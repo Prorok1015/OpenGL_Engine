@@ -13,6 +13,7 @@ rnd::RenderSystem::RenderSystem(std::unique_ptr<rnd::driver::driver_interface> d
 	: drv(std::move(driver))
 	, shader_manager(drv.get())
 	, texture_manager(drv.get())
+	, geom_manager(drv.get())
 {
 }
 

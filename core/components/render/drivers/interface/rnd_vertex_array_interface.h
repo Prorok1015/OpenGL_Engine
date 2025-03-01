@@ -8,8 +8,8 @@ namespace rnd::driver
 	{
 	public:
 		virtual ~vertex_array_interface() {}
-		virtual void bind() = 0;
-		virtual void unbind() = 0;
+		virtual void bind() const = 0;
+		virtual void unbind() const = 0;
 
 		virtual void add_vertex_buffer(const std::shared_ptr<buffer_interface>& vertexBuffer) = 0;
 		virtual void remove_vertex_buffer(const std::shared_ptr<buffer_interface>& vertexBuffer) = 0;

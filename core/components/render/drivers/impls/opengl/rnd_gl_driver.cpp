@@ -434,17 +434,6 @@ void rnd::driver::gl::driver::set_point_size(float size)
 	CHECK_GL_ERROR();
 }
 
-void rnd::driver::gl::driver::draw_elements(RENDER_MODE render_mode, unsigned int vao, unsigned int count)
-{
-	glBindVertexArray(vao);
-	CHECK_GL_ERROR();
-	GLenum rm = gRenderModeToGLRenderMode[(int)render_mode];
-	glDrawElements(rm, count, GL_UNSIGNED_INT, 0);
-	CHECK_GL_ERROR();
-	glBindVertexArray(0);
-	CHECK_GL_ERROR();
-}
-
 void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
 {
 	GLenum rm = GL_TRIANGLES;
@@ -487,6 +476,25 @@ void rnd::driver::gl::driver::draw_instanced_indices(const std::unique_ptr<verte
 	glDrawElementsInstanced(rm, count, GL_UNSIGNED_INT, 0, instance_count);
 	CHECK_GL_ERROR();
 	vertices->unbind();
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, RENDER_MODE render_mode, unsigned int count, unsigned int base_vertex, unsigned int base_index)
+{
+	GLenum rm = GL_TRIANGLES;
+	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
+	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
+		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	}
+	else {
+		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+		rm = gRenderModeToGLRenderMode[(int)render_mode];
+	}
+
+	vertices->bind();
+	glDrawElementsBaseVertex(rm, count, GL_UNSIGNED_INT, (void*)(sizeof(GLuint) * base_index), base_vertex);
+	vertices->unbind();
+
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 

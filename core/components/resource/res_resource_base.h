@@ -12,6 +12,8 @@ namespace res
 
 		bool operator== (const Tag& tag) const { return tag_ == tag; }
 
+		res::Tag get_tag() const { return tag_; }
+
 	protected:
 		Tag tag_;
 	};

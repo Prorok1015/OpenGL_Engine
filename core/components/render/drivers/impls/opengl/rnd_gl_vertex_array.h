@@ -12,8 +12,8 @@ namespace rnd::driver::gl
 		vertex_array();
 		virtual ~vertex_array() override;
 
-		virtual void bind() override;
-		virtual void unbind() override;
+		virtual void bind() const override;
+		virtual void unbind() const override;
 
 		virtual void add_vertex_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& vertexBuffer) override;
 		virtual void remove_vertex_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& vertexBuffer) override;

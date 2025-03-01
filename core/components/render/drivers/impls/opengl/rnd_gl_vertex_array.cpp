@@ -33,13 +33,13 @@ rnd::driver::gl::vertex_array::~vertex_array()
 	glDeleteVertexArrays(1, &vertex_array_id);
 }
 
-void rnd::driver::gl::vertex_array::bind()
+void rnd::driver::gl::vertex_array::bind() const
 {
 	glBindVertexArray(vertex_array_id);
 	CHECK_GL_ERROR();
 }
 
-void rnd::driver::gl::vertex_array::unbind()
+void rnd::driver::gl::vertex_array::unbind() const
 {
 	glBindVertexArray(0);
 }

@@ -6,27 +6,56 @@
 #include "ecs_component.h"
 #include "ecs_common_system.h"
 
-namespace {
+namespace scn
+{
 	struct is_mouse_controller_updated {};
 
-	void on_update_mouse_controller_by_mouse_click_event(ecs::entity evt) {
-		const auto& mouse_btn = ecs::registry.get<inp::mouse_click_event>(evt);
+	void mouse_controller_job::init(entt::organizer& organizer, entt::registry& registry)
+	{
+		entt::sigh_helper{ registry }
+			.with<inp::mouse_click_event>()
+			.on_construct<&mouse_controller_job::on_update_mouse_controller_by_mouse_click_event>(*this)
+			.on_update<&mouse_controller_job::on_update_mouse_controller_by_mouse_click_event>(*this)
+			.with<inp::cursor_move_event>()
+			.on_construct<&mouse_controller_job::on_update_mouse_controller_by_mouse_move_event>(*this)
+			.on_update<&mouse_controller_job::on_update_mouse_controller_by_mouse_move_event>(*this)
+			.with<inp::scroll_move_event>()
+			.on_construct<&mouse_controller_job::on_update_mouse_controller_by_scroll_event>(*this)
+			.on_update<&mouse_controller_job::on_update_mouse_controller_by_scroll_event>(*this)
+			.with<is_mouse_controller_updated>()
+			.on_construct<&mouse_controller_job::on_update_mouse_controller_local_transform>(*this)
+			.on_update<&mouse_controller_job::on_update_mouse_controller_local_transform>(*this);
+	}
 
-		for (const auto& [ent, data] : ecs::registry.view<scn::mouse_controller_component>().each()) {
+	void mouse_controller_job::deinit(entt::organizer& organizer, entt::registry& registry)
+	{
+		registry.on_construct<inp::mouse_click_event>().disconnect<&mouse_controller_job::on_update_mouse_controller_by_mouse_click_event>(*this);
+		registry.on_update<inp::mouse_click_event>().disconnect<&mouse_controller_job::on_update_mouse_controller_by_mouse_click_event>(*this);
+		registry.on_construct<inp::cursor_move_event>().disconnect<&mouse_controller_job::on_update_mouse_controller_by_mouse_move_event>(*this);
+		registry.on_update<inp::cursor_move_event>().disconnect<&mouse_controller_job::on_update_mouse_controller_by_mouse_move_event>(*this);
+		registry.on_construct<inp::scroll_move_event>().disconnect<&mouse_controller_job::on_update_mouse_controller_by_scroll_event>(*this);
+		registry.on_update<inp::scroll_move_event>().disconnect<&mouse_controller_job::on_update_mouse_controller_by_scroll_event>(*this);
+		registry.on_construct<is_mouse_controller_updated>().disconnect<&mouse_controller_job::on_update_mouse_controller_local_transform>(*this);
+	}
+
+	void mouse_controller_job::on_update_mouse_controller_by_mouse_click_event(entt::registry& registry, ecs::entity evt) {
+		const auto& mouse_btn = registry.get<inp::mouse_click_event>(evt);
+
+		for (const auto& [ent, data] : registry.view<scn::mouse_controller_component>().each()) {
 			auto& is_moving = data.is_moving;
 			auto& is_rotating = data.is_rotating;
 			if (mouse_btn.key == inp::MOUSE_BUTTONS::LEFT)
 				is_moving = (mouse_btn.action == inp::KEY_ACTION::DOWN);
 			if (mouse_btn.key == inp::MOUSE_BUTTONS::RIGHT)
 				is_rotating = (mouse_btn.action == inp::KEY_ACTION::DOWN);
-			ecs::registry.emplace_or_replace<is_mouse_controller_updated>(ent);
+			registry.emplace_or_replace<is_mouse_controller_updated>(ent);
 		}
 	}
 
-	void on_update_mouse_controller_by_mouse_move_event(ecs::entity ent) {
-		const auto& cursor = ecs::registry.get<inp::cursor_move_event>(ent);
+	void mouse_controller_job::on_update_mouse_controller_by_mouse_move_event(entt::registry& registry, ecs::entity ent) {
+		const auto& cursor = registry.get<inp::cursor_move_event>(ent);
 
-		for (const auto& [ent, data] : ecs::registry.view<scn::mouse_controller_component>().each()) {
+		for (const auto& [ent, data] : registry.view<scn::mouse_controller_component>().each()) {
 			auto& is_moving = data.is_moving;
 			auto& is_rotating = data.is_rotating;
 			auto& last_mouse_pos = data.last_mouse_pos;
@@ -51,26 +80,26 @@ namespace {
 				rotation.x = std::clamp(rotation.x + pitch, -glm::radians(90.0f), glm::radians(90.0f));
 				rotation.y += yaw;
 			}
-			ecs::registry.emplace_or_replace<is_mouse_controller_updated>(ent);
+			registry.emplace_or_replace<is_mouse_controller_updated>(ent);
 		}
 	}
 
-	void on_update_mouse_controller_by_scroll_event(ecs::entity ent) {
-		const auto& scroll = ecs::registry.get<inp::scroll_move_event>(ent);
+	void mouse_controller_job::on_update_mouse_controller_by_scroll_event(entt::registry& registry, ecs::entity ent) {
+		const auto& scroll = registry.get<inp::scroll_move_event>(ent);
 
-		for (const auto& [ent, data] : ecs::registry.view<scn::mouse_controller_component>().each()) {
+		for (const auto& [ent, data] : registry.view<scn::mouse_controller_component>().each()) {
 			auto& distance = data.distance;
 			auto& speed = data.movement_speed;
 			distance -= scroll.direction.y * speed;
 			distance = std::clamp(distance, 0.f, 150.f);
-			ecs::registry.emplace_or_replace<is_mouse_controller_updated>(ent);
+			registry.emplace_or_replace<is_mouse_controller_updated>(ent);
 		}
 	}
 
-	void on_update_mouse_controller_local_transform(ecs::entity ent) {
-		if (ecs::registry.all_of<scn::local_transform, scn::mouse_controller_component>(ent)) {
-			auto& trans = ecs::registry.get<scn::local_transform>(ent);
-			auto& data = ecs::registry.get<scn::mouse_controller_component>(ent);
+	void mouse_controller_job::on_update_mouse_controller_local_transform(entt::registry& registry, ecs::entity ent) {
+		if (registry.all_of<scn::local_transform, scn::mouse_controller_component>(ent)) {
+			auto& trans = registry.get<scn::local_transform>(ent);
+			auto& data = registry.get<scn::mouse_controller_component>(ent);
 			auto& rotation = data.rotation;
 			auto& pos = data.position;
 			auto& distance = data.distance;
@@ -78,30 +107,5 @@ namespace {
 			trans.local = glm::translate(pos) * orientation * glm::translate(glm::mat4(1.0), glm::vec3(0, 0, distance));
 		}
 	}
-}
 
-void scn::init_camera_controller_system() {
-	entt::sigh_helper{ecs::registry}
-	.with<inp::mouse_click_event>()
-	.on_construct<&on_update_mouse_controller_by_mouse_click_event>()
-	.on_update<&on_update_mouse_controller_by_mouse_click_event>()
-	.with<inp::cursor_move_event>()
-	.on_construct<&on_update_mouse_controller_by_mouse_move_event>()
-	.on_update<&on_update_mouse_controller_by_mouse_move_event>()
-	.with<inp::scroll_move_event>()
-	.on_construct<&on_update_mouse_controller_by_scroll_event>()
-	.on_update<&on_update_mouse_controller_by_scroll_event>()
-	.with<is_mouse_controller_updated>()
-	.on_construct<&on_update_mouse_controller_local_transform>()
-	.on_update<&on_update_mouse_controller_local_transform>();
-}
-
-void scn::deinit_camera_controller_system() {
-	ecs::registry.on_construct<inp::mouse_click_event>().disconnect<&on_update_mouse_controller_by_mouse_click_event>();
-	ecs::registry.on_update<inp::mouse_click_event>().disconnect<&on_update_mouse_controller_by_mouse_click_event>();
-	ecs::registry.on_construct<inp::cursor_move_event>().disconnect<&on_update_mouse_controller_by_mouse_move_event>();
-	ecs::registry.on_update<inp::cursor_move_event>().disconnect<&on_update_mouse_controller_by_mouse_move_event>();
-	ecs::registry.on_construct<inp::scroll_move_event>().disconnect<&on_update_mouse_controller_by_scroll_event>();
-	ecs::registry.on_update<inp::scroll_move_event>().disconnect<&on_update_mouse_controller_by_scroll_event>();
-	ecs::registry.on_construct<is_mouse_controller_updated>().disconnect<&on_update_mouse_controller_local_transform>();
 }

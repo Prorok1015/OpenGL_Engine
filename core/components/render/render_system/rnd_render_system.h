@@ -4,6 +4,7 @@
 
 #include "texture/rnd_texture_manager.h"
 #include "shader/rnd_shader_manager.h"
+#include "geom/rnd_geom_manager.h"
 
 #include "rnd_renderer_base.h"
 
@@ -25,6 +26,8 @@ namespace rnd
 		rnd::TextureManager& get_texture_manager() { return texture_manager; }
 		const rnd::ShaderManager& get_shader_manager() const { return shader_manager; }
 		rnd::ShaderManager& get_shader_manager() { return shader_manager; }
+		const rnd::geom_manager& get_geom_manager() const { return geom_manager; }
+		rnd::geom_manager& get_geom_manager() { return geom_manager; }
 
 		void activate_renderer(std::weak_ptr<renderer_base> renderer);
 		void deactivate_renderer(std::weak_ptr<renderer_base> renderer);
@@ -39,6 +42,7 @@ namespace rnd
 		std::unique_ptr<rnd::driver::driver_interface> drv = nullptr;
 		rnd::TextureManager texture_manager;
 		rnd::ShaderManager shader_manager;
+		rnd::geom_manager geom_manager;
 
 		std::vector<std::weak_ptr<renderer_base>> renderers_list;
 

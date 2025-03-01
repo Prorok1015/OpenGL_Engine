@@ -8,8 +8,8 @@ namespace res
 	class Model : public Resource
 	{
 	public:
-		Model() = default;
 		Model(const Tag& tag);
+		Model(const Tag& tag, const res::model_presintation& model);
 
 		const std::vector<Mesh>& get_meshes() const { return meshes; }
 		res::model_presintation& get_model_pres() { return model; }

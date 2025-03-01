@@ -11,6 +11,8 @@ namespace json = boost::json;
 
 namespace scn {
 
+    struct delta_time { float dt; };
+
     struct keyframes_component {
         std::unordered_map<std::string, res::animation_node> keyframes;
     };
@@ -25,6 +27,7 @@ namespace scn {
 
     struct model_root_component {
         res::meshes_conteiner data;
+        res::Tag geom_tag;
     };
 
     struct animations_component {
@@ -42,11 +45,6 @@ namespace scn {
     struct children_component {
         std::vector<ecs::entity> children;
     };
-    /*
-    struct transform_component {
-        glm::mat4 world = glm::mat4{ 1.0 };
-        glm::mat4 local = glm::mat4{ 1.0 };
-    };*/
 
     struct local_transform {
         glm::mat4 local = glm::mat4{ 1.0 };

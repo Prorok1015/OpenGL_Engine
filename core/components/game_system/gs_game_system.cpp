@@ -18,11 +18,16 @@
 #include "ecs_system.h"
 #include "scn_camera_component.hpp"
 #include "scn_transform_system.h"
+#include "scn_animation_job.h"
 #include "scn_material_component.hpp"
 #include "ecs_component.h"
 
 gs::GameSystem* p_game_system = nullptr;
 extern int gMaxTexture2DSize;
+
+scn::mouse_controller_job mouse_controller_system;
+scn::transform_job transform_job_instance;
+scn::animation_job animation_job_instance;
 
 gs::GameSystem& gs::get_system()
 {
@@ -46,27 +51,15 @@ gs::GameSystem::GameSystem()
 
 	renderer = std::make_shared<scn::renderer_3d>();
 	rnd::get_system().activate_renderer(renderer);
-
-	//input->create_click_action(inp::KEYBOARD_BUTTONS::ESCAPE, [this](float) { window->shutdown(); });
-	scn::init_camera_controller_system();
-	scn::init_transform_system();
-	//ecs::systems.push_back(scn::ecs_process_update_camera_matrix);
-	ecs::systems.push_back(scn::update_animation_system);
-	ecs::systems.push_back(scn::update_transform_system);
-	ecs::systems.push_back(scn::update_bone_offsets_system);
 }
 
 gs::GameSystem::~GameSystem()
 {
 	rnd::get_system().deactivate_renderer(renderer);
-	//inp::get_system().deactivate_manager(input);
-	scn::deinit_camera_controller_system();
-	scn::deinit_transform_system();
 }
 
 void gs::GameSystem::set_enable_input(bool enable)
 {
-	//input->set_enabled(enable);
 }
 
 void gs::GameSystem::load_model(std::string_view path)
@@ -289,7 +282,7 @@ void gs::GameSystem::check_loaded_model()
 		ecs::registry.emplace<scn::children_component>(world_anchor, children);
 
 		ecs::registry.emplace<scn::parent_component>(obj, world_anchor);
-		ecs::registry.emplace<scn::model_root_component>(obj, pres);
+		ecs::registry.emplace<scn::model_root_component>(obj, pres, res->get_tag());
 		if (!root.animations.empty()) {
 			ecs::registry.emplace<scn::animations_component>(obj, root.animations);
 		}		

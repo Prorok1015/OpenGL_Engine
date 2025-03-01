@@ -1,6 +1,7 @@
 #pragma once
 #include <common.h>
 #include <glm/glm.hpp>
+#include "ecs_common_system.h"
 
 namespace application
 {
@@ -16,7 +17,8 @@ namespace application
 		Application& operator= (const Application&) = delete;
 
 		virtual int run();
-
+	private:
+		entt::organizer job_organazer;
 	};
 
 	Application& get_app_system();

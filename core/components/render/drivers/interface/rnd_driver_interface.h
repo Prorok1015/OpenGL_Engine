@@ -192,9 +192,10 @@ namespace rnd::driver
 		virtual void set_activate_texture(int idx) = 0;
 		virtual void set_line_size(float size) = 0;
 		virtual void set_point_size(float size) = 0;
-		virtual void draw_elements(RENDER_MODE render_mode, unsigned int vao, unsigned int count) = 0;
 		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) = 0;
 		virtual void draw_instanced_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int instance_count, unsigned int offset = 0) = 0;
+		virtual void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) = 0;
+
 
 		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) = 0;
 		virtual std::unique_ptr<texture_interface> create_texture(const texture_header& header) = 0;

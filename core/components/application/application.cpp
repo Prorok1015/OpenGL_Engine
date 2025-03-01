@@ -3,9 +3,11 @@
 #include <rnd_render_system.h>
 #include <inp_input_system.h>
 #include <ecs_system.h>
+#include "ecs_common_system.h"
 #include <gs_game_system.h>
 #include <Windows.h>
 #include <chrono>
+#include <entt/entt.hpp>
 
 app::Application* p_app_system = nullptr;
 
@@ -17,10 +19,16 @@ application::Application& application::get_app_system()
 
 application::Application::Application()
 {
+	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
+		ptr->init(job_organazer, ecs::registry);
+	}
 }
 
 application::Application::~Application()
 {
+	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
+		ptr->deinit(job_organazer, ecs::registry);
+	}
 }
 
 int application::Application::run()
@@ -32,17 +40,25 @@ int application::Application::run()
 	float delta_time = 1.0f / 60.0f;
 	auto previous_time = std::chrono::high_resolution_clock::now();
 
+	auto job_graph = job_organazer.graph();
+
+	ecs::registry.ctx().emplace<scn::delta_time>(delta_time);
+
 	while (!window_system_ref.is_stop_running()) {
 		auto current_time = std::chrono::high_resolution_clock::now();
 		std::chrono::duration<float> duration = current_time - previous_time;
 		delta_time = duration.count();
+		ecs::registry.ctx().get<scn::delta_time>().dt = delta_time;
 		previous_time = current_time;
 
 		wnd::get_system().pool_events();
 
 		inp::get_system().process_input(delta_time);
 		 
-		ecs::process_systems(delta_time);
+		for (auto&& system : job_graph) {
+			//system.prepare(ecs::registry);
+			system.callback()(system.data(), ecs::registry);
+		}
 
 		gs::get_system().end_ecs_frame();
 

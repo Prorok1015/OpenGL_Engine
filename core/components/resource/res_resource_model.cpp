@@ -13,6 +13,12 @@ res::Model::Model(const Tag& tag)
 	model = ld.model;
 }
 
+res::Model::Model(const Tag& tag, const res::model_presintation& model_)
+    : Resource(tag)
+    , model(model_)
+{
+}
+
 std::vector<glm::mat4> res::Model::get_bone_transforms(double TimeInSeconds, std::string_view animation_name)
 {
     glm::mat4 Identity{ 1.0 };

@@ -340,8 +340,13 @@ void scn::renderer_3d::draw_instances(rnd::driver::driver_interface* drv)
 
 void scn::renderer_3d::draw_ecs_model(rnd::driver::driver_interface* drv, rnd::shader_scene_desc& scene)
 {
+    auto& geom_mng = rnd::get_system().get_geom_manager();
     for (const auto ent : ecs::registry.view<scn::model_root_component, scn::renderable>()) {
+
         auto& root = ecs::registry.get<scn::model_root_component>(ent);
+        auto* va = geom_mng.require_geometry(root.geom_tag);
+        if (va == nullptr) continue;
+
         rnd::RENDER_MODE tmp = rnd::get_system().get_render_mode();
 
         if (ecs::registry.all_of<rnd::render_mode_component>(ent)) {
@@ -349,7 +354,6 @@ void scn::renderer_3d::draw_ecs_model(rnd::driver::driver_interface* drv, rnd::s
             rnd::get_system().set_render_mode(rnd_mode.mode);
         }
 
-        vertex_buffer->set_data(root.data.vertices);
         if (directional_light_count > 0) {
             scene.defines[rnd::shader_scene_desc::DIRECTION_LIGHT_COUNT] = true;
             scene.defines_values[rnd::shader_scene_desc::DIRECTION_LIGHT_COUNT] = std::to_string(directional_light_count);
@@ -380,19 +384,26 @@ void scn::renderer_3d::draw_ecs_model(rnd::driver::driver_interface* drv, rnd::s
             } else {
                 ASSERT_FAIL("Bones matrices count too big.");
             }
+            if (root.data.bones_data.bones_indeces_txm.is_valid()) {
+                scene.tex3 = rnd::get_system().get_texture_manager().require_texture(root.data.bones_data.bones_indeces_txm);
+            }
+            else {
+                scene.tex3 = nullptr;
+            }
+
         } else {
 			scene.defines[rnd::shader_scene_desc::USE_ANIMATION] = false;
 			scene.defines[rnd::shader_scene_desc::MAX_BONE_MATRICES_COUNT] = false;
 			scene.defines_values[rnd::shader_scene_desc::MAX_BONE_MATRICES_COUNT] = "";
 		}
 
-        draw_ecs_meshes(ent, root.data, scene, drv);
+        draw_ecs_meshes(ent, va, scene, drv);
 
         rnd::get_system().set_render_mode(tmp);
     }
 }
 
-void scn::renderer_3d::draw_ecs_meshes(ecs::entity ent, const res::meshes_conteiner& data, rnd::shader_scene_desc& scene, rnd::driver::driver_interface* drv)
+void scn::renderer_3d::draw_ecs_meshes(ecs::entity ent, const rnd::driver::vertex_array_interface* va, rnd::shader_scene_desc& scene, rnd::driver::driver_interface* drv)
 {
     if (ecs::registry.all_of<scn::mesh_component>(ent))
     {
@@ -409,7 +420,7 @@ void scn::renderer_3d::draw_ecs_meshes(ecs::entity ent, const res::meshes_contei
             apply_material(material.material, scene);
             //auto is_transparent = ecs::get_component<scn::is_transparent_flag_component>(material->material);
             //if (!is_transparent) {
-                draw(scene, meshes.mesh, data, drv);
+                draw(scene, meshes.mesh, va, drv);
             //}
         }
 
@@ -420,12 +431,12 @@ void scn::renderer_3d::draw_ecs_meshes(ecs::entity ent, const res::meshes_contei
         auto& children = ecs::registry.get<scn::children_component>(ent);
         for (auto& child : children.children)
         {
-            draw_ecs_meshes(child, data, scene, drv);
+            draw_ecs_meshes(child, va, scene, drv);
         }
     }
 }
 
-void scn::renderer_3d::draw_ecs_meshes_transparant(ecs::entity ent, const res::meshes_conteiner& data, rnd::shader_scene_desc& scene, rnd::driver::driver_interface* drv)
+void scn::renderer_3d::draw_ecs_meshes_transparant(ecs::entity ent, const rnd::driver::vertex_array_interface* va, rnd::shader_scene_desc& scene, rnd::driver::driver_interface* drv)
 {
     if (ecs::registry.all_of<scn::mesh_component>(ent))
     {
@@ -442,7 +453,7 @@ void scn::renderer_3d::draw_ecs_meshes_transparant(ecs::entity ent, const res::m
             apply_material(material.material, scene);
             auto is_transparent = ecs::registry.all_of<scn::is_transparent_flag_component>(material.material);
             if (is_transparent) {
-                draw(scene, meshes.mesh, data, drv);
+                draw(scene, meshes.mesh, va, drv);
             }        
         }
 
@@ -453,7 +464,7 @@ void scn::renderer_3d::draw_ecs_meshes_transparant(ecs::entity ent, const res::m
         auto& children = ecs::registry.get<scn::children_component>(ent);
         for (auto& child : children.children)
         {
-            draw_ecs_meshes_transparant(child, data, scene, drv);
+            draw_ecs_meshes_transparant(child, va, scene, drv);
         }
     }
 }
@@ -578,9 +589,13 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
 
 void scn::renderer_3d::draw_transparent(rnd::driver::driver_interface* drv)
 {
+    auto& geom_mng = rnd::get_system().get_geom_manager();
     for (const auto ent : ecs::registry.view<scn::model_root_component, scn::renderable>())
     {
         auto& root = ecs::registry.get<scn::model_root_component>(ent);
+        auto* va = geom_mng.require_geometry(root.geom_tag);
+        if (va == nullptr) continue;
+
         rnd::RENDER_MODE tmp = rnd::get_system().get_render_mode();
 
         if (ecs::registry.all_of<rnd::render_mode_component>(ent)) {
@@ -588,7 +603,6 @@ void scn::renderer_3d::draw_transparent(rnd::driver::driver_interface* drv)
             rnd::get_system().set_render_mode(rnd_mode.mode);
         }
 
-        vertex_buffer->set_data(root.data.vertices);
         rnd::pass_transparent_desc desc;
         if (directional_light_count > 0) {
             desc.defines[rnd::shader_scene_desc::DIRECTION_LIGHT_COUNT] = true;
@@ -615,9 +629,15 @@ void scn::renderer_3d::draw_transparent(rnd::driver::driver_interface* drv)
             else {
                 ASSERT_FAIL("Bones matrices count too big.");
             }
+            if (root.data.bones_data.bones_indeces_txm.is_valid()) {
+                desc.tex3 = rnd::get_system().get_texture_manager().require_texture(root.data.bones_data.bones_indeces_txm);
+            }
+            else {
+                desc.tex3 = nullptr;
+            }
         }
 
-        draw_ecs_meshes_transparant(ent, root.data, desc, drv);
+        draw_ecs_meshes_transparant(ent, va, desc, drv);
 
         rnd::get_system().set_render_mode(tmp);
     }
@@ -657,17 +677,9 @@ void scn::renderer_3d::draw_sky(rnd::driver::driver_interface* drv)
     }
 }
 
-void scn::renderer_3d::draw(rnd::shader_scene_desc& desc, res::mesh_view& mesh, const res::meshes_conteiner& data, rnd::driver::driver_interface* drv)
+void scn::renderer_3d::draw(rnd::shader_scene_desc& desc, res::mesh_view& mesh, const rnd::driver::vertex_array_interface* va, rnd::driver::driver_interface* drv)
 {
-    index_buffer->set_data_ptr(&data.indices[mesh.ind_begin], mesh.get_indices_count());
-
-    if (data.bones_data.bones_indeces_txm.is_valid()) {
-        desc.tex3 = rnd::get_system().get_texture_manager().require_texture(data.bones_data.bones_indeces_txm);
-    } else {
-		desc.tex3 = nullptr;
-	}
-
     rnd::configure_pass(desc);
     // draw mesh
-    drv->draw_indices(vertex_array, rnd::get_system().get_render_mode(), mesh.get_indices_count(), mesh.vx_begin);
+    drv->draw_indices(va, rnd::get_system().get_render_mode(), mesh.get_indices_count(), mesh.vx_begin, mesh.ind_begin);
 }

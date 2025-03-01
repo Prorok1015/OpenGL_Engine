@@ -214,20 +214,23 @@ editor::EditorSystem::EditorSystem()
 		ecs::registry.emplace<scn::renderable>(ecs_entity);
 		ecs::registry.emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
 	}
+
+	auto web = scn::generate_web({ 50, 50 });
+	res::Tag web_tag = res::Tag(res::Tag::memory, "web.asset");
+	res::model_presintation web_model_pres;
+	web_model_pres.data = web.data;
+	std::shared_ptr<res::Model> web_asset = std::make_shared<res::Model>(web_tag, web_model_pres);
+	res::get_system().add_resource(web_asset);
 	// web
 	{
 		editor_web = ecs::create_entity();
 		children.push_back(editor_web);
-		auto web = scn::generate_web({ 50, 50 }); 
-		/*res::Material mlt;
-		mlt.diffuse_color = glm::vec4(0);
-		mlt.set_state(res::Material::ALBEDO_COLOR);
-		web.data.materials.push_back(mlt);*/
+
 		res::meshes_conteiner& data = web.data;
 		res::mesh_view& mesh = web.mesh;
 		//mesh.material_id = 0;
 
-		ecs::registry.emplace<scn::model_root_component>(editor_web, scn::model_root_component{ .data = data });
+		ecs::registry.emplace<scn::model_root_component>(editor_web, scn::model_root_component{ .data = data, .geom_tag = web_tag });
 		ecs::registry.emplace<scn::mesh_component>(editor_web, scn::mesh_component{ .mesh = mesh });
 		ecs::registry.emplace<scn::name_component>(editor_web, "Editor Web");
 		ecs::registry.emplace<scn::parent_component>(editor_web, world_anchor);
@@ -238,12 +241,19 @@ editor::EditorSystem::EditorSystem()
 		ecs::registry.emplace<scn::renderable>(editor_web);
 		ecs::registry.emplace<scn::material_link_component>(editor_web, black_mlt );
 	}
+
+	auto geom = scn::generate_cube();
+	res::Tag cube_tag = res::Tag(res::Tag::memory, "cube.asset");
+	res::model_presintation cube_model_pres;
+	cube_model_pres.data = geom.data;
+	std::shared_ptr<res::Model> cube_asset = std::make_shared<res::Model>(cube_tag, cube_model_pres);
+	res::get_system().add_resource(cube_asset);
+
 	// windows objects
 	for(int i = 0; i < 10; ++i)
 	{
 		auto wind = ecs::create_entity();
 		children.push_back(wind);
-		auto geom = scn::generate_cube();
 
 		res::meshes_conteiner& data = geom.data;
 		res::mesh_view& mesh = geom.mesh;
@@ -252,7 +262,7 @@ editor::EditorSystem::EditorSystem()
 
 		ecs::registry.emplace<scn::name_component>(wind, scn::name_component{ .name = "Window" });
 		ecs::registry.emplace<scn::parent_component>(wind, world_anchor);
-		ecs::registry.emplace<scn::model_root_component>(wind, scn::model_root_component{ .data = data });
+		ecs::registry.emplace<scn::model_root_component>(wind, scn::model_root_component{ .data = data, .geom_tag = cube_tag });
 		ecs::registry.emplace<scn::mesh_component>(wind, scn::mesh_component{ .mesh = mesh });
 		auto& transform = ecs::registry.emplace<scn::local_transform>(wind);
 		transform.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
