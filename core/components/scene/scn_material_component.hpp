@@ -41,16 +41,16 @@ namespace scn
 
 	struct is_transparent_flag_component {};
 	
-	struct albedo_map_component { res::Tag txm; };
-	struct normal_map_component  { res::Tag txm; };
-	struct roughness_map_component { res::Tag txm; };
-	struct metallic_map_component { res::Tag txm; };
-	struct ao_map_component { res::Tag txm; };
-	struct height_map_component { res::Tag txm; };
-	struct specular_map_component { res::Tag txm; };
-	struct glossiness_map_component { res::Tag txm; };
-	struct emissive_map_component { res::Tag txm; };
-	struct opacity_map_component { res::Tag txm; };
+	struct albedo_map_component { res::tag txm; };
+	struct normal_map_component  { res::tag txm; };
+	struct roughness_map_component { res::tag txm; };
+	struct metallic_map_component { res::tag txm; };
+	struct ao_map_component { res::tag txm; };
+	struct height_map_component { res::tag txm; };
+	struct specular_map_component { res::tag txm; };
+	struct glossiness_map_component { res::tag txm; };
+	struct emissive_map_component { res::tag txm; };
+	struct opacity_map_component { res::tag txm; };
 
 
 	void tag_invoke(json::value_from_tag, json::value& jv, const base_material_component& c);

@@ -30,6 +30,7 @@ add_subdirectory("components/ecs")
 add_subdirectory("components/scene")
 add_subdirectory("components/image")
 add_subdirectory("components/windows")
+add_subdirectory("components/desc")
 
 
 #TEST_PROJECT

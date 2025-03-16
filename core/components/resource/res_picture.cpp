@@ -2,11 +2,10 @@
 #include "res_system.h"
 #include "image_loader.h"
 
-
-res::Picture::Picture(const res::Tag& tag)
+res::Picture::Picture(const res::tag& tag)
 	: res::Resource(tag)
 {
-	std::string path = ResourceSystem::get_absolut_path(tag);
+	std::string path = resource_system::get_absolut_path(tag);
 	if (path.empty()) {
 		return;
 	}
@@ -19,7 +18,7 @@ res::Picture::Picture(const res::Tag& tag)
 	}
 }
 
-res::Picture::Picture(const Tag& tag, glm::ivec2 size_1, int channels_1, unsigned char* data_1)
+res::Picture::Picture(const tag& tag, glm::ivec2 size_1, int channels_1, unsigned char* data_1)
 	: res::Resource(tag)
 	, is_embedded_picture(true)
 	, size_(size_1)

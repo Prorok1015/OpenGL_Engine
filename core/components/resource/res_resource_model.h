@@ -8,8 +8,8 @@ namespace res
 	class Model : public Resource
 	{
 	public:
-		Model(const Tag& tag);
-		Model(const Tag& tag, const res::model_presintation& model);
+		Model(const tag& tag);
+		Model(const tag& tag, const res::model_presintation& model);
 
 		const std::vector<Mesh>& get_meshes() const { return meshes; }
 		res::model_presintation& get_model_pres() { return model; }
@@ -26,5 +26,16 @@ namespace res
 	private:
 		std::vector<Mesh> meshes;
 		res::model_presintation model;
+	};
+
+	class asset_3d : public Resource
+	{
+	public:
+		asset_3d(const tag& tag);
+
+		res::tag geometry;
+		res::tag skelet;
+		res::tag model;
+		res::tag anim;
 	};
 }

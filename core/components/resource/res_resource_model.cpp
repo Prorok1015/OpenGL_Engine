@@ -5,7 +5,7 @@
 #include "res_model_loader.h"
 
 
-res::Model::Model(const Tag& tag)
+res::Model::Model(const tag& tag)
 	: Resource(tag)
 {
 	loader::model_loader ld(tag);
@@ -13,7 +13,7 @@ res::Model::Model(const Tag& tag)
 	model = ld.model;
 }
 
-res::Model::Model(const Tag& tag, const res::model_presintation& model_)
+res::Model::Model(const tag& tag, const res::model_presintation& model_)
     : Resource(tag)
     , model(model_)
 {

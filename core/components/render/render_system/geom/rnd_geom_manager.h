@@ -13,14 +13,14 @@ namespace rnd
 		geom_manager(rnd::driver::driver_interface* driver);
 		~geom_manager();
 
-		rnd::driver::vertex_array_interface* require_geometry(res::Tag geom_tag);
-		rnd::driver::vertex_array_interface* find_geometry(res::Tag geom_tag);
+		rnd::driver::vertex_array_interface* require_geometry(res::tag geom_tag);
+		rnd::driver::vertex_array_interface* find_geometry(res::tag geom_tag);
 
 	private:
 		std::unique_ptr<driver::vertex_array_interface> create_geometry(std::shared_ptr<res::Model> model);
 
 	private:
 		driver::driver_interface* drv;
-		std::unordered_map<res::Tag, std::unique_ptr<driver::vertex_array_interface>> cache;
+		std::unordered_map<res::tag, std::unique_ptr<driver::vertex_array_interface>> cache;
 	};
 }

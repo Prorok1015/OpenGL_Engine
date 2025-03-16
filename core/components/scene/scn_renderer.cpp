@@ -115,10 +115,10 @@ void scn::renderer_3d::setup_instance_buffer()
 
 void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
 {
-    static res::Tag color_rt_tag = res::Tag(res::Tag::memory, "__color_scene_rt");
-    static res::Tag z_pass_tag = res::Tag(res::Tag::memory, "__z_prepass_rt");
-    static res::Tag color_rt_transparent_tag = res::Tag(res::Tag::memory, "__color_rt_transparent_rt");
-    static res::Tag waight_rt_transparent_tag = res::Tag(res::Tag::memory, "__waight_rt_transparent_rt");
+    static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
+    static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
+    static res::tag color_rt_transparent_tag = res::tag(res::tag::memory, "__color_rt_transparent_rt");
+    static res::tag waight_rt_transparent_tag = res::tag(res::tag::memory, "__waight_rt_transparent_rt");
     rnd::global_params common_matrix{ .time = (float)Timer::now() };
 
     z_prepass(drv);
@@ -209,13 +209,11 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             state.depth.write_mask = false;
             state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
             
-            // Настройка для первого render target (color)
             rnd::driver::blend_state color_blend;
             color_blend.enabled = true;
             color_blend.src_factor = rnd::driver::blend_state::factor::ONE;
             color_blend.dst_factor = rnd::driver::blend_state::factor::ONE;
             
-            // Настройка для второго render target (weight)
             rnd::driver::blend_state weight_blend;
             weight_blend.enabled = true;
             weight_blend.src_factor = rnd::driver::blend_state::factor::ZERO;
@@ -515,8 +513,8 @@ void scn::renderer_3d::apply_material(ecs::entity material, rnd::shader_scene_de
 
 void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
 {
-    static res::Tag z_pass_tag = res::Tag(res::Tag::memory, "__z_prepass_rt");
-    static res::Tag z_pass_color_tag = res::Tag(res::Tag::memory, "__z_prepass_color_rt");
+    static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
+    static res::tag z_pass_color_tag = res::tag(res::tag::memory, "__z_prepass_color_rt");
     auto& txm_manager = rnd::get_system().get_texture_manager();
     rnd::global_params common_matrix;
 

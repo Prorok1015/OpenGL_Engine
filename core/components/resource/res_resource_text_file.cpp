@@ -3,10 +3,10 @@
 #include <fstream>
 #include <sstream>
 
-res::TextFile::TextFile(const Tag& tag)
+res::TextFile::TextFile(const tag& tag)
 	: Resource(tag)
 {
-	std::string path = ResourceSystem::get_absolut_path(tag);
+	std::string path = resource_system::get_absolut_path(tag);
 	if (path.empty()) {
 		return;
 	}

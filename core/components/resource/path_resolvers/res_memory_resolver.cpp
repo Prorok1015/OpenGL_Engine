@@ -1,0 +1,1 @@
+#include "res_memory_resolver.h"

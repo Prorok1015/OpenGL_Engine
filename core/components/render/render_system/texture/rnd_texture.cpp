@@ -2,9 +2,13 @@
 #include "res_system.h"
 #include "res_picture.h"
 
-std::unique_ptr<rnd::driver::texture_interface> rnd::Texture::load(driver::driver_interface* drv, const res::Tag& tag)
+std::unique_ptr<rnd::driver::texture_interface> rnd::Texture::load(driver::driver_interface* drv, const res::tag& tag)
 {
-	auto res = res::get_system().require_resource<res::Picture>(tag, true);
+	auto res = res::get_system().require_resource2<res::Picture>(tag);
+	if (!res) {
+		return nullptr;
+	}
+
     driver::texture_header header;
     header.data.initial_data = res->data();
     switch (res->channels())

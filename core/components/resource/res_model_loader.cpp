@@ -5,8 +5,7 @@
 #include <common.h>
 #include <engine_log.h>
 #include "res_system.h"
-#include "res_picture.h"
-#include "image.h"
+#include "adapters/res_pct_adapter.h"
 
 const aiNodeAnim* find_node_anim(const aiAnimation* pAnimation, const std::string_view NodeName);
 
@@ -84,7 +83,7 @@ std::vector<res::Mesh> res::loader::model_loader::load()
 {
     // read file via ASSIMP
     Assimp::Importer importer;
-    const std::string full_path = ResourceSystem::get_absolut_path(tag);
+    const std::string full_path = resource_system::get_absolut_path(tag);
     egLOG("model/load", "Start loading model '{}' by absolut path:\n\t '{}'", tag.get_full(), full_path);
 
     const aiScene* scene = importer.ReadFile(full_path, aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace);
@@ -95,6 +94,20 @@ std::vector<res::Mesh> res::loader::model_loader::load()
         return {};
     }
 
+
+    /* .material
+    {
+		name: string,
+		diffuse: vec4,
+		ambient: vec4,
+		specular: vec4,
+		shininess: float,
+		normal: tag,
+		specular: tag,
+		diffuse: tag,
+		ambient: tag,
+    }
+    */
     // process materials
     for (int i = 0; i < scene->mNumMaterials; i++) {
         aiMaterial* material = scene->mMaterials[i];
@@ -122,7 +135,18 @@ std::vector<res::Mesh> res::loader::model_loader::load()
     }
 
     enclose_hierarchy(model.head, scene);
-
+    /* .geometry
+    {
+		pos:       vec3,
+        normal:    vec3,
+		uv:        vec2,
+		tangent:   vec3,
+		bitangent: vec3,
+    }
+    {   res::Vertex[]  }
+    {   uint[]  }
+    {   uint[]  }
+    */
     model.data.bones_data.bones_indeces.resize(model.data.vertices.size() * (max_bones_count), -1);
     for (std::size_t v_idx = 0, offset = 0; v_idx < model.data.vertices.size(); )
     {
@@ -605,7 +629,7 @@ std::vector<unsigned int> res::loader::model_loader::copy_indeces(aiMesh* mesh)
     return indices;
 }
 
-res::Tag res::loader::model_loader::find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type) {
+res::tag res::loader::model_loader::find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type) {
     for (unsigned int i = 0; i < mat->GetTextureCount(type); i++)
     {
         aiString str;
@@ -615,37 +639,37 @@ res::Tag res::loader::model_loader::find_material_texture(const aiScene* scene, 
         {
             const std::string_view embedded_filename{ pEmbededTxm->mFilename.C_Str() };
             const std::string_view embedded_format{ pEmbededTxm->achFormatHint };
-            std::string embedded_path = std::vformat("__embedded_txm_{0}/{1}.{2}", std::make_format_args(tag.pure_name(), embedded_filename, embedded_format));
-            res::Tag embedded_tag = res::Tag(res::Tag::memory, embedded_path);
+            std::string embedded_path = std::vformat("__embedded_txm_{0}/{1}.{2}", std::make_format_args(tag.pure_name(), embedded_filename, 
+                pEmbededTxm->mHeight != 0 ? res::raw_image_adapter::EXTENSION : res::pct_adapter::EXTENSIONS[0]));
+            res::tag embedded_tag = res::tag(res::tag::memory, embedded_path);
 
-            if (!res::get_system().is_exist(embedded_tag)) {
+            if (!res::get_system().memory_resolver_.is_exist(embedded_tag)) {
                 glm::ivec2 size;
                 int channel = 4;
-                unsigned char* data;
+				std::vector<std::byte> data_byte;
 
                 if (pEmbededTxm->mHeight != 0) {
                     size.x = pEmbededTxm->mWidth;
                     size.y = pEmbededTxm->mHeight;
 
-                    data = new unsigned char[size.x * size.y * channel];
-                    std::copy((unsigned char*)pEmbededTxm->pcData, (unsigned char*)pEmbededTxm->pcData + (size.x * size.y * channel), data);
+                    res::raw_image_adapter::raw_image_header header;
+					header.size = size;  
+					header.channels = channel;
+					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
+					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
+                    std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + (size.x * size.y * channel), std::back_inserter(data_byte));
+					res::get_system().memory_resolver_.add_memory(embedded_tag, data_byte);
                 }
                 else {
-                    auto img = stb_image::Image::read_from_memory((unsigned char*)pEmbededTxm->pcData, pEmbededTxm->mWidth);
-                    size.x = img.width();
-                    size.y = img.height();
-                    channel = img.channels_count();
-                    data = new unsigned char[img.size()];
-                    std::copy(img.data(), img.data() + img.size(), data);
-                }
-
-                auto pct = std::make_shared<res::Picture>(embedded_tag, size, channel, data);
-                res::get_system().add_resource(pct);            
+					data_byte.reserve(pEmbededTxm->mWidth);
+					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + pEmbededTxm->mWidth, std::back_inserter(data_byte));
+                    res::get_system().memory_resolver_.add_memory(embedded_tag, data_byte);
+                }          
             }
 
             return embedded_tag;
         }
-        return tag + Tag::make(texture_name);
+        return tag + tag::make(texture_name);
     }
     return {};
 }

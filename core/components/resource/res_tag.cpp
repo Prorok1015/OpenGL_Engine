@@ -1,15 +1,15 @@
 #include "res_tag.h"
 #include <engine_log.h>
 
-const res::Tag res::Tag::null{};
+const res::tag res::tag::null{};
 
-res::Tag res::operator+ (const res::Tag& l, const res::Tag& r)
+res::tag res::operator+ (const res::tag& l, const res::tag& r)
 {
 	if (l == r) {
-		egLOG("resoure/tag", "Equal Tags when resource::operator+ (const resource::Tag& l, const resource::Tag& r)");
+		egLOG("resoure/tag", "Equal Tags when resource::operator+ (const resource::tag& l, const resource::tag& r)");
 		return l;
 	}
 
 	const std::string path = std::vformat("{}{}{}", std::make_format_args(l.path(), r.path(), r.name()));
-	return Tag(l.protocol(), path);
+	return tag(l.protocol(), path);
 }

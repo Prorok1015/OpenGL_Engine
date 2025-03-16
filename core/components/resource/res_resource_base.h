@@ -3,19 +3,19 @@
 
 namespace res
 {
-	class ResourceSystem;
+	class resource_system;
 	class Resource
 	{
-		friend res::ResourceSystem;
+		friend res::resource_system;
 	public:
-		Resource(const Tag& tag) : tag_(tag) {}
+		Resource(const tag& tag) : tag_(tag) {}
 
-		bool operator== (const Tag& tag) const { return tag_ == tag; }
+		bool operator== (const tag& tag) const { return tag_ == tag; }
 
-		res::Tag get_tag() const { return tag_; }
+		res::tag get_tag() const { return tag_; }
 
 	protected:
-		Tag tag_;
+		tag tag_;
 	};
 
 	using RecourceRef = std::shared_ptr<Resource>;

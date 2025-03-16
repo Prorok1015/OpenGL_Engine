@@ -8,6 +8,7 @@
 #include <rnd_gl_uniform_buffer.h>
 #include <engine_log.h>
 #include <engine_assert.h>
+#include "ds_fixed_vector.hpp"
 
 const GLenum gRenderModeToGLRenderMode[] =
 {
@@ -297,8 +298,7 @@ void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*>
 
 	glm::ivec2 rt_size{ 0 };
 	std::size_t color_count = std::min(colors.size(), MAX_COLOR_ATTACHMENTS);
-	std::vector<GLenum> drawBuffers;
-	drawBuffers.reserve(color_count);
+	ds::fixed_vector<GLenum, MAX_COLOR_ATTACHMENTS> drawBuffers;
 
 	for (std::size_t i = 0; i < color_count; ++i) {
 		if (auto* color = colors[i]) {
@@ -313,6 +313,9 @@ void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*>
 			CHECK_GL_ERROR();
 			rt_size = { gl_color->width(), gl_color->height() };
 			drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + i);
+		}
+		else {
+			drawBuffers.push_back(GL_NONE);
 		}
 	}
 
@@ -376,18 +379,18 @@ void rnd::driver::gl::driver::clear(clear_flags flags, glm::vec4 color)
 
 void rnd::driver::gl::driver::clear(clear_flags flags, const std::vector<glm::vec4>& colors)
 {
-	attach_frame_buffer();
-
 	if (colors.empty()) {
-		detach_frame_buffer();
 		return;
 	}
 
-	int i = 0;
+	attach_frame_buffer();
+
 	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) {
+		int i = 0;
 		for (auto& color : colors) {
-			glClearBufferfv(GL_COLOR, i++, glm::value_ptr(color));
+			glClearBufferfv(GL_COLOR, i, glm::value_ptr(color));
 			CHECK_GL_ERROR();
+			i++;
 		}
 	}
 
@@ -527,6 +530,10 @@ void rnd::driver::gl::driver::set_render_state(const render_state& state) {
                 );
                 glBlendEquationi(i, gBlendEquationToGL[static_cast<int>(blend.blend_eq)]);
             }
+			else {
+				glBlendFunci(i, GL_ONE, GL_ZERO);
+				glBlendEquationi(i, GL_FUNC_ADD);
+			}
         }
     } else {
         glDisable(GL_BLEND);

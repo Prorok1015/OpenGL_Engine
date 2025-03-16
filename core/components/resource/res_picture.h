@@ -4,11 +4,13 @@
 
 namespace res
 {
+
+
 	class Picture : public Resource
 	{
 	public:
-		Picture(const Tag& tag);
-		Picture(const Tag& tag, glm::ivec2 size_, int channels_, unsigned char* data_);
+		Picture(const tag& tag);
+		Picture(const tag& tag, glm::ivec2 size_, int channels_, unsigned char* data_);
 		~Picture();
 
 		unsigned char* data() const { return data_; }

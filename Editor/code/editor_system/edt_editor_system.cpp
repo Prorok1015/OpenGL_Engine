@@ -142,7 +142,7 @@ editor::EditorSystem::EditorSystem()
 	GUI_SET_ITEM_CHECKED("Editor/Draw web", is_show_web);
 
 
-	auto logo = res::get_system().require_resource<res::Picture>(res::Tag::make("icons/editor_engine_logo.png"));
+	auto logo = res::get_system().require_resource<res::Picture>(res::tag::make("icons/editor_engine_logo.png"));
 	gs::get_system().get_window()->set_logo(logo);
 	gs::get_system().get_window()->set_title("Snake Editor");
 	gui::get_system().set_show_title_bar(true);
@@ -163,8 +163,8 @@ editor::EditorSystem::EditorSystem()
 		//}
 	});
 
-	auto txt = rnd::get_system().get_texture_manager().generate_texture(res::Tag(res::Tag::memory, "__black"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {0, 0, 0});
-	auto txt2 = rnd::get_system().get_texture_manager().generate_texture(res::Tag(res::Tag::memory, "__red"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {255, 0, 0});
+	auto txt = rnd::get_system().get_texture_manager().generate_texture(res::tag(res::tag::memory, "__black"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {0, 0, 0});
+	auto txt2 = rnd::get_system().get_texture_manager().generate_texture(res::tag(res::tag::memory, "__red"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {255, 0, 0});
 
 	auto anchors = ecs::registry.view<scn::scene_anchor_component>();
 	ecs::entity world_anchor;
@@ -195,7 +195,7 @@ editor::EditorSystem::EditorSystem()
 
 	ecs::entity window_mlt = ecs::create_entity();
 	ecs::registry.emplace<scn::base_material_component>(window_mlt, scn::base_material_component{});
-	ecs::registry.emplace<scn::albedo_map_component>(window_mlt, scn::albedo_map_component{ .txm = res::Tag::make("window.png") });
+	ecs::registry.emplace<scn::albedo_map_component>(window_mlt, scn::albedo_map_component{ .txm = res::tag::make("window.png") });
 	ecs::registry.emplace<scn::name_component>(window_mlt, scn::name_component{ .name = "WINDOW"});
 	ecs::registry.emplace<scn::is_transparent_flag_component>(window_mlt);
 
@@ -216,7 +216,7 @@ editor::EditorSystem::EditorSystem()
 	}
 
 	auto web = scn::generate_web({ 50, 50 });
-	res::Tag web_tag = res::Tag(res::Tag::memory, "web.asset");
+	res::tag web_tag = res::tag(res::tag::memory, "web.asset");
 	res::model_presintation web_model_pres;
 	web_model_pres.data = web.data;
 	std::shared_ptr<res::Model> web_asset = std::make_shared<res::Model>(web_tag, web_model_pres);
@@ -243,14 +243,14 @@ editor::EditorSystem::EditorSystem()
 	}
 
 	auto geom = scn::generate_cube();
-	res::Tag cube_tag = res::Tag(res::Tag::memory, "cube.asset");
+	res::tag cube_tag = res::tag(res::tag::memory, "cube.asset");
 	res::model_presintation cube_model_pres;
 	cube_model_pres.data = geom.data;
 	std::shared_ptr<res::Model> cube_asset = std::make_shared<res::Model>(cube_tag, cube_model_pres);
 	res::get_system().add_resource(cube_asset);
 
 	// windows objects
-	for(int i = 0; i < 10; ++i)
+	for(int i = 0; i < 1; ++i)
 	{
 		auto wind = ecs::create_entity();
 		children.push_back(wind);
@@ -258,7 +258,7 @@ editor::EditorSystem::EditorSystem()
 		res::meshes_conteiner& data = geom.data;
 		res::mesh_view& mesh = geom.mesh;
 
-		glm::vec2 rnd_pos = glm::diskRand(5.f);
+		glm::vec2 rnd_pos = glm::diskRand(1.f);
 
 		ecs::registry.emplace<scn::name_component>(wind, scn::name_component{ .name = "Window" });
 		ecs::registry.emplace<scn::parent_component>(wind, world_anchor);
@@ -292,13 +292,13 @@ editor::EditorSystem::EditorSystem()
 		sky = ecs::create_entity();
 		children.push_back(sky);
 		auto m = scn::generate_cube();
-		ecs::registry.emplace<scn::sky_component>(sky, scn::sky_component{ .data = m.data, .mesh = m.mesh, .cube_map = std::vector<res::Tag>{
-			res::Tag::make("skybox/right.jpg"),
-			res::Tag::make("skybox/left.jpg"),
-			res::Tag::make("skybox/bottom.jpg"),
-			res::Tag::make("skybox/top.jpg"),
-			res::Tag::make("skybox/front.jpg"),
-			res::Tag::make("skybox/back.jpg"),
+		ecs::registry.emplace<scn::sky_component>(sky, scn::sky_component{ .data = m.data, .mesh = m.mesh, .cube_map = std::vector<res::tag>{
+			res::tag::make("skybox/right.jpg"),
+			res::tag::make("skybox/left.jpg"),
+			res::tag::make("skybox/bottom.jpg"),
+			res::tag::make("skybox/top.jpg"),
+			res::tag::make("skybox/front.jpg"),
+			res::tag::make("skybox/back.jpg"),
 			}
 			});
 		ecs::registry.emplace<scn::renderable>(sky);
@@ -942,7 +942,7 @@ bool editor::EditorSystem::show_textures()
 	if (ImGui::Begin("Textures", &is_open))
 	{
 		std::vector<std::string> list;
-		std::vector<res::Tag> list_tags;
+		std::vector<res::tag> list_tags;
 		std::size_t max_name = 0;
 		for (const auto& [key, _] : rnd::get_system().get_texture_manager().get_cache())
 		{
@@ -1040,7 +1040,7 @@ void editor::EditorSystem::draw_gizmo(const glm::vec2& start, const glm::vec2& s
 
 void editor::EditorSystem::draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable)
 {
-	auto texture = rnd::get_system().get_texture_manager().find(res::Tag(res::Tag::memory, "__color_scene_rt"));
+	auto texture = rnd::get_system().get_texture_manager().find(res::tag(res::tag::memory, "__color_scene_rt"));
 	auto* backend = wnd::get_system().get_gui_backend();
 
 	ImGuiStyle& style = ImGui::GetStyle();

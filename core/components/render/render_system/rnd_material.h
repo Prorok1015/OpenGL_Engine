@@ -8,8 +8,8 @@ namespace rnd
 	class Material
 	{
 	public:
-		res::Tag shader_tag = res::Tag::make("scene");
-		res::Tag texture_tag = res::Tag::make("block.png");
+		res::tag shader_tag = res::tag::make("scene");
+		res::tag texture_tag = res::tag::make("block.png");
 		bool is_self_indecex = false;
 	};
 }

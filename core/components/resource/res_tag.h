@@ -5,25 +5,25 @@
 
 namespace res
 {
-	class Tag
+	class tag
 	{
 	public:
-		static const Tag null;
+		static const tag null;
 	
 		struct hash {
-			std::size_t operator() (const Tag& tag) const {
-				return tag.get_hash();
+			std::size_t operator() (const tag& val) const {
+				return val.get_hash();
 			}
 		};
 
 		static const std::string_view default_protocol() { return "res"; }
 		static constexpr std::string_view memory = "memory";
-		static Tag make(const std::string_view path) {
-			return Tag{ default_protocol(), path };
+		static tag make(const std::string_view path) {
+			return tag{ default_protocol(), path };
 		}
 
 	public:
-		explicit Tag(const std::string_view pref, const std::string_view path) 
+		explicit tag(const std::string_view pref, const std::string_view path) 
 		{
 			full_ = std::vformat("{0}://{1}", std::make_format_args(pref, path));
 
@@ -34,23 +34,24 @@ namespace res
 			name_ = { name_start_idx + 1, full_.length() - name_start_idx - 1 };
 		}
 
-		Tag() = default;
-		Tag(const Tag&) = default;
-		Tag(Tag&&) = default;
-		Tag& operator= (const Tag&) = default;
-		Tag& operator= (Tag&&) = default;
+		constexpr tag() noexcept = default;
+		constexpr tag(const tag&) = default;
+		constexpr tag(tag&&) = default;
+		constexpr tag& operator= (const tag&) = default;
+		constexpr tag& operator= (tag&&) = default;
 
-		bool is_valid() const { return !full_.empty(); }
+		constexpr bool is_valid() const noexcept { return !full_.empty(); }
 
-		const std::string_view protocol() const { return std::string_view(full_.data() + protocol_.x, protocol_.y); }
-		const std::string_view path() const { return std::string_view(full_.data() + path_.x, path_.y); }
-		const std::string_view name() const { return std::string_view(full_.data() + name_.x, name_.y); }
-		const std::string_view pure_name() const { auto result = name(); return result.substr(0, result.find_last_of('.'));  }
-		const std::string_view get_full() const { return full_; }
+		constexpr const std::string_view protocol() const { return std::string_view(full_.data() + protocol_.x, protocol_.y); }
+		constexpr const std::string_view path() const { return std::string_view(full_.data() + path_.x, path_.y); }
+		constexpr const std::string_view name() const { return std::string_view(full_.data() + name_.x, name_.y); }
+		constexpr const std::string_view pure_name() const { auto result = name(); return result.substr(0, result.find_last_of('.'));  }
+		constexpr const std::string_view get_full() const { return full_; }
+		constexpr const std::string_view extension() const { return name().substr(name().find_last_of('.') + 1); }
 
-		bool operator== (const Tag& tag) const { return get_hash() == tag.get_hash(); }
+		bool operator== (const tag& val) const { return get_hash() == val.get_hash(); }
 		std::size_t get_hash() const { return std::hash<std::string>{}(full_); }
-
+		friend tag operator+ (const tag& a, const tag& b);
 	private:
 		std::string full_;
 		glm::ivec2 protocol_;
@@ -58,18 +59,17 @@ namespace res
 		glm::ivec2 name_;
 	};
 
-	Tag operator+ (const Tag& a, const Tag& b);
 }
 
 namespace std {
 	template <typename T> struct hash;
 
 	template<>
-	struct hash<res::Tag>
+	struct hash<res::tag>
 	{
-		std::size_t operator()(const res::Tag& tag) const
+		std::size_t operator()(const res::tag& val) const
 		{
-			return tag.get_hash();
+			return val.get_hash();
 		}
 	};
 

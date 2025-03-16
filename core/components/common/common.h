@@ -30,4 +30,13 @@ using Event = ds::Event<SIGNATURE, ds::EventPolicySimpleContainer<ds::EventStora
 namespace ds
 {
 	using color = glm::vec4;
+
+	template<typename T, typename U>
+	T polymorphic_cast(U ptr)
+	{
+		auto ptr1 = static_cast<T>(ptr);
+		auto ptr2 = dynamic_cast<T>(ptr);
+		ASSERT_MSG(ptr1 == ptr2, "polymorphic_cast failed");
+		return ptr1;
+	}
 }

@@ -64,7 +64,7 @@ void gs::GameSystem::set_enable_input(bool enable)
 
 void gs::GameSystem::load_model(std::string_view path)
 {
-	future_model = std::make_shared<std::future<std::shared_ptr<res::Model>>>(res::get_system().require_resource_async<res::Model>(res::Tag::make(path)));
+	future_model = std::make_shared<std::future<std::shared_ptr<res::Model>>>(res::get_system().require_resource_async<res::Model>(res::tag::make(path)));
 }
 
 void ensure_ecs_material(ecs::entity material, const res::Material& mlt)
@@ -198,7 +198,7 @@ void gs::GameSystem::check_loaded_model()
 		ecs::entity obj = ecs::create_entity();
 		if (auto& bones_data = pres.bones_data.bones_indeces; !bones_data.empty()) { 
 			// TODO: create texture only for model desc
-			res::Tag txm = res::Tag("memory", "__bones_indeces_" + std::to_string((int)obj));
+			res::tag txm = res::tag("memory", "__bones_indeces_" + std::to_string((int)obj));
 			auto& last_bone_view = pres.bones_data;
 			last_bone_view.bones_indeces_txm = txm;
 

@@ -10,7 +10,7 @@ namespace res::loader {
     class model_loader
     {
     public:
-        model_loader(const Tag& tag_)
+        model_loader(const tag& tag_)
             : tag(tag_)
         {
         }
@@ -29,9 +29,9 @@ namespace res::loader {
 
         std::vector<unsigned int> copy_indeces(aiMesh* mesh);
 
-        Tag find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type);
+        tag find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type);
 
-        void increase_txt_counter(const res::Tag& txt)
+        void increase_txt_counter(const res::tag& txt)
         {
             if (txt.is_valid()) {
                 textures_counter[txt]++;
@@ -46,7 +46,7 @@ namespace res::loader {
         model_presintation model;
 
     private:
-        Tag tag;
+        tag tag;
 
         std::size_t max_bones_count = 0;
 
@@ -58,7 +58,7 @@ namespace res::loader {
         std::vector<Mesh> meshes;
         std::stack<glm::mat4> transform_stack;
         std::stack<aiNode*> nodes;
-        std::unordered_map<res::Tag, int> textures_counter;
+        std::unordered_map<res::tag, int> textures_counter;
         std::unordered_map<aiMesh*, int> meshes_counter;
         std::size_t deep = 0;
     };

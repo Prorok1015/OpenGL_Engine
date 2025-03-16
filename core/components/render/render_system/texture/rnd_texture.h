@@ -9,7 +9,7 @@ namespace rnd
 	class Texture
 	{
 	public:
-		static std::unique_ptr<driver::texture_interface> load(driver::driver_interface* drv, const res::Tag& tag);
+		static std::unique_ptr<driver::texture_interface> load(driver::driver_interface* drv, const res::tag& tag);
 
 	public:
 		Texture(driver::texture_interface* texture, int width, int height) 

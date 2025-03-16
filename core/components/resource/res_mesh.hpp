@@ -58,15 +58,15 @@ namespace res
 		constexpr void set_state(STATES flag) { state[flag] = true; }
 		constexpr void clear_state(STATES flag) { state[flag] = false; }
 		constexpr bool is_state(STATES flag) const { return state[flag]; }
-		const res::Tag& get_txm(STATES txm) const {
+		const res::tag& get_txm(STATES txm) const {
 			if (0 < txm && txm < TRANSMISSION_TXM + 1) {
 				return txm_list[txm];
 			}
-			return res::Tag::null;
+			return res::tag::null;
 		}
 
 		std::string name;
-		std::array<res::Tag, TRANSMISSION_TXM + 1> txm_list{};
+		std::array<res::tag, TRANSMISSION_TXM + 1> txm_list{};
 		
 		//COLOR_DIFFUSE
 		glm::vec4 diffuse_color { 0 };
@@ -132,7 +132,7 @@ namespace res
 	{
 		std::size_t begin = 0;
 		std::size_t end = 0;
-		res::Tag bones_indeces_txm;
+		res::tag bones_indeces_txm;
 
 		std::size_t get_offset() const { return begin; }
 		std::size_t get_count() const { return end - begin; }
@@ -142,7 +142,7 @@ namespace res
 	{
 		std::vector<int32_t> bones_indeces; // vertex_count * max_bones_count_per_vertex
 		//std::vector<bone_view> data;
-		res::Tag bones_indeces_txm;
+		res::tag bones_indeces_txm;
 		glm::ivec2 original_size{ 0 };
 	};
 

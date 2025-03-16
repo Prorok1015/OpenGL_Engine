@@ -5,7 +5,7 @@
 #include "rnd_render_system.h"
 
 
-void rnd::shader_desc::preprocess_shader_code(std::vector<res::Tag> tags, std::vector<rnd::driver::shader_header>& headers, const auto& defines_names) const
+void rnd::shader_desc::preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const auto& defines_names) const
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
@@ -22,7 +22,7 @@ void rnd::shader_desc::preprocess_shader_code(std::vector<res::Tag> tags, std::v
             if (begin != std::string_view::npos && end != std::string_view::npos) {
                 std::string_view include = body_view.substr(begin + 1, end - begin - 1);
 
-                auto include_code = res::get_system().require_resource<res::TextFile>(tags[index] + res::Tag::make(include), true);
+                auto include_code = res::get_system().require_resource<res::TextFile>(tags[index] + res::tag::make(include), true);
                 if (include_code) {
                     std::size_t line_end = body.find_first_of('\n', offset);
                     body_view = header.body.replace(offset, line_end - offset, include_code->c_str());
@@ -72,9 +72,9 @@ void rnd::shader_desc::preprocess_shader_code(std::vector<res::Tag> tags, std::v
 std::vector<rnd::driver::shader_header> rnd::shader_scene_desc::load() const
 {
     std::string shader_path = std::vformat("shaders/{0}", std::make_format_args(name));
-	auto vertexCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(shader_path + ".vert"), true);
-	auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(shader_path + ".frag"), true);
-	//auto geomCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(name + ".geom"), true);
+	auto vertexCode = res::get_system().require_resource<res::TextFile>(res::tag::make(shader_path + ".vert"), true);
+	auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::tag::make(shader_path + ".frag"), true);
+	//auto geomCode = res::get_system().require_resource<res::TextFile>(res::tag::make(name + ".geom"), true);
 
 	std::vector<driver::shader_header> headers
 	{
@@ -82,10 +82,10 @@ std::vector<rnd::driver::shader_header> rnd::shader_scene_desc::load() const
 		driver::shader_header{.title = std::string(name) + ".frag", .body = fragmentCode->c_str(), .type = driver::shader_header::TYPE::FRAGMENT},
 	};
 
-    std::vector<res::Tag> tags
+    std::vector<res::tag> tags
     {
-        res::Tag::make(shader_path + ".vert"),
-        res::Tag::make(shader_path + ".frag"),
+        res::tag::make(shader_path + ".vert"),
+        res::tag::make(shader_path + ".frag"),
     };
 
     defines[LIGHTS_ENABLED] = defines[DIRECTION_LIGHT_COUNT] || defines[POINT_LIGHT_COUNT];
@@ -98,9 +98,9 @@ std::vector<rnd::driver::shader_header> rnd::shader_scene_desc::load() const
 
 std::vector<rnd::driver::shader_header> rnd::shader_sky_desc::load() const
 {
-	auto vertexCode = res::get_system().require_resource<res::TextFile>(res::Tag::make("shaders/sky.vert"), true);
-	auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::Tag::make("shaders/sky.frag"), true);
-	//auto geomCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(name + ".geom"), true);
+	auto vertexCode = res::get_system().require_resource<res::TextFile>(res::tag::make("shaders/sky.vert"), true);
+	auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::tag::make("shaders/sky.frag"), true);
+	//auto geomCode = res::get_system().require_resource<res::TextFile>(res::tag::make(name + ".geom"), true);
 	std::vector<driver::shader_header> headers
 	{
 		driver::shader_header{.title = "sky.vert", .body = vertexCode->c_str(), .type = driver::shader_header::TYPE::VERTEX},
@@ -112,9 +112,9 @@ std::vector<rnd::driver::shader_header> rnd::shader_sky_desc::load() const
 
 std::vector<rnd::driver::shader_header> rnd::shader_scene_instance_desc::load() const
 {
-	auto vertexCode = res::get_system().require_resource<res::TextFile>(res::Tag::make("shaders/scene_inst.vert"), true);
-	auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::Tag::make("shaders/scene_inst.frag"), true);
-	//auto geomCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(name + ".geom"), true);
+	auto vertexCode = res::get_system().require_resource<res::TextFile>(res::tag::make("shaders/scene_inst.vert"), true);
+	auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::tag::make("shaders/scene_inst.frag"), true);
+	//auto geomCode = res::get_system().require_resource<res::TextFile>(res::tag::make(name + ".geom"), true);
 	std::vector<driver::shader_header> headers
 	{
 		driver::shader_header{.title = "scene_inst.vert", .body = vertexCode->c_str(), .type = driver::shader_header::TYPE::VERTEX},
@@ -127,9 +127,9 @@ std::vector<rnd::driver::shader_header> rnd::shader_scene_instance_desc::load() 
 std::vector<rnd::driver::shader_header> rnd::pass_composition_desc::load() const
 {
     std::string shader_path = std::vformat("shaders/{0}", std::make_format_args(name));
-    auto vertexCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(shader_path + ".vert"), true);
-    auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(shader_path + ".frag"), true);
-    //auto geomCode = res::get_system().require_resource<res::TextFile>(res::Tag::make(name + ".geom"), true);
+    auto vertexCode = res::get_system().require_resource<res::TextFile>(res::tag::make(shader_path + ".vert"), true);
+    auto fragmentCode = res::get_system().require_resource<res::TextFile>(res::tag::make(shader_path + ".frag"), true);
+    //auto geomCode = res::get_system().require_resource<res::TextFile>(res::tag::make(name + ".geom"), true);
 
     std::vector<driver::shader_header> headers
     {
@@ -137,10 +137,10 @@ std::vector<rnd::driver::shader_header> rnd::pass_composition_desc::load() const
         driver::shader_header{.title = std::string(name) + ".frag", .body = fragmentCode->c_str(), .type = driver::shader_header::TYPE::FRAGMENT},
     };
 
-    std::vector<res::Tag> tags
+    std::vector<res::tag> tags
     {
-        res::Tag::make(shader_path + ".vert"),
-        res::Tag::make(shader_path + ".frag"),
+        res::tag::make(shader_path + ".vert"),
+        res::tag::make(shader_path + ".frag"),
     };
 
     preprocess_shader_code(tags, headers, get_all_define_names());

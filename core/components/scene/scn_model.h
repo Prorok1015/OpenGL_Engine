@@ -27,7 +27,7 @@ namespace scn {
 
     struct model_root_component {
         res::meshes_conteiner data;
-        res::Tag geom_tag;
+        res::tag geom_tag;
     };
 
     struct animations_component {
@@ -66,7 +66,7 @@ namespace scn {
     {
         res::meshes_conteiner data;
         res::mesh_view mesh;
-        std::vector<res::Tag> cube_map;
+        std::vector<res::tag> cube_map;
     };
 
     struct directional_light

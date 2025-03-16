@@ -63,7 +63,7 @@ namespace rnd
 			return name == desc.name && defines == desc.defines && defines_values == desc.defines_values;
 		}
 
-		void preprocess_shader_code(std::vector<res::Tag> tags, std::vector<rnd::driver::shader_header>& headers, const auto& define_names) const;
+		void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const auto& define_names) const;
 
 		rnd::driver::texture_interface* tex0 = nullptr;
 		rnd::driver::texture_interface* tex1 = nullptr;

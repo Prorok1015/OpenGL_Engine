@@ -12,6 +12,13 @@ namespace ds {
 			static unique_id classId = next();
 			return classId;
 		}
+		
+		template<class T>
+		static Type make() {
+			return Type{ .id = value<T>() };
+		}
+
+		auto operator<=>(const Type&) const = default;
 
 	private:
 		static unique_id next() {
@@ -19,6 +26,8 @@ namespace ds {
 			return counter++;
 		}
 
+	public:
+		unique_id id = 0;
 	};
 
 //  It doesn't work well with MSVC !!!
@@ -85,4 +94,13 @@ namespace ds {
 //	static_assert(type_name<int>() == type_name<int>());
 //	static_assert(type_name<char*>() == "char *");
 //	static_assert(type_name<Type>() == "ds::Type");
+}
+
+namespace std {
+	template<>
+	struct hash<ds::Type> {
+		std::size_t operator()(const ds::Type& type) const {
+			return type.id;
+		}
+	};
 }

@@ -7,7 +7,7 @@ namespace res
 	class TextFile : public Resource
 	{
 	public:
-		TextFile(const Tag& tag);
+		TextFile(const tag& tag);
 
 		const char* c_str() const { return body_.c_str(); }
 

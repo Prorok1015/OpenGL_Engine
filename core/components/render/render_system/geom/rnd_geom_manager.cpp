@@ -11,7 +11,7 @@ rnd::geom_manager::~geom_manager()
 {
 }
 
-rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::Tag geom_tag)
+rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::tag geom_tag)
 {
     ASSERT_MSG(geom_tag.is_valid(), "geom tag is invalid!");
 
@@ -24,7 +24,7 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::Ta
     return (cache[model->get_tag()] = std::move(va)).get();
 }
 
-rnd::driver::vertex_array_interface* rnd::geom_manager::find_geometry(res::Tag geom_tag)
+rnd::driver::vertex_array_interface* rnd::geom_manager::find_geometry(res::tag geom_tag)
 {
 	auto it = cache.find(geom_tag);
 	if (it != cache.end()) {

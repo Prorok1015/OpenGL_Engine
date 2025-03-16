@@ -2,7 +2,7 @@
 #include "res_system.h"
 #include "res_picture.h"
 
-rnd::driver::texture_interface* rnd::TextureManager::require_texture(const res::Tag& tag)
+rnd::driver::texture_interface* rnd::TextureManager::require_texture(const res::tag& tag)
 {
 	auto it = cache.find(tag);
 	if (it != cache.end()) {
@@ -14,7 +14,7 @@ rnd::driver::texture_interface* rnd::TextureManager::require_texture(const res::
 	return texture.get();
 }
 
-rnd::driver::texture_interface* rnd::TextureManager::require_cubemap_texture(const std::vector<res::Tag>& tags)
+rnd::driver::texture_interface* rnd::TextureManager::require_cubemap_texture(const std::vector<res::tag>& tags)
 {
 	auto it = cache.find(tags.front());
     if (it != cache.end()) {
@@ -23,8 +23,8 @@ rnd::driver::texture_interface* rnd::TextureManager::require_cubemap_texture(con
 
     rnd::driver::texture_header cb_header;
 
-    auto load_face_data = [](res::Tag tag) -> std::tuple<void*, rnd::driver::texture_header::TYPE, uint32_t, uint32_t> {
-        auto res = res::get_system().require_resource<res::Picture>(tag);
+    auto load_face_data = [](res::tag tag) -> std::tuple<std::vector<unsigned char>, rnd::driver::texture_header::TYPE, uint32_t, uint32_t> {
+        auto res = res::get_system().require_resource2<res::Picture>(tag);
         rnd::driver::texture_header::TYPE format;
         switch (res->channels()) {
             case 1: format = rnd::driver::texture_header::TYPE::R8; break;
@@ -34,7 +34,11 @@ rnd::driver::texture_interface* rnd::TextureManager::require_cubemap_texture(con
                 // Handle unsupported channel counts appropriately (e.g., throw an exception)
                 throw std::runtime_error("Unsupported number of channels in cubemap texture");
         }
-        return std::make_tuple(res->data(), format, res->size().x, res->size().y);
+
+		std::vector<unsigned char> data(res->size().x * res->size().y * res->channels());
+		std::copy(res->data(), res->data() + data.size(), data.begin());
+
+        return std::make_tuple(std::move(data), format, res->size().x, res->size().y);
     };
 
     // 1. Create Texture (Empty) & allocate storage
@@ -54,9 +58,9 @@ rnd::driver::texture_interface* rnd::TextureManager::require_cubemap_texture(con
     auto& texture = cache[tags.front()] = drv->create_texture(cb_header);
 
     // 2. Update Data for each face
-    auto update_face = [&](rnd::driver::texture_interface* texture_intf, res::Tag tag, uint32_t face) {
+    auto update_face = [&](rnd::driver::texture_interface* texture_intf, res::tag tag, uint32_t face) {
         auto [data, format, width, height] = load_face_data(tag);
-        texture_intf->update_data(data, 0, 0, 0, width, height, 1, 0, 0, face); // face parameter is crucial here!
+        texture_intf->update_data(data.data(), 0, 0, 0, width, height, 1, 0, 0, face); // face parameter is crucial here!
     };
 
 
@@ -70,7 +74,7 @@ rnd::driver::texture_interface* rnd::TextureManager::require_cubemap_texture(con
     return texture.get();
 }
 
-rnd::driver::texture_interface* rnd::TextureManager::generate_texture(const res::Tag& tag, rnd::driver::texture_header header)
+rnd::driver::texture_interface* rnd::TextureManager::generate_texture(const res::tag& tag, rnd::driver::texture_header header)
 {
 	auto it = cache.find(tag);
 	if (it != cache.end()) {
@@ -82,7 +86,7 @@ rnd::driver::texture_interface* rnd::TextureManager::generate_texture(const res:
     return texture.get();
 }
  
-rnd::driver::texture_interface* rnd::TextureManager::generate_texture(const res::Tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data)
+rnd::driver::texture_interface* rnd::TextureManager::generate_texture(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data)
 {
 	rnd::driver::texture_header header;
 	header.data.extent.width = size.x;
@@ -94,7 +98,7 @@ rnd::driver::texture_interface* rnd::TextureManager::generate_texture(const res:
 	return generate_texture(tag, header);
 }
 
-rnd::driver::texture_interface* rnd::TextureManager::find(const res::Tag& tag) const
+rnd::driver::texture_interface* rnd::TextureManager::find(const res::tag& tag) const
 {
 	auto it = cache.find(tag);
 	if (it != cache.end()) {
@@ -105,17 +109,17 @@ rnd::driver::texture_interface* rnd::TextureManager::find(const res::Tag& tag) c
 	return nullptr;
 }
 
-void rnd::TextureManager::remove(const res::Tag& tag)
+void rnd::TextureManager::remove(const res::tag& tag)
 {
 	cache.erase(tag);
 }
 
 void rnd::TextureManager::clear_cache()
 { 
-	std::vector<res::Tag> list_to_delete;
+	std::vector<res::tag> list_to_delete;
 	for (auto& [key, _] : cache)
 	{
-		if (key.protocol() != res::Tag::memory) {
+		if (key.protocol() != res::tag::memory) {
 			list_to_delete.push_back(key);
 		}
 	}

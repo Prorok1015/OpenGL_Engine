@@ -37,7 +37,7 @@ namespace stb_image {
 		void flip(ImageFlip fp) { flipFlag_ = fp; }
 
 		static void free_image_data(unsigned char* data);
-		static Image read_from_memory(unsigned char* data, int len);
+		static Image read_from_memory(const unsigned char* data, int len);
 
 	private:
 		bool read(const std::string_view filename);
