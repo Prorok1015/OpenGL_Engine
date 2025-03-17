@@ -1,0 +1,6 @@
+{
+	"__parent": "res://test_parent_desc.desc",
+	"just_number": 42,
+	"just_string": "Hello, World!",
+	"field": "res://test_sub_field_desc.desc"
+}

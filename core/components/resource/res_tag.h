@@ -23,6 +23,16 @@ namespace res
 		}
 
 	public:
+		explicit tag(const std::string_view tag_path)
+		{
+			full_ = tag_path;
+			protocol_ = { 0, full_.find_first_of("://") };
+			const std::size_t name_start_idx = full_.find_last_of('/');
+			const std::size_t path_start_idx = full_.find_first_of('/') + 1;
+			path_ = { path_start_idx, name_start_idx - path_start_idx };
+			name_ = { name_start_idx + 1, full_.length() - name_start_idx - 1 };
+		}
+
 		explicit tag(const std::string_view pref, const std::string_view path) 
 		{
 			full_ = std::vformat("{0}://{1}", std::make_format_args(pref, path));

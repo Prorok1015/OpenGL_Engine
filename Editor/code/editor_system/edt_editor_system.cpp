@@ -101,7 +101,8 @@ pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nul
         os << "\n";
 }
 
-editor::EditorSystem::EditorSystem()
+editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
+	: desc_system(desc_system_)
 {
 	GUI_REG_LAMBDA("File/Import...", [this] { return show_file_dialog(); });
 
@@ -557,6 +558,16 @@ bool editor::EditorSystem::show_toolbar()
 	bool is_open = true;
 	if (ImGui::Begin("Observer", &is_open))
 	{
+		auto ttt = desc_system.get_desc<editor_test_desc>();
+		if (ttt) {
+			ImGui::Text("DESC TEST just_number: %d", ttt->just_number);
+			ImGui::Text("DESC TEST just_string: %s", ttt->just_string.c_str());
+			ImGui::Text("DESC TEST just_float: %f", ttt->just_double);
+			if (ttt->field) {
+				ImGui::Text("DESC TEST field: %s", ttt->field->field_string.c_str());
+			}
+		}
+
 		auto& app = app::get_app_system();
 		ImGui::Text("Common");
 		ImGui::Separator();

@@ -6,12 +6,91 @@
 #include "rnd_render_system.h"
 #include "edt_input_manager.h"
 #include "edt_file_dialog.h"
+
+#include "desc_base.hpp"
+#include "desc_system.h"
+
 namespace editor
 {
+	class editor_test_field_desc : public desc::desc_base
+	{
+	public:
+		editor_test_field_desc() = default;
+		virtual ~editor_test_field_desc() = default;
+		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
+		{
+			if (data.contains("__parent")) {
+				res::tag parent_tag{ data.at("__parent").as_string() };
+				*this = *desc_system.get_desc<editor_test_field_desc>(parent_tag);
+			}
+
+			if (data.contains("field_string"))
+				field_string = data.at("field_string").as_string();
+		}
+
+		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const override
+		{
+		}
+
+		std::string field_string;
+	};
+
+	class editor_test_sub_field_desc : public editor_test_field_desc
+	{
+
+	};
+
+	class editor_test_parent_desc : public desc::desc_base
+	{
+	public:
+		editor_test_parent_desc() = default;
+		virtual ~editor_test_parent_desc() = default;
+		virtual void deserialize(desc::desc_system& res_system, const json::object& data) override
+		{
+			if (data.contains("just_number"))
+				just_number = data.at("just_number").as_int64();
+			if (data.contains("just_double"))
+				just_double = data.at("just_double").as_double();
+		}
+
+		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const override
+		{
+		}
+
+		int just_number = 0;
+		double just_double = 0.0;
+	};
+
+	class editor_test_desc : public editor_test_parent_desc
+	{
+
+	public:
+		editor_test_desc() = default;
+		virtual ~editor_test_desc() = default;
+		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
+		{
+			res::tag parent_tag{ data.at("__parent").as_string() };
+			(editor_test_parent_desc&)*this = *desc_system.get_desc<editor_test_parent_desc>(parent_tag);
+			editor_test_parent_desc::deserialize(desc_system, data);
+
+			if (data.contains("just_string"))
+				just_string = data.at("just_string").as_string();
+
+			if (data.contains("field")) {
+				res::tag field_tag{ data.at("field").as_string() };
+				field = desc_system.get_desc<editor_test_field_desc>(field_tag);
+			}
+		}
+
+		std::string just_string;
+		std::shared_ptr<editor_test_field_desc> field;
+	};
+
+
 	class EditorSystem
 	{
 	public:
-		EditorSystem();
+		EditorSystem(desc::desc_system& desc_system);
 		~EditorSystem();
 		bool show_toolbar();
 		bool show_file_dialog();
@@ -82,6 +161,8 @@ namespace editor
 		bool is_inited_ecs_test = false;
 		std::shared_ptr<edt::input_manager> input;
 		edt::file_dialog file_dialog;
+
+		desc::desc_system& desc_system;
 	};
 
 

@@ -1,0 +1,4 @@
+{
+	"__parent": "res://test_field_parent_desc.desc",
+	"field_string": "I'm a CHILD field string"
+}
