@@ -1,4 +1,4 @@
-# The Snake Engine
+# Snake Engine
 
 Used third party libs
 <ul>
