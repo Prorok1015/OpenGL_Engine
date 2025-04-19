@@ -330,7 +330,7 @@ void gs::GameSystem::check_loaded_model()
 		ecs::registry.emplace<scn::children_component>(world_anchor, children);
 
 		ecs::registry.emplace<scn::parent_component>(obj, world_anchor);
-		std::string geom_path = std::string{ res->get_tag().path() } + "/__geometry.desc";
+		std::string geom_path = std::string{ res->get_tag().path() } + "__geometry.desc";
 		res::tag geom_tag = res::tag(res::tag::memory, geom_path);
 		
 		// 1. make json -> save to memory resolver
