@@ -121,7 +121,7 @@ void gs::GameSystem::ensure_ecs_material(ecs::entity material, const res::Materi
 	if (mlt.is_state(res::Material::ALBEDO_TXM)) {
 		auto& txm_tag = mlt.get_txm(res::Material::ALBEDO_TXM);
 		{
-			auto str_path = std::string{ txm_tag.path() } + "/" + std::string{txm_tag.pure_name()} + ".desc";
+			auto str_path = std::string{ txm_tag.path() } + std::string{txm_tag.pure_name()} + ".desc";
 			auto desc_tag = res::tag(res::tag::memory, str_path);
 			rnd::texture_desc txm_desc;
 			txm_desc.txm_name = txm_tag.pure_name();

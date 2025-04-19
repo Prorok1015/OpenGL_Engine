@@ -29,7 +29,7 @@ namespace res
 			protocol_ = { 0, full_.find_first_of("://") };
 			const std::size_t name_start_idx = full_.find_last_of('/');
 			const std::size_t path_start_idx = full_.find_first_of('/') + 1;
-			path_ = { path_start_idx, name_start_idx - path_start_idx };
+			path_ = { path_start_idx + 1, name_start_idx - path_start_idx };
 			name_ = { name_start_idx + 1, full_.length() - name_start_idx - 1 };
 		}
 

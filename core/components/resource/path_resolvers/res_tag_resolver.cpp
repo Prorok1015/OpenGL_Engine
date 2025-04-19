@@ -27,9 +27,8 @@ std::filesystem::path res::resource_resolver::resolve_tag(const tag& tag) const
 {
 	for (auto& entry : entry_points)
 	{
-		std::filesystem::path path = entry;
-		path /= tag.path();
-		path /= tag.name();
+		std::filesystem::path path = entry + std::string{ tag.path() } + std::string{ tag.name() };
+		
 		if (std::filesystem::exists(path)) {
 			return path;
 		}
