@@ -5,7 +5,8 @@ extern gs::GameSystem* p_game_system;
 
 void components::game_init(ds::AppDataStorage& data)
 {
-	p_game_system = &data.construct<gs::GameSystem>();
+	auto& desc_sys = data.require<desc::desc_system>();
+	p_game_system = &data.construct<gs::GameSystem>(desc_sys);
 }
 
 void components::game_term(ds::AppDataStorage& data)

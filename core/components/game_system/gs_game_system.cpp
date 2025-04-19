@@ -22,6 +22,9 @@
 #include "scn_material_component.hpp"
 #include "ecs_component.h"
 
+#include "geom/rnd_geometry_desc.h"
+#include "texture/rnd_texture_desc.h"
+
 gs::GameSystem* p_game_system = nullptr;
 extern int gMaxTexture2DSize;
 
@@ -41,7 +44,8 @@ bool is_ready(std::future<R> const& f)
 	return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 }
 
-gs::GameSystem::GameSystem()
+gs::GameSystem::GameSystem(desc::desc_system& d)
+	: desc_system(d)
 {
 	window = wnd::get_system().get_active_window();
 	//input = std::make_shared<inp::input_manager>();
@@ -67,7 +71,7 @@ void gs::GameSystem::load_model(std::string_view path)
 	future_model = std::make_shared<std::future<std::shared_ptr<res::Model>>>(res::get_system().require_resource_async<res::Model>(res::tag::make(path)));
 }
 
-void ensure_ecs_material(ecs::entity material, const res::Material& mlt)
+void gs::GameSystem::ensure_ecs_material(ecs::entity material, const res::Material& mlt)
 {
 	ecs::registry.emplace<scn::name_component>(material, mlt.name);
 	scn::base_material_component base_mlt;
@@ -115,10 +119,54 @@ void ensure_ecs_material(ecs::entity material, const res::Material& mlt)
 
 	ecs::registry.emplace<scn::base_material_component>(material, base_mlt);
 	if (mlt.is_state(res::Material::ALBEDO_TXM)) {
-		ecs::registry.emplace<scn::albedo_map_component>(material, mlt.get_txm(res::Material::ALBEDO_TXM));
+		auto& txm_tag = mlt.get_txm(res::Material::ALBEDO_TXM);
+		{
+			auto str_path = std::string{ txm_tag.path() } + "/" + std::string{txm_tag.pure_name()} + ".desc";
+			auto desc_tag = res::tag(res::tag::memory, str_path);
+			rnd::texture_desc txm_desc;
+			txm_desc.txm_name = txm_tag.pure_name();
+			txm_desc.txm_tag = txm_tag;
+			auto& header = txm_desc.header;
+			header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
+			header.data.extent.width = 0;
+			header.data.extent.height = 0;
+
+			json::object txm_js;
+			txm_desc.serialize(txm_desc.txm_tag, res::get_system(), txm_js);
+			std::string str_data = json::serialize(txm_js);
+			std::vector<std::byte> txm_data;
+			txm_data.resize(str_data.size());
+			std::memcpy(txm_data.data(), str_data.data(), str_data.size());
+			res::get_system().memory_resolver_.add_memory(desc_tag, txm_data);
+
+			desc_system.register_desc<rnd::texture_desc>(desc_tag, std::string{ txm_desc.txm_tag.pure_name() });
+			ecs::registry.emplace<scn::albedo_map_component>(material, desc_tag);
+		}
 	}
 	if (mlt.is_state(res::Material::NORMALS_TXM)) {
-		ecs::registry.emplace<scn::normal_map_component>(material, mlt.get_txm(res::Material::NORMALS_TXM));
+		auto txm_tag = mlt.get_txm(res::Material::NORMALS_TXM);
+		{
+			auto str_path = std::string{ txm_tag.path() } + "/" + std::string{ txm_tag.pure_name() } + ".desc";
+			auto desc_tag = res::tag(res::tag::memory, str_path);
+			rnd::texture_desc txm_desc;
+			txm_desc.txm_name = txm_tag.pure_name();
+			txm_desc.txm_tag = txm_tag;
+			auto& header = txm_desc.header;
+			header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
+			header.data.extent.width = 0;
+			header.data.extent.height = 0;
+
+			json::object txm_js;
+			txm_desc.serialize(txm_desc.txm_tag, res::get_system(), txm_js);
+			std::string str_data = json::serialize(txm_js);
+			std::vector<std::byte> txm_data;
+			txm_data.resize(str_data.size());
+			std::memcpy(txm_data.data(), str_data.data(), str_data.size());
+			res::get_system().memory_resolver_.add_memory(desc_tag, txm_data);
+
+			desc_system.register_desc<rnd::texture_desc>(desc_tag, std::string{ txm_desc.txm_tag.pure_name() });
+			ecs::registry.emplace<scn::normal_map_component>(material, desc_tag);
+		}
 	}
 	if (mlt.is_state(res::Material::SPECULAR_TXM)) {
 		ecs::registry.emplace<scn::specular_map_component>(material, mlt.get_txm(res::Material::SPECULAR_TXM));
@@ -282,7 +330,39 @@ void gs::GameSystem::check_loaded_model()
 		ecs::registry.emplace<scn::children_component>(world_anchor, children);
 
 		ecs::registry.emplace<scn::parent_component>(obj, world_anchor);
-		ecs::registry.emplace<scn::model_root_component>(obj, pres, res->get_tag());
+		std::string geom_path = std::string{ res->get_tag().path() } + "/__geometry.desc";
+		res::tag geom_tag = res::tag(res::tag::memory, geom_path);
+		
+		// 1. make json -> save to memory resolver
+		json::object geom_js;
+		rnd::geometry_desc geom_desc;
+		geom_desc.layout = {
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
+		};
+		geom_desc.vertices.resize(pres.vertices.size() * sizeof(res::Vertex));
+		std::memcpy(geom_desc.vertices.data(), (std::byte*)pres.vertices.data(), geom_desc.vertices.size());
+		geom_desc.indices = pres.indices;
+
+		geom_desc.serialize(geom_tag, res::get_system(), geom_js);
+
+		std::string str_data = json::serialize(geom_js);
+		std::vector<std::byte> geom_data;
+		geom_data.resize(str_data.size());
+		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
+
+		res::get_system().memory_resolver_.add_memory(geom_tag, geom_data);
+
+		// 2. register new geometry_desc
+		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
+
+		ecs::registry.emplace<scn::model_root_component>(obj, pres, geom_tag);
+
 		if (!root.animations.empty()) {
 			ecs::registry.emplace<scn::animations_component>(obj, root.animations);
 		}		

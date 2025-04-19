@@ -15,7 +15,7 @@ namespace rnd
 	class RenderSystem
 	{
 	public:
-		RenderSystem(std::unique_ptr<rnd::driver::driver_interface> driver);
+		RenderSystem(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d);
 		~RenderSystem() = default;
 		RenderSystem(const RenderSystem&) = delete;
 		RenderSystem(RenderSystem&&) = delete;

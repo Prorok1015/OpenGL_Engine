@@ -9,11 +9,11 @@ rnd::RenderSystem& rnd::get_system()
 	return *p_render_system;
 }
 
-rnd::RenderSystem::RenderSystem(std::unique_ptr<rnd::driver::driver_interface> driver)
+rnd::RenderSystem::RenderSystem(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d)
 	: drv(std::move(driver))
 	, shader_manager(drv.get())
-	, texture_manager(drv.get())
-	, geom_manager(drv.get())
+	, texture_manager(drv.get(), d)
+	, geom_manager(drv.get(), d)
 {
 }
 

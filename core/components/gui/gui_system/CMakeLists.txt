@@ -6,4 +6,4 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_DEBUG_UI_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE window PRIVATE resource_system PRIVATE render PRIVATE gui_backend_interface)
+target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE window PRIVATE desc_system PRIVATE resource_system PRIVATE render PRIVATE gui_backend_interface)

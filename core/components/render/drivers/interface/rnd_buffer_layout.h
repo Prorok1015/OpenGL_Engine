@@ -77,6 +77,12 @@ namespace rnd::driver
 			calculate_offsets_and_stride();
 		}
 
+		explicit BufferLayout(const std::vector<BufferElement>& elements)
+			: m_Elements(elements)
+		{
+			calculate_offsets_and_stride();
+		}
+
 		uint32_t get_stride() const { return m_Stride; }
 		const std::vector<BufferElement>& get_elements() const { return m_Elements; }
 

@@ -1,14 +1,12 @@
-#include "res_model_importer_adapter.h"
+#include "scn_model_importer_adapter.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
-#include <boost/json.hpp>
-
 #include "res_system.h"
 
-std::shared_ptr<res::Resource> res::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
+std::shared_ptr<res::Resource> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
 {
     // read file via ASSIMP
     Assimp::Importer importer;
@@ -20,6 +18,9 @@ std::shared_ptr<res::Resource> res::model_importer_adapter::operator()(const res
         egLOG("scene/model/load", "ERROR::ASSIMP::{}", importer.GetErrorString());
         return {};
     }
+
+    auto& res_system = res::get_system();
+    res_system.memory_resolver_.add_memory({}, {});
 
 	return std::shared_ptr<res::Resource>();
 }

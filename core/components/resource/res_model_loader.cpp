@@ -163,6 +163,7 @@ std::vector<res::Mesh> res::loader::model_loader::load()
     }
     model.data.bones_matrices.reserve(model.data.bones.size());
 
+
     egLOG("load/deep", "max deep: {}", deep);
     egLOG("load/meshes", "meshes: {}", meshes.size());
     for (auto& [txt, count] : textures_counter)

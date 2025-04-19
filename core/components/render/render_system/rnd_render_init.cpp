@@ -7,7 +7,8 @@ extern rnd::RenderSystem* p_render_system;
 void components::render_init(ds::AppDataStorage& data)
 {
 	auto& window_system = data.require<wnd::WindowSystem>();
-	p_render_system = &data.construct<rnd::RenderSystem>(window_system.get_context()->create_driver());
+	auto& desc_sys = data.require<desc::desc_system>();
+	p_render_system = &data.construct<rnd::RenderSystem>(window_system.get_context()->create_driver(), desc_sys);
 }
 
 void components::render_term(ds::AppDataStorage& data)

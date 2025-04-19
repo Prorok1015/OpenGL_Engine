@@ -78,6 +78,7 @@ namespace desc
 				if (it != desc_map.end()) {
 					auto desc = res_system.require_resource2<desc::desc_resource>(tag);
 					it->second->deserialize(*this, desc->body);
+					it->second->set_is_loaded();
 				}
 			}
 
@@ -101,7 +102,7 @@ namespace desc
 			if (it == name_map.end()) {
 				return nullptr;
 			}
-			auto type = it->second;
+			auto& type = it->second;
 			auto it2 = desc_map.find(type);
 			if (it2 == desc_map.end()) {
 				return nullptr;

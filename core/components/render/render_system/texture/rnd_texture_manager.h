@@ -2,6 +2,7 @@
 #include <common.h>
 #include "res_tag.h"
 #include "rnd_texture.h"
+#include "desc_system.h"
 
 #include <rnd_driver_interface.h>
 #include <rnd_texture_interface.h>
@@ -11,8 +12,10 @@ namespace rnd
 	class TextureManager
 	{
 	public:
-		TextureManager(driver::driver_interface* driver)
-			: drv(driver) {}
+		TextureManager(driver::driver_interface* driver, desc::desc_system& d)
+			: drv(driver)
+			, desc_system(d)
+		{}
 
 		driver::texture_interface* require_texture(const res::tag& tag);
 		driver::texture_interface* require_cubemap_texture(const std::vector<res::tag>& tags);
@@ -30,6 +33,7 @@ namespace rnd
 		void clear_cache();
 	protected:
 		mutable std::unordered_map<res::tag, std::unique_ptr<driver::texture_interface>, res::tag::hash> cache;
+		desc::desc_system& desc_system;
 		driver::driver_interface* drv = nullptr;
 	};
 

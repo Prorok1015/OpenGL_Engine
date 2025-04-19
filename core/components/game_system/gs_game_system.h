@@ -8,14 +8,14 @@
 #include "ecs_input_manager.h"
 #include "inp_input_manager.h"
 #include "res_instance.h"
-
+#include "desc_system.h"
 
 namespace gs 
 {
 	class GameSystem
 	{
 	public:
-		GameSystem();
+		GameSystem(desc::desc_system& d);
 		~GameSystem();
 		GameSystem(const GameSystem&) = delete;
 		GameSystem& operator= (const GameSystem&) = delete;
@@ -26,6 +26,7 @@ namespace gs
 
 		std::shared_ptr<wnd::window> get_window() { return window; };
 		void load_model(std::string_view path);
+		void ensure_ecs_material(ecs::entity material, const res::Material& mlt);
 		void reload_shaders();
 
 		void add_cube_to_scene(float radius);
@@ -40,6 +41,7 @@ namespace gs
 		ecs::entity cubes_inst;
 
 	private:
+		desc::desc_system& desc_system;
 		std::shared_ptr<scn::renderer_3d> renderer;
 
 		std::shared_ptr<wnd::window> window;

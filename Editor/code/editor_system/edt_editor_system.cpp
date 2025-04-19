@@ -18,6 +18,8 @@
 #include <misc/cpp/imgui_stdlib.h>
 #include <boost/json.hpp>
 #include <imgui.h>
+#include "geom/rnd_geometry_desc.h"
+#include "texture/rnd_texture_desc.h"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -114,14 +116,33 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	GUI_REG_LAMBDA("Editor/Test JSON Window", [this] { 
 		bool is_open = true;
 		if (ImGui::Begin("Test JSON Window", &is_open)) {
-			ImGui::Text("This is a test window for JSON serialization.");
-			if (test_json_selected_material != entt::null) {
-				auto obj = scn::convert_material_to_json(test_json_selected_material); 
-				std::ostringstream oss;
-				pretty_print(oss, obj);
-				std::string json_string = oss.str();
-				ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly); 
+			if (selected_entity != entt::null) 
+			{
+				if (auto* desc = ecs::registry.try_get<rnd::geometry_desc>(selected_entity))
+				{
+					json::object data;
+					desc->serialize({}, res::get_system(), data);
+					std::ostringstream oss;
+					pretty_print(oss, data);
+					std::string json_string = oss.str();
+					ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly);
+				
+					rnd::geometry_desc test_desc;
+					test_desc.deserialize(desc_system, data);
+
+					ASSERT_MSG(desc->vertices == test_desc.vertices, "arrays are different");
+				}
 			}
+
+
+			//ImGui::Text("This is a test window for JSON serialization.");
+			//if (test_json_selected_material != entt::null) {
+			//	auto obj = scn::convert_material_to_json(test_json_selected_material); 
+			//	std::ostringstream oss;
+			//	pretty_print(oss, obj);
+			//	std::string json_string = oss.str();
+			//	ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly); 
+			//}
 
 			ImGui::End();
 		}
@@ -196,10 +217,29 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 
 	ecs::entity window_mlt = ecs::create_entity();
 	ecs::registry.emplace<scn::base_material_component>(window_mlt, scn::base_material_component{});
-	ecs::registry.emplace<scn::albedo_map_component>(window_mlt, scn::albedo_map_component{ .txm = res::tag::make("window.png") });
+	ecs::registry.emplace<scn::albedo_map_component>(window_mlt, scn::albedo_map_component{ .txm = res::tag(res::tag::memory, "window.desc") });
 	ecs::registry.emplace<scn::name_component>(window_mlt, scn::name_component{ .name = "WINDOW"});
 	ecs::registry.emplace<scn::is_transparent_flag_component>(window_mlt);
 
+	{
+		rnd::texture_desc txm_desc;
+		txm_desc.txm_name = "window";
+		txm_desc.txm_tag = res::tag::make("window.png");
+		auto& header = txm_desc.header;
+		header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
+		header.data.extent.width = 4587;
+		header.data.extent.height = 8000;
+
+		json::object txm_js;
+		txm_desc.serialize(txm_desc.txm_tag, res::get_system(), txm_js);
+		std::string str_data = json::serialize(txm_js);
+		std::vector<std::byte> txm_data;
+		txm_data.resize(str_data.size());
+		std::memcpy(txm_data.data(), str_data.data(), str_data.size());
+		res::get_system().memory_resolver_.add_memory(res::tag(res::tag::memory, "window.desc"), txm_data);
+
+		desc_system.register_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc"), std::string{ txm_desc.txm_tag.pure_name() });
+	}
 	//  camera
 	{
 		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), gs::get_system().get_window()->get_size() };
@@ -217,7 +257,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	}
 
 	auto web = scn::generate_web({ 50, 50 });
-	res::tag web_tag = res::tag(res::tag::memory, "web.asset");
+	res::tag web_tag = res::tag(res::tag::memory, "web.desc");
 	res::model_presintation web_model_pres;
 	web_model_pres.data = web.data;
 	std::shared_ptr<res::Model> web_asset = std::make_shared<res::Model>(web_tag, web_model_pres);
@@ -228,6 +268,34 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		children.push_back(editor_web);
 
 		res::meshes_conteiner& data = web.data;
+		rnd::geometry_desc geom_desc;
+		geom_desc.layout = {
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
+		};
+
+		geom_desc.indices = web.data.indices;
+		geom_desc.vertices.resize(web.data.vertices.size() * sizeof(res::Vertex));
+		std::memcpy(geom_desc.vertices.data(), (std::byte*)web.data.vertices.data(), geom_desc.vertices.size());
+		auto geom_tag = web_tag;
+		json::object geom_js;
+		geom_desc.serialize(geom_tag, res::get_system(), geom_js);
+
+		std::string str_data = json::serialize(geom_js);
+		std::vector<std::byte> geom_data;
+		geom_data.resize(str_data.size());
+		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
+
+		res::get_system().memory_resolver_.add_memory(geom_tag, geom_data);
+
+		// 2. register new geometry_desc
+		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
+
 		res::mesh_view& mesh = web.mesh;
 		//mesh.material_id = 0;
 
@@ -244,7 +312,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	}
 
 	auto geom = scn::generate_cube();
-	res::tag cube_tag = res::tag(res::tag::memory, "cube.asset");
+	res::tag cube_tag = res::tag(res::tag::memory, "cube.desc");
 	res::model_presintation cube_model_pres;
 	cube_model_pres.data = geom.data;
 	std::shared_ptr<res::Model> cube_asset = std::make_shared<res::Model>(cube_tag, cube_model_pres);
@@ -257,6 +325,34 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		children.push_back(wind);
 
 		res::meshes_conteiner& data = geom.data;
+		rnd::geometry_desc geom_desc;
+		geom_desc.layout = {
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
+		};
+
+		geom_desc.indices = geom.data.indices;
+		geom_desc.vertices.resize(geom.data.vertices.size() * sizeof(res::Vertex));
+		std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.data.vertices.data(), geom_desc.vertices.size());
+		auto geom_tag = cube_tag;
+		json::object geom_js;
+		geom_desc.serialize(geom_tag, res::get_system(), geom_js);
+
+		std::string str_data = json::serialize(geom_js);
+		std::vector<std::byte> geom_data;
+		geom_data.resize(str_data.size());
+		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
+
+		res::get_system().memory_resolver_.add_memory(geom_tag, geom_data);
+
+		// 2. register new geometry_desc
+		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
+		
 		res::mesh_view& mesh = geom.mesh;
 
 		glm::vec2 rnd_pos = glm::diskRand(1.f);

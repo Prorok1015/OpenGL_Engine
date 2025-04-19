@@ -1,6 +1,7 @@
 #include "rnd_texture_manager.h"
 #include "res_system.h"
 #include "res_picture.h"
+#include "rnd_texture_desc.h"
 
 rnd::driver::texture_interface* rnd::TextureManager::require_texture(const res::tag& tag)
 {
@@ -10,7 +11,57 @@ rnd::driver::texture_interface* rnd::TextureManager::require_texture(const res::
 		return texture.get();
 	}
 
-	auto& texture = cache[tag] = rnd::Texture::load(drv, tag);
+	auto desc = desc_system.get_desc<rnd::texture_desc>(tag);
+	if (!desc) {
+		ASSERT_FAIL("texture desc not found");
+		return nullptr;
+	}
+
+	ASSERT_MSG(desc->is_loaded(), "desc hasn't loaded yet");
+	if (!desc->is_loaded()) {
+		return nullptr;
+	}
+
+    auto res = res::get_system().require_resource2<res::Picture>(desc->txm_tag);
+    if (!res) {
+        return nullptr;
+    }
+
+    driver::texture_header header = desc->header;
+    header.data.initial_data = res->data();
+
+
+	switch (res->channels())
+	{
+	case 1: { 
+		if (header.data.format != driver::texture_header::TYPE::R8) {
+			header.data.format = driver::texture_header::TYPE::R8;
+		}
+	}break;
+	case 3: {
+		if (header.data.format != driver::texture_header::TYPE::RGB8) {
+			header.data.format = driver::texture_header::TYPE::RGB8;
+		}
+	}break;
+	case 4: {
+		if (header.data.format != driver::texture_header::TYPE::RGBA8) {
+			header.data.format = driver::texture_header::TYPE::RGBA8;
+		}
+	}break;
+	default:
+		break;
+	}
+
+    if (header.data.extent.width != res->size().x) {
+		header.data.extent.width = res->size().x;
+    }
+    if (header.data.extent.height != res->size().y) {
+        header.data.extent.height = res->size().y;
+    }
+    //ASSERT_MSG(header.data.extent.width == res->size().x, "Texture's width doesn't equal");
+    //ASSERT_MSG(header.data.extent.height == res->size().y, "Texture's height doesn't equal");
+
+	auto& texture = cache[tag] = drv->create_texture(header);
 	return texture.get();
 }
 

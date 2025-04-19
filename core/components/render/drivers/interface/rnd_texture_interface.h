@@ -29,7 +29,6 @@ namespace rnd::driver
 		STENCIL_TARGET, // Can be used as stencil attachment
 	};
 
-	using texture_usage = ds::bit_flags<TEXTURE_USAGE>;
 
 	// Extended texture header
 	struct texture_header
@@ -90,7 +89,7 @@ namespace rnd::driver
 
 		std::string name = "unknown";
 		TEXTURE_TYPE type = TEXTURE_TYPE::TEXTURE_2D;
-		texture_usage usage = TEXTURE_USAGE::SAMPLED;
+		TEXTURE_USAGE usage = TEXTURE_USAGE::SAMPLED;
 		texture_data data;
 		FILTERING min = FILTERING::LINEAR;
 		FILTERING mag = FILTERING::LINEAR;
@@ -110,9 +109,9 @@ namespace rnd::driver
 
 		// Texture information
 		TEXTURE_TYPE get_type() const { return header.type; }
-		texture_usage get_usage() const { return header.usage; }
+		TEXTURE_USAGE get_usage() const { return header.usage; }
 		bool has_usage(TEXTURE_USAGE usage) const { 
-			return header.usage.has_flag(usage);
+			return header.usage == usage;
 		}
 
 		// Texture dimensions
