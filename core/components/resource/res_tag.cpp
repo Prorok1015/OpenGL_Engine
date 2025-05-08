@@ -13,3 +13,13 @@ res::tag res::operator+ (const res::tag& l, const res::tag& r)
 	const std::string path = std::vformat("{}{}{}", std::make_format_args(l.path(), r.path(), r.name()));
 	return tag(l.protocol(), path);
 }
+
+void res::tag_invoke(json::value_from_tag, json::value& out, const res::tag& c)
+{
+	out = json::value_from(c.get_full());
+}
+
+res::tag res::tag_invoke(json::value_to_tag<res::tag>, const json::value& obj)
+{
+	return res::tag{ obj.as_string() };
+}

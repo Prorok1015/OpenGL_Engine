@@ -7,6 +7,11 @@ rnd::driver::gl::shader::~shader()
 	glDeleteProgram(id);
 }
 
+void rnd::driver::gl::shader::uniform(std::string_view name, const uniform_data& val)
+{
+	std::visit([&](auto&& value) { uniform(name, value); }, val);
+}
+
 void rnd::driver::gl::shader::uniform(std::string_view name, glm::mat4 val)
 {
 	GLuint transformLoc = glGetUniformLocation(id, name.data());

@@ -2,6 +2,10 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <format>
+#include <boost/json.hpp>
+#include "engine_assert.h"
+
+namespace json = boost::json;
 
 namespace res
 {
@@ -35,6 +39,7 @@ namespace res
 
 		explicit tag(const std::string_view pref, const std::string_view path) 
 		{
+			ASSERT_MSG(path.find("://") == std::string_view::npos, "Path already have protocol!");
 			full_ = std::vformat("{0}://{1}", std::make_format_args(pref, path));
 
 			protocol_ = { 0, pref.length() };
@@ -61,14 +66,18 @@ namespace res
 
 		bool operator== (const tag& val) const { return get_hash() == val.get_hash(); }
 		std::size_t get_hash() const { return std::hash<std::string>{}(full_); }
-		friend tag operator+ (const tag& a, const tag& b);
+		friend res::tag operator+ (const res::tag& a, const res::tag& b);
+
 	private:
 		std::string full_;
-		glm::ivec2 protocol_;
-		glm::ivec2 path_;
-		glm::ivec2 name_;
+		glm::ivec2 protocol_{};
+		glm::ivec2 path_{};
+		glm::ivec2 name_{};
 	};
 
+
+	void tag_invoke(json::value_from_tag, json::value& out, const res::tag& c);
+	res::tag tag_invoke(json::value_to_tag<res::tag>, const json::value& obj);
 }
 
 namespace std {

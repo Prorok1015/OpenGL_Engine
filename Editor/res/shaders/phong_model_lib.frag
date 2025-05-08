@@ -31,9 +31,13 @@ layout (std140, binding = 1) uniform GlobalLights
 {
 #ifdef DIRECTION_LIGHT_COUNT
     DirectionalLight dirlights[DIRECTION_LIGHT_COUNT];
+#else
+    DirectionalLight dirlights;
 #endif
 #ifdef POINT_LIGHT_COUNT
     PointLight       pointLights[POINT_LIGHT_COUNT];
+#else
+    PointLight       pointLights;
 #endif
 };
 #endif
@@ -126,6 +130,8 @@ vec4 calculatePhongModel(vec3 norm, vec4 materialColor, vec4 materialSpecular, v
 
     // phase 3: Spot light
     //result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
+#else
+    result = materialColor;
 #endif
 
     //vec4 gamma = vec4(1/2.2);

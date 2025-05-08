@@ -6,12 +6,17 @@
 #include "ecs_entity.h"
 #include "scn_primitives.h"
 #include <boost/json.hpp>
+#include "scn_material_desc.h"
 
 namespace json = boost::json;
 
 namespace scn {
 
     struct delta_time { float dt; };
+
+    struct material_desc_component {
+        std::shared_ptr<scn::material_desc> mlt_desc;
+    };
 
     struct keyframes_component {
         std::unordered_map<std::string, res::animation_node> keyframes;
@@ -29,6 +34,10 @@ namespace scn {
         res::meshes_conteiner data;
         res::tag geom_tag;
     };
+
+	struct geometry_component {
+		res::tag geom_tag;
+	};
 
     struct animations_component {
         std::vector<res::animation> animations;

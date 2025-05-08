@@ -81,10 +81,10 @@ namespace rnd::driver
 
 	struct shader_header
 	{
-		enum class TYPE { VERTEX, FRAGMENT, GEOM };
+		enum class shader_type { VERTEX, FRAGMENT, GEOMETRY };
 		std::string title;
 		std::string body;
-		TYPE type;
+		shader_type type;
 	};
 
 	enum class RENDER_MODE

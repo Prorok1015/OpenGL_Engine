@@ -197,6 +197,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             draw_instances(drv);
             rnd::shader_scene_desc scene{};
             draw_ecs_model(drv, scene);
+            draw_scene_by_material_desc(drv);
             draw_sky(drv);
             drv->pop_frame_buffer();
         }
@@ -580,7 +581,7 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
         drv->set_viewport(camera.viewport);
         rnd::pass_z_prepass_desc z_pass;
         draw_ecs_model(drv, z_pass);
-
+        draw_scene_by_material_desc(drv);
         drv->pop_frame_buffer();
     }
 }
@@ -680,4 +681,45 @@ void scn::renderer_3d::draw(rnd::shader_scene_desc& desc, res::mesh_view& mesh, 
     rnd::configure_pass(desc);
     // draw mesh
     drv->draw_indices(va, rnd::get_system().get_render_mode(), mesh.get_indices_count(), mesh.vx_begin, mesh.ind_begin);
+}
+
+res::tag find_geom_tag(ecs::entity ent) {
+    if (ecs::registry.all_of< scn::geometry_component>(ent)) {
+		auto& geom = ecs::registry.get<scn::geometry_component>(ent);
+		return geom.geom_tag;
+    }
+
+    if (ecs::registry.all_of<scn::model_root_component>(ent)) {
+        auto& root = ecs::registry.get<scn::model_root_component>(ent);
+        return root.geom_tag;
+    }
+
+    if (ecs::registry.all_of<scn::parent_component>(ent)) {
+        auto& parent = ecs::registry.get<scn::parent_component>(ent);
+        return find_geom_tag(parent.parent);
+    }
+
+    return res::tag();
+};
+
+void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface* drv)
+{
+    auto& geom_mng = rnd::get_system().get_geom_manager();
+    for (const auto ent : ecs::registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
+		auto& mesh = ecs::registry.get<scn::mesh_component>(ent).mesh;
+        auto material_desc = ecs::registry.get<scn::material_desc_component>(ent).mlt_desc;
+        auto shader_desc = material_desc->get_shader_desc(entt::handle{ ecs::registry, ent }, rnd::get_system().get_texture_manager());
+        
+        if (directional_light_count > 0) {
+            shader_desc.cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(directional_light_count);
+        }
+
+        if (point_light_count > 0) {
+            shader_desc.cdata.constants["POINT_LIGHT_COUNT"] = std::to_string(point_light_count);
+        }
+        
+        auto* va = geom_mng.require_geometry(find_geom_tag(ent));
+		rnd::configure_pass(shader_desc);
+		drv->draw_indices(va, rnd::get_system().get_render_mode(), mesh.get_indices_count(), mesh.vx_begin, mesh.ind_begin);
+    }
 }

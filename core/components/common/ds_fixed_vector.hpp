@@ -41,14 +41,14 @@ namespace ds
 			length = std::clamp(length - 1, 0, N);
 		}
 
-		constexpr void push_back(T&& val) {
+		constexpr void push_back(auto&& val) {
 			static_assert(N > 0);
 			if (length >= N) {
 				ASSERT_FAIL("Vector is full");
 				return;
 			}
 
-			(*this)[length++] = std::forward<T>(val);
+			(*this)[length++] = val;
 		}
 
 		constexpr std::size_t size() const noexcept { return length; }

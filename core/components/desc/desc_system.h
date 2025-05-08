@@ -79,6 +79,7 @@ namespace desc
 					auto desc = res_system.require_resource2<desc::desc_resource>(tag);
 					it->second->deserialize(*this, desc->body);
 					it->second->set_is_loaded();
+					it->second->set_tag(tag);
 				}
 			}
 

@@ -14,7 +14,6 @@ namespace scn
 		void serialize(const res::tag& tag, res::resource_system& res_system, json::object&) const override;
 
 	private:
-		std::shared_ptr<rnd::geometry_desc> geom_desc;
 
 	};
 }

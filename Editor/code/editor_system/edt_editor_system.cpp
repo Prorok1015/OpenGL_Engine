@@ -20,6 +20,8 @@
 #include <imgui.h>
 #include "geom/rnd_geometry_desc.h"
 #include "texture/rnd_texture_desc.h"
+#include "scn_material_desc.h"
+#include "scn_prototype_desc.h"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -148,7 +150,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		}
 		return is_open;
 	});
-	GUI_SET_ITEM_CHECKED("Editor/Test JSON Window", true);
+	GUI_SET_ITEM_CHECKED("Editor/Test JSON Window", false);
 
 	GUI_REG_LAMBDA("Editor/Test ECS window", [this] { return show_ecs_test(); });
 	GUI_SET_ITEM_CHECKED("Editor/Test ECS window", false);
@@ -198,13 +200,8 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	else {
 		world_anchor = anchors.front();
 	}
-	//TODO: make separate render pipline for editor things
-	decltype(scn::children_component::children) children;
-	if (ecs::registry.all_of<scn::children_component>(world_anchor)) {
-		auto& kids = ecs::registry.get<scn::children_component>(world_anchor);
-		children = kids.children;
-		ecs::remove_component<scn::children_component>(world_anchor);
-	}
+
+	decltype(scn::children_component::children)& children = ecs::registry.get_or_emplace<scn::children_component>(world_anchor).children;
 
 	// black base material
 	ecs::entity black_mlt = ecs::create_entity();
@@ -239,6 +236,30 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		res::get_system().memory_resolver_.add_memory(res::tag(res::tag::memory, "window.desc"), txm_data);
 
 		desc_system.register_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc"), std::string{ txm_desc.txm_tag.pure_name() });
+	
+		res::tag window_material = res::tag(res::tag::memory, "window_material.desc");
+		scn::material_desc mlt;
+
+		rnd::new_shader_desc::constant_data tmpdesc;
+
+		tmpdesc.program = rnd::new_shader_desc::shader_program_data::build()
+			.set_vertex_shader(res::tag::make("shaders/scene.vert"))
+			.set_fragment_shader(res::tag::make("shaders/scene.frag"));
+
+		tmpdesc.defines = { "USE_TXM_AS_DIFFUSE", "LIGHTS_ENABLED" };
+
+		mlt.cdata = tmpdesc;
+		mlt.samplers_textures = { res::tag(res::tag::memory, "window.desc") };
+
+		json::object mlt_js;
+		mlt.serialize(window_material, res::get_system(), mlt_js);
+		std::string str_data2 = json::serialize(mlt_js);
+		std::vector<std::byte> mlt_data;
+		mlt_data.resize(str_data2.size());
+		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
+		res::get_system().memory_resolver_.add_memory(window_material, mlt_data);
+
+		desc_system.register_desc<scn::material_desc>(window_material, std::string{ window_material.pure_name() });
 	}
 	//  camera
 	{
@@ -260,8 +281,6 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	res::tag web_tag = res::tag(res::tag::memory, "web.desc");
 	res::model_presintation web_model_pres;
 	web_model_pres.data = web.data;
-	std::shared_ptr<res::Model> web_asset = std::make_shared<res::Model>(web_tag, web_model_pres);
-	res::get_system().add_resource(web_asset);
 	// web
 	{
 		editor_web = ecs::create_entity();
@@ -356,16 +375,21 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		res::mesh_view& mesh = geom.mesh;
 
 		glm::vec2 rnd_pos = glm::diskRand(1.f);
+		scn::prototype_desc window_prototype_desc;
+		window_prototype_desc.geometry_tag = geom_tag;
+		window_prototype_desc.root.name = "Window";
+		window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
+		window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{ 
+			.vx_begin = mesh.vx_begin, .vx_end = mesh.vx_end, 
+			.ind_begin = mesh.ind_begin, .ind_end = mesh.ind_end, 
+			.material_tag = res::tag(res::tag::memory, "window_material.desc") };
+		window_prototype_desc.root.children = { window_prototype_desc.root };
+		window_prototype_desc.root.children[0].name = "Window2";
+		window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
 
-		ecs::registry.emplace<scn::name_component>(wind, scn::name_component{ .name = "Window" });
-		ecs::registry.emplace<scn::parent_component>(wind, world_anchor);
-		ecs::registry.emplace<scn::model_root_component>(wind, scn::model_root_component{ .data = data, .geom_tag = cube_tag });
-		ecs::registry.emplace<scn::mesh_component>(wind, scn::mesh_component{ .mesh = mesh });
-		auto& transform = ecs::registry.emplace<scn::local_transform>(wind);
-		transform.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
-		ecs::registry.emplace<scn::world_transform>(wind);
-		ecs::registry.emplace<scn::renderable>(wind);
-		ecs::registry.emplace<scn::material_link_component>(wind, window_mlt );
+
+		window_prototype_desc.load_prototype(desc_system, ecs::registry, world_anchor);
+
 	}
 
 	// light
@@ -403,7 +427,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		ecs::registry.emplace<scn::parent_component>(sky, world_anchor);
 	}
 
-	ecs::registry.emplace<scn::children_component>(world_anchor, children);
+	
 }
 
 

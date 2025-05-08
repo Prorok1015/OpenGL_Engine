@@ -91,6 +91,27 @@ namespace rnd
 			}
 		}
 
+		void use(const new_shader_desc& desc) const
+		{
+			auto hash = desc.get_hash();
+			auto it = new_cache.find(hash);
+			rnd::driver::shader_interface* shader = nullptr;
+			if (it == new_cache.end()) {
+				auto new_shader = drv->create_shader(desc.load());
+				if (new_shader) {
+					shader = new_shader.get();
+					new_cache[hash] = std::move(new_shader);
+				}
+			}
+			else {
+				shader = it->second.get();
+			}
+			if (shader) {
+				shader->use();
+				rnd::configure_render_pass(desc, shader);
+			}
+		}
+
 		void update_global_uniform(const global_params& val) const;
 		void update_global_sun(const lights_params& val) const;
 		void update_global_bones_matrices(const bones_matrices& val, std::size_t count) const;
@@ -100,5 +121,6 @@ namespace rnd
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> sun_light;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> bones_buffer;
 		mutable std::unordered_map<shader_desc::shader_desc_hash, std::unique_ptr<rnd::driver::shader_interface>, shader_desc::shader_desc_hash::hasher> _cache;
+		mutable std::unordered_map<std::size_t, std::unique_ptr<rnd::driver::shader_interface>> new_cache;
 	};
 }
