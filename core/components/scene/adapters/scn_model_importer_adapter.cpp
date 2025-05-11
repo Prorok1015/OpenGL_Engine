@@ -107,12 +107,12 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
 					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
 					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + (size.x * size.y * channel), std::back_inserter(data_byte));
-					res::get_system().memory_resolver_.add_memory(embedded_tag, data_byte);
+					res::get_system().memory_resolver_.add_memory_resource(embedded_tag, data_byte);
 				}
 				else {
 					data_byte.reserve(pEmbededTxm->mWidth);
 					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + pEmbededTxm->mWidth, std::back_inserter(data_byte));
-					res::get_system().memory_resolver_.add_memory(embedded_tag, data_byte);
+					res::get_system().memory_resolver_.add_memory_resource(embedded_tag, data_byte);
 				}
 			}
 

@@ -22,6 +22,8 @@ void scn::tag_invoke(json::value_from_tag, json::value& out, const scn::pass_que
 		break;
 	case scn::pass_queue::TRANSPARENT:
 		out = json::value("transparent");
+	case scn::pass_queue::MIX:
+		out = json::value("mix");
 		break;
 	default:
 		break;
@@ -38,6 +40,9 @@ scn::pass_queue scn::tag_invoke(json::value_to_tag<scn::pass_queue>, const json:
 		}
 		else if (str == "transparent") {
 			return scn::pass_queue::TRANSPARENT;
+		}
+		else if (str == "mix") {
+			return scn::pass_queue::MIX;
 		}
 	}
 

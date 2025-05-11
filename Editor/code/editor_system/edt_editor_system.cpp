@@ -234,7 +234,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		std::vector<std::byte> txm_data;
 		txm_data.resize(str_data.size());
 		std::memcpy(txm_data.data(), str_data.data(), str_data.size());
-		res::get_system().memory_resolver_.add_memory(res::tag(res::tag::memory, "window.desc"), txm_data);
+		res::get_system().memory_resolver_.add_memory_resource(res::tag(res::tag::memory, "window.desc"), txm_data);
 
 		desc_system.register_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc"), std::string{ txm_desc.txm_tag.pure_name() });
 	
@@ -244,11 +244,11 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		rnd::new_shader_desc::constant_data tmpdesc;
 
 		tmpdesc.program = rnd::new_shader_desc::shader_program_data::build()
-			.set_vertex_shader(res::tag::make("shaders/scene.vert"))
-			.set_fragment_shader(res::tag::make("shaders/scene.frag"));
+			.set_vertex_shader(res::tag::make("shaders/mix_opaque_trans_scene.vert"))
+			.set_fragment_shader(res::tag::make("shaders/mix_opaque_trans_scene.frag"));
 
 		tmpdesc.defines = { "USE_TXM_AS_DIFFUSE", "LIGHTS_ENABLED" };
-
+		mlt.queue = scn::pass_queue::MIX;
 		mlt.cdata = tmpdesc;
 		mlt.samplers_textures_desc = { desc_system.get_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
 
@@ -258,7 +258,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		std::vector<std::byte> mlt_data;
 		mlt_data.resize(str_data2.size());
 		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
-		res::get_system().memory_resolver_.add_memory(window_material, mlt_data);
+		res::get_system().memory_resolver_.add_memory_resource(window_material, mlt_data);
 
 		desc_system.register_desc<scn::material_desc>(window_material, std::string{ window_material.pure_name() });
 	}
@@ -311,7 +311,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		geom_data.resize(str_data.size());
 		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
 
-		res::get_system().memory_resolver_.add_memory(geom_tag, geom_data);
+		res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
 
 		// 2. register new geometry_desc
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
@@ -368,7 +368,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		geom_data.resize(str_data.size());
 		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
 
-		res::get_system().memory_resolver_.add_memory(geom_tag, geom_data);
+		res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
 
 		// 2. register new geometry_desc
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });

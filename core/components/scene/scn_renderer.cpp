@@ -197,7 +197,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             draw_instances(drv);
             rnd::shader_scene_desc scene{};
             draw_ecs_model(drv, scene);
-            draw_scene_by_material_desc(drv);
+            draw_scene_by_material_desc(drv, scn::pass_queue::OPAQUE);
             draw_sky(drv);
             drv->pop_frame_buffer();
         }
@@ -229,6 +229,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             drv->clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER, { glm::vec4(0), glm::vec4(1) });
             drv->set_viewport(camera.viewport);
             draw_transparent(drv);
+            draw_scene_by_material_desc(drv, scn::pass_queue::TRANSPARENT);
             drv->pop_frame_buffer();
         }
         {
@@ -581,7 +582,7 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
         drv->set_viewport(camera.viewport);
         rnd::pass_z_prepass_desc z_pass;
         draw_ecs_model(drv, z_pass);
-        draw_scene_by_material_desc(drv);
+        draw_scene_by_material_desc(drv, scn::pass_queue::OPAQUE);
         drv->pop_frame_buffer();
     }
 }
@@ -702,14 +703,22 @@ res::tag find_geom_tag(ecs::entity ent) {
     return res::tag();
 };
 
-void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface* drv)
+void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface* drv, scn::pass_queue current_q)
 {
     auto& geom_mng = rnd::get_system().get_geom_manager();
     for (const auto ent : ecs::registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
 		auto& mesh = ecs::registry.get<scn::mesh_component>(ent).mesh;
         auto material_desc = ecs::registry.get<scn::material_desc_component>(ent).mlt_desc;
+		if (!material_desc || (material_desc->queue != current_q && material_desc->queue != scn::pass_queue::MIX)) {
+			continue;
+		}
+
         auto shader_desc = material_desc->get_shader_desc(entt::handle{ ecs::registry, ent }, rnd::get_system().get_texture_manager());
         
+        if (current_q == scn::pass_queue::OPAQUE) {
+            shader_desc.cdata.defines.push_back("OPAQUE");
+        }
+
         if (directional_light_count > 0) {
             shader_desc.cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(directional_light_count);
         }

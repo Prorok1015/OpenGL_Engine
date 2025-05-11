@@ -35,7 +35,7 @@ namespace scn
 		void draw_transparent(rnd::driver::driver_interface* drv);
 		void draw_composition(rnd::driver::driver_interface* drv, rnd::driver::texture_interface* color, rnd::driver::texture_interface* weight);
 		void prepare_directional_light();
-		void draw_scene_by_material_desc(rnd::driver::driver_interface* drv);
+		void draw_scene_by_material_desc(rnd::driver::driver_interface* drv, scn::pass_queue current_q);
 
 	public:
 		int directional_light_count = 0;

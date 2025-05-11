@@ -19,7 +19,7 @@ namespace res
 			return promise.get_future();
 		}
 
-		void add_memory(const tag& tag, std::vector<std::byte> data)
+		void add_memory_resource(const tag& tag, std::vector<std::byte> data)
 		{
 			memory_[tag] = std::move(data);
 		}

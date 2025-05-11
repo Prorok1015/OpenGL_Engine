@@ -137,7 +137,7 @@ void gs::GameSystem::ensure_ecs_material(ecs::entity material, const res::Materi
 			std::vector<std::byte> txm_data;
 			txm_data.resize(str_data.size());
 			std::memcpy(txm_data.data(), str_data.data(), str_data.size());
-			res::get_system().memory_resolver_.add_memory(desc_tag, txm_data);
+			res::get_system().memory_resolver_.add_memory_resource(desc_tag, txm_data);
 
 			desc_system.register_desc<rnd::texture_desc>(desc_tag, std::string{ txm_desc.txm_tag.pure_name() });
 			ecs::registry.emplace<scn::albedo_map_component>(material, desc_tag);
@@ -162,7 +162,7 @@ void gs::GameSystem::ensure_ecs_material(ecs::entity material, const res::Materi
 			std::vector<std::byte> txm_data;
 			txm_data.resize(str_data.size());
 			std::memcpy(txm_data.data(), str_data.data(), str_data.size());
-			res::get_system().memory_resolver_.add_memory(desc_tag, txm_data);
+			res::get_system().memory_resolver_.add_memory_resource(desc_tag, txm_data);
 
 			desc_system.register_desc<rnd::texture_desc>(desc_tag, std::string{ txm_desc.txm_tag.pure_name() });
 			ecs::registry.emplace<scn::normal_map_component>(material, desc_tag);
@@ -356,7 +356,7 @@ void gs::GameSystem::check_loaded_model()
 		geom_data.resize(str_data.size());
 		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
 
-		res::get_system().memory_resolver_.add_memory(geom_tag, geom_data);
+		res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
 
 		// 2. register new geometry_desc
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });

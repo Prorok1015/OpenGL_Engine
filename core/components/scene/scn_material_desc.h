@@ -9,7 +9,7 @@
 
 namespace scn
 {
-	enum class pass_queue { NONE, OPAQUE, TRANSPARENT };
+	enum class pass_queue { NONE, OPAQUE, TRANSPARENT, MIX };
 
 	class material_desc : public desc::desc_base
 	{
