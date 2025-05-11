@@ -82,8 +82,18 @@ namespace std
 
 	std::byte tag_invoke(json::value_to_tag<std::byte>, const json::value& jv)
 	{
-		auto val = jv.as_int64();
-		return std::byte(val);
+		if (jv.is_int64()) {
+			auto val = jv.as_int64();
+			return std::byte(val);
+		}
+
+		if (jv.is_uint64()) {
+			auto val = jv.as_uint64();
+			return std::byte(val);
+		}
+
+		ASSERT_FAIL("rnd::geometry_desc::serialize", "Invalid type for byte");
+		return std::byte(0);
 	}
 }
 

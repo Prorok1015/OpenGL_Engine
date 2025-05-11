@@ -75,7 +75,7 @@ namespace res
 		glm::ivec2 name_{};
 	};
 
-
+	//TODO: move json dependencies into one place
 	void tag_invoke(json::value_from_tag, json::value& out, const res::tag& c);
 	res::tag tag_invoke(json::value_to_tag<res::tag>, const json::value& obj);
 }

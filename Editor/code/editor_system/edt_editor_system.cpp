@@ -22,6 +22,7 @@
 #include "texture/rnd_texture_desc.h"
 #include "scn_material_desc.h"
 #include "scn_prototype_desc.h"
+#include "adapters/scn_model_importer_adapter.h"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -249,7 +250,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		tmpdesc.defines = { "USE_TXM_AS_DIFFUSE", "LIGHTS_ENABLED" };
 
 		mlt.cdata = tmpdesc;
-		mlt.samplers_textures = { res::tag(res::tag::memory, "window.desc") };
+		mlt.samplers_textures_desc = { desc_system.get_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
 
 		json::object mlt_js;
 		mlt.serialize(window_material, res::get_system(), mlt_js);
@@ -376,13 +377,14 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 
 		glm::vec2 rnd_pos = glm::diskRand(1.f);
 		scn::prototype_desc window_prototype_desc;
-		window_prototype_desc.geometry_tag = geom_tag;
+		window_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
 		window_prototype_desc.root.name = "Window";
 		window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
 		window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{ 
 			.vx_begin = mesh.vx_begin, .vx_end = mesh.vx_end, 
 			.ind_begin = mesh.ind_begin, .ind_end = mesh.ind_end, 
-			.material_tag = res::tag(res::tag::memory, "window_material.desc") };
+			.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc") )
+		};
 		window_prototype_desc.root.children = { window_prototype_desc.root };
 		window_prototype_desc.root.children[0].name = "Window2";
 		window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
@@ -426,8 +428,13 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		ecs::registry.emplace<scn::name_component>(sky, scn::name_component{ .name = "Sky" });
 		ecs::registry.emplace<scn::parent_component>(sky, world_anchor);
 	}
+	this->world_anchor = world_anchor;
+	res::get_system().registrate_adapter("glb", scn::model_importer_adapter{desc_system});
 
-	
+	desc_system.register_desc<scn::prototype_desc>(res::tag::make("objects/robot/gen_robot.glb"));
+	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
+	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
+	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 }
 
 
@@ -685,6 +692,13 @@ bool editor::EditorSystem::show_toolbar()
 			ImGui::Text("DESC TEST just_float: %f", ttt->just_double);
 			if (ttt->field) {
 				ImGui::Text("DESC TEST field: %s", ttt->field->field_string.c_str());
+			}
+		}
+
+		if (ImGui::Button("Load new robot")) {
+			auto robot = desc_system.get_desc<scn::prototype_desc>(res::tag::make("objects/robot/gen_robot.glb"));
+			if (robot) {
+				robot->load_prototype(desc_system, ecs::registry, world_anchor);
 			}
 		}
 

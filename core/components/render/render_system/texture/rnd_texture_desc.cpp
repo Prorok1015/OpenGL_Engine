@@ -164,28 +164,60 @@ namespace rnd::driver
 		};
 	}
 
-	texture_header tag_invoke(json::value_to_tag<texture_header>, const json::value& obj)
+	texture_header tag_invoke(json::value_to_tag<texture_header>, const json::value& value, const driver::texture_header& header)
 	{
-		texture_header c;
-		c.type = txm_type_from_string(obj.at("type").as_string());
-		c.usage = txm_usage_from_string(obj.at("usage").as_string());
-		c.wrap = txm_wrap_from_string(obj.at("wrap").as_string());
-		c.mag = txm_filtering_from_string(obj.at("mag").as_string());
-		c.min = txm_filtering_from_string(obj.at("min").as_string());
-		c.data.extent.width = obj.at("data").at("extent").at("width").as_int64();
-		c.data.extent.height = obj.at("data").at("extent").at("height").as_int64();
-		c.data.extent.depth = obj.at("data").at("extent").at("depth").as_int64();
-		c.data.mip_levels = obj.at("data").at("mip_levels").as_int64();
-		c.data.format = txm_data_type_from_string(obj.at("data").at("format").as_string());
+		if (!value.is_object())
+		{
+			return {};
+		}
+
+		texture_header c = header;
+
+		auto& obj = value.as_object();
+		if (obj.contains("type"))
+			c.type = txm_type_from_string(obj.at("type").as_string());
+		if (obj.contains("usage"))
+			c.usage = txm_usage_from_string(obj.at("usage").as_string());
+		if (obj.contains("wrap"))
+			c.wrap = txm_wrap_from_string(obj.at("wrap").as_string());
+		if (obj.contains("mag"))
+			c.mag = txm_filtering_from_string(obj.at("mag").as_string());
+		if (obj.contains("min"))
+			c.min = txm_filtering_from_string(obj.at("min").as_string());
+
+		if (!obj.contains("data")) {
+			return c;
+		}
+
+		auto& data = obj.at("data").as_object();
+
+		if (data.contains("extent")) {
+			auto& extent = data.at("extent").as_object();
+			if (extent.contains("width"))
+				c.data.extent.width = extent.at("width").as_int64();
+			if (extent.contains("height"))
+				c.data.extent.height = extent.at("height").as_int64();
+			if (extent.contains("depth"))
+				c.data.extent.depth = extent.at("depth").as_int64();
+		}
+
+		if (data.contains("mip_levels"))
+			c.data.mip_levels = data.at("mip_levels").as_int64();
+		if (data.contains("format"))
+			c.data.format = txm_data_type_from_string(data.at("format").as_string());
+
 		return c;
 	}
 }
 
 void rnd::texture_desc::deserialize(desc::desc_system& system, const json::object& resource)
 {
-	txm_name = resource.at("name").as_string();
-	txm_tag = res::tag{ resource.at("data").as_string() };
-	header = json::value_to<driver::texture_header>(resource.at("header"));
+	if (resource.contains("name"))
+		txm_name = resource.at("name").as_string();
+	if (resource.contains("data"))
+		txm_tag = res::tag{ resource.at("data").as_string() };
+	if (resource.contains("header"))
+		header = json::value_to<driver::texture_header>(resource.at("header"), header);
 }
 
 void rnd::texture_desc::serialize(const res::tag& tag, res::resource_system& res_system, json::object& resource) const

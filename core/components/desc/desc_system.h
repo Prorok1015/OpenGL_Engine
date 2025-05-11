@@ -43,6 +43,7 @@ namespace desc
 			}
 
 			auto desc = std::make_shared<T>();
+			desc->set_tag(name);
 			desc_map[type] = desc;
 			name_map[name] = type;
 			descs_for_load.push_back(name);
@@ -65,9 +66,46 @@ namespace desc
 			}
 		}
 
+		void deserialize_desc(std::shared_ptr<desc::desc_base> desc, const desc::desc_resource& resource)
+		{
+			if (resource.body.contains("__parent")) {
+				res::tag parent = json::value_to<res::tag>(resource.body.at("__parent"));
+				auto parent_desc = get_desc<desc::desc_base>(parent);
+				if (!parent_desc->is_loaded()) {
+					auto presource = res_system.require_resource2<desc::desc_resource>(parent);
+					if (presource) {
+						deserialize_desc(parent_desc, *presource);
+					}
+
+					ASSERT_MSG(presource, "parent desc file not found");
+				}
+
+				parent_desc->copy_to(*desc); 
+			}
+
+			desc->deserialize(*this, resource.body);
+			desc->set_is_loaded();
+		}
+
 		void finish_descs()
 		{
-			for (auto& tag : descs_for_load)
+			auto tmp_loading_qeueue = loading_qeueue;
+			loading_qeueue.clear();
+			for (auto& [desc_type, desc_resource] : tmp_loading_qeueue)
+			{
+				auto& [desc, type] = desc_type;
+				auto it = desc_map.find(type);
+				if (it == desc_map.end()) {
+					desc_map[type] = desc;
+					name_map[desc->get_tag()] = type;
+					deserialize_desc(desc, desc_resource);
+				}
+			}
+
+			auto process_list = descs_for_load;
+			descs_for_load.clear();
+
+			for (auto& tag : process_list)
 			{
 				if (name_map.find(tag) == name_map.end()) {
 					continue;
@@ -75,19 +113,15 @@ namespace desc
 
 				auto type = name_map[tag];
 				auto it = desc_map.find(type);
-				if (it != desc_map.end()) {
+				if (it != desc_map.end() && !it->second->is_loaded()) {
 					auto desc = res_system.require_resource2<desc::desc_resource>(tag);
-					it->second->deserialize(*this, desc->body);
-					it->second->set_is_loaded();
-					it->second->set_tag(tag);
+					deserialize_desc(it->second, *desc);
 				}
 			}
-
-			descs_for_load.clear();
 		}
 
 		template<typename T>
-		std::shared_ptr<T> get_desc(desc_namespace nms = {})
+		std::shared_ptr<T> get_desc(desc_namespace nms = {}) const
 		{
 			auto it = desc_map.find(std::pair{ ds::Type::make<T>(), nms });
 			if (it == desc_map.end()) {
@@ -97,7 +131,7 @@ namespace desc
 		}
 
 		template<typename T>
-		std::shared_ptr<T> get_desc(const desc_name& name)
+		std::shared_ptr<T> get_desc(const desc_name& name) const
 		{
 			auto it = name_map.find(name);
 			if (it == name_map.end()) {
@@ -111,9 +145,42 @@ namespace desc
 			return std::static_pointer_cast<T>(it2->second);
 		}
 
+		template<typename T>
+		std::shared_ptr<T> get_or_override_desc(const desc::desc_base& owner, const json::value& data) const
+		{
+			if (data.is_string()) {
+				auto name = json::value_to<res::tag>(data);
+				return get_desc<T>(name);
+
+			} else if (data.is_object()) {
+				auto& obj = data.get_object();
+				res::tag cur_tag = owner.get_tag();
+
+				auto parent_tag = json::value_to<res::tag>(obj.at("__parent"));
+
+				std::string path = "memory://override/" + std::string{ cur_tag.pure_name() } + "/" + 
+					std::string{ parent_tag.pure_name() } + ".desc";
+				auto name = res::tag{ path };
+
+				auto desc = std::make_shared<T>();
+				desc->set_tag(name);
+				auto type = std::pair{ ds::Type::make<T>(), std::string{cur_tag.pure_name()} };
+				loading_qeueue.push_back({ {desc, type}, desc::desc_resource{ name, obj} });
+				return desc;
+			}
+
+			egLOG("desc/get_or_override", "desc is not string or object! owner is {}", owner.get_tag().get_full());
+
+			return nullptr;
+		}
+
 	private:
 		res::resource_system& res_system;
-		std::vector<desc_name> descs_for_load;
+		std::vector<desc_name> descs_for_load;// TODO: change
+		mutable std::vector<std::pair<
+			std::pair<std::shared_ptr<desc::desc_base>, std::pair<ds::Type, desc_namespace>
+			>, 
+			desc::desc_resource>> loading_qeueue;
 		std::unordered_map<desc_name, std::pair<ds::Type, desc_namespace>> name_map;
 		std::unordered_map<std::pair<ds::Type, desc_namespace>, std::shared_ptr<desc_base>> desc_map;
 	};

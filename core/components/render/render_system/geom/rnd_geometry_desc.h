@@ -10,6 +10,13 @@ namespace rnd
 	public:
 		geometry_desc() = default;
 		virtual ~geometry_desc() override = default;
+
+		virtual void copy_to(desc::desc_base& other) const override
+		{
+			geometry_desc& other_desc = static_cast<geometry_desc&>(other);
+			other_desc = *this;
+		}
+
 		virtual void deserialize(desc::desc_system& system, const json::object& resource) override;
 		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object& resource) const override;
 

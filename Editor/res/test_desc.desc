@@ -1,6 +1,10 @@
 {
 	"__parent": "res://test_parent_desc.desc",
 	"just_number": 42,
+	"just_double": 3.14,
 	"just_string": "Hello, World!",
-	"field": "res://test_sub_field_desc.desc"
+	"field": {
+		"__parent": "res://test_sub_field_desc.desc",
+		"field_string": "I'm a OVERRIDED CHILD field string"
+		}
 }

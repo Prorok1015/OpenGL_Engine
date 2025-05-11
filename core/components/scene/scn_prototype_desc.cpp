@@ -1,6 +1,7 @@
 #include "scn_prototype_desc.h"
 #include "scn_model.h"
 #include "scn_glm_json_convert.h"
+#include "geom/rnd_geometry_desc.h"
 
 namespace scn
 {
@@ -16,7 +17,7 @@ namespace scn
 			mesh_obj["vx_end"] = mesh.vx_end;
 			mesh_obj["ind_begin"] = mesh.ind_begin;
 			mesh_obj["ind_end"] = mesh.ind_end;
-			mesh_obj["material"] = json::value_from(mesh.material_tag);
+			mesh_obj["material"] = json::value_from(mesh.material->get_tag());
 			object["mesh"] = mesh_obj;
 		}
 
@@ -29,7 +30,13 @@ namespace scn
 		}
 	}
 
-	scn::prototype_desc::node_t tag_invoke(json::value_to_tag<scn::prototype_desc::node_t>, const json::value& data)
+	struct context
+	{
+		desc::desc_system& desc_system;
+		desc::desc_base& self;
+	};
+
+	scn::prototype_desc::node_t tag_invoke(json::value_to_tag<scn::prototype_desc::node_t>, const json::value& data, const context& ctx)
 	{
 		prototype_desc::node_t node;
 		if (data.is_object())
@@ -48,12 +55,15 @@ namespace scn
 				node.mesh->vx_end = json::value_to<std::size_t>(mesh_obj.at("vx_end"));
 				node.mesh->ind_begin = json::value_to<std::size_t>(mesh_obj.at("ind_begin"));
 				node.mesh->ind_end = json::value_to<std::size_t>(mesh_obj.at("ind_end"));
-				node.mesh->material_tag = json::value_to<res::tag>(mesh_obj.at("material"));
+
+				if (mesh_obj.contains("material")) {
+					node.mesh->material = ctx.desc_system.get_or_override_desc<scn::material_desc>(ctx.self, mesh_obj.at("material"));
+				}
 			}
 			if (obj.contains("children")) {
 				auto children_array = obj.at("children").get_array();
 				for (auto& child : children_array) {
-					node.children.push_back(json::value_to<prototype_desc::node_t>(child));
+					node.children.push_back(json::value_to<prototype_desc::node_t>(child, ctx));
 				}
 			}
 		}
@@ -65,10 +75,11 @@ namespace scn
 void scn::prototype_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	if (data.contains("geometry")) {
-		geometry_tag = json::value_to<res::tag>(data.at("geometry"));
+		geometry = desc_system.get_or_override_desc<rnd::geometry_desc>(*this, data.at("geometry"));
 	}
+
 	if (data.contains("tree")) {
-		root = json::value_to<node_t>(data.at("tree"));
+		root = json::value_to<node_t>(data.at("tree"), context{ desc_system, *this });
 	}
 }
 
@@ -111,7 +122,7 @@ void scn::prototype_desc::serialize(const res::tag& tag, res::resource_system& r
 		}
 	*/
 	
-	data["geometry"] = json::value_from(geometry_tag);
+	data["geometry"] = json::value_from(geometry->get_tag());
 	data["tree"] = json::value_from(root);
 }
 
@@ -144,8 +155,8 @@ void scn::prototype_desc::load_prototype_node(desc::desc_system& desc_system, en
 		mesh_data.ind_begin = mesh.ind_begin;
 		mesh_data.ind_end = mesh.ind_end;
 		registry.emplace<scn::mesh_component>(ent, scn::mesh_component{ .mesh = mesh_data });
-		registry.emplace<scn::geometry_component>(ent, scn::geometry_component{ .geom_tag = geometry_tag });
-		registry.emplace<scn::material_desc_component>(ent, scn::material_desc_component{ .mlt_desc = desc_system.get_desc<scn::material_desc>(mesh.material_tag) });
+		registry.emplace<scn::geometry_component>(ent, scn::geometry_component{ .geom_tag = geometry->get_tag() });
+		registry.emplace<scn::material_desc_component>(ent, scn::material_desc_component{ .mlt_desc = mesh.material });
 	}
 
 	for (auto& child : node.children) {

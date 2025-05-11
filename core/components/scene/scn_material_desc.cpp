@@ -48,7 +48,11 @@ scn::pass_queue scn::tag_invoke(json::value_to_tag<scn::pass_queue>, const json:
 void scn::material_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	if (data.contains(SAMPLERS_FIELD)) {
-		samplers_textures = json::value_to<std::vector<res::tag>>(data.at(SAMPLERS_FIELD));
+		//samplers_textures = json::value_to<std::vector<res::tag>>(data.at(SAMPLERS_FIELD));
+		for (auto& sampler : data.at(SAMPLERS_FIELD).get_array())
+		{
+			samplers_textures_desc.push_back(desc_system.get_or_override_desc<rnd::texture_desc>(*this, sampler));
+		}
 	}
 
 	if (data.contains(SHADER_GEOMETRY_FIELD)) {
@@ -124,7 +128,12 @@ void scn::material_desc::serialize(const res::tag& tag, res::resource_system& re
 	*/
 
 	data[DEFINES_FIELD] = json::value_from(cdata.defines);
-	data[SAMPLERS_FIELD] = json::value_from(samplers_textures);
+	json::array jssamplers;
+	for (auto& sampler : samplers_textures_desc)
+	{
+		jssamplers.push_back(json::value_from(sampler->get_tag()));
+	}
+	data[SAMPLERS_FIELD] = jssamplers;
 	data[SHADER_VERTEX_FIELD] = json::value_from(cdata.program.get_vertex_shader());
 	data[SHADER_FRAGMENT_FIELD] = json::value_from(cdata.program.get_fragment_shader());
 	data[SHADER_GEOMETRY_FIELD] = json::value_from(cdata.program.get_geometry_shader());
@@ -134,11 +143,11 @@ void scn::material_desc::serialize(const res::tag& tag, res::resource_system& re
 rnd::new_shader_desc scn::material_desc::get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager)
 {
 	rnd::new_shader_desc::runtime_data rdata;
-	rdata.samplers.resize(samplers_textures.size());
-	for (int idx = 0; idx < samplers_textures.size(); ++idx)
+	rdata.samplers.resize(samplers_textures_desc.size());
+	for (int idx = 0; idx < samplers_textures_desc.size(); ++idx)
 	{
-		if (samplers_textures[idx].is_valid()) {
-			rdata.samplers[idx] = txm_manager.require_texture(samplers_textures[idx]);
+		if (samplers_textures_desc[idx]) {
+			rdata.samplers[idx] = txm_manager.require_texture(samplers_textures_desc[idx]->get_tag());
 		} else {
 			rdata.samplers[idx] = nullptr;
 		}

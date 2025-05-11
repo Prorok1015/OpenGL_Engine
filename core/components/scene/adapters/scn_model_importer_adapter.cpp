@@ -5,6 +5,52 @@
 #include <assimp/postprocess.h>
 
 #include "res_system.h"
+#include "desc_resource.hpp"
+
+#include "geom/rnd_geometry_desc.h"
+#include "adapters/res_pct_adapter.h"
+
+#include "scn_glm_json_convert.h"
+#include "res_mesh.hpp"
+
+void process_model(const aiScene* scene, json::object& data, res::tag tag);
+
+namespace {
+	glm::quat convert_to_glm(const aiQuaternion& vector) {
+		glm::quat result;
+		result.x = vector.x;
+		result.y = vector.y;
+		result.z = vector.z;
+		result.w = vector.w;
+		return result;
+	}
+
+	glm::vec3 convert_to_glm(const aiVector3D& vector) {
+		glm::vec3 result;
+		result.x = vector.x;
+		result.y = vector.y;
+		result.z = vector.z;
+		return result;
+	}
+
+	glm::vec4 convert_to_glm(const aiColor4D& vector) {
+		glm::vec4 result;
+		result.r = vector.r;
+		result.g = vector.g;
+		result.b = vector.b;
+		result.a = vector.a;
+		return result;
+	}
+
+	glm::mat4 convert_to_glm(const aiMatrix4x4& transform) {
+		glm::mat4 local(1);
+		local[0] = glm::vec4(transform.a1, transform.b1, transform.c1, transform.d1);
+		local[1] = glm::vec4(transform.a2, transform.b2, transform.c2, transform.d2);
+		local[2] = glm::vec4(transform.a3, transform.b3, transform.c3, transform.d3);
+		local[3] = glm::vec4(transform.a4, transform.b4, transform.c4, transform.d4);
+		return local;
+	}
+}
 
 std::shared_ptr<res::Resource> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
 {
@@ -19,8 +65,216 @@ std::shared_ptr<res::Resource> scn::model_importer_adapter::operator()(const res
         return {};
     }
 
-    auto& res_system = res::get_system();
-    res_system.memory_resolver_.add_memory({}, {});
+    json::object jsdata;
+	process_model(scene, jsdata, tag);
 
-	return std::shared_ptr<res::Resource>();
+	return std::make_shared<desc::desc_resource>(tag, jsdata);
+}
+
+json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag) {
+	for (unsigned int i = 0; i < mat->GetTextureCount(type); i++)
+	{
+		aiString str;
+		mat->GetTexture(type, i, &str);
+		std::string_view texture_name = str.C_Str();
+		if (auto* pEmbededTxm = scene->GetEmbeddedTexture(texture_name.data()))
+		{
+			const std::string_view embedded_filename{ pEmbededTxm->mFilename.C_Str() };
+			const std::string_view embedded_format{ pEmbededTxm->achFormatHint };
+			std::string embedded_path = std::vformat("__embedded_txm_{0}/{1}.{2}", 
+				std::make_format_args(
+					tag.pure_name(), 
+					embedded_filename,
+				    (pEmbededTxm->mHeight != 0) ? 
+					res::raw_image_adapter::EXTENSION : 
+					res::pct_adapter::EXTENSIONS[0]
+				)
+			);
+			res::tag embedded_tag = res::tag(res::tag::memory, embedded_path);
+
+			if (!res::get_system().memory_resolver_.is_exist(embedded_tag)) {
+				glm::ivec2 size;
+				int channel = 4;
+				std::vector<std::byte> data_byte;
+
+				if (pEmbededTxm->mHeight != 0) {
+					size.x = pEmbededTxm->mWidth;
+					size.y = pEmbededTxm->mHeight;
+
+					res::raw_image_adapter::raw_image_header header;
+					header.size = size;
+					header.channels = channel;
+					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
+					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
+					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + (size.x * size.y * channel), std::back_inserter(data_byte));
+					res::get_system().memory_resolver_.add_memory(embedded_tag, data_byte);
+				}
+				else {
+					data_byte.reserve(pEmbededTxm->mWidth);
+					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + pEmbededTxm->mWidth, std::back_inserter(data_byte));
+					res::get_system().memory_resolver_.add_memory(embedded_tag, data_byte);
+				}
+			}
+
+			json::object desc;
+			desc["__parent"] = "res://base_texture.desc";
+			desc["name"] = embedded_tag.pure_name();
+			desc["data"] = json::value_from(embedded_tag);
+
+			return desc;
+		}
+
+		auto new_tag = tag + res::tag::make(texture_name);
+		json::object desc;
+		desc["__parent"] = "res://base_texture.desc";
+		desc["name"] = new_tag.pure_name();
+		desc["data"] = json::value_from(new_tag);
+
+		return desc;
+	}
+
+	return {};
+}
+
+json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag)
+{
+	json::object jsmaterial;
+	jsmaterial["__parent"] = "res://base_material.desc";
+	jsmaterial["name"] = material->GetName().C_Str();
+	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, tag);
+	json::array samplers;
+	json::array defines{"LIGHTS_ENABLED"};
+
+	if (!diffuse_tag.is_null()) {
+		samplers.push_back(diffuse_tag);
+		defines.push_back("USE_TXM_AS_DIFFUSE");
+	}
+
+	if (!samplers.empty()) {
+		jsmaterial["samplers"] = samplers;
+	}
+
+	jsmaterial["defines"] = defines;
+	return jsmaterial;
+}
+
+
+void store_data(std::vector<std::byte>& data, const auto& value)
+{
+	int begin = data.size();
+	data.resize(data.size() + sizeof(value));
+	std::memcpy((data.data() + begin), &value, sizeof(value));
+}
+
+void process_node(const aiScene* scene, aiNode* node, json::object& jsnode, rnd::geometry_desc& geometry, res::tag tag)
+{
+	jsnode["name"] = node->mName.C_Str();
+	jsnode["local"] = json::value_from(convert_to_glm(node->mTransformation));
+	
+	for (unsigned int i = 0; i < node->mNumMeshes; i++)
+	{
+		aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
+        glm::ivec2 vertex_range{geometry.vertices.size(), 0};
+		glm::ivec2 index_range{geometry.indices.size(), 0};
+
+        for (unsigned int i = 0; i < mesh->mNumVertices; i++)
+        {
+			size_t stride = sizeof(glm::vec3);
+			size_t begin = geometry.vertices.size();
+
+			store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
+            // normals
+            if (mesh->HasNormals())
+            {
+				stride += sizeof(glm::vec3);
+				store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
+            }
+            // texture coordinates
+            if (mesh->HasTextureCoords(0))
+            {
+				stride += sizeof(glm::vec2);
+				store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
+            }
+
+            if (mesh->HasTangentsAndBitangents())
+            {
+				stride += sizeof(glm::vec3) * 2;
+				store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
+				store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
+            }
+
+			ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
+			ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
+
+			if (mesh->HasBones())
+			{
+				//store_data(geometry.vertices, glm::vec4{ 0 });//TODO
+			}
+        }
+
+		for (unsigned int i = 0; i < mesh->mNumFaces; i++)
+		{
+			aiFace face = mesh->mFaces[i];
+			// retrieve all indices of the face and store them in the indices vector
+			for (unsigned int j = 0; j < face.mNumIndices; j++) {
+				geometry.indices.push_back(face.mIndices[j]);
+			}
+		}
+
+		vertex_range.y = geometry.vertices.size();
+		index_range.y = geometry.indices.size();
+
+		jsnode["mesh"] = json::object{
+			{"vx_begin", vertex_range.x},
+			{"vx_end", vertex_range.y},
+			{"ind_begin", index_range.x},
+			{"ind_end", index_range.y},
+			{"material", process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag)}
+		};
+	}
+
+	json::array children;
+	for (unsigned int i = 0; i < node->mNumChildren; i++)
+	{
+		json::object child;
+		process_node(scene, node->mChildren[i], child, geometry, tag);
+		children.push_back(child);
+	}
+	jsnode["children"] = children;
+}
+
+void process_model(const aiScene* scene, json::object& data, res::tag tag)
+{
+    json::object jsgeometry;
+    json::object jstree;
+    jsgeometry["__parent"] = "res://base_geometry.desc";
+	rnd::geometry_desc geometry;
+	if (scene->HasMeshes()) {
+		std::vector<rnd::driver::BufferElement> layout;
+		layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" });
+
+		auto mesh = scene->mMeshes[0];
+		if (mesh->HasNormals()) {
+			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal" });
+		}
+		if (mesh->HasTextureCoords(0)) {
+			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position" });
+		}
+		if (mesh->HasTangentsAndBitangents()) {
+			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent" });
+			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent" });
+		}
+		if (mesh->HasBones()) {
+			//layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight" });
+		}
+		if (mesh->HasVertexColors(0)) {
+			//layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color" });
+		}
+		geometry.layout = rnd::driver::BufferLayout{ layout };
+	}
+
+	process_node(scene, scene->mRootNode, jstree, geometry, tag);
+	geometry.serialize(res::tag::null, res::get_system(), jsgeometry);
+    data["geometry"] = jsgeometry;
+    data["tree"] = jstree;
 }

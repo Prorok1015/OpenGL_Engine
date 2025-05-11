@@ -17,12 +17,19 @@ namespace editor
 	public:
 		editor_test_field_desc() = default;
 		virtual ~editor_test_field_desc() = default;
+
+		virtual void copy_to(desc_base& other) const override
+		{
+			editor_test_field_desc& other_desc = static_cast<editor_test_field_desc&>(other);
+			other_desc = *this;
+		}
+
 		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
 		{
-			if (data.contains("__parent")) {
+			/*if (data.contains("__parent")) {
 				res::tag parent_tag{ data.at("__parent").as_string() };
 				*this = *desc_system.get_desc<editor_test_field_desc>(parent_tag);
-			}
+			}*/
 
 			if (data.contains("field_string"))
 				field_string = data.at("field_string").as_string();
@@ -57,6 +64,12 @@ namespace editor
 		{
 		}
 
+		virtual void copy_to(desc_base& other) const override
+		{
+			editor_test_parent_desc& other_desc = static_cast<editor_test_parent_desc&>(other);
+			other_desc = *this;
+		}
+
 		int just_number = 0;
 		double just_double = 0.0;
 	};
@@ -69,16 +82,13 @@ namespace editor
 		virtual ~editor_test_desc() = default;
 		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
 		{
-			res::tag parent_tag{ data.at("__parent").as_string() };
-			(editor_test_parent_desc&)*this = *desc_system.get_desc<editor_test_parent_desc>(parent_tag);
 			editor_test_parent_desc::deserialize(desc_system, data);
 
 			if (data.contains("just_string"))
 				just_string = data.at("just_string").as_string();
 
 			if (data.contains("field")) {
-				res::tag field_tag{ data.at("field").as_string() };
-				field = desc_system.get_desc<editor_test_field_desc>(field_tag);
+				field = desc_system.get_or_override_desc<editor_test_field_desc>(*this, data.at("field"));
 			}
 		}
 
@@ -153,6 +163,7 @@ namespace editor
 		ecs::entity editor_web;
 		ecs::entity light;
 		ecs::entity sky;
+		ecs::entity world_anchor;
 
 		ecs::entity test_json_selected_material = entt::null;
 		ecs::entity selected_entity = entt::null;

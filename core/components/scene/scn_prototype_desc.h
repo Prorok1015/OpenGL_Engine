@@ -2,21 +2,30 @@
 #include "common.h"
 #include "desc_base.hpp"
 #include "scn_material_desc.h"
-
+#include "geom/rnd_geometry_desc.h"
+#include <optional>
 
 namespace scn
 {
 	class prototype_desc : public desc::desc_base
 	{
 	public:
+		prototype_desc() = default;
+		virtual ~prototype_desc() = default;
+
+		virtual void copy_to(desc_base& other) const override
+		{
+			prototype_desc& other_desc = static_cast<prototype_desc&>(other);
+			other_desc = *this;
+		}
+
 		struct mesh_t
 		{
 			std::size_t vx_begin = 0;
 			std::size_t vx_end = 0;
 			std::size_t ind_begin = 0;
 			std::size_t ind_end = 0;
-
-			res::tag material_tag;
+			std::shared_ptr<scn::material_desc> material;
 		};
 
 		struct node_t
@@ -37,6 +46,6 @@ namespace scn
 
 	public:
 		node_t root;
-		res::tag geometry_tag;
+		std::shared_ptr<rnd::geometry_desc> geometry;
 	};
 }
