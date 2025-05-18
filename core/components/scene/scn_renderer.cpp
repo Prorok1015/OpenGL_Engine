@@ -709,8 +709,17 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
     for (const auto ent : ecs::registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
 		auto& mesh = ecs::registry.get<scn::mesh_component>(ent).mesh;
         auto material_desc = ecs::registry.get<scn::material_desc_component>(ent).mlt_desc;
+		if (!material_desc) {
+            if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
+                egLOG("scn/renderer", "Material desc not found or not in current queue for entity: {0}", name->name);
+            }
+            else {
+                egLOG("scn/renderer", "Material desc not found or not in current queue for entity");
+            }
+		}
+
 		if (!material_desc || (material_desc->queue != current_q && material_desc->queue != scn::pass_queue::MIX)) {
-			continue;
+            continue;
 		}
 
         auto shader_desc = material_desc->get_shader_desc(entt::handle{ ecs::registry, ent }, rnd::get_system().get_texture_manager());

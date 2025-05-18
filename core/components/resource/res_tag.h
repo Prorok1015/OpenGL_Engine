@@ -29,7 +29,8 @@ namespace res
 	public:
 		explicit tag(const std::string_view tag_path)
 		{
-			full_ = tag_path;
+			full_ = tag_path; 
+			validate_path_separator();
 			protocol_ = { 0, full_.find_first_of("://") };
 			const std::size_t name_start_idx = full_.find_last_of('/');
 			const std::size_t path_start_idx = full_.find_first_of('/') + 1;
@@ -39,9 +40,9 @@ namespace res
 
 		explicit tag(const std::string_view pref, const std::string_view path) 
 		{
-			ASSERT_MSG(path.find("://") == std::string_view::npos, "Path already have protocol!");
+			ASSERT_MSG(path.find("://") == std::string_view::npos, "Path already has protocol!");
 			full_ = std::vformat("{0}://{1}", std::make_format_args(pref, path));
-
+			validate_path_separator();
 			protocol_ = { 0, pref.length() };
 			const std::size_t name_start_idx = full_.find_last_of("/");
 			const std::size_t path_start_idx = full_.find_first_of("/") + 1;
@@ -69,6 +70,14 @@ namespace res
 		friend res::tag operator+ (const res::tag& a, const res::tag& b);
 
 	private:
+		void validate_path_separator()
+		{
+			while (full_.find('\\') != full_.npos)
+			{
+				full_.replace(full_.find('\\'), 1, "/");
+			}
+		}
+
 		std::string full_;
 		glm::ivec2 protocol_{};
 		glm::ivec2 path_{};

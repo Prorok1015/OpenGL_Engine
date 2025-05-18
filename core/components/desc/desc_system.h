@@ -158,13 +158,13 @@ namespace desc
 
 				auto parent_tag = json::value_to<res::tag>(obj.at("__parent"));
 
-				std::string path = "memory://override/" + std::string{ cur_tag.pure_name() } + "/" + 
-					std::string{ parent_tag.pure_name() } + ".desc";
+				std::string path = "memory://override/" + std::string{ cur_tag.pure_name() } + std::to_string(name_map.size() + loading_qeueue.size()) + "/" + 
+					std::string{ parent_tag.pure_name() } +".desc";
 				auto name = res::tag{ path };
 
 				auto desc = std::make_shared<T>();
 				desc->set_tag(name);
-				auto type = std::pair{ ds::Type::make<T>(), std::string{cur_tag.pure_name()} };
+				auto type = std::pair{ ds::Type::make<T>(), std::string{name.path()} };
 				loading_qeueue.push_back({ {desc, type}, desc::desc_resource{ name, obj} });
 				return desc;
 			}

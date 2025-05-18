@@ -21,7 +21,7 @@
 #include "geom/rnd_geometry_desc.h"
 #include "texture/rnd_texture_desc.h"
 #include "scn_material_desc.h"
-#include "scn_prototype_desc.h"
+#include "scn_animatable_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
 
 void
@@ -390,7 +390,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
 
 
-		window_prototype_desc.load_prototype(desc_system, ecs::registry, world_anchor);
+		//window_prototype_desc.load_prototype(ecs::registry, world_anchor);
 
 	}
 
@@ -430,8 +430,10 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	}
 	this->world_anchor = world_anchor;
 	res::get_system().registrate_adapter("glb", scn::model_importer_adapter{desc_system});
+	res::get_system().registrate_adapter("obj", scn::model_importer_adapter{desc_system});
+	res::get_system().registrate_adapter("fbx", scn::model_importer_adapter{desc_system});
 
-	desc_system.register_desc<scn::prototype_desc>(res::tag::make("objects/robot/gen_robot.glb"));
+	//desc_system.register_desc<scn::animatable_prototype_desc>(res::tag::make("objects/helicopter/source/helicopter Space ship.glb"));
 	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
@@ -443,6 +445,33 @@ editor::EditorSystem::~EditorSystem()
 	inp::get_system().deactivate_manager(input);
 }
 
+void mark_node_for_animation_stop(entt::entity ent)
+{
+	if (ecs::registry.all_of<scn::keyframes_component>(ent)) {
+		ecs::registry.remove<scn::playable_animation_component>(ent);
+	}
+
+	if (auto* children = ecs::registry.try_get<scn::children_component>(ent)) {
+		for (auto& child : children->children) {
+			mark_node_for_animation_stop(child);
+		}
+	}
+}
+
+void mark_node_for_animation(entt::entity ent, const res::animation& animation)
+{
+	if (ecs::registry.all_of<scn::keyframes_component>(ent)) {
+		scn::playable_animation_component tmp{ animation.name, animation.duration, animation.ticks_per_second };
+		ecs::registry.emplace_or_replace<scn::playable_animation_component>(ent, std::move(tmp));
+	}
+
+	if (auto* children = ecs::registry.try_get<scn::children_component>(ent)) {
+		for (auto& child : children->children) {
+			mark_node_for_animation(child, animation);
+		}
+	}
+}
+
 void editor::EditorSystem::show_tree_items(ecs::entity ent)
 {
 	std::string obj_idx = std::to_string((int)ent);
@@ -450,7 +479,7 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 	if (ecs::registry.all_of<scn::name_component>(ent)) {
 		auto& com_name = ecs::registry.get<scn::name_component>(ent);
 		if (!com_name.name.empty()) {
-			name = com_name.name + "##" + obj_idx;
+			name = (ecs::registry.all_of<scn::mesh_component>(ent) ? "[MESH] " : "") + com_name.name + "##" + obj_idx;
 		}
 	}
 	static ecs::entity selected_node = entt::null;
@@ -552,6 +581,11 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 			}
 		}
 
+		struct edt_playable_animation {
+			std::string name;
+			int idx = -1;
+		};
+
 		if (ecs::registry.all_of<scn::animations_component>(ent)) {
 			auto& anims = ecs::registry.get<scn::animations_component>(ent);
 			std::string_view play_anim_name;
@@ -559,6 +593,11 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 				auto& play = ecs::registry.get<scn::playable_animation>(ent);
 				play_anim_name = play.name;
 				ImGui::Checkbox("Is Repeat", &(play.is_repeat_animation));
+			}
+
+			if (ecs::registry.all_of<edt_playable_animation>(ent)) {
+				auto& play = ecs::registry.get<edt_playable_animation>(ent);
+				play_anim_name = play.name;
 			}
 
 			std::vector<std::string> names;
@@ -579,10 +618,24 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 				{
 					const bool is_selected = (cur == n);
 					if (ImGui::Selectable(names[n].c_str(), is_selected)) {
+						int old = cur;
 						cur = n;
+
+						if (cur == 0) {
+							if (ecs::registry.all_of<edt_playable_animation>(ent)) {
+								ecs::registry.remove<edt_playable_animation>(ent);
+								mark_node_for_animation_stop(ent);
+							}
+						} else {
+							ecs::registry.emplace_or_replace<edt_playable_animation>(ent, edt_playable_animation{ .name = names[cur], .idx = cur });
+							if (old != cur) {
+								mark_node_for_animation(ent, anims.animations[cur - 1]);
+							}
+						}
 
 						if (ecs::registry.all_of<scn::playable_animation>(ent)) {
 							auto& play = ecs::registry.get<scn::playable_animation>(ent);
+
 							if (cur == 0) {
 								ecs::remove_component<scn::playable_animation>(ent);
 							} else {
@@ -692,13 +745,6 @@ bool editor::EditorSystem::show_toolbar()
 			ImGui::Text("DESC TEST just_float: %f", ttt->just_double);
 			if (ttt->field) {
 				ImGui::Text("DESC TEST field: %s", ttt->field->field_string.c_str());
-			}
-		}
-
-		if (ImGui::Button("Load new robot")) {
-			auto robot = desc_system.get_desc<scn::prototype_desc>(res::tag::make("objects/robot/gen_robot.glb"));
-			if (robot) {
-				robot->load_prototype(desc_system, ecs::registry, world_anchor);
 			}
 		}
 
@@ -822,6 +868,36 @@ bool editor::EditorSystem::show_toolbar()
 			ImGui::InputText("Name", buf, 64);
 		}
 
+		ImGui::Text("Import model");
+		static int selected_model_idx = 0;
+		if (!imported_models_list.empty()) {
+			std::string buf = std::string{ imported_models_list[selected_model_idx].get_full() };
+			if (ImGui::BeginCombo("##imported_objects", buf.c_str(), 0))
+			{
+				for (int n = 0; n < imported_models_list.size(); ++n)
+				{
+					const bool is_selected = (selected_model_idx == n);
+					buf = std::string{ imported_models_list[n].get_full() };
+					if (ImGui::Selectable(buf.c_str(), is_selected)) {
+						selected_model_idx = n;
+					}
+
+					// Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
+					if (is_selected)
+						ImGui::SetItemDefaultFocus();
+				}
+				ImGui::EndCombo();
+			}
+			ImGui::SameLine();
+		}
+
+		if (ImGui::Button("Create object on scene")) {
+			auto robot = desc_system.get_desc<scn::prototype_desc>(imported_models_list[selected_model_idx]);
+			if (robot) {
+				robot->load_prototype(ecs::registry, world_anchor);
+			}
+		}
+
 		ImGui::Separator();
 		if (ImGui::BeginCombo("Render mode", render_modes_list[current_render_mode].c_str(), 0))
 		{
@@ -880,7 +956,20 @@ bool editor::EditorSystem::show_toolbar()
 bool editor::EditorSystem::show_file_dialog()
 {
 	bool is_open = true;
-	file_dialog.show("Import", &is_open);
+	file_dialog.clear_extension_filters();
+	file_dialog.add_extension_filter(".glb");
+	file_dialog.add_extension_filter(".obj");
+	file_dialog.add_extension_filter(".fbx");
+
+	if (file_dialog.show("Import", &is_open))
+	{
+		auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
+		res::tag tag = res::tag::make(relateve.string());
+		if (std::find(imported_models_list.begin(), imported_models_list.end(), tag) == imported_models_list.end()) {
+			imported_models_list.push_back(tag);
+			desc_system.register_desc<scn::animatable_prototype_desc>(tag, std::string{ tag.pure_name() });
+		}
+	}
     return is_open;
 }
 

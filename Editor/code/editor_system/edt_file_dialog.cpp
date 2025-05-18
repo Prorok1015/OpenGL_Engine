@@ -145,9 +145,9 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
                     if (!filter.empty() && lower_filename.find(lower_filter) == std::string::npos)
                         continue;
 
-                    bool is_selected = selected_path == entry.path().string();
+                    bool is_selected = selected_path == entry.path();
                     if (ImGui::Selectable((ICON_FA_FILE " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
-                        selected_path = entry.path().string();
+                        selected_path = entry.path();
                     }
                 }
             }
@@ -160,7 +160,8 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
-        ImGui::InputText("##selected", selected_path.data(), selected_path.capacity(), ImGuiInputTextFlags_ReadOnly);
+		std::string selected_path_str = selected_path.string();
+        ImGui::InputText("##selected", selected_path_str.data(), selected_path_str.length(), ImGuiInputTextFlags_ReadOnly);
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
 

@@ -139,6 +139,8 @@ namespace editor
 		};
 		int current_render_mode = 0;
 
+		std::vector<res::tag> imported_models_list;
+
 		std::vector<std::string> models_list
 		{
 			"objects/anim_cube_f/tail_cube.glb",

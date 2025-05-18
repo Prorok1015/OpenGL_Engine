@@ -12,7 +12,7 @@ struct is_transform_will_update_by_parent {};
 
 void scn::transform_job::init(entt::organizer& organizer, entt::registry& registry)
 {
-    entt::sigh_helper{ ecs::registry }
+    entt::sigh_helper{ registry }
         .with<scn::local_transform>()
         .on_construct<&transform_job::on_invalidate_local_transform>(*this)
         .on_update<&transform_job::on_invalidate_local_transform>(*this);
@@ -22,8 +22,8 @@ void scn::transform_job::init(entt::organizer& organizer, entt::registry& regist
 
 void scn::transform_job::deinit(entt::organizer& organizer, entt::registry& registry)
 {
-    ecs::registry.on_construct<scn::local_transform>().disconnect<&transform_job::on_invalidate_local_transform>(*this);
-    ecs::registry.on_update<scn::local_transform>().disconnect<&transform_job::on_invalidate_local_transform>(*this);
+    registry.on_construct<scn::local_transform>().disconnect<&transform_job::on_invalidate_local_transform>(*this);
+    registry.on_update<scn::local_transform>().disconnect<&transform_job::on_invalidate_local_transform>(*this);
 }
 
 void scn::transform_job::update_transform_system(entt::registry& registry)
@@ -54,12 +54,12 @@ void scn::transform_job::calc_world_transforms(ecs::entity ent, entt::registry& 
         registry.emplace_or_replace<scn::world_transform>(ent, parent * local);
     }
 
-    /*if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
-        egLOG("", "name {} is world calculated!", name->name);
-    }
-    else {
-        egLOG("", "name UNLNOWN is world calculated!");
-    }*/
+    //if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
+    //    egLOG("", "name {} is world calculated!", name->name);
+    //}
+    //else {
+    //    egLOG("", "name UNLNOWN is world calculated!");
+    //}
 
     registry.remove<is_local_transform_invalidated>(ent);
     registry.remove<is_transform_will_update_by_parent>(ent);

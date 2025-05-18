@@ -50,6 +50,19 @@ namespace {
 		local[3] = glm::vec4(transform.a4, transform.b4, transform.c4, transform.d4);
 		return local;
 	}
+
+	void log_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, std::string_view name)
+	{
+		if (mat->GetTextureCount(type) > 0)
+		{
+			aiString str;
+			mat->GetTexture(type, 0, &str);
+			std::string_view texture_name = str.C_Str();
+			egLOG("loader", "{0} count: {1}, path: {2}", name, mat->GetTextureCount(type), texture_name);
+		}
+	}
+
+#define TXM_LOG(type) log_material_texture(scene, material, type, ###type)
 }
 
 std::shared_ptr<res::Resource> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
@@ -138,6 +151,26 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 
 json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag)
 {
+	TXM_LOG(aiTextureType_DIFFUSE);
+	TXM_LOG(aiTextureType_SPECULAR);
+	TXM_LOG(aiTextureType_HEIGHT);
+	TXM_LOG(aiTextureType_NORMALS);
+	TXM_LOG(aiTextureType_AMBIENT);
+	TXM_LOG(aiTextureType_BASE_COLOR);
+	TXM_LOG(aiTextureType_EMISSIVE);
+	TXM_LOG(aiTextureType_CLEARCOAT);
+	TXM_LOG(aiTextureType_SHININESS);
+	TXM_LOG(aiTextureType_OPACITY);
+	TXM_LOG(aiTextureType_LIGHTMAP);
+	TXM_LOG(aiTextureType_REFLECTION);
+	TXM_LOG(aiTextureType_NORMAL_CAMERA);
+	TXM_LOG(aiTextureType_EMISSION_COLOR);
+	TXM_LOG(aiTextureType_METALNESS);
+	TXM_LOG(aiTextureType_DIFFUSE_ROUGHNESS);
+	TXM_LOG(aiTextureType_AMBIENT_OCCLUSION);
+	TXM_LOG(aiTextureType_SHEEN);
+	TXM_LOG(aiTextureType_TRANSMISSION);
+
 	json::object jsmaterial;
 	jsmaterial["__parent"] = "res://base_material.desc";
 	jsmaterial["name"] = material->GetName().C_Str();
@@ -148,16 +181,40 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 	if (!diffuse_tag.is_null()) {
 		samplers.push_back(diffuse_tag);
 		defines.push_back("USE_TXM_AS_DIFFUSE");
+	} else {
+		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, tag);
+		if (!diffuse_tag.is_null()) {
+			samplers.push_back(diffuse_tag);
+			defines.push_back("USE_TXM_AS_DIFFUSE");
+		}
 	}
 
 	if (!samplers.empty()) {
 		jsmaterial["samplers"] = samplers;
 	}
 
+	json::object uniforms;
+	aiColor4D color;
+	if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, color)) {
+		uniforms["albedo"] = json::value_from(glm::vec4(color.r, color.g, color.b, color.a));
+	}
+
+	if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_EMISSIVE, color)) {
+		uniforms["emissive"] = json::value_from(glm::vec4(color.r, color.g, color.b, color.a));
+	}
+
+	float shininess = 0;
+	if (AI_SUCCESS == material->Get(AI_MATKEY_SHININESS, shininess)) {
+		uniforms["shininess"] = json::value_from(shininess);
+	}
+
+	if (!uniforms.empty()) {
+		jsmaterial["uniforms"] = uniforms;
+	}
+
 	jsmaterial["defines"] = defines;
 	return jsmaterial;
 }
-
 
 void store_data(std::vector<std::byte>& data, const auto& value)
 {
@@ -166,81 +223,176 @@ void store_data(std::vector<std::byte>& data, const auto& value)
 	std::memcpy((data.data() + begin), &value, sizeof(value));
 }
 
+void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh, rnd::geometry_desc& geometry, res::tag tag)
+{
+	glm::ivec2 vertex_range{ geometry.vertices.size() / geometry.layout.get_stride(), 0 };
+	glm::ivec2 index_range{ geometry.indices.size(), 0 };
+
+	for (unsigned int i = 0; i < mesh->mNumVertices; i++)
+	{
+		size_t stride = sizeof(glm::vec3);
+		size_t begin = geometry.vertices.size();
+
+		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
+		// normals
+		if (mesh->HasNormals())
+		{
+			stride += sizeof(glm::vec3);
+			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
+		}
+		// texture coordinates
+		if (mesh->HasTextureCoords(0))
+		{
+			stride += sizeof(glm::vec2);
+			store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
+		}
+
+		if (mesh->HasTangentsAndBitangents())
+		{
+			stride += sizeof(glm::vec3) * 2;
+			store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
+			store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
+		}
+
+		ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
+		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
+
+		if (mesh->HasBones())
+		{
+			//store_data(geometry.vertices, glm::vec4{ 0 });//TODO
+		}
+	}
+
+	for (unsigned int i = 0; i < mesh->mNumFaces; i++)
+	{
+		aiFace face = mesh->mFaces[i];
+		// retrieve all indices of the face and store them in the indices vector
+		for (unsigned int j = 0; j < face.mNumIndices; j++) {
+			geometry.indices.push_back(face.mIndices[j]);
+		}
+	}
+
+	vertex_range.y = geometry.vertices.size() / geometry.layout.get_stride();
+	index_range.y = geometry.indices.size();
+
+	jsmesh["mesh"] = json::object{
+		{"vx_begin", vertex_range.x},
+		{"vx_end", vertex_range.y},
+		{"ind_begin", index_range.x},
+		{"ind_end", index_range.y},
+		{"material", process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag)}
+	};
+}
+
 void process_node(const aiScene* scene, aiNode* node, json::object& jsnode, rnd::geometry_desc& geometry, res::tag tag)
 {
 	jsnode["name"] = node->mName.C_Str();
 	jsnode["local"] = json::value_from(convert_to_glm(node->mTransformation));
-	
+
+	json::array children;
 	for (unsigned int i = 0; i < node->mNumMeshes; i++)
 	{
 		aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        glm::ivec2 vertex_range{geometry.vertices.size(), 0};
-		glm::ivec2 index_range{geometry.indices.size(), 0};
-
-        for (unsigned int i = 0; i < mesh->mNumVertices; i++)
-        {
-			size_t stride = sizeof(glm::vec3);
-			size_t begin = geometry.vertices.size();
-
-			store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
-            // normals
-            if (mesh->HasNormals())
-            {
-				stride += sizeof(glm::vec3);
-				store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
-            }
-            // texture coordinates
-            if (mesh->HasTextureCoords(0))
-            {
-				stride += sizeof(glm::vec2);
-				store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
-            }
-
-            if (mesh->HasTangentsAndBitangents())
-            {
-				stride += sizeof(glm::vec3) * 2;
-				store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
-				store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
-            }
-
-			ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
-			ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
-
-			if (mesh->HasBones())
-			{
-				//store_data(geometry.vertices, glm::vec4{ 0 });//TODO
-			}
-        }
-
-		for (unsigned int i = 0; i < mesh->mNumFaces; i++)
-		{
-			aiFace face = mesh->mFaces[i];
-			// retrieve all indices of the face and store them in the indices vector
-			for (unsigned int j = 0; j < face.mNumIndices; j++) {
-				geometry.indices.push_back(face.mIndices[j]);
-			}
-		}
-
-		vertex_range.y = geometry.vertices.size();
-		index_range.y = geometry.indices.size();
-
-		jsnode["mesh"] = json::object{
-			{"vx_begin", vertex_range.x},
-			{"vx_end", vertex_range.y},
-			{"ind_begin", index_range.x},
-			{"ind_end", index_range.y},
-			{"material", process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag)}
-		};
+		//if (node->mNumMeshes > 1) {
+			json::object jsmesh;
+			jsmesh["name"] = "mesh"s + mesh->mName.C_Str();
+			process_mesh(scene, mesh, jsmesh, geometry, tag);
+			children.push_back(jsmesh);
+		//} else {
+			//process_mesh(scene, mesh, jsnode, geometry, tag);
+		//}
 	}
 
-	json::array children;
 	for (unsigned int i = 0; i < node->mNumChildren; i++)
 	{
 		json::object child;
 		process_node(scene, node->mChildren[i], child, geometry, tag);
 		children.push_back(child);
 	}
-	jsnode["children"] = children;
+
+	if (!children.empty()) {
+		jsnode["children"] = children;
+	}
+}
+
+void process_animations(const aiScene* scene, json::object& jsanimations, res::tag tag)
+{
+	for (unsigned int i = 0; i < scene->mNumAnimations; i++) {
+		auto animation = scene->mAnimations[i];
+		json::object jsanimation;
+		jsanimation["name"] = animation->mName.C_Str();
+		jsanimation["duration"] = animation->mDuration;
+		jsanimation["ticks_per_second"] = animation->mTicksPerSecond;
+		/*"keyframes": [
+			"node_name":{
+				"position": [
+				{ "value": [0, 0, 0] , "time" : 0.0 },
+				{ "value": [1, 1, 1] , "time" : 1.0 }
+				] ,
+					"rotation" : [
+				{ "value": [0, 0, 0, 1] , "time" : 0.0 },
+				{ "value": [1, 0, 0, 0] , "time" : 1.0 }
+					] ,
+					"scale" : [
+				{ "value": [1, 1, 1] , "time" : 0.0 },
+				{ "value": [2, 2, 2] , "time" : 1.0 }
+					]
+			}
+		]*/
+		json::object keyframes;
+
+		for (std::size_t idx = 0; idx < animation->mNumChannels; ++idx) {
+			auto* pAnimNode = animation->mChannels[idx];
+			std::string_view node_name = pAnimNode->mNodeName.C_Str();
+			json::object node;
+			node["name"] = node_name;
+
+			json::array position_keys;
+			for (std::size_t idx = 0; idx < pAnimNode->mNumPositionKeys; ++idx)
+			{
+				position_keys.push_back(
+					{
+						{"value", json::value_from(convert_to_glm(pAnimNode->mPositionKeys[idx].mValue))},
+						{"time", pAnimNode->mPositionKeys[idx].mTime}
+					}
+				);
+			}
+
+			node["position"] = position_keys;
+
+			json::array rotation_keys;
+			for (std::size_t idx = 0; idx < pAnimNode->mNumRotationKeys; ++idx)
+			{
+				rotation_keys.push_back(
+					{
+						{"value", json::value_from(convert_to_glm(pAnimNode->mRotationKeys[idx].mValue))},
+						{"time", pAnimNode->mRotationKeys[idx].mTime}
+					}
+				);
+			}
+
+			node["rotation"] = rotation_keys;
+
+			json::array scale_keys;
+			for (std::size_t idx = 0; idx < pAnimNode->mNumScalingKeys; ++idx)
+			{
+				scale_keys.push_back(
+					{
+						{"value", json::value_from(convert_to_glm(pAnimNode->mScalingKeys[idx].mValue))},
+						{"time", pAnimNode->mScalingKeys[idx].mTime}
+					}
+				);
+			}
+
+			node["scale"] = scale_keys;
+		
+			keyframes[node_name] = node;
+		}
+
+		jsanimation["keyframes"] = keyframes;
+
+		jsanimations[animation->mName.C_Str()] = jsanimation;
+	}
 }
 
 void process_model(const aiScene* scene, json::object& data, res::tag tag)
@@ -277,4 +429,10 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag)
 	geometry.serialize(res::tag::null, res::get_system(), jsgeometry);
     data["geometry"] = jsgeometry;
     data["tree"] = jstree;
+
+	if (scene->HasAnimations()) {
+		json::object jsanimations;
+		process_animations(scene, jsanimations, tag);
+		data["animations"] = jsanimations;
+	}
 }

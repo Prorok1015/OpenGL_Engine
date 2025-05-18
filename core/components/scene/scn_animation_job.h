@@ -20,5 +20,6 @@ namespace scn
 		void load_bone_offsets(ecs::entity ent, std::vector<glm::mat4>& out, entt::registry& registry);
 		void update_animation_system(scn::delta_time dt, entt::registry& registry);
 		void calc_world_transforms(entt::registry& registry, ecs::entity ent, const float ticks, const res::animation& anim, std::vector<glm::mat4>& out);
+		void update_nodes_animation_system(entt::registry& registry, const scn::delta_time& dt);
 	};
 }

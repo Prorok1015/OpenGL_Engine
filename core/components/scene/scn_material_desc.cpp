@@ -3,6 +3,7 @@
 #include "res_resource_text_file.h"
 #include "rnd_driver_interface.h"
 #include "scn_model.h"
+#include "scn_glm_json_convert.h"
 
 constexpr auto SAMPLERS_FIELD = "samplers";
 constexpr auto SHADER_VERTEX_FIELD = "shader_vertex";
@@ -10,6 +11,7 @@ constexpr auto SHADER_FRAGMENT_FIELD = "shader_fragment";
 constexpr auto SHADER_GEOMETRY_FIELD = "shader_geometry";
 constexpr auto DEFINES_FIELD = "defines";
 constexpr auto QUEUE_FIELD = "queue";
+constexpr auto UNIFORMS_FIELD = "uniforms";
 
 
 
@@ -22,12 +24,10 @@ void scn::tag_invoke(json::value_from_tag, json::value& out, const scn::pass_que
 		break;
 	case scn::pass_queue::TRANSPARENT:
 		out = json::value("transparent");
+		break;
 	case scn::pass_queue::MIX:
 		out = json::value("mix");
 		break;
-	default:
-		break;
-
 	}
 }
 
@@ -84,6 +84,19 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 
 	if (data.contains(QUEUE_FIELD)) {
 		queue = json::value_to<scn::pass_queue>(data.at(QUEUE_FIELD));
+	}
+
+	if (data.contains(UNIFORMS_FIELD)) {
+		auto uniforms = data.at(UNIFORMS_FIELD).get_object();
+		if (uniforms.contains("albedo")) {
+			albedo = json::value_to<glm::vec4>(uniforms.at("albedo"));
+		}
+		if (uniforms.contains("emissive")) {
+			albedo = json::value_to<glm::vec4>(uniforms.at("emissive"));
+		}
+		if (uniforms.contains("shininess")) {
+			shininess = json::value_to<float>(uniforms.at("shininess"));
+		}
 	}
 }
 
@@ -143,6 +156,11 @@ void scn::material_desc::serialize(const res::tag& tag, res::resource_system& re
 	data[SHADER_FRAGMENT_FIELD] = json::value_from(cdata.program.get_fragment_shader());
 	data[SHADER_GEOMETRY_FIELD] = json::value_from(cdata.program.get_geometry_shader());
 	data[QUEUE_FIELD] = json::value_from(queue);
+
+	json::object uniforms;
+	uniforms["albedo"] = json::value_from(albedo);
+	uniforms["emissive"] = json::value_from(emissive);
+	data[UNIFORMS_FIELD] = uniforms;
 }
 
 rnd::new_shader_desc scn::material_desc::get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager)
@@ -163,10 +181,9 @@ rnd::new_shader_desc scn::material_desc::get_shader_desc(entt::handle handle, rn
 		rdata.uniforms["uWorldMeshMatr"] = transform.world;
 	}
 
-	rdata.uniforms["uWorldModel"] = glm::mat4(1.0);
-	rdata.uniforms["diffuseColor"] = glm::vec4(1, 0, 0, 1);
-	rdata.uniforms["emissiveColor"] = glm::vec4(0);
-	rdata.uniforms["shininess"] = 32.f;
+	rdata.uniforms["diffuseColor"] = albedo;
+	rdata.uniforms["emissiveColor"] = emissive;
+	rdata.uniforms["shininess"] = shininess;
 
 	return rnd::new_shader_desc{ cdata, rdata };
 }

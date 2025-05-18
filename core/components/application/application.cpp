@@ -56,7 +56,7 @@ int application::Application::run()
 		inp::get_system().process_input(delta_time);
 		 
 		for (auto&& system : job_graph) {
-			//system.prepare(ecs::registry);
+			system.prepare(ecs::registry);
 			system.callback()(system.data(), ecs::registry);
 		}
 

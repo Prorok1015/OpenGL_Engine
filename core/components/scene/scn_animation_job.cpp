@@ -10,6 +10,7 @@ void scn::animation_job::init(entt::organizer& organizer, entt::registry& regist
 {
     organizer.emplace<&animation_job::update_bone_offsets_system>(*this, "update_bone_offsets_system");
 	organizer.emplace<&animation_job::update_animation_system>(*this, "update_animation_system");
+	organizer.emplace<&animation_job::update_nodes_animation_system>(*this, "update_node_animation_system");
 }
 
 void scn::animation_job::deinit(entt::organizer& organizer, entt::registry& registry)
@@ -122,6 +123,48 @@ void scn::animation_job::calc_world_transforms(entt::registry& registry ,ecs::en
         for (auto& child : children)
         {
             calc_world_transforms(registry, child, ticks, anim, out);
+        }
+    }
+}
+
+void scn::animation_job::update_nodes_animation_system(entt::registry& registry, const scn::delta_time& dt)
+{
+    for (auto [ent, keyframes, animation] : registry.view<scn::keyframes_component, scn::playable_animation_component>().each())
+    {
+        animation.current_tick += dt.dt;
+        const float ticks_per_second = animation.ticks_per_second > 0 ? animation.ticks_per_second : 25.0f;
+        const float time_in_ticks = animation.current_tick * ticks_per_second;
+        float ticks = fmod(time_in_ticks, animation.duration);
+        if (time_in_ticks > animation.duration) {
+            if (animation.is_repeat_animation) {
+                animation.current_tick = 0.f;
+            }
+            else {
+                ticks = animation.duration;
+                continue;
+            }
+        }
+
+        auto& keys = keyframes.keyframes;
+        if (auto it = keys.find(animation.name); it != keys.end()) {
+            // Interpolate scaling and generate scaling transformation matrix
+            glm::vec3 scaling;
+            calc_interpolated_scaling(scaling, ticks, it->second);
+            glm::mat4 scaling_m = glm::scale(scaling);
+
+            // Interpolate rotation and generate rotation transformation matrix
+            glm::quat rotation_q;
+            calc_interpolated_rotation(rotation_q, ticks, it->second);
+            glm::mat4 rotation_m = glm::toMat4(rotation_q);
+
+            // Interpolate translation and generate translation transformation matrix
+            glm::vec3 translation;
+            calc_interpolated_position(translation, ticks, it->second);
+            glm::mat4 translation_m = glm::translate(translation);
+
+            // Combine the above transformations
+            auto local = translation_m * rotation_m * scaling_m;
+            registry.emplace_or_replace<scn::local_transform>(ent, local);
         }
     }
 }

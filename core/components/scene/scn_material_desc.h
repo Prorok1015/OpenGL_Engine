@@ -29,6 +29,11 @@ namespace scn
 		virtual rnd::new_shader_desc get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager);
 
 		std::vector<std::shared_ptr<rnd::texture_desc>> samplers_textures_desc;
+		ds::color albedo = ds::color(1.0f);
+		ds::color specular = ds::color(1.0f);
+		ds::color ambient = ds::color(1.0f);
+		ds::color emissive = ds::color(0.0f);
+		float shininess = 32.0f; // 0.0 -> 1000
 
 		pass_queue queue = pass_queue::OPAQUE;
 		rnd::new_shader_desc::constant_data cdata;

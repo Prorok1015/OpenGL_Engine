@@ -3,6 +3,14 @@
 #include "scn_glm_json_convert.h"
 #include "geom/rnd_geometry_desc.h"
 
+namespace {
+	struct context
+	{
+		desc::desc_system& desc_system;
+		desc::desc_base& self;
+	};
+}
+
 namespace scn
 {
 	void tag_invoke(json::value_from_tag, json::value& out, const scn::prototype_desc::node_t& c)
@@ -29,12 +37,6 @@ namespace scn
 			object["children"] = children;
 		}
 	}
-
-	struct context
-	{
-		desc::desc_system& desc_system;
-		desc::desc_base& self;
-	};
 
 	scn::prototype_desc::node_t tag_invoke(json::value_to_tag<scn::prototype_desc::node_t>, const json::value& data, const context& ctx)
 	{
@@ -126,12 +128,12 @@ void scn::prototype_desc::serialize(const res::tag& tag, res::resource_system& r
 	data["tree"] = json::value_from(root);
 }
 
-void scn::prototype_desc::load_prototype(desc::desc_system& desc_system, entt::registry& registry, entt::entity parent)
+void scn::prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
 {
-	load_prototype_node(desc_system, registry, parent, root);
+	load_prototype_node(registry, parent, root);
 }
 
-void scn::prototype_desc::load_prototype_node(desc::desc_system& desc_system, entt::registry& registry, entt::entity parent, const node_t& node)
+entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node)
 {	
 	auto ent = registry.create();
 	registry.emplace<scn::name_component>(ent, node.name);
@@ -160,6 +162,8 @@ void scn::prototype_desc::load_prototype_node(desc::desc_system& desc_system, en
 	}
 
 	for (auto& child : node.children) {
-		load_prototype_node(desc_system, registry, ent, child);
+		load_prototype_node( registry, ent, child);
 	}
+
+	return ent;
 }

@@ -39,6 +39,14 @@ namespace scn {
 		res::tag geom_tag;
 	};
 
+    struct playable_animation_component {
+        std::string name;
+		float duration = 0.f;
+		float ticks_per_second = 0.f;
+        float current_tick = 0.f;
+        bool is_repeat_animation = true;
+    };
+
     struct animations_component {
         std::vector<res::animation> animations;
     };

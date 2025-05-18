@@ -30,8 +30,8 @@ namespace scn
 
 		struct node_t
 		{
-			std::string name;
-			glm::mat4 local;
+			std::string name = "unknown";
+			glm::mat4 local{ 1.0 };
 			std::vector<node_t> children;
 			std::optional<mesh_t> mesh;
 		};
@@ -39,10 +39,10 @@ namespace scn
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object&) const override;
 
-		virtual void load_prototype(desc::desc_system& desc_system, entt::registry& registry, entt::entity parent);
+		virtual void load_prototype(entt::registry& registry, entt::entity parent);
 
-	private:
-		void load_prototype_node(desc::desc_system& desc_system, entt::registry& registry, entt::entity parent, const node_t& node);
+	protected:
+		virtual entt::entity load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node);
 
 	public:
 		node_t root;
