@@ -24,7 +24,7 @@ namespace scn
 		}
 
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
-		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object&) const override;
+		virtual void serialize(json::object&) const override;
 
 		virtual rnd::new_shader_desc get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager);
 

@@ -121,7 +121,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 	}
 }
 
-void rnd::geometry_desc::serialize(const res::tag& tag, res::resource_system& res_system, json::object& resource) const
+void rnd::geometry_desc::serialize(json::object& resource) const
 {
 	resource["layout"] = json::value_from(layout);
 	resource["indices"] = json::value_from(indices);

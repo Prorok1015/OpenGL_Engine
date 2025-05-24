@@ -13,13 +13,6 @@ namespace res
 	{
 	public:
 		static const tag null;
-	
-		struct hash {
-			std::size_t operator() (const tag& val) const {
-				return val.get_hash();
-			}
-		};
-
 		static const std::string_view default_protocol() { return "res"; }
 		static constexpr std::string_view memory = "memory";
 		static tag make(const std::string_view path) {
@@ -28,26 +21,19 @@ namespace res
 
 	public:
 		explicit tag(const std::string_view tag_path)
+			: full_(tag_path)
 		{
-			full_ = tag_path; 
-			validate_path_separator();
 			protocol_ = { 0, full_.find_first_of("://") };
-			const std::size_t name_start_idx = full_.find_last_of('/');
-			const std::size_t path_start_idx = full_.find_first_of('/') + 1;
+			const std::size_t name_start_idx = full_.find_last_of("/\\");
+			const std::size_t path_start_idx = full_.find_first_of("/\\") + 1;
 			path_ = { path_start_idx + 1, name_start_idx - path_start_idx };
 			name_ = { name_start_idx + 1, full_.length() - name_start_idx - 1 };
 		}
 
 		explicit tag(const std::string_view pref, const std::string_view path) 
+			: tag(std::vformat("{0}://{1}", std::make_format_args(pref, path)))
 		{
 			ASSERT_MSG(path.find("://") == std::string_view::npos, "Path already has protocol!");
-			full_ = std::vformat("{0}://{1}", std::make_format_args(pref, path));
-			validate_path_separator();
-			protocol_ = { 0, pref.length() };
-			const std::size_t name_start_idx = full_.find_last_of("/");
-			const std::size_t path_start_idx = full_.find_first_of("/") + 1;
-			path_ = { path_start_idx + 1, name_start_idx - path_start_idx };
-			name_ = { name_start_idx + 1, full_.length() - name_start_idx - 1 };
 		}
 
 		constexpr tag() noexcept = default;
@@ -58,10 +44,11 @@ namespace res
 
 		constexpr bool is_valid() const noexcept { return !full_.empty(); }
 
-		constexpr const std::string_view protocol() const { return std::string_view(full_.data() + protocol_.x, protocol_.y); }
-		constexpr const std::string_view path() const { return std::string_view(full_.data() + path_.x, path_.y); }
-		constexpr const std::string_view name() const { return std::string_view(full_.data() + name_.x, name_.y); }
-		constexpr const std::string_view pure_name() const { auto result = name(); return result.substr(0, result.find_last_of('.'));  }
+		constexpr const std::string& string() const { return full_; }
+		constexpr const std::string_view protocol() const { return get_full().substr(protocol_.x, protocol_.y); }
+		constexpr const std::string_view path() const { return get_full().substr(path_.x, path_.y); }
+		constexpr const std::string_view name() const { return get_full().substr(name_.x, name_.y); }
+		constexpr const std::string_view pure_name() const { return name().substr(0, name().find_last_of('.'));  }
 		constexpr const std::string_view get_full() const { return full_; }
 		constexpr const std::string_view extension() const { return name().substr(name().find_last_of('.') + 1); }
 
@@ -70,14 +57,6 @@ namespace res
 		friend res::tag operator+ (const res::tag& a, const res::tag& b);
 
 	private:
-		void validate_path_separator()
-		{
-			while (full_.find('\\') != full_.npos)
-			{
-				full_.replace(full_.find('\\'), 1, "/");
-			}
-		}
-
 		std::string full_;
 		glm::ivec2 protocol_{};
 		glm::ivec2 path_{};

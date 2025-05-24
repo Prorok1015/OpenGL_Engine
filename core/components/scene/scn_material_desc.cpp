@@ -100,7 +100,7 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 	}
 }
 
-void scn::material_desc::serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const
+void scn::material_desc::serialize(json::object& data) const
 {
 	/*
 		{

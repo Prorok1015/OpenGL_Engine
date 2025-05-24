@@ -13,6 +13,8 @@
 #include "scn_glm_json_convert.h"
 #include "res_mesh.hpp"
 
+#include "scn_assimp_resource_system_wrapper.h"
+
 void process_model(const aiScene* scene, json::object& data, res::tag tag);
 
 namespace {
@@ -70,7 +72,8 @@ std::shared_ptr<res::Resource> scn::model_importer_adapter::operator()(const res
     // read file via ASSIMP
     Assimp::Importer importer;
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
-    const aiScene* scene = importer.ReadFileFromMemory(data.data(), data.size(), flags);
+	importer.SetIOHandler(new engine_assimp_resource_system_wrapper(res::get_system(), tag, data));
+	const aiScene* scene = importer.ReadFile(std::string{ tag.get_full() }, flags);
     // check for errors
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) // if is Not Zero
     {
@@ -426,7 +429,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag)
 	}
 
 	process_node(scene, scene->mRootNode, jstree, geometry, tag);
-	geometry.serialize(res::tag::null, res::get_system(), jsgeometry);
+	geometry.serialize(jsgeometry);
     data["geometry"] = jsgeometry;
     data["tree"] = jstree;
 

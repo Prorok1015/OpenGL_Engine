@@ -7,6 +7,7 @@
 
 namespace res
 {
+	//TODO: split to memory_storage and memory_resolver
 	class memory_resolver
 	{
 	public:
@@ -35,6 +36,6 @@ namespace res
 		}
 
 	private:
-		std::unordered_map<tag, std::vector<std::byte>> memory_;
+		std::unordered_map<tag, std::vector<std::byte>> memory_; 
 	};
 }

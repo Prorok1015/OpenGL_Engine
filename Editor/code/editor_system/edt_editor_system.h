@@ -35,7 +35,7 @@ namespace editor
 				field_string = data.at("field_string").as_string();
 		}
 
-		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const override
+		virtual void serialize(json::object& data) const override
 		{
 		}
 
@@ -60,7 +60,7 @@ namespace editor
 				just_double = data.at("just_double").as_double();
 		}
 
-		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const override
+		virtual void serialize(json::object& data) const override
 		{
 		}
 

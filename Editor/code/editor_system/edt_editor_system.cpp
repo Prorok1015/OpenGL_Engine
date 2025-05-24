@@ -124,7 +124,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 				if (auto* desc = ecs::registry.try_get<rnd::geometry_desc>(selected_entity))
 				{
 					json::object data;
-					desc->serialize({}, res::get_system(), data);
+					desc->serialize(data);
 					std::ostringstream oss;
 					pretty_print(oss, data);
 					std::string json_string = oss.str();
@@ -229,7 +229,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		header.data.extent.height = 8000;
 
 		json::object txm_js;
-		txm_desc.serialize(txm_desc.txm_tag, res::get_system(), txm_js);
+		txm_desc.serialize(txm_js);
 		std::string str_data = json::serialize(txm_js);
 		std::vector<std::byte> txm_data;
 		txm_data.resize(str_data.size());
@@ -253,7 +253,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		mlt.samplers_textures_desc = { desc_system.get_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
 
 		json::object mlt_js;
-		mlt.serialize(window_material, res::get_system(), mlt_js);
+		mlt.serialize( mlt_js);
 		std::string str_data2 = json::serialize(mlt_js);
 		std::vector<std::byte> mlt_data;
 		mlt_data.resize(str_data2.size());
@@ -304,7 +304,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		std::memcpy(geom_desc.vertices.data(), (std::byte*)web.data.vertices.data(), geom_desc.vertices.size());
 		auto geom_tag = web_tag;
 		json::object geom_js;
-		geom_desc.serialize(geom_tag, res::get_system(), geom_js);
+		geom_desc.serialize(geom_js);
 
 		std::string str_data = json::serialize(geom_js);
 		std::vector<std::byte> geom_data;
@@ -361,7 +361,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.data.vertices.data(), geom_desc.vertices.size());
 		auto geom_tag = cube_tag;
 		json::object geom_js;
-		geom_desc.serialize(geom_tag, res::get_system(), geom_js);
+		geom_desc.serialize(geom_js);
 
 		std::string str_data = json::serialize(geom_js);
 		std::vector<std::byte> geom_data;
@@ -432,6 +432,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	res::get_system().registrate_adapter("glb", scn::model_importer_adapter{desc_system});
 	res::get_system().registrate_adapter("obj", scn::model_importer_adapter{desc_system});
 	res::get_system().registrate_adapter("fbx", scn::model_importer_adapter{desc_system});
+	res::get_system().registrate_adapter("gltf", scn::model_importer_adapter{desc_system});
 
 	//desc_system.register_desc<scn::animatable_prototype_desc>(res::tag::make("objects/helicopter/source/helicopter Space ship.glb"));
 	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
@@ -960,6 +961,7 @@ bool editor::EditorSystem::show_file_dialog()
 	file_dialog.add_extension_filter(".glb");
 	file_dialog.add_extension_filter(".obj");
 	file_dialog.add_extension_filter(".fbx");
+	file_dialog.add_extension_filter(".gltf");
 
 	if (file_dialog.show("Import", &is_open))
 	{

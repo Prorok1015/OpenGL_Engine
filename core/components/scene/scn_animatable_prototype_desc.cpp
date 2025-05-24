@@ -127,9 +127,9 @@ void scn::animatable_prototype_desc::deserialize(desc::desc_system& desc_system,
 	}
 }
 
-void scn::animatable_prototype_desc::serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const
+void scn::animatable_prototype_desc::serialize(json::object& data) const
 {
-	prototype_desc::serialize(tag, res_system, data);
+	prototype_desc::serialize(data);
 
 	data["animations"] = json::value_from(animations);
 }

@@ -132,7 +132,7 @@ void gs::GameSystem::ensure_ecs_material(ecs::entity material, const res::Materi
 			header.data.extent.height = 0;
 
 			json::object txm_js;
-			txm_desc.serialize(txm_desc.txm_tag, res::get_system(), txm_js);
+			txm_desc.serialize(txm_js);
 			std::string str_data = json::serialize(txm_js);
 			std::vector<std::byte> txm_data;
 			txm_data.resize(str_data.size());
@@ -157,7 +157,7 @@ void gs::GameSystem::ensure_ecs_material(ecs::entity material, const res::Materi
 			header.data.extent.height = 0;
 
 			json::object txm_js;
-			txm_desc.serialize(txm_desc.txm_tag, res::get_system(), txm_js);
+			txm_desc.serialize(txm_js);
 			std::string str_data = json::serialize(txm_js);
 			std::vector<std::byte> txm_data;
 			txm_data.resize(str_data.size());
@@ -349,7 +349,7 @@ void gs::GameSystem::check_loaded_model()
 		std::memcpy(geom_desc.vertices.data(), (std::byte*)pres.vertices.data(), geom_desc.vertices.size());
 		geom_desc.indices = pres.indices;
 
-		geom_desc.serialize(geom_tag, res::get_system(), geom_js);
+		geom_desc.serialize( geom_js);
 
 		std::string str_data = json::serialize(geom_js);
 		std::vector<std::byte> geom_data;

@@ -19,7 +19,7 @@ namespace desc
 		virtual void copy_to(desc_base& other) const  = 0;
 
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) = 0;
-		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object&) const = 0;
+		virtual void serialize(json::object&) const = 0;
 		bool is_loaded() const { return is_loaded_flag; }
 		const res::tag& get_tag() const { return tag; }
 

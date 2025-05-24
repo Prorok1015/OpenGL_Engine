@@ -85,7 +85,7 @@ void scn::prototype_desc::deserialize(desc::desc_system& desc_system, const json
 	}
 }
 
-void scn::prototype_desc::serialize(const res::tag& tag, res::resource_system& res_system, json::object& data) const
+void scn::prototype_desc::serialize(json::object& data) const
 {
 	/*
 		"geometry": "res://cube.desc",

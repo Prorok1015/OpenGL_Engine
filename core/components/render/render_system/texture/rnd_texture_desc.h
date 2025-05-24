@@ -18,7 +18,7 @@ namespace rnd
 		}
 
 		virtual void deserialize(desc::desc_system& system, const json::object& resource) override;
-		virtual void serialize(const res::tag& tag, res::resource_system& res_system, json::object& resource) const override;
+		virtual void serialize(json::object& resource) const override;
 	
 		driver::texture_header header;
 		std::string txm_name;

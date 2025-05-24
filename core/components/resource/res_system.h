@@ -83,6 +83,16 @@ namespace res
 			adapters.erase(ext);
 		}
 
+		std::future<std::vector<std::byte>> require_resource_data(const tag& tag) const
+		{
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
+				return std::future<std::vector<std::byte>>{};
+			}
+
+			return resolvers.at(tag.protocol())(tag);
+		}
+
 		template<class RESOURCE>
 		auto require_resource2(const res::tag& tag)
 		{
@@ -96,7 +106,7 @@ namespace res
 				return std::shared_ptr<RESOURCE>{};
 			}
 
-			auto os_stream = resolvers[tag.protocol()](tag);
+			auto os_stream = require_resource_data(tag);
 			auto resource_sp = adapters[tag.extension()](tag, os_stream.get());
 			return std::static_pointer_cast<RESOURCE>(resource_sp);
 		}
