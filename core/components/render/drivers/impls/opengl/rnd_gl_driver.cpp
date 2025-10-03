@@ -6,6 +6,7 @@
 #include <rnd_gl_vertex_array.h>
 #include <rnd_gl_buffer.h>
 #include <rnd_gl_uniform_buffer.h>
+#include <rnd_gl_ssbo_buffer.h>
 #include <engine_log.h>
 #include <engine_assert.h>
 #include "ds_fixed_vector.hpp"
@@ -626,6 +627,14 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::gl::driver::create_b
 std::unique_ptr<rnd::driver::uniform_buffer_interface> rnd::driver::gl::driver::create_uniform_buffer(std::size_t size, std::size_t binding)
 {
 	return std::make_unique<gl::uniform_buffer>(size, binding);
+}
+
+std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::gl::driver::create_ssbo_buffer(std::size_t size, std::size_t binding)
+{
+	static_assert(sizeof(GLuint) == sizeof(uint32_t));
+	static_assert(sizeof(GLint) == sizeof(uint32_t));
+	ASSERT_MSG((size / sizeof(GLuint)) == (size / sizeof(uint32_t)), "Missmatch size with OpenGL size");
+	return std::make_unique<gl::gl_ssbo_buffer>(size, binding);
 }
 
 void rnd::driver::gl::driver::register_render_state(const render_state& state) {

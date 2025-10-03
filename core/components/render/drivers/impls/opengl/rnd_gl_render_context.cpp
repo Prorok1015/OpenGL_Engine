@@ -34,6 +34,8 @@ rnd::driver::gl::render_context::render_context(GLADloadproc load)
 	glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
 	GLint maxVertexTextureUnits;
 	glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &maxVertexTextureUnits);
+	GLint maxShaderStorageBlockSize;
+	glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maxShaderStorageBlockSize);
 
 	egLOG("render_context/init",
 		"OpenGL Info: \n"
@@ -47,6 +49,7 @@ rnd::driver::gl::render_context::render_context(GLADloadproc load)
 		"Max Uniform Block Size(b):          {7}\n"
 		"Max Uniform Buffer Bindings:        {8}\n"
 		"Max image units in fragment: {9}, vertex: {10}\n"
+		"Max shader storage block size: {11} bytes\n"
 		,
 		(const char*)glGetString(GL_VENDOR),
 		(const char*)glGetString(GL_RENDERER),
@@ -58,7 +61,8 @@ rnd::driver::gl::render_context::render_context(GLADloadproc load)
 		maxUniformBlockSize,
 		maxUniformBufferBindings,
 		maxTextureUnits,
-		maxVertexTextureUnits
+		maxVertexTextureUnits,
+		maxShaderStorageBlockSize
 		);
 
 	ASSERT_MSG(GLVersion.major > 4 || (GLVersion.major == 4 && GLVersion.minor >= 5), "Engine requires at least OpenGL version 4.5!");

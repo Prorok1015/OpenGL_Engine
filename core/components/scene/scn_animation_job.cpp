@@ -17,7 +17,7 @@ void scn::animation_job::deinit(entt::organizer& organizer, entt::registry& regi
 {
 }
 
-
+//old
 void scn::animation_job::update_bone_offsets_system(entt::registry& registry)
 {
     for (ecs::entity ent : registry.view<scn::model_root_component, scn::animations_component, scn::playable_animation>())
@@ -26,8 +26,20 @@ void scn::animation_job::update_bone_offsets_system(entt::registry& registry)
         root.data.bones_matrices.clear();
         load_bone_offsets(ent, root.data.bones_matrices, registry);
     }
-}
 
+    // new
+    for (entt::entity ent : registry.view<scn::bone_component, scn::world_transform, scn::obj_owner_component>())
+    {
+        auto& bone = registry.get<scn::bone_component>(ent);
+		auto& obj = registry.get<scn::obj_owner_component>(ent).owner;
+        auto& matrices = registry.get<scn::bone_matrices_component>(obj);
+        if (bone.index >= 0 && bone.index < (int)matrices.matrices.size())
+        {
+            matrices.matrices[bone.index] = registry.get<scn::world_transform>(ent).world * bone.offset;
+		}
+    }
+}
+//old
 void scn::animation_job::load_bone_offsets(ecs::entity ent, std::vector<glm::mat4>& out, entt::registry& registry)
 {
     if (registry.all_of<scn::bone_component, scn::world_transform>(ent))
@@ -47,7 +59,7 @@ void scn::animation_job::load_bone_offsets(ecs::entity ent, std::vector<glm::mat
         }
     }
 }
-
+// old
 void scn::animation_job::update_animation_system(scn::delta_time dt, entt::registry& registry)
 {
     for (ecs::entity ent : registry.view<scn::model_root_component, scn::animations_component, scn::playable_animation>())
@@ -88,7 +100,7 @@ void scn::animation_job::update_animation_system(scn::delta_time dt, entt::regis
         }
     }
 }
-
+//old
 void scn::animation_job::calc_world_transforms(entt::registry& registry ,ecs::entity ent, const float ticks, const res::animation& anim, std::vector<glm::mat4>& out)
 {
     if (registry.all_of<scn::keyframes_component>(ent))
@@ -138,8 +150,7 @@ void scn::animation_job::update_nodes_animation_system(entt::registry& registry,
         if (time_in_ticks > animation.duration) {
             if (animation.is_repeat_animation) {
                 animation.current_tick = 0.f;
-            }
-            else {
+            } else {
                 ticks = animation.duration;
                 continue;
             }

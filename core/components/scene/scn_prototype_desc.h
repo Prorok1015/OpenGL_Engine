@@ -42,7 +42,12 @@ namespace scn
 		virtual void load_prototype(entt::registry& registry, entt::entity parent);
 
 	protected:
-		virtual entt::entity load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node);
+		struct load_context
+		{
+			entt::entity root = entt::null;
+		};
+
+		virtual entt::entity load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node, load_context& ctx) const;
 
 	public:
 		node_t root;

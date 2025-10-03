@@ -5,7 +5,7 @@
 #include "rnd_render_system.h"
 #include "logger/engine_log.h"
 #include "scn_primitives.h"
-
+#include "scn_model.h"
 #include "res_instance.h"
 
 #include "ecs_common_system.h"
@@ -26,10 +26,20 @@ namespace scn {
     {
         return glm::perspective(glm::radians(camera.fov), make_aspect(camera), camera.near_distance, camera.far_distance);
     }
+
+    void log_name(ecs::entity ent, entt::registry& registry) {
+        if (auto* name = registry.try_get<scn::name_component>(ent)) {
+            egLOG("scn/renderer", "Entity: {0}", name->name);
+        }
+        else {
+            egLOG("scn/renderer", "Entity: (no name)");
+        }
+    }
 }
 
-scn::renderer_3d::renderer_3d()
+scn::renderer_3d::renderer_3d(scn::skinning_manager& skin_mng)
     : rnd::renderer_base(1)
+	, skin_manager(skin_mng)
 {
     rnd::driver::driver_interface* drv = rnd::get_system().get_driver();
 
@@ -700,32 +710,36 @@ res::tag find_geom_tag(ecs::entity ent) {
         return find_geom_tag(parent.parent);
     }
 
-    return res::tag();
+    return res::tag::null;
 };
 
 void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface* drv, scn::pass_queue current_q)
 {
+	auto& registry = ecs::registry;
     auto& geom_mng = rnd::get_system().get_geom_manager();
-    for (const auto ent : ecs::registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
-		auto& mesh = ecs::registry.get<scn::mesh_component>(ent).mesh;
-        auto material_desc = ecs::registry.get<scn::material_desc_component>(ent).mlt_desc;
+    for (const auto ent : registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
+		auto& mesh = registry.get<scn::mesh_component>(ent).mesh;
+        auto material_desc = registry.get<scn::material_desc_component>(ent).mlt_desc;
 		if (!material_desc) {
-            if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
-                egLOG("scn/renderer", "Material desc not found or not in current queue for entity: {0}", name->name);
-            }
-            else {
-                egLOG("scn/renderer", "Material desc not found or not in current queue for entity");
-            }
+            egLOG("scn/renderer", "Material desc not found or not in current queue for entity");
+			log_name(ent, registry);
 		}
 
 		if (!material_desc || (material_desc->queue != current_q && material_desc->queue != scn::pass_queue::MIX)) {
             continue;
 		}
 
-        auto shader_desc = material_desc->get_shader_desc(entt::handle{ ecs::registry, ent }, rnd::get_system().get_texture_manager());
+
+        auto shader_desc = material_desc->get_shader_desc(entt::handle{ registry, ent }, rnd::get_system().get_texture_manager());
         
         if (current_q == scn::pass_queue::OPAQUE) {
             shader_desc.cdata.defines.push_back("OPAQUE");
+        }
+
+        if (load_skin(drv, ent, registry)) {
+            shader_desc.cdata.defines.push_back("USE_ANIMATION");
+            shader_desc.cdata.defines.push_back("NEW_ANIMATION");
+            shader_desc.cdata.constants["MAX_BONE_MATRICES_COUNT"] = "128";
         }
 
         if (directional_light_count > 0) {
@@ -740,4 +754,31 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
 		rnd::configure_pass(shader_desc);
 		drv->draw_indices(va, rnd::get_system().get_render_mode(), mesh.get_indices_count(), mesh.vx_begin, mesh.ind_begin);
     }
+}
+
+bool scn::renderer_3d::load_skin(rnd::driver::driver_interface* drv, entt::entity ent, entt::registry& registry)
+{
+    auto& obj = registry.get<scn::obj_owner_component>(ent).owner;
+    if (!registry.all_of<scn::bone_matrices_component>(obj)) {
+        return false;
+	}
+
+    auto& matrices = registry.get<scn::bone_matrices_component>(obj);
+    rnd::bones_matrices bones_matreces{};
+    auto& bones = matrices.matrices;
+    if (bones.size() < rnd::bones_matrices::MAX_BONE_MATRICES_COUNT) {
+        std::copy(bones.begin(), bones.end(), bones_matreces.bones);
+        rnd::get_system().get_shader_manager().update_global_bones_matrices(bones_matreces, bones.size());
+    } else {
+        ASSERT_FAIL("Bones matrices count too big.");
+		return false;
+    }
+
+    if (auto* skin = registry.try_get<scn::skinning_component>(obj); skin && skin->skinning_tag.is_valid()) {
+        auto* ssbo = skin_manager.get_weights_indeces_buffer({registry, obj}, drv);
+        ssbo->bind(1);
+        return true;
+    }
+
+    return false;
 }

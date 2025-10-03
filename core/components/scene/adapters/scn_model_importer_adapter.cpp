@@ -231,6 +231,8 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 	glm::ivec2 vertex_range{ geometry.vertices.size() / geometry.layout.get_stride(), 0 };
 	glm::ivec2 index_range{ geometry.indices.size(), 0 };
 
+	std::size_t weight_offset = 0;
+
 	for (unsigned int i = 0; i < mesh->mNumVertices; i++)
 	{
 		size_t stride = sizeof(glm::vec3);
@@ -257,13 +259,16 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 			store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
 		}
 
-		ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
-		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
-
 		if (mesh->HasBones())
 		{
-			//store_data(geometry.vertices, glm::vec4{ 0 });//TODO
+			//weight_offset = stride;
+			//stride += sizeof(glm::vec4);
+			//store_data(geometry.vertices, glm::vec4{ 0 });
+
 		}
+
+		ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
+		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
 	}
 
 	for (unsigned int i = 0; i < mesh->mNumFaces; i++)
@@ -285,6 +290,45 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 		{"ind_end", index_range.y},
 		{"material", process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag)}
 	};
+
+	//if (mesh->HasBones()) {
+		json::array weights_to_vertex;
+		weights_to_vertex.resize(mesh->mNumVertices);
+
+		for (unsigned int bidx = 0; bidx < mesh->mNumBones; ++bidx)
+		{
+			aiBone* b = mesh->mBones[bidx];
+
+			for (unsigned int widx = 0; widx < b->mNumWeights; ++widx)
+			{
+				const auto& [vertex_idx, weight] = b->mWeights[widx];
+				std::size_t cur_idx = (std::size_t)vertex_range.x + vertex_idx;
+				//TODO: temporary dublicate weight data
+				/*auto& w = reinterpret_cast<glm::vec4&>(geometry.vertices[cur_idx * geometry.layout.get_stride() + weight_offset]);
+				for (int j = 0; j < w.length(); ++j) {
+					if (w[j] > 0.0) continue;
+					w[j] = weight;
+					break;
+				}*/
+				json::object jsboneweight;
+				jsboneweight["bone_name"] = b->mName.C_Str();
+				jsboneweight["weight"] = weight;
+
+				auto& v = weights_to_vertex.at(vertex_idx);
+
+				if (auto* varr = v.if_array()) {
+					varr->push_back(jsboneweight);
+				} else {
+					v = json::array{ jsboneweight };
+				}
+			}
+		}
+
+		if (auto* jm = jsmesh.if_contains("mesh")) {
+			jm->as_object()["weights"] = weights_to_vertex;
+		}
+
+	//}
 }
 
 void process_node(const aiScene* scene, aiNode* node, json::object& jsnode, rnd::geometry_desc& geometry, res::tag tag)
@@ -304,6 +348,15 @@ void process_node(const aiScene* scene, aiNode* node, json::object& jsnode, rnd:
 		//} else {
 			//process_mesh(scene, mesh, jsnode, geometry, tag);
 		//}
+	}
+
+	if (auto* bone = scene->findBone(node->mName))
+	{
+		jsnode["bone"] = json::object
+		{
+			{"name", bone->mName.C_Str()},
+			{"offset_matrix", json::value_from(convert_to_glm(bone->mOffsetMatrix))}
+		};
 	}
 
 	for (unsigned int i = 0; i < node->mNumChildren; i++)
@@ -413,7 +466,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag)
 			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal" });
 		}
 		if (mesh->HasTextureCoords(0)) {
-			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position" });
+			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC2_F, "uv" });
 		}
 		if (mesh->HasTangentsAndBitangents()) {
 			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent" });

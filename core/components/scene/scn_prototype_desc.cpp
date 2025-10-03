@@ -130,12 +130,19 @@ void scn::prototype_desc::serialize(json::object& data) const
 
 void scn::prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
 {
-	load_prototype_node(registry, parent, root);
+	load_context ctx;
+	load_prototype_node(registry, parent, root, ctx);
 }
 
-entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node)
+entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node, load_context& ctx) const
 {	
 	auto ent = registry.create();
+	if (ctx.root == entt::null) {
+		ctx.root = ent;
+		registry.emplace<scn::object_component>(ent);
+	} else {
+		registry.emplace<scn::obj_owner_component>(ent, ctx.root);
+	}
 	registry.emplace<scn::name_component>(ent, node.name);
 	registry.emplace<scn::local_transform>(ent, node.local);
 	registry.emplace<scn::parent_component>(ent, parent);
@@ -162,7 +169,7 @@ entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, 
 	}
 
 	for (auto& child : node.children) {
-		load_prototype_node( registry, ent, child);
+		load_prototype_node( registry, ent, child, ctx);
 	}
 
 	return ent;

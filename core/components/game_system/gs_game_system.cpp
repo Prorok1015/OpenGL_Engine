@@ -20,6 +20,7 @@
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
 #include "scn_material_component.hpp"
+#include "scn_skinning_manager.h"
 #include "ecs_component.h"
 
 #include "geom/rnd_geometry_desc.h"
@@ -43,6 +44,7 @@ bool is_ready(std::future<R> const& f)
 {
 	return f.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 }
+std::unique_ptr<scn::skinning_manager> skin_manager;
 
 gs::GameSystem::GameSystem(desc::desc_system& d)
 	: desc_system(d)
@@ -53,12 +55,15 @@ gs::GameSystem::GameSystem(desc::desc_system& d)
 	//inp::get_system().activate_manager(input);
 	inp::get_system().activate_manager(ecs_input);
 
-	renderer = std::make_shared<scn::renderer_3d>();
+	skin_manager = std::make_unique<scn::skinning_manager>(d);
+
+	renderer = std::make_shared<scn::renderer_3d>(*skin_manager);
 	rnd::get_system().activate_renderer(renderer);
 }
 
 gs::GameSystem::~GameSystem()
 {
+	skin_manager.reset();
 	rnd::get_system().deactivate_renderer(renderer);
 }
 

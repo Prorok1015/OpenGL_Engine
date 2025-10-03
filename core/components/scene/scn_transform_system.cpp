@@ -51,8 +51,8 @@ void scn::transform_job::calc_world_transforms(ecs::entity ent, entt::registry& 
     {
         auto& trans = registry.get<scn::local_transform>(ent);
         local = trans.local;
-        registry.emplace_or_replace<scn::world_transform>(ent, parent * local);
     }
+    registry.emplace_or_replace<scn::world_transform>(ent, parent * local);
 
     //if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
     //    egLOG("", "name {} is world calculated!", name->name);

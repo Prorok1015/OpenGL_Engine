@@ -8,13 +8,14 @@
 
 namespace rnd::driver
 {
+	struct texture_header;
 	class shader_interface;
 	class texture_interface;
-	struct texture_header;
 	class render_context_interface;
 	class vertex_array_interface;
 	class uniform_buffer_interface;
 	class buffer_interface;
+	class ssbo_buffer_interface;
 
 	enum class CLEAR_FLAGS { COLOR_BUFFER, DEPTH_BUFFER, STENCIL_BUFFER, DEPTH_STENCIL_BUFFER };
 
@@ -202,6 +203,7 @@ namespace rnd::driver
 		virtual std::unique_ptr<vertex_array_interface> create_vertex_array() = 0;
 		virtual std::unique_ptr<buffer_interface> create_buffer() = 0;
 		virtual std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) = 0;
+		virtual std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) = 0;
 
 		virtual void register_render_state(const render_state& state) = 0;
 		virtual void set_render_state(const render_state& state) = 0;

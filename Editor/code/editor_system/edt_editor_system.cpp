@@ -21,7 +21,7 @@
 #include "geom/rnd_geometry_desc.h"
 #include "texture/rnd_texture_desc.h"
 #include "scn_material_desc.h"
-#include "scn_animatable_prototype_desc.h"
+#include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
 
 void
@@ -969,7 +969,7 @@ bool editor::EditorSystem::show_file_dialog()
 		res::tag tag = res::tag::make(relateve.string());
 		if (std::find(imported_models_list.begin(), imported_models_list.end(), tag) == imported_models_list.end()) {
 			imported_models_list.push_back(tag);
-			desc_system.register_desc<scn::animatable_prototype_desc>(tag, std::string{ tag.pure_name() });
+			desc_system.register_desc<scn::skinning_prototype_desc>(tag, std::string{ tag.pure_name() });
 		}
 	}
     return is_open;

@@ -22,6 +22,10 @@ vec3 getNormalVector()
 
 out vec4 fragColor;
 
+#ifdef NEW_ANIMATION
+varying vec4 BonesLen;
+
+#endif
 void main()
 {    
     vec3 norm = getNormalVector();
@@ -30,4 +34,11 @@ void main()
     discard;
     }
     fragColor = result;
+#ifdef NEW_ANIMATION1
+    float c = 0.5;
+    if (BonesLen.x < 0) {
+        c = 0.0;
+    }
+    fragColor = vec4(c, 0.0, 0.0, 1.0);
+#endif
 }

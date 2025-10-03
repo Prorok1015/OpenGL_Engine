@@ -33,6 +33,7 @@ namespace rnd::driver::gl
 		virtual std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		virtual std::unique_ptr<buffer_interface> create_buffer() override;
 		virtual std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) override;
+		virtual std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) override;
 
 		virtual void register_render_state(const render_state& state) override;
 		virtual void set_render_state(const render_state& state) override;

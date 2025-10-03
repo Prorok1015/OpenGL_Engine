@@ -92,7 +92,7 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 			albedo = json::value_to<glm::vec4>(uniforms.at("albedo"));
 		}
 		if (uniforms.contains("emissive")) {
-			albedo = json::value_to<glm::vec4>(uniforms.at("emissive"));
+			emissive = json::value_to<glm::vec4>(uniforms.at("emissive"));
 		}
 		if (uniforms.contains("shininess")) {
 			shininess = json::value_to<float>(uniforms.at("shininess"));

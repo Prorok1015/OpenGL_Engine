@@ -51,9 +51,25 @@ namespace scn {
         std::vector<res::animation> animations;
     };
 
+	struct obj_owner_component {
+		ecs::entity owner;
+	};
+
+	struct object_component {
+	};
+
     struct bone_component {
         glm::mat4 offset{ 1.0 };
+        int index = -1;
     };
+
+    struct skinning_component {
+        res::tag skinning_tag;
+    };
+
+    struct bone_matrices_component {
+        std::vector<glm::mat4> matrices;
+	};
 
     struct parent_component {
         ecs::entity parent;

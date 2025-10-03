@@ -66,7 +66,9 @@ namespace rnd
 		ShaderManager& operator= (const ShaderManager&) = delete;
 		ShaderManager& operator= (ShaderManager&&) = delete;
 
-		void clear_cache() const { _cache.clear();}
+		void clear_cache() const {
+			_cache.clear(); new_cache.clear();
+		}
 
 		void unuse() const;
 
