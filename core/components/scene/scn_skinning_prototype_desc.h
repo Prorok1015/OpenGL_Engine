@@ -41,6 +41,6 @@ namespace scn
 
 		std::unordered_map<std::string, std::pair<glm::mat4, int>> bones_offsets;
 		std::vector<bones_influence> bones_weights;
-		int curIndex = 0;
+		int bone_count = 0;
 	};
 }

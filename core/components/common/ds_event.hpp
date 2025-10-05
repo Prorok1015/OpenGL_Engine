@@ -139,7 +139,7 @@ namespace ds
 	template <typename TAG>
 	void EventImplManagedContainer<SIGNATURE, STORAGE_POLICY, SLOT_POLICY>::subscribe_by_tag(const SLOT& slot)
 	{
-		HANDLE handle{ TAG_HANDLE_BIT | Type::value<TAG>() };
+		HANDLE handle{ TAG_HANDLE_BIT | ds::type_id::value<TAG>() };
 
 		storage.add(slot);
 
@@ -151,7 +151,7 @@ namespace ds
 	template <typename TAG>
 	void EventImplManagedContainer<SIGNATURE, STORAGE_POLICY, SLOT_POLICY>::subscribe_by_tag(SLOT&& slot)
 	{
-		HANDLE handle{ TAG_HANDLE_BIT | Type::value<TAG>() };
+		HANDLE handle{ TAG_HANDLE_BIT | ds::type_id::value<TAG>() };
 
 		storage.add(std::move(slot));
 
@@ -186,7 +186,7 @@ namespace ds
 	template <typename TAG>
 	bool EventImplManagedContainer<SIGNATURE, STORAGE_POLICY, SLOT_POLICY>::unsubscribe_by_tag()
 	{
-		HANDLE handle{ TAG_HANDLE_BIT | Type::value<TAG>() };
+		HANDLE handle{ TAG_HANDLE_BIT | ds::type_id::value<TAG>() };
 
 		return unsubscribe(handle);
 	}

@@ -26,7 +26,7 @@ namespace scn
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
 
-		virtual rnd::new_shader_desc get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager);
+		virtual rnd::shader_config get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager);
 
 		std::vector<std::shared_ptr<rnd::texture_desc>> samplers_textures_desc;
 		ds::color albedo = ds::color(1.0f);
@@ -36,7 +36,8 @@ namespace scn
 		float shininess = 32.0f; // 0.0 -> 1000
 
 		pass_queue queue = pass_queue::OPAQUE;
-		rnd::new_shader_desc::constant_data cdata;
+		rnd::driver::RENDER_MODE render_mode = rnd::driver::RENDER_MODE::TRIANGLE;
+		rnd::shader_config::constant_data cdata;
 	};
 
 	void tag_invoke(json::value_from_tag, json::value& out, const scn::pass_queue& c);

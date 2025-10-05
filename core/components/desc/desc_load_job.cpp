@@ -14,6 +14,6 @@ void desc::desc_load_job::deinit(entt::organizer& organizer, entt::registry& reg
 void desc::desc_load_job::update()
 {
 	if (desc_system) {
-		desc_system->finish_descs();
+		desc_system->process_pending_descs();
 	}
 }

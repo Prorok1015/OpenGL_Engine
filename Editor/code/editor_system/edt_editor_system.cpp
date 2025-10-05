@@ -204,21 +204,6 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 
 	decltype(scn::children_component::children)& children = ecs::registry.get_or_emplace<scn::children_component>(world_anchor).children;
 
-	// black base material
-	ecs::entity black_mlt = ecs::create_entity();
-	ecs::registry.emplace<scn::base_material_component>(black_mlt, scn::base_material_component{ .albedo = ds::color(glm::vec3(0), 1) });
-	ecs::registry.emplace<scn::name_component>(black_mlt, scn::name_component{ .name = "Editor web "});
-	// chess base material
-	ecs::entity light_mlt = ecs::create_entity();
-	ecs::registry.emplace<scn::base_material_component>(light_mlt, scn::base_material_component{});
-	ecs::registry.emplace<scn::name_component>(light_mlt, scn::name_component{ .name = "LIGHT"});
-
-	ecs::entity window_mlt = ecs::create_entity();
-	ecs::registry.emplace<scn::base_material_component>(window_mlt, scn::base_material_component{});
-	ecs::registry.emplace<scn::albedo_map_component>(window_mlt, scn::albedo_map_component{ .txm = res::tag(res::tag::memory, "window.desc") });
-	ecs::registry.emplace<scn::name_component>(window_mlt, scn::name_component{ .name = "WINDOW"});
-	ecs::registry.emplace<scn::is_transparent_flag_component>(window_mlt);
-
 	{
 		rnd::texture_desc txm_desc;
 		txm_desc.txm_name = "window";
@@ -241,9 +226,9 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		res::tag window_material = res::tag(res::tag::memory, "window_material.desc");
 		scn::material_desc mlt;
 
-		rnd::new_shader_desc::constant_data tmpdesc;
+		rnd::shader_config::constant_data tmpdesc;
 
-		tmpdesc.program = rnd::new_shader_desc::shader_program_data::build()
+		tmpdesc.program = rnd::shader_config::shader_program_data::build()
 			.set_vertex_shader(res::tag::make("shaders/mix_opaque_trans_scene.vert"))
 			.set_fragment_shader(res::tag::make("shaders/mix_opaque_trans_scene.frag"));
 
@@ -261,7 +246,37 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		res::get_system().memory_resolver_.add_memory_resource(window_material, mlt_data);
 
 		desc_system.register_desc<scn::material_desc>(window_material, std::string{ window_material.pure_name() });
+
+
+
 	}
+
+	{
+		scn::material_desc mlt;
+
+		mlt.cdata.program = rnd::shader_config::shader_program_data::build()
+			.set_vertex_shader(res::tag::make("shaders/scene.vert"))
+			.set_fragment_shader(res::tag::make("shaders/scene.frag"));
+
+		mlt.cdata.defines;
+		mlt.queue = scn::pass_queue::OPAQUE;
+		mlt.render_mode = rnd::driver::RENDER_MODE::LINE;
+		mlt.albedo = ds::color(glm::vec3(0.f), 1.0f);
+
+		json::object mlt_js;
+		mlt.serialize(mlt_js);
+		std::string str_data2 = json::serialize(mlt_js);
+		std::vector<std::byte> mlt_data;
+		mlt_data.resize(str_data2.size());
+		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
+
+		res::tag web_material = res::tag(res::tag::memory, "web_material.desc");
+		res::get_system().memory_resolver_.add_memory_resource(web_material, mlt_data);
+
+		desc_system.register_desc<scn::material_desc>(web_material, std::string{ web_material.pure_name() });
+
+	}
+
 	//  camera
 	{
 		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), gs::get_system().get_window()->get_size() };
@@ -278,15 +293,11 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		ecs::registry.emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
 	}
 
-	auto web = scn::generate_web({ 50, 50 });
-	res::tag web_tag = res::tag(res::tag::memory, "web.desc");
-	res::model_presintation web_model_pres;
-	web_model_pres.data = web.data;
-	// web
-	{
-		editor_web = ecs::create_entity();
-		children.push_back(editor_web);
 
+	// web
+	{	
+		auto web = scn::generate_web({ 50, 50 });
+		res::tag web_tag = res::tag(res::tag::memory, "web.desc");
 		res::meshes_conteiner& data = web.data;
 		rnd::geometry_desc geom_desc;
 		geom_desc.layout = {
@@ -317,27 +328,21 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
 
 		res::mesh_view& mesh = web.mesh;
-		//mesh.material_id = 0;
+		scn::prototype_desc web_prototype_desc;
+		web_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
+		web_prototype_desc.root.name = "Editor Web";
+		web_prototype_desc.root.local = glm::scale(glm::vec3(1, 0, 1));
+		web_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
+			.vx_begin = mesh.vx_begin, .vx_end = mesh.vx_end,
+			.ind_begin = mesh.ind_begin, .ind_end = mesh.ind_end,
+			.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "web_material.desc"))
+		};
 
-		ecs::registry.emplace<scn::model_root_component>(editor_web, scn::model_root_component{ .data = data, .geom_tag = web_tag });
-		ecs::registry.emplace<scn::mesh_component>(editor_web, scn::mesh_component{ .mesh = mesh });
-		ecs::registry.emplace<scn::name_component>(editor_web, "Editor Web");
-		ecs::registry.emplace<scn::parent_component>(editor_web, world_anchor);
-		auto& transform = ecs::registry.emplace<scn::local_transform>(editor_web);
-		transform.local = glm::scale(glm::vec3(1, 0, 1));
-		ecs::registry.emplace<scn::world_transform>(editor_web);
-		ecs::registry.emplace<rnd::render_mode_component>(editor_web, rnd::RENDER_MODE::LINE);// TODO: move to material
-		ecs::registry.emplace<scn::renderable>(editor_web);
-		ecs::registry.emplace<scn::material_link_component>(editor_web, black_mlt );
+		web_prototype_desc.load_prototype(ecs::registry, world_anchor);
 	}
 
 	auto geom = scn::generate_cube();
 	res::tag cube_tag = res::tag(res::tag::memory, "cube.desc");
-	res::model_presintation cube_model_pres;
-	cube_model_pres.data = geom.data;
-	std::shared_ptr<res::Model> cube_asset = std::make_shared<res::Model>(cube_tag, cube_model_pres);
-	res::get_system().add_resource(cube_asset);
-
 	// windows objects
 	for(int i = 0; i < 1; ++i)
 	{
@@ -389,9 +394,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		window_prototype_desc.root.children[0].name = "Window2";
 		window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
 
-
-		//window_prototype_desc.load_prototype(ecs::registry, world_anchor);
-
+		window_prototype_desc.load_prototype(ecs::registry, world_anchor);
 	}
 
 	// light
@@ -434,12 +437,10 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	res::get_system().registrate_adapter("fbx", scn::model_importer_adapter{desc_system});
 	res::get_system().registrate_adapter("gltf", scn::model_importer_adapter{desc_system});
 
-	//desc_system.register_desc<scn::animatable_prototype_desc>(res::tag::make("objects/helicopter/source/helicopter Space ship.glb"));
 	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 }
-
 
 editor::EditorSystem::~EditorSystem()
 {
@@ -840,34 +841,6 @@ bool editor::EditorSystem::show_toolbar()
 
 		ImGui::Text("Scene");
 		ImGui::Separator();
-
-		static int model_load_method = 0;
-		ImGui::RadioButton("Combo models", &model_load_method, 0); ImGui::SameLine();
-		ImGui::RadioButton("Input model", &model_load_method, 1);
-
-		gs::get_system().check_loaded_model();
-		if (ImGui::Button("Add model")) {
-			gs::get_system().load_model(model_load_method == 0 ? models_list[current_model].c_str() : buf);
-		} ImGui::SameLine();
-
-		if (model_load_method == 0) {
-			if (ImGui::BeginCombo("Models", models_list[current_model].c_str()))
-			{
-				for (int n = 0; n < models_list.size(); n++)
-				{
-					const bool is_selected = (current_model == n);
-					if (ImGui::Selectable(models_list[n].c_str(), is_selected))
-						current_model = n;
-
-					// Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
-					if (is_selected)
-						ImGui::SetItemDefaultFocus();
-				}
-				ImGui::EndCombo();
-			}
-		} else {
-			ImGui::InputText("Name", buf, 64);
-		}
 
 		ImGui::Text("Import model");
 		static int selected_model_idx = 0;

@@ -4,7 +4,7 @@
 
 void scn::skinning_prototype_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	curIndex = 0;
+	bone_count = 0;
 	animatable_prototype_desc::deserialize(desc_system, data);
 	if (auto* tree = data.if_contains("tree")) {
 		if (auto* tree_obj = tree->if_object()) {
@@ -31,16 +31,7 @@ void scn::skinning_prototype_desc::load_prototype(entt::registry& registry, entt
 	animatable_prototype_desc::load_prototype_animations(registry, root_ent);
 	registry.emplace<skinning_component>(root_ent, get_tag());
 	auto& matrs = registry.emplace<bone_matrices_component>(root_ent);
-	matrs.matrices.resize(curIndex + 1, glm::mat4{1.0});
-
-	//
-	//   bone_matr_offsets -> [bone_name -> offset_matrix] -> [vertex, bone_name -> weight]
-	//   1. collect matrix offsets into a array +
-	//   2. map bone_name to index in the array +
-	//   3. assign the index to the bone_component. we will set calculated matrix in animation job by this index +
-	//   4. collect weights and bone id into rangged 2d array 
-	//   5. save that array into ssbo
-	//   6. save desc into mesh component. we will load ssbo buffer in renderer by skinning manager +
+	matrs.matrices.resize(bone_count, glm::mat4{1.0});
 }
 
 std::vector<std::vector<uint32_t>> scn::skinning_prototype_desc::get_2d_array_bonesids_weights() const
@@ -95,8 +86,8 @@ void scn::skinning_prototype_desc::deserialize_bones(const json::object& obj)
 		if (auto* obj_bone = bone->if_object()) {
 			std::string name = json::value_to<std::string>(obj_bone->at("name"));
 			glm::mat4 offset = json::value_to<glm::mat4>(obj_bone->at("offset_matrix"));
-			bones_offsets[name] = { offset, curIndex };
-			++curIndex;
+			bones_offsets[name] = { offset, bone_count };
+			++bone_count;
 		}
 	}
 

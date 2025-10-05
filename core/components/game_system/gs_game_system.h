@@ -25,14 +25,7 @@ namespace gs
 		void set_enable_input(bool enable);
 
 		std::shared_ptr<wnd::window> get_window() { return window; };
-		void load_model(std::string_view path);
-		void ensure_ecs_material(ecs::entity material, const res::Material& mlt);
 		void reload_shaders();
-
-		void add_cube_to_scene(float radius);
-		void remove_cube();
-
-		void check_loaded_model();
 		void end_ecs_frame();
 
 		std::shared_ptr<scn::renderer_3d> get_renderer() const { return renderer; }

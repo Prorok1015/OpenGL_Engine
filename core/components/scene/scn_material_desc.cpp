@@ -2,6 +2,7 @@
 #include "res_system.h"
 #include "res_resource_text_file.h"
 #include "rnd_driver_interface.h"
+#include "rnd_state_helper.h"
 #include "scn_model.h"
 #include "scn_glm_json_convert.h"
 
@@ -98,6 +99,10 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 			shininess = json::value_to<float>(uniforms.at("shininess"));
 		}
 	}
+
+	if (data.contains("render_mode")) {
+		render_mode = rnd::render_mode_from_string(json::value_to<std::string>(data.at("render_mode")));
+	}
 }
 
 void scn::material_desc::serialize(json::object& data) const
@@ -161,11 +166,12 @@ void scn::material_desc::serialize(json::object& data) const
 	uniforms["albedo"] = json::value_from(albedo);
 	uniforms["emissive"] = json::value_from(emissive);
 	data[UNIFORMS_FIELD] = uniforms;
+	data["render_mode"] = rnd::to_string(render_mode);
 }
 
-rnd::new_shader_desc scn::material_desc::get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager)
+rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager)
 {
-	rnd::new_shader_desc::runtime_data rdata;
+	rnd::shader_config::runtime_data rdata;
 	rdata.samplers.resize(samplers_textures_desc.size());
 	for (int idx = 0; idx < samplers_textures_desc.size(); ++idx)
 	{
@@ -185,5 +191,5 @@ rnd::new_shader_desc scn::material_desc::get_shader_desc(entt::handle handle, rn
 	rdata.uniforms["emissiveColor"] = emissive;
 	rdata.uniforms["shininess"] = shininess;
 
-	return rnd::new_shader_desc{ cdata, rdata };
+	return rnd::shader_config{ cdata, rdata };
 }

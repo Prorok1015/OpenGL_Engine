@@ -48,7 +48,7 @@ namespace ds {
 
 		template<class T>
 		bool has_value() const {
-			auto it = data.find(Type::value<T>());
+			auto it = data.find(ds::type_id::value<T>());
 			if (it != data.end()) {
 				return it->second.has_value();
 			}
@@ -60,7 +60,7 @@ namespace ds {
 		{
 			ASSERT_MSG(has_value<T>(), "Missing the required type");
 
-			return POLICY_T::template cast<T>(data[Type::value<T>()]);
+			return POLICY_T::template cast<T>(data[ds::type_id::value<T>()]);
 		}
 
 		template<class T>
@@ -72,14 +72,14 @@ namespace ds {
 		template<class T, class ...ARGS>
 		T& construct(ARGS&&... args)
 		{
-			data[Type::value<T>()] = POLICY_T::template construct<T>(std::forward<ARGS>(args)...);
+			data[ds::type_id::value<T>()] = POLICY_T::template construct<T>(std::forward<ARGS>(args)...);
 			return require<T>();
 		}
 
 		template<class T>
 		void destruct()
 		{
-			data[Type::value<T>()] = nullptr;
+			data[ds::type_id::value<T>()] = nullptr;
 		}
 
 	private:

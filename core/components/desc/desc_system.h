@@ -6,9 +6,9 @@
 #include "desc_resource.hpp"
 
 namespace std {
-	template<> struct hash<std::pair<ds::Type, std::string>> {
-		std::size_t operator()(const std::pair<ds::Type, std::string>& k) const {
-			return std::hash<ds::Type>{}(k.first) ^ std::hash<std::string>{}(k.second);
+	template<> struct hash<std::pair<ds::type_id, std::string>> {
+		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
+			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
 		}
 	};
 }
@@ -36,7 +36,7 @@ namespace desc
 				return;
 			}
 
-			auto type = std::pair{ ds::Type::make<T>(), nms };
+			auto type = std::pair{ ds::type_id::make<T>(), nms };
 			if (desc_map.find(type) != desc_map.end()) {
 				ASSERT_FAIL("desc with type already registered");
 				return;
@@ -52,7 +52,7 @@ namespace desc
 		template<typename T>
 		void unregister_desc(desc_namespace nms = {})
 		{
-			auto type = std::pair{ ds::Type::make<T>(), nms };
+			auto type = std::pair{ ds::type_id::make<T>(), nms };
 			auto it = desc_map.find(type);
 			if (it != desc_map.end()) {
 				desc_map.erase(it);
@@ -87,7 +87,7 @@ namespace desc
 			desc->set_is_loaded();
 		}
 
-		void finish_descs()
+		void process_pending_descs()
 		{
 			auto tmp_loading_qeueue = loading_qeueue;
 			loading_qeueue.clear();
@@ -123,7 +123,7 @@ namespace desc
 		template<typename T>
 		std::shared_ptr<T> get_desc(desc_namespace nms = {}) const
 		{
-			auto it = desc_map.find(std::pair{ ds::Type::make<T>(), nms });
+			auto it = desc_map.find(std::pair{ ds::type_id::make<T>(), nms });
 			if (it == desc_map.end()) {
 				return nullptr;
 			}
@@ -164,7 +164,7 @@ namespace desc
 
 				auto desc = std::make_shared<T>();
 				desc->set_tag(name);
-				auto type = std::pair{ ds::Type::make<T>(), std::string{name.path()} };
+				auto type = std::pair{ ds::type_id::make<T>(), std::string{name.path()} };
 				loading_qeueue.push_back({ {desc, type}, desc::desc_resource{ name, obj} });
 				return desc;
 			}
@@ -178,11 +178,11 @@ namespace desc
 		res::resource_system& res_system;
 		std::vector<desc_name> descs_for_load;// TODO: change
 		mutable std::vector<std::pair<
-			std::pair<std::shared_ptr<desc::desc_base>, std::pair<ds::Type, desc_namespace>
+			std::pair<std::shared_ptr<desc::desc_base>, std::pair<ds::type_id, desc_namespace>
 			>, 
 			desc::desc_resource>> loading_qeueue;
-		std::unordered_map<desc_name, std::pair<ds::Type, desc_namespace>> name_map;
-		std::unordered_map<std::pair<ds::Type, desc_namespace>, std::shared_ptr<desc_base>> desc_map;
+		std::unordered_map<desc_name, std::pair<ds::type_id, desc_namespace>> name_map;
+		std::unordered_map<std::pair<ds::type_id, desc_namespace>, std::shared_ptr<desc_base>> desc_map;
 	};
 
 }

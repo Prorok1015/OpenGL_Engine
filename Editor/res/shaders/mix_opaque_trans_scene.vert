@@ -25,7 +25,7 @@ out PiplineStruct PS;
 mat4 getMeshMatrix()
 {
 #ifdef USE_ANIMATION 
-    return culcSkinMatrix();
+    return culcSkinMatrix(gl_VertexID, uWorldMeshMatr);
 #else
     return uWorldMeshMatr;
 #endif

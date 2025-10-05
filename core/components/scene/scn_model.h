@@ -30,11 +30,6 @@ namespace scn {
         res::mesh_view mesh;
     };
 
-    struct model_root_component {
-        res::meshes_conteiner data;
-        res::tag geom_tag;
-    };
-
 	struct geometry_component {
 		res::tag geom_tag;
 	};
@@ -116,22 +111,4 @@ namespace scn {
         float current_tick = 0.f;
         bool is_repeat_animation = true;
     };
-
-    // Конвертация в JSON
-    void tag_invoke(json::value_from_tag, json::value& jv, const keyframes_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const name_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const mesh_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const model_root_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const animations_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const bone_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const parent_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const children_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const local_transform& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const scene_anchor_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const renderable& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const sky_component& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const directional_light& c);
-    void tag_invoke(json::value_from_tag, json::value& jv, const playable_animation& c);
-
-    json::value to_json(const ecs::entity& e);
 }

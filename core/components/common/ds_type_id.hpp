@@ -3,10 +3,12 @@
 #include <source_location>
 
 namespace ds {
-	struct Type
+	struct type_id
 	{
 		using unique_id = size_t;
 	public:
+		type_id() = default;
+
 		template<class T>
 		static unique_id value() {
 			static unique_id classId = next();
@@ -14,13 +16,17 @@ namespace ds {
 		}
 		
 		template<class T>
-		static Type make() {
-			return Type{ .id = value<T>() };
+		static type_id make() {
+			return type_id{ value<T>() };
 		}
 
-		auto operator<=>(const Type&) const = default;
+		auto operator<=>(const type_id&) const = default;
 
 	private:
+		explicit type_id(unique_id id_)
+			: id(id_) {
+		}
+
 		static unique_id next() {
 			static unique_id counter = 0;
 			return counter++;
@@ -98,8 +104,8 @@ namespace ds {
 
 namespace std {
 	template<>
-	struct hash<ds::Type> {
-		std::size_t operator()(const ds::Type& type) const {
+	struct hash<ds::type_id> {
+		std::size_t operator()(const ds::type_id& type) const {
 			return type.id;
 		}
 	};
