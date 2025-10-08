@@ -28,7 +28,7 @@ mat4 culcSkinMatrix(uint ID, mat4 defaultMatrix)
     {
         uint index = data[indicesStart + colStart + k];
         uint weight = data[indicesStart + colStart + colLength + k];
-        skinMatrix += bones[index] * float(weight);
+        skinMatrix += bones[index] * uintBitsToFloat(weight);
     }
 
     if (colLength > 0) {
