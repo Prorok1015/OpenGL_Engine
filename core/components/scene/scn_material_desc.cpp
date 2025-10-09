@@ -57,7 +57,20 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 		//samplers_textures = json::value_to<std::vector<res::tag>>(data.at(SAMPLERS_FIELD));
 		for (auto& sampler : data.at(SAMPLERS_FIELD).get_array())
 		{
-			samplers_textures_desc.push_back(desc_system.get_or_override_desc<rnd::texture_desc>(*this, sampler));
+			if (sampler.is_null()){
+				samplers_textures_desc.push_back(nullptr);
+				continue;
+			}
+
+			if (auto texture = desc_system.get_or_override_desc<rnd::texture_desc>(*this, sampler))
+				samplers_textures_desc.push_back(texture);
+			else {
+				res::tag tag = json::value_to<res::tag>(sampler);
+				json::object obj;
+				obj["__type"] = sampler;
+				desc::desc_resource resource{ tag, json::value{obj} };
+				samplers_textures_desc.push_back(desc_system.try_create_runtime_desc<rnd::texture_desc>(resource));
+			}
 		}
 	}
 

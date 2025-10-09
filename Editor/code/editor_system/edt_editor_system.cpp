@@ -1177,7 +1177,7 @@ bool editor::EditorSystem::show_textures()
 
 		static int item_current = 1;
 		ImGui::PushItemWidth(max_name * 10);
-		ImGui::ListBox("##materials_listbox", &item_current, items_getter, (void*)&list, list.size(), std::min(visibleItems, (int)list.size()));
+		ImGui::ListBox("##textures_listbox", &item_current, items_getter, (void*)&list, list.size(), std::min(visibleItems, (int)list.size()));
 		ImGui::PopItemWidth();
 
 		if (item_current >= 0 && item_current < list_tags.size())

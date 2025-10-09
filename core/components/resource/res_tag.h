@@ -41,6 +41,10 @@ namespace res
 		constexpr tag(tag&&) = default;
 		constexpr tag& operator= (const tag&) = default;
 		constexpr tag& operator= (tag&&) = default;
+		constexpr tag& operator= (const std::string_view str) {
+			*this = tag{ str };
+			return *this;
+		};
 
 		constexpr bool is_valid() const noexcept { return !full_.empty(); }
 

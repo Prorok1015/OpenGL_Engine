@@ -4,6 +4,7 @@
 #include "res_tag.h"
 #include "desc_base.hpp"
 #include "desc_resource.hpp"
+#include <vector>
 
 namespace std {
 	template<> struct hash<std::pair<ds::type_id, std::string>> {
@@ -83,6 +84,15 @@ namespace desc
 				parent_desc->copy_to(*desc); 
 			}
 
+			if (resource.body.contains("__type")) {
+				auto type_str = json::value_to<res::tag>(resource.body.at("__type"));
+				auto presource = res_system.require_resource2<desc::desc_resource>(type_str);
+				if (presource) {
+					deserialize_desc(desc, *presource);
+				}
+				return;
+			}
+
 			desc->deserialize(*this, resource.body);
 			desc->set_is_loaded();
 		}
@@ -145,11 +155,35 @@ namespace desc
 			return std::static_pointer_cast<T>(it2->second);
 		}
 
+		template<class T>
+		std::shared_ptr<T> try_create_runtime_desc(const desc_resource& resource, desc_namespace nms = {})
+		{
+			auto name = resource.get_tag();
+			if (auto desc = get_desc<T>(name)) {
+				return desc;
+			}
+
+			auto pred = [&name](auto t) {
+				return t.first.first->get_tag() == name;
+			};
+
+			if (auto it = std::find_if(loading_qeueue.begin(), loading_qeueue.end(), pred); it != loading_qeueue.end()) 
+			{
+				return std::static_pointer_cast<T>(it->first.first);
+			}
+
+			auto desc = std::make_shared<T>();
+			desc->set_tag(resource.get_tag());
+			auto type = std::pair{ ds::type_id::make<T>(), resource.get_tag().string()};
+			loading_qeueue.push_back({ {desc, type}, resource });
+			return desc;
+		}
+
 		template<typename T>
 		std::shared_ptr<T> get_or_override_desc(const desc::desc_base& owner, const json::value& data) const
 		{
 			if (data.is_string()) {
-				auto name = json::value_to<res::tag>(data);
+				auto name = json::value_to<desc_name>(data);
 				return get_desc<T>(name);
 
 			} else if (data.is_object()) {

@@ -132,21 +132,36 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 				}
 			}
 
+			res::tag desc_tag = res::tag{ res::tag::memory, std::vformat("{0}{1}.txm.desc", std::make_format_args(embedded_tag.path(), embedded_tag.pure_name()))};
+
+			if (!res::get_system().memory_resolver_.is_exist(desc_tag)) {
+				json::object desc;
+				desc["__parent"] = "res://base_texture.desc";
+				desc["name"] = embedded_tag.pure_name();
+				desc["data"] = json::value_from(embedded_tag);
+
+				std::string data = json::serialize(desc);
+				std::vector<std::byte> desc_data(data.size());
+				std::memcpy(desc_data.data(), data.data(), data.size());
+				res::get_system().memory_resolver_.add_memory_resource(desc_tag, desc_data);
+			}
+			return json::value_from(desc_tag);
+		}
+		
+		res::tag desc_tag = res::tag{ res::tag::memory, std::vformat("{0}{1}.txm.desc", std::make_format_args(tag.path(), texture_name)) };
+
+		if (!res::get_system().memory_resolver_.is_exist(desc_tag)) {
 			json::object desc;
 			desc["__parent"] = "res://base_texture.desc";
-			desc["name"] = embedded_tag.pure_name();
-			desc["data"] = json::value_from(embedded_tag);
+			desc["name"] = texture_name;
+			desc["data"] = json::value_from(tag + res::tag::make(texture_name));
 
-			return desc;
+			std::string data = json::serialize(desc);
+			std::vector<std::byte> desc_data(data.size());
+			std::memcpy(desc_data.data(), data.data(), data.size());
+			res::get_system().memory_resolver_.add_memory_resource(desc_tag, desc_data);
 		}
-
-		auto new_tag = tag + res::tag::make(texture_name);
-		json::object desc;
-		desc["__parent"] = "res://base_texture.desc";
-		desc["name"] = new_tag.pure_name();
-		desc["data"] = json::value_from(new_tag);
-
-		return desc;
+		return json::value_from(desc_tag);
 	}
 
 	return {};
