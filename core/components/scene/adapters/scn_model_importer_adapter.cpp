@@ -192,6 +192,18 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 		}
 	}
 
+	if (json::value spec_tag = find_material_texture(scene, material, aiTextureType_SPECULAR, tag); !spec_tag.is_null()) {
+		samplers.resize(2);
+		samplers[1] = spec_tag;
+		defines.push_back("USE_SPECULAR_MAP");
+	}
+
+	if (json::value normal_tag = find_material_texture(scene, material, aiTextureType_NORMALS, tag); !normal_tag.is_null()) {
+		samplers.resize(3);
+		samplers[2] = normal_tag;
+		defines.push_back("USE_NORMAL_MAP");
+	}
+
 	if (!samplers.empty()) {
 		jsmaterial["samplers"] = samplers;
 	}

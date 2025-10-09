@@ -501,7 +501,6 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
 
         if (load_skin(drv, ent, registry)) {
             shader_desc.cdata.defines.push_back("USE_ANIMATION");
-            shader_desc.cdata.constants["MAX_BONE_MATRICES_COUNT"] = "128";
         }
 
         if (directional_light_count > 0) {
@@ -532,13 +531,18 @@ bool scn::renderer_3d::load_skin(rnd::driver::driver_interface* drv, entt::entit
     auto& matrices = registry.get<scn::bone_matrices_component>(obj);
     rnd::bones_matrices bones_matreces{};
     auto& bones = matrices.matrices;
-    if (bones.size() < rnd::bones_matrices::MAX_BONE_MATRICES_COUNT) {
-        std::copy(bones.begin(), bones.end(), bones_matreces.bones);
-        rnd::get_system().get_shader_manager().update_global_bones_matrices(bones_matreces, bones.size());
-    } else {
-        ASSERT_FAIL("Bones matrices count too big.");
-		return false;
+    if (auto* bones_buffer = skin_manager.get_bones_matrices_buffer(drv)) {
+		bones_buffer->bind(2);
+		bones_buffer->set_data(bones);
     }
+
+  //  if (bones.size() < rnd::bones_matrices::MAX_BONE_MATRICES_COUNT) {
+  //      std::copy(bones.begin(), bones.end(), bones_matreces.bones);
+  //      rnd::get_system().get_shader_manager().update_global_bones_matrices(bones_matreces, bones.size());
+  //  } else {
+  //      ASSERT_FAIL("Bones matrices count too big.");
+		//return false;
+  //  }
 
     if (auto* skin = registry.try_get<scn::skinning_component>(obj); skin && skin->skinning_tag.is_valid()) {
         auto* ssbo = skin_manager.get_weights_indeces_buffer({registry, obj}, drv);

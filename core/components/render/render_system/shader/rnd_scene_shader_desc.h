@@ -72,6 +72,7 @@ namespace rnd
 			auto end() { return shader_tags.end(); }
 			auto begin() const { return shader_tags.begin(); }
 			auto end() const { return shader_tags.end(); }
+			auto operator<=>(const shader_program_data&) const noexcept = default;
 
 		private:
 			ds::fixed_vector<res::tag, 3> shader_tags;
@@ -82,6 +83,7 @@ namespace rnd
 			std::unordered_map<std::string, std::string> constants;
 			std::vector<std::string> defines;
 			shader_program_data program;
+			auto operator<=>(const constant_data&) const noexcept = default;
 		};
 
 		struct runtime_data
@@ -104,7 +106,9 @@ namespace rnd
 			return hash;
 		}
 
-		auto operator<=>(const shader_config& rhs) const noexcept = default;
+		auto operator==(const shader_config& lhs) const noexcept {
+			return cdata == lhs.cdata;
+		}
 
 		std::vector<driver::shader_header> load() const;
 
@@ -113,4 +117,13 @@ namespace rnd
 	};
 
 	void configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader);
+}
+
+namespace std {
+	template<>
+	struct hash<rnd::shader_config> {
+		std::size_t operator()(const rnd::shader_config& sdr) const {
+			return sdr.get_hash();
+		}
+	};
 }

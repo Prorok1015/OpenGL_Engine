@@ -1,10 +1,8 @@
 #ifdef USE_ANIMATION
 
-layout (std140, binding = 2) uniform BoneMatrices // TODO: change to SSBO 
+layout (std430, binding = 2) buffer BoneMatrices
 {
-    int rowHeight;
-    int boneCount;
-    mat4 bones[MAX_BONE_MATRICES_COUNT];
+    mat4 bones[];
 };
 
 layout (std430, binding = 1) buffer IndexesBuffer

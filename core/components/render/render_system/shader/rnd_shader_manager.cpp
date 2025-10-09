@@ -5,7 +5,7 @@
 
 namespace glm
 {
-	decltype(auto) value_ptr(auto&& v)
+	static decltype(auto) value_ptr(auto&& v)
 	{
 		return std::addressof(v);
 	}

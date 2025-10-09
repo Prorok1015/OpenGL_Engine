@@ -80,6 +80,18 @@ namespace ds
 		constexpr const_reference back() const noexcept {
 			return (*this)[length - 1];
 		}
+
+		auto operator==(const fixed_vector& lhs) const noexcept {
+			if (length != lhs.length) {
+				return false;
+			}
+			for (std::size_t i = 0; i < length; ++i) {
+				if (!((*this)[i] == lhs[i])) {
+					return false;
+				}
+			}
+			return true;
+		}
 	private:
 		std::size_t length = 0;
 	};

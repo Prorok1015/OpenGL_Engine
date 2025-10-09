@@ -70,23 +70,20 @@ namespace rnd
 			shader_cache.clear();
 		}
 
-		void unuse() const;
-
 		void use(const shader_config& desc) const
 		{
-			auto hash = desc.get_hash();
-			auto it = shader_cache.find(hash);
+			auto it = shader_cache.find(desc);
 			rnd::driver::shader_interface* shader = nullptr;
 			if (it == shader_cache.end()) {
 				auto new_shader = drv->create_shader(desc.load());
 				if (new_shader) {
 					shader = new_shader.get();
-					shader_cache[hash] = std::move(new_shader);
+					shader_cache[desc] = std::move(new_shader);
 				}
-			}
-			else {
+			} else {
 				shader = it->second.get();
 			}
+
 			if (shader) {
 				shader->use();
 				rnd::configure_render_pass(desc, shader);
@@ -101,6 +98,6 @@ namespace rnd
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> _matrices;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> sun_light;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> bones_buffer;
-		mutable std::unordered_map<std::size_t, std::unique_ptr<rnd::driver::shader_interface>> shader_cache;
+		mutable std::unordered_map<shader_config, std::unique_ptr<rnd::driver::shader_interface>> shader_cache;
 	};
 }
