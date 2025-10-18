@@ -9,7 +9,7 @@
 
 res::resource_system* p_res_system = nullptr;
 
-CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./");
+CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 
 res::resource_system& res::get_system()
 {
@@ -19,6 +19,8 @@ res::resource_system& res::get_system()
 
 res::resource_system::resource_system()
 {
+	ASSERT_MSG(std::filesystem::exists(cfg_res_path), "Resources path '{0}' does not exist!", cfg_res_path->string());
+
 	registrate_resolver(tag::memory, 
 		std::bind(&memory_resolver::operator(),
 			std::addressof(memory_resolver_),
