@@ -12,12 +12,15 @@ namespace res
 	{
 	public:
 		std::future<std::vector<std::byte>> operator()(const tag& tag) const;
+		resource_resolver(std::vector<std::string> entry_points_ = {})
+			: entry_points(std::move(entry_points_)) {
+		}
 
 	private:
 		std::filesystem::path resolve_tag(const tag& tag) const;
 
 	private:
-		std::vector<std::string> entry_points = { std::string{RESOURCE_PATH} };
+		std::vector<std::string> entry_points;
 	};
 }
 

@@ -63,7 +63,7 @@ namespace res
 			return find_cache(tag) != nullptr;
 		}
 
-		static std::filesystem::path get_resources_path() { return std::filesystem::path(s_res_path); }
+		static std::filesystem::path get_resources_path();
 
 		void registrate_resolver(protocol protocol, resolver resolver) {
 			ASSERT_MSG(resolvers.find(protocol) == resolvers.end(), "That protocol already has resolver!");
@@ -119,8 +119,6 @@ namespace res
 
 	private:
 		std::vector<std::shared_ptr<Resource>> cache_;
-		static std::string s_res_path;
-
 
 		std::unordered_map<protocol, resolver> resolvers;
 		std::unordered_map<extension, adapter> adapters;

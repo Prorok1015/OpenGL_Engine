@@ -9,12 +9,13 @@ if(NOT ENGINE_BOOST_NO_LIB)
     URL_MD5 893b5203b862eb9bbd08553e24ff146a
     DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
-    set(BOOST_INCLUDE_LIBRARIES json hana)
+    set(BOOST_INCLUDE_LIBRARIES json hana program_options)
     FetchContent_MakeAvailable(Boost)
 endif()
 
 #components
 add_subdirectory("components/common")
+add_subdirectory("components/config")
 add_subdirectory("components/common/logger")
 add_subdirectory("components/application")
 add_subdirectory("components/gui/backends/interface")

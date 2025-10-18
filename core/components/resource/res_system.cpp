@@ -5,9 +5,11 @@
 #include "path_resolvers/res_tag_resolver.h"
 #include "adapters/res_pct_adapter.h"
 #include <boost/json.hpp>
+#include "cfg_api.h"
 
 res::resource_system* p_res_system = nullptr;
-std::string res::resource_system::s_res_path = RESOURCE_PATH;
+
+CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./");
 
 res::resource_system& res::get_system()
 {
@@ -17,18 +19,13 @@ res::resource_system& res::get_system()
 
 res::resource_system::resource_system()
 {
-	if (s_res_path.empty()) {
-		ASSERT_MSG(std::filesystem::exists("./res/"), "The './res/' folder should be exist next to your exe");
-		s_res_path = std::filesystem::absolute("./res/").generic_string();
-	}
-
 	registrate_resolver(tag::memory, 
 		std::bind(&memory_resolver::operator(),
 			std::addressof(memory_resolver_),
 			std::placeholders::_1));
 
 	registrate_resolver(tag::default_protocol(),
-		std::bind(resource_resolver{}, std::placeholders::_1));
+		std::bind(resource_resolver{ { cfg_res_path->string() }}, std::placeholders::_1));
 
 	registrate_adapter(res::raw_image_adapter::EXTENSION, 
 		std::bind(res::raw_image_adapter{},
@@ -44,12 +41,17 @@ res::resource_system::resource_system()
 	}
 }
 
+std::filesystem::path res::resource_system::get_resources_path()
+{
+	return cfg_res_path;
+}
+
 std::string res::resource_system::get_absolut_path(const res::tag& tag)
 {
 	if (tag.protocol() == res::tag::default_protocol()) {
 		std::string path{ tag.path() };
 		std::string name{ tag.name() };
-		return s_res_path + path + name;
+		return cfg_res_path->string() + path + name;
 	}
 
 	egLOG("resource/absolut_path", "Broken tag {}", tag.get_full());

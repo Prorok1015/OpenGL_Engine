@@ -13,3 +13,8 @@ Used third party libs
 </ul>
 To build you have to use cmake.
 The root CMakeLists.txt is building editor application from folder 'editor'.
+
+run:
+   editor.exe --config <path to config file.yaml>
+or
+   editor.exe --set resource/path <path to resource folder>
