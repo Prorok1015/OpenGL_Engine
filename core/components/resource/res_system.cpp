@@ -4,6 +4,7 @@
 #include "res_resource_model.h"
 #include "path_resolvers/res_tag_resolver.h"
 #include "adapters/res_pct_adapter.h"
+#include "adapters/res_text_adapter.h"
 #include <boost/json.hpp>
 #include "cfg_api.h"
 
@@ -29,18 +30,22 @@ res::resource_system::resource_system()
 	registrate_resolver(tag::default_protocol(),
 		std::bind(resource_resolver{ { cfg_res_path->string() }}, std::placeholders::_1));
 
-	registrate_adapter(res::raw_image_adapter::EXTENSION, 
+	registrate_adapter(res::raw_image_adapter::INFO, 
 		std::bind(res::raw_image_adapter{},
 			std::placeholders::_1,
 			std::placeholders::_2));
 
-	for (auto& ext : res::pct_adapter::EXTENSIONS) {
-		registrate_adapter(ext,
-		std::bind(res::pct_adapter{},
-				std::placeholders::_1,
-				std::placeholders::_2)
-			);
-	}
+	registrate_adapter(res::pct_adapter::INFO,
+	std::bind(res::pct_adapter{},
+			std::placeholders::_1,
+			std::placeholders::_2)
+		);
+
+	registrate_adapter(res::text_adapter::INFO,
+	std::bind(res::text_adapter{},
+			std::placeholders::_1,
+			std::placeholders::_2)
+		);
 }
 
 std::filesystem::path res::resource_system::get_resources_path()
@@ -58,14 +63,4 @@ std::string res::resource_system::get_absolut_path(const res::tag& tag)
 
 	egLOG("resource/absolut_path", "Broken tag {}", tag.get_full());
 	return std::string{};
-}
-
-std::shared_ptr<res::Resource> res::resource_system::find_cache(const res::tag& tag) const
-{
-	auto it = std::find_if(cache_.begin(), cache_.end(), [&tag](auto res) { return *res == tag; });
-	if (it != cache_.end()) {
-		return *it;
-	}
-
-	return nullptr;
 }

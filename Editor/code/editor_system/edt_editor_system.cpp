@@ -432,10 +432,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		ecs::registry.emplace<scn::parent_component>(sky, world_anchor);
 	}
 	this->world_anchor = world_anchor;
-	res::get_system().registrate_adapter("glb", scn::model_importer_adapter{desc_system});
-	res::get_system().registrate_adapter("obj", scn::model_importer_adapter{desc_system});
-	res::get_system().registrate_adapter("fbx", scn::model_importer_adapter{desc_system});
-	res::get_system().registrate_adapter("gltf", scn::model_importer_adapter{desc_system});
+	res::get_system().registrate_adapter(scn::model_importer_adapter::INFO, scn::model_importer_adapter{desc_system});
 
 	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));

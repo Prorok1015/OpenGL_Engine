@@ -38,10 +38,10 @@ namespace stb_image {
 
 		static void free_image_data(unsigned char* data);
 		static Image read_from_memory(const unsigned char* data, int len);
+		static void set_image_flip(ImageFlip flag);
 
 	private:
 		bool read(const std::string_view filename);
-		static void set_image_flip(ImageFlip flag);
 
 	private:
 		unsigned char* data_ = nullptr;

@@ -27,3 +27,10 @@ res::TextFile::TextFile(const tag& tag)
 		ASSERT_FAIL("ERROR::SHADER::FILE_NOT_SUCCESFULLY_READ");
 	}
 }
+
+res::TextFile::TextFile(const tag& tag, const std::vector<std::byte>& string)
+	: Resource(tag)
+{
+	body_.resize(string.size());
+	std::memcpy(body_.data(), string.data(), string.size());
+}

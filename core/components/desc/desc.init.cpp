@@ -9,7 +9,7 @@ desc::desc_load_job load_job;
 void components::desc_init(ds::AppDataStorage& data)
 {
 	auto& res_system = data.require<res::resource_system>();
-	res_system.registrate_adapter(desc::desc_adapter::EXTENSION, 
+	res_system.registrate_adapter(desc::desc_adapter::INFO, 
 		std::bind(desc::desc_adapter{},
 			std::placeholders::_1,
 			std::placeholders::_2
@@ -23,5 +23,5 @@ void components::desc_term(ds::AppDataStorage& data)
 	load_job.internal_init(nullptr);
 	data.destruct<desc::desc_system>();
 	auto& res_system = data.require<res::resource_system>();
-	res_system.unregistrate_adapter(desc::desc_adapter::EXTENSION);
+	res_system.unregistrate_adapter(desc::desc_adapter::INFO);
 }

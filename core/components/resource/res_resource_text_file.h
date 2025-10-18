@@ -8,6 +8,7 @@ namespace res
 	{
 	public:
 		TextFile(const tag& tag);
+		TextFile(const tag& tag, const std::vector<std::byte>& string);
 
 		const char* c_str() const { return body_.c_str(); }
 

@@ -5,7 +5,6 @@
 #include <assimp/postprocess.h>
 
 #include "res_system.h"
-#include "desc_resource.hpp"
 
 #include "geom/rnd_geometry_desc.h"
 #include "adapters/res_pct_adapter.h"

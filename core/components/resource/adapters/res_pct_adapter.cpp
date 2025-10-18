@@ -28,14 +28,16 @@ std::shared_ptr<res::Resource> res::raw_image_adapter::operator()(res::tag tag, 
 	return std::make_shared<res::Picture>(tag, header.size, header.channels, raw_data);
 }
 
+res::pct_adapter::pct_adapter()
+{
+	stb_image::Image::set_image_flip(stb_image::Image::ImageFlip::VERTICAL);
+}
+
 std::shared_ptr<res::Resource> res::pct_adapter::operator()(res::tag tag, const std::vector<std::byte>& data) const
 {
-	auto img = stb_image::Image::read_from_memory(
-		reinterpret_cast<const unsigned char*>(data.data()),
-		data.size()
-	);
+	auto img = stb_image::Image::read_from_memory( reinterpret_cast<const unsigned char*>(data.data()), data.size());
 	glm::ivec2 size(img.width(), img.height());
 	auto raw_data = new unsigned char[img.size()];
-	std::copy(img.data(), img.data() + img.size(), raw_data);
+	std::memcpy(raw_data, img.data(), img.size());
 	return std::make_shared<res::Picture>(tag, size, img.channels_count(), raw_data);
 }
