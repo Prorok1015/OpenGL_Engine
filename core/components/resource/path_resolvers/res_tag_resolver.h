@@ -11,11 +11,11 @@ namespace res
 	class resource_resolver
 	{
 	public:
-		std::future<std::vector<std::byte>> operator()(const tag& tag) const;
-		resource_resolver(std::vector<std::string> entry_points_ = {})
+		resource_resolver(std::vector<std::string> entry_points_)
 			: entry_points(std::move(entry_points_)) {
 		}
 
+		std::future<std::vector<std::byte>> operator()(const tag& tag) const;
 	private:
 		std::filesystem::path resolve_tag(const tag& tag) const;
 

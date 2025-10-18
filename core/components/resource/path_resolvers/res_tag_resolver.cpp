@@ -33,6 +33,6 @@ std::filesystem::path res::resource_resolver::resolve_tag(const tag& tag) const
 			return path;
 		}
 	}
-	egLOG("resource/resolve", "Tag '{}' is not resolved!", tag.get_full());
+	egLOG("resource/resolve", "Tag '{0}' is not resolved!", tag.get_full());
 	return {};
 }

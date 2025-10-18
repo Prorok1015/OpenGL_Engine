@@ -6,6 +6,7 @@ set(WITH_CONSOLE_MODE TRUE)
 
 if(${WITH_CONSOLE_MODE})  
 	add_executable(${PROJECT_NAME} "main.cpp")
+	target_compile_definitions(${PROJECT_NAME} PUBLIC ENGINE_CONSOLE_MODE=1)
 else()
 	add_executable(${PROJECT_NAME} WIN32 "main.cpp")
 endif()

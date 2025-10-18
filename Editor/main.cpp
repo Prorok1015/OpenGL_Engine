@@ -1,9 +1,9 @@
 #include <application.h>
 #include <components_init.h>
-#include "code/editor_system/edt_editor_init.h"
 #include <cfg_api.h>
+#include "code/editor_system/edt_editor_init.h"
 
-#ifndef _WINDOWS
+#ifndef ENGINE_CONSOLE_MODE
 #include <Windows.h>
 
 // Add SAL annotations to match the Windows header definition
@@ -17,7 +17,7 @@ int WINAPI WinMain(
 int main(int argc, char* argv[])
 #endif
 {	
-#ifndef _WINDOWS
+#ifndef ENGINE_CONSOLE_MODE
 	int argc;
 	LPCWSTR lpArgvW = GetCommandLineW();
 	LPWSTR* szArglist = CommandLineToArgvW(lpArgvW, &argc);
