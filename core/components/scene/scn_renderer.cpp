@@ -6,7 +6,6 @@
 #include "logger/engine_log.h"
 #include "scn_primitives.h"
 #include "scn_model.h"
-#include "res_instance.h"
 
 #include "ecs_common_system.h"
 
@@ -17,17 +16,17 @@
 #include "scn_material_component.hpp"
 
 namespace scn {
-    float make_aspect(camera_component& camera)
+    static float make_aspect(camera_component& camera)
     {
         return (float)camera.viewport.size.x / (float)camera.viewport.size.y;
     }
 
-    glm::mat4 make_projection(camera_component& camera)
+    static glm::mat4 make_projection(camera_component& camera)
     {
         return glm::perspective(glm::radians(camera.fov), make_aspect(camera), camera.near_distance, camera.far_distance);
     }
 
-    void log_name(ecs::entity ent, entt::registry& registry) {
+    static void log_name(ecs::entity ent, entt::registry& registry) {
         if (auto* name = registry.try_get<scn::name_component>(ent)) {
             egLOG("scn/renderer", "Entity: {0}", name->name);
         }
@@ -46,18 +45,14 @@ scn::renderer_3d::renderer_3d(scn::skinning_manager& skin_mng)
     vertex_array = drv->create_vertex_array();
 
     vertex_buffer = drv->create_buffer();
-    vertex_buffer->reserve(8000000 * sizeof(res::Vertex));
+    vertex_buffer->reserve(8000000 * sizeof(scn::vertex));
     vertex_buffer->set_layout(
         {
             {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
             {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
+            {rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"}
         }
-        );
+    );
 
     vertex_array->add_vertex_buffer(vertex_buffer);
 
@@ -82,8 +77,6 @@ scn::renderer_3d::renderer_3d(scn::skinning_manager& skin_mng)
 
     vertex_array->set_index_buffer(index_buffer);
 
-    setup_instance_buffer();
-
     DBG_UI_REG_LAMBDA("RENDER/TEST_RENDER", [this]() { return is_flag_test_render; });
     DBG_UI_MENU_ITEM_CHECK_LAMBDA("RENDER/TEST_RENDER", [this](bool flag) { is_flag_test_render = flag; });
     DBG_UI_SET_ITEM_CHECKED("RENDER/TEST_RENDER", true);
@@ -96,31 +89,6 @@ scn::renderer_3d::renderer_3d(scn::skinning_manager& skin_mng)
 scn::renderer_3d::~renderer_3d()
 {
 
-}
-
-void scn::renderer_3d::setup_instance_buffer()
-{
-    rnd::driver::driver_interface* drv = rnd::get_system().get_driver();
-    vertex_array_inst = drv->create_vertex_array();
-
-    //vertex_buffer_inst = drv->create_buffer();
-    //vertex_buffer_inst->set_data(nullptr, 800000 * sizeof(res::Vertex), rnd::driver::BUFFER_BINDING::DYNAMIC);
-    /*vertex_buffer_inst->set_layout(
-        {
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"}
-        }
-        );*/
-    vertex_array_inst->add_vertex_buffer(vertex_buffer);
-    matrices_buffer_inst = drv->create_buffer();
-    matrices_buffer_inst->set_data(nullptr, sizeof(glm::mat4) * 3000, rnd::driver::BUFFER_BINDING::DYNAMIC);
-    matrices_buffer_inst->set_layout({ {rnd::driver::SHADER_DATA_TYPE::MAT4_F, "world"} });
-    vertex_array_inst->add_vertex_buffer(matrices_buffer_inst);
-
-    //index_buffer_inst = drv->create_buffer();
-    //index_buffer_inst->set_data(nullptr, 800000 * 6, rnd::driver::BUFFER_BINDING::DYNAMIC);
-    vertex_array_inst->set_index_buffer(index_buffer);
 }
 
 void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
@@ -204,7 +172,6 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
 
             drv->set_viewport(camera.viewport);
-            draw_instances(drv);
             draw_scene_by_material_desc(drv, scn::pass_queue::OPAQUE);
             draw_sky(drv);
             drv->pop_frame_buffer();
@@ -283,68 +250,6 @@ void scn::renderer_3d::prepare_directional_light()
     rnd::get_system().get_shader_manager().update_global_sun(global_lights);
 }
 
-void scn::renderer_3d::draw_instances(rnd::driver::driver_interface* drv)
-{
-    for (const auto ent : ecs::registry.view<res::instance_object>()) {
-        auto& inst = ecs::registry.get<res::instance_object>(ent);
-        if (inst.worlds.empty()) {
-            continue;
-        }
-
-        rnd::RENDER_MODE tmp = rnd::get_system().get_render_mode();
-
-        if (ecs::registry.all_of<rnd::render_mode_component>(ent)) {
-            auto& rnd_mode = ecs::registry.get<rnd::render_mode_component>(ent);
-            tmp = rnd_mode.mode;
-        }
-
-        vertex_buffer->set_data(inst.tpl.vertices);
-        index_buffer->set_data(inst.tpl.indices);
-
-        matrices_buffer_inst->set_data(inst.worlds);
-
-        //rnd::shader_scene_instance_desc desc;
-        //auto& material = inst.tpl.material;
-        //if (material.is_state(res::Material::ALBEDO_TXM)) {
-        //    desc.tex0 = rnd::get_system().get_texture_manager().require_texture(material.get_txm(res::Material::ALBEDO_TXM));
-        //    desc.defines[rnd::shader_scene_desc::USE_TXM_AS_DIFFUSE] = true;
-        //}
-        //else if (material.is_state(res::Material::ALBEDO_COLOR)) {
-        //    //desc.diffuseColor = material.diffuse_color;
-        //    desc.defines[rnd::shader_scene_desc::USE_TXM_AS_DIFFUSE] = false;
-        //}
-
-        //if (material.is_state(res::Material::SPECULAR_TXM)) {
-        //    desc.tex1 = rnd::get_system().get_texture_manager().require_texture(material.get_txm(res::Material::SPECULAR_TXM));
-        //    desc.defines[rnd::shader_scene_desc::USE_SPECULAR_MAP] = true;
-        //}
-        //else {
-        //    desc.defines[rnd::shader_scene_desc::USE_SPECULAR_MAP] = false;
-        //}
-
-        //if (material.is_state(res::Material::AMBIENT_TXM)) {
-        //    desc.tex2 = rnd::get_system().get_texture_manager().require_texture(material.get_txm(res::Material::AMBIENT_TXM));
-        //}
-
-        //if (material.is_state(res::Material::NORMALS_TXM)) {
-        //    desc.tex2 = rnd::get_system().get_texture_manager().require_texture(material.get_txm(res::Material::NORMALS_TXM));
-        //    desc.defines[rnd::shader_scene_desc::USE_NORMAL_MAP] = true;
-        //}
-        //else {
-        //    desc.defines[rnd::shader_scene_desc::USE_NORMAL_MAP] = false;
-        //}
-
-        //rnd::get_system().get_shader_manager().use(desc);
-
-        if (inst.worlds.size() == 1) {
-            drv->draw_indices(vertex_array_inst, tmp, inst.tpl.indices.size());
-        }
-        else {
-            drv->draw_instanced_indices(vertex_array_inst, tmp, inst.tpl.indices.size(), inst.worlds.size());
-        }
-    }
-}
-
 void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
 {
     static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
@@ -419,7 +324,7 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
 
 void scn::renderer_3d::draw_composition(rnd::driver::driver_interface* drv, rnd::driver::texture_interface* color, rnd::driver::texture_interface* weight)
 {
-    res::Vertex screen[4];
+    scn::vertex screen[4];
     screen[0].position = glm::vec3{ -1, -1, 0 };
     screen[1].position = glm::vec3{ -1,  1, 0 };
     screen[2].position = glm::vec3{  1,  1, 0 };
@@ -451,13 +356,12 @@ void scn::renderer_3d::draw_sky(rnd::driver::driver_interface* drv)
         sky.rdata.samplers = {
             rnd::get_system().get_texture_manager().require_cubemap_texture(cube_map.cube_map)
         };
-        auto& vs = cube_map.data.vertices;
-        auto& is = cube_map.data.indices;
-        vertex_buffer->set_data(vs);
-        index_buffer->set_data(is);
+        auto cube = scn::generate_cube();
+        vertex_buffer->set_data(cube.vertices);
+        index_buffer->set_data(cube.indices);
 
         rnd::configure_pass(sky);
-        drv->draw_indices(vertex_array, rnd::RENDER_MODE::TRIANGLE, is.size());
+        drv->draw_indices(vertex_array, rnd::RENDER_MODE::TRIANGLE, cube.indices.size());
     }
 }
 
@@ -535,14 +439,6 @@ bool scn::renderer_3d::load_skin(rnd::driver::driver_interface* drv, entt::entit
 		bones_buffer->bind(2);
 		bones_buffer->set_data(bones);
     }
-
-  //  if (bones.size() < rnd::bones_matrices::MAX_BONE_MATRICES_COUNT) {
-  //      std::copy(bones.begin(), bones.end(), bones_matreces.bones);
-  //      rnd::get_system().get_shader_manager().update_global_bones_matrices(bones_matreces, bones.size());
-  //  } else {
-  //      ASSERT_FAIL("Bones matrices count too big.");
-		//return false;
-  //  }
 
     if (auto* skin = registry.try_get<scn::skinning_component>(obj); skin && skin->skinning_tag.is_valid()) {
         auto* ssbo = skin_manager.get_weights_indeces_buffer({registry, obj}, drv);

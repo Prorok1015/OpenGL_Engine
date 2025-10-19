@@ -6,15 +6,15 @@
 
 namespace wnd
 {
-	class WindowSystem
+	class window_system
 	{
 	public:
-		WindowSystem();
-		~WindowSystem();
-		WindowSystem(WindowSystem&&) = delete;
-		WindowSystem& operator= (WindowSystem&&) = delete;
-		WindowSystem(const WindowSystem&) = delete;
-		WindowSystem& operator= (const WindowSystem&) = delete;
+		window_system();
+		~window_system();
+		window_system(window_system&&) = delete;
+		window_system& operator= (window_system&&) = delete;
+		window_system(const window_system&) = delete;
+		window_system& operator= (const window_system&) = delete;
 
 		std::shared_ptr<window> get_active_window();
 		std::shared_ptr<window> find_window(window::short_id win);
@@ -38,5 +38,5 @@ namespace wnd
 		wnd::context::header title;
 	};
 	
-	WindowSystem& get_system();
+	window_system& get_system();
 }

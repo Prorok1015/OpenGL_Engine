@@ -45,7 +45,7 @@ int main(int argc, char* argv[])
 	com::component_init(app_storage);
 	com::editor_init(app_storage);
 
-	app::Application& myApp = app::get_app_system();
+	app::application& myApp = app::get_app_system();
 	int result = myApp.run();
 
 	com::editor_term(app_storage);

@@ -1,14 +1,10 @@
 #pragma once
 #include <common.h>
-#include <texture/rnd_texture.h>
 #include <texture/rnd_texture_manager.h>
-#include <res_resource_model.h>
 #include "ecs_entity.h"
 #include "scn_primitives.h"
-#include <boost/json.hpp>
 #include "scn_material_desc.h"
-
-namespace json = boost::json;
+#include <res_mesh.hpp>
 
 namespace scn {
 
@@ -92,8 +88,6 @@ namespace scn {
 
     struct sky_component
     {
-        res::meshes_conteiner data;
-        res::mesh_view mesh;
         std::vector<res::tag> cube_map;
     };
 
@@ -103,12 +97,5 @@ namespace scn {
         glm::vec4 diffuse;
         glm::vec4 ambient;
         glm::vec4 specular;
-    };
-
-    struct playable_animation
-    {
-        std::string name;
-        float current_tick = 0.f;
-        bool is_repeat_animation = true;
     };
 }

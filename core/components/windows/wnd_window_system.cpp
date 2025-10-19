@@ -6,9 +6,9 @@
 #include "wnd_input_keycode_convert.hpp"
 #include <filesystem>
 
-wnd::WindowSystem* p_wnd_system = nullptr;
+wnd::window_system* p_wnd_system = nullptr;
 
-wnd::WindowSystem& wnd::get_system()
+wnd::window_system& wnd::get_system()
 {
     ASSERT_MSG(p_wnd_system, "Window system is nullptr!");
     return *p_wnd_system;
@@ -22,12 +22,12 @@ namespace {
         if (auto wnd = wndCreator.find_window({ window })) {
             wnd->on_resize_window(width, height);
         }
-        inp::InputSystem& inpSys = inp::get_system();
+        inp::input_system& inpSys = inp::get_system();
         inpSys.mouse.on_window_resize({ width, height });
     }
 
     void device_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
-        inp::InputSystem& inpSys = inp::get_system();
+        inp::input_system& inpSys = inp::get_system();
         inpSys.mouse.on_mouse_scroll(xoffset, yoffset);
         inp::scroll_move_event evt{ .direction = { xoffset, yoffset } };
         inpSys.on_scroll_move_event(evt);
@@ -36,7 +36,7 @@ namespace {
     void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
         auto& wndCreator = wnd::get_system();
 
-        inp::InputSystem& inpSys = inp::get_system();
+        inp::input_system& inpSys = inp::get_system();
         inpSys.mouse.on_mouse_move(xpos, ypos);
         inp::cursor_move_event evt{ .pos = {xpos, ypos}, .prev = inpSys.mouse.get_old_pos(), .direction = inpSys.mouse.get_direction() };
         inpSys.on_cursor_move_event(evt);
@@ -51,7 +51,7 @@ namespace {
         if (!key_optional.has_value()) {
             return;
         }
-        inp::InputSystem& inpSys = inp::get_system();
+        inp::input_system& inpSys = inp::get_system();
 
         inp::mouse_click_event evt;
         evt.key = key_optional.value();
@@ -72,7 +72,7 @@ namespace {
             return;
         }
 
-        inp::InputSystem& inpSys = inp::get_system();
+        inp::input_system& inpSys = inp::get_system();
 
         inp::keyboard_event evt;
         evt.key = key_optional.value();
@@ -96,7 +96,7 @@ namespace {
     }
 }
 
-wnd::WindowSystem::WindowSystem()
+wnd::window_system::window_system()
 {
     glfwInit();
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -115,13 +115,13 @@ wnd::WindowSystem::WindowSystem()
     imgui_backend->set_initial_layout_by_default(!is_exist);
 }
 
-wnd::WindowSystem::~WindowSystem()
+wnd::window_system::~window_system()
 {
     imgui_backend->shutdown();
     glfwTerminate();
 }
 
-std::shared_ptr<wnd::window> wnd::WindowSystem::make_window()
+std::shared_ptr<wnd::window> wnd::window_system::make_window()
 {
     auto shared_window = std::make_shared<window>(wnd::context{ title });
 
@@ -142,30 +142,30 @@ std::shared_ptr<wnd::window> wnd::WindowSystem::make_window()
     return shared_window;
 }
 
-std::shared_ptr<wnd::window> wnd::WindowSystem::get_active_window()
+std::shared_ptr<wnd::window> wnd::window_system::get_active_window()
 {
     return find_window(active_window);
 }
 
-std::shared_ptr<wnd::window> wnd::WindowSystem::find_window(window::short_id win)
+std::shared_ptr<wnd::window> wnd::window_system::find_window(window::short_id win)
 {
     return windows_list[win];
 }
 
-void wnd::WindowSystem::pool_events() const
+void wnd::window_system::pool_events() const
 {
     glfwPollEvents();
 }
 
 
-void wnd::WindowSystem::init_windows_frame_time() const
+void wnd::window_system::init_windows_frame_time() const
 {
     for (const auto& [_, win] : windows_list) {
         win->init_frame();
     }
 }
 
-void wnd::WindowSystem::process_windows() const
+void wnd::window_system::process_windows() const
 {
     for (const auto& [_, win] : windows_list) {
         win->update_frame();
@@ -173,7 +173,7 @@ void wnd::WindowSystem::process_windows() const
     }
 }
 
-bool wnd::WindowSystem::is_stop_running()
+bool wnd::window_system::is_stop_running()
 {
     for (const auto& [_, win] : windows_list)
     { 

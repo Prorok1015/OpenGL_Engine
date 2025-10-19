@@ -1,8 +1,7 @@
 #include "res_system.h"
-#include "res_picture.h"
-#include "res_resource_text_file.h"
-#include "res_resource_model.h"
-#include "path_resolvers/res_tag_resolver.h"
+#include "resources/res_resource_picture.h"
+#include "resources/res_resource_text.h"
+#include "resolvers/res_tag_resolver.h"
 #include "adapters/res_pct_adapter.h"
 #include "adapters/res_text_adapter.h"
 #include <boost/json.hpp>

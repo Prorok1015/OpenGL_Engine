@@ -1,6 +1,7 @@
 #pragma once
 #include "inp_input_manager_base.h"
 #include "ecs_common_system.h"
+#include "ecs_entity.h"
 
 namespace ecs
 {
@@ -15,7 +16,7 @@ namespace ecs
 
 		ecs::entity get_empty_entity() {
 			if (!ecs::registry.valid(input_event)) {
-				input_event = ecs::create_entity();
+				input_event = ecs::registry.create();
 			}
 			return input_event;
 		}

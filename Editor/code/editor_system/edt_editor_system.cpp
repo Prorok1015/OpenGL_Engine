@@ -3,7 +3,7 @@
 #include "application.h"
 #include "gs_game_system.h"
 #include "res_system.h"
-#include "res_picture.h"
+#include "resources/res_resource_picture.h"
 #include "rnd_render_system.h"
 #include "scn_primitives.h"
 #include "scn_camera_component.hpp"
@@ -106,7 +106,7 @@ pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nul
         os << "\n";
 }
 
-editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
+editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	: desc_system(desc_system_)
 {
 	GUI_REG_LAMBDA("File/Import...", [this] { return show_file_dialog(); });
@@ -167,7 +167,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	GUI_SET_ITEM_CHECKED("Editor/Draw web", is_show_web);
 
 
-	auto logo = res::get_system().require_resource<res::Picture>(res::tag::make("icons/editor_engine_logo.png"));
+	auto logo = res::get_system().require_resource<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
 	gs::get_system().get_window()->set_logo(logo);
 	gs::get_system().get_window()->set_title("Snake Editor");
 	gui::get_system().set_show_title_bar(true);
@@ -194,7 +194,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	auto anchors = ecs::registry.view<scn::scene_anchor_component>();
 	ecs::entity world_anchor;
 	if (anchors.empty()) {
-		world_anchor = ecs::create_entity();
+		world_anchor = ecs::registry.create();
 		ecs::registry.emplace<scn::scene_anchor_component>(world_anchor);
 		ecs::registry.emplace<scn::name_component>(world_anchor, scn::name_component{ .name = "Anchor" });
 	}
@@ -282,7 +282,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), gs::get_system().get_window()->get_size() };
 		glm::vec3 rotation(0);
 		rotation.x = -glm::radians(45.0f);
-		auto ecs_entity = ecs::create_entity();
+		auto ecs_entity = ecs::registry.create();
 		children.push_back(ecs_entity);
 		ecs::registry.emplace<scn::name_component>(ecs_entity, "Editor camera");
 		ecs::registry.emplace<scn::parent_component>(ecs_entity, world_anchor);
@@ -298,21 +298,16 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	{	
 		auto web = scn::generate_web({ 50, 50 });
 		res::tag web_tag = res::tag(res::tag::memory, "web.desc");
-		res::meshes_conteiner& data = web.data;
 		rnd::geometry_desc geom_desc;
 		geom_desc.layout = {
 			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
 			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "uv"},
 		};
 
-		geom_desc.indices = web.data.indices;
-		geom_desc.vertices.resize(web.data.vertices.size() * sizeof(res::Vertex));
-		std::memcpy(geom_desc.vertices.data(), (std::byte*)web.data.vertices.data(), geom_desc.vertices.size());
+		geom_desc.indices = web.indices;
+		geom_desc.vertices.resize(web.vertices.size() * sizeof(scn::vertex));
+		std::memcpy(geom_desc.vertices.data(), (std::byte*)web.vertices.data(), geom_desc.vertices.size());
 		auto geom_tag = web_tag;
 		json::object geom_js;
 		geom_desc.serialize(geom_js);
@@ -327,14 +322,13 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		// 2. register new geometry_desc
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
 
-		res::mesh_view& mesh = web.mesh;
 		scn::prototype_desc web_prototype_desc;
 		web_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
 		web_prototype_desc.root.name = "Editor Web";
 		web_prototype_desc.root.local = glm::scale(glm::vec3(1, 0, 1));
 		web_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
-			.vx_begin = mesh.vx_begin, .vx_end = mesh.vx_end,
-			.ind_begin = mesh.ind_begin, .ind_end = mesh.ind_end,
+			.vx_begin = 0, .vx_end = web.vertices.size(),
+			.ind_begin = 0, .ind_end = web.indices.size(),
 			.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "web_material.desc"))
 		};
 
@@ -346,24 +340,19 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	// windows objects
 	for(int i = 0; i < 1; ++i)
 	{
-		auto wind = ecs::create_entity();
+		auto wind = ecs::registry.create();
 		children.push_back(wind);
 
-		res::meshes_conteiner& data = geom.data;
 		rnd::geometry_desc geom_desc;
 		geom_desc.layout = {
 			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
 			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
+			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"}
 		};
 
-		geom_desc.indices = geom.data.indices;
-		geom_desc.vertices.resize(geom.data.vertices.size() * sizeof(res::Vertex));
-		std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.data.vertices.data(), geom_desc.vertices.size());
+		geom_desc.indices = geom.indices;
+		geom_desc.vertices.resize(geom.vertices.size() * sizeof(scn::vertex));
+		std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.vertices.data(), geom_desc.vertices.size());
 		auto geom_tag = cube_tag;
 		json::object geom_js;
 		geom_desc.serialize(geom_js);
@@ -378,16 +367,14 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 		// 2. register new geometry_desc
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
 		
-		res::mesh_view& mesh = geom.mesh;
-
 		glm::vec2 rnd_pos = glm::diskRand(1.f);
 		scn::prototype_desc window_prototype_desc;
 		window_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
 		window_prototype_desc.root.name = "Window";
 		window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
-		window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{ 
-			.vx_begin = mesh.vx_begin, .vx_end = mesh.vx_end, 
-			.ind_begin = mesh.ind_begin, .ind_end = mesh.ind_end, 
+		window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
+			.vx_begin = 0, .vx_end = geom.vertices.size(),
+			.ind_begin = 0, .ind_end = geom.indices.size(),
 			.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc") )
 		};
 		window_prototype_desc.root.children = { window_prototype_desc.root };
@@ -399,7 +386,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 
 	// light
 	{
-		light = ecs::create_entity();
+		light = ecs::registry.create();
 		children.push_back(light);
 		ecs::registry.emplace<scn::directional_light>(light, 
 			glm::vec4(-0.2f, -1.0f, -0.3f, 0.0),
@@ -415,10 +402,9 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 
 	// sky
 	{
-		sky = ecs::create_entity();
+		sky = ecs::registry.create();
 		children.push_back(sky);
-		auto m = scn::generate_cube();
-		ecs::registry.emplace<scn::sky_component>(sky, scn::sky_component{ .data = m.data, .mesh = m.mesh, .cube_map = std::vector<res::tag>{
+		ecs::registry.emplace<scn::sky_component>(sky, scn::sky_component{ .cube_map = std::vector<res::tag>{
 			res::tag::make("skybox/right.jpg"),
 			res::tag::make("skybox/left.jpg"),
 			res::tag::make("skybox/bottom.jpg"),
@@ -439,7 +425,7 @@ editor::EditorSystem::EditorSystem(desc::desc_system& desc_system_)
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 }
 
-editor::EditorSystem::~EditorSystem()
+editor::editor_system::~editor_system()
 {
 	inp::get_system().deactivate_manager(input);
 }
@@ -471,7 +457,7 @@ void mark_node_for_animation(entt::entity ent, const res::animation& animation)
 	}
 }
 
-void editor::EditorSystem::show_tree_items(ecs::entity ent)
+void editor::editor_system::show_tree_items(ecs::entity ent)
 {
 	std::string obj_idx = std::to_string((int)ent);
 	std::string name = "Node##" + obj_idx;
@@ -521,7 +507,7 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 		if (parent_node_to_add != entt::null) {
 			if (ImGui::BeginPopup("create_new_entity")) {
 				if (ImGui::InputText("##new_entity_name", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-					ecs::entity child = ecs::create_entity();
+					ecs::entity child = ecs::registry.create();
 					ecs::registry.emplace<scn::name_component>(child, buf);
 					ecs::registry.emplace<scn::parent_component>(child, parent_node_to_add);
 					if (ecs::registry.all_of<scn::children_component>(parent_node_to_add)) {
@@ -560,7 +546,7 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 				}
 				if (ecs::registry.all_of<scn::renderable>(ent)) {
 					if (ImGui::MenuItem("Remove Render Flag")) {
-						ecs::remove_component<scn::renderable>(ent);
+						ecs::registry.remove<scn::renderable>(ent);
 					}
 				} else {
 					if (ImGui::MenuItem("Add Render Flag")) {
@@ -588,11 +574,6 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 		if (ecs::registry.all_of<scn::animations_component>(ent)) {
 			auto& anims = ecs::registry.get<scn::animations_component>(ent);
 			std::string_view play_anim_name;
-			if (ecs::registry.all_of<scn::playable_animation>(ent)) {
-				auto& play = ecs::registry.get<scn::playable_animation>(ent);
-				play_anim_name = play.name;
-				ImGui::Checkbox("Is Repeat", &(play.is_repeat_animation));
-			}
 
 			if (ecs::registry.all_of<edt_playable_animation>(ent)) {
 				auto& play = ecs::registry.get<edt_playable_animation>(ent);
@@ -630,21 +611,6 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 							if (old != cur) {
 								mark_node_for_animation(ent, anims.animations[cur - 1]);
 							}
-						}
-
-						if (ecs::registry.all_of<scn::playable_animation>(ent)) {
-							auto& play = ecs::registry.get<scn::playable_animation>(ent);
-
-							if (cur == 0) {
-								ecs::remove_component<scn::playable_animation>(ent);
-							} else {
-								play.name = names[cur];
-								play.current_tick = 0.f;
-							}
-						} else if (cur != 0){
-							scn::playable_animation play_new;
-							play_new.name = names[cur];
-							ecs::registry.emplace<scn::playable_animation>(ent, play_new);
 						}
 					}
 
@@ -730,7 +696,7 @@ void editor::EditorSystem::show_tree_items(ecs::entity ent)
 	}
 }
 
-bool editor::EditorSystem::show_toolbar()
+bool editor::editor_system::show_toolbar()
 {
 	ImGuiIO& io = ImGui::GetIO();
 
@@ -924,7 +890,7 @@ bool editor::EditorSystem::show_toolbar()
 	return is_open;
 }
 
-bool editor::EditorSystem::show_file_dialog()
+bool editor::editor_system::show_file_dialog()
 {
 	bool is_open = true;
 	file_dialog.clear_extension_filters();
@@ -945,11 +911,11 @@ bool editor::EditorSystem::show_file_dialog()
     return is_open;
 }
 
-bool editor::EditorSystem::show_web()
+bool editor::editor_system::show_web()
 {
 	const bool cur_is_show = GUI_IS_ITEM_CHECKED("Editor/Draw web");
 	if (!cur_is_show && cur_is_show != is_show_web) {
-		ecs::remove_component<scn::renderable>(editor_web);
+		ecs::registry.remove<scn::renderable>(editor_web);
 		//ecs::remove_component<scn::renderable>(sky);
 	}
 	else if (cur_is_show && cur_is_show != is_show_web){
@@ -961,7 +927,7 @@ bool editor::EditorSystem::show_web()
 	return true;
 }
 
-bool editor::EditorSystem::show_scene()
+bool editor::editor_system::show_scene()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Scene", &is_open))
@@ -993,7 +959,7 @@ bool editor::EditorSystem::show_scene()
 	return is_open;
 }
 
-bool editor::EditorSystem::show_ecs_test()
+bool editor::editor_system::show_ecs_test()
 {
 	init_ecs_test();
 
@@ -1026,7 +992,7 @@ bool editor::EditorSystem::show_ecs_test()
 	return is_open;
 }
 
-bool editor::EditorSystem::show_materials()
+bool editor::editor_system::show_materials()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Materials", &is_open, ImGuiWindowFlags_NoScrollbar))
@@ -1120,7 +1086,7 @@ bool editor::EditorSystem::show_materials()
 
 			if (ecs::registry.all_of<scn::is_transparent_flag_component>(mlts[item_current])) {
 				if (ImGui::Button("-##transparent_flag")) {
-					ecs::remove_component<scn::is_transparent_flag_component>(mlts[item_current]);
+					ecs::registry.remove<scn::is_transparent_flag_component>(mlts[item_current]);
 				}
 				ImGui::SameLine();
 				ImGui::Text("Transparent");
@@ -1142,7 +1108,7 @@ bool editor::EditorSystem::show_materials()
 	return is_open;
 }
 
-bool editor::EditorSystem::show_textures()
+bool editor::editor_system::show_textures()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Textures", &is_open))
@@ -1208,7 +1174,7 @@ bool editor::EditorSystem::show_textures()
 	return is_open;
 }
 
-bool editor::EditorSystem::show_clear_cache()
+bool editor::editor_system::show_clear_cache()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Caches", &is_open))
@@ -1225,12 +1191,12 @@ bool editor::EditorSystem::show_clear_cache()
 	return is_open;
 }
 
-void editor::EditorSystem::draw_manipulator(const glm::vec2& pos, const glm::vec2& size)
+void editor::editor_system::draw_manipulator(const glm::vec2& pos, const glm::vec2& size)
 {
 
 }
 
-void editor::EditorSystem::draw_gizmo(const glm::vec2& start, const glm::vec2& size, const glm::mat4& view, const glm::mat4& proj)
+void editor::editor_system::draw_gizmo(const glm::vec2& start, const glm::vec2& size, const glm::mat4& view, const glm::mat4& proj)
 {
 	glm::vec2 guizmo_size{ 120, 120 };
 	glm::vec2 guizmo_start = start + size - guizmo_size;
@@ -1244,7 +1210,7 @@ void editor::EditorSystem::draw_gizmo(const glm::vec2& start, const glm::vec2& s
 	ImGui::EndChild();
 }
 
-void editor::EditorSystem::draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable)
+void editor::editor_system::draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable)
 {
 	auto texture = rnd::get_system().get_texture_manager().find(res::tag(res::tag::memory, "__color_scene_rt"));
 	auto* backend = wnd::get_system().get_gui_backend();
@@ -1272,20 +1238,20 @@ void editor::EditorSystem::draw_scene_image(const glm::vec2& pos, const glm::vec
 	}
 }
 
-bool editor::EditorSystem::init_ecs_test()
+bool editor::editor_system::init_ecs_test()
 {
 	if (is_inited_ecs_test) {
 		return true;
 	}
 
 	is_inited_ecs_test = true;
-	ecs::entity first = ecs::create_entity();
+	ecs::entity first = ecs::registry.create();
 	eng::transform3d trn{ glm::translate(glm::mat4{1.0}, glm::vec3(6)) };
 	ecs::registry.emplace<eng::transform3d>(first, trn);
 	glm::vec2 tmp{ 9, 9 };
 	ecs::registry.emplace<glm::vec2>(first, tmp);
 	trn.set_pos(glm::vec3{ 6, 6, 6 });
-	ecs::entity second = ecs::create_entity();
+	ecs::entity second = ecs::registry.create();
 	eng::transform3d trn2{ glm::translate(glm::mat4{1.0}, glm::vec3(3)) };
 	ecs::registry.emplace<eng::transform3d>(second, trn2);
 	trn2.add_yaw(45.f);

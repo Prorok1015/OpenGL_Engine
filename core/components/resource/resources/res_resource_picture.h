@@ -1,17 +1,14 @@
 #pragma once
-#include <common.h>
+#include "common.h"
 #include "res_resource_base.h"
 
 namespace res
 {
-
-
-	class Picture : public Resource
+	class picture_resource : public resource_entry
 	{
 	public:
-		Picture(const tag& tag);
-		Picture(const tag& tag, glm::ivec2 size_, int channels_, unsigned char* data_);
-		~Picture();
+		picture_resource(const tag& tag, glm::ivec2 size_, int channels_, unsigned char* data_);
+		~picture_resource();
 
 		unsigned char* data() const { return data_; }
 		int channels() const { return channels_; }
@@ -24,5 +21,5 @@ namespace res
 		bool is_embedded_picture = false;
 	};
 
-	using ImageRef = std::shared_ptr<Picture>;
+	using ImageRef = std::shared_ptr<picture_resource>;
 }

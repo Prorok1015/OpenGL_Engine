@@ -8,11 +8,11 @@
 #include <wnd_window_init.h>
 #include "desc_init.h"
 
-extern app::Application* p_app_system;
+extern app::application* p_app_system;
 
 void components::component_init(ds::AppDataStorage& data)
 {
-	p_app_system = &data.construct<app::Application>();
+	p_app_system = &data.construct<app::application>();
 	//1
 	resource_init(data);
 	desc_init(data);
@@ -37,6 +37,6 @@ void components::component_term(ds::AppDataStorage& data)
 	desc_term(data);
 	resource_term(data);
 
-	data.destruct<app::Application>();
+	data.destruct<app::application>();
 	p_app_system = nullptr;
 }

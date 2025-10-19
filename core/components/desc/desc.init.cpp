@@ -1,6 +1,6 @@
 #include "desc_init.h"
 #include "res_system.h"
-#include "desc_resource_adapter.h"
+#include "adapters/desc_resource_adapter.h"
 #include "desc_system.h"
 #include "desc_load_job.h"
 

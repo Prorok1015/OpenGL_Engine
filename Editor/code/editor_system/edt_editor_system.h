@@ -97,11 +97,11 @@ namespace editor
 	};
 
 
-	class EditorSystem
+	class editor_system
 	{
 	public:
-		EditorSystem(desc::desc_system& desc_system);
-		~EditorSystem();
+		editor_system(desc::desc_system& desc_system);
+		~editor_system();
 		bool show_toolbar();
 		bool show_file_dialog();
 

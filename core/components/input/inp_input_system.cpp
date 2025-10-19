@@ -1,25 +1,25 @@
 #include "inp_input_system.h"
 #include <engine_log.h>
 
-inp::InputSystem* p_inp_system = nullptr;
+inp::input_system* p_inp_system = nullptr;
 
-inp::InputSystem& inp::get_system()
+inp::input_system& inp::get_system()
 {
 	ASSERT_MSG(p_inp_system, "Input system is nullptr!");
 	return *p_inp_system;
 }
 
-inp::InputSystem::InputSystem()
+inp::input_system::input_system()
 {
 	keyboard.onKeyStateChanged += [this](auto a, auto b) { onKeyAction(a, b); };
 
 }
 
-inp::InputSystem::~InputSystem()
+inp::input_system::~input_system()
 {
 }
 
-void inp::InputSystem::process_input(float dt)
+void inp::input_system::process_input(float dt)
 {
 	while (!event_queque.empty()) {
 		auto& evt = event_queque.front();
@@ -45,7 +45,7 @@ void inp::InputSystem::process_input(float dt)
 
 }
 
-void inp::InputSystem::activate_manager(std::weak_ptr<input_manager_base> inp_manager)
+void inp::input_system::activate_manager(std::weak_ptr<input_manager_base> inp_manager)
 {
 	auto pred = [](auto& lhs, auto& rhs) {
 		auto lhs_r = lhs.lock();
@@ -60,7 +60,7 @@ void inp::InputSystem::activate_manager(std::weak_ptr<input_manager_base> inp_ma
 	input_managers_list.insert(std::lower_bound(input_managers_list.begin(), input_managers_list.end(), inp_manager, pred), inp_manager);
 }
 
-void inp::InputSystem::deactivate_manager(std::weak_ptr<input_manager_base> inp_manager)
+void inp::input_system::deactivate_manager(std::weak_ptr<input_manager_base> inp_manager)
 {
 	auto pred = [find = inp_manager.lock()](auto& lhs) {
 		auto lhs_r = lhs.lock();
@@ -76,33 +76,33 @@ void inp::InputSystem::deactivate_manager(std::weak_ptr<input_manager_base> inp_
 }
 
 
-inp::Key inp::InputSystem::get_key_state(KEYBOARD_BUTTONS key) const
+inp::Key inp::input_system::get_key_state(KEYBOARD_BUTTONS key) const
 {
 	return keyboard.get_key(key);
 }
 
-inp::Key inp::InputSystem::get_key_state(MOUSE_BUTTONS key) const
+inp::Key inp::input_system::get_key_state(MOUSE_BUTTONS key) const
 {
 	return mouse.get_key(key);
 }
 
 
-void inp::InputSystem::on_keyboard_event(const keyboard_event& evt)
+void inp::input_system::on_keyboard_event(const keyboard_event& evt)
 {
 	event_queque.push(evt);
 }
 
-void inp::InputSystem::on_mouse_buttons_event(const mouse_click_event& evt)
+void inp::input_system::on_mouse_buttons_event(const mouse_click_event& evt)
 {
 	event_queque.push(evt);
 }
 
-void inp::InputSystem::on_cursor_move_event(const cursor_move_event& evt)
+void inp::input_system::on_cursor_move_event(const cursor_move_event& evt)
 {
 	event_queque.push(evt);
 }
 
-void inp::InputSystem::on_scroll_move_event(const scroll_move_event& evt)
+void inp::input_system::on_scroll_move_event(const scroll_move_event& evt)
 {
 	event_queque.push(evt);
 }

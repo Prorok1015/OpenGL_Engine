@@ -1,6 +1,6 @@
 #include "scn_material_desc.h"
 #include "res_system.h"
-#include "res_resource_text_file.h"
+#include "resources/res_resource_text.h"
 #include "rnd_driver_interface.h"
 #include "rnd_state_helper.h"
 #include "scn_model.h"
@@ -182,7 +182,7 @@ void scn::material_desc::serialize(json::object& data) const
 	data["render_mode"] = rnd::to_string(render_mode);
 }
 
-rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager)
+rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager)
 {
 	rnd::shader_config::runtime_data rdata;
 	rdata.samplers.resize(samplers_textures_desc.size());

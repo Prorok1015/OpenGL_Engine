@@ -1,25 +1,33 @@
 #pragma once
 #include <common.h>
 #include "scn_model.h"
+#include "res_mesh.hpp"
 
 namespace scn
 {
+	struct vertex
+	{
+		glm::vec3 position;
+		glm::vec3 normal;
+		glm::vec2 uv;
+	};
+
 	struct model_web
 	{
-		res::meshes_conteiner data;
-		res::mesh_view mesh;
+		std::vector<vertex> vertices;
+		std::vector<unsigned int> indices;
 	};
 
 	struct model_cube
 	{
-		res::meshes_conteiner data;
-		res::mesh_view mesh;
+		std::vector<vertex> vertices;
+		std::vector<unsigned int> indices;
 	};
 
 	struct model_sphere
 	{
-		res::meshes_conteiner data;
-		res::mesh_view mesh;
+		std::vector<vertex> vertices;
+		std::vector<unsigned int> indices;
 	};
 
 	model_web generate_web(glm::ivec2 size);

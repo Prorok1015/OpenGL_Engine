@@ -1,5 +1,5 @@
 #pragma once
-#include "res_picture.h"
+#include "resources/res_resource_picture.h"
 #include "wnd_window_context.h"
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>

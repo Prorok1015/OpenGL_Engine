@@ -57,31 +57,3 @@ std::unique_ptr<rnd::driver::vertex_array_interface> rnd::geom_manager::create_g
 	vertex_array->set_index_buffer(index_buffer);
 	return vertex_array;
 }
-
-std::unique_ptr<rnd::driver::vertex_array_interface> rnd::geom_manager::create_geometry(std::shared_ptr<res::Model> model)
-{
-    auto vertex_array = drv->create_vertex_array();
-
-    std::shared_ptr<rnd::driver::buffer_interface> vertex_buffer = drv->create_buffer();
-    vertex_buffer->reserve(8000000 * sizeof(res::Vertex));
-    vertex_buffer->set_layout(
-        {
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC4_F, "bones_weight"},
-            {rnd::driver::SHADER_DATA_TYPE::VEC4_F, "color"},
-        }
-        );
-    vertex_buffer->set_data(model->get_model_pres().data.vertices);
-
-    vertex_array->add_vertex_buffer(vertex_buffer);
-    std::shared_ptr<rnd::driver::buffer_interface> index_buffer = drv->create_buffer();
-    index_buffer->set_data(model->get_model_pres().data.indices);
-
-    vertex_array->set_index_buffer(index_buffer);
-
-    return vertex_array;
-}

@@ -27,8 +27,8 @@ namespace rnd::driver
 		}
 
 		template<class T>
-		void set_data_ptr(const T* data, std::size_t size, BUFFER_BINDING binding = BUFFER_BINDING::DYNAMIC) {
-			set_data(data, size * sizeof(T), binding);
+		void set_data_ptr(const T* data, std::size_t count, BUFFER_BINDING binding = BUFFER_BINDING::DYNAMIC) {
+			set_data(data, count * sizeof(T), binding);
 		}
 
 		void reserve(std::size_t size) {

@@ -2,7 +2,7 @@
 
 void inp::InputActionMouseMove::update(float dt)
 {
-	InputSystem& inpSys = inp::get_system();
+	input_system& inpSys = inp::get_system();
 	glm::vec2 current_position = inpSys.mouse.get_pos();
 
 	if (last_position != current_position) {
@@ -13,7 +13,7 @@ void inp::InputActionMouseMove::update(float dt)
 
 void inp::InputMouseWhell::update(float dt)
 {
-	InputSystem& inpSys = inp::get_system();
+	input_system& inpSys = inp::get_system();
 	glm::vec2 current_position = inpSys.mouse.get_scroll();
 
 	if (last_position != current_position) {

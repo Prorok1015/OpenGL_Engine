@@ -7,16 +7,16 @@
 
 namespace inp
 {
-	class InputSystem
+	class input_system
 	{
 	public:
-		InputSystem();
-		~InputSystem();
-		InputSystem(InputSystem&&) = delete;
-		InputSystem& operator= (InputSystem&&) = delete;
+		input_system();
+		~input_system();
+		input_system(input_system&&) = delete;
+		input_system& operator= (input_system&&) = delete;
 
-		InputSystem(const InputSystem&) = delete;
-		InputSystem& operator= (const InputSystem&) = delete;
+		input_system(const input_system&) = delete;
+		input_system& operator= (const input_system&) = delete;
 
 		void process_input(float dt);
 
@@ -55,6 +55,6 @@ namespace inp
 		std::queue<inp::input_event> event_queque;
 	};
 
-	InputSystem& get_system();
+	input_system& get_system();
 }
  

@@ -7,7 +7,7 @@ namespace components {
 	void editor_init(ds::AppDataStorage& data)
 	{
 		auto& desc_system = data.require<desc::desc_system>();
-		auto& editor = data.construct<edt::EditorSystem>(desc_system);
+		auto& editor = data.construct<edt::editor_system>(desc_system);
 
 		desc_system.register_desc<edt::editor_test_parent_desc>(res::tag::make("test_parent_desc.desc"));
 		desc_system.register_desc<edt::editor_test_desc>(res::tag::make("test_desc.desc"));
@@ -21,7 +21,7 @@ namespace components {
 
 		auto& desc_system = data.require<desc::desc_system>();
 		desc_system.unregister_desc<edt::editor_test_desc>();
-		data.destruct<edt::EditorSystem>();
+		data.destruct<edt::editor_system>();
 	}
 
 }

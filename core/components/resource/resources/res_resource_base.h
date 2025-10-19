@@ -4,11 +4,11 @@
 namespace res
 {
 	class resource_system;
-	class Resource
+	class resource_entry
 	{
 		friend res::resource_system;
 	public:
-		Resource(const tag& tag) : tag_(tag) {}
+		resource_entry(const tag& tag) : tag_(tag) {}
 
 		bool operator== (const tag& tag) const { return tag_ == tag; }
 
@@ -18,5 +18,5 @@ namespace res
 		tag tag_;
 	};
 
-	using RecourceRef = std::shared_ptr<Resource>;
+	using RecourceRef = std::shared_ptr<resource_entry>;
 }

@@ -1,6 +1,6 @@
 #pragma once
 #include "common.h"
-#include "res_resource_base.h"
+#include "resources/res_resource_base.h"
 
 #include <boost/json.hpp>
 
@@ -8,11 +8,11 @@ namespace json = boost::json;
 
 namespace desc
 {
-	class desc_resource : public res::Resource
+	class desc_resource : public res::resource_entry
 	{
 	public:
 		desc_resource(const res::tag& tag, const json::value& json_data)
-			: res::Resource(tag)
+			: res::resource_entry(tag)
 			, body(json_data.as_object())
 		{
 		}

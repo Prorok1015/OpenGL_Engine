@@ -5,12 +5,12 @@
 
 scn::model_web scn::generate_web(glm::ivec2 size)
 {
-    std::vector<res::Vertex> vex;
+    std::vector<vertex> vex;
     std::vector<unsigned int> inc;
 
     const int half_x = size.x / 2;
     for (int i = -half_x; i <= half_x; ++i) {
-        res::Vertex line[2];
+        vertex line[2];
         line[0].position = { 1.f / half_x * i, 0.f, -1.f };
         line[1].position = { 1.f / half_x * i, 0.f,  1.f };
 
@@ -22,7 +22,7 @@ scn::model_web scn::generate_web(glm::ivec2 size)
 
     const int half_y = size.y / 2;
     for (int i = -half_y; i <= half_y; ++i) {
-        res::Vertex line[2];
+        vertex line[2];
         line[0].position = { 1.f, 0.f, 1.f / half_y * i };
         line[1].position = { -1.f, 0.f, 1.f / half_y * i };
 
@@ -32,18 +32,12 @@ scn::model_web scn::generate_web(glm::ivec2 size)
         inc.push_back((unsigned)vex.size() - 1);
     }
 
-    res::meshes_conteiner data;
-    data.indices = inc;
-    data.vertices = vex;
-    res::mesh_view mesh;
-    mesh.ind_end = inc.size();
-    mesh.vx_end = vex.size();
-    return {data, mesh};
+    return { vex, inc };
 }
 
 scn::model_cube scn::generate_cube()
 {
-    std::vector<res::Vertex> vex = {
+    std::vector<vertex> vex = {
     {.position = {-1.f, -1.f, -1.f}, .uv = {0, 0}}, // 0
     {.position = {-1.f, 1.f, -1.f}, .uv = {0, 1}}, // 1
     {.position = {1.f, 1.f, -1.f}, .uv = {1, 1}}, // 2
@@ -144,27 +138,12 @@ scn::model_cube scn::generate_cube()
         p3.normal = p1.normal;
     }
 
-    for (auto& v : vex) {
-        //v.uv /= glm::vec2(16, -16);
-    }
-
-    res::meshes_conteiner data;
-    data.indices = inc;
-    data.vertices = vex;
-    res::Material mlt;
-    mlt.txm_list[res::Material::ALBEDO_TXM] = res::tag::make("block.png");
-    mlt.set_state(res::Material::ALBEDO_TXM);
-    data.materials.push_back(mlt);
-    res::mesh_view mesh;
-    mesh.ind_end = inc.size();
-    mesh.vx_end = vex.size();
-    mesh.material_id = 0;
-    return { data, mesh };
+    return { vex, inc };
 }
 
-std::vector<res::Vertex> generate_sphere_data(float radius, float sectorCount, float stackCount)
+std::vector<scn::vertex> generate_sphere_data(float radius, float sectorCount, float stackCount)
 {
-    std::vector<res::Vertex> result;
+    std::vector<scn::vertex> result;
 
     constexpr float PI = (float)std::numbers::pi;
     float x, y, z, xy;                              // vertex position
@@ -186,7 +165,7 @@ std::vector<res::Vertex> generate_sphere_data(float radius, float sectorCount, f
         {
             const float sectorAngle = j * sectorStep;           // starting from 0 to 2pi
 
-            res::Vertex vert;
+            scn::vertex vert;
 
             // vertex position (x, y, z)
             x = xy * std::cos(sectorAngle);             // r * cos(u) * cos(v)
@@ -266,12 +245,5 @@ scn::model_sphere scn::generate_sphere()
         v.uv = v.uv / glm::vec2(16, -16);
     }
 
-    res::meshes_conteiner data;
-    data.indices = inc;
-    data.vertices = vex;
-    res::mesh_view mesh;
-    mesh.ind_end = inc.size();
-    mesh.vx_end = vex.size();
-    mesh.material_id = 0;
-    return { data, mesh };
+    return { vex, inc };
 }

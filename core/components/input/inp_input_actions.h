@@ -25,7 +25,7 @@ namespace inp
 
 		virtual void update(float dt)
 		{
-			InputSystem& inpSys = inp::get_system();
+			input_system& inpSys = inp::get_system();
 			const auto& action = inpSys.get_key_state(button);
 
 			if (action.action == inp::KEY_ACTION::DOWN) {
@@ -70,7 +70,7 @@ namespace inp
 
 		virtual void update(float dt)
 		{
-			InputSystem& inpSys = inp::get_system();
+			input_system& inpSys = inp::get_system();
 			const auto& action = inpSys.get_key_state(button);
 
 			if (action.action == inp::KEY_ACTION::DOWN) {
@@ -121,7 +121,7 @@ namespace inp
 
 		virtual void update(float dt)
 		{
-			InputSystem& inpSys = inp::get_system();
+			input_system& inpSys = inp::get_system();
 			const auto& action = inpSys.get_key_state(button);
 			if (action.action == inp::KEY_ACTION::DOWN) {
 				actual_time += dt;

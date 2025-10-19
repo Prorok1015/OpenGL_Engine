@@ -1,7 +1,6 @@
 #pragma once
 #include <common.h>
 #include "res_tag.h"
-#include "rnd_texture.h"
 #include "desc_system.h"
 
 #include <rnd_driver_interface.h>
@@ -9,10 +8,10 @@
 
 namespace rnd
 {
-	class TextureManager
+	class texture_manager
 	{
 	public:
-		TextureManager(driver::driver_interface* driver, desc::desc_system& d)
+		texture_manager(driver::driver_interface* driver, desc::desc_system& d)
 			: drv(driver)
 			, desc_system(d)
 		{}

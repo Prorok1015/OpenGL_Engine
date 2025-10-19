@@ -2,8 +2,8 @@
 #include "common.h"
 #include "res_tag.h"
 #include "logger/engine_log.h"
-#include "res_resource_base.h"
-#include "path_resolvers/res_memory_resolver.h"
+#include "resources/res_resource_base.h"
+#include "resolvers/res_memory_resolver.h"
 #include "adapters/res_adapter_info.hpp"
 #include <future>
 #include <iostream>
@@ -18,7 +18,7 @@ namespace res
 		using extension = adapter_info;
 		using data = std::vector<std::byte>;
 		using resolver = std::function<std::future<data>(const tag&)>;
-		using adapter = std::function<std::shared_ptr<Resource>(res::tag, const data&)>;
+		using adapter = std::function<std::shared_ptr<resource_entry>(res::tag, const data&)>;
 
 	public:
 		resource_system();

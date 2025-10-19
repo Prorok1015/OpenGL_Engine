@@ -1,15 +1,15 @@
 #include "rnd_render_system.h"
 #include <rnd_driver_interface.h>
 
-rnd::RenderSystem* p_render_system = nullptr;
+rnd::render_system* p_render_system = nullptr;
 
-rnd::RenderSystem& rnd::get_system()
+rnd::render_system& rnd::get_system()
 {
 	ASSERT_MSG(p_render_system, "Render system is nullptr!");
 	return *p_render_system;
 }
 
-rnd::RenderSystem::RenderSystem(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d)
+rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d)
 	: drv(std::move(driver))
 	, shader_manager(drv.get())
 	, texture_manager(drv.get(), d)
@@ -17,7 +17,7 @@ rnd::RenderSystem::RenderSystem(std::unique_ptr<rnd::driver::driver_interface> d
 {
 }
 
-void rnd::RenderSystem::activate_renderer(std::weak_ptr<renderer_base> renderer_)
+void rnd::render_system::activate_renderer(std::weak_ptr<renderer_base> renderer_)
 {
 	auto pred = [](auto& lhs, auto& rhs) {
 		auto lhs_r = lhs.lock();
@@ -32,7 +32,7 @@ void rnd::RenderSystem::activate_renderer(std::weak_ptr<renderer_base> renderer_
 	renderers_list.insert(std::lower_bound(renderers_list.begin(), renderers_list.end(), renderer_, pred), renderer_);
 }
 
-void rnd::RenderSystem::deactivate_renderer(std::weak_ptr<renderer_base> renderer)
+void rnd::render_system::deactivate_renderer(std::weak_ptr<renderer_base> renderer)
 {
 	auto pred = [find = renderer.lock()](auto& lhs) {
 		auto lhs_r = lhs.lock(); 
@@ -47,7 +47,7 @@ void rnd::RenderSystem::deactivate_renderer(std::weak_ptr<renderer_base> rendere
 	renderers_list.erase(it);
 }
 
-void rnd::RenderSystem::render() const
+void rnd::render_system::render() const
 {
 	for (auto& weak_renderer : renderers_list) {
 		if (auto renderer = weak_renderer.lock()) {

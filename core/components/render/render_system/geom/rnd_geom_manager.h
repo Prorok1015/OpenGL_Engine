@@ -3,7 +3,6 @@
 #include "rnd_driver_interface.h"
 #include "rnd_vertex_array_interface.h"
 #include "res_tag.h"
-#include "res_resource_model.h"
 #include "desc_system.h"
 #include "rnd_geometry_desc.h"
 
@@ -19,7 +18,6 @@ namespace rnd
 		rnd::driver::vertex_array_interface* find_geometry(res::tag geom_tag);
 
 	private:
-		std::unique_ptr<driver::vertex_array_interface> create_geometry(std::shared_ptr<res::Model> model);
 		std::unique_ptr<driver::vertex_array_interface> create_geometry(std::shared_ptr<rnd::geometry_desc> geom_desc);
 
 	private:

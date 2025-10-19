@@ -3,7 +3,7 @@
 #include "res_system.h"
 #include "res_tag.h"
 #include "desc_base.hpp"
-#include "desc_resource.hpp"
+#include "resources/desc_resource.h"
 #include <vector>
 
 namespace std {

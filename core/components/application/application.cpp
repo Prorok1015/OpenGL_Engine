@@ -9,29 +9,29 @@
 #include <chrono>
 #include <entt/entt.hpp>
 
-app::Application* p_app_system = nullptr;
+app::application* p_app_system = nullptr;
 
-application::Application& application::get_app_system()
+app::application& app::get_app_system()
 {
-	ASSERT_MSG(p_app_system, "Application system is nullptr!");
+	ASSERT_MSG(p_app_system, "application system is nullptr!");
 	return *p_app_system;
 }
 
-application::Application::Application()
+app::application::application()
 {
 	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
 		ptr->init(job_organazer, ecs::registry);
 	}
 }
 
-application::Application::~Application()
+app::application::~application()
 {
 	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
 		ptr->deinit(job_organazer, ecs::registry);
 	}
 }
 
-int application::Application::run()
+int app::application::run()
 {
 	auto& window_system_ref = wnd::get_system();
 

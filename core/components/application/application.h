@@ -3,25 +3,23 @@
 #include <glm/glm.hpp>
 #include "ecs_common_system.h"
 
-namespace application
+namespace app
 {
-	class Application
+	class application
 	{
 
 	public:
-		Application();
-		virtual ~Application();
-		Application(Application&&) = delete;
-		Application& operator= (Application&&) = delete;
-		Application(const Application&) = delete;
-		Application& operator= (const Application&) = delete;
+		application();
+		virtual ~application();
+		application(application&&) = delete;
+		application& operator= (application&&) = delete;
+		application(const application&) = delete;
+		application& operator= (const application&) = delete;
 
 		virtual int run();
 	private:
 		entt::organizer job_organazer;
 	};
 
-	Application& get_app_system();
+	application& get_app_system();
 }
-
-namespace app = application;

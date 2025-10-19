@@ -26,7 +26,7 @@ namespace scn
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
 
-		virtual rnd::shader_config get_shader_desc(entt::handle handle, rnd::TextureManager& txm_manager);
+		virtual rnd::shader_config get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager);
 
 		std::vector<std::shared_ptr<rnd::texture_desc>> samplers_textures_desc;
 		ds::color albedo = ds::color(1.0f);

@@ -66,7 +66,7 @@ namespace {
 #define TXM_LOG(type) log_material_texture(scene, material, type, ###type)
 }
 
-std::shared_ptr<res::Resource> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
+std::shared_ptr<desc::desc_resource> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
 {
     // read file via ASSIMP
     Assimp::Importer importer;

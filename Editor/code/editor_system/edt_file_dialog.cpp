@@ -169,13 +169,13 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         bool can_accept = false;
         if (!selected_path.empty()) {
             switch (select_mode) {
-                case SelectMode::FilesOnly:
+                case SELECT_MODE::FILES_ONLY:
                     can_accept = std::filesystem::is_regular_file(selected_path);
                     break;
-                case SelectMode::FoldersOnly:
+                case SELECT_MODE::FOLDERS_ONLY:
                     can_accept = std::filesystem::is_directory(selected_path);
                     break;
-                case SelectMode::Any:
+                case SELECT_MODE::ANY:
                     can_accept = true;
                     break;
             }
