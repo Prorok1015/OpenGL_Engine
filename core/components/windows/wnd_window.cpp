@@ -1,6 +1,5 @@
 #include "wnd_window.h"
 #include <GLFW/glfw3.h>
-#include <enums.h>
 #include <timer.hpp>
 #include <engine_log.h>
 
@@ -39,8 +38,22 @@ void wnd::window::shutdown(bool close)
     glfwSetWindowShouldClose(ctx.get_id(), close);
 }
 
-void wnd::window::set_cursor_mode(CursorMode mode) {
-    glfwSetInputMode(ctx.get_id(), GLFW_CURSOR, (int)mode);
+void wnd::window::set_cursor_mode(CURSOR_MODE mode) {
+	int glfw_mode = 0;
+    switch (mode)
+    {
+    case CURSOR_MODE::DISABLE:
+        glfw_mode = GLFW_CURSOR_DISABLED;
+        break;
+    case CURSOR_MODE::NORMAL:
+        glfw_mode = GLFW_CURSOR_NORMAL;
+        break;
+    case CURSOR_MODE::HIDDEN:
+        glfw_mode = GLFW_CURSOR_HIDDEN;
+        break;
+    }
+
+    glfwSetInputMode(ctx.get_id(), GLFW_CURSOR, glfw_mode);
 }
 
 void wnd::window::init_frame()

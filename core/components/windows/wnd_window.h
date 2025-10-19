@@ -5,10 +5,16 @@
 #include <glm/ext.hpp>
 
 struct GLFWwindow;
-enum class CursorMode;
 
 namespace wnd
 {
+	enum class CURSOR_MODE
+	{
+		DISABLE,
+		NORMAL,
+		HIDDEN
+	};
+
 	class window
 	{
 	public:
@@ -26,13 +32,12 @@ namespace wnd
 
 	public:
 		window(context ctx_);
-		window(std::string_view title, glm::ivec2 size);
 		~window();
 		float aspect_ratio() const { if (is_minimize_mode()) return 0.f; return (float)size.x / (float)size.y; }
 		bool is_shutdown() const;
 		void on_update();
 		void shutdown(bool close = true);
-		void set_cursor_mode(CursorMode mode);
+		void set_cursor_mode(CURSOR_MODE mode);
 		void update_frame();
 		void init_frame();
 
