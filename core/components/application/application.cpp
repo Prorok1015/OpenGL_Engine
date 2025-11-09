@@ -22,6 +22,7 @@ app::application::application()
 	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
 		ptr->init(job_organazer, ecs::registry);
 	}
+	// collect and registrate game jobs and objects here
 }
 
 app::application::~application()
@@ -51,10 +52,12 @@ int app::application::run()
 		ecs::registry.ctx().get<scn::delta_time>().dt = delta_time;
 		previous_time = current_time;
 
-		wnd::get_system().pool_events();
+		window_system_ref.pool_events();
 
 		inp::get_system().process_input(delta_time);
 		 
+		// window->update(context);
+
 		for (auto&& system : job_graph) {
 			system.prepare(ecs::registry);
 			system.callback()(system.data(), ecs::registry);
@@ -63,6 +66,8 @@ int app::application::run()
 		gs::get_system().end_ecs_frame();
 
 		rnd::get_system().render();
+
+		// window->render(context);
  
 		window_system_ref.process_windows();
 	}

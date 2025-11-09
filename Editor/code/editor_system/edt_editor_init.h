@@ -3,8 +3,8 @@
 
 namespace components {
 
-	void editor_init(ds::AppDataStorage& data);
-	void editor_term(ds::AppDataStorage& data);
+	void editor_init(ds::app_data_storage& data);
+	void editor_term(ds::app_data_storage& data);
 }
 
 namespace com = components;

@@ -10,22 +10,22 @@
 
 extern app::application* p_app_system;
 
-void components::component_init(ds::AppDataStorage& data)
+void components::component_init(ds::app_data_storage& data)
 {
 	p_app_system = &data.construct<app::application>();
 	//1
-	resource_init(data);
-	desc_init(data);
-	input_init(data);
+	resource_init(data);// core
+	desc_init(data);// core
+	input_init(data);// engine
 	//2
-	window_init(data);
+	window_init(data);// core
 	//3
-	render_init(data);
-	gui_init(data);
-	game_init(data);
+	render_init(data);// engine
+	gui_init(data);//engine
+	game_init(data);//delete
 }
 
-void components::component_term(ds::AppDataStorage& data)
+void components::component_term(ds::app_data_storage& data)
 {
 	game_term(data);
 	gui_term(data);

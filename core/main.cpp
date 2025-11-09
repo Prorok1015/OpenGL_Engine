@@ -3,7 +3,7 @@
 
 int main()
 {
-	ds::AppDataStorage app_storage;
+	ds::app_data_storage app_storage;
 	com::component_init(app_storage);
 
 	app::application& myApp = app::get_app_system();

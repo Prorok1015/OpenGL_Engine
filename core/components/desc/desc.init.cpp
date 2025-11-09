@@ -6,7 +6,7 @@
 
 desc::desc_load_job load_job;
 
-void components::desc_init(ds::AppDataStorage& data)
+void components::desc_init(ds::app_data_storage& data)
 {
 	auto& res_system = data.require<res::resource_system>();
 	res_system.registrate_adapter(desc::desc_adapter::INFO, 
@@ -18,7 +18,7 @@ void components::desc_init(ds::AppDataStorage& data)
 	load_job.internal_init(&data.construct<desc::desc_system>(res_system));
 }
 
-void components::desc_term(ds::AppDataStorage& data)
+void components::desc_term(ds::app_data_storage& data)
 {
 	load_job.internal_init(nullptr);
 	data.destruct<desc::desc_system>();

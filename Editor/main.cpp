@@ -41,7 +41,7 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
-	ds::AppDataStorage app_storage;
+	ds::app_data_storage app_storage;
 	com::component_init(app_storage);
 	com::editor_init(app_storage);
 

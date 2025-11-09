@@ -3,8 +3,8 @@
 
 namespace components {
 
-	void desc_init(ds::AppDataStorage& data);
-	void desc_term(ds::AppDataStorage& data);
+	void desc_init(ds::app_data_storage& data);
+	void desc_term(ds::app_data_storage& data);
 }
 
 namespace com = components;

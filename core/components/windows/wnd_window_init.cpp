@@ -3,12 +3,12 @@
 
 extern wnd::window_system* p_wnd_system;
 
-void components::window_init(ds::AppDataStorage& data)
+void components::window_init(ds::app_data_storage& data)
 {
 	p_wnd_system = &data.construct<wnd::window_system>();
 }
 
-void components::window_term(ds::AppDataStorage& data)
+void components::window_term(ds::app_data_storage& data)
 {
 
 	data.destruct<wnd::window_system>();

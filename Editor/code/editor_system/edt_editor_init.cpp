@@ -4,7 +4,7 @@
 
 namespace components {
 
-	void editor_init(ds::AppDataStorage& data)
+	void editor_init(ds::app_data_storage& data)
 	{
 		auto& desc_system = data.require<desc::desc_system>();
 		auto& editor = data.construct<edt::editor_system>(desc_system);
@@ -16,7 +16,7 @@ namespace components {
 		desc_system.register_desc<edt::editor_test_sub_field_desc>(res::tag::make("test_sub_field_desc.desc"), "second");
 	}
 
-	void editor_term(ds::AppDataStorage& data)
+	void editor_term(ds::app_data_storage& data)
 	{
 
 		auto& desc_system = data.require<desc::desc_system>();

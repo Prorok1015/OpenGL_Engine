@@ -7,7 +7,7 @@
 
 namespace ds {
 
-	struct DataStoragePolicy
+	struct shared_storage_policy
 	{
 		template<class T>
 		using ITEM_T = std::shared_ptr<T>;
@@ -19,36 +19,43 @@ namespace ds {
 		}
 
 		template<class T>
-		ITEM_T<T> cast(const std::any& any)
+		ITEM_T<T> cast(const std::any& any) const
 		{
+			if (!any.has_value()) return nullptr;
+
 			return std::any_cast<ITEM_T<T>>(any);
 		}
 
 		template<class T, class ...ARGS>
-		auto construct(ARGS&&... args)
+		auto construct(ARGS&&... args) const
 		{
 			return std::make_any<ITEM_T<T>>(std::make_shared<T>(std::forward<ARGS>(args)...));
 		}
 
 		template<class T>
-		auto construct()
+		auto destruct(ITEM_T<T> it) const
 		{
-			return std::make_shared<T>();
+			// shared_ptr will be destructed automatically
 		}
 	};
 
 	template<class POLICY_T>
-	class DataStorageT : public POLICY_T
+	class data_storage_t : protected POLICY_T
 	{
 	public:
-		static DataStorageT& instance() {
-			static DataStorageT inst;
-			return inst;
+		data_storage_t() = default;
+		data_storage_t(ds::data_storage_t<POLICY_T>* parent)
+			: parent_storage(parent) {
 		}
+		data_storage_t(data_storage_t&&) = default;
+		data_storage_t(const data_storage_t&) = delete;
+		data_storage_t& operator=(data_storage_t&&) = default;
+		data_storage_t& operator=(const data_storage_t&) = delete;
+		~data_storage_t() = default;	
 
 		template<class T>
 		bool has_value() const {
-			auto it = data.find(ds::type_id::value<T>());
+			auto it = data.find(ds::type_id::make<T>());
 			if (it != data.end()) {
 				return it->second.has_value();
 			}
@@ -56,35 +63,50 @@ namespace ds {
 		}
 
 		template<class T>
-		auto require_shared()
-		{
-			ASSERT_MSG(has_value<T>(), "Missing the required type");
+		auto require_parent_shared() {
+			if (parent_storage) {
+				return parent_storage->template require_shared<T>();
+			}
 
-			return POLICY_T::template cast<T>(data[ds::type_id::value<T>()]);
+			return POLICY_T::template cast<T>({});
 		}
 
 		template<class T>
-		T& require() 
-		{
-			return POLICY_T::template cast_ref<T>(require_shared<T>());
+		auto require_shared() {
+			if (has_value<T>()) {
+				return POLICY_T::template cast<T>(data[ds::type_id::make<T>()]);
+			}
+			
+			return require_parent_shared<T>();
+		}
+
+		template<class T>
+		T& require() {
+			auto item = require_shared<T>();
+			ASSERT_MSG(item, "Trying to require non existing type");
+			return POLICY_T::template cast_ref<T>(item);
 		}
 
 		template<class T, class ...ARGS>
-		T& construct(ARGS&&... args)
-		{
-			data[ds::type_id::value<T>()] = POLICY_T::template construct<T>(std::forward<ARGS>(args)...);
+		T& construct(ARGS&&... args) {
+			data[ds::type_id::make<T>()] = POLICY_T::template construct<T>(std::forward<ARGS>(args)...);
 			return require<T>();
 		}
 
 		template<class T>
-		void destruct()
-		{
-			data[ds::type_id::value<T>()] = nullptr;
+		void destruct() {
+			if (auto it = data.find(ds::type_id::make<T>()); it != data.end()) {
+				POLICY_T::template destruct<T>(POLICY_T::template cast<T>(it->second));
+				data.erase(it);
+			} else {
+				ASSERT_FAIL("Trying to destruct non existing type");
+			}
 		}
 
 	private:
-		std::unordered_map<size_t, std::any> data;
+		std::unordered_map<ds::type_id, std::any> data;
+		ds::data_storage_t<POLICY_T>* parent_storage = nullptr;
 	};
 
-	using AppDataStorage = DataStorageT<DataStoragePolicy>;
+	using app_data_storage = data_storage_t<shared_storage_policy>;
 }
