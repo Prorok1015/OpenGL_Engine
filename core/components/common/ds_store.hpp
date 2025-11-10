@@ -11,6 +11,7 @@ namespace ds {
 	{
 		template<class T>
 		using ITEM_T = std::shared_ptr<T>;
+		using STORAGE_ITEM = std::any;
 
 		template <class T>
 		T& cast_ref(ITEM_T<T> it) const
@@ -19,7 +20,7 @@ namespace ds {
 		}
 
 		template<class T>
-		ITEM_T<T> cast(const std::any& any) const
+		ITEM_T<T> cast(const STORAGE_ITEM& any) const
 		{
 			if (!any.has_value()) return nullptr;
 
@@ -39,9 +40,43 @@ namespace ds {
 		}
 	};
 
+	struct raw_storage_policy
+	{
+		template<class T>
+		using ITEM_T = T*;
+		using STORAGE_ITEM = void*;
+
+		template <class T>
+		T& cast_ref(ITEM_T<T> it) const
+		{
+			return *it;
+		}
+
+		template<class T>
+		ITEM_T<T> cast(const STORAGE_ITEM& any) const
+		{
+			if (!any) return nullptr;
+
+			return static_cast<ITEM_T<T>>(any);
+		}
+
+		template<class T, class ...ARGS>
+		auto construct(ARGS&&... args) const
+		{
+			return new T(std::forward<ARGS>(args)...);
+		}
+
+		template<class T>
+		auto destruct(ITEM_T<T> it) const
+		{
+			delete it;
+		}
+	};
+
 	template<class POLICY_T>
 	class data_storage_t : protected POLICY_T
 	{
+		using STORAGE_ITEM = POLICY_T::STORAGE_ITEM;
 	public:
 		data_storage_t() = default;
 		data_storage_t(ds::data_storage_t<POLICY_T>* parent)
@@ -57,13 +92,13 @@ namespace ds {
 		bool has_value() const {
 			auto it = data.find(ds::type_id::make<T>());
 			if (it != data.end()) {
-				return it->second.has_value();
+				return it->second;
 			}
 			return false;
 		}
 
 		template<class T>
-		auto require_parent_shared() {
+		auto require_parent_shared() const {
 			if (parent_storage) {
 				return parent_storage->template require_shared<T>();
 			}
@@ -72,16 +107,17 @@ namespace ds {
 		}
 
 		template<class T>
-		auto require_shared() {
-			if (has_value<T>()) {
-				return POLICY_T::template cast<T>(data[ds::type_id::make<T>()]);
+		auto require_shared() const {
+			auto it = data.find(ds::type_id::make<T>());
+			if (it != data.end() && it->second) {
+				return POLICY_T::template cast<T>(it->second);
 			}
 			
 			return require_parent_shared<T>();
 		}
 
 		template<class T>
-		T& require() {
+		T& require() const {
 			auto item = require_shared<T>();
 			ASSERT_MSG(item, "Trying to require non existing type");
 			return POLICY_T::template cast_ref<T>(item);
@@ -104,7 +140,7 @@ namespace ds {
 		}
 
 	private:
-		std::unordered_map<ds::type_id, std::any> data;
+		std::unordered_map<ds::type_id, STORAGE_ITEM> data;
 		ds::data_storage_t<POLICY_T>* parent_storage = nullptr;
 	};
 
