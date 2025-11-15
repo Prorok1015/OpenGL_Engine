@@ -63,7 +63,7 @@ namespace ds {
 		}
 
 		template<class T>
-		auto require_parent_shared() {
+		auto require_parent_shared() const {
 			if (parent_storage) {
 				return parent_storage->template require_shared<T>();
 			}
@@ -72,7 +72,7 @@ namespace ds {
 		}
 
 		template<class T>
-		auto require_shared() {
+		auto require_shared() const {
 			if (has_value<T>()) {
 				return POLICY_T::template cast<T>(data[ds::type_id::make<T>()]);
 			}
@@ -81,7 +81,7 @@ namespace ds {
 		}
 
 		template<class T>
-		T& require() {
+		T& require() const {
 			auto item = require_shared<T>();
 			ASSERT_MSG(item, "Trying to require non existing type");
 			return POLICY_T::template cast_ref<T>(item);
