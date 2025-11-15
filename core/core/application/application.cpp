@@ -9,6 +9,8 @@
 #include <chrono>
 #include <entt/entt.hpp>
 
+#include "app_loop_service_interface.h"
+
 app::application* p_app_system = nullptr;
 
 app::application& app::get_app_system()
@@ -19,57 +21,22 @@ app::application& app::get_app_system()
 
 app::application::application()
 {
-	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
-		ptr->init(job_organazer, ecs::registry);
-	}
-	// collect and registrate game jobs and objects here
 }
 
 app::application::~application()
 {
-	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
-		ptr->deinit(job_organazer, ecs::registry);
-	}
 }
 
-int app::application::run()
+int app::application::run(ds::app_data_storage& storage)
 {
-	auto& window_system_ref = wnd::get_system();
+	if (!storage.has_value<app::app_loop_service_interface>()) {
+		return -1;
+	}
 
-	window_system_ref.init_windows_frame_time();
-
-	float delta_time = 1.0f / 60.0f;
-	auto previous_time = std::chrono::high_resolution_clock::now();
-
-	auto job_graph = job_organazer.graph();
-
-	ecs::registry.ctx().emplace<scn::delta_time>(delta_time);
-
-	while (!window_system_ref.is_stop_running()) {
-		auto current_time = std::chrono::high_resolution_clock::now();
-		std::chrono::duration<float> duration = current_time - previous_time;
-		delta_time = duration.count();
-		ecs::registry.ctx().get<scn::delta_time>().dt = delta_time;
-		previous_time = current_time;
-
-		window_system_ref.pool_events();
-
-		inp::get_system().process_input(delta_time);
-		 
-		// window->update(context);
-
-		for (auto&& system : job_graph) {
-			system.prepare(ecs::registry);
-			system.callback()(system.data(), ecs::registry);
-		}
-
-		gs::get_system().end_ecs_frame();
-
-		rnd::get_system().render();
-
-		// window->render(context);
- 
-		window_system_ref.process_windows();
+	auto& app_loop_service = storage.require<app::app_loop_service_interface>();
+	while (!app_loop_service.should_stop())
+	{
+		app_loop_service.on_step(storage);
 	}
 
 	return 0;

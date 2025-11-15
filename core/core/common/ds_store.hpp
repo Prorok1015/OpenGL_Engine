@@ -32,6 +32,12 @@ namespace ds {
 			return std::make_any<ITEM_T<T>>(std::make_shared<T>(std::forward<ARGS>(args)...));
 		}
 
+		template<class KEY, class INSTANCE, class ...ARGS>
+		auto construct(ARGS&&... args) const
+		{
+			return std::make_any<ITEM_T<KEY>>(std::make_shared<INSTANCE>(std::forward<ARGS>(args)...));
+		}
+
 		template<class T>
 		auto destruct(ITEM_T<T> it) const
 		{
@@ -73,8 +79,9 @@ namespace ds {
 
 		template<class T>
 		auto require_shared() const {
-			if (has_value<T>()) {
-				return POLICY_T::template cast<T>(data[ds::type_id::make<T>()]);
+			auto it = data.find(ds::type_id::make<T>());
+			if (it != data.end()) {
+				return POLICY_T::template cast<T>(it->second);
 			}
 			
 			return require_parent_shared<T>();
@@ -91,6 +98,12 @@ namespace ds {
 		T& construct(ARGS&&... args) {
 			data[ds::type_id::make<T>()] = POLICY_T::template construct<T>(std::forward<ARGS>(args)...);
 			return require<T>();
+		}
+
+		template<class KEY, class INSTANCE, class ...ARGS>
+		KEY& construct(ARGS&&... args) {
+			data[ds::type_id::make<KEY>()] = POLICY_T::template construct<KEY, INSTANCE>(std::forward<ARGS>(args)...);
+			return require<KEY>();
 		}
 
 		template<class T>

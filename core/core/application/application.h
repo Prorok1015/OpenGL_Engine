@@ -2,6 +2,7 @@
 #include <common.h>
 #include <glm/glm.hpp>
 #include "ecs_common_system.h"
+#include "ds_store.hpp"
 
 namespace app
 {
@@ -16,9 +17,8 @@ namespace app
 		application(const application&) = delete;
 		application& operator= (const application&) = delete;
 
-		virtual int run();
+		virtual int run(ds::app_data_storage& storage);
 	private:
-		entt::organizer job_organazer;
 	};
 
 	application& get_app_system();
