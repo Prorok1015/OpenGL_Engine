@@ -22,7 +22,6 @@ namespace gs
 
 		void set_enable_input(bool enable);
 
-		std::shared_ptr<wnd::window> get_window() { return window; };
 		void reload_shaders();
 		void end_ecs_frame();
 
@@ -31,7 +30,6 @@ namespace gs
 		desc::desc_system& desc_system;
 		std::shared_ptr<scn::renderer_3d> renderer;
 
-		std::shared_ptr<wnd::window> window;
 		std::shared_ptr<inp::input_manager> input;
 		std::shared_ptr<ecs::flow_input_manager> ecs_input;
 	};

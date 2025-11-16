@@ -1,6 +1,5 @@
 #include "ecs_input_manager.h"
 #include "ecs_common_system.h"
-#include "inp_input_system.h"
 #include "ecs_component.h"
 
 struct event_visitor

@@ -1,14 +1,4 @@
 #include "application.h"
-#include <wnd_window_system.h>
-#include <rnd_render_system.h>
-#include <inp_input_system.h>
-#include <ecs_system.h>
-#include "ecs_common_system.h"
-#include <gs_game_system.h>
-#include <Windows.h>
-#include <chrono>
-#include <entt/entt.hpp>
-
 #include "app_loop_service_interface.h"
 
 app::application* p_app_system = nullptr;

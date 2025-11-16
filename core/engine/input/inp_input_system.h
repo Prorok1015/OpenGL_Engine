@@ -4,10 +4,11 @@
 #include "inp_keyboard_device.h"
 #include "inp_mouse_device.h"
 #include "inp_input_manager_base.h"
+#include "wnd_window_event_listener_interface.h"
 
 namespace inp
 {
-	class input_system
+	class input_system : public wnd::window_listener_interface
 	{
 	public:
 		input_system();
@@ -45,6 +46,23 @@ namespace inp
 		void on_mouse_buttons_event(const mouse_click_event&);
 		void on_cursor_move_event(const cursor_move_event&);
 		void on_scroll_move_event(const scroll_move_event&);
+
+		virtual void on_key_input(wnd::handle win, wnd::KEYBOARD_BUTTONS key, int scancode, wnd::KEY_ACTION action, int mods) override;
+		virtual void on_char_input(wnd::handle win, wchar_t codepoint) override;
+		virtual void on_mouse_button_input(wnd::handle win, wnd::MOUSE_BUTTONS button, wnd::KEY_ACTION action, int mods) override;
+		virtual void on_mouse_moved(wnd::handle win, double xpos, double ypos) override;
+		virtual void on_mouse_scrolled(wnd::handle win, double xoffset, double yoffset) override;
+		virtual void on_window_focus_gained(wnd::handle win)  override {};
+		virtual void on_window_focus_lost(wnd::handle win)  override {};
+		virtual void on_window_resize(wnd::handle win, int width, int height) override;
+		virtual void on_window_moved(wnd::handle win, int xpos, int ypos)  override {};
+		virtual void on_window_close(wnd::handle win)  override {};
+		virtual void on_window_refresh(wnd::handle win)  override {};
+		virtual void on_window_minimized(wnd::handle win)  override {};
+		virtual void on_window_restored(wnd::handle win)  override {};
+		virtual void on_window_maximized(wnd::handle win)  override {};
+		virtual void on_window_created(wnd::handle win)  override {};
+		virtual void on_window_destroyed(wnd::handle win)  override {};
 
 		MouseDevice mouse;
 		KeyboardDevice keyboard;

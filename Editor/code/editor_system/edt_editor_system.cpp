@@ -168,8 +168,8 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 
 
 	auto logo = res::get_system().require_resource<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
-	gs::get_system().get_window()->set_logo(logo);
-	gs::get_system().get_window()->set_title("Snake Editor");
+	wnd::get_system().get_active_window()->set_logo(logo);
+	wnd::get_system().get_active_window()->set_title("Snake Editor");
 	gui::get_system().set_show_title_bar(true);
 	gui::get_system().set_show_title_bar_dbg(true);
 
@@ -178,15 +178,6 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	inp::get_system().activate_manager(input);
 
 	file_dialog.set_current_path(res::get_system().get_resources_path());
-
-	gs::get_system().get_window()->eventResizeWindow.subscribe([](wnd::window&, int w, int h)
-	{
-		//for (auto& ent : ecs::filter<scn::camera_component>())
-		//{
-		//	auto* camera = ecs::get_component<scn::camera_component>(ent);
-		//	camera->viewport.size = glm::ivec2(w, h);
-		//}
-	});
 
 	auto txt = rnd::get_system().get_texture_manager().generate_texture(res::tag(res::tag::memory, "__black"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {0, 0, 0});
 	auto txt2 = rnd::get_system().get_texture_manager().generate_texture(res::tag(res::tag::memory, "__red"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {255, 0, 0});
@@ -279,7 +270,7 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 
 	//  camera
 	{
-		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), gs::get_system().get_window()->get_size() };
+		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), wnd::get_system().get_active_window()->get_size() };
 		glm::vec3 rotation(0);
 		rotation.x = -glm::radians(45.0f);
 		auto ecs_entity = ecs::registry.create();

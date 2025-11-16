@@ -1,7 +1,5 @@
 #pragma once
 #include <common.h>
-#include <glm/glm.hpp>
-#include "ecs_common_system.h"
 #include "ds_store.hpp"
 
 namespace app

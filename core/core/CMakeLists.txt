@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.16)
+project(core)
+add_library(${PROJECT_NAME} STATIC)
+
+file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+file(GLOB SE_SOURCES_H CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(${PROJECT_NAME} PUBLIC common PUBLIC application PUBLIC window PUBLIC resource_system PUBLIC desc_system PUBLIC ecs)
+
+add_subdirectory("common")
+add_subdirectory("config")
+add_subdirectory("common/logger")
+add_subdirectory("application")
+add_subdirectory("windows/window_service")
+add_subdirectory("windows/event_interface")
+add_subdirectory("desc")
+add_subdirectory("resource")
+add_subdirectory("ecs")
+add_subdirectory("video/drivers/impls/opengl")
+add_subdirectory("video/drivers/interface")

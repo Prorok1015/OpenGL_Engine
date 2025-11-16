@@ -58,8 +58,8 @@ namespace wnd
 		short_id get_id() const { return short_id{ ctx.get_id() }; }
 
 	public:
-		Event<void(window& window)> eventRefreshWindow;
-		Event<void(window& window, int width, int height)> eventResizeWindow;
+		Event<void(window& window)> eventRefreshWindow;//TODO: remove
+		Event<void(window& window, int width, int height)> eventResizeWindow;//TODO: remove
 
 	private: 
 		context ctx;

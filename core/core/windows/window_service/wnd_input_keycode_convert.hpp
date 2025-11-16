@@ -1,23 +1,22 @@
 #pragma once
-#include "inp_key_enums.hpp"
+#include "wnd_input_enums.hpp"
 #include <GLFW/glfw3.h>
 
 namespace wnd::convert
 {
-    inp::KEY_ACTION to_action(int action)
+    wnd::KEY_ACTION to_action(int action)
     {
         switch (action)
         {
-        case GLFW_RELEASE: return inp::KEY_ACTION::UP; break;
-        case GLFW_PRESS: return inp::KEY_ACTION::DOWN; break;
+        case GLFW_RELEASE: return wnd::KEY_ACTION::UP; break;
+        case GLFW_PRESS: return wnd::KEY_ACTION::DOWN; break;
             //case GLFW_REPEAT:;
         }
 
-        return inp::KEY_ACTION::NONE;
+        return wnd::KEY_ACTION::NONE;
     }
 
-    int to_glfw_keycode(inp::KEYBOARD_BUTTONS button) {
-        using namespace inp;
+    int to_glfw_keycode(wnd::KEYBOARD_BUTTONS button) {
         switch (button) {
         case KEYBOARD_BUTTONS::SPACE: return GLFW_KEY_SPACE;
         case KEYBOARD_BUTTONS::APOSTROPHE: return GLFW_KEY_APOSTROPHE;
@@ -136,8 +135,7 @@ namespace wnd::convert
         return -1;
     }
 
-    std::optional<inp::KEYBOARD_BUTTONS> to_keyboard_keycode(int glfw_value) {
-        using namespace inp;
+    std::optional<wnd::KEYBOARD_BUTTONS> to_keyboard_keycode(int glfw_value) {
         switch (glfw_value) {
         case GLFW_KEY_SPACE:       return KEYBOARD_BUTTONS::SPACE;
         case GLFW_KEY_APOSTROPHE:  return KEYBOARD_BUTTONS::APOSTROPHE;
@@ -257,30 +255,30 @@ namespace wnd::convert
         return std::nullopt;
     }
 
-    int to_glfw_keycode(inp::MOUSE_BUTTONS button) {
+    int to_glfw_keycode(wnd::MOUSE_BUTTONS button) {
         switch (button) {
-        case inp::MOUSE_BUTTONS::LEFT:   return GLFW_MOUSE_BUTTON_LEFT;
-        case inp::MOUSE_BUTTONS::RIGHT:  return GLFW_MOUSE_BUTTON_RIGHT;
-        case inp::MOUSE_BUTTONS::MIDDLE: return GLFW_MOUSE_BUTTON_MIDDLE;
-        case inp::MOUSE_BUTTONS::BTN_4:  return GLFW_MOUSE_BUTTON_4;
-        case inp::MOUSE_BUTTONS::BTN_5:  return GLFW_MOUSE_BUTTON_5;
-        case inp::MOUSE_BUTTONS::BTN_6:  return GLFW_MOUSE_BUTTON_6;
-        case inp::MOUSE_BUTTONS::BTN_7:  return GLFW_MOUSE_BUTTON_7;
-        case inp::MOUSE_BUTTONS::BTN_8:  return GLFW_MOUSE_BUTTON_8;
+        case wnd::MOUSE_BUTTONS::LEFT:   return GLFW_MOUSE_BUTTON_LEFT;
+        case wnd::MOUSE_BUTTONS::RIGHT:  return GLFW_MOUSE_BUTTON_RIGHT;
+        case wnd::MOUSE_BUTTONS::MIDDLE: return GLFW_MOUSE_BUTTON_MIDDLE;
+        case wnd::MOUSE_BUTTONS::BTN_4:  return GLFW_MOUSE_BUTTON_4;
+        case wnd::MOUSE_BUTTONS::BTN_5:  return GLFW_MOUSE_BUTTON_5;
+        case wnd::MOUSE_BUTTONS::BTN_6:  return GLFW_MOUSE_BUTTON_6;
+        case wnd::MOUSE_BUTTONS::BTN_7:  return GLFW_MOUSE_BUTTON_7;
+        case wnd::MOUSE_BUTTONS::BTN_8:  return GLFW_MOUSE_BUTTON_8;
         }
         return -1;
     }
 
-    std::optional<inp::MOUSE_BUTTONS> to_mouse_keycode(int glfw_value) {
+    std::optional<wnd::MOUSE_BUTTONS> to_mouse_keycode(int glfw_value) {
         switch (glfw_value) {
-        case GLFW_MOUSE_BUTTON_LEFT:   return inp::MOUSE_BUTTONS::LEFT;
-        case GLFW_MOUSE_BUTTON_RIGHT:  return inp::MOUSE_BUTTONS::RIGHT;
-        case GLFW_MOUSE_BUTTON_MIDDLE: return inp::MOUSE_BUTTONS::MIDDLE;
-        case GLFW_MOUSE_BUTTON_4:  return inp::MOUSE_BUTTONS::BTN_4;
-        case GLFW_MOUSE_BUTTON_5:  return inp::MOUSE_BUTTONS::BTN_5;
-        case GLFW_MOUSE_BUTTON_6:  return inp::MOUSE_BUTTONS::BTN_6;
-        case GLFW_MOUSE_BUTTON_7:  return inp::MOUSE_BUTTONS::BTN_7;
-        case GLFW_MOUSE_BUTTON_8:  return inp::MOUSE_BUTTONS::BTN_8;
+        case GLFW_MOUSE_BUTTON_LEFT:   return wnd::MOUSE_BUTTONS::LEFT;
+        case GLFW_MOUSE_BUTTON_RIGHT:  return wnd::MOUSE_BUTTONS::RIGHT;
+        case GLFW_MOUSE_BUTTON_MIDDLE: return wnd::MOUSE_BUTTONS::MIDDLE;
+        case GLFW_MOUSE_BUTTON_4:  return wnd::MOUSE_BUTTONS::BTN_4;
+        case GLFW_MOUSE_BUTTON_5:  return wnd::MOUSE_BUTTONS::BTN_5;
+        case GLFW_MOUSE_BUTTON_6:  return wnd::MOUSE_BUTTONS::BTN_6;
+        case GLFW_MOUSE_BUTTON_7:  return wnd::MOUSE_BUTTONS::BTN_7;
+        case GLFW_MOUSE_BUTTON_8:  return wnd::MOUSE_BUTTONS::BTN_8;
         default:                   return std::nullopt;
         }
     }

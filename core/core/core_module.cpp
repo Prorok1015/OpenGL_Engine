@@ -1,5 +1,4 @@
 #include "core_module.h"
-#include "inp_input_init.h"
 #include "res_module_init.h"
 #include "wnd_window_init.h"
 #include "desc_init.h"
@@ -15,7 +14,6 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	//1
 	resource_init(data);// core
 	desc_init(data);// core
-	input_init(data);// engine
 	//2
 	window_init(data);// core
 }
@@ -30,7 +28,6 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 	using namespace components;
 	window_term(data);
 
-	input_term(data);
 	desc_term(data);
 	resource_term(data);
 

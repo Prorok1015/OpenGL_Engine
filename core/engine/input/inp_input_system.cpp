@@ -106,3 +106,45 @@ void inp::input_system::on_scroll_move_event(const scroll_move_event& evt)
 {
 	event_queque.push(evt);
 }
+
+void inp::input_system::on_key_input(wnd::handle win, wnd::KEYBOARD_BUTTONS key, int scancode, wnd::KEY_ACTION action, int mode)
+{
+	inp::keyboard_event evt;
+	evt.key = key;
+	evt.action = action;
+	on_keyboard_event(evt);
+	keyboard.on_key_action(evt.key, scancode, evt.action, mode);
+}
+
+void inp::input_system::on_char_input(wnd::handle win, wchar_t codepoint)
+{
+}
+
+void inp::input_system::on_mouse_button_input(wnd::handle win, wnd::MOUSE_BUTTONS button, wnd::KEY_ACTION action, int mode)
+{
+	inp::mouse_click_event evt;
+	evt.key = button;
+	evt.action = action;
+	evt.pos = mouse.get_pos();
+	on_mouse_buttons_event(evt);
+	mouse.on_mouse_button_action(evt.key, evt.action, mode);
+}
+
+void inp::input_system::on_mouse_moved(wnd::handle win, double xpos, double ypos)
+{
+	mouse.on_mouse_move(xpos, ypos);
+	inp::cursor_move_event evt{ .pos = {xpos, ypos}, .prev = mouse.get_old_pos(), .direction = mouse.get_direction() };
+	on_cursor_move_event(evt);
+}
+
+void inp::input_system::on_mouse_scrolled(wnd::handle win, double xoffset, double yoffset)
+{
+	mouse.on_mouse_scroll(xoffset, yoffset);
+	inp::scroll_move_event evt{ .direction = { xoffset, yoffset } };
+	on_scroll_move_event(evt);
+}
+
+void inp::input_system::on_window_resize(wnd::handle win, int width, int height)
+{
+	mouse.on_window_resize({ width, height });
+}

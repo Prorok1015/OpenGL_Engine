@@ -8,4 +8,5 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_DRV_GL_SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_subdirectory(${THIRD_PARTY_PATH}/glad glad)
-target_link_libraries(${PROJECT_NAME} PRIVATE common PUBLIC glad PRIVATE drv_interface PRIVATE engine_logger)
+target_link_libraries(${PROJECT_NAME} PUBLIC glad)
+target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE drv_interface PRIVATE engine_logger)
