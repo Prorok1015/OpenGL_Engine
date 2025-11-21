@@ -14,24 +14,8 @@ if(NOT ENGINE_BOOST_NO_LIB)
 endif()
 
 #components
-add_subdirectory("components/common")
-add_subdirectory("components/config")
-add_subdirectory("components/common/logger")
-add_subdirectory("components/application")
-add_subdirectory("components/gui/backends/interface")
-add_subdirectory("components/gui/backends/opengl")
-add_subdirectory("components/gui/gui_system")
-add_subdirectory("components/render/drivers/impls/opengl")
-add_subdirectory("components/render/drivers/interface")
-add_subdirectory("components/render/render_system")
-add_subdirectory("components/input")
-add_subdirectory("components/resource")
-add_subdirectory("components/game_system")
-add_subdirectory("components/ecs")
-add_subdirectory("components/scene")
-add_subdirectory("components/image")
-add_subdirectory("components/windows")
-add_subdirectory("components/desc")
+add_subdirectory("core")
+add_subdirectory("engine")
 
 
 #TEST_PROJECT
@@ -39,5 +23,5 @@ project(core_exe)
 set(CMAKE_CXX_STANDARD 20)
 
 add_executable(core_exe main.cpp)
-target_link_libraries(core_exe application)
+target_link_libraries(core_exe engine)
 set_target_properties(core_exe PROPERTIES EXCLUDE_FROM_ALL TRUE)

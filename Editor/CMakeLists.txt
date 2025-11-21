@@ -12,5 +12,5 @@ else()
 endif()
 
 add_subdirectory("code/editor_system")
-target_link_libraries(${PROJECT_NAME} PRIVATE editor_system PRIVATE config_system)
+target_link_libraries(${PROJECT_NAME} PRIVATE editor_system PRIVATE engine PRIVATE config_system)
 
