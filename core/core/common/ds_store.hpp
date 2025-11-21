@@ -98,7 +98,7 @@ namespace ds {
 		bool has_value() const {
 			auto it = data.find(ds::type_id::make<T>());
 			if (it != data.end()) {
-				return it->second;
+				return (bool)POLICY_T::template cast<T>(it->second);
 			}
 			return false;
 		}
@@ -115,7 +115,7 @@ namespace ds {
 		template<class T>
 		auto require_shared() const {
 			auto it = data.find(ds::type_id::make<T>());
-			if (it != data.end() && it->second) {
+			if (it != data.end() && POLICY_T::template cast<T>(it->second)) {
 				return POLICY_T::template cast<T>(it->second);
 			}
 			

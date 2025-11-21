@@ -9,6 +9,7 @@
 
 #include "desc_base.hpp"
 #include "desc_system.h"
+#include "scn_skinning_prototype_desc.h"
 
 namespace editor
 {
@@ -174,6 +175,8 @@ namespace editor
 		bool is_inited_ecs_test = false;
 		std::shared_ptr<edt::input_manager> input;
 		edt::file_dialog file_dialog;
+		
+		std::shared_ptr< scn::skinning_prototype_desc> backpack;
 
 		desc::desc_system& desc_system;
 	};
