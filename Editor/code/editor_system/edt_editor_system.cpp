@@ -23,7 +23,28 @@
 #include "scn_material_desc.h"
 #include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
-#include "common/ds_rtree.hpp"
+
+#include "common/ds_svg_writer.hpp"
+
+namespace ds {
+
+	point2d center(const bbox& box) { return (box.min + box.max) * 0.5f; }
+	void expand(bbox& box, const bbox& other) {
+		box.min = glm::min(box.min, other.min);
+		box.max = glm::max(box.max, other.max);
+	}
+	void expand(bbox& box, const point2d& p) {
+		box.min = glm::min(box.min, p);
+		box.max = glm::max(box.max, p);
+	}
+	bool intersects(const bbox& a, const bbox& b) {
+		return (a.min.x <= b.max.x && a.max.x >= b.min.x) && (a.min.y <= b.max.y && a.max.y >= b.min.y);
+	}
+	bool contains(const bbox& a, const point2d& p) {
+		return p.x >= a.min.x && p.x <= a.max.x && p.y >= a.min.y && p.y <= a.max.y;
+	}
+
+}
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -425,6 +446,41 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
 	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
 	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
+	ds::rtree<ds::triangle, ds::bbox, ds::point2d> rtree;
+	std::vector<std::pair<ds::bbox, ds::triangle>> items;
+
+	ds::bbox t1;
+	expand(t1, glm::vec2(0.0f, 0.0f));
+	expand(t1, glm::vec2(0.5f, 0.0f));
+	expand(t1, glm::vec2(0.0f, 0.5f));
+	items.push_back({ t1, 0 });
+
+	ds::bbox t2;
+	expand(t2, glm::vec2(0.6f, 0.6f));
+	expand(t2, glm::vec2(1.0f, 0.6f));
+	expand(t2, glm::vec2(0.6f, 1.0f));
+	items.push_back({ t2, 1 });
+
+	rtree.build(items);
+
+	ds::bbox queryBox;
+	queryBox.min = glm::vec2(0.0f, 0.0f);
+	queryBox.max = glm::vec2(0.2f, 0.2f);
+
+	auto candidates = rtree.query(queryBox);
+
+	std::cout << "Query found " << candidates.size() << " candidates." << std::endl;
+	for (int idx : candidates) {
+		std::cout << " - Triangle Index: " << idx << std::endl;
+	}
+
+	ds::bbox emptyQuery;
+	emptyQuery.min = glm::vec2(2.0f, 2.0f);
+	emptyQuery.max = glm::vec2(3.0f, 3.0f);
+
+	auto emptyRes = rtree.query(emptyQuery);
+	std::cout << "Empty query found: " << emptyRes.size() << std::endl;
+
 }
 
 editor::editor_system::~editor_system()
@@ -707,7 +763,43 @@ bool editor::editor_system::show_toolbar()
 	{
 		static std::once_flag f;
 		std::call_once(f, [&]() {
-			backpack->load_prototype(ecs::registry, world_anchor);
+			backpackent = backpack->load_prototype(ecs::registry, world_anchor);
+			auto geom = backpack->geometry;
+			int uvs_offset = 0;
+			for (const auto& elem : geom->layout.get_elements())
+			{
+				if (elem.Name == "uv") {
+					uvs_offset = elem.Offset;
+					break;
+				}
+			}
+			ds::svg_writer svg_writer("rtree_visualization.svg", 2048, 2048);
+
+			std::vector<std::pair<ds::bbox, ds::triangle>> items;
+			int stride = geom->layout.get_stride();
+			for (int i = 0, triangle = 0; i < geom->indices.size(); i += 3)
+			{
+				uint32_t i0 = geom->indices[i + 0];
+				uint32_t i1 = geom->indices[i + 1];
+				uint32_t i2 = geom->indices[i + 2];
+				auto &v0 = *(glm::vec2*)(geom->vertices.data() + i0 * stride + uvs_offset);
+				auto &v1 = *(glm::vec2*)(geom->vertices.data() + i1 * stride + uvs_offset);
+				auto &v2 = *(glm::vec2*)(geom->vertices.data() + i2 * stride + uvs_offset);
+				ds::bbox box;
+				expand(box, v0);
+				expand(box, v1);
+				expand(box, v2);
+				items.push_back({ box, triangle++ });
+				svg_writer.add_rect(box, triangle % 2 ? "blue" : "red");
+			}
+
+			rtree = geom->rtree;
+
+			ds::svg_writer query_svg("rtree_query_visualization.svg", 2048, 2048);
+			for (auto& v : rtree.data) {
+				query_svg.add_rect(v.box, v.is_leaf ? "green" : "red");
+			}
+
 		});
 	}
 
@@ -1121,6 +1213,29 @@ bool editor::editor_system::show_materials()
 	return is_open;
 }
 
+void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent) {
+	if (ecs::registry.all_of<scn::material_desc_component, scn::mesh_component>(ent)) {
+		auto mesh = ecs::registry.get<scn::mesh_component>(ent);
+		auto material_desc = ecs::registry.get<scn::material_desc_component>(ent).mlt_desc;
+		glm::ivec4 trIds(-1);
+		int i = 0;
+		for (const auto& triangle : res) {
+			if (i < 4 && (triangle >= mesh.mesh.ind_begin / 3 && triangle < mesh.mesh.ind_end / 3)) {
+				trIds[i] = triangle - mesh.mesh.ind_begin / 3;
+			}
+			++i;
+		}
+		material_desc->uniforms["triangleIds"] = trIds;
+	}
+
+	if (ecs::registry.all_of<scn::children_component>(ent)) {
+		auto children = ecs::registry.get<scn::children_component>(ent);
+		for (const auto& child : children.children) {
+			recurcive_set(res, child);
+		}
+	}
+}
+
 bool editor::editor_system::show_textures()
 {
 	bool is_open = true;
@@ -1180,6 +1295,21 @@ bool editor::editor_system::show_textures()
 			style.Colors[ImGuiCol_ButtonHovered] = original_button_hovered_color;
 			style.Colors[ImGuiCol_ButtonActive] = original_button_active_color;
 			style.FramePadding = original_padding;
+
+			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
+				mouse_pos -= pos;
+				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
+
+				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
+
+				auto res = rtree.query(mouse_pos);
+				for (const auto& triangle : res) {
+					std::cout << "Triangle: " << triangle << std::endl;
+				}
+
+				recurcive_set(res, backpackent);
+			}
 		}
 	}
 	ImGui::End();

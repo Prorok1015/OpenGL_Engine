@@ -40,3 +40,35 @@ namespace ds
 		return ptr1;
 	}
 }
+
+namespace ds {
+	using point2d = glm::vec2;
+
+	struct bbox
+	{
+		union
+		{
+			point2d p[2];
+			struct { point2d min; point2d max; };
+		};
+
+		bbox()
+			: min{ std::numeric_limits<float>::max() }
+			, max{ std::numeric_limits<float>::lowest() }
+		{
+		}
+	};
+
+	using triangle = uint32_t;
+}
+
+
+namespace ds {
+
+	point2d center(const bbox& box);
+	void expand(bbox& box, const bbox& other);
+	void expand(bbox& box, const point2d& p);
+	bool intersects(const bbox& a, const bbox& b);
+	bool contains(const bbox& a, const point2d& p);
+
+}

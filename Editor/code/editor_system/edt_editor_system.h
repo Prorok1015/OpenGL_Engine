@@ -10,6 +10,7 @@
 #include "desc_base.hpp"
 #include "desc_system.h"
 #include "scn_skinning_prototype_desc.h"
+#include "common/ds_rtree.hpp"
 
 namespace editor
 {
@@ -167,6 +168,7 @@ namespace editor
 		ecs::entity light;
 		ecs::entity sky;
 		ecs::entity world_anchor;
+		ecs::entity backpackent;
 
 		ecs::entity test_json_selected_material = entt::null;
 		ecs::entity selected_entity = entt::null;
@@ -177,7 +179,7 @@ namespace editor
 		edt::file_dialog file_dialog;
 		
 		std::shared_ptr< scn::skinning_prototype_desc> backpack;
-
+		ds::rtree<ds::triangle, ds::bbox, ds::point2d> rtree;
 		desc::desc_system& desc_system;
 	};
 

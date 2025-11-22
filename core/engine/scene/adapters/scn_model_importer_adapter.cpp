@@ -14,6 +14,8 @@
 
 #include "scn_assimp_resource_system_wrapper.h"
 
+#include "ds_svg_writer.hpp"
+
 void process_model(const aiScene* scene, json::object& data, res::tag tag);
 
 namespace {
@@ -252,6 +254,8 @@ void store_data(std::vector<std::byte>& data, const auto& value)
 	std::memcpy((data.data() + begin), &value, sizeof(value));
 }
 
+ds::svg_writer writer("mesh_bounds.svg", 2048, 2048);
+
 void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh, rnd::geometry_desc& geometry, res::tag tag)
 {
 	glm::ivec2 vertex_range{ geometry.vertices.size() / geometry.layout.get_stride(), 0 };
@@ -295,6 +299,38 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 		// retrieve all indices of the face and store them in the indices vector
 		for (unsigned int j = 0; j < face.mNumIndices; j++) {
 			geometry.indices.push_back(face.mIndices[j]);
+		}
+
+		for (unsigned int j = 0; j < face.mNumIndices; j += 3) {
+			struct bbox1
+			{
+				struct { glm::vec2 min; glm::vec2 max; };
+
+				bbox1()
+					: min{ std::numeric_limits<float>::max() }
+					, max{ std::numeric_limits<float>::lowest() }
+				{
+				}
+
+				void expand(const glm::vec2& point)
+				{
+					min = glm::min(min, point);
+					max = glm::max(max, point);
+				}
+			};
+
+			auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
+			auto uv2 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 1]]);
+			auto uv3 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 2]]);
+
+			ds::bbox box;
+			ds::expand(box, uv1);
+			ds::expand(box, uv2);
+			ds::expand(box, uv3);
+
+			writer.add_rect(box);
+
+			geometry.bounds.push_back({ box, geometry.bounds.size() });
 		}
 	}
 

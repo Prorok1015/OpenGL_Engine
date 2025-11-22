@@ -14,6 +14,7 @@ namespace rnd::driver::gl
 		virtual void uniform(std::string_view name, const uniform_data& val) override;
 
 		void uniform(std::string_view name, glm::mat4 val);
+		void uniform(std::string_view name, glm::ivec4 val);
 		void uniform(std::string_view name, glm::vec4 val);
 		void uniform(std::string_view name, glm::vec3 val);
 		void uniform(std::string_view name, glm::vec2 val);

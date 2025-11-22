@@ -39,7 +39,7 @@ namespace scn
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
 
-		virtual void load_prototype(entt::registry& registry, entt::entity parent);
+		virtual entt::entity load_prototype(entt::registry& registry, entt::entity parent);
 
 	protected:
 		struct load_context
