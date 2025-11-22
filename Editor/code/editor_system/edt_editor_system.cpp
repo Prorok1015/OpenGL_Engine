@@ -23,6 +23,7 @@
 #include "scn_material_desc.h"
 #include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
+#include "common/ds_rtree.hpp"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -195,6 +196,7 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 
 	decltype(scn::children_component::children)& children = ecs::registry.get_or_emplace<scn::children_component>(world_anchor).children;
 
+	if (false)
 	{
 		rnd::texture_desc txm_desc;
 		txm_desc.txm_name = "window";
@@ -286,6 +288,7 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 
 
 	// web
+	if (false)
 	{	
 		auto web = scn::generate_web({ 50, 50 });
 		res::tag web_tag = res::tag(res::tag::memory, "web.desc");
@@ -325,54 +328,58 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 
 		web_prototype_desc.load_prototype(ecs::registry, world_anchor);
 	}
-
-	auto geom = scn::generate_cube();
-	res::tag cube_tag = res::tag(res::tag::memory, "cube.desc");
-	// windows objects
-	for(int i = 0; i < 1; ++i)
+	
+	if (false)
 	{
-		auto wind = ecs::registry.create();
-		children.push_back(wind);
 
-		rnd::geometry_desc geom_desc;
-		geom_desc.layout = {
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"}
-		};
+		auto geom = scn::generate_cube();
+		res::tag cube_tag = res::tag(res::tag::memory, "cube.desc");
+		// windows objects
+		for (int i = 0; i < 1; ++i)
+		{
+			auto wind = ecs::registry.create();
+			children.push_back(wind);
 
-		geom_desc.indices = geom.indices;
-		geom_desc.vertices.resize(geom.vertices.size() * sizeof(scn::vertex));
-		std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.vertices.data(), geom_desc.vertices.size());
-		auto geom_tag = cube_tag;
-		json::object geom_js;
-		geom_desc.serialize(geom_js);
+			rnd::geometry_desc geom_desc;
+			geom_desc.layout = {
+				{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
+				{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
+				{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"}
+			};
 
-		std::string str_data = json::serialize(geom_js);
-		std::vector<std::byte> geom_data;
-		geom_data.resize(str_data.size());
-		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
+			geom_desc.indices = geom.indices;
+			geom_desc.vertices.resize(geom.vertices.size() * sizeof(scn::vertex));
+			std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.vertices.data(), geom_desc.vertices.size());
+			auto geom_tag = cube_tag;
+			json::object geom_js;
+			geom_desc.serialize(geom_js);
 
-		res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
+			std::string str_data = json::serialize(geom_js);
+			std::vector<std::byte> geom_data;
+			geom_data.resize(str_data.size());
+			std::memcpy(geom_data.data(), str_data.data(), str_data.size());
 
-		// 2. register new geometry_desc
-		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
-		
-		glm::vec2 rnd_pos = glm::diskRand(1.f);
-		scn::prototype_desc window_prototype_desc;
-		window_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
-		window_prototype_desc.root.name = "Window";
-		window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
-		window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
-			.vx_begin = 0, .vx_end = geom.vertices.size(),
-			.ind_begin = 0, .ind_end = geom.indices.size(),
-			.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc") )
-		};
-		window_prototype_desc.root.children = { window_prototype_desc.root };
-		window_prototype_desc.root.children[0].name = "Window2";
-		window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
+			res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
 
-		window_prototype_desc.load_prototype(ecs::registry, world_anchor);
+			// 2. register new geometry_desc
+			desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
+
+			glm::vec2 rnd_pos = glm::diskRand(1.f);
+			scn::prototype_desc window_prototype_desc;
+			window_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
+			window_prototype_desc.root.name = "Window";
+			window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
+			window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
+				.vx_begin = 0, .vx_end = geom.vertices.size(),
+				.ind_begin = 0, .ind_end = geom.indices.size(),
+				.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc"))
+			};
+			window_prototype_desc.root.children = { window_prototype_desc.root };
+			window_prototype_desc.root.children[0].name = "Window2";
+			window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
+
+			window_prototype_desc.load_prototype(ecs::registry, world_anchor);
+		}
 	}
 
 	// light
@@ -414,6 +421,10 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
+
+	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
+	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
+	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
 }
 
 editor::editor_system::~editor_system()
@@ -690,6 +701,17 @@ void editor::editor_system::show_tree_items(ecs::entity ent)
 bool editor::editor_system::show_toolbar()
 {
 	ImGuiIO& io = ImGui::GetIO();
+
+	static bool is_last_frame_loaded = false;
+	if (is_last_frame_loaded)
+	{
+		static std::once_flag f;
+		std::call_once(f, [&]() {
+			backpack->load_prototype(ecs::registry, world_anchor);
+		});
+	}
+
+	is_last_frame_loaded = backpack && backpack->is_loaded();
 
 	bool is_open = true;
 	if (ImGui::Begin("Observer", &is_open))
