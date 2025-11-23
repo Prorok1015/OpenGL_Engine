@@ -409,8 +409,13 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
             if (!hightlight.triangles.empty()) {
                 auto buffer = skin_manager.get_tmp_triangles_hightlight_buffer(drv);
                 buffer->bind(3);
+				std::byte color_data[sizeof(ds::color)] = {};
+				std::memcpy(color_data, &hightlight.color, sizeof(ds::color));
                 std::vector<uint32_t> triangles;
                 triangles.reserve(hightlight.triangles.size() + 1);
+				for (int i = 0; i < sizeof(ds::color); i += sizeof(uint32_t)) {
+                    triangles.push_back(*((uint32_t*)(&color_data[i])));
+                }
                 triangles.push_back(hightlight.triangles.size());
                 triangles.insert(triangles.end(), hightlight.triangles.begin(), hightlight.triangles.end());
                 buffer->set_data(triangles);

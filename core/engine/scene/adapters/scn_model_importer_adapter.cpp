@@ -244,6 +244,8 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 	}
 
 	jsmaterial["defines"] = defines;
+	jsmaterial["queue"] = "mix";
+	jsmaterial["shader_fragment"] = "res://shaders/mix_opaque_trans_scene.frag";
 	return jsmaterial;
 }
 

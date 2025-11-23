@@ -27,7 +27,7 @@ namespace scn {
     };
 
     struct hightlight_component {
-        ds::color color = ds::color(1.0f, 0.0f, 0.0f, 1.0f);
+        ds::color color = ds::color(0.0f, 1.0f, 0.0f, 1.0f);
 		std::vector<uint32_t> triangles;
 	};
 

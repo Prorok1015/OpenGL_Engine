@@ -443,44 +443,9 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 
-	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
-	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
+	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/fsb/scene.gltf"), "backpack");
+	imported_models_list.push_back(res::tag::make("objects/fsb/scene.gltf"));
 	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
-	ds::rtree<ds::triangle, ds::bbox, ds::point2d> rtree;
-	std::vector<std::pair<ds::bbox, ds::triangle>> items;
-
-	ds::bbox t1;
-	expand(t1, glm::vec2(0.0f, 0.0f));
-	expand(t1, glm::vec2(0.5f, 0.0f));
-	expand(t1, glm::vec2(0.0f, 0.5f));
-	items.push_back({ t1, 0 });
-
-	ds::bbox t2;
-	expand(t2, glm::vec2(0.6f, 0.6f));
-	expand(t2, glm::vec2(1.0f, 0.6f));
-	expand(t2, glm::vec2(0.6f, 1.0f));
-	items.push_back({ t2, 1 });
-
-	rtree.build(items);
-
-	ds::bbox queryBox;
-	queryBox.min = glm::vec2(0.0f, 0.0f);
-	queryBox.max = glm::vec2(0.2f, 0.2f);
-
-	auto candidates = rtree.query(queryBox);
-
-	std::cout << "Query found " << candidates.size() << " candidates." << std::endl;
-	for (int idx : candidates) {
-		std::cout << " - Triangle Index: " << idx << std::endl;
-	}
-
-	ds::bbox emptyQuery;
-	emptyQuery.min = glm::vec2(2.0f, 2.0f);
-	emptyQuery.max = glm::vec2(3.0f, 3.0f);
-
-	auto emptyRes = rtree.query(emptyQuery);
-	std::cout << "Empty query found: " << emptyRes.size() << std::endl;
-
 }
 
 editor::editor_system::~editor_system()
@@ -1213,15 +1178,23 @@ bool editor::editor_system::show_materials()
 	return is_open;
 }
 
-void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent) {
+void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent, const ds::color& color, bool reset = true) {
 	if (ecs::registry.all_of<scn::material_desc_component, scn::mesh_component>(ent)) {
 		auto mesh = ecs::registry.get<scn::mesh_component>(ent);
 		auto& hightlight = ecs::registry.get_or_emplace<scn::hightlight_component>(ent);
-		hightlight.triangles.clear();
-
-		for (const auto& triangle : res) {
-			if ((triangle >= mesh.mesh.ind_begin / 3 && triangle < mesh.mesh.ind_end / 3)) {
-				hightlight.triangles.push_back(triangle - mesh.mesh.ind_begin / 3);
+		hightlight.color = color;
+		if (hightlight.triangles.size() != mesh.mesh.get_indices_count() / 3)
+			hightlight.triangles.resize(mesh.mesh.get_indices_count() / 3, std::numeric_limits<uint32_t>::max());
+		if (reset) {
+			hightlight.triangles.clear();
+			hightlight.triangles.resize(mesh.mesh.get_indices_count() / 3, std::numeric_limits<uint32_t>::max());
+			size_t offset_begin = mesh.mesh.ind_begin / 3;
+			size_t offset_end = mesh.mesh.ind_end / 3;
+			for (const auto& triangle : res) {
+				if ((triangle >= offset_begin && triangle < offset_end)) {
+					uint32_t local_idx = triangle - offset_begin;
+					hightlight.triangles[local_idx] = local_idx;
+				}
 			}
 		}
 	}
@@ -1229,7 +1202,7 @@ void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent) {
 	if (ecs::registry.all_of<scn::children_component>(ent)) {
 		auto children = ecs::registry.get<scn::children_component>(ent);
 		for (const auto& child : children.children) {
-			recurcive_set(res, child);
+			recurcive_set(res, child, color, reset);
 		}
 	}
 }
@@ -1266,6 +1239,8 @@ bool editor::editor_system::show_textures()
 
 		static int item_current = 1;
 		ImGui::PushItemWidth(max_name * 10);
+		static ds::color picker_color{ 0.0f, 1.0f, 0.0f, 1.0f };
+		bool is_hightlight_color_changed = ImGui::ColorEdit4("Highlight Color", glm::value_ptr(picker_color));		
 		ImGui::ListBox("##textures_listbox", &item_current, items_getter, (void*)&list, list.size(), std::min(visibleItems, (int)list.size()));
 		ImGui::PopItemWidth();
 
@@ -1318,7 +1293,8 @@ bool editor::editor_system::show_textures()
 					std::cout << "Triangle: " << triangle << std::endl;
 				}
 				ecs::registry.clear<scn::hightlight_component>();
-				recurcive_set(res, backpackent);
+				recurcive_set(res, backpackent, picker_color);
+				is_hightlight_color_changed = false;
 			}
 
 			if (is_dragging) {
@@ -1369,13 +1345,18 @@ bool editor::editor_system::show_textures()
 				}
 
 				auto res = rtree.query(rect);
-				for (const auto& triangle : res) {
+				/*for (const auto& triangle : res) {
 					std::cout << "Triangle in rect: " << triangle << std::endl;
-				}
+				}*/
 				ecs::registry.clear<scn::hightlight_component>();
-				recurcive_set(res, backpackent);
+				recurcive_set(res, backpackent, picker_color);
 				is_dragging = false;
+				is_hightlight_color_changed = false;
 				rect = ds::bbox{};
+			}
+
+			if (is_hightlight_color_changed) {
+				recurcive_set({}, backpackent, picker_color, false);
 			}
 
 		}

@@ -12,21 +12,25 @@ namespace rnd
 		struct shader_program_data
 		{
 			static shader_program_data build() {
-				return shader_program_data{};
+				shader_program_data r{};
+				r.shader_tags.push_back(res::tag::null);
+				r.shader_tags.push_back(res::tag::null);
+				r.shader_tags.push_back(res::tag::null);
+				return r;
 			}
 
 			shader_program_data& set_vertex_shader(const res::tag& tag) {
-				shader_tags.push_back(tag);
+				shader_tags[0] = tag;
 				return *this;
 			}
 
 			shader_program_data& set_fragment_shader(const res::tag& tag) {
-				shader_tags.push_back(tag);
+				shader_tags[1] = tag;
 				return *this;
 			}
 
 			shader_program_data& set_geometry_shader(const res::tag& tag) {
-				shader_tags.push_back(tag);
+				shader_tags[2] = tag;
 				return *this;
 			}
 
@@ -82,7 +86,7 @@ namespace rnd
 		{
 			std::unordered_map<std::string, std::string> constants;
 			std::vector<std::string> defines;
-			shader_program_data program;
+			shader_program_data program = shader_program_data::build();
 			auto operator<=>(const constant_data&) const noexcept = default;
 		};
 
