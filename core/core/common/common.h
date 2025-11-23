@@ -107,5 +107,5 @@ namespace ds {
 	void expand(bbox& box, const point2d& p);
 	bool intersects(const bbox& a, const bbox& b);
 	bool contains(const bbox& a, const point2d& p);
-
+	double area(const bbox& box);
 }

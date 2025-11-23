@@ -26,7 +26,7 @@
 
 #include "common/ds_svg_writer.hpp"
 
-namespace ds {
+namespace ds { // TODO: move to common
 
 	point2d center(const bbox& box) { return (box.min + box.max) * 0.5f; }
 	void expand(bbox& box, const bbox& other) {
@@ -43,7 +43,10 @@ namespace ds {
 	bool contains(const bbox& a, const point2d& p) {
 		return p.x >= a.min.x && p.x <= a.max.x && p.y >= a.min.y && p.y <= a.max.y;
 	}
-
+	double area(const bbox& box) {
+		auto ext = box.max - box.min;
+		return static_cast<double>(ext.x) * static_cast<double>(ext.y);
+	}
 }
 
 void
