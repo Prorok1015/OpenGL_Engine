@@ -1288,10 +1288,16 @@ bool editor::editor_system::show_textures()
 
 				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
 
-				auto res = rtree.query(mouse_pos);
+				std::vector<uint32_t> res;
+				{
+					ds::scoped_timer timer("rtree point query time");
+					res = rtree.query(mouse_pos);
+				}
+
 				for (const auto& triangle : res) {
 					std::cout << "Triangle: " << triangle << std::endl;
 				}
+
 				ecs::registry.clear<scn::hightlight_component>();
 				recurcive_set(res, backpackent, picker_color);
 				is_hightlight_color_changed = false;
@@ -1344,7 +1350,12 @@ bool editor::editor_system::show_textures()
 					std::swap(rect.min.y, rect.max.y);
 				}
 
-				auto res = rtree.query(rect);
+				std::vector<uint32_t> res;
+				{
+					ds::scoped_timer timer("rtree rect query time");
+					res = rtree.query(rect);
+				}
+
 				/*for (const auto& triangle : res) {
 					std::cout << "Triangle in rect: " << triangle << std::endl;
 				}*/

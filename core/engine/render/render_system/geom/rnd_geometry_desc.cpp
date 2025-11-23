@@ -147,6 +147,8 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 	{
 		auto& json_bounds = resource.at("bounds");
 		bounds = json::value_to<decltype(bounds)>(json_bounds);
+
+		ds::scoped_timer timer("geometry_desc rtree build");
 		rtree.build(bounds);
 	}
 }
