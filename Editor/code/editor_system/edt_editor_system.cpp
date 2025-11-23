@@ -1216,16 +1216,14 @@ bool editor::editor_system::show_materials()
 void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent) {
 	if (ecs::registry.all_of<scn::material_desc_component, scn::mesh_component>(ent)) {
 		auto mesh = ecs::registry.get<scn::mesh_component>(ent);
-		auto material_desc = ecs::registry.get<scn::material_desc_component>(ent).mlt_desc;
-		glm::ivec4 trIds(-1);
-		int i = 0;
+		auto& hightlight = ecs::registry.get_or_emplace<scn::hightlight_component>(ent);
+		hightlight.triangles.clear();
+
 		for (const auto& triangle : res) {
-			if (i < 4 && (triangle >= mesh.mesh.ind_begin / 3 && triangle < mesh.mesh.ind_end / 3)) {
-				trIds[i] = triangle - mesh.mesh.ind_begin / 3;
+			if ((triangle >= mesh.mesh.ind_begin / 3 && triangle < mesh.mesh.ind_end / 3)) {
+				hightlight.triangles.push_back(triangle - mesh.mesh.ind_begin / 3);
 			}
-			++i;
 		}
-		material_desc->uniforms["triangleIds"] = trIds;
 	}
 
 	if (ecs::registry.all_of<scn::children_component>(ent)) {
@@ -1296,7 +1294,19 @@ bool editor::editor_system::show_textures()
 			style.Colors[ImGuiCol_ButtonActive] = original_button_active_color;
 			style.FramePadding = original_padding;
 
-			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {
+			static ds::bbox rect;
+			static bool is_dragging = false;
+			if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsItemHovered() && !is_dragging) {
+				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
+				mouse_pos -= pos;
+				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
+
+				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
+				rect.min = rect.max = mouse_pos;
+				is_dragging = true;
+			}
+
+			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered() && !is_dragging) {
 				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
 				mouse_pos -= pos;
 				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
@@ -1307,9 +1317,67 @@ bool editor::editor_system::show_textures()
 				for (const auto& triangle : res) {
 					std::cout << "Triangle: " << triangle << std::endl;
 				}
-
+				ecs::registry.clear<scn::hightlight_component>();
 				recurcive_set(res, backpackent);
 			}
+
+			if (is_dragging) {
+				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
+				mouse_pos -= pos;
+				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
+
+				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
+				rect.max = mouse_pos;
+
+				rect.max.x = std::clamp(rect.max.x, 0.0f, 1.0f);
+				rect.max.y = std::clamp(rect.max.y, 0.0f, 1.0f);
+				rect.min.x = std::clamp(rect.min.x, 0.0f, 1.0f);
+				rect.min.y = std::clamp(rect.min.y, 0.0f, 1.0f);
+
+				ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+				ds::point2d p_min_norm = rect.min;
+				float screen_min_y = 1.0f - p_min_norm.y;
+				float screen_min_x = p_min_norm.x;
+
+				ds::point2d p_max_norm = rect.max;
+				float screen_max_y = 1.0f - p_max_norm.y;
+				float screen_max_x = p_max_norm.x;
+
+				ImVec2 p1(
+					pos.x + screen_min_x * contentRegionAvailable.x,
+					pos.y + screen_min_y * contentRegionAvailable.y
+				);
+
+				ImVec2 p2(
+					pos.x + screen_max_x * contentRegionAvailable.x,
+					pos.y + screen_max_y * contentRegionAvailable.y
+				);
+
+				draw_list->AddRect(p1, p2, IM_COL32(255, 255, 0, 255), 0.0f, 0, 2.0f);
+
+				draw_list->AddRectFilled(p1, p2, IM_COL32(255, 255, 0, 50));
+			}
+
+			if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && is_dragging) {
+
+				if (rect.min.x > rect.max.x) {
+					std::swap(rect.min.x, rect.max.x);
+				}
+				if (rect.min.y > rect.max.y) {
+					std::swap(rect.min.y, rect.max.y);
+				}
+
+				auto res = rtree.query(rect);
+				for (const auto& triangle : res) {
+					std::cout << "Triangle in rect: " << triangle << std::endl;
+				}
+				ecs::registry.clear<scn::hightlight_component>();
+				recurcive_set(res, backpackent);
+				is_dragging = false;
+				rect = ds::bbox{};
+			}
+
 		}
 	}
 	ImGui::End();
