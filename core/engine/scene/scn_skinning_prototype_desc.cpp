@@ -24,7 +24,7 @@ void scn::skinning_prototype_desc::serialize(json::object& data) const
 	}
 }
 
-void scn::skinning_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
+entt::entity scn::skinning_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
 {
 	load_context ctx;
 	auto root_ent = load_prototype_node(registry, parent, root, ctx);
@@ -32,6 +32,7 @@ void scn::skinning_prototype_desc::load_prototype(entt::registry& registry, entt
 	registry.emplace<skinning_component>(root_ent, get_tag());
 	auto& matrs = registry.emplace<bone_matrices_component>(root_ent);
 	matrs.matrices.resize(bone_count, glm::mat4{1.0});
+	return root_ent;
 }
 
 std::vector<std::vector<uint32_t>> scn::skinning_prototype_desc::get_2d_array_bonesids_weights() const

@@ -53,6 +53,13 @@ uniform float shininess;
 uniform vec4 diffuseColor;
 uniform vec4 emissiveColor;
 
+layout(std430, binding = 3) buffer hightlight
+{
+    vec4 hightlight_color;
+    int size;
+    int triangleIds[];
+};
+
 vec4 getMaterialColor(vec2 uv)
 {
 #ifdef USE_TXM_AS_DIFFUSE
@@ -133,8 +140,18 @@ vec4 calculatePhongModel(vec3 norm, vec4 materialColor, vec4 materialSpecular, v
 #else
     result = materialColor;
 #endif
+    
+    vec4 emissive = emissiveColor;
+#ifdef HIGHTLIGHT_TRIANGLES
+    if (gl_PrimitiveID == triangleIds[gl_PrimitiveID]) {
+        emissive = hightlight_color;
+        if (hightlight_color.a < 1.0) {
+            result.a = hightlight_color.a;
+        }
+    }
+#endif
 
     //vec4 gamma = vec4(1/2.2);
     vec4 gamma = vec4(1);
-    return pow(result + vec4(emissiveColor.rgb, 0), gamma);
+    return pow(result + vec4(emissive.rgb, 0), gamma);
 }

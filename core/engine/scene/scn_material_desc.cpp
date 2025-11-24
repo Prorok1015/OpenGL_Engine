@@ -195,6 +195,8 @@ rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd:
 		}
 	}
 
+	rdata.uniforms = uniforms;
+
 	if (handle.all_of<scn::world_transform>()) {
 		auto& transform = handle.get<scn::world_transform>();
 		rdata.uniforms["uWorldMeshMatr"] = transform.world;

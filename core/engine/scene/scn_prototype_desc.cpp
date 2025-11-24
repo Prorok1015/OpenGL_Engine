@@ -128,10 +128,10 @@ void scn::prototype_desc::serialize(json::object& data) const
 	data["tree"] = json::value_from(root);
 }
 
-void scn::prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
+entt::entity scn::prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
 {
 	load_context ctx;
-	load_prototype_node(registry, parent, root, ctx);
+	return load_prototype_node(registry, parent, root, ctx);
 }
 
 entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node, load_context& ctx) const

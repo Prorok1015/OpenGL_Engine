@@ -23,7 +23,31 @@
 #include "scn_material_desc.h"
 #include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
-#include "common/ds_rtree.hpp"
+
+#include "common/ds_svg_writer.hpp"
+
+namespace ds { // TODO: move to common
+
+	point2d center(const bbox& box) { return (box.min + box.max) * 0.5f; }
+	void expand(bbox& box, const bbox& other) {
+		box.min = glm::min(box.min, other.min);
+		box.max = glm::max(box.max, other.max);
+	}
+	void expand(bbox& box, const point2d& p) {
+		box.min = glm::min(box.min, p);
+		box.max = glm::max(box.max, p);
+	}
+	bool intersects(const bbox& a, const bbox& b) {
+		return (a.min.x <= b.max.x && a.max.x >= b.min.x) && (a.min.y <= b.max.y && a.max.y >= b.min.y);
+	}
+	bool contains(const bbox& a, const point2d& p) {
+		return p.x >= a.min.x && p.x <= a.max.x && p.y >= a.min.y && p.y <= a.max.y;
+	}
+	double area(const bbox& box) {
+		auto ext = box.max - box.min;
+		return static_cast<double>(ext.x) * static_cast<double>(ext.y);
+	}
+}
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -422,8 +446,8 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 
-	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
-	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
+	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/fsb/scene.gltf"), "backpack");
+	imported_models_list.push_back(res::tag::make("objects/fsb/scene.gltf"));
 	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
 }
 
@@ -707,7 +731,43 @@ bool editor::editor_system::show_toolbar()
 	{
 		static std::once_flag f;
 		std::call_once(f, [&]() {
-			backpack->load_prototype(ecs::registry, world_anchor);
+			backpackent = backpack->load_prototype(ecs::registry, world_anchor);
+			auto geom = backpack->geometry;
+			int uvs_offset = 0;
+			for (const auto& elem : geom->layout.get_elements())
+			{
+				if (elem.Name == "uv") {
+					uvs_offset = elem.Offset;
+					break;
+				}
+			}
+			ds::svg_writer svg_writer("rtree_visualization.svg", 2048, 2048);
+
+			std::vector<std::pair<ds::bbox, ds::triangle>> items;
+			int stride = geom->layout.get_stride();
+			for (int i = 0, triangle = 0; i < geom->indices.size(); i += 3)
+			{
+				uint32_t i0 = geom->indices[i + 0];
+				uint32_t i1 = geom->indices[i + 1];
+				uint32_t i2 = geom->indices[i + 2];
+				auto &v0 = *(glm::vec2*)(geom->vertices.data() + i0 * stride + uvs_offset);
+				auto &v1 = *(glm::vec2*)(geom->vertices.data() + i1 * stride + uvs_offset);
+				auto &v2 = *(glm::vec2*)(geom->vertices.data() + i2 * stride + uvs_offset);
+				ds::bbox box;
+				expand(box, v0);
+				expand(box, v1);
+				expand(box, v2);
+				items.push_back({ box, triangle++ });
+				svg_writer.add_rect(box, triangle % 2 ? "blue" : "red");
+			}
+
+			rtree = geom->rtree;
+
+			ds::svg_writer query_svg("rtree_query_visualization.svg", 2048, 2048);
+			for (auto& v : rtree.data) {
+				query_svg.add_rect(v.box, v.is_leaf ? "green" : "red");
+			}
+
 		});
 	}
 
@@ -1121,6 +1181,35 @@ bool editor::editor_system::show_materials()
 	return is_open;
 }
 
+void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent, const ds::color& color, bool reset = true) {
+	if (ecs::registry.all_of<scn::material_desc_component, scn::mesh_component>(ent)) {
+		auto mesh = ecs::registry.get<scn::mesh_component>(ent);
+		auto& hightlight = ecs::registry.get_or_emplace<scn::hightlight_component>(ent);
+		hightlight.color = color;
+		if (hightlight.triangles.size() != mesh.mesh.get_indices_count() / 3)
+			hightlight.triangles.resize(mesh.mesh.get_indices_count() / 3, std::numeric_limits<uint32_t>::max());
+		if (reset) {
+			hightlight.triangles.clear();
+			hightlight.triangles.resize(mesh.mesh.get_indices_count() / 3, std::numeric_limits<uint32_t>::max());
+			size_t offset_begin = mesh.mesh.ind_begin / 3;
+			size_t offset_end = mesh.mesh.ind_end / 3;
+			for (const auto& triangle : res) {
+				if ((triangle >= offset_begin && triangle < offset_end)) {
+					uint32_t local_idx = triangle - offset_begin;
+					hightlight.triangles[local_idx] = local_idx;
+				}
+			}
+		}
+	}
+
+	if (ecs::registry.all_of<scn::children_component>(ent)) {
+		auto children = ecs::registry.get<scn::children_component>(ent);
+		for (const auto& child : children.children) {
+			recurcive_set(res, child, color, reset);
+		}
+	}
+}
+
 bool editor::editor_system::show_textures()
 {
 	bool is_open = true;
@@ -1153,6 +1242,8 @@ bool editor::editor_system::show_textures()
 
 		static int item_current = 1;
 		ImGui::PushItemWidth(max_name * 10);
+		static ds::color picker_color{ 0.0f, 1.0f, 0.0f, 1.0f };
+		bool is_hightlight_color_changed = ImGui::ColorEdit4("Highlight Color", glm::value_ptr(picker_color));		
 		ImGui::ListBox("##textures_listbox", &item_current, items_getter, (void*)&list, list.size(), std::min(visibleItems, (int)list.size()));
 		ImGui::PopItemWidth();
 
@@ -1180,6 +1271,108 @@ bool editor::editor_system::show_textures()
 			style.Colors[ImGuiCol_ButtonHovered] = original_button_hovered_color;
 			style.Colors[ImGuiCol_ButtonActive] = original_button_active_color;
 			style.FramePadding = original_padding;
+
+			static ds::bbox rect;
+			static bool is_dragging = false;
+			if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsItemHovered() && !is_dragging) {
+				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
+				mouse_pos -= pos;
+				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
+
+				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
+				rect.min = rect.max = mouse_pos;
+				is_dragging = true;
+			}
+
+			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered() && !is_dragging) {
+				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
+				mouse_pos -= pos;
+				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
+
+				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
+
+				std::vector<uint32_t> res;
+				{
+					ds::scoped_timer timer("rtree point query time");
+					res = rtree.query(mouse_pos);
+				}
+
+				for (const auto& triangle : res) {
+					std::cout << "Triangle: " << triangle << std::endl;
+				}
+
+				ecs::registry.clear<scn::hightlight_component>();
+				recurcive_set(res, backpackent, picker_color);
+				is_hightlight_color_changed = false;
+			}
+
+			if (is_dragging) {
+				ds::point2d mouse_pos{ ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y };
+				mouse_pos -= pos;
+				mouse_pos /= ds::point2d{ contentRegionAvailable.x, contentRegionAvailable.y };
+
+				mouse_pos.y = 1.0f - mouse_pos.y; // flip y
+				rect.max = mouse_pos;
+
+				rect.max.x = std::clamp(rect.max.x, 0.0f, 1.0f);
+				rect.max.y = std::clamp(rect.max.y, 0.0f, 1.0f);
+				rect.min.x = std::clamp(rect.min.x, 0.0f, 1.0f);
+				rect.min.y = std::clamp(rect.min.y, 0.0f, 1.0f);
+
+				ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+				ds::point2d p_min_norm = rect.min;
+				float screen_min_y = 1.0f - p_min_norm.y;
+				float screen_min_x = p_min_norm.x;
+
+				ds::point2d p_max_norm = rect.max;
+				float screen_max_y = 1.0f - p_max_norm.y;
+				float screen_max_x = p_max_norm.x;
+
+				ImVec2 p1(
+					pos.x + screen_min_x * contentRegionAvailable.x,
+					pos.y + screen_min_y * contentRegionAvailable.y
+				);
+
+				ImVec2 p2(
+					pos.x + screen_max_x * contentRegionAvailable.x,
+					pos.y + screen_max_y * contentRegionAvailable.y
+				);
+
+				draw_list->AddRect(p1, p2, IM_COL32(255, 255, 0, 255), 0.0f, 0, 2.0f);
+
+				draw_list->AddRectFilled(p1, p2, IM_COL32(255, 255, 0, 50));
+			}
+
+			if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && is_dragging) {
+
+				if (rect.min.x > rect.max.x) {
+					std::swap(rect.min.x, rect.max.x);
+				}
+				if (rect.min.y > rect.max.y) {
+					std::swap(rect.min.y, rect.max.y);
+				}
+
+				std::vector<uint32_t> res;
+				{
+					ds::scoped_timer timer("rtree rect query time");
+					res = rtree.query(rect);
+				}
+
+				/*for (const auto& triangle : res) {
+					std::cout << "Triangle in rect: " << triangle << std::endl;
+				}*/
+				ecs::registry.clear<scn::hightlight_component>();
+				recurcive_set(res, backpackent, picker_color);
+				is_dragging = false;
+				is_hightlight_color_changed = false;
+				rect = ds::bbox{};
+			}
+
+			if (is_hightlight_color_changed) {
+				recurcive_set({}, backpackent, picker_color, false);
+			}
+
 		}
 	}
 	ImGui::End();

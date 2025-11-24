@@ -5,7 +5,7 @@
 
 namespace rnd::driver
 {
-	using uniform_data = std::variant<glm::mat4, glm::vec4, glm::vec3, glm::vec2, int, float>;
+	using uniform_data = std::variant<glm::mat4, glm::vec4, glm::vec3, glm::vec2, glm::ivec4, int, float>;
 
 	class shader_interface
 	{

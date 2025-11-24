@@ -76,7 +76,8 @@ namespace std
 {
 	void tag_invoke(json::value_from_tag, json::value& jv, const std::byte& c)
 	{
-		auto val = reinterpret_cast<const unsigned int&>(c);
+		//auto val = reinterpret_cast<const unsigned int&>(c);
+		auto val = unsigned(c);
 		jv = val;
 	}
 
@@ -94,6 +95,28 @@ namespace std
 
 		ASSERT_FAIL("rnd::geometry_desc::serialize", "Invalid type for byte");
 		return std::byte(0);
+	}
+}
+
+namespace ds {
+	void tag_invoke(json::value_from_tag, json::value& jv, const ds::bbox& c)
+	{
+		json::array arr;
+		arr.push_back({ {"x", c.min.x}, {"y", c.min.y}});
+		arr.push_back({ {"x", c.max.x}, {"y", c.max.y} });
+		jv = arr;
+	}
+
+	ds::bbox tag_invoke(json::value_to_tag<ds::bbox>, const json::value& jv)
+	{
+		auto arr = jv.as_array();
+		ASSERT_MSG(arr.size() == 2, "Invalid bbox array size");
+		ds::bbox box;
+		box.min.x = json::value_to<float>(arr[0].as_object().at("x"));
+		box.min.y = json::value_to<float>(arr[0].as_object().at("y"));
+		box.max.x = json::value_to<float>(arr[1].as_object().at("x"));
+		box.max.y = json::value_to<float>(arr[1].as_object().at("y"));
+		return box;
 	}
 }
 
@@ -119,6 +142,15 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		auto& json_vertices = resource.at("vertices");
 		vertices = json::value_to<decltype(vertices)>(json_vertices);
 	}
+
+	if (resource.contains("bounds"))
+	{
+		auto& json_bounds = resource.at("bounds");
+		bounds = json::value_to<decltype(bounds)>(json_bounds);
+
+		ds::scoped_timer timer("geometry_desc rtree build");
+		rtree.build(bounds);
+	}
 }
 
 void rnd::geometry_desc::serialize(json::object& resource) const
@@ -126,4 +158,5 @@ void rnd::geometry_desc::serialize(json::object& resource) const
 	resource["layout"] = json::value_from(layout);
 	resource["indices"] = json::value_from(indices);
 	resource["vertices"] = json::value_from(vertices);
+	resource["bounds"] = json::value_from(bounds);
 }

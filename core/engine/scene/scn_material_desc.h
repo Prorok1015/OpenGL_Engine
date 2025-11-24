@@ -3,6 +3,7 @@
 #include "res_tag.h"
 #include "rnd_driver_interface.h"
 #include "shader/rnd_scene_shader_desc.h"
+#include "rnd_shader_interface.h"
 #include "ecs_entity.h"
 #include "texture/rnd_texture_manager.h"
 #include "texture/rnd_texture_desc.h"
@@ -38,6 +39,7 @@ namespace scn
 		pass_queue queue = pass_queue::OPAQUE;
 		rnd::driver::RENDER_MODE render_mode = rnd::driver::RENDER_MODE::TRIANGLE;
 		rnd::shader_config::constant_data cdata;
+		std::unordered_map<std::string, rnd::driver::uniform_data> uniforms;
 	};
 
 	void tag_invoke(json::value_from_tag, json::value& out, const scn::pass_queue& c);

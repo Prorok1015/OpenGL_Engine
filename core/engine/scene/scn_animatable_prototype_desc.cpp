@@ -149,11 +149,12 @@ void scn::animatable_prototype_desc::load_prototype_animations(entt::registry& r
 	}
 }
 
-void scn::animatable_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
+entt::entity scn::animatable_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
 {
 	load_context ctx;
 	auto root_ent = load_prototype_node(registry, parent, root, ctx);
 	load_prototype_animations(registry, root_ent);
+	return root_ent;
 }
 
 entt::entity scn::animatable_prototype_desc::load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node, load_context& ctx) const

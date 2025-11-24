@@ -2,6 +2,7 @@
 #include "common.h"
 #include "desc_base.hpp"
 #include "rnd_buffer_layout.h"
+#include "ds_rtree.hpp"
 
 namespace rnd
 {
@@ -24,5 +25,7 @@ namespace rnd
 		rnd::driver::BufferLayout layout;
 		std::vector<unsigned int> indices;
 		std::vector<std::byte> vertices;
+		std::vector<std::pair<ds::bbox, uint32_t>> bounds;
+		ds::rtree<uint32_t, ds::bbox, ds::point2d> rtree;
 	};
 }

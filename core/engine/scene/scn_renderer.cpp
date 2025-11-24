@@ -403,6 +403,26 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
             shader_desc.cdata.defines.push_back("OPAQUE");
         }
 
+        if (registry.all_of<scn::hightlight_component>(ent)) {
+
+            auto& hightlight = registry.get<scn::hightlight_component>(ent);
+            if (!hightlight.triangles.empty()) {
+                auto buffer = skin_manager.get_tmp_triangles_hightlight_buffer(drv);
+                buffer->bind(3);
+				std::byte color_data[sizeof(ds::color)] = {};
+				std::memcpy(color_data, &hightlight.color, sizeof(ds::color));
+                std::vector<uint32_t> triangles;
+                triangles.reserve(hightlight.triangles.size() + 1);
+				for (int i = 0; i < sizeof(ds::color); i += sizeof(uint32_t)) {
+                    triangles.push_back(*((uint32_t*)(&color_data[i])));
+                }
+                triangles.push_back(hightlight.triangles.size());
+                triangles.insert(triangles.end(), hightlight.triangles.begin(), hightlight.triangles.end());
+                buffer->set_data(triangles);
+				shader_desc.cdata.defines.push_back("HIGHTLIGHT_TRIANGLES");
+            }
+        }
+
         if (load_skin(drv, ent, registry)) {
             shader_desc.cdata.defines.push_back("USE_ANIMATION");
         }
@@ -424,6 +444,7 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
 bool scn::renderer_3d::load_skin(rnd::driver::driver_interface* drv, entt::entity ent, entt::registry& registry)
 {
 	entt::entity obj = ent;
+
     if (auto* owner = registry.try_get<scn::obj_owner_component>(ent)) {
         obj = owner->owner;
     }

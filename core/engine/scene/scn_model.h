@@ -26,6 +26,11 @@ namespace scn {
         res::mesh_view mesh;
     };
 
+    struct hightlight_component {
+        ds::color color = ds::color(0.0f, 1.0f, 0.0f, 1.0f);
+		std::vector<uint32_t> triangles;
+	};
+
 	struct geometry_component {
 		res::tag geom_tag;
 	};
