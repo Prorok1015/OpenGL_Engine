@@ -89,6 +89,12 @@ namespace ds {
 			struct { point2d min; point2d max; };
 		};
 
+		bbox(point2d mi, point2d mx)
+			: min{ mi }
+			, max{ mx }
+		{
+		}
+
 		bbox()
 			: min{ std::numeric_limits<float>::max() }
 			, max{ std::numeric_limits<float>::lowest() }
