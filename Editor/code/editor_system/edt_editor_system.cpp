@@ -766,7 +766,7 @@ bool editor::editor_system::show_toolbar()
 
 			ds::svg_writer query_svg("rtree_query_visualization.svg", 2048, 2048);
 			for (auto& v : rtree.data) {
-				query_svg.add_rect(v.box, v.is_leaf ? "green" : "red");
+				query_svg.add_rect(v.box, v.is_leaf() ? "green" : "red");
 			}
 		});
 	}

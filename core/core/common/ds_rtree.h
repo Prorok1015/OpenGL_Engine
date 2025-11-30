@@ -1,6 +1,7 @@
 #pragma once
 #include "ds_fixed_vector.hpp"
 #include <vector>
+#include <variant>
 #include <glm/glm.hpp>
 
 namespace ds
@@ -12,15 +13,15 @@ namespace ds
 		static constexpr uint32_t MIN_ENTRIES = MIN;
 
 		template<class NODE>
-		uint32_t split(std::vector<NODE>& data, uint32_t current, uint32_t& root) const
+		NODE::index_type split(std::vector<NODE>& data, NODE::index_type current, NODE::index_type& root) const
 		{
-			// quadratic split algorithm
 			const auto& oldnode = data[current];
 			const auto& entries = oldnode.entries;
 
-			uint32_t seed1 = NODE::INVALID_NODE;
-			uint32_t seed2 = NODE::INVALID_NODE;
+			auto seed1 = NODE::INVALID_NODE;
+			auto seed2 = NODE::INVALID_NODE;
 
+			// quadratic split algorithm
 			double maxWastedArea = std::numeric_limits<double>::lowest();
 			for (size_t i = 0; i < entries.size(); ++i) {
 				for (size_t j = i + 1; j < entries.size(); ++j) {
@@ -39,10 +40,10 @@ namespace ds
 
 			ASSERT_MSG(seed1 != NODE::INVALID_NODE && seed2 != NODE::INVALID_NODE, "seeds incorrect!");
 
-			auto left = NODE::is_leaf(oldnode) ? NODE::create_leaf() : NODE::create_branch();
-			auto right = NODE::is_leaf(oldnode) ? NODE::create_leaf() : NODE::create_branch();
-			left.parent = oldnode.parent;
-			right.parent = oldnode.parent;
+			auto left = oldnode.is_leaf() ? NODE::create_leaf() : NODE::create_branch();
+			auto right = oldnode.is_leaf() ? NODE::create_leaf() : NODE::create_branch();
+			
+			right.parent = left.parent = oldnode.parent;
 
 			left.box = entries[seed1].box;
 			right.box = entries[seed2].box;
@@ -69,8 +70,8 @@ namespace ds
 				const double extboxarea2 = area(box2);
 				const double enlargement2 = extboxarea2 - rightarea;
 
-				bool force_left = NODE::size(left) < MIN_ENTRIES;
-				bool force_right = NODE::size(right) < MIN_ENTRIES;
+				bool force_left = left.size() < MIN_ENTRIES;
+				bool force_right = right.size() < MIN_ENTRIES;
 
 				bool choose_left;
 
@@ -84,7 +85,7 @@ namespace ds
 					} else if (enlargement2 < enlargement1) {
 						choose_left = false;
 					} else if (leftarea == rightarea) {
-						choose_left = NODE::size(left) <= NODE::size(right);
+						choose_left = left.size() <= right.size();
 					} else {
 						choose_left = leftarea < rightarea;
 					}
@@ -92,45 +93,99 @@ namespace ds
 
 				if (choose_left) {
 					left.box = box1;
-					NODE::add_to_leaf(left, ent);
-				}
-				else {
+					left.add(ent);
+				} else {
 					right.box = box2;
-					NODE::add_to_leaf(right, ent);
+					right.add(ent);
 				}
 			}
 
 			data[current] = left;
 			data.push_back(right); // oldnode can be realloced after this
 			auto new_idx = data.size() - 1;
+
 			if (current == root)
 			{
 				NODE newRoot = NODE::create_branch();
 
-				NODE::add_to_child(newRoot, left.box, current);
+				newRoot.add_as_child(left.box, current);
 				expand(newRoot.box, left.box);
 
-				NODE::add_to_child(newRoot, right.box, new_idx );
+				newRoot.add_as_child(right.box, new_idx);
 				expand(newRoot.box, right.box);
 
 				data.push_back(newRoot);
-				root = uint32_t(data.size() - 1);
+				root = NODE::index_type(data.size() - 1);
 
 				data[current].parent = root;
 				data[new_idx].parent = root;
 			}
 			else {
 				auto& parent = data[right.parent];
-				NODE::add_to_child(parent, right.box, new_idx); // parent.box will be updated in adjust_tree
-				for (const auto& ent : right.entries) {
-					if (ent.child != NODE::INVALID_NODE) {
-						data[ent.child].parent = new_idx;
+				parent.add_as_child(right.box, new_idx); // parent.box will be updated in adjust_tree
+
+				if (!right.is_leaf()) {
+					for (const auto& ent : right.entries) {
+						if (ent.get_child() != NODE::INVALID_NODE) {
+							data[ent.get_child()].parent = new_idx;
+						}
 					}
 				}
 			}
 
 			return new_idx;
 		}
+	};
+
+	template<size_t MAX_ENTRIES>
+	struct data_storage_policy
+	{
+		using index_type = uint32_t;
+		static constexpr auto INVALID_NODE = std::numeric_limits<index_type>::max();
+
+		template<class T, class KEY>
+		struct entry_t
+		{
+			struct payload_wrapper { T value; };
+			using entry_value = std::variant<payload_wrapper, index_type>;
+
+			KEY box;
+			entry_value val;
+
+			static entry_t create_with_value(const KEY& k, const T& v) {
+				return entry_t{ .box = k, .val = payload_wrapper{ v } };
+			}
+
+			static entry_t create_with_child(const KEY& k, index_type idx) {
+				return entry_t{ .box = k, .val = idx };
+			}
+
+			const T& get_value() const { return std::get<payload_wrapper>(val).value; }
+			index_type get_child() const { return std::get<index_type>(val); }
+		};
+
+		template<class T, class KEY>
+		struct node_t
+		{
+			static constexpr auto INVALID_NODE = data_storage_policy::INVALID_NODE;
+			using entry = entry_t<T, KEY>;
+			using index_type = data_storage_policy::index_type;
+
+			KEY box;
+			ds::fixed_vector<entry, MAX_ENTRIES + 1> entries;
+			bool is_leaf_flag = true;
+			index_type parent = INVALID_NODE;
+
+			void add(const entry& ent) { entries.push_back(ent); }
+			void add_as_leaf(const KEY& k, const T& v) { entries.push_back(entry::create_with_value(k, v)); }
+			void add_as_child(const KEY& k, index_type idx) { entries.push_back(entry::create_with_child(k, idx)); }
+			bool is_leaf() const { return is_leaf_flag; }
+
+			size_t size() const { return entries.size(); }
+
+			static node_t create_leaf() { return node_t{}; }
+			static node_t create_branch() { return node_t{ .is_leaf_flag = false }; }
+		};
 	};
 
 	/*
@@ -140,61 +195,40 @@ namespace ds
 		 - double area(const KEY& box);
 		 - point2d center(const KEY& box);
 	*/
-	template<class T, class KEY, class POLICY>
-	struct rtree : protected POLICY
+	template<class T, class KEY, class POLICY, class STORAGE_POLICY>
+	struct rtree : protected POLICY, protected STORAGE_POLICY
 	{
 		using POLICY::MAX_ENTRIES;
 		using POLICY::MIN_ENTRIES;
 
-		struct entry
-		{
-			KEY box;
-			T val;
-			uint32_t child = node::INVALID_NODE;
-		};
+		using index_type = STORAGE_POLICY::index_type;
+		using STORAGE_POLICY::INVALID_NODE;
 
-		struct node
-		{
-			static constexpr auto INVALID_NODE = std::numeric_limits<uint32_t>::max();
-
-			KEY box;
-			ds::fixed_vector<entry, MAX_ENTRIES + 1> entries;
-			bool is_leaf_flag = true;
-			uint32_t parent = INVALID_NODE;
-
-			static inline void add_to_leaf(node& n, KEY k, T v) { n.entries.push_back(entry{ .box = k, .val = v }); }
-			static inline void add_to_leaf(node& n, const entry& ent) { n.entries.push_back(ent); }
-			static inline void add_to_child(node& n, KEY k, uint32_t idx) { n.entries.push_back(entry{.box = k, .child = idx}); }
-			static inline bool is_leaf(const node& n) { return n.is_leaf_flag; }
-
-			static inline size_t size(const node& n) { return n.entries.size(); }
-
-			static inline node create_leaf() { return node{}; }
-			static inline node create_branch() { return node{ .is_leaf_flag = false }; }
-		};
+		using node = typename STORAGE_POLICY::template node_t<T, KEY>;
+		using entry = typename STORAGE_POLICY::template entry_t<T, KEY>;
 
 		std::vector<node> data;
-		uint32_t root = 0;
+		index_type root = 0;
 
 		void insert(const KEY& box, const T& val);
-		void adjust_tree(uint32_t node_idx, uint32_t new_node_idx = node::INVALID_NODE);
+		void adjust_tree(index_type node_idx, index_type new_node_idx = node::INVALID_NODE);
 
 		void build(std::vector<std::pair<KEY, T>> items);
-		std::vector<T> query(const KEY& box, std::function<void(const node&, uint32_t)> func) const;
 		std::vector<T> query(const KEY& box) const;
 
 	private:
-		void split_impl(uint32_t node_idx, uint32_t& new_idx);
-		uint32_t choose_subtree(const KEY& box, uint32_t start_idx) const;
-		bool split_node(uint32_t node_idx, uint32_t& new_idx);
-		void insert_recursive(uint32_t node_idx, const KEY& box, const T& val);
-		void query_recursive(uint32_t nodeIndex, const KEY& box, std::vector<T>& results) const;
-		void query_recursive(uint32_t nodeIndex, const KEY& box, std::vector<T>& results, const std::function<void(const node&, uint32_t)>& func, uint32_t depth) const;
+		index_type choose_subtree(const KEY& box, index_type start_idx) const;
+		bool split_node(index_type node_idx, index_type& new_idx);
+		void insert_recursive(index_type node_idx, const KEY& box, const T& val);
+		void query_recursive(index_type nodeIndex, const KEY& box, std::vector<T>& results) const;
 	};
 
 
+	template<class T, class K, class S> 
+	using rtree_dsp_t = rtree<T, K, S, data_storage_policy<S::MAX_ENTRIES>>;
+
 	template<class T, class K> 
-	using rtree_q = rtree<T, K, quadratic_split_policy<64>>;
+	using rtree_q = rtree_dsp_t<T, K, quadratic_split_policy<3>>;
 }
 
 #include "ds_rtree.hpp"
