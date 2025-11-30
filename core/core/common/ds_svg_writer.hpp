@@ -35,7 +35,7 @@ namespace ds {
 			file << "</svg>";
 		}
 
-		void add_rect(const auto& r, std::string color = "red") {
+		void add_rect(const auto& r, std::string color = "red", uint32_t id = 0) {
 			double px1 = r.min.x * width;
 			double py1 = r.min.y * height;
 			double px2 = r.max.x * width;
@@ -46,7 +46,7 @@ namespace ds {
 			double w = std::abs(px1 - px2);
 			double h = std::abs(py1 - py2);
 
-			file << "<rect x=\"" << x << "\" y=\"" << y << "\" "
+			file << "<rect id=\"" << id << "\" x = \"" << x << "\" y=\"" << y << "\" "
 				<< "width=\"" << w << "\" height=\"" << h << "\" "
 				<< "fill=\"none\" stroke=\"" << color << "\" stroke-width=\"1\" "
 				<< "opacity=\"0.7\" />\n";

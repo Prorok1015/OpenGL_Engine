@@ -47,6 +47,7 @@ namespace ds { // TODO: move to common
 		auto ext = box.max - box.min;
 		return static_cast<double>(ext.x) * static_cast<double>(ext.y);
 	}
+
 }
 
 void
@@ -446,8 +447,8 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 
-	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/fsb/scene.gltf"), "backpack");
-	imported_models_list.push_back(res::tag::make("objects/fsb/scene.gltf"));
+	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
+	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
 	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
 }
 
@@ -767,7 +768,6 @@ bool editor::editor_system::show_toolbar()
 			for (auto& v : rtree.data) {
 				query_svg.add_rect(v.box, v.is_leaf ? "green" : "red");
 			}
-
 		});
 	}
 
@@ -1294,7 +1294,8 @@ bool editor::editor_system::show_textures()
 				std::vector<uint32_t> res;
 				{
 					ds::scoped_timer timer("rtree point query time");
-					res = rtree.query(mouse_pos);
+					ds::bbox rect{ mouse_pos, mouse_pos };
+					res = rtree.query(rect);
 				}
 
 				for (const auto& triangle : res) {
@@ -1355,13 +1356,20 @@ bool editor::editor_system::show_textures()
 
 				std::vector<uint32_t> res;
 				{
+					//ds::svg_writer query_svg{ "rtree_query_visualization2.svg", 2048, 2048 };
 					ds::scoped_timer timer("rtree rect query time");
-					res = rtree.query(rect);
+					res = rtree.query(rect/*, [&](const auto& node, uint32_t depth) {
+						query_svg.add_rect(node.box, "red", depth);
+						if (node.is_leaf) {
+							for (const auto& e : node.entries) {
+								if (ds::intersects(e.box, rect))
+									query_svg.add_rect(e.box, "green", depth);
+							}
+						}
+
+					}*/);
 				}
 
-				/*for (const auto& triangle : res) {
-					std::cout << "Triangle in rect: " << triangle << std::endl;
-				}*/
 				ecs::registry.clear<scn::hightlight_component>();
 				recurcive_set(res, backpackent, picker_color);
 				is_dragging = false;
