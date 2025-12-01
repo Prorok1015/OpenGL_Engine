@@ -84,6 +84,15 @@ namespace rnd::driver
 		}
 
 		uint32_t get_stride() const { return m_Stride; }
+		uint32_t get_element_offset(const std::string& name) const
+		{
+			for (const auto& element : m_Elements)
+			{
+				if (element.Name == name)
+					return static_cast<uint32_t>(element.Offset);
+			}
+			return 0;
+		}
 		const std::vector<BufferElement>& get_elements() const { return m_Elements; }
 
 		std::vector<BufferElement>::iterator begin() { return m_Elements.begin(); }
