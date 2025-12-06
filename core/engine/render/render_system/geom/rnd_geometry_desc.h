@@ -3,6 +3,7 @@
 #include "desc_base.hpp"
 #include "rnd_buffer_layout.h"
 #include "ds_rtree.h"
+#include "ds_bbox.hpp"
 
 namespace rnd
 {

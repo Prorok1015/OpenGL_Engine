@@ -76,18 +76,12 @@ namespace std
 {
 	void tag_invoke(json::value_from_tag, json::value& jv, const std::byte& c)
 	{
-		//auto val = reinterpret_cast<const unsigned int&>(c);
-		auto val = unsigned(c);
+		uint64_t val = 0ull + (unsigned char)c;
 		jv = val;
 	}
 
 	std::byte tag_invoke(json::value_to_tag<std::byte>, const json::value& jv)
 	{
-		if (jv.is_int64()) {
-			auto val = jv.as_int64();
-			return std::byte(val);
-		}
-
 		if (jv.is_uint64()) {
 			auto val = jv.as_uint64();
 			return std::byte(val);

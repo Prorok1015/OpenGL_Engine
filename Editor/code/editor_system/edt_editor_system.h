@@ -179,7 +179,7 @@ namespace editor
 		edt::file_dialog file_dialog;
 		
 		std::shared_ptr< scn::skinning_prototype_desc> backpack;
-		ds::rtree_q<ds::triangle, ds::bbox> rtree;
+		ds::rtree_q<uint32_t, ds::bbox> rtree;
 		desc::desc_system& desc_system;
 	};
 

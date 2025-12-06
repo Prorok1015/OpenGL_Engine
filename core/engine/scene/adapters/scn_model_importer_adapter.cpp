@@ -256,8 +256,6 @@ void store_data(std::vector<std::byte>& data, const auto& value)
 	std::memcpy((data.data() + begin), &value, sizeof(value));
 }
 
-ds::svg_writer writer("mesh_bounds.svg", 2048, 2048);
-
 void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh, rnd::geometry_desc& geometry, res::tag tag)
 {
 	glm::ivec2 vertex_range{ geometry.vertices.size() / geometry.layout.get_stride(), 0 };
@@ -267,6 +265,7 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 
 	for (unsigned int i = 0; i < mesh->mNumVertices; i++)
 	{
+		ASSERT_MSG(0 == geometry.layout.get_element_offset("position"), "Offset position mismatch");
 		size_t stride = sizeof(glm::vec3);
 		size_t begin = geometry.vertices.size();
 
@@ -274,18 +273,22 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 		// normals
 		if (mesh->HasNormals())
 		{
+			ASSERT_MSG(stride == geometry.layout.get_element_offset("normal"), "Offset normal mismatch");
 			stride += sizeof(glm::vec3);
 			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
 		}
 		// texture coordinates
 		if (mesh->HasTextureCoords(0))
 		{
+			ASSERT_MSG(stride == geometry.layout.get_element_offset("uv"), "Offset uv mismatch");
 			stride += sizeof(glm::vec2);
 			store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
 		}
 
 		if (mesh->HasTangentsAndBitangents())
 		{
+			ASSERT_MSG(stride == geometry.layout.get_element_offset("tangent"), "Offset tangent mismatch");
+			ASSERT_MSG((stride + sizeof(glm::vec3)) == geometry.layout.get_element_offset("bitangent"), "Offset bitangent mismatch");
 			stride += sizeof(glm::vec3) * 2;
 			store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
 			store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
@@ -304,23 +307,6 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 		}
 
 		for (unsigned int j = 0; j < face.mNumIndices; j += 3) {
-			struct bbox1
-			{
-				struct { glm::vec2 min; glm::vec2 max; };
-
-				bbox1()
-					: min{ std::numeric_limits<float>::max() }
-					, max{ std::numeric_limits<float>::lowest() }
-				{
-				}
-
-				void expand(const glm::vec2& point)
-				{
-					min = glm::min(min, point);
-					max = glm::max(max, point);
-				}
-			};
-
 			auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
 			auto uv2 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 1]]);
 			auto uv3 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 2]]);
@@ -329,8 +315,6 @@ void process_mesh(const aiScene* scene, const aiMesh* mesh, json::object& jsmesh
 			ds::expand(box, uv1);
 			ds::expand(box, uv2);
 			ds::expand(box, uv3);
-
-			writer.add_rect(box);
 
 			geometry.bounds.push_back({ box, geometry.bounds.size() });
 		}

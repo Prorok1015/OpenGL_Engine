@@ -9,7 +9,6 @@
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
 #include "ecs_common_system.h"
-#include "scn_primitives.h"
 #include "eng_transform_3d.hpp"
 #include "wnd_window_system.h"
 #include "scn_material_component.hpp"
@@ -25,30 +24,6 @@
 #include "adapters/scn_model_importer_adapter.h"
 
 #include "common/ds_svg_writer.hpp"
-
-namespace ds { // TODO: move to common
-
-	point2d center(const bbox& box) { return (box.min + box.max) * 0.5f; }
-	void expand(bbox& box, const bbox& other) {
-		box.min = glm::min(box.min, other.min);
-		box.max = glm::max(box.max, other.max);
-	}
-	void expand(bbox& box, const point2d& p) {
-		box.min = glm::min(box.min, p);
-		box.max = glm::max(box.max, p);
-	}
-	bool intersects(const bbox& a, const bbox& b) {
-		return (a.min.x <= b.max.x && a.max.x >= b.min.x) && (a.min.y <= b.max.y && a.max.y >= b.min.y);
-	}
-	bool contains(const bbox& a, const point2d& p) {
-		return p.x >= a.min.x && p.x <= a.max.x && p.y >= a.min.y && p.y <= a.max.y;
-	}
-	double area(const bbox& box) {
-		auto ext = box.max - box.min;
-		return static_cast<double>(ext.x) * static_cast<double>(ext.y);
-	}
-
-}
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -734,34 +709,6 @@ bool editor::editor_system::show_toolbar()
 		std::call_once(f, [&]() {
 			backpackent = backpack->load_prototype(ecs::registry, world_anchor);
 			auto geom = backpack->geometry;
-			int uvs_offset = 0;
-			for (const auto& elem : geom->layout.get_elements())
-			{
-				if (elem.Name == "uv") {
-					uvs_offset = elem.Offset;
-					break;
-				}
-			}
-			ds::svg_writer svg_writer("rtree_visualization.svg", 2048, 2048);
-
-			std::vector<std::pair<ds::bbox, ds::triangle>> items;
-			int stride = geom->layout.get_stride();
-			for (int i = 0, triangle = 0; i < geom->indices.size(); i += 3)
-			{
-				uint32_t i0 = geom->indices[i + 0];
-				uint32_t i1 = geom->indices[i + 1];
-				uint32_t i2 = geom->indices[i + 2];
-				auto &v0 = *(glm::vec2*)(geom->vertices.data() + i0 * stride + uvs_offset);
-				auto &v1 = *(glm::vec2*)(geom->vertices.data() + i1 * stride + uvs_offset);
-				auto &v2 = *(glm::vec2*)(geom->vertices.data() + i2 * stride + uvs_offset);
-				ds::bbox box;
-				expand(box, v0);
-				expand(box, v1);
-				expand(box, v2);
-				items.push_back({ box, triangle++ });
-				svg_writer.add_rect(box, triangle % 2 ? "blue" : "red");
-			}
-
 			rtree = geom->rtree;
 
 			ds::svg_writer query_svg("rtree_query_visualization.svg", 2048, 2048);
