@@ -29,9 +29,6 @@ namespace gs
 	private:
 		desc::desc_system& desc_system;
 		std::shared_ptr<scn::renderer_3d> renderer;
-
-		std::shared_ptr<inp::input_manager> input;
-		std::shared_ptr<ecs::flow_input_manager> ecs_input;
 	};
 
 	game_system& get_system();

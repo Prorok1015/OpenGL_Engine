@@ -24,11 +24,14 @@ void engine::engine_module::initialize_services(ds::app_data_storage& data)
 	data.require<app::app_loop_service_interface>().init(data);
 
 	auto input_service = data.require_shared<inp::input_system>();
+	auto& win_service = data.require<wnd::window_system>();
 	if (input_service) {
-		auto& win_service = data.require<wnd::window_system>();
 		win_service.add_event_listener(input_service);
-		// hack! to init window size in input system
-		input_service->on_window_resize(win_service.get_active_window().get(), win_service.get_active_window()->get_size().x, win_service.get_active_window()->get_size().y);
+		// HACK! first init window size in input system. 
+		// Because window created in window system constructor before input system subscribe
+		auto window = win_service.get_active_window();
+		input_service->on_window_created(window.get());
+		input_service->on_window_resize(window.get(), window->get_size().x, window->get_size().y);
 	}
 }
 

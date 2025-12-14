@@ -1,8 +1,8 @@
 #pragma once
-#include "resources/res_resource_picture.h"
-#include "wnd_window_context.h"
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
+#include "wnd_window_context.h"
+#include "ds_fixed_vector.hpp"
 
 struct GLFWwindow;
 
@@ -13,6 +13,20 @@ namespace wnd
 		DISABLE,
 		NORMAL,
 		HIDDEN
+	};
+
+	struct window_image
+	{
+		enum class TYPE : uint8_t
+		{
+			ICON,
+			LOGO
+		};
+
+		unsigned char* pixels = nullptr;
+		int width = 0;
+		int height = 0;
+		TYPE type = TYPE::LOGO;
 	};
 
 	class window
@@ -45,7 +59,7 @@ namespace wnd
 
 		glm::ivec2 get_backbuffer_size() const;
 
-		void set_logo(res::ImageRef logo, res::ImageRef logo_small = nullptr);
+		void set_logo(const ds::fixed_vector<window_image, 2>& images);
 		void set_title(std::string_view title);
 		void set_vsync(bool v);
 

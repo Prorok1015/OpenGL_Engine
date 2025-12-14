@@ -43,10 +43,6 @@ std::unique_ptr<scn::skinning_manager> skin_manager;
 gs::game_system::game_system(desc::desc_system& d)
 	: desc_system(d)
 {
-	//input = std::make_shared<inp::input_manager>();
-	ecs_input = std::make_shared<ecs::flow_input_manager>();
-	//inp::get_system().activate_manager(input);
-	inp::get_system().activate_manager(ecs_input);
 
 	skin_manager = std::make_unique<scn::skinning_manager>(d);
 

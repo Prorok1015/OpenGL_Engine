@@ -3,17 +3,23 @@
 #include "rnd_gl_render_context.h"
 #include "gui_gl_backend.h"
 #include "wnd_input_keycode_convert.hpp"
+#include "wnd_keyboard_event.hpp"
 #include <filesystem>
 
-wnd::window_system* p_wnd_system = nullptr;
-
-wnd::window_system& wnd::get_system()
-{
-    ASSERT_MSG(p_wnd_system, "Window system is nullptr!");
-    return *p_wnd_system;
-}
-
 namespace {
+    void window_focus_callback(GLFWwindow* window, int focused)
+    {
+        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window({ window })) {
+            for (auto listener : wndCreator.get_event_listeners()) {
+                if (focused)
+                    listener->on_window_focus_gained(win.get());
+                else 
+                    listener->on_window_focus_lost(win.get());
+            }
+        }
+    }
+
     void window_size_callback(GLFWwindow* window, int width, int height) {
 		auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
@@ -31,7 +37,11 @@ namespace {
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
 
+			wnd::input_event evt;
+			evt.construct_payload<wnd::scroll_move_event>(glm::vec2{ (float)xoffset, (float)yoffset });
+
             for (auto& listener : wndCreator.get_event_listeners()) {
+				listener->on_input_event(win.get(), evt);
                 listener->on_mouse_scrolled(win.get(), xoffset, yoffset);
             }
         }
@@ -39,8 +49,13 @@ namespace {
 
     void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
+
+		wnd::input_event evt;
+        evt.construct_payload<wnd::cursor_move_event>(glm::vec2{ xpos, ypos });
+
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
+				listener->on_input_event(win.get(), evt);
                 listener->on_mouse_moved(win.get(), xpos, ypos);
             }
         }
@@ -56,10 +71,14 @@ namespace {
             return;
         }
 
+		wnd::input_event evt;
+		evt.construct_payload<wnd::mouse_click_event>(key_optional.value(), wnd::convert::to_action(action));
+
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
                 listener->on_mouse_button_input(win.get(), key_optional.value(), wnd::convert::to_action(action), mode);
+				listener->on_input_event(win.get(), evt);
             }
         }
     }
@@ -74,9 +93,13 @@ namespace {
             return;
         }
 
+		wnd::input_event evt;
+		evt.construct_payload<wnd::keyboard_event>(key_optional.value(), wnd::convert::to_action(action));
+
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
+				listener->on_input_event(win.get(), evt);
                 listener->on_key_input(win.get(), key_optional.value(), scancode, wnd::convert::to_action(action), mode);
             }
         }
@@ -145,6 +168,7 @@ std::shared_ptr<wnd::window> wnd::window_system::make_window()
     glfwSetWindowRefreshCallback(wid, window_refresh_callback);
     glfwSetWindowPosCallback(wid, window_move_callback);
     glfwSetWindowSizeCallback(wid, window_size_callback);
+    glfwSetWindowFocusCallback(wid, window_focus_callback);
 
     for (auto& listener : get_event_listeners()) {
         listener->on_window_created(shared_window.get());

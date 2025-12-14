@@ -16,6 +16,7 @@ namespace inp
 
 		virtual void on_notify_listeners(float dt) = 0;
 		virtual bool on_handle_event(const input_event& evt) = 0;
+		virtual bool on_handle_event(wnd::handle win, const wnd::input_event& evt) = 0;
 
 		int get_priority() const { return priority; }
 

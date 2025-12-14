@@ -7,7 +7,7 @@ namespace gui
 	class gui_system
 	{
 	public:
-		gui_system();
+		gui_system(gui::imgui_backend_interface* backend);
 		~gui_system();
 
 		gui_system(gui_system&&) = delete;
@@ -46,6 +46,10 @@ namespace gui
 
 		bool show_stats();
 		bool show_demo();
+
+		gui::imgui_backend_interface* get_backend_interface() const {
+			return backend;
+		}
 	private:
 		bool is_show = true;
 		bool is_input_enabled = true;
@@ -53,6 +57,7 @@ namespace gui
 
 		menu_layout_manager layout;
 		menu_layout_manager dbg_layout;
+		gui::imgui_backend_interface* backend = nullptr;
 	};
 
 	gui_system& get_system();

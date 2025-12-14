@@ -5,7 +5,7 @@ void inp::MouseDevice::on_mouse_move(double xpos, double ypos)
 {
 	prev = cur;
 	cur = { xpos, ypos };
-	//egLOG("", "Mouse pos x:{}, y:{}; prev x:{}, y:{}", position.x, position.y, prev_position.x, prev_position.y);
+	//egLOG("mouse", "Mouse pos x:{}, y:{}; prev x:{}, y:{}", cur.x, cur.y, prev.x, prev.y);
 }
 
 void inp::MouseDevice::on_mouse_scroll(double xpos, double ypos)

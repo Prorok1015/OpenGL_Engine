@@ -2,7 +2,7 @@
 #include "common.h"
 #include <imgui.h>
 
-namespace editor::imgui {
+namespace edt::imgui {
 	namespace details {
 		static struct internal_config {
 			glm::vec2 pos{ 0 };

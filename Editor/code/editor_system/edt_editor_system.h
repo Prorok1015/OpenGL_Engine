@@ -1,10 +1,10 @@
 #pragma once
 #include "common.h"
 #include "scn_model.h"
-#include "scn_camera_controller_system.h"
 #include "ecs_entity.h"
 #include "rnd_render_system.h"
 #include "edt_input_manager.h"
+#include "ecs_input_manager.h"
 #include "edt_file_dialog.h"
 
 #include "desc_base.hpp"
@@ -12,7 +12,7 @@
 #include "scn_skinning_prototype_desc.h"
 #include "common/ds_rtree.h"
 
-namespace editor
+namespace edt
 {
 	class editor_test_field_desc : public desc::desc_base
 	{
@@ -104,6 +104,9 @@ namespace editor
 	public:
 		editor_system(desc::desc_system& desc_system);
 		~editor_system();
+
+		void init(inp::input_system& inp_sys);
+
 		bool show_toolbar();
 		bool show_file_dialog();
 
@@ -176,6 +179,7 @@ namespace editor
 		bool is_show_web = true;
 		bool is_inited_ecs_test = false;
 		std::shared_ptr<edt::input_manager> input;
+		std::shared_ptr<ecs::flow_input_manager> ecs_input;
 		edt::file_dialog file_dialog;
 		
 		std::shared_ptr< scn::skinning_prototype_desc> backpack;
@@ -185,5 +189,3 @@ namespace editor
 
 
 }
-
-namespace edt = editor;

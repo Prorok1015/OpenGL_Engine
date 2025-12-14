@@ -107,7 +107,7 @@ pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nul
         os << "\n";
 }
 
-editor::editor_system::editor_system(desc::desc_system& desc_system_)
+edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	: desc_system(desc_system_)
 {
 	GUI_REG_LAMBDA("File/Import...", [this] { return show_file_dialog(); });
@@ -168,15 +168,12 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	GUI_SET_ITEM_CHECKED("Editor/Draw web", is_show_web);
 
 
-	auto logo = res::get_system().require_resource<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
-	wnd::get_system().get_active_window()->set_logo(logo);
-	wnd::get_system().get_active_window()->set_title("Snake Editor");
+	
 	gui::get_system().set_show_title_bar(true);
 	gui::get_system().set_show_title_bar_dbg(true);
 
 	input = std::make_shared<edt::input_manager>();
-	input->unblock_layer_once();
-	inp::get_system().activate_manager(input);
+	ecs_input = std::make_shared<ecs::flow_input_manager>();
 
 	file_dialog.set_current_path(res::get_system().get_resources_path());
 
@@ -272,7 +269,7 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 
 	//  camera
 	{
-		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), wnd::get_system().get_active_window()->get_size() };
+		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), glm::ivec2{1080, 720} };
 		glm::vec3 rotation(0);
 		rotation.x = -glm::radians(45.0f);
 		auto ecs_entity = ecs::registry.create();
@@ -427,9 +424,16 @@ editor::editor_system::editor_system(desc::desc_system& desc_system_)
 	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
 }
 
-editor::editor_system::~editor_system()
+edt::editor_system::~editor_system()
 {
-	inp::get_system().deactivate_manager(input);
+	//inp::get_system().deactivate_manager(input);
+}
+
+void edt::editor_system::init(inp::input_system& inp_sys)
+{
+	//inp_sys.activate_manager(input);
+	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
+	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 }
 
 void mark_node_for_animation_stop(entt::entity ent)
@@ -459,7 +463,7 @@ void mark_node_for_animation(entt::entity ent, const res::animation& animation)
 	}
 }
 
-void editor::editor_system::show_tree_items(ecs::entity ent)
+void edt::editor_system::show_tree_items(ecs::entity ent)
 {
 	std::string obj_idx = std::to_string((int)ent);
 	std::string name = "Node##" + obj_idx;
@@ -698,7 +702,7 @@ void editor::editor_system::show_tree_items(ecs::entity ent)
 	}
 }
 
-bool editor::editor_system::show_toolbar()
+bool edt::editor_system::show_toolbar()
 {
 	ImGuiIO& io = ImGui::GetIO();
 
@@ -910,7 +914,7 @@ bool editor::editor_system::show_toolbar()
 	return is_open;
 }
 
-bool editor::editor_system::show_file_dialog()
+bool edt::editor_system::show_file_dialog()
 {
 	bool is_open = true;
 	file_dialog.clear_extension_filters();
@@ -931,7 +935,7 @@ bool editor::editor_system::show_file_dialog()
     return is_open;
 }
 
-bool editor::editor_system::show_web()
+bool edt::editor_system::show_web()
 {
 	const bool cur_is_show = GUI_IS_ITEM_CHECKED("Editor/Draw web");
 	if (!cur_is_show && cur_is_show != is_show_web) {
@@ -947,7 +951,7 @@ bool editor::editor_system::show_web()
 	return true;
 }
 
-bool editor::editor_system::show_scene()
+bool edt::editor_system::show_scene()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Scene", &is_open))
@@ -979,7 +983,7 @@ bool editor::editor_system::show_scene()
 	return is_open;
 }
 
-bool editor::editor_system::show_ecs_test()
+bool edt::editor_system::show_ecs_test()
 {
 	init_ecs_test();
 
@@ -1012,7 +1016,7 @@ bool editor::editor_system::show_ecs_test()
 	return is_open;
 }
 
-bool editor::editor_system::show_materials()
+bool edt::editor_system::show_materials()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Materials", &is_open, ImGuiWindowFlags_NoScrollbar))
@@ -1157,7 +1161,7 @@ void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent, const ds:
 	}
 }
 
-bool editor::editor_system::show_textures()
+bool edt::editor_system::show_textures()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Textures", &is_open))
@@ -1199,7 +1203,7 @@ bool editor::editor_system::show_textures()
 			glm::vec2 pos{ pos1.x + max_name * 10, pos1.y };
 			glm::vec2 contentRegionAvailable{ windowSize.x - max_name * 10, windowSize.y };
 			auto texture = rnd::get_system().get_texture_manager().find(list_tags[item_current]);
-			auto* backend = wnd::get_system().get_gui_backend();
+			auto* backend = gui::get_system().get_backend_interface();
 
 			ImGuiStyle& style = ImGui::GetStyle();
 			ImVec4 original_button_color = style.Colors[ImGuiCol_Button];
@@ -1335,7 +1339,7 @@ bool editor::editor_system::show_textures()
 	return is_open;
 }
 
-bool editor::editor_system::show_clear_cache()
+bool edt::editor_system::show_clear_cache()
 {
 	bool is_open = true;
 	if (ImGui::Begin("Caches", &is_open))
@@ -1352,12 +1356,12 @@ bool editor::editor_system::show_clear_cache()
 	return is_open;
 }
 
-void editor::editor_system::draw_manipulator(const glm::vec2& pos, const glm::vec2& size)
+void edt::editor_system::draw_manipulator(const glm::vec2& pos, const glm::vec2& size)
 {
 
 }
 
-void editor::editor_system::draw_gizmo(const glm::vec2& start, const glm::vec2& size, const glm::mat4& view, const glm::mat4& proj)
+void edt::editor_system::draw_gizmo(const glm::vec2& start, const glm::vec2& size, const glm::mat4& view, const glm::mat4& proj)
 {
 	glm::vec2 guizmo_size{ 120, 120 };
 	glm::vec2 guizmo_start = start + size - guizmo_size;
@@ -1371,10 +1375,10 @@ void editor::editor_system::draw_gizmo(const glm::vec2& start, const glm::vec2& 
 	ImGui::EndChild();
 }
 
-void editor::editor_system::draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable)
+void edt::editor_system::draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable)
 {
 	auto texture = rnd::get_system().get_texture_manager().find(res::tag(res::tag::memory, "__color_scene_rt"));
-	auto* backend = wnd::get_system().get_gui_backend();
+	auto* backend = gui::get_system().get_backend_interface();
 
 	ImGuiStyle& style = ImGui::GetStyle();
 	ImVec4 original_button_color = style.Colors[ImGuiCol_Button];
@@ -1388,6 +1392,10 @@ void editor::editor_system::draw_scene_image(const glm::vec2& pos, const glm::ve
 
 	ImGui::SetCursorScreenPos(ImVec2{ pos.x, pos.y });
 	ImGui::ImageButton("##ViewScene", backend->get_imgui_texture_from_texture(texture), ImVec2{ contentRegionAvailable.x, contentRegionAvailable.y }, ImVec2(0, 1), ImVec2(1, 0));
+	
+	glm::ivec4 rect = { pos, pos + contentRegionAvailable };
+	ecs_input->set_input_area(glm::zero<glm::ivec4>(), true);
+	input->set_input_area(rect, true);
 
 	style.Colors[ImGuiCol_Button] = original_button_color;
 	style.Colors[ImGuiCol_ButtonHovered] = original_button_hovered_color;
@@ -1395,11 +1403,11 @@ void editor::editor_system::draw_scene_image(const glm::vec2& pos, const glm::ve
 	style.FramePadding = original_padding;
 	// let input to go to game
 	if (ImGui::IsItemHovered()) {
-		input->unblock_layer_once();
+		ecs_input->set_input_area(rect);
 	}
 }
 
-bool editor::editor_system::init_ecs_test()
+bool edt::editor_system::init_ecs_test()
 {
 	if (is_inited_ecs_test) {
 		return true;

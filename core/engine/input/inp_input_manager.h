@@ -71,6 +71,8 @@ namespace inp
 			return handler;
 		}
 
+		virtual bool on_handle_event(wnd::handle, const wnd::input_event&) override { return false; }
+
 	private:
 		Commands& get_commands(const std::string_view layer_name) { return layers[std::string(layer_name)]; }
 		Commands& get_active_commands() { return get_commands(get_active_layer()); }

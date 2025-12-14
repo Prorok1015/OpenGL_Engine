@@ -1,4 +1,5 @@
 #include "edt_input_manager.h"
+#include "wnd_keyboard_event.hpp"
 
 namespace {
     struct event_visitor
@@ -21,31 +22,50 @@ namespace {
 
 bool edt::input_manager::on_handle_event(const inp::input_event& evt)
 {
-    if (!is_block_keyaction_down || !is_block_keyaction_down_once) {
-        return false;
-    }
-
     return std::visit(event_visitor(), evt);
 }
 
 void edt::input_manager::on_notify_listeners(float dt)
 {
-    is_block_keyaction_down_once = true;
-
     notify_listeners(dt);
 }
 
-void edt::input_manager::unblock_layer_once()
+bool edt::input_manager::on_handle_event(wnd::handle, const wnd::input_event& evt)
 {
-    is_block_keyaction_down_once = false;
-}
+    if (auto* c_evt = evt.get_payload<wnd::cursor_move_event>()) {
+        last_cursor_pos = c_evt->pos;
+    }
 
-void edt::input_manager::block_layer()
-{
-    is_block_keyaction_down = true;
-}
+	if (input_area != glm::zero<glm::ivec4>()) {
+	    bool is_handling = true;
 
-void edt::input_manager::unblock_layer()
-{
-    is_block_keyaction_down = false;
+        if (invert) {
+            is_handling = (last_cursor_pos.x < input_area.x || last_cursor_pos.x > input_area.z ||
+                            last_cursor_pos.y < input_area.y || last_cursor_pos.y > input_area.w);
+        } else {
+            is_handling = (last_cursor_pos.x >= input_area.x && last_cursor_pos.x <= input_area.z &&
+                            last_cursor_pos.y >= input_area.y && last_cursor_pos.y <= input_area.w);
+        }
+
+        if (!is_handling) {
+            return false;
+        }
+    }
+
+    //if (!is_block_keyaction_down || !is_block_keyaction_down_once) {
+    //    return false;
+    //}
+
+    if (auto* mouse_clk = evt.get_payload<wnd::mouse_click_event>()) {
+		return mouse_clk->action == wnd::KEY_ACTION::DOWN;
+	}
+	else if (auto* kbd_evt = evt.get_payload<wnd::keyboard_event>()) {
+		return kbd_evt->action == wnd::KEY_ACTION::DOWN;
+	}
+	else if (auto* c_evt = evt.get_payload<wnd::cursor_move_event>()) {
+		last_cursor_pos = c_evt->pos;
+	}
+
+    return false;
+    //return true;
 }

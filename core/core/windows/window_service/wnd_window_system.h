@@ -1,9 +1,9 @@
 #pragma once
-#include "wnd_window.h"
-#include "rnd_render_contex_interface.h"
-#include "gui_backend_interface.h"
-#include "wnd_window_event_listener_interface.h"
 #include <string>
+#include "wnd_window.h"
+#include "wnd_window_event_listener_interface.h"
+#include "rnd_render_contex_interface.h"
+#include "gui_backend_interface.h" // TODO: construct in app data storage
 
 namespace wnd
 {
@@ -51,6 +51,4 @@ namespace wnd
 		window::short_id active_window;
 		wnd::context::header title;
 	};
-	
-	window_system& get_system();
 }

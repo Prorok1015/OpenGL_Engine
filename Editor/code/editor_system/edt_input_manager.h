@@ -3,7 +3,7 @@
 #include "inp_input_actions.h"
 #include "inp_input_manager.h"
 
-namespace editor
+namespace edt
 {
 	class input_manager : public inp::input_manager
 	{
@@ -15,23 +15,24 @@ namespace editor
 		}
 
 		virtual ~input_manager() override {};
+
+		// TODO: delete legacy
 		virtual bool on_handle_event(const inp::input_event&) override;
-
 		virtual void on_notify_listeners(float dt) override;
+		//
 
-		// there is unblock input to next levels for one frame.
-		// by default input manager is blocking 
-		// keyboard_event, mouse_click_event with KEY_ACTION::DOWN and scroll_move_event
-		void unblock_layer_once();
-		void block_layer();
-		void unblock_layer();
+		virtual bool on_handle_event(wnd::handle, const wnd::input_event&) override;
+
+		void set_input_area(const glm::ivec4& rect, bool invert = false) {
+			input_area = rect;
+			this->invert = invert;
+		}
 
 	private:
-		bool is_block_keyaction_down = true;
-		bool is_block_keyaction_down_once = true;
+		glm::vec2 last_cursor_pos = { 0.f, 0.f };
+		glm::ivec4 input_area = {};
+		bool invert = false;
 	};
 
 	using InputManagerRef = std::shared_ptr<input_manager>;
 }
-
-namespace edt = editor;

@@ -11,13 +11,14 @@ gui::gui_system& gui::get_system()
 	return *p_gui_system;
 }
 
-gui::gui_system::gui_system()
+gui::gui_system::gui_system(gui::imgui_backend_interface* backend_)
+	: backend(backend_)
 {
 	registrate_menu_dbg("Debug/Imgui demo window", [this] { return show_demo(); });
 	registrate_menu_dbg("Debug/Statistic", [this] {  return show_stats(); });
 	set_menu_checked_dbg("Degub/Statistic", true);
 
-	renderer = std::make_shared<gui::renderer>(wnd::get_system().get_gui_backend());
+	renderer = std::make_shared<gui::renderer>(backend);
 	renderer->render_event += [this] { render_menues(); };
 	rnd::get_system().activate_renderer(renderer);
 }

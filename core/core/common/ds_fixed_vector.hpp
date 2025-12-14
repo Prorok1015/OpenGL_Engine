@@ -232,7 +232,7 @@ namespace ds
         }
 
     private:
-        alignas(T) std::byte storage_[N * sizeof(T)];
+        alignas(T) std::byte storage_[N * sizeof(T)]{};
         size_type size_ = 0;
 
         template <typename U>

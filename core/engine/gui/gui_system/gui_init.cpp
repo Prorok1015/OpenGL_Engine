@@ -1,11 +1,13 @@
 #include "gui_init.h"
 #include "gui_system.h"
+#include "wnd_window_system.h"
 
 extern gui::gui_system* p_gui_system;
 
 void components::gui_init(ds::app_data_storage& data)
 {
-	p_gui_system = &data.construct<gui::gui_system>();
+	auto& wnd_system = data.require<wnd::window_system>();// TODO: get backend directly from data storage
+	p_gui_system = &data.construct<gui::gui_system>(wnd_system.get_gui_backend());
 }
 
 void components::gui_term(ds::app_data_storage& data)

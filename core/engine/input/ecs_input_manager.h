@@ -21,7 +21,17 @@ namespace ecs
 			return input_event;
 		}
 
+		virtual bool on_handle_event(wnd::handle win, const wnd::input_event& evt) override;
+
+		void set_input_area(const glm::ivec4& rect, bool invert = false) {
+			input_area = rect;
+			this->invert = invert;
+		}
+
 	private:
 		ecs::entity input_event = entt::null;
+		glm::vec2 last_cursor_pos = { 0.f, 0.f };
+		glm::ivec4 input_area = {};
+		bool invert = false;
 	};
 }

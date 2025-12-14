@@ -1,6 +1,6 @@
 #include "common.h"
 
-namespace editor {
+namespace edt {
 
 class file_dialog {
 public:
@@ -39,5 +39,3 @@ private:
     SELECT_MODE select_mode;
 };
 }
-
-namespace edt = editor;

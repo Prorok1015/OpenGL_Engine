@@ -85,27 +85,52 @@ void wnd::window::set_title(std::string_view title)
     glfwSetWindowTitle(ctx.get_id(), title.data());
 }
 
-void wnd::window::set_logo(res::ImageRef logo, res::ImageRef logo_small)
+void wnd::window::set_logo(const ds::fixed_vector<wnd::window_image, 2>& images_)
 {
-    if (logo->channels() != 4) {
+    if (images_.empty()) {
         egLOG("window/logo", "Logo should be rgba image");
         return;
     }
 
-    GLFWimage images[2];
-    images[0].pixels = logo->data();
-    images[0].width = logo->size().x;
-    images[0].height = logo->size().y;
+    GLFWimage images[2]{};
+	for (const auto& img : images_) {
+        switch (img.type)
+        {
+            case wnd::window_image::TYPE::LOGO:
+            {
+                if (img.width <= 0 || img.height <= 0 || !img.pixels) {
+                    egLOG("window/logo", "Logo image is invalid");
+                    continue;
+                }
+                if (img.width % 4 != 0) {
+                    egLOG("window/logo", "Logo image width should be multiple of 4");
+                    continue;
+                }
+                images[0].pixels = img.pixels;
+                images[0].width = img.width;
+                images[0].height = img.height;
+            }
+			break;
 
-    if (logo_small) {
-        images[1].pixels = logo_small->data();
-        images[1].width = logo_small->size().x;
-        images[1].height = logo_small->size().y;
-        glfwSetWindowIcon(ctx.get_id(), 2, images);
-        return;
+            case wnd::window_image::TYPE::ICON:
+            {
+                if (img.width <= 0 || img.height <= 0 || !img.pixels) {
+                    egLOG("window/logo", "Logo small image is invalid");
+                    continue;
+                }
+                if (img.width % 4 != 0) {
+                    egLOG("window/logo", "Logo small image width should be multiple of 4");
+                    continue;
+                }
+                images[1].pixels = img.pixels;
+                images[1].width = img.width;
+                images[1].height = img.height;
+            }
+            break;
+        }
     }
 
-    glfwSetWindowIcon(ctx.get_id(), 1, images);
+    glfwSetWindowIcon(ctx.get_id(), images_.size(), images);
 }
 
 glm::ivec2 wnd::window::get_backbuffer_size() const
