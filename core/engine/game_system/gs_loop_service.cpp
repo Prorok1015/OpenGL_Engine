@@ -44,8 +44,6 @@ void gs::gs_loop_service::on_step(ds::app_data_storage& storage)
 
 	window_system_ref.pool_events();
 
-	inp::get_system().process_input(delta_time);
-
 	// window->update(context);
 
 	for (auto&& system : job_graph) {

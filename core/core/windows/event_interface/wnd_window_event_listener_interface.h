@@ -8,11 +8,6 @@ namespace wnd
 	public:
 		virtual ~window_listener_interface() = default;
 		virtual void on_input_event(wnd::handle win, const wnd::input_event& evt) = 0;
-		virtual void on_key_input(wnd::handle win, wnd::KEYBOARD_BUTTONS key, int scancode, wnd::KEY_ACTION action,int mods) = 0;
-		virtual void on_char_input(wnd::handle win, wchar_t codepoint) = 0;
-		virtual void on_mouse_button_input(wnd::handle win, wnd::MOUSE_BUTTONS button, wnd::KEY_ACTION action, int mods) = 0;
-		virtual void on_mouse_moved(wnd::handle win, double xpos, double ypos) = 0;
-		virtual void on_mouse_scrolled(wnd::handle win, double xoffset, double yoffset) = 0;
 		virtual void on_window_focus_gained(wnd::handle win) = 0;
 		virtual void on_window_focus_lost(wnd::handle win) = 0;
 		virtual void on_window_resize(wnd::handle win, int width, int height) = 0;

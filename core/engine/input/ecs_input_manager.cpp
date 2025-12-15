@@ -21,17 +21,6 @@ private:
 	ecs::flow_input_manager& mng;
 };
 
-void ecs::flow_input_manager::on_notify_listeners(float dt)
-{
-
-}
-
-bool ecs::flow_input_manager::on_handle_event(const inp::input_event& evt)
-{
-	std::visit(event_visitor(*this), evt);
-	return false;
-}
-
 bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const wnd::input_event& evt)
 {
 	if (input_area != glm::zero<glm::ivec4>()) {

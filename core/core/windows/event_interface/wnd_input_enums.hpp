@@ -1,5 +1,5 @@
 #pragma once
-
+#include "common.h"
 namespace wnd
 {
 	enum class KEY_ACTION : uint8_t

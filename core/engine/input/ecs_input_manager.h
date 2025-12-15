@@ -1,4 +1,5 @@
 #pragma once
+#include "common.h"
 #include "inp_input_manager_base.h"
 #include "ecs_common_system.h"
 #include "ecs_entity.h"
@@ -9,10 +10,7 @@ namespace ecs
 	{
 	public:
 		flow_input_manager()
-			: inp::input_manager_base("ecs", 10) {}
-
-		virtual void on_notify_listeners(float dt) override;
-		virtual bool on_handle_event(const inp::input_event&) override;
+			: inp::input_manager_base("ecs") {}
 
 		ecs::entity get_empty_entity() {
 			if (!ecs::registry.valid(input_event)) {

@@ -3,14 +3,13 @@
 #include "application.h"
 #include "gs_game_system.h"
 #include "res_system.h"
-#include "resources/res_resource_picture.h"
 #include "rnd_render_system.h"
 #include "scn_primitives.h"
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
 #include "ecs_common_system.h"
 #include "eng_transform_3d.hpp"
-#include "wnd_window_system.h"
+#include "inp_input_system.h"
 #include "scn_material_component.hpp"
 #include "edt_input_manager.h"
 #include "edt_guizmo.hpp"
@@ -426,12 +425,10 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 
 edt::editor_system::~editor_system()
 {
-	//inp::get_system().deactivate_manager(input);
 }
 
 void edt::editor_system::init(inp::input_system& inp_sys)
 {
-	//inp_sys.activate_manager(input);
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 }

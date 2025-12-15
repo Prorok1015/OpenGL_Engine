@@ -1,29 +1,14 @@
 #include "gs_game_system.h"
 
-#include <inp_input_manager.h>
-#include <inp_input_system.h>
-
-#include <scn_primitives.h>
 #include <scn_model.h>
-
-#include <wnd_window_system.h>
-#include "res_system.h"
 
 #include <rnd_render_system.h>
 #include <ecs_common_system.h>
 
-#include <timer.hpp>
-#include <glm/gtc/random.hpp>
-#include "ecs_system.h"
-#include "scn_camera_component.hpp"
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
-#include "scn_material_component.hpp"
 #include "scn_skinning_manager.h"
 #include "ecs_component.h"
-
-#include "geom/rnd_geometry_desc.h"
-#include "texture/rnd_texture_desc.h"
 
 gs::game_system* p_game_system = nullptr;
 extern int gMaxTexture2DSize;
@@ -66,8 +51,6 @@ void gs::game_system::end_ecs_frame()
 {
 	const auto ents = ecs::registry.view<ecs::input_changed_event_component>();
 	ecs::registry.destroy(ents.begin(), ents.end());
-
-	inp::get_system().mouse.clear_scroll();
 }
 
 void gs::game_system::reload_shaders()

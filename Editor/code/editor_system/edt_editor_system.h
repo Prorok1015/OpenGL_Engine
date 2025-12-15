@@ -5,6 +5,7 @@
 #include "rnd_render_system.h"
 #include "edt_input_manager.h"
 #include "ecs_input_manager.h"
+#include "inp_input_system.h"
 #include "edt_file_dialog.h"
 
 #include "desc_base.hpp"

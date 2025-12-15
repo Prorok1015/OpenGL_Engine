@@ -1,25 +1,18 @@
 #pragma once
 #include "common.h"
-#include "inp_input_actions.h"
-#include "inp_input_manager.h"
+#include "inp_input_manager_base.h"
 
 namespace edt
 {
-	class input_manager : public inp::input_manager
+	class input_manager : public inp::input_manager_base
 	{
 	public:
 		input_manager()
-			: inp::input_manager("editor", 0) 
+			: inp::input_manager_base("editor") 
 		{
-			set_active_layer("editor");
 		}
 
-		virtual ~input_manager() override {};
-
-		// TODO: delete legacy
-		virtual bool on_handle_event(const inp::input_event&) override;
-		virtual void on_notify_listeners(float dt) override;
-		//
+		virtual ~input_manager() override = default;
 
 		virtual bool on_handle_event(wnd::handle, const wnd::input_event&) override;
 
@@ -33,6 +26,4 @@ namespace edt
 		glm::ivec4 input_area = {};
 		bool invert = false;
 	};
-
-	using InputManagerRef = std::shared_ptr<input_manager>;
 }

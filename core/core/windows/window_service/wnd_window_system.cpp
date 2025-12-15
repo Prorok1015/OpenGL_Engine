@@ -27,10 +27,6 @@ namespace {
                 listener->on_window_resize(win.get(), width, height);
             }
         }
-
-        if (auto wnd = wndCreator.find_window({ window })) {
-            wnd->on_resize_window(width, height);
-        }
     }
 
     void device_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
@@ -42,7 +38,6 @@ namespace {
 
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
-                listener->on_mouse_scrolled(win.get(), xoffset, yoffset);
             }
         }
     }
@@ -56,7 +51,6 @@ namespace {
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
-                listener->on_mouse_moved(win.get(), xpos, ypos);
             }
         }
     }
@@ -77,7 +71,6 @@ namespace {
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_mouse_button_input(win.get(), key_optional.value(), wnd::convert::to_action(action), mode);
 				listener->on_input_event(win.get(), evt);
             }
         }
@@ -100,7 +93,6 @@ namespace {
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
-                listener->on_key_input(win.get(), key_optional.value(), scancode, wnd::convert::to_action(action), mode);
             }
         }
    }
