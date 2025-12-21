@@ -156,13 +156,16 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	GUI_REG_LAMBDA("Editor/Test ECS window", [this] { return show_ecs_test(); });
 	GUI_SET_ITEM_CHECKED("Editor/Test ECS window", false);
 
+	GUI_REG_LAMBDA("Editor/Crossing Game", [this] { return show_crossing_game_window(); });
+	GUI_SET_ITEM_CHECKED("Editor/Crossing Game", true);
+
 	GUI_REG_LAMBDA_IMPLICIT("EDITOR/IMPL/SHOW_WEP", [this] { return show_web(); });
 
 	GUI_REG_LAMBDA("Editor/Clear", [this] { return show_clear_cache(); });
 	GUI_REG_LAMBDA("Window/Materials", [this] { return show_materials(); });
-	GUI_SET_ITEM_CHECKED("Window/Materials", true);
+	GUI_SET_ITEM_CHECKED("Window/Materials", false);
 	GUI_REG_LAMBDA("Window/Textures", [this] { return show_textures(); });
-	GUI_SET_ITEM_CHECKED("Window/Textures", true);
+	GUI_SET_ITEM_CHECKED("Window/Textures", false);
 	GUI_REG_LAMBDA("Editor/Draw web", [this] { return true; });
 	GUI_SET_ITEM_CHECKED("Editor/Draw web", is_show_web);
 
@@ -418,9 +421,9 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
 	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
 
-	desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
+	/*desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
 	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
-	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");
+	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");*/
 }
 
 edt::editor_system::~editor_system()
@@ -930,6 +933,364 @@ bool edt::editor_system::show_file_dialog()
 		}
 	}
     return is_open;
+}
+
+bool edt::editor_system::show_crossing_game_window()
+{
+	bool is_open = true;
+	ImGui::SetNextWindowSize(ImVec2(700, 700), ImGuiCond_FirstUseEver);
+	if (ImGui::Begin("Crossing Game", &is_open, ImGuiWindowFlags_MenuBar ))
+	{
+		static bool is_menu_bar_click = false;
+		static float time = 0.f;
+		static bool is_enable_auto_pause = false;
+		static bool is_open_reset_dialog = false;
+		static bool is_enable_ai_player = false;
+		constexpr glm::vec2 grid_size = glm::vec2(100.f, 100.f);
+		ImGui::BeginMenuBar();
+		if (ImGui::Button("R"))
+			is_open_reset_dialog = true;
+
+		if (ImGui::Button(crossingcontext.is_paused ? ">" : "II")) {
+			crossingcontext.is_paused = !crossingcontext.is_paused;
+		}
+		ImGui::SetNextItemWidth(100.f);
+		ImGui::SliderFloat("aircraft speed", &crossingcontext.hint.aircraft_speed, 0.1f, glm::length(grid_size));
+		ImGui::SetNextItemWidth(100.f);
+		ImGui::SliderFloat("ships speed", &crossingcontext.hint.ship_speed, 0.1f, glm::length(grid_size));
+		ImGui::Checkbox("Auto Pause", &is_enable_auto_pause);
+		ImGui::Checkbox("Enable AI", &is_enable_ai_player);
+		ImGui::Text("Time: %.2fs", time + ImGui::GetIO().DeltaTime);
+		ImGui::EndMenuBar();
+
+		if (is_open_reset_dialog) {
+			ImGui::OpenPopup("Is reset game?");
+			is_menu_bar_click = is_open_reset_dialog;
+		}
+		ImVec2 windowPos = ImGui::GetWindowPos();
+		glm::vec2 window_pos = glm::vec2(windowPos.x, windowPos.y);
+		ImVec2 windowSize = ImGui::GetWindowSize();
+		glm::vec2 window_size = glm::vec2(windowSize.x, windowSize.y);
+		ImVec2 contentRegionAvailable = ImGui::GetContentRegionAvail();
+		glm::vec2 content_size = glm::vec2(contentRegionAvailable.x, contentRegionAvailable.y);
+
+		ImGui::SetNextWindowSize(ImVec2(300, 50), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(window_pos.x + content_size.x / 2 - 150, window_pos.y + content_size.y / 2 - 50));
+		if (ImGui::BeginPopupModal("Is reset game?", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration))
+		{
+			ImGui::Text("Are you sure you want to reset the game?");
+			ImVec2 pos = ImGui::GetCursorScreenPos();
+			ImVec2 content_size = ImGui::GetContentRegionAvail();
+			ImGui::SetCursorScreenPos(ImVec2(pos.x + content_size.x / 2 - 50, pos.y + content_size.y - 15));
+			if (ImGui::Button("Yes")) {
+				crossingcontext = crossing_context{};
+				time = 0.f;
+				ImGui::CloseCurrentPopup();
+				is_open_reset_dialog = false;
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("No")) {
+				ImGui::CloseCurrentPopup();
+				is_open_reset_dialog = false;
+			}
+			ImGui::EndPopup();
+		}
+		
+		if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+			glm::vec2 header = { window_size.x, 16 }; 
+			glm::vec2 mouse_pos = glm::vec2(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y);
+			mouse_pos -= window_pos;
+			if (mouse_pos.x > 0 &&
+				mouse_pos.y > 0 &&
+				mouse_pos.x < header.x && 
+				mouse_pos.y < header.y) {
+				
+				glm::vec2 delta = { ImGui::GetIO().MouseDelta.x, ImGui::GetIO().MouseDelta.y };
+				ImGui::SetWindowPos(ImVec2(window_pos.x + delta.x, window_pos.y + delta.y));
+				is_menu_bar_click = true;
+			}
+			glm::vec2 menubar = { window_size.x, 50 };
+			if (mouse_pos.x > 0 &&
+				mouse_pos.y > 0 &&
+				mouse_pos.x < menubar.x &&
+				mouse_pos.y < menubar.y) {
+				is_menu_bar_click = true;
+			}
+		}
+
+		ImVec2 pos = ImGui::GetCursorScreenPos();
+		glm::vec2 content_pos = glm::vec2(pos.x, pos.y);
+		const glm::vec2 grid_to_window = grid_size / content_size;
+
+		const auto GridToWindow = [&](const glm::vec2& grid_pos) -> glm::vec2 {
+			return content_pos + grid_pos / grid_to_window;
+			};
+		const auto DrawShip = [&](const glm::vec2& ship_pos, const glm::vec2& dir, ImColor color) {
+			glm::vec2 w_ship_pos = GridToWindow(ship_pos);
+			float radius = glm::length(content_size) * 0.01f;
+
+			glm::vec2 front = dir * radius;
+			glm::vec2 left = glm::vec2(-front.y, front.x) * 0.3f;
+			glm::vec2 right = glm::vec2(front.y, -front.x) * 0.3f;
+
+			ImVec2 p0 = ImVec2(w_ship_pos.x + front.x, w_ship_pos.y + front.y);
+			ImVec2 p1 = ImVec2(w_ship_pos.x + left.x, w_ship_pos.y + left.y);
+			ImVec2 p2 = ImVec2(w_ship_pos.x + right.x, w_ship_pos.y + right.y);
+			ImGui::GetWindowDrawList()->AddTriangleFilled(p0, p1, p2, color);
+
+			front *= 2.f;
+
+			ImVec2 q1 = p1;
+			ImVec2 q2 = p2;
+			ImVec2 q3 = ImVec2(p2.x - front.x, p2.y - front.y);
+			ImVec2 q4 = ImVec2(p1.x - front.x, p1.y - front.y);
+			ImGui::GetWindowDrawList()->AddQuadFilled(q1, q2, q3, q4, color);
+		};
+
+		const auto DrawAircraft = [&](const glm::vec2& aircraft_pos, const glm::vec2& dir, ImColor color) {
+			float radius = glm::length(content_size) * 0.01f;
+			glm::vec2 front_world = dir * radius;
+			glm::vec2 front = GridToWindow(aircraft_pos) + front_world;
+			glm::vec2 left = GridToWindow(aircraft_pos) + glm::vec2(-front_world.y, front_world.x) - front_world * 2;
+			glm::vec2 right = GridToWindow(aircraft_pos) + glm::vec2(front_world.y, -front_world.x) - front_world * 2;
+
+			ImVec2 p0 = ImVec2(front.x, front.y);
+			ImVec2 p1 = ImVec2(left.x, left.y);
+			ImVec2 p2 = ImVec2(right.x, right.y);
+			ImGui::GetWindowDrawList()->AddTriangleFilled(p0, p1, p2, color);
+			};
+
+		const auto calculate_future_ship_position = [&](const glm::vec2& ship, const glm::vec2& ship_speed, const glm::vec2& aircraft, float aircraft_speed){
+
+			glm::vec2 future_ship = ship;
+			glm::vec2 dxy = aircraft - ship;
+			glm::vec2 vxy = ship_speed;
+
+			glm::vec2 b = 2 * vxy * dxy;
+			glm::vec3 a = glm::pow2(glm::vec3(vxy, aircraft_speed));
+			glm::vec2 c = glm::pow2(dxy);
+
+			float D = (pow(b.x + b.y, 2) - 4 * (a.x + a.y - a.z) * (c.x + c.y));
+			if (D > 0) {
+				float t = (-(b.x + b.y) + sqrt(D)) / (2 * (a.x + a.y - a.z));
+				future_ship = ship + vxy * -t;
+			}
+
+			return std::pair{ future_ship, D > 0 };
+		};
+
+		auto& ships = crossingcontext.ships;
+		auto& ships_dirs = crossingcontext.ships_dirs;
+		auto& alive_ships = crossingcontext.alive_ships;
+		if (!crossingcontext.is_initialized)
+		{
+			for (int i = 0; i < ships.capacity(); ++i) {
+				ships.push_back(glm::linearRand(glm::zero<glm::vec2>(), grid_size));
+			}
+			for (int i = 0; i < ships_dirs.capacity(); ++i) {
+				ships_dirs.push_back(glm::circularRand(1.f));
+			}
+			for (int i = 0; i < alive_ships.capacity(); ++i) {
+				alive_ships.push_back(true);
+			}
+			crossingcontext.is_initialized = true;
+		}
+
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			ImVec2(content_pos.x, content_pos.y),
+			ImVec2(content_pos.x + content_size.x, content_pos.y + content_size.y),
+			ImColor(0, 0, 255, 200)
+		);
+
+		for (int i = 0; i <= grid_size.x; i += 5) {
+			glm::vec2 p1 = GridToWindow(glm::vec2(i, 0.f));
+			glm::vec2 p2 = GridToWindow(glm::vec2(i, grid_size.y));
+			ImGui::GetWindowDrawList()->AddLine(
+				ImVec2(p1.x, p1.y),
+				ImVec2(p2.x, p2.y),
+				ImColor(255, 255, 255, 200), 0.5f
+			);
+			for (int j = i + 1; j < i + 5; ++j) {
+				glm::vec2 p1 = GridToWindow(glm::vec2(j, 0.f));
+				glm::vec2 p2 = GridToWindow(glm::vec2(j, grid_size.y));
+				ImGui::GetWindowDrawList()->AddLine(
+					ImVec2(p1.x, p1.y),
+					ImVec2(p2.x, p2.y),
+					ImColor(255, 255, 255, 150), 0.2f
+				);
+			}
+		}
+
+		for (int i = 0; i <= grid_size.y; i += 5) {
+			glm::vec2 p1 = GridToWindow(glm::vec2(0.f, i));
+			glm::vec2 p2 = GridToWindow(glm::vec2(grid_size.x, i));
+			ImGui::GetWindowDrawList()->AddLine(
+				ImVec2(p1.x, p1.y),
+				ImVec2(p2.x, p2.y),
+				ImColor(255, 255, 255, 200), 0.5f
+			);
+			for (int j = i + 1; j < i + 5; ++j) {
+				glm::vec2 p1 = GridToWindow(glm::vec2(0.f, j));
+				glm::vec2 p2 = GridToWindow(glm::vec2(grid_size.x, j));
+				ImGui::GetWindowDrawList()->AddLine(
+					ImVec2(p1.x, p1.y),
+					ImVec2(p2.x, p2.y),
+					ImColor(255, 255, 255, 150), 0.2f
+				);
+			}
+		}
+
+		for (const auto& ship : ships) {
+			if (!alive_ships[&ship - &ships[0]]) continue;
+			DrawShip(ship, ships_dirs[&ship - &ships[0]], ImColor(255, 0, 0, 255));
+		}
+
+		static bool is_dragging = false;
+		glm::vec2 mouse_pos = glm::vec2(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y) - content_pos;
+
+		if ((!is_enable_ai_player || !crossingcontext.is_aircraft_placed) && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !is_menu_bar_click)
+		{
+			if (!is_dragging && !crossingcontext.is_aircraft_placed)
+				crossingcontext.aircraft = mouse_pos * grid_to_window;
+			crossingcontext.aircraft_dir = glm::normalize((mouse_pos * grid_to_window + 0.00001f) - crossingcontext.aircraft);
+			crossingcontext.is_aircraft_placed = true;
+			is_dragging = !is_enable_ai_player;
+		}
+
+		static glm::vec2 move_to = glm::zero<glm::vec2>();
+
+		if (is_dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+		{
+			is_dragging = false;
+			move_to = mouse_pos * grid_to_window;
+		}
+
+		if (is_enable_auto_pause && glm::length(crossingcontext.aircraft - move_to) < 0.1f)
+		{
+			crossingcontext.is_paused = true;
+		}
+
+		if (crossingcontext.is_aircraft_placed)
+		{
+			if (is_dragging)
+			{
+				DrawAircraft(mouse_pos* grid_to_window, crossingcontext.aircraft_dir, ImColor(255, 255, 0, 255));
+				glm::vec2 aircraft_window = GridToWindow(crossingcontext.aircraft);
+			}			
+			DrawAircraft(crossingcontext.aircraft, crossingcontext.aircraft_dir, ImColor(0, 255, 0, 255));
+		}
+
+		if (!crossingcontext.is_paused)
+		{
+			const float speed = crossingcontext.hint.aircraft_speed;
+			crossingcontext.aircraft += crossingcontext.aircraft_dir * speed * ImGui::GetIO().DeltaTime;
+			for (auto& ship : ships) {
+				if (!alive_ships[&ship - &ships[0]]) continue;
+				ship += ships_dirs[&ship - &ships[0]] * crossingcontext.hint.ship_speed * ImGui::GetIO().DeltaTime;
+				// Wrap around the grid
+				if (ship.x < 0.f) ship.x += grid_size.x;
+				if (ship.x > grid_size.x) ship.x -= grid_size.x;
+				if (ship.y < 0.f) ship.y += grid_size.y;
+				if (ship.y > grid_size.y) ship.y -= grid_size.y;
+			}
+
+			// Check for collisions with ships
+			for (const auto& ship : ships) {
+				int idx = &ship - &ships[0];
+				if (!alive_ships[idx]) continue;
+				float length = glm::length(crossingcontext.aircraft - ship);
+				if (length < 1.f) {
+					alive_ships[&ship - &ships[0]] = false;
+					break;
+				}
+			}
+			// Wrap around the grid
+			if (crossingcontext.aircraft.x < 0.f) crossingcontext.aircraft.x += grid_size.x;
+			if (crossingcontext.aircraft.x > grid_size.x) crossingcontext.aircraft.x -= grid_size.x;
+			if (crossingcontext.aircraft.y < 0.f) crossingcontext.aircraft.y += grid_size.y;
+			if (crossingcontext.aircraft.y > grid_size.y) crossingcontext.aircraft.y -= grid_size.y;
+		}
+		if (crossingcontext.is_aircraft_placed) {
+			crossingcontext.hint.nearest_ship_distance = std::numeric_limits<float>::max();
+			crossingcontext.hint.nearest_ship_index = -1;
+			for (const auto& ship : ships) {
+				int idx = &ship - &ships[0];
+				if (!alive_ships[idx]) continue;
+				float length = glm::length(crossingcontext.aircraft - ship);
+				if (length < crossingcontext.hint.nearest_ship_distance) {
+					crossingcontext.hint.nearest_ship_distance = length;
+					crossingcontext.hint.nearest_ship_index = idx;
+				}
+			}
+
+			if (crossingcontext.hint.nearest_ship_index != -1) {
+				ImGui::Text("Nearest ship index: %d", crossingcontext.hint.nearest_ship_index);
+				ImGui::Text("Distance to nearest ship: %.2f", crossingcontext.hint.nearest_ship_distance);
+			} else {
+				ImGui::Text("No nearby ships.");
+			}
+
+			if (crossingcontext.hint.nearest_ship_index != -1) {
+				const auto& hint = crossingcontext.hint;
+				const auto& aircraft_pos = crossingcontext.aircraft;
+				const auto& nearest_ship = ships[hint.nearest_ship_index];
+				const auto& nearest_ship_dir = ships_dirs[hint.nearest_ship_index];
+
+				auto [future_ship, exist] = calculate_future_ship_position( 
+					nearest_ship, hint.ship_speed * nearest_ship_dir, aircraft_pos, hint.aircraft_speed);
+
+				if (exist && is_enable_ai_player)
+				{
+					crossingcontext.aircraft_dir = glm::normalize(future_ship - aircraft_pos);
+					move_to = future_ship;
+				}
+
+				if (future_ship.x < 0.f) future_ship.x += grid_size.x;
+				if (future_ship.x > grid_size.x) future_ship.x -= grid_size.x;
+				if (future_ship.y < 0.f) future_ship.y += grid_size.y;
+				if (future_ship.y > grid_size.y) future_ship.y -= grid_size.y;
+
+				ImVec2 aircraft = ImVec2(
+					GridToWindow(crossingcontext.aircraft).x,
+					GridToWindow(crossingcontext.aircraft).y
+				);
+				
+				if (exist) {
+					DrawShip(future_ship, nearest_ship_dir, ImColor(255, 255, 255, 154));
+				}
+
+				if (crossingcontext.is_paused) {
+					glm::vec2 speed2d = glm::vec2{ hint.aircraft_speed, hint.aircraft_speed } / grid_to_window;
+					glm::vec2 shipspeed2d = glm::vec2{ hint.ship_speed, hint.ship_speed } / grid_to_window;
+
+					ImGui::GetWindowDrawList()->AddCircle(aircraft, glm::length(crossingcontext.aircraft_dir * speed2d), ImColor(255, 255, 0, 255));
+				}
+			}
+		} else {
+			ImGui::Text("Aircraft doesn't placed.");
+		}
+
+		if (!crossingcontext.is_paused) {
+			time += ImGui::GetIO().DeltaTime;
+		}
+		else {
+			glm::vec2 pause_pos = grid_size;
+			pause_pos.x -= grid_size.x / 2;
+			pause_pos.y -= 5;
+			pause_pos = GridToWindow(pause_pos);
+			ImGui::SetCursorScreenPos(ImVec2(pause_pos.x, pause_pos.y));
+			ImGui::SetWindowFontScale(glm::length((glm::vec2(0.2, 0.2) / grid_to_window)));
+			ImGui::TextColored(ImColor(255, 0, 0), "PAUSE");
+			ImGui::SetWindowFontScale(1);
+		}
+
+		
+
+		is_menu_bar_click = false;
+
+	}
+	ImGui::End();
+	return is_open;
 }
 
 bool edt::editor_system::show_web()

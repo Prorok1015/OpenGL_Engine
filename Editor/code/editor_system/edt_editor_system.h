@@ -99,6 +99,25 @@ namespace edt
 		std::shared_ptr<editor_test_field_desc> field;
 	};
 
+	struct crossing_context
+	{
+		struct direction_hint
+		{
+			float aircraft_speed = 10.f;
+			float ship_speed = 5.f;
+			int nearest_ship_index = -1;
+			float nearest_ship_distance = std::numeric_limits<float>::max();
+		};
+		direction_hint hint;
+		glm::vec2 aircraft;
+		glm::vec2 aircraft_dir;
+		ds::fixed_vector<glm::vec2, 10> ships;
+		ds::fixed_vector<glm::vec2, 10> ships_dirs;
+		ds::fixed_vector<bool, 10> alive_ships;
+		bool is_initialized = false;
+		bool is_paused = true;
+		bool is_aircraft_placed = false;
+	};
 
 	class editor_system
 	{
@@ -112,6 +131,8 @@ namespace edt
 		bool show_file_dialog();
 
 		//TODO change to renderer
+
+		bool show_crossing_game_window();
 		bool show_web();
 		bool show_scene();
 		bool show_ecs_test();
@@ -186,6 +207,7 @@ namespace edt
 		std::shared_ptr< scn::skinning_prototype_desc> backpack;
 		ds::rtree_q<uint32_t, ds::bbox> rtree;
 		desc::desc_system& desc_system;
+		crossing_context crossingcontext;
 	};
 
 
