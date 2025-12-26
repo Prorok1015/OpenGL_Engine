@@ -1,10 +1,10 @@
 #pragma once
-#include "eng_module_interface.h"
+#include "app_module_interface.h"
 #include <vector>
 #include <memory>
 #include <ranges>
 
-namespace modules {
+namespace app::modules {
 
     class module_loader {
     private:

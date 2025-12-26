@@ -1,11 +1,11 @@
 #pragma once
-#include "eng_module_interface.h"
+#include "app_module_interface.h"
 
 namespace core
 {
-	using MODULE_PRIORITY = modules::MODULE_PRIORITY;
+	using MODULE_PRIORITY = app::modules::MODULE_PRIORITY;
 
-	class core_module : public modules::module_interface
+	class core_module : public app::modules::module_interface
 	{
 	public:
 		virtual void register_services(ds::app_data_storage& data) override;

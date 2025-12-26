@@ -1,9 +1,9 @@
 #include "edt_input_manager.h"
-#include "wnd_keyboard_event.hpp"
+#include "inp_keyboard_event.hpp"
 
-bool edt::input_manager::on_handle_event(wnd::handle, const wnd::input_event& evt)
+bool edt::input_manager::on_handle_event(wnd::handle, const inp::input_event& evt)
 {
-    if (auto* c_evt = evt.get_payload<wnd::cursor_move_event>()) {
+    if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
         last_cursor_pos = c_evt->pos;
     }
 
@@ -23,13 +23,13 @@ bool edt::input_manager::on_handle_event(wnd::handle, const wnd::input_event& ev
         }
     }
 
-    if (auto* mouse_clk = evt.get_payload<wnd::mouse_click_event>()) {
-		return mouse_clk->action == wnd::KEY_ACTION::DOWN;
+    if (auto* mouse_clk = evt.get_payload<core::inp::mouse_click_event>()) {
+		return mouse_clk->action == core::inp::KEY_ACTION::DOWN;
 	}
-	else if (auto* kbd_evt = evt.get_payload<wnd::keyboard_event>()) {
-		return kbd_evt->action == wnd::KEY_ACTION::DOWN;
+	else if (auto* kbd_evt = evt.get_payload<core::inp::keyboard_event>()) {
+		return kbd_evt->action == core::inp::KEY_ACTION::DOWN;
 	}
-	else if (auto* c_evt = evt.get_payload<wnd::cursor_move_event>()) {
+	else if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
 		last_cursor_pos = c_evt->pos;
 	}
 

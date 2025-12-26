@@ -1,10 +1,7 @@
 #pragma once
-#include <ds_store.hpp>
+#include "ds/ds_store.hpp"
 
-namespace components {
-
+namespace core::resource {
 	void resource_init(ds::app_data_storage& data);
 	void resource_term(ds::app_data_storage& data);
 }
-
-namespace com = components;

@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
-#include "inp_events.hpp"
+#include "inp_input_event.hpp"
+#include "wnd_window_event_listener_interface.h"
 
 namespace inp
 {
@@ -12,7 +13,7 @@ namespace inp
 		{
 		}
 		virtual ~input_manager_base() {}
-		virtual bool on_handle_event(wnd::handle win, const wnd::input_event& evt) = 0;
+		virtual bool on_handle_event(wnd::handle win, const inp::input_event& evt) = 0;
 	private:
 		std::string name = "unknown";
 	};

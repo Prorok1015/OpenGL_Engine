@@ -2,7 +2,7 @@
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
 #include "wnd_window_context.h"
-#include "ds_fixed_vector.hpp"
+#include "ds/ds_fixed_vector.hpp"
 
 struct GLFWwindow;
 

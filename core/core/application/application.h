@@ -1,6 +1,6 @@
 #pragma once
-#include <common.h>
-#include "ds_store.hpp"
+#include "common.h"
+#include "ds/ds_store.hpp"
 
 namespace app
 {
@@ -18,6 +18,4 @@ namespace app
 		virtual int run(ds::app_data_storage& storage);
 	private:
 	};
-
-	application& get_app_system();
 }

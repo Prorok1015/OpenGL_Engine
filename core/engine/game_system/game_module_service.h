@@ -1,7 +1,7 @@
 #pragma once
-#include "game_module_service_interface.h"
+#include "app_module_service_interface.h"
 #include "game_module.h"
-#include "resources/resource_system.h"
+#include "resource_system.h"
 #include <iostream> 
 
 namespace modules {

@@ -1,6 +1,6 @@
 #include <application.h>
-#include <eng_module_loader.hpp>
-#include <ds_store.hpp>
+#include <app_module_loader.hpp>
+#include <ds/ds_store.hpp>
 #include <core_module.h>
 #include <engine_module.h>
 
@@ -8,7 +8,7 @@ int main()
 {
 	ds::app_data_storage app_storage;
 
-	modules::module_loader module_loader;
+	app::modules::module_loader module_loader;
 	module_loader.add_module(std::make_unique<core::core_module>());
 	module_loader.add_module(std::make_unique<engine::engine_module>());
 

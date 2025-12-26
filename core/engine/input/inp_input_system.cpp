@@ -1,7 +1,7 @@
 #include "inp_input_system.h"
 #include <engine_log.h>
 
-void inp::input_system::on_input_event(wnd::handle win, const wnd::input_event& event)
+void inp::input_system::on_input_event(wnd::handle win, const inp::input_event& event)
 {
 	for (auto& listener : m_consumable_listeners) {
 			if (listener->on_handle_event(win, event)) {

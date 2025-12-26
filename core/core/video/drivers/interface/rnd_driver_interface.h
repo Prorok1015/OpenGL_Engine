@@ -4,7 +4,7 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <unordered_map>
-#include "ds_bit_frags.hpp"
+#include "ds/ds_bit_frags.hpp"
 
 namespace rnd::driver
 {

@@ -14,7 +14,7 @@
 
 #include "scn_assimp_resource_system_wrapper.h"
 
-#include "ds_svg_writer.hpp"
+#include "ds/ds_svg_writer.hpp"
 
 void process_model(const aiScene* scene, json::object& data, res::tag tag);
 

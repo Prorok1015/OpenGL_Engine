@@ -22,7 +22,7 @@
 #include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
 
-#include "common/ds_svg_writer.hpp"
+#include "ds/ds_svg_writer.hpp"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -737,7 +737,6 @@ bool edt::editor_system::show_toolbar()
 			}
 		}
 
-		auto& app = app::get_app_system();
 		ImGui::Text("Common");
 		ImGui::Separator();
 		ImGui::ColorEdit4("Clear color", glm::value_ptr(clear_color));
@@ -1222,7 +1221,7 @@ bool edt::editor_system::show_crossing_game_window()
 					crossingcontext.hint.nearest_ship_index = idx;
 				}
 			}
-
+			
 			if (crossingcontext.hint.nearest_ship_index != -1) {
 				ImGui::Text("Nearest ship index: %d", crossingcontext.hint.nearest_ship_index);
 				ImGui::Text("Distance to nearest ship: %.2f", crossingcontext.hint.nearest_ship_distance);

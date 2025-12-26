@@ -7,5 +7,4 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_GAME_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PUBLIC window::event_interface)
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE ecs PRIVATE resource_system PRIVATE engine_logger)
+target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE ecs PRIVATE window PRIVATE resource_system PRIVATE engine_logger)

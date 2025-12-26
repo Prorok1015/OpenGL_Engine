@@ -1,10 +1,7 @@
 #pragma once
-#include <ds_store.hpp>
+#include "ds/ds_store.hpp"
 
-namespace components {
-
+namespace engine::input {
 	void input_init(ds::app_data_storage& data);
 	void input_term(ds::app_data_storage& data);
 }
-
-namespace com = components;

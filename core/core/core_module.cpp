@@ -1,36 +1,26 @@
 #include "core_module.h"
-#include "res_module_init.h"
-#include "wnd_window_init.h"
-#include "desc_init.h"
-#include "application.h"
-
-extern app::application* p_app_system;
+#include "res_resource_service_init.h"
+#include "wnd_window_service_init.h"
+#include "desc_desc_service_init.h"
+#include "wnd_window_system.h"
 
 void core::core_module::register_services(ds::app_data_storage& data)
 {
-	using namespace components;
-	p_app_system = &data.construct<app::application>();
-
-	//1
-	resource_init(data);// core
-	desc_init(data);// core
-	//2
-	window_init(data);// core
+	resource::resource_init(data);// core
+	desc::desc_init(data);// core
+	window::window_init(data);// core
 }
 
 void core::core_module::initialize_services(ds::app_data_storage& data)
 {
 	// Initialize core services here
+	auto& window = data.require<wnd::window_system>();
+	window.init();
 }
 
 void core::core_module::shutdown_services(ds::app_data_storage& data)
 {
-	using namespace components;
-	window_term(data);
-
-	desc_term(data);
-	resource_term(data);
-
-	data.destruct<app::application>();
-	p_app_system = nullptr;
+	window::window_term(data);
+	desc::desc_term(data);
+	resource::resource_term(data);
 }

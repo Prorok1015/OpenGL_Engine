@@ -1,14 +1,6 @@
 #include "application.h"
 #include "app_loop_service_interface.h"
 
-app::application* p_app_system = nullptr;
-
-app::application& app::get_app_system()
-{
-	ASSERT_MSG(p_app_system, "application system is nullptr!");
-	return *p_app_system;
-}
-
 app::application::application()
 {
 }

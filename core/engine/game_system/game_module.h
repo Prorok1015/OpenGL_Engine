@@ -1,10 +1,10 @@
 #pragma once
-#include "eng_module_interface.h"
+#include "app_module_interface.h"
 
 namespace game
 {
-	using MODULE_PRIORITY = modules::MODULE_PRIORITY;
-	class game_module : public modules::module_interface
+	using MODULE_PRIORITY = app::modules::MODULE_PRIORITY;
+	class game_module : public app::modules::module_interface
 	{
 	public:
 		virtual void register_services(ds::app_data_storage& data) override;

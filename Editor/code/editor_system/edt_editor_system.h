@@ -11,7 +11,7 @@
 #include "desc_base.hpp"
 #include "desc_system.h"
 #include "scn_skinning_prototype_desc.h"
-#include "common/ds_rtree.h"
+#include "ds/ds_rtree.h"
 
 namespace edt
 {

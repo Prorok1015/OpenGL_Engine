@@ -1,7 +1,7 @@
 #include <application.h>
 #include <cfg_api.h>
-#include <eng_module_loader.hpp>
-#include <ds_store.hpp>
+#include <app_module_loader.hpp>
+#include <ds/ds_store.hpp>
 #include <core_module.h>
 #include <engine_module.h>
 #include "code/editor_system/editor_module.h"
@@ -46,7 +46,7 @@ int main(int argc, char* argv[])
 
 	ds::app_data_storage app_storage;
 
-	modules::module_loader module_loader;
+	app::modules::module_loader module_loader;
 	module_loader.add_module(std::make_unique<core::core_module>());
 	module_loader.add_module(std::make_unique<engine::engine_module>());
 	module_loader.add_module(std::make_unique<editor::editor_module>());
@@ -54,7 +54,7 @@ int main(int argc, char* argv[])
 	module_loader.register_all_services(app_storage);
 	module_loader.initialize_all_services(app_storage);
 
-	app::application& myApp = app_storage.require<app::application>();
+	app::application myApp;
 	int result = myApp.run(app_storage);
 
 	module_loader.shutdown_all_services(app_storage);

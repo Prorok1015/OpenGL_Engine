@@ -3,6 +3,7 @@
 #include "inp_input_manager_base.h"
 #include "ecs_common_system.h"
 #include "ecs_entity.h"
+#include "inp_input_event.hpp"
 
 namespace ecs
 {
@@ -19,7 +20,7 @@ namespace ecs
 			return input_event;
 		}
 
-		virtual bool on_handle_event(wnd::handle win, const wnd::input_event& evt) override;
+		virtual bool on_handle_event(wnd::handle win, const inp::input_event& evt) override;
 
 		void set_input_area(const glm::ivec4& rect, bool invert = false) {
 			input_area = rect;

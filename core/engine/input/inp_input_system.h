@@ -1,6 +1,6 @@
 #pragma once
 #include "common.h"
-#include "ds_type_id.hpp"
+#include "ds/ds_type_id.hpp"
 #include "inp_input_manager_base.h"
 #include "inp_input_consumable_listener.h"
 #include "wnd_window_event_listener_interface.h"
@@ -43,7 +43,7 @@ namespace inp
 				}), m_consumable_listeners.end());
 		}
 
-		virtual void on_input_event(wnd::handle win, const wnd::input_event& evt) override;
+		virtual void on_input_event(wnd::handle win, const inp::input_event& evt) override;
 
 		virtual void on_window_focus_gained(wnd::handle win)  override { m_focused_window = win; }
 		virtual void on_window_focus_lost(wnd::handle win)  override { m_focused_window = nullptr; }

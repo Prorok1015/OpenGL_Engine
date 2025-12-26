@@ -1,7 +1,7 @@
 #pragma once
-#include "ds_store.hpp"
+#include "ds/ds_store.hpp"
 
-namespace modules {
+namespace app::modules {
 	enum class MODULE_PRIORITY
 	{
 		CORE,

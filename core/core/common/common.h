@@ -16,7 +16,7 @@
 #include <glm/gtx/quaternion.hpp>
 #include "engine_assert.h"
 #include "eng_performance_timer.hpp"
-#include "ds_event.hpp"
+#include "ds/ds_event.hpp"
 
 using namespace std::string_literals;
 using namespace std::string_view_literals;

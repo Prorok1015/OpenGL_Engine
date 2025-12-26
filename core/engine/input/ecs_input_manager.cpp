@@ -1,7 +1,8 @@
 #include "ecs_input_manager.h"
 #include "ecs_common_system.h"
 #include "ecs_component.h"
-#include "wnd_keyboard_event.hpp"
+#include "inp_keyboard_event.hpp"
+#include "inp_events.hpp"
 
 struct event_visitor
 {
@@ -21,7 +22,7 @@ private:
 	ecs::flow_input_manager& mng;
 };
 
-bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const wnd::input_event& evt)
+bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const inp::input_event& evt)
 {
 	if (input_area != glm::zero<glm::ivec4>()) {
 		bool is_handling = true;
@@ -36,11 +37,11 @@ bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const wnd::input_
 		}
 
 		if (!is_handling) {
-			if (auto* c_evt = evt.get_payload<wnd::cursor_move_event>()) {
+			if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
 				last_cursor_pos = c_evt->pos;
 			}
-			if (const auto* payload = evt.get_payload<wnd::mouse_click_event>()) {
-				if (payload->action == wnd::KEY_ACTION::UP){
+			if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
+				if (payload->action == core::inp::KEY_ACTION::UP){
 					inp::mouse_click_event mouse_evt;
 					mouse_evt.key = payload->key;
 					mouse_evt.action = payload->action;
@@ -51,11 +52,11 @@ bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const wnd::input_
 			return false;
 		}
 	} else if (invert) {
-		if (auto* c_evt = evt.get_payload<wnd::cursor_move_event>()) {
+		if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
 			last_cursor_pos = c_evt->pos;
 		}
-		if (const auto* payload = evt.get_payload<wnd::mouse_click_event>()) {
-			if (payload->action == wnd::KEY_ACTION::UP) {
+		if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
+			if (payload->action == core::inp::KEY_ACTION::UP) {
 				inp::mouse_click_event mouse_evt;
 				mouse_evt.key = payload->key;
 				mouse_evt.action = payload->action;
@@ -68,20 +69,20 @@ bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const wnd::input_
 
 	event_visitor visitor(*this);
 
-	if (const auto* payload = evt.get_payload<wnd::keyboard_event>()) {
+	if (const auto* payload = evt.get_payload<core::inp::keyboard_event>()) {
 		inp::keyboard_event kbd_evt;
 		kbd_evt.key = payload->key;
 		kbd_evt.action = payload->action;
 		visitor(kbd_evt);
 	}
-	else if (const auto* payload = evt.get_payload<wnd::mouse_click_event>()) {
+	else if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
 		inp::mouse_click_event mouse_evt;
 		mouse_evt.key = payload->key;
 		mouse_evt.action = payload->action;
 		mouse_evt.pos = last_cursor_pos;
 		visitor(mouse_evt);
 	}
-	else if (const auto* payload = evt.get_payload<wnd::cursor_move_event>()) {
+	else if (const auto* payload = evt.get_payload<core::inp::cursor_move_event>()) {
 		if (input_area != glm::zero<glm::ivec4>()) {
 			if (payload->pos.x < input_area.x || payload->pos.x > input_area.z ||
 				payload->pos.y < input_area.y || payload->pos.y > input_area.w) {
@@ -99,7 +100,7 @@ bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const wnd::input_
 		last_cursor_pos = payload->pos;
 		visitor(cursor_evt);
 	}
-	else if (const auto* payload = evt.get_payload<wnd::scroll_move_event>()) {
+	else if (const auto* payload = evt.get_payload<core::inp::scroll_move_event>()) {
 		inp::scroll_move_event scroll_evt;
 		scroll_evt.direction = payload->direction;
 		visitor(scroll_evt);

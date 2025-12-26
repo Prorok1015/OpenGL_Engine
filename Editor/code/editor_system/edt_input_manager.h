@@ -14,7 +14,7 @@ namespace edt
 
 		virtual ~input_manager() override = default;
 
-		virtual bool on_handle_event(wnd::handle, const wnd::input_event&) override;
+		virtual bool on_handle_event(wnd::handle, const inp::input_event&) override;
 
 		void set_input_area(const glm::ivec4& rect, bool invert = false) {
 			input_area = rect;

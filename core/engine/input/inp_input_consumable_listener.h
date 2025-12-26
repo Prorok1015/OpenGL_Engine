@@ -7,6 +7,6 @@ namespace inp
 	{
 	public:
 		virtual ~input_event_consumable_listener_interface() = default;
-		virtual bool on_handle_event(wnd::handle win, const wnd::input_event& evt) = 0;
+		virtual bool on_handle_event(wnd::handle win, const inp::input_event& evt) = 0;
 	};
 }

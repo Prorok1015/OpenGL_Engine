@@ -1,6 +1,6 @@
 #pragma once
 #include "common.h"
-#include "ds_fixed_vector.hpp"
+#include "ds/ds_fixed_vector.hpp"
 #include <entt/fwd.hpp>
 
 namespace ecs

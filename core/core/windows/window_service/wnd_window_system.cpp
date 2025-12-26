@@ -3,7 +3,8 @@
 #include "rnd_gl_render_context.h"
 #include "gui_gl_backend.h"
 #include "wnd_input_keycode_convert.hpp"
-#include "wnd_keyboard_event.hpp"
+#include "inp_keyboard_event.hpp"
+#include "inp_input_event.hpp"
 #include <filesystem>
 
 namespace {
@@ -33,8 +34,8 @@ namespace {
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
 
-			wnd::input_event evt;
-			evt.construct_payload<wnd::scroll_move_event>(glm::vec2{ (float)xoffset, (float)yoffset });
+			inp::input_event evt;
+			evt.construct_payload<core::inp::scroll_move_event>(glm::vec2{ (float)xoffset, (float)yoffset });
 
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
@@ -45,8 +46,8 @@ namespace {
     void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
 
-		wnd::input_event evt;
-        evt.construct_payload<wnd::cursor_move_event>(glm::vec2{ xpos, ypos });
+		inp::input_event evt;
+        evt.construct_payload<core::inp::cursor_move_event>(glm::vec2{ xpos, ypos });
 
         if (auto win = wndCreator.find_window({ window })) {
             for (auto& listener : wndCreator.get_event_listeners()) {
@@ -65,8 +66,8 @@ namespace {
             return;
         }
 
-		wnd::input_event evt;
-		evt.construct_payload<wnd::mouse_click_event>(key_optional.value(), wnd::convert::to_action(action));
+		inp::input_event evt;
+		evt.construct_payload<core::inp::mouse_click_event>(key_optional.value(), wnd::convert::to_action(action));
 
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
@@ -86,8 +87,8 @@ namespace {
             return;
         }
 
-		wnd::input_event evt;
-		evt.construct_payload<wnd::keyboard_event>(key_optional.value(), wnd::convert::to_action(action));
+		inp::input_event evt;
+		evt.construct_payload<core::inp::keyboard_event>(key_optional.value(), wnd::convert::to_action(action));
 
         auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window({ window })) {
@@ -129,7 +130,7 @@ wnd::window_system::window_system()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
-    active_window = make_window()->get_id();   
+    active_window = make_window()->get_id();
     context = std::make_unique<rnd::driver::gl::render_context>((GLADloadproc)glfwGetProcAddress);
     imgui_backend = std::make_unique<gui::gl::gl_imgui_backend>();
     imgui_backend->init(active_window.internal_id);
@@ -141,6 +142,11 @@ wnd::window_system::~window_system()
 {
     imgui_backend->shutdown();
     glfwTerminate();
+}
+
+void wnd::window_system::init()
+{
+
 }
 
 std::shared_ptr<wnd::window> wnd::window_system::make_window()

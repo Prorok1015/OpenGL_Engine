@@ -1,9 +1,9 @@
 #pragma once
-#include <string>
 #include "wnd_window.h"
 #include "wnd_window_event_listener_interface.h"
 #include "rnd_render_contex_interface.h"
 #include "gui_backend_interface.h" // TODO: construct in app data storage
+#include <string>
 
 namespace wnd
 {
@@ -16,6 +16,8 @@ namespace wnd
 		window_system& operator= (window_system&&) = delete;
 		window_system(const window_system&) = delete;
 		window_system& operator= (const window_system&) = delete;
+
+		void init();
 
 		std::shared_ptr<window> get_active_window();
 		std::shared_ptr<window> find_window(window::short_id win);
