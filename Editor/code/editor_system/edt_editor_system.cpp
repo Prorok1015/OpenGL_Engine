@@ -21,6 +21,7 @@
 #include "scn_material_desc.h"
 #include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
+#include "resource/resources/res_resource_text.h"
 
 #include "ds/ds_svg_writer.hpp"
 
@@ -147,8 +148,41 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 			//	ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly); 
 			//}
 
-			ImGui::End();
 		}
+		ImGui::End();
+
+		if (ImGui::Begin("Test files Reload", &is_open))
+		{
+			static std::shared_ptr<res::text_resource> test_res;
+			static bool is_show_file_dialog = true;
+
+			if (ImGui::Button("Test Load")) {
+				is_show_file_dialog = true;
+			}
+
+			if (is_show_file_dialog)
+			{
+				if (file_dialog.show("Select text file", &is_show_file_dialog))
+				{
+					auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
+					res::tag test_tag = res::tag::make(relateve.string());
+					test_res = res::get_system().require_resource<res::text_resource>(test_tag);
+					res::get_system().watch(test_tag, this, [this](const res::tag& test_tag){
+						auto updated_res = res::get_system().require_resource<res::text_resource>(test_tag);
+						egLOG("Editor/Test JSON Window", "Resource '{}' reloaded!", test_tag.string());
+						if (updated_res) {
+							test_res = updated_res;
+						}
+					});
+				}
+			}
+			
+			if (test_res) {
+				ImGui::Text("TEXT:%s", test_res->c_str());
+			}
+		}
+		ImGui::End();
+
 		return is_open;
 	});
 	GUI_SET_ITEM_CHECKED("Editor/Test JSON Window", false);
@@ -812,7 +846,7 @@ bool edt::editor_system::show_toolbar()
 				}
 				ImGui::EndCombo();
 			}
-
+			
 			for (const auto ent : ecs::registry.view<scn::camera_component, scn::renderable>()) {
 				eng::transform3d ct{ glm::mat4{1.0} };
 				if (ecs::registry.all_of<scn::local_transform>(ent)) {

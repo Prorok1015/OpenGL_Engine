@@ -6,7 +6,7 @@ file(GLOB_RECURSE SE_RESOURCE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RESOURCE_SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE assimp PRIVATE engine_logger PRIVATE image PUBLIC Boost::json PRIVATE config_system)
+target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE assimp PRIVATE engine_logger PRIVATE image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE config_system)
 
 target_compile_definitions(${PROJECT_NAME} PUBLIC RESOURCE_PATH="${SE_RESOURCE_ABSOLUTE_PATH}") 
 #assimp

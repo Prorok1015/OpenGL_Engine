@@ -4,6 +4,7 @@
 #include <vector>
 #include <unordered_map>
 #include <cstddef>
+#include <filesystem>
 
 namespace res
 {
@@ -33,6 +34,11 @@ namespace res
 		bool is_exist(const tag& tag) const
 		{
 			return memory_.find(tag) != memory_.end();
+		}
+
+		std::optional<res::tag> path_mapper(const std::filesystem::path& path) const
+		{
+			return std::nullopt;
 		}
 
 	private:

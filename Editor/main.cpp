@@ -54,8 +54,8 @@ int main(int argc, char* argv[])
 	module_loader.register_all_services(app_storage);
 	module_loader.initialize_all_services(app_storage);
 
-	app::application myApp;
-	int result = myApp.run(app_storage);
+	app::application editor;
+	int result = editor.run(app_storage);
 
 	module_loader.shutdown_all_services(app_storage);
 

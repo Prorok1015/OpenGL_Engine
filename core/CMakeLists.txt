@@ -9,7 +9,7 @@ if(NOT ENGINE_BOOST_NO_LIB)
     URL_MD5 893b5203b862eb9bbd08553e24ff146a
     DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
-    set(BOOST_INCLUDE_LIBRARIES json hana program_options)
+    set(BOOST_INCLUDE_LIBRARIES json hana program_options asio)
     FetchContent_MakeAvailable(Boost)
 endif()
 

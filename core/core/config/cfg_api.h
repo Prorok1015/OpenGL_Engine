@@ -43,6 +43,10 @@ namespace cfg {
 			}
 		}
 		
+		T& operator*() {
+			return value_;
+		}
+
 		T* operator->() {
 			return &value_;
 		}

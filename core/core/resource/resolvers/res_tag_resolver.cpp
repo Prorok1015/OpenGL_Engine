@@ -23,6 +23,20 @@ std::future<std::vector<std::byte>> res::resource_resolver::operator()(const tag
 		});
 }
 
+std::optional<res::tag> res::resource_resolver::path_mapper(const std::filesystem::path& path) const
+{
+	for (auto& entry : entry_points)
+	{
+		std::filesystem::path full_entry = std::filesystem::absolute(entry);
+		std::filesystem::path full_path = std::filesystem::absolute(path);
+		if (full_path.string().find(full_entry.string()) == 0) {
+			std::string relative_path = full_path.string().substr(full_entry.string().length());
+			return tag::make(relative_path);
+		}
+	}
+	return std::nullopt;
+}
+
 std::filesystem::path res::resource_resolver::resolve_tag(const tag& tag) const
 {
 	for (auto& entry : entry_points)

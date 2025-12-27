@@ -5,6 +5,10 @@
 #include "wnd_window_system.h"
 #include "inp_input_system.h"
 #include "edt_editor_system.h"
+#include "res_file_watcher.h"
+#include "cfg_api.h"
+
+CFG_VAR_EXT_PATH(cfg_res_path);
 
 void editor::editor_module::register_services(ds::app_data_storage& data)
 {
@@ -27,10 +31,15 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	win_service.get_active_window()->set_title("Snake Editor");
 
 	data.require<edt::editor_system>().init(data.require<inp::input_system>());
+	
+	auto& watcher = data.construct<res::file_watcher>(res);
+	watcher.add_path(*cfg_res_path);
+	watcher.start();
 }
 
 void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
+	data.destruct<res::file_watcher>();
 	editor_term(data);
 }

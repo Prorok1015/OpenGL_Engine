@@ -7,7 +7,7 @@ file(GLOB SE_SOURCES_H CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PUBLIC common PUBLIC application PUBLIC window PUBLIC resource_system PUBLIC desc_system PUBLIC ecs)
+target_link_libraries(${PROJECT_NAME} PUBLIC common PUBLIC config_system PUBLIC application PUBLIC window PUBLIC resource_system PUBLIC desc_system PUBLIC ecs)
 
 add_subdirectory("common")
 add_subdirectory("config")

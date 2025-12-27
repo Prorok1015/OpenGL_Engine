@@ -10,15 +10,25 @@
 
 namespace res
 {
+	struct resolver_entry
+	{
+		using data = std::vector<std::byte>;
+		std::function<std::future<data>(const tag&)> resolver;
+		std::function<std::optional<tag>(const std::filesystem::path&)> path_mapper;
+	};
+
 	class resource_system 
 	{
 	public:
 		static std::string get_absolut_path(const tag& tag);
+		using resource_handle = std::shared_ptr<resource_entry>;
+		using cache_entry = std::weak_ptr<resource_entry>;
 		using protocol = std::string_view;
 		using extension = adapter_info;
-		using data = std::vector<std::byte>;
-		using resolver = std::function<std::future<data>(const tag&)>;
-		using adapter = std::function<std::shared_ptr<resource_entry>(res::tag, const data&)>;
+		using data = resolver_entry::data;
+		using resolver = resolver_entry;
+		using adapter = std::function<resource_handle(res::tag, const data&)>;
+		using reload_callback = std::function<void(const res::tag&)>;
 
 	public:
 		resource_system();
@@ -29,6 +39,44 @@ namespace res
 		resource_system& operator= (resource_system&&) = delete;
 
 		static std::filesystem::path get_resources_path();
+
+		void watch(const res::tag& tag, void* owner, reload_callback cb) {
+			std::lock_guard lock(cache_mutex);
+			watchers[tag][owner] = std::move(cb);
+		}
+
+		void unwatch(const res::tag& tag, void* owner) {
+			std::lock_guard lock(cache_mutex);
+			if (watchers.contains(tag)) {
+				watchers[tag].erase(owner);
+			}
+		}
+
+		void signal_changed(const std::filesystem::path& path) {
+			std::optional<res::tag> tag;
+			{
+				std::lock_guard lock(cache_mutex);
+				for (const auto& [_, resolver] : resolvers) {
+					if (tag = resolver.path_mapper(path)) {
+						break;
+					}
+				}
+				if (!tag.has_value()) {
+					egLOG("resource/signal_changed", "Cannot find tag for changed path '{}'", path.string());
+					return;
+				}
+			}
+
+			cache.erase(tag.value());
+
+			if (watchers.contains(tag.value())) {
+				auto callbacks = watchers.at(tag.value());
+
+				for (auto& [owner, callback] : callbacks) {
+					callback(tag.value());
+				}
+			}
+		}
 
 		void registrate_resolver(protocol protocol, resolver resolver) {
 			ASSERT_MSG(resolvers.find(protocol) == resolvers.end(), "That protocol already has resolver!");
@@ -55,12 +103,20 @@ namespace res
 				return std::future<std::vector<std::byte>>{};
 			}
 
-			return resolvers.at(tag.protocol())(tag);
+			return resolvers.at(tag.protocol()).resolver(tag);
 		}
 
 		template<class RESOURCE>
 		auto require_resource(const res::tag& tag)
 		{
+			if (auto cached_res = try_get_cached_resource(tag)) {
+				auto res_ptr = std::static_pointer_cast<RESOURCE>(cached_res);
+				if (res_ptr) {
+					return res_ptr;
+				}
+				egLOG("resource/require", "Cached resource '{}' has invalid type!", tag.string());
+			}
+
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
 				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
 				return std::shared_ptr<RESOURCE>{};
@@ -75,7 +131,28 @@ namespace res
 
 			auto os_stream = require_resource_data(tag);
 			auto resource_sp = adapter->second(tag, os_stream.get());
+			if (resource_sp) {
+				push_resource_to_cache(tag, resource_sp);
+			}
 			return std::static_pointer_cast<RESOURCE>(resource_sp);
+		}
+
+	private:
+		resource_handle try_get_cached_resource(const tag& tag) {
+			std::lock_guard lock(cache_mutex);
+			auto it = cache.find(tag);
+			if (it != cache.end()) {
+				if (auto sp = it->second.lock()) {
+					return sp;
+				}
+				cache.erase(it);
+			}
+			return nullptr;
+		}
+
+		void push_resource_to_cache(const tag& tag, const resource_handle& resource) {
+			std::lock_guard lock(cache_mutex);
+			cache[tag] = resource;
 		}
 
 	public:
@@ -84,6 +161,9 @@ namespace res
 	private:
 		std::unordered_map<protocol, resolver> resolvers;
 		std::unordered_map<extension, adapter> adapters;
+		std::unordered_map<tag, cache_entry> cache;
+		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> watchers;
+		mutable std::mutex cache_mutex;
 	};
 
 	resource_system& get_system();

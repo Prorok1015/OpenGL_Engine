@@ -21,13 +21,18 @@ res::resource_system::resource_system()
 {
 	ASSERT_MSG(std::filesystem::exists(cfg_res_path), "Resources path '{0}' does not exist!", cfg_res_path->string());
 
-	registrate_resolver(tag::memory, 
-		std::bind(&memory_resolver::operator(),
-			std::addressof(memory_resolver_),
-			std::placeholders::_1));
+	registrate_resolver(tag::memory, {
+		.resolver = std::bind(&memory_resolver::operator(),
+					std::addressof(memory_resolver_),
+					std::placeholders::_1), 
+			.path_mapper = std::bind(&memory_resolver::path_mapper,
+					std::addressof(memory_resolver_),
+					std::placeholders::_1)
+		});
 
-	registrate_resolver(tag::default_protocol(),
-		std::bind(resource_resolver{ { cfg_res_path->string() }}, std::placeholders::_1));
+	registrate_resolver(tag::default_protocol(), {
+		.resolver = std::bind(resource_resolver{ { cfg_res_path->string() }}, std::placeholders::_1),
+		.path_mapper = std::bind(&resource_resolver::path_mapper, resource_resolver{{ cfg_res_path->string() }}, std::placeholders::_1)});
 
 	registrate_adapter(res::raw_image_adapter::INFO, 
 		std::bind(res::raw_image_adapter{},

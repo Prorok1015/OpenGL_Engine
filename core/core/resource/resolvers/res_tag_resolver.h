@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <cstddef>
 #include "res_tag.h"
+#include <optional>
 
 namespace res
 {
@@ -16,6 +17,9 @@ namespace res
 		}
 
 		std::future<std::vector<std::byte>> operator()(const tag& tag) const;
+
+		std::optional<res::tag> path_mapper(const std::filesystem::path& path) const;
+
 	private:
 		std::filesystem::path resolve_tag(const tag& tag) const;
 
