@@ -31,7 +31,7 @@ namespace scn
     private:
         res::tag source_tag;
 		const std::vector<std::byte>& data;
-		std::unordered_map<res::tag, std::vector<std::byte>> data_map;
+		std::unordered_map<res::tag, core::res::res_resolver_interface::async_raw_data> data_map;
 		res::resource_system& resource_system;
     };
 }

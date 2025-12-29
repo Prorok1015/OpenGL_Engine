@@ -5,29 +5,33 @@
 #include "resources/res_resource_base.h"
 #include "resolvers/res_memory_resolver.h"
 #include "adapters/res_adapter_info.hpp"
+#include "resolvers/res_resolver_interface.hpp"
+#include "resolvers/res_resource_handle.hpp"
 #include <future>
 #include <iostream>
 
 namespace res
 {
-	struct resolver_entry
-	{
-		using data = std::vector<std::byte>;
-		std::function<std::future<data>(const tag&)> resolver;
-		std::function<std::optional<tag>(const std::filesystem::path&)> path_mapper;
-	};
+	template<class T>
+	using res_handle = core::res::res_handle<T>;
 
-	class resource_system 
+	class resource_system
 	{
 	public:
 		static std::string get_absolut_path(const tag& tag);
-		using resource_handle = std::shared_ptr<resource_entry>;
-		using cache_entry = std::weak_ptr<resource_entry>;
+		template<class T>
+		using resource_handle_t = core::res::res_control_block<std::shared_ptr<T>>;
+		using resource_handle = core::res::res_control_block_base;
+		using cache_entry = std::weak_ptr<resource_handle>;
+
 		using protocol = std::string_view;
 		using extension = adapter_info;
-		using data = resolver_entry::data;
-		using resolver = resolver_entry;
-		using adapter = std::function<resource_handle(res::tag, const data&)>;
+
+		using data = core::res::res_resolver_interface::async_raw_data;
+		using resolver = std::shared_ptr<core::res::res_resolver_interface>;
+
+		using adapter = std::function<std::shared_ptr<resource_entry>(const res::tag&, const std::vector<std::byte>&)>;
+
 		using reload_callback = std::function<void(const res::tag&)>;
 
 	public:
@@ -52,35 +56,22 @@ namespace res
 			}
 		}
 
-		void signal_changed(const std::filesystem::path& path) {
-			std::optional<res::tag> tag;
-			{
-				std::lock_guard lock(cache_mutex);
-				for (const auto& [_, resolver] : resolvers) {
-					if (tag = resolver.path_mapper(path)) {
-						break;
-					}
-				}
-				if (!tag.has_value()) {
-					egLOG("resource/signal_changed", "Cannot find tag for changed path '{}'", path.string());
-					return;
-				}
-			}
+		void signal_changed(const res::tag& tag) {
+			cache.erase(tag);
 
-			cache.erase(tag.value());
-
-			if (watchers.contains(tag.value())) {
-				auto callbacks = watchers.at(tag.value());
+			if (watchers.contains(tag)) {
+				auto callbacks = watchers.at(tag);
 
 				for (auto& [owner, callback] : callbacks) {
-					callback(tag.value());
+					callback(tag);
 				}
 			}
 		}
 
-		void registrate_resolver(protocol protocol, resolver resolver) {
-			ASSERT_MSG(resolvers.find(protocol) == resolvers.end(), "That protocol already has resolver!");
-			resolvers[protocol] = std::move(resolver);
+		template<class T, class... ARGS>
+		T& registrate_resolver(protocol prt, ARGS... args) {
+			ASSERT_MSG(resolvers.find(prt) == resolvers.end(), "That protocol already has resolver!");
+			return *std::static_pointer_cast<T>(resolvers[prt] = std::make_unique<T>(std::forward<ARGS>(args)...));
 		}
 
 		void unregistrate_resolver(protocol prt) {
@@ -96,49 +87,47 @@ namespace res
 			adapters.erase(ext);
 		}
 
-		std::future<std::vector<std::byte>> require_resource_data(const tag& tag) const
+		data require_resource_data(const tag& tag) const
 		{
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
 				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
-				return std::future<std::vector<std::byte>>{};
+				return data{};
 			}
 
-			return resolvers.at(tag.protocol()).resolver(tag);
+			return resolvers.at(tag.protocol())->resolve(tag);
 		}
 
 		template<class RESOURCE>
 		auto require_resource(const res::tag& tag)
 		{
 			if (auto cached_res = try_get_cached_resource(tag)) {
-				auto res_ptr = std::static_pointer_cast<RESOURCE>(cached_res);
-				if (res_ptr) {
-					return res_ptr;
-				}
-				egLOG("resource/require", "Cached resource '{}' has invalid type!", tag.string());
+				return res_handle<RESOURCE>(
+					std::static_pointer_cast<resource_handle_t<RESOURCE>>(cached_res)
+				);
 			}
 
 			if (resolvers.find(tag.protocol()) == resolvers.end()) {
 				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
-				return std::shared_ptr<RESOURCE>{};
+				return res_handle<RESOURCE>{};
 			}
 
 			auto res_info = res::resource_info::make<RESOURCE>(tag.extension());
 			auto adapter = std::find_if(adapters.begin(), adapters.end(), [&res_info](const auto& par) { return par.first == res_info; });
 			if (adapter == adapters.end()) {
 				egLOG("resource/require", "Extention '{}' is not supported!", tag.extension());
-				return std::shared_ptr<RESOURCE>{};
+				return res_handle<RESOURCE>{};
 			}
 
-			auto os_stream = require_resource_data(tag);
-			auto resource_sp = adapter->second(tag, os_stream.get());
-			if (resource_sp) {
-				push_resource_to_cache(tag, resource_sp);
-			}
-			return std::static_pointer_cast<RESOURCE>(resource_sp);
+			auto final_cb = std::make_shared<resource_handle_t<RESOURCE>>();
+			push_resource_to_cache(tag, std::static_pointer_cast<resource_handle>(final_cb));
+
+			start_async_loading<RESOURCE>(tag, final_cb);
+
+			return res_handle<RESOURCE>(final_cb);
 		}
 
 	private:
-		resource_handle try_get_cached_resource(const tag& tag) {
+		std::shared_ptr<resource_handle> try_get_cached_resource(const tag& tag) {
 			std::lock_guard lock(cache_mutex);
 			auto it = cache.find(tag);
 			if (it != cache.end()) {
@@ -150,13 +139,39 @@ namespace res
 			return nullptr;
 		}
 
-		void push_resource_to_cache(const tag& tag, const resource_handle& resource) {
+		void push_resource_to_cache(const tag& tag, const std::shared_ptr<resource_handle>& resource) {
 			std::lock_guard lock(cache_mutex);
 			cache[tag] = resource;
 		}
 
-	public:
-		memory_resolver memory_resolver_;
+		template<typename T>
+		void start_async_loading(res::tag tag, std::shared_ptr<core::res::res_control_block<std::shared_ptr<T>>> final_cb) {
+			auto& resolver = resolvers[tag.protocol()];
+
+			auto raw_data_block = resolver->resolve(tag);
+			ASSERT_MSG(raw_data_block, "resource data not found");
+
+			raw_data_block->then([this, tag, final_cb](auto& raw_block) {
+				if (raw_block.status == core::res::res_status::error) {
+					final_cb->set_error("Resolver error: "s + raw_block.error_msg);
+					return;
+				}
+
+				try {
+					auto res_info = res::resource_info::make<T>(tag.extension());
+					auto adapter_it = std::find_if(adapters.begin(), adapters.end(), [&res_info](const auto& par) { return par.first == res_info; });
+					auto& adapter = adapter_it->second;
+
+					final_cb->status = core::res::res_status::processing;
+					auto parsed_obj = std::static_pointer_cast<T>(adapter(tag, raw_block.data));
+
+					final_cb->set_ready(std::move(parsed_obj));
+				} catch (const std::exception& e) {
+					final_cb->set_error("Adapter error: "s + e.what());
+				}
+			});
+		}
+
 
 	private:
 		std::unordered_map<protocol, resolver> resolvers;
@@ -164,6 +179,9 @@ namespace res
 		std::unordered_map<tag, cache_entry> cache;
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> watchers;
 		mutable std::mutex cache_mutex;
+
+	public:
+		memory_resolver& memory_resolver_;
 	};
 
 	resource_system& get_system();

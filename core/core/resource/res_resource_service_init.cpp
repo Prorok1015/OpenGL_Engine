@@ -3,13 +3,13 @@
 
 extern res::resource_system* p_res_system;
 
-void core::resource::resource_init(ds::app_data_storage& data)
+void core::res::resource_init(ds::app_data_storage& data)
 {
-	p_res_system = &data.construct<res::resource_system>();
+	p_res_system = &data.construct<::res::resource_system>();
 }
 
-void core::resource::resource_term(ds::app_data_storage& data)
+void core::res::resource_term(ds::app_data_storage& data)
 {
-	data.destruct<res::resource_system>();
+	data.destruct<::res::resource_system>();
 	p_res_system = nullptr;
 }

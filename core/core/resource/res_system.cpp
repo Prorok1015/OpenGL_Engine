@@ -18,21 +18,12 @@ res::resource_system& res::get_system()
 }
 
 res::resource_system::resource_system()
+	: memory_resolver_(registrate_resolver<memory_resolver>(res::tag::memory))
 {
 	ASSERT_MSG(std::filesystem::exists(cfg_res_path), "Resources path '{0}' does not exist!", cfg_res_path->string());
 
-	registrate_resolver(tag::memory, {
-		.resolver = std::bind(&memory_resolver::operator(),
-					std::addressof(memory_resolver_),
-					std::placeholders::_1), 
-			.path_mapper = std::bind(&memory_resolver::path_mapper,
-					std::addressof(memory_resolver_),
-					std::placeholders::_1)
-		});
-
-	registrate_resolver(tag::default_protocol(), {
-		.resolver = std::bind(resource_resolver{ { cfg_res_path->string() }}, std::placeholders::_1),
-		.path_mapper = std::bind(&resource_resolver::path_mapper, resource_resolver{{ cfg_res_path->string() }}, std::placeholders::_1)});
+	auto& res_resolver = registrate_resolver<resource_resolver>(tag::default_protocol(), std::vector<std::string>{ cfg_res_path->string() });
+	res_resolver.set_resource_changed_callback([this](const res::tag& tag) { signal_changed(tag); });
 
 	registrate_adapter(res::raw_image_adapter::INFO, 
 		std::bind(res::raw_image_adapter{},

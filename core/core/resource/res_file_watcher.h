@@ -1,5 +1,4 @@
 #pragma once
-#include "res_system.h"
 #include <filesystem>
 #include <chrono>
 #include <unordered_map>
@@ -9,15 +8,11 @@ namespace fs = std::filesystem;
 namespace res {
     class file_watcher {
     public:
-        file_watcher(resource_system& res_sys)
-            : timer(io), res_system(res_sys)
+        file_watcher(boost::asio::io_context& io, std::function<void(fs::path)> notify_cb)
+            : timer(io), m_notify_cb(notify_cb)
         {
         }
 
-        ~file_watcher()
-        {
-            timer.cancel();
-        }
         void add_path(fs::path path) {
             watch_paths.push_back(std::move(path));
         }
@@ -27,7 +22,10 @@ namespace res {
                 update_state(root, false);
             }
             schedule_timer();
-            async_thread = std::async(std::launch::async, [this]() { io.run(); });
+        }
+
+        void stop() {
+            timer.cancel();
         }
 
     private:
@@ -55,11 +53,11 @@ namespace res {
                 auto it = file_states.find(path);
                 if (it == file_states.end()) {
                     file_states[path] = last_time;
-                    if (notify) res_system.signal_changed(path);
+                    if (notify) m_notify_cb(path);
                 }
                 else if (it->second != last_time) {
                     it->second = last_time;
-                    if (notify) res_system.signal_changed(path);
+                    if (notify) m_notify_cb(path);
                 }
             }
 
@@ -68,10 +66,8 @@ namespace res {
                 });
         }
 
-        std::future<void> async_thread;
-        boost::asio::io_context io;
+        std::function<void(fs::path)> m_notify_cb;
         boost::asio::steady_timer timer;
-        resource_system& res_system;
         std::vector<fs::path> watch_paths;
         std::unordered_map<fs::path, fs::file_time_type> file_states;
     };

@@ -6,7 +6,7 @@
 
 void core::core_module::register_services(ds::app_data_storage& data)
 {
-	resource::resource_init(data);// core
+	res::resource_init(data);// core
 	desc::desc_init(data);// core
 	window::window_init(data);// core
 }
@@ -22,5 +22,5 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 {
 	window::window_term(data);
 	desc::desc_term(data);
-	resource::resource_term(data);
+	res::resource_term(data);
 }

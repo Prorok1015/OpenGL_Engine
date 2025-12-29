@@ -73,7 +73,7 @@ namespace desc
 				res::tag parent = json::value_to<res::tag>(resource.body.at("__parent"));
 				auto parent_desc = get_desc<desc::desc_base>(parent);
 				if (!parent_desc->is_loaded()) {
-					auto presource = res_system.require_resource<desc::desc_resource>(parent);
+					auto presource = res_system.require_resource<desc::desc_resource>(parent).get_sync();
 					if (presource) {
 						deserialize_desc(parent_desc, *presource);
 					}
@@ -86,7 +86,7 @@ namespace desc
 
 			if (resource.body.contains("__type")) {
 				auto type_str = json::value_to<res::tag>(resource.body.at("__type"));
-				auto presource = res_system.require_resource<desc::desc_resource>(type_str);
+				auto presource = res_system.require_resource<desc::desc_resource>(type_str).get_sync();
 				if (presource) {
 					deserialize_desc(desc, *presource);
 				}
@@ -124,7 +124,7 @@ namespace desc
 				auto type = name_map[tag];
 				auto it = desc_map.find(type);
 				if (it != desc_map.end() && !it->second->is_loaded()) {
-					auto desc = res_system.require_resource<desc::desc_resource>(tag);
+					auto desc = res_system.require_resource<desc::desc_resource>(tag).get_sync();
 					deserialize_desc(it->second, *desc);
 				}
 			}

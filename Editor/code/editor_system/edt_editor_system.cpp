@@ -166,9 +166,9 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 				{
 					auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
 					res::tag test_tag = res::tag::make(relateve.string());
-					test_res = res::get_system().require_resource<res::text_resource>(test_tag);
+					test_res = res::get_system().require_resource<res::text_resource>(test_tag).get_sync();
 					res::get_system().watch(test_tag, this, [this](const res::tag& test_tag){
-						auto updated_res = res::get_system().require_resource<res::text_resource>(test_tag);
+						auto updated_res = res::get_system().require_resource<res::text_resource>(test_tag).get_sync();
 						egLOG("Editor/Test JSON Window", "Resource '{}' reloaded!", test_tag.string());
 						if (updated_res) {
 							test_res = updated_res;

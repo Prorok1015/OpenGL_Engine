@@ -37,6 +37,52 @@ std::optional<res::tag> res::resource_resolver::path_mapper(const std::filesyste
 	return std::nullopt;
 }
 
+core::res::res_resolver_interface::async_raw_data res::resource_resolver::resolve(const tag& tag) const
+{
+	auto data_sp = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+	auto path = resolve_tag(tag);
+
+	boost::asio::post(io.get_executor(), [data_sp, path]() {
+		try {
+			egLOG("resource/resolver", "loading file '{}'", path.string());
+
+			if (!std::filesystem::exists(path)) {
+				data_sp->set_error("File does not exist: " + path.string());
+				return;
+			}
+
+			std::ifstream file(path, std::ios::binary | std::ios::ate);
+			if (!file.is_open()) {
+				data_sp->set_error("Failed to open file: " + path.string());
+				return;
+			}
+
+			auto size = file.tellg();
+			std::vector<std::byte> data;
+
+			if (size > 0) {
+				file.seekg(0, std::ios::beg);
+				data.resize(static_cast<size_t>(size));
+				if (!file.read(reinterpret_cast<char*>(data.data()), size)) {
+					data_sp->set_error("Failed to read data: " + path.string());
+					return;
+				}
+			}
+
+			data_sp->set_ready(std::move(data));
+
+		}
+		catch (const std::exception& e) {
+			data_sp->set_error(std::string("Internal IO error: ") + e.what());
+			egLOG("resource/error", "Critical error loading {}: {}", path.string(), e.what());
+		}
+		catch (...) {
+			data_sp->set_error("Unknown critical error");
+		}
+	});
+	return data_sp;
+}
+
 std::filesystem::path res::resource_resolver::resolve_tag(const tag& tag) const
 {
 	for (auto& entry : entry_points)

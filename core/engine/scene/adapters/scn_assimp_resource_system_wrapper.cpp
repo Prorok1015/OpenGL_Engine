@@ -12,11 +12,12 @@ Assimp::IOStream* scn::engine_assimp_resource_system_wrapper::Open(const char* p
         auto it = data_map.find(file_tag);
         if (it == data_map.end()) {
             auto fdata = resource_system.require_resource_data(file_tag);
-            auto& data = data_map[file_tag] = fdata.get();
+            data_map[file_tag] = fdata;
+            auto& data = fdata->get();
             return new Assimp::MemoryIOStream(reinterpret_cast<const uint8_t*>(data.data()), data.size());
-        }
-        else {
-            return new Assimp::MemoryIOStream(reinterpret_cast<const uint8_t*>(it->second.data()), it->second.size());
+        } else {
+            auto& data = it->second->get();
+            return new Assimp::MemoryIOStream(reinterpret_cast<const uint8_t*>(data.data()), data.size());
         }
     }
 

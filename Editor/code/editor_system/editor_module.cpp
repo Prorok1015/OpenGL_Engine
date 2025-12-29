@@ -24,17 +24,13 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& res = data.require<res::resource_system>();
 	auto& win_service = data.require<wnd::window_system>();
 
-	auto logo = res.require_resource<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
+	auto logo = res.require_resource<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png")).get_sync();
 	ds::fixed_vector<wnd::window_image, 2> images;
 	images.emplace_back(logo->data(), logo->size().x, logo->size().y, wnd::window_image::TYPE::LOGO);
 	win_service.get_active_window()->set_logo(images);
 	win_service.get_active_window()->set_title("Snake Editor");
 
 	data.require<edt::editor_system>().init(data.require<inp::input_system>());
-	
-	auto& watcher = data.construct<res::file_watcher>(res);
-	watcher.add_path(*cfg_res_path);
-	watcher.start();
 }
 
 void editor::editor_module::shutdown_services(ds::app_data_storage& data)
