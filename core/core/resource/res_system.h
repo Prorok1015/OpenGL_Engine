@@ -7,6 +7,7 @@
 #include "adapters/res_adapter_info.hpp"
 #include "resolvers/res_resolver_interface.hpp"
 #include "resolvers/res_resource_handle.hpp"
+#include "adapters/res_adapter_worker_base.hpp"
 #include <future>
 #include <iostream>
 
@@ -43,6 +44,11 @@ namespace res
 		resource_system& operator= (resource_system&&) = delete;
 
 		static std::filesystem::path get_resources_path();
+
+		void set_adapter_worker(std::unique_ptr<core::res::adapter_worker_base>&& worker) {
+			adapter_worker = std::move(worker);
+			adapter_worker->start();
+		}
 
 		void watch(const res::tag& tag, void* owner, reload_callback cb) {
 			std::lock_guard lock(cache_mutex);
@@ -151,9 +157,9 @@ namespace res
 			auto raw_data_block = resolver->resolve(tag);
 			ASSERT_MSG(raw_data_block, "resource data not found");
 
-			raw_data_block->then([this, tag, final_cb](auto& raw_block) {
-				if (raw_block.status == core::res::res_status::error) {
-					final_cb->set_error("Resolver error: "s + raw_block.error_msg);
+			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
+				if (raw_data_block->status == core::res::res_status::error) {
+					final_cb->set_error("Resolver error: "s + raw_data_block->error_msg);
 					return;
 				}
 
@@ -163,15 +169,21 @@ namespace res
 					auto& adapter = adapter_it->second;
 
 					final_cb->status = core::res::res_status::processing;
-					auto parsed_obj = std::static_pointer_cast<T>(adapter(tag, raw_block.data));
+					auto parsed_obj = std::static_pointer_cast<T>(adapter(tag, raw_data_block->data));
 
 					final_cb->set_ready(std::move(parsed_obj));
-				} catch (const std::exception& e) {
+				}
+				catch (const std::exception& e) {
 					final_cb->set_error("Adapter error: "s + e.what());
 				}
+			};
+
+			raw_data_block->then([this, adapter_cb](auto& raw_block) {
+				post_adapter_work(adapter_cb);
 			});
 		}
 
+		void post_adapter_work(std::function<void()> cb);
 
 	private:
 		std::unordered_map<protocol, resolver> resolvers;
@@ -179,7 +191,7 @@ namespace res
 		std::unordered_map<tag, cache_entry> cache;
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> watchers;
 		mutable std::mutex cache_mutex;
-
+		std::unique_ptr<core::res::adapter_worker_base> adapter_worker = nullptr;
 	public:
 		memory_resolver& memory_resolver_;
 	};

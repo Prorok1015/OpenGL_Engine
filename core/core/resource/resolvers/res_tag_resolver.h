@@ -27,9 +27,7 @@ namespace res
 			for (auto& root : entry_points)
 				watcher.add_path(root);
 			watcher.start();
-			work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(
-				boost::asio::make_work_guard(io)
-			);
+			work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(boost::asio::make_work_guard(io) );
 			io_thread = std::thread([this]() {
 				egLOG("resource/resolver", "io thread started");
 

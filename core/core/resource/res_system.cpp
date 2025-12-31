@@ -5,6 +5,7 @@
 #include "adapters/res_pct_adapter.h"
 #include "adapters/res_text_adapter.h"
 #include <boost/json.hpp>
+#include <boost/asio.hpp>
 #include "cfg_api.h"
 
 res::resource_system* p_res_system = nullptr;
@@ -41,6 +42,12 @@ res::resource_system::resource_system()
 			std::placeholders::_1,
 			std::placeholders::_2)
 		);
+}
+
+void res::resource_system::post_adapter_work(std::function<void()> cb)
+{
+	if (adapter_worker)
+		adapter_worker->post(cb);
 }
 
 std::filesystem::path res::resource_system::get_resources_path()
