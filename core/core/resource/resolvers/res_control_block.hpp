@@ -30,7 +30,10 @@ namespace core::res
         T& get()
         {
             while (status != res_status::ready)
+            {
+				ASSERT_MSG(status != res_status::error, "Resource loading error: {0}", error_msg);
                 std::this_thread::yield();
+            }
             return data;
         }
 

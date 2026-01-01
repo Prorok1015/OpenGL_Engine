@@ -3,7 +3,6 @@
 #include "res_tag.h"
 #include "logger/engine_log.h"
 #include "resources/res_resource_base.h"
-#include "resolvers/res_memory_resolver.h"
 #include "adapters/res_adapter_info.hpp"
 #include "resolvers/res_resolver_interface.hpp"
 #include "resolvers/res_resource_handle.hpp"
@@ -45,6 +44,23 @@ namespace res
 
 		static std::filesystem::path get_resources_path();
 
+		bool exists(const tag& tag) const {
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+				egLOG("resource/exists", "Protocol '{}' is not supported!", tag.protocol());
+				return false;
+			}
+			return resolvers.at(tag.protocol())->exists(tag);
+		}
+
+		bool store(const tag& tag, const std::vector<std::byte>& data) {
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+				egLOG("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				return false;
+			}
+
+			return resolvers.at(tag.protocol())->store(tag, data);
+		}
+
 		void set_adapter_worker(std::unique_ptr<core::res::adapter_worker_base>&& worker) {
 			adapter_worker = std::move(worker);
 			adapter_worker->start();
@@ -77,7 +93,7 @@ namespace res
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
 			ASSERT_MSG(resolvers.find(prt) == resolvers.end(), "That protocol already has resolver!");
-			return *std::static_pointer_cast<T>(resolvers[prt] = std::make_unique<T>(std::forward<ARGS>(args)...));
+			return *std::static_pointer_cast<T>(resolvers[prt] = std::make_unique<T>(prt, std::forward<ARGS>(args)...));
 		}
 
 		void unregistrate_resolver(protocol prt) {
@@ -125,11 +141,22 @@ namespace res
 			}
 
 			auto final_cb = std::make_shared<resource_handle_t<RESOURCE>>();
-			push_resource_to_cache(tag, std::static_pointer_cast<resource_handle>(final_cb));
+			push_resource_to_cache(tag, final_cb);
 
 			start_async_loading<RESOURCE>(tag, final_cb);
 
 			return res_handle<RESOURCE>(final_cb);
+		}
+
+		template<class RESOURCE>
+		void pin_resource(const res::tag& tag, const std::shared_ptr<RESOURCE>& resource) {
+			std::lock_guard lock(cache_mutex);
+			cache = pinned_resources[tag] = resource;
+		}
+
+		void unpin_resource(const res::tag& tag) {
+			std::lock_guard lock(cache_mutex);
+			pinned_resources.erase(tag);
 		}
 
 	private:
@@ -151,7 +178,7 @@ namespace res
 		}
 
 		template<typename T>
-		void start_async_loading(res::tag tag, std::shared_ptr<core::res::res_control_block<std::shared_ptr<T>>> final_cb) {
+		void start_async_loading(res::tag tag, std::shared_ptr<resource_handle_t<T>> final_cb) {
 			auto& resolver = resolvers[tag.protocol()];
 
 			auto raw_data_block = resolver->resolve(tag);
@@ -186,14 +213,13 @@ namespace res
 		void post_adapter_work(std::function<void()> cb);
 
 	private:
+		mutable std::mutex cache_mutex;
 		std::unordered_map<protocol, resolver> resolvers;
 		std::unordered_map<extension, adapter> adapters;
 		std::unordered_map<tag, cache_entry> cache;
+		std::unordered_map<tag, std::shared_ptr<resource_entry>> pinned_resources;
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> watchers;
-		mutable std::mutex cache_mutex;
 		std::unique_ptr<core::res::adapter_worker_base> adapter_worker = nullptr;
-	public:
-		memory_resolver& memory_resolver_;
 	};
 
 	resource_system& get_system();

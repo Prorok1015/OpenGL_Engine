@@ -16,7 +16,7 @@ res::tag res::operator+ (const res::tag& l, const res::tag& r)
 
 void res::tag_invoke(json::value_from_tag, json::value& out, const res::tag& c)
 {
-	out = json::value_from(c.get_full());
+	out = json::value_from(c.view());
 }
 
 res::tag res::tag_invoke(json::value_to_tag<res::tag>, const json::value& obj)

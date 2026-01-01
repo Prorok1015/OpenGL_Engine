@@ -245,7 +245,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		std::vector<std::byte> txm_data;
 		txm_data.resize(str_data.size());
 		std::memcpy(txm_data.data(), str_data.data(), str_data.size());
-		res::get_system().memory_resolver_.add_memory_resource(res::tag(res::tag::memory, "window.desc"), txm_data);
+		res::get_system().store(res::tag(res::tag::memory, "window.desc"), txm_data);
 
 		desc_system.register_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc"), std::string{ txm_desc.txm_tag.pure_name() });
 	
@@ -269,7 +269,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		std::vector<std::byte> mlt_data;
 		mlt_data.resize(str_data2.size());
 		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
-		res::get_system().memory_resolver_.add_memory_resource(window_material, mlt_data);
+		res::get_system().store(window_material, mlt_data);
 
 		desc_system.register_desc<scn::material_desc>(window_material, std::string{ window_material.pure_name() });
 
@@ -297,7 +297,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
 
 		res::tag web_material = res::tag(res::tag::memory, "web_material.desc");
-		res::get_system().memory_resolver_.add_memory_resource(web_material, mlt_data);
+		res::get_system().store(web_material, mlt_data);
 
 		desc_system.register_desc<scn::material_desc>(web_material, std::string{ web_material.pure_name() });
 
@@ -344,7 +344,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		geom_data.resize(str_data.size());
 		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
 
-		res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
+		res::get_system().store(geom_tag, geom_data);
 
 		// 2. register new geometry_desc
 		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
@@ -392,7 +392,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 			geom_data.resize(str_data.size());
 			std::memcpy(geom_data.data(), str_data.data(), str_data.size());
 
-			res::get_system().memory_resolver_.add_memory_resource(geom_tag, geom_data);
+			res::get_system().store(geom_tag, geom_data);
 
 			// 2. register new geometry_desc
 			desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
@@ -865,13 +865,13 @@ bool edt::editor_system::show_toolbar()
 		ImGui::Text("Import model");
 		static int selected_model_idx = 0;
 		if (!imported_models_list.empty()) {
-			std::string buf = std::string{ imported_models_list[selected_model_idx].get_full() };
+			std::string buf = std::string{ imported_models_list[selected_model_idx].view() };
 			if (ImGui::BeginCombo("##imported_objects", buf.c_str(), 0))
 			{
 				for (int n = 0; n < imported_models_list.size(); ++n)
 				{
 					const bool is_selected = (selected_model_idx == n);
-					buf = std::string{ imported_models_list[n].get_full() };
+					buf = std::string{ imported_models_list[n].view() };
 					if (ImGui::Selectable(buf.c_str(), is_selected)) {
 						selected_model_idx = n;
 					}
@@ -1476,27 +1476,27 @@ bool edt::editor_system::show_materials()
 
 			if (ecs::registry.all_of<scn::normal_map_component>(mlts[item_current])) {
 				auto& normal_map = ecs::registry.get<scn::normal_map_component>(mlts[item_current]);
-				ImGui::Text("Normal Map: %s", normal_map.txm.get_full().data());
+				ImGui::Text("Normal Map: %s", normal_map.txm.view().data());
 			}
 
 			if (ecs::registry.all_of<scn::metallic_map_component>(mlts[item_current])) {
 				auto& metallic_map = ecs::registry.get<scn::metallic_map_component>(mlts[item_current]);
-				ImGui::Text("Metallic Map: %s", metallic_map.txm.get_full().data());
+				ImGui::Text("Metallic Map: %s", metallic_map.txm.view().data());
 			}
 
 			if (ecs::registry.all_of<scn::roughness_map_component>(mlts[item_current])) {
 				auto& roughness_map = ecs::registry.get<scn::roughness_map_component>(mlts[item_current]);
-				ImGui::Text("Roughness Map: %s", roughness_map.txm.get_full().data());
+				ImGui::Text("Roughness Map: %s", roughness_map.txm.view().data());
 			}
 
 			if (ecs::registry.all_of<scn::ao_map_component>(mlts[item_current])) {
 				auto& ao_map = ecs::registry.get<scn::ao_map_component>(mlts[item_current]);
-				ImGui::Text("AO Map: %s", ao_map.txm.get_full().data());
+				ImGui::Text("AO Map: %s", ao_map.txm.view().data());
 			}
 
 			if (ecs::registry.all_of<scn::albedo_map_component>(mlts[item_current])) {
 				auto& albedo_map = ecs::registry.get<scn::albedo_map_component>(mlts[item_current]);
-				ImGui::Text("Albedo Map: %s", albedo_map.txm.get_full().data());
+				ImGui::Text("Albedo Map: %s", albedo_map.txm.view().data());
 			}
 
 			if (ecs::registry.all_of<scn::is_transparent_flag_component>(mlts[item_current])) {

@@ -36,6 +36,5 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
-	data.destruct<res::file_watcher>();
 	editor_term(data);
 }

@@ -74,7 +74,7 @@ std::shared_ptr<desc::desc_resource> scn::model_importer_adapter::operator()(con
     Assimp::Importer importer;
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
 	importer.SetIOHandler(new engine_assimp_resource_system_wrapper(res::get_system(), tag, data));
-	const aiScene* scene = importer.ReadFile(std::string{ tag.get_full() }, flags);
+	const aiScene* scene = importer.ReadFile(std::string{ tag.view() }, flags);
     // check for errors
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) // if is Not Zero
     {
@@ -109,7 +109,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			);
 			res::tag embedded_tag = res::tag(res::tag::memory, embedded_path);
 
-			if (!res::get_system().memory_resolver_.is_exist(embedded_tag)) {
+			if (!res::get_system().exists(embedded_tag)) {
 				glm::ivec2 size;
 				int channel = 4;
 				std::vector<std::byte> data_byte;
@@ -124,18 +124,18 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
 					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
 					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + (size.x * size.y * channel), std::back_inserter(data_byte));
-					res::get_system().memory_resolver_.add_memory_resource(embedded_tag, data_byte);
+					res::get_system().store(embedded_tag, data_byte);
 				}
 				else {
 					data_byte.reserve(pEmbededTxm->mWidth);
 					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + pEmbededTxm->mWidth, std::back_inserter(data_byte));
-					res::get_system().memory_resolver_.add_memory_resource(embedded_tag, data_byte);
+					res::get_system().store(embedded_tag, data_byte);
 				}
 			}
 
 			res::tag desc_tag = res::tag{ res::tag::memory, std::vformat("{0}{1}.txm.desc", std::make_format_args(embedded_tag.path(), embedded_tag.pure_name()))};
 
-			if (!res::get_system().memory_resolver_.is_exist(desc_tag)) {
+			if (!res::get_system().exists(desc_tag)) {
 				json::object desc;
 				desc["__parent"] = "res://base_texture.desc";
 				desc["name"] = embedded_tag.pure_name();
@@ -144,14 +144,14 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 				std::string data = json::serialize(desc);
 				std::vector<std::byte> desc_data(data.size());
 				std::memcpy(desc_data.data(), data.data(), data.size());
-				res::get_system().memory_resolver_.add_memory_resource(desc_tag, desc_data);
+				res::get_system().store(desc_tag, desc_data);
 			}
 			return json::value_from(desc_tag);
 		}
 		
 		res::tag desc_tag = res::tag{ res::tag::memory, std::vformat("{0}{1}.txm.desc", std::make_format_args(tag.path(), texture_name)) };
 
-		if (!res::get_system().memory_resolver_.is_exist(desc_tag)) {
+		if (!res::get_system().exists(desc_tag)) {
 			json::object desc;
 			desc["__parent"] = "res://base_texture.desc";
 			desc["name"] = texture_name;
@@ -160,7 +160,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			std::string data = json::serialize(desc);
 			std::vector<std::byte> desc_data(data.size());
 			std::memcpy(desc_data.data(), data.data(), data.size());
-			res::get_system().memory_resolver_.add_memory_resource(desc_tag, desc_data);
+			res::get_system().store(desc_tag, desc_data);
 		}
 		return json::value_from(desc_tag);
 	}

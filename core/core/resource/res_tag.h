@@ -49,12 +49,13 @@ namespace res
 		constexpr bool is_valid() const noexcept { return !full_.empty(); }
 
 		constexpr const std::string& string() const { return full_; }
-		constexpr const std::string_view protocol() const { return get_full().substr(protocol_.x, protocol_.y); }
-		constexpr const std::string_view path() const { return get_full().substr(path_.x, path_.y); }
-		constexpr const std::string_view name() const { return get_full().substr(name_.x, name_.y); }
+		constexpr const std::string_view protocol() const { return view().substr(protocol_.x, protocol_.y); }
+		constexpr const std::string_view path() const { return view().substr(path_.x, path_.y); }
+		constexpr const std::string_view name() const { return view().substr(name_.x, name_.y); }
 		constexpr const std::string_view pure_name() const { return name().substr(0, name().find_last_of('.'));  }
-		constexpr const std::string_view get_full() const { return full_; }
+		constexpr const std::string_view view() const { return full_; }
 		constexpr const std::string_view extension() const { return name().substr(name().find_last_of('.') + 1); }
+		constexpr const std::string_view relative() const { return view().substr(path_.x); }
 
 		bool operator== (const tag& val) const { return get_hash() == val.get_hash(); }
 		std::size_t get_hash() const { return std::hash<std::string>{}(full_); }

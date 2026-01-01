@@ -203,7 +203,7 @@ namespace desc
 				return desc;
 			}
 
-			egLOG("desc/get_or_override", "desc is not string or object! owner is {}", owner.get_tag().get_full());
+			egLOG("desc/get_or_override", "desc is not string or object! owner is {}", owner.get_tag().view());
 
 			return nullptr;
 		}

@@ -248,5 +248,5 @@ void rnd::texture_desc::serialize(json::object& resource) const
 
 	resource["name"] = txm_name;
 	resource["header"] = json::value_from(header);
-	resource["data"] = json::value_from(txm_tag.get_full());
+	resource["data"] = json::value_from(txm_tag.view());
 }

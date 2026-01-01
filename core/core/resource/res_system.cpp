@@ -1,11 +1,7 @@
 #include "res_system.h"
-#include "resources/res_resource_picture.h"
-#include "resources/res_resource_text.h"
-#include "resolvers/res_tag_resolver.h"
+#include "resolvers/res_vfs_resolver.h"
 #include "adapters/res_pct_adapter.h"
 #include "adapters/res_text_adapter.h"
-#include <boost/json.hpp>
-#include <boost/asio.hpp>
 #include "cfg_api.h"
 
 res::resource_system* p_res_system = nullptr;
@@ -19,12 +15,13 @@ res::resource_system& res::get_system()
 }
 
 res::resource_system::resource_system()
-	: memory_resolver_(registrate_resolver<memory_resolver>(res::tag::memory))
 {
 	ASSERT_MSG(std::filesystem::exists(cfg_res_path), "Resources path '{0}' does not exist!", cfg_res_path->string());
 
-	auto& res_resolver = registrate_resolver<resource_resolver>(tag::default_protocol(), std::vector<std::string>{ cfg_res_path->string() });
+	auto& res_resolver = registrate_resolver<vfs_resolver>(tag::default_protocol(), std::vector<fs::path>{ cfg_res_path->string() });
 	res_resolver.set_resource_changed_callback([this](const res::tag& tag) { signal_changed(tag); });
+	fs::path memory_path = fs::path{ cfg_res_path->string() } / "../eg_memory_vfs"; // TODO: make configurable
+	registrate_resolver<vfs_resolver>(res::tag::memory, std::vector<fs::path>{ memory_path.string() });
 
 	registrate_adapter(res::raw_image_adapter::INFO, 
 		std::bind(res::raw_image_adapter{},
@@ -63,6 +60,6 @@ std::string res::resource_system::get_absolut_path(const res::tag& tag)
 		return cfg_res_path->string() + path + name;
 	}
 
-	egLOG("resource/absolut_path", "Broken tag {}", tag.get_full());
+	egLOG("resource/absolut_path", "Broken tag {}", tag.view());
 	return std::string{};
 }

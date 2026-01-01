@@ -8,6 +8,10 @@ namespace fs = std::filesystem;
 namespace res {
     class file_watcher {
     public:
+        file_watcher(boost::asio::io_context& io)
+            : timer(io)
+        {}
+
         file_watcher(boost::asio::io_context& io, std::function<void(fs::path)> notify_cb)
             : timer(io), m_notify_cb(notify_cb)
         {
