@@ -180,10 +180,10 @@ namespace res
 		template<class T>
 		void warmup(const res::tag& tag)
 		{
-			auto res = require<T>(tag);
-			res.then([this, res](auto _) {
+			res::res_handle<T> res = require<T>(tag);
+			res.then([this, res, tag](auto _) {
 				if (res.has_error()) return;
-				push_resource_to_strong_cache(tag, res.get());
+				push_resource_to_strong_cache(tag, res.get_control_block());
 			});
 		}
 

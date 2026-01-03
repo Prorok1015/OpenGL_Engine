@@ -5,33 +5,41 @@
 
 rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res::tag& tag)
 {
-	auto it = cache.find(tag);
-	if (it != cache.end()) {
+	if (auto it = cache.find(tag); it != cache.end()) {
 		auto& texture = it->second;
 		return texture.get();
 	}
 
-	auto desc = desc_system.get_desc<rnd::texture_desc>(tag);
-	if (!desc) {
-		ASSERT_FAIL("texture desc not found");
+	auto it = loading.find(tag);
+	res::res_handle<rnd::texture_desc> handle;
+	if (it == loading.end()) {
+		handle = res::get_system().require<rnd::texture_desc>(tag);
+		loading[tag] = handle;
+	} else {
+		handle = it->second;
+	}
+
+	if (handle.has_error()) {
+		loading.erase(tag);
+		egLOG("render/geometry", "Failed to load texture desc with name {0}", tag.view());
+	}
+
+	if (!handle.is_ready()) {
 		return nullptr;
 	}
 
-	ASSERT_MSG(desc->is_loaded(), "desc hasn't loaded yet");
-	if (!desc->is_loaded()) {
-		return nullptr;
-	}
+	loading.erase(tag);
 
-    auto res = res::get_system().require<res::picture_resource>(desc->txm_tag).get_sync();
-    if (!res) {
+    auto pct_handle = res::get_system().require_sync<res::picture_resource>(handle->txm_tag);
+    if (pct_handle.has_error()) {
         return nullptr;
     }
 
-    driver::texture_header header = desc->header;
-    header.data.initial_data = res->data();
+    driver::texture_header header = handle->header;
+    header.data.initial_data = pct_handle->data();
 
 
-	switch (res->channels())
+	switch (pct_handle->channels())
 	{
 	case 1: { 
 		if (header.data.format != driver::texture_header::TYPE::R8) {
@@ -52,11 +60,11 @@ rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res:
 		break;
 	}
 
-    if (header.data.extent.width != res->size().x) {
-		header.data.extent.width = res->size().x;
+    if (header.data.extent.width != pct_handle->size().x) {
+		header.data.extent.width = pct_handle->size().x;
     }
-    if (header.data.extent.height != res->size().y) {
-        header.data.extent.height = res->size().y;
+    if (header.data.extent.height != pct_handle->size().y) {
+        header.data.extent.height = pct_handle->size().y;
     }
     //ASSERT_MSG(header.data.extent.width == res->size().x, "Texture's width doesn't equal");
     //ASSERT_MSG(header.data.extent.height == res->size().y, "Texture's height doesn't equal");

@@ -59,7 +59,7 @@ namespace scn
 				node.mesh->ind_end = json::value_to<std::size_t>(mesh_obj.at("ind_end"));
 
 				if (mesh_obj.contains("material")) {
-					node.mesh->material = ctx.desc_system.get_or_override_desc<scn::material_desc>(ctx.self, mesh_obj.at("material"));
+					node.mesh->material = ctx.desc_system.get_or_override_desc2<scn::material_desc>(ctx.self, mesh_obj.at("material"));
 				}
 			}
 			if (obj.contains("children")) {
@@ -77,7 +77,7 @@ namespace scn
 void scn::prototype_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	if (data.contains("geometry")) {
-		geometry = desc_system.get_or_override_desc<rnd::geometry_desc>(*this, data.at("geometry"));
+		geometry = desc_system.get_or_override_desc2<rnd::geometry_desc>(*this, data.at("geometry"));
 	}
 
 	if (data.contains("tree")) {

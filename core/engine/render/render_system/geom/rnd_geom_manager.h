@@ -5,6 +5,7 @@
 #include "res_tag.h"
 #include "desc_system.h"
 #include "rnd_geometry_desc.h"
+#include <unordered_set>
 
 namespace rnd
 {
@@ -18,11 +19,12 @@ namespace rnd
 		rnd::driver::vertex_array_interface* find_geometry(res::tag geom_tag);
 
 	private:
-		std::unique_ptr<driver::vertex_array_interface> create_geometry(std::shared_ptr<rnd::geometry_desc> geom_desc);
+		std::unique_ptr<driver::vertex_array_interface> create_geometry(rnd::geometry_desc& geom_desc);
 
 	private:
 		desc::desc_system& desc_system;
 		driver::driver_interface* drv;
 		std::unordered_map<res::tag, std::unique_ptr<driver::vertex_array_interface>> cache;
+		std::unordered_map<res::tag, res::res_handle<rnd::geometry_desc>> loading;
 	};
 }

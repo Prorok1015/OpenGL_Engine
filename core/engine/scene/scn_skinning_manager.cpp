@@ -31,7 +31,7 @@ rnd::driver::ssbo_buffer_interface* scn::skinning_manager::get_tmp_triangles_hig
 
 std::unique_ptr<rnd::driver::ssbo_buffer_interface> scn::skinning_manager::create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver)
 {
-     auto skinning = descsys.get_desc<scn::skinning_prototype_desc>(skin);
+     auto skinning = res::get_system().require_sync<scn::skinning_prototype_desc>(skin);
      auto columns = skinning->get_2d_array_bonesids_weights();
 
      uint32_t numColumns = static_cast<uint32_t>(columns.size());

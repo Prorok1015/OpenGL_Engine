@@ -13,6 +13,8 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
     std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
     auto json_body = json::parse(json_data).as_object();
 
+	ASSERT_MSG(json_body.contains("__type"), "Deserialized desc resource does not contain __type field!");
+
     std::string type_id = json::value_to<std::string>(json_body.at("__type"));
     auto instance = m_desc_system.create_instance(type_id, tag);
 

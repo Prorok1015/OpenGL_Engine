@@ -20,7 +20,7 @@ res::resource_system::resource_system()
 
 	auto& res_resolver = registrate_resolver<vfs_resolver>(tag::default_protocol(), std::vector<fs::path>{ cfg_res_path->string() });
 	res_resolver.set_resource_changed_callback([this](const res::tag& tag) { signal_changed(tag); });
-	fs::path memory_path = fs::path{ cfg_res_path->string() } / "../eg_memory_vfs"; // TODO: make configurable
+	fs::path memory_path = fs::path{ cfg_res_path->string() } / "../sandbox"; // TODO: make configurable
 	registrate_resolver<vfs_resolver>(res::tag::memory, std::vector<fs::path>{ memory_path.string() });
 
 	registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);

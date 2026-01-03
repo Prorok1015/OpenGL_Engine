@@ -28,15 +28,13 @@ namespace core::res
         T data;
         std::vector<std::function<void(res_control_block<T>&)>> on_ready_callbacks;
 
-        bool has_error() const
-        {
-            return status == res_status::error;
-		}
-
-        bool is_ready() const
-        {
+        bool is_ready() const {
             return status == res_status::ready;
         }
+
+        bool has_error() const {
+            return status == res_status::error;
+		}
 
         void wait()
         {

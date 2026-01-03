@@ -257,8 +257,6 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 		std::memcpy(txm_data.data(), str_data.data(), str_data.size());
 		res::get_system().store(res::tag(res::tag::memory, "window.desc"), txm_data);
 
-		desc_system.register_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc"), std::string{ txm_desc.txm_tag.pure_name() });
-
 		res::tag window_material = res::tag(res::tag::memory, "window_material.desc");
 		scn::material_desc mlt;
 
@@ -271,7 +269,7 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 		tmpdesc.defines = { "USE_TXM_AS_DIFFUSE", "LIGHTS_ENABLED" };
 		mlt.queue = scn::pass_queue::MIX;
 		mlt.cdata = tmpdesc;
-		mlt.samplers_textures_desc = { desc_system.get_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
+		mlt.samplers_textures_desc = { res::get_system().require<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
 
 		json::object mlt_js;
 		mlt.serialize(mlt_js);
@@ -280,11 +278,6 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 		mlt_data.resize(str_data2.size());
 		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
 		res::get_system().store(window_material, mlt_data);
-
-		desc_system.register_desc<scn::material_desc>(window_material, std::string{ window_material.pure_name() });
-
-
-
 	}
 
 	{
@@ -304,7 +297,6 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 		mlt.serialize(mlt_js);
 		res::tag web_material = res::tag(res::tag::memory, "editor/web_material.desc");
 		res::get_system().pin_resource(web_material, desc::desc_resource(web_material, mlt_js));
-		desc_system.register_desc<scn::material_desc>(web_material, std::string{ web_material.pure_name() });
 	}
 
 	//  camera
@@ -350,17 +342,14 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 
 		res::get_system().store(geom_tag, geom_data);
 
-		// 2. register new geometry_desc
-		desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
-
 		scn::prototype_desc web_prototype_desc;
-		web_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
+		web_prototype_desc.geometry = res::get_system().require<rnd::geometry_desc>(geom_tag);
 		web_prototype_desc.root.name = "Editor Web";
 		web_prototype_desc.root.local = glm::scale(glm::vec3(1, 0, 1));
 		web_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
 			.vx_begin = 0, .vx_end = web.vertices.size(),
 			.ind_begin = 0, .ind_end = web.indices.size(),
-			.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "web_material.desc"))
+			.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "web_material.desc"))
 		};
 
 		web_prototype_desc.load_prototype(ecs::registry, world_anchor);
@@ -398,18 +387,15 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 
 			res::get_system().store(geom_tag, geom_data);
 
-			// 2. register new geometry_desc
-			desc_system.register_desc<rnd::geometry_desc>(geom_tag, std::string{ geom_tag.pure_name() });
-
 			glm::vec2 rnd_pos = glm::diskRand(1.f);
 			scn::prototype_desc window_prototype_desc;
-			window_prototype_desc.geometry = desc_system.get_desc<rnd::geometry_desc>(geom_tag);
+			window_prototype_desc.geometry = res::get_system().require<rnd::geometry_desc>(geom_tag);
 			window_prototype_desc.root.name = "Window";
 			window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
 			window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
 				.vx_begin = 0, .vx_end = geom.vertices.size(),
 				.ind_begin = 0, .ind_end = geom.indices.size(),
-				.material = desc_system.get_desc<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc"))
+				.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc"))
 			};
 			window_prototype_desc.root.children = { window_prototype_desc.root };
 			window_prototype_desc.root.children[0].name = "Window2";
@@ -454,13 +440,6 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 	}
 	this->world_anchor = world_anchor;
 
-	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
-	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
-	desc_system.register_desc<rnd::texture_desc>(res::tag::make("base_texture.desc"), "base");
-
-	/*desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
-	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
-	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");*/
 }
 
 void mark_node_for_animation_stop(entt::entity ent)
@@ -893,8 +872,8 @@ bool edt::editor_system::show_toolbar()
 		}
 
 		if (ImGui::Button("Create object on scene")) {
-			auto robot = desc_system.get_desc<scn::prototype_desc>(imported_models_list[selected_model_idx]);
-			if (robot) {
+			auto robot = res::get_system().require_sync<scn::skinning_prototype_desc>(imported_models_list[selected_model_idx]);
+			if (robot.is_ready()) {
 				robot->load_prototype(ecs::registry, world_anchor);
 			}
 		}
@@ -969,7 +948,7 @@ bool edt::editor_system::show_file_dialog()
 		res::tag tag = res::tag::make(relateve.string());
 		if (std::find(imported_models_list.begin(), imported_models_list.end(), tag) == imported_models_list.end()) {
 			imported_models_list.push_back(tag);
-			desc_system.register_desc<scn::skinning_prototype_desc>(tag, std::string{ tag.pure_name() });
+			res::get_system().warmup<scn::skinning_prototype_desc>(tag);
 		}
 	}
     return is_open;

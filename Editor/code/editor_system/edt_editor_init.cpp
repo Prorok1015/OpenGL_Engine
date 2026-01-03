@@ -19,7 +19,6 @@ namespace components {
 	{
 
 		auto& desc_system = data.require<desc::desc_system>();
-		desc_system.unregister_desc<edt::editor_test_desc>();
 		data.destruct<edt::editor_system>();
 	}
 

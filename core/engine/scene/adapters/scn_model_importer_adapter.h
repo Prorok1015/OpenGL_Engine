@@ -4,6 +4,7 @@
 #include "desc_system.h"
 #include "resources/desc_resource.h"
 #include "adapters/res_adapter_interface.hpp"
+#include "scn_skinning_prototype_desc.h"
 
 namespace scn
 {
@@ -11,13 +12,13 @@ namespace scn
 	class model_importer_adapter : public core::res::adapter_interface
 	{
 	public:
-		static inline auto INFO = res::adapter_info::make<desc::desc_resource>({ "glb", "obj", "fbx", "gltf" } );
+		static inline auto INFO = res::adapter_info::make<desc::desc_base>({ "glb", "obj", "fbx", "gltf" } );
 
 		model_importer_adapter(desc::desc_system& desc_system_)
 			: desc_system(desc_system_) {
 		}
 
-		std::shared_ptr<desc::desc_resource> operator()(const res::tag& tag, const std::vector<std::byte>& data) const;
+		std::shared_ptr<desc::desc_base> operator()(const res::tag& tag, const std::vector<std::byte>& data) const;
 
 		virtual std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw_data) const override
 		{

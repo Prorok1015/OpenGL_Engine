@@ -1,10 +1,11 @@
 #pragma once
-#include <common.h>
+#include "common.h"
 #include "res_tag.h"
 #include "desc_system.h"
-
-#include <rnd_driver_interface.h>
-#include <rnd_texture_interface.h>
+#include "rnd_driver_interface.h"
+#include "rnd_texture_interface.h"
+#include "texture/rnd_texture_desc.h"
+#include <unordered_map>
 
 namespace rnd
 {
@@ -32,6 +33,7 @@ namespace rnd
 		void clear_cache();
 	protected:
 		mutable std::unordered_map<res::tag, std::unique_ptr<driver::texture_interface>> cache;
+		std::unordered_map<res::tag, res::res_handle<rnd::texture_desc>> loading;
 		desc::desc_system& desc_system;
 		driver::driver_interface* drv = nullptr;
 	};

@@ -58,19 +58,11 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 		for (auto& sampler : data.at(SAMPLERS_FIELD).get_array())
 		{
 			if (sampler.is_null()){
-				samplers_textures_desc.push_back(nullptr);
+				samplers_textures_desc.emplace_back();
 				continue;
 			}
 
-			if (auto texture = desc_system.get_or_override_desc<rnd::texture_desc>(*this, sampler))
-				samplers_textures_desc.push_back(texture);
-			else {
-				res::tag tag = json::value_to<res::tag>(sampler);
-				json::object obj;
-				obj["__type"] = sampler;
-				desc::desc_resource resource{ tag, json::value{obj} };
-				samplers_textures_desc.push_back(desc_system.try_create_runtime_desc<rnd::texture_desc>(resource));
-			}
+			samplers_textures_desc.push_back(desc_system.get_or_override_desc2<rnd::texture_desc>(*this, sampler));
 		}
 	}
 
@@ -188,7 +180,7 @@ rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd:
 	rdata.samplers.resize(samplers_textures_desc.size());
 	for (int idx = 0; idx < samplers_textures_desc.size(); ++idx)
 	{
-		if (samplers_textures_desc[idx]) {
+		if (samplers_textures_desc[idx].is_ready()) {
 			rdata.samplers[idx] = txm_manager.require_texture(samplers_textures_desc[idx]->get_tag());
 		} else {
 			rdata.samplers[idx] = nullptr;

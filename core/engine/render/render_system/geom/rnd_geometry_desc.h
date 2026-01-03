@@ -10,6 +10,8 @@ namespace rnd
 	class geometry_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
+
 		geometry_desc() = default;
 		virtual ~geometry_desc() override = default;
 

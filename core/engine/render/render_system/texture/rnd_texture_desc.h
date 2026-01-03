@@ -8,6 +8,8 @@ namespace rnd
 	class texture_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
+
 		texture_desc() = default;
 		virtual ~texture_desc() override = default;
 

@@ -387,15 +387,19 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
     for (const auto ent : registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
 		auto& mesh = registry.get<scn::mesh_component>(ent).mesh;
         auto material_desc = registry.get<scn::material_desc_component>(ent).mlt_desc;
-		if (!material_desc) {
+		if (material_desc.has_error()) {
             egLOG("scn/renderer", "Material desc not found or not in current queue for entity");
 			log_name(ent, registry);
 		}
 
-		if (!material_desc || (material_desc->queue != current_q && material_desc->queue != scn::pass_queue::MIX)) {
+		if (!material_desc.is_ready() || (material_desc->queue != current_q && material_desc->queue != scn::pass_queue::MIX)) {
             continue;
 		}
 
+        auto* va = geom_mng.require_geometry(find_geom_tag(ent));
+        if (!va) {
+            continue;
+        }
 
         auto shader_desc = material_desc->get_shader_desc(entt::handle{ registry, ent }, rnd::get_system().get_texture_manager());
         
@@ -435,7 +439,6 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
             shader_desc.cdata.constants["POINT_LIGHT_COUNT"] = std::to_string(point_light_count);
         }
         
-        auto* va = geom_mng.require_geometry(find_geom_tag(ent));
 		rnd::configure_pass(shader_desc);
 		drv->draw_indices(va, material_desc->render_mode, mesh.get_indices_count(), mesh.vx_begin, mesh.ind_begin);
     }

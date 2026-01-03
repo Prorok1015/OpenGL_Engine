@@ -1,20 +1,21 @@
 {
-   "name":"texture",
-   "header":{
-      "type":"texture_2d",
-      "usage":"sampled",
-      "wrap":"clamp_to_edge",
-      "mag":"nearest",
-      "min":"nearest",
-      "data":{
-         "extent":{
-            "width":0,
-            "height":0,
-            "depth":0
-         },
-         "format":"RGBA8",
-         "mip_levels": 1
-      }
-   },
-   "data":""
+  "__type": "texture_desc",
+  "name": "texture",
+  "header": {
+    "type": "texture_2d",
+    "usage": "sampled",
+    "wrap": "clamp_to_edge",
+    "mag": "nearest",
+    "min": "nearest",
+    "data": {
+      "extent": {
+        "width": 0,
+        "height": 0,
+        "depth": 0
+      },
+      "format": "RGBA8",
+      "mip_levels": 1
+    }
+  },
+  "data": ""
 }

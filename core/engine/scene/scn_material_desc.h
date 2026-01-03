@@ -15,6 +15,8 @@ namespace scn
 	class material_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
+
 		virtual ~material_desc() = default;
 		material_desc() = default;
 
@@ -29,7 +31,7 @@ namespace scn
 
 		virtual rnd::shader_config get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager);
 
-		std::vector<std::shared_ptr<rnd::texture_desc>> samplers_textures_desc;
+		std::vector<res::res_handle<rnd::texture_desc>> samplers_textures_desc;
 		ds::color albedo = ds::color(1.0f);
 		ds::color specular = ds::color(1.0f);
 		ds::color ambient = ds::color(1.0f);

@@ -68,7 +68,7 @@ namespace {
 #define TXM_LOG(type) log_material_texture(scene, material, type, ###type)
 }
 
-std::shared_ptr<desc::desc_resource> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
+std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
 {
     // read file via ASSIMP
     Assimp::Importer importer;
@@ -83,9 +83,13 @@ std::shared_ptr<desc::desc_resource> scn::model_importer_adapter::operator()(con
     }
 
     json::object jsdata;
+	jsdata["__type"] = "skin_prototype_desc";
 	process_model(scene, jsdata, tag);
 
-	return std::make_shared<desc::desc_resource>(tag, jsdata);
+	auto instance = desc_system.create_instance("skin_prototype_desc", tag);
+	instance->deserialize(desc_system, jsdata);
+
+	return instance;
 }
 
 json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag) {
@@ -137,6 +141,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 
 			if (!res::get_system().exists(desc_tag)) {
 				json::object desc;
+				desc["__type"] = "texture_desc";
 				desc["__parent"] = "res://base_texture.desc";
 				desc["name"] = embedded_tag.pure_name();
 				desc["data"] = json::value_from(embedded_tag);
@@ -153,6 +158,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 
 		if (!res::get_system().exists(desc_tag)) {
 			json::object desc;
+			desc["__type"] = "texture_desc";
 			desc["__parent"] = "res://base_texture.desc";
 			desc["name"] = texture_name;
 			desc["data"] = json::value_from(tag + res::tag::make(texture_name));
@@ -191,6 +197,7 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 	TXM_LOG(aiTextureType_TRANSMISSION);
 
 	json::object jsmaterial;
+	jsmaterial["__type"] = "material_desc";
 	jsmaterial["__parent"] = "res://base_material.desc";
 	jsmaterial["name"] = material->GetName().C_Str();
 	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, tag);
@@ -481,6 +488,8 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag)
 {
     json::object jsgeometry;
     json::object jstree;
+
+	jsgeometry["__type"] = "geometry_desc";
     jsgeometry["__parent"] = "res://base_geometry.desc";
 	rnd::geometry_desc geometry;
 	if (scene->HasMeshes()) {

@@ -174,6 +174,7 @@ void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, c
 
 	} catch (std::exception& ex) {
 		egLOG("resource/error", "Failed to store resource '{0}': {1}", tag.view(), ex.what());
+		ASSERT_FAIL("Storing a file failed!");
 	}
 }
 

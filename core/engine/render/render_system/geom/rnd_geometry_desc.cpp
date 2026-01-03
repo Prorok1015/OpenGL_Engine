@@ -86,6 +86,10 @@ namespace std
 			auto val = jv.as_uint64();
 			return std::byte(val);
 		}
+		if (jv.is_int64()) {
+			auto val = jv.as_int64();
+			return std::byte(val);
+		}
 
 		ASSERT_FAIL("rnd::geometry_desc::serialize", "Invalid type for byte");
 		return std::byte(0);
@@ -129,12 +133,14 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 
 	{
 		auto& json_indices = resource.at("indices");
-		indices = json::value_to<decltype(indices)>(json_indices);
+		if (!json_indices.as_array().empty())
+			indices = json::value_to<decltype(indices)>(json_indices);
 	}
 
 	{
 		auto& json_vertices = resource.at("vertices");
-		vertices = json::value_to<decltype(vertices)>(json_vertices);
+		if (!json_vertices.as_array().empty())
+			vertices = json::value_to<decltype(vertices)>(json_vertices);
 	}
 
 	if (resource.contains("bounds"))

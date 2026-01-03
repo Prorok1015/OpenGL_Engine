@@ -11,7 +11,7 @@ namespace scn {
     struct delta_time { float dt; };
 
     struct material_desc_component {
-        std::shared_ptr<scn::material_desc> mlt_desc;
+        res::res_handle<scn::material_desc> mlt_desc;
     };
 
     struct keyframes_component {

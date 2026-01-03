@@ -10,6 +10,8 @@ namespace scn
 	class prototype_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
+
 		prototype_desc() = default;
 		virtual ~prototype_desc() = default;
 
@@ -25,7 +27,7 @@ namespace scn
 			std::size_t vx_end = 0;
 			std::size_t ind_begin = 0;
 			std::size_t ind_end = 0;
-			std::shared_ptr<scn::material_desc> material;
+			res::res_handle<scn::material_desc> material;
 		};
 
 		struct node_t
@@ -51,6 +53,6 @@ namespace scn
 
 	public:
 		node_t root;
-		std::shared_ptr<rnd::geometry_desc> geometry;
+		res::res_handle<rnd::geometry_desc> geometry;
 	};
 }

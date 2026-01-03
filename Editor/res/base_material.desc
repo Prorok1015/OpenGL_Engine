@@ -1,8 +1,9 @@
 {
+	"__type": "material_desc",
 	"name": "material",
 	"shader_vertex": "res://shaders/scene.vert",
 	"shader_fragment": "res://shaders/scene.frag",
-	"queue" : "opaque",
+	"queue": "opaque",
 	"constants": {},
 	"defines": [],
 	"samplers": []
