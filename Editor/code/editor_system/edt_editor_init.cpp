@@ -9,11 +9,10 @@ namespace components {
 		auto& desc_system = data.require<desc::desc_system>();
 		auto& editor = data.construct<edt::editor_system>(desc_system);
 
-		desc_system.register_desc<edt::editor_test_parent_desc>(res::tag::make("test_parent_desc.desc"));
-		desc_system.register_desc<edt::editor_test_desc>(res::tag::make("test_desc.desc"));
-		desc_system.register_desc<edt::editor_test_field_desc>(res::tag::make("test_field_parent_desc.desc"));
-		desc_system.register_desc<edt::editor_test_field_desc>(res::tag::make("test_field_desc.desc"), "second");
-		desc_system.register_desc<edt::editor_test_sub_field_desc>(res::tag::make("test_sub_field_desc.desc"), "second");
+		desc_system.register_desc2<edt::editor_test_parent_desc>("editor_parent");
+		desc_system.register_desc2<edt::editor_test_desc>("editor_test");
+		desc_system.register_desc2<edt::editor_test_field_desc>("editor_field_desc");
+		desc_system.register_desc2<edt::editor_test_sub_field_desc>("editor_test_sub");
 	}
 
 	void editor_term(ds::app_data_storage& data)

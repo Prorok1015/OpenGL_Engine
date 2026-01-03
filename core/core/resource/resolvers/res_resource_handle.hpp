@@ -28,6 +28,10 @@ namespace core::res
 
         void then(std::function<void(T&)> cb) {
             if (!m_block) return;
+            m_block->then([cb](auto& block) {
+                if (block.data) cb(*block.data);
+            });
+            /*
             if (is_ready()) {
                 cb(*m_block->data);
             } else {
@@ -35,7 +39,7 @@ namespace core::res
                 m_block->on_ready_callbacks.push_back([cb](auto& block) {
                     if (block.data) cb(*block.data);
                 });
-            }
+            }*/
         }
 
     private:

@@ -21,7 +21,7 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
             if (begin != std::string_view::npos && end != std::string_view::npos) {
                 std::string_view include = body_view.substr(begin + 1, end - begin - 1);
 
-                auto include_code = res::get_system().require_resource<res::text_resource>(tags[index] + res::tag::make(include)).get_sync();
+                auto include_code = res::get_system().require<res::text_resource>(tags[index] + res::tag::make(include)).get_sync();
                 if (include_code) {
                     std::size_t line_end = body.find_first_of('\n', offset);
                     body_view = header.body.replace(offset, line_end - offset, include_code->c_str());
@@ -86,7 +86,7 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load() const
 	{
 		if (!tag.is_valid()) continue;
 
-		auto shaderCode = res::get_system().require_resource<res::text_resource>(tag).get_sync();
+		auto shaderCode = res::get_system().require<res::text_resource>(tag).get_sync();
 		if (shaderCode) {
             headers.push_back(driver::shader_header{ 
                 .title = std::string{tag.name()}, 

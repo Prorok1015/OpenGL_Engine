@@ -18,6 +18,8 @@ namespace edt
 	class editor_test_field_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
+
 		editor_test_field_desc() = default;
 		virtual ~editor_test_field_desc() = default;
 
@@ -47,12 +49,13 @@ namespace edt
 
 	class editor_test_sub_field_desc : public editor_test_field_desc
 	{
-
+		using base_type = editor_test_field_desc::base_type;
 	};
 
 	class editor_test_parent_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
 		editor_test_parent_desc() = default;
 		virtual ~editor_test_parent_desc() = default;
 		virtual void deserialize(desc::desc_system& res_system, const json::object& data) override
@@ -79,8 +82,8 @@ namespace edt
 
 	class editor_test_desc : public editor_test_parent_desc
 	{
-
 	public:
+		using base_type = editor_test_parent_desc::base_type;
 		editor_test_desc() = default;
 		virtual ~editor_test_desc() = default;
 		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
@@ -91,12 +94,12 @@ namespace edt
 				just_string = data.at("just_string").as_string();
 
 			if (data.contains("field")) {
-				field = desc_system.get_or_override_desc<editor_test_field_desc>(*this, data.at("field"));
+				field = desc_system.get_or_override_desc2<editor_test_field_desc>(*this, data.at("field"));
 			}
 		}
 
 		std::string just_string;
-		std::shared_ptr<editor_test_field_desc> field;
+		res::res_handle<editor_test_field_desc> field;
 	};
 
 	struct crossing_context

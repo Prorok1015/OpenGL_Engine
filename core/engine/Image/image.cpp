@@ -77,6 +77,46 @@ void stb_image::Image::set_image_flip(ImageFlip flag)
 	}
 }
 
+static void write_callback(void* context, void* data, int size)
+{
+	std::vector<unsigned char>* out_data = static_cast<std::vector<unsigned char>*>(context);
+	size_t current_size = out_data->size();
+	out_data->resize(current_size + size);
+	std::memcpy(out_data->data() + current_size, data, size);
+}
+
+void stb_image::Image::write_to_memory(ImageType type, const unsigned char* data, int width, int height, int channels, std::vector<std::byte>& out_data)
+{
+	switch (type)
+	{
+		case ImageType::PNG: {
+			int len = 0;
+			unsigned char* png_data = stbi_write_png_to_mem(data, width * channels, width, height, channels, &len);
+			if (png_data) {
+				out_data.resize(len);
+				std::memcpy(out_data.data(), png_data, len);
+				STBIW_FREE(png_data);
+			}
+			break;
+		}
+
+		case ImageType::JPG: {
+			stbi_write_jpg_to_func(write_callback, static_cast<void*>(&out_data), width, height, channels, data, 100);
+			break;
+		}
+
+		case ImageType::BMP: {
+			stbi_write_bmp_to_func(write_callback, static_cast<void*>(&out_data), width, height, channels, data);
+			break;
+		}
+
+		case ImageType::TGA: {
+			stbi_write_tga_to_func(write_callback, static_cast<void*>(&out_data), width, height, channels, data);
+			break;
+		}
+	}
+}
+
 stb_image::Image::ImageType stb_image::Image::type(const std::string_view filename)
 {
 	constexpr std::array<std::pair<const char*, ImageType>, 4> fileTypes = 

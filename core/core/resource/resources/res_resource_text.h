@@ -10,6 +10,7 @@ namespace res
 		text_resource(const tag& tag, const std::vector<std::byte>& string);
 
 		const char* c_str() const { return content.c_str(); }
+		const std::string& str() const { return content; }
 
 	protected:
 		std::string content;

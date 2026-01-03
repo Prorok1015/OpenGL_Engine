@@ -1,10 +1,12 @@
 {
+  "__type": "editor_test",
 	"__parent": "res://test_parent_desc.desc",
 	"just_number": 42,
 	"just_double": 3.14,
-	"just_string": "Hello, World!",
+	"just_string": "Hello, World! I am hot reload",
 	"field": {
+		"__type": "editor_test_sub",
 		"__parent": "res://test_sub_field_desc.desc",
 		"field_string": "I'm a OVERRIDED CHILD field string"
-		}
+	}
 }

@@ -1,12 +1,13 @@
 #pragma once
+#include "adapters/res_adapter_interface.hpp"
+#include "adapters/res_adapter_info.hpp"
 #include "resources/res_resource_picture.h"
 #include <string_view>
 #include <optional>
-#include "adapters/res_adapter_info.hpp"
 
 namespace res
 {
-	class raw_image_adapter
+	class raw_image_adapter : public core::res::adapter_interface
 	{
 	public:
 		struct raw_image_header
@@ -21,9 +22,16 @@ namespace res
 
 		std::optional<raw_image_header> read_header(const std::vector<std::byte>& data) const;
 		std::shared_ptr<res::picture_resource> operator()(res::tag tag, const std::vector<std::byte>& data) const;
+
+		virtual std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw_data) const override
+		{
+			return operator()(tag, raw_data);
+		}
+
+		virtual std::vector<std::byte> serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>& resource) const override;
 	};
 
-	class pct_adapter
+	class pct_adapter : public core::res::adapter_interface
 	{
 	public:
 		static constexpr auto EXTENSIONS = std::array{"pct"sv, "png"sv, "jpeg"sv, "jpg"sv};
@@ -31,5 +39,11 @@ namespace res
 		pct_adapter();
 
 		std::shared_ptr<res::picture_resource> operator()(res::tag tag, const std::vector<std::byte>& data) const;
+		virtual std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw_data) const override
+		{
+			return operator()(tag, raw_data);
+		}
+
+		virtual std::vector<std::byte> serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>& resource) const override;
 	};
 }

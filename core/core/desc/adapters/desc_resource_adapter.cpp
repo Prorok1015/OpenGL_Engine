@@ -7,3 +7,13 @@ std::shared_ptr<desc::desc_resource> desc::desc_adapter::operator()(res::tag tag
 	auto json = json::parse(json_data);
 	return std::make_shared<desc::desc_resource>(tag, json);
 }
+
+std::vector<std::byte> desc::desc_adapter::serialize(const res::tag& tag, const std::shared_ptr<res::resource_entry>& resource) const
+{
+	auto desc_res = std::static_pointer_cast<desc::desc_resource>(resource);
+	std::string data = json::serialize(desc_res->body);
+	std::vector<std::byte> byte_data;
+	byte_data.resize(data.size());
+	std::memcpy(byte_data.data(), data.data(), data.size());
+	return byte_data;
+}

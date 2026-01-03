@@ -8,7 +8,11 @@ namespace res
 	{
 	public:
 		picture_resource(const tag& tag, glm::ivec2 size_, int channels_, unsigned char* data_);
-		~picture_resource();
+		virtual ~picture_resource() override;
+		picture_resource(const picture_resource&);
+		picture_resource& operator= (const picture_resource&);
+		picture_resource(picture_resource&&) noexcept;
+		picture_resource& operator= (picture_resource&&) noexcept;
 
 		unsigned char* data() const { return data_; }
 		int channels() const { return channels_; }

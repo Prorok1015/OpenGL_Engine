@@ -22,6 +22,7 @@
 #include "scn_skinning_prototype_desc.h"
 #include "adapters/scn_model_importer_adapter.h"
 #include "resource/resources/res_resource_text.h"
+#include "resources/res_resource_picture.h"
 
 #include "ds/ds_svg_writer.hpp"
 
@@ -166,9 +167,9 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 				{
 					auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
 					res::tag test_tag = res::tag::make(relateve.string());
-					test_res = res::get_system().require_resource<res::text_resource>(test_tag).get_sync();
+					test_res = res::get_system().require<res::text_resource>(test_tag).get_sync();
 					res::get_system().watch(test_tag, this, [this](const res::tag& test_tag){
-						auto updated_res = res::get_system().require_resource<res::text_resource>(test_tag).get_sync();
+						auto updated_res = res::get_system().require<res::text_resource>(test_tag).get_sync();
 						egLOG("Editor/Test JSON Window", "Resource '{}' reloaded!", test_tag.string());
 						if (updated_res) {
 							test_res = updated_res;
@@ -203,8 +204,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	GUI_REG_LAMBDA("Editor/Draw web", [this] { return true; });
 	GUI_SET_ITEM_CHECKED("Editor/Draw web", is_show_web);
 
-
-	
 	gui::get_system().set_show_title_bar(true);
 	gui::get_system().set_show_title_bar_dbg(true);
 
@@ -215,6 +214,17 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 
 	auto txt = rnd::get_system().get_texture_manager().generate_texture(res::tag(res::tag::memory, "__black"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {0, 0, 0});
 	auto txt2 = rnd::get_system().get_texture_manager().generate_texture(res::tag(res::tag::memory, "__red"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {255, 0, 0});
+}
+
+edt::editor_system::~editor_system()
+{
+}
+
+void edt::editor_system::init(inp::input_system& inp_sys)
+{
+	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
+	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
+	
 
 	auto anchors = ecs::registry.view<scn::scene_anchor_component>();
 	ecs::entity world_anchor;
@@ -248,7 +258,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		res::get_system().store(res::tag(res::tag::memory, "window.desc"), txm_data);
 
 		desc_system.register_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc"), std::string{ txm_desc.txm_tag.pure_name() });
-	
+
 		res::tag window_material = res::tag(res::tag::memory, "window_material.desc");
 		scn::material_desc mlt;
 
@@ -264,7 +274,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		mlt.samplers_textures_desc = { desc_system.get_desc<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
 
 		json::object mlt_js;
-		mlt.serialize( mlt_js);
+		mlt.serialize(mlt_js);
 		std::string str_data2 = json::serialize(mlt_js);
 		std::vector<std::byte> mlt_data;
 		mlt_data.resize(str_data2.size());
@@ -289,18 +299,12 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		mlt.render_mode = rnd::driver::RENDER_MODE::LINE;
 		mlt.albedo = ds::color(glm::vec3(0.f), 1.0f);
 
+
 		json::object mlt_js;
 		mlt.serialize(mlt_js);
-		std::string str_data2 = json::serialize(mlt_js);
-		std::vector<std::byte> mlt_data;
-		mlt_data.resize(str_data2.size());
-		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
-
-		res::tag web_material = res::tag(res::tag::memory, "web_material.desc");
-		res::get_system().store(web_material, mlt_data);
-
+		res::tag web_material = res::tag(res::tag::memory, "editor/web_material.desc");
+		res::get_system().pin_resource(web_material, desc::desc_resource(web_material, mlt_js));
 		desc_system.register_desc<scn::material_desc>(web_material, std::string{ web_material.pure_name() });
-
 	}
 
 	//  camera
@@ -322,7 +326,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 
 	// web
 	if (false)
-	{	
+	{
 		auto web = scn::generate_web({ 50, 50 });
 		res::tag web_tag = res::tag(res::tag::memory, "web.desc");
 		rnd::geometry_desc geom_desc;
@@ -361,7 +365,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 
 		web_prototype_desc.load_prototype(ecs::registry, world_anchor);
 	}
-	
+
 	if (false)
 	{
 
@@ -419,7 +423,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	{
 		light = ecs::registry.create();
 		children.push_back(light);
-		ecs::registry.emplace<scn::directional_light>(light, 
+		ecs::registry.emplace<scn::directional_light>(light,
 			glm::vec4(-0.2f, -1.0f, -0.3f, 0.0),
 			glm::vec4(0.5f, 0.5f, 0.5f, 1.0),
 			glm::vec4(0.2f, 0.2f, 0.2f, 1.0),
@@ -449,7 +453,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		ecs::registry.emplace<scn::parent_component>(sky, world_anchor);
 	}
 	this->world_anchor = world_anchor;
-	res::get_system().registrate_adapter(scn::model_importer_adapter::INFO, scn::model_importer_adapter{desc_system});
 
 	desc_system.register_desc<scn::material_desc>(res::tag::make("base_material.desc"));
 	desc_system.register_desc<rnd::geometry_desc>(res::tag::make("base_geometry.desc"));
@@ -458,16 +461,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	/*desc_system.register_desc<scn::skinning_prototype_desc>(res::tag::make("objects/backpack/backpack.obj"), "backpack");
 	imported_models_list.push_back(res::tag::make("objects/backpack/backpack.obj"));
 	backpack = desc_system.get_desc<scn::skinning_prototype_desc>("backpack");*/
-}
-
-edt::editor_system::~editor_system()
-{
-}
-
-void edt::editor_system::init(inp::input_system& inp_sys)
-{
-	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
-	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 }
 
 void mark_node_for_animation_stop(entt::entity ent)
@@ -761,13 +754,27 @@ bool edt::editor_system::show_toolbar()
 	bool is_open = true;
 	if (ImGui::Begin("Observer", &is_open))
 	{
-		auto ttt = desc_system.get_desc<editor_test_desc>();
-		if (ttt) {
+		static auto desc_test_res = [this]()
+			{
+				auto handle = res::get_system().require<editor_test_desc>(res::tag::make("test_desc.desc"));
+				return handle;
+			}();
+
+		static bool is_first = [&]()-> bool {
+			res::get_system().watch(res::tag::make("test_desc.desc"), this, [this](const res::tag&) {
+				egLOG("Editor/Test DESC Window", "Resource 'test_desc.desc' reloaded!");
+				desc_test_res = res::get_system().require<editor_test_desc>(res::tag::make("test_desc.desc"));
+			});
+			return true;
+			} ();
+
+		if (desc_test_res.is_ready()) {
+			auto ttt = desc_test_res.get();
 			ImGui::Text("DESC TEST just_number: %d", ttt->just_number);
 			ImGui::Text("DESC TEST just_string: %s", ttt->just_string.c_str());
 			ImGui::Text("DESC TEST just_float: %f", ttt->just_double);
-			if (ttt->field) {
-				ImGui::Text("DESC TEST field: %s", ttt->field->field_string.c_str());
+			if (ttt->field.is_ready()) {
+				ImGui::Text("DESC TEST field: %s", ttt->field.get()->field_string.c_str());
 			}
 		}
 

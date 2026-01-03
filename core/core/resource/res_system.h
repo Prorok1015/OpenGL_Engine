@@ -2,13 +2,23 @@
 #include "common.h"
 #include "res_tag.h"
 #include "logger/engine_log.h"
-#include "resources/res_resource_base.h"
 #include "adapters/res_adapter_info.hpp"
+#include "adapters/res_adapter_worker_base.hpp"
+#include "adapters/res_adapter_interface.hpp"
+#include "resources/res_resource_base.h"
 #include "resolvers/res_resolver_interface.hpp"
 #include "resolvers/res_resource_handle.hpp"
-#include "adapters/res_adapter_worker_base.hpp"
 #include <future>
 #include <iostream>
+#include <set>
+
+namespace std {
+	template<> struct hash<std::pair<ds::type_id, std::string>> {
+		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
+			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
+		}
+	};
+}
 
 namespace res
 {
@@ -30,7 +40,7 @@ namespace res
 		using data = core::res::res_resolver_interface::async_raw_data;
 		using resolver = std::shared_ptr<core::res::res_resolver_interface>;
 
-		using adapter = std::function<std::shared_ptr<resource_entry>(const res::tag&, const std::vector<std::byte>&)>;
+		using adapter = std::shared_ptr<core::res::adapter_interface>;
 
 		using reload_callback = std::function<void(const res::tag&)>;
 
@@ -45,44 +55,44 @@ namespace res
 		static std::filesystem::path get_resources_path();
 
 		bool exists(const tag& tag) const {
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
 				egLOG("resource/exists", "Protocol '{}' is not supported!", tag.protocol());
 				return false;
 			}
-			return resolvers.at(tag.protocol())->exists(tag);
+			return m_resolvers.at(tag.protocol())->exists(tag);
 		}
 
 		bool store(const tag& tag, const std::vector<std::byte>& data) {
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
 				egLOG("resource/store", "Protocol '{}' is not supported!", tag.protocol());
 				return false;
 			}
 
-			return resolvers.at(tag.protocol())->store(tag, data);
+			return m_resolvers.at(tag.protocol())->store(tag, data);
 		}
 
 		void set_adapter_worker(std::unique_ptr<core::res::adapter_worker_base>&& worker) {
-			adapter_worker = std::move(worker);
-			adapter_worker->start();
+			m_adapter_worker = std::move(worker);
+			m_adapter_worker->start();
 		}
 
 		void watch(const res::tag& tag, void* owner, reload_callback cb) {
-			std::lock_guard lock(cache_mutex);
-			watchers[tag][owner] = std::move(cb);
+			std::lock_guard lock(m_cache_mutex);
+			m_watchers[tag][owner] = std::move(cb);
 		}
 
 		void unwatch(const res::tag& tag, void* owner) {
-			std::lock_guard lock(cache_mutex);
-			if (watchers.contains(tag)) {
-				watchers[tag].erase(owner);
+			std::lock_guard lock(m_cache_mutex);
+			if (m_watchers.contains(tag)) {
+				m_watchers[tag].erase(owner);
 			}
 		}
 
 		void signal_changed(const res::tag& tag) {
-			cache.erase(tag);
+			m_cache.erase(tag);
 
-			if (watchers.contains(tag)) {
-				auto callbacks = watchers.at(tag);
+			if (m_watchers.contains(tag)) {
+				auto callbacks = m_watchers.at(tag);
 
 				for (auto& [owner, callback] : callbacks) {
 					callback(tag);
@@ -92,94 +102,146 @@ namespace res
 
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
-			ASSERT_MSG(resolvers.find(prt) == resolvers.end(), "That protocol already has resolver!");
-			return *std::static_pointer_cast<T>(resolvers[prt] = std::make_unique<T>(prt, std::forward<ARGS>(args)...));
+			ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
+			return *std::static_pointer_cast<T>(m_resolvers[prt] = std::make_unique<T>(prt, std::forward<ARGS>(args)...));
 		}
 
 		void unregistrate_resolver(protocol prt) {
-			resolvers.erase(prt);
+			m_resolvers.erase(prt);
 		}
 
-		void registrate_adapter(extension extension, adapter loader) {
-			ASSERT_MSG(adapters.find(extension) == adapters.end(), "That extension already has adapter!");
-			adapters[extension] = std::move(loader);
+		template<class T, class... ARGS>
+		T& registrate_adapter(extension extension, ARGS... args) {
+			auto adapter_new = std::make_shared<T>(std::forward<ARGS>(args)...);
+			m_ext_by_adapter[adapter_new] = extension;
+
+			if (extension.extensions.empty()) {
+				m_by_type_ext[std::pair{ extension.resource_type, "*"s}] = adapter_new;
+
+				if (extension.magic_number != 0) {
+					m_extensions_with_magic.insert(std::pair{ extension.resource_type, "*"s});
+				}
+			}
+
+			for (auto& ext : extension.extensions) {
+				m_by_type_ext[std::pair{ extension.resource_type, ext }] = adapter_new;
+
+				if (extension.magic_number != 0) {
+					m_extensions_with_magic.insert(std::pair{ extension.resource_type, ext });
+				}
+			}
+			return *adapter_new;
 		}
 
-		void unregistrate_adapter(extension ext) {
-			adapters.erase(ext);
+		void unregistrate_adapter(extension extension) {
+			for(auto& ext : extension.extensions) {
+				auto it = m_by_type_ext.find(std::pair{ extension.resource_type, ext });
+				if (it != m_by_type_ext.end())
+				{
+					m_ext_by_adapter.erase(it->second);
+					m_by_type_ext.erase(it);
+				}
+				if (extension.magic_number != 0)
+					m_extensions_with_magic.erase(std::pair{ extension.resource_type, ext });
+			}
+
+			if (extension.extensions.empty()) {
+				auto it = m_by_type_ext.find(std::pair{ extension.resource_type, "*"s });
+				if (it != m_by_type_ext.end()) {
+					m_ext_by_adapter.erase(it->second);
+					m_by_type_ext.erase(it);
+				}
+
+				if (extension.magic_number != 0)
+					m_extensions_with_magic.erase(std::pair{ extension.resource_type, "*"s });
+			}
 		}
 
-		data require_resource_data(const tag& tag) const
+		data fetch_data(const tag& tag) const
 		{
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
 				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
 				return data{};
 			}
 
-			return resolvers.at(tag.protocol())->resolve(tag);
+			return m_resolvers.at(tag.protocol())->resolve(tag);
 		}
 
 		template<class RESOURCE>
-		auto require_resource(const res::tag& tag)
+		auto require(const res::tag& tag) {
+			return require_resource_internal<RESOURCE, false>(tag);
+		}
+
+		template<class RESOURCE>
+		auto require_sync(const res::tag& tag) {
+			return require_resource_internal<RESOURCE, true>(tag);
+		}
+
+		template<class T>
+		void warmup(const res::tag& tag)
 		{
-			if (auto cached_res = try_get_cached_resource(tag)) {
-				return res_handle<RESOURCE>(
-					std::static_pointer_cast<resource_handle_t<RESOURCE>>(cached_res)
-				);
-			}
-
-			if (resolvers.find(tag.protocol()) == resolvers.end()) {
-				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
-				return res_handle<RESOURCE>{};
-			}
-
-			auto res_info = res::resource_info::make<RESOURCE>(tag.extension());
-			auto adapter = std::find_if(adapters.begin(), adapters.end(), [&res_info](const auto& par) { return par.first == res_info; });
-			if (adapter == adapters.end()) {
-				egLOG("resource/require", "Extention '{}' is not supported!", tag.extension());
-				return res_handle<RESOURCE>{};
-			}
-
-			auto final_cb = std::make_shared<resource_handle_t<RESOURCE>>();
-			push_resource_to_cache(tag, final_cb);
-
-			start_async_loading<RESOURCE>(tag, final_cb);
-
-			return res_handle<RESOURCE>(final_cb);
+			auto res = require<T>(tag);
+			res.then([this, res](auto _) {
+				if (res.has_error()) return;
+				push_resource_to_strong_cache(tag, res.get());
+			});
 		}
 
 		template<class RESOURCE>
-		void pin_resource(const res::tag& tag, const std::shared_ptr<RESOURCE>& resource) {
-			std::lock_guard lock(cache_mutex);
-			cache = pinned_resources[tag] = resource;
+		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
+
+			auto block = std::make_shared<resource_handle_t<RESOURCE>>();
+			block->set_ready(std::make_shared<RESOURCE>(std::forward<RESOURCE>(resource)));
+			push_resource_to_strong_cache(tag, block);
+			push_resource_to_cache(tag, block);
+
+			if (!exists(tag)) {
+				post_adapter_work([this, tag, block]() {
+					try {
+						auto adapter = find_adapter_recursive<RESOURCE>(tag);
+						ASSERT_MSG(adapter, "No adapter found for resource type!");
+						std::vector<std::byte> raw_data = adapter->serialize(tag, block->data);
+						store(tag, raw_data);
+					} catch (const std::exception& e) {
+						egLOG("res/error", "Failed to auto-serialize {0}: {1}", tag.string(), e.what());
+					}
+				});
+			}
 		}
 
 		void unpin_resource(const res::tag& tag) {
-			std::lock_guard lock(cache_mutex);
-			pinned_resources.erase(tag);
+			std::unique_lock lock(m_pinning_mutex);
+			m_pinned_resources.erase(tag);
 		}
 
 	private:
+		void post_adapter_work(std::function<void()> cb);
 		std::shared_ptr<resource_handle> try_get_cached_resource(const tag& tag) {
-			std::lock_guard lock(cache_mutex);
-			auto it = cache.find(tag);
-			if (it != cache.end()) {
+			std::shared_lock lock(m_cache_mutex);
+			auto it = m_cache.find(tag);
+			if (it != m_cache.end()) {
 				if (auto sp = it->second.lock()) {
 					return sp;
 				}
-				cache.erase(it);
+				m_cache.erase(it);
 			}
 			return nullptr;
 		}
 
-		void push_resource_to_cache(const tag& tag, const std::shared_ptr<resource_handle>& resource) {
-			std::lock_guard lock(cache_mutex);
-			cache[tag] = resource;
+		void push_resource_to_cache(const tag& tag, std::shared_ptr<resource_handle> resource) {
+			std::unique_lock lock(m_cache_mutex);
+			m_cache[tag] = resource;
 		}
 
-		template<typename T>
-		void start_async_loading(res::tag tag, std::shared_ptr<resource_handle_t<T>> final_cb) {
-			auto& resolver = resolvers[tag.protocol()];
+		void push_resource_to_strong_cache(const res::tag& tag, std::shared_ptr<resource_handle> resource)
+		{
+			std::unique_lock lock(m_pinning_mutex);
+			m_pinned_resources[tag] = resource;
+		}
+
+		template<typename T, bool is_sync>
+		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle_t<T>> final_cb) {
+			auto& resolver = m_resolvers[tag.protocol()];
 
 			auto raw_data_block = resolver->resolve(tag);
 			ASSERT_MSG(raw_data_block, "resource data not found");
@@ -191,12 +253,11 @@ namespace res
 				}
 
 				try {
-					auto res_info = res::resource_info::make<T>(tag.extension());
-					auto adapter_it = std::find_if(adapters.begin(), adapters.end(), [&res_info](const auto& par) { return par.first == res_info; });
-					auto& adapter = adapter_it->second;
+					auto adapter = find_adapter_recursive<T>(tag);
+					ASSERT_MSG(adapter, "No adapter found for resource type!");
 
 					final_cb->status = core::res::res_status::processing;
-					auto parsed_obj = std::static_pointer_cast<T>(adapter(tag, raw_data_block->data));
+					auto parsed_obj = ds::polymorphic_cast<T>(adapter->deserialize(tag, raw_data_block->data));
 
 					final_cb->set_ready(std::move(parsed_obj));
 				}
@@ -205,21 +266,72 @@ namespace res
 				}
 			};
 
-			raw_data_block->then([this, adapter_cb](auto& raw_block) {
-				post_adapter_work(adapter_cb);
-			});
+			if constexpr (is_sync)
+			{
+				raw_data_block->wait();
+				adapter_cb();
+			} else {
+				raw_data_block->then([this, adapter_cb](auto& raw_block) {
+					post_adapter_work(adapter_cb);
+				});
+			}
 		}
 
-		void post_adapter_work(std::function<void()> cb);
+		template<class RESOURCE, bool is_sync>
+		auto require_resource_internal(const res::tag& tag) {
+			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
+
+			if (auto cached_res = try_get_cached_resource(tag)) {
+				return res_handle<RESOURCE>(
+					ds::polymorphic_cast<resource_handle_t<RESOURCE>>(cached_res)
+				);
+			}
+			auto final_cb = std::make_shared<resource_handle_t<RESOURCE>>();
+			push_resource_to_cache(tag, final_cb);
+			start_loading_t<RESOURCE, is_sync>(tag, final_cb);
+			return res_handle<RESOURCE>(final_cb);
+		}
+
+		template<class T>
+		adapter find_adapter_recursive(const res::tag& tag) const {			
+			if (auto adapter = find_adapter<T>(tag.extension())) {
+				return adapter;
+			}
+
+			if (auto adapter = find_adapter<T>("*")) {
+				return adapter;
+			}
+
+			if constexpr (requires { typename T::base_type; }) {
+				return find_adapter_recursive<typename T::base_type>(tag);
+			}
+
+			return nullptr;
+		}
+
+		template<class T>
+		adapter find_adapter(const std::string_view ext) const {
+			auto key = std::pair{ ds::type_id::make<T>(), std::string(ext) };
+			if (m_extensions_with_magic.contains(key)) {
+				// Need to check magic number
+			}
+			auto it = m_by_type_ext.find(key);
+			if (it != m_by_type_ext.end()) return it->second;
+			return nullptr;
+		}
 
 	private:
-		mutable std::mutex cache_mutex;
-		std::unordered_map<protocol, resolver> resolvers;
-		std::unordered_map<extension, adapter> adapters;
-		std::unordered_map<tag, cache_entry> cache;
-		std::unordered_map<tag, std::shared_ptr<resource_entry>> pinned_resources;
-		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> watchers;
-		std::unique_ptr<core::res::adapter_worker_base> adapter_worker = nullptr;
+		mutable std::shared_mutex m_cache_mutex;
+		mutable std::shared_mutex m_pinning_mutex;
+		std::set<std::pair<ds::type_id, std::string>> m_extensions_with_magic;
+		std::unordered_map<std::pair<ds::type_id, std::string>, adapter> m_by_type_ext;
+		std::unordered_map<adapter, extension> m_ext_by_adapter;
+
+		std::unordered_map<protocol, resolver> m_resolvers;
+		std::unordered_map<tag, cache_entry> m_cache;
+		std::unordered_map<tag, std::shared_ptr<resource_handle>> m_pinned_resources;
+		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
+		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;
 	};
 
 	resource_system& get_system();

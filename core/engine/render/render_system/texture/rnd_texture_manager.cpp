@@ -22,7 +22,7 @@ rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res:
 		return nullptr;
 	}
 
-    auto res = res::get_system().require_resource<res::picture_resource>(desc->txm_tag).get_sync();
+    auto res = res::get_system().require<res::picture_resource>(desc->txm_tag).get_sync();
     if (!res) {
         return nullptr;
     }
@@ -75,7 +75,7 @@ rnd::driver::texture_interface* rnd::texture_manager::require_cubemap_texture(co
     rnd::driver::texture_header cb_header;
 
     auto load_face_data = [](res::tag tag) -> std::tuple<std::vector<unsigned char>, rnd::driver::texture_header::TYPE, uint32_t, uint32_t> {
-        auto res = res::get_system().require_resource<res::picture_resource>(tag).get_sync();
+        auto res = res::get_system().require<res::picture_resource>(tag).get_sync();
         rnd::driver::texture_header::TYPE format;
         switch (res->channels()) {
             case 1: format = rnd::driver::texture_header::TYPE::R8; break;

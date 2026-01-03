@@ -5,8 +5,9 @@
 #include "wnd_window_system.h"
 #include "inp_input_system.h"
 #include "edt_editor_system.h"
-#include "res_file_watcher.h"
 #include "cfg_api.h"
+#include "adapters/scn_model_importer_adapter.h"
+#include "desc/desc_system.h"
 
 CFG_VAR_EXT_PATH(cfg_res_path);
 
@@ -24,7 +25,10 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& res = data.require<res::resource_system>();
 	auto& win_service = data.require<wnd::window_system>();
 
-	auto logo = res.require_resource<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png")).get_sync();
+	auto& desc_system = data.require<desc::desc_system>();
+	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system));
+
+	auto logo = res.require<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png")).get_sync();
 	ds::fixed_vector<wnd::window_image, 2> images;
 	images.emplace_back(logo->data(), logo->size().x, logo->size().y, wnd::window_image::TYPE::LOGO);
 	win_service.get_active_window()->set_logo(images);

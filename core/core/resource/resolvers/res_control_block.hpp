@@ -19,30 +19,50 @@ namespace core::res
         std::string error_msg;
         std::atomic<res_status> status = res_status::pending;
         mutable std::mutex callback_mtx;
+
+        virtual ~res_control_block_base() = default;
     };
 
     template<typename T>
     struct res_control_block : res_control_block_base {
         T data;
-
         std::vector<std::function<void(res_control_block<T>&)>> on_ready_callbacks;
 
-        T& get()
+        bool has_error() const
         {
-            while (status != res_status::ready)
+            return status == res_status::error;
+		}
+
+        bool is_ready() const
+        {
+            return status == res_status::ready;
+        }
+
+        void wait()
+        {
+            while (!is_ready() && !has_error())
             {
-				ASSERT_MSG(status != res_status::error, "Resource loading error: {0}", error_msg);
                 std::this_thread::yield();
             }
+
+            ASSERT_MSG(!has_error(), "Resource loading error: {0}", error_msg);
+        }
+
+        T& get() {
+            wait();
             return data;
         }
 
         void then(std::function<void(res_control_block<T>&)> callback)
         {
-            if (status == res_status::ready) {
+            if (is_ready() || has_error()) {
                 callback(*this);
             } else {
                 std::lock_guard lock(callback_mtx);
+                if (is_ready() || has_error()) {
+                    callback(*this);
+                    return;
+				}
                 on_ready_callbacks.push_back(callback);
             }
         }

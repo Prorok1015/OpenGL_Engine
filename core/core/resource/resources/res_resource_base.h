@@ -8,14 +8,19 @@ namespace res
 	{
 		friend res::resource_system;
 	public:
-		resource_entry(const tag& tag) : tag_(tag) {}
+		resource_entry() = default;
+		resource_entry(const tag& tag) : m_tag(tag) {}
+		virtual ~resource_entry() = default;
 
-		bool operator== (const tag& tag) const { return tag_ == tag; }
+		bool operator== (const tag& tag) const { return m_tag == tag; }
 
-		res::tag get_tag() const { return tag_; }
-
+		const res::tag& get_tag() const { return m_tag; }
 	protected:
-		tag tag_;
+		void set_tag(const tag& tag) {
+			m_tag = tag;
+		}
+	protected:
+		tag m_tag;
 	};
 
 	using RecourceRef = std::shared_ptr<resource_entry>;

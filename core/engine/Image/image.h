@@ -1,5 +1,6 @@
 #pragma once
 #include <string_view>
+#include <vector>
 
 #ifndef IMAGE
 #define IMAGE
@@ -39,7 +40,8 @@ namespace stb_image {
 		static void free_image_data(unsigned char* data);
 		static Image read_from_memory(const unsigned char* data, int len);
 		static void set_image_flip(ImageFlip flag);
-
+		static void write_to_memory(ImageType type, const unsigned char* data, int width, int height, int channels, std::vector<std::byte>& out_data);
+	
 	private:
 		bool read(const std::string_view filename);
 

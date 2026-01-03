@@ -23,28 +23,15 @@ res::resource_system::resource_system()
 	fs::path memory_path = fs::path{ cfg_res_path->string() } / "../eg_memory_vfs"; // TODO: make configurable
 	registrate_resolver<vfs_resolver>(res::tag::memory, std::vector<fs::path>{ memory_path.string() });
 
-	registrate_adapter(res::raw_image_adapter::INFO, 
-		std::bind(res::raw_image_adapter{},
-			std::placeholders::_1,
-			std::placeholders::_2));
-
-	registrate_adapter(res::pct_adapter::INFO,
-	std::bind(res::pct_adapter{},
-			std::placeholders::_1,
-			std::placeholders::_2)
-		);
-
-	registrate_adapter(res::text_adapter::INFO,
-	std::bind(res::text_adapter{},
-			std::placeholders::_1,
-			std::placeholders::_2)
-		);
+	registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);
+	registrate_adapter<pct_adapter>(res::pct_adapter::INFO);
+	registrate_adapter<text_adapter>(res::text_adapter::INFO);
 }
 
 void res::resource_system::post_adapter_work(std::function<void()> cb)
 {
-	if (adapter_worker)
-		adapter_worker->post(cb);
+	if (m_adapter_worker)
+		m_adapter_worker->post(cb);
 }
 
 std::filesystem::path res::resource_system::get_resources_path()

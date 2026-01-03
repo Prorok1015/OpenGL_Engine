@@ -4,15 +4,8 @@
 #include "res_tag.h"
 #include "desc_base.hpp"
 #include "resources/desc_resource.h"
+#include "adapters/desc_adapter_t.h"
 #include <vector>
-
-namespace std {
-	template<> struct hash<std::pair<ds::type_id, std::string>> {
-		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
-			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
-		}
-	};
-}
 
 namespace desc
 {
@@ -51,6 +44,29 @@ namespace desc
 		}
 
 		template<typename T>
+		void register_desc2(const std::string_view type_name)
+		{
+			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
+		}
+
+		void unregister_desc2(const std::string_view type_name)
+		{
+			factory_map.erase(std::string{ type_name });
+		}
+
+		std::shared_ptr<desc::desc_base> create_instance(const std::string& type_id, const res::tag& tag) const
+		{
+			auto it = factory_map.find(type_id);
+			if (it == factory_map.end()) {
+				egLOG("desc/error", "Failed to create desc instance of type '{0}': type not registered", type_id);
+				return nullptr;
+			}
+			auto instance = it->second();
+			instance->set_tag(tag);
+			return instance;
+		}
+
+		template<typename T>
 		void unregister_desc(desc_namespace nms = {})
 		{
 			auto type = std::pair{ ds::type_id::make<T>(), nms };
@@ -73,7 +89,7 @@ namespace desc
 				res::tag parent = json::value_to<res::tag>(resource.body.at("__parent"));
 				auto parent_desc = get_desc<desc::desc_base>(parent);
 				if (!parent_desc->is_loaded()) {
-					auto presource = res_system.require_resource<desc::desc_resource>(parent).get_sync();
+					auto presource = m_res_system.require<desc::desc_resource>(parent).get_sync();
 					if (presource) {
 						deserialize_desc(parent_desc, *presource);
 					}
@@ -86,7 +102,7 @@ namespace desc
 
 			if (resource.body.contains("__type")) {
 				auto type_str = json::value_to<res::tag>(resource.body.at("__type"));
-				auto presource = res_system.require_resource<desc::desc_resource>(type_str).get_sync();
+				auto presource = m_res_system.require<desc::desc_resource>(type_str).get_sync();
 				if (presource) {
 					deserialize_desc(desc, *presource);
 				}
@@ -124,7 +140,7 @@ namespace desc
 				auto type = name_map[tag];
 				auto it = desc_map.find(type);
 				if (it != desc_map.end() && !it->second->is_loaded()) {
-					auto desc = res_system.require_resource<desc::desc_resource>(tag).get_sync();
+					auto desc = m_res_system.require<desc::desc_resource>(tag).get_sync();
 					deserialize_desc(it->second, *desc);
 				}
 			}
@@ -208,8 +224,42 @@ namespace desc
 			return nullptr;
 		}
 
+		template<typename T>
+		auto get_or_override_desc2(const desc::desc_base& owner, const json::value& data) const
+		{
+			if (data.is_string()) {
+				return m_res_system.require_sync<T>(json::value_to<res::tag>(data));
+			}
+
+			res::tag mem_tag = make_mem_tag(owner);
+			m_res_system.store(mem_tag, serialize_to_bytes(data));
+			return m_res_system.require_sync<T>(mem_tag);
+		}
+
+		std::vector<std::byte> serialize_to_bytes(const json::value& data) const
+		{
+			std::string str = json::serialize(data);
+			std::vector<std::byte> bytes(str.size());
+			std::memcpy(bytes.data(), str.data(), str.size());
+			return bytes;
+		}
+
+		res::tag make_mem_tag(const desc::desc_base& owner) const
+		{
+			static std::atomic<uint64_t> override_id{ 0 };
+
+			std::string_view owner_name = owner.get_tag().pure_name();
+			std::string path = std::format("memory://overrides/{}_{}.desc",
+				owner_name,
+				override_id.fetch_add(1, std::memory_order_relaxed));
+
+			return res::tag{ path };
+		}
+
 	private:
-		res::resource_system& res_system;
+		res::resource_system& m_res_system;
+		std::unordered_map<std::string, std::function<std::shared_ptr<desc::desc_base>()>> factory_map;
+
 		std::vector<desc_name> descs_for_load;// TODO: change
 		mutable std::vector<std::pair<
 			std::pair<std::shared_ptr<desc::desc_base>, std::pair<ds::type_id, desc_namespace>
