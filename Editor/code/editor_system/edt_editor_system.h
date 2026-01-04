@@ -94,7 +94,7 @@ namespace edt
 				just_string = data.at("just_string").as_string();
 
 			if (data.contains("field")) {
-				field = desc_system.get_or_override_desc2<editor_test_field_desc>(*this, data.at("field"));
+				field = desc_system.get_field_desc<editor_test_field_desc>(*this, data.at("field"));
 			}
 		}
 

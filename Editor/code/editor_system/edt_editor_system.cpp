@@ -876,6 +876,9 @@ bool edt::editor_system::show_toolbar()
 			if (robot.is_ready()) {
 				robot->load_prototype(ecs::registry, world_anchor);
 			}
+			if (robot.has_error()) {
+				egLOG("Editor/Observer", "Error loading model prototype: {}", robot.get_control_block()->error_msg);
+			}
 		}
 
 		ImGui::Separator();
@@ -947,8 +950,12 @@ bool edt::editor_system::show_file_dialog()
 		auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
 		res::tag tag = res::tag::make(relateve.string());
 		if (std::find(imported_models_list.begin(), imported_models_list.end(), tag) == imported_models_list.end()) {
-			imported_models_list.push_back(tag);
-			res::get_system().warmup<scn::skinning_prototype_desc>(tag);
+			//res::get_system().warmup<scn::skinning_prototype_desc>(tag);
+			auto handle = res::get_system().require<scn::skinning_prototype_desc>(tag);
+			handle.then([this, tag](auto& desc) {
+				imported_models_list.push_back(desc.get_tag());
+				imported_models_list.push_back(tag);
+				});
 		}
 	}
     return is_open;

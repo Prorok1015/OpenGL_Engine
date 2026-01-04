@@ -11,7 +11,9 @@ core::desc::desc_adapter_t::desc_adapter_t(::res::resource_system& res_system, :
 std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
 {
     std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
-    auto json_body = json::parse(json_data).as_object();
+	json::parse_options options;
+	options.max_depth = 128;
+    auto json_body = json::parse(json_data, {}, options).as_object();
 
 	ASSERT_MSG(json_body.contains("__type"), "Deserialized desc resource does not contain __type field!");
 

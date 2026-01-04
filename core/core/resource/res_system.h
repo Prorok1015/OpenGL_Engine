@@ -169,12 +169,12 @@ namespace res
 
 		template<class RESOURCE>
 		auto require(const res::tag& tag) {
-			return require_resource_internal<RESOURCE, false>(tag);
+			return require_resource_internal<RESOURCE, false>(resolve_alias(tag));
 		}
 
 		template<class RESOURCE>
 		auto require_sync(const res::tag& tag) {
-			return require_resource_internal<RESOURCE, true>(tag);
+			return require_resource_internal<RESOURCE, true>(resolve_alias(tag));
 		}
 
 		template<class T>
@@ -212,6 +212,15 @@ namespace res
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
 			m_pinned_resources.erase(tag);
+		}
+
+		void register_alias(const res::tag& original, const res::tag& alias);
+		const res::tag& resolve_alias(const res::tag& tag) const {
+			auto it = m_aliases.find(tag);
+			if (it != m_aliases.end()) {
+				return it->second;
+			}
+			return tag;
 		}
 
 	private:
@@ -320,12 +329,16 @@ namespace res
 			return nullptr;
 		}
 
+
 	private:
 		mutable std::shared_mutex m_cache_mutex;
 		mutable std::shared_mutex m_pinning_mutex;
+
 		std::set<std::pair<ds::type_id, std::string>> m_extensions_with_magic;
 		std::unordered_map<std::pair<ds::type_id, std::string>, adapter> m_by_type_ext;
 		std::unordered_map<adapter, extension> m_ext_by_adapter;
+
+		std::unordered_map<res::tag, res::tag> m_aliases;
 
 		std::unordered_map<protocol, resolver> m_resolvers;
 		std::unordered_map<tag, cache_entry> m_cache;

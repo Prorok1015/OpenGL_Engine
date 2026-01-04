@@ -82,12 +82,16 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
         return {};
     }
 
+	std::string path = std::format("memory://{0}/{1}.desc", tag.path(), tag.pure_name());
+	res::tag actual_tag = res::tag{ path };
     json::object jsdata;
 	jsdata["__type"] = "skin_prototype_desc";
 	process_model(scene, jsdata, tag);
 
-	auto instance = desc_system.create_instance("skin_prototype_desc", tag);
+	auto instance = desc_system.create_instance("skin_prototype_desc", actual_tag);
 	instance->deserialize(desc_system, jsdata);
+	res::get_system().store(actual_tag, desc_system.serialize_to_bytes(jsdata));
+	res::get_system().register_alias(tag, actual_tag);
 
 	return instance;
 }

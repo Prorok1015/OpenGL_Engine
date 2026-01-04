@@ -62,7 +62,7 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 				continue;
 			}
 
-			samplers_textures_desc.push_back(desc_system.get_or_override_desc2<rnd::texture_desc>(*this, sampler));
+			samplers_textures_desc.push_back(desc_system.get_field_desc<rnd::texture_desc>(*this, sampler));
 		}
 	}
 

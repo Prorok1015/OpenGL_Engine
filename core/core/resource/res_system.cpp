@@ -34,6 +34,25 @@ void res::resource_system::post_adapter_work(std::function<void()> cb)
 		m_adapter_worker->post(cb);
 }
 
+void res::resource_system::register_alias(const res::tag& original, const res::tag& alias)
+{
+	m_aliases[original] = alias;
+
+	{
+		std::unique_lock lock(m_cache_mutex);
+		if (auto it = m_cache.find(original); it != m_cache.end()) {
+			m_cache[alias] = it->second;
+		}
+	}
+
+	{
+		std::unique_lock lock(m_pinning_mutex);
+		if (auto it = m_pinned_resources.find(original); it != m_pinned_resources.end()) {
+			m_pinned_resources[alias] = it->second;
+		}
+	}
+}
+
 std::filesystem::path res::resource_system::get_resources_path()
 {
 	return cfg_res_path;
