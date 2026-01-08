@@ -7,8 +7,7 @@
 #include "adapters/res_adapter_interface.hpp"
 #include "resources/res_resource_base.h"
 #include "resolvers/res_resolver_interface.hpp"
-#include "resolvers/res_resource_handle.hpp"
-#include <future>
+#include "resources/res_resource_handle.hpp"
 #include <iostream>
 #include <set>
 
@@ -44,6 +43,7 @@ namespace res
 
 		using reload_callback = std::function<void(const res::tag&)>;
 
+		using adapter_key = std::pair<ds::type_id, std::string>;
 	public:
 		resource_system();
 		~resource_system() = default;
@@ -113,10 +113,10 @@ namespace res
 		template<class T, class... ARGS>
 		T& registrate_adapter(extension extension, ARGS... args) {
 			auto adapter_new = std::make_shared<T>(std::forward<ARGS>(args)...);
-			m_ext_by_adapter[adapter_new] = extension;
+			m_adapter_infos[adapter_new] = extension;
 
 			if (extension.extensions.empty()) {
-				m_by_type_ext[std::pair{ extension.resource_type, "*"s}] = adapter_new;
+				m_adapters[std::pair{ extension.resource_type, "*"s}] = adapter_new;
 
 				if (extension.magic_number != 0) {
 					m_extensions_with_magic.insert(std::pair{ extension.resource_type, "*"s});
@@ -124,7 +124,7 @@ namespace res
 			}
 
 			for (auto& ext : extension.extensions) {
-				m_by_type_ext[std::pair{ extension.resource_type, ext }] = adapter_new;
+				m_adapters[std::pair{ extension.resource_type, ext }] = adapter_new;
 
 				if (extension.magic_number != 0) {
 					m_extensions_with_magic.insert(std::pair{ extension.resource_type, ext });
@@ -135,21 +135,21 @@ namespace res
 
 		void unregistrate_adapter(extension extension) {
 			for(auto& ext : extension.extensions) {
-				auto it = m_by_type_ext.find(std::pair{ extension.resource_type, ext });
-				if (it != m_by_type_ext.end())
+				auto it = m_adapters.find(std::pair{ extension.resource_type, ext });
+				if (it != m_adapters.end())
 				{
-					m_ext_by_adapter.erase(it->second);
-					m_by_type_ext.erase(it);
+					m_adapter_infos.erase(it->second);
+					m_adapters.erase(it);
 				}
 				if (extension.magic_number != 0)
 					m_extensions_with_magic.erase(std::pair{ extension.resource_type, ext });
 			}
 
 			if (extension.extensions.empty()) {
-				auto it = m_by_type_ext.find(std::pair{ extension.resource_type, "*"s });
-				if (it != m_by_type_ext.end()) {
-					m_ext_by_adapter.erase(it->second);
-					m_by_type_ext.erase(it);
+				auto it = m_adapters.find(std::pair{ extension.resource_type, "*"s });
+				if (it != m_adapters.end()) {
+					m_adapter_infos.erase(it->second);
+					m_adapters.erase(it);
 				}
 
 				if (extension.magic_number != 0)
@@ -320,12 +320,12 @@ namespace res
 
 		template<class T>
 		adapter find_adapter(const std::string_view ext) const {
-			auto key = std::pair{ ds::type_id::make<T>(), std::string(ext) };
+			auto key = adapter_key{ ds::type_id::make<T>(), std::string(ext) };
 			if (m_extensions_with_magic.contains(key)) {
 				// Need to check magic number
 			}
-			auto it = m_by_type_ext.find(key);
-			if (it != m_by_type_ext.end()) return it->second;
+			auto it = m_adapters.find(key);
+			if (it != m_adapters.end()) return it->second;
 			return nullptr;
 		}
 
@@ -334,15 +334,16 @@ namespace res
 		mutable std::shared_mutex m_cache_mutex;
 		mutable std::shared_mutex m_pinning_mutex;
 
-		std::set<std::pair<ds::type_id, std::string>> m_extensions_with_magic;
-		std::unordered_map<std::pair<ds::type_id, std::string>, adapter> m_by_type_ext;
-		std::unordered_map<adapter, extension> m_ext_by_adapter;
+		std::set<adapter_key> m_extensions_with_magic;
+		std::unordered_map<adapter_key, adapter> m_adapters;
+		std::unordered_map<adapter, extension> m_adapter_infos;
 
 		std::unordered_map<res::tag, res::tag> m_aliases;
 
 		std::unordered_map<protocol, resolver> m_resolvers;
-		std::unordered_map<tag, cache_entry> m_cache;
-		std::unordered_map<tag, std::shared_ptr<resource_handle>> m_pinned_resources;
+		std::unordered_map<res::tag, cache_entry> m_cache;
+		std::unordered_map<res::tag, std::shared_ptr<resource_handle>> m_pinned_resources;
+
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
 		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;
 	};

@@ -25,6 +25,7 @@
 #include "resources/res_resource_picture.h"
 
 #include "ds/ds_svg_writer.hpp"
+#include "level/scn_world.h"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -220,8 +221,9 @@ edt::editor_system::~editor_system()
 {
 }
 
-void edt::editor_system::init(inp::input_system& inp_sys)
+void edt::editor_system::init(ds::app_data_storage& data)
 {
+	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 	
@@ -232,8 +234,7 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 		world_anchor = ecs::registry.create();
 		ecs::registry.emplace<scn::scene_anchor_component>(world_anchor);
 		ecs::registry.emplace<scn::name_component>(world_anchor, scn::name_component{ .name = "Anchor" });
-	}
-	else {
+	} else {
 		world_anchor = anchors.front();
 	}
 
@@ -440,6 +441,10 @@ void edt::editor_system::init(inp::input_system& inp_sys)
 	}
 	this->world_anchor = world_anchor;
 
+
+	registry_sp = std::shared_ptr<entt::registry>(&ecs::registry, [](entt::registry*) {});
+	auto& renderer = data.require<scn::renderer_3d>();
+	renderer.set_current_registry(registry_sp);
 }
 
 void mark_node_for_animation_stop(entt::entity ent)
@@ -455,7 +460,7 @@ void mark_node_for_animation_stop(entt::entity ent)
 	}
 }
 
-void mark_node_for_animation(entt::entity ent, const res::animation& animation)
+void mark_node_for_animation(entt::entity ent, const scn::animation& animation)
 {
 	if (ecs::registry.all_of<scn::keyframes_component>(ent)) {
 		scn::playable_animation_component tmp{ animation.name, animation.duration, animation.ticks_per_second };
@@ -950,7 +955,7 @@ bool edt::editor_system::show_file_dialog()
 		auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
 		res::tag tag = res::tag::make(relateve.string());
 		if (std::find(imported_models_list.begin(), imported_models_list.end(), tag) == imported_models_list.end()) {
-			//res::get_system().warmup<scn::skinning_prototype_desc>(tag);
+			res::get_system().warmup<scn::skinning_prototype_desc>(tag);
 			auto handle = res::get_system().require<scn::skinning_prototype_desc>(tag);
 			handle.then([this, tag](auto& desc) {
 				imported_models_list.push_back(desc.get_tag());

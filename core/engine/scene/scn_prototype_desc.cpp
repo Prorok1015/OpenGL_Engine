@@ -158,7 +158,7 @@ entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, 
 
 	if (node.mesh.has_value()) {
 		auto& mesh = node.mesh.value();
-		res::mesh_view mesh_data;
+		scn::mesh_view mesh_data;
 		mesh_data.vx_begin = mesh.vx_begin;
 		mesh_data.vx_end = mesh.vx_end;
 		mesh_data.ind_begin = mesh.ind_begin;

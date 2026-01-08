@@ -29,7 +29,7 @@ gs::game_system::game_system(desc::desc_system& d)
 	: desc_system(d)
 {
 
-	skin_manager = std::make_unique<scn::skinning_manager>(d);
+	skin_manager = std::make_unique<scn::skinning_manager>();
 
 	renderer = std::make_shared<scn::renderer_3d>(*skin_manager);
 	rnd::get_system().activate_renderer(renderer);

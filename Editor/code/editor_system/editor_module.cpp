@@ -8,6 +8,7 @@
 #include "cfg_api.h"
 #include "adapters/scn_model_importer_adapter.h"
 #include "desc/desc_system.h"
+#include "scene/scn_renderer.h"
 
 CFG_VAR_EXT_PATH(cfg_res_path);
 
@@ -34,7 +35,12 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	win_service.get_active_window()->set_logo(images);
 	win_service.get_active_window()->set_title("Snake Editor");
 
-	data.require<edt::editor_system>().init(data.require<inp::input_system>());
+	auto& rndsys = data.require<rnd::render_system>();
+	data.construct<scn::skinning_manager>();
+	auto renderer3d = std::make_shared<scn::renderer_3d>(data.require<scn::skinning_manager>());
+	rndsys.activate_renderer(renderer3d);
+
+	data.require<edt::editor_system>().init(data);
 }
 
 void editor::editor_module::shutdown_services(ds::app_data_storage& data)

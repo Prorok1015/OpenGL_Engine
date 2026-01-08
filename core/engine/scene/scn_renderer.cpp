@@ -93,21 +93,28 @@ scn::renderer_3d::~renderer_3d()
 
 void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
 {
+	auto resgistry_ptr = current_registry.lock();
+	if (!resgistry_ptr) {
+        egLOG("scn/renderer", "No current registry set for renderer_3d");
+        return;
+    }
+
+	auto& registry = *resgistry_ptr;
     static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
     static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
     static res::tag color_rt_transparent_tag = res::tag(res::tag::memory, "__color_rt_transparent_rt");
     static res::tag waight_rt_transparent_tag = res::tag(res::tag::memory, "__waight_rt_transparent_rt");
     rnd::global_params common_matrix{ .time = (float)Timer::now() };
 
-    z_prepass(drv);
+    z_prepass(drv, registry);
 
-    prepare_directional_light();//TODO: move to ecs systems
+    prepare_directional_light(registry);//TODO: move to ecs systems
 
     auto& txm_manager = rnd::get_system().get_texture_manager();
 
-    for(const auto& ent : ecs::registry.view<scn::camera_component, scn::renderable>())
+    for(const auto ent : registry.view<scn::camera_component, scn::renderable>())
     {
-        auto& camera = ecs::registry.get<scn::camera_component>(ent);
+        auto& camera = registry.get<scn::camera_component>(ent);
         if (camera.viewport.size.x < 1 || camera.viewport.size.y < 1) {
             return;
         }
@@ -160,9 +167,9 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             eng::transform3d pos{ glm::mat4{1.0} };
             common_matrix.view = glm::inverse(glm::mat4{ 1.0 });
 
-            if (ecs::registry.all_of<scn::local_transform>(ent))
+            if (registry.all_of<scn::local_transform>(ent))
             {
-                auto& trans = ecs::registry.get<scn::local_transform>(ent);
+                auto& trans = registry.get<scn::local_transform>(ent);
                 common_matrix.view = glm::inverse(trans.local);
                 pos = eng::transform3d{ trans.local };
             }
@@ -172,8 +179,8 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
 
             drv->set_viewport(camera.viewport);
-            draw_scene_by_material_desc(drv, scn::pass_queue::OPAQUE);
-            draw_sky(drv);
+            draw_scene_by_material_desc(drv, registry, scn::pass_queue::OPAQUE);
+            draw_sky(drv, registry);
             drv->pop_frame_buffer();
         }
 
@@ -203,7 +210,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             drv->set_render_targets({ color_tp_rt, waight_tp_rt }, txm_manager.find(z_pass_tag));
             drv->clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER, { glm::vec4(0), glm::vec4(1) });
             drv->set_viewport(camera.viewport);
-            draw_scene_by_material_desc(drv, scn::pass_queue::TRANSPARENT);
+            draw_scene_by_material_desc(drv, registry, scn::pass_queue::TRANSPARENT);
             drv->pop_frame_buffer();
         }
         {
@@ -228,17 +235,17 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
     }
 }
 
-void scn::renderer_3d::prepare_directional_light()
+void scn::renderer_3d::prepare_directional_light(entt::registry& registry)
 {
     rnd::lights_params global_lights;
     directional_light_count = 0;
 
-    for (const auto ent : ecs::registry.view<scn::directional_light>()) {
+    for (const auto ent : registry.view<scn::directional_light>()) {
         if (directional_light_count >= rnd::lights_params::MAX_LIGHT_COUNT) {
             ASSERT_FAIL("Maxsimum of Directional lights is 12");
             break;
         }
-        auto& light = ecs::registry.get<scn::directional_light>(ent);
+        auto& light = registry.get<scn::directional_light>(ent);
 
         rnd::lights_params::directional_light sun;
         sun.ambient = light.ambient;
@@ -250,16 +257,16 @@ void scn::renderer_3d::prepare_directional_light()
     rnd::get_system().get_shader_manager().update_global_sun(global_lights);
 }
 
-void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
+void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv, entt::registry& registry)
 {
     static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
     static res::tag z_pass_color_tag = res::tag(res::tag::memory, "__z_prepass_color_rt");
     auto& txm_manager = rnd::get_system().get_texture_manager();
     rnd::global_params common_matrix;
 
-    for (const auto ent : ecs::registry.view<scn::camera_component, scn::renderable>())
+    for (const auto ent : registry.view<scn::camera_component, scn::renderable>())
     {
-        auto& camera = ecs::registry.get<scn::camera_component>(ent);
+        auto& camera = registry.get<scn::camera_component>(ent);
         if (camera.viewport.size.x < 1 || camera.viewport.size.y < 1) {
             continue;
         }
@@ -305,9 +312,9 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
         eng::transform3d pos{ glm::mat4{1.0} };
         common_matrix.view = glm::inverse(glm::mat4{ 1.0 });
 
-        if (ecs::registry.all_of<scn::local_transform>(ent))
+        if (registry.all_of<scn::local_transform>(ent))
         {
-            auto& trans = ecs::registry.get<scn::local_transform>(ent);
+            auto& trans = registry.get<scn::local_transform>(ent);
             common_matrix.view = glm::inverse(trans.local);
             pos = eng::transform3d{ trans.local };
         }
@@ -317,7 +324,7 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv)
 
         rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
         drv->set_viewport(camera.viewport);
-        draw_scene_by_material_desc(drv, scn::pass_queue::OPAQUE);
+        draw_scene_by_material_desc(drv, registry, scn::pass_queue::OPAQUE);
         drv->pop_frame_buffer();
     }
 }
@@ -345,10 +352,10 @@ void scn::renderer_3d::draw_composition(rnd::driver::driver_interface* drv, rnd:
     drv->draw_indices(vertex_array, rnd::RENDER_MODE::TRIANGLE, std::size(indeces));
 }
 
-void scn::renderer_3d::draw_sky(rnd::driver::driver_interface* drv)
+void scn::renderer_3d::draw_sky(rnd::driver::driver_interface* drv, entt::registry& registry)
 { 
-    for (const auto sky : ecs::registry.view<scn::renderable, scn::sky_component>()) {
-        auto& cube_map = ecs::registry.get<scn::sky_component>(sky);
+    for (const auto sky : registry.view<scn::renderable, scn::sky_component>()) {
+        auto& cube_map = registry.get<scn::sky_component>(sky);
         rnd::shader_config sky;
         sky.cdata.program = rnd::shader_config::shader_program_data::build()
             .set_vertex_shader(res::tag::make("shaders/sky.vert"))
@@ -366,23 +373,22 @@ void scn::renderer_3d::draw_sky(rnd::driver::driver_interface* drv)
 }
 
 
-res::tag find_geom_tag(ecs::entity ent) {
-    if (ecs::registry.all_of< scn::geometry_component>(ent)) {
-		auto& geom = ecs::registry.get<scn::geometry_component>(ent);
+res::tag find_geom_tag(ecs::entity ent, entt::registry& registry) {
+    if (registry.all_of< scn::geometry_component>(ent)) {
+		auto& geom = registry.get<scn::geometry_component>(ent);
 		return geom.geom_tag;
     }
 
-    if (ecs::registry.all_of<scn::parent_component>(ent)) {
-        auto& parent = ecs::registry.get<scn::parent_component>(ent);
-        return find_geom_tag(parent.parent);
+    if (registry.all_of<scn::parent_component>(ent)) {
+        auto& parent = registry.get<scn::parent_component>(ent);
+        return find_geom_tag(parent.parent, registry);
     }
 
     return res::tag::null;
 };
 
-void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface* drv, scn::pass_queue current_q)
+void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface* drv, entt::registry& registry, scn::pass_queue current_q)
 {
-	auto& registry = ecs::registry;
     auto& geom_mng = rnd::get_system().get_geom_manager();
     for (const auto ent : registry.view<scn::mesh_component, scn::renderable, scn::material_desc_component>()) {
 		auto& mesh = registry.get<scn::mesh_component>(ent).mesh;
@@ -396,7 +402,7 @@ void scn::renderer_3d::draw_scene_by_material_desc(rnd::driver::driver_interface
             continue;
 		}
 
-        auto* va = geom_mng.require_geometry(find_geom_tag(ent));
+        auto* va = geom_mng.require_geometry(find_geom_tag(ent, registry));
         if (!va) {
             continue;
         }

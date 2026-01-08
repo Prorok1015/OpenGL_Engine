@@ -5,6 +5,7 @@
 #include "ecs_entity.h"
 #include "shader/rnd_scene_shader_desc.h"
 #include "scn_skinning_manager.h"
+#include <memory>
 
 namespace rnd::driver
 {
@@ -23,12 +24,16 @@ namespace scn
 
 		virtual void on_render(rnd::driver::driver_interface* drv);
 
-		void draw_sky(rnd::driver::driver_interface* drv);
-		void z_prepass(rnd::driver::driver_interface* drv);
+		void draw_sky(rnd::driver::driver_interface* drv, entt::registry& registry);
+		void z_prepass(rnd::driver::driver_interface* drv, entt::registry& registry);
 		void draw_composition(rnd::driver::driver_interface* drv, rnd::driver::texture_interface* color, rnd::driver::texture_interface* weight);
-		void prepare_directional_light();
-		void draw_scene_by_material_desc(rnd::driver::driver_interface* drv, scn::pass_queue current_q);
+		void prepare_directional_light(entt::registry& registry);
+		void draw_scene_by_material_desc(rnd::driver::driver_interface* drv, entt::registry& registry, scn::pass_queue current_q);
 		bool load_skin(rnd::driver::driver_interface* drv, entt::entity ent, entt::registry& registy);
+
+		void set_current_registry(const std::shared_ptr<entt::registry>& registry) {
+			current_registry = registry;
+		}
 
 	public:
 		scn::skinning_manager& skin_manager;
@@ -39,6 +44,7 @@ namespace scn
 		std::unique_ptr<rnd::driver::vertex_array_interface> vertex_array;
 		std::shared_ptr<rnd::driver::buffer_interface> vertex_buffer;
 		std::shared_ptr<rnd::driver::buffer_interface> index_buffer;
+		std::weak_ptr<entt::registry> current_registry;
 	};
 
 }

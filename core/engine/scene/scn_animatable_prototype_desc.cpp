@@ -138,7 +138,7 @@ void scn::animatable_prototype_desc::load_prototype_animations(entt::registry& r
 {
 	scn::animations_component animations_comp;
 	for (const auto& [_, anim] : animations) {
-		res::animation animation;
+		scn::animation animation;
 		animation.name = anim.name;
 		animation.duration = anim.duration;
 		animation.ticks_per_second = anim.ticks_per_second;
@@ -166,7 +166,7 @@ entt::entity scn::animatable_prototype_desc::load_prototype_node(entt::registry&
 		if (auto it = animation.nodes.find(node.name); it != animation.nodes.end()) {
 			auto& node_anim = it->second;
 			auto& key = registry.get_or_emplace<scn::keyframes_component>(ent);
-			res::animation_node node_anim_res;
+			scn::animation_node node_anim_res;
 			for (auto& pos : node_anim.pos_keyframes) {
 				node_anim_res.pos_keys.push_back({ pos.value, pos.time });
 			}

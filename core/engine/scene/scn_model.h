@@ -4,7 +4,7 @@
 #include "ecs_entity.h"
 #include "scn_primitives.h"
 #include "scn_material_desc.h"
-#include <res_mesh.hpp>
+#include "scn_mesh_nodes.hpp"
 
 namespace scn {
 
@@ -15,7 +15,7 @@ namespace scn {
     };
 
     struct keyframes_component {
-        std::unordered_map<std::string, res::animation_node> keyframes;
+        std::unordered_map<std::string, scn::animation_node> keyframes;
     };
 
     struct name_component {
@@ -23,7 +23,7 @@ namespace scn {
     };
 
     struct mesh_component {
-        res::mesh_view mesh;
+        scn::mesh_view mesh;
     };
 
     struct hightlight_component {
@@ -44,7 +44,7 @@ namespace scn {
     };
 
     struct animations_component {
-        std::vector<res::animation> animations;
+        std::vector<scn::animation> animations;
     };
 
 	struct obj_owner_component {

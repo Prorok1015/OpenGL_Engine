@@ -1,6 +1,5 @@
 #include "ecs_system.h"
 #include "ecs_entity.h"
-#include "res_mesh.hpp"
 #include "scn_model.h"
 
 namespace scn

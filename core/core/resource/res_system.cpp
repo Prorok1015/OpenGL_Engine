@@ -21,7 +21,8 @@ res::resource_system::resource_system()
 	auto& res_resolver = registrate_resolver<vfs_resolver>(tag::default_protocol(), std::vector<fs::path>{ cfg_res_path->string() });
 	res_resolver.set_resource_changed_callback([this](const res::tag& tag) { signal_changed(tag); });
 	fs::path memory_path = fs::path{ cfg_res_path->string() } / "../sandbox"; // TODO: make configurable
-	registrate_resolver<vfs_resolver>(res::tag::memory, std::vector<fs::path>{ memory_path.string() });
+	auto& memory_resolver = registrate_resolver<vfs_resolver>(res::tag::memory, std::vector<fs::path>{ memory_path });
+	memory_resolver.set_resource_changed_callback([this](const res::tag& tag) { signal_changed(tag); });
 
 	registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);
 	registrate_adapter<pct_adapter>(res::pct_adapter::INFO);

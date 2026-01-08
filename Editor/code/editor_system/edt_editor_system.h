@@ -128,7 +128,7 @@ namespace edt
 		editor_system(desc::desc_system& desc_system);
 		~editor_system();
 
-		void init(inp::input_system& inp_sys);
+		void init(ds::app_data_storage& inp_sys);
 
 		bool show_toolbar();
 		bool show_file_dialog();
@@ -211,6 +211,7 @@ namespace edt
 		ds::rtree_q<uint32_t, ds::bbox> rtree;
 		desc::desc_system& desc_system;
 		crossing_context crossingcontext;
+		std::shared_ptr<entt::registry> registry_sp;
 	};
 
 

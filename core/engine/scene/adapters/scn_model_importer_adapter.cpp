@@ -10,7 +10,7 @@
 #include "adapters/res_pct_adapter.h"
 
 #include "scn_glm_json_convert.h"
-#include "res_mesh.hpp"
+#include "scn_mesh_nodes.hpp"
 
 #include "scn_assimp_resource_system_wrapper.h"
 
@@ -106,14 +106,12 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 		{
 			const std::string_view embedded_filename{ pEmbededTxm->mFilename.C_Str() };
 			const std::string_view embedded_format{ pEmbededTxm->achFormatHint };
-			std::string embedded_path = std::vformat("__embedded_txm_{0}/{1}.{2}", 
-				std::make_format_args(
+			std::string embedded_path = std::format("__embedded_txm_{0}/{1}.{2}",
 					tag.pure_name(), 
 					embedded_filename,
 				    (pEmbededTxm->mHeight != 0) ? 
 					res::raw_image_adapter::EXTENSION : 
 					res::pct_adapter::EXTENSIONS[0]
-				)
 			);
 			res::tag embedded_tag = res::tag(res::tag::memory, embedded_path);
 
@@ -141,7 +139,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 				}
 			}
 
-			res::tag desc_tag = res::tag{ res::tag::memory, std::vformat("{0}{1}.txm.desc", std::make_format_args(embedded_tag.path(), embedded_tag.pure_name()))};
+			res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", embedded_tag.path(), embedded_tag.pure_name())};
 
 			if (!res::get_system().exists(desc_tag)) {
 				json::object desc;
@@ -158,7 +156,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			return json::value_from(desc_tag);
 		}
 		
-		res::tag desc_tag = res::tag{ res::tag::memory, std::vformat("{0}{1}.txm.desc", std::make_format_args(tag.path(), texture_name)) };
+		res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", tag.path(), texture_name) };
 
 		if (!res::get_system().exists(desc_tag)) {
 			json::object desc;

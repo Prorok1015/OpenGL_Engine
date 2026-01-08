@@ -12,8 +12,7 @@ namespace scn
 	{
 	public:
 		using skinned_ent = entt::entity;
-		skinning_manager(desc::desc_system& sys)
-			: descsys(sys) {}
+		skinning_manager() = default;
 		~skinning_manager() = default;
 		skinning_manager(const skinning_manager&) = delete;
 		skinning_manager& operator=(const skinning_manager&) = delete;
@@ -37,6 +36,5 @@ namespace scn
 		std::unordered_map<res::tag, std::unique_ptr<rnd::driver::ssbo_buffer_interface>> bone_indices_buffer;
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> bones_matrices_buffer;
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> tmp_treangles_hightlight_buffer;
-		desc::desc_system& descsys;
 	};
 }

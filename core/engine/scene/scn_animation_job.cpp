@@ -1,10 +1,10 @@
 #include "scn_animation_job.h"
-#include "res_mesh.hpp"
+#include "scn_mesh_nodes.hpp"
 #include "scn_model.h"
 
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const res::animation_node& anim);
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const res::animation_node& anim);
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const res::animation_node& anim);
+void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
+void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
+void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim);
 
 void scn::animation_job::init(entt::organizer& organizer, entt::registry& registry)
 {
@@ -18,15 +18,14 @@ void scn::animation_job::deinit(entt::organizer& organizer, entt::registry& regi
 
 void scn::animation_job::update_bone_offsets_system(entt::registry& registry)
 {
-    // new
-    for (entt::entity ent : registry.view<scn::bone_component, scn::world_transform, scn::obj_owner_component>())
+	auto view = registry.view<scn::bone_component, scn::world_transform, scn::obj_owner_component>();
+    for (const auto& [ent, bone, transform, owner] : view.each())
     {
-        auto& bone = registry.get<scn::bone_component>(ent);
-		auto& obj = registry.get<scn::obj_owner_component>(ent).owner;
+		auto& obj = owner.owner;
         auto& matrices = registry.get<scn::bone_matrices_component>(obj);
         if (bone.index >= 0 && bone.index < (int)matrices.matrices.size())
         {
-            matrices.matrices[bone.index] = registry.get<scn::world_transform>(ent).world * bone.offset;
+            matrices.matrices[bone.index] = transform.world * bone.offset;
 		}
     }
 }
@@ -86,7 +85,7 @@ std::size_t find_keyframe_index(const std::vector<T>& arr, float time)
 }
 
 
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const res::animation_node& anim)
+void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
     // we need at least two values to interpolate...
     if (anim.scale_keys.size() == 1) {
@@ -108,7 +107,7 @@ void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const r
     Out = Start + Factor * Delta;
 }
 
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const res::animation_node& anim)
+void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
     // we need at least two values to interpolate...
     if (anim.pos_keys.size() == 1) {
@@ -130,7 +129,7 @@ void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const 
     Out = Start + Factor * Delta;
 }
 
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const res::animation_node& anim)
+void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
     // we need at least two values to interpolate...
     if (anim.rotate_keys.size() == 1) {

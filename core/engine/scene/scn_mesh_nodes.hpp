@@ -1,7 +1,9 @@
 #pragma once
 #include "res_tag.h"
+#include <string>
+#include <vector>
 
-namespace res
+namespace scn
 {
 	struct animation
 	{

@@ -1,7 +1,7 @@
 #pragma once
 #include <common.h>
 #include "scn_model.h"
-#include "res_mesh.hpp"
+#include "scn_mesh_nodes.hpp"
 
 namespace scn
 {
