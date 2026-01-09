@@ -10,7 +10,6 @@
 #include "ecs_common_system.h"
 #include "eng_transform_3d.hpp"
 #include "inp_input_system.h"
-#include "scn_material_component.hpp"
 #include "edt_input_manager.h"
 #include "edt_guizmo.hpp"
 #include <misc/cpp/imgui_stdlib.h>
@@ -112,6 +111,7 @@ pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nul
 edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	: desc_system(desc_system_)
 {
+
 	GUI_REG_LAMBDA("File/Import...", [this] { return show_file_dialog(); });
 
 	GUI_REG_LAMBDA("Window/Toolbar", [this] { return show_toolbar(); });
@@ -124,7 +124,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 		if (ImGui::Begin("Test JSON Window", &is_open)) {
 			if (selected_entity != entt::null) 
 			{
-				if (auto* desc = ecs::registry.try_get<rnd::geometry_desc>(selected_entity))
+				if (auto* desc = registry_sp->try_get<rnd::geometry_desc>(selected_entity))
 				{
 					json::object data;
 					desc->serialize(data);
@@ -139,17 +139,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 					ASSERT_MSG(desc->vertices == test_desc.vertices, "arrays are different");
 				}
 			}
-
-
-			//ImGui::Text("This is a test window for JSON serialization.");
-			//if (test_json_selected_material != entt::null) {
-			//	auto obj = scn::convert_material_to_json(test_json_selected_material); 
-			//	std::ostringstream oss;
-			//	pretty_print(oss, obj);
-			//	std::string json_string = oss.str();
-			//	ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly); 
-			//}
-
 		}
 		ImGui::End();
 
@@ -198,8 +187,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	GUI_REG_LAMBDA_IMPLICIT("EDITOR/IMPL/SHOW_WEP", [this] { return show_web(); });
 
 	GUI_REG_LAMBDA("Editor/Clear", [this] { return show_clear_cache(); });
-	GUI_REG_LAMBDA("Window/Materials", [this] { return show_materials(); });
-	GUI_SET_ITEM_CHECKED("Window/Materials", false);
 	GUI_REG_LAMBDA("Window/Textures", [this] { return show_textures(); });
 	GUI_SET_ITEM_CHECKED("Window/Textures", false);
 	GUI_REG_LAMBDA("Editor/Draw web", [this] { return true; });
@@ -221,24 +208,38 @@ edt::editor_system::~editor_system()
 {
 }
 
+
 void edt::editor_system::init(ds::app_data_storage& data)
 {
+	auto& world = data.construct<scn::world>();
+	registry_sp = std::shared_ptr<entt::registry>(&world.state(), [](entt::registry*) {});
+
+	auto& rndsys = data.require<rnd::render_system>();
+	renderer_sp = std::make_shared<scn::renderer_3d>(data.require<scn::skinning_manager>());
+	rndsys.activate_renderer(renderer_sp);
+	renderer_sp->set_current_registry(registry_sp);
+
+
+	registate_systems_world(world);
+
+	ecs_input->set_active_registry(registry_sp);
+
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 	
 
-	auto anchors = ecs::registry.view<scn::scene_anchor_component>();
+	auto anchors = registry_sp->view<scn::scene_anchor_component>();
 	ecs::entity world_anchor;
 	if (anchors.empty()) {
-		world_anchor = ecs::registry.create();
-		ecs::registry.emplace<scn::scene_anchor_component>(world_anchor);
-		ecs::registry.emplace<scn::name_component>(world_anchor, scn::name_component{ .name = "Anchor" });
+		world_anchor = registry_sp->create();
+		registry_sp->emplace<scn::scene_anchor_component>(world_anchor);
+		registry_sp->emplace<scn::name_component>(world_anchor, scn::name_component{ .name = "Anchor" });
 	} else {
 		world_anchor = anchors.front();
 	}
 
-	decltype(scn::children_component::children)& children = ecs::registry.get_or_emplace<scn::children_component>(world_anchor).children;
+	decltype(scn::children_component::children)& children = registry_sp->get_or_emplace<scn::children_component>(world_anchor).children;
 
 	if (false)
 	{
@@ -305,15 +306,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), glm::ivec2{1080, 720} };
 		glm::vec3 rotation(0);
 		rotation.x = -glm::radians(45.0f);
-		auto ecs_entity = ecs::registry.create();
+		auto ecs_entity = registry_sp->create();
 		children.push_back(ecs_entity);
-		ecs::registry.emplace<scn::name_component>(ecs_entity, "Editor camera");
-		ecs::registry.emplace<scn::parent_component>(ecs_entity, world_anchor);
-		ecs::registry.emplace<scn::camera_component>(ecs_entity, scn::camera_component{ .viewport = viewport });
-		ecs::registry.emplace<scn::local_transform>(ecs_entity);
-		ecs::registry.emplace<scn::world_transform>(ecs_entity);
-		ecs::registry.emplace<scn::renderable>(ecs_entity);
-		ecs::registry.emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
+		registry_sp->emplace<scn::name_component>(ecs_entity, "Editor camera");
+		registry_sp->emplace<scn::parent_component>(ecs_entity, world_anchor);
+		registry_sp->emplace<scn::camera_component>(ecs_entity, scn::camera_component{ .viewport = viewport });
+		registry_sp->emplace<scn::local_transform>(ecs_entity);
+		registry_sp->emplace<scn::world_transform>(ecs_entity);
+		registry_sp->emplace<scn::renderable>(ecs_entity);
+		registry_sp->emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
 	}
 
 
@@ -353,7 +354,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "web_material.desc"))
 		};
 
-		web_prototype_desc.load_prototype(ecs::registry, world_anchor);
+		web_prototype_desc.load_prototype(*registry_sp, world_anchor);
 	}
 
 	if (false)
@@ -364,7 +365,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// windows objects
 		for (int i = 0; i < 1; ++i)
 		{
-			auto wind = ecs::registry.create();
+			auto wind = registry_sp->create();
 			children.push_back(wind);
 
 			rnd::geometry_desc geom_desc;
@@ -402,31 +403,31 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			window_prototype_desc.root.children[0].name = "Window2";
 			window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
 
-			window_prototype_desc.load_prototype(ecs::registry, world_anchor);
+			window_prototype_desc.load_prototype(*registry_sp, world_anchor);
 		}
 	}
 
 	// light
 	{
-		light = ecs::registry.create();
+		light = registry_sp->create();
 		children.push_back(light);
-		ecs::registry.emplace<scn::directional_light>(light,
+		registry_sp->emplace<scn::directional_light>(light,
 			glm::vec4(-0.2f, -1.0f, -0.3f, 0.0),
 			glm::vec4(0.5f, 0.5f, 0.5f, 1.0),
 			glm::vec4(0.2f, 0.2f, 0.2f, 1.0),
 			glm::vec4(1)
 		);
 
-		ecs::registry.emplace<scn::name_component>(light, scn::name_component{ .name = "Global Light" });
-		ecs::registry.emplace<scn::parent_component>(light, world_anchor);
-		ecs::registry.emplace<scn::renderable>(light);
+		registry_sp->emplace<scn::name_component>(light, scn::name_component{ .name = "Global Light" });
+		registry_sp->emplace<scn::parent_component>(light, world_anchor);
+		registry_sp->emplace<scn::renderable>(light);
 	}
 
 	// sky
 	{
-		sky = ecs::registry.create();
+		sky = registry_sp->create();
 		children.push_back(sky);
-		ecs::registry.emplace<scn::sky_component>(sky, scn::sky_component{ .cube_map = std::vector<res::tag>{
+		registry_sp->emplace<scn::sky_component>(sky, scn::sky_component{ .cube_map = std::vector<res::tag>{
 			res::tag::make("skybox/right.jpg"),
 			res::tag::make("skybox/left.jpg"),
 			res::tag::make("skybox/bottom.jpg"),
@@ -435,41 +436,36 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			res::tag::make("skybox/back.jpg"),
 			}
 			});
-		ecs::registry.emplace<scn::renderable>(sky);
-		ecs::registry.emplace<scn::name_component>(sky, scn::name_component{ .name = "Sky" });
-		ecs::registry.emplace<scn::parent_component>(sky, world_anchor);
+		registry_sp->emplace<scn::renderable>(sky);
+		registry_sp->emplace<scn::name_component>(sky, scn::name_component{ .name = "Sky" });
+		registry_sp->emplace<scn::parent_component>(sky, world_anchor);
 	}
 	this->world_anchor = world_anchor;
-
-
-	registry_sp = std::shared_ptr<entt::registry>(&ecs::registry, [](entt::registry*) {});
-	auto& renderer = data.require<scn::renderer_3d>();
-	renderer.set_current_registry(registry_sp);
 }
 
-void mark_node_for_animation_stop(entt::entity ent)
+void mark_node_for_animation_stop(entt::registry* registry_sp, entt::entity ent)
 {
-	if (ecs::registry.all_of<scn::keyframes_component>(ent)) {
-		ecs::registry.remove<scn::playable_animation_component>(ent);
+	if (registry_sp->all_of<scn::keyframes_component>(ent)) {
+		registry_sp->remove<scn::playable_animation_component>(ent);
 	}
 
-	if (auto* children = ecs::registry.try_get<scn::children_component>(ent)) {
+	if (auto* children = registry_sp->try_get<scn::children_component>(ent)) {
 		for (auto& child : children->children) {
-			mark_node_for_animation_stop(child);
+			mark_node_for_animation_stop(registry_sp, child);
 		}
 	}
 }
 
-void mark_node_for_animation(entt::entity ent, const scn::animation& animation)
+void mark_node_for_animation(entt::registry* registry_sp, entt::entity ent, const scn::animation& animation)
 {
-	if (ecs::registry.all_of<scn::keyframes_component>(ent)) {
+	if (registry_sp->all_of<scn::keyframes_component>(ent)) {
 		scn::playable_animation_component tmp{ animation.name, animation.duration, animation.ticks_per_second };
-		ecs::registry.emplace_or_replace<scn::playable_animation_component>(ent, std::move(tmp));
+		registry_sp->emplace_or_replace<scn::playable_animation_component>(ent, std::move(tmp));
 	}
 
-	if (auto* children = ecs::registry.try_get<scn::children_component>(ent)) {
+	if (auto* children = registry_sp->try_get<scn::children_component>(ent)) {
 		for (auto& child : children->children) {
-			mark_node_for_animation(child, animation);
+			mark_node_for_animation(registry_sp, child, animation);
 		}
 	}
 }
@@ -478,10 +474,10 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 {
 	std::string obj_idx = std::to_string((int)ent);
 	std::string name = "Node##" + obj_idx;
-	if (ecs::registry.all_of<scn::name_component>(ent)) {
-		auto& com_name = ecs::registry.get<scn::name_component>(ent);
+	if (registry_sp->all_of<scn::name_component>(ent)) {
+		auto& com_name = registry_sp->get<scn::name_component>(ent);
 		if (!com_name.name.empty()) {
-			name = (ecs::registry.all_of<scn::mesh_component>(ent) ? "[MESH] " : "") + com_name.name + "##" + obj_idx;
+			name = (registry_sp->all_of<scn::mesh_component>(ent) ? "[MESH] " : "") + com_name.name + "##" + obj_idx;
 		}
 	}
 	static ecs::entity selected_node = entt::null;
@@ -501,8 +497,8 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 
-			if (ecs::registry.all_of<scn::name_component>(ent)) {
-				auto& name_comp = ecs::registry.get<scn::name_component>(ent);
+			if (registry_sp->all_of<scn::name_component>(ent)) {
+				auto& name_comp = registry_sp->get<scn::name_component>(ent);
 				strncpy(buf, name_comp.name.c_str(), sizeof(buf) - 1);
 				buf[sizeof(buf) - 1] = '\0';
 				ImGui::OpenPopup("Rename Node");
@@ -511,8 +507,8 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 
 		if (ImGui::BeginPopup("Rename Node")) {
 			if (ImGui::InputText("##rename", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-				if (ecs::registry.all_of<scn::name_component>(ent)) {
-					auto& name_comp = ecs::registry.get<scn::name_component>(ent);
+				if (registry_sp->all_of<scn::name_component>(ent)) {
+					auto& name_comp = registry_sp->get<scn::name_component>(ent);
 					name_comp.name = buf;
 				}
 				
@@ -524,18 +520,18 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 		if (parent_node_to_add != entt::null) {
 			if (ImGui::BeginPopup("create_new_entity")) {
 				if (ImGui::InputText("##new_entity_name", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-					ecs::entity child = ecs::registry.create();
-					ecs::registry.emplace<scn::name_component>(child, buf);
-					ecs::registry.emplace<scn::parent_component>(child, parent_node_to_add);
-					if (ecs::registry.all_of<scn::children_component>(parent_node_to_add)) {
-						auto& children = ecs::registry.get<scn::children_component>(parent_node_to_add);
+					ecs::entity child = registry_sp->create();
+					registry_sp->emplace<scn::name_component>(child, buf);
+					registry_sp->emplace<scn::parent_component>(child, parent_node_to_add);
+					if (registry_sp->all_of<scn::children_component>(parent_node_to_add)) {
+						auto& children = registry_sp->get<scn::children_component>(parent_node_to_add);
 						auto children_list = children.children;
 						children_list.push_back(child);
-						ecs::registry.remove<scn::children_component>(parent_node_to_add);
-						ecs::registry.emplace<scn::children_component>(parent_node_to_add, children_list);
+						registry_sp->remove<scn::children_component>(parent_node_to_add);
+						registry_sp->emplace<scn::children_component>(parent_node_to_add, children_list);
 					}
 					else {
-						ecs::registry.emplace<scn::children_component>(parent_node_to_add, std::vector<ecs::entity>{child});
+						registry_sp->emplace<scn::children_component>(parent_node_to_add, std::vector<ecs::entity>{child});
 					}
 
 					parent_node_to_add = entt::null;
@@ -548,26 +544,26 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 		if (selected_node == ent) {
 			if (ImGui::BeginPopup("tree_context_menu")) {
 				if (ImGui::MenuItem("Add Camera")) {
-					ecs::registry.emplace<scn::camera_component>(ent, 
+					registry_sp->emplace<scn::camera_component>(ent, 
 						scn::camera_component{ .viewport = glm::ivec4{100,100, 500, 500} }
 					);
 				}
 
 				if (ImGui::MenuItem("Add Directional Light")) {
-					ecs::registry.emplace<scn::directional_light>(ent, 
+					registry_sp->emplace<scn::directional_light>(ent, 
 						glm::vec4(-0.2f, -1.0f, -0.3f, 0.0),
 						glm::vec4(0.5f, 0.5f, 0.5f, 1.0),
 						glm::vec4(0.2f, 0.2f, 0.2f, 1.0),
 						glm::vec4(1.0f)
 					);
 				}
-				if (ecs::registry.all_of<scn::renderable>(ent)) {
+				if (registry_sp->all_of<scn::renderable>(ent)) {
 					if (ImGui::MenuItem("Remove Render Flag")) {
-						ecs::registry.remove<scn::renderable>(ent);
+						registry_sp->remove<scn::renderable>(ent);
 					}
 				} else {
 					if (ImGui::MenuItem("Add Render Flag")) {
-						ecs::registry.emplace<scn::renderable>(ent);
+						registry_sp->emplace<scn::renderable>(ent);
 					}
 				}
 				if (ImGui::MenuItem("Add Child Entity")) {
@@ -588,12 +584,12 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 			int idx = -1;
 		};
 
-		if (ecs::registry.all_of<scn::animations_component>(ent)) {
-			auto& anims = ecs::registry.get<scn::animations_component>(ent);
+		if (registry_sp->all_of<scn::animations_component>(ent)) {
+			auto& anims = registry_sp->get<scn::animations_component>(ent);
 			std::string_view play_anim_name;
 
-			if (ecs::registry.all_of<edt_playable_animation>(ent)) {
-				auto& play = ecs::registry.get<edt_playable_animation>(ent);
+			if (registry_sp->all_of<edt_playable_animation>(ent)) {
+				auto& play = registry_sp->get<edt_playable_animation>(ent);
 				play_anim_name = play.name;
 			}
 
@@ -619,14 +615,14 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 						cur = n;
 
 						if (cur == 0) {
-							if (ecs::registry.all_of<edt_playable_animation>(ent)) {
-								ecs::registry.remove<edt_playable_animation>(ent);
-								mark_node_for_animation_stop(ent);
+							if (registry_sp->all_of<edt_playable_animation>(ent)) {
+								registry_sp->remove<edt_playable_animation>(ent);
+								mark_node_for_animation_stop(registry_sp.get(), ent);
 							}
 						} else {
-							ecs::registry.emplace_or_replace<edt_playable_animation>(ent, edt_playable_animation{ .name = names[cur], .idx = cur });
+							registry_sp->emplace_or_replace<edt_playable_animation>(ent, edt_playable_animation{ .name = names[cur], .idx = cur });
 							if (old != cur) {
-								mark_node_for_animation(ent, anims.animations[cur - 1]);
+								mark_node_for_animation(registry_sp.get(), ent, anims.animations[cur - 1]);
 							}
 						}
 					}
@@ -639,8 +635,8 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 			}
 		}
 
-		if (ecs::registry.all_of<scn::local_transform>(ent)) {
-			auto& trans = ecs::registry.get<scn::local_transform>(ent);
+		if (registry_sp->all_of<scn::local_transform>(ent)) {
+			auto& trans = registry_sp->get<scn::local_transform>(ent);
 			bool is_update = false;
 			eng::transform3d tr{ trans.local };
 
@@ -673,35 +669,28 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 
 			if (is_update) {
 				trans.local = tr.to_matrix();
-				ecs::registry.patch<scn::local_transform>(ent);
+				registry_sp->patch<scn::local_transform>(ent);
 			}
 		}
 
-		if (ecs::registry.all_of<scn::directional_light>(ent)) {
-			auto& color = ecs::registry.get<scn::directional_light>(ent);
+		if (registry_sp->all_of<scn::directional_light>(ent)) {
+			auto& color = registry_sp->get<scn::directional_light>(ent);
 			ImGui::ColorEdit3("Light Color", glm::value_ptr(color.diffuse));
 			ImGui::ColorEdit3("Ambient Color", glm::value_ptr(color.ambient));
 			ImGui::ColorEdit3("Specular Color", glm::value_ptr(color.specular));
 			ImGui::DragFloat3("Position", glm::value_ptr(color.direction), 0.01f, -1.0f, 1.0f, "%.1f");
-			if (ecs::registry.all_of<scn::material_link_component>(ent)) {
-				auto& mlt = ecs::registry.get<scn::material_link_component>(ent);
-				if (ecs::registry.all_of<scn::base_material_component>(mlt.material)) {
-					auto& base = ecs::registry.get<scn::base_material_component>(mlt.material);
-					base.albedo = color.diffuse;
-				}
-			}
 		}
 
-		if (ecs::registry.all_of<scn::camera_component>(ent)) {
-			auto& camera = ecs::registry.get<scn::camera_component>(ent);
+		if (registry_sp->all_of<scn::camera_component>(ent)) {
+			auto& camera = registry_sp->get<scn::camera_component>(ent);
 			ImGui::Text("fov: %3.f", camera.fov);
 			ImGui::Text("near: %3.f", camera.near_distance);
 			ImGui::Text("far: %3.f", camera.far_distance);
 			ImGui::Text("x: %d, y: %d, width: %d, height: %d", camera.viewport.center.x, camera.viewport.center.y, camera.viewport.size.x, camera.viewport.size.y);
 		}
 
-		if (ecs::registry.all_of<scn::children_component>(ent)) {
-			auto& children = ecs::registry.get<scn::children_component>(ent);
+		if (registry_sp->all_of<scn::children_component>(ent)) {
+			auto& children = registry_sp->get<scn::children_component>(ent);
 			for (auto& child : children.children)
 			{
 				show_tree_items(child);
@@ -722,7 +711,7 @@ bool edt::editor_system::show_toolbar()
 	{
 		static std::once_flag f;
 		std::call_once(f, [&]() {
-			backpackent = backpack->load_prototype(ecs::registry, world_anchor);
+			backpackent = backpack->load_prototype(*registry_sp, world_anchor);
 			auto geom = backpack->geometry;
 			rtree = geom->rtree;
 
@@ -784,7 +773,7 @@ bool edt::editor_system::show_toolbar()
 
 		if (ImGui::CollapsingHeader("Scene Objects"))
 		{
-			for (const auto ent : ecs::registry.view<scn::scene_anchor_component>())
+			for (const auto ent : registry_sp->view<scn::scene_anchor_component>())
 			{
 				show_tree_items(ent);
 			}
@@ -800,18 +789,18 @@ bool edt::editor_system::show_toolbar()
 			int cam_id = 1;
 			int cam_cur = 0;
 			int cam_cur_id = 0;
-			auto cameras_view = ecs::registry.view<scn::camera_component>();
+			auto cameras_view = registry_sp->view<scn::camera_component>();
 			for (auto& ent : cameras_view)
 			{
 				cameras.push_back(ent);
-				if (ecs::registry.all_of<scn::name_component>(ent)) {
-					auto& name = ecs::registry.get<scn::name_component>(ent);
+				if (registry_sp->all_of<scn::name_component>(ent)) {
+					auto& name = registry_sp->get<scn::name_component>(ent);
 					names.push_back(name.name);
 				} else {
 					names.push_back("Camera" + std::to_string(cam_id++));
 				}
 
-				if (ecs::registry.all_of<scn::renderable>(ent)) {
+				if (registry_sp->all_of<scn::renderable>(ent)) {
 					cam_cur_id = cam_cur;
 				}
 
@@ -827,8 +816,8 @@ bool edt::editor_system::show_toolbar()
 						auto old = cameras[cam_cur_id];
 						auto new_one = cameras[n];
 						cam_cur_id = n;
-						ecs::registry.emplace<scn::renderable>(new_one);
-						ecs::registry.remove<scn::renderable>(old);
+						registry_sp->emplace<scn::renderable>(new_one);
+						registry_sp->remove<scn::renderable>(old);
 					}
 
 					// Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
@@ -838,10 +827,10 @@ bool edt::editor_system::show_toolbar()
 				ImGui::EndCombo();
 			}
 			
-			for (const auto ent : ecs::registry.view<scn::camera_component, scn::renderable>()) {
+			for (const auto ent : registry_sp->view<scn::camera_component, scn::renderable>()) {
 				eng::transform3d ct{ glm::mat4{1.0} };
-				if (ecs::registry.all_of<scn::local_transform>(ent)) {
-					auto& trans = ecs::registry.get<scn::local_transform>(ent);
+				if (registry_sp->all_of<scn::local_transform>(ent)) {
+					auto& trans = registry_sp->get<scn::local_transform>(ent);
 					ct = eng::transform3d{ trans.local };
 				}
 				ImGui::Text("pitch: %.3f, yaw: %.3f, roll: %.3f", glm::degrees(ct.get_pitch()), glm::degrees(ct.get_yaw()), glm::degrees(ct.get_roll()));
@@ -879,7 +868,7 @@ bool edt::editor_system::show_toolbar()
 		if (ImGui::Button("Create object on scene")) {
 			auto robot = res::get_system().require_sync<scn::skinning_prototype_desc>(imported_models_list[selected_model_idx]);
 			if (robot.is_ready()) {
-				robot->load_prototype(ecs::registry, world_anchor);
+				robot->load_prototype(*registry_sp, world_anchor);
 			}
 			if (robot.has_error()) {
 				egLOG("Editor/Observer", "Error loading model prototype: {}", robot.get_control_block()->error_msg);
@@ -916,18 +905,18 @@ bool edt::editor_system::show_toolbar()
 			if (ImGui::Button(edit_mode_enabled ? "Disable Object Edit Mode" : "Enable Object Edit Mode")) {
 				edit_mode_enabled = !edit_mode_enabled; // Toggle the editing mode state
 				if (edit_mode_enabled) {
-					ecs::registry.emplace<scn::mouse_controller_component>(selected_entity);
+					registry_sp->emplace<scn::mouse_controller_component>(selected_entity);
 					// Remove mouse controller from the camera if it exists
-					for (const auto ent : ecs::registry.view<scn::camera_component>()) {
-						if (ecs::registry.all_of<scn::mouse_controller_component>(ent)) {
-							ecs::registry.remove<scn::mouse_controller_component>(ent);
+					for (const auto ent : registry_sp->view<scn::camera_component>()) {
+						if (registry_sp->all_of<scn::mouse_controller_component>(ent)) {
+							registry_sp->remove<scn::mouse_controller_component>(ent);
 						}
 					}
 				} else {
-					ecs::registry.remove<scn::mouse_controller_component>(selected_entity);
+					registry_sp->remove<scn::mouse_controller_component>(selected_entity);
 					// Re-add mouse controller to the camera if it was removed
-					for (const auto ent : ecs::registry.view<scn::camera_component>()) {
-						ecs::registry.emplace<scn::mouse_controller_component>(ent);
+					for (const auto ent : registry_sp->view<scn::camera_component>()) {
+						registry_sp->emplace<scn::mouse_controller_component>(ent);
 					}
 				}
 			}
@@ -1328,11 +1317,11 @@ bool edt::editor_system::show_web()
 {
 	const bool cur_is_show = GUI_IS_ITEM_CHECKED("Editor/Draw web");
 	if (!cur_is_show && cur_is_show != is_show_web) {
-		ecs::registry.remove<scn::renderable>(editor_web);
+		registry_sp->remove<scn::renderable>(editor_web);
 		//ecs::remove_component<scn::renderable>(sky);
 	}
 	else if (cur_is_show && cur_is_show != is_show_web){
-		ecs::registry.emplace<scn::renderable>(editor_web);
+		registry_sp->emplace<scn::renderable>(editor_web);
 		//ecs::add_component(sky, scn::renderable{});
 	} 
 
@@ -1349,12 +1338,12 @@ bool edt::editor_system::show_scene()
 		ImVec2 pos = ImGui::GetCursorScreenPos();
 		glm::mat4 viewMatrix{ 0 };
 		glm::mat4 projMat{ 0 };
-		for (const auto ent : ecs::registry.view<scn::camera_component>())
+		for (const auto ent : registry_sp->view<scn::camera_component>())
 		{
-			auto& camera = ecs::registry.get<scn::camera_component>(ent);
+			auto& camera = registry_sp->get<scn::camera_component>(ent);
 			camera.viewport.size = glm::ivec2(contentRegionAvailable.x, contentRegionAvailable.y);
-			if (ecs::registry.all_of<scn::local_transform>(ent)) {
-				auto& trans = ecs::registry.get<scn::local_transform>(ent);
+			if (registry_sp->all_of<scn::local_transform>(ent)) {
+				auto& trans = registry_sp->get<scn::local_transform>(ent);
 				viewMatrix = glm::inverse(trans.local);
 			}
 			if (camera.viewport.size != glm::ivec2{ 0 }) {
@@ -1380,9 +1369,9 @@ bool edt::editor_system::show_ecs_test()
 	ImGui::SetNextWindowSize(ImVec2{ 400, 300 }, ImGuiCond_FirstUseEver);
 	if (ImGui::Begin("ECS Test", &is_open))
 	{
-		for (const auto ent : ecs::registry.view<eng::transform3d, glm::vec2>()) {
-			auto& trn = ecs::registry.get<eng::transform3d>(ent);
-			auto& v = ecs::registry.get<glm::vec2>(ent);
+		for (const auto ent : registry_sp->view<eng::transform3d, glm::vec2>()) {
+			auto& trn = registry_sp->get<eng::transform3d>(ent);
+			auto& v = registry_sp->get<glm::vec2>(ent);
 			ImGui::Text("entity: %d, pitch: %.3f, yaw: %.3f, roll: %.3f", ent, trn.get_pitch(), trn.get_yaw(), trn.get_roll());
 			auto pos = trn.get_pos();
 			ImGui::Text("\t\tx: %.3f, y: %.3f, z: %.3f", pos.x, pos.y, pos.z);
@@ -1392,8 +1381,8 @@ bool edt::editor_system::show_ecs_test()
 		ImGui::Separator();
 		ImGui::NewLine();
 
-		for (auto ent : ecs::registry.view<eng::transform3d>()) {
-			auto& trn = ecs::registry.get<eng::transform3d>(ent);
+		for (auto ent : registry_sp->view<eng::transform3d>()) {
+			auto& trn = registry_sp->get<eng::transform3d>(ent);
 			ImGui::Text("entity: %d, pitch: %.3f, yaw: %.3f, roll: %.3f", ent, trn.get_pitch(), trn.get_yaw(), trn.get_roll());
 			auto pos = trn.get_pos();
 			ImGui::Text("\t\tx: %.3f, y: %.3f, z: %.3f", pos.x, pos.y, pos.z);
@@ -1405,126 +1394,10 @@ bool edt::editor_system::show_ecs_test()
 	return is_open;
 }
 
-bool edt::editor_system::show_materials()
-{
-	bool is_open = true;
-	if (ImGui::Begin("Materials", &is_open, ImGuiWindowFlags_NoScrollbar))
-	{
-		auto mlts_view = ecs::registry.view<scn::base_material_component>();
-		std::vector<ecs::entity> mlts;
-		for (auto& ent : mlts_view) {
-			mlts.push_back(ent);
-		}
-
-		auto items_getter = [](void* data, int idx) -> const char*
-		{
-			std::vector<ecs::entity>* items = (std::vector<ecs::entity>*)data;
-			if (idx < 0 || idx >= items->size())
-				return nullptr;
-			if (ecs::registry.all_of<scn::name_component>((*items)[idx])) {
-				auto& name = ecs::registry.get<scn::name_component>((*items)[idx]);
-				return name.name.c_str();
-			}
-
-			return "Unnamed material";
-		};
-		ImVec2 windowSize = ImGui::GetContentRegionAvail();
-		float itemHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().ItemSpacing.y;
-
-		int visibleItems = static_cast<int>((windowSize.y - ImGui::GetStyle().ItemSpacing.y) / itemHeight);
-
-		static int item_current = 1;
-		ImGui::PushItemWidth(windowSize.x);
-		ImGui::ListBox("##materials_listbox", &item_current, items_getter, (void*)&mlts, mlts.size(), std::min(visibleItems, (int)mlts.size()));
-		ImGui::PopItemWidth();
-		if (item_current >= 0 && item_current < mlts.size())
-		{
-			ImGui::Begin("Material Properties");
-			test_json_selected_material = mlts[item_current];
-			if (ecs::registry.all_of<scn::base_material_component>(mlts[item_current])) {
-				auto& material = ecs::registry.get<scn::base_material_component>(mlts[item_current]);
-				ImGui::ColorEdit4("Albedo", &material.albedo.r);
-				ImGui::ColorEdit4("Specular", &material.specular.r);
-				ImGui::ColorEdit4("Ambient", &material.ambient.r);
-				ImGui::ColorEdit4("Emissive", &material.emissive.r);
-				ImGui::DragFloat("Shininess", &material.shininess, 1.0f, 0.0f, 1000.0f);
-			}
-
-			if (ecs::registry.all_of<scn::transparent_material_component>(mlts[item_current])) {
-				auto& transparent = ecs::registry.get<scn::transparent_material_component>(mlts[item_current]);
-				ImGui::ColorEdit4("Transparent", &transparent.transparent.r);
-				ImGui::DragFloat("Opacity", &transparent.opacity, 0.01f, 0.0f, 1.0f);
-			}
-
-			if (ecs::registry.all_of<scn::reflective_material_component>(mlts[item_current])) {
-				auto& reflective = ecs::registry.get<scn::reflective_material_component>(mlts[item_current]);
-				ImGui::ColorEdit4("Reflective", &reflective.reflective.r);
-				ImGui::DragFloat("Reflectivity", &reflective.reflectivity, 0.01f, 0.0f, 1.0f);
-			}
-
-			if (ecs::registry.all_of<scn::refractive_material_component>(mlts[item_current])) {
-				auto& refractive = ecs::registry.get<scn::refractive_material_component>(mlts[item_current]);
-				ImGui::DragFloat("Refraction Index", &refractive.refracti, 0.01f, 0.0f, 10.0f);
-			}
-
-			if (ecs::registry.all_of<scn::shininess_strength_component>(mlts[item_current])) {
-				auto& shininess = ecs::registry.get<scn::shininess_strength_component>(mlts[item_current]);
-				ImGui::DragFloat("Shininess Strength", &shininess.shininess_strength, 0.01f, 0.0f, 1.0f);
-			}
-
-			if (ecs::registry.all_of<scn::normal_map_component>(mlts[item_current])) {
-				auto& normal_map = ecs::registry.get<scn::normal_map_component>(mlts[item_current]);
-				ImGui::Text("Normal Map: %s", normal_map.txm.view().data());
-			}
-
-			if (ecs::registry.all_of<scn::metallic_map_component>(mlts[item_current])) {
-				auto& metallic_map = ecs::registry.get<scn::metallic_map_component>(mlts[item_current]);
-				ImGui::Text("Metallic Map: %s", metallic_map.txm.view().data());
-			}
-
-			if (ecs::registry.all_of<scn::roughness_map_component>(mlts[item_current])) {
-				auto& roughness_map = ecs::registry.get<scn::roughness_map_component>(mlts[item_current]);
-				ImGui::Text("Roughness Map: %s", roughness_map.txm.view().data());
-			}
-
-			if (ecs::registry.all_of<scn::ao_map_component>(mlts[item_current])) {
-				auto& ao_map = ecs::registry.get<scn::ao_map_component>(mlts[item_current]);
-				ImGui::Text("AO Map: %s", ao_map.txm.view().data());
-			}
-
-			if (ecs::registry.all_of<scn::albedo_map_component>(mlts[item_current])) {
-				auto& albedo_map = ecs::registry.get<scn::albedo_map_component>(mlts[item_current]);
-				ImGui::Text("Albedo Map: %s", albedo_map.txm.view().data());
-			}
-
-			if (ecs::registry.all_of<scn::is_transparent_flag_component>(mlts[item_current])) {
-				if (ImGui::Button("-##transparent_flag")) {
-					ecs::registry.remove<scn::is_transparent_flag_component>(mlts[item_current]);
-				}
-				ImGui::SameLine();
-				ImGui::Text("Transparent");
-			} else {
-				if (ImGui::Button("+##transparent_flag")) {
-					ecs::registry.emplace<scn::is_transparent_flag_component>(mlts[item_current]);
-				}
-				ImGui::SameLine(); 
-				ImGui::Text("Transparent");
-			}
-
-			ImGui::End();
-		}	
-	
-	}
-	ImGui::End();
-
-
-	return is_open;
-}
-
-void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent, const ds::color& color, bool reset = true) {
-	if (ecs::registry.all_of<scn::material_desc_component, scn::mesh_component>(ent)) {
-		auto mesh = ecs::registry.get<scn::mesh_component>(ent);
-		auto& hightlight = ecs::registry.get_or_emplace<scn::hightlight_component>(ent);
+void recurcive_set(entt::registry* registry_sp, const std::vector<uint32_t>& res, entt::entity ent, const ds::color& color, bool reset = true) {
+	if (registry_sp->all_of<scn::material_desc_component, scn::mesh_component>(ent)) {
+		auto mesh = registry_sp->get<scn::mesh_component>(ent);
+		auto& hightlight = registry_sp->get_or_emplace<scn::hightlight_component>(ent);
 		hightlight.color = color;
 		if (hightlight.triangles.size() != mesh.mesh.get_indices_count() / 3)
 			hightlight.triangles.resize(mesh.mesh.get_indices_count() / 3, std::numeric_limits<uint32_t>::max());
@@ -1542,10 +1415,10 @@ void recurcive_set(const std::vector<uint32_t>& res, entt::entity ent, const ds:
 		}
 	}
 
-	if (ecs::registry.all_of<scn::children_component>(ent)) {
-		auto children = ecs::registry.get<scn::children_component>(ent);
+	if (registry_sp->all_of<scn::children_component>(ent)) {
+		auto children = registry_sp->get<scn::children_component>(ent);
 		for (const auto& child : children.children) {
-			recurcive_set(res, child, color, reset);
+			recurcive_set(registry_sp, res, child, color, reset);
 		}
 	}
 }
@@ -1642,8 +1515,8 @@ bool edt::editor_system::show_textures()
 					std::cout << "Triangle: " << triangle << std::endl;
 				}
 
-				ecs::registry.clear<scn::hightlight_component>();
-				recurcive_set(res, backpackent, picker_color);
+				registry_sp->clear<scn::hightlight_component>();
+				recurcive_set(registry_sp.get(), res, backpackent, picker_color);
 				is_hightlight_color_changed = false;
 			}
 
@@ -1710,15 +1583,15 @@ bool edt::editor_system::show_textures()
 					}*/);
 				}
 
-				ecs::registry.clear<scn::hightlight_component>();
-				recurcive_set(res, backpackent, picker_color);
+				registry_sp->clear<scn::hightlight_component>();
+				recurcive_set(registry_sp.get(), res, backpackent, picker_color);
 				is_dragging = false;
 				is_hightlight_color_changed = false;
 				rect = ds::bbox{};
 			}
 
 			if (is_hightlight_color_changed) {
-				recurcive_set({}, backpackent, picker_color, false);
+				recurcive_set(registry_sp.get(), {}, backpackent, picker_color, false);
 			}
 
 		}
@@ -1803,15 +1676,15 @@ bool edt::editor_system::init_ecs_test()
 	}
 
 	is_inited_ecs_test = true;
-	ecs::entity first = ecs::registry.create();
+	ecs::entity first = registry_sp->create();
 	eng::transform3d trn{ glm::translate(glm::mat4{1.0}, glm::vec3(6)) };
-	ecs::registry.emplace<eng::transform3d>(first, trn);
+	registry_sp->emplace<eng::transform3d>(first, trn);
 	glm::vec2 tmp{ 9, 9 };
-	ecs::registry.emplace<glm::vec2>(first, tmp);
+	registry_sp->emplace<glm::vec2>(first, tmp);
 	trn.set_pos(glm::vec3{ 6, 6, 6 });
-	ecs::entity second = ecs::registry.create();
+	ecs::entity second = registry_sp->create();
 	eng::transform3d trn2{ glm::translate(glm::mat4{1.0}, glm::vec3(3)) };
-	ecs::registry.emplace<eng::transform3d>(second, trn2);
+	registry_sp->emplace<eng::transform3d>(second, trn2);
 	trn2.add_yaw(45.f);
 
 	return true;

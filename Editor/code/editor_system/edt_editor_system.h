@@ -12,6 +12,8 @@
 #include "desc_system.h"
 #include "scn_skinning_prototype_desc.h"
 #include "ds/ds_rtree.h"
+#include "ds/ds_store.hpp"
+#include "scn_renderer.h"
 
 namespace edt
 {
@@ -139,7 +141,6 @@ namespace edt
 		bool show_web();
 		bool show_scene();
 		bool show_ecs_test();
-		bool show_materials();
 		bool show_textures();
 		void show_tree_items(ecs::entity ent);
 		bool show_clear_cache();
@@ -212,6 +213,7 @@ namespace edt
 		desc::desc_system& desc_system;
 		crossing_context crossingcontext;
 		std::shared_ptr<entt::registry> registry_sp;
+		std::shared_ptr<scn::renderer_3d> renderer_sp;
 	};
 
 

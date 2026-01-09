@@ -14,8 +14,8 @@ namespace ecs
 			: inp::input_manager_base("ecs") {}
 
 		ecs::entity get_empty_entity() {
-			if (!ecs::registry.valid(input_event)) {
-				input_event = ecs::registry.create();
+			if (!ecs_registry->valid(input_event)) {
+				input_event = ecs_registry->create();
 			}
 			return input_event;
 		}
@@ -27,7 +27,15 @@ namespace ecs
 			this->invert = invert;
 		}
 
+		entt::registry& get_registry() {
+			return *ecs_registry;
+		}
+
+		void set_active_registry(const std::shared_ptr<entt::registry>& registry) {
+			ecs_registry = registry;
+		}
 	private:
+		std::shared_ptr<entt::registry> ecs_registry;
 		ecs::entity input_event = entt::null;
 		glm::vec2 last_cursor_pos = { 0.f, 0.f };
 		glm::ivec4 input_area = {};

@@ -54,13 +54,6 @@ void scn::transform_job::calc_world_transforms(ecs::entity ent, entt::registry& 
     }
     registry.emplace_or_replace<scn::world_transform>(ent, parent * local);
 
-    //if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
-    //    egLOG("", "name {} is world calculated!", name->name);
-    //}
-    //else {
-    //    egLOG("", "name UNLNOWN is world calculated!");
-    //}
-
     registry.remove<is_local_transform_invalidated>(ent);
     registry.remove<is_transform_will_update_by_parent>(ent);
 
@@ -77,12 +70,7 @@ void scn::transform_job::calc_world_transforms(ecs::entity ent, entt::registry& 
 
 void scn::transform_job::on_validate_local_transform(entt::registry& registry, ecs::entity ent)
 {
-    /*if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
-        egLOG("", "name {} child is validated!", name->name);
-    }
-    else {
-        egLOG("", "name UNLNOWN child is validated!");
-    }*/
+
     if (registry.all_of<is_transform_will_update_by_parent>(ent)) {
         return;
     }
@@ -104,13 +92,6 @@ void scn::transform_job::on_invalidate_local_transform(entt::registry& registry,
     if (registry.any_of<is_transform_will_update_by_parent, is_local_transform_invalidated>(ent)) {
         return;
     }
-    /*
-    if (auto* name = ecs::registry.try_get<scn::name_component>(ent)) {
-        egLOG("", "name {} is invalidated!", name->name);
-    }
-    else {
-        egLOG("", "name UNLNOWN is invalidated!");
-    }*/
 
     registry.emplace<is_local_transform_invalidated>(ent);
     if (registry.all_of<scn::children_component>(ent))

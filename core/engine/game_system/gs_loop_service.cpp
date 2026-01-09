@@ -1,10 +1,11 @@
 #include "gs_loop_service.h"
-#include <rnd_render_system.h>
-#include <inp_input_system.h>
-#include <ecs_system.h>
+#include "rnd_render_system.h"
+#include "inp_input_system.h"
+#include "ecs_system.h"
 #include "ecs_common_system.h"
-#include <gs_game_system.h>
+#include "gs_game_system.h"
 #include "wnd_window_system.h"
+#include "level/scn_world.h"
 
 gs::gs_loop_service::gs_loop_service()
 	: stop_requested(false)
@@ -50,6 +51,8 @@ void gs::gs_loop_service::on_step(ds::app_data_storage& storage)
 		system.prepare(ecs::registry);
 		system.callback()(system.data(), ecs::registry);
 	}
+
+	storage.require<scn::world>().update(duration);
 
 	gs::get_system().end_ecs_frame();
 

@@ -67,7 +67,6 @@ namespace wnd
 			return size == glm::zero<glm::ivec2>();
 		}
 
-		float get_delta() const { return (float)delta; }
 		const glm::ivec2& get_size() const { return size; }
 		short_id get_id() const { return short_id{ ctx.get_id() }; }
 

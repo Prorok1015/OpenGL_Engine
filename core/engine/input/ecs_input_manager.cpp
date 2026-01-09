@@ -14,8 +14,8 @@ struct event_visitor
 	{
 		using T = std::decay_t<decltype(evt)>;
 		auto ent = mng.get_empty_entity();
-		ecs::registry.emplace_or_replace<T>(ent, evt);
-		ecs::registry.emplace_or_replace<ecs::input_changed_event_component>(ent);
+		mng.get_registry().emplace_or_replace<T>(ent, evt);
+		mng.get_registry().emplace_or_replace<ecs::input_changed_event_component>(ent);
 	}
 
 private:

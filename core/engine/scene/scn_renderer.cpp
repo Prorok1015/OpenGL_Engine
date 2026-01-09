@@ -13,7 +13,6 @@
 #include "eng_transform_3d.hpp"
 
 #include "gui_api.hpp"
-#include "scn_material_component.hpp"
 
 namespace scn {
     static float make_aspect(camera_component& camera)

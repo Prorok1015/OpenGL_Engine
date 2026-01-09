@@ -35,10 +35,7 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	win_service.get_active_window()->set_logo(images);
 	win_service.get_active_window()->set_title("Snake Editor");
 
-	auto& rndsys = data.require<rnd::render_system>();
 	data.construct<scn::skinning_manager>();
-	auto renderer3d = std::make_shared<scn::renderer_3d>(data.require<scn::skinning_manager>());
-	rndsys.activate_renderer(renderer3d);
 
 	data.require<edt::editor_system>().init(data);
 }
