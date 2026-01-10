@@ -25,8 +25,6 @@ namespace desc
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) = 0;
 		virtual void serialize(json::object&) const = 0;
 
-		bool is_loaded() const { return is_loaded_flag; }
-
 		desc_base& operator=(const desc_base& other)
 		{
 			// HACK: to not copy res::tag m_tag
@@ -34,9 +32,5 @@ namespace desc
 		}
 
 	private:
-		void set_is_loaded(bool f = true) { is_loaded_flag = f; }
-
-	private:
-		bool is_loaded_flag = false;
 	};
 }

@@ -10,16 +10,10 @@
 gs::gs_loop_service::gs_loop_service()
 	: stop_requested(false)
 {
-	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
-		ptr->init(job_organazer, ecs::registry);
-	}
 }
 
 gs::gs_loop_service::~gs_loop_service()
 {
-	for (auto& ptr : ecs::job_base::get_jobs(ecs::job_base::FIRST)) {
-		ptr->deinit(job_organazer, ecs::registry);
-	}
 }
 
 void gs::gs_loop_service::init(ds::app_data_storage& storage)
@@ -28,29 +22,18 @@ void gs::gs_loop_service::init(ds::app_data_storage& storage)
 
 	window_system_ref.init_windows_frame_time();
 	previous_time = std::chrono::high_resolution_clock::now();
-
-	ecs::registry.ctx().emplace<scn::delta_time>(delta_time);
 }
 
 void gs::gs_loop_service::on_step(ds::app_data_storage& storage)
 {
-	auto job_graph = job_organazer.graph();
-
-	auto& window_system_ref = storage.require<wnd::window_system>();
 	auto current_time = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<float> duration = current_time - previous_time;
-	delta_time = duration.count();
-	ecs::registry.ctx().get<scn::delta_time>().dt = delta_time;
 	previous_time = current_time;
 
+	auto& window_system_ref = storage.require<wnd::window_system>();
 	window_system_ref.pool_events();
 
 	// window->update(context);
-
-	for (auto&& system : job_graph) {
-		system.prepare(ecs::registry);
-		system.callback()(system.data(), ecs::registry);
-	}
 
 	storage.require<scn::world>().update(duration);
 

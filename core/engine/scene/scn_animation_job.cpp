@@ -6,31 +6,21 @@ void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const s
 void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
 void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim);
 
-void scn::animation_job::init(entt::organizer& organizer, entt::registry& registry)
+void update_bone_offsets_system(entt::registry& registry)
 {
-    organizer.emplace<&animation_job::update_bone_offsets_system>(*this, "update_bone_offsets_system");
-	organizer.emplace<&animation_job::update_nodes_animation_system>(*this, "update_node_animation_system");
-}
-
-void scn::animation_job::deinit(entt::organizer& organizer, entt::registry& registry)
-{
-}
-
-void scn::animation_job::update_bone_offsets_system(entt::registry& registry)
-{
-	auto view = registry.view<scn::bone_component, scn::world_transform, scn::obj_owner_component>();
+    auto view = registry.view<scn::bone_component, scn::world_transform, scn::obj_owner_component>();
     for (const auto& [ent, bone, transform, owner] : view.each())
     {
-		auto& obj = owner.owner;
+        auto& obj = owner.owner;
         auto& matrices = registry.get<scn::bone_matrices_component>(obj);
         if (bone.index >= 0 && bone.index < (int)matrices.matrices.size())
         {
             matrices.matrices[bone.index] = transform.world * bone.offset;
-		}
+        }
     }
 }
 
-void scn::animation_job::update_nodes_animation_system(entt::registry& registry, const scn::delta_time& dt)
+void update_nodes_animation_system(entt::registry& registry, const scn::delta_time& dt)
 {
     for (auto [ent, keyframes, animation] : registry.view<scn::keyframes_component, scn::playable_animation_component>().each())
     {
@@ -41,7 +31,8 @@ void scn::animation_job::update_nodes_animation_system(entt::registry& registry,
         if (time_in_ticks > animation.duration) {
             if (animation.is_repeat_animation) {
                 animation.current_tick = 0.f;
-            } else {
+            }
+            else {
                 ticks = animation.duration;
                 continue;
             }
@@ -148,4 +139,10 @@ void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const 
     const glm::quat& StartRotationQ = anim.rotate_keys[RotationIndex].value;
     const glm::quat& EndRotationQ = anim.rotate_keys[NextRotationIndex].value;
     Out = glm::slerp(StartRotationQ, EndRotationQ, Factor);
+}
+
+void scn::init_animation_system(entt::registry& registry, entt::organizer& organizer)
+{
+    organizer.emplace<update_bone_offsets_system>("update_bone_offsets_system");
+    organizer.emplace<update_nodes_animation_system>("update_node_animation_system");
 }

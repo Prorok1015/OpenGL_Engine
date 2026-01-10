@@ -13,10 +13,6 @@
 gs::game_system* p_game_system = nullptr;
 extern int gMaxTexture2DSize;
 
-scn::mouse_controller_job mouse_controller_system;
-scn::transform_job transform_job_instance;
-scn::animation_job animation_job_instance;
-
 gs::game_system& gs::get_system()
 {
 	ASSERT_MSG(p_game_system, "Game system is nullptr!");

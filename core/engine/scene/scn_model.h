@@ -9,6 +9,8 @@
 namespace scn {
 
     struct delta_time { float dt; };
+    struct fixed_time { float dt; };
+    struct update_alpha { float dt; };
 
     struct material_desc_component {
         res::res_handle<scn::material_desc> mlt_desc;

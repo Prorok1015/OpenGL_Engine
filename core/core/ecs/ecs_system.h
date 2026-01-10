@@ -1,55 +1,59 @@
 #pragma once
 #include "common.h"
-#include "ds/ds_fixed_vector.hpp"
+#include "logger/engine_log.h"
+#include "ecs_system_interface.hpp"
 #include <entt/fwd.hpp>
 
 namespace ecs
 {
-	/// EXAMPLE 
-	/// 
-	/// class job : public ecs::job_base
-	/// {
-	/// public:
-	/// 	void init(entt::organizer& organizer, entt::registry& registry) override
-	/// 	{
-	///			organizer.add<&job::update>(this);
-	/// 	}
-	/// 
-	/// 	void deinit(entt::organizer& organizer, entt::registry& registry) override
-	/// 	{
-	/// 		organizer.remove<&job::update>(this);
-	/// 	}
-	/// 
-	///		void update(some_data& data) const {
-	///			do_something(data);
-	/// 	}
-	/// };
-	/// 
-	/// job job_instance; // only one instance
-	class job_base
+	class system_factory
 	{
+		using initializer_cb = std::function<std::unique_ptr<system_interface>(entt::registry&, entt::organizer&)>;
 	public:
-		enum layer { FIRST, SECOND, THIRD };
+		system_factory() = default;
+		~system_factory() = default;
+		system_factory(const system_factory&) = delete;
+		system_factory(system_factory&&) = delete;
+		system_factory& operator=(const system_factory&) = delete;
+		system_factory& operator=(system_factory&&) = delete;
 
-	private:
-		static constexpr std::size_t MAX_LAYERS = 3;
-		static constexpr std::size_t MAX_SYSTEMS = 16;
-		static auto& get_jobs_layer(layer layer) {
-			static std::array<ds::fixed_vector<job_base*, MAX_SYSTEMS>, MAX_LAYERS> jobs;
-			return jobs[layer];
+		void register_system(const std::string& name, std::function<void(entt::registry&, entt::organizer&)> func)
+		{
+			ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
+			m_systems[name] = [func = std::move(func)](entt::registry& reg, entt::organizer& org) -> std::unique_ptr<system_interface> {
+				func(reg, org);
+				return nullptr;
+			};
 		}
 
-	public:
-		job_base() { get_jobs_layer(layer::FIRST).push_back(this); }
-		virtual ~job_base() {}
-		job_base(const job_base&) = delete;
-		job_base(job_base&&) = delete;
-		job_base& operator=(const job_base&) = delete;
-		job_base& operator=(job_base&&) = delete;
+		template<typename T, typename... ARGS>
+		void register_system_class(const std::string& name, ARGS... args)
+		{
+			ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
+			m_systems[name] = [args...](entt::registry& reg, entt::organizer& org) {
+				auto sys = std::make_unique<T>(args...);
+				sys->register_in_world(reg, org);
+				return sys;
+			};
+		}
 
-		virtual void init(entt::organizer& organizer, entt::registry& registry) = 0;
-		virtual void deinit(entt::organizer& organizer, entt::registry& registry) = 0;
+		void unregister_system(const std::string_view name)
+		{
+			m_systems.erase(std::string{ name });
+		}
 
-		static const auto& get_jobs(layer layer) { return get_jobs_layer(layer); }
+		std::unique_ptr<system_interface> create_system(const std::string& name, entt::registry& registry, entt::organizer& organizer) const
+		{
+			auto it = m_systems.find(name);
+			if (it != m_systems.end()) {
+				return it->second(registry, organizer);
+			}
+
+			egLOG("ecs/systems/create", "required system isn't registred '{0}'", name);
+			return nullptr;
+		}
+
+	private:
+		std::unordered_map<std::string, initializer_cb> m_systems;
 	};
 }

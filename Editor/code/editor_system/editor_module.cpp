@@ -29,7 +29,7 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& desc_system = data.require<desc::desc_system>();
 	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system));
 
-	auto logo = res.require<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png")).get_sync();
+	auto logo = res.require_sync<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
 	ds::fixed_vector<wnd::window_image, 2> images;
 	images.emplace_back(logo->data(), logo->size().x, logo->size().y, wnd::window_image::TYPE::LOGO);
 	win_service.get_active_window()->set_logo(images);
@@ -43,5 +43,6 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
+	data.destruct<scn::skinning_manager>();
 	editor_term(data);
 }

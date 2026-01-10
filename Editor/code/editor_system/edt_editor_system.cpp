@@ -212,6 +212,11 @@ edt::editor_system::~editor_system()
 void edt::editor_system::init(ds::app_data_storage& data)
 {
 	auto& world = data.construct<scn::world>();
+	auto& sfactory = data.require<ecs::system_factory>();
+	sfactory.create_system("scn::transform_system", world.state(), world.organizer());
+	sfactory.create_system("scn::animation_system", world.state(), world.organizer());
+	sfactory.create_system("scn::mouse_controller_system", world.state(), world.organizer());
+
 	registry_sp = std::shared_ptr<entt::registry>(&world.state(), [](entt::registry*) {});
 
 	auto& rndsys = data.require<rnd::render_system>();
@@ -219,8 +224,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	rndsys.activate_renderer(renderer_sp);
 	renderer_sp->set_current_registry(registry_sp);
 
-
 	registate_systems_world(world);
+
+	world.mark_systems_graphs_dirty();
 
 	ecs_input->set_active_registry(registry_sp);
 
@@ -721,8 +727,6 @@ bool edt::editor_system::show_toolbar()
 			}
 		});
 	}
-
-	is_last_frame_loaded = backpack && backpack->is_loaded();
 
 	bool is_open = true;
 	if (ImGui::Begin("Observer", &is_open))
