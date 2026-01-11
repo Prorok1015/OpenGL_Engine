@@ -21,8 +21,6 @@ void editor::editor_module::register_services(ds::app_data_storage& data)
 
 void editor::editor_module::initialize_services(ds::app_data_storage& data)
 {
-	// Initialize editor services here
-
 	auto& res = data.require<res::resource_system>();
 	auto& win_service = data.require<wnd::window_system>();
 

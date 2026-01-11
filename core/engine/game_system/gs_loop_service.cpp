@@ -5,7 +5,7 @@
 #include "ecs_common_system.h"
 #include "gs_game_system.h"
 #include "wnd_window_system.h"
-#include "level/scn_world.h"
+#include "level/scn_level_manager.h"
 
 gs::gs_loop_service::gs_loop_service()
 	: stop_requested(false)
@@ -35,7 +35,7 @@ void gs::gs_loop_service::on_step(ds::app_data_storage& storage)
 
 	// window->update(context);
 
-	storage.require<scn::world>().update(duration);
+	storage.require<scn::level_manager>().update(duration);
 
 	gs::get_system().end_ecs_frame();
 

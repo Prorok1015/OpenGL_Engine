@@ -28,7 +28,6 @@ namespace scn
 		entt::organizer& organizer() { return m_organizer; }
 		entt::organizer const& organizer() const { return m_organizer; }
 
-		bool load_from_desc(const scn::level_desc& lvl, const ecs::system_factory& system_factory);
 		void mark_systems_graphs_dirty() {
 			m_fixed_graph = m_fixed_organizer.graph();
 			m_variable_graph = m_organizer.graph();

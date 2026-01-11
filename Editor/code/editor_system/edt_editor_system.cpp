@@ -25,6 +25,8 @@
 
 #include "ds/ds_svg_writer.hpp"
 #include "level/scn_world.h"
+#include "level/scn_level.h"
+#include "level/scn_level_manager.h"
 
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
@@ -211,11 +213,23 @@ edt::editor_system::~editor_system()
 
 void edt::editor_system::init(ds::app_data_storage& data)
 {
-	auto& world = data.construct<scn::world>();
-	auto& sfactory = data.require<ecs::system_factory>();
-	sfactory.create_system("scn::transform_system", world.state(), world.organizer());
-	sfactory.create_system("scn::animation_system", world.state(), world.organizer());
-	sfactory.create_system("scn::mouse_controller_system", world.state(), world.organizer());
+	auto& level_manager = data.require<scn::level_manager>();
+	{
+		scn::world world;
+		auto& sfactory = data.require<ecs::system_factory>();
+		sfactory.create_system("scn::transform_system", world.state(), world.organizer());
+		sfactory.create_system("scn::animation_system", world.state(), world.organizer());
+		sfactory.create_system("scn::mouse_controller_system", world.state(), world.organizer());
+
+		registate_systems_world(world);
+
+		world.mark_systems_graphs_dirty();
+		scn::level lvl;
+		lvl.add_world("3d_scene", std::move(world));
+		level_manager.set_level(std::move(lvl));
+	}
+	auto& lvl = level_manager.get_level();
+	auto& world = lvl.get_world("3d_scene");
 
 	registry_sp = std::shared_ptr<entt::registry>(&world.state(), [](entt::registry*) {});
 
@@ -224,9 +238,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	rndsys.activate_renderer(renderer_sp);
 	renderer_sp->set_current_registry(registry_sp);
 
-	registate_systems_world(world);
-
-	world.mark_systems_graphs_dirty();
 
 	ecs_input->set_active_registry(registry_sp);
 

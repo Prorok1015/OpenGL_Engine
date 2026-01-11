@@ -20,11 +20,3 @@ void scn::world::update(std::chrono::duration<float> dt)
 
     run_graph(m_variable_graph);
 }
-
-bool scn::world::load_from_desc(const scn::level_desc& lvl, const ecs::system_factory& system_factory)
-{
-
-    m_fixed_graph = m_fixed_organizer.graph();
-	m_variable_graph = m_organizer.graph();
-	return false;
-}
