@@ -16,9 +16,7 @@ namespace scn
 		void update(std::chrono::duration<float> dt);
 
 		scn::level& get_level() { return active_lvl; }
-		void set_level(scn::level&& lvl) {
-			active_lvl = std::move(lvl);
-		}
+
 	private:
 		scn::level active_lvl;
 	};

@@ -1,7 +1,22 @@
 #include "scn_level.h"
+#include "scn_model.h"
 
 void scn::level::update(std::chrono::duration<float> dt)
 {
-	for (auto& [_, world] : m_worlds)
-		world->update(dt);
+    m_accumulator += dt.count();
+
+    while (m_accumulator >= m_fixed_step) {
+        m_level_state.ctx().insert_or_assign<scn::fixed_time>({ m_fixed_step });
+
+        run_graph(m_fixed_graph);
+
+        m_accumulator -= m_fixed_step;
+    }
+
+    m_level_state.ctx().insert_or_assign<delta_time>({ dt.count() });
+
+    float alpha = m_accumulator / m_fixed_step;
+    m_level_state.ctx().insert_or_assign<scn::update_alpha>({ alpha });
+
+    run_graph(m_variable_graph);
 }

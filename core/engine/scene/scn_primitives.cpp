@@ -249,6 +249,7 @@ scn::model_sphere scn::generate_sphere()
 }
 
 #include "ecs_component.h"
+#include "level/scn_level.h"
 
 void clear_input_events(entt::registry& registry)
 {
@@ -256,7 +257,7 @@ void clear_input_events(entt::registry& registry)
     registry.destroy(ents.begin(), ents.end());
 }
 
-void registate_systems_world(scn::world& world)
+void registate_systems_world(scn::level& world)
 {
     world.organizer().emplace<&clear_input_events>("clear input events");
 }

@@ -2,7 +2,7 @@
 #include <common.h>
 #include "scn_model.h"
 #include "scn_mesh_nodes.hpp"
-#include "level/scn_world.h"
+#include "level/scn_level.h"
 
 namespace scn
 {
@@ -38,4 +38,4 @@ namespace scn
 	model_sphere generate_sphere();
 }
 
-void registate_systems_world(scn::world& world);
+void registate_systems_world(scn::level& world);

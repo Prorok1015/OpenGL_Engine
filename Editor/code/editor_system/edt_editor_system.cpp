@@ -215,19 +215,18 @@ void edt::editor_system::init(ds::app_data_storage& data)
 {
 	auto& level_manager = data.require<scn::level_manager>();
 	{
-		scn::world world;
+		scn::level& lvl = level_manager.get_level();
+		scn::world& world = lvl.create_world("3d_scene", 0);
 		auto& sfactory = data.require<ecs::system_factory>();
-		sfactory.create_system("scn::transform_system", world.state(), world.organizer());
-		sfactory.create_system("scn::animation_system", world.state(), world.organizer());
-		sfactory.create_system("scn::mouse_controller_system", world.state(), world.organizer());
+		sfactory.create_system("scn::transform_system", world.state(), lvl.organizer());
+		sfactory.create_system("scn::animation_system", world.state(), lvl.organizer());
+		sfactory.create_system("scn::mouse_controller_system", world.state(), lvl.organizer());
 
-		registate_systems_world(world);
+		registate_systems_world(lvl);
 
-		world.mark_systems_graphs_dirty();
-		scn::level lvl;
-		lvl.add_world("3d_scene", std::move(world));
-		level_manager.set_level(std::move(lvl));
+		lvl.mark_systems_graphs_dirty();
 	}
+	
 	auto& lvl = level_manager.get_level();
 	auto& world = lvl.get_world("3d_scene");
 
