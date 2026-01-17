@@ -3,32 +3,42 @@
 #include <entt/entt.hpp>
 #include <functional>
 
-namespace scn {
-template <size_t ID, typename T> struct bind_res {
-  T& ref;
+namespace ecs {
+template <size_t ID, typename T> 
+struct bind_res {
+    T& ref;
 
-  bind_res(T& r) : ref(r) {}
+    bind_res(T& r) : ref(r) {}
 
-  T* operator->() const { return &ref; }
-  T& operator*() const { return ref; }
-  T& get() const { return ref; }
+    T* operator->() const { return &ref; }
+    T& operator*() const { return ref; }
+    T& get() const { return ref; }
 };
 
-} // namespace scn
-
-namespace ecs {
 // Context passed to the invoker at runtime
 struct runtime_context {
-  entt::registry* lvl_registry = nullptr;
-  entt::registry* current_registry = nullptr;
-  size_t current_world_id = 0;
+    // Callback to get any world's registry by ID
+    std::function<entt::registry &(size_t)> get_world_registry;
+    entt::registry& current_registry;
+    size_t current_world_id = 0;
+};
 
-  // Callback to get any world's registry by ID
-  std::function<entt::registry &(size_t)> get_world_registry;
+struct runtime_context_provider
+{
+    using getter_type = std::function<runtime_context(size_t)>;
+    runtime_context_provider(getter_type&& get)
+        : get_context(get) {
+    }
+    ~runtime_context_provider() = default;
+    runtime_context_provider(const runtime_context_provider&) = default;
+    runtime_context_provider(runtime_context_provider&&) = default;
+    runtime_context_provider& operator=(const runtime_context_provider&) = default;
+    runtime_context_provider& operator=(runtime_context_provider&&) = default;
+
+    getter_type get_context;
 };
 
 // Argument Resolver Template
-// Resolves arguments for the System Function from the runtime_context
 template <typename T> struct binded_resolver {
   // Fallback: Try to get T from local context
   static decltype(auto) resolve(const runtime_context &ctx) {
@@ -36,85 +46,76 @@ template <typename T> struct binded_resolver {
   }
 };
 
-template <size_t ID, typename... Args> 
-struct binded_resolver<const scn::bind_res<ID, entt::basic_view<Args...>>&> {
+template <size_t ID, typename... ARGS> 
+struct binded_resolver<const ecs::bind_res<ID, entt::basic_view<ARGS...>>&> {
   static decltype(auto) resolve(const runtime_context &ctx) {
       entt::registry& reg = ctx.get_world_registry(ID);
-      return scn::bind_res<ID, entt::basic_view<Args...>>(static_cast<entt::basic_view<Args...>>(entt::as_view{ reg }));
+      return ecs::bind_res<ID, entt::basic_view<ARGS...>>(static_cast<entt::basic_view<ARGS...>>(entt::as_view{ reg }));
   }
 };
 
-template <size_t ID, typename... Args>
-struct binded_resolver<scn::bind_res<ID, entt::basic_view<Args...>>> {
+template <size_t ID, typename... ARGS>
+struct binded_resolver<ecs::bind_res<ID, entt::basic_view<ARGS...>>> {
   static auto resolve(const runtime_context &ctx) {
     entt::registry& reg = ctx.get_world_registry(ID);
-    return scn::bind_res<ID, entt::basic_view<Args...>>(static_cast<entt::basic_view<Args...>>(entt::as_view{ reg }));
+    return ecs::bind_res<ID, entt::basic_view<ARGS...>>(static_cast<entt::basic_view<ARGS...>>(entt::as_view{ reg }));
   }
 };
 
 template <size_t ID, typename T> 
-struct binded_resolver<scn::bind_res<ID, T>> {
+struct binded_resolver<ecs::bind_res<ID, T>> {
   static auto resolve(const runtime_context &ctx) {
     entt::registry& r = ctx.get_world_registry(ID);
     T& val = r.ctx().get<std::remove_const_t<T>>();
-    return scn::bind_res<ID, T>(val);
+    return ecs::bind_res<ID, T>(val);
   }
 };
 
 template <size_t ID, typename T>
-struct binded_resolver<const scn::bind_res<ID, T>>
-    : binded_resolver<scn::bind_res<ID, T>> {};
+struct binded_resolver<const ecs::bind_res<ID, T>> : binded_resolver<ecs::bind_res<ID, T>> {};
 
 template <size_t ID, typename T>
-struct binded_resolver<const scn::bind_res<ID, T> &> {
-  static auto resolve(const runtime_context &ctx) {
-    entt::registry &r = ctx.get_world_registry(ID);
-    T& val = r.ctx().get<std::remove_const_t<T>>();
-    return scn::bind_res<ID, T>(val);
-  }
+struct binded_resolver<const ecs::bind_res<ID, T> &> {
+    static auto resolve(const runtime_context &ctx) {
+        entt::registry &r = ctx.get_world_registry(ID);
+        T& val = r.ctx().get<std::remove_const_t<T>>();
+        return ecs::bind_res<ID, T>(val);
+    }
 };
 
-template<typename Type>
-inline constexpr bool is_view_v = is_view<Type>::value;
-
-template<typename Type>
-inline constexpr bool is_bind_res_v = is_bind_res<Type>::value;
-
-template<typename Type>
+template<typename TYPE>
 [[nodiscard]] static decltype(auto) extract(const runtime_context& ctx) {
-    auto& reg = *ctx.current_registry;
-    if constexpr (std::is_same_v<Type, entt::registry>) {
+    auto& reg = ctx.current_registry;
+    if constexpr (std::is_same_v<TYPE, entt::registry>) {
         return reg;
-    } else if constexpr (is_view_v<Type>) {
-        return static_cast<Type>(entt::as_view{ reg });
-    } else if constexpr (is_bind_res_v<Type>) {
-        return binded_resolver<Type>::resolve(ctx);   
+    } else if constexpr (is_view_v<TYPE>) {
+        return static_cast<TYPE>(entt::as_view{ reg });
+    } else if constexpr (is_bind_res_v<TYPE>) {
+        return binded_resolver<TYPE>::resolve(ctx);   
     } else {
-        return reg.ctx().template emplace<std::remove_reference_t<Type>>();
+        return reg.ctx().template emplace<std::remove_reference_t<TYPE>>();
     }
 }
 
-template<typename... Args>
+template<typename... ARGS>
 struct to_args
 {
     [[nodiscard]] static auto call(const runtime_context& ctx) {
-        return std::tuple<decltype(extract<Args>(ctx))...>(extract<Args>(ctx)...);
+        return std::tuple<decltype(extract<ARGS>(ctx))...>(extract<ARGS>(ctx)...);
     }
 };
 
+template <auto Candidate> struct invoker {
+    using Traits = function_traits<decltype(Candidate)>;
 
-// --- The Invoker ---
-template <auto Candidate> struct Invoker {
-  using Traits = function_traits<decltype(Candidate)>;
+    static void invoke(const runtime_context &ctx) {
+        call(ctx, std::make_index_sequence<Traits::args_count>{});
+    }
 
-  static void invoke(const runtime_context &ctx) {
-    call(ctx, std::make_index_sequence<Traits::args_count>{});
-  }
-
-  template <size_t... Is>
-  static void call(const runtime_context &ctx, std::index_sequence<Is...>) {
-    // std::invoke handles temporary return values binding to arguments
-    std::apply(Candidate, ecs::to_args<typename Traits::template arg_type<Is>...>::call(ctx));
-  }
+private:
+    template <size_t... TYPE_INDEX>
+    static void call(const runtime_context &ctx, std::index_sequence<TYPE_INDEX...>) {
+        std::apply(Candidate, ecs::to_args<typename Traits::template arg_type<TYPE_INDEX>...>::call(ctx));
+    }
 };
 } // namespace ecs

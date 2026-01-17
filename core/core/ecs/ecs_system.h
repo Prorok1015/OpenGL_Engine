@@ -10,7 +10,8 @@
 #include "engine_assert.h"
 #include "logger/engine_log.h"
 
-#include "ecs_invoker.hpp" // Has Invoker, runtime_context
+#include "ecs_command_buffer.hpp"
+#include "ecs_invoker.hpp" // Has invoker, runtime_context
 #include "ecs_system_interface.hpp"
 #include "ecs_traits.hpp" // Has salted_type, function_traits
 
@@ -37,7 +38,7 @@ namespace ecs {
 class system_factory {
 public:
   // Callback signature: register(world_registry, organizer)
-  using SystemInitializer = std::function<std::unique_ptr<system_interface>( entt::registry &, entt::organizer &)>;
+  using system_initializer_fn = std::function<std::unique_ptr<system_interface>( entt::registry &, entt::organizer &)>;
 
   static system_factory &instance() {
     static system_factory inst;
@@ -54,31 +55,20 @@ public:
   template <auto Candidate>
   static void InvokerCallback(const void *payload, entt::registry &level_registry) {
     size_t world_id = reinterpret_cast<size_t>(payload);
-    using namespace entt::literals;
 
-    // Retrieve context from Level Registry
-    // "get_world_registry" must be stored in m_level_state.ctx()
-    auto *get_reg_func = level_registry.ctx().find<std::function<entt::registry &(size_t)>>();
+    auto* get_reg_func = level_registry.ctx().find<runtime_context_provider>();
 
     if (!get_reg_func) {
-      ASSERT_FAIL("Fatal: get_world_registry not found in level context!");
+      ASSERT_FAIL("Fatal: runtime_context_provider not found in level context!");
       return;
     }
 
-    entt::registry &world_reg = (*get_reg_func)(world_id);
-
-    runtime_context ctx;
-    ctx.lvl_registry = &level_registry;
-    ctx.current_registry = &world_reg;
-    ctx.current_world_id = world_id;
-    ctx.get_world_registry = *get_reg_func;
-
-    // Invoke!
-    Invoker<Candidate>::invoke(ctx);
+    runtime_context ctx = get_reg_func->get_context(world_id);
+    invoker<Candidate>::invoke(ctx);
   }
 
   // Registration Dispatcher
-  template <auto Candidate> struct RegistrationDispatcher {
+  template <auto Candidate> struct registration_dispatcher {
     static void dispatch(size_t id, const char *name, entt::organizer &org) {
       switch (id) {
       case 0:
@@ -127,19 +117,18 @@ public:
   }
 
   // Register Automatic System (Function)
-  template <auto Candidate>
-  void register_automatic_system(const std::string &name) {
-    ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
+    template <auto Candidate>
+    void register_automatic_system(const std::string &name) {
+        ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
 
-    m_systems[name] = [name](entt::registry &world_reg, entt::organizer &org) {
-      using namespace entt::literals;
-      size_t w_id = world_reg.ctx().get<ecs::world_index>();
+        m_systems[name] = [name](entt::registry &world_reg, entt::organizer &org) {
+            size_t w_id = world_reg.ctx().get<ecs::world_salt>();
 
-      RegistrationDispatcher<Candidate>::dispatch(w_id, name.c_str(), org);
+            registration_dispatcher<Candidate>::dispatch(w_id, name.c_str(), org);
 
-      return nullptr; // Stateless
-    };
-  }
+            return nullptr; // Stateless
+        };
+    }
 
   std::unique_ptr<system_interface> create_system(const std::string &name,
                                                   entt::registry &reg,
@@ -154,6 +143,6 @@ public:
   system_factory() = default;
 
 private:
-  std::unordered_map<std::string, SystemInitializer> m_systems;
+  std::unordered_map<std::string, system_initializer_fn> m_systems;
 };
 } // namespace ecs
