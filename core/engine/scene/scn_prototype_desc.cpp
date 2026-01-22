@@ -2,6 +2,7 @@
 #include "scn_model.h"
 #include "scn_glm_json_convert.h"
 #include "geom/rnd_geometry_desc.h"
+#include "ecs_event.hpp"
 
 namespace {
 	struct context
@@ -145,7 +146,9 @@ entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, 
 	}
 	registry.emplace<scn::name_component>(ent, node.name);
 	registry.emplace<scn::local_transform>(ent, node.local);
+	registry.emplace<scn::world_transform>(ent);
 	registry.emplace<scn::parent_component>(ent, parent);
+	registry.emplace<scn::depth_level>(ent);
 	registry.emplace<scn::renderable>(ent);
 
 	if (registry.all_of<scn::children_component>(parent)) {
@@ -155,6 +158,9 @@ entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, 
 	} else {
 		registry.emplace<scn::children_component>(parent, std::vector<entt::entity>{ ent });
 	}
+
+	registry.ctx().get<ecs::event<scn::hierarchy_updated>>().emit(ent);
+	registry.ctx().get<ecs::event<scn::transform_updated>>().emit(ent);
 
 	if (node.mesh.has_value()) {
 		auto& mesh = node.mesh.value();

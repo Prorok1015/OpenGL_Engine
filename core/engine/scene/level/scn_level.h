@@ -76,9 +76,10 @@ namespace scn {
             }
         }
 
-        ecs::runtime_context create_runtime_context(size_t world_id) const {
+        ecs::runtime_context create_runtime_context(size_t world_id) {
             ecs::runtime_context ctx{ .current_registry = get_world(world_id).state(), .current_world_id = world_id };
             ctx.get_world_registry = [this](size_t world_id) -> entt::registry& {
+                if (world_id == LEVEL_ID) return m_level_state;
                 return get_world(world_id).state();
             };
             return ctx;

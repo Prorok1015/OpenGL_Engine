@@ -1,7 +1,8 @@
 #pragma once
 #include <entt/fwd.hpp>
+#include "ecs_system.h"
 
 namespace scn
 {
-	void init_transform_system(entt::registry& registry, entt::organizer& organizer);
+	void init_transform_system(ecs::system_factory& factory);
 }

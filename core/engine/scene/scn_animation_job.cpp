@@ -1,38 +1,44 @@
 #include "scn_animation_job.h"
 #include "scn_mesh_nodes.hpp"
 #include "scn_model.h"
+#include "ecs_event.hpp"
 
 void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
 void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
 void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim);
 
-void update_bone_offsets_system(entt::registry& registry)
+void update_bone_offsets_system(
+    entt::view<entt::get_t<const scn::bone_component, const scn::world_transform, const scn::obj_owner_component>> bones_view,
+    entt::view<entt::get_t<scn::bone_matrices_component>> skeletons_view
+)
 {
-    auto view = registry.view<scn::bone_component, scn::world_transform, scn::obj_owner_component>();
-    for (const auto& [ent, bone, transform, owner] : view.each())
-    {
-        auto& obj = owner.owner;
-        auto& matrices = registry.get<scn::bone_matrices_component>(obj);
-        if (bone.index >= 0 && bone.index < (int)matrices.matrices.size())
-        {
-            matrices.matrices[bone.index] = transform.world * bone.offset;
+    for (auto&& [ent, bone, transform, owner] : bones_view.each()) {
+        if (skeletons_view.contains(owner.owner)) {
+            auto& matrices_comp = skeletons_view.get<scn::bone_matrices_component>(owner.owner);
+
+            if (bone.index >= 0 && bone.index < (int)matrices_comp.matrices.size()) {
+                matrices_comp.matrices[bone.index] = transform.world * bone.offset;
+            }
         }
     }
 }
 
-void update_nodes_animation_system(entt::registry& registry, const scn::delta_time& dt)
+void update_nodes_animation_system(scn::level_res<const scn::delta_time> dt,
+                                   entt::view<entt::get_t<const scn::keyframes_component, scn::playable_animation_component>> view,
+                                   entt::view<entt::get_t<scn::local_transform>> locals,
+                                   ecs::event<scn::transform_updated>& event
+    )
 {
-    for (auto [ent, keyframes, animation] : registry.view<scn::keyframes_component, scn::playable_animation_component>().each())
+    for (auto [ent, keyframes, animation] : view.each())
     {
-        animation.current_tick += dt.dt;
+        animation.current_tick += dt->dt;
         const float ticks_per_second = animation.ticks_per_second > 0 ? animation.ticks_per_second : 25.0f;
         const float time_in_ticks = animation.current_tick * ticks_per_second;
         float ticks = fmod(time_in_ticks, animation.duration);
         if (time_in_ticks > animation.duration) {
             if (animation.is_repeat_animation) {
                 animation.current_tick = 0.f;
-            }
-            else {
+            } else {
                 ticks = animation.duration;
                 continue;
             }
@@ -57,7 +63,9 @@ void update_nodes_animation_system(entt::registry& registry, const scn::delta_ti
 
             // Combine the above transformations
             auto local = translation_m * rotation_m * scaling_m;
-            registry.emplace_or_replace<scn::local_transform>(ent, local);
+            
+            locals.get<scn::local_transform>(ent).local = local;
+            event.emit(ent);
         }
     }
 }
@@ -74,7 +82,6 @@ std::size_t find_keyframe_index(const std::vector<T>& arr, float time)
 
     return 0;
 }
-
 
 void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
@@ -141,8 +148,8 @@ void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const 
     Out = glm::slerp(StartRotationQ, EndRotationQ, Factor);
 }
 
-void scn::init_animation_system(entt::registry& registry, entt::organizer& organizer)
+void scn::init_animation_system(ecs::system_factory& factory)
 {
-    organizer.emplace<update_bone_offsets_system>("update_bone_offsets_system");
-    organizer.emplace<update_nodes_animation_system>("update_node_animation_system");
+    factory.register_automatic_system<update_bone_offsets_system>("scn::animation_system_matrix");
+    factory.register_automatic_system<update_nodes_animation_system>("scn::animation_system_node");
 }

@@ -3,27 +3,11 @@
 #include "ecs_component.h"
 #include "inp_keyboard_event.hpp"
 #include "inp_events.hpp"
-
-struct event_visitor
-{
-	event_visitor(ecs::flow_input_manager& mng_)
-		: mng(mng_)
-	{}
-
-	void operator() (const auto& evt) const noexcept
-	{
-		using T = std::decay_t<decltype(evt)>;
-		auto ent = mng.get_empty_entity();
-		mng.get_registry().emplace_or_replace<T>(ent, evt);
-		mng.get_registry().emplace_or_replace<ecs::input_changed_event_component>(ent);
-	}
-
-private:
-	ecs::flow_input_manager& mng;
-};
+#include "ecs_event.hpp"
 
 bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const inp::input_event& evt)
 {
+	auto& input_state = get_registry().ctx().get<inp::input_state>();
 	if (input_area != glm::zero<glm::ivec4>()) {
 		bool is_handling = true;
 
@@ -39,48 +23,29 @@ bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const inp::input_
 		if (!is_handling) {
 			if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
 				last_cursor_pos = c_evt->pos;
+				input_state.mouse_pos = c_evt->pos;
 			}
 			if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
-				if (payload->action == core::inp::KEY_ACTION::UP){
-					inp::mouse_click_event mouse_evt;
-					mouse_evt.key = payload->key;
-					mouse_evt.action = payload->action;
-					mouse_evt.pos = last_cursor_pos;
-					event_visitor{*this}(mouse_evt);
-				}
+				input_state.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
 			}
 			return false;
 		}
 	} else if (invert) {
 		if (auto* c_evt = evt.get_payload<core::inp::cursor_move_event>()) {
 			last_cursor_pos = c_evt->pos;
+			input_state.mouse_pos = c_evt->pos;
 		}
 		if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
-			if (payload->action == core::inp::KEY_ACTION::UP) {
-				inp::mouse_click_event mouse_evt;
-				mouse_evt.key = payload->key;
-				mouse_evt.action = payload->action;
-				mouse_evt.pos = last_cursor_pos;
-				event_visitor{ *this }(mouse_evt);
-			}
+			input_state.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
 		}
 		return false;
 	}
 
-	event_visitor visitor(*this);
-
 	if (const auto* payload = evt.get_payload<core::inp::keyboard_event>()) {
-		inp::keyboard_event kbd_evt;
-		kbd_evt.key = payload->key;
-		kbd_evt.action = payload->action;
-		visitor(kbd_evt);
+		input_state.keyboard[(std::underlying_type_t<inp::KEYBOARD_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
 	}
 	else if (const auto* payload = evt.get_payload<core::inp::mouse_click_event>()) {
-		inp::mouse_click_event mouse_evt;
-		mouse_evt.key = payload->key;
-		mouse_evt.action = payload->action;
-		mouse_evt.pos = last_cursor_pos;
-		visitor(mouse_evt);
+		input_state.mouse[(std::underlying_type_t<inp::MOUSE_BUTTONS>)payload->key] = payload->action == core::inp::KEY_ACTION::DOWN;
 	}
 	else if (const auto* payload = evt.get_payload<core::inp::cursor_move_event>()) {
 		if (input_area != glm::zero<glm::ivec4>()) {
@@ -91,19 +56,14 @@ bool ecs::flow_input_manager::on_handle_event(wnd::handle win, const inp::input_
 		}
 
 		glm::vec2 window_size = glm::vec2{input_area.z - input_area.x, input_area.w - input_area.y};
-		glm::vec2 dir = (last_cursor_pos - glm::vec2{ input_area.x, input_area.y }) - (payload->pos - glm::vec2{ input_area.x, input_area.y });
 
-		inp::cursor_move_event cursor_evt;
-		cursor_evt.pos = payload->pos;
-		cursor_evt.prev = last_cursor_pos;
-		cursor_evt.direction = (last_cursor_pos - payload->pos) / (window_size * 0.5f);
 		last_cursor_pos = payload->pos;
-		visitor(cursor_evt);
+		input_state.mouse_prev = input_state.mouse_pos;
+		input_state.mouse_pos = payload->pos;
+		input_state.mouse_dir = (input_state.mouse_prev - input_state.mouse_pos) / (window_size * 0.5f);
 	}
 	else if (const auto* payload = evt.get_payload<core::inp::scroll_move_event>()) {
-		inp::scroll_move_event scroll_evt;
-		scroll_evt.direction = payload->direction;
-		visitor(scroll_evt);
+		input_state.scroll = payload->direction;
 	}
 	return false;
 }

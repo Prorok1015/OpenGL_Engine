@@ -9,9 +9,15 @@
 struct Health {
   float value;
 };
+
 struct Text {
   std::string content;
 };
+
+struct SubText {
+  std::string content;
+};
+
 struct CtxText
 {
     std::string text;
@@ -21,17 +27,21 @@ struct CtxText
 // Reads Health from World 0, Writes to Text in Current World (UI)
 void sync_health_bar(
     entt::view<entt::get_t<Text>> view,      // Local (UI world)
-    const ecs::bind_res<0, Health> player_hp, // From world 0 (Game world)
+    entt::view<entt::get_t<SubText>> subview,
+    ecs::bind_res<0, Health> player_hp, // From world 0 (Game world)
     const CtxText& text
 ) {
   float hp = player_hp->value;
   std::cout << "[System] Syncing Health: " << hp << std::endl;
 
   view.each([hp](auto entity, auto &text) {
-    //text.content = "HP: " + std::to_string(hp);
-    std::cout << "[System] Updated Entity " << (uint32_t)entity
-              << " Text to: " << text.content << std::endl;
+    std::cout << "[System] Updated Entity " << (uint32_t)entity << " Text to: " << text.content << std::endl;
   });
+
+  subview.each([hp](auto entity, auto &text) {
+    std::cout << "[System] sub text " << (uint32_t)entity << " Text to: " << text.content << std::endl;
+  });
+
   std::cout << "[System] ctx text: " << text.text << std::endl;
 }
 
@@ -39,15 +49,16 @@ void ctx_text_unpdate(CtxText& text, ecs::entity_spawner& sandbox)
 {
     static int id = 0;
     text.text = std::format("text update id:{}", id++);
-    sandbox.emplace<Text>(sandbox.create(), std::format("I amd a new text {}", id));
-    sandbox.emplace<Text>(sandbox.create(), std::format("I amd a new text {}", id));
-    sandbox.emplace<Text>(sandbox.create(), std::format("I amd a new text {}", id));
+    sandbox.emplace<SubText>(sandbox.create(), std::format("I amd a sub new text {}", id));
     sandbox.emplace<Text>(sandbox.create(), std::format("I amd a new text {}", id));
 }
 
-void ctx_text_read(const CtxText& text)
+void ctx_text_read(entt::view<entt::get_t<Text>, entt::exclude_t<SubText>> view, ecs::entity_changer& changer)
 {
-    std::cout << "[Update] " << text.text << std::endl;
+    for (auto&& [ent, text] : view.each())
+    {
+        changer.destroy(ent);
+    }
 }
 
 int main() {
@@ -62,6 +73,7 @@ int main() {
   auto &ui_world = lvl.create_world("ui", 1);
 
   ecs::register_component<Text>("text");
+  ecs::register_component<SubText>("subtext");
 
   // 3. Register System
   // We register the system logic in the factory
@@ -104,6 +116,12 @@ int main() {
   game_world.state().ctx().get<Health>().value = 50.0f;
 
   std::cout << "--- Frame 2 ---" << std::endl;
+  lvl.update(std::chrono::milliseconds(16));
+
+  // Change Health
+  game_world.state().ctx().get<Health>().value = 0.0f;
+
+  std::cout << "--- Frame 3 ---" << std::endl;
   lvl.update(std::chrono::milliseconds(16));
 
   return 0;

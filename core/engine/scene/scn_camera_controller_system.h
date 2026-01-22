@@ -1,7 +1,8 @@
 #pragma once
-#include "entt/fwd.hpp"
+#include "ecs_system.h"
+#include <entt/fwd.hpp>
 
 namespace scn
 {
-	void init_mouse_controller_system(entt::registry& registry, entt::organizer& organizer);
+	void init_mouse_controller_system(ecs::system_factory& factory);
 }

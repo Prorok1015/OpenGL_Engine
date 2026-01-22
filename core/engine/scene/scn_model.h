@@ -12,6 +12,13 @@ namespace scn {
     struct fixed_time { float dt; };
     struct update_alpha { float dt; };
 
+    struct transform_updated {};
+    struct hierarchy_updated {};
+
+    struct depth_level {
+        std::uint32_t value = 0;
+    };
+
     struct material_desc_component {
         res::res_handle<scn::material_desc> mlt_desc;
     };

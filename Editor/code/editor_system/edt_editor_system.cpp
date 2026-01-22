@@ -8,6 +8,7 @@
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
 #include "ecs_common_system.h"
+#include "ecs_event.hpp"
 #include "eng_transform_3d.hpp"
 #include "inp_input_system.h"
 #include "edt_input_manager.h"
@@ -217,12 +218,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	{
 		scn::level& lvl = level_manager.get_level();
 		scn::world& world = lvl.create_world("3d_scene", 0);
+		world.state().ctx().emplace<ecs::event<scn::hierarchy_updated>>();
+		world.state().ctx().emplace<ecs::event<scn::transform_updated>>();
+		world.state().ctx().emplace<inp::input_state>();
 		auto& sfactory = data.require<ecs::system_factory>();
+		sfactory.create_system("scn::animation_system_matrix", world.state(), lvl.organizer());
+		sfactory.create_system("scn::animation_system_node", world.state(), lvl.organizer());
+		sfactory.create_system("scn::update_camera_matrix_system", world.state(), lvl.organizer());
+		sfactory.create_system("scn::depth_system", world.state(), lvl.organizer());
 		sfactory.create_system("scn::transform_system", world.state(), lvl.organizer());
-		sfactory.create_system("scn::animation_system", world.state(), lvl.organizer());
-		sfactory.create_system("scn::mouse_controller_system", world.state(), lvl.organizer());
-
-		registate_systems_world(lvl);
+		sfactory.create_system("inp::clear_input_state", world.state(), lvl.organizer());
 
 		lvl.mark_systems_graphs_dirty();
 	}
@@ -251,11 +256,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		world_anchor = registry_sp->create();
 		registry_sp->emplace<scn::scene_anchor_component>(world_anchor);
 		registry_sp->emplace<scn::name_component>(world_anchor, scn::name_component{ .name = "Anchor" });
+		registry_sp->emplace<scn::depth_level>(world_anchor);
+		registry_sp->emplace<scn::local_transform>(world_anchor, glm::mat4{ 1.0 });
+		registry_sp->emplace<scn::world_transform>(world_anchor, glm::mat4{ 1.0 });
 	} else {
 		world_anchor = anchors.front();
 	}
 
-	decltype(scn::children_component::children)& children = registry_sp->get_or_emplace<scn::children_component>(world_anchor).children;
+	auto& children = registry_sp->get_or_emplace<scn::children_component>(world_anchor).children;
 
 	if (false)
 	{
@@ -326,11 +334,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		children.push_back(ecs_entity);
 		registry_sp->emplace<scn::name_component>(ecs_entity, "Editor camera");
 		registry_sp->emplace<scn::parent_component>(ecs_entity, world_anchor);
+		registry_sp->emplace<scn::depth_level>(ecs_entity, 0u);
 		registry_sp->emplace<scn::camera_component>(ecs_entity, scn::camera_component{ .viewport = viewport });
 		registry_sp->emplace<scn::local_transform>(ecs_entity);
 		registry_sp->emplace<scn::world_transform>(ecs_entity);
 		registry_sp->emplace<scn::renderable>(ecs_entity);
 		registry_sp->emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
+		registry_sp->ctx().get<ecs::event<scn::hierarchy_updated>>().emit(ecs_entity);
+		registry_sp->ctx().get<ecs::event<scn::transform_updated>>().emit(ecs_entity);
 	}
 
 
@@ -436,7 +447,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 		registry_sp->emplace<scn::name_component>(light, scn::name_component{ .name = "Global Light" });
 		registry_sp->emplace<scn::parent_component>(light, world_anchor);
+		registry_sp->emplace<scn::depth_level>(light);
 		registry_sp->emplace<scn::renderable>(light);
+		registry_sp->ctx().get<ecs::event<scn::hierarchy_updated>>().emit(light);
 	}
 
 	// sky
@@ -455,6 +468,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		registry_sp->emplace<scn::renderable>(sky);
 		registry_sp->emplace<scn::name_component>(sky, scn::name_component{ .name = "Sky" });
 		registry_sp->emplace<scn::parent_component>(sky, world_anchor);
+		registry_sp->emplace<scn::depth_level>(sky);
+		registry_sp->ctx().get<ecs::event<scn::hierarchy_updated>>().emit(sky);
 	}
 	this->world_anchor = world_anchor;
 }

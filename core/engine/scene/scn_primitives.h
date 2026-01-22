@@ -37,5 +37,3 @@ namespace scn
 
 	model_sphere generate_sphere();
 }
-
-void registate_systems_world(scn::level& world);

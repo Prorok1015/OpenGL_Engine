@@ -247,17 +247,3 @@ scn::model_sphere scn::generate_sphere()
 
     return { vex, inc };
 }
-
-#include "ecs_component.h"
-#include "level/scn_level.h"
-
-void clear_input_events(entt::registry& registry)
-{
-    const auto ents = registry.view<ecs::input_changed_event_component>();
-    registry.destroy(ents.begin(), ents.end());
-}
-
-void registate_systems_world(scn::level& world)
-{
-    world.organizer().emplace<&clear_input_events>("clear input events");
-}

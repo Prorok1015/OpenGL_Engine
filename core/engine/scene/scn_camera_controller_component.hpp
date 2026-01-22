@@ -5,7 +5,7 @@ namespace scn
 {
 	struct mouse_controller_component
 	{
-		float movement_speed = 1.f;
+		float movement_speed = 3.f;
 		float rotating_speed = glm::radians(90.f);
 		float distance = 2;
 		glm::vec3 rotation{ 0 };
