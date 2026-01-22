@@ -106,10 +106,8 @@ public:
   // Register Stateful System (Class)
   template <typename T, typename... ARGS>
   void register_system_class(const std::string &name, ARGS... args) {
-    ASSERT_MSG(!m_systems.contains(name),
-               "ecs system already contains in the factory!");
-    m_systems[name] = [name = name, args...](entt::registry &reg,
-                                             entt::organizer &org) {
+    ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
+    m_systems[name] = [name = name, args...](entt::registry &reg, entt::organizer &org) {
       auto sys = std::make_unique<T>(args...);
       sys->register_in_world(reg, org);
       return sys;
@@ -132,7 +130,8 @@ public:
 
   std::unique_ptr<system_interface> create_system(const std::string &name,
                                                   entt::registry &reg,
-                                                  entt::organizer &org) {
+                                                  entt::organizer &org) 
+  {
     if (m_systems.contains(name)) {
       return m_systems[name](reg, org);
     }

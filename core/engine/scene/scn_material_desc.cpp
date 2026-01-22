@@ -154,7 +154,7 @@ void scn::material_desc::serialize(json::object& data) const
 			},
 		}
 	*/
-
+	data["__type"] = "material_desc";
 	data[DEFINES_FIELD] = json::value_from(cdata.defines);
 	json::array jssamplers;
 	for (auto& sampler : samplers_textures_desc)

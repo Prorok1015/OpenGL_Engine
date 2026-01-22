@@ -242,14 +242,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	rndsys.activate_renderer(renderer_sp);
 	renderer_sp->set_current_registry(registry_sp);
 
-
 	ecs_input->set_active_registry(registry_sp);
 
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 	
-
 	auto anchors = registry_sp->view<scn::scene_anchor_component>();
 	ecs::entity world_anchor;
 	if (anchors.empty()) {
@@ -265,7 +263,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	auto& children = registry_sp->get_or_emplace<scn::children_component>(world_anchor).children;
 
-	if (false)
+	if (true)
 	{
 		rnd::texture_desc txm_desc;
 		txm_desc.txm_name = "window";
@@ -319,10 +317,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		mlt.albedo = ds::color(glm::vec3(0.f), 1.0f);
 
 
-		json::object mlt_js;
-		mlt.serialize(mlt_js);
+		//json::object mlt_js;
+		//mlt.serialize(mlt_js);
 		res::tag web_material = res::tag(res::tag::memory, "editor/web_material.desc");
-		res::get_system().pin_resource(web_material, desc::desc_resource(web_material, mlt_js));
+		res::get_system().pin_resource(web_material, std::move(mlt));
 	}
 
 	//  camera
@@ -346,7 +344,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 
 	// web
-	if (false)
+	if (true)
 	{
 		auto web = scn::generate_web({ 50, 50 });
 		res::tag web_tag = res::tag(res::tag::memory, "web.desc");
@@ -378,13 +376,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		web_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
 			.vx_begin = 0, .vx_end = web.vertices.size(),
 			.ind_begin = 0, .ind_end = web.indices.size(),
-			.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "web_material.desc"))
+			.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "editor/web_material.desc"))
 		};
 
 		web_prototype_desc.load_prototype(*registry_sp, world_anchor);
 	}
 
-	if (false)
+	if (true)
 	{
 
 		auto geom = scn::generate_cube();
@@ -700,7 +698,7 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 
 			if (is_update) {
 				trans.local = tr.to_matrix();
-				registry_sp->patch<scn::local_transform>(ent);
+				registry_sp->ctx().get<ecs::event<scn::transform_updated>>().emit(ent);
 			}
 		}
 
