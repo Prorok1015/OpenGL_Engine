@@ -2,6 +2,7 @@
 #include "ecs_traits.hpp"
 #include <entt/entt.hpp>
 #include <functional>
+#include "logger/engine_log.h"
 
 namespace ecs {
 template <size_t ID, typename T> 
@@ -86,11 +87,11 @@ struct binded_resolver<const ecs::bind_res<ID, T> &> {
 template<typename TYPE>
 [[nodiscard]] static decltype(auto) extract(const runtime_context& ctx) {
     auto& reg = ctx.current_registry;
-    if constexpr (std::is_same_v<TYPE, entt::registry>) {
+    if constexpr (std::is_same_v<std::decay_t<TYPE>, entt::registry>) {
         return reg;
-    } else if constexpr (is_view_v<TYPE>) {
+    } else if constexpr (is_view_v<std::decay_t<TYPE>>) {
         return static_cast<TYPE>(entt::as_view{ reg });
-    } else if constexpr (is_bind_res_v<TYPE>) {
+    } else if constexpr (is_bind_res_v<std::decay_t<TYPE>>) {
         return binded_resolver<TYPE>::resolve(ctx);   
     } else {
         return reg.ctx().template emplace<std::remove_reference_t<TYPE>>();
@@ -105,17 +106,27 @@ struct to_args
     }
 };
 
-template <auto Candidate> struct invoker {
+template<auto Candidate> struct invoker {
     using Traits = function_traits<decltype(Candidate)>;
 
     static void invoke(const runtime_context &ctx) {
         call(ctx, std::make_index_sequence<Traits::args_count>{});
     }
 
+    template<class INSTANCE>
+    static void invoke(INSTANCE& value_or_instance, const runtime_context &ctx) {
+        call<INSTANCE>(value_or_instance, ctx, std::make_index_sequence<Traits::args_count>{});
+    }
+
 private:
     template <size_t... TYPE_INDEX>
     static void call(const runtime_context &ctx, std::index_sequence<TYPE_INDEX...>) {
         std::apply(Candidate, ecs::to_args<typename Traits::template arg_type<TYPE_INDEX>...>::call(ctx));
+    }
+
+    template <class INSTANCE, size_t... TYPE_INDEX>
+    static void call(INSTANCE& value_or_instance, const runtime_context &ctx, std::index_sequence<TYPE_INDEX...>) {
+        std::apply(Candidate, std::tuple_cat(std::forward_as_tuple(value_or_instance), ecs::to_args<typename Traits::template arg_type<TYPE_INDEX>...>::call(ctx)));
     }
 };
 } // namespace ecs

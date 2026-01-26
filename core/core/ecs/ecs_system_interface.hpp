@@ -6,6 +6,5 @@ namespace ecs {
 	{
 	public:
 		virtual ~system_interface() = default;
-		virtual void initialize(entt::registry& registry, entt::organizer& organizer) = 0;
 	};
 }

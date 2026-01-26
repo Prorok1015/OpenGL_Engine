@@ -1,4 +1,5 @@
 #include "scn_level.h"
+#include "scn_level.h"
 #include "scn_model.h"
 #include "ecs_command_buffer.hpp"
 #include "ecs_entity_changer.hpp"
@@ -23,17 +24,18 @@ void scn::level::update(std::chrono::duration<float> dt)
     m_level_state.ctx().insert_or_assign<scn::update_alpha>({ alpha });
 
     run_graph(m_variable_graph);
+    sync_point();
+}
 
-    // sync point
-    for (auto& [name, world] : m_worlds)
-    {
+void scn::level::sync_point()
+{
+    for (auto& [name, world] : m_worlds) {
         auto& state = world->state();
         if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
             changer->apply(state);
         }
 
-        if (auto* sandbox = state.ctx().find<ecs::entity_spawner>())
-        {
+        if (auto* sandbox = state.ctx().find<ecs::entity_spawner>()) {
             entt::continuous_loader loader{ state };
             {
                 const auto& entity_storage = sandbox->storage<ecs::sandbox_entity>();
@@ -47,7 +49,7 @@ void scn::level::update(std::chrono::duration<float> dt)
 
                 if (auto type = entt::resolve(id)) {
                     if (auto func = type.func(ecs::loader_get_h)) {
-                        func.invoke({}, &loader,  static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
+                        func.invoke({}, &loader, static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
                     }
                 }
             }

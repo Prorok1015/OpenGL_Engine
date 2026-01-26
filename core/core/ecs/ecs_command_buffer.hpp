@@ -6,7 +6,7 @@
 #include <entt/meta/resolve.hpp>
 namespace ecs
 {
-	enum sandbox_entity : std::uint32_t {};
+	enum class sandbox_entity : std::uint32_t {};
 	using sandbox_registry = entt::basic_registry<sandbox_entity>;
 	using sandbox_snapshot = entt::basic_snapshot<sandbox_registry>;
 	using sandbox_continuos_loader = entt::basic_continuous_loader<sandbox_registry>;

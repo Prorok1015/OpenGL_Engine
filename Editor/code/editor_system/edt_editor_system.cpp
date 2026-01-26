@@ -29,6 +29,8 @@
 #include "level/scn_level.h"
 #include "level/scn_level_manager.h"
 
+#include "edt_spawn_system.h"
+
 void
 pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
 {
@@ -222,6 +224,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		world.state().ctx().emplace<ecs::event<scn::transform_updated>>();
 		world.state().ctx().emplace<inp::input_state>();
 		auto& sfactory = data.require<ecs::system_factory>();
+		sfactory.register_automatic_system<edt::spawn_system>("edt::spawn_system");
+		sfactory.create_system("edt::spawn_system", world.state(), lvl.organizer());
 		sfactory.create_system("scn::animation_system_matrix", world.state(), lvl.organizer());
 		sfactory.create_system("scn::animation_system_node", world.state(), lvl.organizer());
 		sfactory.create_system("scn::update_camera_matrix_system", world.state(), lvl.organizer());
@@ -247,229 +251,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
-	
-	auto anchors = registry_sp->view<scn::scene_anchor_component>();
-	ecs::entity world_anchor;
-	if (anchors.empty()) {
-		world_anchor = registry_sp->create();
-		registry_sp->emplace<scn::scene_anchor_component>(world_anchor);
-		registry_sp->emplace<scn::name_component>(world_anchor, scn::name_component{ .name = "Anchor" });
-		registry_sp->emplace<scn::depth_level>(world_anchor);
-		registry_sp->emplace<scn::local_transform>(world_anchor, glm::mat4{ 1.0 });
-		registry_sp->emplace<scn::world_transform>(world_anchor, glm::mat4{ 1.0 });
-	} else {
-		world_anchor = anchors.front();
-	}
-
-	auto& children = registry_sp->get_or_emplace<scn::children_component>(world_anchor).children;
-
-	if (true)
-	{
-		rnd::texture_desc txm_desc;
-		txm_desc.txm_name = "window";
-		txm_desc.txm_tag = res::tag::make("window.png");
-		auto& header = txm_desc.header;
-		header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
-		header.data.extent.width = 4587;
-		header.data.extent.height = 8000;
-
-		json::object txm_js;
-		txm_desc.serialize(txm_js);
-		std::string str_data = json::serialize(txm_js);
-		std::vector<std::byte> txm_data;
-		txm_data.resize(str_data.size());
-		std::memcpy(txm_data.data(), str_data.data(), str_data.size());
-		res::get_system().store(res::tag(res::tag::memory, "window.desc"), txm_data);
-
-		res::tag window_material = res::tag(res::tag::memory, "window_material.desc");
-		scn::material_desc mlt;
-
-		rnd::shader_config::constant_data tmpdesc;
-
-		tmpdesc.program = rnd::shader_config::shader_program_data::build()
-			.set_vertex_shader(res::tag::make("shaders/mix_opaque_trans_scene.vert"))
-			.set_fragment_shader(res::tag::make("shaders/mix_opaque_trans_scene.frag"));
-
-		tmpdesc.defines = { "USE_TXM_AS_DIFFUSE", "LIGHTS_ENABLED" };
-		mlt.queue = scn::pass_queue::MIX;
-		mlt.cdata = tmpdesc;
-		mlt.samplers_textures_desc = { res::get_system().require<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
-
-		json::object mlt_js;
-		mlt.serialize(mlt_js);
-		std::string str_data2 = json::serialize(mlt_js);
-		std::vector<std::byte> mlt_data;
-		mlt_data.resize(str_data2.size());
-		std::memcpy(mlt_data.data(), str_data2.data(), str_data2.size());
-		res::get_system().store(window_material, mlt_data);
-	}
-
-	{
-		scn::material_desc mlt;
-
-		mlt.cdata.program = rnd::shader_config::shader_program_data::build()
-			.set_vertex_shader(res::tag::make("shaders/scene.vert"))
-			.set_fragment_shader(res::tag::make("shaders/scene.frag"));
-
-		mlt.cdata.defines;
-		mlt.queue = scn::pass_queue::OPAQUE;
-		mlt.render_mode = rnd::driver::RENDER_MODE::LINE;
-		mlt.albedo = ds::color(glm::vec3(0.f), 1.0f);
-
-
-		//json::object mlt_js;
-		//mlt.serialize(mlt_js);
-		res::tag web_material = res::tag(res::tag::memory, "editor/web_material.desc");
-		res::get_system().pin_resource(web_material, std::move(mlt));
-	}
-
-	//  camera
-	{
-		glm::ivec4 viewport{ glm::zero<glm::ivec2>(), glm::ivec2{1080, 720} };
-		glm::vec3 rotation(0);
-		rotation.x = -glm::radians(45.0f);
-		auto ecs_entity = registry_sp->create();
-		children.push_back(ecs_entity);
-		registry_sp->emplace<scn::name_component>(ecs_entity, "Editor camera");
-		registry_sp->emplace<scn::parent_component>(ecs_entity, world_anchor);
-		registry_sp->emplace<scn::depth_level>(ecs_entity, 0u);
-		registry_sp->emplace<scn::camera_component>(ecs_entity, scn::camera_component{ .viewport = viewport });
-		registry_sp->emplace<scn::local_transform>(ecs_entity);
-		registry_sp->emplace<scn::world_transform>(ecs_entity);
-		registry_sp->emplace<scn::renderable>(ecs_entity);
-		registry_sp->emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
-		registry_sp->ctx().get<ecs::event<scn::hierarchy_updated>>().emit(ecs_entity);
-		registry_sp->ctx().get<ecs::event<scn::transform_updated>>().emit(ecs_entity);
-	}
-
-
-	// web
-	if (true)
-	{
-		auto web = scn::generate_web({ 50, 50 });
-		res::tag web_tag = res::tag(res::tag::memory, "web.desc");
-		rnd::geometry_desc geom_desc;
-		geom_desc.layout = {
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-			{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "uv"},
-		};
-
-		geom_desc.indices = web.indices;
-		geom_desc.vertices.resize(web.vertices.size() * sizeof(scn::vertex));
-		std::memcpy(geom_desc.vertices.data(), (std::byte*)web.vertices.data(), geom_desc.vertices.size());
-		auto geom_tag = web_tag;
-		json::object geom_js;
-		geom_desc.serialize(geom_js);
-
-		std::string str_data = json::serialize(geom_js);
-		std::vector<std::byte> geom_data;
-		geom_data.resize(str_data.size());
-		std::memcpy(geom_data.data(), str_data.data(), str_data.size());
-
-		res::get_system().store(geom_tag, geom_data);
-
-		scn::prototype_desc web_prototype_desc;
-		web_prototype_desc.geometry = res::get_system().require<rnd::geometry_desc>(geom_tag);
-		web_prototype_desc.root.name = "Editor Web";
-		web_prototype_desc.root.local = glm::scale(glm::vec3(1, 0, 1));
-		web_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
-			.vx_begin = 0, .vx_end = web.vertices.size(),
-			.ind_begin = 0, .ind_end = web.indices.size(),
-			.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "editor/web_material.desc"))
-		};
-
-		web_prototype_desc.load_prototype(*registry_sp, world_anchor);
-	}
-
-	if (true)
-	{
-
-		auto geom = scn::generate_cube();
-		res::tag cube_tag = res::tag(res::tag::memory, "cube.desc");
-		// windows objects
-		for (int i = 0; i < 1; ++i)
-		{
-			auto wind = registry_sp->create();
-			children.push_back(wind);
-
-			rnd::geometry_desc geom_desc;
-			geom_desc.layout = {
-				{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position"},
-				{rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal"},
-				{rnd::driver::SHADER_DATA_TYPE::VEC2_F, "texture_position"}
-			};
-
-			geom_desc.indices = geom.indices;
-			geom_desc.vertices.resize(geom.vertices.size() * sizeof(scn::vertex));
-			std::memcpy(geom_desc.vertices.data(), (std::byte*)geom.vertices.data(), geom_desc.vertices.size());
-			auto geom_tag = cube_tag;
-			json::object geom_js;
-			geom_desc.serialize(geom_js);
-
-			std::string str_data = json::serialize(geom_js);
-			std::vector<std::byte> geom_data;
-			geom_data.resize(str_data.size());
-			std::memcpy(geom_data.data(), str_data.data(), str_data.size());
-
-			res::get_system().store(geom_tag, geom_data);
-
-			glm::vec2 rnd_pos = glm::diskRand(1.f);
-			scn::prototype_desc window_prototype_desc;
-			window_prototype_desc.geometry = res::get_system().require<rnd::geometry_desc>(geom_tag);
-			window_prototype_desc.root.name = "Window";
-			window_prototype_desc.root.local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x, 0, rnd_pos.y));
-			window_prototype_desc.root.mesh = scn::prototype_desc::mesh_t{
-				.vx_begin = 0, .vx_end = geom.vertices.size(),
-				.ind_begin = 0, .ind_end = geom.indices.size(),
-				.material = res::get_system().require<scn::material_desc>(res::tag(res::tag::memory, "window_material.desc"))
-			};
-			window_prototype_desc.root.children = { window_prototype_desc.root };
-			window_prototype_desc.root.children[0].name = "Window2";
-			window_prototype_desc.root.children[0].local = glm::translate(glm::mat4{ 1.0 }, glm::vec3(rnd_pos.x + 3, 0, rnd_pos.y + 3));
-
-			window_prototype_desc.load_prototype(*registry_sp, world_anchor);
-		}
-	}
-
-	// light
-	{
-		light = registry_sp->create();
-		children.push_back(light);
-		registry_sp->emplace<scn::directional_light>(light,
-			glm::vec4(-0.2f, -1.0f, -0.3f, 0.0),
-			glm::vec4(0.5f, 0.5f, 0.5f, 1.0),
-			glm::vec4(0.2f, 0.2f, 0.2f, 1.0),
-			glm::vec4(1)
-		);
-
-		registry_sp->emplace<scn::name_component>(light, scn::name_component{ .name = "Global Light" });
-		registry_sp->emplace<scn::parent_component>(light, world_anchor);
-		registry_sp->emplace<scn::depth_level>(light);
-		registry_sp->emplace<scn::renderable>(light);
-		registry_sp->ctx().get<ecs::event<scn::hierarchy_updated>>().emit(light);
-	}
-
-	// sky
-	{
-		sky = registry_sp->create();
-		children.push_back(sky);
-		registry_sp->emplace<scn::sky_component>(sky, scn::sky_component{ .cube_map = std::vector<res::tag>{
-			res::tag::make("skybox/right.jpg"),
-			res::tag::make("skybox/left.jpg"),
-			res::tag::make("skybox/bottom.jpg"),
-			res::tag::make("skybox/top.jpg"),
-			res::tag::make("skybox/front.jpg"),
-			res::tag::make("skybox/back.jpg"),
-			}
-			});
-		registry_sp->emplace<scn::renderable>(sky);
-		registry_sp->emplace<scn::name_component>(sky, scn::name_component{ .name = "Sky" });
-		registry_sp->emplace<scn::parent_component>(sky, world_anchor);
-		registry_sp->emplace<scn::depth_level>(sky);
-		registry_sp->ctx().get<ecs::event<scn::hierarchy_updated>>().emit(sky);
-	}
-	this->world_anchor = world_anchor;
 }
 
 void mark_node_for_animation_stop(entt::registry* registry_sp, entt::entity ent)
@@ -815,7 +596,7 @@ bool edt::editor_system::show_toolbar()
 			std::vector<ecs::entity> cameras;
 			int cam_id = 1;
 			int cam_cur = 0;
-			int cam_cur_id = 0;
+			int cam_cur_id = -1;
 			auto cameras_view = registry_sp->view<scn::camera_component>();
 			for (auto& ent : cameras_view)
 			{
@@ -834,7 +615,8 @@ bool edt::editor_system::show_toolbar()
 				++cam_cur;
 			}
 
-			if (ImGui::BeginCombo("Current Camera", names[cam_cur_id].c_str(), 0))
+			if (cam_cur_id != -1)
+				if (ImGui::BeginCombo("Current Camera", names[cam_cur_id].c_str(), 0))
 			{
 				for (int n = 0; n < names.size(); ++n)
 				{
@@ -895,7 +677,9 @@ bool edt::editor_system::show_toolbar()
 		if (ImGui::Button("Create object on scene")) {
 			auto robot = res::get_system().require_sync<scn::skinning_prototype_desc>(imported_models_list[selected_model_idx]);
 			if (robot.is_ready()) {
-				robot->load_prototype(*registry_sp, world_anchor);
+				auto anchors = registry_sp->view<scn::scene_anchor_component>();
+				if (!anchors.empty())
+					robot->load_prototype(*registry_sp, anchors.front());
 			}
 			if (robot.has_error()) {
 				egLOG("Editor/Observer", "Error loading model prototype: {}", robot.get_control_block()->error_msg);

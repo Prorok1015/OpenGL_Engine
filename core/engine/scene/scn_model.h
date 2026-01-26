@@ -5,6 +5,7 @@
 #include "scn_primitives.h"
 #include "scn_material_desc.h"
 #include "scn_mesh_nodes.hpp"
+#include "ecs_event.hpp"
 
 namespace scn {
 
@@ -77,15 +78,20 @@ namespace scn {
 	};
 
     struct parent_component {
-        ecs::entity parent;
+        entt::entity parent;
     };
 
     struct children_component {
-        std::vector<ecs::entity> children;
+        std::vector<entt::entity> children;
     };
 
     struct local_transform {
         glm::mat4 local = glm::mat4{ 1.0 };
+        
+        void set(entt::entity ent, const glm::mat4& matr, ecs::event<scn::transform_updated>& event) {
+            local = matr;
+            event.emit(ent);
+        }
     };
 
     struct world_transform {

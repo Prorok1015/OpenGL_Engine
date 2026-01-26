@@ -85,6 +85,7 @@ namespace scn {
             return ctx;
         }
 
+        void sync_point();
     private:
         entt::registry m_level_state;
 

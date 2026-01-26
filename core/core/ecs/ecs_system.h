@@ -38,7 +38,7 @@ namespace ecs {
 class system_factory {
 public:
   // Callback signature: register(world_registry, organizer)
-  using system_initializer_fn = std::function<std::unique_ptr<system_interface>( entt::registry &, entt::organizer &)>;
+  using system_initializer_fn = std::function<std::shared_ptr<system_interface>( entt::registry &, entt::organizer &)>;
 
   static system_factory &instance() {
     static system_factory inst;
@@ -47,15 +47,31 @@ public:
 
   // --- Core Dispatcher Logic for Automatic Systems ---
   template <auto Candidate, size_t WorldID, typename... SaltedReqs>
-  static void emplace_automatic_system(const char *name, entt::organizer &org, type_list<SaltedReqs...>) {
-    org.emplace<SaltedReqs...>(&InvokerCallback<Candidate>, reinterpret_cast<const void *>(WorldID), name);
+  static void emplace_automatic_system(const char* name, entt::organizer &org, type_list<SaltedReqs...>) {
+    org.emplace<SaltedReqs...>(&InvokerCallback<Candidate, WorldID>, nullptr, name);
+  }
+
+  template <auto Candidate, class INSTANCE, size_t WorldID, typename... SaltedReqs>
+  static void emplace_automatic_system(INSTANCE* instance, const char* name, entt::organizer &org, type_list<SaltedReqs...>) {
+    org.emplace<SaltedReqs...>(&InvokerCallback<Candidate, INSTANCE, WorldID>, instance, name);
   }
 
   // The generic callback executed by Organizer
-  template <auto Candidate>
+  template <auto Candidate, class INSTANCE, size_t world_id>
   static void InvokerCallback(const void *payload, entt::registry &level_registry) {
-    size_t world_id = reinterpret_cast<size_t>(payload);
+    auto* get_reg_func = level_registry.ctx().find<runtime_context_provider>();
 
+    if (!get_reg_func) {
+      ASSERT_FAIL("Fatal: runtime_context_provider not found in level context!");
+      return;
+    }
+
+    runtime_context ctx = get_reg_func->get_context(world_id);
+    invoker<Candidate>::invoke(*static_cast<INSTANCE*>(const_cast<void*>(payload)), ctx);
+  }
+
+  template <auto Candidate, size_t world_id>
+  static void InvokerCallback(const void *payload, entt::registry &level_registry) {
     auto* get_reg_func = level_registry.ctx().find<runtime_context_provider>();
 
     if (!get_reg_func) {
@@ -68,23 +84,23 @@ public:
   }
 
   // Registration Dispatcher
-  template <auto Candidate> struct registration_dispatcher {
-    static void dispatch(size_t id, const char *name, entt::organizer &org) {
+  template <auto Candidate, class INSTANCE> struct registration_dispatcher {
+    static void dispatch(size_t id, INSTANCE* instance, const char* name, entt::organizer &org) {
       switch (id) {
       case 0:
-        impl<0>(name, org);
+        impl<0>(instance, name, org);
         break;
       case 1:
-        impl<1>(name, org);
+        impl<1>(instance, name, org);
         break;
       case 2:
-        impl<2>(name, org);
+        impl<2>(instance, name, org);
         break;
       case 3:
-        impl<3>(name, org);
+        impl<3>(instance, name, org);
         break;
       case 4:
-        impl<4>(name, org);
+        impl<4>(instance, name, org);
         break;
       default:
         ASSERT_MSG(false, "World ID > 4 not supported by automatic dispatcher "
@@ -93,26 +109,47 @@ public:
     }
 
     template <size_t ID>
-    static void impl(const char *name, entt::organizer &org) {
+    static void impl(INSTANCE* instance, const char* name, entt::organizer &org) {
       using Traits = function_traits<decltype(Candidate)>;
       using DepList = typename args_to_dependencies<typename Traits::args_tuple, ID>::type;
-
-      emplace_automatic_system<Candidate, ID>(name, org, DepList{});
+      if constexpr (std::is_same_v<INSTANCE, void>)
+        emplace_automatic_system<Candidate, ID>(name, org, DepList{});
+      else
+        emplace_automatic_system<Candidate, INSTANCE, ID>(instance, name, org, DepList{});
     }
   };
 
   // --- Public API ---
 
   // Register Stateful System (Class)
-  template <typename T, typename... ARGS>
-  void register_system_class(const std::string &name, ARGS... args) {
-    ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
-    m_systems[name] = [name = name, args...](entt::registry &reg, entt::organizer &org) {
-      auto sys = std::make_unique<T>(args...);
-      sys->register_in_world(reg, org);
-      return sys;
-    };
-  }
+    template <auto Candidate, typename T>
+    //requires std::is_base_of_v<ecs::system_interface, T>
+    void register_automatic_system(const std::string &name, std::shared_ptr<T> system) {
+        ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
+
+        m_systems[name] = [name = name, system = system](entt::registry& world_reg, entt::organizer &org) {
+            size_t w_id = world_reg.ctx().get<ecs::world_salt>();
+
+            registration_dispatcher<Candidate, T>::dispatch(w_id, system.get(), name.c_str(), org);
+
+            return system;
+        };
+    }
+
+    template <auto Candidate, typename T, class... ARGS>
+    requires std::is_base_of_v<ecs::system_interface, T>
+    void register_system_class(const std::string &name, ARGS... args) {
+        ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
+
+        m_systems[name] = [name = name, args...](entt::registry& world_reg, entt::organizer& org) {
+            size_t w_id = world_reg.ctx().get<ecs::world_salt>();
+            auto system = std::make_shared<T>(args...);
+
+            registration_dispatcher<Candidate, T>::dispatch(w_id, system.get(), name.c_str(), org);
+
+            return system;
+        };
+    }
 
   // Register Automatic System (Function)
     template <auto Candidate>
@@ -122,25 +159,22 @@ public:
         m_systems[name] = [name](entt::registry &world_reg, entt::organizer &org) {
             size_t w_id = world_reg.ctx().get<ecs::world_salt>();
 
-            registration_dispatcher<Candidate>::dispatch(w_id, name.c_str(), org);
+            registration_dispatcher<Candidate, void>::dispatch(w_id, nullptr, name.c_str(), org);
 
             return nullptr; // Stateless
         };
     }
 
-  std::unique_ptr<system_interface> create_system(const std::string &name,
-                                                  entt::registry &reg,
-                                                  entt::organizer &org) 
-  {
+  std::shared_ptr<system_interface> create_system(const std::string &name, entt::registry &reg, entt::organizer &org)  {
     if (m_systems.contains(name)) {
       return m_systems[name](reg, org);
     }
-    ASSERT_MSG(false, "System not found");
+
+    ASSERT_FAIL("System is not found");
     return nullptr;
   }
 
   system_factory() = default;
-
 private:
   std::unordered_map<std::string, system_initializer_fn> m_systems;
 };
