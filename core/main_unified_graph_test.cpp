@@ -62,12 +62,17 @@ void ctx_text_read(entt::view<entt::get_t<Text>, entt::exclude_t<SubText>> view,
 }
 
 struct sys : ecs::system_interface {
+    sys(std::string str)
+        : text(str) {}
+
     void call(entt::view<entt::get_t<SubText>> subview) {
 
-        subview.each([] (auto entity, auto& text) {
-            std::cout << "[Embedded System] sub text " << (uint32_t)entity << " Text to: " << text.content << std::endl;
+        subview.each([this] (auto entity, auto& text) {
+            std::cout << "[Embedded " << this->text << " System] sub text " << (uint32_t)entity << " Text to : " << text.content << std::endl;
         });
     }
+
+    std::string text;
 };
 
 int main() {
@@ -75,8 +80,8 @@ int main() {
 
   // 1. Create Level
   scn::level lvl;
-  ecs::system_factory &factory = ecs::system_factory::instance();
-  auto system1 = std::make_shared<sys>();
+  ecs::system_factory factory;
+  auto system1 = std::make_shared<sys>("instance"s);
   // 2. Create Worlds
   auto &game_world = lvl.create_world("game", 0);
   auto &ui_world = lvl.create_world("ui", 1);
@@ -87,6 +92,7 @@ int main() {
   // 3. Register System
   // We register the system logic in the factory
   factory.register_automatic_system<&sys::call>("sys::embedded", system1);
+  factory.register_automatic_system<&sys::call, sys>("sys::embedded2", "in place"s);
   factory.register_automatic_system<&sync_health_bar>("ui::sync_health");
   factory.register_automatic_system<&ctx_text_unpdate>("ui::update");
   factory.register_automatic_system<&ctx_text_read>("ui::read");
@@ -97,6 +103,7 @@ int main() {
   factory.create_system("ui::read", ui_world.state(), lvl.organizer());
   factory.create_system("ui::update", ui_world.state(), lvl.organizer());
   factory.create_system("sys::embedded", ui_world.state(), lvl.organizer());
+  auto p = factory.create_system("sys::embedded2", ui_world.state(), lvl.organizer());
 
   // 5. Populate Data
   // Game World: Player with Health
