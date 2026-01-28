@@ -14,8 +14,8 @@ namespace inp
 	struct scroll_move_event { glm::vec2 direction; };
 
 	struct input_state {
-		std::array<bool, (std::underlying_type_t<KEYBOARD_BUTTONS>)KEYBOARD_BUTTONS::COUNT> keyboard;
-		std::array<bool, (std::underlying_type_t<MOUSE_BUTTONS>)MOUSE_BUTTONS::COUNT> mouse;
+		std::array<bool, (std::underlying_type_t<KEYBOARD_BUTTONS>)KEYBOARD_BUTTONS::COUNT> keyboard{ false };
+		std::array<bool, (std::underlying_type_t<MOUSE_BUTTONS>)MOUSE_BUTTONS::COUNT> mouse{ false };
 		glm::vec2 mouse_pos{};
 		glm::vec2 mouse_prev{};
 		glm::vec2 mouse_dir{};

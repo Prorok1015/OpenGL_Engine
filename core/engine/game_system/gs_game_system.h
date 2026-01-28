@@ -4,7 +4,7 @@
 #include "scn_renderer.h"
 #include "wnd_window.h"
 #include "scn_camera_controller_system.h"
-#include "ecs_input_manager.h"
+#include "inp_ecs_input_manager.h"
 #include "desc_system.h"
 
 namespace gs 

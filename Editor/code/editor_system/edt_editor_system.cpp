@@ -1,13 +1,11 @@
 #include "edt_editor_system.h"
 #include "gui_api.hpp"
-#include "application.h"
 #include "gs_game_system.h"
 #include "res_system.h"
 #include "rnd_render_system.h"
 #include "scn_primitives.h"
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
-#include "ecs_common_system.h"
 #include "ecs_event.hpp"
 #include "eng_transform_3d.hpp"
 #include "inp_input_system.h"
@@ -17,12 +15,9 @@
 #include <boost/json.hpp>
 #include <imgui.h>
 #include "geom/rnd_geometry_desc.h"
-#include "texture/rnd_texture_desc.h"
 #include "scn_material_desc.h"
 #include "scn_skinning_prototype_desc.h"
-#include "adapters/scn_model_importer_adapter.h"
 #include "resource/resources/res_resource_text.h"
-#include "resources/res_resource_picture.h"
 
 #include "ds/ds_svg_writer.hpp"
 #include "level/scn_world.h"
@@ -201,7 +196,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	gui::get_system().set_show_title_bar_dbg(true);
 
 	input = std::make_shared<edt::input_manager>();
-	ecs_input = std::make_shared<ecs::flow_input_manager>();
 
 	file_dialog.set_current_path(res::get_system().get_resources_path());
 
@@ -222,16 +216,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		scn::world& world = lvl.create_world("3d_scene", 0);
 		world.state().ctx().emplace<ecs::event<scn::hierarchy_updated>>();
 		world.state().ctx().emplace<ecs::event<scn::transform_updated>>();
-		world.state().ctx().emplace<inp::input_state>();
 		auto& sfactory = data.require<ecs::system_factory>();
 		sfactory.register_automatic_system<edt::spawn_system>("edt::spawn_system");
+
+		sfactory.create_system("inp::update_input_state", world.state(), lvl.organizer());
 		sfactory.create_system("edt::spawn_system", world.state(), lvl.organizer());
 		sfactory.create_system("scn::animation_system_matrix", world.state(), lvl.organizer());
 		sfactory.create_system("scn::animation_system_node", world.state(), lvl.organizer());
 		sfactory.create_system("scn::update_camera_matrix_system", world.state(), lvl.organizer());
 		sfactory.create_system("scn::depth_system", world.state(), lvl.organizer());
 		sfactory.create_system("scn::transform_system", world.state(), lvl.organizer());
-		sfactory.create_system("inp::clear_input_state", world.state(), lvl.organizer());
 
 		lvl.mark_systems_graphs_dirty();
 	}
@@ -246,10 +240,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	rndsys.activate_renderer(renderer_sp);
 	renderer_sp->set_current_registry(registry_sp);
 
-	ecs_input->set_active_registry(registry_sp);
-
 	auto& inp_sys = data.require<inp::input_system>();
-	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ ecs_input });
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 }
 

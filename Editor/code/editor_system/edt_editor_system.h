@@ -4,7 +4,7 @@
 #include "ecs_entity.h"
 #include "rnd_render_system.h"
 #include "edt_input_manager.h"
-#include "ecs_input_manager.h"
+#include "inp_ecs_input_manager.h"
 #include "inp_input_system.h"
 #include "edt_file_dialog.h"
 
@@ -205,7 +205,7 @@ namespace edt
 		bool is_show_web = true;
 		bool is_inited_ecs_test = false;
 		std::shared_ptr<edt::input_manager> input;
-		std::shared_ptr<ecs::flow_input_manager> ecs_input;
+		std::shared_ptr<inp::ecs_input_manager> ecs_input;
 		edt::file_dialog file_dialog;
 		
 		std::shared_ptr< scn::skinning_prototype_desc> backpack;

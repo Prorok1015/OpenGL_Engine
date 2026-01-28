@@ -10,7 +10,7 @@
 
 void engine::engine_module::register_services(ds::app_data_storage& data)
 {
-	input::input_init(data);// engine
+	input::input_reg(data);// engine
 	render::render_init(data);// engine
 	gui::gui_init(data);//engine
 	scn::scene_init(data);//engine
@@ -33,6 +33,7 @@ void engine::engine_module::initialize_services(ds::app_data_storage& data)
 		input_service->on_window_created(window.get());
 		input_service->on_window_resize(window.get(), window->get_size().x, window->get_size().y);
 	}
+	input::input_init(data);
 }
 
 void engine::engine_module::shutdown_services(ds::app_data_storage& data)
