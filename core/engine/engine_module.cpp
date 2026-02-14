@@ -6,7 +6,7 @@
 #include "inp_input_system.h"
 #include "wnd_window_system.h"
 #include "scn_scene_service_init.h"
-#include "gs_loop_service.h"
+#include "app_loop_service_interface.h"
 
 void engine::engine_module::register_services(ds::app_data_storage& data)
 {
@@ -15,7 +15,6 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 	gui::gui_init(data);//engine
 	scn::scene_init(data);//engine
 	game::game_init(data);//delete
-	data.construct<app::app_loop_service_interface, gs::gs_loop_service>();
 }
 
 void engine::engine_module::initialize_services(ds::app_data_storage& data)
@@ -44,7 +43,6 @@ void engine::engine_module::shutdown_services(ds::app_data_storage& data)
 		win_service.remove_event_listener(input_service);
 	}
 
-	data.destruct<app::app_loop_service_interface>();
 	game::game_term(data);
 	scn::scene_term(data);
 	gui::gui_term(data);

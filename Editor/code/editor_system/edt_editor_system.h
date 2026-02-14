@@ -14,6 +14,7 @@
 #include "ds/ds_rtree.h"
 #include "ds/ds_store.hpp"
 #include "scn_renderer.h"
+#include "edt_editor_layer.h"
 
 namespace edt
 {
@@ -214,6 +215,7 @@ namespace edt
 		crossing_context crossingcontext;
 		std::shared_ptr<entt::registry> registry_sp;
 		std::shared_ptr<scn::renderer_3d> renderer_sp;
+		std::shared_ptr<edt::editor_layer> editor_layer;
 	};
 
 

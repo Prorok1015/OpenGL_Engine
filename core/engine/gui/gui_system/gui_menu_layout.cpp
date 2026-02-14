@@ -8,7 +8,7 @@ void gui::menu_layout_manager::process()
 	if (get_is_show_main_menu()) {
 		if (ImGui::BeginMainMenuBar()) {
 			for (auto& child : root_menu_item.children) {
-				process_menu_item(child);
+				process_menu_item(child.get());
 			}
 			ImGui::EndMainMenuBar();
 		}
@@ -63,12 +63,12 @@ void gui::menu_layout_manager::unregistrate(std::string_view path)
 	while (true) {
 		menu_tree_item* parent = menuItem->parent;
 		if (parent->children.size() != 1 || parent == &root_menu_item) {
+			set_menu_checked(menuItem, false);
 			parent->remove(menuItem);
 			break;
 		}
 		menuItem = parent;
 	}
-	delete_menu(menuItem);
 }
 
 void gui::menu_layout_manager::register_implicit(const std::string_view id, UI_CALLBACK callback)
@@ -104,8 +104,7 @@ void gui::menu_layout_manager::add_menu(std::string_view path, UI_CALLBACK cb)
 	for (auto& token : tokens) {
 		menu_tree_item* curMenuItem = menuItem->find(token);
 		if (!curMenuItem) {
-			curMenuItem = new menu_tree_item(token);
-			menuItem->add(curMenuItem);
+			curMenuItem = menuItem->add_child(token);
 		}
 		menuItem = curMenuItem;
 	}
@@ -119,7 +118,7 @@ void gui::menu_layout_manager::process_menu_item(menu_tree_item* menuItem)
 	if (!menuItem->uiCallback) {
 		if (ImGui::BeginMenu(menuItem->title.c_str())) {
 			for (auto& child : menuItem->children) {
-				process_menu_item(child);
+				process_menu_item(child.get());
 			}
 			ImGui::EndMenu();
 		}
@@ -218,8 +217,8 @@ void gui::menu_layout_manager::uncheck_all()
 
 void gui::menu_layout_manager::delete_menu(menu_tree_item* menuItem)
 {
-	for (menu_tree_item* child : menuItem->children) {
-		delete_menu(child);
+	for (const auto& child : menuItem->children) {
+		delete_menu(child.get());
 	}
 
 	set_menu_checked(menuItem, false);
@@ -230,27 +229,33 @@ gui::menu_layout_manager::menu_tree_item* gui::menu_layout_manager::menu_tree_it
 {
 	for (const auto& child : children) {
 		if (child->title == title) {
-			return child;
+			return child.get();
 		}
 	}
 	return nullptr;
 }
 
 
-void gui::menu_layout_manager::menu_tree_item::add(menu_tree_item* item)
+gui::menu_layout_manager::menu_tree_item* gui::menu_layout_manager::menu_tree_item::add_child(const std::string_view token)
 {
-	if (!item) {
-		return;
+	if (token.empty()) {
+		return nullptr;
 	}
 
-	children.push_back(item);
+	children.push_back(std::make_unique<gui::menu_layout_manager::menu_tree_item>(token));
+	auto& item = children.back();
 	item->parent = this;
+	return item.get();
 }
 
 
 void gui::menu_layout_manager::menu_tree_item::remove(menu_tree_item* item)
 {
-	children.erase(std::remove(children.begin(), children.end(), item));
+	auto it = std::remove_if(children.begin(), children.end(), [item] (const auto& unique) {
+		return unique.get() == item;
+	});
+
+	children.erase(it);
 }
 
 

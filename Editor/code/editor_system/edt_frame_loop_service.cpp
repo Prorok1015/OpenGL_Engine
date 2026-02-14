@@ -1,18 +1,20 @@
-#include "gs_loop_service.h"
+#include "edt_frame_loop_service.h"
 #include "rnd_render_system.h"
+#include "inp_input_system.h"
+#include "ecs_system.h"
+#include "ecs_common_system.h"
+#include "gs_game_system.h"
 #include "wnd_window_system.h"
 #include "level/scn_level_manager.h"
 
-gs::gs_loop_service::gs_loop_service()
+edt::edt_loop_service::edt_loop_service()
 	: stop_requested(false)
-{
-}
+{}
 
-gs::gs_loop_service::~gs_loop_service()
-{
-}
+edt::edt_loop_service::~edt_loop_service()
+{}
 
-void gs::gs_loop_service::init(ds::app_data_storage& storage)
+void edt::edt_loop_service::init(ds::app_data_storage& storage)
 {
 	auto& window_system_ref = storage.require<wnd::window_system>();
 
@@ -20,7 +22,7 @@ void gs::gs_loop_service::init(ds::app_data_storage& storage)
 	previous_time = std::chrono::high_resolution_clock::now();
 }
 
-void gs::gs_loop_service::on_step(ds::app_data_storage& storage)
+void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 {
 	auto current_time = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<float> duration = current_time - previous_time;
@@ -37,7 +39,7 @@ void gs::gs_loop_service::on_step(ds::app_data_storage& storage)
 	stop_requested = window_system_ref.is_stop_running();
 }
 
-bool gs::gs_loop_service::should_stop() const
+bool edt::edt_loop_service::should_stop() const
 {
 	return stop_requested;
 }

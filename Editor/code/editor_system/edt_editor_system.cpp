@@ -1,5 +1,4 @@
 #include "edt_editor_system.h"
-#include "gui_api.hpp"
 #include "gs_game_system.h"
 #include "res_system.h"
 #include "rnd_render_system.h"
@@ -11,6 +10,7 @@
 #include "inp_input_system.h"
 #include "edt_input_manager.h"
 #include "edt_guizmo.hpp"
+#include "gui_system.h"
 #include <misc/cpp/imgui_stdlib.h>
 #include <boost/json.hpp>
 #include <imgui.h>
@@ -26,8 +26,7 @@
 
 #include "edt_spawn_system.h"
 
-void
-pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
+void pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
 {
     std::string indent_;
     if(! indent)
@@ -111,90 +110,6 @@ pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nul
 edt::editor_system::editor_system(desc::desc_system& desc_system_)
 	: desc_system(desc_system_)
 {
-
-	GUI_REG_LAMBDA("File/Import...", [this] { return show_file_dialog(); });
-
-	GUI_REG_LAMBDA("Window/Toolbar", [this] { return show_toolbar(); });
-	GUI_SET_ITEM_CHECKED("Window/Toolbar", true);
-
-	GUI_REG_LAMBDA("Window/Scene", [this] { return show_scene(); });
-	GUI_SET_ITEM_CHECKED("Window/Scene", true);
-	GUI_REG_LAMBDA("Editor/Test JSON Window", [this] { 
-		bool is_open = true;
-		if (ImGui::Begin("Test JSON Window", &is_open)) {
-			if (selected_entity != entt::null) 
-			{
-				if (auto* desc = registry_sp->try_get<rnd::geometry_desc>(selected_entity))
-				{
-					json::object data;
-					desc->serialize(data);
-					std::ostringstream oss;
-					pretty_print(oss, data);
-					std::string json_string = oss.str();
-					ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly);
-				
-					rnd::geometry_desc test_desc;
-					test_desc.deserialize(desc_system, data);
-
-					ASSERT_MSG(desc->vertices == test_desc.vertices, "arrays are different");
-				}
-			}
-		}
-		ImGui::End();
-
-		if (ImGui::Begin("Test files Reload", &is_open))
-		{
-			static std::shared_ptr<res::text_resource> test_res;
-			static bool is_show_file_dialog = true;
-
-			if (ImGui::Button("Test Load")) {
-				is_show_file_dialog = true;
-			}
-
-			if (is_show_file_dialog)
-			{
-				if (file_dialog.show("Select text file", &is_show_file_dialog))
-				{
-					auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
-					res::tag test_tag = res::tag::make(relateve.string());
-					test_res = res::get_system().require<res::text_resource>(test_tag).get_sync();
-					res::get_system().watch(test_tag, this, [this](const res::tag& test_tag){
-						auto updated_res = res::get_system().require<res::text_resource>(test_tag).get_sync();
-						egLOG("Editor/Test JSON Window", "Resource '{}' reloaded!", test_tag.string());
-						if (updated_res) {
-							test_res = updated_res;
-						}
-					});
-				}
-			}
-			
-			if (test_res) {
-				ImGui::Text("TEXT:%s", test_res->c_str());
-			}
-		}
-		ImGui::End();
-
-		return is_open;
-	});
-	GUI_SET_ITEM_CHECKED("Editor/Test JSON Window", false);
-
-	GUI_REG_LAMBDA("Editor/Test ECS window", [this] { return show_ecs_test(); });
-	GUI_SET_ITEM_CHECKED("Editor/Test ECS window", false);
-
-	GUI_REG_LAMBDA("Editor/Crossing Game", [this] { return show_crossing_game_window(); });
-	GUI_SET_ITEM_CHECKED("Editor/Crossing Game", true);
-
-	GUI_REG_LAMBDA_IMPLICIT("EDITOR/IMPL/SHOW_WEP", [this] { return show_web(); });
-
-	GUI_REG_LAMBDA("Editor/Clear", [this] { return show_clear_cache(); });
-	GUI_REG_LAMBDA("Window/Textures", [this] { return show_textures(); });
-	GUI_SET_ITEM_CHECKED("Window/Textures", false);
-	GUI_REG_LAMBDA("Editor/Draw web", [this] { return true; });
-	GUI_SET_ITEM_CHECKED("Editor/Draw web", is_show_web);
-
-	gui::get_system().set_show_title_bar(true);
-	gui::get_system().set_show_title_bar_dbg(true);
-
 	input = std::make_shared<edt::input_manager>();
 
 	file_dialog.set_current_path(res::get_system().get_resources_path());
@@ -207,9 +122,89 @@ edt::editor_system::~editor_system()
 {
 }
 
-
 void edt::editor_system::init(ds::app_data_storage& data)
 {
+	editor_layer = std::make_shared<edt::editor_layer>();
+
+	auto& gui_system = data.require<gui::gui_system>();
+	gui_system.push_layer(editor_layer);
+
+	editor_layer->register_tool("File/Import...", [this] { return show_file_dialog(); });
+
+	editor_layer->register_tool("Window/Toolbar", [this] { return show_toolbar(); });
+	editor_layer->set_tool_checked("Window/Toolbar", true);
+
+	editor_layer->register_tool("Window/Scene", [this] { return show_scene(); });
+	editor_layer->set_tool_checked("Window/Scene", true);
+	editor_layer->register_tool("Editor/Test JSON Window", [this] {
+		bool is_open = true;
+		if (ImGui::Begin("Test JSON Window", &is_open)) {
+			if (selected_entity != entt::null) {
+				if (auto* desc = registry_sp->try_get<rnd::geometry_desc>(selected_entity)) {
+					json::object data;
+					desc->serialize(data);
+					std::ostringstream oss;
+					pretty_print(oss, data);
+					std::string json_string = oss.str();
+					ImGui::InputTextMultiline("JSON", &json_string, ImVec2(500, 500), ImGuiInputTextFlags_ReadOnly);
+
+					rnd::geometry_desc test_desc;
+					test_desc.deserialize(desc_system, data);
+
+					ASSERT_MSG(desc->vertices == test_desc.vertices, "arrays are different");
+				}
+			}
+		}
+		ImGui::End();
+
+		if (ImGui::Begin("Test files Reload", &is_open)) {
+			static std::shared_ptr<res::text_resource> test_res;
+			static bool is_show_file_dialog = true;
+
+			if (ImGui::Button("Test Load")) {
+				is_show_file_dialog = true;
+			}
+
+			if (is_show_file_dialog) {
+				if (file_dialog.show("Select text file", &is_show_file_dialog)) {
+					auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
+					res::tag test_tag = res::tag::make(relateve.string());
+					test_res = res::get_system().require<res::text_resource>(test_tag).get_sync();
+					res::get_system().watch(test_tag, this, [this] (const res::tag& test_tag) {
+						auto updated_res = res::get_system().require<res::text_resource>(test_tag).get_sync();
+						egLOG("Editor/Test JSON Window", "Resource '{}' reloaded!", test_tag.string());
+						if (updated_res) {
+							test_res = updated_res;
+						}
+					});
+				}
+			}
+
+			if (test_res) {
+				ImGui::Text("TEXT:%s", test_res->c_str());
+			}
+		}
+		ImGui::End();
+
+		return is_open;
+	});
+	editor_layer->set_tool_checked("Editor/Test JSON Window", false);
+
+	editor_layer->register_tool("Editor/Test ECS window", [this] { return show_ecs_test(); });
+	editor_layer->set_tool_checked("Editor/Test ECS window", false);
+
+	editor_layer->register_tool("Editor/Crossing Game", [this] { return show_crossing_game_window(); });
+	editor_layer->set_tool_checked("Editor/Crossing Game", true);
+
+	editor_layer->register_implicit("EDITOR/IMPL/SHOW_WEP", [this] { return show_web(); });
+
+	editor_layer->register_tool("Editor/Clear", [this] { return show_clear_cache(); });
+	editor_layer->register_tool("Window/Textures", [this] { return show_textures(); });
+	editor_layer->set_tool_checked("Window/Textures", false);
+	editor_layer->register_tool("Editor/Draw web", [this] { return true; });
+	editor_layer->set_tool_checked("Editor/Draw web", is_show_web);
+
+
 	auto& level_manager = data.require<scn::level_manager>();
 	{
 		scn::level& lvl = level_manager.get_level();
@@ -242,6 +237,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
+	ecs_input = data.require_shared<inp::ecs_input_manager>();
 }
 
 void mark_node_for_animation_stop(entt::registry* registry_sp, entt::entity ent)
@@ -1117,7 +1113,7 @@ bool edt::editor_system::show_crossing_game_window()
 
 bool edt::editor_system::show_web()
 {
-	const bool cur_is_show = GUI_IS_ITEM_CHECKED("Editor/Draw web");
+	const bool cur_is_show = editor_layer->is_tool_checked("Editor/Draw web");
 	if (!cur_is_show && cur_is_show != is_show_web) {
 		registry_sp->remove<scn::renderable>(editor_web);
 		//ecs::remove_component<scn::renderable>(sky);

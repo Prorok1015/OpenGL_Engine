@@ -22,7 +22,6 @@ namespace gs
 		void set_enable_input(bool enable);
 
 		void reload_shaders();
-		void end_ecs_frame();
 
 		std::shared_ptr<scn::renderer_3d> get_renderer() const { return renderer; }
 	private:

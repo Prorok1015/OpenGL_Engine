@@ -2,6 +2,7 @@
 #include <functional>
 #include <vector>
 #include <string>
+#include <memory>
 
 namespace gui
 {
@@ -15,10 +16,11 @@ namespace gui
 			menu_tree_item() = default;
 			menu_tree_item(const std::string_view title)
 				: title(title) {};
+			~menu_tree_item() = default;
 
 			std::string get_path() const;
 			menu_tree_item* find(const std::string_view title) const;
-			void add(menu_tree_item* item);
+			menu_tree_item* add_child(const std::string_view token);
 			void remove(menu_tree_item* item);
 			void notify_check_callback(bool enable);
 
@@ -28,7 +30,7 @@ namespace gui
 			UI_CALLBACK uiCallback;
 			UI_SWITCH_CALLBACK checkCallback;
 			std::string title;
-			std::vector<menu_tree_item*> children;
+			std::vector<std::unique_ptr<menu_tree_item>> children;
 		};
 
 		void registrate(std::string_view path, std::function<bool()> callback);

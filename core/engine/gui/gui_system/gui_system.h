@@ -1,6 +1,7 @@
 #pragma once
 #include "gui_renderer.h"
 #include "gui_menu_layout.h"
+#include "gui_layer_interface.h"
 
 namespace gui
 {
@@ -18,34 +19,21 @@ namespace gui
 
 		void render_menues();
 
-		void set_show_title_bar(bool show);
-		void set_show_title_bar_dbg(bool show);
-
 		void set_show_ui(bool show) { is_show = show; }
 		bool is_hiden() const { return !is_show; }
 
 		//void switch_input(inp::KEYBOARD_BUTTONS code, inp::KEY_ACTION action);
 		void set_is_input_enabled(bool enable);
 
-		void registrate_menu(std::string_view path, menu_layout_manager::UI_CALLBACK callback);
-		void registrate_menu_dbg(std::string_view path, menu_layout_manager::UI_CALLBACK callback);
-		void unregistrate_menu(std::string_view path);
-		void unregistrate_menu_dbg(std::string_view path);
+		void push_layer(std::shared_ptr<gui::layer_interface> layer) {
+			layers.push_back(layer);
+			layer->on_attach();
+		}
 
-		void register_implicit(const std::string_view id, menu_layout_manager::UI_CALLBACK callback);
-		void register_implicit_dbg(const std::string_view id, menu_layout_manager::UI_CALLBACK callback);
-		void unregister_implicit(const std::string_view id);
-		void unregister_implicit_dbg(const std::string_view id);
-
-		void set_menu_checked(const std::string_view path, bool checked);
-		void set_menu_checked_dbg(const std::string_view path, bool checked);
-		bool is_item_checked(const std::string_view path) const;
-		bool is_item_checked_dbg(const std::string_view path) const;
-		void set_check_callback(const std::string_view path, menu_layout_manager::UI_SWITCH_CALLBACK callback);
-		void set_check_callback_dbg(const std::string_view path, menu_layout_manager::UI_SWITCH_CALLBACK callback);
-
-		bool show_stats();
-		bool show_demo();
+		void pop_layer(std::shared_ptr<gui::layer_interface> layer) {
+			layers.erase(std::remove(layers.begin(), layers.end(), layer));
+			layer->on_dettach();
+		}
 
 		gui::imgui_backend_interface* get_backend_interface() const {
 			return backend;
@@ -54,9 +42,7 @@ namespace gui
 		bool is_show = true;
 		bool is_input_enabled = true;
 		std::shared_ptr<renderer> renderer;
-
-		menu_layout_manager layout;
-		menu_layout_manager dbg_layout;
+		std::vector<std::shared_ptr<gui::layer_interface>> layers;
 		gui::imgui_backend_interface* backend = nullptr;
 	};
 

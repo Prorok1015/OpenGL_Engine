@@ -12,8 +12,6 @@
 #include "timer.hpp"
 #include "eng_transform_3d.hpp"
 
-#include "gui_api.hpp"
-
 namespace scn {
     static float make_aspect(camera_component& camera)
     {
@@ -76,13 +74,13 @@ scn::renderer_3d::renderer_3d(scn::skinning_manager& skin_mng)
 
     vertex_array->set_index_buffer(index_buffer);
 
-    DBG_UI_REG_LAMBDA("RENDER/TEST_RENDER", [this]() { return is_flag_test_render; });
-    DBG_UI_MENU_ITEM_CHECK_LAMBDA("RENDER/TEST_RENDER", [this](bool flag) { is_flag_test_render = flag; });
-    DBG_UI_SET_ITEM_CHECKED("RENDER/TEST_RENDER", true);
+    //DBG_UI_REG_LAMBDA("RENDER/TEST_RENDER", [this]() { return is_flag_test_render; });
+    //DBG_UI_MENU_ITEM_CHECK_LAMBDA("RENDER/TEST_RENDER", [this](bool flag) { is_flag_test_render = flag; });
+    //DBG_UI_SET_ITEM_CHECKED("RENDER/TEST_RENDER", true);
 
-    DBG_UI_REG_LAMBDA("RENDER/SHOW_ANIM", [this]() { return is_flag_show_anim; });
-    DBG_UI_MENU_ITEM_CHECK_LAMBDA("RENDER/SHOW_ANIM", [this](bool flag) { is_flag_show_anim = flag; });
-    DBG_UI_SET_ITEM_CHECKED("RENDER/SHOW_ANIM", true);
+    //DBG_UI_REG_LAMBDA("RENDER/SHOW_ANIM", [this]() { return is_flag_show_anim; });
+    //DBG_UI_MENU_ITEM_CHECK_LAMBDA("RENDER/SHOW_ANIM", [this](bool flag) { is_flag_show_anim = flag; });
+    //DBG_UI_SET_ITEM_CHECKED("RENDER/SHOW_ANIM", true);
 }
 
 scn::renderer_3d::~renderer_3d()

@@ -36,14 +36,6 @@ void gs::game_system::set_enable_input(bool enable)
 {
 }
 
-
-// TODO: remove
-void gs::game_system::end_ecs_frame()
-{
-	const auto ents = ecs::registry.view<ecs::input_changed_event_component>();
-	ecs::registry.destroy(ents.begin(), ents.end());
-}
-
 void gs::game_system::reload_shaders()
 {
 	rnd::get_system().get_shader_manager().clear_cache();
