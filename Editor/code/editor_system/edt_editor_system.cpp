@@ -25,6 +25,8 @@
 #include "level/scn_level_manager.h"
 
 #include "edt_spawn_system.h"
+#include <entt/entt.hpp>
+#include <level/scn_prefab_desc.h>
 
 void pretty_print( std::ostream& os, json::value const& jv, std::string* indent = nullptr )
 {
@@ -224,7 +226,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 		lvl.mark_systems_graphs_dirty();
 	}
-	
+
 	auto& lvl = level_manager.get_level();
 	auto& world = lvl.get_world("3d_scene");
 

@@ -24,7 +24,7 @@ void scn::skinning_prototype_desc::serialize(json::object& data) const
 	}
 }
 
-entt::entity scn::skinning_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
+entt::entity scn::skinning_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent) const
 {
 	load_context ctx;
 	auto root_ent = load_prototype_node(registry, parent, root, ctx);

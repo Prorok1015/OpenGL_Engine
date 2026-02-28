@@ -31,6 +31,12 @@ namespace desc
 			return *this;
 		}
 
+		std::string_view get_type() const { return type; }
+
+	protected:
+		void set_type(const std::string& type) { this->type = type; }
+
 	private:
+		std::string type;
 	};
 }

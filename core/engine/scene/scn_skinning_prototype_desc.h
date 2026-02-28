@@ -29,7 +29,7 @@ namespace scn
 		}
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
-		virtual entt::entity load_prototype(entt::registry& registry, entt::entity parent) override;
+		virtual entt::entity load_prototype(entt::registry& registry, entt::entity parent) const override;
 
 		std::vector<std::vector<uint32_t>> get_2d_array_bonesids_weights() const;
 

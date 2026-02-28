@@ -45,8 +45,8 @@ namespace scn
 		};
 
 	protected:
-		void load_prototype_animations(entt::registry& registry, entt::entity root);
-		virtual entt::entity load_prototype(entt::registry& registry, entt::entity parent) override;
+		void load_prototype_animations(entt::registry& registry, entt::entity root) const;
+		virtual entt::entity load_prototype(entt::registry& registry, entt::entity parent) const override;
 		virtual entt::entity load_prototype_node(entt::registry& registry, entt::entity parent, const node_t& node, load_context& ctx) const override;
 
 		using animation_name = std::string;

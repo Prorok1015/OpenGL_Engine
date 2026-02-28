@@ -43,6 +43,7 @@ namespace desc
 			}
 			auto instance = it->second();
 			instance->set_tag(tag);
+            instance->set_type(type_id);
 			return instance;
 		}
 
@@ -56,6 +57,7 @@ namespace desc
             ASSERT_MSG(data.is_object() && data.as_object().contains("__type"), "Invalid desc field data: expected either string tag or object with '__type' field");
 
 			res::tag mem_tag = make_mem_tag(owner, json::value_to<std::string>(data.at("__type")));
+			// TODO: optimize parsing again data. create desc inplace and pin as a resource to not serialize/deserialize twice
 			m_res_system.store(mem_tag, serialize_to_bytes(data));
 			return m_res_system.require_sync<T>(mem_tag);
 		}

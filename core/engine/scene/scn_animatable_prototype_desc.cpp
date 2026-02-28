@@ -134,7 +134,7 @@ void scn::animatable_prototype_desc::serialize(json::object& data) const
 	data["animations"] = json::value_from(animations);
 }
 
-void scn::animatable_prototype_desc::load_prototype_animations(entt::registry& registry, entt::entity root_ent)
+void scn::animatable_prototype_desc::load_prototype_animations(entt::registry& registry, entt::entity root_ent) const
 {
 	scn::animations_component animations_comp;
 	for (const auto& [_, anim] : animations) {
@@ -149,7 +149,7 @@ void scn::animatable_prototype_desc::load_prototype_animations(entt::registry& r
 	}
 }
 
-entt::entity scn::animatable_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent)
+entt::entity scn::animatable_prototype_desc::load_prototype(entt::registry& registry, entt::entity parent) const
 {
 	load_context ctx;
 	auto root_ent = load_prototype_node(registry, parent, root, ctx);
