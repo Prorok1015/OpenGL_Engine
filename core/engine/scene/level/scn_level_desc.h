@@ -1,11 +1,16 @@
 #pragma once
 #include "desc_base.hpp"
+#include "scn_world_desc.h"
+#include "resources/res_resource_handle.hpp"
+
+#include <vector>
 
 namespace scn
 {
 	class level_desc : public desc::desc_base
 	{
 	public:
+		using base_type = desc::desc_base;
 		level_desc() = default;
 		~level_desc() = default;
 		level_desc(const level_desc&) = default;
@@ -20,5 +25,9 @@ namespace scn
 		}
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
+		const std::vector<res::res_handle<world_desc>>& get_worlds() const { return worlds; }
+
+	private:
+		std::vector<res::res_handle<world_desc>> worlds;
 	};
 }

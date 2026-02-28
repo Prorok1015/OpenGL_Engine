@@ -12,12 +12,7 @@ namespace scn {
     class level 
     {
     public:
-        level() {
-        m_level_state.ctx().emplace<ecs::runtime_context_provider>(
-            ecs::runtime_context_provider::getter_type{
-            [this](size_t world_id) { return this->create_runtime_context(world_id); }
-        });
-        }
+        level();
 
         ~level() = default;
         level(const level &) = delete;
@@ -27,14 +22,7 @@ namespace scn {
 
         void update(std::chrono::duration<float> dt);
 
-        scn::world& create_world(const std::string &type, uint32_t world_id) {
-            auto& w = *(m_worlds[type] = std::make_unique<scn::world>(world_id));
-            m_worlds_by_id[world_id] = &w; // Register in ID map
-
-            // Set the WorldID in the world's own registry context
-            w.state().ctx().emplace<ecs::world_salt>((size_t)world_id);
-            return w;
-        }
+        scn::world& create_world(const std::string& type, uint32_t world_id);
 
         scn::world& get_world(const std::string &type) {
             ASSERT_MSG(m_worlds.contains(type), "level doesn't contain this type of world");
@@ -51,6 +39,8 @@ namespace scn {
 
         entt::registry& state() { return m_level_state; }
         entt::registry const& state() const { return m_level_state; }
+
+		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
 
         void mark_systems_graphs_dirty() {
             m_fixed_graph = m_fixed_organizer.graph();

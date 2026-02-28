@@ -111,7 +111,7 @@ namespace res
 		}
 
 		template<class T, class... ARGS>
-		T& registrate_adapter(extension extension, ARGS... args) {
+		T& registrate_adapter(extension extension, ARGS&&... args) {
 			auto adapter_new = std::make_shared<T>(std::forward<ARGS>(args)...);
 			m_adapter_infos[adapter_new] = extension;
 

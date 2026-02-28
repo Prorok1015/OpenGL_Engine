@@ -34,9 +34,9 @@ namespace desc
 			factory_map.erase(std::string{ type_name });
 		}
 
-		std::shared_ptr<desc::desc_base> create_instance(const std::string& type_id, const res::tag& tag) const
+		std::shared_ptr<desc::desc_base> create_instance(const std::string_view type_id, const res::tag& tag) const
 		{
-			auto it = factory_map.find(type_id);
+            auto it = factory_map.find(std::string{ type_id });
 			if (it == factory_map.end()) {
 				egLOG("desc/error", "Failed to create desc instance of type '{0}': type not registered", type_id);
 				return nullptr;

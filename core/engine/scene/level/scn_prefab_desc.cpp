@@ -1,4 +1,5 @@
 #include "scn_prefab_desc.h"
+#include "scn_model.h"
 
 void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
@@ -49,8 +50,11 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 
 void scn::prefab_desc::serialize(json::object& data) const
 {
-    auto serialize_node = [](auto& self, const prefab_node& nd) -> json::object {
-        json::object node_obj = nd.overrides;
+    auto serialize_node = [](auto& self, const prefab_node& nd, json::object& node_obj) -> void {
+		
+        for (const auto& kv : nd.overrides) {
+            node_obj[kv.key()] = kv.value();
+        }
 
         if (!nd.name.empty() && nd.name != "root" && !nd.name.starts_with("child_")) {
             node_obj["name"] = nd.name;
@@ -67,7 +71,9 @@ void scn::prefab_desc::serialize(json::object& data) const
         if (!nd.components.empty()) {
             json::object comps_obj;
             for (const auto& [comp_key, comp_node] : nd.components) {
-                comps_obj[comp_key] = self(self, comp_node);
+				json::object comp_node_obj;
+                self(self, comp_node, comp_node_obj);
+                comps_obj[comp_key] = comp_node_obj;
             }
             node_obj["components"] = comps_obj;
         }
@@ -75,15 +81,16 @@ void scn::prefab_desc::serialize(json::object& data) const
         if (!nd.children.empty()) {
             json::array children_arr;
             for (const auto& child_node : nd.children) {
-                children_arr.push_back(self(self, child_node));
+                json::object comp_node_obj;
+                self(self, child_node, comp_node_obj);
+                children_arr.push_back(comp_node_obj);
             }
             node_obj["children"] = children_arr;
         }
 
-        return node_obj;
     };
 
-    data = serialize_node(serialize_node, root);
+    serialize_node(serialize_node, root, data);
 }
 
 void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string& name)
@@ -103,7 +110,14 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
     for (const auto& child_node : root_node.children) {
         entt::entity child_entity = reg.create();
 
-        // reg.emplace<ParentComponent>(child_entity, e); 
+        reg.emplace<scn::parent_component>(child_entity, e); 
+
+        if (reg.all_of<scn::children_component>(e)) {
+			auto& children = reg.get<scn::children_component>(e);
+			children.children.push_back(child_entity);
+        } else {
+			reg.emplace<scn::children_component>(e, std::vector{ child_entity });
+        }
 
         assembler.assemble_and_apply(
             reg, child_entity,

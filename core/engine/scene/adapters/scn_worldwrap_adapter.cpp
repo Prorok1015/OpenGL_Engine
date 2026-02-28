@@ -1,0 +1,46 @@
+#include "scn_worldwrap_adapter.h"
+#include "desc_system.h"
+
+scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system& res_system, ::desc::desc_system& desc_system)
+	: m_res_system(res_system)
+	, m_desc_system(desc_system)
+{
+}
+
+std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
+{
+    std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
+    json::parse_options options;
+    options.max_depth = 128;
+    auto json_body = json::parse(json_data, {}, options).as_object();
+
+    ASSERT_MSG(json_body.contains("__type"), "Deserialized desc resource does not contain __type field!");
+
+    std::string type_id = json::value_to<std::string>(json_body.at("__type"));
+
+    auto instance = m_desc_system.create_instance(scn::world_desc::__type, tag);
+
+    if (type_id == scn::world_desc::__type) {
+        if (json_body.contains("__parent")) {
+            auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
+            auto parent = m_res_system.require_sync<::desc::desc_base>(parent_tag);
+            parent->copy_to(*instance);
+        }
+    }
+
+    instance->deserialize(m_desc_system, json_body);
+
+    return instance;
+}
+
+std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const
+{
+    auto desc_res = ds::polymorphic_cast<::desc::desc_base>(resource);
+    json::object body;
+    desc_res->serialize(body);
+    std::string data = json::serialize(body);
+    std::vector<std::byte> byte_data;
+    byte_data.resize(data.size());
+    std::memcpy(byte_data.data(), data.data(), data.size());
+    return byte_data;
+}

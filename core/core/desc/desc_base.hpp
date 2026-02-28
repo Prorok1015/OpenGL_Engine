@@ -34,7 +34,7 @@ namespace desc
 		std::string_view get_type() const { return type; }
 
 	protected:
-		void set_type(const std::string& type) { this->type = type; }
+		void set_type(const std::string_view type) { this->type = std::string{ type }; }
 
 	private:
 		std::string type;

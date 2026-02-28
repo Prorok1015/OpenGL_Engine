@@ -3,10 +3,21 @@
 
 void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::object& obj)
 {
-	// Implement deserialization logic here
+	if (obj.contains("worlds")) {
+		worlds.clear();
+		for (const auto& world_val : obj.at("worlds").as_array()) {
+			worlds.push_back(desc_system.get_field_desc<scn::world_desc>(*this, world_val));
+		}
+	}
 }
 
 void scn::level_desc::serialize(json::object& obj) const
 {
-	// Implement serialization logic here
+	json::array worlds_obj;
+	for (const auto& world : worlds) {
+		json::object world_obj;
+		world->serialize(world_obj);
+		worlds_obj.push_back(world_obj);
+	}
+	obj["worlds"] = worlds_obj;
 }

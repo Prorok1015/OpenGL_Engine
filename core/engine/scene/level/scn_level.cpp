@@ -5,6 +5,14 @@
 #include "ecs_component.h"
 #include <entt/fwd.hpp>
 
+scn::level::level()
+{
+    m_level_state.ctx().emplace<ecs::runtime_context_provider>(
+        ecs::runtime_context_provider::getter_type{
+        [this](size_t world_id) { return this->create_runtime_context(world_id); }
+        });
+}
+
 void scn::level::update(std::chrono::duration<float> dt)
 {
     m_accumulator += dt.count();
@@ -24,6 +32,16 @@ void scn::level::update(std::chrono::duration<float> dt)
 
     run_graph(m_variable_graph);
     sync_point();
+}
+
+scn::world& scn::level::create_world(const std::string& type, uint32_t world_id)
+{
+    auto& w = *(m_worlds[type] = std::make_unique<scn::world>(world_id));
+    m_worlds_by_id[world_id] = &w; // Register in ID map
+
+    // Set the WorldID in the world's own registry context
+    w.state().ctx().emplace<ecs::world_salt>((size_t)world_id);
+    return w;
 }
 
 void scn::level::sync_point()
