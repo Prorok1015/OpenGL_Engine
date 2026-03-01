@@ -1,0 +1,41 @@
+{
+	"name": "editor_level",
+	"__type": "level_desc",
+	"worlds":[
+		{
+			"name": "3d_scene",
+			"__type": "world_desc",
+			"components":{
+				"anchor":{
+					"__type": "anchor_desc",
+					"name": "world anchor"
+				}
+			},
+			"children":[
+				{
+					"__type": "skin_prototype_desc",
+					"name": "robot",
+					"__parent": "memory://objects/robot/gen_robot.desc"
+				},
+				{
+					"__type": "camera_desc",
+					"name": "camera name",
+					"rotation": [-45, 0, 0]
+				},
+				{
+					"__type": "directional_light_desc",
+					"name": "grobal light"
+				}
+			],
+			"systems":[
+				"inp::update_input_state", 
+				"edt::spawn_system",
+				"scn::animation_system_matrix", 
+				"scn::animation_system_node",
+				"scn::update_camera_matrix_system",
+				"scn::depth_system",
+				"scn::transform_system"
+			]
+		}
+	]
+}

@@ -34,14 +34,54 @@ void scn::level::update(std::chrono::duration<float> dt)
     sync_point();
 }
 
-scn::world& scn::level::create_world(const std::string& type, uint32_t world_id)
+scn::world& scn::level::create_world(const std::string_view type, uint32_t world_id)
 {
-    auto& w = *(m_worlds[type] = std::make_unique<scn::world>(world_id));
+    auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id));
     m_worlds_by_id[world_id] = &w; // Register in ID map
 
     // Set the WorldID in the world's own registry context
     w.state().ctx().emplace<ecs::world_salt>((size_t)world_id);
     return w;
+}
+
+void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler)
+{
+	size_t world_index = 0;
+    for (const auto& world_desc : desc.get_worlds()) {
+        auto& world = create_world(world_desc->get_name(), world_index++);
+        for (const auto& system_name : world_desc->get_systems()) {
+            sfactory.create_system(system_name, world.state(), organizer());
+		}
+
+		assambler.spawn_from_desc(world.state(), world.state().create(), *world_desc, world_desc->get_name());
+    }
+
+    mark_systems_graphs_dirty();
+}
+
+void scn::level::load_world_from_desc(const world_desc& world_desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler)
+{
+    auto& world = create_world(world_desc.get_name(), 0);
+    for (const auto& system_name : world_desc.get_systems()) {
+        sfactory.create_system(system_name, world.state(), organizer());
+    }
+
+    assambler.spawn_from_desc(world.state(), entt::null, world_desc, world_desc.get_name());
+
+    mark_systems_graphs_dirty();
+}
+
+void scn::level::clear()
+{
+    m_level_state.clear();
+    m_worlds.clear();
+    m_worlds_by_id.clear();
+    m_fixed_graph.clear();
+    m_variable_graph.clear();
+    m_level_state.ctx().emplace<ecs::runtime_context_provider>(
+        ecs::runtime_context_provider::getter_type{
+        [this](size_t world_id) { return this->create_runtime_context(world_id); }
+        });
 }
 
 void scn::level::sync_point()

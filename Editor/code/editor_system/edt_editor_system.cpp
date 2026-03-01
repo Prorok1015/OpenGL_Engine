@@ -132,6 +132,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	gui_system.push_layer(editor_layer);
 
 	editor_layer->register_tool("File/Import...", [this] { return show_file_dialog(); });
+	editor_layer->register_tool("File/Open Level...", [this] { return load_level(); });
 
 	editor_layer->register_tool("Window/Toolbar", [this] { return show_toolbar(); });
 	editor_layer->set_tool_checked("Window/Toolbar", true);
@@ -207,35 +208,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	editor_layer->set_tool_checked("Editor/Draw web", is_show_web);
 
 
-	auto& level_manager = data.require<scn::level_manager>();
-	{
-		scn::level& lvl = level_manager.get_level();
-		scn::world& world = lvl.create_world("3d_scene", 0);
-		world.state().ctx().emplace<ecs::event<scn::hierarchy_updated>>();
-		world.state().ctx().emplace<ecs::event<scn::transform_updated>>();
-		auto& sfactory = data.require<ecs::system_factory>();
-		sfactory.register_automatic_system<edt::spawn_system>("edt::spawn_system");
-
-		sfactory.create_system("inp::update_input_state", world.state(), lvl.organizer());
-		sfactory.create_system("edt::spawn_system", world.state(), lvl.organizer());
-		sfactory.create_system("scn::animation_system_matrix", world.state(), lvl.organizer());
-		sfactory.create_system("scn::animation_system_node", world.state(), lvl.organizer());
-		sfactory.create_system("scn::update_camera_matrix_system", world.state(), lvl.organizer());
-		sfactory.create_system("scn::depth_system", world.state(), lvl.organizer());
-		sfactory.create_system("scn::transform_system", world.state(), lvl.organizer());
-
-		lvl.mark_systems_graphs_dirty();
-	}
-
-	auto& lvl = level_manager.get_level();
-	auto& world = lvl.get_world("3d_scene");
-
-	registry_sp = std::shared_ptr<entt::registry>(&world.state(), [](entt::registry*) {});
+	m_lvl_manager = data.require_shared<scn::level_manager>();
+	auto& sfactory = data.require<ecs::system_factory>();
+	sfactory.register_automatic_system<edt::spawn_system>("edt::spawn_system");
 
 	auto& rndsys = data.require<rnd::render_system>();
 	renderer_sp = std::make_shared<scn::renderer_3d>(data.require<scn::skinning_manager>());
 	rndsys.activate_renderer(renderer_sp);
-	renderer_sp->set_current_registry(registry_sp);
 
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
@@ -570,14 +549,16 @@ bool edt::editor_system::show_toolbar()
 
 		if (ImGui::CollapsingHeader("Scene Objects"))
 		{
-			for (const auto ent : registry_sp->view<scn::scene_anchor_component>())
-			{
-				show_tree_items(ent);
+			if (registry_sp) {
+				for (const auto ent : registry_sp->view<scn::scene_anchor_component>()) {
+					show_tree_items(ent);
+				}
 			}
 		}
 
 		ImGui::Separator();
 		ImGui::NewLine();
+		if (registry_sp)
 		{
 			ImGui::Text("Camera");
 			ImGui::Separator();
@@ -663,7 +644,7 @@ bool edt::editor_system::show_toolbar()
 			ImGui::SameLine();
 		}
 
-		if (ImGui::Button("Create object on scene")) {
+		if (registry_sp && ImGui::Button("Create object on scene")) {
 			auto robot = res::get_system().require_sync<scn::skinning_prototype_desc>(imported_models_list[selected_model_idx]);
 			if (robot.is_ready()) {
 				auto anchors = registry_sp->view<scn::scene_anchor_component>();
@@ -753,6 +734,29 @@ bool edt::editor_system::show_file_dialog()
 		}
 	}
     return is_open;
+}
+
+bool edt::editor_system::load_level()
+{
+	bool is_open = false;
+	if (auto level_manager = m_lvl_manager.lock())
+	{
+		is_open = true;
+		file_dialog.clear_extension_filters();
+		file_dialog.add_extension_filter(".desc");
+
+		if (file_dialog.show("Load Level", &is_open)) {
+			auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
+			res::tag tag = res::tag::make(relateve.string());
+			if (level_manager->load(tag)) {
+				scn::level& lvl = level_manager->get_level();
+				auto& world = lvl.get_world("3d_scene");
+				registry_sp = std::shared_ptr<entt::registry>(&world.state(), [] (entt::registry*) {});
+				renderer_sp->set_current_registry(registry_sp);
+			}
+		}
+	}
+	return is_open;
 }
 
 bool edt::editor_system::show_crossing_game_window()
@@ -1136,18 +1140,19 @@ bool edt::editor_system::show_scene()
 	{
 		ImVec2 contentRegionAvailable = ImGui::GetContentRegionAvail();
 		ImVec2 pos = ImGui::GetCursorScreenPos();
-		glm::mat4 viewMatrix{ 0 };
-		glm::mat4 projMat{ 0 };
-		for (const auto ent : registry_sp->view<scn::camera_component>())
-		{
-			auto& camera = registry_sp->get<scn::camera_component>(ent);
-			camera.viewport.size = glm::ivec2(contentRegionAvailable.x, contentRegionAvailable.y);
-			if (registry_sp->all_of<scn::local_transform>(ent)) {
-				auto& trans = registry_sp->get<scn::local_transform>(ent);
-				viewMatrix = glm::inverse(trans.local);
-			}
-			if (camera.viewport.size != glm::ivec2{ 0 }) {
-				projMat = glm::perspective(glm::radians(camera.fov), (float)camera.viewport.size.x / (float)camera.viewport.size.y, camera.near_distance, camera.far_distance);
+		glm::mat4 viewMatrix{ 1.0 };
+		glm::mat4 projMat{ 1.0 };
+		if (registry_sp) {
+			for (const auto ent : registry_sp->view<scn::camera_component>()) {
+				auto& camera = registry_sp->get<scn::camera_component>(ent);
+				camera.viewport.size = glm::ivec2(contentRegionAvailable.x, contentRegionAvailable.y);
+				if (registry_sp->all_of<scn::local_transform>(ent)) {
+					auto& trans = registry_sp->get<scn::local_transform>(ent);
+					viewMatrix = glm::inverse(trans.local);
+				}
+				if (camera.viewport.size != glm::ivec2{ 0 }) {
+					projMat = glm::perspective(glm::radians(camera.fov), (float)camera.viewport.size.x / (float)camera.viewport.size.y, camera.near_distance, camera.far_distance);
+				}
 			}
 		}
 

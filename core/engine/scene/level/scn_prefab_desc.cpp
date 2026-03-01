@@ -93,7 +93,7 @@ void scn::prefab_desc::serialize(json::object& data) const
     serialize_node(serialize_node, root, data);
 }
 
-void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string& name)
+void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name)
 {
     const auto& root_node = prefab.get_root();
 
@@ -110,7 +110,8 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
     for (const auto& child_node : root_node.children) {
         entt::entity child_entity = reg.create();
 
-        reg.emplace<scn::parent_component>(child_entity, e); 
+        reg.emplace<scn::parent_component>(child_entity, e);
+        reg.emplace<scn::depth_level>(child_entity);
 
         if (reg.all_of<scn::children_component>(e)) {
 			auto& children = reg.get<scn::children_component>(e);

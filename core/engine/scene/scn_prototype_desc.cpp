@@ -159,8 +159,21 @@ entt::entity scn::prototype_desc::load_prototype_node(entt::registry& registry, 
 		registry.emplace<scn::children_component>(parent, std::vector<entt::entity>{ ent });
 	}
 
-	registry.ctx().get<ecs::event<scn::hierarchy_updated>>().emit(ent);
-	registry.ctx().get<ecs::event<scn::transform_updated>>().emit(ent);
+	if (registry.ctx().contains<ecs::event<scn::hierarchy_updated>>()) {
+		registry.ctx().get<ecs::event<scn::hierarchy_updated>>().emit(ent);
+	} else {
+		ecs::event<scn::hierarchy_updated> event;
+		event.emit(ent);
+		registry.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
+	}
+
+	if (registry.ctx().contains<ecs::event<scn::transform_updated>>()) {
+		registry.ctx().get<ecs::event<scn::transform_updated>>().emit(ent);
+	} else {
+		ecs::event<scn::transform_updated> event;
+		event.emit(ent);
+		registry.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+	}
 
 	if (node.mesh.has_value()) {
 		auto& mesh = node.mesh.value();

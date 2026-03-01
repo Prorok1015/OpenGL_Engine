@@ -15,6 +15,7 @@
 #include "ds/ds_store.hpp"
 #include "scn_renderer.h"
 #include "edt_editor_layer.h"
+#include "level/scn_level_manager.h"
 
 namespace edt
 {
@@ -137,7 +138,7 @@ namespace edt
 		bool show_file_dialog();
 
 		//TODO change to renderer
-
+		bool load_level();
 		bool show_crossing_game_window();
 		bool show_web();
 		bool show_scene();
@@ -212,6 +213,7 @@ namespace edt
 		std::shared_ptr< scn::skinning_prototype_desc> backpack;
 		ds::rtree_q<uint32_t, ds::bbox> rtree;
 		desc::desc_system& desc_system;
+		std::weak_ptr<scn::level_manager> m_lvl_manager;
 		crossing_context crossingcontext;
 		std::shared_ptr<entt::registry> registry_sp;
 		std::shared_ptr<scn::renderer_3d> renderer_sp;

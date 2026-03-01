@@ -14,7 +14,7 @@ namespace scn {
             entt::registry&,
             entt::entity,
             const desc::desc_base&,
-            const std::string&
+            const std::string_view
             )>;
 
 		ecs_assembler(desc::desc_system& desc_sys)
@@ -27,15 +27,15 @@ namespace scn {
 		ecs_assembler(ecs_assembler&&) = default;
 		ecs_assembler& operator=(ecs_assembler&&) = default;
 
-        void register_desc_spawner(const std::string& desc_type, desc_spawner_fn spawner) {
-			m_spawners[desc_type] = spawner;
+        void register_desc_spawner(const std::string_view desc_type, desc_spawner_fn spawner) {
+			m_spawners[std::string{ desc_type }] = spawner;
         }
 
-        void unregister_desc_spawner(const std::string& desc_type) {
-            m_spawners.erase(desc_type);
+		void unregister_desc_spawner(const std::string_view desc_type) {
+			m_spawners.erase(std::string{ desc_type });
         }
 
-		void spawn_from_desc(entt::registry& reg, entt::entity e, const desc::desc_base& desc, const std::string& name = "") const
+		void spawn_from_desc(entt::registry& reg, entt::entity e, const desc::desc_base& desc, const std::string_view name = "") const
 		{
 			auto it = m_spawners.find(std::string{ desc.get_type() });
 			if (it != m_spawners.end()) {

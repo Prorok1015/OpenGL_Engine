@@ -11,19 +11,22 @@
 void scn::scene_init(ds::app_data_storage& store)
 {
 	auto& desc_sys = store.require<desc::desc_system>();
-	store.construct<scn::level_manager>();
-	store.construct<scn::ecs_assembler>(desc_sys);
 	auto& sfactory = store.require<ecs::system_factory>();
+	auto& resource = store.require<res::resource_system>();
+
+	auto& assembler = store.construct<scn::ecs_assembler>(desc_sys);
 	init_animation_system(sfactory);
 	init_transform_system(sfactory);
 	init_mouse_controller_system(sfactory);
-	auto& resource = store.require<res::resource_system>();
+	store.construct<scn::level_manager>(resource, assembler, sfactory);
 	resource.registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, resource, desc_sys);
 }
 
 void scn::scene_term(ds::app_data_storage& store)
 {
+	auto& resource = store.require<res::resource_system>();
+	resource.unregistrate_adapter(scn::worldwrap_adapter::INFO);
+	store.destruct<scn::level_manager>();
 	auto& sfactory = store.require<ecs::system_factory>();
 	store.destruct<scn::ecs_assembler>();
-	store.destruct<scn::level_manager>();
 }

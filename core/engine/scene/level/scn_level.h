@@ -3,6 +3,7 @@
 #include <functional>
 #include <unordered_map>
 #include <entt/entity/fwd.hpp>
+#include "scn_world_desc.h"
 
 namespace scn {
     inline constexpr size_t LEVEL_ID = ~0u;
@@ -16,13 +17,25 @@ namespace scn {
 
         ~level() = default;
         level(const level &) = delete;
-        level(level &&) = default;
+        level(level &&) noexcept = default;
         level &operator=(const level &) = delete;
-        level &operator=(level &&) = default;
+        level &operator=(level &&) noexcept = default;
+
+		void swap(level& other) noexcept {
+            using std::swap;
+            swap(m_level_state, other.m_level_state);
+            swap(m_accumulator, other.m_accumulator);
+            swap(m_organizer, other.m_organizer);
+            swap(m_fixed_organizer, other.m_fixed_organizer);
+            swap(m_fixed_graph, other.m_fixed_graph);
+            swap(m_variable_graph, other.m_variable_graph);
+            swap(m_worlds, other.m_worlds);
+            swap(m_worlds_by_id, other.m_worlds_by_id);
+        }
 
         void update(std::chrono::duration<float> dt);
 
-        scn::world& create_world(const std::string& type, uint32_t world_id);
+        scn::world& create_world(const std::string_view type, uint32_t world_id);
 
         scn::world& get_world(const std::string &type) {
             ASSERT_MSG(m_worlds.contains(type), "level doesn't contain this type of world");
@@ -42,10 +55,14 @@ namespace scn {
 
 		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
 
+		void load_world_from_desc(const world_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
+
         void mark_systems_graphs_dirty() {
             m_fixed_graph = m_fixed_organizer.graph();
             m_variable_graph = m_organizer.graph();
         }
+
+        void clear();
 
     private:
         void run_graph(std::vector<entt::organizer::vertex> &graph) {
@@ -80,7 +97,7 @@ namespace scn {
         entt::registry m_level_state;
 
         float m_accumulator = 0.0f;
-        const float m_fixed_step = 1.0f / 60.0f; // 60 Hz
+        static constexpr float m_fixed_step = 1.0f / 60.0f; // 60 Hz
 
         entt::organizer m_organizer;
         entt::organizer m_fixed_organizer;

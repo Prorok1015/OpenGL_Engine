@@ -156,9 +156,10 @@ public:
         };
     }
 
-    std::shared_ptr<system_interface> create_system(const std::string &name, entt::registry &reg, entt::organizer &org)  {
-        if (m_systems.contains(name)) {
-            return m_systems[name](reg, org);
+    std::shared_ptr<system_interface> create_system(const std::string_view name, entt::registry &reg, entt::organizer &org)  {
+		std::string name_str{ name };
+        if (m_systems.contains(name_str)) {
+            return m_systems[name_str](reg, org);
         }
 
         ASSERT_FAIL("System is not found");

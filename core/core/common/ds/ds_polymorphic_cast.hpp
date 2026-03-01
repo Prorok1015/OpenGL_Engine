@@ -4,10 +4,10 @@
 namespace ds
 {
 	template<class T, class U>
-	T polymorphic_cast(U ptr)
+	T polymorphic_cast(U&& ptr)
 	{
-		auto ptr1 = static_cast<T>(ptr);
-		auto ptr2 = dynamic_cast<T>(ptr);
+		auto ptr1 = static_cast<T>(std::forward<U>(ptr));
+		auto ptr2 = dynamic_cast<T>(std::forward<U>(ptr));
 		ASSERT_MSG(ptr1 == ptr2, "polymorphic_cast failed");
 		return ptr1;
 	}
@@ -22,7 +22,7 @@ namespace ds
 	concept is_specialization_of = is_spec_v<std::remove_cvref_t<T>, Template>;
 
 	template<class T>
-	std::shared_ptr<T> polymorphic_cast(is_specialization_of<std::shared_ptr> auto ptr)
+	std::shared_ptr<T> polymorphic_cast(is_specialization_of<std::shared_ptr> auto&& ptr)
 	{
 		auto ptr1 = std::static_pointer_cast<T>(ptr);
 		auto ptr2 = std::dynamic_pointer_cast<T>(ptr);

@@ -57,11 +57,15 @@ namespace {
         glm::mat4 parent_world{ 1.0 };
         if (parents.contains(ent)) {
             auto& parent = parents.get<0>(ent);
-            parent_world = view.get<1>(parent.parent).world;
+            if (view.contains(parent.parent)) {
+                parent_world = view.get<1>(parent.parent).world;
+            }
         }
 
-        auto&& [local, world] = view.get(ent);
-        world.world = parent_world * local.local;
+        if (view.contains(ent)) {
+            auto&& [local, world] = view.get(ent);
+            world.world = parent_world * local.local;
+        }
 
         if (children_list.contains(ent)) {
             auto& kids = children_list.get<0>(ent);

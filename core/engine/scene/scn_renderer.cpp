@@ -92,7 +92,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
 {
 	auto resgistry_ptr = current_registry.lock();
 	if (!resgistry_ptr) {
-        egLOG("scn/renderer", "No current registry set for renderer_3d");
+        //egLOG("scn/renderer", "No current registry set for renderer_3d");
         return;
     }
 

@@ -98,8 +98,20 @@ void edt::spawn_system(entt::registry& spawner)
 		spawner.emplace<scn::world_transform>(ecs_entity);
 		spawner.emplace<scn::renderable>(ecs_entity);
 		spawner.emplace<scn::mouse_controller_component>(ecs_entity, scn::mouse_controller_component{ .rotation = rotation });
-		spawner.ctx().get<ecs::event<scn::hierarchy_updated>>().emit((ecs_entity));
-		spawner.ctx().get<ecs::event<scn::transform_updated>>().emit((ecs_entity));
+		if (spawner.ctx().contains<ecs::event<scn::hierarchy_updated>>()) {
+			spawner.ctx().get<ecs::event<scn::hierarchy_updated>>().emit((ecs_entity));
+		} else {
+			ecs::event<scn::hierarchy_updated> event;
+			event.emit((ecs_entity));
+			spawner.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
+		}
+		if (spawner.ctx().contains<ecs::event<scn::transform_updated>>()) {
+			spawner.ctx().get<ecs::event<scn::transform_updated>>().emit((ecs_entity));
+		} else {
+			ecs::event<scn::transform_updated> event;
+			event.emit(ecs_entity);
+			spawner.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+		}
 	}
 
 

@@ -43,5 +43,5 @@ namespace scn {
 		prefab_node root;
 	};
 
-	void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string& name = "");
+	void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name = "");
 }
