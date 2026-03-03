@@ -6,25 +6,29 @@
 			"name": "3d_scene",
 			"__type": "world_desc",
 			"components":{
-				"anchor":{
-					"__type": "anchor_desc",
-					"name": "world anchor"
+				"anchor": {
+					"__type": "anchor_desc"
 				}
 			},
-			"children":[
+			"children": [
 				{
 					"__type": "skin_prototype_desc",
 					"name": "robot",
-					"__parent": "memory://objects/robot/gen_robot.desc"
+					"__parent": "res://objects/robot/gen_robot.glb"
 				},
 				{
 					"__type": "camera_desc",
 					"name": "camera name",
-					"rotation": [-45, 0, 0]
+					"rotation": [ -45, 0, 0 ]
 				},
 				{
 					"__type": "directional_light_desc",
 					"name": "grobal light"
+				},
+				{
+					"__type": "skybox_desc",
+					"name": "skybox",
+					"material": "res://skybox/sky_material.desc"
 				}
 			],
 			"systems":[

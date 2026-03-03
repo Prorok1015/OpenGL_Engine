@@ -11,6 +11,12 @@ if(NOT ENGINE_BOOST_NO_LIB)
     )
     set(BOOST_INCLUDE_LIBRARIES json hana program_options asio)
     FetchContent_MakeAvailable(Boost)
+    file(GLOB_RECURSE BOOST_NATVIS_FILES "${boost_SOURCE_DIR}/libs/*.natvis")
+    message(STATUS "Found Boost Natvis files: ${BOOST_NATVIS_FILES}")
+    foreach(natvis_file ${BOOST_NATVIS_FILES})
+        get_filename_component(filename "${natvis_file}" NAME)
+        configure_file("${natvis_file}" "${CMAKE_SOURCE_DIR}/lib3dparty/natvis/${filename}" COPYONLY)
+    endforeach()
 endif()
 
 #components

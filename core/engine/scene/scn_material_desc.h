@@ -31,7 +31,7 @@ namespace scn
 
 		virtual rnd::shader_config get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager);
 
-		std::vector<res::res_handle<rnd::texture_desc>> samplers_textures_desc;
+		std::vector<res::tag> samplers_textures;
 		ds::color albedo = ds::color(1.0f);
 		ds::color specular = ds::color(1.0f);
 		ds::color ambient = ds::color(1.0f);

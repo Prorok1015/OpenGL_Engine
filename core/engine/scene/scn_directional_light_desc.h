@@ -20,10 +20,10 @@ namespace scn {
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
 
-		glm::vec4 direction{ 0.f, -1.f, 0.f , 0.f};
-		glm::vec4 diffuse{ 1.0 };
-		glm::vec4 ambient{ 0 };
-		glm::vec4 specular{ 0 };
+		glm::vec4 direction{ -0.2f, -1.0f, -0.3f, 0.0 };
+		glm::vec4 diffuse{ 0.5f, 0.5f, 0.5f, 1.f };
+		glm::vec4 ambient{ 0.2f, 0.2f, 0.2f, 1.f };
+		glm::vec4 specular{ 1 };
 	};
 
 	void assemble_directional_light(entt::registry& reg, entt::entity e, const directional_light_desc& desc, const std::string_view name);

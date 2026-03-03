@@ -4,6 +4,7 @@
 #include "scn_skinning_prototype_desc.h"
 #include "ecs_event.hpp"
 #include "ecs_component.h"
+#include "texture/rnd_texture_2d_desc.h"
 
 void edt::spawn_system(entt::registry& spawner)
 {
@@ -25,9 +26,9 @@ void edt::spawn_system(entt::registry& spawner)
 	auto& children = spawner.get_or_emplace<scn::children_component>(world_anchor).children;
 
 	if (true) {
-		rnd::texture_desc txm_desc;
+		rnd::texture_2d_desc txm_desc;
 		txm_desc.txm_name = "window";
-		txm_desc.txm_tag = res::tag::make("window.png");
+		//txm_desc.txm_tag = res::tag::make("window.png");
 		auto& header = txm_desc.header;
 		header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
 		header.data.extent.width = 4587;
@@ -53,7 +54,7 @@ void edt::spawn_system(entt::registry& spawner)
 		tmpdesc.defines = { "USE_TXM_AS_DIFFUSE", "LIGHTS_ENABLED" };
 		mlt.queue = scn::pass_queue::MIX;
 		mlt.cdata = tmpdesc;
-		mlt.samplers_textures_desc = { res::get_system().require<rnd::texture_desc>(res::tag(res::tag::memory, "window.desc")) };
+		mlt.samplers_textures = { res::tag(res::tag::memory, "window.desc") };
 
 		json::object mlt_js;
 		mlt.serialize(mlt_js);

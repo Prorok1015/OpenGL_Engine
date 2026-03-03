@@ -1,0 +1,28 @@
+{
+	"__type": "texture_cubemap_desc",
+    "name": "sky six faces",
+  "header": {
+    "type": "texture_cube_map",
+    "usage": "sampled",
+    "wrap": "clamp_to_edge",
+    "mag": "nearest",
+    "min": "nearest",
+    "data": {
+      "extent": {
+        "width": 0,
+        "height": 0,
+        "depth": 0
+      },
+      "format": "RGBA8",
+      "mip_levels": 1
+    }
+  },
+    "data": {
+      "right": "res://skybox/right.jpg",
+      "left": "res://skybox/left.jpg",
+      "top": "res://skybox/top.jpg",
+      "bottom": "res://skybox/bottom.jpg",
+      "front": "res://skybox/front.jpg",
+      "back": "res://skybox/back.jpg"
+    }
+}

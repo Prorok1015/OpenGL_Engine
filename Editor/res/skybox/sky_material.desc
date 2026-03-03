@@ -1,0 +1,10 @@
+{
+	"__type": "material_desc",
+	"name": "material",
+	"shader_vertex": "res://shaders/sky.vert",
+	"shader_fragment": "res://shaders/sky.frag",
+	"queue": "opaque",
+	"constants": {},
+	"defines": [],
+	"samplers": ["res://skybox/sky_texture_cubemap.desc"]
+}

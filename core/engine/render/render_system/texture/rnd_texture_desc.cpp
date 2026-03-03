@@ -216,8 +216,6 @@ void rnd::texture_desc::deserialize(desc::desc_system& system, const json::objec
 {
 	if (resource.contains("name"))
 		txm_name = resource.at("name").as_string();
-	if (resource.contains("data"))
-		txm_tag = res::tag{ resource.at("data").as_string() };
 	if (resource.contains("header"))
 		header = json::value_to<driver::texture_header>(resource.at("header"), header);
 }
@@ -241,12 +239,10 @@ void rnd::texture_desc::serialize(json::object& resource) const
 					format: "texture_format"
 				}
 			}
-			data: "res://path/to/texture.png",
 			
 		}
 	*/
 	resource["__type"] = "texture_desc";
 	resource["name"] = txm_name;
 	resource["header"] = json::value_from(header);
-	resource["data"] = json::value_from(txm_tag.view());
 }

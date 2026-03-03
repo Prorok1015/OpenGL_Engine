@@ -1,5 +1,5 @@
 {
-  "__type": "texture_desc",
+  "__type": "texture_2d_desc",
   "name": "texture",
   "header": {
     "type": "texture_2d",
@@ -16,6 +16,5 @@
       "format": "RGBA8",
       "mip_levels": 1
     }
-  },
-  "data": ""
+  }
 }

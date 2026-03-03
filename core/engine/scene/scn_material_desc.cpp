@@ -54,16 +54,7 @@ scn::pass_queue scn::tag_invoke(json::value_to_tag<scn::pass_queue>, const json:
 void scn::material_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	if (data.contains(SAMPLERS_FIELD)) {
-		//samplers_textures = json::value_to<std::vector<res::tag>>(data.at(SAMPLERS_FIELD));
-		for (auto& sampler : data.at(SAMPLERS_FIELD).get_array())
-		{
-			if (sampler.is_null()){
-				samplers_textures_desc.emplace_back();
-				continue;
-			}
-
-			samplers_textures_desc.push_back(desc_system.get_field_desc<rnd::texture_desc>(*this, sampler));
-		}
+		samplers_textures = json::value_to<std::vector<res::tag>>(data.at(SAMPLERS_FIELD));
 	}
 
 	if (data.contains(SHADER_GEOMETRY_FIELD)) {
@@ -157,9 +148,9 @@ void scn::material_desc::serialize(json::object& data) const
 	data["__type"] = "material_desc";
 	data[DEFINES_FIELD] = json::value_from(cdata.defines);
 	json::array jssamplers;
-	for (auto& sampler : samplers_textures_desc)
+	for (auto& sampler : samplers_textures)
 	{
-		jssamplers.push_back(json::value_from(sampler->get_tag()));
+		jssamplers.push_back(json::value_from(sampler));
 	}
 	data[SAMPLERS_FIELD] = jssamplers;
 	data[SHADER_VERTEX_FIELD] = json::value_from(cdata.program.get_vertex_shader());
@@ -177,11 +168,11 @@ void scn::material_desc::serialize(json::object& data) const
 rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager)
 {
 	rnd::shader_config::runtime_data rdata;
-	rdata.samplers.resize(samplers_textures_desc.size());
-	for (int idx = 0; idx < samplers_textures_desc.size(); ++idx)
+	rdata.samplers.resize(samplers_textures.size());
+	for (int idx = 0; idx < samplers_textures.size(); ++idx)
 	{
-		if (samplers_textures_desc[idx].is_ready()) {
-			rdata.samplers[idx] = txm_manager.require_texture(samplers_textures_desc[idx]->get_tag());
+		if (samplers_textures[idx].is_valid()) {
+			rdata.samplers[idx] = txm_manager.require_texture(samplers_textures[idx]);
 		} else {
 			rdata.samplers[idx] = nullptr;
 		}

@@ -143,7 +143,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 
 			if (!res::get_system().exists(desc_tag)) {
 				json::object desc;
-				desc["__type"] = "texture_desc";
+				desc["__type"] = "texture_2d_desc";
 				desc["__parent"] = "res://base_texture.desc";
 				desc["name"] = embedded_tag.pure_name();
 				desc["data"] = json::value_from(embedded_tag);
@@ -160,7 +160,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 
 		if (!res::get_system().exists(desc_tag)) {
 			json::object desc;
-			desc["__type"] = "texture_desc";
+			desc["__type"] = "texture_2d_desc";
 			desc["__parent"] = "res://base_texture.desc";
 			desc["name"] = texture_name;
 			desc["data"] = json::value_from(tag + res::tag::make(texture_name));

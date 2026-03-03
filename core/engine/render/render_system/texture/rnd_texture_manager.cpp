@@ -30,47 +30,13 @@ rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res:
 
 	loading.erase(tag);
 
-    auto pct_handle = res::get_system().require_sync<res::picture_resource>(handle->txm_tag);
-    if (pct_handle.has_error()) {
-        return nullptr;
-    }
-
-    driver::texture_header header = handle->header;
-    header.data.initial_data = pct_handle->data();
-
-
-	switch (pct_handle->channels())
-	{
-	case 1: { 
-		if (header.data.format != driver::texture_header::TYPE::R8) {
-			header.data.format = driver::texture_header::TYPE::R8;
-		}
-	}break;
-	case 3: {
-		if (header.data.format != driver::texture_header::TYPE::RGB8) {
-			header.data.format = driver::texture_header::TYPE::RGB8;
-		}
-	}break;
-	case 4: {
-		if (header.data.format != driver::texture_header::TYPE::RGBA8) {
-			header.data.format = driver::texture_header::TYPE::RGBA8;
-		}
-	}break;
-	default:
-		break;
+	auto loader_it = loaders.find(std::string{ handle->get_type() });
+	if (loaders.end() != loader_it) {
+		auto& texture = cache[tag] = loader_it->second(drv, *handle);
+		return texture.get();
 	}
 
-    if (header.data.extent.width != pct_handle->size().x) {
-		header.data.extent.width = pct_handle->size().x;
-    }
-    if (header.data.extent.height != pct_handle->size().y) {
-        header.data.extent.height = pct_handle->size().y;
-    }
-    //ASSERT_MSG(header.data.extent.width == res->size().x, "Texture's width doesn't equal");
-    //ASSERT_MSG(header.data.extent.height == res->size().y, "Texture's height doesn't equal");
-
-	auto& texture = cache[tag] = drv->create_texture(header);
-	return texture.get();
+	return nullptr;
 }
 
 rnd::driver::texture_interface* rnd::texture_manager::require_cubemap_texture(const std::vector<res::tag>& tags)

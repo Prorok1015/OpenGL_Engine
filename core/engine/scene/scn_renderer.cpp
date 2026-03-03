@@ -351,15 +351,14 @@ void scn::renderer_3d::draw_composition(rnd::driver::driver_interface* drv, rnd:
 
 void scn::renderer_3d::draw_sky(rnd::driver::driver_interface* drv, entt::registry& registry)
 { 
-    for (const auto sky : registry.view<scn::renderable, scn::sky_component>()) {
-        auto& cube_map = registry.get<scn::sky_component>(sky);
-        rnd::shader_config sky;
-        sky.cdata.program = rnd::shader_config::shader_program_data::build()
-            .set_vertex_shader(res::tag::make("shaders/sky.vert"))
-            .set_fragment_shader(res::tag::make("shaders/sky.frag"));
-        sky.rdata.samplers = {
-            rnd::get_system().get_texture_manager().require_cubemap_texture(cube_map.cube_map)
-        };
+    for (const auto&& [ent, cube_map, material] : registry.view<scn::renderable, scn::sky_component, scn::material_desc_component>().each()) {
+        
+		if (!material.mlt_desc.is_ready()) {
+            continue;
+        }
+
+		auto sky = material.mlt_desc->get_shader_desc(entt::handle{ registry, ent }, rnd::get_system().get_texture_manager());
+
         auto cube = scn::generate_cube();
         vertex_buffer->set_data(cube.vertices);
         index_buffer->set_data(cube.indices);

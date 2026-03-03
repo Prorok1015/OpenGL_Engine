@@ -6,12 +6,14 @@
 #include "rnd_texture_interface.h"
 #include "texture/rnd_texture_desc.h"
 #include <unordered_map>
+#include <functional>
 
 namespace rnd
 {
 	class texture_manager
 	{
 	public:
+		using loader_fn = std::function<std::unique_ptr<driver::texture_interface>(driver::driver_interface* drv, const rnd::texture_desc& txm)>;
 		texture_manager(driver::driver_interface* driver, desc::desc_system& d)
 			: drv(driver)
 			, desc_system(d)
@@ -31,7 +33,18 @@ namespace rnd
 		}
 
 		void clear_cache();
+
+		void register_loader(const std::string& txm_type, loader_fn fn)
+		{
+			loaders[txm_type] = std::move(fn);
+		}
+
+		void unregister_loader(const std::string& txm_type)
+		{
+			loaders.erase(txm_type);
+		}
 	protected:
+		mutable std::unordered_map<std::string, loader_fn> loaders;
 		mutable std::unordered_map<res::tag, std::unique_ptr<driver::texture_interface>> cache;
 		std::unordered_map<res::tag, res::res_handle<rnd::texture_desc>> loading;
 		desc::desc_system& desc_system;
