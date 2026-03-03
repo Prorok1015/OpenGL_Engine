@@ -5,10 +5,10 @@ void scn::ecs_assembler::assemble_and_apply(entt::registry& reg,
 											std::string actual_type, 
 											const res::res_handle<desc::desc_base>& parent_desc,
 											const boost::json::object& overrides,
-											const std::string& name) const 
+											const std::string_view name) const 
 {
-	if (actual_type.empty() && parent_desc.is_ready()) {
-		actual_type = parent_desc.get()->get_type();
+	if (actual_type.empty() && parent_desc.is_valid()) {
+		actual_type = parent_desc->get_type();
 	}
 
 	if (actual_type.empty()) return;
@@ -19,7 +19,7 @@ void scn::ecs_assembler::assemble_and_apply(entt::registry& reg,
 		return;
 	}
 
-	if (overrides.empty() && parent_desc.is_ready()) {
+	if (overrides.empty() && parent_desc.is_valid()) {
 		it->second(reg, e, *parent_desc, name);
 		return;
 	}
@@ -30,7 +30,7 @@ void scn::ecs_assembler::assemble_and_apply(entt::registry& reg,
 		return;
 	}
 
-	if (parent_desc.is_ready()) {
+	if (parent_desc.is_valid()) {
 		parent_desc->copy_to(*temp_desc);
 	}
 

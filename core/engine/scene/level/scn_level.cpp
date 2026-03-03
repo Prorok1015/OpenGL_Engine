@@ -53,7 +53,32 @@ void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfa
             sfactory.create_system(system_name, world.state(), organizer());
 		}
 
-		assambler.spawn_from_desc(world.state(), world.state().create(), *world_desc, world_desc->get_name());
+        entt::entity e = world.state().create();
+		const auto& root_node = world_desc->get_root();
+        if (root_node.position != glm::vec3{ 0.0f } || root_node.rotation != glm::vec3{ 0.0f } || root_node.scale != glm::vec3{ 1.0f }) {
+            world.state().emplace<scn::local_transform>(e, root_node.get_transform());
+            if (world.state().ctx().contains<ecs::event<scn::transform_updated>>()) {
+                world.state().ctx().get<ecs::event<scn::transform_updated>>().emit(e);
+            } else {
+                ecs::event<scn::transform_updated> event;
+                event.emit(e);
+                world.state().ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+            }
+        }
+
+        world.state().emplace<scn::world_transform>(e);
+        world.state().emplace<scn::name_component>(e, scn::name_component{ .name = std::string{world_desc->get_name()} });
+        world.state().emplace<scn::depth_level>(e);
+
+        if (world.state().ctx().contains<ecs::event<scn::hierarchy_updated>>()) {
+            world.state().ctx().get<ecs::event<scn::hierarchy_updated>>().emit(e);
+        } else {
+            ecs::event<scn::hierarchy_updated> event;
+            event.emit(e);
+            world.state().ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
+        }
+
+		assambler.spawn_from_desc(world.state(), e, *world_desc, world_desc->get_name());
     }
 
     mark_systems_graphs_dirty();
@@ -66,7 +91,32 @@ void scn::level::load_world_from_desc(const world_desc& world_desc, ecs::system_
         sfactory.create_system(system_name, world.state(), organizer());
     }
 
-    assambler.spawn_from_desc(world.state(), entt::null, world_desc, world_desc.get_name());
+    entt::entity e = world.state().create();
+    const auto& root_node = world_desc.get_root();
+    if (root_node.position != glm::vec3{ 0.0f } || root_node.rotation != glm::vec3{ 0.0f } || root_node.scale != glm::vec3{ 1.0f }) {
+        world.state().emplace<scn::local_transform>(e, root_node.get_transform());
+        if (world.state().ctx().contains<ecs::event<scn::transform_updated>>()) {
+            world.state().ctx().get<ecs::event<scn::transform_updated>>().emit(e);
+        } else {
+            ecs::event<scn::transform_updated> event;
+            event.emit(e);
+            world.state().ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+        }
+    }
+
+    world.state().emplace<scn::world_transform>(e);
+    world.state().emplace<scn::name_component>(e, scn::name_component{ .name = std::string{ world_desc.get_name() }});
+    world.state().emplace<scn::depth_level>(e);
+
+    if (world.state().ctx().contains<ecs::event<scn::hierarchy_updated>>()) {
+        world.state().ctx().get<ecs::event<scn::hierarchy_updated>>().emit(e);
+    } else {
+        ecs::event<scn::hierarchy_updated> event;
+        event.emit(e);
+        world.state().ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
+    }
+
+    assambler.spawn_from_desc(world.state(), e, world_desc, world_desc.get_name());
 
     mark_systems_graphs_dirty();
 }

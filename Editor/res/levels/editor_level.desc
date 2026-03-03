@@ -5,35 +5,48 @@
 		{
 			"name": "3d_scene",
 			"__type": "world_desc",
+			"transform": {
+				"position": [ 0, 0, 0 ],
+				"rotation": [ 0, 0, 0 ],
+				"scale": [ 1, 1, 1 ]
+			},
 			"components":{
 				"anchor": {
 					"__type": "anchor_desc"
 				}
 			},
-			"children": [
-				{
-					"__type": "skin_prototype_desc",
-					"name": "robot",
-					"__parent": "res://objects/robot/gen_robot.glb"
+			"children": {
+				"robot": {
+					"__type": "prefab_desc",
+					"transform": {
+						"position": [ 0, 0, 0 ],
+						"rotation": [ 0, 0, 0 ],
+						"scale": [ 1, 1, 1 ]
+					},
+					"components": {
+						"prototype_robot": {
+							"__type": "skin_prototype_desc",
+							"__parent": "res://objects/robot/gen_robot.glb"
+						}
+					}
 				},
-				{
+				"camera_name": {
 					"__type": "camera_desc",
-					"name": "camera name",
-					"rotation": [ -45, 0, 0 ]
+					"transform": {
+						"position": [ 0, 0, 0 ],
+						"rotation": [ -25, 0, 0 ]
+					}
 				},
-				{
-					"__type": "directional_light_desc",
-					"name": "grobal light"
+				"global_light": {
+					"__type": "directional_light_desc"
 				},
-				{
+				"skybox": {
 					"__type": "skybox_desc",
-					"name": "skybox",
 					"material": "res://skybox/sky_material.desc"
 				}
-			],
+			},
 			"systems":[
-				"inp::update_input_state", 
-				"edt::spawn_system",
+				"inp::update_input_state",
 				"scn::animation_system_matrix", 
 				"scn::animation_system_node",
 				"scn::update_camera_matrix_system",

@@ -4,6 +4,7 @@
 #include "resources/res_resource_handle.hpp"
 #include <unordered_map>
 #include "scn_ecs_assembler.h"
+#include <glm/glm.hpp>
 
 namespace scn {
 	class prefab_desc : public desc::desc_base
@@ -14,12 +15,22 @@ namespace scn {
 		struct prefab_node {
 			std::string name;
 			std::string type_name;
+			glm::vec3 position{ 0.0f };
+			glm::vec3 rotation{ 0.0f };
+			glm::vec3 scale{ 1.0f };
 			res::res_handle<desc::desc_base> parent_desc;
 
 			std::unordered_map<std::string, prefab_node> components;
 			std::vector<prefab_node> children;
 
 			json::object overrides;
+
+			glm::mat4 get_transform() const {
+				glm::mat4 t = glm::translate(glm::mat4{ 1.f }, position);
+				t = t * glm::yawPitchRoll(glm::radians(rotation.y), glm::radians(rotation.x), glm::radians(rotation.z));
+				t = glm::scale(t, scale);
+				return t;
+			}
 		};
 
 		prefab_desc() = default;

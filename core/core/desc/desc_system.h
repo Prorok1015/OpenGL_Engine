@@ -51,7 +51,7 @@ namespace desc
 		auto get_field_desc(const desc::desc_base& owner, const json::value& data) const
 		{
 			if (data.is_string()) {
-				return m_res_system.require_sync<T>(json::value_to<res::tag>(data));
+				return m_res_system.require<T>(json::value_to<res::tag>(data));
 			}
 
             ASSERT_MSG(data.is_object() && data.as_object().contains("__type"), "Invalid desc field data: expected either string tag or object with '__type' field");
@@ -59,7 +59,7 @@ namespace desc
 			res::tag mem_tag = make_mem_tag(owner, json::value_to<std::string>(data.at("__type")));
 			// TODO: optimize parsing again data. create desc inplace and pin as a resource to not serialize/deserialize twice
 			m_res_system.store(mem_tag, serialize_to_bytes(data));
-			return m_res_system.require_sync<T>(mem_tag);
+			return m_res_system.require<T>(mem_tag);
 		}
 
         void write_pretty_json(std::ostream& os, json::value const& jv, std::string* indent = nullptr) const

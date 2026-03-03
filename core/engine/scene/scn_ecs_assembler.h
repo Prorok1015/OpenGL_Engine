@@ -50,7 +50,7 @@ namespace scn {
 								std::string actual_type,
 								const res::res_handle<desc::desc_base>& parent_desc,
 								const boost::json::object& overrides,
-								const std::string& name) const;
+								const std::string_view name) const;
 		
 
     private:

@@ -41,7 +41,9 @@ namespace {
             std::uint32_t depth = 0;
             if (parents.contains(ent)) {
                 auto&& parent = parents.get<0>(ent);
-                depth = depths.get<0>(parent.parent).value + 1;
+                if (depths.contains(parent.parent)) {
+                    depth = depths.get<0>(parent.parent).value + 1;
+                }
             }
             depths.get<0>(ent).value = depth;
         }

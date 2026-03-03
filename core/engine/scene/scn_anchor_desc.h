@@ -21,18 +21,6 @@ namespace scn {
 
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
-
-		glm::mat4 get_transform() const {
-			glm::mat4 t = glm::translate(glm::mat4{ 1.f }, position);
-			t = t * glm::yawPitchRoll(rotation.y, rotation.x, rotation.z);
-			t = glm::scale(t, scale);
-			return t;
-		}
-
-	private:
-		glm::vec3 position{ 0.f };
-		glm::vec3 rotation{ 0.f };
-		glm::vec3 scale{ 1.f };
 	};
 
 	void assemble_scene_anchor(entt::registry& reg, entt::entity e, const scene_anchor_desc& desc, const std::string_view name);

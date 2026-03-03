@@ -26,6 +26,7 @@ namespace core::res
 
         bool is_ready() const { return m_block && m_block->is_ready(); }
         bool has_error() const { return m_block && m_block->has_error(); }
+		bool is_valid() const { return m_block != nullptr; }
 
         std::shared_ptr<T> get() const {
             return is_ready() ? m_block->data : nullptr;

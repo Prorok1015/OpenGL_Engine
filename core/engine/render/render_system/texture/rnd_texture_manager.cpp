@@ -39,66 +39,6 @@ rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res:
 	return nullptr;
 }
 
-rnd::driver::texture_interface* rnd::texture_manager::require_cubemap_texture(const std::vector<res::tag>& tags)
-{
-	auto it = cache.find(tags.front());
-    if (it != cache.end()) {
-        return it->second.get();
-    }
-
-    rnd::driver::texture_header cb_header;
-
-    auto load_face_data = [](res::tag tag) -> std::tuple<std::vector<unsigned char>, rnd::driver::texture_header::TYPE, uint32_t, uint32_t> {
-        auto res = res::get_system().require<res::picture_resource>(tag).get_sync();
-        rnd::driver::texture_header::TYPE format;
-        switch (res->channels()) {
-            case 1: format = rnd::driver::texture_header::TYPE::R8; break;
-            case 3: format = rnd::driver::texture_header::TYPE::RGB8; break;
-            case 4: format = rnd::driver::texture_header::TYPE::RGBA8; break;
-            default:
-                // Handle unsupported channel counts appropriately (e.g., throw an exception)
-                throw std::runtime_error("Unsupported number of channels in cubemap texture");
-        }
-
-		std::vector<unsigned char> data(res->size().x * res->size().y * res->channels());
-		std::copy(res->data(), res->data() + data.size(), data.begin());
-
-        return std::make_tuple(std::move(data), format, res->size().x, res->size().y);
-    };
-
-    // 1. Create Texture (Empty) & allocate storage
-    auto [right_data, right_format, right_width, right_height] = load_face_data(tags[0]);
-    cb_header.data.extent.width = right_width;
-    cb_header.data.extent.height = right_height;
-    cb_header.data.format = right_format;
-    cb_header.data.extent.faces = 6;  // Important: 6 faces for cubemap
-
-    cb_header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_EDGE;
-    cb_header.min = rnd::driver::texture_header::FILTERING::LINEAR;
-    cb_header.mag = rnd::driver::texture_header::FILTERING::LINEAR;
-    cb_header.type = rnd::driver::TEXTURE_TYPE::TEXTURE_CUBE_MAP;
-    cb_header.usage = rnd::driver::TEXTURE_USAGE::SAMPLED;
-    cb_header.data.mip_levels = 1;
-
-    auto& texture = cache[tags.front()] = drv->create_texture(cb_header);
-
-    // 2. Update Data for each face
-    auto update_face = [&](rnd::driver::texture_interface* texture_intf, res::tag tag, uint32_t face) {
-        auto [data, format, width, height] = load_face_data(tag);
-        texture_intf->update_data(data.data(), 0, 0, 0, width, height, 1, 0, 0, face); // face parameter is crucial here!
-    };
-
-
-    update_face(texture.get(), tags[0], 0); // Right
-    update_face(texture.get(), tags[1], 1); // Left
-    update_face(texture.get(), tags[2], 2); // Bottom
-    update_face(texture.get(), tags[3], 3); // Top
-    update_face(texture.get(), tags[4], 4); // Front
-    update_face(texture.get(), tags[5], 5); // Back
-
-    return texture.get();
-}
-
 rnd::driver::texture_interface* rnd::texture_manager::generate_texture(const res::tag& tag, rnd::driver::texture_header header)
 {
 	auto it = cache.find(tag);
