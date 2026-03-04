@@ -12,24 +12,27 @@ namespace scn {
 	public:
 		using base_type = desc::desc_base;
 
+		struct prefab_comp_node {
+			std::string type_name;
+			res::res_handle<desc::desc_base> parent_desc;
+			boost::json::object overrides;
+		};
+
 		struct prefab_node {
 			std::string name;
-			std::string type_name;
 			glm::vec3 position{ 0.0f };
 			glm::vec3 rotation{ 0.0f };
 			glm::vec3 scale{ 1.0f };
-			res::res_handle<desc::desc_base> parent_desc;
 
-			std::unordered_map<std::string, prefab_node> components;
+			std::unordered_map<std::string, prefab_comp_node> components;
 			std::vector<prefab_node> children;
 
-			json::object overrides;
-
-			glm::mat4 get_transform() const {
-				glm::mat4 t = glm::translate(glm::mat4{ 1.f }, position);
-				t = t * glm::yawPitchRoll(glm::radians(rotation.y), glm::radians(rotation.x), glm::radians(rotation.z));
-				t = glm::scale(t, scale);
-				return t;
+			glm::mat4 get_local_transform() const
+			{
+				glm::mat4 t = glm::translate(glm::mat4(1.0f), position);
+				glm::mat4 r = glm::yawPitchRoll(glm::radians(rotation.y), glm::radians(rotation.x), glm::radians(rotation.z));
+				glm::mat4 s = glm::scale(glm::mat4(1.0f), scale);
+				return t * r * s;
 			}
 		};
 

@@ -19,7 +19,7 @@
 				"robot": {
 					"__type": "prefab_desc",
 					"transform": {
-						"position": [ 0, 0, 0 ],
+						"position": [ -2, 0, -2 ],
 						"rotation": [ 0, 0, 0 ],
 						"scale": [ 1, 1, 1 ]
 					},
@@ -29,6 +29,23 @@
 							"__parent": "res://objects/robot/gen_robot.glb"
 						}
 					}
+				},
+				"simple robot": {
+					"transform": {
+						"position": [ 2, 0, 2 ],
+						"rotation": [ 0, 0, 0 ],
+						"scale": [ 1, 1, 1 ]
+					},
+					"components": {
+						"skin_prototype_desc": {
+							"__type": "skin_prototype_desc",
+							"__parent": "res://objects/robot/gen_robot.glb"
+						}
+					}
+				},
+				"simple robot 2": {
+						"__type": "skin_prototype_desc",
+						"__parent": "res://objects/robot/gen_robot.glb"
 				},
 				"camera_name": {
 					"__type": "camera_desc",
