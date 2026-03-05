@@ -31,3 +31,8 @@ set(CMAKE_CXX_STANDARD 20)
 add_executable(core_exe main_unified_graph_test.cpp)
 target_link_libraries(core_exe engine)
 set_target_properties(core_exe PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+# ds_fixed_vector_test executable
+add_executable(ds_fixed_vector_test core/common/ds/ds_fixed_vector_test.cpp)
+target_link_libraries(ds_fixed_vector_test common)
+set_target_properties(ds_fixed_vector_test PROPERTIES EXCLUDE_FROM_ALL TRUE)
