@@ -5,6 +5,10 @@
 #include "logger/engine_log.h"
 
 namespace ecs {
+
+template <class> 
+constexpr bool always_false = false;
+
 template <size_t ID, typename T> 
 struct bind_res {
     T& ref;
@@ -43,7 +47,7 @@ struct runtime_context_provider
 template <typename T> struct binded_resolver {
   // Fallback: Try to get T from local context
   static decltype(auto) resolve(const runtime_context &ctx) {
-      static_assert(false, "this type is not equal bind_res");
+      static_assert(always_false<T>, "this type is not equal bind_res");
   }
 };
 

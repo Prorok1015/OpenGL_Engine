@@ -38,7 +38,7 @@ namespace ecs
     decltype(auto) register_component(const char* name) {
         return entt::meta<T>()
             .type(entt::type_hash<T>::value())
-            .func<&meta_snapshot_get<T>>(snapshot_get_h)
-            .func<&meta_loader_get<T>>(loader_get_h);
+            .template func<&meta_snapshot_get<T>>(snapshot_get_h)
+            .template func<&meta_loader_get<T>>(loader_get_h);
     }
 }

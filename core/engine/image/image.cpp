@@ -1,18 +1,19 @@
-#include "Image.h"
+#include "image.h"
 
 #include <stb_image.h>
 #include <stb_image_write.h>
 
 #include <iostream>
 #include <string>
-#include <exception>
+#include <stdexcept>
 #include <array>
+#include <cstring>
 
 
 stb_image::Image::Image(const std::string_view filename)
 {
 	if (!read(filename)) {
-		throw std::exception("File read faild"); //Loger(L"Ошибка чтения файла", __func__, __LINE__, __FILEW__);
+		throw std::runtime_error("File read faild"); //Loger(L"  ", __func__, __LINE__, __FILEW__);
 	}			
 }
 

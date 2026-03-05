@@ -55,6 +55,3 @@ namespace stb_image {
 	};
 }
 #endif // IMAGE
-
-
-

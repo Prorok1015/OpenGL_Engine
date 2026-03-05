@@ -73,11 +73,11 @@ namespace ecs
             if (type) {
                 for (auto&& [id, data] : type.data()) {
                     if (data.type() == entt::resolve<entt::entity>()) {
-                        if (auto* ptr = data.get(component).cast<entt::entity*>()) {
+                        if (auto* ptr = data.get(component).template cast<entt::entity*>()) {
                             *ptr = loader.map(*ptr);
                         }
                     } else if (data.type() == entt::resolve<sandbox_entity>()) {
-                        if (auto* ptr = data.get(component).cast<sandbox_entity*>()) {
+                        if (auto* ptr = data.get(component).template cast<sandbox_entity*>()) {
                             auto raw = static_cast<entt::entity>(*ptr);
                             *ptr = static_cast<sandbox_entity>(loader.map(raw));
                         }
@@ -116,12 +116,12 @@ namespace ecs
                 if (type) {
                     for (auto&& [id, data] : type.data()) {
                         if (data.type() == entt::resolve<entt::entity>()) {
-                            if (auto* ptr = data.get(value).cast<entt::entity*>()) {
+                            if (auto* ptr = data.get(value).template cast<entt::entity*>()) {
                                 *ptr = loader.map(*ptr);
                             }
                         }
                         else if (data.type() == entt::resolve<sandbox_entity>()) {
-                            if (auto* ptr = data.get(value).cast<sandbox_entity*>()) {
+                            if (auto* ptr = data.get(value).template cast<sandbox_entity*>()) {
                                 auto raw_snd = static_cast<entt::entity>(*ptr);
                                 *ptr = static_cast<sandbox_entity>(loader.map(raw_snd));
                             }

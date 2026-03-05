@@ -57,11 +57,10 @@ namespace inp
 		copy_func m_copy_func = nullptr;
 		move_func m_move_func = nullptr;
 		destroy_func m_destroy_func = nullptr;
+		device_id m_device_id;
+		payload_type_id m_payload_type_id = 0;
 
 	public:
-		device_id device_id;
-		payload_type_id payload_type_id = 0;
-
 		input_event() = default;
 
 		~input_event() {
@@ -71,8 +70,8 @@ namespace inp
 		}
 
 		input_event(input_event&& other) noexcept
-			: device_id(other.device_id)
-			, payload_type_id(other.payload_type_id)
+			: m_device_id(other.m_device_id)
+			, m_payload_type_id(other.m_payload_type_id)
 			, m_copy_func(other.m_copy_func)
 			, m_move_func(other.m_move_func)
 			, m_destroy_func(other.m_destroy_func)
@@ -89,8 +88,8 @@ namespace inp
 		input_event& operator= (const input_event& other) = delete;
 
 		input_event(const input_event& other)
-			: device_id(other.device_id)
-			, payload_type_id(other.payload_type_id)
+			: m_device_id(other.m_device_id)
+			, m_payload_type_id(other.m_payload_type_id)
 			, m_copy_func(other.m_copy_func)
 			, m_move_func(other.m_move_func)
 			, m_destroy_func(other.m_destroy_func)
@@ -99,6 +98,10 @@ namespace inp
 				m_copy_func(other.m_storage, m_storage);
 			}
 		}
+
+		const device_id& get_device_id() const { return m_device_id; }
+		device_id& get_device_id() { return m_device_id; }
+		payload_type_id get_payload_type_id() const { return m_payload_type_id; }
 
 		template<typename T, typename... Args>
 		void construct_payload(Args&&... args) {
@@ -115,14 +118,14 @@ namespace inp
 			m_copy_func = meta.copy;
 			m_move_func = meta.move;
 			m_destroy_func = meta.destroy;
-			payload_type_id = meta.type_id;
+			m_payload_type_id = meta.type_id;
 
 			new (&m_storage) T(std::forward<Args>(args)...);
 		}
 
 		template<typename T>
 		const T* get_payload() const {
-			if (get_metadata<T>().type_id != payload_type_id) {
+			if (get_metadata<T>().type_id != m_payload_type_id) {
 				return nullptr;
 			}
 

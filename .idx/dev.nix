@@ -1,13 +1,10 @@
-# To learn more about how to use Nix to configure your environment
-# see: https://firebase.google.com/docs/studio/customize-workspace
-{ pkgs, ... }: {
-  # Which nixpkgs channel to use.
-  channel = "stable-24.05"; # or "unstable"
+{ pkgs ? import <nixpkgs> {} }:
 
-  # Use https://search.nixos.org/packages to find packages
-  packages = [
+pkgs.mkShell {
+  # Build inputs for the development environment
+  buildInputs = [
     pkgs.cmake
-    pkgs.gcc
+    pkgs.gcc13
     pkgs.gdb
     pkgs.pkg-config
     pkgs.assimp
@@ -15,20 +12,17 @@
     pkgs.xorg.libXrandr
     pkgs.xorg.libXinerama
     pkgs.xorg.libXcursor
+    pkgs.libGL
     pkgs.xorg.libXi
+    pkgs.wayland
+    pkgs.wayland-protocols
+    pkgs.libxkbcommon
+    pkgs.libffi
+    pkgs.zlib
   ];
 
   # Sets environment variables in the workspace
-  env = {};
-  idx = {
-    # Search for the extensions you want on https://open-vsx.org/ and use "publisher.id"
-    extensions = [
-      "ms-vscode.cpptools"
-    ];
-
-    # Enable previews
-    previews = {
-      enable = true;
-    };
-  };
+  shellHook = ''
+    export LD_LIBRARY_PATH=${pkgs.libGL}/lib:${pkgs.xorg.libX11}/lib:${pkgs.xorg.libXrandr}/lib:${pkgs.xorg.libXinerama}/lib:${pkgs.xorg.libXcursor}/lib:${pkgs.xorg.libXi}/lib:$LD_LIBRARY_PATH
+  '';
 }
