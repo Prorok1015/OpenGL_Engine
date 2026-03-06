@@ -94,7 +94,7 @@ void edt::spawn_system(entt::registry& spawner)
 		spawner.emplace<scn::name_component>(ecs_entity, "Editor camera");
 		spawner.emplace<scn::parent_component>(ecs_entity, world_anchor);
 		spawner.emplace<scn::depth_level>(ecs_entity, 0u);
-		spawner.emplace<scn::camera_component>(ecs_entity, scn::camera_component{ .viewport = viewport });
+		spawner.emplace<scn::camera_component>(ecs_entity, scn::camera_component{ .m_viewport = viewport });
 		spawner.emplace<scn::local_transform>(ecs_entity);
 		spawner.emplace<scn::world_transform>(ecs_entity);
 		spawner.emplace<scn::renderable>(ecs_entity);

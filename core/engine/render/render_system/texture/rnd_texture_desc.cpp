@@ -112,7 +112,7 @@ namespace rnd::driver
 			if (type == "S1") return texture_header::TYPE::S1;
 			if (type == "S4") return texture_header::TYPE::S4;
 			if (type == "S8") return texture_header::TYPE::S8;
-			ASSERT_FAIL("Unknown texture type: {0}", type);
+			ASSERT_FAIL("Unknown texture type");
 			return texture_header::TYPE::RGB8;
 		}
 
@@ -138,7 +138,7 @@ namespace rnd::driver
 			if (type == "texture_cube_map") return TEXTURE_TYPE::TEXTURE_CUBE_MAP;
 			if (type == "texture_cube_array") return TEXTURE_TYPE::TEXTURE_CUBE_ARRAY;
 			if (type == "renderbuffer") return TEXTURE_TYPE::RENDERBUFFER;
-			ASSERT_FAIL("Unknown texture type: {0}", type);
+			ASSERT_FAIL("Unknown texture type");
 			return TEXTURE_TYPE::TEXTURE_2D;
 		}
 	}

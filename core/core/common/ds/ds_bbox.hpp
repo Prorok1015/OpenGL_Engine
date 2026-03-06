@@ -1,16 +1,14 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <limits>
 
 namespace ds {
 	using point2d = glm::vec2;
 
 	struct bbox final
 	{
-		union
-		{
-			point2d p[2];
-			struct { point2d min; point2d max; };
-		};
+		point2d min;
+		point2d max;
 
 		bbox(point2d mi, point2d mx)
 			: min{ mi }

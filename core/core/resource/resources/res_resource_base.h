@@ -1,5 +1,6 @@
 #pragma once
 #include "res_tag.h"
+#include <memory>
 
 namespace res
 {

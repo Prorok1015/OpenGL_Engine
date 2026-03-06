@@ -323,7 +323,7 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 			if (ImGui::BeginPopup("tree_context_menu")) {
 				if (ImGui::MenuItem("Add Camera")) {
 					registry_sp->emplace<scn::camera_component>(ent, 
-						scn::camera_component{ .viewport = glm::ivec4{100,100, 500, 500} }
+						scn::camera_component{ .m_viewport = glm::ivec4{100,100, 500, 500} }
 					);
 				}
 
@@ -464,7 +464,7 @@ void edt::editor_system::show_tree_items(ecs::entity ent)
 			ImGui::Text("fov: %3.f", camera.fov);
 			ImGui::Text("near: %3.f", camera.near_distance);
 			ImGui::Text("far: %3.f", camera.far_distance);
-			ImGui::Text("x: %d, y: %d, width: %d, height: %d", camera.viewport.center.x, camera.viewport.center.y, camera.viewport.size.x, camera.viewport.size.y);
+			ImGui::Text("x: %d, y: %d, width: %d, height: %d", camera.m_viewport.center.x, camera.m_viewport.center.y, camera.m_viewport.size.x, camera.m_viewport.size.y);
 		}
 
 		if (registry_sp->all_of<scn::children_component>(ent)) {
@@ -1145,13 +1145,13 @@ bool edt::editor_system::show_scene()
 		if (registry_sp) {
 			for (const auto ent : registry_sp->view<scn::camera_component>()) {
 				auto& camera = registry_sp->get<scn::camera_component>(ent);
-				camera.viewport.size = glm::ivec2(contentRegionAvailable.x, contentRegionAvailable.y);
+				camera.m_viewport.size = glm::ivec2(contentRegionAvailable.x, contentRegionAvailable.y);
 				if (registry_sp->all_of<scn::local_transform>(ent)) {
 					auto& trans = registry_sp->get<scn::local_transform>(ent);
 					viewMatrix = glm::inverse(trans.local);
 				}
-				if (camera.viewport.size != glm::ivec2{ 0 }) {
-					projMat = glm::perspective(glm::radians(camera.fov), (float)camera.viewport.size.x / (float)camera.viewport.size.y, camera.near_distance, camera.far_distance);
+				if (camera.m_viewport.size != glm::ivec2{ 0 }) {
+					projMat = glm::perspective(glm::radians(camera.fov), (float)camera.m_viewport.size.x / (float)camera.m_viewport.size.y, camera.near_distance, camera.far_distance);
 				}
 			}
 		}

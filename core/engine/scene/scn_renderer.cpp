@@ -15,7 +15,7 @@
 namespace scn {
     static float make_aspect(camera_component& camera)
     {
-        return (float)camera.viewport.size.x / (float)camera.viewport.size.y;
+        return (float)camera.m_viewport.size.x / (float)camera.m_viewport.size.y;
     }
 
     static glm::mat4 make_projection(camera_component& camera)
@@ -112,13 +112,13 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
     for(const auto ent : registry.view<scn::camera_component, scn::renderable>())
     {
         auto& camera = registry.get<scn::camera_component>(ent);
-        if (camera.viewport.size.x < 1 || camera.viewport.size.y < 1) {
+        if (camera.m_viewport.size.x < 1 || camera.m_viewport.size.y < 1) {
             return;
         }
         auto color_rt = txm_manager.find(color_rt_tag);
         auto color_tp_rt = txm_manager.find(color_rt_transparent_tag);
         auto waight_tp_rt = txm_manager.find(waight_rt_transparent_tag);
-        if (color_rt && (color_rt->width() != camera.viewport.size.x || color_rt->height() != camera.viewport.size.y))
+        if (color_rt && (color_rt->width() != camera.m_viewport.size.x || color_rt->height() != camera.m_viewport.size.y))
         {
             txm_manager.remove(color_rt_tag);
             txm_manager.remove(color_rt_transparent_tag);
@@ -130,8 +130,8 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
 
         if (!color_rt) {
             rnd::driver::texture_header header;
-            header.data.extent.width = camera.viewport.size.x;
-            header.data.extent.height = camera.viewport.size.y;
+            header.data.extent.width = camera.m_viewport.size.x;
+            header.data.extent.height = camera.m_viewport.size.y;
             header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
             header.usage = rnd::driver::TEXTURE_USAGE::COLOR_TARGET;
             header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_EDGE;
@@ -175,7 +175,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             common_matrix.view_position = glm::vec4(pos.get_pos(), 1.0);
             rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
 
-            drv->set_viewport(camera.viewport);
+            drv->set_viewport(camera.m_viewport);
             draw_scene_by_material_desc(drv, registry, scn::pass_queue::OPAQUE);
             draw_sky(drv, registry);
             drv->pop_frame_buffer();
@@ -206,7 +206,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
             drv->push_frame_buffer();
             drv->set_render_targets({ color_tp_rt, waight_tp_rt }, txm_manager.find(z_pass_tag));
             drv->clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER, { glm::vec4(0), glm::vec4(1) });
-            drv->set_viewport(camera.viewport);
+            drv->set_viewport(camera.m_viewport);
             draw_scene_by_material_desc(drv, registry, scn::pass_queue::TRANSPARENT);
             drv->pop_frame_buffer();
         }
@@ -225,7 +225,7 @@ void scn::renderer_3d::on_render(rnd::driver::driver_interface* drv)
 
             drv->push_frame_buffer();
             drv->set_render_target(color_rt);
-            drv->set_viewport(camera.viewport);
+            drv->set_viewport(camera.m_viewport);
             draw_composition(drv, color_tp_rt, waight_tp_rt);
             drv->pop_frame_buffer();
         }
@@ -264,13 +264,13 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv, entt::regis
     for (const auto ent : registry.view<scn::camera_component, scn::renderable>())
     {
         auto& camera = registry.get<scn::camera_component>(ent);
-        if (camera.viewport.size.x < 1 || camera.viewport.size.y < 1) {
+        if (camera.m_viewport.size.x < 1 || camera.m_viewport.size.y < 1) {
             continue;
         }
         auto z_pass_rt = txm_manager.find(z_pass_tag);
         auto z_pass_color_rt = txm_manager.find(z_pass_color_tag);
 
-        if (z_pass_rt && (z_pass_rt->width() != camera.viewport.size.x || z_pass_rt->height() != camera.viewport.size.y))
+        if (z_pass_rt && (z_pass_rt->width() != camera.m_viewport.size.x || z_pass_rt->height() != camera.m_viewport.size.y))
         {
             txm_manager.remove(z_pass_tag);
             txm_manager.remove(z_pass_color_tag);
@@ -280,8 +280,8 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv, entt::regis
 
         if (!z_pass_rt) {
             rnd::driver::texture_header header;
-            header.data.extent.width = camera.viewport.size.x;
-            header.data.extent.height = camera.viewport.size.y;
+            header.data.extent.width = camera.m_viewport.size.x;
+            header.data.extent.height = camera.m_viewport.size.y;
             header.data.format = rnd::driver::texture_header::TYPE::D32;
             header.usage = rnd::driver::TEXTURE_USAGE::DEPTH_TARGET;
             header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_BORDER;
@@ -320,7 +320,7 @@ void scn::renderer_3d::z_prepass(rnd::driver::driver_interface* drv, entt::regis
         common_matrix.view_position = glm::vec4(pos.get_pos(), 1.0);
 
         rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
-        drv->set_viewport(camera.viewport);
+        drv->set_viewport(camera.m_viewport);
         draw_scene_by_material_desc(drv, registry, scn::pass_queue::OPAQUE);
         drv->pop_frame_buffer();
     }

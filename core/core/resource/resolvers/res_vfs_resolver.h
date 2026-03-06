@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <optional>
 #include <stack>
+#include <shared_mutex>
 
 namespace res
 {
@@ -40,4 +41,3 @@ namespace res
 		std::unordered_map<res::tag, core::res::res_resolver_interface::async_raw_data> m_pending_writes;
 	};
 }
-

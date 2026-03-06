@@ -16,7 +16,7 @@ res::resource_system& res::get_system()
 
 res::resource_system::resource_system()
 {
-	ASSERT_MSG(std::filesystem::exists(cfg_res_path), "Resources path '{0}' does not exist!", cfg_res_path->string());
+	ASSERT_MSG(std::filesystem::exists(cfg_res_path), "Resources path '{0}' does not exist!");
 
 	auto& res_resolver = registrate_resolver<vfs_resolver>(tag::default_protocol(), std::vector<fs::path>{ cfg_res_path->string() });
 	res_resolver.set_resource_changed_callback([this](const res::tag& tag) { signal_changed(tag); });

@@ -65,7 +65,7 @@ namespace {
 		}
 	}
 
-#define TXM_LOG(type) log_material_texture(scene, material, type, ###type)
+#define TXM_LOG(type) log_material_texture(scene, material, type, #type)
 }
 
 std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
@@ -167,8 +167,8 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 
 			std::string data = json::serialize(desc);
 			std::vector<std::byte> desc_data(data.size());
-			std::memcpy(desc_data.data(), data.data(), data.size());
-			res::get_system().store(desc_tag, desc_data);
+				std::memcpy(desc_data.data(), data.data(), data.size());
+				res::get_system().store(desc_tag, desc_data);
 		}
 		return json::value_from(desc_tag);
 	}

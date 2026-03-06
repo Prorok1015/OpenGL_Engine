@@ -23,7 +23,7 @@ namespace scn
 		float fov = 90.f;
 		float near_distance = 0.0001f;
 		float far_distance = 1000.f;
-		viewport viewport;
+		viewport m_viewport;
 	};
 
 }

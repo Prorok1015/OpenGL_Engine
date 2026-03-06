@@ -3,6 +3,7 @@
 #include "common.h"
 #include "core_thread_utils.hpp"
 #include <fstream>
+#include <shared_mutex>
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points)
 	: core::res::res_resolver_interface(prt)

@@ -10,6 +10,7 @@
 #include "resources/res_resource_handle.hpp"
 #include <iostream>
 #include <set>
+#include <shared_mutex>
 
 namespace std {
 	template<> struct hash<std::pair<ds::type_id, std::string>> {

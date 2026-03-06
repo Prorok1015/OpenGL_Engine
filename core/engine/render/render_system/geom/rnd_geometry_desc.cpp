@@ -91,7 +91,7 @@ namespace std
 			return std::byte(val);
 		}
 
-		ASSERT_FAIL("rnd::geometry_desc::serialize", "Invalid type for byte");
+		ASSERT_FAIL("rnd::geometry_desc::serialize: Invalid type for byte");
 		return std::byte(0);
 	}
 }

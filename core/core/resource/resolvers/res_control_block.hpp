@@ -1,4 +1,5 @@
 #pragma once
+#include <thread>
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -43,7 +44,7 @@ namespace core::res
                 std::this_thread::yield();
             }
 
-            ASSERT_MSG(!has_error(), "Resource loading error: {0}", error_msg);
+            ASSERT_MSG(!has_error(), "Resource loading error: {0}");
         }
 
         T& get() {

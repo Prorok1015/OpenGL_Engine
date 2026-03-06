@@ -13,7 +13,7 @@ namespace ds
 		static constexpr uint32_t MIN_ENTRIES = MIN;
 
 		template<class NODE>
-		NODE::index_type split(std::vector<NODE>& data, NODE::index_type current, NODE::index_type& root) const
+		typename NODE::index_type split(std::vector<NODE>& data, typename NODE::index_type current, typename NODE::index_type& root) const
 		{
 			const auto& oldnode = data[current];
 			const auto& entries = oldnode.entries;
@@ -115,7 +115,7 @@ namespace ds
 				expand(newRoot.box, right.box);
 
 				data.push_back(newRoot);
-				root = NODE::index_type(data.size() - 1);
+				root = typename NODE::index_type(data.size() - 1);
 
 				data[current].parent = root;
 				data[new_idx].parent = root;

@@ -19,12 +19,12 @@ void edt::edt_loop_service::init(ds::app_data_storage& storage)
 	auto& window_system_ref = storage.require<wnd::window_system>();
 
 	window_system_ref.init_windows_frame_time();
-	previous_time = std::chrono::high_resolution_clock::now();
+	previous_time = std::chrono::steady_clock::now();
 }
 
 void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 {
-	auto current_time = std::chrono::high_resolution_clock::now();
+	auto current_time = std::chrono::steady_clock::now();
 	std::chrono::duration<float> duration = current_time - previous_time;
 	previous_time = current_time;
 

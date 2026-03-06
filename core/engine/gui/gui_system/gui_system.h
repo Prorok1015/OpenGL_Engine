@@ -41,7 +41,7 @@ namespace gui
 	private:
 		bool is_show = true;
 		bool is_input_enabled = true;
-		std::shared_ptr<renderer> renderer;
+		std::shared_ptr<gui::renderer> m_renderer;
 		std::vector<std::shared_ptr<gui::layer_interface>> layers;
 		gui::imgui_backend_interface* backend = nullptr;
 	};

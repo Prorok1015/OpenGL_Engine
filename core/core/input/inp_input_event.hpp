@@ -1,6 +1,7 @@
 #pragma once
 #include "ds/ds_type_id.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <type_traits>
 
 namespace inp

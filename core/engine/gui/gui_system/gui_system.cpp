@@ -14,14 +14,14 @@ gui::gui_system& gui::get_system()
 gui::gui_system::gui_system(gui::imgui_backend_interface* backend_)
 	: backend(backend_)
 {
-	renderer = std::make_shared<gui::renderer>(backend);
-	renderer->render_event += [this] { render_menues(); };
-	rnd::get_system().activate_renderer(renderer);
+	m_renderer = std::make_shared<gui::renderer>(backend);
+	m_renderer->render_event += [this] { render_menues(); };
+	rnd::get_system().activate_renderer(m_renderer);
 }
 
 gui::gui_system::~gui_system()
 {
-	rnd::get_system().deactivate_renderer(renderer);
+	rnd::get_system().deactivate_renderer(m_renderer);
 }
 
 void gui::gui_system::render_menues()
