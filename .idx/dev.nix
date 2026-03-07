@@ -38,6 +38,7 @@
     pkgs.xorg.libXext.dev
     pkgs.xorg.libXrender.dev
     pkgs.xorg.libXfixes.dev
+    pkgs.xvfb-run
   ];
 
   # Переменные окружения задаются здесь (IDX сам применит их к терминалу)

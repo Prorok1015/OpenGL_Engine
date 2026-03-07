@@ -6,6 +6,8 @@ wnd::context::context(wnd::context::header title_)
 {
 	internal_id = glfwCreateWindow(title.size.x, title.size.y, title.title.data(), NULL, NULL);
 	ASSERT_MSG(internal_id, "Window didn't create!");
+	if (!internal_id)
+		throw std::runtime_error("Window didn't create!");
 }
 
 wnd::context::~context() {
