@@ -31,11 +31,11 @@ void engine::game::game_init(ds::app_data_storage& data)
 	auto& assembler = data.require<scn::ecs_assembler>();
 	assembler.register_desc_spawner("prefab_desc", [&assembler] (entt::registry& reg, entt::entity e, const desc::desc_base& base_data, const std::string_view name) {
         const auto& prefab = static_cast<const scn::prefab_desc&>(base_data);
-		scn::assemble_prefab(assembler, reg, e, prefab, name);
+		scn::assemble_prefab(assembler, reg, e, prefab, name, prefab.get_tag());
 	});
 	assembler.register_desc_spawner(scn::world_desc::__type, [&assembler] (entt::registry& reg, entt::entity e, const desc::desc_base& base_data, const std::string_view name) {
         const auto& prefab = static_cast<const scn::prefab_desc&>(base_data);
-		scn::assemble_prefab(assembler, reg, e, prefab, name);
+		scn::assemble_prefab(assembler, reg, e, prefab, name, prefab.get_tag());
 	});
 	assembler.register_desc_spawner("prototype_desc", [] (entt::registry& reg, entt::entity e, const desc::desc_base& base_data, const std::string_view name) {
 		const auto& proto = static_cast<const scn::prototype_desc&>(base_data);

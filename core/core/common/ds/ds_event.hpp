@@ -28,7 +28,12 @@ namespace ds
 
 			bool contains(const T& val) const { return std::find(storage.begin(), storage.end(), val) != storage.end(); }
 
-			void erase(int idx) { storage.erase(std::remove(storage.begin(), storage.end(), storage.at(idx))); }
+			void erase(int idx) {
+				for (int i = idx; i < storage.size() - 1; ++i) {
+					std::swap(storage[i], storage[i + 1]);
+				}
+				storage.pop_back();
+			}
 
 			bool empty() const { return storage.empty(); }
 			void clear() { storage.clear(); }
@@ -152,10 +157,12 @@ namespace ds
 	void EventImplManagedContainer<SIGNATURE, STORAGE_POLICY, SLOT_POLICY>::subscribe_by_tag(SLOT&& slot)
 	{
 		HANDLE handle{ TAG_HANDLE_BIT | ds::type_id::value<TAG>() };
+		if (handles.contains(handle)) {
+			ASSERT_FAIL("Only one subscription for the same TAG is allowed");
+			return;
+		}
 
 		storage.add(std::move(slot));
-
-		ASSERT_MSG(handles.contains(handle), "Only one subscription for the same TAG is allowed");
 		handles.add(handle);
 	}
 

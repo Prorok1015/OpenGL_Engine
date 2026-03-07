@@ -21,14 +21,14 @@ BOOST_AUTO_TEST_SUITE(DSPolymorphicCastTests)
 BOOST_AUTO_TEST_CASE(RawPointerSuccess) {
     Derived derived_obj;
     Base* base_ptr = &derived_obj;
-    Derived* derived_ptr = ds::polymorphic_cast<Derived*>(base_ptr);
+    Derived* derived_ptr = ds::polymorphic_cast<Derived>(base_ptr);
     BOOST_CHECK_EQUAL(derived_ptr, &derived_obj);
     BOOST_CHECK_EQUAL(derived_ptr->derived_val, 2);
 }
 
 BOOST_AUTO_TEST_CASE(SharedPointerSuccess) {
     std::shared_ptr<Base> base_ptr = std::make_shared<Derived>();
-    std::shared_ptr<Derived> derived_ptr = ds::polymorphic_cast<Derived>(base_ptr);
+    std::shared_ptr<Derived> derived_ptr = ds::polymorphic_pointer_cast<Derived>(base_ptr);
     BOOST_CHECK(derived_ptr != nullptr);
     BOOST_CHECK_EQUAL(derived_ptr->derived_val, 2);
 }

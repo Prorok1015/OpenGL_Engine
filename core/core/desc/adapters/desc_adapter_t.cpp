@@ -33,7 +33,7 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 
 std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const
 {
-    auto desc_res = ds::polymorphic_cast<::desc::desc_base>(resource);
+    const auto& desc_res = ds::polymorphic_pointer_cast<const ::desc::desc_base>(resource);
 	json::object body;
 	desc_res->serialize(body);
     std::string data = json::serialize(body);

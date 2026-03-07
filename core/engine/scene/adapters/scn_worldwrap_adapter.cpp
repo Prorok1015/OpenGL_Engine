@@ -35,7 +35,7 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
 
 std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const
 {
-    auto desc_res = ds::polymorphic_cast<::desc::desc_base>(resource);
+    const auto& desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
     json::object body;
     desc_res->serialize(body);
     std::string data = json::serialize(body);
