@@ -5,11 +5,14 @@ imgui.ini
 **/x64
 **/x86
 **/.vs
-/out
+Editor/sandbox/
+out/
 bin/
 build/
 .idea/
 .vscode/
+.cache/
+.claude/
 CMakeSettings.json
 Makefile
 
