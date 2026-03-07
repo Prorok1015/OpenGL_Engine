@@ -9,6 +9,7 @@
     pkgs.cmake
     pkgs.gdb
     pkgs.pkg-config
+    pkgs.boost
     pkgs.libGL
     pkgs.libGL.dev
     pkgs.wayland
