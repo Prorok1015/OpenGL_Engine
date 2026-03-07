@@ -1,5 +1,6 @@
 #pragma once
 #include "resolvers/res_control_block.hpp"
+#include "res_tag.h"
 #include <memory>
 #include <functional>
 
@@ -18,8 +19,8 @@ namespace core::res
         };
 
         res_handle() = default;
-        res_handle(std::shared_ptr<resource_control_block> block)
-            : m_block(std::move(block)) {
+        res_handle(std::shared_ptr<resource_control_block> block, const ::res::tag& tag)
+            : m_block(std::move(block)), m_tag(tag) {
         }
 
         auto operator<=> (const res_handle<T>&) const noexcept = default;
@@ -43,6 +44,11 @@ namespace core::res
             });
         }
 
+        const ::res::tag& get_tag() const
+        {
+            return m_tag;
+        }
+
         T& operator*() const {
 			return *get_sync();
         }
@@ -57,6 +63,7 @@ namespace core::res
 
     private:
         std::shared_ptr<resource_control_block> m_block;
+        ::res::tag m_tag;
     };
 
 }

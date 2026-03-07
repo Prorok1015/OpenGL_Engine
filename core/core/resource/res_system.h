@@ -293,13 +293,14 @@ namespace res
 
 			if (auto cached_res = try_get_cached_resource(tag)) {
 				return res_handle<RESOURCE>(
-					ds::polymorphic_pointer_cast<resource_handle_t<RESOURCE>>(cached_res)
+					ds::polymorphic_cast<resource_handle_t<RESOURCE>>(cached_res),
+					tag
 				);
 			}
 			auto final_cb = std::make_shared<resource_handle_t<RESOURCE>>();
 			push_resource_to_cache(tag, final_cb);
 			start_loading_t<RESOURCE, is_sync>(tag, final_cb);
-			return res_handle<RESOURCE>(final_cb);
+			return res_handle<RESOURCE>(final_cb, tag);
 		}
 
 		template<class T>
