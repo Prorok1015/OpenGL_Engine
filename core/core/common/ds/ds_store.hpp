@@ -97,8 +97,11 @@ namespace ds {
 		template<class T>
 		bool has_value() const {
 			auto it = data.find(ds::type_id::make<T>());
-			if (it != data.end()) {
-				return (bool)POLICY_T::template cast<T>(it->second);
+			if (it != data.end() && (bool)POLICY_T::template cast<T>(it->second)) {
+				return true;
+			}
+			if (parent_storage) {
+				return parent_storage->template has_value<T>();
 			}
 			return false;
 		}
