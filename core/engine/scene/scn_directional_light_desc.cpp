@@ -25,6 +25,6 @@ void scn::directional_light_desc::serialize(json::object& data) const
 
 void scn::assemble_directional_light(entt::registry& reg, entt::entity e, const directional_light_desc& desc, const std::string_view name)
 {
-	reg.emplace<scn::renderable>(e);
-	reg.emplace<scn::directional_light>(e, scn::directional_light{ .direction = desc.direction, .diffuse = desc.diffuse, .ambient = desc.ambient, .specular = desc.specular });
+	reg.emplace_or_replace<scn::renderable>(e);
+	reg.emplace_or_replace<scn::directional_light>(e, scn::directional_light{ .direction = desc.direction, .diffuse = desc.diffuse, .ambient = desc.ambient, .specular = desc.specular });
 }

@@ -4,11 +4,6 @@
 #include <unordered_set>
 
 namespace scn {
-	// Компонент для связи живой сущности с исходным файлом префаба И её локальными оверрайдами
-	struct prefab_instance {
-		res::tag source_prefab;
-		scn::prefab_desc::prefab_node local_overrides; // ЗАПОМИНАЕМ ОВЕРРАЙДЫ!
-	};
 
 	void assemble_merged_node(
 		scn::ecs_assembler& assembler,
@@ -26,10 +21,9 @@ namespace scn {
 		const scn::prefab_desc::prefab_node* override_node
 	);
 
-	// Вспомогательная функция для рекурсивного удаления ветки сущностей
 	void destroy_entity_hierarchy(entt::registry& reg, entt::entity entity) {
 		if (auto* children_comp = reg.try_get<scn::children_component>(entity)) {
-			auto children = children_comp->children; // Копируем, так как удаление изменит оригинал
+			auto children = children_comp->children;
 			for (auto child : children) {
 				destroy_entity_hierarchy(reg, child);
 			}
@@ -43,7 +37,6 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const boost::
 	auto parse_comp = [&] (const boost::json::value& val, std::string_view explicit_type) -> prefab_comp_node {
 		if (val.is_string()) {
 			return prefab_comp_node{
-				.type_name = std::string(explicit_type),
 				.parent_desc = desc_system.get_field_desc<desc::desc_base>(*this, val)
 			};
 		}
@@ -442,6 +435,13 @@ void scn::hot_reload_merged_node(
 			reg.emplace<scn::parent_component>(new_child, live_entity);
 			reg.emplace<scn::depth_level>(new_child);
 
+			if (reg.ctx().contains<ecs::event<scn::hierarchy_updated>>()) 
+				reg.ctx().get<ecs::event<scn::hierarchy_updated>>().emit(new_child);
+			else {
+				ecs::event<scn::hierarchy_updated> event; event.emit(new_child);
+				reg.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
+			}
+
 			if (auto* children_c = reg.try_get<scn::children_component>(live_entity)) {
 				children_c->children.push_back(new_child);
 			} else {
@@ -449,6 +449,7 @@ void scn::hot_reload_merged_node(
 			}
 
 			assemble_merged_node(assembler, reg, new_child, next_base, next_override);
+			processed_entities.insert(new_child);
 		}
 	}
 

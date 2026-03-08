@@ -1,14 +1,23 @@
 #pragma once
 #include "scn_level.h"
 #include "res_system.h"
+#include "scn_hot_reload_manager.h"
+#include <memory>
 
 namespace scn
 {
 	class level_manager
 	{
 	public:
-		level_manager(res::resource_system& resource, scn::ecs_assembler& assembler, ecs::system_factory& system_factory)
-			: m_resource(resource), m_assembler(assembler), m_system_factory(system_factory) {}
+		level_manager(res::resource_system& resource, 
+					  scn::ecs_assembler& assembler, 
+					  ecs::system_factory& system_factory, 
+					  std::shared_ptr<scn::hot_reload_manager> hot_manager = nullptr)
+			: m_resource(resource)
+			, m_assembler(assembler)
+			, m_system_factory(system_factory)
+			, active_lvl(hot_manager) 
+		{}
 		~level_manager() = default;
 		level_manager(const level_manager&) = delete;
 		level_manager(level_manager&&) = default;

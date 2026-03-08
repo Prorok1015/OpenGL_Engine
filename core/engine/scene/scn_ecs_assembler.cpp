@@ -25,13 +25,13 @@ namespace scn {
 			return;
 		}
 
-		bool is_structural = (actual_type == "prefab_desc" || actual_type == "world_desc" || actual_type == "level_desc");
+		bool is_structural = (it->second.category == spawner_category::structural);
 
 		if (parent_desc.is_valid() && !is_hot_reload && !is_structural) {
 			auto& tracker = reg.get_or_emplace<scn::component_tracker>(e);
 			tracker.tracked_components[std::string(name)] = scn::tracked_component_info{
 				actual_type,
-				parent_desc->get_tag(),
+				parent_desc.get_tag(),
 				overrides
 			};
 		}
@@ -66,22 +66,19 @@ namespace scn {
 		}
 	}
 
-	void ecs_assembler::trigger_hot_reload_for_component(entt::registry& reg, const res::tag& changed_desc_tag) const
+	void ecs_assembler::trigger_hot_reload_for_component(entt::registry& reg, const res::res_handle<desc::desc_base>& changed_desc) const
 	{
-		auto updated_desc_handle = res::get_system().require_sync<desc::desc_base>(changed_desc_tag);
-		if (!updated_desc_handle.is_ready()) return;
-
 		auto view = reg.view<scn::component_tracker>();
 		for (auto entity : view) {
 			auto& tracker = view.get<scn::component_tracker>(entity);
 
 			for (const auto& [comp_name, info] : tracker.tracked_components) {
-				if (info.source_desc == changed_desc_tag) {
+				if (info.source_desc == changed_desc.get_tag()) {
 					assemble_and_apply(
 						reg,
 						entity,
 						info.type_name,
-						updated_desc_handle,
+						changed_desc,
 						info.local_overrides,
 						comp_name,
 						true

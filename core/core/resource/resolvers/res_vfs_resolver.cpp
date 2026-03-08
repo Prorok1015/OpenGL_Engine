@@ -55,14 +55,18 @@ res::vfs_resolver::~vfs_resolver()
 
 std::optional<res::tag> res::vfs_resolver::path_mapper(const fs::path& path) const
 {
+	fs::path full_path = fs::absolute(path).lexically_normal();
 	auto stack = entries_stack;
-	while(!stack.empty())
-	{
-		fs::path full_entry = fs::absolute(stack.top());
-		fs::path full_path = fs::absolute(path);
-		if (full_path.string().find(full_entry.string()) == 0) {
-			std::string relative_path = full_path.string().substr(full_entry.string().length());
-			return res::tag(protocol, relative_path);
+
+	while (!stack.empty()) {
+		fs::path full_entry = fs::absolute(stack.top()).lexically_normal();
+
+		fs::path rel_path = full_path.lexically_relative(full_entry);
+
+		if (!rel_path.empty() && *rel_path.begin() != "..") {
+			std::string result_str = (rel_path == ".") ? "" : rel_path.generic_string();
+
+			return res::tag(protocol, result_str);
 		}
 
 		stack.pop();

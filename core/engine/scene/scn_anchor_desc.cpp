@@ -12,5 +12,5 @@ void scn::scene_anchor_desc::serialize(json::object& data) const
 
 void scn::assemble_scene_anchor(entt::registry& reg, entt::entity e, const scene_anchor_desc& desc, const std::string_view name)
 {
-	reg.emplace<scn::scene_anchor_component>(e);
+	reg.emplace_or_replace<scn::scene_anchor_component>(e);
 }

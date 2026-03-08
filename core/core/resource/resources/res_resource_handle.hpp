@@ -19,9 +19,14 @@ namespace core::res
         };
 
         res_handle() = default;
+        ~res_handle() = default;
         res_handle(std::shared_ptr<resource_control_block> block, const ::res::tag& tag)
             : m_block(std::move(block)), m_tag(tag) {
         }
+		res_handle(const res_handle<T>&) = default;
+		res_handle(res_handle<T>&&) = default;
+		res_handle<T>& operator= (const res_handle<T>&) = default;
+		res_handle<T>& operator= (res_handle<T>&&) = default;
 
         auto operator<=> (const res_handle<T>&) const noexcept = default;
 

@@ -3,6 +3,7 @@
 #include <string>
 #include <format>
 #include <boost/json.hpp>
+#include <algorithm>
 #include "engine_assert.h"
 
 namespace json = boost::json;
@@ -23,6 +24,7 @@ namespace res
 		explicit tag(const std::string_view tag_path)
 			: full_(tag_path)
 		{
+			std::ranges::replace(full_, '\\', '/');
 			protocol_ = { 0, full_.find_first_of("://") };
 			const std::size_t name_start_idx = full_.find_last_of("/\\");
 			const std::size_t path_start_idx = full_.find_first_of("/\\") + 1;

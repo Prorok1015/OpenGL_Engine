@@ -7,6 +7,7 @@
 #include "scn_ecs_assembler.h"
 #include "adapters/scn_worldwrap_adapter.h"
 #include "res_system.h"
+#include "level/scn_hot_reload_manager.h"
 
 void scn::scene_init(ds::app_data_storage& store)
 {
@@ -18,7 +19,9 @@ void scn::scene_init(ds::app_data_storage& store)
 	init_animation_system(sfactory);
 	init_transform_system(sfactory);
 	init_mouse_controller_system(sfactory);
-	store.construct<scn::level_manager>(resource, assembler, sfactory);
+	store.construct<scn::hot_reload_manager>(store.require<scn::ecs_assembler>(), resource);
+
+	store.construct<scn::level_manager>(resource, assembler, sfactory, store.require_shared<scn::hot_reload_manager>());
 	resource.registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, resource, desc_sys);
 }
 

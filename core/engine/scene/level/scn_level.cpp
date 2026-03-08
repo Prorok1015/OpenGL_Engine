@@ -5,7 +5,8 @@
 #include "ecs_component.h"
 #include <entt/fwd.hpp>
 
-scn::level::level()
+scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
+	: m_hot_reload_manager(std::move(hot_manager))
 {
     m_level_state.ctx().emplace<ecs::runtime_context_provider>(
         ecs::runtime_context_provider::getter_type{
@@ -41,6 +42,11 @@ scn::world& scn::level::create_world(const std::string_view type, uint32_t world
 
     // Set the WorldID in the world's own registry context
     w.state().ctx().emplace<ecs::world_salt>((size_t)world_id);
+
+    if (m_hot_reload_manager) {
+        m_hot_reload_manager->attach_registry(w.state());
+	}
+
     return w;
 }
 
@@ -75,6 +81,12 @@ void scn::level::load_world_from_desc(const world_desc& world_desc, ecs::system_
 
 void scn::level::clear()
 {
+	for (const auto& [name, world] : m_worlds) {
+        if (m_hot_reload_manager) {
+            m_hot_reload_manager->detach_registry(world->state());
+        }
+    }
+
     m_level_state.clear();
     m_worlds.clear();
     m_worlds_by_id.clear();
@@ -115,5 +127,10 @@ void scn::level::sync_point()
 
             sandbox->clear();
         }
+
     }
+
+    if (m_hot_reload_manager) {
+        m_hot_reload_manager->tick();
+	}
 }

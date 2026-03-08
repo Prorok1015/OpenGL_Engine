@@ -21,6 +21,11 @@ namespace scn {
 		std::unordered_map<std::string, tracked_component_info> tracked_components;
 	};
 
+	enum class spawner_category {
+		component,
+		structural 
+	};
+
 	class ecs_assembler {
 	public:
 		using desc_spawner_fn = std::function<void(
@@ -39,6 +44,7 @@ namespace scn {
 		struct spawner_pair {
 			desc_spawner_fn spawn;
 			desc_patcher_fn patch;
+			spawner_category category = spawner_category::component;
 		};
 
 		ecs_assembler(desc::desc_system& desc_sys)
@@ -51,8 +57,8 @@ namespace scn {
 		ecs_assembler(ecs_assembler&&) = default;
 		ecs_assembler& operator=(ecs_assembler&&) = default;
 
-		void register_desc_spawner(const std::string_view desc_type, desc_spawner_fn spawner, desc_patcher_fn patcher = nullptr) {
-			m_spawners[std::string{ desc_type }] = { std::move(spawner), std::move(patcher) };
+		void register_desc_spawner(const std::string_view desc_type, desc_spawner_fn spawner, desc_patcher_fn patcher = nullptr, spawner_category category = spawner_category::component) {
+			m_spawners[std::string{ desc_type }] = { std::move(spawner), std::move(patcher), category };
 		}
 
 		void unregister_desc_spawner(const std::string_view desc_type) {
@@ -67,7 +73,7 @@ namespace scn {
 			if (it != m_spawners.end() && it->second.spawn) {
 				it->second.spawn(reg, e, desc, name);
 			} else {
-				// egLOG("assembler/warning", "No spawner registered for desc type: {0}", desc.get_type());
+				egLOG("assembler/warning", "No spawner registered for desc type: {0}", desc.get_type());
 			}
 		}
 
@@ -79,7 +85,7 @@ namespace scn {
 								const std::string_view name,
 								bool is_hot_reload = false) const;
 
-		void trigger_hot_reload_for_component(entt::registry& reg, const res::tag& changed_desc_tag) const;
+		void trigger_hot_reload_for_component(entt::registry& reg, const res::res_handle<desc::desc_base>& changed_desc_tag) const;
 
 	private:
 		desc::desc_system& m_desc_sys;

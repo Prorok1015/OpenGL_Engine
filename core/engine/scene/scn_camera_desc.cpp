@@ -30,10 +30,10 @@ void scn::camera_desc::serialize(json::object& data) const
 
 void scn::assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name)
 {
-	reg.emplace<scn::renderable>(e);
-	reg.emplace<scn::camera_component>(e, scn::camera_component{ .fov = desc.fov(), .near_distance = desc.near_distance(), .far_distance = desc.far_distance()});
+	reg.emplace_or_replace<scn::renderable>(e);
+	reg.emplace_or_replace<scn::camera_component>(e, scn::camera_component{ .fov = desc.fov(), .near_distance = desc.near_distance(), .far_distance = desc.far_distance()});
 	
 	scn::mouse_controller_component controller{ .rotation = desc.rotation(), .position = desc.position() };
 	reg.emplace_or_replace<scn::local_transform>(e, glm::translate(controller.position) * glm::toMat4(glm::quat(controller.rotation)) * glm::translate(glm::mat4(1.0), glm::vec3(0, 0, controller.distance)));
-	reg.emplace<scn::mouse_controller_component>(e, controller);
+	reg.emplace_or_replace<scn::mouse_controller_component>(e, controller);
 }

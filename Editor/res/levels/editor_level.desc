@@ -16,37 +16,6 @@
 				}
 			},
 			"children": {
-				"robot": {
-					"__type": "prefab_desc",
-					"transform": {
-						"position": [ -2, 0, -2 ],
-						"rotation": [ 0, 0, 0 ],
-						"scale": [ 1, 1, 1 ]
-					},
-					"components": {
-						"prototype_robot": {
-							"__type": "skin_prototype_desc",
-							"__parent": "res://objects/robot/gen_robot.glb"
-						}
-					}
-				},
-				"simple robot": {
-					"transform": {
-						"position": [ 2, 0, 2 ],
-						"rotation": [ 0, 0, 0 ],
-						"scale": [ 1, 1, 1 ]
-					},
-					"components": {
-						"skin_prototype_desc": {
-							"__type": "skin_prototype_desc",
-							"__parent": "res://objects/robot/gen_robot.glb"
-						}
-					}
-				},
-				"simple robot 2": {
-						"__type": "skin_prototype_desc",
-						"__parent": "res://objects/robot/gen_robot.glb"
-				},
 				"camera_name": {
 					"__type": "camera_desc",
 					"transform": {

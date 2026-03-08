@@ -45,7 +45,11 @@ namespace {
                     depth = depths.get<0>(parent.parent).value + 1;
                 }
             }
-            depths.get<0>(ent).value = depth;
+			if (depths.contains(ent)) {
+                depths.get<0>(ent).value = depth;
+            } else {
+                depths.storage()->emplace<scn::depth_level>(ent, { depth });
+            }
         }
 
         event.clear();

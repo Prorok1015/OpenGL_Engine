@@ -293,7 +293,7 @@ namespace res
 
 			if (auto cached_res = try_get_cached_resource(tag)) {
 				return res_handle<RESOURCE>(
-					ds::polymorphic_cast<resource_handle_t<RESOURCE>>(cached_res),
+					ds::polymorphic_pointer_cast<resource_handle_t<RESOURCE>>(cached_res),
 					tag
 				);
 			}

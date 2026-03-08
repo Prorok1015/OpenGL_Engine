@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <entt/entity/fwd.hpp>
 #include "scn_world_desc.h"
+#include "scn_hot_reload_manager.h"
 
 namespace scn {
     inline constexpr size_t LEVEL_ID = ~0u;
@@ -13,7 +14,7 @@ namespace scn {
     class level 
     {
     public:
-        level();
+        level(std::shared_ptr<scn::hot_reload_manager> hot_manager);
 
         ~level() = default;
         level(const level &) = delete;
@@ -94,6 +95,7 @@ namespace scn {
 
         void sync_point();
     private:
+		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
         entt::registry m_level_state;
 
         float m_accumulator = 0.0f;
