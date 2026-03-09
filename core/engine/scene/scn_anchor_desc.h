@@ -19,8 +19,8 @@ namespace scn {
 			other_desc = *this;
 		}
 
-		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
-		virtual void serialize(json::object&) const override;
+		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override {};
+		virtual void serialize(json::object&) const override {};
 	};
 
 	void assemble_scene_anchor(entt::registry& reg, entt::entity e, const scene_anchor_desc& desc, const std::string_view name);

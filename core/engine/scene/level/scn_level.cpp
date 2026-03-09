@@ -37,7 +37,7 @@ void scn::level::update(std::chrono::duration<float> dt)
 
 scn::world& scn::level::create_world(const std::string_view type, uint32_t world_id)
 {
-    auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id));
+    auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id, type));
     m_worlds_by_id[world_id] = &w; // Register in ID map
 
     // Set the WorldID in the world's own registry context
@@ -52,6 +52,7 @@ scn::world& scn::level::create_world(const std::string_view type, uint32_t world
 
 void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler)
 {
+	m_current_level_tag = desc.get_tag();
 	size_t world_index = 0;
     for (const auto& world_desc : desc.get_worlds()) {
         auto& world = create_world(world_desc->get_name(), world_index++);
@@ -76,6 +77,18 @@ void scn::level::load_world_from_desc(const world_desc& world_desc, ecs::system_
     entt::entity e = world.state().create();
     assambler.spawn_from_desc(world.state(), e, world_desc, world_desc.get_name());
 
+    mark_systems_graphs_dirty();
+}
+
+void scn::level::load_systems_from_desc(const level_desc& desc, ecs::system_factory& system_factory)
+{
+    clear_organizer();
+    for (const auto& world_desc : desc.get_worlds()) {
+        for (const auto& system_name : world_desc->get_systems()) {
+            auto& world = get_world(world_desc->get_name());
+            system_factory.create_system(system_name, world.state(), organizer());
+        }
+    }
     mark_systems_graphs_dirty();
 }
 

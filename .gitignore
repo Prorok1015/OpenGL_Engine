@@ -13,6 +13,7 @@ build/
 .vscode/
 .cache/
 .claude/
+lib3dparty/natvis/
 CMakeSettings.json
 Makefile
 

@@ -453,7 +453,7 @@ void scn::hot_reload_merged_node(
 		}
 	}
 
-	if (children_comp) {
+	if (children_comp && !processed_entities.empty()) {
 		auto& children_vec = children_comp->children;
 		for (auto it = children_vec.begin(); it != children_vec.end(); ) {
 			if (processed_entities.find(*it) == processed_entities.end()) {

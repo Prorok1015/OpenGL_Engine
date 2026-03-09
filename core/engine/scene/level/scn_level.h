@@ -38,9 +38,11 @@ namespace scn {
 
         scn::world& create_world(const std::string_view type, uint32_t world_id);
 
-        scn::world& get_world(const std::string &type) {
-            ASSERT_MSG(m_worlds.contains(type), "level doesn't contain this type of world");
-            return *m_worlds[type];
+		std::size_t get_world_count() const { return m_worlds.size(); }
+
+        scn::world& get_world(const std::string_view type) {
+            ASSERT_MSG(m_worlds.contains(std::string{ type }), "level doesn't contain this type of world");
+            return *m_worlds[std::string{ type }];
         }
 
         scn::world& get_world(uint32_t id) const {
@@ -58,13 +60,24 @@ namespace scn {
 
 		void load_world_from_desc(const world_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
 
+		void load_systems_from_desc(const level_desc& desc, ecs::system_factory& desc_system);
+
         void mark_systems_graphs_dirty() {
             m_fixed_graph = m_fixed_organizer.graph();
             m_variable_graph = m_organizer.graph();
         }
 
+        void clear_organizer()
+        {
+            m_organizer.clear();
+            m_fixed_organizer.clear();
+            m_fixed_graph.clear();
+            m_variable_graph.clear();
+		}
+
         void clear();
 
+		const res::tag& get_tag() const { return m_current_level_tag; }
     private:
         void run_graph(std::vector<entt::organizer::vertex> &graph) {
             for (size_t top = 0; top < graph.size(); ++top) {
@@ -95,6 +108,7 @@ namespace scn {
 
         void sync_point();
     private:
+		res::tag m_current_level_tag;
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
         entt::registry m_level_state;
 

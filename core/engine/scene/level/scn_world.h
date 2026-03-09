@@ -13,8 +13,8 @@ namespace scn
 	class world
 	{
 	public:
-		world(uint32_t id)
-			: m_id(id) {
+		world(uint32_t id, std::string_view name)
+			: m_id(id), m_name(name) {
 		}
 		~world() = default;
 		world& operator=(const world&) = default;
@@ -25,6 +25,7 @@ namespace scn
 		entt::registry& state() { return m_state; }
 		entt::registry const& state() const { return m_state; }
 		uint32_t get_id() const { return m_id; }
+		const std::string_view get_name() const { return m_name; }
 	private:
 		uint32_t m_id;
 		std::string m_name;

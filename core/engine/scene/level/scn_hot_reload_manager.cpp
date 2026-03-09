@@ -87,8 +87,12 @@ namespace scn {
 		for (const auto& tag : tags_to_reload) {
 			auto changed_desc_handle = m_res_sys.require_sync<desc::desc_base>(tag);
 
-			if (!changed_desc_handle.is_ready()) {
+			if (changed_desc_handle.has_error()) {
 				continue;
+			}
+
+			if (m_external_watched_tags.contains(tag)) {
+				m_external_watched_tags.at(tag)(tag);
 			}
 
 			for (auto* reg_ptr : m_registries) {
