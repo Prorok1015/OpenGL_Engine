@@ -16,7 +16,7 @@ namespace scn {
     public:
         level(std::shared_ptr<scn::hot_reload_manager> hot_manager);
 
-        ~level() = default;
+        ~level();
         level(const level &) = delete;
         level(level &&) noexcept = default;
         level &operator=(const level &) = delete;

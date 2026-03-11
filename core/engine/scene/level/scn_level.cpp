@@ -14,6 +14,11 @@ scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
         });
 }
 
+scn::level::~level()
+{
+    clear();
+}
+
 void scn::level::update(std::chrono::duration<float> dt)
 {
     m_accumulator += dt.count();

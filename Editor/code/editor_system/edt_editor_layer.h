@@ -1,6 +1,8 @@
 #pragma once
 #include "gui_layer_interface.h"
 #include "gui_menu_layout.h"
+#include "edt_dockspace.h"
+#include "edt_panel_manager.h"
 #include <chrono>
 
 namespace edt {
@@ -43,7 +45,12 @@ namespace edt {
 			m_manager.set_check_callback(path, callback);
 		}
 
+		panel_manager& get_panel_manager() { return m_panel_manager; }
+		dockspace& get_dockspace() { return m_dockspace; }
+
 	private:
 		gui::menu_layout_manager m_manager;
+		dockspace m_dockspace;
+		panel_manager m_panel_manager;
 	};
 }

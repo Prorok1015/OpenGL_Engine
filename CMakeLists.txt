@@ -18,6 +18,6 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/unittests/unit_tests.
 
 add_executable(unit_tests unittests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE engine Boost::unit_test_framework)
+target_link_libraries(unit_tests PRIVATE editor_system PRIVATE engine PRIVATE config_system PRIVATE Boost::unit_test_framework)
 
 add_test(NAME unit_tests COMMAND unit_tests)

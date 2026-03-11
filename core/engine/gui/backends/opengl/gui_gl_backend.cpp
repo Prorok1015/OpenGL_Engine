@@ -30,24 +30,7 @@ void gui::gl::gl_imgui_backend::new_frame()
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    ImGuiID dockspace_id = ImGui::GetID("MainDockView");
-    ImGui::DockSpaceOverViewport(dockspace_id, ImGui::GetMainViewport());
-    if (is_first_init)
-    {
-        is_first_init = false;
-        ImGui::DockBuilderRemoveNode(dockspace_id);
-        ImGui::DockBuilderAddNode(dockspace_id);
-        ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->Size);
-        ImGuiID right = 0;
-        auto left = ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.2f, nullptr, &right);
-        ImGuiID down = 0;
-        auto up = ImGui::DockBuilderSplitNode(left, ImGuiDir_Up, 0.05f, nullptr, &down);
-
-        ImGui::DockBuilderDockWindow("Common stats", up);
-        ImGui::DockBuilderDockWindow("Observer", down);
-        ImGui::DockBuilderDockWindow("Scene", right);
-        ImGui::DockBuilderFinish(dockspace_id);
-    }
+    // DockSpace управляется на уровне редактора (edt_dockspace)
 }
 
 void gui::gl::gl_imgui_backend::render()

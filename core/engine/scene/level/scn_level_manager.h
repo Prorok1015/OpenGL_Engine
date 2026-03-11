@@ -19,7 +19,7 @@ namespace scn
 			, active_lvl(hot_manager)
 			, m_hot_reload_manager(hot_manager)
 		{}
-		~level_manager() = default;
+		~level_manager();
 		level_manager(const level_manager&) = delete;
 		level_manager(level_manager&&) = default;
 		level_manager& operator=(const level_manager&) = delete;

@@ -16,6 +16,11 @@
 #include "scn_renderer.h"
 #include "edt_editor_layer.h"
 #include "level/scn_level_manager.h"
+#include "edt_scene_hierarchy_panel.h"
+#include "edt_inspector_panel.h"
+#include "edt_viewport_panel.h"
+#include "edt_console_panel.h"
+#include "edt_asset_browser_panel.h"
 
 namespace edt
 {
@@ -218,6 +223,12 @@ namespace edt
 		std::shared_ptr<entt::registry> registry_sp;
 		std::shared_ptr<scn::renderer_3d> renderer_sp;
 		std::shared_ptr<edt::editor_layer> editor_layer;
+
+		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
+		std::shared_ptr<inspector_panel>       m_inspector_panel;
+		std::shared_ptr<viewport_panel>        m_viewport_panel;
+		std::shared_ptr<console_panel>         m_console_panel;
+		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 	};
 
 

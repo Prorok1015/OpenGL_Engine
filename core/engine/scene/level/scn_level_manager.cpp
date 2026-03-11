@@ -1,6 +1,9 @@
 #include "scn_level_manager.h"
 #include "scn_level_desc.h"
 
+scn::level_manager::~level_manager()
+{}
+
 void scn::level_manager::update(std::chrono::duration<float> dt)
 {
 	active_lvl.update(dt);

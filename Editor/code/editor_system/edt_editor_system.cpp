@@ -132,13 +132,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	gui_system.push_layer(editor_layer);
 
 	editor_layer->register_tool("File/Import...", [this] { return show_file_dialog(); });
-	editor_layer->register_tool("File/Open Level...", [this] { return load_level(); });
-
 	editor_layer->register_tool("Window/Toolbar", [this] { return show_toolbar(); });
-	editor_layer->set_tool_checked("Window/Toolbar", true);
-
 	editor_layer->register_tool("Window/Scene", [this] { return show_scene(); });
-	editor_layer->set_tool_checked("Window/Scene", true);
 	editor_layer->register_tool("Editor/Test JSON Window", [this] {
 		bool is_open = true;
 		if (ImGui::Begin("Test JSON Window", &is_open)) {
@@ -197,15 +192,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	editor_layer->set_tool_checked("Editor/Test ECS window", false);
 
 	editor_layer->register_tool("Editor/Crossing Game", [this] { return show_crossing_game_window(); });
-	editor_layer->set_tool_checked("Editor/Crossing Game", true);
-
-	editor_layer->register_implicit("EDITOR/IMPL/SHOW_WEP", [this] { return show_web(); });
+	editor_layer->set_tool_checked("Editor/Crossing Game", false);
 
 	editor_layer->register_tool("Editor/Clear", [this] { return show_clear_cache(); });
 	editor_layer->register_tool("Window/Textures", [this] { return show_textures(); });
 	editor_layer->set_tool_checked("Window/Textures", false);
 	editor_layer->register_tool("Editor/Draw web", [this] { return true; });
-	editor_layer->set_tool_checked("Editor/Draw web", is_show_web);
+	editor_layer->set_tool_checked("Editor/Draw web", false);
 
 
 	m_lvl_manager = data.require_shared<scn::level_manager>();
@@ -219,6 +212,35 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 	ecs_input = data.require_shared<inp::ecs_input_manager>();
+
+	// Создаём панели и добавляем в panel_manager
+	m_hierarchy_panel    = std::make_shared<scene_hierarchy_panel>();
+	m_inspector_panel    = std::make_shared<inspector_panel>();
+	m_viewport_panel     = std::make_shared<viewport_panel>();
+	m_console_panel      = std::make_shared<console_panel>();
+	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
+
+	m_viewport_panel->set_renderer(renderer_sp);
+	m_viewport_panel->set_input_manager(input);
+	m_viewport_panel->set_ecs_input_manager(ecs_input);
+
+	m_hierarchy_panel->set_on_entity_selected([this](ecs::entity ent) {
+		selected_entity = ent;
+		m_inspector_panel->set_selected_entity(ent);
+		m_viewport_panel->set_selected_entity(ent);
+	});
+
+	auto& pm = editor_layer->get_panel_manager();
+	pm.add_panel(m_hierarchy_panel);
+	pm.add_panel(m_inspector_panel);
+	pm.add_panel(m_viewport_panel);
+	pm.add_panel(m_console_panel);
+	pm.add_panel(m_asset_browser_panel);
+
+	auto& ds = editor_layer->get_dockspace();
+	ds.set_on_open_level([this] {
+		editor_layer->register_implicit("edt/load_level", [this] { return load_level(); });
+	});
 }
 
 void mark_node_for_animation_stop(entt::registry* registry_sp, entt::entity ent)
@@ -753,6 +775,9 @@ bool edt::editor_system::load_level()
 				auto& world = lvl.get_world("3d_scene");
 				registry_sp = std::shared_ptr<entt::registry>(&world.state(), [] (entt::registry*) {});
 				renderer_sp->set_current_registry(registry_sp);
+				m_hierarchy_panel->set_registry(registry_sp);
+				m_inspector_panel->set_registry(registry_sp);
+				m_viewport_panel->set_registry(registry_sp);
 			}
 		}
 	}
