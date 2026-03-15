@@ -14,14 +14,10 @@ gui::gui_system& gui::get_system()
 gui::gui_system::gui_system(gui::imgui_backend_interface* backend_)
 	: backend(backend_)
 {
-	m_renderer = std::make_shared<gui::renderer>(backend);
-	m_renderer->render_event += [this] { render_menues(); };
-	rnd::get_system().activate_renderer(m_renderer);
 }
 
 gui::gui_system::~gui_system()
 {
-	rnd::get_system().deactivate_renderer(m_renderer);
 }
 
 void gui::gui_system::render_menues()
@@ -52,4 +48,11 @@ void gui::gui_system::set_is_input_enabled(bool enable)
 	}
 
 	is_input_enabled = enable;
+}
+
+void gui::gui_system::render()
+{
+	backend->new_frame();
+	render_menues();
+	backend->render();
 }

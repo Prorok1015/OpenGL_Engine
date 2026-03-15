@@ -39,8 +39,10 @@ namespace ecs
             len = storage.size();
         }
 
-        void operator()(typename entt::entt_traits<entt::entity>::entity_type& in_use) {
-            in_use = static_cast<typename entt::entt_traits<entt::entity>::entity_type>(storage.size());
+        template<typename Type>
+            requires (std::is_same_v<Type, typename entt::entt_traits<entt::entity>::entity_type> && !std::is_same_v<Type, std::size_t>)
+        void operator()(Type& in_use) {
+            in_use = static_cast<Type>(storage.size());
         }
 
         void operator()(entt::entity& ent) {

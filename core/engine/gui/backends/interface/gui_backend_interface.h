@@ -10,6 +10,7 @@ namespace gui
         virtual ~imgui_backend_interface() {}
 
         virtual void init(void* context = nullptr) = 0;
+        virtual void set_dpi_scale(float scale) {}
         virtual void new_frame() = 0;
         virtual void render() = 0;
         virtual void shutdown() = 0;

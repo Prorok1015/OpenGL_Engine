@@ -19,6 +19,14 @@ void gui::gl::gl_imgui_backend::init(void* context)
 
     ImGui::StyleColorsDark();
 
+    // Apply OS DPI scale so the UI looks correct on high-DPI monitors
+    if (m_dpi_scale > 1.f) {
+        ImFontConfig font_cfg;
+        font_cfg.SizePixels = floorf(13.f * m_dpi_scale);
+        io.Fonts->AddFontDefault(&font_cfg);
+        ImGui::GetStyle().ScaleAllSizes(m_dpi_scale);
+    }
+
     ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(context), true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
     // TODO: change to load from memory

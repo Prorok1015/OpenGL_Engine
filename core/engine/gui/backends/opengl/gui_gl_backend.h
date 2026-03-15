@@ -6,11 +6,14 @@ namespace gui::gl
     class gl_imgui_backend : public gui::imgui_backend_interface {
     public:
         virtual void init(void* context) override;
+        void set_dpi_scale(float scale) override { m_dpi_scale = scale; }
         virtual void new_frame() override;
         virtual void render() override;
         virtual void shutdown() override;
         virtual void set_display_size(int width, int height) override;
         virtual void set_input(float mouseX, float mouseY, bool mouseButtons[3], float mouseWheel) override;
         virtual ImTextureID get_imgui_texture_from_texture(rnd::driver::texture_interface* txm) override;
+    private:
+        float m_dpi_scale = 1.f;
     };
 }

@@ -42,7 +42,7 @@ mat3 getTBNMatrix(mat4 worldMesh)
 void main()
 {
     mat4 localMesh = getMeshMatrix();
-    mat4 worldMesh = uWorldModel * localMesh;
+    mat4 worldMesh = localMesh;
 
     PS.Color = aColor;
     PS.UV = aTexCoords;

@@ -38,10 +38,12 @@ namespace gui
 		gui::imgui_backend_interface* get_backend_interface() const {
 			return backend;
 		}
+
+		void render();
+
 	private:
 		bool is_show = true;
 		bool is_input_enabled = true;
-		std::shared_ptr<gui::renderer> m_renderer;
 		std::vector<std::shared_ptr<gui::layer_interface>> layers;
 		gui::imgui_backend_interface* backend = nullptr;
 	};

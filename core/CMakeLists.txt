@@ -9,7 +9,7 @@ if(NOT ENGINE_BOOST_NO_LIB)
     URL_MD5 893b5203b862eb9bbd08553e24ff146a
     DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
-    set(BOOST_INCLUDE_LIBRARIES json hana program_options asio test)
+    #set(BOOST_INCLUDE_LIBRARIES json hana program_options asio test)
     FetchContent_MakeAvailable(Boost)
     file(GLOB_RECURSE BOOST_NATVIS_FILES "${boost_SOURCE_DIR}/libs/*.natvis")
     message(STATUS "Found Boost Natvis files: ${BOOST_NATVIS_FILES}")

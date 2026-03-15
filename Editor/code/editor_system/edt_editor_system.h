@@ -13,7 +13,7 @@
 #include "scn_skinning_prototype_desc.h"
 #include "ds/ds_rtree.h"
 #include "ds/ds_store.hpp"
-#include "scn_renderer.h"
+
 #include "edt_editor_layer.h"
 #include "level/scn_level_manager.h"
 #include "edt_scene_hierarchy_panel.h"
@@ -22,115 +22,7 @@
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
 
-namespace edt
-{
-	class editor_test_field_desc : public desc::desc_base
-	{
-	public:
-		using base_type = desc::desc_base;
-
-		editor_test_field_desc() = default;
-		virtual ~editor_test_field_desc() = default;
-
-		virtual void copy_to(desc_base& other) const override
-		{
-			editor_test_field_desc& other_desc = static_cast<editor_test_field_desc&>(other);
-			other_desc = *this;
-		}
-
-		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
-		{
-			/*if (data.contains("__parent")) {
-				res::tag parent_tag{ data.at("__parent").as_string() };
-				*this = *desc_system.get_desc<editor_test_field_desc>(parent_tag);
-			}*/
-
-			if (data.contains("field_string"))
-				field_string = data.at("field_string").as_string();
-		}
-
-		virtual void serialize(json::object& data) const override
-		{
-		}
-
-		std::string field_string;
-	};
-
-	class editor_test_sub_field_desc : public editor_test_field_desc
-	{
-		using base_type = editor_test_field_desc::base_type;
-	};
-
-	class editor_test_parent_desc : public desc::desc_base
-	{
-	public:
-		using base_type = desc::desc_base;
-		editor_test_parent_desc() = default;
-		virtual ~editor_test_parent_desc() = default;
-		virtual void deserialize(desc::desc_system& res_system, const json::object& data) override
-		{
-			if (data.contains("just_number"))
-				just_number = data.at("just_number").as_int64();
-			if (data.contains("just_double"))
-				just_double = data.at("just_double").as_double();
-		}
-
-		virtual void serialize(json::object& data) const override
-		{
-		}
-
-		virtual void copy_to(desc_base& other) const override
-		{
-			editor_test_parent_desc& other_desc = static_cast<editor_test_parent_desc&>(other);
-			other_desc = *this;
-		}
-
-		int just_number = 0;
-		double just_double = 0.0;
-	};
-
-	class editor_test_desc : public editor_test_parent_desc
-	{
-	public:
-		using base_type = editor_test_parent_desc::base_type;
-		editor_test_desc() = default;
-		virtual ~editor_test_desc() = default;
-		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override
-		{
-			editor_test_parent_desc::deserialize(desc_system, data);
-
-			if (data.contains("just_string"))
-				just_string = data.at("just_string").as_string();
-
-			if (data.contains("field")) {
-				field = desc_system.get_field_desc<editor_test_field_desc>(*this, data.at("field"));
-			}
-		}
-
-		std::string just_string;
-		res::res_handle<editor_test_field_desc> field;
-	};
-
-	struct crossing_context
-	{
-		struct direction_hint
-		{
-			float aircraft_speed = 10.f;
-			float ship_speed = 5.f;
-			int nearest_ship_index = -1;
-			float nearest_ship_distance = std::numeric_limits<float>::max();
-		};
-		direction_hint hint;
-		glm::vec2 aircraft;
-		glm::vec2 aircraft_dir;
-		ds::fixed_vector<glm::vec2, 10> ships;
-		ds::fixed_vector<glm::vec2, 10> ships_dirs;
-		ds::fixed_vector<bool, 10> alive_ships;
-		bool is_initialized = false;
-		bool is_paused = true;
-		bool is_aircraft_placed = false;
-	};
-
+namespace edt {
 	class editor_system
 	{
 	public:
@@ -144,17 +36,12 @@ namespace edt
 
 		//TODO change to renderer
 		bool load_level();
-		bool show_crossing_game_window();
 		bool show_web();
 		bool show_scene();
-		bool show_ecs_test();
-		bool show_textures();
 		void show_tree_items(ecs::entity ent);
 		bool show_clear_cache();
-		void draw_manipulator(const glm::vec2& pos, const glm::vec2& size);
 		void draw_gizmo(const glm::vec2& pos, const glm::vec2& size, const glm::mat4& view, const glm::mat4& proj);
 		void draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable);
-		bool init_ecs_test();
 	private:
 		std::vector<std::string> cameras_list
 		{
@@ -206,11 +93,9 @@ namespace edt
 		ecs::entity world_anchor;
 		ecs::entity backpackent;
 
-		ecs::entity test_json_selected_material = entt::null;
 		ecs::entity selected_entity = entt::null;
 
 		bool is_show_web = true;
-		bool is_inited_ecs_test = false;
 		std::shared_ptr<edt::input_manager> input;
 		std::shared_ptr<inp::ecs_input_manager> ecs_input;
 		edt::file_dialog file_dialog;
@@ -219,9 +104,8 @@ namespace edt
 		ds::rtree_q<uint32_t, ds::bbox> rtree;
 		desc::desc_system& desc_system;
 		std::weak_ptr<scn::level_manager> m_lvl_manager;
-		crossing_context crossingcontext;
 		std::shared_ptr<entt::registry> registry_sp;
-		std::shared_ptr<scn::renderer_3d> renderer_sp;
+
 		std::shared_ptr<edt::editor_layer> editor_layer;
 
 		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
@@ -229,6 +113,16 @@ namespace edt
 		std::shared_ptr<viewport_panel>        m_viewport_panel;
 		std::shared_ptr<console_panel>         m_console_panel;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
+
+		// Scene Save/Load
+		void new_level();
+		bool save_level();
+
+		res::tag                 m_level_tag;
+		std::string              m_world_name;
+		std::vector<std::string> m_world_systems;
+		bool                     m_save_dialog_open = false;
+		char                     m_save_path_buf[512] = {};
 	};
 
 

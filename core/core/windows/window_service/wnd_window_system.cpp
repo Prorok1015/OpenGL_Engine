@@ -133,6 +133,11 @@ wnd::window_system::window_system()
     active_window = make_window()->get_id();
     context = std::make_unique<rnd::driver::gl::render_context>((GLADloadproc)glfwGetProcAddress);
     imgui_backend = std::make_unique<gui::gl::gl_imgui_backend>();
+    {
+        float xscale = 1.f;
+        glfwGetWindowContentScale(static_cast<GLFWwindow*>(active_window.internal_id), &xscale, nullptr);
+        imgui_backend->set_dpi_scale(xscale);
+    }
     imgui_backend->init(active_window.internal_id);
     auto is_exist = std::filesystem::exists(imgui_backend->get_settings_filename());
     imgui_backend->set_initial_layout_by_default(!is_exist);

@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
 #include <future>
-#include "scn_renderer.h"
+
 #include "wnd_window.h"
 #include "scn_camera_controller_system.h"
 #include "inp_ecs_input_manager.h"
@@ -23,10 +23,10 @@ namespace gs
 
 		void reload_shaders();
 
-		std::shared_ptr<scn::renderer_3d> get_renderer() const { return renderer; }
+
 	private:
 		desc::desc_system& desc_system;
-		std::shared_ptr<scn::renderer_3d> renderer;
+
 	};
 
 	game_system& get_system();

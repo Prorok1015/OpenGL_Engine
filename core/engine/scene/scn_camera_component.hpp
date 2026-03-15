@@ -24,6 +24,8 @@ namespace scn
 		float near_distance = 0.0001f;
 		float far_distance = 1000.f;
 		viewport m_viewport;
+
+		res::tag texture;
 	};
 
 }

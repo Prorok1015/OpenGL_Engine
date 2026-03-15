@@ -9,11 +9,6 @@ namespace components {
 	{
 		auto& desc_system = data.require<desc::desc_system>();
 		auto& editor = data.construct<edt::editor_system>(desc_system);
-
-		desc_system.register_desc<edt::editor_test_parent_desc>("editor_parent");
-		desc_system.register_desc<edt::editor_test_desc>("editor_test");
-		desc_system.register_desc<edt::editor_test_field_desc>("editor_field_desc");
-		desc_system.register_desc<edt::editor_test_sub_field_desc>("editor_test_sub");
 		data.construct<app::app_loop_service_interface, edt::edt_loop_service>();
 	}
 

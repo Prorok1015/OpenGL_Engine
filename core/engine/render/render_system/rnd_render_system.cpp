@@ -154,3 +154,12 @@ void rnd::render_system::render() const
 		}
 	}
 }
+
+void rnd::render_system::render_frame(frame_context& context) const
+{
+	if (!drv) return;
+
+	for (auto& pass : render_passes) {
+		pass->execute(context, *drv);
+	}
+}

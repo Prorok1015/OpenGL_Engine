@@ -6,6 +6,9 @@
 #include "gs_game_system.h"
 #include "wnd_window_system.h"
 #include "level/scn_level_manager.h"
+#include "level/scn_render_data_extractor.h"
+#include "gui_system.h"
+#include "rnd_frame_assembler.h"
 
 edt::edt_loop_service::edt_loop_service()
 	: stop_requested(false)
@@ -33,7 +36,13 @@ void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 
 	storage.require<scn::level_manager>().update(duration);
 
-	rnd::get_system().render();
+	rnd::frame_context context;
+
+	storage.require<rnd::frame_assembler>().build_frame(context);
+
+	storage.require<rnd::render_system>().render_frame(context);
+
+	storage.require<gui::gui_system>().render();
 
 	window_system_ref.process_windows();
 	stop_requested = window_system_ref.is_stop_running();

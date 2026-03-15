@@ -8,7 +8,10 @@
 #include "cfg_api.h"
 #include "adapters/scn_model_importer_adapter.h"
 #include "desc/desc_system.h"
-#include "scene/scn_renderer.h"
+
+#include "rnd_frame_assembler.h"
+#include "level/scn_render_data_extractor.h"
+#include "skinning/rnd_skinning_manager.h"
 
 CFG_VAR_EXT_PATH(cfg_res_path);
 
@@ -33,14 +36,11 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	win_service.get_active_window()->set_logo(images);
 	win_service.get_active_window()->set_title("Snake Editor");
 
-	data.construct<scn::skinning_manager>();
-
 	data.require<edt::editor_system>().init(data);
 }
 
 void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
-	data.destruct<scn::skinning_manager>();
 	editor_term(data);
 }

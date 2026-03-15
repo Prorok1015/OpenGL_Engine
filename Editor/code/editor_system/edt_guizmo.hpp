@@ -10,12 +10,12 @@ namespace edt::imgui {
 			ImDrawList* mDrawList = nullptr;
 		} config;
 
-		bool is_hit_circle(const glm::vec2& center, const float radius, const ImVec2& point)
+		inline bool is_hit_circle(const glm::vec2& center, const float radius, const ImVec2& point)
 		{
 			return (point.x - center.x) * (point.x - center.x) + (point.y - center.y) * (point.y - center.y) <= radius * radius;
 		}
 
-		void draw_positive_line(const glm::vec2& center, const glm::vec2& axis, const ImU32 color, const float radius, const float thickness, const char* text, const bool selected)
+		inline void draw_positive_line(const glm::vec2& center, const glm::vec2& axis, const ImU32 color, const float radius, const float thickness, const char* text, const bool selected)
 		{
 			const auto end = ImVec2{ center.x + axis.x, center.y + axis.y };
 			const auto im_center = ImVec2{ center.x, center.y };
@@ -29,7 +29,7 @@ namespace edt::imgui {
 			else details::config.mDrawList->AddText(textPosX, IM_COL32_BLACK, text);
 		}
 
-		void draw_negative_line(const glm::vec2& center, const glm::vec2& axis, const ImU32 color, const float radius, const bool selected)
+		inline void draw_negative_line(const glm::vec2& center, const glm::vec2& axis, const ImU32 color, const float radius, const bool selected)
 		{
 			const auto end = ImVec2{ center.x - axis.x, center.y - axis.y };
 			details::config.mDrawList->AddCircleFilled(end, radius, color);
@@ -55,19 +55,19 @@ namespace edt::imgui {
 		ImU32 hover_circle_color = IM_COL32(100, 100, 100, 130);
 	} style;
 
-	void set_view_area(const float x, const float y, const float size)
+	inline void set_view_area(const float x, const float y, const float size)
 	{
 		details::config.pos.x = x;
 		details::config.pos.y = y;
 		details::config.size = size;
 	}
 
-	void set_draw_list(ImDrawList* drawlist = nullptr)
+	inline void set_draw_list(ImDrawList* drawlist = nullptr)
 	{
 		details::config.mDrawList = drawlist ? drawlist : ImGui::GetWindowDrawList();
 	}
 
-	bool draw_gizmo(const glm::mat4& view, const glm::mat4 proj, const bool interactive = true)
+	inline bool draw_gizmo(const glm::mat4& view, const glm::mat4 proj, const bool interactive = true)
 	{
 		const float size = details::config.size;
 		const float half_size = size * 0.5f;

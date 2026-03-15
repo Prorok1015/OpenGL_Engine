@@ -23,7 +23,7 @@ rnd::driver::gl::buffer::~buffer()
 void rnd::driver::gl::buffer::set_data(const void* data, std::size_t size, BUFFER_BINDING binding)
 {
 	if (data && isAllocatedMemory) {
-		ASSERT_MSG(size < allocated_size, "You trying set more info then was allocated!");
+		ASSERT_MSG(size <= allocated_size, "You trying set more info then was allocated!");
 		glNamedBufferSubData(buffer_id, 0, size, data);
 		CHECK_GL_ERROR();
 	} else {

@@ -7,7 +7,7 @@
 
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
-#include "scn_skinning_manager.h"
+#include "skinning/rnd_skinning_manager.h"
 #include "ecs_component.h"
 
 gs::game_system* p_game_system = nullptr;
@@ -19,7 +19,7 @@ gs::game_system& gs::get_system()
 	return *p_game_system;
 }
 
-std::unique_ptr<scn::skinning_manager> skin_manager;
+std::unique_ptr<rnd::skinning_manager> skin_manager;
 
 gs::game_system::game_system(desc::desc_system& d)
 	: desc_system(d)

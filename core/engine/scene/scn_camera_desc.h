@@ -26,12 +26,15 @@ namespace scn {
 		float far_distance() const { return m_far_distance; }
 		glm::vec3 rotation() const { return glm::radians(m_rotation); }
 		glm::vec3 position() const { return m_position; }
+		res::tag texture() const { return m_texture; }
+
 	private:
 		float m_fov = 90.f;
 		float m_near_distance = 0.0001f;
 		float m_far_distance = 1000.f;
 		glm::vec3 m_rotation{ 0.f };
 		glm::vec3 m_position{ 0.f };
+		res::tag m_texture;
 	};
 
 	void assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name);
