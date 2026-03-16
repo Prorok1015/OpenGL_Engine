@@ -1,0 +1,14 @@
+{
+    "__type": "world_desc",
+    "name": "world",
+    "systems": [
+        "inp::update_input_state",
+        "scn::update_camera_matrix_system",
+        "scn::depth_system",
+        "scn::transform_system"
+    ],
+    "components": {
+        "anchor": { "__type": "anchor_desc" }
+    },
+    "children": {}
+}

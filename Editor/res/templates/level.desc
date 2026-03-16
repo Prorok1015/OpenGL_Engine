@@ -1,0 +1,22 @@
+{
+    "__type": "level_desc",
+    "name": "new_level",
+    "worlds": [
+        {
+            "__type": "world_desc",
+            "name": "3d_scene",
+            "systems": [
+                "inp::update_input_state",
+                "scn::update_camera_matrix_system",
+                "scn::depth_system",
+                "scn::transform_system"
+            ],
+            "components": {
+                "anchor": { "__type": "anchor_desc" }
+            },
+            "children": {
+                "Directional Light": { "__type": "directional_light_desc" }
+            }
+        }
+    ]
+}

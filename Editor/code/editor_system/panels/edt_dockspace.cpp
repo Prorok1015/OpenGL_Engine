@@ -47,13 +47,21 @@ namespace edt
 		if (!ImGui::BeginMenuBar())
 			return;
 
+		// Ctrl+S shortcut (works regardless of menu focus)
+		if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+			if (m_on_quick_save)
+				m_on_quick_save();
+			else if (m_on_save_level)
+				m_on_save_level();
+		}
+
 		if (ImGui::BeginMenu("File"))
 		{
-			if (ImGui::MenuItem("New Level")    && m_on_new_level)   m_on_new_level();
-			if (ImGui::MenuItem("Open Level...") && m_on_open_level)  m_on_open_level();
-			if (ImGui::MenuItem("Save Level")   && m_on_save_level)  m_on_save_level();
+			if (ImGui::MenuItem("New Level")     && m_on_new_level)   m_on_new_level();
+			if (ImGui::MenuItem("Open Level...")  && m_on_open_level)  m_on_open_level();
+			if (ImGui::MenuItem("Save Level", "Ctrl+S") && m_on_save_level)  m_on_save_level();
 			ImGui::Separator();
-			if (ImGui::MenuItem("Exit")         && m_on_exit)        m_on_exit();
+			if (ImGui::MenuItem("Exit")          && m_on_exit)        m_on_exit();
 			ImGui::EndMenu();
 		}
 

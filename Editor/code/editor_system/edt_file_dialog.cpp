@@ -99,9 +99,9 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
                         continue;
 
                     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.3f, 0.7f, 0.5f));
-                    bool is_selected = selected_path == entry.path().string();
+                    bool is_selected = selected_path == entry.path();
                     if (ImGui::Selectable((ICON_FA_FOLDER " " + filename).c_str(), is_selected, 0, ImVec2(0, item_height))) {
-                        selected_path = entry.path().string();
+                        selected_path = entry.path();
                     }
                     
                     // Handle double click to enter directory
@@ -161,7 +161,7 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
 		std::string selected_path_str = selected_path.string();
-        ImGui::InputText("##selected", selected_path_str.data(), selected_path_str.length(), ImGuiInputTextFlags_ReadOnly);
+        ImGui::InputText("##selected", &selected_path_str, ImGuiInputTextFlags_ReadOnly);
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
 

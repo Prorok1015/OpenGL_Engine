@@ -81,7 +81,8 @@ namespace edt
 	// -------------------------------------------------------------------------
 	inline glm::vec3 draw_translate_axis(
 		ImDrawList* dl, ImVec2 origin, ImVec2 axis_1unit,
-		glm::vec3 world_axis, ImU32 color, int btn_id)
+		glm::vec3 world_axis, ImU32 color, int btn_id,
+		bool* committed = nullptr)
 	{
 		auto ax = compute_axis(origin, axis_1unit, GIZMO_ARROW_PX);
 		if (!ax.valid) return {};
@@ -89,6 +90,7 @@ namespace edt
 		ImGui::SetCursorScreenPos({ax.tip.x - GIZMO_HANDLE_R, ax.tip.y - GIZMO_HANDLE_R});
 		ImGui::PushID(btn_id);
 		ImGui::InvisibleButton("##ax", {GIZMO_HANDLE_R * 2.f, GIZMO_HANDLE_R * 2.f});
+		if (ImGui::IsItemDeactivated() && committed) *committed = true;
 		bool hovered = ImGui::IsItemHovered();
 		bool active  = ImGui::IsItemActive();
 		ImGui::PopID();
@@ -115,7 +117,8 @@ namespace edt
 	// -------------------------------------------------------------------------
 	inline glm::vec3 draw_scale_axis(
 		ImDrawList* dl, ImVec2 origin, ImVec2 axis_1unit,
-		glm::vec3 world_axis, ImU32 color, int btn_id)
+		glm::vec3 world_axis, ImU32 color, int btn_id,
+		bool* committed = nullptr)
 	{
 		auto ax = compute_axis(origin, axis_1unit, GIZMO_ARROW_PX);
 		if (!ax.valid) return {};
@@ -123,6 +126,7 @@ namespace edt
 		ImGui::SetCursorScreenPos({ax.tip.x - GIZMO_HANDLE_R, ax.tip.y - GIZMO_HANDLE_R});
 		ImGui::PushID(btn_id);
 		ImGui::InvisibleButton("##sc", {GIZMO_HANDLE_R * 2.f, GIZMO_HANDLE_R * 2.f});
+		if (ImGui::IsItemDeactivated() && committed) *committed = true;
 		bool hovered = ImGui::IsItemHovered();
 		bool active  = ImGui::IsItemActive();
 		ImGui::PopID();
@@ -150,7 +154,10 @@ namespace edt
 		const glm::mat4& view,
 		const glm::mat4& proj,
 		float vp_x, float vp_y, float vp_w, float vp_h,
-		int mode)
+		int mode,
+		entt::entity& inout_rotate_ent,
+		int& inout_active_ring,
+		bool* committed = nullptr)
 	{
 		if (!reg.all_of<scn::local_transform>(ent))
 			return false;
@@ -197,9 +204,9 @@ namespace edt
 		// ----- TRANSLATE -----
 		if (mode == 0) {
 			glm::vec3 world_delta{};
-			world_delta += draw_translate_axis(dl, screen_origin, sx, world_x, GIZMO_X, 200);
-			world_delta += draw_translate_axis(dl, screen_origin, sy, world_y, GIZMO_Y, 201);
-			world_delta += draw_translate_axis(dl, screen_origin, sz, world_z, GIZMO_Z, 202);
+			world_delta += draw_translate_axis(dl, screen_origin, sx, world_x, GIZMO_X, 200, committed);
+			world_delta += draw_translate_axis(dl, screen_origin, sy, world_y, GIZMO_Y, 201, committed);
+			world_delta += draw_translate_axis(dl, screen_origin, sz, world_z, GIZMO_Z, 202, committed);
 			if (world_delta != glm::vec3(0)) {
 				// world_delta is in world space; lt.local[3] is in parent-local space.
 				// Convert: local_delta = inverse(parent_world) * world_delta
@@ -272,14 +279,14 @@ namespace edt
 			}
 
 			// Single InvisibleButton covering the outer ring + hit margin.
-			// We manage which ring is "active" ourselves using a static variable
+			// We manage which ring is "active" ourselves using caller-owned state
 			// keyed by the selected entity, so switching entities resets the state.
-			static entt::entity s_rotate_ent = entt::null;
-			static int          s_active_ring = -1;
+			
+			
 
-			if (s_rotate_ent != ent) {
-				s_rotate_ent  = ent;
-				s_active_ring = -1;
+			if (inout_rotate_ent != ent) {
+				inout_rotate_ent  = ent;
+				inout_active_ring = -1;
 			}
 
 			float btn_r = GIZMO_RING_PX + 2 * GIZMO_RING_STEP + GIZMO_RING_HIT;
@@ -288,8 +295,10 @@ namespace edt
 			ImGui::InvisibleButton("##rotall", {btn_r * 2.f, btn_r * 2.f});
 			const bool btn_active  = ImGui::IsItemActive();
 			const bool btn_clicked = ImGui::IsItemClicked();
-			if (ImGui::IsItemDeactivated())
-				s_active_ring = -1;
+			if (ImGui::IsItemDeactivated()) {
+				inout_active_ring = -1;
+				if (committed) *committed = true;
+			}
 			ImGui::PopID();
 
 			// On first click: pick the ring closest to the mouse (if within hit radius)
@@ -297,13 +306,13 @@ namespace edt
 				int best = 0;
 				for (int r = 1; r < 3; ++r)
 					if (ring_dist[r] < ring_dist[best]) best = r;
-				s_active_ring = (ring_dist[best] < GIZMO_RING_HIT) ? best : -1;
+				inout_active_ring = (ring_dist[best] < GIZMO_RING_HIT) ? best : -1;
 			}
 
 			// Draw all rings
 			for (int r = 0; r < 3; ++r) {
 				bool near   = (ring_dist[r] < GIZMO_RING_HIT);
-				bool active = (btn_active && s_active_ring == r);
+				bool active = (btn_active && inout_active_ring == r);
 				ImU32 col   = (near || active) ? GIZMO_HOVER : rings[r].color;
 				float lw    = active ? GIZMO_LINE_W * 2.f : GIZMO_LINE_W;
 				for (int i = 0; i < RING_SEGS; ++i)
@@ -311,8 +320,8 @@ namespace edt
 			}
 
 			// Apply rotation when dragging
-			if (btn_active && s_active_ring >= 0) {
-				int r = s_active_ring;
+			if (btn_active && inout_active_ring >= 0) {
+				int r = inout_active_ring;
 
 				// Screen-space tangent at the ring point closest to the mouse
 				int closest_seg = 0;
@@ -350,9 +359,9 @@ namespace edt
 			// must be model-space unit vectors {1,0,0}/{0,1,0}/{0,0,1}.
 			// The screen projection (sx/sy/sz) still uses world axes for correct display.
 			glm::vec3 scale_delta{};
-			scale_delta += draw_scale_axis(dl, screen_origin, sx, {1,0,0}, GIZMO_X, 220);
-			scale_delta += draw_scale_axis(dl, screen_origin, sy, {0,1,0}, GIZMO_Y, 221);
-			scale_delta += draw_scale_axis(dl, screen_origin, sz, {0,0,1}, GIZMO_Z, 222);
+			scale_delta += draw_scale_axis(dl, screen_origin, sx, {1,0,0}, GIZMO_X, 220, committed);
+			scale_delta += draw_scale_axis(dl, screen_origin, sy, {0,1,0}, GIZMO_Y, 221, committed);
+			scale_delta += draw_scale_axis(dl, screen_origin, sz, {0,0,1}, GIZMO_Z, 222, committed);
 			if (scale_delta != glm::vec3(0)) {
 				lt.local = lt.local * glm::scale(glm::mat4(1.f), glm::vec3(1.f) + scale_delta);
 				modified = true;

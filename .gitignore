@@ -6,6 +6,7 @@ imgui.ini
 **/x86
 **/.vs
 Editor/sandbox/
+Editor/res/objects/
 out/
 bin/
 build/
