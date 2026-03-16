@@ -1,9 +1,10 @@
 #pragma once
 #include "edt_panel_base.h"
-#include "ecs_entity.h"
-#include <entt/entt.hpp>
+#include "level/scn_world_desc.h"
 #include <functional>
 #include <memory>
+#include <vector>
+#include <string>
 
 namespace edt
 {
@@ -12,29 +13,49 @@ namespace edt
 	public:
 		scene_hierarchy_panel();
 
-		void set_registry(std::shared_ptr<entt::registry> registry);
-		void set_on_entity_selected(std::function<void(ecs::entity)> cb);
-		ecs::entity get_selected_entity() const { return m_selected; }
-		void set_selected_entity(ecs::entity ent) { m_selected = ent; }
+		void set_world_desc(scn::world_desc* desc);
+		void set_on_node_selected(std::function<void(scn::prefab_desc::prefab_node*)> cb);
+		void set_on_delete_node(std::function<void(const std::string& name)> cb);
+		void set_on_create_node(std::function<void(const std::string& type_name)> cb);
+		void set_on_rename_node(std::function<void(const std::string& old_name, const std::string& new_name)> cb);
+		void set_on_duplicate_node(std::function<void(const std::string& name)> cb);
+
+		scn::prefab_desc::prefab_node* get_selected_node() const { return m_selected_node; }
+		void set_selected_node(scn::prefab_desc::prefab_node* node) { m_selected_node = node; }
+
+		// Multi-world support
+		void set_world_names(std::vector<std::string> names, int active_idx = 0);
+		void set_on_world_changed(std::function<void(int)> cb) { m_on_world_changed = std::move(cb); }
+		void set_on_create_world(std::function<void(const std::string&)> cb) { m_on_create_world = std::move(cb); }
 
 	protected:
 		void on_render() override;
 
 	private:
-		// Returns display name for an entity ("ComponentIcon Name" or "Entity #N")
-		std::string get_display_name(ecs::entity ent) const;
-		// Returns a short type-prefix like "[M]", "[C]", "[L]", "[A]" etc.
-		const char* get_type_prefix(ecs::entity ent) const;
-		// Draw one node and recurse into its children.
-		void draw_entity_node(ecs::entity ent);
-		// Recursively destroy an entity and all its descendants, cleaning parent links.
-		void destroy_entity(ecs::entity ent);
+		const char* get_type_prefix(const scn::prefab_desc::prefab_node& node) const;
+		bool node_matches_filter(const scn::prefab_desc::prefab_node& node, const std::string& lower_filter) const;
+		void draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter);
+		void draw_world_tabs();
 
-		std::shared_ptr<entt::registry> m_registry;
-		std::function<void(ecs::entity)> m_on_selected;
-		ecs::entity m_selected       = entt::null;
-		ecs::entity m_rename_entity  = entt::null;
+		scn::world_desc* m_world_desc = nullptr;
+		scn::prefab_desc::prefab_node* m_selected_node = nullptr;
+
+		std::function<void(scn::prefab_desc::prefab_node*)>          m_on_node_selected;
+		std::function<void(const std::string&)>                      m_on_delete_node;
+		std::function<void(const std::string&)>                      m_on_create_node;
+		std::function<void(const std::string&, const std::string&)>  m_on_rename_node;
+		std::function<void(const std::string&)>                      m_on_duplicate_node;
+		std::function<void(int)>                                      m_on_world_changed;
+		std::function<void(const std::string&)>                      m_on_create_world;
+
 		char m_filter[128]           = {};
 		char m_rename_buf[256]       = {};
+		scn::prefab_desc::prefab_node* m_rename_node = nullptr;
+
+		// World tabs
+		std::vector<std::string> m_world_names;
+		int                      m_world_idx        = 0;
+		bool                     m_force_tab_switch = false;
+		char                     m_new_world_buf[128] = {};
 	};
 }

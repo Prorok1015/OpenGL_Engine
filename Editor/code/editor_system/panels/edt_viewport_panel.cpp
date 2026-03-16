@@ -4,26 +4,33 @@
 #include "res_tag.h"
 #include "scn_camera_component.hpp"
 #include "scn_model.h"
+#include "eng_transform_3d.hpp"
 #include "../edt_guizmo.hpp"
 #include <imgui.h>
 
 namespace edt
 {
-	viewport_panel::viewport_panel()
+	static const res::tag s_editor_cam_tag = res::tag(res::tag::memory, "__editor_camera_rt");
+
+	viewport_panel::viewport_panel(rnd::render_system& rnd, gui::gui_system& gui)
 		: panel_base("viewport", "Viewport")
+		, m_rnd(rnd)
+		, m_gui(gui)
 	{
 		m_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 	}
 
 
 
-	void viewport_panel::set_registry(std::shared_ptr<entt::registry> registry)
+	void viewport_panel::set_registry_getter(std::function<entt::registry*()> getter)
 	{
-		m_registry = std::move(registry);
+		m_get_registry = std::move(getter);
 	}
 
 	void viewport_panel::on_render()
 	{
+		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
+
 		render_toolbar();
 
 		// Capture the exact image start position (after toolbar) for gizmo projection
@@ -36,13 +43,14 @@ namespace edt
 
 		// Update camera viewport so the renderer creates a correctly-sized render target
 		glm::mat4 cam_view(1.f), cam_proj(1.f);
-		if (m_registry && size.x > 0 && size.y > 0) {
-			for (auto ent : m_registry->view<scn::camera_component>()) {
-				auto& cam = m_registry->get<scn::camera_component>(ent);
+		if (reg && size.x > 0 && size.y > 0) {
+			for (auto ent : reg->view<scn::camera_component>()) {
+				auto& cam = reg->get<scn::camera_component>(ent);
+				if (cam.texture != s_editor_cam_tag) continue;
 				cam.m_viewport.size = glm::ivec2(static_cast<int>(size.x), static_cast<int>(size.y));
 
-				if (m_registry->all_of<scn::local_transform>(ent))
-					cam_view = glm::inverse(m_registry->get<scn::local_transform>(ent).local);
+				if (reg->all_of<scn::local_transform>(ent))
+					cam_view = glm::inverse(reg->get<scn::local_transform>(ent).local);
 				float aspect = size.x / size.y;
 				cam_proj = glm::perspective(
 					glm::radians(cam.fov), aspect, cam.near_distance, cam.far_distance);
@@ -61,11 +69,10 @@ namespace edt
 		if (m_input)
 			m_input->set_input_area(rect, true);
 
-		// Display the scene render target texture
-		static const res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
-		auto* texture = rnd::get_system().get_texture_manager().find(color_rt_tag);
+		// Display the editor camera render target texture
+		auto* texture = m_rnd.get_texture_manager().find(s_editor_cam_tag);
 		if (texture) {
-			auto* backend = gui::get_system().get_backend_interface();
+			auto* backend = m_gui.get_backend_interface();
 			ImTextureID tex_id = backend->get_imgui_texture_from_texture(texture);
 			// UV (0,1)→(1,0) flips Y for OpenGL convention
 			ImGui::Image(tex_id, size, ImVec2(0, 1), ImVec2(1, 0));
@@ -89,10 +96,15 @@ namespace edt
 			m_ecs_input->set_input_area(rect);
 
 		// Interactive transform gizmo (drawn on top of scene image)
-		if (m_registry && m_selected != entt::null && m_registry->valid(m_selected))
-			render_transform_gizmo(cam_view, cam_proj);
+		if (reg && m_selected != entt::null && reg->valid(m_selected))
+			render_transform_gizmo(*reg, cam_view, cam_proj);
 
-		render_orientation_gizmo();
+		// Re-fetch: on_transform_committed inside the gizmo may have triggered
+		// reload_world(), which destroys the old scn::world and its registry.
+		reg = m_get_registry ? m_get_registry() : nullptr;
+
+		if (reg)
+			render_orientation_gizmo(*reg);
 		render_fps_overlay();
 	}
 
@@ -114,22 +126,20 @@ namespace edt
 		ImGui::Separator();
 	}
 
-	void viewport_panel::render_orientation_gizmo()
+	void viewport_panel::render_orientation_gizmo(entt::registry& reg)
 	{
-		if (!m_registry)
-			return;
-
-		// Find the first camera with a world transform to extract view/proj matrices
+		// Find the editor camera to extract view/proj matrices
 		glm::mat4 view(1.f);
 		glm::mat4 proj(1.f);
 		bool found_camera = false;
 
-		for (auto ent : m_registry->view<scn::camera_component>()) {
-			const auto& cam = m_registry->get<scn::camera_component>(ent);
+		for (auto ent : reg.view<scn::camera_component>()) {
+			const auto& cam = reg.get<scn::camera_component>(ent);
+			if (cam.texture != s_editor_cam_tag) continue;
 			if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1)
 				continue;
-			if (m_registry->all_of<scn::local_transform>(ent)) {
-				const auto& lt = m_registry->get<scn::local_transform>(ent);
+			if (reg.all_of<scn::local_transform>(ent)) {
+				const auto& lt = reg.get<scn::local_transform>(ent);
 				view = glm::inverse(lt.local);
 			}
 			float aspect = static_cast<float>(cam.m_viewport.size.x) /
@@ -153,14 +163,29 @@ namespace edt
 		edt::imgui::draw_gizmo(view, proj);
 	}
 
-	void viewport_panel::render_transform_gizmo(const glm::mat4& view, const glm::mat4& proj)
+	void viewport_panel::render_transform_gizmo(entt::registry& reg, const glm::mat4& view, const glm::mat4& proj)
 	{
+		bool committed = false;
 		edt::draw_transform_gizmo(
-			*m_registry, m_selected,
+			reg, m_selected,
 			view, proj,
 			m_image_pos.x, m_image_pos.y,
 			m_viewport_size.x, m_viewport_size.y,
-			m_gizmo_op);
+			m_gizmo_op, m_rotate_ent, m_active_ring, &committed);
+
+		if (committed && m_on_transform_committed && reg.valid(m_selected)) {
+			std::string name;
+			if (reg.all_of<scn::name_component>(m_selected))
+				name = reg.get<scn::name_component>(m_selected).name;
+
+			if (!name.empty() && reg.all_of<scn::local_transform>(m_selected)) {
+				const auto& lt = reg.get<scn::local_transform>(m_selected);
+				eng::transform3d tr{ lt.local };
+				m_on_transform_committed(name, tr.get_pos(), tr.get_angles_degrees(), tr.get_scale());
+				// The callback may trigger reload_world() — `reg` is dangling from here on.
+				return;
+			}
+		}
 	}
 
 	void viewport_panel::render_fps_overlay()

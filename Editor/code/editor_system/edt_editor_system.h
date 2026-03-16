@@ -1,20 +1,19 @@
 #pragma once
+#include <functional>
 #include "common.h"
-#include "scn_model.h"
 #include "ecs_entity.h"
-#include "rnd_render_system.h"
 #include "edt_input_manager.h"
 #include "inp_ecs_input_manager.h"
-#include "inp_input_system.h"
 #include "edt_file_dialog.h"
 
 #include "desc_base.hpp"
 #include "desc_system.h"
-#include "scn_skinning_prototype_desc.h"
-#include "ds/ds_rtree.h"
 #include "ds/ds_store.hpp"
+#include "res_system.h"
+#include <boost/json.hpp>
 
 #include "edt_editor_layer.h"
+#include "edt_editor_camera.h"
 #include "level/scn_level_manager.h"
 #include "edt_scene_hierarchy_panel.h"
 #include "edt_inspector_panel.h"
@@ -22,89 +21,38 @@
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
 
+namespace scn { class ecs_assembler; }
+namespace ecs { class system_factory; }
+namespace res { class resource_system; }
+namespace rnd { class render_system; }
+namespace gui { class gui_system; }
+
 namespace edt {
 	class editor_system
 	{
 	public:
-		editor_system(desc::desc_system& desc_system);
+		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
 		~editor_system();
 
 		void init(ds::app_data_storage& inp_sys);
 
-		bool show_toolbar();
 		bool show_file_dialog();
 
 		//TODO change to renderer
 		bool load_level();
-		bool show_web();
-		bool show_scene();
-		void show_tree_items(ecs::entity ent);
-		bool show_clear_cache();
-		void draw_gizmo(const glm::vec2& pos, const glm::vec2& size, const glm::mat4& view, const glm::mat4& proj);
-		void draw_scene_image(const glm::vec2& pos, const glm::vec2& contentRegionAvailable);
 	private:
-		std::vector<std::string> cameras_list
-		{
-			"Main", "Second"
-		};
-		int current_camera = 0;
-
-		std::vector<std::string> render_modes_list
-		{
-			"TRIANGLE", "TRIANGLE_STRIP", "LINE_LOOP", "LINE_STRIP", "LINE", "POINT"
-		};
-
-		std::unordered_map<std::string, rnd::RENDER_MODE> mmap{
-				{render_modes_list[0], rnd::RENDER_MODE::TRIANGLE},
-				{render_modes_list[1], rnd::RENDER_MODE::TRIANGLE_STRIP},
-				{render_modes_list[2], rnd::RENDER_MODE::LINE_LOOP},
-				{render_modes_list[3], rnd::RENDER_MODE::LINE_STRIP},
-				{render_modes_list[4], rnd::RENDER_MODE::LINE},
-				{render_modes_list[5], rnd::RENDER_MODE::POINT},
-		};
-		int current_render_mode = 0;
-
 		std::vector<res::tag> imported_models_list;
 
-		std::vector<std::string> models_list
-		{
-			"objects/anim_cube_f/tail_cube.glb",
-			"objects/robot/gen_robot.glb",
-			"objects/anim_cube_f/bird_cube.glb",
-			"objects/anim_cube_f/jump_cube.glb",
-			"objects/anim_cube_f/anim_cube.glb",
-			"objects/getaur/scene.gltf",
-			"objects/train/scene.gltf",
-			"objects/fsb/scene.gltf",
-			"objects/backpack/backpack.obj",
-			"objects/luke/Luke_01.fbx",
-			"objects/flower/source/flower.fbx",
-			"objects/helicopter/source/helicopter Space ship.glb",
-			"objects/Cheeseburger.glb",
-		};
-		int current_model = 1;
-
-		char buf[64] = "objects/";
-
-		glm::vec4 clear_color {1};
-		ecs::entity editor_web;
-		ecs::entity light;
-		ecs::entity sky;
-		ecs::entity world_anchor;
-		ecs::entity backpackent;
-
-		ecs::entity selected_entity = entt::null;
-
-		bool is_show_web = true;
 		std::shared_ptr<edt::input_manager> input;
 		std::shared_ptr<inp::ecs_input_manager> ecs_input;
 		edt::file_dialog file_dialog;
-		
-		std::shared_ptr< scn::skinning_prototype_desc> backpack;
-		ds::rtree_q<uint32_t, ds::bbox> rtree;
-		desc::desc_system& desc_system;
+		desc::desc_system&   desc_system;
+		res::resource_system& m_res;
+		rnd::render_system&   m_rnd;
+		gui::gui_system&      m_gui;
 		std::weak_ptr<scn::level_manager> m_lvl_manager;
-		std::shared_ptr<entt::registry> registry_sp;
+		scn::ecs_assembler*     m_assembler = nullptr;
+		ecs::system_factory*    m_sfactory  = nullptr;
 
 		std::shared_ptr<edt::editor_layer> editor_layer;
 
@@ -114,15 +62,58 @@ namespace edt {
 		std::shared_ptr<console_panel>         m_console_panel;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 
+		// Multi-world
+		void switch_to_world(int idx);
+		void create_world(const std::string& name);
+
+		std::vector<std::string> m_world_names;
+		int                      m_active_world_idx = 0;
+
 		// Scene Save/Load
 		void new_level();
 		bool save_level();
+		void quick_save_level();
+		bool show_exit_confirm();
 
-		res::tag                 m_level_tag;
-		std::string              m_world_name;
-		std::vector<std::string> m_world_systems;
-		bool                     m_save_dialog_open = false;
-		char                     m_save_path_buf[512] = {};
+		res::tag                                   m_editor_tag;
+		std::string                                m_level_name;
+		std::vector<scn::world_desc>               m_world_descs;
+		scn::world_desc& active_world_desc() { return m_world_descs[m_active_world_idx]; }
+		const scn::world_desc& active_world_desc() const { return m_world_descs[m_active_world_idx]; }
+		void on_editor_world_reloaded();
+
+		// Level serialization — single source of truth for the level JSON schema
+		boost::json::object load_desc_template(const std::string& filename);
+		boost::json::object build_level_json() const;
+		bool                write_level_to_disk(const std::string& rel_path);
+		void populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res);
+
+		// Desc-driven scene editing (EPIC-09)
+		void serialize_and_push();
+		void create_entity(const std::string& type_name);
+		void delete_entity(const std::string& name);
+		void duplicate_entity(const std::string& name);
+		void on_transform_committed(const std::string& name, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale);
+		void sync_ecs_transforms_to_desc();
+
+		// Desc helpers
+		std::string make_unique_key(const std::string& base_name) const;
+		scn::prefab_desc::prefab_node* find_node_by_name(std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& name);
+		bool remove_node_by_name(std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& name);
+		std::vector<scn::prefab_desc::prefab_node>* find_parent_children(std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& name);
+
+		// Editor camera (EPIC-11)
+		editor_camera_state m_camera_state;
+		void save_editor_camera_state(entt::registry& reg);
+		void inject_editor_camera(entt::registry& reg);
+
+		res::tag                                   m_level_tag;
+		std::vector<std::vector<std::string>>      m_worlds_systems_list;
+		bool                                       m_save_dialog_open = false;
+		char                                       m_save_path_buf[512] = {};
+		bool                                       m_is_dirty = false;
+		std::function<void()>                      m_exit_action;
+		std::function<void()>                      m_confirm_action;
 	};
 
 

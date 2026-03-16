@@ -1,46 +1,36 @@
 #pragma once
 #include "edt_panel_base.h"
-#include "ecs_entity.h"
-#include <entt/entt.hpp>
+#include "level/scn_prefab_desc.h"
 #include <functional>
 #include <memory>
 #include <string>
-#include <vector>
+#include <unordered_map>
 
 namespace edt
 {
 	class inspector_panel : public panel_base
 	{
 	public:
-		using component_draw_fn = std::function<void(entt::registry&, entt::entity)>;
-
-		struct component_creator
-		{
-			std::string name;
-			std::function<void(entt::registry&, entt::entity)> create_fn;
-		};
+		using desc_comp_renderer = std::function<bool(scn::prefab_desc::prefab_comp_node&)>;
 
 		inspector_panel();
 
-		void set_registry(std::shared_ptr<entt::registry> registry);
-		void set_selected_entity(ecs::entity ent) { m_selected = ent; }
+		void set_selected_node(scn::prefab_desc::prefab_node* node);
+		void set_on_node_changed(std::function<void()> cb);
 
-		// Register a renderer that checks for a component and draws its UI.
-		// fn is called every frame for the selected entity — it should guard with all_of<T> internally.
-		void add_component_renderer(component_draw_fn fn);
-
-		// Register an entry in the "Add Component" popup.
-		void add_component_creator(std::string name, std::function<void(entt::registry&, entt::entity)> fn);
+		// Register a renderer for a specific component type_name.
+		// Renderer returns true if the component was modified.
+		void add_desc_renderer(const std::string& type_name, desc_comp_renderer renderer);
 
 	protected:
 		void on_render() override;
 
 	private:
+		void render_generic_json(boost::json::object& obj);
 		void draw_add_component_popup();
 
-		std::shared_ptr<entt::registry> m_registry;
-		ecs::entity m_selected = entt::null;
-		std::vector<component_draw_fn> m_renderers;
-		std::vector<component_creator> m_creators;
+		scn::prefab_desc::prefab_node* m_selected_node = nullptr;
+		std::function<void()> m_on_node_changed;
+		std::unordered_map<std::string, desc_comp_renderer> m_desc_renderers;
 	};
 }

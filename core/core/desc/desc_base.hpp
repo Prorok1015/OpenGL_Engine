@@ -16,7 +16,7 @@ namespace desc
 		friend desc_system;
 	public:
 		desc_base() = default;
-		desc_base(const desc_base&) {};
+		desc_base(const desc_base& other) : type(other.type) {};
 		desc_base(desc_base&&) = default;
 		desc_base& operator=(desc_base&&) = default;
 		virtual ~desc_base() = default;
@@ -27,7 +27,8 @@ namespace desc
 
 		desc_base& operator=(const desc_base& other)
 		{
-			// HACK: to not copy res::tag m_tag
+			// Do not copy m_tag — resource identity is per-instance.
+			type = other.type;
 			return *this;
 		}
 
