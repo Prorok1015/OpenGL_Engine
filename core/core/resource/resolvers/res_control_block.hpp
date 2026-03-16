@@ -5,6 +5,9 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <memory>
+#include "engine_assert.h"
+#include "resources/res_resource_base.h"
 
 namespace core::res
 {
@@ -44,7 +47,7 @@ namespace core::res
                 std::this_thread::yield();
             }
 
-            ASSERT_MSG(!has_error(), "Resource loading error: {0}");
+            ASSERT_MSG(!has_error(), "Resource loading error");
         }
 
         T& get() {
@@ -84,4 +87,8 @@ namespace core::res
             on_ready_callbacks.clear();
         }
     };
+
+    // Unified non-typed resource control block: all resource types share this block type,
+    // data is retrieved via polymorphic_pointer_cast<T> on the stored shared_ptr<resource_entry>.
+    using res_resource_block = res_control_block<std::shared_ptr<::res::resource_entry>>;
 }

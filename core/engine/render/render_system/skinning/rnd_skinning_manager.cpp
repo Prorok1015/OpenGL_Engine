@@ -29,8 +29,9 @@ rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_tmp_triangles_hig
 
 std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::skinning_manager::create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver)
 {
-     if (!m_weights_provider) return nullptr;
-     auto columns = m_weights_provider(skin);
+     auto it = m_weights_registry.find(skin);
+     if (it == m_weights_registry.end()) return nullptr;
+     auto columns = it->second;
 
      uint32_t numColumns = static_cast<uint32_t>(columns.size());
 

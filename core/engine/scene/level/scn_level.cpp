@@ -85,6 +85,37 @@ void scn::level::load_world_from_desc(const world_desc& world_desc, ecs::system_
     mark_systems_graphs_dirty();
 }
 
+void scn::level::reload_world(
+	const std::string_view name,
+	const world_desc& desc,
+	ecs::system_factory& sf,
+	scn::ecs_assembler& assambler)
+{
+	ASSERT_MSG(m_worlds.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
+
+	uint32_t old_id = m_worlds[std::string{name}]->get_id();
+
+	if (m_hot_reload_manager) {
+		m_hot_reload_manager->detach_registry(m_worlds[std::string{name}]->state());
+	}
+
+	m_worlds_by_id.erase(old_id);
+	m_worlds.erase(std::string{name});
+
+	clear_organizer();
+
+	auto& w = create_world(name, old_id);
+
+	for (const auto& sys_name : desc.get_systems()) {
+		sf.create_system(sys_name, w.state(), organizer());
+	}
+
+	entt::entity e = w.state().create();
+	assambler.spawn_from_desc(w.state(), e, desc, name);
+
+	mark_systems_graphs_dirty();
+}
+
 void scn::level::load_systems_from_desc(const level_desc& desc, ecs::system_factory& system_factory)
 {
     clear_organizer();

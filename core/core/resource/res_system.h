@@ -29,9 +29,7 @@ namespace res
 	{
 	public:
 		static std::string get_absolut_path(const tag& tag);
-		template<class T>
-		using resource_handle_t = core::res::res_control_block<std::shared_ptr<T>>;
-		using resource_handle = core::res::res_control_block_base;
+		using resource_handle = core::res::res_resource_block;
 		using cache_entry = std::weak_ptr<resource_handle>;
 
 		using protocol = std::string_view;
@@ -182,7 +180,7 @@ namespace res
 		void warmup(const res::tag& tag)
 		{
 			res::res_handle<T> res = require<T>(tag);
-			res.then([this, res, tag](auto _) {
+			res.then([this, res, tag](auto&) {
 				if (res.has_error()) return;
 				push_resource_to_strong_cache(tag, res.get_control_block());
 			});
@@ -190,8 +188,7 @@ namespace res
 
 		template<class RESOURCE>
 		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
-
-			auto block = std::make_shared<resource_handle_t<RESOURCE>>();
+			auto block = std::make_shared<resource_handle>();
 			block->set_ready(std::make_shared<RESOURCE>(std::forward<RESOURCE>(resource)));
 			push_resource_to_strong_cache(tag, block);
 			push_resource_to_cache(tag, block);
@@ -250,7 +247,7 @@ namespace res
 		}
 
 		template<typename T, bool is_sync>
-		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle_t<T>> final_cb) {
+		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle> final_cb) {
 			auto& resolver = m_resolvers[tag.protocol()];
 
 			auto raw_data_block = resolver->resolve(tag);
@@ -267,7 +264,7 @@ namespace res
 					ASSERT_MSG(adapter, "No adapter found for resource type!");
 
 					final_cb->status = core::res::res_status::processing;
-					auto parsed_obj = ds::polymorphic_cast<T>(adapter->deserialize(tag, raw_data_block->data));
+					auto parsed_obj = adapter->deserialize(tag, raw_data_block->data);
 
 					final_cb->set_ready(std::move(parsed_obj));
 				}
@@ -292,12 +289,9 @@ namespace res
 			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
 
 			if (auto cached_res = try_get_cached_resource(tag)) {
-				return res_handle<RESOURCE>(
-					ds::polymorphic_pointer_cast<resource_handle_t<RESOURCE>>(cached_res),
-					tag
-				);
+				return res_handle<RESOURCE>(cached_res, tag);
 			}
-			auto final_cb = std::make_shared<resource_handle_t<RESOURCE>>();
+			auto final_cb = std::make_shared<resource_handle>();
 			push_resource_to_cache(tag, final_cb);
 			start_loading_t<RESOURCE, is_sync>(tag, final_cb);
 			return res_handle<RESOURCE>(final_cb, tag);

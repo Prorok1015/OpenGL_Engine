@@ -16,6 +16,7 @@
 #include "scn_skinning_desc.h"
 #include "scn_skinning_prototype_desc.h"
 #include "scn_skybox_desc.h"
+#include "skinning/rnd_skinning_manager.h"
 
 extern gs::game_system *p_game_system;
 
@@ -79,12 +80,14 @@ void engine::game::game_init(ds::app_data_storage &data) {
         proto.load_prototype(reg, e);
       });
 
+  auto& skm = data.require<rnd::skinning_manager>();
   assembler.register_desc_spawner(
       "skin_prototype_desc",
-      [](entt::registry &reg, entt::entity e, const desc::desc_base &base_data,
+      [&skm](entt::registry &reg, entt::entity e, const desc::desc_base &base_data,
          const std::string_view name) {
-        const auto &proto = static_cast<const scn::prototype_desc &>(base_data);
+        const auto &proto = static_cast<const scn::skinning_prototype_desc &>(base_data);
         proto.load_prototype(reg, e);
+        skm.register_weights(proto.get_tag(), proto.get_2d_array_bonesids_weights());
       });
 
   assembler.register_desc_spawner(

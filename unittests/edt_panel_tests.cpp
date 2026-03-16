@@ -2,7 +2,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_panel_manager.h"
 #include "edt_scene_hierarchy_panel.h"
-#include <entt/entt.hpp>
+#include "level/scn_world_desc.h"
 
 // Mock-панель: наследует panel_base, НЕ вызывает ImGui
 struct mock_panel : public edt::panel_base
@@ -78,50 +78,69 @@ BOOST_AUTO_TEST_SUITE_END()
 // ─────────────────────────────────────────────
 BOOST_AUTO_TEST_SUITE(SceneHierarchyPanelTests)
 
-BOOST_AUTO_TEST_CASE(DefaultSelectedEntity_IsNull)
+BOOST_AUTO_TEST_CASE(DefaultSelectedNode_IsNull)
 {
 	edt::scene_hierarchy_panel panel;
-	BOOST_CHECK(panel.get_selected_entity() == entt::null);
+	BOOST_CHECK(panel.get_selected_node() == nullptr);
 }
 
-BOOST_AUTO_TEST_CASE(SetRegistry_DoesNotCrash)
+BOOST_AUTO_TEST_CASE(SetWorldDesc_Null_DoesNotCrash)
 {
 	edt::scene_hierarchy_panel panel;
-	auto registry = std::make_shared<entt::registry>();
-	BOOST_CHECK_NO_THROW(panel.set_registry(registry));
+	BOOST_CHECK_NO_THROW(panel.set_world_desc(nullptr));
 }
 
-BOOST_AUTO_TEST_CASE(SetSelectedEntity_TrackedCorrectly)
+BOOST_AUTO_TEST_CASE(SetWorldDesc_ResetsSelection)
 {
 	edt::scene_hierarchy_panel panel;
-	auto registry = std::make_shared<entt::registry>();
-	panel.set_registry(registry);
+	scn::world_desc desc;
 
-	auto ent = registry->create();
-	panel.set_selected_entity(ent);
-	BOOST_CHECK(panel.get_selected_entity() == ent);
+	// Set a desc, manually set a selected node pointer
+	panel.set_world_desc(&desc);
+	BOOST_CHECK(panel.get_selected_node() == nullptr);
+
+	// Simulate a selected node, then set a new desc — selection must reset
+	scn::prefab_desc::prefab_node node;
+	node.name = "test";
+	panel.set_selected_node(&node);
+	BOOST_REQUIRE(panel.get_selected_node() == &node);
+
+	panel.set_world_desc(&desc);
+	BOOST_CHECK(panel.get_selected_node() == nullptr);
 }
 
-BOOST_AUTO_TEST_CASE(SetSelectedEntity_ToNull)
+BOOST_AUTO_TEST_CASE(SetSelectedNode_TrackedCorrectly)
 {
 	edt::scene_hierarchy_panel panel;
-	auto registry = std::make_shared<entt::registry>();
-	panel.set_registry(registry);
+	scn::prefab_desc::prefab_node node;
+	node.name = "myNode";
 
-	auto ent = registry->create();
-	panel.set_selected_entity(ent);
-	panel.set_selected_entity(entt::null);
-	BOOST_CHECK(panel.get_selected_entity() == entt::null);
+	panel.set_selected_node(&node);
+	BOOST_CHECK(panel.get_selected_node() == &node);
 }
 
-BOOST_AUTO_TEST_CASE(OnEntitySelectedCallback_Stored)
+BOOST_AUTO_TEST_CASE(SetSelectedNode_ToNull)
+{
+	edt::scene_hierarchy_panel panel;
+	scn::prefab_desc::prefab_node node;
+	panel.set_selected_node(&node);
+	panel.set_selected_node(nullptr);
+	BOOST_CHECK(panel.get_selected_node() == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(OnNodeSelectedCallback_Stored)
 {
 	edt::scene_hierarchy_panel panel;
 	bool called = false;
-	panel.set_on_entity_selected([&](ecs::entity) { called = true; });
-	// Callback сохранён — он вызовется при клике в UI
-	// Здесь просто проверяем что установка не падает
-	BOOST_CHECK(!called); // не вызван без UI
+	panel.set_on_node_selected([&](scn::prefab_desc::prefab_node*) { called = true; });
+	// Callback сохранён — проверяем только что установка не падает
+	BOOST_CHECK(!called);
+}
+
+BOOST_AUTO_TEST_CASE(SetWorldNames_DoesNotCrash)
+{
+	edt::scene_hierarchy_panel panel;
+	BOOST_CHECK_NO_THROW(panel.set_world_names({ "World1", "World2" }, 0));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -85,14 +85,17 @@ namespace scn {
 		if (tags_to_reload.empty() || m_registries.empty()) return;
 
 		for (const auto& tag : tags_to_reload) {
-			auto changed_desc_handle = m_res_sys.require_sync<desc::desc_base>(tag);
-
-			if (changed_desc_handle.has_error()) {
+			// External callbacks (e.g. level_manager reload) handle their own typed load.
+			// Don't do a desc_base load first — it would collide in the type-agnostic cache.
+			if (m_external_watched_tags.contains(tag)) {
+				m_external_watched_tags.at(tag)(tag);
 				continue;
 			}
 
-			if (m_external_watched_tags.contains(tag)) {
-				m_external_watched_tags.at(tag)(tag);
+			// Internal component-tracker hot-reload: load as desc_base.
+			auto changed_desc_handle = m_res_sys.require_sync<desc::desc_base>(tag);
+			if (changed_desc_handle.has_error()) {
+				continue;
 			}
 
 			for (auto* reg_ptr : m_registries) {

@@ -1,9 +1,8 @@
 #pragma once
 #include "common.h"
+#include "res_tag.h"
 #include "rnd_driver_interface.h"
 #include "rnd_ssbo_buffer_interface.h"
-#include "desc_system.h"
-#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <glm/mat4x4.hpp>
@@ -21,8 +20,9 @@ namespace rnd
 		skinning_manager(skinning_manager&&) = delete;
 		skinning_manager& operator=(skinning_manager&&) = delete;
 
-		using weights_provider_t = std::function<std::vector<std::vector<uint32_t>>(res::tag)>;
-		void set_weights_provider(weights_provider_t provider) { m_weights_provider = provider; }
+		void register_weights(res::tag tag, std::vector<std::vector<uint32_t>> weights) {
+			m_weights_registry[tag] = std::move(weights);
+		}
 
 		rnd::driver::ssbo_buffer_interface* get_buffer(res::tag skin) const {
 			if (auto it = bone_indices_buffer.find(skin); it != bone_indices_buffer.end()) {
@@ -40,7 +40,7 @@ namespace rnd
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver);
 
 	private:
-		weights_provider_t m_weights_provider;
+		std::unordered_map<res::tag, std::vector<std::vector<uint32_t>>> m_weights_registry;
 		std::unordered_map<res::tag, std::unique_ptr<rnd::driver::ssbo_buffer_interface>> bone_indices_buffer;
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> bones_matrices_buffer;
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> tmp_treangles_hightlight_buffer;

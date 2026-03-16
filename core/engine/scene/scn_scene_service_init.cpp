@@ -7,7 +7,6 @@
 #include "scn_animation_job.h"
 #include "scn_camera_controller_system.h"
 #include "scn_ecs_assembler.h"
-#include "scn_skinning_prototype_desc.h"
 #include "scn_transform_system.h"
 
 
@@ -43,12 +42,7 @@ void scn::scene_init(ds::app_data_storage &store) {
       store.require<scn::level_manager>()));
 
   auto& render_system = store.require<rnd::render_system>();
-  auto* skinning_manager_ptr = &store.require<rnd::skinning_manager>();
-  skinning_manager_ptr->set_weights_provider([](res::tag t) {
-      auto proto = res::get_system().require_sync<scn::skinning_prototype_desc>(t);
-      return proto->get_2d_array_bonesids_weights();
-  });
-  render_system.set_skinning_manager(skinning_manager_ptr);
+  render_system.set_skinning_manager(&store.require<rnd::skinning_manager>());
 }
 
 void scn::scene_term(ds::app_data_storage &store) {

@@ -1,6 +1,7 @@
 #pragma once
 #include "resolvers/res_control_block.hpp"
 #include "res_tag.h"
+#include "ds/ds_polymorphic_cast.hpp"
 #include <memory>
 #include <functional>
 
@@ -9,7 +10,7 @@ namespace core::res
     template<typename T>
     class res_handle {
     public:
-		using resource_control_block = res_control_block<std::shared_ptr<T>>;
+		using resource_control_block = res_resource_block;
 
         struct hash
         {
@@ -35,17 +36,19 @@ namespace core::res
 		bool is_valid() const { return m_block != nullptr; }
 
         std::shared_ptr<T> get() const {
-            return is_ready() ? m_block->data : nullptr;
+            if (!m_block || !m_block->is_ready()) return nullptr;
+            return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
         std::shared_ptr<T> get_sync() const {
-            return m_block->get();
+            m_block->wait();
+            return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
         void then(std::function<void(T&)> cb) {
             if (!m_block) return;
             m_block->then([cb](auto& block) {
-                if (block.data) cb(*block.data);
+                if (block.data) cb(*ds::polymorphic_pointer_cast<T>(block.data));
             });
         }
 

@@ -104,3 +104,9 @@ Macro-based tunables: `CFG_VAR_DEF_INT(name, "path.to.var", default)`. Override 
 ## Testing
 
 Boost.Test framework. Tests live in `unittests/`. Each file is a `BOOST_AUTO_TEST_SUITE` with `BOOST_AUTO_TEST_CASE` entries. The main entry point `unittests/unit_tests.cpp` defines `BOOST_TEST_MODULE AllTests`. New test files are auto-discovered via `file(GLOB)` in the root CMakeLists.txt — just add a `.cpp` file to `unittests/`.
+
+# Tasks
+
+current tasks are locating at docs/epics folder.
+read docs/epics/INDEX.md file to learn current status.
+after complete a task or epic you should update their status in task file and INDEX.md file.

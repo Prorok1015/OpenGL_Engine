@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_inspector_panel.h"
 #include "edt_console_panel.h"
-#include <entt/entt.hpp>
+#include "level/scn_prefab_desc.h"
 
 // ─────────────────────────────────────────────
 BOOST_AUTO_TEST_SUITE(InspectorPanelTests)
@@ -11,29 +11,48 @@ BOOST_AUTO_TEST_CASE(DefaultConstruct_DoesNotCrash)
 	BOOST_CHECK_NO_THROW(edt::inspector_panel panel);
 }
 
-BOOST_AUTO_TEST_CASE(SetRegistry_DoesNotCrash)
+BOOST_AUTO_TEST_CASE(SetSelectedNode_Null_DoesNotCrash)
 {
 	edt::inspector_panel panel;
-	auto registry = std::make_shared<entt::registry>();
-	BOOST_CHECK_NO_THROW(panel.set_registry(registry));
+	BOOST_CHECK_NO_THROW(panel.set_selected_node(nullptr));
 }
 
-BOOST_AUTO_TEST_CASE(SetSelectedEntity_NullDoesNotCrash)
+BOOST_AUTO_TEST_CASE(SetSelectedNode_ValidNode_DoesNotCrash)
 {
 	edt::inspector_panel panel;
-	auto registry = std::make_shared<entt::registry>();
-	panel.set_registry(registry);
-	BOOST_CHECK_NO_THROW(panel.set_selected_entity(entt::null));
+	scn::prefab_desc::prefab_node node;
+	node.name = "TestNode";
+	BOOST_CHECK_NO_THROW(panel.set_selected_node(&node));
 }
 
-BOOST_AUTO_TEST_CASE(SetSelectedEntity_ValidEntity)
+BOOST_AUTO_TEST_CASE(SetOnNodeChanged_Stored)
 {
 	edt::inspector_panel panel;
-	auto registry = std::make_shared<entt::registry>();
-	panel.set_registry(registry);
+	bool called = false;
+	panel.set_on_node_changed([&]() { called = true; });
+	// Callback сохранён — проверяем что установка не падает
+	BOOST_CHECK(!called);
+}
 
-	auto ent = registry->create();
-	BOOST_CHECK_NO_THROW(panel.set_selected_entity(ent));
+BOOST_AUTO_TEST_CASE(AddDescRenderer_DoesNotCrash)
+{
+	edt::inspector_panel panel;
+	bool renderer_called = false;
+	panel.add_desc_renderer("camera_desc",
+		[&](scn::prefab_desc::prefab_comp_node&) -> bool {
+			renderer_called = true;
+			return false;
+		});
+	BOOST_CHECK(!renderer_called); // не вызывается без UI
+}
+
+BOOST_AUTO_TEST_CASE(AddMultipleRenderers_DoesNotCrash)
+{
+	edt::inspector_panel panel;
+	panel.add_desc_renderer("camera_desc",            [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	panel.add_desc_renderer("directional_light_desc", [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	panel.add_desc_renderer("skybox_desc",            [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	BOOST_CHECK(true); // reached without crash
 }
 
 BOOST_AUTO_TEST_SUITE_END()
