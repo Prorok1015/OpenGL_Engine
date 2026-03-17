@@ -257,7 +257,7 @@ void rnd::driver::gl::driver::check_frame_buffer()
 			break;
 		}
 
-		egLOG("Framebuffer is not complete: {0}", errorString);
+		egLOG("opengl", "Framebuffer is not complete: {0}", errorString);
 		ASSERT_FAIL("ERROR");
 	}
 	detach_frame_buffer();

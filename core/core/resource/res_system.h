@@ -70,6 +70,7 @@ namespace res
 			return m_resolvers.at(tag.protocol())->store(tag, data);
 		}
 
+
 		void set_adapter_worker(std::unique_ptr<core::res::adapter_worker_base>&& worker) {
 			m_adapter_worker = std::move(worker);
 			m_adapter_worker->start();

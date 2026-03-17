@@ -27,6 +27,7 @@
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
 | [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | planned |
+| [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | planned |
 
 ### Desc-Driven Architecture
 
@@ -49,7 +50,7 @@
 
 | ID | Title | Status |
 |---|---|---|
-| [EPIC-23](infrastructure/EPIC-23.md) | Logger Migration — spdlog Integration | planned |
+| [EPIC-23](infrastructure/EPIC-23.md) | Logger Migration — spdlog Integration | done |
 
 ### Render Migration
 
@@ -83,6 +84,9 @@ EPIC-08 + EPIC-10 (Inspector)
   └── EPIC-14 (Component UI Registry)
 
 EPIC-23 (Logger → spdlog)  ← standalone, no deps
+
+EPIC-24 (Async Editor Ops)  ← standalone
+  US-24-1 → US-24-2, US-24-3, US-24-4 → US-24-5 → US-24-6
 
 EPIC-16 (Data Contracts)
   └── EPIC-17 (Extractor Layer)

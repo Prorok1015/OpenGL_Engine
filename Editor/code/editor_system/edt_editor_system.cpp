@@ -78,6 +78,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return &level.get_world(name).state();
 	});
 	m_console_panel      = std::make_shared<console_panel>();
+
+	// Route engine log messages to the editor console panel
+	auto console_weak = std::weak_ptr<console_panel>(m_console_panel);
+	engine::set_log_callback([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
+		auto panel = console_weak.lock();
+		if (!panel) return;
+
+		edt::log_level edt_level = edt::log_level::info;
+		if (level == engine::log_level::warn)  edt_level = edt::log_level::warning;
+		if (level == engine::log_level::error) edt_level = edt::log_level::error;
+
+		panel->add_log(edt_level, std::format("[{}] {}", category, message));
+	});
+
 	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
 
 	m_asset_browser_panel->set_base_path(res::resource_system::get_resources_path());

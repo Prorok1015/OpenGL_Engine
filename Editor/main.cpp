@@ -4,6 +4,7 @@
 #include <ds/ds_store.hpp>
 #include <core_module.h>
 #include <engine_module.h>
+#include <engine_log.h>
 #include "code/editor_system/editor_module.h"
 
 #ifndef ENGINE_CONSOLE_MODE
@@ -40,6 +41,8 @@ int main(int argc, char* argv[])
 	char** argv = argvu.get();
 #endif
 
+	engine::init_logger();
+
 	if (!cfg::initialize_configs(argc, argv)) {
 		return -1;
 	}
@@ -59,5 +62,6 @@ int main(int argc, char* argv[])
 
 	module_loader.shutdown_all_services(app_storage);
 
+	engine::shutdown_logger();
 	return result;
 }

@@ -29,10 +29,10 @@ void opengl::glCheckError_(const char* file, int line)
         case GL_OUT_OF_MEMORY:                 error = "OUT_OF_MEMORY"; break;
         case GL_INVALID_FRAMEBUFFER_OPERATION: error = "INVALID_FRAMEBUFFER_OPERATION"; break;
         }
-        eg::logger(sFile, line, error, eg::Error{});
+        egLOG_ERROR("opengl", "{}:{} {}", sFile, line, error);
 
         if (msg_count > max_msg_count) {
-            eg::logger(sFile, line, "Over 20 masseges", eg::Error{});
+            egLOG_ERROR("opengl", "{}:{} Over 20 messages", sFile, line);
             break;
         }
     }

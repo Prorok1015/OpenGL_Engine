@@ -1,5 +1,7 @@
 #pragma once
 #include <filesystem>
+#include <unordered_map>
+#include <string>
 
 namespace cfg {
 
@@ -58,6 +60,42 @@ namespace cfg {
 	private:
 		const std::string name_;
 		T value_;// TODO: atomic?
+	};
+
+	// Forward declarations for variable_map
+	struct variable_map;
+	void registrate_prefix(std::string_view prefix, variable_map* var);
+	void unregistrate_prefix(std::string_view prefix, variable_map* var);
+
+	// A map variable that captures all sub-keys under a given prefix.
+	// E.g. prefix "logger/file" captures "logger/file/edt" → entries["edt"] = value.
+	struct variable_map : public variable_base
+	{
+		variable_map(std::string_view prefix)
+			: prefix_(prefix)
+		{
+			registrate_prefix(prefix, this);
+		}
+
+		virtual ~variable_map() override
+		{
+			unregistrate_prefix(prefix_, this);
+		}
+
+		// Called by the config parser with the full key path.
+		// Extracts the suffix after the prefix separator.
+		virtual void update(const std::filesystem::path& /*location*/, std::string_view /*val*/) override {}
+
+		void update_entry(std::string_view suffix, std::string_view val)
+		{
+			entries_[std::string(suffix)] = std::string(val);
+		}
+
+		const std::unordered_map<std::string, std::string>& entries() const { return entries_; }
+
+	private:
+		const std::string prefix_;
+		std::unordered_map<std::string, std::string> entries_;
 	};
 
 } // namespace cfg

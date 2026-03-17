@@ -6,7 +6,9 @@ set(CMAKE_CXX_STANDARD 20)
 #glm
 add_subdirectory(${THIRD_PARTY_PATH}/glm glm)
 target_compile_definitions(glm INTERFACE GLM_ENABLE_EXPERIMENTAL)
-target_link_libraries(${PROJECT_NAME} INTERFACE glm)
+# logger (spdlog backend) — needed by engine_log.h included from common
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/logger logger)
+target_link_libraries(${PROJECT_NAME} INTERFACE glm engine_logger)
 
 if(ENGINE_BOOST_NO_LIB) 
   find_package(Boost REQUIRED)

@@ -34,6 +34,7 @@ namespace cfg {
 		}
 
 		std::unordered_map<std::string, cfg::variable_base*> registered_variables;
+		std::unordered_map<std::string, cfg::variable_map*>  registered_prefixes;
 	};
 
 } // namespace cfg
@@ -61,9 +62,27 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 		YAML::Node value = it->second;
 		if (value.IsScalar()) {
 			std::string val_str = value.as<std::string>();
-			auto var_it = cfg::config_manager::instance().registered_variables.find(current);
-			if (var_it != cfg::config_manager::instance().registered_variables.end()) {
+			auto& mgr = cfg::config_manager::instance();
+			auto var_it = mgr.registered_variables.find(current);
+			if (var_it != mgr.registered_variables.end()) {
 				var_it->second->update(config_location, val_str);
+			} else {
+				// Check prefix variables by walking up the path.
+				// "a/b/c/d" → try "a/b/c" (suffix "d"), then "a/b" (suffix "c/d"), then "a" (suffix "b/c/d").
+				// The suffix preserves the '/' separators so categories like "editor/asset/import" work.
+				std::string path = current;
+				while (true) {
+					auto sep = path.rfind(SEPARATOR);
+					if (sep == std::string::npos) break;
+					std::string prefix = path.substr(0, sep);
+					std::string suffix = current.substr(sep + 1);
+					auto pfx_it = mgr.registered_prefixes.find(prefix);
+					if (pfx_it != mgr.registered_prefixes.end()) {
+						pfx_it->second->update_entry(suffix, val_str);
+						break;
+					}
+					path = prefix;
+				}
 			}
 		} else if (value.IsMap()) {
 			load_map(config_location, current, value);
@@ -146,4 +165,14 @@ void cfg::registrate_variable(std::string_view name, variable_base* var)
 void cfg::unregistrate_variable(std::string_view name, variable_base* var)
 {
 	cfg::config_manager::instance().registered_variables.erase(std::string{ name });
+}
+
+void cfg::registrate_prefix(std::string_view prefix, variable_map* var)
+{
+	cfg::config_manager::instance().registered_prefixes[std::string{ prefix }] = var;
+}
+
+void cfg::unregistrate_prefix(std::string_view prefix, variable_map* var)
+{
+	cfg::config_manager::instance().registered_prefixes.erase(std::string{ prefix });
 }

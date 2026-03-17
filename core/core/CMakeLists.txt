@@ -11,7 +11,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC common PUBLIC config_system PUBLIC 
 
 add_subdirectory("common")
 add_subdirectory("config")
-add_subdirectory("common/logger")
 add_subdirectory("application")
 add_subdirectory("input")
 add_subdirectory("windows/window_service")

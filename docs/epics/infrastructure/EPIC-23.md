@@ -1,6 +1,6 @@
 # EPIC-23 — Logger Migration: spdlog Integration
 
-**Status:** planned
+**Status:** done
 **Theme:** Infrastructure
 **Priority:** medium
 
@@ -33,22 +33,24 @@ spdlog уже подключён как git-submodule (`lib3dparty/spdlog/`), н
 
 ```
 core/core/common/logger/
-├── engine_log.h      # egLOG macro, logger() overloads
-├── engine_log.cpp    # std::cout implementation
-└── CMakeLists.txt    # engine_logger target (no spdlog link)
+├── engine_log.h      # spdlog macros: egLOG, egLOG_TRACE/DEBUG/INFO/WARN/ERROR
+├── engine_log.cpp    # spdlog backend: multi-sink (console + rotating file)
+└── CMakeLists.txt    # engine_logger target (links spdlog::spdlog_header_only)
 ```
+
+`Editor/main.cpp` calls `engine::init_logger()` at startup, `engine::shutdown_logger()` at exit.
 
 ## User Stories
 
 ### US-23-1: CMake — подключить spdlog к engine_logger
-**Status:** todo
+**Status:** done
 
 - `add_subdirectory(lib3dparty/spdlog)` или `find_package` в корневом CMake
 - `target_link_libraries(engine_logger PUBLIC spdlog::spdlog_header_only)` (header-only mode)
 - Убедиться, что сборка проходит без ошибок
 
 ### US-23-2: Бэкенд — заменить std::cout на spdlog
-**Status:** todo
+**Status:** done
 
 - Создать spdlog-логгер при первом вызове (lazy init, или explicit `init_logger()`)
 - Multi-sink: stdout_color_sink + rotating_file_sink (опционально)
@@ -56,7 +58,7 @@ core/core/common/logger/
 - Формат: `[HH:MM:SS.ms] [category] [level] message`
 
 ### US-23-3: Уровни логирования
-**Status:** todo
+**Status:** done
 
 - Новые макросы: `egLOG_TRACE`, `egLOG_DEBUG`, `egLOG_INFO`, `egLOG_WARN`, `egLOG_ERROR`
 - `egLOG` остаётся как alias для `egLOG_INFO` (обратная совместимость)
@@ -65,18 +67,19 @@ core/core/common/logger/
 - Compile-time отсечение trace/debug в Release через `SPDLOG_ACTIVE_LEVEL`
 
 ### US-23-4: Runtime-фильтрация по категориям
-**Status:** todo
+**Status:** done
 
 - Каждая категория (`"resource"`, `"edt"`, `"desc"`) — отдельный spdlog logger
-- CFG_VAR для глобального уровня: `logger.level = "info"`
-- Опционально: CFG_VAR для per-category level: `logger.level.edt = "debug"`
+- `engine::set_category_level(category, level)` — per-category override
+- `engine::set_log_level(level)` — global level
+- CFG_VAR интеграция может быть добавлена на уровне `core_module` в будущем (logger на уровне common, не может зависеть от config)
 
 ### US-23-5: Console panel — интеграция с editor
-**Status:** todo
+**Status:** done
 
-- Добавить custom spdlog sink, который пишет в `edt::console_panel`
-- Console panel уже имеет `add_log(level, msg)` — нужно подключить sink
-- Фильтрация по уровням в UI уже есть
+- `engine::set_log_callback(fn)` — generic callback, вызывается из `log_message()`
+- Editor подключает callback в `editor_system::init()`, маппит `engine::log_level` → `edt::log_level`
+- Использует `weak_ptr<console_panel>` для безопасного доступа
 
 ## Key Files
 

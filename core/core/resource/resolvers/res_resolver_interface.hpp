@@ -24,6 +24,7 @@ namespace core::res
 			return false;
 		}
 
+
 		virtual bool exists(::res::tag const& tag) const {
 			(void)tag;
 			return false;
