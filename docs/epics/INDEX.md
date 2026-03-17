@@ -8,6 +8,7 @@
 | Desc-Driven Architecture | [desc-driven/](desc-driven/) | Переход к world_desc как источнику правды |
 | Prefab-First | [prefab-first/](prefab-first/) | Замена prototype-десков на prefab-иерархию; type-safe редактор |
 | Render Migration | [render-migration/](render-migration/) | Переход к data-driven конвейеру: экстракторы → render pass'ы → удаление renderer_3d |
+| Infrastructure | [infrastructure/](infrastructure/) | Логгер, профайлер, сборка, инструменты разработки |
 
 ---
 
@@ -25,6 +26,7 @@
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
+| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | planned |
 
 ### Desc-Driven Architecture
 
@@ -39,9 +41,15 @@
 
 | ID | Title | Status |
 |---|---|---|
-| [EPIC-12](prefab-first/EPIC-12.md) | Model Importer → Prefab Output | planned |
-| [EPIC-13](prefab-first/EPIC-13.md) | Remove Prototype Descs | planned |
-| [EPIC-14](prefab-first/EPIC-14.md) | Component UI Registry — type-safe editor | planned |
+| [EPIC-12](prefab-first/EPIC-12.md) | Model Importer → Prefab Output | done |
+| [EPIC-13](prefab-first/EPIC-13.md) | Remove Prototype Descs | done |
+| [EPIC-14](prefab-first/EPIC-14.md) | Component UI Registry — type-safe editor | done |
+
+### Infrastructure
+
+| ID | Title | Status |
+|---|---|---|
+| [EPIC-23](infrastructure/EPIC-23.md) | Logger Migration — spdlog Integration | planned |
 
 ### Render Migration
 
@@ -73,6 +81,8 @@ EPIC-08 + EPIC-09 (Prefab Infra)
         └── EPIC-13 (Remove Prototype Descs)
 EPIC-08 + EPIC-10 (Inspector)
   └── EPIC-14 (Component UI Registry)
+
+EPIC-23 (Logger → spdlog)  ← standalone, no deps
 
 EPIC-16 (Data Contracts)
   └── EPIC-17 (Extractor Layer)

@@ -1,7 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_inspector_panel.h"
+#include "edt_component_ui_registry.h"
 #include "edt_console_panel.h"
 #include "level/scn_prefab_desc.h"
+#include "scn_camera_desc.h"
+#include "scn_directional_light_desc.h"
+#include "scn_skybox_desc.h"
 
 // ─────────────────────────────────────────────
 BOOST_AUTO_TEST_SUITE(InspectorPanelTests)
@@ -30,15 +34,14 @@ BOOST_AUTO_TEST_CASE(SetOnNodeChanged_Stored)
 	edt::inspector_panel panel;
 	bool called = false;
 	panel.set_on_node_changed([&]() { called = true; });
-	// Callback сохранён — проверяем что установка не падает
 	BOOST_CHECK(!called);
 }
 
-BOOST_AUTO_TEST_CASE(AddDescRenderer_DoesNotCrash)
+BOOST_AUTO_TEST_CASE(RegisterRenderer_DoesNotCrash)
 {
-	edt::inspector_panel panel;
+	edt::component_ui_registry registry;
 	bool renderer_called = false;
-	panel.add_desc_renderer("camera_desc",
+	registry.register_renderer<scn::camera_desc>(
 		[&](scn::prefab_desc::prefab_comp_node&) -> bool {
 			renderer_called = true;
 			return false;
@@ -46,13 +49,31 @@ BOOST_AUTO_TEST_CASE(AddDescRenderer_DoesNotCrash)
 	BOOST_CHECK(!renderer_called); // не вызывается без UI
 }
 
-BOOST_AUTO_TEST_CASE(AddMultipleRenderers_DoesNotCrash)
+BOOST_AUTO_TEST_CASE(RegisterMultipleRenderers_DoesNotCrash)
 {
-	edt::inspector_panel panel;
-	panel.add_desc_renderer("camera_desc",            [](scn::prefab_desc::prefab_comp_node&) { return false; });
-	panel.add_desc_renderer("directional_light_desc", [](scn::prefab_desc::prefab_comp_node&) { return false; });
-	panel.add_desc_renderer("skybox_desc",            [](scn::prefab_desc::prefab_comp_node&) { return false; });
-	BOOST_CHECK(true); // reached without crash
+	edt::component_ui_registry registry;
+	registry.register_renderer<scn::camera_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	registry.register_renderer<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node&) { return false; });
+	registry.register_renderer<scn::skybox_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	BOOST_CHECK(true);
+}
+
+BOOST_AUTO_TEST_CASE(InvokeRenderer_KnownType_ReturnsValue)
+{
+	edt::component_ui_registry registry;
+	registry.register_renderer<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node&) { return true; });
+	scn::prefab_desc::prefab_comp_node comp;
+	auto result = registry.invoke(scn::camera_desc::__type, comp);
+	BOOST_REQUIRE(result.has_value());
+	BOOST_CHECK(*result == true);
+}
+
+BOOST_AUTO_TEST_CASE(InvokeRenderer_UnknownType_ReturnsNullopt)
+{
+	edt::component_ui_registry registry;
+	scn::prefab_desc::prefab_comp_node comp;
+	auto result = registry.invoke("unknown_desc", comp);
+	BOOST_CHECK(!result.has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

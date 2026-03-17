@@ -1,7 +1,7 @@
 # EPIC-12: Model Importer → Prefab Output
 
 **Theme:** prefab-first
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-08, EPIC-09
 
 ## Цель

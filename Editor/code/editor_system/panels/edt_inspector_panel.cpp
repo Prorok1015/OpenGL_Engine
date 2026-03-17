@@ -1,4 +1,6 @@
 #include "edt_inspector_panel.h"
+#include "edt_component_ui_registry.h"
+#include "desc_system.h"
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
@@ -21,9 +23,14 @@ namespace edt
 		m_on_node_changed = std::move(cb);
 	}
 
-	void inspector_panel::add_desc_renderer(const std::string& type_name, desc_comp_renderer renderer)
+	void inspector_panel::set_component_ui_registry(component_ui_registry* registry)
 	{
-		m_desc_renderers[type_name] = std::move(renderer);
+		m_ui_registry = registry;
+	}
+
+	void inspector_panel::set_desc_system(desc::desc_system* desc_system)
+	{
+		m_desc_system = desc_system;
 	}
 
 	void inspector_panel::on_render()
@@ -51,10 +58,20 @@ namespace edt
 
 		// Components
 		for (auto& [key, comp] : node.components) {
-			if (ImGui::CollapsingHeader(comp.type_name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-				auto it = m_desc_renderers.find(comp.type_name);
-				if (it != m_desc_renderers.end()) {
-					changed |= it->second(comp);
+			const std::string& header = comp.type_name.empty() ? key : comp.type_name;
+			std::string header_id = header + "##" + key;
+			if (ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+				if (m_ui_registry && !comp.type_name.empty()) {
+					auto result = m_ui_registry->invoke(comp.type_name, comp);
+					if (result.has_value()) {
+						changed |= *result;
+						continue;
+					}
+				}
+
+				// For reference-only components (e.g. prefab instances), show the parent tag
+				if (comp.parent_desc.is_valid() && comp.overrides.empty()) {
+					ImGui::TextDisabled("Source: %s", std::string(comp.parent_desc->get_tag().view()).c_str());
 				} else {
 					render_generic_json(comp.overrides);
 				}
@@ -119,19 +136,16 @@ namespace edt
 			ImGui::OpenPopup("add_comp_desc");
 
 		if (ImGui::BeginPopup("add_comp_desc")) {
-			struct { const char* label; const char* type; } known[] = {
-				{ "Camera",            "camera_desc"            },
-				{ "Directional Light", "directional_light_desc" },
-				{ "Skybox",            "skybox_desc"            },
-			};
 			bool changed = false;
-			for (const auto& entry : known) {
-				if (!m_selected_node->components.count(entry.type)) {
-					if (ImGui::MenuItem(entry.label)) {
-						scn::prefab_desc::prefab_comp_node comp;
-						comp.type_name = entry.type;
-						m_selected_node->components[entry.type] = std::move(comp);
-						changed = true;
+			if (m_desc_system) {
+				for (const auto& type_name : m_desc_system->get_component_type_names()) {
+					if (!m_selected_node->components.count(type_name)) {
+						if (ImGui::MenuItem(type_name.c_str())) {
+							scn::prefab_desc::prefab_comp_node comp;
+							comp.type_name = type_name;
+							m_selected_node->components[type_name] = std::move(comp);
+							changed = true;
+						}
 					}
 				}
 			}

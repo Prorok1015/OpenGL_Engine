@@ -1,7 +1,7 @@
 # EPIC-14: Component UI Registry — type-safe editor
 
 **Theme:** prefab-first
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-08, EPIC-10
 
 ## Цель

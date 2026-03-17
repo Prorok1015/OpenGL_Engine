@@ -7,6 +7,7 @@
 namespace scn {
 	class camera_desc : public desc::desc_base {
 	public:
+		static constexpr std::string_view __type = "camera_desc";
 		using base_type = desc::desc_base;
 		camera_desc() = default;
 		~camera_desc() = default;

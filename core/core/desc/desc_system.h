@@ -29,9 +29,25 @@ namespace desc
 			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
 		}
 
+		// register_component_desc marks the type as user-addable in the editor.
+		// Use this for component descs that users can add to prefab nodes.
+		// Use register_desc for nested/container descs not shown in "Add Component".
+		template<typename T>
+		void register_component_desc(const std::string_view type_name)
+		{
+			register_desc<T>(type_name);
+			m_component_type_names.push_back(std::string{ type_name });
+		}
+
 		void unregister_desc(const std::string_view type_name)
 		{
 			factory_map.erase(std::string{ type_name });
+			std::erase(m_component_type_names, std::string{ type_name });
+		}
+
+		const std::vector<std::string>& get_component_type_names() const
+		{
+			return m_component_type_names;
 		}
 
 		std::shared_ptr<desc::desc_base> create_instance(const std::string_view type_id, const res::tag& tag) const
@@ -188,5 +204,6 @@ namespace desc
 		mutable std::unordered_map<std::string, std::atomic<uint32_t>> virtual_desc_counters;
 		res::resource_system& m_res_system;
 		std::unordered_map<std::string, std::function<std::shared_ptr<desc::desc_base>()>> factory_map;
+		std::vector<std::string> m_component_type_names;
 	};
 }

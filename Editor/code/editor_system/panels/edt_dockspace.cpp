@@ -61,6 +61,8 @@ namespace edt
 			if (ImGui::MenuItem("Open Level...")  && m_on_open_level)  m_on_open_level();
 			if (ImGui::MenuItem("Save Level", "Ctrl+S") && m_on_save_level)  m_on_save_level();
 			ImGui::Separator();
+			if (ImGui::MenuItem("Import Model...") && m_on_import_model) m_on_import_model();
+			ImGui::Separator();
 			if (ImGui::MenuItem("Exit")          && m_on_exit)        m_on_exit();
 			ImGui::EndMenu();
 		}

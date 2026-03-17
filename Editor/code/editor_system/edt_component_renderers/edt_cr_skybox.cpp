@@ -1,13 +1,12 @@
 #include "edt_cr_internal.h"
-#include "edt_inspector_panel.h"
 #include "level/scn_prefab_desc.h"
+#include "scn_skybox_desc.h"
 #include <imgui.h>
-#include <string>
 #include <cstring>
 
-void edt::edt_cr_skybox_register(edt::inspector_panel& panel)
+void edt::edt_cr_skybox_register(edt::component_ui_registry& registry)
 {
-	panel.add_desc_renderer("skybox_desc", [](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.register_renderer<scn::skybox_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 		std::string mat;
 		auto it = comp.overrides.find("material");

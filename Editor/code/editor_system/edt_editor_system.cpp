@@ -9,7 +9,7 @@
 #include "edt_input_manager.h"
 #include "gui_system.h"
 #include <imgui.h>
-#include "scn_skinning_prototype_desc.h"
+#include "level/scn_prefab_desc.h"
 
 #include "level/scn_world.h"
 #include "level/scn_level.h"
@@ -31,6 +31,9 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
 	, m_gui(gui_sys)
+	, m_model_importer(desc_system_, res_sys, rnd_sys)
+	, m_asset_exporter(res_sys)
+	, m_export_dialog(m_asset_exporter)
 {
 	input = std::make_shared<edt::input_manager>();
 }
@@ -49,6 +52,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	m_gui.push_layer(editor_layer);
 
+	// Legacy menu_layout_manager tool (hidden, but processes file dialog each frame)
 	editor_layer->register_tool("File/Import...", [this] { return show_file_dialog(); });
 
 	m_lvl_manager = data.require_shared<scn::level_manager>();
@@ -61,7 +65,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Панели
 	m_hierarchy_panel    = std::make_shared<scene_hierarchy_panel>();
 	m_inspector_panel    = std::make_shared<inspector_panel>();
-	register_desc_component_renderers(*m_inspector_panel);
+	register_desc_component_renderers(m_component_ui_registry);
+	m_inspector_panel->set_component_ui_registry(&m_component_ui_registry);
+	m_inspector_panel->set_desc_system(&desc_system);
 	m_viewport_panel     = std::make_shared<viewport_panel>(m_rnd, m_gui);
 	m_viewport_panel->set_registry_getter([this]() -> entt::registry* {
 		auto lvl_mgr = m_lvl_manager.lock();
@@ -95,13 +101,18 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::string key  = make_unique_key(stem.empty() ? "Asset" : stem);
 
 		scn::prefab_desc::prefab_comp_node comp;
-		comp.type_name   = std::string(desc_handle->get_type());
 		comp.parent_desc = desc_handle;
+		// Leave type_name empty: assemble_and_apply resolves it from parent_desc->get_type().
+		// Setting type_name = "prefab_desc" would route through assemble_merged_node's
+		// require_sync<prefab_desc> path, which may fail on cache lookup.
 
 		scn::prefab_desc::prefab_node node;
 		node.name = key;
 		node.components[key] = std::move(comp);
 
+		// push_back may reallocate, invalidating stored prefab_node pointers
+		m_hierarchy_panel->set_selected_node(nullptr);
+		m_inspector_panel->set_selected_node(nullptr);
 		active_world_desc().get_root().children.push_back(std::move(node));
 		m_is_dirty = true;
 		serialize_and_push();
@@ -184,6 +195,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	});
 	ds.set_on_open_level([this] {
+		file_dialog.set_current_path(res::resource_system::get_resources_path());
+		file_dialog.set_select_mode(edt::file_dialog::SELECT_MODE::FILES_ONLY);
+		file_dialog.clear_extension_filters();
+		file_dialog.add_extension_filter(".desc");
 		editor_layer->register_implicit("edt/load_level", [this] { return load_level(); });
 	});
 	ds.set_on_save_level([this] {
@@ -206,31 +221,72 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_exit_action();
 		}
 	});
+	ds.set_on_import_model([this] {
+		file_dialog.set_current_path(std::filesystem::current_path());
+		file_dialog.set_select_mode(edt::file_dialog::SELECT_MODE::FILES_ONLY);
+		file_dialog.clear_extension_filters();
+		file_dialog.add_extension_filter(".glb");
+		file_dialog.add_extension_filter(".obj");
+		file_dialog.add_extension_filter(".fbx");
+		file_dialog.add_extension_filter(".gltf");
+		editor_layer->register_implicit("edt/import_model", [this] { return show_file_dialog(); });
+	});
 }
 
 bool edt::editor_system::show_file_dialog()
 {
-	bool is_open = true;
-	file_dialog.clear_extension_filters();
-	file_dialog.add_extension_filter(".glb");
-	file_dialog.add_extension_filter(".obj");
-	file_dialog.add_extension_filter(".fbx");
-	file_dialog.add_extension_filter(".gltf");
+	// Phase 2: export dialog is active — render it instead of file dialog
+	if (m_export_dialog_active) {
+		bool still_open = m_export_dialog.render();
+		if (!still_open) {
+			m_export_dialog_active = false;
 
-	if (file_dialog.show("Import", &is_open))
+			// Auto-add exported prefab to the active scene
+			auto exported_tag = m_export_dialog.get_exported_tag();
+			if (exported_tag.is_valid() && m_editor_tag.is_valid()) {
+				auto desc_handle = m_res.require_sync<desc::desc_base>(exported_tag);
+				if (desc_handle.is_ready()) {
+					std::string name_str = std::string(exported_tag.pure_name());
+					std::string key = make_unique_key(name_str.empty() ? "ImportedModel" : name_str);
+
+					scn::prefab_desc::prefab_comp_node comp;
+					comp.parent_desc = desc_handle;
+
+					scn::prefab_desc::prefab_node node;
+					node.name = key;
+					node.components[key] = std::move(comp);
+
+					m_hierarchy_panel->set_selected_node(nullptr);
+					m_inspector_panel->set_selected_node(nullptr);
+					active_world_desc().get_root().children.push_back(std::move(node));
+					m_is_dirty = true;
+					serialize_and_push();
+					egLOG("Editor/Import", "Auto-added '{}' to scene", key);
+				}
+			}
+
+			return false;
+		}
+		return true;
+	}
+
+	// Phase 1: file selection
+	bool is_open = true;
+	if (file_dialog.show("Import Model", &is_open))
 	{
-		auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
-		res::tag tag = res::tag::make(relateve.string());
-		if (std::find(imported_models_list.begin(), imported_models_list.end(), tag) == imported_models_list.end()) {
-			m_res.warmup<scn::skinning_prototype_desc>(tag);
-			auto handle = m_res.require<scn::skinning_prototype_desc>(tag);
-			handle.then([this, tag](auto& desc) {
-				imported_models_list.push_back(desc.get_tag());
-				imported_models_list.push_back(tag);
-				});
+		auto abs_path = file_dialog.get_selected_path();
+		auto result = m_model_importer.import(abs_path);
+		if (result.prefab) {
+			imported_models_list.push_back(result.root_tag);
+			egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());
+			m_export_dialog.open(std::move(result));
+			m_export_dialog_active = true;
+			return true; // keep implicit alive for phase 2
+		} else {
+			egLOG("Editor/Import", "Failed to import model: {}", abs_path.string());
 		}
 	}
-    return is_open;
+	return is_open;
 }
 
 bool edt::editor_system::load_level()
@@ -239,8 +295,6 @@ bool edt::editor_system::load_level()
 	if (auto level_manager = m_lvl_manager.lock())
 	{
 		is_open = true;
-		file_dialog.clear_extension_filters();
-		file_dialog.add_extension_filter(".desc");
 
 		if (file_dialog.show("Load Level", &is_open)) {
 			auto relateve = file_dialog.get_selected_path().lexically_relative(file_dialog.get_base_path());
@@ -563,7 +617,12 @@ void edt::editor_system::inject_editor_camera(entt::registry& reg)
 	ctrl.rotating_speed = m_camera_state.rotating_speed;
 	reg.emplace<scn::mouse_controller_component>(cam, ctrl);
 
-	reg.emplace<scn::local_transform>(cam);
+	// Compute initial transform from controller state so camera isn't identity until first input
+	glm::mat4 orientation = glm::toMat4(glm::quat(ctrl.rotation));
+	glm::mat4 cam_matrix = glm::translate(glm::mat4(1.0f), ctrl.position)
+		* orientation
+		* glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, ctrl.distance));
+	reg.emplace<scn::local_transform>(cam, scn::local_transform{ cam_matrix });
 	reg.emplace<scn::world_transform>(cam);
 	reg.emplace<scn::name_component>(cam, "Editor Camera");
 	reg.emplace<scn::depth_level>(cam);

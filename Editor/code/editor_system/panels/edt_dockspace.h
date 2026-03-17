@@ -15,6 +15,7 @@ namespace edt
 		void set_on_save_level(action cb)  { m_on_save_level  = std::move(cb); }
 		void set_on_quick_save(action cb)  { m_on_quick_save  = std::move(cb); }
 		void set_on_exit(action cb)        { m_on_exit        = std::move(cb); }
+		void set_on_import_model(action cb){ m_on_import_model = std::move(cb); }
 
 		void render(panel_manager& pm);
 
@@ -29,5 +30,6 @@ namespace edt
 		action m_on_save_level;
 		action m_on_quick_save;
 		action m_on_exit;
+		action m_on_import_model;
 	};
 }

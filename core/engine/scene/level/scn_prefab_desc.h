@@ -10,6 +10,7 @@ namespace scn {
 	class prefab_desc : public desc::desc_base
 	{
 	public:
+		static constexpr std::string_view __type = "prefab_desc";
 		using base_type = desc::desc_base;
 
 		struct prefab_comp_node {

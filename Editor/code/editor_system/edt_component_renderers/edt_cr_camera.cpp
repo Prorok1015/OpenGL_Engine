@@ -1,12 +1,11 @@
 #include "edt_cr_internal.h"
-#include "edt_inspector_panel.h"
 #include "level/scn_prefab_desc.h"
+#include "scn_camera_desc.h"
 #include <imgui.h>
-#include <string>
 
-void edt::edt_cr_camera_register(edt::inspector_panel& panel)
+void edt::edt_cr_camera_register(edt::component_ui_registry& registry)
 {
-	panel.add_desc_renderer("camera_desc", [](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.register_renderer<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 		auto get_float = [&](const std::string& key, float def) -> float {
 			auto it = comp.overrides.find(key);

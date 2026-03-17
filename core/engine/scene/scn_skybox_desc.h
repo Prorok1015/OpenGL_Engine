@@ -7,6 +7,7 @@ namespace scn {
 	class skybox_desc : public desc::desc_base
 	{
 	public:
+		static constexpr std::string_view __type = "skybox_desc";
 		using base_type = desc::desc_base;
 		virtual ~skybox_desc() = default;
 		skybox_desc() = default;

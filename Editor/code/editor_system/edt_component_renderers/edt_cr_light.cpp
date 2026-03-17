@@ -1,14 +1,13 @@
 #include "edt_cr_internal.h"
-#include "edt_inspector_panel.h"
 #include "level/scn_prefab_desc.h"
+#include "scn_directional_light_desc.h"
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
-#include <string>
 
-void edt::edt_cr_light_register(edt::inspector_panel& panel)
+void edt::edt_cr_light_register(edt::component_ui_registry& registry)
 {
-	panel.add_desc_renderer("directional_light_desc", [](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.register_renderer<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 		auto get_vec3 = [&](const std::string& key, glm::vec3 def) -> glm::vec3 {
 			auto it = comp.overrides.find(key);

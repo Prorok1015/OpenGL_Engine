@@ -35,6 +35,8 @@ namespace edt
 		const char* get_type_prefix(const scn::prefab_desc::prefab_node& node) const;
 		bool node_matches_filter(const scn::prefab_desc::prefab_node& node, const std::string& lower_filter) const;
 		void draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter);
+		void draw_prefab_children_readonly(const scn::prefab_desc::prefab_node& node);
+		const scn::prefab_desc* get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const;
 		void draw_world_tabs();
 
 		scn::world_desc* m_world_desc = nullptr;

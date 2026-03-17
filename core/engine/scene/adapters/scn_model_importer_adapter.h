@@ -4,8 +4,6 @@
 #include "desc_system.h"
 #include "resources/desc_resource.h"
 #include "adapters/res_adapter_interface.hpp"
-#include "scn_skinning_prototype_desc.h"
-
 namespace scn
 {
 	// TODO: move to separate component with relation on assimp.

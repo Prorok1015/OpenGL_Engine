@@ -1,274 +1,60 @@
-#include "scn_model_importer_adapter.h"
+#include "edt_model_importer.h"
+#include "edt_filesystem_assimp_io.h"
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
-#include "res_system.h"
 #include "rnd_render_system.h"
 #include "skinning/rnd_skinning_manager.h"
-
 #include "geom/rnd_geometry_desc.h"
 #include "adapters/res_pct_adapter.h"
-
 #include "scn_glm_json_convert.h"
 #include "scn_mesh_nodes.hpp"
 
-#include "scn_assimp_resource_system_wrapper.h"
+#include <fstream>
 
-#include "ds/ds_svg_writer.hpp"
+namespace json = boost::json;
 
-void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag);
+// ─── Helpers (same as in scn_model_importer_adapter.cpp) ─────────────────────
 
 namespace {
-	glm::quat convert_to_glm(const aiQuaternion& vector) {
-		glm::quat result;
-		result.x = vector.x;
-		result.y = vector.y;
-		result.z = vector.z;
-		result.w = vector.w;
-		return result;
-	}
 
-	glm::vec3 convert_to_glm(const aiVector3D& vector) {
-		glm::vec3 result;
-		result.x = vector.x;
-		result.y = vector.y;
-		result.z = vector.z;
-		return result;
-	}
-
-	glm::vec4 convert_to_glm(const aiColor4D& vector) {
-		glm::vec4 result;
-		result.r = vector.r;
-		result.g = vector.g;
-		result.b = vector.b;
-		result.a = vector.a;
-		return result;
-	}
-
-	glm::mat4 convert_to_glm(const aiMatrix4x4& transform) {
-		glm::mat4 local(1);
-		local[0] = glm::vec4(transform.a1, transform.b1, transform.c1, transform.d1);
-		local[1] = glm::vec4(transform.a2, transform.b2, transform.c2, transform.d2);
-		local[2] = glm::vec4(transform.a3, transform.b3, transform.c3, transform.d3);
-		local[3] = glm::vec4(transform.a4, transform.b4, transform.c4, transform.d4);
-		return local;
-	}
-
-	struct trs_result { glm::vec3 position; glm::vec3 rotation_deg; glm::vec3 scale; };
-
-	trs_result decompose_aimatrix(const aiMatrix4x4& m) {
-		aiVector3D pos, scale;
-		aiQuaternion rot;
-		m.Decompose(scale, rot, pos);
-		glm::quat q = convert_to_glm(rot);
-		glm::vec3 euler_rad = glm::eulerAngles(q);
-		return { convert_to_glm(pos), glm::degrees(euler_rad), convert_to_glm(scale) };
-	}
-
-	void log_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, std::string_view name)
-	{
-		if (mat->GetTextureCount(type) > 0)
-		{
-			aiString str;
-			mat->GetTexture(type, 0, &str);
-			std::string_view texture_name = str.C_Str();
-			egLOG("loader", "{0} count: {1}, path: {2}", name, mat->GetTextureCount(type), texture_name);
-		}
-	}
-
-#define TXM_LOG(type) log_material_texture(scene, material, type, #type)
-}
-
-std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
+glm::quat convert_to_glm(const aiQuaternion& v)
 {
-    // read file via ASSIMP
-    Assimp::Importer importer;
-	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
-	importer.SetIOHandler(new engine_assimp_resource_system_wrapper(res::get_system(), tag, data));
-	const aiScene* scene = importer.ReadFile(std::string{ tag.view() }, flags);
-    // check for errors
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
-    {
-        egLOG("scene/model/load", "ERROR::ASSIMP::{}", importer.GetErrorString());
-        return {};
-    }
-
-	std::string path = std::format("memory://{0}/{1}.desc", tag.path(), tag.pure_name());
-	res::tag actual_tag = res::tag{ path };
-    json::object jsdata;
-	jsdata["__type"] = "prefab_desc";
-	process_model(scene, jsdata, tag, actual_tag);
-
-	auto instance = desc_system.create_instance("prefab_desc", actual_tag);
-	instance->deserialize(desc_system, jsdata);
-	res::get_system().store(actual_tag, desc_system.serialize_to_bytes(jsdata));
-	res::get_system().register_alias(tag, actual_tag);
-
-	return instance;
+	return glm::quat(v.w, v.x, v.y, v.z);
 }
 
-json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag) {
-	for (unsigned int i = 0; i < mat->GetTextureCount(type); i++)
-	{
-		aiString str;
-		mat->GetTexture(type, i, &str);
-		std::string_view texture_name = str.C_Str();
-		if (auto* pEmbededTxm = scene->GetEmbeddedTexture(texture_name.data()))
-		{
-			const std::string_view embedded_filename{ pEmbededTxm->mFilename.C_Str() };
-			const std::string_view embedded_format{ pEmbededTxm->achFormatHint };
-			std::string embedded_path = std::format("__embedded_txm_{0}/{1}.{2}",
-					tag.pure_name(),
-					embedded_filename,
-				    (pEmbededTxm->mHeight != 0) ?
-					res::raw_image_adapter::EXTENSION :
-					res::pct_adapter::EXTENSIONS[0]
-			);
-			res::tag embedded_tag = res::tag(res::tag::memory, embedded_path);
-
-			if (!res::get_system().exists(embedded_tag)) {
-				glm::ivec2 size;
-				int channel = 4;
-				std::vector<std::byte> data_byte;
-
-				if (pEmbededTxm->mHeight != 0) {
-					size.x = pEmbededTxm->mWidth;
-					size.y = pEmbededTxm->mHeight;
-
-					res::raw_image_adapter::raw_image_header header;
-					header.size = size;
-					header.channels = channel;
-					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
-					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
-					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + (size.x * size.y * channel), std::back_inserter(data_byte));
-					res::get_system().store(embedded_tag, data_byte);
-				}
-				else {
-					data_byte.reserve(pEmbededTxm->mWidth);
-					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + pEmbededTxm->mWidth, std::back_inserter(data_byte));
-					res::get_system().store(embedded_tag, data_byte);
-				}
-			}
-
-			res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", embedded_tag.path(), embedded_tag.pure_name())};
-
-			if (!res::get_system().exists(desc_tag)) {
-				json::object desc;
-				desc["__type"] = "texture_2d_desc";
-				desc["__parent"] = "res://base_texture.desc";
-				desc["name"] = embedded_tag.pure_name();
-				desc["data"] = json::value_from(embedded_tag);
-
-				std::string data = json::serialize(desc);
-				std::vector<std::byte> desc_data(data.size());
-				std::memcpy(desc_data.data(), data.data(), data.size());
-				res::get_system().store(desc_tag, desc_data);
-			}
-			return json::value_from(desc_tag);
-		}
-
-		res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", tag.path(), texture_name) };
-
-		if (!res::get_system().exists(desc_tag)) {
-			json::object desc;
-			desc["__type"] = "texture_2d_desc";
-			desc["__parent"] = "res://base_texture.desc";
-			desc["name"] = texture_name;
-			desc["data"] = json::value_from(tag + res::tag::make(texture_name));
-
-			std::string data = json::serialize(desc);
-			std::vector<std::byte> desc_data(data.size());
-				std::memcpy(desc_data.data(), data.data(), data.size());
-				res::get_system().store(desc_tag, desc_data);
-		}
-		return json::value_from(desc_tag);
-	}
-
-	return {};
-}
-
-json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag)
+glm::vec3 convert_to_glm(const aiVector3D& v)
 {
-	TXM_LOG(aiTextureType_DIFFUSE);
-	TXM_LOG(aiTextureType_SPECULAR);
-	TXM_LOG(aiTextureType_HEIGHT);
-	TXM_LOG(aiTextureType_NORMALS);
-	TXM_LOG(aiTextureType_AMBIENT);
-	TXM_LOG(aiTextureType_BASE_COLOR);
-	TXM_LOG(aiTextureType_EMISSIVE);
-	TXM_LOG(aiTextureType_CLEARCOAT);
-	TXM_LOG(aiTextureType_SHININESS);
-	TXM_LOG(aiTextureType_OPACITY);
-	TXM_LOG(aiTextureType_LIGHTMAP);
-	TXM_LOG(aiTextureType_REFLECTION);
-	TXM_LOG(aiTextureType_NORMAL_CAMERA);
-	TXM_LOG(aiTextureType_EMISSION_COLOR);
-	TXM_LOG(aiTextureType_METALNESS);
-	TXM_LOG(aiTextureType_DIFFUSE_ROUGHNESS);
-	TXM_LOG(aiTextureType_AMBIENT_OCCLUSION);
-	TXM_LOG(aiTextureType_SHEEN);
-	TXM_LOG(aiTextureType_TRANSMISSION);
+	return glm::vec3(v.x, v.y, v.z);
+}
 
-	json::object jsmaterial;
-	jsmaterial["__type"] = "material_desc";
-	jsmaterial["__parent"] = "res://base_material.desc";
-	jsmaterial["name"] = material->GetName().C_Str();
-	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, tag);
-	json::array samplers;
-	json::array defines{"LIGHTS_ENABLED"};
+glm::vec4 convert_to_glm(const aiColor4D& v)
+{
+	return glm::vec4(v.r, v.g, v.b, v.a);
+}
 
-	if (!diffuse_tag.is_null()) {
-		samplers.push_back(diffuse_tag);
-		defines.push_back("USE_TXM_AS_DIFFUSE");
-	} else {
-		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, tag);
-		if (!diffuse_tag.is_null()) {
-			samplers.push_back(diffuse_tag);
-			defines.push_back("USE_TXM_AS_DIFFUSE");
-		}
-	}
+glm::mat4 convert_to_glm(const aiMatrix4x4& m)
+{
+	glm::mat4 local(1);
+	local[0] = glm::vec4(m.a1, m.b1, m.c1, m.d1);
+	local[1] = glm::vec4(m.a2, m.b2, m.c2, m.d2);
+	local[2] = glm::vec4(m.a3, m.b3, m.c3, m.d3);
+	local[3] = glm::vec4(m.a4, m.b4, m.c4, m.d4);
+	return local;
+}
 
-	if (json::value spec_tag = find_material_texture(scene, material, aiTextureType_SPECULAR, tag); !spec_tag.is_null()) {
-		samplers.resize(2);
-		samplers[1] = spec_tag;
-		defines.push_back("USE_SPECULAR_MAP");
-	}
+struct trs_result { glm::vec3 position; glm::vec3 rotation_deg; glm::vec3 scale; };
 
-	if (json::value normal_tag = find_material_texture(scene, material, aiTextureType_NORMALS, tag); !normal_tag.is_null()) {
-		samplers.resize(3);
-		samplers[2] = normal_tag;
-		defines.push_back("USE_NORMAL_MAP");
-	}
-
-	if (!samplers.empty()) {
-		jsmaterial["samplers"] = samplers;
-	}
-
-	json::object uniforms;
-	aiColor4D color;
-	if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, color)) {
-		uniforms["albedo"] = json::value_from(glm::vec4(color.r, color.g, color.b, color.a));
-	}
-
-	if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_EMISSIVE, color)) {
-		uniforms["emissive"] = json::value_from(glm::vec4(color.r, color.g, color.b, color.a));
-	}
-
-	float shininess = 0;
-	if (AI_SUCCESS == material->Get(AI_MATKEY_SHININESS, shininess)) {
-		uniforms["shininess"] = json::value_from(shininess);
-	}
-
-	if (!uniforms.empty()) {
-		jsmaterial["uniforms"] = uniforms;
-	}
-
-	jsmaterial["defines"] = defines;
-	jsmaterial["queue"] = "mix";
-	jsmaterial["shader_fragment"] = "res://shaders/mix_opaque_trans_scene.frag";
-	return jsmaterial;
+trs_result decompose_aimatrix(const aiMatrix4x4& m)
+{
+	aiVector3D pos, scale;
+	aiQuaternion rot;
+	m.Decompose(scale, rot, pos);
+	glm::quat q = convert_to_glm(rot);
+	glm::vec3 euler_rad = glm::eulerAngles(q);
+	return { convert_to_glm(pos), glm::degrees(euler_rad), convert_to_glm(scale) };
 }
 
 void store_data(std::vector<std::byte>& data, const auto& value)
@@ -278,29 +64,217 @@ void store_data(std::vector<std::byte>& data, const auto& value)
 	std::memcpy((data.data() + begin), &value, sizeof(value));
 }
 
-void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geometry_desc& geometry, res::tag tag)
+void log_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, std::string_view name)
 {
-	for (unsigned int i = 0; i < mesh->mNumVertices; i++)
-	{
+	if (mat->GetTextureCount(type) > 0) {
+		aiString str;
+		mat->GetTexture(type, 0, &str);
+		egLOG("edt/import", "{0} count: {1}, path: {2}", name, mat->GetTextureCount(type), str.C_Str());
+	}
+}
+
+#define TXM_LOG(type) log_material_texture(scene, material, type, #type)
+
+// ─── Texture handling ────────────────────────────────────────────────────────
+
+json::value find_material_texture(
+	const aiScene* scene,
+	aiMaterial* mat,
+	aiTextureType type,
+	const std::string& mem_prefix,
+	res::resource_system& res_sys,
+	std::vector<res::tag>& out_tags)
+{
+	for (unsigned int i = 0; i < mat->GetTextureCount(type); i++) {
+		aiString str;
+		mat->GetTexture(type, i, &str);
+		std::string_view texture_name = str.C_Str();
+
+		if (auto* pEmbTxm = scene->GetEmbeddedTexture(texture_name.data())) {
+			const std::string_view emb_name{ pEmbTxm->mFilename.C_Str() };
+			const std::string_view emb_fmt{ pEmbTxm->achFormatHint };
+
+			std::string emb_path = std::format("__embedded_txm/{0}.{1}",
+				emb_name,
+				(pEmbTxm->mHeight != 0) ?
+					res::raw_image_adapter::EXTENSION :
+					res::pct_adapter::EXTENSIONS[0]);
+
+			res::tag emb_tag = res::tag(res::tag::memory, mem_prefix + emb_path);
+
+			if (!res_sys.exists(emb_tag)) {
+				std::vector<std::byte> data_byte;
+
+				if (pEmbTxm->mHeight != 0) {
+					glm::ivec2 size(pEmbTxm->mWidth, pEmbTxm->mHeight);
+					int channel = 4;
+
+					res::raw_image_adapter::raw_image_header header;
+					header.size = size;
+					header.channels = channel;
+					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
+					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
+					std::copy(
+						(std::byte*)pEmbTxm->pcData,
+						(std::byte*)pEmbTxm->pcData + (size.x * size.y * channel),
+						std::back_inserter(data_byte));
+				} else {
+					data_byte.reserve(pEmbTxm->mWidth);
+					std::copy(
+						(std::byte*)pEmbTxm->pcData,
+						(std::byte*)pEmbTxm->pcData + pEmbTxm->mWidth,
+						std::back_inserter(data_byte));
+				}
+
+				res_sys.store(emb_tag, data_byte);
+				out_tags.push_back(emb_tag);
+			}
+
+			res::tag desc_tag = res::tag{ res::tag::memory,
+				std::format("{0}{1}.txm.desc", emb_tag.path(), emb_tag.pure_name()) };
+
+			if (!res_sys.exists(desc_tag)) {
+				json::object desc;
+				desc["__type"] = "texture_2d_desc";
+				desc["__parent"] = "res://base_texture.desc";
+				desc["name"] = emb_tag.pure_name();
+				desc["data"] = json::value_from(emb_tag);
+
+				std::string s = json::serialize(desc);
+				std::vector<std::byte> desc_data(s.size());
+				std::memcpy(desc_data.data(), s.data(), s.size());
+				res_sys.store(desc_tag, desc_data);
+				out_tags.push_back(desc_tag);
+			}
+
+			return json::value_from(desc_tag);
+		}
+
+		// External texture file — read from model's directory via Assimp IO,
+		// but for memory:// storage we just reference it.
+		// The texture bytes are already cached by filesystem_assimp_io.
+		// We store a txm.desc pointing at the texture data.
+
+		// Store texture data in memory://
+		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + std::string(texture_name));
+
+		// The texture file should be read from disk and stored
+		// (it will be done by the caller if not already in memory)
+		// For now, create the desc pointing to the tag from the VFS path
+		// We'll handle copying actual texture bytes in asset_exporter
+
+		res::tag desc_tag = res::tag{ res::tag::memory,
+			std::format("{0}textures/{1}.txm.desc", mem_prefix, texture_name) };
+
+		if (!res_sys.exists(desc_tag)) {
+			json::object desc;
+			desc["__type"] = "texture_2d_desc";
+			desc["__parent"] = "res://base_texture.desc";
+			desc["name"] = texture_name;
+			desc["data"] = json::value_from(tex_data_tag);
+
+			std::string s = json::serialize(desc);
+			std::vector<std::byte> desc_data(s.size());
+			std::memcpy(desc_data.data(), s.data(), s.size());
+			res_sys.store(desc_tag, desc_data);
+			out_tags.push_back(desc_tag);
+		}
+
+		return json::value_from(desc_tag);
+	}
+
+	return {};
+}
+
+json::value process_material(
+	const aiScene* scene,
+	aiMaterial* material,
+	const std::string& mem_prefix,
+	res::resource_system& res_sys,
+	std::vector<res::tag>& out_tags)
+{
+	TXM_LOG(aiTextureType_DIFFUSE);
+	TXM_LOG(aiTextureType_SPECULAR);
+	TXM_LOG(aiTextureType_HEIGHT);
+	TXM_LOG(aiTextureType_NORMALS);
+	TXM_LOG(aiTextureType_BASE_COLOR);
+
+	json::object jsmaterial;
+	jsmaterial["__type"] = "material_desc";
+	jsmaterial["__parent"] = "res://base_material.desc";
+	jsmaterial["name"] = material->GetName().C_Str();
+
+	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, mem_prefix, res_sys, out_tags);
+	json::array samplers;
+	json::array defines{"LIGHTS_ENABLED"};
+
+	if (!diffuse_tag.is_null()) {
+		samplers.push_back(diffuse_tag);
+		defines.push_back("USE_TXM_AS_DIFFUSE");
+	} else {
+		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, mem_prefix, res_sys, out_tags);
+		if (!diffuse_tag.is_null()) {
+			samplers.push_back(diffuse_tag);
+			defines.push_back("USE_TXM_AS_DIFFUSE");
+		}
+	}
+
+	if (json::value spec = find_material_texture(scene, material, aiTextureType_SPECULAR, mem_prefix, res_sys, out_tags); !spec.is_null()) {
+		samplers.resize(2);
+		samplers[1] = spec;
+		defines.push_back("USE_SPECULAR_MAP");
+	}
+
+	if (json::value norm = find_material_texture(scene, material, aiTextureType_NORMALS, mem_prefix, res_sys, out_tags); !norm.is_null()) {
+		samplers.resize(3);
+		samplers[2] = norm;
+		defines.push_back("USE_NORMAL_MAP");
+	}
+
+	if (!samplers.empty())
+		jsmaterial["samplers"] = samplers;
+
+	json::object uniforms;
+	aiColor4D color;
+	if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, color))
+		uniforms["albedo"] = json::value_from(glm::vec4(color.r, color.g, color.b, color.a));
+	if (AI_SUCCESS == material->Get(AI_MATKEY_COLOR_EMISSIVE, color))
+		uniforms["emissive"] = json::value_from(glm::vec4(color.r, color.g, color.b, color.a));
+
+	float shininess = 0;
+	if (AI_SUCCESS == material->Get(AI_MATKEY_SHININESS, shininess))
+		uniforms["shininess"] = json::value_from(shininess);
+
+	if (!uniforms.empty())
+		jsmaterial["uniforms"] = uniforms;
+
+	jsmaterial["defines"] = defines;
+	jsmaterial["queue"] = "mix";
+	jsmaterial["shader_fragment"] = "res://shaders/mix_opaque_trans_scene.frag";
+	return jsmaterial;
+}
+
+// ─── Geometry ────────────────────────────────────────────────────────────────
+
+void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geometry_desc& geometry)
+{
+	for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
 		ASSERT_MSG(0 == geometry.layout.get_element_offset("position"), "Offset position mismatch");
 		size_t stride = sizeof(glm::vec3);
 		size_t begin = geometry.vertices.size();
 
 		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
-		if (mesh->HasNormals())
-		{
+		if (mesh->HasNormals()) {
 			ASSERT_MSG(stride == geometry.layout.get_element_offset("normal"), "Offset normal mismatch");
 			stride += sizeof(glm::vec3);
 			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
 		}
-		if (mesh->HasTextureCoords(0))
-		{
+		if (mesh->HasTextureCoords(0)) {
 			ASSERT_MSG(stride == geometry.layout.get_element_offset("uv"), "Offset uv mismatch");
 			stride += sizeof(glm::vec2);
 			store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
 		}
-		if (mesh->HasTangentsAndBitangents())
-		{
+		if (mesh->HasTangentsAndBitangents()) {
 			ASSERT_MSG(stride == geometry.layout.get_element_offset("tangent"), "Offset tangent mismatch");
 			ASSERT_MSG((stride + sizeof(glm::vec3)) == geometry.layout.get_element_offset("bitangent"), "Offset bitangent mismatch");
 			stride += sizeof(glm::vec3) * 2;
@@ -312,12 +286,10 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
 	}
 
-	for (unsigned int i = 0; i < mesh->mNumFaces; i++)
-	{
+	for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
 		aiFace face = mesh->mFaces[i];
-		for (unsigned int j = 0; j < face.mNumIndices; j++) {
+		for (unsigned int j = 0; j < face.mNumIndices; j++)
 			geometry.indices.push_back(face.mIndices[j]);
-		}
 
 		for (unsigned int j = 0; j < face.mNumIndices; j += 3) {
 			auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
@@ -334,8 +306,8 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 	}
 }
 
-// Builds skinning weights for this mesh in the format expected by skinning_manager:
-// result[vertex_idx] = [bone_idx_0, bone_idx_1, ..., weight_0_as_uint32, weight_1_as_uint32, ...]
+// ─── Skinning weights ────────────────────────────────────────────────────────
+
 void build_mesh_skin_weights(
 	const aiMesh* mesh,
 	const std::unordered_map<std::string, int>& bone_index_map,
@@ -343,7 +315,6 @@ void build_mesh_skin_weights(
 	std::vector<std::vector<uint32_t>>& out_weights)
 {
 	std::size_t num_vx = mesh->mNumVertices;
-	// per-vertex list of (bone_idx, weight) pairs
 	std::vector<std::vector<std::pair<int, float>>> vtx_bones(num_vx);
 
 	for (unsigned int bi = 0; bi < mesh->mNumBones; ++bi) {
@@ -376,6 +347,8 @@ void build_mesh_skin_weights(
 	}
 }
 
+// ─── Prefab node builder ─────────────────────────────────────────────────────
+
 json::object build_prefab_node(
 	const aiScene* scene,
 	aiNode* node,
@@ -384,12 +357,13 @@ json::object build_prefab_node(
 	const std::unordered_map<std::string, int>& bone_index_map,
 	const std::unordered_map<std::string, json::object>& node_kf_map,
 	std::vector<std::vector<uint32_t>>& skin_weights,
-	res::tag tag)
+	const std::string& mem_prefix,
+	res::resource_system& res_sys,
+	std::vector<res::tag>& out_tags)
 {
 	json::object jsnode;
 	std::string node_name = node->mName.C_Str();
 
-	// Transform
 	auto trs = decompose_aimatrix(node->mTransformation);
 	{
 		json::object transform;
@@ -403,7 +377,6 @@ json::object build_prefab_node(
 
 	json::object components;
 
-	// Bone component
 	if (auto* bone = scene->findBone(aiString(node_name))) {
 		if (auto it = bone_index_map.find(node_name); it != bone_index_map.end()) {
 			json::object bone_comp;
@@ -413,7 +386,6 @@ json::object build_prefab_node(
 		}
 	}
 
-	// Keyframes component
 	if (auto it = node_kf_map.find(node_name); it != node_kf_map.end()) {
 		json::object kf_comp;
 		kf_comp["keyframes"] = it->second;
@@ -423,17 +395,15 @@ json::object build_prefab_node(
 	if (!components.empty())
 		jsnode["components"] = components;
 
-	// Children
 	json::object children;
 
-	// Mesh children — one child per mesh attached to this node
 	for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
 		const aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
 
 		std::size_t vx_begin = geometry.vertices.size() / geometry.layout.get_stride();
 		std::size_t ind_begin = geometry.indices.size();
 
-		process_mesh_geometry(scene, mesh, geometry, tag);
+		process_mesh_geometry(scene, mesh, geometry);
 
 		std::size_t vx_end = geometry.vertices.size() / geometry.layout.get_stride();
 		std::size_t ind_end = geometry.indices.size();
@@ -444,7 +414,7 @@ json::object build_prefab_node(
 		mesh_node_comp["vx_end"] = vx_end;
 		mesh_node_comp["ind_begin"] = ind_begin;
 		mesh_node_comp["ind_end"] = ind_end;
-		mesh_node_comp["material"] = process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag);
+		mesh_node_comp["material"] = process_material(scene, scene->mMaterials[mesh->mMaterialIndex], mem_prefix, res_sys, out_tags);
 
 		json::object mesh_components;
 		mesh_components["mesh_node_desc"] = mesh_node_comp;
@@ -464,11 +434,12 @@ json::object build_prefab_node(
 		children[mesh_child_name] = mesh_child;
 	}
 
-	// Recursive children
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {
 		aiNode* child_node = node->mChildren[i];
 		std::string child_name = child_node->mName.C_Str();
-		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag);
+		children[child_name] = build_prefab_node(
+			scene, child_node, geometry, geom_tag, bone_index_map,
+			node_kf_map, skin_weights, mem_prefix, res_sys, out_tags);
 	}
 
 	if (!children.empty())
@@ -477,21 +448,61 @@ json::object build_prefab_node(
 	return jsnode;
 }
 
-void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag)
+} // anonymous namespace
+
+// ─── model_importer implementation ───────────────────────────────────────────
+
+edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system& rs, rnd::render_system& rnd)
+	: m_desc(ds)
+	, m_res(rs)
+	, m_rnd(rnd)
 {
-	// 1. Setup geometry layout from first mesh
+}
+
+edt::import_result edt::model_importer::import(const std::filesystem::path& abs_path)
+{
+	import_result result;
+	result.source_path = abs_path;
+
+	// 1. Read file from disk
+	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
+	if (!in) {
+		egLOG("edt/import", "Failed to open file: {}", abs_path.string());
+		return result;
+	}
+
+	auto file_size = static_cast<std::streamsize>(in.tellg());
+	in.seekg(0);
+	std::vector<std::byte> file_data(static_cast<size_t>(file_size));
+	in.read(reinterpret_cast<char*>(file_data.data()), file_size);
+	in.close();
+
+	// 2. Import via Assimp with filesystem IO
+	Assimp::Importer importer;
+	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
+	importer.SetIOHandler(new edt::filesystem_assimp_io(abs_path, file_data));
+	const aiScene* scene = importer.ReadFile(abs_path.string(), flags);
+
+	if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+		egLOG("edt/import", "ASSIMP error: {}", importer.GetErrorString());
+		return result;
+	}
+
+	// 3. Determine memory:// prefix for this import
+	std::string model_name = abs_path.stem().string();
+	std::string mem_prefix = model_name + "/";
+
+	// 4. Setup geometry
 	rnd::geometry_desc geometry;
 	if (scene->HasMeshes()) {
 		std::vector<rnd::driver::BufferElement> layout;
 		layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "position" });
 
 		auto mesh = scene->mMeshes[0];
-		if (mesh->HasNormals()) {
+		if (mesh->HasNormals())
 			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "normal" });
-		}
-		if (mesh->HasTextureCoords(0)) {
+		if (mesh->HasTextureCoords(0))
 			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC2_F, "uv" });
-		}
 		if (mesh->HasTangentsAndBitangents()) {
 			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "tangent" });
 			layout.push_back({ rnd::driver::SHADER_DATA_TYPE::VEC3_F, "bitangent" });
@@ -499,7 +510,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		geometry.layout = rnd::driver::BufferLayout{ layout };
 	}
 
-	// 2. Pre-scan bones: bone_name → global index
+	// 5. Pre-scan bones
 	std::unordered_map<std::string, int> bone_index_map;
 	int bone_idx = 0;
 	for (unsigned int mi = 0; mi < scene->mNumMeshes; ++mi) {
@@ -510,7 +521,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		}
 	}
 
-	// 3. Pre-build per-node keyframes: node_name → { anim_name → animation_node JSON }
+	// 6. Pre-build keyframes
 	std::unordered_map<std::string, json::object> node_kf_map;
 	json::object animations_obj;
 
@@ -555,26 +566,27 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		}
 	}
 
-	// 4. Geometry tag for this model
-	res::tag geom_tag = res::tag{ res::tag::memory, std::format("{0}{1}.geom.desc", tag.path(), tag.pure_name()) };
+	// 7. Geometry tag
+	res::tag geom_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".geom.desc" };
 
-	// 5. Build prefab tree + accumulate skinning weights
+	// 8. Build prefab tree + skinning weights
 	std::vector<std::vector<uint32_t>> skin_weights;
-	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag);
+	json::object prefab_root = build_prefab_node(
+		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
+		node_kf_map, skin_weights, mem_prefix, m_res, result.all_tags);
 
-	// 6. Add animations_desc component to root
+	// 9. Add animations_desc to root
 	if (scene->HasAnimations()) {
 		json::object anim_comp;
 		anim_comp["animations"] = animations_obj;
 
-		if (prefab_root.contains("components")) {
+		if (prefab_root.contains("components"))
 			prefab_root["components"].as_object()["animations_desc"] = anim_comp;
-		} else {
+		else
 			prefab_root["components"] = json::object{ {"animations_desc", anim_comp} };
-		}
 	}
 
-	// 7. Store geometry as a memory resource
+	// 10. Store geometry
 	json::object jsgeometry;
 	jsgeometry["__type"] = "geometry_desc";
 	jsgeometry["__parent"] = "res://base_geometry.desc";
@@ -582,17 +594,37 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 	std::string geom_str = json::serialize(jsgeometry);
 	std::vector<std::byte> geom_bytes(geom_str.size());
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
-	res::get_system().store(geom_tag, geom_bytes);
+	m_res.store(geom_tag, geom_bytes);
+	result.all_tags.push_back(geom_tag);
 
-	// 8. Register skinning weights with skinning manager
+	// 11. Build and store prefab
+	json::object jsdata;
+	jsdata["__type"] = "prefab_desc";
+	for (auto& kv : prefab_root)
+		jsdata[kv.key()] = kv.value();
+
+	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
+	result.root_tag = prefab_tag;
+
+	auto instance = m_desc.create_instance("prefab_desc", prefab_tag);
+	instance->deserialize(m_desc, jsdata);
+	m_res.store(prefab_tag, m_desc.serialize_to_bytes(jsdata));
+	result.all_tags.push_back(prefab_tag);
+
+	result.prefab = std::dynamic_pointer_cast<scn::prefab_desc>(instance);
+
+	// 12. Register skinning weights
 	if (!skin_weights.empty()) {
-		if (auto* skm = rnd::get_system().get_skinning_manager()) {
+		if (auto* skm = m_rnd.get_skinning_manager()) {
 			skm->register_weights(prefab_tag, std::move(skin_weights));
 		}
 	}
 
-	// Copy prefab fields into data (keeping __type already set by caller)
-	for (auto& kv : prefab_root) {
-		data[kv.key()] = kv.value();
+	// Log full prefab JSON for debugging
+	egLOG("edt/import", "Imported '{}' → {} memory resources", abs_path.filename().string(), result.all_tags.size());
+	egLOG("edt/import", "Prefab JSON:\n{}", json::serialize(jsdata));
+	for (const auto& t : result.all_tags) {
+		egLOG("edt/import", "  tag: {}", t.view());
 	}
+	return result;
 }

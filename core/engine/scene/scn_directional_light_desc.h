@@ -6,6 +6,7 @@ namespace scn {
 	class directional_light_desc : public desc::desc_base
 	{
 	public:
+		static constexpr std::string_view __type = "directional_light_desc";
 		using base_type = desc::desc_base;
 		directional_light_desc() = default;
 		~directional_light_desc() = default;

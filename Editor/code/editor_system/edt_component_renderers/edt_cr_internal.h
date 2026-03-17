@@ -1,7 +1,6 @@
 #pragma once
 #include <boost/json.hpp>
-
-namespace edt { class inspector_panel; }
+#include "edt_component_ui_registry.h"
 
 namespace edt {
 
@@ -16,9 +15,9 @@ inline float json_number_to_float(const boost::json::value& v, float def)
 
 // Internal sub-registration functions — one per component type.
 // Called exclusively from edt_component_renderers.cpp.
-void edt_cr_camera_register(inspector_panel& panel);
-void edt_cr_light_register(inspector_panel& panel);
-void edt_cr_skybox_register(inspector_panel& panel);
-void edt_cr_skin_register(inspector_panel& panel);
+void edt_cr_camera_register(component_ui_registry& registry);
+void edt_cr_light_register(component_ui_registry& registry);
+void edt_cr_skybox_register(component_ui_registry& registry);
+void edt_cr_skin_register(component_ui_registry& registry);
 
 } // namespace edt

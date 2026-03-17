@@ -1,7 +1,7 @@
 # EPIC-13: Remove Prototype Descs
 
 **Theme:** prefab-first
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-12
 
 ## Цель

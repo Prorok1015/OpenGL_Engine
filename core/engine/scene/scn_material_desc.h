@@ -15,6 +15,7 @@ namespace scn
 	class material_desc : public desc::desc_base
 	{
 	public:
+		static constexpr std::string_view __type = "material_desc";
 		using base_type = desc::desc_base;
 
 		virtual ~material_desc() = default;

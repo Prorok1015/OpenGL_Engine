@@ -20,6 +20,10 @@
 #include "edt_viewport_panel.h"
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
+#include "edt_component_ui_registry.h"
+#include "edt_model_importer.h"
+#include "edt_asset_exporter.h"
+#include "edt_asset_export_dialog.h"
 
 namespace scn { class ecs_assembler; }
 namespace ecs { class system_factory; }
@@ -46,6 +50,9 @@ namespace edt {
 		std::shared_ptr<edt::input_manager> input;
 		std::shared_ptr<inp::ecs_input_manager> ecs_input;
 		edt::file_dialog file_dialog;
+		edt::model_importer m_model_importer;
+		edt::asset_exporter m_asset_exporter;
+		edt::asset_export_dialog m_export_dialog;
 		desc::desc_system&   desc_system;
 		res::resource_system& m_res;
 		rnd::render_system&   m_rnd;
@@ -55,6 +62,7 @@ namespace edt {
 		ecs::system_factory*    m_sfactory  = nullptr;
 
 		std::shared_ptr<edt::editor_layer> editor_layer;
+		edt::component_ui_registry         m_component_ui_registry;
 
 		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
 		std::shared_ptr<inspector_panel>       m_inspector_panel;
@@ -110,6 +118,7 @@ namespace edt {
 		res::tag                                   m_level_tag;
 		std::vector<std::vector<std::string>>      m_worlds_systems_list;
 		bool                                       m_save_dialog_open = false;
+		bool                                       m_export_dialog_active = false;
 		char                                       m_save_path_buf[512] = {};
 		bool                                       m_is_dirty = false;
 		std::function<void()>                      m_exit_action;

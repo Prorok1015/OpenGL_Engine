@@ -1,4 +1,9 @@
 #include "edt_scene_hierarchy_panel.h"
+#include "scn_camera_desc.h"
+#include "scn_directional_light_desc.h"
+#include "scn_mesh_node_desc.h"
+#include "scn_skybox_desc.h"
+#include "scn_bone_desc.h"
 #include <imgui.h>
 #include <string>
 #include <algorithm>
@@ -67,12 +72,48 @@ namespace edt
 
 	const char* scene_hierarchy_panel::get_type_prefix(const scn::prefab_desc::prefab_node& node) const
 	{
-		if (node.components.count("camera_desc"))             return "[C] ";
-		if (node.components.count("directional_light_desc"))  return "[L] ";
-		if (node.components.count("skin_prototype_desc"))     return "[M] ";
-		if (node.components.count("skinning_prototype_desc")) return "[M] ";
-		if (node.components.count("skybox_desc"))             return "[S] ";
+		if (node.components.count(std::string(scn::camera_desc::__type)))             return "[C] ";
+		if (node.components.count(std::string(scn::directional_light_desc::__type)))  return "[L] ";
+		if (node.components.count(std::string(scn::mesh_node_desc::__type)))          return "[M] ";
+		if (node.components.count(std::string(scn::skybox_desc::__type)))             return "[S] ";
+		if (get_referenced_prefab(node))                                              return "[P] ";
 		return "";
+	}
+
+	const scn::prefab_desc* scene_hierarchy_panel::get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const
+	{
+		for (const auto& [key, comp] : node.components) {
+			if (!comp.parent_desc.is_valid() || !comp.parent_desc.is_ready()) continue;
+			if (comp.parent_desc->get_type() == scn::prefab_desc::__type) {
+				auto ptr = comp.parent_desc.get();
+				if (ptr) return static_cast<const scn::prefab_desc*>(ptr.get());
+			}
+		}
+		return nullptr;
+	}
+
+	void scene_hierarchy_panel::draw_prefab_children_readonly(const scn::prefab_desc::prefab_node& node)
+	{
+		for (const auto& child : node.children) {
+			const bool has_sub = !child.children.empty();
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
+			if (!has_sub) flags |= ImGuiTreeNodeFlags_Leaf;
+
+			std::string prefix;
+			if (child.components.count(std::string(scn::mesh_node_desc::__type)))   prefix = "[M] ";
+			else if (child.components.count(std::string(scn::bone_desc::__type)))   prefix = "[B] ";
+			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = "[C] ";
+
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+			std::string id = prefix + child.name + "##prefab_" + child.name;
+			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
+			ImGui::PopStyleColor();
+
+			if (opened) {
+				draw_prefab_children_readonly(child);
+				ImGui::TreePop();
+			}
+		}
 	}
 
 	// ─── rendering ────────────────────────────────────────────────────────────
@@ -145,16 +186,16 @@ namespace edt
 			ImGui::OpenPopup("##new_entity_type");
 
 		if (ImGui::BeginPopup("##new_entity_type")) {
-			struct { const char* label; const char* type; } types[] = {
-				{ "Empty",             "Empty"                   },
-				{ "Camera",            "camera_desc"             },
-				{ "Directional Light", "directional_light_desc"  },
-				{ "Skybox",            "skybox_desc"             },
-				{ "Skinned Model",     "skinning_prototype_desc" },
+			struct { const char* label; std::string_view type; } types[] = {
+				{ "Empty",             "Empty"                            },
+				{ "Camera",            scn::camera_desc::__type           },
+				{ "Directional Light", scn::directional_light_desc::__type},
+				{ "Skybox",            scn::skybox_desc::__type           },
+				{ "Prefab",            scn::prefab_desc::__type           },
 			};
 			for (const auto& t : types) {
 				if (ImGui::MenuItem(t.label)) {
-					if (m_on_create_node) m_on_create_node(t.type);
+					if (m_on_create_node) m_on_create_node(std::string(t.type));
 				}
 			}
 			ImGui::EndPopup();
@@ -202,7 +243,8 @@ namespace edt
 		}
 
 		// ── tree node ────────────────────────────────────────────────────────
-		const bool has_children = !node.children.empty();
+		const scn::prefab_desc* ref_prefab = get_referenced_prefab(node);
+		const bool has_children = !node.children.empty() || (ref_prefab && !ref_prefab->get_root().children.empty());
 		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 		if (!has_children) flags |= ImGuiTreeNodeFlags_Leaf;
 		if (&node == m_selected_node) flags |= ImGuiTreeNodeFlags_Selected;
@@ -255,6 +297,9 @@ namespace edt
 		if (opened) {
 			for (auto& child : node.children)
 				draw_node(child, lower_filter);
+			// Show referenced prefab's children as read-only
+			if (ref_prefab)
+				draw_prefab_children_readonly(ref_prefab->get_root());
 			ImGui::TreePop();
 		}
 	}
