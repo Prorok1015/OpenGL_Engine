@@ -5,16 +5,16 @@ namespace scn
 {
 	struct viewport
 	{
-		glm::ivec2 center{ 0 };
+		glm::ivec2 lefttop{ 0 };
 		glm::ivec2 size{ 0 };
 
 		viewport() = default;
 		viewport(const glm::ivec4& vp)
-			: center(vp.x, vp.y)
+			: lefttop(vp.x, vp.y)
 			, size(vp.z, vp.w) {}
 
 		operator glm::ivec4() const noexcept {
-			return { center, size };
+			return { lefttop, size };
 		}
 	};
 

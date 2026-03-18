@@ -55,7 +55,7 @@ namespace res
 
 		bool exists(const tag& tag) const {
 			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
-				egLOG("resource/exists", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/exists", "Protocol '{}' is not supported!", tag.protocol());
 				return false;
 			}
 			return m_resolvers.at(tag.protocol())->exists(tag);
@@ -63,7 +63,7 @@ namespace res
 
 		bool store(const tag& tag, const std::vector<std::byte>& data) {
 			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
-				egLOG("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
 				return false;
 			}
 
@@ -160,7 +160,7 @@ namespace res
 		data fetch_data(const tag& tag) const
 		{
 			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
-				egLOG("resource/require", "Protocol '{}' is not supported!", tag.protocol());
+				egLOG_WARN("resource/require", "Protocol '{}' is not supported!", tag.protocol());
 				return data{};
 			}
 
@@ -202,7 +202,7 @@ namespace res
 						std::vector<std::byte> raw_data = adapter->serialize(tag, block->data);
 						store(tag, raw_data);
 					} catch (const std::exception& e) {
-						egLOG("res/error", "Failed to auto-serialize {0}: {1}", tag.string(), e.what());
+						egLOG_ERROR("res/error", "Failed to auto-serialize {0}: {1}", tag.string(), e.what());
 					}
 				});
 			}
@@ -255,8 +255,9 @@ namespace res
 			ASSERT_MSG(raw_data_block, "resource data not found");
 
 			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
-				if (raw_data_block->status == core::res::res_status::error) {
+				if (raw_data_block->has_error()) {
 					final_cb->set_error("Resolver error: "s + raw_data_block->error_msg);
+					egLOG_ERROR("res/resolver", "Failed to resolve resource {0}: {1}", tag.view(), raw_data_block->error_msg);
 					return;
 				}
 
@@ -268,9 +269,9 @@ namespace res
 					auto parsed_obj = adapter->deserialize(tag, raw_data_block->data);
 
 					final_cb->set_ready(std::move(parsed_obj));
-				}
-				catch (const std::exception& e) {
+				} catch (const std::exception& e) {
 					final_cb->set_error("Adapter error: "s + e.what());
+					egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
 				}
 			};
 

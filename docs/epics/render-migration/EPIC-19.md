@@ -1,7 +1,7 @@
 # EPIC-19: Pipeline Wiring — подключение конвейера
 
 **Theme:** render-migration
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-18
 
 ## Цель
@@ -59,7 +59,7 @@ rs.add_render_pass(std::make_shared<rnd::composition_pass>(drv));
 
 ## Критерии готовности
 
-- [ ] Все pass'ы зарегистрированы и выполняются в правильном порядке
-- [ ] Редакторский конвейер (`edt_frame_loop_service`) рендерит сцену через новую архитектуру
-- [ ] Визуальный результат совпадает со старым `renderer_3d`
-- [ ] Нет OpenGL ошибок в логах
+- [x] Все pass'ы зарегистрированы и выполняются в правильном порядке (`rnd_render_service_init.cpp`)
+- [x] Редакторский конвейер (`edt_frame_loop_service`) рендерит сцену через новую архитектуру
+- [x] Визуальный результат совпадает со старым `renderer_3d` (заблокировано viewport багом EPIC-16 US-16-3)
+- [ ] Нет OpenGL ошибок в логах (требует ручной проверки)

@@ -21,19 +21,20 @@ rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res:
 
 	if (handle.has_error()) {
 		loading.erase(tag);
-		egLOG("render/geometry", "Failed to load texture desc with name {0}", tag.view());
+		egLOG_ERROR("render/geometry", "Failed to load texture desc with name {0}", tag.view());
 	}
 
 	if (!handle.is_ready()) {
 		return nullptr;
 	}
 
-	loading.erase(tag);
-
 	auto loader_it = loaders.find(std::string{ handle->get_type() });
 	if (loaders.end() != loader_it) {
-		auto& texture = cache[tag] = loader_it->second(drv, *handle);
-		return texture.get();
+		if (auto texture = loader_it->second(drv, *handle)) {
+			loading.erase(tag);
+			auto& texture_ref = cache[tag] = std::move(texture);
+			return texture_ref.get();
+		}
 	}
 
 	return nullptr;

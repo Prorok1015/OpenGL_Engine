@@ -21,7 +21,7 @@ namespace scn {
 
 		auto it = m_spawners.find(actual_type);
 		if (it == m_spawners.end()) {
-			egLOG("assembler/warning", "No ECS spawner for desc type: {0}", actual_type);
+			egLOG_WARN("assembler/warning", "No ECS spawner for desc type: {0}", actual_type);
 			return;
 		}
 
@@ -47,7 +47,7 @@ namespace scn {
 
 		auto temp_desc = m_desc_sys.create_instance(actual_type, res::tag{});
 		if (!temp_desc) {
-			egLOG("assembler/error", "Failed to create temporary desc of type: {0}", actual_type);
+			egLOG_ERROR("assembler/error", "Failed to create temporary desc of type: {0}", actual_type);
 			return;
 		}
 

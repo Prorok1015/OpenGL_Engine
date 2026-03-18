@@ -16,10 +16,16 @@ res::tag res::operator+ (const res::tag& l, const res::tag& r)
 
 void res::tag_invoke(json::value_from_tag, json::value& out, const res::tag& c)
 {
-	out = json::value_from(c.view());
+	if (c.is_valid()) {
+		out = json::value_from(c.view());
+		return;
+	}
+	out = json::value{ nullptr };
 }
 
 res::tag res::tag_invoke(json::value_to_tag<res::tag>, const json::value& obj)
 {
-	return res::tag{ obj.as_string() };
+	if (obj.is_string())
+		return res::tag{ obj.as_string() };
+	return res::tag::null;
 }

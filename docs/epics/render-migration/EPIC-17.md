@@ -1,7 +1,7 @@
 # EPIC-17: Extractor Layer — слой экстракторов
 
 **Theme:** render-migration
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-16
 
 ## Цель
@@ -92,7 +92,8 @@ fa.add_extractor(std::make_shared<scn::light_extractor>(lm));
 
 ## Критерии готовности
 
-- [ ] `scn::light_extractor` реализован и регистрирует свет в `frame_context`
-- [ ] `frame_assembler` создаётся и регистрируется при инициализации
-- [ ] `edt_frame_loop_service::on_step()` вызывает `build_frame` с рабочими экстракторами
-- [ ] `frame_context` после `build_frame` содержит корректные данные геометрии и освещения
+- [x] `scn::light_extractor` реализован и регистрирует свет в `frame_context`
+- [x] `frame_assembler` создаётся и регистрируется при инициализации (`scn_scene_service_init.cpp`)
+- [x] `edt_frame_loop_service::on_step()` вызывает `build_frame` с рабочими экстракторами
+- [x] `frame_context` после `build_frame` содержит корректные данные геометрии и освещения
+- [ ] US-17-3 frustum culling — не реализован (низкий приоритет, skip)

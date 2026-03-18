@@ -31,7 +31,7 @@
 | [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | planned |
 | [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы | planned |
 | [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов | planned |
-| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | planned |
+| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | in_progress |
 
 ### Desc-Driven Architecture
 
@@ -64,12 +64,12 @@
 
 | ID | Title | Status |
 |---|---|---|
-| [EPIC-16](render-migration/EPIC-16.md) | Data Contracts — контракты данных рендера | planned |
-| [EPIC-17](render-migration/EPIC-17.md) | Extractor Layer — слой экстракторов | planned |
-| [EPIC-18](render-migration/EPIC-18.md) | Render Passes — конкретные проходы рендеринга | planned |
-| [EPIC-19](render-migration/EPIC-19.md) | Pipeline Wiring — подключение конвейера | planned |
-| [EPIC-20](render-migration/EPIC-20.md) | Game Loop Migration — миграция игрового цикла | planned |
-| [EPIC-21](render-migration/EPIC-21.md) | Legacy Renderer Removal — удаление renderer_3d | planned |
+| [EPIC-16](render-migration/EPIC-16.md) | Data Contracts — контракты данных рендера | in_progress |
+| [EPIC-17](render-migration/EPIC-17.md) | Extractor Layer — слой экстракторов | done |
+| [EPIC-18](render-migration/EPIC-18.md) | Render Passes — конкретные проходы рендеринга | done |
+| [EPIC-19](render-migration/EPIC-19.md) | Pipeline Wiring — подключение конвейера | done |
+| [EPIC-20](render-migration/EPIC-20.md) | Game Loop Migration — миграция игрового цикла | done |
+| [EPIC-21](render-migration/EPIC-21.md) | Legacy Renderer Removal — удаление renderer_3d | done |
 
 ---
 

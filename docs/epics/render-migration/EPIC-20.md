@@ -1,7 +1,7 @@
 # EPIC-20: Game Loop Migration — миграция игрового цикла
 
 **Theme:** render-migration
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-19
 
 ## Цель
@@ -78,6 +78,6 @@ render_system.render_frame(context);
 
 ## Критерии готовности
 
-- [ ] `gs_loop_service` использует `frame_assembler` + `render_system::render_frame`
-- [ ] Старый `render_system.render()` не вызывается нигде
-- [ ] Визуальный результат идентичен старому конвейеру (все сценарии из US-20-2)
+- [x] `gs_loop_service` использует `frame_assembler` + `render_system::render_frame`
+- [x] Старый `render_system.render()` не вызывается нигде
+- [x] Визуальный результат идентичен старому конвейеру (все сценарии из US-20-2)

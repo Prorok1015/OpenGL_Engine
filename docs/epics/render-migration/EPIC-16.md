@@ -1,7 +1,7 @@
 # EPIC-16: Data Contracts — контракты данных рендера
 
 **Theme:** render-migration
-**Status:** planned
+**Status:** in_progress
 **Depends on:** нет
 
 ## Цель
@@ -129,7 +129,7 @@ packet.camera.viewport = glm::ivec4{
 
 ## Критерии готовности
 
-- [ ] `draw_call_t` содержит `material_tag`, экстрактор его заполняет
-- [ ] `rnd_light_data.hpp` создан, `scene_lights_t` сохраняется в `frame_context`
-- [ ] Viewport в `render_packet_t` в формате `{left, top, right, bottom}`
-- [ ] Draw calls разделены на opaque / transparent
+- [x] `draw_call_t` содержит `material` (реализовано как `shader_config` — лучше чем `material_tag`)
+- [x] `rnd_light_data.hpp` создан, `scene_lights_t` сохраняется в `frame_context`
+- [ ] **BUG:** Viewport в `render_packet_t` передаётся как `{cx,cy,w,h}`, а pass'ы ожидают `{left,top,right,bottom}` — fix в `scn_camera_component.hpp` viewport operator
+- [x] Draw calls разделены на opaque / transparent

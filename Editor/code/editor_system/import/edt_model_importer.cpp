@@ -13,6 +13,7 @@
 #include "scn_mesh_nodes.hpp"
 
 #include <fstream>
+#include <unordered_set>
 
 namespace json = boost::json;
 
@@ -128,8 +129,8 @@ json::value find_material_texture(
 				}
 
 				res_sys.store(emb_tag, data_byte);
-				out_tags.push_back(emb_tag);
 			}
+			out_tags.push_back(emb_tag);
 
 			res::tag desc_tag = res::tag{ res::tag::memory,
 				std::format("{0}{1}.txm.desc", emb_tag.path(), emb_tag.pure_name()) };
@@ -145,8 +146,8 @@ json::value find_material_texture(
 				std::vector<std::byte> desc_data(s.size());
 				std::memcpy(desc_data.data(), s.data(), s.size());
 				res_sys.store(desc_tag, desc_data);
-				out_tags.push_back(desc_tag);
 			}
+			out_tags.push_back(desc_tag);
 
 			return json::value_from(desc_tag);
 		}
@@ -163,11 +164,11 @@ json::value find_material_texture(
 				std::vector<std::byte> tex_bytes(static_cast<size_t>(tex_size));
 				tex_in.read(reinterpret_cast<char*>(tex_bytes.data()), tex_size);
 				res_sys.store(tex_data_tag, tex_bytes);
-				out_tags.push_back(tex_data_tag);
 			} else {
 				egLOG_WARN("edt/import", "External texture not found: {}", tex_path.string());
 			}
 		}
+		out_tags.push_back(tex_data_tag);
 
 		res::tag desc_tag = res::tag{ res::tag::memory,
 			std::format("{0}textures/{1}.txm.desc", mem_prefix, texture_name) };
@@ -183,8 +184,8 @@ json::value find_material_texture(
 			std::vector<std::byte> desc_data(s.size());
 			std::memcpy(desc_data.data(), s.data(), s.size());
 			res_sys.store(desc_tag, desc_data);
-			out_tags.push_back(desc_tag);
 		}
+		out_tags.push_back(desc_tag);
 
 		return json::value_from(desc_tag);
 	}
@@ -274,8 +275,8 @@ json::value process_material(
 		std::vector<std::byte> data(s.size());
 		std::memcpy(data.data(), s.data(), s.size());
 		res_sys.store(mat_tag, data);
-		out_tags.push_back(mat_tag);
 	}
+	out_tags.push_back(mat_tag);
 
 	return json::value_from(mat_tag);
 }
@@ -664,6 +665,14 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 
 	// Save prefab JSON for main-thread finalization (owned copy)
 	im.prefab_json = std::move(jsdata);
+
+	// Deduplicate tags (materials/textures shared by multiple meshes)
+	{
+		std::unordered_set<res::tag> seen;
+		std::erase_if(im.all_tags, [&seen](const res::tag& t) {
+			return !seen.insert(t).second;
+		});
+	}
 
 	egLOG("edt/import", "Background import done: '{}' → {} memory resources", abs_path.filename().string(), im.all_tags.size());
 	for (const auto& t : im.all_tags) {

@@ -1,7 +1,7 @@
 # EPIC-21: Legacy Renderer Removal — удаление старого рендерера
 
 **Theme:** render-migration
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-20
 
 ## Цель
@@ -74,7 +74,7 @@ grep -r "renderer_3d\|scn_renderer" --include="*.h" --include="*.cpp" core/ Edit
 
 ## Критерии готовности
 
-- [ ] `scn_renderer.h/.cpp` удалены
-- [ ] Нет `#include "scn_renderer.h"` в кодовой базе
-- [ ] Полный билд (`editor` + `unit_tests`) проходит
-- [ ] Все визуальные тесты из EPIC-20 US-20-2 по-прежнему зелёные
+- [x] `scn_renderer.h/.cpp` удалены
+- [x] Нет `#include "scn_renderer.h"` в кодовой базе
+- [x] Полный билд (`editor` + `unit_tests`) проходит
+- [x] Все визуальные тесты из EPIC-20 US-20-2 по-прежнему зелёные

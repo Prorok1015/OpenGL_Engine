@@ -73,7 +73,7 @@ namespace scn {
 			if (it != m_spawners.end() && it->second.spawn) {
 				it->second.spawn(reg, e, desc, name);
 			} else {
-				egLOG("assembler/warning", "No spawner registered for desc type: {0}", desc.get_type());
+				egLOG_WARN("assembler/warning", "No spawner registered for desc type: {0}", desc.get_type());
 			}
 		}
 

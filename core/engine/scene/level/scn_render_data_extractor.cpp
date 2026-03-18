@@ -14,8 +14,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     int dir_light_count = 0;
 
     if (context.data.has_value<rnd::scene_lights_t>()) {
-        dir_light_count = static_cast<int>(
-            context.data.require<rnd::scene_lights_t>().directional.size());
+        dir_light_count = static_cast<int>(context.data.require<rnd::scene_lights_t>().directional.size());
     }
 
     for (uint32_t i = 0; i < level.get_world_count(); ++i) {
@@ -38,18 +37,15 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
             auto& vp = cam.m_viewport;
             packet.camera.viewport = vp;
-            packet.camera.projection_matrix = glm::perspective(
-                glm::radians(cam.fov), (float)vp.size.x / (float)vp.size.y,
+            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp.size.x / (float)vp.size.y,
                 cam.near_distance, cam.far_distance);
             packet.camera.target_texture_tag = cam.texture;
             packet.camera.render_priority = 0;
 
             auto& tex_mgr = rnd::get_system().get_texture_manager();
 
-            for (auto [m_ent, mesh, geom, mat, m_trans] :
-                 reg.view<scn::mesh_component, scn::geometry_component,
-                 scn::material_desc_component, scn::world_transform>()
-                 .each()) {
+            auto meshes_view = reg.view<scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
+            for (auto&& [m_ent, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
                 if (!mat.mlt_desc.is_ready()) {
                     continue;
@@ -65,12 +61,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 dc.transform = m_trans.world;
 
                 const auto queue = mlt.queue;
-                auto shader_cfg =
-                    mlt.get_shader_desc(entt::handle{ reg, m_ent }, tex_mgr);
+                auto shader_cfg = mlt.get_shader_desc(entt::handle{ reg, m_ent }, tex_mgr);
 
                 if (dir_light_count > 0) {
-                    shader_cfg.cdata.constants["DIRECTION_LIGHT_COUNT"] =
-                        std::to_string(dir_light_count);
+                    shader_cfg.cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(dir_light_count);
                 }
 
                 if (auto* owner = reg.try_get<scn::obj_owner_component>(m_ent)) {
@@ -104,13 +98,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 }
             }
 
-            auto skys_view =
-                reg.view<scn::sky_component, scn::material_desc_component,
-                scn::renderable>();
+            auto skys_view = reg.view<scn::sky_component, scn::material_desc_component, scn::renderable>();
             for (auto [sky_ent, sky, mat] : skys_view.each()) {
                 if (mat.mlt_desc.is_ready()) {
-                    packet.skybox_material = mat.mlt_desc->get_shader_desc(
-                        entt::handle{ reg, sky_ent }, tex_mgr);
+                    packet.skybox_material = mat.mlt_desc->get_shader_desc(entt::handle{ reg, sky_ent }, tex_mgr);
                 }
             }
 

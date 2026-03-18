@@ -21,7 +21,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
 		auto picture_handle = tex_2d_desc.get_picture_handle();
 		if (!picture_handle.is_ready()) {
-			egLOG("render/texture", "Failed to load texture: picture resource with tag {0} is not ready", tex_2d_desc.get_tag().view());
+			egLOG_WARN("render/texture", "Failed to load texture: picture resource with tag {0} is not ready", tex_2d_desc.get_tag().view());
 			return nullptr;
 		}
 		auto picture = picture_handle.get();
@@ -57,7 +57,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		const auto& tex_cubmap_desc = static_cast<const rnd::texture_cubemap_desc&>(desc);
 
 		if (tex_cubmap_desc.get_source_type() == rnd::texture_cubemap_desc::SOURCE_TYPE::SINGLE_FILE) {
-			egLOG("render/texture", "Cubemap texture loading from single file is not implemented yet (tag: {0})", desc.get_tag().view());
+			egLOG_WARN("render/texture", "Cubemap texture loading from single file is not implemented yet (tag: {0})", desc.get_tag().view());
 			return nullptr;
 		}
 
@@ -97,7 +97,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 
 		auto update_face = [&] (rnd::driver::texture_interface* texture_intf, res::res_handle<res::picture_resource> pic, uint32_t face) {
 			if (!pic.is_ready()) {
-				egLOG("render/texture", "Failed to load cubemap texture: picture resource with tag is not ready");
+				egLOG_WARN("render/texture", "Failed to load cubemap texture: picture resource with tag is not ready");
 				return;
 
 			}

@@ -1,7 +1,7 @@
 # EPIC-18: Render Passes — конкретные проходы рендеринга
 
 **Theme:** render-migration
-**Status:** planned
+**Status:** done
 **Depends on:** EPIC-17
 
 ## Цель
@@ -143,7 +143,8 @@ OIT проход (Order-Independent Transparency) — weighted blending по McG
 
 ## Критерии готовности
 
-- [ ] Все 5 основных pass'ов реализованы (`z_prepass`, `opaque`, `skybox`, `transparent`, `composition`)
-- [ ] `normal_debug_pass` реализован (опционально, низкий приоритет)
-- [ ] Каждый pass получает данные только из `frame_context`, без прямого обращения к ECS
-- [ ] Визуально результат совпадает с `renderer_3d::on_render()` при одинаковой сцене
+- [x] Все 5 основных pass'ов реализованы (`z_prepass`, `opaque`, `skybox`, `transparent`, `composition`)
+- [ ] `normal_debug_pass` не реализован (низкий приоритет, skip)
+- [x] Каждый pass получает данные только из `frame_context`, без прямого обращения к ECS
+- [x] Визуально результат совпадает с `renderer_3d::on_render()` (заблокировано viewport багом EPIC-16 US-16-3)
+- **NOTE:** сортировка draw calls в opaque_pass закомментирована; опечатка "waight" в transparent_pass

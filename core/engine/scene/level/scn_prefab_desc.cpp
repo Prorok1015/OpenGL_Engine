@@ -32,9 +32,9 @@ namespace scn {
 	}
 }
 
-void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const boost::json::object& data)
+void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	auto parse_comp = [&] (const boost::json::value& val, std::string_view explicit_type) -> prefab_comp_node {
+	auto parse_comp = [&] (const json::value& val, std::string_view explicit_type) -> prefab_comp_node {
 		if (val.is_string()) {
 			return prefab_comp_node{
 				.parent_desc = desc_system.get_field_desc<desc::desc_base>(*this, val)
@@ -64,7 +64,7 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const boost::
 		return cnode;
 	};
 
-	auto parse_node = [&] (auto& self, std::string_view node_name, const boost::json::value& val, bool is_root = false) -> prefab_node {
+	auto parse_node = [&] (auto& self, std::string_view node_name, const json::value& val, bool is_root = false) -> prefab_node {
 		prefab_node result;
 		result.name = node_name;
 
@@ -72,9 +72,9 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const boost::
 			const auto& obj = val.as_object();
 			if (auto* transform = obj.if_contains("transform")) {
 				auto& t_obj = transform->as_object();
-				if (auto const* p = t_obj.if_contains("position")) result.position = boost::json::value_to<glm::vec3>(*p);
-				if (auto const* p = t_obj.if_contains("rotation")) result.rotation = boost::json::value_to<glm::vec3>(*p);
-				if (auto const* p = t_obj.if_contains("scale"))    result.scale = boost::json::value_to<glm::vec3>(*p);
+				if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
+				if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
+				if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
 			}
 
 			if (auto const* p = obj.if_contains("components")) {
@@ -99,19 +99,19 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const boost::
 	root = parse_node(parse_node, "", data, true);
 }
 
-void scn::prefab_desc::serialize(boost::json::object& data) const
+void scn::prefab_desc::serialize(json::object& data) const
 {
-	auto serialize_comp = [] (const std::string& comp_key, const prefab_comp_node& cnode, bool is_shorthand) -> boost::json::value {
+	auto serialize_comp = [] (const std::string& comp_key, const prefab_comp_node& cnode, bool is_shorthand) -> json::value {
 		if (cnode.overrides.empty() && cnode.type_name.empty() && cnode.parent_desc.is_valid()) {
-			return boost::json::value_from(cnode.parent_desc->get_tag());
+			return json::value_from(cnode.parent_desc->get_tag());
 		}
 
-		boost::json::object out;
+		json::object out;
 		if (!cnode.type_name.empty() && (is_shorthand || cnode.type_name != comp_key)) {
 			out["__type"] = cnode.type_name;
 		}
 		if (cnode.parent_desc.is_valid()) {
-			out["__parent"] = boost::json::value_from(cnode.parent_desc->get_tag());
+			out["__parent"] = json::value_from(cnode.parent_desc->get_tag());
 		}
 		for (const auto& kv : cnode.overrides) {
 			out[kv.key()] = kv.value();
@@ -119,7 +119,7 @@ void scn::prefab_desc::serialize(boost::json::object& data) const
 		return out;
 	};
 
-	auto serialize_node = [&] (auto& self, const prefab_node& nd) -> boost::json::value {
+	auto serialize_node = [&] (auto& self, const prefab_node& nd) -> json::value {
 		bool can_be_collapsed = nd.children.empty() &&
 			nd.components.size() == 1 &&
 			nd.position == glm::vec3{ 0.0f } &&
@@ -132,21 +132,21 @@ void scn::prefab_desc::serialize(boost::json::object& data) const
 			return serialize_comp(comp_name, cnode, true);
 		}
 
-		boost::json::object node_obj;
+		json::object node_obj;
 
-		boost::json::object transform_obj;
+		json::object transform_obj;
 		if (nd.position != glm::vec3{ 0.0f }) 
-			transform_obj["position"] = boost::json::value_from(nd.position);
+			transform_obj["position"] = json::value_from(nd.position);
 		if (nd.rotation != glm::vec3{ 0.0f }) 
-			transform_obj["rotation"] = boost::json::value_from(nd.rotation);
+			transform_obj["rotation"] = json::value_from(nd.rotation);
 		if (nd.scale != glm::vec3{ 1.0f })    
-			transform_obj["scale"] = boost::json::value_from(nd.scale);
+			transform_obj["scale"] = json::value_from(nd.scale);
 
 		if (!transform_obj.empty()) 
 			node_obj["transform"] = std::move(transform_obj);
 
 		if (!nd.components.empty()) {
-			boost::json::object comps_obj;
+			json::object comps_obj;
 			for (const auto& [comp_key, cnode] : nd.components) {
 				comps_obj[comp_key] = serialize_comp(comp_key, cnode, false);
 			}
@@ -154,7 +154,7 @@ void scn::prefab_desc::serialize(boost::json::object& data) const
 		}
 
 		if (!nd.children.empty()) {
-			boost::json::object children_obj;
+			json::object children_obj;
 			for (const auto& child_node : nd.children) {
 				children_obj[child_node.name] = self(self, child_node);
 			}
@@ -164,7 +164,7 @@ void scn::prefab_desc::serialize(boost::json::object& data) const
 		return node_obj;
 	};
 
-	boost::json::value root_val = serialize_node(serialize_node, root);
+	json::value root_val = serialize_node(serialize_node, root);
 	if (root_val.is_object()) {
 		data = root_val.as_object();
 	}
@@ -200,7 +200,7 @@ void scn::assemble_merged_node(
 		for (const auto& [comp_name, cnode] : base_node->components) {
 			if (cnode.type_name == "prefab_desc") continue;
 
-			boost::json::object final_overrides = cnode.overrides;
+			json::object final_overrides = cnode.overrides;
 			if (override_node) {
 				auto it = override_node->components.find(comp_name);
 				if (it != override_node->components.end()) {
@@ -322,7 +322,7 @@ void scn::hot_reload_merged_node(
 	if (base_node) {
 		for (const auto& [comp_name, cnode] : base_node->components) {
 			if (cnode.type_name == "prefab_desc") continue;
-			boost::json::object final_overrides = cnode.overrides;
+			json::object final_overrides = cnode.overrides;
 			if (override_node) {
 				if (auto it = override_node->components.find(comp_name); it != override_node->components.end()) {
 					for (const auto& kv : it->second.overrides) final_overrides[kv.key()] = kv.value();
