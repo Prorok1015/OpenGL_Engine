@@ -55,7 +55,8 @@ namespace ds
 		auto raw_ptr = ptr.get();
 		auto ptr1 = static_cast<T*>(raw_ptr);
 		auto ptr2 = dynamic_cast<T*>(raw_ptr);
-		ASSERT_MSG(ptr1 != ptr2, "polymorphic_cast failed");
-		return std::static_pointer_cast<T>(std::move(ptr));
+		ASSERT_MSG(ptr1 == ptr2, "polymorphic_cast failed");
+		ptr.release();
+		return std::unique_ptr<T>(ptr1);
 	}
 }

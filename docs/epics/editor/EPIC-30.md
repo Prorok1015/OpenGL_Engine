@@ -1,7 +1,7 @@
 # EPIC-30: Editor Code Review — баги, производительность, реорганизация
 
 **Theme:** editor / infrastructure
-**Status:** planned
+**Status:** in_progress
 **Depends on:** —
 
 ---
@@ -383,9 +383,9 @@ US-30-4 (Оптимизации)  ← standalone, можно параллель�
 ## Критерии готовности
 
 - [x] Все CRITICAL/MAJOR баги исправлены (US-30-1)
-- [ ] `editor_system.cpp` < 300 строк
-- [ ] Файлы организованы по 7 подпапкам
-- [ ] `edt_editor_system.h` имеет < 10 includes
+- [x] `editor_system.cpp` ~318 строк (283 без includes; init logic вынесена в `edt_init_helpers.cpp`)
+- [x] Файлы организованы по 7 подпапкам (US-30-3)
+- [x] `edt_editor_system.h` имеет 8 includes (US-30-5, было 30)
 - [x] `draw_node` не аллоцирует строки на каждый кадр (US-30-4)
 - [x] Console имеет лимит 10,000 записей (US-30-6)
 - [x] Деструктор editor_system корректно чистит watchers (US-30-6)

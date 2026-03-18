@@ -26,12 +26,14 @@
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
-| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | planned |
+| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | in_progress |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
 | [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | planned |
 | [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы | planned |
 | [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов | planned |
 | [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | in_progress |
+| [EPIC-34](editor/EPIC-34.md) | Editor Model Importer — расширение и упрощение | planned |
+| [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора | planned |
 
 ### Desc-Driven Architecture
 
@@ -49,6 +51,7 @@
 | [EPIC-12](prefab-first/EPIC-12.md) | Model Importer → Prefab Output | done |
 | [EPIC-13](prefab-first/EPIC-13.md) | Remove Prototype Descs | done |
 | [EPIC-14](prefab-first/EPIC-14.md) | Component UI Registry — type-safe editor | done |
+| [EPIC-33](prefab-first/EPIC-33.md) | Skinning & Animation Refactoring — префаб-совместимая архитектура | planned |
 
 ### Infrastructure
 
@@ -59,12 +62,15 @@
 | [EPIC-29](infrastructure/EPIC-29.md) | Service Layer Refactoring — удаление game_system, единый паттерн сервисов | planned |
 | [EPIC-31](infrastructure/EPIC-31.md) | Assert System — информативные ассерты с диалогом и стек-трейсом | planned |
 | [EPIC-32](infrastructure/EPIC-32.md) | External Assert Dialog — отдельный процесс для ассерт-диалога (lowest priority) | planned |
+| [EPIC-35](infrastructure/EPIC-35.md) | Engine Model Importer Adapter — модернизация для runtime/mods | planned |
+| [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | in_progress |
+| [EPIC-38](infrastructure/EPIC-38.md) | res::tag — std::formatter и ostream support | planned |
 
 ### Render Migration
 
 | ID | Title | Status |
 |---|---|---|
-| [EPIC-16](render-migration/EPIC-16.md) | Data Contracts — контракты данных рендера | in_progress |
+| [EPIC-16](render-migration/EPIC-16.md) | Data Contracts — контракты данных рендера | done |
 | [EPIC-17](render-migration/EPIC-17.md) | Extractor Layer — слой экстракторов | done |
 | [EPIC-18](render-migration/EPIC-18.md) | Render Passes — конкретные проходы рендеринга | done |
 | [EPIC-19](render-migration/EPIC-19.md) | Pipeline Wiring — подключение конвейера | done |
@@ -94,6 +100,19 @@ EPIC-08 + EPIC-10 (Inspector)
 EPIC-23 (Logger → spdlog)  ← standalone, no deps
 
 EPIC-24 (Async Editor Ops)  ← standalone
+
+EPIC-12 + EPIC-13 (Prefab Model)
+  └── EPIC-33 (Skinning & Animation Refactoring)
+
+EPIC-22 (Asset Import Pipeline)
+  └── EPIC-34 (Editor Model Importer — расширение и упрощение)
+        └── EPIC-35 (Engine Model Importer Adapter — модернизация)
+
+EPIC-36 (Editor VFS Protocol edt://)  ← standalone, no deps
+
+EPIC-37 (Unit Test Coverage)  ← standalone, no deps
+
+EPIC-38 (res::tag formatter)  ← standalone, no deps
 
 EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
 EPIC-26 (Shader Desc)    ← после EPIC-08

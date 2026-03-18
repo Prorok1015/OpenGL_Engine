@@ -1,7 +1,7 @@
 # EPIC-16: Data Contracts — контракты данных рендера
 
 **Theme:** render-migration
-**Status:** in_progress
+**Status:** done
 **Depends on:** нет
 
 ## Цель
@@ -79,33 +79,18 @@ struct scene_lights_t {
 
 ---
 
-## US-16-3: Исправить viewport-баг в `scn_render_data_extractor`
+## US-16-3: Исправить семантический viewport-баг в render pass'ах
 
-**Файл:** `core/engine/scene/level/scn_render_data_extractor.cpp`
-**Приоритет:** КРИТИЧЕСКИЙ
+**Файлы:** `rnd_render_packet.hpp`, `rnd_opaque_pass.cpp`, `rnd_z_prepass.cpp`, `rnd_transparent_pass.cpp`, `rnd_composition_pass.cpp`, `rnd_skybox_pass.cpp`
+**Приоритет:** СРЕДНИЙ (функционально работало при viewport от (0,0), но семантика была неверной)
 
-Экстрактор пишет viewport как `{center.x, center.y, size.x, size.y}`.
-Render pass ожидает `{left, top, right, bottom}` (как и `glm::ivec4` input rect повсюду в проекте).
+**Проблема:** `scn::viewport` хранит `{lefttop, size}` и operator `glm::ivec4()` возвращает `{left, top, width, height}`. Все 5 render pass'ов вычисляли `viewport.z - viewport.x` (т.е. `width - left`), полагая что формат `{left, top, right, bottom}`. При `left=0` математика случайно давала верный результат, но при ненулевом offset viewport сломался бы.
 
-```cpp
-// Было (НЕПРАВИЛЬНО):
-packet.camera.viewport = cam.m_viewport;
-
-// Должно быть:
-auto& vp = cam.m_viewport;
-packet.camera.viewport = glm::ivec4{
-    vp.center.x - vp.size.x / 2,
-    vp.center.y - vp.size.y / 2,
-    vp.center.x + vp.size.x / 2,
-    vp.center.y + vp.size.y / 2
-};
-```
-
-> Или пересмотреть хранение viewport в `camera_component` — возможно, сразу хранить `{left, top, right, bottom}`.
+**Исправление:** зафиксирован контракт `camera_render_data_t::viewport` = `{left, top, width, height}`. Во всех pass'ах убрано ошибочное вычитание — `.z`/`.w` используются напрямую как width/height.
 
 **AC:**
-- Viewport в `render_packet_t` в формате `{left, top, right, bottom}`
-- Unit-тест проверяет корректность преобразования
+- [x] `camera_render_data_t::viewport` задокументирован как `{left, top, width, height}`
+- [x] Все render pass'ы используют `.z`/`.w` напрямую без вычитания
 
 ---
 
@@ -131,5 +116,5 @@ packet.camera.viewport = glm::ivec4{
 
 - [x] `draw_call_t` содержит `material` (реализовано как `shader_config` — лучше чем `material_tag`)
 - [x] `rnd_light_data.hpp` создан, `scene_lights_t` сохраняется в `frame_context`
-- [ ] **BUG:** Viewport в `render_packet_t` передаётся как `{cx,cy,w,h}`, а pass'ы ожидают `{left,top,right,bottom}` — fix в `scn_camera_component.hpp` viewport operator
+- [x] Viewport контракт зафиксирован: `camera_render_data_t::viewport` = `{left, top, width, height}`. Render pass'ы исправлены — убрано ошибочное вычитание `viewport.z - viewport.x`, теперь `.z`/`.w` используются напрямую как width/height
 - [x] Draw calls разделены на opaque / transparent
