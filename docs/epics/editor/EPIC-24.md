@@ -1,6 +1,6 @@
 # EPIC-24 — Async Editor Operations
 
-**Status:** planned
+**Status:** done
 **Theme:** Editor Features
 **Priority:** high
 
@@ -54,7 +54,7 @@ serialize_and_push():
 ## User Stories
 
 ### US-24-1: Убрать store из serialize_and_push
-**Status:** todo
+**Status:** done
 **Priority:** critical (блокер для остальных задач)
 
 Проблема: `m_res.store(m_editor_tag, ...)` пишет level JSON на диск при каждом редактировании.
@@ -71,7 +71,7 @@ assembly создаёт новые material overrides → `store` → цикл.
 - `Editor/code/editor_system/edt_editor_system.cpp` — `serialize_and_push()`
 
 ### US-24-2: Async model import с прогрессом
-**Status:** todo
+**Status:** done
 **Priority:** high
 
 Проблема: `model_importer::import()` — полностью синхронный: Assimp parse → geometry → prefab → store.
@@ -96,7 +96,7 @@ assembly создаёт новые material overrides → `store` → цикл.
 - `Editor/code/editor_system/edt_editor_system.cpp` — `show_file_dialog()`
 
 ### US-24-3: Async export с прогрессом
-**Status:** todo
+**Status:** done
 **Priority:** medium
 
 Проблема: `asset_exporter::export_to_project()` — синхронный: fetch → parse → remap → write.
@@ -112,7 +112,7 @@ assembly создаёт новые material overrides → `store` → цикл.
 - `Editor/code/editor_system/edt_asset_export_dialog.h/cpp`
 
 ### US-24-4: Async level load с loading overlay
-**Status:** todo
+**Status:** done
 **Priority:** medium
 
 Проблема: `load_level()` вызывает `require_sync<level_desc>` + `switch_to_world` + `serialize_and_push`.
@@ -133,7 +133,7 @@ m_loading_state: enum { idle, loading_level, importing_model, exporting }
 - `Editor/code/editor_system/edt_editor_layer.cpp` — loading overlay UI
 
 ### US-24-5: Заменить require_sync на require + then в editor hot paths
-**Status:** todo
+**Status:** done
 **Priority:** low
 
 Постепенная замена оставшихся `require_sync` вызовов:
@@ -149,7 +149,7 @@ m_loading_state: enum { idle, loading_level, importing_model, exporting }
 - `Editor/code/editor_system/edt_editor_system.cpp` — множественные callsites
 
 ### US-24-6: Общий async task runner для editor
-**Status:** todo
+**Status:** skipped (overengineering — each async operation has unique completion logic; polling is 2-3 lines)
 **Priority:** low
 
 Если US-24-2, US-24-3, US-24-4 показывают повторяющийся паттерн (future + polling + progress UI),

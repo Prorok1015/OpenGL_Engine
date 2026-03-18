@@ -41,7 +41,7 @@ void scn::assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_nod
 	reg.emplace_or_replace<scn::mesh_component>(e, scn::mesh_component{ .mesh = mesh_data });
 
 	if (desc.geometry.is_valid())
-		reg.emplace_or_replace<scn::geometry_component>(e, scn::geometry_component{ .geom_tag = desc.geometry->get_tag() });
+		reg.emplace_or_replace<scn::geometry_component>(e, scn::geometry_component{ .geom_tag = desc.geometry.get_tag() });
 
 	if (desc.material.is_valid())
 		reg.emplace_or_replace<scn::material_desc_component>(e, scn::material_desc_component{ .mlt_desc = desc.material });

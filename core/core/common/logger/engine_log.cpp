@@ -11,7 +11,7 @@ namespace {
 
 	constexpr std::size_t MAX_FILE_SIZE  = 5 * 1024 * 1024; // 5 MB
 	constexpr std::size_t MAX_FILE_COUNT = 3;
-	constexpr const char* FILE_PATTERN   = "[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v";
+	constexpr const char* FILE_PATTERN   = "[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] %v";
 
 	std::mutex s_logger_mutex;
 	std::unordered_map<std::string, std::shared_ptr<spdlog::logger>> s_loggers;
@@ -82,7 +82,7 @@ void engine::init_logger()
 
 	// Console sink — colored output
 	auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-	console_sink->set_pattern("[%H:%M:%S.%e] [%n] [%^%l%$] %v");
+	console_sink->set_pattern("[%H:%M:%S.%e] [%^%l%$] [%n] %v");
 	s_sinks.push_back(console_sink);
 
 	// File sink — rotating
@@ -130,10 +130,6 @@ void engine::set_log_level(log_level level)
 {
 	auto spd_level = to_spdlog_level(level);
 	spdlog::set_level(spd_level);
-	std::lock_guard lock(s_logger_mutex);
-	for (auto& [name, logger] : s_loggers) {
-		logger->set_level(spd_level);
-	}
 }
 
 void engine::set_category_level(std::string_view category, log_level level)

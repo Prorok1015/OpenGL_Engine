@@ -1,6 +1,7 @@
 #pragma once
 #include <filesystem>
 #include <chrono>
+#include <mutex>
 #include <unordered_map>
 #include <boost/asio.hpp>
 
@@ -32,6 +33,15 @@ namespace res {
             timer.cancel();
         }
 
+        // Update the snapshot for a file we just wrote ourselves,
+        // so the next poll does not treat it as an external change.
+        void mark_written(const fs::path& path) {
+            if (fs::exists(path)) {
+                std::lock_guard lock(m_state_mutex);
+                file_states[path] = fs::last_write_time(path);
+            }
+        }
+
     private:
         void schedule_timer() {
             timer.expires_after(std::chrono::milliseconds(500));
@@ -48,31 +58,41 @@ namespace res {
         void update_state(const fs::path& root, bool notify) {
             if (!fs::exists(root)) return;
 
-            for (const auto& entry : fs::recursive_directory_iterator(root)) {
-                if (!entry.is_regular_file()) continue;
+            std::vector<fs::path> changed;
 
-                auto path = entry.path();
-                auto last_time = fs::last_write_time(path);
+            {
+                std::lock_guard lock(m_state_mutex);
+                for (const auto& entry : fs::recursive_directory_iterator(root)) {
+                    if (!entry.is_regular_file()) continue;
 
-                auto it = file_states.find(path);
-                if (it == file_states.end()) {
-                    file_states[path] = last_time;
-                    if (notify) m_notify_cb(path);
+                    auto path = entry.path();
+                    auto last_time = fs::last_write_time(path);
+
+                    auto it = file_states.find(path);
+                    if (it == file_states.end()) {
+                        file_states[path] = last_time;
+                        if (notify) changed.push_back(path);
+                    }
+                    else if (it->second != last_time) {
+                        it->second = last_time;
+                        if (notify) changed.push_back(path);
+                    }
                 }
-                else if (it->second != last_time) {
-                    it->second = last_time;
-                    if (notify) m_notify_cb(path);
-                }
+
+                std::erase_if(file_states, [](const auto& item) {
+                    return !fs::exists(item.first);
+                });
             }
 
-            std::erase_if(file_states, [](const auto& item) {
-                return !fs::exists(item.first);
-                });
+            for (const auto& path : changed) {
+                m_notify_cb(path);
+            }
         }
 
         std::function<void(fs::path)> m_notify_cb;
         boost::asio::steady_timer timer;
         std::vector<fs::path> watch_paths;
+        std::mutex m_state_mutex;
         std::unordered_map<fs::path, fs::file_time_type> file_states;
     };
 }

@@ -72,9 +72,12 @@ namespace desc
 
             ASSERT_MSG(data.is_object() && data.as_object().contains("__type"), "Invalid desc field data: expected either string tag or object with '__type' field");
 
-			res::tag mem_tag = make_mem_tag(owner, json::value_to<std::string>(data.at("__type")));
-			// TODO: optimize parsing again data. create desc inplace and pin as a resource to not serialize/deserialize twice
-			m_res_system.store(mem_tag, serialize_to_bytes(data));
+			res::tag mem_tag = make_mem_tag_deterministic(owner, json::value_to<std::string>(data.at("__type")), data);
+
+			// Only store if not already in cache — avoids re-creating the same resource on every assembly.
+			if (!m_res_system.exists(mem_tag)) {
+				m_res_system.store(mem_tag, serialize_to_bytes(data));
+			}
 			return m_res_system.require<T>(mem_tag);
 		}
 
@@ -177,31 +180,19 @@ namespace desc
 			return bytes;
 		}
 
-		res::tag make_mem_tag(const desc::desc_base& owner, const std::string& field) const
+		res::tag make_mem_tag_deterministic(const desc::desc_base& owner, const std::string& field, const json::value& data) const
 		{
 			std::string_view owner_name = owner.get_tag().pure_name();
-			std::string_view file_name = field;
+			std::string serialized = json::serialize(data);
+			size_t content_hash = std::hash<std::string>{}(serialized);
 
-			std::string common_name = std::format("{}/{}", owner_name, file_name);
-            
-			auto& override_id = get_virtual_desc_counter(common_name);
-
-			std::string path = std::format("memory://overrides/{}_{}.desc",
-				common_name,
-				override_id.fetch_add(1, std::memory_order_relaxed));
+			std::string path = std::format("memory://overrides/{}/{}_{:x}.desc",
+				owner_name, field, content_hash);
 
 			return res::tag{ path };
 		}
 
-        std::atomic<uint32_t>& get_virtual_desc_counter(const std::string& common_name) const
-        {
-            std::lock_guard lock(m_mutex);
-            return virtual_desc_counters[common_name];
-		}
-
 	private:
-		mutable std::mutex m_mutex;
-		mutable std::unordered_map<std::string, std::atomic<uint32_t>> virtual_desc_counters;
 		res::resource_system& m_res_system;
 		std::unordered_map<std::string, std::function<std::shared_ptr<desc::desc_base>()>> factory_map;
 		std::vector<std::string> m_component_type_names;

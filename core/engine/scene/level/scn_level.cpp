@@ -106,7 +106,7 @@ void scn::level::reload_world(
 
 	auto& w = create_world(name, old_id);
 
-	for (const auto& sys_name : desc.get_systems()) {
+	for (const auto& sys_name : desc.get_systems()) { // TODO: need to create systems from all worlds again
 		sf.create_system(sys_name, w.state(), organizer());
 	}
 

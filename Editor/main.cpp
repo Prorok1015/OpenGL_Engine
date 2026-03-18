@@ -5,7 +5,7 @@
 #include <core_module.h>
 #include <engine_module.h>
 #include <engine_log.h>
-#include "code/editor_system/editor_module.h"
+#include "editor_module.h"
 
 #ifndef ENGINE_CONSOLE_MODE
 #include <Windows.h>

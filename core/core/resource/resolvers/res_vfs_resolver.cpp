@@ -171,6 +171,9 @@ void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, c
 		}
 		fs::rename(tmp_path, target_path);
 
+		// Update file_watcher snapshot so it doesn't treat our own write as an external change.
+		watcher.mark_written(target_path);
+
 		{
 			std::unique_lock lock(m_pending_mutex);
 			m_pending_writes.erase(tag);

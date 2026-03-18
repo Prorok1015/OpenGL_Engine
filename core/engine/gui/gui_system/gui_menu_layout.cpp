@@ -28,8 +28,11 @@ void gui::menu_layout_manager::process()
 		checked_menu_item_list.erase(std::remove(checked_menu_item_list.begin(), checked_menu_item_list.end(), it));
 	}
 
+	// Copy the list before iterating — callbacks may register/unregister implicits,
+	// which would invalidate iterators and references into the original vector.
+	auto implicits_snapshot = implicit_callback_list;
 	std::vector<std::string> del_imp;
-	for (auto& [id, callback] : implicit_callback_list) {
+	for (auto& [id, callback] : implicits_snapshot) {
 		if (!callback()) {
 			del_imp.push_back(id);
 		}

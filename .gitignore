@@ -1,4 +1,4 @@
-imgui.ini
+*.ini
 
 #Не включать папки временных объектов
 #и папки IDE
@@ -7,17 +7,18 @@ imgui.ini
 **/.vs
 Editor/sandbox/
 Editor/res/objects/
+Editor/res/assets/
 out/
 bin/
 build/
+build-release/
 .idea/
 .vscode/
 .cache/
 .claude/
-lib3dparty/natvis/
+**/lib3dparty/natvis
 CMakeSettings.json
 Makefile
-
-#Не включать папки сборок
 **/Debug
 **/Release
+**/logs

@@ -2,8 +2,8 @@
 #include "edt_panel_base.h"
 #include "ecs_entity.h"
 
-#include "../edt_input_manager.h"
-#include "../edt_transform_gizmo.hpp"
+#include "edt_input_manager.h"
+#include "edt_transform_gizmo.hpp"
 #include "inp_ecs_input_manager.h"
 #include <glm/glm.hpp>
 #include <functional>
