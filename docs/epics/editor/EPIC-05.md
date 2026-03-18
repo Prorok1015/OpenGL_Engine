@@ -85,6 +85,6 @@ Shift+Click — выделить диапазон.
 
 - [x] Rename обновляет `world_desc` через hot-reload (`on_rename_node` callback → `serialize_and_push`)
 - [x] Duplicate создаёт полную копию узла в `world_desc` (`duplicate_entity`, вставка как sibling)
-- [ ] Drag-and-drop re-parent работает с пересчётом transform
+- [x] Drag-and-drop re-parent работает (make child / reorder / move to root, visual hints)
 - [x] Filter работает с `prefab_node` деревом (рекурсивный `node_matches_filter`, auto-expand родителей)
 - [ ] Multi-select: delete и duplicate для группы

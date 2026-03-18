@@ -1,5 +1,4 @@
 #include "edt_asset_exporter.h"
-#include <fstream>
 #include <boost/json.hpp>
 
 namespace json = boost::json;
@@ -71,29 +70,31 @@ void edt::asset_exporter::remap_json_strings(
 
 bool edt::asset_exporter::export_to_project(
 	const import_result& result,
-	const std::unordered_map<res::tag, res::tag>& remap) const
+	const std::unordered_map<res::tag, res::tag>& remap,
+	export_progress* progress) const
 {
-	auto base_path = res::resource_system::get_resources_path();
-
-	// Process tags in order: leaves first (textures, geometry), then prefab last
-	// Simple approach: prefab (.prefab.desc) goes last, everything else in order
+	// Process tags in order: leaves first (textures, geometry), then prefab (root) last.
+	// root_tag is already known from import_result — no filename guessing needed.
 	std::vector<res::tag> ordered_tags;
-	res::tag prefab_tag;
 
 	for (const auto& tag : result.all_tags) {
-		std::string rel(tag.relative());
-		if (rel.find(".prefab.desc") != std::string::npos)
-			prefab_tag = tag;
-		else
-			ordered_tags.push_back(tag);
+		if (tag == result.root_tag)
+			continue; // add last
+		ordered_tags.push_back(tag);
 	}
-	if (prefab_tag.is_valid())
-		ordered_tags.push_back(prefab_tag);
+	if (result.root_tag.is_valid())
+		ordered_tags.push_back(result.root_tag);
+
+	if (progress) {
+		progress->total.store(static_cast<int>(ordered_tags.size()));
+		progress->done.store(0);
+	}
 
 	for (const auto& mem_tag : ordered_tags) {
 		auto remap_it = remap.find(mem_tag);
 		if (remap_it == remap.end()) {
-			egLOG("edt/export", "No remap for tag '{}'", mem_tag.view());
+			egLOG_WARN("edt/export", "No remap for tag '{}'", mem_tag.view());
+			if (progress) progress->done.fetch_add(1);
 			continue;
 		}
 
@@ -102,7 +103,8 @@ bool edt::asset_exporter::export_to_project(
 		// Fetch bytes from memory://
 		auto data_block = m_res.fetch_data(mem_tag);
 		if (!data_block) {
-			egLOG("edt/export", "Failed to fetch data for '{}'", mem_tag.view());
+			egLOG_WARN("edt/export", "Failed to fetch data for '{}'", mem_tag.view());
+			if (progress) progress->done.fetch_add(1);
 			continue;
 		}
 
@@ -115,43 +117,37 @@ bool edt::asset_exporter::export_to_project(
 		if (rel.find(".desc") != std::string::npos) {
 			std::string json_str(reinterpret_cast<const char*>(bytes.data()), bytes.size());
 			try {
-				json::value val = json::parse(json_str);
+				json::parse_options opts;
+				opts.max_depth = 128;
+				json::value val = json::parse(json_str, {}, opts);
 				remap_json_strings(val, remap);
 				std::string remapped = json::serialize(val);
 				output_bytes.resize(remapped.size());
 				std::memcpy(output_bytes.data(), remapped.data(), remapped.size());
 			} catch (const std::exception& e) {
-				egLOG("edt/export", "Failed to parse JSON for '{}': {}", mem_tag.view(), e.what());
+				egLOG_ERROR("edt/export", "Failed to parse JSON for '{}': {}", mem_tag.view(), e.what());
 				output_bytes = bytes;
 			}
 		} else {
 			output_bytes = bytes;
 		}
 
-		// Write to disk
-		std::filesystem::path abs_path = base_path / std::string(res_tag.relative());
-		std::error_code ec;
-		std::filesystem::create_directories(abs_path.parent_path(), ec);
-		if (ec) {
-			egLOG("edt/export", "Failed to create directory '{}': {}", abs_path.parent_path().string(), ec.message());
-			return false;
-		}
-
-		std::ofstream out(abs_path, std::ios::binary);
-		if (!out) {
-			egLOG("edt/export", "Failed to open file for writing: {}", abs_path.string());
-			return false;
-		}
-
-		out.write(reinterpret_cast<const char*>(output_bytes.data()), output_bytes.size());
-		out.close();
-
-		// Register in VFS so the resource system can find it
+		// Write via VFS — store() handles disk write + mark_written to suppress file_watcher.
 		m_res.store(res_tag, output_bytes);
 
-		egLOG("edt/export", "Exported: {} → {}", mem_tag.view(), abs_path.string());
+		if (progress) progress->done.fetch_add(1);
+
+		egLOG_INFO("edt/export", "Exported: {} → {}", mem_tag.view(), res_tag.view());
 	}
 
-	egLOG("edt/export", "Export complete: {} files written", ordered_tags.size());
+	// Store the exported root tag
+	if (progress) {
+		if (auto it = remap.find(result.root_tag); it != remap.end())
+			progress->exported_tag = it->second;
+		progress->success.store(true);
+		progress->finished.store(true);
+	}
+
+	egLOG_INFO("edt/export", "Export complete: {} files written", ordered_tags.size());
 	return true;
 }

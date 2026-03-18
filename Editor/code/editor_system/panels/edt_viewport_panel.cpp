@@ -5,7 +5,7 @@
 #include "scn_camera_component.hpp"
 #include "scn_model.h"
 #include "eng_transform_3d.hpp"
-#include "../edt_guizmo.hpp"
+#include "edt_guizmo.hpp"
 #include <imgui.h>
 
 namespace edt
@@ -52,8 +52,7 @@ namespace edt
 				if (reg->all_of<scn::local_transform>(ent))
 					cam_view = glm::inverse(reg->get<scn::local_transform>(ent).local);
 				float aspect = size.x / size.y;
-				cam_proj = glm::perspective(
-					glm::radians(cam.fov), aspect, cam.near_distance, cam.far_distance);
+				cam_proj = glm::perspective(glm::radians(cam.fov), aspect, cam.near_distance, cam.far_distance);
 				break;
 			}
 		}

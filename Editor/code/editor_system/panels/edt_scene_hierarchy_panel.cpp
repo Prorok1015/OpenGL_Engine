@@ -8,6 +8,7 @@
 #include <string>
 #include <algorithm>
 #include <cctype>
+#include <format>
 
 namespace edt
 {
@@ -46,6 +47,11 @@ namespace edt
 	void scene_hierarchy_panel::set_on_duplicate_node(std::function<void(const std::string&)> cb)
 	{
 		m_on_duplicate_node = std::move(cb);
+	}
+
+	void scene_hierarchy_panel::set_on_reparent_node(std::function<void(const std::string&, const std::string&, int)> cb)
+	{
+		m_on_reparent_node = std::move(cb);
 	}
 
 	void scene_hierarchy_panel::set_world_names(std::vector<std::string> names, int active_idx)
@@ -209,8 +215,23 @@ namespace edt
 		std::string lower_filter = m_filter;
 		std::transform(lower_filter.begin(), lower_filter.end(), lower_filter.begin(), ::tolower);
 
-		for (auto& child : m_world_desc->get_root().children)
-			draw_node(child, lower_filter);
+		auto& children = m_world_desc->get_root().children;
+		for (int i = 0; i < children.size(); ++i)
+			draw_node(children[i], lower_filter);
+
+		// ── drop on empty area → move to root ────────────────────────────
+		ImVec2 avail = ImGui::GetContentRegionAvail();
+		if (avail.y > 0.f) {
+			ImGui::InvisibleButton("##root_drop_area", ImVec2(-1.f, avail.y));
+			if (ImGui::BeginDragDropTarget()) {
+				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
+					std::string dragged_name(static_cast<const char*>(payload->Data));
+					// empty parent name = root
+					if (m_on_reparent_node) m_on_reparent_node(dragged_name, "", -1);
+				}
+				ImGui::EndDragDropTarget();
+			}
+		}
 	}
 
 	void scene_hierarchy_panel::draw_node(scn::prefab_desc::prefab_node& node, const std::string& lower_filter)
@@ -220,17 +241,23 @@ namespace edt
 		if (filter_active && !node_matches_filter(node, lower_filter))
 			return;
 
-		const std::string prefix  = get_type_prefix(node);
-		const std::string label   = prefix + node.name;
-		const std::string uid     = "##" + node.name;
+		const char* prefix = get_type_prefix(node);
+
+		// Build ImGui IDs using format_to_n into stack buffer (no heap allocation)
+		char id_buf[512];
+		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{}{}##{}", prefix, node.name, node.name);
+		*id_result.out = '\0';
 
 		// ── inline rename ────────────────────────────────────────────────────
 		if (m_rename_node == &node) {
+			char rename_id[512];
+			auto rn_result = std::format_to_n(rename_id, sizeof(rename_id) - 1, "##rename##{}", node.name);
+			*rn_result.out = '\0';
 			ImGui::SetKeyboardFocusHere();
-			if (ImGui::InputText(("##rename" + uid).c_str(), m_rename_buf, sizeof(m_rename_buf),
+			if (ImGui::InputText(rename_id, m_rename_buf, sizeof(m_rename_buf),
 				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
 			{
-				if (m_rename_buf[0] != '\0' && m_rename_buf != node.name) {
+				if (m_rename_buf[0] != '\0' && node.name != m_rename_buf) {
 					std::string old_name = node.name;
 					node.name = m_rename_buf;
 					if (m_on_rename_node) m_on_rename_node(old_name, node.name);
@@ -252,8 +279,7 @@ namespace edt
 		if (filter_active && has_children)
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
-		const std::string node_id = label + uid;
-		const bool opened = ImGui::TreeNodeEx(node_id.c_str(), flags);
+		const bool opened = ImGui::TreeNodeEx(id_buf, flags);
 
 		// ── selection ───────────────────────────────────────────────────────
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
@@ -261,11 +287,57 @@ namespace edt
 			if (m_on_node_selected) m_on_node_selected(&node);
 		}
 
+		// ── drag source ─────────────────────────────────────────────────────
+		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+			ImGui::SetDragDropPayload("HIERARCHY_NODE", node.name.c_str(), node.name.size() + 1);
+			ImGui::TextUnformatted(node.name.c_str());
+			ImGui::EndDragDropSource();
+		}
+
+		// ── drop target: position-based (top edge = insert before, middle = make child, bottom edge = insert after)
+		if (ImGui::BeginDragDropTarget()) {
+			// Draw visual hint based on mouse position
+			ImVec2 item_min = ImGui::GetItemRectMin();
+			ImVec2 item_max = ImGui::GetItemRectMax();
+			float item_h = item_max.y - item_min.y;
+			float mouse_y = ImGui::GetMousePos().y - item_min.y;
+			float fraction = (item_h > 0.f) ? (mouse_y / item_h) : 0.5f;
+
+			ImDrawList* draw_list = ImGui::GetWindowDrawList();
+			ImU32 line_col = IM_COL32(80, 160, 255, 200);
+			float line_thickness = 2.0f;
+
+			if (fraction < 0.25f) {
+				// Line above
+				draw_list->AddLine(ImVec2(item_min.x, item_min.y), ImVec2(item_max.x, item_min.y), line_col, line_thickness);
+			} else if (fraction > 0.75f) {
+				// Line below
+				draw_list->AddLine(ImVec2(item_min.x, item_max.y), ImVec2(item_max.x, item_max.y), line_col, line_thickness);
+			} else {
+				// Highlight rect (make child)
+				draw_list->AddRect(item_min, item_max, line_col, 0.f, 0, line_thickness);
+			}
+
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
+				std::string dragged_name(static_cast<const char*>(payload->Data));
+				if (dragged_name != node.name) {
+					if (fraction < 0.25f) {
+						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, 0);
+					} else if (fraction > 0.75f) {
+						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, 1);
+					} else {
+						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, -1);
+					}
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
+
 		// ── double-click to rename ───────────────────────────────────────────
 		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 			m_rename_node = &node;
-			strncpy(m_rename_buf, node.name.c_str(), sizeof(m_rename_buf) - 1);
-			m_rename_buf[sizeof(m_rename_buf) - 1] = '\0';
+			auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
+			*cp.out = '\0';
 		}
 
 		// ── context menu ─────────────────────────────────────────────────────

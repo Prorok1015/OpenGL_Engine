@@ -82,6 +82,7 @@ json::value find_material_texture(
 	aiMaterial* mat,
 	aiTextureType type,
 	const std::string& mem_prefix,
+	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
 	std::vector<res::tag>& out_tags)
 {
@@ -150,18 +151,23 @@ json::value find_material_texture(
 			return json::value_from(desc_tag);
 		}
 
-		// External texture file — read from model's directory via Assimp IO,
-		// but for memory:// storage we just reference it.
-		// The texture bytes are already cached by filesystem_assimp_io.
-		// We store a txm.desc pointing at the texture data.
-
-		// Store texture data in memory://
+		// External texture file — read from model's directory and store in memory://
 		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + std::string(texture_name));
 
-		// The texture file should be read from disk and stored
-		// (it will be done by the caller if not already in memory)
-		// For now, create the desc pointing to the tag from the VFS path
-		// We'll handle copying actual texture bytes in asset_exporter
+		if (!res_sys.exists(tex_data_tag)) {
+			std::filesystem::path tex_path = model_dir / std::string(texture_name);
+			std::ifstream tex_in(tex_path, std::ios::binary | std::ios::ate);
+			if (tex_in) {
+				auto tex_size = static_cast<std::streamsize>(tex_in.tellg());
+				tex_in.seekg(0);
+				std::vector<std::byte> tex_bytes(static_cast<size_t>(tex_size));
+				tex_in.read(reinterpret_cast<char*>(tex_bytes.data()), tex_size);
+				res_sys.store(tex_data_tag, tex_bytes);
+				out_tags.push_back(tex_data_tag);
+			} else {
+				egLOG_WARN("edt/import", "External texture not found: {}", tex_path.string());
+			}
+		}
 
 		res::tag desc_tag = res::tag{ res::tag::memory,
 			std::format("{0}textures/{1}.txm.desc", mem_prefix, texture_name) };
@@ -190,6 +196,7 @@ json::value process_material(
 	const aiScene* scene,
 	aiMaterial* material,
 	const std::string& mem_prefix,
+	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
 	std::vector<res::tag>& out_tags)
 {
@@ -199,12 +206,14 @@ json::value process_material(
 	TXM_LOG(aiTextureType_NORMALS);
 	TXM_LOG(aiTextureType_BASE_COLOR);
 
+	std::string mat_name = material->GetName().C_Str();
+
 	json::object jsmaterial;
 	jsmaterial["__type"] = "material_desc";
 	jsmaterial["__parent"] = "res://base_material.desc";
-	jsmaterial["name"] = material->GetName().C_Str();
+	jsmaterial["name"] = mat_name;
 
-	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, mem_prefix, res_sys, out_tags);
+	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, mem_prefix, model_dir, res_sys, out_tags);
 	json::array samplers;
 	json::array defines{"LIGHTS_ENABLED"};
 
@@ -212,22 +221,26 @@ json::value process_material(
 		samplers.push_back(diffuse_tag);
 		defines.push_back("USE_TXM_AS_DIFFUSE");
 	} else {
-		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, mem_prefix, res_sys, out_tags);
+		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, mem_prefix, model_dir, res_sys, out_tags);
 		if (!diffuse_tag.is_null()) {
 			samplers.push_back(diffuse_tag);
 			defines.push_back("USE_TXM_AS_DIFFUSE");
 		}
 	}
 
-	if (json::value spec = find_material_texture(scene, material, aiTextureType_SPECULAR, mem_prefix, res_sys, out_tags); !spec.is_null()) {
-		samplers.resize(2);
-		samplers[1] = spec;
+	json::value spec = find_material_texture(scene, material, aiTextureType_SPECULAR, mem_prefix, model_dir, res_sys, out_tags);
+	if (!spec.is_null()) {
+		// Ensure slot 1 exists (slot 0 = diffuse or placeholder)
+		while (samplers.size() < 1) samplers.push_back(nullptr);
+		samplers.push_back(spec);
 		defines.push_back("USE_SPECULAR_MAP");
 	}
 
-	if (json::value norm = find_material_texture(scene, material, aiTextureType_NORMALS, mem_prefix, res_sys, out_tags); !norm.is_null()) {
-		samplers.resize(3);
-		samplers[2] = norm;
+	json::value norm = find_material_texture(scene, material, aiTextureType_NORMALS, mem_prefix, model_dir, res_sys, out_tags);
+	if (!norm.is_null()) {
+		// Ensure slots 0-1 exist before adding normal at slot 2
+		while (samplers.size() < 2) samplers.push_back(nullptr);
+		samplers.push_back(norm);
 		defines.push_back("USE_NORMAL_MAP");
 	}
 
@@ -251,57 +264,82 @@ json::value process_material(
 	jsmaterial["defines"] = defines;
 	jsmaterial["queue"] = "mix";
 	jsmaterial["shader_fragment"] = "res://shaders/mix_opaque_trans_scene.frag";
-	return jsmaterial;
+
+	// Store as separate memory:// resource instead of inlining in prefab
+	res::tag mat_tag = res::tag{ res::tag::memory,
+		std::format("{0}materials/{1}.mat.desc", mem_prefix, mat_name) };
+
+	if (!res_sys.exists(mat_tag)) {
+		std::string s = json::serialize(jsmaterial);
+		std::vector<std::byte> data(s.size());
+		std::memcpy(data.data(), s.data(), s.size());
+		res_sys.store(mat_tag, data);
+		out_tags.push_back(mat_tag);
+	}
+
+	return json::value_from(mat_tag);
 }
 
 // ─── Geometry ────────────────────────────────────────────────────────────────
 
 void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geometry_desc& geometry)
 {
-	for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
+	// Validate layout offsets once before the loop (PERF-06)
+	{
+		size_t expected_stride = sizeof(glm::vec3); // position
 		ASSERT_MSG(0 == geometry.layout.get_element_offset("position"), "Offset position mismatch");
-		size_t stride = sizeof(glm::vec3);
+		if (mesh->HasNormals()) {
+			ASSERT_MSG(expected_stride == geometry.layout.get_element_offset("normal"), "Offset normal mismatch");
+			expected_stride += sizeof(glm::vec3);
+		}
+		if (mesh->HasTextureCoords(0)) {
+			ASSERT_MSG(expected_stride == geometry.layout.get_element_offset("uv"), "Offset uv mismatch");
+			expected_stride += sizeof(glm::vec2);
+		}
+		if (mesh->HasTangentsAndBitangents()) {
+			ASSERT_MSG(expected_stride == geometry.layout.get_element_offset("tangent"), "Offset tangent mismatch");
+			ASSERT_MSG((expected_stride + sizeof(glm::vec3)) == geometry.layout.get_element_offset("bitangent"), "Offset bitangent mismatch");
+			expected_stride += sizeof(glm::vec3) * 2;
+		}
+		ASSERT_MSG(expected_stride == geometry.layout.get_stride(), "Stride mismatch");
+	}
+
+	for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
 		size_t begin = geometry.vertices.size();
 
 		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
 		if (mesh->HasNormals()) {
-			ASSERT_MSG(stride == geometry.layout.get_element_offset("normal"), "Offset normal mismatch");
-			stride += sizeof(glm::vec3);
 			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));
 		}
 		if (mesh->HasTextureCoords(0)) {
-			ASSERT_MSG(stride == geometry.layout.get_element_offset("uv"), "Offset uv mismatch");
-			stride += sizeof(glm::vec2);
 			store_data(geometry.vertices, (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][i]));
 		}
 		if (mesh->HasTangentsAndBitangents()) {
-			ASSERT_MSG(stride == geometry.layout.get_element_offset("tangent"), "Offset tangent mismatch");
-			ASSERT_MSG((stride + sizeof(glm::vec3)) == geometry.layout.get_element_offset("bitangent"), "Offset bitangent mismatch");
-			stride += sizeof(glm::vec3) * 2;
 			store_data(geometry.vertices, convert_to_glm(mesh->mTangents[i]));
 			store_data(geometry.vertices, convert_to_glm(mesh->mBitangents[i]));
 		}
-
-		ASSERT_MSG(stride == geometry.layout.get_stride(), "Stride mismatch");
-		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
 	}
 
+	const bool has_uvs = mesh->HasTextureCoords(0);
+
 	for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
-		aiFace face = mesh->mFaces[i];
+		const aiFace& face = mesh->mFaces[i];
 		for (unsigned int j = 0; j < face.mNumIndices; j++)
 			geometry.indices.push_back(face.mIndices[j]);
 
-		for (unsigned int j = 0; j < face.mNumIndices; j += 3) {
-			auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
-			auto uv2 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 1]]);
-			auto uv3 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 2]]);
+		if (has_uvs) {
+			for (unsigned int j = 0; j + 2 < face.mNumIndices; j += 3) {
+				auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
+				auto uv2 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 1]]);
+				auto uv3 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 2]]);
 
-			ds::bbox box;
-			ds::expand(box, uv1);
-			ds::expand(box, uv2);
-			ds::expand(box, uv3);
+				ds::bbox box;
+				ds::expand(box, uv1);
+				ds::expand(box, uv2);
+				ds::expand(box, uv3);
 
-			geometry.bounds.push_back({ box, static_cast<uint32_t>(geometry.bounds.size()) });
+				geometry.bounds.push_back({ box, static_cast<uint32_t>(geometry.bounds.size()) });
+			}
 		}
 	}
 }
@@ -358,6 +396,7 @@ json::object build_prefab_node(
 	const std::unordered_map<std::string, json::object>& node_kf_map,
 	std::vector<std::vector<uint32_t>>& skin_weights,
 	const std::string& mem_prefix,
+	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
 	std::vector<res::tag>& out_tags)
 {
@@ -414,7 +453,7 @@ json::object build_prefab_node(
 		mesh_node_comp["vx_end"] = vx_end;
 		mesh_node_comp["ind_begin"] = ind_begin;
 		mesh_node_comp["ind_end"] = ind_end;
-		mesh_node_comp["material"] = process_material(scene, scene->mMaterials[mesh->mMaterialIndex], mem_prefix, res_sys, out_tags);
+		mesh_node_comp["material"] = process_material(scene, scene->mMaterials[mesh->mMaterialIndex], mem_prefix, model_dir, res_sys, out_tags);
 
 		json::object mesh_components;
 		mesh_components["mesh_node_desc"] = mesh_node_comp;
@@ -439,7 +478,7 @@ json::object build_prefab_node(
 		std::string child_name = child_node->mName.C_Str();
 		children[child_name] = build_prefab_node(
 			scene, child_node, geometry, geom_tag, bone_index_map,
-			node_kf_map, skin_weights, mem_prefix, res_sys, out_tags);
+			node_kf_map, skin_weights, mem_prefix, model_dir, res_sys, out_tags);
 	}
 
 	if (!children.empty())
@@ -461,14 +500,26 @@ edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system&
 
 edt::import_result edt::model_importer::import(const std::filesystem::path& abs_path)
 {
-	import_result result;
-	result.source_path = abs_path;
+	auto intermediate = import_background(abs_path);
+	if (!intermediate.error.empty()) {
+		import_result result;
+		result.source_path = abs_path;
+		return result;
+	}
+	return finalize_on_main(std::move(intermediate));
+}
+
+edt::import_intermediate edt::model_importer::import_background(const std::filesystem::path& abs_path)
+{
+	import_intermediate im;
+	im.source_path = abs_path;
 
 	// 1. Read file from disk
 	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
 	if (!in) {
-		egLOG("edt/import", "Failed to open file: {}", abs_path.string());
-		return result;
+		im.error = std::format("Failed to open file: {}", abs_path.string());
+		egLOG("edt/import", "{}", im.error);
+		return im;
 	}
 
 	auto file_size = static_cast<std::streamsize>(in.tellg());
@@ -484,8 +535,9 @@ edt::import_result edt::model_importer::import(const std::filesystem::path& abs_
 	const aiScene* scene = importer.ReadFile(abs_path.string(), flags);
 
 	if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
-		egLOG("edt/import", "ASSIMP error: {}", importer.GetErrorString());
-		return result;
+		im.error = std::format("ASSIMP error: {}", importer.GetErrorString());
+		egLOG("edt/import", "{}", im.error);
+		return im;
 	}
 
 	// 3. Determine memory:// prefix for this import
@@ -568,25 +620,26 @@ edt::import_result edt::model_importer::import(const std::filesystem::path& abs_
 
 	// 7. Geometry tag
 	res::tag geom_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".geom.desc" };
+	im.geom_tag = geom_tag;
 
 	// 8. Build prefab tree + skinning weights
-	std::vector<std::vector<uint32_t>> skin_weights;
+	std::filesystem::path model_dir = abs_path.parent_path();
 	json::object prefab_root = build_prefab_node(
 		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
-		node_kf_map, skin_weights, mem_prefix, m_res, result.all_tags);
+		node_kf_map, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags);
 
 	// 9. Add animations_desc to root
 	if (scene->HasAnimations()) {
 		json::object anim_comp;
 		anim_comp["animations"] = animations_obj;
 
-		if (prefab_root.contains("components"))
+		if (prefab_root.contains("components") && prefab_root["components"].is_object())
 			prefab_root["components"].as_object()["animations_desc"] = anim_comp;
 		else
 			prefab_root["components"] = json::object{ {"animations_desc", anim_comp} };
 	}
 
-	// 10. Store geometry
+	// 10. Store geometry (res_sys.store is mutex-protected)
 	json::object jsgeometry;
 	jsgeometry["__type"] = "geometry_desc";
 	jsgeometry["__parent"] = "res://base_geometry.desc";
@@ -595,36 +648,50 @@ edt::import_result edt::model_importer::import(const std::filesystem::path& abs_
 	std::vector<std::byte> geom_bytes(geom_str.size());
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
 	m_res.store(geom_tag, geom_bytes);
-	result.all_tags.push_back(geom_tag);
+	im.all_tags.push_back(geom_tag);
 
-	// 11. Build and store prefab
+	// 11. Build and store prefab JSON
 	json::object jsdata;
 	jsdata["__type"] = "prefab_desc";
 	for (auto& kv : prefab_root)
 		jsdata[kv.key()] = kv.value();
 
 	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
-	result.root_tag = prefab_tag;
+	im.prefab_tag = prefab_tag;
 
-	auto instance = m_desc.create_instance("prefab_desc", prefab_tag);
-	instance->deserialize(m_desc, jsdata);
 	m_res.store(prefab_tag, m_desc.serialize_to_bytes(jsdata));
-	result.all_tags.push_back(prefab_tag);
+	im.all_tags.push_back(prefab_tag);
 
-	result.prefab = std::dynamic_pointer_cast<scn::prefab_desc>(instance);
+	// Save prefab JSON for main-thread finalization (owned copy)
+	im.prefab_json = std::move(jsdata);
 
-	// 12. Register skinning weights
-	if (!skin_weights.empty()) {
+	egLOG("edt/import", "Background import done: '{}' → {} memory resources", abs_path.filename().string(), im.all_tags.size());
+	for (const auto& t : im.all_tags) {
+		egLOG("edt/import", "  tag: {}", t.view());
+	}
+	return im;
+}
+
+edt::import_result edt::model_importer::finalize_on_main(import_intermediate&& im)
+{
+	import_result result;
+	result.source_path = std::move(im.source_path);
+	result.root_tag = im.prefab_tag;
+	result.all_tags = std::move(im.all_tags);
+
+	// desc_sys.create_instance + deserialize — main thread only
+	auto instance = m_desc.create_instance("prefab_desc", im.prefab_tag);
+	if (instance) {
+		instance->deserialize(m_desc, im.prefab_json);
+		result.prefab = ds::polymorphic_pointer_cast<scn::prefab_desc>(instance);
+	}
+
+	// skinning_manager — main thread only
+	if (!im.skin_weights.empty()) {
 		if (auto* skm = m_rnd.get_skinning_manager()) {
-			skm->register_weights(prefab_tag, std::move(skin_weights));
+			skm->register_weights(im.prefab_tag, std::move(im.skin_weights));
 		}
 	}
 
-	// Log full prefab JSON for debugging
-	egLOG("edt/import", "Imported '{}' → {} memory resources", abs_path.filename().string(), result.all_tags.size());
-	egLOG("edt/import", "Prefab JSON:\n{}", json::serialize(jsdata));
-	for (const auto& t : result.all_tags) {
-		egLOG("edt/import", "  tag: {}", t.view());
-	}
 	return result;
 }

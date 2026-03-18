@@ -102,7 +102,7 @@ namespace edt
 			} else if (val.is_string()) {
 				char buf[512];
 				std::string s(val.as_string());
-				strncpy(buf, s.c_str(), sizeof(buf) - 1);
+				strncpy(buf, s.c_str(), sizeof(buf) - 1); // TODO: use std::format_to_n
 				buf[sizeof(buf) - 1] = '\0';
 				if (ImGui::InputText(k.c_str(), buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue))
 					val = std::string(buf);

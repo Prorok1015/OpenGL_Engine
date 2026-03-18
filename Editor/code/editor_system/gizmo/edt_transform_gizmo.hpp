@@ -154,7 +154,7 @@ namespace edt
 		const glm::mat4& view,
 		const glm::mat4& proj,
 		float vp_x, float vp_y, float vp_w, float vp_h,
-		int mode,
+		int mode, // TODO: use enum class
 		entt::entity& inout_rotate_ent,
 		int& inout_active_ring,
 		bool* committed = nullptr)

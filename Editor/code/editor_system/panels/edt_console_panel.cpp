@@ -11,6 +11,8 @@ namespace edt
 
 	void console_panel::add_log(log_level level, std::string message)
 	{
+		if (m_logs.size() >= max_log_entries)
+			m_logs.erase(m_logs.begin(), m_logs.begin() + (max_log_entries / 4));
 		m_logs.push_back({level, std::move(message)});
 	}
 

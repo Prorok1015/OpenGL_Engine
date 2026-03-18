@@ -29,6 +29,8 @@ namespace edt
 	protected:
 		void on_render() override;
 
+		static constexpr std::size_t max_log_entries = 10000;
+
 	private:
 		std::vector<log_entry> m_logs;
 		bool m_show_info = true;

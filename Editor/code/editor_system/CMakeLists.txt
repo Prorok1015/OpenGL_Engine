@@ -7,7 +7,13 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_EDT_SOURCES})
 target_link_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${PROJECT_NAME} PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
+	"${CMAKE_CURRENT_SOURCE_DIR}/core"
+	"${CMAKE_CURRENT_SOURCE_DIR}/controller"
 	"${CMAKE_CURRENT_SOURCE_DIR}/panels"
+	"${CMAKE_CURRENT_SOURCE_DIR}/edt_component_renderers"
+	"${CMAKE_CURRENT_SOURCE_DIR}/import"
+	"${CMAKE_CURRENT_SOURCE_DIR}/gizmo"
+	"${CMAKE_CURRENT_SOURCE_DIR}/input"
 )
 
 add_subdirectory(${ENGINE_CORE_PATH} "core")

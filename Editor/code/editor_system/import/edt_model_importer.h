@@ -3,6 +3,7 @@
 #include "res_tag.h"
 #include "desc_system.h"
 #include "res_system.h"
+#include "edt_async_import_task.h"
 #include "level/scn_prefab_desc.h"
 #include <filesystem>
 #include <vector>
@@ -23,8 +24,15 @@ namespace edt {
 	public:
 		model_importer(desc::desc_system& ds, res::resource_system& rs, rnd::render_system& rnd);
 
-		// Load model from absolute FS path, store results in memory://
+		// Synchronous import (blocks caller). Kept for backward compat.
 		import_result import(const std::filesystem::path& abs_path);
+
+		// Background-safe phase: Assimp parse + geometry + materials + store.
+		// Does NOT touch desc_sys.create_instance or skinning_manager.
+		import_intermediate import_background(const std::filesystem::path& abs_path);
+
+		// Main-thread finalization: desc_sys.create_instance + deserialize + skinning.
+		import_result finalize_on_main(import_intermediate&& intermediate);
 
 	private:
 		desc::desc_system&    m_desc;

@@ -5,8 +5,18 @@
 #include "edt_model_importer.h"
 #include <unordered_map>
 #include <filesystem>
+#include <atomic>
+#include <functional>
 
 namespace edt {
+
+	struct export_progress {
+		std::atomic<int> done{ 0 };
+		std::atomic<int> total{ 0 };
+		std::atomic<bool> finished{ false };
+		std::atomic<bool> success{ false };
+		res::tag exported_tag;
+	};
 
 	class asset_exporter {
 	public:
@@ -18,10 +28,12 @@ namespace edt {
 			const std::string& asset_name,
 			const std::string& target_folder) const;
 
-		// Write all resources to disk, remapping memory:// → res:// in JSON files
+		// Write all resources to disk, remapping memory:// → res:// in JSON files.
+		// Thread-safe — can run on background thread.
 		bool export_to_project(
 			const import_result& result,
-			const std::unordered_map<res::tag, res::tag>& remap) const;
+			const std::unordered_map<res::tag, res::tag>& remap,
+			export_progress* progress = nullptr) const;
 
 	private:
 		res::resource_system& m_res;

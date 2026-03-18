@@ -27,7 +27,11 @@
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
 | [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | planned |
-| [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | planned |
+| [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
+| [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | planned |
+| [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы | planned |
+| [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов | planned |
+| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | planned |
 
 ### Desc-Driven Architecture
 
@@ -51,6 +55,10 @@
 | ID | Title | Status |
 |---|---|---|
 | [EPIC-23](infrastructure/EPIC-23.md) | Logger Migration — spdlog Integration | done |
+| [EPIC-28](infrastructure/EPIC-28.md) | Resource Cache — кеш по тегу + типу ресурса | planned |
+| [EPIC-29](infrastructure/EPIC-29.md) | Service Layer Refactoring — удаление game_system, единый паттерн сервисов | planned |
+| [EPIC-31](infrastructure/EPIC-31.md) | Assert System — информативные ассерты с диалогом и стек-трейсом | planned |
+| [EPIC-32](infrastructure/EPIC-32.md) | External Assert Dialog — отдельный процесс для ассерт-диалога (lowest priority) | planned |
 
 ### Render Migration
 
@@ -86,7 +94,10 @@ EPIC-08 + EPIC-10 (Inspector)
 EPIC-23 (Logger → spdlog)  ← standalone, no deps
 
 EPIC-24 (Async Editor Ops)  ← standalone
-  US-24-1 → US-24-2, US-24-3, US-24-4 → US-24-5 → US-24-6
+
+EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
+EPIC-26 (Shader Desc)    ← после EPIC-08
+  └── EPIC-07 (Material Editor)  ← после EPIC-26
 
 EPIC-16 (Data Contracts)
   └── EPIC-17 (Extractor Layer)

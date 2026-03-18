@@ -187,7 +187,7 @@ namespace edt
 
 		// Left: directory tree
 		ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.f);
-		if (ImGui::TreeNodeEx("res://", ImGuiTreeNodeFlags_DefaultOpen |
+		if (ImGui::TreeNodeEx("res://##directorytreeroot", ImGuiTreeNodeFlags_DefaultOpen |
 		                                ImGuiTreeNodeFlags_SpanFullWidth))
 		{
 			draw_dir_tree(m_base_path);

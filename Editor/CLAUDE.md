@@ -8,40 +8,71 @@ Editor/
 ├── config/editor.cfg                 # resource.path = ../res/
 ├── res/                              # icons, levels, objects, shaders, skybox, templates
 └── code/editor_system/
-    ├── editor_module.cpp             # register/initialize/shutdown lifecycle
-    ├── edt_editor_init.cpp           # constructs editor_system + edt_loop_service
-    ├── edt_editor_system.h/cpp       # main controller — see below
-    ├── edt_editor_layer.h/cpp        # ImGui layer: dockspace + panel_manager + menus
-    ├── edt_frame_loop_service.h/cpp  # app_loop_service_interface impl (delta time)
-    ├── edt_component_ui_registry.h   # per-type custom ImGui renderers
-    ├── edt_component_renderers/      # camera, light, skybox, skin UI implementations
-    └── panels/                       # 7 panels, all extend panel_base
+    ├── core/                         # Module lifecycle & frame loop
+    │   ├── editor_module.cpp/h       # register/initialize/shutdown lifecycle
+    │   ├── edt_editor_init.cpp/h     # constructs editor_system + edt_loop_service
+    │   └── edt_frame_loop_service.cpp/h  # app_loop_service_interface impl
+    │
+    ├── controller/                   # Editor controllers (decomposed from editor_system)
+    │   ├── edt_editor_system.cpp/h   # thin coordinator: init, panel wiring, async orchestration
+    │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
+    │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
+    │   ├── edt_world_controller.cpp/h # switch/create world
+    │   ├── edt_shared_state.h        # shared mutable state for all controllers
+    │   ├── edt_editor_camera.h       # camera state POD
+    │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace + panel_manager + menus
+    │
+    ├── panels/                       # 7 UI panels, all extend panel_base
+    │
+    ├── edt_component_renderers/      # per-type ImGui renderers for components
+    │   ├── edt_component_ui_registry.h
+    │   ├── edt_component_renderers.cpp/h
+    │   └── edt_cr_*.cpp              # camera, light, skybox, skin
+    │
+    ├── import/                       # Asset import/export pipeline
+    │   ├── edt_model_importer.cpp/h
+    │   ├── edt_asset_exporter.cpp/h
+    │   ├── edt_asset_export_dialog.cpp/h
+    │   ├── edt_async_import_task.h
+    │   └── edt_filesystem_assimp_io.cpp/h
+    │
+    ├── gizmo/                        # Transform gizmo
+    │   ├── edt_transform_gizmo.hpp
+    │   └── edt_guizmo.hpp
+    │
+    ├── input/                        # Editor input & file dialog
+    │   ├── edt_input_manager.cpp/h
+    │   └── edt_file_dialog.cpp/h
+    │
+    └── CMakeLists.txt
 ```
 
-## editor_system — Central Controller
+## Controller Decomposition
 
-**Constructor injects**: `desc_system`, `resource_system`, `render_system`, `gui_system`.
-**init() receives**: `app_data_storage` — pulls `level_manager`, `ecs_assembler`, `system_factory`.
+`editor_system` was split into 4 classes connected via `shared_state` and callbacks:
 
-Key responsibilities:
+| Class | File | Responsibility |
+|-------|------|----------------|
+| `editor_system` | `controller/edt_editor_system.cpp/h` | Thin coordinator: init, panel wiring, camera, async orchestration |
+| `scene_editor` | `controller/edt_scene_editor.cpp/h` | Entity CRUD (create/delete/duplicate/reparent), desc tree helpers, `serialize_and_push`, `sync_ecs_transforms_to_desc` |
+| `level_controller` | `controller/edt_level_controller.cpp/h` | Level I/O: new/load/save/quicksave, `write_level_to_disk`, `populate_worlds_from_level`, templates |
+| `world_controller` | `controller/edt_world_controller.cpp/h` | Multi-world: `switch_to_world`, `create_world` |
 
-| Area | Methods |
-|------|---------|
-| Level I/O | `new_level`, `load_level`, `save_level`, `quick_save_level` |
-| Desc editing | `create_entity`, `delete_entity`, `duplicate_entity` |
-| Desc ↔ ECS sync | `serialize_and_push()` (desc→ECS), `sync_ecs_transforms_to_desc()` (ECS→desc) |
-| Multi-world | `switch_to_world(idx)`, `create_world(name)`, `m_world_descs` vector |
-| Editor camera | `save_editor_camera_state`, `inject_editor_camera` (persists across world switches) |
-| Serialization | `build_level_json()`, `write_level_to_disk()`, `load_desc_template()` |
+**`shared_state`** (`controller/edt_shared_state.h`) holds mutable state shared between controllers:
+- Service references: `lvl_manager`, `assembler`, `sfactory`
+- Level identity: `editor_tag`, `level_tag`, `level_name`, `is_dirty`
+- Multi-world: `world_descs`, `world_names`, `worlds_systems_list`, `active_world_idx`
+
+Controllers communicate via `std::function` callbacks set by `editor_system` during `init()`.
 
 ## Panels
 
 | Panel | Header | Purpose |
 |-------|--------|---------|
-| `scene_hierarchy_panel` | `edt_scene_hierarchy_panel.h` | Prefab node tree + world tabs; callbacks for create/delete/rename/duplicate |
+| `scene_hierarchy_panel` | `edt_scene_hierarchy_panel.h` | Prefab node tree + world tabs; callbacks for create/delete/rename/duplicate/reparent |
 | `inspector_panel` | `edt_inspector_panel.h` | Component property editor; uses component_ui_registry, falls back to generic JSON |
 | `viewport_panel` | `edt_viewport_panel.h` | 3D view + transform gizmo + orientation gizmo; fires `on_transform_committed` |
-| `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, counts per level, filter, clear |
+| `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |
 | `asset_browser_panel` | `edt_asset_browser_panel.h` | Directory tree + file grid; drag-drop to viewport |
 | `dockspace` | `edt_dockspace.h` | ImGui DockSpace + menu bar (File/Edit/View/Help) |
 | `panel_base` | `edt_panel_base.h` | `render()` wraps ImGui::Begin/End; `virtual on_render()` |
@@ -67,7 +98,7 @@ auto result = registry.invoke(type_name, comp_node);
 ```
 User edits in Inspector
   → inspector on_node_changed callback
-  → editor_system::serialize_and_push()
+  → scene_editor::serialize_and_push()
       → active_world_desc serialized to JSON
       → desc_system re-parses level desc
       → ecs_assembler re-assembles world registry
@@ -75,12 +106,12 @@ User edits in Inspector
 
 Gizmo drag committed
   → on_transform_committed(name, pos, rot, scale)
-  → find_node_by_name in active_world_desc
+  → scene_editor::find_node_by_name in active_world_desc
   → update node.position / rotation / scale
   → serialize_and_push()
 ```
 
-**ECS → Desc** (called before save): `sync_ecs_transforms_to_desc()` reads `local_transform` components and writes back to desc nodes.
+**ECS → Desc** (called before save): `scene_editor::sync_ecs_transforms_to_desc()` reads `local_transform` components and writes back to desc nodes.
 
 ## Level JSON Schema
 
@@ -96,14 +127,14 @@ Gizmo drag committed
 }
 ```
 
-`build_level_json()` is the single source of truth. `populate_worlds_from_level()` reconstructs `m_world_descs` on load.
+`level_controller::build_level_json()` is the single source of truth. `level_controller::populate_worlds_from_level()` reconstructs `shared_state::world_descs` on load.
 
 ## Multi-World
 
-- `m_world_descs` — vector, indexed by `m_active_world_idx`
-- `active_world_desc()` — shorthand accessor
-- Hierarchy panel shows a tab per world; switching calls `switch_to_world(idx)` which saves editor camera, tears down old registry, rebuilds new one
-- `m_worlds_systems_list` — per-world list of system names (parallel to `m_world_descs`)
+- `shared_state::world_descs` — vector, indexed by `active_world_idx`
+- `shared_state::active_world_desc()` — shorthand accessor
+- Hierarchy panel shows a tab per world; switching calls `world_controller::switch_to_world(idx)` which saves editor camera, tears down old registry, rebuilds new one
+- `shared_state::worlds_systems_list` — per-world list of system names (parallel to `world_descs`)
 
 ## Prefab Node Format (critical)
 
@@ -150,7 +181,7 @@ Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_ada
 - Bone nodes → `bone_desc` components with offset matrix + global index
 - Animations → `animations_desc` on root, `keyframes_desc` on each animated node
 
-Import in editor: `editor_system::show_file_dialog()` → `m_res.warmup<scn::prefab_desc>(tag)`.
+Import in editor: `editor_system::show_file_dialog()` → async import → export dialog → auto-add to scene.
 
 ## File Dialog
 
@@ -175,9 +206,11 @@ Non-blocking ImGui modal — must be called every frame while open.
 ## Common Pitfalls
 
 - **EnTT `registry::each()` does not exist** — use `registry.storage<entt::entity>()` to iterate all entities
+- **EnTT forward declare** — use `#include <entt/fwd.hpp>`, not `namespace entt { class registry; }`
 - **Input rect**: editor input is gated to viewport rect — mouse outside viewport is not forwarded to ECS
 - **`serialize_and_push()` is destructive** — tears down and rebuilds the entire ECS world; don't hold raw pointers to registry components across it
 - **Camera state**: always call `save_editor_camera_state` before `serialize_and_push`, `inject_editor_camera` after — otherwise camera resets
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`
 - **`get_field_desc<T>` with inline objects** requires `__type` field present in the JSON object
 - **`children` is a JSON object, not array** — iterating via `as_object()`, not `as_array()`
+- **No C functions** — prefer `std::format_to_n` over `snprintf`/`strncpy`, C++ alternatives over C stdlib

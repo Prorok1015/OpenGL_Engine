@@ -19,6 +19,7 @@ namespace edt
 		void set_on_create_node(std::function<void(const std::string& type_name)> cb);
 		void set_on_rename_node(std::function<void(const std::string& old_name, const std::string& new_name)> cb);
 		void set_on_duplicate_node(std::function<void(const std::string& name)> cb);
+		void set_on_reparent_node(std::function<void(const std::string& node_name, const std::string& new_parent_name, int insert_index)> cb);
 
 		scn::prefab_desc::prefab_node* get_selected_node() const { return m_selected_node; }
 		void set_selected_node(scn::prefab_desc::prefab_node* node) { m_selected_node = node; }
@@ -47,6 +48,7 @@ namespace edt
 		std::function<void(const std::string&)>                      m_on_create_node;
 		std::function<void(const std::string&, const std::string&)>  m_on_rename_node;
 		std::function<void(const std::string&)>                      m_on_duplicate_node;
+		std::function<void(const std::string&, const std::string&, int)> m_on_reparent_node;
 		std::function<void(int)>                                      m_on_world_changed;
 		std::function<void(const std::string&)>                      m_on_create_world;
 

@@ -3,12 +3,15 @@
 #include "edt_model_importer.h"
 #include "edt_asset_exporter.h"
 #include "edt_file_dialog.h"
+#include <future>
+#include <memory>
 
 namespace edt {
 
 	class asset_export_dialog {
 	public:
 		asset_export_dialog(asset_exporter& exporter);
+		~asset_export_dialog();
 
 		// Set the import result to export
 		void open(import_result result);
@@ -20,6 +23,9 @@ namespace edt {
 		res::tag get_exported_tag() const { return m_exported_tag; }
 
 	private:
+		void render_export_form();
+		void render_export_progress();
+
 		asset_exporter& m_exporter;
 
 		bool m_is_open = false;
@@ -32,6 +38,11 @@ namespace edt {
 		file_dialog m_folder_dialog;
 
 		res::tag m_exported_tag;
+
+		// Async export state
+		std::future<bool> m_export_future;
+		std::shared_ptr<export_progress> m_export_progress;
+		bool m_exporting = false;
 	};
 
 } // namespace edt
