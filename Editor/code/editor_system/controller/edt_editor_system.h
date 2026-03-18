@@ -1,46 +1,47 @@
 #pragma once
 #include <functional>
-#include <optional>
-#include "common.h"
-#include "ecs_entity.h"
-#include "edt_input_manager.h"
-#include "inp_ecs_input_manager.h"
-#include "edt_file_dialog.h"
-
-#include "desc_base.hpp"
-#include "desc_system.h"
-#include "ds/ds_store.hpp"
-#include "res_system.h"
-#include <boost/json.hpp>
-
-#include "edt_editor_layer.h"
+#include <memory>
+#include "resources/res_resource_handle.hpp"
 #include "edt_editor_camera.h"
 #include "edt_shared_state.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
+#include "edt_init_helpers.h"
+#include "ds/ds_store.hpp"
 
-#include "level/scn_level_manager.h"
-#include "edt_scene_hierarchy_panel.h"
-#include "edt_inspector_panel.h"
-#include "edt_viewport_panel.h"
-#include "edt_console_panel.h"
-#include "edt_asset_browser_panel.h"
-#include "edt_component_ui_registry.h"
-#include "edt_model_importer.h"
-#include "edt_asset_exporter.h"
-#include "edt_asset_export_dialog.h"
-#include "edt_async_import_task.h"
-#include "level/scn_level_desc.h"
-
-namespace scn { class ecs_assembler; }
-namespace ecs { class system_factory; }
-namespace rnd { class render_system; }
-namespace gui { class gui_system; }
+// Forward declarations — full types only needed in .cpp
+namespace desc { class desc_system; class desc_base; }
+namespace res  { class resource_system; }
+namespace rnd  { class render_system; }
+namespace gui  { class gui_system; }
+namespace scn  { class ecs_assembler; class level_desc; }
+namespace ecs  { class system_factory; }
 
 namespace edt {
+	class input_manager;
+	class file_dialog;
+	class editor_layer;
+	class model_importer;
+	class asset_exporter;
+	class asset_export_dialog;
+	class component_ui_registry;
+	class scene_hierarchy_panel;
+	class inspector_panel;
+	class viewport_panel;
+	class console_panel;
+	class asset_browser_panel;
+	struct async_import_token;
+
 	class editor_system
 	{
+		friend void init_helpers::wire_controller_callbacks(
+			editor_system&, scene_editor&, world_controller&, level_controller&,
+			editor_layer&, scene_hierarchy_panel&, inspector_panel&, viewport_panel&, shared_state&);
+		friend void init_helpers::setup_viewport_panel(
+			std::shared_ptr<viewport_panel>&, std::shared_ptr<input_manager>&,
+			std::shared_ptr<inp::ecs_input_manager>&, editor_system&, shared_state&,
+			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
 		~editor_system();
@@ -62,7 +63,7 @@ namespace edt {
 		level_controller m_level_ctrl;
 
 		// Services (not owned)
-		desc::desc_system&   desc_system;
+		desc::desc_system&    desc_system;
 		res::resource_system& m_res;
 		rnd::render_system&   m_rnd;
 		gui::gui_system&      m_gui;
@@ -70,19 +71,19 @@ namespace edt {
 		// Input
 		std::shared_ptr<edt::input_manager> input;
 		std::shared_ptr<inp::ecs_input_manager> ecs_input;
-		edt::file_dialog file_dialog;
+		std::unique_ptr<edt::file_dialog> m_file_dialog;
 
 		// Import/export
-		edt::model_importer m_model_importer;
-		edt::asset_exporter m_asset_exporter;
-		edt::asset_export_dialog m_export_dialog;
+		std::unique_ptr<edt::model_importer> m_model_importer;
+		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
+		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
 		std::vector<res::tag> imported_models_list;
-		std::optional<edt::async_import_token> m_import_token;
+		std::unique_ptr<edt::async_import_token> m_import_token;
 		bool poll_import_progress();
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
-		edt::component_ui_registry m_component_ui_registry;
+		std::unique_ptr<edt::component_ui_registry> m_component_ui_registry;
 
 		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
 		std::shared_ptr<inspector_panel>       m_inspector_panel;
@@ -109,8 +110,5 @@ namespace edt {
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
 
-		// Panel selection clearing helper
-		void clear_selection();
-		void sync_viewport_selection();
 	};
 }

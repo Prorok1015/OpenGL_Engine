@@ -8,7 +8,7 @@
 
 namespace rnd {
 	struct camera_render_data_t {
-		glm::ivec4 viewport;
+		glm::ivec4 viewport; // {left, top, width, height}
 		glm::mat4 view_matrix;
 		glm::mat4 projection_matrix;
 		glm::vec3 view_position = glm::vec3{0.0f};

@@ -35,8 +35,8 @@ void transparent_pass::execute(frame_context &context,
     if (packet.transparent_draws.empty())
       continue;
 
-    int vp_width = packet.camera.viewport.z - packet.camera.viewport.x;
-    int vp_height = packet.camera.viewport.w - packet.camera.viewport.y;
+    int vp_width = packet.camera.viewport.z;
+    int vp_height = packet.camera.viewport.w;
 
     if (vp_width < 1 || vp_height < 1)
       continue;

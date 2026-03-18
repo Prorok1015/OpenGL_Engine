@@ -44,8 +44,8 @@ void composition_pass::execute(frame_context &context,
   auto &txm_manager = rnd::get_system().get_texture_manager();
 
   for (auto packet : packets) {
-    int vp_width = packet.camera.viewport.z - packet.camera.viewport.x;
-    int vp_height = packet.camera.viewport.w - packet.camera.viewport.y;
+    int vp_width = packet.camera.viewport.z;
+    int vp_height = packet.camera.viewport.w;
 
     if (vp_width < 1 || vp_height < 1)
       continue;
