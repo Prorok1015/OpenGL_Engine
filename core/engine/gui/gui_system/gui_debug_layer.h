@@ -1,6 +1,7 @@
 #pragma once
 #include "gui_layer_interface.h"
 #include "gui_menu_layout.h"
+#include "gui_profiler_overlay.h"
 
 namespace gui {
 	class debug_layer : public gui::layer_interface {
@@ -13,6 +14,7 @@ namespace gui {
 
 			m_manager.registrate("Debug/Imgui demo window", [this] { return show_demo(); });
 			m_manager.registrate("Debug/Statistic", [this] {  return show_stats(); });
+			m_manager.registrate("Debug/Profiler", [this] { return show_profiler(); });
 			m_manager.set_menu_checked("Degub/Statistic", true);
 
 		}
@@ -49,7 +51,9 @@ namespace gui {
 
 		bool show_stats();
 		bool show_demo();
+		bool show_profiler();
 	private:
 		gui::menu_layout_manager m_manager;
+		gui::profiler_overlay m_profiler_overlay;
 	};
 }

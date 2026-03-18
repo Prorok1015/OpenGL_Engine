@@ -3,6 +3,7 @@
 
 void gui::debug_layer::on_update(std::chrono::duration<float> dt)
 {
+	m_profiler_overlay.check_hotkey();
 	m_manager.process();
 }
 
@@ -24,4 +25,9 @@ bool gui::debug_layer::show_demo()
 	bool show_demo_window = true;
 	ImGui::ShowDemoWindow(&show_demo_window);
 	return show_demo_window;
+}
+
+bool gui::debug_layer::show_profiler()
+{
+	return m_profiler_overlay.render();
 }

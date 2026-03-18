@@ -14,21 +14,21 @@ BOOST_AUTO_TEST_CASE(SetVertexShader_StoredCorrectly) {
 	auto prog = rnd::shader_config::shader_program_data::build();
 	auto tag = res::tag::make("shaders/basic.vert");
 	prog.set_vertex_shader(tag);
-	BOOST_CHECK(prog.get_vertex_shader() == tag);
+	BOOST_TEST(prog.get_vertex_shader() == tag);
 }
 
 BOOST_AUTO_TEST_CASE(SetFragmentShader_StoredCorrectly) {
 	auto prog = rnd::shader_config::shader_program_data::build();
 	auto tag = res::tag::make("shaders/basic.frag");
 	prog.set_fragment_shader(tag);
-	BOOST_CHECK(prog.get_fragment_shader() == tag);
+	BOOST_TEST(prog.get_fragment_shader() == tag);
 }
 
 BOOST_AUTO_TEST_CASE(SetGeometryShader_StoredCorrectly) {
 	auto prog = rnd::shader_config::shader_program_data::build();
 	auto tag = res::tag::make("shaders/wireframe.geom");
 	prog.set_geometry_shader(tag);
-	BOOST_CHECK(prog.get_geometry_shader() == tag);
+	BOOST_TEST(prog.get_geometry_shader() == tag);
 }
 
 BOOST_AUTO_TEST_CASE(GetShader_WhenNotSet_ReturnsNull) {

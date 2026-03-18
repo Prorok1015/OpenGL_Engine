@@ -2,6 +2,7 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <format>
+#include <ostream>
 #include <boost/json.hpp>
 #include <algorithm>
 #include "engine_assert.h"
@@ -73,6 +74,10 @@ namespace res
 	//TODO: move json dependencies into one place
 	void tag_invoke(json::value_from_tag, json::value& out, const res::tag& c);
 	res::tag tag_invoke(json::value_to_tag<res::tag>, const json::value& obj);
+
+	inline std::ostream& operator<<(std::ostream& os, const tag& t) {
+		return os << t.string();
+	}
 }
 
 namespace std {
@@ -87,4 +92,43 @@ namespace std {
 		}
 	};
 
+	template<>
+	struct formatter<res::tag>
+	{
+		enum class spec_kind : uint8_t { full, name, path, ext, pure, proto, rel };
+		spec_kind kind_ = spec_kind::full;
+
+		constexpr auto parse(std::format_parse_context& ctx) {
+			auto it = ctx.begin();
+			auto end = ctx.end();
+			if (it == end || *it == '}') return it;
+
+			auto spec_begin = it;
+			while (it != end && *it != '}') ++it;
+			std::string_view spec(&*spec_begin, static_cast<size_t>(std::distance(spec_begin, it)));
+
+			if      (spec == "name")  kind_ = spec_kind::name;
+			else if (spec == "path")  kind_ = spec_kind::path;
+			else if (spec == "ext")   kind_ = spec_kind::ext;
+			else if (spec == "pure")  kind_ = spec_kind::pure;
+			else if (spec == "proto") kind_ = spec_kind::proto;
+			else if (spec == "rel")   kind_ = spec_kind::rel;
+
+			return it;
+		}
+
+		auto format(const res::tag& t, std::format_context& ctx) const {
+			std::string_view value;
+			switch (kind_) {
+			case spec_kind::name:  value = t.name();      break;
+			case spec_kind::path:  value = t.path();      break;
+			case spec_kind::ext:   value = t.extension(); break;
+			case spec_kind::pure:  value = t.pure_name(); break;
+			case spec_kind::proto: value = t.protocol();  break;
+			case spec_kind::rel:   value = t.relative();  break;
+			default:               value = t.view();      break;
+			}
+			return std::format_to(ctx.out(), "{}", value);
+		}
+	};
 }

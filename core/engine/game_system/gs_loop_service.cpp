@@ -3,6 +3,7 @@
 #include "rnd_frame_assembler.h"
 #include "rnd_render_system.h"
 #include "wnd_window_system.h"
+#include "eng_profiler.h"
 
 
 gs::gs_loop_service::gs_loop_service() : stop_requested(false) {}
@@ -17,6 +18,7 @@ void gs::gs_loop_service::init(ds::app_data_storage &storage) {
 }
 
 void gs::gs_loop_service::on_step(ds::app_data_storage &storage) {
+  PROFILE_FRAME("GameThread");
   auto current_time = std::chrono::steady_clock::now();
   std::chrono::duration<float> duration = current_time - previous_time;
   previous_time = current_time;

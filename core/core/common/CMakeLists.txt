@@ -10,6 +10,12 @@ target_compile_definitions(glm INTERFACE GLM_ENABLE_EXPERIMENTAL)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/logger logger)
 target_link_libraries(${PROJECT_NAME} INTERFACE glm engine_logger)
 
+if(ENGINE_PROFILE_MODE STREQUAL "INTERNAL")
+  target_compile_definitions(${PROJECT_NAME} INTERFACE ENGINE_PROFILE_INTERNAL=1)
+elseif(ENGINE_PROFILE_MODE STREQUAL "TRACY")
+  target_compile_definitions(${PROJECT_NAME} INTERFACE ENGINE_PROFILE_TRACY=1)
+endif()
+
 if(ENGINE_BOOST_NO_LIB) 
   find_package(Boost REQUIRED)
   target_include_directories(${PROJECT_NAME} INTERFACE ${Boost_INCLUDE_DIRS})

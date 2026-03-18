@@ -34,6 +34,7 @@
 | [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | in_progress |
 | [EPIC-34](editor/EPIC-34.md) | Editor Model Importer — расширение и упрощение | planned |
 | [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора | planned |
+| [EPIC-40](editor/EPIC-40.md) | Icon Font Integration — иконочный шрифт для UI редактора | planned |
 
 ### Desc-Driven Architecture
 
@@ -64,7 +65,8 @@
 | [EPIC-32](infrastructure/EPIC-32.md) | External Assert Dialog — отдельный процесс для ассерт-диалога (lowest priority) | planned |
 | [EPIC-35](infrastructure/EPIC-35.md) | Engine Model Importer Adapter — модернизация для runtime/mods | planned |
 | [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | in_progress |
-| [EPIC-38](infrastructure/EPIC-38.md) | res::tag — std::formatter и ostream support | planned |
+| [EPIC-38](infrastructure/EPIC-38.md) | res::tag — std::formatter и ostream support | done |
+| [EPIC-39](infrastructure/EPIC-39.md) | Performance Profiling Infrastructure — замеры производительности | in_progress |
 
 ### Render Migration
 
@@ -113,6 +115,10 @@ EPIC-36 (Editor VFS Protocol edt://)  ← standalone, no deps
 EPIC-37 (Unit Test Coverage)  ← standalone, no deps
 
 EPIC-38 (res::tag formatter)  ← standalone, no deps
+
+EPIC-39 (Performance Profiling)  ← depends on EPIC-23 (Logger)
+
+EPIC-40 (Icon Font)  ← standalone, no deps
 
 EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
 EPIC-26 (Shader Desc)    ← после EPIC-08

@@ -1,6 +1,6 @@
 # EPIC-38: res::tag — std::formatter и ostream support
 
-**Status:** planned
+**Status:** done
 **Theme:** infrastructure
 **Dependencies:** none
 
@@ -75,15 +75,15 @@ struct std::formatter<res::tag> {
 Описание: Добавить `operator<<` для ostream и специализацию `std::formatter<res::tag>` с поддержкой спецификаторов.
 
 **AC:**
-- [ ] `std::format("{}", tag)` выводит полную строку тега
-- [ ] `std::format("{:name}", tag)` выводит имя файла
-- [ ] `std::format("{:path}", tag)` выводит путь
-- [ ] `std::format("{:ext}", tag)` выводит расширение
-- [ ] `std::format("{:pure}", tag)` выводит имя без расширения
-- [ ] `std::format("{:proto}", tag)` выводит протокол
-- [ ] `std::format("{:rel}", tag)` выводит relative path
-- [ ] `operator<<(ostream, tag)` работает (для Boost.Test и logging)
-- [ ] Unit-тесты для всех спецификаторов в `unittests/res_tag_formatter_tests.cpp`
+- [x] `std::format("{}", tag)` выводит полную строку тега
+- [x] `std::format("{:name}", tag)` выводит имя файла
+- [x] `std::format("{:path}", tag)` выводит путь
+- [x] `std::format("{:ext}", tag)` выводит расширение
+- [x] `std::format("{:pure}", tag)` выводит имя без расширения
+- [x] `std::format("{:proto}", tag)` выводит протокол
+- [x] `std::format("{:rel}", tag)` выводит relative path
+- [x] `operator<<(ostream, tag)` работает (для Boost.Test и logging)
+- [x] Unit-тесты для всех спецификаторов в `unittests/res_tag_formatter_tests.cpp`
 
 ### US-38-2: Обновить тесты — заменить BOOST_CHECK на BOOST_TEST для res::tag
 **Файлы:** `unittests/res_tag_tests.cpp`, `unittests/rnd_shader_config_tests.cpp`
@@ -91,9 +91,9 @@ struct std::formatter<res::tag> {
 Описание: После добавления `operator<<` тег станет printable. Заменить `BOOST_CHECK` обратно на `BOOST_TEST` для лучшей диагностики при падениях.
 
 **AC:**
-- [ ] `BOOST_CHECK(a == b)` → `BOOST_TEST(a == b)` в res_tag_tests.cpp
-- [ ] `BOOST_CHECK(config == other)` → `BOOST_TEST(config == other)` в rnd_shader_config_tests.cpp
-- [ ] Все тесты проходят
+- [x] `BOOST_CHECK(a == b)` → `BOOST_TEST(a == b)` в res_tag_tests.cpp
+- [x] `BOOST_CHECK(config == other)` → `BOOST_TEST(config == other)` в rnd_shader_config_tests.cpp
+- [x] Все тесты проходят
 
 ---
 
@@ -106,7 +106,7 @@ US-38-1 (formatter + operator<<)
 
 ## Критерии завершения эпика
 
-- [ ] `std::format("{:name}", tag)` и другие спецификаторы работают
-- [ ] `operator<<` работает в Boost.Test и logging
-- [ ] Unit-тесты покрывают все спецификаторы
+- [x] `std::format("{:name}", tag)` и другие спецификаторы работают
+- [x] `operator<<` работает в Boost.Test и logging
+- [x] Unit-тесты покрывают все спецификаторы
 - [ ] Все существующие тесты проходят

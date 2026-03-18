@@ -9,6 +9,7 @@
 #include "level/scn_render_data_extractor.h"
 #include "gui_system.h"
 #include "rnd_frame_assembler.h"
+#include "eng_profiler.h"
 
 edt::edt_loop_service::edt_loop_service()
 	: stop_requested(false)
@@ -27,12 +28,18 @@ void edt::edt_loop_service::init(ds::app_data_storage& storage)
 
 void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 {
+	PROFILE_FRAME("MainThread");
+	PROFILE_SCOPE("FrameTotal");
+
 	auto current_time = std::chrono::steady_clock::now();
 	std::chrono::duration<float> duration = current_time - previous_time;
 	previous_time = current_time;
 
 	auto& window_system_ref = storage.require<wnd::window_system>();
-	window_system_ref.pool_events();
+	{
+		PROFILE_SCOPE("PollEvents");
+		window_system_ref.pool_events();
+	}
 
 	storage.require<scn::level_manager>().update(duration);
 
@@ -44,7 +51,10 @@ void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 
 	storage.require<gui::gui_system>().render();
 
-	window_system_ref.process_windows();
+	{
+		PROFILE_SCOPE("SwapBuffers");
+		window_system_ref.process_windows();
+	}
 	stop_requested = window_system_ref.is_stop_running();
 }
 

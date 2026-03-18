@@ -1,6 +1,7 @@
 #include "rnd_composition_pass.h"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
+#include "eng_profiler.h"
 
 namespace rnd {
 struct screen_vertex {
@@ -13,6 +14,7 @@ composition_pass::composition_pass() {}
 
 void composition_pass::execute(frame_context &context,
                                driver::driver_interface &drv) {
+  PROFILE_SCOPE("Pass.Composition");
   if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
     return;
   }

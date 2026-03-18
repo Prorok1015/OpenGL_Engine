@@ -5,11 +5,13 @@
 #include "rnd_ssbo_buffer_interface.h"
 #include "skinning/rnd_skinning_manager.h"
 #include "timer.hpp"
+#include "eng_profiler.h"
 #include <algorithm>
 
 namespace rnd {
 void opaque_pass::execute(frame_context &context,
                           driver::driver_interface &drv) {
+  PROFILE_SCOPE("Pass.Opaque");
   if (!context.data.has_value<std::vector<rnd::render_packet_t>>())
     return;
 

@@ -2,6 +2,7 @@
 #include <rnd_driver_interface.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
+#include "eng_profiler.h"
 
 rnd::render_system* p_render_system = nullptr;
 
@@ -157,6 +158,7 @@ void rnd::render_system::render() const
 
 void rnd::render_system::render_frame(frame_context& context) const
 {
+	PROFILE_SCOPE("RenderFrame");
 	if (!drv) return;
 
 	for (auto& pass : render_passes) {

@@ -1,6 +1,7 @@
 #pragma once
 #include "rnd_frame_context.h"
 #include "rnd_extractor_interface.h"
+#include "eng_profiler.h"
 
 namespace rnd {
 	struct frame_assembler {
@@ -13,6 +14,7 @@ namespace rnd {
 		}
 
 		void build_frame(frame_context& context) {
+			PROFILE_SCOPE("BuildFrame");
 			for (auto& extractor : extractors) {
 				extractor->extract(context);
 			}

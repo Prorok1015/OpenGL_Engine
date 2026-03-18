@@ -1,6 +1,7 @@
 #include "rnd_skybox_pass.h"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
+#include "eng_profiler.h"
 
 namespace rnd {
 	struct skybox_vertex {
@@ -32,6 +33,7 @@ namespace rnd {
 	skybox_pass::skybox_pass() {}
 
 	void skybox_pass::execute(frame_context& context, driver::driver_interface& drv) {
+		PROFILE_SCOPE("Pass.Skybox");
 		if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
 			return;
 		}

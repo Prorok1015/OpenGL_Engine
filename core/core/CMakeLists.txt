@@ -9,6 +9,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(${PROJECT_NAME} PUBLIC common PUBLIC config_system PUBLIC application PUBLIC window PUBLIC resource_system PUBLIC desc_system PUBLIC ecs)
 
+if(NOT ENGINE_PROFILE_MODE STREQUAL "NONE")
+  target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/common/eng_profiler.cpp")
+endif()
+
 add_subdirectory("common")
 add_subdirectory("config")
 add_subdirectory("application")

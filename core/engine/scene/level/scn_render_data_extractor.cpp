@@ -6,8 +6,10 @@
 #include "scn_camera_component.hpp"
 #include "scn_material_desc.h"
 #include "scn_model.h"
+#include "eng_profiler.h"
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
+    PROFILE_SCOPE("ExtractRenderData");
     auto& level = m_level_manager.get_level();
 
     std::vector<rnd::render_packet_t> packets;

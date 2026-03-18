@@ -4,6 +4,7 @@
 #include "ecs_entity_changer.hpp"
 #include "ecs_component.h"
 #include <entt/fwd.hpp>
+#include "eng_profiler.h"
 
 scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
 	: m_hot_reload_manager(std::move(hot_manager))
@@ -21,9 +22,12 @@ scn::level::~level()
 
 void scn::level::update(std::chrono::duration<float> dt)
 {
+    PROFILE_SCOPE("LevelUpdate");
+
     m_accumulator += dt.count();
 
     while (m_accumulator >= m_fixed_step) {
+        PROFILE_SCOPE("ECS.FixedGraph");
         m_level_state.ctx().insert_or_assign<scn::fixed_time>({ m_fixed_step });
 
         run_graph(m_fixed_graph);
@@ -36,7 +40,10 @@ void scn::level::update(std::chrono::duration<float> dt)
     float alpha = m_accumulator / m_fixed_step;
     m_level_state.ctx().insert_or_assign<scn::update_alpha>({ alpha });
 
-    run_graph(m_variable_graph);
+    {
+        PROFILE_SCOPE("ECS.VariableGraph");
+        run_graph(m_variable_graph);
+    }
     sync_point();
 }
 

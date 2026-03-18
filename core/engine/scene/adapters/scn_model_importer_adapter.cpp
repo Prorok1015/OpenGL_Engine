@@ -7,6 +7,7 @@
 #include "res_system.h"
 #include "rnd_render_system.h"
 #include "skinning/rnd_skinning_manager.h"
+#include "eng_profiler.h"
 
 #include "geom/rnd_geometry_desc.h"
 #include "adapters/res_pct_adapter.h"
@@ -83,6 +84,7 @@ namespace {
 
 std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const res::tag& tag, const std::vector<std::byte>& data) const
 {
+	PROFILE_SCOPE("LoadModel.Assimp");
     // read file via ASSIMP
     Assimp::Importer importer;
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;

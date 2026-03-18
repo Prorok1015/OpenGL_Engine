@@ -2,6 +2,7 @@
 #include "engine_assert.h"
 #include "rnd_render_system.h"
 #include "wnd_window_system.h"
+#include "eng_profiler.h"
 
 gui::gui_system* p_gui_system = nullptr;
 
@@ -52,6 +53,7 @@ void gui::gui_system::set_is_input_enabled(bool enable)
 
 void gui::gui_system::render()
 {
+	PROFILE_SCOPE("GuiRender");
 	backend->new_frame();
 	render_menues();
 	backend->render();
