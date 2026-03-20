@@ -15,7 +15,6 @@
 #include <glm/ext.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include "engine_assert.h"
-#include "eng_performance_timer.hpp"
 #include "ds/ds_event.hpp"
 #include "ds/ds_polymorphic_cast.hpp"
 

@@ -1,6 +1,8 @@
 # Snake Engine
 
-Snake Engine is a modular C++20 game engine built on OpenGL with an integrated scene editor, data-driven resource pipeline, and an ECS architecture powered by EnTT.
+Snake Engine (`snk::`) is a modular C++20 game engine built on OpenGL with an integrated scene editor, data-driven resource pipeline, and an ECS architecture powered by EnTT.
+
+> The project started as a simple OpenGL snake game and evolved into a general-purpose engine with a full editor.
 
 ```
  ┌────────────────────────────────────────────────────────────┐
@@ -100,7 +102,8 @@ OpenGL_Engine/
 │   ├── glad/, stb_image/           # Internal libraries
 │   └── natvis/                     # Visual Studio debugger visualizers
 │
-├── unittests/                      # Boost.Test suite (30+ test cases)
+├── unittests/                      # Boost.Test suite (180+ test cases)
+├── docs/epics/                     # Task tracker (epics & user stories)
 ├── guidelines.md                   # Coding standards
 └── CMakeLists.txt                  # Root build configuration
 ```
@@ -237,6 +240,8 @@ Snake Editor provides a full scene editing environment:
 - **Animation** — playback controls with keyframe support
 - **Skybox** — cubemap-based background
 - **Debug tools** — JSON debugger, ECS inspector, R-tree visualizer, texture browser
+- **Profiler overlay** — real-time performance stats with smoothing, multi-select rows, copy to clipboard
+- **Profiler hotkey** — `F3` dumps frame stats to engine log
 
 ---
 
@@ -285,7 +290,7 @@ Snake Editor provides a full scene editing environment:
 
 ## Testing
 
-**Framework:** Boost.Test | **30+ test cases across 10 files**
+**Framework:** Boost.Test | **180+ test cases across 15+ files**
 
 ```bash
 cd build && ./unit_tests
@@ -302,6 +307,50 @@ cd build && ./unit_tests
 | `transform_3d_tests` | TRS composition, decomposition |
 | `transform_system_tests` | hierarchy depth, world matrix propagation |
 | `timer_tests` | monotonic clock precision |
+
+---
+
+## Profiling
+
+Built-in profiler with macro API. Enable via CMake:
+
+```bash
+cmake --preset x64-Debug -DENGINE_PROFILE_MODE=INTERNAL
+```
+
+Usage in code:
+
+```cpp
+#include "eng_profiler.h"
+
+void update() {
+    PROFILE_FUNCTION();              // auto-named zone
+    {
+        PROFILE_SCOPE("Physics");    // named zone
+    }
+}
+```
+
+- **ImGui overlay**: View > Profiler — real-time stats with smoothing
+- **Log dump**: press `F3` or call `ds::profiler_dump_to_log()`
+- **Modes**: `INTERNAL` (ring buffer + overlay), `NONE` (zero overhead, macros compile to nothing)
+
+---
+
+## CMake Targets
+
+All engine libraries use `snk::` namespace aliases (planned via EPIC-41):
+
+```
+snk::common          INTERFACE   Math, logging, data structures
+snk::application     STATIC      App lifecycle, module system
+snk::ecs             STATIC      ECS framework
+snk::scene           STATIC      Scene graph, cameras, lights
+snk::render          STATIC      Render pipeline, shaders
+snk::gui             STATIC      ImGui integration
+snk::input_system    STATIC      Input mapping
+snk::engine          STATIC      Aggregates all engine systems
+```
 
 ---
 

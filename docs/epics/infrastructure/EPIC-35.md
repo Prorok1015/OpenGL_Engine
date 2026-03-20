@@ -30,17 +30,16 @@
 
 ## User Stories
 
-### US-35-1: Миграция на scn_assimp_helpers
-**Файлы:** `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.h`
-**Зависимости:** EPIC-34 US-34-1, US-34-2
+### US-35-1: Миграция на scn_assimp_scene_parser
+**Файлы:** `core/engine/assimp_importer/scn_model_importer_adapter.cpp`, `core/engine/assimp_importer/scn_model_importer_adapter.h`
+**Зависимости:** EPIC-34 US-34-8
 
-Заменить все локальные дублированные функции на вызовы из `scn::assimp_helpers`. Адаптер должен стать тонкой обёрткой: I/O + material_processor callback + передача результата в resource_system.
+Адаптер уже перемещён в `assimp_importer/` (в рамках US-34-8). Заменить все локальные дублированные функции на вызовы `scn::parse_assimp_scene()`. Адаптер должен стать тонкой обёрткой: I/O + `res_texture_store` + передача результата в resource_system.
 
 **AC:**
-- [ ] Все `convert_to_glm`, `decompose_aimatrix`, `store_data`, `process_mesh_geometry`, `build_mesh_skin_weights` удалены из адаптера — используются из `scn_assimp_helpers`
-- [ ] `build_prefab_node` вызывается из helpers с callback для материалов
-- [ ] `scan_bones`, `build_keyframes_map`, `build_animations_desc` — из helpers
-- [ ] Адаптер уменьшился до ~150-200 строк (I/O + glue code)
+- [ ] Адаптер вызывает `scn::parse_assimp_scene()` вместо локальных функций
+- [ ] Реализован `res_texture_store : texture_store_interface` для runtime-резолва текстур через `res://`
+- [ ] Адаптер уменьшился до ~50-80 строк (I/O + вызов парсера + finalize)
 - [ ] Импорт `.glb` через `res::require<>()` работает как раньше
 
 ### US-35-2: Выделить материалы в отдельные memory:// ресурсы

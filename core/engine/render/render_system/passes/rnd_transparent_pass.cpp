@@ -6,11 +6,13 @@
 #include "skinning/rnd_skinning_manager.h"
 #include "timer.hpp"
 #include "eng_profiler.h"
+#include "rnd_gpu_profiler.h"
 
 namespace rnd {
 void transparent_pass::execute(frame_context &context,
                                driver::driver_interface &drv) {
   PROFILE_SCOPE("Pass.Transparent");
+  PROFILE_GPU_SCOPE("Pass.Transparent");
 
   if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
     return;

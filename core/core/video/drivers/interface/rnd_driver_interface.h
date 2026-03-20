@@ -207,5 +207,13 @@ namespace rnd::driver
 
 		virtual void register_render_state(const render_state& state) = 0;
 		virtual void set_render_state(const render_state& state) = 0;
+
+		// GPU timer queries for profiling
+		virtual bool supports_timer_queries() const { return false; }
+		virtual uint32_t create_timer_query() { return 0; }
+		virtual void destroy_timer_query(uint32_t /*id*/) {}
+		virtual void timestamp_query(uint32_t /*id*/) {}
+		virtual bool is_query_ready(uint32_t /*id*/) const { return false; }
+		virtual uint64_t get_query_result_ns(uint32_t /*id*/) const { return 0; }
 	};
 }

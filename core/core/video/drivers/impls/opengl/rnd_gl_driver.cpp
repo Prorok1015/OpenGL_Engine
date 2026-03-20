@@ -642,3 +642,42 @@ void rnd::driver::gl::driver::register_render_state(const render_state& state) {
     // but we can cache them for optimization
     state_cache.register_state(state);
 }
+
+// GPU timer queries
+
+bool rnd::driver::gl::driver::supports_timer_queries() const
+{
+	return glad_glQueryCounter != NULL && glad_glGetQueryObjectui64v != NULL;
+}
+
+uint32_t rnd::driver::gl::driver::create_timer_query()
+{
+	GLuint id = 0;
+	glGenQueries(1, &id);
+	return static_cast<uint32_t>(id);
+}
+
+void rnd::driver::gl::driver::destroy_timer_query(uint32_t id)
+{
+	GLuint gl_id = static_cast<GLuint>(id);
+	glDeleteQueries(1, &gl_id);
+}
+
+void rnd::driver::gl::driver::timestamp_query(uint32_t id)
+{
+	glQueryCounter(static_cast<GLuint>(id), GL_TIMESTAMP);
+}
+
+bool rnd::driver::gl::driver::is_query_ready(uint32_t id) const
+{
+	GLint available = 0;
+	glGetQueryObjectiv(static_cast<GLuint>(id), GL_QUERY_RESULT_AVAILABLE, &available);
+	return available != 0;
+}
+
+uint64_t rnd::driver::gl::driver::get_query_result_ns(uint32_t id) const
+{
+	GLuint64 result = 0;
+	glGetQueryObjectui64v(static_cast<GLuint>(id), GL_QUERY_RESULT, &result);
+	return static_cast<uint64_t>(result);
+}

@@ -10,11 +10,20 @@ namespace ds
 {
 	static constexpr uint32_t PROFILER_RING_BUFFER_SIZE = 1024;
 
+	// Timeline IDs — each represents a separate execution context
+	enum class profiler_timeline : uint8_t
+	{
+		cpu = 0,
+		gpu = 1,
+		// Future: audio, job_system, etc.
+	};
+
 	struct profile_entry
 	{
 		const char* name = nullptr;
 		float duration_us = 0.0f;
 		uint8_t depth = 0;
+		profiler_timeline timeline = profiler_timeline::cpu;
 		uint64_t frame_number = 0;
 		std::thread::id thread_id{};
 	};
@@ -26,15 +35,13 @@ namespace ds
 		uint8_t current_depth = 0;
 		uint64_t frame_number = 0;
 
-		std::chrono::high_resolution_clock::time_point frame_start{};
-		bool frame_start_valid = false;
-
-		void push_entry(const char* name, float duration_us)
+		void push_entry(const char* name, float duration_us, profiler_timeline tl = profiler_timeline::cpu)
 		{
 			auto& e = entries[write_index % PROFILER_RING_BUFFER_SIZE];
 			e.name = name;
 			e.duration_us = duration_us;
 			e.depth = current_depth;
+			e.timeline = tl;
 			e.frame_number = frame_number;
 			e.thread_id = std::this_thread::get_id();
 			++write_index;
@@ -70,9 +77,13 @@ namespace ds
 		float total_us = 0.0f;
 		float max_us = 0.0f;
 		uint32_t call_count = 0;
+		profiler_timeline timeline = profiler_timeline::cpu;
 
 		float avg_us() const { return call_count > 0 ? total_us / call_count : 0.0f; }
 	};
+
+	// Get raw entries for the last completed frame (preserves depth and order)
+	std::vector<profile_entry> profiler_last_frame_entries();
 
 	// Get per-zone aggregate stats for the last completed frame
 	std::vector<zone_stats> profiler_last_frame_stats();
@@ -140,4 +151,9 @@ namespace ds
 #define PROFILE_FUNCTION() (void)0
 #define PROFILE_FRAME(name) (void)0
 
+#endif
+
+// Default no-op for GPU profiling — overridden by rnd_gpu_profiler.h when included
+#if !defined(PROFILE_GPU_SCOPE)
+#define PROFILE_GPU_SCOPE(name) (void)0
 #endif

@@ -38,6 +38,14 @@ namespace rnd::driver::gl
 		virtual void register_render_state(const render_state& state) override;
 		virtual void set_render_state(const render_state& state) override;
 
+		// GPU timer queries
+		virtual bool supports_timer_queries() const override;
+		virtual uint32_t create_timer_query() override;
+		virtual void destroy_timer_query(uint32_t id) override;
+		virtual void timestamp_query(uint32_t id) override;
+		virtual bool is_query_ready(uint32_t id) const override;
+		virtual uint64_t get_query_result_ns(uint32_t id) const override;
+
 	private:
 		// Helper methods for framebuffer management
 		void attach_frame_buffer();

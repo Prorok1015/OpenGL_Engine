@@ -3,6 +3,7 @@
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
 #include "eng_profiler.h"
+#include "rnd_gpu_profiler.h"
 
 rnd::render_system* p_render_system = nullptr;
 
@@ -53,6 +54,8 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		return texture;
 
 	});
+
+	rnd::get_gpu_profiler().init(*drv.get());
 
 	texture_manager.register_loader("texture_cubemap_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> std::unique_ptr<rnd::driver::texture_interface> {
 		const auto& tex_cubmap_desc = static_cast<const rnd::texture_cubemap_desc&>(desc);
@@ -161,7 +164,12 @@ void rnd::render_system::render_frame(frame_context& context) const
 	PROFILE_SCOPE("RenderFrame");
 	if (!drv) return;
 
+	auto& gpu = rnd::get_gpu_profiler();
+	gpu.begin_frame(ds::profiler_current_frame());
+
 	for (auto& pass : render_passes) {
 		pass->execute(context, *drv);
 	}
+
+	gpu.end_frame();
 }

@@ -107,7 +107,7 @@ struct profile_entry {
 - [x] При `PROFILE_NONE` макросы раскрываются в пустоту (проверить в Compiler Explorer или asm)
 - [x] При `PROFILE_INTERNAL` данные попадают в ring buffer
 - [x] Ring buffer thread-safe для single-producer (один поток пишет)
-- [ ] Существующий `eng_performance_timer.hpp` используется внутри (не дублировать)
+- [x] Существующий `eng_performance_timer.hpp` удалён — заменён на `eng_profiler.h`
 - [x] Unit-тесты: замер зоны возвращает >0, вложенные зоны корректно считают depth
 
 ### US-39-2: Инструментирование main loop и ключевых систем
@@ -124,7 +124,7 @@ struct profile_entry {
 **AC:**
 - [x] `PROFILE_FRAME("MainThread")` вызывается каждый кадр
 - [x] Каждый render pass имеет `PROFILE_SCOPE`
-- [ ] ECS system_factory вызывает `PROFILE_SCOPE` при update каждой системы
+- [x] ECS system_factory вызывает `PROFILE_SCOPE` при update каждой системы
 - [x] Ресурсные адаптеры (assimp, stb) имеют `PROFILE_SCOPE` на load
 - [x] Не менее 15 точек инструментирования в движке
 
@@ -162,10 +162,10 @@ struct profile_entry {
 Добавить `PROFILE_GPU_SCOPE` через OpenGL timer queries (`GL_TIME_ELAPSED`). При Tracy — пробрасывать в `TracyGpuZone`.
 
 **AC:**
-- [ ] `PROFILE_GPU_SCOPE("OpaquePass")` замеряет время на GPU
-- [ ] Результаты доступны через ring buffer (с задержкой 1-2 кадра — особенность GPU queries)
+- [x] `PROFILE_GPU_SCOPE("OpaquePass")` замеряет время на GPU
+- [x] Результаты доступны через ring buffer (с задержкой 1-2 кадра — особенность GPU queries)
 - [ ] При Tracy — GPU-зоны видны на GPU timeline
-- [ ] При отсутствии поддержки timer queries — graceful fallback (не крашится)
+- [x] При отсутствии поддержки timer queries — graceful fallback (не крашится)
 
 ### US-39-6: Миграция scoped_timer → PROFILE_SCOPE
 **Файлы:** все файлы, использующие `eng_performance_timer.hpp`
@@ -174,9 +174,9 @@ struct profile_entry {
 Заменить прямое использование `ds::scoped_timer` (stdout) на `PROFILE_SCOPE`. Удалить `std::cout` из `scoped_timer` или пометить deprecated.
 
 **AC:**
-- [ ] Нет прямых вызовов `ds::scoped_timer` в production-коде
-- [ ] `scoped_timer` помечен `[[deprecated]]` или удалён
-- [ ] Все замеры идут через единый `PROFILE_*` API
+- [x] Нет прямых вызовов `ds::scoped_timer` в production-коде
+- [x] `scoped_timer` помечен `[[deprecated]]` или удалён
+- [x] Все замеры идут через единый `PROFILE_*` API
 
 ---
 

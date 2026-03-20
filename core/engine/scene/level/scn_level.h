@@ -5,6 +5,7 @@
 #include <entt/entity/fwd.hpp>
 #include "scn_world_desc.h"
 #include "scn_hot_reload_manager.h"
+#include "eng_profiler.h"
 
 namespace scn {
     inline constexpr size_t LEVEL_ID = ~0u;
@@ -96,6 +97,7 @@ namespace scn {
 
         void run_graph_recursive(size_t top, std::vector<entt::organizer::vertex>& graph) {
             auto& top_node = graph[top];
+            PROFILE_SCOPE(top_node.name());
             top_node.prepare(m_level_state);
             top_node.callback()(top_node.data(), m_level_state);
 

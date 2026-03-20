@@ -1,7 +1,7 @@
 # EPIC-30: Editor Code Review — баги, производительность, реорганизация
 
 **Theme:** editor / infrastructure
-**Status:** in_progress
+**Status:** done
 **Depends on:** —
 
 ---
@@ -391,4 +391,4 @@ US-30-4 (Оптимизации)  ← standalone, можно параллель�
 - [x] Деструктор editor_system корректно чистит watchers (US-30-6)
 - [x] `sync_ecs_transforms_to_desc` использует O(1) lookup (US-30-4)
 - [x] Assertions в model_importer вынесены из vertex loop (US-30-4)
-- [ ] Сборка работает, тесты проходят, сцены загружаются
+- [x] Сборка работает, тесты проходят, сцены загружаются

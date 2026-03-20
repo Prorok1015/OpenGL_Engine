@@ -26,15 +26,16 @@
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
-| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | in_progress |
+| [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | done |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
 | [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | planned |
 | [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы | planned |
 | [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов | planned |
-| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | in_progress |
+| [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | done |
 | [EPIC-34](editor/EPIC-34.md) | Editor Model Importer — расширение и упрощение | planned |
 | [EPIC-36](editor/EPIC-36.md) | Editor VFS Protocol — `edt://` для ресурсов редактора | planned |
 | [EPIC-40](editor/EPIC-40.md) | Icon Font Integration — иконочный шрифт для UI редактора | planned |
+| [EPIC-42](editor/EPIC-42.md) | Workspace & Game Project System — разделение движка и игровых данных | planned |
 
 ### Desc-Driven Architecture
 
@@ -67,6 +68,8 @@
 | [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | in_progress |
 | [EPIC-38](infrastructure/EPIC-38.md) | res::tag — std::formatter и ostream support | done |
 | [EPIC-39](infrastructure/EPIC-39.md) | Performance Profiling Infrastructure — замеры производительности | in_progress |
+| [EPIC-41](infrastructure/EPIC-41.md) | CMake Build System — продакшн-качество сборки | planned |
+| [EPIC-43](infrastructure/EPIC-43.md) | Memory Allocators — система управления памятью движка | planned |
 
 ### Render Migration
 
@@ -111,6 +114,7 @@ EPIC-22 (Asset Import Pipeline)
         └── EPIC-35 (Engine Model Importer Adapter — модернизация)
 
 EPIC-36 (Editor VFS Protocol edt://)  ← standalone, no deps
+  └── EPIC-42 (Workspace & Game Project System)  ← depends on EPIC-36
 
 EPIC-37 (Unit Test Coverage)  ← standalone, no deps
 
@@ -119,6 +123,11 @@ EPIC-38 (res::tag formatter)  ← standalone, no deps
 EPIC-39 (Performance Profiling)  ← depends on EPIC-23 (Logger)
 
 EPIC-40 (Icon Font)  ← standalone, no deps
+
+EPIC-41 (CMake Build System)  ← standalone, no deps
+  └── US-41-7 координируется с EPIC-34 US-34-8 (assimp_importer)
+
+EPIC-43 (Memory Allocators)  ← standalone, мотивация из EPIC-39 (Profiling)
 
 EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
 EPIC-26 (Shader Desc)    ← после EPIC-08

@@ -31,18 +31,12 @@ namespace ds
 		return tls_data;
 	}
 
-	void profiler_mark_frame(const char* name)
+	void profiler_mark_frame(const char* /*name*/)
 	{
 		auto& td = profiler_get_thread_data();
-		auto now = std::chrono::high_resolution_clock::now();
 
-		if (td.frame_start_valid) {
-			float frame_us = std::chrono::duration<float, std::micro>(now - td.frame_start).count();
-			td.push_entry(name, frame_us);
-		}
-
-		td.frame_start = now;
-		td.frame_start_valid = true;
+		// Frame boundary management only — no entry push.
+		// Frame timing should be captured via PROFILE_SCOPE at the call site.
 		++td.frame_number;
 		td.current_depth = 0;
 	}
@@ -93,6 +87,13 @@ namespace ds
 		return profiler_get_thread_data().frame_number;
 	}
 
+	std::vector<profile_entry> profiler_last_frame_entries()
+	{
+		uint64_t frame = profiler_current_frame();
+		if (frame == 0) return {};
+		return profiler_snapshot_frame(frame - 1);
+	}
+
 	std::vector<zone_stats> profiler_last_frame_stats()
 	{
 		uint64_t frame = profiler_current_frame();
@@ -108,6 +109,7 @@ namespace ds
 			s.name = e.name;
 			s.total_us += e.duration_us;
 			s.max_us = std::max(s.max_us, e.duration_us);
+			s.timeline = e.timeline;
 			++s.call_count;
 		}
 

@@ -66,37 +66,26 @@ struct import_options {
 ## User Stories
 
 ### US-34-1: Вынести общий код в scn_assimp_helpers
-**Файлы:** `core/engine/scene/adapters/scn_assimp_helpers.h` (новый), `core/engine/scene/adapters/scn_assimp_helpers.cpp` (новый), `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`
+**Файлы:** `core/engine/assimp_importer/scn_assimp_helpers.h`, `core/engine/assimp_importer/scn_assimp_helpers.cpp`
+**Зависимости:** US-34-8
 
-Извлечь дублированные функции (convert_to_glm, decompose_aimatrix, store_data, process_mesh_geometry, build_mesh_skin_weights) в shared header. Оба импортера переходят на вызовы из `scn::assimp_helpers`.
+Извлечь дублированные функции (convert_to_glm, decompose_aimatrix, store_data, process_mesh_geometry, build_mesh_skin_weights) в shared header внутри модуля `assimp_importer`. Эта US теперь выполняется в рамках US-34-8, но выделена для трекинга.
 
 **AC:**
-- [ ] Создан `scn_assimp_helpers.h/cpp` с общими функциями
-- [ ] `edt_model_importer.cpp` использует `scn::assimp_helpers::*` вместо локальных копий
-- [ ] `scn_model_importer_adapter.cpp` использует `scn::assimp_helpers::*` вместо локальных копий
-- [ ] Нет дублированного кода между двумя импортерами (кроме различий в I/O и texture handling)
+- [ ] Создан `scn_assimp_helpers.h/cpp` внутри `assimp_importer/`
+- [ ] Все `convert_to_glm`, `decompose_aimatrix`, `store_data`, `process_mesh_geometry`, `build_mesh_skin_weights` — только в helpers, нигде больше
 - [ ] Сборка и импорт модели работают как раньше
 
 ### US-34-2: Вынести общую логику построения prefab-ноды
-**Файлы:** `core/engine/scene/adapters/scn_assimp_helpers.h`, `core/engine/scene/adapters/scn_assimp_helpers.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`
-**Зависимости:** US-34-1
+**Файлы:** `core/engine/assimp_importer/scn_assimp_scene_parser.h`, `core/engine/assimp_importer/scn_assimp_scene_parser.cpp`
+**Зависимости:** US-34-8, US-34-1
 
-Функции `build_prefab_node`, `scan_bones`, `build_keyframes_map`, `build_animations_desc` содержат идентичную логику, но различаются способом обработки текстур/материалов. Вынести структурный код, оставив материальный pipeline как callback.
-
-```cpp
-// Callback для создания материала — отличается между editor и engine
-using material_processor_fn = std::function<json::value(const aiScene*, aiMaterial*)>;
-
-json::object build_prefab_node(
-    const aiScene*, aiNode*, rnd::geometry_desc&, res::tag geom_tag,
-    const bone_index_map_t&, const node_kf_map_t&, weights_t&,
-    material_processor_fn process_material);
-```
+Функции `build_prefab_node`, `scan_bones`, `build_keyframes_map`, `build_animations_desc`, `find_material_texture`, `process_material` объединены в `scn_assimp_scene_parser`. Различие в текстурном I/O абстрагировано через `texture_store_interface`. Эта US теперь выполняется в рамках US-34-8, но выделена для трекинга.
 
 **AC:**
-- [ ] `build_prefab_node` принимает callback для обработки материалов
-- [ ] `scan_bones`, `build_keyframes_map`, `build_animations_desc` вынесены в helpers
-- [ ] Editor и engine adapter передают свои реализации material processing через callback
+- [ ] `parse_assimp_scene()` — единая точка парсинга для editor и runtime
+- [ ] `texture_store_interface` абстрагирует разницу в текстурном I/O
+- [ ] `scan_bones`, `build_keyframes_map`, `build_animations_desc` — только в парсере
 - [ ] Логика построения дерева (bone, keyframes, mesh, children) не дублируется
 
 ### US-34-3: Расширить импорт текстур — PBR карты
@@ -172,7 +161,7 @@ Assimp извлекает `aiCamera` и `aiLight`. Нужно генериров
 
 ### US-34-7: Тесты
 **Файлы:** `unittests/scn_assimp_helpers_tests.cpp` (новый)
-**Зависимости:** US-34-1
+**Зависимости:** US-34-8
 
 **AC:**
 - [ ] Тест: `convert_to_glm` для aiMatrix4x4 → glm::mat4 (column-major)
@@ -180,26 +169,170 @@ Assimp извлекает `aiCamera` и `aiLight`. Нужно генериров
 - [ ] Тест: `detect_layout` корректно объединяет атрибуты из нескольких мешей
 - [ ] Тест: `build_mesh_skin_weights` корректно упаковывает веса
 
+### US-34-8: Выделить Assimp в опциональный CMake-модуль `assimp_importer`
+**Файлы:**
+- `core/engine/assimp_importer/CMakeLists.txt` (новый)
+- `core/engine/assimp_importer/scn_assimp_scene_parser.h` (новый)
+- `core/engine/assimp_importer/scn_assimp_scene_parser.cpp` (новый)
+- `core/engine/assimp_importer/scn_assimp_helpers.h` (новый — вместо `scene/adapters/`)
+- `core/engine/assimp_importer/scn_assimp_helpers.cpp` (новый)
+- `core/engine/assimp_importer/scn_model_importer_adapter.h` (перемещён из `scene/adapters/`)
+- `core/engine/assimp_importer/scn_model_importer_adapter.cpp` (перемещён из `scene/adapters/`)
+- `core/engine/assimp_importer/scn_assimp_resource_system_wrapper.h` (перемещён из `scene/adapters/`)
+- `core/engine/assimp_importer/scn_assimp_resource_system_wrapper.cpp` (перемещён из `scene/adapters/`)
+- `core/engine/scene/CMakeLists.txt` (убрать `PRIVATE assimp`)
+- `Editor/code/editor_system/CMakeLists.txt` (заменить `PRIVATE assimp` → `PRIVATE assimp_importer`)
+- `CMakeLists.txt` (корневой — опция `ENABLE_ASSIMP_IMPORTER`)
+**Зависимости:** нет (фундаментальная задача, предшествует US-34-1 и US-34-2)
+
+Сейчас Assimp линкуется в двух местах: `scene` (`target_link_libraries(... PRIVATE assimp)` — с комментарием `#temporary`) и `editor_system` (`PRIVATE assimp`). Парсинг модели дублируется в `scn_model_importer_adapter.cpp` (~600 строк) и `edt_model_importer.cpp` (~700 строк). Нужно:
+
+1. **Создать отдельную static library `assimp_importer`** — единственный таргет, который линкует Assimp.
+2. **Перенести весь Assimp-зависимый код** из `scene/adapters/` и `editor_system/import/` в новый модуль.
+3. **Объединить дублированный парсинг** в `scn_assimp_scene_parser` — единую точку входа для преобразования `aiScene*` в `parse_result` (prefab JSON + geometry + skinning weights + tags).
+4. **Сделать модуль опциональным** через CMake-опцию `ENABLE_ASSIMP_IMPORTER` (по умолчанию `ON`).
+
+#### Архитектура модуля
+
+```
+core/engine/assimp_importer/         ← новая static library
+├── CMakeLists.txt                   ← target_link_libraries(... PRIVATE assimp PUBLIC engine)
+├── scn_assimp_helpers.h/cpp         ← convert_to_glm, decompose, store_data, etc.
+├── scn_assimp_scene_parser.h/cpp    ← unified parser: aiScene* → parse_result
+├── scn_model_importer_adapter.h/cpp ← runtime adapter (перемещён из scene/adapters/)
+└── scn_assimp_resource_system_wrapper.h/cpp ← Assimp IOSystem для res:// (перемещён)
+```
+
+#### CMake-интеграция
+
+```cmake
+# CMakeLists.txt (корневой или core/engine/)
+option(ENABLE_ASSIMP_IMPORTER "Build Assimp model importer module" ON)
+
+if(ENABLE_ASSIMP_IMPORTER)
+    add_subdirectory("assimp_importer")
+endif()
+```
+
+```cmake
+# core/engine/assimp_importer/CMakeLists.txt
+project(assimp_importer)
+add_library(${PROJECT_NAME} STATIC)
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+target_sources(${PROJECT_NAME} PRIVATE ${SOURCES})
+target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(${PROJECT_NAME} PRIVATE assimp PUBLIC scene PUBLIC render)
+target_compile_definitions(${PROJECT_NAME} PUBLIC HAS_ASSIMP_IMPORTER=1)
+```
+
+```cmake
+# scene/CMakeLists.txt — удалить строку:
+# target_link_libraries(${PROJECT_NAME} PRIVATE assimp)
+
+# editor_system/CMakeLists.txt — заменить:
+# target_link_libraries(... PRIVATE assimp)
+# на:
+# target_link_libraries(... PRIVATE assimp_importer)
+```
+
+#### Единый парсер — `scn_assimp_scene_parser`
+
+```cpp
+namespace scn {
+
+// Callback: как сохранить/зарезолвить текстуру.
+// Runtime-адаптер резолвит через res://, editor — через filesystem + memory://.
+struct texture_store_interface {
+    virtual ~texture_store_interface() = default;
+    virtual res::tag store_embedded(std::string_view name,
+                                     std::span<const std::byte> data,
+                                     glm::ivec2 size, int channels) = 0;
+    virtual res::tag resolve_external(std::string_view relative_path) = 0;
+    virtual res::tag store_texture_desc(const res::tag& data_tag,
+                                         std::string_view name) = 0;
+};
+
+struct parse_result {
+    json::object                        prefab_json;
+    rnd::geometry_desc                  geometry;
+    res::tag                            geom_tag;
+    std::vector<std::vector<uint32_t>>  skin_weights;
+    std::vector<res::tag>               created_tags;
+};
+
+// Единая точка парсинга — и editor, и runtime вызывают эту функцию.
+parse_result parse_assimp_scene(
+    const aiScene* scene,
+    const std::string& tag_prefix,
+    texture_store_interface& textures,
+    res::resource_system& res_sys);
+
+} // namespace scn
+```
+
+Обе стороны (editor и runtime adapter) предоставляют свою реализацию `texture_store_interface`:
+- **Runtime:** `res_texture_store` — резолвит через `res::resource_system::fetch_data()`
+- **Editor:** `filesystem_texture_store` — читает с диска через `std::ifstream`, сохраняет в `memory://`
+
+Вся остальная логика (geometry, materials, bones, keyframes, animations, prefab tree) — **одна реализация** в `scn_assimp_scene_parser.cpp`.
+
+#### Условная регистрация runtime-адаптера
+
+В `gs_game_init.cpp` (или `engine_module`):
+```cpp
+#if HAS_ASSIMP_IMPORTER
+    res_sys.register_adapter(scn::model_importer_adapter::INFO,
+        std::make_shared<scn::model_importer_adapter>(desc_sys));
+#endif
+```
+
+Без `ENABLE_ASSIMP_IMPORTER` — engine собирается без Assimp, runtime-загрузка `.glb`/`.fbx` недоступна, но все остальные ресурсы (desc, textures, geometry) работают как обычно.
+
+#### Что остаётся в `editor_system/import/`
+
+- `edt_model_importer.h/cpp` — тонкая обёртка: читает файл с диска, создаёт `Assimp::Importer`, вызывает `scn::parse_assimp_scene()` с `filesystem_texture_store`, оркестрирует background/main split.
+- `edt_filesystem_assimp_io.h/cpp` — Assimp IOSystem для файловой системы (специфика editor).
+- `edt_asset_exporter.h/cpp`, `edt_asset_export_dialog.h/cpp` — без изменений.
+
+**AC:**
+- [ ] Создан CMake-таргет `assimp_importer` (static library) — единственный таргет, линкующий Assimp
+- [ ] `scene/CMakeLists.txt` не содержит `PRIVATE assimp` — зависимость убрана
+- [ ] `editor_system/CMakeLists.txt` линкует `assimp_importer` вместо `assimp` напрямую
+- [ ] `scn_model_importer_adapter` и `scn_assimp_resource_system_wrapper` перемещены в `assimp_importer/`
+- [ ] Создан `scn_assimp_scene_parser` с `parse_result parse_assimp_scene()` — единая точка парсинга
+- [ ] `texture_store_interface` абстрагирует разницу между runtime (res://) и editor (filesystem) текстурами
+- [ ] Дублированный код (`convert_to_glm`, `decompose_aimatrix`, `store_data`, `process_mesh_geometry`, `build_mesh_skin_weights`, `build_prefab_node`, `find_material_texture`, `process_material`) существует только в `assimp_importer/`, не в editor и не в scene
+- [ ] `edt_model_importer.cpp` уменьшен до ~100-150 строк (I/O + async split + вызов `parse_assimp_scene`)
+- [ ] `scn_model_importer_adapter.cpp` уменьшен до ~50-80 строк (I/O + вызов `parse_assimp_scene` + finalize)
+- [ ] CMake-опция `ENABLE_ASSIMP_IMPORTER=OFF` → проект собирается без Assimp, адаптер не регистрируется
+- [ ] CMake-опция `ENABLE_ASSIMP_IMPORTER=ON` (default) → всё работает как раньше
+- [ ] Импорт `.glb` через editor работает как раньше
+- [ ] Импорт `.glb` через `res::require<>()` в runtime работает как раньше
+
 ## Порядок выполнения
 
 ```
-US-34-1 (shared helpers)
-  ├── US-34-2 (shared prefab node builder)
+US-34-8 (CMake-модуль assimp_importer + unified parser)
+  ├── US-34-1 (shared helpers — уже часть US-34-8)
+  ├── US-34-2 (shared prefab node builder — уже часть US-34-8)
   │     └── US-34-6 (камеры и свет)
   ├── US-34-3 (PBR текстуры)
-  └── US-34-4 (layout по всем мешам)
-US-34-5 (import options UI) — параллельно с US-34-1
-US-34-7 (тесты) — по мере выполнения
+  ├── US-34-4 (layout по всем мешам)
+  └── US-34-7 (тесты)
+US-34-5 (import options UI) — параллельно с US-34-8
 ```
 
 ## Риски
 
-- **Shared header в core, Assimp — в engine.** Assimp-хедеры подключаются через engine; если `scn_assimp_helpers` в core — потребуется линковка с Assimp в core. Альтернатива: разместить helpers в engine layer.
+- **Circular dependency.** `assimp_importer` зависит от `scene` (для типов desc) и `render` (для `geometry_desc`). Нужно убедиться что `scene` не зависит обратно от `assimp_importer`. Регистрация адаптера — через `game_init` или условный `#if HAS_ASSIMP_IMPORTER`, не через прямую зависимость.
 - **Совместимость шейдеров.** Новые PBR sampler slots (metalness, roughness, AO) требуют поддержки в фрагментных шейдерах. Без обновления шейдеров новые текстуры не повлияют на рендеринг.
 - **Обратная совместимость material_desc.** Новые поля (дополнительные samplers, defines) должны игнорироваться старыми шейдерами.
+- **`#if HAS_ASSIMP_IMPORTER` в game_init.** Требует условной компиляции в engine-слое. Альтернатива: регистрация адаптера через модульную систему (assimp_importer как отдельный `module_interface`).
 
 ## Критерии завершения эпика
 
+- [ ] Весь Assimp-зависимый код изолирован в `assimp_importer` — ни `scene`, ни `editor_system` не линкуют Assimp напрямую
+- [ ] Проект собирается с `ENABLE_ASSIMP_IMPORTER=OFF` без ошибок линковки
 - [ ] Нет дублированного кода между `edt_model_importer` и `scn_model_importer_adapter`
 - [ ] PBR-модель (glTF с metalness/roughness) импортируется с корректными текстурными слотами
 - [ ] Layout строится по всем мешам, а не по первому

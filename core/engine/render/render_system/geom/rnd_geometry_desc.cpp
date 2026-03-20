@@ -1,5 +1,6 @@
 #include "rnd_geometry_desc.h"
 #include "desc_system.h"
+#include "eng_profiler.h"
 
 std::string_view shader_data_type_to_string(rnd::driver::SHADER_DATA_TYPE type)
 {
@@ -148,7 +149,7 @@ void rnd::geometry_desc::deserialize(desc::desc_system& system, const json::obje
 		auto& json_bounds = resource.at("bounds");
 		bounds = json::value_to<decltype(bounds)>(json_bounds);
 
-		ds::scoped_timer timer("geometry_desc rtree build");
+		PROFILE_SCOPE("geometry_desc rtree build");
 		for(auto& [key, val] : bounds)
 		{
 			rtree.insert(key, val);
