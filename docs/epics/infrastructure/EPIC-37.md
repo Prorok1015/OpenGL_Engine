@@ -1,6 +1,6 @@
 # EPIC-37: Unit Test Coverage — аудит, исправления, расширение
 
-**Status:** in_progress
+**Status:** done
 **Theme:** infrastructure
 **Dependencies:** none
 

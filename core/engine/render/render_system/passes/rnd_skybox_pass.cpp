@@ -36,7 +36,7 @@ namespace rnd {
 	void skybox_pass::execute(frame_context& context, driver::driver_interface& drv) {
 		PROFILE_SCOPE("Pass.Skybox");
 		PROFILE_GPU_SCOPE("Pass.Skybox");
-		if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
+		if (!context.data.has_value<std::pmr::vector<rnd::render_packet_t>>()) {
 			return;
 		}
 
@@ -58,7 +58,7 @@ namespace rnd {
 			m_va->set_index_buffer(m_ibo);
 		}
 
-		auto& packets = context.data.require<std::vector<rnd::render_packet_t>>();
+		auto& packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
 		static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
 		static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
@@ -66,7 +66,7 @@ namespace rnd {
 		auto& txm_manager = rnd::get_system().get_texture_manager();
 		rnd::global_params common_matrix;
 
-		for (auto packet : packets) {
+		for (const auto& packet : packets) {
 			if (!packet.skybox_material.has_value()) {
 				continue;
 			}

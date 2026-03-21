@@ -17,7 +17,7 @@ void composition_pass::execute(frame_context &context,
                                driver::driver_interface &drv) {
   PROFILE_SCOPE("Pass.Composition");
   PROFILE_GPU_SCOPE("Pass.Composition");
-  if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
+  if (!context.data.has_value<std::pmr::vector<rnd::render_packet_t>>()) {
     return;
   }
 
@@ -37,7 +37,7 @@ void composition_pass::execute(frame_context &context,
     m_va->set_index_buffer(m_ibo);
   }
 
-  auto &packets = context.data.require<std::vector<rnd::render_packet_t>>();
+  auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
   static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
   static res::tag color_rt_transparent_tag =
@@ -47,7 +47,7 @@ void composition_pass::execute(frame_context &context,
 
   auto &txm_manager = rnd::get_system().get_texture_manager();
 
-  for (auto packet : packets) {
+  for (const auto& packet : packets) {
     int vp_width = packet.camera.viewport.z;
     int vp_height = packet.camera.viewport.w;
 

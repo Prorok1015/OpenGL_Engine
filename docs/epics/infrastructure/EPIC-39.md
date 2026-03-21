@@ -1,6 +1,6 @@
 # EPIC-39: Performance Profiling Infrastructure — замеры производительности
 
-**Status:** in_progress
+**Status:** done
 **Theme:** infrastructure
 **Dependencies:** EPIC-23 (Logger — spdlog), EPIC-37 (Unit Tests — для бенчмарков)
 
@@ -142,29 +142,19 @@ struct profile_entry {
 - [x] Работает при `PROFILE_INTERNAL` без Tracy
 
 ### US-39-4: Tracy Integration
-**Файлы:** `lib3dparty/tracy/` (submodule), `core/CMakeLists.txt`, `core/core/common/eng_profiler.h`
-**Зависимости:** US-39-1
+**Выделено в отдельный эпик:** [EPIC-46](EPIC-46.md)
 
-Добавить Tracy как git submodule. При `PROFILE_TRACY` макросы пробрасывают в `ZoneScoped`, `FrameMark` и т.д.
-
-**AC:**
-- [ ] Tracy добавлен как submodule в `lib3dparty/tracy`
-- [ ] `PROFILE_TRACY` линкует `TracyClient`
-- [ ] `PROFILE_SCOPE` → `ZoneScoped` / `ZoneScopedN`
-- [ ] `PROFILE_FRAME` → `FrameMark`
-- [ ] Данные видны в Tracy GUI при подключении к запущенному Editor
-- [ ] `PROFILE_INTERNAL` и `PROFILE_TRACY` не конфликтуют (взаимоисключающие)
+Tracy интеграция отложена — внутреннего профайлера достаточно для текущих задач.
 
 ### US-39-5: GPU Profiling (OpenGL Timer Queries)
 **Файлы:** `core/core/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
-**Зависимости:** US-39-2, US-39-4
+**Зависимости:** US-39-2
 
-Добавить `PROFILE_GPU_SCOPE` через OpenGL timer queries (`GL_TIME_ELAPSED`). При Tracy — пробрасывать в `TracyGpuZone`.
+Добавить `PROFILE_GPU_SCOPE` через OpenGL timer queries (`GL_TIME_ELAPSED`).
 
 **AC:**
 - [x] `PROFILE_GPU_SCOPE("OpaquePass")` замеряет время на GPU
 - [x] Результаты доступны через ring buffer (с задержкой 1-2 кадра — особенность GPU queries)
-- [ ] При Tracy — GPU-зоны видны на GPU timeline
 - [x] При отсутствии поддержки timer queries — graceful fallback (не крашится)
 
 ### US-39-6: Миграция scoped_timer → PROFILE_SCOPE
@@ -201,9 +191,8 @@ US-39-4 (Tracy) — параллельно с US-39-2/39-3, после US-39-1
 
 ## Критерии завершения эпика
 
-- [ ] `PROFILE_SCOPE` / `PROFILE_FUNCTION` / `PROFILE_FRAME` работают во всех трёх режимах (NONE, INTERNAL, TRACY)
-- [ ] Не менее 15 точек инструментирования в движке (loop, render, ECS, resources)
-- [ ] ImGui overlay показывает breakdown текущего кадра
-- [ ] Tracy подключается и показывает timeline при `PROFILE_TRACY`
-- [ ] GPU-замеры работают для render passes
-- [ ] Старый `scoped_timer` заменён на `PROFILE_*`
+- [x] `PROFILE_SCOPE` / `PROFILE_FUNCTION` / `PROFILE_FRAME` работают в режимах NONE и INTERNAL (Tracy — см. EPIC-46)
+- [x] Не менее 15 точек инструментирования в движке (loop, render, ECS, resources)
+- [x] ImGui overlay показывает breakdown текущего кадра
+- [x] GPU-замеры работают для render passes
+- [x] Старый `scoped_timer` заменён на `PROFILE_*`

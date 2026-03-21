@@ -1,7 +1,7 @@
 # EPIC-05: Entity Management — продвинутые операции над сущностями
 
 **Theme:** editor
-**Status:** in_progress
+**Status:** done
 **Depends on:** EPIC-08, EPIC-09 (для desc-driven варианта)
 
 ## Цель
@@ -87,4 +87,4 @@ Shift+Click — выделить диапазон.
 - [x] Duplicate создаёт полную копию узла в `world_desc` (`duplicate_entity`, вставка как sibling)
 - [x] Drag-and-drop re-parent работает (make child / reorder / move to root, visual hints)
 - [x] Filter работает с `prefab_node` деревом (рекурсивный `node_matches_filter`, auto-expand родителей)
-- [ ] Multi-select: delete и duplicate для группы
+- [x] Multi-select: delete и duplicate для группы

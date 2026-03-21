@@ -129,12 +129,18 @@ void wire_hierarchy_callbacks(
 	hierarchy.set_on_delete_node([&](const std::string& name) {
 		scene_ed.delete_entity(name);
 	});
+	hierarchy.set_on_delete_nodes([&](const std::vector<std::string>& names) {
+		scene_ed.delete_entities(names);
+	});
 	hierarchy.set_on_rename_node([&](const std::string& /*old_name*/, const std::string& /*new_name*/) {
 		state.is_dirty = true;
 		scene_ed.serialize_and_push();
 	});
 	hierarchy.set_on_duplicate_node([&](const std::string& name) {
 		scene_ed.duplicate_entity(name);
+	});
+	hierarchy.set_on_duplicate_nodes([&](const std::vector<std::string>& names) {
+		scene_ed.duplicate_entities(names);
 	});
 	hierarchy.set_on_reparent_node([&](const std::string& node_name, const std::string& new_parent_name, int insert_index) {
 		scene_ed.reparent_entity(node_name, new_parent_name, insert_index);

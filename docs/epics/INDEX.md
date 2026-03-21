@@ -22,7 +22,7 @@
 | [EPIC-02](editor/EPIC-02.md) | Inspector — динамическая инспекция компонентов | done |
 | [EPIC-03](editor/EPIC-03.md) | Asset Browser — просмотр и импорт ассетов | done |
 | [EPIC-04](editor/EPIC-04.md) | Scene Save/Load — сохранение и управление сценами | done |
-| [EPIC-05](editor/EPIC-05.md) | Entity Management — продвинутые операции над сущностями | in_progress |
+| [EPIC-05](editor/EPIC-05.md) | Entity Management — продвинутые операции над сущностями | done |
 | [EPIC-06](editor/EPIC-06.md) | Рефакторинг и чистка кодовой базы редактора | done |
 | [EPIC-07](editor/EPIC-07.md) | Material & Shader Editor | planned |
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
@@ -65,11 +65,13 @@
 | [EPIC-31](infrastructure/EPIC-31.md) | Assert System — информативные ассерты с диалогом и стек-трейсом | planned |
 | [EPIC-32](infrastructure/EPIC-32.md) | External Assert Dialog — отдельный процесс для ассерт-диалога (lowest priority) | planned |
 | [EPIC-35](infrastructure/EPIC-35.md) | Engine Model Importer Adapter — модернизация для runtime/mods | planned |
-| [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | in_progress |
+| [EPIC-37](infrastructure/EPIC-37.md) | Unit Test Coverage — аудит, исправления, расширение | done |
 | [EPIC-38](infrastructure/EPIC-38.md) | res::tag — std::formatter и ostream support | done |
-| [EPIC-39](infrastructure/EPIC-39.md) | Performance Profiling Infrastructure — замеры производительности | in_progress |
+| [EPIC-39](infrastructure/EPIC-39.md) | Performance Profiling Infrastructure — замеры производительности | done |
 | [EPIC-41](infrastructure/EPIC-41.md) | CMake Build System — продакшн-качество сборки | planned |
-| [EPIC-43](infrastructure/EPIC-43.md) | Memory Allocators — система управления памятью движка | planned |
+| [EPIC-43](infrastructure/EPIC-43.md) | Memory Allocators — система управления памятью движка | done |
+| [EPIC-44](infrastructure/EPIC-44.md) | Memory Profiling & Container Aliases — трекинг памяти и удобные контейнеры | planned |
+| [EPIC-46](infrastructure/EPIC-46.md) | Tracy Profiler Integration — внешний профайлер для детального анализа | planned |
 
 ### Render Migration
 
@@ -81,6 +83,7 @@
 | [EPIC-19](render-migration/EPIC-19.md) | Pipeline Wiring — подключение конвейера | done |
 | [EPIC-20](render-migration/EPIC-20.md) | Game Loop Migration — миграция игрового цикла | done |
 | [EPIC-21](render-migration/EPIC-21.md) | Legacy Renderer Removal — удаление renderer_3d | done |
+| [EPIC-45](render-migration/EPIC-45.md) | Render Pipeline Optimization — оптимизация экстракции и рендер пассов | planned |
 
 ---
 
@@ -120,7 +123,8 @@ EPIC-37 (Unit Test Coverage)  ← standalone, no deps
 
 EPIC-38 (res::tag formatter)  ← standalone, no deps
 
-EPIC-39 (Performance Profiling)  ← depends on EPIC-23 (Logger)
+EPIC-39 (Performance Profiling)  ← depends on EPIC-23 (Logger) — done
+  └── EPIC-46 (Tracy Profiler Integration)  ← depends on EPIC-39
 
 EPIC-40 (Icon Font)  ← standalone, no deps
 
@@ -128,6 +132,8 @@ EPIC-41 (CMake Build System)  ← standalone, no deps
   └── US-41-7 координируется с EPIC-34 US-34-8 (assimp_importer)
 
 EPIC-43 (Memory Allocators)  ← standalone, мотивация из EPIC-39 (Profiling)
+  ├── EPIC-44 (Memory Profiling & Container Aliases)  ← depends on EPIC-43
+  └── EPIC-45 (Render Pipeline Optimization)  ← depends on EPIC-43, EPIC-39
 
 EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
 EPIC-26 (Shader Desc)    ← после EPIC-08

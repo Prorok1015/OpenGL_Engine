@@ -20,7 +20,9 @@ namespace edt
 		void create_entity(const std::string& type_name);
 		void create_entity_from_node(prefab_node node);
 		void delete_entity(const std::string& name);
+		void delete_entities(const std::vector<std::string>& names);
 		void duplicate_entity(const std::string& name);
+		void duplicate_entities(const std::vector<std::string>& names);
 		void reparent_entity(const std::string& node_name, const std::string& new_parent_name, int insert_index);
 		void on_transform_committed(const std::string& name, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale);
 

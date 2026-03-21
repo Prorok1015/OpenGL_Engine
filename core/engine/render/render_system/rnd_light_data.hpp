@@ -1,7 +1,8 @@
 #pragma once
-#include <vector>
+#include <memory_resource>
 #include <glm/vec4.hpp>
 #include "shader/rnd_shader_manager.h"
+#include "mem_allocator.h"
 
 // rnd_light_data.hpp
 // Transport-layer light data for frame_context.
@@ -21,7 +22,7 @@ namespace rnd {
 			glm::vec4 specular;
 		};
 
-		std::vector<directional_light_t> directional;
+		std::pmr::vector<directional_light_t> directional{ds::frame_allocator()};
 
 		// Convert to GPU-ready lights_params for ShaderManager::update_global_sun().
 		// Respects lights_params::MAX_LIGHT_COUNT limit.

@@ -51,6 +51,17 @@ void edt::scene_editor::delete_entity(const std::string& name)
 	serialize_and_push();
 }
 
+void edt::scene_editor::delete_entities(const std::vector<std::string>& names)
+{
+	if (names.empty()) return;
+	if (on_before_modify) on_before_modify();
+	auto& root_children = m_state.active_world_desc().get_root().children;
+	for (const auto& name : names)
+		remove_node_by_name(root_children, name);
+	m_state.is_dirty = true;
+	serialize_and_push();
+}
+
 void edt::scene_editor::duplicate_entity(const std::string& name)
 {
 	auto* siblings = find_parent_children(m_state.active_world_desc().get_root().children, name);
@@ -65,6 +76,36 @@ void edt::scene_editor::duplicate_entity(const std::string& name)
 
 	if (on_before_modify) on_before_modify();
 	siblings->insert(it + 1, std::move(copy));
+	m_state.is_dirty = true;
+	serialize_and_push();
+}
+
+void edt::scene_editor::duplicate_entities(const std::vector<std::string>& names)
+{
+	if (names.empty()) return;
+	if (on_before_modify) on_before_modify();
+	auto& root_children = m_state.active_world_desc().get_root().children;
+	// Collect copies before any insertions to avoid iterator invalidation
+	struct pending_copy { std::vector<prefab_node>* siblings; std::size_t insert_after_idx; prefab_node node; };
+	std::vector<pending_copy> copies;
+	for (const auto& name : names) {
+		auto* siblings = find_parent_children(root_children, name);
+		if (!siblings) continue;
+		auto it = std::find_if(siblings->begin(), siblings->end(),
+			[&](const prefab_node& n) { return n.name == name; });
+		if (it == siblings->end()) continue;
+		prefab_node copy = *it;
+		copy.name = make_unique_key(name + "_copy");
+		std::size_t idx = static_cast<std::size_t>(std::distance(siblings->begin(), it));
+		copies.push_back({ siblings, idx + 1, std::move(copy) });
+	}
+	// Insert from highest index to lowest within each sibling list to preserve indices
+	std::stable_sort(copies.begin(), copies.end(), [](const pending_copy& a, const pending_copy& b) {
+		if (a.siblings != b.siblings) return a.siblings > b.siblings;
+		return a.insert_after_idx > b.insert_after_idx;
+	});
+	for (auto& c : copies)
+		c.siblings->insert(c.siblings->begin() + static_cast<std::ptrdiff_t>(c.insert_after_idx), std::move(c.node));
 	m_state.is_dirty = true;
 	serialize_and_push();
 }

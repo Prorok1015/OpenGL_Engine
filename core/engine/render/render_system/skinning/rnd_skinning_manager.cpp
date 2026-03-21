@@ -59,12 +59,12 @@ std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::skinning_manager::creat
      return ssbo;
 }
 
-void rnd::skinning_manager::bind_skin(rnd::driver::driver_interface* drv, res::tag skin_tag, const std::vector<glm::mat4>& matrices)
+void rnd::skinning_manager::bind_skin(rnd::driver::driver_interface* drv, res::tag skin_tag, std::span<const glm::mat4> matrices)
 {
     if (!matrices.empty()) {
         if (auto* bones_buffer = get_bones_matrices_buffer(drv)) {
             bones_buffer->bind(2);
-            bones_buffer->set_data(matrices);
+            bones_buffer->set_data(matrices.data(), matrices.size_bytes());
         }
     }
 

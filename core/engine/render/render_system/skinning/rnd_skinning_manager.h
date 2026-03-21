@@ -4,6 +4,7 @@
 #include "rnd_driver_interface.h"
 #include "rnd_ssbo_buffer_interface.h"
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <glm/mat4x4.hpp>
 #include <vector>
@@ -31,7 +32,7 @@ namespace rnd
 			return nullptr;
 		}
 
-		void bind_skin(rnd::driver::driver_interface* drv, res::tag skin_tag, const std::vector<glm::mat4>& matrices);
+		void bind_skin(rnd::driver::driver_interface* drv, res::tag skin_tag, std::span<const glm::mat4> matrices);
 
 		rnd::driver::ssbo_buffer_interface* get_weights_indeces_buffer(res::tag tag, rnd::driver::driver_interface* driver);
 		rnd::driver::ssbo_buffer_interface* get_bones_matrices_buffer(rnd::driver::driver_interface* driver);

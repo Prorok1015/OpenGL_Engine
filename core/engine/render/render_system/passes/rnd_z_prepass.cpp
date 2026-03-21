@@ -10,11 +10,11 @@ namespace rnd {
 void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
   PROFILE_SCOPE("Pass.ZPrepass");
   PROFILE_GPU_SCOPE("Pass.ZPrepass");
-  if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
+  if (!context.data.has_value<std::pmr::vector<rnd::render_packet_t>>()) {
     return;
   }
 
-  auto &packets = context.data.require<std::vector<rnd::render_packet_t>>();
+  auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
   static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
   static res::tag z_pass_color_tag =
       res::tag(res::tag::memory, "__z_prepass_color_rt");
@@ -76,7 +76,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
 
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
-
+    /*
     rnd::shader_config shader_desc;
     shader_desc.cdata.program =
         rnd::shader_config::shader_program_data::build()
@@ -89,8 +89,13 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
                       // handles that?
     // Wait, the new architecture sets transform per draw call! But how?
     // In opaque pass we probably set it. But `draw_call_t` has `transform`!
+    */
 
-    for (const auto &dc : packet.opaque_draws) {
+	auto z_prepass_program = rnd::shader_config::shader_program_data::build()
+        .set_vertex_shader(res::tag::make("shaders/z_prepass.vert"))
+        .set_fragment_shader(res::tag::make("shaders/z_prepass.frag"));
+
+    for (const auto& dc : packet.opaque_draws) {
       auto *va = geom_manager.require_geometry(dc.geometry_tag);
       if (!va)
         continue;
@@ -103,7 +108,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
 
       // Let's use dc.material with `z_prepass` overriden program!
       rnd::shader_config object_shader = dc.material;
-      object_shader.cdata.program = shader_desc.cdata.program;
+      object_shader.cdata.program = z_prepass_program;
       rnd::configure_pass(object_shader);
 
       if (!dc.bone_matrices.empty() && dc.skinning_tag.is_valid()) {

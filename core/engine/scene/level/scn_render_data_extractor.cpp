@@ -1,4 +1,5 @@
 #include "scn_render_data_extractor.h"
+#include <memory_resource>
 #include "eng_transform_3d.hpp"
 #include "rnd_light_data.hpp"
 #include "rnd_render_packet.hpp"
@@ -7,12 +8,13 @@
 #include "scn_material_desc.h"
 #include "scn_model.h"
 #include "eng_profiler.h"
+#include "mem_allocator.h"
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
     auto& level = m_level_manager.get_level();
 
-    std::vector<rnd::render_packet_t> packets;
+    std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
     int dir_light_count = 0;
 
     if (context.data.has_value<rnd::scene_lights_t>()) {
@@ -47,6 +49,9 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             auto& tex_mgr = rnd::get_system().get_texture_manager();
 
             auto meshes_view = reg.view<scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
+            auto mesh_count = meshes_view.size_hint();
+            packet.opaque_draws.reserve(mesh_count);
+            packet.transparent_draws.reserve(mesh_count);
             for (auto&& [m_ent, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
                 if (!mat.mlt_desc.is_ready()) {
@@ -56,47 +61,69 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 auto& mlt = *mat.mlt_desc;
 
                 rnd::draw_call_t dc;
-                dc.geometry_tag = geom.geom_tag;
-                dc.indices_count = static_cast<uint32_t>(mesh.mesh.get_indices_count());
-                dc.vx_begin = static_cast<uint32_t>(mesh.mesh.vx_begin);
-                dc.ind_begin = static_cast<uint32_t>(mesh.mesh.ind_begin);
-                dc.transform = m_trans.world;
+                {
+                    PROFILE_SCOPE("Extract.BuildDC");
+                    dc.geometry_tag = geom.geom_tag;
+                    dc.indices_count = static_cast<uint32_t>(mesh.mesh.get_indices_count());
+                    dc.vx_begin = static_cast<uint32_t>(mesh.mesh.vx_begin);
+                    dc.ind_begin = static_cast<uint32_t>(mesh.mesh.ind_begin);
+                    dc.transform = m_trans.world;
+                }
 
                 const auto queue = mlt.queue;
-                auto shader_cfg = mlt.get_shader_desc(entt::handle{ reg, m_ent }, tex_mgr);
+                rnd::shader_config shader_cfg;
+                {
+                    PROFILE_SCOPE("Extract.ShaderDesc");
+                    shader_cfg = mlt.get_shader_desc(entt::handle{ reg, m_ent }, tex_mgr);
+                }
 
                 if (dir_light_count > 0) {
                     shader_cfg.cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(dir_light_count);
                 }
 
-                if (auto* owner = reg.try_get<scn::obj_owner_component>(m_ent)) {
-                    auto owner_ent = owner->owner;
-                    if (reg.all_of<scn::bone_matrices_component>(owner_ent) &&
-                        reg.all_of<scn::skinning_component>(owner_ent)) {
+                {
+                    PROFILE_SCOPE("Extract.Skinning");
+                    if (auto* owner = reg.try_get<scn::obj_owner_component>(m_ent)) {
+                        auto owner_ent = owner->owner;
+                        if (reg.all_of<scn::bone_matrices_component>(owner_ent) &&
+                            reg.all_of<scn::skinning_component>(owner_ent)) {
 
-                        auto& skm = reg.get<scn::skinning_component>(owner_ent);
-                        auto& matrices = reg.get<scn::bone_matrices_component>(owner_ent);
+                            auto& skm = reg.get<scn::skinning_component>(owner_ent);
+                            auto& matrices = reg.get<scn::bone_matrices_component>(owner_ent);
 
-                        dc.bone_matrices = matrices.matrices;
-                        dc.skinning_tag = skm.skinning_tag;
+                            dc.bone_matrices.assign(matrices.matrices.begin(), matrices.matrices.end());
+                            dc.skinning_tag = skm.skinning_tag;
 
-                        shader_cfg.cdata.defines.push_back("USE_ANIMATION");
+                            shader_cfg.cdata.defines.push_back("USE_ANIMATION");
+                        }
                     }
                 }
 
-                if (queue == scn::pass_queue::OPAQUE || queue == scn::pass_queue::MIX) {
-                    rnd::draw_call_t opaque_dc = dc;
-                    opaque_dc.material = shader_cfg;
-                    opaque_dc.material.cdata.defines.push_back("OPAQUE");
-                    opaque_dc.sort_key = opaque_dc.material.get_hash();
-                    packet.opaque_draws.push_back(std::move(opaque_dc));
-                }
+                {
+                    PROFILE_SCOPE("Extract.PushDraws");
+                    bool needs_opaque = (queue == scn::pass_queue::OPAQUE || queue == scn::pass_queue::MIX);
+                    bool needs_transparent = (queue == scn::pass_queue::TRANSPARENT || queue == scn::pass_queue::MIX);
 
-                if (queue == scn::pass_queue::TRANSPARENT || queue == scn::pass_queue::MIX) {
-                    rnd::draw_call_t trans_dc = dc;
-                    trans_dc.material = std::move(shader_cfg);
-                    trans_dc.sort_key = trans_dc.material.get_hash();
-                    packet.transparent_draws.push_back(std::move(trans_dc));
+                    if (needs_opaque && needs_transparent) {
+                        rnd::draw_call_t opaque_dc = dc;
+                        opaque_dc.material = shader_cfg;
+                        opaque_dc.material.cdata.defines.push_back("OPAQUE");
+                        opaque_dc.sort_key = opaque_dc.material.get_hash();
+                        packet.opaque_draws.push_back(std::move(opaque_dc));
+
+                        dc.material = std::move(shader_cfg);
+                        dc.sort_key = dc.material.get_hash();
+                        packet.transparent_draws.push_back(std::move(dc));
+                    } else if (needs_opaque) {
+                        dc.material = std::move(shader_cfg);
+                        dc.material.cdata.defines.push_back("OPAQUE");
+                        dc.sort_key = dc.material.get_hash();
+                        packet.opaque_draws.push_back(std::move(dc));
+                    } else if (needs_transparent) {
+                        dc.material = std::move(shader_cfg);
+                        dc.sort_key = dc.material.get_hash();
+                        packet.transparent_draws.push_back(std::move(dc));
+                    }
                 }
             }
 
@@ -111,5 +138,5 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
         }
     }
 
-    context.data.construct<std::vector<rnd::render_packet_t>>(std::move(packets));
+    context.data.construct<std::pmr::vector<rnd::render_packet_t>>(std::move(packets));
 }

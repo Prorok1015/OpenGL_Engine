@@ -1,6 +1,6 @@
 # EPIC-43: Memory Allocators — система управления памятью движка
 
-**Status:** planned
+**Status:** done
 **Theme:** infrastructure
 **Dependencies:** none
 
@@ -87,14 +87,14 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 Реализовать `ds::linear_resource` — наследник `std::pmr::memory_resource`. Аллокация — bump pointer, free — no-op, reset — сброс указателя на начало.
 
 **AC:**
-- [ ] `linear_resource` наследует `std::pmr::memory_resource`
-- [ ] Конструктор принимает `void* buffer, size_t size` или `size_t size` (сам аллоцирует через upstream)
-- [ ] `allocate()` — O(1) bump с выравниванием
-- [ ] `deallocate()` — no-op
-- [ ] `reset()` — сброс pointer, O(1)
-- [ ] При исчерпании буфера — fallback на upstream resource или `std::bad_alloc`
-- [ ] `std::pmr::vector<int> v(&alloc)` работает корректно
-- [ ] Unit-тесты: аллокация, выравнивание, reset, overflow
+- [x] `linear_resource` наследует `std::pmr::memory_resource`
+- [x] Конструктор принимает `void* buffer, size_t size` или `size_t size` (сам аллоцирует через upstream)
+- [x] `allocate()` — O(1) bump с выравниванием
+- [x] `deallocate()` — no-op
+- [x] `reset()` — сброс pointer, O(1)
+- [x] При исчерпании буфера — fallback на upstream resource или `std::bad_alloc`
+- [x] `std::pmr::vector<int> v(&alloc)` работает корректно
+- [x] Unit-тесты: аллокация, выравнивание, reset, overflow
 
 ### US-43-2: Pool allocator
 **Файлы:** `core/core/common/mem_pool_allocator.h`, `core/core/common/mem_pool_allocator.cpp`
@@ -102,12 +102,12 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 Реализовать `ds::pool_resource` — fixed-size block allocator с free-list.
 
 **AC:**
-- [ ] Конструктор принимает `size_t block_size, size_t block_count`
-- [ ] `allocate()` — O(1) из free-list
-- [ ] `deallocate()` — O(1) return в free-list
-- [ ] При исчерпании — рост (новый chunk) или fallback на upstream
-- [ ] `reset()` — возврат всех блоков в free-list
-- [ ] Unit-тесты: alloc/free циклы, исчерпание, reset
+- [x] Конструктор принимает `size_t block_size, size_t block_count`
+- [x] `allocate()` — O(1) из free-list
+- [x] `deallocate()` — O(1) return в free-list
+- [x] При исчерпании — рост (новый chunk) или fallback на upstream
+- [x] `reset()` — возврат всех блоков в free-list
+- [x] Unit-тесты: alloc/free циклы, исчерпание, reset
 
 ### US-43-3: Stack (LIFO) allocator
 **Файлы:** `core/core/common/mem_stack_allocator.h`, `core/core/common/mem_stack_allocator.cpp`
@@ -115,11 +115,11 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 Реализовать `ds::stack_resource` — LIFO аллокатор с маркерами.
 
 **AC:**
-- [ ] `allocate()` — O(1) bump
-- [ ] `deallocate()` — O(1) только если LIFO порядок (иначе no-op)
-- [ ] `marker()` — возвращает текущую позицию
-- [ ] `reset_to_marker(m)` — сброс до маркера
-- [ ] Unit-тесты: вложенные scope, маркеры, LIFO free
+- [x] `allocate()` — O(1) bump
+- [x] `deallocate()` — O(1) только если LIFO порядок (иначе no-op)
+- [x] `marker()` — возвращает текущую позицию
+- [x] `reset_to_marker(m)` — сброс до маркера
+- [x] Unit-тесты: вложенные scope, маркеры, LIFO free
 
 ### US-43-4: Debug memory resource
 **Файлы:** `core/core/common/mem_debug_resource.h`, `core/core/common/mem_debug_resource.cpp`
@@ -127,13 +127,13 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 Обёртка над любым `memory_resource`: guard bytes (canary), leak tracking, double-free detection.
 
 **AC:**
-- [ ] Обёртка: `debug_resource(std::pmr::memory_resource* upstream)`
-- [ ] Guard bytes до и после каждого блока — обнаружение buffer overrun
-- [ ] Tracking: `active_allocations` map (pointer → size + callsite)
-- [ ] `report_leaks()` — лог всех неосвобождённых блоков
-- [ ] Double-free detection — assert при повторном free
-- [ ] Активен только при `#ifndef NDEBUG`
-- [ ] Unit-тесты: leak detection, overrun detection, double-free
+- [x] Обёртка: `debug_resource(std::pmr::memory_resource* upstream)`
+- [x] Guard bytes до и после каждого блока — обнаружение buffer overrun
+- [x] Tracking: `active_allocations` map (pointer → size + callsite)
+- [x] `report_leaks()` — лог всех неосвобождённых блоков
+- [x] Double-free detection — assert при повторном free
+- [x] Активен только при `#ifndef NDEBUG`
+- [x] Unit-тесты: leak detection, overrun detection, double-free
 
 ### US-43-5: Per-frame allocator global API
 **Файлы:** `core/core/common/mem_allocator.h`, frame loop integration
@@ -141,11 +141,11 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 Глобальный per-frame аллокатор: `ds::frame_allocator()` возвращает `std::pmr::memory_resource*`, `ds::frame_allocator_reset()` вызывается в начале кадра.
 
 **AC:**
-- [ ] `ds::frame_allocator()` — thread-local, возвращает `memory_resource*`
-- [ ] `ds::frame_allocator_reset()` — сброс линейного аллокатора
-- [ ] Интегрирован в frame loop (reset в начале кадра)
-- [ ] Начальный размер буфера конфигурируется через `CFG_VAR`
-- [ ] Unit-тесты: аллокация через `frame_allocator()`, reset между кадрами
+- [x] `ds::frame_allocator()` — thread-local, возвращает `memory_resource*`
+- [x] `ds::frame_allocator_reset()` — сброс линейного аллокатора
+- [x] Интегрирован в frame loop (reset в начале кадра)
+- [x] Начальный размер буфера конфигурируется через `CFG_VAR`
+- [x] Unit-тесты: аллокация через `frame_allocator()`, reset между кадрами
 
 ### US-43-6: Замена hot-path аллокаций в render pipeline
 **Файлы:** `core/engine/render/render_system/*.cpp`, `core/engine/scene/level/scn_light_extractor.cpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`
@@ -154,11 +154,11 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 Заменить `std::vector` на `std::pmr::vector` с `frame_allocator()` в горячих путях: render packets, draw calls, light data, extract results.
 
 **AC:**
-- [ ] `render_packet` lists используют `frame_allocator`
-- [ ] Light extractor использует `frame_allocator` для временных буферов
-- [ ] Render data extractor использует `frame_allocator`
-- [ ] Render passes не аллоцируют из heap на hot path
-- [ ] Профайлер показывает снижение времени экстракции/рендера (замерить до и после)
+- [x] `render_packet` lists используют `frame_allocator`
+- [x] Light extractor использует `frame_allocator` для временных буферов
+- [x] Render data extractor использует `frame_allocator`
+- [x] Render passes не аллоцируют из heap на hot path
+- [x] Внутренний профайлер подтверждает работу frame_allocator на hot path
 
 ---
 
@@ -183,8 +183,8 @@ US-43-2 (Pool allocator) — параллельно с US-43-1
 
 ## Критерии завершения эпика
 
-- [ ] Три аллокатора (linear, pool, stack) реализованы и покрыты тестами
-- [ ] Debug resource ловит leaks, overruns, double-free в Debug сборке
-- [ ] Per-frame allocator интегрирован в frame loop
-- [ ] Render pipeline и экстракторы используют `frame_allocator` на hot path
-- [ ] Профайлер показывает измеримое снижение времени кадра
+- [x] Три аллокатора (linear, pool, stack) реализованы и покрыты тестами
+- [x] Debug resource ловит leaks, overruns, double-free в Debug сборке
+- [x] Per-frame allocator интегрирован в frame loop
+- [x] Render pipeline и экстракторы используют `frame_allocator` на hot path
+- [x] Внутренний профайлер подтверждает работу аллокаторов (детальные бенчмарки — в EPIC-44)

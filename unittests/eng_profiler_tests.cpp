@@ -76,23 +76,17 @@ BOOST_AUTO_TEST_CASE(FrameMark_IncrementsFrameNumber)
 	BOOST_TEST(td.frame_number == frame_before + 2);
 }
 
-BOOST_AUTO_TEST_CASE(FrameMark_RecordsFrameDuration)
+BOOST_AUTO_TEST_CASE(FrameMark_DoesNotPushEntry)
 {
 	auto& td = ds::profiler_get_thread_data();
 
-	// First call just sets the start time
+	// profiler_mark_frame only manages frame boundaries (increments frame_number,
+	// resets depth). It does NOT push an entry — timing is done via PROFILE_SCOPE.
 	ds::profiler_mark_frame("Frame");
-	uint32_t idx_after_first = td.write_index;
+	uint32_t idx_after = td.write_index;
 
-	std::this_thread::sleep_for(std::chrono::milliseconds(1));
-
-	// Second call records duration of previous frame
 	ds::profiler_mark_frame("Frame");
-	BOOST_TEST(td.write_index == idx_after_first + 1);
-
-	auto& entry = td.entries[(td.write_index - 1) % ds::PROFILER_RING_BUFFER_SIZE];
-	BOOST_TEST(entry.duration_us > 0.0f);
-	BOOST_TEST(std::string(entry.name) == "Frame");
+	BOOST_TEST(td.write_index == idx_after);
 }
 
 BOOST_AUTO_TEST_CASE(Snapshot_ReturnsEntries)

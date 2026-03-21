@@ -14,10 +14,10 @@ void transparent_pass::execute(frame_context &context,
   PROFILE_SCOPE("Pass.Transparent");
   PROFILE_GPU_SCOPE("Pass.Transparent");
 
-  if (!context.data.has_value<std::vector<rnd::render_packet_t>>()) {
+  if (!context.data.has_value<std::pmr::vector<rnd::render_packet_t>>()) {
     return;
   }
-  auto &packets = context.data.require<std::vector<rnd::render_packet_t>>();
+  auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
   if (context.data.has_value<rnd::scene_lights_t>()) {
     auto &scene_lights = context.data.require<rnd::scene_lights_t>();
@@ -35,7 +35,7 @@ void transparent_pass::execute(frame_context &context,
   auto &geom_manager = rnd::get_system().get_geom_manager();
   rnd::global_params common_matrix;
 
-  for (auto packet : packets) {
+  for (const auto& packet : packets) {
     if (packet.transparent_draws.empty())
       continue;
 

@@ -1,10 +1,11 @@
 #pragma once
-#include <vector>
+#include <memory_resource>
 #include <optional>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include "shader/rnd_scene_shader_desc.h"
 #include "rnd_ssbo_buffer_interface.h"
+#include "mem_allocator.h"
 
 namespace rnd {
 	struct camera_render_data_t {
@@ -26,13 +27,13 @@ namespace rnd {
 		glm::mat4    transform     = glm::mat4{1.0f};
 
 		res::tag skinning_tag;
-		std::vector<glm::mat4> bone_matrices;
+		std::pmr::vector<glm::mat4> bone_matrices{ds::frame_allocator()};
 	};
 
 	struct render_packet_t {
 		camera_render_data_t     camera;
-		std::vector<draw_call_t> opaque_draws;
-		std::vector<draw_call_t> transparent_draws;
+		std::pmr::vector<draw_call_t> opaque_draws{ds::frame_allocator()};
+		std::pmr::vector<draw_call_t> transparent_draws{ds::frame_allocator()};
 		std::optional<shader_config> skybox_material;
 	};
 }

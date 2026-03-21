@@ -98,8 +98,83 @@ Macro-based tunables: `CFG_VAR_DEF_INT(name, "path.to.var", default)`. Override 
 - **Components**: POD structs, suffix `_component` if name isn't self-descriptive.
 - **Assertions**: Use `ASSERT_MSG`/`ASSERT_FAIL` from `engine_assert.h`. Use `engine_log.h` for logging, not `std::cout`.
 - **Containers**: Prefer `ds::fixed_vector<T, N>` in performance-critical code when max size is known.
+- **Memory**: See [Memory Allocators](#memory-allocators) below.
 - **ImGui**: Follow `Begin()`/check return/`End()` pattern. Editor logic in `edt` namespace.
 - **GLM**: Include only what's needed. Use `scn_glm_json_convert.h` for serialization.
+
+## Memory Allocators
+
+Custom allocators based on `std::pmr::memory_resource`. All live in `core/core/common/mem_*.h`.
+
+### When to use what
+
+| Allocator | Header | Use case |
+|-----------|--------|----------|
+| `ds::frame_allocator()` | `mem_allocator.h` | **Per-frame temporaries**: render packets, draw call lists, extracted data. Resets every frame automatically. |
+| `ds::linear_resource` | `mem_linear_allocator.h` | Custom-scoped bump allocator. Use when you need a reset at a specific point, not per-frame. |
+| `ds::pool_resource` | `mem_pool_allocator.h` | Fixed-size objects allocated/freed frequently (components, nodes, handles). O(1) alloc and free. |
+| `ds::stack_resource` | `mem_stack_allocator.h` | LIFO allocations with markers. Nested scopes that allocate and then fully unwind. |
+| `ds::debug_resource` | `mem_debug_resource.h` | Debug wrapper: guard bytes, leak tracking, double-free detection. Zero overhead in Release. |
+
+### Per-frame allocator (hot path)
+
+```cpp
+#include "mem_allocator.h"
+
+// Containers on the hot path use frame_allocator — zero heap allocs per frame:
+std::pmr::vector<rnd::render_packet> packets(ds::frame_allocator());
+packets.reserve(estimated_count);
+// ... fill packets, use them during the frame ...
+// Memory is freed automatically at frame start (ds::frame_allocator_reset())
+```
+
+**Rules:**
+- `ds::frame_allocator_reset()` is called at the start of each frame in the frame loop. All memory from the previous frame is invalidated.
+- **Never** store `std::pmr::vector<T>(ds::frame_allocator())` across frames — pointers/iterators become dangling after reset.
+- **Always** `reserve()` when the count is known or estimable — avoids grow+copy within the linear buffer.
+- `deallocate()` is a no-op on linear allocator. Memory is only reclaimed on `reset()`.
+- In Debug builds the frame allocator is wrapped with `debug_resource` — it will assert on leaks at reset and catch buffer overruns.
+
+### Replacing std::vector on hot paths
+
+```cpp
+// BEFORE (heap allocation every frame):
+std::vector<rnd::draw_call> draw_calls;
+
+// AFTER (bump allocation, no heap):
+std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
+```
+
+For `std::pmr::string`:
+```cpp
+std::pmr::string name(ds::frame_allocator());
+```
+
+### Custom scoped allocators
+
+```cpp
+#include "mem_linear_allocator.h"
+
+// 64KB scratch buffer for a specific operation:
+ds::linear_resource scratch(64 * 1024);
+std::pmr::vector<int> temp(&scratch);
+temp.reserve(1000);
+// ... use temp ...
+// scratch goes out of scope, backing memory freed
+```
+
+### Pool allocator
+
+```cpp
+#include "mem_pool_allocator.h"
+
+// Pool of 256 blocks, each 128 bytes:
+ds::pool_resource pool(128, 256);
+void* obj = pool.allocate(128, alignof(MyComponent));
+// ... use obj ...
+pool.deallocate(obj, 128, alignof(MyComponent));
+pool.reset(); // all blocks returned to free-list
+```
 
 ## Testing
 
