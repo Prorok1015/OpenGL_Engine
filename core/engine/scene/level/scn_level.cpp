@@ -123,6 +123,24 @@ void scn::level::reload_world(
 	mark_systems_graphs_dirty();
 }
 
+void scn::level::remove_world(const std::string_view name)
+{
+	std::string key{name};
+	ASSERT_MSG(m_worlds.contains(key), "remove_world: level doesn't contain world with this name");
+
+	auto& world = m_worlds[key];
+	uint32_t id = world->get_id();
+
+	if (m_hot_reload_manager) {
+		m_hot_reload_manager->detach_registry(world->state());
+	}
+
+	m_worlds_by_id.erase(id);
+	m_worlds.erase(key);
+
+	mark_systems_graphs_dirty();
+}
+
 void scn::level::load_systems_from_desc(const level_desc& desc, ecs::system_factory& system_factory)
 {
     clear_organizer();

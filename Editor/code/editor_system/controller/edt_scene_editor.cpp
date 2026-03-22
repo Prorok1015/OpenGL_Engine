@@ -186,15 +186,7 @@ void edt::scene_editor::serialize_and_push()
 		: std::string(m_state.active_world_desc().get_name());
 
 	scn::level& lvl = lvl_mgr->get_level();
-	bool world_exists = false;
-	for (uint32_t i = 0; i < (uint32_t)lvl.get_world_count(); ++i) {
-		if (lvl.get_world(i).get_name() == world_name) { 
-			world_exists = true; 
-			break; 
-		}
-	}
-
-	if (!world_exists) 
+	if (!lvl.has_world(world_name))
 		return;
 
 	{

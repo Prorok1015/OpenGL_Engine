@@ -19,17 +19,13 @@ void transparent_pass::execute(frame_context &context,
   }
   auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
-  if (context.data.has_value<rnd::scene_lights_t>()) {
-    auto &scene_lights = context.data.require<rnd::scene_lights_t>();
-    rnd::get_system().get_shader_manager().update_global_sun(
-        scene_lights.to_gpu_params());
-  }
-
   auto &txm_manager = rnd::get_system().get_texture_manager();
   auto &geom_manager = rnd::get_system().get_geom_manager();
   rnd::global_params common_matrix;
 
   for (const auto& packet : packets) {
+    rnd::get_system().get_shader_manager().update_global_sun(
+        packet.lights.to_gpu_params());
     if (packet.transparent_draws.empty())
       continue;
 

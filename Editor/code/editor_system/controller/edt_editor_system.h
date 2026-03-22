@@ -31,6 +31,8 @@ namespace edt {
 	class viewport_panel;
 	class console_panel;
 	class asset_browser_panel;
+	class prefab_editor_panel;
+	class prefab_editor_context;
 	struct async_import_token;
 
 	class editor_system
@@ -90,6 +92,12 @@ namespace edt {
 		std::shared_ptr<viewport_panel>        m_viewport_panel;
 		std::shared_ptr<console_panel>         m_console_panel;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
+		std::shared_ptr<prefab_editor_panel>   m_prefab_panel;
+
+		// Prefab editor (EPIC-25)
+		std::unique_ptr<prefab_editor_context> m_prefab_ctx;
+		void open_prefab_for_edit(const res::tag& tag);
+		void close_prefab_editor();
 
 		// Editor camera (EPIC-11)
 		editor_camera_state m_camera_state;

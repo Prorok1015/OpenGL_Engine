@@ -2,7 +2,7 @@
 #pragma once
 #include "desc_system.h"
 #include "desc_base.hpp"
-#include "entt/entt.hpp"
+#include <entt/entt.hpp>
 #include "resources/res_resource_handle.hpp"
 #include "res_tag.h"
 #include <boost/json.hpp>

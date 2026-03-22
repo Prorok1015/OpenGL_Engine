@@ -1,6 +1,7 @@
 #include "edt_frame_loop_service.h"
 #include "rnd_render_system.h"
 #include "inp_input_system.h"
+#include "inp_ecs_input_manager.h"
 #include "ecs_system.h"
 #include "ecs_common_system.h"
 #include "gs_game_system.h"
@@ -44,6 +45,10 @@ void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 	}
 
 	storage.require<scn::level_manager>().update(duration);
+
+	if (auto ecs_input = storage.require_shared<inp::ecs_input_manager>()) {
+		ecs_input->reset_frame_deltas();
+	}
 
 	rnd::frame_context context;
 

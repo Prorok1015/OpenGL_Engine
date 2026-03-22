@@ -73,8 +73,9 @@ void edt::level_controller::new_level()
 	m_state.level_tag = res::tag{};
 	scn::level& lvl = lvl_mgr->get_level();
 	m_state.world_names.clear();
-	for (uint32_t i = 0; i < (uint32_t)lvl.get_world_count(); ++i)
-		m_state.world_names.push_back(std::string(lvl.get_world(i).get_name()));
+	lvl.for_each_world([&](scn::world& w) {
+		m_state.world_names.push_back(std::string(w.get_name()));
+	});
 
 	m_state.active_world_idx = 0;
 	m_state.is_dirty = true;
@@ -221,8 +222,9 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 
 		scn::level& lvl = level_manager->get_level();
 		m_state.world_names.clear();
-		for (uint32_t i = 0; i < (uint32_t)lvl.get_world_count(); ++i)
-			m_state.world_names.push_back(std::string(lvl.get_world(i).get_name()));
+		lvl.for_each_world([&](scn::world& w) {
+			m_state.world_names.push_back(std::string(w.get_name()));
+		});
 
 		m_state.active_world_idx = 0;
 		m_state.is_dirty = false;

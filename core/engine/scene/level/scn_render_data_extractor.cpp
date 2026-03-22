@@ -1,4 +1,5 @@
 #include "scn_render_data_extractor.h"
+#include "scn_world.h"
 #include <memory_resource>
 #include "eng_transform_3d.hpp"
 #include "rnd_light_data.hpp"
@@ -15,14 +16,21 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     auto& level = m_level_manager.get_level();
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
-    int dir_light_count = 0;
 
-    if (context.data.has_value<rnd::scene_lights_t>()) {
-        dir_light_count = static_cast<int>(context.data.require<rnd::scene_lights_t>().directional.size());
-    }
+    level.for_each_world([&](scn::world& w) {
+        auto& reg = w.state();
 
-    for (uint32_t i = 0; i < level.get_world_count(); ++i) {
-        auto& reg = level.get_world(i).state();
+        // Collect per-world lights
+        rnd::scene_lights_t world_lights;
+        for (auto [l_ent, light] : reg.view<scn::directional_light>().each()) {
+            rnd::scene_lights_t::directional_light_t dl;
+            dl.direction = light.direction;
+            dl.diffuse   = light.diffuse;
+            dl.ambient   = light.ambient;
+            dl.specular  = light.specular;
+            world_lights.directional.push_back(dl);
+        }
+        int dir_light_count = static_cast<int>(world_lights.directional.size());
 
         for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
             if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1) {
@@ -30,6 +38,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             }
 
             rnd::render_packet_t packet;
+            packet.lights = world_lights;
 
             packet.camera.view_matrix = glm::mat4{ 1.0f };
             packet.camera.view_position = glm::vec3{ 0.0f };
@@ -161,7 +170,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
             packets.push_back(std::move(packet));
         }
-    }
+    });
 
     context.data.construct<std::pmr::vector<rnd::render_packet_t>>(std::move(packets));
 }

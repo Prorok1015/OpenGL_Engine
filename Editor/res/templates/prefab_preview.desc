@@ -1,0 +1,31 @@
+{
+    "__type": "world_desc",
+    "name": "__prefab_preview",
+    "systems": [
+        "inp::update_input_state",
+        "scn::update_camera_matrix_system",
+        "scn::depth_system",
+        "scn::transform_system"
+    ],
+    "components": {
+        "anchor": { "__type": "anchor_desc" }
+    },
+    "children": {
+        "PrefabLight": {
+            "rotation": [50, -30, 0],
+            "components": {
+                "directional_light_desc": {
+                    "__type": "directional_light_desc"
+                }
+            }
+        },
+        "Skybox": {
+            "components": {
+                "skybox_desc": {
+                    "__type": "skybox_desc",
+                    "material": "res://skybox/sky_material.desc"
+                }
+            }
+        }
+    }
+}

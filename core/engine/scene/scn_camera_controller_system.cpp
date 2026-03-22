@@ -2,12 +2,16 @@
 #include "scn_camera_controller_component.hpp"
 #include "scn_model.h"
 #include "inp_input_system.h"
+#include "inp_events.hpp"
 #include "ecs_event.hpp"
 
 void update_camera_matrix_system(const inp::input_state& state,
+                                 const inp::input_focus& focus,
                                  ecs::event<scn::transform_updated>& event,
                                  entt::view<entt::get_t<scn::local_transform, scn::mouse_controller_component>> view)
 {
+    if (!focus.active) return;
+
     for (auto&& [ent, local, controller] : view.each()) {
         auto& rotation = controller.rotation;
         auto& pos = controller.position;

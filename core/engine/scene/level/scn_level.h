@@ -42,6 +42,20 @@ namespace scn {
 		std::size_t get_world_count() const { return m_worlds.size(); }
 		bool has_world(const std::string_view name) const { return m_worlds.contains(std::string{ name }); }
 
+		template<typename Fn>
+		void for_each_world(Fn&& fn) {
+			for (auto& [name, world_ptr] : m_worlds) {
+				fn(*world_ptr);
+			}
+		}
+
+		template<typename Fn>
+		void for_each_world(Fn&& fn) const {
+			for (const auto& [name, world_ptr] : m_worlds) {
+				fn(*world_ptr);
+			}
+		}
+
         scn::world& get_world(const std::string_view type) {
             ASSERT_MSG(m_worlds.contains(std::string{ type }), "level doesn't contain this type of world");
             return *m_worlds[std::string{ type }];
@@ -67,6 +81,8 @@ namespace scn {
 			const world_desc& desc,
 			ecs::system_factory& sf,
 			scn::ecs_assembler& assambler);
+
+		void remove_world(const std::string_view name);
 
 		void load_systems_from_desc(const level_desc& desc, ecs::system_factory& desc_system);
 

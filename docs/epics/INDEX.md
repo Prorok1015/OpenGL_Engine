@@ -28,7 +28,7 @@
 | [EPIC-15](editor/EPIC-15.md) | Command Pattern — Undo/Redo | planned |
 | [EPIC-22](editor/EPIC-22.md) | Asset Import Pipeline — импорт 3D-моделей в проект | done |
 | [EPIC-24](editor/EPIC-24.md) | Async Editor Operations — асинхронные операции редактора | done |
-| [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | planned |
+| [EPIC-25](editor/EPIC-25.md) | Prefab Editor — автономное редактирование prefab-ассетов | in_progress |
 | [EPIC-26](editor/EPIC-26.md) | Shader Desc — шейдеры как desc-ресурсы | planned |
 | [EPIC-27](editor/EPIC-27.md) | Texture Desc — полноценная система текстурных дескрипторов | planned |
 | [EPIC-30](editor/EPIC-30.md) | Editor Code Review — баги, производительность, реорганизация | done |

@@ -5,6 +5,7 @@
 #include "scn_camera_component.hpp"
 #include "scn_model.h"
 #include "eng_transform_3d.hpp"
+#include "inp_events.hpp"
 #include "edt_guizmo.hpp"
 #include <imgui.h>
 
@@ -93,6 +94,12 @@ namespace edt
 		// Let ECS input through only when cursor is over the image
 		if (ImGui::IsItemHovered() && m_ecs_input)
 			m_ecs_input->set_input_area(rect);
+
+		// Gate per-world camera input: only active when this viewport is hovered
+		if (reg) {
+			auto& focus = reg->ctx().emplace<inp::input_focus>();
+			focus.active = ImGui::IsItemHovered();
+		}
 
 		// Interactive transform gizmo (drawn on top of scene image)
 		if (reg && m_selected != entt::null && reg->valid(m_selected))

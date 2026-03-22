@@ -21,4 +21,8 @@ namespace inp
 		glm::vec2 mouse_dir{};
 		glm::vec2 scroll{};
 	};
+
+	// Per-world flag: set by viewport panels to gate camera input.
+	// Default active=true so worlds without an explicit panel still work.
+	struct input_focus { bool active = true; };
 }

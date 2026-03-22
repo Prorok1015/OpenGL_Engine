@@ -218,6 +218,12 @@ namespace edt
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					navigate_to(e.path);
 			} else {
+				// Double-click on file
+				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+					if (m_on_file_double_clicked)
+						m_on_file_double_clicked(e.path);
+				}
+
 				// Drag source: full absolute path
 				if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
 					const std::string full = e.path.string();

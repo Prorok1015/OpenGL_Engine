@@ -21,6 +21,9 @@ namespace inp
 
 		void update_input_state_system(inp::input_state& state) {
 			state = this->input_state;
+		}
+
+		void reset_frame_deltas() {
 			input_state.scroll = glm::vec2{};
 			input_state.mouse_dir = glm::vec2{};
 		}

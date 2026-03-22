@@ -346,7 +346,6 @@ void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*>
 void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 {
 	if (viewport != rect) {
-		egLOG("renderer/set_viewport", "viewport: '{},{}'", rect[2], rect[3]);
 		viewport = rect;
 		glViewport(rect[0], rect[1], rect[2], rect[3]);
 		CHECK_GL_ERROR();

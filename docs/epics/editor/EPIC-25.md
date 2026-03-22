@@ -1,7 +1,7 @@
 # EPIC-25: Prefab Editor — автономное редактирование prefab-ассетов
 
 **Theme:** editor
-**Status:** planned
+**Status:** in_progress
 **Depends on:** EPIC-12, EPIC-13, EPIC-14, EPIC-22, EPIC-15 (рекомендуется)
 
 ---
@@ -45,19 +45,68 @@ struct prefab_instance {
 };
 ```
 
-### Prefab Context — изолированный мир для редактирования
+### Prefab Context — transient world в level
+
+Вместо отдельного изолированного registry, prefab editor **инъектирует transient world** в текущий `scn::level`. Это позволяет render pipeline автоматически обрабатывать мир через стандартные extractors. Transient world не регистрируется в `shared_state` (world_descs, world_names), поэтому невидим для save и hierarchy tabs.
+
+```
+scn::level
+├── World0 (scene) — в shared_state, сохраняется
+└── __prefab_preview (transient) — НЕ в shared_state
+      ├── Camera (→ __prefab_camera_rt, per-camera depth/tp)
+      ├── Directional Light
+      ├── Skybox
+      └── [Loaded Prefab]
+```
 
 ```cpp
 edt::prefab_editor_context {
-    res::tag                           source_tag;     // res://... источник
-    std::shared_ptr<scn::prefab_desc>  working_copy;   // in-memory рабочая копия
-    entt::registry                     registry;       // изолированный ECS world
-    scn::ecs_assembler*                assembler;
-    bool                               is_dirty;
+    shared_state&  m_state;
+    res::tag       m_source_tag;     // res://... источник
+    uint32_t       m_world_id;       // ID мира в level
+    bool           m_dirty;
+    editor_camera_state m_camera_state;
+    std::shared_ptr<inp::ecs_input_manager> m_pp_input; // отдельный input layer
 }
 ```
 
-Открытие prefab создаёт отдельный `prefab_editor_context`, собирает из него ECS world через `assemble_prefab`. Редактирование мутирует `working_copy`, `serialize_and_push` применяется внутри контекста — не затрагивает level world.
+Открытие prefab создаёт world в level через `level.create_world()`, собирает preview scene из шаблона + загруженный prefab. Закрытие — `level.remove_world()`. Per-camera render targets обеспечивают независимый depth/transparent pipeline.
+
+### Проблема маршрутизации инпута (multi-viewport input)
+
+Архитектура инпута построена на стеке `input_layer` в `inp::input_system`. Слои обрабатываются сверху вниз (LIFO). Каждый слой может захватить событие и заблокировать нижние (`blocks_lower_layers`).
+
+**Текущий стек (до PP):**
+```
+[TOP]  edt::input_manager     blocks=true   ← блокирует mouse clicks вне main VP rect
+[BOT]  inp::ecs_input_manager blocks=false  ← shared, для всех ECS миров
+```
+
+**Проблема:** `edt::input_manager` возвращает `true` для mouse click/keyboard events вне main viewport rect (с `invert=true`). Это блокирует `ecs_input_manager` от получения событий, когда мышь над PP панелью (она вне main VP rect). PP камера не получает mouse button state → не может вращаться/перемещаться.
+
+Кроме того, shared `ecs_input_manager` копирует один и тот же `input_state` во ВСЕ миры через `update_input_state_system`. При двух viewport'ах обе камеры двигаются одновременно.
+
+**Решение: per-viewport input layer**
+
+Каждый viewport-panel, которому нужен отдельный ECS-инпут, создаёт собственный `ecs_input_manager`:
+- Пушит как input layer ВЫШЕ `edt::input_manager`
+- Управляет `input_area` через `ImGui::IsItemHovered()`
+- Регистрирует `update_*_input_state` под уникальным именем в `system_factory`
+- World template ссылается на своё имя системы
+
+```
+[TOP]  pp_ecs_input            blocks=false  ← PP viewport
+[MID]  edt::input_manager      blocks=true   ← блокирует клики вне main VP
+[BOT]  inp::ecs_input_manager  blocks=false  ← main world
+```
+
+**Почему работает:**
+- PP layer выше editor → получает события первым, `on_handle_event` всегда `return false`
+- Когда мышь над PP: pp_ecs_input захватывает → editor блокирует → shared не получает
+- Когда мышь над main VP: pp_ecs_input пропускает (мышь вне PP rect) → editor пропускает (invert, мышь внутри VP) → shared получает
+- Каждый мир имеет свой input_state от своего менеджера → камеры не влияют друг на друга
+
+**Масштабирование:** подход обобщается на N viewport'ов. Для двух камер ОДНОГО мира — решается на уровне camera controller (один active, остальные игнорируют).
 
 ### Архитектурный слой
 
@@ -77,21 +126,33 @@ edt::prefab_editor_context {
 ### US-25-1 — Открытие prefab в изолированном контексте
 
 **Файлы:**
-- Новый `Editor/code/editor_system/edt_prefab_editor_context.h/.cpp`
+- `core/engine/scene/level/scn_level.h/.cpp` — добавить `remove_world()`
+- Новый `Editor/code/editor_system/controller/edt_prefab_editor_context.h/.cpp`
 - Новый `Editor/code/editor_system/panels/edt_prefab_editor_panel.h/.cpp`
-- `Editor/code/editor_system/edt_editor_system.h/.cpp` — добавить `open_prefab_for_edit`
-- `Editor/code/editor_system/panels/edt_asset_browser_panel.cpp` — двойной клик на `.prefab.desc`
+- Новый `Editor/res/templates/prefab_preview.desc`
+- `Editor/code/editor_system/controller/edt_editor_system.h/.cpp` — `open_prefab_for_edit`, `close_prefab_editor`
+- `Editor/code/editor_system/panels/edt_asset_browser_panel.h/.cpp` — double-click callback
+- `Editor/code/editor_system/controller/edt_init_helpers.cpp` — wiring
 
 **Поведение:**
 
 Двойной клик на `.prefab.desc` в Asset Browser → `editor_system::open_prefab_for_edit(tag)`:
-- Загружает prefab через `res::resource_system`, делает глубокую копию `prefab_desc` → `working_copy`
-- Создаёт отдельный ECS world (аналогично `create_world`), собирает в нём `working_copy` через `assemble_prefab`
-- Открывает `prefab_editor_panel` — плавающий или docked ImGui window
+- Загружает prefab через `res::resource_system`
+- Инъектирует transient world `__prefab_preview` в текущий level (НЕ в shared_state)
+- Собирает preview scene из `prefab_preview.desc` (свет) + программная камера с per-camera RT
+- Загружает prefab в мир через `assemble_prefab`
+- Открывает `prefab_editor_panel` — docked ImGui window с viewport
 - Заголовок: `"Prefab: robot [*]"` (звёздочка при `is_dirty`)
-- Viewport для Prefab Editor переиспользует `__color_prefab_rt` render target (отдельный от `__color_scene_rt`)
+- Viewport отображает `__prefab_camera_rt` (отдельный от `__editor_camera_rt`)
+- Закрытие panel → `level.remove_world("__prefab_preview")`
 
-**Критерии:** prefab открывается без закрытия текущего уровня; два мира существуют параллельно.
+**AC:**
+- [ ] Double-click на `.prefab.desc` открывает prefab editor panel
+- [ ] Префаб рендерится в отдельном viewport с освещением
+- [ ] Основной viewport (scene) продолжает работать параллельно
+- [ ] Закрытие panel удаляет transient world
+- [ ] Save level не включает prefab preview world
+- [ ] Hierarchy не показывает tab для prefab world
 
 ---
 

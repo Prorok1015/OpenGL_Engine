@@ -6,6 +6,7 @@
 #include <glm/vec4.hpp>
 #include "shader/rnd_scene_shader_desc.h"
 #include "rnd_ssbo_buffer_interface.h"
+#include "rnd_light_data.hpp"
 #include "mem_allocator.h"
 #include "ds/ds_fixed_vector.hpp"
 
@@ -78,6 +79,7 @@ namespace rnd {
 
 	struct render_packet_t {
 		camera_render_data_t     camera;
+		scene_lights_t           lights;
 		std::pmr::vector<draw_call_t> opaque_draws{ds::frame_allocator()};
 		std::pmr::vector<draw_call_t> transparent_draws{ds::frame_allocator()};
 		std::optional<shader_config> skybox_material;

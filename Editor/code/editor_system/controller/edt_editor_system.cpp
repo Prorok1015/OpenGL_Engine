@@ -1,5 +1,6 @@
 #include "edt_editor_system.h"
 #include "edt_init_helpers.h"
+#include "edt_prefab_editor_context.h"
 
 #include "edt_editor_layer.h"
 #include "edt_scene_hierarchy_panel.h"
@@ -7,6 +8,7 @@
 #include "edt_viewport_panel.h"
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
+#include "edt_prefab_editor_panel.h"
 #include "edt_component_ui_registry.h"
 #include "edt_model_importer.h"
 #include "edt_asset_exporter.h"
@@ -90,6 +92,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		*m_hierarchy_panel, *m_inspector_panel, *m_viewport_panel,
 		m_scene_editor, m_world_ctrl, m_state);
 
+	// Create prefab editor panel (EPIC-25)
+	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
+	m_prefab_panel->set_on_close([this] { close_prefab_editor(); });
+	m_prefab_panel->set_ecs_input_manager(ecs_input);
+	m_prefab_panel->set_editor_input(input);
+
+	// Wire asset browser double-click for prefab editing
+	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& p) {
+		std::string filename = p.filename().string();
+		if (filename.ends_with(".prefab.desc")) {
+			auto rel = p.lexically_relative(res::resource_system::get_resources_path());
+			auto tag = res::tag::make(rel.string());
+			open_prefab_for_edit(tag);
+		}
+	});
+
 	// Register panels with manager
 	auto& pm = editor_layer->get_panel_manager();
 	pm.add_panel(m_hierarchy_panel);
@@ -97,6 +115,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	pm.add_panel(m_viewport_panel);
 	pm.add_panel(m_console_panel);
 	pm.add_panel(m_asset_browser_panel);
+	pm.add_panel(m_prefab_panel);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -314,5 +333,34 @@ void edt::editor_system::save_editor_camera_state(entt::registry& reg)
 void edt::editor_system::inject_editor_camera(entt::registry& reg)
 {
 	init_helpers::inject_camera(reg, m_camera_state);
+}
+
+// ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
+
+void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
+{
+	if (!m_prefab_ctx) {
+		m_prefab_ctx = std::make_unique<prefab_editor_context>(m_state, m_res, desc_system);
+	}
+
+	if (m_prefab_ctx->is_open()) {
+		m_prefab_ctx->close();
+	}
+
+	m_prefab_ctx->open(tag);
+
+	if (m_prefab_ctx->is_open()) {
+		m_prefab_panel->set_context(m_prefab_ctx.get());
+		m_prefab_panel->set_open(true);
+	}
+}
+
+void edt::editor_system::close_prefab_editor()
+{
+	if (m_prefab_ctx) {
+		m_prefab_ctx->close();
+	}
+	m_prefab_panel->set_context(nullptr);
+	m_prefab_panel->set_open(false);
 }
 

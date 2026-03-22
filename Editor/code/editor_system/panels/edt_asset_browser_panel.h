@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_panel_base.h"
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,11 @@ namespace edt
 
 		// Set the physical base path for the resource directory.
 		void set_base_path(std::filesystem::path base_path);
+
+		// Callback fired on double-click on a file entry.
+		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
+			m_on_file_double_clicked = std::move(cb);
+		}
 
 	protected:
 		void on_render() override;
@@ -38,5 +44,6 @@ namespace edt
 		};
 		std::vector<entry> m_entries;
 		bool m_needs_refresh = true;
+		std::function<void(const std::filesystem::path&)> m_on_file_double_clicked;
 	};
 }
