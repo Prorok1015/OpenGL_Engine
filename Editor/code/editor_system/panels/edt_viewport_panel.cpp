@@ -121,8 +121,46 @@ namespace edt
 				ImGui::PopStyleColor();
 			ImGui::SameLine();
 		}
+
+		// Show Skeleton toggle — find skeleton_component on selected entity or its ancestors
+		if (auto* reg = m_get_registry ? m_get_registry() : nullptr) {
+			scn::skeleton_component* skel = find_skeleton_for_selected(*reg);
+			if (skel) {
+				ImGui::SameLine();
+				ImGui::TextDisabled("|");
+				ImGui::SameLine();
+				bool active = skel->show_skeleton;
+				if (active)
+					ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+				if (ImGui::Button("Bones"))
+					skel->show_skeleton = !skel->show_skeleton;
+				if (active)
+					ImGui::PopStyleColor();
+			}
+		}
+
+		ImGui::SameLine();
 		ImGui::TextDisabled("| FPS: %.1f", m_fps);
 		ImGui::Separator();
+	}
+
+	scn::skeleton_component* viewport_panel::find_skeleton_for_selected(entt::registry& reg)
+	{
+		if (m_selected == entt::null || !reg.valid(m_selected)) return nullptr;
+
+		// Check selected entity itself
+		if (auto* skel = reg.try_get<scn::skeleton_component>(m_selected))
+			return skel;
+
+		// Walk up ancestors
+		entt::entity current = m_selected;
+		while (auto* pc = reg.try_get<scn::parent_component>(current)) {
+			current = pc->parent;
+			if (auto* skel = reg.try_get<scn::skeleton_component>(current))
+				return skel;
+		}
+
+		return nullptr;
 	}
 
 	void viewport_panel::render_orientation_gizmo(entt::registry& reg)

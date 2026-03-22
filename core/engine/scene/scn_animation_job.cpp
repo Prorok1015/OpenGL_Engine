@@ -1,6 +1,7 @@
 #include "scn_animation_job.h"
 #include "scn_mesh_nodes.hpp"
 #include "scn_model.h"
+#include "scn_animation_collection_desc.h"
 #include "ecs_event.hpp"
 #include "engine_log.h"
 #include <algorithm>
@@ -56,36 +57,44 @@ void update_animation_controllers_system(
 
 void update_nodes_animation_system(
     entt::registry& reg,
-    entt::view<entt::get_t<const scn::keyframes_component>> bones_view,
+    entt::view<entt::get_t<const scn::animated_node_component>> anim_nodes_view,
     ecs::event<scn::transform_updated>& event)
 {
-    for (auto [ent, keyframes] : bones_view.each()) {
+    for (auto [ent, anim_node_comp] : anim_nodes_view.each()) {
         entt::entity root = find_skeleton_root(reg, ent);
         auto* ctrl = reg.try_get<scn::animation_controller_component>(root);
         if (!ctrl) continue;
         if (!ctrl->playing) continue;
 
+        auto* clips_comp = reg.try_get<scn::animation_collection_component>(root);
+        if (!clips_comp) continue;
+
+        const auto* clip = clips_comp->find(ctrl->current_animation);
+        if (!clip) continue;
+
+        auto ch_it = clip->channels.find(anim_node_comp.node_name);
+        if (ch_it == clip->channels.end()) continue;
+
         const float tps = ctrl->ticks_per_second > 0 ? ctrl->ticks_per_second : 25.0f;
         float ticks = std::fmod(ctrl->current_time * tps, ctrl->duration);
 
-        auto& keys = keyframes.keyframes;
-        if (auto it = keys.find(ctrl->current_animation); it != keys.end()) {
-            glm::vec3 scaling;
-            calc_interpolated_scaling(scaling, ticks, it->second);
-            glm::mat4 scaling_m = glm::scale(scaling);
+        const auto& anim_node = ch_it->second;
 
-            glm::quat rotation_q;
-            calc_interpolated_rotation(rotation_q, ticks, it->second);
-            glm::mat4 rotation_m = glm::toMat4(rotation_q);
+        glm::vec3 scaling;
+        calc_interpolated_scaling(scaling, ticks, anim_node);
+        glm::mat4 scaling_m = glm::scale(scaling);
 
-            glm::vec3 translation;
-            calc_interpolated_position(translation, ticks, it->second);
-            glm::mat4 translation_m = glm::translate(translation);
+        glm::quat rotation_q;
+        calc_interpolated_rotation(rotation_q, ticks, anim_node);
+        glm::mat4 rotation_m = glm::toMat4(rotation_q);
 
-            auto local = translation_m * rotation_m * scaling_m;
-            reg.get_or_emplace<scn::local_transform>(ent).local = local;
-            event.emit(ent);
-        }
+        glm::vec3 translation;
+        calc_interpolated_position(translation, ticks, anim_node);
+        glm::mat4 translation_m = glm::translate(translation);
+
+        auto local = translation_m * rotation_m * scaling_m;
+        reg.get_or_emplace<scn::local_transform>(ent).local = local;
+        event.emit(ent);
     }
 }
 template<class T>

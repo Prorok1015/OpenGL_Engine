@@ -4,8 +4,8 @@
 #include "scn_model.h"
 #include "scn_mesh_node_desc.h"
 #include "scn_object_desc.h"
-#include "scn_animations_desc.h"
-#include "scn_keyframes_desc.h"
+#include "scn_animation_clip_desc.h"
+#include "scn_animation_collection_desc.h"
 #include "scn_bone_desc.h"
 #include "scn_skinning_desc.h"
 #include "scn_glm_json_convert.h"
@@ -89,92 +89,49 @@ BOOST_AUTO_TEST_CASE(MeshNodeDesc_MeshViewCorrect)
 	BOOST_TEST(mc.mesh.ind_end == 32u);
 }
 
-// ---- animations_desc ----
+// ---- animation_clip_desc ----
 
-BOOST_AUTO_TEST_CASE(AnimationsDesc_TypeConstant)
+BOOST_AUTO_TEST_CASE(AnimationClipDesc_TypeConstant)
 {
-	BOOST_TEST(scn::animations_desc::__type == "animations_desc");
+	BOOST_TEST(scn::animation_clip_desc::__type == "animation_clip_desc");
 }
 
-BOOST_AUTO_TEST_CASE(AnimationsDesc_AssemblesComponent)
+BOOST_AUTO_TEST_CASE(AnimationClipDesc_SerializeDeserialize)
 {
-	entt::registry reg;
-	auto e = reg.create();
+	scn::animation_clip_desc desc;
+	desc.name = "Walk";
+	desc.duration = 30.f;
+	desc.ticks_per_second = 30.f;
 
-	scn::animations_desc desc;
-	desc.animations.push_back({ "Walk", 30.f, 30.f });
-	desc.animations.push_back({ "Run", 20.f, 24.f });
-
-	scn::assemble_animations(reg, e, desc, "root");
-
-	BOOST_TEST(reg.all_of<scn::animations_component>(e));
-	auto& comp = reg.get<scn::animations_component>(e);
-	BOOST_TEST(comp.animations.size() == 2u);
-	BOOST_TEST(comp.animations[0].name == "Walk");
-	BOOST_TEST(comp.animations[0].duration == 30.f);
-	BOOST_TEST(comp.animations[0].ticks_per_second == 30.f);
-	BOOST_TEST(comp.animations[1].name == "Run");
-}
-
-BOOST_AUTO_TEST_CASE(AnimationsDesc_DeserializesJSON)
-{
-	json::object data;
-	json::object anims;
-	anims["Walk"] = json::object{ {"duration", 30.0}, {"ticks_per_second", 30.0} };
-	anims["Run"]  = json::object{ {"duration", 20.0}, {"ticks_per_second", 24.0} };
-	data["animations"] = std::move(anims);
-
-	scn::animations_desc desc;
-	// desc_system is not used by animations_desc::deserialize — safe to omit test here
-	// instead we verify the populated desc produces correct component
-	desc.animations.push_back({ "Walk", 30.f, 30.f });
-
-	entt::registry reg;
-	auto e = reg.create();
-	scn::assemble_animations(reg, e, desc, "root");
-	BOOST_TEST(reg.get<scn::animations_component>(e).animations.size() == 1u);
-}
-
-// ---- keyframes_desc ----
-
-BOOST_AUTO_TEST_CASE(KeyframesDesc_TypeConstant)
-{
-	BOOST_TEST(scn::keyframes_desc::__type == "keyframes_desc");
-}
-
-BOOST_AUTO_TEST_CASE(KeyframesDesc_AssemblesComponent)
-{
-	entt::registry reg;
-	auto e = reg.create();
-
-	scn::keyframes_desc desc;
 	scn::animation_node node;
 	node.pos_keys.push_back({ glm::vec3{0, 0, 0}, 0.f });
 	node.pos_keys.push_back({ glm::vec3{1, 0, 0}, 1.f });
 	node.rotate_keys.push_back({ glm::quat{1, 0, 0, 0}, 0.f });
 	node.scale_keys.push_back({ glm::vec3{1, 1, 1}, 0.f });
-	desc.keyframes["Walk"] = std::move(node);
+	desc.channels["Bone_Hip"] = std::move(node);
 
-	scn::assemble_keyframes(reg, e, desc, "node");
+	json::object data;
+	desc.serialize(data);
 
-	BOOST_TEST(reg.all_of<scn::keyframes_component>(e));
-	auto& comp = reg.get<scn::keyframes_component>(e);
-	BOOST_TEST(comp.keyframes.count("Walk") == 1u);
-	BOOST_TEST(comp.keyframes.at("Walk").pos_keys.size() == 2u);
-	BOOST_TEST(comp.keyframes.at("Walk").rotate_keys.size() == 1u);
-	BOOST_TEST(comp.keyframes.at("Walk").scale_keys.size() == 1u);
+	BOOST_TEST(json::value_to<std::string>(data.at("name")) == "Walk");
+	BOOST_TEST(data.at("duration").to_number<double>() == 30.0);
+	BOOST_TEST(data.at("channels").as_object().contains("Bone_Hip"));
 }
 
-BOOST_AUTO_TEST_CASE(KeyframesDesc_EmptyKeyframesMapProducesEmptyComponent)
+// ---- animation_collection_desc ----
+
+BOOST_AUTO_TEST_CASE(AnimationCollectionDesc_TypeConstant)
 {
-	entt::registry reg;
-	auto e = reg.create();
+	BOOST_TEST(scn::animation_collection_desc::__type == "animation_collection_desc");
+}
 
-	scn::keyframes_desc desc;
-	scn::assemble_keyframes(reg, e, desc, "node");
-
-	BOOST_TEST(reg.all_of<scn::keyframes_component>(e));
-	BOOST_TEST(reg.get<scn::keyframes_component>(e).keyframes.empty());
+BOOST_AUTO_TEST_CASE(AnimationClipsComponent_FindByName)
+{
+	// Can't easily test with res_handle without a full desc_system,
+	// so we test the find logic structurally
+	scn::animation_collection_component comp;
+	// Component with no clips
+	BOOST_TEST(comp.find("Walk") == nullptr);
 }
 
 // ---- bone_desc ----

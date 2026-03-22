@@ -29,6 +29,7 @@ namespace edt
 	void scene_hierarchy_panel::set_selected_node(scn::prefab_desc::prefab_node* node)
 	{
 		m_selected_node = node;
+		m_selected_readonly = false;
 		m_multi_selected.clear();
 		m_last_clicked_flat_idx = -1;
 	}
@@ -124,6 +125,10 @@ namespace edt
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 			if (!has_sub) flags |= ImGuiTreeNodeFlags_Leaf;
 
+			// Highlight if this readonly node is selected
+			if (m_selected_readonly && m_selected_node == const_cast<scn::prefab_desc::prefab_node*>(&child))
+				flags |= ImGuiTreeNodeFlags_Selected;
+
 			std::string prefix;
 			if (child.components.count(std::string(scn::mesh_node_desc::__type)))   prefix = "[M] ";
 			else if (child.components.count(std::string(scn::bone_desc::__type)))   prefix = "[B] ";
@@ -133,6 +138,14 @@ namespace edt
 			std::string id = prefix + child.name + "##prefab_" + child.name;
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
+
+			// Handle click — select readonly node for inspector viewing
+			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
+				m_multi_selected.clear();
+				m_selected_node = const_cast<scn::prefab_desc::prefab_node*>(&child);
+				m_selected_readonly = true;
+				if (m_on_node_selected) m_on_node_selected(m_selected_node);
+			}
 
 			if (opened) {
 				draw_prefab_children_readonly(child);
@@ -405,6 +418,7 @@ namespace edt
 				// Plain click: single selection
 				m_multi_selected.clear();
 				m_selected_node = &node;
+				m_selected_readonly = false;
 				m_last_clicked_flat_idx = my_flat_index;
 				if (m_on_node_selected) m_on_node_selected(&node);
 			}

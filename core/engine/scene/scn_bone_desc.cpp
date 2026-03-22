@@ -18,5 +18,8 @@ void scn::bone_desc::serialize(json::object& data) const
 
 void scn::assemble_bone(entt::registry& reg, entt::entity e, const bone_desc& desc, std::string_view name)
 {
-	reg.emplace_or_replace<scn::bone_component>(e, scn::bone_component{ .offset = desc.offset_matrix, .index = desc.index });
+	reg.emplace_or_replace<scn::bone_component>(e, scn::bone_component{
+		.offset = desc.offset_matrix,
+		.index = desc.index
+	});
 }

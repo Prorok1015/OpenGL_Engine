@@ -24,10 +24,6 @@ namespace scn {
         res::res_handle<scn::material_desc> mlt_desc;
     };
 
-    struct keyframes_component {
-        std::unordered_map<std::string, scn::animation_node> keyframes;
-    };
-
     struct name_component {
         std::string name;
     };
@@ -56,12 +52,12 @@ namespace scn {
         float ticks_per_second = 25.f;
     };
 
-    struct animations_component {
-        std::vector<scn::animation> animations;
-    };
-
 	struct object_component {
 	};
+
+    struct animated_node_component {
+        std::string node_name;
+    };
 
     struct bone_component {
         glm::mat4 offset{ 1.0 };

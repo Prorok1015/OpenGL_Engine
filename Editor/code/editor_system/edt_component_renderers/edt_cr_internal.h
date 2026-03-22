@@ -19,5 +19,6 @@ void edt_cr_camera_register(component_ui_registry& registry);
 void edt_cr_light_register(component_ui_registry& registry);
 void edt_cr_skybox_register(component_ui_registry& registry);
 void edt_cr_skin_register(component_ui_registry& registry);
+void edt_cr_animation_register(component_ui_registry& registry);
 
 } // namespace edt

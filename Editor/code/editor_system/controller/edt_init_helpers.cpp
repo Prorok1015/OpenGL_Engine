@@ -103,7 +103,7 @@ void wire_hierarchy_callbacks(
 	shared_state& state)
 {
 	hierarchy.set_on_node_selected([&](scn::prefab_desc::prefab_node* node) {
-		inspector.set_selected_node(node);
+		inspector.set_selected_node(node, hierarchy.is_selected_readonly());
 		auto lvl_mgr = state.lvl_manager.lock();
 		if (lvl_mgr && node && state.active_world_idx < (int)state.world_names.size()) {
 			auto& reg = lvl_mgr->get_level().get_world(state.world_names[state.active_world_idx]).state();

@@ -394,7 +394,7 @@ json::object build_prefab_node(
 	rnd::geometry_desc& geometry,
 	res::tag geom_tag,
 	const std::unordered_map<std::string, int>& bone_index_map,
-	const std::unordered_map<std::string, json::object>& node_kf_map,
+	const std::unordered_set<std::string>& animated_node_names,
 	std::vector<std::vector<uint32_t>>& skin_weights,
 	const std::string& mem_prefix,
 	const std::filesystem::path& model_dir,
@@ -427,10 +427,8 @@ json::object build_prefab_node(
 		}
 	}
 
-	if (auto it = node_kf_map.find(node_name); it != node_kf_map.end()) {
-		json::object kf_comp;
-		kf_comp["keyframes"] = it->second;
-		components["keyframes_desc"] = kf_comp;
+	if (animated_node_names.contains(node_name)) {
+		components["animated_node_desc"] = json::object{};
 	}
 
 	if (!components.empty())
@@ -481,7 +479,7 @@ json::object build_prefab_node(
 		std::string child_name = child_node->mName.C_Str();
 		children[child_name] = build_prefab_node(
 			scene, child_node, geometry, geom_tag, bone_index_map,
-			node_kf_map, skin_weights, mem_prefix, model_dir, res_sys, out_tags, prefab_tag);
+			animated_node_names, skin_weights, mem_prefix, model_dir, res_sys, out_tags, prefab_tag);
 	}
 
 	if (!children.empty())
@@ -576,18 +574,21 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 		}
 	}
 
-	// 6. Pre-build keyframes
-	std::unordered_map<std::string, json::object> node_kf_map;
-	json::object animations_obj;
+	// 6. Pre-build animation clips: anim_name → { node_name → animation_node JSON }
+	struct clip_data {
+		double duration = 0.0;
+		double ticks_per_second = 25.0;
+		json::object channels;
+	};
+	std::unordered_map<std::string, clip_data> clip_map;
 
 	for (unsigned int ai = 0; ai < scene->mNumAnimations; ++ai) {
 		auto* anim = scene->mAnimations[ai];
 		std::string anim_name = anim->mName.C_Str();
 
-		json::object anim_entry;
-		anim_entry["duration"] = anim->mDuration;
-		anim_entry["ticks_per_second"] = anim->mTicksPerSecond;
-		animations_obj[anim_name] = anim_entry;
+		auto& clip = clip_map[anim_name];
+		clip.duration = anim->mDuration;
+		clip.ticks_per_second = anim->mTicksPerSecond;
 
 		for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci) {
 			auto* chan = anim->mChannels[ci];
@@ -617,7 +618,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 			anim_node["position"] = pos_keys;
 			anim_node["rotation"] = rot_keys;
 			anim_node["scale"] = scale_keys;
-			node_kf_map[nname][anim_name] = anim_node;
+			clip.channels[nname] = anim_node;
 		}
 	}
 
@@ -625,22 +626,41 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	res::tag geom_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".geom.desc" };
 	im.geom_tag = geom_tag;
 
+	// 7b. Build animated node names set from clip channels
+	std::unordered_set<std::string> animated_node_names;
+	for (auto const& [anim_name, clip] : clip_map) {
+		for (auto const& [node_name, _] : clip.channels) {
+			animated_node_names.insert(std::string(node_name));
+		}
+	}
+
 	// 8. Build prefab tree + skinning weights
 	std::filesystem::path model_dir = abs_path.parent_path();
 	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
 	json::object prefab_root = build_prefab_node(
 		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
-		node_kf_map, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags, prefab_tag);
+		animated_node_names, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags, prefab_tag);
 
-	// 9. Add animations_desc to root
-	if (scene->HasAnimations()) {
-		json::object anim_comp;
-		anim_comp["animations"] = animations_obj;
+	// 9. Add animation_collection_desc to root (inline clips)
+	if (!clip_map.empty()) {
+		json::array clips_arr;
+		for (auto const& [anim_name, clip] : clip_map) {
+			json::object clip_obj;
+			clip_obj["__type"] = "animation_clip_desc";
+			clip_obj["name"] = anim_name;
+			clip_obj["duration"] = clip.duration;
+			clip_obj["ticks_per_second"] = clip.ticks_per_second;
+			clip_obj["channels"] = clip.channels;
+			clips_arr.push_back(std::move(clip_obj));
+		}
+
+		json::object collection_comp;
+		collection_comp["clips"] = std::move(clips_arr);
 
 		if (prefab_root.contains("components") && prefab_root["components"].is_object())
-			prefab_root["components"].as_object()["animations_desc"] = anim_comp;
+			prefab_root["components"].as_object()["animation_collection_desc"] = collection_comp;
 		else
-			prefab_root["components"] = json::object{ {"animations_desc", anim_comp} };
+			prefab_root["components"] = json::object{ {"animation_collection_desc", collection_comp} };
 	}
 
 	// 9b. Add skin_weights_desc to root (registered during assembly)

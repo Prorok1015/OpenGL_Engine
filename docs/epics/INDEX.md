@@ -72,6 +72,7 @@
 | [EPIC-43](infrastructure/EPIC-43.md) | Memory Allocators — система управления памятью движка | done |
 | [EPIC-44](infrastructure/EPIC-44.md) | Memory Profiling & Container Aliases — трекинг памяти и удобные контейнеры | planned |
 | [EPIC-46](infrastructure/EPIC-46.md) | Tracy Profiler Integration — внешний профайлер для детального анализа | planned |
+| [EPIC-47](infrastructure/EPIC-47.md) | ds::string_id — хешированные идентификаторы строк | planned |
 
 ### Render Migration
 
@@ -84,6 +85,7 @@
 | [EPIC-20](render-migration/EPIC-20.md) | Game Loop Migration — миграция игрового цикла | done |
 | [EPIC-21](render-migration/EPIC-21.md) | Legacy Renderer Removal — удаление renderer_3d | done |
 | [EPIC-45](render-migration/EPIC-45.md) | Render Pipeline Optimization — оптимизация экстракции и рендер пассов | planned |
+| [EPIC-48](render-migration/EPIC-48.md) | Skeleton & Skinning Pipeline v2 — desc-driven скелет + GPU batching | planned |
 
 ---
 
@@ -134,6 +136,11 @@ EPIC-41 (CMake Build System)  ← standalone, no deps
 EPIC-43 (Memory Allocators)  ← standalone, мотивация из EPIC-39 (Profiling)
   ├── EPIC-44 (Memory Profiling & Container Aliases)  ← depends on EPIC-43
   └── EPIC-45 (Render Pipeline Optimization)  ← depends on EPIC-43, EPIC-39
+
+EPIC-47 (ds::string_id)  ← standalone, no deps
+
+EPIC-33 (Skinning & Animation Refactoring)
+  └── EPIC-48 (Skeleton & Skinning Pipeline v2)  ← depends on EPIC-33, EPIC-45
 
 EPIC-25 (Prefab Editor)  ← после EPIC-12, 13, 14, 22
 EPIC-26 (Shader Desc)    ← после EPIC-08

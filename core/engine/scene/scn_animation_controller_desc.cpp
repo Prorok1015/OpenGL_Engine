@@ -1,5 +1,6 @@
 #include "scn_animation_controller_desc.h"
 #include "scn_model.h"
+#include "scn_animation_collection_desc.h"
 
 void scn::animation_controller_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
@@ -30,23 +31,22 @@ void scn::assemble_animation_controller(entt::registry& reg, entt::entity e,
 	ctrl.loop = desc.loop;
 	ctrl.playing = desc.autoplay;
 
-	// If default_animation specified, use it; otherwise pick from animations_component
+	// If default_animation specified, use it; otherwise pick from animation_collection_component
 	if (!desc.default_animation.empty()) {
 		ctrl.current_animation = desc.default_animation;
 	}
 
-	if (auto* anims = reg.try_get<scn::animations_component>(e)) {
-		// If no default specified, pick the first animation
-		if (ctrl.current_animation.empty() && !anims->animations.empty()) {
-			ctrl.current_animation = anims->animations[0].name;
-		}
-		// Cache duration and ticks_per_second from the selected animation
-		for (auto& anim : anims->animations) {
-			if (anim.name == ctrl.current_animation) {
-				ctrl.duration = anim.duration;
-				ctrl.ticks_per_second = anim.ticks_per_second;
-				break;
+	if (auto* clips_comp = reg.try_get<scn::animation_collection_component>(e)) {
+		// If no default specified, pick the first clip
+		if (ctrl.current_animation.empty() && !clips_comp->clips.empty()) {
+			if (clips_comp->clips[0].is_ready()) {
+				ctrl.current_animation = clips_comp->clips[0].get_sync()->name;
 			}
+		}
+		// Cache duration and ticks_per_second from the selected animation clip
+		if (const auto* clip = clips_comp->find(ctrl.current_animation)) {
+			ctrl.duration = clip->duration;
+			ctrl.ticks_per_second = clip->ticks_per_second;
 		}
 	}
 

@@ -11,6 +11,10 @@ void edt::edt_cr_skin_register(edt::component_ui_registry& registry)
 		int count = (it != comp.overrides.end() && it->value().is_int64())
 			? static_cast<int>(it->value().as_int64()) : 0;
 		ImGui::TextDisabled("Bone count: %d", count);
+
+		if (auto tag_it = comp.overrides.find("skinning_tag"); tag_it != comp.overrides.end() && tag_it->value().is_string())
+			ImGui::TextDisabled("Skinning tag: %s", std::string(tag_it->value().as_string()).c_str());
+
 		return false;
 	});
 

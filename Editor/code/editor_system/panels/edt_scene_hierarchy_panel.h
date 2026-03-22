@@ -25,6 +25,7 @@ namespace edt
 		void set_on_reparent_node(std::function<void(const std::string& node_name, const std::string& new_parent_name, int insert_index)> cb);
 
 		scn::prefab_desc::prefab_node* get_selected_node() const { return m_selected_node; }
+		bool is_selected_readonly() const { return m_selected_readonly; }
 		void set_selected_node(scn::prefab_desc::prefab_node* node);
 
 		// Multi-world support
@@ -48,6 +49,7 @@ namespace edt
 
 		scn::world_desc* m_world_desc = nullptr;
 		scn::prefab_desc::prefab_node* m_selected_node = nullptr;
+		bool m_selected_readonly = false;
 
 		// Multi-selection
 		std::unordered_set<scn::prefab_desc::prefab_node*> m_multi_selected;

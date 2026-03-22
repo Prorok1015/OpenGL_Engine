@@ -16,6 +16,7 @@
 #include "scn_assimp_resource_system_wrapper.h"
 
 #include "ds/ds_svg_writer.hpp"
+#include <unordered_set>
 
 void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag);
 
@@ -382,7 +383,7 @@ json::object build_prefab_node(
 	rnd::geometry_desc& geometry,
 	res::tag geom_tag,
 	const std::unordered_map<std::string, int>& bone_index_map,
-	const std::unordered_map<std::string, json::object>& node_kf_map,
+	const std::unordered_set<std::string>& animated_node_names,
 	std::vector<std::vector<uint32_t>>& skin_weights,
 	res::tag tag,
 	res::tag prefab_tag)
@@ -414,11 +415,9 @@ json::object build_prefab_node(
 		}
 	}
 
-	// Keyframes component
-	if (auto it = node_kf_map.find(node_name); it != node_kf_map.end()) {
-		json::object kf_comp;
-		kf_comp["keyframes"] = it->second;
-		components["keyframes_desc"] = kf_comp;
+	// Animated node marker (set at import time for nodes with animation channels)
+	if (animated_node_names.contains(node_name)) {
+		components["animated_node_desc"] = json::object{};
 	}
 
 	if (!components.empty())
@@ -470,7 +469,7 @@ json::object build_prefab_node(
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {
 		aiNode* child_node = node->mChildren[i];
 		std::string child_name = child_node->mName.C_Str();
-		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag, prefab_tag);
+		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag);
 	}
 
 	if (!children.empty())
@@ -512,18 +511,22 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		}
 	}
 
-	// 3. Pre-build per-node keyframes: node_name → { anim_name → animation_node JSON }
-	std::unordered_map<std::string, json::object> node_kf_map;
-	json::object animations_obj;
+	// 3. Pre-build animation clips: anim_name → { node_name → animation_node JSON }
+	// Each clip contains all channels (nodes) for one animation.
+	struct clip_data {
+		double duration = 0.0;
+		double ticks_per_second = 25.0;
+		json::object channels; // node_name → animation_node JSON
+	};
+	std::unordered_map<std::string, clip_data> clip_map;
 
 	for (unsigned int ai = 0; ai < scene->mNumAnimations; ++ai) {
 		auto* anim = scene->mAnimations[ai];
 		std::string anim_name = anim->mName.C_Str();
 
-		json::object anim_entry;
-		anim_entry["duration"] = anim->mDuration;
-		anim_entry["ticks_per_second"] = anim->mTicksPerSecond;
-		animations_obj[anim_name] = anim_entry;
+		auto& clip = clip_map[anim_name];
+		clip.duration = anim->mDuration;
+		clip.ticks_per_second = anim->mTicksPerSecond;
 
 		for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci) {
 			auto* chan = anim->mChannels[ci];
@@ -553,26 +556,45 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 			anim_node["position"] = pos_keys;
 			anim_node["rotation"] = rot_keys;
 			anim_node["scale"] = scale_keys;
-			node_kf_map[nname][anim_name] = anim_node;
+			clip.channels[nname] = anim_node;
 		}
 	}
 
 	// 4. Geometry tag for this model
 	res::tag geom_tag = res::tag{ res::tag::memory, std::format("{0}{1}.geom.desc", tag.path(), tag.pure_name()) };
 
+	// 4b. Collect animated node names from all clips
+	std::unordered_set<std::string> animated_node_names;
+	for (auto const& [anim_name, clip] : clip_map) {
+		for (auto const& [node_name, _] : clip.channels) {
+			animated_node_names.insert(node_name);
+		}
+	}
+
 	// 5. Build prefab tree + accumulate skinning weights
 	std::vector<std::vector<uint32_t>> skin_weights;
-	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag, prefab_tag);
+	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag);
 
-	// 6. Add animations_desc component to root
-	if (scene->HasAnimations()) {
-		json::object anim_comp;
-		anim_comp["animations"] = animations_obj;
+	// 6. Add animation_collection_desc component to root (inline clips)
+	if (!clip_map.empty()) {
+		json::array clips_arr;
+		for (auto const& [anim_name, clip] : clip_map) {
+			json::object clip_obj;
+			clip_obj["__type"] = "animation_clip_desc";
+			clip_obj["name"] = anim_name;
+			clip_obj["duration"] = clip.duration;
+			clip_obj["ticks_per_second"] = clip.ticks_per_second;
+			clip_obj["channels"] = clip.channels;
+			clips_arr.push_back(std::move(clip_obj));
+		}
+
+		json::object collection_comp;
+		collection_comp["clips"] = std::move(clips_arr);
 
 		if (prefab_root.contains("components")) {
-			prefab_root["components"].as_object()["animations_desc"] = anim_comp;
+			prefab_root["components"].as_object()["animation_collection_desc"] = collection_comp;
 		} else {
-			prefab_root["components"] = json::object{ {"animations_desc", anim_comp} };
+			prefab_root["components"] = json::object{ {"animation_collection_desc", collection_comp} };
 		}
 	}
 

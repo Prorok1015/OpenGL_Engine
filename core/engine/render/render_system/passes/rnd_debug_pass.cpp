@@ -77,8 +77,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		if (!color_rt) continue;
 
 		driver::render_state state;
-		state.depth.enabled = true;
-		state.depth.test_func = driver::depth_state::func::LEQUAL;
+		state.depth.enabled = false;
 		state.depth.write_mask = false;
 		drv.set_render_state(state);
 
@@ -124,7 +123,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		m_index_buffer->set_data(indices.data(), ib_size, driver::BUFFER_BINDING::DYNAMIC);
 
 		m_shader->use();
-		drv.set_line_size(2.0f);
+		drv.set_line_size(1.0f);
 		drv.draw_indices(m_vao, driver::RENDER_MODE::LINE,
 			static_cast<unsigned int>(indices.size()), 0);
 

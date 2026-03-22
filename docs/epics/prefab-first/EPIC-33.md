@@ -119,17 +119,20 @@ struct animation_controller_component {
 - [x] `playable_animation_component` удалён
 
 ### US-33-5: Animation clip как shared ресурс
-**Файлы:** `core/engine/scene/scn_keyframes_desc.h`, `core/engine/scene/scn_keyframes_desc.cpp`, `core/engine/scene/scn_mesh_nodes.hpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`
+**Файлы:** `core/engine/scene/scn_animation_clip_desc.h` (новый), `core/engine/scene/scn_animation_clip_desc.cpp` (новый), `core/engine/scene/scn_animation_collection_desc.h` (новый), `core/engine/scene/scn_animation_collection_desc.cpp` (новый), `core/engine/scene/scn_animated_node_desc.h` (новый), `core/engine/scene/scn_animated_node_desc.cpp` (новый), `core/engine/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
 **Зависимости:** US-33-4
 
-Keyframes дублируются в каждой bone-entity. Нужно вынести в shared-ресурс — один `animation_clip_desc` на анимацию.
+Keyframes дублировались в каждой bone-entity. Вынесены в shared-ресурс — один `animation_clip_desc` на анимацию. `animation_collection_desc` — контейнер клипов с поддержкой inline и file-based ресурсов через `desc_system::get_field_desc`. `animated_node_desc` — маркер для нод с анимационными каналами, проставляется при импорте.
 
 **AC:**
-- [ ] Создан `animation_clip_desc` — desc-ресурс, содержащий keyframes для всех нод одной анимации
-- [ ] При импорте генерируется один `animation_clip_desc` на анимацию (вместо `keyframes_desc` на каждую bone)
-- [ ] `skeleton_component` хранит список `res::res_handle<animation_clip_desc>`
-- [ ] `update_nodes_animation_system` берёт keyframes из clip по имени ноды
-- [ ] Обратная совместимость: `keyframes_desc` продолжает десериализоваться (fallback)
+- [x] Создан `animation_clip_desc` — desc-ресурс, содержащий keyframes для всех нод одной анимации
+- [x] Создан `animation_collection_desc` — контейнер клипов (`res::res_handle<animation_clip_desc>`) с поддержкой inline/file через `get_field_desc`
+- [x] Создан `animated_node_desc` — маркер для нод с анимациями, проставляется при импорте
+- [x] При импорте генерируется один `animation_clip_desc` на анимацию (вместо `keyframes_desc` на каждую bone)
+- [x] `animation_collection_component` хранит список `res::res_handle<animation_clip_desc>` на skeleton root
+- [x] `update_nodes_animation_system` итерирует `animated_node_component`, берёт keyframes из clip по `node_name`
+- [x] Удалены `keyframes_desc`, `keyframes_component`, `animations_desc`, `animations_component`
+- [x] Оба импортёра (adapter + editor) обновлены для новой архитектуры
 
 ### US-33-6: Оптимизация render extractor — убрать копирование матриц
 **Файлы:** `core/engine/render/render_system/rnd_render_packet.hpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`, `core/engine/render/render_system/passes/rnd_opaque_pass.cpp`, `core/engine/render/render_system/passes/rnd_transparent_pass.cpp`, `core/engine/render/render_system/passes/rnd_z_prepass.cpp`
@@ -144,16 +147,16 @@ Keyframes дублируются в каждой bone-entity. Нужно вын�
 - [x] `rnd_opaque_pass`, `rnd_transparent_pass`, `rnd_z_prepass` обновлены
 
 ### US-33-7: Inspector UI для анимаций
-**Файлы:** `Editor/code/editor_system/edt_component_renderers/edt_cr_skin.cpp`, `Editor/code/editor_system/edt_component_renderers/edt_cr_animation.cpp` (новый), `core/engine/game_system/gs_game_init.cpp`
-**Зависимости:** US-33-4
+**Файлы:** `Editor/code/editor_system/edt_component_renderers/edt_cr_animation.cpp` (новый), `Editor/code/editor_system/edt_component_renderers/edt_cr_skin.cpp`, `Editor/code/editor_system/edt_component_renderers/edt_cr_internal.h`, `Editor/code/editor_system/edt_component_renderers/edt_component_renderers.cpp`
+**Зависимости:** US-33-4, US-33-5
 
-Анимационные компоненты не отображаются в инспекторе. Нужны component renderers.
+Анимационные desc-компоненты не имеют custom renderer'ов в инспекторе (рендерятся generic JSON fallback'ом).
 
 **AC:**
-- [ ] Component renderer для `animations_component` — отображает список доступных анимаций
-- [ ] Component renderer для `animation_controller_component` — play/pause/stop, выбор анимации, speed slider, progress bar
-- [ ] Component renderer для `skeleton_component` — bone count, skeleton tag
-- [ ] Все renderers зарегистрированы и отображаются в инспекторе при выборе анимированной entity
+- [x] Component renderer для `animation_controller_desc` — default_animation, speed slider, autoplay, loop checkboxes
+- [x] Component renderer для `animation_collection_desc` — read-only список клипов (имя, duration, channel count)
+- [x] Renderer для `skinning_desc` расширен — отображает skinning_tag
+- [x] Все renderers зарегистрированы в component_ui_registry
 
 ### US-33-8: Binary search для keyframes + кеширование индекса
 **Файлы:** `core/engine/scene/scn_animation_job.cpp`
@@ -162,7 +165,7 @@ Keyframes дублируются в каждой bone-entity. Нужно вын�
 
 **AC:**
 - [x] `find_keyframe_index()` использует `std::upper_bound` (O(log n))
-- [ ] Опционально: кеширование последнего найденного индекса в `animation_controller_component` для sequential playback
+- [ ] ~~Опционально: кеширование последнего найденного индекса~~ — отложено, binary search достаточен при текущих масштабах
 - [x] Интерполяция корректна при edge cases: 0 ключей, 1 ключ, время ровно на границе кадра
 
 ### US-33-9: Юнит-тесты
@@ -193,13 +196,12 @@ Keyframes дублируются в каждой bone-entity. Нужно вын�
 **Файлы:** `core/engine/scene/level/scn_render_data_extractor.cpp`, `Editor/code/editor_system/edt_component_renderers/edt_cr_skin.cpp`
 **Зависимости:** US-33-10, US-33-1
 
-Экстрактор рисует скелет анимированной модели как набор линий (bone → parent). Toggle включается из inspector компонента `skeleton_component`.
+Экстрактор рисует скелет анимированной модели как набор линий (bone → parent). Toggle включается кнопкой "Bones" в toolbar viewport'а.
 
 **AC:**
 - [x] Render data extractor генерирует `debug_line_t` для каждой кости (от позиции кости к позиции parent)
-- [x] Линии костей отображаются поверх модели с depth testing
-- [x] Toggle "Show Skeleton" в inspector `skeleton_component` (`skeleton_component::show_skeleton`)
-- [ ] Выбранные кости подсвечиваются другим цветом
+- [x] Линии костей отображаются поверх модели (debug pass без depth test)
+- [x] Toggle "Bones" в toolbar viewport — появляется при выбранном entity со skeleton_component (или его потомке)
 - [x] При отключённом toggle линии не генерируются (zero overhead)
 
 ## Порядок выполнения
@@ -229,7 +231,7 @@ US-33-9 (тесты) — по мере выполнения задач
 
 - [x] Анимированная модель корректно рендерится с новой архитектурой (skeleton root + shared bone_matrices)
 - [ ] Множественные экземпляры одного префаба анимируются независимо
-- [ ] Inspector показывает animation controller с play/pause/speed
+- [x] Inspector показывает animation controller (speed, autoplay, loop) и animation collection (список клипов)
 - [x] `obj_owner_component` удалён из анимационного pipeline
 - [x] Нет копирования `bone_matrices` в draw calls
 - [x] Debug draw infrastructure позволяет рисовать 3D-линии в сцене

@@ -12,6 +12,7 @@
 
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
+namespace scn { struct skeleton_component; }
 
 namespace edt
 {
@@ -45,6 +46,7 @@ namespace edt
 		void render_fps_overlay();
 		void render_orientation_gizmo(entt::registry& reg);
 		void render_transform_gizmo(entt::registry& reg, const glm::mat4& view, const glm::mat4& proj);
+		scn::skeleton_component* find_skeleton_for_selected(entt::registry& reg);
 
 
 		rnd::render_system& m_rnd;
