@@ -37,4 +37,15 @@ void scn::assemble_animations(entt::registry& reg, entt::entity e, const animati
 	scn::animations_component comp;
 	comp.animations = desc.animations;
 	reg.emplace_or_replace<scn::animations_component>(e, std::move(comp));
+
+	// Auto-create animation_controller if not already present
+	if (!reg.all_of<scn::animation_controller_component>(e) && !desc.animations.empty()) {
+		scn::animation_controller_component ctrl;
+		ctrl.current_animation = desc.animations[0].name;
+		ctrl.duration = desc.animations[0].duration;
+		ctrl.ticks_per_second = desc.animations[0].ticks_per_second;
+		ctrl.playing = true;
+		ctrl.loop = true;
+		reg.emplace<scn::animation_controller_component>(e, std::move(ctrl));
+	}
 }

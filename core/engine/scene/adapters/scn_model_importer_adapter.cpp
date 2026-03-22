@@ -5,8 +5,6 @@
 #include <assimp/postprocess.h>
 
 #include "res_system.h"
-#include "rnd_render_system.h"
-#include "skinning/rnd_skinning_manager.h"
 #include "eng_profiler.h"
 
 #include "geom/rnd_geometry_desc.h"
@@ -386,7 +384,8 @@ json::object build_prefab_node(
 	const std::unordered_map<std::string, int>& bone_index_map,
 	const std::unordered_map<std::string, json::object>& node_kf_map,
 	std::vector<std::vector<uint32_t>>& skin_weights,
-	res::tag tag)
+	res::tag tag,
+	res::tag prefab_tag)
 {
 	json::object jsnode;
 	std::string node_name = node->mName.C_Str();
@@ -454,6 +453,7 @@ json::object build_prefab_node(
 		if (mesh->mNumBones > 0) {
 			json::object skinning_comp;
 			skinning_comp["bone_count"] = static_cast<int>(mesh->mNumBones);
+			skinning_comp["skinning_tag"] = json::value_from(prefab_tag);
 			mesh_components["skinning_desc"] = skinning_comp;
 
 			build_mesh_skin_weights(mesh, bone_index_map, vx_begin, skin_weights);
@@ -470,7 +470,7 @@ json::object build_prefab_node(
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {
 		aiNode* child_node = node->mChildren[i];
 		std::string child_name = child_node->mName.C_Str();
-		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag);
+		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag, prefab_tag);
 	}
 
 	if (!children.empty())
@@ -562,7 +562,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 
 	// 5. Build prefab tree + accumulate skinning weights
 	std::vector<std::vector<uint32_t>> skin_weights;
-	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag);
+	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, node_kf_map, skin_weights, tag, prefab_tag);
 
 	// 6. Add animations_desc component to root
 	if (scene->HasAnimations()) {
@@ -586,10 +586,26 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
 	res::get_system().store(geom_tag, geom_bytes);
 
-	// 8. Register skinning weights with skinning manager
+	// 8. Add skin_weights_desc component to root (registered during assembly)
 	if (!skin_weights.empty()) {
-		if (auto* skm = rnd::get_system().get_skinning_manager()) {
-			skm->register_weights(prefab_tag, std::move(skin_weights));
+		json::object sw_comp;
+		sw_comp["tag"] = json::value_from(prefab_tag);
+		json::array sw_arr;
+		sw_arr.reserve(skin_weights.size());
+		for (auto const& column : skin_weights) {
+			json::array vtx_arr;
+			vtx_arr.reserve(column.size());
+			for (uint32_t v : column) {
+				vtx_arr.push_back(static_cast<uint64_t>(v));
+			}
+			sw_arr.push_back(std::move(vtx_arr));
+		}
+		sw_comp["weights"] = std::move(sw_arr);
+
+		if (prefab_root.contains("components")) {
+			prefab_root["components"].as_object()["skin_weights_desc"] = sw_comp;
+		} else {
+			prefab_root["components"] = json::object{ {"skin_weights_desc", sw_comp} };
 		}
 	}
 

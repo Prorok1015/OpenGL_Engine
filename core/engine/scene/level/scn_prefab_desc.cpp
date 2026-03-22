@@ -243,20 +243,19 @@ void scn::assemble_merged_node(
 			o_child->scale : 
 			(b_child ? b_child->scale : glm::vec3(1));
 
-		if (pos != glm::vec3{ 0.0f } || rot != glm::vec3{ 0.0f } || scl != glm::vec3{ 1.0f }) {
+		{
 			scn::prefab_desc::prefab_node temp_node;
 			temp_node.position = pos; temp_node.rotation = rot; temp_node.scale = scl;
 			reg.emplace<scn::local_transform>(child_entity, temp_node.get_local_transform());
-
-			if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) 
-				reg.ctx().get<ecs::event<scn::transform_updated>>().emit(child_entity);
-			else {
-				ecs::event<scn::transform_updated> event; event.emit(child_entity);
-				reg.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
-			}
 		}
-
 		reg.emplace<scn::world_transform>(child_entity);
+
+		if (reg.ctx().contains<ecs::event<scn::transform_updated>>())
+			reg.ctx().get<ecs::event<scn::transform_updated>>().emit(child_entity);
+		else {
+			ecs::event<scn::transform_updated> event; event.emit(child_entity);
+			reg.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+		}
 		reg.emplace<scn::name_component>(child_entity, scn::name_component{ .name = final_name });
 		reg.emplace<scn::parent_component>(child_entity, e);
 		reg.emplace<scn::depth_level>(child_entity);
@@ -392,12 +391,12 @@ void scn::hot_reload_merged_node(
 				next_override->scale : 
 				(next_base ? next_base->scale : glm::vec3(1));
 
-			if (auto* loc = reg.try_get<scn::local_transform>(child_entity)) {
+			{
 				scn::prefab_desc::prefab_node temp_node;
-				temp_node.position = pos; 
-				temp_node.rotation = rot; 
+				temp_node.position = pos;
+				temp_node.rotation = rot;
 				temp_node.scale = scl;
-				loc->local = temp_node.get_local_transform();
+				reg.get_or_emplace<scn::local_transform>(child_entity).local = temp_node.get_local_transform();
 
 				if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) {
 					reg.ctx().get<ecs::event<scn::transform_updated>>().emit(child_entity);
@@ -422,15 +421,19 @@ void scn::hot_reload_merged_node(
 				next_override->scale : 
 				(next_base ? next_base->scale : glm::vec3(1));
 
-			if (pos != glm::vec3{ 0.0f } || rot != glm::vec3{ 0.0f } || scl != glm::vec3{ 1.0f }) {
+			{
 				scn::prefab_desc::prefab_node temp_node;
 				temp_node.position = pos; temp_node.rotation = rot; temp_node.scale = scl;
 				reg.emplace<scn::local_transform>(new_child, temp_node.get_local_transform());
-
-				if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) reg.ctx().get<ecs::event<scn::transform_updated>>().emit(new_child);
 			}
-
 			reg.emplace<scn::world_transform>(new_child);
+
+			if (reg.ctx().contains<ecs::event<scn::transform_updated>>())
+				reg.ctx().get<ecs::event<scn::transform_updated>>().emit(new_child);
+			else {
+				ecs::event<scn::transform_updated> event; event.emit(new_child);
+				reg.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+			}
 			reg.emplace<scn::name_component>(new_child, scn::name_component{ .name = final_name });
 			reg.emplace<scn::parent_component>(new_child, live_entity);
 			reg.emplace<scn::depth_level>(new_child);
@@ -495,19 +498,16 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
 {
 	const auto& root_node = prefab.get_root();
 
-	if (root_node.position != glm::vec3{ 0.0f } || root_node.rotation != glm::vec3{ 0.0f } || root_node.scale != glm::vec3{ 1.0f }) {
-		reg.emplace_or_replace<scn::local_transform>(e, root_node.get_local_transform());
-
-		if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) {
-			reg.ctx().get<ecs::event<scn::transform_updated>>().emit(e);
-		} else {
-			ecs::event<scn::transform_updated> event;
-			event.emit(e);
-			reg.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
-		}
-	}
-
+	reg.emplace_or_replace<scn::local_transform>(e, root_node.get_local_transform());
 	reg.emplace_or_replace<scn::world_transform>(e);
+
+	if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) {
+		reg.ctx().get<ecs::event<scn::transform_updated>>().emit(e);
+	} else {
+		ecs::event<scn::transform_updated> event;
+		event.emit(e);
+		reg.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
+	}
 	if (!name.empty()) {
 		reg.emplace_or_replace<scn::name_component>(e, scn::name_component{ .name = std::string(name) });
 	}

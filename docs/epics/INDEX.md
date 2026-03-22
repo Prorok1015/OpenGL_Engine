@@ -53,7 +53,7 @@
 | [EPIC-12](prefab-first/EPIC-12.md) | Model Importer → Prefab Output | done |
 | [EPIC-13](prefab-first/EPIC-13.md) | Remove Prototype Descs | done |
 | [EPIC-14](prefab-first/EPIC-14.md) | Component UI Registry — type-safe editor | done |
-| [EPIC-33](prefab-first/EPIC-33.md) | Skinning & Animation Refactoring — префаб-совместимая архитектура | planned |
+| [EPIC-33](prefab-first/EPIC-33.md) | Skinning & Animation Refactoring — префаб-совместимая архитектура | in_progress |
 
 ### Infrastructure
 

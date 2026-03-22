@@ -3,6 +3,7 @@
 #include <optional>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 #include "shader/rnd_scene_shader_desc.h"
 #include "rnd_ssbo_buffer_interface.h"
 #include "mem_allocator.h"
@@ -27,7 +28,17 @@ namespace rnd {
 		glm::mat4    transform     = glm::mat4{1.0f};
 
 		res::tag skinning_tag;
-		std::pmr::vector<glm::mat4> bone_matrices{ds::frame_allocator()};
+		const std::vector<glm::mat4>* bone_matrices = nullptr;
+	};
+
+	struct debug_line_t {
+		glm::vec3 start;
+		glm::vec3 end;
+		glm::vec4 color = glm::vec4{1.0f, 1.0f, 0.0f, 1.0f};
+	};
+
+	struct debug_draw_data_t {
+		std::pmr::vector<debug_line_t> lines{ds::frame_allocator()};
 	};
 
 	struct render_packet_t {
@@ -35,5 +46,6 @@ namespace rnd {
 		std::pmr::vector<draw_call_t> opaque_draws{ds::frame_allocator()};
 		std::pmr::vector<draw_call_t> transparent_draws{ds::frame_allocator()};
 		std::optional<shader_config> skybox_material;
+		debug_draw_data_t debug_draws;
 	};
 }

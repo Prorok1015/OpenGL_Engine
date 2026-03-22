@@ -45,21 +45,20 @@ namespace scn {
 		res::tag geom_tag;
 	};
 
-    struct playable_animation_component {
-        std::string name;
-		float duration = 0.f;
-		float ticks_per_second = 0.f;
-        float current_tick = 0.f;
-        bool is_repeat_animation = true;
+    struct animation_controller_component {
+        std::string current_animation;
+        float current_time = 0.f;
+        float speed = 1.f;
+        bool playing = false;
+        bool loop = true;
+        // Cached from animation metadata when animation is selected:
+        float duration = 0.f;
+        float ticks_per_second = 25.f;
     };
 
     struct animations_component {
         std::vector<scn::animation> animations;
     };
-
-	struct obj_owner_component {
-		ecs::entity owner;
-	};
 
 	struct object_component {
 	};
@@ -69,8 +68,15 @@ namespace scn {
         int index = -1;
     };
 
+    struct skeleton_component {
+        res::tag skinning_tag;
+        int bone_count = 0;
+        bool show_skeleton = false;
+    };
+
     struct skinning_component {
         res::tag skinning_tag;
+        entt::entity skeleton_entity = entt::null;
     };
 
     struct bone_matrices_component {

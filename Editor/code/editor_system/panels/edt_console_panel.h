@@ -2,6 +2,7 @@
 #include "edt_panel_base.h"
 #include <string>
 #include <vector>
+#include <mutex>
 #include <cstddef>
 
 namespace edt
@@ -32,6 +33,7 @@ namespace edt
 		static constexpr std::size_t max_log_entries = 10000;
 
 	private:
+		mutable std::mutex m_mutex;
 		std::vector<log_entry> m_logs;
 		bool m_show_info = true;
 		bool m_show_warnings = true;

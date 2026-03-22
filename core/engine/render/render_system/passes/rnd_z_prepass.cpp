@@ -111,9 +111,9 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       object_shader.cdata.program = z_prepass_program;
       rnd::configure_pass(object_shader);
 
-      if (!dc.bone_matrices.empty() && dc.skinning_tag.is_valid()) {
+      if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
           if (auto* skm = rnd::get_system().get_skinning_manager()) {
-              skm->bind_skin(&drv, dc.skinning_tag, dc.bone_matrices);
+              skm->bind_skin(&drv, dc.skinning_tag, *dc.bone_matrices);
           }
       }
 

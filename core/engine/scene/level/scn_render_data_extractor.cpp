@@ -48,11 +48,11 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
             auto& tex_mgr = rnd::get_system().get_texture_manager();
 
-            auto meshes_view = reg.view<scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
+            auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
             auto mesh_count = meshes_view.size_hint();
             packet.opaque_draws.reserve(mesh_count);
             packet.transparent_draws.reserve(mesh_count);
-            for (auto&& [m_ent, mesh, geom, mat, m_trans] : meshes_view.each()) {
+            for (auto&& [m_ent, name, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
                 if (!mat.mlt_desc.is_ready()) {
                     continue;
@@ -83,16 +83,16 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
                 {
                     PROFILE_SCOPE("Extract.Skinning");
-                    if (auto* owner = reg.try_get<scn::obj_owner_component>(m_ent)) {
-                        auto owner_ent = owner->owner;
-                        if (reg.all_of<scn::bone_matrices_component>(owner_ent) &&
-                            reg.all_of<scn::skinning_component>(owner_ent)) {
+                    if (auto* skin = reg.try_get<scn::skinning_component>(m_ent)) {
+                        auto skel_ent = skin->skeleton_entity;
+                        if (skel_ent != entt::null &&
+                            reg.valid(skel_ent) &&
+                            reg.all_of<scn::bone_matrices_component>(skel_ent)) {
 
-                            auto& skm = reg.get<scn::skinning_component>(owner_ent);
-                            auto& matrices = reg.get<scn::bone_matrices_component>(owner_ent);
+                            auto& matrices = reg.get<scn::bone_matrices_component>(skel_ent);
 
-                            dc.bone_matrices.assign(matrices.matrices.begin(), matrices.matrices.end());
-                            dc.skinning_tag = skm.skinning_tag;
+                            dc.bone_matrices = &matrices.matrices;
+                            dc.skinning_tag = skin->skinning_tag;
 
                             shader_cfg.cdata.defines.push_back("USE_ANIMATION");
                         }
@@ -131,6 +131,28 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             for (auto [sky_ent, sky, mat] : skys_view.each()) {
                 if (mat.mlt_desc.is_ready()) {
                     packet.skybox_material = mat.mlt_desc->get_shader_desc(entt::handle{ reg, sky_ent }, tex_mgr);
+                }
+            }
+
+            // Bone visualization: generate debug lines for skeletons with show_skeleton enabled
+            auto skeleton_view = reg.view<scn::skeleton_component>();
+            for (auto [skel_ent, skel] : skeleton_view.each()) {
+                if (!skel.show_skeleton) continue;
+
+                auto bones_view = reg.view<scn::bone_component, scn::world_transform, scn::parent_component>();
+                for (auto [bone_ent, bone, bone_trans, parent_comp] : bones_view.each()) {
+                    // Only draw bones belonging to this skeleton
+                    auto* parent_trans = reg.try_get<scn::world_transform>(parent_comp.parent);
+                    if (!parent_trans) continue;
+
+                    glm::vec3 bone_pos = glm::vec3(bone_trans.world[3]);
+                    glm::vec3 parent_pos = glm::vec3(parent_trans->world[3]);
+
+                    rnd::debug_line_t line;
+                    line.start = parent_pos;
+                    line.end = bone_pos;
+                    line.color = glm::vec4{0.0f, 1.0f, 0.0f, 1.0f};
+                    packet.debug_draws.lines.push_back(line);
                 }
             }
 

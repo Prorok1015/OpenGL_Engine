@@ -10,6 +10,7 @@
 #include "passes/rnd_transparent_pass.h"
 #include "passes/rnd_composition_pass.h"
 #include "passes/rnd_skybox_pass.h"
+#include "passes/rnd_debug_pass.h"
 
 extern rnd::render_system* p_render_system;
 
@@ -26,6 +27,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 	p_render_system->add_render_pass(std::make_shared<rnd::opaque_pass>());
 	p_render_system->add_render_pass(std::make_shared<rnd::skybox_pass>());
 	p_render_system->add_render_pass(std::make_shared<rnd::transparent_pass>());
+	p_render_system->add_render_pass(std::make_shared<rnd::debug_pass>());
 	p_render_system->add_render_pass(std::make_shared<rnd::composition_pass>());
 }
 

@@ -68,10 +68,8 @@ namespace {
             }
         }
 
-        if (view.contains(ent)) {
-            auto&& [local, world] = view.get(ent);
-            world.world = parent_world * local.local;
-        }
+        auto&& [local, world] = view.get(ent);
+        world.world = parent_world * local.local;
 
         if (children_list.contains(ent)) {
             auto& kids = children_list.get<0>(ent);

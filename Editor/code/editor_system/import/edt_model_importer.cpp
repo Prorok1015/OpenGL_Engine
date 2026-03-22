@@ -399,7 +399,8 @@ json::object build_prefab_node(
 	const std::string& mem_prefix,
 	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
-	std::vector<res::tag>& out_tags)
+	std::vector<res::tag>& out_tags,
+	res::tag prefab_tag)
 {
 	json::object jsnode;
 	std::string node_name = node->mName.C_Str();
@@ -462,6 +463,7 @@ json::object build_prefab_node(
 		if (mesh->mNumBones > 0) {
 			json::object skinning_comp;
 			skinning_comp["bone_count"] = static_cast<int>(mesh->mNumBones);
+			skinning_comp["skinning_tag"] = json::value_from(prefab_tag);
 			mesh_components["skinning_desc"] = skinning_comp;
 
 			build_mesh_skin_weights(mesh, bone_index_map, vx_begin, skin_weights);
@@ -479,7 +481,7 @@ json::object build_prefab_node(
 		std::string child_name = child_node->mName.C_Str();
 		children[child_name] = build_prefab_node(
 			scene, child_node, geometry, geom_tag, bone_index_map,
-			node_kf_map, skin_weights, mem_prefix, model_dir, res_sys, out_tags);
+			node_kf_map, skin_weights, mem_prefix, model_dir, res_sys, out_tags, prefab_tag);
 	}
 
 	if (!children.empty())
@@ -519,7 +521,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
 	if (!in) {
 		im.error = std::format("Failed to open file: {}", abs_path.string());
-		egLOG("edt/import", "{}", im.error);
+		egLOG_ERROR("edt/import", "{}", im.error);
 		return im;
 	}
 
@@ -537,7 +539,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 
 	if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
 		im.error = std::format("ASSIMP error: {}", importer.GetErrorString());
-		egLOG("edt/import", "{}", im.error);
+		egLOG_ERROR("edt/import", "{}", im.error);
 		return im;
 	}
 
@@ -625,9 +627,10 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 
 	// 8. Build prefab tree + skinning weights
 	std::filesystem::path model_dir = abs_path.parent_path();
+	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
 	json::object prefab_root = build_prefab_node(
 		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
-		node_kf_map, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags);
+		node_kf_map, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags, prefab_tag);
 
 	// 9. Add animations_desc to root
 	if (scene->HasAnimations()) {
@@ -638,6 +641,28 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 			prefab_root["components"].as_object()["animations_desc"] = anim_comp;
 		else
 			prefab_root["components"] = json::object{ {"animations_desc", anim_comp} };
+	}
+
+	// 9b. Add skin_weights_desc to root (registered during assembly)
+	if (!im.skin_weights.empty()) {
+		json::object sw_comp;
+		sw_comp["tag"] = json::value_from(prefab_tag);
+		json::array sw_arr;
+		sw_arr.reserve(im.skin_weights.size());
+		for (auto const& column : im.skin_weights) {
+			json::array vtx_arr;
+			vtx_arr.reserve(column.size());
+			for (uint32_t v : column) {
+				vtx_arr.push_back(static_cast<uint64_t>(v));
+			}
+			sw_arr.push_back(std::move(vtx_arr));
+		}
+		sw_comp["weights"] = std::move(sw_arr);
+
+		if (prefab_root.contains("components") && prefab_root["components"].is_object())
+			prefab_root["components"].as_object()["skin_weights_desc"] = sw_comp;
+		else
+			prefab_root["components"] = json::object{ {"skin_weights_desc", sw_comp} };
 	}
 
 	// 10. Store geometry (res_sys.store is mutex-protected)
@@ -657,7 +682,6 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	for (auto& kv : prefab_root)
 		jsdata[kv.key()] = kv.value();
 
-	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
 	im.prefab_tag = prefab_tag;
 
 	m_res.store(prefab_tag, m_desc.serialize_to_bytes(jsdata));
@@ -693,13 +717,6 @@ edt::import_result edt::model_importer::finalize_on_main(import_intermediate&& i
 	if (instance) {
 		instance->deserialize(m_desc, im.prefab_json);
 		result.prefab = ds::polymorphic_pointer_cast<scn::prefab_desc>(instance);
-	}
-
-	// skinning_manager — main thread only
-	if (!im.skin_weights.empty()) {
-		if (auto* skm = m_rnd.get_skinning_manager()) {
-			skm->register_weights(im.prefab_tag, std::move(im.skin_weights));
-		}
 	}
 
 	return result;

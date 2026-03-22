@@ -7,9 +7,12 @@
             "name": "3d_scene",
             "systems": [
                 "inp::update_input_state",
-                "scn::update_camera_matrix_system",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
                 "scn::depth_system",
-                "scn::transform_system"
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
             ],
             "components": {
                 "anchor": { "__type": "anchor_desc" }

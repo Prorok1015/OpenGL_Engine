@@ -4,7 +4,11 @@
 rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_weights_indeces_buffer(res::tag tag, rnd::driver::driver_interface* driver)
 {
     if (bone_indices_buffer.find(tag) == bone_indices_buffer.end()) {
-        bone_indices_buffer[tag] = create_ssbo_weights_indeces_buffer(tag, driver);
+        if (auto buffer = create_ssbo_weights_indeces_buffer(tag, driver)) {
+			bone_indices_buffer[tag] = std::move(buffer);
+        } else {
+			return nullptr;
+        }
     }
     return bone_indices_buffer[tag].get();
 }

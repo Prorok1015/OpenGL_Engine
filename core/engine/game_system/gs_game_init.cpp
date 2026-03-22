@@ -13,8 +13,10 @@
 #include "scn_material_desc.h"
 #include "scn_mesh_node_desc.h"
 #include "scn_object_desc.h"
+#include "scn_skin_weights_desc.h"
 #include "scn_skinning_desc.h"
 #include "scn_skybox_desc.h"
+#include "scn_animation_controller_desc.h"
 
 extern gs::game_system *p_game_system;
 
@@ -37,6 +39,8 @@ void engine::game::game_init(ds::app_data_storage &data) {
   desc_sys.register_desc<scn::keyframes_desc>(scn::keyframes_desc::__type);
   desc_sys.register_desc<scn::bone_desc>(scn::bone_desc::__type);
   desc_sys.register_desc<scn::skinning_desc>(scn::skinning_desc::__type);
+  desc_sys.register_desc<scn::skin_weights_desc>(scn::skin_weights_desc::__type);
+  desc_sys.register_desc<scn::animation_controller_desc>(scn::animation_controller_desc::__type);
 
   auto &assembler = data.require<scn::ecs_assembler>();
   assembler.register_desc_spawner(
@@ -140,6 +144,22 @@ void engine::game::game_init(ds::app_data_storage &data) {
         const auto &desc = static_cast<const scn::skinning_desc &>(base_data);
         scn::assemble_skinning(reg, e, desc, name);
       });
+
+  assembler.register_desc_spawner(
+      scn::skin_weights_desc::__type,
+      [](entt::registry &reg, entt::entity e, const desc::desc_base &base_data,
+         const std::string_view name) {
+        const auto &desc = static_cast<const scn::skin_weights_desc &>(base_data);
+        scn::assemble_skin_weights(reg, e, desc, name);
+      });
+
+  assembler.register_desc_spawner(
+      scn::animation_controller_desc::__type,
+      [](entt::registry &reg, entt::entity e, const desc::desc_base &base_data,
+         const std::string_view name) {
+        const auto &desc = static_cast<const scn::animation_controller_desc &>(base_data);
+        scn::assemble_animation_controller(reg, e, desc, name);
+      });
 }
 
 void engine::game::game_term(ds::app_data_storage &data) {
@@ -150,6 +170,8 @@ void engine::game::game_term(ds::app_data_storage &data) {
   assembler.unregister_desc_spawner("anchor_desc");
   assembler.unregister_desc_spawner("prefab_desc");
 
+  assembler.unregister_desc_spawner(scn::animation_controller_desc::__type);
+  assembler.unregister_desc_spawner(scn::skin_weights_desc::__type);
   assembler.unregister_desc_spawner(scn::skinning_desc::__type);
   assembler.unregister_desc_spawner(scn::bone_desc::__type);
   assembler.unregister_desc_spawner(scn::keyframes_desc::__type);
@@ -160,6 +182,8 @@ void engine::game::game_term(ds::app_data_storage &data) {
   auto &desc_sys = data.require<desc::desc_system>();
   desc_sys.unregister_desc("material_desc");
 
+  desc_sys.unregister_desc(scn::animation_controller_desc::__type);
+  desc_sys.unregister_desc(scn::skin_weights_desc::__type);
   desc_sys.unregister_desc(scn::skinning_desc::__type);
   desc_sys.unregister_desc(scn::bone_desc::__type);
   desc_sys.unregister_desc(scn::keyframes_desc::__type);
