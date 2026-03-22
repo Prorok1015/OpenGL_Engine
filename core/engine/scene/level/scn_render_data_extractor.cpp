@@ -43,7 +43,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.camera.viewport = vp;
             packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp.size.x / (float)vp.size.y,
                 cam.near_distance, cam.far_distance);
-            packet.camera.target_texture_tag = cam.texture;
+            packet.camera.color_targets = cam.color_targets;
+            packet.camera.depth_target = cam.depth_target;
+            packet.camera.tp_accum_target = cam.tp_accum_target;
+            packet.camera.tp_reveal_target = cam.tp_reveal_target;
             packet.camera.render_priority = 0;
 
             auto& tex_mgr = rnd::get_system().get_texture_manager();

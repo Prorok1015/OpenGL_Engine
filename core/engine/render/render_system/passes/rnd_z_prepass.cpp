@@ -15,9 +15,6 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
   }
 
   auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
-  static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
-  static res::tag z_pass_color_tag =
-      res::tag(res::tag::memory, "__z_prepass_color_rt");
 
   auto &txm_manager = rnd::get_system().get_texture_manager();
   auto &geom_manager = rnd::get_system().get_geom_manager();
@@ -30,15 +27,14 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     if (vp_width < 1 || vp_height < 1)
       continue;
 
+    res::tag z_pass_tag = rnd::resolve_depth_target(packet.camera);
+
     auto z_pass_rt = txm_manager.find(z_pass_tag);
-    auto z_pass_color_rt = txm_manager.find(z_pass_color_tag);
 
     if (z_pass_rt &&
         (z_pass_rt->width() != vp_width || z_pass_rt->height() != vp_height)) {
       txm_manager.remove(z_pass_tag);
-      txm_manager.remove(z_pass_color_tag);
       z_pass_rt = nullptr;
-      z_pass_color_rt = nullptr;
     }
 
     if (!z_pass_rt) {
@@ -51,10 +47,6 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       header.mag = rnd::driver::texture_header::FILTERING::NEAREST;
       header.min = rnd::driver::texture_header::FILTERING::NEAREST;
       z_pass_rt = txm_manager.generate_texture(z_pass_tag, header);
-
-      header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
-      header.usage = rnd::driver::TEXTURE_USAGE::COLOR_TARGET;
-      z_pass_color_rt = txm_manager.generate_texture(z_pass_color_tag, header);
     }
 
     rnd::driver::render_state state;

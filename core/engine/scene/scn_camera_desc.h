@@ -1,6 +1,7 @@
 #pragma once
 #include "desc_base.hpp"
 #include "scn_ecs_assembler.h"
+#include "ds/ds_fixed_vector.hpp"
 
 #include <glm/glm.hpp>
 
@@ -27,7 +28,10 @@ namespace scn {
 		float far_distance() const { return m_far_distance; }
 		glm::vec3 rotation() const { return glm::radians(m_rotation); }
 		glm::vec3 position() const { return m_position; }
-		res::tag texture() const { return m_texture; }
+		const ds::fixed_vector<res::tag, 4>& color_targets() const { return m_color_targets; }
+		res::tag depth_target() const { return m_depth_target; }
+		res::tag tp_accum_target() const { return m_tp_accum_target; }
+		res::tag tp_reveal_target() const { return m_tp_reveal_target; }
 
 	private:
 		float m_fov = 90.f;
@@ -35,7 +39,10 @@ namespace scn {
 		float m_far_distance = 1000.f;
 		glm::vec3 m_rotation{ 0.f };
 		glm::vec3 m_position{ 0.f };
-		res::tag m_texture;
+		ds::fixed_vector<res::tag, 4> m_color_targets;
+		res::tag m_depth_target;
+		res::tag m_tp_accum_target;
+		res::tag m_tp_reveal_target;
 	};
 
 	void assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name);

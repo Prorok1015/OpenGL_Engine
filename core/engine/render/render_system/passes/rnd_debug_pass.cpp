@@ -56,9 +56,6 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 	ensure_resources(drv);
 	if (!m_shader) return;
 
-	static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
-	static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
-
 	auto& txm_manager = rnd::get_system().get_texture_manager();
 	rnd::global_params common_matrix;
 
@@ -69,10 +66,8 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		int vp_height = packet.camera.viewport.w;
 		if (vp_width < 1 || vp_height < 1) continue;
 
-		res::tag target_tag = packet.camera.target_texture_tag;
-		if (!target_tag.is_valid()) {
-			target_tag = color_rt_tag;
-		}
+		res::tag target_tag = rnd::resolve_color_target(packet.camera);
+		res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
 		auto color_rt = txm_manager.find(target_tag);
 		if (!color_rt) continue;
 
@@ -82,7 +77,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		drv.set_render_state(state);
 
 		drv.push_frame_buffer();
-		drv.set_render_target(color_rt, txm_manager.find(z_pass_tag));
+		drv.set_render_target(color_rt, txm_manager.find(depth_tag));
 
 		common_matrix.view = packet.camera.view_matrix;
 		common_matrix.projection = packet.camera.projection_matrix;

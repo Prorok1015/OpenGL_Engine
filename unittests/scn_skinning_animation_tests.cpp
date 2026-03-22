@@ -138,7 +138,7 @@ BOOST_AUTO_TEST_CASE(MultipleMeshesShareBoneMatrices)
 	// Both point to the same skeleton root
 	auto& skin0 = reg.get<scn::skinning_component>(mesh0);
 	auto& skin1 = reg.get<scn::skinning_component>(mesh1);
-	BOOST_CHECK_EQUAL(skin0.skeleton_entity, skin1.skeleton_entity);
+	BOOST_CHECK(skin0.skeleton_entity == skin1.skeleton_entity);
 
 	// Only one bone_matrices_component exists (on root)
 	auto& matrices = reg.get<scn::bone_matrices_component>(s.root);

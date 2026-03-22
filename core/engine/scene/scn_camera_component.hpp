@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "ds/ds_fixed_vector.hpp"
 
 namespace scn
 {
@@ -25,7 +26,10 @@ namespace scn
 		float far_distance = 1000.f;
 		viewport m_viewport;
 
-		res::tag texture;
+		ds::fixed_vector<res::tag, 4> color_targets;  // [0] = main color RT
+		res::tag depth_target;                         // depth RT
+		res::tag tp_accum_target;                      // transparent accum RT
+		res::tag tp_reveal_target;                     // transparent reveal RT
 	};
 
 }

@@ -25,12 +25,6 @@ void transparent_pass::execute(frame_context &context,
         scene_lights.to_gpu_params());
   }
 
-  static res::tag z_pass_tag = res::tag(res::tag::memory, "__z_prepass_rt");
-  static res::tag color_rt_transparent_tag =
-      res::tag(res::tag::memory, "__color_rt_transparent_rt");
-  static res::tag waight_rt_transparent_tag =
-      res::tag(res::tag::memory, "__waight_rt_transparent_rt");
-
   auto &txm_manager = rnd::get_system().get_texture_manager();
   auto &geom_manager = rnd::get_system().get_geom_manager();
   rnd::global_params common_matrix;
@@ -45,13 +39,17 @@ void transparent_pass::execute(frame_context &context,
     if (vp_width < 1 || vp_height < 1)
       continue;
 
-    auto color_tp_rt = txm_manager.find(color_rt_transparent_tag);
-    auto waight_tp_rt = txm_manager.find(waight_rt_transparent_tag);
+    res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
+    res::tag tp_accum_tag = rnd::resolve_tp_accum_target(packet.camera);
+    res::tag tp_reveal_tag = rnd::resolve_tp_reveal_target(packet.camera);
+
+    auto color_tp_rt = txm_manager.find(tp_accum_tag);
+    auto waight_tp_rt = txm_manager.find(tp_reveal_tag);
 
     if (color_tp_rt && (color_tp_rt->width() != vp_width ||
                         color_tp_rt->height() != vp_height)) {
-      txm_manager.remove(color_rt_transparent_tag);
-      txm_manager.remove(waight_rt_transparent_tag);
+      txm_manager.remove(tp_accum_tag);
+      txm_manager.remove(tp_reveal_tag);
       color_tp_rt = nullptr;
       waight_tp_rt = nullptr;
     }
@@ -66,11 +64,11 @@ void transparent_pass::execute(frame_context &context,
       header.mag = rnd::driver::texture_header::FILTERING::LINEAR;
       header.min = rnd::driver::texture_header::FILTERING::LINEAR;
       color_tp_rt =
-          txm_manager.generate_texture(color_rt_transparent_tag, header);
+          txm_manager.generate_texture(tp_accum_tag, header);
 
       header.data.format = rnd::driver::texture_header::TYPE::R8;
       waight_tp_rt =
-          txm_manager.generate_texture(waight_rt_transparent_tag, header);
+          txm_manager.generate_texture(tp_reveal_tag, header);
     }
 
     rnd::driver::render_state state;
@@ -94,7 +92,7 @@ void transparent_pass::execute(frame_context &context,
 
     drv.push_frame_buffer();
     drv.set_render_targets({color_tp_rt, waight_tp_rt},
-                           txm_manager.find(z_pass_tag));
+                           txm_manager.find(depth_tag));
     drv.clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER,
               {glm::vec4(0), glm::vec4(1)});
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,

@@ -39,12 +39,6 @@ void composition_pass::execute(frame_context &context,
 
   auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
-  static res::tag color_rt_tag = res::tag(res::tag::memory, "__color_scene_rt");
-  static res::tag color_rt_transparent_tag =
-      res::tag(res::tag::memory, "__color_rt_transparent_rt");
-  static res::tag waight_rt_transparent_tag =
-      res::tag(res::tag::memory, "__waight_rt_transparent_rt");
-
   auto &txm_manager = rnd::get_system().get_texture_manager();
 
   for (const auto& packet : packets) {
@@ -54,13 +48,12 @@ void composition_pass::execute(frame_context &context,
     if (vp_width < 1 || vp_height < 1)
       continue;
 
-    res::tag target_tag = packet.camera.target_texture_tag;
-    if (!target_tag.is_valid()) {
-      target_tag = color_rt_tag;
-    }
+    res::tag target_tag = rnd::resolve_color_target(packet.camera);
+    res::tag tp_accum_tag = rnd::resolve_tp_accum_target(packet.camera);
+    res::tag tp_reveal_tag = rnd::resolve_tp_reveal_target(packet.camera);
     auto color_rt = txm_manager.find(target_tag);
-    auto color_tp_rt = txm_manager.find(color_rt_transparent_tag);
-    auto waight_tp_rt = txm_manager.find(waight_rt_transparent_tag);
+    auto color_tp_rt = txm_manager.find(tp_accum_tag);
+    auto waight_tp_rt = txm_manager.find(tp_reveal_tag);
 
     if (!color_rt || !color_tp_rt || !waight_tp_rt)
       continue;

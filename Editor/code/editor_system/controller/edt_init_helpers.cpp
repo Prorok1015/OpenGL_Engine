@@ -293,7 +293,10 @@ void inject_camera(entt::registry& reg, const editor_camera_state& state)
 	cam_comp.fov           = state.fov;
 	cam_comp.near_distance = state.near_distance;
 	cam_comp.far_distance  = state.far_distance;
-	cam_comp.texture       = res::tag{ edt::editor_camera_state::RT_TAG };
+	cam_comp.color_targets.push_back(res::tag{ edt::editor_camera_state::RT_TAG });
+	cam_comp.depth_target = res::tag(res::tag::memory, "__editor_depth_rt");
+	cam_comp.tp_accum_target = res::tag(res::tag::memory, "__editor_tp_accum_rt");
+	cam_comp.tp_reveal_target = res::tag(res::tag::memory, "__editor_tp_reveal_rt");
 	reg.emplace<scn::camera_component>(cam, cam_comp);
 
 	scn::mouse_controller_component ctrl;

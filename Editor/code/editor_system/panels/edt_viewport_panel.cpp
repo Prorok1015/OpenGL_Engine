@@ -46,7 +46,7 @@ namespace edt
 		if (reg && size.x > 0 && size.y > 0) {
 			for (auto ent : reg->view<scn::camera_component>()) {
 				auto& cam = reg->get<scn::camera_component>(ent);
-				if (cam.texture != s_editor_cam_tag) continue;
+				if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
 				cam.m_viewport.size = glm::ivec2(static_cast<int>(size.x), static_cast<int>(size.y));
 
 				if (reg->all_of<scn::local_transform>(ent))
@@ -172,7 +172,7 @@ namespace edt
 
 		for (auto ent : reg.view<scn::camera_component>()) {
 			const auto& cam = reg.get<scn::camera_component>(ent);
-			if (cam.texture != s_editor_cam_tag) continue;
+			if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
 			if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1)
 				continue;
 			if (reg.all_of<scn::local_transform>(ent)) {
