@@ -1,0 +1,62 @@
+[PROJECT_OVERVIEW]
+name: OpenGL Engine & Editor
+description: C++20 3D graphics engine with real-time scene editor
+tech_stack:
+  - C++20 (no extensions)
+  - OpenGL 4.5+ rendering
+  - ImGui editor UI
+  - CMake build system
+  - EnTT ECS framework
+  - Assimp model importing
+  - Boost 1.84.0 utilities
+
+[PROJECT_PURPOSE]
+goal: Build production-quality 3D engine with WYSIWYG editor
+key_features:
+  - Data-driven scene management (world_desc → prefabs → entities)
+  - Multi-world ECS (up to 8 independent worlds)
+  - Real-time render pipeline with extractors and passes
+  - Async asset loading with resource cache
+  - In-editor prefab and shader editing
+  - Hot-reload descriptor system
+
+[ARCHITECTURE_TIERS]
+Layer 1: Core Services
+  - ECS engine, window management, resource system
+  - Configuration system, application lifecycle
+  - Memory allocators, logging
+
+Layer 2: Engine Systems
+  - Scene management, camera, lighting
+  - Render pipeline (extractors → passes)
+  - Input handling, physics integration hooks
+  - Animation and skinning systems
+
+Layer 3: Editor Application
+  - ImGui-based scene editor
+  - Inspector, hierarchy, asset browser
+  - Gizmo-based object transformation
+  - Prefab editor with live preview
+
+[CURRENT_STATUS]
+active_epics: 48 total
+completed: ~28 (core infra, render migration, editor basics)
+in_progress: EPIC-25 (Prefab Editor), EPIC-33 (Skinning & Animation)
+upcoming: Optimization, shader/texture descriptors, workspace system
+
+[CRITICAL_PATHS]
+Prefab System:
+  EPIC-12 ✅ → EPIC-13 ✅ → EPIC-14 ✅ → EPIC-25 🔄
+
+Render Pipeline:
+  EPIC-16-21 ✅ → EPIC-45 (optimization) → EPIC-48 (GPU batching)
+
+Infrastructure:
+  EPIC-23,37-39,43 ✅ → EPIC-44,46-47
+
+[KEY_CONSTRAINTS]
+- C++20 only, no compiler extensions
+- Tabs (size 4) for all indentation
+- No global state in performance-critical code
+- All logging via engine_log.h, never std::cout
+- Frame allocator for temp data, never across frames

@@ -1,0 +1,172 @@
+[QUICK_LINKS]
+overview: Fast navigation to important files and concepts
+
+[CORE_LAYER]
+ECS Framework:
+  → Core/core/ecs/ecs_world.hpp (world management)
+  → Core/core/ecs/ecs_system.h (system_interface)
+  → Core/core/ecs/ecs_registry.h (entity-component storage)
+
+Resource System:
+  → Core/core/res/res_loader.h (loading and caching)
+  → Core/core/res/res_tag.h (resource identification)
+  → Core/core/res/res_adapter.h (Assimp/stb pipeline)
+
+Descriptor System:
+  → Core/core/desc/ (descriptor classes)
+  → docs/epics/desc-driven/ (architecture docs)
+
+Memory Allocators:
+  → Core/core/common/mem_allocator.h (frame allocator)
+  → Core/core/common/mem_linear_allocator.h (custom scope)
+  → Core/core/common/mem_pool_allocator.h (O(1) alloc/free)
+
+Configuration:
+  → Core/core/cfg/ (config system macros)
+
+Application:
+  → Core/core/app/module_interface.h (module lifecycle)
+  → Core/core/app/app_data_storage.h (service locator DI)
+
+[ENGINE_LAYER]
+Scene Management:
+  → Engine/scene/scn_scene.h (scene root)
+  → Engine/scene/scn_hierarchy.h (entity tree)
+  → Engine/scene/scn_world.h (world wrapper)
+
+Rendering Pipeline:
+  → Engine/render/rnd_pipeline.h (main render loop)
+  → Engine/render/extractors/ (geometry→packets)
+  → Engine/render/passes/ (shadow, g-buffer, lighting, etc.)
+
+Animation & Skinning:
+  → Engine/scene/animation/ (EPIC-33 refactoring)
+
+Input System:
+  → Engine/input/inp_input_manager.h
+
+[EDITOR_LAYER]
+Main Editor:
+  → Editor/editor_app.h (application entry)
+  → Editor/config/editor.cfg (settings)
+
+ImGui Panels:
+  → Editor/panels/edt_inspector_panel.h
+  → Editor/panels/edt_hierarchy_panel.h
+  → Editor/panels/edt_asset_browser.h
+  → Editor/panels/edt_prefab_editor.h (EPIC-25)
+
+Gizmo Transform:
+  → Editor/gizmo/edt_gizmo.h
+
+Viewport:
+  → Editor/viewport/ (scene preview)
+
+[DESCRIPTOR_FILES]
+Level & World:
+  → Editor/res/levels/ (.desc files)
+  → Editor/res/scenes/ (scene templates)
+
+Models & Prefabs:
+  → Editor/res/models/ (imported 3D assets)
+  → Editor/res/prefabs/ (reusable templates)
+
+[BUILD_SYSTEM]
+Main CMake:
+  → CMakeLists.txt (root)
+  → Core/CMakeLists.txt
+  → Engine/CMakeLists.txt
+  → Editor/CMakeLists.txt
+
+Build Output:
+  → build/Core/core (core lib)
+  → build/Engine/engine (engine lib)
+  → build/Editor/editor (executable)
+  → build/unit_tests (test executable)
+
+[TESTING]
+Test Suite:
+  → unittests/ (all test files)
+  → Build: mkdir build && cd build && cmake .. && make -j4
+  → Run: ./unit_tests
+  → Single: ./unit_tests --run_test=DSBitFlagsTests
+
+[DOCUMENTATION]
+Project Docs:
+  → docs/agent/ (Claude documentation)
+  → docs/agent/learning/ (self-learning guides)
+  → docs/epics/ (task management)
+  → docs/epics/INDEX.md (epic registry)
+
+CLAUDE Guidelines:
+  → CLAUDE.md (root, critical rules)
+  → docs/agent/ARCHITECTURE.toon (system design)
+  → docs/agent/CONSTRAINTS.toon (hard rules)
+  → docs/agent/CODE_CONVENTIONS.toon (naming/style)
+
+[IMPORTANT_CONCEPTS]
+Frame Allocator (Memory):
+  → See: CONSTRAINTS.toon [CONSTRAINT_1-3]
+  → Code: Core/core/common/mem_allocator.h
+  → Pattern: std::pmr::vector<T>(ds::frame_allocator())
+
+Multi-World ECS:
+  → See: ARCHITECTURE.toon [LAYER_ECS_SYSTEM]
+  → Code: Core/core/ecs/ directory
+  → Max: 8 independent worlds via world_salt
+
+Descriptor Inheritance:
+  → See: ARCHITECTURE.toon [DESCRIPTOR_SYSTEM]
+  → Files: level_desc → world_desc → prefab_desc
+  → Hot-reload: Changes auto-apply to scenes
+
+Resource System:
+  → See: ARCHITECTURE.toon [RESOURCE_SYSTEM]
+  → Tag-based: res::tag{"path/to/resource"}
+  → VFS: res:// (filesystem), memory:// (runtime)
+
+[EPIC_QUICK_LINKS]
+Current Work:
+  → EPIC-25: docs/epics/editor/EPIC-25.md (Prefab Editor)
+  → EPIC-33: docs/epics/prefab-first/EPIC-33.md (Animation)
+
+Recent Completions:
+  → EPIC-43: Memory Allocators (done)
+  → EPIC-39: Profiling Infrastructure (done)
+  → EPIC-37: Unit Test Coverage (done)
+
+Render Pipeline:
+  → EPIC-16-21: Complete pipeline (done)
+  → EPIC-45: Optimization (planned)
+
+[COMMON_TASKS]
+Add new System:
+  1. File: Engine/systems/verb_noun_system.cpp
+  2. Inherit: ecs::system_interface
+  3. Register: system_factory auto-discovers
+
+Add new ImGui Panel:
+  1. File: Editor/panels/edt_name_panel.h
+  2. Pattern: if (ImGui::Begin("Name")) { ... ImGui::End(); }
+  3. Call: From Editor main loop
+
+Add new Descriptor Type:
+  1. File: Core/core/desc/name_desc.h
+  2. Inherit: descriptor_base or json_serializable
+  3. Register: res_manager type mapping
+
+Load Resource:
+  1. Tag: res::tag{"path/to/asset"}
+  2. Load: res_mgr.load<T>(tag)
+  3. Wait: Optional .then(callback) for async
+
+Create Entity:
+  1. Source: Prefab template (.desc file)
+  2. Spawn: world.instantiate(prefab_desc)
+  3. Edit: Inspector or in-scene gizmo
+
+[CONFIG_REFERENCE]
+Editor Config File:
+  → Editor/config/editor.cfg
+  → Override: --set key=value CLI args
+  → Variables: CFG_VAR_DEF_* macros

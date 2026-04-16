@@ -1,0 +1,191 @@
+[EXAMPLES]
+overview: Real-world examples of documentation updates
+purpose: Show how to apply self-learning process
+
+[EXAMPLE_1_USER_EXPLICIT_RULE]
+scenario: User says "Never use std::cout in core, use engine_log.h"
+
+step_1: Identify
+  - This is from user (meets CRITERIA_1)
+  - It's a constraint/rule
+  - Target: CLAUDE.md
+
+step_2: Locate
+  - Open /CLAUDE.md
+  - Find section "⚠️ Critical Rules"
+  - Add as critical rule
+
+step_3: Check duplicate
+  - Search CLAUDE.md for "cout" or "engine_log"
+  - Not found, proceed
+
+step_4: Write
+  - Never use std::cout/cin/cerr, use engine_log.h
+  - Why: engine_log.h provides formatted, filterable logging
+  - How: #include "engine_log.h" and use the macros
+
+step_5: Edit
+  Use Edit tool to add to CLAUDE.md
+
+step_6: Verify
+  - CLAUDE.md < 500 words
+  - No syntax errors
+  - Rule is clear
+
+step_7: Commit
+  git commit -m "docs: [rule] add logging requirement
+
+  Source: User explicit statement
+  File: CLAUDE.md
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[EXAMPLE_2_FOUND_IN_CODE]
+scenario: Found in render_packet.cpp: "// Never store frame_allocator pointers across frames"
+
+step_1: Identify
+  - Found in code with comment (meets CRITERIA_2)
+  - It's a memory/architecture constraint
+  - Target: CONSTRAINTS.toon
+
+step_2: Locate
+  - Open docs/agent/CONSTRAINTS.toon
+  - Find [MEMORY_CONSTRAINTS] section
+  - Add details there
+
+step_3: Check duplicate
+  - Search "frame" in CONSTRAINTS.toon
+  - Found existing info about frame_allocator
+  - Update existing section instead of adding new
+
+step_4: Write
+  - Add: "Never store pointers from frame_allocator across frames"
+  - Why: Frame allocator resets at each frame start
+  - How: Always transfer data or use other allocators for persistence
+
+step_5: Edit
+  Update CONSTRAINTS.toon frame_allocator section
+
+step_6: Verify
+  - Info integrates with existing section
+  - References actual code location
+  - Clear and concise
+
+step_7: Commit
+  git commit -m "docs: [constraint] clarify frame allocator lifespan
+
+  Source: Code inspection, render_packet.cpp
+  File: docs/agent/CONSTRAINTS.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[EXAMPLE_3_DISCOVERED_PATTERN]
+scenario: Found pattern: every system inherits from ecs::system_interface
+
+step_1: Identify
+  - Discovered from code analysis (meets CRITERIA_3)
+  - It's an architectural pattern
+  - Target: ARCHITECTURE.toon or CODE_CONVENTIONS.toon
+
+step_2: Locate
+  - Open docs/agent/CODE_CONVENTIONS.toon
+  - Find [SYSTEM_PATTERNS] section
+
+step_3: Check duplicate
+  - Search "system_interface" in existing docs
+  - Found reference in ARCHITECTURE.toon
+  - Will add CODE_CONVENTIONS perspective
+
+step_4: Write
+  In [SYSTEM_PATTERNS] section:
+  pattern: All systems inherit from ecs::system_interface
+  location: Core/core/ecs/ecs_system.h
+  how: Override initialize(), update(), shutdown()
+  example: See Engine/scene/scn_renderer_system.cpp
+
+step_5: Edit
+  Update CODE_CONVENTIONS.toon
+
+step_6: Verify
+  - Doesn't duplicate ARCHITECTURE.toon
+  - Adds code-level pattern guidance
+  - References actual files
+
+step_7: Commit
+  git commit -m "docs: [conventions] document system inheritance pattern
+
+  Source: Code discovery across systems
+  File: docs/agent/CODE_CONVENTIONS.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[EXAMPLE_4_FIXING_ERROR]
+scenario: ARCHITECTURE.toon says "ECS supports 5 worlds" but code comment says "8 worlds max"
+
+step_1: Identify
+  - Found error in docs (meets CRITERIA_4)
+  - Target: ARCHITECTURE.toon (ECS section)
+
+step_2: Locate
+  - Open docs/agent/ARCHITECTURE.toon
+  - Find [ECS_WORLD_MANAGEMENT] section
+
+step_3: Check duplicate
+  - This is the only entry for world limits
+  - Proceed
+
+step_4: Write
+  Change: "Supports up to 5 independent worlds"
+  To: "Supports up to 8 independent worlds (world_salt + bind_res)"
+  And verify: Check code for actual limit
+
+step_5: Edit
+  Update ARCHITECTURE.toon
+
+step_6: Verify
+  - Number matches code comment
+  - Other docs that reference this are still valid
+
+step_7: Commit
+  git commit -m "docs: [fix] correct ECS world count limit
+
+  Source: Code verification, ecs_world.hpp comment line 47
+  File: docs/agent/ARCHITECTURE.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[WHAT_TO_AVOID]
+example_bad_1: Too vague
+  "The system is complex"
+  problem: No actionable information
+
+example_bad_2: Speculation
+  "Probably the developers meant to implement it this way"
+  problem: Vague, unverified
+
+example_bad_3: Opinion
+  "This would be better if implemented differently"
+  problem: Not a rule, just preference
+
+example_bad_4: Obvious
+  "The code iterates through elements"
+  problem: Anyone reading code sees this
+
+example_bad_5: Implementation detail
+  "Vector grows by 2x when capacity exceeded"
+  problem: Can change, not architectural rule
+
+[KEY_TAKEAWAYS]
+✅ Small targeted updates (5-10 lines)
+✅ One file per update (don't scatter info)
+✅ Always verify source (code review or user confirmation)
+✅ Link to references (line numbers, existing docs)
+✅ Clear commit message with source attribution
+✅ Check for duplicates before adding
+
+❌ Large multi-concept updates
+❌ Speculative or opinion-based info
+❌ Obvious facts from code
+❌ Without source attribution
+❌ Breaking existing structure/format
+❌ Forgetting to commit [docs] prefix

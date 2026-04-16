@@ -1,0 +1,32 @@
+[SELF_LEARNING]
+overview: Agent self-improvement mechanism for OpenGL Engine project
+purpose: Accumulate knowledge across sessions via documentation updates
+mechanism: When agent discovers rules → update docs → commit → next session reads updated docs
+
+[QUICK_START]
+1. During work: Discover a rule or get one from user
+2. Check: Is it worth documenting? (see WHEN_TO_UPDATE.toon)
+3. Find: Which file to update (see FILES_REFERENCE.toon)
+4. Update: Follow process (see HOW_TO_UPDATE.toon)
+5. Commit: Make git commit with [docs] prefix
+
+[DOCUMENTATION_STRUCTURE]
+Small modular files in docs/agent/learning/:
+  → WHEN_TO_UPDATE.toon        Criteria for documentation updates
+  → WHEN_NOT_TO_UPDATE.toon    What NOT to document
+  → FILES_REFERENCE.toon       Which file for what information
+  → HOW_TO_UPDATE.toon         Step-by-step update process
+  → EXAMPLES.toon              Real update examples
+  → GUARDRAILS.toon            Safety checks and filters
+
+[BENEFITS]
+- No huge documents to read (load only what needed)
+- Modular knowledge (each topic in separate file)
+- Easy updates (edit small targeted files)
+- Self-documenting (links show the structure)
+- Knowledge accumulation (each session improves docs)
+
+[NEXT_STEPS]
+Start here: → WHEN_TO_UPDATE.toon (understand criteria)
+Then: → FILES_REFERENCE.toon (know where to put info)
+Finally: → HOW_TO_UPDATE.toon (learn the process)

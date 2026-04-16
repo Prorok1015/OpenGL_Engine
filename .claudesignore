@@ -1,0 +1,45 @@
+# Build artifacts
+build/
+dist/
+out/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+
+# IDE caches
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Node/npm
+node_modules/
+.npm
+
+# Keep human docs separate from agent docs
+docs/human/
+
+# Generated files
+*.log
+*.tmp
+.cmake/
+
+# Temporary work files
+*.bak
+.claude/worktrees/
+
+# Third-party (submodules are in source control)
+lib3dparty/
+
+# Editor tmp
+*.desc.tmp

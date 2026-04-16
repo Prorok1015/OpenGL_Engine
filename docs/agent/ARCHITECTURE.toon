@@ -1,0 +1,142 @@
+[ARCHITECTURE_OVERVIEW]
+pyramid:
+  Layer 1: editor (executable)
+            └── engine (static lib)
+                  └── core (static lib)
+                        └── common (INTERFACE)
+                              └── third-party
+
+[LAYER_HIERARCHY]
+description: Dependency order (lower depends on higher)
+
+[LAYER_COMMON]
+role: Interfaces and third-party headers
+provides:
+  - GLM math library
+  - Boost headers (json, hana, program_options, asio, test)
+  - Custom data structures (fixed_vector, smart pointers)
+  - Engine-wide macros and assertions
+scope: Editor + Engine + Core
+
+[LAYER_CORE]
+role: Engine foundation and services
+modules:
+  - ecs: EnTT-based ECS with multi-world support (up to 8 worlds)
+  - window: Platform window management
+  - resource: VFS resolver, Adapter pipeline (Assimp/stb/text), cache
+  - desc: JSON descriptor system with inheritance (level→world→prefab)
+  - config: Macro-based config system (CFG_VAR_DEF_*)
+  - app: Application lifecycle and module system
+  - video: Window abstraction layer
+key_patterns:
+  - Service Locator: ds::app_data_storage (type-safe DI)
+  - Module System: Priority-ordered lifecycle (CORE→ENGINE→EDITOR→GAME)
+  - Resource System: res::tag identification, VFS protocols (res://,memory://)
+  - Descriptor System: Inheritance chain, JSON serialization
+
+[LAYER_ENGINE]
+role: Gameplay and rendering systems
+modules:
+  - scene: Entity/prefab management, hierarchy, object transforms
+  - render: Data-driven pipeline (extractors→passes), material system
+  - gui: ImGui integration, editor panels
+  - input: Keyboard/mouse/gamepad handling
+  - game: Game-specific systems and logic hooks
+render_pipeline:
+  1. Extractors: Camera→RenderPacket (geometry, instances, lights)
+  2. Passes: Shadow (depth), G-Buffer (normals, albedo, PBR), Lighting, Post-fx
+  3. Output: ImGui overlay, multiple render targets per camera
+
+[LAYER_EDITOR]
+role: Real-time scene editing
+modules:
+  - editor: Main editor application
+  - panels: Inspector, hierarchy, asset browser, prefab editor
+  - gizmo: Transform, rotate, scale handles in viewport
+  - viewport: Scene preview, camera controls
+key_features:
+  - Async operations (loading, cooking resources)
+  - Per-camera render targets (__editor_depth_rt, etc.)
+  - Live prefab preview in separate world
+  - Descriptor hot-reload and validation
+
+[MEMORY_SYSTEM]
+allocators:
+  - frame_allocator: Per-frame bump (resets every frame start)
+  - linear_resource: Custom-scoped bump allocator
+  - pool_resource: Fixed-size O(1) alloc/free
+  - stack_resource: LIFO with markers
+  - debug_resource: Guard bytes, leak tracking (Debug only)
+hot_path_pattern:
+  std::pmr::vector<T> vec(ds::frame_allocator());
+  vec.reserve(estimated_size); // avoid grow-copy
+  // use vec during frame
+  // automatically freed at frame reset
+
+[ECS_SYSTEM]
+worlds: Up to 8 independent worlds (world_salt + bind_res<WorldID,T>)
+systems: All inherit ecs::system_interface, auto-registered via system_factory
+components: POD structs, optional _component suffix
+dependency_resolution: Auto via invoker<Candidate> using registry context
+boot_sequence:
+  module_loader.add_module(core, engine, editor)
+  → register_all_services()
+  → initialize_all_services() // sorted by priority
+  → app.run() // game loop
+  → shutdown_all_services() // reverse order
+
+[RESOURCE_SYSTEM]
+identification: res::tag (unique resource identifier)
+protocols:
+  - res:// filesystem (VFS resolver)
+  - memory:// runtime data
+pipeline:
+  VFS Resolver → Adapter (Assimp/stb/text) → Cache (weak/pinned)
+async_loading: res_handle<T> with .then() callbacks
+caching: Weak refs (auto-unload), pinned (persistent)
+
+[DESCRIPTOR_SYSTEM]
+format: JSON files (.desc extension)
+inheritance_chain:
+  level_desc
+    └── world_desc (entities, systems config)
+          └── prefab_desc (reusable template)
+                └── prefab_node (hierarchy)
+                      └── prefab_comp_node (component data)
+hot_reload: Editors change descs → scene updates via binding
+validation: Type checking, circular dep detection
+
+[RENDER_PIPELINE_DETAIL]
+per_camera:
+  - color_targets: fixed_vector<4> MRT support
+  - depth_target, tp_accum_target, tp_reveal_target
+  - RT tags resolve from camera packet, fallback to legacy static tags
+
+passes:
+  - Shadow Pass: Depth rendering for lights
+  - G-Buffer Pass: Normal, albedo, PBR encoding
+  - Lighting Pass: Deferred shading
+  - Transparency Pass: OIT (Order-Independent Transparency)
+  - Post-FX Pass: Bloom, tone mapping, etc.
+  - ImGui Pass: Editor UI overlay
+
+[MODULE_LIFECYCLE]
+Each module implements app::modules::module_interface:
+
+1. register_services(): Add types to app_data_storage
+   - Constructor injection, no dependencies yet
+
+2. initialize_services(): Resolve from storage, setup
+   - Sorted by priority
+   - Dependencies already registered
+
+3. shutdown_services(): Cleanup in reverse order
+   - Guaranteed to run even on error
+
+[NAMING_PATTERNS]
+namespaces: 2-4 letter abbrev (ds, ecs, scn, gui, rnd, res, inp, edt, gs, cfg, wnd)
+files: prefix_name.hpp/.cpp (scn_renderer.hpp, res_loader.cpp)
+components: _component suffix if name not self-descriptive
+systems: Inherit system_interface, naming_system.cpp pattern
+variables: snake_case always
+macros: UPPER_CASE

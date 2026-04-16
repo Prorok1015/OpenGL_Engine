@@ -1,0 +1,105 @@
+[FILES_REFERENCE]
+overview: Where to put different types of information
+purpose: Route discovered knowledge to correct documentation file
+principle: Each file has specific scope - don't mix concerns
+
+[FILE_CLAUDE_MD]
+location: /CLAUDE.md (root of project)
+scope: Critical universal rules (apply to ALL work on project)
+examples_update:
+  - "Never use std::cout, use engine_log.h"
+  - "No raw delete/new outside RAII"
+  - "All C++ code must be snake_case"
+  - "Tabs (size 4) for indentation"
+examples_not:
+  - Layer-specific rules (→ ARCHITECTURE.toon)
+  - Algorithm details (→ ARCHITECTURE.toon)
+  - Module responsibilities (→ ARCHITECTURE.toon)
+  - Memory allocator patterns (→ ARCHITECTURE.toon)
+when_update: Rare. Only if affects ALL code in project.
+format: Markdown section under "⚠️ Critical Rules"
+size: Keep small (< 500 words total)
+
+[FILE_ARCHITECTURE_TOON]
+location: docs/agent/ARCHITECTURE.toon
+scope: Layer structure, module interactions, systems, patterns
+examples_update:
+  - ECS world management and system registration
+  - Module lifecycle and service locator pattern
+  - Resource system pipeline and caching
+  - Descriptor system inheritance and serialization
+  - Memory allocator system and usage patterns
+  - Render pipeline architecture (extractors, passes, wiring)
+examples_not:
+  - Code style rules (→ CLAUDE.md)
+  - Specific function implementations (read code for that)
+  - "Absolute" constraints like "never" (→ separate section if critical)
+when_update: When understanding system interactions or design patterns
+format: [SECTION_NAME] with structured sub-sections
+size: Comprehensive reference document
+
+[FILE_CONSTRAINTS_TOON]
+location: docs/agent/CONSTRAINTS.toon
+scope: Hard architectural rules and "never/always" statements
+examples_update:
+  - "Always use frame_allocator for per-frame temporaries"
+  - "Never store frame-allocated pointers across frames"
+  - "ImGui: always check Begin() return value before End()"
+  - "Resources: never bypass cache, always use res::tag"
+examples_not:
+  - "How to use X" (→ ARCHITECTURE.toon)
+  - Implementation patterns (→ ARCHITECTURE.toon)
+  - Code style (→ CLAUDE.md)
+when_update: When discovering hard "must not" or "always must" rules
+format: [CONSTRAINT_N] with rule + why + how_to_apply
+size: Focused reference (one constraint = 5-10 lines max)
+
+[FILE_CODE_CONVENTIONS_TOON]
+location: docs/agent/CODE_CONVENTIONS.toon
+scope: Naming, style, architecture patterns specific to codebase
+examples_update:
+  - Namespace abbreviations (ds, ecs, scn, gui, rnd, res, inp, edt, gs, cfg, wnd)
+  - File naming patterns (prefix_name.hpp/.cpp)
+  - Component naming (_component suffix)
+  - System patterns (ecs::system_interface inheritance)
+examples_not:
+  - Language-level rules (C++20, no extensions) → CLAUDE.md
+  - Logic patterns that change (→ ARCHITECTURE.toon)
+when_update: When discovering consistent naming/style patterns
+format: [PATTERN_NAME] sections
+size: Reference document
+
+[FILE_QUICK_LINKS_TOON]
+location: docs/agent/QUICK_LINKS.toon
+scope: Navigation shortcuts to important files and concepts
+examples_update:
+  - "For ECS questions: Core/core/ecs/"
+  - "For rendering: Engine/render/"
+  - "For ImGui editor: Editor/panels/"
+  - "For resources: Core/core/res/"
+examples_not:
+  - Deep architectural explanations (→ ARCHITECTURE.toon)
+  - Rules and constraints (→ CONSTRAINTS.toon)
+when_update: When discovering important directory structure
+format: [SECTION] → file/folder descriptions
+size: Quick index
+
+[DECISION_MATRIX]
+Information Type → File
+
+Universal rule (affects all code)
+  → CLAUDE.md
+
+Hard "never/always" constraint
+  → CONSTRAINTS.toon
+
+System design / architecture / interactions
+  → ARCHITECTURE.toon
+
+Code naming / style / patterns
+  → CODE_CONVENTIONS.toon
+
+File locations / quick navigation
+  → QUICK_LINKS.toon
+
+Unknown file → Ask or check FILES_REFERENCE.toon (this file)

@@ -1,0 +1,160 @@
+[CONSTRAINTS_MEMORY]
+[CONSTRAINT_1]
+rule: Never store pointers from frame_allocator across frames
+why: Frame allocator memory is invalidated at frame start (ds::frame_allocator_reset())
+how_to_apply:
+  - If you need data across frames, use other allocators (std::make_shared, pool_resource)
+  - For frame data: std::pmr::vector<T>(ds::frame_allocator()) is safe within frame
+  - Always read comment at alloc site: "frame temp" vs "persistent"
+
+[CONSTRAINT_2]
+rule: Always reserve() when count is known
+why: Avoids grow-and-copy within bump allocator (wastes memory + performance)
+how_to_apply:
+  std::pmr::vector<rnd::render_packet> packets(ds::frame_allocator());
+  packets.reserve(estimated_count); // BEFORE pushing
+
+[CONSTRAINT_3]
+rule: deallocate() is a no-op on linear allocator
+why: Memory only reclaimed on reset() (bump allocation design)
+how_to_apply:
+  - Individual deallocate() calls don't free memory
+  - Only bulk reset() at frame boundary reclaims
+  - Don't create tight alloc/free loops in frame (use pool_resource instead)
+
+[CONSTRAINTS_LOGGING]
+[CONSTRAINT_4]
+rule: Never use std::cout, std::cerr, or std::cin
+why: engine_log.h provides formatted, filterable logging
+how_to_apply:
+  #include "engine_log.h"
+  Use macros: ENGINE_LOG, ENGINE_WARN, ENGINE_ERROR
+
+[CONSTRAINTS_CODE_STYLE]
+[CONSTRAINT_5]
+rule: C++20 only, no compiler extensions
+why: Cross-platform compatibility, maintainability
+how_to_apply:
+  - No __attribute__, __declspec, #pragma pack (use standard equivalents)
+  - No compiler-specific builtins
+  - Test on multiple platforms
+
+[CONSTRAINT_6]
+rule: Tabs (size 4) for indentation everywhere
+why: Project-wide consistency
+how_to_apply:
+  - Configure editor: spaces=off, tab_size=4
+  - All files .hpp, .cpp, CMakeLists.txt, .md use tabs
+
+[CONSTRAINT_7]
+rule: snake_case for all identifiers
+why: Consistency across codebase
+how_to_apply:
+  - Variables: my_variable
+  - Functions: my_function()
+  - Classes: my_class (rare, prefer structs for data)
+  - Enums: MY_ENUM_VALUE (exceptions: UPPER_CASE for macros)
+
+[CONSTRAINTS_ARCHITECTURE]
+[CONSTRAINT_8]
+rule: No global state in performance-critical code
+why: Prevents cache contention, simplifies testing
+how_to_apply:
+  - Render loop: zero statics, all data in structs
+  - ECS systems: dependencies via registry context
+  - Per-frame allocations: use frame_allocator, not statics
+
+[CONSTRAINT_9]
+rule: Always check ImGui Begin() return value
+why: User might have collapsed or hidden the panel
+how_to_apply:
+  if (ImGui::Begin("Name")) {
+    // panel content
+    ImGui::End();
+  }
+
+[CONSTRAINT_10]
+rule: Use res::tag for all resource identification
+why: Prevents cache misses, enables hot-reload
+how_to_apply:
+  auto mesh = res_manager.load<mesh_resource>(res::tag{"models/backpack"});
+  Never: hardcode filenames in component, always use descriptors
+
+[CONSTRAINT_11]
+rule: Always use engine_assert.h (ASSERT_MSG, ASSERT_FAIL)
+why: Provides stack traces, assert dialogs, debug info
+how_to_apply:
+  #include "engine_assert.h"
+  ASSERT_MSG(condition, "message");
+  ASSERT_FAIL("error");
+  NOT: assert() macro or C std assert
+
+[CONSTRAINTS_ECS]
+[CONSTRAINT_12]
+rule: Components are POD structs, no virtual functions
+why: Cache efficiency, memcpy safety
+how_to_apply:
+  struct transform_component {
+    glm::mat4 matrix;
+    glm::vec3 position;
+    // no virtual ~, no callbacks
+  };
+
+[CONSTRAINT_13]
+rule: Systems inherit ecs::system_interface
+why: Automatic registration, consistent lifecycle
+how_to_apply:
+  struct my_system : ecs::system_interface {
+    void initialize() override;
+    void update() override;
+    void shutdown() override;
+  };
+  system_factory will auto-register
+
+[CONSTRAINTS_RESOURCES]
+[CONSTRAINT_14]
+rule: Never bypass resource cache
+why: Prevents duplicate loads, enables hot-reload
+how_to_apply:
+  ✅ auto h = res_mgr.load<T>(tag);
+  ❌ new T(); load from disk directly
+
+[CONSTRAINT_15]
+rule: Resources use VFS (res:// or memory://)
+why: Enables mods, asset packing, runtime replacement
+how_to_apply:
+  res:// = filesystem path
+  memory:// = runtime-created data
+  Never embed paths in code, always use tags
+
+[CONSTRAINTS_DESCRIPTORS]
+[CONSTRAINT_16]
+rule: Scene truth is in level_desc, not code
+why: Data-driven architecture, runtime flexibility
+how_to_apply:
+  - Don't spawn entities in code
+  - Use prefabs and level descs
+  - Editors change descs, code reads them
+
+[CONSTRAINT_17]
+rule: Descriptor inheritance: never circular deps
+why: Serialization and validation
+how_to_apply:
+  OK: level → world → prefab → prefab_node
+  VETO: world references level, prefab references world
+
+[CONSTRAINTS_RENDERING]
+[CONSTRAINT_18]
+rule: Render target tags are per-camera
+why: Multiple worlds need independent targets
+how_to_apply:
+  Editor injects: __editor_depth_rt, __editor_tp_accum_rt, etc.
+  Fallback to legacy tags for backward compat
+
+[CONSTRAINT_19]
+rule: Frame allocator must reset every frame
+why: Prevents memory bloat, GC-like semantics
+how_to_apply:
+  Frame start: ds::frame_allocator_reset()
+  → clears all frame-temp data
+  → next frame has clean slate
