@@ -1,0 +1,131 @@
+[META]
+framework: claude-framework
+file_id: delegation.PATTERNS
+class: universal
+version: 1.0.0
+
+[PATTERNS]
+overview: Copy-paste-ready Agent() invocation templates for the most common delegation scenarios
+usage: Pick the pattern matching your trigger; fill in the placeholders; ship.
+
+[PATTERN_1_WIDE_EXPLORE]
+when: Trigger 1 fires (orientation, wide reading)
+template:
+  Agent({
+    description: "Explore <topic>",
+    subagent_type: "Explore",
+    prompt: "Find and summarize how <topic> works in this repo.
+             Start from: <hint path or keyword>.
+             Report: architecture summary + the 3-5 most relevant file:line citations.
+             Under 250 words."
+  })
+notes:
+  - Omit `model` — Explore has its own default
+  - Always give a seed (keyword, path, or symbol) to avoid cold-start drift
+  - Enforce word budget; otherwise Explore will return full file dumps
+
+[PATTERN_2_DISTILL_LARGE_OUTPUT]
+when: Trigger 2 fires (large output, only summary needed)
+template:
+  Agent({
+    description: "<verb> <object>",
+    subagent_type: "general-purpose",
+    model: "haiku",
+    prompt: "Run <exact command> and report ONLY: <exact shape>.
+             Do not include raw output. Do not include reasoning.
+             If the command fails, report the single error line and exit code."
+  })
+example:
+  prompt: "Run `npm test` in ./packages/api. Report: total tests, passed, failed.
+           If any failed, list failing test names (one per line) with the first error line each.
+           Nothing else."
+
+[PATTERN_3_PARALLEL_INDEPENDENT]
+when: Trigger 3 fires (2+ independent subtasks)
+template: Send ONE message with MULTIPLE Agent() blocks
+example:
+  Message contains:
+    Agent({description: "Audit Website deps", ...})
+    Agent({description: "Audit RenderEngine deps", ...})
+    Agent({description: "Audit IllustratorPlugIn deps", ...})
+notes:
+  - All three run concurrently
+  - Each gets its own word budget
+  - Main agent synthesizes after all return
+
+[PATTERN_4_MECHANICAL_TRANSFORM]
+when: Trigger 4 fires (mechanical task)
+template:
+  Agent({
+    description: "<verb> <object>",
+    subagent_type: "general-purpose",
+    model: "haiku",
+    prompt: "In files <exact paths>, <exact transformation>.
+             Follow this pattern exactly (copy from <reference file>): <pattern or example>.
+             Do not redesign. Do not add comments. Do not change unrelated code.
+             Confirm by listing the files changed and line counts."
+  })
+example:
+  prompt: "In files src/api/v1/*.ts, add a `@deprecated` JSDoc tag above every exported function.
+           Pattern: /** @deprecated Use v2 instead. */.
+           Do not modify function bodies. List changed files + count of tags added."
+
+[PATTERN_5_PLAN_REFACTOR]
+when: Trigger 5 fires (multi-file planning)
+template:
+  Agent({
+    description: "Plan <refactor>",
+    subagent_type: "Plan",
+    prompt: "Design an implementation plan for: <goal>.
+             Current state: <one or two sentences + key file paths>.
+             Constraints: <list>.
+             Return: ordered step list, critical files, risks. No code."
+  })
+
+[PATTERN_6_OPEN_SEARCH]
+when: Trigger 6 fires (unclear target)
+template:
+  Agent({
+    description: "Locate <thing>",
+    subagent_type: "general-purpose",
+    prompt: "Find <thing> in this repo.
+             It may be called: <synonyms / likely names>.
+             It is likely in: <plausible locations>.
+             Return: exact file:line of the definition + 1-sentence explanation.
+             If not found after reasonable search, say so explicitly."
+  })
+
+[PATTERN_7_ISOLATED_RISKY_EDIT]
+when: Edit touches shared state or may break main branch; user wants to validate before merging
+template:
+  Agent({
+    description: "<task>",
+    subagent_type: "general-purpose",
+    isolation: "worktree",
+    prompt: "<task brief> ..."
+  })
+notes:
+  - Worktree is auto-cleaned if no changes made
+  - If changes made, path + branch are returned for review
+  - Use for: experimental refactors, destructive migrations, anything reversible-but-scary
+
+[PATTERN_8_BACKGROUND_WORK]
+when: Subtask is long-running AND main agent has other independent work to progress
+template:
+  Agent({
+    description: "<task>",
+    run_in_background: true,
+    prompt: "..."
+  })
+notes:
+  - Do NOT poll — completion arrives as a notification
+  - Good for: long test suites, wide scans, multi-file refactors where you can keep working
+
+[PROMPT_BRIEFING_CHECKLIST]
+Every spawned subagent prompt MUST contain:
+  1. What to do (verb + object)
+  2. Relevant context (why, constraints, existing state — enough to act without this conversation)
+  3. Exact output shape (format + length cap)
+  4. What NOT to do (especially for mechanical / haiku tasks)
+
+If any of the four is missing, the prompt is not ready.

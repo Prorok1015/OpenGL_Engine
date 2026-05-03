@@ -1,3 +1,9 @@
+[META]
+framework: claude-framework
+file_id: CODE_CONVENTIONS
+class: custom
+version: 1.0.0
+
 [CODE_CONVENTIONS]
 overview: Naming, style, and architectural patterns in OpenGL Engine
 

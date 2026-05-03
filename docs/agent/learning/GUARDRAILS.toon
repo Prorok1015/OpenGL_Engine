@@ -1,33 +1,39 @@
+[META]
+framework: claude-framework
+file_id: learning.GUARDRAILS
+class: universal
+version: 1.0.0
+
 [GUARDRAILS]
 overview: Safety mechanisms to prevent bad documentation updates
-principle: Err on side of caution (better skip than add wrong info)
+principle: Err on the side of caution (better skip than add wrong info)
 
 [GUARDRAIL_1_DOUBT_DONT_UPDATE]
 rule: If you have ANY doubt → DON'T UPDATE
 process:
-  1. Are you 100% sure? YES → proceed
+  1. 100% sure? YES → proceed
   2. Any uncertainty? → ASK USER or SKIP
   3. Speculating? → ASK USER
   4. Unsure about format? → ASK USER
 examples:
-  - Found something that might be true but not verified? → SKIP
-  - User said something but code contradicts? → ASK USER
-  - Unsure if this is permanent or temporary? → SKIP
-  - Don't know which file to update? → Check FILES_REFERENCE.toon first
+  - Found something that might be true but not verified → SKIP
+  - User said something but code contradicts → ASK USER
+  - Unsure if this is permanent or temporary → SKIP
+  - Don't know which file to update → Check FILES_REFERENCE.toon first
 
 [GUARDRAIL_2_CODE_VERIFICATION]
 rule: Code must prove the claim (not vice versa)
 process:
-  1. Make claim: "Frame allocator resets every frame"
-  2. Find proof in code: locate ds::frame_allocator_reset()
-  3. Read the code: understand WHERE and WHEN it's called
+  1. Make claim: "X happens every 30 days"
+  2. Find proof in code: locate the actual implementation
+  3. Read the code: understand HOW it works
   4. Verify: does code match claim? If NO → don't document
   5. Update: only after verification
 red_flags:
   - "I think the code probably..."
   - "This is likely what happens when..."
   - "Based on patterns, it must be..."
-  → These are not verification
+  These are NOT verification.
 
 [GUARDRAIL_3_SOURCE_ATTRIBUTION]
 rule: Every update must cite source
@@ -42,23 +48,22 @@ examples_invalid:
   - Source: I guessed
   - Source: Probably from somewhere
   - Source: Might be true
-  → These are NOT valid sources
 
 [GUARDRAIL_4_IMPACT_CHECK]
-rule: Consider impact on future developers
+rule: Consider impact on future sessions
 before_update_ask:
-  1. Will this help future Claude sessions?
+  1. Will this help future sessions?
   2. Is this actionable information?
   3. Will anyone use this knowledge?
   4. Does this prevent future mistakes?
 examples_safe:
-  - "Never use X in Y" (prevents mistakes) ✅
-  - "Component A owns B via weak_ptr" (architectural knowledge) ✅
-  - "Frame allocator resets every frame" (operational constraint) ✅
+  - "Never use X in Y" (prevents mistakes)
+  - "Component A owns B via weak reference" (architectural knowledge)
+  - "Key rotation every 30 days" (operational constraint)
 examples_risky:
-  - "This is how it currently works" (might change) ⚠️
-  - "This seems to be the pattern" (uncertain) ⚠️
-  - "I think developers intended..." (speculation) ⚠️
+  - "This is how it currently works" (might change)
+  - "This seems to be the pattern" (uncertain)
+  - "I think developers intended..." (speculation)
 
 [GUARDRAIL_5_CONSISTENCY_CHECK]
 rule: New info must align with existing documentation
@@ -81,11 +86,11 @@ principle: Small updates are easier to review and revert if wrong
 [GUARDRAIL_7_FORMAT_PRESERVATION]
 rule: Don't break file structure or format
 check_list:
-  □ TOON files: Use [SECTION] and key: value format
-  □ Markdown files: Use proper markdown syntax
-  □ Indentation: Preserve consistent spacing
-  □ Links: Keep relative paths working
-  □ Order: Maintain logical section ordering
+  - TOON files: Use [SECTION] and key: value format
+  - Markdown files: Use proper markdown syntax
+  - Indentation: Preserve consistent spacing
+  - Links: Keep relative paths working
+  - Order: Maintain logical section ordering
 danger: Bad format breaks future edits
 
 [GUARDRAIL_8_REVERT_READY]
@@ -101,12 +106,12 @@ benefit: Can undo mistakes without affecting other docs
 rule: Only document permanent rules, not temporary states
 permanent_examples:
   - "Constraint: never allocate > X"
-  - "Architecture: ECS owns game objects"
-  - "Memory: frame_allocator resets each frame"
+  - "Architecture: Layer 2 owns Layer 1"
+  - "Protocol: signature size is 64 bytes"
 temporary_examples:
-  - "Current status: EPIC-25 is 50% done"
-  - "Right now: render pipeline is being optimized"
-  - "Today: we're working on X"
+  - "Current status: feature X is 50% done"
+  - "Right now: service is overloaded"
+  - "Today: we're working on Y"
 principle: Operational status changes, constraints don't
 
 [GUARDRAIL_10_DUPLICATE_CHECK]
@@ -115,7 +120,7 @@ process:
   1. Know what you want to add
   2. Search target file for keywords
   3. Search related files (use QUICK_LINKS.toon)
-  4. If found exact match: DON'T ADD (duplicate)
+  4. If found exact match: DON'T ADD
   5. If found related: LINK instead of duplicate
   6. Only ADD if truly new knowledge
 benefit: Keep docs lean (one fact in one place)
@@ -133,26 +138,26 @@ START: Found something worth documenting?
 
 [CHECKLIST_BEFORE_COMMIT]
 Before running git commit:
-□ Did I verify this in actual code?
-□ Is this already documented somewhere?
-□ Did I check WHEN_NOT_TO_UPDATE.toon?
-□ Is update small (< 15 lines)?
-□ Did I use correct file (FILES_REFERENCE.toon)?
-□ Does file format remain correct?
-□ Did I include source attribution?
-□ Can this be reverted if wrong?
-□ Is commit message clear?
+- Did I verify this in actual code?
+- Is this already documented somewhere?
+- Did I check WHEN_NOT_TO_UPDATE.toon?
+- Is update small (< 15 lines)?
+- Did I use correct file (FILES_REFERENCE.toon)?
+- Does file format remain correct?
+- Did I include source attribution?
+- Can this be reverted if wrong?
+- Is commit message clear?
 
-If ANY checkbox is unchecked → DON'T COMMIT YET
+If ANY answer is NO → DON'T COMMIT YET
 
 [RED_FLAGS_THAT_MEAN_SKIP]
-🚩 "I think..." or "Probably..."
-🚩 "This might be..."
-🚩 "Assuming..."
-🚩 "The developers likely..."
-🚩 "This looks like..."
-🚩 "I don't have code proof but..."
-→ All these mean: SKIP or ASK USER
+- "I think..." or "Probably..."
+- "This might be..."
+- "Assuming..."
+- "The developers likely..."
+- "This looks like..."
+- "I don't have code proof but..."
+All of these mean: SKIP or ASK USER
 
 [WHEN_TO_ASK_USER]
 Ask user before updating if:
@@ -164,6 +169,6 @@ Ask user before updating if:
   - Wondering if something is worth documenting
 
 Example message to user:
-  "Found: Resource system uses weak_ptr for cache references.
-   Is this a permanent architectural constraint or implementation detail?
+  "Found: component X currently uses weak references to break cycles.
+   Is this a permanent architectural constraint or just an implementation detail?
    Should I document this in CONSTRAINTS.toon?"

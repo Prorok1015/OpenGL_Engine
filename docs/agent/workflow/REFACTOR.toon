@@ -1,0 +1,78 @@
+[META]
+framework: claude-framework
+file_id: workflow.REFACTOR
+class: universal
+version: 1.0.0
+
+[REFACTOR]
+overview: Rules specific to refactoring — changing code shape without changing behavior
+applies_when: User asks to "refactor / restructure / clean up / reorganize / extract / inline / rename / simplify"
+follows: PHASES.toon with extra emphasis on Phase 1 (understand existing behavior) and Phase 5 (prove behavior unchanged)
+core_definition: Refactoring changes internal structure. It MUST NOT change observable behavior. If you're changing behavior, it's not a refactor — it's a feature or bugfix.
+
+[RULE_1_BEHAVIOR_PRESERVING]
+what: Refactors are behavior-preserving by definition
+why: A refactor that also "fixes a bug" or "tightens validation" mixes two concerns; the diff becomes unreviewable
+how:
+  - In PLAN phase, explicitly state: "No observable behavior changes expected"
+  - If you spot a bug during refactor → note it, do NOT fix in the same change
+  - If you spot a missing test → add the test FIRST as a separate commit, then refactor on top of it
+  - If you think a behavior change is required to refactor → STOP, this is not a refactor, return to PLAN and reclassify
+
+[RULE_2_TESTS_BEFORE_CHANGES]
+what: Precondition tests are non-negotiable for refactor
+why: Without tests, "behavior-preserving" is aspirational. Tests are how you prove it.
+how:
+  - In DISCOVER phase: identify existing test coverage for the code being refactored
+  - If coverage exists → verify it's green BEFORE any refactor change (baseline)
+  - If coverage is thin → add characterization tests FIRST (capture current behavior, even imperfect behavior), get user approval for the added tests, then refactor
+  - After refactor → the SAME tests must pass, unchanged
+
+[RULE_3_ONE_TRANSFORMATION_PER_COMMIT]
+what: A commit should represent one kind of change (rename, extract function, inline variable, move file)
+why: Small, named transformations are reviewable, revertable, and bisectable
+how:
+  - In PLAN phase, list transformations as an ORDERED sequence of commits, not a single blob
+  - Each commit's message names the transformation type
+  - If you find yourself writing "refactor X, Y, Z and also..." — split
+
+[RULE_4_EXPLICIT_ROLLBACK_PLAN]
+what: Every refactor has an answer to "how do we undo this if it breaks prod?"
+why: Refactors often have subtle timing/ordering effects that don't surface until deploy
+how:
+  - In PLAN phase, include a "Rollback" section: git revert-able? Requires migration reversal? Data compat concerns?
+  - For refactors touching hot paths / public APIs / storage layout — answer must be more than "git revert"
+
+[RULE_5_SCOPE_DISCIPLINE]
+what: Refactor only what the user asked for; don't opportunistically clean up adjacent code
+why: Scope creep in refactors is how 200-line changes become 2000-line changes the user won't merge
+how:
+  - In PLAN phase, name the exact module/function/file boundary of the refactor
+  - "While I'm in here" changes → note as a follow-up task (spawn_task or add to TODO), do NOT include
+  - Formatting changes in untouched areas are NOT allowed; keep the diff minimal
+
+[RULE_6_NO_RENAMES_WITHOUT_CONFIRMATION]
+what: Renaming symbols, files, or modules is a GATE (see GATES.toon)
+why: Renames cascade — downstream callers, docs, configs, logs, search tools all see the change
+how:
+  - Call out every rename in the plan with old → new
+  - Get per-rename approval if multiple renames are bundled
+  - Don't rename "for consistency" without the user explicitly asking
+
+[RULE_7_EXTRACTIONS_NEED_EVIDENCE]
+what: Extracting a helper / interface / abstraction requires ≥3 concrete call sites OR an explicit architectural requirement
+why: Premature extraction is the same problem as premature abstraction in new code — locks in the wrong shape
+how:
+  - In PLAN phase, list the call sites that will use the extraction
+  - If only 1-2 sites → don't extract, inline or leave duplicated
+
+[REFACTOR_PLAN_CHECKLIST]
+Before leaving PLAN phase, confirm:
+  - [ ] "No observable behavior changes" stated explicitly
+  - [ ] Existing test coverage identified and verified green (baseline)
+  - [ ] If coverage was insufficient — characterization tests added as a separate preceding step
+  - [ ] Transformations listed as an ordered, named sequence
+  - [ ] Rollback plan stated
+  - [ ] Scope boundary named precisely (file / module / function)
+  - [ ] Every rename enumerated with old → new
+  - [ ] Every extraction justified with ≥3 call sites or an architectural requirement

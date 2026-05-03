@@ -1,0 +1,59 @@
+[META]
+framework: claude-framework
+file_id: workflow.WORKFLOW
+class: universal
+version: 1.0.0
+
+[WORKFLOW]
+overview: Development workflow the agent MUST follow before writing production code
+purpose: Prevent the "jump straight to coding" failure mode — where the agent starts editing files before understanding the task, producing wrong architecture, missed constraints, wasted tokens, and rework
+mechanism: Task type is classified → mandatory phases run in order → each phase has a hard exit gate → code is written ONLY after the user approves the plan
+
+[CORE_PRINCIPLE]
+No production code before a plan. No plan without discovery. No implementation without explicit user approval.
+The user saying "I want to implement feature X" is NOT approval to start coding.
+It is approval to start the WORKFLOW. The plan comes first, always.
+
+[WHEN_WORKFLOW_APPLIES]
+Triggers that force this workflow:
+  - User says "I want to implement / add / build / create <feature>"
+  - User says "refactor / restructure / reorganize / migrate <component>"
+  - User says "fix / debug / resolve <bug>" where cause is not immediately obvious
+  - Any task that will touch ≥3 files OR introduces a new public API OR changes data model
+
+Triggers that BYPASS this workflow (see ESCAPE_HATCH.toon):
+  - User gives an explicit surgical instruction with known file and change ("fix typo in X:42")
+  - Trivial one-liner with no design component
+  - User explicitly says "just do it" / "skip the plan" after being asked
+
+[QUICK_START]
+1. Classify the task: feature / refactor / bugfix / trivial (see task-specific files)
+2. Run PHASES.toon in order — do NOT skip ahead
+3. At each confirmation gate (see GATES.toon) — STOP and ask the user
+4. Only after the plan is explicitly approved → implement
+5. After implementation → verify → report (never declare done without verification)
+
+[DOCUMENTATION_STRUCTURE]
+Small modular files in docs/agent/workflow/:
+  → PHASES.toon            The six mandatory phases and their exit criteria
+  → FEATURE.toon           Rules for new-feature work
+  → REFACTOR.toon          Rules for refactoring (behavior-preserving changes)
+  → BUGFIX.toon            Rules for bug fixes (reproduce-first)
+  → GATES.toon             Confirmation gates — when agent MUST stop and ask
+  → STATE_TRACKING.toon    Hybrid state: TodoWrite for phase progress + workplan file on disk
+  → ESCAPE_HATCH.toon      When the workflow can be skipped entirely
+
+[ANTI_PATTERNS]
+The following are workflow violations, not shortcuts:
+  - "I'll start with the obvious part while I think about the rest" → NO. Plan first.
+  - "The change is small, I'll skip the plan" → use ESCAPE_HATCH criteria, not intuition
+  - "I'll ask for approval after writing the first draft" → approval is PRE-code, not post
+  - "The user will tell me if they don't like it" → the user hired the workflow so they don't have to babysit
+  - "I can always revert if wrong" → reverting wastes their tokens and context
+
+[NEXT_STEPS]
+Start here: → PHASES.toon (learn the mandatory flow)
+Then: → GATES.toon (know where to stop)
+Then: → STATE_TRACKING.toon (how to remember state across turns and compactions)
+Then: FEATURE / REFACTOR / BUGFIX depending on task type
+Finally: → ESCAPE_HATCH.toon (when to skip this whole thing)

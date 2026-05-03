@@ -1,105 +1,124 @@
+[META]
+framework: claude-framework
+file_id: learning.FILES_REFERENCE
+class: universal
+version: 1.0.0
+
 [FILES_REFERENCE]
 overview: Where to put different types of information
-purpose: Route discovered knowledge to correct documentation file
-principle: Each file has specific scope - don't mix concerns
+purpose: Route discovered knowledge to the correct documentation file
+principle: Each file has specific scope — don't mix concerns
+
+[STANDARD_FILES]
+# These 4 files exist in every project initialized from this framework.
+# Domain-specific files (e.g. CRYPTO.toon, API.toon, DATABASE.toon) are added
+# per project and documented in QUICK_LINKS.toon.
 
 [FILE_CLAUDE_MD]
-location: /CLAUDE.md (root of project)
+location: /CLAUDE.md (project root)
 scope: Critical universal rules (apply to ALL work on project)
 examples_update:
-  - "Never use std::cout, use engine_log.h"
-  - "No raw delete/new outside RAII"
-  - "All C++ code must be snake_case"
-  - "Tabs (size 4) for indentation"
+  - "Never modify migrations without explicit approval"
+  - "All public APIs must have OpenAPI schema"
+  - "Core module MUST NOT write to filesystem"
 examples_not:
-  - Layer-specific rules (→ ARCHITECTURE.toon)
-  - Algorithm details (→ ARCHITECTURE.toon)
-  - Module responsibilities (→ ARCHITECTURE.toon)
-  - Memory allocator patterns (→ ARCHITECTURE.toon)
+  - Module-specific rules (→ CONSTRAINTS.toon)
+  - Algorithm details (→ domain-specific .toon)
+  - Implementation patterns (→ ARCHITECTURE.toon)
 when_update: Rare. Only if affects ALL code in project.
-format: Markdown section under "⚠️ Critical Rules"
+format: Markdown section under "Critical Rules"
 size: Keep small (< 500 words total)
-
-[FILE_ARCHITECTURE_TOON]
-location: docs/agent/ARCHITECTURE.toon
-scope: Layer structure, module interactions, systems, patterns
-examples_update:
-  - ECS world management and system registration
-  - Module lifecycle and service locator pattern
-  - Resource system pipeline and caching
-  - Descriptor system inheritance and serialization
-  - Memory allocator system and usage patterns
-  - Render pipeline architecture (extractors, passes, wiring)
-examples_not:
-  - Code style rules (→ CLAUDE.md)
-  - Specific function implementations (read code for that)
-  - "Absolute" constraints like "never" (→ separate section if critical)
-when_update: When understanding system interactions or design patterns
-format: [SECTION_NAME] with structured sub-sections
-size: Comprehensive reference document
 
 [FILE_CONSTRAINTS_TOON]
 location: docs/agent/CONSTRAINTS.toon
-scope: Hard architectural rules and "never/always" statements
+scope: Architectural constraints and "never do this" rules
 examples_update:
-  - "Always use frame_allocator for per-frame temporaries"
-  - "Never store frame-allocated pointers across frames"
-  - "ImGui: always check Begin() return value before End()"
-  - "Resources: never bypass cache, always use res::tag"
+  - rule: "Module A never depends on Module B"
+  - rule: "No allocations > 64 MB in single block"
+  - rule: "Thread safety required for shared cache"
 examples_not:
-  - "How to use X" (→ ARCHITECTURE.toon)
-  - Implementation patterns (→ ARCHITECTURE.toon)
-  - Code style (→ CLAUDE.md)
-when_update: When discovering hard "must not" or "always must" rules
-format: [CONSTRAINT_N] with rule + why + how_to_apply
-size: Focused reference (one constraint = 5-10 lines max)
+  - Implementation details (→ ARCHITECTURE.toon)
+  - What modules do (→ ARCHITECTURE.toon)
+when_update: When discovering a "you must not" or "only between X and Y" rule
+format: [CONSTRAINT_N] section + rule + why + how_to_apply
+size: One constraint = 5-10 lines max
 
-[FILE_CODE_CONVENTIONS_TOON]
-location: docs/agent/CODE_CONVENTIONS.toon
-scope: Naming, style, architecture patterns specific to codebase
+[FILE_ARCHITECTURE_TOON]
+location: docs/agent/ARCHITECTURE.toon
+scope: Component/layer structure, dataflow, interactions
 examples_update:
-  - Namespace abbreviations (ds, ecs, scn, gui, rnd, res, inp, edt, gs, cfg, wnd)
-  - File naming patterns (prefix_name.hpp/.cpp)
-  - Component naming (_component suffix)
-  - System patterns (ecs::system_interface inheritance)
+  - How data flows through modules/layers
+  - What each layer owns vs observes
+  - Caching patterns, ownership model
+  - Concurrency model, state transitions
 examples_not:
-  - Language-level rules (C++20, no extensions) → CLAUDE.md
-  - Logic patterns that change (→ ARCHITECTURE.toon)
-when_update: When discovering consistent naming/style patterns
-format: [PATTERN_NAME] sections
-size: Reference document
+  - Constraints (→ CONSTRAINTS.toon)
+  - Specific algorithms (→ domain file)
+when_update: When understanding component interactions or data movement
+format: Structured sections per component/layer
+size: Medium (should fit in one document)
+
+[FILE_PROJECT_TOON]
+location: docs/agent/PROJECT.toon
+scope: Project overview, modules, current status
+examples_update:
+  - New module added
+  - Status milestone changed
+  - Tech stack updated
+when_update: When project scope or status changes
+format: [PROJECT], [MODULES], [STATUS] sections
+size: Small (overview, not detail)
 
 [FILE_QUICK_LINKS_TOON]
 location: docs/agent/QUICK_LINKS.toon
-scope: Navigation shortcuts to important files and concepts
+scope: Navigation — which file for which info, code location pointers
 examples_update:
-  - "For ECS questions: Core/core/ecs/"
-  - "For rendering: Engine/render/"
-  - "For ImGui editor: Editor/panels/"
-  - "For resources: Core/core/res/"
-examples_not:
-  - Deep architectural explanations (→ ARCHITECTURE.toon)
-  - Rules and constraints (→ CONSTRAINTS.toon)
-when_update: When discovering important directory structure
-format: [SECTION] → file/folder descriptions
-size: Quick index
+  - New domain-specific .toon file added
+  - Component moved to new path
+when_update: When a new .toon file is created or structure changes
+format: [CODE], [DOCUMENTATION] sections with path mappings
+size: Small (index only)
+
+[FILE_PROJECT_STRUCTURE_MD]
+location: /PROJECT_STRUCTURE.md (project root)
+scope: File and directory tree with descriptions
+examples_update:
+  - New module directory created
+  - File moved or renamed
+  - Directory refactored
+when_update: When project structure physically changes
+format: Markdown with file tree and descriptions
+size: Keep organized and up-to-date
+
+[DOMAIN_SPECIFIC_FILES]
+# Projects add domain files as needed. Common examples:
+#   docs/agent/API.toon         — endpoint documentation
+#   docs/agent/DATABASE.toon    — schema, models
+#   docs/agent/CRYPTO.toon      — cryptographic details
+#   docs/agent/MODULES.toon     — deep module details if project is complex
+#   docs/agent/ACTIVE_EPICS.toon — current work tracking
+# Register new files in QUICK_LINKS.toon so future sessions can find them.
 
 [DECISION_MATRIX]
-Information Type → File
+Information type → File
 
-Universal rule (affects all code)
+Critical universal rule (all code)
   → CLAUDE.md
 
-Hard "never/always" constraint
+"Never do X" / architectural limit
   → CONSTRAINTS.toon
 
-System design / architecture / interactions
+How components interact / dataflow
   → ARCHITECTURE.toon
 
-Code naming / style / patterns
-  → CODE_CONVENTIONS.toon
+Project overview / module list / status
+  → PROJECT.toon
 
-File locations / quick navigation
+File/directory structure changed
+  → PROJECT_STRUCTURE.md
+
+Navigation entry / new domain file
   → QUICK_LINKS.toon
 
-Unknown file → Ask or check FILES_REFERENCE.toon (this file)
+Domain-specific knowledge (API, DB, crypto, etc.)
+  → Domain .toon file (create if missing, register in QUICK_LINKS.toon)

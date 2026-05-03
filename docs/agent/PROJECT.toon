@@ -1,3 +1,9 @@
+[META]
+framework: claude-framework
+file_id: PROJECT
+class: custom
+version: 1.0.0
+
 [PROJECT_OVERVIEW]
 name: OpenGL Engine & Editor
 description: C++20 3D graphics engine with real-time scene editor

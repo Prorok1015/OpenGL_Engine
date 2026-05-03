@@ -1,0 +1,117 @@
+[META]
+framework: claude-framework
+file_id: backlog.OPERATIONS
+class: universal
+version: 1.0.0
+
+[OPERATIONS]
+overview: The five operations the agent performs on the backlog: add, list, show, update, activate, archive
+principle: Every operation reads INDEX.toon first. Detail files are touched only when the operation requires detail.
+
+[OP_ADD]
+purpose: Capture a new item
+inputs: title (required), type (required), priority (default P2), theme (optional), motivation + description (for detail), source (who triggered: user / spawn_task / workflow / ...)
+steps:
+  1. Read INDEX.toon → find `next_id_seq` → new id = `BL-<zero-padded seq>`
+  2. Append [ITEM.<id>] block (7 lines) to [ITEMS] section
+  3. Re-sort [ITEMS] (see SCHEMA.toon order rule)
+  4. Increment `next_id_seq`
+  5. Update `last_updated`
+  6. Write items/<id>.toon with the full detail schema
+  7. Write initial HISTORY line
+  8. Respond: "Captured as <id>" + one-line recap
+duration_budget: Under 5 tool calls (read INDEX, write INDEX, write detail = 3 minimum)
+
+[OP_LIST]
+purpose: Show what's in the backlog, filtered
+inputs: filter (optional: status, type, theme, priority)
+steps:
+  1. Read INDEX.toon only (NEVER read detail files for listing)
+  2. Filter entries by the requested criteria
+  3. Present as a compact table: id | title | type | status | priority | theme
+response_budget: Keep under 25 rows in the shown output; if more match, paginate or tighten filter
+
+[OP_SHOW]
+purpose: Display full detail of one item
+inputs: id
+steps:
+  1. Read items/<id>.toon
+  2. Present DESCRIPTION, MOTIVATION, ACCEPTANCE, OUT_OF_SCOPE, LINKS, HISTORY (last 5 entries)
+  3. Do NOT re-read INDEX unless detail fields conflict with INDEX — then run INTEGRITY_RULES repair from SCHEMA.toon
+
+[OP_UPDATE]
+purpose: Change fields of an item (title, priority, theme, description, acceptance, out_of_scope, links)
+inputs: id, fields to change
+NOT_this_op: Status transitions — those go through OP_TRANSITION (see LIFECYCLE.toon)
+steps:
+  1. Read items/<id>.toon
+  2. Apply changes
+  3. If change touches a shared field (title/type/priority/theme) → also update INDEX.toon entry
+  4. Append HISTORY line: "<ISO> — updated: <fields changed> — <who: user/agent>"
+  5. Update INDEX `last_updated`
+
+[OP_TRANSITION]
+purpose: Change status (see LIFECYCLE.toon transition matrix)
+inputs: id, new status, reason
+gate: If transition requires user (per LIFECYCLE matrix), STOP and ask. Do not proceed without explicit "yes".
+steps:
+  1. Verify legality against LIFECYCLE transition matrix
+  2. If requires approval and not yet granted → propose and wait
+  3. Update INDEX [ITEM.<id>].status
+  4. Update items/<id>.toon [ITEM].status
+  5. Append HISTORY line
+  6. Re-sort INDEX [ITEMS] by status order
+  7. Update INDEX `last_updated`
+
+[OP_ACTIVATE]
+purpose: Start actual work on an item — bridge to the workflow module
+inputs: id
+preconditions:
+  - Item status is `accepted` (preferred) or `proposed` (with user approval) or `deferred`
+  - In-progress concurrency cap not exceeded (see LIFECYCLE.toon)
+steps:
+  1. Read items/<id>.toon in full
+  2. If status is `proposed` and user hasn't accepted — ask: "BL-<id> is still `proposed`. Accept and activate? [y/n]"
+  3. Run OP_TRANSITION to in-progress
+  4. Start workflow module (see docs/agent/workflow/WORKFLOW.toon):
+     - Task classification comes from [ITEM].type (feature → FEATURE.toon, refactor → REFACTOR.toon, bugfix → BUGFIX.toon, chore/docs → plain PHASES)
+     - DISCOVER phase is pre-seeded with DESCRIPTION + MOTIVATION + ACCEPTANCE + OUT_OF_SCOPE from the detail file
+     - PLAN phase's "Out of scope" section inherits from item's OUT_OF_SCOPE
+     - PLAN phase's verification items inherit from item's ACCEPTANCE
+  5. Create workplan at .claude/workplan/<slug>.md; slug is derived from item title (see workflow/STATE_TRACKING.toon)
+  6. Set items/<id>.toon [LINKS].workplan = <slug>
+  7. Run workflow normally. On REPORT success → auto-transition in-progress → done; auto-archive the workplan.
+
+[OP_ARCHIVE]
+purpose: Move old terminal items out of the hot INDEX
+inputs: none (scans automatically) or specific id
+trigger: Manual (user says "archive the backlog") OR automatic when [ITEMS] exceeds 80 entries
+steps:
+  1. Identify candidates: status in {done, rejected} AND last HISTORY entry older than 30 days
+  2. Ensure archive/INDEX.toon exists (create if needed, same schema)
+  3. For each candidate:
+     - Move entry from INDEX.toon [ITEMS] to archive/INDEX.toon [ITEMS]
+     - Move items/<id>.toon to items/archive/<id>.toon (or leave in place — config TBD; default: leave items/ files untouched)
+  4. Update both INDEX files' `last_updated`
+note: Archived items remain readable via OP_SHOW; OP_LIST by default excludes archive — `--include-archive` to include
+
+[OP_SPAWN_FROM_WORKFLOW]
+purpose: Specific entry point — workflow phases auto-capture follow-ups as backlog items
+triggered_from:
+  - REFACTOR.toon RULE_5 ("scope discipline"): out-of-scope items noted mid-refactor
+  - BUGFIX.toon RULE_5 ("no opportunistic changes"): adjacent issues spotted but not fixed
+  - FEATURE.toon RULE_7 ("no future proofing"): ideas that came up but were deferred
+  - PHASES.toon Phase 4 ("while I'm here" notes)
+flow:
+  1. Workflow context generates a short note ("scope drift spotted: X could be simplified")
+  2. Agent calls OP_ADD with:
+     - title = note summary
+     - type = inferred (refactor / bugfix / chore)
+     - priority = P3 default (user can bump later)
+     - source = "workflow.<phase>.<rule>"
+  3. Agent mentions in the ongoing task's REPORT: "Captured BL-<id> as follow-up"
+
+[MUTATIONS_AND_CONCURRENCY]
+- All mutations go through OPERATIONS; agent never edits INDEX.toon or detail files by free-form write
+- Always read-modify-write INDEX in a single logical step; don't interleave with other operations
+- If two operations in one turn both mutate INDEX → batch the changes, write INDEX once at the end

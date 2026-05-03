@@ -1,0 +1,91 @@
+[META]
+framework: claude-framework
+file_id: backlog.LIFECYCLE
+class: universal
+version: 1.0.0
+
+[LIFECYCLE]
+overview: Statuses a backlog item can hold and legal transitions between them
+principle: Transitions are explicit. Agent may perform some autonomously; others require user approval. Every transition is appended to the item's HISTORY section.
+
+[STATUSES]
+proposed:
+  meaning: Item captured but not yet reviewed by user
+  entered_from: (initial state on capture)
+  agent_may_set: YES — default on capture
+  user_sees: Listed when user asks "what's in the backlog?"
+
+accepted:
+  meaning: User has reviewed and confirmed the item should be done eventually
+  entered_from: proposed
+  agent_may_set: NO — requires user action (user says "accept BL-042" or "yes, do it later")
+  note: Accepted items are what enters planning/prioritization discussions
+
+in-progress:
+  meaning: Item is actively being worked on via the workflow module
+  entered_from: accepted (preferred), proposed (if user activates directly), deferred
+  agent_may_set: YES — triggered by OPERATIONS.activate
+  concurrency: At most 3 items in-progress at once; warn user if they request a 4th
+
+done:
+  meaning: Work is complete and verified (workflow REPORT phase succeeded)
+  entered_from: in-progress
+  agent_may_set: YES — on successful REPORT phase of the linked workplan
+  immutable: HISTORY locks here; no further transitions (except to archive)
+
+deferred:
+  meaning: Temporarily paused; will return to accepted/in-progress later
+  entered_from: accepted, in-progress
+  agent_may_set: NO — requires user to say so (or agent proposes and user confirms)
+  note: Use when user says "put this on hold" or "not this sprint"
+
+rejected:
+  meaning: Decided not to do it (invalid, obsolete, wrong-fix)
+  entered_from: proposed, accepted, deferred
+  agent_may_set: NO — requires explicit user decision
+  immutable: Terminal; not deleted so the history is preserved
+
+[TRANSITION_MATRIX]
+# Rows = from, Columns = to. Cells = who can trigger.
+#
+#             proposed  accepted  in-progress  done    deferred  rejected
+# proposed    —         user      user         —       user      user
+# accepted    —         —         agent/user   —       user      user
+# in-progress —         user      —            agent   user      user
+# done        —         —         —            —       —         —       (terminal)
+# deferred    —         user      user         —       —         user
+# rejected    —         —         —            —       —         —       (terminal)
+#
+# Transitions marked `agent` fire automatically when the corresponding event happens.
+# Transitions marked `user` require the user to explicitly say so; agent may propose but not execute.
+
+[AGENT_AUTONOMOUS_TRANSITIONS]
+These happen without asking the user:
+  - (initial) → proposed            — on capture
+  - accepted → in-progress          — when user runs OPERATIONS.activate BL-XXX
+  - in-progress → done              — on workflow REPORT phase success for the linked workplan
+
+All other transitions require a direct user instruction. Agent MAY propose a transition in a message
+(e.g. "BL-042 looks obsolete — reject?") but MUST NOT execute it without the user's explicit "yes".
+
+[CONCURRENT_IN_PROGRESS_POLICY]
+Hard cap: 3 items in-progress simultaneously.
+  - Prevents context thrash and half-finished work
+  - On attempt to start a 4th: "Already 3 items in progress: BL-X, BL-Y, BL-Z. Defer one first, or pick a replacement?"
+  - This is a soft-gate handled at OPERATIONS.activate time
+
+[TRANSITIONS_AND_EXTERNAL_SYNC]
+If the item has `LINKS.external_id` set and sync_target is non-none:
+  - Local transitions do NOT automatically push to the external tracker
+  - Sync is explicit — see SYNC.toon
+  - Agent MUST note in the message: "Local status updated. Run sync to propagate to <tracker>."
+
+[HISTORY_ENTRY_FORMAT]
+Every transition appends ONE line to item's [HISTORY] section:
+<ISO datetime> — <old_status> → <new_status> — <reason or trigger>
+
+Examples:
+  2026-04-18T10:15:00Z — (initial) → proposed — source: spawn_task
+  2026-04-19T09:02:00Z — proposed → accepted — user: "ok, do this eventually"
+  2026-04-20T14:30:00Z — accepted → in-progress — OPERATIONS.activate, workplan=add-webhook-retries
+  2026-04-20T17:45:00Z — in-progress → done — workflow REPORT success

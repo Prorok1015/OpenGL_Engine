@@ -1,0 +1,77 @@
+[META]
+framework: claude-framework
+file_id: workflow.BUGFIX
+class: universal
+version: 1.0.0
+
+[BUGFIX]
+overview: Rules specific to fixing bugs — making the code do what it was supposed to do
+applies_when: User reports incorrect behavior, a crash, a regression, a test failure, or an edge case that breaks
+follows: PHASES.toon with extra emphasis on reproducing FIRST and addressing root cause
+
+[RULE_1_REPRODUCE_BEFORE_FIX]
+what: You must reproduce the bug deterministically before writing any fix
+why: A "fix" without a reproducer has no proof it actually fixes anything. It might hide the symptom while the real bug lurks.
+how:
+  - In DISCOVER phase: produce a minimal reproducer — a failing test, a shell command with expected-vs-actual, or step-by-step with screenshots
+  - If you cannot reproduce → STOP and ask the user for more details, do not guess
+  - If reproduction requires env the agent doesn't have → say so, request the user reproduce and share output
+
+[RULE_2_WRITE_THE_FAILING_TEST_FIRST]
+what: The first code change in a bugfix is a test that fails for the right reason
+why: Failing test = proof you understand the bug. Passing test after fix = proof the fix works. Without both, you're flying blind.
+how:
+  - In IMPLEMENT phase: add the failing test BEFORE touching the bugged code
+  - Run it — confirm it fails with the expected error message
+  - Only then fix the underlying code
+  - After fix: re-run, confirm it passes
+  - If the project's test setup makes this infeasible → say so in the plan; propose an alternative (manual reproducer script) and get approval
+
+[RULE_3_ROOT_CAUSE_OVER_SYMPTOM]
+what: Fix the actual cause, not the visible symptom
+why: Symptom-fixing creates Whac-A-Mole bugs — the same cause manifests elsewhere later
+how:
+  - In DISCOVER phase: trace the failure back to its origin. Ask "why" at least 3 times.
+  - In PLAN phase: name the root cause explicitly, not just the fix
+  - If the root cause is out of scope (deep architectural flaw) → state that, propose a scoped symptomatic fix with a follow-up task, get user's explicit OK to treat the symptom
+
+[RULE_4_WHY_DIDNT_TESTS_CATCH_IT]
+what: For every bugfix, answer: why didn't existing tests catch this?
+why: A bug that slipped through tests is ALSO a test-coverage bug. Fix both.
+how:
+  - In PLAN phase, include a short section: "Why existing tests missed this"
+  - Possible answers: untested code path / assertion too loose / environment difference / race condition / missing edge case
+  - The fix plan should address the test gap, not just the code gap — usually this means the failing test from RULE_2 closes the gap
+
+[RULE_5_NO_OPPORTUNISTIC_CHANGES]
+what: A bugfix commit changes only what's needed to fix the bug
+why: Extra changes bundled with a bugfix make regression hunting harder and reviews slower
+how:
+  - In IMPLEMENT phase: resist the urge to "clean up" or "also fix" nearby code
+  - If you spot adjacent issues — log them as separate tasks (spawn_task), do NOT bundle
+  - A bugfix diff should be the smallest change that makes the failing test pass
+
+[RULE_6_REGRESSION_CHECK]
+what: Before declaring done, run the broader test suite in the affected area
+why: A fix that introduces a new regression is net-negative — the bug count stayed the same, the debt grew
+how:
+  - In VERIFY phase: don't just run the new test; run neighboring tests too
+  - For UI bugs: manually exercise adjacent features in the browser
+  - For backend: run the module's full test file at minimum
+
+[RULE_7_DIAGNOSIS_IS_WORTH_DOCUMENTING]
+what: If the bug was subtle (race condition, encoding issue, platform-specific, off-by-one in edge case), the commit message and/or a code comment should explain WHY the fix works
+why: The code change alone may look arbitrary; a future reader needs to understand the invariant being preserved
+how:
+  - Add a short comment ONLY when the fix is non-obvious (see CLAUDE.md "WHY not WHAT" rule)
+  - The commit message carries the detailed explanation
+  - Do not add comments explaining the obvious
+
+[BUGFIX_PLAN_CHECKLIST]
+Before leaving PLAN phase, confirm:
+  - [ ] Deterministic reproducer exists (failing test, script, or step-by-step)
+  - [ ] Root cause identified and named (not just the symptom)
+  - [ ] "Why existing tests missed this" answered
+  - [ ] Fix plan names the smallest change that would make the reproducer pass
+  - [ ] No bundled cleanups or adjacent fixes
+  - [ ] Regression-check scope named (which tests / which features to re-verify)

@@ -1,79 +1,90 @@
+[META]
+framework: claude-framework
+file_id: learning.WHEN_TO_UPDATE
+class: universal
+version: 1.0.0
+
 [WHEN_TO_UPDATE]
 overview: Criteria for when documentation should be updated
-decision: Check EACH criteria before updating. Must match AT LEAST ONE.
+decision: Check each criterion. Update only if AT LEAST ONE matches.
 
 [CRITERIA_1_USER_SAID_IT]
-trigger: User explicitly states a rule or principle
+trigger: User explicitly states a rule, constraint, or principle
 examples:
   - "Remember: never touch migrations without my approval"
-  - "This is an architectural rule: no global state in Layer 2"
-  - "That's a constraint we discovered: weak_ptr for cycles"
+  - "This is an architectural rule: no global state in the service layer"
+  - "Constraint we discovered: use immutable DTOs across module boundaries"
 action: UPDATE immediately (explicit knowledge from domain expert)
-files: Typically CONSTRAINTS.toon or appropriate .toon file
+files: Typically CONSTRAINTS.toon or the most relevant domain file
 
 [CRITERIA_2_FOUND_IN_CODE]
 trigger: Discovery of architectural rule/pattern in source code
 how_to_identify:
-  - Comments with "MUST", "NEVER", "ALWAYS", "WARNING"
-  - Consistent patterns across multiple files
-  - Safety checks that reveal hidden constraints
-  - Configuration constants that define limits
+  - Comments with "MUST", "NEVER", "ALWAYS", "WARNING", "DO NOT"
+  - Consistent patterns repeated across multiple files
+  - Safety checks / asserts that reveal hidden constraints
+  - Configuration constants that define hard limits
 examples:
-  - Found: // Key rotation must happen every 30 days
-  - Found: // NEVER reuse (key, nonce) pair
-  - Found: assert(buffer_size < 64 * 1024); // Hard limit
+  - Found: // MUST rotate session keys every 30 days
+  - Found: // NEVER reuse a (key, nonce) pair
+  - Found: assert(buffer_size < 64 * 1024); // hard limit
 action: UPDATE (verified from implementation)
-files: Code conventions, architectural patterns, constraints
+files: CONSTRAINTS.toon, ARCHITECTURE.toon, or domain-specific file
 
 [CRITERIA_3_DISCOVERED_THROUGH_WORK]
-trigger: Understanding gained while implementing/debugging
-when: Have conclusive evidence of how something works
+trigger: Understanding gained while implementing or debugging
+when: You have conclusive evidence of how something works
 examples:
-  - "Now I understand: ECS systems are auto-registered via system_factory"
-  - "Discovered: resource pipeline uses Adapter pattern with VFS"
-  - "Verified: descriptor system supports inheritance chain"
+  - "Now I understand: the cache layer uses weak references to break cycles"
+  - "Discovered: the session pool reuses connections across requests"
+  - "Verified: ownership of the loader is exclusive to the bootstrap module"
 evidence_required:
   - Read the actual code confirming this
-  - Understand the reason WHY it works this way
-  - Not a guess or assumption
+  - Understand WHY it works this way
+  - Not a guess or pattern-match assumption
 action: UPDATE (verified through code analysis)
-files: ARCHITECTURE.toon, code conventions
+files: ARCHITECTURE.toon or the relevant domain file
 
 [CRITERIA_4_FIXING_ERROR]
 trigger: Found inaccuracy or outdated info in existing docs
 examples:
-  - "CONSTRAINTS.toon says we use raw pointers, but it's actually weak_ptr"
-  - "ARCHITECTURE.toon says module X is responsible for Y, but code shows it's Z"
+  - "CONSTRAINTS.toon says module X uses raw pointers, but it's actually smart pointers"
+  - "PROJECT.toon says feature Y is in progress, but code shows it's complete"
+  - "ARCHITECTURE.toon is missing a newly added layer"
 action: UPDATE immediately (correctness matters)
-files: Any .toon file with the error
+files: Any file with the error
 
 [CRITERIA_5_SIGNIFICANT_PATTERN]
-trigger: Pattern that appears in 3+ places and isn't documented
+trigger: Pattern appears in 3+ places and is not documented
 how_to_verify:
-  - Find it in at least 3 different locations
-  - It's not in current documentation
-  - It's not obvious (hidden pattern)
+  - Found in at least 3 different locations
+  - Not in current documentation
+  - Not an obvious standard practice
 examples:
-  - "All namespace abbreviations are 2-4 letters (ds, ecs, scn, edt)"
-  - "Every system inherits from ecs::system_interface"
-  - "All resources use res::tag for identification"
+  - "All layer N→N+1 calls use a common error-handling wrapper"
+  - "Every network operation validates the peer cert before use"
+  - "All DTOs are frozen/immutable via a shared decorator"
 action: UPDATE (prevents re-discovery in future)
-files: Appropriate .toon file for the pattern
+files: Appropriate file for the pattern
+
+[CRITERIA_6_STRUCTURE_CHANGED]
+trigger: Project file/directory structure physically changes
+how_to_verify:
+  - New files/directories created
+  - Existing files moved or reorganized
+  - Module structure refactored
+examples:
+  - "Created new src/services/billing/ directory with 4 modules"
+  - "Moved API handlers to src/api/v2/"
+  - "Split monolith into src/core/ and src/plugins/"
+action: UPDATE (keeps PROJECT_STRUCTURE.md current)
+files: PROJECT_STRUCTURE.md (keep tree accurate)
 
 [COMBINED_DECISION_TREE]
-┌─ User said it explicitly?
-│  └─ YES → UPDATE
-│
-├─ Found warning/MUST/NEVER in code?
-│  └─ YES → UPDATE
-│
-├─ Verified understanding from code analysis?
-│  └─ YES → UPDATE
-│
-├─ Found error in existing docs?
-│  └─ YES → UPDATE
-│
-└─ Pattern appears in 3+ places undocumented?
-   └─ YES → UPDATE
-
-If NO to all → DON'T UPDATE
+├─ User said it explicitly?                           → UPDATE
+├─ Found warning/MUST/NEVER in code?                  → UPDATE
+├─ Verified understanding from code analysis?         → UPDATE
+├─ Found error in existing docs?                      → UPDATE
+├─ Pattern appears in 3+ places undocumented?         → UPDATE
+├─ Project file/directory structure physically changed? → UPDATE PROJECT_STRUCTURE.md
+└─ None of the above?                                 → DON'T UPDATE

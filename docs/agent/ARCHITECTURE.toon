@@ -1,3 +1,9 @@
+[META]
+framework: claude-framework
+file_id: ARCHITECTURE
+class: custom
+version: 1.0.0
+
 [ARCHITECTURE_OVERVIEW]
 pyramid:
   Layer 1: editor (executable)

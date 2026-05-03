@@ -1,0 +1,33 @@
+[META]
+framework: claude-framework
+file_id: backlog.INDEX
+class: parameterized
+version: 1.0.0
+
+[BACKLOG_META]
+project_name: OpenGL Engine & Editor
+next_id_seq: 1
+last_updated: 2026-04-17
+sync_target: none
+sync_project:
+sync_default_area:
+sync_default_type:
+
+[ITEMS]
+# Agent appends [ITEM.BL-XXX] blocks here via OPERATIONS.toon OP_ADD.
+# Each entry is exactly 7 lines (see SCHEMA.toon INDEX_ENTRY_SHAPE).
+# Entries are sorted by status → priority → id, re-sorted on every write.
+#
+# Example:
+#
+# [ITEM.BL-001]
+# title: Add webhook retries
+# type: feature
+# status: proposed
+# priority: P2
+# created: 2026-04-17
+# theme: integrations
+
+[ARCHIVE]
+# Optional. Once [ITEMS] exceeds ~80 entries, agent moves terminal items (done/rejected)
+# older than 30 days to archive/INDEX.toon. Keep this section as a placeholder.

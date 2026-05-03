@@ -1,0 +1,144 @@
+[META]
+framework: claude-framework
+file_id: workflow.STATE_TRACKING
+class: universal
+version: 1.0.0
+
+[STATE_TRACKING]
+overview: Hybrid state tracking for multi-phase workflow tasks — TodoWrite for phase progress, a workplan file for plan/approvals/decisions
+purpose: Survive context compaction, session restart, and long-running tasks. The agent must be able to resume work without losing the approved plan or the list of what's done.
+principle: Ephemeral state (which step is next) goes in TodoWrite. Durable state (the plan, user approvals, deviations, out-of-scope notes) goes on disk.
+
+[WHY_BOTH]
+TodoWrite alone:
+  - Good: built-in, visible to user, lightweight
+  - Bad: doesn't survive session restart, doesn't hold structured plan content, can't capture approval history
+Workplan file alone:
+  - Good: durable, human-readable, captures everything
+  - Bad: not shown in the live todo UI, easier to forget to update
+Hybrid:
+  - TodoWrite tracks phase-level progress (6 todos per task, one per phase)
+  - Workplan file holds the plan, approvals, deviations, and final report
+  - Both updated together; they stay consistent
+
+[WORKPLAN_LOCATION]
+path_active:   .claude/workplan/<slug>.md
+path_archive:  .claude/workplan/archive/<ISO_DATE>-<slug>.md
+slug_format:   lowercase, hyphen-separated, ≤40 chars, derived from user's request
+               examples: "add-webhook-retries", "refactor-auth-middleware", "fix-login-race"
+
+Multiple active workplans may coexist if the user juggles tasks. One workplan per task.
+
+[WORKPLAN_LIFECYCLE]
+1. CREATED at end of DISCOVER phase (Phase 1)
+2. UPDATED after each phase transition and after each user response at a gate
+3. ARCHIVED at end of REPORT phase (Phase 6): moved to archive/ with today's ISO date prefix
+4. DELETED only if user explicitly says "drop the workplan" — default is to archive
+
+Before starting any new turn on a workflow task, the agent MUST:
+  - Check .claude/workplan/ for active workplans matching the current request
+  - If found → load state, resume from the recorded phase, do NOT restart from Phase 1
+  - If not found → start a new workplan at the end of DISCOVER
+
+[WORKPLAN_TEMPLATE]
+# Workplan: <user's request in one line>
+
+**Slug:** <slug>
+**Task type:** <feature | refactor | bugfix | other>
+**Started:** <ISO datetime>
+**Current phase:** <DISCOVER | PLAN | CONFIRM | IMPLEMENT | VERIFY | REPORT | ARCHIVED>
+**Status:** <in-progress | awaiting-approval | blocked | done>
+
+## Task
+<Restated task. Confirm with user if restatement was needed.>
+
+## Discovery
+- **Similar patterns found:** <list or "none">
+- **Relevant files:** <list with one-line purpose each>
+- **Constraints from CLAUDE.md / CONSTRAINTS.toon:** <list>
+- **Unknowns resolved in discovery:** <list>
+
+## Plan
+### Goal
+<one sentence>
+
+### Approach
+<2-5 sentences: what and why>
+
+### Files to change
+- `<path>` — <what changes>
+
+### Files to add
+- `<path>` — <purpose>
+
+### Files to delete
+- `<path>` — <reason>
+
+### Tests / verification
+<how this will be proven>
+
+### Risks / unknowns
+<what could go wrong>
+
+### Out of scope
+<what was deliberately excluded>
+
+### Rollback (refactor only)
+<how to undo if needed>
+
+## Gate log
+- **<ISO datetime>** — Presented plan. User response: `<verbatim or paraphrased>`. Outcome: `<approved | amended | rejected>`.
+- **<ISO datetime>** — <next gate event>
+
+## Deviations
+(Filled during IMPLEMENT phase if reality diverges from plan. Each entry forces a trip back to PLAN and CONFIRM.)
+- **<ISO datetime>** — Discovered: `<what>`. Re-planned: `<how>`. User response: `<outcome>`.
+
+## Verification
+- [ ] <verification item from plan> — <result>
+- [ ] <...>
+
+## Report
+<Final summary. Filled in Phase 6.>
+
+## Unresolved
+<Follow-ups, spawned tasks, anything the user should know.>
+
+[TODOWRITE_USAGE]
+At the start of a workflow task, the agent creates SIX todos, one per phase:
+  1. [DISCOVER] <one-line task description>
+  2. [PLAN] Design approach and write plan
+  3. [CONFIRM] Present plan, wait for approval
+  4. [IMPLEMENT] Execute approved plan
+  5. [VERIFY] Prove change works
+  6. [REPORT] Summarize for user
+
+Each todo transitions: pending → in_progress (when phase starts) → completed (when phase exit criteria met).
+Only ONE todo is in_progress at a time.
+If a gate rejects the plan → the CONFIRM todo stays in_progress; the PLAN todo reopens.
+If IMPLEMENT deviates → IMPLEMENT stays in_progress; a new "re-plan" sub-todo is added.
+
+[CONSISTENCY_RULES]
+- Workplan `Current phase` field MUST match the single in_progress TodoWrite entry
+- Every user response at a gate MUST be appended to the "Gate log" section of the workplan BEFORE the agent does anything else
+- Never update TodoWrite without also updating the workplan (and vice-versa)
+
+[RESUMPTION_AFTER_COMPACTION_OR_RESTART]
+If context was compacted or the session was restarted:
+  1. First action: list .claude/workplan/*.md (not archive/)
+  2. If any are in-progress, ask the user: "I see an active workplan for `<slug>`. Resume, or start fresh?"
+  3. On resume: read the workplan file fully, restore TodoWrite state to match `Current phase`, continue
+  4. On fresh start: offer to archive the stale workplan before beginning
+
+[GITIGNORE_AND_CLAUDESIGNORE]
+Workplans are local session state, not project history:
+  - Add `.claude/workplan/` to the project's `.gitignore` (do not commit workplans)
+  - Add `.claude/workplan/archive/` to the project's `.claudesignore` (don't load archives into context by default)
+  - The active `.claude/workplan/*.md` files ARE loaded into context when the agent needs them
+  - SETUP_PROMPT ensures both entries are present at init time
+
+[WHEN_TO_SKIP_STATE_TRACKING]
+If ESCAPE_HATCH applies (see ESCAPE_HATCH.toon) → no workplan is needed.
+A trivial edit does not justify a workplan file. Skip TodoWrite for trivial tasks as well.
+
+If unsure whether the task is trivial enough → create the workplan. Cost is one file write; benefit is resumability.

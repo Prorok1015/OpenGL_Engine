@@ -1,0 +1,117 @@
+[META]
+framework: claude-framework
+file_id: backlog.SYNC
+class: universal
+version: 1.0.0
+
+[SYNC]
+overview: Explicit synchronization between the local backlog and an external tracker (Azure DevOps, Linear, GitHub Issues)
+principle: Sync is ALWAYS manual. Agent never silently pushes or pulls. Duplication between local and external is accepted; resolution is by explicit user instruction.
+
+[WHY_EXPLICIT_ONLY]
+Silent sync causes two failure modes:
+  1. Agent overwrites external edits a human made (teammate updates the ticket; sync clobbers)
+  2. Agent pollutes the tracker with experimental items that were never meant to leave the repo
+
+Both are hard to undo and erode trust in the tracker. Explicit sync keeps the user in control of both direction and timing.
+
+[SUPPORTED_TARGETS]
+Set INDEX.toon [BACKLOG_META].sync_target to one of:
+  - none           — no sync available; ignore SYNC operations (default)
+  - azure-devops   — via the Azure DevOps MCP server or REST API
+  - linear         — via Linear MCP server
+  - github         — via `gh` CLI or GitHub MCP server
+
+Other trackers can be added by extending this file in a future release.
+
+[CONFIGURATION_FIELDS]
+These live in INDEX.toon [BACKLOG_META] and are set at SETUP or by user command:
+  - sync_target: <one of above>
+  - sync_project: <tracker-specific project id/name, e.g. "MyOrg/MyProj" for Azure DevOps>
+  - sync_default_area: <optional, where new items go by default>
+  - sync_default_type: <optional, tracker-specific work item type mapping>
+
+The agent MUST NOT store credentials in these files. Credentials come from the environment or MCP config.
+
+[SYNC_OPERATIONS]
+
+[SYNC_PUSH]
+purpose: Create or update external items to match local state
+triggered_by: User says "push BL-042" / "sync to Azure DevOps" / "export the backlog"
+steps:
+  1. Read items/<id>.toon
+  2. If [LINKS].external_id is empty → CREATE in external tracker; capture returned external_id
+  3. If non-empty → UPDATE the referenced external item
+  4. Map fields per mapping table below
+  5. Write returned external_id back to items/<id>.toon [LINKS].external_id
+  6. Append HISTORY line: "<ISO> — sync push → <tracker>:<external_id>"
+safety:
+  - Always show the user what will be pushed BEFORE making the API call
+  - On create, confirm the target project/area
+  - On update, show diff of what the push would change externally
+
+[SYNC_PULL]
+purpose: Update local items from external state
+triggered_by: User says "pull BL-042" / "refresh from Linear"
+steps:
+  1. Read items/<id>.toon → get [LINKS].external_id
+  2. Fetch current state from tracker
+  3. Show diff between local and external
+  4. Ask user per-field which side wins — do NOT auto-merge
+  5. Apply resolved values; append HISTORY line: "<ISO> — sync pull <- <tracker>:<external_id> — fields updated: <list>"
+
+[SYNC_LINK]
+purpose: Associate an existing local item with an existing external item (no creation)
+triggered_by: User says "link BL-042 to AB#1234"
+steps:
+  1. Fetch external item to confirm it exists and is accessible
+  2. Write [LINKS].external_id
+  3. Append HISTORY line: "<ISO> — linked to <tracker>:<external_id>"
+no_fields_are_copied: Linking is just a reference; use SYNC_PULL to bring fields across
+
+[SYNC_CAPTURE]
+purpose: Create a local item FROM an external one (inverse of SYNC_PUSH)
+triggered_by: User says "capture AB#1234 into the backlog"
+steps:
+  1. Fetch external item
+  2. Run OP_ADD (see OPERATIONS.toon) with fields mapped from external
+  3. Set [LINKS].external_id to the source
+  4. Status defaults to `accepted` (already exists externally; presumed reviewed)
+
+[FIELD_MAPPING_TABLE]
+# Default mappings; projects may override by adding a [SYNC_FIELD_OVERRIDES] block in INDEX.toon.
+#
+# local field     → azure-devops           linear             github
+# title           → System.Title           title              title
+# type            → work item type         label:type:<type>  label:type:<type>
+# status          → System.State           state              state (open/closed) + label
+# priority        → Microsoft.VSTS.Common.Priority  priority   label:priority:<P>
+# description     → System.Description     description        body (section)
+# motivation      → (append to desc)       (append to desc)   body (section)
+# acceptance      → System.AcceptanceCriteria  (append to desc)  body (section)
+# theme           → area path              label:theme:<v>    label:theme:<v>
+
+[STATUS_MAPPING]
+# Map local status ↔ external state. Agent reads/writes via this mapping.
+#
+# local          azure-devops      linear              github
+# proposed       New               Backlog             open + label:backlog
+# accepted       Approved          Todo                open + label:accepted
+# in-progress    Active            In Progress         open + label:in-progress
+# done           Closed (Done)     Done                closed + label:done
+# deferred       New + tag:deferred  Backlog + tag:deferred  open + label:deferred
+# rejected       Removed           Canceled            closed + label:wontfix
+
+[CONFLICT_RULES]
+When local and external disagree (detected during SYNC_PULL):
+  - Never auto-merge
+  - Show user a side-by-side diff per field
+  - Default proposal: external wins for `status`; local wins for `description/motivation/acceptance` (these are agent's working notes, not the external source of truth)
+  - User can override any field choice; agent respects user's decision and writes HISTORY line explaining it
+
+[BULK_SYNC_RULES]
+Bulk operations ("sync all open items") require extra care:
+  - Present a plan of what will push / pull / conflict BEFORE doing anything
+  - Get explicit approval for the batch
+  - If ANY item in the batch fails mid-way → stop, report progress, ask whether to retry or abort
+  - Never exceed 10 API calls per minute to the external tracker; throttle if needed

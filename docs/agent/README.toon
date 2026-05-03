@@ -1,0 +1,44 @@
+[META]
+framework: claude-framework
+file_id: agent.README
+class: custom
+version: 1.0.0
+
+[OVERVIEW]
+purpose: Index of agent documentation for OpenGL Engine project
+audience: Claude agent (compact, modular, TOON-formatted)
+load_strategy: Read CLAUDE.md first, then load only files needed for current task
+
+[PROJECT_FILES]
+# Custom files — project-specific knowledge
+PROJECT.toon: Project overview, modules, current status
+ARCHITECTURE.toon: Layer hierarchy, module interactions, render pipeline, ECS
+CONSTRAINTS.toon: 19 hard rules (memory, logging, code style, ECS, resources)
+CODE_CONVENTIONS.toon: Naming, style, patterns specific to codebase
+QUICK_LINKS.toon: Fast navigation to important files and concepts
+
+[FRAMEWORK_MODULES]
+# Universal files — framework-managed (do not edit, will be overwritten on patch)
+learning/: Self-learning system (7 files) — when/how/where to update docs
+delegation/: Subagent delegation rules (6 files) — when and how to route work
+workflow/: Mandatory dev process (8 files) — DISCOVER → PLAN → CONFIRM → IMPLEMENT → VERIFY → REPORT
+backlog/: Deferred-work queue (5 files + INDEX.toon) — track tasks to do later
+
+[LOAD_ORDER]
+1. CLAUDE.md (root) — critical rules and pointers
+2. PROJECT.toon — what this project is
+3. Task-specific:
+   - Coding: ARCHITECTURE.toon + CONSTRAINTS.toon + CODE_CONVENTIONS.toon
+   - Documenting: learning/ files
+   - Implementing feature: workflow/ files
+   - Multi-step task: delegation/ files
+   - Capturing follow-up: backlog/ files
+4. QUICK_LINKS.toon — when looking for specific files
+
+[EPIC_TRACKING]
+location: docs/epics/
+index: docs/epics/INDEX.md
+language: Russian (epic descriptions, motivation, AC)
+note: Epic system pre-dates the framework's backlog/ module. Treat docs/epics/ as
+      the authoritative source for large work items; backlog/ is for short-lived
+      follow-ups and side-quests captured during sessions.

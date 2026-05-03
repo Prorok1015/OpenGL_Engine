@@ -1,0 +1,45 @@
+[META]
+framework: claude-framework
+file_id: delegation.DELEGATION
+class: universal
+version: 1.0.0
+
+[DELEGATION]
+overview: Automatic decomposition of tasks into subagents to save context tokens and route work by cost
+purpose: Main agent stays focused on synthesis; cheap/mechanical work goes to cheaper models; large tool outputs never pollute main context
+mechanism: Before starting any task, main agent checks triggers → picks model via routing matrix → spawns subagent with self-contained prompt and response budget → integrates summary
+
+[CORE_PRINCIPLE]
+The main agent's context is the most expensive resource. Protect it.
+Every tool call that returns >1k tokens, every multi-file scan, every long log read
+is a candidate for delegation. The question is never "can I do this myself" —
+it is "does doing this myself leak tokens the main thread will need later".
+
+[QUICK_START]
+1. Before tool use: Estimate output size and task complexity
+2. Check: Do triggers in TRIGGERS.toon fire? → if yes, delegate
+3. Route: Pick model via ROUTING.toon (haiku for mechanical, sonnet for standard, opus for synthesis)
+4. Shape: Use a template from PATTERNS.toon; always set a response word-budget
+5. Filter: Confirm not in ANTI_PATTERNS.toon
+6. Spawn: Call Agent() with model, self-contained prompt, and budget
+7. Integrate: Read subagent summary; do NOT re-do work it already did
+
+[DOCUMENTATION_STRUCTURE]
+Small modular files in docs/agent/delegation/:
+  → TRIGGERS.toon          When delegation is required (criteria with thresholds)
+  → ROUTING.toon           Model↔task matrix (haiku / sonnet / opus)
+  → PATTERNS.toon          Ready-to-use Agent() invocation templates
+  → ANTI_PATTERNS.toon     When NOT to delegate (overhead > savings)
+  → BUDGETS.toon           Token/cost thresholds and response-length rules
+
+[WHY_THIS_MATTERS]
+- Context window is finite; once polluted with raw tool output, later tasks degrade
+- Haiku is ~5× cheaper than Sonnet; mechanical work routed to Haiku is a pure win
+- Independent subtasks run in parallel → wall-clock wins
+- Subagent summaries are naturally terse → the main thread retains only decisions, not logs
+
+[NEXT_STEPS]
+Start here: → TRIGGERS.toon (learn when to delegate)
+Then: → ROUTING.toon (learn which model for which task)
+Then: → PATTERNS.toon (copy-paste-ready invocations)
+Finally: → BUDGETS.toon (enforce response budgets)

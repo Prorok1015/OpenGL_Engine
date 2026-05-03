@@ -1,3 +1,9 @@
+[META]
+framework: claude-framework
+file_id: learning.HOW_TO_UPDATE
+class: universal
+version: 1.0.0
+
 [HOW_TO_UPDATE]
 overview: Step-by-step process for updating documentation
 principle: Small edits, clear commits, no breaking changes
@@ -30,7 +36,7 @@ process:
   3. If found: LINK instead of duplicate
   4. If found but outdated: UPDATE existing
   5. If new: ADD as new entry
-result: No duplicate knowledge (save tokens)
+result: No duplicate knowledge
 
 [STEP_4_WRITE_UPDATE]
 task: Compose the update
@@ -42,10 +48,10 @@ process:
   5. Add reference if applicable (line number, commit)
 example_good:
   [CONSTRAINT_11]
-  rule: Always validate pointer inputs at C boundary
-  why: FFI is untrusted (from mirage_api.cpp line 42)
+  rule: All FFI functions validate ALL pointer inputs
+  why: C boundary is untrusted
   pattern: if (!ptr || !size) return STATUS_INVALID;
-
+  source: bindings/ffi.cpp code review
 example_bad:
   "FFI functions should probably validate inputs maybe"
 
@@ -76,29 +82,30 @@ format:
   Source: [where did you find this info?]
   File: [which file updated?]
 
-  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+  Co-Authored-By: Claude <noreply@anthropic.com>"
 
-[type] options:
+type_options:
   - [constraint] for CONSTRAINTS.toon additions
   - [arch] for ARCHITECTURE.toon changes
-  - [conventions] for CODE_CONVENTIONS.toon updates
-  - [links] for QUICK_LINKS.toon changes
+  - [project] for PROJECT.toon updates
+  - [module] for module-level details
   - [rule] for CLAUDE.md changes
   - [fix] for error corrections
+  - [structure] for PROJECT_STRUCTURE.md changes
 
-examples_commit:
-  git commit -m "docs: [constraint] add frame allocator rule
+example_commit:
+  git commit -m "docs: [constraint] add FFI validation rule
 
-  Source: code review of render_packet.cpp
+  Source: code review of bindings/ffi.cpp
   File: docs/agent/CONSTRAINTS.toon
 
-  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+  Co-Authored-By: Claude <noreply@anthropic.com>"
 
 [STEP_8_DOCUMENT_SOURCE]
 task: Always record where info came from
 sources_valid:
   - "User: explicit mention of rule"
-  - "Code: line X in file Y"
+  - "Code: line X in file Y (commit hash if known)"
   - "Discovery: code analysis, verified in N locations"
   - "Finding: from code review, present in implementation"
 sources_invalid:

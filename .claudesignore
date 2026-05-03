@@ -38,6 +38,12 @@ docs/human/
 *.bak
 .claude/worktrees/
 
+# Workplans: active state lives here; archived plans should not load into context
+.claude/workplan/archive/
+
+# Backlog archive should not load into agent context by default
+docs/agent/backlog/archive/
+
 # Third-party (submodules are in source control)
 lib3dparty/
 

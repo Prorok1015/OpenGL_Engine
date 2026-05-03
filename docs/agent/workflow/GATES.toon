@@ -1,0 +1,94 @@
+[META]
+framework: claude-framework
+file_id: workflow.GATES
+class: universal
+version: 1.0.0
+
+[GATES]
+overview: Confirmation gates — points in the workflow where the agent MUST stop and request explicit user approval
+principle: A gate is a checkpoint, not a suggestion. Silence is not approval. "Sounds reasonable" is not approval. Only explicit "yes / proceed / go ahead" passes the gate.
+
+[HARD_GATE_1_PLAN_APPROVAL]
+location: End of PHASES Phase 3 (CONFIRM)
+trigger: ALWAYS — every non-trivial task has this gate (see ESCAPE_HATCH.toon for the few exceptions)
+what_to_ask: Present the full plan, then ask: "Proceed with this plan? [yes / amend / reject]"
+waiting_behavior:
+  - Do NOT start implementation while waiting
+  - Do NOT "prepare" files in anticipation
+  - Do NOT read more files "to be ready"
+  - Answer any follow-up questions, then re-ask
+what_counts_as_approval:
+  - "yes" / "go" / "proceed" / "approved" / "LGTM" / "ok let's do it"
+what_does_NOT_count:
+  - Silence
+  - "Sounds good" followed by concerns
+  - "I think so"
+  - "Maybe"
+  - "Whatever you think is best" — this is the user deferring, not approving; push back and ask them to decide
+
+[HARD_GATE_2_PUBLIC_API_SHAPE]
+location: During Phase 3, if the plan introduces or changes a public API
+trigger: New exported function / class / HTTP route / CLI flag / config key / database schema / event shape
+what_to_ask: Present the API shape as a separate, focused question: "Here is the API signature: <signature>. Is this correct? [yes / revise]"
+why: Public APIs are harder to change later than internal code. Getting explicit sign-off on the shape prevents expensive reversals.
+
+[HARD_GATE_3_DESTRUCTIVE_OR_WIDE_BLAST_RADIUS]
+location: During Phase 3, if the plan includes ANY of the following
+triggers:
+  - Deleting files or directories
+  - Deleting/dropping database columns, tables, indexes
+  - Force-pushing, rewriting git history, rebasing shared branches
+  - Modifying CI/CD pipelines
+  - Adding or removing dependencies (new `npm install`, `pip install`, new submodule)
+  - Changing permissions / roles / secrets
+  - Running migrations on user data
+  - Renaming files or symbols (see REFACTOR.toon RULE_6)
+  - Mass find-and-replace across >5 files
+what_to_ask: Explicitly call out the destructive/wide action as its own question. "This plan will <action>. Confirm explicitly: <yes / no>"
+special_rule: Get confirmation PER destructive action if the plan contains multiple
+
+[HARD_GATE_4_MID_IMPLEMENTATION_DEVIATION]
+location: Inside Phase 4 (IMPLEMENT) when reality diverges from the plan
+trigger: ANY of the following discovered mid-implementation
+  - A constraint the plan missed
+  - An error the plan didn't anticipate
+  - A file that needs changes beyond what the plan listed
+  - A rename / deletion / new dependency not in the plan
+  - A realization that the approach won't work
+what_to_do:
+  - STOP immediately. Do not push through.
+  - Return to PLAN phase with the new information
+  - Re-run CONFIRM gate with the amended plan
+why: "I'll adjust as I go" is how approved plans silently become unapproved ones
+
+[HARD_GATE_5_BEFORE_IRREVERSIBLE_ACTION]
+location: Just before executing an irreversible action, even if previously approved in the plan
+trigger: The specific action is about to run (not just approved in principle)
+examples:
+  - About to run `git push --force`
+  - About to run a production migration
+  - About to delete files that aren't tracked by git
+  - About to send a message / open a PR / publish anything externally visible
+what_to_do: Re-confirm at the point of execution, even if the plan was approved. "About to <action> — confirm? [yes / abort]"
+rationale: Plan approval is conditional; the final trigger pull is its own decision
+
+[SOFT_GATE_1_UNKNOWN_CONVENTION]
+location: In DISCOVER or PLAN when you can't determine the project's convention from evidence
+trigger: No existing similar pattern found, or conflicting patterns exist
+what_to_do: Ask the user rather than guess. "I don't see an existing pattern for X. Prefer A or B?"
+why: Guessing produces code that doesn't match the project's style; a 5-second question prevents a 30-minute rework
+
+[SOFT_GATE_2_AMBIGUOUS_REQUEST]
+location: In DISCOVER when the user's request has plausible multiple interpretations
+trigger: Task could mean 2+ different things, and the wrong interpretation would waste significant work
+what_to_do: State the interpretations back and ask. "I read this as either A or B. Which?"
+why: Cheaper to ask than to rewrite
+
+[GATE_CHECKLIST_BEFORE_CODING]
+Every time you're about to write production code, answer:
+  - [ ] Is there an approved plan covering exactly this change?
+  - [ ] Did the user explicitly approve, not just acknowledge?
+  - [ ] Are there any hard-gate triggers I haven't cleared?
+  - [ ] If this is an ESCAPE_HATCH case, does it truly match the criteria (not a rationalization)?
+
+If ANY answer is "no" or "not sure" → do NOT write code. Return to the appropriate phase or gate.

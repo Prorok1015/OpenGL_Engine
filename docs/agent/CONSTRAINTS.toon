@@ -1,3 +1,9 @@
+[META]
+framework: claude-framework
+file_id: CONSTRAINTS
+class: custom
+version: 1.0.0
+
 [CONSTRAINTS_MEMORY]
 [CONSTRAINT_1]
 rule: Never store pointers from frame_allocator across frames

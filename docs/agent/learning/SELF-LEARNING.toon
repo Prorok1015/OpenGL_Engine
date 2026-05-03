@@ -1,29 +1,37 @@
+[META]
+framework: claude-framework
+file_id: learning.SELF-LEARNING
+class: universal
+version: 1.0.0
+
 [SELF_LEARNING]
-overview: Agent self-improvement mechanism for OpenGL Engine project
-purpose: Accumulate knowledge across sessions via documentation updates
+overview: Agent self-improvement mechanism via documentation updates
+purpose: Accumulate project knowledge across sessions
 mechanism: When agent discovers rules → update docs → commit → next session reads updated docs
 
 [QUICK_START]
 1. During work: Discover a rule or get one from user
 2. Check: Is it worth documenting? (see WHEN_TO_UPDATE.toon)
-3. Find: Which file to update (see FILES_REFERENCE.toon)
-4. Update: Follow process (see HOW_TO_UPDATE.toon)
-5. Commit: Make git commit with [docs] prefix
+3. Filter: Does it hit the veto list? (see WHEN_NOT_TO_UPDATE.toon)
+4. Find: Which file to update (see FILES_REFERENCE.toon)
+5. Update: Follow process (see HOW_TO_UPDATE.toon)
+6. Verify: Run safety checks (see GUARDRAILS.toon)
+7. Commit: Make git commit with [docs] prefix
 
 [DOCUMENTATION_STRUCTURE]
 Small modular files in docs/agent/learning/:
   → WHEN_TO_UPDATE.toon        Criteria for documentation updates
-  → WHEN_NOT_TO_UPDATE.toon    What NOT to document
+  → WHEN_NOT_TO_UPDATE.toon    What NOT to document (veto list)
   → FILES_REFERENCE.toon       Which file for what information
   → HOW_TO_UPDATE.toon         Step-by-step update process
-  → EXAMPLES.toon              Real update examples
+  → EXAMPLES.toon              Concrete update examples
   → GUARDRAILS.toon            Safety checks and filters
 
 [BENEFITS]
-- No huge documents to read (load only what needed)
+- No huge documents to load (read only what needed)
 - Modular knowledge (each topic in separate file)
 - Easy updates (edit small targeted files)
-- Self-documenting (links show the structure)
+- Self-documenting (cross-links show structure)
 - Knowledge accumulation (each session improves docs)
 
 [NEXT_STEPS]

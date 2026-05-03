@@ -1,0 +1,74 @@
+[META]
+framework: claude-framework
+file_id: workflow.FEATURE
+class: universal
+version: 1.0.0
+
+[FEATURE]
+overview: Rules specific to implementing a new feature
+applies_when: User asks to "add / build / implement / create" something that doesn't exist yet
+follows: PHASES.toon (all six phases apply; this file adds feature-specific constraints)
+
+[RULE_1_FIND_EXISTING_PATTERN_FIRST]
+what: Before designing anything, search the project for existing features that solve a similar problem
+why: Most projects already have idiomatic patterns. Reinventing breaks consistency and creates duplication.
+how:
+  - In DISCOVER phase, grep/explore for similar features (e.g. for "add a new API endpoint" → find how other endpoints are structured)
+  - Copy the structural pattern; only deviate when you can articulate why
+  - Cite the reference in your plan: "Following the pattern used in <file>"
+
+[RULE_2_MVP_FIRST]
+what: The first version implements the minimum that satisfies the stated need
+why: Scope creep is the #1 cause of plans that fail confirmation or produce buggy code
+how:
+  - In PLAN phase, explicitly list "Out of scope" items — things the user DIDN'T ask for
+  - Resist symmetry: if user asks for "read", don't design "read + write" unless they asked
+  - Resist configurability: hardcode values that have only one real use case today; don't add flags for hypothetical needs
+
+[RULE_3_NO_PREMATURE_ABSTRACTION]
+what: Three similar lines of code beats one clever abstraction
+why: Abstraction locks in a shape before you know the right shape. Duplication is cheap; wrong abstraction is expensive.
+how:
+  - Don't introduce a helper / base class / factory / strategy on the FIRST occurrence of a pattern
+  - Wait until you have ≥3 real instances before extracting
+  - If the plan includes "new utility module / helper / abstraction" — justify with 3 concrete call sites
+
+[RULE_4_PUBLIC_API_REQUIRES_EXTRA_CONFIRMATION]
+what: Any change that introduces or modifies a public API (exported function, HTTP route, schema, CLI flag) is a GATE (see GATES.toon)
+why: Public APIs are contracts. Getting them wrong forces painful migrations later.
+how:
+  - In PLAN phase, call out the new API surface explicitly
+  - In CONFIRM phase, present API shape to user as a separate question: "Is this API signature correct?"
+  - Do not implement until the specific API shape is approved (not just "the overall plan")
+
+[RULE_5_TESTS_MATCH_PROJECT_STYLE]
+what: Follow the project's existing test conventions — don't introduce a new framework or style
+why: Mixed test styles are a maintenance tax; reviewer cognitive load goes up
+how:
+  - In DISCOVER phase, find existing tests for similar code; note the framework and style
+  - If the project has no tests for similar code — ask the user: "Add tests? Which style?" Don't assume.
+  - Integration tests go where integration tests live; unit tests where unit tests live
+
+[RULE_6_FEATURE_FLAGS_ONLY_WHEN_ASKED]
+what: Don't add a feature flag, config toggle, or "backwards compatibility shim" unless the user asks for it
+why: These are liabilities (extra code paths, extra testing); they belong in the plan only if the user wants them
+how:
+  - If you think one might be needed → raise it as a question during CONFIRM, don't add it silently
+  - "Just change the code" is the default
+
+[RULE_7_NO_FUTURE_PROOFING]
+what: Don't design for requirements the user hasn't stated
+why: YAGNI. Future requirements usually look different than you guess.
+how:
+  - If you find yourself writing "in case we later want to..." → delete that code
+  - Parameters / hooks / extension points with no current consumer are dead weight
+  - Plugin systems, event buses, strategy patterns require ≥2 real consumers to justify
+
+[FEATURE_PLAN_CHECKLIST]
+Before leaving PLAN phase, confirm:
+  - [ ] Referenced an existing similar pattern (or verified none exists)
+  - [ ] MVP scope listed; "Out of scope" section is non-empty
+  - [ ] No speculative abstractions
+  - [ ] Public API surface called out explicitly (or confirmed: no new public API)
+  - [ ] Test approach matches project conventions
+  - [ ] No feature flags / toggles / shims unless user requested

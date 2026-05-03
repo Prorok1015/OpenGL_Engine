@@ -1,3 +1,9 @@
+[META]
+framework: claude-framework
+file_id: QUICK_LINKS
+class: custom
+version: 1.0.0
+
 [QUICK_LINKS]
 overview: Fast navigation to important files and concepts
 

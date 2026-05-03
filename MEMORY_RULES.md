@@ -1,7 +1,11 @@
+<!-- framework-meta: framework=claude-framework class=parameterized target=MEMORY_RULES.md version=1.0.0 -->
+<!-- The line above is a framework marker. Do NOT remove it. It tells PATCH_PROMPT which template produced this file. -->
+
 # Memory Management Rules — OpenGL Engine
 
-**Purpose**: Govern what agents save to cross-session memory (~240 tokens, <0.2% context)  
+**Purpose**: Govern what agents save to cross-session memory (~240 tokens, <0.2% context)
 **Benefit**: Accumulate knowledge between sessions without token bloat
+**Relation to built-in memory**: This file is a *project-level policy layer* on top of the agent harness's built-in auto-memory system. Built-in rules (user/feedback/project/reference types) still apply; this file adds project-specific guidance.
 
 ---
 
