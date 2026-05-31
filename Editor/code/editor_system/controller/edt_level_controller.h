@@ -3,6 +3,7 @@
 #include "resources/res_resource_handle.hpp"
 #include "desc_base.hpp"
 #include <string>
+#include <vector>
 #include <functional>
 #include <boost/json/object.hpp>
 
@@ -15,6 +16,28 @@ namespace edt
 	struct shared_state;
 	class scene_editor;
 	class world_controller;
+
+	// Derives the parallel multi-world arrays (names, per-world system lists) from the
+	// ordered world list, keeping all three shared_state arrays index-aligned.
+	// The world list is the single source of truth for world order (desc order), so deriving
+	// names/systems from it avoids the hash-order desync that scn::level::for_each_world
+	// (backed by an unordered_map) would otherwise introduce when there are >=2 worlds.
+	// Templated on any "world-like" type exposing get_name() and get_systems().
+	template<typename World>
+	void derive_world_arrays(
+		const std::vector<World>& worlds,
+		std::vector<std::string>& out_names,
+		std::vector<std::vector<std::string>>& out_systems)
+	{
+		out_names.clear();
+		out_systems.clear();
+		out_names.reserve(worlds.size());
+		out_systems.reserve(worlds.size());
+		for (const auto& w : worlds) {
+			out_names.emplace_back(w.get_name());
+			out_systems.push_back(w.get_systems());
+		}
+	}
 
 	class level_controller
 	{

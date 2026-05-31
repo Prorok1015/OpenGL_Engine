@@ -71,11 +71,7 @@ void edt::level_controller::new_level()
 	m_state.level_name = "new_level";
 
 	m_state.level_tag = res::tag{};
-	scn::level& lvl = lvl_mgr->get_level();
-	m_state.world_names.clear();
-	lvl.for_each_world([&](scn::world& w) {
-		m_state.world_names.push_back(std::string(w.get_name()));
-	});
+	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
 	m_state.active_world_idx = 0;
 	m_state.is_dirty = true;
@@ -220,12 +216,7 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
 		if (auto p = m_state.level_name.rfind('/');  p != std::string::npos) m_state.level_name = m_state.level_name.substr(p + 1);
 
-		scn::level& lvl = level_manager->get_level();
-		m_state.world_names.clear();
-		lvl.for_each_world([&](scn::world& w) {
-			m_state.world_names.push_back(std::string(w.get_name()));
-		});
-
+		// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 		m_state.active_world_idx = 0;
 		m_state.is_dirty = false;
 		m_world_ctrl.switch_to_world(0);
@@ -304,10 +295,13 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res)
 {
 	m_state.world_descs.clear();
+	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();
 	if (!level_res.is_ready()) return;
+	// world_descs is the single ordered source of truth (desc order); names and systems
+	// are derived from it so all three parallel arrays stay index-aligned.
 	for (const auto& wh : level_res->get_worlds()) {
 		m_state.world_descs.push_back(*wh);
-		m_state.worlds_systems_list.push_back(wh->get_systems());
 	}
+	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
 }
