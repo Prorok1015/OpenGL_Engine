@@ -1,22 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
-if(NOT ENGINE_BOOST_NO_LIB)
-    include(FetchContent)
-    FetchContent_Declare(
-    Boost
-    URL https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz
-    URL_MD5 893b5203b862eb9bbd08553e24ff146a
-    DOWNLOAD_EXTRACT_TIMESTAMP ON
-    )
-    #set(BOOST_INCLUDE_LIBRARIES json hana program_options asio test)
-    FetchContent_MakeAvailable(Boost)
-    file(GLOB_RECURSE BOOST_NATVIS_FILES CONFIGURE_DEPENDS "${boost_SOURCE_DIR}/libs/*.natvis")
-    message(STATUS "Found Boost Natvis files: ${BOOST_NATVIS_FILES}")
-    foreach(natvis_file ${BOOST_NATVIS_FILES})
-        get_filename_component(filename "${natvis_file}" NAME)
-        configure_file("${natvis_file}" "${CMAKE_SOURCE_DIR}/lib3dparty/natvis/${filename}" COPYONLY)
-    endforeach()
-endif()
+# Boost (FetchContent + slim component set) is configured in cmake/ThirdParty.cmake,
+# included once at the root before this directory is added (EPIC-41 US-41-1).
 
 #components
 add_subdirectory("core")

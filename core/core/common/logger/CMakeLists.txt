@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(engine_logger)
 
-# spdlog: use std::format (C++20), no fmtlib dependency
-set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "" FORCE)
+# spdlog SPDLOG_USE_STD_FORMAT option lives in cmake/ThirdParty.cmake (EPIC-41 US-41-1).
 add_subdirectory(${THIRD_PARTY_PATH}/spdlog ${CMAKE_CURRENT_BINARY_DIR}/spdlog)
 
 add_library(engine_logger STATIC "engine_log.cpp")

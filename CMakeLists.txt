@@ -18,6 +18,11 @@ set(THIRD_PARTY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib3dparty")
 set(ENGINE_CORE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/core")
 set(SE_PROJECT_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Centralized third-party configuration (cache vars, slim Boost) — must run before
+# any add_subdirectory so every submodule sees consistent options (EPIC-41 US-41-1).
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(ThirdParty)
+
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
 # editor_system re-configure core via add_subdirectory (EPIC-49 US-49-2).
