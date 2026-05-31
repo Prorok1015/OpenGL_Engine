@@ -56,7 +56,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 	ensure_resources(drv);
 	if (!m_shader) return;
 
-	auto& txm_manager = rnd::get_system().get_texture_manager();
+	auto& txm_manager = *context.textures;
 	rnd::global_params common_matrix;
 
 	for (const auto& packet : packets) {
@@ -84,7 +84,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
 		common_matrix.time = 0.f;
 
-		rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
+		context.shaders->update_global_uniform(common_matrix);
 		drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
 			packet.camera.viewport.y, vp_width, vp_height});
 

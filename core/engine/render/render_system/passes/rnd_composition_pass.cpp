@@ -39,7 +39,7 @@ void composition_pass::execute(frame_context &context,
 
   auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
-  auto &txm_manager = rnd::get_system().get_texture_manager();
+  auto &txm_manager = *context.textures;
 
   for (const auto& packet : packets) {
     int vp_width = packet.camera.viewport.z;

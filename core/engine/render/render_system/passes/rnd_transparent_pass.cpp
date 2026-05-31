@@ -19,12 +19,12 @@ void transparent_pass::execute(frame_context &context,
   }
   auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
-  auto &txm_manager = rnd::get_system().get_texture_manager();
-  auto &geom_manager = rnd::get_system().get_geom_manager();
+  auto &txm_manager = *context.textures;
+  auto &geom_manager = *context.geometry;
   rnd::global_params common_matrix;
 
   for (const auto& packet : packets) {
-    rnd::get_system().get_shader_manager().update_global_sun(
+    context.shaders->update_global_sun(
         packet.lights.to_gpu_params());
     if (packet.transparent_draws.empty())
       continue;
@@ -99,7 +99,7 @@ void transparent_pass::execute(frame_context &context,
     common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
     common_matrix.time = (float)Timer::now();
 
-    rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
+    context.shaders->update_global_uniform(common_matrix);
 
     for (const auto &dc : packet.transparent_draws) {
       auto *va = geom_manager.require_geometry(dc.geometry_tag);
@@ -108,7 +108,7 @@ void transparent_pass::execute(frame_context &context,
 
       rnd::configure_pass(dc.material);
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
-          if (auto* skm = rnd::get_system().get_skinning_manager()) {
+          if (auto* skm = context.skinning) {
               skm->bind_skin(&drv, dc.skinning_tag, *dc.bone_matrices);
           }
       }

@@ -13,6 +13,14 @@ rnd::render_system& rnd::get_system()
 	return *p_render_system;
 }
 
+void rnd::render_system::begin_frame(frame_context& context)
+{
+	context.textures = &texture_manager;
+	context.shaders  = &shader_manager;
+	context.geometry = &geom_manager;
+	context.skinning = m_skinning_manager; // nullable
+}
+
 rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d)
 	: drv(std::move(driver))
 	, shader_manager(drv.get())

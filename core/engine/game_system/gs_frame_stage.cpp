@@ -30,6 +30,11 @@ void gs::register_core_frame_stages(frame_stage_registry& registry)
 		PROFILE_SCOPE("PollEvents");
 		c.storage.require<wnd::window_system>().pool_events();
 	});
+	// Inject the render managers into the frame_context before extract(30)/render(40) read them
+	// (EPIC-49 US-49-6).
+	registry.add_stage(28, [](frame_step_context& c) {
+		c.storage.require<rnd::render_system>().begin_frame(c.render);
+	});
 	registry.add_stage(20, [](frame_step_context& c) {
 		c.storage.require<scn::level_manager>().update(c.dt);
 	});

@@ -42,6 +42,11 @@ namespace rnd
 		void render() const;
 		void render_frame(frame_context& context) const;
 
+		// Inject the render managers into the per-frame context so the scene extractor and the
+		// render passes read them from frame_context instead of the rnd::get_system() singleton
+		// (EPIC-49 US-49-6). Call once per frame before build_frame / render_frame.
+		void begin_frame(frame_context& context);
+
 		void add_render_pass(std::shared_ptr<render_pass_interface> pass) {
 			render_passes.push_back(pass);
 		}

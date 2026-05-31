@@ -16,8 +16,8 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
 
   auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
-  auto &txm_manager = rnd::get_system().get_texture_manager();
-  auto &geom_manager = rnd::get_system().get_geom_manager();
+  auto &txm_manager = *context.textures;
+  auto &geom_manager = *context.geometry;
   rnd::global_params common_matrix;
 
   for (const auto &packet : packets) {
@@ -64,7 +64,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     common_matrix.projection = packet.camera.projection_matrix;
     common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
 
-    rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
+    context.shaders->update_global_uniform(common_matrix);
 
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
@@ -104,7 +104,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       rnd::configure_pass(object_shader);
 
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
-          if (auto* skm = rnd::get_system().get_skinning_manager()) {
+          if (auto* skm = context.skinning) {
               skm->bind_skin(&drv, dc.skinning_tag, *dc.bone_matrices);
           }
       }

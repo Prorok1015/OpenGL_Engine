@@ -13,6 +13,9 @@
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
+    // Managers are injected into frame_context by render_system::begin_frame (frame stage 28),
+    // which runs before this extractor (stage 30). Catch a missing/mis-ordered injection early.
+    ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
     auto& level = m_level_manager.get_level();
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
@@ -58,7 +61,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.camera.tp_reveal_target = cam.tp_reveal_target;
             packet.camera.render_priority = 0;
 
-            auto& tex_mgr = rnd::get_system().get_texture_manager();
+            auto& tex_mgr = *context.textures;
 
             auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
             auto mesh_count = meshes_view.size_hint();

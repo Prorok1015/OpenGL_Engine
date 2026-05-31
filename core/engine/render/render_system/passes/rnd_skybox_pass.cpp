@@ -60,7 +60,7 @@ namespace rnd {
 
 		auto& packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
-		auto& txm_manager = rnd::get_system().get_texture_manager();
+		auto& txm_manager = *context.textures;
 		rnd::global_params common_matrix;
 
 		for (const auto& packet : packets) {
@@ -90,7 +90,7 @@ namespace rnd {
 			common_matrix.view = packet.camera.view_matrix;
 			common_matrix.projection = packet.camera.projection_matrix;
 			common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
-			rnd::get_system().get_shader_manager().update_global_uniform(common_matrix);
+			context.shaders->update_global_uniform(common_matrix);
 			drv.set_viewport(glm::ivec4{packet.camera.viewport.x, packet.camera.viewport.y, vp_width, vp_height});
 
 			m_vbo->set_data_ptr(cube_vertices, 8);
