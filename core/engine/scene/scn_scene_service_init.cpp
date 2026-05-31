@@ -10,7 +10,6 @@
 #include "scn_transform_system.h"
 
 
-#include "level/scn_light_extractor.h"
 #include "level/scn_render_data_extractor.h"
 #include "rnd_frame_assembler.h"
 #include "skinning/rnd_skinning_manager.h"
@@ -36,8 +35,8 @@ void scn::scene_init(ds::app_data_storage &store) {
       scn::worldwrap_adapter::INFO, resource, desc_sys);
 
   auto &frame_assembler = store.construct<rnd::frame_assembler>();
-  frame_assembler.add_extractor(std::make_shared<scn::light_extractor>(
-      store.require<scn::level_manager>()));
+  // render_data_extractor builds per-camera packet.lights consumed by the passes;
+  // the former standalone light_extractor wrote a global scene_lights_t that nothing read.
   frame_assembler.add_extractor(std::make_shared<scn::render_data_extractor>(
       store.require<scn::level_manager>()));
 

@@ -1,0 +1,47 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-001
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-001
+title: Normalize RT tags read from camera desc (protocol-less)
+type: bugfix
+status: proposed
+priority: P2
+created: 2026-05-31
+theme: rendering
+
+[DESCRIPTION]
+scn_camera_desc.cpp deserialize wraps JSON strings for color_targets/depth_target/
+tp_accum_target/tp_reveal_target in single-arg res::tag(std::string). Per res_tag.h the
+single-arg ctor parses the protocol via find_first_of("://"); a string WITHOUT a protocol
+yields wrong protocol/path/name slices (a malformed tag that the resolver cannot match).
+So a hand-authored or legacy .desc with a protocol-less RT tag is silently broken.
+
+[MOTIVATION]
+Render targets read from desc must resolve reliably. Today protocol-less RT tags fail to
+resolve (masked by the per-camera RT "legacy fallback"), which is fragile and confusing.
+
+[ACCEPTANCE]
+- RT tag fields read from camera desc resolve correctly whether or not the JSON string
+  includes a "protocol://" prefix.
+- Canonical RT protocol decided (likely memory:// for runtime render targets) and applied
+  consistently — normalize at the desc read site if no protocol is present.
+- Editor-camera RT tags at the source (e.g. __editor_depth_rt) audited for the same issue
+  and normalized where they originate, so serialize/deserialize round-trips cleanly.
+- No regression for RT tags that already carry a protocol.
+
+[OUT_OF_SCOPE]
+- General res::tag ctor redesign (only the camera-desc read path + editor RT sources).
+- Non-RT tag fields.
+
+[LINKS]
+workplan:
+external_id:
+epic:
+related_items:
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow.REFACTOR.out_of_scope (code-review finding #3, deferred at CONFIRM)

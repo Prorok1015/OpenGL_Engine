@@ -42,6 +42,16 @@ namespace scn {
 		std::size_t get_world_count() const { return m_worlds.size(); }
 		bool has_world(const std::string_view name) const { return m_worlds.contains(std::string{ name }); }
 
+		// Smallest non-negative world id not currently in use. Fills gaps left by remove_world,
+		// so ids stay small (the automatic system dispatcher supports world ids 0-4). Prefer this
+		// over get_world_count() when picking an id for a new world — count collides when ids are
+		// non-contiguous (e.g. after a remove).
+		uint32_t acquire_free_world_id() const {
+			uint32_t id = 0;
+			while (m_worlds_by_id.contains(id)) ++id;
+			return id;
+		}
+
 		template<typename Fn>
 		void for_each_world(Fn&& fn) {
 			for (auto& [name, world_ptr] : m_worlds) {

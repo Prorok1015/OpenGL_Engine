@@ -77,7 +77,7 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 
 	// Create transient world in level — NOT registered in shared_state
 	scn::level& lvl = lvl_mgr->get_level();
-	m_world_id = static_cast<uint32_t>(lvl.get_world_count());
+	m_world_id = lvl.acquire_free_world_id();
 	scn::world& world = lvl.create_world(std::string{WORLD_NAME}, m_world_id);
 
 	// Register systems from template

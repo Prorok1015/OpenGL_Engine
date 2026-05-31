@@ -8,7 +8,6 @@
 #include <new>
 #include <stdexcept>
 #include <type_traits>
-#include <ostream>
 #include <utility>
 
 namespace ds
@@ -259,14 +258,4 @@ namespace ds
         }
     };
 
-    template <typename T, std::size_t N>
-    std::ostream& operator<<(std::ostream& os, const fixed_vector<T, N>& v) {
-        os << "[";
-        for (std::size_t i = 0; i < v.size(); ++i) {
-            if (i > 0) os << ", ";
-            os << v[i];
-        }
-        os << "]";
-        return os;
-    }
 }

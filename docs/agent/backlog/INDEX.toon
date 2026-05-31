@@ -6,8 +6,8 @@ version: 1.0.0
 
 [BACKLOG_META]
 project_name: OpenGL Engine & Editor
-next_id_seq: 1
-last_updated: 2026-04-17
+next_id_seq: 2
+last_updated: 2026-05-31
 sync_target: none
 sync_project:
 sync_default_area:
@@ -27,6 +27,14 @@ sync_default_type:
 # priority: P2
 # created: 2026-04-17
 # theme: integrations
+
+[ITEM.BL-001]
+title: Normalize RT tags read from camera desc (protocol-less)
+type: bugfix
+status: proposed
+priority: P2
+created: 2026-05-31
+theme: rendering
 
 [ARCHIVE]
 # Optional. Once [ITEMS] exceeds ~80 entries, agent moves terminal items (done/rejected)
