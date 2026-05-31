@@ -37,7 +37,7 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/unittests/unit_tests.
 
 add_executable(unit_tests unittests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::config_system PRIVATE Boost::unit_test_framework)
+target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::config_system PRIVATE Boost::unit_test_framework)
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)

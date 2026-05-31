@@ -5,9 +5,11 @@ add_library(snk::core ALIAS ${PROJECT_NAME})
 
 file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# PRIVATE: the umbrella provides object code but no longer re-exports its components' headers.
+# Cross-layer consumers compile against snk::core_api instead (EPIC-49 US-49-1/US-49-3).
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PUBLIC snk::common PUBLIC snk::config_system PUBLIC snk::application PUBLIC snk::window PUBLIC snk::resource_system PUBLIC snk::desc_system PUBLIC snk::ecs)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_system PRIVATE snk::application PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::ecs)
 
 # Public contract of the CORE layer (EPIC-49 US-49-3). INTERFACE-only: it carries the curated
 # set of components whose headers upper layers legitimately compile against — NOT drv_opengl

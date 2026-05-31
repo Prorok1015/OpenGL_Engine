@@ -11,5 +11,9 @@ else()
 endif()
 
 add_subdirectory("code/editor_system")
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::config_system)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::config_system)
+# main.cpp bootstraps the module system via the per-layer module-entry headers (core_module.h,
+# engine_module.h) which live at the aggregator roots — exposed only to this bootstrap exe so the
+# api targets stay component-scoped (EPIC-49 US-49-1).
+target_include_directories(${PROJECT_NAME} PRIVATE ${ENGINE_CORE_PATH}/core ${ENGINE_CORE_PATH}/engine)
 

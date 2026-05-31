@@ -7,7 +7,7 @@
 #include "edt_editor_system.h"
 #include "cfg_api.h"
 #include "adapters/scn_model_importer_adapter.h"
-#include "desc/desc_system.h"
+#include "desc_system.h"
 
 #include "rnd_frame_assembler.h"
 #include "level/scn_render_data_extractor.h"

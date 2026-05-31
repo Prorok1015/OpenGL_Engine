@@ -5,9 +5,14 @@ add_library(snk::engine ALIAS ${PROJECT_NAME})
 
 file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# PRIVATE: the umbrella provides aggregated object code but no longer re-exports component
+# headers. Cross-layer consumers compile against snk::engine_api (EPIC-49 US-49-1/US-49-3).
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PUBLIC snk::core PUBLIC snk::render PUBLIC snk::input_system PUBLIC snk::scene PUBLIC snk::game PUBLIC snk::gui)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::core PRIVATE snk::render PRIVATE snk::input_system PRIVATE snk::scene PRIVATE snk::game PRIVATE snk::gui)
+# core_api gives this aggregator's OWN sources (engine_module.cpp etc.) the core headers they
+# include, now that snk::core no longer propagates them.
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::core_api)
 
 # Public contract of the ENGINE layer (EPIC-49 US-49-3). INTERFACE-only: editor_system and a
 # future game_module compile against this, NOT the engine umbrella. Excludes gui_gl_backend

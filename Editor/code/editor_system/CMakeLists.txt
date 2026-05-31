@@ -16,5 +16,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/input"
 )
 
-# core/engine are configured once at the root (EPIC-49 US-49-2); editor_system just consumes `engine`.
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE assimp)
+# snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface
+# (EPIC-49 US-49-1/US-49-3). The umbrella no longer leaks all component headers.
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE assimp)
