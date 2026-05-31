@@ -1,5 +1,6 @@
 #pragma once
 #include "app_loop_service_interface.h"
+#include "gs_frame_stage.h"
 #include <chrono>
 
 namespace edt {
@@ -15,5 +16,6 @@ namespace edt {
 		bool stop_requested = false;
 		float delta_time = 1.0f / 60.0f;
 		std::chrono::steady_clock::time_point previous_time;
+		gs::frame_stage_registry m_stages;
 	};
 }

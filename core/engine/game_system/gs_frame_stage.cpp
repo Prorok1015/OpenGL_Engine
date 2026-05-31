@@ -1,0 +1,46 @@
+#include "gs_frame_stage.h"
+#include <algorithm>
+#include "wnd_window_system.h"
+#include "level/scn_level_manager.h"
+#include "rnd_frame_assembler.h"
+#include "rnd_render_system.h"
+#include "eng_profiler.h"
+
+void gs::frame_stage_registry::add_stage(int order, stage_fn fn)
+{
+	m_stages.push_back({ order, std::move(fn) });
+	m_sorted = false;
+}
+
+void gs::frame_stage_registry::run(frame_step_context& ctx)
+{
+	if (!m_sorted) {
+		std::stable_sort(m_stages.begin(), m_stages.end(),
+			[](const entry& a, const entry& b) { return a.order < b.order; });
+		m_sorted = true;
+	}
+	for (auto& stage : m_stages) {
+		stage.fn(ctx);
+	}
+}
+
+void gs::register_core_frame_stages(frame_stage_registry& registry)
+{
+	registry.add_stage(10, [](frame_step_context& c) {
+		PROFILE_SCOPE("PollEvents");
+		c.storage.require<wnd::window_system>().pool_events();
+	});
+	registry.add_stage(20, [](frame_step_context& c) {
+		c.storage.require<scn::level_manager>().update(c.dt);
+	});
+	registry.add_stage(30, [](frame_step_context& c) {
+		c.storage.require<rnd::frame_assembler>().build_frame(c.render);
+	});
+	registry.add_stage(40, [](frame_step_context& c) {
+		c.storage.require<rnd::render_system>().render_frame(c.render);
+	});
+	registry.add_stage(50, [](frame_step_context& c) {
+		PROFILE_SCOPE("SwapBuffers");
+		c.storage.require<wnd::window_system>().process_windows();
+	});
+}

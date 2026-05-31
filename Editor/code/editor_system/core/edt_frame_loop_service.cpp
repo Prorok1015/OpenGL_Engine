@@ -26,6 +26,18 @@ void edt::edt_loop_service::init(ds::app_data_storage& storage)
 
 	window_system_ref.init_windows_frame_time();
 	previous_time = std::chrono::steady_clock::now();
+
+	gs::register_core_frame_stages(m_stages);
+	// Editor-only stages, slotted into the canonical order: input-delta reset between the level
+	// update (20) and extract (30), GUI render between the 3D render (40) and present (50).
+	m_stages.add_stage(25, [](gs::frame_step_context& c) {
+		if (auto ecs_input = c.storage.require_shared<inp::ecs_input_manager>()) {
+			ecs_input->reset_frame_deltas();
+		}
+	});
+	m_stages.add_stage(45, [](gs::frame_step_context& c) {
+		c.storage.require<gui::gui_system>().render();
+	});
 }
 
 void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
@@ -38,31 +50,11 @@ void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 	std::chrono::duration<float> duration = current_time - previous_time;
 	previous_time = current_time;
 
-	auto& window_system_ref = storage.require<wnd::window_system>();
-	{
-		PROFILE_SCOPE("PollEvents");
-		window_system_ref.pool_events();
-	}
-
-	storage.require<scn::level_manager>().update(duration);
-
-	if (auto ecs_input = storage.require_shared<inp::ecs_input_manager>()) {
-		ecs_input->reset_frame_deltas();
-	}
-
 	rnd::frame_context context;
+	gs::frame_step_context ctx{ storage, duration, context };
+	m_stages.run(ctx);
 
-	storage.require<rnd::frame_assembler>().build_frame(context);
-
-	storage.require<rnd::render_system>().render_frame(context);
-
-	storage.require<gui::gui_system>().render();
-
-	{
-		PROFILE_SCOPE("SwapBuffers");
-		window_system_ref.process_windows();
-	}
-	stop_requested = window_system_ref.is_stop_running();
+	stop_requested = storage.require<wnd::window_system>().is_stop_running();
 }
 
 bool edt::edt_loop_service::should_stop() const
