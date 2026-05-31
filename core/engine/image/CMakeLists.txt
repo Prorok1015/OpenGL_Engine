@@ -12,4 +12,4 @@ target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE stb_image PRIVATE e
 project(image_test)
 add_executable(image_test "test/Source.cpp")
 target_compile_definitions(image_test PRIVATE TESTLIB=1)
-target_link_libraries(image_test image)
+target_link_libraries(image_test PRIVATE image)

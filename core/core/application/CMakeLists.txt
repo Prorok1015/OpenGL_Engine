@@ -6,6 +6,8 @@ file(GLOB_RECURSE SE_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/
 target_sources(${PROJECT_NAME} PRIVATE ${SE_APP_SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} common)
-
-target_link_libraries(${PROJECT_NAME} Boost::json)
+target_link_libraries(${PROJECT_NAME} PRIVATE common)
+# Boost::json is not referenced by any application header or source (the app_data_storage
+# the EPIC-41 AC assumed no longer exists) — keep it PRIVATE, not PUBLIC. Candidate for
+# removal as a follow-up; left linked here to stay strictly behavior-preserving.
+target_link_libraries(${PROJECT_NAME} PRIVATE Boost::json)
