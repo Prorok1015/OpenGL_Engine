@@ -3,69 +3,15 @@
 #include <entt/entt.hpp>
 #include "scn_model.h"
 #include "scn_mesh_nodes.hpp"
+#include "scn_animation_job.h" // real animation-sampling helpers under test
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <algorithm>
 #include <vector>
 
-// Copied from scn_animation_job.cpp for unit testing (internal linkage in original)
+// These tests exercise the REAL animation-sampling helpers (scn::find_keyframe_index,
+// scn::calc_interpolated_*) declared in scn_animation_job.h — no copied logic.
 namespace {
-
-template<class T>
-std::size_t find_keyframe_index(const std::vector<T>& arr, float time)
-{
-	if (arr.size() < 2) return 0;
-
-	auto it = std::upper_bound(arr.begin(), arr.end(), time,
-		[](float t, const T& key) { return t < key.time; });
-
-	if (it == arr.begin()) return 0;
-	std::size_t idx = static_cast<std::size_t>(std::distance(arr.begin(), it)) - 1;
-	if (idx >= arr.size() - 1) idx = arr.size() - 2;
-	return idx;
-}
-
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
-{
-	if (anim.scale_keys.empty()) { Out = glm::vec3{1.0f}; return; }
-	if (anim.scale_keys.size() == 1) {
-		Out = anim.scale_keys[0].value;
-		return;
-	}
-	std::size_t i = find_keyframe_index(anim.scale_keys, AnimationTimeTicks);
-	float t1 = anim.scale_keys[i].time;
-	float t2 = anim.scale_keys[i + 1].time;
-	float factor = std::clamp((AnimationTimeTicks - t1) / (t2 - t1), 0.0f, 1.0f);
-	Out = anim.scale_keys[i].value + factor * (anim.scale_keys[i + 1].value - anim.scale_keys[i].value);
-}
-
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
-{
-	if (anim.pos_keys.empty()) { Out = glm::vec3{0.0f}; return; }
-	if (anim.pos_keys.size() == 1) {
-		Out = anim.pos_keys[0].value;
-		return;
-	}
-	std::size_t i = find_keyframe_index(anim.pos_keys, AnimationTimeTicks);
-	float t1 = anim.pos_keys[i].time;
-	float t2 = anim.pos_keys[i + 1].time;
-	float factor = std::clamp((AnimationTimeTicks - t1) / (t2 - t1), 0.0f, 1.0f);
-	Out = anim.pos_keys[i].value + factor * (anim.pos_keys[i + 1].value - anim.pos_keys[i].value);
-}
-
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim)
-{
-	if (anim.rotate_keys.empty()) { Out = glm::quat{1.0f, 0.0f, 0.0f, 0.0f}; return; }
-	if (anim.rotate_keys.size() == 1) {
-		Out = anim.rotate_keys[0].value;
-		return;
-	}
-	std::size_t i = find_keyframe_index(anim.rotate_keys, AnimationTimeTicks);
-	float t1 = anim.rotate_keys[i].time;
-	float t2 = anim.rotate_keys[i + 1].time;
-	float factor = std::clamp((AnimationTimeTicks - t1) / (t2 - t1), 0.0f, 1.0f);
-	Out = glm::slerp(anim.rotate_keys[i].value, anim.rotate_keys[i + 1].value, factor);
-}
 
 // Helper: build a simple skeleton hierarchy in registry
 //   skeleton_root (skeleton_component, bone_matrices_component)
@@ -267,7 +213,7 @@ BOOST_AUTO_TEST_CASE(EmptyKeys)
 {
 	std::vector<scn::animation_pos_key> keys;
 	// find_keyframe_index returns 0 for < 2 keys
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 0.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 0.0f), 0u);
 }
 
 BOOST_AUTO_TEST_CASE(SingleKey)
@@ -275,8 +221,8 @@ BOOST_AUTO_TEST_CASE(SingleKey)
 	std::vector<scn::animation_pos_key> keys = {
 		{ glm::vec3(1, 0, 0), 0.0f }
 	};
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 0.0f), 0u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 5.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 0.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 5.0f), 0u);
 }
 
 BOOST_AUTO_TEST_CASE(TwoKeys)
@@ -286,9 +232,9 @@ BOOST_AUTO_TEST_CASE(TwoKeys)
 		{ glm::vec3(1), 10.0f }
 	};
 	// Any time should return index 0 (the only valid pair is 0,1)
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 0.0f), 0u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 5.0f), 0u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 10.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 0.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 5.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 10.0f), 0u);
 }
 
 BOOST_AUTO_TEST_CASE(MultipleKeys)
@@ -299,14 +245,14 @@ BOOST_AUTO_TEST_CASE(MultipleKeys)
 		{ glm::vec3(2), 20.0f },
 		{ glm::vec3(3), 30.0f }
 	};
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 0.0f), 0u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 5.0f), 0u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 10.0f), 1u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 15.0f), 1u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 20.0f), 2u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 25.0f), 2u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 0.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 5.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 10.0f), 1u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 15.0f), 1u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 20.0f), 2u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 25.0f), 2u);
 	// Past last key — clamped to second-to-last
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 100.0f), 2u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 100.0f), 2u);
 }
 
 BOOST_AUTO_TEST_CASE(TimeBeforeFirstKey)
@@ -317,8 +263,8 @@ BOOST_AUTO_TEST_CASE(TimeBeforeFirstKey)
 		{ glm::vec3(2), 15.0f }
 	};
 	// Before first key — returns 0
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 0.0f), 0u);
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 4.9f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 0.0f), 0u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 4.9f), 0u);
 }
 
 BOOST_AUTO_TEST_CASE(TimeExactlyOnKey)
@@ -329,7 +275,7 @@ BOOST_AUTO_TEST_CASE(TimeExactlyOnKey)
 		{ glm::vec3(2), 20.0f }
 	};
 	// Exactly on key boundary
-	BOOST_CHECK_EQUAL(find_keyframe_index(keys, 10.0f), 1u);
+	BOOST_CHECK_EQUAL(scn::find_keyframe_index(keys, 10.0f), 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -344,7 +290,7 @@ BOOST_AUTO_TEST_CASE(EmptyPositionKeys)
 {
 	scn::animation_node anim;
 	glm::vec3 result;
-	calc_interpolated_position(result, 0.0f, anim);
+	scn::calc_interpolated_position(result, 0.0f, anim);
 	BOOST_CHECK_SMALL(result.x, 1e-5f);
 	BOOST_CHECK_SMALL(result.y, 1e-5f);
 	BOOST_CHECK_SMALL(result.z, 1e-5f);
@@ -355,7 +301,7 @@ BOOST_AUTO_TEST_CASE(SinglePositionKey)
 	scn::animation_node anim;
 	anim.pos_keys = { { glm::vec3(3, 4, 5), 0.0f } };
 	glm::vec3 result;
-	calc_interpolated_position(result, 0.0f, anim);
+	scn::calc_interpolated_position(result, 0.0f, anim);
 	BOOST_CHECK_CLOSE(result.x, 3.0f, 0.01f);
 	BOOST_CHECK_CLOSE(result.y, 4.0f, 0.01f);
 	BOOST_CHECK_CLOSE(result.z, 5.0f, 0.01f);
@@ -369,7 +315,7 @@ BOOST_AUTO_TEST_CASE(PositionInterpolationMidpoint)
 		{ glm::vec3(10, 20, 30), 10.0f }
 	};
 	glm::vec3 result;
-	calc_interpolated_position(result, 5.0f, anim);
+	scn::calc_interpolated_position(result, 5.0f, anim);
 	BOOST_CHECK_CLOSE(result.x, 5.0f, 0.01f);
 	BOOST_CHECK_CLOSE(result.y, 10.0f, 0.01f);
 	BOOST_CHECK_CLOSE(result.z, 15.0f, 0.01f);
@@ -379,7 +325,7 @@ BOOST_AUTO_TEST_CASE(EmptyScaleKeys)
 {
 	scn::animation_node anim;
 	glm::vec3 result;
-	calc_interpolated_scaling(result, 0.0f, anim);
+	scn::calc_interpolated_scaling(result, 0.0f, anim);
 	BOOST_CHECK_CLOSE(result.x, 1.0f, 0.01f);
 	BOOST_CHECK_CLOSE(result.y, 1.0f, 0.01f);
 	BOOST_CHECK_CLOSE(result.z, 1.0f, 0.01f);
@@ -389,7 +335,7 @@ BOOST_AUTO_TEST_CASE(EmptyRotationKeys)
 {
 	scn::animation_node anim;
 	glm::quat result;
-	calc_interpolated_rotation(result, 0.0f, anim);
+	scn::calc_interpolated_rotation(result, 0.0f, anim);
 	BOOST_CHECK_CLOSE(result.w, 1.0f, 0.01f);
 	BOOST_CHECK_SMALL(result.x, 1e-5f);
 	BOOST_CHECK_SMALL(result.y, 1e-5f);
@@ -404,7 +350,7 @@ BOOST_AUTO_TEST_CASE(ScaleInterpolation)
 		{ glm::vec3(2, 2, 2), 10.0f }
 	};
 	glm::vec3 result;
-	calc_interpolated_scaling(result, 5.0f, anim);
+	scn::calc_interpolated_scaling(result, 5.0f, anim);
 	BOOST_CHECK_CLOSE(result.x, 1.5f, 0.01f);
 	BOOST_CHECK_CLOSE(result.y, 1.5f, 0.01f);
 	BOOST_CHECK_CLOSE(result.z, 1.5f, 0.01f);
@@ -420,11 +366,11 @@ BOOST_AUTO_TEST_CASE(PositionAtBoundary)
 	glm::vec3 result;
 
 	// At start
-	calc_interpolated_position(result, 0.0f, anim);
+	scn::calc_interpolated_position(result, 0.0f, anim);
 	BOOST_CHECK_SMALL(result.x, 1e-5f);
 
 	// At end
-	calc_interpolated_position(result, 10.0f, anim);
+	scn::calc_interpolated_position(result, 10.0f, anim);
 	BOOST_CHECK_CLOSE(result.x, 10.0f, 0.01f);
 }
 
@@ -437,7 +383,7 @@ BOOST_AUTO_TEST_CASE(PositionBeforeFirstKey)
 	};
 	glm::vec3 result;
 	// Before first key — factor clamped to 0, returns first key value
-	calc_interpolated_position(result, 0.0f, anim);
+	scn::calc_interpolated_position(result, 0.0f, anim);
 	BOOST_CHECK_CLOSE(result.x, 5.0f, 0.01f);
 }
 

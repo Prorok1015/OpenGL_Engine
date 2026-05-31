@@ -6,10 +6,6 @@
 #include "engine_log.h"
 #include <algorithm>
 
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim);
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim);
-
 static entt::entity find_skeleton_root(entt::registry& reg, entt::entity ent)
 {
     entt::entity current = ent;
@@ -81,15 +77,15 @@ void update_nodes_animation_system(
         const auto& anim_node = ch_it->second;
 
         glm::vec3 scaling;
-        calc_interpolated_scaling(scaling, ticks, anim_node);
+        scn::calc_interpolated_scaling(scaling, ticks, anim_node);
         glm::mat4 scaling_m = glm::scale(scaling);
 
         glm::quat rotation_q;
-        calc_interpolated_rotation(rotation_q, ticks, anim_node);
+        scn::calc_interpolated_rotation(rotation_q, ticks, anim_node);
         glm::mat4 rotation_m = glm::toMat4(rotation_q);
 
         glm::vec3 translation;
-        calc_interpolated_position(translation, ticks, anim_node);
+        scn::calc_interpolated_position(translation, ticks, anim_node);
         glm::mat4 translation_m = glm::translate(translation);
 
         auto local = translation_m * rotation_m * scaling_m;
@@ -97,23 +93,7 @@ void update_nodes_animation_system(
         event.emit(ent);
     }
 }
-template<class T>
-std::size_t find_keyframe_index(const std::vector<T>& arr, float time)
-{
-    if (arr.size() < 2) return 0;
-
-    // Binary search: find the last key where key.time <= time
-    auto it = std::upper_bound(arr.begin(), arr.end(), time,
-        [](float t, const T& key) { return t < key.time; });
-
-    if (it == arr.begin()) return 0;
-    std::size_t idx = static_cast<std::size_t>(std::distance(arr.begin(), it)) - 1;
-    // Clamp to second-to-last to ensure idx+1 is valid
-    if (idx >= arr.size() - 1) idx = arr.size() - 2;
-    return idx;
-}
-
-void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
+void scn::calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
     if (anim.scale_keys.empty()) { Out = glm::vec3{1.0f}; return; }
     if (anim.scale_keys.size() == 1) {
@@ -135,7 +115,7 @@ void calc_interpolated_scaling(glm::vec3& Out, float AnimationTimeTicks, const s
     Out = Start + Factor * Delta;
 }
 
-void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
+void scn::calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
     if (anim.pos_keys.empty()) { Out = glm::vec3{0.0f}; return; }
     if (anim.pos_keys.size() == 1) {
@@ -157,7 +137,7 @@ void calc_interpolated_position(glm::vec3& Out, float AnimationTimeTicks, const 
     Out = Start + Factor * Delta;
 }
 
-void calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim)
+void scn::calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, const scn::animation_node& anim)
 {
     if (anim.rotate_keys.empty()) { Out = glm::quat{1.0f, 0.0f, 0.0f, 0.0f}; return; }
     if (anim.rotate_keys.size() == 1) {

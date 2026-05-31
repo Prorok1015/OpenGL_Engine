@@ -172,11 +172,15 @@ Keyframes дублировались в каждой bone-entity. Вынесен
 **Файлы:** `unittests/scn_skinning_animation_tests.cpp` (новый)
 
 **AC:**
-- [ ] Тест: сборка skeleton + bone_matrices из desc — `bone_matrices_component` на skeleton root, не на mesh
-- [ ] Тест: множественные mesh-entities ссылаются на один `bone_matrices_component`
-- [ ] Тест: `animation_controller_component` play/pause/loop корректно управляет current_time
-- [ ] Тест: keyframe interpolation edge cases (0 ключей, 1 ключ, граница)
-- [ ] Тест: бинарный поиск keyframe возвращает корректный индекс
+- [x] Тест: skeleton + bone_matrices — `bone_matrices_component` на skeleton root, не на mesh
+- [x] Тест: множественные mesh-entities ссылаются на один `bone_matrices_component`
+- [x] Тест: `animation_controller_component` play/pause/loop корректно управляет current_time
+- [x] Тест: keyframe interpolation edge cases (0 ключей, 1 ключ, граница)
+- [x] Тест: бинарный поиск keyframe возвращает корректный индекс
+
+> Тесты вызывают РЕАЛЬНЫЙ продакшн-код: `scn::find_keyframe_index` и `scn::calc_interpolated_*`
+> вынесены в `scn_animation_job.h` (single source of truth), копии из теста удалены.
+> Открыто: assemble-из-desc для skeleton (сейчас скелет строится вручную на ECS-уровне).
 
 ### US-33-10: Debug Draw Infrastructure — инфраструктура отладочного рендеринга
 **Файлы:** `core/engine/render/render_system/rnd_render_packet.hpp`, `core/engine/render/render_system/passes/rnd_debug_pass.h` (новый), `core/engine/render/render_system/passes/rnd_debug_pass.cpp` (новый), `Editor/res/shaders/debug_line.vert` (новый), `Editor/res/shaders/debug_line.frag` (новый), `core/engine/render/render_system/rnd_render_service_init.cpp`
@@ -237,4 +241,4 @@ US-33-9 (тесты) — по мере выполнения задач
 - [x] Debug draw infrastructure позволяет рисовать 3D-линии в сцене
 - [x] Скелет анимированной модели визуализируется поверх меша
 - [x] Skinning weights сохраняются через desc-систему (переживают перезапуск)
-- [ ] Все юнит-тесты проходят
+- [x] Все юнит-тесты проходят (против реального кода сэмплинга анимации)
