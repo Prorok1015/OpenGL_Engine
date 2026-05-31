@@ -5,4 +5,5 @@ add_library(gui_backend_interface INTERFACE)
 add_library(gui_backend_interface::gui_backend_interface ALIAS gui_backend_interface)
 
 target_include_directories(gui_backend_interface INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(gui_backend_interface INTERFACE ${THIRD_PARTY_PATH}/imgui)
+# imgui headers come from the reusable `imgui` target (EPIC-41 US-41-6).
+target_link_libraries(gui_backend_interface INTERFACE imgui)

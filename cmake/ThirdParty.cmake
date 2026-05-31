@@ -27,6 +27,10 @@ set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
 # Use std::format (C++20) instead of bundled fmtlib.
 set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "" FORCE)
 
+# --- Dear ImGui (gui backends) ---
+# Defines a reusable `imgui` STATIC target (the submodule ships no CMakeLists).
+include(imgui)
+
 # --- Boost (FetchContent, 1.84.0) ---
 # Slim build: only configure the sublibraries the engine actually links. The Boost
 # superproject pulls in their transitive dependencies automatically.

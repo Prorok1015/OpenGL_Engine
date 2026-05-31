@@ -6,15 +6,11 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_GUI_GL_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_sources(${PROJECT_NAME} PRIVATE 
+# Core ImGui sources are built by the reusable `imgui` target. Only the platform/renderer
+# backend impls (which depend on glfw/glad) are compiled here (EPIC-41 US-41-6).
+target_sources(${PROJECT_NAME} PRIVATE
 "${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_glfw.cpp"
 "${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_opengl3.cpp"
-"${THIRD_PARTY_PATH}/imgui/imgui.cpp" 
-"${THIRD_PARTY_PATH}/imgui/imgui_draw.cpp"
-"${THIRD_PARTY_PATH}/imgui/imgui_widgets.cpp" 
-"${THIRD_PARTY_PATH}/imgui/imgui_tables.cpp"
-"${THIRD_PARTY_PATH}/imgui/imgui_demo.cpp"
-"${THIRD_PARTY_PATH}/imgui/misc/cpp/imgui_stdlib.cpp"
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE gui_backend_interface PRIVATE glfw PRIVATE drv_interface PRIVATE drv_opengl)
+target_link_libraries(${PROJECT_NAME} PRIVATE common PRIVATE gui_backend_interface PRIVATE imgui PRIVATE glfw PRIVATE drv_interface PRIVATE drv_opengl)
