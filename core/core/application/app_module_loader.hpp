@@ -1,41 +1,108 @@
 #pragma once
 #include "app_module_interface.h"
+#include "engine_assert.h"
 #include <vector>
 #include <memory>
 #include <ranges>
+#include <algorithm>
+#include <string_view>
+#include <unordered_map>
 
 namespace app::modules {
 
     class module_loader {
     private:
         std::vector<std::unique_ptr<module_interface>> m_modules;
+        bool m_sorted = false;
+
+        // Topo-sort modules by their declared depends_on() once, so register, initialize and
+        // shutdown all use one consistent order (EPIC-49 US-49-7). Dependencies come first;
+        // get_priority() (then insertion order) only breaks ties between independent modules.
+        void ensure_sorted() {
+            if (m_sorted) {
+                return;
+            }
+            const std::size_t n = m_modules.size();
+            std::unordered_map<std::string_view, std::size_t> index_of;
+            for (std::size_t i = 0; i < n; ++i) {
+                const auto [it, inserted] = index_of.emplace(m_modules[i]->name(), i);
+                ASSERT_MSG(inserted, "module_loader: duplicate module name");
+            }
+
+            std::vector<int> in_degree(n, 0);
+            std::vector<std::vector<std::size_t>> dependents(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                for (const auto dep : m_modules[i]->depends_on()) {
+                    const auto it = index_of.find(dep);
+                    ASSERT_MSG(it != index_of.end(), "module_loader: dependency on unknown module");
+                    dependents[it->second].push_back(i);
+                    ++in_degree[i];
+                }
+            }
+
+            // Among modules with no remaining dependency, pick lowest priority then earliest insertion.
+            const auto tiebreak = [this](std::size_t a, std::size_t b) {
+                const auto pa = m_modules[a]->get_priority();
+                const auto pb = m_modules[b]->get_priority();
+                if (pa != pb) {
+                    return pa < pb;
+                }
+                return a < b;
+            };
+
+            std::vector<std::size_t> ready;
+            for (std::size_t i = 0; i < n; ++i) {
+                if (in_degree[i] == 0) {
+                    ready.push_back(i);
+                }
+            }
+
+            std::vector<std::size_t> order;
+            order.reserve(n);
+            while (!ready.empty()) {
+                const auto best = std::min_element(ready.begin(), ready.end(), tiebreak);
+                const std::size_t cur = *best;
+                ready.erase(best);
+                order.push_back(cur);
+                for (const std::size_t d : dependents[cur]) {
+                    if (--in_degree[d] == 0) {
+                        ready.push_back(d);
+                    }
+                }
+            }
+            ASSERT_MSG(order.size() == n, "module_loader: dependency cycle detected");
+
+            std::vector<std::unique_ptr<module_interface>> sorted;
+            sorted.reserve(n);
+            for (const std::size_t idx : order) {
+                sorted.push_back(std::move(m_modules[idx]));
+            }
+            m_modules = std::move(sorted);
+            m_sorted = true;
+        }
 
     public:
         void add_module(std::unique_ptr<module_interface> module) {
             m_modules.push_back(std::move(module));
+            m_sorted = false;
         }
 
         void register_all_services(ds::app_data_storage& data) {
+            ensure_sorted();
             for (auto& mod : m_modules) {
                 mod->register_services(data);
             }
         }
 
         void initialize_all_services(ds::app_data_storage& data) {
-            //std::sort(m_modules.begin(), m_modules.end(),
-            //    [](const auto& a, const auto& b) {
-            //        return a->get_priority() < b->get_priority();
-            //    });
-            std::ranges::sort(m_modules, {}, [](const auto& m) {
-                return m->get_priority();
-                });
-
+            ensure_sorted();
             for (auto& mod : m_modules) {
                 mod->initialize_services(data);
             }
         }
 
         void shutdown_all_services(ds::app_data_storage& data) {
+            ensure_sorted();
             for (auto& module : m_modules | std::ranges::views::reverse) {
                 module->shutdown_services(data);
             }

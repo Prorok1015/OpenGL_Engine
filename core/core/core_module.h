@@ -15,5 +15,7 @@ namespace core
 		virtual MODULE_PRIORITY get_priority() const override {
 			return MODULE_PRIORITY::CORE;
 		}
+
+		virtual std::string_view name() const override { return "core"; }
 	};
 }

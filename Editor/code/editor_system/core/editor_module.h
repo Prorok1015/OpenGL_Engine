@@ -13,5 +13,8 @@ namespace editor
 		virtual MODULE_PRIORITY get_priority() const override {
 			return MODULE_PRIORITY::EDITOR;
 		}
+
+		virtual std::string_view name() const override { return "editor"; }
+		virtual std::vector<std::string_view> depends_on() const override { return { "core", "engine" }; }
 	};
 }
