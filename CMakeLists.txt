@@ -22,7 +22,7 @@ add_subdirectory(Editor)
 
 enable_testing()
 
-file(GLOB TEST_SOURCES "unittests/*.cpp")
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "unittests/*.cpp")
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/unittests/unit_tests.cpp")
 
 add_executable(unit_tests unittests/unit_tests.cpp ${TEST_SOURCES})

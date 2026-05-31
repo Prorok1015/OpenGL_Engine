@@ -1,8 +1,16 @@
 # EPIC-41: CMake Build System — продакшн-качество сборки
 
-**Status:** planned
+**Status:** in_progress
 **Theme:** infrastructure
 **Dependencies:** none (standalone, но US-41-7 координируется с EPIC-34 US-34-8)
+
+> **Прогресс (2026-05-31):** низкорисковый срез сделан — **US-41-2** (один CXX_STANDARD в root),
+> **US-41-3** (явный STATIC на всех либах, вкл. engine_logger/editor_system сверх списка),
+> **US-41-5** (CONFIGURE_DEPENDS на оставшихся GLOB: root TEST_SOURCES + boost-natvis; удалён
+> неиспользуемый SE_SOURCES_H; ренейм коллизий SE_RENDER/GAME/DEBUG_UI_SOURCES),
+> **US-41-9** (CMakePresets.json: dev-debug/dev-release/release/no-assimp + build presets).
+> Verify: configure clean, build editor+unit_tests OK, 307 тестов зелёные, `cmake --list-presets` валиден.
+> Осталось: US-41-1/4/6/7/8/10 (включая ребрендинг Snake Engine + snk:: в US-41-4).
 
 ---
 
@@ -238,13 +246,13 @@ US-41-10 (compiler warnings) — после US-41-1
 ## Критерии завершения эпика
 
 - [ ] Все настройки третьесторонних библиотек — в `cmake/ThirdParty.cmake`
-- [ ] `CMAKE_CXX_STANDARD` задан один раз в root
-- [ ] Все `add_library` имеют явный тип (`STATIC`/`INTERFACE`)
+- [x] `CMAKE_CXX_STANDARD` задан один раз в root
+- [x] Все `add_library` имеют явный тип (`STATIC`/`INTERFACE`)
 - [ ] Все `target_link_libraries` имеют явный visibility (`PRIVATE`/`PUBLIC`/`INTERFACE`)
-- [ ] Все `file(GLOB...)` используют `CONFIGURE_DEPENDS`
+- [x] Все `file(GLOB...)` используют `CONFIGURE_DEPENDS`
 - [ ] ImGui — отдельный CMake-таргет
 - [ ] Нет прямой зависимости `scene` и `resource_system` от Assimp
-- [ ] `CMakePresets.json` работает для debug/release/no-assimp конфигураций
+- [x] `CMakePresets.json` работает для debug/release/no-assimp конфигураций
 - [ ] Compiler warnings включены для проектного кода, отключены для third-party
 - [ ] Все движковые таргеты имеют `snk::` алиасы и зависимости используют алиасы
 - [ ] Нет глобального загрязнения — `BUILD_SHARED_LIBS`, пути и cache-переменные определены в правильных местах

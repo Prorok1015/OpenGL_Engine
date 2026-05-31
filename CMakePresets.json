@@ -1,0 +1,58 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "dev-debug",
+      "inherits": "base",
+      "displayName": "Dev Debug",
+      "description": "Debug build with the internal profiler enabled",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENGINE_PROFILE_MODE": "INTERNAL"
+      }
+    },
+    {
+      "name": "dev-release",
+      "inherits": "base",
+      "displayName": "Dev RelWithDebInfo",
+      "description": "Optimized build with debug info and the internal profiler",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ENGINE_PROFILE_MODE": "INTERNAL"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release",
+      "description": "Optimized build, profiler disabled",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENGINE_PROFILE_MODE": "NONE"
+      }
+    },
+    {
+      "name": "no-assimp",
+      "inherits": "dev-debug",
+      "displayName": "Dev Debug (no Assimp importer)",
+      "description": "Debug build to validate compilation without the Assimp importer (option lands in EPIC-34)",
+      "cacheVariables": {
+        "ENABLE_ASSIMP_IMPORTER": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "build-debug", "configurePreset": "dev-debug" },
+    { "name": "build-release", "configurePreset": "release" }
+  ]
+}

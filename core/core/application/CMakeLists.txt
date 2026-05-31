@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(application)
-add_library(application)
+add_library(application STATIC)
 
 file(GLOB_RECURSE SE_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_APP_SOURCES})

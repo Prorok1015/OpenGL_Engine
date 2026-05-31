@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(drv_opengl)
-add_library(drv_opengl)
+add_library(drv_opengl STATIC)
 target_compile_definitions(drv_opengl PRIVATE PROJECT_SOURCE_PATH="${SE_PROJECT_SOURCE_PATH}") 
 
 file(GLOB_RECURSE SE_DRV_GL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")

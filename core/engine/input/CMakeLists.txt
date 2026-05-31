@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(input_system)
-add_library(input_system)
+add_library(input_system STATIC)
 
-file(GLOB_RECURSE SE_GAME_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
-target_sources(${PROJECT_NAME} PRIVATE ${SE_GAME_SOURCES})
+file(GLOB_RECURSE SE_INPUT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+target_sources(${PROJECT_NAME} PRIVATE ${SE_INPUT_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

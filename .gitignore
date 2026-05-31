@@ -18,6 +18,7 @@ build-release/
 .claude/
 **/lib3dparty/natvis
 CMakeSettings.json
+CMakeUserPresets.json
 Makefile
 **/Debug
 **/Release
