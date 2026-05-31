@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(common)
 add_library(${PROJECT_NAME} STATIC)
+add_library(snk::common ALIAS ${PROJECT_NAME})
 # Memory allocators live here (previously compiled into `core` — see EPIC-49 US-49-2).
 target_sources(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_allocator.cpp"
@@ -15,7 +16,7 @@ add_subdirectory(${THIRD_PARTY_PATH}/glm glm)
 target_compile_definitions(glm INTERFACE GLM_ENABLE_EXPERIMENTAL)
 # logger (spdlog backend) — needed by engine_log.h included from common
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/logger logger)
-target_link_libraries(${PROJECT_NAME} PUBLIC glm engine_logger)
+target_link_libraries(${PROJECT_NAME} PUBLIC glm snk::engine_logger)
 
 if(ENGINE_PROFILE_MODE STREQUAL "INTERNAL")
   target_compile_definitions(${PROJECT_NAME} PUBLIC ENGINE_PROFILE_INTERNAL=1)

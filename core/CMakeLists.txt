@@ -12,5 +12,5 @@ add_subdirectory("engine")
 project(core_exe)
 
 add_executable(core_exe main_unified_graph_test.cpp)
-target_link_libraries(core_exe PRIVATE engine)
+target_link_libraries(core_exe PRIVATE snk::engine)
 set_target_properties(core_exe PROPERTIES EXCLUDE_FROM_ALL TRUE)

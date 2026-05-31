@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(editor_system)
 add_library(${PROJECT_NAME} STATIC)
+add_library(snk::editor_system ALIAS ${PROJECT_NAME})
 
 file(GLOB_RECURSE SE_EDT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_EDT_SOURCES})
@@ -16,4 +17,4 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 
 # core/engine are configured once at the root (EPIC-49 US-49-2); editor_system just consumes `engine`.
-target_link_libraries(${PROJECT_NAME} PRIVATE engine PRIVATE assimp)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE assimp)

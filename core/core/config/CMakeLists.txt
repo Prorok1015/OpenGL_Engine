@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(config_system)
 add_library(config_system STATIC)
+add_library(snk::config_system ALIAS config_system)
 
 file(GLOB_RECURSE SE_CONFIG_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_CONFIG_SOURCES})

@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(core)
 add_library(${PROJECT_NAME} STATIC)
+add_library(snk::core ALIAS ${PROJECT_NAME})
 
 file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(${PROJECT_NAME} PUBLIC common PUBLIC config_system PUBLIC application PUBLIC window PUBLIC resource_system PUBLIC desc_system PUBLIC ecs)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::common PUBLIC snk::config_system PUBLIC snk::application PUBLIC snk::window PUBLIC snk::resource_system PUBLIC snk::desc_system PUBLIC snk::ecs)
 
 if(NOT ENGINE_PROFILE_MODE STREQUAL "NONE")
   target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/common/eng_profiler.cpp")
