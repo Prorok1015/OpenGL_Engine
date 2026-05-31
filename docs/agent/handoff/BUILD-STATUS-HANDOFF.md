@@ -74,7 +74,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 
 ## 3. ФРОНТ РАБОТ (с чего начать)
 
-### A. Закрыть EPIC-41 (гигиена CMake) — `docs/epics/infrastructure/EPIC-41.md`
+### A. Закрыть EPIC-41 (гигиена CMake) — `docs/epics/infrastructure/EPIC-41.md` · backlog **BL-008** (`docs/agent/backlog/items/BL-008.toon`)
 - **US-41-10 (low-risk, проверяется сборкой):** создать `cmake/CompilerWarnings.cmake` с INTERFACE-таргетом
   `compiler_warnings` (MSVC `/W3`; GCC/Clang `-Wall -Wextra -Wpedantic -Wno-unused-parameter`), подключить к
   `common` через `target_link_libraries(common INTERFACE compiler_warnings)`. Third-party не должны получать флаги.
@@ -90,7 +90,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 - **Физический `public/` split (US-49-1, этап 2):** сейчас компонентные dirs всё ещё открывают свой корень
   PUBLIC внутри слоя; границы держатся на `*_api` INTERFACE. Полный разнос заголовков на `public/`+`private/`
   отложен (по эпику — допустимо). Делать ПОСЛЕ исправления visibility (уже сделано), отдельно, НЕ мешая с ренеймами (EPIC-29 US-29-2).
-- **Assembly-time skinning инъекция:** `core/engine/scene/scn_skin_weights_desc.cpp:52` зовёт
+- **Assembly-time skinning инъекция** (backlog **BL-007** — `docs/agent/backlog/items/BL-007.toon`): `core/engine/scene/scn_skin_weights_desc.cpp:52` зовёт
   `rnd::get_system().get_skinning_manager()` на ECS-assembly-time (`gs_game_init.cpp:142`), НЕ per-frame — поэтому
   исключён из US-49-6 (там нет frame_context). Нужно протащить `skinning_manager&`/коллбэк через ассемблер
   (координировать с EPIC-29 US-29-4 / EPIC-33).
@@ -119,6 +119,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 - Эпики: `docs/epics/infrastructure/EPIC-49.md` (все US с пометками DONE + коммиты), `EPIC-41.md` (прогресс/остаток), `EPIC-29.md` (координация Service Layer).
 - Архив воркпланов: `.claude/workplan/archive/2026-05-31-epic49-phase{0,1,2,3,4}.md` (детальный discovery+plan каждой фазы).
 - Исходный бриф: `docs/agent/handoff/EPIC-49-agent-brief.md`.
+- Backlog follow-ups: **BL-007** (`docs/agent/backlog/items/BL-007.toon`, assembly-time skinning), **BL-008** (`docs/agent/backlog/items/BL-008.toon`, остаток EPIC-41) — индекс `docs/agent/backlog/INDEX.toon`.
 - Memory: `reference_windows_build.md` (build-гоча), `reference_frame_allocator.md`, `reference_ecs.md`.
 - Коммиты EPIC-49: `1441bd6`(49-2) `ca6aef9`(41-1) `cedc10b`(41-6) `2d89688`+`2714c1e`(41-4) `4e9688d`+`484e492`+`092b315`+`d44b492`(49-4) `fa142b5`+`d489a98`(49-3/1) `cf82fd9`(49-7) `64f7a0b`(49-8) `3cf68bc`+`0dff7ca`(49-9) `bcf7f49`(49-6) `3ed2cc9`(49-5) + docs.
 

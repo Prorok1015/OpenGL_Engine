@@ -1,0 +1,49 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-008
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-008
+title: Finish EPIC-41 CMake hygiene (US-41-7/8/10)
+type: chore
+status: proposed
+priority: P2
+created: 2026-05-31
+theme: build
+
+[DESCRIPTION]
+EPIC-41 (продакшн-качество сборки) выполнен кроме трёх историй (полные AC — в самом эпике, это
+pointer-айтем, не дубль):
+- US-41-7: assimp линкуется напрямую в scene (core/engine/scene/CMakeLists.txt:14 `#temporary`),
+  resource_system и editor_system → вынести assimp-зависимый код в опциональный модуль assimp_importer
+  (КООРДИНИРОВАТЬ с EPIC-34 US-34-8).
+- US-41-8: хардкод путей — SE_RESOURCE_ABSOLUTE_PATH (Editor/CMakeLists.txt:3 → используется в
+  resource/CMakeLists.txt как RESOURCE_PATH), глобальная THIRD_PARTY_PATH, SE_PROJECT_SOURCE_PATH →
+  PROJECT_SOURCE_PATH в drv_opengl/CMakeLists.txt:4.
+- US-41-10: создать cmake/CompilerWarnings.cmake (INTERFACE-таргет compiler_warnings, MSVC /W3,
+  GCC/Clang -Wall -Wextra -Wpedantic -Wno-unused-parameter), подключить к common; third-party без флагов.
+
+[MOTIVATION]
+Закрывает эпик гигиены сборки. US-41-8 и US-41-10 — низкорисковые, проверяются сборкой. US-41-7 даёт
+опциональность assimp (сборка без импортёра), но требует EPIC-34. Без этого остаётся глобальное
+загрязнение путями и нет предупреждений компилятора для проектного кода.
+
+[ACCEPTANCE]
+- Детальные критерии — в docs/epics/infrastructure/EPIC-41.md (US-41-7/8/10 AC). Этот айтем —
+  напоминание возобновить срез; по завершении пометить соответствующие чекбоксы в эпике.
+- Каждый шаг behavior-preserving: чистая сборка preset dev-debug + unit-тесты зелёные.
+
+[OUT_OF_SCOPE]
+- Детальная работа и критерии живут в EPIC-41.md — здесь НЕ дублируются (правило: крупная работа → epics).
+- US-41-1/2/3/4/5/6/9 — уже сделаны (см. EPIC-41.md прогресс).
+
+[LINKS]
+workplan:
+external_id:
+epic: docs/epics/infrastructure/EPIC-41.md
+related_items: BL-003
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: user (handoff follow-up)

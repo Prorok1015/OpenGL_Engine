@@ -1,0 +1,47 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-007
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-007
+title: Inject skinning_manager into ECS assembler (drop get_system at assembly time)
+type: refactor
+status: proposed
+priority: P2
+created: 2026-05-31
+theme: skinning
+
+[DESCRIPTION]
+core/engine/scene/scn_skin_weights_desc.cpp:52 вызывает rnd::get_system().get_skinning_manager() на
+ECS-assembly-time (из спавнера assemble_skin_weights, gs_game_init.cpp:142) — НЕ в кадровом пути.
+EPIC-49 US-49-6 убрал rnd::get_system() из per-frame extractor'а и 6 пассов через инъекцию менеджеров
+в rnd::frame_context, но этот сайт ИСКЛЮЧИЛ: при ассемблировании frame_context ещё не существует.
+Нужно протащить skinning_manager в ассемблер другим путём (ref/коллбэк в сигнатуре спавнера или
+поле ассемблера), чтобы убрать последнее обращение к синглтону рендера в scene/assembly.
+
+[MOTIVATION]
+Это последнее использование рендер-синглтона rnd::get_system() в scene/assembly-пути. Пока оно есть,
+нельзя полностью удалить глобальный p_render_system (координируется с EPIC-29 US-29-4). Также мешает
+изоляции scene от внутренностей render на этапе сборки мира.
+
+[ACCEPTANCE]
+- assemble_skin_weights получает skinning_manager через инъекцию (ассемблер хранит ref/коллбэк, либо
+  менеджер передаётся в сигнатуре спавнера) — без обращения к rnd::get_system().
+- В core/engine/scene/scn_skin_weights_desc.cpp не осталось rnd::get_system().
+- Регистрация skin-weights в skinning_manager работает как раньше; build + unit-тесты зелёные.
+- (Ручная проверка) скелетная модель импортируется и анимируется в редакторе.
+
+[OUT_OF_SCOPE]
+- Per-frame инъекция менеджеров в frame_context — уже сделана в US-49-6.
+- Полное удаление глобального p_render_system / rnd::get_system() — EPIC-29 US-29-4.
+
+[LINKS]
+workplan:
+external_id:
+epic: docs/epics/infrastructure/EPIC-49.md#US-49-6
+related_items: BL-005
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow.REFACTOR.out_of_scope (EPIC-49 US-49-6 adversarial review)

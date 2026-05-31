@@ -6,7 +6,7 @@ version: 1.0.0
 
 [BACKLOG_META]
 project_name: OpenGL Engine & Editor
-next_id_seq: 7
+next_id_seq: 9
 last_updated: 2026-05-31
 sync_target: none
 sync_project:
@@ -75,6 +75,22 @@ status: proposed
 priority: P2
 created: 2026-05-31
 theme: rendering
+
+[ITEM.BL-007]
+title: Inject skinning_manager into ECS assembler (drop get_system at assembly time)
+type: refactor
+status: proposed
+priority: P2
+created: 2026-05-31
+theme: skinning
+
+[ITEM.BL-008]
+title: Finish EPIC-41 CMake hygiene (US-41-7/8/10)
+type: chore
+status: proposed
+priority: P2
+created: 2026-05-31
+theme: build
 
 [ARCHIVE]
 # Optional. Once [ITEMS] exceeds ~80 entries, agent moves terminal items (done/rejected)
