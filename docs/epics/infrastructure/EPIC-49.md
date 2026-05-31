@@ -21,8 +21,12 @@
 >
 > **Прогресс (2026-05-31): Фаза 1 «Дешёвые границы» завершена.** US-49-4 DONE (см. ниже),
 > коммиты `4e9688d 484e492 092b315 d44b492`. Каждый под-коммит верифицирован ЧИСТОЙ сборкой
-> (preset dev-debug) + 307 тестов. Следующее: Фаза 2 — US-49-1 (public/private границы) + US-49-3
-> (engine_api/core_api INTERFACE-контракты).
+> (preset dev-debug) + 307 тестов.
+>
+> **Прогресс (2026-05-31): Фаза 2 «Контракты слоёв» завершена (первый этап).** US-49-3 + US-49-1 DONE,
+> коммиты `fa142b5 d489a98`. core_api/engine_api INTERFACE-таргеты; агрегаторы core/engine PRIVATE;
+> потребители линкуют engine + engine_api. Fallout мал (3 файла). Физический public/ split отложен.
+> Следующее: Фаза 3 — US-49-7 (depends_on+топосорт) + US-49-8 (реестр стадий кадра).
 
 ---
 
@@ -85,7 +89,11 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 
 ## User Stories
 
-### US-49-1 — Публичные API-границы компонентов (public/ + private include)
+### US-49-1 — Публичные API-границы компонентов (public/ + private include) ✅ DONE (первый этап, 2026-05-31, `fa142b5 d489a98`)
+> Первый этап (без физического разноса public/ директорий, как допускает эпик): агрегаторы `core`/`engine`
+> переведены PUBLIC→PRIVATE (и линки компонентов, и include корня источников) — больше не «всё видно всем».
+> Кросс-слойные потребители компилируются против snk::core_api / snk::engine_api (US-49-3). Вскрылись и
+> исправлены 3 umbrella-prefix инклюда (desc/…, common/…) + bootstrap-exe wiring. Физический public/ split — позже.
 **Файлы:** все `*/CMakeLists.txt` с `target_include_directories(... PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})`.
 Ввести на компонент публичный «конверт» (`public/` заголовки) и держать внутренние рядом с .cpp;
 `target_include_directories(<c> PUBLIC public PRIVATE src)`. На первом этапе допустимо не разносить
@@ -99,7 +107,11 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 `core/core/CMakeLists.txt` (вынести mem_*.cpp в `common`); `core/core/common/CMakeLists.txt` (`common`→STATIC).
 **AC:** `common` — самодостаточная STATIC-либа с аллокаторами; editor_system не реконфигурирует core; сборка зелёная. Усилие: **M**.
 
-### US-49-3 — `snk::engine_api` / `snk::core_api` INTERFACE-контракты
+### US-49-3 — `snk::engine_api` / `snk::core_api` INTERFACE-контракты ✅ DONE (2026-05-31, `fa142b5 d489a98`)
+> Созданы INTERFACE-таргеты snk::core_api (common/application/ecs/desc_system/resource_system/core_input/
+> drv_interface/window/config_system) и snk::engine_api (core_api + scene/render/gui/input_system/game),
+> исключая drv_opengl/gui_gl_backend. Агрегаторы core/engine — PRIVATE. editor_system/unit_tests/editor линкуют
+> и snk::engine (объектный код), и snk::engine_api (заголовки). api НЕ линкует umbrella STATIC (иначе ре-leak).
 **Файлы:** `core/engine/CMakeLists.txt`, `core/core/CMakeLists.txt`, новые INTERFACE-таргеты.
 Агрегаторы `engine`/`core` — PRIVATE всё; публичный контракт слоя — отдельный INTERFACE-таргет с публичными
 заголовками. editor_system и будущий game_module линкуются к `engine_api`, не к зонтику.
@@ -184,9 +196,9 @@ US-49-9 (нарушения слоёв)
 - Не смешивать переименования (EPIC-29 US-29-2) с visibility/boundary-правками — нечитаемый дифф.
 
 ## Критерии готовности
-- [ ] Ни один таргет не открывает корень исходников как PUBLIC; у компонентов есть публичные API-границы
-- [ ] `common` — самодостаточная STATIC-либа; editor_system не реконфигурирует core
-- [ ] `engine_api`/`core_api` INTERFACE-контракты; агрегаторы PRIVATE
+- [~] Ни один АГРЕГАТОР (core/engine) не открывает корень как PUBLIC (US-49-1); компонентные dirs пока PUBLIC (физический public/ split отложен)
+- [x] `common` — самодостаточная STATIC-либа; editor_system не реконфигурирует core (US-49-2)
+- [x] `engine_api`/`core_api` INTERFACE-контракты; агрегаторы PRIVATE (US-49-3)
 - [x] Тяжёлые заголовки (res::tag/desc_base/entt/imgui) изолированы (US-49-4); время компиляции снижено
 - [ ] scene не включает конкретные render-классы и не вызывает rnd::get_system(); scene не знает о gui
 - [ ] Связывание модулей декларативно (depends_on+топосорт); per-frame стадии — через реестр
