@@ -26,7 +26,11 @@
 > **Прогресс (2026-05-31): Фаза 2 «Контракты слоёв» завершена (первый этап).** US-49-3 + US-49-1 DONE,
 > коммиты `fa142b5 d489a98`. core_api/engine_api INTERFACE-таргеты; агрегаторы core/engine PRIVATE;
 > потребители линкуют engine + engine_api. Fallout мал (3 файла). Физический public/ split отложен.
-> Следующее: Фаза 3 — US-49-7 (depends_on+топосорт) + US-49-8 (реестр стадий кадра).
+>
+> **Прогресс (2026-05-31): Фаза 3 «Wiring» завершена.** US-49-7 + US-49-8 DONE, коммиты `cf82fd9 64f7a0b`.
+> depends_on()+топосорт инициализации; ordered frame-stage реестр (дедуп edt/gs loop). Build+307 зелёные.
+> ⚠️ Frame loop (US-49-8) не покрыт тестами — нужен ручной запуск редактора для проверки рендера.
+> Следующее: Фаза 4 — US-49-9 (нарушения слоёв) → US-49-6 (frame_context-инъекция) → US-49-5 (POD-материалы), с архитектурным агентом.
 
 ---
 
@@ -145,13 +149,21 @@ scene компилируется без знания внутренностей 
 **AC:** ни scene-экстрактор, ни render-пассы не вызывают `rnd::get_system()` — менеджеры берутся из
 frame_context; координируется с EPIC-29 US-29-4. Усилие: **M**.
 
-### US-49-7 — Декларация зависимостей модуля + топосорт init
+### US-49-7 — Декларация зависимостей модуля + топосорт init ✅ DONE (2026-05-31, `cf82fd9`)
+> module_interface получил name() + depends_on() (core{}, engine{core}, editor{core,engine}). Loader делает
+> ОДНУ топосортировку (Kahn; tiebreak priority→insertion; ASSERT на циклы/неизвестные deps) — один порядок
+> для register И initialize, reverse для shutdown. Поведение сохранено: топосорт = core→engine→editor.
 **Файлы:** `core/core/application/app_module_interface.h` (добавить `depends_on()`),
 `app_module_loader.hpp` (одна топосортировка; тот же порядок для register И initialize; reverse — shutdown).
 **AC:** порядок инициализации выражен декларативно, не порядком строк; register и initialize в одном порядке;
 priority-enum заменён/дополнен зависимостями. Усилие: **S/M**.
 
-### US-49-8 — Реестр стадий кадра вместо god-on_step
+### US-49-8 — Реестр стадий кадра вместо god-on_step ✅ DONE (2026-05-31, `64f7a0b`)
+> gs::frame_stage_registry + frame_step_context. register_core_frame_stages() задаёт 6 общих стадий с
+> явными order-ключами (poll 10, update 20, extract 30, render 40, present 50); edt добавляет input_reset(25)
+> + gui(45). Оба loop-сервиса строят реестр в init() и зовут run(ctx) — нет дублирования, добавление
+> подсистемы = один add_stage. Порядок воспроизведён точно. ⚠️ Frame loop НЕ покрыт unit-тестами —
+> build+307 зелёные, но рендер/ввод/gui проверять ручным запуском редактора.
 **Файлы:** `Editor/code/editor_system/core/edt_frame_loop_service.cpp`, `core/engine/game_system/gs_loop_service.cpp`,
 новый `frame_stage`-реестр.
 Заменить захардкоженный список стадий на упорядоченный реестр (сервисы регистрируют свои стадии как уже
@@ -201,7 +213,7 @@ US-49-9 (нарушения слоёв)
 - [x] `engine_api`/`core_api` INTERFACE-контракты; агрегаторы PRIVATE (US-49-3)
 - [x] Тяжёлые заголовки (res::tag/desc_base/entt/imgui) изолированы (US-49-4); время компиляции снижено
 - [ ] scene не включает конкретные render-классы и не вызывает rnd::get_system(); scene не знает о gui
-- [ ] Связывание модулей декларативно (depends_on+топосорт); per-frame стадии — через реестр
+- [x] Связывание модулей декларативно (depends_on+топосорт, US-49-7); per-frame стадии — через реестр (US-49-8)
 - [ ] `window` не зависит публично от `gui_gl_backend`
 - [ ] Добавление нового модуля/компонента: новый таргет + 1-2 строки в агрегаторе/модуле, 0 правок в чужих файлах
 - [ ] Все тесты проходят; поведение движка не изменилось
