@@ -31,10 +31,13 @@ how_to_apply:
 [CONSTRAINTS_LOGGING]
 [CONSTRAINT_4]
 rule: Never use std::cout, std::cerr, or std::cin
-why: engine_log.h provides formatted, filterable logging
+why: engine_log.h provides formatted, filterable per-category logging (spdlog backend)
 how_to_apply:
   #include "engine_log.h"
-  Use macros: ENGINE_LOG, ENGINE_WARN, ENGINE_ERROR
+  Macros: egLOG/egLOG_INFO, egLOG_WARN, egLOG_ERROR, egLOG_TRACE, egLOG_DEBUG
+  First arg = category string, then std::format args:
+    egLOG_WARN("resource", "not found: {}", tag);
+  source: core/core/common/logger/engine_log.h (macros defined L46-62)
 
 [CONSTRAINTS_CODE_STYLE]
 [CONSTRAINT_5]
@@ -83,8 +86,9 @@ how_to_apply:
 rule: Use res::tag for all resource identification
 why: Prevents cache misses, enables hot-reload
 how_to_apply:
-  auto mesh = res_manager.load<mesh_resource>(res::tag{"models/backpack"});
+  auto mesh = res::get_system().require<mesh_resource>(res::tag{"res://models/backpack"});
   Never: hardcode filenames in component, always use descriptors
+  source: core/core/resource/res_system.h require<T>/require_sync<T> (L170-178)
 
 [CONSTRAINT_11]
 rule: Always use engine_assert.h (ASSERT_MSG, ASSERT_FAIL)
@@ -108,30 +112,57 @@ how_to_apply:
 
 [CONSTRAINT_13]
 rule: Systems inherit ecs::system_interface
-why: Automatic registration, consistent lifecycle
+why: Required base for ecs::system_factory::register_automatic_system
 how_to_apply:
-  struct my_system : ecs::system_interface {
-    void initialize() override;
-    void update() override;
-    void shutdown() override;
-  };
-  system_factory will auto-register
+  struct my_system : ecs::system_interface { /* state only */ };
+  // system_interface has NO update()/initialize() — it is just a virtual dtor.
+  // The per-frame logic is a free or member function whose args (entt::view,
+  // ecs::bind_res<ID,T>, ...) are auto-resolved by the organizer:
+  sfactory.register_automatic_system<&my_system::tick, my_system>("my_system", inst);
+  source: core/core/ecs/ecs_system_interface.hpp, ecs_system.h
+
+[CONSTRAINT_13B]
+rule: Automatic system dispatch supports world IDs 0-4 only (max 5 worlds)
+why: registration_dispatcher::dispatch is a hard-coded switch (case 0..4);
+     world_id > 4 hits ASSERT_MSG(false, "World ID > 4 not supported...")
+how_to_apply:
+  - Keep level world count <= 5, or expand the switch in ecs_system.h
+  - world_salt is just a size_t wrapper, NOT a fixed-size limit by itself
+  source: core/core/ecs/ecs_system.h registration_dispatcher::dispatch (L80-99)
+
+[CONSTRAINT_13C]
+rule: World order is desc order; derive parallel world arrays from one ordered source
+why: scn::level::for_each_world iterates std::unordered_map<string,world> in HASH
+     order — it does NOT preserve desc/insertion order. With >=2 worlds, building
+     editor arrays (world_descs/world_names/worlds_systems_list) from for_each_world
+     desyncs the parallel arrays.
+how_to_apply:
+  - Treat the ordered world_descs vector as single source of truth for order
+  - Derive names + per-world systems via edt::derive_world_arrays (index-aligned)
+  - populate_worlds_from_level is the single build point on load
+  source: core/engine/scene/level/scn_level.h for_each_world (L46-57);
+          Editor/code/editor_system/controller/edt_level_controller.h derive_world_arrays
 
 [CONSTRAINTS_RESOURCES]
 [CONSTRAINT_14]
 rule: Never bypass resource cache
 why: Prevents duplicate loads, enables hot-reload
 how_to_apply:
-  ✅ auto h = res_mgr.load<T>(tag);
+  ✅ auto h = res::get_system().require<T>(tag);   // res_handle<T>
   ❌ new T(); load from disk directly
 
 [CONSTRAINT_15]
 rule: Resources use VFS (res:// or memory://)
 why: Enables mods, asset packing, runtime replacement
 how_to_apply:
-  res:// = filesystem path
+  res:// = filesystem path (default protocol)
   memory:// = runtime-created data
   Never embed paths in code, always use tags
+gotcha: single-arg res::tag{"..."} PARSES the protocol out of the string —
+  the string must contain "protocol://" or protocol/path/name slices are wrong.
+  Use the 2-arg form res::tag{"res", "path"} or res::tag::make(path) to prepend
+  the default protocol; 2-arg form asserts the path has no "://" already.
+  source: core/core/resource/res_tag.h ctor (L20-40)
 
 [CONSTRAINTS_DESCRIPTORS]
 [CONSTRAINT_16]

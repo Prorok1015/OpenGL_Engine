@@ -27,8 +27,9 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 ## ⚠️ Critical Rules (STRICT!)
 
 ### No iostream, no std::cout/cerr
-- **Use:** `#include "engine_log.h"` → ENGINE_LOG, ENGINE_WARN, ENGINE_ERROR
-- **Why:** Formatted, filterable logging with debug context
+- **Use:** `#include "engine_log.h"` → `egLOG`/`egLOG_INFO`, `egLOG_WARN`, `egLOG_ERROR` (also `egLOG_TRACE`/`egLOG_DEBUG`)
+- **Signature:** first arg is a category string, then `std::format` args: `egLOG_WARN("resource", "not found: {}", tag)`
+- **Why:** Formatted, filterable per-category logging routed through spdlog
 
 ### Never store frame-allocator pointers across frames
 - **What:** `std::pmr::vector<T>(ds::frame_allocator())` invalidated at frame reset
@@ -48,7 +49,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - **Pattern:** `if (ImGui::Begin("Name")) { ... ImGui::End(); }`
 
 ### Never bypass resource cache
-- **Use:** `res_mgr.load<T>(res::tag{"path"})`
+- **Use:** `res::get_system().require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
 - **Never:** hardcode filenames, new/load directly from disk
 
 ## 🗣️ Conventions

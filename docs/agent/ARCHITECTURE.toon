@@ -27,7 +27,7 @@ scope: Editor + Engine + Core
 [LAYER_CORE]
 role: Engine foundation and services
 modules:
-  - ecs: EnTT-based ECS with multi-world support (up to 8 worlds)
+  - ecs: EnTT-based ECS with multi-world support (auto-dispatch world IDs 0-4, max 5)
   - window: Platform window management
   - resource: VFS resolver, Adapter pipeline (Assimp/stb/text), cache
   - desc: JSON descriptor system with inheritance (level→world→prefab)
@@ -49,9 +49,12 @@ modules:
   - input: Keyboard/mouse/gamepad handling
   - game: Game-specific systems and logic hooks
 render_pipeline:
-  1. Extractors: Camera→RenderPacket (geometry, instances, lights)
-  2. Passes: Shadow (depth), G-Buffer (normals, albedo, PBR), Lighting, Post-fx
-  3. Output: ImGui overlay, multiple render targets per camera
+  1. Extractors: Camera→render_packet (geometry, instances, lights);
+     extractors live in core/engine/scene/level/ (scn_render_data_extractor,
+     scn_light_extractor), NOT in a render/extractors/ dir
+  2. Passes (render_pass_interface): z_prepass, opaque, skybox, transparent (OIT),
+     composition, debug
+  3. Output: ImGui overlay, per-camera render targets
 
 [LAYER_EDITOR]
 role: Real-time scene editing
@@ -80,10 +83,19 @@ hot_path_pattern:
   // automatically freed at frame reset
 
 [ECS_SYSTEM]
-worlds: Up to 8 independent worlds (world_salt + bind_res<WorldID,T>)
-systems: All inherit ecs::system_interface, auto-registered via system_factory
+worlds: Independent worlds keyed by name; automatic system dispatch supports
+        world IDs 0-4 (max 5, hard-coded switch in registration_dispatcher).
+        Per-world component access via world_salt + bind_res<WorldID,T>.
+world_order: scn::level stores worlds in std::unordered_map (HASH order).
+        for_each_world does NOT preserve desc order — see CONSTRAINTS [13C].
+        Editor derives parallel world arrays from the ordered world_descs vector
+        (edt::derive_world_arrays), making desc order the single source of truth.
+systems: All inherit ecs::system_interface (empty base), registered via
+        ecs::system_factory::register_automatic_system<&fn, T>. The interface
+        has no update() — per-frame logic is the registered fn.
 components: POD structs, optional _component suffix
-dependency_resolution: Auto via invoker<Candidate> using registry context
+dependency_resolution: Auto via invoker<Candidate>; system fn arg types
+        (entt::view, ecs::bind_res) resolved through the registry context
 boot_sequence:
   module_loader.add_module(core, engine, editor)
   → register_all_services()
@@ -118,13 +130,14 @@ per_camera:
   - depth_target, tp_accum_target, tp_reveal_target
   - RT tags resolve from camera packet, fallback to legacy static tags
 
-passes:
-  - Shadow Pass: Depth rendering for lights
-  - G-Buffer Pass: Normal, albedo, PBR encoding
-  - Lighting Pass: Deferred shading
-  - Transparency Pass: OIT (Order-Independent Transparency)
-  - Post-FX Pass: Bloom, tone mapping, etc.
-  - ImGui Pass: Editor UI overlay
+passes: (core/engine/render/render_system/passes/, all : render_pass_interface)
+  - z_prepass: depth pre-pass
+  - opaque_pass: opaque geometry
+  - skybox_pass: skybox
+  - transparent_pass: OIT (Order-Independent Transparency)
+  - composition_pass: combine targets into final image
+  - debug_pass: debug draw overlay
+  ImGui editor UI is drawn by the gui system, not a render pass here.
 
 [MODULE_LIFECYCLE]
 Each module implements app::modules::module_interface:

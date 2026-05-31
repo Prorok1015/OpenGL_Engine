@@ -44,30 +44,37 @@ OpenGL_Engine/
 │   └── workplan/                   ← Active workflow state (gitignored)
 │       └── archive/                ← Completed workplans
 │
-├── Core/                           ← Engine foundation library
-│   └── core/
-│       ├── ecs/                    ← EnTT-based ECS (multi-world support)
-│       ├── res/                    ← Resource system (VFS, adapter, cache)
-│       ├── desc/                   ← Descriptor system (JSON-based)
-│       ├── cfg/                    ← Configuration system
-│       ├── app/                    ← Application lifecycle and modules
-│       ├── video/                  ← Window abstraction
-│       └── common/                 ← Memory allocators, data structures
-│
-├── Engine/                         ← Engine systems library
-│   ├── scene/                      ← Scene management, hierarchy, transforms
-│   ├── render/                     ← Render pipeline (extractors, passes)
-│   ├── gui/                        ← ImGui integration
-│   ├── input/                      ← Keyboard, mouse, gamepad
-│   └── game/                       ← Gameplay systems
+├── core/                           ← Top-level dir holding BOTH static libs + main.cpp
+│   ├── core/                       ← "core" lib: engine foundation
+│   │   ├── ecs/                    ← EnTT-based ECS (system_factory, world_salt, bind_res)
+│   │   ├── resource/               ← Resource system (VFS resolvers, adapters, cache)
+│   │   ├── desc/                   ← Descriptor system (JSON-based, desc_system)
+│   │   ├── config/                 ← Configuration system (cfg_api.h, CFG_VAR_DEF_*)
+│   │   ├── application/            ← App lifecycle, module_loader, MODULE_PRIORITY
+│   │   ├── video/                  ← Render driver abstraction (OpenGL impls)
+│   │   ├── windows/                ← Platform window service
+│   │   ├── input/                  ← Input events
+│   │   └── common/                 ← Allocators, ds/, logger/, engine_assert.h
+│   │
+│   └── engine/                     ← "engine" lib: gameplay + rendering systems
+│       ├── scene/                  ← Scene mgmt, descs; scene/level/ (scn_level, world, extractors)
+│       ├── render/render_system/   ← Render pipeline (passes/, geom/, shader/, skinning/, texture/)
+│       ├── gui/gui_system/         ← ImGui integration
+│       ├── image/                  ← Image loading
+│       ├── input/                  ← ECS input system
+│       └── game_system/            ← Gameplay systems, gs_game_init (desc registration)
 │
 ├── Editor/                         ← Editor application
-│   ├── editor_app.h                ← Entry point
-│   ├── panels/                     ← ImGui panels (inspector, hierarchy, etc.)
-│   ├── gizmo/                      ← Transform manipulators
-│   ├── viewport/                   ← Scene preview
+│   ├── main.cpp                    ← Module bootstrap (Core → Engine → Editor)
+│   ├── code/editor_system/         ← Editor sources (see Editor/CLAUDE.md)
+│   │   ├── core/                   ← Module lifecycle + frame loop
+│   │   ├── controller/             ← editor_system, scene/level/world controllers
+│   │   ├── panels/                 ← ImGui panels (extend edt::panel_base)
+│   │   ├── gizmo/                  ← Transform gizmo (pure ImGui DrawList)
+│   │   ├── import/                 ← Model import/export pipeline
+│   │   └── input/                  ← Editor input + file dialog
 │   ├── config/                     ← editor.cfg
-│   └── res/                        ← Editor-specific resources
+│   └── res/                        ← Editor resources (levels, objects, templates, shaders, skybox)
 │
 ├── unittests/                      ← Boost.Test test suite (auto-discovered)
 │
@@ -80,10 +87,8 @@ OpenGL_Engine/
 ├── claude-framework/               ← Local copy of framework (legacy, see Mirage/claude-framework/)
 │
 └── build/                          ← CMake build output (gitignored)
-    ├── Core/
-    ├── Engine/
-    ├── Editor/editor              ← Editor executable
-    └── unit_tests                 ← Test executable
+    ├── Editor/                     ← Editor build artifacts
+    └── unit_tests.exe             ← Test executable (Windows / Ninja)
 ```
 
 ## File Classes

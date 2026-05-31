@@ -20,7 +20,7 @@ tech_stack:
 goal: Build production-quality 3D engine with WYSIWYG editor
 key_features:
   - Data-driven scene management (world_desc → prefabs → entities)
-  - Multi-world ECS (up to 8 independent worlds)
+  - Multi-world ECS (automatic system dispatch supports world IDs 0-4, max 5)
   - Real-time render pipeline with extractors and passes
   - Async asset loading with resource cache
   - In-editor prefab and shader editing

@@ -104,11 +104,13 @@ examples:
 
 [LOGGING_PATTERN]
 never: std::cout, std::cerr, std::cin, printf
-always: #include "engine_log.h" and use macros
+always: #include "engine_log.h" and use egLOG_* macros (spdlog backend)
+note: first arg is a category string (becomes the spdlog logger name), then format args
 examples:
-  ENGINE_LOG("Loading model: {}", path);
-  ENGINE_WARN("Resource not found: {}", tag);
-  ENGINE_ERROR("Failed to compile shader");
+  egLOG("resource", "Loading model: {}", path);   // egLOG == egLOG_INFO
+  egLOG_WARN("resource", "Resource not found: {}", tag);
+  egLOG_ERROR("render", "Failed to compile shader");
+levels: egLOG_TRACE, egLOG_DEBUG, egLOG_INFO, egLOG_WARN, egLOG_ERROR
 
 [ALLOCATOR_PATTERNS]
 frame_temporaries:
@@ -140,26 +142,27 @@ never: std::auto_ptr (deprecated), raw new/delete in code (use RAII)
 [DESCRIPTOR_PATTERNS]
 files: snake_case.desc (e.g., backpack.desc, level.desc)
 format: JSON with inheritance (extends: "parent.desc")
-loading: res_manager.load<descriptor_type>(res::tag{"path"})
+loading: res::get_system().require<descriptor_type>(res::tag{"res://path"})
 hot_reload: Editor changes desc → binding updates entities
 
 [RESOURCE_PATTERNS]
-identification: res::tag{"path/to/resource"}
-loading: res_handle<T> = res_mgr.load<T>(tag)
-async: handle.then([](const T& resource) { /* callback */ })
+identification: res::tag{"res://path/to/resource"} (single-arg parses protocol)
+loading: res_handle<T> h = res::get_system().require<T>(tag); // require_sync<T> blocks
+async: h.then([](auto& res) { /* callback; check res.has_error() */ })
 cache: automatic (weak refs for auto-unload, pinned for persistent)
 
 [ERROR_HANDLING]
-assertions: ASSERT_MSG(cond, "message") from engine_assert.h
-logging: Use ENGINE_ERROR, ENGINE_WARN macros
+assertions: ASSERT_MSG(cond, "message") from engine_assert.h (active in _DEBUG only)
+logging: Use egLOG_ERROR / egLOG_WARN (category-first) from engine_log.h
 exceptions: Avoid in hot paths, use for init errors only
 return_codes: Prefer for resource loading failures
 
 [ECS_PATTERNS]
-system_registration: Automatic via system_factory
-system_lifecycle: initialize() → update() → shutdown()
-component_dependency: Via registry context passed to systems
-world_creation: Up to 8 independent worlds (world_salt + bind_res)
+system_registration: ecs::system_factory::register_automatic_system<&fn, T>(name, instance)
+system_interface: empty base (virtual dtor only) — NO update()/initialize() methods
+system_logic: free/member fn; args (entt::view, ecs::bind_res<ID,T>) auto-resolved by organizer
+component_dependency: declared via the system fn's argument types, salted per world_id
+world_creation: automatic dispatch supports world IDs 0-4 (max 5); world_salt + bind_res<WorldID,T>
 
 [IMGUI_PATTERNS]
 always_check_begin:

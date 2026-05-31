@@ -34,7 +34,7 @@ Example:
 
 Example:
 ```
-"ECS supports max 8 independent worlds via world_salt + bind_res"
+"ECS auto-system dispatch supports world IDs 0-4 (max 5 worlds) via world_salt + bind_res"
 "Frame allocator uses bump allocation (deallocate() is no-op)"
 → Save: Architecture-level constraints
 ```

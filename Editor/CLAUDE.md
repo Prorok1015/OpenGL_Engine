@@ -136,6 +136,15 @@ Gizmo drag committed
 - Hierarchy panel shows a tab per world; switching calls `world_controller::switch_to_world(idx)` which saves editor camera, tears down old registry, rebuilds new one
 - `shared_state::worlds_systems_list` — per-world list of system names (parallel to `world_descs`)
 
+**Single source of truth for world order (critical invariant):** the three parallel
+`shared_state` arrays (`world_descs` / `world_names` / `worlds_systems_list`) MUST be
+built from the same ordered source — the desc-ordered world list. Do NOT build them by
+iterating `scn::level::for_each_world`: it walks a `std::unordered_map` in **hash order**,
+not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
+per-world systems via `edt::derive_world_arrays` (`controller/edt_level_controller.h`), and
+keep `populate_worlds_from_level` as the single build point on load. Covered by
+`unittests/edt_world_array_sync_tests.cpp`.
+
 ## Prefab Node Format (critical)
 
 ```

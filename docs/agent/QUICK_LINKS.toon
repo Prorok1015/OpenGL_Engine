@@ -8,87 +8,108 @@ version: 1.0.0
 overview: Fast navigation to important files and concepts
 
 [CORE_LAYER]
+# Note: the "core" static lib lives under core/core/ ; the "engine" lib under core/engine/.
+# There is NO top-level Engine/ or Editor/panels/ — see EDITOR_LAYER below.
+
 ECS Framework:
-  → Core/core/ecs/ecs_world.hpp (world management)
-  → Core/core/ecs/ecs_system.h (system_interface)
-  → Core/core/ecs/ecs_registry.h (entity-component storage)
+  → core/core/ecs/ecs_system_interface.hpp (empty system_interface base)
+  → core/core/ecs/ecs_system.h (system_factory, register_automatic_system, dispatcher 0-4)
+  → core/core/ecs/ecs_traits.hpp (world_salt, bind_res, dependency_extractor)
+  → core/core/ecs/ecs_entity.h (entity helpers)
 
 Resource System:
-  → Core/core/res/res_loader.h (loading and caching)
-  → Core/core/res/res_tag.h (resource identification)
-  → Core/core/res/res_adapter.h (Assimp/stb pipeline)
+  → core/core/resource/res_system.h (resource_system: load/caching)
+  → core/core/resource/res_tag.h (res::tag; single-arg parses protocol from string)
+  → core/core/resource/adapters/ (Assimp/stb/text adapter pipeline)
+  → core/core/resource/resolvers/ (VFS resolvers, e.g. res_vfs_resolver)
 
 Descriptor System:
-  → Core/core/desc/ (descriptor classes)
+  → core/core/desc/desc_system.h (desc::desc_system)
+  → core/core/desc/desc_base.hpp (descriptor base)
   → docs/epics/desc-driven/ (architecture docs)
 
 Memory Allocators:
-  → Core/core/common/mem_allocator.h (frame allocator)
-  → Core/core/common/mem_linear_allocator.h (custom scope)
-  → Core/core/common/mem_pool_allocator.h (O(1) alloc/free)
+  → core/core/common/mem_allocator.h (ds::frame_allocator(), frame_allocator_reset())
+  → core/core/common/mem_linear_allocator.h (custom scope)
+  → core/core/common/mem_pool_allocator.h (O(1) alloc/free)
+  → core/core/common/mem_stack_allocator.h (LIFO markers)
+
+Logging / Assert:
+  → core/core/common/logger/engine_log.h (egLOG_* macros, namespace eg = engine)
+  → core/core/common/engine_assert.h (ASSERT_MSG/ASSERT_FAIL, _DEBUG only)
 
 Configuration:
-  → Core/core/cfg/ (config system macros)
+  → core/core/config/cfg_api.h (config API)
 
 Application:
-  → Core/core/app/module_interface.h (module lifecycle)
-  → Core/core/app/app_data_storage.h (service locator DI)
+  → core/core/application/app_module_interface.h (module_interface lifecycle, MODULE_PRIORITY)
+  → core/core/application/app_module_loader.hpp (register/initialize/shutdown_all_services)
+  → core/core/common/ds/ds_store.hpp (ds::app_data_storage service locator DI)
 
 [ENGINE_LAYER]
 Scene Management:
-  → Engine/scene/scn_scene.h (scene root)
-  → Engine/scene/scn_hierarchy.h (entity tree)
-  → Engine/scene/scn_world.h (world wrapper)
+  → core/engine/scene/level/scn_level.h (scn::level; for_each_world = HASH order!)
+  → core/engine/scene/level/scn_world.h (world wrapper)
+  → core/engine/scene/level/scn_level_manager.h (level load/manager)
+  → core/engine/scene/scn_ecs_assembler.h (desc → ECS registry assembly)
 
 Rendering Pipeline:
-  → Engine/render/rnd_pipeline.h (main render loop)
-  → Engine/render/extractors/ (geometry→packets)
-  → Engine/render/passes/ (shadow, g-buffer, lighting, etc.)
+  → core/engine/render/render_system/rnd_render_system.h (render system)
+  → core/engine/render/render_system/rnd_frame_assembler.h (frame assembly)
+  → core/engine/render/render_system/passes/ (z_prepass, opaque, skybox, transparent, composition, debug)
+  → core/engine/scene/level/scn_render_data_extractor.h (geometry→render_packet)
+  → core/engine/scene/level/scn_light_extractor.h (lights→packet)
 
 Animation & Skinning:
-  → Engine/scene/animation/ (EPIC-33 refactoring)
+  → core/engine/scene/scn_animation_* , scn_skinning_desc.* (EPIC-33)
+  → core/engine/render/render_system/skinning/ (rnd::skinning_manager)
 
 Input System:
-  → Engine/input/inp_input_manager.h
+  → core/engine/input/inp_input_system.h , inp_ecs_input_manager.h
+
+GUI:
+  → core/engine/gui/gui_system/ (gui::system, ImGui integration)
 
 [EDITOR_LAYER]
+# Editor sources live under Editor/code/editor_system/ — see Editor/CLAUDE.md for the
+# full controller/panel decomposition. There is NO Editor/panels/ or Editor/editor_app.h.
 Main Editor:
-  → Editor/editor_app.h (application entry)
-  → Editor/config/editor.cfg (settings)
+  → Editor/main.cpp (module bootstrap: Core → Engine → Editor)
+  → Editor/config/editor.cfg (settings; resource.path = ../res/)
+  → Editor/code/editor_system/controller/edt_editor_system.cpp/h (coordinator)
+  → Editor/code/editor_system/controller/edt_level_controller.cpp/h (level I/O, derive_world_arrays)
 
-ImGui Panels:
-  → Editor/panels/edt_inspector_panel.h
-  → Editor/panels/edt_hierarchy_panel.h
-  → Editor/panels/edt_asset_browser.h
-  → Editor/panels/edt_prefab_editor.h (EPIC-25)
+ImGui Panels: (Editor/code/editor_system/panels/, all extend edt::panel_base)
+  → edt_inspector_panel.h
+  → edt_scene_hierarchy_panel.h
+  → edt_asset_browser_panel.h
+  → edt_prefab_editor_panel.h (EPIC-25)
+  → edt_viewport_panel.h , edt_console_panel.h , edt_dockspace.h
 
 Gizmo Transform:
-  → Editor/gizmo/edt_gizmo.h
+  → Editor/code/editor_system/gizmo/edt_transform_gizmo.hpp (pure ImGui DrawList)
 
-Viewport:
-  → Editor/viewport/ (scene preview)
+Input / File Dialog:
+  → Editor/code/editor_system/input/edt_input_manager.h , edt_file_dialog.h
 
 [DESCRIPTOR_FILES]
 Level & World:
-  → Editor/res/levels/ (.desc files)
-  → Editor/res/scenes/ (scene templates)
+  → Editor/res/levels/ (.desc level files)
+  → Editor/res/templates/ (desc templates)
 
-Models & Prefabs:
-  → Editor/res/models/ (imported 3D assets)
-  → Editor/res/prefabs/ (reusable templates)
+Objects & Assets:
+  → Editor/res/objects/ (imported objects / prefab descs)
+  → Editor/res/assets/ , Editor/res/shaders/ , Editor/res/skybox/
 
 [BUILD_SYSTEM]
 Main CMake:
   → CMakeLists.txt (root)
-  → Core/CMakeLists.txt
-  → Engine/CMakeLists.txt
+  → core/CMakeLists.txt (adds core/core + core/engine targets)
   → Editor/CMakeLists.txt
 
 Build Output:
-  → build/Core/core (core lib)
-  → build/Engine/engine (engine lib)
-  → build/Editor/editor (executable)
-  → build/unit_tests (test executable)
+  → build/Editor/ (editor build artifacts)
+  → build/unit_tests.exe (test executable; Windows/Ninja)
 
 [TESTING]
 Test Suite:
@@ -113,13 +134,13 @@ CLAUDE Guidelines:
 [IMPORTANT_CONCEPTS]
 Frame Allocator (Memory):
   → See: CONSTRAINTS.toon [CONSTRAINT_1-3]
-  → Code: Core/core/common/mem_allocator.h
+  → Code: core/core/common/mem_allocator.h
   → Pattern: std::pmr::vector<T>(ds::frame_allocator())
 
 Multi-World ECS:
-  → See: ARCHITECTURE.toon [LAYER_ECS_SYSTEM]
-  → Code: Core/core/ecs/ directory
-  → Max: 8 independent worlds via world_salt
+  → See: ARCHITECTURE.toon [ECS_SYSTEM], CONSTRAINTS [13B][13C]
+  → Code: core/core/ecs/ directory
+  → Max: auto-dispatch world IDs 0-4 (5 worlds); for_each_world = HASH order
 
 Descriptor Inheritance:
   → See: ARCHITECTURE.toon [DESCRIPTOR_SYSTEM]
@@ -128,7 +149,7 @@ Descriptor Inheritance:
 
 Resource System:
   → See: ARCHITECTURE.toon [RESOURCE_SYSTEM]
-  → Tag-based: res::tag{"path/to/resource"}
+  → Tag-based: res::tag{"res://path/to/resource"} (single-arg parses protocol)
   → VFS: res:// (filesystem), memory:// (runtime)
 
 [EPIC_QUICK_LINKS]
@@ -147,29 +168,29 @@ Render Pipeline:
 
 [COMMON_TASKS]
 Add new System:
-  1. File: Engine/systems/verb_noun_system.cpp
-  2. Inherit: ecs::system_interface
-  3. Register: system_factory auto-discovers
+  1. File: core/engine/<module>/<prefix>_<name>_system.cpp (e.g. scn_transform_system.cpp)
+  2. Inherit: ecs::system_interface (state only); logic = free/member fn
+  3. Register: sfactory.register_automatic_system<&fn, T>(name, instance)
 
 Add new ImGui Panel:
-  1. File: Editor/panels/edt_name_panel.h
-  2. Pattern: if (ImGui::Begin("Name")) { ... ImGui::End(); }
-  3. Call: From Editor main loop
+  1. File: Editor/code/editor_system/panels/edt_<name>_panel.h
+  2. Extend: edt::panel_base (on_render() body; base wraps ImGui::Begin/End)
+  3. Register: add as shared_ptr member, wired into panel_manager
 
 Add new Descriptor Type:
-  1. File: Core/core/desc/name_desc.h
-  2. Inherit: descriptor_base or json_serializable
-  3. Register: res_manager type mapping
+  1. File: core/engine/scene/scn_<name>_desc.h (inherit desc::desc_base)
+  2. Register spawner: core/engine/game_system/gs_game_init.cpp (assemble_*)
+  3. Unregister: matching entry in game_term
 
 Load Resource:
-  1. Tag: res::tag{"path/to/asset"}
-  2. Load: res_mgr.load<T>(tag)
-  3. Wait: Optional .then(callback) for async
+  1. Tag: res::tag{"res://path/to/asset"}
+  2. Load: res::get_system().require<T>(tag) (require_sync<T> blocks)
+  3. Wait: res_handle<T>, optional .then(callback) for async
 
-Create Entity:
-  1. Source: Prefab template (.desc file)
-  2. Spawn: world.instantiate(prefab_desc)
-  3. Edit: Inspector or in-scene gizmo
+Create Entity (data-driven):
+  1. Source: prefab/world desc nodes (.desc), not code
+  2. Assemble: ecs_assembler builds the registry from the world_desc
+  3. Edit: Inspector or in-scene gizmo (editor re-serializes desc)
 
 [CONFIG_REFERENCE]
 Editor Config File:
