@@ -73,7 +73,7 @@
 | [EPIC-44](infrastructure/EPIC-44.md) | Memory Profiling & Container Aliases — трекинг памяти и удобные контейнеры | planned |
 | [EPIC-46](infrastructure/EPIC-46.md) | Tracy Profiler Integration — внешний профайлер для детального анализа | planned |
 | [EPIC-47](infrastructure/EPIC-47.md) | ds::string_id — хешированные идентификаторы строк | planned |
-| [EPIC-49](infrastructure/EPIC-49.md) | Engine Componentization & Module Wiring — чистое разделение на компоненты | in_progress |
+| [EPIC-49](infrastructure/EPIC-49.md) | Engine Componentization & Module Wiring — чистое разделение на компоненты | done |
 
 ### Render Migration
 

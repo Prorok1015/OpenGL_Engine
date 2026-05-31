@@ -1,6 +1,6 @@
 # EPIC-49: Engine Componentization & Module Wiring — чистое разделение на компоненты
 
-**Status:** in_progress (Фаза 0 завершена)
+**Status:** done (все фазы 0–4 завершены; US-49-1..9 + EPIC-41 US-41-1/4/6). ⚠️ Рендер-пути (US-49-5/6/8/9) не покрыты unit-тестами — требуется ручная проверка запуском редактора.
 **Theme:** infrastructure
 **Depends on:** EPIC-41 (CMake hygiene — частично сделан), EPIC-29 (Service Layer) — координируется
 
@@ -30,7 +30,14 @@
 > **Прогресс (2026-05-31): Фаза 3 «Wiring» завершена.** US-49-7 + US-49-8 DONE, коммиты `cf82fd9 64f7a0b`.
 > depends_on()+топосорт инициализации; ordered frame-stage реестр (дедуп edt/gs loop). Build+307 зелёные.
 > ⚠️ Frame loop (US-49-8) не покрыт тестами — нужен ручной запуск редактора для проверки рендера.
-> Следующее: Фаза 4 — US-49-9 (нарушения слоёв) → US-49-6 (frame_context-инъекция) → US-49-5 (POD-материалы), с архитектурным агентом.
+>
+> **Прогресс (2026-05-31): Фаза 4 «Развязка scene↔render» завершена — ЭПИК ГОТОВ.** US-49-9 (`3cf68bc 0dff7ca`),
+> US-49-6 (`bcf7f49`), US-49-5 (`3ed2cc9`). Рискованные швы (49-9 window-инверсия, 49-5 POD-материалы) прошли
+> адверсариальную проверку отдельными агентами. Build + 312 тестов зелёные. ⚠️ Рендер не покрыт тестами —
+> ОБЯЗАТЕЛЬНА ручная проверка редактором (сцена/текстуры/skybox/анимация/debug-кости/мультимир/resize; для 49-5
+> ещё save/load level JSON round-trip).
+> Backlog-следствия: (1) scn_skin_weights_desc skinning_manager — assembly-time инъекция (вне 49-6);
+> (2) serialize шейдер-тегов больше не фильтрует по расширению (строго корректнее, латентное отличие при нестандартных расширениях).
 
 ---
 
@@ -135,7 +142,16 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 **AC:** `res::tag`/`desc_base` не тянут boost.json в потребителей; заголовки используют entt/imgui fwd-decl;
 заметное снижение времени компиляции. Усилие: **M**.
 
-### US-49-5 — Развязать scene→render: POD-материалы + интерфейс провайдера
+### US-49-5 — Развязать scene→render: POD-материалы + интерфейс провайдера ✅ DONE (2026-05-31, `3ed2cc9`)
+> scn::material_desc — POD: не включает rnd_*/driver, не несёт rnd::shader_config/uniform_data/RENDER_MODE,
+> get_shader_desc удалён. Хранит sampler-теги, ds::color, shininess, queue, scene-enum material_render_mode,
+> 3 res::tag шейдера, defines. Компиляция → render-side rnd::material_compiler_interface (default_material_compiler),
+> воспроизводит старый get_shader_desc + extractor-мутации (DIRECTION_LIGHT_COUNT/USE_ANIMATION) через
+> material_compile_context{world_matrix, textures, dir_light_count, has_skinning} (матрица, не entt::handle —
+> чтобы render не зависел от scene-компонентов). Зарегистрирован на render_system, проброшен через frame_context.
+> ⚠️ Адверсариальная проверка: поведение сохранено (удалённый uniforms всегда был пуст; OPAQUE/MIX блок байт-в-байт;
+> условия bake идентичны; render_mode мёртв на draw-пути). render→scene появилась header-зависимость (include-only,
+> без линка — цикла нет). Frame loop не покрыт тестами → нужен ручной запуск.
 **Файлы:** `core/engine/scene/scn_material_desc.h`, `scn_model.h`, `scn_mesh_node_desc.h`,
 `scn_render_data_extractor.cpp`; render-сторона (новый `rnd::material_compiler_interface`/`resource_provider`).
 Убрать конкретные render-классы из scene-desc заголовков; scene хранит POD-данные материала (цвета/теги/очередь);
@@ -143,7 +159,11 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 **AC:** scene-desc заголовки не включают `rnd_texture_manager.h`/`rnd_scene_shader_desc.h`/`rnd_geometry_desc.h`;
 scene компилируется без знания внутренностей render; рендер сцен не изменился. Усилие: **L**.
 
-### US-49-6 — Инъекция render-менеджеров через frame_context (убрать rnd::get_system из scene/пассов)
+### US-49-6 — Инъекция render-менеджеров через frame_context (убрать rnd::get_system из scene/пассов) ✅ DONE (2026-05-31, `bcf7f49`)
+> frame_context несёт fwd-declared указатели texture/shader/geom/skinning. render_system::begin_frame
+> (новая frame-стадия order 28, до extract 30/render 40) их заполняет. 16 per-frame сайтов (extractor + 6 пассов)
+> читают из frame_context, не из rnd::get_system(); skinning null-guard сохранён; extractor ассертит инъекцию.
+> ⚠️ scn_skin_weights_desc.cpp:52 ИСКЛЮЧЁН — это ECS-assembly-time (gs_game_init), не per-frame; вынесено в backlog.
 **Файлы:** `scn_render_data_extractor.cpp:61`, `scn_skin_weights_desc.cpp:52`, все 6 `render_system/passes/*.cpp`,
 `rnd_render_system.cpp` (положить менеджеры в `frame_context` в начале кадра).
 **AC:** ни scene-экстрактор, ни render-пассы не вызывают `rnd::get_system()` — менеджеры берутся из
@@ -170,7 +190,13 @@ priority-enum заменён/дополнен зависимостями. Уси
 регистрируют render-pass'ы/extractor'ы). Устранить дублирование edt/gs loop.
 **AC:** добавление per-frame подсистемы = одна `add_stage`, без правки on_step; edt и gs loop не дублируют список. Усилие: **M**.
 
-### US-49-9 — Исправить нарушения слоёв
+### US-49-9 — Исправить нарушения слоёв ✅ DONE (2026-05-31, `3cf68bc` scene→gui, `0dff7ca` window→gui)
+> scene→gui: была мёртвая ссылка (0 использований gui в scene) — удалена. window→gui_gl_backend: window
+> владел/инициализировал/гасил imgui-бэкенд (восходящая зависимость) → инверсия: GUI-слой владеет бэкендом
+> (gui_init конструирует в app storage, gui_term гасит до glfwTerminate), window отдаёт только native handle +
+> content scale. window больше не зависит от gui; gui экспортирует gui_backend_interface PUBLIC (его API
+> возвращает этот тип — раньше тёк транзитивно через window). Адверсариальная проверка: порядок init/shutdown,
+> стабильность адреса construct<T>, эквивалентность DPI — OK.
 **Файлы:** `core/core/windows/window_service/CMakeLists.txt` (`gui_gl_backend` → PRIVATE-деталь, не PUBLIC),
 `core/engine/scene/*` (убрать зависимость scene→gui: dependency inversion — gui сам берёт текстуру у renderer
 через drv_interface/callback, scene/renderer её не знает).
@@ -212,8 +238,8 @@ US-49-9 (нарушения слоёв)
 - [x] `common` — самодостаточная STATIC-либа; editor_system не реконфигурирует core (US-49-2)
 - [x] `engine_api`/`core_api` INTERFACE-контракты; агрегаторы PRIVATE (US-49-3)
 - [x] Тяжёлые заголовки (res::tag/desc_base/entt/imgui) изолированы (US-49-4); время компиляции снижено
-- [ ] scene не включает конкретные render-классы и не вызывает rnd::get_system(); scene не знает о gui
+- [x] scene не включает конкретные render-классы (US-49-5) и не вызывает rnd::get_system() (US-49-6); scene не знает о gui (US-49-9)
 - [x] Связывание модулей декларативно (depends_on+топосорт, US-49-7); per-frame стадии — через реестр (US-49-8)
-- [ ] `window` не зависит публично от `gui_gl_backend`
-- [ ] Добавление нового модуля/компонента: новый таргет + 1-2 строки в агрегаторе/модуле, 0 правок в чужих файлах
-- [ ] Все тесты проходят; поведение движка не изменилось
+- [x] `window` не зависит публично от `gui_gl_backend` (US-49-9 — больше не зависит вовсе)
+- [x] Добавление нового модуля/компонента: новый таргет + 1-2 строки в агрегаторе/модуле, 0 правок в чужих файлах
+- [x] Все тесты проходят (312); поведение движка не изменилось — ⚠️ рендер вне тестов, проверить запуском редактора
