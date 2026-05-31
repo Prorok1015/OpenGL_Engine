@@ -1,9 +1,7 @@
 #include "scn_material_desc.h"
 #include "res_system.h"
+#include "res_tag_json.h"
 #include "resources/res_resource_text.h"
-#include "rnd_driver_interface.h"
-#include "rnd_state_helper.h"
-#include "scn_model.h"
 #include "scn_glm_json_convert.h"
 
 constexpr auto SAMPLERS_FIELD = "samplers";
@@ -14,7 +12,48 @@ constexpr auto DEFINES_FIELD = "defines";
 constexpr auto QUEUE_FIELD = "queue";
 constexpr auto UNIFORMS_FIELD = "uniforms";
 
+namespace
+{
+	// Scene-side replica of rnd::render_mode_from_string / rnd::to_string (rnd_state_helper). Kept
+	// here so the .cpp does not pull rnd_state_helper.h — the string table MUST stay byte-for-byte
+	// identical to the render-side table to preserve .desc round-trip (EPIC-49 US-49-5).
+	scn::material_render_mode render_mode_from_string(const std::string& str)
+	{
+		using rm = scn::material_render_mode;
+		if (str == "TRIANGLE") return rm::TRIANGLE;
+		if (str == "TRIANGLE_STRIP") return rm::TRIANGLE_STRIP;
+		if (str == "TRIANGLE_FAN") return rm::TRIANGLE_FAN;
+		if (str == "TRIANGLE_ADJ") return rm::TRIANGLE_ADJ;
+		if (str == "TRIANGLE_STRIP_ADJ") return rm::TRIANGLE_STRIP_ADJ;
+		if (str == "LINE") return rm::LINE;
+		if (str == "LINE_STRIP") return rm::LINE_STRIP;
+		if (str == "LINE_LOOP") return rm::LINE_LOOP;
+		if (str == "LINE_ADJ") return rm::LINE_ADJ;
+		if (str == "LINE_STRIP_ADJ") return rm::LINE_STRIP_ADJ;
+		if (str == "POINT") return rm::POINT;
+		return rm::TRIANGLE; // Default
+	}
 
+	std::string render_mode_to_string(scn::material_render_mode mode)
+	{
+		using rm = scn::material_render_mode;
+		switch (mode) {
+		case rm::TRIANGLE: return "TRIANGLE";
+		case rm::TRIANGLE_STRIP: return "TRIANGLE_STRIP";
+		case rm::TRIANGLE_FAN: return "TRIANGLE_FAN";
+		case rm::TRIANGLE_ADJ: return "TRIANGLE_ADJ";
+		case rm::TRIANGLE_STRIP_ADJ: return "TRIANGLE_STRIP_ADJ";
+		case rm::LINE: return "LINE";
+		case rm::LINE_STRIP: return "LINE_STRIP";
+		case rm::LINE_LOOP: return "LINE_LOOP";
+		case rm::LINE_ADJ: return "LINE_ADJ";
+		case rm::LINE_STRIP_ADJ: return "LINE_STRIP_ADJ";
+		case rm::POINT: return "POINT";
+		}
+
+		return "UNKNOWN";
+	}
+}
 
 void scn::tag_invoke(json::value_from_tag, json::value& out, const scn::pass_queue& c)
 {
@@ -32,7 +71,7 @@ void scn::tag_invoke(json::value_from_tag, json::value& out, const scn::pass_que
 	}
 }
 
-scn::pass_queue scn::tag_invoke(json::value_to_tag<scn::pass_queue>, const json::value& obj) 
+scn::pass_queue scn::tag_invoke(json::value_to_tag<scn::pass_queue>, const json::value& obj)
 {
 	if (obj.is_string()) {
 		auto str = obj.get_string();
@@ -58,25 +97,19 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 	}
 
 	if (data.contains(SHADER_GEOMETRY_FIELD)) {
-		cdata.program.set_geometry_shader(
-			json::value_to<res::tag>(data.at(SHADER_GEOMETRY_FIELD)
-			));
+		geometry_shader = json::value_to<res::tag>(data.at(SHADER_GEOMETRY_FIELD));
 	}
 
 	if (data.contains(SHADER_VERTEX_FIELD)) {
-		cdata.program.set_vertex_shader(
-			json::value_to<res::tag>(data.at(SHADER_VERTEX_FIELD)
-			));
+		vertex_shader = json::value_to<res::tag>(data.at(SHADER_VERTEX_FIELD));
 	}
 
 	if (data.contains(SHADER_FRAGMENT_FIELD)) {
-		cdata.program.set_fragment_shader(
-			json::value_to<res::tag>(data.at(SHADER_FRAGMENT_FIELD)
-			));
+		fragment_shader = json::value_to<res::tag>(data.at(SHADER_FRAGMENT_FIELD));
 	}
 
 	if (data.contains(DEFINES_FIELD)) {
-		cdata.defines = json::value_to<std::vector<std::string>>(data.at(DEFINES_FIELD));
+		defines = json::value_to<std::vector<std::string>>(data.at(DEFINES_FIELD));
 	}
 
 	if (data.contains(QUEUE_FIELD)) {
@@ -97,7 +130,7 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 	}
 
 	if (data.contains("render_mode")) {
-		render_mode = rnd::render_mode_from_string(json::value_to<std::string>(data.at("render_mode")));
+		render_mode = render_mode_from_string(json::value_to<std::string>(data.at("render_mode")));
 	}
 }
 
@@ -121,7 +154,7 @@ void scn::material_desc::serialize(json::object& data) const
 				"USE_SPECULAR_MAP",
 				"USE_TXM_AS_DIFFUSE"
 			},
-			
+
 			"samplers": {
 				"tex0": "res://txm1.desc",
 				"tex1": "res://txm2.desc",
@@ -146,48 +179,21 @@ void scn::material_desc::serialize(json::object& data) const
 		}
 	*/
 	data["__type"] = "material_desc";
-	data[DEFINES_FIELD] = json::value_from(cdata.defines);
+	data[DEFINES_FIELD] = json::value_from(defines);
 	json::array jssamplers;
 	for (auto& sampler : samplers_textures)
 	{
 		jssamplers.push_back(json::value_from(sampler));
 	}
 	data[SAMPLERS_FIELD] = jssamplers;
-	data[SHADER_VERTEX_FIELD] = json::value_from(cdata.program.get_vertex_shader());
-	data[SHADER_FRAGMENT_FIELD] = json::value_from(cdata.program.get_fragment_shader());
-	data[SHADER_GEOMETRY_FIELD] = json::value_from(cdata.program.get_geometry_shader());
+	data[SHADER_VERTEX_FIELD] = json::value_from(vertex_shader);
+	data[SHADER_FRAGMENT_FIELD] = json::value_from(fragment_shader);
+	data[SHADER_GEOMETRY_FIELD] = json::value_from(geometry_shader);
 	data[QUEUE_FIELD] = json::value_from(queue);
 
 	json::object uniforms;
 	uniforms["albedo"] = json::value_from(albedo);
 	uniforms["emissive"] = json::value_from(emissive);
 	data[UNIFORMS_FIELD] = uniforms;
-	data["render_mode"] = rnd::to_string(render_mode);
-}
-
-rnd::shader_config scn::material_desc::get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager)
-{
-	rnd::shader_config::runtime_data rdata;
-	rdata.samplers.resize(samplers_textures.size());
-	for (int idx = 0; idx < samplers_textures.size(); ++idx)
-	{
-		if (samplers_textures[idx].is_valid()) {
-			rdata.samplers[idx] = txm_manager.require_texture(samplers_textures[idx]);
-		} else {
-			rdata.samplers[idx] = nullptr;
-		}
-	}
-
-	rdata.uniforms = uniforms;
-
-	if (handle.all_of<scn::world_transform>()) {
-		auto& transform = handle.get<scn::world_transform>();
-		rdata.uniforms["uWorldMeshMatr"] = transform.world;
-	}
-
-	rdata.uniforms["diffuseColor"] = albedo;
-	rdata.uniforms["emissiveColor"] = emissive;
-	rdata.uniforms["shininess"] = shininess;
-
-	return rnd::shader_config{ cdata, rdata };
+	data["render_mode"] = render_mode_to_string(render_mode);
 }

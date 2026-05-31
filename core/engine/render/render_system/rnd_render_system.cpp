@@ -19,6 +19,7 @@ void rnd::render_system::begin_frame(frame_context& context)
 	context.shaders  = &shader_manager;
 	context.geometry = &geom_manager;
 	context.skinning = m_skinning_manager; // nullable
+	context.material_compiler = m_material_compiler.get();
 }
 
 rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d)

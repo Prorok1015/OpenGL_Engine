@@ -5,6 +5,7 @@
 #include "rnd_light_data.hpp"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
+#include "shader/rnd_material_compiler.h"
 #include "scn_camera_component.hpp"
 #include "scn_material_desc.h"
 #include "scn_model.h"
@@ -16,6 +17,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     // Managers are injected into frame_context by render_system::begin_frame (frame stage 28),
     // which runs before this extractor (stage 30). Catch a missing/mis-ordered injection early.
     ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
+    ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
     auto& level = m_level_manager.get_level();
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
@@ -61,8 +63,6 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.camera.tp_reveal_target = cam.tp_reveal_target;
             packet.camera.render_priority = 0;
 
-            auto& tex_mgr = *context.textures;
-
             auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
             auto mesh_count = meshes_view.size_hint();
             packet.opaque_draws.reserve(mesh_count);
@@ -86,16 +86,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 }
 
                 const auto queue = mlt.queue;
-                rnd::shader_config shader_cfg;
-                {
-                    PROFILE_SCOPE("Extract.ShaderDesc");
-                    shader_cfg = mlt.get_shader_desc(entt::handle{ reg, m_ent }, tex_mgr);
-                }
 
-                if (dir_light_count > 0) {
-                    shader_cfg.cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(dir_light_count);
-                }
-
+                // Resolve skinning before compiling: the compiler bakes USE_ANIMATION from
+                // ctx.has_skinning (was an extractor mutation on the returned shader_cfg).
+                bool has_skinning = false;
                 {
                     PROFILE_SCOPE("Extract.Skinning");
                     if (auto* skin = reg.try_get<scn::skinning_component>(m_ent)) {
@@ -109,9 +103,16 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                             dc.bone_matrices = &matrices.matrices;
                             dc.skinning_tag = skin->skinning_tag;
 
-                            shader_cfg.cdata.defines.push_back("USE_ANIMATION");
+                            has_skinning = true;
                         }
                     }
+                }
+
+                rnd::shader_config shader_cfg;
+                {
+                    PROFILE_SCOPE("Extract.ShaderDesc");
+                    rnd::material_compile_context mctx{ &m_trans.world, context.textures, dir_light_count, has_skinning };
+                    shader_cfg = context.material_compiler->compile(mlt, mctx);
                 }
 
                 {
@@ -145,7 +146,14 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             auto skys_view = reg.view<scn::sky_component, scn::material_desc_component, scn::renderable>();
             for (auto [sky_ent, sky, mat] : skys_view.each()) {
                 if (mat.mlt_desc.is_ready()) {
-                    packet.skybox_material = mat.mlt_desc->get_shader_desc(entt::handle{ reg, sky_ent }, tex_mgr);
+                    // Skybox: no directional-light/skinning baking; uWorldMeshMatr only if the sky
+                    // entity has a world transform (mirrors old handle.all_of<world_transform>()).
+                    const glm::mat4* sky_world = nullptr;
+                    if (auto* sky_trans = reg.try_get<scn::world_transform>(sky_ent)) {
+                        sky_world = &sky_trans->world;
+                    }
+                    rnd::material_compile_context mctx{ sky_world, context.textures, 0, false };
+                    packet.skybox_material = context.material_compiler->compile(*mat.mlt_desc, mctx);
                 }
             }
 

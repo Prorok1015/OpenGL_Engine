@@ -11,6 +11,7 @@
 #include "passes/rnd_composition_pass.h"
 #include "passes/rnd_skybox_pass.h"
 #include "passes/rnd_debug_pass.h"
+#include "shader/rnd_material_compiler.h"
 
 extern rnd::render_system* p_render_system;
 
@@ -29,6 +30,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 	p_render_system->add_render_pass(std::make_shared<rnd::transparent_pass>());
 	p_render_system->add_render_pass(std::make_shared<rnd::debug_pass>());
 	p_render_system->add_render_pass(std::make_shared<rnd::composition_pass>());
+	p_render_system->set_material_compiler(std::make_shared<rnd::default_material_compiler>());
 }
 
 void engine::render::render_term(ds::app_data_storage& data)

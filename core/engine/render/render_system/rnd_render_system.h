@@ -14,6 +14,7 @@
 
 namespace scn { class skybox_desc; }
 namespace rnd { class skinning_manager; }
+namespace rnd { struct material_compiler_interface; }
 
 namespace rnd
 {
@@ -63,8 +64,12 @@ namespace rnd
 		void set_skinning_manager(rnd::skinning_manager* sm) { m_skinning_manager = sm; }
 		rnd::skinning_manager* get_skinning_manager() const { return m_skinning_manager; }
 
+		void set_material_compiler(std::shared_ptr<material_compiler_interface> mc) { m_material_compiler = std::move(mc); }
+		material_compiler_interface* get_material_compiler() const { return m_material_compiler.get(); }
+
 	private:
 		rnd::skinning_manager* m_skinning_manager = nullptr;
+		std::shared_ptr<material_compiler_interface> m_material_compiler;
 		std::unique_ptr<rnd::driver::driver_interface> drv = nullptr;
 		rnd::texture_manager texture_manager;
 		rnd::ShaderManager shader_manager;

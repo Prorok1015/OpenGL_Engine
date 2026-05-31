@@ -1,16 +1,30 @@
 #pragma once
 #include "desc_base.hpp"
 #include "res_tag.h"
-#include "rnd_driver_interface.h"
-#include "shader/rnd_scene_shader_desc.h"
-#include "rnd_shader_interface.h"
-#include "ecs_entity.h"
-#include "texture/rnd_texture_manager.h"
-#include "texture/rnd_texture_desc.h"
+#include <string>
+#include <vector>
 
 namespace scn
 {
 	enum class pass_queue { NONE, OPAQUE, TRANSPARENT, MIX };
+
+	// Mirrors rnd::driver::RENDER_MODE enumerators exactly (same order/names). Kept scene-side so
+	// material_desc stays a POD with no render/driver header dependency (EPIC-49 US-49-5). The
+	// render-side material compiler maps this to rnd::driver::RENDER_MODE when needed.
+	enum class material_render_mode
+	{
+		TRIANGLE,
+		TRIANGLE_STRIP,
+		TRIANGLE_FAN,
+		TRIANGLE_ADJ,
+		TRIANGLE_STRIP_ADJ,
+		LINE,
+		LINE_STRIP,
+		LINE_LOOP,
+		LINE_ADJ,
+		LINE_STRIP_ADJ,
+		POINT,
+	};
 
 	class material_desc : public desc::desc_base
 	{
@@ -30,8 +44,6 @@ namespace scn
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
 
-		virtual rnd::shader_config get_shader_desc(entt::handle handle, rnd::texture_manager& txm_manager);
-
 		std::vector<res::tag> samplers_textures;
 		ds::color albedo = ds::color(1.0f);
 		ds::color specular = ds::color(1.0f);
@@ -40,9 +52,12 @@ namespace scn
 		float shininess = 32.0f; // 0.0 -> 1000
 
 		pass_queue queue = pass_queue::OPAQUE;
-		rnd::driver::RENDER_MODE render_mode = rnd::driver::RENDER_MODE::TRIANGLE;
-		rnd::shader_config::constant_data cdata;
-		std::unordered_map<std::string, rnd::driver::uniform_data> uniforms;
+		material_render_mode render_mode = material_render_mode::TRIANGLE;
+
+		res::tag vertex_shader;
+		res::tag fragment_shader;
+		res::tag geometry_shader;
+		std::vector<std::string> defines;
 	};
 
 	void tag_invoke(json::value_from_tag, json::value& out, const scn::pass_queue& c);
