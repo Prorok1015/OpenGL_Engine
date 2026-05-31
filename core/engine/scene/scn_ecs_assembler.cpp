@@ -1,4 +1,5 @@
 #include "scn_ecs_assembler.h"
+#include <entt/entt.hpp>
 #include "res_system.h"
 #include "logger/engine_log.h"
 

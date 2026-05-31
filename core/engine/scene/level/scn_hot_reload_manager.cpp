@@ -1,5 +1,6 @@
 #include "scn_hot_reload_manager.h"
-#include "res_system.h" 
+#include <entt/entt.hpp>
+#include "res_system.h"
 #include "scn_prefab_desc.h"
 
 namespace scn {
