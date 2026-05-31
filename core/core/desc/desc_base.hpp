@@ -1,6 +1,10 @@
 #pragma once
 #include "common.h"
-#include <boost/json.hpp>
+// json::object appears only as a reference parameter in the pure-virtual serialize/deserialize
+// below, so a forward declaration suffices — this keeps full <boost/json.hpp> out of the ~25
+// headers that include desc_base.hpp (EPIC-49 US-49-4). TUs that actually call json methods
+// include <boost/json.hpp> themselves.
+#include <boost/json/fwd.hpp>
 #include "res_system.h"
 #include "res_tag.h"
 #include "resources/res_resource_base.h"
