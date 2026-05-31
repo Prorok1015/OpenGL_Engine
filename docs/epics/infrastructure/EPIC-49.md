@@ -18,7 +18,11 @@
 >   линкует Boost::json, но НЕ использует → PRIVATE, кандидат на удаление.
 > - ⚠️ Метод верификации: документированный `cmd /c "...vcvars... && cmake"` ломается в Git Bash
 >   (мангл `/c`) → cmake не запускался, тесты гоняли СТАРЫЙ бинарь. Чинить `.bat`-хелпером + `cmd //c`.
-> Следующее: Фаза 1 — US-49-4 (entt/imgui fwd-decl, res::tag без json/glm).
+>
+> **Прогресс (2026-05-31): Фаза 1 «Дешёвые границы» завершена.** US-49-4 DONE (см. ниже),
+> коммиты `4e9688d 484e492 092b315 d44b492`. Каждый под-коммит верифицирован ЧИСТОЙ сборкой
+> (preset dev-debug) + 307 тестов. Следующее: Фаза 2 — US-49-1 (public/private границы) + US-49-3
+> (engine_api/core_api INTERFACE-контракты).
 
 ---
 
@@ -101,7 +105,13 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 заголовками. editor_system и будущий game_module линкуются к `engine_api`, не к зонтику.
 **AC:** editor линкуется к `snk::engine_api`; `engine`/`core` не экспортируют impl-зависимости. Усилие: **M**.
 
-### US-49-4 — Изоляция тяжёлых заголовков
+### US-49-4 — Изоляция тяжёлых заголовков ✅ DONE (2026-05-31, `4e9688d 484e492 092b315 d44b492`)
+> Сделано: entt/fwd.hpp в scn_ecs_assembler.h + scn_hot_reload_manager.h (scn_world.h ИСКЛЮЧЁН —
+> хранит `entt::registry` by value, нужен полный тип); imgui.h убран из gui_backend_interface.h /
+> edt_panel_base.h / edt_dockspace.h через реплику integer-typedef (ImTextureID/ImGuiWindowFlags/ImGuiID);
+> res_tag.h больше не тянет boost/json+glm (вынесено в res_tag_json.h; glm::ivec2→POD span);
+> desc_base.hpp → boost/json/fwd.hpp (json::object только reference-параметр в pure-virtual).
+> Замечание: исходное AC-предположение «desc_base нельзя облегчить» неверно — fwd-decl достаточно для ref-параметра.
 **Файлы:** `core/core/resource/res_tag.h` (вынести `tag_invoke`+`<boost/json.hpp>` в `res_tag_json.h`;
 заменить glm::ivec2-поля на POD), `core/core/desc/desc_base.hpp` (json в .cpp где можно),
 `scn_world.h`/`scn_ecs_assembler.h`/`scn_hot_reload_manager.h` (`entt/entt.hpp`→`entt/fwd.hpp`),
@@ -177,7 +187,7 @@ US-49-9 (нарушения слоёв)
 - [ ] Ни один таргет не открывает корень исходников как PUBLIC; у компонентов есть публичные API-границы
 - [ ] `common` — самодостаточная STATIC-либа; editor_system не реконфигурирует core
 - [ ] `engine_api`/`core_api` INTERFACE-контракты; агрегаторы PRIVATE
-- [ ] Тяжёлые заголовки (res::tag/desc_base/entt/imgui) изолированы; время компиляции снижено
+- [x] Тяжёлые заголовки (res::tag/desc_base/entt/imgui) изолированы (US-49-4); время компиляции снижено
 - [ ] scene не включает конкретные render-классы и не вызывает rnd::get_system(); scene не знает о gui
 - [ ] Связывание модулей декларативно (depends_on+топосорт); per-frame стадии — через реестр
 - [ ] `window` не зависит публично от `gui_gl_backend`
