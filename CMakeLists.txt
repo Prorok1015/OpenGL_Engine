@@ -18,6 +18,11 @@ set(THIRD_PARTY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib3dparty")
 set(ENGINE_CORE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/core")
 set(SE_PROJECT_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Engine layers (core/core + core/engine). Brought in here so the Editor and the
+# unit_tests executable consume the already-configured targets instead of having
+# editor_system re-configure core via add_subdirectory (EPIC-49 US-49-2).
+add_subdirectory(core)
+
 add_subdirectory(Editor)
 
 enable_testing()

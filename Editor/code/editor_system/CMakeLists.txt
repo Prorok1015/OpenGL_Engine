@@ -4,7 +4,6 @@ add_library(${PROJECT_NAME} STATIC)
 
 file(GLOB_RECURSE SE_EDT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_EDT_SOURCES})
-target_link_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${PROJECT_NAME} PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
 	"${CMAKE_CURRENT_SOURCE_DIR}/core"
@@ -16,5 +15,5 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/input"
 )
 
-add_subdirectory(${ENGINE_CORE_PATH} "core")
-target_link_libraries(${PROJECT_NAME} PUBLIC engine PRIVATE assimp)
+# core/engine are configured once at the root (EPIC-49 US-49-2); editor_system just consumes `engine`.
+target_link_libraries(${PROJECT_NAME} PRIVATE engine PRIVATE assimp)
