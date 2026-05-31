@@ -14,5 +14,7 @@ add_subdirectory(${THIRD_PARTY_PATH}/glfw glfw)
 target_compile_definitions(window PUBLIC GLFW_INCLUDE_NONE=1)
 
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::core_input)
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE glfw PRIVATE glad PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PUBLIC snk::gui_backend_interface PRIVATE snk::gui_gl_backend PRIVATE snk::engine_logger)
+# window no longer depends on gui (EPIC-49 US-49-9): the gui_backend_interface / gui_gl_backend
+# links are removed — the GUI layer owns its imgui backend now.
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE glfw PRIVATE glad PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::engine_logger)
 

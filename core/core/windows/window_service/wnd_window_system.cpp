@@ -1,7 +1,6 @@
 #include "wnd_window_system.h"
 #include "wnd_window.h"
 #include "rnd_gl_render_context.h"
-#include "gui_gl_backend.h"
 #include "wnd_input_keycode_convert.hpp"
 #include "inp_keyboard_event.hpp"
 #include "inp_input_event.hpp"
@@ -132,21 +131,21 @@ wnd::window_system::window_system()
 
     active_window = make_window()->get_id();
     context = std::make_unique<rnd::driver::gl::render_context>((GLADloadproc)glfwGetProcAddress);
-    imgui_backend = std::make_unique<gui::gl::gl_imgui_backend>();
-    {
-        float xscale = 1.f;
-        glfwGetWindowContentScale(static_cast<GLFWwindow*>(active_window.internal_id), &xscale, nullptr);
-        imgui_backend->set_dpi_scale(xscale);
-    }
-    imgui_backend->init(active_window.internal_id);
-    auto is_exist = std::filesystem::exists(imgui_backend->get_settings_filename());
-    imgui_backend->set_initial_layout_by_default(!is_exist);
+    // The imgui backend is now created/initialised/shut down by the GUI layer (gui_init/gui_term),
+    // so window no longer depends on gui (EPIC-49 US-49-9). It exposes the native handle + DPI
+    // scale below for the GUI layer to set its backend up.
 }
 
 wnd::window_system::~window_system()
 {
-    imgui_backend->shutdown();
     glfwTerminate();
+}
+
+float wnd::window_system::get_active_content_scale() const
+{
+    float xscale = 1.f;
+    glfwGetWindowContentScale(static_cast<GLFWwindow*>(active_window.internal_id), &xscale, nullptr);
+    return xscale;
 }
 
 void wnd::window_system::init()
