@@ -1,0 +1,46 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-006
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-006
+title: res_control_block thread-safety + then() TOCTOU race
+type: bugfix
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: resources
+
+[DESCRIPTION]
+core/core/resource/resolvers/res_control_block.hpp: data/error_msg пишутся из adapter-worker-потока
+(set_ready/set_error) и читаются из main-потока, синхронизация только через atomic<status>, сам data
+не под мьютексом/без барьера. then() имеет TOCTOU: первая проверка is_ready()/has_error() без lock —
+при смене статуса между проверкой и взятием lock колбэк может потеряться (push_back после очистки
+вектора в set_ready) → ресурс «вечно грузится», либо выполниться дважды.
+
+[MOTIVATION]
+Найдено агентом по надёжности. Классический невоспроизводимый production-баг под нагрузкой: спорадически
+текстура/модель «не догружается» или гонка данных на слабых моделях памяти.
+
+[ACCEPTANCE]
+- data/error_msg публикуются с корректной синхронизацией (под callback_mtx либо release/acquire-барьер
+  относительно status; читатель берёт data только при status==ready).
+- then(): убрать безмьютексную первую ветку — всегда брать lock, проверять статус под ним, push_back в
+  on_ready_callbacks только если ещё не ready/error; иначе вызвать колбэк синхронно. Колбэк не теряется и
+  не вызывается дважды.
+- (Желательно) тест: конкурентный set_ready/then не теряет колбэк (стресс в цикле).
+
+[OUT_OF_SCOPE]
+- Переписывание модели async-загрузки/worker-пула.
+- Составной ключ кеша {tag,type} — это EPIC-28.
+
+[LINKS]
+workplan:
+external_id:
+epic:
+related_items: BL-002
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow discovery (multi-agent audit)

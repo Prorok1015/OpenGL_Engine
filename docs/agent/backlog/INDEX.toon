@@ -6,7 +6,7 @@ version: 1.0.0
 
 [BACKLOG_META]
 project_name: OpenGL Engine & Editor
-next_id_seq: 2
+next_id_seq: 7
 last_updated: 2026-05-31
 sync_target: none
 sync_project:
@@ -27,6 +27,46 @@ sync_default_type:
 # priority: P2
 # created: 2026-04-17
 # theme: integrations
+
+[ITEM.BL-002]
+title: ENGINE_VERIFY — release-active checks, fix ASSERT compiling to nothing
+type: refactor
+status: proposed
+priority: P0
+created: 2026-05-31
+theme: robustness
+
+[ITEM.BL-003]
+title: CI pipeline — build + ctest gating on PRs (MSVC + Clang)
+type: chore
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: infra
+
+[ITEM.BL-004]
+title: Top-level exception periphery + atomic bootstrap/shutdown
+type: refactor
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: robustness
+
+[ITEM.BL-005]
+title: frame_allocator_reset() missing in engine loop (standalone leak)
+type: bugfix
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: memory
+
+[ITEM.BL-006]
+title: res_control_block thread-safety + then() TOCTOU race
+type: bugfix
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: resources
 
 [ITEM.BL-001]
 title: Normalize RT tags read from camera desc (protocol-less)

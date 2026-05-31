@@ -1,0 +1,43 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-003
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-003
+title: CI pipeline — build + ctest gating on PRs (MSVC + Clang)
+type: chore
+status: proposed
+priority: P1
+created: 2026-05-31
+theme: infra
+
+[DESCRIPTION]
+В репозитории нет CI (.github/.gitlab/azure отсутствуют). ~330 Boost.Test кейсов и add_test есть,
+но гоняются только вручную — ничто не блокирует merge при поломке сборки/тестов. Добавить пайплайн,
+собирающий проект через CMakePresets и прогоняющий ctest на push/PR.
+
+[MOTIVATION]
+Найдено 2 агентами (build, testing) как блокер №1 для своих осей. Без CI остальная работа над
+качеством не защищает основную ветку; кросс-платформенность (Linux/Clang) не валидируется вообще.
+
+[ACCEPTANCE]
+- .github/workflows/ci.yml (или эквивалент): на push/PR в основную ветку.
+- Матрица windows-latest/MSVC + ubuntu/Clang; `cmake --preset dev-debug` → build → `ctest --output-on-failure`.
+- FetchContent/Boost закеширован, чтобы CI не качал tarball каждый раз.
+- Зелёный прогон обязателен для merge (branch protection — на стороне репо).
+- CONFIGURE_DEPENDS уже подхватывает новые тест-файлы — CI не требует правок при добавлении тестов.
+
+[OUT_OF_SCOPE]
+- Релизные артефакты/packaging (отдельно).
+- Static analysis / sanitizers (следующий шаг после базового CI).
+
+[LINKS]
+workplan:
+external_id:
+epic: docs/epics/infrastructure/EPIC-41.md
+related_items: BL-001
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow discovery (multi-agent audit; not covered by any epic)

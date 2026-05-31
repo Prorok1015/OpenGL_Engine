@@ -73,6 +73,7 @@
 | [EPIC-44](infrastructure/EPIC-44.md) | Memory Profiling & Container Aliases — трекинг памяти и удобные контейнеры | planned |
 | [EPIC-46](infrastructure/EPIC-46.md) | Tracy Profiler Integration — внешний профайлер для детального анализа | planned |
 | [EPIC-47](infrastructure/EPIC-47.md) | ds::string_id — хешированные идентификаторы строк | planned |
+| [EPIC-49](infrastructure/EPIC-49.md) | Engine Componentization & Module Wiring — чистое разделение на компоненты | in_progress |
 
 ### Render Migration
 
@@ -138,6 +139,9 @@ EPIC-43 (Memory Allocators)  ← standalone, мотивация из EPIC-39 (Pr
   └── EPIC-45 (Render Pipeline Optimization)  ← depends on EPIC-43, EPIC-39
 
 EPIC-47 (ds::string_id)  ← standalone, no deps
+
+EPIC-49 (Componentization & Module Wiring)  ← координируется с EPIC-41 (CMake) + EPIC-29 (Service Layer)
+  net-new: public/private границы, scene↔render развязка, тяжёлые заголовки, depends_on/топосорт, frame-stage реестр
 
 EPIC-33 (Skinning & Animation Refactoring)
   └── EPIC-48 (Skeleton & Skinning Pipeline v2)  ← depends on EPIC-33, EPIC-45

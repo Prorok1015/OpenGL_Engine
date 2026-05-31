@@ -1,0 +1,49 @@
+[META]
+framework: claude-framework
+file_id: backlog.item.BL-002
+class: runtime-managed
+version: 1.0.0
+
+[ITEM]
+id: BL-002
+title: ENGINE_VERIFY — release-active checks, fix ASSERT compiling to nothing
+type: refactor
+status: proposed
+priority: P0
+created: 2026-05-31
+theme: robustness
+
+[DESCRIPTION]
+core/core/common/engine_assert.h раскрывает ASSERT_MSG/ASSERT_FAIL в release (_DEBUG не задан)
+в ПУСТОТУ — условие не вычисляется. Весь защитный слой движка исчезает в боевой сборке. Нужен
+второй макрос ENGINE_VERIFY(cond, msg), который В RELEASE вычисляет условие, логирует egLOG_ERROR
+и делает graceful-degradation (типизированное исключение / return), а не проваливается дальше.
+Runtime-пути перевести с ASSERT на VERIFY.
+
+[MOTIVATION]
+Найдено независимо 3 агентами как production-блокер №1. В release: ds_store::require<T> при miss
+разыменовывает *nullptr; res_control_block::wait() отдаёт невалидную data при error; scn::level
+get_world(id) делает .at() → необработанный std::out_of_range → std::terminate; ecs world id>4 молча
+не регистрирует систему; FBO/glfwInit/glad не проверяются. Контролируемые ошибки превращаются в тихие
+краши/UB без диагностики.
+
+[ACCEPTANCE]
+- Введён ENGINE_VERIFY(cond, msg): в release вычисляет cond, при false логирует egLOG_ERROR и
+  graceful-degradation (исключение или явный возврат ошибки); ASSERT_* остаются debug-only для багов.
+- ds_store::require<T> при отсутствии сервиса в release не разыменовывает null (лог + бросок/возврат).
+- Runtime-пути переведены на VERIFY: загрузка ресурса (res_system require/wait, res_control_block),
+  scn::level::get_world(id) (find + лог вместо .at()), FBO check, glfwInit/gladLoadGLLoader.
+- Документировано различие ASSERT (внутренний инвариант) vs VERIFY (внешние данные/контракты).
+
+[OUT_OF_SCOPE]
+- Диалог ассерта со стектрейсом (это EPIC-31).
+- Снятие лимита миров 0-4 (отдельная задача).
+
+[LINKS]
+workplan:
+external_id:
+epic: docs/epics/infrastructure/EPIC-31.md
+related_items: BL-004, BL-006
+
+[HISTORY]
+2026-05-31 — captured (proposed) — source: workflow discovery (multi-agent production-readiness audit; flagged by 3 agents)

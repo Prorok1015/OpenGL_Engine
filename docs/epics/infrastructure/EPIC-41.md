@@ -4,13 +4,23 @@
 **Theme:** infrastructure
 **Dependencies:** none (standalone, но US-41-7 координируется с EPIC-34 US-34-8)
 
-> **Прогресс (2026-05-31):** низкорисковый срез сделан — **US-41-2** (один CXX_STANDARD в root),
+> **Прогресс (2026-05-31, срез 1):** низкорисковый срез — **US-41-2** (один CXX_STANDARD в root),
 > **US-41-3** (явный STATIC на всех либах, вкл. engine_logger/editor_system сверх списка),
 > **US-41-5** (CONFIGURE_DEPENDS на оставшихся GLOB: root TEST_SOURCES + boost-natvis; удалён
 > неиспользуемый SE_SOURCES_H; ренейм коллизий SE_RENDER/GAME/DEBUG_UI_SOURCES),
 > **US-41-9** (CMakePresets.json: dev-debug/dev-release/release/no-assimp + build presets).
-> Verify: configure clean, build editor+unit_tests OK, 307 тестов зелёные, `cmake --list-presets` валиден.
-> Осталось: US-41-1/4/6/7/8/10 (включая ребрендинг Snake Engine + snk:: в US-41-4).
+>
+> **Прогресс (2026-05-31, срез 2 = EPIC-49 Фаза 0):** **US-41-1** (cmake/ThirdParty.cmake: все
+> third-party cache-vars + единый BUILD_SHARED_LIBS; Boost FetchContent перенесён + slim
+> `BOOST_INCLUDE_LIBRARIES=json;asio;program_options;test`), **US-41-6** (таргет `imgui` STATIC в
+> parent-tracked `cmake/imgui.cmake` — НЕ внутри сабмодуля imgui; gui_backend_interface PUBLIC imgui,
+> gui_gl_backend PRIVATE imgui + только backend-impls), **US-41-4** (явный visibility: application/core_exe/
+> image_test; `snk::` алиасы на всех 22 lib-таргетах + зависимости через snk::). Коммиты:
+> `1441bd6 ca6aef9 cedc10b 2d89688 2714c1e`. Verify: ЧИСТАЯ сборка с нуля (preset dev-debug) +
+> свежий unit_tests.exe = 307 зелёных, exit 0; slim Boost подтверждён из чистого конфига.
+> ⚠️ US-41-4 AC по `application` устарел: Boost::json НЕ используется (нет app_data_storage, нет json
+> ни в одном хедере/.cpp) → сделан PRIVATE, не PUBLIC; кандидат на удаление.
+> Осталось: US-41-7 (assimp из scene/resource), US-41-8 (хардкод путей), US-41-10 (warnings).
 
 ---
 
@@ -245,14 +255,14 @@ US-41-10 (compiler warnings) — после US-41-1
 
 ## Критерии завершения эпика
 
-- [ ] Все настройки третьесторонних библиотек — в `cmake/ThirdParty.cmake`
+- [x] Все настройки третьесторонних библиотек — в `cmake/ThirdParty.cmake` (cache-vars + Boost; per-component `add_subdirectory(${THIRD_PARTY_PATH}/...)` остаются у владельцев)
 - [x] `CMAKE_CXX_STANDARD` задан один раз в root
 - [x] Все `add_library` имеют явный тип (`STATIC`/`INTERFACE`)
-- [ ] Все `target_link_libraries` имеют явный visibility (`PRIVATE`/`PUBLIC`/`INTERFACE`)
+- [x] Все `target_link_libraries` имеют явный visibility (`PRIVATE`/`PUBLIC`/`INTERFACE`)
 - [x] Все `file(GLOB...)` используют `CONFIGURE_DEPENDS`
-- [ ] ImGui — отдельный CMake-таргет
-- [ ] Нет прямой зависимости `scene` и `resource_system` от Assimp
+- [x] ImGui — отдельный CMake-таргет (`cmake/imgui.cmake`, `imgui`/`imgui::imgui`)
+- [ ] Нет прямой зависимости `scene` и `resource_system` от Assimp (US-41-7, pending)
 - [x] `CMakePresets.json` работает для debug/release/no-assimp конфигураций
-- [ ] Compiler warnings включены для проектного кода, отключены для third-party
-- [ ] Все движковые таргеты имеют `snk::` алиасы и зависимости используют алиасы
-- [ ] Нет глобального загрязнения — `BUILD_SHARED_LIBS`, пути и cache-переменные определены в правильных местах
+- [ ] Compiler warnings включены для проектного кода, отключены для third-party (US-41-10, pending)
+- [x] Все движковые таргеты имеют `snk::` алиасы и зависимости используют алиасы
+- [~] Нет глобального загрязнения — `BUILD_SHARED_LIBS` и cache-переменные централизованы; хардкод путей (`SE_RESOURCE_ABSOLUTE_PATH`, `THIRD_PARTY_PATH`) остаётся (US-41-8, pending)
