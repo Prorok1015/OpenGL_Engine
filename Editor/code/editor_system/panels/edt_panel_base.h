@@ -1,6 +1,9 @@
 #pragma once
 #include <string>
-#include <imgui.h>
+// ImGuiWindowFlags is an imgui integer typedef (int). Re-declared here to keep <imgui.h>
+// out of this header, which leaks into every panel (EPIC-49 US-49-4). Same-type redefinition
+// is legal alongside <imgui.h>; the .cpp includes the full header for the ImGui API.
+using ImGuiWindowFlags = int;
 
 namespace edt
 {

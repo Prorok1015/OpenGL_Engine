@@ -1,4 +1,5 @@
 #include "edt_panel_base.h"
+#include <imgui.h>
 
 namespace edt
 {

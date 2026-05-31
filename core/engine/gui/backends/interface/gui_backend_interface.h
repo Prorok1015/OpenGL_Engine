@@ -1,5 +1,9 @@
 #pragma once
-#include <imgui.h>
+// Avoid pulling all of <imgui.h> into this widely-included interface header (EPIC-49 US-49-4).
+// ImTextureID is an imgui integer typedef (ImU64 == unsigned long long in imgui v1.91.x).
+// Re-declaring it to the identical underlying type is legal even when <imgui.h> is also
+// included in the same TU. Keep in sync with imgui.h if the imgui version changes.
+using ImTextureID = unsigned long long;
 #include "rnd_texture_interface.h"
 #include <string>
 

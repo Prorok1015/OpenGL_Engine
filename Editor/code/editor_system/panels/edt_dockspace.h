@@ -1,6 +1,9 @@
 #pragma once
 #include "edt_panel_manager.h"
-#include <imgui.h>
+// ImGuiID is an imgui integer typedef (unsigned int). Re-declared here to keep <imgui.h>
+// out of this header (EPIC-49 US-49-4); the .cpp pulls in the full imgui API. Same-type
+// redefinition is legal alongside <imgui.h>.
+using ImGuiID = unsigned int;
 #include <functional>
 
 namespace edt
