@@ -1,13 +1,12 @@
 #pragma once
-#include <glm/glm.hpp>
 #include <string>
 #include <format>
 #include <ostream>
-#include <boost/json.hpp>
 #include <algorithm>
 #include "engine_assert.h"
 
-namespace json = boost::json;
+// Note: JSON (de)serialization of res::tag lives in res_tag_json.h (EPIC-49 US-49-4), so this
+// header pulls in neither <boost/json.hpp> nor <glm/glm.hpp>.
 
 namespace res
 {
@@ -26,11 +25,11 @@ namespace res
 			: full_(tag_path)
 		{
 			std::ranges::replace(full_, '\\', '/');
-			protocol_ = { 0, full_.find_first_of("://") };
+			protocol_ = { 0, static_cast<int>(full_.find_first_of("://")) };
 			const std::size_t name_start_idx = full_.find_last_of("/\\");
 			const std::size_t path_start_idx = full_.find_first_of("/\\") + 1;
-			path_ = { path_start_idx + 1, name_start_idx - path_start_idx };
-			name_ = { name_start_idx + 1, full_.length() - name_start_idx - 1 };
+			path_ = { static_cast<int>(path_start_idx + 1), static_cast<int>(name_start_idx - path_start_idx) };
+			name_ = { static_cast<int>(name_start_idx + 1), static_cast<int>(full_.length() - name_start_idx - 1) };
 		}
 
 		explicit tag(const std::string_view pref, const std::string_view path) 
@@ -65,15 +64,13 @@ namespace res
 		friend res::tag operator+ (const res::tag& a, const res::tag& b);
 
 	private:
+		// {offset, length} spans into full_ (was glm::ivec2; POD-ified to drop the glm include).
+		struct span { int x = 0; int y = 0; };
 		std::string full_;
-		glm::ivec2 protocol_{};
-		glm::ivec2 path_{};
-		glm::ivec2 name_{};
+		span protocol_{};
+		span path_{};
+		span name_{};
 	};
-
-	//TODO: move json dependencies into one place
-	void tag_invoke(json::value_from_tag, json::value& out, const res::tag& c);
-	res::tag tag_invoke(json::value_to_tag<res::tag>, const json::value& obj);
 
 	inline std::ostream& operator<<(std::ostream& os, const tag& t) {
 		return os << t.string();
