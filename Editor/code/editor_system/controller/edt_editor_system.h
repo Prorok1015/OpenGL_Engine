@@ -79,7 +79,6 @@ namespace edt {
 		std::unique_ptr<edt::model_importer> m_model_importer;
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
-		std::vector<res::tag> imported_models_list;
 		std::unique_ptr<edt::async_import_token> m_import_token;
 		bool poll_import_progress();
 

@@ -65,7 +65,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	editor_layer = std::make_shared<edt::editor_layer>();
 	m_gui.push_layer(editor_layer);
-	editor_layer->register_tool("File/Import...", [this] { return show_file_dialog(); });
 
 	// Resolve services from data storage → shared state
 	m_state.lvl_manager = data.require_shared<scn::level_manager>();
@@ -205,7 +204,6 @@ bool edt::editor_system::poll_import_progress()
 
 	auto result = m_model_importer->finalize_on_main(std::move(intermediate));
 	if (result.prefab) {
-		imported_models_list.push_back(result.root_tag);
 		egLOG("Editor/Import", "Model imported to memory: {}", result.root_tag.view());
 		m_export_dialog->open(std::move(result));
 		m_export_dialog_active = true;

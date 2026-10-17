@@ -499,17 +499,6 @@ edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system&
 {
 }
 
-edt::import_result edt::model_importer::import(const std::filesystem::path& abs_path)
-{
-	auto intermediate = import_background(abs_path);
-	if (!intermediate.error.empty()) {
-		import_result result;
-		result.source_path = abs_path;
-		return result;
-	}
-	return finalize_on_main(std::move(intermediate));
-}
-
 edt::import_intermediate edt::model_importer::import_background(const std::filesystem::path& abs_path)
 {
 	import_intermediate im;

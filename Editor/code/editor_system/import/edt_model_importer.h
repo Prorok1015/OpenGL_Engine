@@ -24,9 +24,6 @@ namespace edt {
 	public:
 		model_importer(desc::desc_system& ds, res::resource_system& rs, rnd::render_system& rnd);
 
-		// Synchronous import (blocks caller). Kept for backward compat.
-		import_result import(const std::filesystem::path& abs_path);
-
 		// Background-safe phase: Assimp parse + geometry + materials + store.
 		// Does NOT touch desc_sys.create_instance or skinning_manager.
 		import_intermediate import_background(const std::filesystem::path& abs_path);

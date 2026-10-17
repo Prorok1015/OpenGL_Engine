@@ -7,7 +7,7 @@
 #include <engine_log.h>
 #include "editor_module.h"
 
-#ifndef ENGINE_CONSOLE_MODE
+#if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
 
 // Add SAL annotations to match the Windows header definition
@@ -20,8 +20,8 @@ int WINAPI WinMain(
 #else
 int main(int argc, char* argv[])
 #endif
-{	
-#ifndef ENGINE_CONSOLE_MODE
+{
+#if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 	int argc;
 	LPCWSTR lpArgvW = GetCommandLineW();
 	LPWSTR* szArglist = CommandLineToArgvW(lpArgvW, &argc);
