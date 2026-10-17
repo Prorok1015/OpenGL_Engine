@@ -397,11 +397,6 @@ BOOST_AUTO_TEST_CASE(DescAdapter_SerializeThenDeserializeRoundTripsMaterialAndWo
 	}
 }
 
-// BUG: desc_adapter_t::serialize delegates to desc::serialize(), and most descs (prefab, level,
-// camera, lights, skybox, mesh_node, bone, skinning, animation_*, ...) do not write their own
-// "__type" -- only material_desc and world_desc do. A resource saved through the adapter (e.g. the
-// auto-serialize in pin_resource) therefore cannot be loaded again ("missing '__type'").
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(DescAdapter_SerializeKeepsTypeForEveryDescType)
 {
 	core::desc::desc_adapter_t adapter(*rs, *descs);
