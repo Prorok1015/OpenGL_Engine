@@ -1,4 +1,5 @@
 #include "scn_glm_json_convert.h"
+#include "engine_log.h"
 
 void glm::tag_invoke(json::value_from_tag, json::value& jv, const glm::vec2& v) {
     jv = json::array{ v.x, v.y };
@@ -57,6 +58,7 @@ glm::vec4 glm::tag_invoke(json::value_to_tag<glm::vec4>, const json::value& jv)
 			json::value_to<float>(jv.at(3))
 		};
 	}
+	egLOG_WARN("scene/json", "vec4 expects an array of 4 numbers, got '{}'; using zero", json::serialize(jv));
 	return {};
 }
 glm::mat4 glm::tag_invoke(json::value_to_tag<glm::mat4>, const json::value& jv)

@@ -112,6 +112,22 @@ BOOST_AUTO_TEST_CASE(DirectionalLight_PartialJsonKeepsOtherFields)
 	BOOST_TEST((l.ambient == glm::vec4{ 0.2f, 0.2f, 0.2f, 1 })); // untouched default
 }
 
+// #81: a 3-element colour/direction array (what the inspector used to write) must not zero the light.
+BOOST_AUTO_TEST_CASE(DirectionalLight_MalformedVectorsKeepDefaultsInsteadOfZero)
+{
+	const scn::directional_light_desc def;
+	scn::directional_light_desc l;
+	l.deserialize(*descs, parse(R"({"direction":[0,-1,0],"diffuse":[1,0.5],"ambient":"x","specular":[1,"a",3,1]})"));
+	BOOST_TEST((l.direction == def.direction));
+	BOOST_TEST((l.diffuse == def.diffuse));
+	BOOST_TEST((l.ambient == def.ambient));
+	BOOST_TEST((l.specular == def.specular));
+
+	l.deserialize(*descs, parse(R"({"diffuse":[1,0.5,0.25,1],"direction":[0,-1]})"));
+	BOOST_TEST((l.diffuse == glm::vec4{ 1, 0.5f, 0.25f, 1 }));
+	BOOST_TEST((l.direction == def.direction));
+}
+
 BOOST_AUTO_TEST_CASE(BoneDesc_RoundTripKeepsMatrixAndIndex)
 {
 	scn::bone_desc b;

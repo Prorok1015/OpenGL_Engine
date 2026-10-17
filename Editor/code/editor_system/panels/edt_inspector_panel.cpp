@@ -118,9 +118,26 @@ namespace edt
 					if (!handled) {
 						changed |= render_generic_json(comp.overrides);
 					}
-				} else if (auto it = m_parent_cache.find(key); it != m_parent_cache.end()) {
-					// No overrides but has parent_desc — show cached parent data read-only
-					render_generic_json_readonly(it->second);
+				} else {
+					// No overrides yet: let a custom renderer show the effective values (parent data or desc
+					// defaults) on a scratch copy; the first edit materialises it as the node's overrides.
+					std::optional<bool> result;
+					if (m_ui_registry && !effective_type.empty()) {
+						auto scratch = comp;
+						if (auto it = m_parent_cache.find(key); it != m_parent_cache.end())
+							scratch.overrides = it->second;
+						result = m_ui_registry->invoke(effective_type, scratch);
+						if (result.has_value() && *result && !m_readonly) {
+							comp.overrides = std::move(scratch.overrides);
+							changed = true;
+						}
+					}
+					if (!result.has_value()) {
+						if (auto it = m_parent_cache.find(key); it != m_parent_cache.end()) {
+							// has parent_desc — show cached parent data read-only
+							render_generic_json_readonly(it->second);
+						}
+					}
 				}
 
 				ImGui::PopID();

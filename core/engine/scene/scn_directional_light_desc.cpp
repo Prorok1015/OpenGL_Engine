@@ -3,16 +3,32 @@
 
 #include "scn_model.h"
 
+namespace {
+	// A malformed field keeps the current (default) value instead of collapsing to zero, which would black out the light.
+	void read_vec4_field(const json::object& data, std::string_view key, glm::vec4& field)
+	{
+		const auto* v = data.if_contains(key);
+		if (!v) return;
+		if (!v->is_array() || v->as_array().size() != 4) {
+			egLOG_WARN("scene/light", "directional_light_desc.{}: expected an array of 4 numbers, got '{}'; keeping default", key, json::serialize(*v));
+			return;
+		}
+		for (const auto& n : v->as_array()) {
+			if (!n.is_number()) {
+				egLOG_WARN("scene/light", "directional_light_desc.{}: non-numeric component in '{}'; keeping default", key, json::serialize(*v));
+				return;
+			}
+		}
+		field = json::value_to<glm::vec4>(*v);
+	}
+}
+
 void scn::directional_light_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	if (data.contains("direction"))
-		direction = json::value_to<glm::vec4>(data.at("direction"));
-	if (data.contains("diffuse"))
-		diffuse = json::value_to<glm::vec4>(data.at("diffuse"));
-	if (data.contains("ambient"))
-		ambient = json::value_to<glm::vec4>(data.at("ambient"));
-	if (data.contains("specular"))
-		specular = json::value_to<glm::vec4>(data.at("specular"));
+	read_vec4_field(data, "direction", direction);
+	read_vec4_field(data, "diffuse", diffuse);
+	read_vec4_field(data, "ambient", ambient);
+	read_vec4_field(data, "specular", specular);
 }
 
 void scn::directional_light_desc::serialize(json::object& data) const
