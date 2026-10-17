@@ -50,7 +50,11 @@ bool inp::ecs_input_manager::on_handle_event(wnd::handle win, const inp::input_e
 
 		input_state.mouse_prev = input_state.mouse_pos;
 		input_state.mouse_pos = payload->pos;
-		input_state.mouse_dir = (input_state.mouse_prev - input_state.mouse_pos) / (window_size * 0.5f);
+		// No input area configured -> zero-sized window; report no normalized delta instead of inf/NaN.
+		const glm::vec2 half_size = window_size * 0.5f;
+		input_state.mouse_dir = (half_size.x > 0.f && half_size.y > 0.f)
+									? (input_state.mouse_prev - input_state.mouse_pos) / half_size
+									: glm::vec2{0.f};
 	} else if (const auto* payload = evt.get_payload<core::inp::scroll_move_event>()) {
 		input_state.scroll = payload->direction;
 	}

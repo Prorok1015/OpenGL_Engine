@@ -239,9 +239,6 @@ BOOST_AUTO_TEST_CASE(EcsManager_ScrollIsLatchedUntilFrameDeltasReset)
 	BOOST_TEST((state.mouse_dir == glm::vec2{ 0 }));
 }
 
-// BUG: inp_ecs_input_manager.cpp -- with no input area configured (the default), the cursor
-// delta divides by a zero-sized window, so mouse_dir becomes +-inf/NaN instead of staying finite.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(2))
 BOOST_AUTO_TEST_CASE(EcsManager_MouseDeltaIsFiniteWithoutConfiguredArea)
 {
 	inp::ecs_input_manager mgr;
