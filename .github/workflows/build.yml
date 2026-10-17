@@ -1,0 +1,101 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    # Non-blocking entries (Linux) must not fail the workflow.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows MSVC Debug
+            os: windows-latest
+            build_type: Debug
+            profile_mode: INTERNAL
+            experimental: false
+          - name: Windows MSVC Release
+            os: windows-latest
+            build_type: Release
+            profile_mode: NONE
+            experimental: false
+          # make blocking after Phase 0 stage B fixes GCC/Clang build
+          - name: Linux GCC Debug
+            os: ubuntu-latest
+            build_type: Debug
+            profile_mode: INTERNAL
+            cc: gcc
+            cxx: g++
+            experimental: true
+          # make blocking after Phase 0 stage B fixes GCC/Clang build
+          - name: Linux Clang Debug
+            os: ubuntu-latest
+            build_type: Debug
+            profile_mode: INTERNAL
+            cc: clang
+            cxx: clang++
+            experimental: true
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # Boost 1.84 is downloaded by FetchContent (cmake/ThirdParty.cmake); cache its
+      # base dir so the tarball is not re-downloaded/re-extracted on every run.
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-${{ matrix.os }}-${{ matrix.build_type }}-${{ matrix.cxx || 'msvc' }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        shell: bash
+        run: |
+          args=(-S . -B build -G Ninja
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+            -DENGINE_PROFILE_MODE=${{ matrix.profile_mode }}
+            "-DFETCHCONTENT_BASE_DIR=${FC_DIR}")
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            args+=(-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+              -DGLFW_BUILD_WAYLAND=OFF)
+          fi
+          cmake "${args[@]}"
+
+      - name: Build editor and unit_tests
+        run: cmake --build build --target editor unit_tests --parallel
+
+      # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
+      # hosted runners, so this relies on the tests being headless.
+      - name: Run unit tests
+        working-directory: build
+        shell: bash
+        run: ./unit_tests --log_level=test_suite
