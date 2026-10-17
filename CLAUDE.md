@@ -64,7 +64,20 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - **Components:** POD structs, optional `_component` suffix
 - **Systems:** Inherit `ecs::system_interface` (auto-registered)
 
-## 📚 Backlog (deferred work)
+## 🎫 Task Tracking — GitHub Issues (primary)
+
+All work is tracked in [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues) — status and progress live there, not in markdown.
+
+- **Epic** = issue with label `epic`; its stories are native **sub-issues** (one issue per user story `US-NN-X`: description, files, AC checklist, link to the epic).
+- **Bug** = issue with label `bug`, attached to its epic when there is one.
+- **Labels:** `epic` `story` `bug` `tech-debt` `docs` `ci` · themes `editor` `render` `ecs` `resource` `infrastructure` `desc` `chimera` · priority `P0`–`P2`.
+- **Milestones:** Фаза 0 — этап C / этап D, M1–M6 (Chimera roadmap), Этап Б (ТЗ).
+- **Design docs stay in the repo:** `docs/epics/**/EPIC-NN.md`, `docs/roadmap/*.md` hold motivation and architecture; each links to its issue (`**Issue:** #N`) and each epic issue links back.
+- **Before starting work:** find the issue (or create one for non-trivial work); read the linked design doc.
+- **Commits:** reference the issue — `refs #N` while in progress, `closes #N` in the commit that finishes it; close the issue (and tick AC) when done. Bugs found mid-task → new `bug` issue, not a silent fix in an unrelated commit.
+- **Session handoff:** [`docs/agent/handoff/PHASE0-STATUS.md`](docs/agent/handoff/PHASE0-STATUS.md) — current phase, what's done, key issues and agreements.
+
+## 📚 Backlog (session scratch)
 
 The agent keeps a lightweight backlog at `docs/agent/backlog/`. Use it when the user says "do this later", when workflow phases produce out-of-scope follow-ups, or when side-quests should be captured without breaking the current task.
 
@@ -78,7 +91,7 @@ Then use these guides:
 
 Data: [`INDEX.toon`](docs/agent/backlog/INDEX.toon) (flat index) + `items/<id>.toon` (details, on demand).
 
-Note: Large work items belong in [`docs/epics/`](docs/epics/INDEX.md). Backlog is for short-lived follow-ups captured during sessions.
+Note: the local backlog is only for short-lived follow-ups within a session; anything that outlives the session goes to GitHub Issues (`sync_target: github`, see `SYNC.toon` → `[PROJECT_POLICY]`).
 
 ## 🗺️ Development Workflow (MANDATORY)
 
@@ -128,9 +141,9 @@ Commit format: `git commit -m "docs: [type] brief desc\n\nSource: ...\nFile: ...
 
 ## 📋 Current Status
 
-- Status of every epic (done / in_progress / planned): see link below
+- Status and progress: GitHub Issues + milestones (open/closed); current phase summary in `docs/agent/handoff/PHASE0-STATUS.md`
 
-👉 **All tasks:** [docs/epics/INDEX.md](docs/epics/INDEX.md)
+👉 **All tasks:** [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues) · [milestones](https://github.com/Prorok1015/OpenGL_Engine/milestones) · design index [docs/epics/INDEX.md](docs/epics/INDEX.md)
 
 ## 🚀 Build & Test
 

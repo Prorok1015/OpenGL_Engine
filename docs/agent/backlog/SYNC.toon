@@ -15,6 +15,14 @@ Silent sync causes two failure modes:
 
 Both are hard to undo and erode trust in the tracker. Explicit sync keeps the user in control of both direction and timing.
 
+[PROJECT_POLICY]
+# OpenGL Engine: GitHub Issues (Prorok1015/OpenGL_Engine) is the PRIMARY tracker (sync_target: github).
+primary_tracker: GitHub Issues — epics (label epic, native sub-issues), stories (label story, one per US-NN-X), bugs (label bug)
+milestones: 1 «Фаза 0 — этап C», 2 «Фаза 0 — этап D», 3 «M1 Проект и игровой модуль», 4 «M2 Данные», 5 «M3 Документный редактор», 6 «M4 Runtime», 7 «M5 Игровой UI», 8 «M6 Выпуск этапа А», 9 «Этап Б (ТЗ)»
+local_backlog_role: short-lived scratch for follow-ups found mid-session; anything that outlives the session is pushed to GitHub Issues (SYNC_PUSH) and the BL item is archived with a link
+commits: reference the issue — `refs #N` while working, `closes #N` in the commit that completes it
+manifest: docs/agent/tracker/manifest.json mirrors the initial issue set (key → number); new issues need not be added there
+
 [SUPPORTED_TARGETS]
 Set INDEX.toon [BACKLOG_META].sync_target to one of:
   - none           — no sync available; ignore SYNC operations (default)
