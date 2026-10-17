@@ -8,7 +8,7 @@ version: 1.0.0
 id: BL-001
 title: Normalize RT tags read from camera desc (protocol-less)
 type: bugfix
-status: proposed
+status: accepted
 priority: P2
 created: 2026-05-31
 theme: rendering
@@ -39,9 +39,10 @@ resolve (masked by the per-camera RT "legacy fallback"), which is fragile and co
 
 [LINKS]
 workplan:
-external_id:
+external_id: github#169
 epic:
 related_items:
 
 [HISTORY]
 2026-05-31 — captured (proposed) — source: workflow.REFACTOR.out_of_scope (code-review finding #3, deferred at CONFIRM)
+2026-10-17 — moved to GitHub Issues (see external_id); tracked there from now on

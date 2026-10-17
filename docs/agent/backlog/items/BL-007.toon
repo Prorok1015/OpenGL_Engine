@@ -8,7 +8,7 @@ version: 1.0.0
 id: BL-007
 title: Inject skinning_manager into ECS assembler (drop get_system at assembly time)
 type: refactor
-status: proposed
+status: accepted
 priority: P2
 created: 2026-05-31
 theme: skinning
@@ -39,9 +39,10 @@ EPIC-49 US-49-6 убрал rnd::get_system() из per-frame extractor'а и 6 п
 
 [LINKS]
 workplan:
-external_id:
+external_id: github#170
 epic: docs/epics/infrastructure/EPIC-49.md#US-49-6
 related_items: BL-005
 
 [HISTORY]
 2026-05-31 — captured (proposed) — source: workflow.REFACTOR.out_of_scope (EPIC-49 US-49-6 adversarial review)
+2026-10-17 — moved to GitHub Issues (see external_id); tracked there from now on

@@ -8,7 +8,7 @@ version: 1.0.0
 id: BL-008
 title: Finish EPIC-41 CMake hygiene (US-41-7/8/10)
 type: chore
-status: proposed
+status: accepted
 priority: P2
 created: 2026-05-31
 theme: build
@@ -41,9 +41,10 @@ pointer-айтем, не дубль):
 
 [LINKS]
 workplan:
-external_id:
+external_id: github#105 github#106 github#107
 epic: docs/epics/infrastructure/EPIC-41.md
 related_items: BL-003
 
 [HISTORY]
 2026-05-31 — captured (proposed) — source: user (handoff follow-up)
+2026-10-17 — moved to GitHub Issues (see external_id); tracked there from now on

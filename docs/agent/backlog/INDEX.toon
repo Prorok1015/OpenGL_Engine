@@ -71,7 +71,7 @@ theme: resources
 [ITEM.BL-001]
 title: Normalize RT tags read from camera desc (protocol-less)
 type: bugfix
-status: proposed
+status: accepted
 priority: P2
 created: 2026-05-31
 theme: rendering
@@ -79,7 +79,7 @@ theme: rendering
 [ITEM.BL-007]
 title: Inject skinning_manager into ECS assembler (drop get_system at assembly time)
 type: refactor
-status: proposed
+status: accepted
 priority: P2
 created: 2026-05-31
 theme: skinning
@@ -87,7 +87,7 @@ theme: skinning
 [ITEM.BL-008]
 title: Finish EPIC-41 CMake hygiene (US-41-7/8/10)
 type: chore
-status: proposed
+status: accepted
 priority: P2
 created: 2026-05-31
 theme: build
