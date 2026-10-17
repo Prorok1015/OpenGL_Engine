@@ -81,9 +81,7 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 	scn::world& world = lvl.create_world(std::string{WORLD_NAME}, m_world_id);
 
 	// Register systems from template
-	for (const auto& sys : world_res->get_systems()) {
-		m_state.sfactory->create_system(sys, world.state(), lvl.organizer());
-	}
+	lvl.add_world_systems(world, world_res->get_systems(), *m_state.sfactory);
 
 	// Assemble template (anchor, light, etc.)
 	entt::entity root = world.state().create();
@@ -114,18 +112,8 @@ void edt::prefab_editor_context::close()
 	if (lvl_mgr) {
 		scn::level& lvl = lvl_mgr->get_level();
 		if (lvl.has_world(WORLD_NAME)) {
-			lvl.remove_world(WORLD_NAME);
-
-			// Rebuild organizer for remaining (scene) worlds
-			lvl.clear_organizer();
-			for (size_t i = 0; i < m_state.world_names.size(); ++i) {
-				if (!lvl.has_world(m_state.world_names[i])) continue;
-				auto& world = lvl.get_world(m_state.world_names[i]);
-				for (const auto& sys_name : m_state.worlds_systems_list[i]) {
-					m_state.sfactory->create_system(sys_name, world.state(), lvl.organizer());
-				}
-			}
-			lvl.mark_systems_graphs_dirty();
+			// Rebuilds the organizer from the remaining (scene) worlds.
+			lvl.remove_world(WORLD_NAME, *m_state.sfactory);
 		}
 	}
 

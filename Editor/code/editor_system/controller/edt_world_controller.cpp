@@ -75,16 +75,13 @@ void edt::world_controller::create_world(const std::string& name)
 	}
 
 	scn::level& lvl = lvl_mgr->get_level();
-	uint32_t new_id = (uint32_t)lvl.get_world_count();
+	uint32_t new_id = lvl.acquire_free_world_id();
 	scn::world& world = lvl.create_world(name, new_id);
 
-	for (const auto& sys : world_res->get_systems())
-		m_state.sfactory->create_system(sys, world.state(), lvl.organizer());
+	lvl.add_world_systems(world, world_res->get_systems(), *m_state.sfactory);
 
 	entt::entity e = world.state().create();
 	m_state.assembler->spawn_from_desc(world.state(), e, *world_res, name);
-
-	lvl.mark_systems_graphs_dirty();
 
 	m_state.world_names.push_back(name);
 	m_state.world_descs.push_back(*world_res);
