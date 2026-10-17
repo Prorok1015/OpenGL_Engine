@@ -357,11 +357,6 @@ BOOST_FIXTURE_TEST_CASE(Camera_ScrollUpZoomsInAndClampsAtZero, camera_fixture)
 	BOOST_TEST(events() == 1u);
 }
 
-// BUG: scn_camera_controller_system.cpp -- the transform_updated event is only emitted when
-// `state.scroll.y > 0`, so scrolling OUT (negative scroll) changes `distance` and the local matrix
-// but never tells the transform system, leaving the camera's world matrix stale until another
-// input arrives.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_FIXTURE_TEST_CASE(Camera_ScrollDownZoomOutNotifiesTransformSystem, camera_fixture)
 {
 	state->scroll = { 0.0f, -1.0f };

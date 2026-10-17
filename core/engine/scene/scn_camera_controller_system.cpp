@@ -47,7 +47,7 @@ void update_camera_matrix_system(const inp::input_state& state,
 
         glm::mat4 orientation = glm::toMat4(glm::quat(rotation));
         local.local = glm::translate(pos) * orientation * glm::translate(glm::mat4(1.0), glm::vec3(0, 0, distance));
-        if (is_moving || is_rotating || state.scroll.y > 0)
+        if (is_moving || is_rotating || state.scroll.y != 0.f)
             event.emit(ent);
     }
 }
