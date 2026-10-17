@@ -10,7 +10,6 @@
 #include "gui_system.h"
 #include "rnd_frame_assembler.h"
 #include "eng_profiler.h"
-#include "mem_allocator.h"
 
 edt::edt_loop_service::edt_loop_service()
 	: stop_requested(false)
@@ -43,7 +42,6 @@ void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 {
 	PROFILE_FRAME("MainThread");
 	PROFILE_SCOPE("FrameTotal");
-	ds::frame_allocator_reset();
 
 	auto current_time = std::chrono::steady_clock::now();
 	std::chrono::duration<float> duration = current_time - previous_time;

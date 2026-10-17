@@ -97,8 +97,111 @@ BOOST_AUTO_TEST_CASE(UpstreamFallbackOnOverflow) {
 	void* p = nullptr;
 	BOOST_CHECK_NO_THROW(p = alloc.allocate(32, 1));
 	BOOST_TEST(p != nullptr);
-	// Clean up the upstream allocation
-	std::pmr::get_default_resource()->deallocate(p, 32, 1);
+	// The overflow block is owned by the resource and freed on reset()/destruction.
+	BOOST_TEST(alloc.overflow_block_count() == 1u);
+}
+
+namespace {
+
+	// Counts live upstream allocations/bytes so leaks and double frees are observable.
+	class counting_resource : public std::pmr::memory_resource
+	{
+	public:
+		std::size_t live_blocks = 0;
+		std::size_t live_bytes = 0;
+		std::size_t allocs = 0;
+		std::size_t deallocs = 0;
+		std::size_t last_alignment = 0;
+
+	protected:
+		void* do_allocate(std::size_t bytes, std::size_t alignment) override
+		{
+			++allocs;
+			++live_blocks;
+			live_bytes += bytes;
+			last_alignment = alignment;
+			return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+		}
+		void do_deallocate(void* p, std::size_t bytes, std::size_t alignment) override
+		{
+			++deallocs;
+			BOOST_REQUIRE(live_blocks > 0);
+			--live_blocks;
+			live_bytes -= bytes;
+			std::pmr::new_delete_resource()->deallocate(p, bytes, alignment);
+		}
+		bool do_is_equal(const std::pmr::memory_resource& o) const noexcept override
+		{
+			return this == &o;
+		}
+	};
+
+}
+
+BOOST_AUTO_TEST_CASE(ResetReleasesOverflowToUpstream) {
+	counting_resource up;
+	{
+		ds::linear_resource alloc(64, &up);
+		BOOST_TEST(up.live_blocks == 1u); // backing buffer only
+		alloc.allocate(64, 1);
+		alloc.allocate(100, 8);
+		alloc.allocate(200, 16);
+		BOOST_TEST(up.live_blocks == 3u);
+		BOOST_TEST(alloc.overflow_block_count() == 2u);
+
+		alloc.reset();
+		BOOST_TEST(up.live_blocks == 1u);
+		BOOST_TEST(alloc.overflow_block_count() == 0u);
+		BOOST_TEST(alloc.used() == 0u);
+
+		// Second reset must not double free.
+		alloc.reset();
+		BOOST_TEST(up.deallocs == 2u);
+	}
+	BOOST_TEST(up.live_blocks == 0u);
+	BOOST_TEST(up.allocs == up.deallocs);
+}
+
+BOOST_AUTO_TEST_CASE(RepeatedFillResetDoesNotGrowUpstream) {
+	counting_resource up;
+	ds::linear_resource alloc(256, &up);
+	for (int cycle = 0; cycle < 100; ++cycle) {
+		for (int i = 0; i < 20; ++i) {
+			alloc.allocate(64, 8);
+		}
+		BOOST_TEST(up.live_blocks <= 1u + 20u);
+		alloc.reset();
+		BOOST_REQUIRE(up.live_blocks == 1u);
+		BOOST_REQUIRE(up.live_bytes == 256u);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(OverflowBlockHonoursAlignmentAndDeallocateIsSafe) {
+	counting_resource up;
+	ds::linear_resource alloc(32, &up);
+	alloc.allocate(32, 1);
+	void* p = alloc.allocate(64, 64);
+	BOOST_TEST(reinterpret_cast<std::uintptr_t>(p) % 64 == 0u);
+	BOOST_TEST(up.last_alignment == 64u);
+	// Caller-side deallocate stays a no-op: no double free when reset() releases the block.
+	alloc.deallocate(p, 64, 64);
+	BOOST_TEST(up.live_blocks == 2u);
+	alloc.reset();
+	BOOST_TEST(up.live_blocks == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(PmrContainerOverflowIsReclaimedOnReset) {
+	counting_resource up;
+	ds::linear_resource alloc(128, &up);
+	{
+		std::pmr::vector<int> v(&alloc);
+		for (int i = 0; i < 1000; ++i) {
+			v.push_back(i);
+		}
+	}
+	BOOST_TEST(up.live_blocks > 1u);
+	alloc.reset();
+	BOOST_TEST(up.live_blocks == 1u);
 }
 
 // --- Deallocate is a no-op ---

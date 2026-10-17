@@ -28,13 +28,19 @@ namespace gs
 		void add_stage(int order, stage_fn fn);
 		void run(frame_step_context& ctx);
 
+		// Registered order keys, ascending (introspection for tests).
+		[[nodiscard]] std::vector<int> stage_orders() const;
+
 	private:
 		struct entry { int order; stage_fn fn; };
 		std::vector<entry> m_stages;
 		bool m_sorted = false;
 	};
 
+	// Order key of the frame-begin stage (frame allocator reset); runs before everything else.
+	inline constexpr int frame_begin_order = 5;
+
 	// Stages common to every frame loop, in canonical order:
-	// poll_events(10) -> level update(20) -> extract(30) -> render(40) -> present(50).
+	// frame_begin(5) -> poll_events(10) -> level update(20) -> extract(30) -> render(40) -> present(50).
 	void register_core_frame_stages(frame_stage_registry& registry);
 }

@@ -2,6 +2,7 @@
 #include <memory_resource>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace ds {
 
@@ -30,8 +31,12 @@ namespace ds {
 		linear_resource(const linear_resource&) = delete;
 		linear_resource& operator=(const linear_resource&) = delete;
 
-		/// Reset bump pointer to the beginning. O(1).
+		/// Reset bump pointer to the beginning and release every block that overflowed to
+		/// upstream. O(1) when nothing overflowed.
 		void reset() noexcept;
+
+		/// Number of live blocks currently held from upstream because the buffer was exhausted.
+		[[nodiscard]] std::size_t overflow_block_count() const noexcept;
 
 		/// Bytes currently in use (including alignment padding).
 		[[nodiscard]] std::size_t used() const noexcept;
@@ -45,6 +50,17 @@ namespace ds {
 		bool  do_is_equal(const std::pmr::memory_resource& other) const noexcept override;
 
 	private:
+		struct overflow_block
+		{
+			void*       ptr;
+			std::size_t bytes;
+			std::size_t alignment;
+		};
+
+		void release_overflow() noexcept;
+
+		std::vector<overflow_block> overflow_;
+		bool                        warned_      = false;
 		std::byte*                  buffer_      = nullptr;
 		std::size_t                 capacity_    = 0;
 		std::size_t                 offset_      = 0;

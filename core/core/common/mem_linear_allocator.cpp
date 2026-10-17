@@ -2,6 +2,7 @@
 #include <new>
 #include <cstring>
 #include "engine_assert.h"
+#include "engine_log.h"
 
 namespace ds {
 
@@ -29,9 +30,18 @@ namespace ds {
 
 	linear_resource::~linear_resource()
 	{
+		release_overflow();
 		if (owns_buffer_ && buffer_) {
 			upstream_->deallocate(buffer_, capacity_, alignof(std::max_align_t));
 		}
+	}
+
+	void linear_resource::release_overflow() noexcept
+	{
+		for (const auto& block : overflow_) {
+			upstream_->deallocate(block.ptr, block.bytes, block.alignment);
+		}
+		overflow_.clear();
 	}
 
 	void* linear_resource::do_allocate(std::size_t bytes, std::size_t alignment)
@@ -40,16 +50,27 @@ namespace ds {
 		std::uintptr_t current = reinterpret_cast<std::uintptr_t>(buffer_ + offset_);
 		std::uintptr_t aligned = (current + alignment - 1) & ~(alignment - 1);
 		std::size_t padding = static_cast<std::size_t>(aligned - current);
-		std::size_t total = padding + bytes;
+		std::size_t remaining = capacity_ - offset_;
 
-		if (offset_ + total <= capacity_) {
-			offset_ += total;
+		if (padding <= remaining && bytes <= remaining - padding) {
+			offset_ += padding + bytes;
 			return reinterpret_cast<void*>(aligned);
 		}
 
-		// Buffer exhausted — fall back to upstream if available
+		// Buffer exhausted — fall back to upstream if available. The block is tracked so that
+		// reset()/destructor can free it; deallocate() stays a no-op.
 		if (upstream_) {
-			return upstream_->allocate(bytes, alignment);
+			if (!warned_) {
+				warned_ = true;
+				egLOG_WARN("memory", "linear_resource overflow to upstream: capacity {} bytes, high-water {} bytes, requested {} bytes",
+					capacity_, offset_, bytes);
+			}
+			if (overflow_.size() == overflow_.capacity()) {
+				overflow_.reserve(overflow_.empty() ? 8 : overflow_.size() * 2);
+			}
+			void* p = upstream_->allocate(bytes, alignment);
+			overflow_.push_back({ p, bytes, alignment }); // capacity reserved above, cannot throw
+			return p;
 		}
 
 		throw std::bad_alloc();
@@ -67,7 +88,13 @@ namespace ds {
 
 	void linear_resource::reset() noexcept
 	{
+		release_overflow();
 		offset_ = 0;
+	}
+
+	std::size_t linear_resource::overflow_block_count() const noexcept
+	{
+		return overflow_.size();
 	}
 
 	std::size_t linear_resource::used() const noexcept

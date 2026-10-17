@@ -5,11 +5,23 @@
 #include "rnd_frame_assembler.h"
 #include "rnd_render_system.h"
 #include "eng_profiler.h"
+#include "mem_allocator.h"
 
 void gs::frame_stage_registry::add_stage(int order, stage_fn fn)
 {
 	m_stages.push_back({ order, std::move(fn) });
 	m_sorted = false;
+}
+
+std::vector<int> gs::frame_stage_registry::stage_orders() const
+{
+	std::vector<int> orders;
+	orders.reserve(m_stages.size());
+	for (const auto& stage : m_stages) {
+		orders.push_back(stage.order);
+	}
+	std::stable_sort(orders.begin(), orders.end());
+	return orders;
 }
 
 void gs::frame_stage_registry::run(frame_step_context& ctx)
@@ -26,6 +38,10 @@ void gs::frame_stage_registry::run(frame_step_context& ctx)
 
 void gs::register_core_frame_stages(frame_stage_registry& registry)
 {
+	// Must run before any stage allocates from the frame allocator; shared so every loop gets it.
+	registry.add_stage(frame_begin_order, [](frame_step_context&) {
+		ds::frame_allocator_reset();
+	});
 	registry.add_stage(10, [](frame_step_context& c) {
 		PROFILE_SCOPE("PollEvents");
 		c.storage.require<wnd::window_system>().pool_events();
