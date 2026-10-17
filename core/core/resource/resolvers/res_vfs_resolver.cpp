@@ -9,8 +9,8 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			auto otag = path_mapper(pth);
-			if (otag.has_value() && m_on_resource_changed) {
-				m_on_resource_changed(otag.value());
+			if (otag.has_value()) {
+				notify_resource_changed(otag.value());
 			}
 		})
 {
@@ -108,9 +108,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	}
 
 	if (entries_stack.empty()) {
-		if (m_on_resource_changed) {
-			m_on_resource_changed(tag);
-		}
+		notify_resource_changed(tag);
 
 		return false;
 	}

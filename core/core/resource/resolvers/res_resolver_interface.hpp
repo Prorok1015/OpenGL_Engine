@@ -3,6 +3,7 @@
 #include "res_control_block.hpp"
 #include <functional>
 #include <future>
+#include <mutex>
 
 namespace core::res
 {
@@ -31,6 +32,7 @@ namespace core::res
 		}
 
 		void set_resource_changed_callback(resource_changed_callback&& callback) {
+			std::lock_guard lock(m_on_resource_changed_mutex);
 			m_on_resource_changed = std::move(callback);
 		}
 
@@ -39,6 +41,20 @@ namespace core::res
 		}
 
 	protected:
+		// The callback may be set after a derived resolver already started its watcher thread,
+		// so it is invoked from a copy taken under the lock, never in place.
+		void notify_resource_changed(const ::res::tag& tag) {
+			resource_changed_callback callback;
+			{
+				std::lock_guard lock(m_on_resource_changed_mutex);
+				callback = m_on_resource_changed;
+			}
+			if (callback) {
+				callback(tag);
+			}
+		}
+
+		std::mutex m_on_resource_changed_mutex;
 		resource_changed_callback m_on_resource_changed;
 		std::string protocol;
 	};
