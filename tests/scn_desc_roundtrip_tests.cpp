@@ -487,4 +487,36 @@ BOOST_AUTO_TEST_CASE(DescSystem_PrettyJsonParsesBackToTheSameValue)
 	BOOST_TEST(json::value(json::parse(as_text)) == v);
 }
 
+// ---------------------------------------------------------------- regression: #82 (save dropped the transform of a reference-only node)
+
+BOOST_AUTO_TEST_CASE(WorldDesc_NodeReferencingAssetKeepsTransformOnSave)
+{
+	put("robot.desc", R"({"__type":"stat_desc","hp":5})");
+	auto text = std::string(R"({"__type":"world_desc","name":"w","systems":[],"children":{
+		"scene":{"transform":{"rotation":[-90,0,0],"position":[0,-1,-6],"scale":[0.1,0.1,0.1]},
+			"components":{"scene":")") + tag_of("robot.desc").string() + R"("}}}})";
+
+	scn::world_desc w;
+	w.deserialize(*descs, parse(text.c_str()));
+	auto out = ser(w);
+
+	const auto& scene = out.at("children").as_object().at("scene");
+	BOOST_REQUIRE_MESSAGE(scene.is_object(), "node with a transform must not collapse to a bare string");
+	const auto& tr = scene.as_object().at("transform").as_object();
+	BOOST_TEST((json::value_to<glm::vec3>(tr.at("position")) == glm::vec3{ 0, -1, -6 }));
+	BOOST_TEST((json::value_to<glm::vec3>(tr.at("rotation")) == glm::vec3{ -90, 0, 0 }));
+	check_stable(*descs, w);
+}
+
+BOOST_AUTO_TEST_CASE(WorldDesc_IdentityReferenceNodeStillUsesShorthand)
+{
+	put("robot.desc", R"({"__type":"stat_desc","hp":5})");
+	auto text = std::string(R"({"__type":"world_desc","name":"w","systems":[],"children":{"scene":")")
+		+ tag_of("robot.desc").string() + R"("}})";
+
+	scn::world_desc w;
+	w.deserialize(*descs, parse(text.c_str()));
+	BOOST_TEST(ser(w).at("children").as_object().at("scene").is_string());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

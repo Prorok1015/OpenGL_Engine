@@ -583,4 +583,26 @@ BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "leg")).hp == 44);
 }
 
+// #82: a node that only references an asset (e.g. a .glb) must keep its own transform at spawn,
+// otherwise the editor syncs the identity back into the desc and Save loses the transform.
+BOOST_AUTO_TEST_CASE(AssemblePrefab_NodeReferencingAssetKeepsItsOwnTransform)
+{
+	put("asset.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":2}}})");
+	auto world_tag = put("w.desc", R"({"__type":"world_desc","name":"w","systems":[],"children":{
+		"scene":{"transform":{"position":[0,-1,-6],"scale":[0.1,0.1,0.1]},"components":{"scene":"memory://t/asset.prefab.desc"}},
+		"plain":"memory://t/asset.prefab.desc"}})");
+	auto world = load<scn::world_desc>(world_tag);
+	BOOST_REQUIRE(world);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *world, "w", world_tag);
+
+	auto scene = child_named(reg, root, "scene");
+	BOOST_REQUIRE(scene != entt::null);
+	BOOST_TEST((translation_of(reg, scene) == glm::vec3{ 0, -1, -6 }));
+	BOOST_TEST(scale_x_of(reg, scene) == 0.1f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST(reg.get<test_util::stat_component>(scene).hp == 2); // the referenced content is still assembled
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -525,7 +525,11 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
 {
 	const auto& root_node = prefab.get_root();
 
-	reg.emplace_or_replace<scn::local_transform>(e, root_node.get_local_transform());
+	// A node that references this prefab as a component already got its own transform from spawn_child;
+	// the referenced root must not wipe it (it is only a fallback while the node is at identity).
+	const auto* existing = reg.try_get<scn::local_transform>(e);
+	if (!existing || existing->local == glm::mat4(1.0f))
+		reg.emplace_or_replace<scn::local_transform>(e, root_node.get_local_transform());
 	reg.emplace_or_replace<scn::world_transform>(e);
 
 	if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) {
