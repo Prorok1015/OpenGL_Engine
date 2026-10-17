@@ -143,7 +143,7 @@ iterating `scn::level::for_each_world`: it walks a `std::unordered_map` in **has
 not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
 per-world systems via `edt::derive_world_arrays` (`controller/edt_level_controller.h`), and
 keep `populate_worlds_from_level` as the single build point on load. Covered by
-`unittests/edt_world_array_sync_tests.cpp`.
+`tests/edt_world_array_sync_tests.cpp`.
 
 ## Prefab Node Format (critical)
 

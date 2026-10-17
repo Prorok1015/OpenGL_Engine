@@ -112,7 +112,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 - `core/core/resource/res_tag_json.h` (json/tag_invoke вынесены из res_tag.h)
 - `core/engine/game_system/gs_frame_stage.{h,cpp}` (frame_stage_registry + register_core_frame_stages)
 - `core/engine/render/render_system/shader/rnd_material_compiler.{h,cpp}` (material_compiler_interface + default_material_compiler)
-- `unittests/scn_material_desc_tests.cpp` (round-trip + render_mode таблица)
+- `tests/scn_material_desc_tests.cpp` (round-trip + render_mode таблица)
 - INTERFACE-таргеты `core_api`/`engine_api` — в `core/core/CMakeLists.txt` / `core/engine/CMakeLists.txt`.
 
 ## 5. Ссылки

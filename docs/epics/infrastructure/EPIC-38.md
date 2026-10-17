@@ -83,10 +83,10 @@ struct std::formatter<res::tag> {
 - [x] `std::format("{:proto}", tag)` выводит протокол
 - [x] `std::format("{:rel}", tag)` выводит relative path
 - [x] `operator<<(ostream, tag)` работает (для Boost.Test и logging)
-- [x] Unit-тесты для всех спецификаторов в `unittests/res_tag_formatter_tests.cpp`
+- [x] Unit-тесты для всех спецификаторов в `tests/res_tag_formatter_tests.cpp`
 
 ### US-38-2: Обновить тесты — заменить BOOST_CHECK на BOOST_TEST для res::tag
-**Файлы:** `unittests/res_tag_tests.cpp`, `unittests/rnd_shader_config_tests.cpp`
+**Файлы:** `tests/res_tag_tests.cpp`, `tests/rnd_shader_config_tests.cpp`
 
 Описание: После добавления `operator<<` тег станет printable. Заменить `BOOST_CHECK` обратно на `BOOST_TEST` для лучшей диагностики при падениях.
 

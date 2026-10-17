@@ -76,7 +76,7 @@ OpenGL_Engine/
 │   ├── config/                     ← editor.cfg
 │   └── res/                        ← Editor resources (levels, objects, templates, shaders, skybox)
 │
-├── unittests/                      ← Boost.Test test suite (auto-discovered)
+├── tests/                      ← Boost.Test test suite (auto-discovered)
 │
 ├── lib3dparty/                     ← Third-party submodules
 │   ├── assimp/

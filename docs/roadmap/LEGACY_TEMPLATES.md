@@ -6,7 +6,7 @@
 
 Метод проверки:
 
-- Ссылки искались по `*.cpp *.h *.hpp *.desc *.cfg *.json CMakeLists.txt` в `core/`, `Editor/`, `unittests/`, а упоминания в документах отдельно по `docs/`, `*.md`. Упоминание только в `docs/` не считается использованием.
+- Ссылки искались по `*.cpp *.h *.hpp *.desc *.cfg *.json CMakeLists.txt` в `core/`, `Editor/`, `tests/`, а упоминания в документах отдельно по `docs/`, `*.md`. Упоминание только в `docs/` не считается использованием.
 - Искались как полные пути (`shaders/scene_inst.vert`), так и основы имён (`scene_inst`, `normal.`, `network`, `transparent`) на случай путей, собираемых во время выполнения. Таких динамических сборок имён шейдеров в коде нет: все пути шейдеров либо литералы в C++ (`res::tag::make("shaders/...")`), либо поля `shader_vertex / shader_fragment / shader_geometry` в `.desc`.
 - Включаемые файлы (`#include "..."`) разворачиваются текстовой подстановкой в `core/engine/render/render_system/shader/rnd_scene_shader_desc.cpp` (функция `preprocess_shader_code`), поэтому `*_lib.*` считаются используемыми, если их включает используемый шейдер.
 - Корень ресурсов `res://` = `Editor/res/`: `Editor/config/editor.cfg:2` (`resource.path: ../res/`) и `Editor/CMakeLists.txt:3` (`SE_RESOURCE_ABSOLUTE_PATH = Editor/res/`, передаётся как `RESOURCE_PATH` в `core/core/resource/CMakeLists.txt:12`).
@@ -81,7 +81,7 @@
 - `Editor/config/editor.cfg:2`: `resource.path: ../res/`, это `Editor/res/`.
 - `Editor/CMakeLists.txt:3`: `SE_RESOURCE_ABSOLUTE_PATH = ${CMAKE_CURRENT_SOURCE_DIR}/res/`, то есть `Editor/res/`. Больше нигде `RESOURCE_PATH` не задаётся.
 - `grep -rE "core/res|\.\./res"` по `*.cpp *.h *.hpp *.cfg *.json CMakeLists.txt *.cmake *.yml` даёт единственное совпадение: `editor.cfg:2`, которое указывает на Editor.
-- В `unittests/` нет ссылок на файлы ни из `core/res`, ни из `Editor/res` (тесты используют только вымышленные пути-литералы вроде `shaders/basic.vert`).
+- В `tests/` нет ссылок на файлы ни из `core/res`, ни из `Editor/res` (тесты используют только вымышленные пути-литералы вроде `shaders/basic.vert`).
 - Из `docs/` на `core/res` не ссылается ничего (совпадения grep относятся к `core/core/resource/`).
 - Имена шейдеров (`main`, `lines`, `crosshair`, `bitmap`, `shape`, `scene`) в C++ как пути не встречаются; `scene.*` в `core/res` не совпадают с `Editor/res/shaders/scene.*` (устаревшая версия `#version 330`).
 
@@ -106,7 +106,7 @@
 | `test.jpg` (512x512, 157 КБ) | Код: нет. `core/engine/image/test/Source.cpp:10` открывает `"test.jpg"` из **текущего каталога**, а не через `res://`; рядом лежит своя копия `core/engine/image/test/test.jpg`. Документы: `EPIC-36.md:13,104,107`, `ARCHITECTURE_REVIEW.md:509` | Тестовая текстура для загрузчика изображений (stb) | Нет в `res://`; тест `image_test` использует собственную копию | Удалить. Идентичная копия лежит в `core/res/` | ☐ |
 | `test2.png` (1600x1059, 813 КБ) | Только документы | Вторая тестовая текстура | Нет | Удалить | ☐ |
 | `block.png` (512x512, 2.5 КБ) | Только документы | Текстура блока (наследие воксельного движка, см. `core/res/main.*`) | Нет | Удалить | ☐ |
-| `milla.bmp` (211x242, 154 КБ) | Только документы | Тест загрузки формата BMP | Загрузка BMP делается stb, тест на формат в `unittests/` отсутствует | Удалить либо оставить как фикстуру для будущего юнит-теста формата BMP. Уверенность средняя | ☐ |
+| `milla.bmp` (211x242, 154 КБ) | Только документы | Тест загрузки формата BMP | Загрузка BMP делается stb, тест на формат в `tests/` отсутствует | Удалить либо оставить как фикстуру для будущего юнит-теста формата BMP. Уверенность средняя | ☐ |
 | `window.png` (4587x8000, 1.18 МБ) | Только документы | Тест большого изображения / сброс текстуры (stress-тест размера) | Нет | Удалить. Самый большой файл из группы | ☐ |
 | `icons/engine_logo_small.png` (256x256, 13 КБ) | Только `EPIC-36.md:42` (описывает целевую структуру), `ARCHITECTURE_REVIEW.md:509` | Маленький логотип (иконка окна?) | Нет: код грузит только `icons/editor_engine_logo.png` (`editor_module.cpp:33`) | Оставить, если планируете задать иконку окна; иначе удалить. Уверенность средняя | ☐ |
 

@@ -160,7 +160,7 @@ Assimp извлекает `aiCamera` и `aiLight`. Нужно генериров
 - [ ] Поддерживаются как минимум directional lights (остальные типы — logWarning и skip)
 
 ### US-34-7: Тесты
-**Файлы:** `unittests/scn_assimp_helpers_tests.cpp` (новый)
+**Файлы:** `tests/scn_assimp_helpers_tests.cpp` (новый)
 **Зависимости:** US-34-8
 
 **AC:**

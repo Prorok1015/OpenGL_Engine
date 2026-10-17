@@ -81,7 +81,7 @@ CMakeLists.txt (root)
   │   ├── core/                       ← STATIC libraries (без изменений)
   │   └── engine/                     ← STATIC libraries (без изменений)
   ├── Editor/                         ← executable
-  └── unittests/                      ← executable
+  └── tests/                      ← executable
 ```
 
 ### Принципы

@@ -42,7 +42,7 @@
 ## User Stories
 
 ### US-37-1: Исправить баг в ds_polymorphic_cast и включить тесты
-**Файлы:** `core/core/common/ds/ds_polymorphic_cast.hpp`, `unittests/ds_polymorphic_cast_tests.cpp`
+**Файлы:** `core/core/common/ds/ds_polymorphic_cast.hpp`, `tests/ds_polymorphic_cast_tests.cpp`
 
 Баг: unique_ptr overload (строка 58) имеет `ASSERT_MSG(ptr1 != ptr2, ...)` — условие инвертировано (должно быть `==`). Строка 59 использует `std::static_pointer_cast` с `unique_ptr` — не компилируется.
 
@@ -53,7 +53,7 @@
 - [x] Добавлен тест RawReferenceSuccess
 
 ### US-37-2: Разбить ds_fixed_vector_test на отдельные кейсы
-**Файлы:** `unittests/ds_fixed_vector_test.cpp`
+**Файлы:** `tests/ds_fixed_vector_test.cpp`
 
 **AC:**
 - [x] Каждая операция в отдельном BOOST_AUTO_TEST_CASE (16 кейсов)
@@ -61,7 +61,7 @@
 - [x] Тесты overflow: InitializerListOverflow_Throws, PushBack_WhenFull_Throws
 
 ### US-37-3: Исправить timer_tests — убрать flaky busy-loop
-**Файлы:** `unittests/timer_tests.cpp`
+**Файлы:** `tests/timer_tests.cpp`
 
 **AC:**
 - [x] Убран busy-loop, используется sleep_for(50ms)
@@ -69,7 +69,7 @@
 - [x] Добавлены тесты NowSec_ReturnsPositiveValue, NowSec_IsMonotonicallyIncreasing
 
 ### US-37-4: Тесты ресурсной системы — res::tag
-**Файлы:** `unittests/res_tag_tests.cpp` (новый)
+**Файлы:** `tests/res_tag_tests.cpp` (новый)
 
 **AC:**
 - [ ] Парсинг: `tag::make("path/file.txt")` → корректные protocol/path/name/extension
@@ -80,7 +80,7 @@
 - [ ] Невалидный тег: пустая строка, только протокол
 
 ### US-37-5: Тесты ресурсной системы — control_block и text_adapter
-**Файлы:** `unittests/res_control_block_tests.cpp` (новый), `unittests/res_text_adapter_tests.cpp` (новый)
+**Файлы:** `tests/res_control_block_tests.cpp` (новый), `tests/res_text_adapter_tests.cpp` (новый)
 
 **AC:**
 - [x] control_block: статусы pending→ready, callback вызывается при ready (11 кейсов)
@@ -89,7 +89,7 @@
 - [x] text_adapter: serialize roundtrip, empty content, adapter_info
 
 ### US-37-6: Тесты рендер-пайплайна — buffer_layout
-**Файлы:** `unittests/rnd_buffer_layout_tests.cpp` (новый)
+**Файлы:** `tests/rnd_buffer_layout_tests.cpp` (новый)
 
 **AC:**
 - [ ] shader_data_type_size() возвращает корректные размеры для всех 11 типов
@@ -99,7 +99,7 @@
 - [ ] Поиск элемента по имени работает
 
 ### US-37-7: Тесты рендер-пайплайна — light_data и shader_config
-**Файлы:** `unittests/rnd_light_data_tests.cpp` (новый), `unittests/rnd_shader_config_tests.cpp` (новый)
+**Файлы:** `tests/rnd_light_data_tests.cpp` (новый), `tests/rnd_shader_config_tests.cpp` (новый)
 
 **AC:**
 - [ ] scene_lights_t::to_gpu_params() корректно конвертирует 0, 1, MAX_LIGHT_COUNT источников
@@ -109,7 +109,7 @@
 - [ ] shader_program_data builder: set/get vertex/fragment/geometry shader по расширению
 
 ### US-37-8: Тесты рендер-пайплайна — render_mode conversion и geometry_desc serialization
-**Файлы:** `unittests/rnd_state_helper_tests.cpp` (новый), `unittests/rnd_geometry_desc_tests.cpp` (новый)
+**Файлы:** `tests/rnd_state_helper_tests.cpp` (новый), `tests/rnd_geometry_desc_tests.cpp` (новый)
 
 **AC:**
 - [ ] to_string() и render_mode_from_string() для всех 12 режимов

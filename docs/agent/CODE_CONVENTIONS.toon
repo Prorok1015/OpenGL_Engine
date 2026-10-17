@@ -195,6 +195,6 @@ batch_operations: Group by resource type, render pass, etc.
 
 [TESTING_PATTERNS]
 framework: Boost.Test (BOOST_AUTO_TEST_SUITE, BOOST_AUTO_TEST_CASE)
-location: unittests/ directory
+location: tests/ directory
 naming: SuffixTests or SuffixTest for suite, TestCaseName for cases
 discovery: Auto via file(GLOB) in CMakeLists.txt

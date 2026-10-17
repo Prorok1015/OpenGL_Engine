@@ -113,7 +113,7 @@ OpenGL_Engine/
 │   ├── glad/, stb_image/           # Internal libraries
 │   └── natvis/                     # Visual Studio debugger visualizers (lib3dparty/natvis)
 │
-├── unittests/                      # Boost.Test suite (180+ test cases)
+├── tests/                      # Boost.Test suite (180+ test cases)
 ├── docs/epics/                     # Task tracker (epics & user stories)
 └── CMakeLists.txt                  # Root build configuration
 ```

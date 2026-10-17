@@ -169,7 +169,7 @@ Keyframes дублировались в каждой bone-entity. Вынесен
 - [x] Интерполяция корректна при edge cases: 0 ключей, 1 ключ, время ровно на границе кадра
 
 ### US-33-9: Юнит-тесты
-**Файлы:** `unittests/scn_skinning_animation_tests.cpp` (новый)
+**Файлы:** `tests/scn_skinning_animation_tests.cpp` (новый)
 
 **AC:**
 - [x] Тест: skeleton + bone_matrices — `bone_matrices_component` на skeleton root, не на mesh

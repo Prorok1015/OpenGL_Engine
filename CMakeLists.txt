@@ -34,10 +34,10 @@ add_subdirectory(Editor)
 
 enable_testing()
 
-file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "unittests/*.cpp")
-list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/unittests/unit_tests.cpp")
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
+list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp")
 
-add_executable(unit_tests unittests/unit_tests.cpp ${TEST_SOURCES})
+add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::config_system PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 

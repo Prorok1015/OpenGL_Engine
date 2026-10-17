@@ -37,7 +37,7 @@
 ```
 core/core/common/ds_string_id.hpp           ← header-only, FNV-1a + string_id класс
 core/core/common/ds_string_id.cpp           ← (если нужна глобальная таблица для debug)
-core/core/common/ds_string_id_tests.cpp     ← unit tests (в unittests/)
+core/core/common/ds_string_id_tests.cpp     ← unit tests (в tests/)
 ```
 
 ### Дизайн string_id

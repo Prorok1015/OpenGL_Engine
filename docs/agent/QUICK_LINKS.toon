@@ -113,7 +113,7 @@ Build Output:
 
 [TESTING]
 Test Suite:
-  → unittests/ (all test files)
+  → tests/ (all test files)
   → Build: mkdir build && cd build && cmake .. && make -j4
   → Run: ./unit_tests
   → Single: ./unit_tests --run_test=DSBitFlagsTests

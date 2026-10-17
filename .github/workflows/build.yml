@@ -205,7 +205,7 @@ jobs:
           # hit counts and header templates repeat across TUs, hence the tolerance flags.
           gcovr_args=(--root . --object-directory build
             --filter 'core/' --filter 'Editor/code/'
-            --exclude 'lib3dparty/' --exclude 'unittests/' --exclude 'build/' --exclude '.fetchcontent-cache/'
+            --exclude 'lib3dparty/' --exclude 'tests/' --exclude 'build/' --exclude '.fetchcontent-cache/'
             --exclude-unreachable-branches --exclude-throw-branches
             --merge-mode-functions=separate
             --gcov-ignore-parse-errors=negative_hits.warn_once_per_file
