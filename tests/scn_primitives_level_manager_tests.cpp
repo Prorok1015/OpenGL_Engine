@@ -212,10 +212,6 @@ BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTriggersFullReload)
 	BOOST_TEST(has_named(lvl.get_world("only").state(), "c3"));
 }
 
-// BUG: same as HotReloadManager_UnwatchedNonPrefabDescDoesNotAbort -- after the old level file is
-// unwatched, its change falls to the internal reload and trigger_hot_reload's polymorphic cast of a
-// level_desc to prefab_desc asserts (abort) in Debug builds.
-BOOST_TEST_DECORATOR(*boost::unit_test::disabled())
 BOOST_AUTO_TEST_CASE(HotReload_ReloadingAnotherLevelStopsWatchingTheOldOne)
 {
 	auto tag1 = put("lv.desc", LEVEL_V1);
@@ -259,11 +255,6 @@ BOOST_AUTO_TEST_CASE(WorldTypedFileKeepsItsNameSystemsAndInheritsParent)
 	BOOST_TEST((child->get_systems() == std::vector<std::string>{ "a", "b" })); // inherited
 }
 
-// BUG: scn_prefab_desc.cpp prefab_desc::deserialize -- `root = parse_node(...)` replaces the whole
-// tree after desc_adapter/worldwrap_adapter already copied the __parent into the instance, so a
-// derived prefab/world silently loses every inherited component and child (only the scalar
-// fields name/systems of world_desc are inherited).
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(WorldTypedFileInheritsParentContent)
 {
 	rs->registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, std::ref(*rs), std::ref(*descs));

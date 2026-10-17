@@ -77,6 +77,10 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
     const auto& desc_res = ds::polymorphic_pointer_cast<const ::desc::desc_base>(resource);
 	json::object body;
 	desc_res->serialize(body);
+	// Most descs do not write their own __type, but deserialize() requires it.
+	if (!body.contains("__type")) {
+		body["__type"] = std::string(desc_res->get_type());
+	}
     std::string data = json::serialize(body);
     std::vector<std::byte> byte_data;
     byte_data.resize(data.size());

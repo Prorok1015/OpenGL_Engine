@@ -436,11 +436,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_ShallowMergeReplacesWholeNestedObject_Curren
 	BOOST_TEST(s.label == "base");
 }
 
-// BUG: scn_prefab_desc.cpp ~assemble_merged_node -- `cnode.parent_desc->get_tag()` dereferences
-// res_handle::operator->, which returns a null shared_ptr for an errored/missing base prefab, so a
-// nested instance whose base file is missing dereferences null (crash) instead of being skipped.
-// Disabled because the failure mode is a segfault that would take the whole test binary down.
-BOOST_TEST_DECORATOR(*boost::unit_test::disabled())
 BOOST_AUTO_TEST_CASE(NestedInstance_MissingBasePrefabStillAppliesOverrides)
 {
 	global_res_guard guard(rs.get());
@@ -537,10 +532,6 @@ BOOST_AUTO_TEST_CASE(HotReload_ReplacesChildrenEvenWhenNewVersionKeepsOnlyRename
 	BOOST_TEST((names == std::vector<std::string>{ "b", "c" }));
 }
 
-// BUG: scn_prefab_desc.cpp hot_reload_merged_node -- stale children are only removed when
-// `!processed_entities.empty()`, so a new prefab version that has NO children leaves all the old
-// live children (and their entities) in place.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(HotReload_RemovingAllChildrenDestroysLiveChildren)
 {
 	auto tag = put("base.prefab.desc", R"({"__type":"prefab_desc","children":{"arm":{"components":{"stat":{"__type":"stat_desc","hp":3}}}}})");
@@ -575,11 +566,6 @@ BOOST_AUTO_TEST_CASE(HotReload_OnlyReloadsInstancesOfTheChangedPrefab)
 	BOOST_TEST(reg.get<test_util::stat_component>(eb).hp == 1);
 }
 
-// BUG (suspected): for an explicit nested instance, hot_reload_merged_node takes the base from
-// `cnode.parent_desc` stored inside local_overrides -- the handle that was resolved when the
-// instance was first assembled -- instead of from the freshly reloaded prefab, so changes to the
-// base prefab never reach override-bearing instances.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 {
 	global_res_guard guard(rs.get());

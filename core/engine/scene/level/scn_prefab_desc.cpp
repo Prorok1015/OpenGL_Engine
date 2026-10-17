@@ -1,6 +1,7 @@
 #include "scn_prefab_desc.h"
 #include "scn_model.h"
 #include "scn_glm_json_convert.h"
+#include <algorithm>
 #include <unordered_set>
 
 namespace scn {
@@ -96,7 +97,28 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 		return result;
 	};
 
-	root = parse_node(parse_node, "", data, true);
+	prefab_node parsed = parse_node(parse_node, "", data, true);
+
+	// With a __parent the adapter already copied the parent into this instance: layer on top of it.
+	if (!data.contains("__parent")) {
+		root = std::move(parsed);
+		return;
+	}
+
+	if (auto const* transform = data.if_contains("transform"); transform && transform->is_object()) {
+		const auto& t_obj = transform->as_object();
+		if (t_obj.contains("position")) root.position = parsed.position;
+		if (t_obj.contains("rotation")) root.rotation = parsed.rotation;
+		if (t_obj.contains("scale"))    root.scale = parsed.scale;
+	}
+	for (auto& [key, comp] : parsed.components) {
+		root.components[key] = std::move(comp);
+	}
+	for (auto& child : parsed.children) {
+		auto it = std::ranges::find(root.children, child.name, &prefab_node::name);
+		if (it != root.children.end()) *it = std::move(child);
+		else root.children.push_back(std::move(child));
+	}
 }
 
 void scn::prefab_desc::serialize(json::object& data) const
@@ -297,14 +319,15 @@ void scn::hot_reload_merged_node(
 	const scn::prefab_desc::prefab_node* override_node
 ) {
 	const scn::prefab_desc::prefab_node* nested_base_root = nullptr;
+	res::res_handle<scn::prefab_desc> nested_asset;
 
 	if (override_node) {
 		for (const auto& [comp_name, cnode] : override_node->components) {
 			if (cnode.type_name == "prefab_desc" && cnode.parent_desc.is_valid()) {
-				
-				auto asset = ds::polymorphic_pointer_cast<const scn::prefab_desc>(cnode.parent_desc.get());
-				if (ENGINE_VERIFY(asset, "nested prefab '{}' is not loaded, ignoring", cnode.parent_desc.get_tag().view())) {
-					nested_base_root = &asset->get_root();
+				// cnode.parent_desc is the handle captured at first assembly and goes stale; re-resolve by tag.
+				nested_asset = res::get_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
+				if (ENGINE_VERIFY(nested_asset.is_ready(), "nested prefab '{}' is not loaded, ignoring", cnode.parent_desc.get_tag().view())) {
+					nested_base_root = &nested_asset->get_root();
 				}
 
 				reg.emplace_or_replace<scn::prefab_instance>(live_entity, scn::prefab_instance{
@@ -457,7 +480,9 @@ void scn::hot_reload_merged_node(
 		}
 	}
 
-	if (children_comp && !processed_entities.empty()) {
+	// Re-fetch: spawning children above may have created the component or moved it.
+	children_comp = reg.try_get<scn::children_component>(live_entity);
+	if (children_comp) {
 		auto& children_vec = children_comp->children;
 		for (auto it = children_vec.begin(); it != children_vec.end(); ) {
 			if (processed_entities.find(*it) == processed_entities.end()) {
@@ -471,6 +496,10 @@ void scn::hot_reload_merged_node(
 }
 
 void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab) {
+	// Any desc (level, stat, component descs...) can be signalled here; only prefab-derived ones are prefabs.
+	auto desc = std::dynamic_pointer_cast<const scn::prefab_desc>(changed_prefab.get());
+	if (!desc) return;
+
 	auto view = reg.view<scn::prefab_instance>();
 
 	std::vector<entt::entity> roots_to_reload;
@@ -480,9 +509,6 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 			roots_to_reload.push_back(entity);
 		}
 	}
-
-	auto desc = ds::polymorphic_pointer_cast<const scn::prefab_desc>(changed_prefab.get());
-	if (!desc) return;
 
 	for (auto root_entity : roots_to_reload) {
 		auto& instance = reg.get<scn::prefab_instance>(root_entity);

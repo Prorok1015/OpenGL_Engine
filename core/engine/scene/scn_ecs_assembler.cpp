@@ -33,12 +33,17 @@ namespace scn {
 		bool is_structural = (it->second.category == spawner_category::structural);
 
 		if (parent_desc.is_valid() && !is_hot_reload && !is_structural) {
-			auto& tracker = reg.get_or_emplace<scn::component_tracker>(e);
-			tracker.tracked_components[std::string(name)] = scn::tracked_component_info{
-				actual_type,
-				parent_desc.get_tag(),
-				overrides
-			};
+			scn::tracked_component_info info{ actual_type, parent_desc.get_tag(), overrides };
+			// Fill before the registry signals, so hot_reload_manager sees the source desc.
+			if (reg.all_of<scn::component_tracker>(e)) {
+				reg.patch<scn::component_tracker>(e, [&] (scn::component_tracker& tracker) {
+					tracker.tracked_components[std::string(name)] = std::move(info);
+				});
+			} else {
+				scn::component_tracker tracker;
+				tracker.tracked_components[std::string(name)] = std::move(info);
+				reg.emplace<scn::component_tracker>(e, std::move(tracker));
+			}
 		}
 
 		if (overrides.empty() && parent_desc.is_valid()) {
