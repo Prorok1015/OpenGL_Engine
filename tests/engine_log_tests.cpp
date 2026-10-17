@@ -104,11 +104,6 @@ BOOST_AUTO_TEST_CASE(CategoryFile_ReceivesOnlyItsCategoryWithFormattedLine)
 	// (the sinks keep the files open until process exit; temp_dir removal ignores that on POSIX)
 }
 
-// BUG: engine_log.cpp get_or_create_logger -- after shutdown_logger() the next log call re-runs
-// init_logger() but then reads spdlog::get_level(), which dereferences spdlog's default logger
-// that spdlog::shutdown() destroyed, so any egLOG after shutdown_logger() (e.g. from a static
-// destructor) segfaults. Disabled: the failure mode is a crash that would abort the test binary.
-BOOST_TEST_DECORATOR(*boost::unit_test::disabled())
 BOOST_AUTO_TEST_CASE(LoggingAfterShutdownReinitializes)
 {
 	capture cap;

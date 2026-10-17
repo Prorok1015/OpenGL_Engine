@@ -18,6 +18,8 @@ namespace {
 	std::vector<spdlog::sink_ptr> s_sinks;
 	spdlog::sink_ptr s_file_sink;
 	bool s_initialized = false;
+	// Own copy: spdlog::get_level() dereferences the default logger, which spdlog::shutdown() destroys.
+	spdlog::level::level_enum s_global_level = spdlog::level::info;
 	engine::log_callback_t s_callback;
 	std::string s_log_file_path = "logs/engine.log";
 
@@ -60,7 +62,7 @@ namespace {
 		}
 
 		auto logger = std::make_shared<spdlog::logger>(key, s_sinks.begin(), s_sinks.end());
-		logger->set_level(spdlog::get_level());
+		logger->set_level(s_global_level);
 		logger->flush_on(spdlog::level::warn);
 		spdlog::register_logger(logger);
 		s_loggers[key] = logger;
@@ -86,10 +88,11 @@ void engine::init_logger()
 
 	// Default level
 #ifdef _DEBUG
-	spdlog::set_level(spdlog::level::trace);
+	s_global_level = spdlog::level::trace;
 #else
-	spdlog::set_level(spdlog::level::info);
+	s_global_level = spdlog::level::info;
 #endif
+	spdlog::set_level(s_global_level);
 
 	s_initialized = true;
 }
@@ -122,6 +125,7 @@ void engine::log_message(std::string_view category, log_level level, std::string
 void engine::set_log_level(log_level level)
 {
 	auto spd_level = to_spdlog_level(level);
+	s_global_level = spd_level;
 	spdlog::set_level(spd_level);
 }
 
