@@ -99,3 +99,96 @@ jobs:
         working-directory: build
         shell: bash
         run: ./unit_tests --log_level=test_suite
+
+  # Non-blocking unit-test coverage report (GCC + gcov/gcovr). No external services or tokens:
+  # the per-area table goes to the job summary and the full HTML report is an artifact.
+  coverage:
+    name: Coverage (Linux GCC Debug)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+          python3 -m pip install --user gcovr
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-coverage-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure (--coverage)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENGINE_PROFILE_MODE=INTERNAL \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DGLFW_BUILD_WAYLAND=OFF \
+            "-DFETCHCONTENT_BASE_DIR=${FC_DIR}" \
+            -DCMAKE_CXX_FLAGS=--coverage \
+            -DCMAKE_EXE_LINKER_FLAGS=--coverage
+
+      - name: Build unit_tests
+        run: cmake --build build --target unit_tests --parallel
+
+      # Keep going when a test fails: a coverage report of a red run is still useful, and the
+      # step fails at the end so the job is flagged (the job itself is non-blocking).
+      - name: Run unit tests
+        working-directory: build
+        run: |
+          set +e
+          ./unit_tests
+          echo "UNIT_TESTS_EXIT=$?" >> "$GITHUB_ENV"
+
+      - name: Generate coverage report
+        run: |
+          mkdir -p build/coverage
+          # Product code only: engine/core libraries and the editor. Third-party code, the tests
+          # themselves and build output are excluded. Multi-threaded tests can produce negative
+          # hit counts and header templates repeat across TUs, hence the tolerance flags.
+          gcovr_args=(--root . --object-directory build
+            --filter 'core/' --filter 'Editor/code/'
+            --exclude 'lib3dparty/' --exclude 'unittests/' --exclude 'build/' --exclude '.fetchcontent-cache/'
+            --exclude-unreachable-branches --exclude-throw-branches
+            --merge-mode-functions=separate
+            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file
+            --gcov-ignore-errors=no_working_dir_found
+            -j "$(nproc)")
+          gcovr "${gcovr_args[@]}" --txt build/coverage/coverage.txt --print-summary \
+            --json-summary build/coverage/summary.json \
+            --html-details build/coverage/index.html
+          {
+            python3 .github/scripts/coverage_summary.py build/coverage/summary.json
+            echo
+            echo '<details><summary>Per-file report</summary>'
+            echo
+            echo '```'
+            cat build/coverage/coverage.txt
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: build/coverage
+          if-no-files-found: warn
+
+      - name: Fail if unit tests failed
+        if: env.UNIT_TESTS_EXIT != '0'
+        run: |
+          echo "unit_tests exited with ${UNIT_TESTS_EXIT}"
+          exit 1
