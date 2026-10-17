@@ -31,9 +31,12 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system));
 
 	auto logo = res.require_sync<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
-	ds::fixed_vector<wnd::window_image, 2> images;
-	images.emplace_back(logo->data(), logo->size().x, logo->size().y, wnd::window_image::TYPE::LOGO);
-	win_service.get_active_window()->set_logo(images);
+	// A missing logo is cosmetic: keep starting the editor without it.
+	if (const auto logo_res = logo.get_sync(); ENGINE_VERIFY(logo_res, "editor logo failed to load, window icon skipped")) {
+		ds::fixed_vector<wnd::window_image, 2> images;
+		images.emplace_back(logo_res->data(), logo_res->size().x, logo_res->size().y, wnd::window_image::TYPE::LOGO);
+		win_service.get_active_window()->set_logo(images);
+	}
 	win_service.get_active_window()->set_title("Snake Editor");
 
 	data.require<edt::editor_system>().init(data);

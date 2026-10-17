@@ -8,6 +8,7 @@
 #include <vector>
 #include <memory>
 #include "engine_assert.h"
+#include "logger/engine_log.h"
 #include "resources/res_resource_base.h"
 
 namespace core::res
@@ -65,7 +66,7 @@ namespace core::res
                     return;
                 }
             }
-            callback(*this);
+            invoke_callback(callback);
         }
 
         void set_ready(T&& result) {
@@ -89,12 +90,29 @@ namespace core::res
             std::vector<std::function<void(res_control_block<T>&)>> callbacks;
             {
                 std::lock_guard lock(callback_mtx);
+                // A block settles once: a second set_ready/set_error must not overwrite data or drop callbacks.
+                if (is_finished()) {
+                    egLOG_ERROR("resource", "res_control_block already finished, ignoring repeated completion");
+                    return;
+                }
                 write();
                 status.store(final_status, std::memory_order_release);
                 callbacks.swap(on_ready_callbacks);
             }
             m_cv.notify_all();
-            for (auto& cb : callbacks) cb(*this);
+            for (auto& cb : callbacks) invoke_callback(cb);
+        }
+
+        // A throwing callback must not prevent the remaining callbacks from firing nor turn a ready block into an error.
+        void invoke_callback(std::function<void(res_control_block<T>&)>& cb)
+        {
+            try {
+                cb(*this);
+            } catch (const std::exception& e) {
+                egLOG_ERROR("resource", "then() callback threw: {}", e.what());
+            } catch (...) {
+                egLOG_ERROR("resource", "then() callback threw an unknown exception");
+            }
         }
 
         std::condition_variable m_cv;

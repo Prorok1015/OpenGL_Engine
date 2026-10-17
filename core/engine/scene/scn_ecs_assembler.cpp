@@ -14,6 +14,10 @@ namespace scn {
 		const std::string_view name,
 		bool is_hot_reload) const
 	{
+		if (!ENGINE_VERIFY(!parent_desc.has_error(), "component '{}': parent desc '{}' failed to load, skipping", name, parent_desc.get_tag().view())) {
+			return;
+		}
+
 		if (actual_type.empty() && parent_desc.is_valid()) {
 			actual_type = parent_desc->get_type();
 		}

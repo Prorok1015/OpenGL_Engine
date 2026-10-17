@@ -35,7 +35,11 @@ void scn::assemble_animation_collection(entt::registry& reg, entt::entity e,
 
 	// Auto-create animation_controller if not already present and we have clips
 	if (!reg.all_of<scn::animation_controller_component>(e) && !desc.clips.empty()) {
-		auto& first_clip = *desc.clips[0].get_sync();
+		const auto first_clip_ptr = desc.clips[0].get_sync();
+		if (!ENGINE_VERIFY(first_clip_ptr, "animation_collection '{}': first clip failed to load, skipping auto controller", name)) {
+			return;
+		}
+		auto& first_clip = *first_clip_ptr;
 		scn::animation_controller_component ctrl;
 		ctrl.current_animation = first_clip.name;
 		ctrl.duration = first_clip.duration;

@@ -30,7 +30,9 @@ bool scn::level_manager::load(const res::tag& level_tag)
 						std::size_t world_index = 0;
 						for (const auto& world_desc : level_res->get_worlds()) {
 							auto& world = active_lvl.get_world(world_index++);
-							if (world.get_name() != world_desc->get_name()) {
+							const auto desc_ptr = world_desc.get_sync();
+							if (!ENGINE_VERIFY(desc_ptr, "level reload '{}': world desc failed to load, forcing full reload", changed_tag.view())
+								|| world.get_name() != desc_ptr->get_name()) {
 								is_full_reload = true;
 								break;
 							}

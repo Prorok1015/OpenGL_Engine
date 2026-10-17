@@ -1,5 +1,7 @@
 #include "scn_worldwrap_adapter.h"
 #include "desc_system.h"
+#include <stdexcept>
+#include <string>
 
 scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system& res_system, ::desc::desc_system& desc_system)
 	: m_res_system(res_system)
@@ -14,7 +16,9 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
     options.max_depth = 128;
     auto json_body = json::parse(json_data, {}, options).as_object();
 
-    ASSERT_MSG(json_body.contains("__type"), "Deserialized desc resource does not contain __type field!");
+    if (!json_body.contains("__type")) {
+        throw std::runtime_error("world desc '" + std::string{ tag.view() } + "' does not contain __type field");
+    }
 
     std::string type_id = json::value_to<std::string>(json_body.at("__type"));
 
@@ -24,7 +28,11 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
         if (json_body.contains("__parent")) {
             auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
             auto parent = m_res_system.require_sync<::desc::desc_base>(parent_tag);
-            parent->copy_to(*instance);
+            const auto parent_desc = parent.get_sync();
+            if (!parent_desc) {
+                throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': failed to load '__parent' '" + std::string{ parent_tag.view() } + "'");
+            }
+            parent_desc->copy_to(*instance);
         }
     }
 

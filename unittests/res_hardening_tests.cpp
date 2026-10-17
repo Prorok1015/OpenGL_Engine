@@ -94,6 +94,7 @@ BOOST_AUTO_TEST_CASE(ControlBlock_ThenRacingWithCompletion_FiresExactlyOnce)
 	for (int i = 0; i < iterations; ++i) {
 		res_control_block<int> block;
 		std::atomic<int> fired = 0;
+		std::atomic<int> wrong_value = 0;
 		std::atomic<bool> go = false;
 
 		std::thread completer([&] {
@@ -102,8 +103,9 @@ BOOST_AUTO_TEST_CASE(ControlBlock_ThenRacingWithCompletion_FiresExactlyOnce)
 		});
 		std::thread subscriber([&] {
 			while (!go) std::this_thread::yield();
+			// Boost.Test is not thread-safe: record results here, check after join.
 			block.then([&](auto& b) {
-				BOOST_CHECK_EQUAL(b.data, 7);
+				if (b.data != 7) ++wrong_value;
 				++fired;
 			});
 		});
@@ -111,7 +113,66 @@ BOOST_AUTO_TEST_CASE(ControlBlock_ThenRacingWithCompletion_FiresExactlyOnce)
 		completer.join();
 		subscriber.join();
 		BOOST_REQUIRE_EQUAL(fired.load(), 1);
+		BOOST_REQUIRE_EQUAL(wrong_value.load(), 0);
 	}
+}
+
+BOOST_AUTO_TEST_CASE(ControlBlock_ThrowingCallbackKeepsBlockReadyAndOthersFire)
+{
+	res_control_block<int> block;
+	int before = 0, after = 0;
+	block.then([&](auto&) { ++before; });
+	block.then([&](auto&) { throw std::runtime_error("callback failure"); });
+	block.then([&](auto&) { ++after; });
+
+	BOOST_CHECK_NO_THROW(block.set_ready(3));
+	BOOST_CHECK(block.is_ready());
+	BOOST_CHECK(!block.has_error());
+	BOOST_CHECK_EQUAL(block.data, 3);
+	BOOST_CHECK_EQUAL(before, 1);
+	BOOST_CHECK_EQUAL(after, 1);
+
+	// A throwing callback registered after completion must not propagate either.
+	BOOST_CHECK_NO_THROW(block.then([](auto&) { throw std::runtime_error("late failure"); }));
+}
+
+BOOST_AUTO_TEST_CASE(ControlBlock_SecondCompletionIsIgnored)
+{
+	res_control_block<int> block;
+	block.set_ready(1);
+	block.set_error("late error");
+	block.set_ready(2);
+	BOOST_CHECK(block.is_ready());
+	BOOST_CHECK(!block.has_error());
+	BOOST_CHECK_EQUAL(block.data, 1);
+	BOOST_CHECK(block.error_msg.empty());
+
+	res_control_block<int> failed;
+	failed.set_error("first");
+	failed.set_ready(5);
+	BOOST_CHECK(failed.has_error());
+	BOOST_CHECK_EQUAL(failed.error_msg, "first");
+}
+
+BOOST_AUTO_TEST_CASE(RequireSync_ThrowingResolver_EndsInErrorStatus)
+{
+	struct throwing_resolver : core::res::res_resolver_interface {
+		using res_resolver_interface::res_resolver_interface;
+		async_raw_data resolve(const res::tag&) const override { throw std::runtime_error("resolver exploded"); }
+	};
+
+	desc_fixture f;
+	f.res_sys->registrate_resolver<throwing_resolver>("throwres");
+	const res::tag tag{ "throwres://x/y.txt" };
+
+	auto handle = f.res_sys->require_sync<res::text_resource>(tag);
+	BOOST_CHECK(handle.has_error());
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.get_control_block()->error_msg.find("resolver exploded") != std::string::npos);
+
+	// A second requester shares the failed block instead of waiting forever.
+	auto again = f.res_sys->require_sync<res::text_resource>(tag);
+	BOOST_CHECK(again.has_error());
 }
 
 BOOST_AUTO_TEST_CASE(ControlBlock_CallbackMayReenterThen)

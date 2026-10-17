@@ -67,6 +67,10 @@ void edt::level_controller::new_level()
 	});
 
 	auto level_res = m_res.require_sync<scn::level_desc>(m_state.editor_tag);
+	if (!level_res.is_ready()) {
+		egLOG_ERROR("Editor/NewLevel", "Level desc '{}' failed to load after creation", m_state.editor_tag.view());
+		return;
+	}
 	populate_worlds_from_level(level_res);
 	m_state.level_name = "new_level";
 
@@ -222,6 +226,10 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		});
 
 		auto level_res = m_res.require_sync<scn::level_desc>(m_state.editor_tag);
+		if (!level_res.is_ready()) {
+			egLOG_ERROR("Editor/LoadLevel", "Level desc '{}' failed to load", m_state.editor_tag.view());
+			return;
+		}
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
@@ -312,7 +320,11 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 	// world_descs is the single ordered source of truth (desc order); names and systems
 	// are derived from it so all three parallel arrays stay index-aligned.
 	for (const auto& wh : level_res->get_worlds()) {
-		m_state.world_descs.push_back(*wh);
+		const auto world = wh.get_sync();
+		if (!ENGINE_VERIFY(world, "level '{}': world desc failed to load, skipping", level_res.get_tag().view())) {
+			continue;
+		}
+		m_state.world_descs.push_back(*world);
 	}
 	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
 }

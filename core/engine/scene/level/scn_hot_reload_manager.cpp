@@ -95,7 +95,7 @@ namespace scn {
 
 			// Internal component-tracker hot-reload: load as desc_base.
 			auto changed_desc_handle = m_res_sys.require_sync<desc::desc_base>(tag);
-			if (changed_desc_handle.has_error()) {
+			if (!ENGINE_VERIFY(changed_desc_handle.is_ready(), "hot reload: '{}' failed to reload, keeping previous state", tag.view())) {
 				continue;
 			}
 

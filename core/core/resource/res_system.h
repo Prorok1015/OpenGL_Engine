@@ -199,7 +199,9 @@ namespace res
 				post_adapter_work([this, tag, block]() {
 					try {
 						auto adapter = find_adapter_recursive<RESOURCE>(tag);
-						ASSERT_MSG(adapter, "No adapter found for resource type!");
+						if (!adapter) {
+							throw std::runtime_error("No adapter found for resource type");
+						}
 						std::vector<std::byte> raw_data = adapter->serialize(tag, block->data);
 						store(tag, raw_data);
 					} catch (const std::exception& e) {
@@ -251,6 +253,20 @@ namespace res
 
 		template<typename T, bool is_sync>
 		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle> final_cb) {
+			// The cache slot already holds final_cb: any escape from here would leave waiters blocked forever.
+			try {
+				start_loading_unguarded<T, is_sync>(tag, final_cb);
+			} catch (const std::exception& e) {
+				egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
+				final_cb->set_error("Load error: "s + e.what());
+			} catch (...) {
+				egLOG_ERROR("res/resolver", "Failed to start loading {}: unknown exception", tag.view());
+				final_cb->set_error("Load error: unknown exception");
+			}
+		}
+
+		template<typename T, bool is_sync>
+		void start_loading_unguarded(const res::tag& tag, const std::shared_ptr<resource_handle>& final_cb) {
 			auto resolver_it = m_resolvers.find(tag.protocol());
 			if (resolver_it == m_resolvers.end()) {
 				egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
@@ -274,7 +290,9 @@ namespace res
 
 				try {
 					auto adapter = find_adapter_recursive<T>(tag);
-					ASSERT_MSG(adapter, "No adapter found for resource type!");
+					if (!adapter) {
+						throw std::runtime_error("No adapter found for resource type");
+					}
 
 					final_cb->status = core::res::res_status::processing;
 					auto parsed_obj = adapter->deserialize(tag, raw_data_block->data);

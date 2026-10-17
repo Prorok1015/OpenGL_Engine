@@ -103,7 +103,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 {
 	auto serialize_comp = [] (const std::string& comp_key, const prefab_comp_node& cnode, bool is_shorthand) -> json::value {
 		if (cnode.overrides.empty() && cnode.type_name.empty() && cnode.parent_desc.is_valid()) {
-			return json::value_from(cnode.parent_desc->get_tag());
+			return json::value_from(cnode.parent_desc.get_tag());
 		}
 
 		json::object out;
@@ -111,7 +111,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 			out["__type"] = cnode.type_name;
 		}
 		if (cnode.parent_desc.is_valid()) {
-			out["__parent"] = json::value_from(cnode.parent_desc->get_tag());
+			out["__parent"] = json::value_from(cnode.parent_desc.get_tag());
 		}
 		for (const auto& kv : cnode.overrides) {
 			out[kv.key()] = kv.value();
@@ -182,11 +182,11 @@ void scn::assemble_merged_node(
 	if (override_node) {
 		for (const auto& [comp_name, cnode] : override_node->components) {
 			if (cnode.type_name == "prefab_desc" && cnode.parent_desc.is_valid()) {
-				auto asset = res::get_system().require_sync<scn::prefab_desc>(cnode.parent_desc->get_tag());
+				auto asset = res::get_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
 				if (asset.is_ready()) nested_base_root = &asset->get_root();
 
 				reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{
-					cnode.parent_desc->get_tag(),
+					cnode.parent_desc.get_tag(),
 					*override_node
 				});
 				break;
@@ -303,11 +303,12 @@ void scn::hot_reload_merged_node(
 			if (cnode.type_name == "prefab_desc" && cnode.parent_desc.is_valid()) {
 				
 				auto asset = ds::polymorphic_pointer_cast<const scn::prefab_desc>(cnode.parent_desc.get());
-				 
-				nested_base_root = &asset->get_root();
+				if (ENGINE_VERIFY(asset, "nested prefab '{}' is not loaded, ignoring", cnode.parent_desc.get_tag().view())) {
+					nested_base_root = &asset->get_root();
+				}
 
 				reg.emplace_or_replace<scn::prefab_instance>(live_entity, scn::prefab_instance{
-					cnode.parent_desc->get_tag(),
+					cnode.parent_desc.get_tag(),
 					*override_node
 				});
 				break;

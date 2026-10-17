@@ -63,7 +63,9 @@ namespace core::res
         }
 
 		std::shared_ptr<T> operator->() const {
-			return get_sync();
+			auto ptr = get_sync();
+			ASSERT_MSG(ptr, "Dereferencing a failed resource handle");
+			return ptr;
 		}
 
         std::shared_ptr<resource_control_block> get_control_block() const {
