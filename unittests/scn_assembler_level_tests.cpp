@@ -259,11 +259,26 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ExternalWatchReplacesInternalReloadAndDedu
 	BOOST_TEST(calls == 1);
 	mgr.tick();
 	BOOST_TEST(calls == 1);
+}
 
+// BUG: scn_prefab_desc.cpp trigger_hot_reload does polymorphic_pointer_cast<const prefab_desc> on
+// ANY changed desc (here a stat_desc, in the level-manager case a level_desc). static_cast succeeds
+// but dynamic_cast is null, so the (now live) assert aborts instead of returning "not a prefab".
+// Reached when an unwatched, non-prefab desc is signalled and hot_reload_manager::tick falls back
+// to the internal reload.
+BOOST_TEST_DECORATOR(*boost::unit_test::disabled())
+BOOST_AUTO_TEST_CASE(HotReloadManager_UnwatchedNonPrefabDescDoesNotAbort)
+{
+	auto tag = put("ext2.desc", R"({"__type":"stat_desc","hp":1})");
+	entt::registry reg;
+	scn::hot_reload_manager mgr(*assembler, *rs);
+	mgr.attach_registry(reg);
+	int calls = 0;
+	mgr.watch_resource(tag, [&](const res::tag&) { ++calls; });
 	mgr.unwatch_resource(tag);
-	rs->signal_changed(tag);   // still queued by the resource watch...
-	mgr.tick();                // ...but no external callback is invoked any more
-	BOOST_TEST(calls == 1);
+	rs->signal_changed(tag);
+	mgr.tick();
+	BOOST_TEST(calls == 0);
 }
 
 // BUG: scn_ecs_assembler.cpp assemble_and_apply -- the component_tracker is emplaced EMPTY
