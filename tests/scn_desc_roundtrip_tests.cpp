@@ -333,9 +333,6 @@ BOOST_AUTO_TEST_CASE(CameraDesc_SerializeRoundTripsRenderSettings)
 	BOOST_TEST(!ser(c).contains("tp_accum_target")); // invalid tags are omitted
 }
 
-// BUG: scn_camera_desc.cpp serialize() -- camera position/rotation ("transform") are read by
-// deserialize() but never written, so saving a camera desc silently resets its pose.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(CameraDesc_SerializeKeepsTransform)
 {
 	scn::camera_desc c;
@@ -344,10 +341,6 @@ BOOST_AUTO_TEST_CASE(CameraDesc_SerializeKeepsTransform)
 	BOOST_TEST((r.position() == glm::vec3{ 1, 2, 3 }));
 }
 
-// BUG: scn_camera_desc.cpp deserialize() -- color_targets are APPENDED to the existing list, so
-// layering an override on a desc copied from its __parent duplicates targets (and overflows the
-// fixed_vector<4> after a few overrides) instead of replacing them.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(CameraDesc_OverrideReplacesInheritedColorTargets)
 {
 	scn::camera_desc parent;
@@ -359,9 +352,6 @@ BOOST_AUTO_TEST_CASE(CameraDesc_OverrideReplacesInheritedColorTargets)
 	BOOST_TEST(child.color_targets().size() == 1u);
 }
 
-// BUG: scn_camera_desc.cpp deserialize() -- uses json::value::as_double(), which throws for JSON
-// integers, so a hand-written `"fov": 60` makes the whole desc fail to load while `60.0` works.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(CameraDesc_AcceptsIntegerNumbers)
 {
 	scn::camera_desc c;
