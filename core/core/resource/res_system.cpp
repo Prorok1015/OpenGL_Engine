@@ -42,7 +42,10 @@ void res::resource_system::post_adapter_work(std::function<void()> cb) {
 
 void res::resource_system::register_alias(const res::tag &original,
                                           const res::tag &alias) {
-  m_aliases[original] = alias;
+  {
+    std::unique_lock lock(m_alias_mutex);
+    m_aliases[original] = alias;
+  }
 
   {
     std::unique_lock lock(m_cache_mutex);

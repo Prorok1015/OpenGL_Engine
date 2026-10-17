@@ -124,7 +124,10 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 
 bool res::vfs_resolver::exists(const::res::tag& tag) const
 {
-	if (m_pending_writes.contains(tag)) return true;
+	{
+		std::shared_lock lock(m_pending_mutex);
+		if (m_pending_writes.contains(tag)) return true;
+	}
 	auto stack = entries_stack;
 	while (!stack.empty()) {
 		fs::path path = stack.top() / std::string{ tag.relative() };

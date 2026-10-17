@@ -89,14 +89,17 @@ namespace res
 		}
 
 		void signal_changed(const res::tag& tag) {
-			m_cache.erase(tag);
-
-			if (m_watchers.contains(tag)) {
-				auto callbacks = m_watchers.at(tag);
-
-				for (auto& [owner, callback] : callbacks) {
-					callback(tag);
+			std::unordered_map<void*, reload_callback> callbacks;
+			{
+				std::unique_lock lock(m_cache_mutex);
+				m_cache.erase(tag);
+				if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
+					callbacks = it->second;
 				}
+			}
+
+			for (auto& [owner, callback] : callbacks) {
+				callback(tag);
 			}
 		}
 
@@ -214,7 +217,8 @@ namespace res
 		}
 
 		void register_alias(const res::tag& original, const res::tag& alias);
-		const res::tag& resolve_alias(const res::tag& tag) const {
+		res::tag resolve_alias(const res::tag& tag) const {
+			std::shared_lock lock(m_alias_mutex);
 			auto it = m_aliases.find(tag);
 			if (it != m_aliases.end()) {
 				return it->second;
@@ -224,16 +228,16 @@ namespace res
 
 	private:
 		void post_adapter_work(std::function<void()> cb);
-		std::shared_ptr<resource_handle> try_get_cached_resource(const tag& tag) {
-			std::shared_lock lock(m_cache_mutex);
-			auto it = m_cache.find(tag);
-			if (it != m_cache.end()) {
-				if (auto sp = it->second.lock()) {
-					return sp;
-				}
-				m_cache.erase(it);
+		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
+		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const tag& tag) {
+			std::unique_lock lock(m_cache_mutex);
+			auto& slot = m_cache[tag];
+			if (auto sp = slot.lock()) {
+				return { std::move(sp), false };
 			}
-			return nullptr;
+			auto created = std::make_shared<resource_handle>();
+			slot = created;
+			return { std::move(created), true };
 		}
 
 		void push_resource_to_cache(const tag& tag, std::shared_ptr<resource_handle> resource) {
@@ -249,10 +253,19 @@ namespace res
 
 		template<typename T, bool is_sync>
 		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle> final_cb) {
-			auto& resolver = m_resolvers[tag.protocol()];
+			auto resolver_it = m_resolvers.find(tag.protocol());
+			if (resolver_it == m_resolvers.end()) {
+				egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
+				final_cb->set_error("Unsupported protocol: "s + std::string{ tag.protocol() });
+				return;
+			}
 
-			auto raw_data_block = resolver->resolve(tag);
-			ASSERT_MSG(raw_data_block, "resource data not found");
+			auto raw_data_block = resolver_it->second->resolve(tag);
+			if (!raw_data_block) {
+				egLOG_ERROR("res/resolver", "Resolver returned no data block for {}", tag.view());
+				final_cb->set_error("Resolver returned no data");
+				return;
+			}
 
 			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
 				if (raw_data_block->has_error()) {
@@ -290,13 +303,11 @@ namespace res
 		auto require_resource_internal(const res::tag& tag) {
 			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
 
-			if (auto cached_res = try_get_cached_resource(tag)) {
-				return res_handle<RESOURCE>(cached_res, tag);
+			auto [block, is_new] = find_or_insert_cache(tag);
+			if (is_new) {
+				start_loading_t<RESOURCE, is_sync>(tag, block);
 			}
-			auto final_cb = std::make_shared<resource_handle>();
-			push_resource_to_cache(tag, final_cb);
-			start_loading_t<RESOURCE, is_sync>(tag, final_cb);
-			return res_handle<RESOURCE>(final_cb, tag);
+			return res_handle<RESOURCE>(block, tag);
 		}
 
 		template<class T>
@@ -331,6 +342,7 @@ namespace res
 	private:
 		mutable std::shared_mutex m_cache_mutex;
 		mutable std::shared_mutex m_pinning_mutex;
+		mutable std::shared_mutex m_alias_mutex;
 
 		std::set<adapter_key> m_extensions_with_magic;
 		std::unordered_map<adapter_key, adapter> m_adapters;

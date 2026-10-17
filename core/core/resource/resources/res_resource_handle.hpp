@@ -2,6 +2,7 @@
 #include "resolvers/res_control_block.hpp"
 #include "res_tag.h"
 #include "ds/ds_polymorphic_cast.hpp"
+#include "logger/engine_log.h"
 #include <memory>
 #include <functional>
 
@@ -41,7 +42,12 @@ namespace core::res
         }
 
         std::shared_ptr<T> get_sync() const {
+            if (!m_block) return nullptr;
             m_block->wait();
+            if (m_block->has_error() || !m_block->data) {
+                egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), m_block->error_msg);
+                return nullptr;
+            }
             return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
@@ -58,7 +64,9 @@ namespace core::res
         }
 
         T& operator*() const {
-			return *get_sync();
+			auto ptr = get_sync();
+			ASSERT_MSG(ptr, "Dereferencing a failed resource handle");
+			return *ptr;
         }
 
 		std::shared_ptr<T> operator->() const {

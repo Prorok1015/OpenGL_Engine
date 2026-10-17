@@ -60,7 +60,7 @@ namespace res
 		constexpr const std::string_view extension() const { return name().substr(name().find_last_of('.') + 1); }
 		constexpr const std::string_view relative() const { return view().substr(path_.x); }
 
-		bool operator== (const tag& val) const { return get_hash() == val.get_hash(); }
+		bool operator== (const tag& val) const { return full_ == val.full_; }
 		std::size_t get_hash() const { return std::hash<std::string>{}(full_); }
 		friend res::tag operator+ (const res::tag& a, const res::tag& b);
 
