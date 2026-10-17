@@ -79,7 +79,7 @@ OpenGL_Engine/
 │   │       └── impls/opengl/       # OpenGL implementation (glad)
 │   │
 │   └── engine/                     # High-level systems
-│       ├── render_system/          # Render pipeline, shaders, geometry, textures
+│       ├── render/render_system/   # Render pipeline, shaders, geometry, textures
 │       ├── scene/                  # Scene graph, cameras, lights, animation
 │       ├── gui/                    # ImGui integration (backends + layer system)
 │       ├── game_system/            # Game loop, frame timing
@@ -100,11 +100,10 @@ OpenGL_Engine/
 ├── lib3dparty/                     # Third-party dependencies (git submodules)
 │   ├── entt, glfw, glm, imgui, assimp, spdlog, yaml
 │   ├── glad/, stb_image/           # Internal libraries
-│   └── natvis/                     # Visual Studio debugger visualizers
+│   └── natvis/                     # Visual Studio debugger visualizers (lib3dparty/natvis)
 │
 ├── unittests/                      # Boost.Test suite (180+ test cases)
 ├── docs/epics/                     # Task tracker (epics & user stories)
-├── guidelines.md                   # Coding standards
 └── CMakeLists.txt                  # Root build configuration
 ```
 
@@ -114,7 +113,7 @@ OpenGL_Engine/
 
 ### Module System
 
-The engine is built from modules implementing `app::modules::module_interface`, each with a priority that determines initialization order:
+The engine is built from modules implementing `app::modules::module_interface`, initialized in topological order of `depends_on()` (priority only breaks ties):
 
 ```
 CORE  →  ENGINE  →  EDITOR  →  GAME
@@ -239,7 +238,7 @@ Snake Editor provides a full scene editing environment:
 - **Import** — model import dialog (glb, gltf, fbx, obj)
 - **Animation** — playback controls with keyframe support
 - **Skybox** — cubemap-based background
-- **Debug tools** — JSON debugger, ECS inspector, R-tree visualizer, texture browser
+- **Asset Browser, Prefab Editor, Console** panels
 - **Profiler overlay** — real-time performance stats with smoothing, multi-select rows, copy to clipboard
 - **Profiler hotkey** — `F3` dumps frame stats to engine log
 
@@ -339,10 +338,10 @@ void update() {
 
 ## CMake Targets
 
-All engine libraries use `snk::` namespace aliases (planned via EPIC-41):
+All engine libraries use `snk::` namespace aliases (EPIC-41, partially done):
 
 ```
-snk::common          INTERFACE   Math, logging, data structures
+snk::common          STATIC      Math, logging, data structures
 snk::application     STATIC      App lifecycle, module system
 snk::ecs             STATIC      ECS framework
 snk::scene           STATIC      Scene graph, cameras, lights
@@ -356,12 +355,12 @@ snk::engine          STATIC      Aggregates all engine systems
 
 ## Code Conventions
 
-See [guidelines.md](guidelines.md) for full details.
+See `CLAUDE.md` and `docs/agent/CODE_CONVENTIONS.toon` for full details.
 
 - **C++ Standard:** C++20, no extensions
 - **Namespaces:** 3-4 letter abbreviations (`ds`, `ecs`, `scn`, `gui`, `rnd`, `res`, `inp`, `edt`, `gs`, `cfg`, `wnd`)
-- **Naming:** `snake_case` everywhere; private members end with `_`
-- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_renderer.cpp`)
+- **Naming:** `snake_case` everywhere; private members use `m_` prefix
+- **Files:** `prefix_name.hpp` / `prefix_name.cpp` (e.g., `ds_store.hpp`, `scn_level.cpp`)
 - **Headers:** `#pragma once`
 - **Indentation:** tabs (size 4)
 - **Braces:** new line for functions, same line for control flow

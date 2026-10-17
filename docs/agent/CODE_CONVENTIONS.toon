@@ -27,7 +27,7 @@ format: prefix_name.hpp / prefix_name.cpp
 where_prefix_is: namespace abbreviation (2-4 chars)
 examples:
   ✅ ds_store.hpp, ds_fixed_vector.hpp
-  ✅ scn_renderer.cpp, scn_camera.h
+  ✅ scn_level.cpp, scn_world.h
   ✅ ecs_world.hpp, ecs_system.cpp
   ❌ Store.hpp, renderer.cpp (no prefix)
   ❌ datastructures.hpp (too long prefix)
@@ -37,7 +37,7 @@ variables: snake_case (my_variable, frame_count)
 functions: snake_case (get_position(), update_transform())
 classes: snake_case (rare, prefer structs for data)
 constants: UPPER_CASE or snake_case (depends on scope)
-private_members: snake_case with trailing underscore (position_)
+private_members: snake_case with m_ prefix (m_position, m_worlds)
 enums: ENUM_VALUE (UPPER_CASE for options)
 template_params: T, U, or CamelCase (Allocator, Traits)
 
@@ -56,16 +56,16 @@ examples:
   struct animation_system : ecs::system_interface { ... }
 
 [INCLUDE_ORDER]
-1. Module header (e.g., "scn_renderer.h")
+1. Module header (e.g., "scn_level.h")
 2. Standard library headers (cmath, vector, etc.)
 3. Third-party headers (glm, boost, entt)
 4. Other project headers (from other modules)
 
 Example:
-  #include "scn_renderer.h"
+  #include "scn_level.h"
   #include <cmath>
   #include <glm/glm.hpp>
-  #include "res_loader.h"
+  #include "res_system.h"
 
 [HEADER_GUARDS]
 use: #pragma once (no macro guards)
@@ -142,12 +142,12 @@ never: std::auto_ptr (deprecated), raw new/delete in code (use RAII)
 [DESCRIPTOR_PATTERNS]
 files: snake_case.desc (e.g., backpack.desc, level.desc)
 format: JSON with inheritance (extends: "parent.desc")
-loading: res::get_system().require<descriptor_type>(res::tag{"res://path"})
+loading: resources.require<descriptor_type>(res::tag{"res://path"})  // res::resource_system& injected; res::get_system() is legacy
 hot_reload: Editor changes desc → binding updates entities
 
 [RESOURCE_PATTERNS]
 identification: res::tag{"res://path/to/resource"} (single-arg parses protocol)
-loading: res_handle<T> h = res::get_system().require<T>(tag); // require_sync<T> blocks
+loading: res_handle<T> h = resources.require<T>(tag); // resources: injected res::resource_system&; require_sync<T> blocks; get_system() legacy, no new uses
 async: h.then([](auto& res) { /* callback; check res.has_error() */ })
 cache: automatic (weak refs for auto-unload, pinned for persistent)
 
@@ -165,11 +165,12 @@ component_dependency: declared via the system fn's argument types, salted per wo
 world_creation: automatic dispatch supports world IDs 0-4 (max 5); world_salt + bind_res<WorldID,T>
 
 [IMGUI_PATTERNS]
-always_check_begin:
+begin_end_pairing:  # End() ALWAYS called; Begin() result only gates drawing
   if (ImGui::Begin("Panel")) {
     // render content
-    ImGui::End();
   }
+  ImGui::End();
+  # BeginChild/EndChild same; BeginPopup*/BeginMenu/BeginTable: End* only if Begin* returned true
 
 layout:
   ImGui::Columns(N);

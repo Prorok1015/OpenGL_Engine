@@ -22,7 +22,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - 🎨 [CODE_CONVENTIONS.toon](docs/agent/CODE_CONVENTIONS.toon) — Naming & style
 - ⚡ [CONSTRAINTS.toon](docs/agent/CONSTRAINTS.toon) — Hard rules & limits
 - 🔗 [QUICK_LINKS.toon](docs/agent/QUICK_LINKS.toon) — File navigation
-- 📋 [docs/epics/INDEX.md](docs/epics/INDEX.md) — Task management (48 epics)
+- 📋 [docs/epics/INDEX.md](docs/epics/INDEX.md) — Task management (epics and their statuses)
 
 ## ⚠️ Critical Rules (STRICT!)
 
@@ -45,18 +45,22 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 - **Braces:** functions on new line, control flow same line
 - **Assertions:** `ASSERT_MSG`/`ASSERT_FAIL` from `engine_assert.h`, never `assert()`
 
-### Always check ImGui Begin() return
-- **Pattern:** `if (ImGui::Begin("Name")) { ... ImGui::End(); }`
+### ImGui: `End()` is unconditional
+- **Pattern:** `if (ImGui::Begin("Name")) { ...draw... } ImGui::End();` (same for `BeginChild`/`EndChild`)
+- **Exception:** `BeginPopup*`/`BeginMenu`/`BeginTable`/etc. → call `End*` only if `Begin*` returned true
+- **Ref:** `Editor/code/editor_system/panels/edt_panel_base.cpp`
 
 ### Never bypass resource cache
-- **Use:** `res::get_system().require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
+- **Use:** get `res::resource_system&` by injection (constructor parameter / `app_data_storage` in composition code), then `.require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
+- **Legacy:** `res::get_system()` global accessor is being phased out in favour of DI — do not add new uses
 - **Never:** hardcode filenames, new/load directly from disk
 
 ## 🗣️ Conventions
 
 - **Language:** English (code/comments), Russian (docs/epics/)
 - **Namespaces:** 2-4 letter abbrev (`ds`, `ecs`, `scn`, `rnd`, `res`, `edt`, etc.)
-- **Files:** `prefix_name.hpp/.cpp` (e.g. `scn_renderer.cpp`, `res_loader.h`)
+- **Files:** `prefix_name.hpp/.cpp` (e.g. `scn_level.cpp`, `res_system.h`)
+- **Private members:** `m_` prefix (`m_worlds`)
 - **Components:** POD structs, optional `_component` suffix
 - **Systems:** Inherit `ecs::system_interface` (auto-registered)
 
@@ -124,10 +128,7 @@ Commit format: `git commit -m "docs: [type] brief desc\n\nSource: ...\nFile: ...
 
 ## 📋 Current Status
 
-- ✅ 28 epics completed (core infra, render pipeline, editor basics)
-- 🔄 EPIC-25 Prefab Editor (in progress)
-- 🔄 EPIC-33 Skinning & Animation (in progress)
-- 📋 20 epics planned (shader/texture descriptors, optimization, profiling)
+- Status of every epic (done / in_progress / planned): see link below
 
 👉 **All tasks:** [docs/epics/INDEX.md](docs/epics/INDEX.md)
 

@@ -36,7 +36,7 @@ modules:
   - video: Window abstraction layer
 key_patterns:
   - Service Locator: ds::app_data_storage (type-safe DI)
-  - Module System: Priority-ordered lifecycle (CORE→ENGINE→EDITOR→GAME)
+  - Module System: lifecycle ordered by topological sort over module_interface::depends_on() (priority = tiebreaker only; core/core/application/app_module_loader.hpp)
   - Resource System: res::tag identification, VFS protocols (res://,memory://)
   - Descriptor System: Inheritance chain, JSON serialization
 
@@ -50,8 +50,8 @@ modules:
   - game: Game-specific systems and logic hooks
 render_pipeline:
   1. Extractors: Camera→render_packet (geometry, instances, lights);
-     extractors live in core/engine/scene/level/ (scn_render_data_extractor,
-     scn_light_extractor), NOT in a render/extractors/ dir
+     extractors live in core/engine/scene/level/ (scn_render_data_extractor.cpp
+     extracts geometry and lights), NOT in a render/extractors/ dir
   2. Passes (render_pass_interface): z_prepass, opaque, skybox, transparent (OIT),
      composition, debug
   3. Output: ImGui overlay, per-camera render targets
@@ -99,7 +99,7 @@ dependency_resolution: Auto via invoker<Candidate>; system fn arg types
 boot_sequence:
   module_loader.add_module(core, engine, editor)
   → register_all_services()
-  → initialize_all_services() // sorted by priority
+  → initialize_all_services() // topo-sorted by depends_on(), priority breaks ties
   → app.run() // game loop
   → shutdown_all_services() // reverse order
 
@@ -146,7 +146,7 @@ Each module implements app::modules::module_interface:
    - Constructor injection, no dependencies yet
 
 2. initialize_services(): Resolve from storage, setup
-   - Sorted by priority
+   - Topo-sorted by depends_on() (priority only breaks ties)
    - Dependencies already registered
 
 3. shutdown_services(): Cleanup in reverse order
@@ -154,8 +154,8 @@ Each module implements app::modules::module_interface:
 
 [NAMING_PATTERNS]
 namespaces: 2-4 letter abbrev (ds, ecs, scn, gui, rnd, res, inp, edt, gs, cfg, wnd)
-files: prefix_name.hpp/.cpp (scn_renderer.hpp, res_loader.cpp)
+files: prefix_name.hpp/.cpp (scn_level.cpp, res_system.h)
 components: _component suffix if name not self-descriptive
-systems: Inherit system_interface, naming_system.cpp pattern
-variables: snake_case always
+systems: Inherit system_interface (files like scn_level.cpp / edt_scene_editor.cpp)
+variables: snake_case always; private members m_ prefix
 macros: UPPER_CASE

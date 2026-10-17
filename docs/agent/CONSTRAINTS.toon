@@ -73,20 +73,26 @@ how_to_apply:
   - ECS systems: dependencies via registry context
   - Per-frame allocations: use frame_allocator, not statics
 
+# Owner-accepted architectural decisions (Windows+OpenGL now behind backend-agnostic RHI, GLFW behind platform::window,
+# own graphics backends only, GLSL portability rules, explicit ECS phases, m_ prefix): docs/roadmap/ARCHITECTURE_REVIEW.md §9
+
 [CONSTRAINT_9]
-rule: Always check ImGui Begin() return value
-why: User might have collapsed or hidden the panel
+rule: ImGui::End() must be called regardless of Begin() return value
+why: Begin/End must stay paired even when the window is collapsed/hidden; Begin() result only gates drawing
 how_to_apply:
   if (ImGui::Begin("Name")) {
     // panel content
-    ImGui::End();
   }
+  ImGui::End();   // always
+  Same for BeginChild/EndChild. BeginPopup*/BeginMenu/BeginTable: End* only if Begin* returned true.
+  source: Editor/code/editor_system/panels/edt_panel_base.cpp render()
 
 [CONSTRAINT_10]
 rule: Use res::tag for all resource identification
 why: Prevents cache misses, enables hot-reload
 how_to_apply:
-  auto mesh = res::get_system().require<mesh_resource>(res::tag{"res://models/backpack"});
+  auto mesh = resources.require<mesh_resource>(res::tag{"res://models/backpack"});  // resources: res::resource_system& injected
+  res::get_system() is legacy (being phased out for DI) — no new uses
   Never: hardcode filenames in component, always use descriptors
   source: core/core/resource/res_system.h require<T>/require_sync<T> (L170-178)
 
@@ -148,7 +154,7 @@ how_to_apply:
 rule: Never bypass resource cache
 why: Prevents duplicate loads, enables hot-reload
 how_to_apply:
-  ✅ auto h = res::get_system().require<T>(tag);   // res_handle<T>
+  ✅ auto h = resources.require<T>(tag);   // res::resource_system& via DI; res_handle<T>
   ❌ new T(); load from disk directly
 
 [CONSTRAINT_15]

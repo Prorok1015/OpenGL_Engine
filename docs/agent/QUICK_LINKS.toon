@@ -58,7 +58,7 @@ Rendering Pipeline:
   → core/engine/render/render_system/rnd_frame_assembler.h (frame assembly)
   → core/engine/render/render_system/passes/ (z_prepass, opaque, skybox, transparent, composition, debug)
   → core/engine/scene/level/scn_render_data_extractor.h (geometry→render_packet)
-  → core/engine/scene/level/scn_light_extractor.h (lights→packet)
+  → core/engine/scene/level/scn_render_data_extractor.cpp (also extracts lights→packet)
 
 Animation & Skinning:
   → core/engine/scene/scn_animation_* , scn_skinning_desc.* (EPIC-33)
@@ -184,7 +184,7 @@ Add new Descriptor Type:
 
 Load Resource:
   1. Tag: res::tag{"res://path/to/asset"}
-  2. Load: res::get_system().require<T>(tag) (require_sync<T> blocks)
+  2. Load: resource_system&.require<T>(tag) (injected; require_sync<T> blocks; get_system() legacy)
   3. Wait: res_handle<T>, optional .then(callback) for async
 
 Create Entity (data-driven):
