@@ -3,6 +3,9 @@
 #include "engine_assert.h"
 #include <any>
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <typeinfo>
 #include <unordered_map>
 
 namespace ds {
@@ -95,7 +98,10 @@ namespace ds {
 		template<class T>
 		T& require() const {
 			auto item = require_shared<T>();
-			ASSERT_MSG(item, "Trying to require non existing type");
+			if (!item) {
+				// Hard error in every build type: a missing service must not turn into a null dereference.
+				throw std::runtime_error(std::string{ "ds::data_storage_t::require: service not found: " } + typeid(T).name());
+			}
 			return POLICY_T::template cast_ref<T>(item);
 		}
 

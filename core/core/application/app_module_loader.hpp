@@ -1,6 +1,9 @@
 #pragma once
 #include "app_module_interface.h"
 #include "engine_assert.h"
+#include "engine_log.h"
+#include <exception>
+#include <utility>
 #include <vector>
 #include <memory>
 #include <ranges>
@@ -14,6 +17,20 @@ namespace app::modules {
     private:
         std::vector<std::unique_ptr<module_interface>> m_modules;
         bool m_sorted = false;
+        std::size_t m_initialized = 0;
+
+        void shutdown_initialized(ds::app_data_storage& data) {
+            const std::size_t count = std::exchange(m_initialized, 0);
+            for (std::size_t i = count; i-- > 0;) {
+                try {
+                    m_modules[i]->shutdown_services(data);
+                } catch (const std::exception& e) {
+                    egLOG_ERROR("app", "module '{}' threw during shutdown: {}", m_modules[i]->name(), e.what());
+                } catch (...) {
+                    egLOG_ERROR("app", "module '{}' threw unknown exception during shutdown", m_modules[i]->name());
+                }
+            }
+        }
 
         // Topo-sort modules by their declared depends_on() once, so register, initialize and
         // shutdown all use one consistent order (EPIC-49 US-49-7). Dependencies come first;
@@ -94,18 +111,27 @@ namespace app::modules {
             }
         }
 
+        // If a module throws, the modules initialized before it are shut down in reverse order
+        // and the exception is rethrown. The throwing module itself is not shut down: it never
+        // finished initializing and is expected to clean up after itself.
         void initialize_all_services(ds::app_data_storage& data) {
             ensure_sorted();
-            for (auto& mod : m_modules) {
-                mod->initialize_services(data);
+            m_initialized = 0;
+            try {
+                for (auto& mod : m_modules) {
+                    mod->initialize_services(data);
+                    ++m_initialized;
+                }
+            } catch (...) {
+                shutdown_initialized(data);
+                throw;
             }
         }
 
+        // Shuts down only the modules that finished initialize_services, in reverse order.
         void shutdown_all_services(ds::app_data_storage& data) {
             ensure_sorted();
-            for (auto& module : m_modules | std::ranges::views::reverse) {
-                module->shutdown_services(data);
-            }
+            shutdown_initialized(data);
         }
     };
 

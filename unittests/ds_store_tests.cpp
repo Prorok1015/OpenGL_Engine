@@ -57,4 +57,22 @@ BOOST_AUTO_TEST_CASE(HierarchicalLookup)
     BOOST_CHECK(!parent_storage.has_value<another_test_service>());
 }
 
+BOOST_AUTO_TEST_CASE(RequireMissingServiceThrows)
+{
+    ds::app_data_storage storage;
+    BOOST_CHECK_THROW(storage.require<test_service>(), std::runtime_error);
+    BOOST_CHECK(storage.require_shared<test_service>() == nullptr);
+
+    try {
+        storage.require<test_service>();
+        BOOST_FAIL("require must throw");
+    } catch (const std::runtime_error& e) {
+        BOOST_CHECK(std::string{ e.what() }.find("test_service") != std::string::npos);
+    }
+
+    // Lookup through a parent that also lacks the service must throw too.
+    ds::app_data_storage child(&storage);
+    BOOST_CHECK_THROW(child.require<test_service>(), std::runtime_error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

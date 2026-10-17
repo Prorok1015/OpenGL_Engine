@@ -54,13 +54,37 @@ int main(int argc, char* argv[])
 	module_loader.add_module(std::make_unique<engine::engine_module>());
 	module_loader.add_module(std::make_unique<editor::editor_module>());
 
-	module_loader.register_all_services(app_storage);
-	module_loader.initialize_all_services(app_storage);
+	// Exception perimeter: nothing may escape main(). initialize_all_services rolls back
+	// the modules it already initialized if one throws, so shutdown below only runs
+	// once initialization has fully succeeded.
+	int result = -1;
+	bool initialized = false;
+	try {
+		module_loader.register_all_services(app_storage);
+		module_loader.initialize_all_services(app_storage);
+		initialized = true;
 
-	app::application editor;
-	int result = editor.run(app_storage);
+		app::application editor;
+		result = editor.run(app_storage);
+	} catch (const std::exception& e) {
+		egLOG_ERROR("app", "fatal error: {}", e.what());
+		result = -1;
+	} catch (...) {
+		egLOG_ERROR("app", "fatal error: unknown exception");
+		result = -1;
+	}
 
-	module_loader.shutdown_all_services(app_storage);
+	if (initialized) {
+		try {
+			module_loader.shutdown_all_services(app_storage);
+		} catch (const std::exception& e) {
+			egLOG_ERROR("app", "error during shutdown: {}", e.what());
+			result = -1;
+		} catch (...) {
+			egLOG_ERROR("app", "error during shutdown: unknown exception");
+			result = -1;
+		}
+	}
 
 	engine::shutdown_logger();
 	return result;
