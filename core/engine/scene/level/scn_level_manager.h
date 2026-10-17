@@ -30,7 +30,6 @@ namespace scn
 		scn::level& get_level() { return active_lvl; }
 
 		bool load(const res::tag& level_tag);
-		void load_world(const res::tag& world_tag);
 	private:
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		scn::ecs_assembler& m_assembler;

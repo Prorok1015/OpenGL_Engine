@@ -30,6 +30,5 @@ namespace scn
 		uint32_t m_id;
 		std::string m_name;
 		entt::registry m_state;
-		std::vector<std::unique_ptr<ecs::system_interface>> m_systems;
 	};
 }

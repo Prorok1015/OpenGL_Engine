@@ -12,15 +12,6 @@ namespace ecs
 	using sandbox_continuos_loader = entt::basic_continuous_loader<sandbox_registry>;
 	using sandbox_snapshot_loader = entt::basic_snapshot_loader<sandbox_registry>;
 
-	class command_buffer
-	{
-	public:
-		sandbox_registry& get_sandbox() { return sandbox; }
-	private:
-		sandbox_registry sandbox;
-
-	};
-
 	class entity_spawner : public sandbox_registry
 	{
 	};

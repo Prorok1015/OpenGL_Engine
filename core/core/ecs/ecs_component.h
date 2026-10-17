@@ -2,7 +2,6 @@
 #include "ecs_command_buffer.hpp"
 #include <entt/meta/meta.hpp>
 #include <entt/meta/factory.hpp>
-#include <iostream>
 namespace ecs
 {
     using namespace entt::literals;
@@ -31,7 +30,6 @@ namespace ecs
         ecs::sandbox_loader_archive archive{ *loader, *storage_ptr };
 
         loader->get<T>(archive);
-        std::cout << "get loader call" << std::endl;
     }
 
     template<typename T>

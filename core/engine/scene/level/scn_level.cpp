@@ -79,19 +79,6 @@ void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfa
     mark_systems_graphs_dirty();
 }
 
-void scn::level::load_world_from_desc(const world_desc& world_desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler)
-{
-    auto& world = create_world(world_desc.get_name(), 0);
-    for (const auto& system_name : world_desc.get_systems()) {
-        sfactory.create_system(system_name, world.state(), organizer());
-    }
-
-    entt::entity e = world.state().create();
-    assambler.spawn_from_desc(world.state(), e, world_desc, world_desc.get_name());
-
-    mark_systems_graphs_dirty();
-}
-
 void scn::level::reload_world(
 	const std::string_view name,
 	const world_desc& desc,

@@ -7,10 +7,3 @@ cmake_minimum_required(VERSION 3.16)
 add_subdirectory("core")
 add_subdirectory("engine")
 
-
-#TEST_PROJECT
-project(core_exe)
-
-add_executable(core_exe main_unified_graph_test.cpp)
-target_link_libraries(core_exe PRIVATE snk::engine PRIVATE snk::engine_api)
-set_target_properties(core_exe PROPERTIES EXCLUDE_FROM_ALL TRUE)

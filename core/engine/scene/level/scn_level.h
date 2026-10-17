@@ -84,8 +84,6 @@ namespace scn {
 
 		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
 
-		void load_world_from_desc(const world_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
-
 		void reload_world(
 			const std::string_view name,
 			const world_desc& desc,

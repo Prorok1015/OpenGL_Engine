@@ -46,39 +46,6 @@ namespace ds {
 		}
 	};
 
-	struct raw_storage_policy
-	{
-		template<class T>
-		using ITEM_T = T*;
-		using STORAGE_ITEM = void*;
-
-		template <class T>
-		T& cast_ref(ITEM_T<T> it) const
-		{
-			return *it;
-		}
-
-		template<class T>
-		ITEM_T<T> cast(const STORAGE_ITEM& any) const
-		{
-			if (!any) return nullptr;
-
-			return static_cast<ITEM_T<T>>(any);
-		}
-
-		template<class T, class ...ARGS>
-		auto construct(ARGS&&... args) const
-		{
-			return new T(std::forward<ARGS>(args)...);
-		}
-
-		template<class T>
-		auto destruct(ITEM_T<T> it) const
-		{
-			delete it;
-		}
-	};
-
 	template<class POLICY_T>
 	class data_storage_t : protected POLICY_T
 	{

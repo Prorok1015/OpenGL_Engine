@@ -3,7 +3,6 @@
 #include <scn_model.h>
 
 #include <rnd_render_system.h>
-#include <ecs_common_system.h>
 
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
