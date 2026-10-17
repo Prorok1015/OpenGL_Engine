@@ -1,5 +1,6 @@
 #include "edt_world_controller.h"
 #include "edt_shared_state.h"
+#include "edt_editor_camera.h"
 #include "level/scn_level.h"
 #include "level/scn_level_manager.h"
 #include "level/scn_world_desc.h"
@@ -29,6 +30,14 @@ void edt::world_controller::switch_to_world(int idx)
 		if (on_save_camera) {
 			on_save_camera(lvl_mgr->get_level().get_world(m_state.world_names[m_state.active_world_idx]).state());
 		}
+	}
+
+	// render_data_extractor renders every world's cameras into their targets. A left-over editor camera
+	// in the world we leave would keep drawing into the shared editor RT and overdraw the new world.
+	if (idx != m_state.active_world_idx && m_state.active_world_idx < (int)m_state.world_names.size()) {
+		auto& old_reg = lvl_mgr->get_level().get_world(m_state.world_names[m_state.active_world_idx]).state();
+		for (auto ent : old_reg.view<edt::editor_camera_tag>())
+			old_reg.destroy(ent);
 	}
 
 	m_state.active_world_idx = idx;
