@@ -64,13 +64,3 @@ std::filesystem::path res::resource_system::get_resources_path() {
   return cfg_res_path;
 }
 
-std::string res::resource_system::get_absolut_path(const res::tag &tag) {
-  if (tag.protocol() == res::tag::default_protocol()) {
-    std::string path{tag.path()};
-    std::string name{tag.name()};
-    return cfg_res_path->string() + path + name;
-  }
-
-  egLOG("resource/absolut_path", "Broken tag {}", tag.view());
-  return std::string{};
-}

@@ -2,7 +2,6 @@
 #include "common.h"
 #include "resources/res_resource_base.h"
 #include "desc_system.h"
-#include "resources/desc_resource.h"
 #include "adapters/res_adapter_interface.hpp"
 namespace scn
 {

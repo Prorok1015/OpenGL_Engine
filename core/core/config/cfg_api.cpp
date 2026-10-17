@@ -6,7 +6,6 @@
 #include <iostream>
 
 namespace po = boost::program_options;
-using config_types = std::variant<int, float, bool, std::string>;
 
 bool is_initialized = false;
 
@@ -14,17 +13,6 @@ constexpr auto EXTENDS_KEY = "extends";
 constexpr auto SEPARATOR = '/';
 
 namespace cfg {
-	struct tag
-	{
-		tag(std::string_view path)
-			: id(std::hash<std::string_view>{}(path)) {
-		}
-
-		auto operator<=>(const tag&) const = default;
-
-		std::size_t id;
-	};
-
 	struct config_manager
 	{
 		static config_manager& instance()
@@ -38,17 +26,6 @@ namespace cfg {
 	};
 
 } // namespace cfg
-
-namespace std {
-	template <>
-	struct hash<cfg::tag>
-	{
-		std::size_t operator()(const cfg::tag& k) const
-		{
-			return k.id;
-		}
-	};
-} // namespace std
 
 namespace {
 void load_map(const std::filesystem::path& config_location, const std::string& parent, YAML::Node map_node)

@@ -24,5 +24,4 @@ namespace res
 		tag m_tag;
 	};
 
-	using RecourceRef = std::shared_ptr<resource_entry>;
 }

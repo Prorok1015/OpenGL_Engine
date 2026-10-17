@@ -8,7 +8,6 @@
 #include "resources/res_resource_base.h"
 #include "resolvers/res_resolver_interface.hpp"
 #include "resources/res_resource_handle.hpp"
-#include <iostream>
 #include <set>
 #include <shared_mutex>
 
@@ -28,7 +27,6 @@ namespace res
 	class resource_system
 	{
 	public:
-		static std::string get_absolut_path(const tag& tag);
 		using resource_handle = core::res::res_resource_block;
 		using cache_entry = std::weak_ptr<resource_handle>;
 

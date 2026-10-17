@@ -4,7 +4,6 @@
 #include "res_tag.h"
 #include "res_tag_json.h" // get_field_desc<T> (inline template below) does json::value_to<res::tag>
 #include "desc_base.hpp"
-#include "resources/desc_resource.h"
 #include "adapters/desc_adapter_t.h"
 #include <vector>
 

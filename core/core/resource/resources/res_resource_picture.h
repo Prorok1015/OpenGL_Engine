@@ -25,5 +25,4 @@ namespace res
 		bool is_embedded_picture = false;
 	};
 
-	using ImageRef = std::shared_ptr<picture_resource>;
 }
