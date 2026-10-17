@@ -47,30 +47,23 @@ namespace {
 
 	std::shared_ptr<spdlog::logger> get_or_create_logger(std::string_view category)
 	{
+		std::string key(category);
+
+		// Find-or-create under one lock: two threads logging a new category at once must not both
+		// register it (spdlog::register_logger throws on a duplicate name).
+		std::lock_guard lock(s_logger_mutex);
 		if (!s_initialized) {
 			engine::init_logger();
 		}
-
-		std::string key(category);
-
-		{
-			std::lock_guard lock(s_logger_mutex);
-			auto it = s_loggers.find(key);
-			if (it != s_loggers.end()) {
-				return it->second;
-			}
+		if (auto it = s_loggers.find(key); it != s_loggers.end()) {
+			return it->second;
 		}
 
 		auto logger = std::make_shared<spdlog::logger>(key, s_sinks.begin(), s_sinks.end());
 		logger->set_level(spdlog::get_level());
 		logger->flush_on(spdlog::level::warn);
 		spdlog::register_logger(logger);
-
-		{
-			std::lock_guard lock(s_logger_mutex);
-			s_loggers[key] = logger;
-		}
-
+		s_loggers[key] = logger;
 		return logger;
 	}
 
