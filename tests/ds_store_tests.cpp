@@ -1,6 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include "ds/ds_store.hpp"
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 struct test_service {
     int value = 42;
@@ -12,6 +15,27 @@ struct another_test_service {
 
 struct named_service {
     static constexpr std::string_view service_id = "my.service";
+};
+
+struct order_a {
+    explicit order_a(std::vector<std::string>* log_) : log(log_) {}
+    ~order_a() { log->push_back("a"); }
+    std::vector<std::string>* log;
+};
+
+struct order_b {
+    explicit order_b(std::vector<std::string>* log_) : log(log_) {}
+    ~order_b() { log->push_back("b"); }
+    std::vector<std::string>* log;
+};
+
+struct base_iface {
+    virtual ~base_iface() = default;
+    virtual int id() const = 0;
+};
+
+struct derived_impl : base_iface {
+    int id() const override { return 7; }
 };
 
 BOOST_AUTO_TEST_SUITE(DSStoreTests)
@@ -34,7 +58,7 @@ BOOST_AUTO_TEST_CASE(TypeKeyUsesServiceId)
 
 BOOST_AUTO_TEST_CASE(SharedPolicyBasicOperations)
 {
-    ds::data_storage_t<ds::shared_storage_policy> storage;
+    ds::app_data_storage storage;
 
     // Test construction
     test_service& service = storage.construct<test_service>();
@@ -94,6 +118,53 @@ BOOST_AUTO_TEST_CASE(RequireMissingServiceThrows)
     // Lookup through a parent that also lacks the service must throw too.
     ds::app_data_storage child(&storage);
     BOOST_CHECK_THROW(child.require<test_service>(), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(DestroysInReverseRegistrationOrder)
+{
+    std::vector<std::string> log;
+    {
+        ds::app_data_storage storage;
+        storage.construct<order_a>(&log);
+        storage.construct<order_b>(&log);
+    }
+    BOOST_CHECK(log == (std::vector<std::string>{ "b", "a" }));
+}
+
+BOOST_AUTO_TEST_CASE(DuplicateConstructThrows)
+{
+    ds::app_data_storage storage;
+    test_service& first = storage.construct<test_service>();
+    BOOST_CHECK_THROW(storage.construct<test_service>(), std::logic_error);
+    BOOST_CHECK_EQUAL(&storage.require<test_service>(), &first);
+    BOOST_CHECK_EQUAL(storage.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(DestructMissingThrows)
+{
+    ds::app_data_storage storage;
+    BOOST_CHECK_THROW(storage.destruct<test_service>(), std::logic_error);
+}
+
+BOOST_AUTO_TEST_CASE(DestructKeepsOtherEntriesReachable)
+{
+    ds::app_data_storage storage;
+    storage.construct<test_service>();
+    another_test_service& other = storage.construct<another_test_service>();
+    storage.destruct<test_service>();
+    BOOST_CHECK(!storage.has_value<test_service>());
+    BOOST_CHECK_EQUAL(&storage.require<another_test_service>(), &other);
+    BOOST_CHECK_EQUAL(storage.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ConstructBaseKeyFromDerivedInstance)
+{
+    ds::app_data_storage storage;
+    base_iface& iface = storage.construct<base_iface, derived_impl>();
+    BOOST_CHECK_EQUAL(iface.id(), 7);
+    BOOST_CHECK(storage.has_value<base_iface>());
+    BOOST_CHECK(!storage.has_value<derived_impl>());
+    BOOST_CHECK_EQUAL(&storage.require<base_iface>(), &iface);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

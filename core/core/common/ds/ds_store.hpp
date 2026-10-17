@@ -1,136 +1,159 @@
 #pragma once
 #include "ds_type_id.hpp"
-#include "engine_assert.h"
-#include <any>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <typeinfo>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace ds {
 
-	struct shared_storage_policy
+	// Services are destroyed in reverse registration order, so a service may hold references
+	// to services registered before it.
+	class app_data_storage
 	{
-		template<class T>
-		using ITEM_T = std::shared_ptr<T>;
-		using STORAGE_ITEM = std::any;
-
-		template <class T>
-		T& cast_ref(ITEM_T<T> it) const
-		{
-			return *it;
-		}
-
-		template<class T>
-		ITEM_T<T> cast(const STORAGE_ITEM& any) const
-		{
-			if (!any.has_value()) return nullptr;
-
-			return std::any_cast<ITEM_T<T>>(any);
-		}
-
-		template<class T, class ...ARGS>
-		auto construct(ARGS&&... args) const
-		{
-			return std::make_any<ITEM_T<T>>(std::make_shared<T>(std::forward<ARGS>(args)...));
-		}
-
-		template<class KEY, class INSTANCE, class ...ARGS>
-		auto construct(ARGS&&... args) const
-		{
-			return std::make_any<ITEM_T<KEY>>(std::make_shared<INSTANCE>(std::forward<ARGS>(args)...));
-		}
-
-		template<class T>
-		auto destruct(ITEM_T<T> it) const
-		{
-			// shared_ptr will be destructed automatically
-		}
-	};
-
-	template<class POLICY_T>
-	class data_storage_t : protected POLICY_T
-	{
-		using STORAGE_ITEM = POLICY_T::STORAGE_ITEM;
 	public:
-		data_storage_t() = default;
-		data_storage_t(ds::data_storage_t<POLICY_T>* parent)
-			: parent_storage(parent) {
+		app_data_storage() = default;
+		explicit app_data_storage(app_data_storage* parent)
+			: m_parent(parent) {
 		}
-		data_storage_t(data_storage_t&&) = default;
-		data_storage_t(const data_storage_t&) = delete;
-		data_storage_t& operator=(data_storage_t&&) = default;
-		data_storage_t& operator=(const data_storage_t&) = delete;
-		~data_storage_t() = default;	
+		app_data_storage(app_data_storage&& other) = default;
+		app_data_storage& operator=(app_data_storage&& other) {
+			if (this != &other) {
+				destroy_all();
+				m_entries = std::move(other.m_entries);
+				m_index = std::move(other.m_index);
+				m_parent = other.m_parent;
+			}
+			return *this;
+		}
+		app_data_storage(const app_data_storage&) = delete;
+		app_data_storage& operator=(const app_data_storage&) = delete;
+		~app_data_storage() { destroy_all(); }
 
 		template<class T>
 		bool has_value() const {
-			auto it = data.find(ds::type_id::make<T>());
-			if (it != data.end() && (bool)POLICY_T::template cast<T>(it->second)) {
-				return true;
-			}
-			if (parent_storage) {
-				return parent_storage->template has_value<T>();
-			}
-			return false;
+			return find_entry(type_key<T>(), type_name<T>()) != nullptr;
 		}
 
 		template<class T>
-		auto require_parent_shared() const {
-			if (parent_storage) {
-				return parent_storage->template require_shared<T>();
+		std::shared_ptr<T> require_parent_shared() const {
+			if (m_parent) {
+				return m_parent->template require_shared<T>();
 			}
-
-			return POLICY_T::template cast<T>({});
+			return nullptr;
 		}
 
 		template<class T>
-		auto require_shared() const {
-			auto it = data.find(ds::type_id::make<T>());
-			if (it != data.end() && POLICY_T::template cast<T>(it->second)) {
-				return POLICY_T::template cast<T>(it->second);
+		std::shared_ptr<T> require_shared() const {
+			if (const entry* found = find_entry(type_key<T>(), type_name<T>())) {
+				return std::static_pointer_cast<T>(found->object);
 			}
-			
-			return require_parent_shared<T>();
+			return nullptr;
 		}
 
 		template<class T>
 		T& require() const {
-			auto item = require_shared<T>();
-			if (!item) {
+			const entry* found = find_entry(type_key<T>(), type_name<T>());
+			if (!found) {
 				// Hard error in every build type: a missing service must not turn into a null dereference.
-				throw std::runtime_error(std::string{ "ds::data_storage_t::require: service not found: " } + typeid(T).name());
+				throw std::runtime_error(std::string{ "ds::app_data_storage::require: service not found: " } + std::string{ type_name<T>() });
 			}
-			return POLICY_T::template cast_ref<T>(item);
+			return *static_cast<T*>(found->object.get());
 		}
 
-		template<class T, class ...ARGS>
-		T& construct(ARGS&&... args) {
-			data[ds::type_id::make<T>()] = POLICY_T::template construct<T>(std::forward<ARGS>(args)...);
-			return require<T>();
+		template<class T, class... A>
+		T& construct(A&&... args) {
+			return add<T, T>(std::forward<A>(args)...);
 		}
 
-		template<class KEY, class INSTANCE, class ...ARGS>
-		KEY& construct(ARGS&&... args) {
-			data[ds::type_id::make<KEY>()] = POLICY_T::template construct<KEY, INSTANCE>(std::forward<ARGS>(args)...);
-			return require<KEY>();
+		template<class KEY, class INSTANCE, class... A>
+		KEY& construct(A&&... args) {
+			return add<KEY, INSTANCE>(std::forward<A>(args)...);
 		}
 
 		template<class T>
 		void destruct() {
-			if (auto it = data.find(ds::type_id::make<T>()); it != data.end()) {
-				POLICY_T::template destruct<T>(POLICY_T::template cast<T>(it->second));
-				data.erase(it);
-			} else {
-				ASSERT_FAIL("Trying to destruct non existing type");
+			const std::uint64_t key = type_key<T>();
+			auto it = m_index.find(key);
+			if (it == m_index.end() || m_entries[it->second].name != type_name<T>()) {
+				throw std::logic_error(std::string{ "ds::app_data_storage::destruct: service not registered: " } + std::string{ type_name<T>() });
 			}
+			// Take the entry out first, so the object is destroyed after the index is consistent again.
+			entry removed = std::move(m_entries[it->second]);
+			m_entries.erase(m_entries.begin() + static_cast<std::ptrdiff_t>(it->second));
+			rebuild_index();
+		}
+
+		std::size_t size() const noexcept {
+			return m_entries.size();
 		}
 
 	private:
-		std::unordered_map<ds::type_id, STORAGE_ITEM> data;
-		ds::data_storage_t<POLICY_T>* parent_storage = nullptr;
-	};
+		struct entry {
+			std::uint64_t key;
+			std::string_view name;
+			std::shared_ptr<void> object;
+		};
 
-	using app_data_storage = data_storage_t<shared_storage_policy>;
+		template<class KEY, class INSTANCE, class... A>
+		KEY& add(A&&... args) {
+			ensure_absent(type_key<KEY>(), type_name<KEY>());
+			std::shared_ptr<KEY> object = std::make_shared<INSTANCE>(std::forward<A>(args)...);
+			KEY& ref = *object;
+			insert(type_key<KEY>(), type_name<KEY>(), std::move(object));
+			return ref;
+		}
+
+		void ensure_absent(std::uint64_t key, std::string_view name) const {
+			auto it = m_index.find(key);
+			if (it == m_index.end()) {
+				return;
+			}
+			const entry& existing = m_entries[it->second];
+			if (existing.name == name) {
+				throw std::logic_error(std::string{ "ds::app_data_storage::construct: service already registered: " } + std::string{ name });
+			}
+			throw std::logic_error(std::string{ "ds::app_data_storage: key collision between " } + std::string{ existing.name } + " and " + std::string{ name });
+		}
+
+		void insert(std::uint64_t key, std::string_view name, std::shared_ptr<void> object) {
+			ensure_absent(key, name);
+			m_index.emplace(key, m_entries.size());
+			m_entries.push_back(entry{ key, name, std::move(object) });
+		}
+
+		void rebuild_index() {
+			m_index.clear();
+			for (std::size_t i = 0; i < m_entries.size(); ++i) {
+				m_index.emplace(m_entries[i].key, i);
+			}
+		}
+
+		// Looks in this storage first, then in the parents.
+		const entry* find_entry(std::uint64_t key, std::string_view name) const {
+			for (const app_data_storage* storage = this; storage != nullptr; storage = storage->m_parent) {
+				auto it = storage->m_index.find(key);
+				if (it != storage->m_index.end() && storage->m_entries[it->second].name == name) {
+					return &storage->m_entries[it->second];
+				}
+			}
+			return nullptr;
+		}
+
+		void destroy_all() {
+			while (!m_entries.empty()) {
+				m_index.erase(m_entries.back().key);
+				m_entries.pop_back();
+			}
+		}
+
+		std::vector<entry> m_entries;
+		std::unordered_map<std::uint64_t, std::size_t> m_index;
+		app_data_storage* m_parent = nullptr;
+	};
 }
