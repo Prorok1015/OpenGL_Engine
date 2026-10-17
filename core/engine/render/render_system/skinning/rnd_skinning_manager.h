@@ -36,7 +36,6 @@ namespace rnd
 
 		rnd::driver::ssbo_buffer_interface* get_weights_indeces_buffer(res::tag tag, rnd::driver::driver_interface* driver);
 		rnd::driver::ssbo_buffer_interface* get_bones_matrices_buffer(rnd::driver::driver_interface* driver);
-		rnd::driver::ssbo_buffer_interface* get_tmp_triangles_hightlight_buffer(rnd::driver::driver_interface* driver);
 	private:
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver);
 
@@ -44,6 +43,5 @@ namespace rnd
 		std::unordered_map<res::tag, std::vector<std::vector<uint32_t>>> m_weights_registry;
 		std::unordered_map<res::tag, std::unique_ptr<rnd::driver::ssbo_buffer_interface>> bone_indices_buffer;
 		std::unique_ptr<rnd::driver::ssbo_buffer_interface> bones_matrices_buffer;
-		std::unique_ptr<rnd::driver::ssbo_buffer_interface> tmp_treangles_hightlight_buffer;
 	};
 }

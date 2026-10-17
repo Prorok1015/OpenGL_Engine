@@ -17,15 +17,11 @@ namespace rnd::driver::gl
 		virtual void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) override;
 
 		virtual void set_viewport(glm::ivec4 rect) override;
-		virtual void set_clear_color(glm::vec4 color) override;
 		virtual void clear(clear_flags flags) override;
 		virtual void clear(clear_flags flags, glm::vec4 color) override;
 		virtual void clear(clear_flags flags, const std::vector<glm::vec4>& colors) override;
-		virtual void set_activate_texture(int idx) override;
 		virtual void set_line_size(float size) override;
-		virtual void set_point_size(float size) override;
 		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) override;
-		virtual void draw_instanced_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int instance_count, unsigned int offset = 0) override;
 		virtual void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
 
 		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) override;
@@ -35,7 +31,6 @@ namespace rnd::driver::gl
 		virtual std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) override;
 		virtual std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) override;
 
-		virtual void register_render_state(const render_state& state) override;
 		virtual void set_render_state(const render_state& state) override;
 
 		// GPU timer queries
@@ -54,6 +49,5 @@ namespace rnd::driver::gl
 
 		glm::ivec4 viewport{ 0 };
 		std::stack<std::pair<GLuint, GLuint>> framebuffers;
-		render_state_cache state_cache;
 	};
 }

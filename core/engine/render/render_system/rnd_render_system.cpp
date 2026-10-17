@@ -129,45 +129,6 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	});
 }
 
-void rnd::render_system::activate_renderer(std::weak_ptr<renderer_base> renderer_)
-{
-	auto pred = [](auto& lhs, auto& rhs) {
-		auto lhs_r = lhs.lock();
-		auto rhs_r = rhs.lock();
-		if (!lhs_r || !rhs_r) {
-			return false;
-		}
-
-		return lhs_r->get_render_priority() > rhs_r->get_render_priority();
-	};
-
-	renderers_list.insert(std::lower_bound(renderers_list.begin(), renderers_list.end(), renderer_, pred), renderer_);
-}
-
-void rnd::render_system::deactivate_renderer(std::weak_ptr<renderer_base> renderer)
-{
-	auto pred = [find = renderer.lock()](auto& lhs) {
-		auto lhs_r = lhs.lock(); 
-		if (!lhs_r) {
-			return false;
-		}
-
-		return lhs_r == find;
-	};
-
-	auto it = std::find_if(renderers_list.begin(), renderers_list.end(), pred);
-	renderers_list.erase(it);
-}
-
-void rnd::render_system::render() const
-{
-	for (auto& weak_renderer : renderers_list) {
-		if (auto renderer = weak_renderer.lock()) {
-			renderer->on_render(drv.get());
-		}
-	}
-}
-
 void rnd::render_system::render_frame(frame_context& context) const
 {
 	PROFILE_SCOPE("RenderFrame");

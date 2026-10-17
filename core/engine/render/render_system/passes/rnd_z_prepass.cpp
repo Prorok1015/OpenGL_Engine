@@ -68,20 +68,6 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
 
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
-    /*
-    rnd::shader_config shader_desc;
-    shader_desc.cdata.program =
-        rnd::shader_config::shader_program_data::build()
-            .set_vertex_shader(res::tag::make("shaders/z_prepass.vert"))
-            .set_fragment_shader(res::tag::make("shaders/z_prepass.frag"));
-
-    rnd::configure_pass(
-        shader_desc); // Note: Original material might be needed if they rely on
-                      // a particular original transform format, but draw_call_t
-                      // handles that?
-    // Wait, the new architecture sets transform per draw call! But how?
-    // In opaque pass we probably set it. But `draw_call_t` has `transform`!
-    */
 
 	auto z_prepass_program = rnd::shader_config::shader_program_data::build()
         .set_vertex_shader(res::tag::make("shaders/z_prepass.vert"))

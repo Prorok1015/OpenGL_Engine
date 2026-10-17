@@ -32,16 +32,6 @@ void gui::gui_system::render_menues()
 	}
 }
 
-//void gui::gui_system::switch_input(inp::KEYBOARD_BUTTONS code, inp::KEY_ACTION action)
-//{
-//	if (code == inp::KEYBOARD_BUTTONS::F5 && action == inp::KEY_ACTION::UP)
-//	{
-//		gs::get_system().set_enable_input(layout.get_is_show_main_menu());
-//		layout.set_show_main_menu(!layout.get_is_show_main_menu());
-//		ImGui::SetWindowFocus();
-//	}
-//}
-
 void gui::gui_system::set_is_input_enabled(bool enable)
 {
 	if (is_input_enabled == enable) {

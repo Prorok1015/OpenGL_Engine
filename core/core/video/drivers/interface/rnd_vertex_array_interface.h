@@ -12,7 +12,6 @@ namespace rnd::driver
 		virtual void unbind() const = 0;
 
 		virtual void add_vertex_buffer(const std::shared_ptr<buffer_interface>& vertexBuffer) = 0;
-		virtual void remove_vertex_buffer(const std::shared_ptr<buffer_interface>& vertexBuffer) = 0;
 		virtual void set_index_buffer(const std::shared_ptr<buffer_interface>& indexBuffer) = 0;
 	};
 }

@@ -1,5 +1,7 @@
 #pragma once
-#include "gui_renderer.h"
+#include <common.h>
+#include <rnd_driver_interface.h>
+#include "gui_backend_interface.h"
 #include "gui_menu_layout.h"
 #include "gui_layer_interface.h"
 
@@ -22,7 +24,6 @@ namespace gui
 		void set_show_ui(bool show) { is_show = show; }
 		bool is_hiden() const { return !is_show; }
 
-		//void switch_input(inp::KEYBOARD_BUTTONS code, inp::KEY_ACTION action);
 		void set_is_input_enabled(bool enable);
 
 		void push_layer(std::shared_ptr<gui::layer_interface> layer) {

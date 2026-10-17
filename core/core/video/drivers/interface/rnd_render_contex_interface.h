@@ -4,8 +4,6 @@
 
 namespace rnd::driver
 {
-	enum class RENDER_CONTEXT_TYPE { OPENGL, /*VULKAN*/ };
-
 	class render_context_interface
 	{
 	public:

@@ -352,12 +352,6 @@ void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 	}
 }
 
-void rnd::driver::gl::driver::set_clear_color(glm::vec4 color)
-{
-	glClearColor(color.r, color.g, color.b, color.a);
-	CHECK_GL_ERROR();
-}
-
 void rnd::driver::gl::driver::clear(clear_flags flags)
 {
 	attach_frame_buffer();
@@ -418,22 +412,9 @@ void rnd::driver::gl::driver::clear(clear_flags flags, const std::vector<glm::ve
 	detach_frame_buffer();
 }
 
-void rnd::driver::gl::driver::set_activate_texture(int idx)
-{
-	// active proper texture unit before binding
-	glActiveTexture(GL_TEXTURE0 + idx);
-	CHECK_GL_ERROR();
-}
-
 void rnd::driver::gl::driver::set_line_size(float size)
 {
 	glLineWidth(size);
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::set_point_size(float size)
-{
-	glPointSize(size);
 	CHECK_GL_ERROR();
 }
 
@@ -461,24 +442,6 @@ void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_in
 
 	vertices->unbind();
 
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void rnd::driver::gl::driver::draw_instanced_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int instance_count, unsigned int offset)
-{
-	GLenum rm = GL_TRIANGLES;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
-	vertices->bind();
-	glDrawElementsInstanced(rm, count, GL_UNSIGNED_INT, 0, instance_count);
-	CHECK_GL_ERROR();
-	vertices->unbind();
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -634,12 +597,6 @@ std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::gl::driver::cre
 	static_assert(sizeof(GLint) == sizeof(uint32_t));
 	ASSERT_MSG((size / sizeof(GLuint)) == (size / sizeof(uint32_t)), "Missmatch size with OpenGL size");
 	return std::make_unique<gl::gl_ssbo_buffer>(size, binding);
-}
-
-void rnd::driver::gl::driver::register_render_state(const render_state& state) {
-    // OpenGL doesn't require state preregistration,
-    // but we can cache them for optimization
-    state_cache.register_state(state);
 }
 
 // GPU timer queries

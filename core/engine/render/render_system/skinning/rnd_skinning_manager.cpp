@@ -22,15 +22,6 @@ rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_bones_matrices_bu
 	return bones_matrices_buffer.get();
 }
 
-rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_tmp_triangles_hightlight_buffer(rnd::driver::driver_interface* driver)
-{
-    if (!tmp_treangles_hightlight_buffer) {
-        tmp_treangles_hightlight_buffer = driver->create_ssbo_buffer(sizeof(uint32_t) * 1024 * 1024, 0);
-	}
-
-	return tmp_treangles_hightlight_buffer.get();
-}
-
 std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::skinning_manager::create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver)
 {
      auto it = m_weights_registry.find(skin);

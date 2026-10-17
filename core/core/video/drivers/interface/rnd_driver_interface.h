@@ -150,29 +150,6 @@ namespace rnd::driver
 			state.face_culling.enabled = false;
 			return state;
 		}
-
-		// Hash for use as a key in state cache
-		size_t hash() const {
-			size_t h = 0;
-			//TODO: hash calculation based on all fields
-			return h;
-		}
-	};
-
-	// State cache manager
-	class render_state_cache {
-	public:
-		void register_state(const render_state& state) {
-			m_states[state.hash()] = state;
-		}
-
-		const render_state* get_state(size_t hash) const {
-			auto it = m_states.find(hash);
-			return it != m_states.end() ? &it->second : nullptr;
-		}
-
-	private:
-		std::unordered_map<size_t, render_state> m_states;
 	};
 
 	class driver_interface
@@ -186,15 +163,11 @@ namespace rnd::driver
 		virtual void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) = 0;
 
 		virtual void set_viewport(glm::ivec4 rect) = 0;
-		virtual void set_clear_color(glm::vec4 color) = 0;
 		virtual void clear(clear_flags flags) = 0;
 		virtual void clear(clear_flags flags, glm::vec4 color) = 0;
 		virtual void clear(clear_flags flags, const std::vector<glm::vec4>& colors) = 0;
-		virtual void set_activate_texture(int idx) = 0;
 		virtual void set_line_size(float size) = 0;
-		virtual void set_point_size(float size) = 0;
 		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) = 0;
-		virtual void draw_instanced_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int instance_count, unsigned int offset = 0) = 0;
 		virtual void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) = 0;
 
 
@@ -205,7 +178,6 @@ namespace rnd::driver
 		virtual std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) = 0;
 		virtual std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) = 0;
 
-		virtual void register_render_state(const render_state& state) = 0;
 		virtual void set_render_state(const render_state& state) = 0;
 
 		// GPU timer queries for profiling

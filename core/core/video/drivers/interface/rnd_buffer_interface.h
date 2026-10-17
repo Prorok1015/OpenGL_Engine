@@ -8,12 +8,6 @@ namespace rnd::driver
 		STATIC, DYNAMIC
 	};
 
-	enum class BUFFER_TYPE
-	{
-		ARRAY_BUFFER,
-		ELEMENT_ARRAY_BUFFER
-	};
-
 	class buffer_interface
 	{
 	public:

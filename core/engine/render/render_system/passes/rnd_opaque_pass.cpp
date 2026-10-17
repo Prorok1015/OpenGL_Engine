@@ -73,11 +73,6 @@ void opaque_pass::execute(frame_context &context,
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
-    //std::sort(packet.opaque_draws.begin(), packet.opaque_draws.end(),
-    //          [](const rnd::draw_call_t &a, const rnd::draw_call_t &b) {
-    //            return a.sort_key < b.sort_key;
-    //          });
-
     for (const auto &dc : packet.opaque_draws) {
       auto *va = geom_manager.require_geometry(dc.geometry_tag);
       if (!va)

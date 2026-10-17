@@ -44,17 +44,6 @@ namespace rnd
 		point_light point_lights[MAX_LIGHT_COUNT];
 	};
 
-	struct bones_matrices
-	{
-		static constexpr int MAX_BONE_MATRICES_COUNT = 128;
-		int row_height;
-		int bone_count;
-	private:
-		glm::ivec2 _std140padding;
-	public:
-		glm::mat4 bones[MAX_BONE_MATRICES_COUNT];
-	};
-
 	class ShaderManager
 	{
 	public:
@@ -92,12 +81,10 @@ namespace rnd
 
 		void update_global_uniform(const global_params& val) const;
 		void update_global_sun(const lights_params& val) const;
-		void update_global_bones_matrices(const bones_matrices& val, std::size_t count) const;
 	private:
 		driver::driver_interface* drv = nullptr;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> _matrices;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> sun_light;
-		std::shared_ptr<rnd::driver::uniform_buffer_interface> bones_buffer;
 		mutable std::unordered_map<shader_config, std::unique_ptr<rnd::driver::shader_interface>> shader_cache;
 	};
 }

@@ -115,10 +115,6 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 	m_VertexBuffers.push_back(vertexBuffer);
 }
 
-void rnd::driver::gl::vertex_array::remove_vertex_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& vertexBuffer)
-{
-}
-
 void rnd::driver::gl::vertex_array::set_index_buffer(const std::shared_ptr<rnd::driver::buffer_interface>& indexBuffer)
 {
 	m_IndexBuffer = std::static_pointer_cast<gl::buffer>(indexBuffer);

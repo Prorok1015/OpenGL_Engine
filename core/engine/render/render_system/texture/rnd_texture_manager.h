@@ -20,7 +20,6 @@ namespace rnd
 		{}
 
 		driver::texture_interface* require_texture(const res::tag& tag);
-		driver::texture_interface* require_cubemap_texture(const std::vector<res::tag>& tags);
 		driver::texture_interface* generate_texture(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data);
 		driver::texture_interface* generate_texture(const res::tag& tag, rnd::driver::texture_header header);
 
