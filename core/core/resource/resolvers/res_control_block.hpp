@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <condition_variable>
 #include <string>
 #include <vector>
 #include <memory>
@@ -40,14 +41,12 @@ namespace core::res
             return status == res_status::error;
 		}
 
+        // Blocks until the block is ready or failed. Does not assert on error: check has_error().
         void wait()
         {
-            while (!is_ready() && !has_error())
-            {
-                std::this_thread::yield();
-            }
-
-            ASSERT_MSG(!has_error(), "Resource loading error");
+            if (is_finished()) return;
+            std::unique_lock lock(callback_mtx);
+            m_cv.wait(lock, [this] { return is_finished(); });
         }
 
         T& get() {
@@ -55,37 +54,50 @@ namespace core::res
             return data;
         }
 
+        // Fires exactly once, immediately (on the caller thread) if already finished.
+        // Callbacks never run under the lock, so they may re-enter this block.
         void then(std::function<void(res_control_block<T>&)> callback)
         {
-            if (is_ready() || has_error()) {
-                callback(*this);
-            } else {
+            {
                 std::lock_guard lock(callback_mtx);
-                if (is_ready() || has_error()) {
-                    callback(*this);
+                if (!is_finished()) {
+                    on_ready_callbacks.push_back(std::move(callback));
                     return;
-				}
-                on_ready_callbacks.push_back(callback);
+                }
             }
+            callback(*this);
         }
 
         void set_ready(T&& result) {
-            data = std::move(result);
-            status = res_status::ready;
-
-            std::lock_guard lock(callback_mtx);
-            for (auto& cb : on_ready_callbacks) cb(*this);
-            on_ready_callbacks.clear();
+            // data is published before the release store of status, under the same lock that guards then()/wait()
+            finish(res_status::ready, [&] { data = std::move(result); });
         }
 
         void set_error(std::string msg) {
-            error_msg = std::move(msg);
-            status = res_status::error;
-
-            std::lock_guard lock(callback_mtx);
-            for (auto& cb : on_ready_callbacks) cb(*this);
-            on_ready_callbacks.clear();
+            finish(res_status::error, [&] { error_msg = std::move(msg); });
         }
+
+    private:
+        bool is_finished() const {
+            auto s = status.load(std::memory_order_acquire);
+            return s == res_status::ready || s == res_status::error;
+        }
+
+        template<typename F>
+        void finish(res_status final_status, F&& write)
+        {
+            std::vector<std::function<void(res_control_block<T>&)>> callbacks;
+            {
+                std::lock_guard lock(callback_mtx);
+                write();
+                status.store(final_status, std::memory_order_release);
+                callbacks.swap(on_ready_callbacks);
+            }
+            m_cv.notify_all();
+            for (auto& cb : callbacks) cb(*this);
+        }
+
+        std::condition_variable m_cv;
     };
 
     // Unified non-typed resource control block: all resource types share this block type,

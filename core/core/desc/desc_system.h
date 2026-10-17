@@ -15,6 +15,17 @@ namespace desc
 		using desc_name = res::tag;
 		using desc_namespace = std::string;
 
+		// std::hash is not stable across platforms/STLs; these names end up in saved data.
+		static constexpr uint64_t fnv1a_64(std::string_view s) noexcept
+		{
+			uint64_t h = 14695981039346656037ull;
+			for (unsigned char c : s) {
+				h ^= c;
+				h *= 1099511628211ull;
+			}
+			return h;
+		}
+
 		desc_system(res::resource_system& res_system);
 		~desc_system() = default;
 		desc_system(const desc_system&) = delete;
@@ -184,7 +195,7 @@ namespace desc
 		{
 			std::string_view owner_name = owner.get_tag().pure_name();
 			std::string serialized = json::serialize(data);
-			size_t content_hash = std::hash<std::string>{}(serialized);
+			uint64_t content_hash = fnv1a_64(serialized);
 
 			std::string path = std::format("memory://overrides/{}/{}_{:x}.desc",
 				owner_name, field, content_hash);

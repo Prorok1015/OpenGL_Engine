@@ -1,0 +1,203 @@
+#include <boost/test/unit_test.hpp>
+#include "res_system.h"
+#include "desc_system.h"
+#include "adapters/desc_adapter_t.h"
+#include "adapters/res_text_adapter.h"
+#include "resolvers/res_control_block.hpp"
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <thread>
+
+using namespace core::res;
+
+namespace {
+
+std::vector<std::byte> bytes_of(const std::string& str)
+{
+	std::vector<std::byte> result(str.size());
+	std::memcpy(result.data(), str.data(), str.size());
+	return result;
+}
+
+struct inline_worker : adapter_worker_base
+{
+	void start() override {}
+	void stop() override {}
+	bool is_stopped() const override { return false; }
+	void post(std::function<void()> cb) override { cb(); }
+};
+
+struct hardening_test_desc : desc::desc_base
+{
+	int value = 0;
+
+	void copy_to(desc::desc_base& other) const override
+	{
+		if (auto* o = dynamic_cast<hardening_test_desc*>(&other)) {
+			o->value = value;
+		}
+	}
+	void deserialize(desc::desc_system&, const boost::json::object& obj) override
+	{
+		if (obj.contains("value")) value = static_cast<int>(obj.at("value").as_int64());
+	}
+	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
+};
+
+struct desc_fixture
+{
+	desc_fixture()
+	{
+		std::filesystem::create_directories("./res");
+		std::filesystem::create_directories("./sandbox");
+		res_sys = std::make_unique<res::resource_system>();
+		res_sys->set_adapter_worker(std::make_unique<inline_worker>());
+		desc_sys = std::make_unique<desc::desc_system>(*res_sys);
+		desc_sys->register_desc<hardening_test_desc>("hardening_test_desc");
+		res_sys->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*res_sys), std::ref(*desc_sys));
+	}
+
+	res::tag put(const std::string& name, const std::string& json_text)
+	{
+		auto tag = res::tag{ "memory://hardening/" + name + ".desc" };
+		BOOST_REQUIRE(res_sys->store(tag, bytes_of(json_text)));
+		return tag;
+	}
+
+	std::unique_ptr<res::resource_system> res_sys;
+	std::unique_ptr<desc::desc_system> desc_sys;
+};
+
+}
+
+BOOST_AUTO_TEST_SUITE(ResHardeningTests)
+
+BOOST_AUTO_TEST_CASE(Tag_DifferentStringsAreNotEqual)
+{
+	BOOST_CHECK(res::tag::make("a/b.txt") == res::tag::make("a/b.txt"));
+	BOOST_CHECK(!(res::tag::make("a/b.txt") == res::tag::make("a/c.txt")));
+	BOOST_CHECK(!(res::tag::make("a/b.txt") == res::tag{ "memory://a/b.txt" }));
+}
+
+BOOST_AUTO_TEST_CASE(Fnv1a64_GoldenValues)
+{
+	BOOST_CHECK_EQUAL(desc::desc_system::fnv1a_64(""), 0xcbf29ce484222325ull);
+	BOOST_CHECK_EQUAL(desc::desc_system::fnv1a_64("a"), 0xaf63dc4c8601ec8cull);
+	BOOST_CHECK_EQUAL(desc::desc_system::fnv1a_64("foobar"), 0x85944171f73967e8ull);
+}
+
+BOOST_AUTO_TEST_CASE(ControlBlock_ThenRacingWithCompletion_FiresExactlyOnce)
+{
+	constexpr int iterations = 2000;
+	for (int i = 0; i < iterations; ++i) {
+		res_control_block<int> block;
+		std::atomic<int> fired = 0;
+		std::atomic<bool> go = false;
+
+		std::thread completer([&] {
+			while (!go) std::this_thread::yield();
+			block.set_ready(7);
+		});
+		std::thread subscriber([&] {
+			while (!go) std::this_thread::yield();
+			block.then([&](auto& b) {
+				BOOST_CHECK_EQUAL(b.data, 7);
+				++fired;
+			});
+		});
+		go = true;
+		completer.join();
+		subscriber.join();
+		BOOST_REQUIRE_EQUAL(fired.load(), 1);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ControlBlock_CallbackMayReenterThen)
+{
+	res_control_block<int> block;
+	int inner = 0;
+	block.then([&](auto& b) { b.then([&](auto&) { ++inner; }); });
+	block.set_ready(1);
+	BOOST_CHECK_EQUAL(inner, 1);
+}
+
+BOOST_AUTO_TEST_CASE(ControlBlock_WaitReturnsOnErrorWithoutAsserting)
+{
+	res_control_block<int> block;
+	std::thread t([&] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		block.set_error("boom");
+	});
+	block.wait();
+	t.join();
+	BOOST_CHECK(block.has_error());
+	BOOST_CHECK_EQUAL(block.error_msg, "boom");
+}
+
+BOOST_AUTO_TEST_CASE(RequireSync_MissingFile_ReturnsErrorWithoutCrash)
+{
+	desc_fixture f;
+	auto handle = f.res_sys->require_sync<res::text_resource>(res::tag::make("definitely/missing_file.txt"));
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(RequireSync_UnknownProtocol_FailsLoad)
+{
+	desc_fixture f;
+	auto handle = f.res_sys->require_sync<res::text_resource>(res::tag{ "nosuchproto://x/y.txt" });
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(Desc_Valid_LoadsAndInheritsParent)
+{
+	desc_fixture f;
+	auto parent = f.put("ok_parent", R"({"__type":"hardening_test_desc","value":5})");
+	auto child = f.put("ok_child", R"({"__type":"hardening_test_desc","__parent":"memory://hardening/ok_parent.desc"})");
+	auto handle = f.res_sys->require_sync<desc::desc_base>(child);
+	auto loaded = std::dynamic_pointer_cast<hardening_test_desc>(handle.get_sync());
+	BOOST_REQUIRE(loaded);
+	BOOST_CHECK_EQUAL(loaded->value, 5);
+}
+
+BOOST_AUTO_TEST_CASE(Desc_UnknownType_IsLoadError)
+{
+	desc_fixture f;
+	auto tag = f.put("unknown_type", R"({"__type":"no_such_type"})");
+	auto handle = f.res_sys->require_sync<desc::desc_base>(tag);
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(Desc_MissingType_IsLoadError)
+{
+	desc_fixture f;
+	auto tag = f.put("missing_type", R"({"value":1})");
+	auto handle = f.res_sys->require_sync<desc::desc_base>(tag);
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(Desc_MissingParent_IsLoadError)
+{
+	desc_fixture f;
+	auto tag = f.put("missing_parent", R"({"__type":"hardening_test_desc","__parent":"memory://hardening/nonexistent.desc"})");
+	auto handle = f.res_sys->require_sync<desc::desc_base>(tag);
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(Desc_ParentCycle_IsLoadError)
+{
+	desc_fixture f;
+	f.put("cycle_a", R"({"__type":"hardening_test_desc","__parent":"memory://hardening/cycle_b.desc"})");
+	f.put("cycle_b", R"({"__type":"hardening_test_desc","__parent":"memory://hardening/cycle_a.desc"})");
+	auto handle = f.res_sys->require_sync<desc::desc_base>(res::tag{ "memory://hardening/cycle_a.desc" });
+	BOOST_CHECK(handle.get_sync() == nullptr);
+	BOOST_CHECK(handle.has_error());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
