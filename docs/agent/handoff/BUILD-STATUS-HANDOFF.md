@@ -118,7 +118,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 ## 5. Ссылки
 - Эпики: `docs/epics/infrastructure/EPIC-49.md` (все US с пометками DONE + коммиты), `EPIC-41.md` (прогресс/остаток), `EPIC-29.md` (координация Service Layer).
 - Архив воркпланов: `.claude/workplan/archive/2026-05-31-epic49-phase{0,1,2,3,4}.md` (детальный discovery+plan каждой фазы).
-- Исходный бриф: `docs/agent/handoff/EPIC-49-agent-brief.md`.
+- Исходный бриф EPIC-49 удалён (эпик завершён); история — в git.
 - Backlog follow-ups: **BL-007** (`docs/agent/backlog/items/BL-007.toon`, assembly-time skinning), **BL-008** (`docs/agent/backlog/items/BL-008.toon`, остаток EPIC-41) — индекс `docs/agent/backlog/INDEX.toon`.
 - Memory: `reference_windows_build.md` (build-гоча), `reference_frame_allocator.md`, `reference_ecs.md`.
 - Коммиты EPIC-49: `1441bd6`(49-2) `ca6aef9`(41-1) `cedc10b`(41-6) `2d89688`+`2714c1e`(41-4) `4e9688d`+`484e492`+`092b315`+`d44b492`(49-4) `fa142b5`+`d489a98`(49-3/1) `cf82fd9`(49-7) `64f7a0b`(49-8) `3cf68bc`+`0dff7ca`(49-9) `bcf7f49`(49-6) `3ed2cc9`(49-5) + docs.

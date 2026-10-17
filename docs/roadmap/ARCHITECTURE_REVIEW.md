@@ -516,7 +516,7 @@
 | Закомментированный код: `rnd_z_prepass.cpp:71-83`, `rnd_opaque_pass.cpp:76-80`, `gui_system.cpp:35-43`, `scn_primitives.cpp:72-102`, `core/core/input/CMakeLists.txt` | Мёртвые блоки | нет |
 | `application/CMakeLists.txt` линк `Boost::json` | Не используется | нет |
 | `CMakeUserPresets.json` | В `.gitignore`, но в репозитории | нет |
-| `docs/agent/handoff/EPIC-49-agent-brief.md` | Эпик завершён | нет |
+| ~~`docs/agent/handoff/EPIC-49-agent-brief.md`~~ | Эпик завершён — удалён 2026-10-17 | нет |
 
 ### Устаревшая документация
 
