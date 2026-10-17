@@ -4,6 +4,7 @@ add_library(${PROJECT_NAME} STATIC)
 add_library(snk::common ALIAS ${PROJECT_NAME})
 # Memory allocators live here (previously compiled into `core` — see EPIC-49 US-49-2).
 target_sources(${PROJECT_NAME} PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/engine_assert.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_allocator.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_debug_resource.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_linear_allocator.cpp"
