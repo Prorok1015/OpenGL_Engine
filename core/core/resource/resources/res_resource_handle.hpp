@@ -12,13 +12,6 @@ namespace core::res
     public:
 		using resource_control_block = res_resource_block;
 
-        struct hash
-        {
-            std::size_t operator()(const res_handle& h) const {
-                return static_cast<std::size_t>(h.m_block.get());
-            }
-        };
-
         res_handle() = default;
         ~res_handle() = default;
         res_handle(std::shared_ptr<resource_control_block> block, const ::res::tag& tag)
