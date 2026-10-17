@@ -3,6 +3,14 @@
 #include <memory_resource>
 #include "mem_debug_resource.h"
 
+// Allocation tracking exists only in debug builds (NDEBUG undefined); release is a pure
+// pass-through to upstream, so tracked counters stay at zero there (see mem_debug_resource.h).
+#ifndef NDEBUG
+#define DBG_TRACKED_TEST(expr) BOOST_TEST(expr)
+#else
+#define DBG_TRACKED_TEST(expr) ((void)0)
+#endif
+
 BOOST_AUTO_TEST_SUITE(MemDebugResourceTests)
 
 // --- Construction ---
@@ -19,8 +27,8 @@ BOOST_AUTO_TEST_CASE(SingleAllocDealloc) {
 	ds::debug_resource dbg(std::pmr::new_delete_resource());
 	void* p = dbg.allocate(64, alignof(int));
 	BOOST_TEST(p != nullptr);
-	BOOST_TEST(dbg.active_allocation_count() == 1u);
-	BOOST_TEST(dbg.active_allocation_bytes() == 64u);
+	DBG_TRACKED_TEST(dbg.active_allocation_count() == 1u);
+	DBG_TRACKED_TEST(dbg.active_allocation_bytes() == 64u);
 	dbg.deallocate(p, 64, alignof(int));
 	BOOST_TEST(dbg.active_allocation_count() == 0u);
 	BOOST_TEST(dbg.active_allocation_bytes() == 0u);
@@ -31,11 +39,11 @@ BOOST_AUTO_TEST_CASE(MultipleAllocations) {
 	void* a = dbg.allocate(100, 1);
 	void* b = dbg.allocate(200, 1);
 	void* c = dbg.allocate(50, 1);
-	BOOST_TEST(dbg.active_allocation_count() == 3u);
-	BOOST_TEST(dbg.active_allocation_bytes() == 350u);
+	DBG_TRACKED_TEST(dbg.active_allocation_count() == 3u);
+	DBG_TRACKED_TEST(dbg.active_allocation_bytes() == 350u);
 	dbg.deallocate(b, 200, 1);
-	BOOST_TEST(dbg.active_allocation_count() == 2u);
-	BOOST_TEST(dbg.active_allocation_bytes() == 150u);
+	DBG_TRACKED_TEST(dbg.active_allocation_count() == 2u);
+	DBG_TRACKED_TEST(dbg.active_allocation_bytes() == 150u);
 	dbg.deallocate(a, 100, 1);
 	dbg.deallocate(c, 50, 1);
 	BOOST_TEST(dbg.active_allocation_count() == 0u);
@@ -135,7 +143,7 @@ BOOST_AUTO_TEST_CASE(PmrVectorWorks) {
 			v.push_back(i);
 		}
 		BOOST_TEST(v.size() == 50u);
-		BOOST_TEST(dbg.active_allocation_count() > 0u);
+		DBG_TRACKED_TEST(dbg.active_allocation_count() > 0u);
 	}
 	// After vector destruction, all allocations should be freed
 	BOOST_TEST(dbg.active_allocation_count() == 0u);
@@ -178,8 +186,8 @@ BOOST_AUTO_TEST_CASE(WrapsCustomUpstream) {
 
 	void* p = dbg.allocate(128, 8);
 	BOOST_TEST(p != nullptr);
-	BOOST_TEST(dbg.active_allocation_count() == 1u);
-	BOOST_TEST(dbg.active_allocation_bytes() == 128u);
+	DBG_TRACKED_TEST(dbg.active_allocation_count() == 1u);
+	DBG_TRACKED_TEST(dbg.active_allocation_bytes() == 128u);
 	dbg.deallocate(p, 128, 8);
 	BOOST_TEST(dbg.active_allocation_count() == 0u);
 }
