@@ -27,8 +27,9 @@ namespace edt
 
 	private:
 		void rebuild_parent_cache();
-		void render_generic_json(boost::json::object& obj);
-		void render_generic_json_value(const std::string& key, boost::json::value& val);
+		bool render_generic_json(boost::json::object& obj);
+		bool render_generic_json_value(const std::string& key, boost::json::value& val);
+		void commit_if_idle();
 		void render_generic_json_readonly(const boost::json::object& obj);
 		void render_generic_json_value_readonly(const std::string& key, const boost::json::value& val);
 		void draw_add_component_popup();
@@ -38,6 +39,8 @@ namespace edt
 		component_ui_registry*         m_ui_registry    = nullptr;
 		desc::desc_system*             m_desc_system    = nullptr;
 		std::function<void()>          m_on_node_changed;
+		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
+		bool                           m_pending_commit = false;
 
 		// Cached serialized parent_desc data — built once on selection change for read-only display
 		std::unordered_map<std::string, boost::json::object> m_parent_cache;
