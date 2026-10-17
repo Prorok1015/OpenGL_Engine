@@ -282,7 +282,7 @@ boost::json::object edt::level_controller::load_desc_template(const std::string&
 boost::json::object edt::level_controller::build_level_json() const
 {
 	const std::string name = m_state.level_name.empty() ? "level" : m_state.level_name;
-	return scn::level_desc::build_json(name, m_state.world_descs);
+	return scn::level_desc::build_json(name, m_state.world_descs, m_desc);
 }
 
 bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
@@ -293,7 +293,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	const std::string stem = frel.stem().string();
 	const std::string level_name = stem.empty() ? m_state.level_name : stem;
 
-	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs);
+	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, m_desc);
 
 	std::filesystem::path abs_path = res::resource_system::get_resources_path() / frel;
 	std::error_code ec;

@@ -23,6 +23,12 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 		throw std::runtime_error(std::format("desc '{}': {}", tag.view(), reason));
 	};
 
+	try {
+		m_desc_system.migrate_tree(json_body, tag.view());
+	} catch (const std::exception& e) {
+		fail(e.what());
+	}
+
 	if (!json_body.contains("__type") || !json_body.at("__type").is_string()) {
 		fail("missing or non-string '__type' field");
 	}
@@ -81,6 +87,7 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
 	if (!body.contains("__type")) {
 		body["__type"] = std::string(desc_res->get_type());
 	}
+	m_desc_system.stamp_header(body);
     std::string data = json::serialize(body);
     std::vector<std::byte> byte_data;
     byte_data.resize(data.size());

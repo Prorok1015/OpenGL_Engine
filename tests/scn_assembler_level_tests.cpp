@@ -359,7 +359,7 @@ BOOST_AUTO_TEST_CASE(LevelDesc_LoadsInlineWorldsAndBuildJsonRoundTrips)
 	std::vector<scn::world_desc> worlds(2);
 	worlds[0].deserialize(*descs, json::parse(R"({"name":"a","systems":["s"]})").as_object());
 	worlds[1].deserialize(*descs, json::parse(R"({"name":"b"})").as_object());
-	auto built = scn::level_desc::build_json("L", worlds);
+	auto built = scn::level_desc::build_json("L", worlds, *descs);
 	BOOST_TEST(built.at("__type").as_string() == "level_desc");
 	BOOST_TEST(built.at("name").as_string() == "L");
 	BOOST_TEST(built.at("worlds").as_array().size() == 2u);
