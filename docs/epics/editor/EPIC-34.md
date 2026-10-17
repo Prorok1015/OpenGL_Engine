@@ -1,6 +1,7 @@
 # EPIC-34: Editor Model Importer — расширение и упрощение
 
 **Status:** planned
+**Issue:** [#38](https://github.com/Prorok1015/OpenGL_Engine/issues/38)
 **Theme:** editor
 **Dependencies:** EPIC-22, EPIC-12
 

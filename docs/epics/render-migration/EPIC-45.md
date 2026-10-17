@@ -1,6 +1,7 @@
 # EPIC-45: Render Pipeline Optimization — оптимизация экстракции и рендер пассов
 
 **Status:** planned
+**Issue:** [#15](https://github.com/Prorok1015/OpenGL_Engine/issues/15) (поглощён эпиком «POD-пакеты рендера и материал-инстансы»)
 **Theme:** render-migration
 **Dependencies:** EPIC-43 (Memory Allocators), EPIC-39 (Profiling)
 

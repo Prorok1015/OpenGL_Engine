@@ -1,0 +1,3021 @@
+[
+ {
+  "key": "phase0_tails",
+  "kind": "epic",
+  "title": "Фаза 0: хвосты этапов A/B",
+  "labels": [
+   "epic",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЗакрыть остатки этапов A/B фазы 0 перед переходом к этапам C/D: гигиена репозитория, ручная и автоматическая проверка, решения владельца по легаси-шаблонам.\n\n## Мотивация\nЭтапы A/B завершены в коде, но остались хвосты: легаси-шаблоны, `<iostream>` в общих заголовках, непроверенные на Windows сценарии редактора, отсутствие визуального smoke-теста в CI и тяжёлая история git.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/LEGACY_TEMPLATES.md\n\n## Ключевые решения и ограничения\n- Работа не меняет архитектуру, только гигиена и проверки.\n- Переписывание истории выполняется один раз при мерже aibranch в main.\n\n## Критерии завершения эпика\n- [ ] Все дочерние задачи закрыты\n- [ ] Smoke-тест редактора работает в CI\n- [ ] История git очищена, команда предупреждена о переклоне",
+  "number": 4
+ },
+ {
+  "key": "p0_legacy",
+  "kind": "story",
+  "title": "Фаза 0 хвосты: решения владельца по LEGACY_TEMPLATES",
+  "labels": [
+   "story",
+   "infrastructure",
+   "docs",
+   "P2"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "phase0_tails",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nВладелец принимает решения по шаблонным шейдерам/уровням/core/res/картинкам: удалить или перенести в `templates/`. Затем решения применяются в репозитории.\n\n## Файлы\n- `docs/roadmap/LEGACY_TEMPLATES.md`\n- `Editor/res/`\n- `core/res/`\n\n## Критерии приёмки\n- [ ] По каждой группе файлов в LEGACY_TEMPLATES.md записано решение (удалить / в templates/)\n- [ ] Решения применены, ссылки на удалённые ресурсы отсутствуют\n- [ ] Редактор запускается, тесты проходят\n\n## Связи\n- Эпик: {{#phase0_tails}}\n- Раздел дизайн-документа: [LEGACY_TEMPLATES.md](https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/LEGACY_TEMPLATES.md)",
+  "number": 53
+ },
+ {
+  "key": "p0_iostream",
+  "kind": "story",
+  "title": "Фаза 0 хвосты: убрать iostream и глобальные using из common.h",
+  "labels": [
+   "story",
+   "infrastructure",
+   "tech-debt",
+   "P2"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "phase0_tails",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nУбрать `<iostream>` из `core/core/common/common.h` и прочих заголовков, а также `using namespace` и глобальные алиасы из `common.h` (правило проекта: только `egLOG`).\n\n## Файлы\n- `core/core/common/common.h`\n\n## Критерии приёмки\n- [ ] В заголовках проекта нет `#include <iostream>`\n- [ ] В `common.h` нет `using namespace` и глобальных алиасов\n- [ ] Проект собирается, unit-тесты проходят\n\n## Связи\n- Эпик: {{#phase0_tails}}",
+  "number": 54
+ },
+ {
+  "key": "p0_manual_win",
+  "kind": "story",
+  "title": "Фаза 0 хвосты: ручная проверка редактора на Windows",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "phase0_tails",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nРучная проверка сценариев, которые нельзя проверить в headless: перетаскивание в инспекторе, превью префаба при нескольких мирах, Save & Continue, Debug-ассерты.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Перетаскивание значения в инспекторе вызывает reload один раз — на отпускании кнопки\n- [ ] Превью префаба корректно при нескольких мирах\n- [ ] Save & Continue работает на безымянном уровне\n- [ ] Debug-ассерты на GUI/GL путях не срабатывают в штатных сценариях\n- [ ] Результаты записаны в комментарий к задаче\n\n## Связи\n- Эпик: {{#phase0_tails}}",
+  "number": 55
+ },
+ {
+  "key": "p0_ci_smoke",
+  "kind": "story",
+  "title": "Фаза 0 хвосты: визуальный smoke-тест редактора в CI",
+  "labels": [
+   "story",
+   "infrastructure",
+   "ci",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "phase0_tails",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nLinux job с Xvfb + llvmpipe: запуск `tools/run_headless.sh` с `editor/startup_level` = `levels/smoke_level.desc` и сценариями `tools/headless/*.actions`; скриншоты сохраняются как артефакты.\n\n## Файлы\n- `tools/run_headless.sh`\n- `tools/headless/*.actions`\n- `.github/workflows/`\n\n## Критерии приёмки\n- [ ] CI job запускает редактор под Xvfb+llvmpipe\n- [ ] Выполняются все сценарии `tools/headless/*.actions`\n- [ ] Скриншоты загружаются в артефакты job\n- [ ] Падение редактора или отсутствие кадра ломает job\n\n## Связи\n- Эпик: {{#phase0_tails}}",
+  "number": 56
+ },
+ {
+  "key": "p0_history",
+  "kind": "story",
+  "title": "Фаза 0 хвосты: переписать историю git при мерже aibranch в main",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "phase0_tails",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`git filter-repo`: убрать старые модели `Editor/res/objects` и `core/res` из истории при мерже aibranch в main; force-push и предупреждение о необходимости переклонировать репозиторий.\n\n## Файлы\n- `(история git)`\n\n## Критерии приёмки\n- [ ] Список путей для удаления согласован с владельцем\n- [ ] Размер репозитория после очистки измерен и записан\n- [ ] Force-push выполнен, участники предупреждены о переклоне\n- [ ] Резервная копия старой истории сохранена\n\n## Связи\n- Эпик: {{#phase0_tails}}",
+  "number": 57
+ },
+ {
+  "key": "stab_bugs",
+  "kind": "epic",
+  "title": "Стабилизация: баги фазы 0",
+  "labels": [
+   "epic",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nСобрать и закрыть дефекты, найденные в фазе 0 (ревью кода, тесты с `// BUG:` и ручной headless-QA).\n\n## Мотивация\nЧасть багов найдена статически, часть — воспроизведена в headless-редакторе. Эпик даёт единое место учёта: что исправлено (с коммитами) и что осталось.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n\n## Ключевые решения и ограничения\n- Баги #1 и #2 (merge overrides) ведутся в эпике «Форматы данных: node_id, версии, GUID».\n- Доказательства QA: сценарии `tools/headless/*.actions` (воспроизведение в headless-редакторе) и отчёт о покрытии тестами.\n- Дефект #16 вероятно потеряет актуальность после «world_context и context_manager» и «EPIC-50: явные фазы ECS».\n\n## Критерии завершения эпика\n- [ ] Все открытые баги закрыты или перенесены в профильные эпики\n- [ ] Для каждого исправленного бага есть коммит и тест\n- [ ] Rare-crash (C) воспроизведён и исправлен либо закрыт как не воспроизводимый (ASan-прогон)",
+  "number": 5
+ },
+ {
+  "key": "epic29",
+  "kind": "epic",
+  "title": "EPIC-29: сервисы и готовность к DLL",
+  "labels": [
+   "epic",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nПеревести сервисы и модули на модель, пригодную для подключения игры как DLL: стабильные ключи, DI вместо глобальных `get_system()`, симметричные регистрации, жизненный цикл модулей.\n\n## Мотивация\nADR-01 требует shared library / игровые модули. Сейчас мешают глобальные аксессоры (`res::get_system`, `gs`), `gs::game_system`, тип-хеши, зависящие от компилятора, и отсутствие выгрузки модуля.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/infrastructure/EPIC-29.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-01)\n\n## Ключевые решения и ограничения\n- Переопределённый объём (re-scoped) по сравнению с EPIC-29.md.\n- Включает цели ARCHITECTURE_REVIEW §3.2.\n- Без `res::get_system()` и `gs::game_system` в новом коде.\n\n## Критерии завершения эпика\n- [ ] Все дочерние задачи закрыты\n- [ ] Нет новых вызовов `res::get_system()` вне legacy-слоя\n- [ ] Модуль можно загрузить/выгрузить по одному, регистрации симметричны",
+  "number": 6
+ },
+ {
+  "key": "e29_store",
+  "kind": "story",
+  "title": "EPIC-29: стабильные ключи ds_store и порядок разрушения",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic29",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКлючи сервисов в `ds_store` строятся от стабильных идентификаторов (`entt::type_hash` / `service_id`), а не от `typeid`. Сервисы разрушаются в обратном порядке регистрации. Убрать policy-шаблон.\n\n## Файлы\n- `core/core/ds/ds_store.h`\n\n## Критерии приёмки\n- [ ] Ключи не зависят от RTTI/компилятора\n- [ ] Тест: порядок разрушения обратный порядку регистрации\n- [ ] Policy-шаблон удалён, все использования обновлены\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
+  "number": 58
+ },
+ {
+  "key": "e29_pic",
+  "kind": "story",
+  "title": "EPIC-29: PIC, hidden visibility и SNK_API export header",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic29",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nВключить PIC и `-fvisibility=hidden`; добавить заголовок экспорта `SNK_API` (пустой в static-сборке).\n\n## Файлы\n- `CMakeLists.txt`\n- `core/core/common/snk_api.h`\n\n## Критерии приёмки\n- [ ] Сборка static не изменилась (SNK_API пустой)\n- [ ] Shared-вариант таргетов собирается на Linux\n- [ ] Публичные типы помечены SNK_API\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
+  "number": 59
+ },
+ {
+  "key": "e29_gs",
+  "kind": "story",
+  "title": "EPIC-29: удалить gs::game_system и регистрации через registration_scope",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic29",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nУдалить `gs::game_system` / `gs_game_init`; регистрации desc и spawner выполняются в scene через RAII `registration_scope` с симметричным unregister.\n\n## Файлы\n- `core/engine/game_system/gs_game_init.cpp`\n- `core/engine/scene/`\n\n## Критерии приёмки\n- [ ] `gs::game_system` и `gs_game_init` удалены\n- [ ] `registration_scope` снимает все регистрации в деструкторе\n- [ ] Тест: после выгрузки модуля реестры desc/spawner пусты\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
+  "number": 60
+ },
+ {
+  "key": "e29_di",
+  "kind": "story",
+  "title": "EPIC-29: внедрение res::resource_system& вместо get_system()",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic29",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПередавать `res::resource_system&` через конструктор в `scn_model_importer_adapter`, сборку префабов, render managers. Удалить глобалы `gs`, `skin_manager`, `gMaxTexture2DSize`.\n\n## Файлы\n- `core/engine/scene/scn_model_importer_adapter.cpp`\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] В перечисленных местах нет `res::get_system()`\n- [ ] Глобалы gs/skin_manager/gMaxTexture2DSize удалены\n- [ ] Все тесты проходят\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
+  "number": 61
+ },
+ {
+  "key": "e29_modules",
+  "kind": "story",
+  "title": "EPIC-29: жизненный цикл модулей и C-точка входа",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic29",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСостояние модуля, load/unload одного модуля, C-точка входа `snk_module_api_version` / `snk_create_module`; убрать `MODULE_PRIORITY`.\n\n## Файлы\n- `core/core/app/app_module.h`\n\n## Критерии приёмки\n- [ ] Модуль имеет состояние (loaded/initialized/shutdown)\n- [ ] Загрузка и выгрузка одного модуля покрыта тестом\n- [ ] Экспортируются `snk_module_api_version` и `snk_create_module`\n- [ ] `MODULE_PRIORITY` удалён, порядок задаётся `depends_on`\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
+  "number": 62
+ },
+ {
+  "key": "formats",
+  "kind": "epic",
+  "title": "Форматы данных: node_id, версии, GUID",
+  "labels": [
+   "epic",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВвести устойчивую идентичность узлов префабов, явную модель overrides, версии desc и резерв под GUID.\n\n## Мотивация\nМатчинг детей по имени (`scn_prefab_desc.cpp`): одноимённые соседи схлопываются, а переименование выглядит как удаление+добавление; плюс «sentinel»-значения в overrides дают дефекты (#1, #2), а отсутствие версий и идентификаторов блокирует миграции и asset database.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md (§7 этап C п.2)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-05, ADR-06)\n\n## Ключевые решения и ограничения\n- Остаётся запись {target_node_id, component, json_pointer, value} с явным присутствием поля.\n- `__guid` — только поле и генерация, без asset database (EPIC-57).\n- Остаток версионирования ведётся в EPIC-58.\n\n## Критерии завершения эпика\n- [ ] Баги #1 и #2 закрыты\n- [ ] Все .desc в репозитории мигрированы и проходят round-trip\n- [ ] Версии и GUID записываются при сохранении",
+  "number": 7
+ },
+ {
+  "key": "fm_nodeid",
+  "kind": "story",
+  "title": "Форматы данных: persistent node_id и карта node_id→entity",
+  "labels": [
+   "story",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nPersistent `node_id` в `prefab_node` и узлах мира; карта node_id→entity в мире; сопоставление детей при merge по id, а не по имени (одноимённые соседи больше не схлопываются, переименование — не удаление+добавление).\n\n## Файлы\n- `core/engine/scene/level/scn_prefab_desc.h/.cpp`\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] `node_id` сохраняется и читается\n- [ ] В мире есть карта node_id→entity\n- [ ] Тест: переименование узла и одноимённые соседи не ломают overrides\n\n## Связи\n- Эпик: {{#formats}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.7",
+  "number": 63
+ },
+ {
+  "key": "fm_overrides",
+  "kind": "story",
+  "title": "Форматы данных: overrides как записи {target_node_id, component, json_pointer, value}",
+  "labels": [
+   "story",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЗаменить sentinel-сравнение явными записями override с признаком присутствия. Закрывает баги #1 и #2.\n\n## Файлы\n- `core/engine/scene/level/scn_prefab_desc.cpp`\n- `tests/scn_prefab_merge_tests.cpp`\n\n## Критерии приёмки\n- [ ] Override «обратно к умолчанию» (pos 0 / rot 0 / scale 1) применяется\n- [ ] Глубокий merge вложенных объектов\n- [ ] Тесты NestedInstance_* с `// BUG:` проходят и маркеры сняты\n\n## Связи\n- Эпик: {{#formats}}\n- Зависимости: {{#bug_1}}, {{#bug_2}}, {{#fm_nodeid}}",
+  "number": 85
+ },
+ {
+  "key": "fm_version",
+  "kind": "story",
+  "title": "Форматы данных: __version и реестр JSON-миграций",
+  "labels": [
+   "story",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`__version` в каждом desc; реестр JSON→JSON миграций в `desc_adapter_t`, выполняется до `create_instance`.\n\n## Файлы\n- `core/core/desc/desc_adapter.h`\n\n## Критерии приёмки\n- [ ] Каждый сохранённый desc содержит `__version`\n- [ ] Цепочка миграций применяется при загрузке\n- [ ] Тест миграции v1→v2 на фиктивном типе\n\n## Связи\n- Эпик: {{#formats}}\n- Раздел дизайн-документа: ADR-06",
+  "number": 86
+ },
+ {
+  "key": "fm_guid",
+  "kind": "story",
+  "title": "Форматы данных: резерв __guid",
+  "labels": [
+   "story",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПоле `__guid` в desc и генерация при сохранении. Asset database не реализуется.\n\n## Файлы\n- `core/core/desc/`\n\n## Критерии приёмки\n- [ ] `__guid` генерируется при первом сохранении и не меняется при повторных\n- [ ] Загрузка desc без `__guid` не ошибается\n\n## Связи\n- Эпик: {{#formats}}\n- Раздел дизайн-документа: ADR-05",
+  "number": 87
+ },
+ {
+  "key": "fm_migrate",
+  "kind": "story",
+  "title": "Форматы данных: миграция существующих .desc и проверка round-trip",
+  "labels": [
+   "story",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПривести все .desc репозитория к новому формату и добавить тест round-trip (load → save → load) по всем файлам.\n\n## Файлы\n- `Editor/res/`\n- `tests/`\n\n## Критерии приёмки\n- [ ] Все .desc содержат `__version`\n- [ ] Тест round-trip проходит для всех .desc в репозитории\n\n## Связи\n- Эпик: {{#formats}}\n- Зависимости: {{#fm_nodeid}}, {{#fm_overrides}}, {{#fm_version}}",
+  "number": 88
+ },
+ {
+  "key": "epic50",
+  "kind": "epic",
+  "title": "EPIC-50: явные фазы ECS и детерминизм",
+  "labels": [
+   "epic",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЗаменить неявный порядок систем явными фазами, планировщиком и детерминированным fixed update.\n\n## Мотивация\nПорядок систем сейчас выводится из типов аргументов и солится; это приводит к недетерминизму и необъяснимым рёбрам графа (баг #16).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-08)\n\n## Ключевые решения и ограничения\n- Фазы: input → pre_update → fixed_update → update → post_update → transform → late_update.\n- Явные `after`/`before` + tie-break по порядку `world_desc.systems`.\n- Поглощает прежний EPIC-50 из CHIMERA_ROADMAP.\n\n## Критерии завершения эпика\n- [ ] Все системы перенесены на фазы\n- [ ] `salted_type` и `args_to_dependencies` удалены\n- [ ] Порядок выполнения детерминирован и покрыт тестами",
+  "number": 8
+ },
+ {
+  "key": "e50_enum",
+  "kind": "story",
+  "title": "EPIC-50: перечисление фаз и именованные фазы игры",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nenum фаз input→pre_update→fixed_update→update→post_update→transform→late_update и именованные фазы игры с якорем на стандартную фазу.\n\n## Файлы\n- `core/core/ecs/`\n\n## Критерии приёмки\n- [ ] Фазы определены и документированы\n- [ ] Игровая фаза объявляется с якорем\n\n## Связи\n- Эпик: {{#epic50}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.5",
+  "number": 89
+ },
+ {
+  "key": "e50_api",
+  "kind": "story",
+  "title": "EPIC-50: API регистрации системы {phase, after, before, run_in_edit}",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЕдиный дескриптор регистрации системы с фазой, зависимостями по именам и флагом выполнения в режиме редактирования.\n\n## Файлы\n- `core/core/ecs/ecs_system_interface.h`\n\n## Критерии приёмки\n- [ ] Система регистрируется с полями phase/after/before/run_in_edit\n- [ ] Старый способ объявления удалён или помечен deprecated\n\n## Связи\n- Эпик: {{#epic50}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.5\n- Зависимости: {{#e50_enum}}",
+  "number": 90
+ },
+ {
+  "key": "e50_sched",
+  "kind": "story",
+  "title": "EPIC-50: планировщик — план один раз, топосорт в фазе",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПлан строится один раз, топосортировка внутри фазы, tie-break по порядку `world_desc.systems`, диагностика циклов и неизвестных имён.\n\n## Файлы\n- `core/core/ecs/`\n\n## Критерии приёмки\n- [ ] Цикл зависимостей даёт понятную ошибку с именами систем\n- [ ] Неизвестное имя в after/before диагностируется\n- [ ] Порядок стабилен между запусками (тест)\n\n## Связи\n- Эпик: {{#epic50}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.5\n- Зависимости: {{#e50_api}}",
+  "number": 91
+ },
+ {
+  "key": "e50_fixed",
+  "kind": "story",
+  "title": "EPIC-50: fixed_update по аккумулятору и режимы Edit/Play/Pause/Step",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nFixed update по аккумулятору контекста; режимы Edit/Play/Pause/Step через `run_in_edit`; clamp dt и лимит шагов.\n\n## Файлы\n- `core/core/ecs/`\n- `core/engine/scene/scn_level.cpp`\n\n## Критерии приёмки\n- [ ] Fixed-шаги детерминированы при одинаковой последовательности dt\n- [ ] В Edit выполняются только системы с `run_in_edit`\n- [ ] Step выполняет ровно один кадр\n\n## Связи\n- Эпик: {{#epic50}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.5\n- Зависимости: {{#e50_sched}}",
+  "number": 92
+ },
+ {
+  "key": "e50_access",
+  "kind": "story",
+  "title": "EPIC-50: debug-валидация конфликтов доступа по типам аргументов",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nВ debug-сборке валидировать конфликты чтения/записи систем одной фазы по типам аргументов invoker (вместо вывода порядка из них).\n\n## Файлы\n- `core/core/ecs/`\n\n## Критерии приёмки\n- [ ] Конфликт записи двух систем без порядка даёт предупреждение в debug\n- [ ] Тест на конфликтную пару\n\n## Связи\n- Эпик: {{#epic50}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.5\n- Зависимости: {{#e50_sched}}",
+  "number": 93
+ },
+ {
+  "key": "e50_migrate",
+  "kind": "story",
+  "title": "EPIC-50: перенос систем на фазы и удаление salted_type",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПеренести существующие системы на новый API; удалить `salted_type` и `args_to_dependencies`.\n\n## Файлы\n- `core/engine/`\n- `core/core/ecs/`\n\n## Критерии приёмки\n- [ ] Все системы объявлены с фазами\n- [ ] `salted_type`/`args_to_dependencies` удалены\n- [ ] Все тесты проходят, редактор запускается\n\n## Связи\n- Эпик: {{#epic50}}\n- Зависимости: {{#e50_sched}}",
+  "number": 94
+ },
+ {
+  "key": "e50_rng",
+  "kind": "story",
+  "title": "EPIC-50: seeded RNG как ресурс контекста",
+  "labels": [
+   "story",
+   "ecs",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic50",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nДетерминированный генератор случайных чисел как ресурс мира/контекста с задаваемым seed.\n\n## Файлы\n- `core/core/ecs/`\n\n## Критерии приёмки\n- [ ] Одинаковый seed даёт одинаковую последовательность\n- [ ] Системы получают RNG через ресурс, не через глобал\n\n## Связи\n- Эпик: {{#epic50}}\n- Раздел дизайн-документа: ADR-08",
+  "number": 95
+ },
+ {
+  "key": "frameloop",
+  "kind": "epic",
+  "title": "Цикл кадра и player",
+  "labels": [
+   "epic",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nУпорядочить стадии кадра, объединить loop service и подготовить общий runtime для редактора и player.\n\n## Мотивация\nСтадии кадра упорядочены числовыми ключами (10/20/…), loop service разделён между edt и gs, а `loop.init()` вызывается неочевидно.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/infrastructure/EPIC-49.md\n\n## Ключевые решения и ограничения\n- Исполняемый player (core+engine+game, без редактора) входит в EPIC-54 и здесь не дублируется.\n- Present-пасс выводит в backbuffer без ImGui.\n\n## Критерии завершения эпика\n- [ ] Стадии кадра именованы, order-ключей нет\n- [ ] Один loop_service для edt и gs\n- [ ] `loop.init()` вызывается в `application::run`",
+  "number": 9
+ },
+ {
+  "key": "fl_phases",
+  "kind": "story",
+  "title": "Цикл кадра: именованные фазы стадий вместо order-ключей",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "frameloop",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЗаменить числовые order-ключи 10/20/… именованными фазами стадий кадра.\n\n## Файлы\n- `core/core/app/frame_stage_registry.h`\n\n## Критерии приёмки\n- [ ] Нет числовых order-ключей в регистрации стадий\n- [ ] Порядок стадий покрыт тестом\n\n## Связи\n- Эпик: {{#frameloop}}",
+  "number": 96
+ },
+ {
+  "key": "fl_loop",
+  "kind": "story",
+  "title": "Цикл кадра: единый loop_service и реестр стадий как сервис",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "frameloop",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nОбъединить loop_service редактора (edt) и игры (gs); реестр стадий — сервис.\n\n## Файлы\n- `Editor/code/`\n- `core/engine/game_system/`\n\n## Критерии приёмки\n- [ ] Остался один loop_service\n- [ ] Реестр стадий получается через DI\n\n## Связи\n- Эпик: {{#frameloop}}\n- Зависимости: {{#fl_phases}}",
+  "number": 97
+ },
+ {
+  "key": "fl_player",
+  "kind": "story",
+  "title": "Цикл кадра: подготовка исполняемого player (часть EPIC-54)",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "frameloop",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nВыделить общий цикл для player (core+engine+game без редактора). Реализация исполняемого файла — в EPIC-54; здесь только цикл кадра без зависимостей на edt.\n\n## Файлы\n- `core/main.cpp`\n- `core/engine/game_system/`\n\n## Критерии приёмки\n- [ ] Цикл кадра запускается без модулей редактора\n- [ ] Ссылка на EPIC-54 в описании реализована\n\n## Связи\n- Эпик: {{#frameloop}}\n- Зависимости: {{#fl_loop}}",
+  "number": 98
+ },
+ {
+  "key": "fl_present",
+  "kind": "story",
+  "title": "Цикл кадра: present-пасс в backbuffer без ImGui",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "frameloop",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПасс вывода итогового изображения в backbuffer без участия ImGui.\n\n## Файлы\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Player без ImGui отображает кадр\n- [ ] Редактор по-прежнему показывает viewport через ImGui\n\n## Связи\n- Эпик: {{#frameloop}}",
+  "number": 99
+ },
+ {
+  "key": "fl_init",
+  "kind": "story",
+  "title": "Цикл кадра: loop.init() в application::run",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "frameloop",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nВызывать `loop.init()` в `application::run`; `engine_module` не зависит от loop service редактора.\n\n## Файлы\n- `core/core/app/app_application.cpp`\n\n## Критерии приёмки\n- [ ] `loop.init()` вызывается в `application::run`\n- [ ] `engine_module` не включает заголовки редактора\n\n## Связи\n- Эпик: {{#frameloop}}",
+  "number": 100
+ },
+ {
+  "key": "platform",
+  "kind": "epic",
+  "title": "Платформенный шов (GLFW за platform::window)",
+  "labels": [
+   "epic",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nСкрыть GLFW за интерфейсом `platform::window`, создание GL-контекста перенести в драйвер.\n\n## Мотивация\nGLFW-типы протекают в движок и ImGui-бэкенд; это мешает player, тестам без окна и будущим бэкендам.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n\n## Ключевые решения и ограничения\n- Интерфейс window не содержит GLFW-типов.\n- `drv_opengl` создаёт контекст и swapchain: `create_swapchain(native_window)`.\n- window не линкует drv_opengl/glad.\n\n## Критерии завершения эпика\n- [ ] Нет GLFW-типов вне platform/drv\n- [ ] ImGui-бэкенд разделён на platform- и renderer-половины\n- [ ] Редактор работает без регрессий",
+  "number": 10
+ },
+ {
+  "key": "pl_iface",
+  "kind": "story",
+  "title": "Платформенный шов: интерфейс platform::window без GLFW-типов",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "platform",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nИнтерфейс окна: native handle, размер framebuffer, content scale, события.\n\n## Файлы\n- `core/core/window/`\n\n## Критерии приёмки\n- [ ] В публичном заголовке нет GLFW-типов\n- [ ] Реализация на GLFW за интерфейсом\n\n## Связи\n- Эпик: {{#platform}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.2",
+  "number": 101
+ },
+ {
+  "key": "pl_ctx",
+  "kind": "story",
+  "title": "Платформенный шов: создание GL-контекста и swap в drv_opengl",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "platform",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`create_swapchain(native_window)` в `drv_opengl`; window не линкует drv_opengl/glad.\n\n## Файлы\n- `core/drivers/drv_opengl/`\n\n## Критерии приёмки\n- [ ] Контекст создаёт драйвер\n- [ ] window не зависит от glad\n\n## Связи\n- Эпик: {{#platform}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.2\n- Зависимости: {{#pl_iface}}",
+  "number": 102
+ },
+ {
+  "key": "pl_events",
+  "kind": "story",
+  "title": "Платформенный шов: события и координаты",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "platform",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСобытия char / content_scale_changed / framebuffer resize; курсор в framebuffer-координатах.\n\n## Файлы\n- `core/core/window/`\n- `core/core/input/`\n\n## Критерии приёмки\n- [ ] События доставляются потребителям\n- [ ] Курсор в framebuffer-координатах при DPI != 100%\n\n## Связи\n- Эпик: {{#platform}}\n- Зависимости: {{#pl_iface}}",
+  "number": 103
+ },
+ {
+  "key": "pl_imgui",
+  "kind": "story",
+  "title": "Платформенный шов: разделить ImGui-бэкенд на platform/renderer",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "platform",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nРазделить ImGui-бэкенд на платформенную и рендер-половины.\n\n## Файлы\n- `Editor/code/imgui/`\n\n## Критерии приёмки\n- [ ] Платформенная половина не использует GL\n- [ ] Рендер-половина не использует GLFW\n\n## Связи\n- Эпик: {{#platform}}\n- Зависимости: {{#pl_ctx}}",
+  "number": 104
+ },
+ {
+  "key": "epic41",
+  "kind": "epic",
+  "title": "EPIC-41: остаток гигиены CMake",
+  "labels": [
+   "epic",
+   "infrastructure",
+   "ci",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЗакрыть оставшиеся пункты EPIC-41 и подготовить SDK (install/export, find_package, public/ split).\n\n## Мотивация\nСборка содержит абсолютные пути, нет единого таргета предупреждений и экспорта; ADR-03 требует установки SDK.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/infrastructure/EPIC-41.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-03)\n\n## Ключевые решения и ограничения\n- assimp — опциональный модуль (координация с EPIC-34).\n- Физический `public/` split — отложенный этап US-49-1.\n\n## Критерии завершения эпика\n- [ ] US-41-7/8/10 закрыты\n- [ ] `cmake --install` + `find_package(snk)` работают на тестовом проекте\n- [ ] Заголовки разделены на public/ и внутренние",
+  "number": 11
+ },
+ {
+  "key": "e41_7",
+  "kind": "story",
+  "title": "US-41-7: assimp в опциональный модуль",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic41",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nВынести assimp в опциональный модуль; согласовать с EPIC-34.\n\n## Файлы\n- `CMakeLists.txt`\n- `core/engine/scene/scn_model_importer_adapter.cpp`\n\n## Критерии приёмки\n- [ ] Сборка без assimp проходит\n- [ ] Импорт доступен при включённой опции\n\n## Связи\n- Эпик: {{#epic41}}\n- Раздел дизайн-документа: EPIC-41.md",
+  "number": 105
+ },
+ {
+  "key": "e41_8",
+  "kind": "story",
+  "title": "US-41-8: убрать абсолютные пути RESOURCE_PATH/PROJECT_SOURCE_PATH",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic41",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЗаменить абсолютные пути относительными/конфигурируемыми.\n\n## Файлы\n- `CMakeLists.txt`\n\n## Критерии приёмки\n- [ ] В бинарниках нет абсолютных путей исходников\n- [ ] Редактор запускается из установленного каталога\n\n## Связи\n- Эпик: {{#epic41}}\n- Раздел дизайн-документа: EPIC-41.md",
+  "number": 106
+ },
+ {
+  "key": "e41_10",
+  "kind": "story",
+  "title": "US-41-10: таргет compiler_warnings",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic41",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЕдиный INTERFACE-таргет с предупреждениями компилятора.\n\n## Файлы\n- `cmake/`\n\n## Критерии приёмки\n- [ ] Все таргеты движка линкуют `compiler_warnings`\n- [ ] Сборка без новых предупреждений\n\n## Связи\n- Эпик: {{#epic41}}\n- Раздел дизайн-документа: EPIC-41.md",
+  "number": 107
+ },
+ {
+  "key": "e41_install",
+  "kind": "story",
+  "title": "EPIC-41: install/export, snkConfig.cmake и find_package",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic41",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`cmake --install`, экспорт таргетов, `snkConfig.cmake`.\n\n## Файлы\n- `CMakeLists.txt`\n- `cmake/snkConfig.cmake.in`\n\n## Критерии приёмки\n- [ ] Установка в каталог проходит\n- [ ] Тестовый проект собирается через `find_package(snk)`\n\n## Связи\n- Эпик: {{#epic41}}\n- Раздел дизайн-документа: ADR-03",
+  "number": 108
+ },
+ {
+  "key": "e41_public",
+  "kind": "story",
+  "title": "EPIC-41: физический public/ split заголовков",
+  "labels": [
+   "story",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Task",
+  "parent_key": "epic41",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nРазложить публичные заголовки в `include/snk/<component>/`.\n\n## Файлы\n- `core/`\n\n## Критерии приёмки\n- [ ] Публичные заголовки в `include/snk/<component>/`\n- [ ] Внутренние заголовки не попадают в install\n\n## Связи\n- Эпик: {{#epic41}}\n- Раздел дизайн-документа: ADR-03\n- Зависимости: {{#e41_install}}",
+  "number": 109
+ },
+ {
+  "key": "ctx",
+  "kind": "epic",
+  "title": "world_context и context_manager",
+  "labels": [
+   "epic",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВвести `world_context` как единицу симуляции (registry, фазы, время, ввод, command buffer, флаг hot_reload) и `context_manager` вместо `level_manager`.\n\n## Мотивация\nЛимит 5 миров, соление типов и `runtime_context_provider` мешают превью префабов, Play-режиму и per-context вводу.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md (§7 этап D, §9.5)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-07, ADR-08)\n\n## Ключевые решения и ограничения\n- level становится набором контекстов, level_manager → context_manager.\n- Превью префаба/сцены редактора — отдельные контексты.\n- Баг «Multi-world oddity» (D) проверить после реализации.\n\n## Критерии завершения эпика\n- [ ] Все дочерние задачи закрыты\n- [ ] Лимит 5 миров и соление удалены\n- [ ] Превью префаба работает как независимый контекст",
+  "number": 12
+ },
+ {
+  "key": "ctx_ctx",
+  "kind": "story",
+  "title": "world_context: registry, фазы, время, ввод, command buffer, флаг hot_reload",
+  "labels": [
+   "story",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "ctx",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСтруктура `world_context` и её владение ресурсами контекста.\n\n## Файлы\n- `core/engine/scene/level/`\n\n## Критерии приёмки\n- [ ] `world_context` содержит registry, фазы, время, ввод, command buffer и флаг hot_reload\n- [ ] Тесты создания и уничтожения контекста\n\n## Связи\n- Эпик: {{#ctx}}",
+  "number": 110
+ },
+ {
+  "key": "ctx_mgr",
+  "kind": "story",
+  "title": "context_manager: level как набор контекстов",
+  "labels": [
+   "story",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "ctx",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`level` хранит набор контекстов; `level_manager` заменяется на `context_manager`.\n\n## Файлы\n- `core/engine/scene/level/scn_level.cpp`\n- `core/engine/scene/level/scn_level_manager.cpp`\n\n## Критерии приёмки\n- [ ] `level_manager` удалён\n- [ ] Загрузка уровня создаёт контексты по `world_desc`\n\n## Связи\n- Эпик: {{#ctx}}\n- Зависимости: {{#ctx_ctx}}",
+  "number": 111
+ },
+ {
+  "key": "ctx_preview",
+  "kind": "story",
+  "title": "world_context: превью префаба/сцены редактора как контексты",
+  "labels": [
+   "story",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "ctx",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПревью префаба и сцены в редакторе работают как отдельные контексты, а не как «transient world» уровня.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Превью префаба — отдельный контекст\n- [ ] Сохранение уровня не включает контекст превью\n\n## Связи\n- Эпик: {{#ctx}}\n- Зависимости: {{#ctx_mgr}}",
+  "number": 112
+ },
+ {
+  "key": "ctx_input",
+  "kind": "story",
+  "title": "world_context: per-context ввод",
+  "labels": [
+   "story",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "ctx",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКаждый контекст получает собственный источник ввода и область ввода.\n\n## Файлы\n- `core/core/input/`\n\n## Критерии приёмки\n- [ ] Ввод viewport-а префаба не влияет на основной viewport\n- [ ] Тест маршрутизации ввода\n\n## Связи\n- Эпик: {{#ctx}}\n- Зависимости: {{#ctx_ctx}}",
+  "number": 113
+ },
+ {
+  "key": "ctx_cleanup",
+  "kind": "story",
+  "title": "world_context: удалить соление, лимит 5 миров и runtime_context_provider",
+  "labels": [
+   "story",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "ctx",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nУбрать лимит 5 миров, соление типов и `runtime_context_provider`.\n\n## Файлы\n- `core/engine/scene/`\n- `core/core/ecs/`\n\n## Критерии приёмки\n- [ ] Нет константы лимита миров\n- [ ] Нет `runtime_context_provider`\n- [ ] Все тесты проходят\n\n## Связи\n- Эпик: {{#ctx}}\n- Зависимости: {{#ctx_mgr}}",
+  "number": 114
+ },
+ {
+  "key": "rhi",
+  "kind": "epic",
+  "title": "RHI шаги 1–4 и null-бэкенд",
+  "labels": [
+   "epic",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВыделить абстракцию RHI: pass descriptors, неизменяемые pipeline, bind groups, typed handles и null/validation-бэкенд.\n\n## Мотивация\nGL-понятия протекают за пределы `drv_*`; нет бэкенда для тестов без GPU.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md (§3.5, §9.1)\n\n## Ключевые решения и ограничения\n- Критерий: вне `drv_*` нет GL-понятий.\n- Поглощает ранее запланированные шаги RHI.\n\n## Критерии завершения эпика\n- [ ] Все шаги выполнены\n- [ ] Тесты рендера идут на null-бэкенде без GPU\n- [ ] Вне `drv_*` нет GL-понятий (проверка grep в CI)",
+  "number": 13
+ },
+ {
+  "key": "rhi_pass",
+  "kind": "story",
+  "title": "RHI шаг 1: render pass descriptors и usage-флаги текстур",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "rhi",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nОписание проходов через descriptors; флаги использования текстур.\n\n## Файлы\n- `core/drivers/`\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Пассы создаются через descriptors\n- [ ] Флаги usage проверяются при создании текстуры\n\n## Связи\n- Эпик: {{#rhi}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.5",
+  "number": 115
+ },
+ {
+  "key": "rhi_pipe",
+  "kind": "story",
+  "title": "RHI шаг 2: неизменяемый pipeline_desc → handle",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "rhi",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nНеизменяемый `pipeline_desc`, кеш и выдача handle.\n\n## Файлы\n- `core/drivers/`\n\n## Критерии приёмки\n- [ ] Один pipeline_desc даёт один handle\n- [ ] Изменение состояния после создания невозможно\n\n## Связи\n- Эпик: {{#rhi}}\n- Зависимости: {{#rhi_pass}}",
+  "number": 116
+ },
+ {
+  "key": "rhi_bind",
+  "kind": "story",
+  "title": "RHI шаг 3: bind groups с явными set/slot, per-draw UBO",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "rhi",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nBind groups с явными set/slot и per-draw UBO.\n\n## Файлы\n- `core/drivers/`\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Ресурсы привязываются через bind groups\n- [ ] Свободные uniform не используются\n\n## Связи\n- Эпик: {{#rhi}}\n- Зависимости: {{#rhi_pipe}}",
+  "number": 117
+ },
+ {
+  "key": "rhi_handles",
+  "kind": "story",
+  "title": "RHI шаг 4: typed handles вместо сырых указателей",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "rhi",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nTyped handles для буферов, текстур, pipeline.\n\n## Файлы\n- `core/drivers/`\n\n## Критерии приёмки\n- [ ] Нет сырых указателей на GPU-объекты в публичном API\n- [ ] Устаревший handle обнаруживается валидацией\n\n## Связи\n- Эпик: {{#rhi}}\n- Зависимости: {{#rhi_bind}}",
+  "number": 118
+ },
+ {
+  "key": "rhi_null",
+  "kind": "story",
+  "title": "RHI: null/validation-бэкенд и тесты",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "rhi",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nБэкенд без GPU с валидацией вызовов; тесты рендера на нём.\n\n## Файлы\n- `core/drivers/drv_null/`\n- `tests/`\n\n## Критерии приёмки\n- [ ] Рендер-тесты проходят без GL\n- [ ] Вне `drv_*` нет GL-понятий\n\n## Связи\n- Эпик: {{#rhi}}\n- Зависимости: {{#rhi_handles}}",
+  "number": 119
+ },
+ {
+  "key": "glsl",
+  "kind": "epic",
+  "title": "Правила шейдеров GLSL",
+  "labels": [
+   "epic",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЕдиные правила GLSL: общий include, явные биндинги, блоки вместо свободных uniform, ключи вариантов.\n\n## Мотивация\nШейдеры используют свободные uniform и неявные ключи вариантов; это мешает RHI и reflect материалов.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md (§9.4)\n\n## Ключевые решения и ограничения\n- `snk_common.glsl` + `SNK_BINDING(set,slot)`.\n- glslang-валидация в CI — опционально.\n- SPIRV-Reflect для параметров материала.\n\n## Критерии завершения эпика\n- [ ] Все шейдеры переведены\n- [ ] Хеш вариантов стабилен между запусками\n- [ ] Валидация шейдеров в CI (если включена)",
+  "number": 14
+ },
+ {
+  "key": "glsl_common",
+  "kind": "story",
+  "title": "GLSL: snk_common.glsl, SNK_BINDING и препроцессор include",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "glsl",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nОбщий заголовок, макрос `SNK_BINDING(set,slot)`, препроцессор include с guard'ами.\n\n## Файлы\n- `Engine/res/shaders/`\n\n## Критерии приёмки\n- [ ] Include работает с guard'ами\n- [ ] Все биндинги заданы через SNK_BINDING\n\n## Связи\n- Эпик: {{#glsl}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §9.4",
+  "number": 120
+ },
+ {
+  "key": "glsl_blocks",
+  "kind": "story",
+  "title": "GLSL: перевод шейдеров на блоки без свободных uniform",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "glsl",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЗаменить свободные uniform uniform-блоками.\n\n## Файлы\n- `Engine/res/shaders/`\n\n## Критерии приёмки\n- [ ] Нет свободных uniform в шейдерах\n- [ ] Рендер эквивалентен прежнему\n\n## Связи\n- Эпик: {{#glsl}}\n- Зависимости: {{#glsl_common}}",
+  "number": 121
+ },
+ {
+  "key": "glsl_variants",
+  "kind": "story",
+  "title": "GLSL: явные ключи вариантов и стабильный хеш",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "glsl",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЯвные ключи вариантов, стабильный хеш; число источников света — uniform.\n\n## Файлы\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Хеш варианта не зависит от порядка\n- [ ] Число источников света не создаёт вариантов\n\n## Связи\n- Эпик: {{#glsl}}\n- Зависимости: {{#glsl_common}}",
+  "number": 122
+ },
+ {
+  "key": "glsl_validate",
+  "kind": "story",
+  "title": "GLSL: glslang-валидация в CI и SPIRV-Reflect для материалов",
+  "labels": [
+   "story",
+   "render",
+   "ci",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "glsl",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nОпциональная валидация glslang в CI; параметры материала из SPIRV-Reflect.\n\n## Файлы\n- `.github/workflows/`\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] CI валидирует шейдеры (если опция включена)\n- [ ] Параметры материала читаются через SPIRV-Reflect\n\n## Связи\n- Эпик: {{#glsl}}\n- Зависимости: {{#glsl_blocks}}",
+  "number": 123
+ },
+ {
+  "key": "packets",
+  "kind": "epic",
+  "title": "POD-пакеты рендера и материал-инстансы (поглощает EPIC-45)",
+  "labels": [
+   "epic",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nПеревести рендер на POD draw packets и материал-инстансы, компилируемые при изменении.\n\n## Мотивация\nЭкстракция и пассы работают с тяжёлыми объектами и глобальным `rnd::get_system`.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/render-migration/EPIC-45.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n\n## Ключевые решения и ограничения\n- Поглощает EPIC-45: отдельная задача не создаётся.\n- Цели EPIC-45: кеш шейдер-конфигов, оптимизация экстракции.\n\n## Критерии завершения эпика\n- [ ] Все дочерние задачи закрыты\n- [ ] Пассы не используют `rnd::get_system`\n- [ ] Измерено ускорение на сцене-образце",
+  "number": 15
+ },
+ {
+  "key": "pk_packets",
+  "kind": "story",
+  "title": "POD-пакеты: draw packets (ids, sort key, offset костей)",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "packets",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nPOD draw packets с id, ключом сортировки и смещением костей.\n\n## Файлы\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Пакет — POD без указателей-владельцев\n- [ ] Сортировка по ключу покрыта тестом\n\n## Связи\n- Эпик: {{#packets}}",
+  "number": 124
+ },
+ {
+  "key": "pk_mat",
+  "kind": "story",
+  "title": "POD-пакеты: материал-инстансы компилируются при изменении",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "packets",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nМатериал-инстанс компилируется один раз при изменении desc.\n\n## Файлы\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Компиляция только при изменении\n- [ ] Hot reload материала обновляет инстанс\n\n## Связи\n- Эпик: {{#packets}}\n- Зависимости: {{#pk_packets}}",
+  "number": 125
+ },
+ {
+  "key": "pk_configure",
+  "kind": "story",
+  "title": "POD-пакеты: configure_pass без rnd::get_system",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "packets",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПередавать зависимости в `configure_pass` явно.\n\n## Файлы\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Нет вызовов `rnd::get_system` в пассах\n\n## Связи\n- Эпик: {{#packets}}",
+  "number": 126
+ },
+ {
+  "key": "pk_cache",
+  "kind": "story",
+  "title": "POD-пакеты: кеш шейдер-конфигов (EPIC-45)",
+  "labels": [
+   "story",
+   "render",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "packets",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКеш конфигураций шейдеров; цели EPIC-45.\n\n## Файлы\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Повторное создание конфигурации берётся из кеша\n- [ ] Бенчмарк до/после\n\n## Связи\n- Эпик: {{#packets}}\n- Зависимости: {{#pk_mat}}",
+  "number": 127
+ },
+ {
+  "key": "schema",
+  "kind": "epic",
+  "title": "EPIC-55: схема desc (DESC_FIELDS)",
+  "labels": [
+   "epic",
+   "desc",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nОписание схемы desc-типов через DESC_FIELDS/hints и generic сериализация, copy/diff и инспектор.\n\n## Мотивация\nКаждый desc имеет рукописные serialize/deserialize/inspector; нет единого описания полей.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-04)\n\n## Ключевые решения и ограничения\n- Boost.Describe (header-only), `desc_hints.hpp` оживляется.\n- Рукописные desc работают (мост), миграция по одному.\n- Реестр миграций связан с «Форматы данных».\n\n## Критерии завершения эпика\n- [ ] Базовый набор desc переведён на схему\n- [ ] Generic inspector работает для переведённых типов",
+  "number": 16
+ },
+ {
+  "key": "sc_schema",
+  "kind": "story",
+  "title": "EPIC-55: type_schema и DESC_FIELDS/hints",
+  "labels": [
+   "story",
+   "desc",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "schema",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСтруктура `type_schema`, макрос DESC_FIELDS, подсказки (`desc_hints.hpp`).\n\n## Файлы\n- `core/core/desc/desc_hints.hpp`\n\n## Критерии приёмки\n- [ ] Схема описывает имя, вид, умолчание, диапазон, enum, тип ссылки, optional\n- [ ] Тест на тестовом типе\n\n## Связи\n- Эпик: {{#schema}}\n- Раздел дизайн-документа: ADR-04",
+  "number": 128
+ },
+ {
+  "key": "sc_generic",
+  "kind": "story",
+  "title": "EPIC-55: generic serialize/deserialize/copy/diff и enum↔string",
+  "labels": [
+   "story",
+   "desc",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "schema",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nУниверсальные операции по схеме.\n\n## Файлы\n- `core/core/desc/`\n\n## Критерии приёмки\n- [ ] Round-trip тестового типа без рукописного кода\n- [ ] diff и copy покрыты тестами\n\n## Связи\n- Эпик: {{#schema}}\n- Зависимости: {{#sc_schema}}",
+  "number": 129
+ },
+ {
+  "key": "sc_inspector",
+  "kind": "story",
+  "title": "EPIC-55: generic inspector из схемы",
+  "labels": [
+   "story",
+   "desc",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "schema",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nИнспектор строится из схемы.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Инспектор показывает поля тестового типа по схеме\n- [ ] Hints влияют на виджет\n\n## Связи\n- Эпик: {{#schema}}\n- Зависимости: {{#sc_schema}}",
+  "number": 130
+ },
+ {
+  "key": "sc_port",
+  "kind": "story",
+  "title": "EPIC-55: реестр миграций и перевод desc по одному",
+  "labels": [
+   "story",
+   "desc",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "schema",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПодключить реестр миграций и переводить существующие desc на схему по одному.\n\n## Файлы\n- `core/engine/scene/`\n- `core/engine/render/`\n\n## Критерии приёмки\n- [ ] Не менее трёх desc переведены и покрыты тестами\n- [ ] Список непереведённых desc в описании эпика\n\n## Связи\n- Эпик: {{#schema}}\n- Зависимости: {{#sc_generic}}, {{#fm_version}}",
+  "number": 131
+ },
+ {
+  "key": "tasks",
+  "kind": "epic",
+  "title": "EPIC-64: task_system",
+  "labels": [
+   "epic",
+   "resource",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nСистема фоновых задач: пул потоков, main-thread очередь, handle с прогрессом и отменой.\n\n## Мотивация\nЗагрузка ресурсов использует вложенный `require_sync`, импорт блокирует UI; нет отмены и прогресса.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-10)\n\n## Ключевые решения и ограничения\n- Колбэки только на главном потоке и через lifetime-токены.\n- Поглощает EPIC-64 из CHIMERA_ROADMAP (M4).\n\n## Критерии завершения эпика\n- [ ] Загрузка ресурсов идёт через task_system\n- [ ] Импорт/экспорт редактора переведён",
+  "number": 17
+ },
+ {
+  "key": "tk_core",
+  "kind": "story",
+  "title": "task_system: пул, main-thread очередь, task_handle",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "tasks",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПул + очередь главного потока; `task_handle` (прогресс, отмена, `std::stop_token`).\n\n## Файлы\n- `core/core/ds/`\n\n## Критерии приёмки\n- [ ] Задача отменяется через stop_token\n- [ ] Прогресс читается из handle\n- [ ] Очередь дренируется в loop\n\n## Связи\n- Эпик: {{#tasks}}\n- Раздел дизайн-документа: ADR-10",
+  "number": 132
+ },
+ {
+  "key": "tk_life",
+  "kind": "story",
+  "title": "task_system: lifetime-токены",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "tasks",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКолбэки доставляются только живому владельцу.\n\n## Файлы\n- `core/core/ds/`\n\n## Критерии приёмки\n- [ ] Колбэк не вызывается после разрушения владельца (тест)\n\n## Связи\n- Эпик: {{#tasks}}\n- Зависимости: {{#tk_core}}",
+  "number": 133
+ },
+ {
+  "key": "tk_res",
+  "kind": "story",
+  "title": "task_system: загрузка ресурсов и граф зависимостей адаптеров",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "tasks",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nАдаптеры объявляют зависимости вместо вложенного `require_sync`; колбэки на главном потоке.\n\n## Файлы\n- `core/core/resource/`\n\n## Критерии приёмки\n- [ ] Нет вложенного `require_sync` в адаптерах\n- [ ] Колбэки приходят на главном потоке\n\n## Связи\n- Эпик: {{#tasks}}\n- Зависимости: {{#tk_life}}",
+  "number": 134
+ },
+ {
+  "key": "tk_editor",
+  "kind": "story",
+  "title": "task_system: перевод импорта/экспорта редактора",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "tasks",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nИмпорт и экспорт редактора выполняются как задачи.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] UI не блокируется при импорте\n- [ ] Отмена импорта работает\n\n## Связи\n- Эпик: {{#tasks}}\n- Зависимости: {{#tk_core}}",
+  "number": 135
+ },
+ {
+  "key": "edfw",
+  "kind": "epic",
+  "title": "Каркас редактора: editor_context и документы",
+  "labels": [
+   "epic",
+   "editor",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nДать редактору публичный `editor_context`, документную модель и реестры расширения.\n\n## Мотивация\nСостояние редактора в `shared_state`, доступ через friend и `init_helpers`; расширения игры не могут добавлять панели и инспекторы.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/ARCHITECTURE_REVIEW.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md (EPIC-53, EPIC-59)\n\n## Ключевые решения и ограничения\n- Частично покрывает EPIC-59 (Document Model) и EPIC-53 (Editor Extension API); остаток — в этих эпиках.\n- `shared_state` → `scene_document`.\n\n## Критерии завершения эпика\n- [ ] Нет friend и `init_helpers`\n- [ ] Панели, инспекторы, виды ассетов регистрируются публично\n- [ ] Сцена — документ в `document_manager`",
+  "number": 18
+ },
+ {
+  "key": "ef_ctx",
+  "kind": "story",
+  "title": "Каркас редактора: editor_context с публичным API",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "edfw",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПубличный `editor_context`.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Панели получают `editor_context`\n- [ ] Нет прямого доступа к приватным данным\n\n## Связи\n- Эпик: {{#edfw}}",
+  "number": 136
+ },
+ {
+  "key": "ef_doc",
+  "kind": "story",
+  "title": "Каркас редактора: document/document_manager, shared_state → scene_document",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "edfw",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nМодель документа; `shared_state` заменяется на `scene_document`.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Сцена — документ\n- [ ] Dirty-флаг хранится в документе\n\n## Связи\n- Эпик: {{#edfw}}\n- Зависимости: {{#ef_ctx}}",
+  "number": 137
+ },
+ {
+  "key": "ef_reg",
+  "kind": "story",
+  "title": "Каркас редактора: публичные реестры панелей, инспекторов, видов ассетов",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "edfw",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nРеестры для игровых расширений.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Тестовое расширение регистрирует панель и инспектор\n- [ ] Реестры доступны через `editor_context`\n\n## Связи\n- Эпик: {{#edfw}}\n- Зависимости: {{#ef_ctx}}",
+  "number": 138
+ },
+ {
+  "key": "ef_svc",
+  "kind": "story",
+  "title": "Каркас редактора: dialog_service и job_service",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "edfw",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСервисы диалогов и фоновых заданий редактора.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Диалоги открываются через сервис\n- [ ] Задачи идут через job_service (на базе task_system)\n\n## Связи\n- Эпик: {{#edfw}}\n- Зависимости: {{#ef_ctx}}",
+  "number": 139
+ },
+ {
+  "key": "ef_clean",
+  "kind": "story",
+  "title": "Каркас редактора: удалить init_helpers и friend",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 2,
+  "type": "Task",
+  "parent_key": "edfw",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nУбрать `init_helpers` и объявления friend.\n\n## Файлы\n- `Editor/code/editor_system/edt_init_helpers.cpp`\n\n## Критерии приёмки\n- [ ] Нет `init_helpers` и friend\n- [ ] Редактор запускается\n\n## Связи\n- Эпик: {{#edfw}}\n- Зависимости: {{#ef_doc}}, {{#ef_reg}}",
+  "number": 140
+ },
+ {
+  "key": "e42",
+  "kind": "epic",
+  "title": "EPIC-42: Project System (workspace → проект)",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nПроект вне репозитория движка: манифест с версией движка, create/open/close/recent, слоёный `res://`, протоколы `engine://`, `cache://`, `user://`.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-42.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-02)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Эпик переработан по ADR-02: `project.snkproj` вместо `workspace.json`, проект вне репо движка.\n\n## Критерии завершения эпика\n- [ ] Проект создаётся и открывается вне репо движка\n- [ ] Версия движка проверяется при открытии\n- [ ] Каталоги cache/user/build разделены",
+  "number": 19
+ },
+ {
+  "key": "e36",
+  "kind": "epic",
+  "title": "EPIC-36: edt:// protocol",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nПротокол `edt://` для ресурсов редактора (иконки, шаблоны, настройки), скрытый от Asset Browser.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-36.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-02)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Протокол `edt://` резолвит в `Editor/data/`\n- [ ] Иконки и шаблоны только через `edt://`\n- [ ] Asset Browser не показывает editor-ресурсы",
+  "number": 20
+ },
+ {
+  "key": "e52",
+  "kind": "epic",
+  "title": "EPIC-52: Game Module API",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЗагрузка `game` / `game_editor` модулей из проекта (сначала статически в source-сборке, затем dll), `game_module_service`, пример игрового модуля во внешнем каталоге.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-01)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Опирается на «EPIC-29: сервисы и готовность к DLL».\n\n## Критерии завершения эпика\n- [ ] Пример игрового модуля во внешнем каталоге собирается и загружается\n- [ ] Тестовый модуль регистрирует системы и desc\n- [ ] Критерий AC01 в source-сборке",
+  "number": 21
+ },
+ {
+  "key": "e53",
+  "kind": "epic",
+  "title": "EPIC-53: Editor Extension API",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nПубличные реестры в `app_data_storage`: панели, меню/команды, renderer'ы inspector'а, виды ассетов, превью.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-01)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Частично покрыт «Каркас редактора: editor_context и документы» (этап D).\n\n## Критерии завершения эпика\n- [ ] Игровой модуль добавляет панель и inspector без правки редактора\n- [ ] Реестры документированы",
+  "number": 22
+ },
+ {
+  "key": "e54",
+  "kind": "epic",
+  "title": "EPIC-54: Standalone Player",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nИсполняемый player без редактора: запуск стартовой сцены проекта на общем с редактором runtime.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-13)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Остаток после этапа C (см. «Цикл кадра и player»).\n\n## Критерии завершения эпика\n- [ ] Player запускает стартовую сцену проекта без модулей редактора\n- [ ] Игровой модуль загружается player'ом",
+  "number": 23
+ },
+ {
+  "key": "e51",
+  "kind": "epic",
+  "title": "EPIC-51: Desc diagnostics: коллектор и problems-панель",
+  "labels": [
+   "epic",
+   "chimera",
+   "desc",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nКоллектор диагностики загрузки desc (ресурс + JSON-путь + причина) и problems-панель в редакторе.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-04)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Ошибки загрузки (unknown `__type`, отсутствующий `__parent`, циклы) уже исправлены в этапе B — остался коллектор и панель.\n\n## Критерии завершения эпика\n- [ ] Ошибки загрузки собираются в коллектор\n- [ ] Problems-панель показывает ресурс, путь и причину",
+  "number": 24
+ },
+ {
+  "key": "e28",
+  "kind": "epic",
+  "title": "EPIC-28: Resource Cache: кеш по тегу и типу ресурса",
+  "labels": [
+   "epic",
+   "chimera",
+   "resource",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nСоставной ключ кеша `{tag, type}`: один файл загружается как `text_resource` и как `desc_base` без конфликта.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/infrastructure/EPIC-28.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Предпосылка для EPIC-56.\n\n## Критерии завершения эпика\n- [ ] Один файл загружается разными типами без конфликта\n- [ ] `signal_changed(tag)` инвалидирует все записи тега\n- [ ] Существующие тесты проходят",
+  "number": 25
+ },
+ {
+  "key": "e56",
+  "kind": "epic",
+  "title": "EPIC-56: Data Documents & Schema Inspector",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "desc",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nОткрытие любого `is_document` типа; inspector из схемы (строки, enum, списки/словари, optional, struct), итог vs override, reset, типизированный пикер ссылок.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-04)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Опирается на «EPIC-55: схема desc».\n\n## Критерии завершения эпика\n- [ ] Любой `is_document` тип открывается и редактируется\n- [ ] Списки поддерживают add/remove/reorder\n- [ ] Пикер ссылок типизирован",
+  "number": 26
+ },
+ {
+  "key": "e57",
+  "kind": "epic",
+  "title": "EPIC-57: Asset Identity & Database",
+  "labels": [
+   "epic",
+   "chimera",
+   "resource",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nGUID ассетов, `.meta`, guid↔путь, обратные зависимости, rename/move/delete с отчётом, стабильный `__id` узлов.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-05)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Поле `__guid` вводится в «Форматы данных».\n\n## Критерии завершения эпика\n- [ ] Rename/move не ломает ссылки\n- [ ] Обратные зависимости видны в отчёте",
+  "number": 27
+ },
+ {
+  "key": "e58",
+  "kind": "epic",
+  "title": "EPIC-58: Data Versioning & Migration",
+  "labels": [
+   "epic",
+   "chimera",
+   "desc",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВерсии типов и явная миграция проекта с бэкапом и отчётом.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-06)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Остаток после «Форматы данных» (`__version`, реестр миграций уже там).\n\n## Критерии завершения эпика\n- [ ] Миграция проекта запускается явной командой\n- [ ] Создаётся бэкап и отчёт",
+  "number": 28
+ },
+ {
+  "key": "e15",
+  "kind": "epic",
+  "title": "EPIC-15: Undo/Redo (стек на документ)",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nUndo/Redo для всех структурных операций и правок полей: стек на документ, save-point для dirty, merge непрерывного drag.\n\n## Мотивация\nEPIC-15.md устарел: он проектировался под единственный `m_world_desc`. Теперь есть документы и стабильные id узлов.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-15.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (M3)\n\n## Ключевые решения и ограничения\n- EPIC-15.md устарел — истории переписаны под per-document stacks и стабильные node id.\n- Команды ссылаются на узлы по `node_id`.\n\n## Критерии завершения эпика\n- [ ] Ctrl+Z / Ctrl+Y работают для документа сцены\n- [ ] Dirty определяется по save-point\n- [ ] Непрерывный drag даёт одну команду",
+  "number": 29
+ },
+ {
+  "key": "u15_mgr",
+  "kind": "story",
+  "title": "US-15-1: command_manager со стеком на документ",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e15",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`command_manager` в каждом документе; execute/undo/redo, лимит истории.\n\n## Файлы\n- `Editor/code/editor_system/edt_command_manager.h`\n\n## Критерии приёмки\n- [ ] Стек принадлежит документу\n- [ ] Лимит истории настраивается\n- [ ] Тесты undo/redo\n\n## Связи\n- Эпик: {{#e15}}\n- Раздел дизайн-документа: EPIC-15.md (Архитектура)",
+  "number": 141
+ },
+ {
+  "key": "u15_nodes",
+  "kind": "story",
+  "title": "US-15-2: команды add/delete/reparent/duplicate/rename по node_id",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e15",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСтруктурные команды, адресующие узлы по стабильному `node_id`.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Undo добавления/удаления/переноса восстанавливает состояние\n- [ ] Команды не используют пути в дереве\n\n## Связи\n- Эпик: {{#e15}}\n- Раздел дизайн-документа: EPIC-15.md (Команды)\n- Зависимости: {{#u15_mgr}}, {{#fm_nodeid}}",
+  "number": 142
+ },
+ {
+  "key": "u15_set",
+  "kind": "story",
+  "title": "US-15-3: cmd_set_field и merge непрерывного drag",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e15",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКоманда правки поля из инспектора; непрерывное перетаскивание сливается в одну команду.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Один drag = одна запись истории\n- [ ] Undo возвращает значение до drag\n\n## Связи\n- Эпик: {{#e15}}\n- Раздел дизайн-документа: EPIC-15.md (cmd_set_field)\n- Зависимости: {{#u15_mgr}}",
+  "number": 143
+ },
+ {
+  "key": "u15_save",
+  "kind": "story",
+  "title": "US-15-4: save-point для dirty-флага",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e15",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nDirty вычисляется как отличие от save-point.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] После save и undo/redo к save-point документ не dirty\n\n## Связи\n- Эпик: {{#e15}}\n- Зависимости: {{#u15_mgr}}",
+  "number": 144
+ },
+ {
+  "key": "u15_ui",
+  "kind": "story",
+  "title": "US-15-5: горячие клавиши и меню Edit",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e15",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nCtrl+Z / Ctrl+Y, меню Edit с описанием команды.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Горячие клавиши работают\n- [ ] Меню Edit показывает описание последней команды\n- [ ] Load/New очищает историю\n\n## Связи\n- Эпик: {{#e15}}\n- Раздел дизайн-документа: EPIC-15.md (Интеграция с UI)\n- Зависимости: {{#u15_mgr}}",
+  "number": 145
+ },
+ {
+  "key": "u15_data",
+  "kind": "story",
+  "title": "US-15-6: команды полей data-документов",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e15",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКоманды правок data-документов (схема-инспектор).\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Правка поля data-документа отменяется и повторяется\n\n## Связи\n- Эпик: {{#e15}}\n- Раздел дизайн-документа: CHIMERA_ROADMAP M3\n- Зависимости: {{#u15_set}}",
+  "number": 146
+ },
+ {
+  "key": "e25",
+  "kind": "epic",
+  "title": "EPIC-25: Prefab Editor",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЗавершить автономное редактирование префабов (US-25-2…25-7) на документной модели и стабильных `__id`. US-25-1 выполнен.\n\n## Мотивация\nОткрытие префаба в изолированном контексте работает; нет Apply/Revert, редактирования overrides, вложения, вариантов и async-загрузки.\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-25.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (M3)\n\n## Ключевые решения и ограничения\n- US-25-1 (открытие в изолированном контексте) выполнен.\n- Опирается на «world_context и context_manager» и «Форматы данных».\n\n## Критерии завершения эпика\n- [ ] Apply сохраняет на диск, hot reload применяется\n- [ ] Overrides редактируются в инспекторе\n- [ ] Вложение и варианты работают без циклов\n- [ ] Загрузка асинхронна",
+  "number": 30
+ },
+ {
+  "key": "us25_2",
+  "kind": "story",
+  "title": "US-25-2: редактирование prefab и Apply/Revert",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e25",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nРедактирование префаба, Apply (запись на диск + hot reload), Revert.\n\n## Файлы\n- `Editor/code/editor_system/edt_prefab_editor_context.h/.cpp`\n- `Editor/code/editor_system/panels/edt_prefab_editor_panel.h/.cpp`\n\n## Критерии приёмки\n- [ ] Apply сохраняет и обновляет level\n- [ ] Revert восстанавливает рабочую копию из файла\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-2)",
+  "number": 147
+ },
+ {
+  "key": "us25_3",
+  "kind": "story",
+  "title": "US-25-3: расширение prefab_instance — overrides компонентов",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e25",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nМодель overrides инстанса и их применение при сборке.\n\n## Файлы\n- `core/engine/scene/level/scn_prefab_desc.h`\n- `core/engine/scene/scn_prefab_override_applier.h/.cpp`\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] `prefab_instance` сериализует overrides\n- [ ] `apply_overrides` покрыт тестами\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-3)\n- Зависимости: {{#fm_overrides}}",
+  "number": 148
+ },
+ {
+  "key": "us25_4",
+  "kind": "story",
+  "title": "US-25-4: Inspector — редактирование overrides инстанса",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e25",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nUI overrides в инспекторе: Edit Prefab, Revert поля, Add Override.\n\n## Файлы\n- `Editor/code/editor_system/edt_component_renderers/edt_cr_prefab_instance.cpp`\n\n## Критерии приёмки\n- [ ] Список overrides с Revert на поле\n- [ ] Edit Prefab открывает префаб\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-4)\n- Зависимости: {{#us25_3}}",
+  "number": 149
+ },
+ {
+  "key": "us25_5",
+  "kind": "story",
+  "title": "US-25-5: Prefab Nesting — инстанс prefab внутри prefab",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e25",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nРекурсивная сборка вложенных инстансов, защита от циклов.\n\n## Файлы\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] Вложенный инстанс собирается рекурсивно\n- [ ] Цикл не крашит движок и даёт диагностику\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-5)\n- Зависимости: {{#us25_3}}",
+  "number": 150
+ },
+ {
+  "key": "us25_6",
+  "kind": "story",
+  "title": "US-25-6: Prefab Variants",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e25",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nVariant — `.prefab.desc` со ссылкой на базовый prefab и overrides; Create Variant.\n\n## Файлы\n- `Editor/code/editor_system/edt_prefab_variant_creator.h/.cpp`\n- `core/engine/scene/level/scn_prefab_desc.h/.cpp`\n\n## Критерии приёмки\n- [ ] Variant создаётся из префаба\n- [ ] Variant редактируется отдельно\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-6)\n- Зависимости: {{#us25_3}}",
+  "number": 151
+ },
+ {
+  "key": "us25_7",
+  "kind": "story",
+  "title": "US-25-7: async load prefab для редактирования",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Task",
+  "parent_key": "e25",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nАсинхронное открытие больших префабов без блокировки UI.\n\n## Файлы\n- `Editor/code/editor_system/edt_editor_system.h/.cpp`\n\n## Критерии приёмки\n- [ ] UI не фризит при открытии большого префаба\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-7)\n- Зависимости: {{#us25_2}}, {{#tk_core}}",
+  "number": 152
+ },
+ {
+  "key": "e59",
+  "kind": "epic",
+  "title": "EPIC-59: Document Model",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\n`document`/`document_manager`: документ владеет desc, dirty, своим world-контекстом; save/save all/close с промптом; `shared_state` → документ сцены.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Частично покрыт этапом D «Каркас редактора: editor_context и документы» (ef_doc, ef_ctx); здесь остаётся save/save all/close с промптом и контекст документа.\n\n## Критерии завершения эпика\n- [ ] Save / Save All / Close спрашивают о несохранённых изменениях\n- [ ] Несколько документов открыты одновременно",
+  "number": 31
+ },
+ {
+  "key": "e60",
+  "kind": "epic",
+  "title": "EPIC-60: Autosave & Recovery",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P2"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nАвтосохранение в `cache://`, восстановление после падения, конфликт с внешним изменением файла.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] После аварийного завершения предлагается восстановление\n- [ ] Конфликт с внешней правкой файла обрабатывается",
+  "number": 32
+ },
+ {
+  "key": "e61",
+  "kind": "epic",
+  "title": "EPIC-61: Viewport Picking & Incremental Reload",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nPicking кликом (ID-буфер), точечное обновление ECS вместо полной пересборки мира, выделение по stable id.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Зависит от «Форматы данных» (node_id).\n\n## Критерии завершения эпика\n- [ ] Клик по объекту выделяет его\n- [ ] Правка поля не пересобирает мир целиком",
+  "number": 33
+ },
+ {
+  "key": "e62",
+  "kind": "epic",
+  "title": "EPIC-62: Asset Browser v2 & Import Pipeline",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "resource",
+   "P1"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВиды ассетов (из EPIC-53), фильтры, миниатюры, create-действия, импорт PNG с настройками, повторный импорт с сохранением GUID.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- EPIC-34 входит сюда частично (настройки импорта).\n- Желательно после task_system.\n\n## Критерии завершения эпика\n- [ ] Ассеты фильтруются и имеют миниатюры\n- [ ] Повторный импорт сохраняет GUID",
+  "number": 34
+ },
+ {
+  "key": "e7",
+  "kind": "epic",
+  "title": "EPIC-07: Material editor (урезанный до SCN06)",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "render",
+   "P2"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nРедактор материалов в объёме SCN06: материал карты (лицо, рубашка, прозрачная рамка), назначение текстур.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-07.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Урезанный объём по CHIMERA_ROADMAP.\n\n## Критерии завершения эпика\n- [ ] Материал карты редактируется в инспекторе\n- [ ] Ошибки шейдеров показываются в problems-панели",
+  "number": 35
+ },
+ {
+  "key": "e26",
+  "kind": "epic",
+  "title": "EPIC-26: Shader Desc",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "render",
+   "P2"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nШейдеры как `.shader.desc` ресурсы.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-26.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Урезанный объём по CHIMERA_ROADMAP.\n\n## Критерии завершения эпика\n- [ ] Шейдер — самостоятельный ассет\n- [ ] Ошибки шейдеров выводятся в problems-панель",
+  "number": 36
+ },
+ {
+  "key": "e27",
+  "kind": "epic",
+  "title": "EPIC-27: Texture Desc",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "render",
+   "P2"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nПолноценные текстурные дескрипторы (виды текстур, inline-пиксели).\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-27.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Урезанный объём по CHIMERA_ROADMAP.\n\n## Критерии завершения эпика\n- [ ] Текстурные desc всех видов загружаются\n- [ ] Текстуры — ассеты редактора",
+  "number": 37
+ },
+ {
+  "key": "e34",
+  "kind": "epic",
+  "title": "EPIC-34: Model Importer: настройки и дедупликация",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "resource",
+   "P2"
+  ],
+  "milestone": 5,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nНастройки импорта, повторный импорт, устранение дублирования с engine adapter.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/editor/EPIC-34.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Координация с US-41-7 (assimp как модуль) и EPIC-62.\n\n## Критерии завершения эпика\n- [ ] Настройки импорта сохраняются\n- [ ] Дублирование ~400 строк с `scn_model_importer_adapter.cpp` устранено",
+  "number": 38
+ },
+ {
+  "key": "e63",
+  "kind": "epic",
+  "title": "EPIC-63: Play Mode",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "ecs",
+   "P1"
+  ],
+  "milestone": 6,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nPlay/Stop/Pause/Step с изолированным level, тестовым профилем и своим временем/вводом.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-07)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Опирается на «world_context» и «EPIC-50: явные фазы».\n\n## Критерии завершения эпика\n- [ ] 10 циклов Play/Stop без утечек\n- [ ] Авторский контент не изменяется в Play",
+  "number": 39
+ },
+ {
+  "key": "e65",
+  "kind": "epic",
+  "title": "EPIC-65: Runtime Images & Texture Budget",
+  "labels": [
+   "epic",
+   "chimera",
+   "render",
+   "resource",
+   "P1"
+  ],
+  "milestone": 6,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nRuntime image registry, handle-индирекция текстур, заглушка, миниатюры, LRU-бюджет GPU/CPU, лимит загрузок в кадр.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-11)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Бюджет текстур соблюдается\n- [ ] Загрузки в кадр ограничены",
+  "number": 40
+ },
+ {
+  "key": "e66",
+  "kind": "epic",
+  "title": "EPIC-66: Save Service",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 6,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\n`save_service` на `user://`: транзакционная запись, ротация `.bak`, откат при чтении.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-12)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Прерванная запись не повреждает сохранение\n- [ ] Чтение откатывается на `.bak`",
+  "number": 41
+ },
+ {
+  "key": "e67",
+  "kind": "epic",
+  "title": "EPIC-67: UI Runtime",
+  "labels": [
+   "epic",
+   "chimera",
+   "render",
+   "P2"
+  ],
+  "milestone": 7,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nДерево элементов UI как desc, layout (Yoga + якоря), clipping/scroll, UI render pass, ввод с модальной блокировкой.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-09)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] UI-документ отображается и реагирует на ввод\n- [ ] Модальная блокировка ввода работает",
+  "number": 42
+ },
+ {
+  "key": "e68",
+  "kind": "epic",
+  "title": "EPIC-68: Fonts & Text",
+  "labels": [
+   "epic",
+   "chimera",
+   "render",
+   "P2"
+  ],
+  "milestone": 7,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nTTF, кириллица/латиница, атлас, перенос строк, многоточие, пересборка под DPI 100/150%.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-09)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Кириллица и латиница отображаются\n- [ ] Текст корректен при DPI 100% и 150%",
+  "number": 43
+ },
+ {
+  "key": "e69",
+  "kind": "epic",
+  "title": "EPIC-69: UI Templates, Data Binding & Actions",
+  "labels": [
+   "epic",
+   "chimera",
+   "render",
+   "P2"
+  ],
+  "milestone": 7,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nШаблоны элементов, привязка к полям схемы, списки/сетки с виртуализацией (1000 карт), реестр игровых действий.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-09)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Список из 1000 элементов виртуализирован\n- [ ] Действия берутся из реестра игрового модуля",
+  "number": 44
+ },
+ {
+  "key": "e70",
+  "kind": "epic",
+  "title": "EPIC-70: UI Editor",
+  "labels": [
+   "epic",
+   "chimera",
+   "editor",
+   "P2"
+  ],
+  "milestone": 7,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nUI-документ в редакторе: иерархия, inspector, предпросмотр разрешений и DPI, тестовые данные.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-09)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] UI-документ редактируется визуально\n- [ ] Предпросмотр разрешений и DPI",
+  "number": 45
+ },
+ {
+  "key": "e71",
+  "kind": "epic",
+  "title": "EPIC-71: Cook & Package",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 8,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВалидация, обход зависимостей, editor-only исключение, отчёт, standalone в чистом каталоге.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-13)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Упакованная игра запускается в чистом каталоге\n- [ ] Editor-only ассеты не попадают в пакет",
+  "number": 46
+ },
+ {
+  "key": "e72",
+  "kind": "epic",
+  "title": "EPIC-72: SDK & Project Upgrade",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 8,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nВерсионированная установка SDK, пример игрового расширения, явное обновление проекта с отчётом и бэкапом.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#4-ключевые-технические-решения-вынести-в-adr-на-следующем-шаге (ADR-03)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] SDK устанавливается в версионированный каталог\n- [ ] Обновление проекта явное, с отчётом и бэкапом",
+  "number": 47
+ },
+ {
+  "key": "e73",
+  "kind": "epic",
+  "title": "EPIC-73: Diagnostics & Docs",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 8,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nКонтекст операции в логах, метрики кадра/памяти/задач в редакторе, документация платформы/toolchain/восстановления, протокол приёмки AC01–AC06.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Протокол приёмки AC01–AC06 оформлен\n- [ ] Метрики видны в редакторе",
+  "number": 48
+ },
+ {
+  "key": "e44",
+  "kind": "epic",
+  "title": "EPIC-44: Memory profiling (в рамках диагностики)",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 8,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nТрекинг памяти по модулям и удобные контейнеры; частично, в рамках EPIC-73.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/epics/infrastructure/EPIC-44.md\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n- Частично; остаток замораживается.\n\n## Критерии завершения эпика\n- [ ] Потребление памяти видно по модулям",
+  "number": 49
+ },
+ {
+  "key": "e74",
+  "kind": "epic",
+  "title": "EPIC-74: UI Tweens",
+  "labels": [
+   "epic",
+   "chimera",
+   "render",
+   "P2"
+  ],
+  "milestone": 9,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nАнимации UI: move/rotate/scale/alpha, отмена при смене экрана.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Твины отменяются при смене экрана",
+  "number": 50
+ },
+ {
+  "key": "e75",
+  "kind": "epic",
+  "title": "EPIC-75: Audio",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 9,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nЗвук на miniaudio, категории громкости, музыка без дублирования после Play/Stop, настройки в `user://`.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Музыка не дублируется после Play/Stop",
+  "number": 51
+ },
+ {
+  "key": "e76",
+  "kind": "epic",
+  "title": "EPIC-76: Localization",
+  "labels": [
+   "epic",
+   "chimera",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 9,
+  "type": "Feature",
+  "parent_key": null,
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Цель\nСтроковые таблицы как desc, выбор языка, подстановки, fallback, диагностика отсутствующих строк, привязка в UI.\n\n## Мотивация\nТребование ТЗ «Химера» v0.1, не закрытое текущим состоянием движка (см. CHIMERA_ROADMAP §3).\n\n## Дизайн-документ\n- https://github.com/Prorok1015/OpenGL_Engine/blob/aibranch/docs/roadmap/CHIMERA_ROADMAP.md#5-роадмап-по-вехам (раздел вехи)\n\n## Ключевые решения и ограничения\n- Входит в CHIMERA_ROADMAP, раздел 5 (веха этого эпика).\n\n## Критерии завершения эпика\n- [ ] Язык переключается без перезапуска\n- [ ] Отсутствующие строки диагностируются",
+  "number": 52
+ },
+ {
+  "key": "u42_1",
+  "kind": "story",
+  "title": "US-42-1: Манифест проекта project.snkproj и CLI",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nМанифест JSON: `engine_version`, `format_version`, `start_scene`, `content_roots`, `modules`, `platforms`; CLI `--project`. Заменяет workspace.json из прежней версии.\n\n## Файлы\n- `Editor/code/`\n- `core/core/project/`\n\n## Критерии приёмки\n- [ ] Манифест парсится и валидируется\n- [ ] CLI `--project` открывает проект\n- [ ] Отсутствие манифеста даёт понятную ошибку\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)",
+  "number": 153
+ },
+ {
+  "key": "u42_2",
+  "kind": "story",
+  "title": "US-42-2: Слоёный res:// (проект → движок) и протокол engine://",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nДва mount point'а `res://` (проект поверх движка), `engine://` для ресурсов движка; запись в проект.\n\n## Файлы\n- `core/core/resource/res_vfs_resolver.cpp`\n\n## Критерии приёмки\n- [ ] Файл проекта приоритетнее файла движка\n- [ ] `store()` пишет в проект\n- [ ] File watcher следит за обоими корнями\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_1}}",
+  "number": 154
+ },
+ {
+  "key": "u42_3",
+  "kind": "story",
+  "title": "US-42-3: Каталоги cache://, user://, build; проект вне репо движка",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nПротоколы `cache://` (`<project>/.cache`), `user://` (ОС-каталог; в Play — тестовый профиль), каталог `build`.\n\n## Файлы\n- `core/core/resource/`\n\n## Критерии приёмки\n- [ ] `cache://` и `user://` резолвятся\n- [ ] Проект вне репозитория движка открывается\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_1}}",
+  "number": 155
+ },
+ {
+  "key": "u42_4",
+  "kind": "story",
+  "title": "US-42-4: Проверка версии движка при открытии проекта",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nСравнение `engine_version` манифеста с версией редактора; предупреждение/отказ при несовместимости.\n\n## Файлы\n- `Editor/code/`\n\n## Критерии приёмки\n- [ ] Несовместимая версия даёт диалог с вариантами\n- [ ] Тест сравнения версий\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_1}}",
+  "number": 156
+ },
+ {
+  "key": "u42_5",
+  "kind": "story",
+  "title": "US-42-5: Миграция engine defaults и тестового проекта",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nШейдеры и базовые ресурсы движка — в `engine://`; игровые ресурсы — в тестовом проекте вне репо.\n\n## Файлы\n- `Editor/res/`\n- `core/res/`\n\n## Критерии приёмки\n- [ ] Редактор открывает тестовый проект\n- [ ] Уровень загружается, рендер работает\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_2}}",
+  "number": 157
+ },
+ {
+  "key": "u42_6",
+  "kind": "story",
+  "title": "US-42-6: UI: New / Open Project / Recent Projects",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nFile → New/Open Project, Recent (до 5), заголовок окна с именем проекта; первая версия — переключение рестартом.\n\n## Файлы\n- `Editor/code/editor_system/`\n\n## Критерии приёмки\n- [ ] Создание проекта из шаблона\n- [ ] Recent показывает до 5 проектов\n- [ ] Title bar обновляется\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_4}}",
+  "number": 158
+ },
+ {
+  "key": "u42_7",
+  "kind": "story",
+  "title": "US-42-7: Загрузка игрового модуля из проекта",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЗагрузка `game`/`game_editor` модулей, указанных в манифесте (сначала статически, затем dll); без модуля — предупреждение.\n\n## Файлы\n- `core/core/app/`\n\n## Критерии приёмки\n- [ ] Модуль из манифеста загружается\n- [ ] Отсутствие модуля не роняет редактор\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_1}}",
+  "number": 159
+ },
+ {
+  "key": "u42_8",
+  "kind": "story",
+  "title": "US-42-8: CMake: шаблон проекта и режим static/dll",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e42",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nШаблон CMake для игрового проекта: `find_package(snk)`, сборка в `<project>/build`.\n\n## Файлы\n- `cmake/`\n- `templates/project/`\n\n## Критерии приёмки\n- [ ] Шаблонный проект собирается через `find_package`\n- [ ] Режимы DLL и STATIC собираются\n\n## Связи\n- Эпик: {{#e42}}\n- Раздел дизайн-документа: EPIC-42.md (адаптировано под ADR-02)\n- Зависимости: {{#u42_7}}, {{#e41_install}}",
+  "number": 160
+ },
+ {
+  "key": "u36_1",
+  "kind": "story",
+  "title": "US-36-1: Регистрация edt:// резолвера",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e36",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`vfs_resolver` для протокола `edt` в `editor_module`, настройка `editor.data_path`.\n\n## Файлы\n- `Editor/code/`\n- `Editor/config/editor.cfg`\n\n## Критерии приёмки\n- [ ] `editor.data_path` добавлен в editor.cfg\n- [ ] `res::tag(\"edt://icons/editor_engine_logo.png\")` резолвится\n- [ ] Отсутствие `Editor/data/` даёт warning, не crash\n\n## Связи\n- Эпик: {{#e36}}\n- Раздел дизайн-документа: EPIC-36.md",
+  "number": 161
+ },
+ {
+  "key": "u36_2",
+  "kind": "story",
+  "title": "US-36-2: Перенести icons и templates в Editor/data/",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e36",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nИконки и шаблоны переносятся в `Editor/data/`.\n\n## Файлы\n- `Editor/res/icons/`\n- `Editor/res/templates/`\n- `Editor/data/`\n\n## Критерии приёмки\n- [ ] Иконки и шаблоны доступны только через `edt://`\n- [ ] Старые каталоги удалены\n- [ ] Создание уровня/мира работает\n\n## Связи\n- Эпик: {{#e36}}\n- Раздел дизайн-документа: EPIC-36.md\n- Зависимости: {{#u36_1}}",
+  "number": 162
+ },
+ {
+  "key": "u36_3",
+  "kind": "story",
+  "title": "US-36-3: Убрать тестовые файлы из res://",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e36",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nУдалить или перенести тестовые файлы (`test*.desc`, `test.jpg` и т. п.).\n\n## Файлы\n- `Editor/res/`\n\n## Критерии приёмки\n- [ ] Нет ссылок на удалённые ресурсы\n- [ ] `Editor/res/` содержит только игровые ресурсы\n\n## Связи\n- Эпик: {{#e36}}\n- Раздел дизайн-документа: EPIC-36.md",
+  "number": 163
+ },
+ {
+  "key": "u36_4",
+  "kind": "story",
+  "title": "US-36-4: Инфраструктура settings — edt://settings/",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e36",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nКаталог настроек и хелпер чтения/записи.\n\n## Файлы\n- `Editor/data/settings/`\n\n## Критерии приёмки\n- [ ] `edt://settings/` читается и пишется\n- [ ] Каталог в .gitignore (кроме .gitkeep)\n\n## Связи\n- Эпик: {{#e36}}\n- Раздел дизайн-документа: EPIC-36.md\n- Зависимости: {{#u36_1}}",
+  "number": 164
+ },
+ {
+  "key": "u36_5",
+  "kind": "story",
+  "title": "US-36-5: Asset Browser: скрыть edt:// ресурсы",
+  "labels": [
+   "story",
+   "editor",
+   "P1"
+  ],
+  "milestone": 3,
+  "type": "Task",
+  "parent_key": "e36",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nAsset Browser не показывает ресурсы `edt://`.\n\n## Файлы\n- `Editor/code/editor_system/panels/edt_asset_browser_panel.cpp`\n\n## Критерии приёмки\n- [ ] Файлы `Editor/data/` не отображаются\n- [ ] Drag-drop для `res://` работает\n\n## Связи\n- Эпик: {{#e36}}\n- Раздел дизайн-документа: EPIC-36.md\n- Зависимости: {{#u36_2}}",
+  "number": 165
+ },
+ {
+  "key": "u28_1",
+  "kind": "story",
+  "title": "US-28-1: Составной ключ кеша",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Task",
+  "parent_key": "e28",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nЗаменить `res::tag` на `cache_key` в `m_cache` и `m_pinned_resources`.\n\n## Файлы\n- `core/core/resource/res_system.h`\n- `core/core/resource/res_system.cpp`\n\n## Критерии приёмки\n- [ ] Один тег кешируется отдельно для каждого типа\n- [ ] Существующие тесты проходят\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
+  "number": 166
+ },
+ {
+  "key": "u28_2",
+  "kind": "story",
+  "title": "US-28-2: Обновить signal_changed и watchers",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Task",
+  "parent_key": "e28",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\n`signal_changed(tag)` вытесняет все типы; watchers по тегу.\n\n## Файлы\n- `core/core/resource/res_system.h`\n\n## Критерии приёмки\n- [ ] Все записи тега инвалидируются\n- [ ] Watchers не зависят от типа\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
+  "number": 167
+ },
+ {
+  "key": "u28_3",
+  "kind": "story",
+  "title": "US-28-3: Обновить register_alias",
+  "labels": [
+   "story",
+   "resource",
+   "P1"
+  ],
+  "milestone": 4,
+  "type": "Task",
+  "parent_key": "e28",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Описание\nAlias работает на уровне тега до построения ключа.\n\n## Файлы\n- `core/core/resource/res_system.cpp`\n\n## Критерии приёмки\n- [ ] Семантика alias не изменилась\n- [ ] Тест alias + разные типы\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
+  "number": 168
+ },
+ {
+  "key": "bug_1",
+  "kind": "bug",
+  "title": "Баг: override трансформа обратно к 0/0/1 игнорируется (sentinel)",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nЕсли override возвращает позицию/поворот/масштаб к значениям по умолчанию (pos 0, rot 0, scale 1), он игнорируется и остаётся значение базового префаба.\n\n## Шаги / условия воспроизведения\nВложенный инстанс префаба, у базового узла ненулевой трансформ; override задаёт 0/0/1.\n\n## Причина\n`core/engine/scene/level/scn_prefab_desc.cpp` ~236-244: значения по умолчанию используются как sentinel «override отсутствует».\n\n## Тест\n`tests/scn_prefab_merge_tests.cpp`: `NestedInstance_OverridingPosition/Scale/RotationBackTo*IsHonored` (ожидаемые падения, помечены `// BUG:`).\n\n## Статус\nОткрыт. Будет закрыт в «Форматы данных» (явное присутствие override).\n\n## Связи\n- Эпик: {{#formats}}",
+  "number": 64
+ },
+ {
+  "key": "bug_2",
+  "kind": "bug",
+  "title": "Баг: поверхностный merge overrides (shallow)",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "formats",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nOverride вложенного объекта заменяет объект целиком, а не сливается по полям; несвязанные поля базового префаба теряются.\n\n## Шаги / условия воспроизведения\nOverride одного поля вложенного JSON-объекта компонента во вложенном инстансе.\n\n## Причина\n`core/engine/scene/level/scn_prefab_desc.cpp` ~207-208: shallow merge.\n\n## Тест\n`tests/scn_prefab_merge_tests.cpp`: `NestedInstance_OverrideMergeIsDeepForNestedObjects` (`// BUG:`).\n\n## Статус\nОткрыт. Будет закрыт в «Форматы данных».\n\n## Связи\n- Эпик: {{#formats}}",
+  "number": 65
+ },
+ {
+  "key": "bug_3",
+  "kind": "bug",
+  "title": "Баг: hot reload оставляет устаревших детей, если в новом префабе их нет",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nПосле hot reload префаба без детей в мире остаются дети прежней версии.\n\n## Шаги / условия воспроизведения\nИзменить префаб так, чтобы у узла не осталось детей; дождаться hot reload.\n\n## Причина\n`scn_ecs_assembler.cpp`: удаление детей зависело от `processed_entities`, поэтому при пустом списке детей не выполнялось.\n\n## Статус\nИсправлен.\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 66
+ },
+ {
+  "key": "bug_4",
+  "kind": "bug",
+  "title": "Баг: вложенный инстанс не видит изменений базового префаба при hot reload",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nИзменение базового префаба не обновляет вложенные инстансы этого префаба.\n\n## Шаги / условия воспроизведения\nПрефаб A содержит инстанс префаба B; изменить B на диске.\n\n## Причина\n`scn_prefab_desc.cpp`: вложенный инстанс держал устаревший handle `parent_desc`; теперь базовый префаб переразрешается по тегу при reload.\n\n## Статус\nИсправлен.\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 67
+ },
+ {
+  "key": "bug_5",
+  "kind": "bug",
+  "title": "Баг: разыменование null базового префаба в assemble_merged_node",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nПотенциальный null-deref, если базовый префаб не загружен.\n\n## Шаги / условия воспроизведения\nУзел ссылается на отсутствующий базовый префаб.\n\n## Причина\n`assemble_merged_node`: отсутствовала проверка. Оказалось, что уже обрабатывалось; тест был отключён.\n\n## Тест\nТест на отсутствующий базовый префаб снова включён в b2ca2d8.\n\n## Статус\nИсправлен (уже обработан в коде; тест включён).\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 68
+ },
+ {
+  "key": "bug_6",
+  "kind": "bug",
+  "title": "Баг: component_tracker не сигналится — отдельные component desc не перезагружаются",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nStandalone component-дески не подхватываются при hot reload.\n\n## Шаги / условия воспроизведения\nИзменить файл component desc, не являющийся префабом, при запущенном редакторе.\n\n## Причина\n`component_tracker` создавал пустую запись без сигнала; теперь запись заполняется/патчится, и `hot_reload_manager` начинает её отслеживать.\n\n## Статус\nИсправлен.\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 69
+ },
+ {
+  "key": "bug_7",
+  "kind": "bug",
+  "title": "Баг: производный префаб/мир теряет унаследованное содержимое (__parent)",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nПрефаб или мир с `__parent` не получает содержимое родителя.\n\n## Шаги / условия воспроизведения\nСоздать префаб/мир с `__parent` без дублирования содержимого.\n\n## Причина\n`prefab_desc::deserialize` заменял унаследованный корень; теперь при `__parent` содержимое сливается с унаследованным корнем.\n\n## Статус\nИсправлен.\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 70
+ },
+ {
+  "key": "bug_8",
+  "kind": "bug",
+  "title": "Баг: camera_desc — потеря трансформа, добавление color_targets, as_double() на целых",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в 03c001e (https://github.com/Prorok1015/OpenGL_Engine/commit/03c001e)",
+  "body": "## Симптом\nserialize не сохраняет transform; color_targets дописываются вместо замены; `as_double()` бросает исключение на целом числе в JSON.\n\n## Шаги / условия воспроизведения\nСохранить камеру с override; задать color_targets в derived desc; указать целое число для вещественного поля.\n\n## Причина\n`camera_desc` (serialize/deserialize).\n\n## Статус\nИсправлен.\n\nИсправлено в [03c001e](https://github.com/Prorok1015/OpenGL_Engine/commit/03c001e).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 71
+ },
+ {
+  "key": "bug_9",
+  "kind": "bug",
+  "title": "Баг: desc_adapter_t::serialize теряет __type",
+  "labels": [
+   "bug",
+   "desc",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nСериализованный desc не содержит поля `__type`.\n\n## Шаги / условия воспроизведения\nСериализовать любой desc через адаптер и загрузить обратно.\n\n## Причина\n`desc_adapter_t.cpp`: `serialize` не добавлял `__type`; теперь берёт его из экземпляра.\n\n## Статус\nИсправлен.\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 72
+ },
+ {
+  "key": "bug_10",
+  "kind": "bug",
+  "title": "Баг: zoom-out камеры не уведомляет transform-систему",
+  "labels": [
+   "bug",
+   "editor",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в ee66ba6 (https://github.com/Prorok1015/OpenGL_Engine/commit/ee66ba6)",
+  "body": "## Симптом\nКолесо мыши вниз (отдаление) не обновляет камеру до следующего события.\n\n## Шаги / условия воспроизведения\nПрокрутить колесо вниз в viewport редактора. Воспроизведено в headless-редакторе.\n\n## Причина\n`scn_camera_controller_system.cpp`: уведомление только при прокрутке вверх.\n\n## Статус\nИсправлен.\n\nИсправлено в [ee66ba6](https://github.com/Prorok1015/OpenGL_Engine/commit/ee66ba6).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 73
+ },
+ {
+  "key": "bug_11",
+  "kind": "bug",
+  "title": "Баг: mouse delta = inf/NaN без области ввода",
+  "labels": [
+   "bug",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в 608d0d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/608d0d8)",
+  "body": "## Симптом\nДельта мыши становится inf/NaN, если не задана область ввода.\n\n## Шаги / условия воспроизведения\nЗапустить ввод без input area и подвигать мышь.\n\n## Причина\n`inp_ecs_input_manager.cpp`: деление на нулевой размер области.\n\n## Статус\nИсправлен.\n\nИсправлено в [608d0d8](https://github.com/Prorok1015/OpenGL_Engine/commit/608d0d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 74
+ },
+ {
+  "key": "bug_12",
+  "kind": "bug",
+  "title": "Баг: логирование после shutdown_logger() вызывает segfault",
+  "labels": [
+   "bug",
+   "infrastructure",
+   "P2"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в 4486831 (https://github.com/Prorok1015/OpenGL_Engine/commit/4486831)",
+  "body": "## Симптом\nВызов egLOG после `shutdown_logger()` падает.\n\n## Шаги / условия воспроизведения\nЛогировать из деструкторов статических объектов после остановки логгера.\n\n## Причина\n`engine_log.cpp`: обращение к уничтоженному логгеру.\n\n## Статус\nИсправлен.\n\nИсправлено в [4486831](https://github.com/Prorok1015/OpenGL_Engine/commit/4486831).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 75
+ },
+ {
+  "key": "bug_13",
+  "kind": "bug",
+  "title": "Баг: гонка find+register логгера — spdlog_ex при старте",
+  "labels": [
+   "bug",
+   "infrastructure",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в 795ef7a (https://github.com/Prorok1015/OpenGL_Engine/commit/795ef7a)",
+  "body": "## Симптом\nПри старте возникает `spdlog_ex` из-за гонки поиска и регистрации логгера.\n\n## Шаги / условия воспроизведения\nОдновременное создание логгеров категорий из нескольких потоков при запуске.\n\n## Причина\nНеатомарная пара find + register.\n\n## Статус\nИсправлен.\n\nИсправлено в [795ef7a](https://github.com/Prorok1015/OpenGL_Engine/commit/795ef7a).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 76
+ },
+ {
+  "key": "bug_14",
+  "kind": "bug",
+  "title": "Баг: импортёр моделей — двойной слэш в теге префаба и порядок углов Эйлера",
+  "labels": [
+   "bug",
+   "resource",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в 8e912b2 (https://github.com/Prorok1015/OpenGL_Engine/commit/8e912b2)",
+  "body": "## Симптом\nВ сохранённом теге префаба двойной слэш; экспорт Euler XYZ против импорта yawPitchRoll — поворот на 90° по yaw инвертируется.\n\n## Шаги / условия воспроизведения\nИмпортировать модель с поворотом и открыть сохранённый префаб.\n\n## Причина\nКод экспорта/импорта в модельном импортёре.\n\n## Статус\nИсправлен.\n\nИсправлено в [8e912b2](https://github.com/Prorok1015/OpenGL_Engine/commit/8e912b2).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 77
+ },
+ {
+  "key": "bug_15",
+  "kind": "bug",
+  "title": "Баг: импортёр — меш без UV и одноимённые меши",
+  "labels": [
+   "bug",
+   "resource",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в 8e912b2 (https://github.com/Prorok1015/OpenGL_Engine/commit/8e912b2)",
+  "body": "## Симптом\nМеш без UV вероятно падает (разыменование `mTextureCoords[0]`); одноимённые меши перезаписывают друг друга.\n\n## Шаги / условия воспроизведения\nИмпортировать модель с мешем без UV или с повторяющимися именами мешей.\n\n## Причина\nИмпортёр моделей.\n\n## Статус\nИсправлен.\n\nИсправлено в [8e912b2](https://github.com/Prorok1015/OpenGL_Engine/commit/8e912b2).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 78
+ },
+ {
+  "key": "bug_16",
+  "kind": "bug",
+  "title": "Баг: необъяснимое ребро графа между одноимёнными stateless-системами разных миров",
+  "labels": [
+   "bug",
+   "ecs",
+   "P2"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nВ графе систем появляется ребро между одноимёнными stateless-системами в разных мирах.\n\n## Шаги / условия воспроизведения\nНесколько миров с одинаковыми системами.\n\n## Причина\nНе установлена; вероятно, исчезнет после «world_context и context_manager» и «EPIC-50: явные фазы ECS» (удаление соления и вывода порядка из типов).\n\n## Статус\nОткрыт. Перепроверить после EPIC-50 / world_context.\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 79
+ },
+ {
+  "key": "bug_17",
+  "kind": "bug",
+  "title": "Баг: trigger_hot_reload падает на не-prefab desc (assert полиморфного каста)",
+  "labels": [
+   "bug",
+   "desc",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "closed",
+  "state_reason": "completed",
+  "close_comment": "Исправлено в b2ca2d8 (https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8)",
+  "body": "## Симптом\nВ Debug-редакторе hot reload не-prefab desc приводит к аварийному завершению (assert).\n\n## Шаги / условия воспроизведения\nИзменить на диске desc, не являющийся префабом, при запущенном Debug-редакторе.\n\n## Причина\n`trigger_hot_reload`: полиморфный каст с assert на не-prefab desc; теперь `dynamic_pointer_cast` и ранний возврат.\n\n## Статус\nИсправлен.\n\nИсправлено в [b2ca2d8](https://github.com/Prorok1015/OpenGL_Engine/commit/b2ca2d8).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 80
+ },
+ {
+  "key": "bug_A",
+  "kind": "bug",
+  "title": "Баг: правка Directional Light в инспекторе обнуляет свет",
+  "labels": [
+   "bug",
+   "editor",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nПравка Directional Light в инспекторе обнуляет свет; свет без overrides показывает пустую секцию инспектора, редактировать умолчание нельзя; reload сбрасывает камеру.\n\n## Шаги / условия воспроизведения\nОткрыть уровень, выделить Directional Light, изменить значение в инспекторе.\n\n## Причина\n`core/engine/scene/scn_glm_json_convert.cpp:50`: `tag_invoke` для glm vec4 возвращает ноль, если массив не из 4 элементов; `edt_cr_light.cpp` пишет массивы из 3 элементов; `edt_inspector_panel.cpp` ~112: пустая секция при отсутствии overrides.\n\n## Статус\nОткрыт.\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 81
+ },
+ {
+  "key": "bug_B",
+  "kind": "bug",
+  "title": "Баг: Save теряет transform узла, ссылающегося только на glb",
+  "labels": [
+   "bug",
+   "editor",
+   "P0"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nПотеря данных: узел «scene» из smoke_level сохраняется как голая строка, transform пропадает.\n\n## Шаги / условия воспроизведения\nОткрыть `levels/smoke_level.desc`, сохранить уровень, сравнить файл.\n\n## Причина\nСериализация узла, содержащего только ссылку на glb, пропускает transform (редактор).\n\n## Статус\nОткрыт.\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 82
+ },
+ {
+  "key": "bug_C",
+  "kind": "bug",
+  "title": "Баг: редкий тихий краш при старте (~1 из 12 headless-запусков)",
+  "labels": [
+   "bug",
+   "infrastructure",
+   "P1"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nРедактор молча завершается сразу после строки «Stored resource memory://editor/<level>.desc».\n\n## Шаги / условия воспроизведения\nЗапустить headless-редактор в цикле (~12 запусков); нужна воспроизводимость. План: цикл запусков + ASan.\n\n## Причина\nНе установлена.\n\n## Статус\nОткрыт. Требуется воспроизведение (цикл headless-запусков, ASan).\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 83
+ },
+ {
+  "key": "bug_D",
+  "kind": "bug",
+  "title": "Баг: при пустом втором мире viewport показывает робота первого мира",
+  "labels": [
+   "bug",
+   "editor",
+   "ecs",
+   "P2"
+  ],
+  "milestone": 1,
+  "type": "Bug",
+  "parent_key": "stab_bugs",
+  "state": "open",
+  "state_reason": null,
+  "close_comment": null,
+  "body": "## Симптом\nПри активном пустом втором мире viewport по-прежнему показывает робота первого мира (устаревший рендер или общий render world).\n\n## Шаги / условия воспроизведения\nСоздать второй мир, сделать его активным.\n\n## Причина\nНе установлена; кандидаты: устаревший рендер или общий render world между мирами (см. «world_context и context_manager»).\n\n## Статус\nОткрыт.\n\n## Связи\n- Эпик: {{#stab_bugs}}",
+  "number": 84
+ }
+]

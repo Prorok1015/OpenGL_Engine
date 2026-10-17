@@ -2,6 +2,7 @@
 
 **Theme:** editor
 **Status:** in_progress
+**Issue:** [#30](https://github.com/Prorok1015/OpenGL_Engine/issues/30)
 **Depends on:** EPIC-12, EPIC-13, EPIC-14, EPIC-22, EPIC-15 (рекомендуется)
 
 ---

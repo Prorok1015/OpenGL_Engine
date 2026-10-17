@@ -2,6 +2,7 @@
 
 **Theme:** editor
 **Status:** planned
+**Issue:** [#29](https://github.com/Prorok1015/OpenGL_Engine/issues/29)
 **Depends on:** EPIC-08, EPIC-09 (операции через desc — легко обернуть в команды)
 
 ## Цель

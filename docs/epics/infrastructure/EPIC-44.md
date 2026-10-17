@@ -1,6 +1,7 @@
 # EPIC-44: Memory Profiling & Standard Library — трекинг памяти и движковая стандартная библиотека
 
 **Status:** planned
+**Issue:** [#49](https://github.com/Prorok1015/OpenGL_Engine/issues/49)
 **Theme:** infrastructure
 **Dependencies:** EPIC-43 (Memory Allocators)
 

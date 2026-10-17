@@ -1,6 +1,7 @@
 # EPIC-36: Editor VFS Protocol — `edt://` для ресурсов редактора
 
 **Status:** planned
+**Issue:** [#20](https://github.com/Prorok1015/OpenGL_Engine/issues/20)
 **Theme:** editor
 **Dependencies:** none
 

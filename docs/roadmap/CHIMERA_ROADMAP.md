@@ -238,6 +238,47 @@ M4 можно вести параллельно с M3 после M1; EPIC-64 ж�
 
 ---
 
+### Эпики вех в GitHub Issues
+
+Задачи ведутся в [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues); milestones: M1 «Проект и игровой модуль», M2 «Данные», M3 «Документный редактор», M4 «Runtime», M5 «Игровой UI», M6 «Выпуск этапа А», «Этап Б (ТЗ)». Эпики фазы 0 (этапы C/D) — в [ARCHITECTURE_REVIEW.md](ARCHITECTURE_REVIEW.md) §7. EPIC-50, EPIC-55, EPIC-64, EPIC-29 и EPIC-45 вошли в эпики этапов C/D (#8, #16, #17, #6, #15), отдельных issue для них нет. Манифест: [`docs/agent/tracker/manifest.json`](../agent/tracker/manifest.json).
+
+| Веха | Эпик | Issue |
+|---|---|---|
+| M1 | EPIC-42 Project System | [#19](https://github.com/Prorok1015/OpenGL_Engine/issues/19) |
+| M1 | EPIC-36 `edt://` | [#20](https://github.com/Prorok1015/OpenGL_Engine/issues/20) |
+| M1 | EPIC-52 Game Module API | [#21](https://github.com/Prorok1015/OpenGL_Engine/issues/21) |
+| M1 | EPIC-53 Editor Extension API | [#22](https://github.com/Prorok1015/OpenGL_Engine/issues/22) |
+| M1 | EPIC-54 Standalone Player | [#23](https://github.com/Prorok1015/OpenGL_Engine/issues/23) |
+| M2 | EPIC-51 Desc diagnostics | [#24](https://github.com/Prorok1015/OpenGL_Engine/issues/24) |
+| M2 | EPIC-28 Resource Cache | [#25](https://github.com/Prorok1015/OpenGL_Engine/issues/25) |
+| M2 | EPIC-56 Data Documents & Schema Inspector | [#26](https://github.com/Prorok1015/OpenGL_Engine/issues/26) |
+| M2 | EPIC-57 Asset Identity & Database | [#27](https://github.com/Prorok1015/OpenGL_Engine/issues/27) |
+| M2 | EPIC-58 Data Versioning & Migration | [#28](https://github.com/Prorok1015/OpenGL_Engine/issues/28) |
+| M3 | EPIC-15 Undo/Redo | [#29](https://github.com/Prorok1015/OpenGL_Engine/issues/29) |
+| M3 | EPIC-25 Prefab Editor | [#30](https://github.com/Prorok1015/OpenGL_Engine/issues/30) |
+| M3 | EPIC-59 Document Model | [#31](https://github.com/Prorok1015/OpenGL_Engine/issues/31) |
+| M3 | EPIC-60 Autosave & Recovery | [#32](https://github.com/Prorok1015/OpenGL_Engine/issues/32) |
+| M3 | EPIC-61 Viewport Picking & Incremental Reload | [#33](https://github.com/Prorok1015/OpenGL_Engine/issues/33) |
+| M3 | EPIC-62 Asset Browser v2 & Import Pipeline | [#34](https://github.com/Prorok1015/OpenGL_Engine/issues/34) |
+| M3 | EPIC-07 Material editor | [#35](https://github.com/Prorok1015/OpenGL_Engine/issues/35) |
+| M3 | EPIC-26 Shader Desc | [#36](https://github.com/Prorok1015/OpenGL_Engine/issues/36) |
+| M3 | EPIC-27 Texture Desc | [#37](https://github.com/Prorok1015/OpenGL_Engine/issues/37) |
+| M3 | EPIC-34 Model Importer | [#38](https://github.com/Prorok1015/OpenGL_Engine/issues/38) |
+| M4 | EPIC-63 Play Mode | [#39](https://github.com/Prorok1015/OpenGL_Engine/issues/39) |
+| M4 | EPIC-65 Runtime Images & Texture Budget | [#40](https://github.com/Prorok1015/OpenGL_Engine/issues/40) |
+| M4 | EPIC-66 Save Service | [#41](https://github.com/Prorok1015/OpenGL_Engine/issues/41) |
+| M5 | EPIC-67 UI Runtime | [#42](https://github.com/Prorok1015/OpenGL_Engine/issues/42) |
+| M5 | EPIC-68 Fonts & Text | [#43](https://github.com/Prorok1015/OpenGL_Engine/issues/43) |
+| M5 | EPIC-69 UI Templates, Data Binding & Actions | [#44](https://github.com/Prorok1015/OpenGL_Engine/issues/44) |
+| M5 | EPIC-70 UI Editor | [#45](https://github.com/Prorok1015/OpenGL_Engine/issues/45) |
+| M6 | EPIC-71 Cook & Package | [#46](https://github.com/Prorok1015/OpenGL_Engine/issues/46) |
+| M6 | EPIC-72 SDK & Project Upgrade | [#47](https://github.com/Prorok1015/OpenGL_Engine/issues/47) |
+| M6 | EPIC-73 Diagnostics & Docs | [#48](https://github.com/Prorok1015/OpenGL_Engine/issues/48) |
+| M6 | EPIC-44 Memory profiling | [#49](https://github.com/Prorok1015/OpenGL_Engine/issues/49) |
+| Б | EPIC-74 UI Tweens | [#50](https://github.com/Prorok1015/OpenGL_Engine/issues/50) |
+| Б | EPIC-75 Audio | [#51](https://github.com/Prorok1015/OpenGL_Engine/issues/51) |
+| Б | EPIC-76 Localization | [#52](https://github.com/Prorok1015/OpenGL_Engine/issues/52) |
+
 ## 6. Граф зависимостей (укрупнённо)
 
 ```

@@ -1,6 +1,7 @@
 # EPIC-41: CMake Build System — продакшн-качество сборки
 
 **Status:** in_progress
+**Issue:** [#11](https://github.com/Prorok1015/OpenGL_Engine/issues/11) (остаток)
 **Theme:** infrastructure
 **Dependencies:** none (standalone, но US-41-7 координируется с EPIC-34 US-34-8)
 

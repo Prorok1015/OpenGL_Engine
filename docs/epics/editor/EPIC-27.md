@@ -2,6 +2,7 @@
 
 **Theme:** editor
 **Status:** planned
+**Issue:** [#37](https://github.com/Prorok1015/OpenGL_Engine/issues/37)
 **Depends on:** EPIC-08 (Desc-Driven Core)
 
 ---

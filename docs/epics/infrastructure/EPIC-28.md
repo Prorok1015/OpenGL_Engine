@@ -2,6 +2,7 @@
 
 **Theme:** infrastructure
 **Status:** planned
+**Issue:** [#25](https://github.com/Prorok1015/OpenGL_Engine/issues/25)
 **Depends on:** —
 
 ---

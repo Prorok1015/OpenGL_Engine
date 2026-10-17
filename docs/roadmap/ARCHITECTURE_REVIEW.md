@@ -602,6 +602,28 @@
 
 После этапа D функциональные вехи роадмапа (проект, игровой модуль, данные, документы, Play, UI) ложатся на уже переделанные основания.
 
+### Эпики этапов C и D в GitHub Issues
+
+Задачи ведутся в [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues) (эпик → sub-issues). Полный манифест — [`docs/agent/tracker/manifest.json`](../agent/tracker/manifest.json).
+
+| Этап | Эпик | Issue |
+|---|---|---|
+| Хвосты A/B | Фаза 0: хвосты этапов A/B | [#4](https://github.com/Prorok1015/OpenGL_Engine/issues/4) |
+| C | Стабилизация: баги фазы 0 (группирующий эпик) | [#5](https://github.com/Prorok1015/OpenGL_Engine/issues/5) |
+| C | EPIC-29: сервисы и готовность к DLL | [#6](https://github.com/Prorok1015/OpenGL_Engine/issues/6) |
+| C | Форматы данных: node_id, версии, GUID | [#7](https://github.com/Prorok1015/OpenGL_Engine/issues/7) |
+| C | EPIC-50: явные фазы ECS и детерминизм | [#8](https://github.com/Prorok1015/OpenGL_Engine/issues/8) |
+| C | Цикл кадра и player | [#9](https://github.com/Prorok1015/OpenGL_Engine/issues/9) |
+| C | Платформенный шов (GLFW за platform::window) | [#10](https://github.com/Prorok1015/OpenGL_Engine/issues/10) |
+| C | EPIC-41: остаток гигиены CMake | [#11](https://github.com/Prorok1015/OpenGL_Engine/issues/11) |
+| D | world_context и context_manager | [#12](https://github.com/Prorok1015/OpenGL_Engine/issues/12) |
+| D | RHI шаги 1–4 и null-бэкенд | [#13](https://github.com/Prorok1015/OpenGL_Engine/issues/13) |
+| D | Правила шейдеров GLSL | [#14](https://github.com/Prorok1015/OpenGL_Engine/issues/14) |
+| D | POD-пакеты рендера и материал-инстансы (поглощает EPIC-45) | [#15](https://github.com/Prorok1015/OpenGL_Engine/issues/15) |
+| D | EPIC-55: схема desc (DESC_FIELDS) | [#16](https://github.com/Prorok1015/OpenGL_Engine/issues/16) |
+| D | EPIC-64: task_system | [#17](https://github.com/Prorok1015/OpenGL_Engine/issues/17) |
+| D | Каркас редактора: editor_context и документы | [#18](https://github.com/Prorok1015/OpenGL_Engine/issues/18) |
+
 ### Что сознательно откладываем
 - Второй графический бэкенд (SDL_GPU / Vulkan / Metal). Делать после RHI-шагов, когда понадобится платформа.
 - Cooked-формат и pak — к вехе сборки (M6).

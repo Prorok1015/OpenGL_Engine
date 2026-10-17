@@ -2,6 +2,7 @@
 
 **Theme:** editor
 **Status:** planned
+**Issue:** [#35](https://github.com/Prorok1015/OpenGL_Engine/issues/35)
 **Depends on:** EPIC-10 (Inspector с desc-рендерерами), EPIC-08
 
 ## Цель

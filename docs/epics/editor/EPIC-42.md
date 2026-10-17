@@ -1,6 +1,7 @@
 # EPIC-42: Workspace & Game Project System — разделение движка и игровых данных
 
 **Status:** planned
+**Issue:** [#19](https://github.com/Prorok1015/OpenGL_Engine/issues/19) (эпик переработан по ADR-02, см. CHIMERA_ROADMAP)
 **Theme:** editor
 **Dependencies:** EPIC-36 (Editor VFS Protocol — `edt://`)
 
