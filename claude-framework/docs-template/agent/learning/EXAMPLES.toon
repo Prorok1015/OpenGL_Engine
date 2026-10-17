@@ -1,0 +1,199 @@
+[EXAMPLES]
+overview: Real-world examples of documentation updates
+purpose: Show how to apply self-learning process
+
+[EXAMPLE_1_USER_EXPLICIT_RULE]
+scenario: User says "Never use std::regex in core, too slow"
+
+step_1: Identify
+  - This is from user (meets CRITERIA_1)
+  - It's a constraint/rule
+  - Target: CONSTRAINTS.toon
+
+step_2: Locate
+  - Open docs/agent/CONSTRAINTS.toon
+  - Find appropriate place (alphabetical? at end? ask yourself)
+  - Add as [CONSTRAINT_N]
+
+step_3: Check duplicate
+  - Search CONSTRAINTS.toon for "regex"
+  - Not found, proceed
+
+step_4: Write
+  [CONSTRAINT_12]
+  rule: Never use std::regex in core (performance critical)
+  why: Regex engine is slow, unacceptable latency for Layer 5
+  alternatives: Use simple string matching or hand-written parser
+  enforcement: Code review veto if found
+
+step_5: Edit
+  Use Edit tool to add to CONSTRAINTS.toon
+
+step_6: Verify
+  - File structure intact
+  - No syntax errors
+  - Constraint is clear
+
+step_7: Commit
+  git commit -m "docs: [constraint] add regex prohibition
+
+  Source: User explicitly stated in work session
+  File: docs/agent/CONSTRAINTS.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[EXAMPLE_2_FOUND_IN_CODE]
+scenario: Reading core_engine.cpp, found comment: "Key rotation happens every 30 days"
+
+step_1: Identify
+  - Found in code with comment (meets CRITERIA_2)
+  - It's cryptographic detail
+  - Target: CRYPTO.toon
+
+step_2: Locate
+  - Open docs/agent/CRYPTO.toon
+  - Find [KEY_HIERARCHY] or [NONCE_HANDLING] section
+  - Add details there
+
+step_3: Check duplicate
+  - Search "rotation" in CRYPTO.toon
+  - Not found, proceed
+
+step_4: Write
+  In [KEY_HIERARCHY] section:
+  rotation_interval: 30 days
+  implementation: Timer in identity_engine.cpp (line 142)
+  mechanism: Generates new Device Key, updates via signed Roster
+  verification: See KEY-MANAGEMENT-DESIGN.md for full details
+
+step_5: Edit
+  Update CRYPTO.toon with rotation details
+
+step_6: Verify
+  - New info integrates with existing KEY_HIERARCHY section
+  - References actual code location
+  - Clear and concise
+
+step_7: Commit
+  git commit -m "docs: [crypto] document key rotation interval
+
+  Source: Code inspection, core_engine.cpp line 142
+  File: docs/agent/CRYPTO.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[EXAMPLE_3_DISCOVERED_ARCHITECTURE]
+scenario: While debugging found: relay_session reuses QUIC connections
+
+step_1: Identify
+  - Discovered from code analysis (meets CRITERIA_3)
+  - It's architectural pattern
+  - Target: MODULES.toon or ARCHITECTURE.toon (connection reuse pattern)
+
+step_2: Locate
+  - Open docs/agent/MODULES.toon
+  - Find [MODULE.RELAY] section
+  - Add subsection about connection reuse
+
+step_3: Check duplicate
+  - Search "reuse" in MODULES.toon and ARCHITECTURE.toon
+  - Found in ARCHITECTURE.toon Level 5, but no relay details
+  - Proceed (will complement existing info)
+
+step_4: Write
+  In [MODULE.RELAY] section, add:
+  connection_reuse: true
+  mechanism: QUIC connection pooled per peer, reused for sequential messages
+  benefit: Reduce handshake overhead, improve throughput
+  implementation: See relay_session.cpp (refactored in EPIC-18)
+  verification: Confirmed via code walk-through
+
+step_5: Edit
+  Update MODULES.toon relay section
+
+step_6: Verify
+  - Doesn't duplicate ARCHITECTURE.toon
+  - Adds relay-specific details
+  - References implementation
+
+step_7: Commit
+  git commit -m "docs: [module] document relay connection reuse
+
+  Source: Code discovery while analyzing relay_session.cpp
+  File: docs/agent/MODULES.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[EXAMPLE_4_FIXING_ERROR]
+scenario: ACTIVE_EPICS.toon says EPIC-10 is "IN_PROGRESS" but code shows it's complete
+
+step_1: Identify
+  - Found error in docs (meets CRITERIA_4)
+  - Target: ACTIVE_EPICS.toon (status update)
+
+step_2: Locate
+  - Open docs/agent/ACTIVE_EPICS.toon
+  - Find [EPIC_10_TRANSPORT_ROUTING] section
+
+step_3: Check duplicate
+  - This is the only entry for EPIC-10
+  - Proceed
+
+step_4: Write
+  Change:
+    status: IN_PROGRESS 🔴
+  To:
+    status: COMPLETED ✅
+  And update description to reflect completion
+
+step_5: Edit
+  Update ACTIVE_EPICS.toon
+
+step_6: Verify
+  - Status matches code reality
+  - Other epics that depend on EPIC-10 can now be unblocked
+  - Links to deliverables still valid
+
+step_7: Commit
+  git commit -m "docs: [epic] mark EPIC-10 as completed
+
+  Source: Code verification, all deliverables present in mirage-core/
+  File: docs/agent/ACTIVE_EPICS.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[WHAT_TO_AVOID]
+example_bad_1: Too vague
+  "The system is complex"
+  problem: No actionable information
+
+example_bad_2: Speculation
+  "Probably the developers meant to implement it this way"
+  problem: Vague, unverified
+
+example_bad_3: Opinion
+  "This would be better if implemented differently"
+  problem: Not a rule, just preference
+
+example_bad_4: Obvious
+  "The code iterates through elements"
+  problem: Anyone reading code sees this
+
+example_bad_5: Implementation detail
+  "Vector grows by 2x when capacity exceeded"
+  problem: Can change, not architectural rule
+
+[KEY_TAKEAWAYS]
+✅ Small targeted updates (5-10 lines)
+✅ One file per update (don't scatter info)
+✅ Always verify source (code review or user confirmation)
+✅ Link to references (line numbers, existing docs)
+✅ Clear commit message with source attribution
+✅ Check for duplicates before adding
+
+❌ Large multi-concept updates
+❌ Speculative or opinion-based info
+❌ Obvious facts from code
+❌ Without source attribution
+❌ Breaking existing structure/format
+❌ Forgetting to commit [docs] prefix

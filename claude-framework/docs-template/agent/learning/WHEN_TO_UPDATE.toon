@@ -1,0 +1,80 @@
+[WHEN_TO_UPDATE]
+overview: Criteria for when documentation should be updated
+decision: Check EACH criteria before updating. Must match AT LEAST ONE.
+
+[CRITERIA_1_USER_SAID_IT]
+trigger: User explicitly states a rule or principle
+examples:
+  - "Remember: never touch migrations without my approval"
+  - "This is an architectural rule: no global state in Layer 2"
+  - "That's a constraint we discovered: weak_ptr for cycles"
+action: UPDATE immediately (explicit knowledge from domain expert)
+files: Typically CONSTRAINTS.toon or appropriate .toon file
+
+[CRITERIA_2_FOUND_IN_CODE]
+trigger: Discovery of architectural rule/pattern in source code
+how_to_identify:
+  - Comments with "MUST", "NEVER", "ALWAYS", "WARNING"
+  - Consistent patterns across multiple files
+  - Safety checks that reveal hidden constraints
+  - Configuration constants that define limits
+examples:
+  - Found: // Key rotation must happen every 30 days
+  - Found: // NEVER reuse (key, nonce) pair
+  - Found: assert(buffer_size < 64 * 1024); // Hard limit
+action: UPDATE (verified from implementation)
+files: CRYPTO.toon, CONSTRAINTS.toon, or ARCHITECTURE.toon
+
+[CRITERIA_3_DISCOVERED_THROUGH_WORK]
+trigger: Understanding gained while implementing/debugging
+when: Have conclusive evidence of how something works
+examples:
+  - "Now I understand: Layer 4 caches weak_ptrs to Layer 2 objects via LRU"
+  - "Discovered: relay_session reuses QUIC connections across messages"
+  - "Verified: Core_engine owns all layers via shared_ptr"
+evidence_required:
+  - Read the actual code confirming this
+  - Understand the reason WHY it works this way
+  - Not a guess or assumption
+action: UPDATE (verified through code analysis)
+files: ARCHITECTURE.toon, MODULES.toon, or specific layer docs
+
+[CRITERIA_4_FIXING_ERROR]
+trigger: Found inaccuracy or outdated info in existing docs
+examples:
+  - "CONSTRAINTS.toon says Layer 2 uses raw pointers, but it's actually weak_ptr"
+  - "PROJECT.toon says EPIC-10 is active, but code shows it's DONE"
+  - "ARCHITECTURE.toon is missing Layer 5 details"
+action: UPDATE immediately (correctness matters)
+files: Any .toon file with the error
+
+[CRITERIA_5_SIGNIFICANT_PATTERN]
+trigger: Pattern that appears in 3+ places and isn't documented
+how_to_verify:
+  - Find it in at least 3 different locations
+  - It's not in current documentation
+  - It's not obvious (hidden pattern)
+examples:
+  - "All Layer N→N+1 calls use a common error pattern"
+  - "Every crypto operation validates input before use"
+  - "DPI evasion happens in 5 different places, never documented"
+action: UPDATE (prevents re-discovery in future)
+files: Appropriate .toon file for the pattern
+
+[COMBINED_DECISION_TREE]
+┌─ User said it explicitly?
+│  └─ YES → UPDATE
+│
+├─ Found warning/MUST/NEVER in code?
+│  └─ YES → UPDATE
+│
+├─ Verified understanding from code analysis?
+│  └─ YES → UPDATE
+│
+├─ Found error in existing docs?
+│  └─ YES → UPDATE
+│
+└─ Pattern appears in 3+ places undocumented?
+   └─ YES → UPDATE
+
+If NO to all → DON'T UPDATE

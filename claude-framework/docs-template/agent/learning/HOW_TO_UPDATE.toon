@@ -1,0 +1,143 @@
+[HOW_TO_UPDATE]
+overview: Step-by-step process for updating documentation
+principle: Small edits, clear commits, no breaking changes
+
+[STEP_1_IDENTIFY]
+task: Determine which file to update and what section
+process:
+  1. Read the discovery (rule, error, or info)
+  2. Check WHEN_TO_UPDATE.toon (does it qualify?)
+  3. Check WHEN_NOT_TO_UPDATE.toon (any veto?)
+  4. Use FILES_REFERENCE.toon (which file?)
+  5. Read target file (understand current structure)
+result: Know exactly what file and where in that file
+
+[STEP_2_LOCATE]
+task: Find the exact section in target file
+process:
+  1. Open target file from FILES_REFERENCE.toon
+  2. Read file structure (sections, format)
+  3. Find matching section for info
+  4. If section exists: UPDATE it
+  5. If section missing: ADD at appropriate place
+danger: Don't break file structure. Maintain consistent format.
+
+[STEP_3_CHECK_DUPLICATE]
+task: Ensure info isn't already documented
+process:
+  1. Search target file for keywords
+  2. Check related files (use QUICK_LINKS.toon)
+  3. If found: LINK instead of duplicate
+  4. If found but outdated: UPDATE existing
+  5. If new: ADD as new entry
+result: No duplicate knowledge (save tokens)
+
+[STEP_4_WRITE_UPDATE]
+task: Compose the update
+process:
+  1. Keep it SHORT (5-10 lines typical)
+  2. Use TOON format if in .toon file
+  3. Use Markdown if in .md file
+  4. Include context (why? found where?)
+  5. Add reference if applicable (line number, commit)
+example_good:
+  [CONSTRAINT_11]
+  rule: FFI functions validate ALL pointer inputs
+  why: C boundary is untrusted (from mirage_api.cpp)
+  pattern: if (!ptr || !size) return STATUS_INVALID;
+
+example_bad:
+  "FFI functions should probably validate inputs maybe"
+
+[STEP_5_USE_EDIT_TOOL]
+task: Apply the update to file
+tool: Use Edit tool, not raw file modifications
+process:
+  1. Identify exact old_string (including context)
+  2. Write exact new_string (with update)
+  3. Use Edit tool (preserves formatting)
+  4. Verify change was applied correctly
+
+[STEP_6_VERIFY_CHANGE]
+task: Ensure update is correct and file is valid
+process:
+  1. Read file section again (verify change applied)
+  2. Check TOON format is valid (if .toon file)
+  3. Check links work (if markdown with links)
+  4. No syntax errors
+  5. File is readable and makes sense
+danger: Don't commit broken files
+
+[STEP_7_GIT_COMMIT]
+task: Commit the documentation change
+format:
+  git commit -m "docs: [type] brief description
+
+  Source: [where did you find this info?]
+  File: [which file updated?]
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[type] options:
+  - [constraint] for CONSTRAINTS.toon additions
+  - [arch] for ARCHITECTURE.toon changes
+  - [crypto] for CRYPTO.toon updates
+  - [epic] for ACTIVE_EPICS.toon status changes
+  - [module] for MODULES.toon details
+  - [rule] for CLAUDE.md changes
+  - [fix] for error corrections
+
+examples_commit:
+  git commit -m "docs: [constraint] add FFI validation rule
+
+  Source: code review of mirage_api.cpp
+  File: docs/agent/CONSTRAINTS.toon
+
+  Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
+
+[STEP_8_DOCUMENT_SOURCE]
+task: Always record where info came from
+sources_valid:
+  - "User: explicit mention of rule"
+  - "Code: line X in file Y (commit hash if known)"
+  - "Discovery: code analysis, verified in N locations"
+  - "Finding: from code review, present in implementation"
+sources_invalid:
+  - "Probably from..."
+  - "Might be..."
+  - "Seems like..."
+  - "I assume..."
+
+[COMMON_MISTAKES]
+mistake_1: Updating without verifying source
+  fix: Check WHEN_TO_UPDATE.toon first
+
+mistake_2: Duplicating existing info
+  fix: Search existing docs before adding
+
+mistake_3: Adding speculation or opinion
+  fix: Check WHEN_NOT_TO_UPDATE.toon veto list
+
+mistake_4: Huge multi-page update
+  fix: Keep updates small (5-10 lines)
+
+mistake_5: Breaking file format/structure
+  fix: Read whole file first, understand structure
+
+mistake_6: Forgetting [docs] prefix in commit
+  fix: Always use [docs: type] format
+
+mistake_7: No source attribution
+  fix: Add "Source: ..." to every commit message
+
+[SUMMARY]
+1. Identify (what file? which section?)
+2. Locate (where in file?)
+3. Check (is it duplicate?)
+4. Write (compose update)
+5. Edit (use Edit tool)
+6. Verify (file is correct?)
+7. Commit (with [docs] prefix + source)
+8. Document (record where it came from)
+
+Time estimate: 2-5 minutes per update
