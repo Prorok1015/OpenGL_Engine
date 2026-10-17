@@ -15,8 +15,6 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    # Non-blocking entries (Linux) must not fail the workflow.
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
@@ -25,28 +23,22 @@ jobs:
             os: windows-latest
             build_type: Debug
             profile_mode: INTERNAL
-            experimental: false
           - name: Windows MSVC Release
             os: windows-latest
             build_type: Release
             profile_mode: NONE
-            experimental: false
-          # make blocking after Phase 0 stage B fixes GCC/Clang build
           - name: Linux GCC Debug
             os: ubuntu-latest
             build_type: Debug
             profile_mode: INTERNAL
             cc: gcc
             cxx: g++
-            experimental: true
-          # make blocking after Phase 0 stage B fixes GCC/Clang build
           - name: Linux Clang Debug
             os: ubuntu-latest
             build_type: Debug
             profile_mode: INTERNAL
             cc: clang
             cxx: clang++
-            experimental: true
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
