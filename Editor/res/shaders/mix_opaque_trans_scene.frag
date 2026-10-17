@@ -1,4 +1,4 @@
-#version 460 core
+#version 450 core
 
 #include "pipline_struct_lib.glsl"
 #include "phong_model_lib.frag"

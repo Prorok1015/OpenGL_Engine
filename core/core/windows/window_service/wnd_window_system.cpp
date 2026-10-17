@@ -4,6 +4,7 @@
 #include "wnd_input_keycode_convert.hpp"
 #include "inp_keyboard_event.hpp"
 #include "inp_input_event.hpp"
+#include "engine_log.h"
 #include <filesystem>
 
 namespace {
@@ -120,12 +121,16 @@ namespace {
 
 wnd::window_system::window_system()
 {
+    glfwSetErrorCallback([](int code, const char* description) {
+        egLOG_ERROR("window", "GLFW error {}: {}", code, description);
+    });
     glfwInit();
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     // TODO: move to gl context
+    // 4.5 is what the GL backend actually requires (DSA); asking for 4.6 fails on 4.5-only drivers.
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
