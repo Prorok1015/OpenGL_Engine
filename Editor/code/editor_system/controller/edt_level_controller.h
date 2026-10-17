@@ -63,6 +63,9 @@ namespace edt
 		// Stored confirm action (persists across frames for ImGui modal)
 		std::function<void()> m_confirm_action;
 
+		// Action deferred by "Save & Continue" on an untitled level; run after a successful Save-As.
+		std::function<void()> m_pending_after_save;
+
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
 		std::function<void()> on_need_save_dialog;

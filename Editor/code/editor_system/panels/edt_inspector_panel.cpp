@@ -53,6 +53,8 @@ namespace edt
 	void inspector_panel::on_render()
 	{
 		if (!m_selected_node) {
+			// Selection may be cleared while an edit is still pending (e.g. text field lost focus on click).
+			commit_if_idle();
 			ImGui::TextDisabled("No node selected");
 			return;
 		}
@@ -93,6 +95,8 @@ namespace edt
 			std::string header_id = header + "##" + key;
 			if (ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
 				if (m_readonly) ImGui::BeginDisabled();
+				// Field labels repeat across components, so scope their IDs per component.
+				ImGui::PushID(key.c_str());
 
 				// Show source tag if component references a parent desc
 				if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
@@ -112,13 +116,14 @@ namespace edt
 						}
 					}
 					if (!handled) {
-						render_generic_json(comp.overrides);
+						changed |= render_generic_json(comp.overrides);
 					}
 				} else if (auto it = m_parent_cache.find(key); it != m_parent_cache.end()) {
 					// No overrides but has parent_desc — show cached parent data read-only
 					render_generic_json_readonly(it->second);
 				}
 
+				ImGui::PopID();
 				if (m_readonly) ImGui::EndDisabled();
 			}
 		}
@@ -127,41 +132,65 @@ namespace edt
 		if (!m_readonly)
 			draw_add_component_popup();
 
-		if (changed && !m_readonly && m_on_node_changed)
+		// Widgets edit the desc live; the ECS push (full world reload) waits until
+		// no item is active, i.e. a drag was released. Checkboxes are never active after
+		// the frame that changed them, so they commit at once.
+		if (changed && !m_readonly)
+			m_pending_commit = true;
+		commit_if_idle();
+	}
+
+	void inspector_panel::commit_if_idle()
+	{
+		if (!m_pending_commit || ImGui::IsAnyItemActive())
+			return;
+		m_pending_commit = false;
+		if (m_on_node_changed)
 			m_on_node_changed();
 	}
 
-	void inspector_panel::render_generic_json(boost::json::object& obj)
+	bool inspector_panel::render_generic_json(boost::json::object& obj)
 	{
+		bool changed = false;
 		for (auto& [key, val] : obj) {
 			std::string k(key);
 			if (k.starts_with("__")) continue; // skip meta fields
 			if (k == "children") continue; // shown in hierarchy panel
 
-			render_generic_json_value(k, val);
+			changed |= render_generic_json_value(k, val);
 		}
+		return changed;
 	}
 
-	void inspector_panel::render_generic_json_value(const std::string& key, boost::json::value& val)
+	bool inspector_panel::render_generic_json_value(const std::string& key, boost::json::value& val)
 	{
+		bool changed = false;
 		if (val.is_double()) {
 			float f = static_cast<float>(val.as_double());
-			if (ImGui::DragFloat(key.c_str(), &f, 0.01f))
+			if (ImGui::DragFloat(key.c_str(), &f, 0.01f)) {
 				val = static_cast<double>(f);
+				changed = true;
+			}
 		} else if (val.is_int64()) {
 			int i = static_cast<int>(val.as_int64());
-			if (ImGui::DragInt(key.c_str(), &i))
+			if (ImGui::DragInt(key.c_str(), &i)) {
 				val = static_cast<int64_t>(i);
+				changed = true;
+			}
 		} else if (val.is_uint64()) {
 			int i = static_cast<int>(val.as_uint64());
-			if (ImGui::DragInt(key.c_str(), &i, 1.f, 0))
+			if (ImGui::DragInt(key.c_str(), &i, 1.f, 0)) {
 				val = static_cast<uint64_t>(std::max(0, i));
+				changed = true;
+			}
 		} else if (val.is_string()) {
 			ImGui::TextDisabled("%s: %s", key.c_str(), std::string(val.as_string()).c_str());
 		} else if (val.is_bool()) {
 			bool b = val.as_bool();
-			if (ImGui::Checkbox(key.c_str(), &b))
+			if (ImGui::Checkbox(key.c_str(), &b)) {
 				val = b;
+				changed = true;
+			}
 		} else if (val.is_array()) {
 			auto& arr = val.as_array();
 			// vec3-like array of 3 numbers
@@ -175,6 +204,7 @@ namespace edt
 					arr[0] = static_cast<double>(v.x);
 					arr[1] = static_cast<double>(v.y);
 					arr[2] = static_cast<double>(v.z);
+					changed = true;
 				}
 			} else {
 				// Generic array — show as collapsible list with limit for large arrays
@@ -184,7 +214,7 @@ namespace edt
 					std::size_t count = std::min(arr.size(), max_display);
 					for (std::size_t i = 0; i < count; ++i) {
 						std::string item_key = std::format("[{}]", i);
-						render_generic_json_value(item_key, arr[i]);
+						changed |= render_generic_json_value(item_key, arr[i]);
 					}
 					if (arr.size() > max_display) {
 						ImGui::TextDisabled("... and %zu more items", arr.size() - max_display);
@@ -198,13 +228,14 @@ namespace edt
 				for (auto& [k, v] : obj) {
 					std::string sk(k);
 					if (sk.starts_with("__")) continue;
-					render_generic_json_value(sk, v);
+					changed |= render_generic_json_value(sk, v);
 				}
 				ImGui::TreePop();
 			}
 		} else if (val.is_null()) {
 			ImGui::TextDisabled("%s: null", key.c_str());
 		}
+		return changed;
 	}
 
 	void inspector_panel::render_generic_json_readonly(const boost::json::object& obj)

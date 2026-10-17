@@ -96,6 +96,8 @@ bool edt::level_controller::save_level()
 	}
 
 	bool is_open = true;
+	// Run only after the popup is closed so the action can't touch ImGui state mid-modal.
+	std::function<void()> run_after_save;
 	if (ImGui::BeginPopupModal("Save Level##edt_save", nullptr,
 		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
 	{
@@ -115,7 +117,9 @@ bool edt::level_controller::save_level()
 			const std::string rel_path_str(m_save_path_buf);
 			if (write_level_to_disk(rel_path_str)) {
 				m_state.level_tag = res::tag::make(rel_path_str);
+				run_after_save = std::move(m_pending_after_save);
 			}
+			m_pending_after_save = nullptr;
 			m_save_dialog_open = false;
 			is_open = false;
 			ImGui::CloseCurrentPopup();
@@ -124,6 +128,7 @@ bool edt::level_controller::save_level()
 		ImGui::SameLine();
 
 		if (ImGui::Button("Cancel", {bw, 0.f})) {
+			m_pending_after_save = nullptr;
 			m_save_dialog_open = false;
 			is_open = false;
 			ImGui::CloseCurrentPopup();
@@ -131,9 +136,13 @@ bool edt::level_controller::save_level()
 
 		ImGui::EndPopup();
 	} else if (m_save_dialog_open) {
+		m_pending_after_save = nullptr;
 		m_save_dialog_open = false;
 		is_open = false;
 	}
+
+	if (run_after_save)
+		run_after_save();
 
 	return is_open;
 }
@@ -168,6 +177,8 @@ bool edt::level_controller::show_exit_confirm()
 				quick_save_level();
 				if (m_confirm_action) m_confirm_action();
 			} else {
+				// Untitled level: Save-As runs first, the action follows it (see save_level).
+				m_pending_after_save = m_confirm_action;
 				if (on_need_save_dialog) on_need_save_dialog();
 			}
 			is_open = false;
