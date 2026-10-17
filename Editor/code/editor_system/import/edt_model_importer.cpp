@@ -12,6 +12,8 @@
 #include "scn_glm_json_convert.h"
 #include "scn_mesh_nodes.hpp"
 
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/euler_angles.hpp>
 #include <fstream>
 #include <unordered_set>
 
@@ -54,8 +56,10 @@ trs_result decompose_aimatrix(const aiMatrix4x4& m)
 	aiQuaternion rot;
 	m.Decompose(scale, rot, pos);
 	glm::quat q = convert_to_glm(rot);
-	glm::vec3 euler_rad = glm::eulerAngles(q);
-	return { convert_to_glm(pos), glm::degrees(euler_rad), convert_to_glm(scale) };
+	// prefab_node rebuilds rotation as yawPitchRoll(y, x, z) (Y*X*Z order), so decompose in the same order.
+	float yaw = 0.f, pitch = 0.f, roll = 0.f;
+	glm::extractEulerAngleYXZ(glm::mat4_cast(q), yaw, pitch, roll);
+	return { convert_to_glm(pos), glm::degrees(glm::vec3{ pitch, yaw, roll }), convert_to_glm(scale) };
 }
 
 void store_data(std::vector<std::byte>& data, const auto& value)
@@ -283,6 +287,17 @@ json::value process_material(
 
 // ─── Geometry ────────────────────────────────────────────────────────────────
 
+std::string unique_child_name(const json::object& children, const std::string& name)
+{
+	if (!children.contains(name))
+		return name;
+	for (unsigned int suffix = 1;; ++suffix) {
+		auto candidate = std::format("{}_{}", name, suffix);
+		if (!children.contains(candidate))
+			return candidate;
+	}
+}
+
 void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geometry_desc& geometry)
 {
 	// Validate layout offsets once before the loop (PERF-06)
@@ -471,7 +486,8 @@ json::object build_prefab_node(
 		mesh_child["components"] = mesh_components;
 
 		std::string mesh_child_name = "mesh_" + std::string(mesh->mName.C_Str());
-		children[mesh_child_name] = mesh_child;
+		// Same-named meshes under one node must not overwrite each other.
+		children[unique_child_name(children, mesh_child_name)] = mesh_child;
 	}
 
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {

@@ -32,6 +32,32 @@ o Tri
 f 1/1/1 2/2/1 3/3/1
 )";
 
+constexpr const char* OBJ_NO_UV = R"(v -1 -1 0
+v 1 -1 0
+v 0 1 0
+o Tri
+f 1 2 3
+)";
+
+// Two objects sharing a name under one node. Assimp keeps both meshes; the same-named group
+// is merged by some loaders, so the test only requires that no mesh child is lost.
+constexpr const char* OBJ_TWO_SAME_NAME = R"(v -1 -1 0
+v 1 -1 0
+v 0 1 0
+v 2 2 0
+v 3 2 0
+v 2 3 0
+vt 0 0
+vt 1 0
+vt 0 1
+g Tri
+usemtl a
+f 1/1 2/2 3/3
+g Tri
+usemtl b
+f 4/1 5/2 6/3
+)";
+
 // glTF 2.0 (ASCII, buffer embedded as a data URI, generated once): node "Parent" with
 // translation (1,2,3), +90 degree yaw and uniform scale 2, whose child "Child" (translated (0,5,0))
 // carries a single-triangle mesh with a red material; animation "Move" translates "Parent"
@@ -107,10 +133,6 @@ BOOST_AUTO_TEST_CASE(Obj_RegistersAliasFromSourceTagToStoredPrefab)
 	BOOST_TEST(rs->exists(aliased));
 }
 
-// BUG: scn_model_importer_adapter.cpp builds the prefab tag with "{0}/{1}.desc" while tag.path()
-// already ends in '/', giving "memory://models//tri.desc" (double slash) -- a different cache key
-// than the single-slash form used for the geometry tag ("memory://models/tri.geom.desc").
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(Obj_StoredPrefabTagHasNoDoubleSlash)
 {
 	import("tri.obj", OBJ_TRIANGLE);
@@ -170,10 +192,6 @@ BOOST_AUTO_TEST_CASE(Gltf_CombinedRotationRoundTripsThroughPrefabTransform)
 			BOOST_TEST(std::abs(actual[c][r] - expected[c][r]) < 1e-3f);
 }
 
-// BUG: the importer writes glm::eulerAngles(q) (XYZ order) but prefab_node::get_local_transform()
-// rebuilds the rotation with yawPitchRoll (Y*X*Z), so rotations near gimbal lock (here a plain
-// 90 degree yaw, exported as [180, 89.98, 180]) come out as a different orientation.
-BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(Gltf_NinetyDegreeYawRoundTripsThroughPrefabTransform)
 {
 	auto prefab = import("tri.gltf", GLTF_TRIANGLE);
@@ -183,6 +201,27 @@ BOOST_AUTO_TEST_CASE(Gltf_NinetyDegreeYawRoundTripsThroughPrefabTransform)
 	float diff = 0;
 	for (int c = 0; c < 3; ++c) diff += glm::length(rot[c] - expected[c]);
 	BOOST_TEST(diff < 1e-2f);
+}
+
+BOOST_AUTO_TEST_CASE(Obj_MeshWithoutUvsImportsWithZeroUvBounds)
+{
+	auto prefab = import("nouv.obj", OBJ_NO_UV);
+	BOOST_REQUIRE(prefab);
+	auto out = serialized(*prefab);
+	BOOST_TEST(out.at("children").at("Tri").at("children").at("mesh_Tri").at("components").at("mesh_node_desc").at("ind_end").to_number<int>() == 3);
+}
+
+BOOST_AUTO_TEST_CASE(Obj_SameNamedMeshesUnderOneNodeGetUniqueChildren)
+{
+	auto prefab = import("twin.obj", OBJ_TWO_SAME_NAME);
+	BOOST_REQUIRE(prefab);
+	auto out = serialized(*prefab);
+	std::size_t mesh_children = 0;
+	for (auto& [name, value] : out.at("children").as_object())
+		for (auto& [child_name, child] : value.at("children").as_object())
+			if (child_name.starts_with("mesh_")) ++mesh_children;
+	BOOST_TEST_MESSAGE(json::serialize(out));
+	BOOST_TEST(mesh_children == 2u);
 }
 
 BOOST_AUTO_TEST_CASE(Garbage_DataYieldsNoPrefab)
