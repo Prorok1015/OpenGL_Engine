@@ -1,0 +1,127 @@
+# Инвентаризация шаблонов и неиспользуемых ассетов
+
+## Назначение и метод
+
+Документ помогает владельцу репозитория решить по каждому файлу отдельно, можно ли удалить возможно неиспользуемые шейдеры, уровни и тестовые ассеты. Часть файлов могла храниться как шаблоны, поэтому **ничего не удалено и не перемещено**: документ только фиксирует факты и даёт рекомендации. Колонка «Решение владельца» заполняется вручную.
+
+Метод проверки:
+
+- Ссылки искались по `*.cpp *.h *.hpp *.desc *.cfg *.json CMakeLists.txt` в `core/`, `Editor/`, `unittests/`, а упоминания в документах отдельно по `docs/`, `*.md`. Упоминание только в `docs/` не считается использованием.
+- Искались как полные пути (`shaders/scene_inst.vert`), так и основы имён (`scene_inst`, `normal.`, `network`, `transparent`) на случай путей, собираемых во время выполнения. Таких динамических сборок имён шейдеров в коде нет: все пути шейдеров либо литералы в C++ (`res::tag::make("shaders/...")`), либо поля `shader_vertex / shader_fragment / shader_geometry` в `.desc`.
+- Включаемые файлы (`#include "..."`) разворачиваются текстовой подстановкой в `core/engine/render/render_system/shader/rnd_scene_shader_desc.cpp` (функция `preprocess_shader_code`), поэтому `*_lib.*` считаются используемыми, если их включает используемый шейдер.
+- Корень ресурсов `res://` = `Editor/res/`: `Editor/config/editor.cfg:2` (`resource.path: ../res/`) и `Editor/CMakeLists.txt:3` (`SE_RESOURCE_ABSOLUTE_PATH = Editor/res/`, передаётся как `RESOURCE_PATH` в `core/core/resource/CMakeLists.txt:12`).
+- Сопоставление с текущим конвейером: проходы `core/engine/render/render_system/passes/*` (opaque, z_prepass, skybox, transparent (OIT), composition, debug), компилятор материалов `rnd_material_compiler.cpp`, `.desc` материалов (`Editor/res/base_material.desc`, `Editor/res/skybox/sky_material.desc`).
+
+Ключевой факт о текущем конвейере: все импортированные материалы наследуют `res://base_material.desc` (`scn_model_importer_adapter.cpp:217`, `edt_model_importer.cpp:214`), то есть вершинный шейдер `scene.vert`, а фрагментный переопределяется на `mix_opaque_trans_scene.frag` (`scn_model_importer_adapter.cpp:271`, `edt_model_importer.cpp:267`). Один и тот же материал рисуется дважды: с `#define OPAQUE` в opaque-проходе и без него в OIT-проходе (`scn_render_data_extractor.cpp:120-135`). Отдельные `transparent.*` для этого не нужны.
+
+Обозначения в колонке «Решается ли сейчас»: да / частично / нет.
+
+---
+
+## Шейдеры (`Editor/res/shaders/`, 27 файлов)
+
+### Кандидаты на удаление или перенос (не используются)
+
+| Файл | Ссылки | Какую задачу решал | Решается ли сейчас | Рекомендация | Решение владельца |
+|---|---|---|---|---|---|
+| `normal.vert` | Нет в коде, `.desc`, тестах. Только `docs/epics/render-migration/EPIC-18.md:136` (US-18-6, не реализован) | Визуализация нормалей: вершина в view-space, нормаль через `mat3(transpose(inverse(view*model)))`. Использует старую модель `uniform mat4 model` | Нет. Прохода `normal_debug_pass` в `passes/` нет. Шейдер не совместим с текущим форматом: матрица называется `uWorldMeshMatr`, нет skinning | Превратить в функцию нового конвейера (отладочный проход нормалей, EPIC-18 US-18-6), шейдеры при этом переписать. До этого переместить в `templates/` как эталон. Уверенность средняя | ☐ |
+| `normal.geom` | Только `EPIC-18.md:136` | Geometry shader: для каждой вершины треугольника выпускает отрезок длиной `MAGNITUDE=0.4` вдоль нормали (`line_strip`, 6 вершин) | Частично: geometry-стадия поддержана (`shader_geometry` в `scn_material_desc.cpp:10,100`, `rnd_material_compiler.cpp:34`, расширение `geom` в `rnd_scene_shader_desc.cpp`), но проход и флаг в редакторе отсутствуют | Как у `normal.vert` | ☐ |
+| `normal.frag` | Только `EPIC-18.md:136` | Заливка жёлтым `vec4(1,1,0,1)` | Нет (см. выше) | Как у `normal.vert` | ☐ |
+| `scene_network.vert` | Нет ссылок нигде, в docs/epics тоже | Только позиция `projection*view*model`, для сетки (wireframe) | Нет. В `debug_line.*` свой путь для линий, режима каркаса нет (`wireframe` в C++ не встречается) | Удалить или в `templates/`. Если нужен каркас, проще режим polygon mode в состоянии рендера, чем отдельный шейдер. Уверенность высокая | ☐ |
+| `scene_network.geom` | Нет | Передаёт 3 вершины треугольника дальше как `triangle_strip` с `max_vertices = 1` (по смыслу ошибка: выпускает 3 вершины при лимите 1, комментарий про quad не соответствует коду). Заготовка, не рабочий шейдер | Нет | Удалить. Уверенность высокая | ☐ |
+| `scene_network.frag` | Нет | Заливка красным `(1,0,0,1)` | Нет | Удалить или вместе с группой в `templates/` | ☐ |
+| `scene_inst.vert` | Нет ссылок. Инстансинга в коде нет (`grep -i instanc` по `core`, `Editor/code` находит только `prefab_instance`; API `draw_instanced_indices` помечен мёртвым в `ARCHITECTURE_REVIEW.md:502`) | Инстансированный рендер: `mat4 model` как per-instance атрибут `location=3` (занимает 3..6), Phong-вывод UV, Normal, FragPos | Нет. Конвейер рисует по одному `draw_call_t` на меш с uniform `uWorldMeshMatr`. Кроме того, `location=3` теперь `aTangent`, раскладка вершин несовместима | Оставить как шаблон в `templates/`, если планируется instancing. Иначе удалить. Решение за владельцем, уверенность средняя | ☐ |
+| `scene_inst.frag` | Нет | Старый Phong с одним точечным источником через `uniform Light` (binding=1); в конце `fragColor = texture(diffuse, UV)`, то есть расчёт освещения не используется (мёртвый код внутри) | Да, другим способом: `phong_model_lib.frag` + направленные источники (`DIRECTION_LIGHT_COUNT`), см. `rnd_material_compiler.cpp` | Удалить (освещение решено лучше). Уверенность высокая | ☐ |
+| `scene.geom` | Нет ссылок. Ни один `.desc` не задаёт `shader_geometry` (grep по `Editor/res`) | Geometry-эффект «explode»: вычисляет нормаль грани и сдвиг по `sin(time)`, но возврат `position` без смещения (смещение закомментировано), то есть сквозной проход. Ожидает varying `texCoords[]`, которого `scene.vert` не выдаёт | Нет, не совместим с `PiplineStruct` из `pipline_struct_lib.glsl` | Удалить, либо в `templates/` как пример geometry-шейдера в материале. Уверенность высокая | ☐ |
+| `transparent.vert` | Нет в коде и `.desc`. `EPIC-18.md:103` (план, переосмыслен) | OIT-вариант вершинного шейдера для прозрачности. Идентичен `scene.vert` и `mix_opaque_trans_scene.vert` с точностью до пробела | Да: транспарентный проход берёт материал из `draw_call_t` (`rnd_transparent_pass.cpp:104`), шейдеры те же, что и в opaque, без `OPAQUE` | Удалить: дубль. Уверенность высокая | ☐ |
+| `transparent.frag` | Нет | OIT weighted blended (McGuire/Bavoil): accum в `location 0`, reveal в `location 1`, без ветки opaque | Да: делает то же ветка `#ifndef OPAQUE` в `mix_opaque_trans_scene.frag` | Удалить: дубль. Уверенность высокая | ☐ |
+| `mix_opaque_trans_scene.vert` | Нет: упоминается только в `EPIC-18.md:121` как альтернатива. Вершина берётся из `base_material.desc:4` = `scene.vert` | Вершинный шейдер для «смешанных» материалов. Отличается от `scene.vert` только двумя строками (`localMesh` / `worldMesh`) | Да, `scene.vert` | Удалить: дубль. **Неожиданность:** парный `.frag` используется, а `.vert` нет. Уверенность высокая | ☐ |
+
+### Используемые шейдеры (для полноты картины)
+
+| Файл | Ссылки | Какую задачу решает | Статус | Рекомендация | Решение владельца |
+|---|---|---|---|---|---|
+| `scene.vert` | `Editor/res/base_material.desc:4` | Основной вершинный шейдер сцены: TBN, skinning (`USE_ANIMATION`), `PiplineStruct` | Используется | Оставить | ☐ |
+| `scene.frag` | `Editor/res/base_material.desc:5` | Фрагментный opaque для материалов, не переопределивших шейдер | Используется (перекрывается импортом, но это значение по умолчанию) | Оставить | ☐ |
+| `mix_opaque_trans_scene.frag` | `scn_model_importer_adapter.cpp:271`, `edt_model_importer.cpp:267` | Phong + opaque / OIT в одном файле через `OPAQUE` | Используется | Оставить | ☐ |
+| `z_prepass.vert`, `z_prepass.frag` | `rnd_z_prepass.cpp:75-76, 87-88` | Depth prepass с alpha-discard | Используется | Оставить | ☐ |
+| `composition.vert`, `composition.frag` | `rnd_composition_pass.cpp:91-92` | Композиция OIT accum/reveal | Используется | Оставить | ☐ |
+| `debug_line.vert`, `debug_line.frag` | `rnd_debug_pass.cpp:33-34` | Отладочные линии | Используется | Оставить | ☐ |
+| `sky.vert`, `sky.frag` | `Editor/res/skybox/sky_material.desc:4-5` | Skybox | Используется | Оставить | ☐ |
+| `first_include.vert` | `#include` в `scene.vert:22`, `z_prepass.vert:22` и др. | Объявления uniform для меша | Используется (include) | Оставить | ☐ |
+| `pipline_struct_lib.glsl` | `#include` в `scene.vert:18`, `scene.frag:3` и др. | Структура `PiplineStruct` | Используется (include) | Оставить | ☐ |
+| `phong_model_lib.frag` | `#include` в `scene.frag:4`, `mix_opaque_trans_scene.frag:4`, `z_prepass.frag:4` | Phong и светильники | Используется (include) | Оставить | ☐ |
+| `skinning_lib.glsl` | `#include` в `scene.vert:23`, `z_prepass.vert:23` | Skinning-матрицы | Используется (include) | Оставить | ☐ |
+
+Итог по шейдерам: 27 файлов, используются 15, не используются 12. Из 12 неиспользуемых 6 дублируют или заменены текущим конвейером (`transparent.*`, `mix_opaque_trans_scene.vert`, `scene_inst.frag`, `scene_network.geom`, `scene_network.frag`), 3 (`normal.*`) выглядят задачей, запланированной в EPIC-18 US-18-6 (не реализована), `scene_inst.vert`, `scene_network.vert`, `scene.geom` спорные (шаблон или удалить).
+
+---
+
+## Уровни (`Editor/res/levels/`, 6 файлов)
+
+Ни один уровень не указан по имени в C++, `.cfg`, `CMakeLists.txt` или тестах. Загрузка уровня идёт через диалог открытия в редакторе, путь вводит пользователь; по умолчанию при сохранении предлагается `levels/my_level.desc` (`edt_level_controller.cpp:92`). Поэтому «нет ссылок» здесь означает «не загружается автоматически», а не «сломан». Новые уровни создаются из `templates/level.desc` (`edt_level_controller.cpp:45`), а не копированием из `levels/`.
+
+| Файл | Ссылки | Какую задачу решал | Решается ли сейчас | Рекомендация | Решение владельца |
+|---|---|---|---|---|---|
+| `my_level123.desc` | Только `docs/roadmap/ARCHITECTURE_REVIEW.md:511` («черновые сохранения») | Сохранение сцены с `backpack.obj`: камера, один направленный свет, иерархия узлов `Cube.028__0`, `meshCube...` без компонентов. Мешей в файле нет, только имена узлов: данные меша были в `memory://` и после перезапуска не восстанавливаются, то есть уровень вероятно загрузится пустым скелетом | Частично: структура уровня описывается шаблонами `templates/level.desc` и `templates/world.desc`, импорт модели делается заново | Удалить (черновик, потеря содержимого) или оставить как пример `camera_desc` + `directional_light_desc` внутри мира. Уверенность средняя, откройте в редакторе для проверки | ☐ |
+| `my_level_3.desc` | То же (`ARCHITECTURE_REVIEW.md:511`) | Почти то же, что `my_level123`, но `"systems": []`, камера на `z=2`, fov=90 | Как выше | Как выше. Если оставлять, то только один из двух (они дублируют друг друга) | ☐ |
+| `editor_level2.desc` | `ARCHITECTURE_REVIEW.md:511`. В содержимом встречается имя `robot` (возможно, импорт `objects/robot/gen_robot.glb`) | Сохранение сцены `simple` с иерархией ROOT, Armature и костей (`Bone`, `Bone_L...`, `geometry_0`) и `"systems": []`; проверка скелетной анимации | Частично: анимация решается `scn::animation_*` системами (см. `editor_level.desc` / `templates/level.desc`), этот файл системы не перечисляет и без данных не оживёт | Кандидат на удаление, как и два выше. Уверенность средняя | ☐ |
+| `backpack_level.desc` | `ARCHITECTURE_REVIEW.md:510` | Мир с префабом `res://assets/backpack/backpack.prefab.desc` и skybox. **Каталога `Editor/res/assets/` не существует** (проверено `ls`), поэтому префаб не загрузится | Частично: префабы реализованы (EPIC-25, `scn_prefab_desc.cpp`), но сам ассет отсутствует | Удалить, либо восстановить `assets/backpack/` и оставить как пример уровня с префабом. Если сохраняете как шаблон, то лучше в `templates/` с рабочим ссылочным ассетом. Уверенность высокая в отношении «сломан» | ☐ |
+| `prefab_level.desc` | `ARCHITECTURE_REVIEW.md:510` | Два экземпляра префаба `res://assets/solder/solder.prefab.desc`, которого нет (тоже `assets/` отсутствует) | Как выше | Как у `backpack_level.desc` | ☐ |
+| `editor_level.desc` | Нет ссылок. **Не из списка кандидатов, добавлен при проверке** | Рабочий уровень с анимационными системами, skybox и компонентом `scene` = `memory://objects/fsb//scene.desc`. Ссылка на `memory://` ресурс, созданный только импортёром во время работы, на диске его нет | Частично: сам формат актуален, ссылка на память после перезапуска не разрешается | Неопределённо: уточните у себя, нужен ли он как пример работающего набора систем. Если да, оставить | ☐ |
+
+Итог по уровням: 6 файлов, используемых автоматически нет (загрузка идёт только вручную). Явно сломаны (ссылки на отсутствующий `res://assets/`): 2. Скелеты без данных меша: 3. Неопределённые: 1 (`editor_level.desc`).
+
+---
+
+## `core/res/` (24 файла, 41 МБ, все отслеживаются git)
+
+**Проверка монтирования.** Ни один конфиг не указывает на `core/res`:
+
+- `Editor/config/editor.cfg:2`: `resource.path: ../res/`, это `Editor/res/`.
+- `Editor/CMakeLists.txt:3`: `SE_RESOURCE_ABSOLUTE_PATH = ${CMAKE_CURRENT_SOURCE_DIR}/res/`, то есть `Editor/res/`. Больше нигде `RESOURCE_PATH` не задаётся.
+- `grep -rE "core/res|\.\./res"` по `*.cpp *.h *.hpp *.cfg *.json CMakeLists.txt *.cmake *.yml` даёт единственное совпадение: `editor.cfg:2`, которое указывает на Editor.
+- В `unittests/` нет ссылок на файлы ни из `core/res`, ни из `Editor/res` (тесты используют только вымышленные пути-литералы вроде `shaders/basic.vert`).
+- Из `docs/` на `core/res` не ссылается ничего (совпадения grep относятся к `core/core/resource/`).
+- Имена шейдеров (`main`, `lines`, `crosshair`, `bitmap`, `shape`, `scene`) в C++ как пути не встречаются; `scene.*` в `core/res` не совпадают с `Editor/res/shaders/scene.*` (устаревшая версия `#version 330`).
+
+Вывод: всё дерево `core/res/` не используется (уверенность высокая). **Ни один файл в нём не имеет ссылок.**
+
+| Подпапка / группа | Содержимое | Ссылки | Какую задачу решал | Решается ли сейчас | Рекомендация | Решение владельца |
+|---|---|---|---|---|---|---|
+| `core/res/*.vert`, `*.frag` (6 пар: `main`, `scene`, `lines`, `crosshair`, `bitmap`, `shape`; 12 файлов, около 4 КБ) | `#version 330/400`: `main.*` воксельный шейдер (`projview`, свет в `v_light`), `scene.*` простая текстура, `lines.*` круг/линии, `crosshair.*` белый прицел, `bitmap.*` 2D-текстура с цветом, `shape.*` цветная фигура | Нет | Ранние шейдеры до `desc`-конвейера (воксели, прицел, 2D) | Частично: 2D/UI рисует ImGui, освещённая сцена идёт через `Editor/res/shaders/*`. Прицела и воксельного рендера в проекте нет | Удалить. Если нужен прицел `crosshair.*`, это 2 строки, переносить смысла нет. Уверенность высокая | ☐ |
+| `core/res/test.jpg`, `test2.png`, `block.png`, `milla.bmp` (около 1.1 МБ) | Тестовые текстуры | Нет. **Побайтово идентичны** файлам в `Editor/res/` (проверено `md5sum`) | Тесты загрузки текстур | Дубликат | Удалить. Уверенность высокая | ☐ |
+| `core/res/objects/backpack/` (8 файлов, около 40 МБ из 41) | `backpack.obj` и `source_attribution.txt` идентичны `Editor/res/objects/backpack/`; текстуры (`diffuse.jpg`, `normal.png` 15 МБ, `ao`, `roughness`, `specular`) **отличаются** от версий в Editor (в Editor `normal.png` 21 МБ, `diffuse.jpg` 3 МБ против 6 МБ): другие размеры/разрешение | Нет. Сам `Editor/res/objects/backpack/` тоже не имеет ссылок в коде (ссылаются только сломанные `backpack_level.desc`, `my_level*.desc` по имени узла) | Модель для проверки импорта assimp и материалов | Решается импортом (`edt_model_importer`), но тестовой модели в проекте сейчас никто не вызывает | Удалить `core/res/objects/backpack/` (освободит почти весь объём). Версия в `Editor/res/objects/backpack/` остаётся как эталон; если нужна, лучше её тоже оценить отдельно. **Файл `source_attribution.txt` (лицензия автора модели) сохранить рядом с копией, которая останется.** Уверенность средняя из-за различия текстур | ☐ |
+
+Итог по `core/res/`: 24 файла, используемых 0, неиспользуемых 24 (по группам: 3 группы строк выше). Целиком удаляемо с высокой уверенностью, кроме вопроса о том, какая из двух копий `backpack` эталонная. Удаление из рабочего дерева не уменьшит размер истории git.
+
+---
+
+## Изображения `Editor/res/`
+
+Все пять файлов в корне и `icons/engine_logo_small.png` отсутствуют в коде, `.desc`, тестах. В `docs/epics/editor/EPIC-36.md:104-107` (US-36-3) уже запланировано их удаление или перенос в `Editor/data/test/`, если они используются.
+
+| Файл | Ссылки | Какую задачу решал | Решается ли сейчас | Рекомендация | Решение владельца |
+|---|---|---|---|---|---|
+| `test.jpg` (512x512, 157 КБ) | Код: нет. `core/engine/image/test/Source.cpp:10` открывает `"test.jpg"` из **текущего каталога**, а не через `res://`; рядом лежит своя копия `core/engine/image/test/test.jpg`. Документы: `EPIC-36.md:13,104,107`, `ARCHITECTURE_REVIEW.md:509` | Тестовая текстура для загрузчика изображений (stb) | Нет в `res://`; тест `image_test` использует собственную копию | Удалить. Идентичная копия лежит в `core/res/` | ☐ |
+| `test2.png` (1600x1059, 813 КБ) | Только документы | Вторая тестовая текстура | Нет | Удалить | ☐ |
+| `block.png` (512x512, 2.5 КБ) | Только документы | Текстура блока (наследие воксельного движка, см. `core/res/main.*`) | Нет | Удалить | ☐ |
+| `milla.bmp` (211x242, 154 КБ) | Только документы | Тест загрузки формата BMP | Загрузка BMP делается stb, тест на формат в `unittests/` отсутствует | Удалить либо оставить как фикстуру для будущего юнит-теста формата BMP. Уверенность средняя | ☐ |
+| `window.png` (4587x8000, 1.18 МБ) | Только документы | Тест большого изображения / сброс текстуры (stress-тест размера) | Нет | Удалить. Самый большой файл из группы | ☐ |
+| `icons/engine_logo_small.png` (256x256, 13 КБ) | Только `EPIC-36.md:42` (описывает целевую структуру), `ARCHITECTURE_REVIEW.md:509` | Маленький логотип (иконка окна?) | Нет: код грузит только `icons/editor_engine_logo.png` (`editor_module.cpp:33`) | Оставить, если планируете задать иконку окна; иначе удалить. Уверенность средняя | ☐ |
+
+Итог по изображениям: 6 файлов, используемых 0. **Дополнительно найдено:** `icons/engine_logo.png` тоже нигде не загружается (используется только `icons/editor_engine_logo.png`). `EPIC-36.md` описывает его как часть структуры, поэтому отнесён к неопределённым.
+
+---
+
+## Что выявлено дополнительно (вне заданного списка)
+
+- `Editor/res/test_desc.desc`, `test_field_desc.desc`, `test_field_parent_desc.desc`, `test_parent_desc.desc`, `test_sub_field_desc.desc`: тип `editor_test` не зарегистрирован, ссылок из кода нет; отмечено в `ARCHITECTURE_REVIEW.md:508`. Не разбирались подробно.
+- `Editor/res/objects/getaur`, `helicopter`, `robot`, `train`: в коде и `.desc` ссылок нет (имя `robot` встречается только в `editor_level2.desc`). Не входили в задачу, не проверялись по содержимому.
+- В `EPIC-18.md` (US-18-4, US-18-5) названы `transparent.vert/frag` и `mix_opaque_trans_scene.vert` как шейдеры проходов, но реализация использует единый материал. Текст эпика устарел.
+
+## Как использовать документ
+
+1. Вставьте в колонку «Решение владельца» одно из: удалить / в `templates/` / в фичу / оставить.
+2. Если выбрано «в `templates/`», создайте папку `Editor/res/templates/shaders/` (или `docs/templates/`) и перенесите вручную; существующий `Editor/res/templates/` уже используется редактором для `level.desc`, `world.desc`, `prefab_preview.desc`, поэтому шаблонные шейдеры лучше хранить в подпапке, чтобы не путать с ними.
+3. Если выбрано «в фичу», создайте задачу в `docs/agent/backlog/` или привяжите к EPIC-18 US-18-6 (отладочный проход нормалей).
