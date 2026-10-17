@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include <cmath>
 #include <imgui.h>
 
 namespace edt::imgui {
@@ -21,7 +22,7 @@ namespace edt::imgui {
 			const auto im_center = ImVec2{ center.x, center.y };
 			details::config.mDrawList->AddLine(im_center, end, color, thickness);
 			details::config.mDrawList->AddCircleFilled(end, radius, color);
-			const auto textPosX = ImVec2{ floor(end.x - 3.0f), floor(end.y - 6.0f) };
+			const auto textPosX = ImVec2{ std::floor(end.x - 3.0f), std::floor(end.y - 6.0f) };
 			if (selected) {
 				details::config.mDrawList->AddCircle(end, radius, IM_COL32_WHITE, 0, 1.1f);
 				details::config.mDrawList->AddText(textPosX, IM_COL32_WHITE, text);
