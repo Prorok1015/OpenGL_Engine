@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "ds/ds_store.hpp"
+#include <string_view>
 
 struct test_service {
     int value = 42;
@@ -9,7 +10,27 @@ struct another_test_service {
     float f_value = 3.14f;
 };
 
+struct named_service {
+    static constexpr std::string_view service_id = "my.service";
+};
+
 BOOST_AUTO_TEST_SUITE(DSStoreTests)
+
+BOOST_AUTO_TEST_CASE(TypeKeyDistinctTypesDiffer)
+{
+    BOOST_CHECK(ds::type_key<test_service>() != ds::type_key<another_test_service>());
+}
+
+BOOST_AUTO_TEST_CASE(TypeKeySameTypeIsStable)
+{
+    BOOST_CHECK_EQUAL(ds::type_key<test_service>(), ds::type_key<test_service>());
+    static_assert(ds::type_key<int>() == ds::type_key<int>());
+}
+
+BOOST_AUTO_TEST_CASE(TypeKeyUsesServiceId)
+{
+    BOOST_CHECK_EQUAL(ds::type_key<named_service>(), ds::fnv1a_64("my.service"));
+}
 
 BOOST_AUTO_TEST_CASE(SharedPolicyBasicOperations)
 {
