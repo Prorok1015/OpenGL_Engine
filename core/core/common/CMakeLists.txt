@@ -9,6 +9,9 @@ target_sources(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_linear_allocator.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_pool_allocator.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_stack_allocator.cpp"
+	# Always compiled: profiler entry points are referenced unconditionally (render, gui);
+	# ENGINE_PROFILE_MODE only gates the PROFILE_* macros.
+	"${CMAKE_CURRENT_SOURCE_DIR}/eng_profiler.cpp"
 )
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 #glm

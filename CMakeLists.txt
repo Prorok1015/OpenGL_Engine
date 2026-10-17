@@ -41,8 +41,5 @@ target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine 
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
-if(ENGINE_PROFILE_MODE STREQUAL "NONE")
-  target_sources(unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/core/core/common/eng_profiler.cpp")
-endif()
 
 add_test(NAME unit_tests COMMAND unit_tests)

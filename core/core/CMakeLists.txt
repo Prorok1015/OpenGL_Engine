@@ -28,9 +28,6 @@ target_link_libraries(core_api INTERFACE
 	snk::config_system
 )
 
-if(NOT ENGINE_PROFILE_MODE STREQUAL "NONE")
-  target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/common/eng_profiler.cpp")
-endif()
 
 # Memory allocators (mem_*.cpp) now live in the `common` STATIC lib (EPIC-49 US-49-2).
 
