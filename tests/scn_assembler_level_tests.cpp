@@ -414,7 +414,7 @@ BOOST_FIXTURE_TEST_CASE(Level_LoadFromDescBuildsOneRegistryPerWorldInOrder, leve
 	BOOST_TEST(lvl.has_world("w1"));
 	BOOST_TEST(!lvl.has_world("w2"));
 	BOOST_TEST(lvl.get_tag() == tag_of("lv.desc"));
-	BOOST_TEST(lvl.get_world(0u).get_name() == "w0"); // worlds get ids in file order
+	BOOST_TEST(lvl.get_world(std::uint32_t{ 0 }).get_name() == "w0"); // worlds get ids in file order; a literal 0 would also convert to string_view
 	BOOST_TEST(lvl.get_world(1u).get_name() == "w1");
 	BOOST_TEST(lvl.acquire_free_world_id() == 2u);
 
