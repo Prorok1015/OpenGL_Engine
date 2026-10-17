@@ -91,3 +91,58 @@ jobs:
         working-directory: build
         shell: bash
         run: ./unit_tests --log_level=test_suite
+
+  # Sanitizer builds (Linux only; project targets instrumented, third-party is not).
+  # GCC is used because the Clang build is currently broken (see the Linux Clang Debug job).
+  sanitizers:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux ASan+UBSan
+            sanitize: address
+            experimental: false
+          - name: Linux TSan
+            sanitize: thread
+            experimental: false
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENGINE_PROFILE_MODE=INTERNAL \
+            -DSNK_SANITIZE=${{ matrix.sanitize }} -DGLFW_BUILD_WAYLAND=OFF \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build unit_tests
+        run: cmake --build build --target unit_tests --parallel
+
+      - name: Run unit tests under sanitizer
+        working-directory: build
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/sanitizers/lsan.supp:print_suppressions=0
+          TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1 suppressions=${{ github.workspace }}/.github/sanitizers/tsan.supp
+        run: ./unit_tests --log_level=test_suite
