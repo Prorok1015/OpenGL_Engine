@@ -22,6 +22,8 @@ set(SE_PROJECT_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
 # any add_subdirectory so every submodule sees consistent options (EPIC-41 US-41-1).
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ThirdParty)
+# SNK_SANITIZE option + snk::sanitizers interface target (project targets only).
+include(Sanitizers)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -37,7 +39,7 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/unittests/unit_tests.
 
 add_executable(unit_tests unittests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::config_system PRIVATE Boost::unit_test_framework)
+target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::config_system PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)

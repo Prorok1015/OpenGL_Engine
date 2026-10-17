@@ -306,6 +306,21 @@ Snake Editor provides a full scene editing environment:
 cd build && ./unit_tests
 ```
 
+**Sanitizers (Linux, GCC/Clang):** configure with `-DSNK_SANITIZE=address` (ASan + UBSan) or
+`-DSNK_SANITIZE=thread` (TSan) in a separate build dir. Only project targets are instrumented
+(third-party code is not); the suppression files live in `.github/sanitizers/`.
+
+```bash
+cmake -S . -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DSNK_SANITIZE=address
+cmake --build build/asan --target unit_tests
+cd build/asan
+ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+LSAN_OPTIONS=suppressions=../../.github/sanitizers/lsan.supp ./unit_tests
+
+# TSan: -DSNK_SANITIZE=thread, then
+TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1 suppressions=../../.github/sanitizers/tsan.supp" ./unit_tests
+```
+
 | Test File | Coverage |
 |-----------|----------|
 | `ds_fixed_vector_test` | push/pop, overflow, RAII semantics |

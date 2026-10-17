@@ -1,0 +1,3 @@
+# LeakSanitizer suppressions for unit_tests (LSAN_OPTIONS=suppressions=<this file>).
+# Intentionally empty: the ASan+UBSan run is leak-clean. Add only third-party/driver leaks
+# (e.g. "leak:libGL"), never engine code.
