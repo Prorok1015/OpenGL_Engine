@@ -30,10 +30,16 @@
 #include "level/scn_prefab_desc.h"
 #include "wnd_window_system.h"
 #include "resources/res_resource_text.h"
+#include <cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <future>
 #include <fstream>
+
+namespace {
+	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
+	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
+}
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
 	: desc_system(desc_system_)
@@ -124,6 +130,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Wire dockspace menu actions
 	init_helpers::wire_dockspace_menus(*editor_layer, m_level_ctrl, *this, m_state, *m_file_dialog, m_exit_action);
+
+	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
+		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
+		// load_level() polls the pending load (and skips the file dialog) while m_loading_level is set.
+		editor_layer->register_implicit("edt/load_level", [this] { return load_level(); });
+	}
 }
 
 // ─── Import pipeline ────────────────────────────────────────────────────────
@@ -227,32 +239,35 @@ bool edt::editor_system::load_level()
 		is_open = true;
 		if (m_file_dialog->show("Load Level", &is_open)) {
 			auto relateve = m_file_dialog->get_selected_path().lexically_relative(m_file_dialog->get_base_path());
-			res::tag original_tag = res::tag::make(relateve.string());
-
-			if (m_state.editor_tag.is_valid()) {
-				m_res.unwatch(m_state.editor_tag, &m_level_ctrl);
-			}
-
-			std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
-			m_state.editor_tag = res::tag{ "memory://editor/" + stem + ".desc" };
-			m_state.level_tag = original_tag;
-
-			auto abs_path = res::resource_system::get_resources_path() / std::string(original_tag.relative());
-			std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
-			if (in) {
-				auto size = (std::streamsize)in.tellg();
-				in.seekg(0);
-				std::vector<std::byte> bytes(static_cast<size_t>(size));
-				in.read(reinterpret_cast<char*>(bytes.data()), size);
-				m_res.store(m_state.editor_tag, bytes);
-			}
-
-			m_loading_level_handle = m_res.require<scn::level_desc>(m_state.editor_tag);
-			m_loading_level = true;
+			begin_level_load(res::tag::make(relateve.string()));
 			return true;
 		}
 	}
 	return is_open;
+}
+
+void edt::editor_system::begin_level_load(const res::tag& original_tag)
+{
+	if (m_state.editor_tag.is_valid()) {
+		m_res.unwatch(m_state.editor_tag, &m_level_ctrl);
+	}
+
+	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
+	m_state.editor_tag = res::tag{ "memory://editor/" + stem + ".desc" };
+	m_state.level_tag = original_tag;
+
+	auto abs_path = res::resource_system::get_resources_path() / std::string(original_tag.relative());
+	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
+	if (in) {
+		auto size = (std::streamsize)in.tellg();
+		in.seekg(0);
+		std::vector<std::byte> bytes(static_cast<size_t>(size));
+		in.read(reinterpret_cast<char*>(bytes.data()), size);
+		m_res.store(m_state.editor_tag, bytes);
+	}
+
+	m_loading_level_handle = m_res.require<scn::level_desc>(m_state.editor_tag);
+	m_loading_level = true;
 }
 
 bool edt::editor_system::poll_level_load()

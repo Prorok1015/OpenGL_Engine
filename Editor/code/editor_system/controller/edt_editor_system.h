@@ -54,6 +54,7 @@ namespace edt {
 
 		//TODO change to renderer
 		bool load_level();
+		void begin_level_load(const res::tag& level_tag);
 
 	private:
 		// Shared state for all controllers
