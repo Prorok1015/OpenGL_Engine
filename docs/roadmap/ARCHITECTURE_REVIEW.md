@@ -508,7 +508,7 @@
 | `Editor/res/test*.desc` (5 шт.) | Незарегистрированные типы, при загрузке падают | нет |
 | `Editor/res/{test.jpg, test2.png, block.png, milla.bmp, window.png}`, `icons/engine_logo_small.png` | Нет ссылок в коде | низкий |
 | `Editor/res/levels/{backpack_level, prefab_level}.desc` | Ссылаются на несуществующий `res://assets/` | низкий |
-| `Editor/res/levels/{my_level123, my_level_3, editor_level2}.desc` | Черновые сохранения | проверить |
+| `Editor/res/levels/{my_level123 → test_level, ~~my_level_3~~ (удалён), editor_level2}.desc` | Черновые сохранения | проверить |
 | `edt::model_importer::import()` (sync), `editor_system::imported_models_list`, `register_tool` / `unregister_tool` / `set_tool_check*` | Без вызовов; главное меню отключено | нет |
 | `Editor/main.cpp:10-42` (`WinMain`) | Недостижимо; заменить `_WIN32`-шимом | нет |
 | `common.h`: `<iostream>` (в 42 TU), `using namespace` в заголовке, глобальные `Event` | Нарушает правила проекта | низкий |
