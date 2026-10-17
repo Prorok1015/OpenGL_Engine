@@ -4,6 +4,7 @@
 // ecs_assembler with the production spawners plus one test-only component ("stat_desc") that makes
 // override/merge behavior easy to observe.
 #include "res_system.h"
+#include "logger/engine_log.h"
 #include "desc_system.h"
 #include "adapters/desc_adapter_t.h"
 #include "resolvers/res_resolver_interface.hpp"
@@ -85,6 +86,11 @@ struct ram_res_env
 {
 	ram_res_env()
 	{
+		// resource_system starts two vfs io threads that both log under "resource/resolver" right
+		// away. engine_log creates a category's logger without holding a lock across
+		// find+register, so the first two concurrent logs of a NEW category can collide
+		// ("logger with name ... already exists" -> terminate). Create the logger up front.
+		engine::log_message("resource/resolver", engine::log_level::trace, "test env");
 		std::filesystem::create_directories("./res"); // resource_system's vfs root
 		std::filesystem::create_directories("./sandbox");
 		rs = std::make_unique<res::resource_system>();
