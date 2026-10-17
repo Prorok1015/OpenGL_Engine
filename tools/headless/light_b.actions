@@ -1,0 +1,11 @@
+# Item 5: run once per level (qa_light_a / qa_light_b / qa_light_edit); shot name taken from the 'shot' lines below.
+# NOTE: Directional Light overrides must be 4-element arrays in the level JSON (3-element arrays are read as zero vectors).
+sleep 18
+click 960 400 5
+sleep 0.3
+drag 960 400 961 400
+sleep 4
+shot headless_out/checklist/21_light_b_robot.png
+click 88 149
+sleep 1
+shot headless_out/checklist/21_light_b_inspector.png

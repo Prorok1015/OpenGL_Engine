@@ -1,0 +1,12 @@
+# Edit the Directional Light via Inspector (run with qa_light_a.desc, 1920x1080). Shows the 3-element-array write bug.
+sleep 18
+click 960 400 5
+sleep 0.3
+drag 960 400 961 400
+sleep 3
+click 88 149
+sleep 1
+shot headless_out/checklist/22_edit_before.png
+drag 1583 215 1620 215
+sleep 6
+shot headless_out/checklist/22_edit_after.png

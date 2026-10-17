@@ -90,9 +90,9 @@ if [[ -n "$ACTIONS" ]]; then
 		alive || { echo "editor exited during actions" >&2; break; }
 		case "$cmd" in
 			sleep) sleep "$a" ;;
-			click) xdotool mousemove "$a" "$b" click "${c:-1}" ;;
-			dclick) xdotool mousemove "$a" "$b" click --repeat 2 --delay 80 1 ;;
-			drag) xdotool mousemove "$a" "$b" mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
+			click) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click "${c:-1}" ;; # hover first: ImGui needs a frame at the new position
+			dclick) xdotool mousemove "$a" "$b"; sleep 0.4; xdotool click --repeat 2 --delay 80 1 ;;
+			drag) xdotool mousemove "$a" "$b" sleep 0.4 mousedown 1 sleep 0.2 mousemove "$c" "$d" sleep 0.2 mouseup 1 ;;
 			move) xdotool mousemove "$a" "$b" ;;
 			key) xdotool key --delay 50 "$a" ;;
 			type) xdotool type --delay 30 "${line#*type }" ;;

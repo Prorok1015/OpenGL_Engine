@@ -1,0 +1,16 @@
+# File > Save Level, replace the path, Save. Edit the 'type' line below (path relative to res://).
+sleep 18
+click 25 29
+sleep 1
+click 50 87
+sleep 2
+click 960 540
+sleep 0.5
+key Home
+key shift+End
+type levels/qa_roundtrip2.desc
+sleep 0.5
+shot headless_out/checklist/54_save2_typed.png
+click 892 576
+sleep 2
+shot headless_out/checklist/55_after_save2.png

@@ -1,0 +1,19 @@
+# Item 7: add a world with '+', switch back and forth (1920x1080 layout)
+sleep 18
+shot headless_out/checklist/30_world_0.png
+click 100 75
+sleep 1
+type world2
+key Return
+sleep 4
+click 118 75
+sleep 5
+shot headless_out/checklist/31_world2_active.png
+click 56 75
+sleep 5
+shot headless_out/checklist/32_world1_back.png
+click 118 75
+sleep 4
+click 56 75
+sleep 5
+shot headless_out/checklist/33_world1_back2.png
