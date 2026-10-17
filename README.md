@@ -31,6 +31,17 @@ The project supports two development environments:
 - **Project IDX** (Nix) — all dependencies pre-configured in `.idx/dev.nix`
 - **Local build** — requires CMake 3.16+, a C++20 compiler, Boost, and platform windowing libraries
 
+### Getting the sources
+
+```bash
+git clone --recursive https://github.com/Prorok1015/OpenGL_Engine.git
+# Optional: test 3D models for the editor (~650 MB, separate repo, not fetched by default)
+git submodule update --init --checkout Editor/res/samples
+```
+
+`Editor/res/objects/robot` (small skinned + animated glb) stays in the repo for a quick check; larger test
+models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples) (`res://samples/...`).
+
 ### Building
 
 ```bash

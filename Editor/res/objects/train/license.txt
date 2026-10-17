@@ -1,8 +1,0 @@
-Model Information:
-* title:	British Rail Class 08
-* source:	https://sketchfab.com/3d-models/british-rail-class-08-739047d878d749faa7a2911663e6b3b3
-* author:	Jesper Landin (https://sketchfab.com/JesperLandin)
-
-Model License:
-* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
-* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works
