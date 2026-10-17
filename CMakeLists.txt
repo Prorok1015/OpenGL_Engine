@@ -24,6 +24,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ThirdParty)
 # SNK_SANITIZE option + snk::sanitizers interface target (project targets only).
 include(Sanitizers)
+# snk::compiler_warnings interface target (project targets only, via snk::common).
+include(CompilerWarnings)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -31,6 +33,7 @@ include(Sanitizers)
 add_subdirectory(core)
 
 add_subdirectory(Editor)
+snk_isolate_third_party_warnings()
 
 enable_testing()
 
