@@ -4,14 +4,22 @@
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
 
+namespace {
+	// as_double() throws on JSON integers (`"fov": 60`); to_number accepts any numeric kind.
+	float read_number(const json::value& v)
+	{
+		return v.to_number<float>();
+	}
+}
+
 void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	if (data.contains("fov"))
-		m_fov = data.at("fov").as_double();
+		m_fov = read_number(data.at("fov"));
 	if (data.contains("near_distance"))
-		m_near_distance = data.at("near_distance").as_double();
+		m_near_distance = read_number(data.at("near_distance"));
 	if (data.contains("far_distance"))
-		m_far_distance = data.at("far_distance").as_double();
+		m_far_distance = read_number(data.at("far_distance"));
 
 	if (auto* trans = data.if_contains("transform")) {
 		if (trans->as_object().contains("rotation"))
@@ -21,13 +29,16 @@ void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::o
 	}
 
 	// Render targets
+	// Replace (not append) so an override layered on a copy of its parent does not duplicate targets.
 	if (auto* arr = data.if_contains("color_targets")) {
+		m_color_targets.clear();
 		for (const auto& v : arr->as_array()) {
 			auto tag_str = v.as_string();
 			m_color_targets.push_back(res::tag(std::string(tag_str)));
 		}
 	} else if (data.contains("texture")) {
 		// Backward compatibility: old single "texture" field → color_targets[0]
+		m_color_targets.clear();
 		auto tag_str = data.at("texture").as_string();
 		m_color_targets.push_back(res::tag(std::string(tag_str)));
 	}
@@ -44,6 +55,11 @@ void scn::camera_desc::serialize(json::object& data) const
 	data["fov"] = m_fov;
 	data["near_distance"] = m_near_distance;
 	data["far_distance"] = m_far_distance;
+
+	json::object transform;
+	transform["rotation"] = json::value_from(m_rotation);
+	transform["position"] = json::value_from(m_position);
+	data["transform"] = std::move(transform);
 
 	if (!m_color_targets.empty()) {
 		json::array arr;
