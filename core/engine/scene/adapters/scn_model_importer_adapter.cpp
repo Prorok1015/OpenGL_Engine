@@ -15,6 +15,9 @@
 
 #include "scn_assimp_resource_system_wrapper.h"
 
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/euler_angles.hpp>
+
 #include "ds/ds_svg_writer.hpp"
 #include <unordered_set>
 
@@ -63,8 +66,10 @@ namespace {
 		aiQuaternion rot;
 		m.Decompose(scale, rot, pos);
 		glm::quat q = convert_to_glm(rot);
-		glm::vec3 euler_rad = glm::eulerAngles(q);
-		return { convert_to_glm(pos), glm::degrees(euler_rad), convert_to_glm(scale) };
+		// prefab_node rebuilds rotation as yawPitchRoll(y, x, z) (Y*X*Z order), so decompose in the same order.
+		float yaw = 0.f, pitch = 0.f, roll = 0.f;
+		glm::extractEulerAngleYXZ(glm::mat4_cast(q), yaw, pitch, roll);
+		return { convert_to_glm(pos), glm::degrees(glm::vec3{ pitch, yaw, roll }), convert_to_glm(scale) };
 	}
 
 	void log_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, std::string_view name)
@@ -96,7 +101,7 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
         return {};
     }
 
-	std::string path = std::format("memory://{0}/{1}.desc", tag.path(), tag.pure_name());
+	std::string path = std::format("memory://{0}{1}.desc", tag.path(), tag.pure_name());
 	res::tag actual_tag = res::tag{ path };
     json::object jsdata;
 	jsdata["__type"] = "prefab_desc";
@@ -272,6 +277,17 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 	return jsmaterial;
 }
 
+std::string unique_child_name(const json::object& children, const std::string& name)
+{
+	if (!children.contains(name))
+		return name;
+	for (unsigned int suffix = 1;; ++suffix) {
+		auto candidate = std::format("{}_{}", name, suffix);
+		if (!children.contains(candidate))
+			return candidate;
+	}
+}
+
 void store_data(std::vector<std::byte>& data, const auto& value)
 {
 	int begin = data.size();
@@ -313,6 +329,7 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 		ASSERT_MSG(stride == (geometry.vertices.size() - begin), "Stride mismatch2");
 	}
 
+	const bool has_uv = mesh->HasTextureCoords(0);
 	for (unsigned int i = 0; i < mesh->mNumFaces; i++)
 	{
 		aiFace face = mesh->mFaces[i];
@@ -321,9 +338,12 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 		}
 
 		for (unsigned int j = 0; j < face.mNumIndices; j += 3) {
-			auto uv1 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j]]);
-			auto uv2 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 1]]);
-			auto uv3 = (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][face.mIndices[j + 2]]);
+			auto uv_at = [&](unsigned int idx) {
+				return has_uv ? (glm::vec2)convert_to_glm(mesh->mTextureCoords[0][idx]) : glm::vec2{ 0.f };
+			};
+			auto uv1 = uv_at(face.mIndices[j]);
+			auto uv2 = uv_at(face.mIndices[j + 1]);
+			auto uv3 = uv_at(face.mIndices[j + 2]);
 
 			ds::bbox box;
 			ds::expand(box, uv1);
@@ -462,7 +482,8 @@ json::object build_prefab_node(
 		mesh_child["components"] = mesh_components;
 
 		std::string mesh_child_name = "mesh_" + std::string(mesh->mName.C_Str());
-		children[mesh_child_name] = mesh_child;
+		// Same-named meshes under one node must not overwrite each other.
+		children[unique_child_name(children, mesh_child_name)] = mesh_child;
 	}
 
 	// Recursive children
