@@ -5,5 +5,5 @@ res::text_resource::text_resource(const tag& tag, const std::vector<std::byte>& 
 	: resource_entry(tag)
 {
 	content.resize(string.size());
-	std::memcpy(content.data(), string.data(), string.size());
+	if (!string.empty()) std::memcpy(content.data(), string.data(), string.size());
 }

@@ -19,7 +19,10 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_TypeConstant)
 // reference that is never dereferenced. Keep deserialize free of desc_system use or this breaks.
 static desc::desc_system& shared_desc_system()
 {
-	return *static_cast<desc::desc_system*>(nullptr);
+	// Aligned, non-null storage (never constructed or dereferenced): binding a reference to null trips UBSan.
+	// (desc_system is an incomplete type here, so use max-aligned dummy bytes.)
+	alignas(std::max_align_t) static unsigned char dummy_bytes[64];
+	return *reinterpret_cast<desc::desc_system*>(dummy_bytes);
 }
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
