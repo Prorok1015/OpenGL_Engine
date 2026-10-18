@@ -265,7 +265,7 @@ void wire_controller_callbacks(
 		egLOG("Editor", "Editor world reloaded");
 	};
 	if (auto lvl_mgr = state.lvl_manager.lock()) {
-		lvl_mgr->set_on_full_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
+		lvl_mgr->set_on_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
 	}
 	level_ctrl.on_need_save_dialog = [&layer, &level_ctrl] {
 		layer.register_implicit("edt/save_level", [&level_ctrl] { return level_ctrl.save_level(); });

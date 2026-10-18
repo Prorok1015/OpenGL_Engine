@@ -33,7 +33,7 @@ edt::level_controller::~level_controller()
 	if (m_state.editor_tag.is_valid())
 		m_res.unwatch(m_state.editor_tag, this);
 	if (auto lvl_mgr = m_state.lvl_manager.lock())
-		lvl_mgr->set_on_full_reload(nullptr);
+		lvl_mgr->set_on_reload(nullptr);
 }
 
 // ─── New / Save / Quick-save ─────────────────────────────────────────────────

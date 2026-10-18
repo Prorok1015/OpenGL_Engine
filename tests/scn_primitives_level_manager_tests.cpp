@@ -221,7 +221,7 @@ BOOST_AUTO_TEST_CASE(HotReload_FullReloadKeepsRuntimeCreatedWorlds)
 	rt_reg.emplace<scn::name_component>(rt_reg.create(), scn::name_component{ "rt_ent" });
 
 	int reloads = 0;
-	mgr.set_on_full_reload([&reloads] { ++reloads; });
+	mgr.set_on_reload([&reloads] { ++reloads; });
 	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
 	rs->signal_changed(tag);
 	mgr.update(std::chrono::duration<float>(0.001f));
@@ -243,14 +243,37 @@ BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadKeepsRuntimeCreatedWorlds)
 	lvl.create_world("rt", lvl.acquire_free_world_id());
 
 	int reloads = 0;
-	mgr.set_on_full_reload([&reloads] { ++reloads; });
+	mgr.set_on_reload([&reloads] { ++reloads; });
 	put("lv.desc", LEVEL_V2_SAME_NAMES);
 	rs->signal_changed(tag);
 	mgr.update(std::chrono::duration<float>(0.001f));
 
-	BOOST_TEST(reloads == 0); // an extra runtime world must not turn this into a full reload
+	BOOST_TEST(reloads == 1); // the editor resyncs its system lists on a systems-only reload too
 	BOOST_TEST(lvl.get_world_count() == 3u);
-	BOOST_TEST(has_named(lvl.get_world("w0").state(), "c1"));
+	BOOST_TEST(has_named(lvl.get_world("w0").state(), "c1")); // an extra runtime world must not turn this into a full reload
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_FailedWorldDescKeepsTheCurrentLevelAndSkipsTheCallback)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load(tag));
+	auto& lvl = mgr.get_level();
+	lvl.create_world("rt", lvl.acquire_free_world_id());
+
+	int reloads = 0;
+	mgr.set_on_reload([&reloads] { ++reloads; });
+	// the second world is a tag of a file that does not exist
+	put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":[]},"memory://t/missing_world.desc"]})");
+	rs->signal_changed(tag);
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(reloads == 0);
+	BOOST_TEST(lvl.get_world_count() == 3u);
+	BOOST_TEST(lvl.has_world("w0"));
+	BOOST_TEST(lvl.has_world("w1"));
+	BOOST_TEST(lvl.has_world("rt"));
+	BOOST_TEST(has_named(lvl.get_world("w0").state(), "c1")); // not rebuilt
 }
 
 BOOST_AUTO_TEST_CASE(HotReload_DescWorldReplacesRuntimeWorldWithTheSameName)
