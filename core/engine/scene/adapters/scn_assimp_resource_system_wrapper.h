@@ -2,6 +2,7 @@
 #include <snk/common/common.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
+#include <assimp/IOStream.hpp>
 #include <assimp/IOSystem.hpp>
 
 namespace scn

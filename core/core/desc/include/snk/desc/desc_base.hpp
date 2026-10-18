@@ -21,7 +21,7 @@ namespace desc
 	public:
 		desc_base() = default;
 		// Do not copy m_guid — a copy is a new file, so it must get its own __guid (same as m_tag).
-		desc_base(const desc_base& other) : type(other.type) {};
+		desc_base(const desc_base& other) : res::resource_entry(), type(other.type) {};
 		desc_base(desc_base&&) = default;
 		desc_base& operator=(desc_base&&) = default;
 		virtual ~desc_base() = default;

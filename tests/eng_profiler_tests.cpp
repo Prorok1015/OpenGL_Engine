@@ -91,7 +91,7 @@ BOOST_AUTO_TEST_CASE(FrameMark_DoesNotPushEntry)
 
 BOOST_AUTO_TEST_CASE(Snapshot_ReturnsEntries)
 {
-	auto& td = ds::profiler_get_thread_data();
+	(void)ds::profiler_get_thread_data();
 
 	{
 		ds::scoped_profiler_zone zone("SnapshotTest");

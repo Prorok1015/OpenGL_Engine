@@ -16,7 +16,7 @@ void gui::menu_layout_manager::process()
 	}
 
 	std::vector<menu_tree_item*> del;
-	for (int i = 0; i < checked_menu_item_list.size(); ++i) {
+	for (std::size_t i = 0; i < checked_menu_item_list.size(); ++i) {
 		menu_tree_item* item = checked_menu_item_list[i];
 		item->checked = item->uiCallback();
 		if (!item->checked) {

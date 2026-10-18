@@ -2,12 +2,6 @@
 #include "open_gl_specific.h"
 #include <snk/common/engine_assert.h>
 
-const GLint gBufferTypeToGlBufferType[] =
-{
-	GL_ARRAY_BUFFER,
-	GL_ELEMENT_ARRAY_BUFFER,
-};
-
 rnd::driver::gl::buffer::buffer()
 {
 	glCreateBuffers(1, &buffer_id);

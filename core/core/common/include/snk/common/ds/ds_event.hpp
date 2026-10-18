@@ -29,7 +29,7 @@ namespace ds
 			bool contains(const T& val) const { return std::find(storage.begin(), storage.end(), val) != storage.end(); }
 
 			void erase(int idx) {
-				for (int i = idx; i < storage.size() - 1; ++i) {
+				for (std::size_t i = static_cast<std::size_t>(idx); i < storage.size() - 1; ++i) {
 					std::swap(storage[i], storage[i + 1]);
 				}
 				storage.pop_back();

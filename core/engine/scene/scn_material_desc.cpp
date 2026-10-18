@@ -68,6 +68,8 @@ void scn::tag_invoke(json::value_from_tag, json::value& out, const scn::pass_que
 	case scn::pass_queue::MIX:
 		out = json::value("mix");
 		break;
+	case scn::pass_queue::NONE:
+		break;
 	}
 }
 

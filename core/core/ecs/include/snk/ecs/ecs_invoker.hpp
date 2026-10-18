@@ -23,7 +23,7 @@ struct bind_res {
 // Context passed to the invoker at runtime
 struct runtime_context {
     // Callback to get any world's registry by ID
-    std::function<entt::registry &(size_t)> get_world_registry;
+    std::function<entt::registry &(size_t)> get_world_registry{};
     entt::registry& current_registry;
     size_t current_world_id = 0;
 };

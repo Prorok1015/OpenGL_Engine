@@ -17,9 +17,9 @@ namespace scn
 			: m_id(id), m_name(name) {
 		}
 		~world() = default;
-		world& operator=(const world&) = default;
+		world& operator=(const world&) = delete;
 		world& operator=(world&&) = default;
-		world(const world&) = default;
+		world(const world&) = delete;
 		world(world&&) = default;
 
 		entt::registry& state() { return m_state; }

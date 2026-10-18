@@ -93,8 +93,8 @@ BOOST_AUTO_TEST_CASE(AllocDeallocCycles) {
 
 BOOST_AUTO_TEST_CASE(GrowsWhenExhausted) {
 	ds::pool_resource pool(32, 2);
-	pool.allocate(32, 1);
-	pool.allocate(32, 1);
+	(void)pool.allocate(32, 1);
+	(void)pool.allocate(32, 1);
 	BOOST_TEST(pool.free_blocks() == 0u);
 	// Next allocation triggers growth
 	void* p = pool.allocate(32, 1);
@@ -118,7 +118,7 @@ BOOST_AUTO_TEST_CASE(MultipleGrowths) {
 BOOST_AUTO_TEST_CASE(ResetRestoresAllBlocks) {
 	ds::pool_resource pool(64, 8);
 	for (int i = 0; i < 8; ++i) {
-		pool.allocate(64, 1);
+		(void)pool.allocate(64, 1);
 	}
 	BOOST_TEST(pool.free_blocks() == 0u);
 	pool.reset();
@@ -129,7 +129,7 @@ BOOST_AUTO_TEST_CASE(ResetRestoresAllBlocks) {
 BOOST_AUTO_TEST_CASE(CanAllocateAfterReset) {
 	ds::pool_resource pool(32, 4);
 	for (int i = 0; i < 4; ++i) {
-		pool.allocate(32, 1);
+		(void)pool.allocate(32, 1);
 	}
 	pool.reset();
 	// Should be able to allocate all blocks again
@@ -144,7 +144,7 @@ BOOST_AUTO_TEST_CASE(ResetAfterGrowthIncludesAllChunks) {
 	ds::pool_resource pool(32, 2);
 	// Allocate 4 blocks → triggers 1 growth
 	for (int i = 0; i < 4; ++i) {
-		pool.allocate(32, 1);
+		(void)pool.allocate(32, 1);
 	}
 	BOOST_TEST(pool.total_blocks() == 4u);
 	pool.reset();

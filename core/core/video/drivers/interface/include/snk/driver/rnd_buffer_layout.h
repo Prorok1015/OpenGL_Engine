@@ -25,6 +25,7 @@ namespace rnd::driver
 		case SHADER_DATA_TYPE::VEC3_I:   return sizeof(int) * 3;
 		case SHADER_DATA_TYPE::VEC4_I:   return sizeof(glm::ivec4);
 		case SHADER_DATA_TYPE::BOOL:     return sizeof(bool);
+		case SHADER_DATA_TYPE::UNKNOWN:  break;
 		}
 
 		return 0;
@@ -60,6 +61,7 @@ namespace rnd::driver
 			case SHADER_DATA_TYPE::VEC3_I:  return 3;
 			case SHADER_DATA_TYPE::VEC4_I:  return 4;
 			case SHADER_DATA_TYPE::BOOL:    return 1;
+			case SHADER_DATA_TYPE::UNKNOWN: break;
 			}
 
 			return 0;

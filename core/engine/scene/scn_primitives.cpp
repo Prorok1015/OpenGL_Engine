@@ -128,7 +128,7 @@ scn::model_cube scn::generate_cube()
     //    23,21,22,
     //};
 
-    for (int i = 0; i < inc.size(); i += 3) {
+    for (std::size_t i = 0; i < inc.size(); i += 3) {
         auto& p1 = vex[inc[i]];
         auto& p2 = vex[inc[i + 1]];
         auto& p3 = vex[inc[i + 2]];

@@ -78,7 +78,7 @@ namespace rnd
 			auto end() { return shader_tags.end(); }
 			auto begin() const { return shader_tags.begin(); }
 			auto end() const { return shader_tags.end(); }
-			auto operator<=>(const shader_program_data&) const noexcept = default;
+			bool operator==(const shader_program_data&) const noexcept = default;
 
 		private:
 			ds::fixed_vector<res::tag, 3> shader_tags;
@@ -89,7 +89,7 @@ namespace rnd
 			std::unordered_map<std::string, std::string> constants;
 			std::vector<std::string> defines;
 			shader_program_data program = shader_program_data::build();
-			auto operator<=>(const constant_data&) const noexcept = default;
+			bool operator==(const constant_data&) const noexcept = default;
 		};
 
 		struct runtime_data

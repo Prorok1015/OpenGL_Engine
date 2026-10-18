@@ -33,21 +33,6 @@ const GLenum gShaderTypeToGLShaderType[] =
 	GL_GEOMETRY_SHADER,
 };
 
-const GLint gTextureFilteringToGlFiltering[] =
-{
-	GL_NEAREST,
-	GL_LINEAR,
-	GL_LINEAR_MIPMAP_LINEAR,
-};
-
-const GLint gTextureWrappingToGlWrapping[] =
-{
-	GL_REPEAT,
-	GL_MIRRORED_REPEAT,
-	GL_CLAMP_TO_EDGE,
-	GL_CLAMP_TO_BORDER,
-};
-
 // Conversion tables for OpenGL constants
 const GLenum gDepthFuncToGL[] = {
 	GL_LESS,

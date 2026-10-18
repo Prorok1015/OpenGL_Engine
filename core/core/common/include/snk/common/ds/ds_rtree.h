@@ -171,8 +171,8 @@ namespace ds
 			using entry = entry_t<T, KEY>;
 			using index_type = data_storage_policy::index_type;
 
-			KEY box;
-			ds::fixed_vector<entry, MAX_ENTRIES + 1> entries;
+			KEY box{};
+			ds::fixed_vector<entry, MAX_ENTRIES + 1> entries{};
 			bool is_leaf_flag = true;
 			index_type parent = INVALID_NODE;
 

@@ -61,7 +61,7 @@ namespace scn {
 		ecs_assembler(const ecs_assembler&) = delete;
 		ecs_assembler& operator=(const ecs_assembler&) = delete;
 		ecs_assembler(ecs_assembler&&) = default;
-		ecs_assembler& operator=(ecs_assembler&&) = default;
+		ecs_assembler& operator=(ecs_assembler&&) = delete;
 
 		void register_desc_spawner(const std::string_view desc_type, desc_spawner_fn spawner, desc_patcher_fn patcher = nullptr, spawner_category category = spawner_category::component) {
 			m_spawners[std::string{ desc_type }] = { std::move(spawner), std::move(patcher), category };

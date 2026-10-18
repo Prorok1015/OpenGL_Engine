@@ -46,7 +46,10 @@ namespace {
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
-	: desc_system(desc_system_)
+	: m_scene_editor(m_state)
+	, m_world_ctrl(m_state, res_sys, desc_system_)
+	, m_level_ctrl(m_state, res_sys, desc_system_, m_scene_editor, m_world_ctrl)
+	, desc_system(desc_system_)
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
 	, m_gui(gui_sys)
@@ -55,9 +58,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
 	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
 	, m_component_ui_registry(std::make_unique<edt::component_ui_registry>())
-	, m_scene_editor(m_state)
-	, m_world_ctrl(m_state, res_sys, desc_system_)
-	, m_level_ctrl(m_state, res_sys, desc_system_, m_scene_editor, m_world_ctrl)
 {
 	input = std::make_shared<edt::input_manager>();
 }

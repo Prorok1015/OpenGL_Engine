@@ -34,11 +34,6 @@ glm::vec3 convert_to_glm(const aiVector3D& v)
 	return glm::vec3(v.x, v.y, v.z);
 }
 
-glm::vec4 convert_to_glm(const aiColor4D& v)
-{
-	return glm::vec4(v.r, v.g, v.b, v.a);
-}
-
 glm::mat4 convert_to_glm(const aiMatrix4x4& m)
 {
 	glm::mat4 local(1);
@@ -321,8 +316,6 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 	}
 
 	for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-		size_t begin = geometry.vertices.size();
-
 		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
 		if (mesh->HasNormals()) {
 			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));

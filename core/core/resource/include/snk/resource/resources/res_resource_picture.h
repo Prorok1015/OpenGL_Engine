@@ -23,7 +23,6 @@ namespace res
 		unsigned char* data_ = nullptr;
 		int channels_ = 0;
 		glm::ivec2 size_{ 0, 0 };
-		bool is_embedded_picture = false;
 	};
 
 }

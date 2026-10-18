@@ -45,7 +45,7 @@ void stb_image::Image::free_image_data(unsigned char* data)
 stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, int len)
 {
 	Image result;
-	if (result.data_ = stbi_load_from_memory(data, len, &result.width_, &result.height_, &result.channels_, 0))
+	if ((result.data_ = stbi_load_from_memory(data, len, &result.width_, &result.height_, &result.channels_, 0)))
 	{
 		result.size_ = result.width_ * result.height_ * result.channels_;
 		return result;
@@ -56,7 +56,7 @@ stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, i
 bool stb_image::Image::read(const std::string_view filename)
 {
 	set_image_flip(flipFlag_);
-	if (data_ = stbi_load(filename.data(), &width_, &height_, &channels_, 0))
+	if ((data_ = stbi_load(filename.data(), &width_, &height_, &channels_, 0)))
 	{
 		size_ = width_ * height_ * channels_;
 		return true;
@@ -114,6 +114,9 @@ void stb_image::Image::write_to_memory(ImageType type, const unsigned char* data
 			stbi_write_tga_to_func(write_callback, static_cast<void*>(&out_data), width, height, channels, data);
 			break;
 		}
+
+		case ImageType::NONE:
+			break;
 	}
 }
 
@@ -150,6 +153,8 @@ bool stb_image::Image::write(const std::string_view filename)
 		break;
 	case ImageType::TGA:
 		return stbi_write_tga(filename.data(), width_, height_, channels_, data_);
+		break;
+	case ImageType::NONE:
 		break;
 	}
 

@@ -71,7 +71,7 @@ BOOST_AUTO_TEST_CASE(FrontAndBack) {
 BOOST_AUTO_TEST_CASE(AtBoundsCheck_Throws) {
 	ds::fixed_vector<int, 3> v = {1};
 	BOOST_CHECK_EQUAL(v.at(0), 1);
-	BOOST_CHECK_THROW(v.at(1), std::out_of_range);
+	BOOST_CHECK_THROW((void)v.at(1), std::out_of_range);
 }
 
 BOOST_AUTO_TEST_CASE(Iterator_RangeFor) {

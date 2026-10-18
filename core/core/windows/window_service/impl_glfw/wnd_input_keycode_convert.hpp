@@ -117,6 +117,7 @@ namespace wnd::convert
         case core::inp::KEYBOARD_BUTTONS::KP_8: return GLFW_KEY_KP_8;
         case core::inp::KEYBOARD_BUTTONS::KP_9: return GLFW_KEY_KP_9;
         case core::inp::KEYBOARD_BUTTONS::KP_DECIMAL: return GLFW_KEY_KP_DECIMAL;
+        case core::inp::KEYBOARD_BUTTONS::KP_DIVIDE: return GLFW_KEY_KP_DIVIDE;
         case core::inp::KEYBOARD_BUTTONS::KP_MULTIPLY: return GLFW_KEY_KP_MULTIPLY;
         case core::inp::KEYBOARD_BUTTONS::KP_SUBTRACT: return GLFW_KEY_KP_SUBTRACT;
         case core::inp::KEYBOARD_BUTTONS::KP_ADD: return GLFW_KEY_KP_ADD;
@@ -131,6 +132,7 @@ namespace wnd::convert
         case core::inp::KEYBOARD_BUTTONS::RIGHT_ALT: return GLFW_KEY_RIGHT_ALT;
         case core::inp::KEYBOARD_BUTTONS::RIGHT_SUPER: return GLFW_KEY_RIGHT_SUPER;
         case core::inp::KEYBOARD_BUTTONS::MENU: return GLFW_KEY_MENU;
+        case core::inp::KEYBOARD_BUTTONS::COUNT: break;
         }
         return -1;
     }
@@ -265,6 +267,8 @@ namespace wnd::convert
         case core::inp::MOUSE_BUTTONS::BTN_6:  return GLFW_MOUSE_BUTTON_6;
         case core::inp::MOUSE_BUTTONS::BTN_7:  return GLFW_MOUSE_BUTTON_7;
         case core::inp::MOUSE_BUTTONS::BTN_8:  return GLFW_MOUSE_BUTTON_8;
+        case core::inp::MOUSE_BUTTONS::LAST:
+        case core::inp::MOUSE_BUTTONS::COUNT: break;
         }
         return -1;
     }

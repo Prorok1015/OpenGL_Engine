@@ -1,6 +1,7 @@
 #include "rnd_gl_vertex_array.h"
 #include "glad/glad.h"
 #include "open_gl_specific.h"
+#include <snk/common/logger/engine_log.h>
 
 static GLenum ShaderDataTypeToOpenGLBaseType(rnd::driver::SHADER_DATA_TYPE type)
 {
@@ -18,6 +19,7 @@ static GLenum ShaderDataTypeToOpenGLBaseType(rnd::driver::SHADER_DATA_TYPE type)
 	case SHADER_DATA_TYPE::VEC3_I:     return GL_INT;
 	case SHADER_DATA_TYPE::VEC4_I:     return GL_INT;
 	case SHADER_DATA_TYPE::BOOL:     return GL_BOOL;
+	case SHADER_DATA_TYPE::UNKNOWN:  break;
 	}
 
 	return 0;
@@ -108,6 +110,9 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			glVertexArrayBindingDivisor(vertex_array_id, binding_index, 1);
 			
 		} break;
+		case SHADER_DATA_TYPE::UNKNOWN:
+			egLOG_WARN("opengl/vertex_array", "vertex element '{}' has an unknown data type and is skipped", element.Name);
+			break;
 
 		}
 	}

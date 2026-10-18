@@ -3,9 +3,9 @@
 #include <snk/resource/res_system.h>
 
 rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, desc::desc_system& d, res::resource_system& res_sys)
-	: drv(_driver)
-	, desc_system(d)
+	: desc_system(d)
 	, m_res_sys(res_sys)
+	, drv(_driver)
 {
 }
 

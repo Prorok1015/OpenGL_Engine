@@ -18,7 +18,7 @@ namespace res
 	{
 	public:
 		vfs_resolver(const std::string_view prt)
-			: watcher(io), core::res::res_resolver_interface(prt) {}
+			: core::res::res_resolver_interface(prt), watcher(io) {}
 		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points);
 		~vfs_resolver();
 
