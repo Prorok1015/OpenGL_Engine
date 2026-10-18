@@ -117,6 +117,7 @@ namespace wnd::convert
         case core::inp::KEYBOARD_BUTTONS::KP_8: return GLFW_KEY_KP_8;
         case core::inp::KEYBOARD_BUTTONS::KP_9: return GLFW_KEY_KP_9;
         case core::inp::KEYBOARD_BUTTONS::KP_DECIMAL: return GLFW_KEY_KP_DECIMAL;
+        case core::inp::KEYBOARD_BUTTONS::KP_DIVIDE: return GLFW_KEY_KP_DIVIDE;
         case core::inp::KEYBOARD_BUTTONS::KP_MULTIPLY: return GLFW_KEY_KP_MULTIPLY;
         case core::inp::KEYBOARD_BUTTONS::KP_SUBTRACT: return GLFW_KEY_KP_SUBTRACT;
         case core::inp::KEYBOARD_BUTTONS::KP_ADD: return GLFW_KEY_KP_ADD;
