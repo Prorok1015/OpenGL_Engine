@@ -21,7 +21,7 @@ target_link_libraries(package_consumer PRIVATE snk::engine snk::engine_api)
 # already live under include/snk/<name>/, compiled against the installed SDK. Off by default; the
 # SDK CI jobs turn it on. Extend SNK_CONSUMER_HEADER_COMPONENTS as more components migrate.
 option(SNK_CONSUMER_HEADER_CHECK "Compile one TU per installed public header of the migrated components" OFF)
-set(SNK_CONSUMER_HEADER_COMPONENTS application core_input window driver ecs desc resource)
+set(SNK_CONSUMER_HEADER_COMPONENTS application core_input window driver ecs desc resource common config)
 if(SNK_CONSUMER_HEADER_CHECK)
 	get_filename_component(_sdk_prefix "${snake_sdk_DIR}/../../.." ABSOLUTE)
 	set(_header_tus "")
