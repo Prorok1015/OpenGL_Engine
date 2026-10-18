@@ -3,7 +3,7 @@
 #include <vector>
 #include <array>
 #include <cstdint>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 namespace rnd::driver { class driver_interface; }
 

@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ds/ds_type_id.hpp"
+#include <snk/common/ds/ds_type_id.hpp>
 #include <array>
 #include <atomic>
 #include <set>

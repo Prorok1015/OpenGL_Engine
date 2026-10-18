@@ -1,5 +1,5 @@
 #pragma once
-#include "ds/ds_store.hpp"
+#include <snk/common/ds/ds_store.hpp>
 
 namespace app
 {

@@ -1,7 +1,7 @@
 #pragma once
 #include <format>
 #include <string_view>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 // Assert policy:
 //   ASSERT_MSG / ASSERT_FAIL  - internal invariants (programmer bugs). Active when NDEBUG is not

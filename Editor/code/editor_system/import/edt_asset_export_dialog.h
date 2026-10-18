@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include "edt_model_importer.h"
 #include "edt_asset_exporter.h"
 #include "edt_file_dialog.h"

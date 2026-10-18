@@ -1,6 +1,6 @@
 #include "rnd_gl_driver.h"
 #include "open_gl_specific.h"
-#include "ds/ds_fixed_vector.hpp"
+#include <snk/common/ds/ds_fixed_vector.hpp>
 #include <glad/glad.h>
 #include <rnd_gl_shader.h>
 #include <rnd_gl_texture.h>
@@ -8,8 +8,8 @@
 #include <rnd_gl_buffer.h>
 #include <rnd_gl_uniform_buffer.h>
 #include <rnd_gl_ssbo_buffer.h>
-#include <engine_log.h>
-#include <engine_assert.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 
 const GLenum gRenderModeToGLRenderMode[] =
 {

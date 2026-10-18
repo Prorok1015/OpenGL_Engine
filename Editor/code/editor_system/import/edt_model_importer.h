@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/resource/res_tag.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>

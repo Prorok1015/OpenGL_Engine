@@ -4,7 +4,7 @@
 #include "gui_debug_layer.h"
 #include "gui_gl_backend.h"
 #include "gui_platform_backend.h"
-#include "engine_assert.h"
+#include <snk/common/engine_assert.h>
 #include <filesystem>
 
 void engine::gui::gui_init(ds::app_data_storage& data)

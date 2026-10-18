@@ -1,6 +1,6 @@
 #include "scn_skin_weights_desc.h"
 #include <snk/desc/desc_system.h>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include "skinning/rnd_skinning_manager.h"
 
 void scn::skin_weights_desc::deserialize(desc::desc_system& desc_system, const json::object& data)

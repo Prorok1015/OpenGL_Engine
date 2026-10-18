@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <cstdint>
 #include <vector>
-#include "mem_pool_allocator.h"
+#include <snk/common/mem_pool_allocator.h>
 
 BOOST_AUTO_TEST_SUITE(MemPoolAllocatorTests)
 

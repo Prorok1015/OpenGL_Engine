@@ -1,8 +1,8 @@
 #pragma once
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
-#include "engine_assert.h"
-#include "engine_log.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <cstddef>
 #include <exception>

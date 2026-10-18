@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
@@ -14,7 +14,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace desc
 {

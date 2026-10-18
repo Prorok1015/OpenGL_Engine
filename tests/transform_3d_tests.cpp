@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/test/tools/floating_point_comparison.hpp>
-#include "eng_transform_3d.hpp"
+#include <snk/common/eng_transform_3d.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 BOOST_AUTO_TEST_SUITE(Transform3DTests)

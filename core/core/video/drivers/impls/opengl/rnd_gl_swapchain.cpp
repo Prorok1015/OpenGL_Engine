@@ -1,8 +1,8 @@
 #include "rnd_gl_swapchain.h"
-#include <common.h>
+#include <snk/common/common.h>
 #include <glad/glad.h>
 #include "rnd_gl_driver.h"
-#include <engine_log.h>
+#include <snk/common/logger/engine_log.h>
 
 namespace {
 	// GLADloadproc is a bare function pointer, so the surface travels through a global during the load.

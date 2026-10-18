@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ds/ds_bit_frags.hpp"
+#include <snk/common/ds/ds_bit_frags.hpp>
 
 // Define a sample enum for testing
 enum class test_flags {

@@ -4,7 +4,7 @@
                        // transitively via scn_material_desc.h before it was POD-ified, EPIC-49 US-49-5)
 #include "scn_material_desc.h"
 #include "geom/rnd_geometry_desc.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	// Describes a renderable mesh node for use within prefab hierarchies.

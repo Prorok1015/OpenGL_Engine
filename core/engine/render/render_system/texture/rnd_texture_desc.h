@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/driver/rnd_texture_interface.h>
 

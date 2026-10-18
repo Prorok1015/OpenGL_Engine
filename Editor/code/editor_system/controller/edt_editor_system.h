@@ -8,7 +8,7 @@
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
 #include "edt_init_helpers.h"
-#include "ds/ds_store.hpp"
+#include <snk/common/ds/ds_store.hpp>
 
 // Forward declarations — full types only needed in .cpp
 namespace desc { class desc_system; class desc_base; }

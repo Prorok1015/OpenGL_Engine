@@ -3,7 +3,7 @@
 #include "wnd_input_keycode_convert.hpp"
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <snk/core_input/inp_input_event.hpp>
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <snk/window/wnd_coordinates.h>
 #include <filesystem>
 

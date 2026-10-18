@@ -22,12 +22,12 @@
 #include "inp_ecs_input_manager.h"
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
-#include "eng_transform_3d.hpp"
+#include <snk/common/eng_transform_3d.hpp>
 #include "level/scn_level_manager.h"
 #include "level/scn_node_index.h"
 #include "level/scn_level.h"
 #include "level/scn_world.h"
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <entt/entt.hpp>
 #include <span>
 #include <glm/gtx/quaternion.hpp>

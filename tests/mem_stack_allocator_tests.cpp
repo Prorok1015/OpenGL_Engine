@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <vector>
 #include <memory_resource>
-#include "mem_stack_allocator.h"
+#include <snk/common/mem_stack_allocator.h>
 
 BOOST_AUTO_TEST_SUITE(MemStackAllocatorTests)
 

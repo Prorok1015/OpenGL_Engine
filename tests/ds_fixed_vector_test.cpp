@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ds/ds_fixed_vector.hpp"
+#include <snk/common/ds/ds_fixed_vector.hpp>
 #include <string>
 
 BOOST_AUTO_TEST_SUITE(DSFixedVectorTests)

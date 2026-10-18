@@ -1,6 +1,6 @@
 #pragma once
-#include "common.h"
-#include "ds/ds_fixed_vector.hpp"
+#include <snk/common/common.h>
+#include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/resource/res_tag.h>
 #include <snk/driver/rnd_shader_interface.h>
 #include <snk/driver/rnd_driver_interface.h>

@@ -4,8 +4,8 @@
 #include <format>
 #include <ostream>
 #include <algorithm>
-#include "engine_assert.h"
-#include "snk_api.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/snk_api.h>
 
 // Note: JSON (de)serialization of res::tag lives in res_tag_json.h (EPIC-49 US-49-4), so this
 // header pulls in neither <boost/json.hpp> nor <glm/glm.hpp>.

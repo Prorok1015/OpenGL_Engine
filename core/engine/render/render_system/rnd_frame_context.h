@@ -1,6 +1,6 @@
 #pragma once
 #include <glm/vec2.hpp>
-#include "ds/ds_store.hpp"
+#include <snk/common/ds/ds_store.hpp>
 
 namespace rnd {
 	class texture_manager;

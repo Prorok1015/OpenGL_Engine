@@ -1,8 +1,8 @@
 #include <snk/application/app_frame_stage.h>
 #include <algorithm>
 #include <exception>
-#include "engine_log.h"
-#include "mem_allocator.h"
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/mem_allocator.h>
 
 std::optional<app::builtin_stage> app::parse_builtin_stage(std::string_view name) noexcept
 {

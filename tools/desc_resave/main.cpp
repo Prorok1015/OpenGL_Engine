@@ -11,8 +11,8 @@
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/adapters/res_adapter_worker_base.hpp>
 #include "adapters/scn_model_importer_adapter.h"
-#include "cfg_api.h"
-#include "logger/engine_log.h"
+#include <snk/config/cfg_api.h>
+#include <snk/common/logger/engine_log.h>
 #include "rnd_render_service_init.h"
 #include "scn_ecs_assembler.h"
 #include "scn_registration_scope.h"

@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/ecs/ecs_system_registry.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 #include <span>
 #include <string>
 #include <string_view>

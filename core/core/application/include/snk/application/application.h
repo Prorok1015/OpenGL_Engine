@@ -1,7 +1,7 @@
 #pragma once
-#include "common.h"
-#include "ds/ds_store.hpp"
-#include "snk_api.h"
+#include <snk/common/common.h>
+#include <snk/common/ds/ds_store.hpp>
+#include <snk/common/snk_api.h>
 
 namespace app
 {

@@ -7,8 +7,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include "ds/ds_store.hpp"
-#include "snk_api.h"
+#include <snk/common/ds/ds_store.hpp>
+#include <snk/common/snk_api.h>
 
 namespace app
 {

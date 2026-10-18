@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ds/ds_polymorphic_cast.hpp"
+#include <snk/common/ds/ds_polymorphic_cast.hpp>
 #include <memory>
 
 struct Base {

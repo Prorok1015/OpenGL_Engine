@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 // ECS phases (ARCHITECTURE_REVIEW 9.5). The engine owns a fixed, ordered list of built-in phases;
 // a game may add its own *named* phase anchored before/after a built-in one, but cannot reorder

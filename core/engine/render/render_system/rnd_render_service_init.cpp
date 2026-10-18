@@ -2,7 +2,7 @@
 #include "rnd_render_system.h"
 #include <snk/window/wnd_window_system.h>
 #include "rnd_gl_swapchain.h"
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <stdexcept>
 #include <snk/resource/res_system.h>
 #include "geom/rnd_geometry_desc.h"

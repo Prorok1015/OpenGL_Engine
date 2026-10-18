@@ -1,7 +1,7 @@
-#include "mem_debug_resource.h"
+#include <snk/common/mem_debug_resource.h>
 #include <cstring>
-#include "engine_assert.h"
-#include "logger/engine_log.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 
 namespace ds {
 

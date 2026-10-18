@@ -1,12 +1,12 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
-#include "common.h"
+#include <snk/common/common.h>
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include "ds/ds_fixed_vector.hpp"
-#include "snk_api.h"
+#include <snk/common/ds/ds_fixed_vector.hpp>
+#include <snk/common/snk_api.h>
 #include <snk/window/wnd_gl_surface.h>
 
 namespace wnd

@@ -3,7 +3,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/desc/desc_base.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace desc {
 	class desc_system;

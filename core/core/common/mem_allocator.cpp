@@ -1,8 +1,8 @@
-#include "mem_allocator.h"
+#include <snk/common/mem_allocator.h>
 #include <cstddef>
-#include "mem_linear_allocator.h"
-#include "mem_debug_resource.h"
-#include "engine_log.h"
+#include <snk/common/mem_linear_allocator.h>
+#include <snk/common/mem_debug_resource.h>
+#include <snk/common/logger/engine_log.h>
 
 namespace {
 

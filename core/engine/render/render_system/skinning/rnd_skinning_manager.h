@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/resource/res_tag.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>

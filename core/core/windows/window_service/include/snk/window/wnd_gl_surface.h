@@ -1,5 +1,5 @@
 #pragma once
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace wnd
 {

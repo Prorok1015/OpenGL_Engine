@@ -1,6 +1,6 @@
 #include "rnd_geometry_desc.h"
 #include <snk/desc/desc_system.h>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 std::string_view shader_data_type_to_string(rnd::driver::SHADER_DATA_TYPE type)
 {

@@ -1,9 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include <vector>
 #include <algorithm>
-#include "engine_assert.h"
-#include "ds/ds_rtree.h"
-#include "ds/ds_bbox.hpp"
+#include <snk/common/engine_assert.h>
+#include <snk/common/ds/ds_rtree.h>
+#include <snk/common/ds/ds_bbox.hpp>
 
 // Use the provided alias for a quadratic split r-tree
 using RTree = ds::rtree_q<int, ds::bbox>;

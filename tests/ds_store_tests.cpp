@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ds/ds_store.hpp"
+#include <snk/common/ds/ds_store.hpp>
 #include <stdexcept>
 #include <string>
 #include <string_view>

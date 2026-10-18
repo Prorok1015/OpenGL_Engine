@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include "test_temp_dir.hpp"
 #include <atomic>
 #include <fstream>

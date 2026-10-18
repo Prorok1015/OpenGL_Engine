@@ -1,8 +1,8 @@
 #pragma once
 #include <vector>
 #include <functional>
-#include "ds_type_id.hpp"
-#include "engine_assert.h"
+#include <snk/common/ds/ds_type_id.hpp>
+#include <snk/common/engine_assert.h>
 
 namespace ds
 {

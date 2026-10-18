@@ -3,7 +3,7 @@
 #include "scn_registration_scope.h"
 #include <memory>
 #include <optional>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace inp { class input_event_consumable_listener_interface; }
 

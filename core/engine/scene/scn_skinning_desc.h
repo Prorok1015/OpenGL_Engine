@@ -2,7 +2,7 @@
 #include <snk/desc/desc_base.hpp>
 #include "scn_ecs_assembler.h"
 #include <snk/resource/res_tag.h>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	// Adds skinning data to a mesh entity: skinning_component with reference to

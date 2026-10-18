@@ -5,7 +5,7 @@
 #include <map>
 #include <unordered_map>
 #include <chrono>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 namespace gui
 {

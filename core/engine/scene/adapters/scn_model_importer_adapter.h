@@ -1,9 +1,9 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace res {
 	class resource_system;

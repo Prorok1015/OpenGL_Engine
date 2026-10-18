@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include "inp_input_manager_base.h"
 
 namespace edt

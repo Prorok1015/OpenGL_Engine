@@ -32,7 +32,7 @@
 #include "level/scn_prefab_desc.h"
 #include <snk/window/wnd_window_system.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include <cfg_api.h>
+#include <snk/config/cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <future>

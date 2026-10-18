@@ -2,7 +2,7 @@
 #include <snk/resource/adapters/res_adapter_worker_base.hpp>
 #include <boost/asio.hpp>
 #include <functional>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace core::res
 {

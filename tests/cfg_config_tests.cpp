@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "cfg_api.h"
+#include <snk/config/cfg_api.h>
 #include "test_temp_dir.hpp"
 #include <vector>
 

@@ -1,7 +1,7 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <boost/json.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace json = boost::json;
 

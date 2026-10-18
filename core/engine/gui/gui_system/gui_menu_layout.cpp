@@ -1,8 +1,8 @@
 #include "gui_menu_layout.h"
 #include <imgui.h>
 #include <ranges>
-#include "engine_assert.h"
-#include "engine_log.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 
 void gui::menu_layout_manager::process()
 {

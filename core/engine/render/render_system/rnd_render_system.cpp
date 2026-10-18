@@ -2,7 +2,7 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
 
 void rnd::render_system::begin_frame(frame_context& context)

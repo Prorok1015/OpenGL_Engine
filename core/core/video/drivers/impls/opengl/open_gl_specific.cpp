@@ -3,7 +3,7 @@
 #ifdef _DEBUG
 #include <glad/glad.h>
 #include <string_view>
-#include <engine_log.h>
+#include <snk/common/logger/engine_log.h>
 
 void opengl::glCheckError_(const char* file, int line)
 {

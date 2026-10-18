@@ -5,7 +5,7 @@
 #include <unordered_set>
 #include <snk/resource/res_tag.h>
 #include "scn_ecs_assembler.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace core::res { class resource_system; }
 

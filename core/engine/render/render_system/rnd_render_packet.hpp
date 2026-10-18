@@ -7,8 +7,8 @@
 #include "shader/rnd_scene_shader_desc.h"
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include "rnd_light_data.hpp"
-#include "mem_allocator.h"
-#include "ds/ds_fixed_vector.hpp"
+#include <snk/common/mem_allocator.h>
+#include <snk/common/ds/ds_fixed_vector.hpp>
 
 namespace rnd {
 	struct camera_render_data_t {

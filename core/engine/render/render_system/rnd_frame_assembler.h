@@ -1,7 +1,7 @@
 #pragma once
 #include "rnd_frame_context.h"
 #include "rnd_extractor_interface.h"
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 namespace rnd {
 	struct frame_assembler {

@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace desc
 {

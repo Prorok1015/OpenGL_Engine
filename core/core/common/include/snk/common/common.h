@@ -12,9 +12,9 @@
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
 #include <glm/gtx/quaternion.hpp>
-#include "engine_assert.h"
-#include "ds/ds_event.hpp"
-#include "ds/ds_polymorphic_cast.hpp"
+#include <snk/common/engine_assert.h>
+#include <snk/common/ds/ds_event.hpp>
+#include <snk/common/ds/ds_polymorphic_cast.hpp>
 
 namespace ds {
 	using color = glm::vec4;
