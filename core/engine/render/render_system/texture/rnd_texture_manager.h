@@ -23,6 +23,10 @@ namespace rnd
 			, m_res_sys(res_sys)
 		{}
 
+		// dllexport instantiates the implicit copy members, which cannot compile with unique_ptr values
+		texture_manager(const texture_manager&) = delete;
+		texture_manager& operator=(const texture_manager&) = delete;
+
 		driver::texture_interface* require_texture(const res::tag& tag);
 		driver::texture_interface* generate_texture(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data);
 		driver::texture_interface* generate_texture(const res::tag& tag, rnd::driver::texture_header header);
