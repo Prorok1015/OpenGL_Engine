@@ -38,7 +38,9 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
         int dir_light_count = static_cast<int>(world_lights.directional.size());
 
         for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
-            if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1) {
+            const auto camera_viewport = rnd::effective_camera_viewport(
+                cam.m_viewport, rnd::targets_backbuffer(cam.color_targets), context.backbuffer_size);
+            if (!camera_viewport) {
                 continue;
             }
 
@@ -53,9 +55,9 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 packet.camera.view_position = glm::vec3(trans->world[3]);
             }
 
-            auto& vp = cam.m_viewport;
-            packet.camera.viewport = vp;
-            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp.size.x / (float)vp.size.y,
+            const glm::ivec4 vp_rect = *camera_viewport;
+            packet.camera.viewport = vp_rect;
+            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp_rect.z / (float)vp_rect.w,
                 cam.near_distance, cam.far_distance);
             packet.camera.color_targets = cam.color_targets;
             packet.camera.depth_target = cam.depth_target;

@@ -2,6 +2,8 @@
 #include "edt_editor_system.h"
 #include "desc_system.h"
 #include "app_frame_stage.h"
+#include "edt_camera_redirect.h"
+#include "level/scn_level_manager.h"
 #include "rnd_render_system.h"
 #include "gui_system.h"
 #include "res_system.h"
@@ -16,14 +18,22 @@ namespace components {
 		auto& gui_sys     = data.require<gui::gui_system>();
 		data.construct<edt::editor_system>(desc_system, res_sys, rnd_sys, gui_sys);
 		// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
-		data.require<app::frame_stage_registry>().set_body(app::builtin_stage::ui, [](app::stage_context& c) {
+		auto& stages = data.require<app::frame_stage_registry>();
+		stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
 			c.storage.require<gui::gui_system>().render();
 		});
+		// The 3D view is shown inside an ImGui panel: game cameras draw into textures, not the backbuffer.
+		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
+			[](app::stage_context& c) {
+				edt::redirect_backbuffer_cameras(c.storage.require<scn::level_manager>().get_level());
+			});
 	}
 
 	void editor_term(ds::app_data_storage& data)
 	{
-		data.require<app::frame_stage_registry>().clear_body(app::builtin_stage::ui);
+		auto& stages = data.require<app::frame_stage_registry>();
+		stages.remove_stage("editor_redirect_cameras");
+		stages.clear_body(app::builtin_stage::ui);
 		data.destruct<edt::editor_system>();
 	}
 

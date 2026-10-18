@@ -32,17 +32,20 @@ void opaque_pass::execute(frame_context &context,
     if (vp_width < 1 || vp_height < 1)
       continue;
 
-    res::tag target_tag = rnd::resolve_color_target(packet.camera);
+    const auto target = rnd::select_camera_target(packet.camera);
+    const bool offscreen = target.kind == rnd::render_target_kind::texture;
+    res::tag target_tag = target.texture;
     res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-    auto color_rt = txm_manager.find(target_tag);
+    driver::texture_interface *color_rt =
+        offscreen ? txm_manager.find(target_tag) : nullptr;
 
-    if (color_rt &&
+    if (offscreen && color_rt &&
         (color_rt->width() != vp_width || color_rt->height() != vp_height)) {
       txm_manager.remove(target_tag);
       color_rt = nullptr;
     }
 
-    if (!color_rt) {
+    if (offscreen && !color_rt) {
       rnd::driver::texture_header header;
       header.data.extent.width = vp_width;
       header.data.extent.height = vp_height;
@@ -57,11 +60,17 @@ void opaque_pass::execute(frame_context &context,
     rnd::driver::render_state state;
     state.depth.enabled = true;
     state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
-    state.depth.write_mask = false;
+    // The backbuffer has no z-prepass depth attached: this pass writes the depth the later
+    // passes (skybox) test against.
+    state.depth.write_mask = !offscreen;
     drv.set_render_state(state);
 
-    drv.push_frame_buffer();
-    drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+    if (offscreen) {
+      drv.push_frame_buffer();
+      drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+    } else {
+      drv.clear(rnd::driver::CLEAR_FLAGS::DEPTH_BUFFER);
+    }
     drv.clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER, {glm::vec4(0)});
 
     common_matrix.view = packet.camera.view_matrix;
@@ -89,7 +98,9 @@ void opaque_pass::execute(frame_context &context,
                        dc.vx_begin, dc.ind_begin);
     }
 
-    drv.pop_frame_buffer();
+    if (offscreen) {
+      drv.pop_frame_buffer();
+    }
   }
 }
 } // namespace rnd

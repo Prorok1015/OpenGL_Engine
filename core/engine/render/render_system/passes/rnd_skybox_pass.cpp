@@ -73,10 +73,11 @@ namespace rnd {
 
 			if (vp_width < 1 || vp_height < 1) continue;
 
-			res::tag target_tag = rnd::resolve_color_target(packet.camera);
+			const auto target = rnd::select_camera_target(packet.camera);
+			const bool offscreen = target.kind == rnd::render_target_kind::texture;
 			res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-			auto color_rt = txm_manager.find(target_tag);
-			if (!color_rt) continue;
+			auto color_rt = offscreen ? txm_manager.find(target.texture) : nullptr;
+			if (offscreen && !color_rt) continue;
 
 			rnd::driver::render_state state;
 			state.depth.enabled = true;
@@ -84,8 +85,10 @@ namespace rnd {
 			state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
 			drv.set_render_state(state);
 
-			drv.push_frame_buffer();
-			drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+			if (offscreen) {
+				drv.push_frame_buffer();
+				drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+			}
 			
 			common_matrix.view = packet.camera.view_matrix;
 			common_matrix.projection = packet.camera.projection_matrix;
@@ -99,7 +102,9 @@ namespace rnd {
 			rnd::configure_pass(context, *packet.skybox_material);
 			drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, 36);
 
-			drv.pop_frame_buffer();
+			if (offscreen) {
+				drv.pop_frame_buffer();
+			}
 		}
 	}
 }

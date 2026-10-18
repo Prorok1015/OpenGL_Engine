@@ -34,6 +34,9 @@ void gs::register_platform_frame_stages(app::frame_stage_registry& registry)
 	registry.set_body(app::builtin_stage::extract, [](app::stage_context& c) {
 		auto& frame = c.storage.require<rnd::frame_context>();
 		c.storage.require<rnd::render_system>().begin_frame(frame);
+		if (const auto window = c.storage.require<wnd::window_system>().get_active_window()) {
+			frame.backbuffer_size = window->get_backbuffer_size();
+		}
 		c.storage.require<rnd::frame_assembler>().build_frame(frame);
 	});
 	registry.set_body(app::builtin_stage::render, [](app::stage_context& c) {
