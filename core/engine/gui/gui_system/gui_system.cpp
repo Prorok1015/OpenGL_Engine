@@ -36,6 +36,10 @@ void gui::gui_system::set_is_input_enabled(bool enable)
 void gui::gui_system::render()
 {
 	PROFILE_SCOPE("GuiRender");
+	if (m_pending_scale > 0.f) {
+		backend->rebuild_fonts(m_pending_scale);
+		m_pending_scale = 0.f;
+	}
 	backend->new_frame();
 	render_menues();
 	backend->render();

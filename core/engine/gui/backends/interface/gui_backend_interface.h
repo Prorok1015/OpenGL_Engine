@@ -15,6 +15,8 @@ namespace gui
 
         virtual void init(void* context = nullptr) = 0;
         virtual void set_dpi_scale(float scale) {}
+        // Rebuilds fonts and re-applies style scaling for a new content scale. Call outside an ImGui frame.
+        virtual void rebuild_fonts(float scale) {}
         virtual void new_frame() = 0;
         virtual void render() = 0;
         virtual void shutdown() = 0;

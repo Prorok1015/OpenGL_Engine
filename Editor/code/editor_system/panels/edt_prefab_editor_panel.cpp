@@ -81,10 +81,8 @@ namespace edt
 			// Route ECS input when cursor is over the prefab viewport
 			if (ImGui::IsItemHovered()) {
 				ImVec2 win_pos = ImGui::GetWindowPos();
-				glm::ivec4 rect = {
-					static_cast<int>(win_pos.x), static_cast<int>(win_pos.y),
-					static_cast<int>(win_pos.x + size.x), static_cast<int>(win_pos.y + size.y)
-				};
+				const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
+				const glm::ivec4 rect = edt::make_input_area({ win_pos.x, win_pos.y }, { size.x, size.y }, { fb_scale.x, fb_scale.y });
 				if (m_ecs_input)
 					m_ecs_input->set_input_area(rect);
 				// Disable editor input blocking so mouse events reach ecs_input

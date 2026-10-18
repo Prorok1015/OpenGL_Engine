@@ -6,6 +6,9 @@
 #include "backends/imgui_impl_opengl3.h"
 #include "rnd_gl_texture.h"
 
+gui::gl::gl_imgui_backend::gl_imgui_backend() = default;
+gui::gl::gl_imgui_backend::~gl_imgui_backend() = default;
+
 void gui::gl::gl_imgui_backend::init(void* context)
 {
     // Setup Dear ImGui context
@@ -18,6 +21,7 @@ void gui::gl::gl_imgui_backend::init(void* context)
     io.IniFilename = nullptr;
 
     ImGui::StyleColorsDark();
+    m_base_style = std::make_unique<ImGuiStyle>(ImGui::GetStyle());
 
     // Apply OS DPI scale so the UI looks correct on high-DPI monitors
     if (m_dpi_scale > 1.f) {
@@ -31,6 +35,25 @@ void gui::gl::gl_imgui_backend::init(void* context)
     ImGui_ImplOpenGL3_Init("#version 330 core");
     // TODO: change to load from memory
     ImGui::LoadIniSettingsFromDisk(get_settings_filename().c_str());
+}
+
+void gui::gl::gl_imgui_backend::rebuild_fonts(float scale)
+{
+    if (!m_base_style || scale <= 0.f) {
+        return;
+    }
+
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui_ImplOpenGL3_DestroyFontsTexture();
+    io.Fonts->Clear();
+    ImFontConfig font_cfg;
+    font_cfg.SizePixels = floorf(13.f * scale);
+    io.Fonts->AddFontDefault(&font_cfg);
+    // ImGui_ImplOpenGL3_NewFrame recreates the texture from the new atlas.
+
+    ImGui::GetStyle() = *m_base_style;
+    ImGui::GetStyle().ScaleAllSizes(scale);
+    m_dpi_scale = scale;
 }
 
 void gui::gl::gl_imgui_backend::new_frame()
