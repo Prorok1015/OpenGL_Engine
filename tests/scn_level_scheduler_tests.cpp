@@ -6,6 +6,7 @@
 #include <vector>
 #include "level/scn_level.h"
 #include "scn_ecs_assembler.h"
+#include "ecs_random.hpp"
 #include "scn_model.h"
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
@@ -30,6 +31,9 @@ namespace {
 	void sys_game() { g_log.emplace_back("G"); }
 	void sys_edit() { g_log.emplace_back("E"); }
 
+	std::vector<uint32_t> g_rolls;
+	void sys_roll(ecs::rng& rng) { g_rolls.push_back(rng.next_u32()); }
+
 	std::vector<float> g_dts;
 	void sys_capture_dt(scn::level_res<const scn::delta_time> dt) { g_dts.push_back(dt->dt); }
 
@@ -46,6 +50,8 @@ namespace {
 		{
 			g_log.clear();
 			g_dts.clear();
+			g_rolls.clear();
+			sf.register_system<&sys_roll>("roll");
 			sf.register_system<&sys_fixed>("fixed", { .phase = ecs::phase::fixed_update });
 			sf.register_system<&sys_game>("game");
 			sf.register_system<&sys_edit>("edit", { .run_in_edit = true });
@@ -464,6 +470,56 @@ BOOST_AUTO_TEST_CASE(Mode_SurvivesClearAndReload)
 	lvl.set_mode(ecs::run_mode::edit);
 	lvl.clear();
 	BOOST_TEST((lvl.mode() == ecs::run_mode::edit));
+}
+
+// ---------------------------------------------------------------- seeded rng resource
+
+BOOST_AUTO_TEST_CASE(Rng_SameSeedReplaysTheSameSequenceThroughTheResource)
+{
+	auto run = [&](uint64_t seed) {
+		g_rolls.clear();
+		scn::level lvl(nullptr);
+		lvl.set_seed(seed);
+		auto& w = lvl.create_world("w0", 0);
+		lvl.add_world_systems(w, { "roll" }, sf);
+		for (int i = 0; i < 5; ++i) lvl.update(one_frame);
+		return g_rolls;
+	};
+
+	const auto a = run(42);
+	BOOST_REQUIRE(a.size() == 5u);
+	BOOST_TEST(run(42) == a, boost::test_tools::per_element());
+	BOOST_TEST(run(43) != a);
+}
+
+BOOST_AUTO_TEST_CASE(Rng_WorldsGetIndependentStreams)
+{
+	scn::level lvl(nullptr);
+	auto& w0 = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w0, { "roll" }, sf);
+	auto& w1 = lvl.create_world("w1", 1);
+	lvl.add_world_systems(w1, { "roll" }, sf);
+
+	lvl.update(one_frame);
+	BOOST_REQUIRE(g_rolls.size() == 2u);
+	BOOST_TEST(g_rolls[0] != g_rolls[1]);
+}
+
+BOOST_AUTO_TEST_CASE(Rng_SetSeedReseedsExistingWorlds)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "roll" }, sf);
+
+	lvl.set_seed(7);
+	lvl.update(one_frame);
+	lvl.update(one_frame);
+	lvl.set_seed(7);
+	lvl.update(one_frame);
+
+	BOOST_REQUIRE(g_rolls.size() == 3u);
+	BOOST_TEST(g_rolls[2] == g_rolls[0]); // the sequence restarted
+	BOOST_TEST(lvl.seed() == 7u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -11,6 +11,16 @@
 scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
 	: m_hot_reload_manager(std::move(hot_manager))
 {
+    m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) });
+}
+
+void scn::level::set_seed(uint64_t seed)
+{
+    m_seed = seed;
+    m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) });
+    for (const auto& [id, world] : m_worlds_by_id) {
+        world->state().ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, id) });
+    }
 }
 
 scn::level::~level()
@@ -95,6 +105,7 @@ scn::world& scn::level::create_world(const std::string_view type, uint32_t world
 {
     auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id, type));
     m_worlds_by_id[world_id] = &w; // Register in ID map
+    w.state().ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, world_id) });
 
     if (m_hot_reload_manager) {
         m_hot_reload_manager->attach_registry(w.state());
@@ -106,6 +117,7 @@ scn::world& scn::level::create_world(const std::string_view type, uint32_t world
 void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler)
 {
 	m_current_level_tag = desc.get_tag();
+	m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) }); // a fresh load replays from the seed
 	size_t world_index = 0;
     for (const auto& world_desc : desc.get_worlds()) {
         auto& world = create_world(world_desc->get_name(), world_index++);

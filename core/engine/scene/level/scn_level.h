@@ -1,6 +1,7 @@
 #pragma once
 #include "scn_world.h"
 #include "ecs_fixed_stepper.hpp"
+#include "ecs_random.hpp"
 #include "ecs_system_plan.hpp"
 #include <functional>
 #include <map>
@@ -34,6 +35,7 @@ namespace scn {
             swap(m_level_state, other.m_level_state);
             swap(m_stepper, other.m_stepper);
             swap(m_mode, other.m_mode);
+            swap(m_seed, other.m_seed);
             swap(m_plans, other.m_plans);
             swap(m_worlds, other.m_worlds);
             swap(m_worlds_by_id, other.m_worlds_by_id);
@@ -50,6 +52,13 @@ namespace scn {
         // becomes Pause. The mode survives clear() and level loads.
         void set_mode(ecs::run_mode mode) { m_mode = mode; }
         ecs::run_mode mode() const { return m_mode; }
+
+        // Seed of the level's random numbers. Every world owns an `ecs::rng` resource seeded from
+        // it and its id (the level's own is reachable as level_res<ecs::rng>), so the same seed
+        // reproduces the same sequences. Reseeds the existing worlds; worlds created later derive
+        // from it as well.
+        void set_seed(uint64_t seed);
+        uint64_t seed() const { return m_seed; }
 
         scn::world& create_world(const std::string_view type, uint32_t world_id);
 
@@ -143,6 +152,7 @@ namespace scn {
 
         ecs::fixed_stepper m_stepper; // 60 Hz, dt clamped, steps per frame capped
         ecs::run_mode m_mode = ecs::run_mode::play;
+        uint64_t m_seed = ecs::rng::default_seed;
 
         // Per world name: the system names the world runs (data from world_desc.systems).
         std::unordered_map<std::string, std::vector<std::string>> m_world_systems;
