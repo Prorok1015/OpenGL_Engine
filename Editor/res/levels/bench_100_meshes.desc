@@ -1,0 +1,1886 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "0c7a4d52-91be-4e63-b8f4-2a6d3e5c7b10",
+    "name" : "bench_100_meshes",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 3,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "627fdb3021b44819",
+                    "name" : "Camera A",
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 1,
+                            "transform" : {
+                                "rotation" : [0.0, 0.0, 0.0],
+                                "position" : [0.0, 0.0, 12.0]
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "c8cec430f536d18e",
+                    "name" : "Camera B",
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 1,
+                            "transform" : {
+                                "rotation" : [-15.0, 0.0, 0.0],
+                                "position" : [0.0, 6.0, 14.0]
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "cc55413f3f17a7d8",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "2732f55bf9391723",
+                    "name" : "skybox",
+                    "components" : {
+                        "skybox" : "res://skybox/skybox.desc"
+                    }
+                },
+                {
+                    "__id" : "24086ac65c39f9d4",
+                    "name" : "robot_00",
+                    "transform" : {
+                        "position" : [-9.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "673db862f9f07ecb",
+                    "name" : "quad_00_01",
+                    "transform" : {
+                        "position" : [-7.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "1ccc5e139ad874db",
+                    "name" : "quad_00_02",
+                    "transform" : {
+                        "position" : [-5.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "2df1bfdbc23c5fcd",
+                    "name" : "quad_00_03",
+                    "transform" : {
+                        "position" : [-3.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "25132904a9e3fa2d",
+                    "name" : "quad_00_04",
+                    "transform" : {
+                        "position" : [-1.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "98391cdc2e2072b3",
+                    "name" : "quad_00_05",
+                    "transform" : {
+                        "position" : [1.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "95fc4e2d18e76192",
+                    "name" : "quad_00_06",
+                    "transform" : {
+                        "position" : [3.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "a3a066811b1b245b",
+                    "name" : "quad_00_07",
+                    "transform" : {
+                        "position" : [5.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "f396f190ee3649e7",
+                    "name" : "quad_00_08",
+                    "transform" : {
+                        "position" : [7.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "7176fd38e0f291bb",
+                    "name" : "quad_00_09",
+                    "transform" : {
+                        "position" : [9.0, -9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "c7131cef8f6f3725",
+                    "name" : "robot_01",
+                    "transform" : {
+                        "position" : [-9.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "7bfa161d816dabec",
+                    "name" : "quad_01_01",
+                    "transform" : {
+                        "position" : [-7.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "485631641ca14846",
+                    "name" : "quad_01_02",
+                    "transform" : {
+                        "position" : [-5.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "6700ae734833872f",
+                    "name" : "quad_01_03",
+                    "transform" : {
+                        "position" : [-3.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ea18572d1acb5944",
+                    "name" : "quad_01_04",
+                    "transform" : {
+                        "position" : [-1.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "9eb7991f9fe35341",
+                    "name" : "quad_01_05",
+                    "transform" : {
+                        "position" : [1.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "9106988f20353064",
+                    "name" : "quad_01_06",
+                    "transform" : {
+                        "position" : [3.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "413076a113f8681b",
+                    "name" : "quad_01_07",
+                    "transform" : {
+                        "position" : [5.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "f37bffdaca98a81a",
+                    "name" : "quad_01_08",
+                    "transform" : {
+                        "position" : [7.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "2dc234144907e877",
+                    "name" : "quad_01_09",
+                    "transform" : {
+                        "position" : [9.0, -7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "e05a64cdf95a5390",
+                    "name" : "robot_02",
+                    "transform" : {
+                        "position" : [-9.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "9b9d64fe4430d7b1",
+                    "name" : "quad_02_01",
+                    "transform" : {
+                        "position" : [-7.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "9c71af819f5be3fc",
+                    "name" : "quad_02_02",
+                    "transform" : {
+                        "position" : [-5.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "3dac0dcbda67141c",
+                    "name" : "quad_02_03",
+                    "transform" : {
+                        "position" : [-3.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "3d0d4fccf5dbf7a2",
+                    "name" : "quad_02_04",
+                    "transform" : {
+                        "position" : [-1.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "45bc27204b5e7b88",
+                    "name" : "quad_02_05",
+                    "transform" : {
+                        "position" : [1.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "87efd918d2f81647",
+                    "name" : "quad_02_06",
+                    "transform" : {
+                        "position" : [3.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ea08af14b85a56b2",
+                    "name" : "quad_02_07",
+                    "transform" : {
+                        "position" : [5.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "c0afca9f6d9b9537",
+                    "name" : "quad_02_08",
+                    "transform" : {
+                        "position" : [7.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "e5b794cf4441db7b",
+                    "name" : "quad_02_09",
+                    "transform" : {
+                        "position" : [9.0, -5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "fcd2ee5465b540aa",
+                    "name" : "robot_03",
+                    "transform" : {
+                        "position" : [-9.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "54d41a82895da4da",
+                    "name" : "quad_03_01",
+                    "transform" : {
+                        "position" : [-7.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "5b84b49f1097580a",
+                    "name" : "quad_03_02",
+                    "transform" : {
+                        "position" : [-5.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "6e8a4c54bd26b3da",
+                    "name" : "quad_03_03",
+                    "transform" : {
+                        "position" : [-3.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "8d5244b6cec880a4",
+                    "name" : "quad_03_04",
+                    "transform" : {
+                        "position" : [-1.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "c8c961d4d126eb32",
+                    "name" : "quad_03_05",
+                    "transform" : {
+                        "position" : [1.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "25524bd1ca52e51f",
+                    "name" : "quad_03_06",
+                    "transform" : {
+                        "position" : [3.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "16911cf27ad210ce",
+                    "name" : "quad_03_07",
+                    "transform" : {
+                        "position" : [5.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "8560e77e597cfb97",
+                    "name" : "quad_03_08",
+                    "transform" : {
+                        "position" : [7.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ca69f11b8b501982",
+                    "name" : "quad_03_09",
+                    "transform" : {
+                        "position" : [9.0, -3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "5d552383982c1152",
+                    "name" : "robot_04",
+                    "transform" : {
+                        "position" : [-9.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "93dfc8fcb90a41fe",
+                    "name" : "quad_04_01",
+                    "transform" : {
+                        "position" : [-7.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "be5711c806c9b71e",
+                    "name" : "quad_04_02",
+                    "transform" : {
+                        "position" : [-5.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "4264e71f1270ec1e",
+                    "name" : "quad_04_03",
+                    "transform" : {
+                        "position" : [-3.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "68a2528e0adab9d7",
+                    "name" : "quad_04_04",
+                    "transform" : {
+                        "position" : [-1.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "7b93731c0e5dd416",
+                    "name" : "quad_04_05",
+                    "transform" : {
+                        "position" : [1.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "5d80d4033abac30f",
+                    "name" : "quad_04_06",
+                    "transform" : {
+                        "position" : [3.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "397fa21972f3d467",
+                    "name" : "quad_04_07",
+                    "transform" : {
+                        "position" : [5.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "d1d8890e32274cdf",
+                    "name" : "quad_04_08",
+                    "transform" : {
+                        "position" : [7.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "940e65e674995a39",
+                    "name" : "quad_04_09",
+                    "transform" : {
+                        "position" : [9.0, -1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "eb9235f9be2f8901",
+                    "name" : "robot_05",
+                    "transform" : {
+                        "position" : [-9.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "843afccd520a3156",
+                    "name" : "quad_05_01",
+                    "transform" : {
+                        "position" : [-7.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "e73b2eafbdf05df3",
+                    "name" : "quad_05_02",
+                    "transform" : {
+                        "position" : [-5.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "fbe7c87123553ff1",
+                    "name" : "quad_05_03",
+                    "transform" : {
+                        "position" : [-3.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "bf466f00bb1d0c51",
+                    "name" : "quad_05_04",
+                    "transform" : {
+                        "position" : [-1.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "92efe46582eb7caa",
+                    "name" : "quad_05_05",
+                    "transform" : {
+                        "position" : [1.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "42044799301f557e",
+                    "name" : "quad_05_06",
+                    "transform" : {
+                        "position" : [3.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "b7ba2495d795b9d9",
+                    "name" : "quad_05_07",
+                    "transform" : {
+                        "position" : [5.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "6030c5dac5641ae3",
+                    "name" : "quad_05_08",
+                    "transform" : {
+                        "position" : [7.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "196c96ef2e4f1335",
+                    "name" : "quad_05_09",
+                    "transform" : {
+                        "position" : [9.0, 1.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "9c19e6589e83b92f",
+                    "name" : "robot_06",
+                    "transform" : {
+                        "position" : [-9.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "d5b3ad64c9708e48",
+                    "name" : "quad_06_01",
+                    "transform" : {
+                        "position" : [-7.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "4fb0ac8ee2c6dfeb",
+                    "name" : "quad_06_02",
+                    "transform" : {
+                        "position" : [-5.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "26024fbd2bd1c722",
+                    "name" : "quad_06_03",
+                    "transform" : {
+                        "position" : [-3.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "fc3b924c462afb55",
+                    "name" : "quad_06_04",
+                    "transform" : {
+                        "position" : [-1.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "7f14d702f3ace7a3",
+                    "name" : "quad_06_05",
+                    "transform" : {
+                        "position" : [1.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "084346247ad2b3c4",
+                    "name" : "quad_06_06",
+                    "transform" : {
+                        "position" : [3.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "49e6792c1c141c53",
+                    "name" : "quad_06_07",
+                    "transform" : {
+                        "position" : [5.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "8e6a3c1ebaa85191",
+                    "name" : "quad_06_08",
+                    "transform" : {
+                        "position" : [7.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "cd51939c6713f4f1",
+                    "name" : "quad_06_09",
+                    "transform" : {
+                        "position" : [9.0, 3.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "5a749571dcf933c0",
+                    "name" : "robot_07",
+                    "transform" : {
+                        "position" : [-9.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "80628bd03d53ae01",
+                    "name" : "quad_07_01",
+                    "transform" : {
+                        "position" : [-7.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "10957c1ec76cd462",
+                    "name" : "quad_07_02",
+                    "transform" : {
+                        "position" : [-5.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "25e52cf9b964810f",
+                    "name" : "quad_07_03",
+                    "transform" : {
+                        "position" : [-3.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ae57ea7542d1dc16",
+                    "name" : "quad_07_04",
+                    "transform" : {
+                        "position" : [-1.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "745ac6d57709a0d4",
+                    "name" : "quad_07_05",
+                    "transform" : {
+                        "position" : [1.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "2ec6d12d935c7c6d",
+                    "name" : "quad_07_06",
+                    "transform" : {
+                        "position" : [3.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "c4bd9659c07e0bc3",
+                    "name" : "quad_07_07",
+                    "transform" : {
+                        "position" : [5.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "256fbe183b604b03",
+                    "name" : "quad_07_08",
+                    "transform" : {
+                        "position" : [7.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "b9228c1734a9737d",
+                    "name" : "quad_07_09",
+                    "transform" : {
+                        "position" : [9.0, 5.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "21c31914897de775",
+                    "name" : "robot_08",
+                    "transform" : {
+                        "position" : [-9.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "c0103c2486249e1f",
+                    "name" : "quad_08_01",
+                    "transform" : {
+                        "position" : [-7.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "cbd9413be792abfc",
+                    "name" : "quad_08_02",
+                    "transform" : {
+                        "position" : [-5.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "e23f191fdcf4a814",
+                    "name" : "quad_08_03",
+                    "transform" : {
+                        "position" : [-3.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "c87abac67a98ae03",
+                    "name" : "quad_08_04",
+                    "transform" : {
+                        "position" : [-1.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ab1ee4a2739b2d4b",
+                    "name" : "quad_08_05",
+                    "transform" : {
+                        "position" : [1.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "b0f89ec418a6c47c",
+                    "name" : "quad_08_06",
+                    "transform" : {
+                        "position" : [3.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ada842c4da210130",
+                    "name" : "quad_08_07",
+                    "transform" : {
+                        "position" : [5.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "f93947f81590006b",
+                    "name" : "quad_08_08",
+                    "transform" : {
+                        "position" : [7.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "ced755598e356e2f",
+                    "name" : "quad_08_09",
+                    "transform" : {
+                        "position" : [9.0, 7.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "a09e4fe3128438fd",
+                    "name" : "robot_09",
+                    "transform" : {
+                        "position" : [-9.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                },
+                {
+                    "__id" : "4bfb94625742ec3e",
+                    "name" : "quad_09_01",
+                    "transform" : {
+                        "position" : [-7.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "9266c497919ffee8",
+                    "name" : "quad_09_02",
+                    "transform" : {
+                        "position" : [-5.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "771242d7fce84f98",
+                    "name" : "quad_09_03",
+                    "transform" : {
+                        "position" : [-3.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "2dacfff5dc6595c7",
+                    "name" : "quad_09_04",
+                    "transform" : {
+                        "position" : [-1.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "d98746758a188450",
+                    "name" : "quad_09_05",
+                    "transform" : {
+                        "position" : [1.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "3aa1f015ff9e88da",
+                    "name" : "quad_09_06",
+                    "transform" : {
+                        "position" : [3.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "a5a1796a8f8c584e",
+                    "name" : "quad_09_07",
+                    "transform" : {
+                        "position" : [5.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "464cc76e429bf5a5",
+                    "name" : "quad_09_08",
+                    "transform" : {
+                        "position" : [7.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                },
+                {
+                    "__id" : "29e1682087210426",
+                    "name" : "quad_09_09",
+                    "transform" : {
+                        "position" : [9.0, 9.0, -6.0]
+                    },
+                    "components" : {
+                        "mesh" : {
+                            "__type" : "mesh_node_desc",
+                            "__version" : 1,
+                            "geometry" : "res://bench/bench_quad.desc",
+                            "vx_begin" : 0,
+                            "vx_end" : 4,
+                            "ind_begin" : 0,
+                            "ind_end" : 6,
+                            "material" : "res://base_material.desc"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}
