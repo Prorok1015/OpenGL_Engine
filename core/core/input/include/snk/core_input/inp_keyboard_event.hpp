@@ -1,4 +1,8 @@
 #pragma once
+#include <cstdint>
+
+#include <glm/glm.hpp>
+
 #include <snk/core_input/inp_input_event.hpp>
 
 namespace core::inp
