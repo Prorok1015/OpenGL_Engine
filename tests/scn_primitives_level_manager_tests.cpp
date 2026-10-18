@@ -212,6 +212,62 @@ BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTriggersFullReload)
 	BOOST_TEST(has_named(lvl.get_world("only").state(), "c3"));
 }
 
+BOOST_AUTO_TEST_CASE(HotReload_FullReloadKeepsRuntimeCreatedWorlds)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load(tag));
+	auto& lvl = mgr.get_level();
+	auto& rt_reg = lvl.create_world("rt", lvl.acquire_free_world_id()).state();
+	rt_reg.emplace<scn::name_component>(rt_reg.create(), scn::name_component{ "rt_ent" });
+
+	int reloads = 0;
+	mgr.set_on_full_reload([&reloads] { ++reloads; });
+	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
+	rs->signal_changed(tag);
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(reloads == 1);
+	BOOST_TEST(lvl.get_world_count() == 2u);
+	BOOST_TEST(lvl.has_world("only"));
+	BOOST_TEST(!lvl.has_world("w0"));
+	BOOST_REQUIRE(lvl.has_world("rt"));
+	BOOST_TEST(has_named(lvl.get_world("rt").state(), "rt_ent"));
+	BOOST_TEST(lvl.get_world("rt").get_id() != lvl.get_world("only").get_id());
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadKeepsRuntimeCreatedWorlds)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load(tag));
+	auto& lvl = mgr.get_level();
+	lvl.create_world("rt", lvl.acquire_free_world_id());
+
+	int reloads = 0;
+	mgr.set_on_full_reload([&reloads] { ++reloads; });
+	put("lv.desc", LEVEL_V2_SAME_NAMES);
+	rs->signal_changed(tag);
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(reloads == 0); // an extra runtime world must not turn this into a full reload
+	BOOST_TEST(lvl.get_world_count() == 3u);
+	BOOST_TEST(has_named(lvl.get_world("w0").state(), "c1"));
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_DescWorldReplacesRuntimeWorldWithTheSameName)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load(tag));
+	auto& lvl = mgr.get_level();
+	lvl.create_world("only", lvl.acquire_free_world_id());
+
+	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
+	rs->signal_changed(tag);
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(lvl.get_world_count() == 1u);
+	BOOST_TEST(has_named(lvl.get_world("only").state(), "c3"));
+}
+
 BOOST_AUTO_TEST_CASE(HotReload_ReloadingAnotherLevelStopsWatchingTheOldOne)
 {
 	auto tag1 = put("lv.desc", LEVEL_V1);

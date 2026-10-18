@@ -2,6 +2,7 @@
 #include "res_tag.h"
 #include "resources/res_resource_handle.hpp"
 #include "desc_base.hpp"
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <functional>
@@ -39,6 +40,24 @@ namespace edt
 		}
 	}
 
+	// World list after a level hot reload: the desc worlds in desc order, then the previous worlds that
+	// are not in the desc but still alive in the level (created in the editor, not saved yet).
+	// Worlds the reload dropped (is_alive false) are not kept.
+	template<typename World, typename Alive>
+	std::vector<World> merge_reloaded_worlds(
+		const std::vector<World>& desc_worlds,
+		const std::vector<World>& previous,
+		Alive&& is_alive)
+	{
+		std::vector<World> merged = desc_worlds;
+		for (const auto& p : previous) {
+			const bool in_desc = std::any_of(desc_worlds.begin(), desc_worlds.end(),
+				[&p](const World& w) { return w.get_name() == p.get_name(); });
+			if (!in_desc && is_alive(p)) merged.push_back(p);
+		}
+		return merged;
+	}
+
 	class level_controller
 	{
 	public:
@@ -57,6 +76,8 @@ namespace edt
 		boost::json::object build_level_json() const;
 		bool write_level_to_disk(const std::string& rel_path);
 		void populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res);
+		// The level manager rebuilt the desc worlds on a hot reload: realign the world arrays with the level.
+		void resync_worlds_after_reload();
 
 		void add_desc_to_scene(const res::res_handle<desc::desc_base>& handle, const std::string& key);
 
