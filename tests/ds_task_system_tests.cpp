@@ -1,0 +1,632 @@
+#include <boost/test/unit_test.hpp>
+#include <atomic>
+#include <chrono>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+#include <snk/common/ds/ds_task_system.hpp>
+
+namespace {
+
+using namespace std::chrono_literals;
+using ds::lane;
+using ds::main_class;
+using ds::task_status;
+
+ds::task_system_config manual_config()
+{
+	ds::task_system_config config;
+	config.mode = ds::policy::manual;
+	return config;
+}
+
+// Time only moves when a test moves it.
+struct fake_clock {
+	std::chrono::steady_clock::time_point now{};
+
+	std::function<std::chrono::steady_clock::time_point()> source()
+	{
+		return [this] { return now; };
+	}
+};
+
+}
+
+BOOST_AUTO_TEST_SUITE(TaskSystemManualTests)
+
+BOOST_AUTO_TEST_CASE(ManualModeCreatesNoThreads)
+{
+	ds::task_system tasks(manual_config());
+	BOOST_CHECK(tasks.mode() == ds::policy::manual);
+	BOOST_TEST(tasks.thread_count(lane::compute) == 0u);
+	BOOST_TEST(tasks.thread_count(lane::io) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TasksRunOnlyWhenDriven)
+{
+	ds::task_system tasks(manual_config());
+	int runs = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, [&](ds::task_context&) { ++runs; return 42; });
+	BOOST_CHECK(handle.status() == task_status::pending);
+	BOOST_TEST(runs == 0);
+
+	BOOST_TEST(tasks.run_one(lane::compute));
+	BOOST_TEST(runs == 1);
+	BOOST_CHECK(handle.status() == task_status::ready);
+	BOOST_TEST(handle.get() == 42);
+	BOOST_TEST(handle.progress() == 1.f);
+	BOOST_TEST(!tasks.run_one(lane::compute));
+}
+
+BOOST_AUTO_TEST_CASE(TasksOfOneLaneRunInSubmissionOrder)
+{
+	ds::task_system tasks(manual_config());
+	std::vector<int> order;
+	for (int i = 0; i < 4; ++i) {
+		tasks.run(lane::compute, { "t" }, [&order, i](ds::task_context&) { order.push_back(i); });
+	}
+	while (tasks.run_one(lane::compute)) {}
+	const std::vector<int> expected{ 0, 1, 2, 3 };
+	BOOST_TEST(order == expected, boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(LanesAreIndependent)
+{
+	ds::task_system tasks(manual_config());
+	std::string trace;
+	tasks.run(lane::io, { "io" }, [&](ds::task_context&) { trace += 'i'; });
+	tasks.run(lane::compute, { "c" }, [&](ds::task_context&) { trace += 'c'; });
+
+	BOOST_TEST(tasks.run_one(lane::compute));
+	BOOST_TEST(trace == "c");
+	BOOST_TEST(!tasks.run_one(lane::compute));
+	BOOST_TEST(tasks.run_one(lane::io));
+	BOOST_TEST(trace == "ci");
+}
+
+BOOST_AUTO_TEST_CASE(BodySeesWorkerFlagOnlyWhileRunning)
+{
+	ds::task_system tasks(manual_config());
+	bool on_worker_inside = false;
+	tasks.run(lane::compute, { "t" }, [&](ds::task_context&) { on_worker_inside = ds::task_system::on_worker(); });
+	BOOST_TEST(!ds::task_system::on_worker());
+	tasks.run_one(lane::compute);
+	BOOST_TEST(on_worker_inside);
+	BOOST_TEST(!ds::task_system::on_worker());
+}
+
+BOOST_AUTO_TEST_CASE(ProgressAndTextAreReported)
+{
+	ds::task_system tasks(manual_config());
+	float seen = -1.f;
+	std::string seen_text;
+	ds::task_handle<void> handle;
+	handle = tasks.run(lane::compute, { "t" }, [&](ds::task_context& ctx) {
+		ctx.set_progress(0.25f, "quarter");
+		seen = handle.progress();
+		seen_text = handle.progress_text();
+		ctx.set_progress(2.f);
+	});
+	tasks.run_one(lane::compute);
+	BOOST_TEST(seen == 0.25f);
+	BOOST_TEST(seen_text == "quarter");
+	BOOST_TEST(handle.progress() == 1.f);
+	BOOST_TEST(handle.progress_text() == "quarter");
+}
+
+BOOST_AUTO_TEST_CASE(ExceptionBecomesErrorValue)
+{
+	ds::task_system tasks(manual_config());
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) -> int { throw std::runtime_error("boom"); });
+	tasks.run_one(lane::compute);
+	BOOST_CHECK(handle.status() == task_status::error);
+	BOOST_TEST(handle.error() == "boom");
+}
+
+BOOST_AUTO_TEST_CASE(CancelBeforeStartNeverRunsTheBody)
+{
+	ds::task_system tasks(manual_config());
+	bool ran = false;
+	auto handle = tasks.run(lane::compute, { "t" }, [&](ds::task_context&) { ran = true; });
+	handle.cancel();
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+
+	tasks.run_one(lane::compute);
+	BOOST_TEST(!ran);
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(CancelDuringExecutionIsCooperative)
+{
+	ds::task_system tasks(manual_config());
+	bool saw_stop = false;
+	bool finished_body = false;
+	ds::task_handle<void> handle;
+	handle = tasks.run(lane::compute, { "t" }, [&](ds::task_context& ctx) {
+		handle.cancel();
+		BOOST_CHECK(handle.status() == task_status::running);
+		saw_stop = ctx.stop.stop_requested();
+		ctx.throw_if_stopped();
+		finished_body = true;
+	});
+	tasks.run_one(lane::compute);
+	BOOST_TEST(saw_stop);
+	BOOST_TEST(!finished_body);
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(BodyThatIgnoresCancelIsStillReportedCancelled)
+{
+	ds::task_system tasks(manual_config());
+	ds::task_handle<int> handle;
+	handle = tasks.run(lane::compute, { "t" }, [&](ds::task_context&) {
+		handle.cancel();
+		return 7;
+	});
+	tasks.run_one(lane::compute);
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(ThenMainRunsOnlyWhenTheMainQueueIsDrained)
+{
+	ds::task_system tasks(manual_config());
+	int callbacks = 0;
+	int value = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) { return 5; });
+	handle.then_main([&](ds::task_result<int>& result) {
+		++callbacks;
+		BOOST_TEST(result.ok());
+		value = *result.value;
+	});
+
+	tasks.run_one(lane::compute);
+	BOOST_TEST(callbacks == 0);
+	BOOST_TEST(tasks.drain_main() == 1u);
+	BOOST_TEST(callbacks == 1);
+	BOOST_TEST(value == 5);
+}
+
+BOOST_AUTO_TEST_CASE(ThenMainAfterCompletionStillGoesThroughTheQueue)
+{
+	ds::task_system tasks(manual_config());
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) {});
+	tasks.run_one(lane::compute);
+
+	bool called = false;
+	handle.then_main([&](ds::task_result<void>& result) { called = result.ok(); });
+	BOOST_TEST(!called);
+	tasks.drain_main();
+	BOOST_TEST(called);
+}
+
+BOOST_AUTO_TEST_CASE(ThenMainReceivesErrorAndCancellation)
+{
+	ds::task_system tasks(manual_config());
+	auto failing = tasks.run(lane::compute, { "f" }, [](ds::task_context&) -> int { throw std::runtime_error("bad"); });
+	auto cancelled = tasks.run(lane::compute, { "c" }, [](ds::task_context&) { return 1; });
+	std::string error;
+	task_status failing_status = task_status::pending;
+	task_status cancelled_status = task_status::pending;
+	failing.then_main([&](ds::task_result<int>& r) { error = r.error; failing_status = r.status; });
+	cancelled.then_main([&](ds::task_result<int>& r) { cancelled_status = r.status; });
+
+	cancelled.cancel();
+	while (tasks.run_one(lane::compute)) {}
+	tasks.drain_main();
+	BOOST_TEST(error == "bad");
+	BOOST_CHECK(failing_status == task_status::error);
+	BOOST_CHECK(cancelled_status == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(GeneralBudgetStopsTheDrainOnTheInjectedClock)
+{
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	ds::task_system tasks(config);
+
+	int ran = 0;
+	for (int i = 0; i < 5; ++i) {
+		tasks.post_main([&] { ++ran; clock.now += 1ms; });
+	}
+	BOOST_TEST(tasks.drain_main(2ms) == 2u);
+	BOOST_TEST(ran == 2);
+	BOOST_TEST(tasks.drain_main(2ms) == 2u);
+	BOOST_TEST(tasks.drain_main(2ms) == 1u);
+	BOOST_TEST(ran == 5);
+	BOOST_TEST(tasks.drain_main(2ms) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(CheapItemsAllFitInOneBudget)
+{
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	ds::task_system tasks(config);
+
+	int ran = 0;
+	for (int i = 0; i < 5; ++i) {
+		tasks.post_main([&] { ++ran; });
+	}
+	BOOST_TEST(tasks.drain_main(2ms) == 5u);
+	BOOST_TEST(ran == 5);
+}
+
+BOOST_AUTO_TEST_CASE(AtLeastOneGeneralItemRunsPerFrameEvenWithoutBudget)
+{
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	ds::task_system tasks(config);
+
+	int ran = 0;
+	for (int i = 0; i < 3; ++i) {
+		tasks.post_main([&] { ++ran; clock.now += 10ms; });
+	}
+	BOOST_TEST(tasks.drain_main(0ms) == 1u);
+	BOOST_TEST(tasks.drain_main(0ms) == 1u);
+	BOOST_TEST(tasks.drain_main(0ms) == 1u);
+	BOOST_TEST(ran == 3);
+}
+
+BOOST_AUTO_TEST_CASE(ConfiguredBudgetIsUsedByDrainWithoutArguments)
+{
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	config.main_budget = 3ms;
+	ds::task_system tasks(config);
+
+	for (int i = 0; i < 5; ++i) {
+		tasks.post_main([&] { clock.now += 1ms; });
+	}
+	BOOST_TEST(tasks.drain_main() == 3u);
+	tasks.set_main_budget(1ms);
+	BOOST_TEST(tasks.drain_main() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(GpuUploadIsLimitedByCountNotByTime)
+{
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	config.gpu_upload_per_frame = 2;
+	ds::task_system tasks(config);
+
+	int uploads = 0;
+	int general = 0;
+	for (int i = 0; i < 5; ++i) {
+		tasks.post_main([&] { ++uploads; clock.now += 50ms; }, main_class::gpu_upload);
+	}
+	tasks.post_main([&] { ++general; });
+
+	BOOST_TEST(tasks.drain_main(1ms) == 3u);
+	BOOST_TEST(uploads == 2);
+	BOOST_TEST(general == 1);
+	BOOST_TEST(tasks.pending_main(main_class::gpu_upload) == 3u);
+
+	tasks.set_gpu_upload_limit(10);
+	BOOST_TEST(tasks.drain_main(1ms) == 3u);
+	BOOST_TEST(uploads == 5);
+}
+
+BOOST_AUTO_TEST_CASE(ItemPostedFromAMainCallbackWaitsForTheBudget)
+{
+	fake_clock clock;
+	auto config = manual_config();
+	config.clock = clock.source();
+	ds::task_system tasks(config);
+
+	std::string trace;
+	tasks.post_main([&] {
+		trace += 'a';
+		clock.now += 5ms;
+		tasks.post_main([&] { trace += 'b'; });
+	});
+	BOOST_TEST(tasks.drain_main(2ms) == 1u);
+	BOOST_TEST(trace == "a");
+	BOOST_TEST(tasks.drain_main(2ms) == 1u);
+	BOOST_TEST(trace == "ab");
+}
+
+BOOST_AUTO_TEST_CASE(ThrowingMainItemDoesNotStopTheDrain)
+{
+	ds::task_system tasks(manual_config());
+	int ran = 0;
+	tasks.post_main([] { throw std::runtime_error("bad item"); });
+	tasks.post_main([&] { ++ran; });
+	BOOST_TEST(tasks.drain_main(10ms) == 2u);
+	BOOST_TEST(ran == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ShutdownDropsTheMainQueueWithoutCallingIt)
+{
+	bool posted_called = false;
+	bool upload_called = false;
+	bool then_called = false;
+	ds::task_handle<int> pending;
+	ds::task_handle<int> finished;
+	{
+		ds::task_system tasks(manual_config());
+		tasks.post_main([&] { posted_called = true; });
+		tasks.post_main([&] { upload_called = true; }, main_class::gpu_upload);
+
+		finished = tasks.run(lane::compute, { "done" }, [](ds::task_context&) { return 1; });
+		tasks.run_one(lane::compute);
+		finished.then_main([&](ds::task_result<int>&) { then_called = true; });
+
+		pending = tasks.run(lane::compute, { "never" }, [](ds::task_context&) { return 2; });
+	}
+	BOOST_TEST(!posted_called);
+	BOOST_TEST(!upload_called);
+	BOOST_TEST(!then_called);
+	BOOST_CHECK(finished.status() == task_status::ready);
+	BOOST_CHECK(pending.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(PostMainAfterShutdownIsHarmlessForSurvivingHandles)
+{
+	ds::task_handle<int> handle;
+	{
+		ds::task_system tasks(manual_config());
+		handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) { return 1; });
+	}
+	bool called = false;
+	handle.then_main([&](ds::task_result<int>&) { called = true; });
+	BOOST_TEST(!called);
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllRunsAfterEveryInputWithoutBlocking)
+{
+	ds::task_system tasks(manual_config());
+	std::string trace;
+	auto a = tasks.run(lane::compute, { "a" }, [&](ds::task_context&) { trace += 'a'; });
+	auto b = tasks.run(lane::io, { "b" }, [&](ds::task_context&) { trace += 'b'; });
+	const ds::task_handle_base inputs[] = { a, b };
+	auto all = tasks.when_all(inputs, lane::compute, [&](ds::task_context&) { trace += 'X'; });
+	BOOST_CHECK(all.status() == task_status::pending);
+
+	tasks.run_one(lane::compute);
+	BOOST_TEST(trace == "a");
+	BOOST_TEST(!tasks.run_one(lane::compute));
+	tasks.run_one(lane::io);
+	BOOST_TEST(trace == "ab");
+	BOOST_TEST(tasks.run_one(lane::compute));
+	BOOST_TEST(trace == "abX");
+	BOOST_CHECK(all.status() == task_status::ready);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllOverFinishedInputsIsQueuedImmediately)
+{
+	ds::task_system tasks(manual_config());
+	auto a = tasks.run(lane::compute, { "a" }, [](ds::task_context&) {});
+	tasks.run_one(lane::compute);
+
+	bool ran = false;
+	const ds::task_handle_base inputs[] = { a };
+	auto all = tasks.when_all(inputs, lane::compute, [&](ds::task_context&) { ran = true; });
+	BOOST_TEST(!ran);
+	tasks.run_one(lane::compute);
+	BOOST_TEST(ran);
+	BOOST_CHECK(all.status() == task_status::ready);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllWithoutInputsRuns)
+{
+	ds::task_system tasks(manual_config());
+	bool ran = false;
+	auto all = tasks.when_all({}, lane::compute, [&](ds::task_context&) { ran = true; });
+	tasks.run_one(lane::compute);
+	BOOST_TEST(ran);
+	BOOST_CHECK(all.status() == task_status::ready);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllWithAFailedInputFailsAndSkipsTheBody)
+{
+	ds::task_system tasks(manual_config());
+	bool ran = false;
+	auto good = tasks.run(lane::compute, { "good" }, [](ds::task_context&) {});
+	auto bad = tasks.run(lane::compute, { "bad" }, [](ds::task_context&) { throw std::runtime_error("disk gone"); });
+	const ds::task_handle_base inputs[] = { good, bad };
+	auto all = tasks.when_all(inputs, lane::compute, [&](ds::task_context&) { ran = true; });
+
+	bool continuation_saw_error = false;
+	all.then_main([&](ds::task_result<void>& result) {
+		continuation_saw_error = result.status == task_status::error;
+	});
+
+	while (tasks.run_one(lane::compute)) {}
+	tasks.drain_main();
+	BOOST_TEST(!ran);
+	BOOST_CHECK(all.status() == task_status::error);
+	BOOST_TEST(all.error().find("bad") != std::string::npos);
+	BOOST_TEST(all.error().find("disk gone") != std::string::npos);
+	BOOST_TEST(continuation_saw_error);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllWithACancelledInputIsCancelled)
+{
+	ds::task_system tasks(manual_config());
+	bool ran = false;
+	auto a = tasks.run(lane::compute, { "a" }, [](ds::task_context&) {});
+	auto b = tasks.run(lane::compute, { "b" }, [](ds::task_context&) {});
+	const ds::task_handle_base inputs[] = { a, b };
+	auto all = tasks.when_all(inputs, lane::compute, [&](ds::task_context&) { ran = true; });
+
+	b.cancel();
+	while (tasks.run_one(lane::compute)) {}
+	BOOST_TEST(!ran);
+	BOOST_CHECK(all.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(CancelledWhenAllNeverRuns)
+{
+	ds::task_system tasks(manual_config());
+	bool ran = false;
+	auto a = tasks.run(lane::compute, { "a" }, [](ds::task_context&) {});
+	const ds::task_handle_base inputs[] = { a };
+	auto all = tasks.when_all(inputs, lane::compute, [&](ds::task_context&) { ran = true; });
+
+	all.cancel();
+	while (tasks.run_one(lane::compute)) {}
+	BOOST_TEST(!ran);
+	BOOST_CHECK(all.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(WaitInManualModeDrivesTheQueue)
+{
+	ds::task_system tasks(manual_config());
+	auto a = tasks.run(lane::compute, { "a" }, [](ds::task_context&) { return 1; });
+	auto b = tasks.run(lane::io, { "b" }, [](ds::task_context&) { return 2; });
+	const ds::task_handle_base inputs[] = { a, b };
+	auto all = tasks.when_all(inputs, lane::compute, [](ds::task_context&) {});
+
+	all.wait();
+	BOOST_CHECK(all.status() == task_status::ready);
+	BOOST_TEST(a.get() + b.get() == 3);
+}
+
+BOOST_AUTO_TEST_CASE(SnapshotListsOnlyVisibleUnfinishedTasks)
+{
+	ds::task_system tasks(manual_config());
+	tasks.run(lane::compute, { "shown", "import", true }, [](ds::task_context& ctx) { ctx.set_progress(0.5f, "half"); });
+	tasks.run(lane::io, { "hidden", "internal", false }, [](ds::task_context&) {});
+	auto second = tasks.run(lane::compute, { "second", "export", true }, [](ds::task_context&) {});
+
+	auto infos = tasks.snapshot();
+	BOOST_REQUIRE(infos.size() == 2u);
+	BOOST_TEST(infos[0].name == "shown");
+	BOOST_TEST(infos[0].category == "import");
+	BOOST_CHECK(infos[0].status == task_status::pending);
+	BOOST_TEST(infos[1].name == "second");
+
+	tasks.run_one(lane::compute);
+	infos = tasks.snapshot();
+	BOOST_REQUIRE(infos.size() == 1u);
+	BOOST_TEST(infos[0].name == "second");
+
+	second.cancel();
+	BOOST_TEST(tasks.snapshot().empty());
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(TaskSystemThreadedTests)
+
+// Real threads: meant for the TSan job. Everything the callbacks touch is main-thread data, so a
+// race here is a task_system bug.
+BOOST_AUTO_TEST_CASE(ThenMainRunsOnTheMainThreadAfterCompletion)
+{
+	ds::task_system_config config;
+	config.compute_threads = 3;
+	ds::task_system tasks(config);
+	BOOST_TEST(tasks.thread_count(lane::compute) == 3u);
+	BOOST_TEST(tasks.thread_count(lane::io) == 2u);
+
+	constexpr int count = 200;
+	const auto main_id = std::this_thread::get_id();
+	std::vector<ds::task_handle<int>> handles;
+	handles.reserve(count);
+
+	int completed = 0;
+	long sum = 0;
+	bool wrong_thread = false;
+	for (int i = 0; i < count; ++i) {
+		auto handle = tasks.run(i % 5 == 0 ? lane::io : lane::compute, { "t" }, [i](ds::task_context& ctx) {
+			ctx.set_progress(0.5f);
+			return i;
+		});
+		handle.then_main([&](ds::task_result<int>& result) {
+			wrong_thread = wrong_thread || std::this_thread::get_id() != main_id;
+			++completed;
+			if (result.ok()) {
+				sum += *result.value;
+			}
+		});
+		handles.push_back(std::move(handle));
+	}
+
+	const auto deadline = std::chrono::steady_clock::now() + 20s;
+	while (completed < count && std::chrono::steady_clock::now() < deadline) {
+		tasks.drain_main(1ms);
+		std::this_thread::sleep_for(100us);
+	}
+	BOOST_TEST(completed == count);
+	BOOST_TEST(!wrong_thread);
+	BOOST_TEST(sum == static_cast<long>(count) * (count - 1) / 2);
+}
+
+BOOST_AUTO_TEST_CASE(CancelRacesWithCompletionWithoutLosingTheCallback)
+{
+	ds::task_system_config config;
+	config.compute_threads = 2;
+	ds::task_system tasks(config);
+
+	constexpr int count = 200;
+	int callbacks = 0;
+	std::vector<ds::task_handle<int>> handles;
+	handles.reserve(count);
+	for (int i = 0; i < count; ++i) {
+		auto handle = tasks.run(lane::compute, { "t" }, [i](ds::task_context&) { return i; });
+		handle.then_main([&](ds::task_result<int>&) { ++callbacks; });
+		handles.push_back(std::move(handle));
+	}
+	for (int i = 0; i < count; i += 2) {
+		handles[static_cast<std::size_t>(i)].cancel();
+	}
+
+	const auto deadline = std::chrono::steady_clock::now() + 20s;
+	while (callbacks < count && std::chrono::steady_clock::now() < deadline) {
+		tasks.drain_main(1ms);
+		std::this_thread::sleep_for(100us);
+	}
+	BOOST_TEST(callbacks == count);
+	for (const auto& handle : handles) {
+		BOOST_CHECK(handle.done());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WaitAndWhenAllWorkOnThePool)
+{
+	ds::task_system tasks{ ds::task_system_config{} };
+	auto a = tasks.run(lane::compute, { "a" }, [](ds::task_context&) { return 20; });
+	auto b = tasks.run(lane::io, { "b" }, [](ds::task_context&) { return 22; });
+	const ds::task_handle_base inputs[] = { a, b };
+	std::atomic<bool> ran{ false };
+	auto all = tasks.when_all(inputs, lane::compute, [&](ds::task_context&) { ran = true; });
+	all.wait();
+	BOOST_CHECK(all.status() == task_status::ready);
+	BOOST_TEST(ran.load());
+	BOOST_TEST(a.get() + b.get() == 42);
+}
+
+BOOST_AUTO_TEST_CASE(ShutdownCancelsRunningAndQueuedTasks)
+{
+	std::atomic<bool> started{ false };
+	std::atomic<bool> saw_stop{ false };
+	ds::task_handle<void> running;
+	ds::task_handle<void> queued;
+	{
+		ds::task_system_config config;
+		config.compute_threads = 1;
+		ds::task_system tasks(config);
+		running = tasks.run(lane::compute, { "running" }, [&](ds::task_context& ctx) {
+			started = true;
+			while (!ctx.stop.stop_requested()) {
+				std::this_thread::sleep_for(100us);
+			}
+			saw_stop = true;
+		});
+		queued = tasks.run(lane::compute, { "queued" }, [](ds::task_context&) {});
+		while (!started) {
+			std::this_thread::sleep_for(100us);
+		}
+	}
+	BOOST_TEST(saw_stop.load());
+	BOOST_CHECK(running.status() == task_status::cancelled);
+	BOOST_CHECK(queued.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
