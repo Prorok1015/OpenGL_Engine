@@ -34,11 +34,6 @@ glm::vec3 convert_to_glm(const aiVector3D& v)
 	return glm::vec3(v.x, v.y, v.z);
 }
 
-glm::vec4 convert_to_glm(const aiColor4D& v)
-{
-	return glm::vec4(v.r, v.g, v.b, v.a);
-}
-
 glm::mat4 convert_to_glm(const aiMatrix4x4& m)
 {
 	glm::mat4 local(1);

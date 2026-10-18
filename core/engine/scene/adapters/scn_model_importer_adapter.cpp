@@ -42,15 +42,6 @@ namespace {
 		return result;
 	}
 
-	glm::vec4 convert_to_glm(const aiColor4D& vector) {
-		glm::vec4 result;
-		result.r = vector.r;
-		result.g = vector.g;
-		result.b = vector.b;
-		result.a = vector.a;
-		return result;
-	}
-
 	glm::mat4 convert_to_glm(const aiMatrix4x4& transform) {
 		glm::mat4 local(1);
 		local[0] = glm::vec4(transform.a1, transform.b1, transform.c1, transform.d1);

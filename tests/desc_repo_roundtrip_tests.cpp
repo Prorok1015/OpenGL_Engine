@@ -34,7 +34,7 @@ const std::vector<repo_file>& repo_files()
 	static const std::vector<repo_file> files = [] {
 		std::vector<repo_file> out;
 		// Base layer first; a file of the editor layer replaces the base file at the same path.
-		for (const fs::path root : { fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_EDITOR_RES_DIR } }) {
+		for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_EDITOR_RES_DIR } }) {
 			for (const auto& entry : fs::recursive_directory_iterator(root)) {
 				if (!entry.is_regular_file()) continue;
 				std::ifstream in(entry.path(), std::ios::binary);
@@ -162,7 +162,7 @@ BOOST_AUTO_TEST_CASE(EveryTypedObjectHasItsCurrentVersion)
 
 BOOST_AUTO_TEST_CASE(SavedFilesAreIndentedAndEndWithANewline)
 {
-	for_each_desc([this](const res::tag& tag, const repo_file& file) {
+	for_each_desc([](const res::tag&, const repo_file& file) {
 		BOOST_CHECK(file.bytes.size() > 2u);
 		const std::string text(reinterpret_cast<const char*>(file.bytes.data()), file.bytes.size());
 		BOOST_CHECK(text.find('\n') != std::string::npos);

@@ -45,7 +45,7 @@ void stb_image::Image::free_image_data(unsigned char* data)
 stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, int len)
 {
 	Image result;
-	if (result.data_ = stbi_load_from_memory(data, len, &result.width_, &result.height_, &result.channels_, 0))
+	if ((result.data_ = stbi_load_from_memory(data, len, &result.width_, &result.height_, &result.channels_, 0)))
 	{
 		result.size_ = result.width_ * result.height_ * result.channels_;
 		return result;
@@ -56,7 +56,7 @@ stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, i
 bool stb_image::Image::read(const std::string_view filename)
 {
 	set_image_flip(flipFlag_);
-	if (data_ = stbi_load(filename.data(), &width_, &height_, &channels_, 0))
+	if ((data_ = stbi_load(filename.data(), &width_, &height_, &channels_, 0)))
 	{
 		size_ = width_ * height_ * channels_;
 		return true;
