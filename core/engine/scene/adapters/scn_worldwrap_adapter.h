@@ -1,9 +1,9 @@
 #pragma once
-#include "adapters/res_adapter_interface.hpp"
-#include "res_system.h"
-#include "res_tag.h"
-#include "desc_base.hpp"
-#include "desc_system.h"
+#include <snk/resource/adapters/res_adapter_interface.hpp>
+#include <snk/resource/res_system.h>
+#include <snk/resource/res_tag.h>
+#include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_system.h>
 #include "level/scn_world_desc.h"
 #include "snk_api.h"
 

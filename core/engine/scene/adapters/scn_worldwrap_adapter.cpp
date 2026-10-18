@@ -1,5 +1,5 @@
 #include "scn_worldwrap_adapter.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 #include <stdexcept>
 #include <string>
 

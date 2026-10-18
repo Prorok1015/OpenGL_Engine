@@ -1,6 +1,6 @@
 #pragma once
 #include "edt_editor_camera.h"
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include <cstdint>
 #include <string>
 #include <functional>

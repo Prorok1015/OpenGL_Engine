@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "adapters/res_text_adapter.h"
-#include "adapters/res_adapter_worker.h"
-#include "resources/res_resource_text.h"
+#include <snk/resource/adapters/res_text_adapter.h>
+#include <snk/resource/adapters/res_adapter_worker.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <atomic>
 #include <chrono>
 #include <thread>

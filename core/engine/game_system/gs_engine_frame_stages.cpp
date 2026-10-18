@@ -5,7 +5,7 @@
 #include "rnd_frame_assembler.h"
 #include "rnd_frame_context.h"
 #include "rnd_render_system.h"
-#include "rnd_swapchain_interface.h"
+#include <snk/driver/rnd_swapchain_interface.h>
 #include <snk/application/app_loop_service_interface.h>
 #include "eng_profiler.h"
 

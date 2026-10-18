@@ -1,7 +1,7 @@
 #pragma once
-#include "desc_base.hpp"
-#include "res_tag.h"
-#include "ecs_system.h"
+#include <snk/desc/desc_base.hpp>
+#include <snk/resource/res_tag.h>
+#include <snk/ecs/ecs_system.h>
 #include <vector>
 #include "snk_api.h"
 

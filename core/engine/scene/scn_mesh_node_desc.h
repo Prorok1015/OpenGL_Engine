@@ -1,5 +1,5 @@
 #pragma once
-#include "desc_base.hpp"
+#include <snk/desc/desc_base.hpp>
 #include <entt/fwd.hpp> // entt::registry / entt::entity in assemble_mesh_node decl (was pulled in
                        // transitively via scn_material_desc.h before it was POD-ified, EPIC-49 US-49-5)
 #include "scn_material_desc.h"

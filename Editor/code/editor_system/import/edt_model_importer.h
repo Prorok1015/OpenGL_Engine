@@ -1,8 +1,8 @@
 #pragma once
 #include "common.h"
-#include "res_tag.h"
-#include "desc_system.h"
-#include "res_system.h"
+#include <snk/resource/res_tag.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_system.h>
 #include "edt_async_import_task.h"
 #include "level/scn_prefab_desc.h"
 #include <filesystem>

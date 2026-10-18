@@ -18,9 +18,9 @@
 #include "edt_async_import_task.h"
 #include "edt_input_manager.h"
 #include "edt_file_dialog.h"
-#include "desc_base.hpp"
-#include "desc_system.h"
-#include "res_system.h"
+#include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_system.h>
 #include "rnd_render_system.h"
 #include "gui_system.h"
 #include "inp_input_system.h"
@@ -31,7 +31,7 @@
 #include "level/scn_world.h"
 #include "level/scn_prefab_desc.h"
 #include <snk/window/wnd_window_system.h>
-#include "resources/res_resource_text.h"
+#include <snk/resource/resources/res_resource_text.h>
 #include <cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>

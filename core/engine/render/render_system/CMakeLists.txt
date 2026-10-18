@@ -6,6 +6,8 @@ add_library(snk::render ALIAS render)
 file(GLOB_RECURSE SE_RENDER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RENDER_SOURCES})
 snk_component_headers(${PROJECT_NAME})
+# rnd_render_service_init.cpp includes the internal rnd_gl_swapchain.h of the GL driver.
+target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:drv_opengl,SOURCE_DIR>")
 
 # rnd_material_compiler consumes the POD scn::material_desc header (EPIC-49 US-49-5). material_desc
 # is header-only data (its methods live in scene's .cpp and the compiler calls none of them), so this

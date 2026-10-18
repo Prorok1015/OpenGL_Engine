@@ -1,7 +1,7 @@
 #pragma once
-#include "desc_base.hpp"
-#include "desc_system.h"
-#include "resources/res_resource_handle.hpp"
+#include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/resources/res_resource_handle.hpp>
 #include <unordered_map>
 #include "scn_ecs_assembler.h"
 #include "scn_override_record.h"

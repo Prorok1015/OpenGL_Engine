@@ -4,11 +4,11 @@
 #include "level/scn_level.h"
 #include "level/scn_level_manager.h"
 #include "level/scn_world_desc.h"
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include "scn_ecs_assembler.h"
-#include "desc_system.h"
-#include "res_system.h"
-#include "resources/res_resource_text.h"
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <entt/entt.hpp>
 #include <boost/json.hpp>
 #include "engine_log.h"

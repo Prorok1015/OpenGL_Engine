@@ -1,5 +1,5 @@
 #include "rnd_texture_2d_desc.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 
 void rnd::texture_2d_desc::deserialize(desc::desc_system& system, const json::object& resource)
 {

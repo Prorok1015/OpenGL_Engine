@@ -1,6 +1,6 @@
 #pragma once
 #include "scn_level.h"
-#include "res_system.h"
+#include <snk/resource/res_system.h>
 #include "scn_hot_reload_manager.h"
 #include <functional>
 #include <memory>

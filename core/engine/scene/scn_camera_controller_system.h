@@ -1,5 +1,5 @@
 #pragma once
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include <entt/fwd.hpp>
 #include "snk_api.h"
 

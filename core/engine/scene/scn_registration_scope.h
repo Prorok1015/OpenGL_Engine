@@ -1,6 +1,6 @@
 #pragma once
 #include "scn_ecs_assembler.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 #include <cstddef>
 #include <functional>
 #include <string>

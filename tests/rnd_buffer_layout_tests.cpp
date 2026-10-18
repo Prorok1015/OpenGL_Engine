@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "rnd_buffer_layout.h"
+#include <snk/driver/rnd_buffer_layout.h>
 
 using namespace rnd::driver;
 

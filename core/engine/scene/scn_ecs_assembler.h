@@ -1,10 +1,10 @@
 #pragma once
 #pragma once
-#include "desc_system.h"
-#include "desc_base.hpp"
+#include <snk/desc/desc_system.h>
+#include <snk/desc/desc_base.hpp>
 #include <entt/fwd.hpp>
-#include "resources/res_resource_handle.hpp"
-#include "res_tag.h"
+#include <snk/resource/resources/res_resource_handle.hpp>
+#include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <string>
 #include <functional>

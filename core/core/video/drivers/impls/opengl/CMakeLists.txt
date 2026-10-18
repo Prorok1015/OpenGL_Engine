@@ -5,7 +5,9 @@ add_library(snk::drv_opengl ALIAS drv_opengl)
 
 file(GLOB_RECURSE SE_DRV_GL_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_DRV_GL_SOURCES})
-snk_component_headers(${PROJECT_NAME})
+# Every header of the driver is internal (rnd_gl_*): the source dir is private to the target.
+# render and gui_gl_backend get explicit PRIVATE access to the two headers they include (#109).
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_subdirectory(${THIRD_PARTY_PATH}/glad glad)
 target_link_libraries(${PROJECT_NAME} PUBLIC glad)

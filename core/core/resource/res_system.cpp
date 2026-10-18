@@ -1,8 +1,8 @@
-#include "res_system.h"
-#include "adapters/res_pct_adapter.h"
-#include "adapters/res_text_adapter.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/resource/adapters/res_text_adapter.h>
 #include "cfg_api.h"
-#include "resolvers/res_vfs_resolver.h"
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 // Optional lower layer (engine base resources). Empty = single-root setup.

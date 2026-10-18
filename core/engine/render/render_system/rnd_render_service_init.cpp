@@ -4,7 +4,7 @@
 #include "rnd_gl_swapchain.h"
 #include "engine_log.h"
 #include <stdexcept>
-#include "res_system.h"
+#include <snk/resource/res_system.h>
 #include "geom/rnd_geometry_desc.h"
 #include "texture/rnd_texture_desc.h"
 #include "texture/rnd_texture_2d_desc.h"

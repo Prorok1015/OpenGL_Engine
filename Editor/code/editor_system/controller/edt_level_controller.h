@@ -1,7 +1,7 @@
 #pragma once
-#include "res_tag.h"
-#include "resources/res_resource_handle.hpp"
-#include "desc_base.hpp"
+#include <snk/resource/res_tag.h>
+#include <snk/resource/resources/res_resource_handle.hpp>
+#include <snk/desc/desc_base.hpp>
 #include "level/scn_world_desc.h"
 #include <algorithm>
 #include <string>

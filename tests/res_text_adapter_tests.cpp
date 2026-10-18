@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "adapters/res_text_adapter.h"
+#include <snk/resource/adapters/res_text_adapter.h>
 #include <cstring>
 
 BOOST_AUTO_TEST_SUITE(ResTextAdapterTests)

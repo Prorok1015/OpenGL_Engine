@@ -2,7 +2,7 @@
 #include "test_scene_env.hpp"
 #include "level/scn_level.h"
 #include "level/scn_hot_reload_manager.h"
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include <algorithm>
 
 namespace json = boost::json;

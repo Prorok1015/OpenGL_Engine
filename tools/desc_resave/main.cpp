@@ -6,10 +6,10 @@
 // --check writes nothing and exits with 1 when any file would change.
 // --base mounts a lower layer under the directory (Editor/res needs core/res for its base descs);
 // only the descs of the first directory are touched.
-#include "res_system.h"
-#include "desc_system.h"
-#include "adapters/desc_adapter_t.h"
-#include "adapters/res_adapter_worker_base.hpp"
+#include <snk/resource/res_system.h>
+#include <snk/desc/desc_system.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/resource/adapters/res_adapter_worker_base.hpp>
 #include "adapters/scn_model_importer_adapter.h"
 #include "cfg_api.h"
 #include "logger/engine_log.h"

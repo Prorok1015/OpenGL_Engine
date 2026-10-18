@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
-#include "desc_base.hpp"
-#include "rnd_buffer_layout.h"
+#include <snk/desc/desc_base.hpp>
+#include <snk/driver/rnd_buffer_layout.h>
 #include "ds/ds_rtree.h"
 #include "ds/ds_bbox.hpp"
 #include "snk_api.h"

@@ -1,5 +1,5 @@
 #pragma once
-#include <rnd_shader_interface.h>
+#include <snk/driver/rnd_shader_interface.h>
 #include <glad/glad.h>
 #include <glm/ext/matrix_float4x4.hpp>
 

@@ -5,7 +5,7 @@ add_library(snk::resource_system ALIAS resource_system)
 
 file(GLOB_RECURSE SE_RESOURCE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RESOURCE_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE assimp PRIVATE snk::engine_logger PRIVATE snk::image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE snk::config_system)
 

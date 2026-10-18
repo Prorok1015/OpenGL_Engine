@@ -1,4 +1,4 @@
-#include "res_resource_picture.h"
+#include <snk/resource/resources/res_resource_picture.h>
 
 res::picture_resource::picture_resource(const tag& tag, glm::ivec2 size_1, int channels_1, unsigned char* data_1)
 	: res::resource_entry(tag)

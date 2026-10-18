@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ecs_phase.hpp"
+#include <snk/ecs/ecs_phase.hpp>
 #include <algorithm>
 #include <string>
 #include <vector>

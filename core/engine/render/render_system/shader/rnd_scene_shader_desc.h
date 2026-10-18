@@ -1,9 +1,9 @@
 #pragma once
 #include "common.h"
 #include "ds/ds_fixed_vector.hpp"
-#include "res_tag.h"
-#include "rnd_shader_interface.h"
-#include "rnd_driver_interface.h"
+#include <snk/resource/res_tag.h>
+#include <snk/driver/rnd_shader_interface.h>
+#include <snk/driver/rnd_driver_interface.h>
 
 namespace res { class resource_system; }
 

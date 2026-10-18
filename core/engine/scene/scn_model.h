@@ -1,11 +1,11 @@
 #pragma once
 #include <common.h>
 #include <texture/rnd_texture_manager.h>
-#include "ecs_entity.h"
+#include <snk/ecs/ecs_entity.h>
 #include "scn_primitives.h"
 #include "scn_material_desc.h"
 #include "scn_mesh_nodes.hpp"
-#include "ecs_event.hpp"
+#include <snk/ecs/ecs_event.hpp>
 
 namespace scn {
 

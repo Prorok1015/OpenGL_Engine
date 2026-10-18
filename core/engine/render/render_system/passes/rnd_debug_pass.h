@@ -1,8 +1,8 @@
 #pragma once
 #include "rnd_render_pass_interface.h"
-#include "rnd_vertex_array_interface.h"
-#include "rnd_buffer_interface.h"
-#include "rnd_shader_interface.h"
+#include <snk/driver/rnd_vertex_array_interface.h>
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/driver/rnd_shader_interface.h>
 #include <memory>
 
 namespace res { class resource_system; }

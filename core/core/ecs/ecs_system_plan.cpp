@@ -1,4 +1,4 @@
-#include "ecs_system_plan.hpp"
+#include <snk/ecs/ecs_system_plan.hpp>
 #include "logger/engine_log.h"
 #include <algorithm>
 #include <format>

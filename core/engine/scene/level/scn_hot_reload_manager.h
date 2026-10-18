@@ -3,7 +3,7 @@
 #include <mutex>
 #include <vector>
 #include <unordered_set>
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include "scn_ecs_assembler.h"
 #include "snk_api.h"
 

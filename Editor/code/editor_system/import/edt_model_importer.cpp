@@ -8,9 +8,9 @@
 #include "rnd_render_system.h"
 #include "skinning/rnd_skinning_manager.h"
 #include "geom/rnd_geometry_desc.h"
-#include "adapters/res_pct_adapter.h"
+#include <snk/resource/adapters/res_pct_adapter.h>
 #include "scn_glm_json_convert.h"
-#include "desc_node_id.h"
+#include <snk/desc/desc_node_id.h>
 #include "scn_mesh_nodes.hpp"
 
 #include <glm/gtc/quaternion.hpp>

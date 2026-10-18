@@ -1,7 +1,7 @@
 #include "scn_ecs_assembler.h"
 #include <entt/entt.hpp>
-#include "res_system.h"
-#include "desc_json_ops.h"
+#include <snk/resource/res_system.h>
+#include <snk/desc/desc_json_ops.h>
 #include "logger/engine_log.h"
 
 namespace scn {

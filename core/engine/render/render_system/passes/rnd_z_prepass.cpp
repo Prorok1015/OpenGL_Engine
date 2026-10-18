@@ -1,7 +1,7 @@
 #include "rnd_z_prepass.h"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
-#include "rnd_ssbo_buffer_interface.h"
+#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include "skinning/rnd_skinning_manager.h"
 #include "eng_profiler.h"
 #include "rnd_gpu_profiler.h"

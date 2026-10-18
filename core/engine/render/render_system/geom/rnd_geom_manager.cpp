@@ -1,6 +1,6 @@
 #include "rnd_geom_manager.h"
-#include "rnd_buffer_interface.h"
-#include "res_system.h"
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/resource/res_system.h>
 
 rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, desc::desc_system& d, res::resource_system& res_sys)
 	: drv(_driver)

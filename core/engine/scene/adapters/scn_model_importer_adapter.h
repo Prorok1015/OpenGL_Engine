@@ -1,8 +1,8 @@
 #pragma once
 #include "common.h"
-#include "resources/res_resource_base.h"
-#include "desc_system.h"
-#include "adapters/res_adapter_interface.hpp"
+#include <snk/resource/resources/res_resource_base.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/adapters/res_adapter_interface.hpp>
 #include "snk_api.h"
 
 namespace res {
