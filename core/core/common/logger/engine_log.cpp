@@ -3,6 +3,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <string>
@@ -20,7 +21,11 @@ namespace {
 	bool s_initialized = false;
 	// Own copy: spdlog::get_level() dereferences the default logger, which spdlog::shutdown() destroys.
 	spdlog::level::level_enum s_global_level = spdlog::level::info;
-	engine::log_callback_t s_callback;
+	// Logging happens on resource/io worker threads while the editor installs its console sink on the
+	// main thread; an unguarded std::function swap during a call crashes. Readers copy the pointer
+	// under the lock and invoke outside it, so a callback that logs cannot deadlock.
+	std::mutex s_callback_mutex;
+	std::shared_ptr<const engine::log_callback_t> s_callback;
 	std::string s_log_file_path = "logs/engine.log";
 
 	spdlog::level::level_enum to_spdlog_level(engine::log_level level)
@@ -103,7 +108,10 @@ void engine::shutdown_logger()
 	s_loggers.clear();
 	s_sinks.clear();
 	s_file_sink = nullptr;
-	s_callback = nullptr;
+	{
+		std::lock_guard cb_lock(s_callback_mutex);
+		s_callback.reset();
+	}
 	spdlog::shutdown();
 	s_initialized = false;
 }
@@ -117,8 +125,13 @@ void engine::log_message(std::string_view category, log_level level, std::string
 		logger->log(spd_level, "{}", message);
 	}
 
-	if (s_callback) {
-		s_callback(category, level, message);
+	std::shared_ptr<const engine::log_callback_t> callback;
+	{
+		std::lock_guard cb_lock(s_callback_mutex);
+		callback = s_callback;
+	}
+	if (callback && *callback) {
+		(*callback)(category, level, message);
 	}
 }
 
@@ -182,5 +195,7 @@ void engine::set_category_file(std::string_view category, std::string_view path)
 
 void engine::set_log_callback(log_callback_t callback)
 {
-	s_callback = std::move(callback);
+	auto holder = callback ? std::make_shared<const log_callback_t>(std::move(callback)) : nullptr;
+	std::lock_guard cb_lock(s_callback_mutex);
+	s_callback = std::move(holder);
 }

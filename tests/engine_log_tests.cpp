@@ -1,9 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "logger/engine_log.h"
 #include "test_temp_dir.hpp"
+#include <atomic>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -121,6 +123,34 @@ BOOST_AUTO_TEST_CASE(GlobalLevel_CanBeRaisedAndRestoredWithoutAffectingCallbackD
 	engine::set_log_level(engine::log_level::info);
 	egLOG_INFO("covtest/global", "delivered");
 	BOOST_TEST(cap.lines.size() == 2u);
+}
+
+// Regression guard for the startup crash (#83): the editor installs its console sink on the main
+// thread while resource/io workers are already logging. Swapping the std::function during a call
+// used to tear it (crash, or a TSan data race on the callback).
+BOOST_AUTO_TEST_CASE(Callback_CanBeReplacedWhileOtherThreadsLog)
+{
+	engine::set_log_level(engine::log_level::error); // keep the spin loop out of the sinks
+	std::atomic<bool> stop{ false };
+	std::atomic<int> delivered{ 0 };
+	std::thread logger_thread([&] {
+		while (!stop.load(std::memory_order_acquire)) {
+			engine::log_message("covtest/race", engine::log_level::info, "tick");
+		}
+	});
+
+	for (int i = 0; i < 20000; ++i) {
+		engine::set_log_callback([&delivered](std::string_view, engine::log_level, std::string_view) {
+			delivered.fetch_add(1, std::memory_order_relaxed);
+		});
+		if (i % 8 == 0) engine::set_log_callback(nullptr);
+	}
+	engine::set_log_callback(nullptr);
+	stop.store(true, std::memory_order_release);
+	logger_thread.join();
+	engine::set_log_level(engine::log_level::info);
+
+	BOOST_TEST(delivered.load() >= 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

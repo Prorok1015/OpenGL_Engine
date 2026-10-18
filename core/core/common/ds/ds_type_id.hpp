@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -31,8 +32,10 @@ namespace ds {
 		}
 
 		static unique_id next() {
-			static unique_id counter = 0;
-			return counter++;
+			// Ids are first requested from any thread (resource adapter workers, main thread);
+			// a plain counter loses updates and hands two types the same id.
+			static std::atomic<unique_id> counter{ 0 };
+			return counter.fetch_add(1, std::memory_order_relaxed);
 		}
 
 	public:
