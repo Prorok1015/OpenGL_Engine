@@ -29,6 +29,10 @@ namespace edt
 		void serialize_and_push();
 		void sync_ecs_transforms_to_desc();
 
+		// Copies a live transform into the node. A node that references a desc and has no transform of its own is
+		// placed by the referenced prefab; that placement is not the user's, so it is left alone.
+		static void write_live_transform(prefab_node& node, const glm::mat4& local);
+
 		std::string make_unique_key(const std::string& base_name) const;
 
 		static prefab_node* find_node_by_name(std::vector<prefab_node>& nodes, const std::string& name);

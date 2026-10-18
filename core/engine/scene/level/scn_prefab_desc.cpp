@@ -73,6 +73,20 @@ namespace scn {
 		using prefab_node = scn::prefab_desc::prefab_node;
 		using prefab_comp_node = scn::prefab_desc::prefab_comp_node;
 
+		// A transform field is three numbers; anything else is reported and the default stays.
+		void read_vec3(const json::object& transform, std::string_view key, glm::vec3& out, const std::string& node_name)
+		{
+			const auto* value = transform.if_contains(key);
+			if (!value) return;
+			const bool valid = value->is_array() && value->as_array().size() == 3
+				&& std::ranges::all_of(value->as_array(), [] (const json::value& n) { return n.is_number(); });
+			if (!valid) {
+				egLOG_WARN("desc", "node '{}': transform '{}' must be three numbers, ignoring it", node_name, key);
+				return;
+			}
+			out = json::value_to<glm::vec3>(*value);
+		}
+
 		// `owner` names the memory:// copies of inline descs, so it has to be the desc the JSON came from.
 		prefab_comp_node parse_component(desc::desc_system& desc_system, const desc::desc_base& owner, const json::value& val, std::string_view explicit_type)
 		{
@@ -122,9 +136,9 @@ namespace scn {
 			if (auto* transform = obj.if_contains("transform"); transform && transform->is_object()) {
 				auto& t_obj = transform->as_object();
 				result.has_transform = true;
-				if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
-				if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
-				if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
+				read_vec3(t_obj, "position", result.position, result.name);
+				read_vec3(t_obj, "rotation", result.rotation, result.name);
+				read_vec3(t_obj, "scale", result.scale, result.name);
 			}
 
 			if (auto const* p = obj.if_contains("components"); p && p->is_object()) {
