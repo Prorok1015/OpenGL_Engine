@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
+
+# SNK_COMPILER_CACHE / SNK_PCH. Before project(): the MSVC debug-info policy it sets must precede
+# it, and NO_POLICY_SCOPE keeps that policy in this scope.
+include(cmake/SnkBuildCache.cmake NO_POLICY_SCOPE)
+
 project(build_all)
 
 set(CMAKE_CXX_STANDARD 20)

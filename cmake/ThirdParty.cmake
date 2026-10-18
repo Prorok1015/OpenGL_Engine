@@ -22,6 +22,9 @@ set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
 set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+# Assimp would set a GLOBAL ccache RULE_LAUNCH_COMPILE/LINK for the whole build (project targets
+# included), stacking a second ccache in front of the launcher chosen by SNK_COMPILER_CACHE.
+set(ASSIMP_BUILD_USE_CCACHE OFF CACHE BOOL "" FORCE)
 
 # --- spdlog (engine_logger) ---
 # Use std::format (C++20) instead of bundled fmtlib.
