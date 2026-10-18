@@ -26,6 +26,20 @@
             },
             "children" : [
                 {
+                    "__id" : "5a1f0c3e7b9d2468",
+                    "name" : "Game Camera",
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 1,
+                            "transform" : {
+                                "rotation" : [-5.0, 0.0, 0.0],
+                                "position" : [0.0, 1.0, 3.0]
+                            }
+                        }
+                    }
+                },
+                {
                     "__id" : "93d77f8c2348f13e",
                     "name" : "Directional Light",
                     "components" : {

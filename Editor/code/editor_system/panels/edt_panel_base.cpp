@@ -10,10 +10,14 @@ namespace edt
 
 	void panel_base::render()
 	{
-		if (!m_open)
+		if (!m_open) {
+			on_hidden();
 			return;
+		}
 		if (ImGui::Begin(m_title.c_str(), &m_open, m_flags))
 			on_render();
+		else
+			on_hidden();
 		ImGui::End();
 	}
 }

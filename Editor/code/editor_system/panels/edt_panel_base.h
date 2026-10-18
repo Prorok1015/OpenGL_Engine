@@ -22,6 +22,8 @@ namespace edt
 
 	protected:
 		virtual void on_render() = 0;
+		// Called instead of on_render() when the panel is closed, collapsed or in a hidden tab.
+		virtual void on_hidden() {}
 
 		std::string m_id;
 		std::string m_title;

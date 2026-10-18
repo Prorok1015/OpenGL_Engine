@@ -33,7 +33,8 @@ namespace edt
 
 		if (!m_layout_initialized)
 		{
-			setup_default_layout(dockspace_id);
+			const panel_base* game_view = pm.find_panel("game_view");
+			setup_default_layout(dockspace_id, game_view && game_view->is_open());
 			m_layout_initialized = true;
 		}
 
@@ -82,7 +83,7 @@ namespace edt
 		ImGui::EndMenuBar();
 	}
 
-	void dockspace::setup_default_layout(ImGuiID dockspace_id)
+	void dockspace::setup_default_layout(ImGuiID dockspace_id, bool split_game_view)
 	{
 		ImGui::DockBuilderRemoveNode(dockspace_id);
 		ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
@@ -98,6 +99,14 @@ namespace edt
 
 		ImGui::DockBuilderDockWindow("Scene Hierarchy", dock_left);
 		ImGui::DockBuilderDockWindow("Inspector",       dock_right);
+		// Opened at startup: side by side with the Viewport. Otherwise it joins the Viewport as a tab
+		// when first shown (a split would leave an empty node while the panel is closed).
+		if (split_game_view) {
+			ImGuiID dock_game_view = ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.50f, nullptr, &dock_center);
+			ImGui::DockBuilderDockWindow("Game view", dock_game_view);
+		} else {
+			ImGui::DockBuilderDockWindow("Game view", dock_center);
+		}
 		ImGui::DockBuilderDockWindow("Viewport",        dock_center);
 		ImGui::DockBuilderDockWindow("Asset Browser",   dock_bottom_left);
 		ImGui::DockBuilderDockWindow("Console",         dock_bottom_right);

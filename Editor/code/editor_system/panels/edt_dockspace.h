@@ -24,7 +24,7 @@ namespace edt
 
 	private:
 		void render_menu_bar(panel_manager& pm);
-		void setup_default_layout(ImGuiID dockspace_id);
+		void setup_default_layout(ImGuiID dockspace_id, bool split_game_view);
 
 		bool m_layout_initialized = false;
 

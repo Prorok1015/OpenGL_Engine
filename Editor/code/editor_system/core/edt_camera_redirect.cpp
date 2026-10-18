@@ -11,6 +11,11 @@ namespace {
 	constexpr std::string_view target_prefix = "memory://__game_camera_rt_";
 }
 
+bool edt::is_game_camera_target(const res::tag& target)
+{
+	return target.view().starts_with(target_prefix);
+}
+
 void edt::camera_redirector::begin_frame()
 {
 	m_live.clear();

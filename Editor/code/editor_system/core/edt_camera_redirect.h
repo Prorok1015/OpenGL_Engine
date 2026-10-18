@@ -9,6 +9,9 @@
 
 namespace edt
 {
+	// True for a texture target assigned by camera_redirector (as opposed to the editor/prefab cameras').
+	bool is_game_camera_target(const res::tag& target);
+
 	// In the editor the 3D view is shown inside an ImGui panel, so a camera must not draw into the
 	// window's backbuffer (it would be painted over by the UI). Every camera that targets the
 	// backbuffer is given its own texture target instead.
