@@ -10,5 +10,6 @@ snk_component_headers(${PROJECT_NAME})
 add_subdirectory(${THIRD_PARTY_PATH}/glad glad)
 target_link_libraries(${PROJECT_NAME} PUBLIC glad)
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::drv_interface PRIVATE snk::engine_logger)
-# rnd_gl_swapchain.h includes wnd_gl_surface.h; the window component never links back to the driver.
-target_link_libraries(${PROJECT_NAME} PUBLIC snk::window)
+# rnd_gl_swapchain.h includes wnd_gl_surface.h: the driver depends on the gl_surface interface, not on
+# the windowing library (no GLFW/core_input leaking into the GL backends).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::window_gl_surface)

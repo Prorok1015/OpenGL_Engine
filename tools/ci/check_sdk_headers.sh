@@ -48,10 +48,10 @@ while IFS= read -r rel; do
 done < <(cd "${root}" && find snk -type f | LC_ALL=C sort)
 
 would_fail=()
-for entry in "${found[@]}"; do
+for entry in ${found[@]+"${found[@]}"}; do
 	rel="${entry%%  (*}"
 	allowed=0
-	for re in "${ALLOW[@]}"; do
+	for re in ${ALLOW[@]+"${ALLOW[@]}"}; do
 		[[ "${rel}" =~ ${re} ]] && allowed=1
 	done
 	((allowed)) || would_fail+=("${entry}")
@@ -59,7 +59,7 @@ done
 
 total=$(cd "${root}" && find snk -type f | wc -l)
 echo "SDK headers: ${total} files installed under include/snk, ${#would_fail[@]} internal"
-for entry in "${would_fail[@]}"; do
+for entry in ${would_fail[@]+"${would_fail[@]}"}; do
 	echo "  internal: ${entry}"
 done
 
