@@ -4,6 +4,7 @@
 #include "res_tag.h"
 #include "scn_camera_component.hpp"
 #include "scn_model.h"
+#include "level/scn_node_index.h"
 #include "eng_transform_3d.hpp"
 #include "inp_events.hpp"
 #include "edt_guizmo.hpp"
@@ -218,14 +219,15 @@ namespace edt
 			m_gizmo_op, m_rotate_ent, m_active_ring, &committed);
 
 		if (committed && m_on_transform_committed && reg.valid(m_selected)) {
-			std::string name;
-			if (reg.all_of<scn::name_component>(m_selected))
-				name = reg.get<scn::name_component>(m_selected).name;
+			// Copied: the callback may reload the world and with it the component this path lives in.
+			std::vector<uint64_t> path;
+			if (const auto* id = reg.try_get<scn::node_id_component>(m_selected))
+				path = id->path;
 
-			if (!name.empty() && reg.all_of<scn::local_transform>(m_selected)) {
+			if (!path.empty() && reg.all_of<scn::local_transform>(m_selected)) {
 				const auto& lt = reg.get<scn::local_transform>(m_selected);
 				eng::transform3d tr{ lt.local };
-				m_on_transform_committed(name, tr.get_pos(), tr.get_angles_degrees(), tr.get_scale());
+				m_on_transform_committed(path, tr.get_pos(), tr.get_angles_degrees(), tr.get_scale());
 				// The callback may trigger reload_world() — `reg` is dangling from here on.
 				return;
 			}

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <format>
+#include <cstring>
 
 namespace edt
 {
@@ -21,6 +22,9 @@ namespace edt
 	{
 		m_world_desc    = desc;
 		m_selected_node = nullptr;
+		m_selected_owner = nullptr;
+		m_selected_path.clear();
+		m_selected_target.clear();
 		m_rename_node   = nullptr;
 		m_multi_selected.clear();
 		m_last_clicked_flat_idx = -1;
@@ -30,6 +34,10 @@ namespace edt
 	{
 		m_selected_node = node;
 		m_selected_readonly = false;
+		m_selected_owner = nullptr;
+		m_selected_target.clear();
+		m_selected_path.clear();
+		if (node && m_world_desc) find_path(m_world_desc->get_root().children, node, m_selected_path);
 		m_multi_selected.clear();
 		m_last_clicked_flat_idx = -1;
 	}
@@ -39,12 +47,12 @@ namespace edt
 		m_on_node_selected = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_delete_node(std::function<void(const std::string&)> cb)
+	void scene_hierarchy_panel::set_on_delete_node(std::function<void(uint64_t)> cb)
 	{
 		m_on_delete_node = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_delete_nodes(std::function<void(const std::vector<std::string>&)> cb)
+	void scene_hierarchy_panel::set_on_delete_nodes(std::function<void(const std::vector<uint64_t>&)> cb)
 	{
 		m_on_delete_nodes = std::move(cb);
 	}
@@ -59,17 +67,17 @@ namespace edt
 		m_on_rename_node = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_duplicate_node(std::function<void(const std::string&)> cb)
+	void scene_hierarchy_panel::set_on_duplicate_node(std::function<void(uint64_t)> cb)
 	{
 		m_on_duplicate_node = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_duplicate_nodes(std::function<void(const std::vector<std::string>&)> cb)
+	void scene_hierarchy_panel::set_on_duplicate_nodes(std::function<void(const std::vector<uint64_t>&)> cb)
 	{
 		m_on_duplicate_nodes = std::move(cb);
 	}
 
-	void scene_hierarchy_panel::set_on_reparent_node(std::function<void(const std::string&, const std::string&, int)> cb)
+	void scene_hierarchy_panel::set_on_reparent_node(std::function<void(uint64_t, uint64_t, int)> cb)
 	{
 		m_on_reparent_node = std::move(cb);
 	}
@@ -118,15 +126,41 @@ namespace edt
 		return nullptr;
 	}
 
-	void scene_hierarchy_panel::draw_prefab_children_readonly(const scn::prefab_desc::prefab_node& node)
+	bool scene_hierarchy_panel::find_path(
+		const std::vector<scn::prefab_desc::prefab_node>& nodes, const scn::prefab_desc::prefab_node* wanted, std::vector<uint64_t>& path) const
 	{
-		for (const auto& child : node.children) {
+		for (const auto& node : nodes) {
+			path.push_back(node.node_id);
+			if (&node == wanted || find_path(node.children, wanted, path))
+				return true;
+			path.pop_back();
+		}
+		return false;
+	}
+
+	void scene_hierarchy_panel::notify_selected()
+	{
+		if (!m_selected_readonly) {
+			m_selected_owner = nullptr;
+			m_selected_target.clear();
+			m_selected_path.clear();
+			if (m_selected_node && m_world_desc)
+				find_path(m_world_desc->get_root().children, m_selected_node, m_selected_path);
+		}
+		if (m_on_node_selected) m_on_node_selected(m_selected_node);
+	}
+
+	void scene_hierarchy_panel::draw_prefab_children_readonly(
+		scn::prefab_desc::prefab_node& owner, const scn::prefab_desc::prefab_node& content, std::vector<uint64_t>& target)
+	{
+		for (const auto& child : content.children) {
 			const bool has_sub = !child.children.empty();
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 			if (!has_sub) flags |= ImGuiTreeNodeFlags_Leaf;
 
-			// Highlight if this readonly node is selected
-			if (m_selected_readonly && m_selected_node == const_cast<scn::prefab_desc::prefab_node*>(&child))
+			// Highlight if this node of the instantiated prefab is selected
+			if (m_selected_readonly && m_selected_owner == &owner
+				&& m_selected_node == const_cast<scn::prefab_desc::prefab_node*>(&child))
 				flags |= ImGuiTreeNodeFlags_Selected;
 
 			std::string prefix;
@@ -135,22 +169,30 @@ namespace edt
 			else if (child.components.count(std::string(scn::camera_desc::__type))) prefix = "[C] ";
 
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-			std::string id = prefix + child.name + "##prefab_" + child.name;
+			std::string id = std::format("{}{}##prefab_{:x}", prefix, child.name, child.node_id);
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
 
-			// Handle click — select readonly node for inspector viewing
+			target.push_back(child.node_id);
+
+			// A click selects the node; its edits become override records on the instance
 			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
 				m_multi_selected.clear();
 				m_selected_node = const_cast<scn::prefab_desc::prefab_node*>(&child);
 				m_selected_readonly = true;
+				m_selected_owner = &owner;
+				m_selected_target = target;
+				m_selected_path.clear();
+				find_path(m_world_desc->get_root().children, &owner, m_selected_path);
+				m_selected_path.insert(m_selected_path.end(), target.begin(), target.end());
 				if (m_on_node_selected) m_on_node_selected(m_selected_node);
 			}
 
 			if (opened) {
-				draw_prefab_children_readonly(child);
+				draw_prefab_children_readonly(owner, child, target);
 				ImGui::TreePop();
 			}
+			target.pop_back();
 		}
 	}
 
@@ -168,36 +210,36 @@ namespace edt
 	void scene_hierarchy_panel::delete_selected()
 	{
 		if (m_multi_selected.size() > 1) {
-			std::vector<std::string> names;
-			names.reserve(m_multi_selected.size());
+			std::vector<uint64_t> ids;
+			ids.reserve(m_multi_selected.size());
 			for (auto* n : m_multi_selected)
-				names.push_back(n->name);
+				ids.push_back(n->node_id);
 			m_multi_selected.clear();
 			m_selected_node = nullptr;
-			if (m_on_delete_nodes) m_on_delete_nodes(names);
+			if (m_on_delete_nodes) m_on_delete_nodes(ids);
 		} else if (m_selected_node) {
-			std::string name = m_selected_node->name;
+			const uint64_t id = m_selected_node->node_id;
 			m_selected_node = nullptr;
 			m_multi_selected.clear();
-			if (m_on_delete_node) m_on_delete_node(name);
+			if (m_on_delete_node) m_on_delete_node(id);
 		}
 	}
 
 	void scene_hierarchy_panel::duplicate_selected()
 	{
 		if (m_multi_selected.size() > 1) {
-			std::vector<std::string> names;
-			names.reserve(m_multi_selected.size());
+			std::vector<uint64_t> ids;
+			ids.reserve(m_multi_selected.size());
 			for (auto* n : m_multi_selected)
-				names.push_back(n->name);
+				ids.push_back(n->node_id);
 			m_multi_selected.clear();
 			m_selected_node = nullptr;
-			if (m_on_duplicate_nodes) m_on_duplicate_nodes(names);
+			if (m_on_duplicate_nodes) m_on_duplicate_nodes(ids);
 		} else if (m_selected_node) {
-			std::string name = m_selected_node->name;
+			const uint64_t id = m_selected_node->node_id;
 			m_selected_node = nullptr;
 			m_multi_selected.clear();
-			if (m_on_duplicate_node) m_on_duplicate_node(name);
+			if (m_on_duplicate_node) m_on_duplicate_node(id);
 		}
 	}
 
@@ -219,6 +261,9 @@ namespace edt
 					if (i != m_world_idx) {
 						m_world_idx     = i;
 						m_selected_node = nullptr;
+						m_selected_owner = nullptr;
+						m_selected_path.clear();
+						m_selected_target.clear();
 						m_rename_node   = nullptr;
 						m_multi_selected.clear();
 						m_last_clicked_flat_idx = -1;
@@ -303,7 +348,7 @@ namespace edt
 		// Delete key shortcut
 		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
 			ImGui::IsKeyPressed(ImGuiKey_Delete) &&
-			(m_selected_node || m_multi_selected.size() > 1))
+			((m_selected_node && !m_selected_readonly) || m_multi_selected.size() > 1))
 		{
 			delete_selected();
 			return;
@@ -320,9 +365,10 @@ namespace edt
 			ImGui::InvisibleButton("##root_drop_area", ImVec2(-1.f, avail.y));
 			if (ImGui::BeginDragDropTarget()) {
 				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
-					std::string dragged_name(static_cast<const char*>(payload->Data));
-					// empty parent name = root
-					if (m_on_reparent_node) m_on_reparent_node(dragged_name, "", -1);
+					uint64_t dragged_id = 0;
+					std::memcpy(&dragged_id, payload->Data, sizeof(dragged_id));
+					// parent id 0 = root
+					if (m_on_reparent_node) m_on_reparent_node(dragged_id, 0, -1);
 				}
 				ImGui::EndDragDropTarget();
 			}
@@ -342,13 +388,13 @@ namespace edt
 
 		// Build ImGui IDs using format_to_n into stack buffer (no heap allocation)
 		char id_buf[512];
-		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{0}{1}##{1}", prefix, node.name);
+		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{0}{1}##{2:x}", prefix, node.name, node.node_id);
 		*id_result.out = '\0';
 
 		// ── inline rename ────────────────────────────────────────────────────
 		if (m_rename_node == &node) {
 			char rename_id[512];
-			auto rn_result = std::format_to_n(rename_id, sizeof(rename_id) - 1, "##rename##{}", node.name);
+			auto rn_result = std::format_to_n(rename_id, sizeof(rename_id) - 1, "##rename##{:x}", node.node_id);
 			*rn_result.out = '\0';
 			ImGui::SetKeyboardFocusHere();
 			if (ImGui::InputText(rename_id, m_rename_buf, sizeof(m_rename_buf),
@@ -394,7 +440,7 @@ namespace edt
 					// If we removed the primary, pick another or clear
 					if (&node == m_selected_node) {
 						m_selected_node = m_multi_selected.empty() ? nullptr : *m_multi_selected.begin();
-						if (m_on_node_selected) m_on_node_selected(m_selected_node);
+						notify_selected();
 					}
 				} else {
 					// Add current primary to multi_selected first
@@ -402,7 +448,8 @@ namespace edt
 						m_multi_selected.insert(m_selected_node);
 					m_multi_selected.insert(&node);
 					m_selected_node = &node;
-					if (m_on_node_selected) m_on_node_selected(m_selected_node);
+					m_selected_readonly = false;
+					notify_selected();
 				}
 				m_last_clicked_flat_idx = my_flat_index;
 			} else if (shift_held && m_last_clicked_flat_idx >= 0) {
@@ -413,20 +460,21 @@ namespace edt
 				for (int i = from; i <= to && i < (int)m_flat_visible_nodes.size(); ++i)
 					m_multi_selected.insert(m_flat_visible_nodes[i]);
 				m_selected_node = &node;
-				if (m_on_node_selected) m_on_node_selected(m_selected_node);
+				m_selected_readonly = false;
+				notify_selected();
 			} else {
 				// Plain click: single selection
 				m_multi_selected.clear();
 				m_selected_node = &node;
 				m_selected_readonly = false;
 				m_last_clicked_flat_idx = my_flat_index;
-				if (m_on_node_selected) m_on_node_selected(&node);
+				notify_selected();
 			}
 		}
 
 		// ── drag source ─────────────────────────────────────────────────────
 		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-			ImGui::SetDragDropPayload("HIERARCHY_NODE", node.name.c_str(), node.name.size() + 1);
+			ImGui::SetDragDropPayload("HIERARCHY_NODE", &node.node_id, sizeof(node.node_id));
 			ImGui::TextUnformatted(node.name.c_str());
 			ImGui::EndDragDropSource();
 		}
@@ -456,14 +504,15 @@ namespace edt
 			}
 
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
-				std::string dragged_name(static_cast<const char*>(payload->Data));
-				if (dragged_name != node.name) {
+				uint64_t dragged_id = 0;
+				std::memcpy(&dragged_id, payload->Data, sizeof(dragged_id));
+				if (dragged_id != node.node_id) {
 					if (fraction < 0.25f) {
-						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, 0);
+						if (m_on_reparent_node) m_on_reparent_node(dragged_id, node.node_id, 0);
 					} else if (fraction > 0.75f) {
-						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, 1);
+						if (m_on_reparent_node) m_on_reparent_node(dragged_id, node.node_id, 1);
 					} else {
-						if (m_on_reparent_node) m_on_reparent_node(dragged_name, node.name, -1);
+						if (m_on_reparent_node) m_on_reparent_node(dragged_id, node.node_id, -1);
 					}
 				}
 			}
@@ -495,10 +544,10 @@ namespace edt
 				if (multi_mode) {
 					duplicate_selected();
 				} else {
-					std::string name = node.name;
+					const uint64_t id = node.node_id;
 					m_multi_selected.clear();
 					m_selected_node = nullptr;
-					if (m_on_duplicate_node) m_on_duplicate_node(name);
+					if (m_on_duplicate_node) m_on_duplicate_node(id);
 				}
 				return;
 			}
@@ -511,10 +560,10 @@ namespace edt
 				if (multi_mode) {
 					delete_selected();
 				} else {
-					std::string name = node.name;
+					const uint64_t id = node.node_id;
 					m_selected_node = nullptr;
 					m_multi_selected.clear();
-					if (m_on_delete_node) m_on_delete_node(name);
+					if (m_on_delete_node) m_on_delete_node(id);
 				}
 				return;
 			}
@@ -527,8 +576,10 @@ namespace edt
 			for (auto& child : node.children)
 				draw_node(child, lower_filter, flat_index);
 			// Show referenced prefab's children as read-only
-			if (ref_prefab)
-				draw_prefab_children_readonly(ref_prefab->get_root());
+			if (ref_prefab) {
+				std::vector<uint64_t> target;
+				draw_prefab_children_readonly(node, ref_prefab->get_root(), target);
+			}
 			ImGui::TreePop();
 		}
 	}

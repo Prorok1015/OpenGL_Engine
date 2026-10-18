@@ -1,6 +1,7 @@
 #include "edt_inspector_panel.h"
 #include "edt_component_ui_registry.h"
 #include "desc_system.h"
+#include "edt_override_edit.h"
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
@@ -18,7 +19,15 @@ namespace edt
 	{
 		m_selected_node = node;
 		m_readonly = readonly;
+		m_owner = nullptr;
+		m_target.clear();
 		rebuild_parent_cache();
+	}
+
+	void inspector_panel::set_override_target(scn::prefab_desc::prefab_node* owner, std::vector<uint64_t> target)
+	{
+		m_owner = owner;
+		m_target = std::move(target);
 	}
 
 	void inspector_panel::rebuild_parent_cache()
@@ -56,6 +65,11 @@ namespace edt
 			// Selection may be cleared while an edit is still pending (e.g. text field lost focus on click).
 			commit_if_idle();
 			ImGui::TextDisabled("No node selected");
+			return;
+		}
+
+		if (m_owner) {
+			render_override_target();
 			return;
 		}
 
@@ -158,6 +172,81 @@ namespace edt
 		// no item is active, i.e. a drag was released. Checkboxes are never active after
 		// the frame that changed them, so they commit at once.
 		if (changed && !m_readonly)
+			m_pending_commit = true;
+		commit_if_idle();
+	}
+
+	void inspector_panel::render_override_target()
+	{
+		namespace oe = override_edit;
+		const scn::prefab_desc::prefab_node& base = *m_selected_node;
+		bool changed = false;
+
+		ImGui::Text("%s", base.name.c_str());
+		ImGui::TextDisabled("part of %s: edits are saved as overrides", m_owner->name.c_str());
+		ImGui::Separator();
+
+		const std::string transform_key{ scn::transform_pseudo_component };
+		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::PushID("transform");
+			glm::vec3 pos, rot, scl;
+			oe::effective_transform(*m_owner, m_target, base, pos, rot, scl);
+			bool edited = false;
+			if (ImGui::DragFloat3("Position", &pos.x, 0.01f)) edited = true;
+			if (ImGui::DragFloat3("Rotation", &rot.x, 0.5f))  edited = true;
+			if (ImGui::DragFloat3("Scale",    &scl.x, 0.01f, 0.001f, 100.f)) edited = true;
+			if (edited) {
+				oe::write_transform(*m_owner, m_target, base, pos, rot, scl);
+				changed = true;
+			}
+			if (oe::has_record(*m_owner, m_target, transform_key) && ImGui::SmallButton("Reset to base")) {
+				oe::reset(*m_owner, m_target, transform_key);
+				changed = true;
+			}
+			ImGui::PopID();
+		}
+
+		ImGui::Separator();
+
+		for (const auto& [key, comp] : base.components) {
+			std::string effective_type = comp.type_name;
+			if (effective_type.empty() && comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
+				effective_type = std::string(comp.parent_desc->get_type());
+			}
+			const std::string& header = effective_type.empty() ? key : effective_type;
+			const std::string header_id = header + "##" + key;
+			if (!ImGui::CollapsingHeader(header_id.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+				continue;
+
+			ImGui::PushID(key.c_str());
+			const boost::json::object base_json = oe::component_json(comp);
+			// The widgets edit a scratch copy holding what the instance has now; the difference to the base becomes the record.
+			auto scratch = comp;
+			scratch.overrides = oe::effective_component(*m_owner, m_target, key, base_json);
+
+			bool edited = false;
+			bool handled = false;
+			if (m_ui_registry && !effective_type.empty()) {
+				if (auto result = m_ui_registry->invoke(effective_type, scratch); result.has_value()) {
+					edited = *result;
+					handled = true;
+				}
+			}
+			if (!handled)
+				edited = render_generic_json(scratch.overrides);
+
+			if (edited) {
+				oe::write_component(*m_owner, m_target, key, base_json, scratch.overrides);
+				changed = true;
+			}
+			if (oe::has_record(*m_owner, m_target, key) && ImGui::SmallButton("Reset to base")) {
+				oe::reset(*m_owner, m_target, key);
+				changed = true;
+			}
+			ImGui::PopID();
+		}
+
+		if (changed)
 			m_pending_commit = true;
 		commit_if_idle();
 	}

@@ -106,13 +106,16 @@ User edits in Inspector
   → Viewport reflects changes next frame
 
 Gizmo drag committed
-  → on_transform_committed(name, pos, rot, scale)
-  → scene_editor::find_node_by_name in active_world_desc
-  → update node.position / rotation / scale
+  → on_transform_committed(node_id path, pos, rot, scale)   (path = scn::node_id_component of the entity)
+  → scene_editor::resolve_node_path in active_world_desc → { owner, target }
+  → target empty: update owner.position / rotation / scale
+  → target non-empty (node inside a prefab instance): override_edit::write_transform → override_record on owner
   → serialize_and_push()
 ```
 
-**ECS → Desc** (called before save): `scene_editor::sync_ecs_transforms_to_desc()` reads `local_transform` components and writes back to desc nodes.
+The editor never finds nodes by name (names are display only): hierarchy, viewport and `scene_editor` pass `node_id`s / id paths. Inspector edits of a node inside a prefab instance go through `edt_override_edit.h` (records on the instance node; "Reset to base" drops them).
+
+**ECS → Desc** (called before save): `scene_editor::sync_ecs_transforms_to_desc()` reads `local_transform` of entities with a `node_id_component`, resolves the path, and writes back to the (non-instanced) desc nodes.
 
 ## Level JSON Schema
 
