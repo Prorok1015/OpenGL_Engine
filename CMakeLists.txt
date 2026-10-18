@@ -16,12 +16,33 @@ endif()
 
 set(THIRD_PARTY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib3dparty")
 set(ENGINE_CORE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/core")
-set(SE_PROJECT_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Keep absolute source paths out of the binaries: __FILE__ (asserts, GL error checks, logging
+# in project and third-party code) becomes relative to the source root. Only the __FILE__ macro
+# is remapped, not debug info, so debuggers and gcov/coverage still see the real paths.
+if(MSVC)
+    add_compile_options(/d1trimfile:${CMAKE_CURRENT_SOURCE_DIR}/)
+else()
+    add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
+endif()
 
 # Centralized third-party configuration (cache vars, slim Boost) — must run before
 # any add_subdirectory so every submodule sees consistent options (EPIC-41 US-41-1).
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ThirdParty)
+# FetchContent'd Boost lives outside the source tree: remap it too, plus the symlink-resolved
+# source root (e.g. submodules linked from another checkout).
+if(MSVC)
+    if(boost_SOURCE_DIR)
+        add_compile_options(/d1trimfile:${boost_SOURCE_DIR}/)
+    endif()
+else()
+    get_filename_component(_snk_real_src "${CMAKE_CURRENT_SOURCE_DIR}/lib3dparty" REALPATH)
+    add_compile_options(-fmacro-prefix-map=${_snk_real_src}/=lib3dparty/)
+    if(boost_SOURCE_DIR)
+        add_compile_options(-fmacro-prefix-map=${boost_SOURCE_DIR}/=boost/)
+    endif()
+endif()
 # SNK_SANITIZE option + snk::sanitizers interface target (project targets only).
 include(Sanitizers)
 # snk::compiler_warnings interface target (project targets only, via snk::common).

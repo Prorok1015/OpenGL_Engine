@@ -7,11 +7,10 @@
 
 void opengl::glCheckError_(const char* file, int line)
 {
-    constexpr int prefix_length = std::string_view(PROJECT_SOURCE_PATH).length() + 1;
     constexpr char max_msg_count = 20;
 
+    // __FILE__ is already relative to the source root (see root CMakeLists.txt), so no prefix stripping.
     std::string_view sFile = file;
-    sFile.remove_prefix(prefix_length);
 
     int msg_count = 0;
     GLenum errorCode = GL_NO_ERROR;
