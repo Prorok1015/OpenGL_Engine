@@ -22,3 +22,7 @@ target_include_directories(imgui PUBLIC
 	"${THIRD_PARTY_PATH}/imgui"
 	"${THIRD_PARTY_PATH}/imgui/misc/cpp"
 )
+
+if(SNK_ENGINE_SHARED AND MSVC)
+	target_compile_definitions(imgui PRIVATE "IMGUI_API=__declspec(dllexport)")
+endif()

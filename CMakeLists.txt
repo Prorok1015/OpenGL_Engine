@@ -15,7 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # One shared library (snk_engine) instead of static engine components; the editor and the tests
-# link it. Experimental, Linux only for now (EPIC-29 #59).
+# link it. Experimental; CI covers Linux GCC and Windows MSVC (EPIC-29 #59, #198).
 option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" OFF)
 if(SNK_ENGINE_SHARED)
     # $<COMPILE_ONLY:> (usage requirements without linking) keeps consumers from linking the
@@ -106,6 +106,13 @@ target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 # desc_repo_roundtrip_tests loads the descs the repository ships.
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/res")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
+
+if(WIN32 AND SNK_ENGINE_SHARED)
+	# Windows has no rpath: snk_engine.dll must sit next to the executable.
+	add_custom_command(TARGET unit_tests POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:unit_tests> $<TARGET_FILE_DIR:unit_tests>
+		COMMAND_EXPAND_LISTS)
+endif()
 
 add_test(NAME unit_tests COMMAND unit_tests)
 
