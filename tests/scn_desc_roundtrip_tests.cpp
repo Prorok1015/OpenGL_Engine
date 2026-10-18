@@ -532,6 +532,8 @@ BOOST_AUTO_TEST_CASE(WorldDesc_IdentityReferenceNodeStillUsesShorthand)
 
 	scn::world_desc w;
 	w.deserialize(*descs, parse(text.c_str()));
+	// The one-line form cannot hold a node id, so only an id-less node collapses.
+	w.get_root().children[0].node_id = 0;
 	BOOST_TEST(ser(w).at("children").as_object().at("scene").is_string());
 }
 

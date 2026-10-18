@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "scn_glm_json_convert.h"
+#include "desc_node_id.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 
@@ -140,6 +141,8 @@ BOOST_AUTO_TEST_CASE(Parse_ParentKeepsOverridesButStripsReservedKeys)
 BOOST_AUTO_TEST_CASE(Serialize_OmitsDefaultsAndCollapsesShorthandNodes)
 {
 	auto d = parse(BASE_PREFAB);
+	// Loaded nodes carry an id and only id-less nodes collapse (the one-line form cannot hold it).
+	d.get_root().children[2].node_id = 0;
 	json::object out;
 	d.serialize(out);
 
@@ -178,6 +181,8 @@ BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentCollapsesToTagString)
 {
 	put("arm.desc", R"({"__type":"stat_desc","hp":5})");
 	auto d = parse(R"({"children":{"arm":"memory://t/arm.desc"}})");
+	// Loaded nodes always carry an id and the collapsed form has no room for it: only an id-less node collapses.
+	d.get_root().children[0].node_id = 0;
 	json::object out;
 	d.serialize(out);
 
@@ -187,6 +192,23 @@ BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentCollapsesToTagString)
 	scn::prefab_desc again;
 	again.deserialize(*descs, out);
 	BOOST_TEST(again.get_root().children[0].components.at("arm").parent_desc.get_tag() == tag_of("arm.desc"));
+}
+
+BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentOfNodeWithIdKeepsTheIdInsteadOfCollapsing)
+{
+	put("arm.desc", R"({"__type":"stat_desc","hp":5})");
+	auto d = parse(R"({"children":{"arm":"memory://t/arm.desc"}})");
+	const auto id = d.get_root().children[0].node_id;
+	json::object out;
+	d.serialize(out);
+
+	const auto& arm = out.at("children").at("arm").as_object();
+	BOOST_TEST(arm.at("__id").as_string() == desc::format_node_id(id));
+	BOOST_TEST(arm.at("components").at("arm").as_string() == "memory://t/arm.desc");
+
+	scn::prefab_desc again;
+	again.deserialize(*descs, out);
+	BOOST_TEST(again.get_root().children[0].node_id == id);
 }
 
 BOOST_AUTO_TEST_CASE(PrefabNode_LocalTransformComposesTranslateRotateScale)

@@ -3,6 +3,7 @@
 #include "level/scn_level.h"
 #include "level/scn_level_manager.h"
 #include "scn_model.h"
+#include "desc_node_id.h"
 #include "eng_transform_3d.hpp"
 #include <entt/entt.hpp>
 #include <algorithm>
@@ -22,6 +23,7 @@ void edt::scene_editor::create_entity(const std::string& type_name)
 
 	prefab_node node;
 	node.name = key;
+	node.node_id = desc::new_node_id();
 
 	if (type_name != "Empty" && !type_name.empty()) {
 		scn::prefab_desc::prefab_comp_node comp;
@@ -37,6 +39,8 @@ void edt::scene_editor::create_entity(const std::string& type_name)
 
 void edt::scene_editor::create_entity_from_node(prefab_node node)
 {
+	if (node.node_id == desc::invalid_node_id)
+		node.node_id = desc::new_node_id();
 	if (on_before_modify) on_before_modify();
 	m_state.active_world_desc().get_root().children.push_back(std::move(node));
 	m_state.is_dirty = true;
@@ -73,6 +77,7 @@ void edt::scene_editor::duplicate_entity(const std::string& name)
 
 	prefab_node copy = *it;
 	copy.name = make_unique_key(name + "_copy");
+	scn::regenerate_node_ids(copy);
 
 	if (on_before_modify) on_before_modify();
 	siblings->insert(it + 1, std::move(copy));
@@ -96,6 +101,7 @@ void edt::scene_editor::duplicate_entities(const std::vector<std::string>& names
 		if (it == siblings->end()) continue;
 		prefab_node copy = *it;
 		copy.name = make_unique_key(name + "_copy");
+		scn::regenerate_node_ids(copy);
 		std::size_t idx = static_cast<std::size_t>(std::distance(siblings->begin(), it));
 		copies.push_back({ siblings, idx + 1, std::move(copy) });
 	}

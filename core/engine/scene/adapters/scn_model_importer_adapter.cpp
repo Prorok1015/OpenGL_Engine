@@ -11,6 +11,7 @@
 #include "adapters/res_pct_adapter.h"
 
 #include "scn_glm_json_convert.h"
+#include "desc_node_id.h"
 #include "scn_mesh_nodes.hpp"
 
 #include "scn_assimp_resource_system_wrapper.h"
@@ -407,10 +408,13 @@ json::object build_prefab_node(
 	std::vector<std::vector<uint32_t>>& skin_weights,
 	res::tag tag,
 	res::tag prefab_tag,
-	res::resource_system& res_sys)
+	res::resource_system& res_sys,
+	const std::string& node_path)
 {
 	json::object jsnode;
 	std::string node_name = node->mName.C_Str();
+	// Hash of the name path: re-importing the same model yields the same ids.
+	jsnode["__id"] = desc::format_node_id(desc::derive_node_id(node_path));
 
 	// Transform
 	auto trs = decompose_aimatrix(node->mTransformation);
@@ -479,19 +483,23 @@ json::object build_prefab_node(
 			build_mesh_skin_weights(mesh, bone_index_map, vx_begin, skin_weights);
 		}
 
-		json::object mesh_child;
-		mesh_child["components"] = mesh_components;
-
 		std::string mesh_child_name = "mesh_" + std::string(mesh->mName.C_Str());
 		// Same-named meshes under one node must not overwrite each other.
-		children[unique_child_name(children, mesh_child_name)] = mesh_child;
+		std::string mesh_key = unique_child_name(children, mesh_child_name);
+
+		json::object mesh_child;
+		mesh_child["__id"] = desc::format_node_id(desc::derive_node_id(node_path + "/" + mesh_key));
+		mesh_child["components"] = mesh_components;
+		children[mesh_key] = std::move(mesh_child);
 	}
 
 	// Recursive children
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {
 		aiNode* child_node = node->mChildren[i];
 		std::string child_name = child_node->mName.C_Str();
-		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys);
+		// Same-named siblings (and a node named like a mesh child) must not collapse into one key.
+		std::string child_key = unique_child_name(children, child_name);
+		children[child_key] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys, node_path + "/" + child_key);
 	}
 
 	if (!children.empty())
@@ -595,7 +603,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 
 	// 5. Build prefab tree + accumulate skinning weights
 	std::vector<std::vector<uint32_t>> skin_weights;
-	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys);
+	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys, scene->mRootNode->mName.C_Str());
 
 	// 6. Add animation_collection_desc component to root (inline clips)
 	if (!clip_map.empty()) {

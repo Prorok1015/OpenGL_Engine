@@ -21,6 +21,7 @@ namespace scn {
 
 		struct prefab_node {
 			std::string name;
+			uint64_t node_id = 0; // persistent identity, unique within one desc file; 0 = invalid
 			glm::vec3 position{ 0.0f };
 			glm::vec3 rotation{ 0.0f };
 			glm::vec3 scale{ 1.0f };
@@ -62,6 +63,9 @@ namespace scn {
 		res::tag source_prefab;
 		scn::prefab_desc::prefab_node local_overrides;
 	};
+
+	// Gives every node of the subtree a fresh random id (editor duplicate).
+	void regenerate_node_ids(scn::prefab_desc::prefab_node& node);
 
 	void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);

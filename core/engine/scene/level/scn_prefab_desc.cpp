@@ -1,11 +1,79 @@
 #include "scn_prefab_desc.h"
 #include "scn_model.h"
+#include "scn_node_index.h"
 #include "scn_glm_json_convert.h"
+#include "desc_node_id.h"
 #include "res_system.h"
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace scn {
+
+	namespace {
+
+		// Sets the component for a spawned child: the parent's path plus the child's own id.
+		// Nodes without a valid id (hand-built descs) are simply not addressable.
+		void apply_node_path(entt::registry& reg, entt::entity parent, entt::entity child, uint64_t node_id)
+		{
+			scn::node_index::get(reg); // hooks must exist before the first component is added
+
+			const auto* parent_path = reg.try_get<scn::node_id_component>(parent);
+			if (node_id == desc::invalid_node_id || !parent_path) {
+				reg.remove<scn::node_id_component>(child);
+				return;
+			}
+			scn::node_id_component comp{ parent_path->path };
+			comp.path.push_back(node_id);
+			reg.emplace_or_replace<scn::node_id_component>(child, std::move(comp));
+		}
+
+		uint64_t effective_node_id(const scn::prefab_desc::prefab_node* base, const scn::prefab_desc::prefab_node* over)
+		{
+			if (base && base->node_id != desc::invalid_node_id) return base->node_id;
+			return over ? over->node_id : desc::invalid_node_id;
+		}
+
+		// Ids are unique per file. Explicit ids come first (a repeated one is dropped with a warning), then nodes
+		// without one get the hash of their name path, which makes ids of old files stable across loads.
+		void finalize_node_ids(scn::prefab_desc::prefab_node& root)
+		{
+			std::unordered_set<uint64_t> used;
+
+			auto collect = [&] (auto& self, scn::prefab_desc::prefab_node& node, std::string& path) -> void {
+				if (node.node_id != desc::invalid_node_id && !used.insert(node.node_id).second) {
+					egLOG_WARN("desc", "duplicate node id {} at '{}', regenerating", desc::format_node_id(node.node_id), path);
+					node.node_id = desc::invalid_node_id;
+				}
+				for (auto& child : node.children) {
+					self(self, child, path);
+				}
+			};
+			std::string path;
+			collect(collect, root, path);
+
+			auto assign = [&] (auto& self, scn::prefab_desc::prefab_node& node, const std::string& node_path) -> void {
+				if (node.node_id == desc::invalid_node_id) {
+					uint64_t id = desc::derive_node_id(node_path);
+					while (used.contains(id)) {
+						id = desc::new_node_id();
+					}
+					node.node_id = id;
+					used.insert(id);
+				}
+				std::unordered_map<std::string_view, int> seen;
+				for (auto& child : node.children) {
+					const int index = seen[child.name]++;
+					std::string child_path = node_path + "/" + child.name;
+					if (index > 0) {
+						child_path += "#" + std::to_string(index);
+					}
+					self(self, child, child_path);
+				}
+			};
+			assign(assign, root, root.name);
+		}
+	}
 
 	void assemble_merged_node(
 		scn::ecs_assembler& assembler,
@@ -60,7 +128,8 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 		}
 
 		for (const auto& kv : obj) {
-			if (kv.key() == "__type" || kv.key() == "__parent") continue;
+			// __type/__parent are consumed above; other __* keys are file metadata, never overrides.
+			if (kv.key().starts_with("__")) continue;
 			cnode.overrides[kv.key()] = kv.value();
 		}
 		return cnode;
@@ -72,6 +141,11 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 
 		if (is_root || (val.is_object() && !val.as_object().contains("__type"))) {
 			const auto& obj = val.as_object();
+			if (auto const* p = obj.if_contains("__id")) {
+				auto id = p->is_string() ? desc::parse_node_id(p->as_string()) : std::nullopt;
+				if (id) result.node_id = *id;
+				else egLOG_WARN("desc", "node '{}' has a malformed __id, it will be derived", node_name);
+			}
 			if (auto* transform = obj.if_contains("transform")) {
 				auto& t_obj = transform->as_object();
 				if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
@@ -103,8 +177,11 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 	// With a __parent the adapter already copied the parent into this instance: layer on top of it.
 	if (!data.contains("__parent")) {
 		root = std::move(parsed);
+		finalize_node_ids(root);
 		return;
 	}
+
+	if (parsed.node_id != desc::invalid_node_id) root.node_id = parsed.node_id;
 
 	if (auto const* transform = data.if_contains("transform"); transform && transform->is_object()) {
 		const auto& t_obj = transform->as_object();
@@ -120,6 +197,7 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 		if (it != root.children.end()) *it = std::move(child);
 		else root.children.push_back(std::move(child));
 	}
+	finalize_node_ids(root);
 }
 
 void scn::prefab_desc::serialize(json::object& data) const
@@ -143,7 +221,9 @@ void scn::prefab_desc::serialize(json::object& data) const
 	};
 
 	auto serialize_node = [&] (auto& self, const prefab_node& nd) -> json::value {
-		bool can_be_collapsed = nd.children.empty() &&
+		// The collapsed form has nowhere to keep the id.
+		bool can_be_collapsed = nd.node_id == desc::invalid_node_id &&
+			nd.children.empty() &&
 			nd.components.size() == 1 &&
 			nd.position == glm::vec3{ 0.0f } &&
 			nd.rotation == glm::vec3{ 0.0f } &&
@@ -156,6 +236,8 @@ void scn::prefab_desc::serialize(json::object& data) const
 		}
 
 		json::object node_obj;
+		if (nd.node_id != desc::invalid_node_id)
+			node_obj["__id"] = desc::format_node_id(nd.node_id);
 
 		json::object transform_obj;
 		if (nd.position != glm::vec3{ 0.0f }) 
@@ -293,6 +375,7 @@ void scn::assemble_merged_node(
 			reg.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
 		}
 
+		apply_node_path(reg, e, child_entity, effective_node_id(b_child, o_child));
 		assemble_merged_node(assembler, reg, child_entity, b_child, o_child);
 	};
 
@@ -428,6 +511,7 @@ void scn::hot_reload_merged_node(
 				}
 			}
 
+			apply_node_path(reg, live_entity, child_entity, effective_node_id(next_base, next_override));
 			hot_reload_merged_node(assembler, reg, child_entity, next_base, next_override);
 			processed_entities.insert(child_entity);
 		} else {
@@ -476,6 +560,7 @@ void scn::hot_reload_merged_node(
 				reg.emplace<scn::children_component>(live_entity, std::vector{ new_child });
 			}
 
+			apply_node_path(reg, live_entity, new_child, effective_node_id(next_base, next_override));
 			assemble_merged_node(assembler, reg, new_child, next_base, next_override);
 			processed_entities.insert(new_child);
 		}
@@ -493,6 +578,13 @@ void scn::hot_reload_merged_node(
 				++it;
 			}
 		}
+	}
+}
+
+void scn::regenerate_node_ids(scn::prefab_desc::prefab_node& node) {
+	node.node_id = desc::new_node_id();
+	for (auto& child : node.children) {
+		regenerate_node_ids(child);
 	}
 }
 
@@ -525,6 +617,11 @@ void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, en
 void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab)
 {
 	const auto& root_node = prefab.get_root();
+
+	// The root of a spawn is the origin of its own paths; a node spawned by a parent already has its path.
+	scn::node_index::get(reg);
+	if (!reg.all_of<scn::node_id_component>(e) && !reg.all_of<scn::parent_component>(e))
+		reg.emplace<scn::node_id_component>(e);
 
 	// A node that references this prefab as a component already got its own transform from spawn_child;
 	// the referenced root must not wipe it (it is only a fallback while the node is at identity).
