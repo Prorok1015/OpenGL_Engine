@@ -1,6 +1,6 @@
 #pragma once
 #include <entt/fwd.hpp>
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include "snk_api.h"
 
 namespace scn

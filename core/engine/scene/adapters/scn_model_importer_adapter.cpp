@@ -4,14 +4,14 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
-#include "res_system.h"
+#include <snk/resource/res_system.h>
 #include "eng_profiler.h"
 
 #include "geom/rnd_geometry_desc.h"
-#include "adapters/res_pct_adapter.h"
+#include <snk/resource/adapters/res_pct_adapter.h>
 
 #include "scn_glm_json_convert.h"
-#include "desc_node_id.h"
+#include <snk/desc/desc_node_id.h>
 #include "scn_mesh_nodes.hpp"
 
 #include "scn_assimp_resource_system_wrapper.h"

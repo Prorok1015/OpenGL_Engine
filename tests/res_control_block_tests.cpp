@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "resolvers/res_control_block.hpp"
+#include <snk/resource/resolvers/res_control_block.hpp>
 #include <thread>
 #include <string>
 

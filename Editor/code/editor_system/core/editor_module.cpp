@@ -1,13 +1,13 @@
 #include "editor_module.h"
 #include "edt_editor_init.h"
-#include "res_system.h"
-#include "resources/res_resource_picture.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_picture.h>
 #include <snk/window/wnd_window_system.h>
 #include "inp_input_system.h"
 #include "edt_editor_system.h"
 #include "cfg_api.h"
 #include "adapters/scn_model_importer_adapter.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 
 #include "rnd_frame_assembler.h"
 #include "level/scn_render_data_extractor.h"

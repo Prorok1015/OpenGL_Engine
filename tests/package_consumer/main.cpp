@@ -1,7 +1,7 @@
 // Calls into the installed SDK: ds::frame_allocator lives in the engine's common component,
 // res::tag is a header-only class from the resource component.
 #include "mem_allocator.h"
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 
 int main()
 {

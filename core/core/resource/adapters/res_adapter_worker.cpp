@@ -1,4 +1,4 @@
-#include "res_adapter_worker.h"
+#include <snk/resource/adapters/res_adapter_worker.h>
 #include "logger/engine_log.h"
 
 core::res::async_adapter_worker::async_adapter_worker()

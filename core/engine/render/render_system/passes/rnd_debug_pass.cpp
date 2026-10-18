@@ -1,7 +1,7 @@
 #include "rnd_debug_pass.h"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
-#include "rnd_buffer_layout.h"
+#include <snk/driver/rnd_buffer_layout.h>
 #include "eng_profiler.h"
 
 namespace rnd {

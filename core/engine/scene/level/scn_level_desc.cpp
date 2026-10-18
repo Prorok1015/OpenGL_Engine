@@ -1,5 +1,5 @@
 #include "scn_level_desc.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 
 void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::object& obj)
 {

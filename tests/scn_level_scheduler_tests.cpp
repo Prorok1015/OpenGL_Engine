@@ -7,15 +7,15 @@
 #include "level/scn_level.h"
 #include "level/scn_level_desc.h"
 #include "scn_ecs_assembler.h"
-#include "ecs_random.hpp"
-#include "ecs_entity_changer.hpp"
+#include <snk/ecs/ecs_random.hpp>
+#include <snk/ecs/ecs_entity_changer.hpp>
 #include "scn_model.h"
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
 #include "scn_camera_controller_system.h"
 #include "inp_ecs_input_manager.h"
-#include "desc_system.h"
-#include "res_system.h"
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_system.h>
 
 namespace json = boost::json;
 

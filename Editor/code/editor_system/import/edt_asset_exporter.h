@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
-#include "res_tag.h"
-#include "res_system.h"
+#include <snk/resource/res_tag.h>
+#include <snk/resource/res_system.h>
 #include "edt_model_importer.h"
 #include <unordered_map>
 #include <filesystem>

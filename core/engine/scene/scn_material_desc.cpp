@@ -1,7 +1,7 @@
 #include "scn_material_desc.h"
-#include "res_system.h"
-#include "res_tag_json.h"
-#include "resources/res_resource_text.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/res_tag_json.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include "scn_glm_json_convert.h"
 
 constexpr auto SAMPLERS_FIELD = "samplers";

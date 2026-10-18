@@ -1,8 +1,8 @@
 #pragma once
 #include "scn_world.h"
-#include "ecs_fixed_stepper.hpp"
-#include "ecs_random.hpp"
-#include "ecs_system_plan.hpp"
+#include <snk/ecs/ecs_fixed_stepper.hpp>
+#include <snk/ecs/ecs_random.hpp>
+#include <snk/ecs/ecs_system_plan.hpp>
 #include <functional>
 #include <map>
 #include <unordered_map>

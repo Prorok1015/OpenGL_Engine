@@ -1,5 +1,5 @@
-#include "res_resource_service_init.h"
-#include "res_system.h"
+#include <snk/resource/res_resource_service_init.h>
+#include <snk/resource/res_system.h>
 
 void core::res::resource_init(ds::app_data_storage& data)
 {

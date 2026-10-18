@@ -1,6 +1,6 @@
 #include "rnd_texture_manager.h"
-#include "res_system.h"
-#include "resources/res_resource_picture.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_picture.h>
 #include "rnd_texture_desc.h"
 
 rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res::tag& tag)

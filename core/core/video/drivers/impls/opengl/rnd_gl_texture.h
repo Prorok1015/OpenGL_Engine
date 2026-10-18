@@ -1,5 +1,5 @@
 #pragma once
-#include <rnd_texture_interface.h>
+#include <snk/driver/rnd_texture_interface.h>
 #include <glad/glad.h>
 
 namespace rnd::driver::gl

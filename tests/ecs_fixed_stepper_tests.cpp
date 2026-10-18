@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ecs_fixed_stepper.hpp"
+#include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <limits>
 #include <vector>
 

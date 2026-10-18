@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include <entt/entt.hpp>
 
 // Phase-based registration: {phase, after, before, run_in_edit} declared by the system author.

@@ -1,5 +1,5 @@
 #include "scn_skin_weights_desc.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 #include "logger/engine_log.h"
 #include "skinning/rnd_skinning_manager.h"
 

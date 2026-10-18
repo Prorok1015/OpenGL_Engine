@@ -1,4 +1,4 @@
-#include "res_vfs_resolver.h"
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include "logger/engine_log.h"
 #include "common.h"
 #include "core_thread_utils.hpp"

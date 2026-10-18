@@ -1,8 +1,8 @@
 #include "scn_level.h"
 #include "scn_model.h"
-#include "ecs_command_buffer.hpp"
-#include "ecs_entity_changer.hpp"
-#include "ecs_component.h"
+#include <snk/ecs/ecs_command_buffer.hpp>
+#include <snk/ecs/ecs_entity_changer.hpp>
+#include <snk/ecs/ecs_component.h>
 #include <entt/fwd.hpp>
 #include <algorithm>
 #include <functional>

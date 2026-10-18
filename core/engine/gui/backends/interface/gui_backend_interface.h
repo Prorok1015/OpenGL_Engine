@@ -4,7 +4,7 @@
 // Re-declaring it to the identical underlying type is legal even when <imgui.h> is also
 // included in the same TU. Keep in sync with imgui.h if the imgui version changes.
 using ImTextureID = unsigned long long;
-#include "rnd_texture_interface.h"
+#include <snk/driver/rnd_texture_interface.h>
 #include <string>
 
 namespace gui

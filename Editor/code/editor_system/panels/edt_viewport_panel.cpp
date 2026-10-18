@@ -1,7 +1,7 @@
 #include "edt_viewport_panel.h"
 #include "rnd_render_system.h"
 #include "gui_system.h"
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include "scn_camera_component.hpp"
 #include "scn_model.h"
 #include "level/scn_node_index.h"

@@ -2,7 +2,7 @@
 #include "scn_mesh_nodes.hpp"
 #include "scn_model.h"
 #include "scn_animation_collection_desc.h"
-#include "ecs_event.hpp"
+#include <snk/ecs/ecs_event.hpp>
 #include "engine_log.h"
 #include <algorithm>
 

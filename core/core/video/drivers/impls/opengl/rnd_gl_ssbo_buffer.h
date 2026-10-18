@@ -1,5 +1,5 @@
 #pragma once
-#include "rnd_ssbo_buffer_interface.h"
+#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <glad/glad.h>
 
 namespace rnd::driver::gl

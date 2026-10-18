@@ -5,7 +5,7 @@
 #include <vector>
 #include <entt/fwd.hpp>
 #include "level/scn_level.h"
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 
 namespace edt
 {

@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "desc_node_id.h"
+#include <snk/desc/desc_node_id.h>
 #include <sstream>
 
 // Format v2 of prefab_desc / world_desc / level_desc: children are an array of nodes with "__id" and

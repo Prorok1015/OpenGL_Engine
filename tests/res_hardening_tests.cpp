@@ -1,9 +1,9 @@
 #include <boost/test/unit_test.hpp>
-#include "res_system.h"
-#include "desc_system.h"
-#include "adapters/desc_adapter_t.h"
-#include "adapters/res_text_adapter.h"
-#include "resolvers/res_control_block.hpp"
+#include <snk/resource/res_system.h>
+#include <snk/desc/desc_system.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/resource/adapters/res_text_adapter.h>
+#include <snk/resource/resolvers/res_control_block.hpp>
 #include <atomic>
 #include <chrono>
 #include <cstring>

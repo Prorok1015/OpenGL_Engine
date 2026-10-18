@@ -1,7 +1,7 @@
-#include "desc_desc_service_init.h"
-#include "res_system.h"
-#include "adapters/desc_adapter_t.h"
-#include "desc_system.h"
+#include <snk/desc/desc_desc_service_init.h>
+#include <snk/resource/res_system.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_system.h>
 
 void core::desc::desc_init(ds::app_data_storage& data)
 {

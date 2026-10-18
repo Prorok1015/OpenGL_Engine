@@ -3,7 +3,7 @@
 #include <boost/test/tools/floating_point_comparison.hpp>
 #include <entt/entt.hpp>
 #include "scn_model.h"
-#include "ecs_event.hpp"
+#include <snk/ecs/ecs_event.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_set>
 

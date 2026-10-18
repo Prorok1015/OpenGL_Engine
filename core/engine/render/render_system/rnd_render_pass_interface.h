@@ -1,6 +1,6 @@
 #pragma once
 #include "rnd_frame_context.h"
-#include "rnd_driver_interface.h"
+#include <snk/driver/rnd_driver_interface.h>
 
 namespace rnd {
 	struct render_pass_interface {

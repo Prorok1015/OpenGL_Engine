@@ -1,7 +1,7 @@
-#include "desc_adapter_t.h"
-#include "desc_system.h"
-#include "desc_base.hpp"
-#include "desc_guid.h"
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_system.h>
+#include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_guid.h>
 #include <algorithm>
 #include <format>
 #include <stdexcept>

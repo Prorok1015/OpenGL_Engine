@@ -1,5 +1,5 @@
 #pragma once
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <filesystem>
 #include <future>

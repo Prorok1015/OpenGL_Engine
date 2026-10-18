@@ -1,5 +1,5 @@
 #include "rnd_render_system.h"
-#include <rnd_driver_interface.h>
+#include <snk/driver/rnd_driver_interface.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
 #include "eng_profiler.h"

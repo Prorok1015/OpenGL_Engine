@@ -6,7 +6,7 @@
 #include "inp_ecs_input_manager.h"
 #include "inp_events.hpp"
 #include "scn_camera_component.hpp"
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
 

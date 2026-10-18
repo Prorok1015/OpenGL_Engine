@@ -1,6 +1,6 @@
 #pragma once
 #include <common.h>
-#include <rnd_driver_interface.h>
+#include <snk/driver/rnd_driver_interface.h>
 #include "gui_backend_interface.h"
 #include "gui_menu_layout.h"
 #include "gui_layer_interface.h"

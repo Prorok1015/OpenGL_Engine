@@ -1,6 +1,6 @@
 #include "edt_override_edit.h"
 #include "scn_glm_json_convert.h"
-#include "desc_json_ops.h"
+#include <snk/desc/desc_json_ops.h>
 #include "edt_shared_state.h"
 #include <algorithm>
 #include <cmath>

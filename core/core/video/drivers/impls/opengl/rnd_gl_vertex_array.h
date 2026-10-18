@@ -1,5 +1,5 @@
 #pragma once
-#include <rnd_vertex_array_interface.h>
+#include <snk/driver/rnd_vertex_array_interface.h>
 #include <rnd_gl_buffer.h>
 #include <vector>
 #include <memory>

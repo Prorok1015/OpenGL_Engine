@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ecs_random.hpp"
+#include <snk/ecs/ecs_random.hpp>
 #include <set>
 #include <vector>
 

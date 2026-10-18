@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "resolvers/res_vfs_resolver.h"
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <atomic>

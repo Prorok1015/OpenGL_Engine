@@ -3,7 +3,7 @@
 #include "scn_model.h"
 #include "inp_input_system.h"
 #include "inp_events.hpp"
-#include "ecs_event.hpp"
+#include <snk/ecs/ecs_event.hpp>
 
 void update_camera_matrix_system(const inp::input_state& state,
                                  const inp::input_focus& focus,

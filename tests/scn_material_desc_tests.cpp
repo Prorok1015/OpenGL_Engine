@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include "scn_material_desc.h"
-#include "res_tag_json.h"
+#include <snk/resource/res_tag_json.h>
 #include "scn_glm_json_convert.h"
 
 namespace json = boost::json;

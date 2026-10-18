@@ -1,7 +1,7 @@
 #pragma once
 #include <vector>
 #include <glad/glad.h> 
-#include <rnd_uniform_buffer_interface.h>
+#include <snk/driver/rnd_uniform_buffer_interface.h>
 
 
 namespace rnd::driver::gl
