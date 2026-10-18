@@ -37,7 +37,10 @@ void gui::gui_system::render()
 {
 	PROFILE_SCOPE("GuiRender");
 	if (m_pending_scale > 0.f) {
-		backend->rebuild_fonts(m_pending_scale);
+		if (m_pending_scale != m_applied_scale) {
+			backend->rebuild_fonts(m_pending_scale);
+			m_applied_scale = m_pending_scale;
+		}
 		m_pending_scale = 0.f;
 	}
 	backend->new_frame();

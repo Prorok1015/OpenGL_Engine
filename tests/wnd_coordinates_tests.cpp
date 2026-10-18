@@ -20,6 +20,12 @@ BOOST_AUTO_TEST_CASE(FramebufferScaleFollowsRatio)
 BOOST_AUTO_TEST_CASE(FramebufferScaleOfMinimizedWindowFallsBackToOne)
 {
 	BOOST_TEST((wnd::framebuffer_scale({ 0, 0 }, { 0, 0 }) == glm::vec2{ 1.f }));
+	BOOST_TEST((wnd::framebuffer_scale({ 0, 0 }, { 800, 600 }) == glm::vec2{ 1.f }));
+}
+
+BOOST_AUTO_TEST_CASE(EditorInputAreaWithZeroScaleFallsBackToOne)
+{
+	BOOST_TEST((edt::make_input_area({ 10.f, 20.f }, { 300.f, 200.f }, { 0.f, 0.f }) == glm::ivec4{ 10, 20, 310, 220 }));
 }
 
 BOOST_AUTO_TEST_CASE(CursorPositionIsScaled)

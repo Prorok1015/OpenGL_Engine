@@ -50,6 +50,7 @@ namespace gui
 		bool is_show = true;
 		bool is_input_enabled = true;
 		float m_pending_scale = 0.f;
+		float m_applied_scale = 0.f;
 		std::vector<std::shared_ptr<gui::layer_interface>> layers;
 		gui::imgui_backend_interface* backend = nullptr;
 	};
