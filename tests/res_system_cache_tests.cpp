@@ -362,6 +362,59 @@ BOOST_AUTO_TEST_CASE(CacheKey_UnpinReleasesEveryTypeOfTag)
 	BOOST_TEST(shout(tag) == "V2");
 }
 
+BOOST_AUTO_TEST_CASE(SignalChanged_EvictsEveryTypeCachedUnderTag)
+{
+	auto tag = put("evict_all.txt", "v1");
+	auto old_text = sys->require_sync<res::text_resource>(tag);
+	auto old_shout = sys->require_sync<shout_resource>(tag);
+	put("evict_all.txt", "v2");
+
+	sys->signal_changed(tag);
+
+	auto new_text = sys->require_sync<res::text_resource>(tag);
+	auto new_shout = sys->require_sync<shout_resource>(tag);
+	BOOST_TEST(new_text.get_control_block() != old_text.get_control_block());
+	BOOST_TEST(new_shout.get_control_block() != old_shout.get_control_block());
+	BOOST_TEST(new_text.get()->str() == "v2");
+	BOOST_TEST(new_shout.get()->str() == "V2");
+	BOOST_TEST(old_text.get()->str() == "v1");
+	BOOST_TEST(old_shout.get()->str() == "V1");
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_LeavesTypedEntriesOfOtherTagsAlone)
+{
+	auto changed = put("sig_changed.txt", "a");
+	auto untouched = put("sig_untouched.txt", "b");
+	auto text_held = sys->require_sync<res::text_resource>(untouched);
+	auto shout_held = sys->require_sync<shout_resource>(untouched);
+
+	sys->signal_changed(changed);
+
+	BOOST_TEST(sys->require_sync<res::text_resource>(untouched).get_control_block() == text_held.get_control_block());
+	BOOST_TEST(sys->require_sync<shout_resource>(untouched).get_control_block() == shout_held.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(Watchers_FireOncePerSignalRegardlessOfTypesLoaded)
+{
+	auto tag = put("watch_typed.txt", "v1");
+	auto text_held = sys->require_sync<res::text_resource>(tag);
+	auto shout_held = sys->require_sync<shout_resource>(tag);
+	int calls = 0, owner = 0;
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
+
+	sys->signal_changed(tag);
+	BOOST_TEST(calls == 1);
+
+	// watching is per tag: a watcher registered before any type was requested is still reached
+	auto late = tag_of("watch_late.txt");
+	int late_calls = 0, late_owner = 0;
+	sys->watch(late, &late_owner, [&](const res::tag&) { ++late_calls; });
+	put("watch_late.txt", "x");
+	sys->require_sync<shout_resource>(late);
+	sys->signal_changed(late);
+	BOOST_TEST(late_calls == 1);
+}
+
 BOOST_AUTO_TEST_CASE(RequireMissing_YieldsErrorHandleThatIsNotReady)
 {
 	auto handle = sys->require_sync<res::text_resource>(tag_of("never_stored.txt"));
