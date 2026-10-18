@@ -114,6 +114,9 @@ void stb_image::Image::write_to_memory(ImageType type, const unsigned char* data
 			stbi_write_tga_to_func(write_callback, static_cast<void*>(&out_data), width, height, channels, data);
 			break;
 		}
+
+		case ImageType::NONE:
+			break;
 	}
 }
 
@@ -150,6 +153,8 @@ bool stb_image::Image::write(const std::string_view filename)
 		break;
 	case ImageType::TGA:
 		return stbi_write_tga(filename.data(), width_, height_, channels_, data_);
+		break;
+	case ImageType::NONE:
 		break;
 	}
 

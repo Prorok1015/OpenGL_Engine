@@ -1,5 +1,6 @@
 #include "rnd_gl_texture.h"
 #include "open_gl_specific.h"
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 
 namespace rnd::driver::gl 
@@ -202,6 +203,10 @@ namespace rnd::driver::gl
 									 extent.width, extent.height, 
 									 header.type == TEXTURE_TYPE::TEXTURE_3D ? extent.depth : extent.layers * extent.faces);
 					break;
+
+				case TEXTURE_TYPE::RENDERBUFFER:
+					ASSERT_FAIL("renderbuffer storage is set before this switch");
+					break;
 			}
 		}
 		CHECK_GL_ERROR();
@@ -243,6 +248,10 @@ namespace rnd::driver::gl
 			case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY:
 				glTextureSubImage3D(id, level, x_offset, y_offset, layer * 6 + face,
 								  width, height, 1, format, type, data);
+				break;
+
+			case TEXTURE_TYPE::RENDERBUFFER:
+				ASSERT_FAIL("renderbuffer is rejected before this switch");
 				break;
 		}
 		CHECK_GL_ERROR();

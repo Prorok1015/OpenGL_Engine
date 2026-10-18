@@ -18,6 +18,7 @@ std::string_view shader_data_type_to_string(rnd::driver::SHADER_DATA_TYPE type)
 	case SHADER_DATA_TYPE::VEC3_I:   return "ivec3";
 	case SHADER_DATA_TYPE::VEC4_I:   return "ivec4";
 	case SHADER_DATA_TYPE::BOOL:     return "bool";
+	case SHADER_DATA_TYPE::UNKNOWN:  break;
 	}
 	return "unknown";
 }

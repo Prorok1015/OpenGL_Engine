@@ -13,6 +13,7 @@ namespace rnd::driver
 			case TEXTURE_USAGE::SAMPLED: return "sampled";
 			case TEXTURE_USAGE::STENCIL_TARGET: return "stencil_target";
 			case TEXTURE_USAGE::STORAGE: return "storage";
+			case TEXTURE_USAGE::NONE: break;
 			}
 			return "unknown";
 		}
@@ -127,6 +128,8 @@ namespace rnd::driver
 			case TEXTURE_TYPE::TEXTURE_CUBE_MAP: return "texture_cube_map";
 			case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY: return "texture_cube_array";
 			case TEXTURE_TYPE::RENDERBUFFER: return "renderbuffer";
+			case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
+			case TEXTURE_TYPE::TEXTURE_2D_ARRAY: break;
 			}
 			return "unknown";
 		}
