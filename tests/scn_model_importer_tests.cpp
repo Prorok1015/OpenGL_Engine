@@ -7,18 +7,9 @@
 
 // scn::model_importer_adapter: Assimp -> prefab_desc conversion, driven by tiny in-memory models.
 
-extern res::resource_system* p_res_system;
-
 namespace json = boost::json;
 
 namespace {
-
-struct global_res_guard
-{
-	res::resource_system* prev;
-	explicit global_res_guard(res::resource_system* s) : prev(p_res_system) { p_res_system = s; }
-	~global_res_guard() { p_res_system = prev; }
-};
 
 constexpr const char* OBJ_TRIANGLE = R"(# one textured triangle
 v -1 -1 0
@@ -66,9 +57,9 @@ constexpr const char* GLTF_TRIANGLE = R"GLTF({"asset":{"version":"2.0"},"scene":
 
 struct importer_fixture : test_util::scene_env
 {
-	importer_fixture() : guard(rs.get())
+	importer_fixture()
 	{
-		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs));
+		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
 	}
 
 	std::shared_ptr<scn::prefab_desc> import(const char* name, const char* text)
@@ -85,7 +76,6 @@ struct importer_fixture : test_util::scene_env
 		return o;
 	}
 
-	global_res_guard guard;
 };
 
 }

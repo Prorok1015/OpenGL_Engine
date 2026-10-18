@@ -21,7 +21,7 @@
 #include "ds/ds_svg_writer.hpp"
 #include <unordered_set>
 
-void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag);
+void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, res::resource_system& res_sys);
 
 namespace {
 	glm::quat convert_to_glm(const aiQuaternion& vector) {
@@ -92,7 +92,7 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
     // read file via ASSIMP
     Assimp::Importer importer;
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
-	importer.SetIOHandler(new engine_assimp_resource_system_wrapper(res::get_system(), tag, data));
+	importer.SetIOHandler(new engine_assimp_resource_system_wrapper(m_res_sys, tag, data));
 	const aiScene* scene = importer.ReadFile(std::string{ tag.view() }, flags);
     // check for errors
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
@@ -105,17 +105,17 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
 	res::tag actual_tag = res::tag{ path };
     json::object jsdata;
 	jsdata["__type"] = "prefab_desc";
-	process_model(scene, jsdata, tag, actual_tag);
+	process_model(scene, jsdata, tag, actual_tag, m_res_sys);
 
 	auto instance = desc_system.create_instance("prefab_desc", actual_tag);
 	instance->deserialize(desc_system, jsdata);
-	res::get_system().store(actual_tag, desc_system.serialize_to_bytes(jsdata));
-	res::get_system().register_alias(tag, actual_tag);
+	m_res_sys.store(actual_tag, desc_system.serialize_to_bytes(jsdata));
+	m_res_sys.register_alias(tag, actual_tag);
 
 	return instance;
 }
 
-json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag) {
+json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextureType type, res::tag tag, res::resource_system& res_sys) {
 	for (unsigned int i = 0; i < mat->GetTextureCount(type); i++)
 	{
 		aiString str;
@@ -134,7 +134,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			);
 			res::tag embedded_tag = res::tag(res::tag::memory, embedded_path);
 
-			if (!res::get_system().exists(embedded_tag)) {
+			if (!res_sys.exists(embedded_tag)) {
 				glm::ivec2 size;
 				int channel = 4;
 				std::vector<std::byte> data_byte;
@@ -149,18 +149,18 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 					data_byte.resize(res::raw_image_adapter::HEADER_SIZE);
 					std::memcpy(data_byte.data(), &header, res::raw_image_adapter::HEADER_SIZE);
 					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + (size.x * size.y * channel), std::back_inserter(data_byte));
-					res::get_system().store(embedded_tag, data_byte);
+					res_sys.store(embedded_tag, data_byte);
 				}
 				else {
 					data_byte.reserve(pEmbededTxm->mWidth);
 					std::copy((std::byte*)pEmbededTxm->pcData, (std::byte*)pEmbededTxm->pcData + pEmbededTxm->mWidth, std::back_inserter(data_byte));
-					res::get_system().store(embedded_tag, data_byte);
+					res_sys.store(embedded_tag, data_byte);
 				}
 			}
 
 			res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", embedded_tag.path(), embedded_tag.pure_name())};
 
-			if (!res::get_system().exists(desc_tag)) {
+			if (!res_sys.exists(desc_tag)) {
 				json::object desc;
 				desc["__type"] = "texture_2d_desc";
 				desc["__parent"] = "res://base_texture.desc";
@@ -170,14 +170,14 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 				std::string data = json::serialize(desc);
 				std::vector<std::byte> desc_data(data.size());
 				std::memcpy(desc_data.data(), data.data(), data.size());
-				res::get_system().store(desc_tag, desc_data);
+				res_sys.store(desc_tag, desc_data);
 			}
 			return json::value_from(desc_tag);
 		}
 
 		res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", tag.path(), texture_name) };
 
-		if (!res::get_system().exists(desc_tag)) {
+		if (!res_sys.exists(desc_tag)) {
 			json::object desc;
 			desc["__type"] = "texture_2d_desc";
 			desc["__parent"] = "res://base_texture.desc";
@@ -187,7 +187,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			std::string data = json::serialize(desc);
 			std::vector<std::byte> desc_data(data.size());
 				std::memcpy(desc_data.data(), data.data(), data.size());
-				res::get_system().store(desc_tag, desc_data);
+				res_sys.store(desc_tag, desc_data);
 		}
 		return json::value_from(desc_tag);
 	}
@@ -195,7 +195,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 	return {};
 }
 
-json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag)
+json::value process_material(const aiScene* scene, aiMaterial* material, res::tag tag, res::resource_system& res_sys)
 {
 	TXM_LOG(aiTextureType_DIFFUSE);
 	TXM_LOG(aiTextureType_SPECULAR);
@@ -221,7 +221,7 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 	jsmaterial["__type"] = "material_desc";
 	jsmaterial["__parent"] = "res://base_material.desc";
 	jsmaterial["name"] = material->GetName().C_Str();
-	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, tag);
+	json::value diffuse_tag = find_material_texture(scene, material, aiTextureType_DIFFUSE, tag, res_sys);
 	json::array samplers;
 	json::array defines{"LIGHTS_ENABLED"};
 
@@ -229,20 +229,20 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 		samplers.push_back(diffuse_tag);
 		defines.push_back("USE_TXM_AS_DIFFUSE");
 	} else {
-		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, tag);
+		diffuse_tag = find_material_texture(scene, material, aiTextureType_BASE_COLOR, tag, res_sys);
 		if (!diffuse_tag.is_null()) {
 			samplers.push_back(diffuse_tag);
 			defines.push_back("USE_TXM_AS_DIFFUSE");
 		}
 	}
 
-	if (json::value spec_tag = find_material_texture(scene, material, aiTextureType_SPECULAR, tag); !spec_tag.is_null()) {
+	if (json::value spec_tag = find_material_texture(scene, material, aiTextureType_SPECULAR, tag, res_sys); !spec_tag.is_null()) {
 		samplers.resize(2);
 		samplers[1] = spec_tag;
 		defines.push_back("USE_SPECULAR_MAP");
 	}
 
-	if (json::value normal_tag = find_material_texture(scene, material, aiTextureType_NORMALS, tag); !normal_tag.is_null()) {
+	if (json::value normal_tag = find_material_texture(scene, material, aiTextureType_NORMALS, tag, res_sys); !normal_tag.is_null()) {
 		samplers.resize(3);
 		samplers[2] = normal_tag;
 		defines.push_back("USE_NORMAL_MAP");
@@ -406,7 +406,8 @@ json::object build_prefab_node(
 	const std::unordered_set<std::string>& animated_node_names,
 	std::vector<std::vector<uint32_t>>& skin_weights,
 	res::tag tag,
-	res::tag prefab_tag)
+	res::tag prefab_tag,
+	res::resource_system& res_sys)
 {
 	json::object jsnode;
 	std::string node_name = node->mName.C_Str();
@@ -464,7 +465,7 @@ json::object build_prefab_node(
 		mesh_node_comp["vx_end"] = vx_end;
 		mesh_node_comp["ind_begin"] = ind_begin;
 		mesh_node_comp["ind_end"] = ind_end;
-		mesh_node_comp["material"] = process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag);
+		mesh_node_comp["material"] = process_material(scene, scene->mMaterials[mesh->mMaterialIndex], tag, res_sys);
 
 		json::object mesh_components;
 		mesh_components["mesh_node_desc"] = mesh_node_comp;
@@ -490,7 +491,7 @@ json::object build_prefab_node(
 	for (unsigned int i = 0; i < node->mNumChildren; ++i) {
 		aiNode* child_node = node->mChildren[i];
 		std::string child_name = child_node->mName.C_Str();
-		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag);
+		children[child_name] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys);
 	}
 
 	if (!children.empty())
@@ -499,7 +500,7 @@ json::object build_prefab_node(
 	return jsnode;
 }
 
-void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag)
+void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, res::resource_system& res_sys)
 {
 	// 1. Setup geometry layout from first mesh
 	rnd::geometry_desc geometry;
@@ -594,7 +595,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 
 	// 5. Build prefab tree + accumulate skinning weights
 	std::vector<std::vector<uint32_t>> skin_weights;
-	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag);
+	json::object prefab_root = build_prefab_node(scene, scene->mRootNode, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys);
 
 	// 6. Add animation_collection_desc component to root (inline clips)
 	if (!clip_map.empty()) {
@@ -627,7 +628,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 	std::string geom_str = json::serialize(jsgeometry);
 	std::vector<std::byte> geom_bytes(geom_str.size());
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
-	res::get_system().store(geom_tag, geom_bytes);
+	res_sys.store(geom_tag, geom_bytes);
 
 	// 8. Add skin_weights_desc component to root (registered during assembly)
 	if (!skin_weights.empty()) {

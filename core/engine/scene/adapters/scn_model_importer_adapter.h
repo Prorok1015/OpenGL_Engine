@@ -3,6 +3,11 @@
 #include "resources/res_resource_base.h"
 #include "desc_system.h"
 #include "adapters/res_adapter_interface.hpp"
+
+namespace res {
+	class resource_system;
+}
+
 namespace scn
 {
 	// TODO: move to separate component with relation on assimp.
@@ -11,8 +16,9 @@ namespace scn
 	public:
 		static inline auto INFO = res::adapter_info::make<desc::desc_base>({ "glb", "obj", "fbx", "gltf" } );
 
-		model_importer_adapter(desc::desc_system& desc_system_)
-			: desc_system(desc_system_) {
+		model_importer_adapter(desc::desc_system& desc_system_, res::resource_system& res_sys)
+			: desc_system(desc_system_)
+			, m_res_sys(res_sys) {
 		}
 
 		std::shared_ptr<desc::desc_base> operator()(const res::tag& tag, const std::vector<std::byte>& data) const;
@@ -30,5 +36,6 @@ namespace scn
 
 	private:
 		desc::desc_system& desc_system;
+		res::resource_system& m_res_sys;
 	};
 }

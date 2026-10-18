@@ -28,7 +28,7 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& win_service = data.require<wnd::window_system>();
 
 	auto& desc_system = data.require<desc::desc_system>();
-	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system));
+	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(res));
 
 	auto logo = res.require_sync<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
 	// A missing logo is cosmetic: keep starting the editor without it.
@@ -46,4 +46,5 @@ void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
 	editor_term(data);
+	data.require<res::resource_system>().unregistrate_adapter(scn::model_importer_adapter::INFO);
 }
