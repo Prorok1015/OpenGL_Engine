@@ -5,6 +5,7 @@
 #include "level/scn_node_index.h"
 #include "edt_scene_editor.h"
 #include "edt_shared_state.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <set>
 
@@ -256,6 +257,49 @@ BOOST_FIXTURE_TEST_CASE(Editor_CreatedEntityGetsRandomId, editor_fixture)
 	BOOST_TEST(children[2].node_id != desc::invalid_node_id);
 	BOOST_TEST(children[3].node_id != desc::invalid_node_id);
 	BOOST_TEST(children[2].node_id != children[3].node_id);
+}
+
+BOOST_FIXTURE_TEST_CASE(Editor_SyncLeavesAnInstanceWithoutATransformAlone, node_id_fixture)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":3,"transform":{"position":[1,2,3]}})");
+	scn::prefab_desc level;
+	level.deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"inst","components":{"base":"memory://t/base.prefab.desc"}},
+		{"__id":"00000000000000c2","name":"plain","components":{"stat":{"__type":"stat_desc"}}}]})"));
+	json::object before;
+	level.serialize(before);
+
+	// the live entities sit where the prefab root put the instance
+	glm::mat4 root_placement = glm::translate(glm::mat4(1.0f), glm::vec3(1, 2, 3));
+	edt::scene_editor::write_live_transform(level.get_root().children[0], root_placement);
+	edt::scene_editor::write_live_transform(level.get_root().children[1], glm::mat4(1.0f));
+
+	json::object after;
+	level.serialize(after);
+	BOOST_TEST(json::value(before) == json::value(after));
+	BOOST_TEST(!level.get_root().children[0].has_transform);
+}
+
+BOOST_FIXTURE_TEST_CASE(Editor_SyncWritesTheTransformOfAnInstanceTheUserPlaced, node_id_fixture)
+{
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":3,"transform":{"position":[1,2,3]}})");
+	scn::prefab_desc level;
+	level.deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"inst","transform":{"position":[4,0,0]},"components":{"base":"memory://t/base.prefab.desc"}}]})"));
+	edt::scene_editor::write_live_transform(level.get_root().children[0], glm::mat4(1.0f));
+	const auto& node = level.get_root().children[0];
+	BOOST_TEST((node.position == glm::vec3{ 0 }));
+	BOOST_TEST(node.has_transform);
+}
+
+BOOST_FIXTURE_TEST_CASE(Parse_MalformedTransformValuesAreIgnoredWithoutThrowing, node_id_fixture)
+{
+	scn::prefab_desc level;
+	BOOST_CHECK_NO_THROW(level.deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"a","transform":{"position":["a","b","c"],"scale":[2,2]}}]})")));
+	const auto& node = level.get_root().children[0];
+	BOOST_TEST((node.position == glm::vec3{ 0 }));
+	BOOST_TEST((node.scale == glm::vec3{ 1 }));
 }
 
 BOOST_FIXTURE_TEST_CASE(Editor_DuplicateGivesTheWholeSubtreeFreshIds, editor_fixture)
