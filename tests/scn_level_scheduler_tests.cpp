@@ -319,6 +319,26 @@ BOOST_AUTO_TEST_CASE(AcquireFreeWorldId_ReusesGapInsteadOfCount)
 	BOOST_TEST(gap.acquire_free_world_id() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(CreateWorld_DuplicateNameIsRejectedAndLeavesNoStaleEntries)
+{
+	scn::level lvl(nullptr);
+	auto& first = lvl.create_world("w0", 0);
+	lvl.add_world_systems(first, { "a" }, sf);
+
+	auto& again = lvl.create_world("w0", 5);
+
+	BOOST_TEST(&again == &first);
+	BOOST_TEST(lvl.get_world_count() == 1u);
+	BOOST_TEST(&lvl.get_world("w0") == &first);
+	BOOST_TEST(lvl.has_world("w0"));
+	BOOST_TEST(lvl.plan_of(5) == nullptr);
+	BOOST_TEST(lvl.plan_of(0) != nullptr);
+
+	g_log.clear();
+	lvl.update(one_frame); // would touch freed memory if the old world had been replaced
+	BOOST_TEST(count("A") == 1u);
+}
+
 // ARCHITECTURE_REVIEW 9.5: the system list of editor_level.desc, spread over phases by the
 // production registrations. This is the table from the design document.
 BOOST_AUTO_TEST_CASE(EditorLevelDesc_IsLaidOutAsTheDesignTable)
