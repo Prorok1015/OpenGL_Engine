@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/common.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
+#include <snk/resource/res_tag.h>
 
 namespace scn
 {

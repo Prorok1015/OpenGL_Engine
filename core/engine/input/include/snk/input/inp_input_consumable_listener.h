@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/input/inp_events.hpp>
+#include <snk/window/wnd_window_event_listener_interface.h>
 
 namespace inp
 {
