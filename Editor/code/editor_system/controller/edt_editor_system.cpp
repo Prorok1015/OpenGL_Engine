@@ -131,6 +131,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const auto& name = m_state.world_names[m_state.active_world_idx];
 		return level.has_world(name) ? &level.get_world(name).state() : nullptr;
 	});
+	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
+		if (auto lvl_mgr = m_state.lvl_manager.lock()) {
+			lvl_mgr->get_level().for_each_world([&visit](scn::world& world) { visit(world.state()); });
+		}
+	});
 	m_game_view_panel->set_open(cfg_show_game_view);
 	pm.add_panel(m_game_view_panel);
 	pm.add_panel(m_console_panel);

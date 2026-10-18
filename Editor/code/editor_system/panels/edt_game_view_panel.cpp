@@ -15,16 +15,23 @@ namespace edt
 		m_open = false;
 	}
 
+	void game_view_panel::turn_off_cameras_except_in(const entt::registry* keep)
+	{
+		if (!m_for_each_registry) return;
+		m_for_each_registry([keep](entt::registry& reg) {
+			if (&reg != keep) game_view::apply_viewports(reg, entt::null, {});
+		});
+	}
+
 	void game_view_panel::on_hidden()
 	{
-		if (entt::registry* reg = m_get_registry ? m_get_registry() : nullptr) {
-			game_view::apply_viewports(*reg, entt::null, {});
-		}
+		turn_off_cameras_except_in(nullptr);
 	}
 
 	void game_view_panel::on_render()
 	{
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
+		turn_off_cameras_except_in(reg);
 		if (!reg) {
 			m_selection.refresh(nullptr, {});
 			ImGui::TextDisabled("(no active world)");
@@ -41,9 +48,12 @@ namespace edt
 		ImGui::SetNextItemWidth(220.f);
 		if (ImGui::BeginCombo("Camera", m_selection.cameras()[static_cast<std::size_t>(current)].name.c_str())) {
 			for (int i = 0; i < static_cast<int>(m_selection.cameras().size()); ++i) {
+				// Node names are not unique ("Camera" is common).
+				ImGui::PushID(i);
 				if (ImGui::Selectable(m_selection.cameras()[static_cast<std::size_t>(i)].name.c_str(), i == current)) {
 					m_selection.select(i);
 				}
+				ImGui::PopID();
 			}
 			ImGui::EndCombo();
 		}
