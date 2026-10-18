@@ -22,15 +22,25 @@ void scn::level::update(std::chrono::duration<float> dt)
 {
     PROFILE_SCOPE("LevelUpdate");
 
-    m_accumulator += dt.count();
+    const ecs::run_mode mode = m_mode;
+    float frame_dt = 0.0f;
     int fixed_steps = 0;
-    while (m_accumulator >= m_fixed_step) {
-        m_accumulator -= m_fixed_step;
-        ++fixed_steps;
+    switch (mode) {
+    case ecs::run_mode::pause:
+        break; // time is frozen
+    case ecs::run_mode::step:
+        frame_dt = m_stepper.step();
+        fixed_steps = 1;
+        break;
+    case ecs::run_mode::edit:
+    case ecs::run_mode::play:
+        frame_dt = static_cast<float>(m_stepper.clamp_dt(dt.count()));
+        fixed_steps = m_stepper.advance(frame_dt);
+        break;
     }
 
-    m_level_state.ctx().insert_or_assign<delta_time>({ dt.count() });
-    m_level_state.ctx().insert_or_assign<scn::update_alpha>({ m_accumulator / m_fixed_step });
+    m_level_state.ctx().insert_or_assign<delta_time>({ frame_dt });
+    m_level_state.ctx().insert_or_assign<scn::update_alpha>({ m_stepper.alpha() });
 
     size_t phase_count = 0;
     for (const auto& [id, plan] : m_plans) {
@@ -48,20 +58,22 @@ void scn::level::update(std::chrono::duration<float> dt)
         if (fixed) {
             PROFILE_SCOPE("ECS.fixed_update");
             for (int i = 0; i < fixed_steps; ++i) {
-                m_level_state.ctx().insert_or_assign<scn::fixed_time>({ m_fixed_step });
-                run_phase(p);
+                m_level_state.ctx().insert_or_assign<scn::fixed_time>({ m_stepper.step() });
+                run_phase(p, mode);
             }
         } else {
-            run_phase(p);
+            run_phase(p, mode);
         }
     }
+
+    if (mode == ecs::run_mode::step) m_mode = ecs::run_mode::pause;
 
     if (m_hot_reload_manager) {
         m_hot_reload_manager->tick();
 	}
 }
 
-void scn::level::run_phase(size_t phase_index)
+void scn::level::run_phase(size_t phase_index, ecs::run_mode mode)
 {
     for (auto& [world_id, plan] : m_plans) {
         if (phase_index >= plan.phases.size()) continue;
@@ -70,6 +82,7 @@ void scn::level::run_phase(size_t phase_index)
             PROFILE_SCOPE(phase.id.name().c_str());
             const ecs::runtime_context ctx = create_runtime_context(world_id);
             for (const auto& node : phase.nodes) {
+                if (!ecs::mode_runs_system(mode, node.run_in_edit)) continue;
                 PROFILE_SCOPE(node.name.c_str());
                 node(ctx);
             }

@@ -74,6 +74,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Resolve services from data storage → shared state
 	m_state.lvl_manager = data.require_shared<scn::level_manager>();
+	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
+	m_state.lvl_manager.lock()->get_level().set_mode(ecs::run_mode::edit);
 	m_state.sfactory  = &data.require<ecs::system_factory>();
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	auto& inp_sys = data.require<inp::input_system>();

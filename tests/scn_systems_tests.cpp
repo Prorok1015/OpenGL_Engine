@@ -36,6 +36,16 @@ struct systems_fixture : test_util::scene_env
 
 	void step(float seconds) { lvl.update(std::chrono::duration<float>(seconds)); }
 
+	// The level clamps one frame's delta to 0.25 s; longer spans are played as several frames.
+	void run_for(float seconds)
+	{
+		while (seconds > 0.0f) {
+			const float frame = std::min(seconds, 0.25f);
+			step(frame);
+			seconds -= frame;
+		}
+	}
+
 	// adds the components every hierarchy node needs and links it under `parent`
 	static entt::entity node(entt::registry& reg, entt::entity parent, glm::vec3 local_pos)
 	{
@@ -238,7 +248,7 @@ BOOST_FIXTURE_TEST_CASE(Anim_PausedControllerDoesNotAdvance, anim_fixture)
 
 BOOST_FIXTURE_TEST_CASE(Anim_LoopingControllerWrapsToZeroPastTheEnd, anim_fixture)
 {
-	step(1.2f); // 12 ticks > 10
+	run_for(1.2f); // 12 ticks > 10
 	BOOST_TEST(ctrl().current_time == 0.0f);
 	BOOST_TEST(ctrl().playing);
 }
@@ -246,21 +256,21 @@ BOOST_FIXTURE_TEST_CASE(Anim_LoopingControllerWrapsToZeroPastTheEnd, anim_fixtur
 BOOST_FIXTURE_TEST_CASE(Anim_NonLoopingControllerStopsAtTheEnd, anim_fixture)
 {
 	ctrl().loop = false;
-	step(1.5f);
+	run_for(1.5f);
 	BOOST_TEST(ctrl().current_time == 1.0f, boost::test_tools::tolerance(1e-5f)); // duration / tps
 	BOOST_TEST(!ctrl().playing);
 }
 
 BOOST_FIXTURE_TEST_CASE(Anim_NodeSystemInterpolatesChannelIntoLocalAndWorldTransform, anim_fixture)
 {
-	step(0.5f); // 5 ticks -> halfway along the 0..10 position track
+	run_for(0.5f); // 5 ticks -> halfway along the 0..10 position track
 	BOOST_TEST((glm::vec3(reg->get<scn::local_transform>(bone).local[3]) == glm::vec3{ 5, 0, 0 }));
 	BOOST_TEST((world_pos(*reg, bone) == glm::vec3{ 5, 0, 0 })); // transform system ran after it in the same frame
 }
 
 BOOST_FIXTURE_TEST_CASE(Anim_BoneMatrixIsWorldTimesOffsetAtItsIndex, anim_fixture)
 {
-	step(0.5f);
+	run_for(0.5f);
 	const auto& m = reg->get<scn::bone_matrices_component>(root).matrices;
 	BOOST_REQUIRE(m.size() == 2u);
 	BOOST_TEST((glm::vec3(m[1][3]) == glm::vec3{ 5, 0, 1 })); // world (5,0,0) * offset translate(0,0,1)

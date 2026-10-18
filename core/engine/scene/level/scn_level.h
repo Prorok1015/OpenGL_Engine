@@ -1,5 +1,6 @@
 #pragma once
 #include "scn_world.h"
+#include "ecs_fixed_stepper.hpp"
 #include "ecs_system_plan.hpp"
 #include <functional>
 #include <map>
@@ -31,14 +32,24 @@ namespace scn {
             swap(m_current_level_tag, other.m_current_level_tag);
             swap(m_hot_reload_manager, other.m_hot_reload_manager);
             swap(m_level_state, other.m_level_state);
-            swap(m_accumulator, other.m_accumulator);
+            swap(m_stepper, other.m_stepper);
+            swap(m_mode, other.m_mode);
             swap(m_plans, other.m_plans);
             swap(m_worlds, other.m_worlds);
             swap(m_worlds_by_id, other.m_worlds_by_id);
             swap(m_world_systems, other.m_world_systems);
         }
 
+        // One frame of ECS: the phases in order, fixed_update stepped by the accumulator, the
+        // command buffer applied after every phase. What runs depends on the mode.
         void update(std::chrono::duration<float> dt);
+
+        // Edit: only run_in_edit systems. Play: all (default). Pause: only run_in_edit systems with
+        // time frozen (delta_time 0, no fixed steps). Step: the next update() runs exactly one
+        // frame (one fixed step, the other phases once, delta_time = fixed step), then the mode
+        // becomes Pause. The mode survives clear() and level loads.
+        void set_mode(ecs::run_mode mode) { m_mode = mode; }
+        ecs::run_mode mode() const { return m_mode; }
 
         scn::world& create_world(const std::string_view type, uint32_t world_id);
 
@@ -114,7 +125,7 @@ namespace scn {
     private:
         void rebuild_world_plan(uint32_t world_id, ecs::system_factory& sf);
         void rebuild_all_plans(ecs::system_factory& sf);
-        void run_phase(size_t phase_index);
+        void run_phase(size_t phase_index, ecs::run_mode mode);
         void apply_commands(scn::world& world);
 
         ecs::runtime_context create_runtime_context(size_t world_id) {
@@ -130,8 +141,8 @@ namespace scn {
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
         entt::registry m_level_state;
 
-        float m_accumulator = 0.0f;
-        static constexpr float m_fixed_step = 1.0f / 60.0f; // 60 Hz
+        ecs::fixed_stepper m_stepper; // 60 Hz, dt clamped, steps per frame capped
+        ecs::run_mode m_mode = ecs::run_mode::play;
 
         // Per world name: the system names the world runs (data from world_desc.systems).
         std::unordered_map<std::string, std::vector<std::string>> m_world_systems;

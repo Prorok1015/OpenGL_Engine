@@ -6,6 +6,7 @@
 #include <vector>
 #include "level/scn_level.h"
 #include "scn_ecs_assembler.h"
+#include "scn_model.h"
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
 #include "scn_camera_controller_system.h"
@@ -25,6 +26,12 @@ namespace {
 	void sys_c() { g_log.emplace_back("C"); }
 	void sys_d() { g_log.emplace_back("D"); }
 	void sys_w() { g_log.emplace_back("W"); }
+	void sys_fixed() { g_log.emplace_back("F"); }
+	void sys_game() { g_log.emplace_back("G"); }
+	void sys_edit() { g_log.emplace_back("E"); }
+
+	std::vector<float> g_dts;
+	void sys_capture_dt(scn::level_res<const scn::delta_time> dt) { g_dts.push_back(dt->dt); }
 
 	struct stateful_sys : ecs::system_interface {
 		explicit stateful_sys(std::string tag) : tag(std::move(tag)) {}
@@ -38,6 +45,11 @@ namespace {
 			, assembler(ds, rs)
 		{
 			g_log.clear();
+			g_dts.clear();
+			sf.register_system<&sys_fixed>("fixed", { .phase = ecs::phase::fixed_update });
+			sf.register_system<&sys_game>("game");
+			sf.register_system<&sys_edit>("edit", { .run_in_edit = true });
+			sf.register_system<&sys_capture_dt>("dt", { .run_in_edit = true });
 			sf.register_system<&sys_a>("a");
 			sf.register_system<&sys_b>("b", { .after = { "a" } });
 			sf.register_system<&sys_c>("c", { .after = { "a" } });
@@ -331,6 +343,127 @@ BOOST_AUTO_TEST_CASE(EditorLevelDesc_IsLaidOutAsTheDesignTable)
 	check(editor_level);
 	// the order no longer depends on how the desc happens to list the systems
 	check(std::vector<std::string>(editor_level.rbegin(), editor_level.rend()));
+}
+
+// ---------------------------------------------------------------- fixed_update
+
+BOOST_AUTO_TEST_CASE(FixedUpdate_StepsFollowTheAccumulator)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "fixed" }, sf);
+
+	std::vector<size_t> per_frame;
+	for (float dt : { 0.04f, 0.04f, 0.04f, 0.001f }) {
+		g_log.clear();
+		lvl.update(std::chrono::duration<float>(dt));
+		per_frame.push_back(g_log.size());
+	}
+	BOOST_TEST(per_frame == (std::vector<size_t>{ 2, 2, 3, 0 }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(FixedUpdate_SameDeltasGiveTheSameRunSequence)
+{
+	auto run = [&] {
+		g_log.clear();
+		scn::level lvl(nullptr);
+		auto& w = lvl.create_world("w0", 0);
+		lvl.add_world_systems(w, { "game", "fixed" }, sf);
+		for (float dt : { 0.03f, 0.02f, 0.05f, 0.016f, 0.2f }) lvl.update(std::chrono::duration<float>(dt));
+		return g_log;
+	};
+	BOOST_TEST(run() == run(), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(FixedUpdate_RunsBeforeUpdateAndOncePerStep)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "game", "fixed" }, sf);
+
+	lvl.update(std::chrono::duration<float>(0.04f)); // two steps
+	BOOST_TEST(g_log == (names{ "F", "F", "G" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(FixedUpdate_HugeFrameIsClampedAndStepCountIsCapped)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "fixed", "dt" }, sf);
+
+	lvl.update(std::chrono::duration<float>(30.0f));
+	BOOST_TEST(count("F") == 8u);
+	BOOST_REQUIRE(g_dts.size() == 1u);
+	BOOST_TEST(g_dts[0] == 0.25f); // delta_time is the clamped value
+}
+
+// ---------------------------------------------------------------- Edit / Play / Pause / Step
+
+BOOST_AUTO_TEST_CASE(Mode_DefaultsToPlayAndRunsEverything)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "game", "edit", "fixed" }, sf);
+
+	BOOST_TEST((lvl.mode() == ecs::run_mode::play));
+	lvl.update(std::chrono::duration<float>(1.0f / 60.0f));
+	BOOST_TEST(g_log == (names{ "F", "G", "E" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(Mode_EditRunsOnlyRunInEditSystems)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "game", "edit", "fixed" }, sf);
+	lvl.set_mode(ecs::run_mode::edit);
+
+	lvl.update(std::chrono::duration<float>(1.0f / 30.0f));
+	BOOST_TEST(g_log == (names{ "E" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(Mode_PauseFreezesTimeAndRunsOnlyEditSystems)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "game", "edit", "fixed", "dt" }, sf);
+	lvl.set_mode(ecs::run_mode::pause);
+
+	lvl.update(std::chrono::duration<float>(0.5f));
+	BOOST_TEST(g_log == (names{ "E" }), boost::test_tools::per_element());
+	BOOST_REQUIRE(g_dts.size() == 1u);
+	BOOST_TEST(g_dts[0] == 0.0f);
+
+	// resuming does not replay the paused time
+	g_log.clear();
+	lvl.set_mode(ecs::run_mode::play);
+	lvl.update(std::chrono::duration<float>(0.001f));
+	BOOST_TEST(count("F") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Mode_StepRunsExactlyOneFrameThenPauses)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "game", "edit", "fixed", "dt" }, sf);
+	lvl.set_mode(ecs::run_mode::step);
+
+	lvl.update(std::chrono::duration<float>(5.0f)); // the real dt is irrelevant for a step
+	BOOST_TEST(g_log == (names{ "F", "G", "E" }), boost::test_tools::per_element());
+	BOOST_REQUIRE(g_dts.size() == 1u);
+	BOOST_TEST(g_dts[0] == 1.0f / 60.0f, boost::test_tools::tolerance(1e-5));
+	BOOST_TEST((lvl.mode() == ecs::run_mode::pause));
+
+	g_log.clear();
+	lvl.update(std::chrono::duration<float>(1.0f));
+	BOOST_TEST(g_log == (names{ "E" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(Mode_SurvivesClearAndReload)
+{
+	scn::level lvl(nullptr);
+	lvl.set_mode(ecs::run_mode::edit);
+	lvl.clear();
+	BOOST_TEST((lvl.mode() == ecs::run_mode::edit));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
