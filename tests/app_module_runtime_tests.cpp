@@ -156,4 +156,29 @@ BOOST_AUTO_TEST_CASE(UnloadingAMiddleModuleIsNotConfusedByLaterModules)
 	BOOST_TEST(storage.has_value<svc_c>());
 }
 
+BOOST_AUTO_TEST_CASE(FailedInitializeDuringLoadIsRolledBackAndCanBeRetried)
+{
+	bool fail_init = true;
+	struct flaky_module final : service_module<svc_b>
+	{
+		flaky_module(bool& f) : service_module<svc_b>("flaky"), m_fail(f) {}
+		void initialize_services(ds::app_data_storage&) override
+		{
+			if (m_fail) {
+				throw std::runtime_error("init failed");
+			}
+		}
+		bool& m_fail;
+	};
+
+	BOOST_CHECK_THROW(loader.load(std::make_unique<flaky_module>(fail_init), storage), std::runtime_error);
+	BOOST_TEST(storage.size() == 1u); // svc_b registered by the module was torn down again
+	BOOST_TEST(!loader.state("flaky").has_value());
+
+	fail_init = false;
+	BOOST_CHECK_NO_THROW(loader.load(std::make_unique<flaky_module>(fail_init), storage));
+	BOOST_TEST((loader.state("flaky") == module_state::initialized));
+	BOOST_TEST(storage.size() == 2u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -199,8 +199,10 @@ namespace app::modules {
 		// Loads one module after startup: every module it depends on must already be initialized,
 		// otherwise nothing is registered and std::logic_error is thrown. The module is appended
 		// (its dependencies are all ahead of it), registered and initialized; if either phase
-		// throws, the module is dropped without shutdown (like a failed initialize_all_services)
-		// and the exception propagates.
+		// throws the exception propagates and nothing is kept. If initialize_services throws, the
+		// module has already registered services, so it is shut down (a throw there is logged),
+		// the storage size is checked against the pre-load size (error log if it differs) and the
+		// module is dropped, which lets the same module be loaded again later.
 		void load(std::unique_ptr<module_interface> module, ds::app_data_storage& data) {
 			load(module_ptr{ module.release() }, data);
 		}
@@ -238,7 +240,16 @@ namespace app::modules {
 			e.size_before = data.size();
 			e.module->register_services(data);
 			e.state = module_state::registered;
-			e.module->initialize_services(data);
+			try {
+				e.module->initialize_services(data);
+			} catch (...) {
+				shutdown_entry(e, data);
+				if (data.size() != e.size_before) {
+					egLOG_ERROR("app", "module '{}' left the service storage asymmetric after a failed load: {} services, expected {}",
+						name, data.size(), e.size_before);
+				}
+				throw;
+			}
 			e.state = module_state::initialized;
 			e.provided = data.size() - e.size_before;
 
