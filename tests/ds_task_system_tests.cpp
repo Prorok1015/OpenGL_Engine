@@ -656,6 +656,20 @@ BOOST_AUTO_TEST_CASE(WaitIdleReturnsOnlyAfterBoundTasksFinish)
 	BOOST_TEST(runs == 2);
 }
 
+BOOST_AUTO_TEST_CASE(WaitIdleWaitsForChildrenBoundByBoundTasks)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int child_runs = 0;
+	ds::task_handle<void> child;
+	tasks.run(lane::compute, { "parent" }, owner, [&](ds::task_context&) {
+		child = tasks.run(lane::io, { "child" }, owner, [&](ds::task_context&) { ++child_runs; });
+	});
+	tasks.wait_idle(owner);
+	BOOST_TEST(child_runs == 1);
+	BOOST_CHECK(child.done());
+}
+
 BOOST_AUTO_TEST_CASE(WaitIdleLeavesUnboundTasksAlone)
 {
 	ds::task_system tasks(manual_config());
@@ -838,9 +852,18 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 	config.compute_threads = 3;
 	ds::task_system tasks(config);
 
+	struct probe_t {
+		explicit probe_t(std::atomic<int>& dropped_count) : dropped(dropped_count) {}
+		~probe_t() { dropped += delivered ? 0 : 1; }
+
+		std::atomic<int>& dropped;
+		bool delivered = false; // main-thread data, published to the destructor by the shared_ptr count
+	};
+
 	constexpr int rounds = 300;
 	int delivered = 0;
 	int after_death = 0;
+	std::atomic<int> dropped{ 0 };
 	std::vector<ds::task_handle<int>> handles;
 	handles.reserve(rounds);
 	for (int i = 0; i < rounds; ++i) {
@@ -850,7 +873,8 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 			ctx.throw_if_stopped();
 			return 1;
 		});
-		handle.then_main(owner->life, [&, destroyed = owner->destroyed](ds::task_result<int>&) {
+		handle.then_main(owner->life, [&, destroyed = owner->destroyed, probe = std::make_shared<probe_t>(dropped)](ds::task_result<int>&) {
+			probe->delivered = true;
 			++delivered;
 			after_death += *destroyed ? 1 : 0;
 		});
@@ -866,9 +890,11 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 	for (const auto& handle : handles) {
 		handle.wait();
 	}
+	handles.clear();
 	tasks.drain_main(1ms);
 	BOOST_TEST(after_death == 0);
-	BOOST_TEST(delivered <= rounds);
+	BOOST_TEST(delivered > 0);
+	BOOST_TEST(delivered + dropped.load() == rounds);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

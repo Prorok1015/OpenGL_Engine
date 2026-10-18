@@ -64,8 +64,10 @@ namespace ds {
 		cancel_on_destroy, // the destructor requests stop on every task still bound to it
 	};
 
-	// A member of the object that receives results. Create, bind and destroy it on the main thread.
+	// A member of the object that receives results. Create and destroy it on the main thread (asserted);
+	// tasks may be bound from any thread.
 	// Not copyable or movable: callbacks capture the owner's address, so a token cannot outlive it.
+	// Declare it AFTER every member its callbacks touch, so it is destroyed (and cancels) first.
 	class SNK_API lifetime
 	{
 	public:
@@ -404,6 +406,8 @@ namespace ds {
 		// Main thread only. Blocks until every task bound to `owner` before the call has finished
 		// (manual mode runs the queue instead). Cancel first (owner.cancel_tasks()) to make it short,
 		// then unload the code those tasks run. Does not wait for then_main callbacks.
+		// Repeats until no bound task is left, so children bound by bound tasks are covered. A bound
+		// task that blocks on main-thread work deadlocks it: it does not drain the main queue.
 		void wait_idle(const lifetime& owner);
 
 		// Safe from any thread; dropped silently once the system is shutting down.

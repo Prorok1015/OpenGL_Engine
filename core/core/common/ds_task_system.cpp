@@ -51,6 +51,7 @@ namespace ds::detail {
 		explicit lifetime_state(bool cancel) : cancel_on_destroy(cancel) {}
 
 		const bool cancel_on_destroy;
+		const std::thread::id owner_thread = std::this_thread::get_id();
 		std::mutex mutex;
 		std::vector<std::weak_ptr<task_state_base>> tasks;
 	};
@@ -361,6 +362,7 @@ namespace ds {
 
 	lifetime::~lifetime()
 	{
+		ASSERT_MSG(std::this_thread::get_id() == m_state->owner_thread, "lifetime: destroy on the thread that created it");
 		if (m_state->cancel_on_destroy) {
 			cancel_tasks();
 		}
@@ -368,6 +370,7 @@ namespace ds {
 
 	void lifetime::cancel_tasks() const
 	{
+		ASSERT_MSG(std::this_thread::get_id() == m_state->owner_thread, "lifetime::cancel_tasks: owner thread only");
 		for (const auto& state : bound()) {
 			state->cancel();
 		}
@@ -375,10 +378,15 @@ namespace ds {
 
 	void lifetime::bind(const std::shared_ptr<detail::task_state_base>& state) const
 	{
+		std::vector<std::shared_ptr<detail::task_state_base>> released; // destructed after the unlock
 		std::lock_guard lock(m_state->mutex);
-		std::erase_if(m_state->tasks, [](const std::weak_ptr<detail::task_state_base>& weak) {
-			const auto alive = weak.lock();
-			return !alive || alive->done();
+		std::erase_if(m_state->tasks, [&released](const std::weak_ptr<detail::task_state_base>& weak) {
+			auto alive = weak.lock();
+			const bool drop = !alive || alive->done();
+			if (alive) {
+				released.push_back(std::move(alive));
+			}
+			return drop;
 		});
 		m_state->tasks.push_back(state);
 	}
@@ -437,7 +445,7 @@ namespace ds {
 		}
 		for (const auto& state : alive) {
 			if (!state->done()) {
-				egLOG_WARN("task", "shutdown: task '{}' (#{}) is still running and ignores stop, join() waits for it",
+				egLOG_WARN("task", "shutdown: task '{}' (#{}) is still running after stop request, join() waits for it",
 					state->desc().name, state->id());
 			}
 		}
@@ -535,8 +543,15 @@ namespace ds {
 
 	void task_system::wait_idle(const lifetime& owner)
 	{
-		for (const auto& state : owner.bound()) {
-			state->wait();
+		ASSERT_MSG(on_main(), "task_system::wait_idle: main thread only");
+		for (bool waited = true; waited;) {
+			waited = false;
+			for (const auto& state : owner.bound()) {
+				if (!state->done()) {
+					state->wait();
+					waited = true;
+				}
+			}
 		}
 	}
 
