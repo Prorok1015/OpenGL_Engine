@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
   "configurePresets": [
     {
       "name": "base",
@@ -8,7 +8,9 @@
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SNK_COMPILER_CACHE": "AUTO",
+        "SNK_PCH": "AUTO"
       }
     },
     {
@@ -48,6 +50,88 @@
       "description": "Debug build to validate compilation without the Assimp importer (option lands in EPIC-34)",
       "cacheVariables": {
         "ENABLE_ASSIMP_IMPORTER": "OFF"
+      }
+    },
+
+    {
+      "name": "ci",
+      "hidden": true,
+      "inherits": "base",
+      "description": "Common CI settings (.github/workflows). Compiler cache and PCH come from base.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "ENGINE_PROFILE_MODE": "INTERNAL"
+      }
+    },
+    {
+      "name": "ci-linux",
+      "hidden": true,
+      "inherits": "ci",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" },
+      "cacheVariables": {
+        "GLFW_BUILD_WAYLAND": "OFF",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "ci-linux-gcc-debug",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux GCC Debug"
+    },
+    {
+      "name": "ci-linux-clang-debug",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux Clang Debug (PCH off)",
+      "description": "PCH is off on purpose: this job catches headers that only compile thanks to the PCH",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "SNK_PCH": "OFF"
+      }
+    },
+    {
+      "name": "ci-linux-asan",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux ASan+UBSan",
+      "cacheVariables": { "SNK_SANITIZE": "address" }
+    },
+    {
+      "name": "ci-linux-tsan",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux TSan",
+      "cacheVariables": { "SNK_SANITIZE": "thread" }
+    },
+    {
+      "name": "ci-linux-coverage",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux GCC coverage",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "--coverage",
+        "CMAKE_EXE_LINKER_FLAGS": "--coverage"
+      }
+    },
+    {
+      "name": "ci-linux-shared",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux GCC shared snk_engine",
+      "description": "Needs CMake 3.27+",
+      "cacheVariables": { "SNK_ENGINE_SHARED": "ON" }
+    },
+    {
+      "name": "ci-windows-msvc-debug",
+      "inherits": "ci",
+      "displayName": "CI Windows MSVC Debug",
+      "description": "Run from a Developer Command Prompt (cl.exe on PATH)",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "ci-windows-msvc-release",
+      "inherits": "ci-windows-msvc-debug",
+      "displayName": "CI Windows MSVC Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ENGINE_PROFILE_MODE": "NONE"
       }
     }
   ],
