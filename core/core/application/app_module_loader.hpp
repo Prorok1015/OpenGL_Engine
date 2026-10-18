@@ -1,4 +1,5 @@
 #pragma once
+#include "app_module_entry.h"
 #include "app_module_interface.h"
 #include "engine_assert.h"
 #include "engine_log.h"
@@ -33,7 +34,7 @@ namespace app::modules {
 	class module_loader {
 	private:
 		struct entry {
-			std::unique_ptr<module_interface> module;
+			module_ptr module;
 			module_state state = module_state::added;
 			std::size_t size_before = 0; // storage.size() right before this module registered
 			std::size_t provided = 0;    // services it left in the storage after register + initialize
@@ -140,7 +141,7 @@ namespace app::modules {
 
 	public:
 		void add_module(std::unique_ptr<module_interface> module) {
-			m_entries.push_back(entry{ std::move(module) });
+			m_entries.push_back(entry{ module_ptr{ module.release() } });
 			m_sorted = false;
 		}
 
@@ -201,6 +202,25 @@ namespace app::modules {
 		// throws, the module is dropped without shutdown (like a failed initialize_all_services)
 		// and the exception propagates.
 		void load(std::unique_ptr<module_interface> module, ds::app_data_storage& data) {
+			load(module_ptr{ module.release() }, data);
+		}
+
+		// Same, for a module created by a module binary's entry point. Refused (std::logic_error,
+		// nothing created) when the entry is incomplete or its api major version, compiler or build
+		// flags do not match this host. The module is later destroyed through the entry's own
+		// destroy function, so the binary that allocated it frees it.
+		void load(const module_entry& exports, ds::app_data_storage& data) {
+			if (const std::string problem = check_module_entry(exports); !problem.empty()) {
+				fail(std::format("module_loader: refusing module: {}", problem));
+			}
+			module_ptr module{ exports.create(), module_deleter{ exports.destroy } };
+			if (!module) {
+				fail("module_loader: refusing module: snk_create_module returned null");
+			}
+			load(std::move(module), data);
+		}
+
+		void load(module_ptr module, ds::app_data_storage& data) {
 			ASSERT_MSG(module, "module_loader::load: null module");
 			const std::string name{ module->name() };
 			if (find(name)) {
