@@ -919,11 +919,51 @@ void scn::migrate_prefab_v2(json::object& obj)
 	upgrade_node_v2(obj);
 }
 
-void scn::regenerate_node_ids(scn::prefab_desc::prefab_node& node) {
-	node.node_id = desc::new_node_id();
-	for (auto& child : node.children) {
-		regenerate_node_ids(child);
+namespace {
+	using id_remap = std::unordered_map<uint64_t, uint64_t>;
+
+	void assign_new_ids(scn::prefab_desc::prefab_node& node, id_remap& remap) {
+		node.node_id = remap.emplace(node.node_id, desc::new_node_id()).first->second;
+		for (auto& child : node.children) {
+			assign_new_ids(child, remap);
+		}
 	}
+
+	// Gives the nodes of an add_node value fresh ids (the copy must not share them) and records old -> new.
+	void remap_added_node(json::value& value, id_remap& remap) {
+		if (!value.is_object()) return;
+		auto& obj = value.as_object();
+		if (auto* raw = obj.if_contains("__id"); raw && raw->is_string()) {
+			if (auto old_id = desc::parse_node_id(raw->as_string())) {
+				const uint64_t fresh = remap.emplace(*old_id, desc::new_node_id()).first->second;
+				*raw = desc::format_node_id(fresh);
+			}
+		}
+		if (auto* kids = obj.if_contains("children"); kids && kids->is_array()) {
+			for (auto& kid : kids->as_array()) remap_added_node(kid, remap);
+		}
+	}
+
+	// Only ids that belong to the copied subtree change; ids of the instantiated prefab's content stay.
+	void remap_overrides(scn::prefab_desc::prefab_node& node, id_remap& remap) {
+		for (auto& record : node.overrides) {
+			if (record.op == scn::override_op::add_node) remap_added_node(record.value, remap);
+		}
+		for (auto& record : node.overrides) {
+			for (auto& id : record.target) {
+				if (auto it = remap.find(id); it != remap.end()) id = it->second;
+			}
+		}
+		for (auto& child : node.children) {
+			remap_overrides(child, remap);
+		}
+	}
+}
+
+void scn::regenerate_node_ids(scn::prefab_desc::prefab_node& node) {
+	id_remap remap;
+	assign_new_ids(node, remap);
+	remap_overrides(node, remap);
 }
 
 void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab) {

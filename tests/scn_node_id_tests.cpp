@@ -481,6 +481,81 @@ BOOST_FIXTURE_TEST_CASE(Override_RecordsSurviveSaveAndLoad, instance_fixture)
 	}
 }
 
+BOOST_FIXTURE_TEST_CASE(Override_RemoveRecordsSurviveEditsAndResets, instance_fixture)
+{
+	namespace oe = edt::override_edit;
+	auto& robot = nodes()[2];
+	const std::vector<uint64_t> target{ 0xa1ull };
+	scn::override_record removal;
+	removal.target = target;
+	removal.component = "stat";
+	removal.op = scn::override_op::remove;
+	robot.overrides.push_back(removal);
+
+	BOOST_TEST(!oe::has_record(robot, target, "stat"));
+	BOOST_TEST(!oe::reset(robot, target, "stat"));
+	oe::write_component(robot, target, "stat", json::object{ {"hp", 3} }, json::object{ {"hp", 4} });
+	BOOST_TEST(oe::reset(robot, target, "stat"));
+	BOOST_TEST(oe::reset(robot, target, std::string{ scn::transform_pseudo_component }) == false);
+	BOOST_REQUIRE(robot.overrides.size() == 1u);
+	BOOST_TEST((robot.overrides[0].op == scn::override_op::remove));
+}
+
+BOOST_AUTO_TEST_CASE(Override_DiffComparesNumbersByValue)
+{
+	auto changed = edt::override_edit::diff(json::object{ {"hp", 1}, {"scale", 2.0} }, json::object{ {"hp", 1.0}, {"scale", 2} });
+	BOOST_TEST(changed.empty());
+	changed = edt::override_edit::diff(json::object{ {"hp", 1} }, json::object{ {"hp", 1.5} });
+	BOOST_TEST(changed.size() == 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(Override_EquivalentEulerRotationIsNoOverride, instance_fixture)
+{
+	namespace oe = edt::override_edit;
+	prefab_node base;
+	base.rotation = glm::vec3{ 0, 270, 0 };
+	auto& robot = nodes()[2];
+	oe::write_transform(robot, { 0xa1ull }, base, base.position, glm::vec3{ 0, -90, 0 }, base.scale);
+	BOOST_TEST(robot.overrides.empty());
+	oe::write_transform(robot, { 0xa1ull }, base, base.position, glm::vec3{ 0, 0, 0 }, base.scale);
+	BOOST_TEST(robot.overrides.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Duplicate_RemapsRecordsAddressedToTheCopiedSubtree)
+{
+	prefab_node inst;
+	inst.node_id = 0xc1ull;
+	prefab_node literal;
+	literal.node_id = 0xd1ull;
+	inst.children.push_back(literal);
+
+	scn::override_record on_literal;
+	on_literal.target = { 0xd1ull };
+	on_literal.component = "stat";
+	on_literal.value = json::object{ {"hp", 2} };
+	scn::override_record on_content;
+	on_content.target = { 0xa1ull };
+	on_content.component = "stat";
+	scn::override_record added;
+	added.op = scn::override_op::add_node;
+	added.value = json::object{ {"__id", desc::format_node_id(0xe1ull)}, {"name", "extra"} };
+	scn::override_record on_added;
+	on_added.target = { 0xe1ull };
+	on_added.component = "stat";
+	inst.overrides = { on_literal, on_content, added, on_added };
+
+	scn::regenerate_node_ids(inst);
+
+	const uint64_t new_literal = inst.children[0].node_id;
+	BOOST_TEST(new_literal != 0xd1ull);
+	BOOST_TEST((inst.overrides[0].target == std::vector<uint64_t>{ new_literal }));
+	BOOST_TEST((inst.overrides[1].target == std::vector<uint64_t>{ 0xa1ull }));
+	const auto new_added = desc::parse_node_id(inst.overrides[2].value.as_object().at("__id").as_string());
+	BOOST_REQUIRE(new_added);
+	BOOST_TEST(*new_added != 0xe1ull);
+	BOOST_TEST((inst.overrides[3].target == std::vector<uint64_t>{ *new_added }));
+}
+
 BOOST_FIXTURE_TEST_CASE(Override_TransformIsEffectiveAndResettable, instance_fixture)
 {
 	namespace oe = edt::override_edit;

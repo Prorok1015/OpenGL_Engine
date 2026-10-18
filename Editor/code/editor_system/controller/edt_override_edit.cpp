@@ -2,6 +2,9 @@
 #include "scn_glm_json_convert.h"
 #include "desc_json_ops.h"
 #include <algorithm>
+#include <cmath>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/gtx/euler_angles.hpp>
 #include <ranges>
 
 namespace json = boost::json;
@@ -13,7 +16,8 @@ namespace
 
 	bool same_target(const scn::override_record& record, std::span<const uint64_t> target, const std::string& component)
 	{
-		return record.component == component && std::ranges::equal(record.target, target);
+		// remove / add_node records are not edits of the inspector and must survive its writes and resets
+		return record.op == scn::override_op::set && record.component == component && std::ranges::equal(record.target, target);
 	}
 
 	const prefab_node* find_in(const prefab_node& node, uint64_t id, int depth)
@@ -33,6 +37,23 @@ namespace
 	bool almost_equal(const glm::vec3& a, const glm::vec3& b)
 	{
 		return glm::length(a - b) < 1e-4f;
+	}
+
+	// Euler triples such as 270 and -90 are one orientation; compare orientations, not angles.
+	bool same_rotation(const glm::vec3& a, const glm::vec3& b)
+	{
+		auto orientation = [] (const glm::vec3& deg) {
+			return glm::quat_cast(glm::yawPitchRoll(glm::radians(deg.y), glm::radians(deg.x), glm::radians(deg.z)));
+		};
+		return std::abs(glm::dot(orientation(a), orientation(b))) > 1.0f - 1e-5f;
+	}
+
+	bool same_value(const json::value& a, const json::value& b)
+	{
+		if (a.is_number() && b.is_number()) {
+			return a.to_number<double>() == b.to_number<double>();
+		}
+		return a == b;
 	}
 
 	void erase_records(prefab_node& owner, std::span<const uint64_t> target, const std::string& component)
@@ -81,7 +102,7 @@ json::object edt::override_edit::diff(const json::object& base, const json::obje
 		if (before && before->is_object() && member.value().is_object()) {
 			json::object nested = diff(before->as_object(), member.value().as_object());
 			if (!nested.empty()) out.insert_or_assign(member.key(), std::move(nested));
-		} else if (!before || *before != member.value()) {
+		} else if (!before || !same_value(*before, member.value())) {
 			out.insert_or_assign(member.key(), member.value());
 		}
 	}
@@ -154,7 +175,7 @@ void edt::override_edit::write_transform(
 	const std::string component{ scn::transform_pseudo_component };
 	json::object changed;
 	if (!almost_equal(position, base.position)) changed["position"] = json::value_from(position);
-	if (!almost_equal(rotation, base.rotation)) changed["rotation"] = json::value_from(rotation);
+	if (!same_rotation(rotation, base.rotation)) changed["rotation"] = json::value_from(rotation);
 	if (!almost_equal(scale, base.scale)) changed["scale"] = json::value_from(scale);
 
 	erase_records(owner, target, component);

@@ -25,6 +25,7 @@ namespace edt::override_edit
 	boost::json::object diff(const boost::json::object& base, const boost::json::object& edited);
 
 	// `base` with the owner's records for (target, component) applied: what the instance really has.
+	// Known limit: records an intermediate prefab carries for nodes of a prefab it instantiates are not in the base (#195).
 	boost::json::object effective_component(
 		const prefab_node& owner, std::span<const uint64_t> target, const std::string& component, boost::json::object base);
 
