@@ -2,9 +2,10 @@
 #
 # `cmake --install <build> --prefix <dir>` lays out a self-contained SDK:
 #
-#   include/snk/<path in the repo>/...  headers of every exported target, same relative layout as
-#                                       the source tree (all current engine headers; a public/
-#                                       split comes later, #109)
+#   include/snk/<path in the repo>/...  headers of every exported target that has not migrated yet,
+#                                       same relative layout as the source tree
+#   include/snk/<component>/...         headers of migrated targets (<component>/include/snk/<component>/,
+#                                       see snk_component_headers(), #109): include/ installs to include/
 #   include/snk/boost/                  the Boost headers the engine needs, merged into one tree
 #   lib/snk/*.a                         static engine components and the bundled third-party
 #                                       libraries (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...)
@@ -104,7 +105,13 @@ function(_snk_sdk_include_dest out abs)
 		string(FIND "${abs}/" "${CMAKE_SOURCE_DIR}/" _pos)
 		if(_pos EQUAL 0)
 			file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${abs}")
-			set(_dest include/snk/${_rel})
+			if(_rel MATCHES "^core/.*/include$")
+				# Migrated component (snk_component_headers): include/snk/<name>/... lands at
+				# <prefix>/include/snk/<name>/..., whichever component it comes from.
+				set(_dest include)
+			else()
+				set(_dest include/snk/${_rel})
+			endif()
 		endif()
 	endif()
 	if(NOT _dest)
