@@ -69,9 +69,11 @@ void edt::world_controller::select_world(int idx)
 		return;
 	}
 	if (switch_to_world(idx)) return;
-	m_state.active_world_idx = idx;
+	// Refused: the ECS and the viewport stay on the old world, so the index must too (or none if that one is gone).
+	if (m_state.active_world_idx < 0 || m_state.active_world_idx >= (int)m_state.world_names.size())
+		m_state.active_world_idx = -1;
 	m_state.touch_descs();
-	if (on_world_switched) on_world_switched(idx);
+	if (on_world_switched) on_world_switched(m_state.active_world_idx);
 }
 
 void edt::world_controller::clear_active_world()

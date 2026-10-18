@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_panel_base.h"
+#include "edt_asset_layers.h"
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -12,10 +13,10 @@ namespace edt
 	public:
 		asset_browser_panel();
 
-		// Set the physical base path for the resource directory.
-		void set_base_path(std::filesystem::path base_path);
+		// Physical roots behind res://, lowest layer first, top last (as the resource system mounts them).
+		void set_layers(std::vector<std::filesystem::path> layers);
 
-		// Callback fired on double-click on a file entry.
+		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
 		}
@@ -24,22 +25,21 @@ namespace edt
 		void on_render() override;
 
 	private:
-		// Non-recursive scan of m_current_dir into m_entries.
+		// Non-recursive merged scan of m_current_rel into m_entries.
 		void refresh_entries();
-		// Recursive directory tree for the left panel.
-		void draw_dir_tree(const std::filesystem::path& dir, int depth = 0);
-		// Navigate the right panel to dir.
-		void navigate_to(const std::filesystem::path& dir);
+		// Recursive directory tree for the left panel; rel_dir is relative to res://.
+		void draw_dir_tree(const std::filesystem::path& rel_dir, int depth = 0);
+		// Navigate the right panel to rel_dir (relative to res://).
+		void navigate_to(const std::filesystem::path& rel_dir);
 		// Short icon prefix for a file based on extension.
 		const char* get_file_icon(const std::filesystem::path& path) const;
 
-		std::filesystem::path m_base_path;
-		std::filesystem::path m_current_dir;
+		std::vector<std::filesystem::path> m_layers;
+		std::filesystem::path m_current_rel;
 		char m_search[128] = {};
 
 		struct entry {
-			std::filesystem::path path;
-			bool        is_dir = false;
+			layer_entry src;
 			std::string label; // pre-built "icon filename"
 		};
 		std::vector<entry> m_entries;

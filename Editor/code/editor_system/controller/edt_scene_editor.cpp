@@ -256,6 +256,7 @@ void edt::scene_editor::sync_ecs_transforms_to_desc()
 	const std::string* world_name = m_state.active_world_name();
 	if (!lvl_mgr || !world_desc || !world_name) return;
 
+	m_state.touch_descs();
 	auto& children = world_desc->get_root().children;
 	auto& reg = lvl_mgr->get_level().get_world(*world_name).state();
 	reg.view<scn::node_id_component, scn::local_transform>().each(

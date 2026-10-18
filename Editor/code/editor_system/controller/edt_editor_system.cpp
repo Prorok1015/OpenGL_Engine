@@ -116,11 +116,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab_panel->set_editor_input(input);
 
 	// Wire asset browser double-click for prefab editing
-	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& p) {
-		std::string filename = p.filename().string();
+	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
+		std::string filename = res_rel.filename().string();
 		if (filename.ends_with(".prefab.desc")) {
-			auto rel = p.lexically_relative(res::resource_system::get_resources_path());
-			auto tag = res::tag::make(rel.string());
+			auto tag = res::tag::make(res_rel.generic_string());
 			open_prefab_for_edit(tag);
 		}
 	});

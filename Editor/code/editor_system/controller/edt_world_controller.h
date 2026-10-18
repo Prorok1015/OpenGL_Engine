@@ -17,7 +17,8 @@ namespace edt
 
 		// False when it could not switch (no level, or the world is not in it); the state is left as it was then.
 		bool switch_to_world(int idx);
-		// switch_to_world / clear_active_world, and the panels hear about it even when the switch itself is refused:
+		// switch_to_world / clear_active_world, and the panels hear about it even when the switch itself is refused
+		// (the active index then stays on the old world, or becomes -1 when that is out of range):
 		// the world arrays may have been replaced, so whatever points into them must be re-resolved.
 		void select_world(int idx);
 		// The level has no worlds: no world is active (active_world_idx = -1) and the panels drop their selection.

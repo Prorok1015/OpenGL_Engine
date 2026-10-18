@@ -49,7 +49,7 @@ void setup_panels(
 	inspector->set_component_ui_registry(&registry);
 	console = std::make_shared<console_panel>();
 	asset_browser = std::make_shared<asset_browser_panel>();
-	asset_browser->set_base_path(res::resource_system::get_resources_path());
+	asset_browser->set_layers(res::resource_system::get_resource_layers());
 
 	auto console_weak = std::weak_ptr<console_panel>(console);
 	engine::set_log_callback([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
@@ -84,11 +84,10 @@ void setup_viewport_panel(
 	});
 	viewport->set_input_manager(input);
 	viewport->set_ecs_input_manager(ecs_input);
-	viewport->set_on_asset_dropped([&sys](const std::string& abs_path) {
+	viewport->set_on_asset_dropped([&sys](const std::string& res_rel_path) {
 		if (!sys.m_state.editor_tag.is_valid()) return;
-		auto base = res::resource_system::get_resources_path();
-		auto rel  = std::filesystem::path(abs_path).lexically_relative(base);
-		res::tag tag = res::tag::make(rel.string());
+		const std::filesystem::path rel{ res_rel_path };
+		res::tag tag = res::tag::make(res_rel_path);
 		const std::string stem = rel.stem().string();
 		sys.m_pending_desc_handle = sys.m_res.require<desc::desc_base>(tag);
 		sys.m_pending_desc_tag = tag;
@@ -126,7 +125,9 @@ void wire_hierarchy_callbacks(
 	});
 
 	hierarchy.set_on_world_changed([&](int idx) {
-		world_ctrl.switch_to_world(idx);
+		// A refused switch leaves the old world active: resync the tab and the panels to it.
+		if (!world_ctrl.switch_to_world(idx) && world_ctrl.on_world_switched)
+			world_ctrl.on_world_switched(state.active_world_idx);
 	});
 	hierarchy.set_on_create_world([&](const std::string& name) {
 		world_ctrl.create_world(name);
