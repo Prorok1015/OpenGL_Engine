@@ -9,6 +9,28 @@
 #include "skinning/rnd_skinning_manager.h"
 #include "app_frame_stage.h"
 #include "gs_engine_frame_stages.h"
+#include "gui_system.h"
+#include "inp_input_consumable_listener.h"
+#include "inp_keyboard_event.hpp"
+
+namespace {
+	class content_scale_forwarder final : public inp::input_event_consumable_listener_interface
+	{
+	public:
+		explicit content_scale_forwarder(::gui::gui_system& gui) : m_gui(gui) {}
+
+		bool on_handle_event(wnd::handle, const inp::input_event& evt) override
+		{
+			if (const auto* scale = evt.get_payload<core::inp::content_scale_changed>()) {
+				m_gui.on_content_scale_changed(scale->scale.x);
+			}
+			return false;
+		}
+
+	private:
+		::gui::gui_system& m_gui;
+	};
+}
 
 void engine::engine_module::register_services(ds::app_data_storage& data)
 {
@@ -36,6 +58,8 @@ void engine::engine_module::initialize_services(ds::app_data_storage& data)
 		auto window = win_service.get_active_window();
 		input_service->on_window_created(window.get());
 		input_service->on_window_resize(window.get(), window->get_size().x, window->get_size().y);
+		m_content_scale_listener = std::make_shared<content_scale_forwarder>(data.require<::gui::gui_system>());
+		input_service->push_consumable_listener(m_content_scale_listener);
 	}
 	input::input_init(data);
 }
@@ -46,7 +70,11 @@ void engine::engine_module::shutdown_services(ds::app_data_storage& data)
 	if (input_service) {
 		auto& win_service = data.require<wnd::window_system>();
 		win_service.remove_event_listener(input_service);
+		if (m_content_scale_listener) {
+			input_service->pop_consumable_listener(m_content_scale_listener);
+		}
 	}
+	m_content_scale_listener.reset();
 
 	m_scene_types.reset();
 	scn::scene_term(data);

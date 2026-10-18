@@ -4,6 +4,7 @@
 #include "inp_keyboard_event.hpp"
 #include "inp_input_event.hpp"
 #include "engine_log.h"
+#include "wnd_coordinates.h"
 #include <filesystem>
 
 namespace {
@@ -47,9 +48,9 @@ namespace {
         auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
 
 		inp::input_event evt;
-        evt.construct_payload<core::inp::cursor_move_event>(glm::vec2{ xpos, ypos });
-
         if (auto win = wndCreator.find_window(window)) {
+            const glm::vec2 scale = wnd::framebuffer_scale(win->get_backbuffer_size(), win->get_size());
+            evt.construct_payload<core::inp::cursor_move_event>(wnd::to_framebuffer(glm::vec2{ xpos, ypos }, scale));
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
             }
@@ -97,6 +98,39 @@ namespace {
             }
         }
    }
+
+    void char_callback(GLFWwindow* window, unsigned int codepoint) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
+            inp::input_event evt;
+            evt.construct_payload<core::inp::char_event>(static_cast<char32_t>(codepoint));
+            for (auto& listener : wndCreator.get_event_listeners()) {
+                listener->on_input_event(win.get(), evt);
+            }
+        }
+    }
+
+    void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
+            inp::input_event evt;
+            evt.construct_payload<core::inp::framebuffer_resized>(glm::ivec2{ width, height });
+            for (auto& listener : wndCreator.get_event_listeners()) {
+                listener->on_input_event(win.get(), evt);
+            }
+        }
+    }
+
+    void content_scale_callback(GLFWwindow* window, float xscale, float yscale) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
+            inp::input_event evt;
+            evt.construct_payload<core::inp::content_scale_changed>(glm::vec2{ xscale, yscale });
+            for (auto& listener : wndCreator.get_event_listeners()) {
+                listener->on_input_event(win.get(), evt);
+            }
+        }
+    }
 
     void window_refresh_callback(GLFWwindow* window) {
         auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
@@ -168,6 +202,9 @@ std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::make_window()
     glfwSetMouseButtonCallback(wid, mouse_button_callback);
     glfwSetScrollCallback(wid, device_scroll_callback);
     glfwSetCursorPosCallback(wid, cursor_position_callback);
+    glfwSetCharCallback(wid, char_callback);
+    glfwSetFramebufferSizeCallback(wid, framebuffer_size_callback);
+    glfwSetWindowContentScaleCallback(wid, content_scale_callback);
 
     glfwSetWindowRefreshCallback(wid, window_refresh_callback);
     glfwSetWindowPosCallback(wid, window_move_callback);

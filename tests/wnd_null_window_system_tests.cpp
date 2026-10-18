@@ -81,6 +81,24 @@ BOOST_AUTO_TEST_CASE(WindowStoresTitleAndIgnoresEmpty)
 	BOOST_TEST((win->get_cursor_mode() == wnd::CURSOR_MODE::HIDDEN));
 }
 
+BOOST_AUTO_TEST_CASE(ClipboardRoundTrip)
+{
+	wnd::null_window win;
+	BOOST_TEST(win.get_clipboard_text().empty());
+	win.set_clipboard_text("hello \xD0\xBC\xD0\xB8\xD1\x80");
+	BOOST_TEST(win.get_clipboard_text() == "hello \xD0\xBC\xD0\xB8\xD1\x80");
+	win.set_clipboard_text("");
+	BOOST_TEST(win.get_clipboard_text().empty());
+}
+
+BOOST_AUTO_TEST_CASE(CursorShapeIsStored)
+{
+	wnd::null_window win;
+	BOOST_TEST((win.get_cursor_shape() == wnd::cursor_shape::arrow));
+	win.set_cursor_shape(wnd::cursor_shape::resize_nwse);
+	BOOST_TEST((win.get_cursor_shape() == wnd::cursor_shape::resize_nwse));
+}
+
 BOOST_AUTO_TEST_CASE(AspectRatioFollowsSize)
 {
 	wnd::null_window win{ glm::ivec2{ 800, 400 } };

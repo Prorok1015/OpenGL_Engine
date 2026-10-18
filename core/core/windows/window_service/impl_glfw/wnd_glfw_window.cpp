@@ -15,6 +15,11 @@ wnd::glfw_window::glfw_window(wnd::context ctx_)
 
 wnd::glfw_window::~glfw_window()
 {
+    for (GLFWcursor* cursor : m_cursors) {
+        if (cursor) {
+            glfwDestroyCursor(cursor);
+        }
+    }
 }
 
 wnd::gl_surface* wnd::glfw_window::gl_surface_ptr() const
@@ -71,6 +76,47 @@ void wnd::glfw_window::set_cursor_mode(CURSOR_MODE mode) {
     }
 
     glfwSetInputMode(m_ctx.get_id(), GLFW_CURSOR, glfw_mode);
+}
+
+void wnd::glfw_window::set_cursor_shape(cursor_shape shape)
+{
+    const auto index = static_cast<size_t>(shape);
+    if (index >= m_cursors.size()) {
+        return;
+    }
+
+    if (!m_cursors[index]) {
+        int glfw_shape = GLFW_ARROW_CURSOR;
+        switch (shape)
+        {
+        case cursor_shape::arrow:       glfw_shape = GLFW_ARROW_CURSOR; break;
+        case cursor_shape::text_input:  glfw_shape = GLFW_IBEAM_CURSOR; break;
+        case cursor_shape::resize_all:  glfw_shape = GLFW_RESIZE_ALL_CURSOR; break;
+        case cursor_shape::resize_ns:   glfw_shape = GLFW_RESIZE_NS_CURSOR; break;
+        case cursor_shape::resize_ew:   glfw_shape = GLFW_RESIZE_EW_CURSOR; break;
+        case cursor_shape::resize_nesw: glfw_shape = GLFW_RESIZE_NESW_CURSOR; break;
+        case cursor_shape::resize_nwse: glfw_shape = GLFW_RESIZE_NWSE_CURSOR; break;
+        case cursor_shape::hand:        glfw_shape = GLFW_POINTING_HAND_CURSOR; break;
+        case cursor_shape::not_allowed: glfw_shape = GLFW_NOT_ALLOWED_CURSOR; break;
+        case cursor_shape::count:       break;
+        }
+        // Null when the platform lacks the shape: glfwSetCursor(nullptr) restores the default arrow.
+        m_cursors[index] = glfwCreateStandardCursor(glfw_shape);
+    }
+
+    glfwSetCursor(m_ctx.get_id(), m_cursors[index]);
+}
+
+std::string wnd::glfw_window::get_clipboard_text() const
+{
+    const char* text = glfwGetClipboardString(m_ctx.get_id());
+    return text ? std::string{ text } : std::string{};
+}
+
+void wnd::glfw_window::set_clipboard_text(std::string_view text)
+{
+    const std::string owned{ text };
+    glfwSetClipboardString(m_ctx.get_id(), owned.c_str());
 }
 
 void wnd::glfw_window::init_frame()

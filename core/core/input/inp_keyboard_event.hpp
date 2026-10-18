@@ -46,4 +46,9 @@ namespace core::inp
 	struct mouse_click_event { MOUSE_BUTTONS key; KEY_ACTION action; };
 	struct cursor_move_event { glm::vec2 pos;};
 	struct scroll_move_event { glm::vec2 direction; };
+	// Text input: one Unicode code point (UTF-32), already layout/IME/modifier-resolved by the platform.
+	struct char_event { char32_t codepoint; };
+	// Drawable size in pixels (not window units); cursor_move_event.pos is in the same space.
+	struct framebuffer_resized { glm::ivec2 size; };
+	struct content_scale_changed { glm::vec2 scale; };
 }

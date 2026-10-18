@@ -1,8 +1,11 @@
 #pragma once
 #include "app_module_interface.h"
 #include "scn_registration_scope.h"
+#include <memory>
 #include <optional>
 #include "snk_api.h"
+
+namespace inp { class input_event_consumable_listener_interface; }
 
 namespace engine
 {
@@ -19,5 +22,7 @@ namespace engine
 	private:
 		// Spawners hold &ecs_assembler: reset in shutdown_services before the scene services go.
 		std::optional<scn::registration_scope> m_scene_types;
+		// Forwards content_scale_changed to gui_system (font rebuild); never consumes the event.
+		std::shared_ptr<inp::input_event_consumable_listener_interface> m_content_scale_listener;
 	};
 }
