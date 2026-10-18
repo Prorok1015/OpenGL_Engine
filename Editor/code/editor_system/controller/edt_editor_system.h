@@ -29,6 +29,7 @@ namespace edt {
 	class scene_hierarchy_panel;
 	class inspector_panel;
 	class viewport_panel;
+	class game_view_panel;
 	class console_panel;
 	class asset_browser_panel;
 	class prefab_editor_panel;
@@ -90,6 +91,7 @@ namespace edt {
 		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
 		std::shared_ptr<inspector_panel>       m_inspector_panel;
 		std::shared_ptr<viewport_panel>        m_viewport_panel;
+		std::shared_ptr<game_view_panel>       m_game_view_panel;
 		std::shared_ptr<console_panel>         m_console_panel;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 		std::shared_ptr<prefab_editor_panel>   m_prefab_panel;

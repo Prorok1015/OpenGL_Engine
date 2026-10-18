@@ -6,6 +6,7 @@
 #include "edt_scene_hierarchy_panel.h"
 #include "edt_inspector_panel.h"
 #include "edt_viewport_panel.h"
+#include "edt_game_view_panel.h"
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
 #include "edt_prefab_editor_panel.h"
@@ -39,6 +40,8 @@
 namespace {
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
+	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
+	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -120,6 +123,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	pm.add_panel(m_hierarchy_panel);
 	pm.add_panel(m_inspector_panel);
 	pm.add_panel(m_viewport_panel);
+	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
+	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
+		auto lvl_mgr = m_state.lvl_manager.lock();
+		if (!lvl_mgr || m_state.active_world_idx < 0 || m_state.active_world_idx >= (int)m_state.world_names.size()) return nullptr;
+		auto& level = lvl_mgr->get_level();
+		const auto& name = m_state.world_names[m_state.active_world_idx];
+		return level.has_world(name) ? &level.get_world(name).state() : nullptr;
+	});
+	m_game_view_panel->set_open(cfg_show_game_view);
+	pm.add_panel(m_game_view_panel);
 	pm.add_panel(m_console_panel);
 	pm.add_panel(m_asset_browser_panel);
 	pm.add_panel(m_prefab_panel);
