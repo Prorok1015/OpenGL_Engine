@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "wnd_window.h"
 
 struct GLFWwindow;
 
@@ -11,7 +12,8 @@ namespace wnd
 		struct header
 		{
 			std::string title = "Default title";
-			glm::ivec2 size = glm::ivec2{ 1920, 1080 }; 
+			glm::ivec2 size = glm::ivec2{ 1920, 1080 };
+			graphics_api api = graphics_api::opengl;
 		};
 
 	public:

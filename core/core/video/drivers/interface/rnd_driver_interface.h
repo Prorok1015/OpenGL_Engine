@@ -11,7 +11,7 @@ namespace rnd::driver
 	struct texture_header;
 	class shader_interface;
 	class texture_interface;
-	class render_context_interface;
+	class swapchain_interface;
 	class vertex_array_interface;
 	class uniform_buffer_interface;
 	class buffer_interface;

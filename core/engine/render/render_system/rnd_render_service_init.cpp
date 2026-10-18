@@ -1,6 +1,9 @@
 #include "rnd_render_service_init.h"
 #include "rnd_render_system.h"
 #include "wnd_window_system.h"
+#include "rnd_gl_swapchain.h"
+#include "engine_log.h"
+#include <stdexcept>
 #include "res_system.h"
 #include "geom/rnd_geometry_desc.h"
 #include "texture/rnd_texture_desc.h"
@@ -35,7 +38,15 @@ void engine::render::render_init(ds::app_data_storage& data)
 	auto& window_system = data.require<wnd::window_system>();
 	auto& desc_sys = data.require<desc::desc_system>();
 	auto& res_sys = data.require<res::resource_system>();
-	auto& render_system = data.construct<rnd::render_system>(window_system.get_context()->create_driver(), desc_sys, res_sys);
+	const auto window = window_system.get_active_window();
+	wnd::gl_surface* surface = window ? window->gl_surface_ptr() : nullptr;
+	if (!surface) {
+		egLOG_ERROR("render", "Active window has no GL surface: cannot create the swapchain");
+		throw std::runtime_error("render_init: active window has no GL surface");
+	}
+	// Destroyed in render_term after the render system, before the window (core shutdown).
+	auto& swapchain = data.construct<rnd::driver::swapchain_interface, rnd::driver::gl::swapchain>(*surface);
+	auto& render_system = data.construct<rnd::render_system>(swapchain.create_driver(), desc_sys, res_sys);
 	// Per-frame render data shared by the extract and render stages; reset at the end of each frame.
 	data.construct<rnd::frame_context>();
 	register_render_descs(desc_sys);
@@ -55,4 +66,5 @@ void engine::render::render_term(ds::app_data_storage& data)
 
 	data.destruct<rnd::frame_context>();
 	data.destruct<rnd::render_system>();
+	data.destruct<rnd::driver::swapchain_interface>();
 }

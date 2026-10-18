@@ -1,7 +1,18 @@
-#include "rnd_gl_render_context.h"
+#include "rnd_gl_swapchain.h"
 #include <common.h>
+#include <glad/glad.h>
 #include "rnd_gl_driver.h"
 #include <engine_log.h>
+
+namespace {
+	// GLADloadproc is a bare function pointer, so the surface travels through a global during the load.
+	wnd::gl_surface* s_loading_surface = nullptr;
+
+	void* load_gl_proc(const char* name)
+	{
+		return s_loading_surface->get_proc_address(name);
+	}
+}
 
 void APIENTRY DebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam) {
 	if (type == GL_DEBUG_TYPE_OTHER) {
@@ -11,10 +22,13 @@ void APIENTRY DebugCallback(GLenum source, GLenum type, GLuint id, GLenum severi
 	egLOG("opengl/debug", "OpenGL Debug Message: \"{0}\"", message);
 }
 
-rnd::driver::gl::render_context::render_context(GLADloadproc load)
-	: loader(load) 
+rnd::driver::gl::swapchain::swapchain(wnd::gl_surface& surface)
+	: m_surface(surface)
 {
-	const bool success = gladLoadGLLoader(load);
+	m_surface.make_current();
+	s_loading_surface = &m_surface;
+	const bool success = gladLoadGLLoader(load_gl_proc);
+	s_loading_surface = nullptr;
 	ASSERT_MSG(success, "glad didnt loaded in this process!");
 	GLint maxTextureSize;
 	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
@@ -68,7 +82,18 @@ rnd::driver::gl::render_context::render_context(GLADloadproc load)
 	glDebugMessageCallback(DebugCallback, nullptr);
 }
 
-std::unique_ptr<rnd::driver::driver_interface> rnd::driver::gl::render_context::create_driver()
+std::unique_ptr<rnd::driver::driver_interface> rnd::driver::gl::swapchain::create_driver()
 {
 	return std::make_unique<gl::driver>();
+}
+
+void rnd::driver::gl::swapchain::present()
+{
+	m_surface.swap_buffers();
+}
+
+void rnd::driver::gl::swapchain::set_vsync(bool enabled)
+{
+	m_surface.make_current();
+	m_surface.set_swap_interval(enabled ? 1 : 0);
 }

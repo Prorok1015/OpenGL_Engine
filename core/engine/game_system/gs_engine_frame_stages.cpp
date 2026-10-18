@@ -5,6 +5,7 @@
 #include "rnd_frame_assembler.h"
 #include "rnd_frame_context.h"
 #include "rnd_render_system.h"
+#include "rnd_swapchain_interface.h"
 #include "app_loop_service_interface.h"
 #include "eng_profiler.h"
 
@@ -46,6 +47,7 @@ void gs::register_platform_frame_stages(app::frame_stage_registry& registry)
 		PROFILE_SCOPE("SwapBuffers");
 		auto& windows = c.storage.require<wnd::window_system>();
 		windows.process_windows();
+		c.storage.require<rnd::driver::swapchain_interface>().present();
 		if (windows.is_stop_running()) {
 			c.storage.require<app::app_loop_service_interface>().request_stop();
 		}

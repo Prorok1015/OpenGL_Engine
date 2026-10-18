@@ -1,5 +1,5 @@
 #include "wnd_glfw_window_system.h"
-#include "rnd_gl_render_context.h"
+#include <GLFW/glfw3.h>
 #include "wnd_input_keycode_convert.hpp"
 #include "inp_keyboard_event.hpp"
 #include "inp_input_event.hpp"
@@ -127,15 +127,7 @@ wnd::glfw_window_system::glfw_window_system()
     glfwInit();
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    // TODO: move to gl context
-    // 4.5 is what the GL backend actually requires (DSA); asking for 4.6 fails on 4.5-only drivers.
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
-
     m_active_window = make_window()->get_glfw_handle();
-    m_context = std::make_unique<rnd::driver::gl::render_context>((GLADloadproc)glfwGetProcAddress);
     // The imgui backend is now created/initialised/shut down by the GUI layer (gui_init/gui_term),
     // so window no longer depends on gui (EPIC-49 US-49-9). It exposes the native handle + DPI
     // scale below for the GUI layer to set its backend up.
@@ -145,7 +137,7 @@ wnd::glfw_window_system::~glfw_window_system()
 {
     // Members are destroyed after the body; wnd::context::~context calls glfwDestroyWindow,
     // which would run after glfwTerminate and raise GLFW_NOT_INITIALIZED (#182).
-    m_context.reset();
+    // The swapchain (render_term) is already gone: it holds a reference into these windows.
     m_windows_list.clear();
     glfwTerminate();
 }
@@ -218,7 +210,6 @@ void wnd::glfw_window_system::process_windows() const
 {
     for (const auto& [_, win] : m_windows_list) {
         win->update_frame();
-        win->on_update();
     }
 }
 

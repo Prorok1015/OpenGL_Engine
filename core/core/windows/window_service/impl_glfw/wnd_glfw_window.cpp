@@ -6,8 +6,9 @@
 wnd::glfw_window::glfw_window(wnd::context ctx_)
     : m_ctx(std::move(ctx_)), m_size(m_ctx.get_header().size)
 {
-    /* Make the window's context current */
-    glfwMakeContextCurrent(m_ctx.get_id());
+    if (m_ctx.get_header().api == graphics_api::opengl) {
+        make_current();
+    }
     init_frame();
 }
 
@@ -16,16 +17,32 @@ wnd::glfw_window::~glfw_window()
 {
 }
 
-void wnd::glfw_window::set_vsync(bool val)
+wnd::gl_surface* wnd::glfw_window::gl_surface_ptr() const
 {
-    /* Make the window's context current */
-    glfwMakeContextCurrent(m_ctx.get_id());
-    glfwSwapInterval(val ? 1 : 0);
+    if (m_ctx.get_header().api != graphics_api::opengl) {
+        return nullptr;
+    }
+    return const_cast<glfw_window*>(this);
 }
 
-void wnd::glfw_window::on_update()
+void wnd::glfw_window::make_current()
+{
+    glfwMakeContextCurrent(m_ctx.get_id());
+}
+
+void wnd::glfw_window::swap_buffers()
 {
     m_ctx.swap_buffers();
+}
+
+void wnd::glfw_window::set_swap_interval(int interval)
+{
+    glfwSwapInterval(interval);
+}
+
+void* wnd::glfw_window::get_proc_address(const char* name) const
+{
+    return reinterpret_cast<void*>(glfwGetProcAddress(name));
 }
 
 bool wnd::glfw_window::is_shutdown() const
