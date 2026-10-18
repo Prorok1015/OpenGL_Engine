@@ -1,7 +1,7 @@
 #pragma once
-#include "desc_base.hpp"
+#include <snk/desc/desc_base.hpp>
 #include "scn_ecs_assembler.h"
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include "snk_api.h"
 
 namespace scn {

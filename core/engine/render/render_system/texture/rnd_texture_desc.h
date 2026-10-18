@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
-#include "desc_base.hpp"
-#include "rnd_texture_interface.h"
+#include <snk/desc/desc_base.hpp>
+#include <snk/driver/rnd_texture_interface.h>
 
 namespace rnd
 {

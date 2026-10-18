@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include <unordered_set>
 
 BOOST_AUTO_TEST_SUITE(ResTagTests)

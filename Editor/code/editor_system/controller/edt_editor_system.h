@@ -1,7 +1,7 @@
 #pragma once
 #include <functional>
 #include <memory>
-#include "resources/res_resource_handle.hpp"
+#include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
 #include "edt_shared_state.h"
 #include "edt_scene_editor.h"

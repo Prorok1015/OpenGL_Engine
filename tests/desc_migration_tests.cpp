@@ -3,8 +3,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
-#include "desc_system.h"
-#include "res_system.h"
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_system.h>
 
 namespace json = boost::json;
 

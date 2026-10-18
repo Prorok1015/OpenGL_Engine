@@ -1,4 +1,4 @@
-#include "res_pct_adapter.h"
+#include <snk/resource/adapters/res_pct_adapter.h>
 #include "image.h"
 
 std::optional<res::raw_image_adapter::raw_image_header> res::raw_image_adapter::read_header(const std::vector<std::byte>& data) const

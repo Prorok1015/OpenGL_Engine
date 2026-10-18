@@ -6,10 +6,10 @@
 #include "level/scn_level_manager.h"
 #include "level/scn_level_desc.h"
 #include "level/scn_prefab_desc.h"
-#include "desc_system.h"
-#include "desc_guid.h"
-#include "res_system.h"
-#include "resources/res_resource_text.h"
+#include <snk/desc/desc_system.h>
+#include <snk/desc/desc_guid.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <fstream>

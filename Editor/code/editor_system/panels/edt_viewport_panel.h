@@ -1,6 +1,6 @@
 #pragma once
 #include "edt_panel_base.h"
-#include "ecs_entity.h"
+#include <snk/ecs/ecs_entity.h>
 
 #include "edt_input_manager.h"
 #include "edt_transform_gizmo.hpp"

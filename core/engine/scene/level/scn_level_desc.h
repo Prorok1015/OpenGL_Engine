@@ -1,7 +1,7 @@
 #pragma once
-#include "desc_base.hpp"
+#include <snk/desc/desc_base.hpp>
 #include "scn_world_desc.h"
-#include "resources/res_resource_handle.hpp"
+#include <snk/resource/resources/res_resource_handle.hpp>
 
 #include <vector>
 #include "snk_api.h"

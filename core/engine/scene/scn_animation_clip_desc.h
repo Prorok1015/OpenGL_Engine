@@ -1,5 +1,5 @@
 #pragma once
-#include "desc_base.hpp"
+#include <snk/desc/desc_base.hpp>
 #include "scn_mesh_nodes.hpp"
 
 #include <unordered_map>

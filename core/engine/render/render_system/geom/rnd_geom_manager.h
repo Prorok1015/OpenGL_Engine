@@ -1,9 +1,9 @@
 #pragma once
 #include "common.h"
-#include "rnd_driver_interface.h"
-#include "rnd_vertex_array_interface.h"
-#include "res_tag.h"
-#include "desc_system.h"
+#include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_vertex_array_interface.h>
+#include <snk/resource/res_tag.h>
+#include <snk/desc/desc_system.h>
 #include "rnd_geometry_desc.h"
 #include <unordered_set>
 

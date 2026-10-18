@@ -1,4 +1,4 @@
-#include "desc_guid.h"
+#include <snk/desc/desc_guid.h>
 #include <cstdint>
 #include <random>
 

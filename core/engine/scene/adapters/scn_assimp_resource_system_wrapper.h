@@ -1,7 +1,7 @@
 #pragma once
 #include "common.h"
-#include "res_system.h"
-#include "res_tag.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/res_tag.h>
 #include <assimp/IOSystem.hpp>
 
 namespace scn

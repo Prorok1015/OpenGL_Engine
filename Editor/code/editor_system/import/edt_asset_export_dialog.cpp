@@ -1,5 +1,5 @@
 #include "edt_asset_export_dialog.h"
-#include "res_system.h"
+#include <snk/resource/res_system.h>
 #include <imgui.h>
 
 edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter)

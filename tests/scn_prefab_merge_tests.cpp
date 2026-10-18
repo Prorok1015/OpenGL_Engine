@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "scn_glm_json_convert.h"
-#include "desc_node_id.h"
+#include <snk/desc/desc_node_id.h>
 #include "level/scn_node_index.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>

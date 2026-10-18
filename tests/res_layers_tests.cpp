@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
-#include "resolvers/res_vfs_resolver.h"
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <filesystem>
 #include <fstream>
 #include <set>

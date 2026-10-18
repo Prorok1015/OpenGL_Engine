@@ -3,10 +3,10 @@
 // in-RAM store (no disk, no threads), a desc_system with every scene desc registered, and an
 // ecs_assembler with the production spawners plus one test-only component ("stat_desc") that makes
 // override/merge behavior easy to observe.
-#include "res_system.h"
-#include "desc_system.h"
-#include "adapters/desc_adapter_t.h"
-#include "resolvers/res_resolver_interface.hpp"
+#include <snk/resource/res_system.h>
+#include <snk/desc/desc_system.h>
+#include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include "scn_ecs_assembler.h"
 #include "scn_registration_scope.h"
 #include "skinning/rnd_skinning_manager.h"

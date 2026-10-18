@@ -1,5 +1,5 @@
-#include "ecs_ecs_service_init.h"
-#include "ecs_system.h"
+#include <snk/ecs/ecs_ecs_service_init.h>
+#include <snk/ecs/ecs_system.h>
 
 void ecs::ecs_init(ds::app_data_storage& data)
 {

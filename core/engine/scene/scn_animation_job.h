@@ -1,6 +1,6 @@
 #pragma once
 #include <entt/fwd.hpp>
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <vector>

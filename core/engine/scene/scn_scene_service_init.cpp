@@ -1,9 +1,9 @@
 #include "scn_scene_service_init.h"
 #include "adapters/scn_worldwrap_adapter.h"
-#include "ecs_system.h"
+#include <snk/ecs/ecs_system.h>
 #include "level/scn_hot_reload_manager.h"
 #include "level/scn_level_manager.h"
-#include "res_system.h"
+#include <snk/resource/res_system.h>
 #include "scn_animation_job.h"
 #include "scn_camera_controller_system.h"
 #include "scn_ecs_assembler.h"

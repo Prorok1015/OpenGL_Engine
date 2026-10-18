@@ -5,7 +5,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include "shader/rnd_scene_shader_desc.h"
-#include "rnd_ssbo_buffer_interface.h"
+#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include "rnd_light_data.hpp"
 #include "mem_allocator.h"
 #include "ds/ds_fixed_vector.hpp"

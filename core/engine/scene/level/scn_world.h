@@ -1,6 +1,6 @@
 #pragma once
-#include "ecs_system.h"
-#include "ecs_system_interface.hpp"
+#include <snk/ecs/ecs_system.h>
+#include <snk/ecs/ecs_system_interface.hpp>
 #include "scn_level_desc.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>

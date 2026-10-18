@@ -1,4 +1,4 @@
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 
 desc::desc_system::desc_system(res::resource_system& res_system_)
 	: m_res_system(res_system_)

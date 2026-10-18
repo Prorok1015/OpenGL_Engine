@@ -1,8 +1,8 @@
 #pragma once
 #include "common.h"
-#include "res_tag.h"
-#include "rnd_driver_interface.h"
-#include "rnd_ssbo_buffer_interface.h"
+#include <snk/resource/res_tag.h>
+#include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <memory>
 #include <span>
 #include <unordered_map>

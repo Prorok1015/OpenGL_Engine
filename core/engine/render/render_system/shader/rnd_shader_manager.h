@@ -1,10 +1,10 @@
 #pragma once
 #include <common.h>
-#include "res_tag.h"
+#include <snk/resource/res_tag.h>
 #include "rnd_scene_shader_desc.h"
 
-#include <rnd_driver_interface.h>
-#include <rnd_uniform_buffer_interface.h>
+#include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_uniform_buffer_interface.h>
 
 namespace rnd
 {

@@ -2,7 +2,7 @@
 #include "rnd_light_data.hpp"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
-#include "rnd_ssbo_buffer_interface.h"
+#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include "skinning/rnd_skinning_manager.h"
 #include "timer.hpp"
 #include "eng_profiler.h"

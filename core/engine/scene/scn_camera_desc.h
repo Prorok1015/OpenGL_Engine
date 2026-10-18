@@ -1,5 +1,5 @@
 #pragma once
-#include "desc_base.hpp"
+#include <snk/desc/desc_base.hpp>
 #include "scn_ecs_assembler.h"
 #include "ds/ds_fixed_vector.hpp"
 

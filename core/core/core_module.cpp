@@ -1,12 +1,12 @@
 #include "core_module.h"
-#include "res_resource_service_init.h"
+#include <snk/resource/res_resource_service_init.h>
 #include <snk/window/wnd_window_service_init.h>
-#include "desc_desc_service_init.h"
-#include "ecs_ecs_service_init.h"
+#include <snk/desc/desc_desc_service_init.h>
+#include <snk/ecs/ecs_ecs_service_init.h>
 #include <snk/window/wnd_window_system.h>
 #include <snk/application/app_loop_service.h>
-#include "res_system.h"
-#include "adapters/res_adapter_worker.h"
+#include <snk/resource/res_system.h>
+#include <snk/resource/adapters/res_adapter_worker.h>
 #include <engine_log.h>
 #include <cfg_api.h>
 

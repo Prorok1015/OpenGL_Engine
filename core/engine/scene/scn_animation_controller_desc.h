@@ -1,6 +1,6 @@
 #pragma once
-#include "desc_base.hpp"
-#include "ecs_system.h"
+#include <snk/desc/desc_base.hpp>
+#include <snk/ecs/ecs_system.h>
 #include <string>
 #include "snk_api.h"
 

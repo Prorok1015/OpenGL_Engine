@@ -1,6 +1,6 @@
 #pragma once
 #include "rnd_texture_desc.h"
-#include "resources/res_resource_picture.h"
+#include <snk/resource/resources/res_resource_picture.h>
 
 namespace rnd
 {

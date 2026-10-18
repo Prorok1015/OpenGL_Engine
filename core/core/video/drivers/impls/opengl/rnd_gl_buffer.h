@@ -1,8 +1,8 @@
 #pragma once
 #include <vector>
 #include <glad/glad.h>
-#include <rnd_buffer_interface.h>
-#include <rnd_buffer_layout.h>
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/driver/rnd_buffer_layout.h>
 
 namespace rnd::driver::gl
 {

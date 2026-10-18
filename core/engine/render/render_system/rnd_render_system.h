@@ -1,6 +1,6 @@
 #pragma once
 #include <common.h>
-#include <rnd_driver_interface.h>
+#include <snk/driver/rnd_driver_interface.h>
 
 #include "texture/rnd_texture_manager.h"
 #include "shader/rnd_shader_manager.h"

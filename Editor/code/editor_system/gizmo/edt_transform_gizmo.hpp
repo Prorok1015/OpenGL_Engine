@@ -1,7 +1,7 @@
 #pragma once
 #include "scn_model.h"
-#include "ecs_event.hpp"
-#include "ecs_entity.h"
+#include <snk/ecs/ecs_event.hpp>
+#include <snk/ecs/ecs_entity.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>

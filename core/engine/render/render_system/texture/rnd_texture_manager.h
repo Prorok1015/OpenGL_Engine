@@ -1,9 +1,9 @@
 #pragma once
 #include "common.h"
-#include "res_tag.h"
-#include "desc_system.h"
-#include "rnd_driver_interface.h"
-#include "rnd_texture_interface.h"
+#include <snk/resource/res_tag.h>
+#include <snk/desc/desc_system.h>
+#include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_texture_interface.h>
 #include "texture/rnd_texture_desc.h"
 #include <unordered_map>
 #include <functional>

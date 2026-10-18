@@ -1,6 +1,6 @@
 #include "edt_inspector_panel.h"
 #include "edt_component_ui_registry.h"
-#include "desc_system.h"
+#include <snk/desc/desc_system.h>
 #include "edt_override_edit.h"
 #include <imgui.h>
 #include <boost/json.hpp>
