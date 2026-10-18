@@ -1234,7 +1234,7 @@ BOOST_AUTO_TEST_CASE(AssemblePrefab_NodeNameSurvivesADifferentReferenceKey)
 	auto root = reg.create();
 	scn::assemble_prefab(*assembler, reg, root, *world, "w", world_tag);
 
-	BOOST_TEST((child_named(reg, root, "model_key") == entt::entity{ entt::null }));
+	BOOST_TEST((child_named(reg, root, "model_key") == entt::null));
 	auto robot = child_named(reg, root, "robot");
 	BOOST_REQUIRE(robot != entt::null);
 	BOOST_TEST(reg.get<test_util::stat_component>(robot).hp == 2);

@@ -4,6 +4,7 @@
 #include "desc_node_id.h"
 #include "level/scn_node_index.h"
 #include "edt_scene_editor.h"
+#include "edt_override_edit.h"
 #include "edt_shared_state.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
@@ -304,7 +305,7 @@ BOOST_FIXTURE_TEST_CASE(Parse_MalformedTransformValuesAreIgnoredWithoutThrowing,
 
 BOOST_FIXTURE_TEST_CASE(Editor_DuplicateGivesTheWholeSubtreeFreshIds, editor_fixture)
 {
-	editor->duplicate_entity("arm");
+	editor->duplicate_entity(0xbbull);
 	const auto& children = world().get_root().children;
 	BOOST_REQUIRE(children.size() == 3u);
 
@@ -322,15 +323,181 @@ BOOST_FIXTURE_TEST_CASE(Editor_DuplicateGivesTheWholeSubtreeFreshIds, editor_fix
 
 BOOST_FIXTURE_TEST_CASE(Editor_DuplicateManyAndReparentKeepIds, editor_fixture)
 {
-	editor->duplicate_entities({ "arm", "leg" });
+	editor->duplicate_entities({ 0xbbull, 0xddull });
 	std::vector<uint64_t> ids;
 	collect_ids(world().get_root(), ids);
 	BOOST_TEST(std::set<uint64_t>(ids.begin(), ids.end()).size() == ids.size());
 
-	editor->reparent_entity("leg", "arm", -1);
-	const auto* leg = edt::scene_editor::find_node_by_name(world().get_root().children, "leg");
+	editor->reparent_entity(0xddull, 0xbbull, -1);
+	const auto* leg = edt::scene_editor::find_node_by_id(world().get_root().children, 0xddull);
 	BOOST_REQUIRE(leg);
-	BOOST_TEST(leg->node_id == 0xddull);
+	BOOST_TEST(leg->name == "leg");
+	const auto* arm = edt::scene_editor::find_node_by_id(world().get_root().children, 0xbbull);
+	BOOST_REQUIRE(arm);
+	BOOST_TEST(std::ranges::count(arm->children, 0xddull, &prefab_node::node_id) == 1);
+}
+
+// Nodes are edited by id; instance_fixture has two nodes named "twin" and an instance "robot" of rig.prefab.desc
+// whose reference component is keyed "model_key".
+struct instance_fixture : node_id_fixture
+{
+	instance_fixture()
+	{
+		auto rig = put("rig.prefab.desc", R"({"__type":"prefab_desc","__version":3,"children":[
+			{"__id":"00000000000000a1","name":"arm","transform":{"position":[5,0,0]},
+				"components":{"stat":{"__type":"stat_desc","hp":3}}}]})");
+		load<scn::prefab_desc>(rig); // resolves the reference handle of robot before it is parsed
+		state.world_descs.emplace_back();
+		state.world_names.push_back("w");
+		world().deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
+			{"__id":"00000000000000b1","name":"twin"},
+			{"__id":"00000000000000b2","name":"twin"},
+			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/rig.prefab.desc"}}]})"));
+		editor = std::make_unique<edt::scene_editor>(state);
+	}
+
+	scn::world_desc& world() { return state.world_descs[0]; }
+	std::vector<prefab_node>& nodes() { return world().get_root().children; }
+
+	edt::shared_state state;
+	std::unique_ptr<edt::scene_editor> editor;
+};
+
+BOOST_FIXTURE_TEST_CASE(Editor_SameNamedNodesAreEditedIndependently, instance_fixture)
+{
+	const std::vector<uint64_t> second{ 0xb2ull };
+	editor->on_transform_committed(second, glm::vec3{ 1, 2, 3 }, glm::vec3{ 0 }, glm::vec3{ 1 });
+	BOOST_TEST(!nodes()[0].has_transform);
+	BOOST_TEST(nodes()[1].has_transform);
+	BOOST_TEST((nodes()[1].position == glm::vec3{ 1, 2, 3 }));
+
+	editor->delete_entity(0xb1ull);
+	BOOST_REQUIRE(nodes().size() == 2u);
+	BOOST_TEST(nodes()[0].node_id == 0xb2ull);
+	BOOST_TEST(nodes()[0].name == "twin");
+}
+
+BOOST_FIXTURE_TEST_CASE(Editor_CommittedTransformLandsOnTheNodeNotOnItsReferenceKey, instance_fixture)
+{
+	const std::vector<uint64_t> robot{ 0xc1ull };
+	editor->on_transform_committed(robot, glm::vec3{ 4, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
+	BOOST_TEST(nodes()[2].name == "robot");
+	BOOST_TEST(nodes()[2].has_transform);
+	BOOST_TEST((nodes()[2].position == glm::vec3{ 4, 0, 0 }));
+	BOOST_TEST(nodes()[2].overrides.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(Editor_ResolveNodePathSplitsAtTheInstanceBoundary, instance_fixture)
+{
+	const std::vector<uint64_t> own{ 0xc1ull };
+	auto direct = edt::scene_editor::resolve_node_path(nodes(), own);
+	BOOST_TEST(direct.owner == &nodes()[2]);
+	BOOST_TEST(direct.target.empty());
+
+	const std::vector<uint64_t> inside{ 0xc1ull, 0xa1ull };
+	auto below = edt::scene_editor::resolve_node_path(nodes(), inside);
+	BOOST_TEST(below.owner == &nodes()[2]);
+	BOOST_TEST((below.target == std::vector<uint64_t>{ 0xa1ull }));
+
+	const std::vector<uint64_t> unknown{ 0x99ull };
+	BOOST_TEST(edt::scene_editor::resolve_node_path(nodes(), unknown).owner == nullptr);
+	BOOST_TEST(edt::scene_editor::resolve_node_path(nodes(), {}).owner == nullptr);
+}
+
+BOOST_FIXTURE_TEST_CASE(Editor_TransformInsideAnInstanceBecomesAnOverrideRecord, instance_fixture)
+{
+	const std::vector<uint64_t> path{ 0xc1ull, 0xa1ull };
+	editor->on_transform_committed(path, glm::vec3{ 9, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
+
+	auto& robot = nodes()[2];
+	BOOST_TEST(!robot.has_transform);
+	BOOST_REQUIRE(robot.overrides.size() == 1u);
+	const auto& record = robot.overrides[0];
+	BOOST_TEST((record.target == std::vector<uint64_t>{ 0xa1ull }));
+	BOOST_TEST(record.component == "transform");
+	BOOST_TEST(record.path.empty());
+	BOOST_TEST((record.value == json::value{ {"position", {9.0, 0.0, 0.0}} }));
+
+	// putting it back where the prefab has it is no override at all
+	editor->on_transform_committed(path, glm::vec3{ 5, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
+	BOOST_TEST(robot.overrides.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(Override_ComponentEditIsOneRecordAndResetRemovesIt, instance_fixture)
+{
+	namespace oe = edt::override_edit;
+	auto& robot = nodes()[2];
+	const std::vector<uint64_t> target{ 0xa1ull };
+	const prefab_node* arm = oe::find_base_node(robot, target);
+	BOOST_REQUIRE(arm);
+	BOOST_TEST(arm->name == "arm");
+
+	const auto base_json = oe::component_json(arm->components.at("stat"));
+	auto edited = base_json;
+	edited["hp"] = 20;
+	oe::write_component(robot, target, "stat", base_json, edited);
+
+	BOOST_REQUIRE(robot.overrides.size() == 1u);
+	BOOST_TEST(robot.overrides[0].component == "stat");
+	BOOST_TEST((robot.overrides[0].value == json::value{ {"hp", 20} }));
+	BOOST_TEST(oe::has_record(robot, target, "stat"));
+	BOOST_TEST(oe::effective_component(robot, target, "stat", base_json).at("hp").to_number<int64_t>() == 20);
+
+	// editing again replaces the record instead of stacking another one
+	edited["hp"] = 30;
+	oe::write_component(robot, target, "stat", base_json, edited);
+	BOOST_REQUIRE(robot.overrides.size() == 1u);
+	BOOST_TEST(oe::effective_component(robot, target, "stat", base_json).at("hp").to_number<int64_t>() == 30);
+
+	BOOST_TEST(oe::reset(robot, target, "stat"));
+	BOOST_TEST(robot.overrides.empty());
+	BOOST_TEST(!oe::reset(robot, target, "stat"));
+	BOOST_TEST(oe::effective_component(robot, target, "stat", base_json).at("hp").to_number<int64_t>() == 3);
+}
+
+BOOST_FIXTURE_TEST_CASE(Override_RecordsSurviveSaveAndLoad, instance_fixture)
+{
+	namespace oe = edt::override_edit;
+	const std::vector<uint64_t> path{ 0xc1ull, 0xa1ull };
+	editor->on_transform_committed(path, glm::vec3{ 9, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
+	const std::vector<uint64_t> target{ 0xa1ull };
+	const auto base_json = oe::component_json(oe::find_base_node(nodes()[2], target)->components.at("stat"));
+	auto edited = base_json;
+	edited["hp"] = 20;
+	oe::write_component(nodes()[2], target, "stat", base_json, edited);
+
+	json::object saved;
+	world().serialize(saved);
+	scn::world_desc loaded;
+	loaded.deserialize(*descs, saved);
+
+	const auto& robot = loaded.get_root().children[2];
+	BOOST_TEST(robot.node_id == 0xc1ull);
+	BOOST_REQUIRE(robot.overrides.size() == 2u);
+	BOOST_TEST(std::ranges::count(robot.overrides, "transform", &scn::override_record::component) == 1);
+	BOOST_TEST(std::ranges::count(robot.overrides, "stat", &scn::override_record::component) == 1);
+	for (const auto& record : robot.overrides) {
+		BOOST_TEST((record.target == std::vector<uint64_t>{ 0xa1ull }));
+	}
+}
+
+BOOST_FIXTURE_TEST_CASE(Override_TransformIsEffectiveAndResettable, instance_fixture)
+{
+	namespace oe = edt::override_edit;
+	auto& robot = nodes()[2];
+	const std::vector<uint64_t> target{ 0xa1ull };
+	const prefab_node* arm = oe::find_base_node(robot, target);
+	BOOST_REQUIRE(arm);
+
+	oe::write_transform(robot, target, *arm, glm::vec3{ 1, 1, 1 }, arm->rotation, arm->scale);
+	glm::vec3 pos, rot, scl;
+	oe::effective_transform(robot, target, *arm, pos, rot, scl);
+	BOOST_TEST((pos == glm::vec3{ 1, 1, 1 }));
+	BOOST_TEST((scl == arm->scale));
+
+	BOOST_TEST(oe::reset(robot, target, std::string{ scn::transform_pseudo_component }));
+	oe::effective_transform(robot, target, *arm, pos, rot, scl);
+	BOOST_TEST((pos == glm::vec3{ 5, 0, 0 }));
 }
 
 // ---------------------------------------------------------------- importer
