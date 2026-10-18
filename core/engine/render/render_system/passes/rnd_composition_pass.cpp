@@ -48,14 +48,15 @@ void composition_pass::execute(frame_context &context,
     if (vp_width < 1 || vp_height < 1)
       continue;
 
-    res::tag target_tag = rnd::resolve_color_target(packet.camera);
+    const auto target = rnd::select_camera_target(packet.camera);
+    const bool offscreen = target.kind == rnd::render_target_kind::texture;
     res::tag tp_accum_tag = rnd::resolve_tp_accum_target(packet.camera);
     res::tag tp_reveal_tag = rnd::resolve_tp_reveal_target(packet.camera);
-    auto color_rt = txm_manager.find(target_tag);
+    auto color_rt = offscreen ? txm_manager.find(target.texture) : nullptr;
     auto color_tp_rt = txm_manager.find(tp_accum_tag);
     auto waight_tp_rt = txm_manager.find(tp_reveal_tag);
 
-    if (!color_rt || !color_tp_rt || !waight_tp_rt)
+    if ((offscreen && !color_rt) || !color_tp_rt || !waight_tp_rt)
       continue;
 
     rnd::driver::render_state state;
@@ -69,8 +70,10 @@ void composition_pass::execute(frame_context &context,
     state.blend_states = {blend};
     drv.set_render_state(state);
 
-    drv.push_frame_buffer();
-    drv.set_render_target(color_rt);
+    if (offscreen) {
+      drv.push_frame_buffer();
+      drv.set_render_target(color_rt);
+    }
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
@@ -95,7 +98,9 @@ void composition_pass::execute(frame_context &context,
     rnd::configure_pass(context, desc);
     drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, std::size(indeces));
 
-    drv.pop_frame_buffer();
+    if (offscreen) {
+      drv.pop_frame_buffer();
+    }
   }
 }
 } // namespace rnd

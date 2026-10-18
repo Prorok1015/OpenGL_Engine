@@ -36,6 +36,8 @@ void engine::render::render_init(ds::app_data_storage& data)
 	auto& desc_sys = data.require<desc::desc_system>();
 	auto& res_sys = data.require<res::resource_system>();
 	auto& render_system = data.construct<rnd::render_system>(window_system.get_context()->create_driver(), desc_sys, res_sys);
+	// Per-frame render data shared by the extract and render stages; reset at the end of each frame.
+	data.construct<rnd::frame_context>();
 	register_render_descs(desc_sys);
 	render_system.add_render_pass(std::make_shared<rnd::z_prepass>());
 	render_system.add_render_pass(std::make_shared<rnd::opaque_pass>());
@@ -51,5 +53,6 @@ void engine::render::render_term(ds::app_data_storage& data)
 	auto& desc_sys = data.require<desc::desc_system>();
 	unregister_render_descs(desc_sys);
 
+	data.destruct<rnd::frame_context>();
 	data.destruct<rnd::render_system>();
 }

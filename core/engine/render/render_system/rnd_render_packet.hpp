@@ -24,6 +24,40 @@ namespace rnd {
 		int render_priority = 0;
 	};
 
+	// Where a camera's main color goes: straight to the window's default framebuffer, or into a texture.
+	enum class render_target_kind : uint8_t { backbuffer, texture };
+
+	struct camera_target {
+		render_target_kind kind = render_target_kind::backbuffer;
+		res::tag texture; // valid only for kind == texture
+	};
+
+	// A camera without a (valid) color target draws to the backbuffer; the editor redirects such
+	// cameras to textures so it can show them in its viewport.
+	inline bool targets_backbuffer(const ds::fixed_vector<res::tag, 4>& color_targets)
+	{
+		return color_targets.empty() || !color_targets[0].is_valid();
+	}
+
+	inline camera_target select_camera_target(const camera_render_data_t& cam)
+	{
+		if (!targets_backbuffer(cam.color_targets))
+			return { render_target_kind::texture, cam.color_targets[0] };
+		return { render_target_kind::backbuffer, {} };
+	}
+
+	// The viewport a camera renders with: its own if it has one, else (backbuffer cameras only)
+	// the whole backbuffer. nullopt when there is nothing to render into.
+	inline std::optional<glm::ivec4> effective_camera_viewport(
+		const glm::ivec4& own_viewport, bool targets_the_backbuffer, const glm::ivec2& backbuffer_size)
+	{
+		if (own_viewport.z >= 1 && own_viewport.w >= 1)
+			return own_viewport;
+		if (targets_the_backbuffer && backbuffer_size.x >= 1 && backbuffer_size.y >= 1)
+			return glm::ivec4{ 0, 0, backbuffer_size.x, backbuffer_size.y };
+		return std::nullopt;
+	}
+
 	// Resolve helpers — fallback to legacy static tags when camera doesn't specify
 	inline res::tag resolve_color_target(const camera_render_data_t& cam, std::size_t index = 0)
 	{

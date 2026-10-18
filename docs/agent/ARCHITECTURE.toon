@@ -101,8 +101,19 @@ boot_sequence:
   module_loader.add_module(core, engine, editor)
   → register_all_services()
   → initialize_all_services() // topo-sorted by depends_on(), priority breaks ties
-  → app.run() // game loop
+  → app.run() // loop.init → loop.on_step … → loop.term (term also when a step throws)
   → shutdown_all_services() // reverse order
+
+[FRAME_LOOP]
+design: docs/roadmap/design/FRAME_LOOP.md
+loop: one app::loop_service (core/core/application) for every host; core_module registers it with app::frame_stage_registry
+stages: begin, input, update, post_update, extract, render, ui, present (fixed, ordered; mirror of ECS phases)
+  - begin: frame allocator reset (core). Nothing may run before it.
+  - bodies: engine sets update/post_update (scene, input deltas) and input/extract/render/present (window, renderer) in gs_engine_frame_stages; editor sets ui (ImGui)
+  - a module adds its own named stage with registry.add_stage(name, anchor, before|after, fn); same anchor = registration order; duplicate names rejected; remove_stage/clear_body on module shutdown
+  - stage context: {storage, dt}; the render frame_context is a service in the storage, reset after present
+camera_target: camera color_targets empty = backbuffer (draws into the default framebuffer, no present pass); a tag = texture. rnd::select_camera_target. The editor redirects backbuffer cameras to textures (edt::redirect_backbuffer_cameras)
+without_editor: engine runs without editor_module; editor-only behaviour exists only as editor stages
 
 [RESOURCE_SYSTEM]
 identification: res::tag (unique resource identifier)

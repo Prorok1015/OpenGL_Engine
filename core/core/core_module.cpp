@@ -4,6 +4,7 @@
 #include "desc_desc_service_init.h"
 #include "ecs_ecs_service_init.h"
 #include "wnd_window_system.h"
+#include "app_loop_service.h"
 #include "res_system.h"
 #include "adapters/res_adapter_worker.h"
 #include <engine_log.h>
@@ -40,6 +41,10 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	desc::desc_init(data);// core
 	window::window_init(data);// core
 	ecs::ecs_init(data);// core
+	// The frame loop is shared by every host; modules add their stages to the registry.
+	auto& stages = data.construct<app::frame_stage_registry>();
+	app::register_core_frame_stages(stages);
+	data.construct<app::app_loop_service_interface, app::loop_service>(stages);
 }
 
 void core::core_module::initialize_services(ds::app_data_storage& data)
@@ -76,6 +81,8 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 
 void core::core_module::shutdown_services(ds::app_data_storage& data)
 {
+	data.destruct<app::app_loop_service_interface>();
+	data.destruct<app::frame_stage_registry>();
 	ecs::ecs_term(data);
 	window::window_term(data);
 	desc::desc_term(data);

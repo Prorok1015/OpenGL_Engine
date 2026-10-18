@@ -71,18 +71,21 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		int vp_height = packet.camera.viewport.w;
 		if (vp_width < 1 || vp_height < 1) continue;
 
-		res::tag target_tag = rnd::resolve_color_target(packet.camera);
+		const auto target = rnd::select_camera_target(packet.camera);
+		const bool offscreen = target.kind == rnd::render_target_kind::texture;
 		res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-		auto color_rt = txm_manager.find(target_tag);
-		if (!color_rt) continue;
+		auto color_rt = offscreen ? txm_manager.find(target.texture) : nullptr;
+		if (offscreen && !color_rt) continue;
 
 		driver::render_state state;
 		state.depth.enabled = false;
 		state.depth.write_mask = false;
 		drv.set_render_state(state);
 
-		drv.push_frame_buffer();
-		drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+		if (offscreen) {
+			drv.push_frame_buffer();
+			drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+		}
 
 		common_matrix.view = packet.camera.view_matrix;
 		common_matrix.projection = packet.camera.projection_matrix;
@@ -127,7 +130,9 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		drv.draw_indices(m_vao, driver::RENDER_MODE::LINE,
 			static_cast<unsigned int>(indices.size()), 0);
 
-		drv.pop_frame_buffer();
+		if (offscreen) {
+			drv.pop_frame_buffer();
+		}
 	}
 }
 } // namespace rnd

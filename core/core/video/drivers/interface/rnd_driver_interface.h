@@ -163,6 +163,8 @@ namespace rnd::driver
 		virtual void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) = 0;
 
 		virtual void set_viewport(glm::ivec4 rect) = 0;
+		// Limits clears and draws to `rect` ({left, top, width, height}); {0,0,0,0} lifts the limit.
+		virtual void set_scissor(glm::ivec4 /*rect*/) {}
 		virtual void clear(clear_flags flags) = 0;
 		virtual void clear(clear_flags flags, glm::vec4 color) = 0;
 		virtual void clear(clear_flags flags, const std::vector<glm::vec4>& colors) = 0;

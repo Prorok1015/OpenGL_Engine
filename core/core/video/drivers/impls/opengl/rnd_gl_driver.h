@@ -17,6 +17,7 @@ namespace rnd::driver::gl
 		virtual void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) override;
 
 		virtual void set_viewport(glm::ivec4 rect) override;
+		virtual void set_scissor(glm::ivec4 rect) override;
 		virtual void clear(clear_flags flags) override;
 		virtual void clear(clear_flags flags, glm::vec4 color) override;
 		virtual void clear(clear_flags flags, const std::vector<glm::vec4>& colors) override;

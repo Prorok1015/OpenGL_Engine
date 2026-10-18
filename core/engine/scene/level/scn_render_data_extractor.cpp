@@ -14,8 +14,8 @@
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
-    // Managers are injected into frame_context by render_system::begin_frame (frame stage 28),
-    // which runs before this extractor (stage 30). Catch a missing/mis-ordered injection early.
+    // Managers are injected into frame_context by render_system::begin_frame, which the `extract`
+    // stage runs before this extractor. Catch a missing/mis-ordered injection early.
     ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
     ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
     auto& level = m_level_manager.get_level();
@@ -38,7 +38,9 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
         int dir_light_count = static_cast<int>(world_lights.directional.size());
 
         for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
-            if (cam.m_viewport.size.x < 1 || cam.m_viewport.size.y < 1) {
+            const auto camera_viewport = rnd::effective_camera_viewport(
+                cam.m_viewport, rnd::targets_backbuffer(cam.color_targets), context.backbuffer_size);
+            if (!camera_viewport) {
                 continue;
             }
 
@@ -53,9 +55,9 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 packet.camera.view_position = glm::vec3(trans->world[3]);
             }
 
-            auto& vp = cam.m_viewport;
-            packet.camera.viewport = vp;
-            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp.size.x / (float)vp.size.y,
+            const glm::ivec4 vp_rect = *camera_viewport;
+            packet.camera.viewport = vp_rect;
+            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp_rect.z / (float)vp_rect.w,
                 cam.near_distance, cam.far_distance);
             packet.camera.color_targets = cam.color_targets;
             packet.camera.depth_target = cam.depth_target;
