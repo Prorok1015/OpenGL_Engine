@@ -42,7 +42,7 @@ jobs:
 
       - name: Configure
         shell: bash
-        run: cmake --preset ci-windows-msvc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ci-windows-msvc-release -DSNK_ASSIMP_FORMATS=ALL "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor
         run: cmake --build build/ci-windows-msvc-release --target editor --parallel

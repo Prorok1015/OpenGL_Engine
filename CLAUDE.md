@@ -159,6 +159,7 @@ build/dev-debug/Editor/editor --config Editor/config/editor.cfg
 Build speed (CMake options, so local/IDE/CI behave the same):
 - `SNK_COMPILER_CACHE=AUTO|ON|OFF` — launcher via ccache (sccache on Windows); a user-set `CMAKE_<LANG>_COMPILER_LAUNCHER` wins
 - `SNK_PCH=AUTO|ON|OFF` — one shared PCH (`cmake/pch/snk_pch.h`) for project targets; AUTO = ON except MSVC with a cache. Missing include that PCH hides? Build with `-DSNK_PCH=OFF` (CI job `ci-linux-clang-debug` does)
+- `SNK_ASSIMP_FORMATS=MINIMAL|ALL` — MINIMAL (default) builds only the glTF/glb, OBJ, FBX importers and no exporters; `release` preset and `release.yml` use ALL. Need another format locally? `-DSNK_ASSIMP_FORMATS=ALL`
 
 ---
 

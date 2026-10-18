@@ -37,10 +37,11 @@
       "name": "release",
       "inherits": "base",
       "displayName": "Release",
-      "description": "Optimized build, profiler disabled",
+      "description": "Optimized build, profiler disabled, all Assimp formats",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "ENGINE_PROFILE_MODE": "NONE"
+        "ENGINE_PROFILE_MODE": "NONE",
+        "SNK_ASSIMP_FORMATS": "ALL"
       }
     },
     {
