@@ -13,15 +13,16 @@ namespace gui
     public:
         virtual ~imgui_backend_interface() {}
 
-        virtual void init(void* context = nullptr) = 0;
+        // Renderer half of the ImGui integration: owns the ImGui context. Input and window state
+        // come from gui::platform_backend.
+        virtual void init() = 0;
         virtual void set_dpi_scale(float scale) {}
         // Rebuilds fonts and re-applies style scaling for a new content scale. Call outside an ImGui frame.
         virtual void rebuild_fonts(float scale) {}
+        // Renderer per-frame setup only; gui_system calls ImGui::NewFrame after the platform's.
         virtual void new_frame() = 0;
         virtual void render() = 0;
         virtual void shutdown() = 0;
-        virtual void set_display_size(int width, int height) = 0;
-        virtual void set_input(float mouseX, float mouseY, bool mouseButtons[3], float mouseWheel) = 0;
         virtual ImTextureID get_imgui_texture_from_texture(rnd::driver::texture_interface* txm) = 0;
         void set_initial_layout_by_default(bool flag) { is_first_init = flag; }
         const std::string& get_settings_filename() const {

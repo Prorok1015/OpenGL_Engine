@@ -22,9 +22,6 @@ namespace wnd
 		virtual void init() = 0;
 
 		virtual std::shared_ptr<window> get_active_window() = 0;
-		// Native window handle + DPI scale, exposed so the GUI layer can set up its imgui backend
-		// without window depending on gui (EPIC-49 US-49-9). window no longer owns the gui backend.
-		virtual void* get_active_native_handle() const = 0;
 		virtual float get_active_content_scale() const = 0;
 		virtual bool is_stop_running() = 0;
 

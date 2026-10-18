@@ -8,10 +8,13 @@
 
 namespace gui
 {
+	class platform_backend;
+
 	class SNK_API gui_system
 	{
 	public:
-		gui_system(gui::imgui_backend_interface* backend);
+		// The two halves of the ImGui integration: renderer (draws) and platform (input / window state).
+		gui_system(gui::imgui_backend_interface* backend, gui::platform_backend* platform);
 		~gui_system();
 
 		gui_system(gui_system&&) = delete;
@@ -53,5 +56,6 @@ namespace gui
 		float m_applied_scale = 0.f;
 		std::vector<std::shared_ptr<gui::layer_interface>> layers;
 		gui::imgui_backend_interface* backend = nullptr;
+		gui::platform_backend* m_platform = nullptr;
 	};
 }

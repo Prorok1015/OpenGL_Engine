@@ -1,6 +1,7 @@
 #pragma once
 #include "wnd_window_system.h"
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace wnd
@@ -20,10 +21,11 @@ namespace wnd
 		std::string get_clipboard_text() const override { return m_clipboard; }
 		void set_clipboard_text(std::string_view text) override { m_clipboard = text; }
 
-		glm::ivec2 get_backbuffer_size() const override { return m_size; }
+		glm::ivec2 get_backbuffer_size() const override { return m_backbuffer_size.value_or(m_size); }
+		// Simulates a high-DPI display: framebuffer pixels differ from window units.
+		void set_backbuffer_size(glm::ivec2 size) { m_backbuffer_size = size; }
 		const glm::ivec2& get_size() const override { return m_size; }
 		float get_content_scale() const override { return 1.f; }
-		void* get_native_handle() const override { return nullptr; }
 
 		const std::string& get_title() const { return m_title; }
 		CURSOR_MODE get_cursor_mode() const { return m_cursor_mode; }
@@ -31,6 +33,7 @@ namespace wnd
 
 	private:
 		glm::ivec2 m_size;
+		std::optional<glm::ivec2> m_backbuffer_size;
 		std::string m_title;
 		std::string m_clipboard;
 		CURSOR_MODE m_cursor_mode = CURSOR_MODE::NORMAL;
@@ -47,7 +50,6 @@ namespace wnd
 		void init() override {}
 
 		std::shared_ptr<window> get_active_window() override { return m_window; }
-		void* get_active_native_handle() const override { return nullptr; }
 		float get_active_content_scale() const override { return 1.f; }
 		bool is_stop_running() override { return m_window->is_shutdown(); }
 

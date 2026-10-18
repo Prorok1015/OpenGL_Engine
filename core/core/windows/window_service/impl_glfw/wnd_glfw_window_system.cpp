@@ -14,9 +14,9 @@ namespace {
         if (auto win = wndCreator.find_window(window)) {
             for (auto listener : wndCreator.get_event_listeners()) {
                 if (focused)
-                    listener->on_window_focus_gained(win.get());
+                    listener->on_window_focus_gained(static_cast<wnd::window*>(win.get()));
                 else
-                    listener->on_window_focus_lost(win.get());
+                    listener->on_window_focus_lost(static_cast<wnd::window*>(win.get()));
             }
         }
     }
@@ -39,7 +39,7 @@ namespace {
 			evt.construct_payload<core::inp::scroll_move_event>(glm::vec2{ (float)xoffset, (float)yoffset });
 
             for (auto& listener : wndCreator.get_event_listeners()) {
-				listener->on_input_event(win.get(), evt);
+				listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
     }
@@ -52,7 +52,18 @@ namespace {
             const glm::vec2 scale = wnd::framebuffer_scale(win->get_backbuffer_size(), win->get_size());
             evt.construct_payload<core::inp::cursor_move_event>(wnd::to_framebuffer(glm::vec2{ xpos, ypos }, scale));
             for (auto& listener : wndCreator.get_event_listeners()) {
-				listener->on_input_event(win.get(), evt);
+				listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
+            }
+        }
+    }
+
+    void cursor_enter_callback(GLFWwindow* window, int entered) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
+            inp::input_event evt;
+            evt.construct_payload<core::inp::cursor_entered_event>(entered != 0);
+            for (auto& listener : wndCreator.get_event_listeners()) {
+                listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
     }
@@ -73,7 +84,7 @@ namespace {
         auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
-				listener->on_input_event(win.get(), evt);
+				listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
     }
@@ -94,7 +105,7 @@ namespace {
         auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
-				listener->on_input_event(win.get(), evt);
+				listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
    }
@@ -105,7 +116,7 @@ namespace {
             inp::input_event evt;
             evt.construct_payload<core::inp::char_event>(static_cast<char32_t>(codepoint));
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_input_event(win.get(), evt);
+                listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
     }
@@ -116,7 +127,7 @@ namespace {
             inp::input_event evt;
             evt.construct_payload<core::inp::framebuffer_resized>(glm::ivec2{ width, height });
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_input_event(win.get(), evt);
+                listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
     }
@@ -127,7 +138,7 @@ namespace {
             inp::input_event evt;
             evt.construct_payload<core::inp::content_scale_changed>(glm::vec2{ xscale, yscale });
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_input_event(win.get(), evt);
+                listener->on_input_event(static_cast<wnd::window*>(win.get()), evt);
             }
         }
     }
@@ -137,7 +148,7 @@ namespace {
 
         if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_window_refresh(win.get());
+                listener->on_window_refresh(static_cast<wnd::window*>(win.get()));
             }
         }
     }
@@ -147,7 +158,7 @@ namespace {
 
         if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_window_moved(win.get(), xpos, ypos);
+                listener->on_window_moved(static_cast<wnd::window*>(win.get()), xpos, ypos);
             }
         }
     }
@@ -162,9 +173,6 @@ wnd::glfw_window_system::glfw_window_system()
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     m_active_window = make_window()->get_glfw_handle();
-    // The imgui backend is now created/initialised/shut down by the GUI layer (gui_init/gui_term),
-    // so window no longer depends on gui (EPIC-49 US-49-9). It exposes the native handle + DPI
-    // scale below for the GUI layer to set its backend up.
 }
 
 wnd::glfw_window_system::~glfw_window_system()
@@ -202,6 +210,7 @@ std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::make_window()
     glfwSetMouseButtonCallback(wid, mouse_button_callback);
     glfwSetScrollCallback(wid, device_scroll_callback);
     glfwSetCursorPosCallback(wid, cursor_position_callback);
+    glfwSetCursorEnterCallback(wid, cursor_enter_callback);
     glfwSetCharCallback(wid, char_callback);
     glfwSetFramebufferSizeCallback(wid, framebuffer_size_callback);
     glfwSetWindowContentScaleCallback(wid, content_scale_callback);

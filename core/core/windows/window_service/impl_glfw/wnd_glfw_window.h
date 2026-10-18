@@ -25,7 +25,6 @@ namespace wnd
 		glm::ivec2 get_backbuffer_size() const override;
 		const glm::ivec2& get_size() const override { return m_size; }
 		float get_content_scale() const override;
-		void* get_native_handle() const override { return m_ctx.get_id(); }
 		gl_surface* gl_surface_ptr() const override;
 
 		void make_current() override;

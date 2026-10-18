@@ -14,7 +14,6 @@ namespace wnd
 		void init() override;
 
 		std::shared_ptr<window> get_active_window() override;
-		void* get_active_native_handle() const override { return m_active_window; }
 		float get_active_content_scale() const override;
 		bool is_stop_running() override;
 

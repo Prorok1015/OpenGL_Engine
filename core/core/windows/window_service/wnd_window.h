@@ -71,8 +71,6 @@ namespace wnd
 		virtual glm::ivec2 get_backbuffer_size() const = 0;
 		virtual const glm::ivec2& get_size() const = 0;
 		virtual float get_content_scale() const = 0;
-		// Opaque backend handle for the GUI platform layer; nullptr when there is none.
-		virtual void* get_native_handle() const = 0;
 		// GL context of this window; nullptr when it has none (null window, graphics_api::none).
 		virtual gl_surface* gl_surface_ptr() const { return nullptr; }
 
