@@ -5,7 +5,7 @@ add_library(snk::ecs ALIAS ${PROJECT_NAME})
 
 file(GLOB_RECURSE SE_ECS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_ECS_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common)
 
