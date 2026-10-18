@@ -1,6 +1,6 @@
 # Handoff: Фаза 0 (подготовка движка к ТЗ «Химера») — статус
 
-**Обновлено:** 2026-10-18 (вечер) · **Ветка:** `aibranch` (дефолт — `main`) · **Трекер:** [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues), [milestones](https://github.com/Prorok1015/OpenGL_Engine/milestones)
+**Обновлено:** 2026-10-18 (поздний вечер) · **Ветка:** `aibranch` (дефолт — `main`) · **Трекер:** [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues), [milestones](https://github.com/Prorok1015/OpenGL_Engine/milestones)
 
 Этот файл — точка входа для новой сессии: прочитав его, можно продолжить работу.
 
@@ -50,9 +50,15 @@
 - CMake/CI (#11): #107, #106, #108 SDK `snake_sdk` (find_package, сторонние внутри, static+shared, CI-потребитель), #180 ускорение (ccache/sccache, PCH, `SNK_ASSIMP_FORMATS`, пресеты `ci-*`: CI ~21 мин → единицы минут), #54, #56 визуальный smoke в CI.
 - Хвосты A/B (#4): `LEGACY_TEMPLATES` решены, `CMakeUserPresets.json` удалён, чек-лист Windows в #55.
 
-**В работе:** #9 цикл кадра + цель рендера камеры — PR #189 (дизайн `docs/roadmap/design/FRAME_LOOP.md`).
+- Форматы данных (#7) закрыт целиком: + #192 редактор по `node_id`, инспектор пишет override-записи («Reset to base»), #172; #195 база инспектора при вложенных инстансах (кэш `override_edit::view_cache`: `shared_ptr<const T>`, ключ мир/owner node_id/цель + `shared_state::desc_generation`).
+- #9 цикл кадра (#96–#100): именованные стадии, один `app::loop_service`, цель рендера камеры. #190 Game view в редакторе.
+- #186 hot reload сохраняет миры, созданные в редакторе (редактор ресинхронизируется после любой перезагрузки); #196 уровень без миров (`active_world_idx = -1` допустим).
+- #198 Windows MSVC shared в CI (`snk_engine.dll`; imgui экспортируется из DLL через `IMGUI_API`; Boost.JSON/assimp статически в editor — безопасно при `/MD`).
+- #10 платформенный шов, дизайн утверждён: `docs/roadmap/design/PLATFORM_SEAM.md` (свой ImGui-бэкенд на событиях `wnd`, swap/vsync/glad в драйвере через `wnd::gl_surface`, курсор в координатах framebuffer). Шаг #101 (интерфейсы `wnd` без GLFW, `null_window_system`) — сделан.
 
-**Осталось по этапу C:** #172 (редактор по `node_id`, override-записи из инспектора), #10 платформенный шов, #109 public/internal заголовки, #174 предупреждения, #186 (hot reload теряет миры редактора), #105 (ждёт EPIC-34).
+**В работе (2026-10-18 вечер):** #102 GL swapchain в драйвере — PR #203; #202 браузер ассетов по слоям ресурсов + согласованность при отказе смены мира; #201 SDK shared на Windows (`IMGUI_API` для потребителей, shared Release, C4251).
+
+**Осталось по этапу C:** #103 → #104 (строго после #102); затем #109 public/internal заголовки, #174 предупреждения (последним); замечания EPIC-50 (игровые фазы после загрузки миров, состояние систем при reload); #105 (ждёт EPIC-34).
 
 **Решение владельца — ресурсы слоями:** в ядре (`core/res`) базовые ресурсы, чтобы модели рисовались «из коробки» в любом новом проекте; редактор и игра добавляют шаблоны и переопределения; `res://` ищется проект → редактор → ядро.
 
@@ -84,6 +90,7 @@
 - Файлы с CRLF правятся только инструментом Edit (не python/sed с перезаписью).
 - `closes #N` закрывает issue только при попадании в `main` — в `aibranch` закрывать вручную.
 - Проверка через CI (решение владельца 2026-10-18): агент пишет код в ветке `wip/<issue>-<slug>` от `aibranch`, пушит её и открывает **draft PR в `aibranch`** (PR-прогоны берут кэш компиляции из `aibranch`). Локально не собирает. Оркестратор следит за CI PR, ревьюит, затем переводит PR из draft в ready и делает **squash-merge в `aibranch` через GitHub** (решение владельца 2026-10-18; ветка удаляется автоматически настройкой репозитория). Удалять ветки из сессии нельзя — git-прокси обрывает push с удалением. CI покрывает Linux GCC/Clang/ASan/TSan/shared, Windows MSVC Debug/Release, headless smoke с проверкой кадра (`check_smoke.sh`).
+- Ревью и мерж (владелец 2026-10-18): заметные PR — независимое ревью вторым агентом (только `git show/diff`, без checkout в общем дереве), находки — обратно автору-агенту; PR с чистым ревью и зелёным CI мержится без CodeRabbit. CodeRabbit (`@coderabbitai review`, вручную, ≤1 ревью/час на бесплатном плане) — для крупных/рискованных изменений; ответы в его тредах обязательны. Если PR тестировался на старой базе и пересекается с новыми мержами — вмержить `aibranch` в ветку и дождаться CI. CI теперь покрывает и Windows MSVC Shared.
 - Проверка перед пушем в `aibranch` (если что-то правится прямо там): сборка + `unit_tests` + headless-запуск `smoke_level`.
 - Коммиты оканчиваются строками `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` и `Claude-Session: <url сессии>`.
 
