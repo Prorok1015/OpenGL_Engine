@@ -4,6 +4,7 @@
 #include "resources/res_resource_handle.hpp"
 #include <unordered_map>
 #include "scn_ecs_assembler.h"
+#include "scn_override_record.h"
 #include <glm/glm.hpp>
 #include "snk_api.h"
 
@@ -14,10 +15,18 @@ namespace scn {
 		static constexpr std::string_view __type = "prefab_desc";
 		using base_type = desc::desc_base;
 
+		// A pointer write that has to land after serialize(parent) + overrides are merged. Only built while an
+		// instance is expanded (override records become edits); never stored in a desc or saved.
+		struct comp_edit {
+			std::string path; // RFC 6901; "" merges the object `value` into the component
+			boost::json::value value;
+		};
+
 		struct prefab_comp_node {
 			std::string type_name;
 			res::res_handle<desc::desc_base> parent_desc;
 			boost::json::object overrides;
+			std::vector<comp_edit> edits;
 		};
 
 		struct prefab_node {
@@ -29,6 +38,9 @@ namespace scn {
 
 			std::unordered_map<std::string, prefab_comp_node> components;
 			std::vector<prefab_node> children;
+			// Changes this node makes to the content it instantiates (see override_record). A node that references
+			// a prefab applies them to that prefab; any other node applies them to its own subtree.
+			std::vector<override_record> overrides;
 
 			glm::mat4 get_local_transform() const
 			{
@@ -72,21 +84,25 @@ namespace scn {
 	// components spell out their __type. Registered with the desc_system by register_scene_types.
 	SNK_API void migrate_prefab_v1(boost::json::object& obj);
 
+	// prefab_desc / world_desc v2 -> v3: the override layer of an explicit nested instance (a component
+	// { "__type": "prefab_desc", "__parent": X }) becomes `overrides` records on the instance node.
+	SNK_API void migrate_prefab_v2(boost::json::object& obj);
+
 	enum class reconcile_mode {
 		spawn,  // `live` is a fresh entity: create everything below it
 		reload, // `live` already has children: update the ones that still exist, add new ones, destroy the rest
 	};
 
-	// The single place that turns prefab nodes into entities. `base` is the prefab being instantiated and
-	// `records` the local layer on top of it (an explicit nested instance's overrides); either may be null.
-	// Children are paired across the layers, and with the live children on a reload, by node id.
-	// Every spawned node gets its node_id_component, which fills the registry's node_index.
+	// The single place that turns prefab nodes into entities. If `node` references a prefab, that prefab's
+	// content (with the node's override records applied and the node's own components and children added) is
+	// what gets built, and the entity remembers the prefab as its prefab_instance. Children are matched with
+	// the live children on a reload by node id. Every spawned node gets its node_id_component, which fills
+	// the registry's node_index.
 	SNK_API void reconcile(
 		ecs_assembler& assembler,
 		entt::registry& reg,
 		entt::entity live,
-		const prefab_desc::prefab_node* base,
-		const prefab_desc::prefab_node* records,
+		const prefab_desc::prefab_node& node,
 		reconcile_mode mode);
 
 	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
