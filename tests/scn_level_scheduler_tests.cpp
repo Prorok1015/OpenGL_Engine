@@ -38,7 +38,7 @@ namespace {
 	struct fixture {
 		fixture()
 			: ds(rs)
-			, assembler(ds)
+			, assembler(ds, rs)
 		{
 			g_log.clear();
 			sf.register_automatic_system<&sys_a>("a");

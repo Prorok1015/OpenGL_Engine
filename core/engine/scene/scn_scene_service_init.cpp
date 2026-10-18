@@ -20,7 +20,7 @@ void scn::scene_init(ds::app_data_storage &store) {
   auto &sfactory = store.require<ecs::system_factory>();
   auto &resource = store.require<res::resource_system>();
 
-  auto &assembler = store.construct<scn::ecs_assembler>(desc_sys);
+  auto &assembler = store.construct<scn::ecs_assembler>(desc_sys, resource);
   init_animation_system(sfactory);
   init_transform_system(sfactory);
   init_mouse_controller_system(sfactory);

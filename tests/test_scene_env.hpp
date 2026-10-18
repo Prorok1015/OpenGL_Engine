@@ -234,7 +234,7 @@ struct scene_env : ram_res_env
 		descs = std::make_unique<desc::desc_system>(*rs);
 		register_scene_descs(*descs);
 		rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(*descs));
-		assembler = std::make_unique<scn::ecs_assembler>(*descs);
+		assembler = std::make_unique<scn::ecs_assembler>(*descs, *rs);
 		register_scene_spawners(*assembler);
 	}
 

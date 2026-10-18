@@ -1,6 +1,7 @@
 #include "scn_prefab_desc.h"
 #include "scn_model.h"
 #include "scn_glm_json_convert.h"
+#include "res_system.h"
 #include <algorithm>
 #include <unordered_set>
 
@@ -204,7 +205,7 @@ void scn::assemble_merged_node(
 	if (override_node) {
 		for (const auto& [comp_name, cnode] : override_node->components) {
 			if (cnode.type_name == "prefab_desc" && cnode.parent_desc.is_valid()) {
-				auto asset = res::get_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
+				auto asset = assembler.get_resource_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
 				if (asset.is_ready()) nested_base_root = &asset->get_root();
 
 				reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{
@@ -325,7 +326,7 @@ void scn::hot_reload_merged_node(
 		for (const auto& [comp_name, cnode] : override_node->components) {
 			if (cnode.type_name == "prefab_desc" && cnode.parent_desc.is_valid()) {
 				// cnode.parent_desc is the handle captured at first assembly and goes stale; re-resolve by tag.
-				nested_asset = res::get_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
+				nested_asset = assembler.get_resource_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
 				if (ENGINE_VERIFY(nested_asset.is_ready(), "nested prefab '{}' is not loaded, ignoring", cnode.parent_desc.get_tag().view())) {
 					nested_base_root = &nested_asset->get_root();
 				}

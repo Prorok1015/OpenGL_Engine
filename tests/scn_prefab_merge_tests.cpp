@@ -7,7 +7,7 @@
 // Behavior of prefab assembly: parse/serialize, hierarchy spawning, override merge for explicit
 // nested instances, and hot reload. Descs live in a RAM resolver; no GPU, window or disk.
 
-// Legacy global accessor used by nested-prefab assembly (res::get_system()).
+// Legacy global; the test below nulls it to prove prefab assembly no longer reads it.
 extern res::resource_system* p_res_system;
 // Non-namespaced entry point that assembles a prefab_node as an *override* node (nested instance).
 void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const scn::prefab_desc::prefab_node& node);
@@ -15,13 +15,6 @@ void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, en
 namespace json = boost::json;
 
 namespace {
-
-struct global_res_guard
-{
-	res::resource_system* prev;
-	explicit global_res_guard(res::resource_system* s) : prev(p_res_system) { p_res_system = s; }
-	~global_res_guard() { p_res_system = prev; }
-};
 
 constexpr const char* BASE_PREFAB = R"({
 	"__type": "prefab_desc",
@@ -300,7 +293,6 @@ BOOST_AUTO_TEST_CASE(AssemblePrefab_ParentDescComponentIsTrackedWithItsLocalOver
 
 BOOST_AUTO_TEST_CASE(NestedInstance_MergesComponentsChildrenAndRecordsOverrides)
 {
-	global_res_guard guard(rs.get());
 	auto base_tag = put("base.prefab.desc", BASE_PREFAB);
 	auto inst_tag = put("inst.prefab.desc", INSTANCE_PREFAB);
 	auto inst = load<scn::prefab_desc>(inst_tag);
@@ -338,7 +330,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_MergesComponentsChildrenAndRecordsOverrides)
 
 BOOST_AUTO_TEST_CASE(NestedInstance_ChildRotationInheritedWhenOnlyPositionOverridden)
 {
-	global_res_guard guard(rs.get());
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = parse(INSTANCE_PREFAB);
 	entt::registry reg;
@@ -363,7 +354,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_ChildRotationInheritedWhenOnlyPositionOverri
 BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverridingPositionBackToZeroIsHonored)
 {
-	global_res_guard guard(rs.get());
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
 		"children":{"arm":{"transform":{"position":[0,0,0]}}}})");
@@ -377,7 +367,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_OverridingPositionBackToZeroIsHonored)
 BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverridingScaleBackToOneIsHonored)
 {
-	global_res_guard guard(rs.get());
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
 		"children":{"arm":{"transform":{"scale":[1,1,1]}}}})");
@@ -391,7 +380,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_OverridingScaleBackToOneIsHonored)
 BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverridingRotationBackToZeroIsHonored)
 {
-	global_res_guard guard(rs.get());
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
 		"children":{"arm":{"transform":{"rotation":[0,0,0]}}}})");
@@ -408,7 +396,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_OverridingRotationBackToZeroIsHonored)
 BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverrideMergeIsDeepForNestedObjects)
 {
-	global_res_guard guard(rs.get());
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"},
 		"stat":{"__type":"stat_desc","limits":{"max":20}}}})");
@@ -423,7 +410,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_OverrideMergeIsDeepForNestedObjects)
 BOOST_AUTO_TEST_CASE(NestedInstance_ShallowMergeReplacesWholeNestedObject_CurrentBehavior)
 {
 	// Characterizes the CURRENT (shallow) behavior behind the expected failure above.
-	global_res_guard guard(rs.get());
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"},
 		"stat":{"__type":"stat_desc","limits":{"max":20}}}})");
@@ -438,7 +424,6 @@ BOOST_AUTO_TEST_CASE(NestedInstance_ShallowMergeReplacesWholeNestedObject_Curren
 
 BOOST_AUTO_TEST_CASE(NestedInstance_MissingBasePrefabStillAppliesOverrides)
 {
-	global_res_guard guard(rs.get());
 	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/does_not_exist.desc"},
 		"stat":{"__type":"stat_desc","hp":7}}})");
 	entt::registry reg;
@@ -568,7 +553,6 @@ BOOST_AUTO_TEST_CASE(HotReload_OnlyReloadsInstancesOfTheChangedPrefab)
 
 BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 {
-	global_res_guard guard(rs.get());
 	auto base_tag = put("base.prefab.desc", BASE_PREFAB);
 	auto inst = load<scn::prefab_desc>(put("inst.prefab.desc", INSTANCE_PREFAB));
 	entt::registry reg;
@@ -581,6 +565,29 @@ BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(base_tag));
 
 	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "leg")).hp == 44);
+}
+
+// Nested assembly resolves its parent through the assembler's injected resource system, not the
+// p_res_system global, so it must work with the global unset.
+BOOST_AUTO_TEST_CASE(NestedInstance_AssemblesWithGlobalResourceSystemUnset)
+{
+	struct restore_global
+	{
+		res::resource_system* prev;
+		~restore_global() { p_res_system = prev; }
+	} restore{ p_res_system };
+	p_res_system = nullptr;
+
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = load<scn::prefab_desc>(put("inst.prefab.desc", INSTANCE_PREFAB));
+	BOOST_REQUIRE(inst);
+
+	entt::registry reg;
+	auto e = reg.create();
+	assemble_prefab_node(*assembler, reg, e, inst->get_root());
+
+	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "leg")).hp == 4); // from the parent
+	BOOST_TEST(reg.get<test_util::stat_component>(e).hp == 99);                         // local override
 }
 
 // #82: a node that only references an asset (e.g. a .glb) must keep its own transform at spawn,

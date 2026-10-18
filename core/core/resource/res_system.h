@@ -374,5 +374,5 @@ namespace res
 		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;
 	};
 
-	resource_system& get_system();
+	[[deprecated("inject res::resource_system& instead (EPIC-29 #61)")]] resource_system& get_system();
 }

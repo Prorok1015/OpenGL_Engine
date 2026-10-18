@@ -10,6 +10,10 @@
 #include <functional>
 #include <unordered_map>
 
+namespace res {
+	class resource_system;
+}
+
 namespace scn {
 	struct tracked_component_info {
 		std::string type_name;
@@ -47,8 +51,9 @@ namespace scn {
 			spawner_category category = spawner_category::component;
 		};
 
-		ecs_assembler(desc::desc_system& desc_sys)
+		ecs_assembler(desc::desc_system& desc_sys, res::resource_system& res_sys)
 			: m_desc_sys(desc_sys)
+			, m_res_sys(res_sys)
 		{}
 
 		~ecs_assembler() = default;
@@ -66,6 +71,7 @@ namespace scn {
 		}
 
 		desc::desc_system& get_desc_system() const { return m_desc_sys; }
+		res::resource_system& get_resource_system() const { return m_res_sys; }
 
 		void spawn_from_desc(entt::registry& reg, entt::entity e, const desc::desc_base& desc, const std::string_view name = "") const
 		{
@@ -89,6 +95,7 @@ namespace scn {
 
 	private:
 		desc::desc_system& m_desc_sys;
+		res::resource_system& m_res_sys;
 		std::unordered_map<std::string, spawner_pair> m_spawners;
 	};
 }
