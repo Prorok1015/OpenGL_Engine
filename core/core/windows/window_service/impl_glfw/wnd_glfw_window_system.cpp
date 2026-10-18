@@ -1,5 +1,4 @@
-#include "wnd_window_system.h"
-#include "wnd_window.h"
+#include "wnd_glfw_window_system.h"
 #include "rnd_gl_render_context.h"
 #include "wnd_input_keycode_convert.hpp"
 #include "inp_keyboard_event.hpp"
@@ -10,20 +9,20 @@
 namespace {
     void window_focus_callback(GLFWwindow* window, int focused)
     {
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
-        if (auto win = wndCreator.find_window({ window })) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
             for (auto listener : wndCreator.get_event_listeners()) {
                 if (focused)
                     listener->on_window_focus_gained(win.get());
-                else 
+                else
                     listener->on_window_focus_lost(win.get());
             }
         }
     }
 
     void window_size_callback(GLFWwindow* window, int width, int height) {
-		auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
-        if (auto win = wndCreator.find_window({ window })) {
+		auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
                 listener->on_window_resize(win.get(), width, height);
             }
@@ -31,8 +30,8 @@ namespace {
     }
 
     void device_scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
-        if (auto win = wndCreator.find_window({ window })) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
 
 			inp::input_event evt;
 			evt.construct_payload<core::inp::scroll_move_event>(glm::vec2{ (float)xoffset, (float)yoffset });
@@ -44,12 +43,12 @@ namespace {
     }
 
     void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
 
 		inp::input_event evt;
         evt.construct_payload<core::inp::cursor_move_event>(glm::vec2{ xpos, ypos });
 
-        if (auto win = wndCreator.find_window({ window })) {
+        if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
             }
@@ -69,8 +68,8 @@ namespace {
 		inp::input_event evt;
 		evt.construct_payload<core::inp::mouse_click_event>(key_optional.value(), wnd::convert::to_action(action));
 
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
-        if (auto win = wndCreator.find_window({ window })) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
             }
@@ -90,8 +89,8 @@ namespace {
 		inp::input_event evt;
 		evt.construct_payload<core::inp::keyboard_event>(key_optional.value(), wnd::convert::to_action(action));
 
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
-        if (auto win = wndCreator.find_window({ window })) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
 				listener->on_input_event(win.get(), evt);
             }
@@ -99,9 +98,9 @@ namespace {
    }
 
     void window_refresh_callback(GLFWwindow* window) {
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
 
-        if (auto win = wndCreator.find_window({ window })) {
+        if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
                 listener->on_window_refresh(win.get());
             }
@@ -109,9 +108,9 @@ namespace {
     }
 
     void window_move_callback(GLFWwindow* window, int xpos, int ypos) {
-        auto& wndCreator = *(wnd::window_system*)glfwGetWindowUserPointer(window);
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
 
-        if (auto win = wndCreator.find_window({ window })) {
+        if (auto win = wndCreator.find_window(window)) {
             for (auto& listener : wndCreator.get_event_listeners()) {
                 listener->on_window_moved(win.get(), xpos, ypos);
             }
@@ -119,7 +118,7 @@ namespace {
     }
 }
 
-wnd::window_system::window_system()
+wnd::glfw_window_system::glfw_window_system()
 {
     glfwSetErrorCallback([](int code, const char* description) {
         egLOG_ERROR("window", "GLFW error {}: {}", code, description);
@@ -134,40 +133,41 @@ wnd::window_system::window_system()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GL_TRUE);
 
-    active_window = make_window()->get_id();
-    context = std::make_unique<rnd::driver::gl::render_context>((GLADloadproc)glfwGetProcAddress);
+    m_active_window = make_window()->get_glfw_handle();
+    m_context = std::make_unique<rnd::driver::gl::render_context>((GLADloadproc)glfwGetProcAddress);
     // The imgui backend is now created/initialised/shut down by the GUI layer (gui_init/gui_term),
     // so window no longer depends on gui (EPIC-49 US-49-9). It exposes the native handle + DPI
     // scale below for the GUI layer to set its backend up.
 }
 
-wnd::window_system::~window_system()
+wnd::glfw_window_system::~glfw_window_system()
 {
     // Members are destroyed after the body; wnd::context::~context calls glfwDestroyWindow,
     // which would run after glfwTerminate and raise GLFW_NOT_INITIALIZED (#182).
-    context.reset();
-    windows_list.clear();
+    m_context.reset();
+    m_windows_list.clear();
     glfwTerminate();
 }
 
-float wnd::window_system::get_active_content_scale() const
+float wnd::glfw_window_system::get_active_content_scale() const
 {
-    float xscale = 1.f;
-    glfwGetWindowContentScale(static_cast<GLFWwindow*>(active_window.internal_id), &xscale, nullptr);
-    return xscale;
+    if (auto win = find_window(m_active_window)) {
+        return win->get_content_scale();
+    }
+    return 1.f;
 }
 
-void wnd::window_system::init()
+void wnd::glfw_window_system::init()
 {
 
 }
 
-std::shared_ptr<wnd::window> wnd::window_system::make_window()
+std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::make_window()
 {
-    auto shared_window = std::make_shared<window>(wnd::context{ title });
+    auto shared_window = std::make_shared<glfw_window>(wnd::context{ m_title });
 
-    window::short_id wid = shared_window->get_id();
-    windows_list[wid] = shared_window;
+    GLFWwindow* wid = shared_window->get_glfw_handle();
+    m_windows_list[wid] = shared_window;
 
 	glfwSetWindowUserPointer(wid, this);
 
@@ -189,44 +189,45 @@ std::shared_ptr<wnd::window> wnd::window_system::make_window()
     return shared_window;
 }
 
-std::shared_ptr<wnd::window> wnd::window_system::get_active_window()
+std::shared_ptr<wnd::window> wnd::glfw_window_system::get_active_window()
 {
-    return find_window(active_window);
+    return find_window(m_active_window);
 }
 
-std::shared_ptr<wnd::window> wnd::window_system::find_window(window::short_id win)
+std::shared_ptr<wnd::window> wnd::glfw_window_system::find_window(GLFWwindow* handle) const
 {
-    return windows_list[win];
+    auto it = m_windows_list.find(handle);
+    return it != m_windows_list.end() ? it->second : nullptr;
 }
 
-void wnd::window_system::pool_events() const
+void wnd::glfw_window_system::pool_events() const
 {
     glfwPollEvents();
 }
 
 
-void wnd::window_system::init_windows_frame_time() const
+void wnd::glfw_window_system::init_windows_frame_time() const
 {
-    for (const auto& [_, win] : windows_list) {
+    for (const auto& [_, win] : m_windows_list) {
         win->init_frame();
     }
 }
 
-void wnd::window_system::process_windows() const
+void wnd::glfw_window_system::process_windows() const
 {
-    for (const auto& [_, win] : windows_list) {
+    for (const auto& [_, win] : m_windows_list) {
         win->update_frame();
         win->on_update();
     }
 }
 
-bool wnd::window_system::is_stop_running()
+bool wnd::glfw_window_system::is_stop_running()
 {
-    for (const auto& [_, win] : windows_list)
-    { 
+    for (const auto& [_, win] : m_windows_list)
+    {
         if (!win->is_shutdown()) {
             return false;
-        } 
+        }
     }
     return true;
 }

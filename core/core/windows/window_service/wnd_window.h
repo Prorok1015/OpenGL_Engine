@@ -1,11 +1,11 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <glm/ext.hpp>
-#include "wnd_window_context.h"
+#include "common.h"
+#include <cstdint>
+#include <string_view>
 #include "ds/ds_fixed_vector.hpp"
 #include "snk_api.h"
-
-struct GLFWwindow;
 
 namespace wnd
 {
@@ -30,55 +30,26 @@ namespace wnd
 		TYPE type = TYPE::LOGO;
 	};
 
+	// Backend-agnostic window: concrete implementations live behind this interface.
 	class SNK_API window
 	{
 	public:
-		struct short_id
-		{
-			GLFWwindow* internal_id = nullptr;
+		virtual ~window();
 
-			auto operator<=>(const short_id&) const = default;
-			std::size_t get_id() const { return std::size_t(internal_id); }
-			operator GLFWwindow* () const { return internal_id; }
-			struct hasher {
-				std::size_t operator() (const short_id& id) const { return id.get_id(); }
-			};
-		};
+		virtual bool is_shutdown() const = 0;
+		virtual void shutdown(bool close = true) = 0;
+		virtual void set_cursor_mode(CURSOR_MODE mode) = 0;
+		virtual void set_logo(const ds::fixed_vector<window_image, 2>& images) = 0;
+		virtual void set_title(std::string_view title) = 0;
+		virtual void set_vsync(bool v) = 0;
 
-	public:
-		window(context ctx_);
-		~window();
-		float aspect_ratio() const { if (is_minimize_mode()) return 0.f; return (float)size.x / (float)size.y; }
-		bool is_shutdown() const;
-		void on_update();
-		void shutdown(bool close = true);
-		void set_cursor_mode(CURSOR_MODE mode);
-		void update_frame();
-		void init_frame();
+		virtual glm::ivec2 get_backbuffer_size() const = 0;
+		virtual const glm::ivec2& get_size() const = 0;
+		virtual float get_content_scale() const = 0;
+		// Opaque backend handle for the GUI platform layer; nullptr when there is none.
+		virtual void* get_native_handle() const = 0;
 
-		void on_resize_window(int width, int height);
-
-		glm::ivec2 get_backbuffer_size() const;
-
-		void set_logo(const ds::fixed_vector<window_image, 2>& images);
-		void set_title(std::string_view title);
-		void set_vsync(bool v);
-
-		bool is_minimize_mode() const {
-			return size == glm::zero<glm::ivec2>();
-		}
-
-		const glm::ivec2& get_size() const { return size; }
-		short_id get_id() const { return short_id{ ctx.get_id() }; }
-
-	public:
-		ds::simple_event<void(window& window)> eventRefreshWindow;//TODO: remove
-		ds::simple_event<void(window& window, int width, int height)> eventResizeWindow;//TODO: remove
-
-	private: 
-		context ctx;
-		glm::ivec2 size{ 0 };
-		double delta = 0.f;
-		double lastTime = 0.f;
+		float aspect_ratio() const { if (is_minimize_mode()) return 0.f; return (float)get_size().x / (float)get_size().y; }
+		bool is_minimize_mode() const { return get_size() == glm::zero<glm::ivec2>(); }
 	};
 }
