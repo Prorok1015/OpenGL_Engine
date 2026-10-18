@@ -6,7 +6,7 @@
     "worlds" : [
         {
             "__type" : "world_desc",
-            "__version" : 2,
+            "__version" : 3,
             "name" : "3d_scene",
             "systems" : [
                 "inp::update_input_state",
