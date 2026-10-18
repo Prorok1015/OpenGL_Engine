@@ -3,6 +3,7 @@
 #include <glm/ext.hpp>
 #include "common.h"
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include "ds/ds_fixed_vector.hpp"
 #include "snk_api.h"
@@ -15,6 +16,20 @@ namespace wnd
 		DISABLE,
 		NORMAL,
 		HIDDEN
+	};
+
+	enum class cursor_shape
+	{
+		arrow,
+		text_input,
+		resize_all,
+		resize_ns,
+		resize_ew,
+		resize_nesw,
+		resize_nwse,
+		hand,
+		not_allowed,
+		count
 	};
 
 	// Client API the window is created for; a GL context can only be attached by glfwCreateWindow.
@@ -49,6 +64,9 @@ namespace wnd
 		virtual void set_cursor_mode(CURSOR_MODE mode) = 0;
 		virtual void set_logo(const ds::fixed_vector<window_image, 2>& images) = 0;
 		virtual void set_title(std::string_view title) = 0;
+		virtual void set_cursor_shape(cursor_shape shape) = 0;
+		virtual std::string get_clipboard_text() const = 0;
+		virtual void set_clipboard_text(std::string_view text) = 0;
 
 		virtual glm::ivec2 get_backbuffer_size() const = 0;
 		virtual const glm::ivec2& get_size() const = 0;

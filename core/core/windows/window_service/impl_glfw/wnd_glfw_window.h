@@ -1,6 +1,9 @@
 #pragma once
 #include "wnd_window.h"
 #include "wnd_window_context.h"
+#include <array>
+
+struct GLFWcursor;
 
 namespace wnd
 {
@@ -15,6 +18,9 @@ namespace wnd
 		void set_cursor_mode(CURSOR_MODE mode) override;
 		void set_logo(const ds::fixed_vector<window_image, 2>& images) override;
 		void set_title(std::string_view title) override;
+		void set_cursor_shape(cursor_shape shape) override;
+		std::string get_clipboard_text() const override;
+		void set_clipboard_text(std::string_view text) override;
 
 		glm::ivec2 get_backbuffer_size() const override;
 		const glm::ivec2& get_size() const override { return m_size; }
@@ -34,6 +40,8 @@ namespace wnd
 
 	private:
 		context m_ctx;
+		// Created lazily and destroyed with the window (must precede glfwTerminate).
+		std::array<GLFWcursor*, static_cast<size_t>(cursor_shape::count)> m_cursors{};
 		glm::ivec2 m_size{ 0 };
 		double m_delta = 0.f;
 		double m_last_time = 0.f;

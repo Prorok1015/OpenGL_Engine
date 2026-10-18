@@ -354,4 +354,62 @@ BOOST_AUTO_TEST_CASE(System_PopLayerRemovesOnlyThatProcessor)
 	BOOST_TEST((log == std::vector<std::string>{ "b" }));
 }
 
+// ---------------------------------------------------------------- platform events (#103)
+
+BOOST_AUTO_TEST_CASE(PlatformEvents_PayloadsRoundTrip)
+{
+	inp::input_event ch;
+	ch.construct_payload<core::inp::char_event>(core::inp::char_event{ U'\U0001F600' });
+	BOOST_REQUIRE(ch.get_payload<core::inp::char_event>());
+	BOOST_TEST((ch.get_payload<core::inp::char_event>()->codepoint == U'\U0001F600'));
+	BOOST_TEST((ch.get_payload<core::inp::framebuffer_resized>() == nullptr));
+
+	inp::input_event fb;
+	fb.construct_payload<core::inp::framebuffer_resized>(core::inp::framebuffer_resized{ glm::ivec2{ 3840, 2160 } });
+	BOOST_REQUIRE(fb.get_payload<core::inp::framebuffer_resized>());
+	BOOST_TEST((fb.get_payload<core::inp::framebuffer_resized>()->size == glm::ivec2{ 3840, 2160 }));
+
+	inp::input_event sc;
+	sc.construct_payload<core::inp::content_scale_changed>(core::inp::content_scale_changed{ glm::vec2{ 1.5f, 2.f } });
+	inp::input_event copy(sc);
+	BOOST_REQUIRE(copy.get_payload<core::inp::content_scale_changed>());
+	BOOST_TEST((copy.get_payload<core::inp::content_scale_changed>()->scale == glm::vec2{ 1.5f, 2.f }));
+}
+
+BOOST_AUTO_TEST_CASE(PlatformEvents_AreDeliveredThroughInputSystem)
+{
+	struct capture_listener : inp::input_event_consumable_listener_interface
+	{
+		bool on_handle_event(wnd::handle, const inp::input_event& evt) override
+		{
+			if (auto* c = evt.get_payload<core::inp::char_event>()) chars.push_back(c->codepoint);
+			if (auto* f = evt.get_payload<core::inp::framebuffer_resized>()) fb = f->size;
+			if (auto* s = evt.get_payload<core::inp::content_scale_changed>()) scale = s->scale;
+			return false;
+		}
+		std::vector<char32_t> chars;
+		glm::ivec2 fb{ 0 };
+		glm::vec2 scale{ 0.f };
+	};
+
+	inp::input_system sys;
+	auto listener = std::make_shared<capture_listener>();
+	sys.push_consumable_listener(listener);
+
+	inp::input_event ch;
+	ch.construct_payload<core::inp::char_event>(U'x');
+	inp::input_event fb;
+	fb.construct_payload<core::inp::framebuffer_resized>(glm::ivec2{ 800, 600 });
+	inp::input_event sc;
+	sc.construct_payload<core::inp::content_scale_changed>(glm::vec2{ 2.f, 2.f });
+
+	sys.on_input_event(win(1), ch);
+	sys.on_input_event(win(1), fb);
+	sys.on_input_event(win(1), sc);
+
+	BOOST_TEST((listener->chars == std::vector<char32_t>{ U'x' }));
+	BOOST_TEST((listener->fb == glm::ivec2{ 800, 600 }));
+	BOOST_TEST((listener->scale == glm::vec2{ 2.f, 2.f }));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
