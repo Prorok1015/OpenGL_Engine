@@ -15,7 +15,7 @@
 
 **Общий цикл, хост-специфичное — стадиями.** Один `app::loop_service` в core. Редакторские вещи (ImGui, редакторская камера, переназначение целей) добавляет `editor_module` своими стадиями; без него их нет. Движок о редакторе не знает.
 
-**Именованные стадии** (зеркало фаз ECS, `core/core/ecs/ecs_phase.hpp`): `begin, input, update, post_update, extract, render, ui, present`. Встроенные нельзя переставлять/удалять; модуль добавляет свою стадию `before/after` встроенной; при равном якоре — порядок регистрации; дубль имени отклоняется. Соответствие: 5→begin, 10→input, 20→update, 25→post_update, 28+30→extract, 40→render, 45→ui, 50→present.
+**Именованные стадии** (зеркало фаз ECS, `core/core/ecs/include/snk/ecs/ecs_phase.hpp`): `begin, input, update, post_update, extract, render, ui, present`. Встроенные нельзя переставлять/удалять; модуль добавляет свою стадию `before/after` встроенной; при равном якоре — порядок регистрации; дубль имени отклоняется. Соответствие: 5→begin, 10→input, 20→update, 25→post_update, 28+30→extract, 40→render, 45→ui, 50→present.
 
 ## 3. Решения (по рекомендации)
 

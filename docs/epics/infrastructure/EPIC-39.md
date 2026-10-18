@@ -45,7 +45,7 @@
 ### Новые файлы
 
 ```
-core/core/common/eng_profiler.h       ← макросы PROFILE_SCOPE, PROFILE_FUNCTION, PROFILE_FRAME
+core/core/common/include/snk/common/eng_profiler.h       ← макросы PROFILE_SCOPE, PROFILE_FUNCTION, PROFILE_FRAME
 core/core/common/eng_profiler.cpp     ← fallback реализация (без Tracy)
 ```
 
@@ -97,7 +97,7 @@ struct profile_entry {
 ## User Stories
 
 ### US-39-1: Макро-обёртки и fallback profiler
-**Файлы:** `core/core/common/eng_profiler.h`, `core/core/common/eng_profiler.cpp`, `core/CMakeLists.txt`
+**Файлы:** `core/core/common/include/snk/common/eng_profiler.h`, `core/core/common/eng_profiler.cpp`, `core/CMakeLists.txt`
 
 Создать `eng_profiler.h` с макросами `PROFILE_SCOPE(name)`, `PROFILE_FUNCTION()`, `PROFILE_FRAME(name)`. Реализовать fallback: `scoped_profiler_zone` с ring buffer. Добавить CMake option `ENGINE_PROFILE_MODE` (NONE / INTERNAL / TRACY).
 
@@ -129,7 +129,7 @@ struct profile_entry {
 - [x] Не менее 15 точек инструментирования в движке
 
 ### US-39-3: ImGui Profiler Overlay
-**Файлы:** `core/engine/gui/gui_system/gui_debug_layer.h`, `core/engine/gui/gui_system/gui_debug_layer.cpp`
+**Файлы:** `core/engine/gui/gui_system/include/snk/gui/gui_debug_layer.h`, `core/engine/gui/gui_system/gui_debug_layer.cpp`
 **Зависимости:** US-39-1
 
 Расширить debug layer: окно "Profiler" с таблицей последних замеров и простой timeline-полоской текущего кадра.
@@ -147,7 +147,7 @@ struct profile_entry {
 Tracy интеграция отложена — внутреннего профайлера достаточно для текущих задач.
 
 ### US-39-5: GPU Profiling (OpenGL Timer Queries)
-**Файлы:** `core/core/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
+**Файлы:** `core/core/common/include/snk/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
 **Зависимости:** US-39-2
 
 Добавить `PROFILE_GPU_SCOPE` через OpenGL timer queries (`GL_TIME_ELAPSED`).

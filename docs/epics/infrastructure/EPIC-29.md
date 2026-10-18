@@ -228,9 +228,9 @@ namespace res {
 ### US-29-4 — Удалить глобальные указатели и `get_system()`
 
 **Файлы:**
-- `core/core/resource/res_system.h` — убрать `extern p_res_system`, `get_system()`
-- `core/engine/render/render_system/rnd_render_system.h` — убрать `extern p_render_system`, `get_system()`
-- `core/engine/gui/gui_system/gui_system.h` — убрать `extern p_gui_system`, `get_system()`
+- `core/core/resource/include/snk/resource/res_system.h` — убрать `extern p_res_system`, `get_system()`
+- `core/engine/render/render_system/include/snk/render/rnd_render_system.h` — убрать `extern p_render_system`, `get_system()`
+- `core/engine/gui/gui_system/include/snk/gui/gui_system.h` — убрать `extern p_gui_system`, `get_system()`
 - Все callsite'ы `res::get_system()`, `rnd::get_system()`, `gui::get_system()`
 
 **Стратегия:** поэтапная замена:
@@ -245,7 +245,7 @@ namespace res {
 ### US-29-5 — Унифицировать input init (убрать `input_reg`)
 
 **Файлы:**
-- `core/engine/input/inp_input_service_init.h/.cpp` (до удаления в US-29-3)
+- `core/engine/input/include/snk/input/inp_input_service_init.h/.cpp` (до удаления в US-29-3)
 - `core/engine/engine_module.cpp`
 
 **Проблема:** input использует `input_reg()` для register phase и `input_init()` для initialize phase. Все остальные используют единый `*_init()`.

@@ -198,7 +198,7 @@ US-24-1 (remove store from serialize_and_push)  ← critical, standalone
 | `Editor/code/editor_system/edt_model_importer.h/cpp` | Synchronous Assimp import |
 | `Editor/code/editor_system/edt_asset_exporter.h/cpp` | Synchronous export pipeline |
 | `Editor/code/editor_system/edt_asset_export_dialog.h/cpp` | Export UI |
-| `core/core/resource/res_system.h` | require / require_sync / warmup API |
+| `core/core/resource/include/snk/resource/res_system.h` | require / require_sync / warmup API |
 | `core/engine/scene/level/scn_level.cpp` | reload_world |
 | `core/engine/scene/scn_ecs_assembler.cpp` | spawn_from_desc |
 

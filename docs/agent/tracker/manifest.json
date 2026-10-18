@@ -52,7 +52,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\nУбрать `<iostream>` из `core/core/common/common.h` и прочих заголовков, а также `using namespace` и глобальные алиасы из `common.h` (правило проекта: только `egLOG`).\n\n## Файлы\n- `core/core/common/common.h`\n\n## Критерии приёмки\n- [ ] В заголовках проекта нет `#include <iostream>`\n- [ ] В `common.h` нет `using namespace` и глобальных алиасов\n- [ ] Проект собирается, unit-тесты проходят\n\n## Связи\n- Эпик: {{#phase0_tails}}",
+  "body": "## Описание\nУбрать `<iostream>` из `core/core/common/include/snk/common/common.h` и прочих заголовков, а также `using namespace` и глобальные алиасы из `common.h` (правило проекта: только `egLOG`).\n\n## Файлы\n- `core/core/common/include/snk/common/common.h`\n\n## Критерии приёмки\n- [ ] В заголовках проекта нет `#include <iostream>`\n- [ ] В `common.h` нет `using namespace` и глобальных алиасов\n- [ ] Проект собирается, unit-тесты проходят\n\n## Связи\n- Эпик: {{#phase0_tails}}",
   "number": 54
  },
  {
@@ -178,7 +178,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\nВключить PIC и `-fvisibility=hidden`; добавить заголовок экспорта `SNK_API` (пустой в static-сборке).\n\n## Файлы\n- `CMakeLists.txt`\n- `core/core/common/snk_api.h`\n\n## Критерии приёмки\n- [ ] Сборка static не изменилась (SNK_API пустой)\n- [ ] Shared-вариант таргетов собирается на Linux\n- [ ] Публичные типы помечены SNK_API\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
+  "body": "## Описание\nВключить PIC и `-fvisibility=hidden`; добавить заголовок экспорта `SNK_API` (пустой в static-сборке).\n\n## Файлы\n- `CMakeLists.txt`\n- `core/core/common/include/snk/common/snk_api.h`\n\n## Критерии приёмки\n- [ ] Сборка static не изменилась (SNK_API пустой)\n- [ ] Shared-вариант таргетов собирается на Linux\n- [ ] Публичные типы помечены SNK_API\n\n## Связи\n- Эпик: {{#epic29}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.2",
   "number": 59
  },
  {
@@ -268,7 +268,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\nPersistent `node_id` в `prefab_node` и узлах мира; карта node_id→entity в мире; сопоставление детей при merge по id, а не по имени (одноимённые соседи больше не схлопываются, переименование — не удаление+добавление).\n\n## Файлы\n- `core/engine/scene/level/scn_prefab_desc.h/.cpp`\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] `node_id` сохраняется и читается\n- [ ] В мире есть карта node_id→entity\n- [ ] Тест: переименование узла и одноимённые соседи не ломают overrides\n\n## Связи\n- Эпик: {{#formats}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.7",
+  "body": "## Описание\nPersistent `node_id` в `prefab_node` и узлах мира; карта node_id→entity в мире; сопоставление детей при merge по id, а не по имени (одноимённые соседи больше не схлопываются, переименование — не удаление+добавление).\n\n## Файлы\n- `core/engine/scene/include/snk/scene/level/scn_prefab_desc.h/.cpp`\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] `node_id` сохраняется и читается\n- [ ] В мире есть карта node_id→entity\n- [ ] Тест: переименование узла и одноимённые соседи не ломают overrides\n\n## Связи\n- Эпик: {{#formats}}\n- Раздел дизайн-документа: ARCHITECTURE_REVIEW §3.7",
   "number": 63
  },
  {
@@ -1850,7 +1850,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\nМодель overrides инстанса и их применение при сборке.\n\n## Файлы\n- `core/engine/scene/level/scn_prefab_desc.h`\n- `core/engine/scene/scn_prefab_override_applier.h/.cpp`\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] `prefab_instance` сериализует overrides\n- [ ] `apply_overrides` покрыт тестами\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-3)\n- Зависимости: {{#fm_overrides}}",
+  "body": "## Описание\nМодель overrides инстанса и их применение при сборке.\n\n## Файлы\n- `core/engine/scene/include/snk/scene/level/scn_prefab_desc.h`\n- `core/engine/scene/scn_prefab_override_applier.h/.cpp`\n- `core/engine/scene/scn_ecs_assembler.cpp`\n\n## Критерии приёмки\n- [ ] `prefab_instance` сериализует overrides\n- [ ] `apply_overrides` покрыт тестами\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-3)\n- Зависимости: {{#fm_overrides}}",
   "number": 148
  },
  {
@@ -1904,7 +1904,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\nVariant — `.prefab.desc` со ссылкой на базовый prefab и overrides; Create Variant.\n\n## Файлы\n- `Editor/code/editor_system/edt_prefab_variant_creator.h/.cpp`\n- `core/engine/scene/level/scn_prefab_desc.h/.cpp`\n\n## Критерии приёмки\n- [ ] Variant создаётся из префаба\n- [ ] Variant редактируется отдельно\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-6)\n- Зависимости: {{#us25_3}}",
+  "body": "## Описание\nVariant — `.prefab.desc` со ссылкой на базовый prefab и overrides; Create Variant.\n\n## Файлы\n- `Editor/code/editor_system/edt_prefab_variant_creator.h/.cpp`\n- `core/engine/scene/include/snk/scene/level/scn_prefab_desc.h/.cpp`\n\n## Критерии приёмки\n- [ ] Variant создаётся из префаба\n- [ ] Variant редактируется отдельно\n\n## Связи\n- Эпик: {{#e25}}\n- Раздел дизайн-документа: EPIC-25.md (US-25-6)\n- Зависимости: {{#us25_3}}",
   "number": 151
  },
  {
@@ -2600,7 +2600,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\nЗаменить `res::tag` на `cache_key` в `m_cache` и `m_pinned_resources`.\n\n## Файлы\n- `core/core/resource/res_system.h`\n- `core/core/resource/res_system.cpp`\n\n## Критерии приёмки\n- [ ] Один тег кешируется отдельно для каждого типа\n- [ ] Существующие тесты проходят\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
+  "body": "## Описание\nЗаменить `res::tag` на `cache_key` в `m_cache` и `m_pinned_resources`.\n\n## Файлы\n- `core/core/resource/include/snk/resource/res_system.h`\n- `core/core/resource/res_system.cpp`\n\n## Критерии приёмки\n- [ ] Один тег кешируется отдельно для каждого типа\n- [ ] Существующие тесты проходят\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
   "number": 166
  },
  {
@@ -2618,7 +2618,7 @@
   "state": "open",
   "state_reason": null,
   "close_comment": null,
-  "body": "## Описание\n`signal_changed(tag)` вытесняет все типы; watchers по тегу.\n\n## Файлы\n- `core/core/resource/res_system.h`\n\n## Критерии приёмки\n- [ ] Все записи тега инвалидируются\n- [ ] Watchers не зависят от типа\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
+  "body": "## Описание\n`signal_changed(tag)` вытесняет все типы; watchers по тегу.\n\n## Файлы\n- `core/core/resource/include/snk/resource/res_system.h`\n\n## Критерии приёмки\n- [ ] Все записи тега инвалидируются\n- [ ] Watchers не зависят от типа\n\n## Связи\n- Эпик: {{#e28}}\n- Раздел дизайн-документа: EPIC-28.md",
   "number": 167
  },
  {

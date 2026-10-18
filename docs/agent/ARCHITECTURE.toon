@@ -36,7 +36,7 @@ modules:
   - video: Window abstraction layer
 key_patterns:
   - Service Locator: ds::app_data_storage (type-safe DI)
-  - Module System: lifecycle ordered by topological sort over module_interface::depends_on() (priority = tiebreaker only; core/core/application/app_module_loader.hpp)
+  - Module System: lifecycle ordered by topological sort over module_interface::depends_on() (priority = tiebreaker only; core/core/application/include/snk/application/app_module_loader.hpp)
   - Resource System: res::tag identification, VFS protocols (res://,memory://)
   - Descriptor System: Inheritance chain, JSON serialization
 

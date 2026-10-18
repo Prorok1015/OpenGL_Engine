@@ -42,7 +42,7 @@
 ## User Stories
 
 ### US-37-1: Исправить баг в ds_polymorphic_cast и включить тесты
-**Файлы:** `core/core/common/ds/ds_polymorphic_cast.hpp`, `tests/ds_polymorphic_cast_tests.cpp`
+**Файлы:** `core/core/common/include/snk/common/ds/ds_polymorphic_cast.hpp`, `tests/ds_polymorphic_cast_tests.cpp`
 
 Баг: unique_ptr overload (строка 58) имеет `ASSERT_MSG(ptr1 != ptr2, ...)` — условие инвертировано (должно быть `==`). Строка 59 использует `std::static_pointer_cast` с `unique_ptr` — не компилируется.
 

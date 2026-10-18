@@ -127,7 +127,7 @@ edt::prefab_editor_context {
 ### US-25-1 — Открытие prefab в изолированном контексте
 
 **Файлы:**
-- `core/engine/scene/level/scn_level.h/.cpp` — добавить `remove_world()`
+- `core/engine/scene/include/snk/scene/level/scn_level.h/.cpp` — добавить `remove_world()`
 - Новый `Editor/code/editor_system/controller/edt_prefab_editor_context.h/.cpp`
 - Новый `Editor/code/editor_system/panels/edt_prefab_editor_panel.h/.cpp`
 - Новый `Editor/res/templates/prefab_preview.desc`

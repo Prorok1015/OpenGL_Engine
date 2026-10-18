@@ -70,7 +70,7 @@ struct std::formatter<res::tag> {
 ## User Stories
 
 ### US-38-1: Реализовать std::formatter<res::tag> и operator<<
-**Файлы:** `core/core/resource/res_tag.h`
+**Файлы:** `core/core/resource/include/snk/resource/res_tag.h`
 
 Описание: Добавить `operator<<` для ostream и специализацию `std::formatter<res::tag>` с поддержкой спецификаторов.
 

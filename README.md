@@ -349,7 +349,7 @@ cmake --preset x64-Debug -DENGINE_PROFILE_MODE=INTERNAL
 Usage in code:
 
 ```cpp
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 void update() {
     PROFILE_FUNCTION();              // auto-named zone

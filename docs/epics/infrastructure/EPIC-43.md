@@ -36,15 +36,15 @@
 ### Новые файлы
 
 ```
-core/core/common/mem_linear_allocator.h      ← linear (bump/frame) allocator
+core/core/common/include/snk/common/mem_linear_allocator.h      ← linear (bump/frame) allocator
 core/core/common/mem_linear_allocator.cpp
-core/core/common/mem_pool_allocator.h        ← fixed-size pool allocator
+core/core/common/include/snk/common/mem_pool_allocator.h        ← fixed-size pool allocator
 core/core/common/mem_pool_allocator.cpp
-core/core/common/mem_stack_allocator.h       ← stack (LIFO) allocator
+core/core/common/include/snk/common/mem_stack_allocator.h       ← stack (LIFO) allocator
 core/core/common/mem_stack_allocator.cpp
-core/core/common/mem_debug_resource.h        ← debug wrapper: leak/overrun detection
+core/core/common/include/snk/common/mem_debug_resource.h        ← debug wrapper: leak/overrun detection
 core/core/common/mem_debug_resource.cpp
-core/core/common/mem_allocator.h             ← общий include + per-frame globals
+core/core/common/include/snk/common/mem_allocator.h             ← общий include + per-frame globals
 ```
 
 ### Аллокаторы
@@ -82,7 +82,7 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 ## User Stories
 
 ### US-43-1: Linear (frame) allocator
-**Файлы:** `core/core/common/mem_linear_allocator.h`, `core/core/common/mem_linear_allocator.cpp`, `core/CMakeLists.txt`
+**Файлы:** `core/core/common/include/snk/common/mem_linear_allocator.h`, `core/core/common/mem_linear_allocator.cpp`, `core/CMakeLists.txt`
 
 Реализовать `ds::linear_resource` — наследник `std::pmr::memory_resource`. Аллокация — bump pointer, free — no-op, reset — сброс указателя на начало.
 
@@ -97,7 +97,7 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 - [x] Unit-тесты: аллокация, выравнивание, reset, overflow
 
 ### US-43-2: Pool allocator
-**Файлы:** `core/core/common/mem_pool_allocator.h`, `core/core/common/mem_pool_allocator.cpp`
+**Файлы:** `core/core/common/include/snk/common/mem_pool_allocator.h`, `core/core/common/mem_pool_allocator.cpp`
 
 Реализовать `ds::pool_resource` — fixed-size block allocator с free-list.
 
@@ -110,7 +110,7 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 - [x] Unit-тесты: alloc/free циклы, исчерпание, reset
 
 ### US-43-3: Stack (LIFO) allocator
-**Файлы:** `core/core/common/mem_stack_allocator.h`, `core/core/common/mem_stack_allocator.cpp`
+**Файлы:** `core/core/common/include/snk/common/mem_stack_allocator.h`, `core/core/common/mem_stack_allocator.cpp`
 
 Реализовать `ds::stack_resource` — LIFO аллокатор с маркерами.
 
@@ -122,7 +122,7 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 - [x] Unit-тесты: вложенные scope, маркеры, LIFO free
 
 ### US-43-4: Debug memory resource
-**Файлы:** `core/core/common/mem_debug_resource.h`, `core/core/common/mem_debug_resource.cpp`
+**Файлы:** `core/core/common/include/snk/common/mem_debug_resource.h`, `core/core/common/mem_debug_resource.cpp`
 
 Обёртка над любым `memory_resource`: guard bytes (canary), leak tracking, double-free detection.
 
@@ -136,7 +136,7 @@ std::pmr::vector<rnd::draw_call> draw_calls(ds::frame_allocator());
 - [x] Unit-тесты: leak detection, overrun detection, double-free
 
 ### US-43-5: Per-frame allocator global API
-**Файлы:** `core/core/common/mem_allocator.h`, frame loop integration
+**Файлы:** `core/core/common/include/snk/common/mem_allocator.h`, frame loop integration
 
 Глобальный per-frame аллокатор: `ds::frame_allocator()` возвращает `std::pmr::memory_resource*`, `ds::frame_allocator_reset()` вызывается в начале кадра.
 
