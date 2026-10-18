@@ -47,10 +47,10 @@ uint64_t id_of(const json::value& node)
 
 BOOST_FIXTURE_TEST_SUITE(DescPrefabV2Tests, v2_fixture)
 
-BOOST_AUTO_TEST_CASE(Version_PrefabWorldAndLevelAreAtVersionTwo)
+BOOST_AUTO_TEST_CASE(Version_PrefabAndWorldAreAtVersionThreeAndLevelAtTwo)
 {
-	BOOST_TEST(descs->current_version("prefab_desc") == 2);
-	BOOST_TEST(descs->current_version("world_desc") == 2);
+	BOOST_TEST(descs->current_version("prefab_desc") == 3);
+	BOOST_TEST(descs->current_version("world_desc") == 3);
 	BOOST_TEST(descs->current_version("level_desc") == 2);
 	BOOST_TEST(descs->current_version("camera_desc") == 1);
 }
@@ -58,7 +58,7 @@ BOOST_AUTO_TEST_CASE(Version_PrefabWorldAndLevelAreAtVersionTwo)
 BOOST_AUTO_TEST_CASE(Migration_ChildrenObjectBecomesAnArrayWithNamesAndDerivedIds)
 {
 	auto w = migrated(V1_WORLD);
-	BOOST_TEST(w.at("__version").as_int64() == 2);
+	BOOST_TEST(w.at("__version").as_int64() == 3);
 
 	const auto& children = w.at("children").as_array();
 	BOOST_REQUIRE(children.size() == 3u);
@@ -99,9 +99,9 @@ BOOST_AUTO_TEST_CASE(Migration_KeepsAValidIdAndRepairsAMalformedOne)
 	BOOST_TEST(id_of(children[1]) == desc::derive_node_id("/b"));
 }
 
-BOOST_AUTO_TEST_CASE(Migration_LeavesVersionTwoFilesAlone)
+BOOST_AUTO_TEST_CASE(Migration_LeavesCurrentVersionFilesAlone)
 {
-	const char* text = R"({"__type":"prefab_desc","__version":2,"children":[{"__id":"00000000000000aa","name":"a"}]})";
+	const char* text = R"({"__type":"prefab_desc","__version":3,"children":[{"__id":"00000000000000aa","name":"a"}]})";
 	auto p = migrated(text);
 	BOOST_TEST(json::value(p) == json::parse(text));
 }
@@ -113,9 +113,9 @@ BOOST_AUTO_TEST_CASE(Migration_NestedTypedPrefabAndWorldsInsideALevelAreMigrated
 			"n":{"components":{"inst":{"__type":"prefab_desc","children":{"k":{}}}}}}}]})");
 	BOOST_TEST(lv.at("__version").as_int64() == 2);
 	const auto& world = lv.at("worlds").as_array()[0];
-	BOOST_TEST(world.at("__version").as_int64() == 2);
+	BOOST_TEST(world.at("__version").as_int64() == 3);
 	const auto& inner = world.at("children").as_array()[0].at("components").at("inst");
-	BOOST_TEST(inner.at("__version").as_int64() == 2);
+	BOOST_TEST(inner.at("__version").as_int64() == 3);
 	BOOST_TEST(inner.at("children").as_array()[0].at("name").as_string() == "k");
 }
 
@@ -268,8 +268,8 @@ BOOST_AUTO_TEST_CASE(StampTree_StampsNestedTypedObjectsAndOrdersTheHeader)
 	std::vector<std::string> keys;
 	for (auto& kv : obj) keys.emplace_back(kv.key());
 	BOOST_TEST((keys == std::vector<std::string>{ "__type", "__version", "__guid", "children", "name", "inner" }));
-	BOOST_TEST(obj.at("__version").as_int64() == 2);
-	BOOST_TEST(obj.at("inner").as_array()[0].at("x").at("__version").as_int64() == 2);
+	BOOST_TEST(obj.at("__version").as_int64() == 3);
+	BOOST_TEST(obj.at("inner").as_array()[0].at("x").at("__version").as_int64() == 3);
 	BOOST_TEST(obj.at("inner").as_array()[1].at("__version").as_int64() == 1);
 }
 

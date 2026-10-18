@@ -4,6 +4,7 @@
 #include "scn_node_index.h"
 #include "scn_glm_json_convert.h"
 #include "desc_node_id.h"
+#include "desc_json_ops.h"
 #include "res_system.h"
 #include <algorithm>
 #include <unordered_map>
@@ -27,12 +28,6 @@ namespace scn {
 			scn::node_id_component comp{ parent_path->path };
 			comp.path.push_back(node_id);
 			reg.emplace_or_replace<scn::node_id_component>(child, std::move(comp));
-		}
-
-		uint64_t effective_node_id(const scn::prefab_desc::prefab_node* base, const scn::prefab_desc::prefab_node* over)
-		{
-			if (base && base->node_id != desc::invalid_node_id) return base->node_id;
-			return over ? over->node_id : desc::invalid_node_id;
 		}
 
 		// Ids are unique per file. Explicit ids come first (a repeated one is dropped with a warning), then nodes
@@ -74,85 +69,105 @@ namespace scn {
 			};
 			assign(assign, root, root.name);
 		}
+
+		using prefab_node = scn::prefab_desc::prefab_node;
+		using prefab_comp_node = scn::prefab_desc::prefab_comp_node;
+
+		// `owner` names the memory:// copies of inline descs, so it has to be the desc the JSON came from.
+		prefab_comp_node parse_component(desc::desc_system& desc_system, const desc::desc_base& owner, const json::value& val, std::string_view explicit_type)
+		{
+			if (val.is_string()) {
+				return prefab_comp_node{
+					.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, val)
+				};
+			}
+
+			if (!val.is_object())
+				return {};
+
+			const auto& obj = val.as_object();
+			prefab_comp_node cnode;
+
+			if (auto const* t = obj.if_contains("__type")) {
+				cnode.type_name = t->as_string();
+			} else {
+				cnode.type_name = explicit_type;
+			}
+
+			if (auto const* p = obj.if_contains("__parent")) {
+				cnode.parent_desc = desc_system.get_field_desc<desc::desc_base>(owner, *p);
+			}
+
+			for (const auto& kv : obj) {
+				// __type/__parent are consumed above; other __* keys are file metadata, never overrides.
+				if (kv.key().starts_with("__")) continue;
+				cnode.overrides[kv.key()] = kv.value();
+			}
+			return cnode;
+		}
+
+		// A node is { "__id", "name", "transform", "components", "overrides": [records], "children": [nodes] };
+		// the root has no name.
+		prefab_node parse_node(desc::desc_system& desc_system, const desc::desc_base& owner, const json::object& obj, bool is_root)
+		{
+			prefab_node result;
+			if (auto const* p = obj.if_contains("name"); p && p->is_string() && !is_root) {
+				result.name = p->as_string();
+			}
+			if (auto const* p = obj.if_contains("__id")) {
+				auto id = p->is_string() ? desc::parse_node_id(p->as_string()) : std::nullopt;
+				if (id) result.node_id = *id;
+				else egLOG_WARN("desc", "node '{}' has a malformed __id, it will be derived", result.name);
+			}
+			if (auto* transform = obj.if_contains("transform"); transform && transform->is_object()) {
+				auto& t_obj = transform->as_object();
+				if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
+				if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
+				if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
+			}
+
+			if (auto const* p = obj.if_contains("components"); p && p->is_object()) {
+				for (const auto& kv : p->as_object()) {
+					std::string_view comp_key = kv.key();
+					result.components[std::string(comp_key)] = parse_component(desc_system, owner, kv.value(), comp_key);
+				}
+			}
+
+			if (auto const* p = obj.if_contains("overrides")) {
+				if (!p->is_array()) {
+					egLOG_ERROR("desc", "node '{}': 'overrides' must be an array of records, ignoring it", result.name);
+				} else {
+					result.overrides.reserve(p->as_array().size());
+					for (const auto& element : p->as_array()) {
+						if (auto record = scn::parse_override_record(element)) {
+							result.overrides.push_back(std::move(*record));
+						}
+					}
+				}
+			}
+
+			if (auto const* p = obj.if_contains("children")) {
+				if (!p->is_array()) {
+					egLOG_ERROR("desc", "node '{}': 'children' must be an array (format v1 needs migration), ignoring it", result.name);
+				} else {
+					result.children.reserve(p->as_array().size());
+					for (const auto& child : p->as_array()) {
+						if (!child.is_object()) {
+							egLOG_WARN("desc", "node '{}': child is not an object, skipping", result.name);
+							continue;
+						}
+						result.children.push_back(parse_node(desc_system, owner, child.as_object(), false));
+					}
+				}
+			}
+			return result;
+		}
 	}
 }
 
 void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	auto parse_comp = [&] (const json::value& val, std::string_view explicit_type) -> prefab_comp_node {
-		if (val.is_string()) {
-			return prefab_comp_node{
-				.parent_desc = desc_system.get_field_desc<desc::desc_base>(*this, val)
-			};
-		}
-
-		if (!val.is_object())
-			return {};
-
-		const auto& obj = val.as_object();
-		prefab_comp_node cnode;
-
-		if (auto const* t = obj.if_contains("__type")) {
-			cnode.type_name = t->as_string();
-		} else {
-			cnode.type_name = explicit_type;
-		}
-
-		if (auto const* p = obj.if_contains("__parent")) {
-			cnode.parent_desc = desc_system.get_field_desc<desc::desc_base>(*this, *p);
-		}
-
-		for (const auto& kv : obj) {
-			// __type/__parent are consumed above; other __* keys are file metadata, never overrides.
-			if (kv.key().starts_with("__")) continue;
-			cnode.overrides[kv.key()] = kv.value();
-		}
-		return cnode;
-	};
-
-	// A v2 node is { "__id", "name", "transform", "components", "children": [nodes] }; the root has no name.
-	auto parse_node = [&] (auto& self, const json::object& obj, bool is_root) -> prefab_node {
-		prefab_node result;
-		if (auto const* p = obj.if_contains("name"); p && p->is_string() && !is_root) {
-			result.name = p->as_string();
-		}
-		if (auto const* p = obj.if_contains("__id")) {
-			auto id = p->is_string() ? desc::parse_node_id(p->as_string()) : std::nullopt;
-			if (id) result.node_id = *id;
-			else egLOG_WARN("desc", "node '{}' has a malformed __id, it will be derived", result.name);
-		}
-		if (auto* transform = obj.if_contains("transform"); transform && transform->is_object()) {
-			auto& t_obj = transform->as_object();
-			if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
-			if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
-			if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
-		}
-
-		if (auto const* p = obj.if_contains("components"); p && p->is_object()) {
-			for (const auto& kv : p->as_object()) {
-				std::string_view comp_key = kv.key();
-				result.components[std::string(comp_key)] = parse_comp(kv.value(), comp_key);
-			}
-		}
-
-		if (auto const* p = obj.if_contains("children")) {
-			if (!p->is_array()) {
-				egLOG_ERROR("desc", "node '{}': 'children' must be an array (format v1 needs migration), ignoring it", result.name);
-			} else {
-				result.children.reserve(p->as_array().size());
-				for (const auto& child : p->as_array()) {
-					if (!child.is_object()) {
-						egLOG_WARN("desc", "node '{}': child is not an object, skipping", result.name);
-						continue;
-					}
-					result.children.push_back(self(self, child.as_object(), false));
-				}
-			}
-		}
-		return result;
-	};
-
-	prefab_node parsed = parse_node(parse_node, data, true);
+	prefab_node parsed = parse_node(desc_system, *this, data, true);
 
 	// With a __parent the adapter already copied the parent into this instance: layer on top of it.
 	if (!data.contains("__parent")) {
@@ -175,6 +190,8 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 	for (auto& [key, comp] : parsed.components) {
 		root.components[key] = std::move(comp);
 	}
+	// Records of the file come after the parent's own: they are applied to the merged tree when it is built.
+	root.overrides.insert(root.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
 	for (auto& child : parsed.children) {
 		auto it = std::ranges::find(root.children, child.node_id, &prefab_node::node_id);
 		if (it != root.children.end()) *it = std::move(child);
@@ -236,6 +253,17 @@ void scn::prefab_desc::serialize(json::object& data) const
 			node_obj["components"] = std::move(comps_obj);
 		}
 
+		if (!nd.overrides.empty()) {
+			auto records = nd.overrides;
+			scn::canonicalize_overrides(records);
+			json::array records_arr;
+			records_arr.reserve(records.size());
+			for (const auto& record : records) {
+				records_arr.push_back(scn::override_record_to_json(record));
+			}
+			node_obj["overrides"] = std::move(records_arr);
+		}
+
 		if (!nd.children.empty()) {
 			json::array children_arr;
 			children_arr.reserve(nd.children.size());
@@ -254,17 +282,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 namespace {
 
 	using prefab_node = scn::prefab_desc::prefab_node;
-
-	// Both layers are optional; the override's transform component wins over the base's when it differs from the
-	// identity value (the same "set" test the format has always used).
-	glm::mat4 merged_local_transform(const prefab_node* base, const prefab_node* over)
-	{
-		prefab_node t;
-		t.position = (over && over->position != glm::vec3(0)) ? over->position : (base ? base->position : glm::vec3(0));
-		t.rotation = (over && over->rotation != glm::vec3(0)) ? over->rotation : (base ? base->rotation : glm::vec3(0));
-		t.scale    = (over && over->scale != glm::vec3(1)) ? over->scale : (base ? base->scale : glm::vec3(1));
-		return t.get_local_transform();
-	}
+	using prefab_comp_node = scn::prefab_desc::prefab_comp_node;
 
 	template<class Event>
 	void emit_event(entt::registry& reg, entt::entity e)
@@ -296,60 +314,254 @@ namespace {
 		return child;
 	}
 
-	// A child of the base layered with the record that targets it (either may be missing).
-	struct child_pair {
-		const prefab_node* base = nullptr;
-		const prefab_node* over = nullptr;
+	constexpr int max_instance_depth = 16;
+
+	struct prefab_ref {
+		std::string key;
+		std::shared_ptr<const scn::prefab_desc> prefab;
 	};
 
-	// Base children in order, each with its matching override child, then the override-only ones. Nodes pair by
-	// node id; nodes without an id (hand-built descs) can only pair by name.
-	std::vector<child_pair> pair_children(const prefab_node* base, const prefab_node* over)
+	// The component of `node` that makes it an instance of a prefab: a typed { "__parent": X } component or a
+	// plain string reference that resolves to a prefab. Looked up by tag every time, a handle kept in the node
+	// goes stale when the prefab is reloaded.
+	std::optional<prefab_ref> find_prefab_ref(scn::ecs_assembler& assembler, const prefab_node& node)
 	{
-		std::vector<child_pair> pairs;
-		const size_t base_count = base ? base->children.size() : 0;
-		const size_t over_count = over ? over->children.size() : 0;
-		pairs.reserve(base_count + over_count);
-
-		std::vector<bool> consumed(over_count, false);
-		std::unordered_map<uint64_t, size_t> over_by_id;
-		over_by_id.reserve(over_count);
-		bool over_has_idless = false;
-		for (size_t i = 0; i < over_count; ++i) {
-			if (over->children[i].node_id != desc::invalid_node_id)
-				over_by_id.emplace(over->children[i].node_id, i);
-			else over_has_idless = true;
-		}
-
-		for (size_t b = 0; b < base_count; ++b) {
-			const prefab_node& base_child = base->children[b];
-			size_t found = over_count;
-			if (base_child.node_id != desc::invalid_node_id) {
-				if (auto it = over_by_id.find(base_child.node_id); it != over_by_id.end() && !consumed[it->second])
-					found = it->second;
+		std::vector<const std::pair<const std::string, prefab_comp_node>*> candidates;
+		for (const auto& entry : node.components) {
+			const auto& cnode = entry.second;
+			const bool may_be_prefab = cnode.type_name.empty() || cnode.type_name == "prefab_desc" || cnode.type_name == "world_desc";
+			if (may_be_prefab && cnode.parent_desc.is_valid() && !cnode.parent_desc.has_error()) {
+				candidates.push_back(&entry);
 			}
-			if (found == over_count && (base_child.node_id == desc::invalid_node_id || over_has_idless)) {
-				for (size_t i = 0; i < over_count; ++i) {
-					const prefab_node& candidate = over->children[i];
-					const bool nameable = base_child.node_id == desc::invalid_node_id || candidate.node_id == desc::invalid_node_id;
-					if (!consumed[i] && nameable && candidate.name == base_child.name) {
-						found = i;
-						break;
-					}
+		}
+		std::ranges::sort(candidates, {}, [] (const auto* entry) -> const std::string& { return entry->first; });
+
+		for (const auto* entry : candidates) {
+			auto loaded = assembler.get_resource_system().require_sync<desc::desc_base>(entry->second.parent_desc.get_tag());
+			if (!loaded.is_ready()) {
+				if (entry->second.type_name == "prefab_desc") {
+					egLOG_ERROR("desc", "nested prefab '{}' is not loaded, ignoring", entry->second.parent_desc.get_tag().view());
 				}
+				continue;
 			}
+			if (auto prefab = std::dynamic_pointer_cast<const scn::prefab_desc>(loaded.get())) {
+				return prefab_ref{ entry->first, std::move(prefab) };
+			}
+		}
+		return std::nullopt;
+	}
 
-			child_pair pair{ &base_child, nullptr };
-			if (found != over_count) {
-				consumed[found] = true;
-				pair.over = &over->children[found];
+	void add_or_merge_node(desc::desc_system& desc_system, const desc::desc_base& owner, std::vector<prefab_node>& siblings, const json::object& value);
+
+	// Overlays `src` (the JSON of a node) onto an existing node: only what the JSON spells out changes.
+	void merge_into_node(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& dst, const json::object& src)
+	{
+		prefab_node parsed = scn::parse_node(desc_system, owner, src, false);
+		if (src.contains("name")) dst.name = parsed.name;
+		if (auto* transform = src.if_contains("transform"); transform && transform->is_object()) {
+			const auto& t_obj = transform->as_object();
+			if (t_obj.contains("position")) dst.position = parsed.position;
+			if (t_obj.contains("rotation")) dst.rotation = parsed.rotation;
+			if (t_obj.contains("scale"))    dst.scale = parsed.scale;
+		}
+		for (auto& [key, comp] : parsed.components) {
+			auto it = dst.components.find(key);
+			if (it == dst.components.end()) {
+				dst.components.emplace(key, std::move(comp));
+			} else if (!comp.overrides.empty()) {
+				it->second.edits.push_back({ "", comp.overrides });
 			}
-			pairs.push_back(pair);
 		}
-		for (size_t i = 0; i < over_count; ++i) {
-			if (!consumed[i]) pairs.push_back({ nullptr, &over->children[i] });
+		dst.overrides.insert(dst.overrides.end(), std::make_move_iterator(parsed.overrides.begin()), std::make_move_iterator(parsed.overrides.end()));
+		if (auto* children = src.if_contains("children"); children && children->is_array()) {
+			for (const auto& child : children->as_array()) {
+				if (child.is_object()) add_or_merge_node(desc_system, owner, dst.children, child.as_object());
+			}
 		}
-		return pairs;
+	}
+
+	void add_or_merge_node(desc::desc_system& desc_system, const desc::desc_base& owner, std::vector<prefab_node>& siblings, const json::object& value)
+	{
+		std::optional<uint64_t> id;
+		if (const auto* raw = value.if_contains("__id"); raw && raw->is_string()) {
+			id = desc::parse_node_id(raw->as_string());
+		}
+		if (id) {
+			if (auto existing = std::ranges::find(siblings, *id, &prefab_node::node_id); existing != siblings.end()) {
+				merge_into_node(desc_system, owner, *existing, value);
+				return;
+			}
+		}
+		prefab_node added = scn::parse_node(desc_system, owner, value, false);
+		if (!id) {
+			egLOG_WARN("desc", "add_node: node '{}' has no valid __id, it gets a new one", added.name);
+			added.node_id = desc::new_node_id();
+		}
+		siblings.push_back(std::move(added));
+	}
+
+	void apply_transform_record(prefab_node& node, const scn::override_record& record)
+	{
+		json::value transform = json::object{
+			{ "position", json::value_from(node.position) },
+			{ "rotation", json::value_from(node.rotation) },
+			{ "scale", json::value_from(node.scale) },
+		};
+		if (record.path.empty()) {
+			if (!record.value.is_object()) {
+				egLOG_WARN("desc", "override: a transform record at '' needs an object value, skipping");
+				return;
+			}
+			desc::json_deep_merge(transform.as_object(), record.value.as_object());
+		} else if (!desc::json_pointer_set(transform, record.path, record.value)) {
+			egLOG_WARN("desc", "override: bad transform pointer '{}', skipping", record.path);
+			return;
+		}
+		const auto& t = transform.as_object();
+		node.position = json::value_to<glm::vec3>(t.at("position"));
+		node.rotation = json::value_to<glm::vec3>(t.at("rotation"));
+		node.scale = json::value_to<glm::vec3>(t.at("scale"));
+	}
+
+	void apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& record)
+	{
+		if (record.component == scn::transform_pseudo_component) {
+			apply_transform_record(node, record);
+			return;
+		}
+
+		auto it = node.components.find(record.component);
+		if (it == node.components.end()) {
+			if (record.path.empty() && (record.value.is_object() || record.value.is_string())) {
+				node.components.emplace(record.component, scn::parse_component(desc_system, owner, record.value, record.component));
+			} else {
+				egLOG_WARN("desc", "override: component '{}' not found, cannot set '{}'", record.component, record.path);
+			}
+			return;
+		}
+		if (record.path.empty() && !record.value.is_object()) {
+			egLOG_WARN("desc", "override: component '{}' can only be merged with an object at ''", record.component);
+			return;
+		}
+		it->second.edits.push_back({ record.path, record.value });
+	}
+
+	// Applies the records to a tree that is already a private copy. A record that targets a node below an
+	// instance of another prefab is handed down to that instance, which resolves it once it is expanded.
+	void apply_records(scn::ecs_assembler& assembler, const desc::desc_base& owner, prefab_node& root, const std::vector<scn::override_record>& records)
+	{
+		auto& desc_system = assembler.get_desc_system();
+		for (const auto& record : records) {
+			prefab_node* parent = nullptr;
+			prefab_node* node = &root;
+			bool resolved = true;
+			for (size_t depth = 0; depth < record.target.size(); ++depth) {
+				auto child = std::ranges::find(node->children, record.target[depth], &prefab_node::node_id);
+				if (child == node->children.end()) {
+					resolved = false;
+					if (find_prefab_ref(assembler, *node)) {
+						scn::override_record forwarded = record;
+						forwarded.target.erase(forwarded.target.begin(), forwarded.target.begin() + depth);
+						node->overrides.push_back(std::move(forwarded));
+					} else {
+						egLOG_WARN("desc", "override: no node {} below '{}', record skipped", desc::format_node_id(record.target[depth]), node->name);
+					}
+					break;
+				}
+				parent = node;
+				node = &*child;
+			}
+			if (!resolved) continue;
+
+			switch (record.op) {
+			case scn::override_op::add_node:
+				add_or_merge_node(desc_system, owner, node->children, record.value.as_object());
+				break;
+
+			case scn::override_op::remove:
+				if (!record.component.empty()) {
+					if (!record.path.empty()) {
+						egLOG_WARN("desc", "override: 'remove' of '{}' with a path is not supported, skipped", record.component);
+					} else if (record.component == scn::transform_pseudo_component || node->components.erase(record.component) == 0) {
+						egLOG_WARN("desc", "override: no component '{}' to remove on '{}'", record.component, node->name);
+					}
+				} else if (!parent) {
+					egLOG_WARN("desc", "override: the root of an instance cannot be removed, record skipped");
+				} else {
+					std::erase_if(parent->children, [node] (const prefab_node& candidate) { return &candidate == node; });
+				}
+				break;
+
+			case scn::override_op::set:
+				apply_set_record(desc_system, owner, *node, record);
+				break;
+			}
+		}
+	}
+
+	// What `node` stands for when it is more than its own fields: the prefab it references (itself expanded)
+	// plus the node's own extra components and children, then the node's override records. False for a plain
+	// node without records. `source` is the referenced prefab, empty when there is none.
+	bool materialize(scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source, int depth)
+	{
+		std::optional<prefab_ref> ref = find_prefab_ref(assembler, node);
+		if (ref && depth >= max_instance_depth) {
+			egLOG_ERROR("desc", "prefab '{}' instantiates itself (nesting deeper than {}), reference ignored", ref->prefab->get_tag().view(), max_instance_depth);
+			ref.reset();
+		}
+		if (!ref && node.overrides.empty()) return false;
+
+		scn::prefab_desc fallback_owner;
+		const desc::desc_base* owner = &fallback_owner;
+		if (ref) {
+			owner = ref->prefab.get();
+			source = ref->prefab->get_tag();
+			if (!materialize(assembler, ref->prefab->get_root(), out, source, depth + 1)) {
+				out = ref->prefab->get_root();
+			}
+			source = ref->prefab->get_tag();
+			for (const auto& [key, comp] : node.components) {
+				if (key != ref->key) out.components[key] = comp;
+			}
+			out.children.insert(out.children.end(), node.children.begin(), node.children.end());
+		} else {
+			out = node;
+		}
+		out.overrides.clear();
+		apply_records(assembler, *owner, out, node.overrides);
+		return true;
+	}
+
+	// serialize(parent) with the component's own overrides merged in, then the edits in order.
+	json::object compose_component_json(const prefab_comp_node& cnode, const desc::desc_base* parent)
+	{
+		json::object effective;
+		if (parent) parent->serialize(effective);
+		desc::json_deep_merge(effective, cnode.overrides);
+
+		json::value holder = std::move(effective);
+		for (const auto& edit : cnode.edits) {
+			if (edit.path.empty()) {
+				json::object mergeable;
+				for (const auto& member : edit.value.as_object()) {
+					if (!member.key().starts_with("__")) mergeable.insert_or_assign(member.key(), member.value());
+				}
+				desc::json_deep_merge(holder.as_object(), mergeable);
+			} else if (!desc::json_pointer_set(holder, edit.path, edit.value)) {
+				egLOG_WARN("desc", "override: cannot set '{}', skipped", edit.path);
+			}
+		}
+		return std::move(holder.as_object());
+	}
+
+	// A node that instantiates a prefab already got its transform from the node itself; the prefab's root
+	// transform is only the fallback while that is still the identity.
+	void apply_root_transform_fallback(entt::registry& reg, entt::entity e, const prefab_node& prefab_root)
+	{
+		const auto* existing = reg.try_get<scn::local_transform>(e);
+		if (!existing || existing->local == glm::mat4(1.0f)) {
+			reg.emplace_or_replace<scn::local_transform>(e, prefab_root.get_local_transform());
+		}
 	}
 
 	void destroy_entity_hierarchy(entt::registry& reg, entt::entity entity)
@@ -424,66 +636,50 @@ void scn::reconcile(
 	scn::ecs_assembler& assembler,
 	entt::registry& reg,
 	entt::entity live,
-	const scn::prefab_desc::prefab_node* base,
-	const scn::prefab_desc::prefab_node* records,
+	const scn::prefab_desc::prefab_node& node,
 	reconcile_mode mode
 ) {
-	// An explicit nested instance replaces the base with the referenced prefab; its own node keeps the records.
-	res::res_handle<scn::prefab_desc> nested_asset;
-	if (records) {
-		for (const auto& [comp_name, cnode] : records->components) {
-			if (cnode.type_name == "prefab_desc" && cnode.parent_desc.is_valid()) {
-				// cnode.parent_desc is the handle captured at first assembly and goes stale; re-resolve by tag.
-				nested_asset = assembler.get_resource_system().require_sync<scn::prefab_desc>(cnode.parent_desc.get_tag());
-				if (ENGINE_VERIFY(nested_asset.is_ready(), "nested prefab '{}' is not loaded, ignoring", cnode.parent_desc.get_tag().view())) {
-					base = &nested_asset->get_root();
-				}
-
-				reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{
-					cnode.parent_desc.get_tag(),
-					*records
-				});
-				break;
-			}
+	// `node` itself unless it references a prefab or carries override records; `node` may be a part of this
+	// entity's prefab_instance, which is replaced below, so nothing reads it after that.
+	prefab_node expanded;
+	const prefab_node* content = &node;
+	res::tag source;
+	if (materialize(assembler, node, expanded, source, 0)) {
+		if (!source.string().empty()) {
+			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, node });
+			apply_root_transform_fallback(reg, live, expanded);
+			emit_event<scn::transform_updated>(reg, live);
 		}
+		content = &expanded;
 	}
 
-	if (base) {
-		for (const auto& [comp_name, cnode] : base->components) {
-			if (cnode.type_name == "prefab_desc") continue;
+	for (const auto& [comp_name, cnode] : content->components) {
+		if (cnode.type_name == "prefab_desc") continue;
 
-			json::object final_overrides = cnode.overrides;
-			if (records) {
-				if (auto it = records->components.find(comp_name); it != records->components.end()) {
-					for (const auto& kv : it->second.overrides)
-						final_overrides[kv.key()] = kv.value();
-				}
-			}
-			assembler.assemble_and_apply(reg, live, cnode.type_name, cnode.parent_desc, final_overrides, comp_name);
+		if (cnode.edits.empty()) {
+			assembler.assemble_and_apply(reg, live, cnode.type_name, cnode.parent_desc, cnode.overrides, comp_name);
+			continue;
 		}
+
+		// Records edit the merged data, so the parent is folded in here and the component spawns from the result.
+		std::shared_ptr<desc::desc_base> parent;
+		if (cnode.parent_desc.is_valid()) {
+			parent = assembler.get_resource_system().require_sync<desc::desc_base>(cnode.parent_desc.get_tag()).get_sync();
+		}
+		std::string type = cnode.type_name;
+		if (type.empty() && parent) type = std::string{ parent->get_type() };
+		assembler.assemble_and_apply(reg, live, type, {}, compose_component_json(cnode, parent.get()), comp_name);
 	}
 
-	if (records) {
-		for (const auto& [comp_name, cnode] : records->components) {
-			if (cnode.type_name == "prefab_desc") continue;
-			if (!base || base->components.find(comp_name) == base->components.end()) {
-				assembler.assemble_and_apply(reg, live, cnode.type_name, cnode.parent_desc, cnode.overrides, comp_name);
-			}
-		}
-	}
-
-	// Children the components above may have spawned (a referenced prefab's content) are not looked up on a
-	// fresh spawn; on a reload they are part of the live set and go away unless a node claims them.
+	// A fresh spawn has no children yet; on a reload the live ones go away unless a node claims them.
 	const bool reload = mode == reconcile_mode::reload;
 	live_children existing = reload ? live_children(reg, live) : live_children();
 	std::unordered_set<entt::entity> kept;
 
-	for (const auto& pair : pair_children(base, records)) {
-		const uint64_t node_id = effective_node_id(pair.base, pair.over);
-		std::string_view name = "unnamed_child";
-		if (pair.over && !pair.over->name.empty()) name = pair.over->name;
-		else if (pair.base) name = pair.base->name;
-		const glm::mat4 local = merged_local_transform(pair.base, pair.over);
+	for (const auto& child_node : content->children) {
+		const uint64_t node_id = child_node.node_id;
+		std::string_view name = child_node.name.empty() ? std::string_view{ "unnamed_child" } : std::string_view{ child_node.name };
+		const glm::mat4 local = child_node.get_local_transform();
 
 		entt::entity child = reload ? existing.take(node_id, name) : entt::entity{ entt::null };
 		if (child != entt::null) {
@@ -494,11 +690,11 @@ void scn::reconcile(
 			reg.emplace_or_replace<scn::name_component>(child, scn::name_component{ .name = std::string{ name } });
 
 			apply_node_path(reg, live, child, node_id);
-			reconcile(assembler, reg, child, pair.base, pair.over, reconcile_mode::reload);
+			reconcile(assembler, reg, child, child_node, reconcile_mode::reload);
 		} else {
 			child = create_child_entity(reg, live, std::string{ name }, local);
 			apply_node_path(reg, live, child, node_id);
-			reconcile(assembler, reg, child, pair.base, pair.over, reconcile_mode::spawn);
+			reconcile(assembler, reg, child, child_node, reconcile_mode::spawn);
 		}
 		kept.insert(child);
 	}
@@ -599,6 +795,85 @@ void scn::migrate_prefab_v1(json::object& obj)
 	}
 }
 
+namespace {
+
+	bool is_prefab_reference_component(const json::value& comp)
+	{
+		if (!comp.is_object()) return false;
+		const auto& obj = comp.as_object();
+		const auto* type = obj.if_contains("__type");
+		const auto* parent = obj.if_contains("__parent");
+		return type && type->is_string() && (type->as_string() == "prefab_desc" || type->as_string() == "world_desc")
+			&& parent && parent->is_string();
+	}
+
+	// Turns what an explicit nested instance layered over its prefab into records: its other components
+	// (set at "": added, or merged into the prefab's component of that name) and its children (add_node: added,
+	// or merged into the prefab's node with the same id).
+	void upgrade_node_v2(json::object& node)
+	{
+		auto comps = node.find("components");
+		std::string reference_key;
+		if (comps != node.end() && comps->value().is_object()) {
+			for (const auto& kv : comps->value().as_object()) {
+				if (is_prefab_reference_component(kv.value())) {
+					reference_key = std::string{ kv.key() };
+					break;
+				}
+			}
+		}
+
+		if (reference_key.empty()) {
+			if (auto children = node.find("children"); children != node.end() && children->value().is_array()) {
+				for (auto& child : children->value().as_array()) {
+					if (child.is_object()) upgrade_node_v2(child.as_object());
+				}
+			}
+			return;
+		}
+
+		json::array records;
+		json::object kept;
+		for (auto& kv : comps->value().as_object()) {
+			if (kv.key() == reference_key) {
+				kept[kv.key()] = std::move(kv.value());
+				continue;
+			}
+			json::object record;
+			record["target"] = json::array{};
+			record["component"] = std::string{ kv.key() };
+			record["path"] = "";
+			record["value"] = std::move(kv.value());
+			records.push_back(std::move(record));
+		}
+		comps->value() = std::move(kept);
+
+		if (auto children = node.find("children"); children != node.end()) {
+			if (children->value().is_array()) {
+				for (auto& child : children->value().as_array()) {
+					json::object record;
+					record["target"] = json::array{};
+					record["op"] = "add_node";
+					record["value"] = std::move(child);
+					records.push_back(std::move(record));
+				}
+			}
+			node.erase(children);
+		}
+
+		if (!records.empty()) {
+			node["overrides"] = std::move(records);
+		}
+	}
+}
+
+// v2 let an explicit nested instance carry a node tree that was matched against the prefab by id; v3 spells those
+// changes out as `overrides` records, which can also say "back to the default value" and remove things.
+void scn::migrate_prefab_v2(json::object& obj)
+{
+	upgrade_node_v2(obj);
+}
+
 void scn::regenerate_node_ids(scn::prefab_desc::prefab_node& node) {
 	node.node_id = desc::new_node_id();
 	for (auto& child : node.children) {
@@ -622,15 +897,18 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 	}
 
 	for (auto root_entity : roots_to_reload) {
-		auto& instance = reg.get<scn::prefab_instance>(root_entity);
-		scn::reconcile(assembler, reg, root_entity, &desc->get_root(), &instance.local_overrides, scn::reconcile_mode::reload);
+		// An instance node keeps itself (it names the prefab again, so the changed one is picked up); a plain
+		// prefab root is rebuilt from the changed desc. A copy: reconcile replaces the prefab_instance it came from.
+		const scn::prefab_desc::prefab_node& remembered = reg.get<scn::prefab_instance>(root_entity).local_overrides;
+		const scn::prefab_desc::prefab_node node = remembered.components.empty() ? desc->get_root() : remembered;
+		scn::reconcile(assembler, reg, root_entity, node, scn::reconcile_mode::reload);
 	}
 }
 
 // Declared by hand in tests/scn_prefab_merge_tests.cpp, so it needs its own export.
 SNK_API void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const scn::prefab_desc::prefab_node& node)
 {
-	scn::reconcile(assembler, reg, e, nullptr, &node, scn::reconcile_mode::spawn);
+	scn::reconcile(assembler, reg, e, node, scn::reconcile_mode::spawn);
 }
 
 void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab)
@@ -642,11 +920,7 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
 	if (!reg.all_of<scn::node_id_component>(e) && !reg.all_of<scn::parent_component>(e))
 		reg.emplace<scn::node_id_component>(e);
 
-	// A node that references this prefab as a component already got its own transform from spawn_child;
-	// the referenced root must not wipe it (it is only a fallback while the node is at identity).
-	const auto* existing = reg.try_get<scn::local_transform>(e);
-	if (!existing || existing->local == glm::mat4(1.0f))
-		reg.emplace_or_replace<scn::local_transform>(e, root_node.get_local_transform());
+	apply_root_transform_fallback(reg, e, root_node);
 	reg.emplace_or_replace<scn::world_transform>(e);
 
 	if (reg.ctx().contains<ecs::event<scn::transform_updated>>()) {
@@ -676,5 +950,5 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
 		reg.ctx().emplace<ecs::event<scn::hierarchy_updated>>(std::move(event));
 	}
 
-	scn::reconcile(assembler, reg, e, &root_node, nullptr, scn::reconcile_mode::spawn);
+	scn::reconcile(assembler, reg, e, root_node, scn::reconcile_mode::spawn);
 }
