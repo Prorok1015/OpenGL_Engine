@@ -21,6 +21,7 @@
 
 namespace {
 	// "gl" (default) or "null". A window without a GL surface selects null regardless.
+	// Unknown values warn and fall through to the surface check.
 	CFG_VAR_DEF_STRING(cfg_render_backend, "render/backend", "gl");
 }
 
@@ -54,7 +55,11 @@ void engine::render::render_init(ds::app_data_storage& data)
 	// Destroyed in render_term after the render system, before the window (core shutdown).
 	rnd::driver::swapchain_interface* swapchain_ptr = nullptr;
 	if (backend == "null" || !surface) {
-		egLOG_INFO("render", "Render backend: null ({})", backend == "null" ? "render/backend = null" : "the window has no GL surface");
+		if (backend == "null") {
+			egLOG_INFO("render", "Render backend: null (render/backend = null)");
+		} else {
+			egLOG_WARN("render", "render/backend is gl but the window has no GL surface; falling back to the null backend");
+		}
 		swapchain_ptr = &data.construct<rnd::driver::swapchain_interface, rnd::driver::null::swapchain>();
 	} else {
 		swapchain_ptr = &data.construct<rnd::driver::swapchain_interface, rnd::driver::gl::swapchain>(*surface);
