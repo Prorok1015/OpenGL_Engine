@@ -91,9 +91,6 @@ jobs:
         run: |
           if command -v sccache >/dev/null; then sccache --show-stats; fi
           if command -v ccache >/dev/null; then ccache -s; fi
-          if [ -f "${RUNNER_TEMP}/sccache.log" ]; then
-            grep -n -i -m 5 -B 3 -A 3 "multiple input\|cannot cache\|non-cacheable\|parse_arguments" "${RUNNER_TEMP}/sccache.log" || true
-          fi
 
       # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
       # hosted runners, so this relies on the tests being headless.

@@ -26,9 +26,6 @@ runs:
           {
             echo "SCCACHE_DIR=${GITHUB_WORKSPACE}/.sccache"
             echo "SCCACHE_CACHE_SIZE=1G"
-            # Temporary diagnostics: why are MSVC compiles "multiple input files" (non-cacheable)?
-            echo "SCCACHE_LOG=debug"
-            echo "SCCACHE_ERROR_LOG=${RUNNER_TEMP}/sccache.log"
           } >> "$GITHUB_ENV"
         else
           {
