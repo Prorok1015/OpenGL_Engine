@@ -18,6 +18,9 @@ namespace gui
 			menu_tree_item(const std::string_view title)
 				: title(title) {};
 			~menu_tree_item() = default;
+			// dllexport instantiates the implicit copy members, which cannot compile with unique_ptr children
+			menu_tree_item(const menu_tree_item&) = delete;
+			menu_tree_item& operator=(const menu_tree_item&) = delete;
 
 			std::string get_path() const;
 			menu_tree_item* find(const std::string_view title) const;
