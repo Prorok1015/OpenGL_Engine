@@ -37,6 +37,8 @@ namespace scn {
             swap(m_mode, other.m_mode);
             swap(m_seed, other.m_seed);
             swap(m_plans, other.m_plans);
+            swap(m_phase_order, other.m_phase_order);
+            swap(m_plan_slots, other.m_plan_slots);
             swap(m_worlds, other.m_worlds);
             swap(m_worlds_by_id, other.m_worlds_by_id);
             swap(m_world_systems, other.m_world_systems);
@@ -126,7 +128,18 @@ namespace scn {
 			ecs::system_factory& sf);
 
 		// The system list of the worlds changed (hot reload): rebuilds every world's plan.
+		// Reload contract (systems only): per-world system instances (registered in place, with
+		// ARGS...) are re-created, so they pick up new parameters and lose their runtime state;
+		// shared instances (registered as a shared_ptr) are kept as they are. Mode, seed, the
+		// fixed-step accumulator and the worlds' random streams are not touched; only a full
+		// load_from_desc / reload_world re-seeds the streams.
 		void load_systems_from_desc(const level_desc& desc, ecs::system_factory& desc_system);
+
+		// The phase table of `sf` changed after plans were built (a game phase was added): rebuilds
+		// every world's plan so systems of the new phase run and every world agrees on the phase
+		// order. Game phases should be registered before the first load; this is the fallback.
+		// Per-world system instances are re-created, like in load_systems_from_desc.
+		void rebuild_all_plans(ecs::system_factory& sf);
 
 		// Plan of a world, null when the world has no systems registered.
 		const ecs::system_plan* plan_of(uint32_t world_id) const {
@@ -140,9 +153,10 @@ namespace scn {
 
     private:
         void rebuild_world_plan(uint32_t world_id, ecs::system_factory& sf);
-        void rebuild_all_plans(ecs::system_factory& sf);
-        void run_phase(size_t phase_index, ecs::run_mode mode);
-        void apply_commands(scn::world& world);
+        // Takes the phase order from sf and re-resolves every world's phases against it.
+        void refresh_plan_slots(const ecs::system_factory& sf);
+        void run_phase(size_t order_index, ecs::run_mode mode);
+        static void apply_commands(entt::registry& state);
 
         ecs::runtime_context create_runtime_context(size_t world_id) {
             ecs::runtime_context ctx{ .current_registry = get_world(world_id).state(), .current_world_id = world_id };
@@ -165,6 +179,11 @@ namespace scn {
         std::unordered_map<std::string, std::vector<std::string>> m_world_systems;
         // Per world id (ordered, so worlds always run in id order): the plan built from that list.
         std::map<uint32_t, ecs::system_plan> m_plans;
+        // Phase order the level runs (copy of the table at the last plan build) and, per world id,
+        // that world's phase_plan for every position of it (null where the plan has no such phase).
+        // Resolved by phase id when plans are built, so a frame does no searching.
+        std::vector<ecs::phase_id> m_phase_order = ecs::phase_table{}.ordered();
+        std::map<uint32_t, std::vector<const ecs::phase_plan*>> m_plan_slots;
         std::unordered_map<std::string, std::unique_ptr<scn::world>> m_worlds;
         std::map<uint32_t, scn::world *> m_worlds_by_id;
     };

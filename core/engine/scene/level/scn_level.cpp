@@ -53,19 +53,8 @@ void scn::level::update(std::chrono::duration<float> dt)
     m_level_state.ctx().insert_or_assign<delta_time>({ frame_dt });
     m_level_state.ctx().insert_or_assign<scn::update_alpha>({ m_stepper.alpha() });
 
-    size_t phase_count = 0;
-    for (const auto& [id, plan] : m_plans) {
-        phase_count = std::max(phase_count, plan.phases.size());
-    }
-
-    for (size_t p = 0; p < phase_count; ++p) {
-        const auto* any = [&]() -> const ecs::phase_plan* {
-            for (const auto& [id, plan] : m_plans) {
-                if (p < plan.phases.size()) return &plan.phases[p];
-            }
-            return nullptr;
-        }();
-        const bool fixed = any && any->id.builtin() == ecs::phase::fixed_update;
+    for (size_t p = 0; p < m_phase_order.size(); ++p) {
+        const bool fixed = m_phase_order[p].builtin() == ecs::phase::fixed_update;
         if (fixed) {
             PROFILE_SCOPE("ECS.fixed_update");
             for (int i = 0; i < fixed_steps; ++i) {
@@ -84,22 +73,28 @@ void scn::level::update(std::chrono::duration<float> dt)
 	}
 }
 
-void scn::level::run_phase(size_t phase_index, ecs::run_mode mode)
+void scn::level::run_phase(size_t order_index, ecs::run_mode mode)
 {
-    for (auto& [world_id, plan] : m_plans) {
-        if (phase_index >= plan.phases.size()) continue;
-        const auto& phase = plan.phases[phase_index];
-        if (!phase.nodes.empty()) {
-            PROFILE_SCOPE(phase.id.name().c_str());
+    // Every world takes part, also one without systems: commands queued into it from outside
+    // (other worlds' systems, the editor) are applied on the same schedule.
+    for (const auto& [world_id, world] : m_worlds_by_id) {
+        const ecs::phase_plan* phase = nullptr;
+        if (auto slots = m_plan_slots.find(world_id); slots != m_plan_slots.end()) {
+            phase = slots->second[order_index];
+        }
+        if (phase && !phase->nodes.empty()) {
+            PROFILE_SCOPE(phase->id.name().c_str());
             const ecs::runtime_context ctx = create_runtime_context(world_id);
-            for (const auto& node : phase.nodes) {
+            for (const auto& node : phase->nodes) {
                 if (!ecs::mode_runs_system(mode, node.run_in_edit)) continue;
                 PROFILE_SCOPE(node.name.c_str());
                 node(ctx);
             }
         }
-        apply_commands(get_world(world_id));
+        apply_commands(world->state());
     }
+    // Systems reach the level state through get_world_registry(LEVEL_ID) as well.
+    apply_commands(m_level_state);
 }
 
 scn::world& scn::level::create_world(const std::string_view type, uint32_t world_id)
@@ -125,6 +120,8 @@ void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfa
 {
 	m_current_level_tag = desc.get_tag();
 	m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) }); // a fresh load replays from the seed
+	m_stepper.reset(); // no leftover fraction of a step from the previous level
+	m_level_state.ctx().insert_or_assign<scn::update_alpha>({ 0.0f });
     for (const auto& world_desc : desc.get_worlds()) {
         auto& world = create_world(world_desc->get_name(), acquire_free_world_id());
         add_world_systems(world, world_desc->get_systems(), sfactory);
@@ -149,6 +146,7 @@ void scn::level::reload_world(
 	}
 
 	m_plans.erase(old_id);
+	m_plan_slots.erase(old_id);
 	m_worlds_by_id.erase(old_id);
 	m_worlds.erase(std::string{name});
 
@@ -173,6 +171,7 @@ void scn::level::remove_world(const std::string_view name)
 	}
 
 	m_plans.erase(id);
+	m_plan_slots.erase(id);
 	m_worlds_by_id.erase(id);
 	m_worlds.erase(key);
 	m_world_systems.erase(key);
@@ -201,9 +200,10 @@ void scn::level::rebuild_world_plan(uint32_t world_id, ecs::system_factory& sf)
     auto it = m_world_systems.find(std::string{ world.get_name() });
     if (it == m_world_systems.end()) {
         m_plans.erase(world_id);
-        return;
+    } else {
+        m_plans.insert_or_assign(world_id, ecs::build_system_plan(sf.registry(), it->second));
     }
-    m_plans.insert_or_assign(world_id, ecs::build_system_plan(sf.registry(), it->second));
+    refresh_plan_slots(sf);
 }
 
 void scn::level::rebuild_all_plans(ecs::system_factory& sf)
@@ -211,6 +211,20 @@ void scn::level::rebuild_all_plans(ecs::system_factory& sf)
     m_plans.clear();
     for (const auto& [id, world] : m_worlds_by_id) {
         rebuild_world_plan(id, sf);
+    }
+    refresh_plan_slots(sf); // also when there are no worlds: the phase order still follows the table
+}
+
+void scn::level::refresh_plan_slots(const ecs::system_factory& sf)
+{
+    m_phase_order = sf.registry().phases().ordered();
+    m_plan_slots.clear();
+    for (const auto& [id, plan] : m_plans) {
+        auto& slots = m_plan_slots[id];
+        slots.reserve(m_phase_order.size());
+        for (const auto& pid : m_phase_order) {
+            slots.push_back(plan.find_phase(pid));
+        }
     }
 }
 
@@ -223,15 +237,16 @@ void scn::level::clear()
     }
 
     m_plans.clear();
+    m_plan_slots.clear();
+    m_stepper.reset();
     m_world_systems.clear();
     m_level_state.clear();
     m_worlds.clear();
     m_worlds_by_id.clear();
 }
 
-void scn::level::apply_commands(scn::world& world)
+void scn::level::apply_commands(entt::registry& state)
 {
-    auto& state = world.state();
     if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
         changer->apply(state);
     }
