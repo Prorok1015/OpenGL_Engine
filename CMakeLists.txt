@@ -101,6 +101,9 @@ add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 
+# rnd_null_driver_tests drive the internal null backend; it is linked through render (shared: snk_engine).
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>")
+
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 # desc_repo_roundtrip_tests loads the descs the repository ships.
