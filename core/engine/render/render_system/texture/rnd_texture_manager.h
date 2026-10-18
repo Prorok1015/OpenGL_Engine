@@ -8,15 +8,18 @@
 #include <unordered_map>
 #include <functional>
 
+namespace res { class resource_system; }
+
 namespace rnd
 {
 	class texture_manager
 	{
 	public:
 		using loader_fn = std::function<std::unique_ptr<driver::texture_interface>(driver::driver_interface* drv, const rnd::texture_desc& txm)>;
-		texture_manager(driver::driver_interface* driver, desc::desc_system& d)
+		texture_manager(driver::driver_interface* driver, desc::desc_system& d, res::resource_system& res_sys)
 			: drv(driver)
 			, desc_system(d)
+			, m_res_sys(res_sys)
 		{}
 
 		driver::texture_interface* require_texture(const res::tag& tag);
@@ -47,6 +50,7 @@ namespace rnd
 		mutable std::unordered_map<res::tag, std::unique_ptr<driver::texture_interface>> cache;
 		std::unordered_map<res::tag, res::res_handle<rnd::texture_desc>> loading;
 		desc::desc_system& desc_system;
+		res::resource_system& m_res_sys;
 		driver::driver_interface* drv = nullptr;
 	};
 

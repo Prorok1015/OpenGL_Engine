@@ -47,7 +47,7 @@ namespace rnd
 	class ShaderManager
 	{
 	public:
-		ShaderManager(driver::driver_interface* ptr);
+		ShaderManager(driver::driver_interface* ptr, res::resource_system& res_sys);
 		~ShaderManager();
 
 		ShaderManager(const ShaderManager&) = delete;
@@ -64,7 +64,7 @@ namespace rnd
 			auto it = shader_cache.find(desc);
 			rnd::driver::shader_interface* shader = nullptr;
 			if (it == shader_cache.end()) {
-				auto new_shader = drv->create_shader(desc.load());
+				auto new_shader = drv->create_shader(desc.load(m_res_sys));
 				if (new_shader) {
 					shader = new_shader.get();
 					shader_cache[desc] = std::move(new_shader);
@@ -83,6 +83,7 @@ namespace rnd
 		void update_global_sun(const lights_params& val) const;
 	private:
 		driver::driver_interface* drv = nullptr;
+		res::resource_system& m_res_sys;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> _matrices;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> sun_light;
 		mutable std::unordered_map<shader_config, std::unique_ptr<rnd::driver::shader_interface>> shader_cache;

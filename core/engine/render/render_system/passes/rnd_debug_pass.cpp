@@ -11,6 +11,11 @@ struct debug_vertex_t {
 	glm::vec4 color;
 };
 
+debug_pass::debug_pass(res::resource_system& res_sys)
+	: m_res_sys(res_sys)
+{
+}
+
 void debug_pass::ensure_resources(driver::driver_interface& drv)
 {
 	if (m_vao) return;
@@ -33,7 +38,7 @@ void debug_pass::ensure_resources(driver::driver_interface& drv)
 		.set_vertex_shader(res::tag::make("shaders/debug_line.vert"))
 		.set_fragment_shader(res::tag::make("shaders/debug_line.frag"));
 
-	m_shader = drv.create_shader(cfg.load());
+	m_shader = drv.create_shader(cfg.load(m_res_sys));
 }
 
 void debug_pass::execute(frame_context& context, driver::driver_interface& drv)

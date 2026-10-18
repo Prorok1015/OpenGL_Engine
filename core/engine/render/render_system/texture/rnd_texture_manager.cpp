@@ -13,7 +13,7 @@ rnd::driver::texture_interface* rnd::texture_manager::require_texture(const res:
 	auto it = loading.find(tag);
 	res::res_handle<rnd::texture_desc> handle;
 	if (it == loading.end()) {
-		handle = res::get_system().require<rnd::texture_desc>(tag);
+		handle = m_res_sys.require<rnd::texture_desc>(tag);
 		loading[tag] = handle;
 	} else {
 		handle = it->second;

@@ -92,7 +92,7 @@ void composition_pass::execute(frame_context &context,
             .set_fragment_shader(res::tag::make("shaders/composition.frag"));
     desc.rdata.samplers = {color_tp_rt, waight_tp_rt};
 
-    rnd::configure_pass(desc);
+    rnd::configure_pass(context, desc);
     drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, std::size(indeces));
 
     drv.pop_frame_buffer();

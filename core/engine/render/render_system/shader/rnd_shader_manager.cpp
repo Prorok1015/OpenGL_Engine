@@ -11,8 +11,9 @@ namespace glm
 	}
 }
 
-rnd::ShaderManager::ShaderManager(driver::driver_interface* ptr)
+rnd::ShaderManager::ShaderManager(driver::driver_interface* ptr, res::resource_system& res_sys)
 	: drv(ptr)
+	, m_res_sys(res_sys)
 	, _matrices(drv->create_uniform_buffer(sizeof(global_params), 0))
 	, sun_light(drv->create_uniform_buffer(sizeof(lights_params), 1))
 {

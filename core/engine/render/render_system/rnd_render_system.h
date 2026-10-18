@@ -13,6 +13,7 @@
 namespace scn { class skybox_desc; }
 namespace rnd { class skinning_manager; }
 namespace rnd { struct material_compiler_interface; }
+namespace res { class resource_system; }
 
 namespace rnd
 {
@@ -21,7 +22,7 @@ namespace rnd
 	class render_system
 	{
 	public:
-		render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d);
+		render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d, res::resource_system& res);
 		~render_system() = default;
 		render_system(const render_system&) = delete;
 		render_system(render_system&&) = delete;
@@ -72,8 +73,8 @@ namespace rnd
 	render_system& get_system();
 
 	template<class T>
-	void configure_pass(T& desc)
+	void configure_pass(const frame_context& context, T& desc)
 	{
-		rnd::get_system().get_shader_manager().use(desc);
+		context.shaders->use(desc);
 	}
 }

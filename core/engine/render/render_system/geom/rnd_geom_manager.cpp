@@ -2,9 +2,10 @@
 #include "rnd_buffer_interface.h"
 #include "res_system.h"
 
-rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, desc::desc_system& d)
+rnd::geom_manager::geom_manager(rnd::driver::driver_interface* _driver, desc::desc_system& d, res::resource_system& res_sys)
 	: drv(_driver)
 	, desc_system(d)
+	, m_res_sys(res_sys)
 {
 }
 
@@ -23,7 +24,7 @@ rnd::driver::vertex_array_interface* rnd::geom_manager::require_geometry(res::ta
 	auto it = loading.find(geom_tag); 
 	res::res_handle<rnd::geometry_desc> handle;
 	if (it == loading.end()) {
-		handle = res::get_system().require<rnd::geometry_desc>(geom_tag);
+		handle = m_res_sys.require<rnd::geometry_desc>(geom_tag);
 		loading[geom_tag] = handle;
 	} else {
 		handle = it->second;

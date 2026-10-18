@@ -87,7 +87,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       // Let's use dc.material with `z_prepass` overriden program!
       rnd::shader_config object_shader = dc.material;
       object_shader.cdata.program = z_prepass_program;
-      rnd::configure_pass(object_shader);
+      rnd::configure_pass(context, object_shader);
 
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
           if (auto* skm = context.skinning) {

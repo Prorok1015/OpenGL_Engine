@@ -5,6 +5,8 @@
 #include "rnd_shader_interface.h"
 #include "rnd_driver_interface.h"
 
+namespace res { class resource_system; }
+
 namespace rnd
 {
 	struct shader_config
@@ -114,7 +116,7 @@ namespace rnd
 			return cdata == lhs.cdata;
 		}
 
-		std::vector<driver::shader_header> load() const;
+		std::vector<driver::shader_header> load(res::resource_system& res_sys) const;
 
 		constant_data cdata;
 		runtime_data rdata;
