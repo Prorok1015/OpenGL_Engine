@@ -175,6 +175,7 @@ void edt::scene_editor::on_transform_committed(
 	node->position = pos;
 	node->rotation = rot;
 	node->scale    = scale;
+	node->has_transform = true;
 	m_state.is_dirty = true;
 	serialize_and_push();
 }
@@ -231,12 +232,20 @@ void edt::scene_editor::sync_ecs_transforms_to_desc()
 		[&node_map](const scn::name_component& nc, const scn::local_transform& lt) {
 			auto it = node_map.find(nc.name);
 			if (it == node_map.end()) return;
-			auto* node = it->second;
-			eng::transform3d tr{ lt.local };
-			node->position = tr.get_pos();
-			node->rotation = tr.get_angles_degrees();
-			node->scale    = tr.get_scale();
+			write_live_transform(*it->second, lt.local);
 		});
+}
+
+void edt::scene_editor::write_live_transform(prefab_node& node, const glm::mat4& local)
+{
+	const bool references_desc = std::ranges::any_of(node.components, [] (const auto& entry) { return entry.second.parent_desc.is_valid(); });
+	if (references_desc && !node.has_transform) {
+		return;
+	}
+	eng::transform3d tr{ local };
+	node.position = tr.get_pos();
+	node.rotation = tr.get_angles_degrees();
+	node.scale    = tr.get_scale();
 }
 
 // ─── Desc tree helpers ───────────────────────────────────────────────────────

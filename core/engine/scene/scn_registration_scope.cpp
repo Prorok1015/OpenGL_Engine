@@ -109,6 +109,9 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	// v2: children are an array of nodes with __id and name (the world is a prefab, so it shares the step).
 	scope.migration("prefab_desc", 1, migrate_prefab_v1);
 	scope.migration(world_desc::__type, 1, migrate_prefab_v1);
+	// v3: the override layer of an explicit nested instance becomes `overrides` records.
+	scope.migration("prefab_desc", 2, migrate_prefab_v2);
+	scope.migration(world_desc::__type, 2, migrate_prefab_v2);
 	scope.migration("level_desc", 1, [](json::object&) {}); // the worlds are typed objects and migrate on their own
 
 	auto prefab_spawn = [&assembler](entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {

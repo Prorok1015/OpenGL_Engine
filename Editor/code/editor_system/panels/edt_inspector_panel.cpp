@@ -74,9 +74,14 @@ namespace edt
 
 		// Transform
 		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (ImGui::DragFloat3("Position", &node.position.x, 0.01f)) changed = true;
-			if (ImGui::DragFloat3("Rotation", &node.rotation.x, 0.5f))  changed = true;
-			if (ImGui::DragFloat3("Scale",    &node.scale.x,    0.01f, 0.001f, 100.f)) changed = true;
+			bool transform_changed = false;
+			if (ImGui::DragFloat3("Position", &node.position.x, 0.01f)) transform_changed = true;
+			if (ImGui::DragFloat3("Rotation", &node.rotation.x, 0.5f))  transform_changed = true;
+			if (ImGui::DragFloat3("Scale",    &node.scale.x,    0.01f, 0.001f, 100.f)) transform_changed = true;
+			if (transform_changed) {
+				node.has_transform = true; // typed values, even 0/0/0, are the user's placement
+				changed = true;
+			}
 		}
 
 		if (m_readonly) ImGui::EndDisabled();
