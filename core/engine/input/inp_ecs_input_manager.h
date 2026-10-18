@@ -5,6 +5,9 @@
 #include "inp_input_event.hpp"
 #include "inp_events.hpp"
 #include "snk_api.h"
+#include <memory>
+
+namespace ecs { class system_factory; }
 
 namespace inp
 {
@@ -33,4 +36,7 @@ namespace inp
 		glm::ivec4 input_area = {};
 		bool invert = false;
 	};
+
+	// Registers "inp::update_input_state" (phase `input`) for the given manager instance.
+	void register_ecs_input_system(ecs::system_factory& factory, std::shared_ptr<ecs_input_manager> manager);
 }

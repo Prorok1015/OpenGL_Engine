@@ -160,7 +160,12 @@ void scn::calc_interpolated_rotation(glm::quat& Out, float AnimationTimeTicks, c
 
 void scn::init_animation_system(ecs::system_factory& factory)
 {
-    factory.register_automatic_system<update_animation_controllers_system>("scn::animation_controller_update");
-    factory.register_automatic_system<update_nodes_animation_system>("scn::animation_system_node");
-    factory.register_automatic_system<update_bone_offsets_system>("scn::animation_system_matrix");
+    // Animation keeps ticking in the editor viewport, hence run_in_edit.
+    factory.register_system<update_animation_controllers_system>("scn::animation_controller_update",
+        { .phase = ecs::phase::update, .run_in_edit = true });
+    factory.register_system<update_nodes_animation_system>("scn::animation_system_node",
+        { .phase = ecs::phase::update, .after = { "scn::animation_controller_update" }, .run_in_edit = true });
+    // Bone matrices need the world transforms the transform phase just produced.
+    factory.register_system<update_bone_offsets_system>("scn::animation_system_matrix",
+        { .phase = ecs::phase::late_update, .after = { "scn::transform_system" }, .run_in_edit = true });
 }

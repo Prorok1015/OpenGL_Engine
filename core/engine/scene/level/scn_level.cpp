@@ -6,13 +6,11 @@
 #include <entt/fwd.hpp>
 #include <algorithm>
 #include <functional>
-#include <queue>
 #include "eng_profiler.h"
 
 scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
 	: m_hot_reload_manager(std::move(hot_manager))
 {
-    install_context_provider();
 }
 
 scn::level::~level()
@@ -25,35 +23,65 @@ void scn::level::update(std::chrono::duration<float> dt)
     PROFILE_SCOPE("LevelUpdate");
 
     m_accumulator += dt.count();
-
+    int fixed_steps = 0;
     while (m_accumulator >= m_fixed_step) {
-        PROFILE_SCOPE("ECS.FixedGraph");
-        m_level_state.ctx().insert_or_assign<scn::fixed_time>({ m_fixed_step });
-
-        run_graph(m_fixed_graph, m_fixed_order);
-
         m_accumulator -= m_fixed_step;
+        ++fixed_steps;
     }
 
     m_level_state.ctx().insert_or_assign<delta_time>({ dt.count() });
+    m_level_state.ctx().insert_or_assign<scn::update_alpha>({ m_accumulator / m_fixed_step });
 
-    float alpha = m_accumulator / m_fixed_step;
-    m_level_state.ctx().insert_or_assign<scn::update_alpha>({ alpha });
-
-    {
-        PROFILE_SCOPE("ECS.VariableGraph");
-        run_graph(m_variable_graph, m_variable_order);
+    size_t phase_count = 0;
+    for (const auto& [id, plan] : m_plans) {
+        phase_count = std::max(phase_count, plan.phases.size());
     }
-    sync_point();
+
+    for (size_t p = 0; p < phase_count; ++p) {
+        const auto* any = [&]() -> const ecs::phase_plan* {
+            for (const auto& [id, plan] : m_plans) {
+                if (p < plan.phases.size()) return &plan.phases[p];
+            }
+            return nullptr;
+        }();
+        const bool fixed = any && any->id.builtin() == ecs::phase::fixed_update;
+        if (fixed) {
+            PROFILE_SCOPE("ECS.fixed_update");
+            for (int i = 0; i < fixed_steps; ++i) {
+                m_level_state.ctx().insert_or_assign<scn::fixed_time>({ m_fixed_step });
+                run_phase(p);
+            }
+        } else {
+            run_phase(p);
+        }
+    }
+
+    if (m_hot_reload_manager) {
+        m_hot_reload_manager->tick();
+	}
+}
+
+void scn::level::run_phase(size_t phase_index)
+{
+    for (auto& [world_id, plan] : m_plans) {
+        if (phase_index >= plan.phases.size()) continue;
+        const auto& phase = plan.phases[phase_index];
+        if (!phase.nodes.empty()) {
+            PROFILE_SCOPE(phase.id.name().c_str());
+            const ecs::runtime_context ctx = create_runtime_context(world_id);
+            for (const auto& node : phase.nodes) {
+                PROFILE_SCOPE(node.name.c_str());
+                node(ctx);
+            }
+        }
+        apply_commands(get_world(world_id));
+    }
 }
 
 scn::world& scn::level::create_world(const std::string_view type, uint32_t world_id)
 {
     auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id, type));
     m_worlds_by_id[world_id] = &w; // Register in ID map
-
-    // Set the WorldID in the world's own registry context
-    w.state().ctx().emplace<ecs::world_salt>((size_t)world_id);
 
     if (m_hot_reload_manager) {
         m_hot_reload_manager->attach_registry(w.state());
@@ -73,8 +101,6 @@ void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfa
         entt::entity e = world.state().create();
 		assambler.spawn_from_desc(world.state(), e, *world_desc, world_desc->get_name());
     }
-
-    mark_systems_graphs_dirty();
 }
 
 void scn::level::reload_world(
@@ -91,20 +117,19 @@ void scn::level::reload_world(
 		m_hot_reload_manager->detach_registry(m_worlds[std::string{name}]->state());
 	}
 
+	m_plans.erase(old_id);
 	m_worlds_by_id.erase(old_id);
 	m_worlds.erase(std::string{name});
 
 	auto& w = create_world(name, old_id);
 	m_world_systems[std::string{ name }] = desc.get_systems();
+	rebuild_world_plan(old_id, sf);
 
 	entt::entity e = w.state().create();
 	assambler.spawn_from_desc(w.state(), e, desc, name);
-
-	// The organizer still references the destroyed world's systems; rebuild it from every live world.
-	rebuild_systems(sf);
 }
 
-void scn::level::remove_world(const std::string_view name, ecs::system_factory& sf)
+void scn::level::remove_world(const std::string_view name)
 {
 	std::string key{name};
 	ASSERT_MSG(m_worlds.contains(key), "remove_world: level doesn't contain world with this name");
@@ -116,11 +141,10 @@ void scn::level::remove_world(const std::string_view name, ecs::system_factory& 
 		m_hot_reload_manager->detach_registry(world->state());
 	}
 
+	m_plans.erase(id);
 	m_worlds_by_id.erase(id);
 	m_worlds.erase(key);
 	m_world_systems.erase(key);
-
-	rebuild_systems(sf);
 }
 
 void scn::level::load_systems_from_desc(const level_desc& desc, ecs::system_factory& system_factory)
@@ -128,7 +152,7 @@ void scn::level::load_systems_from_desc(const level_desc& desc, ecs::system_fact
     for (const auto& world_desc : desc.get_worlds()) {
         m_world_systems[std::string{ world_desc->get_name() }] = world_desc->get_systems();
     }
-    rebuild_systems(system_factory);
+    rebuild_all_plans(system_factory);
 }
 
 void scn::level::add_world_systems(
@@ -137,69 +161,26 @@ void scn::level::add_world_systems(
     ecs::system_factory& sf)
 {
     m_world_systems[std::string{ world.get_name() }] = systems;
-    create_world_systems(world, sf);
-    mark_systems_graphs_dirty();
+    rebuild_world_plan(world.get_id(), sf);
 }
 
-void scn::level::create_world_systems(scn::world& world, ecs::system_factory& sf)
+void scn::level::rebuild_world_plan(uint32_t world_id, ecs::system_factory& sf)
 {
-    const std::string world_name{ world.get_name() };
-    auto it = m_world_systems.find(world_name);
-    if (it == m_world_systems.end()) return;
-
-    auto& handles = m_system_handles[world_name];
-    for (const auto& system_name : it->second) {
-        // Stateful systems are referenced by raw pointer from the organizer, keep them alive with it.
-        if (auto sys = sf.create_system(system_name, world.state(), m_organizer)) {
-            handles.push_back(std::move(sys));
-        }
+    const scn::world& world = get_world(world_id);
+    auto it = m_world_systems.find(std::string{ world.get_name() });
+    if (it == m_world_systems.end()) {
+        m_plans.erase(world_id);
+        return;
     }
+    m_plans.insert_or_assign(world_id, ecs::build_system_plan(sf.registry(), it->second));
 }
 
-void scn::level::rebuild_systems(ecs::system_factory& sf)
+void scn::level::rebuild_all_plans(ecs::system_factory& sf)
 {
-    clear_organizer();
-
-    std::vector<scn::world*> ordered;
-    ordered.reserve(m_worlds_by_id.size());
+    m_plans.clear();
     for (const auto& [id, world] : m_worlds_by_id) {
-        ordered.push_back(world);
+        rebuild_world_plan(id, sf);
     }
-    std::ranges::sort(ordered, {}, &scn::world::get_id);
-
-    for (scn::world* world : ordered) {
-        create_world_systems(*world, sf);
-    }
-    mark_systems_graphs_dirty();
-}
-
-std::vector<size_t> scn::level::topological_order(const std::vector<entt::organizer::vertex>& graph)
-{
-    std::vector<size_t> in_degree(graph.size(), 0);
-    for (const auto& node : graph) {
-        for (size_t out : node.out_edges()) {
-            ++in_degree[out];
-        }
-    }
-
-    std::priority_queue<size_t, std::vector<size_t>, std::greater<>> ready;
-    for (size_t i = 0; i < graph.size(); ++i) {
-        if (in_degree[i] == 0) ready.push(i);
-    }
-
-    std::vector<size_t> order;
-    order.reserve(graph.size());
-    while (!ready.empty()) {
-        const size_t idx = ready.top();
-        ready.pop();
-        order.push_back(idx);
-        for (size_t out : graph[idx].out_edges()) {
-            if (--in_degree[out] == 0) ready.push(out);
-        }
-    }
-
-    ASSERT_MSG(order.size() == graph.size(), "system graph contains a cycle");
-    return order;
 }
 
 void scn::level::clear()
@@ -210,47 +191,39 @@ void scn::level::clear()
         }
     }
 
-    clear_organizer();
+    m_plans.clear();
     m_world_systems.clear();
     m_level_state.clear();
     m_worlds.clear();
     m_worlds_by_id.clear();
-    install_context_provider();
 }
 
-void scn::level::sync_point()
+void scn::level::apply_commands(scn::world& world)
 {
-    for (auto& [name, world] : m_worlds) {
-        auto& state = world->state();
-        if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
-            changer->apply(state);
-        }
-
-        if (auto* sandbox = state.ctx().find<ecs::entity_spawner>()) {
-            entt::continuous_loader loader{ state };
-            {
-                const auto& entity_storage = sandbox->storage<ecs::sandbox_entity>();
-                ecs::sandbox_loader_archive archive{ loader, entity_storage };
-                loader.get<entt::entity>(archive);
-            }
-
-            for (auto [id, storage] : sandbox->storage()) {
-                if (id == entt::type_hash<ecs::sandbox_entity>::value()) continue;
-                if (storage.empty()) continue;
-
-                if (auto type = entt::resolve(id)) {
-                    if (auto func = type.func(ecs::loader_get_h)) {
-                        func.invoke({}, &loader, static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
-                    }
-                }
-            }
-
-            sandbox->clear();
-        }
-
+    auto& state = world.state();
+    if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
+        changer->apply(state);
     }
 
-    if (m_hot_reload_manager) {
-        m_hot_reload_manager->tick();
-	}
+    if (auto* sandbox = state.ctx().find<ecs::entity_spawner>()) {
+        entt::continuous_loader loader{ state };
+        {
+            const auto& entity_storage = sandbox->storage<ecs::sandbox_entity>();
+            ecs::sandbox_loader_archive archive{ loader, entity_storage };
+            loader.get<entt::entity>(archive);
+        }
+
+        for (auto [id, storage] : sandbox->storage()) {
+            if (id == entt::type_hash<ecs::sandbox_entity>::value()) continue;
+            if (storage.empty()) continue;
+
+            if (auto type = entt::resolve(id)) {
+                if (auto func = type.func(ecs::loader_get_h)) {
+                    func.invoke({}, &loader, static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
+                }
+            }
+        }
+
+        sandbox->clear();
+    }
 }

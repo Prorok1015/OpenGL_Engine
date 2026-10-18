@@ -6,6 +6,10 @@
 #include <vector>
 #include "level/scn_level.h"
 #include "scn_ecs_assembler.h"
+#include "scn_transform_system.h"
+#include "scn_animation_job.h"
+#include "scn_camera_controller_system.h"
+#include "inp_ecs_input_manager.h"
 #include "desc_system.h"
 #include "res_system.h"
 
@@ -15,23 +19,16 @@ namespace {
 
 	std::vector<std::string> g_log;
 
-	// Resources used only to create read/write dependencies between systems.
-	struct res_x {};
-	struct res_y {};
-	struct res_b {};
-	struct res_c {};
-	struct res_w {};
-
-	void sys_a(res_x&, res_y&) { g_log.emplace_back("A"); }
-	void sys_b(const res_x&, res_b&) { g_log.emplace_back("B"); }
-	void sys_c(const res_y&, res_c&) { g_log.emplace_back("C"); }
-	void sys_d(const res_b&, const res_c&) { g_log.emplace_back("D"); }
-
-	void sys_w(res_w&) { g_log.emplace_back("W"); }
+	// Order comes from the phase and after/before declared at registration, never from argument types.
+	void sys_a() { g_log.emplace_back("A"); }
+	void sys_b() { g_log.emplace_back("B"); }
+	void sys_c() { g_log.emplace_back("C"); }
+	void sys_d() { g_log.emplace_back("D"); }
+	void sys_w() { g_log.emplace_back("W"); }
 
 	struct stateful_sys : ecs::system_interface {
 		explicit stateful_sys(std::string tag) : tag(std::move(tag)) {}
-		void run(res_w&) { g_log.push_back(tag); }
+		void run() { g_log.push_back(tag); }
 		std::string tag;
 	};
 
@@ -41,12 +38,12 @@ namespace {
 			, assembler(ds, rs)
 		{
 			g_log.clear();
-			sf.register_automatic_system<&sys_a>("a");
-			sf.register_automatic_system<&sys_b>("b");
-			sf.register_automatic_system<&sys_c>("c");
-			sf.register_automatic_system<&sys_d>("d");
-			sf.register_automatic_system<&sys_w>("w");
-			sf.register_automatic_system<&stateful_sys::run, stateful_sys>("stateful", std::string{ "S" });
+			sf.register_system<&sys_a>("a");
+			sf.register_system<&sys_b>("b", { .after = { "a" } });
+			sf.register_system<&sys_c>("c", { .after = { "a" } });
+			sf.register_system<&sys_d>("d", { .after = { "b", "c" } });
+			sf.register_system<&sys_w>("w");
+			sf.register_system<&stateful_sys::run, stateful_sys>("stateful", {}, std::string{ "S" });
 		}
 
 		scn::world_desc make_world_desc(const std::string& name, const std::vector<std::string>& systems)
@@ -73,6 +70,8 @@ namespace {
 
 	constexpr auto one_frame = std::chrono::duration<float>(0.001f); // below the fixed step
 
+	using names = std::vector<std::string>;
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(ScnLevelSchedulerTests, fixture)
@@ -81,7 +80,7 @@ BOOST_AUTO_TEST_CASE(Diamond_EachSystemRunsOnceAndInOrder)
 {
 	scn::level lvl(nullptr);
 	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "a", "b", "c", "d" }, sf);
+	lvl.add_world_systems(w, { "d", "c", "b", "a" }, sf);
 
 	lvl.update(one_frame);
 
@@ -96,7 +95,7 @@ BOOST_AUTO_TEST_CASE(Diamond_EachSystemRunsOnceAndInOrder)
 	BOOST_TEST(pos("C") < pos("D"));
 }
 
-BOOST_AUTO_TEST_CASE(Diamond_OrderIsStableAcrossFrames)
+BOOST_AUTO_TEST_CASE(Diamond_OrderIsStableAcrossFramesAndLevels)
 {
 	scn::level lvl(nullptr);
 	auto& w = lvl.create_world("w0", 0);
@@ -106,20 +105,40 @@ BOOST_AUTO_TEST_CASE(Diamond_OrderIsStableAcrossFrames)
 	auto first = g_log;
 	g_log.clear();
 	lvl.update(one_frame);
+	BOOST_TEST(g_log == first);
 
+	scn::level other(nullptr);
+	auto& ow = other.create_world("w0", 0);
+	other.add_world_systems(ow, { "a", "b", "c", "d" }, sf);
+	g_log.clear();
+	other.update(one_frame);
 	BOOST_TEST(g_log == first);
 }
 
-BOOST_AUTO_TEST_CASE(TopologicalOrder_TieBreaksByIndexAndRunsOnce)
+BOOST_AUTO_TEST_CASE(Plan_IsBuiltOnceNotEveryFrame)
 {
 	scn::level lvl(nullptr);
 	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "a", "b", "c", "d" }, sf);
+	lvl.add_world_systems(w, { "stateful", "a" }, sf);
 
-	const auto& graph = lvl.organizer().graph();
-	auto order = scn::level::topological_order(graph);
+	const ecs::system_plan* plan = lvl.plan_of(0);
+	BOOST_REQUIRE(plan != nullptr);
+	void* self_before = plan->find_phase(ecs::phase::update)->nodes[0].instance.self;
 
-	BOOST_TEST(order == (std::vector<size_t>{ 0, 1, 2, 3 }), boost::test_tools::per_element());
+	for (int i = 0; i < 5; ++i) lvl.update(one_frame);
+
+	BOOST_TEST((lvl.plan_of(0) == plan));
+	BOOST_TEST((plan->find_phase(ecs::phase::update)->nodes[0].instance.self == self_before));
+	BOOST_TEST(count("S") == 5u);
+}
+
+BOOST_AUTO_TEST_CASE(PlanOrder_FollowsConstraintsThenDescListOrder)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "d", "b", "c", "a" }, sf);
+
+	BOOST_TEST(lvl.plan_of(0)->names_in(ecs::phase::update) == (names{ "a", "b", "c", "d" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(ReloadWorld_KeepsOtherWorldsSystems)
@@ -135,6 +154,7 @@ BOOST_AUTO_TEST_CASE(ReloadWorld_KeepsOtherWorldsSystems)
 	BOOST_TEST(count("S") == 1u);
 
 	g_log.clear();
+	const ecs::system_plan* plan_a = lvl.plan_of(0);
 	auto desc_b = make_world_desc("wb", { "stateful" });
 	lvl.reload_world("wb", desc_b, sf, assembler);
 	lvl.update(one_frame);
@@ -142,6 +162,7 @@ BOOST_AUTO_TEST_CASE(ReloadWorld_KeepsOtherWorldsSystems)
 	BOOST_TEST(count("W") == 1u);
 	BOOST_TEST(count("S") == 1u);
 	BOOST_TEST(g_log.size() == 2u);
+	BOOST_TEST((lvl.plan_of(0) == plan_a)); // the other world's plan was not touched
 }
 
 BOOST_AUTO_TEST_CASE(LoadClearLoad_DoesNotDuplicateSystems)
@@ -191,7 +212,7 @@ BOOST_AUTO_TEST_CASE(MoveAndSwap_LevelStillRunsSystems)
 	moved.swap(other);
 
 	moved.update(one_frame);
-	BOOST_TEST(g_log == (std::vector<std::string>{ "S" }));
+	BOOST_TEST(g_log == (names{ "S" }));
 
 	g_log.clear();
 	other.update(one_frame);
@@ -206,10 +227,62 @@ BOOST_AUTO_TEST_CASE(RemoveWorld_DropsItsSystemsKeepsOthers)
 	auto& wb = lvl.create_world("wb", 1);
 	lvl.add_world_systems(wb, { "stateful" }, sf);
 
-	lvl.remove_world("wb", sf);
+	lvl.remove_world("wb");
 	lvl.update(one_frame);
 
-	BOOST_TEST(g_log == (std::vector<std::string>{ "W" }));
+	BOOST_TEST(g_log == (names{ "W" }));
+	BOOST_TEST(lvl.plan_of(1) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(UnknownSystemInWorld_IsDiagnosedAndTheRestStillRuns)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "a", "not_registered", "b" }, sf);
+
+	BOOST_TEST(lvl.plan_of(0)->has_diagnostic(ecs::diagnostic_kind::unknown_system));
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "A", "B" }));
+}
+
+BOOST_AUTO_TEST_CASE(Worlds_RunInIdOrderEveryPhase)
+{
+	scn::level lvl(nullptr);
+	auto& w1 = lvl.create_world("second", 1);
+	lvl.add_world_systems(w1, { "stateful" }, sf);
+	auto& w0 = lvl.create_world("first", 0);
+	lvl.add_world_systems(w0, { "w" }, sf);
+
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "W", "S" }));
+}
+
+// Bug #79: a graph edge appeared between same-named stateless systems of different worlds
+// because every world fed one shared organizer. Plans are per world, so the worlds cannot
+// influence each other.
+BOOST_AUTO_TEST_CASE(SameStatelessSystemInTwoWorlds_PlansAreIndependent)
+{
+	scn::level lvl(nullptr);
+	auto& w0 = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w0, { "a", "b", "c", "d" }, sf);
+	auto& w1 = lvl.create_world("w1", 1);
+	lvl.add_world_systems(w1, { "d", "a" }, sf); // same systems, different subset and order
+
+	BOOST_TEST(lvl.plan_of(0)->names_in(ecs::phase::update) == (names{ "a", "b", "c", "d" }), boost::test_tools::per_element());
+	BOOST_TEST(lvl.plan_of(1)->names_in(ecs::phase::update) == (names{ "d", "a" }), boost::test_tools::per_element());
+	BOOST_TEST(lvl.plan_of(0)->diagnostics.empty());
+	BOOST_TEST(lvl.plan_of(1)->diagnostics.empty());
+
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "A", "B", "C", "D", "D", "A" }), boost::test_tools::per_element());
+
+	// changing one world's list leaves the other's plan alone
+	const ecs::system_plan* before = lvl.plan_of(0);
+	lvl.add_world_systems(w1, { "a" }, sf);
+	BOOST_TEST((lvl.plan_of(0) == before));
+	g_log.clear();
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "A", "B", "C", "D", "A" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(AcquireFreeWorldId_ReusesGapInsteadOfCount)
@@ -226,6 +299,38 @@ BOOST_AUTO_TEST_CASE(AcquireFreeWorldId_ReusesGapInsteadOfCount)
 	gap.create_world("c", 2);
 	BOOST_TEST(gap.get_world_count() == 2u);
 	BOOST_TEST(gap.acquire_free_world_id() == 1u);
+}
+
+// ARCHITECTURE_REVIEW 9.5: the system list of editor_level.desc, spread over phases by the
+// production registrations. This is the table from the design document.
+BOOST_AUTO_TEST_CASE(EditorLevelDesc_IsLaidOutAsTheDesignTable)
+{
+	ecs::system_factory prod;
+	scn::init_transform_system(prod);
+	scn::init_animation_system(prod);
+	scn::init_mouse_controller_system(prod);
+	inp::register_ecs_input_system(prod, std::make_shared<inp::ecs_input_manager>());
+
+	const std::vector<std::string> editor_level = {
+		"inp::update_input_state", "scn::animation_controller_update", "scn::animation_system_node",
+		"scn::depth_system", "scn::transform_system", "scn::animation_system_matrix",
+		"scn::update_camera_matrix_system" };
+
+	auto check = [&](const std::vector<std::string>& list) {
+		auto plan = ecs::build_system_plan(prod.registry(), list, { .validate_access = false });
+		BOOST_TEST(plan.diagnostics.empty());
+		BOOST_TEST(plan.names_in(ecs::phase::input) == (names{ "inp::update_input_state" }), boost::test_tools::per_element());
+		BOOST_TEST(plan.names_in(ecs::phase::update) == (names{ "scn::animation_controller_update", "scn::animation_system_node" }), boost::test_tools::per_element());
+		BOOST_TEST(plan.names_in(ecs::phase::transform) == (names{ "scn::depth_system", "scn::transform_system" }), boost::test_tools::per_element());
+		BOOST_TEST(plan.names_in(ecs::phase::late_update) == (names{ "scn::animation_system_matrix", "scn::update_camera_matrix_system" }), boost::test_tools::per_element());
+		BOOST_TEST(plan.names_in(ecs::phase::pre_update).empty());
+		BOOST_TEST(plan.names_in(ecs::phase::fixed_update).empty());
+		BOOST_TEST(plan.names_in(ecs::phase::post_update).empty());
+	};
+
+	check(editor_level);
+	// the order no longer depends on how the desc happens to list the systems
+	check(std::vector<std::string>(editor_level.rbegin(), editor_level.rend()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

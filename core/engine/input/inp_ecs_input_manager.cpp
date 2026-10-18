@@ -1,6 +1,13 @@
 #include "inp_ecs_input_manager.h"
 #include "inp_keyboard_event.hpp"
 #include "inp_events.hpp"
+#include "ecs_system.h"
+
+void inp::register_ecs_input_system(ecs::system_factory& factory, std::shared_ptr<ecs_input_manager> manager)
+{
+	factory.register_system<&ecs_input_manager::update_input_state_system>("inp::update_input_state",
+		{ .phase = ecs::phase::input, .run_in_edit = true }, std::move(manager));
+}
 
 bool inp::ecs_input_manager::on_handle_event(wnd::handle win, const inp::input_event& evt)
 {

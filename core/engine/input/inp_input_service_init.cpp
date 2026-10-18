@@ -17,7 +17,7 @@ void engine::input::input_init(ds::app_data_storage& data)
 	input_service.push_input_layer(input_service.get_focused_window(), inp::input_layer{ ecs_input });
 
 	auto& sfactory = data.require<ecs::system_factory>();
-	sfactory.register_automatic_system<&inp::ecs_input_manager::update_input_state_system>("inp::update_input_state", ecs_input);
+	inp::register_ecs_input_system(sfactory, ecs_input);
 }
 
 void engine::input::input_term(ds::app_data_storage& data)

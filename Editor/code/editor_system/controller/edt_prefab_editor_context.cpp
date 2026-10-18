@@ -94,8 +94,6 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 	entt::entity prefab_root = world.state().create();
 	scn::assemble_prefab(*m_state.assembler, world.state(), prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
 
-	lvl.mark_systems_graphs_dirty();
-
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
 	m_open = true;
@@ -112,8 +110,7 @@ void edt::prefab_editor_context::close()
 	if (lvl_mgr) {
 		scn::level& lvl = lvl_mgr->get_level();
 		if (lvl.has_world(WORLD_NAME)) {
-			// Rebuilds the organizer from the remaining (scene) worlds.
-			lvl.remove_world(WORLD_NAME, *m_state.sfactory);
+			lvl.remove_world(WORLD_NAME);
 		}
 	}
 

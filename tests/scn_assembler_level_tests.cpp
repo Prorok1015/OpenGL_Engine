@@ -423,8 +423,8 @@ BOOST_FIXTURE_TEST_CASE(Level_LoadFromDescBuildsOneRegistryPerWorldInOrder, leve
 
 	auto& r0 = lvl.get_world("w0").state();
 	auto& r1 = lvl.get_world("w1").state();
-	BOOST_TEST(r0.ctx().get<ecs::world_salt>().value == 0u);
-	BOOST_TEST(r1.ctx().get<ecs::world_salt>().value == 1u);
+	BOOST_TEST(lvl.get_world("w0").get_id() == 0u);
+	BOOST_TEST(lvl.get_world("w1").get_id() == 1u);
 
 	// world 0: root has the anchor and a Sun child; world 1 is independent
 	auto root0 = find_named(r0, "w0");
@@ -479,7 +479,7 @@ BOOST_FIXTURE_TEST_CASE(Level_RemoveWorldFreesItsIdAndClearEmptiesEverything, le
 	scn::level lvl(manager);
 	lvl.load_from_desc(*lv_desc, sf, *assembler);
 
-	lvl.remove_world("w0", sf);
+	lvl.remove_world("w0");
 	BOOST_TEST(lvl.get_world_count() == 1u);
 	BOOST_TEST(!lvl.has_world("w0"));
 	BOOST_TEST(lvl.acquire_free_world_id() == 0u); // gap reused

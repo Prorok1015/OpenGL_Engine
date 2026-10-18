@@ -60,6 +60,8 @@ void clear_input_state_system(inp::input_state& state)
 
 void scn::init_mouse_controller_system(ecs::system_factory& factory)
 {
-    factory.register_automatic_system<update_camera_matrix_system>("scn::update_camera_matrix_system");
-    factory.register_automatic_system<clear_input_state_system>("inp::clear_input_state");
+    factory.register_system<update_camera_matrix_system>("scn::update_camera_matrix_system",
+        { .phase = ecs::phase::late_update, .after = { "scn::animation_system_matrix" }, .run_in_edit = true });
+    factory.register_system<clear_input_state_system>("inp::clear_input_state",
+        { .phase = ecs::phase::late_update, .after = { "scn::update_camera_matrix_system" }, .run_in_edit = true });
 }

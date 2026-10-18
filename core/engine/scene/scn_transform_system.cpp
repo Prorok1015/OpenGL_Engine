@@ -99,6 +99,8 @@ namespace {
 
 void scn::init_transform_system(ecs::system_factory& factory)
 {
-    factory.register_automatic_system<update_depth_system>("scn::depth_system");
-    factory.register_automatic_system<update_transform_system>("scn::transform_system");
+    factory.register_system<update_depth_system>("scn::depth_system",
+        { .phase = ecs::phase::transform, .run_in_edit = true });
+    factory.register_system<update_transform_system>("scn::transform_system",
+        { .phase = ecs::phase::transform, .after = { "scn::depth_system" }, .run_in_edit = true });
 }
