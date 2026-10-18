@@ -55,6 +55,7 @@ function(snk_apply_target_defaults)
 			get_target_property(_type ${_t} TYPE)
 			if(_type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
 				snk_target_defaults(${_t})
+				snk_pch_apply(${_t})
 				# Everything compiled under core/ ends up in snk_engine: it exports (SNK_API).
 				if(SNK_ENGINE_SHARED)
 					get_target_property(_src ${_t} SOURCE_DIR)

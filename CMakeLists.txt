@@ -70,6 +70,8 @@ include(Sanitizers)
 include(CompilerWarnings)
 # snk_target_defaults(): hidden visibility for project targets (applied at the end of this file).
 include(SnkTarget)
+# snk_pch_*(): shared precompiled header (SNK_PCH), applied by snk_apply_target_defaults().
+include(SnkPch)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -97,4 +99,5 @@ target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_
 
 add_test(NAME unit_tests COMMAND unit_tests)
 
+snk_pch_create_owner()
 snk_apply_target_defaults()
