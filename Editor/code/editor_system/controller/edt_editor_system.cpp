@@ -30,7 +30,7 @@
 #include "level/scn_level.h"
 #include "level/scn_world.h"
 #include "level/scn_prefab_desc.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "resources/res_resource_text.h"
 #include <cfg_api.h>
 #include <imgui.h>

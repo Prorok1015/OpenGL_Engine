@@ -2,7 +2,7 @@
 #include "common.h"
 #include "ecs_system_interface.hpp"
 #include "inp_input_manager_base.h"
-#include "inp_input_event.hpp"
+#include <snk/core_input/inp_input_event.hpp>
 #include "inp_events.hpp"
 #include "snk_api.h"
 #include <memory>

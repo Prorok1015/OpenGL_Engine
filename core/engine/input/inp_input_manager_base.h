@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
-#include "inp_input_event.hpp"
-#include "wnd_window_event_listener_interface.h"
+#include <snk/core_input/inp_input_event.hpp>
+#include <snk/window/wnd_window_event_listener_interface.h>
 
 namespace inp
 {

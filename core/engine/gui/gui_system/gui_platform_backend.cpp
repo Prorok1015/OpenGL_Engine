@@ -1,6 +1,6 @@
 #include "gui_platform_backend.h"
-#include "inp_keyboard_event.hpp"
-#include "wnd_coordinates.h"
+#include <snk/core_input/inp_keyboard_event.hpp>
+#include <snk/window/wnd_coordinates.h>
 #include <algorithm>
 #include <cfloat>
 #include <imgui.h>

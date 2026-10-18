@@ -1,5 +1,5 @@
 #pragma once
-#include "inp_input_event.hpp"
+#include <snk/core_input/inp_input_event.hpp>
 
 namespace wnd
 {

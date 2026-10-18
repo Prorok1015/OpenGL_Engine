@@ -1,5 +1,5 @@
-#include "application.h"
-#include "app_loop_service_interface.h"
+#include <snk/application/application.h>
+#include <snk/application/app_loop_service_interface.h>
 #include <exception>
 #include "engine_log.h"
 

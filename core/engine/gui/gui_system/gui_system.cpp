@@ -3,7 +3,7 @@
 #include <imgui.h>
 #include "engine_assert.h"
 #include "rnd_render_system.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "eng_profiler.h"
 
 gui::gui_system::gui_system(gui::imgui_backend_interface* backend_, gui::platform_backend* platform_)

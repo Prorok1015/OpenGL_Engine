@@ -2,7 +2,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include "app_frame_stage.h"
+#include <snk/application/app_frame_stage.h>
 
 namespace {
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "inp_keyboard_event.hpp"
+#include <snk/core_input/inp_keyboard_event.hpp>
 #include <vector>
 
 namespace inp

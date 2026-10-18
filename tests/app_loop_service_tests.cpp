@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <string>
-#include "app_frame_stage.h"
-#include "app_loop_service.h"
+#include <snk/application/app_frame_stage.h>
+#include <snk/application/app_loop_service.h>
 
 BOOST_AUTO_TEST_SUITE(AppLoopServiceTests)
 

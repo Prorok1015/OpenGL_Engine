@@ -1,4 +1,4 @@
-#include "app_frame_stage.h"
+#include <snk/application/app_frame_stage.h>
 #include <algorithm>
 #include <exception>
 #include "engine_log.h"

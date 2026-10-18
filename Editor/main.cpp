@@ -1,6 +1,6 @@
-#include <application.h>
+#include <snk/application/application.h>
 #include <cfg_api.h>
-#include <app_module_loader.hpp>
+#include <snk/application/app_module_loader.hpp>
 #include <ds/ds_store.hpp>
 #include <core_module.h>
 #include <engine_module.h>

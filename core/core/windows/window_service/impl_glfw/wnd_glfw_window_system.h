@@ -1,5 +1,5 @@
 #pragma once
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "wnd_glfw_window.h"
 #include <unordered_map>
 

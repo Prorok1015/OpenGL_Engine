@@ -1,5 +1,5 @@
 #include "inp_ecs_input_manager.h"
-#include "inp_keyboard_event.hpp"
+#include <snk/core_input/inp_keyboard_event.hpp>
 #include "inp_events.hpp"
 #include "ecs_system.h"
 

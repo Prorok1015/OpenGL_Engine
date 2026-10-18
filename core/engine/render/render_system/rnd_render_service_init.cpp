@@ -1,6 +1,6 @@
 #include "rnd_render_service_init.h"
 #include "rnd_render_system.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "rnd_gl_swapchain.h"
 #include "engine_log.h"
 #include <stdexcept>
