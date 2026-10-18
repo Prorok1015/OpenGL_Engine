@@ -203,7 +203,8 @@ void scn::prefab_desc::serialize(json::object& data) const
 		return out;
 	};
 
-	auto serialize_node = [&] (auto& self, const prefab_node& nd, bool is_root) -> json::object {
+	// Not a generic `auto& self` lambda: instantiating that one crashes Clang 18 (frontend segfault).
+	std::function<json::object(const prefab_node&, bool)> serialize_node = [&] (const prefab_node& nd, bool is_root) -> json::object {
 		json::object node_obj;
 		if (nd.node_id != desc::invalid_node_id)
 			node_obj["__id"] = desc::format_node_id(nd.node_id);
@@ -239,7 +240,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 			json::array children_arr;
 			children_arr.reserve(nd.children.size());
 			for (const auto& child_node : nd.children) {
-				children_arr.push_back(self(self, child_node, false));
+				children_arr.push_back(serialize_node(child_node, false));
 			}
 			node_obj["children"] = std::move(children_arr);
 		}
@@ -247,7 +248,7 @@ void scn::prefab_desc::serialize(json::object& data) const
 		return node_obj;
 	};
 
-	data = serialize_node(serialize_node, root, true);
+	data = serialize_node(root, true);
 }
 
 namespace {
