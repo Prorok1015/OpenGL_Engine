@@ -3,6 +3,7 @@
 #include <snk/window/wnd_window_system.h>
 #include "rnd_gl_swapchain.h"
 #include "rnd_null_swapchain.h"
+#include "rnd_validation_driver.h"
 #include <snk/config/cfg_api.h>
 #include <snk/common/logger/engine_log.h>
 #include <string>
@@ -23,6 +24,40 @@ namespace {
 	// "gl" (default) or "null". A window without a GL surface selects null regardless.
 	// Unknown values warn and fall through to the surface check.
 	CFG_VAR_DEF_STRING(cfg_render_backend, "render/backend", "gl");
+
+	// Wraps the backend in the validation decorator (rule violations go to the "rnd.validate" log category).
+	// Over GL only in builds without NDEBUG; over null in every build.
+	CFG_VAR_DEF_BOOL(cfg_render_validate, "render/validate", false);
+	// Per-frame creation budgets of the validation; 0 leaves a budget unlimited.
+	CFG_VAR_DEF_INT(cfg_validate_max_frame_buffers, "render/validate_max_frame_buffers", 0);
+	CFG_VAR_DEF_INT(cfg_validate_max_programs, "render/validate_max_programs", 0);
+	CFG_VAR_DEF_INT(cfg_validate_max_textures, "render/validate_max_textures", 0);
+
+	std::size_t budget_of(int configured)
+	{
+		return configured > 0 ? static_cast<std::size_t>(configured) : rnd::driver::validation::limits::unlimited;
+	}
+
+	rnd::driver::validation::limits validation_budget()
+	{
+		return { budget_of(*cfg_validate_max_frame_buffers), budget_of(*cfg_validate_max_programs), budget_of(*cfg_validate_max_textures) };
+	}
+
+	bool validation_wanted(bool null_backend)
+	{
+		if (!*cfg_render_validate) {
+			return false;
+		}
+#ifdef NDEBUG
+		if (!null_backend) {
+			egLOG_WARN("render", "render/validate over the GL backend needs a build without NDEBUG; ignored");
+			return false;
+		}
+#else
+		(void)null_backend;
+#endif
+		return true;
+	}
 }
 
 void engine::render::register_render_descs(desc::desc_system& desc_sys)
@@ -54,12 +89,24 @@ void engine::render::render_init(ds::app_data_storage& data)
 	}
 	// Destroyed in render_term after the render system, before the window (core shutdown).
 	rnd::driver::swapchain_interface* swapchain_ptr = nullptr;
-	if (backend == "null" || !surface) {
+	const bool use_null = backend == "null" || !surface;
+	if (use_null) {
 		if (backend == "null") {
 			egLOG_INFO("render", "Render backend: null (render/backend = null)");
 		} else {
 			egLOG_WARN("render", "render/backend is gl but the window has no GL surface; falling back to the null backend");
 		}
+	}
+	if (validation_wanted(use_null)) {
+		egLOG_INFO("render", "Render validation is on (render/validate)");
+		std::unique_ptr<rnd::driver::swapchain_interface> inner;
+		if (use_null) {
+			inner = std::make_unique<rnd::driver::null::swapchain>();
+		} else {
+			inner = std::make_unique<rnd::driver::gl::swapchain>(*surface);
+		}
+		swapchain_ptr = &data.construct<rnd::driver::swapchain_interface, rnd::driver::validation::swapchain>(std::move(inner), validation_budget());
+	} else if (use_null) {
 		swapchain_ptr = &data.construct<rnd::driver::swapchain_interface, rnd::driver::null::swapchain>();
 	} else {
 		swapchain_ptr = &data.construct<rnd::driver::swapchain_interface, rnd::driver::gl::swapchain>(*surface);

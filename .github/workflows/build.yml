@@ -61,6 +61,11 @@ jobs:
         with:
           submodules: recursive
 
+      # RHI R0: GL stays inside the GL driver plus the documented allow-list; runs first, it needs no build.
+      - name: Check GL is used only inside the GL driver
+        if: matrix.preset == 'ci-linux-gcc-debug'
+        run: tools/ci/check_no_gl_outside_drivers.sh
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
