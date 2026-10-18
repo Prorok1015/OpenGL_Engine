@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/common.h>
 #include <snk/resource/res_tag.h>
 #include <string>
 #include <vector>
