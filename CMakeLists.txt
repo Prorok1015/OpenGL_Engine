@@ -107,6 +107,13 @@ target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/res")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
 
+if(WIN32 AND SNK_ENGINE_SHARED)
+	# Windows has no rpath: snk_engine.dll must sit next to the executable.
+	add_custom_command(TARGET unit_tests POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:unit_tests> $<TARGET_FILE_DIR:unit_tests>
+		COMMAND_EXPAND_LISTS)
+endif()
+
 add_test(NAME unit_tests COMMAND unit_tests)
 
 snk_pch_create_owner()

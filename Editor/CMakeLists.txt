@@ -15,4 +15,10 @@ target_link_libraries(${PROJECT_NAME} PRIVATE snk::editor_system PRIVATE snk::en
 # engine_module.h) which live at the aggregator roots — exposed only to this bootstrap exe so the
 # api targets stay component-scoped (EPIC-49 US-49-1).
 target_include_directories(${PROJECT_NAME} PRIVATE ${ENGINE_CORE_PATH}/core ${ENGINE_CORE_PATH}/engine)
+if(WIN32 AND SNK_ENGINE_SHARED)
+	# Windows has no rpath: snk_engine.dll must sit next to the executable.
+	add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:${PROJECT_NAME}> $<TARGET_FILE_DIR:${PROJECT_NAME}>
+		COMMAND_EXPAND_LISTS)
+endif()
 
