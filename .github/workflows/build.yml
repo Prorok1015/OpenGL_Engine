@@ -407,6 +407,77 @@ jobs:
           path: headless_out
           if-no-files-found: warn
 
+  # Report-only (RHI.md section 4, owner decision Q5): hosted runners are too noisy to gate on timings.
+  # Runs the extract benchmark (tests/app_engine_null_backend_bench.cpp) on the null backend in an
+  # optimized build, prints the table into the job summary and uploads the JSON. continue-on-error keeps
+  # a failure here from failing the workflow; the job is not a required check.
+  extract-bench:
+    name: Extract benchmark (Linux, report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      BENCH_DIR: ${{ github.workspace }}/bench_out
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev jq
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-gcc-release
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Release-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: cmake --preset ci-linux-gcc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build unit_tests
+        run: cmake --build build/ci-linux-gcc-release --target unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Run extract benchmark
+        working-directory: build/ci-linux-gcc-release
+        run: |
+          set -o pipefail
+          mkdir -p "$BENCH_DIR"
+          SNK_BENCH_JSON="$BENCH_DIR/bench_extract.json" ./unit_tests \
+            --run_test=AppEngineNullBackendBench/ExtractRenderDataOnHundredMeshes --log_level=message \
+            2>&1 | tee "$BENCH_DIR/bench_extract.log"
+
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f "$BENCH_DIR/bench_extract.json" ]; then
+            tools/ci/bench_extract_summary.sh "$BENCH_DIR/bench_extract.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no bench_extract.json: the benchmark did not finish" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extract-bench
+          path: bench_out
+          if-no-files-found: warn
+
   # Installs the SDK (cmake --install, package `snake_sdk`) and builds tests/package_consumer
   # against it with find_package: proves the export set is complete and self-contained (third-party
   # libraries are bundled). Static and shared (SNK_ENGINE_SHARED) engine.

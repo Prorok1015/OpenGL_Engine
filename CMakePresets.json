@@ -81,6 +81,13 @@
       "displayName": "CI Linux GCC Debug"
     },
     {
+      "name": "ci-linux-gcc-release",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux GCC Release (benchmarks)",
+      "description": "Optimized build with the internal profiler: the extract benchmark (unit_tests AppEngineNullBackendBench)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
       "name": "ci-linux-clang-debug",
       "inherits": "ci-linux",
       "displayName": "CI Linux Clang Debug (PCH off)",
