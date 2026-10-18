@@ -12,7 +12,25 @@
 #include <shared_mutex>
 #include <snk/common/snk_api.h>
 
+namespace res {
+	struct cache_key
+	{
+		res::tag tag;
+		ds::type_id type;
+
+		bool operator==(const cache_key&) const = default;
+	};
+}
+
 namespace std {
+	template<> struct hash<res::cache_key> {
+		std::size_t operator()(const res::cache_key& k) const {
+			const std::size_t h1 = std::hash<res::tag>{}(k.tag);
+			const std::size_t h2 = std::hash<ds::type_id>{}(k.type);
+			return h1 ^ (h2 + static_cast<std::size_t>(0x9e3779b97f4a7c15ull) + (h1 << 6) + (h1 >> 2));
+		}
+	};
+
 	template<> struct hash<std::pair<ds::type_id, std::string>> {
 		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
 			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
@@ -93,7 +111,7 @@ namespace res
 			std::unordered_map<void*, reload_callback> callbacks;
 			{
 				std::unique_lock lock(m_cache_mutex);
-				m_cache.erase(tag);
+				std::erase_if(m_cache, [&tag](const auto& entry) { return entry.first.tag == tag; });
 				if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
 					callbacks = it->second;
 				}
@@ -187,7 +205,7 @@ namespace res
 			res::res_handle<T> res = require<T>(tag);
 			res.then([this, res, tag](auto&) {
 				if (res.has_error()) return;
-				push_resource_to_strong_cache(tag, res.get_control_block());
+				push_resource_to_strong_cache(cache_key{ tag, ds::type_id::make<T>() }, res.get_control_block());
 			});
 		}
 
@@ -195,8 +213,9 @@ namespace res
 		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
 			auto block = std::make_shared<resource_handle>();
 			block->set_ready(std::make_shared<RESOURCE>(std::forward<RESOURCE>(resource)));
-			push_resource_to_strong_cache(tag, block);
-			push_resource_to_cache(tag, block);
+			const cache_key key{ tag, ds::type_id::make<RESOURCE>() };
+			push_resource_to_strong_cache(key, block);
+			push_resource_to_cache(key, block);
 
 			if (!exists(tag)) {
 				post_adapter_work([this, tag, block]() {
@@ -216,7 +235,7 @@ namespace res
 
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
-			m_pinned_resources.erase(tag);
+			std::erase_if(m_pinned_resources, [&tag](const auto& entry) { return entry.first.tag == tag; });
 		}
 
 		void register_alias(const res::tag& original, const res::tag& alias);
@@ -232,9 +251,9 @@ namespace res
 	private:
 		void post_adapter_work(std::function<void()> cb);
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
-		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const tag& tag) {
+		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key) {
 			std::unique_lock lock(m_cache_mutex);
-			auto& slot = m_cache[tag];
+			auto& slot = m_cache[key];
 			if (auto sp = slot.lock()) {
 				return { std::move(sp), false };
 			}
@@ -243,15 +262,15 @@ namespace res
 			return { std::move(created), true };
 		}
 
-		void push_resource_to_cache(const tag& tag, std::shared_ptr<resource_handle> resource) {
+		void push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource) {
 			std::unique_lock lock(m_cache_mutex);
-			m_cache[tag] = resource;
+			m_cache[key] = resource;
 		}
 
-		void push_resource_to_strong_cache(const res::tag& tag, std::shared_ptr<resource_handle> resource)
+		void push_resource_to_strong_cache(const cache_key& key, std::shared_ptr<resource_handle> resource)
 		{
 			std::unique_lock lock(m_pinning_mutex);
-			m_pinned_resources[tag] = resource;
+			m_pinned_resources[key] = resource;
 		}
 
 		template<typename T, bool is_sync>
@@ -322,7 +341,7 @@ namespace res
 		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
 			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
 
-			auto [block, is_new] = find_or_insert_cache(tag);
+			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, ds::type_id::make<RESOURCE>() });
 			if (is_new) {
 				start_loading_t<RESOURCE, is_sync>(tag, block);
 			}
@@ -372,8 +391,8 @@ namespace res
 		std::unordered_map<res::tag, res::tag> m_aliases;
 
 		std::unordered_map<protocol, resolver> m_resolvers;
-		std::unordered_map<res::tag, cache_entry> m_cache;
-		std::unordered_map<res::tag, std::shared_ptr<resource_handle>> m_pinned_resources;
+		std::unordered_map<cache_key, cache_entry> m_cache;
+		std::unordered_map<cache_key, std::shared_ptr<resource_handle>> m_pinned_resources;
 
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
 		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;

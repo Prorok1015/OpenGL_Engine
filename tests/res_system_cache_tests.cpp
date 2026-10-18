@@ -2,8 +2,10 @@
 #include "test_scene_env.hpp"
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/resource/adapters/res_adapter_worker.h>
+#include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <thread>
 #include <string>
@@ -14,6 +16,30 @@
 
 namespace {
 
+// A second type over the same raw bytes as text_resource, so one tag can be requested as two types.
+struct shout_resource : res::text_resource
+{
+	shout_resource(const res::tag& tag, const std::vector<std::byte>& bytes) : res::text_resource(tag, bytes)
+	{
+		for (auto& c : content) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+	}
+};
+
+struct shout_adapter : core::res::adapter_interface
+{
+	static inline auto INFO = res::adapter_info::make<shout_resource>();
+
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
+	{
+		return std::make_shared<shout_resource>(tag, raw);
+	}
+
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>& resource) const override
+	{
+		return test_util::to_bytes(std::static_pointer_cast<shout_resource>(resource)->str());
+	}
+};
+
 using test_util::inline_worker;
 using test_util::to_bytes;
 
@@ -21,13 +47,22 @@ std::vector<std::byte> bytes_of(std::string_view s) { return to_bytes(s); }
 
 struct sys_fixture : test_util::ram_res_env
 {
-	sys_fixture() : sys(rs.get()) {}
+	sys_fixture() : sys(rs.get())
+	{
+		rs->registrate_adapter<shout_adapter>(shout_adapter::INFO);
+	}
 
 	res::tag put(std::string_view name, std::string_view content)
 	{
 		auto tag = tag_of(name);
 		BOOST_REQUIRE(rs->store(tag, bytes_of(content)));
 		return tag;
+	}
+
+	std::string shout(const res::tag& tag)
+	{
+		auto ptr = rs->require_sync<shout_resource>(tag).get_sync();
+		return ptr ? ptr->str() : std::string("<null>");
 	}
 
 	std::string text(const res::tag& tag)
@@ -267,6 +302,64 @@ BOOST_AUTO_TEST_CASE(AsyncWorker_LoadsOnBackgroundThreadAndNotifiesThen)
 
 	// replace the worker with the inline one so the fixture can tear down quietly
 	sys->set_adapter_worker(std::make_unique<inline_worker>());
+}
+
+BOOST_AUTO_TEST_CASE(CacheKey_SameTagTwoTypesAreCachedSeparately)
+{
+	auto tag = put("typed.txt", "mixed Case");
+	auto as_text = sys->require_sync<res::text_resource>(tag);
+	auto as_shout = sys->require_sync<shout_resource>(tag);
+
+	BOOST_TEST(as_text.get_control_block() != as_shout.get_control_block());
+	BOOST_TEST(as_text.get()->str() == "mixed Case");
+	BOOST_TEST(as_shout.get()->str() == "MIXED CASE");
+
+	auto text_again = sys->require<res::text_resource>(tag);
+	auto shout_again = sys->require<shout_resource>(tag);
+	BOOST_TEST(text_again.get_control_block() == as_text.get_control_block());
+	BOOST_TEST(shout_again.get_control_block() == as_shout.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(CacheKey_ReverseRequestOrderStillYieldsEachType)
+{
+	auto tag = put("typed_rev.txt", "abc");
+	BOOST_TEST(shout(tag) == "ABC");
+	BOOST_TEST(text(tag) == "abc");
+}
+
+BOOST_AUTO_TEST_CASE(CacheKey_PinnedResourceIsPerType)
+{
+	auto tag = tag_of("pinned_typed.txt");
+	sys->pin_resource(tag, res::text_resource{ tag, bytes_of("pinned") });
+
+	auto pinned = sys->require<res::text_resource>(tag);
+	BOOST_REQUIRE(pinned.is_ready());
+	BOOST_TEST(pinned.get()->str() == "pinned");
+
+	// the pin covers text_resource only: another type under the same tag loads on its own
+	put("pinned_typed.txt", "disk");
+	BOOST_TEST(shout(tag) == "DISK");
+	BOOST_TEST(text(tag) == "pinned");
+}
+
+BOOST_AUTO_TEST_CASE(CacheKey_UnpinReleasesEveryTypeOfTag)
+{
+	auto tag = put("unpin_typed.txt", "v1");
+	sys->warmup<res::text_resource>(tag);
+	sys->warmup<shout_resource>(tag);
+	{
+		auto p1 = sys->require_sync<res::text_resource>(tag);
+		auto p2 = sys->require_sync<shout_resource>(tag);
+		BOOST_REQUIRE(p1.get_sync());
+		BOOST_REQUIRE(p2.get_sync());
+	}
+	put("unpin_typed.txt", "v2");
+	BOOST_TEST(text(tag) == "v1");
+	BOOST_TEST(shout(tag) == "V1");
+
+	sys->unpin_resource(tag);
+	BOOST_TEST(text(tag) == "v2");
+	BOOST_TEST(shout(tag) == "V2");
 }
 
 BOOST_AUTO_TEST_CASE(RequireMissing_YieldsErrorHandleThatIsNotReady)
