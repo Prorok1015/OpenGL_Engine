@@ -452,7 +452,7 @@ jobs:
       - name: Configure consumer
         run: |
           cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}"
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
 
       - name: Build consumer
         run: cmake --build build/consumer
@@ -526,7 +526,7 @@ jobs:
       - name: Configure consumer
         run: |
           cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}"
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
 
       - name: Build consumer
         run: cmake --build build/consumer

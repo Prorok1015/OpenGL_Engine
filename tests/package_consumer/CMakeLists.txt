@@ -17,6 +17,34 @@ message(STATUS "snake_sdk ${snake_sdk_VERSION} (shared engine: ${snake_sdk_ENGIN
 add_executable(package_consumer main.cpp)
 target_link_libraries(package_consumer PRIVATE snk::engine snk::engine_api)
 
+# Header self-containment (#109): one translation unit per installed header of the components that
+# already live under include/snk/<name>/, compiled against the installed SDK. Off by default; the
+# SDK CI jobs turn it on. Extend SNK_CONSUMER_HEADER_COMPONENTS as more components migrate.
+option(SNK_CONSUMER_HEADER_CHECK "Compile one TU per installed public header of the migrated components" OFF)
+set(SNK_CONSUMER_HEADER_COMPONENTS application core_input window)
+if(SNK_CONSUMER_HEADER_CHECK)
+	get_filename_component(_sdk_prefix "${snake_sdk_DIR}/../../.." ABSOLUTE)
+	set(_header_tus "")
+	set(_idx 0)
+	foreach(_comp IN LISTS SNK_CONSUMER_HEADER_COMPONENTS)
+		file(GLOB_RECURSE _headers RELATIVE "${_sdk_prefix}/include" "${_sdk_prefix}/include/snk/${_comp}/*")
+		list(SORT _headers)
+		if(NOT _headers)
+			message(FATAL_ERROR "no installed headers under ${_sdk_prefix}/include/snk/${_comp}")
+		endif()
+		foreach(_hdr IN LISTS _headers)
+			string(MAKE_C_IDENTIFIER "${_hdr}" _id)
+			set(_tu "${CMAKE_CURRENT_BINARY_DIR}/header_tus/${_idx}_${_id}.cpp")
+			file(GENERATE OUTPUT "${_tu}" CONTENT "#include <${_hdr}>\n")
+			list(APPEND _header_tus "${_tu}")
+			math(EXPR _idx "${_idx} + 1")
+		endforeach()
+	endforeach()
+	message(STATUS "header self-containment: ${_idx} headers")
+	add_library(package_consumer_headers OBJECT ${_header_tus})
+	target_link_libraries(package_consumer_headers PRIVATE snk::engine snk::engine_api)
+endif()
+
 if(WIN32 AND snake_sdk_ENGINE_SHARED)
 	# Windows has no rpath: snk_engine.dll (installed to <prefix>/bin) must sit next to the executable.
 	add_custom_command(TARGET package_consumer POST_BUILD
