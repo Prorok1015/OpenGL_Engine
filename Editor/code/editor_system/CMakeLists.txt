@@ -20,4 +20,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 # (EPIC-49 US-49-1/US-49-3). The umbrella no longer leaks all component headers.
 # assimp: the editor calls it directly; in the shared build it lives in snk_engine.
 snk_usage_only(_edt_assimp assimp)
+if(SNK_ENGINE_SHARED AND MSVC)
+	# A DLL exports nothing it was not told to: assimp and Boost.JSON (stateless) are linked into
+	# the editor as their own static copy instead. imgui is stateful and is exported (IMGUI_API).
+	set(_edt_assimp assimp Boost::json)
+endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp})
