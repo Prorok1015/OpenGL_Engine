@@ -28,6 +28,12 @@ jobs:
         with:
           arch: x64
 
+      # Same preset (and cache key) as the Windows MSVC Release job in build.yml.
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-windows-msvc-release
+
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
         with:
@@ -36,14 +42,10 @@ jobs:
 
       - name: Configure
         shell: bash
-        run: >
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DENGINE_PROFILE_MODE=NONE
-          "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ci-windows-msvc-release "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor
-        run: cmake --build build --target editor --parallel
+        run: cmake --build build/ci-windows-msvc-release --target editor --parallel
 
       - name: Package
         shell: bash
@@ -57,9 +59,10 @@ jobs:
           # Engine base resources (core/res) ship as res_core/ and the packaged
           # cfg's base_path is rewritten from the in-repo ../../core/res/.
           mkdir -p "${PKG}/bin" "${PKG}/config"
-          cp build/Editor/editor.exe "${PKG}/bin/" || cp "$(find build -name editor.exe | head -n1)" "${PKG}/bin/"
+          BUILD_DIR=build/ci-windows-msvc-release
+          cp "${BUILD_DIR}/Editor/editor.exe" "${PKG}/bin/" || cp "$(find "${BUILD_DIR}" -name editor.exe | head -n1)" "${PKG}/bin/"
           # Runtime DLLs (libs are static by default, so normally none).
-          find build/Editor -maxdepth 1 -name '*.dll' -exec cp {} "${PKG}/bin/" \;
+          find "${BUILD_DIR}/Editor" -maxdepth 1 -name '*.dll' -exec cp {} "${PKG}/bin/" \;
           sed 's#base_path: ../../core/res/#base_path: ../res_core/#' Editor/config/editor.cfg > "${PKG}/config/editor.cfg"
           grep -q 'base_path: ../res_core/' "${PKG}/config/editor.cfg"
           cp -r core/res "${PKG}/res_core"

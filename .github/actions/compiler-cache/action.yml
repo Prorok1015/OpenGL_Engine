@@ -1,0 +1,47 @@
+name: Compiler cache
+description: >
+  Prepares the compiler cache used by CMake (SNK_COMPILER_CACHE=AUTO, cmake/SnkBuildCache.cmake):
+  ccache on Linux (installed by the job's apt step), sccache on Windows (MSVC), with its directory
+  persisted through actions/cache. CMake picks the tool up by itself; nothing is passed to it here.
+
+inputs:
+  key:
+    description: Cache key prefix; use one per job/preset so configurations do not evict each other.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install sccache (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      # Without sccache the build still works, just uncached (CMake only logs a status line).
+      continue-on-error: true
+      run: choco install sccache --yes --no-progress
+
+    - name: Configure compiler cache
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          {
+            echo "SCCACHE_DIR=${GITHUB_WORKSPACE}/.sccache"
+            echo "SCCACHE_CACHE_SIZE=1G"
+          } >> "$GITHUB_ENV"
+        else
+          {
+            echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_MAXSIZE=500M"
+            echo "CCACHE_COMPRESS=1"
+            # The compiler is replaced with runner image updates without mtime guarantees.
+            echo "CCACHE_COMPILERCHECK=content"
+          } >> "$GITHUB_ENV"
+        fi
+
+    - name: Restore compiler cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/${{ runner.os == 'Windows' && '.sccache' || '.ccache' }}
+        key: ${{ inputs.key }}-${{ github.sha }}
+        restore-keys: |
+          ${{ inputs.key }}-

@@ -1,5 +1,10 @@
 name: Build
 
+# Every job configures through a preset from CMakePresets.json (ci-*), so CI and local builds share
+# one definition. The compiler cache (ccache on Linux, sccache on MSVC) and precompiled headers are
+# CMake options enabled by those presets (SNK_COMPILER_CACHE, SNK_PCH); the cache directory is
+# persisted by .github/actions/compiler-cache.
+
 on:
   push:
     paths-ignore:
@@ -27,24 +32,17 @@ jobs:
         include:
           - name: Windows MSVC Debug
             os: windows-latest
-            build_type: Debug
-            profile_mode: INTERNAL
+            preset: ci-windows-msvc-debug
           - name: Windows MSVC Release
             os: windows-latest
-            build_type: Release
-            profile_mode: NONE
+            preset: ci-windows-msvc-release
           - name: Linux GCC Debug
             os: ubuntu-latest
-            build_type: Debug
-            profile_mode: INTERNAL
-            cc: gcc
-            cxx: g++
+            preset: ci-linux-gcc-debug
+          # PCH is off in this preset: it catches headers that compile only thanks to the PCH.
           - name: Linux Clang Debug
             os: ubuntu-latest
-            build_type: Debug
-            profile_mode: INTERNAL
-            cc: clang
-            cxx: clang++
+            preset: ci-linux-clang-debug
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -59,7 +57,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
 
       - name: Set up MSVC environment
         if: runner.os == 'Windows'
@@ -67,34 +65,37 @@ jobs:
         with:
           arch: x64
 
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-${{ matrix.preset }}
+
       # Boost 1.84 is downloaded by FetchContent (cmake/ThirdParty.cmake); cache its
       # base dir so the tarball is not re-downloaded/re-extracted on every run.
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
         with:
           path: ${{ env.FC_DIR }}
-          key: fc-${{ matrix.os }}-${{ matrix.build_type }}-${{ matrix.cxx || 'msvc' }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
+          key: fc-${{ matrix.preset }}-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure
         shell: bash
-        run: |
-          args=(-S . -B build -G Ninja
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-            -DENGINE_PROFILE_MODE=${{ matrix.profile_mode }}
-            "-DFETCHCONTENT_BASE_DIR=${FC_DIR}")
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            args+=(-DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-              -DGLFW_BUILD_WAYLAND=OFF)
-          fi
-          cmake "${args[@]}"
+        run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor and unit_tests
-        run: cmake --build build --target editor unit_tests --parallel
+        run: cmake --build build/${{ matrix.preset }} --target editor unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        shell: bash
+        run: |
+          if command -v sccache >/dev/null; then sccache --show-stats; fi
+          if command -v ccache >/dev/null; then ccache -s; fi
 
       # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
       # hosted runners, so this relies on the tests being headless.
       - name: Run unit tests
-        working-directory: build
+        working-directory: build/${{ matrix.preset }}
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
@@ -116,7 +117,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-shared
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -125,16 +131,17 @@ jobs:
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENGINE_PROFILE_MODE=INTERNAL \
-            -DSNK_ENGINE_SHARED=ON -DGLFW_BUILD_WAYLAND=OFF \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ci-linux-shared "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor and unit_tests
-        run: cmake --build build --target editor unit_tests --parallel
+        run: cmake --build build/ci-linux-shared --target editor unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
 
       - name: Run unit tests
-        working-directory: build
+        working-directory: build/ci-linux-shared
         run: ./unit_tests --log_level=test_suite
 
   # Sanitizer builds (Linux only; project targets instrumented, third-party is not).
@@ -148,10 +155,10 @@ jobs:
       matrix:
         include:
           - name: Linux ASan+UBSan
-            sanitize: address
+            preset: ci-linux-asan
             experimental: false
           - name: Linux TSan
-            sanitize: thread
+            preset: ci-linux-tsan
             experimental: false
 
     env:
@@ -166,7 +173,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-${{ matrix.preset }}
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -175,16 +187,17 @@ jobs:
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENGINE_PROFILE_MODE=INTERNAL \
-            -DSNK_SANITIZE=${{ matrix.sanitize }} -DGLFW_BUILD_WAYLAND=OFF \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build unit_tests
-        run: cmake --build build --target unit_tests --parallel
+        run: cmake --build build/${{ matrix.preset }} --target unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
 
       - name: Run unit tests under sanitizer
-        working-directory: build
+        working-directory: build/${{ matrix.preset }}
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
@@ -209,9 +222,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
           python3 -m pip install --user gcovr
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-coverage
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -220,23 +238,19 @@ jobs:
           key: fc-coverage-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure (--coverage)
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENGINE_PROFILE_MODE=INTERNAL \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
-            -DGLFW_BUILD_WAYLAND=OFF \
-            "-DFETCHCONTENT_BASE_DIR=${FC_DIR}" \
-            -DCMAKE_CXX_FLAGS=--coverage \
-            -DCMAKE_EXE_LINKER_FLAGS=--coverage
+        run: cmake --preset ci-linux-coverage "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build unit_tests
-        run: cmake --build build --target unit_tests --parallel
+        run: cmake --build build/ci-linux-coverage --target unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
 
       # Keep going when a test fails: a coverage report of a red run is still useful, and the
       # step fails at the end so the job is flagged (the job itself is non-blocking).
       - name: Run unit tests
-        working-directory: build
+        working-directory: build/ci-linux-coverage
         run: |
           set +e
           ./unit_tests
@@ -248,7 +262,7 @@ jobs:
           # Product code only: engine/core libraries and the editor. Third-party code, the tests
           # themselves and build output are excluded. Multi-threaded tests can produce negative
           # hit counts and header templates repeat across TUs, hence the tolerance flags.
-          gcovr_args=(--root . --object-directory build
+          gcovr_args=(--root . --object-directory build/ci-linux-coverage
             --filter 'core/' --filter 'Editor/code/'
             --exclude 'lib3dparty/' --exclude 'tests/' --exclude 'build/' --exclude '.fetchcontent-cache/'
             --exclude-unreachable-branches --exclude-throw-branches
@@ -291,6 +305,7 @@ jobs:
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      EDITOR_BIN: ${{ github.workspace }}/build/ci-linux-gcc-debug/Editor/editor
 
     steps:
       - uses: actions/checkout@v4
@@ -301,8 +316,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
             xvfb libgl1-mesa-dri xdotool imagemagick
+
+      # Same preset (and so the same cache key) as the Linux GCC Debug job: its objects are reused.
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-gcc-debug
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -311,24 +332,25 @@ jobs:
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure
-        run: |
-          cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENGINE_PROFILE_MODE=INTERNAL \
-            -DGLFW_BUILD_WAYLAND=OFF -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
-            "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+        run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       - name: Build editor
-        run: cmake --build build/linux --target editor --parallel
+        run: cmake --build build/ci-linux-gcc-debug --target editor --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
 
       - name: Smoke run (smoke_level)
         run: |
-          tools/run_headless.sh --seconds 20 --size 1600x900 --shot headless_out/smoke/final.png \
+          tools/run_headless.sh --editor "$EDITOR_BIN" --seconds 20 --size 1600x900 --shot headless_out/smoke/final.png \
             -- --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/smoke/final.png headless_out/smoke/editor.log
 
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
       - name: Smoke run (checklist actions)
         run: |
-          tools/run_headless.sh --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
+          tools/run_headless.sh --editor "$EDITOR_BIN" --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
             --shot headless_out/checklist/final.png \
             -- --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/checklist/final.png headless_out/checklist/editor.log \
