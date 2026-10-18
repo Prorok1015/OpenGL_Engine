@@ -6,6 +6,7 @@
 #include <string_view>
 #include "ds/ds_fixed_vector.hpp"
 #include "snk_api.h"
+#include "wnd_gl_surface.h"
 
 namespace wnd
 {
@@ -14,6 +15,13 @@ namespace wnd
 		DISABLE,
 		NORMAL,
 		HIDDEN
+	};
+
+	// Client API the window is created for; a GL context can only be attached by glfwCreateWindow.
+	enum class graphics_api
+	{
+		opengl,
+		none
 	};
 
 	struct window_image
@@ -41,13 +49,14 @@ namespace wnd
 		virtual void set_cursor_mode(CURSOR_MODE mode) = 0;
 		virtual void set_logo(const ds::fixed_vector<window_image, 2>& images) = 0;
 		virtual void set_title(std::string_view title) = 0;
-		virtual void set_vsync(bool v) = 0;
 
 		virtual glm::ivec2 get_backbuffer_size() const = 0;
 		virtual const glm::ivec2& get_size() const = 0;
 		virtual float get_content_scale() const = 0;
 		// Opaque backend handle for the GUI platform layer; nullptr when there is none.
 		virtual void* get_native_handle() const = 0;
+		// GL context of this window; nullptr when it has none (null window, graphics_api::none).
+		virtual gl_surface* gl_surface_ptr() const { return nullptr; }
 
 		float aspect_ratio() const { if (is_minimize_mode()) return 0.f; return (float)get_size().x / (float)get_size().y; }
 		bool is_minimize_mode() const { return get_size() == glm::zero<glm::ivec2>(); }

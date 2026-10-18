@@ -4,7 +4,7 @@
 
 namespace wnd
 {
-	class glfw_window final : public window
+	class glfw_window final : public window, public gl_surface
 	{
 	public:
 		explicit glfw_window(context ctx_);
@@ -15,16 +15,20 @@ namespace wnd
 		void set_cursor_mode(CURSOR_MODE mode) override;
 		void set_logo(const ds::fixed_vector<window_image, 2>& images) override;
 		void set_title(std::string_view title) override;
-		void set_vsync(bool v) override;
 
 		glm::ivec2 get_backbuffer_size() const override;
 		const glm::ivec2& get_size() const override { return m_size; }
 		float get_content_scale() const override;
 		void* get_native_handle() const override { return m_ctx.get_id(); }
+		gl_surface* gl_surface_ptr() const override;
+
+		void make_current() override;
+		void swap_buffers() override;
+		void set_swap_interval(int interval) override;
+		void* get_proc_address(const char* name) const override;
 
 		GLFWwindow* get_glfw_handle() const { return m_ctx.get_id(); }
 		void set_size(glm::ivec2 size) { m_size = size; }
-		void on_update();
 		void update_frame();
 		void init_frame();
 
