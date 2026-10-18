@@ -197,6 +197,22 @@ class CheckTest(unittest.TestCase):
 			self.assertIn("(c) remaining non-snk includes of moved headers: 1", out)
 			self.assertIn("Editor/late.cpp:1: 'sub/a_deep.h' should be <snk/alpha/sub/a_deep.h>", out)
 
+	def test_private_access_exception_is_accepted_but_undeclared_use_is_flagged(self):
+		files = {"core/core/alpha/a_pub.h": b"#pragma once\n",
+			"core/core/beta/b_user.cpp": b'#include "a_int.h"\n'}
+		with fixture(files) as (root, cfg):
+			code, out, _ = run_cli(root, cfg, "check")
+			self.assertEqual(code, 1)
+			self.assertIn("(d) internal headers used by another component without private_access: 1", out)
+		config = json.loads(json.dumps(CONFIG))
+		config["components"][1]["private_access"] = ["alpha:a_int.h"]
+		with fixture(files, config) as (root, cfg):
+			code, out, _ = run_cli(root, cfg, "check")
+			self.assertEqual(code, 0, out)
+			self.assertIn("(declared exceptions: 1)", out)
+			_, plan_out, _ = run_cli(root, cfg, "plan", "alpha")
+			self.assertIn("needs PRIVATE include access", plan_out)
+
 	def test_unclassified_header_is_reported(self):
 		with fixture({"core/core/alpha/new_one.h": b"#pragma once\n"}) as (root, cfg):
 			_, out, _ = run_cli(root, cfg, "check")

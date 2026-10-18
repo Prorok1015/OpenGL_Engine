@@ -240,17 +240,28 @@ def rewrite(data, edits):
 	return b"".join(out)
 
 
-def outside_use_warnings(repo, sel):
-	"""Internal headers of the selected components that other components include."""
-	uses = collections.defaultdict(set)
+def outside_uses(repo):
+	"""Internal header included by another component: (path, line, header, consumer, declared)."""
+	out = []
 	for e in repo.all_edges():
 		t = e.target
-		if t and t.comp in sel and t.internal:
+		if t and t.internal:
 			who = repo.owner(e.path)
 			if who != t.comp:
-				uses[t.path].add(f"{e.path}:{e.line}")
-	return [f"internal {h} is included outside its component by {len(w)} file(s), e.g. {sorted(w)[0]}"
-		for h, w in sorted(uses.items())]
+				declared = who != EXTERNAL and f"{t.comp}:{t.sub}" in repo.comps[who].get("private_access", [])
+				out.append((e.path, e.line, t, who, declared))
+	return out
+
+
+def outside_use_warnings(repo, sel):
+	"""Internal headers of the selected components used elsewhere (declared ones need PRIVATE CMake access)."""
+	uses = collections.defaultdict(list)
+	for p, line, t, who, declared in outside_uses(repo):
+		if t.comp in sel:
+			uses[(t.path, who, declared)].append(f"{p}:{line}")
+	return [("needs PRIVATE include access (declared private_access)" if declared else "UNDECLARED use")
+		+ f": internal {h} included by {who} in {len(w)} file(s), e.g. {w[0]}"
+		for (h, who, declared), w in sorted(uses.items())]
 
 
 def file_eol_kind(data):
@@ -356,7 +367,13 @@ def run_check(repo, out=None):
 	w(f"ambiguous includes: {len(amb)}")
 	for p, line, inc, cands in amb:
 		w(f"  {p}:{line}: {inc!r} -> {cands}")
-	return 1 if (col or vio or rem or unc) else 0
+	uses = outside_uses(repo)
+	bad = [u for u in uses if not u[4]]
+	w(f"(d) internal headers used by another component without private_access: {len(bad)} "
+		f"(declared exceptions: {len(uses) - len(bad)})")
+	for p, line, t, who, _ in bad:
+		w(f"  {p}:{line}: internal {t.path} (component {t.comp}) used by {who}")
+	return 1 if (col or vio or rem or unc or bad) else 0
 
 
 # ---- report ------------------------------------------------------------------
@@ -379,7 +396,7 @@ def run_report(repo, out=None):
 		w(f"- touched files by area: {', '.join(f'{k} {v}' for k, v in sorted(per.items()))}")
 		w(f"- ambiguities: {len(plan.ambiguities)}" + "".join(f"\n  - {a[0]}:{a[1]} {a[2]!r} -> {a[3]}" for a in plan.ambiguities[:5]))
 		w(f"- plan errors: {len(plan.errors)}" + "".join(f"\n  - {s}" for s in plan.errors))
-		w(f"- warnings (internal header used outside its component): {len(plan.warnings)}")
+		w(f"- warnings (internal header used by another component): {len(plan.warnings)}")
 		for s in plan.warnings[:6]:
 			w(f"  - {s}")
 		if len(plan.warnings) > 6:
@@ -393,6 +410,15 @@ def run_report(repo, out=None):
 	w(f"- unclassified headers inside component roots: {len(unc)}" + "".join(f"\n  - {p}" for p in unc))
 	amb = find_ambiguous(repo)
 	w(f"- ambiguous includes anywhere: {len(amb)}")
+	uses = outside_uses(repo)
+	bad = [u for u in uses if not u[4]]
+	w(f"- (d) internal headers used by another component: {len(uses)} lines, {len(bad)} undeclared")
+	decl = collections.defaultdict(int)
+	for _, _, t, who, ok in uses:
+		if ok:
+			decl[(who, f"{t.comp}:{t.sub}")] += 1
+	for (who, h), n in sorted(decl.items()):
+		w(f"  - declared private_access: {who} -> {h} ({n} line)")
 	pairs = collections.defaultdict(list)
 	for p, line, _, tgt in vio:
 		pairs[(p, tgt)].append(line)

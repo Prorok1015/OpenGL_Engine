@@ -1,5 +1,5 @@
 {
- "_comment": "Component -> header split mapping for issue #109 (docs/roadmap/design/HEADER_SPLIT.md sec.3, 6). public/internal paths are relative to root; dest is the include prefix: <root>/include/<dest>/<subpath>. Membership is by explicit list; dest null means nothing is exported.",
+ "_comment": "Component -> header split mapping for issue #109 (docs/roadmap/design/HEADER_SPLIT.md sec.3, 6). public/internal paths are relative to root; dest is the include prefix: <root>/include/<dest>/<subpath>. Membership is by explicit list; dest null means nothing is exported. private_access lists internal headers of other components (\"comp:sub\") that this component's own sources may include: PR agents give it PRIVATE include access to that dir in CMake; `check` accepts these and flags every undeclared cross-component use of an internal header.",
  "components": [
   {
    "name": "application",
@@ -9,13 +9,12 @@
     "app_frame_stage.h",
     "app_loop_service.h",
     "app_loop_service_interface.h",
+    "app_module_entry.h",
     "app_module_interface.h",
     "app_module_loader.hpp",
     "application.h"
    ],
-   "internal": [
-    "app_module_entry.h"
-   ]
+   "internal": []
   },
   {
    "name": "core_input",
@@ -128,6 +127,7 @@
    "root": "core/core/resource",
    "dest": "snk/resource",
    "public": [
+    "adapters/res_adapter_info.hpp",
     "adapters/res_adapter_interface.hpp",
     "adapters/res_adapter_worker.h",
     "adapters/res_adapter_worker_base.hpp",
@@ -138,6 +138,7 @@
     "res_tag.h",
     "res_tag_json.h",
     "resolvers/res_control_block.hpp",
+    "resolvers/res_file_watcher.h",
     "resolvers/res_resolver_interface.hpp",
     "resolvers/res_vfs_resolver.h",
     "resources/res_resource_base.h",
@@ -145,10 +146,7 @@
     "resources/res_resource_picture.h",
     "resources/res_resource_text.h"
    ],
-   "internal": [
-    "adapters/res_adapter_info.hpp",
-    "resolvers/res_file_watcher.h"
-   ]
+   "internal": []
   },
   {
    "name": "common",
@@ -156,12 +154,14 @@
    "dest": "snk/common",
    "public": [
     "common.h",
+    "core_thread_utils.hpp",
     "ds/ds_bbox.hpp",
     "ds/ds_bit_frags.hpp",
     "ds/ds_event.hpp",
     "ds/ds_fixed_vector.hpp",
     "ds/ds_polymorphic_cast.hpp",
     "ds/ds_rtree.h",
+    "ds/ds_rtree.hpp",
     "ds/ds_store.hpp",
     "ds/ds_svg_writer.hpp",
     "ds/ds_type_id.hpp",
@@ -177,10 +177,7 @@
     "snk_api.h",
     "timer.hpp"
    ],
-   "internal": [
-    "core_thread_utils.hpp",
-    "ds/ds_rtree.hpp"
-   ],
+   "internal": [],
    "note": "logger/ stays a subfolder: snk/common/logger/engine_log.h"
   },
   {
@@ -234,10 +231,12 @@
     "gui_layer_interface.h",
     "gui_menu_layout.h",
     "gui_platform_backend.h",
+    "gui_profiler_overlay.h",
     "gui_system.h"
    ],
-   "internal": [
-    "gui_profiler_overlay.h"
+   "internal": [],
+   "private_access": [
+    "gui_gl_backend:gui_gl_backend.h"
    ]
   },
   {
@@ -257,7 +256,10 @@
    "internal": [
     "gui_gl_backend.h"
    ],
-   "note": "only included by gui_system .cpp; GUI backend gets PRIVATE access (owner decision 6.3)"
+   "note": "only included by gui_system .cpp; GUI backend gets PRIVATE access (owner decision 6.3)",
+   "private_access": [
+    "drv_opengl:rnd_gl_texture.h"
+   ]
   },
   {
    "name": "render",
@@ -292,6 +294,9 @@
     "rnd_gpu_profiler.h",
     "texture/rnd_texture_2d_desc.h",
     "texture/rnd_texture_cubemap_desc.h"
+   ],
+   "private_access": [
+    "drv_opengl:rnd_gl_swapchain.h"
    ]
   },
   {
@@ -306,6 +311,7 @@
     "level/scn_level_desc.h",
     "level/scn_level_manager.h",
     "level/scn_node_index.h",
+    "level/scn_override_record.h",
     "level/scn_prefab_desc.h",
     "level/scn_render_data_extractor.h",
     "level/scn_world.h",
@@ -338,8 +344,7 @@
     "scn_transform_system.h"
    ],
    "internal": [
-    "adapters/scn_assimp_resource_system_wrapper.h",
-    "level/scn_override_record.h"
+    "adapters/scn_assimp_resource_system_wrapper.h"
    ]
   },
   {
