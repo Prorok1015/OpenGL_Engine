@@ -4,10 +4,13 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <concepts>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stop_token>
 #include <string>
@@ -52,7 +55,36 @@ namespace ds {
 
 		// True on a pool thread (and while task_system::run_one executes a task).
 		[[nodiscard]] SNK_API bool on_worker_thread() noexcept;
+
+		struct lifetime_state;
 	}
+
+	enum class lifetime_option : std::uint8_t {
+		none,
+		cancel_on_destroy, // the destructor requests stop on every task still bound to it
+	};
+
+	// A member of the object that receives results. Create, bind and destroy it on the main thread.
+	// Not copyable or movable: callbacks capture the owner's address, so a token cannot outlive it.
+	class SNK_API lifetime
+	{
+	public:
+		explicit lifetime(lifetime_option option = lifetime_option::none);
+		~lifetime();
+		lifetime(const lifetime&) = delete;
+		lifetime& operator=(const lifetime&) = delete;
+
+		// Requests stop on every task bound so far (cancel_on_destroy does this in the destructor).
+		void cancel_tasks() const;
+		[[nodiscard]] std::weak_ptr<detail::lifetime_state> token() const { return m_state; }
+
+	private:
+		friend class task_system;
+		void bind(const std::shared_ptr<detail::task_state_base>& state) const;
+		[[nodiscard]] std::vector<std::shared_ptr<detail::task_state_base>> bound() const;
+
+		std::shared_ptr<detail::lifetime_state> m_state;
+	};
 
 	class task_context
 	{
@@ -240,27 +272,48 @@ namespace ds {
 
 		// Runs `fn` on the main thread (post_main, general class) once the task has finished,
 		// whatever the outcome. If it has finished already, `fn` is queued right away.
+		// `fn` must be copyable (std::function): move-only captures do not compile.
 		void then_main(callback_t fn) const
 		{
 			ASSERT_MSG(m_state, "task_handle::then_main: empty handle");
 			if (!m_state) {
 				return;
 			}
-			auto st = std::static_pointer_cast<state_t>(m_state);
-			m_state->add_continuation(true, [st, fn = std::move(fn)]() {
-				task_result<T> result;
-				result.status = st->status();
-				result.error = st->error();
-				if constexpr (!std::is_void_v<T>) {
-					if (st->value) {
-						result.value = &*st->value;
-					}
+			m_state->add_continuation(true, [st = std::static_pointer_cast<state_t>(m_state), fn = std::move(fn)]() {
+				deliver(*st, fn);
+			});
+		}
+
+		// Same, but dropped without a call if `owner` is already destroyed; checked on the main
+		// thread right before the call, where the owner dies too, so it cannot die in between.
+		void then_main(const lifetime& owner, callback_t fn) const
+		{
+			ASSERT_MSG(m_state, "task_handle::then_main: empty handle");
+			if (!m_state) {
+				return;
+			}
+			m_state->add_continuation(true, [st = std::static_pointer_cast<state_t>(m_state), weak = owner.token(),
+				fn = std::move(fn)]() {
+				if (!weak.expired()) {
+					deliver(*st, fn);
 				}
-				fn(result);
 			});
 		}
 
 	private:
+		static void deliver(state_t& st, const callback_t& fn)
+		{
+			task_result<T> result;
+			result.status = st.status();
+			result.error = st.error();
+			if constexpr (!std::is_void_v<T>) {
+				if (st.value) {
+					result.value = &*st.value;
+				}
+			}
+			fn(result);
+		}
+
 		friend class task_system;
 		explicit task_handle(std::shared_ptr<state_t> state) : task_handle_base(std::move(state)) {}
 
@@ -287,6 +340,8 @@ namespace ds {
 	};
 
 	// Service (ds::app_data_storage). Created before resource_system, destroyed after it.
+	// Its "main thread" is the creating one: core_module::register_services runs on the thread of
+	// main(), which is also the frame-loop thread (application::run is called from the same main()).
 	class SNK_API task_system
 	{
 	public:
@@ -296,6 +351,7 @@ namespace ds {
 		task_system(const task_system&) = delete;
 		task_system& operator=(const task_system&) = delete;
 
+		// `fn` must be copyable (std::function). The body must not touch the owner of a lifetime.
 		template<class F>
 		auto run(lane where, task_desc desc, F&& fn)
 		{
@@ -307,11 +363,48 @@ namespace ds {
 			return task_handle<result_t>(std::move(state));
 		}
 
+		// Same, bound to `owner` (before it is queued): cancel_on_destroy / cancel_tasks / wait_idle see it.
+		template<class F>
+		auto run(lane where, task_desc desc, const lifetime& owner, F&& fn)
+		{
+			using result_t = std::invoke_result_t<F&, task_context&>;
+			using state_t = detail::task_state<result_t>;
+			auto state = std::make_shared<state_t>(std::move(desc), weak_impl(), next_id(),
+				typename state_t::body_t(std::forward<F>(fn)));
+			owner.bind(state);
+			submit(where, state);
+			return task_handle<result_t>(std::move(state));
+		}
+
 		// Continuation on the pool, never blocks: `fn` is queued on `where` once every input has
 		// finished. If any input failed, `fn` does not run and the result carries that failure:
 		// error if an input errored (message names it), else cancelled.
 		task_handle<void> when_all(std::span<const task_handle_base> inputs, lane where,
 			std::function<void(task_context&)> fn);
+
+		// Typed handles (vector<task_handle<T>>, ...) without slicing by hand.
+		template<std::ranges::input_range R> requires std::derived_from<std::ranges::range_value_t<R>, task_handle_base>
+		task_handle<void> when_all(const R& inputs, lane where, std::function<void(task_context&)> fn)
+		{
+			std::vector<task_handle_base> erased;
+			if constexpr (std::ranges::sized_range<R>) {
+				erased.reserve(std::ranges::size(inputs));
+			}
+			for (const auto& input : inputs) {
+				erased.push_back(input);
+			}
+			return when_all(std::span<const task_handle_base>(erased), where, std::move(fn));
+		}
+		task_handle<void> when_all(std::initializer_list<task_handle_base> inputs, lane where,
+			std::function<void(task_context&)> fn)
+		{
+			return when_all(std::span<const task_handle_base>(inputs.begin(), inputs.size()), where, std::move(fn));
+		}
+
+		// Main thread only. Blocks until every task bound to `owner` before the call has finished
+		// (manual mode runs the queue instead). Cancel first (owner.cancel_tasks()) to make it short,
+		// then unload the code those tasks run. Does not wait for then_main callbacks.
+		void wait_idle(const lifetime& owner);
 
 		// Safe from any thread; dropped silently once the system is shutting down.
 		void post_main(std::function<void()> fn, main_class cls = main_class::general);

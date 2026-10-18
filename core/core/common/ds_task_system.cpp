@@ -47,6 +47,14 @@ namespace ds::detail {
 		return g_on_worker;
 	}
 
+	struct lifetime_state {
+		explicit lifetime_state(bool cancel) : cancel_on_destroy(cancel) {}
+
+		const bool cancel_on_destroy;
+		std::mutex mutex;
+		std::vector<std::weak_ptr<task_state_base>> tasks;
+	};
+
 	struct task_system_impl {
 		using work_queue = std::deque<std::function<void()>>;
 
@@ -346,6 +354,48 @@ namespace ds::detail {
 
 namespace ds {
 
+	lifetime::lifetime(lifetime_option option)
+		: m_state(std::make_shared<detail::lifetime_state>(option == lifetime_option::cancel_on_destroy))
+	{
+	}
+
+	lifetime::~lifetime()
+	{
+		if (m_state->cancel_on_destroy) {
+			cancel_tasks();
+		}
+	}
+
+	void lifetime::cancel_tasks() const
+	{
+		for (const auto& state : bound()) {
+			state->cancel();
+		}
+	}
+
+	void lifetime::bind(const std::shared_ptr<detail::task_state_base>& state) const
+	{
+		std::lock_guard lock(m_state->mutex);
+		std::erase_if(m_state->tasks, [](const std::weak_ptr<detail::task_state_base>& weak) {
+			const auto alive = weak.lock();
+			return !alive || alive->done();
+		});
+		m_state->tasks.push_back(state);
+	}
+
+	std::vector<std::shared_ptr<detail::task_state_base>> lifetime::bound() const
+	{
+		std::vector<std::shared_ptr<detail::task_state_base>> out;
+		std::lock_guard lock(m_state->mutex);
+		out.reserve(m_state->tasks.size());
+		for (const auto& weak : m_state->tasks) {
+			if (auto state = weak.lock()) {
+				out.push_back(std::move(state));
+			}
+		}
+		return out;
+	}
+
 	void task_context::set_progress(float value, std::string_view text)
 	{
 		if (m_state) {
@@ -375,6 +425,21 @@ namespace ds {
 		}
 		for (auto& state : alive) {
 			state->cancel();
+		}
+
+		// A body that ignores stop would hang join() with no clue why; give cooperative ones a moment.
+		const auto grace_end = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+		const auto still_running = [&alive] {
+			return std::ranges::any_of(alive, [](const auto& state) { return !state->done(); });
+		};
+		while (still_running() && std::chrono::steady_clock::now() < grace_end) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		for (const auto& state : alive) {
+			if (!state->done()) {
+				egLOG_WARN("task", "shutdown: task '{}' (#{}) is still running and ignores stop, join() waits for it",
+					state->desc().name, state->id());
+			}
 		}
 		alive.clear();
 
@@ -466,6 +531,13 @@ namespace ds {
 		}
 		arrive(); // releases the guard count held while the continuations were being attached
 		return task_handle<void>(std::move(state));
+	}
+
+	void task_system::wait_idle(const lifetime& owner)
+	{
+		for (const auto& state : owner.bound()) {
+			state->wait();
+		}
 	}
 
 	void task_system::post_main(std::function<void()> fn, main_class cls)
