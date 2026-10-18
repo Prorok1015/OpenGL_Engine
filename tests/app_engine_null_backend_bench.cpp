@@ -3,6 +3,8 @@
 #include "null_engine_fixture.hpp"
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/scene/level/scn_world.h>
+#include <snk/scene/scn_model.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -31,6 +33,7 @@ constexpr int warmup_frames = 30;
 constexpr int measured_frames = 300;
 constexpr std::uint32_t expected_mesh_count = 100;
 constexpr std::uint32_t expected_camera_count = 2;
+constexpr std::size_t expected_skinned_count = 10;
 
 struct zone_series
 {
@@ -98,6 +101,12 @@ BOOST_AUTO_TEST_CASE(ExtractRenderDataOnHundredMeshes, * tt::disabled())
 	BOOST_REQUIRE(levels.load(res::tag::make("levels/bench_100_meshes.desc")));
 	BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
 
+	std::size_t skinned = 0;
+	levels.get_level().for_each_world([&skinned](scn::world& w) {
+		skinned += w.state().view<scn::skinning_component>().size();
+	});
+	BOOST_TEST(skinned == expected_skinned_count);
+
 	std::map<std::string, zone_series> series;
 	int frame = 0;
 	auto& stages = storage.require<app::frame_stage_registry>();
@@ -115,8 +124,13 @@ BOOST_AUTO_TEST_CASE(ExtractRenderDataOnHundredMeshes, * tt::disabled())
 
 	BOOST_REQUIRE(series.contains("ExtractRenderData"));
 	BOOST_TEST(series.at("ExtractRenderData").total_ms.size() == static_cast<std::size_t>(measured_frames));
-	BOOST_REQUIRE(series.contains("Extract.BuildDC"));
-	BOOST_TEST(series.at("Extract.BuildDC").calls_per_frame == expected_mesh_count * expected_camera_count);
+	BOOST_TEST(series.at("ExtractRenderData").calls_per_frame == 1u);
+	for (const char* zone : { "Extract.BuildDC", "Extract.Skinning", "Extract.ShaderDesc", "Extract.PushDraws" }) {
+		BOOST_REQUIRE_MESSAGE(series.contains(zone), zone << " was not recorded");
+		BOOST_TEST_CONTEXT(zone) {
+			BOOST_TEST(series.at(zone).calls_per_frame == expected_mesh_count * expected_camera_count);
+		}
+	}
 
 	json::object zones;
 	egLOG_INFO("bench", "extract, {} frames after {} warm-up, {} meshes, {} cameras (per-frame totals, ms)",
