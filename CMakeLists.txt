@@ -109,3 +109,11 @@ add_test(NAME unit_tests COMMAND unit_tests)
 
 snk_pch_create_owner()
 snk_apply_target_defaults()
+
+# Assimp hard-codes /Zi into its Debug C++ flags (lib3dparty/assimp/CMakeLists.txt); sccache then
+# expects a .pdb that the embedded-debug-info (/Z7) build never writes and fails the compile.
+# Assimp alone builds uncached in that case.
+if(MSVC AND SNK_COMPILER_CACHE_TOOL STREQUAL "sccache" AND TARGET assimp
+		AND CMAKE_BUILD_TYPE MATCHES "^(Debug|RelWithDebInfo)$")
+	set_target_properties(assimp PROPERTIES CXX_COMPILER_LAUNCHER "")
+endif()
