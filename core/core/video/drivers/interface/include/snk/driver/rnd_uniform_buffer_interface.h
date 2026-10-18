@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 namespace rnd::driver
 {
 	//TODO: rename to constant_buffer_interface
