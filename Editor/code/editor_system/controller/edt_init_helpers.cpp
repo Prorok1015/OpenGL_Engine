@@ -126,7 +126,9 @@ void wire_hierarchy_callbacks(
 	});
 
 	hierarchy.set_on_world_changed([&](int idx) {
-		world_ctrl.switch_to_world(idx);
+		// A refused switch leaves the old world active: resync the tab and the panels to it.
+		if (!world_ctrl.switch_to_world(idx) && world_ctrl.on_world_switched)
+			world_ctrl.on_world_switched(state.active_world_idx);
 	});
 	hierarchy.set_on_create_world([&](const std::string& name) {
 		world_ctrl.create_world(name);

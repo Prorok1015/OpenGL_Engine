@@ -160,6 +160,60 @@ BOOST_AUTO_TEST_CASE(Resync_KeepsTheStateWhenTheDescListsWorldsButNoneLoaded)
 	BOOST_TEST(switches == 0);
 }
 
+BOOST_AUTO_TEST_CASE(SelectWorld_RefusedSwitchKeepsTheOldWorldAndTellsThePanels)
+{
+	populate(put("lv.desc", LEVEL_TWO_WORLDS)); // no level manager is attached, so every switch is refused
+	BOOST_REQUIRE(state.world_names.size() == 2u);
+	state.active_world_idx = 0;
+
+	std::vector<int> switched;
+	world_ctrl.on_world_switched = [&switched](int idx) { switched.push_back(idx); };
+	const uint64_t generation = state.desc_generation;
+
+	BOOST_TEST(!world_ctrl.switch_to_world(1));
+	BOOST_TEST(state.active_world_idx == 0);
+
+	world_ctrl.select_world(1);
+
+	BOOST_TEST(state.active_world_idx == 0);
+	BOOST_TEST((switched == std::vector<int>{ 0 }));
+	BOOST_TEST(state.desc_generation != generation);
+	BOOST_TEST(state.world_descs.size() == 2u);
+	BOOST_TEST(state.worlds_systems_list.size() == 2u);
+	BOOST_REQUIRE(state.active_world_desc());
+	BOOST_TEST(state.active_world_desc() == &state.world_descs[0]);
+}
+
+BOOST_AUTO_TEST_CASE(SelectWorld_RefusedSwitchClearsAnIndexThatIsOutOfRange)
+{
+	populate(put("lv.desc", LEVEL_TWO_WORLDS));
+	std::vector<int> switched;
+	world_ctrl.on_world_switched = [&switched](int idx) { switched.push_back(idx); };
+
+	for (const int stale : { -1, 5 }) {
+		state.active_world_idx = stale;
+		world_ctrl.select_world(1);
+		BOOST_TEST(state.active_world_idx == -1);
+		BOOST_TEST(state.active_world_desc() == nullptr);
+	}
+	BOOST_TEST((switched == std::vector<int>{ -1, -1 }));
+}
+
+BOOST_AUTO_TEST_CASE(SceneEditor_SyncEcsTransformsToDescBumpsTheDescGeneration)
+{
+	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
+	auto shared_mgr = std::make_shared<scn::level_manager>(*rs, *assembler, sf, hot);
+	BOOST_REQUIRE(shared_mgr->load(tag));
+	populate(tag);
+	state.lvl_manager = shared_mgr;
+	edt::scene_editor editor(state);
+
+	const uint64_t generation = state.desc_generation;
+	editor.sync_ecs_transforms_to_desc();
+
+	BOOST_TEST(state.desc_generation != generation);
+}
+
 BOOST_AUTO_TEST_CASE(Save_WithoutWorldsWritesAnEmptyWorldList)
 {
 	const auto json = scn::level_desc::build_json("lv", state.world_descs, *descs, "");
