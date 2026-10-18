@@ -35,4 +35,5 @@ void rnd::ShaderManager::update_global_sun(const lights_params& val) const
 {
 	sun_light->set_data(glm::value_ptr(val.directional_lights), sizeof(decltype(val.directional_lights)), offsetof(lights_params, directional_lights));
 	sun_light->set_data(glm::value_ptr(val.point_lights), sizeof(decltype(val.point_lights)), offsetof(lights_params, point_lights));
+	sun_light->set_data(&val.dir_light_count, sizeof(val.dir_light_count) + sizeof(val.point_light_count), offsetof(lights_params, dir_light_count));
 }

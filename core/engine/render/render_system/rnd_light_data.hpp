@@ -37,6 +37,7 @@ namespace rnd {
 				result.directional_lights[i].ambient   = directional[i].ambient;
 				result.directional_lights[i].specular  = directional[i].specular;
 			}
+			result.dir_light_count = count;
 			return result;
 		}
 	};

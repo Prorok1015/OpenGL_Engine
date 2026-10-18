@@ -14,7 +14,6 @@ namespace rnd
 	{
 		const glm::mat4*  world_matrix = nullptr;
 		texture_manager*  textures = nullptr;
-		int               directional_light_count = 0;
 		bool              has_skinning = false;
 	};
 

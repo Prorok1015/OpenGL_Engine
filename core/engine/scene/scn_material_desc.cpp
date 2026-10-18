@@ -144,9 +144,7 @@ void scn::material_desc::serialize(json::object& data) const
 			"shader_geometry": "shd://geometry_shader.geom",
 			"queue" : "qpaque",
 			"constants": {
-				"LIGHTS_ENABLED": "true",
-				"DIRECTION_LIGHT_COUNT": "4",
-				"POINT_LIGHT_COUNT": "8"
+				"LIGHTS_ENABLED": "true"
 			},
 			"defines": {
 				"USE_ANIMATION",
