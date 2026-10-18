@@ -81,7 +81,7 @@
 - Корректность/конкурентность — отдельное ревью вторым агентом.
 - Файлы с CRLF правятся только инструментом Edit (не python/sed с перезаписью).
 - `closes #N` закрывает issue только при попадании в `main` — в `aibranch` закрывать вручную.
-- Проверка через CI (решение владельца 2026-10-18): агент пишет код в ветке `wip/<issue>-<slug>` от `aibranch`, пушит её и открывает **draft PR в `aibranch`** (PR-прогоны берут кэш компиляции из `aibranch`). Локально не собирает. Оркестратор следит за CI PR, ревьюит, переносит в `aibranch` (cherry-pick), закрывает PR и удаляет ветку. CI покрывает Linux GCC/Clang/ASan/TSan/shared, Windows MSVC Debug/Release, headless smoke с проверкой кадра (`check_smoke.sh`).
+- Проверка через CI (решение владельца 2026-10-18): агент пишет код в ветке `wip/<issue>-<slug>` от `aibranch`, пушит её и открывает **draft PR в `aibranch`** (PR-прогоны берут кэш компиляции из `aibranch`). Локально не собирает. Оркестратор следит за CI PR, ревьюит, затем переводит PR из draft в ready и делает **squash-merge в `aibranch` через GitHub** (решение владельца 2026-10-18; ветка удаляется автоматически настройкой репозитория). Удалять ветки из сессии нельзя — git-прокси обрывает push с удалением. CI покрывает Linux GCC/Clang/ASan/TSan/shared, Windows MSVC Debug/Release, headless smoke с проверкой кадра (`check_smoke.sh`).
 - Проверка перед пушем в `aibranch` (если что-то правится прямо там): сборка + `unit_tests` + headless-запуск `smoke_level`.
 - Коммиты оканчиваются строками `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` и `Claude-Session: <url сессии>`.
 
