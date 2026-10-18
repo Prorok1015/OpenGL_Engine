@@ -46,11 +46,11 @@
                     "__id" : "3faa0ae2dbe035de",
                     "name" : "scene",
                     "transform" : {
-                        "rotation" : [-90.0, 0.0, 0.0],
-                        "scale" : [0.9606748819351196, 0.9606748819351196, 0.9606748819351196]
+                        "position" : [0.0, -1.0, -6.0],
+                        "scale" : [4.0, 4.0, 4.0]
                     },
                     "components" : {
-                        "scene" : "memory://objects/fsb//scene.desc"
+                        "scene" : "res://objects/robot/gen_robot.glb"
                     }
                 }
             ]
