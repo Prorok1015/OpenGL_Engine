@@ -493,7 +493,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.FC_DIR }}
-          key: fc-ci-windows-msvc-shared-${{ hashFiles('cmake/ThirdParty.cmake') }}
+          key: fc-sdk-ci-windows-msvc-shared-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
       - name: Configure
         run: cmake --preset "${PRESET}" "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
@@ -525,7 +525,9 @@ jobs:
 
       - name: Configure consumer
         run: |
-          cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+          # The consumer must use the configuration the SDK was built with (MSVC runtime, DLL name).
+          build_type="$(sed -n 's/^CMAKE_BUILD_TYPE:[A-Z]*=//p' "build/${PRESET}/CMakeCache.txt")"
+          cmake -S tests/package_consumer -B build/consumer -G Ninja "-DCMAKE_BUILD_TYPE=${build_type}" \
             "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
 
       - name: Build consumer
