@@ -167,6 +167,18 @@ buffer_handle create_buffer(const buffer_desc&); // {size, usage: vertex|index|u
    - Сцена `levels/bench_100_meshes.desc` (100 мешей, 10 со скиннингом, 2 камеры).
    - Тест или режим `--bench-frames 300` на null-бэкенде: среднее `profiler_last_frame_stats()` по `ExtractRenderData` и `Extract.*` после 30 кадров прогрева, вывод в лог/JSON.
    - Baseline снимается в R0, повтор — после R1 и R6; job в CI — отчётный, не блокирующий (Q5).
+   - Реализация (R0c): `unit_tests --run_test=AppEngineNullBackendBench/ExtractRenderDataOnHundredMeshes` (отключён по умолчанию, `tests/app_engine_null_backend_bench.cpp`), 30 кадров прогрева и 300 измеряемых, суммы зоны за кадр; сцена — 10 роботов со скиннингом и 90 одноквадовых мешей из `bench/bench_quad.desc`, 2 камеры; job «Extract benchmark (Linux, report-only)», артефакт `extract-bench` (JSON).
+   - **Baseline R0** (GCC Release, ubuntu-latest, null-бэкенд, мс за кадр; 2 камеры × 100 мешей = 200 вызовов на зону):
+
+     | Зона | mean | p50 | p95 | max |
+     |---|---:|---:|---:|---:|
+     | `ExtractRenderData` | 0.201 | 0.197 | 0.222 | 0.281 |
+     | `Extract.ShaderDesc` | 0.111 | 0.108 | 0.125 | 0.151 |
+     | `Extract.PushDraws` | 0.030 | 0.029 | 0.033 | 0.103 |
+     | `Extract.BuildDC` | 0.008 | 0.008 | 0.008 | 0.033 |
+     | `Extract.Skinning` | 0.008 | 0.008 | 0.008 | 0.022 |
+
+     Критерий EPIC-45 (< 2 мс на 100 мешей) на этом baseline выполнен с большим запасом; цели `Extract.ShaderDesc`/`Extract.PushDraws` из п. 1 (< 0.5 мс на 79 мешей) тоже. Раннеры шумные: сравнивать порядок величин, не проценты.
 
 ## 5. План по PR (после PR-5 #109 и #174; волны — `STAGE_D_PLAN.md` §2)
 
