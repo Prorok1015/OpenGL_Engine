@@ -23,10 +23,10 @@ namespace scn {
 		};
 
 		struct prefab_comp_node {
-			std::string type_name;
+			std::string type_name{};
 			res::res_handle<desc::desc_base> parent_desc;
-			boost::json::object overrides;
-			std::vector<comp_edit> edits;
+			boost::json::object overrides{};
+			std::vector<comp_edit> edits{};
 		};
 
 		struct prefab_node {

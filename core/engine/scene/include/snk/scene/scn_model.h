@@ -65,13 +65,13 @@ namespace scn {
     };
 
     struct skeleton_component {
-        res::tag skinning_tag;
+        res::tag skinning_tag{};
         int bone_count = 0;
         bool show_skeleton = false;
     };
 
     struct skinning_component {
-        res::tag skinning_tag;
+        res::tag skinning_tag{};
         entt::entity skeleton_entity = entt::null;
     };
 

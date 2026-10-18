@@ -116,7 +116,7 @@ struct stat_component
 	int hp = 0;
 	int limit_min = 0;
 	int limit_max = 0;
-	std::string label;
+	std::string label{};
 	int patch_count = 0; // incremented every time the hot-reload patcher runs on the entity
 };
 

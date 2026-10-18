@@ -31,8 +31,8 @@ enum class run_mode : uint8_t { edit, play, pause, step };
 struct system_desc
 {
 	phase_id phase = ecs::phase::update;
-	std::vector<std::string> after;
-	std::vector<std::string> before;
+	std::vector<std::string> after{};
+	std::vector<std::string> before{};
 	bool run_in_edit = false;
 };
 
