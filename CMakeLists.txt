@@ -5,6 +5,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# PIC everywhere (third-party included: assimp, glfw, ... end up inside a shared engine library
+# when SNK_ENGINE_SHARED is on). Must be set before any target is created.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 set(ENGINE_PROFILE_MODE "NONE" CACHE STRING "Profiling mode: NONE, INTERNAL, TRACY")
 set_property(CACHE ENGINE_PROFILE_MODE PROPERTY STRINGS NONE INTERNAL TRACY)
 
@@ -47,6 +51,8 @@ endif()
 include(Sanitizers)
 # snk::compiler_warnings interface target (project targets only, via snk::common).
 include(CompilerWarnings)
+# snk_target_defaults(): hidden visibility for project targets (applied at the end of this file).
+include(SnkTarget)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -73,3 +79,5 @@ target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURREN
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
 
 add_test(NAME unit_tests COMMAND unit_tests)
+
+snk_apply_target_defaults()
