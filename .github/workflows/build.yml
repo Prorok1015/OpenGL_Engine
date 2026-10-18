@@ -508,8 +508,8 @@ jobs:
       - name: Check the installed layout
         run: |
           find "${SDK_PREFIX}/bin" "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
-          test -f "${SDK_PREFIX}/bin/snk_engine.dll"
-          test -f "${SDK_PREFIX}/lib/snk/snk_engine.lib"
+          # Debug builds carry a "d" postfix (snk_engined.dll).
+          ls "${SDK_PREFIX}"/bin/snk_engine*.dll "${SDK_PREFIX}"/lib/snk/snk_engine*.lib
           ws="$(cygpath -m "${GITHUB_WORKSPACE}")"
           if grep -rIn -e "${ws}" "${SDK_PREFIX}/lib/cmake"; then
             echo "::error::installed package config references the workspace"
