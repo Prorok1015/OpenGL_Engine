@@ -25,6 +25,8 @@ namespace edt::game_view
 				? name->name
 				: std::format("Camera {}", static_cast<std::uint32_t>(entt::to_entity(ent))) });
 		}
+		// Views walk the storage back to front; keep the picker (and the default pick) in creation order.
+		std::ranges::sort(out, {}, [](const camera_entry& e) { return entt::to_entity(e.entity); });
 		return out;
 	}
 
