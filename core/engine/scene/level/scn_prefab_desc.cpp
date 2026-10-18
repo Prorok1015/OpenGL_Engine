@@ -121,6 +121,7 @@ namespace scn {
 			}
 			if (auto* transform = obj.if_contains("transform"); transform && transform->is_object()) {
 				auto& t_obj = transform->as_object();
+				result.has_transform = true;
 				if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
 				if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
 				if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
@@ -183,6 +184,7 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 
 	if (auto const* transform = data.if_contains("transform"); transform && transform->is_object()) {
 		const auto& t_obj = transform->as_object();
+		root.has_transform = true;
 		if (t_obj.contains("position")) root.position = parsed.position;
 		if (t_obj.contains("rotation")) root.rotation = parsed.rotation;
 		if (t_obj.contains("scale"))    root.scale = parsed.scale;
@@ -236,7 +238,10 @@ void scn::prefab_desc::serialize(json::object& data) const
 		if (nd.scale != glm::vec3{ 1.0f })    
 			transform_obj["scale"] = json::value_from(nd.scale);
 
-		if (!transform_obj.empty()) 
+		// An empty "transform" is kept for a node that instantiates a prefab: it says "placed at the origin"
+		// instead of "use the prefab root's transform".
+		const bool references_desc = std::ranges::any_of(nd.components, [] (const auto& entry) { return entry.second.parent_desc.is_valid(); });
+		if (!transform_obj.empty() || (nd.has_transform && references_desc))
 			node_obj["transform"] = std::move(transform_obj);
 
 		if (!nd.components.empty()) {
@@ -360,6 +365,7 @@ namespace {
 		if (src.contains("name")) dst.name = parsed.name;
 		if (auto* transform = src.if_contains("transform"); transform && transform->is_object()) {
 			const auto& t_obj = transform->as_object();
+			dst.has_transform = true;
 			if (t_obj.contains("position")) dst.position = parsed.position;
 			if (t_obj.contains("rotation")) dst.rotation = parsed.rotation;
 			if (t_obj.contains("scale"))    dst.scale = parsed.scale;
@@ -417,10 +423,20 @@ namespace {
 			egLOG_WARN("desc", "override: bad transform pointer '{}', skipping", record.path);
 			return;
 		}
+
+		auto is_vec3 = [] (const json::value* v) {
+			if (!v || !v->is_array() || v->as_array().size() != 3) return false;
+			return std::ranges::all_of(v->as_array(), [] (const json::value& n) { return n.is_number(); });
+		};
 		const auto& t = transform.as_object();
+		if (!is_vec3(t.if_contains("position")) || !is_vec3(t.if_contains("rotation")) || !is_vec3(t.if_contains("scale"))) {
+			egLOG_WARN("desc", "override: transform record at '{}' does not leave three numbers per field, skipping", record.path);
+			return;
+		}
 		node.position = json::value_to<glm::vec3>(t.at("position"));
 		node.rotation = json::value_to<glm::vec3>(t.at("rotation"));
 		node.scale = json::value_to<glm::vec3>(t.at("scale"));
+		node.has_transform = true;
 	}
 
 	void apply_set_record(desc::desc_system& desc_system, const desc::desc_base& owner, prefab_node& node, const scn::override_record& record)
@@ -437,6 +453,11 @@ namespace {
 			} else {
 				egLOG_WARN("desc", "override: component '{}' not found, cannot set '{}'", record.component, record.path);
 			}
+			return;
+		}
+		if (record.path.empty() && record.value.is_string()) {
+			// a plain reference to a desc replaces the component whole
+			it->second = scn::parse_component(desc_system, owner, record.value, record.component);
 			return;
 		}
 		if (record.path.empty() && !record.value.is_object()) {
@@ -646,8 +667,13 @@ void scn::reconcile(
 	res::tag source;
 	if (materialize(assembler, node, expanded, source, 0)) {
 		if (!source.string().empty()) {
+			// A transform the node spells out places the instance; otherwise the prefab root's does, with the
+			// target-[] transform records applied. Taken before the prefab_instance below replaces `node`.
+			const glm::mat4 placement = (node.has_transform ? node : expanded).get_local_transform();
+			if (!node.has_transform || !reg.all_of<scn::local_transform>(live)) {
+				reg.emplace_or_replace<scn::local_transform>(live, placement);
+			}
 			reg.emplace_or_replace<scn::prefab_instance>(live, scn::prefab_instance{ source, node });
-			apply_root_transform_fallback(reg, live, expanded);
 			emit_event<scn::transform_updated>(reg, live);
 		}
 		content = &expanded;
@@ -833,6 +859,9 @@ namespace {
 		}
 
 		json::array records;
+		if (auto existing = node.find("overrides"); existing != node.end() && existing->value().is_array()) {
+			records = std::move(existing->value().as_array());
+		}
 		json::object kept;
 		for (auto& kv : comps->value().as_object()) {
 			if (kv.key() == reference_key) {
@@ -851,6 +880,8 @@ namespace {
 		if (auto children = node.find("children"); children != node.end()) {
 			if (children->value().is_array()) {
 				for (auto& child : children->value().as_array()) {
+					// an overlay child can itself be a nested instance
+					if (child.is_object()) upgrade_node_v2(child.as_object());
 					json::object record;
 					record["target"] = json::array{};
 					record["op"] = "add_node";

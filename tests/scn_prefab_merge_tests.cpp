@@ -644,8 +644,10 @@ BOOST_AUTO_TEST_CASE(Records_AreWrittenCanonicalAndSurviveAReload)
 		"0 set stat /hp",           // the later /hp won, the earlier one is gone
 		"1 set stat /limits",       // absorbed /limits/max
 		"1 set transform /scale",
-		"1 remove stat -",          // absorbed the earlier /hp on a2
-		"1 remove - -",             // absorbed the transform record below the removed node
+		"1 set stat /hp",           // a remove never absorbs anything: it stays after the run it follows
+		"1 remove stat -",
+		"1 set transform /position",
+		"1 remove - -",
 	}));
 	BOOST_TEST(records[0].at("value").to_number<int>() == 2);
 	BOOST_TEST(records[0].at("target").as_array().empty());
@@ -658,19 +660,73 @@ BOOST_AUTO_TEST_CASE(Records_AreWrittenCanonicalAndSurviveAReload)
 	BOOST_TEST((json::value(out) == json::value(second)));
 }
 
-BOOST_AUTO_TEST_CASE(Records_RemovingAnAddedNodeCancelsTheAddition)
+// The records of the instance node "inst" after a save, as a list of "op target-size component path".
+std::vector<json::value> saved_records(prefab_fixture& f, const char* overrides)
 {
-	auto d = parse(R"({"__type":"prefab_desc","__version":3,"children":[
-		{"__id":"00000000000000c1","name":"inst","components":{"base":"memory://t/base.prefab.desc"},"overrides":[
-			{"target":[],"op":"add_node","value":{"__id":"00000000000000f1","name":"tmp"}},
-			{"target":["00000000000000f1"],"component":"transform","path":"/position","value":[1,0,0]},
-			{"target":["00000000000000f1"],"op":"remove"},
-			{"target":[],"component":"stat","path":"/hp","value":6}]}]})");
+	auto d = f.parse((std::string(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"inst","components":{"base":"memory://t/base.prefab.desc"},"overrides":[)") + overrides + "]}]}").c_str());
 	json::object out;
 	d.serialize(out);
 	const auto& records = out.at("children").as_array()[0].at("overrides").as_array();
-	BOOST_REQUIRE(records.size() == 1u);
-	BOOST_TEST(records[0].at("component").as_string() == "stat");
+	return { records.begin(), records.end() };
+}
+
+BOOST_AUTO_TEST_CASE(Records_RemoveAfterAddNodeKeepsBothBecauseAddNodeMayMerge)
+{
+	// add_node of an existing id merges into the base's node; the remove after it must still delete that node
+	auto records = saved_records(*this, R"(
+		{"target":[],"op":"add_node","value":{"__id":"00000000000000a1","name":"arm","transform":{"position":[1,0,0]}}},
+		{"target":["00000000000000a1"],"component":"transform","path":"/position","value":[2,0,0]},
+		{"target":["00000000000000a1"],"op":"remove"})");
+	BOOST_REQUIRE(records.size() == 3u);
+	BOOST_TEST(records[0].at("op").as_string() == "add_node");
+	BOOST_TEST(records[2].at("op").as_string() == "remove");
+}
+
+BOOST_AUTO_TEST_CASE(Records_TwoAddNodesOfOneIdAreBothKept)
+{
+	auto records = saved_records(*this, R"(
+		{"target":[],"op":"add_node","value":{"__id":"00000000000000a1","name":"arm","transform":{"position":[1,0,0]}}},
+		{"target":[],"op":"add_node","value":{"__id":"00000000000000a1","name":"arm","transform":{"scale":[3,3,3]}}})");
+	BOOST_TEST(records.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(Records_OrderAgainstRemoveAndAddNodeIsNotChangedBySorting)
+{
+	auto records = saved_records(*this, R"(
+		{"target":["00000000000000a1"],"op":"remove"},
+		{"target":[],"op":"add_node","value":{"__id":"00000000000000a1","name":"arm"}},
+		{"target":["00000000000000b1","00000000000000b2"],"component":"transform","path":"/position","value":[2,0,0]},
+		{"target":["00000000000000b1"],"op":"add_node","value":{"__id":"00000000000000b2","name":"x","transform":{"position":[1,0,0]}}})");
+	BOOST_REQUIRE(records.size() == 4u);
+	BOOST_TEST(records[0].at("op").as_string() == "remove");
+	BOOST_TEST(records[1].at("op").as_string() == "add_node");
+	BOOST_TEST(records[2].at("component").as_string() == "transform"); // before the merging add_node, as written
+	BOOST_TEST(records[3].at("op").as_string() == "add_node");
+}
+
+BOOST_AUTO_TEST_CASE(Records_ArrayPointersAreNeitherCollapsedNorReordered)
+{
+	auto records = saved_records(*this, R"(
+		{"target":[],"component":"stat","path":"/list/-","value":1},
+		{"target":[],"component":"stat","path":"/list/-","value":2},
+		{"target":[],"component":"stat","path":"/list/10","value":3},
+		{"target":[],"component":"stat","path":"/list/2","value":4})");
+	BOOST_REQUIRE(records.size() == 4u);
+	BOOST_TEST(records[0].at("value").to_number<int>() == 1);
+	BOOST_TEST(records[1].at("value").to_number<int>() == 2);
+	BOOST_TEST(records[2].at("path").as_string() == "/list/10");
+	BOOST_TEST(records[3].at("path").as_string() == "/list/2");
+}
+
+BOOST_AUTO_TEST_CASE(Records_AParentPointerDoesNotAbsorbAcrossARemove)
+{
+	auto records = saved_records(*this, R"(
+		{"target":[],"component":"stat","path":"/limits/max","value":5},
+		{"target":[],"op":"remove","component":"stat"},
+		{"target":[],"component":"stat","path":"","value":{"__type":"stat_desc"}},
+		{"target":[],"component":"stat","path":"/limits","value":{"min":1}})");
+	BOOST_TEST(records.size() == 4u);
 }
 
 BOOST_AUTO_TEST_CASE(Records_PreserveTheOrderOfMergeAndPointerRecordsOfOneComponent)
@@ -751,6 +807,125 @@ BOOST_AUTO_TEST_CASE(Migration_VersionTwoFileWithoutAnInstanceOnlyGetsTheNewVers
 	auto expected = json::parse(text).as_object();
 	expected["__version"] = 3;
 	BOOST_TEST(json::value(migrated) == json::value(expected));
+}
+
+BOOST_AUTO_TEST_CASE(Migration_AnOverlayChildThatIsAnInstanceIsMigratedToo)
+{
+	auto migrated = parse_migrated(R"({"__type":"prefab_desc","__version":2,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
+		"children":[{"__id":"00000000000000e1","name":"holder","components":{
+			"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"},
+			"stat":{"__type":"stat_desc","hp":5}}}]})");
+	const auto& records = migrated.at("overrides").as_array();
+	BOOST_REQUIRE(records.size() == 1u);
+	const auto& holder = records[0].at("value").as_object();
+	BOOST_TEST(holder.at("components").as_object().size() == 1u);        // only the reference is left
+	BOOST_REQUIRE(holder.contains("overrides"));
+	BOOST_TEST(holder.at("overrides").as_array()[0].at("component").as_string() == "stat");
+}
+
+BOOST_AUTO_TEST_CASE(Migration_KeepsRecordsAlreadyOnTheNodeAndReplacesWithAStringReference)
+{
+	put("stat_a.desc", R"({"__type":"stat_desc","hp":5,"label":"A"})");
+	put("base.prefab.desc", BASE_PREFAB);
+	auto migrated = parse_migrated(R"({"__type":"prefab_desc","__version":2,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"},
+			"stat":"memory://t/stat_a.desc"},
+		"overrides":[{"target":[],"component":"stat","path":"/hp","value":1}]})");
+	const auto& records = migrated.at("overrides").as_array();
+	BOOST_REQUIRE(records.size() == 2u);
+	BOOST_TEST(records[0].at("path").as_string() == "/hp");
+	BOOST_TEST(records[1].at("path").as_string() == "");
+
+	scn::prefab_desc inst;
+	inst.deserialize(*descs, migrated);
+	entt::registry reg;
+	auto e = reg.create();
+	assemble_prefab_node(*assembler, reg, e, inst.get_root());
+	const auto& s = reg.get<test_util::stat_component>(e);
+	BOOST_TEST(s.hp == 5);          // the string reference replaced the base's component (v2 did the same)
+	BOOST_TEST(s.label == "A");
+}
+
+BOOST_AUTO_TEST_CASE(NestedInstance_MalformedTransformRecordsAreSkipped)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(instance_with(
+		on_arm(R"("component":"transform","path":"/position","value":[1,2])") + ","
+		+ on_arm(R"("component":"transform","path":"/position/1","value":"x")") + ","
+		+ on_arm(R"("component":"transform","path":"","value":{"scale":"big"})")).c_str());
+	entt::registry reg;
+	auto e = reg.create();
+	BOOST_CHECK_NO_THROW(assemble_prefab_node(*assembler, reg, e, inst.get_root()));
+	auto arm = child_named(reg, e, "arm");
+	BOOST_TEST((translation_of(reg, arm) == glm::vec3{ 5, 0, 0 }));
+	BOOST_TEST(scale_x_of(reg, arm) == 2.0f, boost::test_tools::tolerance(1e-5f));
+}
+
+// ---------------------------------------------------------------- placement of an instance
+
+constexpr const char* LEVEL_WITH_INSTANCE = R"({"__type":"prefab_desc","__version":3,"children":[
+	{"__id":"00000000000000c1","name":"inst","components":{"base":"memory://t/base.prefab.desc"}}]})";
+
+BOOST_AUTO_TEST_CASE(Instance_WithoutATransformIsPlacedByThePrefabRoot)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto level = parse(LEVEL_WITH_INSTANCE);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, level, "level", res::tag{});
+	BOOST_TEST((translation_of(reg, child_named(reg, root, "inst")) == glm::vec3{ 1, 2, 3 }));
+}
+
+BOOST_AUTO_TEST_CASE(Instance_DraggedToTheOriginStaysThereAfterSaveAndReload)
+{
+	put("base.prefab.desc", BASE_PREFAB); // its root sits at 1, 2, 3
+	auto level = parse(LEVEL_WITH_INSTANCE);
+	level.get_root().children[0].has_transform = true; // what the editor does when the node is moved; position stays 0
+
+	json::object out;
+	level.serialize(out);
+	const auto& saved = out.at("children").as_array()[0].as_object();
+	BOOST_REQUIRE(saved.contains("transform"));
+	BOOST_TEST(saved.at("transform").as_object().empty());
+
+	scn::prefab_desc again;
+	again.deserialize(*descs, out);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, again, "level", res::tag{});
+	BOOST_TEST((translation_of(reg, child_named(reg, root, "inst")) == glm::vec3{ 0 }));
+}
+
+BOOST_AUTO_TEST_CASE(Instance_RootTransformRecordPlacesItUnlessTheNodeHasItsOwnTransform)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto level = parse(R"({"__type":"prefab_desc","__version":3,"children":[
+		{"__id":"00000000000000c1","name":"recorded","components":{"base":"memory://t/base.prefab.desc"},
+		 "overrides":[{"target":[],"component":"transform","path":"/position","value":[0,0,7]}]},
+		{"__id":"00000000000000c2","name":"placed","transform":{"position":[0,5,0]},"components":{"base":"memory://t/base.prefab.desc"},
+		 "overrides":[{"target":[],"component":"transform","path":"/position","value":[0,0,7]}]}]})");
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, level, "level", res::tag{});
+	BOOST_TEST((translation_of(reg, child_named(reg, root, "recorded")) == glm::vec3{ 0, 0, 7 }));
+	BOOST_TEST((translation_of(reg, child_named(reg, root, "placed")) == glm::vec3{ 0, 5, 0 })); // the node's own transform wins
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_InstanceFollowsAChangedPrefabRootTransform)
+{
+	auto base_tag = put("base.prefab.desc", BASE_PREFAB);
+	auto level = parse(LEVEL_WITH_INSTANCE);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, level, "level", res::tag{});
+	auto inst = child_named(reg, root, "inst");
+	BOOST_REQUIRE((translation_of(reg, inst) == glm::vec3{ 1, 2, 3 }));
+
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":3,"transform":{"position":[9,9,9]}})");
+	rs->signal_changed(base_tag);
+	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(base_tag));
+	BOOST_TEST((translation_of(reg, inst) == glm::vec3{ 9, 9, 9 }));
 }
 
 BOOST_AUTO_TEST_CASE(Migration_ARecordedInstanceIsLeftAlone)

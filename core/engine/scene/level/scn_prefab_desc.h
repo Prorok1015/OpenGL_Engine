@@ -35,6 +35,10 @@ namespace scn {
 			glm::vec3 position{ 0.0f };
 			glm::vec3 rotation{ 0.0f };
 			glm::vec3 scale{ 1.0f };
+			// The node's transform is spelled out (a "transform" object exists), even if every value equals the
+			// default. For a node that instantiates a prefab it decides whether the node's own transform or the
+			// prefab root's (with target-[] records) places the instance.
+			bool has_transform = false;
 
 			std::unordered_map<std::string, prefab_comp_node> components;
 			std::vector<prefab_node> children;
