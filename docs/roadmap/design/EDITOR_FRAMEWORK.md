@@ -1,6 +1,6 @@
 # Дизайн: каркас редактора — editor_context, документы, реестры, сервисы (эпик #18)
 
-**Issue:** #18 (stories #136–#140) · **Статус:** черновик, ждёт решения владельца · Основа: `STAGE_D_PLAN.md` §1 #18, §5 п.5 (Undo и Extension API остаются в M3; `job_service` сначала поверх `std::async`); `WORLD_CONTEXT.md` §2 «Граница с #18», §4 (утверждено); `DISTRIBUTION.md` §2 (утверждено: `registration_context`, области, `game_editor.dll` → #22, problems → #24, сборка через `job_service`); `CHIMERA_ROADMAP.md` ADR-01, ADR-05, ADR-10; стыковка с M3: #31 (EPIC-59), #22 (EPIC-53), #29/#141–#146 (EPIC-15), #24 (EPIC-51), #17/#135
+**Issue:** #18 (stories #136–#140) · **Статус:** утверждён владельцем 2026-10-18 (решения в конце) · Основа: `STAGE_D_PLAN.md` §1 #18, §5 п.5 (Undo и Extension API остаются в M3; `job_service` сначала поверх `std::async`); `WORLD_CONTEXT.md` §2 «Граница с #18», §4 (утверждено); `DISTRIBUTION.md` §2 (утверждено: `registration_context`, области, `game_editor.dll` → #22, problems → #24, сборка через `job_service`); `CHIMERA_ROADMAP.md` ADR-01, ADR-05, ADR-10; стыковка с M3: #31 (EPIC-59), #22 (EPIC-53), #29/#141–#146 (EPIC-15), #24 (EPIC-51), #17/#135
 
 ## 1. Как устроено сейчас (aibranch)
 
@@ -184,3 +184,13 @@ void cancel_all_and_wait(); // в ~editor_system
 6. #137 ждёт #12 PR-5 (рек., `WORLD_CONTEXT` §4), а #136/#138/#139 идут раньше? Или делать #137 сразу на `level_manager` и потом переделывать?
 
 > **Сверка с `TASK_SYSTEM.md` (до утверждения):** сигнатуры `job_service` в двух черновиках расходятся. Здесь: `run(label, work, on_done, weak_ptr owner)` + `poll()`. В TASK_SYSTEM: `start(task_desc, fn(task_context&))` по образцу `task_system::run`, с `then_main(ds::lifetime, …)`. Предлагается взять форму TASK_SYSTEM (`task_desc` + `task_context` + `ds::lifetime` вместо `weak_ptr<void>`), чтобы смена бэкенда в #135 не трогала вызывающий код.
+
+## Решения владельца (2026-10-18, «по рекомендациям»)
+
+1. Публичные заголовки редактора — сразу в `include/snk/editor/`.
+2. В D только `scene_document::commit(label)` и термин «action»; `edt::command` и стек — в #141.
+3. Выделение по пути node id, без сырых указателей.
+4. `job_service`: отмена кооперативная, импорт при отмене выбрасывает результат, прогресс — одна модалка.
+5. Реестры доступны через `editor_context` из `app_data_storage`.
+6. #137 ждёт #12 PR-5; #136/#138/#139 идут раньше.
+7. Сигнатура `job_service` — по `TASK_SYSTEM.md` (`start(task_desc, fn(task_context&))`, доставка через `ds::lifetime`), чтобы #135 менял только backend.

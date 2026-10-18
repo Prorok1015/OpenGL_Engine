@@ -1,6 +1,6 @@
 # Дизайн: схема desc — type_schema, generic-операции, инспектор, компоненты без C++-типа (эпик #16)
 
-**Issue:** #16 (stories #128–#131) · **Решение владельца (финальное):** Boost.Describe по ADR-04: `describe` и `mp11` добавляются в `BOOST_INCLUDE_LIBRARIES` и в SDK-замыкание (STAGE_D_PLAN §5.6) · **Новое требование:** DISTRIBUTION.md §7.1: компоненты из wasm-модулей описываются схемой, а не C++-типом; id компонента — по имени · Основа: `CHIMERA_ROADMAP.md` ADR-04, ADR-06; `ARCHITECTURE_REVIEW.md` §3.7; `DATA_FORMATS_V2.md` §3–§6; `STAGE_D_PLAN.md` §1 #16, §2 (волна 1 C, волна 2); `HEADER_SPLIT.md` (desc переезжает в PR-2) · **Статус:** черновик, ждёт утверждения владельца
+**Issue:** #16 (stories #128–#131) · **Решение владельца (финальное):** Boost.Describe по ADR-04: `describe` и `mp11` добавляются в `BOOST_INCLUDE_LIBRARIES` и в SDK-замыкание (STAGE_D_PLAN §5.6) · **Новое требование:** DISTRIBUTION.md §7.1: компоненты из wasm-модулей описываются схемой, а не C++-типом; id компонента — по имени · Основа: `CHIMERA_ROADMAP.md` ADR-04, ADR-06; `ARCHITECTURE_REVIEW.md` §3.7; `DATA_FORMATS_V2.md` §3–§6; `STAGE_D_PLAN.md` §1 #16, §2 (волна 1 C, волна 2); `HEADER_SPLIT.md` (desc переезжает в PR-2) · **Статус:** утверждён владельцем 2026-10-18 (решения в конце)
 
 ## 1. Как устроено сейчас (aibranch)
 
@@ -109,3 +109,12 @@
 4. Первые три типа — light, camera, material (skybox — четвёртым); prefab/world/level/geometry не переводить? **Рекомендация: да.**
 5. Компоненты без C++-типа — вариант A (именованный пул `dyn_blob`) за интерфейсом `dyn_components`, B — по итогам спайка S12? **Рекомендация: да.**
 6. Добавить `desc_resave --check` в CI отдельным PR до #128? **Рекомендация: да**, это дёшево и закрывает главный риск эпика.
+
+## Решения владельца (2026-10-18, «по рекомендациям»)
+
+1. Свой макрос `DESC_FIELDS` не вводим: поля — `BOOST_DESCRIBE_CLASS`, атрибуты — `constexpr`-таблица `field_attrs<T>`.
+2. `type_schema` — данные времени выполнения, общие для C++ и wasm/JSON.
+3. Presence — только в JSON (overrides + записи), без маски полей.
+4. Первые типы: light → camera → material, skybox четвёртым; prefab/world/level/geometry не переводятся.
+5. Компоненты без C++-типа — вариант A (`dyn_blob` в именованном пуле) за `dyn_components`; B — по итогам S12 #230.
+6. `desc_resave --check` в CI — отдельным PR (S0) до #128.
