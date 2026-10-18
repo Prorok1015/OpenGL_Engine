@@ -11,6 +11,6 @@ namespace engine::render {
 	SNK_API void register_render_descs(desc::desc_system& desc_sys);
 	SNK_API void unregister_render_descs(desc::desc_system& desc_sys);
 
-	void render_init(ds::app_data_storage& data);
-	void render_term(ds::app_data_storage& data);
+	SNK_API void render_init(ds::app_data_storage& data);
+	SNK_API void render_term(ds::app_data_storage& data);
 }
