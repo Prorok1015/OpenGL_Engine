@@ -117,24 +117,26 @@ how_to_apply:
   };
 
 [CONSTRAINT_13]
-rule: Systems inherit ecs::system_interface
-why: Required base for ecs::system_factory::register_automatic_system
+rule: Systems inherit ecs::system_interface only when stateful; every system declares its phase in code
+why: Phase and ordering are properties of what the system does (ARCHITECTURE_REVIEW 9.5), the desc only says which systems a world runs
 how_to_apply:
   struct my_system : ecs::system_interface { /* state only */ };
   // system_interface has NO update()/initialize() — it is just a virtual dtor.
   // The per-frame logic is a free or member function whose args (entt::view,
-  // ecs::bind_res<ID,T>, ...) are auto-resolved by the organizer:
-  sfactory.register_automatic_system<&my_system::tick, my_system>("my_system", inst);
-  source: core/core/ecs/ecs_system_interface.hpp, ecs_system.h
+  // ecs::bind_res<ID,T>, ...) are injected by the invoker:
+  sfactory.register_system<&my_system::tick, my_system>("my_system",
+      { .phase = ecs::phase::update, .after = { "other_system" }, .run_in_edit = false }, ctor_args...);
+  // Do not rely on argument types for ordering; add .after/.before. Debug builds warn about
+  // two unordered systems of one phase that write the same data.
+  source: core/core/ecs/ecs_system.h, ecs_system_registry.hpp, ecs_system_plan.hpp, ecs_phase.hpp
 
 [CONSTRAINT_13B]
-rule: Automatic system dispatch supports world IDs 0-4 only (max 5 worlds)
-why: registration_dispatcher::dispatch is a hard-coded switch (case 0..4);
-     world_id > 4 hits ASSERT_MSG(false, "World ID > 4 not supported...")
+rule: Add game phases before worlds load; built-in phases cannot be changed
+why: Plans are built per world against the phase table at that moment
 how_to_apply:
-  - Keep level world count <= 5, or expand the switch in ecs_system.h
-  - world_salt is just a size_t wrapper, NOT a fixed-size limit by itself
-  source: core/core/ecs/ecs_system.h registration_dispatcher::dispatch (L80-99)
+  - sfactory.add_game_phase("ai", ecs::phase::update, ecs::phase_side::before);
+  - fixed_update is the only phase stepped by the accumulator
+  source: core/core/ecs/ecs_phase.hpp
 
 [CONSTRAINT_13C]
 rule: World order is desc order; derive parallel world arrays from one ordered source

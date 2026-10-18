@@ -158,11 +158,12 @@ exceptions: Avoid in hot paths, use for init errors only
 return_codes: Prefer for resource loading failures
 
 [ECS_PATTERNS]
-system_registration: ecs::system_factory::register_automatic_system<&fn, T>(name, instance)
+system_registration: ecs::system_factory::register_system<&fn>(name, { .phase, .after, .before, .run_in_edit }) — stateful: <&T::fn, T>(name, desc, ctor args...) or <&T::fn>(name, desc, shared_ptr<T>)
 system_interface: empty base (virtual dtor only) — NO update()/initialize() methods
-system_logic: free/member fn; args (entt::view, ecs::bind_res<ID,T>) auto-resolved by organizer
-component_dependency: declared via the system fn's argument types, salted per world_id
-world_creation: automatic dispatch supports world IDs 0-4 (max 5); world_salt + bind_res<WorldID,T>
+system_logic: free/member fn; args (entt::view, ecs::bind_res<ID,T>, ctx resources) auto-injected by ecs::invoker
+system_order: explicit — phase (input, pre_update, fixed_update, update, post_update, transform, late_update) + after/before by system name; ties broken by order in world_desc.systems. Argument types never decide order, they only feed Debug access-conflict warnings
+world_creation: one execution plan per world (ecs::build_system_plan), built when the world loads or its system list changes; worlds run in id order; bind_res<WorldID,T> reaches another world's ctx
+modes: scn::level::set_mode(ecs::run_mode::edit|play|pause|step) — edit/pause run only run_in_edit systems
 
 [IMGUI_PATTERNS]
 begin_end_pairing:  # End() ALWAYS called; Begin() result only gates drawing

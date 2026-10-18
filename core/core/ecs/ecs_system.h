@@ -3,6 +3,7 @@
 #include "logger/engine_log.h"
 #include "ecs_command_buffer.hpp"
 #include "ecs_invoker.hpp"
+#include "ecs_system_access.hpp"
 #include "ecs_system_interface.hpp"
 #include "ecs_system_registry.hpp"
 #include "ecs_traits.hpp"
@@ -13,109 +14,15 @@
 #include <string>
 #include <unordered_map>
 
-// --- Specialization of type_hash for salted_type Types ---
-namespace entt {
-template <typename T, size_t ID> 
-struct type_hash<ecs::salted_type<T, ID>> {
-  [[nodiscard]] static constexpr id_type value() noexcept {
-    // Salt the hash: Original ^ (ID << 16)
-    return type_hash<T>::value() ^ (static_cast<id_type>(ID) << 16);
-  }
-};
-
-template <typename T, size_t ID> 
-struct type_hash<ecs::salted_type<const T, ID>> {
-  [[nodiscard]] static constexpr id_type value() noexcept {
-    return type_hash<T>::value() ^ (static_cast<id_type>(ID) << 16);
-  }
-};
-} // namespace entt
-
 namespace ecs {
 
+// Registration of systems. The author declares the phase, the ordering constraints and the
+// edit-mode flag in code; which systems a world runs is data (world_desc.systems). The scheduler
+// (ecs_system_plan.hpp) turns both into one execution plan per world.
+//   sf.register_system<&fn>("scn::transform_system",
+//       { .phase = ecs::phase::transform, .after = { "scn::depth_system" }, .run_in_edit = true });
 class system_factory {
-private:
-    // Callback signature: register(world_registry, organizer)
-    using system_initializer_fn = std::function<std::shared_ptr<system_interface>(entt::registry&, entt::organizer&)>;
-
-    template <auto Candidate, size_t WorldID, typename... SaltedReqs>
-    static void emplace_automatic_system(const char* name, entt::organizer &org, type_list<SaltedReqs...>) {
-        org.emplace<SaltedReqs...>(&invoker_callback<Candidate, WorldID>, nullptr, name);
-    }
-
-    template <auto Candidate, class INSTANCE, size_t WorldID, typename... SaltedReqs>
-    static void emplace_automatic_system(INSTANCE* instance, const char* name, entt::organizer &org, type_list<SaltedReqs...>) {
-        org.emplace<SaltedReqs...>(&invoker_callback<Candidate, INSTANCE, WorldID>, instance, name);
-    }
-
-    // The generic callback executed by Organizer
-    template <auto Candidate, class INSTANCE, size_t world_id>
-    static void invoker_callback(const void *payload, entt::registry &level_registry) {
-        auto* get_reg_func = level_registry.ctx().find<runtime_context_provider>();
-
-        if (!get_reg_func) {
-            ASSERT_FAIL("Fatal: runtime_context_provider not found in level context!");
-            return;
-        }
-
-        runtime_context ctx = get_reg_func->get_context(world_id);
-        invoker<Candidate>::invoke(*static_cast<INSTANCE*>(const_cast<void*>(payload)), ctx);
-    }
-
-    template <auto Candidate, size_t world_id>
-    static void invoker_callback(const void *payload, entt::registry &level_registry) {
-        auto* get_reg_func = level_registry.ctx().find<runtime_context_provider>();
-
-        if (!get_reg_func) {
-            ASSERT_FAIL("Fatal: runtime_context_provider not found in level context!");
-            return;
-        }
-
-        runtime_context ctx = get_reg_func->get_context(world_id);
-        invoker<Candidate>::invoke(ctx);
-    }
-
-    template <auto Candidate, class INSTANCE> 
-    struct registration_dispatcher 
-    {
-        static void dispatch(size_t id, INSTANCE* instance, const char* name, entt::organizer &org) {
-            switch (id) {
-            case 0:
-                impl<0>(instance, name, org);
-            break;
-            case 1:
-                impl<1>(instance, name, org);
-            break;
-            case 2:
-                impl<2>(instance, name, org);
-            break;
-            case 3:
-                impl<3>(instance, name, org);
-            break;
-            case 4:
-                impl<4>(instance, name, org);
-            break;
-            default:
-                ASSERT_MSG(false, "World ID > 4 not supported by automatic dispatcher (expand switch case if needed)");
-            }
-        }
-
-        template <size_t ID>
-        static void impl(INSTANCE* instance, const char* name, entt::organizer &org) {
-            using Traits = function_traits<decltype(Candidate)>;
-            using DepList = typename args_to_dependencies<typename Traits::args_tuple, ID>::type;
-            if constexpr (std::is_same_v<INSTANCE, void>)
-                emplace_automatic_system<Candidate, ID>(name, org, DepList{});
-            else
-                emplace_automatic_system<Candidate, INSTANCE, ID>(instance, name, org, DepList{});
-        }
-    };
-
 public:
-    // --- Phase-based registration (ARCHITECTURE_REVIEW 9.5) ---
-    // The author declares phase / after / before / run_in_edit in code:
-    //   sf.register_system<&fn>("scn::transform_system", { .phase = ecs::phase::transform, .after = { "scn::depth_system" }, .run_in_edit = true });
-
     // Stateless system (free function).
     template <auto Candidate>
     void register_system(const std::string &name, system_desc desc = {}) {
@@ -146,61 +53,6 @@ public:
 
     system_registry& registry() { return m_registry; }
     const system_registry& registry() const { return m_registry; }
-
-   // Register Stateful System (instance)
-    template <auto Candidate, typename T>
-    requires std::is_base_of_v<ecs::system_interface, T>
-    void register_automatic_system(const std::string &name, std::shared_ptr<T> system) {
-        ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
-
-        m_systems[name] = [name = name, system = system](entt::registry& world_reg, entt::organizer &org) {
-            size_t w_id = world_reg.ctx().get<ecs::world_salt>();
-
-            registration_dispatcher<Candidate, T>::dispatch(w_id, system.get(), name.c_str(), org);
-
-            return system;
-        };
-    }
-
-    // Register Stateful System (in place)
-    template <auto Candidate, typename T, class... ARGS>
-    requires std::is_base_of_v<ecs::system_interface, T>
-    void register_automatic_system(const std::string &name, ARGS... args) {
-        ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
-
-        m_systems[name] = [name = name, args...](entt::registry& world_reg, entt::organizer& org) {
-            size_t w_id = world_reg.ctx().get<ecs::world_salt>();
-            auto system = std::make_shared<T>(args...);
-
-            registration_dispatcher<Candidate, T>::dispatch(w_id, system.get(), name.c_str(), org);
-
-            return system;
-        };
-    }
-    
-    // Register Automatic System (Function)
-    template <auto Candidate>
-    void register_automatic_system(const std::string &name) {
-        ASSERT_MSG(!m_systems.contains(name), "ecs system already contains in the factory!");
-
-        m_systems[name] = [name](entt::registry &world_reg, entt::organizer &org) {
-            size_t w_id = world_reg.ctx().get<ecs::world_salt>();
-
-            registration_dispatcher<Candidate, void>::dispatch(w_id, nullptr, name.c_str(), org);
-
-            return nullptr; // Stateless
-        };
-    }
-
-    std::shared_ptr<system_interface> create_system(const std::string_view name, entt::registry &reg, entt::organizer &org)  {
-		std::string name_str{ name };
-        if (m_systems.contains(name_str)) {
-            return m_systems[name_str](reg, org);
-        }
-
-        ASSERT_FAIL("System is not found");
-        return nullptr;
-    }
 
     system_factory() = default;
     ~system_factory() = default;
@@ -233,6 +85,5 @@ private:
     }
 
     system_registry m_registry;
-    std::unordered_map<std::string, system_initializer_fn> m_systems;
 };
 } // namespace ecs

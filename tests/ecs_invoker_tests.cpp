@@ -134,47 +134,12 @@ BOOST_AUTO_TEST_CASE(FunctionTraitsReportArgumentCountAndTypes)
 	BOOST_TEST(true);
 }
 
-BOOST_AUTO_TEST_CASE(DependencyExtractorSaltsTypesPerWorld)
-{
-	using deps0 = ecs::args_to_dependencies<std::tuple<tick_counter&>, 0>::type;
-	using deps1 = ecs::args_to_dependencies<std::tuple<tick_counter&>, 1>::type;
-	static_assert(!std::is_same_v<deps0, deps1>); // same resource in different worlds is not a conflict
-	static_assert(std::is_same_v<deps0, ecs::type_list<ecs::salted_type<tick_counter, 0>>>);
-
-	// bind_res targets the world named by its template id, not the system's own world
-	using bound = ecs::args_to_dependencies<std::tuple<const ecs::bind_res<1, shared_state>&>, 0>::type;
-	static_assert(std::is_same_v<bound, ecs::type_list<ecs::salted_type<shared_state, 1>>>);
-	using bound_const = ecs::args_to_dependencies<std::tuple<ecs::bind_res<1, const shared_state>>, 0>::type;
-	static_assert(std::is_same_v<bound_const, ecs::type_list<const ecs::salted_type<shared_state, 1>>>); // read-only access stays const
-	BOOST_TEST(true);
-}
-
 // ---------------------------------------------------------------- system_factory
 
-// ASSERT_FAIL("System is not found") in system_factory::create_system aborts the process now that
-// asserts are live (Debug), so the null-return fallback is unreachable there; kept for Release.
-BOOST_TEST_DECORATOR(*boost::unit_test::disabled())
-BOOST_AUTO_TEST_CASE(Factory_UnknownSystemYieldsNull)
+BOOST_AUTO_TEST_CASE(Factory_UnknownSystemIsNotInTheRegistry)
 {
 	ecs::system_factory factory;
-	entt::registry reg;
-	reg.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 0 });
-	entt::organizer org;
-	BOOST_TEST(factory.create_system("nope", reg, org) == nullptr);
-	BOOST_TEST(org.graph().empty());
-}
-
-BOOST_AUTO_TEST_CASE(Factory_StatelessFunctionRegistersOneVertexAndReturnsNoInstance)
-{
-	ecs::system_factory factory;
-	factory.register_automatic_system<&sys_increment_resource>("tick");
-	entt::registry reg;
-	reg.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 2 });
-	entt::organizer org;
-
-	BOOST_TEST(factory.create_system("tick", reg, org) == nullptr); // stateless -> no instance
-	BOOST_REQUIRE(org.graph().size() == 1u);
-	BOOST_TEST(std::string(org.graph()[0].name()) == "tick");
+	BOOST_TEST(factory.registry().find("nope") == nullptr);
 }
 
 struct stateful_system : ecs::system_interface
@@ -184,72 +149,54 @@ struct stateful_system : ecs::system_interface
 	int counter;
 };
 
-BOOST_AUTO_TEST_CASE(Factory_StatefulSystemIsConstructedPerWorldWithRegisteredArguments)
+BOOST_AUTO_TEST_CASE(Factory_StatefulSystemIsConstructedPerInstanceWithRegisteredArguments)
 {
 	ecs::system_factory factory;
-	factory.register_automatic_system<&stateful_system::run, stateful_system>("st", 100);
+	factory.register_system<&stateful_system::run, stateful_system>("st", {}, 100);
 
-	entt::registry reg_a, reg_b;
-	reg_a.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 0 });
-	reg_b.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 1 });
-	entt::organizer org;
+	const auto* entry = factory.registry().find("st");
+	BOOST_REQUIRE(entry != nullptr);
+	auto a = entry->make();
+	auto b = entry->make();
+	BOOST_REQUIRE(a.owner);
+	BOOST_REQUIRE(b.owner);
+	BOOST_TEST(a.owner != b.owner); // separate instance per world
+	BOOST_TEST(static_cast<stateful_system&>(*a.owner).counter == 100);
 
-	auto a = factory.create_system("st", reg_a, org);
-	auto b = factory.create_system("st", reg_b, org);
-	BOOST_REQUIRE(a);
-	BOOST_REQUIRE(b);
-	BOOST_TEST(a != b); // separate instance per world
-	BOOST_TEST(static_cast<stateful_system&>(*a).counter == 100);
-	BOOST_TEST(org.graph().size() == 2u);
+	entt::registry reg;
+	auto ctx = ecs::runtime_context{ .get_world_registry = [&reg](size_t) -> entt::registry& { return reg; }, .current_registry = reg };
+	entry->run(a.self, ctx);
+	BOOST_TEST(static_cast<stateful_system&>(*a.owner).counter == 101);
+	BOOST_TEST(static_cast<stateful_system&>(*b.owner).counter == 100); // the other instance is untouched
+	BOOST_TEST(reg.ctx().get<tick_counter>().ticks == 101);
 }
 
-BOOST_AUTO_TEST_CASE(Factory_SharedInstanceOverloadReturnsTheSameObject)
+BOOST_AUTO_TEST_CASE(Factory_SharedInstanceOverloadHandsOutTheSameObject)
 {
 	ecs::system_factory factory;
 	auto inst = std::make_shared<stateful_system>(5);
-	factory.register_automatic_system<&stateful_system::run>("shared", inst);
+	factory.register_system<&stateful_system::run>("shared", {}, inst);
 
-	entt::registry reg;
-	reg.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 0 });
-	entt::organizer org;
-	BOOST_TEST(factory.create_system("shared", reg, org) == inst);
+	const auto* entry = factory.registry().find("shared");
+	BOOST_REQUIRE(entry != nullptr);
+	BOOST_TEST(entry->make().owner == inst);
 }
 
-BOOST_AUTO_TEST_CASE(Factory_SystemsSharingAWritableResourceGetOrderedEdges)
+BOOST_AUTO_TEST_CASE(Factory_StatelessFunctionHasNoInstanceAndRunsThroughTheInvoker)
 {
 	ecs::system_factory factory;
-	factory.register_automatic_system<&sys_increment_resource>("w1");
-	factory.register_automatic_system<&sys_increment_resource>("w2");
+	factory.register_system<&sys_increment_resource>("tick");
+
+	const auto* entry = factory.registry().find("tick");
+	BOOST_REQUIRE(entry != nullptr);
+	auto inst = entry->make();
+	BOOST_TEST(inst.owner == nullptr);
+
 	entt::registry reg;
-	reg.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 0 });
-	entt::organizer org;
-	factory.create_system("w1", reg, org);
-	factory.create_system("w2", reg, org);
-
-	auto graph = org.graph();
-	BOOST_REQUIRE(graph.size() == 2u);
-	// both write tick_counter in world 0 -> the second must run after the first
-	BOOST_TEST(graph[0].out_edges().size() + graph[1].out_edges().size() == 1u);
-}
-
-BOOST_AUTO_TEST_CASE(Factory_SameResourceInDifferentWorldsIsADistinctDependency)
-{
-	ecs::system_factory factory;
-	factory.register_automatic_system<&sys_increment_resource>("w");
-	entt::registry r0, r1;
-	r0.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 0 });
-	r1.ctx().emplace<ecs::world_salt>(ecs::world_salt{ 1 });
-	entt::organizer org;
-	factory.create_system("w", r0, org);
-	factory.create_system("w", r1, org);
-	auto graph = org.graph();
-	BOOST_REQUIRE(graph.size() == 2u);
-	const entt::type_info* w0[2]{};
-	const entt::type_info* w1[2]{};
-	BOOST_REQUIRE(graph[0].rw_dependency(w0, 2) == 1u);
-	BOOST_REQUIRE(graph[1].rw_dependency(w1, 2) == 1u);
-	BOOST_TEST(w0[0]->hash() != w1[0]->hash()); // the same resource is a different dependency per world
-	BOOST_TEST(w0[0]->hash() == (w1[0]->hash() ^ (entt::id_type{ 1 } << 16))); // salt = world id << 16
+	auto ctx = ecs::runtime_context{ .get_world_registry = [&reg](size_t) -> entt::registry& { return reg; }, .current_registry = reg };
+	entry->run(inst.self, ctx);
+	entry->run(inst.self, ctx);
+	BOOST_TEST(reg.ctx().get<tick_counter>().ticks == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

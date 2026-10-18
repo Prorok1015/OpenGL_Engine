@@ -28,21 +28,6 @@ struct runtime_context {
     size_t current_world_id = 0;
 };
 
-struct runtime_context_provider
-{
-    using getter_type = std::function<runtime_context(size_t)>;
-    runtime_context_provider(getter_type&& get)
-        : get_context(get) {
-    }
-    ~runtime_context_provider() = default;
-    runtime_context_provider(const runtime_context_provider&) = default;
-    runtime_context_provider(runtime_context_provider&&) = default;
-    runtime_context_provider& operator=(const runtime_context_provider&) = default;
-    runtime_context_provider& operator=(runtime_context_provider&&) = default;
-
-    getter_type get_context;
-};
-
 // Argument Resolver Template
 template <typename T> struct binded_resolver {
   // Fallback: Try to get T from local context
