@@ -35,7 +35,6 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             dl.specular  = light.specular;
             world_lights.directional.push_back(dl);
         }
-        int dir_light_count = static_cast<int>(world_lights.directional.size());
 
         for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
             const auto camera_viewport = rnd::effective_camera_viewport(
@@ -113,7 +112,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 rnd::shader_config shader_cfg;
                 {
                     PROFILE_SCOPE("Extract.ShaderDesc");
-                    rnd::material_compile_context mctx{ &m_trans.world, context.textures, dir_light_count, has_skinning };
+                    rnd::material_compile_context mctx{ &m_trans.world, context.textures, has_skinning };
                     shader_cfg = context.material_compiler->compile(mlt, mctx);
                 }
 
@@ -154,7 +153,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                     if (auto* sky_trans = reg.try_get<scn::world_transform>(sky_ent)) {
                         sky_world = &sky_trans->world;
                     }
-                    rnd::material_compile_context mctx{ sky_world, context.textures, 0, false };
+                    rnd::material_compile_context mctx{ sky_world, context.textures, false };
                     packet.skybox_material = context.material_compiler->compile(*mat.mlt_desc, mctx);
                 }
             }
