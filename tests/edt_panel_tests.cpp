@@ -3,6 +3,14 @@
 #include "edt_panel_manager.h"
 #include "edt_scene_hierarchy_panel.h"
 #include "level/scn_world_desc.h"
+#include "edt_editor_layer.h"
+#include "gui_debug_layer.h"
+#include <type_traits>
+
+// Layers are owned via shared_ptr<gui::layer_interface>; a non-virtual dtor would be UB (#173).
+static_assert(std::has_virtual_destructor_v<gui::layer_interface>);
+static_assert(std::has_virtual_destructor_v<gui::debug_layer>);
+static_assert(std::has_virtual_destructor_v<edt::editor_layer>);
 
 // Mock-панель: наследует panel_base, НЕ вызывает ImGui
 struct mock_panel : public edt::panel_base
