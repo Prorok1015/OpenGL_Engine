@@ -332,7 +332,8 @@ jobs:
           exit 1
 
   # Starts the editor on levels/smoke_level.desc under Xvfb + Mesa llvmpipe and checks that it
-  # survives, logs no errors and actually draws the scene (tools/headless/check_smoke.sh).
+  # survives, logs no errors and actually draws the scene (tools/headless/check_smoke.sh). The screenshots
+  # are also compared with tools/headless/reference/*.png; that comparison only reports for now.
   editor-smoke:
     name: Editor visual smoke (Linux)
     runs-on: ubuntu-latest
@@ -379,7 +380,8 @@ jobs:
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --seconds 20 --size 1600x900 --shot headless_out/smoke/final.png \
             -- --set editor/startup_level levels/smoke_level.desc
-          tools/headless/check_smoke.sh headless_out/smoke/final.png headless_out/smoke/editor.log
+          tools/headless/check_smoke.sh headless_out/smoke/final.png headless_out/smoke/editor.log \
+            200x200+860+450 0.055 tools/headless/reference/smoke.png
 
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
       - name: Smoke run (checklist actions)
@@ -388,7 +390,7 @@ jobs:
             --shot headless_out/checklist/final.png \
             -- --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/checklist/final.png headless_out/checklist/editor.log \
-            200x200+860+450 0
+            200x200+860+450 0 tools/headless/reference/checklist.png
 
       # Game view opened at startup (editor/show_game_view): it docks to the right half of the central
       # area and must show the "Game Camera" of smoke_level, so a crop of that panel cannot be flat.
@@ -397,7 +399,7 @@ jobs:
           tools/run_headless.sh --editor "$EDITOR_BIN" --seconds 20 --size 1600x900 --shot headless_out/game_view/final.png \
             -- --set editor/startup_level levels/smoke_level.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/game_view/final.png headless_out/game_view/editor.log \
-            200x200+940+260 0.03
+            200x200+940+260 0.03 tools/headless/reference/game_view.png
 
       - name: Upload screenshots and logs
         if: always()
