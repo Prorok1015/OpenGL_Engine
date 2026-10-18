@@ -3,6 +3,7 @@
 #include <glm/ext.hpp>
 #include "wnd_window_context.h"
 #include "ds/ds_fixed_vector.hpp"
+#include "snk_api.h"
 
 struct GLFWwindow;
 
@@ -29,7 +30,7 @@ namespace wnd
 		TYPE type = TYPE::LOGO;
 	};
 
-	class window
+	class SNK_API window
 	{
 	public:
 		struct short_id

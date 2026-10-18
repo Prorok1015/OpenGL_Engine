@@ -6,11 +6,12 @@
 // Include this header only in TUs that call json::value_from / json::value_to on a res::tag.
 #include "res_tag.h"
 #include <boost/json.hpp>
+#include "snk_api.h"
 
 namespace json = boost::json;
 
 namespace res
 {
-	void tag_invoke(json::value_from_tag, json::value& out, const res::tag& c);
-	res::tag tag_invoke(json::value_to_tag<res::tag>, const json::value& obj);
+	SNK_API void tag_invoke(json::value_from_tag, json::value& out, const res::tag& c);
+	SNK_API res::tag tag_invoke(json::value_to_tag<res::tag>, const json::value& obj);
 }

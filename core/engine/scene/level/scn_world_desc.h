@@ -1,9 +1,10 @@
 #pragma once
 #include "scn_prefab_desc.h"
+#include "snk_api.h"
 
 namespace scn
 {
-	class world_desc : public scn::prefab_desc
+	class SNK_API world_desc : public scn::prefab_desc
 	{
 	public:
 		static constexpr std::string_view __type = "world_desc";

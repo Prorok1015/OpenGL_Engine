@@ -7,12 +7,13 @@
 #include "texture/rnd_texture_desc.h"
 #include <unordered_map>
 #include <functional>
+#include "snk_api.h"
 
 namespace res { class resource_system; }
 
 namespace rnd
 {
-	class texture_manager
+	class SNK_API texture_manager
 	{
 	public:
 		using loader_fn = std::function<std::unique_ptr<driver::texture_interface>(driver::driver_interface* drv, const rnd::texture_desc& txm)>;

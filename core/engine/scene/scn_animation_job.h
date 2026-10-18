@@ -7,12 +7,13 @@
 #include <cstddef>
 #include <algorithm>
 #include <iterator>
+#include "snk_api.h"
 
 namespace scn
 {
 	struct animation_node; // defined in scn_mesh_nodes.hpp
 
-	void init_animation_system(ecs::system_factory& factory);
+	SNK_API void init_animation_system(ecs::system_factory& factory);
 
 	// Animation sampling helpers — exposed so unit tests exercise the real code
 	// (single source of truth) instead of a copy. Used by scn_animation_job.cpp.
@@ -35,7 +36,7 @@ namespace scn
 		return idx;
 	}
 
-	void calc_interpolated_scaling(glm::vec3& out, float time_ticks, const animation_node& anim);
-	void calc_interpolated_position(glm::vec3& out, float time_ticks, const animation_node& anim);
-	void calc_interpolated_rotation(glm::quat& out, float time_ticks, const animation_node& anim);
+	SNK_API void calc_interpolated_scaling(glm::vec3& out, float time_ticks, const animation_node& anim);
+	SNK_API void calc_interpolated_position(glm::vec3& out, float time_ticks, const animation_node& anim);
+	SNK_API void calc_interpolated_rotation(glm::quat& out, float time_ticks, const animation_node& anim);
 }

@@ -2,6 +2,7 @@
 #include "desc_base.hpp"
 #include "scn_ecs_assembler.h"
 #include "res_tag.h"
+#include "snk_api.h"
 
 namespace scn {
 	// Adds skinning data to a mesh entity: skinning_component with reference to
@@ -13,7 +14,7 @@ namespace scn {
 	//     "bone_count": 4,
 	//     "skinning_tag": "memory://models/character.skin"
 	//   }
-	class skinning_desc : public desc::desc_base
+	class SNK_API skinning_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "skinning_desc";
@@ -39,5 +40,5 @@ namespace scn {
 		res::tag skinning_tag;
 	};
 
-	void assemble_skinning(entt::registry& reg, entt::entity e, const skinning_desc& desc, std::string_view name);
+	SNK_API void assemble_skinning(entt::registry& reg, entt::entity e, const skinning_desc& desc, std::string_view name);
 }

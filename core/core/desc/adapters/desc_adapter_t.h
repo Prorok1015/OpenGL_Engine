@@ -3,6 +3,7 @@
 #include "res_system.h"
 #include "res_tag.h"
 #include "desc_base.hpp"
+#include "snk_api.h"
 
 namespace desc {
 	class desc_system;
@@ -10,7 +11,7 @@ namespace desc {
 
 namespace core::desc
 {
-	class desc_adapter_t : public core::res::adapter_interface
+	class SNK_API desc_adapter_t : public core::res::adapter_interface
 	{
 	public:
 		static inline auto INFO = ::res::adapter_info::make<::desc::desc_base>({ "desc" });

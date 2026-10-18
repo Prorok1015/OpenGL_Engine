@@ -5,6 +5,7 @@
 #include <array>
 #include <vector>
 #include <cstdint>
+#include "snk_api.h"
 
 namespace ds
 {
@@ -56,19 +57,19 @@ namespace ds
 	};
 
 	// Thread data access (lazy-registers thread on first call)
-	profiler_thread_data& profiler_get_thread_data();
+	SNK_API profiler_thread_data& profiler_get_thread_data();
 
 	// Mark frame boundary — increments frame counter, records prev frame duration
-	void profiler_mark_frame(const char* name);
+	SNK_API void profiler_mark_frame(const char* name);
 
 	// Copy all entries from all registered threads
-	std::vector<profile_entry> profiler_snapshot();
+	SNK_API std::vector<profile_entry> profiler_snapshot();
 
 	// Get entries for a specific frame number from all threads
 	std::vector<profile_entry> profiler_snapshot_frame(uint64_t frame_number);
 
 	// Get current frame number on calling thread
-	uint64_t profiler_current_frame();
+	SNK_API uint64_t profiler_current_frame();
 
 	// Aggregate stats for a single zone across a frame
 	struct zone_stats

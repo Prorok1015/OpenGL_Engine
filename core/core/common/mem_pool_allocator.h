@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include "snk_api.h"
 
 namespace ds {
 
@@ -14,7 +15,7 @@ namespace ds {
 	///   void* p = pool.allocate(sizeof(my_component), alignof(my_component));
 	///   pool.deallocate(p, sizeof(my_component), alignof(my_component));
 	///   pool.reset();  // all blocks returned to free-list
-	class pool_resource : public std::pmr::memory_resource
+	class SNK_API pool_resource : public std::pmr::memory_resource
 	{
 	public:
 		/// Allocate an initial chunk of \p block_count blocks, each \p block_size bytes,

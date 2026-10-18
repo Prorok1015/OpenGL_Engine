@@ -1,9 +1,10 @@
 #pragma once
 #include "app_module_interface.h"
+#include "snk_api.h"
 
 namespace core
 {
-	class core_module : public app::modules::module_interface
+	class SNK_API core_module : public app::modules::module_interface
 	{
 	public:
 		virtual void register_services(ds::app_data_storage& data) override;

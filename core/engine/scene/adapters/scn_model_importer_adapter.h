@@ -3,6 +3,7 @@
 #include "resources/res_resource_base.h"
 #include "desc_system.h"
 #include "adapters/res_adapter_interface.hpp"
+#include "snk_api.h"
 
 namespace res {
 	class resource_system;
@@ -11,7 +12,7 @@ namespace res {
 namespace scn
 {
 	// TODO: move to separate component with relation on assimp.
-	class model_importer_adapter : public core::res::adapter_interface
+	class SNK_API model_importer_adapter : public core::res::adapter_interface
 	{
 	public:
 		static inline auto INFO = res::adapter_info::make<desc::desc_base>({ "glb", "obj", "fbx", "gltf" } );

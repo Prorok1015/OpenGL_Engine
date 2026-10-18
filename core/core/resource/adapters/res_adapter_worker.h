@@ -2,10 +2,11 @@
 #include "res_adapter_worker_base.hpp"
 #include <boost/asio.hpp>
 #include <functional>
+#include "snk_api.h"
 
 namespace core::res
 {
-	class async_adapter_worker : public adapter_worker_base
+	class SNK_API async_adapter_worker : public adapter_worker_base
 	{
 	public:
 		async_adapter_worker();

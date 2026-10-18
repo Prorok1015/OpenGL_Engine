@@ -626,7 +626,8 @@ void scn::trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg,
 	}
 }
 
-void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const scn::prefab_desc::prefab_node& node)
+// Declared by hand in tests/scn_prefab_merge_tests.cpp, so it needs its own export.
+SNK_API void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const scn::prefab_desc::prefab_node& node)
 {
 	scn::reconcile(assembler, reg, e, nullptr, &node, scn::reconcile_mode::spawn);
 }

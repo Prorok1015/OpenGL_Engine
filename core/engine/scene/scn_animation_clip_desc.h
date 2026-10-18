@@ -4,13 +4,14 @@
 
 #include <unordered_map>
 #include <string>
+#include "snk_api.h"
 
 namespace scn {
 
 	// A single animation clip containing keyframes for all animated nodes.
 	// One clip per animation (e.g., "Idle", "Walk").
 	// Can be stored as a separate .desc file or inlined in a prefab.
-	class animation_clip_desc : public desc::desc_base
+	class SNK_API animation_clip_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "animation_clip_desc";

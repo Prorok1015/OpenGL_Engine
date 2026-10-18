@@ -3,25 +3,26 @@
 #include <string_view>
 #include <format>
 #include <functional>
+#include "snk_api.h"
 
 namespace engine
 {
 	enum class log_level { trace, debug, info, warn, error };
 
 	// Initialize the logging system. Call once at startup.
-	void init_logger();
+	SNK_API void init_logger();
 
 	// Shutdown the logging system. Call once at exit.
-	void shutdown_logger();
+	SNK_API void shutdown_logger();
 
 	// Log a pre-formatted message. spdlog is hidden in the .cpp.
-	void log_message(std::string_view category, log_level level, std::string_view message);
+	SNK_API void log_message(std::string_view category, log_level level, std::string_view message);
 
 	// Set global log level at runtime.
-	void set_log_level(log_level level);
+	SNK_API void set_log_level(log_level level);
 
 	// Set log level for a specific category. Overrides the global level.
-	void set_category_level(std::string_view category, log_level level);
+	SNK_API void set_category_level(std::string_view category, log_level level);
 
 	// Set the global log file path. Replaces the default "logs/engine.log".
 	// Call before init_logger() or at any time — existing loggers are updated.
@@ -29,12 +30,12 @@ namespace engine
 
 	// Add a dedicated file sink for a specific category.
 	// Messages from this category will go to both the global sinks and this file.
-	void set_category_file(std::string_view category, std::string_view path);
+	SNK_API void set_category_file(std::string_view category, std::string_view path);
 
 	// External log callback — editor console or other sinks.
 	// Signature: (category, level, message).
 	using log_callback_t = std::function<void(std::string_view, log_level, std::string_view)>;
-	void set_log_callback(log_callback_t callback);
+	SNK_API void set_log_callback(log_callback_t callback);
 
 } // namespace engine
 namespace eg = engine;

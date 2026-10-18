@@ -2,6 +2,7 @@
 #include <memory_resource>
 #include <cstddef>
 #include <cstdint>
+#include "snk_api.h"
 
 namespace ds {
 
@@ -15,7 +16,7 @@ namespace ds {
 	///   auto m = stack.marker();
 	///   void* p = stack.allocate(128, 8);
 	///   stack.reset_to_marker(m);  // rewinds past p
-	class stack_resource : public std::pmr::memory_resource
+	class SNK_API stack_resource : public std::pmr::memory_resource
 	{
 	public:
 		using marker = std::size_t;

@@ -3,6 +3,7 @@
 #include <vector>
 #include <chrono>
 #include "ds/ds_store.hpp"
+#include "snk_api.h"
 
 namespace rnd { struct frame_context; }
 
@@ -20,7 +21,7 @@ namespace gs
 	// Ordered registry of per-frame stages, replacing the hardcoded god on_step. A service adds
 	// its stage with an explicit order key; run() executes them in stable order. This mirrors how
 	// render passes / extractors self-register, but with an explicit cross-service ordering.
-	class frame_stage_registry
+	class SNK_API frame_stage_registry
 	{
 	public:
 		using stage_fn = std::function<void(frame_step_context&)>;
@@ -42,5 +43,5 @@ namespace gs
 
 	// Stages common to every frame loop, in canonical order:
 	// frame_begin(5) -> poll_events(10) -> level update(20) -> extract(30) -> render(40) -> present(50).
-	void register_core_frame_stages(frame_stage_registry& registry);
+	SNK_API void register_core_frame_stages(frame_stage_registry& registry);
 }

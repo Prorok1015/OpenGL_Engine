@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "snk_api.h"
 
 namespace rnd {
 	class skinning_manager;
@@ -15,7 +16,7 @@ namespace scn
 {
 	// Owns a set of desc-factory and spawner registrations and removes them, in reverse order, on
 	// destruction. Spawners may capture the assembler, so destroy the scope before the assembler.
-	class registration_scope
+	class SNK_API registration_scope
 	{
 	public:
 		registration_scope(desc::desc_system& desc_sys, ecs_assembler& assembler);
@@ -68,5 +69,5 @@ namespace scn
 
 	// Registers every scene desc type and its spawner. The skin_weights spawner keeps a reference
 	// to `skinning`, which must outlive the returned scope.
-	registration_scope register_scene_types(desc::desc_system& desc_sys, ecs_assembler& assembler, rnd::skinning_manager& skinning);
+	SNK_API registration_scope register_scene_types(desc::desc_system& desc_sys, ecs_assembler& assembler, rnd::skinning_manager& skinning);
 }

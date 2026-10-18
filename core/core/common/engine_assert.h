@@ -1,6 +1,7 @@
 #pragma once
 #include <format>
 #include <string_view>
+#include "snk_api.h"
 
 // Assert policy:
 //   ASSERT_MSG / ASSERT_FAIL  - internal invariants (programmer bugs). Active when NDEBUG is not
@@ -13,9 +14,9 @@
 namespace engine::detail
 {
 	// Logs "assert" category error with location, then aborts. Defined in engine_assert.cpp.
-	[[noreturn]] void assert_failed(std::string_view msg, const char* file, int line);
+	[[noreturn]] SNK_API void assert_failed(std::string_view msg, const char* file, int line);
 	// Logs "verify" category error with location; returns normally.
-	void verify_failed(std::string_view msg, const char* file, int line);
+	SNK_API void verify_failed(std::string_view msg, const char* file, int line);
 }
 
 #if !defined(NDEBUG) || defined(SNK_FORCE_ASSERTS)

@@ -57,4 +57,12 @@ BOOST_AUTO_TEST_CASE(ConcurrentFirstUseYieldsUniqueIds)
 	BOOST_CHECK_EQUAL(unique.size(), static_cast<std::size_t>(k_type_count));
 }
 
+// The id is the stable type key, not a per-binary counter: the executable and a shared library
+// must agree on it (adapters, events and input payloads are keyed by it).
+BOOST_AUTO_TEST_CASE(IdIsTheStableTypeKey)
+{
+	BOOST_CHECK_EQUAL(ds::type_id::value<probe_type<7>>(), static_cast<ds::type_id::unique_id>(ds::type_key<probe_type<7>>()));
+	BOOST_CHECK(ds::type_id::value<probe_type<7>>() != ds::type_id::value<probe_type<8>>());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

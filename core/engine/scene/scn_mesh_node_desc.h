@@ -4,6 +4,7 @@
                        // transitively via scn_material_desc.h before it was POD-ified, EPIC-49 US-49-5)
 #include "scn_material_desc.h"
 #include "geom/rnd_geometry_desc.h"
+#include "snk_api.h"
 
 namespace scn {
 	// Describes a renderable mesh node for use within prefab hierarchies.
@@ -18,7 +19,7 @@ namespace scn {
 	//     "ind_end": 36,
 	//     "material": "res://material.desc"
 	//   }
-	class mesh_node_desc : public desc::desc_base
+	class SNK_API mesh_node_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "mesh_node_desc";
@@ -48,5 +49,5 @@ namespace scn {
 		res::res_handle<scn::material_desc> material;
 	};
 
-	void assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name);
+	SNK_API void assemble_mesh_node(entt::registry& reg, entt::entity e, const mesh_node_desc& desc, const std::string_view name);
 }

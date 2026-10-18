@@ -5,13 +5,14 @@
 #include <ostream>
 #include <algorithm>
 #include "engine_assert.h"
+#include "snk_api.h"
 
 // Note: JSON (de)serialization of res::tag lives in res_tag_json.h (EPIC-49 US-49-4), so this
 // header pulls in neither <boost/json.hpp> nor <glm/glm.hpp>.
 
 namespace res
 {
-	class tag
+	class SNK_API tag
 	{
 	public:
 		static const tag null;
@@ -72,6 +73,9 @@ namespace res
 		span path_{};
 		span name_{};
 	};
+
+	// Namespace-scope declaration: the friend declaration above cannot carry the export attribute.
+	SNK_API res::tag operator+ (const res::tag& a, const res::tag& b);
 
 	inline std::ostream& operator<<(std::ostream& os, const tag& t) {
 		return os << t.string();

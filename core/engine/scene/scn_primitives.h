@@ -3,6 +3,7 @@
 #include "scn_model.h"
 #include "scn_mesh_nodes.hpp"
 #include "level/scn_level.h"
+#include "snk_api.h"
 
 namespace scn
 {
@@ -31,9 +32,9 @@ namespace scn
 		std::vector<unsigned int> indices;
 	};
 
-	model_web generate_web(glm::ivec2 size);
+	SNK_API model_web generate_web(glm::ivec2 size);
 
-	model_cube generate_cube();
+	SNK_API model_cube generate_cube();
 
-	model_sphere generate_sphere();
+	SNK_API model_sphere generate_sphere();
 }

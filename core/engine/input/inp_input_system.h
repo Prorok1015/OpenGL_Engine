@@ -5,6 +5,7 @@
 #include "inp_input_consumable_listener.h"
 #include "wnd_window_event_listener_interface.h"
 #include <unordered_map>
+#include "snk_api.h"
 
 namespace inp
 {
@@ -14,7 +15,7 @@ namespace inp
 		bool blocks_lower_layers = false;
 	};
 
-	class input_system : public wnd::window_listener_interface
+	class SNK_API input_system : public wnd::window_listener_interface
 	{
 	public:
 		input_system() = default;

@@ -4,10 +4,11 @@
 #include "rnd_buffer_layout.h"
 #include "ds/ds_rtree.h"
 #include "ds/ds_bbox.hpp"
+#include "snk_api.h"
 
 namespace rnd
 {
-	class geometry_desc : public desc::desc_base
+	class SNK_API geometry_desc : public desc::desc_base
 	{
 	public:
 		using base_type = desc::desc_base;

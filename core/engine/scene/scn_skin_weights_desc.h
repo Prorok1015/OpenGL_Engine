@@ -3,6 +3,7 @@
 #include "res_tag.h"
 #include "ecs_system.h"
 #include <vector>
+#include "snk_api.h"
 
 namespace rnd {
 	class skinning_manager;
@@ -19,7 +20,7 @@ namespace scn {
 	//     "tag": "memory://objects/model.desc",
 	//     "weights": [ [1, 2, 0x3F800000, 0x3F000000], ... ]
 	//   }
-	class skin_weights_desc : public desc::desc_base
+	class SNK_API skin_weights_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "skin_weights_desc";

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.24)
 project(build_all)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -8,6 +8,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # PIC everywhere (third-party included: assimp, glfw, ... end up inside a shared engine library
 # when SNK_ENGINE_SHARED is on). Must be set before any target is created.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# One shared library (snk_engine) instead of static engine components; the editor and the tests
+# link it. Experimental, Linux only for now (EPIC-29 #59).
+option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" OFF)
+if(SNK_ENGINE_SHARED)
+    # $<COMPILE_ONLY:> (usage requirements without linking) keeps consumers from linking the
+    # component archives a second time.
+    if(CMAKE_VERSION VERSION_LESS 3.27)
+        message(FATAL_ERROR "SNK_ENGINE_SHARED requires CMake 3.27+ (found ${CMAKE_VERSION})")
+    endif()
+    add_compile_definitions(SNK_ENGINE_SHARED)
+endif()
 
 set(ENGINE_PROFILE_MODE "NONE" CACHE STRING "Profiling mode: NONE, INTERNAL, TRACY")
 set_property(CACHE ENGINE_PROFILE_MODE PROPERTY STRINGS NONE INTERNAL TRACY)
@@ -70,7 +82,7 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp"
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::config_system PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)

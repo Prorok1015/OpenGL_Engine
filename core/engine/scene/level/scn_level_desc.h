@@ -4,10 +4,11 @@
 #include "resources/res_resource_handle.hpp"
 
 #include <vector>
+#include "snk_api.h"
 
 namespace scn
 {
-	class level_desc : public desc::desc_base
+	class SNK_API level_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "level_desc";

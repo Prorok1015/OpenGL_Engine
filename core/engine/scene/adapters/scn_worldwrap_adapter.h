@@ -5,9 +5,10 @@
 #include "desc_base.hpp"
 #include "desc_system.h"
 #include "level/scn_world_desc.h"
+#include "snk_api.h"
 
 namespace scn {
-	class worldwrap_adapter : public core::res::adapter_interface {
+	class SNK_API worldwrap_adapter : public core::res::adapter_interface {
 	public:
 		static inline auto INFO = ::res::adapter_info::make<scn::world_desc>({ "desc" });
 

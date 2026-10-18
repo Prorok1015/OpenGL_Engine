@@ -4,9 +4,10 @@
 #include "ds/ds_fixed_vector.hpp"
 
 #include <glm/glm.hpp>
+#include "snk_api.h"
 
 namespace scn {
-	class camera_desc : public desc::desc_base {
+	class SNK_API camera_desc : public desc::desc_base {
 	public:
 		static constexpr std::string_view __type = "camera_desc";
 		using base_type = desc::desc_base;

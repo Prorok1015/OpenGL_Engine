@@ -2,10 +2,11 @@
 #include "app_module_interface.h"
 #include "scn_registration_scope.h"
 #include <optional>
+#include "snk_api.h"
 
 namespace engine
 {
-	class engine_module : public app::modules::module_interface
+	class SNK_API engine_module : public app::modules::module_interface
 	{
 	public:
 		virtual void register_services(ds::app_data_storage& data) override;

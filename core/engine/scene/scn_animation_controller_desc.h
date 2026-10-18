@@ -2,10 +2,11 @@
 #include "desc_base.hpp"
 #include "ecs_system.h"
 #include <string>
+#include "snk_api.h"
 
 namespace scn {
 
-class animation_controller_desc : public desc::desc_base {
+class SNK_API animation_controller_desc : public desc::desc_base {
 public:
 	static constexpr std::string_view __type = "animation_controller_desc";
 

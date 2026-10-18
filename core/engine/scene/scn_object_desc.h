@@ -1,13 +1,14 @@
 #pragma once
 #include "desc_base.hpp"
 #include "scn_ecs_assembler.h"
+#include "snk_api.h"
 
 namespace scn {
 	// Marks an entity as the root of an object hierarchy (adds object_component).
 	// Use on the root node of a prefab to replicate the prototype root marker.
 	// JSON format:
 	//   { "__type": "object_desc" }
-	class object_desc : public desc::desc_base
+	class SNK_API object_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "object_desc";
@@ -30,5 +31,5 @@ namespace scn {
 		virtual void serialize(json::object&) const override;
 	};
 
-	void assemble_object(entt::registry& reg, entt::entity e, const object_desc& desc, const std::string_view name);
+	SNK_API void assemble_object(entt::registry& reg, entt::entity e, const object_desc& desc, const std::string_view name);
 }

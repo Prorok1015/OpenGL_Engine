@@ -1,5 +1,6 @@
 #pragma once
 #include <memory_resource>
+#include "snk_api.h"
 
 namespace ds {
 
@@ -12,11 +13,11 @@ namespace ds {
 	///
 	/// In debug builds the resource is wrapped with debug_resource
 	/// for leak/overrun detection.
-	std::pmr::memory_resource* frame_allocator();
+	SNK_API std::pmr::memory_resource* frame_allocator();
 
 	/// Resets the per-frame linear allocator. Must be called once
 	/// at the beginning of each frame (before any frame_allocator() usage).
 	/// All memory handed out since the previous reset becomes invalid.
-	void frame_allocator_reset();
+	SNK_API void frame_allocator_reset();
 
 } // namespace ds

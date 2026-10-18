@@ -2,11 +2,12 @@
 #include <filesystem>
 #include <unordered_map>
 #include <string>
+#include "snk_api.h"
 
 namespace cfg {
 
-	void initialize_configs(std::filesystem::path init_file);
-	bool initialize_configs(int argc, char* args[]);
+	SNK_API void initialize_configs(std::filesystem::path init_file);
+	SNK_API bool initialize_configs(int argc, char* args[]);
 
 	struct variable_base
 	{
@@ -14,8 +15,8 @@ namespace cfg {
 		virtual void update(const std::filesystem::path& location, std::string_view val) = 0;
 	};
 
-	void registrate_variable(std::string_view name, variable_base* var);
-	void unregistrate_variable(std::string_view name, variable_base* var);
+	SNK_API void registrate_variable(std::string_view name, variable_base* var);
+	SNK_API void unregistrate_variable(std::string_view name, variable_base* var);
 
 	template<class T>
 	struct variable : public variable_base
@@ -64,8 +65,8 @@ namespace cfg {
 
 	// Forward declarations for variable_map
 	struct variable_map;
-	void registrate_prefix(std::string_view prefix, variable_map* var);
-	void unregistrate_prefix(std::string_view prefix, variable_map* var);
+	SNK_API void registrate_prefix(std::string_view prefix, variable_map* var);
+	SNK_API void unregistrate_prefix(std::string_view prefix, variable_map* var);
 
 	// A map variable that captures all sub-keys under a given prefix.
 	// E.g. prefix "logger/file" captures "logger/file/edt" → entries["edt"] = value.

@@ -2,10 +2,11 @@
 #include "resources/res_resource_text.h"
 #include "adapters/res_adapter_info.hpp"
 #include "adapters/res_adapter_interface.hpp"
+#include "snk_api.h"
 
 namespace res
 {
-	class text_adapter : public core::res::adapter_interface
+	class SNK_API text_adapter : public core::res::adapter_interface
 	{
 	public:
 		static inline auto INFO = res::adapter_info::make<res::text_resource>();

@@ -3,10 +3,11 @@
 #include "wnd_window_event_listener_interface.h"
 #include "rnd_render_contex_interface.h"
 #include <string>
+#include "snk_api.h"
 
 namespace wnd
 {
-	class window_system
+	class SNK_API window_system
 	{
 	public:
 		window_system();

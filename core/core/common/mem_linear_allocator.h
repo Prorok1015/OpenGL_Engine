@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include "snk_api.h"
 
 namespace ds {
 
@@ -15,7 +16,7 @@ namespace ds {
 	///   std::pmr::vector<int> v(&frame_mem);
 	///   // ... use v ...
 	///   frame_mem.reset();           // O(1), ready for next frame
-	class linear_resource : public std::pmr::memory_resource
+	class SNK_API linear_resource : public std::pmr::memory_resource
 	{
 	public:
 		/// Allocate a backing buffer of \p capacity bytes from \p upstream.

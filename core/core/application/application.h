@@ -1,10 +1,11 @@
 #pragma once
 #include "common.h"
 #include "ds/ds_store.hpp"
+#include "snk_api.h"
 
 namespace app
 {
-	class application
+	class SNK_API application
 	{
 
 	public:

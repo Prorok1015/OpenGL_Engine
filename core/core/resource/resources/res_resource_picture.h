@@ -1,10 +1,11 @@
 #pragma once
 #include "common.h"
 #include "res_resource_base.h"
+#include "snk_api.h"
 
 namespace res
 {
-	class picture_resource : public resource_entry
+	class SNK_API picture_resource : public resource_entry
 	{
 	public:
 		picture_resource(const tag& tag, glm::ivec2 size_, int channels_, unsigned char* data_);

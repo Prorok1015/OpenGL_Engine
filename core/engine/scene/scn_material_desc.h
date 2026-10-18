@@ -3,6 +3,7 @@
 #include "res_tag.h"
 #include <string>
 #include <vector>
+#include "snk_api.h"
 
 namespace scn
 {
@@ -26,7 +27,7 @@ namespace scn
 		POINT,
 	};
 
-	class material_desc : public desc::desc_base
+	class SNK_API material_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "material_desc";

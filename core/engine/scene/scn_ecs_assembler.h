@@ -9,6 +9,7 @@
 #include <string>
 #include <functional>
 #include <unordered_map>
+#include "snk_api.h"
 
 namespace res {
 	class resource_system;
@@ -30,7 +31,7 @@ namespace scn {
 		structural 
 	};
 
-	class ecs_assembler {
+	class SNK_API ecs_assembler {
 	public:
 		using desc_spawner_fn = std::function<void(
 			entt::registry&,

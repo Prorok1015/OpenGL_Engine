@@ -5,12 +5,13 @@
 #include <unordered_set>
 #include "res_tag.h"
 #include "scn_ecs_assembler.h"
+#include "snk_api.h"
 
 namespace core::res { class resource_system; }
 
 namespace scn {
 
-	class hot_reload_manager {
+	class SNK_API hot_reload_manager {
 	public:
 		hot_reload_manager(ecs_assembler& assembler, res::resource_system& res_sys);
 		~hot_reload_manager();

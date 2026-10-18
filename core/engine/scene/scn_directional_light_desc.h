@@ -1,9 +1,10 @@
 #pragma once
 #include "desc_base.hpp"
 #include "scn_ecs_assembler.h"
+#include "snk_api.h"
 
 namespace scn {
-	class directional_light_desc : public desc::desc_base
+	class SNK_API directional_light_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "directional_light_desc";

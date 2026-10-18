@@ -14,10 +14,11 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#include "snk_api.h"
 
 namespace desc
 {
-	class desc_system
+	class SNK_API desc_system
 	{
 	public:
 		using desc_name = res::tag;

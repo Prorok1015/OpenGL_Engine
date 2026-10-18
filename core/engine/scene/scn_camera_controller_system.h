@@ -1,8 +1,9 @@
 #pragma once
 #include "ecs_system.h"
 #include <entt/fwd.hpp>
+#include "snk_api.h"
 
 namespace scn
 {
-	void init_mouse_controller_system(ecs::system_factory& factory);
+	SNK_API void init_mouse_controller_system(ecs::system_factory& factory);
 }

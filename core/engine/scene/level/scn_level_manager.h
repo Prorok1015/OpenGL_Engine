@@ -3,10 +3,11 @@
 #include "res_system.h"
 #include "scn_hot_reload_manager.h"
 #include <memory>
+#include "snk_api.h"
 
 namespace scn
 {
-	class level_manager
+	class SNK_API level_manager
 	{
 	public:
 		level_manager(res::resource_system& resource, 

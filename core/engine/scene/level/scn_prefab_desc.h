@@ -5,9 +5,10 @@
 #include <unordered_map>
 #include "scn_ecs_assembler.h"
 #include <glm/glm.hpp>
+#include "snk_api.h"
 
 namespace scn {
-	class prefab_desc : public desc::desc_base
+	class SNK_API prefab_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "prefab_desc";
@@ -65,11 +66,11 @@ namespace scn {
 	};
 
 	// Gives every node of the subtree a fresh random id (editor duplicate).
-	void regenerate_node_ids(scn::prefab_desc::prefab_node& node);
+	SNK_API void regenerate_node_ids(scn::prefab_desc::prefab_node& node);
 
 	// prefab_desc / world_desc v1 -> v2: `children` becomes an array of { "__id", "name", ... } nodes and
 	// components spell out their __type. Registered with the desc_system by register_scene_types.
-	void migrate_prefab_v1(boost::json::object& obj);
+	SNK_API void migrate_prefab_v1(boost::json::object& obj);
 
 	enum class reconcile_mode {
 		spawn,  // `live` is a fresh entity: create everything below it
@@ -80,7 +81,7 @@ namespace scn {
 	// `records` the local layer on top of it (an explicit nested instance's overrides); either may be null.
 	// Children are paired across the layers, and with the live children on a reload, by node id.
 	// Every spawned node gets its node_id_component, which fills the registry's node_index.
-	void reconcile(
+	SNK_API void reconcile(
 		ecs_assembler& assembler,
 		entt::registry& reg,
 		entt::entity live,
@@ -88,6 +89,6 @@ namespace scn {
 		const prefab_desc::prefab_node* records,
 		reconcile_mode mode);
 
-	void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
-	void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
+	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
+	SNK_API void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 }

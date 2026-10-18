@@ -1,6 +1,7 @@
 #pragma once
 #include "desc_base.hpp"
 #include "scn_ecs_assembler.h"
+#include "snk_api.h"
 
 namespace scn {
 	// Marks a node as a bone, adding bone_component with offset matrix and index.
@@ -10,7 +11,7 @@ namespace scn {
 	//     "offset_matrix": [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]],
 	//     "index": 0
 	//   }
-	class bone_desc : public desc::desc_base
+	class SNK_API bone_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "bone_desc";
@@ -36,5 +37,5 @@ namespace scn {
 		int index = -1;
 	};
 
-	void assemble_bone(entt::registry& reg, entt::entity e, const bone_desc& desc, std::string_view name);
+	SNK_API void assemble_bone(entt::registry& reg, entt::entity e, const bone_desc& desc, std::string_view name);
 }

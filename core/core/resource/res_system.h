@@ -10,6 +10,7 @@
 #include "resources/res_resource_handle.hpp"
 #include <set>
 #include <shared_mutex>
+#include "snk_api.h"
 
 namespace std {
 	template<> struct hash<std::pair<ds::type_id, std::string>> {
@@ -24,7 +25,7 @@ namespace res
 	template<class T>
 	using res_handle = core::res::res_handle<T>;
 
-	class resource_system
+	class SNK_API resource_system
 	{
 	public:
 		using resource_handle = core::res::res_resource_block;

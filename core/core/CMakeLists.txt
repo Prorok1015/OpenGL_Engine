@@ -16,7 +16,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_sy
 # (concrete GL impl). Consumers link snk::core (object code) AND snk::core_api (headers).
 add_library(core_api INTERFACE)
 add_library(snk::core_api ALIAS core_api)
-target_link_libraries(core_api INTERFACE
+# snk_usage_only: headers/defines only when the components live in the shared snk_engine.
+snk_usage_only(_core_api_libs
 	snk::common
 	snk::application
 	snk::ecs
@@ -27,9 +28,15 @@ target_link_libraries(core_api INTERFACE
 	snk::window
 	snk::config_system
 )
+target_link_libraries(core_api INTERFACE ${_core_api_libs})
 
 
 # Memory allocators (mem_*.cpp) now live in the `common` STATIC lib (EPIC-49 US-49-2).
+
+# snk_api.h (SNK_API) for leaf components that do not link `common`: logger, config.
+add_library(snk_api INTERFACE)
+add_library(snk::api ALIAS snk_api)
+target_include_directories(snk_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common)
 
 add_subdirectory("common")
 add_subdirectory("config")

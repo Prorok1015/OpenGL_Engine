@@ -9,11 +9,12 @@
 #include <optional>
 #include <stack>
 #include <shared_mutex>
+#include "snk_api.h"
 
 namespace res
 {
 	namespace io = boost::asio;
-	class vfs_resolver : public core::res::res_resolver_interface
+	class SNK_API vfs_resolver : public core::res::res_resolver_interface
 	{
 	public:
 		vfs_resolver(const std::string_view prt)

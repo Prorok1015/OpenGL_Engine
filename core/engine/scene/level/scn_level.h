@@ -6,13 +6,14 @@
 #include "scn_world_desc.h"
 #include "scn_hot_reload_manager.h"
 #include "eng_profiler.h"
+#include "snk_api.h"
 
 namespace scn {
     inline constexpr size_t LEVEL_ID = ~0u;
     template<class T>
     using level_res = ecs::bind_res<LEVEL_ID, T>;
 
-    class level 
+    class SNK_API level 
     {
     public:
         level(std::shared_ptr<scn::hot_reload_manager> hot_manager);

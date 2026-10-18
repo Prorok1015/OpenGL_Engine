@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "snk_api.h"
+
 #ifndef NDEBUG
 #include <unordered_map>
 #endif
@@ -13,7 +15,7 @@ namespace ds {
 	/// In debug builds: adds guard bytes (canary) around each allocation,
 	/// tracks active allocations, detects buffer overruns and double-frees.
 	/// In release builds: pure pass-through to upstream (zero overhead).
-	class debug_resource : public std::pmr::memory_resource
+	class SNK_API debug_resource : public std::pmr::memory_resource
 	{
 	public:
 		explicit debug_resource(std::pmr::memory_resource* upstream);

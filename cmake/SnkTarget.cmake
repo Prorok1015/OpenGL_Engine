@@ -9,6 +9,20 @@ function(snk_target_defaults tgt)
 		VISIBILITY_INLINES_HIDDEN ON)
 endfunction()
 
+# Usage requirements of `libs` without linking them when the engine is a shared library (the code
+# then lives in snk_engine); plain link dependencies otherwise.
+function(snk_usage_only out)
+	set(_res "")
+	foreach(_l IN LISTS ARGN)
+		if(SNK_ENGINE_SHARED)
+			list(APPEND _res "$<COMPILE_ONLY:${_l}>")
+		else()
+			list(APPEND _res "${_l}")
+		endif()
+	endforeach()
+	set(${out} "${_res}" PARENT_SCOPE)
+endfunction()
+
 # Applies snk_target_defaults to every compiled target created outside lib3dparty/ and the
 # FetchContent Boost tree. Call once, after the last add_subdirectory().
 function(snk_apply_target_defaults)
@@ -41,6 +55,14 @@ function(snk_apply_target_defaults)
 			get_target_property(_type ${_t} TYPE)
 			if(_type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
 				snk_target_defaults(${_t})
+				# Everything compiled under core/ ends up in snk_engine: it exports (SNK_API).
+				if(SNK_ENGINE_SHARED)
+					get_target_property(_src ${_t} SOURCE_DIR)
+					string(FIND "${_src}/" "${CMAKE_SOURCE_DIR}/core/" _in_core)
+					if(_in_core EQUAL 0)
+						target_compile_definitions(${_t} PRIVATE SNK_ENGINE_BUILD)
+					endif()
+				endif()
 			endif()
 		endforeach()
 	endwhile()

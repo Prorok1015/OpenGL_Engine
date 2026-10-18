@@ -98,6 +98,45 @@ jobs:
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
+  # One shared snk_engine library instead of static components (EPIC-29 #59). Linux only:
+  # Windows needs dllexport coverage of the whole surface (C4251 etc.) and comes later.
+  shared:
+    name: Linux GCC Shared
+    runs-on: ubuntu-latest
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENGINE_PROFILE_MODE=INTERNAL \
+            -DSNK_ENGINE_SHARED=ON -DGLFW_BUILD_WAYLAND=OFF \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build editor and unit_tests
+        run: cmake --build build --target editor unit_tests --parallel
+
+      - name: Run unit tests
+        working-directory: build
+        run: ./unit_tests --log_level=test_suite
+
   # Sanitizer builds (Linux only; project targets instrumented, third-party is not).
   # GCC is used because the Clang build is currently broken (see the Linux Clang Debug job).
   sanitizers:

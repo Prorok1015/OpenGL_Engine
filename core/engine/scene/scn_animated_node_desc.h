@@ -1,12 +1,13 @@
 #pragma once
 #include "desc_base.hpp"
 #include "scn_ecs_assembler.h"
+#include "snk_api.h"
 
 namespace scn {
 
 	// Marks a node as having animation channels.
 	// Placed by the importer on any node whose name appears in animation clip channels.
-	class animated_node_desc : public desc::desc_base
+	class SNK_API animated_node_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "animated_node_desc";

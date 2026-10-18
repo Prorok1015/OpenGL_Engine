@@ -4,10 +4,11 @@
 #include "inp_input_manager_base.h"
 #include "inp_input_event.hpp"
 #include "inp_events.hpp"
+#include "snk_api.h"
 
 namespace inp
 {
-	class ecs_input_manager : public inp::input_manager_base, public ecs::system_interface
+	class SNK_API ecs_input_manager : public inp::input_manager_base, public ecs::system_interface
 	{
 	public:
 		ecs_input_manager() : inp::input_manager_base("ecs") {}

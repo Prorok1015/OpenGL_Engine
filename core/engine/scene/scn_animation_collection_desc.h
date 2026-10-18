@@ -5,6 +5,7 @@
 #include "resources/res_resource_handle.hpp"
 
 #include <vector>
+#include "snk_api.h"
 
 namespace scn {
 
@@ -25,7 +26,7 @@ namespace scn {
 		}
 	};
 
-	class animation_collection_desc : public desc::desc_base
+	class SNK_API animation_collection_desc : public desc::desc_base
 	{
 	public:
 		static constexpr std::string_view __type = "animation_collection_desc";
@@ -50,7 +51,7 @@ namespace scn {
 		std::vector<res::res_handle<animation_clip_desc>> clips;
 	};
 
-	void assemble_animation_collection(entt::registry& reg, entt::entity e,
+	SNK_API void assemble_animation_collection(entt::registry& reg, entt::entity e,
 	                                   const animation_collection_desc& desc, std::string_view name);
 
 } // namespace scn

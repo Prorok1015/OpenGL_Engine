@@ -4,10 +4,11 @@
 #include "gui_backend_interface.h"
 #include "gui_menu_layout.h"
 #include "gui_layer_interface.h"
+#include "snk_api.h"
 
 namespace gui
 {
-	class gui_system
+	class SNK_API gui_system
 	{
 	public:
 		gui_system(gui::imgui_backend_interface* backend);

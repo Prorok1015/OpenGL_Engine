@@ -3,10 +3,11 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include "snk_api.h"
 
 namespace gui
 {
-	class menu_layout_manager
+	class SNK_API menu_layout_manager
 	{
 	public:
 		using UI_CALLBACK = std::function<bool()>;

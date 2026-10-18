@@ -4,6 +4,7 @@
 #include <span>
 #include <unordered_map>
 #include <vector>
+#include "snk_api.h"
 
 namespace scn
 {
@@ -15,7 +16,7 @@ namespace scn
 
 	// path -> entity lookup, kept in reg.ctx(). Follows node_id_component through construct/update/destroy
 	// hooks, so destroying an entity (or its whole hierarchy) unregisters it with no extra bookkeeping.
-	class node_index {
+	class SNK_API node_index {
 	public:
 		// Returns the registry's index, creating it (and hooking the registry) on first use.
 		// Must run before the first node_id_component is added.
