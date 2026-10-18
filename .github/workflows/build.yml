@@ -42,6 +42,9 @@ jobs:
           - name: Windows MSVC Shared
             os: windows-latest
             preset: ci-windows-msvc-shared
+          - name: Windows MSVC Shared Release
+            os: windows-latest
+            preset: ci-windows-msvc-shared-release
           - name: Linux GCC Debug
             os: ubuntu-latest
             preset: ci-linux-gcc-debug
@@ -452,3 +455,74 @@ jobs:
 
       - name: Run consumer
         run: build/consumer/package_consumer
+
+  # The Windows variant of the shared SDK: snk_engine.dll goes to bin/, the import library to
+  # lib/snk/, and the consumer copies the DLL next to its executable (no rpath on Windows).
+  sdk-package-windows:
+    name: SDK package (Windows shared)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install
+      PRESET: ci-windows-msvc-shared
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-sdk-ci-windows-msvc-shared
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ci-windows-msvc-shared-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: cmake --preset "${PRESET}" "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build SDK targets
+        run: cmake --build "build/${PRESET}" --target snk_sdk --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: |
+          if command -v sccache >/dev/null; then sccache --show-stats; fi
+
+      - name: Install SDK
+        run: cmake --install "build/${PRESET}" --prefix "${SDK_PREFIX}"
+
+      - name: Check the installed layout
+        run: |
+          find "${SDK_PREFIX}/bin" "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
+          test -f "${SDK_PREFIX}/bin/snk_engine.dll"
+          test -f "${SDK_PREFIX}/lib/snk/snk_engine.lib"
+          ws="$(cygpath -m "${GITHUB_WORKSPACE}")"
+          if grep -rIn -e "${ws}" "${SDK_PREFIX}/lib/cmake"; then
+            echo "::error::installed package config references the workspace"
+            exit 1
+          fi
+
+      - name: Configure consumer
+        run: |
+          cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}"
+
+      - name: Build consumer
+        run: cmake --build build/consumer
+
+      - name: Run consumer
+        run: build/consumer/package_consumer.exe

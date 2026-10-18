@@ -141,6 +141,13 @@
         "CMAKE_BUILD_TYPE": "Release",
         "ENGINE_PROFILE_MODE": "NONE"
       }
+    },
+    {
+      "name": "ci-windows-msvc-shared-release",
+      "inherits": "ci-windows-msvc-release",
+      "displayName": "CI Windows MSVC Release shared snk_engine",
+      "description": "Needs CMake 3.27+",
+      "cacheVariables": { "SNK_ENGINE_SHARED": "ON" }
     }
   ],
   "buildPresets": [

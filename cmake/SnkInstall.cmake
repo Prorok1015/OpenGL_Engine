@@ -9,6 +9,7 @@
 #   lib/snk/*.a                         static engine components and the bundled third-party
 #                                       libraries (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...)
 #   lib/libsnk_engine.so                SNK_ENGINE_SHARED only
+#   bin/snk_engine.dll, lib/snk/snk_engine.lib   SNK_ENGINE_SHARED on Windows
 #   lib/cmake/snake_sdk/                snake_sdkConfig.cmake, ...ConfigVersion.cmake, ...Targets.cmake
 #
 # Consumers: find_package(snake_sdk) and link snk::engine + snk::engine_api. Third-party libraries

@@ -7,6 +7,11 @@ if(SNK_ENGINE_SHARED)
 	# Consumers (incl. the installed SDK, whose package cannot see the root directory's
 	# add_compile_definitions) need it for the SNK_API import side.
 	target_compile_definitions(snk_engine INTERFACE SNK_ENGINE_SHARED)
+	if(MSVC)
+		# imgui is exported by snk_engine. In-tree targets under core/ never link snk_engine, so
+		# this cannot clash with their PRIVATE dllexport (see snk_apply_target_defaults).
+		target_compile_definitions(snk_engine INTERFACE "IMGUI_API=__declspec(dllimport)")
+	endif()
 else()
 	set(SNK_ENGINE_TARGET ${PROJECT_NAME})
 	add_library(${PROJECT_NAME} STATIC)
