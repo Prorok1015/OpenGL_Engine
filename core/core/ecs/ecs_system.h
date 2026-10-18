@@ -119,7 +119,7 @@ public:
     // Stateless system (free function).
     template <auto Candidate>
     void register_system(const std::string &name, system_desc desc = {}) {
-        add_entry(name, std::move(desc), &run_stateless<Candidate>, [] { return system_instance{}; });
+        add_entry(name, std::move(desc), &run_stateless<Candidate>, [] { return system_instance{}; }, access_of<Candidate>());
     }
 
     // Stateful system shared by every world that enables it.
@@ -127,7 +127,7 @@ public:
     requires std::is_base_of_v<ecs::system_interface, T>
     void register_system(const std::string &name, system_desc desc, std::shared_ptr<T> system) {
         add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
-                  [system] { return system_instance{ system, system.get() }; });
+                  [system] { return system_instance{ system, system.get() }; }, access_of<Candidate>());
     }
 
     // Stateful system constructed in place, one instance per world that enables it.
@@ -135,7 +135,8 @@ public:
     requires std::is_base_of_v<ecs::system_interface, T>
     void register_system(const std::string &name, system_desc desc, ARGS... args) {
         add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
-                  [args...] { auto system = std::make_shared<T>(args...); return system_instance{ system, system.get() }; });
+                  [args...] { auto system = std::make_shared<T>(args...); return system_instance{ system, system.get() }; },
+                  access_of<Candidate>());
     }
 
     // Adds a named game phase anchored next to a built-in one; false when the name is rejected.
@@ -209,9 +210,16 @@ public:
     system_factory& operator=(system_factory&&) = default;
 
 private:
-    void add_entry(const std::string &name, system_desc desc, system_run_fn run, std::function<system_instance()> make) {
-        const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make) });
+    void add_entry(const std::string &name, system_desc desc, system_run_fn run,
+                   std::function<system_instance()> make, std::vector<access_entry> access) {
+        const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make), std::move(access) });
         ASSERT_MSG(added, "ecs system already registered in the factory!");
+    }
+
+    template <auto Candidate>
+    static std::vector<access_entry> access_of() {
+        using args = typename function_traits<decltype(Candidate)>::args_tuple;
+        return collect_access(static_cast<args*>(nullptr));
     }
 
     template <auto Candidate>

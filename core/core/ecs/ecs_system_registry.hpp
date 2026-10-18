@@ -1,5 +1,6 @@
 #pragma once
 #include "ecs_phase.hpp"
+#include "ecs_system_access.hpp"
 #include "ecs_system_interface.hpp"
 #include <functional>
 #include <memory>
@@ -51,6 +52,7 @@ struct system_entry
 	system_desc desc;
 	system_run_fn run = nullptr;
 	std::function<system_instance()> make;
+	std::vector<access_entry> access; // deduced from the argument types, for validation only
 };
 
 // Name -> system registration plus the phase list of the context. Pure data: plans are built

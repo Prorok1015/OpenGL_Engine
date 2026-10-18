@@ -213,6 +213,59 @@ ecs::system_plan ecs::build_system_plan(
 		plan.phases[items[i].phase].nodes.push_back(std::move(node));
 	}
 
-	(void)options;
+	if (options.validate_access) {
+		// Two systems of one phase that touch the same data, at least one of them writing, must be
+		// ordered (directly or through a chain). Otherwise the result depends on the list order.
+		auto reaches = [&](size_t from, size_t to) {
+			std::vector<bool> seen(items.size(), false);
+			std::vector<size_t> stack{ from };
+			while (!stack.empty()) {
+				const size_t cur = stack.back();
+				stack.pop_back();
+				for (size_t next : successors[cur]) {
+					if (next == to) return true;
+					if (!seen[next]) {
+						seen[next] = true;
+						stack.push_back(next);
+					}
+				}
+			}
+			return false;
+		};
+
+		for (size_t a = 0; a < items.size(); ++a) {
+			for (size_t b = a + 1; b < items.size(); ++b) {
+				if (items[a].phase != items[b].phase) continue;
+				if (reaches(a, b) || reaches(b, a)) continue;
+
+				std::vector<std::string> both_write;
+				std::vector<std::string> one_writes;
+				for (const auto& ea : items[a].entry->access) {
+					for (const auto& eb : items[b].entry->access) {
+						if (ea.type != eb.type || ea.world != eb.world || !(ea.write || eb.write)) continue;
+						std::string label{ ea.name };
+						if (ea.world != own_world) label += std::format(" (world {})", ea.world);
+						auto& bucket = (ea.write && eb.write) ? both_write : one_writes;
+						if (std::ranges::find(bucket, label) == bucket.end()) bucket.push_back(std::move(label));
+					}
+				}
+
+				const std::string& name_a = items[a].entry->name;
+				const std::string& name_b = items[b].entry->name;
+				const std::string& phase_name = plan.phases[items[a].phase].id.name();
+				if (!both_write.empty()) {
+					report(diagnostic_kind::access_conflict,
+						std::format("systems '{}' and '{}' both write {} in phase '{}' with no order; add after/before",
+							name_a, name_b, join(both_write, ", "), phase_name));
+				}
+				if (!one_writes.empty()) {
+					report(diagnostic_kind::access_conflict,
+						std::format("systems '{}' and '{}' read and write {} in phase '{}' with no order; add after/before",
+							name_a, name_b, join(one_writes, ", "), phase_name));
+				}
+			}
+		}
+	}
+
 	return plan;
 }
