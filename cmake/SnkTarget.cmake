@@ -7,6 +7,11 @@ function(snk_target_defaults tgt)
 	set_target_properties(${tgt} PROPERTIES
 		CXX_VISIBILITY_PRESET hidden
 		VISIBILITY_INLINES_HIDDEN ON)
+	# STL members in exported classes: the engine and its consumers share one CRT (/MD), so the
+	# DLL-interface warnings carry no information.
+	if(MSVC AND SNK_ENGINE_SHARED)
+		target_compile_options(${tgt} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/wd4251> $<$<COMPILE_LANGUAGE:CXX>:/wd4275>)
+	endif()
 endfunction()
 
 # Usage requirements of `libs` without linking them when the engine is a shared library (the code

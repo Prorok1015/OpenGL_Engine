@@ -16,3 +16,10 @@ message(STATUS "snake_sdk ${snake_sdk_VERSION} (shared engine: ${snake_sdk_ENGIN
 
 add_executable(package_consumer main.cpp)
 target_link_libraries(package_consumer PRIVATE snk::engine snk::engine_api)
+
+if(WIN32 AND snake_sdk_ENGINE_SHARED)
+	# Windows has no rpath: snk_engine.dll (installed to <prefix>/bin) must sit next to the executable.
+	add_custom_command(TARGET package_consumer POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:package_consumer> $<TARGET_FILE_DIR:package_consumer>
+		COMMAND_EXPAND_LISTS)
+endif()
