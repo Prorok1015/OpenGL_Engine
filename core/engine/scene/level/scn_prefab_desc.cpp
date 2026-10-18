@@ -568,7 +568,7 @@ namespace {
 	}
 
 	// serialize(parent) with the component's own overrides merged in, then the edits in order.
-	json::object compose_component_json(const prefab_comp_node& cnode, const desc::desc_base* parent)
+	json::object compose_json(const prefab_comp_node& cnode, const desc::desc_base* parent)
 	{
 		json::object effective;
 		if (parent) parent->serialize(effective);
@@ -667,6 +667,17 @@ namespace {
 	};
 }
 
+json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent)
+{
+	return compose_json(cnode, parent);
+}
+
+bool scn::expand_instance(
+	ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
+{
+	return materialize(assembler, node, out, source, 0);
+}
+
 void scn::reconcile(
 	scn::ecs_assembler& assembler,
 	entt::registry& reg,
@@ -708,7 +719,7 @@ void scn::reconcile(
 		}
 		std::string type = cnode.type_name;
 		if (type.empty() && parent) type = std::string{ parent->get_type() };
-		assembler.assemble_and_apply(reg, live, type, {}, compose_component_json(cnode, parent.get()), comp_name);
+		assembler.assemble_and_apply(reg, live, type, {}, compose_json(cnode, parent.get()), comp_name);
 	}
 
 	// A fresh spawn has no children yet; on a reload the live ones go away unless a node claims them.

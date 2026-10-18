@@ -3,11 +3,16 @@
 #include <boost/json.hpp>
 #include <glm/vec3.hpp>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <vector>
 
 // How the editor turns an edit inside a prefab instance into override records on the instance node.
 // `owner` is the node of the edited desc that instantiates the prefab, `target` the node-id path below it.
+namespace edt { struct shared_state; }
+
 namespace edt::override_edit
 {
 	using prefab_node = scn::prefab_desc::prefab_node;
@@ -15,17 +20,59 @@ namespace edt::override_edit
 	// The prefab (loaded) that a node instantiates through one of its reference components, or null.
 	const scn::prefab_desc* referenced_prefab(const prefab_node& node);
 
-	// The node of the instantiated content that `target` addresses, or null if the content has no such node.
-	const prefab_node* find_base_node(const prefab_node& owner, std::span<const uint64_t> target);
+	// The node of the instantiated content that `target` addresses, composed the way reconcile builds it: records of
+	// every prefab level on the way are applied, only the owner's own edits of this node are left out. Name, id,
+	// placement and components are filled, children are not. Empty if the content has no such node.
+	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target);
 
-	// A component as the base content defines it: the referenced desc's data with the component's own values on top.
+	// A node of an instance as the hierarchy lists it: no children, `has_children` says whether it has some.
+	struct listed_node {
+		prefab_node node;
+		bool has_children = false;
+	};
+
+	// The children of the node `target` addresses (empty target: the owner itself), composed like find_base_node does,
+	// with the owner's own records applied. For an owner these include the owner's own children.
+	std::vector<listed_node> list_children(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target);
+
+	// Expanding an instance copies prefab content and logs about broken input, so the panels do it once per selection or
+	// edit instead of once per frame. Results are kept per (active world, owner node id, target) and dropped as a whole
+	// when shared_state::desc_generation moves, so correctness does not depend on anyone calling invalidate().
+	// Callers get shared ownership: what they hold stays valid whatever the cache does meanwhile.
+	class view_cache
+	{
+	public:
+		view_cache(scn::ecs_assembler& assembler, const shared_state& state) : m_assembler(assembler), m_state(state) {}
+
+		void invalidate();
+		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
+		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
+
+	private:
+		template<typename T>
+		struct entry {
+			int world;
+			uint64_t owner_id;
+			std::vector<uint64_t> target;
+			std::shared_ptr<const T> value;
+		};
+
+		void sync_generation();
+
+		scn::ecs_assembler& m_assembler;
+		const shared_state& m_state;
+		uint64_t m_generation = 0;
+		std::vector<entry<std::optional<prefab_node>>> m_bases;
+		std::vector<entry<std::vector<listed_node>>> m_children;
+	};
+
+	// A component as the base content defines it: the referenced desc's data with the component's own values and edits on top.
 	boost::json::object component_json(const scn::prefab_desc::prefab_comp_node& comp);
 
 	// What `edited` changes compared to `base`: objects are compared key by key, everything else as a whole.
 	boost::json::object diff(const boost::json::object& base, const boost::json::object& edited);
 
 	// `base` with the owner's records for (target, component) applied: what the instance really has.
-	// Known limit: records an intermediate prefab carries for nodes of a prefab it instantiates are not in the base (#195).
 	boost::json::object effective_component(
 		const prefab_node& owner, std::span<const uint64_t> target, const std::string& component, boost::json::object base);
 

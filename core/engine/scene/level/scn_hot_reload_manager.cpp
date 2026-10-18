@@ -83,7 +83,7 @@ namespace scn {
 			m_reload_queue.clear();
 		}
 
-		if (tags_to_reload.empty() || m_registries.empty()) return;
+		if (tags_to_reload.empty()) return;
 
 		for (const auto& tag : tags_to_reload) {
 			// External callbacks (e.g. level_manager reload) handle their own typed load.
@@ -92,6 +92,9 @@ namespace scn {
 				m_external_watched_tags.at(tag)(tag);
 				continue;
 			}
+
+			// A level without worlds has no registry, but its own reload callback above must still run.
+			if (m_registries.empty()) continue;
 
 			// Internal component-tracker hot-reload: load as desc_base.
 			auto changed_desc_handle = m_res_sys.require_sync<desc::desc_base>(tag);

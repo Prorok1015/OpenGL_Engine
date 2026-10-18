@@ -75,8 +75,9 @@ void setup_viewport_panel(
 	viewport = std::make_shared<viewport_panel>(rnd, gui);
 	viewport->set_registry_getter([&state]() -> entt::registry* {
 		auto lvl_mgr = state.lvl_manager.lock();
-		if (!lvl_mgr || state.active_world_idx >= (int)state.world_names.size()) return nullptr;
-		const auto& name = state.world_names[state.active_world_idx];
+		const std::string* active = state.active_world_name();
+		if (!lvl_mgr || !active) return nullptr;
+		const auto& name = *active;
 		auto& level = lvl_mgr->get_level();
 		if (!level.has_world(name)) return nullptr;
 		return &level.get_world(name).state();
@@ -99,9 +100,10 @@ void setup_viewport_panel(
 static ecs::entity find_entity_by_path(shared_state& state, std::span<const uint64_t> path)
 {
 	auto lvl_mgr = state.lvl_manager.lock();
-	if (!lvl_mgr || path.empty() || state.active_world_idx >= (int)state.world_names.size())
+	const std::string* active = state.active_world_name();
+	if (!lvl_mgr || path.empty() || !active)
 		return entt::null;
-	scn::world* world = lvl_mgr->get_level().find_world(state.world_names[state.active_world_idx]);
+	scn::world* world = lvl_mgr->get_level().find_world(*active);
 	if (!world)
 		return entt::null;
 	return scn::node_index::get(world->state()).find(path);
@@ -236,7 +238,8 @@ void wire_controller_callbacks(
 		hierarchy.set_selected_node(nullptr);
 		inspector.set_selected_node(nullptr);
 	};
-	scene_ed.on_after_push = [&hierarchy, &viewport, &state] {
+	scene_ed.on_after_push = [&hierarchy, &inspector, &viewport, &state] {
+		inspector.invalidate_view(); // the desc was rewritten: instance expansions are stale
 		if (!hierarchy.get_selected_node()) {
 			viewport.set_selected_entity(entt::null);
 			return;
@@ -249,7 +252,7 @@ void wire_controller_callbacks(
 	world_ctrl.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	world_ctrl.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
 	world_ctrl.on_world_switched = [&hierarchy, &inspector, &viewport, &state](int idx) {
-		hierarchy.set_world_desc(&state.active_world_desc());
+		hierarchy.set_world_desc(state.active_world_desc());
 		hierarchy.set_world_names(state.world_names, idx);
 		inspector.set_selected_node(nullptr);
 		hierarchy.set_selected_node(nullptr);

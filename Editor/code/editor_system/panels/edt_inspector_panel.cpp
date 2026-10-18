@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
 #include <format>
 
@@ -21,6 +22,7 @@ namespace edt
 		m_readonly = readonly;
 		m_owner = nullptr;
 		m_target.clear();
+		invalidate_view();
 		rebuild_parent_cache();
 	}
 
@@ -28,6 +30,17 @@ namespace edt
 	{
 		m_owner = owner;
 		m_target = std::move(target);
+		invalidate_view();
+	}
+
+	void inspector_panel::set_view_cache(std::shared_ptr<override_edit::view_cache> cache)
+	{
+		m_view_cache = std::move(cache);
+	}
+
+	void inspector_panel::invalidate_view()
+	{
+		if (m_view_cache) m_view_cache->invalidate();
 	}
 
 	void inspector_panel::rebuild_parent_cache()
@@ -179,7 +192,19 @@ namespace edt
 	void inspector_panel::render_override_target()
 	{
 		namespace oe = override_edit;
-		const scn::prefab_desc::prefab_node& base = *m_selected_node;
+		if (!m_view_cache) {
+			ImGui::TextDisabled("Overrides need the ecs assembler");
+			return;
+		}
+		// Records of intermediate prefab levels are part of what the instance edits are based on. Composed once per
+		// selection or edit; the base leaves out the owner's own records of this node, so drags need no recompose.
+		const auto composed_holder = m_view_cache->base(*m_owner, m_target); // held for the whole frame of this panel
+		const std::optional<scn::prefab_desc::prefab_node>& composed = *composed_holder;
+		if (!composed) {
+			ImGui::TextDisabled("%s is not part of %s any more", m_selected_node->name.c_str(), m_owner->name.c_str());
+			return;
+		}
+		const scn::prefab_desc::prefab_node& base = *composed;
 		bool changed = false;
 
 		ImGui::Text("%s", base.name.c_str());
@@ -256,6 +281,7 @@ namespace edt
 		if (!m_pending_commit || ImGui::IsAnyItemActive())
 			return;
 		m_pending_commit = false;
+		invalidate_view();
 		if (m_on_node_changed)
 			m_on_node_changed();
 	}

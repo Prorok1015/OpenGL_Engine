@@ -1,37 +1,26 @@
 #include "edt_override_edit.h"
 #include "scn_glm_json_convert.h"
 #include "desc_json_ops.h"
+#include "edt_shared_state.h"
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <optional>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <ranges>
+#include <vector>
 
 namespace json = boost::json;
 
 namespace
 {
 	using prefab_node = scn::prefab_desc::prefab_node;
-	constexpr int max_nesting = 16;
 
 	bool same_target(const scn::override_record& record, std::span<const uint64_t> target, const std::string& component)
 	{
 		// remove / add_node records are not edits of the inspector and must survive its writes and resets
 		return record.op == scn::override_op::set && record.component == component && std::ranges::equal(record.target, target);
-	}
-
-	const prefab_node* find_in(const prefab_node& node, uint64_t id, int depth)
-	{
-		if (auto child = std::ranges::find(node.children, id, &prefab_node::node_id); child != node.children.end()) {
-			return &*child;
-		}
-		if (depth >= max_nesting) {
-			return nullptr;
-		}
-		if (const auto* prefab = edt::override_edit::referenced_prefab(node)) {
-			return find_in(prefab->get_root(), id, depth + 1);
-		}
-		return nullptr;
 	}
 
 	bool almost_equal(const glm::vec3& a, const glm::vec3& b)
@@ -73,24 +62,136 @@ const scn::prefab_desc* edt::override_edit::referenced_prefab(const prefab_node&
 	return nullptr;
 }
 
-const edt::override_edit::prefab_node* edt::override_edit::find_base_node(const prefab_node& owner, std::span<const uint64_t> target)
+namespace
 {
-	const prefab_node* node = &owner;
-	for (uint64_t id : target) {
-		node = find_in(*node, id, 0);
-		if (!node) return nullptr;
+	// The nodes on the way to a target, each expanded the way reconcile does it: records of intermediate prefabs
+	// land in the nodes below them. Heap-owned, so the pointers survive moving this around.
+	struct composed_path
+	{
+		std::unique_ptr<prefab_node> copy;
+		std::vector<std::unique_ptr<prefab_node>> expansions;
+		const prefab_node* raw = nullptr;      // the node as it is stored (inside copy or an expansion)
+		const prefab_node* composed = nullptr; // the same node expanded
+	};
+
+	const prefab_node* expand_node(scn::ecs_assembler& assembler, const prefab_node& raw, std::vector<std::unique_ptr<prefab_node>>& keep)
+	{
+		auto expanded = std::make_unique<prefab_node>();
+		res::tag source;
+		if (!scn::expand_instance(assembler, raw, *expanded, source)) return &raw;
+		keep.push_back(std::move(expanded));
+		return keep.back().get();
 	}
-	return node;
+
+	// `without_target_edits`: leave out the owner's own set records of the target node, the edit a base is for.
+	std::optional<composed_path> compose_path(
+		scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target, bool without_target_edits)
+	{
+		composed_path path;
+		path.copy = std::make_unique<prefab_node>(owner);
+		if (without_target_edits) {
+			std::erase_if(path.copy->overrides, [&] (const scn::override_record& r) {
+				return r.op == scn::override_op::set && std::ranges::equal(r.target, target);
+			});
+		}
+		path.raw = path.copy.get();
+		path.composed = expand_node(assembler, *path.raw, path.expansions);
+		for (uint64_t id : target) {
+			auto child = std::ranges::find(path.composed->children, id, &prefab_node::node_id);
+			if (child == path.composed->children.end()) return std::nullopt;
+			path.raw = &*child;
+			path.composed = expand_node(assembler, *path.raw, path.expansions);
+		}
+		return path;
+	}
+}
+
+std::vector<edt::override_edit::listed_node> edt::override_edit::list_children(
+	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target)
+{
+	std::vector<listed_node> out;
+	auto path = compose_path(assembler, owner, target, false);
+	if (!path) return out;
+
+	std::vector<std::unique_ptr<prefab_node>> keep;
+	out.reserve(path->composed->children.size());
+	for (const auto& child : path->composed->children) {
+		const prefab_node* expanded = expand_node(assembler, child, keep);
+		listed_node listed;
+		listed.node.name = child.name;
+		listed.node.node_id = child.node_id;
+		listed.node.components = expanded->components;
+		listed.has_children = !expanded->children.empty();
+		out.push_back(std::move(listed));
+	}
+	return out;
+}
+
+std::optional<edt::override_edit::prefab_node> edt::override_edit::find_base_node(
+	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target)
+{
+	auto path = compose_path(assembler, owner, target, true);
+	if (!path) return std::nullopt;
+	const prefab_node* raw = path->raw;
+	const prefab_node* composed = path->composed;
+
+	// An instance node's own transform places it when it spells one out, otherwise the prefab root's does.
+	const prefab_node& placed = raw->has_transform ? *raw : *composed;
+	prefab_node base;
+	base.name = raw->name;
+	base.node_id = raw->node_id;
+	base.position = placed.position;
+	base.rotation = placed.rotation;
+	base.scale = placed.scale;
+	base.has_transform = true;
+	base.components = composed->components;
+	return base;
+}
+
+void edt::override_edit::view_cache::invalidate()
+{
+	m_bases.clear();
+	m_children.clear();
+}
+
+void edt::override_edit::view_cache::sync_generation()
+{
+	if (m_generation == m_state.desc_generation) return;
+	invalidate();
+	m_generation = m_state.desc_generation;
+}
+
+std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::override_edit::view_cache::base(
+	const prefab_node& owner, std::span<const uint64_t> target)
+{
+	sync_generation();
+	for (const auto& e : m_bases) {
+		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
+	}
+	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(m_assembler, owner, target));
+	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	return value;
+}
+
+std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::override_edit::view_cache::children(
+	const prefab_node& owner, std::span<const uint64_t> target)
+{
+	sync_generation();
+	for (const auto& e : m_children) {
+		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
+	}
+	auto value = std::make_shared<const std::vector<listed_node>>(list_children(m_assembler, owner, target));
+	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	return value;
 }
 
 json::object edt::override_edit::component_json(const scn::prefab_desc::prefab_comp_node& comp)
 {
-	json::object out;
 	if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
-		comp.parent_desc->serialize(out);
+		auto parent = comp.parent_desc.get();
+		return scn::compose_component_json(comp, parent.get());
 	}
-	desc::json_deep_merge(out, comp.overrides);
-	return out;
+	return scn::compose_component_json(comp, nullptr);
 }
 
 json::object edt::override_edit::diff(const json::object& base, const json::object& edited)
