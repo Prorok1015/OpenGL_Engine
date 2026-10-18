@@ -78,7 +78,7 @@ ImTextureID gui::gl::gl_imgui_backend::get_imgui_texture_from_texture(rnd::drive
         return 0;
     }
 
-    auto* gl_txm = static_cast<rnd::driver::gl::texture*>(txm);
+    auto* gl_txm = static_cast<rnd::driver::gl::texture*>(txm->native());
 
     return gl_txm->get_id();
 }

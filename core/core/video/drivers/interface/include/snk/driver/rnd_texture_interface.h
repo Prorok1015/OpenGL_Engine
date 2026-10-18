@@ -103,6 +103,9 @@ namespace rnd::driver
 			: header(hdr) {}
 		virtual ~texture_interface() = default;
 
+		// The texture a backend-specific consumer may downcast; decorators (validation) return the one they wrap.
+		virtual texture_interface* native() { return this; }
+
 		// Base operations
 		virtual void bind(uint32_t position) = 0;
 		virtual void unbind(uint32_t position) = 0;

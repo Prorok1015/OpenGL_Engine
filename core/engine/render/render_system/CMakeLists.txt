@@ -7,7 +7,7 @@ file(GLOB_RECURSE SE_RENDER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DI
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RENDER_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 # rnd_render_service_init.cpp includes the internal rnd_gl_swapchain.h of the GL driver.
-target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:drv_opengl,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>")
+target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:drv_opengl,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>")
 
 # rnd_material_compiler consumes the POD scn::material_desc header (EPIC-49 US-49-5). material_desc
 # is header-only data (its methods live in scene's .cpp and the compiler calls none of them), so this
@@ -17,4 +17,4 @@ target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:drv_opengl
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::scene_material_desc_api)
 
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::input_system PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::drv_null PRIVATE snk::config_system PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::input_system PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::drv_null PRIVATE snk::drv_validation PRIVATE snk::config_system PRIVATE snk::engine_logger)
