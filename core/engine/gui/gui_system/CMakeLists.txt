@@ -5,7 +5,10 @@ add_library(snk::gui ALIAS gui)
 file(GLOB_RECURSE SE_GUI_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_GUI_SOURCES})
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
+
+# gui_gui_service_init.cpp includes the internal gui_gl_backend.h (declared private access, #109).
+target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:gui_gl_backend,SOURCE_DIR>")
 
 # gui_backend_interface is PUBLIC: gui_system.h's public API returns gui::imgui_backend_interface*
 # (get_backend_interface). gui_gl_backend is PRIVATE: gui_init constructs the concrete GL backend

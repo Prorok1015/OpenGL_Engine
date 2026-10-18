@@ -22,7 +22,7 @@ file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${SNK_ENGINE_TARGET} PRIVATE ${SE_SOURCES})
 # PRIVATE: the umbrella provides aggregated object code but no longer re-exports component
 # headers. Cross-layer consumers compile against snk::engine_api (EPIC-49 US-49-1/US-49-3).
-target_include_directories(${SNK_ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${SNK_ENGINE_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(${SNK_ENGINE_TARGET} PRIVATE snk::core PRIVATE snk::render PRIVATE snk::input_system PRIVATE snk::scene PRIVATE snk::game PRIVATE snk::gui)
 # core_api gives this aggregator's OWN sources (engine_module.cpp etc.) the core headers they
@@ -44,6 +44,8 @@ snk_usage_only(_engine_api_libs
 	snk::game
 )
 target_link_libraries(engine_api INTERFACE ${_engine_api_libs})
+# engine_module.h (snk/engine/) belongs to the layer contract.
+snk_component_headers(engine_api)
 
 add_subdirectory("input")
 add_subdirectory("gui/backends/interface")
