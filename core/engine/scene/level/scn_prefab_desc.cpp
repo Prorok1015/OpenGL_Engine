@@ -975,8 +975,9 @@ void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, en
 		event.emit(e);
 		reg.ctx().emplace<ecs::event<scn::transform_updated>>(std::move(event));
 	}
-	if (!name.empty()) {
-		reg.emplace_or_replace<scn::name_component>(e, scn::name_component{ .name = std::string(name) });
+	// A node spawned by a parent already has its name; `name` is then only the component key (#172).
+	if (!name.empty() && !reg.all_of<scn::name_component>(e)) {
+		reg.emplace<scn::name_component>(e, scn::name_component{ .name = std::string(name) });
 	}
 	reg.emplace_or_replace<scn::depth_level>(e);
 

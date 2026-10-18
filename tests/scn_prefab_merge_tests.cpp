@@ -1202,10 +1202,11 @@ BOOST_AUTO_TEST_CASE(NestedInstance_AssemblesViaInjectedResourceSystem)
 // otherwise the editor syncs the identity back into the desc and Save loses the transform.
 BOOST_AUTO_TEST_CASE(AssemblePrefab_NodeReferencingAssetKeepsItsOwnTransform)
 {
-	put("asset.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":2}}})");
-	auto world_tag = put("w.desc", R"({"__type":"world_desc","name":"w","systems":[],"children":{
-		"scene":{"transform":{"position":[0,-1,-6],"scale":[0.1,0.1,0.1]},"components":{"scene":"memory://t/asset.prefab.desc"}},
-		"plain":"memory://t/asset.prefab.desc"}})");
+	put("asset.prefab.desc", R"({"__type":"prefab_desc","__version":3,"components":{"stat":{"__type":"stat_desc","hp":2}}})");
+	auto world_tag = put("w.desc", R"({"__type":"world_desc","__version":3,"name":"w","systems":[],"children":[
+		{"__id":"00000000000000b1","name":"scene","transform":{"position":[0,-1,-6],"scale":[0.1,0.1,0.1]},
+			"components":{"scene":"memory://t/asset.prefab.desc"}},
+		{"__id":"00000000000000b2","name":"plain","components":{"plain":"memory://t/asset.prefab.desc"}}]})");
 	auto world = load<scn::world_desc>(world_tag);
 	BOOST_REQUIRE(world);
 
@@ -1218,6 +1219,25 @@ BOOST_AUTO_TEST_CASE(AssemblePrefab_NodeReferencingAssetKeepsItsOwnTransform)
 	BOOST_TEST((translation_of(reg, scene) == glm::vec3{ 0, -1, -6 }));
 	BOOST_TEST(scale_x_of(reg, scene) == 0.1f, boost::test_tools::tolerance(1e-5f));
 	BOOST_TEST(reg.get<test_util::stat_component>(scene).hp == 2); // the referenced content is still assembled
+}
+
+// #172: the node's name stays when its reference component has another key.
+BOOST_AUTO_TEST_CASE(AssemblePrefab_NodeNameSurvivesADifferentReferenceKey)
+{
+	put("asset.prefab.desc", R"({"__type":"prefab_desc","__version":3,"components":{"stat":{"__type":"stat_desc","hp":2}}})");
+	auto world_tag = put("w.desc", R"({"__type":"world_desc","__version":3,"name":"w","systems":[],"children":[
+		{"__id":"00000000000000b1","name":"robot","components":{"model_key":"memory://t/asset.prefab.desc"}}]})");
+	auto world = load<scn::world_desc>(world_tag);
+	BOOST_REQUIRE(world);
+
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *world, "w", world_tag);
+
+	BOOST_TEST((child_named(reg, root, "model_key") == entt::entity{ entt::null }));
+	auto robot = child_named(reg, root, "robot");
+	BOOST_REQUIRE(robot != entt::null);
+	BOOST_TEST(reg.get<test_util::stat_component>(robot).hp == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
