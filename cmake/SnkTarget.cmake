@@ -28,6 +28,33 @@ function(snk_usage_only out)
 	set(${out} "${_res}" PARENT_SCOPE)
 endfunction()
 
+# Header layout of an engine component (#109, docs/roadmap/design/HEADER_SPLIT.md).
+#
+#   <component>/include/snk/<name>/*.h   public headers: the only include directory consumers see
+#                                        (PUBLIC, or INTERFACE for header-only targets)
+#   <component>/ (root)                  sources and internal headers, PRIVATE to the component
+#
+# A component without an include/ directory keeps the legacy layout: its root is the PUBLIC include
+# directory. Migrating a component is therefore a move of its public headers into include/snk/<name>/.
+# SnkInstall.cmake installs include/ to <prefix>/include, the legacy root to include/snk/<path in the repo>.
+function(snk_component_headers tgt)
+	get_target_property(_type ${tgt} TYPE)
+	if(_type STREQUAL "INTERFACE_LIBRARY")
+		set(_scope INTERFACE)
+	else()
+		set(_scope PUBLIC)
+	endif()
+	set(_public "${CMAKE_CURRENT_SOURCE_DIR}/include")
+	if(IS_DIRECTORY "${_public}")
+		target_include_directories(${tgt} ${_scope} "$<BUILD_INTERFACE:${_public}>")
+		if(NOT _type STREQUAL "INTERFACE_LIBRARY")
+			target_include_directories(${tgt} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+		endif()
+	else()
+		target_include_directories(${tgt} ${_scope} "${CMAKE_CURRENT_SOURCE_DIR}")
+	endif()
+endfunction()
+
 # Applies snk_target_defaults to every compiled target created outside lib3dparty/ and the
 # FetchContent Boost tree. Call once, after the last add_subdirectory().
 function(snk_apply_target_defaults)

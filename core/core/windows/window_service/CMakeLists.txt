@@ -7,6 +7,12 @@ file(GLOB_RECURSE SE_WINDOW_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DI
 target_sources(${PROJECT_NAME} PRIVATE ${SE_WINDOW_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Header-only view of wnd_gl_surface.h for the GL driver. Transitional: narrows to
+# include/snk/window/wnd_gl_surface.h in PR-1 of #109.
+add_library(window_gl_surface INTERFACE)
+add_library(snk::window_gl_surface ALIAS window_gl_surface)
+target_include_directories(window_gl_surface INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 # GLFW implementation headers stay private: consumers only see the wnd:: interfaces.
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/impl_glfw)
 

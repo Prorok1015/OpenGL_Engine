@@ -437,6 +437,10 @@ jobs:
       - name: Install SDK
         run: cmake --install build/${{ matrix.preset }} --prefix "${SDK_PREFIX}"
 
+      # Report-only until the components migrate to <component>/include (#109); see the script.
+      - name: Check the installed headers
+        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
+
       - name: Check the package does not point into the build or source tree
         run: |
           find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
@@ -504,6 +508,9 @@ jobs:
 
       - name: Install SDK
         run: cmake --install "build/${PRESET}" --prefix "${SDK_PREFIX}"
+
+      - name: Check the installed headers
+        run: bash tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
 
       - name: Check the installed layout
         run: |
