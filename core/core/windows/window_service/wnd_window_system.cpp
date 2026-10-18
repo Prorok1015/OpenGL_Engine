@@ -143,6 +143,10 @@ wnd::window_system::window_system()
 
 wnd::window_system::~window_system()
 {
+    // Members are destroyed after the body; wnd::context::~context calls glfwDestroyWindow,
+    // which would run after glfwTerminate and raise GLFW_NOT_INITIALIZED (#182).
+    context.reset();
+    windows_list.clear();
     glfwTerminate();
 }
 
