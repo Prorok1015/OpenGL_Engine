@@ -5,6 +5,7 @@
 #include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_schema.h>
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -27,12 +28,7 @@ namespace desc
 		// std::hash is not stable across platforms/STLs; these names end up in saved data.
 		static constexpr uint64_t fnv1a_64(std::string_view s) noexcept
 		{
-			uint64_t h = 14695981039346656037ull;
-			for (unsigned char c : s) {
-				h ^= c;
-				h *= 1099511628211ull;
-			}
-			return h;
+			return desc::schema_id(s);
 		}
 
 		desc_system(res::resource_system& res_system);
@@ -42,11 +38,12 @@ namespace desc
 		desc_system(desc_system&&) = delete;
 		desc_system& operator=(desc_system&&) = delete;
 
+		// A T described with BOOST_DESCRIBE_CLASS also gets its type_schema (and enum schemas) registered; that
+		// needs <snk/desc/desc_describe.h> in the registering translation unit.
 		template<typename T>
 		void register_desc(const std::string_view type_name)
 		{
-			ASSERT_MSG(!factory_map.contains(std::string{ type_name }), "That desc type is already registered!");
-			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
+			add_desc<T>(type_name, schema_kind::desc);
 		}
 
 		// register_component_desc marks the type as user-addable in the editor.
@@ -55,7 +52,7 @@ namespace desc
 		template<typename T>
 		void register_component_desc(const std::string_view type_name)
 		{
-			register_desc<T>(type_name);
+			add_desc<T>(type_name, schema_kind::component);
 			m_component_type_names.push_back(std::string{ type_name });
 		}
 
@@ -63,7 +60,25 @@ namespace desc
 		{
 			factory_map.erase(std::string{ type_name });
 			std::erase(m_component_type_names, std::string{ type_name });
+			m_schemas.remove(type_name);
 		}
+
+		// Registers a schema that has no C++ type (wasm/JSON). The version must match current_version(name).
+		// Migrations registered later move the stored schema's version along, so the order does not matter.
+		// No factory is created for it yet.
+		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
+		const type_schema* register_schema(type_schema schema)
+		{
+			ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
+				schema.name, schema.version, current_version(schema.name));
+			ASSERT_MSG(!m_schemas.contains(schema.name), "Schema '{}' is already registered!", schema.name);
+			return m_schemas.add(std::move(schema));
+		}
+
+		const type_schema* find_schema(std::string_view type_name) const { return m_schemas.find(type_name); }
+
+		const schema_registry& schemas() const { return m_schemas; }
+		schema_registry& schemas() { return m_schemas; }
 
 		bool is_registered(const std::string_view type_name) const
 		{
@@ -82,11 +97,13 @@ namespace desc
 			auto& steps = m_migrations[std::string{ type }];
 			ASSERT_MSG(!steps.contains(from_version), "Migration for '{}' from version {} is already registered!", type, from_version);
 			steps.emplace(from_version, std::move(fn));
+			m_schemas.set_version(type, current_version(type));
 		}
 
 		void unregister_migrations(std::string_view type)
 		{
 			m_migrations.erase(std::string{ type });
+			m_schemas.set_version(type, current_version(type));
 		}
 
 		int current_version(std::string_view type) const
@@ -347,6 +364,20 @@ namespace desc
 		}
 
 	private:
+		template<typename T>
+		void add_desc(const std::string_view type_name, const schema_kind kind)
+		{
+			ASSERT_MSG(!factory_map.contains(std::string{ type_name }), "That desc type is already registered!");
+			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
+			if constexpr (desc::is_described<T>) {
+				static_assert(desc::has_schema_generator<T>, "T is described with BOOST_DESCRIBE_CLASS: include <snk/desc/desc_describe.h> where it is registered");
+				for (auto& enumeration : desc::schema_generator<T>::enums()) {
+					m_schemas.add_enum(std::move(enumeration));
+				}
+				register_schema(desc::schema_generator<T>::make(type_name, current_version(type_name), kind));
+			}
+		}
+
 		// Migrates the object itself first, then its members, so children a migration creates are visited too.
 		void migrate_object(json::object& obj, std::string_view context) const
 		{
@@ -419,5 +450,6 @@ namespace desc
 		std::unordered_map<std::string, std::function<std::shared_ptr<desc::desc_base>()>> factory_map;
 		std::unordered_map<std::string, std::map<int, std::function<void(json::object&)>>> m_migrations;
 		std::vector<std::string> m_component_type_names;
+		schema_registry m_schemas;
 	};
 }

@@ -76,6 +76,7 @@ include(imgui)
 #   Boost::asio                -> resource_system
 #   Boost::program_options     -> config_system
 #   Boost::unit_test_framework -> unit_tests   (the "test" sublibrary)
+#   Boost::describe, mp11      -> desc_system  (type_schema generation, ADR-04)
 # Set ENGINE_BOOST_NO_LIB to use a system-installed Boost (find_package) instead;
 # in that case core/core/common/CMakeLists.txt wires the include dirs.
 if(NOT ENGINE_BOOST_NO_LIB)
@@ -86,7 +87,7 @@ if(NOT ENGINE_BOOST_NO_LIB)
         URL_MD5 893b5203b862eb9bbd08553e24ff146a
         DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
-    set(BOOST_INCLUDE_LIBRARIES json asio program_options test)
+    set(BOOST_INCLUDE_LIBRARIES json asio program_options test describe mp11)
     FetchContent_MakeAvailable(Boost)
     file(GLOB_RECURSE BOOST_NATVIS_FILES CONFIGURE_DEPENDS "${boost_SOURCE_DIR}/libs/*.natvis")
     message(STATUS "Found Boost Natvis files: ${BOOST_NATVIS_FILES}")
