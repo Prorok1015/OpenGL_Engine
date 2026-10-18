@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -9,17 +10,14 @@
 #include "ds/ds_store.hpp"
 #include "snk_api.h"
 
-namespace rnd { struct frame_context; }
-
-namespace gs
+namespace app
 {
-	// Per-frame data threaded to every frame stage (EPIC-49 US-49-8). `render` is the single
-	// frame_context shared by the extract and render stages within one frame.
-	struct frame_step_context
+	// Per-frame data threaded to every frame stage. Engine-level frame data (the render
+	// frame_context) is a service in `storage`, not a member here.
+	struct stage_context
 	{
 		ds::app_data_storage& storage;
 		std::chrono::duration<float> dt;
-		rnd::frame_context& render;
 	};
 
 	// The fixed, ordered frame stages (mirror of the ECS phases, ecs_phase.hpp). Built-ins cannot be
@@ -62,27 +60,40 @@ namespace gs
 	class SNK_API frame_stage_registry
 	{
 	public:
-		using stage_fn = std::function<void(frame_step_context&)>;
+		using stage_fn = std::function<void(stage_context&)>;
+		using hook_fn = std::function<void(ds::app_data_storage&)>;
 
 		// Gives a built-in stage its body. False (logged) if it already has one.
 		bool set_body(builtin_stage stage, stage_fn fn);
+		// Takes the body away again (a module that set it is being unloaded).
+		void clear_body(builtin_stage stage);
 
 		// False (nothing added, logged) when the name is empty, is a built-in name or is taken, or
 		// when the stage is asked to run before `begin`.
 		bool add_stage(std::string name, builtin_stage anchor, stage_side side, stage_fn fn);
+		// False when there is no such added stage (built-ins cannot be removed).
+		bool remove_stage(std::string_view name);
 
-		void run(frame_step_context& ctx);
+		void run(stage_context& ctx);
 
 		// Stage names in execution order, built-ins included (introspection for tests).
 		[[nodiscard]] std::vector<std::string> stage_names() const;
+
+		// Run once by loop_service::init (registration order) / term (reverse order).
+		void add_init_hook(hook_fn fn) { m_init_hooks.push_back(std::move(fn)); }
+		void add_term_hook(hook_fn fn) { m_term_hooks.push_back(std::move(fn)); }
+		void run_init_hooks(ds::app_data_storage& storage);
+		void run_term_hooks(ds::app_data_storage& storage);
 
 	private:
 		struct extra_stage { std::string name; builtin_stage anchor; stage_side side; stage_fn fn; };
 
 		std::array<stage_fn, builtin_stage_count> m_bodies;
 		std::vector<extra_stage> m_extra;
+		std::vector<hook_fn> m_init_hooks;
+		std::vector<hook_fn> m_term_hooks;
 	};
 
-	// Bodies of the built-in stages common to every frame loop.
+	// Body of the `begin` stage: the frame allocator reset every other stage relies on.
 	SNK_API void register_core_frame_stages(frame_stage_registry& registry);
 }

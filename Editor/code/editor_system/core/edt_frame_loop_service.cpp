@@ -1,4 +1,5 @@
 #include "edt_frame_loop_service.h"
+#include "gs_engine_frame_stages.h"
 #include "rnd_render_system.h"
 #include "inp_input_system.h"
 #include "inp_ecs_input_manager.h"
@@ -19,16 +20,15 @@ edt::edt_loop_service::~edt_loop_service()
 
 void edt::edt_loop_service::init(ds::app_data_storage& storage)
 {
-	auto& window_system_ref = storage.require<wnd::window_system>();
-
-	window_system_ref.init_windows_frame_time();
-	previous_time = std::chrono::steady_clock::now();
-
-	gs::register_core_frame_stages(m_stages);
+	app::register_core_frame_stages(m_stages);
+	gs::register_scene_frame_stages(m_stages);
+	gs::register_platform_frame_stages(m_stages);
 	// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
-	m_stages.set_body(gs::builtin_stage::ui, [](gs::frame_step_context& c) {
+	m_stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
 		c.storage.require<gui::gui_system>().render();
 	});
+	m_stages.run_init_hooks(storage);
+	previous_time = std::chrono::steady_clock::now();
 }
 
 void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
@@ -40,11 +40,13 @@ void edt::edt_loop_service::on_step(ds::app_data_storage& storage)
 	std::chrono::duration<float> duration = current_time - previous_time;
 	previous_time = current_time;
 
-	rnd::frame_context context;
-	gs::frame_step_context ctx{ storage, duration, context };
+	app::stage_context ctx{ storage, duration };
 	m_stages.run(ctx);
+}
 
-	stop_requested = storage.require<wnd::window_system>().is_stop_running();
+void edt::edt_loop_service::request_stop()
+{
+	stop_requested = true;
 }
 
 bool edt::edt_loop_service::should_stop() const
