@@ -20,7 +20,9 @@ add_subdirectory(${THIRD_PARTY_PATH}/glm glm)
 target_compile_definitions(glm INTERFACE GLM_ENABLE_EXPERIMENTAL)
 # logger (spdlog backend) — needed by engine_log.h included from common
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/logger logger)
-target_link_libraries(${PROJECT_NAME} PUBLIC glm snk::engine_logger PUBLIC snk::sanitizers PUBLIC snk::compiler_warnings)
+# Sanitizer/warning flags are for in-tree project code only: BUILD_INTERFACE keeps them out of the
+# installed SDK package (cmake/SnkInstall.cmake).
+target_link_libraries(${PROJECT_NAME} PUBLIC glm snk::engine_logger PUBLIC $<BUILD_INTERFACE:snk::sanitizers> PUBLIC $<BUILD_INTERFACE:snk::compiler_warnings>)
 
 if(ENGINE_PROFILE_MODE STREQUAL "INTERNAL")
   target_compile_definitions(${PROJECT_NAME} PUBLIC ENGINE_PROFILE_INTERNAL=1)
