@@ -99,7 +99,7 @@ Level & World:
 
 Objects & Assets:
   → Editor/res/objects/ (imported objects / prefab descs)
-  → Editor/res/assets/ , Editor/res/shaders/ , Editor/res/skybox/
+  → Editor/res/assets/ (editor layer, wins) , core/res/shaders/ , core/res/skybox/ (engine base layer; res:// = core/res under Editor/res)
 
 [BUILD_SYSTEM]
 Main CMake:
