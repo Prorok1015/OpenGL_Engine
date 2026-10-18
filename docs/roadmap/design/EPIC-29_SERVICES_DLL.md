@@ -24,7 +24,7 @@
 
 ## 3. #59 — PIC, visibility, SNK_API
 - Сейчас (бинарник не меняется): `CMAKE_POSITION_INDEPENDENT_CODE ON` глобально до `include(ThirdParty)`; hidden visibility только нашим таргетам через `snk_target_defaults(tgt)` (`cmake/SnkTarget.cmake`); ручной `core/core/common/snk_api.h` с одним макросом `SNK_API` (пустой в статике).
-- Shared-вариант: опция `SNK_ENGINE_SHARED` (OFF), один `snk_engine SHARED` из компонентов core+engine через `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` (минимум CMake → 3.24); CI-задача «Linux GCC Shared»; Windows-shared позже (C4251, dllimport данных).
+- Shared-вариант: опция `SNK_ENGINE_SHARED` (OFF), один `snk_engine SHARED` из компонентов core+engine через `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` (минимум CMake → 3.24); CI-задача «Linux GCC Shared»; Windows MSVC shared собирается и тестируется в CI («Windows MSVC Shared», #198).
 - Что ломается в shared: typeinfo для исключений/`dynamic_cast` (экспорт классов); синглтоны (`cfg::config_manager::instance`, реестр spdlog, профайлер, `thread_local` frame allocator) — жить только в `snk_engine`; `entt::meta` контекст в статическом `locator` каждого бинарника — хост передаёт `entt::locator<entt::meta_ctx>::handle()` в модуль.
 
 ## 4. #60 — registration_scope вместо game_system
@@ -76,7 +76,7 @@ extern "C" SNK_MODULE_EXPORT void snk_destroy_module(app::modules::module_interf
 
 ## 9. Решения владельца (2026-10-17: «всё по рекомендации»)
 1. Ключ сервиса: свой FNV от `source_location` + опциональный `service_id` → **принято**.
-2. Shared: один `snk_engine` SHARED под опцией (OFF), CI только Linux, минимум CMake 3.24 → **принято**.
+2. Shared: один `snk_engine` SHARED под опцией (OFF), CI: Linux GCC и Windows MSVC (#198), минимум CMake 3.24 → **принято**.
 3. `get_system()`: удалить в рамках эпика после короткой `[[deprecated]]`-фазы → **принято**.
 4. Объём #62: точка входа + загрузка через указатели на функции сейчас, dlopen и тестовая .so — EPIC-52 → **принято**.
 5. Перенос `loop.init` в `application::run` — в #62a; типизированный `frame_context` — отложить до работ по циклу кадра → **принято**.

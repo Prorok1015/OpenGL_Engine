@@ -39,6 +39,9 @@ jobs:
           - name: Windows MSVC Release
             os: windows-latest
             preset: ci-windows-msvc-release
+          - name: Windows MSVC Shared
+            os: windows-latest
+            preset: ci-windows-msvc-shared
           - name: Linux GCC Debug
             os: ubuntu-latest
             preset: ci-linux-gcc-debug
@@ -102,8 +105,8 @@ jobs:
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
-  # One shared snk_engine library instead of static components (EPIC-29 #59). Linux only:
-  # Windows needs dllexport coverage of the whole surface (C4251 etc.) and comes later.
+  # One shared snk_engine library instead of static components (EPIC-29 #59). The Windows MSVC
+  # variant is the 'Windows MSVC Shared' entry of the build matrix above.
   shared:
     name: Linux GCC Shared
     runs-on: ubuntu-latest

@@ -63,6 +63,9 @@ if(SNK_ENGINE_SHARED)
 		snk::resource_system snk::desc_system snk::ecs snk::drv_opengl snk::input_system snk::render
 		snk::game snk::scene snk::gui snk::gui_gl_backend snk::image imgui assimp)
 	if(MSVC)
+		# assimp.lib carries a .res (assimp.rc): whole-archiving it reports LNK1241 as the plain
+		# link-line occurrence adds the same resource again. Its symbols are pulled on demand.
+		list(REMOVE_ITEM _snk_whole_archive assimp)
 		foreach(_lib IN LISTS _snk_whole_archive)
 			target_link_options(snk_engine PRIVATE "LINKER:/WHOLEARCHIVE:$<TARGET_FILE:${_lib}>")
 		endforeach()

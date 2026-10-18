@@ -106,13 +106,16 @@ User edits in Inspector
   → Viewport reflects changes next frame
 
 Gizmo drag committed
-  → on_transform_committed(name, pos, rot, scale)
-  → scene_editor::find_node_by_name in active_world_desc
-  → update node.position / rotation / scale
+  → on_transform_committed(node_id path, pos, rot, scale)   (path = scn::node_id_component of the entity)
+  → scene_editor::resolve_node_path in active_world_desc → { owner, target }
+  → target empty: update owner.position / rotation / scale
+  → target non-empty (node inside a prefab instance): override_edit::write_transform → override_record on owner
   → serialize_and_push()
 ```
 
-**ECS → Desc** (called before save): `scene_editor::sync_ecs_transforms_to_desc()` reads `local_transform` components and writes back to desc nodes.
+The editor never finds nodes by name (names are display only): hierarchy, viewport and `scene_editor` pass `node_id`s / id paths. Inspector edits of a node inside a prefab instance go through `edt_override_edit.h` (records on the instance node; "Reset to base" drops them).
+
+**ECS → Desc** (called before save): `scene_editor::sync_ecs_transforms_to_desc()` reads `local_transform` of entities with a `node_id_component`, resolves the path, and writes back to the (non-instanced) desc nodes.
 
 ## Level JSON Schema
 
@@ -133,7 +136,7 @@ Gizmo drag committed
 ## Multi-World
 
 - `shared_state::world_descs` — vector, indexed by `active_world_idx`
-- `shared_state::active_world_desc()` — shorthand accessor
+- `shared_state::active_world_desc()` / `active_world_name()` — pointers, null when the level has no worlds (`active_world_idx = -1`, arrays empty; `world_controller::clear_active_world()`). Never index `world_descs[active_world_idx]` directly.
 - Hierarchy panel shows a tab per world; switching calls `world_controller::switch_to_world(idx)` which saves editor camera, tears down old registry, rebuilds new one
 - `shared_state::worlds_systems_list` — per-world list of system names (parallel to `world_descs`)
 

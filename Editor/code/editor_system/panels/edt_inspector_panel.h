@@ -3,12 +3,15 @@
 #include "level/scn_prefab_desc.h"
 #include <functional>
 #include <memory>
+#include <cstdint>
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <boost/json/object.hpp>
 
 namespace desc { class desc_system; }
 namespace edt  { class component_ui_registry; }
+namespace edt::override_edit { class view_cache; }
 
 namespace edt
 {
@@ -18,9 +21,16 @@ namespace edt
 		inspector_panel();
 
 		void set_selected_node(scn::prefab_desc::prefab_node* node, bool readonly = false);
+		// The selected node is a node of the prefab that `owner` instantiates, `target` the ids from the instance to it.
+		// Edits then become override records on `owner`; null owner = the selected node is edited itself.
+		void set_override_target(scn::prefab_desc::prefab_node* owner, std::vector<uint64_t> target);
 		void set_on_node_changed(std::function<void()> cb);
 		void set_component_ui_registry(component_ui_registry* registry);
 		void set_desc_system(desc::desc_system* desc_system);
+		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
+		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
+		// The desc under the cache changed: the next frame composes again.
+		void invalidate_view();
 
 	protected:
 		void on_render() override;
@@ -33,11 +43,15 @@ namespace edt
 		void render_generic_json_readonly(const boost::json::object& obj);
 		void render_generic_json_value_readonly(const std::string& key, const boost::json::value& val);
 		void draw_add_component_popup();
+		void render_override_target();
 
 		scn::prefab_desc::prefab_node* m_selected_node  = nullptr;
 		bool                           m_readonly       = false;
+		scn::prefab_desc::prefab_node* m_owner          = nullptr;
+		std::vector<uint64_t>          m_target;
 		component_ui_registry*         m_ui_registry    = nullptr;
 		desc::desc_system*             m_desc_system    = nullptr;
+		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;
 		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
 		bool                           m_pending_commit = false;

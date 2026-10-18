@@ -24,10 +24,12 @@
 #include "scn_camera_controller_component.hpp"
 #include "eng_transform_3d.hpp"
 #include "level/scn_level_manager.h"
+#include "level/scn_node_index.h"
 #include "level/scn_level.h"
 #include "level/scn_world.h"
 #include "engine_log.h"
 #include <entt/entt.hpp>
+#include <span>
 #include <glm/gtx/quaternion.hpp>
 
 namespace edt::init_helpers {
@@ -73,8 +75,9 @@ void setup_viewport_panel(
 	viewport = std::make_shared<viewport_panel>(rnd, gui);
 	viewport->set_registry_getter([&state]() -> entt::registry* {
 		auto lvl_mgr = state.lvl_manager.lock();
-		if (!lvl_mgr || state.active_world_idx >= (int)state.world_names.size()) return nullptr;
-		const auto& name = state.world_names[state.active_world_idx];
+		const std::string* active = state.active_world_name();
+		if (!lvl_mgr || !active) return nullptr;
+		const auto& name = *active;
 		auto& level = lvl_mgr->get_level();
 		if (!level.has_world(name)) return nullptr;
 		return &level.get_world(name).state();
@@ -94,6 +97,18 @@ void setup_viewport_panel(
 	});
 }
 
+static ecs::entity find_entity_by_path(shared_state& state, std::span<const uint64_t> path)
+{
+	auto lvl_mgr = state.lvl_manager.lock();
+	const std::string* active = state.active_world_name();
+	if (!lvl_mgr || path.empty() || !active)
+		return entt::null;
+	scn::world* world = lvl_mgr->get_level().find_world(*active);
+	if (!world)
+		return entt::null;
+	return scn::node_index::get(world->state()).find(path);
+}
+
 void wire_hierarchy_callbacks(
 	scene_hierarchy_panel& hierarchy,
 	inspector_panel& inspector,
@@ -103,18 +118,11 @@ void wire_hierarchy_callbacks(
 	shared_state& state)
 {
 	hierarchy.set_on_node_selected([&](scn::prefab_desc::prefab_node* node) {
-		inspector.set_selected_node(node, hierarchy.is_selected_readonly());
-		auto lvl_mgr = state.lvl_manager.lock();
-		if (lvl_mgr && node && state.active_world_idx < (int)state.world_names.size()) {
-			auto& reg = lvl_mgr->get_level().get_world(state.world_names[state.active_world_idx]).state();
-			ecs::entity found = entt::null;
-			reg.view<scn::name_component>().each([&](auto ent, const scn::name_component& nc) {
-				if (nc.name == node->name) found = ent;
-			});
-			viewport.set_selected_entity(found);
-		} else {
-			viewport.set_selected_entity(entt::null);
-		}
+		inspector.set_selected_node(node);
+		inspector.set_override_target(hierarchy.get_selected_owner(), hierarchy.get_selected_target());
+		ecs::entity found = entt::null;
+		if (node) found = find_entity_by_path(state, hierarchy.get_selected_path());
+		viewport.set_selected_entity(found);
 	});
 
 	hierarchy.set_on_world_changed([&](int idx) {
@@ -126,24 +134,24 @@ void wire_hierarchy_callbacks(
 	hierarchy.set_on_create_node([&](const std::string& type_name) {
 		scene_ed.create_entity(type_name);
 	});
-	hierarchy.set_on_delete_node([&](const std::string& name) {
-		scene_ed.delete_entity(name);
+	hierarchy.set_on_delete_node([&](uint64_t node_id) {
+		scene_ed.delete_entity(node_id);
 	});
-	hierarchy.set_on_delete_nodes([&](const std::vector<std::string>& names) {
-		scene_ed.delete_entities(names);
+	hierarchy.set_on_delete_nodes([&](const std::vector<uint64_t>& node_ids) {
+		scene_ed.delete_entities(node_ids);
 	});
 	hierarchy.set_on_rename_node([&](const std::string& /*old_name*/, const std::string& /*new_name*/) {
 		state.is_dirty = true;
 		scene_ed.serialize_and_push();
 	});
-	hierarchy.set_on_duplicate_node([&](const std::string& name) {
-		scene_ed.duplicate_entity(name);
+	hierarchy.set_on_duplicate_node([&](uint64_t node_id) {
+		scene_ed.duplicate_entity(node_id);
 	});
-	hierarchy.set_on_duplicate_nodes([&](const std::vector<std::string>& names) {
-		scene_ed.duplicate_entities(names);
+	hierarchy.set_on_duplicate_nodes([&](const std::vector<uint64_t>& node_ids) {
+		scene_ed.duplicate_entities(node_ids);
 	});
-	hierarchy.set_on_reparent_node([&](const std::string& node_name, const std::string& new_parent_name, int insert_index) {
-		scene_ed.reparent_entity(node_name, new_parent_name, insert_index);
+	hierarchy.set_on_reparent_node([&](uint64_t node_id, uint64_t new_parent_id, int insert_index) {
+		scene_ed.reparent_entity(node_id, new_parent_id, insert_index);
 	});
 
 	inspector.set_on_node_changed([&]() {
@@ -152,8 +160,8 @@ void wire_hierarchy_callbacks(
 	});
 
 	viewport.set_on_transform_committed(
-		[&](const std::string& name, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
-			scene_ed.on_transform_committed(name, pos, rot, scale);
+		[&](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
+			scene_ed.on_transform_committed(path, pos, rot, scale);
 		});
 }
 
@@ -230,23 +238,13 @@ void wire_controller_callbacks(
 		hierarchy.set_selected_node(nullptr);
 		inspector.set_selected_node(nullptr);
 	};
-	scene_ed.on_after_push = [&hierarchy, &viewport, &state] {
-		auto* selected = hierarchy.get_selected_node();
-		if (!selected) {
+	scene_ed.on_after_push = [&hierarchy, &inspector, &viewport, &state] {
+		inspector.invalidate_view(); // the desc was rewritten: instance expansions are stale
+		if (!hierarchy.get_selected_node()) {
 			viewport.set_selected_entity(entt::null);
 			return;
 		}
-		auto lvl_mgr = state.lvl_manager.lock();
-		if (!lvl_mgr || state.active_world_idx >= (int)state.world_names.size()) {
-			viewport.set_selected_entity(entt::null);
-			return;
-		}
-		auto& reg = lvl_mgr->get_level().get_world(state.world_names[state.active_world_idx]).state();
-		ecs::entity found = entt::null;
-		reg.view<scn::name_component>().each([&](auto ent, const scn::name_component& nc) {
-			if (nc.name == selected->name) found = ent;
-		});
-		viewport.set_selected_entity(found);
+		viewport.set_selected_entity(find_entity_by_path(state, hierarchy.get_selected_path()));
 	};
 	scene_ed.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	scene_ed.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
@@ -254,7 +252,7 @@ void wire_controller_callbacks(
 	world_ctrl.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	world_ctrl.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
 	world_ctrl.on_world_switched = [&hierarchy, &inspector, &viewport, &state](int idx) {
-		hierarchy.set_world_desc(&state.active_world_desc());
+		hierarchy.set_world_desc(state.active_world_desc());
 		hierarchy.set_world_names(state.world_names, idx);
 		inspector.set_selected_node(nullptr);
 		hierarchy.set_selected_node(nullptr);

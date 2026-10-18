@@ -8,6 +8,9 @@
 #include <glm/glm.hpp>
 #include <functional>
 #include <memory>
+#include <span>
+#include <cstdint>
+#include <vector>
 #include <string>
 
 namespace rnd { class render_system; }
@@ -32,7 +35,7 @@ namespace edt
 		// Argument: absolute filesystem path of the dropped asset.
 		void set_on_asset_dropped(std::function<void(const std::string&)> cb) { m_on_asset_dropped = std::move(cb); }
 
-		void set_on_transform_committed(std::function<void(const std::string&, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
+		void set_on_transform_committed(std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
 
 		glm::vec2 get_viewport_pos() const { return m_image_pos; }
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }
@@ -66,6 +69,6 @@ namespace edt
 		float m_fps_timer = 0.f;
 		int m_frame_count = 0;
 		std::function<void(const std::string&)> m_on_asset_dropped;
-		std::function<void(const std::string&, glm::vec3, glm::vec3, glm::vec3)> m_on_transform_committed;
+		std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> m_on_transform_committed;
 	};
 }

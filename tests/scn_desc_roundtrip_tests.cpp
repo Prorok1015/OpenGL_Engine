@@ -537,9 +537,9 @@ BOOST_AUTO_TEST_CASE(DescSystem_PrettyJsonParsesBackToTheSameValue)
 BOOST_AUTO_TEST_CASE(WorldDesc_NodeReferencingAssetKeepsTransformOnSave)
 {
 	put("robot.desc", R"({"__type":"stat_desc","hp":5})");
-	auto text = std::string(R"({"__type":"world_desc","name":"w","systems":[],"children":{
-		"scene":{"transform":{"rotation":[-90,0,0],"position":[0,-1,-6],"scale":[0.1,0.1,0.1]},
-			"components":{"scene":")") + tag_of("robot.desc").string() + R"("}}}})";
+	auto text = std::string(R"({"__type":"world_desc","__version":3,"name":"w","systems":[],"children":[
+		{"__id":"00000000000000b1","name":"scene","transform":{"rotation":[-90,0,0],"position":[0,-1,-6],"scale":[0.1,0.1,0.1]},
+			"components":{"scene":")") + tag_of("robot.desc").string() + R"("}}]})";
 
 	scn::world_desc w;
 	w.deserialize(*descs, parse_migrated(text, "world_desc"));
@@ -557,8 +557,8 @@ BOOST_AUTO_TEST_CASE(WorldDesc_NodeReferencingAssetKeepsTransformOnSave)
 BOOST_AUTO_TEST_CASE(WorldDesc_IdentityReferenceNodeIsWrittenAsANodeWithAReferenceComponent)
 {
 	put("robot.desc", R"({"__type":"stat_desc","hp":5})");
-	auto text = std::string(R"({"__type":"world_desc","name":"w","systems":[],"children":{"scene":")")
-		+ tag_of("robot.desc").string() + R"("}})";
+	auto text = std::string(R"({"__type":"world_desc","__version":3,"name":"w","systems":[],"children":[
+		{"__id":"00000000000000b1","name":"scene","components":{"scene":")") + tag_of("robot.desc").string() + R"("}}]})";
 
 	scn::world_desc w;
 	w.deserialize(*descs, parse_migrated(text, "world_desc"));
