@@ -336,6 +336,35 @@ BOOST_AUTO_TEST_CASE(CameraDesc_LegacySingleTextureBecomesFirstColorTarget)
 	BOOST_TEST(c.color_targets()[0] == res::tag{ "memory://rt/old.tex" });
 }
 
+BOOST_AUTO_TEST_CASE(CameraDesc_ProtocolLessRenderTargetsNormalizeToMemory)
+{
+	scn::camera_desc c;
+	c.deserialize(*descs, parse(R"({"color_targets":["__rt_color","memory://__rt_keep","rt/sub"],
+		"depth_target":"__rt_depth","tp_accum_target":"__rt_acc","tp_reveal_target":"__rt_rev"})"));
+	BOOST_REQUIRE(c.color_targets().size() == 3u);
+	BOOST_TEST(c.color_targets()[0] == res::tag(res::tag::memory, "__rt_color"));
+	BOOST_TEST(c.color_targets()[1] == res::tag{ "memory://__rt_keep" });
+	BOOST_TEST(c.color_targets()[2] == res::tag(res::tag::memory, "rt/sub"));
+	BOOST_TEST(c.depth_target() == res::tag(res::tag::memory, "__rt_depth"));
+	BOOST_TEST(c.tp_accum_target() == res::tag(res::tag::memory, "__rt_acc"));
+	BOOST_TEST(c.tp_reveal_target() == res::tag(res::tag::memory, "__rt_rev"));
+	BOOST_TEST(c.depth_target().protocol() == "memory");
+	BOOST_TEST(c.depth_target().name() == "__rt_depth");
+
+	auto r = reload(*descs, c);
+	BOOST_TEST(r.depth_target() == c.depth_target());
+	BOOST_TEST(r.color_targets()[0] == c.color_targets()[0]);
+	BOOST_TEST(ser(c).at("depth_target").as_string() == "memory://__rt_depth");
+}
+
+BOOST_AUTO_TEST_CASE(CameraDesc_LegacyProtocolLessTextureNormalizes)
+{
+	scn::camera_desc c;
+	c.deserialize(*descs, parse(R"({"texture":"__rt_old"})"));
+	BOOST_REQUIRE(c.color_targets().size() == 1u);
+	BOOST_TEST(c.color_targets()[0] == res::tag(res::tag::memory, "__rt_old"));
+}
+
 BOOST_AUTO_TEST_CASE(CameraDesc_SerializeRoundTripsRenderSettings)
 {
 	scn::camera_desc c;

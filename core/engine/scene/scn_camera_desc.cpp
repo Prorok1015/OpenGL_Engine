@@ -10,6 +10,16 @@ namespace {
 	{
 		return v.to_number<float>();
 	}
+
+	// Runtime render targets live in the memory:// store. res::tag(std::string) slices garbage
+	// from a string without a protocol, so add the canonical one when it is missing.
+	res::tag read_rt_tag(const json::value& v)
+	{
+		const std::string_view str = v.as_string();
+		if (str.find("://") != std::string_view::npos)
+			return res::tag(str);
+		return res::tag(res::tag::memory, str);
+	}
 }
 
 void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
@@ -33,21 +43,19 @@ void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::o
 	if (auto* arr = data.if_contains("color_targets")) {
 		m_color_targets.clear();
 		for (const auto& v : arr->as_array()) {
-			auto tag_str = v.as_string();
-			m_color_targets.push_back(res::tag(std::string(tag_str)));
+			m_color_targets.push_back(read_rt_tag(v));
 		}
 	} else if (data.contains("texture")) {
 		// Backward compatibility: old single "texture" field → color_targets[0]
 		m_color_targets.clear();
-		auto tag_str = data.at("texture").as_string();
-		m_color_targets.push_back(res::tag(std::string(tag_str)));
+		m_color_targets.push_back(read_rt_tag(data.at("texture")));
 	}
 	if (data.contains("depth_target"))
-		m_depth_target = res::tag(std::string(data.at("depth_target").as_string()));
+		m_depth_target = read_rt_tag(data.at("depth_target"));
 	if (data.contains("tp_accum_target"))
-		m_tp_accum_target = res::tag(std::string(data.at("tp_accum_target").as_string()));
+		m_tp_accum_target = read_rt_tag(data.at("tp_accum_target"));
 	if (data.contains("tp_reveal_target"))
-		m_tp_reveal_target = res::tag(std::string(data.at("tp_reveal_target").as_string()));
+		m_tp_reveal_target = read_rt_tag(data.at("tp_reveal_target"));
 }
 
 void scn::camera_desc::serialize(json::object& data) const
