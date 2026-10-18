@@ -1,11 +1,11 @@
 #include "edt_world_controller.h"
 #include "edt_shared_state.h"
 #include "edt_editor_camera.h"
-#include "level/scn_level.h"
-#include "level/scn_level_manager.h"
-#include "level/scn_world_desc.h"
+#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_world_desc.h>
 #include <snk/ecs/ecs_system.h>
-#include "scn_ecs_assembler.h"
+#include <snk/scene/scn_ecs_assembler.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>

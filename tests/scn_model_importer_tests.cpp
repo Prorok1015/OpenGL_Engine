@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "adapters/scn_model_importer_adapter.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
 

@@ -1,9 +1,9 @@
-#include "gui_gui_service_init.h"
-#include "gui_system.h"
+#include <snk/gui/gui_gui_service_init.h>
+#include <snk/gui/gui_system.h>
 #include <snk/window/wnd_window_system.h>
-#include "gui_debug_layer.h"
+#include <snk/gui/gui_debug_layer.h>
 #include "gui_gl_backend.h"
-#include "gui_platform_backend.h"
+#include <snk/gui/gui_platform_backend.h>
 #include <snk/common/engine_assert.h>
 #include <filesystem>
 

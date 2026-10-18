@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "rnd_state_helper.h"
+#include <snk/render/rnd_state_helper.h>
 
 using namespace rnd::driver;
 

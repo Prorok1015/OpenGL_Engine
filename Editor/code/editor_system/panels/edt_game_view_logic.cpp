@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <format>
 #include "edt_camera_redirect.h"
-#include "scn_camera_component.hpp"
-#include "scn_model.h"
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_model.h>
 
 namespace edt::game_view
 {

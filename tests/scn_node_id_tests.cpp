@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "adapters/scn_model_importer_adapter.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <snk/desc/desc_node_id.h>
-#include "level/scn_node_index.h"
+#include <snk/scene/level/scn_node_index.h>
 #include "edt_scene_editor.h"
 #include "edt_override_edit.h"
 #include "edt_shared_state.h"

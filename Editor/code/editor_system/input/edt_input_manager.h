@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/common/common.h>
-#include "inp_input_manager_base.h"
+#include <snk/input/inp_input_manager_base.h>
 
 namespace edt
 {

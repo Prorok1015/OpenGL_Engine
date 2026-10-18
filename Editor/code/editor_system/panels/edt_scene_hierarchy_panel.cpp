@@ -1,9 +1,9 @@
 #include "edt_scene_hierarchy_panel.h"
-#include "scn_camera_desc.h"
-#include "scn_directional_light_desc.h"
-#include "scn_mesh_node_desc.h"
-#include "scn_skybox_desc.h"
-#include "scn_bone_desc.h"
+#include <snk/scene/scn_camera_desc.h>
+#include <snk/scene/scn_directional_light_desc.h>
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
+#include <snk/scene/scn_bone_desc.h>
 #include "edt_override_edit.h"
 #include <imgui.h>
 #include <string>

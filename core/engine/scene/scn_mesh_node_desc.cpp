@@ -1,6 +1,6 @@
-#include "scn_mesh_node_desc.h"
-#include "scn_model.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_glm_json_convert.h>
 
 void scn::mesh_node_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {

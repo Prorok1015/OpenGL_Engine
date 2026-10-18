@@ -1,16 +1,16 @@
-#include "engine_module.h"
-#include "rnd_render_service_init.h"
-#include "gui_gui_service_init.h"
-#include "inp_input_service_init.h"
-#include "inp_input_system.h"
+#include <snk/engine/engine_module.h>
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/gui/gui_gui_service_init.h>
+#include <snk/input/inp_input_service_init.h>
+#include <snk/input/inp_input_system.h>
 #include <snk/window/wnd_window_system.h>
-#include "scn_scene_service_init.h"
-#include "scn_ecs_assembler.h"
-#include "skinning/rnd_skinning_manager.h"
+#include <snk/scene/scn_scene_service_init.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/application/app_frame_stage.h>
-#include "gs_engine_frame_stages.h"
-#include "gui_system.h"
-#include "inp_input_consumable_listener.h"
+#include <snk/game/gs_engine_frame_stages.h>
+#include <snk/gui/gui_system.h>
+#include <snk/input/inp_input_consumable_listener.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
 
 namespace {

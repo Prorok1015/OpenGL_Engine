@@ -4,7 +4,7 @@ add_library(${PROJECT_NAME} STATIC)
 add_library(snk::image ALIAS ${PROJECT_NAME})
 
 target_sources(${PROJECT_NAME} PRIVATE "image.cpp")
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
 
 add_subdirectory(${THIRD_PARTY_PATH}/stb_image stb_image)
 

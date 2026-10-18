@@ -1,12 +1,12 @@
-#include "rnd_render_service_init.h"
-#include "rnd_render_system.h"
+#include <snk/render/rnd_render_service_init.h>
+#include <snk/render/rnd_render_system.h>
 #include <snk/window/wnd_window_system.h>
 #include "rnd_gl_swapchain.h"
 #include <snk/common/logger/engine_log.h>
 #include <stdexcept>
 #include <snk/resource/res_system.h>
-#include "geom/rnd_geometry_desc.h"
-#include "texture/rnd_texture_desc.h"
+#include <snk/render/geom/rnd_geometry_desc.h>
+#include <snk/render/texture/rnd_texture_desc.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
 #include "passes/rnd_z_prepass.h"
@@ -15,7 +15,7 @@
 #include "passes/rnd_composition_pass.h"
 #include "passes/rnd_skybox_pass.h"
 #include "passes/rnd_debug_pass.h"
-#include "shader/rnd_material_compiler.h"
+#include <snk/render/shader/rnd_material_compiler.h>
 
 void engine::render::register_render_descs(desc::desc_system& desc_sys)
 {

@@ -1,4 +1,4 @@
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_glm_json_convert.h>
 #include <snk/common/logger/engine_log.h>
 
 void glm::tag_invoke(json::value_from_tag, json::value& jv, const glm::vec2& v) {

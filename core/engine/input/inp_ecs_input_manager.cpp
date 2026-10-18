@@ -1,6 +1,6 @@
-#include "inp_ecs_input_manager.h"
+#include <snk/input/inp_ecs_input_manager.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
-#include "inp_events.hpp"
+#include <snk/input/inp_events.hpp>
 #include <snk/ecs/ecs_system.h>
 
 void inp::register_ecs_input_system(ecs::system_factory& factory, std::shared_ptr<ecs_input_manager> manager)

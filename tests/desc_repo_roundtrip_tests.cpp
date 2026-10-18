@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "adapters/scn_model_importer_adapter.h"
-#include "rnd_render_service_init.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
+#include <snk/render/rnd_render_service_init.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>

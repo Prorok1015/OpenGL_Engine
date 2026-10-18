@@ -4,7 +4,7 @@
 
 #include "edt_input_manager.h"
 #include "edt_transform_gizmo.hpp"
-#include "inp_ecs_input_manager.h"
+#include <snk/input/inp_ecs_input_manager.h>
 #include <glm/glm.hpp>
 #include <functional>
 #include <memory>

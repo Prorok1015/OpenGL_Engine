@@ -1,4 +1,4 @@
-#include "rnd_skinning_manager.h"
+#include <snk/render/skinning/rnd_skinning_manager.h>
 #include <vector>
 
 rnd::driver::ssbo_buffer_interface* rnd::skinning_manager::get_weights_indeces_buffer(res::tag tag, rnd::driver::driver_interface* driver)

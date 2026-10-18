@@ -1,5 +1,5 @@
 #pragma once
-#include "level/scn_prefab_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <boost/json.hpp>
 #include <glm/vec3.hpp>
 #include <cstdint>

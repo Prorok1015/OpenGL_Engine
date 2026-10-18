@@ -1,8 +1,8 @@
-#include "scn_camera_desc.h"
-#include "scn_glm_json_convert.h"
-#include "scn_model.h"
-#include "scn_camera_component.hpp"
-#include "scn_camera_controller_component.hpp"
+#include <snk/scene/scn_camera_desc.h>
+#include <snk/scene/scn_glm_json_convert.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_camera_controller_component.hpp>
 
 namespace {
 	// as_double() throws on JSON integers (`"fov": 60`); to_number accepts any numeric kind.

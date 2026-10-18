@@ -1,5 +1,5 @@
-#include "shader/rnd_material_compiler.h"
-#include "texture/rnd_texture_manager.h"
+#include <snk/render/shader/rnd_material_compiler.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/common/engine_assert.h>
 
 rnd::shader_config rnd::default_material_compiler::compile(const scn::material_desc& mat, const material_compile_context& ctx)

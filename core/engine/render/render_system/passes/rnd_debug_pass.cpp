@@ -1,6 +1,6 @@
 #include "rnd_debug_pass.h"
-#include "rnd_render_packet.hpp"
-#include "rnd_render_system.h"
+#include <snk/render/rnd_render_packet.hpp>
+#include <snk/render/rnd_render_system.h>
 #include <snk/driver/rnd_buffer_layout.h>
 #include <snk/common/eng_profiler.h>
 

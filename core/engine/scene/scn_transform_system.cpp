@@ -1,6 +1,6 @@
-#include "scn_transform_system.h"
+#include <snk/scene/scn_transform_system.h>
 #include <snk/common/common.h>
-#include "scn_model.h"
+#include <snk/scene/scn_model.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <unordered_set>

@@ -12,8 +12,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:drv_opengl
 # rnd_material_compiler consumes the POD scn::material_desc header (EPIC-49 US-49-5). material_desc
 # is header-only data (its methods live in scene's .cpp and the compiler calls none of them), so this
 # is a header dependency only — render does NOT link scene (scene links render, that would be a cycle).
-# snk::scene_material_desc_api (defined next to scene) exposes the scene directory without code.
-# Transitional until the scene headers move to scene/include (#109, PR-4).
+# snk::scene_material_desc_api (defined next to scene) exposes scene's public include dir without code.
+# Stays until the material compiler stops taking scn::material_desc (#236).
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::scene_material_desc_api)
 
 

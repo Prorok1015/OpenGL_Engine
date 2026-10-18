@@ -1,4 +1,4 @@
-#include "scn_ecs_assembler.h"
+#include <snk/scene/scn_ecs_assembler.h>
 #include <entt/entt.hpp>
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_json_ops.h>

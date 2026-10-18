@@ -1,4 +1,4 @@
-#include "rnd_shader_manager.h"
+#include <snk/render/shader/rnd_shader_manager.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 

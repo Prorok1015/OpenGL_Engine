@@ -1,5 +1,5 @@
 #pragma once
-#include "rnd_render_pass_interface.h"
+#include <snk/render/rnd_render_pass_interface.h>
 
 namespace rnd {
 class transparent_pass : public render_pass_interface {

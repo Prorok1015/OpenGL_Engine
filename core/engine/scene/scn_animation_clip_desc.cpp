@@ -1,5 +1,5 @@
-#include "scn_animation_clip_desc.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_animation_clip_desc.h>
+#include <snk/scene/scn_glm_json_convert.h>
 
 namespace scn
 {

@@ -1,10 +1,10 @@
 #include "edt_scene_editor.h"
 #include "edt_shared_state.h"
 #include "edt_override_edit.h"
-#include "level/scn_level.h"
-#include "level/scn_level_manager.h"
-#include "level/scn_node_index.h"
-#include "scn_model.h"
+#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/scn_model.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/eng_transform_3d.hpp>

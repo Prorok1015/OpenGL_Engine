@@ -1,9 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_inspector_panel.h"
 #include "edt_component_ui_registry.h"
-#include "level/scn_prefab_desc.h"
-#include "scn_camera_desc.h"
-#include "gui_menu_layout.h"
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_camera_desc.h>
+#include <snk/gui/gui_menu_layout.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 

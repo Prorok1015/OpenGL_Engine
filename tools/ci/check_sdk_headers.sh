@@ -7,12 +7,11 @@
 # under passes/, anything with glad/GLFW in its path, and headers that #include <glad/...> or
 # <GLFW/...>. Bundled third-party trees (snk/boost, snk/lib3dparty, snk/_generated) are not checked.
 #
-# Until the components have moved their public headers to <component>/include (PR-1..PR-4) the
-# install still contains such files, so the check only reports them. The PR that migrates the last
-# offender sets ENFORCE_DEFAULT=1. SNK_SDK_HEADERS_ENFORCE=0|1 or --enforce/--report override it.
+# Enforcing by default since every public header lives in <component>/include (#109).
+# SNK_SDK_HEADERS_ENFORCE=0|1 or --enforce/--report override it.
 set -euo pipefail
 
-ENFORCE_DEFAULT=0
+ENFORCE_DEFAULT=1
 
 # Extended regexes (matched against the path relative to <prefix>/include) that stay tolerated even
 # when enforcing. Keep empty; every entry needs an issue reference.

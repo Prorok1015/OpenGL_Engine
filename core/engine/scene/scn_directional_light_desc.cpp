@@ -1,7 +1,7 @@
-#include "scn_directional_light_desc.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_directional_light_desc.h>
+#include <snk/scene/scn_glm_json_convert.h>
 
-#include "scn_model.h"
+#include <snk/scene/scn_model.h>
 
 namespace {
 	// A malformed field keeps the current (default) value instead of collapsing to zero, which would black out the light.

@@ -1,4 +1,4 @@
-#include "scn_worldwrap_adapter.h"
+#include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/desc/desc_system.h>
 #include <stdexcept>
 #include <string>

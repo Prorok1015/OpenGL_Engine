@@ -1,4 +1,4 @@
-#include "scn_override_record.h"
+#include <snk/scene/level/scn_override_record.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_node_id.h>
 #include <algorithm>

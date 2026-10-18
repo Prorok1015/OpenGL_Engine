@@ -7,7 +7,7 @@ file(GLOB SE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
 # PRIVATE: the umbrella provides object code but no longer re-exports its components' headers.
 # Cross-layer consumers compile against snk::core_api instead (EPIC-49 US-49-1/US-49-3).
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_system PRIVATE snk::application PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::ecs)
 
@@ -29,6 +29,8 @@ snk_usage_only(_core_api_libs
 	snk::config_system
 )
 target_link_libraries(core_api INTERFACE ${_core_api_libs})
+# core_module.h (snk/core/) belongs to the layer contract.
+snk_component_headers(core_api)
 
 
 # Memory allocators (mem_*.cpp) now live in the `common` STATIC lib (EPIC-49 US-49-2).

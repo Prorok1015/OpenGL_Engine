@@ -5,13 +5,13 @@ add_library(snk::scene ALIAS ${PROJECT_NAME})
 
 file(GLOB_RECURSE SE_SCENE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 target_sources(${PROJECT_NAME} PRIVATE ${SE_SCENE_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
 
 # Header-only view of scene for render (rnd_material_compiler.h -> scn_material_desc.h); render cannot
-# link scene itself (cycle). Transitional: becomes scene/include in #109, PR-4.
+# link scene itself (cycle). Stays until the material compiler stops taking scn::material_desc (#236).
 add_library(scene_material_desc_api INTERFACE)
 add_library(snk::scene_material_desc_api ALIAS scene_material_desc_api)
-target_include_directories(scene_material_desc_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(scene_material_desc_api INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 
 # scene does NOT use gui (verified: zero gui includes / gui:: usage) — the link was dead and is a
 # layer violation (scene must not depend on gui). Removed (EPIC-49 US-49-9). gui takes the rendered

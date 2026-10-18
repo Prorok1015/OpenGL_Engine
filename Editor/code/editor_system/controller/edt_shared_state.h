@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/resource/res_tag.h>
-#include "level/scn_world_desc.h"
+#include <snk/scene/level/scn_world_desc.h>
 #include <cstdint>
 #include <vector>
 #include <string>

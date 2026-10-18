@@ -1,8 +1,8 @@
-#include "scn_prefab_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/common/logger/engine_log.h>
-#include "scn_model.h"
-#include "scn_node_index.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_node_index.h>
+#include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_json_ops.h>
 #include <snk/resource/res_system.h>

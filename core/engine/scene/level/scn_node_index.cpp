@@ -1,4 +1,4 @@
-#include "scn_node_index.h"
+#include <snk/scene/level/scn_node_index.h>
 #include <algorithm>
 
 scn::node_index& scn::node_index::get(entt::registry& reg)

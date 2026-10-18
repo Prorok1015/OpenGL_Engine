@@ -1,5 +1,5 @@
 #pragma once
-#include "gui_backend_interface.h"
+#include <snk/gui/gui_backend_interface.h>
 #include <memory>
 
 struct ImGuiStyle;

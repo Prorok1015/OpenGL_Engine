@@ -1,8 +1,8 @@
 #include "edt_game_view_panel.h"
 #include "edt_input_manager.h"
-#include "rnd_render_system.h"
-#include "gui_system.h"
-#include "scn_camera_component.hpp"
+#include <snk/render/rnd_render_system.h>
+#include <snk/gui/gui_system.h>
+#include <snk/scene/scn_camera_component.hpp>
 #include <imgui.h>
 
 namespace edt

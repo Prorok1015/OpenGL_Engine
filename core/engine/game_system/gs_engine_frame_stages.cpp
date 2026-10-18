@@ -1,10 +1,10 @@
-#include "gs_engine_frame_stages.h"
+#include <snk/game/gs_engine_frame_stages.h>
 #include <snk/window/wnd_window_system.h>
-#include "level/scn_level_manager.h"
-#include "inp_ecs_input_manager.h"
-#include "rnd_frame_assembler.h"
-#include "rnd_frame_context.h"
-#include "rnd_render_system.h"
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/render/rnd_frame_assembler.h>
+#include <snk/render/rnd_frame_context.h>
+#include <snk/render/rnd_render_system.h>
 #include <snk/driver/rnd_swapchain_interface.h>
 #include <snk/application/app_loop_service_interface.h>
 #include <snk/common/eng_profiler.h>

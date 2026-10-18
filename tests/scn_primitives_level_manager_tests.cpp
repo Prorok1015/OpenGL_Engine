@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "scn_primitives.h"
-#include "level/scn_level_manager.h"
-#include "adapters/scn_worldwrap_adapter.h"
+#include <snk/scene/scn_primitives.h>
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <cmath>
 #include <set>
 #include <tuple>

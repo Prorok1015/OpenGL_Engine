@@ -1,7 +1,7 @@
-#include "scn_animation_job.h"
-#include "scn_mesh_nodes.hpp"
-#include "scn_model.h"
-#include "scn_animation_collection_desc.h"
+#include <snk/scene/scn_animation_job.h>
+#include <snk/scene/scn_mesh_nodes.hpp>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_animation_collection_desc.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>

@@ -1,4 +1,4 @@
-#include "gui_profiler_overlay.h"
+#include <snk/gui/gui_profiler_overlay.h>
 #include "imgui.h"
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>

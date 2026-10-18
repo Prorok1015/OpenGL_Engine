@@ -1,14 +1,14 @@
-#include "scn_render_data_extractor.h"
-#include "scn_world.h"
+#include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/scene/level/scn_world.h>
 #include <memory_resource>
 #include <snk/common/eng_transform_3d.hpp>
-#include "rnd_light_data.hpp"
-#include "rnd_render_packet.hpp"
-#include "rnd_render_system.h"
-#include "shader/rnd_material_compiler.h"
-#include "scn_camera_component.hpp"
-#include "scn_material_desc.h"
-#include "scn_model.h"
+#include <snk/render/rnd_light_data.hpp>
+#include <snk/render/rnd_render_packet.hpp>
+#include <snk/render/rnd_render_system.h>
+#include <snk/render/shader/rnd_material_compiler.h>
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_material_desc.h>
+#include <snk/scene/scn_model.h>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/mem_allocator.h>
 

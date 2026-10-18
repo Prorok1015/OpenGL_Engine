@@ -1,4 +1,4 @@
-#include "gui_platform_backend.h"
+#include <snk/gui/gui_platform_backend.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <snk/window/wnd_coordinates.h>
 #include <algorithm>

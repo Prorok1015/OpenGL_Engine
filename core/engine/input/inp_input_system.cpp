@@ -1,4 +1,4 @@
-#include "inp_input_system.h"
+#include <snk/input/inp_input_system.h>
 #include <snk/common/logger/engine_log.h>
 
 void inp::input_system::on_input_event(wnd::handle win, const inp::input_event& event)

@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "gui_platform_backend.h"
+#include <snk/gui/gui_platform_backend.h>
 #include <snk/window/wnd_null_window_system.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <cfloat>

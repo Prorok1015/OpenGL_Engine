@@ -1,19 +1,19 @@
-#include "scn_scene_service_init.h"
-#include "adapters/scn_worldwrap_adapter.h"
+#include <snk/scene/scn_scene_service_init.h>
+#include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <snk/ecs/ecs_system.h>
-#include "level/scn_hot_reload_manager.h"
-#include "level/scn_level_manager.h"
+#include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/level/scn_level_manager.h>
 #include <snk/resource/res_system.h>
-#include "scn_animation_job.h"
-#include "scn_camera_controller_system.h"
-#include "scn_ecs_assembler.h"
-#include "scn_transform_system.h"
+#include <snk/scene/scn_animation_job.h>
+#include <snk/scene/scn_camera_controller_system.h>
+#include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_transform_system.h>
 
 
-#include "level/scn_render_data_extractor.h"
-#include "rnd_frame_assembler.h"
-#include "skinning/rnd_skinning_manager.h"
-#include "rnd_render_system.h"
+#include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/render/rnd_frame_assembler.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
+#include <snk/render/rnd_render_system.h>
 
 void scn::scene_init(ds::app_data_storage &store) {
   auto &desc_sys = store.require<desc::desc_system>();

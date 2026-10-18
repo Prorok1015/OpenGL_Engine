@@ -1,0 +1,42 @@
+#pragma once
+#include <snk/common/common.h>
+#include <snk/ecs/ecs_system_interface.hpp>
+#include <snk/input/inp_input_manager_base.h>
+#include <snk/core_input/inp_input_event.hpp>
+#include <snk/input/inp_events.hpp>
+#include <snk/common/snk_api.h>
+#include <memory>
+
+namespace ecs { class system_factory; }
+
+namespace inp
+{
+	class SNK_API ecs_input_manager : public inp::input_manager_base, public ecs::system_interface
+	{
+	public:
+		ecs_input_manager() : inp::input_manager_base("ecs") {}
+
+		virtual bool on_handle_event(wnd::handle win, const inp::input_event& evt) override;
+
+		void set_input_area(const glm::ivec4& rect, bool invert = false) {
+			input_area = rect;
+			this->invert = invert;
+		}
+
+		void update_input_state_system(inp::input_state& state) {
+			state = this->input_state;
+		}
+
+		void reset_frame_deltas() {
+			input_state.scroll = glm::vec2{};
+			input_state.mouse_dir = glm::vec2{};
+		}
+	private:
+		inp::input_state input_state;
+		glm::ivec4 input_area = {};
+		bool invert = false;
+	};
+
+	// Registers "inp::update_input_state" (phase `input`) for the given manager instance.
+	SNK_API void register_ecs_input_system(ecs::system_factory& factory, std::shared_ptr<ecs_input_manager> manager);
+}

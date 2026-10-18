@@ -1,6 +1,6 @@
 #pragma once
 #include "edt_panel_base.h"
-#include "level/scn_world_desc.h"
+#include <snk/scene/level/scn_world_desc.h>
 #include <functional>
 #include <memory>
 #include <vector>

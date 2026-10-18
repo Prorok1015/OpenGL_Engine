@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 #include <entt/fwd.hpp>
-#include "level/scn_level.h"
+#include <snk/scene/level/scn_level.h>
 #include <snk/resource/res_tag.h>
 
 namespace edt

@@ -1,9 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/test/tools/floating_point_comparison.hpp>
 #include <entt/entt.hpp>
-#include "scn_model.h"
-#include "scn_mesh_nodes.hpp"
-#include "scn_animation_job.h" // real animation-sampling helpers under test
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_mesh_nodes.hpp>
+#include <snk/scene/scn_animation_job.h> // real animation-sampling helpers under test
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <algorithm>

@@ -1,7 +1,7 @@
 #include "edt_cr_internal.h"
-#include "level/scn_prefab_desc.h"
-#include "scn_animation_controller_desc.h"
-#include "scn_animation_collection_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_animation_controller_desc.h>
+#include <snk/scene/scn_animation_collection_desc.h>
 #include <imgui.h>
 
 void edt::edt_cr_animation_register(edt::component_ui_registry& registry)
