@@ -4,6 +4,7 @@
 #include "scn_mesh_node_desc.h"
 #include "scn_skybox_desc.h"
 #include "scn_bone_desc.h"
+#include "edt_override_edit.h"
 #include <imgui.h>
 #include <string>
 #include <algorithm>
@@ -16,6 +17,11 @@ namespace edt
 	scene_hierarchy_panel::scene_hierarchy_panel()
 		: panel_base("scene_hierarchy", "Scene Hierarchy")
 	{
+	}
+
+	void scene_hierarchy_panel::set_view_cache(std::shared_ptr<override_edit::view_cache> cache)
+	{
+		m_view_cache = std::move(cache);
 	}
 
 	void scene_hierarchy_panel::set_world_desc(scn::world_desc* desc)
@@ -150,21 +156,27 @@ namespace edt
 		if (m_on_node_selected) m_on_node_selected(m_selected_node);
 	}
 
-	void scene_hierarchy_panel::draw_prefab_children_readonly(
-		scn::prefab_desc::prefab_node& owner, const scn::prefab_desc::prefab_node& content, std::vector<uint64_t>& target)
+	void scene_hierarchy_panel::draw_instance_children(scn::prefab_desc::prefab_node& owner, std::vector<uint64_t>& target)
 	{
 		constexpr std::size_t max_listed_depth = 16; // a prefab that instantiates itself must not unfold forever
-		if (target.size() >= max_listed_depth) return;
-		for (const auto& child : content.children) {
-			// A node that instantiates another prefab lists that prefab's nodes below it; their ids extend `target`.
-			const scn::prefab_desc* nested = get_referenced_prefab(child);
-			const bool has_sub = !child.children.empty() || (nested && !nested->get_root().children.empty());
+		if (!m_view_cache || target.size() >= max_listed_depth) return;
+		m_view_cache->begin_frame();
+
+		// The same composed expansion the inspector edits against: intermediate removes / add_nodes are in it.
+		const auto& kids = m_view_cache->children(owner, target);
+		for (const auto& kid : kids) {
+			const auto& child = kid.node;
+			// The owner's own children are drawn by draw_node already.
+			if (target.empty() && std::ranges::any_of(owner.children, [&] (const auto& own) { return own.node_id == child.node_id; }))
+				continue;
+
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
-			if (!has_sub) flags |= ImGuiTreeNodeFlags_Leaf;
+			if (!kid.has_children) flags |= ImGuiTreeNodeFlags_Leaf;
+
+			target.push_back(child.node_id);
 
 			// Highlight if this node of the instantiated prefab is selected
-			if (m_selected_readonly && m_selected_owner == &owner
-				&& m_selected_node == const_cast<scn::prefab_desc::prefab_node*>(&child))
+			if (m_selected_readonly && m_selected_owner == &owner && m_selected_target == target)
 				flags |= ImGuiTreeNodeFlags_Selected;
 
 			std::string prefix;
@@ -177,12 +189,12 @@ namespace edt
 			bool opened = ImGui::TreeNodeEx(id.c_str(), flags);
 			ImGui::PopStyleColor();
 
-			target.push_back(child.node_id);
-
 			// A click selects the node; its edits become override records on the instance
 			if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {
 				m_multi_selected.clear();
-				m_selected_node = const_cast<scn::prefab_desc::prefab_node*>(&child);
+				// A copy: the cached listing is dropped on the next edit, the selection outlives it.
+				m_instance_selection = child;
+				m_selected_node = &m_instance_selection;
 				m_selected_readonly = true;
 				m_selected_owner = &owner;
 				m_selected_target = target;
@@ -193,8 +205,7 @@ namespace edt
 			}
 
 			if (opened) {
-				draw_prefab_children_readonly(owner, child, target);
-				if (nested) draw_prefab_children_readonly(owner, nested->get_root(), target);
+				draw_instance_children(owner, target);
 				ImGui::TreePop();
 			}
 			target.pop_back();
@@ -314,6 +325,7 @@ namespace edt
 
 	void scene_hierarchy_panel::on_render()
 	{
+		if (m_view_cache) m_view_cache->begin_frame();
 		if (!m_world_names.empty()) {
 			draw_world_tabs();
 			ImGui::Separator();
@@ -435,7 +447,7 @@ namespace edt
 
 		// ── tree node ────────────────────────────────────────────────────────
 		const scn::prefab_desc* ref_prefab = get_referenced_prefab(node);
-		const bool has_children = !node.children.empty() || (ref_prefab && !ref_prefab->get_root().children.empty());
+		const bool has_children = !node.children.empty() || ref_prefab;
 		ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 		if (!has_children) flags |= ImGuiTreeNodeFlags_Leaf;
 
@@ -596,10 +608,10 @@ namespace edt
 		if (opened) {
 			for (auto& child : node.children)
 				draw_node(child, lower_filter, flat_index);
-			// Show referenced prefab's children as read-only
+			// Show the instantiated nodes as read-only (their edits become override records)
 			if (ref_prefab) {
 				std::vector<uint64_t> target;
-				draw_prefab_children_readonly(node, ref_prefab->get_root(), target);
+				draw_instance_children(node, target);
 			}
 			ImGui::TreePop();
 		}

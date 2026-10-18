@@ -238,7 +238,8 @@ void wire_controller_callbacks(
 		hierarchy.set_selected_node(nullptr);
 		inspector.set_selected_node(nullptr);
 	};
-	scene_ed.on_after_push = [&hierarchy, &viewport, &state] {
+	scene_ed.on_after_push = [&hierarchy, &inspector, &viewport, &state] {
+		inspector.invalidate_view(); // the desc was rewritten: instance expansions are stale
 		if (!hierarchy.get_selected_node()) {
 			viewport.set_selected_entity(entt::null);
 			return;

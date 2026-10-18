@@ -11,6 +11,7 @@
 
 namespace desc { class desc_system; }
 namespace edt  { class component_ui_registry; }
+namespace edt::override_edit { class view_cache; }
 
 namespace edt
 {
@@ -26,7 +27,10 @@ namespace edt
 		void set_on_node_changed(std::function<void()> cb);
 		void set_component_ui_registry(component_ui_registry* registry);
 		void set_desc_system(desc::desc_system* desc_system);
-		void set_assembler(scn::ecs_assembler* assembler);
+		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
+		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
+		// The desc under the cache changed: the next frame composes again.
+		void invalidate_view();
 
 	protected:
 		void on_render() override;
@@ -47,7 +51,7 @@ namespace edt
 		std::vector<uint64_t>          m_target;
 		component_ui_registry*         m_ui_registry    = nullptr;
 		desc::desc_system*             m_desc_system    = nullptr;
-		scn::ecs_assembler*            m_assembler      = nullptr;
+		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;
 		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
 		bool                           m_pending_commit = false;

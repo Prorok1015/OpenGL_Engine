@@ -686,6 +686,39 @@ BOOST_FIXTURE_TEST_CASE(Override_BaseAppliesRemoveAndAddNodeRecordsOfIntermediat
 	BOOST_TEST(!oe::find_base_node(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull, 0x99ull }).has_value());
 }
 
+BOOST_FIXTURE_TEST_CASE(Override_ListedChildrenAreTheComposedNodes, nested_fixture)
+{
+	namespace oe = edt::override_edit;
+	const auto top = oe::list_children(*assembler, robot(), std::span<const uint64_t>{});
+	BOOST_REQUIRE(top.size() == 1u);
+	BOOST_TEST(top[0].node.node_id == 0xb1ull);
+	BOOST_TEST(top[0].has_children); // mid instantiates gear
+
+	const auto below = oe::list_children(*assembler, robot(), std::vector<uint64_t>{ 0xb1ull });
+	std::vector<uint64_t> ids;
+	for (const auto& listed : below) ids.push_back(listed.node.node_id);
+	// body removed wing and added extra; the inspector's base has the same nodes
+	BOOST_TEST((ids == std::vector<uint64_t>{ 0xa1ull, 0xa2ull, 0xe1ull }));
+}
+
+BOOST_FIXTURE_TEST_CASE(Override_ViewCacheComposesOncePerSelectionAndEdit, nested_fixture)
+{
+	namespace oe = edt::override_edit;
+	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
+	oe::view_cache cache(*assembler);
+
+	const auto& first = cache.base(robot(), tooth);
+	BOOST_REQUIRE(first);
+	BOOST_TEST(&cache.base(robot(), tooth) == &first); // a second frame reuses the composed base
+	BOOST_TEST(&cache.children(robot(), std::vector<uint64_t>{ 0xb1ull }) == &cache.children(robot(), std::vector<uint64_t>{ 0xb1ull }));
+
+	cache.invalidate();
+	cache.begin_frame();
+	const auto& again = cache.base(robot(), tooth);
+	BOOST_REQUIRE(again);
+	BOOST_TEST(oe::component_json(again->components.at("stat")).at("hp").to_number<int64_t>() == 7);
+}
+
 BOOST_FIXTURE_TEST_CASE(Editor_TransformCommitInsideANestedInstanceIsRelativeToTheComposedBase, nested_fixture)
 {
 	const std::vector<uint64_t> path{ 0xc1ull, 0xb1ull, 0xa1ull };

@@ -22,6 +22,7 @@ namespace edt
 		m_readonly = readonly;
 		m_owner = nullptr;
 		m_target.clear();
+		invalidate_view();
 		rebuild_parent_cache();
 	}
 
@@ -29,11 +30,17 @@ namespace edt
 	{
 		m_owner = owner;
 		m_target = std::move(target);
+		invalidate_view();
 	}
 
-	void inspector_panel::set_assembler(scn::ecs_assembler* assembler)
+	void inspector_panel::set_view_cache(std::shared_ptr<override_edit::view_cache> cache)
 	{
-		m_assembler = assembler;
+		m_view_cache = std::move(cache);
+	}
+
+	void inspector_panel::invalidate_view()
+	{
+		if (m_view_cache) m_view_cache->invalidate();
 	}
 
 	void inspector_panel::rebuild_parent_cache()
@@ -185,12 +192,14 @@ namespace edt
 	void inspector_panel::render_override_target()
 	{
 		namespace oe = override_edit;
-		if (!m_assembler) {
+		if (!m_view_cache) {
 			ImGui::TextDisabled("Overrides need the ecs assembler");
 			return;
 		}
-		// Composed per frame: records of intermediate prefab levels are part of what the instance edits are based on.
-		const std::optional<scn::prefab_desc::prefab_node> composed = oe::find_base_node(*m_assembler, *m_owner, m_target);
+		// Records of intermediate prefab levels are part of what the instance edits are based on. Composed once per
+		// selection or edit; the base leaves out the owner's own records of this node, so drags need no recompose.
+		m_view_cache->begin_frame();
+		const std::optional<scn::prefab_desc::prefab_node>& composed = m_view_cache->base(*m_owner, m_target);
 		if (!composed) {
 			ImGui::TextDisabled("%s is not part of %s any more", m_selected_node->name.c_str(), m_owner->name.c_str());
 			return;
@@ -272,6 +281,7 @@ namespace edt
 		if (!m_pending_commit || ImGui::IsAnyItemActive())
 			return;
 		m_pending_commit = false;
+		invalidate_view();
 		if (m_on_node_changed)
 			m_on_node_changed();
 	}
