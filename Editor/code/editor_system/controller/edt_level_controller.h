@@ -2,6 +2,7 @@
 #include "res_tag.h"
 #include "resources/res_resource_handle.hpp"
 #include "desc_base.hpp"
+#include "level/scn_world_desc.h"
 #include <algorithm>
 #include <string>
 #include <string_view>
@@ -78,6 +79,16 @@ namespace edt
 		const auto it = std::find(out_names.begin(), out_names.end(), active_name);
 		return it == out_names.end() ? 0 : static_cast<int>(it - out_names.begin());
 	}
+
+	// The editor side of a level reload: realigns the world arrays of `state` with the reloaded level and tells the
+	// world controller which world is active (none at all, or the one to switch to). `desc_lists_worlds` is whether
+	// the level desc names any world; if it does but none of them loaded (`desc_worlds` empty) the state is kept.
+	void apply_world_resync(
+		shared_state& state,
+		world_controller& worlds,
+		const std::vector<scn::world_desc>& desc_worlds,
+		bool desc_lists_worlds,
+		const std::function<bool(const scn::world_desc&)>& is_alive);
 
 	class level_controller
 	{
