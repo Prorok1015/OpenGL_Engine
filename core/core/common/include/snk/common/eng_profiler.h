@@ -9,7 +9,7 @@
 
 namespace ds
 {
-	static constexpr uint32_t PROFILER_RING_BUFFER_SIZE = 1024;
+	static constexpr uint32_t PROFILER_RING_BUFFER_SIZE = 4096;
 
 	// Timeline IDs — each represents a separate execution context
 	enum class profiler_timeline : uint8_t
