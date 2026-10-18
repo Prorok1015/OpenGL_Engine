@@ -6,7 +6,10 @@ name: Build
 # persisted by .github/actions/compiler-cache.
 
 on:
+  # Work branches (wip/*) are checked through their draft PR into aibranch; a push trigger on them
+  # too would run every job twice.
   push:
+    branches: [aibranch, main]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
