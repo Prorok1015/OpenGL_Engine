@@ -54,12 +54,13 @@
 - #9 цикл кадра (#96–#100): именованные стадии, один `app::loop_service`, цель рендера камеры. #190 Game view в редакторе.
 - #186 hot reload сохраняет миры, созданные в редакторе (редактор ресинхронизируется после любой перезагрузки); #196 уровень без миров (`active_world_idx = -1` допустим).
 - #198 Windows MSVC shared в CI (`snk_engine.dll`; imgui экспортируется из DLL через `IMGUI_API`; Boost.JSON/assimp статически в editor — безопасно при `/MD`).
-- #10 платформенный шов, дизайн утверждён: `docs/roadmap/design/PLATFORM_SEAM.md` (свой ImGui-бэкенд на событиях `wnd`, swap/vsync/glad в драйвере через `wnd::gl_surface`, курсор в координатах framebuffer). Шаги #101 (интерфейсы `wnd` без GLFW, `null_window_system`), #102 (swap/vsync/glad в драйвере через `wnd::gl_surface`, `gl::swapchain`) и #103 (события char/framebuffer/scale, курсор в координатах framebuffer, `edt::make_input_area`, пересборка шрифта по смене scale, cursor shape/clipboard у окна) — сделаны.
+- #10 платформенный шов, дизайн утверждён: `docs/roadmap/design/PLATFORM_SEAM.md` (свой ImGui-бэкенд на событиях `wnd`, swap/vsync/glad в драйвере через `wnd::gl_surface`, курсор в координатах framebuffer). Шаги #101 (интерфейсы `wnd` без GLFW, `null_window_system`), #102 (swap/vsync/glad в драйвере через `wnd::gl_surface`, `gl::swapchain`) #103 (события char/framebuffer/scale, курсор в координатах framebuffer, `edt::make_input_area`, пересборка шрифта по смене scale, cursor shape/clipboard у окна) и #104 (своя ImGui-платформа `gui::platform_backend` на событиях `wnd`, `imgui_impl_glfw` удалён, геймпад-навигация снята) — сделаны; **эпик #10 закрыт**.
+- #201 SDK shared на Windows (CI: `SDK package (Windows shared)`, `Windows MSVC Shared Release`; `IMGUI_API=dllimport` для потребителей пакета).
 - #202 браузер ассетов по слоям ресурсов (`resource_system::get_resource_layers`, `edt::list_merged_directory`; нижние слои приглушены) + отказ смены мира оставляет прежний активный мир.
 
-**В работе (2026-10-18 вечер):** #104 своя ImGui-платформа на событиях `wnd` (`imgui_impl_glfw` удаляется, renderer — `imgui_impl_opengl3`); #201 SDK shared на Windows (PR #204: `IMGUI_API` для потребителей, shared Release, C4251) — ревью чистое, ждёт CI на свежей базе.
+**В работе:** ничего (2026-10-18, после мержа #208).
 
-**Осталось по этапу C:** после #104 — #109 public/internal заголовки, #174 предупреждения (последним); замечания EPIC-50 (игровые фазы после загрузки миров, состояние систем при reload); #105 (ждёт EPIC-34); #207 viewport в пикселях framebuffer (HiDPI).
+**Осталось по этапу C:** #109 public/internal заголовки, #174 предупреждения (последним); замечания EPIC-50 (игровые фазы после загрузки миров, состояние систем при reload); #105 (ждёт EPIC-34); #207 viewport в пикселях framebuffer (HiDPI); #209 клавиши ` [ ] \ и не-US раскладки.
 
 **Решение владельца — ресурсы слоями:** в ядре (`core/res`) базовые ресурсы, чтобы модели рисовались «из коробки» в любом новом проекте; редактор и игра добавляют шаблоны и переопределения; `res://` ищется проект → редактор → ядро.
 
