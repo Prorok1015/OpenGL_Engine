@@ -7,6 +7,8 @@ file(GLOB_RECURSE SE_WINDOW_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DI
 target_sources(${PROJECT_NAME} PRIVATE ${SE_WINDOW_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# GLFW implementation headers stay private: consumers only see the wnd:: interfaces.
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/impl_glfw)
 
 #libs
 # GLFW_* / BUILD_SHARED_LIBS options live in cmake/ThirdParty.cmake (EPIC-41 US-41-1).
