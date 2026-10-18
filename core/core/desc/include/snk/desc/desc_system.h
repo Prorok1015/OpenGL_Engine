@@ -5,6 +5,7 @@
 #include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/adapters/desc_adapter_t.h>
+#include <snk/desc/desc_dynamic.h>
 #include <snk/desc/desc_schema.h>
 #include <algorithm>
 #include <charconv>
@@ -63,16 +64,27 @@ namespace desc
 			m_schemas.remove(type_name);
 		}
 
-		// Registers a schema that has no C++ type (wasm/JSON). The version must match current_version(name).
-		// Migrations registered later move the stored schema's version along, so the order does not matter.
-		// No factory is created for it yet.
+		// Registers a schema (wasm/JSON, or a described C++ type through register_desc). The version must match
+		// current_version(name). Migrations registered later move the stored schema's version along, so the order
+		// does not matter.
+		// A schema whose type has no factory yet gets one that creates dynamic_desc objects; a component schema is
+		// also listed in get_component_type_names(). Structure fields need their nested schemas registered first.
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema)
 		{
 			ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
 				schema.name, schema.version, current_version(schema.name));
 			ASSERT_MSG(!m_schemas.contains(schema.name), "Schema '{}' is already registered!", schema.name);
-			return m_schemas.add(std::move(schema));
+			const type_schema* stored = m_schemas.add(std::move(schema));
+			if (stored && !factory_map.contains(stored->name)) {
+				if (auto factory = make_dynamic_factory(*stored, m_schemas)) {
+					factory_map[stored->name] = std::move(factory);
+					if (stored->is_component) {
+						m_component_type_names.push_back(stored->name);
+					}
+				}
+			}
+			return stored;
 		}
 
 		const type_schema* find_schema(std::string_view type_name) const { return m_schemas.find(type_name); }
@@ -184,6 +196,7 @@ namespace desc
 				return nullptr;
 			}
 			auto instance = it->second();
+			instance->m_system = const_cast<desc_system*>(this);
 			instance->set_tag(tag);
             instance->set_type(type_id);
 			return instance;

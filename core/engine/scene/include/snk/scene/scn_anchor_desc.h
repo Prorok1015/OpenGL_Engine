@@ -15,8 +15,7 @@ namespace scn {
 		scene_anchor_desc& operator=(const scene_anchor_desc&) = default;
 		scene_anchor_desc& operator=(scene_anchor_desc&&) = default;
 		virtual void copy_to(desc_base& other) const override {
-			scene_anchor_desc& other_desc = static_cast<scene_anchor_desc&>(other);
-			other_desc = *this;
+			copy_to_same(*this, other);
 		}
 
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override {};

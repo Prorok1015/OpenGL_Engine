@@ -36,8 +36,7 @@ namespace scn {
 
 		virtual void copy_to(desc_base& other) const override
 		{
-			skin_weights_desc& other_desc = static_cast<skin_weights_desc&>(other);
-			other_desc = *this;
+			copy_to_same(*this, other);
 		}
 
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;

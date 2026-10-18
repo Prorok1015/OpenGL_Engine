@@ -16,8 +16,7 @@ namespace scn {
 		directional_light_desc& operator=(const directional_light_desc&) = default;
 		directional_light_desc& operator=(directional_light_desc&&) = default;
 		virtual void copy_to(desc_base& other) const override {
-			directional_light_desc& other_desc = static_cast<directional_light_desc&>(other);
-			other_desc = *this;
+			copy_to_same(*this, other);
 		}
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;

@@ -125,4 +125,12 @@
 - Атрибуты `field_attrs<T>` сопоставляются по имени члена, а не по указателю (приватные члены); опечатка в имени ловится `static_assert` при генерации схемы.
 - Декларативные миграции runtime-схем (`"migrations"` в JSON) пока не поддерживаются: `parse_type_schema` отвечает ошибкой; версия сохранённой схемы следует за `register_migration`.
 - Равенство схем (`operator==`) не учитывает `layout` и `offset`: это детали хранения.
-- Для схем без C++-типа фабрика в `factory_map` не создаётся (#129).
+- Фабрика схемы без C++-типа создаётся в `register_schema` (#129): вложенные схемы (`structure`) и enum-схемы должны быть зарегистрированы раньше; иначе тип остаётся только в реестре схем, без фабрики, и в лог пишется ошибка.
+
+## Реализация #129
+
+- `desc_schema_ops.h`: `schema_binding` (схема + `field_ops` по полям: `to_json`, `from_json -> bool`, `equal`, `assign`) и функции `serialize`, `deserialize`, `copy`, `equal`, `diff`, `validate_override`, `json_equal`, `enum_from_json`/`enum_to_json`. Привязка к C++-типу (`bind_described<T>`, указатели на члены) — в `desc_describe_ops.h` (тяжёлый, как `desc_describe.h`); привязка к runtime-схеме (`bind_runtime`, смещения в blob) — в `desc_schema_ops.cpp`.
+- `dynamic_desc` (`desc_dynamic.h`): `desc_base` поверх blob'а; поля `string`/`res_tag`/`desc_ref`/`array`/`custom` лежат в таблице значений blob'а (в самом blob'е — индекс, 0 = не задано).
+- `schema_desc<T, Kind>` (`desc_schema_desc.h`): CRTP-мост, реализует `serialize`/`deserialize`/`copy_to` через схему. Ни один существующий тип на него не переведён (#131).
+- `desc_base::copy_to` больше не чисто виртуальный. У всех 21 рукописного типа тело — `copy_to_same(*this, other)`: тот же тип копируется поэлементно, любой другой — через `serialize`/`deserialize` с предупреждением (нужен `desc_system`, который `create_instance` запоминает в экземпляре; без него копирование пропускается).
+- Кастомный кодек поля с видом `custom`: специализация `desc::json_codec<T>`.

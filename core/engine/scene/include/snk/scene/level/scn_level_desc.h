@@ -23,8 +23,7 @@ namespace scn
 
 		virtual void copy_to(desc_base& other) const override
 		{
-			level_desc& other_desc = static_cast<level_desc&>(other);
-			other_desc = *this;
+			copy_to_same(*this, other);
 		}
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
