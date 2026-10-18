@@ -82,4 +82,21 @@ BOOST_AUTO_TEST_CASE(MissingDirectoriesAreSkipped)
 	BOOST_TEST(edt::list_merged_directory({}, {}).empty());
 }
 
+BOOST_AUTO_TEST_CASE(MergeKeyFoldsCaseOnlyWhenAsked)
+{
+	BOOST_TEST(edt::layer_merge_key("Foo.TXT", true) == "foo.txt");
+	BOOST_TEST(edt::layer_merge_key("Foo.TXT", false) == "Foo.TXT");
+}
+
+BOOST_AUTO_TEST_CASE(DirsOnlySkipsFiles)
+{
+	test_util::temp_dir base("asset_layers_base_dirsonly");
+	base.write("sub/x.txt", "x");
+	base.write("file.txt", "f");
+
+	const auto entries = edt::list_merged_directory({ base.path() }, {}, true);
+
+	BOOST_TEST((names(entries) == std::vector<std::string>{ "sub" }));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
