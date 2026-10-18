@@ -71,6 +71,23 @@ namespace scn {
 	// components spell out their __type. Registered with the desc_system by register_scene_types.
 	void migrate_prefab_v1(boost::json::object& obj);
 
+	enum class reconcile_mode {
+		spawn,  // `live` is a fresh entity: create everything below it
+		reload, // `live` already has children: update the ones that still exist, add new ones, destroy the rest
+	};
+
+	// The single place that turns prefab nodes into entities. `base` is the prefab being instantiated and
+	// `records` the local layer on top of it (an explicit nested instance's overrides); either may be null.
+	// Children are paired across the layers, and with the live children on a reload, by node id.
+	// Every spawned node gets its node_id_component, which fills the registry's node_index.
+	void reconcile(
+		ecs_assembler& assembler,
+		entt::registry& reg,
+		entt::entity live,
+		const prefab_desc::prefab_node* base,
+		const prefab_desc::prefab_node* records,
+		reconcile_mode mode);
+
 	void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 }

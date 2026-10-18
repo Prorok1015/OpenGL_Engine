@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include "scn_glm_json_convert.h"
 #include "desc_node_id.h"
+#include "level/scn_node_index.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 
@@ -512,6 +513,106 @@ BOOST_AUTO_TEST_CASE(HotReload_RenamedChildIsRecreatedNotMoved_CurrentBehavior)
 	auto forearm = child_named(reg, root, "forearm");
 	BOOST_REQUIRE(reg.valid(forearm));
 	BOOST_TEST(!reg.all_of<int>(forearm));
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_ChildKeepsItsEntityWhenRenamedButKeepsItsId)
+{
+	auto tag = put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a1","name":"arm","components":{"stat":{"__type":"stat_desc","hp":3}}}]})");
+	auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *prefab, "r", tag);
+	auto arm = child_named(reg, root, "arm");
+	reg.emplace<int>(arm, 1234); // runtime-only data
+
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a1","name":"forearm","components":{"stat":{"__type":"stat_desc","hp":8}}}]})");
+	rs->signal_changed(tag);
+	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+
+	BOOST_TEST((child_named(reg, root, "forearm") == arm));
+	BOOST_TEST(!reg.valid(child_named(reg, root, "arm")));
+	BOOST_TEST(reg.get<int>(arm) == 1234);
+	BOOST_TEST(reg.get<test_util::stat_component>(arm).hp == 8);
+	BOOST_TEST(reg.get<scn::node_id_component>(arm).path == std::vector<uint64_t>{ 0xa1 });
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_SameNamedSiblingsAreMatchedByIdNotByName)
+{
+	auto tag = put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a1","name":"x","components":{"stat":{"__type":"stat_desc","hp":1}}},
+		{"__id":"00000000000000a2","name":"x","components":{"stat":{"__type":"stat_desc","hp":2}}}]})");
+	auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *prefab, "r", tag);
+	const auto before = reg.get<scn::children_component>(root).children;
+	BOOST_REQUIRE(before.size() == 2u);
+
+	// the second node comes first and only the first one's hp changes
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a2","name":"x","components":{"stat":{"__type":"stat_desc","hp":2}}},
+		{"__id":"00000000000000a1","name":"x","components":{"stat":{"__type":"stat_desc","hp":10}}}]})");
+	rs->signal_changed(tag);
+	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+
+	const auto after = reg.get<scn::children_component>(root).children;
+	BOOST_REQUIRE(after.size() == 2u);
+	BOOST_TEST((after == before)); // both entities survived, in their original order
+	BOOST_TEST(reg.get<test_util::stat_component>(before[0]).hp == 10);
+	BOOST_TEST(reg.get<test_util::stat_component>(before[1]).hp == 2);
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_SameNameWithAnotherIdIsANewNode)
+{
+	auto tag = put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a1","name":"arm"}]})");
+	auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *prefab, "r", tag);
+	auto arm = child_named(reg, root, "arm");
+
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000b1","name":"arm"}]})");
+	rs->signal_changed(tag);
+	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+
+	BOOST_TEST(!reg.valid(arm));
+	BOOST_REQUIRE(reg.valid(child_named(reg, root, "arm")));
+}
+
+BOOST_AUTO_TEST_CASE(NestedInstance_RecordWithAnotherIdIsAnAdditionEvenWithTheSameName)
+{
+	put("base.prefab.desc", BASE_PREFAB);
+	auto inst = parse(R"({"__type":"prefab_desc","__version":2,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
+		"children":[{"__id":"00000000000000f1","name":"arm","components":{"stat":{"__type":"stat_desc","hp":77}}}]})");
+	entt::registry reg;
+	auto e = reg.create();
+	assemble_prefab_node(*assembler, reg, e, inst.get_root());
+
+	BOOST_TEST((child_names(reg, e) == std::vector<std::string>{ "arm", "leg", "Light", "arm" }));
+	const auto& children = reg.get<scn::children_component>(e).children;
+	BOOST_TEST(reg.get<test_util::stat_component>(children[0]).hp == 3);   // the base's arm, untouched
+	BOOST_TEST(reg.get<test_util::stat_component>(children[3]).hp == 77);  // the addition
+}
+
+BOOST_AUTO_TEST_CASE(AssemblePrefab_FillsNodeIndexWithDistinctPathsForSameNamedSiblings)
+{
+	auto tag = put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a1","name":"x"},{"__id":"00000000000000a2","name":"x"}]})");
+	auto prefab = load<scn::prefab_desc>(tag);
+	entt::registry reg;
+	auto root = reg.create();
+	scn::assemble_prefab(*assembler, reg, root, *prefab, "r", tag);
+
+	const auto& index = scn::node_index::get(reg);
+	const auto first = index.find(std::vector<uint64_t>{ 0xa1 });
+	const auto second = index.find(std::vector<uint64_t>{ 0xa2 });
+	BOOST_REQUIRE((first != entt::null && second != entt::null));
+	BOOST_TEST((first != second));
 }
 
 BOOST_AUTO_TEST_CASE(HotReload_ReplacesChildrenEvenWhenNewVersionKeepsOnlyRenamedOnes)
