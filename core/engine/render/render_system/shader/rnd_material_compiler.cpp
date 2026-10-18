@@ -35,10 +35,6 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 	cdata.defines = mat.defines;
 
 	// --- former extractor mutations, now driven by the compile context ---
-	if (ctx.directional_light_count > 0) {
-		cdata.constants["DIRECTION_LIGHT_COUNT"] = std::to_string(ctx.directional_light_count);
-	}
-
 	if (ctx.has_skinning) {
 		cdata.defines.push_back("USE_ANIMATION");
 	}

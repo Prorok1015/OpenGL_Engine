@@ -27,18 +27,15 @@ struct PointLight {
 };
 
 #ifdef LIGHTS_ENABLED
+// Must match rnd::lights_params::MAX_LIGHT_COUNT (rnd_shader_manager.h): array lengths are fixed so
+// the std140 offsets never depend on shader variants.
+#define MAX_LIGHT_COUNT 12
 layout (std140, binding = 1) uniform GlobalLights
 {
-#ifdef DIRECTION_LIGHT_COUNT
-    DirectionalLight dirlights[DIRECTION_LIGHT_COUNT];
-#else
-    DirectionalLight dirlights;
-#endif
-#ifdef POINT_LIGHT_COUNT
-    PointLight       pointLights[POINT_LIGHT_COUNT];
-#else
-    PointLight       pointLights;
-#endif
+    DirectionalLight dirlights[MAX_LIGHT_COUNT];
+    PointLight       pointLights[MAX_LIGHT_COUNT];
+    int              dirLightCount;
+    int              pointLightCount;
 };
 #endif
 
@@ -123,17 +120,13 @@ vec4 calculatePhongModel(vec3 norm, vec4 materialColor, vec4 materialSpecular, v
 #ifdef LIGHTS_ENABLED
     vec3 viewDir = normalize(cameraPosition - fragPos);
 
-    #ifdef DIRECTION_LIGHT_COUNT
     // phase 1: Directional lighting
-    for(int i = 0; i < DIRECTION_LIGHT_COUNT; i++)
+    for(int i = 0; i < min(dirLightCount, MAX_LIGHT_COUNT); i++)
         result += calcDirectionalLight(dirlights[i], norm, materialColor, materialSpecular, viewDir);
-    #endif
 
-    #ifdef POINT_LIGHT_COUNT
     // phase 2: Point lights
-    for(int i = 0; i < POINT_LIGHT_COUNT; i++)
+    for(int i = 0; i < min(pointLightCount, MAX_LIGHT_COUNT); i++)
         result += calcPointLight(pointLights[i], norm, materialColor, materialSpecular, viewDir, fragPos);
-    #endif
 
     // phase 3: Spot light
     //result += CalcSpotLight(spotLight, norm, FragPos, viewDir);
