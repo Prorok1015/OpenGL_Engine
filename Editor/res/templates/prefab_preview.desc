@@ -1,6 +1,6 @@
 {
     "__type" : "world_desc",
-    "__version" : 2,
+    "__version" : 3,
     "__guid" : "f5d49976-d6ba-42f0-8214-a78f64af0bda",
     "name" : "__prefab_preview",
     "systems" : [

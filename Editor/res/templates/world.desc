@@ -1,6 +1,6 @@
 {
     "__type" : "world_desc",
-    "__version" : 2,
+    "__version" : 3,
     "__guid" : "a09caf21-5be2-4439-8774-6946418a7d83",
     "name" : "world",
     "systems" : [
