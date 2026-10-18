@@ -61,6 +61,11 @@ namespace desc
 			std::erase(m_component_type_names, std::string{ type_name });
 		}
 
+		bool is_registered(const std::string_view type_name) const
+		{
+			return factory_map.contains(std::string{ type_name });
+		}
+
 		const std::vector<std::string>& get_component_type_names() const
 		{
 			return m_component_type_names;

@@ -1,5 +1,7 @@
 #pragma once
 #include "app_module_interface.h"
+#include "scn_registration_scope.h"
+#include <optional>
 
 namespace engine
 {
@@ -16,5 +18,9 @@ namespace engine
 
 		virtual std::string_view name() const override { return "engine"; }
 		virtual std::vector<std::string_view> depends_on() const override { return { "core" }; }
+
+	private:
+		// Spawners hold &ecs_assembler: reset in shutdown_services before the scene services go.
+		std::optional<scn::registration_scope> m_scene_types;
 	};
 }

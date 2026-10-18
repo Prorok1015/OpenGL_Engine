@@ -179,8 +179,8 @@ Add new ImGui Panel:
 
 Add new Descriptor Type:
   1. File: core/engine/scene/scn_<name>_desc.h (inherit desc::desc_base)
-  2. Register spawner: core/engine/game_system/gs_game_init.cpp (assemble_*)
-  3. Unregister: matching entry in game_term
+  2. Register desc + spawner: register_scene_types in core/engine/scene/scn_registration_scope.cpp (assemble_*)
+  3. Unregister: automatic (registration_scope destructor)
 
 Load Resource:
   1. Tag: res::tag{"res://path/to/asset"}

@@ -177,8 +177,8 @@ prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 | `object_desc` | `scn::object_desc` | `assemble_object` |
 | `anchor_desc` | `scn::scene_anchor_desc` | `assemble_scene_anchor` |
 
-**Registration lives in**: `core/engine/game_system/gs_game_init.cpp`
-**Adding a new desc type requires**: register in `game_init`, add `unregister` in `game_term`.
+**Registration lives in**: `scn::register_scene_types` (`core/engine/scene/scn_registration_scope.cpp`)
+**Adding a new desc type requires**: one `scope.desc<T>()` / `scope.spawner()` line there; unregistration is automatic when the returned `scn::registration_scope` is destroyed.
 
 ## Model Import Pipeline
 

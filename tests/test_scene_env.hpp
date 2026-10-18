@@ -8,6 +8,8 @@
 #include "adapters/desc_adapter_t.h"
 #include "resolvers/res_resolver_interface.hpp"
 #include "scn_ecs_assembler.h"
+#include "scn_registration_scope.h"
+#include "skinning/rnd_skinning_manager.h"
 #include "scn_model.h"
 #include "level/scn_prefab_desc.h"
 #include "level/scn_world_desc.h"
@@ -30,6 +32,7 @@
 #include <entt/entt.hpp>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -149,69 +152,12 @@ struct stat_desc : desc::desc_base
 	}
 };
 
-inline void register_scene_descs(desc::desc_system& desc_sys)
+// Test-only component. spawn replaces the component; patch (hot reload) updates it in place and
+// counts how many times it ran, so tests can tell the two paths apart.
+inline void register_stat_desc(scn::registration_scope& scope)
 {
-	desc_sys.register_desc<scn::material_desc>("material_desc");
-	desc_sys.register_desc<scn::prefab_desc>("prefab_desc");
-	desc_sys.register_desc<scn::world_desc>(scn::world_desc::__type);
-	desc_sys.register_desc<scn::level_desc>("level_desc");
-	desc_sys.register_desc<scn::scene_anchor_desc>("anchor_desc");
-	desc_sys.register_component_desc<scn::camera_desc>(scn::camera_desc::__type);
-	desc_sys.register_component_desc<scn::directional_light_desc>(scn::directional_light_desc::__type);
-	desc_sys.register_component_desc<scn::skybox_desc>(scn::skybox_desc::__type);
-	desc_sys.register_desc<scn::mesh_node_desc>(scn::mesh_node_desc::__type);
-	desc_sys.register_desc<scn::object_desc>(scn::object_desc::__type);
-	desc_sys.register_desc<scn::bone_desc>(scn::bone_desc::__type);
-	desc_sys.register_desc<scn::skinning_desc>(scn::skinning_desc::__type);
-	desc_sys.register_desc<scn::skin_weights_desc>(scn::skin_weights_desc::__type);
-	desc_sys.register_desc<scn::animation_controller_desc>(scn::animation_controller_desc::__type);
-	desc_sys.register_desc<scn::animated_node_desc>(scn::animated_node_desc::__type);
-	desc_sys.register_desc<scn::animation_clip_desc>(scn::animation_clip_desc::__type);
-	desc_sys.register_desc<scn::animation_collection_desc>(scn::animation_collection_desc::__type);
-	desc_sys.register_desc<stat_desc>("stat_desc");
-}
-
-inline void register_scene_spawners(scn::ecs_assembler& assembler)
-{
-	auto prefab_spawn = [&assembler](entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {
-		const auto& prefab = static_cast<const scn::prefab_desc&>(base);
-		scn::assemble_prefab(assembler, reg, e, prefab, name, prefab.get_tag());
-	};
-	assembler.register_desc_spawner("prefab_desc", prefab_spawn, nullptr, scn::spawner_category::structural);
-	assembler.register_desc_spawner(std::string(scn::world_desc::__type), prefab_spawn, nullptr, scn::spawner_category::structural);
-
-	assembler.register_desc_spawner("anchor_desc",
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_scene_anchor(reg, e, static_cast<const scn::scene_anchor_desc&>(d), name);
-		});
-	assembler.register_desc_spawner("camera_desc",
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_camera(reg, e, static_cast<const scn::camera_desc&>(d), name);
-		});
-	assembler.register_desc_spawner("directional_light_desc",
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_directional_light(reg, e, static_cast<const scn::directional_light_desc&>(d), name);
-		});
-	assembler.register_desc_spawner(std::string(scn::mesh_node_desc::__type),
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_mesh_node(reg, e, static_cast<const scn::mesh_node_desc&>(d), name);
-		});
-	assembler.register_desc_spawner(std::string(scn::object_desc::__type),
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_object(reg, e, static_cast<const scn::object_desc&>(d), name);
-		});
-	assembler.register_desc_spawner(std::string(scn::bone_desc::__type),
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_bone(reg, e, static_cast<const scn::bone_desc&>(d), name);
-		});
-	assembler.register_desc_spawner(std::string(scn::animated_node_desc::__type),
-		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view name) {
-			scn::assemble_animated_node(reg, e, static_cast<const scn::animated_node_desc&>(d), name);
-		});
-
-	// Test component. spawn replaces the component; patch (hot reload) updates it in place and
-	// counts how many times it ran, so tests can tell the two paths apart.
-	assembler.register_desc_spawner("stat_desc",
+	scope.desc<stat_desc>("stat_desc");
+	scope.spawner("stat_desc",
 		[](entt::registry& reg, entt::entity e, const desc::desc_base& d, const std::string_view) {
 			const auto& s = static_cast<const stat_desc&>(d);
 			reg.emplace_or_replace<stat_component>(e, stat_component{ s.hp, s.limit_min, s.limit_max, s.label, 0 });
@@ -232,15 +178,16 @@ struct scene_env : ram_res_env
 	scene_env()
 	{
 		descs = std::make_unique<desc::desc_system>(*rs);
-		register_scene_descs(*descs);
 		rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(*descs));
 		assembler = std::make_unique<scn::ecs_assembler>(*descs, *rs);
-		register_scene_spawners(*assembler);
+		scope.emplace(scn::register_scene_types(*descs, *assembler, skinning));
+		register_stat_desc(*scope);
 	}
 
 	~scene_env()
 	{
-		// destroy in dependency order (assembler -> desc -> resources)
+		// destroy in dependency order (scope -> assembler -> desc -> resources)
+		scope.reset();
 		assembler.reset();
 		descs.reset();
 		rs.reset();
@@ -254,6 +201,8 @@ struct scene_env : ram_res_env
 
 	std::unique_ptr<desc::desc_system> descs;
 	std::unique_ptr<scn::ecs_assembler> assembler;
+	rnd::skinning_manager skinning;
+	std::optional<scn::registration_scope> scope;
 };
 
 }

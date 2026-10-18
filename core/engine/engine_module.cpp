@@ -1,11 +1,12 @@
 #include "engine_module.h"
 #include "rnd_render_service_init.h"
-#include "gs_game_init.h"
 #include "gui_gui_service_init.h"
 #include "inp_input_service_init.h"
 #include "inp_input_system.h"
 #include "wnd_window_system.h"
 #include "scn_scene_service_init.h"
+#include "scn_ecs_assembler.h"
+#include "skinning/rnd_skinning_manager.h"
 #include "app_loop_service_interface.h"
 
 void engine::engine_module::register_services(ds::app_data_storage& data)
@@ -14,7 +15,10 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 	render::render_init(data);// engine
 	gui::gui_init(data);//engine
 	scn::scene_init(data);//engine
-	game::game_init(data);//delete
+	m_scene_types.emplace(scn::register_scene_types(
+		data.require<desc::desc_system>(),
+		data.require<scn::ecs_assembler>(),
+		data.require<rnd::skinning_manager>()));
 }
 
 void engine::engine_module::initialize_services(ds::app_data_storage& data)
@@ -43,7 +47,7 @@ void engine::engine_module::shutdown_services(ds::app_data_storage& data)
 		win_service.remove_event_listener(input_service);
 	}
 
-	game::game_term(data);
+	m_scene_types.reset();
 	scn::scene_term(data);
 	gui::gui_term(data);
 	render::render_term(data);

@@ -70,6 +70,10 @@ namespace scn {
 			m_spawners.erase(std::string{ desc_type });
 		}
 
+		bool has_spawner(const std::string_view desc_type) const {
+			return m_spawners.contains(std::string{ desc_type });
+		}
+
 		desc::desc_system& get_desc_system() const { return m_desc_sys; }
 		res::resource_system& get_resource_system() const { return m_res_sys; }
 

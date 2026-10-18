@@ -1,5 +1,5 @@
 #include "scn_skin_weights_desc.h"
-#include "rnd_render_system.h"
+#include "desc_system.h"
 #include "logger/engine_log.h"
 #include "skinning/rnd_skinning_manager.h"
 
@@ -42,14 +42,12 @@ void scn::skin_weights_desc::serialize(json::object& data) const
 	data["weights"] = std::move(arr);
 }
 
-void scn::assemble_skin_weights(entt::registry& reg, entt::entity e, const skin_weights_desc& desc, std::string_view name)
+void scn::assemble_skin_weights(rnd::skinning_manager& skinning, entt::registry& reg, entt::entity e, const skin_weights_desc& desc, std::string_view name)
 {
 	if (desc.weights.empty() || !desc.registration_tag.is_valid()) {
 		egLOG_WARN("assembler", "skin_weights_desc: empty weights or invalid tag");
 		return;
 	}
 
-	if (auto* skm = rnd::get_system().get_skinning_manager()) {
-		skm->register_weights(desc.registration_tag, desc.weights);
-	}
+	skinning.register_weights(desc.registration_tag, desc.weights);
 }

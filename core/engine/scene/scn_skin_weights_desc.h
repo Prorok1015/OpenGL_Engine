@@ -4,6 +4,10 @@
 #include "ecs_system.h"
 #include <vector>
 
+namespace rnd {
+	class skinning_manager;
+}
+
 namespace scn {
 	// Stores per-vertex skinning weights. Registered with skinning_manager during assembly.
 	// Each vertex column: [bone_idx_0, ..., bone_idx_N, weight_0_bits, ..., weight_N_bits]
@@ -42,5 +46,5 @@ namespace scn {
 		std::vector<std::vector<uint32_t>> weights;
 	};
 
-	void assemble_skin_weights(entt::registry& reg, entt::entity e, const skin_weights_desc& desc, std::string_view name);
+	void assemble_skin_weights(rnd::skinning_manager& skinning, entt::registry& reg, entt::entity e, const skin_weights_desc& desc, std::string_view name);
 }
