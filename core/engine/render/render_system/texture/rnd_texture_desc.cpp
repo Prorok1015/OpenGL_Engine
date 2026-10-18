@@ -1,4 +1,4 @@
-#include "rnd_texture_desc.h"
+#include <snk/render/texture/rnd_texture_desc.h>
 #include <boost/json.hpp>
 
 namespace rnd::driver

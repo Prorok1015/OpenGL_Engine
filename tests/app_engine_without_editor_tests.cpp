@@ -3,9 +3,9 @@
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/application/application.h>
-#include "gs_engine_frame_stages.h"
-#include "inp_ecs_input_manager.h"
-#include "level/scn_level_manager.h"
+#include <snk/game/gs_engine_frame_stages.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/scene/level/scn_level_manager.h>
 #include <string>
 #include <vector>
 

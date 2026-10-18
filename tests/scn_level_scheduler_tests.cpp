@@ -4,16 +4,16 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "level/scn_level.h"
-#include "level/scn_level_desc.h"
-#include "scn_ecs_assembler.h"
+#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/scn_ecs_assembler.h>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/ecs/ecs_entity_changer.hpp>
-#include "scn_model.h"
-#include "scn_transform_system.h"
-#include "scn_animation_job.h"
-#include "scn_camera_controller_system.h"
-#include "inp_ecs_input_manager.h"
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_transform_system.h>
+#include <snk/scene/scn_animation_job.h>
+#include <snk/scene/scn_camera_controller_system.h>
+#include <snk/input/inp_ecs_input_manager.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 

@@ -1,5 +1,5 @@
-#include "scn_primitives.h"
-#include <rnd_render_system.h>
+#include <snk/scene/scn_primitives.h>
+#include <snk/render/rnd_render_system.h>
 
 #include <numeric>
 

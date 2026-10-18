@@ -1,4 +1,4 @@
-#include "gui_debug_layer.h"
+#include <snk/gui/gui_debug_layer.h>
 #include "imgui.h"
 
 void gui::debug_layer::on_update(std::chrono::duration<float> dt)

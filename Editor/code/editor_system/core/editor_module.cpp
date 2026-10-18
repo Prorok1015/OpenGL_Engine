@@ -3,15 +3,15 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_picture.h>
 #include <snk/window/wnd_window_system.h>
-#include "inp_input_system.h"
+#include <snk/input/inp_input_system.h>
 #include "edt_editor_system.h"
 #include <snk/config/cfg_api.h>
-#include "adapters/scn_model_importer_adapter.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <snk/desc/desc_system.h>
 
-#include "rnd_frame_assembler.h"
-#include "level/scn_render_data_extractor.h"
-#include "skinning/rnd_skinning_manager.h"
+#include <snk/render/rnd_frame_assembler.h>
+#include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
 
 CFG_VAR_EXT_PATH(cfg_res_path);
 

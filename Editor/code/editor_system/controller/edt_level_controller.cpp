@@ -2,10 +2,10 @@
 #include "edt_shared_state.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
-#include "level/scn_level.h"
-#include "level/scn_level_manager.h"
-#include "level/scn_level_desc.h"
-#include "level/scn_prefab_desc.h"
+#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/desc_guid.h>
 #include <snk/resource/res_system.h>

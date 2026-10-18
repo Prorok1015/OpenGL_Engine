@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_cr_internal.h"
-#include "scn_directional_light_desc.h"
+#include <snk/scene/scn_directional_light_desc.h>
 #include "test_scene_env.hpp"
 
 namespace json = boost::json;

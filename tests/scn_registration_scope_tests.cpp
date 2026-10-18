@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "scn_registration_scope.h"
+#include <snk/scene/scn_registration_scope.h>
 
 namespace {
 

@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "level/scn_level.h"
+#include <snk/scene/level/scn_level.h>
 
 // #175: a name kept outside the level (editor world_names) can outlive the world after a level
 // reload rebuilds the worlds from the desc. get_world(name) asserts on it; find_world must not.

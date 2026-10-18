@@ -1,8 +1,8 @@
-#include "rnd_scene_shader_desc.h"
+#include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/resource/res_system.h>
 #include <snk/driver/rnd_shader_interface.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include "rnd_render_system.h"
+#include <snk/render/rnd_render_system.h>
 
 static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config& desc, res::resource_system& res_sys)
 {

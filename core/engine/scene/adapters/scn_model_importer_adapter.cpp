@@ -1,4 +1,4 @@
-#include "scn_model_importer_adapter.h"
+#include <snk/scene/adapters/scn_model_importer_adapter.h>
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -7,12 +7,12 @@
 #include <snk/resource/res_system.h>
 #include <snk/common/eng_profiler.h>
 
-#include "geom/rnd_geometry_desc.h"
+#include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
 
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
-#include "scn_mesh_nodes.hpp"
+#include <snk/scene/scn_mesh_nodes.hpp>
 
 #include "scn_assimp_resource_system_wrapper.h"
 

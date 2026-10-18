@@ -1,14 +1,14 @@
 #include <boost/test/unit_test.hpp>
 #include <entt/entt.hpp>
 #include <boost/json.hpp>
-#include "scn_model.h"
-#include "scn_mesh_node_desc.h"
-#include "scn_object_desc.h"
-#include "scn_animation_clip_desc.h"
-#include "scn_animation_collection_desc.h"
-#include "scn_bone_desc.h"
-#include "scn_skinning_desc.h"
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_mesh_node_desc.h>
+#include <snk/scene/scn_object_desc.h>
+#include <snk/scene/scn_animation_clip_desc.h>
+#include <snk/scene/scn_animation_collection_desc.h>
+#include <snk/scene/scn_bone_desc.h>
+#include <snk/scene/scn_skinning_desc.h>
+#include <snk/scene/scn_glm_json_convert.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace json = boost::json;

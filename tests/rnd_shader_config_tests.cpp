@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "shader/rnd_scene_shader_desc.h"
+#include <snk/render/shader/rnd_scene_shader_desc.h>
 
 BOOST_AUTO_TEST_SUITE(RndShaderConfigTests)
 

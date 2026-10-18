@@ -1,7 +1,7 @@
-#include "scn_hot_reload_manager.h"
+#include <snk/scene/level/scn_hot_reload_manager.h>
 #include <entt/entt.hpp>
 #include <snk/resource/res_system.h>
-#include "scn_prefab_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
 
 namespace scn {
 

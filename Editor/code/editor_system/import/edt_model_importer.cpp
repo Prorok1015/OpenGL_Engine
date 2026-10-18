@@ -5,13 +5,13 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
-#include "rnd_render_system.h"
-#include "skinning/rnd_skinning_manager.h"
-#include "geom/rnd_geometry_desc.h"
+#include <snk/render/rnd_render_system.h>
+#include <snk/render/skinning/rnd_skinning_manager.h>
+#include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
-#include "scn_glm_json_convert.h"
+#include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
-#include "scn_mesh_nodes.hpp"
+#include <snk/scene/scn_mesh_nodes.hpp>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>

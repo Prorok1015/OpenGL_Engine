@@ -2,7 +2,7 @@
 #include <snk/resource/res_tag.h>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <snk/desc/desc_base.hpp>
-#include "level/scn_world_desc.h"
+#include <snk/scene/level/scn_world_desc.h>
 #include <algorithm>
 #include <string>
 #include <string_view>

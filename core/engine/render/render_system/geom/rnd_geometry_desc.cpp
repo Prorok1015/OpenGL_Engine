@@ -1,4 +1,4 @@
-#include "rnd_geometry_desc.h"
+#include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/desc/desc_system.h>
 #include <snk/common/eng_profiler.h>
 

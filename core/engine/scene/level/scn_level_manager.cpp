@@ -1,5 +1,5 @@
-#include "scn_level_manager.h"
-#include "scn_level_desc.h"
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_level_desc.h>
 
 namespace {
 	// Names in desc order; false when a world desc failed to load.

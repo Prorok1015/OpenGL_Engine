@@ -1,4 +1,4 @@
-#include "core_module.h"
+#include <snk/core/core_module.h>
 #include <snk/resource/res_resource_service_init.h>
 #include <snk/window/wnd_window_service_init.h>
 #include <snk/desc/desc_desc_service_init.h>

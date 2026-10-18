@@ -2,8 +2,8 @@
 #include <algorithm>
 #include <vector>
 #include <entt/entt.hpp>
-#include "rnd_render_packet.hpp"
-#include "scn_camera_component.hpp"
+#include <snk/render/rnd_render_packet.hpp>
+#include <snk/scene/scn_camera_component.hpp>
 #include "edt_camera_redirect.h"
 
 BOOST_AUTO_TEST_SUITE(RndCameraTargetTests)

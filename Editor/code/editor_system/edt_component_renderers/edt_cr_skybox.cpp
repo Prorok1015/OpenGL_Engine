@@ -1,6 +1,6 @@
 #include "edt_cr_internal.h"
-#include "level/scn_prefab_desc.h"
-#include "scn_skybox_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
 #include <imgui.h>
 #include <cstring>
 

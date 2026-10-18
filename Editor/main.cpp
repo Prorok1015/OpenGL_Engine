@@ -2,8 +2,8 @@
 #include <snk/config/cfg_api.h>
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
-#include <core_module.h>
-#include <engine_module.h>
+#include <snk/core/core_module.h>
+#include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
 #include "editor_module.h"
 

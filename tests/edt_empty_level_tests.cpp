@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "level/scn_level_manager.h"
-#include "level/scn_level_desc.h"
+#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_level_desc.h>
 #include "edt_level_controller.h"
 #include "edt_scene_editor.h"
 #include "edt_shared_state.h"

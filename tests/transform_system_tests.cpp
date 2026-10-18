@@ -2,7 +2,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/test/tools/floating_point_comparison.hpp>
 #include <entt/entt.hpp>
-#include "scn_model.h"
+#include <snk/scene/scn_model.h>
 #include <snk/ecs/ecs_event.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_set>

@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "rnd_light_data.hpp"
+#include <snk/render/rnd_light_data.hpp>
 #include <cstring>
 #include <cstddef>
 

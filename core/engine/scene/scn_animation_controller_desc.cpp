@@ -1,6 +1,6 @@
-#include "scn_animation_controller_desc.h"
-#include "scn_model.h"
-#include "scn_animation_collection_desc.h"
+#include <snk/scene/scn_animation_controller_desc.h>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_animation_collection_desc.h>
 
 void scn::animation_controller_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {

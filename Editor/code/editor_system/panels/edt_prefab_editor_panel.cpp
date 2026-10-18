@@ -1,11 +1,11 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_editor_context.h"
 #include "edt_input_manager.h"
-#include "rnd_render_system.h"
-#include "gui_system.h"
-#include "inp_ecs_input_manager.h"
-#include "inp_events.hpp"
-#include "scn_camera_component.hpp"
+#include <snk/render/rnd_render_system.h>
+#include <snk/gui/gui_system.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_events.hpp>
+#include <snk/scene/scn_camera_component.hpp>
 #include <snk/resource/res_tag.h>
 #include <imgui.h>
 #include <entt/entt.hpp>

@@ -1,12 +1,12 @@
 #include "edt_viewport_panel.h"
-#include "rnd_render_system.h"
-#include "gui_system.h"
+#include <snk/render/rnd_render_system.h>
+#include <snk/gui/gui_system.h>
 #include <snk/resource/res_tag.h>
-#include "scn_camera_component.hpp"
-#include "scn_model.h"
-#include "level/scn_node_index.h"
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_node_index.h>
 #include <snk/common/eng_transform_3d.hpp>
-#include "inp_events.hpp"
+#include <snk/input/inp_events.hpp>
 #include "edt_guizmo.hpp"
 #include <imgui.h>
 

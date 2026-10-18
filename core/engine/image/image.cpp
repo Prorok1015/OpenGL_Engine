@@ -1,4 +1,4 @@
-#include "image.h"
+#include <snk/image/image.h>
 
 #include <stb_image.h>
 #include <stb_image_write.h>

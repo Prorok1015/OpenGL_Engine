@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
-#include "inp_input_system.h"
-#include "inp_ecs_input_manager.h"
-#include "inp_events.hpp"
+#include <snk/input/inp_input_system.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_events.hpp>
 #include <cmath>
 #include <cstdint>
 #include <memory>

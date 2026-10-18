@@ -1,5 +1,5 @@
-#include "scn_skybox_desc.h"
-#include "scn_model.h"
+#include <snk/scene/scn_skybox_desc.h>
+#include <snk/scene/scn_model.h>
 #include <snk/desc/desc_system.h>
 
 void scn::skybox_desc::deserialize(desc::desc_system& desc_system, const json::object& resource)

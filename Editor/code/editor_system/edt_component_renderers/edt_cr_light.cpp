@@ -1,6 +1,6 @@
 #include "edt_cr_internal.h"
-#include "level/scn_prefab_desc.h"
-#include "scn_directional_light_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_directional_light_desc.h>
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>

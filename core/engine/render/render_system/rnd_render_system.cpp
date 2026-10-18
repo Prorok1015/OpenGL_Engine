@@ -1,4 +1,4 @@
-#include "rnd_render_system.h"
+#include <snk/render/rnd_render_system.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"

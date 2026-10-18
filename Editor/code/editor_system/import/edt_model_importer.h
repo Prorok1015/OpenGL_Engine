@@ -4,7 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include "edt_async_import_task.h"
-#include "level/scn_prefab_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <filesystem>
 #include <vector>
 #include <memory>

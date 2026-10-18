@@ -1,6 +1,6 @@
-#include "inp_input_service_init.h"
-#include "inp_input_system.h"
-#include "inp_ecs_input_manager.h"
+#include <snk/input/inp_input_service_init.h>
+#include <snk/input/inp_input_system.h>
+#include <snk/input/inp_ecs_input_manager.h>
 #include <snk/ecs/ecs_system.h>
 
 void engine::input::input_reg(ds::app_data_storage& data)

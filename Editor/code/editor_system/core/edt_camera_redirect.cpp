@@ -4,8 +4,8 @@
 #include <format>
 #include <string>
 #include <entt/entt.hpp>
-#include "scn_camera_component.hpp"
-#include "rnd_render_packet.hpp"
+#include <snk/scene/scn_camera_component.hpp>
+#include <snk/render/rnd_render_packet.hpp>
 
 namespace {
 	constexpr std::string_view target_prefix = "memory://__game_camera_rt_";

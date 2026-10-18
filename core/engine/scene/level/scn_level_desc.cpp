@@ -1,4 +1,4 @@
-#include "scn_level_desc.h"
+#include <snk/scene/level/scn_level_desc.h>
 #include <snk/desc/desc_system.h>
 
 void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::object& obj)

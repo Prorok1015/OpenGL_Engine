@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "level/scn_level.h"
-#include "level/scn_hot_reload_manager.h"
+#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/ecs/ecs_system.h>
 #include <algorithm>
 

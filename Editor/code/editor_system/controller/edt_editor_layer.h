@@ -1,6 +1,6 @@
 #pragma once
-#include "gui_layer_interface.h"
-#include "gui_menu_layout.h"
+#include <snk/gui/gui_layer_interface.h>
+#include <snk/gui/gui_menu_layout.h>
 #include "edt_dockspace.h"
 #include "edt_panel_manager.h"
 #include <chrono>

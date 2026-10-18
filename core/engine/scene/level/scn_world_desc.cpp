@@ -1,4 +1,4 @@
-#include "scn_world_desc.h"
+#include <snk/scene/level/scn_world_desc.h>
 
 void scn::world_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {

@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/desc/desc_guid.h>
-#include "scn_camera_desc.h"
+#include <snk/scene/scn_camera_desc.h>
 #include <boost/json.hpp>
 #include <cstring>
 #include <string>

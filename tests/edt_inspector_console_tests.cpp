@@ -2,10 +2,10 @@
 #include "edt_inspector_panel.h"
 #include "edt_component_ui_registry.h"
 #include "edt_console_panel.h"
-#include "level/scn_prefab_desc.h"
-#include "scn_camera_desc.h"
-#include "scn_directional_light_desc.h"
-#include "scn_skybox_desc.h"
+#include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/scene/scn_camera_desc.h>
+#include <snk/scene/scn_directional_light_desc.h>
+#include <snk/scene/scn_skybox_desc.h>
 
 // ─────────────────────────────────────────────
 BOOST_AUTO_TEST_SUITE(InspectorPanelTests)

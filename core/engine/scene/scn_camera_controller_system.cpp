@@ -1,8 +1,8 @@
-#include "scn_camera_controller_system.h"
-#include "scn_camera_controller_component.hpp"
-#include "scn_model.h"
-#include "inp_input_system.h"
-#include "inp_events.hpp"
+#include <snk/scene/scn_camera_controller_system.h>
+#include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/scn_model.h>
+#include <snk/input/inp_input_system.h>
+#include <snk/input/inp_events.hpp>
 #include <snk/ecs/ecs_event.hpp>
 
 void update_camera_matrix_system(const inp::input_state& state,

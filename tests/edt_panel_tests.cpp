@@ -2,9 +2,9 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_panel_manager.h"
 #include "edt_scene_hierarchy_panel.h"
-#include "level/scn_world_desc.h"
+#include <snk/scene/level/scn_world_desc.h>
 #include "edt_editor_layer.h"
-#include "gui_debug_layer.h"
+#include <snk/gui/gui_debug_layer.h>
 #include <type_traits>
 
 // Layers are owned via shared_ptr<gui::layer_interface>; a non-virtual dtor would be UB (#173).
