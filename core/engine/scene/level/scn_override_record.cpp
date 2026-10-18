@@ -23,52 +23,44 @@ namespace scn {
 			return inner == outer || (inner.size() > outer.size() && inner.starts_with(outer) && inner[outer.size()] == '/');
 		}
 
-		uint64_t added_node_id(const override_record& record)
+		// A pointer whose writes can be collapsed or reordered safely: not the document root and no array index or
+		// "-" (appending twice is two appends, and "/arr/10" sorts before "/arr/2").
+		bool is_plain_pointer(const std::string& pointer)
 		{
-			if (!record.value.is_object()) {
-				return desc::invalid_node_id;
+			if (pointer.empty() || pointer.front() != '/') {
+				return false;
 			}
-			const auto* id = record.value.as_object().if_contains("__id");
-			if (!id || !id->is_string()) {
-				return desc::invalid_node_id;
+			size_t begin = 1;
+			while (begin <= pointer.size()) {
+				size_t end = pointer.find('/', begin);
+				if (end == std::string::npos) end = pointer.size();
+				const std::string_view token = std::string_view{ pointer }.substr(begin, end - begin);
+				const bool numeric = !token.empty() && std::ranges::all_of(token, [] (char c) { return c >= '0' && c <= '9'; });
+				if (numeric || token == "-") {
+					return false;
+				}
+				begin = end + 1;
 			}
-			return desc::parse_node_id(id->as_string()).value_or(desc::invalid_node_id);
+			return true;
 		}
 
-		// Is `earlier` made irrelevant by the later record `later`? `later_is_redundant` is set when `later`
-		// only undoes an addition made by `earlier`.
-		bool absorbs(const override_record& later, const override_record& earlier, bool& later_is_redundant)
+		bool is_plain_set(const override_record& record)
 		{
-			switch (later.op) {
-			case override_op::set:
-				return earlier.op == override_op::set && earlier.target == later.target
-					&& earlier.component == later.component && pointer_covers(later.path, earlier.path);
+			return record.op == override_op::set && is_plain_pointer(record.path);
+		}
 
-			case override_op::remove:
-				if (!later.component.empty()) {
-					return earlier.op != override_op::add_node && earlier.target == later.target && earlier.component == later.component;
-				}
-				if (later.target.empty()) {
-					return false;
-				}
-				if (earlier.op == override_op::add_node) {
-					if (is_prefix(later.target, earlier.target)) {
-						return true;
-					}
-					if (earlier.target.size() + 1 == later.target.size() && is_prefix(earlier.target, later.target)
-						&& added_node_id(earlier) == later.target.back()) {
-						later_is_redundant = true;
-						return true;
-					}
-					return false;
-				}
-				return is_prefix(later.target, earlier.target);
+		bool related_targets(const std::vector<uint64_t>& a, const std::vector<uint64_t>& b)
+		{
+			return is_prefix(a, b) || is_prefix(b, a);
+		}
 
-			case override_op::add_node:
-				return earlier.op == override_op::add_node && earlier.target == later.target
-					&& added_node_id(later) != desc::invalid_node_id && added_node_id(later) == added_node_id(earlier);
+		// Can the record at `between` change what happens to `earlier`, so that dropping `earlier` could alter the result?
+		bool is_barrier(const override_record& between, const override_record& earlier)
+		{
+			if (between.op != override_op::set) {
+				return related_targets(between.target, earlier.target);
 			}
-			return false;
+			return between.target == earlier.target && between.component == earlier.component && !is_plain_pointer(between.path);
 		}
 
 		std::string_view op_name(override_op op)
@@ -167,16 +159,24 @@ namespace scn {
 
 	void canonicalize_overrides(std::vector<override_record>& records)
 	{
+		// Only plain pointer writes are touched. Everything else (remove, add_node, merges at "", array pointers)
+		// keeps its written place and is never dropped: add_node can merge into an existing node, so it neither
+		// cancels against a remove nor replaces an earlier add_node.
 		const size_t count = records.size();
 		std::vector<bool> dead(count, false);
 		for (size_t later = 0; later < count; ++later) {
+			if (!is_plain_set(records[later])) continue;
 			for (size_t earlier = 0; earlier < later; ++earlier) {
-				if (dead[earlier]) continue;
-				bool later_is_redundant = false;
-				if (absorbs(records[later], records[earlier], later_is_redundant)) {
-					dead[earlier] = true;
-					if (later_is_redundant) dead[later] = true;
+				const override_record& e = records[earlier];
+				if (dead[earlier] || !is_plain_set(e) || e.target != records[later].target || e.component != records[later].component
+					|| !pointer_covers(records[later].path, e.path)) {
+					continue;
 				}
+				bool blocked = false;
+				for (size_t between = earlier + 1; between < later && !blocked; ++between) {
+					blocked = !dead[between] && is_barrier(records[between], e);
+				}
+				if (!blocked) dead[earlier] = true;
 			}
 		}
 
@@ -186,23 +186,23 @@ namespace scn {
 			if (!dead[i]) kept.push_back(std::move(records[i]));
 		}
 
-		// A merge at "" is order sensitive against the pointer records of its component: such a component keeps
-		// its records in the order they were written.
-		std::map<std::pair<std::vector<uint64_t>, std::string>, bool> has_merge;
-		for (const auto& record : kept) {
-			if (record.op == override_op::set && record.path.empty()) {
-				has_merge[{ record.target, record.component }] = true;
-			}
-		}
-		auto sort_path = [&] (const override_record& record) -> const std::string& {
-			static const std::string empty;
-			return has_merge.contains({ record.target, record.component }) ? empty : record.path;
-		};
-		std::ranges::stable_sort(kept, [&] (const override_record& a, const override_record& b) {
+		// Sorting only inside runs of plain pointer writes: those commute unless one pointer is a parent of the
+		// other, and a parent sorts before its children.
+		auto less = [] (const override_record& a, const override_record& b) {
 			if (a.target != b.target) return a.target < b.target;
 			if (a.component != b.component) return a.component < b.component;
-			return sort_path(a) < sort_path(b);
-		});
+			return a.path < b.path;
+		};
+		for (size_t begin = 0; begin < kept.size();) {
+			if (!is_plain_set(kept[begin])) {
+				++begin;
+				continue;
+			}
+			size_t end = begin;
+			while (end < kept.size() && is_plain_set(kept[end])) ++end;
+			std::stable_sort(kept.begin() + begin, kept.begin() + end, less);
+			begin = end;
+		}
 		records = std::move(kept);
 	}
 }
