@@ -19,8 +19,9 @@ int app::application::run(ds::app_data_storage& storage)
 
 	auto& app_loop_service = storage.require<app::app_loop_service_interface>();
 	// Every module is initialized by now, so the loop may rely on any service it registered.
-	app_loop_service.init(storage);
 	try {
+		// Inside the guard: a loop that failed halfway through init() still gets its term().
+		app_loop_service.init(storage);
 		while (!app_loop_service.should_stop())
 		{
 			app_loop_service.on_step(storage);

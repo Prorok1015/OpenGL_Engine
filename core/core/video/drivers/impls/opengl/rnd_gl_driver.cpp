@@ -352,6 +352,17 @@ void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 	}
 }
 
+void rnd::driver::gl::driver::set_scissor(glm::ivec4 rect)
+{
+	if (rect.z < 1 || rect.w < 1) {
+		glDisable(GL_SCISSOR_TEST);
+	} else {
+		glEnable(GL_SCISSOR_TEST);
+		glScissor(rect[0], rect[1], rect[2], rect[3]);
+	}
+	CHECK_GL_ERROR();
+}
+
 void rnd::driver::gl::driver::clear(clear_flags flags)
 {
 	attach_frame_buffer();

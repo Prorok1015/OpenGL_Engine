@@ -1,5 +1,6 @@
 #include "app_frame_stage.h"
 #include <algorithm>
+#include <exception>
 #include "engine_log.h"
 #include "mem_allocator.h"
 
@@ -61,20 +62,27 @@ bool app::frame_stage_registry::remove_stage(std::string_view name)
 
 void app::frame_stage_registry::run(stage_context& ctx)
 {
-	const auto run_extra = [&](builtin_stage anchor, stage_side side) {
-		for (auto& stage : m_extra) {
+	// A stage may add or remove stages (or set bodies) while the frame runs; iterate a copy of
+	// this frame's plan so such changes only take effect from the next frame.
+	std::vector<stage_fn> plan;
+	plan.reserve(builtin_stage_count + m_extra.size());
+	const auto plan_extra = [&](builtin_stage anchor, stage_side side) {
+		for (const auto& stage : m_extra) {
 			if (stage.anchor == anchor && stage.side == side) {
-				stage.fn(ctx);
+				plan.push_back(stage.fn);
 			}
 		}
 	};
 	for (std::size_t i = 0; i < builtin_stage_count; ++i) {
 		const auto stage = static_cast<builtin_stage>(i);
-		run_extra(stage, stage_side::before);
+		plan_extra(stage, stage_side::before);
 		if (m_bodies[i]) {
-			m_bodies[i](ctx);
+			plan.push_back(m_bodies[i]);
 		}
-		run_extra(stage, stage_side::after);
+		plan_extra(stage, stage_side::after);
+	}
+	for (auto& fn : plan) {
+		fn(ctx);
 	}
 }
 
@@ -107,8 +115,21 @@ void app::frame_stage_registry::run_init_hooks(ds::app_data_storage& storage)
 
 void app::frame_stage_registry::run_term_hooks(ds::app_data_storage& storage)
 {
+	// One failing hook must not skip the others; the first failure is rethrown afterwards.
+	std::exception_ptr first_error;
 	for (auto it = m_term_hooks.rbegin(); it != m_term_hooks.rend(); ++it) {
-		(*it)(storage);
+		try {
+			(*it)(storage);
+		} catch (const std::exception& e) {
+			egLOG_ERROR("app", "frame term hook failed: {}", e.what());
+			if (!first_error) first_error = std::current_exception();
+		} catch (...) {
+			egLOG_ERROR("app", "frame term hook failed with an unknown exception");
+			if (!first_error) first_error = std::current_exception();
+		}
+	}
+	if (first_error) {
+		std::rethrow_exception(first_error);
 	}
 }
 

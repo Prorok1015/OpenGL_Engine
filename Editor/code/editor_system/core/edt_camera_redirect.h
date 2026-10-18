@@ -1,18 +1,39 @@
 #pragma once
 #include <cstddef>
+#include <functional>
 #include <string_view>
+#include <vector>
 #include <entt/fwd.hpp>
 #include "level/scn_level.h"
+#include "res_tag.h"
 
 namespace edt
 {
 	// In the editor the 3D view is shown inside an ImGui panel, so a camera must not draw into the
-	// window's backbuffer (it would be painted over by the UI). Every camera of `reg` that targets
-	// the backbuffer is given its own texture target instead. `scope` (the world name) keeps the
-	// target tags of different worlds apart. Returns how many cameras were redirected.
-	std::size_t redirect_backbuffer_cameras(entt::registry& reg, std::string_view scope);
+	// window's backbuffer (it would be painted over by the UI). Every camera that targets the
+	// backbuffer is given its own texture target instead.
+	//
+	// The redirector also owns the lifetime of those textures: a target whose camera is gone (entity
+	// destroyed, world unloaded or reloaded) is released through `release` at the end of the pass.
+	// Usage per frame: begin_frame(), redirect() for each registry, end_frame(release).
+	class camera_redirector
+	{
+	public:
+		using release_fn = std::function<void(const res::tag&)>;
 
-	// Same for every world of the level; run each frame before extraction so cameras created
-	// by level loads and hot reloads are covered too.
-	void redirect_backbuffer_cameras(scn::level& level);
+		void begin_frame();
+		// `scope` (the world name) keeps the target tags of different worlds apart. Returns how many
+		// cameras were redirected by this call.
+		std::size_t redirect(entt::registry& reg, std::string_view scope);
+		void end_frame(const release_fn& release);
+
+		// Convenience for a whole level: begin_frame, redirect every world, end_frame.
+		void update(scn::level& level, const release_fn& release);
+
+		[[nodiscard]] std::size_t tracked_count() const { return m_known.size(); }
+
+	private:
+		std::vector<res::tag> m_known; // targets assigned by this redirector and still alive
+		std::vector<res::tag> m_live;  // targets seen in the current frame
+	};
 }

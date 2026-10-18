@@ -1,4 +1,6 @@
 #include <boost/test/unit_test.hpp>
+#include <algorithm>
+#include <vector>
 #include <entt/entt.hpp>
 #include "rnd_render_packet.hpp"
 #include "scn_camera_component.hpp"
@@ -56,15 +58,22 @@ BOOST_AUTO_TEST_CASE(EditorRedirectsBackbufferCamerasToTextures) {
 	const res::tag editor_rt(res::tag::memory, "__editor_camera_rt");
 	editor_comp.color_targets.push_back(editor_rt);
 
-	BOOST_TEST(edt::redirect_backbuffer_cameras(reg, "w0") == 1u);
+	edt::camera_redirector redirector;
+	redirector.begin_frame();
+	BOOST_TEST(redirector.redirect(reg, "w0") == 1u);
+	redirector.end_frame({});
 
 	const auto& redirected = reg.get<scn::camera_component>(game_cam);
 	BOOST_REQUIRE(redirected.color_targets.size() == 1u);
 	BOOST_TEST(!rnd::targets_backbuffer(redirected.color_targets));
 	BOOST_TEST((reg.get<scn::camera_component>(editor_cam).color_targets[0] == editor_rt));
+	BOOST_TEST(redirector.tracked_count() == 1u); // the editor camera's own target is not ours
 
 	// Already redirected: nothing left to do.
-	BOOST_TEST(edt::redirect_backbuffer_cameras(reg, "w0") == 0u);
+	redirector.begin_frame();
+	BOOST_TEST(redirector.redirect(reg, "w0") == 0u);
+	redirector.end_frame({});
+	BOOST_TEST(redirector.tracked_count() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(RedirectedTargetsDifferBetweenCamerasAndWorlds) {
@@ -76,14 +85,70 @@ BOOST_AUTO_TEST_CASE(RedirectedTargetsDifferBetweenCamerasAndWorlds) {
 	a.emplace<scn::camera_component>(a1);
 	a.emplace<scn::camera_component>(a2);
 	b.emplace<scn::camera_component>(b1);
-	edt::redirect_backbuffer_cameras(a, "w0");
-	edt::redirect_backbuffer_cameras(b, "w1");
+	edt::camera_redirector redirector;
+	redirector.begin_frame();
+	redirector.redirect(a, "w0");
+	redirector.redirect(b, "w1");
+	redirector.end_frame({});
 
 	const auto& t_a1 = a.get<scn::camera_component>(a1).color_targets[0];
 	const auto& t_a2 = a.get<scn::camera_component>(a2).color_targets[0];
 	const auto& t_b1 = b.get<scn::camera_component>(b1).color_targets[0];
 	BOOST_TEST((t_a1 != t_a2));
 	BOOST_TEST((t_a1 != t_b1));
+	BOOST_TEST(redirector.tracked_count() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(TargetsOfDestroyedCamerasAreReleasedAndCountStaysBounded) {
+	entt::registry reg;
+	edt::camera_redirector redirector;
+	std::vector<res::tag> released;
+	const auto release = [&released](const res::tag& tag) { released.push_back(tag); };
+
+	std::size_t max_tracked = 0;
+	for (int i = 0; i < 50; ++i) {
+		const auto cam = reg.create();
+		reg.emplace<scn::camera_component>(cam);
+		redirector.begin_frame();
+		redirector.redirect(reg, "w0");
+		redirector.end_frame(release);
+		max_tracked = std::max(max_tracked, redirector.tracked_count());
+		reg.destroy(cam);
+	}
+	BOOST_TEST(max_tracked == 1u);
+
+	// The last camera is gone too: one more frame releases its target.
+	redirector.begin_frame();
+	redirector.redirect(reg, "w0");
+	redirector.end_frame(release);
+	BOOST_TEST(redirector.tracked_count() == 0u);
+	// Entity slots are recycled, so all 50 cameras shared one tag; it is released exactly once, when
+	// the last of them is gone.
+	BOOST_TEST(released.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(OnlyTheTargetOfADestroyedCameraIsReleased) {
+	entt::registry reg;
+	const auto keep = reg.create();
+	const auto drop = reg.create();
+	reg.emplace<scn::camera_component>(keep);
+	reg.emplace<scn::camera_component>(drop);
+	edt::camera_redirector redirector;
+	std::vector<res::tag> released;
+	const auto release = [&released](const res::tag& tag) { released.push_back(tag); };
+
+	redirector.begin_frame();
+	redirector.redirect(reg, "w0");
+	redirector.end_frame(release);
+	const res::tag dropped_tag = reg.get<scn::camera_component>(drop).color_targets[0];
+	reg.destroy(drop);
+
+	redirector.begin_frame();
+	redirector.redirect(reg, "w0");
+	redirector.end_frame(release);
+	BOOST_REQUIRE(released.size() == 1u);
+	BOOST_TEST((released[0] == dropped_tag));
+	BOOST_TEST(redirector.tracked_count() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

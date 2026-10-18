@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include "app_frame_stage.h"
@@ -92,6 +93,41 @@ BOOST_AUTO_TEST_CASE(RunExecutesBodiesAndStagesInOrder) {
 	app::stage_context ctx{ storage, std::chrono::duration<float>{ 0.016f } };
 	registry.run(ctx);
 	BOOST_TEST(trace == "BxUyP");
+}
+
+BOOST_AUTO_TEST_CASE(StageMayAddAndRemoveStagesWhileRunning) {
+	app::frame_stage_registry registry;
+	std::string trace;
+	const auto mark = [&trace](char c) {
+		return [&trace, c](app::stage_context&) { trace += c; };
+	};
+	registry.add_stage("late", app::builtin_stage::present, app::stage_side::after, mark('L'));
+	registry.add_stage("self_modifying", app::builtin_stage::update, app::stage_side::after,
+		[&](app::stage_context&) {
+			trace += 'S';
+			registry.add_stage("added_during_run", app::builtin_stage::render, app::stage_side::after, mark('A'));
+			registry.remove_stage("late");
+		});
+
+	ds::app_data_storage storage;
+	app::stage_context ctx{ storage, std::chrono::duration<float>{ 0.f } };
+	registry.run(ctx);
+	BOOST_TEST(trace == "SL"); // this frame's plan was fixed before it started
+	trace.clear();
+	registry.run(ctx);
+	BOOST_TEST(trace == "SA"); // changes apply from the next frame
+}
+
+BOOST_AUTO_TEST_CASE(TermHooksAllRunEvenWhenOneThrows) {
+	app::frame_stage_registry registry;
+	std::string trace;
+	registry.add_term_hook([&](ds::app_data_storage&) { trace += "1"; });
+	registry.add_term_hook([&](ds::app_data_storage&) { trace += "2"; throw std::runtime_error("boom"); });
+	registry.add_term_hook([&](ds::app_data_storage&) { trace += "3"; });
+
+	ds::app_data_storage storage;
+	BOOST_CHECK_THROW(registry.run_term_hooks(storage), std::runtime_error);
+	BOOST_TEST(trace == "321");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -69,9 +69,15 @@ void opaque_pass::execute(frame_context &context,
       drv.push_frame_buffer();
       drv.set_render_target(color_rt, txm_manager.find(depth_tag));
     } else {
+      // Several cameras share the backbuffer: clear only this camera's rectangle.
+      drv.set_scissor(glm::ivec4{packet.camera.viewport.x,
+                                 packet.camera.viewport.y, vp_width, vp_height});
       drv.clear(rnd::driver::CLEAR_FLAGS::DEPTH_BUFFER);
     }
     drv.clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER, {glm::vec4(0)});
+    if (!offscreen) {
+      drv.set_scissor(glm::ivec4{0});
+    }
 
     common_matrix.view = packet.camera.view_matrix;
     common_matrix.projection = packet.camera.projection_matrix;

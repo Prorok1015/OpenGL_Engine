@@ -23,9 +23,13 @@ namespace components {
 			c.storage.require<gui::gui_system>().render();
 		});
 		// The 3D view is shown inside an ImGui panel: game cameras draw into textures, not the backbuffer.
+		// The redirector also releases the textures of cameras that no longer exist.
+		auto redirector = std::make_shared<edt::camera_redirector>();
 		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
-			[](app::stage_context& c) {
-				edt::redirect_backbuffer_cameras(c.storage.require<scn::level_manager>().get_level());
+			[redirector](app::stage_context& c) {
+				auto& textures = c.storage.require<rnd::render_system>().get_texture_manager();
+				redirector->update(c.storage.require<scn::level_manager>().get_level(),
+					[&textures](const res::tag& tag) { textures.remove(tag); });
 			});
 	}
 

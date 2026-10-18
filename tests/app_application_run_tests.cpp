@@ -8,9 +8,16 @@ namespace {
 
 struct recording_loop : app::app_loop_service_interface
 {
-	explicit recording_loop(int steps, int throw_at = -1) : m_steps(steps), m_throw_at(throw_at) {}
+	explicit recording_loop(int steps, int throw_at = -1, bool throw_in_init = false)
+		: m_steps(steps), m_throw_at(throw_at), m_throw_in_init(throw_in_init) {}
 
-	void init(ds::app_data_storage&) override { trace += "I"; }
+	void init(ds::app_data_storage&) override
+	{
+		trace += "I";
+		if (m_throw_in_init) {
+			throw std::runtime_error("init failed");
+		}
+	}
 	void on_step(ds::app_data_storage&) override
 	{
 		if (done == m_throw_at) {
@@ -28,6 +35,7 @@ struct recording_loop : app::app_loop_service_interface
 	int done = 0;
 	int m_steps;
 	int m_throw_at;
+	bool m_throw_in_init;
 };
 
 }
@@ -56,6 +64,14 @@ BOOST_AUTO_TEST_CASE(TermRunsAfterThrowingStepAndExceptionPropagates) {
 	app::application app;
 	BOOST_CHECK_THROW(app.run(storage), std::runtime_error);
 	BOOST_TEST(static_cast<recording_loop&>(loop).trace == "ISS!T");
+}
+
+BOOST_AUTO_TEST_CASE(TermRunsWhenInitThrows) {
+	ds::app_data_storage storage;
+	auto& loop = storage.construct<app::app_loop_service_interface, recording_loop>(5, -1, true);
+	app::application app;
+	BOOST_CHECK_THROW(app.run(storage), std::runtime_error);
+	BOOST_TEST(static_cast<recording_loop&>(loop).trace == "IT");
 }
 
 BOOST_AUTO_TEST_CASE(RunWithoutLoopReturnsMinusOne) {
