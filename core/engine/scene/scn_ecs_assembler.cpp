@@ -1,6 +1,7 @@
 #include "scn_ecs_assembler.h"
 #include <entt/entt.hpp>
 #include "res_system.h"
+#include "desc_json_ops.h"
 #include "logger/engine_log.h"
 
 namespace scn {
@@ -65,7 +66,14 @@ namespace scn {
 			parent_desc->copy_to(*temp_desc);
 		}
 
-		if (!overrides.empty()) {
+		if (!overrides.empty() && parent_desc.is_valid()) {
+			// Effective data is serialize(parent) with the overrides merged in recursively; a plain deserialize of
+			// the overrides would replace a nested object whole and lose the sibling fields the parent set.
+			boost::json::object effective;
+			parent_desc->serialize(effective);
+			desc::json_deep_merge(effective, overrides);
+			temp_desc->deserialize(m_desc_sys, effective);
+		} else if (!overrides.empty()) {
 			temp_desc->deserialize(m_desc_sys, overrides);
 		}
 
