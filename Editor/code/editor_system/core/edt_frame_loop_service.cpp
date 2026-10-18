@@ -25,14 +25,8 @@ void edt::edt_loop_service::init(ds::app_data_storage& storage)
 	previous_time = std::chrono::steady_clock::now();
 
 	gs::register_core_frame_stages(m_stages);
-	// Editor-only stages, slotted into the canonical order: input-delta reset between the level
-	// update (20) and extract (30), GUI render between the 3D render (40) and present (50).
-	m_stages.add_stage(25, [](gs::frame_step_context& c) {
-		if (auto ecs_input = c.storage.require_shared<inp::ecs_input_manager>()) {
-			ecs_input->reset_frame_deltas();
-		}
-	});
-	m_stages.add_stage(45, [](gs::frame_step_context& c) {
+	// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
+	m_stages.set_body(gs::builtin_stage::ui, [](gs::frame_step_context& c) {
 		c.storage.require<gui::gui_system>().render();
 	});
 }
