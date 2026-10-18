@@ -44,4 +44,26 @@ BOOST_AUTO_TEST_CASE(EditorInputAreaScalesToFramebuffer)
 	BOOST_TEST((edt::make_input_area({ 10.f, 20.f }, { 300.f, 200.f }, { 2.f, 2.f }) == glm::ivec4{ 20, 40, 620, 440 }));
 }
 
+BOOST_AUTO_TEST_CASE(RenderTargetSizeIsIdentityAtNativeDpi)
+{
+	BOOST_TEST((edt::to_framebuffer_size({ 800.f, 600.f }, { 1.f, 1.f }) == glm::ivec2{ 800, 600 }));
+}
+
+BOOST_AUTO_TEST_CASE(RenderTargetSizeScalesToFramebuffer)
+{
+	BOOST_TEST((edt::to_framebuffer_size({ 800.f, 600.f }, { 2.f, 2.f }) == glm::ivec2{ 1600, 1200 }));
+}
+
+BOOST_AUTO_TEST_CASE(RenderTargetSizeWithNonPositiveScaleFallsBackToOne)
+{
+	BOOST_TEST((edt::to_framebuffer_size({ 800.f, 600.f }, { 0.f, 0.f }) == glm::ivec2{ 800, 600 }));
+	BOOST_TEST((edt::to_framebuffer_size({ 800.f, 600.f }, { -2.f, 2.f }) == glm::ivec2{ 800, 600 }));
+}
+
+BOOST_AUTO_TEST_CASE(RenderTargetSizeTruncatesFractionalPixels)
+{
+	BOOST_TEST((edt::to_framebuffer_size({ 801.f, 599.f }, { 1.25f, 1.25f }) == glm::ivec2{ 1001, 748 }));
+	BOOST_TEST((edt::to_framebuffer_size({ 800.5f, 600.f }, { 1.f, 1.f }) == glm::ivec2{ 800, 600 }));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

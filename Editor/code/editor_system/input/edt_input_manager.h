@@ -18,6 +18,17 @@ namespace edt
 		return glm::ivec4{ static_cast<int>(min.x), static_cast<int>(min.y), static_cast<int>(max.x), static_cast<int>(max.y) };
 	}
 
+	// Render-target size in framebuffer pixels for an ImGui item of `size` window units. Truncates
+	// toward zero, like make_input_area, so the texture never exceeds the area it is drawn into.
+	inline glm::ivec2 to_framebuffer_size(glm::vec2 size, glm::vec2 fb_scale)
+	{
+		if (fb_scale.x <= 0.f || fb_scale.y <= 0.f) {
+			fb_scale = glm::vec2{ 1.f };
+		}
+		const glm::vec2 px = size * fb_scale;
+		return glm::ivec2{ static_cast<int>(px.x), static_cast<int>(px.y) };
+	}
+
 	class input_manager : public inp::input_manager_base
 	{
 	public:
