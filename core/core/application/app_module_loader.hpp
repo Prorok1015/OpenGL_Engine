@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <exception>
+#include <format>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -40,6 +42,27 @@ namespace app::modules {
 		std::vector<entry> m_entries;
 		std::vector<std::string> m_unloaded; // names; the module objects are gone
 		bool m_sorted = false;
+
+		[[noreturn]] static void fail(std::string message) {
+			egLOG_ERROR("app", "{}", message);
+			throw std::logic_error(std::move(message));
+		}
+
+		entry* find(std::string_view name) {
+			const auto it = std::ranges::find_if(m_entries, [&](const entry& e) { return e.module->name() == name; });
+			return it == m_entries.end() ? nullptr : &*it;
+		}
+
+		static std::string_view state_name(module_state s) {
+			switch (s) {
+			case module_state::added: return "added";
+			case module_state::registered: return "registered";
+			case module_state::initialized: return "initialized";
+			case module_state::shut_down: return "shut_down";
+			case module_state::unloaded: return "unloaded";
+			}
+			return "?";
+		}
 
 		void shutdown_entry(entry& e, ds::app_data_storage& data) {
 			e.state = module_state::shut_down;
@@ -169,6 +192,77 @@ namespace app::modules {
 			} catch (...) {
 				shutdown_entries(done, data);
 				throw;
+			}
+		}
+
+		// Loads one module after startup: every module it depends on must already be initialized,
+		// otherwise nothing is registered and std::logic_error is thrown. The module is appended
+		// (its dependencies are all ahead of it), registered and initialized; if either phase
+		// throws, the module is dropped without shutdown (like a failed initialize_all_services)
+		// and the exception propagates.
+		void load(std::unique_ptr<module_interface> module, ds::app_data_storage& data) {
+			ASSERT_MSG(module, "module_loader::load: null module");
+			const std::string name{ module->name() };
+			if (find(name)) {
+				fail(std::format("module_loader: cannot load '{}': a module with this name is already present", name));
+			}
+			for (const auto dep : module->depends_on()) {
+				const entry* d = find(dep);
+				if (!d || d->state != module_state::initialized) {
+					fail(std::format("module_loader: cannot load '{}': dependency '{}' is {}", name, dep,
+						d ? state_name(d->state) : std::string_view{ "not loaded" }));
+				}
+			}
+
+			entry e{ std::move(module) };
+			e.size_before = data.size();
+			e.module->register_services(data);
+			e.state = module_state::registered;
+			e.module->initialize_services(data);
+			e.state = module_state::initialized;
+			e.provided = data.size() - e.size_before;
+
+			std::erase(m_unloaded, name);
+			m_entries.push_back(std::move(e));
+		}
+
+		// Unloads one initialized module: refused (std::logic_error, nothing touched) if another
+		// initialized module depends on it. Otherwise it is shut down and removed. Afterwards the
+		// storage must have shrunk by exactly the services the module left behind at load time
+		// (for the most recently loaded module that is the size recorded before its registration);
+		// a module that forgot to destruct a service is reported with an error log and
+		// std::logic_error, after it has been removed, so the leak is visible and not retried.
+		void unload(std::string_view requested, ds::app_data_storage& data) {
+			const std::string name{ requested }; // the module's own name() dies with it
+			entry* e = find(name);
+			if (!e) {
+				fail(std::format("module_loader: cannot unload '{}': no such module", name));
+			}
+			if (e->state != module_state::initialized) {
+				fail(std::format("module_loader: cannot unload '{}': module is {}", name, state_name(e->state)));
+			}
+			for (const auto& other : m_entries) {
+				if (&other == e || other.state != module_state::initialized) {
+					continue;
+				}
+				for (const auto dep : other.module->depends_on()) {
+					if (dep == name) {
+						fail(std::format("module_loader: cannot unload '{}': initialized module '{}' depends on it",
+							name, other.module->name()));
+					}
+				}
+			}
+
+			const std::size_t expected = data.size() - e->provided;
+			shutdown_entry(*e, data);
+			const std::size_t actual = data.size();
+
+			m_unloaded.emplace_back(name);
+			m_entries.erase(m_entries.begin() + (e - m_entries.data()));
+
+			if (actual != expected) {
+				fail(std::format("module_loader: module '{}' left the service storage asymmetric after shutdown: "
+					"{} services, expected {}", name, actual, expected));
 			}
 		}
 
