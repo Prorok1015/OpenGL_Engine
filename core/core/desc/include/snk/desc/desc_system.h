@@ -63,8 +63,9 @@ namespace desc
 			m_schemas.remove(type_name);
 		}
 
-		// Registers a schema that has no C++ type (wasm/JSON). The version must match current_version(name):
-		// register the type's migrations first. No factory is created for it yet.
+		// Registers a schema that has no C++ type (wasm/JSON). The version must match current_version(name).
+		// Migrations registered later move the stored schema's version along, so the order does not matter.
+		// No factory is created for it yet.
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema)
 		{
@@ -96,11 +97,13 @@ namespace desc
 			auto& steps = m_migrations[std::string{ type }];
 			ASSERT_MSG(!steps.contains(from_version), "Migration for '{}' from version {} is already registered!", type, from_version);
 			steps.emplace(from_version, std::move(fn));
+			m_schemas.set_version(type, current_version(type));
 		}
 
 		void unregister_migrations(std::string_view type)
 		{
 			m_migrations.erase(std::string{ type });
+			m_schemas.set_version(type, current_version(type));
 		}
 
 		int current_version(std::string_view type) const

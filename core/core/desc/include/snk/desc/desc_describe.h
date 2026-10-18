@@ -159,6 +159,26 @@ namespace desc
 		}
 	}
 
+	// True when every field_attrs<T> entry names a member Describe lists for T. schema_generator<T>::make
+	// static_asserts it, so a typo or a renamed member fails the build instead of being ignored.
+	template<typename T>
+	constexpr bool attrs_match_members()
+	{
+		namespace bd = boost::describe;
+		bool all_found = true;
+		for (const auto& item : field_attrs<T>.items) {
+			bool found = false;
+			boost::mp11::mp_for_each<bd::describe_members<T, bd::mod_any_access>>([&](auto descriptor) {
+				using descriptor_type = decltype(descriptor);
+				if (std::string_view{ descriptor_type::name } == item.data().member) {
+					found = true;
+				}
+			});
+			all_found = all_found && found;
+		}
+		return all_found;
+	}
+
 	// Schema of a type with BOOST_DESCRIBE_CLASS (members) and, optionally, a field_attrs<T> specialization.
 	// T must be default constructible: the defaults are the converted members of T{}.
 	template<typename T>
@@ -166,6 +186,8 @@ namespace desc
 	{
 		static type_schema make(std::string_view name, int version, schema_kind kind = schema_kind::desc)
 		{
+			static_assert(attrs_match_members<T>(), "field_attrs<T> names a member that BOOST_DESCRIBE_CLASS does not list");
+
 			type_schema schema;
 			schema.name = std::string{ name };
 			schema.id = schema_id(name);
@@ -175,10 +197,8 @@ namespace desc
 
 			const T defaults{};
 			const auto& table = field_attrs<T>;
-			std::vector<std::string_view> members;
 			for_each_data_member<T>([&](std::string_view member, auto pointer) {
 				using member_type = std::remove_cvref_t<decltype(defaults.*pointer)>;
-				members.push_back(member);
 				const field_attr_data* attr = table.find(member);
 
 				field_schema field;
@@ -217,11 +237,6 @@ namespace desc
 				}
 				schema.fields.push_back(std::move(field));
 			});
-
-			for (const auto& item : table.items) {
-				const bool known = std::ranges::find(members, item.data().member) != members.end();
-				ASSERT_MSG(known, "field_attrs<{}> names unknown member '{}'", name, item.data().member);
-			}
 			return schema;
 		}
 

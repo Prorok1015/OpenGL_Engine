@@ -165,6 +165,8 @@ namespace desc
 		// Both add functions return nullptr and keep the registry unchanged when the name (or the id) is taken.
 		const type_schema* add(type_schema schema);
 		bool remove(std::string_view name);
+		// Keeps a stored schema in step with current_version(name); false if there is no such schema.
+		bool set_version(std::string_view name, int version);
 		const type_schema* find(std::string_view name) const;
 		const type_schema* find(std::uint64_t id) const;
 		bool contains(std::string_view name) const;

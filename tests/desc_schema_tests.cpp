@@ -48,6 +48,13 @@ namespace schema_test {
 		BOOST_DESCRIBE_CLASS(probe, (), (position, label, mode, ids, nested), (), (m_fov, m_tint, m_count, m_texture))
 	};
 
+	class typo_probe
+	{
+	public:
+		float fov = 1.0f;
+		BOOST_DESCRIBE_CLASS(typo_probe, (), (fov), (), ())
+	};
+
 }
 
 namespace desc {
@@ -68,6 +75,9 @@ namespace desc {
 		f("mode").ref("blend_mode"),
 		f("nested").ref("schema_test.inner"),
 		f("m_count").hidden());
+
+	template<>
+	inline constexpr auto field_attrs<schema_test::typo_probe> = attrs(f("fov").range(0, 1), f("fvo").hidden());
 
 }
 
@@ -118,6 +128,8 @@ namespace {
 	static_assert(k_table.find("a") != nullptr && k_table.find("a")->has_range && k_table.find("a")->alias_count == 2);
 	static_assert(k_table.find("b") != nullptr && !k_table.find("b")->has_range);
 	static_assert(k_table.find("c") == nullptr);
+	static_assert(desc::attrs_match_members<schema_test::probe>());
+	static_assert(!desc::attrs_match_members<schema_test::typo_probe>(), "a misspelled attr name must be detected");
 	static_assert(desc::kind_of<float> == desc::field_kind::f32);
 	static_assert(desc::kind_of<const std::int32_t&> == desc::field_kind::i32);
 	static_assert(desc::kind_of<std::uint64_t> == desc::field_kind::u64);
@@ -355,6 +367,7 @@ BOOST_AUTO_TEST_CASE(MalformedSchemasThrow)
 	fails(R"({ "fields": [] })");
 	fails(R"({ "name": "t" })");
 	fails(R"({ "name": "t", "fields": [], "typo": 1 })");
+	fails(R"({ "name": "t", "fields": [], "migrations": [] })");
 	fails(R"({ "name": "t", "version": 0, "fields": [] })");
 	fails(R"({ "name": "t", "kind": "widget", "fields": [] })");
 	fails(R"({ "name": "t", "fields": [ { "name": "a", "kind": "float" } ] })");
@@ -371,6 +384,16 @@ BOOST_AUTO_TEST_CASE(MalformedSchemasThrow)
 
 	BOOST_CHECK_THROW(desc::parse_enum_schema(parse(R"({ "name": "e", "items": 3 })")), std::runtime_error);
 	BOOST_CHECK_THROW(desc::parse_enum_schema(parse(R"({ "name": "e", "items": { "a": "x" } })")), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(MigrationsKeyIsReportedAsNotSupportedYet)
+{
+	try {
+		desc::parse_type_schema(parse(R"({ "name": "t", "fields": [], "migrations": [] })"));
+		BOOST_FAIL("expected an exception");
+	} catch (const std::runtime_error& error) {
+		BOOST_CHECK(std::string_view{ error.what() }.find("not supported yet") != std::string_view::npos);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(KindNamesRoundTrip)
@@ -434,6 +457,28 @@ BOOST_FIXTURE_TEST_CASE(SchemaVersionFollowsRegisteredMigrations, schema_fixture
 	const auto* stored = ds.register_schema(desc::parse_type_schema(parse(R"({ "name": "test.versioned", "version": 2, "fields": [] })")));
 	BOOST_REQUIRE(stored);
 	BOOST_TEST(stored->version == ds.current_version("test.versioned"));
+}
+
+BOOST_FIXTURE_TEST_CASE(MigrationRegisteredAfterTheDescBumpsTheSchemaVersion, schema_fixture)
+{
+	ds.register_desc<schema_test::probe>("test.late");
+	BOOST_REQUIRE(ds.find_schema("test.late"));
+	BOOST_TEST(ds.find_schema("test.late")->version == 1);
+
+	ds.register_migration("test.late", 1, [](json::object&) {});
+	BOOST_TEST(ds.current_version("test.late") == 2);
+	BOOST_TEST(ds.find_schema("test.late")->version == 2);
+
+	ds.unregister_migrations("test.late");
+	BOOST_TEST(ds.find_schema("test.late")->version == 1);
+
+	ds.register_migration("test.runtime", 1, [](json::object&) {});
+	const auto* stored = ds.register_schema(desc::parse_type_schema(parse(R"({ "name": "test.runtime", "version": 2, "fields": [] })")));
+	BOOST_REQUIRE(stored);
+	ds.register_migration("test.runtime", 2, [](json::object&) {});
+	BOOST_TEST(stored->version == 3);
+
+	BOOST_CHECK_NO_THROW(ds.register_migration("test.none", 1, [](json::object&) {}));
 }
 
 BOOST_FIXTURE_TEST_CASE(RegisteringADescribedTypeRegistersItsSchema, schema_fixture)

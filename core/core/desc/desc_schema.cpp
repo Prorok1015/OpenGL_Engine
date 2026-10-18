@@ -51,6 +51,9 @@ namespace desc
 		void check_keys(const json::object& object, std::initializer_list<std::string_view> allowed, const std::string& path)
 		{
 			for (const auto& member : object) {
+				if (member.key() == "migrations") {
+					fail(path, "'migrations' is not supported yet (declarative migrations of runtime schemas come later)");
+				}
 				if (std::ranges::find(allowed, std::string_view{ member.key() }) == allowed.end()) {
 					fail(path, std::format("unknown key '{}'", std::string_view{ member.key() }));
 				}
@@ -367,6 +370,16 @@ namespace desc
 		}
 		m_names_by_id.erase(it->second.id);
 		m_types.erase(it);
+		return true;
+	}
+
+	bool schema_registry::set_version(std::string_view name, int version)
+	{
+		auto it = m_types.find(std::string{ name });
+		if (it == m_types.end()) {
+			return false;
+		}
+		it->second.version = version;
 		return true;
 	}
 
