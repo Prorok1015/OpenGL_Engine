@@ -32,7 +32,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     auto z_pass_rt = txm_manager.find(z_pass_tag);
 
     if (z_pass_rt &&
-        (z_pass_rt->width() != vp_width || z_pass_rt->height() != vp_height)) {
+        (z_pass_rt->width() != static_cast<uint32_t>(vp_width) || z_pass_rt->height() != static_cast<uint32_t>(vp_height))) {
       txm_manager.remove(z_pass_tag);
       z_pass_rt = nullptr;
     }

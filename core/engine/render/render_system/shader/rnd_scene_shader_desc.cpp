@@ -50,7 +50,7 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
 
     if (!dbg_addition_defines_names.empty()) {
         std::string format = dbg_addition_defines_names.front();
-        for (int i = 1; i < dbg_addition_defines_names.size(); ++i) {
+        for (std::size_t i = 1; i < dbg_addition_defines_names.size(); ++i) {
             auto& name_ = dbg_addition_defines_names[i];
             format = std::vformat("{0} | {1}", std::make_format_args(format, name_));
         }
@@ -103,10 +103,10 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load(res::resource_s
 
 void rnd::configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader)
 {
-	for (int idx = 0; idx < desc.rdata.samplers.size(); ++idx)
+	for (std::size_t idx = 0; idx < desc.rdata.samplers.size(); ++idx)
 	{
 		if (desc.rdata.samplers[idx]) {
-			desc.rdata.samplers[idx]->bind(idx);
+			desc.rdata.samplers[idx]->bind(static_cast<uint32_t>(idx));
 		}
 	}
 

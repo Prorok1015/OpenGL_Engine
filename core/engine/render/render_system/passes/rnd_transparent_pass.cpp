@@ -42,8 +42,8 @@ void transparent_pass::execute(frame_context &context,
     auto color_tp_rt = txm_manager.find(tp_accum_tag);
     auto waight_tp_rt = txm_manager.find(tp_reveal_tag);
 
-    if (color_tp_rt && (color_tp_rt->width() != vp_width ||
-                        color_tp_rt->height() != vp_height)) {
+    if (color_tp_rt && (color_tp_rt->width() != static_cast<uint32_t>(vp_width) ||
+                        color_tp_rt->height() != static_cast<uint32_t>(vp_height))) {
       txm_manager.remove(tp_accum_tag);
       txm_manager.remove(tp_reveal_tag);
       color_tp_rt = nullptr;

@@ -40,7 +40,7 @@ void opaque_pass::execute(frame_context &context,
         offscreen ? txm_manager.find(target_tag) : nullptr;
 
     if (offscreen && color_rt &&
-        (color_rt->width() != vp_width || color_rt->height() != vp_height)) {
+        (color_rt->width() != static_cast<uint32_t>(vp_width) || color_rt->height() != static_cast<uint32_t>(vp_height))) {
       txm_manager.remove(target_tag);
       color_rt = nullptr;
     }

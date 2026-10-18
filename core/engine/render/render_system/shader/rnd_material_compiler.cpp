@@ -9,7 +9,7 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 	// --- runtime_data: resolve samplers + per-draw uniforms (was scn::material_desc::get_shader_desc) ---
 	rnd::shader_config::runtime_data rdata;
 	rdata.samplers.resize(mat.samplers_textures.size());
-	for (int idx = 0; idx < mat.samplers_textures.size(); ++idx)
+	for (std::size_t idx = 0; idx < mat.samplers_textures.size(); ++idx)
 	{
 		if (mat.samplers_textures[idx].is_valid()) {
 			rdata.samplers[idx] = ctx.textures->require_texture(mat.samplers_textures[idx]);
