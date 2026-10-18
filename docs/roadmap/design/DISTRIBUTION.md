@@ -1,0 +1,132 @@
+# Дизайн: распространение — игра как библиотека и как модуль редактора, SDK, установщик
+
+**Issue:** #TBD (эпик) · **Основа:** ADR-01/02/03/13 (`docs/roadmap/CHIMERA_ROADMAP.md:123-125,135`), EPIC-29 (`docs/roadmap/design/EPIC-29_SERVICES_DLL.md`), #108, #201, #176 · **Статус:** черновик, ждёт подтверждения владельца (решения §3 — приняты 2026-10-18, не пересматриваются)
+
+## 1. Как устроено сейчас
+
+**Модули.** `app::modules::module_interface` (`core/core/application/app_module_interface.h:7-20`): register/initialize/shutdown, `name()`, `depends_on()`. `module_loader` (`app_module_loader.hpp`): стабильный топосорт, откат init, состояния `added → … → unloaded`, `unload(name)` одного модуля (`:266`). C-точка входа: `SNK_DECLARE_MODULE` → `snk_module_api_version/build_info/create/destroy` (`app_module_entry.h:152-173`), проверка `check_module_entry` (api major/minor, компилятор, флаги debug/CRT/STL; `:108-144`).
+- **DLL с диска сейчас не грузится.** `module_entry` — указатели на функции. LoadLibrary/dlopen по решению EPIC-29 отнесены к EPIC-52 #21 (`app_module_entry.h:97-98`), тесты берут адреса напрямую (`tests/app_module_entry_tests.cpp:5`).
+- **Правило компилятора слабее нужного.** Для MSVC проходит любой 19.x (`app_module_entry.h:132-134`). Нужно «MSVC игры ≥ MSVC движка».
+- **DebugGame уже совместим с проверкой.** `build_flag::debug` на MSVC выставляется только при `_DEBUG` (`:63-65`), который задаёт `/MDd`. Код игры с `/Od /MD` даёт те же флаги, что движок RelWithDebInfo `/MD`. Ошибочная сборка игры с `/MDd` отклоняется с понятной причиной (`:139-141`).
+
+**Редактор.** `editor.exe` = `Editor/main.cpp` + **статический** `editor_system` (`Editor/code/editor_system/CMakeLists.txt:3`). Модули `core`/`engine`/`editor` добавляются в коде (`Editor/main.cpp:52-55`), конфиг передаётся через `--config` (`:46`, `Editor/config/editor.cfg`: `base_path`/`path`).
+- Движок по умолчанию статический. `SNK_ENGINE_SHARED` (CMake ≥3.27, `CMakeLists.txt:19-27`) собирает один `snk_engine.dll`, который копируется к exe (`Editor/CMakeLists.txt:19-23`). CI собирает Windows MSVC Shared и Shared Release (`build.yml:42-47`, #198).
+- Отдельного модуля-DLL редактора нет.
+
+**Экспорт.** `SNK_API` (`core/core/common/snk_api.h`), hidden visibility, `/wd4251` (`cmake/SnkTarget.cmake:6-15`). ImGui экспортируется из `snk_engine` (`SnkTarget.cmake:70-76`); потребители получают `IMGUI_API=dllimport` через INTERFACE (`core/engine/CMakeLists.txt:13`) — один ImGui-контекст. assimp и Boost.JSON — отдельные статические копии в редакторе (`editor_system/CMakeLists.txt:22-28`).
+
+**SDK.** `cmake --install` → пакет `snake_sdk` 0.1.0 (`cmake/SnkInstall.cmake:27`, `install(TARGETS … RUNTIME bin)` `:235-239`).
+- Правил для PDB нет. CI-конфигурации Debug/RelWithDebInfo собираются с `/Z7` (`cmake/SnkBuildCache.cmake:69-74`); PDB при этом пишет линкер `/DEBUG`.
+- Потребитель — `tests/package_consumer` (Linux static/shared, Windows shared; `build.yml:388-528`).
+- Пресеты: `release` (Release), `dev-release` (RelWithDebInfo), CI Windows — Debug/Release (`CMakePresets.json:27-42,123-151`).
+
+**Релиз.** `release.yml`: `ci-windows-msvc-release`, **статический** Release, только `editor.exe` + `res`/`res_core` + переписанный `editor.cfg` → zip (`:45-85`). Нет SDK, PDB, redist и шаблонов.
+
+**Ресурсы.** Два слоя: `base_path` (движок) + `path` (`core/core/resource/res_system.cpp:72-78`, #176). Слой проекта — в #154 (US-42-2).
+
+**Что ломается для модели (2) «игра = `game.dll` в процессе редактора»:**
+1. **EnTT meta.** `ecs::register_component` пишет в `entt::meta<T>()` (`core/core/ecs/ecs_component.h:36-41`), то есть в контекст `entt::locator<meta_ctx>` того бинарника, где вызвана функция. Движок ищет через `entt::resolve(id)` (`core/engine/scene/level/scn_level.cpp:263-266`, `ecs_command_buffer.hpp:65`), поэтому компоненты игры для него невидимы. Передачу `meta_ctx` хостом EPIC-29 §3 обещал, но в коде её нет (grep `locator`/`meta_ctx` пуст).
+2. **`type_hash`/`type_index`.** EnTT 3.15 (`lib3dparty/entt/src/entt/config/version.h`). `type_hash` построен на `__FUNCSIG__` и стабилен между бинарниками одного компилятора; используется в `ecs_system_access.hpp:34`, `ecs_component.h:38`. `type_index` (бывший `type_seq`) — счётчик внутри каждого бинарника. С `ENTT_STANDARD_CPP` хеш падает на `type_index` и ломается между DLL. `ENTT_*` в проекте сейчас не задано. Нужна проверка спайком.
+3. **Регистрации систем.** `system_factory` — объект, а не статика (`core/core/ecs/ecs_system.h:24`), но удаления нет: `system_registry::add` (`ecs_system_registry.hpp:64`), дубль ловит ASSERT (`ecs_system.h`, `add_entry`). После FreeLibrary останутся висеть `run_stateless`/`run_stateful`, лямбды `make` и vtable `system_interface`.
+4. **Desc и спавнеры.** `scn::registration_scope` уже снимает их в обратном порядке (`core/engine/scene/scn_registration_scope.h:15-23`). Это образец для п.3.
+5. **Синглтоны.** `config_manager::instance` (`cfg_api.cpp:19`), логгер (spdlog спрятан за `SNK_API`, `logger/engine_log.h:13-38`) и кадровый аллокатор (`thread_local` в `mem_allocator.cpp:50` за `SNK_API frame_allocator()`) живут в одном экземпляре **только в shared-сборке**. В статике каждая DLL получит свою копию, поэтому модель (2) требует `SNK_ENGINE_SHARED`. Кадровая память не должна переживать перезагрузку. `thread_local` RNG в заголовке `desc_node_id.h:18` — свой на бинарник; это безвредно.
+6. **Куча и типы.** Через границу ходят STL-типы — допустимо при одном `/MD` CRT (решение §3.2). `ds_store` без `std::any` (EPIC-29 #58). Модуль уничтожает тот бинарник, что его создал (`app_module_entry.h:81-95`).
+
+**MSVC.** CI: `windows-latest` + `ilammy/msvc-dev-cmd@v1` без `toolset` (`build.yml:36-47,71-73`, `release.yml:19-27`), то есть берётся самая свежая VS из образа; версия не закреплена. ADR-03 фиксирует VS 18 как среду разработки (`CHIMERA_ROADMAP.md:125`).
+
+## 2. Решение
+
+**Две модели над одним SDK.**
+- (1) Библиотека: игра со своим `main()` делает `find_package(snake_sdk)` и линкует `snk::engine` + `snk::engine_api`. Это уже есть (#108, `tests/package_consumer`); добавить пример с полноценным циклом.
+- (2) Модуль редактора: `game.dll` = модуль с `SNK_DECLARE_MODULE`, `depends_on{core, engine}`, линкуется с `snk_engine.dll`. Редактор грузит его в процесс; play-in-editor и hot reload внутри редактора. Standalone = лаунчер (player #23) + те же DLL + упакованные ресурсы. `game_editor.dll` остаётся по ADR-01, его API — #22.
+
+**Слой регистрации не зависит от источника кода** (предусловие и для hot reload, и для будущего JIT):
+- `app::modules::module_source` — откуда взялся модуль: `load() → module_entry`, `unload()`, `identity()`. Реализации: `native_library_source` (LoadLibrary с теневой копией, см. ниже; сама загрузка — в #21), позже `jit_source` (LLVM, §6).
+- Модуль регистрирует всё через `registration_context`, выданный хостом, и не трогает реестры напрямую. В контексте области (scopes): системы (новый `ecs::system_scope` поверх `system_registry::remove(name)`), компоненты (по **стабильному имени** + meta, хост передаёт свой `meta_ctx`), desc и спавнеры (`scn::registration_scope`), игровые фазы (`add_game_phase`), позже — расширения редактора (#22). Область живёт в записи модуля в loader'е и уничтожается до `unload()` источника.
+- Реестры ничего не знают о DLL: ключ — имя, операции — add/remove. Тогда JIT-модуль с компонентами без C++-типа (layout в meta) встаёт в тот же слой.
+
+**Hot reload `game.dll`** — над этим слоем, в редакторе:
+1. Собрать (§2, сборка).
+2. Скопировать `game.dll`/`game.pdb` под уникальное имя (`game.<n>.dll`) — исходный файл не блокируется, PDB у отладчика не конфликтует.
+3. Остановить Play (§5).
+4. Снимок мира в desc v3 по `node_id` (`DATA_FORMATS_V2.md:56`) — сериализация, а не копия памяти, поэтому переживает смену layout.
+5. `module_loader::unload` → уничтожить области → FreeLibrary.
+6. Загрузить новую копию, `check_module_entry`, регистрация.
+7. `scn::level::rebuild_all_plans` (`scn_level.h:142`), восстановить мир из снимка.
+
+Ошибка на шаге 6 → откат на предыдущую копию.
+
+**Сборка игры из редактора.** Компилятор не поставляем.
+- Поиск: `vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -version [<min>,)` → `vcvars64`. CMake — из VS или PATH.
+- Проект игры генерируется из шаблона. Сборка: `cmake --preset` + `cmake --build` фоновой задачей (`job_service` #139 / `task_system` #17). Вывод MSVC (`file(line): error Cxxxx`) разбирается в панель problems (#24), затем перезагрузка `game.dll`.
+
+**Конфигурации (DebugGame).**
+- Движок поставляется одной конфигурацией: RelWithDebInfo, `/MD`, PDB рядом с DLL (`install(FILES $<TARGET_PDB_FILE:…>)`, `/DEBUG` в Release-линковке).
+- Шаблон игры: `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL` для всех конфигураций. Конфигурация `DebugGame` = `/Od /Zi /MD`, без `_DEBUG`, `_ITERATOR_DEBUG_LEVEL=0`; `Release` = `/O2 /MD`.
+- Полный Debug движка (`/MDd`) — отдельный необязательный пакет для разработчиков движка: другой `build_info`, с обычным SDK не смешивается. Symbol server — позже.
+
+**MSVC.**
+- Закрепить runner (`windows-2025`) и `toolset:` в `msvc-dev-cmd`.
+- Записать `SNK_MSVC_VERSION` (`_MSC_VER` сборки) в `snake_sdkConfig.cmake`. Config падает, если `MSVC_VERSION` потребителя меньше.
+- В `check_module_entry`: младшая часть компилятора модуля ≥ хоста.
+- Redist в поставке — не старше самого нового поддерживаемого toolset.
+- Рекомендуемый минимум: 14.44 (`_MSC_VER 1944`, VS 2022 17.14). v145 (VS 18) бинарно совместим с v143, так что пользователи VS 2022 не отсекаются, а движок собирается самым старым поддерживаемым toolset. Альтернатива — только VS 18 (1950), см. §5.
+
+**Поставка.**
+- Сначала портативный zip из CI: shared RelWithDebInfo редактор + SDK (`cmake --install`) + PDB + базовые ресурсы + шаблоны.
+- Затем CPack-установщик поверх правил install (компоненты `editor`, `snake_sdk`, `templates`, `redist`).
+- Затем браузер проектов / лаунчер с выбором версии движка.
+- Standalone-игра: Release `game.dll` + лаунчер + `snk_engine.dll` + redist + ресурсы (cook — #46). Опционально — монолитная статическая сборка для shipping (модель (1) без DLL).
+
+**Платформы.** Публикуем только Windows x64. Кроссплатформенный код и Linux CI (static, shared, SDK) остаются; `native_library_source` получает ветку `dlopen` без публикации.
+
+## 3. Решения владельца (2026-10-18, окончательные)
+
+1. **Модель разработки игры — обе.** (1) Движок как библиотека через `find_package(snake_sdk)`. (2) Игра как модуль редактора: `game.dll` в процессе редактора, play-in-editor и hot reload; standalone = лаунчер + те же DLL + упакованные ресурсы. Основа — `module_interface`/`module_loader`, `SNK_ENGINE_SHARED`, `SNK_API`. Редактор компилятор не поставляет: ищет установленный (`vswhere`), генерирует CMake-проект из шаблона, запускает `cmake --build`, показывает ошибки, перезагружает `game.dll`.
+2. **Конфигурации DebugGame.**
+   - Движок — одна конфигурация: RelWithDebInfo, `/MD`, PDB.
+   - Debug игры = `/Od`, но `/MD`: один CRT, совпадающий ABI на границе DLL, через неё ходят STL-типы. `/MDd` и `/MD` никогда не смешиваются.
+   - Полный Debug движка — отдельный необязательный пакет.
+   - PDB лежат рядом с DLL; symbol server — позже.
+3. **Платформы.** Публикуем только Windows; кроссплатформенный код и Linux CI сохраняются. Минимальный MSVC закрепляется: игра собирается тем же или более новым MSVC, чем движок.
+4. **EnTT между модулями проверяется до модели (2)** отдельной story с наивысшим приоритетом в эпике: компонент и система из отдельной DLL работают с registry движка.
+5. **Долгосрочная цель — встроенный LLVM-компилятор** (интерпретация/JIT скриптовых языков без внешнего тулчейна). Это отдельный будущий эпик, не этапы C/D. Схема с внешним MSVC — временный первый шаг и не должна блокировать цель: слой модулей и регистрации не зависит от источника кода (§2).
+6. **Порядок.** Эпик не блокирует #109 и этап C.
+
+## 4. Шаги / stories
+
+Подробности — в `DISTRIBUTION_STORIES.md`. Порядок:
+- S1 (спайк EnTT) → S3 (слой регистрации) → S6 (hot reload).
+- S2 (конфигурации/MSVC) → S7 (zip) → S9 (установщик) → S10 (лаунчер).
+- S4 (шаблон) → S5 (сборка из редактора) → S6.
+- S8 (упаковка игры) ← #23, #46.
+
+Загрузка DLL с диска — в #21/#159 (не дублируем): S3 и S6 зависят от неё, S1 её блокирует.
+
+## 5. Риски и открытые вопросы
+
+- **EnTT.** Если `type_hash` или внутренние вызовы EnTT через `type_index` окажутся нестабильны между DLL, понадобятся `ENTT_API` (dllexport `type_index`) или собственный `type_info` по стабильным именам. Это меняет `ecs_component.h` и всё, что берёт `type_hash`. Поэтому S1 идёт первым.
+- **Висящие указатели после FreeLibrary**: `std::function`, vtable, meta-функции, спавнеры, подписки на события и ресурсы, `thread_local` в DLL. Контроль — счётчик регистраций области до и после (по образцу `storage.size()` в `module_loader`) и тест «выгрузить → `rebuild_all_plans` → ни одной записи модуля».
+- **Hot reload во время Play** (ADR-07: Play = отдельный level). Варианты: (а) Stop → reload → Start; (б) reload с переносом снимка Play-level. Рекомендация — (а). Вопрос владельцу.
+- **Минимальный MSVC**: 14.44 (VS 2022 17.14) против только VS 18 (14.50). Чем ниже минимум, тем шире аудитория; движок обязан собираться самым старым поддерживаемым toolset.
+- **Shared-сборка редактора по умолчанию** для Windows-поставки: статика остаётся для CI и shipping. Пересборка статики под редактор запрещена: синглтоны раздвоятся (§1, п.5).
+- **Includes в шаблоне** изменятся после #109 (PR-5, `SNK_SDK_VERSION` 0.2.0). Шаблон генерируется под версию SDK и проверяется в CI сборкой шаблонного проекта.
+- **Установщик**: NSIS (проще, без MSI) или WiX (MSI, корпоративная установка). Рекомендация — NSIS для первой версии.
+- **Пересечение с #160 (US-42-8)** «шаблон проекта и режим static/dll»: перенести в этот эпик или оставить в #19 и расширить критерии.
+
+## 6. Пересечения с существующими планами
+
+| Что | Где | Отношение |
+|---|---|---|
+| Игровой код = shared lib + `game.dll`/`game_editor.dll`, «без hot reload» | ADR-01, `CHIMERA_ROADMAP.md:123` | Обновить ADR-01: hot reload **в объёме** (решение 2026-10-18); остальное совпадает |
+| `project.snkproj` с `engine_version`, слоёный `res://` | ADR-02 (`:124`), #19, #153, #154, #156 | Ссылаемся; S4 использует манифест вместо `--config editor.cfg` |
+| SDK `snake_sdk`, версионированная установка | ADR-03 (`:125,137`), #108 ✔, #201 ✔, #109, #47 | S2/S7/S9 надстраиваются; S9 закрывает пункт «SDK устанавливается в версионированный каталог» #47 |
+| Загрузка `game`/`game_editor` (static → dll), пример модуля | #21 (EPIC-52), #159 (US-42-7), `app_module_entry.h:98` | Зависимость; S1 — блокер DLL-части #21 |
+| Шаблон CMake-проекта, static/dll | #160 (US-42-8) | S4 расширяет #160 (DebugGame, `/MD`, MSVC-пин, `res/` проекта); предложить перенести |
+| Player | #23 (EPIC-54), #98 ✔ | Лаунчер standalone = player; S8 зависит от него |
+| Cook | ADR-13 (`:135`), #46 (EPIC-71) | S8 — бинарники и раскладка; обход и валидация ассетов — #46 |
+| Play mode | ADR-07 (`:129`), #39 (EPIC-63) | S6 согласует reload и Play |
+| Extension API, каркас редактора, `job_service` | #22 (EPIC-53), #18 (#136-#140), `STAGE_D_PLAN.md:67` | `game_editor.dll` — там; S5 берёт `job_service` из #139 |
+| Problems-панель | #24 (EPIC-51) | S5 выводит ошибки компилятора туда |
+| Сервисы/DLL-готовность, `meta_ctx` | #6 (EPIC-29) ✔, `EPIC-29_SERVICES_DLL.md` §3 | Обещанная передача `meta_ctx` не сделана — входит в S1/S3 |
+| Риск «ABI C++ через dll, разные toolchain» | `CHIMERA_ROADMAP.md:336` | Закрывается S2 (пин MSVC + проверка при загрузке) |
