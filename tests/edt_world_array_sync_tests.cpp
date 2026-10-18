@@ -81,4 +81,25 @@ BOOST_AUTO_TEST_CASE(DeriveWorldArrays_EmptyInputClearsOutput)
 	BOOST_CHECK(systems.empty());
 }
 
+BOOST_AUTO_TEST_CASE(MergeReloadedWorlds_KeepsDescOrderThenUnsavedAliveWorlds)
+{
+	std::vector<stub_world> desc = { { "B", {} }, { "A", {} } };
+	std::vector<stub_world> previous = { { "A", { "stale" } }, { "Unsaved", { "Sys" } }, { "Gone", {} } };
+
+	auto merged = edt::merge_reloaded_worlds(desc, previous,
+		[](const stub_world& w) { return w.name != "Gone"; });
+
+	BOOST_REQUIRE_EQUAL(merged.size(), 3u);
+	BOOST_CHECK_EQUAL(merged[0].name, "B");
+	BOOST_CHECK_EQUAL(merged[1].name, "A");
+	BOOST_CHECK(merged[1].systems.empty()); // the desc copy wins over the stale editor one
+	BOOST_CHECK_EQUAL(merged[2].name, "Unsaved");
+
+	std::vector<std::string> names;
+	std::vector<std::vector<std::string>> systems;
+	edt::derive_world_arrays(merged, names, systems);
+	BOOST_CHECK_EQUAL(names.size(), systems.size());
+	BOOST_CHECK_EQUAL(systems[2][0], "Sys");
+}
+
 BOOST_AUTO_TEST_SUITE_END()

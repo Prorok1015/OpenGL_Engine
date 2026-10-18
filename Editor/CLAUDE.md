@@ -149,6 +149,11 @@ per-world systems via `edt::derive_world_arrays` (`controller/edt_level_controll
 keep `populate_worlds_from_level` as the single build point on load. Covered by
 `tests/edt_world_array_sync_tests.cpp`.
 
+**Hot reload:** `scn::level_manager` drops/rebuilds only the desc-owned worlds, so worlds created in the
+editor but not yet saved survive. After every reload (world list or systems only) it calls `level_controller::resync_worlds_after_reload()`
+(`merge_reloaded_worlds` + `derive_world_arrays`), which keeps the arrays aligned with the level. A reload
+whose world desc fails to load is skipped entirely (current level kept, no callback).
+
 ## Prefab Node Format (critical)
 
 ```
