@@ -51,6 +51,7 @@ namespace edt
 		void notify_selected();
 		const scn::prefab_desc* get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const;
 		void draw_world_tabs();
+		void draw_new_world_popup();
 		void collect_flat_order(const std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& lower_filter);
 		void delete_selected();
 		void duplicate_selected();

@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
 #include <format>
 
@@ -28,6 +29,11 @@ namespace edt
 	{
 		m_owner = owner;
 		m_target = std::move(target);
+	}
+
+	void inspector_panel::set_assembler(scn::ecs_assembler* assembler)
+	{
+		m_assembler = assembler;
 	}
 
 	void inspector_panel::rebuild_parent_cache()
@@ -179,7 +185,17 @@ namespace edt
 	void inspector_panel::render_override_target()
 	{
 		namespace oe = override_edit;
-		const scn::prefab_desc::prefab_node& base = *m_selected_node;
+		if (!m_assembler) {
+			ImGui::TextDisabled("Overrides need the ecs assembler");
+			return;
+		}
+		// Composed per frame: records of intermediate prefab levels are part of what the instance edits are based on.
+		const std::optional<scn::prefab_desc::prefab_node> composed = oe::find_base_node(*m_assembler, *m_owner, m_target);
+		if (!composed) {
+			ImGui::TextDisabled("%s is not part of %s any more", m_selected_node->name.c_str(), m_owner->name.c_str());
+			return;
+		}
+		const scn::prefab_desc::prefab_node& base = *composed;
 		bool changed = false;
 
 		ImGui::Text("%s", base.name.c_str());

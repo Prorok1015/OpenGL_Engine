@@ -16,6 +16,8 @@ namespace edt
 		world_controller(shared_state& state, res::resource_system& res, desc::desc_system& desc);
 
 		void switch_to_world(int idx);
+		// The level has no worlds: no world is active (active_world_idx = -1) and the panels drop their selection.
+		void clear_active_world();
 		void create_world(const std::string& name);
 
 		// Callbacks set by the coordinator

@@ -3,35 +3,23 @@
 #include "desc_json_ops.h"
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <optional>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <ranges>
+#include <vector>
 
 namespace json = boost::json;
 
 namespace
 {
 	using prefab_node = scn::prefab_desc::prefab_node;
-	constexpr int max_nesting = 16;
 
 	bool same_target(const scn::override_record& record, std::span<const uint64_t> target, const std::string& component)
 	{
 		// remove / add_node records are not edits of the inspector and must survive its writes and resets
 		return record.op == scn::override_op::set && record.component == component && std::ranges::equal(record.target, target);
-	}
-
-	const prefab_node* find_in(const prefab_node& node, uint64_t id, int depth)
-	{
-		if (auto child = std::ranges::find(node.children, id, &prefab_node::node_id); child != node.children.end()) {
-			return &*child;
-		}
-		if (depth >= max_nesting) {
-			return nullptr;
-		}
-		if (const auto* prefab = edt::override_edit::referenced_prefab(node)) {
-			return find_in(prefab->get_root(), id, depth + 1);
-		}
-		return nullptr;
 	}
 
 	bool almost_equal(const glm::vec3& a, const glm::vec3& b)
@@ -73,24 +61,54 @@ const scn::prefab_desc* edt::override_edit::referenced_prefab(const prefab_node&
 	return nullptr;
 }
 
-const edt::override_edit::prefab_node* edt::override_edit::find_base_node(const prefab_node& owner, std::span<const uint64_t> target)
+std::optional<edt::override_edit::prefab_node> edt::override_edit::find_base_node(
+	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target)
 {
-	const prefab_node* node = &owner;
+	// The owner's own set records of this node are the edit being based; every other record is part of the base.
+	prefab_node stripped = owner;
+	std::erase_if(stripped.overrides, [&] (const scn::override_record& r) {
+		return r.op == scn::override_op::set && std::ranges::equal(r.target, target);
+	});
+
+	// Expanding level by level is what reconcile does: records of intermediate prefabs land in the nodes below them.
+	std::vector<std::unique_ptr<prefab_node>> expansions;
+	auto expand = [&] (const prefab_node& raw) -> const prefab_node* {
+		auto expanded = std::make_unique<prefab_node>();
+		res::tag source;
+		if (!scn::expand_instance(assembler, raw, *expanded, source)) return &raw;
+		expansions.push_back(std::move(expanded));
+		return expansions.back().get();
+	};
+
+	const prefab_node* raw = &stripped;
+	const prefab_node* composed = expand(*raw);
 	for (uint64_t id : target) {
-		node = find_in(*node, id, 0);
-		if (!node) return nullptr;
+		auto child = std::ranges::find(composed->children, id, &prefab_node::node_id);
+		if (child == composed->children.end()) return std::nullopt;
+		raw = &*child;
+		composed = expand(*raw);
 	}
-	return node;
+
+	// An instance node's own transform places it when it spells one out, otherwise the prefab root's does.
+	const prefab_node& placed = raw->has_transform ? *raw : *composed;
+	prefab_node base;
+	base.name = raw->name;
+	base.node_id = raw->node_id;
+	base.position = placed.position;
+	base.rotation = placed.rotation;
+	base.scale = placed.scale;
+	base.has_transform = true;
+	base.components = composed->components;
+	return base;
 }
 
 json::object edt::override_edit::component_json(const scn::prefab_desc::prefab_comp_node& comp)
 {
-	json::object out;
 	if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
-		comp.parent_desc->serialize(out);
+		auto parent = comp.parent_desc.get();
+		return scn::compose_component_json(comp, parent.get());
 	}
-	desc::json_deep_merge(out, comp.overrides);
-	return out;
+	return scn::compose_component_json(comp, nullptr);
 }
 
 json::object edt::override_edit::diff(const json::object& base, const json::object& edited)

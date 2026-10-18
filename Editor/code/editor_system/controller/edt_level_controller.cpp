@@ -244,9 +244,14 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		if (auto p = m_state.level_name.rfind('/');  p != std::string::npos) m_state.level_name = m_state.level_name.substr(p + 1);
 
 		// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
-		m_state.active_world_idx = 0;
 		m_state.is_dirty = false;
-		m_world_ctrl.switch_to_world(0);
+		if (m_state.world_names.empty()) {
+			egLOG_WARN("Editor/LoadLevel", "Level '{}' has no worlds", m_state.level_name);
+			m_world_ctrl.clear_active_world();
+		} else {
+			m_state.active_world_idx = 0;
+			m_world_ctrl.switch_to_world(0);
+		}
 	}
 }
 
@@ -351,26 +356,23 @@ void edt::level_controller::resync_worlds_after_reload()
 		desc_worlds.push_back(*world);
 	}
 
-	auto merged = merge_reloaded_worlds(desc_worlds, m_state.world_descs,
-		[&lvl](const scn::world_desc& w) { return lvl.has_world(w.get_name()); });
-	// The editor needs an active world (active_world_desc() is unchecked); keep the old arrays,
-	// switch_to_world already tolerates names missing from the level.
-	if (merged.empty()) {
-		egLOG_WARN("Editor/Reload", "Level '{}' has no worlds after reload, world arrays not resynced", lvl.get_tag().view());
+	// Worlds the desc lists but that failed to load are skipped above; those must not wipe the editor's worlds.
+	if (desc_worlds.empty() && !level_res->get_worlds().empty()) {
+		egLOG_WARN("Editor/Reload", "No world of level '{}' loaded after reload, world arrays not resynced", lvl.get_tag().view());
 		return;
 	}
-	m_state.world_descs = std::move(merged);
-	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
-
-	int idx = -1;
-	for (int i = 0; i < (int)m_state.world_names.size(); ++i) {
-		if (m_state.world_names[i] == active_name) { idx = i; break; }
-	}
+	// An empty list is a valid state (idx -1): the arrays are cleared so nothing can index a world that is gone.
+	const int idx = resync_world_arrays(desc_worlds, m_state.world_descs, m_state.world_names, m_state.worlds_systems_list, active_name,
+		[&lvl](const scn::world_desc& w) { return lvl.has_world(w.get_name()); });
 	if (idx < 0) {
 		if (!active_name.empty()) {
-			egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, switching to '{}'", active_name, m_state.world_names[0]);
+			egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, the level has no worlds", active_name);
 		}
-		idx = 0;
+		m_world_ctrl.clear_active_world();
+		return;
+	}
+	if (!active_name.empty() && m_state.world_names[idx] != active_name) {
+		egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, switching to '{}'", active_name, m_state.world_names[idx]);
 	}
 	m_state.active_world_idx = idx;
 	m_world_ctrl.switch_to_world(idx); // the active world may have been rebuilt without the editor camera

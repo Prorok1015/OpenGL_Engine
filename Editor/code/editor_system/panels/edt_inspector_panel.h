@@ -26,6 +26,7 @@ namespace edt
 		void set_on_node_changed(std::function<void()> cb);
 		void set_component_ui_registry(component_ui_registry* registry);
 		void set_desc_system(desc::desc_system* desc_system);
+		void set_assembler(scn::ecs_assembler* assembler);
 
 	protected:
 		void on_render() override;
@@ -46,6 +47,7 @@ namespace edt
 		std::vector<uint64_t>          m_target;
 		component_ui_registry*         m_ui_registry    = nullptr;
 		desc::desc_system*             m_desc_system    = nullptr;
+		scn::ecs_assembler*            m_assembler      = nullptr;
 		std::function<void()>          m_on_node_changed;
 		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
 		bool                           m_pending_commit = false;

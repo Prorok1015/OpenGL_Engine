@@ -33,8 +33,10 @@ void edt::scene_editor::create_entity(const std::string& type_name)
 		node.components[type_name] = std::move(comp);
 	}
 
+	auto* world = m_state.active_world_desc();
+	if (!world) return;
 	if (on_before_modify) on_before_modify();
-	m_state.active_world_desc().get_root().children.push_back(std::move(node));
+	world->get_root().children.push_back(std::move(node));
 	m_state.is_dirty = true;
 	serialize_and_push();
 }
@@ -43,25 +45,30 @@ void edt::scene_editor::create_entity_from_node(prefab_node node)
 {
 	if (node.node_id == desc::invalid_node_id)
 		node.node_id = desc::new_node_id();
+	auto* world = m_state.active_world_desc();
+	if (!world) return;
 	if (on_before_modify) on_before_modify();
-	m_state.active_world_desc().get_root().children.push_back(std::move(node));
+	world->get_root().children.push_back(std::move(node));
 	m_state.is_dirty = true;
 	serialize_and_push();
 }
 
 void edt::scene_editor::delete_entity(uint64_t node_id)
 {
+	auto* world = m_state.active_world_desc();
+	if (!world) return;
 	if (on_before_modify) on_before_modify();
-	remove_node_by_id(m_state.active_world_desc().get_root().children, node_id);
+	remove_node_by_id(world->get_root().children, node_id);
 	m_state.is_dirty = true;
 	serialize_and_push();
 }
 
 void edt::scene_editor::delete_entities(const std::vector<uint64_t>& node_ids)
 {
-	if (node_ids.empty()) return;
+	auto* world = m_state.active_world_desc();
+	if (node_ids.empty() || !world) return;
 	if (on_before_modify) on_before_modify();
-	auto& root_children = m_state.active_world_desc().get_root().children;
+	auto& root_children = world->get_root().children;
 	for (uint64_t id : node_ids)
 		remove_node_by_id(root_children, id);
 	m_state.is_dirty = true;
@@ -70,7 +77,9 @@ void edt::scene_editor::delete_entities(const std::vector<uint64_t>& node_ids)
 
 void edt::scene_editor::duplicate_entity(uint64_t node_id)
 {
-	auto* siblings = find_parent_children(m_state.active_world_desc().get_root().children, node_id);
+	auto* world = m_state.active_world_desc();
+	if (!world) return;
+	auto* siblings = find_parent_children(world->get_root().children, node_id);
 	if (!siblings) return;
 
 	auto it = std::find_if(siblings->begin(), siblings->end(),
@@ -89,9 +98,10 @@ void edt::scene_editor::duplicate_entity(uint64_t node_id)
 
 void edt::scene_editor::duplicate_entities(const std::vector<uint64_t>& node_ids)
 {
-	if (node_ids.empty()) return;
+	auto* world = m_state.active_world_desc();
+	if (node_ids.empty() || !world) return;
 	if (on_before_modify) on_before_modify();
-	auto& root_children = m_state.active_world_desc().get_root().children;
+	auto& root_children = world->get_root().children;
 	// Collect copies before any insertions to avoid iterator invalidation
 	struct pending_copy { std::vector<prefab_node>* siblings; std::size_t insert_after_idx; prefab_node node; };
 	std::vector<pending_copy> copies;
@@ -120,7 +130,9 @@ void edt::scene_editor::duplicate_entities(const std::vector<uint64_t>& node_ids
 
 void edt::scene_editor::reparent_entity(uint64_t node_id, uint64_t new_parent_id, int insert_index)
 {
-	auto& root_children = m_state.active_world_desc().get_root().children;
+	auto* world = m_state.active_world_desc();
+	if (!world) return;
+	auto& root_children = world->get_root().children;
 
 	auto* current_siblings = find_parent_children(root_children, node_id);
 	if (!current_siblings) return;
@@ -173,7 +185,9 @@ void edt::scene_editor::reparent_entity(uint64_t node_id, uint64_t new_parent_id
 void edt::scene_editor::on_transform_committed(
 	std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale)
 {
-	auto address = resolve_node_path(m_state.active_world_desc().get_root().children, path);
+	auto* world = m_state.active_world_desc();
+	if (!world) return;
+	auto address = resolve_node_path(world->get_root().children, path);
 	if (!address.owner) return;
 
 	if (address.target.empty()) {
@@ -183,7 +197,8 @@ void edt::scene_editor::on_transform_committed(
 		node.scale    = scale;
 		node.has_transform = true;
 	} else {
-		const prefab_node* base = override_edit::find_base_node(*address.owner, address.target);
+		if (!m_state.assembler) return;
+		const auto base = override_edit::find_base_node(*m_state.assembler, *address.owner, address.target);
 		if (!base) {
 			egLOG_WARN("editor", "no node below '{}' for the committed transform", address.owner->name);
 			return;
@@ -202,9 +217,11 @@ void edt::scene_editor::serialize_and_push()
 	auto lvl_mgr = m_state.lvl_manager.lock();
 	if (!lvl_mgr || !m_state.sfactory || !m_state.assembler) return;
 
-	const std::string world_name = m_state.active_world_idx < (int)m_state.world_names.size()
-		? m_state.world_names[m_state.active_world_idx]
-		: std::string(m_state.active_world_desc().get_name());
+	auto* world_desc = m_state.active_world_desc();
+	if (!world_desc) return;
+	const std::string world_name = m_state.active_world_name()
+		? *m_state.active_world_name()
+		: std::string(world_desc->get_name());
 
 	scn::level& lvl = lvl_mgr->get_level();
 	if (!lvl.has_world(world_name))
@@ -215,7 +232,7 @@ void edt::scene_editor::serialize_and_push()
 		if (on_save_camera) on_save_camera(world.state());
 	}
 	// TODO: Better just save the world on a disk. hot reload system will take care of reloading it in the editor and the game.
-	lvl.reload_world(world_name, m_state.active_world_desc(), *m_state.sfactory, *m_state.assembler);
+	lvl.reload_world(world_name, *world_desc, *m_state.sfactory, *m_state.assembler);
 
 	scn::world& world = lvl.get_world(world_name);
 	if (on_inject_camera) on_inject_camera(world.state());
@@ -226,10 +243,12 @@ void edt::scene_editor::serialize_and_push()
 void edt::scene_editor::sync_ecs_transforms_to_desc()
 {
 	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr || m_state.active_world_idx >= (int)m_state.world_names.size()) return;
+	auto* world_desc = m_state.active_world_desc();
+	const std::string* world_name = m_state.active_world_name();
+	if (!lvl_mgr || !world_desc || !world_name) return;
 
-	auto& children = m_state.active_world_desc().get_root().children;
-	auto& reg = lvl_mgr->get_level().get_world(m_state.world_names[m_state.active_world_idx]).state();
+	auto& children = world_desc->get_root().children;
+	auto& reg = lvl_mgr->get_level().get_world(*world_name).state();
 	reg.view<scn::node_id_component, scn::local_transform>().each(
 		[&children](const scn::node_id_component& id, const scn::local_transform& lt) {
 			if (id.path.empty()) return;
@@ -256,7 +275,9 @@ void edt::scene_editor::write_live_transform(prefab_node& node, const glm::mat4&
 
 std::string edt::scene_editor::make_unique_key(const std::string& base_name) const
 {
-	const auto& children = m_state.active_world_desc().get_root().children;
+	const auto* world = m_state.active_world_desc();
+	if (!world) return base_name;
+	const auto& children = world->get_root().children;
 	auto has_name = [&](const std::string& n) {
 		for (const auto& c : children)
 			if (c.name == n) return true;

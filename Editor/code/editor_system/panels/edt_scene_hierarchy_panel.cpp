@@ -153,8 +153,12 @@ namespace edt
 	void scene_hierarchy_panel::draw_prefab_children_readonly(
 		scn::prefab_desc::prefab_node& owner, const scn::prefab_desc::prefab_node& content, std::vector<uint64_t>& target)
 	{
+		constexpr std::size_t max_listed_depth = 16; // a prefab that instantiates itself must not unfold forever
+		if (target.size() >= max_listed_depth) return;
 		for (const auto& child : content.children) {
-			const bool has_sub = !child.children.empty();
+			// A node that instantiates another prefab lists that prefab's nodes below it; their ids extend `target`.
+			const scn::prefab_desc* nested = get_referenced_prefab(child);
+			const bool has_sub = !child.children.empty() || (nested && !nested->get_root().children.empty());
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_OpenOnArrow;
 			if (!has_sub) flags |= ImGuiTreeNodeFlags_Leaf;
 
@@ -190,6 +194,7 @@ namespace edt
 
 			if (opened) {
 				draw_prefab_children_readonly(owner, child, target);
+				if (nested) draw_prefab_children_readonly(owner, nested->get_root(), target);
 				ImGui::TreePop();
 			}
 			target.pop_back();
@@ -278,23 +283,7 @@ namespace edt
 				ImGui::OpenPopup("##new_world_popup");
 			}
 
-			ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Always);
-			if (ImGui::BeginPopup("##new_world_popup")) {
-				ImGui::TextUnformatted("New world name:");
-				ImGui::SetNextItemWidth(-1.f);
-				if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-				bool confirm = ImGui::InputText("##new_world_name", m_new_world_buf, sizeof(m_new_world_buf),
-					ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-
-				const bool valid = m_new_world_buf[0] != '\0';
-				if (!valid) ImGui::BeginDisabled();
-				if (ImGui::Button("Create", ImVec2(-1, 0)) || (confirm && valid)) {
-					if (m_on_create_world) m_on_create_world(m_new_world_buf);
-					ImGui::CloseCurrentPopup();
-				}
-				if (!valid) ImGui::EndDisabled();
-				ImGui::EndPopup();
-			}
+			draw_new_world_popup();
 
 			ImGui::EndTabBar();
 		}
@@ -302,10 +291,40 @@ namespace edt
 		m_force_tab_switch = false;
 	}
 
+	void scene_hierarchy_panel::draw_new_world_popup()
+	{
+		ImGui::SetNextWindowSize(ImVec2(280, 0), ImGuiCond_Always);
+		if (ImGui::BeginPopup("##new_world_popup")) {
+			ImGui::TextUnformatted("New world name:");
+			ImGui::SetNextItemWidth(-1.f);
+			if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+			bool confirm = ImGui::InputText("##new_world_name", m_new_world_buf, sizeof(m_new_world_buf),
+				ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+
+			const bool valid = m_new_world_buf[0] != '\0';
+			if (!valid) ImGui::BeginDisabled();
+			if (ImGui::Button("Create", ImVec2(-1, 0)) || (confirm && valid)) {
+				if (m_on_create_world) m_on_create_world(m_new_world_buf);
+				ImGui::CloseCurrentPopup();
+			}
+			if (!valid) ImGui::EndDisabled();
+			ImGui::EndPopup();
+		}
+	}
+
 	void scene_hierarchy_panel::on_render()
 	{
 		if (!m_world_names.empty()) {
 			draw_world_tabs();
+			ImGui::Separator();
+		} else {
+			// Without worlds there are no tabs, so this is the only way to get one.
+			ImGui::TextDisabled("This level has no worlds");
+			if (ImGui::Button("+ New World")) {
+				m_new_world_buf[0] = '\0';
+				ImGui::OpenPopup("##new_world_popup");
+			}
+			draw_new_world_popup();
 			ImGui::Separator();
 		}
 
@@ -314,8 +333,10 @@ namespace edt
 		ImGui::InputTextWithHint("##filter", "Filter by name...", m_filter, sizeof(m_filter));
 
 		// New root node button
+		ImGui::BeginDisabled(!m_world_desc);
 		if (ImGui::Button("+ New Entity"))
 			ImGui::OpenPopup("##new_entity_type");
+		ImGui::EndDisabled();
 
 		if (ImGui::BeginPopup("##new_entity_type")) {
 			struct { const char* label; std::string_view type; } types[] = {

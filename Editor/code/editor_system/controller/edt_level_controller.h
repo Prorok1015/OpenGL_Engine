@@ -4,6 +4,8 @@
 #include "desc_base.hpp"
 #include <algorithm>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 #include <functional>
 #include <boost/json/object.hpp>
@@ -56,6 +58,25 @@ namespace edt
 			if (!in_desc && is_alive(p)) merged.push_back(p);
 		}
 		return merged;
+	}
+
+	// Replaces the editor's world list by merge_reloaded_worlds(desc_worlds, worlds, is_alive) and re-derives the
+	// parallel arrays. Returns the index of the world to keep active: the one called `active_name`, else the first,
+	// -1 when no world is left (the arrays are then empty too).
+	template<typename World, typename Alive>
+	int resync_world_arrays(
+		const std::vector<World>& desc_worlds,
+		std::vector<World>& out_worlds,
+		std::vector<std::string>& out_names,
+		std::vector<std::vector<std::string>>& out_systems,
+		std::string_view active_name,
+		Alive&& is_alive)
+	{
+		out_worlds = merge_reloaded_worlds(desc_worlds, out_worlds, is_alive);
+		derive_world_arrays(out_worlds, out_names, out_systems);
+		if (out_names.empty()) return -1;
+		const auto it = std::find(out_names.begin(), out_names.end(), active_name);
+		return it == out_names.end() ? 0 : static_cast<int>(it - out_names.begin());
 	}
 
 	class level_controller

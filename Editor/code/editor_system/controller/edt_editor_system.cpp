@@ -91,6 +91,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_console_panel, m_asset_browser_panel,
 		*m_component_ui_registry, *this);
 	m_inspector_panel->set_desc_system(&desc_system);
+	m_inspector_panel->set_assembler(m_state.assembler);
 	init_helpers::setup_viewport_panel(
 		m_viewport_panel, input, ecs_input, *this, m_state, m_rnd, m_gui, m_res);
 
@@ -126,9 +127,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
 		auto lvl_mgr = m_state.lvl_manager.lock();
-		if (!lvl_mgr || m_state.active_world_idx < 0 || m_state.active_world_idx >= (int)m_state.world_names.size()) return nullptr;
+		const std::string* active = m_state.active_world_name();
+		if (!lvl_mgr || !active) return nullptr;
 		auto& level = lvl_mgr->get_level();
-		const auto& name = m_state.world_names[m_state.active_world_idx];
+		const auto& name = *active;
 		return level.has_world(name) ? &level.get_world(name).state() : nullptr;
 	});
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {

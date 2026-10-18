@@ -60,6 +60,12 @@ void edt::world_controller::switch_to_world(int idx)
 	if (on_world_switched) on_world_switched(idx);
 }
 
+void edt::world_controller::clear_active_world()
+{
+	m_state.active_world_idx = -1;
+	if (on_world_switched) on_world_switched(-1);
+}
+
 void edt::world_controller::create_world(const std::string& name)
 {
 	auto lvl_mgr = m_state.lvl_manager.lock();

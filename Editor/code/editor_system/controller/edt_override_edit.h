@@ -3,6 +3,7 @@
 #include <boost/json.hpp>
 #include <glm/vec3.hpp>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 
@@ -15,17 +16,18 @@ namespace edt::override_edit
 	// The prefab (loaded) that a node instantiates through one of its reference components, or null.
 	const scn::prefab_desc* referenced_prefab(const prefab_node& node);
 
-	// The node of the instantiated content that `target` addresses, or null if the content has no such node.
-	const prefab_node* find_base_node(const prefab_node& owner, std::span<const uint64_t> target);
+	// The node of the instantiated content that `target` addresses, composed the way reconcile builds it: records of
+	// every prefab level on the way are applied, only the owner's own edits of this node are left out. Name, id,
+	// placement and components are filled, children are not. Empty if the content has no such node.
+	std::optional<prefab_node> find_base_node(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target);
 
-	// A component as the base content defines it: the referenced desc's data with the component's own values on top.
+	// A component as the base content defines it: the referenced desc's data with the component's own values and edits on top.
 	boost::json::object component_json(const scn::prefab_desc::prefab_comp_node& comp);
 
 	// What `edited` changes compared to `base`: objects are compared key by key, everything else as a whole.
 	boost::json::object diff(const boost::json::object& base, const boost::json::object& edited);
 
 	// `base` with the owner's records for (target, component) applied: what the instance really has.
-	// Known limit: records an intermediate prefab carries for nodes of a prefab it instantiates are not in the base (#195).
 	boost::json::object effective_component(
 		const prefab_node& owner, std::span<const uint64_t> target, const std::string& component, boost::json::object base);
 

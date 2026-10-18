@@ -109,6 +109,19 @@ namespace scn {
 		const prefab_desc::prefab_node& node,
 		reconcile_mode mode);
 
+	// What reconcile builds for `node` before it spawns anything: the referenced prefab (itself expanded) plus the
+	// node's own components and children, then the node's override records, those forwarded from above included.
+	// False (`out` untouched) for a plain node without records; `source` is the prefab's tag, empty if none.
+	// Nested instances below `out` stay unexpanded: call it again on the child you descend into.
+	SNK_API bool expand_instance(
+		ecs_assembler& assembler,
+		const prefab_desc::prefab_node& node,
+		prefab_desc::prefab_node& out,
+		res::tag& source);
+
+	// A component as reconcile spawns it: serialize(parent), the component's own overrides, then its edits.
+	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);
+
 	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	SNK_API void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 }
