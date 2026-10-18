@@ -62,7 +62,7 @@ OpenGL_Engine/
 │       ├── gui/gui_system/         ← ImGui integration
 │       ├── image/                  ← Image loading
 │       ├── input/                  ← ECS input system
-│       └── game_system/            ← Gameplay systems, gs_game_init (desc registration)
+│       └── game_system/            ← Frame stages and loop service
 │
 ├── Editor/                         ← Editor application
 │   ├── main.cpp                    ← Module bootstrap (Core → Engine → Editor)

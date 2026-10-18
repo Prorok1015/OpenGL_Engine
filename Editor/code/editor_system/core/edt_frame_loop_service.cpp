@@ -3,7 +3,6 @@
 #include "inp_input_system.h"
 #include "inp_ecs_input_manager.h"
 #include "ecs_system.h"
-#include "gs_game_system.h"
 #include "wnd_window_system.h"
 #include "level/scn_level_manager.h"
 #include "level/scn_render_data_extractor.h"
