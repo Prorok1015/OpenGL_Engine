@@ -13,6 +13,5 @@ namespace rnd::driver::gl
 		virtual void bind(std::size_t index) override;
 	private:
 		GLuint renderer_id = 0;
-		std::size_t buffer_size = 0;
 	};
 }

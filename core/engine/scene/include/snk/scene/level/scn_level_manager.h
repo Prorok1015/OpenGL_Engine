@@ -27,7 +27,7 @@ namespace scn
 		level_manager(const level_manager&) = delete;
 		level_manager(level_manager&&) = default;
 		level_manager& operator=(const level_manager&) = delete;
-		level_manager& operator=(level_manager&&) = default;
+		level_manager& operator=(level_manager&&) = delete;
 
 		void update(std::chrono::duration<float> dt);
 

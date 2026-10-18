@@ -2,7 +2,6 @@
 #include "open_gl_specific.h"
 
 rnd::driver::gl::gl_ssbo_buffer::gl_ssbo_buffer(std::size_t size, std::size_t binding)
-	: buffer_size(size)
 {
 	glCreateBuffers(1, &renderer_id);
 	glNamedBufferData(renderer_id, size, nullptr, GL_DYNAMIC_DRAW);

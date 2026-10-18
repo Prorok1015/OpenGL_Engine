@@ -5,7 +5,6 @@ res::picture_resource::picture_resource(const tag& tag, glm::ivec2 size_1, int c
 	, data_(data_1)
 	, channels_(channels_1)
 	, size_(size_1)
-	, is_embedded_picture(true)
 {
 
 }
