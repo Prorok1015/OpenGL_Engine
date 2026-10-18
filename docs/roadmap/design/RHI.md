@@ -28,7 +28,7 @@
 **Материалы и варианты.** `shader_config` = `constant_data` (теги программы, `defines`, `constants`) + `runtime_data` (сэмплеры, `unordered_map<string, uniform_data>`) (`rnd_scene_shader_desc.h:87-99`).
 - Вариант — текстовая вставка `#define` и `#include` при загрузке (`rnd_scene_shader_desc.cpp:7-68`).
 - Ключ кеша программ — весь `shader_config` (`rnd_shader_manager.h:89`). Хеш XOR-ит только значения, без имён (`rnd_scene_shader_desc.h:101-113`); равенство — по `cdata` (`:115`).
-- `default_material_compiler` в extract зовёт `require_texture` (`rnd_material_compiler.cpp:15`). Он кладёт `uWorldMeshMatr`, `diffuseColor`, `emissiveColor`, `shininess` в map по имени (`:22-27`). Число направленных источников — вариант `DIRECTION_LIGHT_COUNT` (`:39`), скиннинг — `USE_ANIMATION` (`:43`). Extract добавляет `OPAQUE` и копирует конфиг для MIX (`scn_render_data_extractor.cpp:125-139`).
+- `default_material_compiler` в extract зовёт `require_texture` (`rnd_material_compiler.cpp:15`). Он кладёт `uWorldMeshMatr`, `diffuseColor`, `emissiveColor`, `shininess` в map по имени (`:22-27`). Число источников больше не вариант шейдера (#216 убрал `DIRECTION_LIGHT_COUNT`), скиннинг — `USE_ANIMATION` (`:43`). Extract добавляет `OPAQUE` и копирует конфиг для MIX (`scn_render_data_extractor.cpp:125-139`).
 - `draw_call_t` несёт `shader_config` по значению и `const std::vector<glm::mat4>* bone_matrices` (указатель в ECS) (`rnd_render_packet.hpp:91-102`); `sort_key` = тот же XOR-хеш.
 - Кости — один SSBO на 128 матриц, перезаписывается на **каждый** draw (`rnd_skinning_manager.cpp:19,60-62`).
 
@@ -36,7 +36,7 @@
 - Свободные uniform: `first_include.vert:2`, `phong_model_lib.frag:52-54`.
 - SSBO `hightlight` на binding 3 никто не привязывает (`phong_model_lib.frag:56`).
 - `#version 420` в `sky.vert`/`sky.frag`.
-- **Подозрение на баг std140**: `global_params::view_position` пишется по смещению 132 (glm без выравнивания), а `Matrices.cameraPosition` в std140 лежит по смещению 144 (`phong_model_lib.frag:1-7`). Шаг `point_light` в C++ 76 байт, в std140 — 80. Смещение `pointLights` в шейдере зависит от `DIRECTION_LIGHT_COUNT`, а C++ всегда пишет по смещению 768. Нужен отдельный bug-issue; исправляется в R5.
+- **Баг std140 исправлен в #216** (PR #231): явные паддинги и `static_assert(offsetof)` в `rnd_shader_manager.h`, `view_position` на 144, шаг `point_light` 80, `GlobalLights` с массивами `MAX_LIGHT_COUNT` и счётчиками `dirLightCount`/`pointLightCount`. Остаётся в R5: точечные источники extractor не заполняет; `MAX_LIGHT_COUNT` дублируется `#define` в `phong_model_lib.frag` без проверки.
 
 **Транзитивность (#212):** `rnd_render_system.h:5-7` включает менеджеры текстур, шейдеров и геометрии. Пассы получают их через `frame_context` (`rnd_frame_context.h:18-25`) и `configure_pass` (`rnd_render_system.h:73-77`).
 
@@ -88,7 +88,7 @@ pipeline_handle create_pipeline(const pipeline_desc&); void bind_pipeline(pipeli
 
 **Шаг 3 — bind groups, set/slot, per-draw данные (#117, закрывает #121).**
 - Наборы (§9.4):
-  - **0** — кадр и вид: `Matrices`, `GlobalLights` с полем `dir_light_count`; массивы фиксированной длины `MAX_LIGHT_COUNT`, поэтому `DIRECTION_LIGHT_COUNT` перестаёт быть вариантом и исчезает фриз при смене числа источников;
+  - **0** — кадр и вид: `Matrices`, `GlobalLights` (фиксированные массивы и счётчики уже введены в #216);
   - **1** — пасс: accum/reveal для композиции, cubemap неба;
   - **2** — материал: блок `MaterialParams { vec4 diffuseColor; vec4 emissiveColor; float shininess; }` + сэмплеры diffuse/specular/normal;
   - **3** — объект: `ObjectData { mat4 world; uint bone_offset; }` + SSBO `BoneMatrices` (кадровый) + `IndexesBuffer` скина.
@@ -186,7 +186,7 @@ buffer_handle create_buffer(const buffer_desc&); // {size, usage: vertex|index|u
   - (2) новая проверка `tools/headless/compare_shots.sh`: эталоны `smoke`/`game_view`/`checklist` (llvmpipe), `compare -metric AE -fuzz 2%` ниже порога;
   - (3) кадр на null без ошибок валидации;
   - (4) в Debug-сборке validation поверх GL в smoke-прогоне.
-  R5 меняет std140 (исправление бага) и шейдеры — эталон обновляется осознанно одним коммитом с объяснением.
+  R5 меняет раскладку блоков и шейдеры — эталон обновляется осознанно одним коммитом с объяснением.
 - **#109:** RHI-код только после PR-5, пути — уже `snk/driver/`, `snk/render/`. **#120/#122** делят `rnd_shader_manager`/`rnd_gl_shader` — не параллелить с R4/R5. **#212** закрывается в R5 (иначе заголовки правятся дважды).
 
 ## 6. Риски и вопросы владельцу

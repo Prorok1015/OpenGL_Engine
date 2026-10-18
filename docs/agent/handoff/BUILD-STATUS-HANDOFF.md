@@ -102,7 +102,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 работает. Запустить редактор и проверить глазами:
 1. Сцена рендерится (опак-меши, текстуры, цвета материалов — albedo/emissive).
 2. Skybox виден. 3. Анимированная/скелетная модель деформируется (USE_ANIMATION). 4. Debug-кости (`show_skeleton`).
-5. Направленный свет влияет на затенение (DIRECTION_LIGHT_COUNT). 6. MIX-материал в opaque И transparent.
+5. Направленный свет влияет на затенение (счётчик `dirLightCount` в `GlobalLights`, #216). 6. MIX-материал в opaque И transparent.
 7. Мультимир (переключение в иерархии). 8. Resize вьюпорта (регенерация RT). 9. Save level → load → diff JSON (round-trip).
 
 ---
