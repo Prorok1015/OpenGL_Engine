@@ -64,6 +64,7 @@
 - Невозможно `find_package(OpenGLEngine)` из внешнего проекта.
 - Нет `install(TARGETS ...)` ни для одного таргета.
 - Нет `CMakePresets.json` для стандартизации конфигурации.
+- **Решение владельца 2026-10-18 (#108):** пакет `snake_sdk` (вместо `OpenGLEngine` и `snk` из issue): `find_package(snake_sdk)`, таргеты `snk::engine`/`snk::engine_api`, сторонние библиотеки вшиты в SDK, static и shared; `cmake/SnkInstall.cmake`, проверка в CI — job `sdk-package`.
 
 ---
 

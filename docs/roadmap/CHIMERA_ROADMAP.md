@@ -134,6 +134,8 @@
 | ADR-12 | Сохранения | `save_service` на `user://`: транзакционная запись (уникальный tmp → flush/fsync → rename, ротация `.bak`), future с результатом, ошибка как значение, чтение с откатом на `.bak`. Состав снимка определяет игра | Исправляет `vfs_resolver::save_pending_write` |
 | ADR-13 | Сборка игры | Player-исполняемый файл (на базе `gs_loop_service` и `core/main.cpp`) + **cook**: обход зависимостей от стартовой сцены и корней через asset database, валидация (ADR-04/05), копирование в `build/<platform>`, исключение editor-only по флагам ассетов/протоколу `edt://`, отчёт | Использует граф зависимостей из ADR-05 |
 
+> **ADR-03, решение владельца 2026-10-18 (#108):** пакет называется `snake_sdk` (`find_package(snake_sdk)`, таргеты `snk::engine`, `snk::engine_api`), а не «SnakeEngine»; сторонние библиотеки вшиты в SDK; поддерживаются статическая и shared (`SNK_ENGINE_SHARED`) сборки. Реализация: `cmake/SnkInstall.cmake`.
+
 ---
 
 ## 5. Роадмап по вехам
