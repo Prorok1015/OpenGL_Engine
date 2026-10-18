@@ -1,6 +1,6 @@
-#include "engine_assert.h"
+#include <snk/common/engine_assert.h>
 
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 
 #include <cstdio>
 #include <cstdlib>

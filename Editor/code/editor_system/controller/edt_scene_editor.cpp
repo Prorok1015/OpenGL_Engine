@@ -6,8 +6,8 @@
 #include "level/scn_node_index.h"
 #include "scn_model.h"
 #include <snk/desc/desc_node_id.h>
-#include "logger/engine_log.h"
-#include "eng_transform_3d.hpp"
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/eng_transform_3d.hpp>
 #include <entt/entt.hpp>
 #include <algorithm>
 

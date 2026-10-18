@@ -6,8 +6,8 @@
 #include <entt/fwd.hpp>
 #include <algorithm>
 #include <functional>
-#include "eng_profiler.h"
-#include "engine_log.h"
+#include <snk/common/eng_profiler.h>
+#include <snk/common/logger/engine_log.h>
 
 scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
 	: m_hot_reload_manager(std::move(hot_manager))

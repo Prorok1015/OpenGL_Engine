@@ -9,8 +9,8 @@
 #include <entt/entity/fwd.hpp>
 #include "scn_world_desc.h"
 #include "scn_hot_reload_manager.h"
-#include "eng_profiler.h"
-#include "snk_api.h"
+#include <snk/common/eng_profiler.h>
+#include <snk/common/snk_api.h>
 
 namespace scn {
     inline constexpr size_t LEVEL_ID = ~0u;

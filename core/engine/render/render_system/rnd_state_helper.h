@@ -1,7 +1,7 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/driver/rnd_driver_interface.h>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace rnd
 {

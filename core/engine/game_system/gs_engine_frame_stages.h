@@ -1,6 +1,6 @@
 #pragma once
 #include <snk/application/app_frame_stage.h>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace gs
 {

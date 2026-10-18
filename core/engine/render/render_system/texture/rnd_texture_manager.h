@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/resource/res_tag.h>
 #include <snk/desc/desc_system.h>
 #include <snk/driver/rnd_driver_interface.h>
@@ -7,7 +7,7 @@
 #include "texture/rnd_texture_desc.h"
 #include <unordered_map>
 #include <functional>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace res { class resource_system; }
 

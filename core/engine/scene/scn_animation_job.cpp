@@ -3,7 +3,7 @@
 #include "scn_model.h"
 #include "scn_animation_collection_desc.h"
 #include <snk/ecs/ecs_event.hpp>
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 
 static entt::entity find_skeleton_root(entt::registry& reg, entt::entity ent)

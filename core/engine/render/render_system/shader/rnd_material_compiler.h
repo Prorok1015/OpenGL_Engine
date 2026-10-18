@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include "shader/rnd_scene_shader_desc.h"
 #include "scn_material_desc.h"
 

@@ -1,6 +1,6 @@
 #pragma once
 #include <memory>
-#include "engine_assert.h"
+#include <snk/common/engine_assert.h>
 
 namespace ds
 {

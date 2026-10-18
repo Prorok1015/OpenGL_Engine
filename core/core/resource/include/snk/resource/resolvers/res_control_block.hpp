@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include "engine_assert.h"
-#include "logger/engine_log.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/resource/resources/res_resource_base.h>
 
 namespace core::res

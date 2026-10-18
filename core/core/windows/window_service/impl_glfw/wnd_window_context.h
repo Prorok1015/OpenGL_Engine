@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/window/wnd_window.h>
 
 struct GLFWwindow;

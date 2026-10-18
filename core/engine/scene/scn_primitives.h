@@ -1,9 +1,9 @@
 #pragma once
-#include <common.h>
+#include <snk/common/common.h>
 #include "scn_model.h"
 #include "scn_mesh_nodes.hpp"
 #include "level/scn_level.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn
 {

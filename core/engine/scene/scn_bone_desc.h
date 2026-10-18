@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
 #include "scn_ecs_assembler.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	// Marks a node as a bone, adding bone_component with offset matrix and index.

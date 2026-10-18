@@ -1,10 +1,10 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/driver/rnd_buffer_layout.h>
-#include "ds/ds_rtree.h"
-#include "ds/ds_bbox.hpp"
-#include "snk_api.h"
+#include <snk/common/ds/ds_rtree.h>
+#include <snk/common/ds/ds_bbox.hpp>
+#include <snk/common/snk_api.h>
 
 namespace rnd
 {

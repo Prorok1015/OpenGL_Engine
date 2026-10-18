@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "engine_assert.h"
+#include <snk/common/engine_assert.h>
 
 BOOST_AUTO_TEST_SUITE(EngineAssertTests)
 

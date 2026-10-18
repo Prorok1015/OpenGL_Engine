@@ -7,8 +7,8 @@
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/adapters/res_adapter_worker.h>
-#include <engine_log.h>
-#include <cfg_api.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/config/cfg_api.h>
 
 namespace {
 	CFG_VAR_DEF_STRING(cfg_log_file,  "logger/file",  "logs/engine.log");

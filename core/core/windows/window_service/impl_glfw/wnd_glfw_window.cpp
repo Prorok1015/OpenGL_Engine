@@ -1,7 +1,7 @@
 #include "wnd_glfw_window.h"
 #include <GLFW/glfw3.h>
-#include <timer.hpp>
-#include <engine_log.h>
+#include <snk/common/timer.hpp>
+#include <snk/common/logger/engine_log.h>
 
 wnd::glfw_window::glfw_window(wnd::context ctx_)
     : m_ctx(std::move(ctx_)), m_size(m_ctx.get_header().size)

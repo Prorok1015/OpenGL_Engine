@@ -1,6 +1,6 @@
 #pragma once
-#include "ds/ds_store.hpp"
-#include "snk_api.h"
+#include <snk/common/ds/ds_store.hpp>
+#include <snk/common/snk_api.h>
 
 namespace desc {
 	class desc_system;

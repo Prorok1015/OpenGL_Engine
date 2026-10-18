@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 
 namespace eng {
 	class transform3d final

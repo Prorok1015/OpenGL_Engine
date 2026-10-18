@@ -6,7 +6,7 @@
 #include "scn_ecs_assembler.h"
 #include "scn_override_record.h"
 #include <glm/glm.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	class SNK_API prefab_desc : public desc::desc_base

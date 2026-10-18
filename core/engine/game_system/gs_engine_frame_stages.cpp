@@ -7,7 +7,7 @@
 #include "rnd_render_system.h"
 #include <snk/driver/rnd_swapchain_interface.h>
 #include <snk/application/app_loop_service_interface.h>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 void gs::register_scene_frame_stages(app::frame_stage_registry& registry)
 {

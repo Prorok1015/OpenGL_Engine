@@ -1,7 +1,7 @@
-#include "mem_stack_allocator.h"
+#include <snk/common/mem_stack_allocator.h>
 #include <new>
 #include <algorithm>
-#include "engine_assert.h"
+#include <snk/common/engine_assert.h>
 
 namespace ds {
 

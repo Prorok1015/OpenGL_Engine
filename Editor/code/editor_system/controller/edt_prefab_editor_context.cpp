@@ -12,9 +12,9 @@
 #include "scn_model.h"
 #include "scn_camera_component.hpp"
 #include "scn_camera_controller_component.hpp"
-#include "eng_transform_3d.hpp"
+#include <snk/common/eng_transform_3d.hpp>
 #include <snk/resource/resources/res_resource_text.h>
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <entt/entt.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>

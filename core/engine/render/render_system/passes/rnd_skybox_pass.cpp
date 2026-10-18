@@ -1,7 +1,7 @@
 #include "rnd_skybox_pass.h"
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
 
 namespace rnd {

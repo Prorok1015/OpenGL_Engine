@@ -1,6 +1,6 @@
 #pragma once
-#include "engine_assert.h"
-#include "logger/engine_log.h"
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <snk/ecs/ecs_invoker.hpp>
 #include <snk/ecs/ecs_system_access.hpp>

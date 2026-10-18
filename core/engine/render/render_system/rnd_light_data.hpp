@@ -2,7 +2,7 @@
 #include <memory_resource>
 #include <glm/vec4.hpp>
 #include "shader/rnd_shader_manager.h"
-#include "mem_allocator.h"
+#include <snk/common/mem_allocator.h>
 
 // rnd_light_data.hpp
 // Transport-layer light data for frame_context.

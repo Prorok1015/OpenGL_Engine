@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "timer.hpp"
+#include <snk/common/timer.hpp>
 #include <thread>
 
 BOOST_AUTO_TEST_SUITE(TimerTests)

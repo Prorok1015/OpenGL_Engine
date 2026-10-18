@@ -1,5 +1,5 @@
 #pragma once
-#include "ds/ds_store.hpp"
+#include <snk/common/ds/ds_store.hpp>
 
 namespace core::res {
 	void resource_init(ds::app_data_storage& data);

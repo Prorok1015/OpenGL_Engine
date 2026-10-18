@@ -1,7 +1,7 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/resource/res_tag.h>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/adapters/res_adapter_worker_base.hpp>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
@@ -10,7 +10,7 @@
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <set>
 #include <shared_mutex>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace std {
 	template<> struct hash<std::pair<ds::type_id, std::string>> {

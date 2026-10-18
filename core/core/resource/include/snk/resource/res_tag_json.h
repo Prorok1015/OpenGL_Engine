@@ -6,7 +6,7 @@
 // Include this header only in TUs that call json::value_from / json::value_to on a res::tag.
 #include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace json = boost::json;
 

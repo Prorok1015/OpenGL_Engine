@@ -1,6 +1,6 @@
 #pragma once
 #include "scn_prefab_desc.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn
 {

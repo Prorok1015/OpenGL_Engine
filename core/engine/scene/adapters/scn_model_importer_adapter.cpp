@@ -5,7 +5,7 @@
 #include <assimp/postprocess.h>
 
 #include <snk/resource/res_system.h>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 #include "geom/rnd_geometry_desc.h"
 #include <snk/resource/adapters/res_pct_adapter.h>
@@ -19,7 +19,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
 
-#include "ds/ds_svg_writer.hpp"
+#include <snk/common/ds/ds_svg_writer.hpp>
 #include <unordered_set>
 
 void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, res::resource_system& res_sys);

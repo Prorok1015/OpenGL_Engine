@@ -2,7 +2,7 @@
 #include <snk/ecs/ecs_traits.hpp>
 #include <entt/entt.hpp>
 #include <functional>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 
 namespace ecs {
 

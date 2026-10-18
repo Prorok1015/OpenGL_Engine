@@ -1,10 +1,10 @@
 #pragma once
-#include <common.h>
+#include <snk/common/common.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include "gui_backend_interface.h"
 #include "gui_menu_layout.h"
 #include "gui_layer_interface.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace gui
 {

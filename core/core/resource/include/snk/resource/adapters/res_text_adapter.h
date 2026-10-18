@@ -2,7 +2,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace res
 {

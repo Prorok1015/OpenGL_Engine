@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <iterator>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn
 {

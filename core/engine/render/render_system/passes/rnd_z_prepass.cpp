@@ -3,7 +3,7 @@
 #include "rnd_render_system.h"
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include "skinning/rnd_skinning_manager.h"
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
 
 namespace rnd {

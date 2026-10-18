@@ -1,5 +1,5 @@
 #include <snk/ecs/ecs_phase.hpp>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 
 bool ecs::phase_table::add_game_phase(std::string name, phase anchor, phase_side side)

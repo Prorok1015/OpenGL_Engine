@@ -2,7 +2,7 @@
 #include <chrono>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service_interface.h>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace app
 {

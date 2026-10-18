@@ -1,5 +1,5 @@
 #pragma once
-#include "ds_fixed_vector.hpp"
+#include <snk/common/ds/ds_fixed_vector.hpp>
 #include <vector>
 #include <variant>
 #include <glm/glm.hpp>
@@ -231,4 +231,4 @@ namespace ds
 	using rtree_q = rtree_dsp_t<T, K, quadratic_split_policy<3>>;
 }
 
-#include "ds_rtree.hpp"
+#include <snk/common/ds/ds_rtree.hpp>

@@ -1,7 +1,7 @@
 #pragma once
 #include <entt/fwd.hpp>
 #include <snk/ecs/ecs_system.h>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn
 {

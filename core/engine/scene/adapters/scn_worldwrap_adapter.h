@@ -5,7 +5,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include "level/scn_world_desc.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	class SNK_API worldwrap_adapter : public core::res::adapter_interface {

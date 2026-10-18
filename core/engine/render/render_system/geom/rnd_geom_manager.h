@@ -1,5 +1,5 @@
 #pragma once
-#include "common.h"
+#include <snk/common/common.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
 #include <snk/resource/res_tag.h>

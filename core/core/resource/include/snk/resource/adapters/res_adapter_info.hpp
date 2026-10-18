@@ -1,5 +1,5 @@
 #pragma once
-#include "ds/ds_type_id.hpp"
+#include <snk/common/ds/ds_type_id.hpp>
 #include <string>
 #include <vector>
 #include <initializer_list>

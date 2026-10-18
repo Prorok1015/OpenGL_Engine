@@ -1,5 +1,5 @@
 #pragma once
-#include "ds/ds_type_id.hpp"
+#include <snk/common/ds/ds_type_id.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>

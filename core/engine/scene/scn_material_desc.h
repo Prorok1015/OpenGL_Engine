@@ -3,7 +3,7 @@
 #include <snk/resource/res_tag.h>
 #include <string>
 #include <vector>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn
 {

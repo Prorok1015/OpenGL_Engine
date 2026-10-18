@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
 #include "scn_ecs_assembler.h"
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	class SNK_API directional_light_desc : public desc::desc_base

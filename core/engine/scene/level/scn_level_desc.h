@@ -4,7 +4,7 @@
 #include <snk/resource/resources/res_resource_handle.hpp>
 
 #include <vector>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn
 {

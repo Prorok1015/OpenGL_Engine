@@ -1,8 +1,8 @@
 #include "scn_transform_system.h"
-#include "common.h"
+#include <snk/common/common.h>
 #include "scn_model.h"
 #include <snk/ecs/ecs_event.hpp>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <unordered_set>
 
 namespace {

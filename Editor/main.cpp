@@ -1,10 +1,10 @@
 #include <snk/application/application.h>
-#include <cfg_api.h>
+#include <snk/config/cfg_api.h>
 #include <snk/application/app_module_loader.hpp>
-#include <ds/ds_store.hpp>
+#include <snk/common/ds/ds_store.hpp>
 #include <core_module.h>
 #include <engine_module.h>
-#include <engine_log.h>
+#include <snk/common/logger/engine_log.h>
 #include "editor_module.h"
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)

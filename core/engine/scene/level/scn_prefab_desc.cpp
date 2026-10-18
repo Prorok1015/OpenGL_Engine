@@ -1,5 +1,5 @@
 #include "scn_prefab_desc.h"
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include "scn_model.h"
 #include "scn_node_index.h"
 #include "scn_glm_json_convert.h"

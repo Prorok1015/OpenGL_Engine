@@ -1,7 +1,7 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
-#include "logger/engine_log.h"
-#include "common.h"
-#include "core_thread_utils.hpp"
+#include <snk/common/logger/engine_log.h>
+#include <snk/common/common.h>
+#include <snk/common/core_thread_utils.hpp>
 #include <fstream>
 #include <shared_mutex>
 

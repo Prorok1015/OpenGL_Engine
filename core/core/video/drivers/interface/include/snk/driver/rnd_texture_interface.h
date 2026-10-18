@@ -1,6 +1,6 @@
 #pragma once
-#include "common.h"
-#include "ds/ds_bit_frags.hpp"
+#include <snk/common/common.h>
+#include <snk/common/ds/ds_bit_frags.hpp>
 #include <glm/glm.hpp>
 
 namespace rnd::driver

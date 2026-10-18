@@ -1,5 +1,5 @@
 #include <snk/application/app_loop_service.h>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 app::loop_service::loop_service(frame_stage_registry& stages)
 	: m_stages(stages)

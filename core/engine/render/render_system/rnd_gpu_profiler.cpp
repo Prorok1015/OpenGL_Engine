@@ -1,6 +1,6 @@
 #include "rnd_gpu_profiler.h"
 #include <snk/driver/rnd_driver_interface.h>
-#include "engine_log.h"
+#include <snk/common/logger/engine_log.h>
 #include <cstring>
 #include <unordered_map>
 #include <memory>

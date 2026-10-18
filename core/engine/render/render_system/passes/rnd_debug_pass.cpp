@@ -2,7 +2,7 @@
 #include "rnd_render_packet.hpp"
 #include "rnd_render_system.h"
 #include <snk/driver/rnd_buffer_layout.h>
-#include "eng_profiler.h"
+#include <snk/common/eng_profiler.h>
 
 namespace rnd {
 

@@ -1,10 +1,10 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
 #include "scn_ecs_assembler.h"
-#include "ds/ds_fixed_vector.hpp"
+#include <snk/common/ds/ds_fixed_vector.hpp>
 
 #include <glm/glm.hpp>
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 namespace scn {
 	class SNK_API camera_desc : public desc::desc_base {

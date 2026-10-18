@@ -1,5 +1,5 @@
 #pragma once
-#include "ds/ds_type_id.hpp"
+#include <snk/common/ds/ds_type_id.hpp>
 #include <entt/entity/registry.hpp>
 #include <unordered_map>
 #include <vector>

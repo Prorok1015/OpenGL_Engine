@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "ds/ds_event.hpp"
+#include <snk/common/ds/ds_event.hpp>
 
 // Simple test listener function
 void simple_listener(int& value) {

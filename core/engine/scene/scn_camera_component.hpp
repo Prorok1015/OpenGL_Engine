@@ -1,6 +1,6 @@
 #pragma once
-#include "common.h"
-#include "ds/ds_fixed_vector.hpp"
+#include <snk/common/common.h>
+#include <snk/common/ds/ds_fixed_vector.hpp>
 
 namespace scn
 {

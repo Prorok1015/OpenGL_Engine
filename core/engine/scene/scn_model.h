@@ -1,5 +1,5 @@
 #pragma once
-#include <common.h>
+#include <snk/common/common.h>
 #include <texture/rnd_texture_manager.h>
 #include <snk/ecs/ecs_entity.h>
 #include "scn_primitives.h"

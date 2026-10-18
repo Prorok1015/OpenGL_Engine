@@ -2,7 +2,7 @@
 #include <entt/entt.hpp>
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_json_ops.h>
-#include "logger/engine_log.h"
+#include <snk/common/logger/engine_log.h>
 
 namespace scn {
 

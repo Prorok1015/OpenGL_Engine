@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <vector>
 #include <memory_resource>
-#include "mem_debug_resource.h"
+#include <snk/common/mem_debug_resource.h>
 
 // Allocation tracking exists only in debug builds (NDEBUG undefined); release is a pure
 // pass-through to upstream, so tracked counters stay at zero there (see mem_debug_resource.h).

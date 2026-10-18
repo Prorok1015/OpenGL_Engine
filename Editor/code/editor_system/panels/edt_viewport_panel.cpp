@@ -5,7 +5,7 @@
 #include "scn_camera_component.hpp"
 #include "scn_model.h"
 #include "level/scn_node_index.h"
-#include "eng_transform_3d.hpp"
+#include <snk/common/eng_transform_3d.hpp>
 #include "inp_events.hpp"
 #include "edt_guizmo.hpp"
 #include <imgui.h>

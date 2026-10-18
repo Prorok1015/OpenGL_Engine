@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "snk_api.h"
+#include <snk/common/snk_api.h>
 
 #ifndef NDEBUG
 #include <unordered_map>

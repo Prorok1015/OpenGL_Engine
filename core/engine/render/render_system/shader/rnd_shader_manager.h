@@ -1,5 +1,5 @@
 #pragma once
-#include <common.h>
+#include <snk/common/common.h>
 #include <cstddef>
 #include <snk/resource/res_tag.h>
 #include "rnd_scene_shader_desc.h"
