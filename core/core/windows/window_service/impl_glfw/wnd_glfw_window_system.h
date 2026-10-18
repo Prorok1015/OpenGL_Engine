@@ -23,7 +23,7 @@ namespace wnd
 		void init_windows_frame_time() const override;
 		void process_windows() const override;
 
-		std::shared_ptr<window> find_window(GLFWwindow* handle) const;
+		std::shared_ptr<glfw_window> find_window(GLFWwindow* handle) const;
 
 	private:
 		std::shared_ptr<glfw_window> make_window();

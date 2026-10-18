@@ -23,8 +23,9 @@ namespace {
     void window_size_callback(GLFWwindow* window, int width, int height) {
 		auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
         if (auto win = wndCreator.find_window(window)) {
+            win->set_size({ width, height });
             for (auto& listener : wndCreator.get_event_listeners()) {
-                listener->on_window_resize(win.get(), width, height);
+                listener->on_window_resize(static_cast<wnd::window*>(win.get()), width, height);
             }
         }
     }
@@ -182,8 +183,8 @@ std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::make_window()
     glfwSetWindowFocusCallback(wid, window_focus_callback);
 
     for (auto& listener : get_event_listeners()) {
-        listener->on_window_created(shared_window.get());
-		listener->on_window_resize(shared_window.get(), shared_window->get_size().x, shared_window->get_size().y);
+        listener->on_window_created(static_cast<wnd::window*>(shared_window.get()));
+		listener->on_window_resize(static_cast<wnd::window*>(shared_window.get()),shared_window->get_size().x, shared_window->get_size().y);
     }
 
     return shared_window;
@@ -194,7 +195,7 @@ std::shared_ptr<wnd::window> wnd::glfw_window_system::get_active_window()
     return find_window(m_active_window);
 }
 
-std::shared_ptr<wnd::window> wnd::glfw_window_system::find_window(GLFWwindow* handle) const
+std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::find_window(GLFWwindow* handle) const
 {
     auto it = m_windows_list.find(handle);
     return it != m_windows_list.end() ? it->second : nullptr;

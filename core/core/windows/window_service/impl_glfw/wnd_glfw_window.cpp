@@ -76,7 +76,8 @@ void wnd::glfw_window::set_title(std::string_view title)
         return;
     }
 
-    glfwSetWindowTitle(m_ctx.get_id(), title.data());
+    const std::string owned_title{ title };
+    glfwSetWindowTitle(m_ctx.get_id(), owned_title.c_str());
 }
 
 void wnd::glfw_window::set_logo(const ds::fixed_vector<wnd::window_image, 2>& images_)
@@ -87,7 +88,11 @@ void wnd::glfw_window::set_logo(const ds::fixed_vector<wnd::window_image, 2>& im
     }
 
     GLFWimage images[2]{};
+    int count = 0;
 	for (const auto& img : images_) {
+        if (count >= 2) {
+            break;
+        }
         switch (img.type)
         {
             case wnd::window_image::TYPE::LOGO:
@@ -100,9 +105,7 @@ void wnd::glfw_window::set_logo(const ds::fixed_vector<wnd::window_image, 2>& im
                     egLOG("window/logo", "Logo image width should be multiple of 4");
                     continue;
                 }
-                images[0].pixels = img.pixels;
-                images[0].width = img.width;
-                images[0].height = img.height;
+                images[count++] = GLFWimage{ img.width, img.height, img.pixels };
             }
 			break;
 
@@ -116,15 +119,15 @@ void wnd::glfw_window::set_logo(const ds::fixed_vector<wnd::window_image, 2>& im
                     egLOG("window/logo", "Logo small image width should be multiple of 4");
                     continue;
                 }
-                images[1].pixels = img.pixels;
-                images[1].width = img.width;
-                images[1].height = img.height;
+                images[count++] = GLFWimage{ img.width, img.height, img.pixels };
             }
             break;
         }
     }
 
-    glfwSetWindowIcon(m_ctx.get_id(), images_.size(), images);
+    if (count > 0) {
+        glfwSetWindowIcon(m_ctx.get_id(), count, images);
+    }
 }
 
 glm::ivec2 wnd::glfw_window::get_backbuffer_size() const

@@ -23,6 +23,7 @@ namespace wnd
 		void* get_native_handle() const override { return m_ctx.get_id(); }
 
 		GLFWwindow* get_glfw_handle() const { return m_ctx.get_id(); }
+		void set_size(glm::ivec2 size) { m_size = size; }
 		void on_update();
 		void update_frame();
 		void init_frame();
