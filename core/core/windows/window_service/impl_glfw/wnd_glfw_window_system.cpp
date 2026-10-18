@@ -57,6 +57,17 @@ namespace {
         }
     }
 
+    void cursor_enter_callback(GLFWwindow* window, int entered) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
+            inp::input_event evt;
+            evt.construct_payload<core::inp::cursor_entered_event>(entered != 0);
+            for (auto& listener : wndCreator.get_event_listeners()) {
+                listener->on_input_event(win.get(), evt);
+            }
+        }
+    }
+
     void mouse_button_callback(GLFWwindow* window, int button, int action, int mode) {
         if (button == -1 || action == GLFW_REPEAT) {
             return;
@@ -162,9 +173,6 @@ wnd::glfw_window_system::glfw_window_system()
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     m_active_window = make_window()->get_glfw_handle();
-    // The imgui backend is now created/initialised/shut down by the GUI layer (gui_init/gui_term),
-    // so window no longer depends on gui (EPIC-49 US-49-9). It exposes the native handle + DPI
-    // scale below for the GUI layer to set its backend up.
 }
 
 wnd::glfw_window_system::~glfw_window_system()
@@ -202,6 +210,7 @@ std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::make_window()
     glfwSetMouseButtonCallback(wid, mouse_button_callback);
     glfwSetScrollCallback(wid, device_scroll_callback);
     glfwSetCursorPosCallback(wid, cursor_position_callback);
+    glfwSetCursorEnterCallback(wid, cursor_enter_callback);
     glfwSetCharCallback(wid, char_callback);
     glfwSetFramebufferSizeCallback(wid, framebuffer_size_callback);
     glfwSetWindowContentScaleCallback(wid, content_scale_callback);

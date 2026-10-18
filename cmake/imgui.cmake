@@ -5,8 +5,8 @@
 # repo cannot track), the target is defined here, in a parent-tracked module included
 # from ThirdParty.cmake. Requires THIRD_PARTY_PATH to be set by the root CMakeLists.
 #
-# Backend implementations (imgui_impl_glfw.cpp, imgui_impl_opengl3.cpp) depend on
-# glfw/glad and are compiled by gui_gl_backend, not here.
+# The renderer backend implementation (imgui_impl_opengl3.cpp) is compiled by gui_gl_backend,
+# not here. There is no stock platform backend: gui::platform_backend feeds ImGui from wnd events.
 
 add_library(imgui STATIC
 	"${THIRD_PARTY_PATH}/imgui/imgui.cpp"
