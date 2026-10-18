@@ -2,10 +2,12 @@
 #include "test_scene_env.hpp"
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
+#include "rnd_validation_driver.h"
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/application/application.h>
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/config/cfg_api.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_system.h>
@@ -25,10 +27,13 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <string>
 
 // The engine frame on the null render backend: render_init picks drv_null because the null window has no
 // GL surface, and the real platform stages (extract, render, present) run the engine's passes over the
 // shipped smoke level without a display or a GPU. Only the GUI is absent: its backend is still GL.
+// The backend runs under the validation decorator (render/validate), so every frame is also checked
+// against the rules of docs/roadmap/design/RHI.md section 3.
 
 namespace fs = std::filesystem;
 
@@ -40,6 +45,18 @@ namespace fs = std::filesystem;
 #endif
 
 namespace {
+
+namespace vl = rnd::driver::validation;
+
+void set_render_validate(bool on)
+{
+	std::string program = "unit_tests";
+	std::string flag = "--set";
+	std::string name = "render/validate";
+	std::string value = on ? "true" : "false";
+	char* argv[] = { program.data(), flag.data(), name.data(), value.data() };
+	cfg::initialize_configs(static_cast<int>(std::size(argv)), argv);
+}
 
 // Serves the repository's res:// files (core/res, overridden by Editor/res) from RAM.
 void mount_repo_res(test_util::ram_resolver& ram)
@@ -83,6 +100,7 @@ struct null_engine_fixture
 		auto ecs_input = std::make_shared<inp::ecs_input_manager>();
 		inp::register_ecs_input_system(sfactory, ecs_input);
 
+		set_render_validate(true);
 		engine::render::render_init(storage);
 		scn::scene_init(storage);
 		gs::register_scene_frame_stages(stages);
@@ -95,19 +113,32 @@ struct null_engine_fixture
 		scene_types.reset();
 		scn::scene_term(storage);
 		engine::render::render_term(storage);
+		set_render_validate(false);
 		auto& rs = storage.require<res::resource_system>();
 		rs.unregistrate_adapter(scn::model_importer_adapter::INFO);
 		rs.unregistrate_adapter(core::desc::desc_adapter_t::INFO);
 	}
 
+	vl::swapchain* validating_swapchain()
+	{
+		return dynamic_cast<vl::swapchain*>(&storage.require<rnd::driver::swapchain_interface>());
+	}
+
+	vl::driver* validating_driver()
+	{
+		return dynamic_cast<vl::driver*>(storage.require<rnd::render_system>().get_driver());
+	}
+
 	rnd::driver::null::swapchain* swapchain()
 	{
-		return dynamic_cast<rnd::driver::null::swapchain*>(&storage.require<rnd::driver::swapchain_interface>());
+		auto* validating = validating_swapchain();
+		return validating ? dynamic_cast<rnd::driver::null::swapchain*>(&validating->inner()) : nullptr;
 	}
 
 	rnd::driver::null::driver* driver()
 	{
-		return dynamic_cast<rnd::driver::null::driver*>(storage.require<rnd::render_system>().get_driver());
+		auto* validating = validating_driver();
+		return validating ? dynamic_cast<rnd::driver::null::driver*>(&validating->inner()) : nullptr;
 	}
 
 	// Runs `frames` frames through application::run: a stage after `present` counts them and stops the loop.
@@ -141,6 +172,13 @@ BOOST_AUTO_TEST_CASE(WindowWithoutGlSurfaceSelectsTheNullBackend)
 	BOOST_REQUIRE(driver());
 }
 
+BOOST_AUTO_TEST_CASE(RenderValidateWrapsTheBackendInTheValidationDecorator)
+{
+	BOOST_REQUIRE(validating_swapchain());
+	BOOST_REQUIRE(validating_driver());
+	BOOST_TEST(&validating_driver()->state() == &validating_swapchain()->state());
+}
+
 BOOST_AUTO_TEST_CASE(SmokeLevelRunsThreeFramesWithoutAGpu)
 {
 	auto& levels = storage.require<scn::level_manager>();
@@ -151,6 +189,22 @@ BOOST_AUTO_TEST_CASE(SmokeLevelRunsThreeFramesWithoutAGpu)
 	BOOST_TEST(swapchain()->frames_presented() == 3u);
 	BOOST_TEST(driver()->calls().draws > 0u);
 	BOOST_TEST(driver()->stats().live_total() > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(SmokeLevelFramesPassValidationWithoutViolations)
+{
+	auto& levels = storage.require<scn::level_manager>();
+	BOOST_REQUIRE(levels.load(res::tag::make("levels/smoke_level.desc")));
+
+	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
+
+	const vl::validator& state = validating_driver()->state();
+	for (const auto& violation : state.violations()) {
+		BOOST_ERROR("frame " << violation.frame << ", " << vl::rule_name(violation.kind) << ": " << violation.message);
+	}
+	BOOST_TEST(state.total() == 0u);
+	BOOST_TEST(state.frame() == 3u);
+	BOOST_TEST(state.last_frame().draws > 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
