@@ -108,6 +108,26 @@ jobs:
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
+      # Generic desc serialization must reproduce the committed files byte for byte (EPIC-16 #233);
+      # --check lists every file whose re-serialized bytes differ and exits 1 if there is any.
+      - name: Build desc_resave
+        if: matrix.preset == 'ci-linux-gcc-debug'
+        run: cmake --build build/${{ matrix.preset }} --target desc_resave --parallel
+
+      - name: Check desc files are byte-stable
+        if: matrix.preset == 'ci-linux-gcc-debug'
+        shell: bash
+        run: |
+          tool=build/${{ matrix.preset }}/tools/desc_resave/desc_resave
+          status=0
+          echo "::group::core/res"
+          "$tool" core/res --check || status=1
+          echo "::endgroup::"
+          echo "::group::Editor/res"
+          "$tool" Editor/res --base core/res --check || status=1
+          echo "::endgroup::"
+          exit $status
+
   # One shared snk_engine library instead of static components (EPIC-29 #59). The Windows MSVC
   # variant is the 'Windows MSVC Shared' entry of the build matrix above.
   shared:
