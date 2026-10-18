@@ -113,14 +113,15 @@
     "adapters/desc_adapter_t.h",
     "desc_base.hpp",
     "desc_desc_service_init.h",
+    "desc_describe.h",
     "desc_guid.h",
+    "desc_hints.hpp",
     "desc_json_ops.h",
     "desc_node_id.h",
+    "desc_schema.h",
     "desc_system.h"
    ],
-   "internal": [
-    "desc_hints.hpp"
-   ]
+   "internal": []
   },
   {
    "name": "resource",
