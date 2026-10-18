@@ -42,7 +42,7 @@ Configuration:
   → core/core/config/cfg_api.h (config API)
 
 Application:
-  → core/core/application/app_module_interface.h (module_interface lifecycle, MODULE_PRIORITY)
+  → core/core/application/app_module_interface.h (module_interface lifecycle, depends_on)
   → core/core/application/app_module_loader.hpp (register/initialize/shutdown_all_services)
   → core/core/common/ds/ds_store.hpp (ds::app_data_storage service locator DI)
 

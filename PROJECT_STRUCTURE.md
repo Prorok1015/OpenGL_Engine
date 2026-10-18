@@ -50,7 +50,7 @@ OpenGL_Engine/
 │   │   ├── resource/               ← Resource system (VFS resolvers, adapters, cache)
 │   │   ├── desc/                   ← Descriptor system (JSON-based, desc_system)
 │   │   ├── config/                 ← Configuration system (cfg_api.h, CFG_VAR_DEF_*)
-│   │   ├── application/            ← App lifecycle, module_loader, MODULE_PRIORITY
+│   │   ├── application/            ← App lifecycle, module_loader (module states, depends_on order)
 │   │   ├── video/                  ← Render driver abstraction (OpenGL impls)
 │   │   ├── windows/                ← Platform window service
 │   │   ├── input/                  ← Input events

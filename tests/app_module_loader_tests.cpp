@@ -27,7 +27,6 @@ namespace {
 				throw std::runtime_error("shutdown failed: " + m_name);
 			}
 		}
-		app::modules::MODULE_PRIORITY get_priority() const override { return app::modules::MODULE_PRIORITY::CORE; }
 		std::string_view name() const override { return m_name; }
 		std::vector<std::string_view> depends_on() const override { return deps; }
 

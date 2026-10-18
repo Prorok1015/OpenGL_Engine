@@ -7,7 +7,6 @@
 #include "scn_scene_service_init.h"
 #include "scn_ecs_assembler.h"
 #include "skinning/rnd_skinning_manager.h"
-#include "app_loop_service_interface.h"
 
 void engine::engine_module::register_services(ds::app_data_storage& data)
 {
@@ -23,9 +22,6 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 
 void engine::engine_module::initialize_services(ds::app_data_storage& data)
 {
-	// Initialize engine services here
-	data.require<app::app_loop_service_interface>().init(data);
-
 	auto input_service = data.require_shared<inp::input_system>();
 	auto& win_service = data.require<wnd::window_system>();
 	if (input_service) {
