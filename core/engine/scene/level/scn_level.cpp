@@ -125,9 +125,8 @@ void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfa
 {
 	m_current_level_tag = desc.get_tag();
 	m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) }); // a fresh load replays from the seed
-	size_t world_index = 0;
     for (const auto& world_desc : desc.get_worlds()) {
-        auto& world = create_world(world_desc->get_name(), world_index++);
+        auto& world = create_world(world_desc->get_name(), acquire_free_world_id());
         add_world_systems(world, world_desc->get_systems(), sfactory);
 
         entt::entity e = world.state().create();
