@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/common.h>
+#include <snk/common/snk_api.h>
 // json::object appears only as a reference parameter in the pure-virtual serialize/deserialize
 // below, so a forward declaration suffices — this keeps full <boost/json.hpp> out of the ~25
 // headers that include desc_base.hpp (EPIC-49 US-49-4). TUs that actually call json methods
@@ -26,7 +27,9 @@ namespace desc
 		desc_base& operator=(desc_base&&) = default;
 		virtual ~desc_base() = default;
 
-		virtual void copy_to(desc_base& other) const  = 0;
+		// Copies this desc into `other`. An override assigns member-wise when `other` has its own type
+		// (copy_to_same); the default, and any other type, goes through serialize/deserialize.
+		virtual void copy_to(desc_base& other) const { copy_through_json(other); }
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) = 0;
 		virtual void serialize(json::object&) const = 0;
 
@@ -46,8 +49,23 @@ namespace desc
 	protected:
 		void set_type(const std::string_view type) { this->type = std::string{ type }; }
 
+		template<typename T>
+		void copy_to_same(const T& self, desc_base& other) const
+		{
+			if (T* typed = dynamic_cast<T*>(&other)) {
+				*typed = self;
+				return;
+			}
+			copy_through_json(other);
+		}
+
+		// serialize(this) -> deserialize(other): only keys both types know cross over. Needs the desc_system the
+		// instances were created by; without one nothing is copied.
+		SNK_API void copy_through_json(desc_base& other) const;
+
 	private:
 		std::string type;
 		std::string m_guid;
+		desc_system* m_system = nullptr;
 	};
 }
