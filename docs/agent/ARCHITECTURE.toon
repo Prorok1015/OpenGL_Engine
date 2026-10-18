@@ -91,8 +91,9 @@ world_order: scn::level stores worlds in std::unordered_map (HASH order).
         Editor derives parallel world arrays from the ordered world_descs vector
         (edt::derive_world_arrays), making desc order the single source of truth.
 systems: All inherit ecs::system_interface (empty base), registered via
-        ecs::system_factory::register_automatic_system<&fn, T>. The interface
-        has no update() — per-frame logic is the registered fn.
+        ecs::system_factory::register_system<&fn>(name, {phase, after, before, run_in_edit}).
+        The interface has no update() — per-frame logic is the registered fn; order = phase,
+        then after/before, ties by the world desc system list (no type-inferred ordering).
 components: POD structs, optional _component suffix
 dependency_resolution: Auto via invoker<Candidate>; system fn arg types
         (entt::view, ecs::bind_res) resolved through the registry context

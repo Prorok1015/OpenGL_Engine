@@ -13,7 +13,7 @@ overview: Fast navigation to important files and concepts
 
 ECS Framework:
   → core/core/ecs/ecs_system_interface.hpp (empty system_interface base)
-  → core/core/ecs/ecs_system.h (system_factory, register_automatic_system, dispatcher 0-4)
+  → core/core/ecs/ecs_system.h (system_factory, register_system with {phase, after, before, run_in_edit})
   → core/core/ecs/ecs_traits.hpp (world_salt, bind_res, dependency_extractor)
   → core/core/ecs/ecs_entity.h (entity helpers)
 
@@ -170,7 +170,7 @@ Render Pipeline:
 Add new System:
   1. File: core/engine/<module>/<prefix>_<name>_system.cpp (e.g. scn_transform_system.cpp)
   2. Inherit: ecs::system_interface (state only); logic = free/member fn
-  3. Register: sfactory.register_automatic_system<&fn, T>(name, instance)
+  3. Register: sfactory.register_system<&fn>(name, { .phase = ecs::phase::update, .after = {...} }[, instance])
 
 Add new ImGui Panel:
   1. File: Editor/code/editor_system/panels/edt_<name>_panel.h

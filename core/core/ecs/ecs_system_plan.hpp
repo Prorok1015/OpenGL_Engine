@@ -1,5 +1,6 @@
 #pragma once
 #include "ecs_system_registry.hpp"
+#include "snk_api.h"
 #include <span>
 #include <string>
 #include <string_view>
@@ -48,7 +49,7 @@ struct plan_diagnostic
 
 // The execution plan of one world, built once when the world loads or its system list changes:
 // a flat vector of phases, each with its systems already in order.
-struct system_plan
+struct SNK_API system_plan
 {
 	std::vector<phase_plan> phases; // same order as phase_table::ordered(), empty phases included
 	std::vector<plan_diagnostic> diagnostics;
@@ -77,7 +78,7 @@ struct plan_options
 //    an unregistered system is a warning.
 //  - Problems never throw or abort: they land in `diagnostics` (and the log). A cycle falls back
 //    to list order for the systems involved.
-[[nodiscard]] system_plan build_system_plan(
+[[nodiscard]] SNK_API system_plan build_system_plan(
 	const system_registry& registry,
 	std::span<const std::string> names,
 	plan_options options = {});

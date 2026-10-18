@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "snk_api.h"
 
 // ECS phases (ARCHITECTURE_REVIEW 9.5). The engine owns a fixed, ordered list of built-in phases;
 // a game may add its own *named* phase anchored before/after a built-in one, but cannot reorder
@@ -84,7 +85,7 @@ struct game_phase
 // Game phases sharing an anchor and side keep their registration order. Game phases run once per
 // frame; only the built-in `fixed_update` is stepped by the accumulator, even when a game phase
 // is anchored next to it.
-class phase_table
+class SNK_API phase_table
 {
 public:
 	// False (and nothing added) when the name is empty, is a built-in name or is already taken.
