@@ -2,8 +2,7 @@
 #include <cstddef>
 #include <string_view>
 #include <entt/fwd.hpp>
-
-namespace scn { class level; }
+#include "level/scn_level.h"
 
 namespace edt
 {
