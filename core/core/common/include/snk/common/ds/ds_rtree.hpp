@@ -1,6 +1,8 @@
 #pragma once
 #include <algorithm>
 #include <span>
+#include <vector>
+#include <snk/common/ds/ds_rtree.h>
 
 template<class T, class KEY, class POLICY, class STORAGE>
 void ds::rtree<T, KEY, POLICY, STORAGE>::build(std::vector<std::pair<KEY, T>> items)
