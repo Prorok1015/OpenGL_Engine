@@ -108,7 +108,8 @@ namespace edt
 		for (auto ent : reg->view<scn::camera_component>()) {
 			auto& cam = reg->get<scn::camera_component>(ent);
 			if (cam.color_targets.empty() || cam.color_targets[0] != s_prefab_cam_tag) continue;
-			cam.m_viewport.size = glm::ivec2(static_cast<int>(width), static_cast<int>(height));
+			const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
+			cam.m_viewport.size = edt::to_framebuffer_size({ width, height }, { fb_scale.x, fb_scale.y });
 			break;
 		}
 	}

@@ -1,4 +1,5 @@
 #include "edt_game_view_panel.h"
+#include "edt_input_manager.h"
 #include "rnd_render_system.h"
 #include "gui_system.h"
 #include "scn_camera_component.hpp"
@@ -61,7 +62,8 @@ namespace edt
 
 		const ImVec2 avail = ImGui::GetContentRegionAvail();
 		const entt::entity picked = m_selection.selected();
-		game_view::apply_viewports(*reg, picked, { static_cast<int>(avail.x), static_cast<int>(avail.y) });
+		const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
+		game_view::apply_viewports(*reg, picked, edt::to_framebuffer_size({ avail.x, avail.y }, { fb_scale.x, fb_scale.y }));
 
 		const auto& cam = reg->get<scn::camera_component>(picked);
 		auto* texture = m_rnd.get_texture_manager().find(cam.color_targets[0]);

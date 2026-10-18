@@ -45,11 +45,12 @@ namespace edt
 
 		// Update camera viewport so the renderer creates a correctly-sized render target
 		glm::mat4 cam_view(1.f), cam_proj(1.f);
+		const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
 		if (reg && size.x > 0 && size.y > 0) {
 			for (auto ent : reg->view<scn::camera_component>()) {
 				auto& cam = reg->get<scn::camera_component>(ent);
 				if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
-				cam.m_viewport.size = glm::ivec2(static_cast<int>(size.x), static_cast<int>(size.y));
+				cam.m_viewport.size = edt::to_framebuffer_size({ size.x, size.y }, { fb_scale.x, fb_scale.y });
 
 				if (reg->all_of<scn::local_transform>(ent))
 					cam_view = glm::inverse(reg->get<scn::local_transform>(ent).local);
@@ -61,7 +62,6 @@ namespace edt
 
 		// Block ECS input by default; allow only when cursor is over the viewport
 		ImVec2 win_pos = ImGui::GetWindowPos();
-		const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
 		const glm::ivec4 rect = edt::make_input_area({ win_pos.x, win_pos.y }, { size.x, size.y }, { fb_scale.x, fb_scale.y });
 		if (m_ecs_input)
 			m_ecs_input->set_input_area(glm::zero<glm::ivec4>(), true);
