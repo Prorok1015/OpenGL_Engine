@@ -26,22 +26,35 @@ void edt::world_controller::switch_to_world(int idx)
 	if (!lvl_mgr || idx < 0 || idx >= (int)m_state.world_names.size())
 		return;
 
-	if (!m_state.world_names.empty() && m_state.active_world_idx < (int)m_state.world_names.size()) {
-		if (on_save_camera) {
-			on_save_camera(lvl_mgr->get_level().get_world(m_state.world_names[m_state.active_world_idx]).state());
-		}
+	scn::level& lvl = lvl_mgr->get_level();
+
+	// The world we leave (or the target) may be gone: a level reload from the desc drops worlds
+	// created at runtime while world_names still lists them. Never assert on a stale name.
+	scn::world* target = lvl.find_world(m_state.world_names[idx]);
+	if (!target) {
+		egLOG_ERROR("Editor/SwitchWorld", "World '{}' is not in the level, switch ignored", m_state.world_names[idx]);
+		return;
+	}
+
+	scn::world* old_world = nullptr;
+	if (m_state.active_world_idx >= 0 && m_state.active_world_idx < (int)m_state.world_names.size()) {
+		old_world = lvl.find_world(m_state.world_names[m_state.active_world_idx]);
+	}
+
+	if (old_world && on_save_camera) {
+		on_save_camera(old_world->state());
 	}
 
 	// render_data_extractor renders every world's cameras into their targets. A left-over editor camera
 	// in the world we leave would keep drawing into the shared editor RT and overdraw the new world.
-	if (idx != m_state.active_world_idx && m_state.active_world_idx < (int)m_state.world_names.size()) {
-		auto& old_reg = lvl_mgr->get_level().get_world(m_state.world_names[m_state.active_world_idx]).state();
+	if (old_world && idx != m_state.active_world_idx) {
+		auto& old_reg = old_world->state();
 		for (auto ent : old_reg.view<edt::editor_camera_tag>())
 			old_reg.destroy(ent);
 	}
 
 	m_state.active_world_idx = idx;
-	scn::world& world = lvl_mgr->get_level().get_world(m_state.world_names[idx]);
+	scn::world& world = *target;
 
 	if (on_inject_camera) on_inject_camera(world.state());
 	if (on_world_switched) on_world_switched(idx);

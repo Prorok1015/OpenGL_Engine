@@ -93,6 +93,13 @@ namespace scn {
             return *m_worlds[std::string{ type }];
         }
 
+        // Null when there is no such world: for callers holding a name that can outlive the world
+        // (a level reload rebuilds the worlds from the desc and drops runtime-created ones).
+        scn::world* find_world(const std::string_view name) const {
+            auto it = m_worlds.find(std::string{ name });
+            return it == m_worlds.end() ? nullptr : it->second.get();
+        }
+
         scn::world& get_world(uint32_t id) const {
             ASSERT_MSG(m_worlds_by_id.contains(id), "level doesn't contain world with this ID");
             return *m_worlds_by_id.at(id);
