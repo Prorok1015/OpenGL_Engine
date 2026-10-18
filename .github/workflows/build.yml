@@ -243,3 +243,62 @@ jobs:
         run: |
           echo "unit_tests exited with ${UNIT_TESTS_EXIT}"
           exit 1
+
+  # Starts the editor on levels/smoke_level.desc under Xvfb + Mesa llvmpipe and checks that it
+  # survives, logs no errors and actually draws the scene (tools/headless/check_smoke.sh).
+  editor-smoke:
+    name: Editor visual smoke (Linux)
+    runs-on: ubuntu-latest
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
+            xvfb libgl1-mesa-dri xdotool imagemagick
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DENGINE_PROFILE_MODE=INTERNAL \
+            -DGLFW_BUILD_WAYLAND=OFF -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Build editor
+        run: cmake --build build/linux --target editor --parallel
+
+      - name: Smoke run (smoke_level)
+        run: |
+          tools/run_headless.sh --seconds 20 --size 1600x900 --shot headless_out/smoke/final.png \
+            -- --set editor/startup_level levels/smoke_level.desc
+          tools/headless/check_smoke.sh headless_out/smoke/final.png headless_out/smoke/editor.log
+
+      # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
+      - name: Smoke run (checklist actions)
+        run: |
+          tools/run_headless.sh --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
+            --shot headless_out/checklist/final.png \
+            -- --set editor/startup_level levels/smoke_level.desc
+          tools/headless/check_smoke.sh headless_out/checklist/final.png headless_out/checklist/editor.log \
+            200x200+860+450 0
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-smoke
+          path: headless_out
+          if-no-files-found: warn
