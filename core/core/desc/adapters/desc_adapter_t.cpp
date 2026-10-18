@@ -1,6 +1,7 @@
 #include "desc_adapter_t.h"
 #include "desc_system.h"
 #include "desc_base.hpp"
+#include "desc_guid.h"
 #include <algorithm>
 #include <format>
 #include <stdexcept>
@@ -75,12 +76,18 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 
     instance->deserialize(m_desc_system, json_body);
 
+    // Read regardless of protocol: the editor loads level files through a memory:// copy, and that copy must keep the guid.
+    // Only serialize() decides where __guid is written.
+    if (auto guid_it = json_body.find("__guid"); guid_it != json_body.end() && guid_it->value().is_string()) {
+        instance->set_guid(json::value_to<std::string>(guid_it->value()));
+    }
+
     return instance;
 }
 
 std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const
 {
-    const auto& desc_res = ds::polymorphic_pointer_cast<const ::desc::desc_base>(resource);
+    auto desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
 	json::object body;
 	desc_res->serialize(body);
 	// Most descs do not write their own __type, but deserialize() requires it.
@@ -88,6 +95,13 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
 		body["__type"] = std::string(desc_res->get_type());
 	}
 	m_desc_system.stamp_header(body);
+	// __guid identifies a file, so only res:// files get one; it is generated once and then kept on the instance.
+	if (tag.protocol() == ::res::tag::default_protocol()) {
+		if (desc_res->get_guid().empty()) {
+			desc_res->set_guid(::desc::generate_guid());
+		}
+		body["__guid"] = desc_res->get_guid();
+	}
     std::string data = json::serialize(body);
     std::vector<std::byte> byte_data;
     byte_data.resize(data.size());

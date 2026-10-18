@@ -7,6 +7,7 @@
 #include "level/scn_level_desc.h"
 #include "level/scn_prefab_desc.h"
 #include "desc_system.h"
+#include "desc_guid.h"
 #include "res_system.h"
 #include "resources/res_resource_text.h"
 #include <imgui.h>
@@ -75,6 +76,7 @@ void edt::level_controller::new_level()
 	m_state.level_name = "new_level";
 
 	m_state.level_tag = res::tag{};
+	m_state.level_guid.clear();
 	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
 	m_state.active_world_idx = 0;
@@ -217,6 +219,9 @@ bool edt::level_controller::show_exit_confirm()
 
 void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& handle)
 {
+	// Cleared first so a failed load cannot leave the previous level's guid to be written into the new file.
+	m_state.level_guid.clear();
+
 	auto level_manager = m_state.lvl_manager.lock();
 	if (!level_manager) return;
 
@@ -230,6 +235,7 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 			egLOG_ERROR("Editor/LoadLevel", "Level desc '{}' failed to load", m_state.editor_tag.view());
 			return;
 		}
+		m_state.level_guid = level_res->get_guid();
 		populate_worlds_from_level(level_res);
 		m_state.level_name = std::string(m_state.level_tag.relative());
 		if (auto p = m_state.level_name.rfind('.'); p != std::string::npos) m_state.level_name.resize(p);
@@ -282,7 +288,7 @@ boost::json::object edt::level_controller::load_desc_template(const std::string&
 boost::json::object edt::level_controller::build_level_json() const
 {
 	const std::string name = m_state.level_name.empty() ? "level" : m_state.level_name;
-	return scn::level_desc::build_json(name, m_state.world_descs, m_desc);
+	return scn::level_desc::build_json(name, m_state.world_descs, m_desc, m_state.level_guid);
 }
 
 bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
@@ -293,7 +299,11 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	const std::string stem = frel.stem().string();
 	const std::string level_name = stem.empty() ? m_state.level_name : stem;
 
-	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, m_desc);
+	// Saving the same file keeps its guid; saving to another path (Save As) writes a new file, which gets a new guid.
+	const bool same_file = m_state.level_tag.is_valid() && rel_path == m_state.level_tag.relative();
+	const std::string guid = (same_file && !m_state.level_guid.empty()) ? m_state.level_guid : desc::generate_guid();
+
+	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, m_desc, guid);
 
 	std::filesystem::path abs_path = res::resource_system::get_resources_path() / frel;
 	std::error_code ec;
@@ -305,6 +315,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	}
 
 	out << boost::json::serialize(level_json);
+	m_state.level_guid = guid;
 	m_state.level_name = level_name;
 	m_state.is_dirty   = false;
 	egLOG("Editor/Save", "Level saved to {}", abs_path.string());

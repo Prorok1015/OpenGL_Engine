@@ -21,6 +21,8 @@ namespace edt
 		res::tag editor_tag;
 		res::tag level_tag;
 		std::string level_name;
+		// __guid of the level file in level_tag; empty until the first save (or when loaded from a file without one).
+		std::string level_guid;
 		bool is_dirty = false;
 
 		// Multi-world state

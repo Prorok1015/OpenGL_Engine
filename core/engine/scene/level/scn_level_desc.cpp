@@ -22,7 +22,7 @@ void scn::level_desc::serialize(json::object& obj) const
 	obj["worlds"] = std::move(worlds_arr);
 }
 
-json::object scn::level_desc::build_json(std::string_view name, const std::vector<world_desc>& worlds, const desc::desc_system& desc_system)
+json::object scn::level_desc::build_json(std::string_view name, const std::vector<world_desc>& worlds, const desc::desc_system& desc_system, std::string_view guid)
 {
 	json::array worlds_arr;
 	for (const auto& wd : worlds) {
@@ -36,5 +36,8 @@ json::object scn::level_desc::build_json(std::string_view name, const std::vecto
 	obj["name"]   = std::string{ name };
 	obj["worlds"] = std::move(worlds_arr);
 	desc_system.stamp_header(obj);
+	if (!guid.empty()) {
+		obj["__guid"] = std::string{ guid };
+	}
 	return obj;
 }
