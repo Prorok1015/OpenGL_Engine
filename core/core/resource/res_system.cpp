@@ -3,6 +3,23 @@
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/config/cfg_api.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <utility>
+#include <vector>
+
+namespace {
+template <class MAP>
+void copy_tag_entries(MAP &map, const res::tag &from, const res::tag &to) {
+  std::vector<std::pair<res::cache_key, typename MAP::mapped_type>> found;
+  for (const auto &[key, value] : map) {
+    if (key.tag == from) {
+      found.emplace_back(key, value);
+    }
+  }
+  for (auto &[key, value] : found) {
+    map[res::cache_key{to, key.type}] = std::move(value);
+  }
+}
+} // namespace
 
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 // Optional lower layer (engine base resources). Empty = single-root setup.
@@ -51,17 +68,12 @@ void res::resource_system::register_alias(const res::tag &original,
 
   {
     std::unique_lock lock(m_cache_mutex);
-    if (auto it = m_cache.find(original); it != m_cache.end()) {
-      m_cache[alias] = it->second;
-    }
+    copy_tag_entries(m_cache, original, alias);
   }
 
   {
     std::unique_lock lock(m_pinning_mutex);
-    if (auto it = m_pinned_resources.find(original);
-        it != m_pinned_resources.end()) {
-      m_pinned_resources[alias] = it->second;
-    }
+    copy_tag_entries(m_pinned_resources, original, alias);
   }
 }
 
