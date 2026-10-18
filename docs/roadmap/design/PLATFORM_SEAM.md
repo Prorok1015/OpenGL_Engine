@@ -1,6 +1,6 @@
 # Дизайн: платформенный шов (эпик #10)
 
-**Issue:** #10 (stories #101–#104) · **Статус:** черновик, ждёт подтверждения владельца · Основа: `docs/roadmap/ARCHITECTURE_REVIEW.md` §3.4, §3.5, §9.2 (GLFW остаётся, SDL3 отклонён)
+**Issue:** #10 (stories #101–#104) · **Утверждено владельцем:** 2026-10-18 («да», своя ImGui-платформа) · Основа: `docs/roadmap/ARCHITECTURE_REVIEW.md` §3.4, §3.5, §9.2 (GLFW остаётся, SDL3 отклонён)
 
 ## 1. Как устроено сейчас
 
@@ -35,7 +35,8 @@
 - Content scale при смене монитора — пересборка шрифта ImGui по событию.
 
 **ImGui на две половины** (#104):
-- `gui::platform_backend` — `imgui_impl_glfw` через `InitForOther` (без GL), `install_callbacks=true` остаётся (ImGui сам цепляется к колбэкам — самый короткий путь; char ImGui получает так же, как сейчас).
+- `gui::platform_backend` — **свой**, без GLFW: питается событиями `wnd` (key/char/mouse/scroll/focus/cursor leave) через тот же слушатель, что и `inp::input_system`; `DisplaySize`/`DisplayFramebufferScale` и `dt` — из `wnd::window`; клавиши — наши коды → `ImGuiKey`; форма курсора и буфер обмена — через `wnd::window` (`set_cursor_shape`, `get/set_clipboard`). `imgui_impl_glfw` уходит. Один путь событий: кто получает ввод (ImGui или слои движка, `WantCapture*`) решается в одном месте; UI можно гонять подставными событиями в тестах.
+- Не переносим сейчас: геймпад (`NavEnableGamepad` снимается до задачи про геймпад в шве) и multi-viewport (не включён; docking работает).
 - `gui::renderer_backend` — `imgui_impl_opengl3` + `get_imgui_texture_from_texture` (без GLFW).
 - `gui_system` держит обе; собирает их `gui_init` (единственное место, где названы конкретные бэкенды). Мёртвые `set_display_size`/`set_input` удаляются.
 - Новые цели CMake добавить в whole-archive список `snk_engine` (`core/engine/CMakeLists.txt:62-64`).
@@ -47,7 +48,7 @@
 1. Namespace `wnd` и текущая папка остаются; отдельного `platform::` нет.
 2. Swap/vsync/загрузка glad — у драйвера через `wnd::gl_surface`; контекст рождается вместе с окном по хинтам из описания окна (вариант «драйвер сам создаёт контекст» невозможен на GLFW).
 3. Курсор и resize в событиях — framebuffer-координаты; редактор переводит ImGui-прямоугольники одним множителем.
-4. ImGui-платформа — stock `imgui_impl_glfw` с `install_callbacks=true` (не пересылать события вручную).
+4. ImGui-платформа — своя, на событиях `wnd` (`imgui_impl_glfw` удаляется); renderer — stock `imgui_impl_opengl3`.
 5. `null_window_system` — только для тестов.
 6. Порядок уничтожения сохраняется (окно до `glfwTerminate`, #182); swapchain разрушается до окна.
 
@@ -55,7 +56,7 @@
 
 1. #101: интерфейсы `wnd::window`/`window_system`, GLFW-реализация за ними, keycode-таблица в `.cpp`, `null_window_system` + тест. Поведение не меняется.
 2. #102: `wnd::gl_surface`, `gl::swapchain` в `drv_opengl`, `present` через swapchain; `window` перестаёт линковать `glad`/`drv_opengl`.
-3. #104: ImGui platform/renderer половины (после #102 — renderer половине нужен только драйвер).
-4. #103: char / framebuffer resize / content scale, курсор в framebuffer-координатах, перевод `input_area`, пересборка шрифта по смене scale.
+3. #103: char / framebuffer resize / content scale, курсор в framebuffer-координатах, перевод `input_area`, пересборка шрифта по смене scale; `wnd::window` получает форму курсора и буфер обмена.
+4. #104: своя ImGui-платформа на событиях `wnd` + renderer на `imgui_impl_opengl3`; `imgui_impl_glfw` удаляется.
 
-Шаги 3 и 4 независимы друг от друга после шага 2 и могут идти параллельно.
+Порядок строго последовательный: #104 нужны события и координаты из #103.
