@@ -216,7 +216,7 @@ Non-blocking ImGui modal — must be called every frame while open.
 ## Viewport & Gizmo
 
 - Viewport shows the editor camera texture (`__editor_camera_rt`); game cameras (no color target = backbuffer) are redirected to their own textures by the `editor_redirect_cameras` stage (before `extract`)
-- `ImTextureID` obtained via `gui::get_system().get_backend_interface()->get_imgui_texture_from_texture(tex)`
+- `ImTextureID` obtained via the injected `gui::gui_system&` (from `app_data_storage`, no global accessor): `gui.get_backend_interface()->get_imgui_texture_from_texture(tex)`
 - Gizmo modes: Translate / Rotate / Scale (keyboard shortcuts T/R/S)
 - Transform committed only on gizmo release (not every frame)
 - `edt_transform_gizmo.hpp` — pure ImGui DrawList implementation, no external gizmo lib
