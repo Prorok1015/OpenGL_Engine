@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(HasActiveWindowWithoutDisplayOrContext)
 	BOOST_TEST((win->get_backbuffer_size() == win->get_size()));
 	BOOST_TEST(!win->get_native_handle());
 	BOOST_TEST(win->get_content_scale() == 1.f);
-	BOOST_TEST(!sys.get_context());
+	BOOST_TEST(!win->gl_surface_ptr());
 	BOOST_TEST(!sys.get_active_native_handle());
 	BOOST_TEST(sys.get_active_content_scale() == 1.f);
 }

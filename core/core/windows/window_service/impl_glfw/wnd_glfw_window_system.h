@@ -14,7 +14,6 @@ namespace wnd
 		void init() override;
 
 		std::shared_ptr<window> get_active_window() override;
-		rnd::driver::render_context_interface* get_context() const override { return m_context.get(); }
 		void* get_active_native_handle() const override { return m_active_window; }
 		float get_active_content_scale() const override;
 		bool is_stop_running() override;
@@ -30,7 +29,6 @@ namespace wnd
 
 	private:
 		std::unordered_map<GLFWwindow*, std::shared_ptr<glfw_window>> m_windows_list;
-		std::unique_ptr<rnd::driver::render_context_interface> m_context = nullptr;
 
 		GLFWwindow* m_active_window = nullptr;
 		wnd::context::header m_title;
