@@ -16,7 +16,7 @@ namespace edt
 		// Physical roots behind res://, lowest layer first, top last (as the resource system mounts them).
 		void set_layers(std::vector<std::filesystem::path> layers);
 
-		// Callback fired on double-click on a file entry.
+		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
 			m_on_file_double_clicked = std::move(cb);
 		}

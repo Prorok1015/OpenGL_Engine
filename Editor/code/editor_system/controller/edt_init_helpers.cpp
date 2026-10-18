@@ -84,11 +84,10 @@ void setup_viewport_panel(
 	});
 	viewport->set_input_manager(input);
 	viewport->set_ecs_input_manager(ecs_input);
-	viewport->set_on_asset_dropped([&sys](const std::string& abs_path) {
+	viewport->set_on_asset_dropped([&sys](const std::string& res_rel_path) {
 		if (!sys.m_state.editor_tag.is_valid()) return;
-		auto base = res::resource_system::get_resources_path();
-		auto rel  = std::filesystem::path(abs_path).lexically_relative(base);
-		res::tag tag = res::tag::make(rel.string());
+		const std::filesystem::path rel{ res_rel_path };
+		res::tag tag = res::tag::make(res_rel_path);
 		const std::string stem = rel.stem().string();
 		sys.m_pending_desc_handle = sys.m_res.require<desc::desc_base>(tag);
 		sys.m_pending_desc_tag = tag;

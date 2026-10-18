@@ -74,9 +74,7 @@ namespace edt
 		if (depth > 6)
 			return;
 
-		for (const auto& sub : list_merged_directory(m_layers, rel_dir)) {
-			if (!sub.is_dir)
-				continue;
+		for (const auto& sub : list_merged_directory(m_layers, rel_dir, true)) {
 			const bool selected  = (sub.relative == m_current_rel);
 			// Auto-expand if m_current_rel is inside this subtree
 			const bool is_ancestor = [&] {
@@ -191,12 +189,12 @@ namespace edt
 				// Double-click on file
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 					if (m_on_file_double_clicked)
-						m_on_file_double_clicked(e.src.path);
+						m_on_file_double_clicked(e.src.relative);
 				}
 
-				// Drag source: full absolute path
+				// Drag source: path relative to res:// (the physical path would be wrong for lower layers)
 				if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-					const std::string full = e.src.path.string();
+					const std::string full = e.src.relative.generic_string();
 					ImGui::SetDragDropPayload("ASSET_PATH", full.c_str(), full.size() + 1);
 					ImGui::TextUnformatted(e.label.c_str());
 					ImGui::EndDragDropSource();
