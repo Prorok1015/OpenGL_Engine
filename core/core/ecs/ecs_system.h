@@ -4,6 +4,7 @@
 #include "ecs_command_buffer.hpp"
 #include "ecs_invoker.hpp"
 #include "ecs_system_interface.hpp"
+#include "ecs_system_registry.hpp"
 #include "ecs_traits.hpp"
 
 #include <entt/entt.hpp>
@@ -111,6 +112,40 @@ private:
     };
 
 public:
+    // --- Phase-based registration (ARCHITECTURE_REVIEW 9.5) ---
+    // The author declares phase / after / before / run_in_edit in code:
+    //   sf.register_system<&fn>("scn::transform_system", { .phase = ecs::phase::transform, .after = { "scn::depth_system" }, .run_in_edit = true });
+
+    // Stateless system (free function).
+    template <auto Candidate>
+    void register_system(const std::string &name, system_desc desc = {}) {
+        add_entry(name, std::move(desc), &run_stateless<Candidate>, [] { return system_instance{}; });
+    }
+
+    // Stateful system shared by every world that enables it.
+    template <auto Candidate, typename T>
+    requires std::is_base_of_v<ecs::system_interface, T>
+    void register_system(const std::string &name, system_desc desc, std::shared_ptr<T> system) {
+        add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
+                  [system] { return system_instance{ system, system.get() }; });
+    }
+
+    // Stateful system constructed in place, one instance per world that enables it.
+    template <auto Candidate, typename T, class... ARGS>
+    requires std::is_base_of_v<ecs::system_interface, T>
+    void register_system(const std::string &name, system_desc desc, ARGS... args) {
+        add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
+                  [args...] { auto system = std::make_shared<T>(args...); return system_instance{ system, system.get() }; });
+    }
+
+    // Adds a named game phase anchored next to a built-in one; false when the name is rejected.
+    bool add_game_phase(std::string name, phase anchor, phase_side side) {
+        return m_registry.phases().add_game_phase(std::move(name), anchor, side);
+    }
+
+    system_registry& registry() { return m_registry; }
+    const system_registry& registry() const { return m_registry; }
+
    // Register Stateful System (instance)
     template <auto Candidate, typename T>
     requires std::is_base_of_v<ecs::system_interface, T>
@@ -174,6 +209,22 @@ public:
     system_factory& operator=(system_factory&&) = default;
 
 private:
+    void add_entry(const std::string &name, system_desc desc, system_run_fn run, std::function<system_instance()> make) {
+        const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make) });
+        ASSERT_MSG(added, "ecs system already registered in the factory!");
+    }
+
+    template <auto Candidate>
+    static void run_stateless(void*, const runtime_context &ctx) {
+        invoker<Candidate>::invoke(ctx);
+    }
+
+    template <auto Candidate, class T>
+    static void run_stateful(void *self, const runtime_context &ctx) {
+        invoker<Candidate>::invoke(*static_cast<T*>(self), ctx);
+    }
+
+    system_registry m_registry;
     std::unordered_map<std::string, system_initializer_fn> m_systems;
 };
 } // namespace ecs
