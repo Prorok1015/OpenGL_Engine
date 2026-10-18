@@ -51,6 +51,8 @@ namespace res
 		resource_system& operator= (resource_system&&) = delete;
 
 		static std::filesystem::path get_resources_path();
+		// Physical roots behind res://, lowest layer first, top (writable) layer last; the same list the vfs resolver mounts.
+		static std::vector<std::filesystem::path> get_resource_layers();
 
 		bool exists(const tag& tag) const {
 			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {

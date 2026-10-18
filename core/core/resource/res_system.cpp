@@ -15,13 +15,11 @@ res::resource_system::resource_system() {
              "Resources path does not exist!");
 
   // Mount order: base first, top last (the last mount wins and receives writes).
-  std::vector<fs::path> layers;
+  std::vector<fs::path> layers = get_resource_layers();
   if (!cfg_res_base_path->empty()) {
     ASSERT_MSG(std::filesystem::exists(cfg_res_base_path),
                "Base resources path does not exist!");
-    layers.push_back(cfg_res_base_path->string());
   }
-  layers.push_back(cfg_res_path->string());
 
   auto &res_resolver =
       registrate_resolver<vfs_resolver>(tag::default_protocol(), layers);
@@ -69,5 +67,13 @@ void res::resource_system::register_alias(const res::tag &original,
 
 std::filesystem::path res::resource_system::get_resources_path() {
   return cfg_res_path;
+}
+
+std::vector<std::filesystem::path> res::resource_system::get_resource_layers() {
+  std::vector<std::filesystem::path> layers;
+  if (!cfg_res_base_path->empty())
+    layers.push_back(cfg_res_base_path->string());
+  layers.push_back(cfg_res_path->string());
+  return layers;
 }
 

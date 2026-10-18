@@ -49,7 +49,7 @@ void setup_panels(
 	inspector->set_component_ui_registry(&registry);
 	console = std::make_shared<console_panel>();
 	asset_browser = std::make_shared<asset_browser_panel>();
-	asset_browser->set_base_path(res::resource_system::get_resources_path());
+	asset_browser->set_layers(res::resource_system::get_resource_layers());
 
 	auto console_weak = std::weak_ptr<console_panel>(console);
 	engine::set_log_callback([console_weak](std::string_view category, engine::log_level level, std::string_view message) {

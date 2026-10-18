@@ -32,16 +32,16 @@ namespace edt
 	{
 	}
 
-	void asset_browser_panel::set_base_path(std::filesystem::path base_path)
+	void asset_browser_panel::set_layers(std::vector<std::filesystem::path> layers)
 	{
-		m_base_path  = std::move(base_path);
-		m_current_dir = m_base_path;
+		m_layers = std::move(layers);
+		m_current_rel.clear();
 		m_needs_refresh = true;
 	}
 
-	void asset_browser_panel::navigate_to(const std::filesystem::path& dir)
+	void asset_browser_panel::navigate_to(const std::filesystem::path& rel_dir)
 	{
-		m_current_dir   = dir;
+		m_current_rel   = rel_dir;
 		m_needs_refresh = true;
 	}
 
@@ -52,75 +52,37 @@ namespace edt
 		m_entries.clear();
 		m_needs_refresh = false;
 
-		if (m_current_dir.empty())
-			return;
-
-		std::error_code ec;
-		if (!std::filesystem::is_directory(m_current_dir, ec) || ec)
-			return;
-
 		const std::string search_lower = to_lower(m_search);
 
-		std::vector<entry> dirs, files;
-		for (auto it = std::filesystem::directory_iterator(m_current_dir, ec);
-		     !ec && it != std::filesystem::directory_iterator{};
-		     it.increment(ec))
-		{
-			std::error_code ec2;
-			const bool is_dir = it->is_directory(ec2);
-			if (ec2) continue;
-
-			const std::filesystem::path& p = it->path();
-			std::string name = p.filename().string();
-
+		for (auto& src : list_merged_directory(m_layers, m_current_rel)) {
 			// Search filter (dirs always pass)
-			if (!search_lower.empty() && !is_dir) {
-				if (to_lower(name).find(search_lower) == std::string::npos)
+			if (!search_lower.empty() && !src.is_dir) {
+				if (to_lower(src.name).find(search_lower) == std::string::npos)
 					continue;
 			}
-
-			if (is_dir) {
-				dirs.push_back({p, true, "[/] " + name});
-			} else {
-				files.push_back({p, false, std::string(get_file_icon(p)) + " " + name});
-			}
+			std::string label = src.is_dir
+				? "[/] " + src.name
+				: std::string(get_file_icon(src.path)) + " " + src.name;
+			m_entries.push_back({std::move(src), std::move(label)});
 		}
-
-		auto by_path = [](const entry& a, const entry& b) { return a.path < b.path; };
-		std::sort(dirs.begin(),  dirs.end(),  by_path);
-		std::sort(files.begin(), files.end(), by_path);
-
-		m_entries.insert(m_entries.end(), dirs.begin(),  dirs.end());
-		m_entries.insert(m_entries.end(), files.begin(), files.end());
 	}
 
 	// ─── left panel: directory tree ───────────────────────────────────────────
 
-	void asset_browser_panel::draw_dir_tree(const std::filesystem::path& dir, int depth)
+	void asset_browser_panel::draw_dir_tree(const std::filesystem::path& rel_dir, int depth)
 	{
 		if (depth > 6)
 			return;
 
-		std::error_code ec;
-		std::vector<std::filesystem::path> subdirs;
-		for (auto it = std::filesystem::directory_iterator(dir, ec);
-		     !ec && it != std::filesystem::directory_iterator{};
-		     it.increment(ec))
-		{
-			std::error_code ec2;
-			if (it->is_directory(ec2) && !ec2)
-				subdirs.push_back(it->path());
-		}
-		std::sort(subdirs.begin(), subdirs.end());
-
-		for (const auto& sub : subdirs) {
-			const std::string name = sub.filename().string();
-			const bool selected  = (sub == m_current_dir);
-			// Auto-expand if m_current_dir is inside this subtree
+		for (const auto& sub : list_merged_directory(m_layers, rel_dir)) {
+			if (!sub.is_dir)
+				continue;
+			const bool selected  = (sub.relative == m_current_rel);
+			// Auto-expand if m_current_rel is inside this subtree
 			const bool is_ancestor = [&] {
-				auto p = m_current_dir;
+				auto p = m_current_rel;
 				while (p != p.parent_path()) {
-					if (p == sub) return true;
+					if (p == sub.relative) return true;
 					p = p.parent_path();
 				}
 				return false;
@@ -132,13 +94,13 @@ namespace edt
 			if (selected)   flags |= ImGuiTreeNodeFlags_Selected;
 			if (is_ancestor) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
 
-			const bool opened = ImGui::TreeNodeEx(name.c_str(), flags);
+			const bool opened = ImGui::TreeNodeEx(sub.name.c_str(), flags);
 
 			if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
-				navigate_to(sub);
+				navigate_to(sub.relative);
 
 			if (opened) {
-				draw_dir_tree(sub, depth + 1);
+				draw_dir_tree(sub.relative, depth + 1);
 				ImGui::TreePop();
 			}
 		}
@@ -148,7 +110,7 @@ namespace edt
 
 	void asset_browser_panel::on_render()
 	{
-		if (m_base_path.empty()) {
+		if (m_layers.empty()) {
 			ImGui::TextDisabled("(base path not set)");
 			return;
 		}
@@ -157,12 +119,11 @@ namespace edt
 		{
 			// Root button
 			if (ImGui::SmallButton("res://"))
-				navigate_to(m_base_path);
+				navigate_to({});
 
-			// One button per path segment between base and current
-			auto rel = m_current_dir.lexically_relative(m_base_path);
-			std::filesystem::path cursor = m_base_path;
-			for (const auto& part : rel) {
+			// One button per path segment between res:// and current
+			std::filesystem::path cursor;
+			for (const auto& part : m_current_rel) {
 				if (part == ".") continue;
 				cursor /= part;
 				ImGui::SameLine(0.f, 2.f);
@@ -190,7 +151,7 @@ namespace edt
 		if (ImGui::TreeNodeEx("res://##directorytreeroot", ImGuiTreeNodeFlags_DefaultOpen |
 		                                ImGuiTreeNodeFlags_SpanFullWidth))
 		{
-			draw_dir_tree(m_base_path);
+			draw_dir_tree({});
 			ImGui::TreePop();
 		}
 		ImGui::PopStyleVar();
@@ -203,30 +164,39 @@ namespace edt
 
 		// ".." back button (disabled at root)
 		{
-			bool at_root = (m_current_dir == m_base_path);
+			bool at_root = m_current_rel.empty();
 			if (at_root) ImGui::BeginDisabled();
 			if (ImGui::Selectable("[/] .."))
-				navigate_to(m_current_dir.parent_path());
+				navigate_to(m_current_rel.parent_path());
 			if (at_root) ImGui::EndDisabled();
 		}
 
+		const size_t top_layer = m_layers.size() - 1;
 		for (const auto& e : m_entries) {
+			// Entries that come from a lower layer are dimmed; the tooltip names the layer root.
+			const bool from_lower_layer = e.src.layer != top_layer;
+			if (from_lower_layer)
+				ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 			ImGui::Selectable(e.label.c_str());
+			if (from_lower_layer)
+				ImGui::PopStyleColor();
+			if (ImGui::IsItemHovered() && m_layers.size() > 1)
+				ImGui::SetTooltip("layer %zu: %s", e.src.layer, m_layers[e.src.layer].string().c_str());
 
-			if (e.is_dir) {
+			if (e.src.is_dir) {
 				// Navigate into folder on click
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-					navigate_to(e.path);
+					navigate_to(e.src.relative);
 			} else {
 				// Double-click on file
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 					if (m_on_file_double_clicked)
-						m_on_file_double_clicked(e.path);
+						m_on_file_double_clicked(e.src.path);
 				}
 
 				// Drag source: full absolute path
 				if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-					const std::string full = e.path.string();
+					const std::string full = e.src.path.string();
 					ImGui::SetDragDropPayload("ASSET_PATH", full.c_str(), full.size() + 1);
 					ImGui::TextUnformatted(e.label.c_str());
 					ImGui::EndDragDropSource();
@@ -235,10 +205,9 @@ namespace edt
 				// Context menu
 				if (ImGui::BeginPopupContextItem()) {
 					if (ImGui::MenuItem("Copy path"))
-						ImGui::SetClipboardText(e.path.string().c_str());
+						ImGui::SetClipboardText(e.src.path.string().c_str());
 					if (ImGui::MenuItem("Copy relative path")) {
-						auto rel = e.path.lexically_relative(m_base_path);
-						ImGui::SetClipboardText(rel.string().c_str());
+						ImGui::SetClipboardText(e.src.relative.generic_string().c_str());
 					}
 					ImGui::EndPopup();
 				}
