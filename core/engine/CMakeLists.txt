@@ -4,6 +4,9 @@ if(SNK_ENGINE_SHARED)
 	# The umbrella is the shared library itself; see the WHOLE_ARCHIVE block at the end.
 	set(SNK_ENGINE_TARGET snk_engine)
 	add_library(snk_engine SHARED)
+	# Consumers (incl. the installed SDK, whose package cannot see the root directory's
+	# add_compile_definitions) need it for the SNK_API import side.
+	target_compile_definitions(snk_engine INTERFACE SNK_ENGINE_SHARED)
 else()
 	set(SNK_ENGINE_TARGET ${PROJECT_NAME})
 	add_library(${PROJECT_NAME} STATIC)

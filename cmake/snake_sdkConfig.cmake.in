@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+# ON when the engine was built as one shared library (SNK_ENGINE_SHARED).
+set(snake_sdk_ENGINE_SHARED @SNK_ENGINE_SHARED@)
+
+include("${CMAKE_CURRENT_LIST_DIR}/snake_sdkTargets.cmake")
+
+check_required_components(snake_sdk)

@@ -80,6 +80,8 @@ include(CompilerWarnings)
 include(SnkTarget)
 # snk_pch_*(): shared precompiled header (SNK_PCH), applied by snk_apply_target_defaults().
 include(SnkPch)
+# snk_install_sdk(): install/export rules and the snake_sdk package (called at the end).
+include(SnkInstall)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -109,3 +111,4 @@ add_test(NAME unit_tests COMMAND unit_tests)
 
 snk_pch_create_owner()
 snk_apply_target_defaults()
+snk_install_sdk()
