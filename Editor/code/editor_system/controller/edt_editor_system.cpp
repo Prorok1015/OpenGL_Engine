@@ -94,7 +94,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_inspector_panel->set_desc_system(&desc_system);
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
-		auto view_cache = std::make_shared<override_edit::view_cache>(*m_state.assembler);
+		auto view_cache = std::make_shared<override_edit::view_cache>(*m_state.assembler, m_state);
 		m_inspector_panel->set_view_cache(view_cache);
 		m_hierarchy_panel->set_view_cache(std::move(view_cache));
 	}

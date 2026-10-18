@@ -198,8 +198,8 @@ namespace edt
 		}
 		// Records of intermediate prefab levels are part of what the instance edits are based on. Composed once per
 		// selection or edit; the base leaves out the owner's own records of this node, so drags need no recompose.
-		m_view_cache->begin_frame();
-		const std::optional<scn::prefab_desc::prefab_node>& composed = m_view_cache->base(*m_owner, m_target);
+		const auto composed_holder = m_view_cache->base(*m_owner, m_target); // held for the whole frame of this panel
+		const std::optional<scn::prefab_desc::prefab_node>& composed = *composed_holder;
 		if (!composed) {
 			ImGui::TextDisabled("%s is not part of %s any more", m_selected_node->name.c_str(), m_owner->name.c_str());
 			return;

@@ -1,6 +1,7 @@
 #pragma once
 #include "res_tag.h"
 #include "level/scn_world_desc.h"
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <memory>
@@ -31,6 +32,9 @@ namespace edt
 		std::vector<std::vector<std::string>> worlds_systems_list;
 		// -1 (or any index outside world_descs) = the level has no worlds; use the accessors below, never index directly.
 		int active_world_idx = 0;
+		// Bumped on every change of the edited descs (and of which one is edited); caches of derived views key on it.
+		uint64_t desc_generation = 0;
+		void touch_descs() { ++desc_generation; }
 
 		bool has_active_world() const { return active_world_idx >= 0 && active_world_idx < static_cast<int>(world_descs.size()); }
 		scn::world_desc* active_world_desc() { return has_active_world() ? &world_descs[active_world_idx] : nullptr; }

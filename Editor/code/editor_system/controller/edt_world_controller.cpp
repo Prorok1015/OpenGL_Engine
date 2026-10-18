@@ -20,11 +20,11 @@ edt::world_controller::world_controller(shared_state& state, res::resource_syste
 {
 }
 
-void edt::world_controller::switch_to_world(int idx)
+bool edt::world_controller::switch_to_world(int idx)
 {
 	auto lvl_mgr = m_state.lvl_manager.lock();
 	if (!lvl_mgr || idx < 0 || idx >= (int)m_state.world_names.size())
-		return;
+		return false;
 
 	scn::level& lvl = lvl_mgr->get_level();
 
@@ -33,7 +33,7 @@ void edt::world_controller::switch_to_world(int idx)
 	scn::world* target = lvl.find_world(m_state.world_names[idx]);
 	if (!target) {
 		egLOG_ERROR("Editor/SwitchWorld", "World '{}' is not in the level, switch ignored", m_state.world_names[idx]);
-		return;
+		return false;
 	}
 
 	scn::world* old_world = nullptr;
@@ -54,15 +54,30 @@ void edt::world_controller::switch_to_world(int idx)
 	}
 
 	m_state.active_world_idx = idx;
+	m_state.touch_descs();
 	scn::world& world = *target;
 
 	if (on_inject_camera) on_inject_camera(world.state());
+	if (on_world_switched) on_world_switched(idx);
+	return true;
+}
+
+void edt::world_controller::select_world(int idx)
+{
+	if (idx < 0) {
+		clear_active_world();
+		return;
+	}
+	if (switch_to_world(idx)) return;
+	m_state.active_world_idx = idx;
+	m_state.touch_descs();
 	if (on_world_switched) on_world_switched(idx);
 }
 
 void edt::world_controller::clear_active_world()
 {
 	m_state.active_world_idx = -1;
+	m_state.touch_descs();
 	if (on_world_switched) on_world_switched(-1);
 }
 
@@ -120,5 +135,5 @@ void edt::world_controller::create_world(const std::string& name)
 	m_state.world_descs.push_back(*world_res);
 	m_state.worlds_systems_list.push_back(world_res->get_systems());
 	m_state.is_dirty = true;
-	switch_to_world((int)m_state.world_names.size() - 1);
+	select_world((int)m_state.world_names.size() - 1);
 }

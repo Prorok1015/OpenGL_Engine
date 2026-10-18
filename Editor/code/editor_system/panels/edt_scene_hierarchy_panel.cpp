@@ -160,11 +160,11 @@ namespace edt
 	{
 		constexpr std::size_t max_listed_depth = 16; // a prefab that instantiates itself must not unfold forever
 		if (!m_view_cache || target.size() >= max_listed_depth) return;
-		m_view_cache->begin_frame();
 
 		// The same composed expansion the inspector edits against: intermediate removes / add_nodes are in it.
-		const auto& kids = m_view_cache->children(owner, target);
-		for (const auto& kid : kids) {
+		// Held for the loop: a click below invalidates the cache, the listing being drawn must outlive that.
+		const auto kids = m_view_cache->children(owner, target);
+		for (const auto& kid : *kids) {
 			const auto& child = kid.node;
 			// The owner's own children are drawn by draw_node already.
 			if (target.empty() && std::ranges::any_of(owner.children, [&] (const auto& own) { return own.node_id == child.node_id; }))
@@ -325,7 +325,6 @@ namespace edt
 
 	void scene_hierarchy_panel::on_render()
 	{
-		if (m_view_cache) m_view_cache->begin_frame();
 		if (!m_world_names.empty()) {
 			draw_world_tabs();
 			ImGui::Separator();

@@ -701,22 +701,46 @@ BOOST_FIXTURE_TEST_CASE(Override_ListedChildrenAreTheComposedNodes, nested_fixtu
 	BOOST_TEST((ids == std::vector<uint64_t>{ 0xa1ull, 0xa2ull, 0xe1ull }));
 }
 
-BOOST_FIXTURE_TEST_CASE(Override_ViewCacheComposesOncePerSelectionAndEdit, nested_fixture)
+BOOST_FIXTURE_TEST_CASE(Override_ViewCacheComposesOncePerGeneration, nested_fixture)
 {
 	namespace oe = edt::override_edit;
 	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
-	oe::view_cache cache(*assembler);
+	const std::vector<uint64_t> mid{ 0xb1ull };
+	oe::view_cache cache(*assembler, state);
 
-	const auto& first = cache.base(robot(), tooth);
-	BOOST_REQUIRE(first);
-	BOOST_TEST(&cache.base(robot(), tooth) == &first); // a second frame reuses the composed base
-	BOOST_TEST(&cache.children(robot(), std::vector<uint64_t>{ 0xb1ull }) == &cache.children(robot(), std::vector<uint64_t>{ 0xb1ull }));
+	const auto first = cache.base(robot(), tooth);
+	BOOST_REQUIRE(first && *first);
+	BOOST_TEST(cache.base(robot(), tooth) == first); // a second frame reuses the composed base
+	const auto listing = cache.children(robot(), mid);
+	BOOST_TEST(cache.children(robot(), mid) == listing);
 
+	// a desc change moves the generation: the next ask composes again
+	state.touch_descs();
+	const auto second = cache.base(robot(), tooth);
+	BOOST_TEST(second != first);
+	BOOST_REQUIRE(second && *second);
+	BOOST_TEST(oe::component_json((*second)->components.at("stat")).at("hp").to_number<int64_t>() == 7);
+	BOOST_TEST(cache.children(robot(), mid) != listing);
+}
+
+BOOST_FIXTURE_TEST_CASE(Override_ViewCacheResultsOutliveInvalidation, nested_fixture)
+{
+	namespace oe = edt::override_edit;
+	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
+	const std::vector<uint64_t> mid{ 0xb1ull };
+	oe::view_cache cache(*assembler, state);
+
+	const auto base = cache.base(robot(), tooth);
+	const auto listing = cache.children(robot(), mid);
 	cache.invalidate();
-	cache.begin_frame();
-	const auto& again = cache.base(robot(), tooth);
-	BOOST_REQUIRE(again);
-	BOOST_TEST(oe::component_json(again->components.at("stat")).at("hp").to_number<int64_t>() == 7);
+	state.touch_descs();
+	cache.base(robot(), tooth); // recomposing must not free what is held
+	cache.children(robot(), mid);
+
+	BOOST_REQUIRE(base && *base);
+	BOOST_TEST((*base)->name == "tooth");
+	BOOST_REQUIRE(listing);
+	BOOST_TEST(listing->size() == 3u);
 }
 
 BOOST_FIXTURE_TEST_CASE(Editor_TransformCommitInsideANestedInstanceIsRelativeToTheComposedBase, nested_fixture)

@@ -81,9 +81,9 @@ void edt::level_controller::new_level()
 	m_state.level_guid.clear();
 	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
-	m_state.active_world_idx = 0;
+	m_state.active_world_idx = m_state.world_names.empty() ? -1 : 0;
 	m_state.is_dirty = true;
-	m_world_ctrl.switch_to_world(0);
+	m_world_ctrl.select_world(m_state.active_world_idx);
 }
 
 bool edt::level_controller::save_level()
@@ -250,7 +250,7 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 			m_world_ctrl.clear_active_world();
 		} else {
 			m_state.active_world_idx = 0;
-			m_world_ctrl.switch_to_world(0);
+			m_world_ctrl.select_world(0);
 		}
 	}
 }
@@ -368,6 +368,7 @@ void edt::apply_world_resync(
 		egLOG_WARN("Editor/Reload", "No world of the level loaded after reload, world arrays not resynced");
 		return;
 	}
+	state.touch_descs();
 
 	std::string active_name;
 	if (const std::string* active = state.active_world_name()) active_name = *active;
@@ -385,11 +386,13 @@ void edt::apply_world_resync(
 		egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, switching to '{}'", active_name, state.world_names[idx]);
 	}
 	state.active_world_idx = idx;
-	worlds.switch_to_world(idx); // the active world may have been rebuilt without the editor camera
+	// The world list was replaced, so every pointer into it is stale: the panels are told even if the switch is refused.
+	worlds.select_world(idx); // the active world may have been rebuilt without the editor camera
 }
 
 void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn::level_desc>& level_res)
 {
+	m_state.touch_descs();
 	m_state.world_descs.clear();
 	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();

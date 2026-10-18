@@ -15,7 +15,11 @@ namespace edt
 	public:
 		world_controller(shared_state& state, res::resource_system& res, desc::desc_system& desc);
 
-		void switch_to_world(int idx);
+		// False when it could not switch (no level, or the world is not in it); the state is left as it was then.
+		bool switch_to_world(int idx);
+		// switch_to_world / clear_active_world, and the panels hear about it even when the switch itself is refused:
+		// the world arrays may have been replaced, so whatever points into them must be re-resolved.
+		void select_world(int idx);
 		// The level has no worlds: no world is active (active_world_idx = -1) and the panels drop their selection.
 		void clear_active_world();
 		void create_world(const std::string& name);

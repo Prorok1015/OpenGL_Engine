@@ -1,6 +1,7 @@
 #include "edt_override_edit.h"
 #include "scn_glm_json_convert.h"
 #include "desc_json_ops.h"
+#include "edt_shared_state.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -149,37 +150,39 @@ std::optional<edt::override_edit::prefab_node> edt::override_edit::find_base_nod
 
 void edt::override_edit::view_cache::invalidate()
 {
-	// Panels may still be drawing from the old results this frame; they are released in begin_frame().
-	if (!m_bases.empty()) m_retired_bases.push_back(std::move(m_bases));
-	if (!m_children.empty()) m_retired_children.push_back(std::move(m_children));
 	m_bases.clear();
 	m_children.clear();
 }
 
-void edt::override_edit::view_cache::begin_frame()
+void edt::override_edit::view_cache::sync_generation()
 {
-	m_retired_bases.clear();
-	m_retired_children.clear();
+	if (m_generation == m_state.desc_generation) return;
+	invalidate();
+	m_generation = m_state.desc_generation;
 }
 
-const std::optional<edt::override_edit::prefab_node>& edt::override_edit::view_cache::base(
+std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::override_edit::view_cache::base(
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
+	sync_generation();
 	for (const auto& e : m_bases) {
-		if (e.owner == &owner && std::ranges::equal(e.target, target)) return e.value;
+		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
 	}
-	m_bases.push_back({ &owner, std::vector<uint64_t>(target.begin(), target.end()), find_base_node(m_assembler, owner, target) });
-	return m_bases.back().value;
+	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(m_assembler, owner, target));
+	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	return value;
 }
 
-const std::vector<edt::override_edit::listed_node>& edt::override_edit::view_cache::children(
+std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::override_edit::view_cache::children(
 	const prefab_node& owner, std::span<const uint64_t> target)
 {
+	sync_generation();
 	for (const auto& e : m_children) {
-		if (e.owner == &owner && std::ranges::equal(e.target, target)) return e.value;
+		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
 	}
-	m_children.push_back({ &owner, std::vector<uint64_t>(target.begin(), target.end()), list_children(m_assembler, owner, target) });
-	return m_children.back().value;
+	auto value = std::make_shared<const std::vector<listed_node>>(list_children(m_assembler, owner, target));
+	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
+	return value;
 }
 
 json::object edt::override_edit::component_json(const scn::prefab_desc::prefab_comp_node& comp)

@@ -3,7 +3,7 @@
 #include <boost/json.hpp>
 #include <glm/vec3.hpp>
 #include <cstdint>
-#include <deque>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -11,6 +11,8 @@
 
 // How the editor turns an edit inside a prefab instance into override records on the instance node.
 // `owner` is the node of the edited desc that instantiates the prefab, `target` the node-id path below it.
+namespace edt { struct shared_state; }
+
 namespace edt::override_edit
 {
 	using prefab_node = scn::prefab_desc::prefab_node;
@@ -34,31 +36,34 @@ namespace edt::override_edit
 	std::vector<listed_node> list_children(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target);
 
 	// Expanding an instance copies prefab content and logs about broken input, so the panels do it once per selection or
-	// edit instead of once per frame: results are kept per (owner, target) until invalidate().
-	// References handed out stay valid until the next begin_frame() after an invalidate().
+	// edit instead of once per frame. Results are kept per (active world, owner node id, target) and dropped as a whole
+	// when shared_state::desc_generation moves, so correctness does not depend on anyone calling invalidate().
+	// Callers get shared ownership: what they hold stays valid whatever the cache does meanwhile.
 	class view_cache
 	{
 	public:
-		explicit view_cache(scn::ecs_assembler& assembler) : m_assembler(assembler) {}
+		view_cache(scn::ecs_assembler& assembler, const shared_state& state) : m_assembler(assembler), m_state(state) {}
 
 		void invalidate();
-		void begin_frame();
-		const std::optional<prefab_node>& base(const prefab_node& owner, std::span<const uint64_t> target);
-		const std::vector<listed_node>& children(const prefab_node& owner, std::span<const uint64_t> target);
+		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
+		std::shared_ptr<const std::vector<listed_node>> children(const prefab_node& owner, std::span<const uint64_t> target);
 
 	private:
 		template<typename T>
 		struct entry {
-			const prefab_node* owner;
+			int world;
+			uint64_t owner_id;
 			std::vector<uint64_t> target;
-			T value;
+			std::shared_ptr<const T> value;
 		};
 
+		void sync_generation();
+
 		scn::ecs_assembler& m_assembler;
-		std::deque<entry<std::optional<prefab_node>>> m_bases;
-		std::deque<entry<std::vector<listed_node>>> m_children;
-		std::vector<std::deque<entry<std::optional<prefab_node>>>> m_retired_bases;
-		std::vector<std::deque<entry<std::vector<listed_node>>>> m_retired_children;
+		const shared_state& m_state;
+		uint64_t m_generation = 0;
+		std::vector<entry<std::optional<prefab_node>>> m_bases;
+		std::vector<entry<std::vector<listed_node>>> m_children;
 	};
 
 	// A component as the base content defines it: the referenced desc's data with the component's own values and edits on top.

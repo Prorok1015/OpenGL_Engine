@@ -124,6 +124,27 @@ BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
 	BOOST_TEST(state.active_world_desc() == &state.world_descs[0]);
 }
 
+BOOST_AUTO_TEST_CASE(Resync_TellsThePanelsEvenWhenTheSwitchIsRefused)
+{
+	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
+	BOOST_REQUIRE(mgr.load(tag));
+	populate(tag);
+	state.active_world_idx = 1; // "w1", which the reloaded desc no longer has
+
+	std::vector<int> switched;
+	world_ctrl.on_world_switched = [&switched](int idx) { switched.push_back(idx); };
+	const uint64_t generation = state.desc_generation;
+	std::vector<scn::world_desc> only_w0{ state.world_descs[0] };
+
+	// no level manager is attached to the state, so switch_to_world itself refuses
+	edt::apply_world_resync(state, world_ctrl, only_w0, true, [](const scn::world_desc&) { return false; });
+
+	BOOST_TEST((switched == std::vector<int>{ 0 }));
+	BOOST_TEST(state.active_world_idx == 0);
+	BOOST_TEST(state.world_names.size() == 1u);
+	BOOST_TEST(state.desc_generation != generation);
+}
+
 BOOST_AUTO_TEST_CASE(Resync_KeepsTheStateWhenTheDescListsWorldsButNoneLoaded)
 {
 	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
