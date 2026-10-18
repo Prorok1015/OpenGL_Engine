@@ -8,4 +8,4 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_DESC_SOURCES})
 
 snk_component_headers(${PROJECT_NAME})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::resource_system PRIVATE snk::ecs PUBLIC Boost::json)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::resource_system PRIVATE snk::ecs PUBLIC Boost::json PUBLIC Boost::describe PUBLIC Boost::mp11)
