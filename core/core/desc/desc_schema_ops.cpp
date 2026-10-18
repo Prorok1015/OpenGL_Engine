@@ -307,7 +307,7 @@ namespace desc
 				if (!in.is_bool()) {
 					return false;
 				}
-				store<std::uint8_t>(address, in.as_bool() ? 1 : 0);
+				store<std::uint8_t>(address, static_cast<std::uint8_t>(in.as_bool() ? 1 : 0));
 				return true;
 			case field_kind::i32:
 				if (!read_integer_of_kind(ops.kind, in, signed_value, unsigned_value)) {

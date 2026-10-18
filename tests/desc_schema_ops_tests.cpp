@@ -316,7 +316,7 @@ BOOST_AUTO_TEST_CASE(SchemaOnlyTypeIsSpawnedThroughTheFactoryMap)
 
 	fx.ds.unregister_desc("mymod.health");
 	BOOST_TEST(!fx.ds.is_registered("mymod.health"));
-	BOOST_TEST(fx.ds.create_instance("mymod.health", res::tag{}) == nullptr);
+	BOOST_CHECK(fx.ds.create_instance("mymod.health", res::tag{}) == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(SchemaOnlyDefaultsHonorWritePolicies)
@@ -336,7 +336,7 @@ BOOST_AUTO_TEST_CASE(SchemaOnlyTypeWithAnUnknownNestedSchemaGetsNoFactory)
 	desc::schema_registry resolve;
 	resolve.add(desc::parse_type_schema(parse(k_inner_schema)));
 	fx.ds.register_schema(desc::parse_type_schema(parse(k_health_schema), &resolve));
-	BOOST_TEST(fx.ds.find_schema("mymod.health") != nullptr);
+	BOOST_CHECK(fx.ds.find_schema("mymod.health") != nullptr);
 	BOOST_TEST(!fx.ds.is_registered("mymod.health"));
 }
 
@@ -349,7 +349,7 @@ BOOST_AUTO_TEST_CASE(DescribedTypeRegisteredThroughTheSystemKeepsItsFactory)
 
 	auto instance = fx.ds.create_instance("ops.widget", res::tag{});
 	BOOST_REQUIRE(instance);
-	BOOST_TEST(dynamic_cast<ops_test::widget*>(instance.get()) != nullptr);
+	BOOST_CHECK(dynamic_cast<ops_test::widget*>(instance.get()) != nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(CopyBetweenSameSchemaIsMemberWise)
