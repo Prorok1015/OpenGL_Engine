@@ -1,6 +1,6 @@
 # Handoff: Фаза 0 (подготовка движка к ТЗ «Химера») — статус
 
-**Обновлено:** 2026-10-18 · **Ветка:** `aibranch` (дефолт — `main`) · **Трекер:** [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues), [milestones](https://github.com/Prorok1015/OpenGL_Engine/milestones)
+**Обновлено:** 2026-10-18 (вечер) · **Ветка:** `aibranch` (дефолт — `main`) · **Трекер:** [GitHub Issues](https://github.com/Prorok1015/OpenGL_Engine/issues), [milestones](https://github.com/Prorok1015/OpenGL_Engine/milestones)
 
 Этот файл — точка входа для новой сессии: прочитав его, можно продолжить работу.
 
@@ -42,15 +42,17 @@
 ## 4. Этап C — прогресс (2026-10-18)
 
 **Сделано (в `aibranch`):**
-- Баги #81, #82, #83, #84, #169, #171, #173.
-- EPIC-29 (#6): #58 хранилище сервисов (стабильные ключи, LIFO), #61 DI вместо `get_system()` (глобальные аксессоры удалены), #60 `registration_scope` (+#170), #62 состояния модулей, load/unload, C-точка входа. Дизайн: `docs/roadmap/design/EPIC-29_SERVICES_DLL.md`.
-- Форматы данных (#7): #86 миграции и `__version`, #87 `__guid`, #63 `node_id` + индекс, #88 формат v2 (дети массивом), общий `reconcile`, `tools/desc_resave`, все `.desc` репозитория в v2. Дизайн: `docs/roadmap/design/DATA_FORMATS_V2.md`.
-- CMake (#11): #107 `snk::compiler_warnings`, #106 абсолютные пути убраны.
-- Хвосты A/B (#4): решения по `LEGACY_TEMPLATES` (удалены лишние уровни и тестовые картинки), чек-лист ручной проверки на Windows — в #55.
+- Баги #81–#84, #169, #171, #173, #175, #177, #178, #179, #181, #182; краш Clang 18; закрытие файла в резолвере до сигнала (Windows).
+- EPIC-29 (#6) целиком: #58, #60 (+#170), #61, #62, #59 (PIC/visibility/shared `snk_engine`). Дизайн: `docs/roadmap/design/EPIC-29_SERVICES_DLL.md`.
+- EPIC-50 (#8) явные фазы ECS: #89–#95, #79; камера в `pre_update` (#179).
+- Форматы данных (#7): #86, #87, #63, #88, #85 (записи overrides + глубокое слияние, prefab/world v3, флаг `has_transform`) → #64, #65. Дизайн: `docs/roadmap/design/DATA_FORMATS_V2.md`.
+- Ресурсы слоями #176 (+#53): `core/res` → `Editor/res`.
+- CMake/CI (#11): #107, #106, #108 SDK `snake_sdk` (find_package, сторонние внутри, static+shared, CI-потребитель), #180 ускорение (ccache/sccache, PCH, `SNK_ASSIMP_FORMATS`, пресеты `ci-*`: CI ~21 мин → единицы минут), #54, #56 визуальный smoke в CI.
+- Хвосты A/B (#4): `LEGACY_TEMPLATES` решены, `CMakeUserPresets.json` удалён, чек-лист Windows в #55.
 
-**В работе:** EPIC-50 явные фазы ECS (#89–#95, +#79), #59 PIC/visibility/shared-сборка, #176 слои ресурсов (ядро `core/res` → редактор → проект), #54 `<iostream>`, #56 визуальный smoke-тест в CI.
+**В работе:** #9 цикл кадра + цель рендера камеры — PR #189 (дизайн `docs/roadmap/design/FRAME_LOOP.md`).
 
-**Осталось по этапу C:** форматы шаг 5 (записи overrides + deep merge, #85 → закрывает #64/#65) и шаг 6 (редактор по `node_id`, #172); цикл кадра и player (#9); платформенный шов (#10); остаток #11 (#108, #109, #174, #105); баги #175, #177, #79.
+**Осталось по этапу C:** #172 (редактор по `node_id`, override-записи из инспектора), #10 платформенный шов, #109 public/internal заголовки, #174 предупреждения, #186 (hot reload теряет миры редактора), #105 (ждёт EPIC-34).
 
 **Решение владельца — ресурсы слоями:** в ядре (`core/res`) базовые ресурсы, чтобы модели рисовались «из коробки» в любом новом проекте; редактор и игра добавляют шаблоны и переопределения; `res://` ищется проект → редактор → ядро.
 
