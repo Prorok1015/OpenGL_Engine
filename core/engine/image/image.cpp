@@ -3,7 +3,6 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 
-#include <iostream>
 #include <string>
 #include <stdexcept>
 #include <array>

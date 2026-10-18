@@ -7,7 +7,7 @@ Assimp::IOStream* scn::engine_assimp_resource_system_wrapper::Open(const char* p
         return new Assimp::MemoryIOStream(reinterpret_cast<const uint8_t*>(data.data()), data.size());
     }
 
-    if (pMode == "rb"sv) {
+    if (std::string_view{ pMode } == "rb") {
         res::tag file_tag = res::tag{ pFile };
         auto it = data_map.find(file_tag);
         if (it == data_map.end()) {

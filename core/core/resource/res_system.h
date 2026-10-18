@@ -117,10 +117,10 @@ namespace res
 			m_adapter_infos[adapter_new] = extension;
 
 			if (extension.extensions.empty()) {
-				m_adapters[std::pair{ extension.resource_type, "*"s}] = adapter_new;
+				m_adapters[std::pair{ extension.resource_type, std::string{ "*" }}] = adapter_new;
 
 				if (extension.magic_number != 0) {
-					m_extensions_with_magic.insert(std::pair{ extension.resource_type, "*"s});
+					m_extensions_with_magic.insert(std::pair{ extension.resource_type, std::string{ "*" }});
 				}
 			}
 
@@ -147,14 +147,14 @@ namespace res
 			}
 
 			if (extension.extensions.empty()) {
-				auto it = m_adapters.find(std::pair{ extension.resource_type, "*"s });
+				auto it = m_adapters.find(std::pair{ extension.resource_type, std::string{ "*" } });
 				if (it != m_adapters.end()) {
 					m_adapter_infos.erase(it->second);
 					m_adapters.erase(it);
 				}
 
 				if (extension.magic_number != 0)
-					m_extensions_with_magic.erase(std::pair{ extension.resource_type, "*"s });
+					m_extensions_with_magic.erase(std::pair{ extension.resource_type, std::string{ "*" } });
 			}
 		}
 
@@ -258,7 +258,7 @@ namespace res
 				start_loading_unguarded<T, is_sync>(tag, final_cb);
 			} catch (const std::exception& e) {
 				egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
-				final_cb->set_error("Load error: "s + e.what());
+				final_cb->set_error(std::string{ "Load error: " } + e.what());
 			} catch (...) {
 				egLOG_ERROR("res/resolver", "Failed to start loading {}: unknown exception", tag.view());
 				final_cb->set_error("Load error: unknown exception");
@@ -270,7 +270,7 @@ namespace res
 			auto resolver_it = m_resolvers.find(tag.protocol());
 			if (resolver_it == m_resolvers.end()) {
 				egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
-				final_cb->set_error("Unsupported protocol: "s + std::string{ tag.protocol() });
+				final_cb->set_error(std::string{ "Unsupported protocol: " } + std::string{ tag.protocol() });
 				return;
 			}
 
@@ -283,7 +283,7 @@ namespace res
 
 			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
 				if (raw_data_block->has_error()) {
-					final_cb->set_error("Resolver error: "s + raw_data_block->error_msg);
+					final_cb->set_error(std::string{ "Resolver error: " } + raw_data_block->error_msg);
 					egLOG_ERROR("res/resolver", "Failed to resolve resource {0}: {1}", tag.view(), raw_data_block->error_msg);
 					return;
 				}
@@ -299,7 +299,7 @@ namespace res
 
 					final_cb->set_ready(std::move(parsed_obj));
 				} catch (const std::exception& e) {
-					final_cb->set_error("Adapter error: "s + e.what());
+					final_cb->set_error(std::string{ "Adapter error: " } + e.what());
 					egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
 				}
 			};

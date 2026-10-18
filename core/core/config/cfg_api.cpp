@@ -3,7 +3,8 @@
 #include <variant>
 #include <yaml-cpp/yaml.h>
 #include <boost/program_options.hpp>
-#include <iostream>
+#include <cstdio>
+#include <sstream>
 
 namespace po = boost::program_options;
 
@@ -106,11 +107,12 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	po::notify(vm);
 
 	if (vm.count("help")) {
-		std::cout << desc << "\n";
-		std::cout << "Config variables:\n";
+		std::ostringstream help_text;
+		help_text << desc << "\nConfig variables:\n";
 		for (const auto& [name, var] : cfg::config_manager::instance().registered_variables) {
-			std::cout << "--set " << name << "\n";
+			help_text << "--set " << name << "\n";
 		}
+		std::fputs(help_text.str().c_str(), stdout);
 		return false;
 	}
 

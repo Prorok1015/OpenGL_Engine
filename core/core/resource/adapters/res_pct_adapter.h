@@ -17,8 +17,8 @@ namespace res
 		};
 
 		static constexpr auto HEADER_SIZE = sizeof(raw_image_header);
-		static constexpr auto EXTENSION = "raw"sv;
-		static inline auto INFO = res::adapter_info::make<res::picture_resource>({"raw"s});
+		static constexpr auto EXTENSION = std::string_view{ "raw" };
+		static inline auto INFO = res::adapter_info::make<res::picture_resource>({std::string{ "raw" }});
 
 		std::optional<raw_image_header> read_header(const std::vector<std::byte>& data) const;
 		std::shared_ptr<res::picture_resource> operator()(res::tag tag, const std::vector<std::byte>& data) const;
@@ -34,8 +34,8 @@ namespace res
 	class pct_adapter : public core::res::adapter_interface
 	{
 	public:
-		static constexpr auto EXTENSIONS = std::array{"pct"sv, "png"sv, "jpeg"sv, "jpg"sv};
-		static inline auto INFO = res::adapter_info::make<res::picture_resource>({"pct"s, "png"s, "jpeg"s, "jpg"s} );
+		static constexpr auto EXTENSIONS = std::array{std::string_view{ "pct" }, std::string_view{ "png" }, std::string_view{ "jpeg" }, std::string_view{ "jpg" }};
+		static inline auto INFO = res::adapter_info::make<res::picture_resource>({std::string{ "pct" }, std::string{ "png" }, std::string{ "jpeg" }, std::string{ "jpg" }} );
 		pct_adapter();
 
 		std::shared_ptr<res::picture_resource> operator()(res::tag tag, const std::vector<std::byte>& data) const;

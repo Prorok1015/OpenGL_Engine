@@ -1,6 +1,5 @@
 #pragma once
 #include <type_traits>
-#include <iostream>
 // Concept to ensure the type is an enum
 template<typename T>
 concept EnumType = std::is_enum_v<T>;
@@ -78,12 +77,9 @@ namespace ds {
 //    flags |= my_flags::flag1;
 //    flags |= my_flags::flag2;
 //    if (flags.has_flag(my_flags::flag1)) {
-//        std::cout << "flag1 is set" << std::endl;
 //    }
 //   if (flags.has_flag(my_flags::flag3)) {
-//        std::cout << "flag3 is set" << std::endl;
 //    } else {
-//        std::cout << "flag3 is not set" << std::endl;
 //    }
 //    return 0;
 //}
