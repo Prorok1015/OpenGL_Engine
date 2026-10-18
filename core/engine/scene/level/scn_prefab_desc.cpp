@@ -923,7 +923,10 @@ namespace {
 	using id_remap = std::unordered_map<uint64_t, uint64_t>;
 
 	void assign_new_ids(scn::prefab_desc::prefab_node& node, id_remap& remap) {
-		node.node_id = remap.emplace(node.node_id, desc::new_node_id()).first->second;
+		const uint64_t fresh = desc::new_node_id();
+		// Hand-built nodes may have no id; mapping 0 would hand all of them the same new id.
+		if (node.node_id != desc::invalid_node_id) remap.insert_or_assign(node.node_id, fresh);
+		node.node_id = fresh;
 		for (auto& child : node.children) {
 			assign_new_ids(child, remap);
 		}

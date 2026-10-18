@@ -101,8 +101,10 @@ static ecs::entity find_entity_by_path(shared_state& state, std::span<const uint
 	auto lvl_mgr = state.lvl_manager.lock();
 	if (!lvl_mgr || path.empty() || state.active_world_idx >= (int)state.world_names.size())
 		return entt::null;
-	auto& reg = lvl_mgr->get_level().get_world(state.world_names[state.active_world_idx]).state();
-	return scn::node_index::get(reg).find(path);
+	scn::world* world = lvl_mgr->get_level().find_world(state.world_names[state.active_world_idx]);
+	if (!world)
+		return entt::null;
+	return scn::node_index::get(world->state()).find(path);
 }
 
 void wire_hierarchy_callbacks(
