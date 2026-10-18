@@ -1,0 +1,114 @@
+// desc_resave: loads every .desc file under a resources directory through the engine (older formats are
+// migrated on load) and writes it back in the current format, indented. Run it after a format change.
+//
+//   desc_resave <path to a resources directory named "res"> [--check]
+//
+// --check writes nothing and exits with 1 when any file would change.
+#include "res_system.h"
+#include "desc_system.h"
+#include "adapters/desc_adapter_t.h"
+#include "adapters/res_adapter_worker_base.hpp"
+#include "adapters/scn_model_importer_adapter.h"
+#include "logger/engine_log.h"
+#include "rnd_render_service_init.h"
+#include "scn_ecs_assembler.h"
+#include "scn_registration_scope.h"
+#include "skinning/rnd_skinning_manager.h"
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+	struct inline_worker : core::res::adapter_worker_base
+	{
+		void start() override {}
+		void stop() override {}
+		bool is_stopped() const override { return false; }
+		void post(std::function<void()> cb) override { cb(); }
+	};
+
+	std::vector<std::byte> read_file(const fs::path& path)
+	{
+		std::ifstream in(path, std::ios::binary);
+		std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+		std::vector<std::byte> bytes(text.size());
+		std::transform(text.begin(), text.end(), bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
+		return bytes;
+	}
+
+}
+
+int main(int argc, char** argv)
+{
+	if (argc < 2) {
+		egLOG_ERROR("desc_resave", "usage: desc_resave <resources directory named 'res'> [--check]");
+		return 2;
+	}
+	const fs::path res_dir = fs::absolute(argv[1]).lexically_normal();
+	const bool check_only = argc > 2 && std::string{ argv[2] } == "--check";
+	if (!fs::is_directory(res_dir) || res_dir.filename() != "res") {
+		egLOG_ERROR("desc_resave", "'{}' is not a directory named 'res'", res_dir.string());
+		return 2;
+	}
+
+	// The resource system reads its root from the configured "./res"; run next to it, with the sandbox it expects.
+	fs::current_path(res_dir.parent_path());
+	std::error_code ec;
+	fs::create_directories("./sandbox", ec);
+
+	res::resource_system res_sys;
+	res_sys.set_adapter_worker(std::make_unique<inline_worker>());
+	desc::desc_system desc_sys(res_sys);
+	res_sys.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(res_sys), std::ref(desc_sys));
+	scn::ecs_assembler assembler(desc_sys, res_sys);
+	rnd::skinning_manager skinning;
+	auto scene_types = scn::register_scene_types(desc_sys, assembler, skinning);
+	engine::render::register_render_descs(desc_sys);
+	// Levels reference models (.glb) that are imported into prefabs while they load.
+	res_sys.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_sys), std::ref(res_sys));
+	core::desc::desc_adapter_t adapter(res_sys, desc_sys);
+
+	std::vector<fs::path> files;
+	for (const auto& entry : fs::recursive_directory_iterator(res_dir)) {
+		if (entry.is_regular_file() && entry.path().extension() == ".desc") {
+			files.push_back(entry.path());
+		}
+	}
+	std::ranges::sort(files);
+
+	int failed = 0;
+	int changed = 0;
+	for (const auto& path : files) {
+		const std::string rel = fs::relative(path, res_dir).generic_string();
+		const res::tag tag = res::tag::make(rel);
+		auto handle = res_sys.require_sync<desc::desc_base>(tag);
+		auto loaded = handle.get_sync();
+		if (!loaded) {
+			egLOG_ERROR("desc_resave", "{}: failed to load", rel);
+			++failed;
+			continue;
+		}
+
+		const auto written = adapter.serialize(tag, loaded);
+		if (written == read_file(path)) {
+			continue;
+		}
+		++changed;
+		if (check_only) {
+			egLOG_INFO("desc_resave", "{}: would change", rel);
+			continue;
+		}
+		std::ofstream out(path, std::ios::binary | std::ios::trunc);
+		out.write(reinterpret_cast<const char*>(written.data()), static_cast<std::streamsize>(written.size()));
+		egLOG_INFO("desc_resave", "{}: rewritten", rel);
+	}
+
+	egLOG_INFO("desc_resave", "{} files, {} {}, {} failed", files.size(), changed, check_only ? "would change" : "rewritten", failed);
+	return failed > 0 || (check_only && changed > 0) ? 1 : 0;
+}

@@ -54,6 +54,7 @@ include(CompilerWarnings)
 add_subdirectory(core)
 
 add_subdirectory(Editor)
+add_subdirectory(tools/desc_resave)
 snk_isolate_third_party_warnings()
 
 enable_testing()
@@ -67,5 +68,7 @@ target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine 
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
+# desc_repo_roundtrip_tests loads the descs the repository ships.
+target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/res")
 
 add_test(NAME unit_tests COMMAND unit_tests)

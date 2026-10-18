@@ -1,1 +1,59 @@
-{"__type":"level_desc","name":"editor_level","worlds":[{"components":{"anchor":{"__type":"anchor_desc"}},"children":{"Directional Light":{"__type":"directional_light_desc"},"skybox":"res://skybox/skybox.desc","scene":{"transform":{"rotation":[-9E1,0E0,0E0],"scale":[9.606748819351196E-1,9.606748819351196E-1,9.606748819351196E-1]},"components":{"scene":"memory://objects/fsb//scene.desc"}}},"__type":"world_desc","systems":["inp::update_input_state","scn::animation_controller_update","scn::animation_system_node","scn::depth_system","scn::transform_system","scn::animation_system_matrix","scn::update_camera_matrix_system"],"name":"3d_scene"}]}
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "8b9cfe88-c87a-4a72-8ca3-61ac9fcf61d1",
+    "name" : "editor_level",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 2,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "c4816c9643267e08",
+                    "name" : "skybox",
+                    "components" : {
+                        "skybox" : "res://skybox/skybox.desc"
+                    }
+                },
+                {
+                    "__id" : "3faa0ae2dbe035de",
+                    "name" : "scene",
+                    "transform" : {
+                        "rotation" : [-90.0, 0.0, 0.0],
+                        "scale" : [0.9606748819351196, 0.9606748819351196, 0.9606748819351196]
+                    },
+                    "components" : {
+                        "scene" : "memory://objects/fsb//scene.desc"
+                    }
+                }
+            ]
+        }
+    ]
+}

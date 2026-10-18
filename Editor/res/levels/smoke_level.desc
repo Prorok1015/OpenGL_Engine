@@ -1,1 +1,59 @@
-{"__type":"level_desc","name":"smoke_level","worlds":[{"components":{"anchor":{"__type":"anchor_desc"}},"children":{"Directional Light":{"__type":"directional_light_desc"},"skybox":"res://skybox/skybox.desc","scene":{"transform":{"rotation":[0E0,0E0,0E0],"position":[0E0,-1E0,-6E0],"scale":[4E0,4E0,4E0]},"components":{"scene":"res://objects/robot/gen_robot.glb"}}},"__type":"world_desc","systems":["inp::update_input_state","scn::animation_controller_update","scn::animation_system_node","scn::depth_system","scn::transform_system","scn::animation_system_matrix","scn::update_camera_matrix_system"],"name":"3d_scene"}]}
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "63de1147-86ff-4f72-8490-665f3d8dc087",
+    "name" : "smoke_level",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 2,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "c4816c9643267e08",
+                    "name" : "skybox",
+                    "components" : {
+                        "skybox" : "res://skybox/skybox.desc"
+                    }
+                },
+                {
+                    "__id" : "3faa0ae2dbe035de",
+                    "name" : "scene",
+                    "transform" : {
+                        "position" : [0.0, -1.0, -6.0],
+                        "scale" : [4.0, 4.0, 4.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                }
+            ]
+        }
+    ]
+}

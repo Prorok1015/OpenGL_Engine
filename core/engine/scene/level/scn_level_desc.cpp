@@ -3,6 +3,10 @@
 
 void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::object& obj)
 {
+	if (auto it = obj.find("name"); it != obj.end() && it->value().is_string()) {
+		name = std::string{ it->value().as_string() };
+	}
+
 	if (obj.contains("worlds")) {
 		worlds.clear();
 		for (const auto& world_val : obj.at("worlds").as_array()) {
@@ -13,6 +17,9 @@ void scn::level_desc::deserialize(desc::desc_system& desc_system, const json::ob
 
 void scn::level_desc::serialize(json::object& obj) const
 {
+	if (!name.empty()) {
+		obj["name"] = name;
+	}
 	json::array worlds_arr;
 	for (const auto& world : worlds) {
 		json::object world_obj;

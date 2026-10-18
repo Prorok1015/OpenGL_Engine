@@ -90,8 +90,9 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
     auto desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
 	json::object body;
 	desc_res->serialize(body);
-	// Most descs do not write their own __type, but deserialize() requires it.
-	if (!body.contains("__type")) {
+	// deserialize() requires __type. The instance knows what it was created as; a serialize() inherited from a base
+	// class may name its own type (a texture_2d_desc would come back as texture_desc).
+	if (!desc_res->get_type().empty() || !body.contains("__type")) {
 		body["__type"] = std::string(desc_res->get_type());
 	}
 	// __guid identifies a file, so only res:// files get one; it is generated once and then kept on the instance.

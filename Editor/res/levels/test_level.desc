@@ -1,1 +1,56 @@
-{"__type":"level_desc","name":"test_level","worlds":[{"__type":"world_desc","name":"3d_scene","components":{"anchor":{"__type":"anchor_desc"}},"children":{"Camera":{"components":{"camera":{"__type":"camera_desc","transform":{"rotation":[-2.852613639831543E1,-1.5373703956604004E1,0E0],"position":[3.8635069131851196E-1,0E0,-3.0489423274993896E0]}}}},"Directional Light":{"components":{"directional_light":{"__type":"directional_light_desc","direction":[3.860273063182831E-1,-8.251869082450867E-1,-4.1237056255340576E-1,0E0],"diffuse":[1E0,1E0,1E0,1E0],"ambient":[0E0,0E0,0E0,1E0],"specular":[0E0,0E0,0E0,1E0]}}}},"systems":["inp::update_input_state","scn::update_camera_matrix_system","scn::depth_system","scn::transform_system"]}]}
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "f836219d-0909-41b4-9e48-657c8e69fa6d",
+    "name" : "test_level",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 2,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::update_camera_matrix_system",
+                "scn::depth_system",
+                "scn::transform_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "39d3e30167f16e0d",
+                    "name" : "Camera",
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 1,
+                            "transform" : {
+                                "rotation" : [-28.52613639831543, -15.373703956604004, 0.0],
+                                "position" : [0.386350691318512, 0.0, -3.0489423274993896]
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "directional_light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1,
+                            "direction" : [0.3860273063182831, -0.8251869082450867, -0.41237056255340576, 0.0],
+                            "diffuse" : [1.0, 1.0, 1.0, 1.0],
+                            "ambient" : [0.0, 0.0, 0.0, 1.0],
+                            "specular" : [0.0, 0.0, 0.0, 1.0]
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}

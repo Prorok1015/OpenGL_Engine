@@ -28,6 +28,7 @@ namespace scn
 		virtual void deserialize(desc::desc_system& desc_system, const json::object&) override;
 		virtual void serialize(json::object&) const override;
 		const std::vector<res::res_handle<world_desc>>& get_worlds() const { return worlds; }
+		const std::string& get_name() const { return name; }
 
 		// Build a complete level_desc JSON object from value-typed world descs.
 		// Delegates world serialization to world_desc::serialize — no hardcoded JSON.
@@ -36,6 +37,7 @@ namespace scn
 		static json::object build_json(std::string_view name, const std::vector<world_desc>& worlds, const desc::desc_system& desc_system, std::string_view guid = {});
 
 	private:
+		std::string name;
 		std::vector<res::res_handle<world_desc>> worlds;
 	};
 }

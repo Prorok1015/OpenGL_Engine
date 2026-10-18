@@ -1,31 +1,42 @@
 {
-    "__type": "world_desc",
-    "name": "__prefab_preview",
-    "systems": [
+    "__type" : "world_desc",
+    "__version" : 2,
+    "__guid" : "f5d49976-d6ba-42f0-8214-a78f64af0bda",
+    "name" : "__prefab_preview",
+    "systems" : [
         "inp::update_input_state",
         "scn::update_camera_matrix_system",
         "scn::depth_system",
         "scn::transform_system"
     ],
-    "components": {
-        "anchor": { "__type": "anchor_desc" }
+    "__id" : "cbf29ce484222325",
+    "components" : {
+        "anchor" : {
+            "__type" : "anchor_desc",
+            "__version" : 1
+        }
     },
-    "children": {
-        "PrefabLight": {
-            "rotation": [50, -30, 0],
-            "components": {
-                "directional_light_desc": {
-                    "__type": "directional_light_desc"
+    "children" : [
+        {
+            "__id" : "09705f78a49797f0",
+            "name" : "PrefabLight",
+            "components" : {
+                "directional_light_desc" : {
+                    "__type" : "directional_light_desc",
+                    "__version" : 1
                 }
             }
         },
-        "Skybox": {
-            "components": {
-                "skybox_desc": {
-                    "__type": "skybox_desc",
-                    "material": "res://skybox/sky_material.desc"
+        {
+            "__id" : "faa1152ccb1457e8",
+            "name" : "Skybox",
+            "components" : {
+                "skybox_desc" : {
+                    "__type" : "skybox_desc",
+                    "__version" : 1,
+                    "material" : "res://skybox/sky_material.desc"
                 }
             }
         }
-    }
+    ]
 }

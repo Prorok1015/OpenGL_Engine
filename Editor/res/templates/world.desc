@@ -1,14 +1,19 @@
 {
-    "__type": "world_desc",
-    "name": "world",
-    "systems": [
+    "__type" : "world_desc",
+    "__version" : 2,
+    "__guid" : "a09caf21-5be2-4439-8774-6946418a7d83",
+    "name" : "world",
+    "systems" : [
         "inp::update_input_state",
         "scn::update_camera_matrix_system",
         "scn::depth_system",
         "scn::transform_system"
     ],
-    "components": {
-        "anchor": { "__type": "anchor_desc" }
-    },
-    "children": {}
+    "__id" : "cbf29ce484222325",
+    "components" : {
+        "anchor" : {
+            "__type" : "anchor_desc",
+            "__version" : 1
+        }
+    }
 }

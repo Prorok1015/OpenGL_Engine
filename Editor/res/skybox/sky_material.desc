@@ -1,10 +1,16 @@
 {
-	"__type": "material_desc",
-	"name": "material",
-	"shader_vertex": "res://shaders/sky.vert",
-	"shader_fragment": "res://shaders/sky.frag",
-	"queue": "opaque",
-	"constants": {},
-	"defines": [],
-	"samplers": ["res://skybox/sky_texture_cubemap.desc"]
+    "__type" : "material_desc",
+    "__version" : 1,
+    "__guid" : "ef0eb176-c36e-4b82-b6df-4e2c8dca625c",
+    "defines" : [],
+    "samplers" : ["res://skybox/sky_texture_cubemap.desc"],
+    "shader_vertex" : "res://shaders/sky.vert",
+    "shader_fragment" : "res://shaders/sky.frag",
+    "shader_geometry" : null,
+    "queue" : "opaque",
+    "uniforms" : {
+        "albedo" : [1.0, 1.0, 1.0, 1.0],
+        "emissive" : [0.0, 0.0, 0.0, 0.0]
+    },
+    "render_mode" : "TRIANGLE"
 }

@@ -14,16 +14,29 @@
 #include "passes/rnd_debug_pass.h"
 #include "shader/rnd_material_compiler.h"
 
+void engine::render::register_render_descs(desc::desc_system& desc_sys)
+{
+	desc_sys.register_desc<rnd::geometry_desc>("geometry_desc");
+	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
+	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
+	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
+}
+
+void engine::render::unregister_render_descs(desc::desc_system& desc_sys)
+{
+	desc_sys.unregister_desc("texture_cubemap_desc");
+	desc_sys.unregister_desc("texture_2d_desc");
+	desc_sys.unregister_desc("texture_desc");
+	desc_sys.unregister_desc("geometry_desc");
+}
+
 void engine::render::render_init(ds::app_data_storage& data)
 {
 	auto& window_system = data.require<wnd::window_system>();
 	auto& desc_sys = data.require<desc::desc_system>();
 	auto& res_sys = data.require<res::resource_system>();
 	auto& render_system = data.construct<rnd::render_system>(window_system.get_context()->create_driver(), desc_sys, res_sys);
-	desc_sys.register_desc<rnd::geometry_desc>("geometry_desc");
-	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
-	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
-	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
+	register_render_descs(desc_sys);
 	render_system.add_render_pass(std::make_shared<rnd::z_prepass>());
 	render_system.add_render_pass(std::make_shared<rnd::opaque_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::skybox_pass>());
@@ -36,10 +49,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 void engine::render::render_term(ds::app_data_storage& data)
 {
 	auto& desc_sys = data.require<desc::desc_system>();
-	desc_sys.unregister_desc("texture_cubemap_desc");
-	desc_sys.unregister_desc("texture_2d_desc");
-	desc_sys.unregister_desc("texture_desc");
-	desc_sys.unregister_desc("geometry_desc");
+	unregister_render_descs(desc_sys);
 
 	data.destruct<rnd::render_system>();
 }

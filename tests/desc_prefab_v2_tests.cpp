@@ -144,6 +144,13 @@ BOOST_AUTO_TEST_CASE(Load_V1LevelWithInlineWorldsMigrates)
 	BOOST_REQUIRE(root.children.size() == 1u);
 	BOOST_TEST(root.children[0].name == "c");
 	BOOST_TEST(root.children[0].components.at("stat").type_name == "stat_desc");
+	BOOST_TEST(lv->get_name() == "L");
+
+	// the level name survives a save through the adapter
+	core::desc::desc_adapter_t adapter(*rs, *descs);
+	auto bytes = adapter.serialize(tag_of("lv.desc"), lv);
+	auto text = std::string(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+	BOOST_TEST(json::parse(text).at("name").as_string() == "L");
 }
 
 BOOST_AUTO_TEST_CASE(Save_WritesChildrenAsAnArrayWithExplicitTypes)
@@ -223,6 +230,33 @@ BOOST_AUTO_TEST_CASE(PrettyWriter_KeepsNumberArraysOnOneLine)
 	BOOST_TEST(text.find("[1, 2, 3]") != std::string::npos);
 	BOOST_TEST(text.find("[]") != std::string::npos);
 	BOOST_TEST(json::value(json::parse(text)) == v);
+}
+
+BOOST_AUTO_TEST_CASE(PrettyWriter_LongStringListsGetALinePerElementAndEmptyObjectsStayCompact)
+{
+	json::value v = json::parse(R"({"short":["a","b"],"long":["scn::animation_controller_update","scn::animation_system_node",
+		"scn::depth_system"],"empty":{}})");
+	std::ostringstream ss;
+	descs->write_pretty_json(ss, v);
+	const auto text = ss.str();
+	BOOST_TEST(text.find("[\"a\", \"b\"]") != std::string::npos);
+	BOOST_TEST(text.find("\"empty\" : {}") != std::string::npos);
+	BOOST_TEST(text.find("[\"scn::animation_controller_update\"") == std::string::npos);
+	BOOST_TEST(json::value(json::parse(text)) == v);
+}
+
+BOOST_AUTO_TEST_CASE(PrettyWriter_DoublesStayDoublesAndReadBackExactly)
+{
+	json::value v = json::parse(R"({"a":[0.0,-1.0,0.9606748819351196,1e20,-0.0,2.5e-7],"n":3,"u":18446744073709551615})");
+	std::ostringstream ss;
+	descs->write_pretty_json(ss, v);
+	const auto text = ss.str();
+	BOOST_TEST(text.find("0.9606748819351196") != std::string::npos);
+	BOOST_TEST(text.find("[0.0, -1.0,") != std::string::npos);
+	auto back = json::parse(text);
+	BOOST_TEST(back == v);
+	BOOST_TEST(back.at("a").as_array()[0].is_double());
+	BOOST_TEST(back.at("n").is_int64());
 }
 
 BOOST_AUTO_TEST_CASE(StampTree_StampsNestedTypedObjectsAndOrdersTheHeader)

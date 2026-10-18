@@ -1,10 +1,16 @@
 {
-	"__type": "material_desc",
-	"name": "material",
-	"shader_vertex": "res://shaders/scene.vert",
-	"shader_fragment": "res://shaders/scene.frag",
-	"queue": "opaque",
-	"constants": {},
-	"defines": [],
-	"samplers": []
+    "__type" : "material_desc",
+    "__version" : 1,
+    "__guid" : "f90d3c03-865c-4193-aa09-cb2f98315634",
+    "defines" : [],
+    "samplers" : [],
+    "shader_vertex" : "res://shaders/scene.vert",
+    "shader_fragment" : "res://shaders/scene.frag",
+    "shader_geometry" : null,
+    "queue" : "opaque",
+    "uniforms" : {
+        "albedo" : [1.0, 1.0, 1.0, 1.0],
+        "emissive" : [0.0, 0.0, 0.0, 0.0]
+    },
+    "render_mode" : "TRIANGLE"
 }

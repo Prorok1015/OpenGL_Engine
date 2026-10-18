@@ -1,20 +1,22 @@
 {
-  "__type": "texture_2d_desc",
-  "name": "texture",
-  "header": {
-    "type": "texture_2d",
-    "usage": "sampled",
-    "wrap": "clamp_to_edge",
-    "mag": "nearest",
-    "min": "nearest",
-    "data": {
-      "extent": {
-        "width": 0,
-        "height": 0,
-        "depth": 0
-      },
-      "format": "RGBA8",
-      "mip_levels": 1
+    "__type" : "texture_2d_desc",
+    "__version" : 1,
+    "__guid" : "3b1367f2-0fe5-4d96-80c6-ee98dbc6d503",
+    "name" : "texture",
+    "header" : {
+        "type" : "texture_2d",
+        "usage" : "sampled",
+        "wrap" : "clamp_to_edge",
+        "mag" : "nearest",
+        "min" : "nearest",
+        "data" : {
+            "extent" : {
+                "width" : 0,
+                "height" : 0,
+                "depth" : 0
+            },
+            "mip_levels" : 1,
+            "format" : "RGBA8"
+        }
     }
-  }
 }

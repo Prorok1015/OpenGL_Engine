@@ -1,11 +1,14 @@
 {
-    "__type": "level_desc",
-    "name": "new_level",
-    "worlds": [
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "bac1b54d-77c5-4370-8113-88500f8487cd",
+    "name" : "new_level",
+    "worlds" : [
         {
-            "__type": "world_desc",
-            "name": "3d_scene",
-            "systems": [
+            "__type" : "world_desc",
+            "__version" : 2,
+            "name" : "3d_scene",
+            "systems" : [
                 "inp::update_input_state",
                 "scn::animation_controller_update",
                 "scn::animation_system_node",
@@ -14,12 +17,25 @@
                 "scn::animation_system_matrix",
                 "scn::update_camera_matrix_system"
             ],
-            "components": {
-                "anchor": { "__type": "anchor_desc" }
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
             },
-            "children": {
-                "Directional Light": { "__type": "directional_light_desc" }
-            }
+            "children" : [
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                }
+            ]
         }
     ]
 }
