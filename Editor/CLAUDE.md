@@ -10,8 +10,8 @@ Editor/
 └── code/editor_system/
     ├── core/                         # Module lifecycle & frame loop
     │   ├── editor_module.cpp/h       # register/initialize/shutdown lifecycle
-    │   ├── edt_editor_init.cpp/h     # constructs editor_system + edt_loop_service
-    │   └── edt_frame_loop_service.cpp/h  # app_loop_service_interface impl
+    │   ├── edt_editor_init.cpp/h     # constructs editor_system; adds the `ui` stage body and the editor_redirect_cameras stage
+    │   └── edt_camera_redirect.cpp/h # redirects backbuffer cameras to textures (editor shows them in the viewport)
     │
     ├── controller/                   # Editor controllers (decomposed from editor_system)
     │   ├── edt_editor_system.cpp/h   # thin coordinator: init, panel wiring, async orchestration
@@ -206,7 +206,7 @@ Non-blocking ImGui modal — must be called every frame while open.
 
 ## Viewport & Gizmo
 
-- Viewport renders `__color_scene_rt` texture from `scn::renderer_3d`
+- Viewport shows the editor camera texture (`__editor_camera_rt`); game cameras (no color target = backbuffer) are redirected to their own textures by the `editor_redirect_cameras` stage (before `extract`)
 - `ImTextureID` obtained via `gui::get_system().get_backend_interface()->get_imgui_texture_from_texture(tex)`
 - Gizmo modes: Translate / Rotate / Scale (keyboard shortcuts T/R/S)
 - Transform committed only on gizmo release (not every frame)

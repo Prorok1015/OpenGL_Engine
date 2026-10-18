@@ -14,8 +14,8 @@
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
-    // Managers are injected into frame_context by render_system::begin_frame (frame stage 28),
-    // which runs before this extractor (stage 30). Catch a missing/mis-ordered injection early.
+    // Managers are injected into frame_context by render_system::begin_frame, which the `extract`
+    // stage runs before this extractor. Catch a missing/mis-ordered injection early.
     ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
     ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
     auto& level = m_level_manager.get_level();
