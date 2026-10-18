@@ -5,8 +5,10 @@
 #include <utility>
 #include <vector>
 #include "level/scn_level.h"
+#include "level/scn_level_desc.h"
 #include "scn_ecs_assembler.h"
 #include "ecs_random.hpp"
+#include "ecs_entity_changer.hpp"
 #include "scn_model.h"
 #include "scn_transform_system.h"
 #include "scn_animation_job.h"
@@ -41,6 +43,14 @@ namespace {
 		explicit stateful_sys(std::string tag) : tag(std::move(tag)) {}
 		void run() { g_log.push_back(tag); }
 		std::string tag;
+	};
+
+	// Counts its own runs, so a re-created instance shows up as the count starting over.
+	struct counting_sys : ecs::system_interface {
+		explicit counting_sys(std::string tag) : tag(std::move(tag)) {}
+		void run() { g_log.push_back(tag + std::to_string(++runs)); }
+		std::string tag;
+		int runs = 0;
 	};
 
 	struct fixture {
@@ -540,6 +550,152 @@ BOOST_AUTO_TEST_CASE(Rng_SetSeedReseedsExistingWorlds)
 	BOOST_REQUIRE(g_rolls.size() == 3u);
 	BOOST_TEST(g_rolls[2] == g_rolls[0]); // the sequence restarted
 	BOOST_TEST(lvl.seed() == 7u);
+}
+
+// ---------------------------------------------------------------- phases by id, plan rebuild (#211)
+
+// A game phase added after the first world's plan was built: the two plans have different phase
+// lists, and every system must still run in its own phase, fixed_update only through the stepper.
+BOOST_AUTO_TEST_CASE(GamePhaseAddedBetweenPlans_EachSystemRunsInItsOwnPhase)
+{
+	auto tagged = [&](const char* name, const char* tag, ecs::phase_id phase) {
+		sf.register_system<&stateful_sys::run, stateful_sys>(name, { .phase = phase }, std::string{ tag });
+	};
+	tagged("f0", "F0", ecs::phase::fixed_update);
+	tagged("f1", "F1", ecs::phase::fixed_update);
+	tagged("u0", "U0", ecs::phase::update);
+	tagged("u1", "U1", ecs::phase::update);
+	tagged("early1", "P1", "early");
+
+	scn::level lvl(nullptr);
+	auto& w0 = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w0, { "f0", "u0" }, sf);
+	BOOST_REQUIRE(sf.add_game_phase("early", ecs::phase::fixed_update, ecs::phase_side::before));
+	auto& w1 = lvl.create_world("w1", 1);
+	lvl.add_world_systems(w1, { "f1", "u1", "early1" }, sf);
+
+	lvl.update(std::chrono::duration<float>(0.04f)); // two fixed steps
+	BOOST_TEST(g_log == (names{ "P1", "F0", "F1", "F0", "F1", "U0", "U1" }), boost::test_tools::per_element());
+
+	g_log.clear();
+	lvl.update(one_frame); // no step: the fixed systems stay quiet, the game phase runs once
+	BOOST_TEST(g_log == (names{ "P1", "U0", "U1" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(RebuildAllPlans_PicksUpAGamePhaseAddedAfterLoad)
+{
+	sf.register_system<&sys_game>("late_game", { .phase = "late_phase" });
+
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "a", "late_game" }, sf);
+	BOOST_TEST(lvl.plan_of(0)->has_diagnostic(ecs::diagnostic_kind::unknown_phase));
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "A" }), boost::test_tools::per_element());
+
+	BOOST_REQUIRE(sf.add_game_phase("late_phase", ecs::phase::update, ecs::phase_side::after));
+	lvl.rebuild_all_plans(sf);
+	BOOST_TEST(!lvl.plan_of(0)->has_diagnostic(ecs::diagnostic_kind::unknown_phase));
+
+	g_log.clear();
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "A", "G" }), boost::test_tools::per_element());
+}
+
+// ---------------------------------------------------------------- command buffers
+
+BOOST_AUTO_TEST_CASE(WorldWithoutSystems_StillGetsItsCommandsApplied)
+{
+	scn::level lvl(nullptr);
+	auto& empty = lvl.create_world("empty", 0);
+	auto& reg = empty.state();
+	const entt::entity e = reg.create();
+	reg.ctx().emplace<ecs::entity_changer>().destroy(e);
+	BOOST_REQUIRE(lvl.plan_of(0) == nullptr);
+
+	lvl.update(one_frame);
+	BOOST_TEST(!reg.valid(e));
+}
+
+BOOST_AUTO_TEST_CASE(LevelState_GetsItsCommandsApplied)
+{
+	scn::level lvl(nullptr);
+	auto& reg = lvl.state();
+	const entt::entity e = reg.create();
+	reg.ctx().emplace<ecs::entity_changer>().destroy(e);
+
+	lvl.update(one_frame);
+	BOOST_TEST(!reg.valid(e));
+}
+
+// ---------------------------------------------------------------- fixed accumulator on load / clear
+
+BOOST_AUTO_TEST_CASE(LoadFromDesc_ResetsTheFixedAccumulator)
+{
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "fixed" }, sf);
+	lvl.update(std::chrono::duration<float>(0.01f)); // 0.01 of a 1/60 step left in the accumulator
+	BOOST_TEST(count("F") == 0u);
+
+	json::object obj;
+	obj["name"] = "empty";
+	obj["worlds"] = json::array{};
+	scn::level_desc level_desc;
+	level_desc.deserialize(ds, obj);
+	lvl.load_from_desc(level_desc, sf, assembler);
+
+	lvl.update(std::chrono::duration<float>(0.01f)); // 0.02 would be a step; the leftover must be gone
+	BOOST_TEST(count("F") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Clear_ResetsTheFixedAccumulator)
+{
+	scn::level lvl(nullptr);
+	lvl.update(std::chrono::duration<float>(0.01f));
+	lvl.clear();
+
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "fixed" }, sf);
+	lvl.update(std::chrono::duration<float>(0.01f));
+	BOOST_TEST(count("F") == 0u);
+}
+
+// ---------------------------------------------------------------- reload contract (systems only)
+
+BOOST_AUTO_TEST_CASE(SystemsReload_RecreatesPerWorldInstancesKeepsSharedOnes)
+{
+	sf.register_system<&counting_sys::run, counting_sys>("counter_per_world", {}, std::string{ "P" });
+	sf.register_system<&counting_sys::run, counting_sys>("counter_shared", {}, std::make_shared<counting_sys>(std::string{ "H" }));
+
+	scn::level lvl(nullptr);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "counter_per_world", "counter_shared" }, sf);
+	lvl.update(one_frame);
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "P1", "H1", "P2", "H2" }), boost::test_tools::per_element());
+
+	g_log.clear();
+	lvl.rebuild_all_plans(sf); // the plan rebuild a systems-only reload does
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "P1", "H3" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(SystemsReload_KeepsModeSeedAndWorldRng)
+{
+	scn::level lvl(nullptr);
+	lvl.set_seed(11);
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "roll" }, sf);
+	lvl.update(one_frame); // advances the world's stream
+	lvl.set_mode(ecs::run_mode::edit);
+	ecs::rng expected = w.state().ctx().get<ecs::rng>();
+
+	lvl.rebuild_all_plans(sf);
+
+	BOOST_TEST(lvl.seed() == 11u);
+	BOOST_TEST((lvl.mode() == ecs::run_mode::edit));
+	BOOST_TEST(w.state().ctx().get<ecs::rng>().next_u32() == expected.next_u32()); // not re-seeded
 }
 
 BOOST_AUTO_TEST_SUITE_END()

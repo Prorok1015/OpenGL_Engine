@@ -38,6 +38,10 @@ public:
     }
 
     // Stateful system constructed in place, one instance per world that enables it.
+    // Reload contract: the instance lives in the world's plan, so every plan rebuild (a hot reload
+    // of the systems, reload_world, a phase table change) constructs it anew from ARGS... and its
+    // runtime state starts over; that is how a changed desc parameter reaches it. A shared
+    // instance (the shared_ptr overload above) is kept across rebuilds and keeps its state.
     template <auto Candidate, typename T, class... ARGS>
     requires std::is_base_of_v<ecs::system_interface, T>
     void register_system(const std::string &name, system_desc desc, ARGS... args) {
@@ -47,6 +51,8 @@ public:
     }
 
     // Adds a named game phase anchored next to a built-in one; false when the name is rejected.
+    // Register game phases before the first level load. Plans built earlier do not know the new
+    // phase (its systems are dropped as unknown_phase); call scn::level::rebuild_all_plans then.
     bool add_game_phase(std::string name, phase anchor, phase_side side) {
         return m_registry.phases().add_game_phase(std::move(name), anchor, side);
     }
