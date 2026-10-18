@@ -4,6 +4,7 @@ add_library(${PROJECT_NAME} STATIC)
 add_library(snk::common ALIAS ${PROJECT_NAME})
 # Memory allocators live here (previously compiled into `core` — see EPIC-49 US-49-2).
 target_sources(${PROJECT_NAME} PRIVATE
+	"${CMAKE_CURRENT_SOURCE_DIR}/ds_task_system.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/engine_assert.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_allocator.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/mem_debug_resource.cpp"
@@ -22,7 +23,7 @@ target_compile_definitions(glm INTERFACE GLM_ENABLE_EXPERIMENTAL)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/logger logger)
 # Sanitizer/warning flags are for in-tree project code only: BUILD_INTERFACE keeps them out of the
 # installed SDK package (cmake/SnkInstall.cmake).
-target_link_libraries(${PROJECT_NAME} PUBLIC glm snk::engine_logger PUBLIC $<BUILD_INTERFACE:snk::sanitizers> PUBLIC $<BUILD_INTERFACE:snk::compiler_warnings>)
+target_link_libraries(${PROJECT_NAME} PUBLIC glm snk::engine_logger PRIVATE Boost::asio PUBLIC $<BUILD_INTERFACE:snk::sanitizers> PUBLIC $<BUILD_INTERFACE:snk::compiler_warnings>)
 
 if(ENGINE_PROFILE_MODE STREQUAL "INTERNAL")
   target_compile_definitions(${PROJECT_NAME} PUBLIC ENGINE_PROFILE_INTERNAL=1)

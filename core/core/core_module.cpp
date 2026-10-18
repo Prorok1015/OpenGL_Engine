@@ -7,12 +7,20 @@
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/adapters/res_adapter_worker.h>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_api.h>
+
+#include <algorithm>
+#include <chrono>
 
 namespace {
 	CFG_VAR_DEF_STRING(cfg_log_file,  "logger/file",  "logs/engine.log");
 	CFG_VAR_DEF_STRING(cfg_log_level, "logger/level", "");
+
+	// Main-thread queue limits (ds::task_system, `tasks` frame stage).
+	CFG_VAR_DEF_FLOAT(cfg_tasks_main_budget_ms, "tasks/main_budget_ms", 2.0f);
+	CFG_VAR_DEF_INT(cfg_tasks_gpu_upload_per_frame, "tasks/gpu_upload_per_frame", 4);
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -37,6 +45,8 @@ namespace {
 
 void core::core_module::register_services(ds::app_data_storage& data)
 {
+	// Before resource_system (and so destroyed after it): resource work will run on its lanes.
+	data.construct<ds::task_system>();
 	res::resource_init(data);// core
 	desc::desc_init(data);// core
 	window::window_init(data);// core
@@ -44,6 +54,9 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	// The frame loop is shared by every host; modules add their stages to the registry.
 	auto& stages = data.construct<app::frame_stage_registry>();
 	app::register_core_frame_stages(stages);
+	stages.add_stage("tasks", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& ctx) {
+		ctx.storage.require<ds::task_system>().drain_main();
+	});
 	data.construct<app::app_loop_service_interface, app::loop_service>(stages);
 }
 
@@ -72,6 +85,11 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 		}
 	}
 
+	auto& tasks = data.require<ds::task_system>();
+	tasks.set_main_budget(std::chrono::duration_cast<std::chrono::nanoseconds>(
+		std::chrono::duration<float, std::milli>(std::max(0.f, static_cast<float>(cfg_tasks_main_budget_ms)))));
+	tasks.set_gpu_upload_limit(static_cast<std::size_t>(std::max(0, static_cast<int>(cfg_tasks_gpu_upload_per_frame))));
+
 	// Initialize core services here
 	auto& window = data.require<wnd::window_system>();
 	window.init();
@@ -87,4 +105,5 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 	window::window_term(data);
 	desc::desc_term(data);
 	res::resource_term(data);
+	data.destruct<ds::task_system>();
 }
