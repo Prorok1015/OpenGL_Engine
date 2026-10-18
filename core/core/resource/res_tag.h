@@ -63,7 +63,7 @@ namespace res
 
 		bool operator== (const tag& val) const { return full_ == val.full_; }
 		std::size_t get_hash() const { return std::hash<std::string>{}(full_); }
-		friend res::tag operator+ (const res::tag& a, const res::tag& b);
+		friend SNK_API res::tag operator+ (const res::tag& a, const res::tag& b);
 
 	private:
 		// {offset, length} spans into full_ (was glm::ivec2; POD-ified to drop the glm include).
