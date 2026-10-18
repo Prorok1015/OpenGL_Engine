@@ -52,6 +52,11 @@ void edt::world_controller::create_world(const std::string& name)
 	auto lvl_mgr = m_state.lvl_manager.lock();
 	if (!lvl_mgr || !m_state.sfactory || !m_state.assembler) return;
 
+	if (lvl_mgr->get_level().has_world(name)) {
+		egLOG_WARN("Editor/CreateWorld", "World '{}' already exists, choose another name", name);
+		return;
+	}
+
 	namespace json = boost::json;
 
 	auto tag = res::tag::make("templates/world.desc");

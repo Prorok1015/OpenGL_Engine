@@ -241,6 +241,8 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 			}
 		}
 
+		// Close before waking waiters: on Windows an open handle blocks deleting or replacing the file.
+		file.close();
 		data_sp->set_ready(std::move(data));
 
 	}

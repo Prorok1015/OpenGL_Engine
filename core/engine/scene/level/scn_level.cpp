@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <functional>
 #include "eng_profiler.h"
+#include "engine_log.h"
 
 scn::level::level(std::shared_ptr<scn::hot_reload_manager> hot_manager)
 	: m_hot_reload_manager(std::move(hot_manager))
@@ -103,6 +104,12 @@ void scn::level::run_phase(size_t phase_index, ecs::run_mode mode)
 
 scn::world& scn::level::create_world(const std::string_view type, uint32_t world_id)
 {
+    if (auto it = m_worlds.find(std::string{ type }); it != m_worlds.end()) {
+        // replacing would free a world that m_worlds_by_id and m_plans still point at
+        egLOG_ERROR("scene", "create_world: world '{}' already exists, keeping the existing one", type);
+        return *it->second;
+    }
+
     auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id, type));
     m_worlds_by_id[world_id] = &w; // Register in ID map
     w.state().ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, world_id) });

@@ -41,8 +41,16 @@ set(ENGINE_CORE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/core")
 # Keep absolute source paths out of the binaries: __FILE__ (asserts, GL error checks, logging
 # in project and third-party code) becomes relative to the source root. Only the __FILE__ macro
 # is remapped, not debug info, so debuggers and gcov/coverage still see the real paths.
+# sccache takes the path in /d1trimfile:<dir> for a second input file and refuses to cache every
+# compile ("multiple input files"), so with sccache MSVC keeps absolute __FILE__ paths.
+set(_snk_msvc_trimfile OFF)
+if(MSVC AND NOT SNK_COMPILER_CACHE_TOOL STREQUAL "sccache")
+    set(_snk_msvc_trimfile ON)
+endif()
 if(MSVC)
-    add_compile_options(/d1trimfile:${CMAKE_CURRENT_SOURCE_DIR}/)
+    if(_snk_msvc_trimfile)
+        add_compile_options(/d1trimfile:${CMAKE_CURRENT_SOURCE_DIR}/)
+    endif()
 else()
     add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}/=)
 endif()
@@ -54,7 +62,7 @@ include(ThirdParty)
 # FetchContent'd Boost lives outside the source tree: remap it too, plus the symlink-resolved
 # source root (e.g. submodules linked from another checkout).
 if(MSVC)
-    if(boost_SOURCE_DIR)
+    if(boost_SOURCE_DIR AND _snk_msvc_trimfile)
         add_compile_options(/d1trimfile:${boost_SOURCE_DIR}/)
     endif()
 else()
@@ -101,3 +109,11 @@ add_test(NAME unit_tests COMMAND unit_tests)
 
 snk_pch_create_owner()
 snk_apply_target_defaults()
+
+# Assimp hard-codes /Zi into its Debug C++ flags (lib3dparty/assimp/CMakeLists.txt); sccache then
+# expects a .pdb that the embedded-debug-info (/Z7) build never writes and fails the compile.
+# Assimp alone builds uncached in that case.
+if(MSVC AND SNK_COMPILER_CACHE_TOOL STREQUAL "sccache" AND TARGET assimp
+		AND CMAKE_BUILD_TYPE MATCHES "^(Debug|RelWithDebInfo)$")
+	set_target_properties(assimp PROPERTIES CXX_COMPILER_LAUNCHER "")
+endif()

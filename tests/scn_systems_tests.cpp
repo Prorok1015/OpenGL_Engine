@@ -359,6 +359,38 @@ BOOST_FIXTURE_TEST_CASE(Camera_PanFollowsCurrentYaw, camera_fixture)
 	BOOST_TEST(ctl().position.z == -3.0f, boost::test_tools::tolerance(1e-5f));
 }
 
+// The camera runs before the transform phase, so this frame's move is already in the world matrix.
+struct camera_world_fixture : systems_fixture
+{
+	camera_world_fixture()
+	{
+		auto& world = make_world({ "scn::depth_system", "scn::transform_system", "scn::update_camera_matrix_system" });
+		reg = &world.state();
+		state = &reg->ctx().emplace<inp::input_state>();
+		reg->ctx().emplace<inp::input_focus>();
+		cam = node(*reg, entt::null, { 0, 0, 0 });
+		reg->emplace<scn::mouse_controller_component>(cam);
+	}
+
+	entt::registry* reg = nullptr;
+	inp::input_state* state = nullptr;
+	entt::entity cam = entt::null;
+};
+
+BOOST_FIXTURE_TEST_CASE(Camera_WorldMatrixReflectsThisFramesMove, camera_world_fixture)
+{
+	emit_hierarchy(*reg, cam);
+	step(0.016f);
+
+	state->mouse[(int)inp::MOUSE_BUTTONS::LEFT] = true;
+	state->mouse_dir = { 0.1f, 0.2f };
+	step(0.016f);
+
+	const glm::vec3 local = glm::vec3(reg->get<scn::local_transform>(cam).local[3]);
+	BOOST_TEST(local.z == 0.6f + 2.0f, boost::test_tools::tolerance(1e-5f));
+	BOOST_TEST((world_pos(*reg, cam) == local)); // not the previous frame's matrix
+}
+
 BOOST_FIXTURE_TEST_CASE(Camera_ScrollUpZoomsInAndClampsAtZero, camera_fixture)
 {
 	state->scroll = { 0.0f, 1.0f };

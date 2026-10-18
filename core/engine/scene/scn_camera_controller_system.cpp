@@ -60,8 +60,10 @@ void clear_input_state_system(inp::input_state& state)
 
 void scn::init_mouse_controller_system(ecs::system_factory& factory)
 {
+    // pre_update: the camera writes local_transform and emits transform_updated, so it has to run
+    // before the transform phase or its world matrix lags a frame behind
     factory.register_system<update_camera_matrix_system>("scn::update_camera_matrix_system",
-        { .phase = ecs::phase::late_update, .after = { "scn::animation_system_matrix" }, .run_in_edit = true });
+        { .phase = ecs::phase::pre_update, .run_in_edit = true });
     factory.register_system<clear_input_state_system>("inp::clear_input_state",
         { .phase = ecs::phase::late_update, .after = { "scn::update_camera_matrix_system" }, .run_in_edit = true });
 }

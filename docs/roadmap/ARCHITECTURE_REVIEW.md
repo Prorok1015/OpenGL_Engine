@@ -730,9 +730,10 @@ SDL_GPU — GPU-API в составе SDL3: тонкая абстракция н
 | Фаза | Системы |
 |---|---|
 | `input` | `inp::update_input_state` |
+| `pre_update` | `scn::update_camera_matrix_system` (пишет `local_transform` камеры до фазы `transform`, иначе мировая матрица отстаёт на кадр) |
 | `update` | `scn::animation_controller_update` → `scn::animation_system_node` |
 | `transform` | `scn::depth_system` → `scn::transform_system` |
-| `post_update`… `late_update` | `scn::animation_system_matrix` (`.after = transform_system`) → `scn::update_camera_matrix_system` |
+| `post_update`… `late_update` | `scn::animation_system_matrix` (`.after = transform_system`) |
 
 Порядок больше не зависит от того, какие типы аргументов у систем.
 
