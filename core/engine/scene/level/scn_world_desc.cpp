@@ -15,8 +15,14 @@ void scn::world_desc::deserialize(desc::desc_system& desc_system, const json::ob
 
 void scn::world_desc::serialize(json::object& data) const
 {
-	scn::prefab_desc::serialize(data);  // overwrites data — must set fields after
+	json::object node;
+	scn::prefab_desc::serialize(node);
+	// The world's own fields go first, the node tree after them.
+	data.clear();
 	data["__type"] = "world_desc";
-	data["systems"] = json::value_from(systems);
 	data["name"] = json::value_from(name);
+	data["systems"] = json::value_from(systems);
+	for (auto& member : node) {
+		data[member.key()] = std::move(member.value());
+	}
 }

@@ -16,6 +16,12 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
     options.max_depth = 128;
     auto json_body = json::parse(json_data, {}, options).as_object();
 
+    try {
+        m_desc_system.migrate_tree(json_body, tag.view());
+    } catch (const std::exception& e) {
+        throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': " + e.what());
+    }
+
     if (!json_body.contains("__type")) {
         throw std::runtime_error("world desc '" + std::string{ tag.view() } + "' does not contain __type field");
     }
@@ -46,9 +52,6 @@ std::vector<std::byte> scn::worldwrap_adapter::serialize(const::res::tag& tag, c
     const auto& desc_res = ds::polymorphic_pointer_cast<::desc::desc_base>(resource);
     json::object body;
     desc_res->serialize(body);
-    std::string data = json::serialize(body);
-    std::vector<std::byte> byte_data;
-    byte_data.resize(data.size());
-    std::memcpy(byte_data.data(), data.data(), data.size());
-    return byte_data;
+    m_desc_system.stamp_tree(body);
+    return m_desc_system.serialize_to_bytes(json::value{ std::move(body) });
 }

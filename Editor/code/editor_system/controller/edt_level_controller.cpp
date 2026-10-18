@@ -308,13 +308,15 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	std::filesystem::path abs_path = res::resource_system::get_resources_path() / frel;
 	std::error_code ec;
 	std::filesystem::create_directories(abs_path.parent_path(), ec);
-	std::ofstream out(abs_path);
+	std::ofstream out(abs_path, std::ios::binary);
 	if (!out) {
 		egLOG("Editor/Save", "Failed to open file for writing: {}", abs_path.string());
 		return false;
 	}
 
-	out << boost::json::serialize(level_json);
+	// Same writer as every other desc save, so level files are indented and diff well.
+	const auto bytes = m_desc.serialize_to_bytes(boost::json::value{ level_json });
+	out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 	m_state.level_guid = guid;
 	m_state.level_name = level_name;
 	m_state.is_dirty   = false;

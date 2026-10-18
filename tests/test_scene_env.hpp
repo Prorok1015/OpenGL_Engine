@@ -193,6 +193,16 @@ struct scene_env : ram_res_env
 		rs.reset();
 	}
 
+	// Parses `text` as a desc object (`type` is filled in when the text has none) and upgrades it to the
+	// current format version, the way the desc adapter does before create_instance.
+	boost::json::object parse_migrated(std::string_view text, std::string_view type = "prefab_desc")
+	{
+		auto obj = boost::json::parse(text).as_object();
+		if (!obj.contains("__type")) obj["__type"] = std::string{ type };
+		descs->migrate_tree(obj, "test");
+		return obj;
+	}
+
 	template<class T>
 	std::shared_ptr<T> load(const res::tag& tag)
 	{

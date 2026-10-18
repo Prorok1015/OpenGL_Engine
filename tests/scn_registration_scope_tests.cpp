@@ -38,7 +38,9 @@ BOOST_AUTO_TEST_SUITE(scn_registration_scope_tests)
 BOOST_FIXTURE_TEST_CASE(register_scene_types_registers_everything, scope_fixture)
 {
 	auto scope = scn::register_scene_types(descs, assembler, skinning);
-	BOOST_CHECK_EQUAL(scope.size(), std::size(scene_descs) + std::size(scene_spawners));
+	constexpr std::size_t migrations = 3; // prefab_desc, world_desc and level_desc, v1 -> v2
+	BOOST_CHECK_EQUAL(scope.size(), std::size(scene_descs) + std::size(scene_spawners) + migrations);
+	for (auto type : { "prefab_desc", "world_desc", "level_desc" }) BOOST_CHECK_EQUAL(descs.current_version(type), 2);
 	for (auto type : scene_descs) BOOST_CHECK_MESSAGE(descs.is_registered(type), type);
 	for (auto type : scene_spawners) BOOST_CHECK_MESSAGE(assembler.has_spawner(type), type);
 	BOOST_CHECK_EQUAL(descs.get_component_type_names().size(), 3u);
@@ -53,6 +55,7 @@ BOOST_FIXTURE_TEST_CASE(destroying_scope_restores_registries, scope_fixture)
 	for (auto type : scene_descs) BOOST_CHECK_MESSAGE(!descs.is_registered(type), type);
 	for (auto type : scene_spawners) BOOST_CHECK_MESSAGE(!assembler.has_spawner(type), type);
 	BOOST_CHECK(descs.get_component_type_names().empty());
+	BOOST_CHECK_EQUAL(descs.current_version("prefab_desc"), 1); // migrations leave with the scope
 }
 
 BOOST_FIXTURE_TEST_CASE(scene_types_can_be_registered_again_after_scope_ends, scope_fixture)

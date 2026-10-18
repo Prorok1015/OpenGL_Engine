@@ -1,4 +1,5 @@
 #include "scn_prefab_desc.h"
+#include "logger/engine_log.h"
 #include "scn_model.h"
 #include "scn_node_index.h"
 #include "scn_glm_json_convert.h"
@@ -135,44 +136,49 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 		return cnode;
 	};
 
-	auto parse_node = [&] (auto& self, std::string_view node_name, const json::value& val, bool is_root = false) -> prefab_node {
+	// A v2 node is { "__id", "name", "transform", "components", "children": [nodes] }; the root has no name.
+	auto parse_node = [&] (auto& self, const json::object& obj, bool is_root) -> prefab_node {
 		prefab_node result;
-		result.name = node_name;
-
-		if (is_root || (val.is_object() && !val.as_object().contains("__type"))) {
-			const auto& obj = val.as_object();
-			if (auto const* p = obj.if_contains("__id")) {
-				auto id = p->is_string() ? desc::parse_node_id(p->as_string()) : std::nullopt;
-				if (id) result.node_id = *id;
-				else egLOG_WARN("desc", "node '{}' has a malformed __id, it will be derived", node_name);
-			}
-			if (auto* transform = obj.if_contains("transform")) {
-				auto& t_obj = transform->as_object();
-				if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
-				if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
-				if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
-			}
-
-			if (auto const* p = obj.if_contains("components")) {
-				for (const auto& kv : p->as_object()) {
-					std::string_view comp_key = kv.key();
-					result.components[std::string(comp_key)] = parse_comp(kv.value(), comp_key);
-				}
-			}
-
-			if (auto const* p = obj.if_contains("children")) {
-				for (const auto& kv : p->as_object()) {
-					result.children.push_back(self(self, kv.key(), kv.value()));
-				}
-			}
-		} else {
-			result.components[std::string(node_name)] = parse_comp(val, node_name);
+		if (auto const* p = obj.if_contains("name"); p && p->is_string() && !is_root) {
+			result.name = p->as_string();
+		}
+		if (auto const* p = obj.if_contains("__id")) {
+			auto id = p->is_string() ? desc::parse_node_id(p->as_string()) : std::nullopt;
+			if (id) result.node_id = *id;
+			else egLOG_WARN("desc", "node '{}' has a malformed __id, it will be derived", result.name);
+		}
+		if (auto* transform = obj.if_contains("transform"); transform && transform->is_object()) {
+			auto& t_obj = transform->as_object();
+			if (auto const* p = t_obj.if_contains("position")) result.position = json::value_to<glm::vec3>(*p);
+			if (auto const* p = t_obj.if_contains("rotation")) result.rotation = json::value_to<glm::vec3>(*p);
+			if (auto const* p = t_obj.if_contains("scale"))    result.scale = json::value_to<glm::vec3>(*p);
 		}
 
+		if (auto const* p = obj.if_contains("components"); p && p->is_object()) {
+			for (const auto& kv : p->as_object()) {
+				std::string_view comp_key = kv.key();
+				result.components[std::string(comp_key)] = parse_comp(kv.value(), comp_key);
+			}
+		}
+
+		if (auto const* p = obj.if_contains("children")) {
+			if (!p->is_array()) {
+				egLOG_ERROR("desc", "node '{}': 'children' must be an array (format v1 needs migration), ignoring it", result.name);
+			} else {
+				result.children.reserve(p->as_array().size());
+				for (const auto& child : p->as_array()) {
+					if (!child.is_object()) {
+						egLOG_WARN("desc", "node '{}': child is not an object, skipping", result.name);
+						continue;
+					}
+					result.children.push_back(self(self, child.as_object(), false));
+				}
+			}
+		}
 		return result;
 	};
 
-	prefab_node parsed = parse_node(parse_node, "", data, true);
+	prefab_node parsed = parse_node(parse_node, data, true);
 
 	// With a __parent the adapter already copied the parent into this instance: layer on top of it.
 	if (!data.contains("__parent")) {
@@ -181,7 +187,10 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 		return;
 	}
 
-	if (parsed.node_id != desc::invalid_node_id) root.node_id = parsed.node_id;
+	// Ids the overlay does not spell out are derived the same way the parent's were, so a same-named node lines up.
+	const uint64_t explicit_root_id = parsed.node_id;
+	finalize_node_ids(parsed);
+	if (explicit_root_id != desc::invalid_node_id) root.node_id = explicit_root_id;
 
 	if (auto const* transform = data.if_contains("transform"); transform && transform->is_object()) {
 		const auto& t_obj = transform->as_object();
@@ -193,7 +202,7 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 		root.components[key] = std::move(comp);
 	}
 	for (auto& child : parsed.children) {
-		auto it = std::ranges::find(root.children, child.name, &prefab_node::name);
+		auto it = std::ranges::find(root.children, child.node_id, &prefab_node::node_id);
 		if (it != root.children.end()) *it = std::move(child);
 		else root.children.push_back(std::move(child));
 	}
@@ -202,13 +211,13 @@ void scn::prefab_desc::deserialize(desc::desc_system& desc_system, const json::o
 
 void scn::prefab_desc::serialize(json::object& data) const
 {
-	auto serialize_comp = [] (const std::string& comp_key, const prefab_comp_node& cnode, bool is_shorthand) -> json::value {
+	auto serialize_comp = [] (const prefab_comp_node& cnode) -> json::value {
 		if (cnode.overrides.empty() && cnode.type_name.empty() && cnode.parent_desc.is_valid()) {
 			return json::value_from(cnode.parent_desc.get_tag());
 		}
 
 		json::object out;
-		if (!cnode.type_name.empty() && (is_shorthand || cnode.type_name != comp_key)) {
+		if (!cnode.type_name.empty()) {
 			out["__type"] = cnode.type_name;
 		}
 		if (cnode.parent_desc.is_valid()) {
@@ -220,24 +229,12 @@ void scn::prefab_desc::serialize(json::object& data) const
 		return out;
 	};
 
-	auto serialize_node = [&] (auto& self, const prefab_node& nd) -> json::value {
-		// The collapsed form has nowhere to keep the id.
-		bool can_be_collapsed = nd.node_id == desc::invalid_node_id &&
-			nd.children.empty() &&
-			nd.components.size() == 1 &&
-			nd.position == glm::vec3{ 0.0f } &&
-			nd.rotation == glm::vec3{ 0.0f } &&
-			nd.scale == glm::vec3{ 1.0f } &&
-			nd.components.begin()->first == nd.name;
-
-		if (can_be_collapsed) {
-			const auto& [comp_name, cnode] = *nd.components.begin();
-			return serialize_comp(comp_name, cnode, true);
-		}
-
+	auto serialize_node = [&] (auto& self, const prefab_node& nd, bool is_root) -> json::object {
 		json::object node_obj;
 		if (nd.node_id != desc::invalid_node_id)
 			node_obj["__id"] = desc::format_node_id(nd.node_id);
+		if (!is_root)
+			node_obj["name"] = nd.name;
 
 		json::object transform_obj;
 		if (nd.position != glm::vec3{ 0.0f }) 
@@ -251,28 +248,32 @@ void scn::prefab_desc::serialize(json::object& data) const
 			node_obj["transform"] = std::move(transform_obj);
 
 		if (!nd.components.empty()) {
+			// The components live in an unordered_map: sorted keys keep saved files stable.
+			std::vector<const std::pair<const std::string, prefab_comp_node>*> sorted;
+			sorted.reserve(nd.components.size());
+			for (const auto& entry : nd.components) sorted.push_back(&entry);
+			std::ranges::sort(sorted, {}, [] (const auto* entry) -> const std::string& { return entry->first; });
+
 			json::object comps_obj;
-			for (const auto& [comp_key, cnode] : nd.components) {
-				comps_obj[comp_key] = serialize_comp(comp_key, cnode, false);
+			for (const auto* entry : sorted) {
+				comps_obj[entry->first] = serialize_comp(entry->second);
 			}
 			node_obj["components"] = std::move(comps_obj);
 		}
 
 		if (!nd.children.empty()) {
-			json::object children_obj;
+			json::array children_arr;
+			children_arr.reserve(nd.children.size());
 			for (const auto& child_node : nd.children) {
-				children_obj[child_node.name] = self(self, child_node);
+				children_arr.push_back(self(self, child_node, false));
 			}
-			node_obj["children"] = std::move(children_obj);
+			node_obj["children"] = std::move(children_arr);
 		}
 
 		return node_obj;
 	};
 
-	json::value root_val = serialize_node(serialize_node, root);
-	if (root_val.is_object()) {
-		data = root_val.as_object();
-	}
+	data = serialize_node(serialize_node, root, true);
 }
 
 void scn::assemble_merged_node(
@@ -578,6 +579,86 @@ void scn::hot_reload_merged_node(
 				++it;
 			}
 		}
+	}
+}
+
+namespace {
+
+	bool has_valid_node_id(const json::object& node)
+	{
+		auto it = node.find("__id");
+		return it != node.end() && it->value().is_string() && desc::parse_node_id(it->value().as_string());
+	}
+
+	// A component object without __type took the component key as its type; spell that out.
+	void spell_out_component_types(json::object& node)
+	{
+		auto comps = node.find("components");
+		if (comps == node.end() || !comps->value().is_object()) return;
+		for (auto& kv : comps->value().as_object()) {
+			if (kv.value().is_object() && !kv.value().as_object().contains("__type")) {
+				kv.value().as_object()["__type"] = std::string{ kv.key() };
+			}
+		}
+	}
+
+	json::array upgrade_children_v1(json::object& children, const std::string& parent_path);
+
+	// Header keys first, then the rest in the original order.
+	json::object upgrade_node_v1(std::string_view name, json::value& val, const std::string& path)
+	{
+		json::object src;
+		if (val.is_object() && !val.as_object().contains("__type")) {
+			src = std::move(val.as_object());
+		} else {
+			// v1 one-line form: the node is a single component named after the node.
+			json::object comps;
+			comps[name] = std::move(val);
+			src["components"] = std::move(comps);
+		}
+
+		json::object out;
+		out["__id"] = has_valid_node_id(src) ? src.at("__id") : json::value{ desc::format_node_id(desc::derive_node_id(path)) };
+		out["name"] = std::string{ name };
+		spell_out_component_types(src);
+		for (auto& kv : src) {
+			if (kv.key() == "__id" || kv.key() == "name" || kv.key() == "children") continue;
+			out[kv.key()] = std::move(kv.value());
+		}
+		if (auto it = src.find("children"); it != src.end() && it->value().is_object()) {
+			out["children"] = upgrade_children_v1(it->value().as_object(), path);
+		}
+		return out;
+	}
+
+	json::array upgrade_children_v1(json::object& children, const std::string& parent_path)
+	{
+		json::array out;
+		out.reserve(children.size());
+		for (auto& kv : children) {
+			const std::string name{ kv.key() };
+			out.push_back(upgrade_node_v1(name, kv.value(), parent_path + "/" + name));
+		}
+		return out;
+	}
+}
+
+// v1 keyed children by name (the name was the identity). v2 stores an array of nodes with an explicit
+// __id and name. Ids are the same name-path hash the loader derived for v1 files, so they stay stable.
+void scn::migrate_prefab_v1(json::object& obj)
+{
+	if (obj.contains("__parent") && obj.contains("children")) {
+		egLOG_WARN("desc", "a prefab with '__parent' lists children; v2 pairs them with the parent's nodes by '__id', "
+			"v1 name matching is not migrated (ids are derived from the node names)");
+	}
+
+	if (!has_valid_node_id(obj)) {
+		obj["__id"] = desc::format_node_id(desc::derive_node_id(""));
+	}
+	spell_out_component_types(obj);
+	if (auto it = obj.find("children"); it != obj.end() && it->value().is_object()) {
+		json::array upgraded = upgrade_children_v1(it->value().as_object(), "");
+		obj["children"] = std::move(upgraded);
 	}
 }
 

@@ -156,7 +156,7 @@ prefab_desc::prefab_node {
 prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 ```
 
-- `children` serialized as JSON **object** (key = name), NOT array
+- `children` serialized as a JSON **array** of nodes `{ "__id", "name", "transform", "components", "children" }` (format v2; v1 keyed them by name and is migrated on load)
 - `components` key = type_name (e.g. `"mesh_node_desc"`, `"bone_desc"`)
 - `rotation` stores Euler degrees: `x=pitch, y=yaw, z=roll`; reconstructed via `yawPitchRoll(y,x,z)`
 
@@ -221,5 +221,5 @@ Non-blocking ImGui modal — must be called every frame while open.
 - **Camera state**: always call `save_editor_camera_state` before `serialize_and_push`, `inject_editor_camera` after — otherwise camera resets
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`
 - **`get_field_desc<T>` with inline objects** requires `__type` field present in the JSON object
-- **`children` is a JSON object, not array** — iterating via `as_object()`, not `as_array()`
+- **`children` is a JSON array of named nodes (v2)** — iterate via `as_array()`; a v1 object is only valid before `migrate_tree`
 - **No C functions** — prefer `std::format_to_n` over `snprintf`/`strncpy`, C++ alternatives over C stdlib

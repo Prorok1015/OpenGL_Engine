@@ -55,6 +55,31 @@ f 4/1 5/2 6/3
 // from x=0 at t=0 to x=10 at t=2.
 constexpr const char* GLTF_TRIANGLE = R"GLTF({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"Parent","translation":[1,2,3],"rotation":[0,0.7071068,0,0.7071068],"scale":[2,2,2],"children":[1,2]},{"name":"Child","mesh":0,"translation":[0,5,0]},{"name":"Tilted","rotation":[0.23911761839433449,0.3696438106143861,-0.09904576054128762,0.8923991008325228]}],"meshes":[{"name":"TriMesh","primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],"materials":[{"name":"Red","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}],"animations":[{"name":"Move","samplers":[{"input":4,"output":5,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}],"buffers":[{"byteLength":136,"uri":"data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAABAAIAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAIEEAAAAAAAAAAA=="}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6},{"buffer":0,"byteOffset":104,"byteLength":8},{"buffer":0,"byteOffset":112,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2]},{"bufferView":5,"componentType":5126,"count":2,"type":"VEC3"}]})GLTF";
 
+// The child of a node (or of the file root) with the given name; children are an array of named nodes.
+const json::value& child_named(const json::value& node, std::string_view name)
+{
+	for (const auto& child : node.at("children").as_array()) {
+		if (child.at("name").as_string() == name) return child;
+	}
+	throw std::out_of_range("no child named " + std::string(name));
+}
+
+const json::value& child_named(const json::object& node, std::string_view name)
+{
+	for (const auto& child : node.at("children").as_array()) {
+		if (child.at("name").as_string() == name) return child;
+	}
+	throw std::out_of_range("no child named " + std::string(name));
+}
+
+bool has_child(const json::object& node, std::string_view name)
+{
+	for (const auto& child : node.at("children").as_array()) {
+		if (child.at("name").as_string() == name) return true;
+	}
+	return false;
+}
+
 struct importer_fixture : test_util::scene_env
 {
 	importer_fixture()
@@ -87,7 +112,7 @@ BOOST_AUTO_TEST_CASE(Obj_TriangleBecomesPrefabWithMeshNodeAndDefaultMaterial)
 	auto prefab = import("tri.obj", OBJ_TRIANGLE);
 	BOOST_REQUIRE(prefab);
 	auto out = serialized(*prefab);
-	const auto& mesh = out.at("children").at("Tri").at("children").at("mesh_Tri").at("components").at("mesh_node_desc").as_object();
+	const auto& mesh = child_named(child_named(out, "Tri"), "mesh_Tri").at("components").at("mesh_node_desc").as_object();
 	BOOST_TEST(mesh.at("vx_begin").to_number<int>() == 0);
 	BOOST_TEST(mesh.at("vx_end").to_number<int>() == 3);
 	BOOST_TEST(mesh.at("ind_begin").to_number<int>() == 0);
@@ -138,18 +163,18 @@ BOOST_AUTO_TEST_CASE(Gltf_NodeTransformsAndHierarchyAreImported)
 	BOOST_TEST((json::value_to<glm::vec3>(out.at("transform").at("position")) == glm::vec3{ 1, 2, 3 }));
 	auto scale = json::value_to<glm::vec3>(out.at("transform").at("scale"));
 	BOOST_TEST(scale.y == 2.0f, boost::test_tools::tolerance(1e-4f));
-	const auto& children = out.at("children").as_object();
-	BOOST_TEST(children.contains("Child"));
-	BOOST_TEST(children.contains("Tilted"));
-	BOOST_TEST((json::value_to<glm::vec3>(children.at("Child").at("transform").at("position")) == glm::vec3{ 0, 5, 0 }));
-	BOOST_TEST(children.at("Child").at("children").at("mesh_TriMesh").at("components").at("mesh_node_desc").at("material").at("name").as_string() == "Red");
+	BOOST_TEST(has_child(out, "Child"));
+	BOOST_TEST(has_child(out, "Tilted"));
+	const auto& child = child_named(out, "Child");
+	BOOST_TEST((json::value_to<glm::vec3>(child.at("transform").at("position")) == glm::vec3{ 0, 5, 0 }));
+	BOOST_TEST(child_named(child, "mesh_TriMesh").at("components").at("mesh_node_desc").at("material").at("name").as_string() == "Red");
 }
 
 BOOST_AUTO_TEST_CASE(Gltf_MaterialColorBecomesAlbedoUniform)
 {
 	auto prefab = import("tri.gltf", GLTF_TRIANGLE);
 	auto out = serialized(*prefab);
-	const auto& mat = out.at("children").at("Child").at("children").at("mesh_TriMesh").at("components").at("mesh_node_desc").at("material");
+	const auto& mat = child_named(child_named(out, "Child"), "mesh_TriMesh").at("components").at("mesh_node_desc").at("material");
 	BOOST_TEST((json::value_to<glm::vec4>(mat.at("uniforms").at("albedo")) == glm::vec4{ 1, 0, 0, 1 }));
 }
 
@@ -198,7 +223,7 @@ BOOST_AUTO_TEST_CASE(Obj_MeshWithoutUvsImportsWithZeroUvBounds)
 	auto prefab = import("nouv.obj", OBJ_NO_UV);
 	BOOST_REQUIRE(prefab);
 	auto out = serialized(*prefab);
-	BOOST_TEST(out.at("children").at("Tri").at("children").at("mesh_Tri").at("components").at("mesh_node_desc").at("ind_end").to_number<int>() == 3);
+	BOOST_TEST(child_named(child_named(out, "Tri"), "mesh_Tri").at("components").at("mesh_node_desc").at("ind_end").to_number<int>() == 3);
 }
 
 BOOST_AUTO_TEST_CASE(Obj_SameNamedMeshesUnderOneNodeGetUniqueChildren)
@@ -207,9 +232,9 @@ BOOST_AUTO_TEST_CASE(Obj_SameNamedMeshesUnderOneNodeGetUniqueChildren)
 	BOOST_REQUIRE(prefab);
 	auto out = serialized(*prefab);
 	std::size_t mesh_children = 0;
-	for (auto& [name, value] : out.at("children").as_object())
-		for (auto& [child_name, child] : value.at("children").as_object())
-			if (child_name.starts_with("mesh_")) ++mesh_children;
+	for (const auto& value : out.at("children").as_array())
+		for (const auto& child : value.at("children").as_array())
+			if (child.at("name").as_string().starts_with("mesh_")) ++mesh_children;
 	BOOST_TEST_MESSAGE(json::serialize(out));
 	BOOST_TEST(mesh_children == 2u);
 }

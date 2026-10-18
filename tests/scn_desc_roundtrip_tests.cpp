@@ -542,28 +542,32 @@ BOOST_AUTO_TEST_CASE(WorldDesc_NodeReferencingAssetKeepsTransformOnSave)
 			"components":{"scene":")") + tag_of("robot.desc").string() + R"("}}}})";
 
 	scn::world_desc w;
-	w.deserialize(*descs, parse(text.c_str()));
+	w.deserialize(*descs, parse_migrated(text, "world_desc"));
 	auto out = ser(w);
 
-	const auto& scene = out.at("children").as_object().at("scene");
-	BOOST_REQUIRE_MESSAGE(scene.is_object(), "node with a transform must not collapse to a bare string");
+	const auto& scene = out.at("children").as_array().at(0);
+	BOOST_REQUIRE_MESSAGE(scene.is_object(), "a node is always an object");
+	BOOST_TEST(scene.at("name").as_string() == "scene");
 	const auto& tr = scene.as_object().at("transform").as_object();
 	BOOST_TEST((json::value_to<glm::vec3>(tr.at("position")) == glm::vec3{ 0, -1, -6 }));
 	BOOST_TEST((json::value_to<glm::vec3>(tr.at("rotation")) == glm::vec3{ -90, 0, 0 }));
 	check_stable(*descs, w);
 }
 
-BOOST_AUTO_TEST_CASE(WorldDesc_IdentityReferenceNodeStillUsesShorthand)
+BOOST_AUTO_TEST_CASE(WorldDesc_IdentityReferenceNodeIsWrittenAsANodeWithAReferenceComponent)
 {
 	put("robot.desc", R"({"__type":"stat_desc","hp":5})");
 	auto text = std::string(R"({"__type":"world_desc","name":"w","systems":[],"children":{"scene":")")
 		+ tag_of("robot.desc").string() + R"("}})";
 
 	scn::world_desc w;
-	w.deserialize(*descs, parse(text.c_str()));
-	// The one-line form cannot hold a node id, so only an id-less node collapses.
-	w.get_root().children[0].node_id = 0;
-	BOOST_TEST(ser(w).at("children").as_object().at("scene").is_string());
+	w.deserialize(*descs, parse_migrated(text, "world_desc"));
+	const auto out = ser(w);
+	const auto& scene = out.at("children").as_array().at(0).as_object();
+	BOOST_TEST(scene.at("name").as_string() == "scene");
+	BOOST_TEST(scene.at("components").at("scene").as_string() == tag_of("robot.desc").string());
+	BOOST_TEST(!scene.contains("transform"));
+	check_stable(*descs, w);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

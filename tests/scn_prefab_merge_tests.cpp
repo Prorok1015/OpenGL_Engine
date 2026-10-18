@@ -16,29 +16,40 @@ namespace json = boost::json;
 namespace {
 
 constexpr const char* BASE_PREFAB = R"({
-	"__type": "prefab_desc",
+	"__type": "prefab_desc", "__version": 2,
 	"transform": { "position": [1, 2, 3] },
 	"components": { "stat": { "__type": "stat_desc", "hp": 10, "label": "base", "limits": { "min": 1, "max": 10 } } },
-	"children": {
-		"arm": { "transform": { "position": [5, 0, 0], "rotation": [0, 90, 0], "scale": [2, 2, 2] },
-		         "components": { "stat": { "__type": "stat_desc", "hp": 3 } } },
-		"leg": { "components": { "stat": { "__type": "stat_desc", "hp": 4 } } },
-		"Light": { "__type": "directional_light_desc" }
-	}
+	"children": [
+		{ "__id": "00000000000000a1", "name": "arm",
+		  "transform": { "position": [5, 0, 0], "rotation": [0, 90, 0], "scale": [2, 2, 2] },
+		  "components": { "stat": { "__type": "stat_desc", "hp": 3 } } },
+		{ "__id": "00000000000000a2", "name": "leg", "components": { "stat": { "__type": "stat_desc", "hp": 4 } } },
+		{ "__id": "00000000000000a3", "name": "Light", "components": { "Light": { "__type": "directional_light_desc" } } }
+	]
 })";
 
-// An explicit nested instance of base.prefab.desc with local overrides.
+// An explicit nested instance of base.prefab.desc with local overrides. Its children are paired with the
+// base's by "__id" (a1 is the base's arm); a node with a new id is an addition.
 constexpr const char* INSTANCE_PREFAB = R"({
-	"__type": "prefab_desc",
+	"__type": "prefab_desc", "__version": 2,
 	"components": {
 		"prefab_desc": { "__type": "prefab_desc", "__parent": "memory://t/base.prefab.desc" },
 		"stat": { "__type": "stat_desc", "hp": 99 }
 	},
-	"children": {
-		"arm": { "transform": { "position": [7, 0, 0] }, "components": { "stat": { "__type": "stat_desc", "hp": 30 } } },
-		"extra": { "components": { "stat": { "__type": "stat_desc", "hp": 1 } } }
-	}
+	"children": [
+		{ "__id": "00000000000000a1", "name": "arm", "transform": { "position": [7, 0, 0] },
+		  "components": { "stat": { "__type": "stat_desc", "hp": 30 } } },
+		{ "__id": "00000000000000e1", "name": "extra", "components": { "stat": { "__type": "stat_desc", "hp": 1 } } }
+	]
 })";
+
+// Instance of the base whose only node is the base's arm (a1), with `arm_body` as the rest of that node.
+std::string instance_with_arm(std::string_view arm_body)
+{
+	return std::string(R"({"__type":"prefab_desc","__version":2,
+		"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
+		"children":[{"__id":"00000000000000a1","name":"arm",)") + std::string(arm_body) + "}]}";
+}
 
 glm::vec3 translation_of(entt::registry& reg, entt::entity e)
 {
@@ -75,7 +86,7 @@ struct prefab_fixture : test_util::scene_env
 	scn::prefab_desc parse(const char* text)
 	{
 		scn::prefab_desc d;
-		d.deserialize(*descs, json::parse(text).as_object());
+		d.deserialize(*descs, parse_migrated(text));
 		return d;
 	}
 };
@@ -104,10 +115,10 @@ BOOST_AUTO_TEST_CASE(Parse_ReadsRootTransformComponentsAndChildrenInOrder)
 	BOOST_TEST((root.children[0].scale == glm::vec3{ 2 }));
 }
 
-BOOST_AUTO_TEST_CASE(Parse_TypedChildIsShorthandForSingleComponentNamedAfterNode)
+BOOST_AUTO_TEST_CASE(Parse_V1TypedChildBecomesANodeWithOneComponentNamedAfterIt)
 {
-	auto d = parse(BASE_PREFAB);
-	const auto& light = d.get_root().children[2];
+	auto d = parse(R"({"children":{"Light":{"__type":"directional_light_desc"}}})");
+	const auto& light = d.get_root().children[0];
 	BOOST_REQUIRE(light.components.size() == 1u);
 	BOOST_REQUIRE(light.components.contains("Light"));
 	BOOST_TEST(light.components.at("Light").type_name == "directional_light_desc");
@@ -136,11 +147,9 @@ BOOST_AUTO_TEST_CASE(Parse_ParentKeepsOverridesButStripsReservedKeys)
 	BOOST_TEST(c.overrides.at("hp").as_int64() == 8);
 }
 
-BOOST_AUTO_TEST_CASE(Serialize_OmitsDefaultsAndCollapsesShorthandNodes)
+BOOST_AUTO_TEST_CASE(Serialize_OmitsDefaultsAndWritesEveryNodeAsAnObjectInAnArray)
 {
 	auto d = parse(BASE_PREFAB);
-	// Loaded nodes carry an id and only id-less nodes collapse (the one-line form cannot hold it).
-	d.get_root().children[2].node_id = 0;
 	json::object out;
 	d.serialize(out);
 
@@ -148,17 +157,18 @@ BOOST_AUTO_TEST_CASE(Serialize_OmitsDefaultsAndCollapsesShorthandNodes)
 	BOOST_TEST(!out.at("transform").as_object().contains("scale")); // default scale not written
 	BOOST_TEST(out.at("components").at("stat").at("hp").to_number<int>() == 10);
 
-	const auto& children = out.at("children").as_object();
-	std::vector<std::string> keys;
-	for (auto& kv : children) keys.emplace_back(kv.key());
-	BOOST_TEST((keys == std::vector<std::string>{ "arm", "leg", "Light" }));
+	const auto& children = out.at("children").as_array();
+	std::vector<std::string> names;
+	for (auto& child : children) names.emplace_back(child.at("name").as_string());
+	BOOST_TEST((names == std::vector<std::string>{ "arm", "leg", "Light" }));
 
-	// "Light" collapses back to the one-line typed form
-	BOOST_TEST(children.at("Light").at("__type").as_string() == "directional_light_desc");
-	BOOST_TEST(!children.at("Light").as_object().contains("components"));
-	// "leg" has default transform but its component name differs from the node name -> not collapsed
-	BOOST_TEST(children.at("leg").as_object().contains("components"));
-	BOOST_TEST(!children.at("leg").as_object().contains("transform"));
+	// the typed light stays a component of its node: there is no one-line form
+	const auto& light = children[2].as_object();
+	BOOST_TEST(light.at("__id").as_string() == "00000000000000a3");
+	BOOST_TEST(light.at("components").at("Light").at("__type").as_string() == "directional_light_desc");
+	// default transform is not written
+	BOOST_TEST(children[1].as_object().contains("components"));
+	BOOST_TEST(!children[1].as_object().contains("transform"));
 }
 
 BOOST_AUTO_TEST_CASE(Serialize_ThenParse_IsStable)
@@ -175,24 +185,7 @@ BOOST_AUTO_TEST_CASE(Serialize_ThenParse_IsStable)
 	BOOST_TEST((json::value(first) == json::value(second)));
 }
 
-BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentCollapsesToTagString)
-{
-	put("arm.desc", R"({"__type":"stat_desc","hp":5})");
-	auto d = parse(R"({"children":{"arm":"memory://t/arm.desc"}})");
-	// Loaded nodes always carry an id and the collapsed form has no room for it: only an id-less node collapses.
-	d.get_root().children[0].node_id = 0;
-	json::object out;
-	d.serialize(out);
-
-	BOOST_TEST(out.at("children").at("arm").is_string());
-	BOOST_TEST(out.at("children").at("arm").as_string() == "memory://t/arm.desc");
-
-	scn::prefab_desc again;
-	again.deserialize(*descs, out);
-	BOOST_TEST(again.get_root().children[0].components.at("arm").parent_desc.get_tag() == tag_of("arm.desc"));
-}
-
-BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentOfNodeWithIdKeepsTheIdInsteadOfCollapsing)
+BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentIsWrittenAsTagString)
 {
 	put("arm.desc", R"({"__type":"stat_desc","hp":5})");
 	auto d = parse(R"({"children":{"arm":"memory://t/arm.desc"}})");
@@ -200,13 +193,16 @@ BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentOfNodeWithIdKeepsTheIdInsteadO
 	json::object out;
 	d.serialize(out);
 
-	const auto& arm = out.at("children").at("arm").as_object();
+	const auto& arm = out.at("children").as_array().at(0).as_object();
 	BOOST_TEST(arm.at("__id").as_string() == desc::format_node_id(id));
+	BOOST_TEST(arm.at("name").as_string() == "arm");
+	BOOST_TEST(arm.at("components").at("arm").is_string());
 	BOOST_TEST(arm.at("components").at("arm").as_string() == "memory://t/arm.desc");
 
 	scn::prefab_desc again;
 	again.deserialize(*descs, out);
 	BOOST_TEST(again.get_root().children[0].node_id == id);
+	BOOST_TEST(again.get_root().children[0].components.at("arm").parent_desc.get_tag() == tag_of("arm.desc"));
 }
 
 BOOST_AUTO_TEST_CASE(PrefabNode_LocalTransformComposesTranslateRotateScale)
@@ -375,8 +371,7 @@ BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverridingPositionBackToZeroIsHonored)
 {
 	put("base.prefab.desc", BASE_PREFAB);
-	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
-		"children":{"arm":{"transform":{"position":[0,0,0]}}}})");
+	auto inst = parse(instance_with_arm(R"("transform":{"position":[0,0,0]})").c_str());
 	entt::registry reg;
 	auto e = reg.create();
 	assemble_prefab_node(*assembler, reg, e, inst.get_root());
@@ -388,8 +383,7 @@ BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverridingScaleBackToOneIsHonored)
 {
 	put("base.prefab.desc", BASE_PREFAB);
-	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
-		"children":{"arm":{"transform":{"scale":[1,1,1]}}}})");
+	auto inst = parse(instance_with_arm(R"("transform":{"scale":[1,1,1]})").c_str());
 	entt::registry reg;
 	auto e = reg.create();
 	assemble_prefab_node(*assembler, reg, e, inst.get_root());
@@ -401,8 +395,7 @@ BOOST_TEST_DECORATOR(*boost::unit_test::expected_failures(1))
 BOOST_AUTO_TEST_CASE(NestedInstance_OverridingRotationBackToZeroIsHonored)
 {
 	put("base.prefab.desc", BASE_PREFAB);
-	auto inst = parse(R"({"components":{"prefab_desc":{"__type":"prefab_desc","__parent":"memory://t/base.prefab.desc"}},
-		"children":{"arm":{"transform":{"rotation":[0,0,0]}}}})");
+	auto inst = parse(instance_with_arm(R"("transform":{"rotation":[0,0,0]})").c_str());
 	entt::registry reg;
 	auto e = reg.create();
 	assemble_prefab_node(*assembler, reg, e, inst.get_root());
@@ -466,14 +459,15 @@ BOOST_AUTO_TEST_CASE(HotReload_UpdatesLiveChildrenInPlaceAddsNewAndRemovesDroppe
 	auto leg = child_named(reg, root, "leg");
 	BOOST_REQUIRE(reg.valid(arm) && reg.valid(leg));
 
-	put("base.prefab.desc", R"({"__type":"prefab_desc",
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,
 		"transform": { "position": [1, 2, 3] },
 		"components": { "stat": { "__type": "stat_desc", "hp": 11, "label": "v2" } },
-		"children": {
-			"arm": { "transform": { "position": [9, 0, 0] }, "components": { "stat": { "__type": "stat_desc", "hp": 33 } } },
-			"head": { "components": { "stat": { "__type": "stat_desc", "hp": 5 } } },
-			"Light": { "__type": "directional_light_desc" }
-		}
+		"children": [
+			{ "__id": "00000000000000a1", "name": "arm", "transform": { "position": [9, 0, 0] },
+			  "components": { "stat": { "__type": "stat_desc", "hp": 33 } } },
+			{ "__id": "00000000000000a4", "name": "head", "components": { "stat": { "__type": "stat_desc", "hp": 5 } } },
+			{ "__id": "00000000000000a3", "name": "Light", "components": { "Light": { "__type": "directional_light_desc" } } }
+		]
 	})");
 	rs->signal_changed(tag);
 	auto changed = rs->require_sync<desc::desc_base>(tag);
@@ -580,7 +574,8 @@ BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 	assemble_prefab_node(*assembler, reg, e, inst->get_root());
 	BOOST_REQUIRE(reg.get<test_util::stat_component>(child_named(reg, e, "leg")).hp == 4);
 
-	put("base.prefab.desc", R"({"__type":"prefab_desc","children":{"leg":{"components":{"stat":{"__type":"stat_desc","hp":44}}}}})");
+	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":2,"children":[
+		{"__id":"00000000000000a2","name":"leg","components":{"stat":{"__type":"stat_desc","hp":44}}}]})");
 	rs->signal_changed(base_tag);
 	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(base_tag));
 

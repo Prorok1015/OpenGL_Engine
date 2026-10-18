@@ -35,9 +35,10 @@ json::object scn::level_desc::build_json(std::string_view name, const std::vecto
 	obj["__type"] = std::string{ scn::level_desc::__type };
 	obj["name"]   = std::string{ name };
 	obj["worlds"] = std::move(worlds_arr);
-	desc_system.stamp_header(obj);
 	if (!guid.empty()) {
 		obj["__guid"] = std::string{ guid };
 	}
+	// The worlds and everything typed inside them carry their own __version.
+	desc_system.stamp_tree(obj);
 	return obj;
 }

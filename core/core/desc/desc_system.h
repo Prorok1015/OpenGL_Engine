@@ -5,6 +5,7 @@
 #include "res_tag_json.h" // get_field_desc<T> (inline template below) does json::value_to<res::tag>
 #include "desc_base.hpp"
 #include "adapters/desc_adapter_t.h"
+#include <algorithm>
 #include <functional>
 #include <limits>
 #include <map>
@@ -80,6 +81,11 @@ namespace desc
 			steps.emplace(from_version, std::move(fn));
 		}
 
+		void unregister_migrations(std::string_view type)
+		{
+			m_migrations.erase(std::string{ type });
+		}
+
 		int current_version(std::string_view type) const
 		{
 			auto it = m_migrations.find(std::string{ type });
@@ -96,13 +102,58 @@ namespace desc
 			migrate_object(root, context);
 		}
 
-		// Writes the current __version into an object that has a string __type.
+		// Writes the current __version into an object that has a string __type, and moves the header keys
+		// (__type, __version, __guid) to the front so saved files read the same way everywhere.
 		void stamp_header(json::object& obj) const
 		{
 			auto it = obj.find("__type");
-			if (it != obj.end() && it->value().is_string()) {
-				obj["__version"] = current_version(std::string{ it->value().as_string() });
+			if (it == obj.end() || !it->value().is_string()) {
+				return;
 			}
+			obj["__version"] = current_version(std::string{ it->value().as_string() });
+
+			constexpr std::string_view header_keys[] = { "__type", "__version", "__guid" };
+			json::object ordered;
+			for (auto key : header_keys) {
+				if (auto found = obj.find(key); found != obj.end()) {
+					ordered.emplace(found->key(), std::move(found->value()));
+				}
+			}
+			for (auto& member : obj) {
+				if (!ordered.contains(member.key())) {
+					ordered.emplace(member.key(), std::move(member.value()));
+				}
+			}
+			obj = std::move(ordered);
+		}
+
+		// stamp_header for every typed object under `value` (the files embed typed descs, and a memory://
+		// copy of them goes through the adapter - and its migrations - again).
+		void stamp_tree(json::value& value) const
+		{
+			if (value.is_object()) {
+				auto& obj = value.as_object();
+				stamp_header(obj);
+				for (auto& member : obj) {
+					stamp_tree(member.value());
+				}
+			}
+			else if (value.is_array()) {
+				auto& arr = value.as_array();
+				if (!arr.empty() && arr.front().is_number()) {
+					return;
+				}
+				for (auto& element : arr) {
+					stamp_tree(element);
+				}
+			}
+		}
+
+		void stamp_tree(json::object& obj) const
+		{
+			json::value wrapper = std::move(obj);
+			stamp_tree(wrapper);
+			obj = std::move(wrapper.as_object());
 		}
 
 		std::shared_ptr<desc::desc_base> create_instance(const std::string_view type_id, const res::tag& tag) const
@@ -168,9 +219,23 @@ namespace desc
 
             case json::kind::array:
             {
+                auto const& arr = jv.get_array();
+                // Vectors and matrices stay on one line; one number per line makes diffs unreadable.
+                const bool flat = std::ranges::none_of(arr, [](const json::value& v) { return v.is_array() || v.is_object(); });
+                if (flat) {
+                    os << "[";
+                    indent->append(4, ' '); // keeps the scalar writes below from treating themselves as the document root
+                    for (auto it = arr.begin(); it != arr.end(); ++it) {
+                        if (it != arr.begin())
+                            os << ", ";
+                        write_pretty_json(os, *it, indent);
+                    }
+                    indent->resize(indent->size() - 4);
+                    os << "]";
+                    break;
+                }
                 os << "[\n";
                 indent->append(4, ' ');
-                auto const& arr = jv.get_array();
                 if (!arr.empty())
                 {
                     auto it = arr.begin();

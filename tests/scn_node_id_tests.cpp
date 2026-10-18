@@ -80,7 +80,7 @@ struct node_id_fixture : test_util::scene_env
 	scn::prefab_desc parse(const char* text)
 	{
 		scn::prefab_desc d;
-		d.deserialize(*descs, json::parse(text).as_object());
+		d.deserialize(*descs, parse_migrated(text));
 		return d;
 	}
 
@@ -126,8 +126,10 @@ BOOST_AUTO_TEST_CASE(Load_ReadsExplicitIdsAndSaveWritesThemAsHexStrings)
 
 	auto out = serialized(d);
 	BOOST_TEST(out.at("__id").as_string() == "00000000000000aa");
-	BOOST_TEST(out.at("children").at("arm").at("__id").as_string() == "00000000000000bb");
-	BOOST_TEST(out.at("children").at("arm").at("children").at("hand").at("__id").as_string() == "00000000000000cc");
+	const auto& arm = out.at("children").as_array().at(0);
+	BOOST_TEST(arm.at("name").as_string() == "arm");
+	BOOST_TEST(arm.at("__id").as_string() == "00000000000000bb");
+	BOOST_TEST(arm.at("children").as_array().at(0).at("__id").as_string() == "00000000000000cc");
 }
 
 BOOST_AUTO_TEST_CASE(RoundTrip_LoadSaveLoadKeepsIdsAndSaveIsAFixedPoint)
@@ -218,8 +220,8 @@ BOOST_AUTO_TEST_CASE(Load_ParentLayerKeepsParentIdsAndDerivesNewNodes)
 	auto base = load<scn::prefab_desc>(res::tag{ "memory://t/base.prefab.desc" });
 	BOOST_REQUIRE(base);
 	scn::prefab_desc child = *base;
-	child.deserialize(*descs, json::parse(R"({"__parent": "memory://t/base.prefab.desc",
-		"children": { "extra": { "components": { "stat": { "__type": "stat_desc" } } } } })").as_object());
+	child.deserialize(*descs, json::parse(R"({"__parent": "memory://t/base.prefab.desc", "__version": 2,
+		"children": [ { "name": "extra", "components": { "stat": { "__type": "stat_desc" } } } ] })").as_object());
 
 	BOOST_TEST(child.get_root().node_id == 0xaaull);
 	BOOST_TEST(child.get_root().children[0].node_id == 0xbbull);
@@ -235,7 +237,7 @@ struct editor_fixture : node_id_fixture
 	{
 		state.world_descs.emplace_back();
 		state.world_names.push_back("w");
-		world().deserialize(*descs, json::parse(TREE_WITH_IDS).as_object());
+		world().deserialize(*descs, parse_migrated(TREE_WITH_IDS));
 		editor = std::make_unique<edt::scene_editor>(state);
 	}
 

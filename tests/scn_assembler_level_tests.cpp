@@ -333,7 +333,9 @@ BOOST_AUTO_TEST_CASE(WorldDesc_SerializeKeepsTypeNameSystemsAndTree)
 	BOOST_TEST(out.at("__type").as_string() == "world_desc");
 	BOOST_TEST(out.at("name").as_string() == "w");
 	BOOST_TEST(out.at("systems").as_array().size() == 1u);
-	BOOST_TEST(out.at("children").at("c").at("components").at("stat").at("hp").to_number<int>() == 3);
+	const auto& c = out.at("children").as_array().at(0);
+	BOOST_TEST(c.at("name").as_string() == "c");
+	BOOST_TEST(c.at("components").at("stat").at("hp").to_number<int>() == 3);
 
 	// feed the output back through the loader
 	auto tag2 = put("w2.desc", json::serialize(out));

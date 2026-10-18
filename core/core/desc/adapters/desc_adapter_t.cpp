@@ -94,7 +94,6 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
 	if (!body.contains("__type")) {
 		body["__type"] = std::string(desc_res->get_type());
 	}
-	m_desc_system.stamp_header(body);
 	// __guid identifies a file, so only res:// files get one; it is generated once and then kept on the instance.
 	if (tag.protocol() == ::res::tag::default_protocol()) {
 		if (desc_res->get_guid().empty()) {
@@ -102,9 +101,6 @@ std::vector<std::byte> core::desc::desc_adapter_t::serialize(const::res::tag& ta
 		}
 		body["__guid"] = desc_res->get_guid();
 	}
-    std::string data = json::serialize(body);
-    std::vector<std::byte> byte_data;
-    byte_data.resize(data.size());
-    std::memcpy(byte_data.data(), data.data(), data.size());
-    return byte_data;
+	m_desc_system.stamp_tree(body);
+	return m_desc_system.serialize_to_bytes(json::value{ std::move(body) });
 }

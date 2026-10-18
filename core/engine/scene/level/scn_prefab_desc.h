@@ -67,6 +67,10 @@ namespace scn {
 	// Gives every node of the subtree a fresh random id (editor duplicate).
 	void regenerate_node_ids(scn::prefab_desc::prefab_node& node);
 
+	// prefab_desc / world_desc v1 -> v2: `children` becomes an array of { "__id", "name", ... } nodes and
+	// components spell out their __type. Registered with the desc_system by register_scene_types.
+	void migrate_prefab_v1(boost::json::object& obj);
+
 	void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
 	void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 }

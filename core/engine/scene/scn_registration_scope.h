@@ -2,6 +2,7 @@
 #include "scn_ecs_assembler.h"
 #include "desc_system.h"
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,6 +38,13 @@ namespace scn
 			m_entries.push_back({ entry_kind::desc, std::string{ type } });
 		}
 
+		// Upgrades `type` from `from_version` to the next one; removed together with the scope.
+		void migration(std::string_view type, int from_version, std::function<void(json::object&)> fn)
+		{
+			m_desc_sys->register_migration(type, from_version, std::move(fn));
+			m_entries.push_back({ entry_kind::migration, std::string{ type } });
+		}
+
 		void spawner(std::string_view type,
 					 ecs_assembler::desc_spawner_fn spawn,
 					 ecs_assembler::desc_patcher_fn patch = {},
@@ -45,7 +53,7 @@ namespace scn
 		std::size_t size() const { return m_entries.size(); }
 
 	private:
-		enum class entry_kind { desc, spawner };
+		enum class entry_kind { desc, spawner, migration };
 		struct entry {
 			entry_kind kind;
 			std::string type;

@@ -107,6 +107,7 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
     json::object jsdata;
 	jsdata["__type"] = "prefab_desc";
 	process_model(scene, jsdata, tag, actual_tag, m_res_sys);
+	desc_system.stamp_tree(jsdata);
 
 	auto instance = desc_system.create_instance("prefab_desc", actual_tag);
 	instance->deserialize(desc_system, jsdata);
@@ -278,15 +279,14 @@ json::value process_material(const aiScene* scene, aiMaterial* material, res::ta
 	return jsmaterial;
 }
 
-std::string unique_child_name(const json::object& children, const std::string& name)
+// Reserves a sibling name that is not taken yet (children keep distinct names even though v2 could store duplicates:
+// animation channels and the editor address nodes by name).
+std::string unique_child_name(std::unordered_set<std::string>& used_names, const std::string& name)
 {
-	if (!children.contains(name))
-		return name;
-	for (unsigned int suffix = 1;; ++suffix) {
-		auto candidate = std::format("{}_{}", name, suffix);
-		if (!children.contains(candidate))
-			return candidate;
-	}
+	std::string candidate = name;
+	for (unsigned int suffix = 1; !used_names.insert(candidate).second; ++suffix)
+		candidate = std::format("{}_{}", name, suffix);
+	return candidate;
 }
 
 void store_data(std::vector<std::byte>& data, const auto& value)
@@ -409,12 +409,16 @@ json::object build_prefab_node(
 	res::tag tag,
 	res::tag prefab_tag,
 	res::resource_system& res_sys,
-	const std::string& node_path)
+	const std::string& node_path,
+	std::string_view node_key = {})
 {
 	json::object jsnode;
 	std::string node_name = node->mName.C_Str();
 	// Hash of the name path: re-importing the same model yields the same ids.
 	jsnode["__id"] = desc::format_node_id(desc::derive_node_id(node_path));
+	// The root of the file has no name of its own; every other node is named by its (unique among siblings) key.
+	if (!node_key.empty())
+		jsnode["name"] = std::string{ node_key };
 
 	// Transform
 	auto trs = decompose_aimatrix(node->mTransformation);
@@ -434,6 +438,7 @@ json::object build_prefab_node(
 	if (auto* bone = scene->findBone(aiString(node_name))) {
 		if (auto it = bone_index_map.find(node_name); it != bone_index_map.end()) {
 			json::object bone_comp;
+			bone_comp["__type"] = "bone_desc";
 			bone_comp["offset_matrix"] = json::value_from(convert_to_glm(bone->mOffsetMatrix));
 			bone_comp["index"] = it->second;
 			components["bone_desc"] = bone_comp;
@@ -442,14 +447,15 @@ json::object build_prefab_node(
 
 	// Animated node marker (set at import time for nodes with animation channels)
 	if (animated_node_names.contains(node_name)) {
-		components["animated_node_desc"] = json::object{};
+		components["animated_node_desc"] = json::object{ {"__type", "animated_node_desc"} };
 	}
 
 	if (!components.empty())
 		jsnode["components"] = components;
 
 	// Children
-	json::object children;
+	json::array children;
+	std::unordered_set<std::string> used_child_names;
 
 	// Mesh children — one child per mesh attached to this node
 	for (unsigned int i = 0; i < node->mNumMeshes; ++i) {
@@ -464,6 +470,7 @@ json::object build_prefab_node(
 		std::size_t ind_end = geometry.indices.size();
 
 		json::object mesh_node_comp;
+		mesh_node_comp["__type"] = "mesh_node_desc";
 		mesh_node_comp["geometry"] = json::value_from(geom_tag);
 		mesh_node_comp["vx_begin"] = vx_begin;
 		mesh_node_comp["vx_end"] = vx_end;
@@ -476,6 +483,7 @@ json::object build_prefab_node(
 
 		if (mesh->mNumBones > 0) {
 			json::object skinning_comp;
+			skinning_comp["__type"] = "skinning_desc";
 			skinning_comp["bone_count"] = static_cast<int>(mesh->mNumBones);
 			skinning_comp["skinning_tag"] = json::value_from(prefab_tag);
 			mesh_components["skinning_desc"] = skinning_comp;
@@ -485,12 +493,13 @@ json::object build_prefab_node(
 
 		std::string mesh_child_name = "mesh_" + std::string(mesh->mName.C_Str());
 		// Same-named meshes under one node must not overwrite each other.
-		std::string mesh_key = unique_child_name(children, mesh_child_name);
+		std::string mesh_key = unique_child_name(used_child_names, mesh_child_name);
 
 		json::object mesh_child;
 		mesh_child["__id"] = desc::format_node_id(desc::derive_node_id(node_path + "/" + mesh_key));
+		mesh_child["name"] = mesh_key;
 		mesh_child["components"] = mesh_components;
-		children[mesh_key] = std::move(mesh_child);
+		children.push_back(std::move(mesh_child));
 	}
 
 	// Recursive children
@@ -498,8 +507,8 @@ json::object build_prefab_node(
 		aiNode* child_node = node->mChildren[i];
 		std::string child_name = child_node->mName.C_Str();
 		// Same-named siblings (and a node named like a mesh child) must not collapse into one key.
-		std::string child_key = unique_child_name(children, child_name);
-		children[child_key] = build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys, node_path + "/" + child_key);
+		std::string child_key = unique_child_name(used_child_names, child_name);
+		children.push_back(build_prefab_node(scene, child_node, geometry, geom_tag, bone_index_map, animated_node_names, skin_weights, tag, prefab_tag, res_sys, node_path + "/" + child_key, child_key));
 	}
 
 	if (!children.empty())
@@ -619,6 +628,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 		}
 
 		json::object collection_comp;
+		collection_comp["__type"] = "animation_collection_desc";
 		collection_comp["clips"] = std::move(clips_arr);
 
 		if (prefab_root.contains("components")) {
@@ -641,6 +651,7 @@ void process_model(const aiScene* scene, json::object& data, res::tag tag, res::
 	// 8. Add skin_weights_desc component to root (registered during assembly)
 	if (!skin_weights.empty()) {
 		json::object sw_comp;
+		sw_comp["__type"] = "skin_weights_desc";
 		sw_comp["tag"] = json::value_from(prefab_tag);
 		json::array sw_arr;
 		sw_arr.reserve(skin_weights.size());

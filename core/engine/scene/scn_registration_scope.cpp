@@ -62,6 +62,8 @@ void scn::registration_scope::release()
 	for (auto it = m_entries.rbegin(); it != m_entries.rend(); ++it) {
 		if (it->kind == entry_kind::spawner) {
 			m_assembler->unregister_desc_spawner(it->type);
+		} else if (it->kind == entry_kind::migration) {
+			m_desc_sys->unregister_migrations(it->type);
 		} else {
 			m_desc_sys->unregister_desc(it->type);
 		}
@@ -103,6 +105,11 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	scope.desc<animated_node_desc>(animated_node_desc::__type);
 	scope.desc<animation_clip_desc>(animation_clip_desc::__type);
 	scope.desc<animation_collection_desc>(animation_collection_desc::__type);
+
+	// v2: children are an array of nodes with __id and name (the world is a prefab, so it shares the step).
+	scope.migration("prefab_desc", 1, migrate_prefab_v1);
+	scope.migration(world_desc::__type, 1, migrate_prefab_v1);
+	scope.migration("level_desc", 1, [](json::object&) {}); // the worlds are typed objects and migrate on their own
 
 	auto prefab_spawn = [&assembler](entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {
 		const auto& prefab = static_cast<const prefab_desc&>(base);
