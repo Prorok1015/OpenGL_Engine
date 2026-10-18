@@ -4,7 +4,10 @@
 #include <snk/input/inp_input_manager_base.h>
 #include <snk/input/inp_input_consumable_listener.h>
 #include <snk/window/wnd_window_event_listener_interface.h>
+#include <algorithm>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 #include <snk/common/snk_api.h>
 
 namespace inp

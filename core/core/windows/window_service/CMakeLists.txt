@@ -9,7 +9,7 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_WINDOW_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 
 # Header-only view of the window public headers (wnd_gl_surface.h) for the GL driver: the window
-# include dir only, without linking the window library (avoids a cycle). Narrowed in PR-1 of #109.
+# include dir only, without linking the window library (avoids a cycle).
 add_library(window_gl_surface INTERFACE)
 add_library(snk::window_gl_surface ALIAS window_gl_surface)
 target_include_directories(window_gl_surface INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")

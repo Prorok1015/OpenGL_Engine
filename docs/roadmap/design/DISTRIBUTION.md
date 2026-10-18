@@ -17,7 +17,7 @@
 
 **Экспорт.** `SNK_API` (`core/core/common/snk_api.h`), hidden visibility, `/wd4251` (`cmake/SnkTarget.cmake:6-15`). ImGui экспортируется из `snk_engine` (`SnkTarget.cmake:70-76`); потребители получают `IMGUI_API=dllimport` через INTERFACE (`core/engine/CMakeLists.txt:13`) — один ImGui-контекст. assimp и Boost.JSON — отдельные статические копии в редакторе (`editor_system/CMakeLists.txt:22-28`).
 
-**SDK.** `cmake --install` → пакет `snake_sdk` 0.1.0 (`cmake/SnkInstall.cmake:27`, `install(TARGETS … RUNTIME bin)` `:235-239`).
+**SDK.** `cmake --install` → пакет `snake_sdk` 0.2.0 (`cmake/SnkInstall.cmake:29`, `install(TARGETS … RUNTIME bin)` `:235-239`).
 - Правил для PDB нет. CI-конфигурации Debug/RelWithDebInfo собираются с `/Z7` (`cmake/SnkBuildCache.cmake:69-74`); PDB при этом пишет линкер `/DEBUG`.
 - Потребитель — `tests/package_consumer` (Linux static/shared, Windows shared; `build.yml:388-528`).
 - Пресеты: `release` (Release), `dev-release` (RelWithDebInfo), CI Windows — Debug/Release (`CMakePresets.json:27-42,123-151`).
