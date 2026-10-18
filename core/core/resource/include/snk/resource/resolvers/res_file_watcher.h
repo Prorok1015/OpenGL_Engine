@@ -14,7 +14,7 @@ namespace res {
         {}
 
         file_watcher(boost::asio::io_context& io, std::function<void(fs::path)> notify_cb)
-            : timer(io), m_notify_cb(notify_cb)
+            : m_notify_cb(notify_cb), timer(io)
         {
         }
 

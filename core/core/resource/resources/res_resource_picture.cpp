@@ -2,18 +2,18 @@
 
 res::picture_resource::picture_resource(const tag& tag, glm::ivec2 size_1, int channels_1, unsigned char* data_1)
 	: res::resource_entry(tag)
-	, is_embedded_picture(true)
-	, size_(size_1)
-	, channels_(channels_1)
 	, data_(data_1)
+	, channels_(channels_1)
+	, size_(size_1)
+	, is_embedded_picture(true)
 {
 
 }
 
 res::picture_resource::picture_resource(const picture_resource& other)
 	: res::resource_entry(other.m_tag)
-	, size_(other.size_)
 	, channels_(other.channels_)
+	, size_(other.size_)
 {
 	const std::size_t data_size = size_.x * size_.y * channels_;
 	data_ = new unsigned char[data_size];
@@ -36,9 +36,9 @@ res::picture_resource& res::picture_resource::operator= (const picture_resource&
 
 res::picture_resource::picture_resource(picture_resource&& other) noexcept
 	: res::resource_entry(other.m_tag)
-	, size_(other.size_)
-	, channels_(other.channels_)
 	, data_(other.data_)
+	, channels_(other.channels_)
+	, size_(other.size_)
 {
 	other.data_ = nullptr;
 	other.size_ = glm::ivec2{ 0,0 };

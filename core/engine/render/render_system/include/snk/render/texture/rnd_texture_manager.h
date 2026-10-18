@@ -18,9 +18,9 @@ namespace rnd
 	public:
 		using loader_fn = std::function<std::unique_ptr<driver::texture_interface>(driver::driver_interface* drv, const rnd::texture_desc& txm)>;
 		texture_manager(driver::driver_interface* driver, desc::desc_system& d, res::resource_system& res_sys)
-			: drv(driver)
-			, desc_system(d)
+			: desc_system(d)
 			, m_res_sys(res_sys)
+			, drv(driver)
 		{}
 
 		// dllexport instantiates the implicit copy members, which cannot compile with unique_ptr values

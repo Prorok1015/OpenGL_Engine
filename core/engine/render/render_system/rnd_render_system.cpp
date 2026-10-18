@@ -16,8 +16,8 @@ void rnd::render_system::begin_frame(frame_context& context)
 
 rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d, res::resource_system& res_sys)
 	: drv(std::move(driver))
-	, shader_manager(drv.get(), res_sys)
 	, texture_manager(drv.get(), d, res_sys)
+	, shader_manager(drv.get(), res_sys)
 	, geom_manager(drv.get(), d, res_sys)
 {
 	texture_manager.register_loader("texture_2d_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> std::unique_ptr<rnd::driver::texture_interface> {

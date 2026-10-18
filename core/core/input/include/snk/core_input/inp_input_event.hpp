@@ -71,11 +71,11 @@ namespace inp
 		}
 
 		input_event(input_event&& other) noexcept
-			: m_device_id(other.m_device_id)
-			, m_payload_type_id(other.m_payload_type_id)
-			, m_copy_func(other.m_copy_func)
+			: m_copy_func(other.m_copy_func)
 			, m_move_func(other.m_move_func)
 			, m_destroy_func(other.m_destroy_func)
+			, m_device_id(other.m_device_id)
+			, m_payload_type_id(other.m_payload_type_id)
 		{
 			if (m_move_func) {
 				m_move_func(other.m_storage, m_storage);
@@ -89,11 +89,11 @@ namespace inp
 		input_event& operator= (const input_event& other) = delete;
 
 		input_event(const input_event& other)
-			: m_device_id(other.m_device_id)
-			, m_payload_type_id(other.m_payload_type_id)
-			, m_copy_func(other.m_copy_func)
+			: m_copy_func(other.m_copy_func)
 			, m_move_func(other.m_move_func)
 			, m_destroy_func(other.m_destroy_func)
+			, m_device_id(other.m_device_id)
+			, m_payload_type_id(other.m_payload_type_id)
 		{
 			if (m_copy_func) {
 				m_copy_func(other.m_storage, m_storage);
