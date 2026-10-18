@@ -1,14 +1,17 @@
 // desc_resave: loads every .desc file under a resources directory through the engine (older formats are
 // migrated on load) and writes it back in the current format, indented. Run it after a format change.
 //
-//   desc_resave <path to a resources directory named "res"> [--check]
+//   desc_resave <path to a resources directory named "res"> [--base <res dir>] [--check]
 //
 // --check writes nothing and exits with 1 when any file would change.
+// --base mounts a lower layer under the directory (Editor/res needs core/res for its base descs);
+// only the descs of the first directory are touched.
 #include "res_system.h"
 #include "desc_system.h"
 #include "adapters/desc_adapter_t.h"
 #include "adapters/res_adapter_worker_base.hpp"
 #include "adapters/scn_model_importer_adapter.h"
+#include "cfg_api.h"
 #include "logger/engine_log.h"
 #include "rnd_render_service_init.h"
 #include "scn_ecs_assembler.h"
@@ -22,6 +25,8 @@
 #include <vector>
 
 namespace fs = std::filesystem;
+
+CFG_VAR_EXT_PATH(cfg_res_base_path);
 
 namespace {
 
@@ -51,7 +56,19 @@ int main(int argc, char** argv)
 		return 2;
 	}
 	const fs::path res_dir = fs::absolute(argv[1]).lexically_normal();
-	const bool check_only = argc > 2 && std::string{ argv[2] } == "--check";
+	bool check_only = false;
+	fs::path base_dir;
+	for (int i = 2; i < argc; ++i) {
+		const std::string arg{ argv[i] };
+		if (arg == "--check") {
+			check_only = true;
+		} else if (arg == "--base" && i + 1 < argc) {
+			base_dir = fs::absolute(argv[++i]).lexically_normal();
+		} else {
+			egLOG_ERROR("desc_resave", "unknown argument '{}'", arg);
+			return 2;
+		}
+	}
 	if (!fs::is_directory(res_dir) || res_dir.filename() != "res") {
 		egLOG_ERROR("desc_resave", "'{}' is not a directory named 'res'", res_dir.string());
 		return 2;
@@ -59,6 +76,13 @@ int main(int argc, char** argv)
 
 	// The resource system reads its root from the configured "./res"; run next to it, with the sandbox it expects.
 	fs::current_path(res_dir.parent_path());
+	if (!base_dir.empty()) {
+		if (!fs::is_directory(base_dir)) {
+			egLOG_ERROR("desc_resave", "base '{}' is not a directory", base_dir.string());
+			return 2;
+		}
+		*cfg_res_base_path = base_dir;
+	}
 	std::error_code ec;
 	fs::create_directories("./sandbox", ec);
 

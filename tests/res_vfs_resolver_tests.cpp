@@ -1,8 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include "resolvers/res_vfs_resolver.h"
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <thread>
 
 namespace {
@@ -225,6 +227,83 @@ BOOST_FIXTURE_TEST_CASE(ExternalFileChange_FiresResourceChangedCallback, mounts_
 	BOOST_TEST(fired.load());
 	std::lock_guard lock(m);
 	BOOST_TEST(seen == "created_externally.txt");
+}
+
+namespace {
+
+struct change_recorder
+{
+	std::mutex m;
+	std::vector<std::string> seen;
+
+	void attach(res::vfs_resolver& r)
+	{
+		r.set_resource_changed_callback([this](const res::tag& t) {
+			std::lock_guard lock(m);
+			seen.emplace_back(t.relative());
+		});
+	}
+
+	bool wait_for(const std::string& rel)
+	{
+		for (int i = 0; i < 300; ++i) {
+			if (contains(rel)) return true;
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		return false;
+	}
+
+	bool contains(const std::string& rel)
+	{
+		std::lock_guard lock(m);
+		return std::find(seen.begin(), seen.end(), rel) != seen.end();
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(Layers_ChangeInBaseLayerFiresWhenNotOverridden, mounts_fixture)
+{
+	change_recorder rec;
+	res::vfs_resolver r("res", { low, high });
+	rec.attach(r);
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	dir.write("low/fresh_base.txt", "x");
+	BOOST_TEST(rec.wait_for("fresh_base.txt"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Layers_ChangeInBaseLayerIgnoredWhenTopOverrides, mounts_fixture)
+{
+	change_recorder rec;
+	res::vfs_resolver r("res", { low, high });
+	rec.attach(r);
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	// a.txt exists in both layers: editing the shadowed base copy changes nothing visible
+	dir.write("low/a.txt", "low-a-edited");
+	// sentinel proves the watcher had time to report the shadowed change
+	dir.write("low/sentinel.txt", "x");
+	BOOST_TEST(rec.wait_for("sentinel.txt"));
+	BOOST_TEST(!rec.contains("a.txt"));
+	BOOST_TEST(load(r, "res://a.txt") == "high-a");
+}
+
+BOOST_FIXTURE_TEST_CASE(Layers_ChangeInTopLayerFiresForOverriddenPath, mounts_fixture)
+{
+	change_recorder rec;
+	res::vfs_resolver r("res", { low, high });
+	rec.attach(r);
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	dir.write("high/a.txt", "high-a-edited");
+	BOOST_TEST(rec.wait_for("a.txt"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Layers_RemovingTopOverrideRevealsBaseOnNextResolve, mounts_fixture)
+{
+	res::vfs_resolver r("res", { low, high });
+	BOOST_TEST(load(r, "res://a.txt") == "high-a");
+	std::filesystem::remove(high / "a.txt");
+	// the file watcher does not report deletions, but lookups see the base file again
+	BOOST_TEST(load(r, "res://a.txt") == "low-a");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

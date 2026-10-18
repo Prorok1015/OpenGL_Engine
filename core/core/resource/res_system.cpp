@@ -5,6 +5,8 @@
 #include "resolvers/res_vfs_resolver.h"
 
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
+// Optional lower layer (engine base resources). Empty = single-root setup.
+CFG_VAR_DEF_PATH(cfg_res_base_path, "resource/base_path", "");
 
 res::resource_system::resource_system() {
   egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
@@ -12,8 +14,17 @@ res::resource_system::resource_system() {
   ASSERT_MSG(std::filesystem::exists(cfg_res_path),
              "Resources path does not exist!");
 
-  auto &res_resolver = registrate_resolver<vfs_resolver>(
-      tag::default_protocol(), std::vector<fs::path>{cfg_res_path->string()});
+  // Mount order: base first, top last (the last mount wins and receives writes).
+  std::vector<fs::path> layers;
+  if (!cfg_res_base_path->empty()) {
+    ASSERT_MSG(std::filesystem::exists(cfg_res_base_path),
+               "Base resources path does not exist!");
+    layers.push_back(cfg_res_base_path->string());
+  }
+  layers.push_back(cfg_res_path->string());
+
+  auto &res_resolver =
+      registrate_resolver<vfs_resolver>(tag::default_protocol(), layers);
   res_resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
   fs::path memory_path = fs::path{cfg_res_path->string()} /

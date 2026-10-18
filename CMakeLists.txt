@@ -70,5 +70,6 @@ target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine 
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 # desc_repo_roundtrip_tests loads the descs the repository ships.
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/res")
+target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
 
 add_test(NAME unit_tests COMMAND unit_tests)

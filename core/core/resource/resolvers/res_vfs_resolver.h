@@ -27,6 +27,7 @@ namespace res
 		virtual bool exists(const ::res::tag& tag) const override;
 
 	private:
+		bool is_shadowed(const fs::path& path) const;
 		fs::path resolve_tag(const tag& tag) const;
 		void save_pending_write(res::tag tag, fs::path path, core::res::res_resolver_interface::async_raw_data data);
 		void resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const;

@@ -54,11 +54,15 @@ jobs:
 
           # Layout keeps editor.cfg's `resource: path: ../res/` valid (resolved
           # relative to the cfg file): config/../res == SnakeEditor/res.
+          # Engine base resources (core/res) ship as res_core/ and the packaged
+          # cfg's base_path is rewritten from the in-repo ../../core/res/.
           mkdir -p "${PKG}/bin" "${PKG}/config"
           cp build/Editor/editor.exe "${PKG}/bin/" || cp "$(find build -name editor.exe | head -n1)" "${PKG}/bin/"
           # Runtime DLLs (libs are static by default, so normally none).
           find build/Editor -maxdepth 1 -name '*.dll' -exec cp {} "${PKG}/bin/" \;
-          cp Editor/config/editor.cfg "${PKG}/config/"
+          sed 's#base_path: ../../core/res/#base_path: ../res_core/#' Editor/config/editor.cfg > "${PKG}/config/editor.cfg"
+          grep -q 'base_path: ../res_core/' "${PKG}/config/editor.cfg"
+          cp -r core/res "${PKG}/res_core"
           cp -r Editor/res "${PKG}/res"
           cat > "${PKG}/README.txt" <<'TXT'
           SnakeEditor - OpenGL Engine editor
@@ -68,8 +72,9 @@ jobs:
           Run from this folder:
               bin\editor.exe --config config\editor.cfg
 
-          Keep the bin/, config/ and res/ folders side by side: the config refers to
-          the resources as ../res/ relative to the config file. Logs are written
+          Keep the bin/, config/, res/ and res_core/ folders side by side: the config
+          refers to the resources as ../res/ (editor layer, wins) and ../res_core/
+          (engine base layer) relative to the config file. Logs are written
           to config\logs\.
           TXT
           cp LICENSE "${PKG}/" 2>/dev/null || true

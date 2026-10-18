@@ -9,7 +9,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			auto otag = path_mapper(pth);
-			if (otag.has_value()) {
+			if (otag.has_value() && !is_shadowed(pth)) {
 				notify_resource_changed(otag.value());
 			}
 		})
@@ -72,6 +72,32 @@ std::optional<res::tag> res::vfs_resolver::path_mapper(const fs::path& path) con
 		stack.pop();
 	}
 	return std::nullopt;
+}
+
+bool res::vfs_resolver::is_shadowed(const fs::path& path) const
+{
+	fs::path full_path = fs::absolute(path).lexically_normal();
+	auto stack = entries_stack;
+	std::vector<fs::path> higher;
+
+	while (!stack.empty()) {
+		fs::path full_entry = fs::absolute(stack.top()).lexically_normal();
+		fs::path rel_path = full_path.lexically_relative(full_entry);
+
+		if (!rel_path.empty() && *rel_path.begin() != "..") {
+			// A change in a lower layer is invisible while a higher layer has a file at the same path.
+			for (const auto& upper : higher) {
+				std::error_code ec;
+				if (fs::exists(upper / rel_path, ec)) {
+					return true;
+				}
+			}
+			return false;
+		}
+		higher.push_back(full_entry);
+		stack.pop();
+	}
+	return false;
 }
 
 core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(const tag& tag) const

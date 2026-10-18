@@ -6,15 +6,18 @@
 #include <fstream>
 #include <iterator>
 
-// Every .desc the repository ships (Editor/res) must load, be a fixed point of the engine's own save, and
+// Every .desc the repository ships (core/res + Editor/res layers) must load, be a fixed point of the engine's own save, and
 // carry the current __version on every typed object. When a format changes, run tools/desc_resave on
-// Editor/res: this test fails on files that are still in an older format.
+// core/res and Editor/res: this test fails on files that are still in an older format.
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
 
 #ifndef SNK_EDITOR_RES_DIR
 #error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#endif
+#ifndef SNK_CORE_RES_DIR
+#error "SNK_CORE_RES_DIR must point at core/res"
 #endif
 
 namespace {
@@ -30,17 +33,20 @@ const std::vector<repo_file>& repo_files()
 {
 	static const std::vector<repo_file> files = [] {
 		std::vector<repo_file> out;
-		const fs::path root = SNK_EDITOR_RES_DIR;
-		for (const auto& entry : fs::recursive_directory_iterator(root)) {
-			if (!entry.is_regular_file()) continue;
-			std::ifstream in(entry.path(), std::ios::binary);
-			std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-			repo_file file;
-			file.rel = fs::relative(entry.path(), root).generic_string();
-			file.bytes.resize(text.size());
-			std::memcpy(file.bytes.data(), text.data(), text.size());
-			file.is_desc = entry.path().extension() == ".desc";
-			out.push_back(std::move(file));
+		// Base layer first; a file of the editor layer replaces the base file at the same path.
+		for (const fs::path root : { fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_EDITOR_RES_DIR } }) {
+			for (const auto& entry : fs::recursive_directory_iterator(root)) {
+				if (!entry.is_regular_file()) continue;
+				std::ifstream in(entry.path(), std::ios::binary);
+				std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+				repo_file file;
+				file.rel = fs::relative(entry.path(), root).generic_string();
+				file.bytes.resize(text.size());
+				std::memcpy(file.bytes.data(), text.data(), text.size());
+				file.is_desc = entry.path().extension() == ".desc";
+				std::erase_if(out, [&](const repo_file& f) { return f.rel == file.rel; });
+				out.push_back(std::move(file));
+			}
 		}
 		std::ranges::sort(out, {}, &repo_file::rel);
 		return out;
@@ -131,7 +137,7 @@ BOOST_AUTO_TEST_CASE(SavingALoadedFileGivesTheFileBack)
 		auto loaded = load_desc(tag);
 		BOOST_REQUIRE(loaded);
 		const auto saved = parse(adapter.serialize(tag, loaded));
-		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on Editor/res");
+		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on core/res and Editor/res");
 	});
 }
 
