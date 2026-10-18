@@ -52,7 +52,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 
 ### Never bypass resource cache
 - **Use:** get `res::resource_system&` by injection (constructor parameter / `app_data_storage` in composition code), then `.require<T>(res::tag{"res://path"})` (or `require_sync<T>` for blocking) → returns `res_handle<T>`
-- **Legacy:** `res::get_system()` global accessor is being phased out in favour of DI — do not add new uses
+- **No global accessor:** `res::get_system()` (and `rnd::`/`gui::get_system()`) no longer exist — never reintroduce a global/singleton; inject `res::resource_system&`
 - **Never:** hardcode filenames, new/load directly from disk
 
 ## 🗣️ Conventions

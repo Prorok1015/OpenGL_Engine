@@ -92,7 +92,7 @@ rule: Use res::tag for all resource identification
 why: Prevents cache misses, enables hot-reload
 how_to_apply:
   auto mesh = resources.require<mesh_resource>(res::tag{"res://models/backpack"});  // resources: res::resource_system& injected
-  res::get_system() is legacy (being phased out for DI) — no new uses
+  no global get_system() accessors exist — inject res::resource_system&, never reintroduce a global
   Never: hardcode filenames in component, always use descriptors
   source: core/core/resource/res_system.h require<T>/require_sync<T> (L170-178)
 

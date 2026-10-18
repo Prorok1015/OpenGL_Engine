@@ -5,8 +5,6 @@
 #include "gui_gl_backend.h"
 #include <filesystem>
 
-extern gui::gui_system* p_gui_system;
-
 void engine::gui::gui_init(ds::app_data_storage& data)
 {
 	auto& wnd_system = data.require<wnd::window_system>();
@@ -19,14 +17,13 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	const auto is_exist = std::filesystem::exists(backend.get_settings_filename());
 	backend.set_initial_layout_by_default(!is_exist);
 
-	p_gui_system = &data.construct<::gui::gui_system>(&backend);
-	p_gui_system->push_layer(std::make_shared<::gui::debug_layer>());
+	auto& gui_sys = data.construct<::gui::gui_system>(&backend);
+	gui_sys.push_layer(std::make_shared<::gui::debug_layer>());
 }
 
 void engine::gui::gui_term(ds::app_data_storage& data)
 {
 	data.destruct<::gui::gui_system>();
-	p_gui_system = nullptr;
 	// Shut the backend down while the GL context is still alive (engine terminates before core).
 	data.require<::gui::gl::gl_imgui_backend>().shutdown();
 	data.destruct<::gui::gl::gl_imgui_backend>();

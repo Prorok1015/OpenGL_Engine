@@ -4,14 +4,7 @@
 #include "cfg_api.h"
 #include "resolvers/res_vfs_resolver.h"
 
-res::resource_system *p_res_system = nullptr;
-
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
-
-res::resource_system &res::get_system() {
-  ASSERT_MSG(p_res_system, "Resource system is nullptr!");
-  return *p_res_system;
-}
 
 res::resource_system::resource_system() {
   egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",

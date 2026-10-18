@@ -48,6 +48,4 @@ namespace gui
 		std::vector<std::shared_ptr<gui::layer_interface>> layers;
 		gui::imgui_backend_interface* backend = nullptr;
 	};
-
-	gui_system& get_system();
 }

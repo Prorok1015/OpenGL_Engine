@@ -142,7 +142,7 @@ never: std::auto_ptr (deprecated), raw new/delete in code (use RAII)
 [DESCRIPTOR_PATTERNS]
 files: snake_case.desc (e.g., backpack.desc, level.desc)
 format: JSON with inheritance (extends: "parent.desc")
-loading: resources.require<descriptor_type>(res::tag{"res://path"})  // res::resource_system& injected; res::get_system() is legacy
+loading: resources.require<descriptor_type>(res::tag{"res://path"})  // res::resource_system& injected; there is no global get_system()
 hot_reload: Editor changes desc → binding updates entities
 
 [RESOURCE_PATTERNS]

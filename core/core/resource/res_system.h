@@ -373,6 +373,4 @@ namespace res
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
 		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;
 	};
-
-	[[deprecated("inject res::resource_system& instead (EPIC-29 #61)")]] resource_system& get_system();
 }

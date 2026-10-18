@@ -184,7 +184,7 @@ Add new Descriptor Type:
 
 Load Resource:
   1. Tag: res::tag{"res://path/to/asset"}
-  2. Load: resource_system&.require<T>(tag) (injected; require_sync<T> blocks; get_system() legacy)
+  2. Load: resource_system&.require<T>(tag) (injected; require_sync<T> blocks; no global get_system())
   3. Wait: res_handle<T>, optional .then(callback) for async
 
 Create Entity (data-driven):

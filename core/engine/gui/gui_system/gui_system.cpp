@@ -4,14 +4,6 @@
 #include "wnd_window_system.h"
 #include "eng_profiler.h"
 
-gui::gui_system* p_gui_system = nullptr;
-
-gui::gui_system& gui::get_system()
-{
-	ASSERT_MSG(p_gui_system, "DebugUi system is nullptr!");
-	return *p_gui_system;
-}
-
 gui::gui_system::gui_system(gui::imgui_backend_interface* backend_)
 	: backend(backend_)
 {

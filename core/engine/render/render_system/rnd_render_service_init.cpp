@@ -14,25 +14,23 @@
 #include "passes/rnd_debug_pass.h"
 #include "shader/rnd_material_compiler.h"
 
-extern rnd::render_system* p_render_system;
-
 void engine::render::render_init(ds::app_data_storage& data)
 {
 	auto& window_system = data.require<wnd::window_system>();
 	auto& desc_sys = data.require<desc::desc_system>();
 	auto& res_sys = data.require<res::resource_system>();
-	p_render_system = &data.construct<rnd::render_system>(window_system.get_context()->create_driver(), desc_sys, res_sys);
+	auto& render_system = data.construct<rnd::render_system>(window_system.get_context()->create_driver(), desc_sys, res_sys);
 	desc_sys.register_desc<rnd::geometry_desc>("geometry_desc");
 	desc_sys.register_desc<rnd::texture_desc>("texture_desc");
 	desc_sys.register_desc<rnd::texture_2d_desc>("texture_2d_desc");
 	desc_sys.register_desc<rnd::texture_cubemap_desc>("texture_cubemap_desc");
-	p_render_system->add_render_pass(std::make_shared<rnd::z_prepass>());
-	p_render_system->add_render_pass(std::make_shared<rnd::opaque_pass>());
-	p_render_system->add_render_pass(std::make_shared<rnd::skybox_pass>());
-	p_render_system->add_render_pass(std::make_shared<rnd::transparent_pass>());
-	p_render_system->add_render_pass(std::make_shared<rnd::debug_pass>(res_sys));
-	p_render_system->add_render_pass(std::make_shared<rnd::composition_pass>());
-	p_render_system->set_material_compiler(std::make_shared<rnd::default_material_compiler>());
+	render_system.add_render_pass(std::make_shared<rnd::z_prepass>());
+	render_system.add_render_pass(std::make_shared<rnd::opaque_pass>());
+	render_system.add_render_pass(std::make_shared<rnd::skybox_pass>());
+	render_system.add_render_pass(std::make_shared<rnd::transparent_pass>());
+	render_system.add_render_pass(std::make_shared<rnd::debug_pass>(res_sys));
+	render_system.add_render_pass(std::make_shared<rnd::composition_pass>());
+	render_system.set_material_compiler(std::make_shared<rnd::default_material_compiler>());
 }
 
 void engine::render::render_term(ds::app_data_storage& data)
@@ -44,5 +42,4 @@ void engine::render::render_term(ds::app_data_storage& data)
 	desc_sys.unregister_desc("geometry_desc");
 
 	data.destruct<rnd::render_system>();
-	p_render_system = nullptr;
 }

@@ -70,8 +70,6 @@ namespace rnd
 		std::vector<std::shared_ptr<render_pass_interface>> render_passes;
 	};
 
-	render_system& get_system();
-
 	template<class T>
 	void configure_pass(const frame_context& context, T& desc)
 	{

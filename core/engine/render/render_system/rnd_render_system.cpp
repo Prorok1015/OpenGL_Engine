@@ -5,14 +5,6 @@
 #include "eng_profiler.h"
 #include "rnd_gpu_profiler.h"
 
-rnd::render_system* p_render_system = nullptr;
-
-rnd::render_system& rnd::get_system()
-{
-	ASSERT_MSG(p_render_system, "Render system is nullptr!");
-	return *p_render_system;
-}
-
 void rnd::render_system::begin_frame(frame_context& context)
 {
 	context.textures = &texture_manager;

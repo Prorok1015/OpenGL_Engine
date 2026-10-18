@@ -8,8 +8,6 @@
 // Behavior of prefab assembly: parse/serialize, hierarchy spawning, override merge for explicit
 // nested instances, and hot reload. Descs live in a RAM resolver; no GPU, window or disk.
 
-// Legacy global; the test below nulls it to prove prefab assembly no longer reads it.
-extern res::resource_system* p_res_system;
 // Non-namespaced entry point that assembles a prefab_node as an *override* node (nested instance).
 void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const scn::prefab_desc::prefab_node& node);
 
@@ -589,17 +587,9 @@ BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "leg")).hp == 44);
 }
 
-// Nested assembly resolves its parent through the assembler's injected resource system, not the
-// p_res_system global, so it must work with the global unset.
-BOOST_AUTO_TEST_CASE(NestedInstance_AssemblesWithGlobalResourceSystemUnset)
+// Nested assembly resolves its parent through the assembler's injected resource system.
+BOOST_AUTO_TEST_CASE(NestedInstance_AssemblesViaInjectedResourceSystem)
 {
-	struct restore_global
-	{
-		res::resource_system* prev;
-		~restore_global() { p_res_system = prev; }
-	} restore{ p_res_system };
-	p_res_system = nullptr;
-
 	put("base.prefab.desc", BASE_PREFAB);
 	auto inst = load<scn::prefab_desc>(put("inst.prefab.desc", INSTANCE_PREFAB));
 	BOOST_REQUIRE(inst);
