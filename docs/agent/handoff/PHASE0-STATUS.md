@@ -90,9 +90,15 @@
 git submodule update --init --depth 1            # кроме Editor/res/samples (update = none)
 sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
      ccache xvfb libgl1-mesa-dri xdotool imagemagick
-cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DGLFW_BUILD_WAYLAND=OFF \
-      -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-ninja -C build/linux editor unit_tests && (cd build/linux && ./unit_tests)
-tools/run_headless.sh --seconds 25 --shot headless_out/smoke.png -- --set editor/startup_level levels/smoke_level.desc
+cmake --preset ci-linux-gcc-debug                 # build/ci-linux-gcc-debug; ccache и PCH включены самим CMake (#180)
+cmake --build build/ci-linux-gcc-debug --target editor unit_tests && build/ci-linux-gcc-debug/unit_tests
+tools/run_headless.sh --editor build/ci-linux-gcc-debug/Editor/editor --seconds 25 --shot headless_out/smoke.png -- --set editor/startup_level levels/smoke_level.desc
 ```
-Санитайзеры: `-DSNK_SANITIZE=address` (ASan+UBSan) или `thread`. Покрытие — job `coverage` в `.github/workflows/build.yml`.
+Скорость сборки (#180) — опции CMake, поэтому одинаково для локальной сборки, IDE и CI: `SNK_COMPILER_CACHE=AUTO|ON|OFF`
+(ccache, на Windows sccache; свой `CMAKE_<LANG>_COMPILER_LAUNCHER` имеет приоритет) и `SNK_PCH=AUTO|ON|OFF` (общий PCH
+`cmake/pch/snk_pch.h`; AUTO = ON, кроме MSVC с кэшем — sccache не кэширует `/Yu`). Пресеты `ci-*` в `CMakePresets.json` — ровно
+конфигурации из `.github/workflows/build.yml` (`ci-linux-{gcc-debug,clang-debug,asan,tsan,coverage,shared}`,
+`ci-windows-msvc-{debug,release}`); `ci-linux-clang-debug` собирается с `SNK_PCH=OFF` (ловит include, спрятанные PCH).
+Лёгкая проверка без PCH: `cmake --preset dev-debug -DSNK_PCH=OFF`. Каталог кэша контейнера: `CCACHE_DIR=/home/user/.ccache`.
+Старые сборки без пресетов (`cmake -S . -B build/linux ...`) работают как раньше.
+Санитайзеры: пресеты `ci-linux-asan` / `ci-linux-tsan` (или `-DSNK_SANITIZE=address|thread`). Покрытие — job `coverage` в `.github/workflows/build.yml` (пресет `ci-linux-coverage`).

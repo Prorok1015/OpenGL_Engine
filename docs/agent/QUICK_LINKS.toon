@@ -114,7 +114,7 @@ Build Output:
 [TESTING]
 Test Suite:
   → tests/ (all test files)
-  → Build: mkdir build && cd build && cmake .. && make -j4
+  → Build: cmake --preset dev-debug && cmake --build build/dev-debug (ccache + PCH via SNK_COMPILER_CACHE / SNK_PCH)
   → Run: ./unit_tests
   → Single: ./unit_tests --run_test=DSBitFlagsTests
 

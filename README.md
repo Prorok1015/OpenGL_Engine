@@ -45,10 +45,13 @@ models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engi
 ### Building
 
 ```bash
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+cmake --preset dev-debug        # Ninja, build/dev-debug (see CMakePresets.json for all presets)
+cmake --build build/dev-debug
+# or without presets: mkdir build && cd build && cmake .. && make -j$(nproc)
 ```
+
+A compiler cache (ccache; sccache for MSVC) and a shared precompiled header are used automatically
+when available: `-DSNK_COMPILER_CACHE=OFF` / `-DSNK_PCH=OFF` turn them off.
 
 Produces two executables:
 | Target | Description |

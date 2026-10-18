@@ -148,10 +148,17 @@ Commit format: `git commit -m "docs: [type] brief desc\n\nSource: ...\nFile: ...
 ## 🚀 Build & Test
 
 ```bash
-mkdir build && cd build && cmake .. && make -j$(nproc)
-./unit_tests [--run_test=SuiteName]
-./Editor/editor --config ../Editor/config/editor.cfg
+cmake --preset dev-debug                      # Ninja, build/dev-debug; ccache/sccache + PCH on by default
+cmake --build build/dev-debug --target editor unit_tests
+build/dev-debug/unit_tests [--run_test=SuiteName]
+build/dev-debug/Editor/editor --config Editor/config/editor.cfg
+# presets: dev-debug dev-release release no-assimp, and ci-* (the exact CI configurations, e.g. ci-linux-asan)
+# without presets: mkdir build && cd build && cmake .. && make -j$(nproc)   (cache/PCH options still apply)
 ```
+
+Build speed (CMake options, so local/IDE/CI behave the same):
+- `SNK_COMPILER_CACHE=AUTO|ON|OFF` — launcher via ccache (sccache on Windows); a user-set `CMAKE_<LANG>_COMPILER_LAUNCHER` wins
+- `SNK_PCH=AUTO|ON|OFF` — one shared PCH (`cmake/pch/snk_pch.h`) for project targets; AUTO = ON except MSVC with a cache. Missing include that PCH hides? Build with `-DSNK_PCH=OFF` (CI job `ci-linux-clang-debug` does)
 
 ---
 

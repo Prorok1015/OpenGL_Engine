@@ -102,17 +102,19 @@ OpenGL_Engine/
 ## Build Targets
 
 ```bash
-# Configure and build
-mkdir build && cd build && cmake .. && make -j$(nproc)
+# Configure and build (presets: CMakePresets.json; compiler cache + PCH are enabled by default)
+cmake --preset dev-debug
+cmake --build build/dev-debug --target editor unit_tests
+# (without presets: mkdir build && cd build && cmake .. && make -j$(nproc))
 
 # Run editor
-./Editor/editor --config ../Editor/config/editor.cfg
+build/dev-debug/Editor/editor --config Editor/config/editor.cfg
 
 # Run all tests
-./unit_tests
+build/dev-debug/unit_tests
 
 # Run specific test suite
-./unit_tests --run_test=DSBitFlagsTests
+build/dev-debug/unit_tests --run_test=DSBitFlagsTests
 ```
 
 ## See Also
