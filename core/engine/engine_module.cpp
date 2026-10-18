@@ -7,6 +7,8 @@
 #include "scn_scene_service_init.h"
 #include "scn_ecs_assembler.h"
 #include "skinning/rnd_skinning_manager.h"
+#include "app_frame_stage.h"
+#include "gs_engine_frame_stages.h"
 
 void engine::engine_module::register_services(ds::app_data_storage& data)
 {
@@ -14,6 +16,9 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 	render::render_init(data);// engine
 	gui::gui_init(data);//engine
 	scn::scene_init(data);//engine
+	auto& stages = data.require<app::frame_stage_registry>();
+	gs::register_scene_frame_stages(stages);
+	gs::register_platform_frame_stages(stages);
 	m_scene_types.emplace(scn::register_scene_types(
 		data.require<desc::desc_system>(),
 		data.require<scn::ecs_assembler>(),

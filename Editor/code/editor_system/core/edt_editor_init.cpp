@@ -1,7 +1,7 @@
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
 #include "desc_system.h"
-#include "edt_frame_loop_service.h"
+#include "app_frame_stage.h"
 #include "rnd_render_system.h"
 #include "gui_system.h"
 #include "res_system.h"
@@ -15,12 +15,15 @@ namespace components {
 		auto& rnd_sys     = data.require<rnd::render_system>();
 		auto& gui_sys     = data.require<gui::gui_system>();
 		data.construct<edt::editor_system>(desc_system, res_sys, rnd_sys, gui_sys);
-		data.construct<app::app_loop_service_interface, edt::edt_loop_service>();
+		// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
+		data.require<app::frame_stage_registry>().set_body(app::builtin_stage::ui, [](app::stage_context& c) {
+			c.storage.require<gui::gui_system>().render();
+		});
 	}
 
 	void editor_term(ds::app_data_storage& data)
 	{
-		data.destruct<app::app_loop_service_interface>();
+		data.require<app::frame_stage_registry>().clear_body(app::builtin_stage::ui);
 		data.destruct<edt::editor_system>();
 	}
 
