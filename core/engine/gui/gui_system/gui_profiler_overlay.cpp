@@ -200,7 +200,6 @@ void profiler_overlay::check_hotkey()
 
 std::string profiler_overlay::format_row(const smoothed_zone& s) const
 {
-	auto suffix = time_unit_suffix();
 	return std::format("{:<30s}\t{:>12s}\t{:>12s}\t{:>12s}\t{:>6d}",
 		s.name ? s.name : "???",
 		format_time(s.total_us),

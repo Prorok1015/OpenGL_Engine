@@ -138,7 +138,7 @@ BOOST_AUTO_TEST_CASE(Layout_Iterable) {
 		{SHADER_DATA_TYPE::VEC2_F, "b"}
 	};
 	int count = 0;
-	for (const auto& e : layout) {
+	for ([[maybe_unused]] const auto& e : layout) {
 		++count;
 	}
 	BOOST_TEST(count == 2);

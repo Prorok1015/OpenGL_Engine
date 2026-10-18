@@ -51,6 +51,6 @@ void scn::scene_term(ds::app_data_storage &store) {
   auto &resource = store.require<res::resource_system>();
   resource.unregistrate_adapter(scn::worldwrap_adapter::INFO);
   store.destruct<scn::level_manager>();
-  auto &sfactory = store.require<ecs::system_factory>();
+  [[maybe_unused]] auto &sfactory = store.require<ecs::system_factory>();
   store.destruct<scn::ecs_assembler>();
 }

@@ -321,8 +321,6 @@ void process_mesh_geometry(const aiScene* scene, const aiMesh* mesh, rnd::geomet
 	}
 
 	for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-		size_t begin = geometry.vertices.size();
-
 		store_data(geometry.vertices, convert_to_glm(mesh->mVertices[i]));
 		if (mesh->HasNormals()) {
 			store_data(geometry.vertices, convert_to_glm(mesh->mNormals[i]));

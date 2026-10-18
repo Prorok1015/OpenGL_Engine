@@ -94,6 +94,7 @@ BOOST_AUTO_TEST_CASE(HierarchicalLookup)
     another_test_service& child_service = child_storage.construct<another_test_service>();
 
     // Child should be able to access parent's services
+    BOOST_CHECK_EQUAL(&child_service, &child_storage.require<another_test_service>());
     BOOST_CHECK(child_storage.has_value<test_service>());
     test_service& required_from_child = child_storage.require<test_service>();
     BOOST_CHECK_EQUAL(&parent_service, &required_from_child);
