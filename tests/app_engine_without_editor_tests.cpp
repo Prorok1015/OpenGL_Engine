@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "app_frame_stage.h"
-#include "app_loop_service.h"
-#include "application.h"
+#include <snk/application/app_frame_stage.h>
+#include <snk/application/app_loop_service.h>
+#include <snk/application/application.h>
 #include "gs_engine_frame_stages.h"
 #include "inp_ecs_input_manager.h"
 #include "level/scn_level_manager.h"

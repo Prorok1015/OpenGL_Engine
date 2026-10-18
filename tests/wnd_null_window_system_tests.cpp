@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "wnd_null_window_system.h"
+#include <snk/window/wnd_null_window_system.h>
 #include "ds/ds_store.hpp"
 #include <memory>
 

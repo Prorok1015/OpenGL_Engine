@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "wnd_coordinates.h"
+#include <snk/window/wnd_coordinates.h>
 #include "edt_input_manager.h"
 
 BOOST_AUTO_TEST_SUITE(WndCoordinatesTests)

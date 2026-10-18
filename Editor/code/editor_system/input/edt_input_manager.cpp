@@ -1,5 +1,5 @@
 #include "edt_input_manager.h"
-#include "inp_keyboard_event.hpp"
+#include <snk/core_input/inp_keyboard_event.hpp>
 
 bool edt::input_manager::on_handle_event(wnd::handle, const inp::input_event& evt)
 {

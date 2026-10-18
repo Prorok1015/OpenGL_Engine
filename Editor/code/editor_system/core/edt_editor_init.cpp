@@ -1,7 +1,7 @@
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
 #include "desc_system.h"
-#include "app_frame_stage.h"
+#include <snk/application/app_frame_stage.h>
 #include "edt_camera_redirect.h"
 #include "level/scn_level_manager.h"
 #include "rnd_render_system.h"

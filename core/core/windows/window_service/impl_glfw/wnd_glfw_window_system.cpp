@@ -1,10 +1,10 @@
 #include "wnd_glfw_window_system.h"
 #include <GLFW/glfw3.h>
 #include "wnd_input_keycode_convert.hpp"
-#include "inp_keyboard_event.hpp"
-#include "inp_input_event.hpp"
+#include <snk/core_input/inp_keyboard_event.hpp>
+#include <snk/core_input/inp_input_event.hpp>
 #include "engine_log.h"
-#include "wnd_coordinates.h"
+#include <snk/window/wnd_coordinates.h>
 #include <filesystem>
 
 namespace {

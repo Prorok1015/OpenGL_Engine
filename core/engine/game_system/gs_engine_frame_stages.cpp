@@ -1,12 +1,12 @@
 #include "gs_engine_frame_stages.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "level/scn_level_manager.h"
 #include "inp_ecs_input_manager.h"
 #include "rnd_frame_assembler.h"
 #include "rnd_frame_context.h"
 #include "rnd_render_system.h"
 #include "rnd_swapchain_interface.h"
-#include "app_loop_service_interface.h"
+#include <snk/application/app_loop_service_interface.h>
 #include "eng_profiler.h"
 
 void gs::register_scene_frame_stages(app::frame_stage_registry& registry)

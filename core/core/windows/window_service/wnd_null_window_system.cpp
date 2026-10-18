@@ -1,4 +1,4 @@
-#include "wnd_null_window_system.h"
+#include <snk/window/wnd_null_window_system.h>
 #include "engine_log.h"
 
 void wnd::null_window::set_title(std::string_view title)

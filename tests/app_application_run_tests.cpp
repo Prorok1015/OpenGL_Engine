@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include <stdexcept>
 #include <string>
-#include "application.h"
-#include "app_loop_service_interface.h"
+#include <snk/application/application.h>
+#include <snk/application/app_loop_service_interface.h>
 
 namespace {
 

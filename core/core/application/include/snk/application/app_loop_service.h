@@ -1,7 +1,7 @@
 #pragma once
 #include <chrono>
-#include "app_frame_stage.h"
-#include "app_loop_service_interface.h"
+#include <snk/application/app_frame_stage.h>
+#include <snk/application/app_loop_service_interface.h>
 #include "snk_api.h"
 
 namespace app

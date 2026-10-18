@@ -3,15 +3,15 @@
 #include "gui_gui_service_init.h"
 #include "inp_input_service_init.h"
 #include "inp_input_system.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "scn_scene_service_init.h"
 #include "scn_ecs_assembler.h"
 #include "skinning/rnd_skinning_manager.h"
-#include "app_frame_stage.h"
+#include <snk/application/app_frame_stage.h>
 #include "gs_engine_frame_stages.h"
 #include "gui_system.h"
 #include "inp_input_consumable_listener.h"
-#include "inp_keyboard_event.hpp"
+#include <snk/core_input/inp_keyboard_event.hpp>
 
 namespace {
 	class content_scale_forwarder final : public inp::input_event_consumable_listener_interface

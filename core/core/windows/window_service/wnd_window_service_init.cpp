@@ -1,5 +1,5 @@
-#include "wnd_window_service_init.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_service_init.h>
+#include <snk/window/wnd_window_system.h>
 #include "wnd_glfw_window_system.h"
 
 void core::window::window_init(ds::app_data_storage& data)

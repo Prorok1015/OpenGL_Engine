@@ -1,5 +1,5 @@
 #pragma once
-#include "app_frame_stage.h"
+#include <snk/application/app_frame_stage.h>
 #include "snk_api.h"
 
 namespace gs

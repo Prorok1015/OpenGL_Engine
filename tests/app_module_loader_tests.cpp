@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include "app_module_loader.hpp"
+#include <snk/application/app_module_loader.hpp>
 
 #include <stdexcept>
 #include <string>

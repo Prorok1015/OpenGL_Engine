@@ -1,6 +1,6 @@
 #pragma once
-#include "wnd_window.h"
-#include "wnd_window_event_listener_interface.h"
+#include <snk/window/wnd_window.h>
+#include <snk/window/wnd_window_event_listener_interface.h>
 #include <algorithm>
 #include <memory>
 #include <vector>

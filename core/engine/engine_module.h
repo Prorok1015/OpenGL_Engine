@@ -1,5 +1,5 @@
 #pragma once
-#include "app_module_interface.h"
+#include <snk/application/app_module_interface.h>
 #include "scn_registration_scope.h"
 #include <memory>
 #include <optional>

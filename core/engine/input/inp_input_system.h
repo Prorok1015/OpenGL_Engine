@@ -3,7 +3,7 @@
 #include "ds/ds_type_id.hpp"
 #include "inp_input_manager_base.h"
 #include "inp_input_consumable_listener.h"
-#include "wnd_window_event_listener_interface.h"
+#include <snk/window/wnd_window_event_listener_interface.h>
 #include <unordered_map>
 #include "snk_api.h"
 

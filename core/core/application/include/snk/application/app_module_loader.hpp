@@ -1,6 +1,6 @@
 #pragma once
-#include "app_module_entry.h"
-#include "app_module_interface.h"
+#include <snk/application/app_module_entry.h>
+#include <snk/application/app_module_interface.h>
 #include "engine_assert.h"
 #include "engine_log.h"
 #include <algorithm>

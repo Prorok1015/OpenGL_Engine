@@ -2,7 +2,7 @@
 #include "edt_editor_init.h"
 #include "res_system.h"
 #include "resources/res_resource_picture.h"
-#include "wnd_window_system.h"
+#include <snk/window/wnd_window_system.h>
 #include "inp_input_system.h"
 #include "edt_editor_system.h"
 #include "cfg_api.h"
