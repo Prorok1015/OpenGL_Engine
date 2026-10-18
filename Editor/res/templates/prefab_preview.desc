@@ -20,6 +20,9 @@
         {
             "__id" : "09705f78a49797f0",
             "name" : "PrefabLight",
+            "transform" : {
+                "rotation" : [50.0, -30.0, 0.0]
+            },
             "components" : {
                 "directional_light_desc" : {
                     "__type" : "directional_light_desc",
