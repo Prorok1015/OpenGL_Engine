@@ -44,7 +44,7 @@ BOOST_AUTO_TEST_CASE(MultipleAllocations) {
 BOOST_AUTO_TEST_CASE(AllocationRespects16ByteAlignment) {
 	ds::linear_resource alloc(4096);
 	// Burn 1 byte to shift the internal pointer off-alignment
-	alloc.allocate(1, 1);
+	(void)alloc.allocate(1, 1);
 	void* p = alloc.allocate(32, 16);
 	auto addr = reinterpret_cast<std::uintptr_t>(p);
 	BOOST_TEST((addr % 16) == 0u);
@@ -52,7 +52,7 @@ BOOST_AUTO_TEST_CASE(AllocationRespects16ByteAlignment) {
 
 BOOST_AUTO_TEST_CASE(AllocationRespects64ByteAlignment) {
 	ds::linear_resource alloc(4096);
-	alloc.allocate(3, 1);
+	(void)alloc.allocate(3, 1);
 	void* p = alloc.allocate(64, 64);
 	auto addr = reinterpret_cast<std::uintptr_t>(p);
 	BOOST_TEST((addr % 64) == 0u);
@@ -62,7 +62,7 @@ BOOST_AUTO_TEST_CASE(AllocationRespects64ByteAlignment) {
 
 BOOST_AUTO_TEST_CASE(ResetRestoresUsedToZero) {
 	ds::linear_resource alloc(1024);
-	alloc.allocate(512, 1);
+	(void)alloc.allocate(512, 1);
 	BOOST_TEST(alloc.used() > 0u);
 	alloc.reset();
 	BOOST_TEST(alloc.used() == 0u);
@@ -70,7 +70,7 @@ BOOST_AUTO_TEST_CASE(ResetRestoresUsedToZero) {
 
 BOOST_AUTO_TEST_CASE(CanAllocateAfterReset) {
 	ds::linear_resource alloc(256);
-	alloc.allocate(200, 1);
+	(void)alloc.allocate(200, 1);
 	alloc.reset();
 	void* p = alloc.allocate(200, 1);
 	BOOST_TEST(p != nullptr);
@@ -83,16 +83,16 @@ BOOST_AUTO_TEST_CASE(ExternalBufferThrowsOnOverflow) {
 	alignas(std::max_align_t) std::byte buf[64];
 	ds::linear_resource alloc(buf, sizeof(buf));
 	// Fill the buffer
-	alloc.allocate(64, 1);
+	(void)alloc.allocate(64, 1);
 	// Next allocation must throw — no upstream
-	BOOST_CHECK_THROW(alloc.allocate(1, 1), std::bad_alloc);
+	BOOST_CHECK_THROW((void)alloc.allocate(1, 1), std::bad_alloc);
 }
 
 // --- Overflow with upstream fallback ---
 
 BOOST_AUTO_TEST_CASE(UpstreamFallbackOnOverflow) {
 	ds::linear_resource alloc(64);
-	alloc.allocate(64, 1);
+	(void)alloc.allocate(64, 1);
 	// This should NOT throw — falls back to upstream (default resource)
 	void* p = nullptr;
 	BOOST_CHECK_NO_THROW(p = alloc.allocate(32, 1));
@@ -143,9 +143,9 @@ BOOST_AUTO_TEST_CASE(ResetReleasesOverflowToUpstream) {
 	{
 		ds::linear_resource alloc(64, &up);
 		BOOST_TEST(up.live_blocks == 1u); // backing buffer only
-		alloc.allocate(64, 1);
-		alloc.allocate(100, 8);
-		alloc.allocate(200, 16);
+		(void)alloc.allocate(64, 1);
+		(void)alloc.allocate(100, 8);
+		(void)alloc.allocate(200, 16);
 		BOOST_TEST(up.live_blocks == 3u);
 		BOOST_TEST(alloc.overflow_block_count() == 2u);
 
@@ -167,7 +167,7 @@ BOOST_AUTO_TEST_CASE(RepeatedFillResetDoesNotGrowUpstream) {
 	ds::linear_resource alloc(256, &up);
 	for (int cycle = 0; cycle < 100; ++cycle) {
 		for (int i = 0; i < 20; ++i) {
-			alloc.allocate(64, 8);
+			(void)alloc.allocate(64, 8);
 		}
 		BOOST_TEST(up.live_blocks <= 1u + 20u);
 		alloc.reset();
@@ -179,7 +179,7 @@ BOOST_AUTO_TEST_CASE(RepeatedFillResetDoesNotGrowUpstream) {
 BOOST_AUTO_TEST_CASE(OverflowBlockHonoursAlignmentAndDeallocateIsSafe) {
 	counting_resource up;
 	ds::linear_resource alloc(32, &up);
-	alloc.allocate(32, 1);
+	(void)alloc.allocate(32, 1);
 	void* p = alloc.allocate(64, 64);
 	BOOST_TEST(reinterpret_cast<std::uintptr_t>(p) % 64 == 0u);
 	BOOST_TEST(up.last_alignment == 64u);
