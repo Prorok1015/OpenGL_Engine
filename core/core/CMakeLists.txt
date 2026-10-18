@@ -36,7 +36,7 @@ target_link_libraries(core_api INTERFACE ${_core_api_libs})
 # snk_api.h (SNK_API) for leaf components that do not link `common`: logger, config.
 add_library(snk_api INTERFACE)
 add_library(snk::api ALIAS snk_api)
-target_include_directories(snk_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common)
+target_include_directories(snk_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common/include)
 
 add_subdirectory("common")
 add_subdirectory("config")

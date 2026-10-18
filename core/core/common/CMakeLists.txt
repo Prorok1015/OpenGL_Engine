@@ -14,7 +14,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	# ENGINE_PROFILE_MODE only gates the PROFILE_* macros.
 	"${CMAKE_CURRENT_SOURCE_DIR}/eng_profiler.cpp"
 )
-target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+snk_component_headers(${PROJECT_NAME})
 #glm
 add_subdirectory(${THIRD_PARTY_PATH}/glm glm)
 target_compile_definitions(glm INTERFACE GLM_ENABLE_EXPERIMENTAL)
