@@ -27,7 +27,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 ## ⚠️ Critical Rules (STRICT!)
 
 ### No iostream, no std::cout/cerr
-- **Use:** `#include "engine_log.h"` → `egLOG`/`egLOG_INFO`, `egLOG_WARN`, `egLOG_ERROR` (also `egLOG_TRACE`/`egLOG_DEBUG`)
+- **Use:** `#include <snk/common/logger/engine_log.h>` → `egLOG`/`egLOG_INFO`, `egLOG_WARN`, `egLOG_ERROR` (also `egLOG_TRACE`/`egLOG_DEBUG`)
 - **Signature:** first arg is a category string, then `std::format` args: `egLOG_WARN("resource", "not found: {}", tag)`
 - **Why:** Formatted, filterable per-category logging routed through spdlog
 
@@ -43,7 +43,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 ### C++20 only, snake_case, tabs (size 4)
 - **Headers:** `#pragma once`, include order: module → stdlib → third-party → project
 - **Braces:** functions on new line, control flow same line
-- **Assertions:** `ASSERT_MSG`/`ASSERT_FAIL` from `engine_assert.h`, never `assert()`
+- **Assertions:** `ASSERT_MSG`/`ASSERT_FAIL` from `<snk/common/engine_assert.h>`, never `assert()`
 
 ### ImGui: `End()` is unconditional
 - **Pattern:** `if (ImGui::Begin("Name")) { ...draw... } ImGui::End();` (same for `BeginChild`/`EndChild`)

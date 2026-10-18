@@ -1,7 +1,7 @@
 # SnkTarget.cmake — per-target defaults for project (non-third-party) targets.
 #
 # Hidden visibility keeps the binary identical in static builds and makes the exported surface
-# explicit (SNK_API, core/core/common/snk_api.h) once engine components are linked into a
+# explicit (SNK_API, core/core/common/include/snk/common/snk_api.h) once engine components are linked into a
 # shared library (SNK_ENGINE_SHARED).
 function(snk_target_defaults tgt)
 	set_target_properties(${tgt} PROPERTIES
@@ -34,9 +34,7 @@ endfunction()
 #                                        (PUBLIC, or INTERFACE for header-only targets)
 #   <component>/ (root)                  sources and internal headers, PRIVATE to the component
 #
-# A component without an include/ directory keeps the legacy layout: its root is the PUBLIC include
-# directory. Migrating a component is therefore a move of its public headers into include/snk/<name>/.
-# SnkInstall.cmake installs include/ to <prefix>/include, the legacy root to include/snk/<path in the repo>.
+# Every component must have an include/ directory; SnkInstall.cmake installs it to <prefix>/include.
 function(snk_component_headers tgt)
 	get_target_property(_type ${tgt} TYPE)
 	if(_type STREQUAL "INTERFACE_LIBRARY")
@@ -51,7 +49,7 @@ function(snk_component_headers tgt)
 			target_include_directories(${tgt} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 		endif()
 	else()
-		target_include_directories(${tgt} ${_scope} "${CMAKE_CURRENT_SOURCE_DIR}")
+		message(FATAL_ERROR "snk_component_headers(${tgt}): ${_public} does not exist")
 	endif()
 endfunction()
 

@@ -135,8 +135,8 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 > res_tag.h больше не тянет boost/json+glm (вынесено в res_tag_json.h; glm::ivec2→POD span);
 > desc_base.hpp → boost/json/fwd.hpp (json::object только reference-параметр в pure-virtual).
 > Замечание: исходное AC-предположение «desc_base нельзя облегчить» неверно — fwd-decl достаточно для ref-параметра.
-**Файлы:** `core/core/resource/res_tag.h` (вынести `tag_invoke`+`<boost/json.hpp>` в `res_tag_json.h`;
-заменить glm::ivec2-поля на POD), `core/core/desc/desc_base.hpp` (json в .cpp где можно),
+**Файлы:** `core/core/resource/include/snk/resource/res_tag.h` (вынести `tag_invoke`+`<boost/json.hpp>` в `res_tag_json.h`;
+заменить glm::ivec2-поля на POD), `core/core/desc/include/snk/desc/desc_base.hpp` (json в .cpp где можно),
 `scn_world.h`/`scn_ecs_assembler.h`/`scn_hot_reload_manager.h` (`entt/entt.hpp`→`entt/fwd.hpp`),
 `gui_backend_interface.h`+editor-панели (`imgui.h`→forward-decl `ImTextureID`).
 **AC:** `res::tag`/`desc_base` не тянут boost.json в потребителей; заголовки используют entt/imgui fwd-decl;
@@ -152,7 +152,7 @@ forward-декларациями), `rnd::extractor_interface` (чистый шо
 > ⚠️ Адверсариальная проверка: поведение сохранено (удалённый uniforms всегда был пуст; OPAQUE/MIX блок байт-в-байт;
 > условия bake идентичны; render_mode мёртв на draw-пути). render→scene появилась header-зависимость (include-only,
 > без линка — цикла нет). Frame loop не покрыт тестами → нужен ручной запуск.
-**Файлы:** `core/engine/scene/scn_material_desc.h`, `scn_model.h`, `scn_mesh_node_desc.h`,
+**Файлы:** `core/engine/scene/include/snk/scene/scn_material_desc.h`, `scn_model.h`, `scn_mesh_node_desc.h`,
 `scn_render_data_extractor.cpp`; render-сторона (новый `rnd::material_compiler_interface`/`resource_provider`).
 Убрать конкретные render-классы из scene-desc заголовков; scene хранит POD-данные материала (цвета/теги/очередь);
 `get_shader_desc` перенести на render-сторону (расширение экстрактора).
@@ -173,7 +173,7 @@ frame_context; координируется с EPIC-29 US-29-4. Усилие: **
 > module_interface получил name() + depends_on() (core{}, engine{core}, editor{core,engine}). Loader делает
 > ОДНУ топосортировку (Kahn; tiebreak priority→insertion; ASSERT на циклы/неизвестные deps) — один порядок
 > для register И initialize, reverse для shutdown. Поведение сохранено: топосорт = core→engine→editor.
-**Файлы:** `core/core/application/app_module_interface.h` (добавить `depends_on()`),
+**Файлы:** `core/core/application/include/snk/application/app_module_interface.h` (добавить `depends_on()`),
 `app_module_loader.hpp` (одна топосортировка; тот же порядок для register И initialize; reverse — shutdown).
 **AC:** порядок инициализации выражен декларативно, не порядком строк; register и initialize в одном порядке;
 priority-enum заменён/дополнен зависимостями. Усилие: **S/M**.

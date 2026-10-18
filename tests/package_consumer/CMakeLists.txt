@@ -11,19 +11,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(snake_sdk 0.1 CONFIG REQUIRED)
+find_package(snake_sdk 0.2 CONFIG REQUIRED)
 message(STATUS "snake_sdk ${snake_sdk_VERSION} (shared engine: ${snake_sdk_ENGINE_SHARED}) from ${snake_sdk_DIR}")
 
 add_executable(package_consumer main.cpp)
 target_link_libraries(package_consumer PRIVATE snk::engine snk::engine_api)
 
 # Header self-containment (#109): one translation unit per installed header of the components that
-# already live under include/snk/<name>/, compiled against the installed SDK. Off by default; the
-# SDK CI jobs turn it on. Extend SNK_CONSUMER_HEADER_COMPONENTS as more components migrate.
+# live under include/snk/<name>/, compiled against the installed SDK. Off by default; the SDK CI
+# jobs turn it on. Add a component to SNK_CONSUMER_HEADER_COMPONENTS when it gains public headers.
 option(SNK_CONSUMER_HEADER_CHECK "Compile one TU per installed public header of the migrated components" OFF)
 set(SNK_CONSUMER_HEADER_COMPONENTS application core_input window driver ecs desc resource common config input image game gui render scene core engine)
 if(SNK_CONSUMER_HEADER_CHECK)
 	get_filename_component(_sdk_prefix "${snake_sdk_DIR}/../../.." ABSOLUTE)
+	if(NOT IS_DIRECTORY "${_sdk_prefix}/include/snk")
+		message(FATAL_ERROR "SDK prefix ${_sdk_prefix} (derived from ${snake_sdk_DIR}, expected <prefix>/lib/cmake/snake_sdk) has no include/snk")
+	endif()
 	set(_header_tus "")
 	set(_idx 0)
 	foreach(_comp IN LISTS SNK_CONSUMER_HEADER_COMPONENTS)

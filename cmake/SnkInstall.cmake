@@ -2,10 +2,10 @@
 #
 # `cmake --install <build> --prefix <dir>` lays out a self-contained SDK:
 #
-#   include/snk/<path in the repo>/...  headers of every exported target that has not migrated yet,
-#                                       same relative layout as the source tree
-#   include/snk/<component>/...         headers of migrated targets (<component>/include/snk/<component>/,
-#                                       see snk_component_headers(), #109): include/ installs to include/
+#   include/snk/<component>/...         public headers of the engine components
+#                                       (<component>/include/snk/<component>/, see
+#                                       snk_component_headers(), #109): include/ installs to include/
+#   include/snk/lib3dparty/...          headers of the bundled submodule libraries (glm, imgui, ...)
 #   include/snk/boost/                  the Boost headers the engine needs, merged into one tree
 #   lib/snk/*.a                         static engine components and the bundled third-party
 #                                       libraries (assimp, glfw, yaml-cpp, imgui, glad, Boost, ...)
@@ -26,7 +26,7 @@
 
 include(CMakePackageConfigHelpers)
 
-set(SNK_SDK_VERSION 0.1.0)
+set(SNK_SDK_VERSION 0.2.0)
 set(SNK_SDK_EXPORT_SET snake_sdk_targets)
 set(SNK_SDK_CMAKE_DIR lib/cmake/snake_sdk)
 
@@ -106,10 +106,11 @@ function(_snk_sdk_include_dest out abs)
 		if(_pos EQUAL 0)
 			file(RELATIVE_PATH _rel "${CMAKE_SOURCE_DIR}" "${abs}")
 			if(_rel MATCHES "^core/.*/include$")
-				# Migrated component (snk_component_headers): include/snk/<name>/... lands at
+				# snk_component_headers(): include/snk/<name>/... lands at
 				# <prefix>/include/snk/<name>/..., whichever component it comes from.
 				set(_dest include)
 			else()
+				# Bundled third-party libraries keep their path in the repo.
 				set(_dest include/snk/${_rel})
 			endif()
 		endif()

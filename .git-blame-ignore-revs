@@ -1,0 +1,11 @@
+# Mechanical header moves and include rewrites of #109. Used by GitHub automatically;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# PR-1 (#228): application, core_input, window public headers -> include/snk/
+97a329d8cf1f7bdaa5e140d4327b6b6662ac8925
+# PR-2 (#234): driver, ecs, desc, resource public headers -> include/snk/
+2945f1f53cb8fd45b9a0e9a4fc35c999b51008d1
+# PR-3 (#235): common, config public headers -> include/snk/
+2071b14a288a7bc7bfc242f35186096f0eb6fc2f
+# PR-4 (#237): engine-layer public headers -> include/snk/
+1ca8f664b661f2834a4c6a43bfed824a7a30ed04

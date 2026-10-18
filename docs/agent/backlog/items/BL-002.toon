@@ -14,7 +14,7 @@ created: 2026-05-31
 theme: robustness
 
 [DESCRIPTION]
-core/core/common/engine_assert.h раскрывает ASSERT_MSG/ASSERT_FAIL в release (_DEBUG не задан)
+core/core/common/include/snk/common/engine_assert.h раскрывает ASSERT_MSG/ASSERT_FAIL в release (_DEBUG не задан)
 в ПУСТОТУ — условие не вычисляется. Весь защитный слой движка исчезает в боевой сборке. Нужен
 второй макрос ENGINE_VERIFY(cond, msg), который В RELEASE вычисляет условие, логирует egLOG_ERROR
 и делает graceful-degradation (типизированное исключение / return), а не проваливается дальше.

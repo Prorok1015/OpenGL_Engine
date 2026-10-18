@@ -56,16 +56,22 @@ examples:
   struct animation_system : ecs::system_interface { ... }
 
 [INCLUDE_ORDER]
-1. Module header (e.g., "scn_level.h")
+1. Module header (e.g., <snk/scene/level/scn_level.h>)
 2. Standard library headers (cmath, vector, etc.)
 3. Third-party headers (glm, boost, entt)
 4. Other project headers (from other modules)
 
 Example:
-  #include "scn_level.h"
+  #include <snk/scene/level/scn_level.h>
   #include <cmath>
   #include <glm/glm.hpp>
-  #include "res_system.h"
+  #include <snk/resource/res_system.h>
+
+[HEADER_LAYOUT]
+public: <component>/include/snk/<component>/*.h, included as <snk/<component>/x.h> (angle brackets)
+internal: next to the .cpp in <component>/, never installed with the SDK, included with quotes
+rule: a public header must not include an internal one (glad, GLFW, assimp, impl_*, rnd_gl_*, passes/)
+check: python3 tools/header_split/split.py check; CI job "SDK package" compiles every installed header
 
 [HEADER_GUARDS]
 use: #pragma once (no macro guards)
@@ -104,7 +110,7 @@ examples:
 
 [LOGGING_PATTERN]
 never: std::cout, std::cerr, std::cin, printf
-always: #include "engine_log.h" and use egLOG_* macros (spdlog backend)
+always: #include <snk/common/logger/engine_log.h> and use egLOG_* macros (spdlog backend)
 note: first arg is a category string (becomes the spdlog logger name), then format args
 examples:
   egLOG("resource", "Loading model: {}", path);   // egLOG == egLOG_INFO
@@ -152,7 +158,7 @@ async: h.then([](auto& res) { /* callback; check res.has_error() */ })
 cache: automatic (weak refs for auto-unload, pinned for persistent)
 
 [ERROR_HANDLING]
-assertions: ASSERT_MSG(cond, "message") from engine_assert.h (active in _DEBUG only)
+assertions: ASSERT_MSG(cond, "message") from <snk/common/engine_assert.h> (active in _DEBUG only)
 logging: Use egLOG_ERROR / egLOG_WARN (category-first) from engine_log.h
 exceptions: Avoid in hot paths, use for init errors only
 return_codes: Prefer for resource loading failures

@@ -208,7 +208,7 @@ Top allocations by file:
 ## User Stories
 
 ### US-44-1: Allocation registry и site_resource
-**Файлы:** `core/core/common/mem_site_resource.h`, `core/core/common/mem_site_resource.cpp`
+**Файлы:** `core/core/common/include/snk/common/mem_site_resource.h`, `core/core/common/mem_site_resource.cpp`
 
 Реализовать `alloc_site_stats`, registry, `site_resource`, `get_tracked_resource()`.
 
@@ -222,7 +222,7 @@ Top allocations by file:
 - [ ] Unit-тесты: counters корректны, peak отслеживается, snapshot работает
 
 ### US-44-2: Wrapper containers (ds::vector, ds::string, ...)
-**Файлы:** `core/core/common/mem_vector.h`, `core/core/common/mem_string.h`, `core/core/common/mem_containers.h`
+**Файлы:** `core/core/common/include/snk/common/mem_vector.h`, `core/core/common/include/snk/common/mem_string.h`, `core/core/common/include/snk/common/mem_containers.h`
 
 Wrapper-классы с source_location в конструкторах.
 
@@ -247,7 +247,7 @@ Wrapper-классы с source_location в конструкторах.
 - [ ] Unit-тесты: new/delete обновляют counters
 
 ### US-44-4: Heap object factories
-**Файлы:** `core/core/common/mem_make.h`
+**Файлы:** `core/core/common/include/snk/common/mem_make.h`
 
 `ds::make_unique_at<T>`, `ds::make_shared_at<T>` с source_location.
 
@@ -258,7 +258,7 @@ Wrapper-классы с source_location в конструкторах.
 - [ ] Unit-тесты: объекты создаются, трекинг работает
 
 ### US-44-5: Memory profiler overlay (ImGui)
-**Файлы:** `core/engine/gui/gui_system/gui_memory_overlay.h`, `core/engine/gui/gui_system/gui_memory_overlay.cpp`
+**Файлы:** `core/engine/gui/gui_system/include/snk/gui/gui_memory_overlay.h`, `core/engine/gui/gui_system/gui_memory_overlay.cpp`
 **Зависимости:** US-44-1
 
 ImGui панель с breakdown по категориям и файлам.

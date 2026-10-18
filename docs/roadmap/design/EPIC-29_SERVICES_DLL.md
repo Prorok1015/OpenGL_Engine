@@ -2,7 +2,7 @@
 
 **Issue:** #6 (stories #58–#62; закрывает и #170) · **Статус:** утверждён владельцем 2026-10-17 (все рекомендации §9 приняты) · **Дата:** 2026-10-17
 
-Реальные пути: `core/core/common/ds/ds_store.hpp` (+ `ds_type_id.hpp`), `core/core/application/app_module_interface.h`, `app_module_loader.hpp`.
+Реальные пути: `core/core/common/include/snk/common/ds/ds_store.hpp` (+ `ds_type_id.hpp`), `core/core/application/include/snk/application/app_module_interface.h`, `app_module_loader.hpp`.
 
 ## 1. Текущее состояние
 **#58 ds_store.** Ключ — `ds::type_id::value<T>()` (`ds_type_id.hpp:13-16`), function-static счётчик (`:30-33`): в каждом бинарнике своя нумерация → DLL получит чужой слот. Хранилище `unordered_map<type_id, std::any>` (`ds_store.hpp:131`), порядок разрушения не определён; policy-шаблон (`:13-50`) используется только в `tests/ds_store_tests.cpp:16`; `construct` молча перезаписывает (`:110`); `destruct` отсутствующего — только ASSERT (`:126`); `require` уже бросает в release (`:99-106`). `std::any` ломается через границу .so при hidden visibility (libstdc++ сравнивает указатель на менеджер). `rnd::frame_context::data` — тоже `app_data_storage`, пересоздаётся каждый кадр (`rnd_frame_context.h:12`).
@@ -23,7 +23,7 @@
 - Тесты: LIFO, повторная регистрация, стабильность `type_key`.
 
 ## 3. #59 — PIC, visibility, SNK_API
-- Сейчас (бинарник не меняется): `CMAKE_POSITION_INDEPENDENT_CODE ON` глобально до `include(ThirdParty)`; hidden visibility только нашим таргетам через `snk_target_defaults(tgt)` (`cmake/SnkTarget.cmake`); ручной `core/core/common/snk_api.h` с одним макросом `SNK_API` (пустой в статике).
+- Сейчас (бинарник не меняется): `CMAKE_POSITION_INDEPENDENT_CODE ON` глобально до `include(ThirdParty)`; hidden visibility только нашим таргетам через `snk_target_defaults(tgt)` (`cmake/SnkTarget.cmake`); ручной `core/core/common/include/snk/common/snk_api.h` с одним макросом `SNK_API` (пустой в статике).
 - Shared-вариант: опция `SNK_ENGINE_SHARED` (OFF), один `snk_engine SHARED` из компонентов core+engine через `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` (минимум CMake → 3.24); CI-задача «Linux GCC Shared»; Windows MSVC shared собирается и тестируется в CI («Windows MSVC Shared», #198).
 - Что ломается в shared: typeinfo для исключений/`dynamic_cast` (экспорт классов); синглтоны (`cfg::config_manager::instance`, реестр spdlog, профайлер, `thread_local` frame allocator) — жить только в `snk_engine`; `entt::meta` контекст в статическом `locator` каждого бинарника — хост передаёт `entt::locator<entt::meta_ctx>::handle()` в модуль.
 

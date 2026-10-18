@@ -55,7 +55,7 @@
 - [ ] Текстурные desc тоже создаются как отдельные ресурсы (как в editor)
 
 ### US-35-3: Улучшить обработку ошибок
-**Файлы:** `core/engine/scene/adapters/scn_model_importer_adapter.h`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/adapters/scn_model_importer_adapter.h`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`
 
 Сейчас при ошибке возвращается `nullptr` — вызывающий код не знает причину. Нужна диагностика.
 
@@ -66,7 +66,7 @@
 - [ ] Если `desc_system.create_instance` не удался — ошибка логируется, возвращается `nullptr` с внятным сообщением
 
 ### US-35-4: Thread-safety аудит
-**Файлы:** `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `core/engine/scene/scn_ecs_assembler.cpp`, `core/engine/render/render_system/skinning/rnd_skinning_manager.h`
+**Файлы:** `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `core/engine/scene/scn_ecs_assembler.cpp`, `core/engine/render/render_system/include/snk/render/skinning/rnd_skinning_manager.h`
 
 `operator()` может вызываться из фонового потока ресурсной системы. Нужно убедиться, что все операции безопасны.
 

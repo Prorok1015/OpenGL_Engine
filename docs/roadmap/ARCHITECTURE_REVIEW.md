@@ -87,7 +87,7 @@
 
 **Плохо:**
 - **Нет подготовки к shared library.** Нет `POSITION_INDEPENDENT_CODE`, `CXX_VISIBILITY_PRESET hidden`, `generate_export_header`, `install(EXPORT)`. `BUILD_SHARED_LIBS` принудительно выключен (`cmake/ThirdParty.cmake:12`). Чем больше кода написано без `SNK_API`, тем дороже переход.
-- **Плоские заголовки без префикса** (`#include "res_system.h"`). При установке SDK они столкнутся с заголовками пользователя.
+- **Плоские заголовки без префикса** (`#include "res_system.h"`). При установке SDK они столкнутся с заголовками пользователя. Устранено в #109: `#include <snk/resource/res_system.h>`.
 - **Абсолютные пути вшиты при компиляции.** `RESOURCE_PATH` (PUBLIC, `core/core/resource/CMakeLists.txt:12`) и `PROJECT_SOURCE_PATH` (`drv_opengl`) несовместимы с установленным редактором.
 - **Остаточные нарушения слоёв.** `resource_system` (core) линкует `snk::image` (engine) и assimp. `window` линкует `drv_opengl` (см. 3.4).
 - **Каждая поддиректория вызывает `project()`** (~24 раза). Third-party подключается через `add_subdirectory` в разных компонентах, поэтому невозможно `find_package`-потребление и переключение на системные зависимости.
@@ -450,14 +450,14 @@
 
 | Баг | Где | Последствие |
 |---|---|---|
-| DFS без visited-set | `core/engine/scene/level/scn_level.h` (`run_graph_recursive`) | Системы запускаются несколько раз за кадр, порядок не топологический |
+| DFS без visited-set | `core/engine/scene/include/snk/scene/level/scn_level.h` (`run_graph_recursive`) | Системы запускаются несколько раз за кадр, порядок не топологический |
 | Fixed organizer не заполняется | `scn_level.cpp:28-36` | Fixed step пуст, `fixed_time` / `update_alpha` мертвы |
 | `level::clear()` не чистит `m_organizer` | `scn_level.cpp:155-172` | Второй уровень наследует системы первого |
 | `reload_world` стирает системы чужих миров | `scn_level.cpp:112-117` | Редактор чинит это вручную |
 | Лямбда с `this` в ctx при movable `level` | `scn_level.cpp:12-16, 169` | Висячий указатель после move / swap |
 | `create_system` → `shared_ptr` выбрасывается | `scn_level.cpp:72,86,117,150` | Stateful-системы in-place вызываются через висячий указатель |
-| Ассерты гейтятся `_DEBUG` | `core/core/common/engine_assert.h` | На GCC/Clang ассерты выключены всегда |
-| Счётчик type-id function-static | `core/core/common/ds/ds_type_id.hpp:13-33` | Ломается на границе DLL |
+| Ассерты гейтятся `_DEBUG` | `core/core/common/include/snk/common/engine_assert.h` | На GCC/Clang ассерты выключены всегда |
+| Счётчик type-id function-static | `core/core/common/include/snk/common/ds/ds_type_id.hpp:13-33` | Ломается на границе DLL |
 | `require()` без проверки в release | `ds_store.hpp:129-133` | Разыменование nullptr |
 | Неизвестный `__type` → null | `desc_adapter_t.cpp:20-29` | Падение загрузчика |
 | `tag::operator==` по хешу | `res_tag.h:62` | Коллизия хеша молча вернёт чужой ресурс |

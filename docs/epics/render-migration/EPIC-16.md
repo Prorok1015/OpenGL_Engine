@@ -22,7 +22,7 @@ Viewport передаётся в неправильном формате.
 
 ## US-16-1: Добавить `material_tag` в `draw_call_t`
 
-**Файл:** `core/engine/render/render_system/rnd_render_packet.hpp`
+**Файл:** `core/engine/render/render_system/include/snk/render/rnd_render_packet.hpp`
 **Приоритет:** КРИТИЧЕСКИЙ
 
 `draw_call_t` содержит `geometry_tag`, но render pass не может выбрать шейдер без тега материала.
@@ -49,7 +49,7 @@ struct draw_call_t {
 
 ## US-16-2: Структуры данных освещения в `rnd_light_data.hpp`
 
-**Файл:** `core/engine/render/render_system/rnd_light_data.hpp` (новый)
+**Файл:** `core/engine/render/render_system/include/snk/render/rnd_light_data.hpp` (новый)
 **Приоритет:** ВЫСОКИЙ
 
 Данные о свете сейчас вычисляются инлайн в `renderer_3d::prepare_directional_light()`.

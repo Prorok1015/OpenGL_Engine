@@ -32,7 +32,7 @@
 ## User Stories
 
 ### US-45-1: shader_config как lightweight handle
-**Файлы:** `core/engine/render/render_system/shader/rnd_scene_shader_desc.h`, `rnd_scene_shader_desc.cpp`, новый `rnd_shader_config_cache.h/.cpp`
+**Файлы:** `core/engine/render/render_system/include/snk/render/shader/rnd_scene_shader_desc.h`, `rnd_scene_shader_desc.cpp`, новый `rnd_shader_config_cache.h/.cpp`
 
 Вместо хранения данных по значению, `shader_config` становится handle на immutable кешированный объект. Материал создаёт config один раз, draw_call хранит только handle. Копирование = копия индекса.
 
@@ -59,7 +59,7 @@ struct draw_call_t {
 - [ ] Профайлер: Extract.PushDraws < 0.5ms для 79 мешей
 
 ### US-45-2: shader_config на pmr контейнерах
-**Файлы:** `core/engine/render/render_system/shader/rnd_scene_shader_desc.h`
+**Файлы:** `core/engine/render/render_system/include/snk/render/shader/rnd_scene_shader_desc.h`
 **Зависимости:** может делаться параллельно с US-45-1 или вместо
 
 Перевести внутренности `shader_config` на pmr контейнеры с frame allocator:

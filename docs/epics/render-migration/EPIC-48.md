@@ -134,7 +134,7 @@ draw_call_t {
 ## User Stories
 
 ### US-48-1: bone_matrix_storage — flat storage матриц в registry context
-**Файлы:** `core/engine/scene/scn_bone_matrix_storage.h` (новый), `core/engine/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/level/scn_level.cpp`
+**Файлы:** `core/engine/scene/scn_bone_matrix_storage.h` (новый), `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/level/scn_level.cpp`
 
 Создать `bone_matrix_storage` как ctx-ресурс registry. Заменить `bone_matrices_component` на lookup в storage.
 
@@ -146,7 +146,7 @@ draw_call_t {
 - [ ] `skeleton_component` удалён из ECS (данные в storage)
 
 ### US-48-2: skeleton_tag в bone_component и animated_node_component
-**Файлы:** `core/engine/scene/scn_model.h`, `core/engine/scene/scn_bone_desc.h`, `core/engine/scene/scn_bone_desc.cpp`, `core/engine/scene/scn_animated_node_desc.h`, `core/engine/scene/scn_animated_node_desc.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/include/snk/scene/scn_bone_desc.h`, `core/engine/scene/scn_bone_desc.cpp`, `core/engine/scene/include/snk/scene/scn_animated_node_desc.h`, `core/engine/scene/scn_animated_node_desc.cpp`
 
 Добавить `skeleton_tag` в `bone_component` и `animated_node_component`. Устанавливается из desc при assembly — никакого runtime-поиска.
 
@@ -197,7 +197,7 @@ draw_call_t {
 - [ ] `skeleton_tag` = prefab tag (уникален для каждого импортированного скелета)
 
 ### US-48-6: Глобальный SSBO матриц — batching всех скелетов
-**Файлы:** `core/engine/render/render_system/skinning/rnd_skinning_manager.h`, `core/engine/render/render_system/skinning/rnd_skinning_manager.cpp`, `core/engine/render/render_system/rnd_render_packet.hpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`
+**Файлы:** `core/engine/render/render_system/include/snk/render/skinning/rnd_skinning_manager.h`, `core/engine/render/render_system/skinning/rnd_skinning_manager.cpp`, `core/engine/render/render_system/include/snk/render/rnd_render_packet.hpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`
 
 Заменить единственный `bones_matrices_buffer` на динамический буфер, вмещающий матрицы всех активных скелетов. Render extractor читает `bone_matrix_storage` из `reg.ctx()` и собирает данные.
 
@@ -211,7 +211,7 @@ draw_call_t {
 - [ ] Нет pipeline stalls от per-draw-call uploads
 
 ### US-48-7: bind_for_draw — единый метод привязки skinning
-**Файлы:** `core/engine/render/render_system/skinning/rnd_skinning_manager.h`, `core/engine/render/render_system/skinning/rnd_skinning_manager.cpp`, `core/engine/render/render_system/passes/rnd_opaque_pass.cpp`, `core/engine/render/render_system/passes/rnd_transparent_pass.cpp`, `core/engine/render/render_system/passes/rnd_z_prepass.cpp`
+**Файлы:** `core/engine/render/render_system/include/snk/render/skinning/rnd_skinning_manager.h`, `core/engine/render/render_system/skinning/rnd_skinning_manager.cpp`, `core/engine/render/render_system/passes/rnd_opaque_pass.cpp`, `core/engine/render/render_system/passes/rnd_transparent_pass.cpp`, `core/engine/render/render_system/passes/rnd_z_prepass.cpp`
 **Зависимости:** US-48-6
 
 Вынести дублированную логику привязки skinning из трёх render passes в один метод.

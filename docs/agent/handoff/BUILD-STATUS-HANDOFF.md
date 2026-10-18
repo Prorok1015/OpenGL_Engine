@@ -109,7 +109,7 @@ LAYER 4 EDITOR  snk::editor_system → PRIVATE snk::engine (символы) + PR
 
 ## 4. Карта ключевых файлов (свежесозданное в EPIC-49)
 - `cmake/ThirdParty.cmake`, `cmake/imgui.cmake`
-- `core/core/resource/res_tag_json.h` (json/tag_invoke вынесены из res_tag.h)
+- `core/core/resource/include/snk/resource/res_tag_json.h` (json/tag_invoke вынесены из res_tag.h)
 - `core/engine/game_system/gs_frame_stage.{h,cpp}` (frame_stage_registry + register_core_frame_stages)
 - `core/engine/render/render_system/shader/rnd_material_compiler.{h,cpp}` (material_compiler_interface + default_material_compiler)
 - `tests/scn_material_desc_tests.cpp` (round-trip + render_mode таблица)

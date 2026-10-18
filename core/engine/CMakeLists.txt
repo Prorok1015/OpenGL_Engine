@@ -11,6 +11,8 @@ if(SNK_ENGINE_SHARED)
 		# imgui is exported by snk_engine. In-tree targets under core/ never link snk_engine, so
 		# this cannot clash with their PRIVATE dllexport (see snk_apply_target_defaults).
 		target_compile_definitions(snk_engine INTERFACE "IMGUI_API=__declspec(dllimport)")
+		# STL members in exported classes: consumers share the engine's /MD CRT (see snk_target_defaults).
+		target_compile_options(snk_engine INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/wd4251> $<$<COMPILE_LANGUAGE:CXX>:/wd4275>)
 	endif()
 else()
 	set(SNK_ENGINE_TARGET ${PROJECT_NAME})

@@ -60,7 +60,7 @@ prefab_root (skeleton_root)
 ## User Stories
 
 ### US-33-1: skeleton_component и перенос bone_matrices на skeleton root
-**Файлы:** `core/engine/scene/scn_model.h`, `core/engine/scene/scn_skinning_desc.h`, `core/engine/scene/scn_skinning_desc.cpp`, `core/engine/scene/scn_animation_job.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/include/snk/scene/scn_skinning_desc.h`, `core/engine/scene/scn_skinning_desc.cpp`, `core/engine/scene/scn_animation_job.cpp`
 
 Сейчас `bone_matrices_component` создаётся на mesh-entity в `assemble_skinning()`. При нескольких мешах каждый хранит свою копию матриц. Нужно вынести `bone_matrices_component` на skeleton root и ввести `skeleton_component` для связи.
 
@@ -71,7 +71,7 @@ prefab_root (skeleton_root)
 - [x] При нескольких мешах существует только один `bone_matrices_component` на skeleton root
 
 ### US-33-2: Убрать obj_owner_component из анимационного pipeline
-**Файлы:** `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`, `core/engine/scene/scn_model.h`
+**Файлы:** `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`, `core/engine/scene/include/snk/scene/scn_model.h`
 **Зависимости:** US-33-1
 
 `update_bone_offsets_system` и render extractor используют `obj_owner_component` для поиска `bone_matrices_component`. Нужно заменить на навигацию через `parent_component`.
@@ -82,7 +82,7 @@ prefab_root (skeleton_root)
 - [x] `obj_owner_component` не используется в анимационном/скиннинг pipeline (если не используется нигде — удалён)
 
 ### US-33-3: skinning_tag при assemble + skin_weights_desc
-**Файлы:** `core/engine/scene/scn_skinning_desc.h`, `core/engine/scene/scn_skinning_desc.cpp`, `core/engine/scene/scn_skin_weights_desc.h` (новый), `core/engine/scene/scn_skin_weights_desc.cpp` (новый), `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_skinning_desc.h`, `core/engine/scene/scn_skinning_desc.cpp`, `core/engine/scene/include/snk/scene/scn_skin_weights_desc.h` (новый), `core/engine/scene/scn_skin_weights_desc.cpp` (новый), `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
 
 Сейчас `skinning_component::skinning_tag` остаётся пустым после assemble. Тег должен прописываться из дескриптора при импорте. Skinning weights должны быть desc-driven (а не регистрироваться только при импорте).
 
@@ -97,7 +97,7 @@ prefab_root (skeleton_root)
 - [x] Веса сохраняются в prefab.desc и переживают перезапуск редактора
 
 ### US-33-4: animation_controller_component — управление воспроизведением
-**Файлы:** `core/engine/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/scn_animation_controller_desc.h` (новый), `core/engine/scene/scn_animation_controller_desc.cpp` (новый), `core/engine/game_system/gs_game_init.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/include/snk/scene/scn_animation_controller_desc.h` (новый), `core/engine/scene/scn_animation_controller_desc.cpp` (новый), `core/engine/game_system/gs_game_init.cpp`
 
 `playable_animation_component` не создаётся при assemble и не поддерживает play/pause/speed. Нужен полноценный контроллер.
 
@@ -119,7 +119,7 @@ struct animation_controller_component {
 - [x] `playable_animation_component` удалён
 
 ### US-33-5: Animation clip как shared ресурс
-**Файлы:** `core/engine/scene/scn_animation_clip_desc.h` (новый), `core/engine/scene/scn_animation_clip_desc.cpp` (новый), `core/engine/scene/scn_animation_collection_desc.h` (новый), `core/engine/scene/scn_animation_collection_desc.cpp` (новый), `core/engine/scene/scn_animated_node_desc.h` (новый), `core/engine/scene/scn_animated_node_desc.cpp` (новый), `core/engine/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
+**Файлы:** `core/engine/scene/include/snk/scene/scn_animation_clip_desc.h` (новый), `core/engine/scene/scn_animation_clip_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_animation_collection_desc.h` (новый), `core/engine/scene/scn_animation_collection_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_animated_node_desc.h` (новый), `core/engine/scene/scn_animated_node_desc.cpp` (новый), `core/engine/scene/include/snk/scene/scn_model.h`, `core/engine/scene/scn_animation_job.cpp`, `core/engine/scene/adapters/scn_model_importer_adapter.cpp`, `Editor/code/editor_system/import/edt_model_importer.cpp`, `core/engine/game_system/gs_game_init.cpp`
 **Зависимости:** US-33-4
 
 Keyframes дублировались в каждой bone-entity. Вынесены в shared-ресурс — один `animation_clip_desc` на анимацию. `animation_collection_desc` — контейнер клипов с поддержкой inline и file-based ресурсов через `desc_system::get_field_desc`. `animated_node_desc` — маркер для нод с анимационными каналами, проставляется при импорте.
@@ -135,7 +135,7 @@ Keyframes дублировались в каждой bone-entity. Вынесен
 - [x] Оба импортёра (adapter + editor) обновлены для новой архитектуры
 
 ### US-33-6: Оптимизация render extractor — убрать копирование матриц
-**Файлы:** `core/engine/render/render_system/rnd_render_packet.hpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`, `core/engine/render/render_system/passes/rnd_opaque_pass.cpp`, `core/engine/render/render_system/passes/rnd_transparent_pass.cpp`, `core/engine/render/render_system/passes/rnd_z_prepass.cpp`
+**Файлы:** `core/engine/render/render_system/include/snk/render/rnd_render_packet.hpp`, `core/engine/scene/level/scn_render_data_extractor.cpp`, `core/engine/render/render_system/passes/rnd_opaque_pass.cpp`, `core/engine/render/render_system/passes/rnd_transparent_pass.cpp`, `core/engine/render/render_system/passes/rnd_z_prepass.cpp`
 **Зависимости:** US-33-1, US-33-2
 
 Каждый draw call копирует вектор bone_matrices (~8KB). Нужно передавать указатель.
@@ -183,7 +183,7 @@ Keyframes дублировались в каждой bone-entity. Вынесен
 > Открыто: assemble-из-desc для skeleton (сейчас скелет строится вручную на ECS-уровне).
 
 ### US-33-10: Debug Draw Infrastructure — инфраструктура отладочного рендеринга
-**Файлы:** `core/engine/render/render_system/rnd_render_packet.hpp`, `core/engine/render/render_system/passes/rnd_debug_pass.h` (новый), `core/engine/render/render_system/passes/rnd_debug_pass.cpp` (новый), `Editor/res/shaders/debug_line.vert` (новый), `Editor/res/shaders/debug_line.frag` (новый), `core/engine/render/render_system/rnd_render_service_init.cpp`
+**Файлы:** `core/engine/render/render_system/include/snk/render/rnd_render_packet.hpp`, `core/engine/render/render_system/passes/rnd_debug_pass.h` (новый), `core/engine/render/render_system/passes/rnd_debug_pass.cpp` (новый), `Editor/res/shaders/debug_line.vert` (новый), `Editor/res/shaders/debug_line.frag` (новый), `core/engine/render/render_system/rnd_render_service_init.cpp`
 
 Сейчас в движке нет инфраструктуры для отладочного 3D-рендеринга (линии, точки, wireframes). Гизмо работает через ImGui DrawList (2D overlay), но для костей, коллизий, bounds нужен настоящий 3D debug draw с depth testing.
 

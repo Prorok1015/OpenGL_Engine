@@ -34,7 +34,7 @@
 - [ ] Сборка без Tracy (NONE, INTERNAL) не затронута
 
 ### US-46-2: Макро-проброс в Tracy API
-**Файлы:** `core/core/common/eng_profiler.h`
+**Файлы:** `core/core/common/include/snk/common/eng_profiler.h`
 **Зависимости:** US-46-1
 
 При `PROFILE_TRACY` макросы пробрасывают в Tracy:
@@ -56,7 +56,7 @@
 - [ ] Frame marks корректно разделяют кадры
 
 ### US-46-4: GPU Profiling через Tracy
-**Файлы:** `core/core/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
+**Файлы:** `core/core/common/include/snk/common/eng_profiler.h`, `core/engine/render/render_system/rnd_render_pipeline.cpp`
 **Зависимости:** US-46-2
 
 При Tracy — `PROFILE_GPU_SCOPE` пробрасывает в `TracyGpuZone`.

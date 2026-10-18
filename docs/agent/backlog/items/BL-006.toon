@@ -14,7 +14,7 @@ created: 2026-05-31
 theme: resources
 
 [DESCRIPTION]
-core/core/resource/resolvers/res_control_block.hpp: data/error_msg пишутся из adapter-worker-потока
+core/core/resource/include/snk/resource/resolvers/res_control_block.hpp: data/error_msg пишутся из adapter-worker-потока
 (set_ready/set_error) и читаются из main-потока, синхронизация только через atomic<status>, сам data
 не под мьютексом/без барьера. then() имеет TOCTOU: первая проверка is_ready()/has_error() без lock —
 при смене статуса между проверкой и взятием lock колбэк может потеряться (push_back после очистки

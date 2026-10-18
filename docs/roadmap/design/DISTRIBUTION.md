@@ -6,7 +6,7 @@
 
 ## 1. Как устроено сейчас
 
-**Модули.** `app::modules::module_interface` (`core/core/application/app_module_interface.h:7-20`): register/initialize/shutdown, `name()`, `depends_on()`. `module_loader` (`app_module_loader.hpp`): стабильный топосорт, откат init, состояния `added → … → unloaded`, `unload(name)` одного модуля (`:266`). C-точка входа: `SNK_DECLARE_MODULE` → `snk_module_api_version/build_info/create/destroy` (`app_module_entry.h:152-173`), проверка `check_module_entry` (api major/minor, компилятор, флаги debug/CRT/STL; `:108-144`).
+**Модули.** `app::modules::module_interface` (`core/core/application/include/snk/application/app_module_interface.h:7-20`): register/initialize/shutdown, `name()`, `depends_on()`. `module_loader` (`app_module_loader.hpp`): стабильный топосорт, откат init, состояния `added → … → unloaded`, `unload(name)` одного модуля (`:266`). C-точка входа: `SNK_DECLARE_MODULE` → `snk_module_api_version/build_info/create/destroy` (`app_module_entry.h:152-173`), проверка `check_module_entry` (api major/minor, компилятор, флаги debug/CRT/STL; `:108-144`).
 - **DLL с диска сейчас не грузится.** `module_entry` — указатели на функции. LoadLibrary/dlopen по решению EPIC-29 отнесены к EPIC-52 #21 (`app_module_entry.h:97-98`), тесты берут адреса напрямую (`tests/app_module_entry_tests.cpp:5`).
 - **Правило компилятора слабее нужного.** Для MSVC проходит любой 19.x (`app_module_entry.h:132-134`). Нужно «MSVC игры ≥ MSVC движка».
 - **DebugGame уже совместим с проверкой.** `build_flag::debug` на MSVC выставляется только при `_DEBUG` (`:63-65`), который задаёт `/MDd`. Код игры с `/Od /MD` даёт те же флаги, что движок RelWithDebInfo `/MD`. Ошибочная сборка игры с `/MDd` отклоняется с понятной причиной (`:139-141`).
@@ -15,9 +15,9 @@
 - Движок по умолчанию статический. `SNK_ENGINE_SHARED` (CMake ≥3.27, `CMakeLists.txt:19-27`) собирает один `snk_engine.dll`, который копируется к exe (`Editor/CMakeLists.txt:19-23`). CI собирает Windows MSVC Shared и Shared Release (`build.yml:42-47`, #198).
 - Отдельного модуля-DLL редактора нет.
 
-**Экспорт.** `SNK_API` (`core/core/common/snk_api.h`), hidden visibility, `/wd4251` (`cmake/SnkTarget.cmake:6-15`). ImGui экспортируется из `snk_engine` (`SnkTarget.cmake:70-76`); потребители получают `IMGUI_API=dllimport` через INTERFACE (`core/engine/CMakeLists.txt:13`) — один ImGui-контекст. assimp и Boost.JSON — отдельные статические копии в редакторе (`editor_system/CMakeLists.txt:22-28`).
+**Экспорт.** `SNK_API` (`core/core/common/include/snk/common/snk_api.h`), hidden visibility, `/wd4251` (`cmake/SnkTarget.cmake:6-15`). ImGui экспортируется из `snk_engine` (`SnkTarget.cmake:70-76`); потребители получают `IMGUI_API=dllimport` через INTERFACE (`core/engine/CMakeLists.txt:13`) — один ImGui-контекст. assimp и Boost.JSON — отдельные статические копии в редакторе (`editor_system/CMakeLists.txt:22-28`).
 
-**SDK.** `cmake --install` → пакет `snake_sdk` 0.1.0 (`cmake/SnkInstall.cmake:27`, `install(TARGETS … RUNTIME bin)` `:235-239`).
+**SDK.** `cmake --install` → пакет `snake_sdk` 0.2.0 (`cmake/SnkInstall.cmake:29`, `install(TARGETS … RUNTIME bin)` `:235-239`).
 - Правил для PDB нет. CI-конфигурации Debug/RelWithDebInfo собираются с `/Z7` (`cmake/SnkBuildCache.cmake:69-74`); PDB при этом пишет линкер `/DEBUG`.
 - Потребитель — `tests/package_consumer` (Linux static/shared, Windows shared; `build.yml:388-528`).
 - Пресеты: `release` (Release), `dev-release` (RelWithDebInfo), CI Windows — Debug/Release (`CMakePresets.json:27-42,123-151`).
@@ -27,10 +27,10 @@
 **Ресурсы.** Два слоя: `base_path` (движок) + `path` (`core/core/resource/res_system.cpp:72-78`, #176). Слой проекта — в #154 (US-42-2).
 
 **Что ломается для модели (2) «игра = `game.dll` в процессе редактора»:**
-1. **EnTT meta.** `ecs::register_component` пишет в `entt::meta<T>()` (`core/core/ecs/ecs_component.h:36-41`), то есть в контекст `entt::locator<meta_ctx>` того бинарника, где вызвана функция. Движок ищет через `entt::resolve(id)` (`core/engine/scene/level/scn_level.cpp:263-266`, `ecs_command_buffer.hpp:65`), поэтому компоненты игры для него невидимы. Передачу `meta_ctx` хостом EPIC-29 §3 обещал, но в коде её нет (grep `locator`/`meta_ctx` пуст).
+1. **EnTT meta.** `ecs::register_component` пишет в `entt::meta<T>()` (`core/core/ecs/include/snk/ecs/ecs_component.h:36-41`), то есть в контекст `entt::locator<meta_ctx>` того бинарника, где вызвана функция. Движок ищет через `entt::resolve(id)` (`core/engine/scene/level/scn_level.cpp:263-266`, `ecs_command_buffer.hpp:65`), поэтому компоненты игры для него невидимы. Передачу `meta_ctx` хостом EPIC-29 §3 обещал, но в коде её нет (grep `locator`/`meta_ctx` пуст).
 2. **`type_hash`/`type_index`.** EnTT 3.15 (`lib3dparty/entt/src/entt/config/version.h`). `type_hash` построен на `__FUNCSIG__` и стабилен между бинарниками одного компилятора; используется в `ecs_system_access.hpp:34`, `ecs_component.h:38`. `type_index` (бывший `type_seq`) — счётчик внутри каждого бинарника. С `ENTT_STANDARD_CPP` хеш падает на `type_index` и ломается между DLL. `ENTT_*` в проекте сейчас не задано. Нужна проверка спайком.
-3. **Регистрации систем.** `system_factory` — объект, а не статика (`core/core/ecs/ecs_system.h:24`), но удаления нет: `system_registry::add` (`ecs_system_registry.hpp:64`), дубль ловит ASSERT (`ecs_system.h`, `add_entry`). После FreeLibrary останутся висеть `run_stateless`/`run_stateful`, лямбды `make` и vtable `system_interface`.
-4. **Desc и спавнеры.** `scn::registration_scope` уже снимает их в обратном порядке (`core/engine/scene/scn_registration_scope.h:15-23`). Это образец для п.3.
+3. **Регистрации систем.** `system_factory` — объект, а не статика (`core/core/ecs/include/snk/ecs/ecs_system.h:24`), но удаления нет: `system_registry::add` (`ecs_system_registry.hpp:64`), дубль ловит ASSERT (`ecs_system.h`, `add_entry`). После FreeLibrary останутся висеть `run_stateless`/`run_stateful`, лямбды `make` и vtable `system_interface`.
+4. **Desc и спавнеры.** `scn::registration_scope` уже снимает их в обратном порядке (`core/engine/scene/include/snk/scene/scn_registration_scope.h:15-23`). Это образец для п.3.
 5. **Синглтоны.** `config_manager::instance` (`cfg_api.cpp:19`), логгер (spdlog спрятан за `SNK_API`, `logger/engine_log.h:13-38`) и кадровый аллокатор (`thread_local` в `mem_allocator.cpp:50` за `SNK_API frame_allocator()`) живут в одном экземпляре **только в shared-сборке**. В статике каждая DLL получит свою копию, поэтому модель (2) требует `SNK_ENGINE_SHARED`. Кадровая память не должна переживать перезагрузку. `thread_local` RNG в заголовке `desc_node_id.h:18` — свой на бинарник; это безвредно.
 6. **Куча и типы.** Через границу ходят STL-типы — допустимо при одном `/MD` CRT (решение §3.2). `ds_store` без `std::any` (EPIC-29 #58). Модуль уничтожает тот бинарник, что его создал (`app_module_entry.h:81-95`).
 

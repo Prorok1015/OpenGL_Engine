@@ -10,6 +10,7 @@ OpenGL_Engine/
 ├── .claude-framework               ← Framework manifest (universal, do not edit)
 ├── .claudesignore                  ← AI context exclusions (custom)
 ├── .gitignore                      ← Git exclusions
+├── .git-blame-ignore-revs          ← Mechanical header-move commits (#109) skipped by blame
 ├── CMakeLists.txt                  ← Root build configuration
 │
 ├── docs/
@@ -55,6 +56,9 @@ OpenGL_Engine/
 │   │   ├── windows/                ← Platform window service
 │   │   ├── input/                  ← Input events
 │   │   └── common/                 ← Allocators, ds/, logger/, engine_assert.h
+│   │
+│   │   Every component below core/ and engine/ keeps its public headers in include/snk/<component>/
+│   │   (installed with the SDK, included as <snk/<component>/x.h>); the rest of its directory is internal.
 │   │
 │   └── engine/                     ← "engine" lib: gameplay + rendering systems
 │       ├── scene/                  ← Scene mgmt, descs; scene/level/ (scn_level, world, extractors)

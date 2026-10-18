@@ -31,13 +31,13 @@ how_to_apply:
 [CONSTRAINTS_LOGGING]
 [CONSTRAINT_4]
 rule: Never use std::cout, std::cerr, or std::cin
-why: engine_log.h provides formatted, filterable per-category logging (spdlog backend)
+why: <snk/common/logger/engine_log.h> provides formatted, filterable per-category logging (spdlog backend)
 how_to_apply:
-  #include "engine_log.h"
+  #include <snk/common/logger/engine_log.h>
   Macros: egLOG/egLOG_INFO, egLOG_WARN, egLOG_ERROR, egLOG_TRACE, egLOG_DEBUG
   First arg = category string, then std::format args:
     egLOG_WARN("resource", "not found: {}", tag);
-  source: core/core/common/logger/engine_log.h (macros defined L46-62)
+  source: core/core/common/include/snk/common/logger/engine_log.h (macros defined L46-62)
 
 [CONSTRAINTS_CODE_STYLE]
 [CONSTRAINT_5]
@@ -94,13 +94,13 @@ how_to_apply:
   auto mesh = resources.require<mesh_resource>(res::tag{"res://models/backpack"});  // resources: res::resource_system& injected
   no global get_system() accessors exist — inject res::resource_system&, never reintroduce a global
   Never: hardcode filenames in component, always use descriptors
-  source: core/core/resource/res_system.h require<T>/require_sync<T> (L170-178)
+  source: core/core/resource/include/snk/resource/res_system.h require<T>/require_sync<T> (L170-178)
 
 [CONSTRAINT_11]
-rule: Always use engine_assert.h (ASSERT_MSG, ASSERT_FAIL)
+rule: Always use <snk/common/engine_assert.h> (ASSERT_MSG, ASSERT_FAIL)
 why: Provides stack traces, assert dialogs, debug info
 how_to_apply:
-  #include "engine_assert.h"
+  #include <snk/common/engine_assert.h>
   ASSERT_MSG(condition, "message");
   ASSERT_FAIL("error");
   NOT: assert() macro or C std assert
@@ -128,7 +128,7 @@ how_to_apply:
       { .phase = ecs::phase::update, .after = { "other_system" }, .run_in_edit = false }, ctor_args...);
   // Do not rely on argument types for ordering; add .after/.before. Debug builds warn about
   // two unordered systems of one phase that write the same data.
-  source: core/core/ecs/ecs_system.h, ecs_system_registry.hpp, ecs_system_plan.hpp, ecs_phase.hpp
+  source: core/core/ecs/include/snk/ecs/ecs_system.h, ecs_system_registry.hpp, ecs_system_plan.hpp, ecs_phase.hpp
 
 [CONSTRAINT_13B]
 rule: Add game phases before worlds load; built-in phases cannot be changed
@@ -136,7 +136,7 @@ why: Plans are built per world against the phase table at that moment
 how_to_apply:
   - sfactory.add_game_phase("ai", ecs::phase::update, ecs::phase_side::before);
   - fixed_update is the only phase stepped by the accumulator
-  source: core/core/ecs/ecs_phase.hpp
+  source: core/core/ecs/include/snk/ecs/ecs_phase.hpp
 
 [CONSTRAINT_13C]
 rule: World order is desc order; derive parallel world arrays from one ordered source
@@ -148,7 +148,7 @@ how_to_apply:
   - Treat the ordered world_descs vector as single source of truth for order
   - Derive names + per-world systems via edt::derive_world_arrays (index-aligned)
   - populate_worlds_from_level is the single build point on load
-  source: core/engine/scene/level/scn_level.h for_each_world (L46-57);
+  source: core/engine/scene/include/snk/scene/level/scn_level.h for_each_world (L46-57);
           Editor/code/editor_system/controller/edt_level_controller.h derive_world_arrays
 
 [CONSTRAINTS_RESOURCES]
@@ -170,7 +170,7 @@ gotcha: single-arg res::tag{"..."} PARSES the protocol out of the string —
   the string must contain "protocol://" or protocol/path/name slices are wrong.
   Use the 2-arg form res::tag{"res", "path"} or res::tag::make(path) to prepend
   the default protocol; 2-arg form asserts the path has no "://" already.
-  source: core/core/resource/res_tag.h ctor (L20-40)
+  source: core/core/resource/include/snk/resource/res_tag.h ctor (L20-40)
 
 [CONSTRAINTS_DESCRIPTORS]
 [CONSTRAINT_16]
