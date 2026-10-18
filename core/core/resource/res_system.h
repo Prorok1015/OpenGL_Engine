@@ -171,12 +171,12 @@ namespace res
 
 		template<class RESOURCE>
 		auto require(const res::tag& tag) {
-			return require_resource_internal<RESOURCE, false>(resolve_alias(tag));
+			return require_resource_internal<RESOURCE, false>(tag, resolve_alias(tag));
 		}
 
 		template<class RESOURCE>
 		auto require_sync(const res::tag& tag) {
-			return require_resource_internal<RESOURCE, true>(resolve_alias(tag));
+			return require_resource_internal<RESOURCE, true>(tag, resolve_alias(tag));
 		}
 
 		template<class T>
@@ -317,14 +317,16 @@ namespace res
 		}
 
 		template<class RESOURCE, bool is_sync>
-		auto require_resource_internal(const res::tag& tag) {
+		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
 			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
 
 			auto [block, is_new] = find_or_insert_cache(tag);
 			if (is_new) {
 				start_loading_t<RESOURCE, is_sync>(tag, block);
 			}
-			return res_handle<RESOURCE>(block, tag);
+			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
+			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
+			return res_handle<RESOURCE>(block, requested);
 		}
 
 		template<class T>

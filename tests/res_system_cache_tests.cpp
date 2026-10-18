@@ -184,7 +184,7 @@ BOOST_AUTO_TEST_CASE(Alias_RedirectsRequireToTargetTag)
 	BOOST_TEST(sys->resolve_alias(target) == target);
 
 	auto handle = sys->require_sync<res::text_resource>(original);
-	BOOST_TEST(handle.get_tag() == target);
+	BOOST_TEST(handle.get_tag() == original); // the handle keeps the requested tag (#181)
 	BOOST_TEST(handle.get()->str() == "from target");
 }
 

@@ -6,7 +6,10 @@ name: Build
 # persisted by .github/actions/compiler-cache.
 
 on:
+  # Work branches (wip/*) are checked through their draft PR into aibranch; a push trigger on them
+  # too would run every job twice.
   push:
+    branches: [aibranch, main]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
@@ -91,9 +94,6 @@ jobs:
         run: |
           if command -v sccache >/dev/null; then sccache --show-stats; fi
           if command -v ccache >/dev/null; then ccache -s; fi
-          if [ -f "${RUNNER_TEMP}/sccache.log" ]; then
-            grep -n -i -m 5 -B 3 -A 3 "multiple input\|cannot cache\|non-cacheable\|parse_arguments" "${RUNNER_TEMP}/sccache.log" || true
-          fi
 
       # NOTE: some suites (edt_*) may touch the resource system; there is no GPU on
       # hosted runners, so this relies on the tests being headless.
@@ -366,3 +366,77 @@ jobs:
           name: editor-smoke
           path: headless_out
           if-no-files-found: warn
+
+  # Installs the SDK (cmake --install, package `snake_sdk`) and builds tests/package_consumer
+  # against it with find_package: proves the export set is complete and self-contained (third-party
+  # libraries are bundled). Static and shared (SNK_ENGINE_SHARED) engine.
+  sdk-package:
+    name: SDK package (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: static
+            preset: ci-linux-gcc-debug
+          - name: shared
+            preset: ci-linux-shared
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-sdk-${{ matrix.preset }}
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      # snk_sdk builds exactly the targets the install step copies.
+      - name: Build SDK targets
+        run: cmake --build build/${{ matrix.preset }} --target snk_sdk --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Install SDK
+        run: cmake --install build/${{ matrix.preset }} --prefix "${SDK_PREFIX}"
+
+      - name: Check the package does not point into the build or source tree
+        run: |
+          find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
+          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX}/lib/cmake"; then
+            echo "::error::installed package config references the workspace"
+            exit 1
+          fi
+
+      - name: Configure consumer
+        run: |
+          cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}"
+
+      - name: Build consumer
+        run: cmake --build build/consumer
+
+      - name: Run consumer
+        run: build/consumer/package_consumer
