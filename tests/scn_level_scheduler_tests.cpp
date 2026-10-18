@@ -360,8 +360,8 @@ BOOST_AUTO_TEST_CASE(EditorLevelDesc_IsLaidOutAsTheDesignTable)
 		BOOST_TEST(plan.names_in(ecs::phase::input) == (names{ "inp::update_input_state" }), boost::test_tools::per_element());
 		BOOST_TEST(plan.names_in(ecs::phase::update) == (names{ "scn::animation_controller_update", "scn::animation_system_node" }), boost::test_tools::per_element());
 		BOOST_TEST(plan.names_in(ecs::phase::transform) == (names{ "scn::depth_system", "scn::transform_system" }), boost::test_tools::per_element());
-		BOOST_TEST(plan.names_in(ecs::phase::late_update) == (names{ "scn::animation_system_matrix", "scn::update_camera_matrix_system" }), boost::test_tools::per_element());
-		BOOST_TEST(plan.names_in(ecs::phase::pre_update).empty());
+		BOOST_TEST(plan.names_in(ecs::phase::late_update) == (names{ "scn::animation_system_matrix" }), boost::test_tools::per_element());
+		BOOST_TEST(plan.names_in(ecs::phase::pre_update) == (names{ "scn::update_camera_matrix_system" }), boost::test_tools::per_element());
 		BOOST_TEST(plan.names_in(ecs::phase::fixed_update).empty());
 		BOOST_TEST(plan.names_in(ecs::phase::post_update).empty());
 	};
