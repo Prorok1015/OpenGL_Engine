@@ -515,9 +515,9 @@ BOOST_FIXTURE_TEST_CASE(Override_EquivalentEulerRotationIsNoOverride, instance_f
 	prefab_node base;
 	base.rotation = glm::vec3{ 0, 270, 0 };
 	auto& robot = nodes()[2];
-	oe::write_transform(robot, { 0xa1ull }, base, base.position, glm::vec3{ 0, -90, 0 }, base.scale);
+	oe::write_transform(robot, std::vector<uint64_t>{ 0xa1ull }, base, base.position, glm::vec3{ 0, -90, 0 }, base.scale);
 	BOOST_TEST(robot.overrides.empty());
-	oe::write_transform(robot, { 0xa1ull }, base, base.position, glm::vec3{ 0, 0, 0 }, base.scale);
+	oe::write_transform(robot, std::vector<uint64_t>{ 0xa1ull }, base, base.position, glm::vec3{ 0, 0, 0 }, base.scale);
 	BOOST_TEST(robot.overrides.size() == 1u);
 }
 
