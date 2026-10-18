@@ -15,7 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # One shared library (snk_engine) instead of static engine components; the editor and the tests
-# link it. Experimental, Linux only for now (EPIC-29 #59).
+# link it. Experimental; CI covers Linux GCC and Windows MSVC (EPIC-29 #59, #198).
 option(SNK_ENGINE_SHARED "Build the engine layers as one shared library (snk_engine)" OFF)
 if(SNK_ENGINE_SHARED)
     # $<COMPILE_ONLY:> (usage requirements without linking) keeps consumers from linking the

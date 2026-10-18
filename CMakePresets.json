@@ -127,6 +127,13 @@
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     },
     {
+      "name": "ci-windows-msvc-shared",
+      "inherits": "ci-windows-msvc-debug",
+      "displayName": "CI Windows MSVC shared snk_engine",
+      "description": "Needs CMake 3.27+",
+      "cacheVariables": { "SNK_ENGINE_SHARED": "ON" }
+    },
+    {
       "name": "ci-windows-msvc-release",
       "inherits": "ci-windows-msvc-debug",
       "displayName": "CI Windows MSVC Release",
