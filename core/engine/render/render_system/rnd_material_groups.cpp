@@ -64,13 +64,13 @@ std::size_t rnd::material_groups::content_hash::operator()(const content_key& ke
 	for (const std::byte b : key.block) {
 		mix(static_cast<std::uint64_t>(b));
 	}
-	for (const driver::texture_interface* texture : key.textures) {
-		mix(reinterpret_cast<std::uintptr_t>(texture));
+	for (const std::uint64_t texture : key.textures) {
+		mix(texture);
 	}
 	return static_cast<std::size_t>(h);
 }
 
-rnd::material_groups::content_key rnd::material_groups::key_of(const compiled_material& material) const
+rnd::material_groups::content_key rnd::material_groups::key_of(const compiled_material& material, texture_set& textures) const
 {
 	// The block is the size the shader declares; bytes a compiler did not give stay at the defaults.
 	const material_params defaults;
@@ -82,14 +82,16 @@ rnd::material_groups::content_key rnd::material_groups::key_of(const compiled_ma
 	}
 	for (std::uint32_t slot = 0; slot < bindings::material_texture_count; ++slot) {
 		driver::texture_interface* texture = slot < material.runtime.samplers.size() ? material.runtime.samplers[slot] : nullptr;
-		key.textures[slot] = texture ? texture : m_placeholders[slot].get();
+		textures[slot] = texture ? texture : m_placeholders[slot].get();
+		key.textures[slot] = textures[slot]->serial();
 	}
 	return key;
 }
 
 rnd::material_groups::entry& rnd::material_groups::acquire(const compiled_material& material)
 {
-	const content_key key = key_of(material);
+	texture_set textures{};
+	const content_key key = key_of(material, textures);
 	if (const auto found = m_entries.find(key); found != m_entries.end()) {
 		return found->second;
 	}
@@ -114,7 +116,7 @@ rnd::material_groups::entry& rnd::material_groups::acquire(const compiled_materi
 	desc.layout = m_layout;
 	desc.entries.push_back({ driver::binding_type::ubo, bindings::material_params_slot, made.params, 0, sizeof(material_params), nullptr });
 	for (std::uint32_t slot = 0; slot < bindings::material_texture_count; ++slot) {
-		desc.entries.push_back({ driver::binding_type::texture, slot, {}, 0, 0, const_cast<driver::texture_interface*>(key.textures[slot]) });
+		desc.entries.push_back({ driver::binding_type::texture, slot, {}, 0, 0, textures[slot] });
 	}
 	made.group = m_drv.create_bind_group(desc, driver::lifetime::persistent);
 	++m_groups_created;

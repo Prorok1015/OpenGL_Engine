@@ -54,7 +54,8 @@ namespace rnd
 		struct content_key
 		{
 			std::array<std::byte, sizeof(material_params)> block{};
-			std::array<const driver::texture_interface*, bindings::material_texture_count> textures{};
+			// Serials, not addresses: a texture destroyed and replaced at the same address is another texture.
+			std::array<std::uint64_t, bindings::material_texture_count> textures{};
 
 			bool operator==(const content_key&) const = default;
 		};
@@ -72,7 +73,9 @@ namespace rnd
 		};
 
 		entry& acquire(const compiled_material& material);
-		content_key key_of(const compiled_material& material) const;
+		using texture_set = std::array<driver::texture_interface*, bindings::material_texture_count>;
+		// The textures the group binds (placeholders for the missing ones) and the key they and the params make.
+		content_key key_of(const compiled_material& material, texture_set& textures) const;
 		void destroy(entry& e);
 
 		driver::driver_interface& m_drv;
