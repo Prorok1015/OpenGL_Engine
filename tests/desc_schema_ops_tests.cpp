@@ -431,6 +431,40 @@ BOOST_AUTO_TEST_CASE(DiffUsesFloatToleranceAndRecordsChangedFieldsOnly)
 	BOOST_TEST(changes[2].value.as_double() == 75.0);
 }
 
+BOOST_AUTO_TEST_CASE(DiffSeesSmallFloatChangesAndIgnoresFloat32RoundTrip)
+{
+	const auto schema = desc::schema_generator<ops_test::widget>::make("ops.widget", 1, desc::schema_kind::component);
+	const json::value base = json::parse(R"({ "position": [0.0001, 1, 2], "camera": { "near": 0.0001 } })");
+
+	// 0.0001 -> 0.000095 differs by 5e-6 absolute, which is 5% of the value: it must be recorded
+	json::value edited = base;
+	edited.as_object()["position"] = json::parse("[0.000095, 1, 2]");
+	const auto typed = desc::diff(schema, base, edited);
+	BOOST_REQUIRE_EQUAL(typed.size(), 1u);
+	BOOST_TEST(typed[0].pointer == "/position");
+
+	edited = base;
+	edited.as_object()["camera"].as_object()["near"] = 0.000095;
+	const auto untyped = desc::diff(schema, base, edited);
+	BOOST_REQUIRE_EQUAL(untyped.size(), 1u);
+	BOOST_TEST(untyped[0].pointer == "/camera/near");
+
+	// the same float32 value written as a double and read back is not a change
+	const float stored = 0.0001f;
+	json::value round_trip = base;
+	round_trip.as_object()["position"].as_array()[0] = static_cast<double>(stored);
+	round_trip.as_object()["camera"].as_object()["near"] = static_cast<double>(stored);
+	BOOST_TEST(desc::diff(schema, base, round_trip).empty());
+}
+
+BOOST_AUTO_TEST_CASE(JsonEqualToleranceIsRelativeToTheValues)
+{
+	BOOST_TEST(!desc::json_equal(json::value(0.0001), json::value(0.000095), desc::float_relative_tolerance));
+	BOOST_TEST(desc::json_equal(json::value(0.0001), json::value(static_cast<double>(0.0001f)), desc::float_relative_tolerance));
+	BOOST_TEST(desc::json_equal(json::value(1000.0), json::value(1000.0005), desc::float_relative_tolerance));
+	BOOST_TEST(!desc::json_equal(json::value(0.0), json::value(1e-9), desc::float_relative_tolerance));
+}
+
 BOOST_AUTO_TEST_CASE(DiffRecursesIntoStructuresThroughTheRegistry)
 {
 	const auto schema = desc::schema_generator<ops_test::widget>::make("ops.widget", 1, desc::schema_kind::component);
