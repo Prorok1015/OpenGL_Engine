@@ -85,6 +85,7 @@ struct material_cache_fixture : test_util::null_engine_fixture
 	{
 		auto& levels = storage.require<scn::level_manager>();
 		BOOST_REQUIRE(levels.load(res::tag::make("levels/bench_100_meshes.desc")));
+		test_util::pump(tasks); // the materials and textures the level's descs reference load in the background
 		BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
 	}
 };
