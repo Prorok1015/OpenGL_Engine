@@ -47,5 +47,5 @@ namespace scn {
 		BOOST_DESCRIBE_CLASS(screen_anchor_desc, (), (target_context, target_path, offset), (), ())
 	};
 
-	void assemble_screen_anchor(entt::registry& reg, entt::entity e, const screen_anchor_desc& desc, const std::string_view name);
+	SNK_API void assemble_screen_anchor(entt::registry& reg, entt::entity e, const screen_anchor_desc& desc, const std::string_view name);
 }
