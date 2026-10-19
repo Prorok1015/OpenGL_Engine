@@ -897,4 +897,31 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 	BOOST_TEST(delivered + dropped.load() == rounds);
 }
 
+BOOST_AUTO_TEST_CASE(TryRunOne_LetsABlockedWorkerRunQueuedWorkItself)
+{
+	ds::task_system_config config;
+	config.compute_threads = 1;
+	ds::task_system tasks(config);
+
+	std::atomic<bool> second_ran{ false };
+	std::atomic<bool> helped{ false };
+	std::atomic<bool> first_started{ false };
+	auto first = tasks.run(lane::compute, {}, [&](ds::task_context&) {
+		first_started = true;
+		// Queued behind this task, on the only thread: only helping can run it.
+		const auto deadline = std::chrono::steady_clock::now() + 10s;
+		while (!second_ran.load() && std::chrono::steady_clock::now() < deadline) {
+			helped = tasks.try_run_one(lane::compute) || helped.load();
+			std::this_thread::sleep_for(1ms);
+		}
+	});
+	while (!first_started.load()) std::this_thread::sleep_for(1ms);
+	auto second = tasks.run(lane::compute, {}, [&](ds::task_context&) { second_ran = true; });
+	first.wait();
+	BOOST_TEST(helped.load());
+	BOOST_TEST(second_ran.load());
+	BOOST_TEST((second.status() == task_status::ready));
+	BOOST_TEST(!tasks.try_run_one(lane::compute)); // nothing left
+}
+
 BOOST_AUTO_TEST_SUITE_END()

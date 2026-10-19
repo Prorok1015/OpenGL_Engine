@@ -423,6 +423,11 @@ namespace ds {
 		// `manual` policy only: runs the oldest queued task of the lane on the calling thread.
 		bool run_one(lane which);
 
+		// Any policy, any thread: runs the oldest queued task of the lane on the calling thread. For a pool thread that
+		// has to wait for a result: it can run queued work instead of blocking while the lane is short of threads.
+		// False when nothing is queued (a task that is already running elsewhere is not available: wait for it).
+		bool try_run_one(lane which);
+
 		// Not yet finished tasks with task_desc::visible, for the task panel / game UI.
 		[[nodiscard]] std::vector<task_info> snapshot() const;
 

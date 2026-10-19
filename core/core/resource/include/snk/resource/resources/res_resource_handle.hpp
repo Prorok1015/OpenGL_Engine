@@ -4,6 +4,7 @@
 #include <snk/common/ds/ds_polymorphic_cast.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <chrono>
 #include <memory>
 #include <functional>
 
@@ -35,14 +36,19 @@ namespace core::res
             return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
-        // Blocks until the load finished, either way (check is_ready() / has_error() after). Main thread only:
-        // a pool thread that waits for a load can starve the very lane that would run it.
+        // Blocks until the load finished, either way (check is_ready() / has_error() after).
+        // On a task_system worker (an adapter that needs another resource) it runs queued compute tasks while it
+        // waits, so the load it waits for cannot be stuck behind the workers that are all waiting. A load that is
+        // already running on another thread is just waited for. Cycles through several threads are not detected
+        // here (that is the wait graph of #134b); a wait that goes on for long is logged.
         // A handle built by hand, without a task_system, can only block on the block.
         void wait() const {
             if (!m_block) return;
             if (m_block->is_ready() || m_block->has_error()) return;
-            ASSERT_MSG(!ds::task_system::on_worker() || (m_tasks && m_tasks->mode() == ds::policy::manual),
-                "res_handle::wait: waiting for an unfinished load on a task_system worker thread");
+            if (m_tasks && m_tasks->mode() == ds::policy::threaded && ds::task_system::on_worker()) {
+                help_until_finished();
+                return;
+            }
             if (m_tasks && m_tasks->mode() == ds::policy::manual) {
                 // Nothing runs in the background, so run the queued loads here. When none is queued the block
                 // may still be waiting for a resolver thread, whose completion queues the next one.
@@ -105,6 +111,19 @@ namespace core::res
 		}
 
     private:
+        void help_until_finished() const {
+            const auto start = std::chrono::steady_clock::now();
+            bool reported = false;
+            while (!m_block->is_ready() && !m_block->has_error()) {
+                if (m_tasks->try_run_one(ds::lane::compute)) continue;
+                m_block->wait_for(std::chrono::milliseconds(1));
+                if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
+                    reported = true;
+                    egLOG_ERROR("resource", "still waiting for '{}' on a worker thread after 10 s: dependency cycle?", m_tag.view());
+                }
+            }
+        }
+
         std::shared_ptr<resource_control_block> m_block;
         ::res::tag m_tag;
         ds::task_system* m_tasks = nullptr;

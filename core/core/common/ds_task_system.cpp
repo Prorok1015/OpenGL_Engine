@@ -105,14 +105,17 @@ namespace ds::detail {
 			}
 		}
 
+		// Work waits in lane_queues[which]. In threaded mode every item also posts one pool job that takes the oldest
+		// item, so a pool thread that blocks on a result can take items itself (try_run_one) without losing any.
 		void enqueue(lane which, std::function<void()> fn)
 		{
-			if (cfg.mode == policy::manual) {
+			{
 				std::lock_guard lock(lane_mutex);
-				manual_queues[lane_index(which)].push_back(std::move(fn));
-				return;
+				lane_queues[lane_index(which)].push_back(std::move(fn));
 			}
-			boost::asio::post(*pools[lane_index(which)], std::move(fn));
+			if (cfg.mode == policy::threaded) {
+				boost::asio::post(*pools[lane_index(which)], [this, which] { run_one(which); });
+			}
 		}
 
 		bool run_one(lane which)
@@ -120,7 +123,7 @@ namespace ds::detail {
 			std::function<void()> fn;
 			{
 				std::lock_guard lock(lane_mutex);
-				auto& queue = manual_queues[lane_index(which)];
+				auto& queue = lane_queues[lane_index(which)];
 				if (queue.empty()) {
 					return false;
 				}
@@ -182,7 +185,7 @@ namespace ds::detail {
 		std::array<std::unique_ptr<boost::asio::thread_pool>, 2> pools;
 
 		std::mutex lane_mutex;
-		std::array<work_queue, 2> manual_queues;
+		std::array<work_queue, 2> lane_queues;
 
 		std::mutex main_mutex;
 		std::array<work_queue, 2> main_queues;
@@ -463,7 +466,7 @@ namespace ds {
 		std::array<detail::task_system_impl::work_queue, 2> dropped_main;
 		{
 			std::lock_guard lock(impl.lane_mutex);
-			dropped_lane.swap(impl.manual_queues);
+			dropped_lane.swap(impl.lane_queues);
 		}
 		{
 			std::lock_guard lock(impl.main_mutex);
@@ -596,6 +599,11 @@ namespace ds {
 	{
 		ASSERT_MSG(m_impl->cfg.mode == policy::manual, "task_system::run_one: manual policy only");
 		return m_impl->cfg.mode == policy::manual && m_impl->run_one(which);
+	}
+
+	bool task_system::try_run_one(lane which)
+	{
+		return m_impl->run_one(which);
 	}
 
 	std::vector<task_info> task_system::snapshot() const

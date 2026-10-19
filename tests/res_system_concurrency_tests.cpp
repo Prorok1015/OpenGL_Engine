@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -43,7 +44,8 @@ struct probe_adapter : core::res::adapter_interface
 
 struct threaded_env
 {
-	threaded_env()
+	explicit threaded_env(ds::task_system_config config = {})
+		: tasks(std::move(config))
 	{
 		std::filesystem::create_directories("./res");
 		std::filesystem::create_directories("./sandbox");
@@ -78,6 +80,55 @@ struct threaded_env
 	test_util::ram_resolver* ram = nullptr;
 };
 
+// A resource whose adapter needs another resource: the nested require_sync that #134b replaces with a graph.
+struct child_resource : res::text_resource
+{
+	using res::text_resource::text_resource;
+};
+
+struct child_adapter : core::res::adapter_interface
+{
+	static inline auto INFO = res::adapter_info::make<child_resource>();
+
+	explicit child_adapter(res::resource_system& rs) : m_rs(rs) {}
+
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
+	{
+		const std::string parent_tag(reinterpret_cast<const char*>(raw.data()), raw.size());
+		auto parent = m_rs.require_sync<res::text_resource>(res::tag{ parent_tag }).get_sync();
+		if (!parent) {
+			throw std::runtime_error("parent failed to load");
+		}
+		return std::make_shared<child_resource>(tag, test_util::to_bytes(parent->str() + "+child"));
+	}
+
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+
+	res::resource_system& m_rs;
+};
+
+// A regression here is a deadlock: end the process with a message instead of letting CI hang until its timeout.
+struct deadline_guard
+{
+	explicit deadline_guard(int seconds)
+		: thread([this, seconds] {
+			for (int i = 0; i < seconds * 20 && !done.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			if (!done.load()) {
+				egLOG_ERROR("test", "deadlock: the test did not finish in {} s", seconds);
+				std::_Exit(3);
+			}
+		})
+	{
+	}
+	~deadline_guard()
+	{
+		done = true;
+		thread.join();
+	}
+	std::atomic<bool> done{ false };
+	std::thread thread;
+};
+
 template<class F>
 void run_threads(int count, F&& body)
 {
@@ -92,6 +143,46 @@ void run_threads(int count, F&& body)
 }
 
 }
+
+// Two compute threads: easy to exhaust by workers that wait for a load queued behind them.
+struct two_thread_env : threaded_env
+{
+	static ds::task_system_config config()
+	{
+		ds::task_system_config c;
+		c.compute_threads = 2;
+		return c;
+	}
+
+	two_thread_env() : threaded_env(config())
+	{
+		rs->registrate_adapter<child_adapter>(child_adapter::INFO, std::ref(*rs));
+	}
+
+	std::vector<res::res_handle<child_resource>> request_children(int count, const res::tag& parent)
+	{
+		std::vector<res::tag> tags; // all stored before the first load starts: ram_resolver has no locking
+		for (int i = 0; i < count; ++i) {
+			tags.push_back(put("child_" + std::to_string(i) + ".bin", parent.string()));
+		}
+		std::vector<res::res_handle<child_resource>> handles;
+		for (const auto& tag : tags) {
+			handles.push_back(rs->require<child_resource>(tag));
+		}
+		return handles;
+	}
+
+	static void expect_all_loaded(const std::vector<res::res_handle<child_resource>>& handles)
+	{
+		for (const auto& handle : handles) {
+			for (int i = 0; i < 4000 && !handle.is_ready() && !handle.has_error(); ++i) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			}
+			BOOST_REQUIRE(handle.is_ready());
+			BOOST_TEST(handle.get()->str() == "parent data+child");
+		}
+	}
+};
 
 BOOST_FIXTURE_TEST_SUITE(ResSystemConcurrencyTests, threaded_env)
 
@@ -224,6 +315,44 @@ BOOST_AUTO_TEST_CASE(Destruction_WithLoadsInFlightWaitsForThemAndDropsTheRest)
 	}
 	rs.reset(); // cancels what has not started, waits for what has: no task may touch the dead system
 	BOOST_TEST(tasks.pending_main(ds::main_class::general) == 0u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(ResSystemNestedLoadTests, two_thread_env)
+
+BOOST_AUTO_TEST_CASE(TwoChildrenRacingOnTheSameUnloadedParent_BothGetItsData)
+{
+	deadline_guard deadline(60);
+	const auto parent = put("parent.txt", "parent data");
+	const auto children = request_children(2, parent);
+	expect_all_loaded(children);
+}
+
+BOOST_AUTO_TEST_CASE(ManyChildrenWaitingForAParentQueuedBehindThem_DoNotStarveTheLane)
+{
+	deadline_guard deadline(60);
+	const auto parent = put("parent.txt", "parent data");
+
+	// Both compute threads are held, so the queue order below is exactly the order the tasks run in.
+	std::atomic<bool> release{ false };
+	std::atomic<int> held{ 0 };
+	for (int i = 0; i < 2; ++i) {
+		tasks.run(ds::lane::compute, ds::task_desc{ "gate", "test", false }, [&](ds::task_context&) {
+			++held;
+			while (!release.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+	}
+	while (held.load() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+	// The children go first; the parent's own load task is queued behind all of them, and its block already exists
+	// when they run, so their require_sync has to wait for it instead of loading it inline.
+	const auto children = request_children(5, parent);
+	auto parent_handle = rs->require<res::text_resource>(parent);
+	release = true;
+
+	expect_all_loaded(children);
+	BOOST_TEST(parent_handle.is_ready());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
