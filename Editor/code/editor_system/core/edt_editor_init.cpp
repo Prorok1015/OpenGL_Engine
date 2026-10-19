@@ -1,5 +1,6 @@
 #include "edt_editor_init.h"
 #include "edt_editor_system.h"
+#include <snk/editor/edt_editor_context.h>
 #include <snk/desc/desc_system.h>
 #include <snk/application/app_frame_stage.h>
 #include "edt_camera_redirect.h"
@@ -39,6 +40,10 @@ namespace components {
 		stages.remove_stage("editor_redirect_cameras");
 		stages.clear_body(app::builtin_stage::ui);
 		data.destruct<edt::editor_system>();
+		// Registered by editor_system::init, after the system itself.
+		if (data.has_value<edt::editor_context>()) {
+			data.destruct<edt::editor_context>();
+		}
 	}
 
 }
