@@ -474,6 +474,80 @@ BOOST_AUTO_TEST_CASE(CameraDesc_AcceptsIntegerNumbers)
 	BOOST_CHECK_NO_THROW(c.deserialize(*descs, parse(R"({"fov":60})")));
 }
 
+BOOST_AUTO_TEST_CASE(CameraDesc_RenderLayersRoundTripAndTheDefaultsAreNotWritten)
+{
+	scn::camera_desc plain;
+	plain.deserialize(*descs, parse(R"({"fov":60.0})"));
+	BOOST_TEST(plain.layer() == 0);
+	BOOST_TEST((plain.clear() == scn::camera_clear::all));
+	BOOST_TEST((plain.projection() == scn::camera_projection::perspective));
+	const auto written = ser(plain);
+	// cameras saved before the fields existed stay byte-identical
+	BOOST_TEST(!written.contains("layer"));
+	BOOST_TEST(!written.contains("clear"));
+	BOOST_TEST(!written.contains("projection"));
+	BOOST_TEST(!written.contains("ortho_size"));
+
+	scn::camera_desc overlay;
+	overlay.deserialize(*descs, parse(R"({"layer":1,"clear":"depth","projection":"ortho","ortho_size":4})"));
+	BOOST_TEST(overlay.layer() == 1);
+	BOOST_TEST((overlay.clear() == scn::camera_clear::depth));
+	BOOST_TEST((overlay.projection() == scn::camera_projection::ortho));
+	BOOST_TEST(overlay.ortho_size() == 4.0f);
+	const auto out = ser(overlay);
+	BOOST_TEST(out.at("layer").as_int64() == 1);
+	BOOST_TEST(out.at("clear").as_string() == "depth");
+	BOOST_TEST(out.at("projection").as_string() == "ortho");
+	const auto back = reload(*descs, overlay);
+	BOOST_TEST(back.layer() == 1);
+	BOOST_TEST((back.clear() == scn::camera_clear::depth));
+	BOOST_TEST((back.projection() == scn::camera_projection::ortho));
+	BOOST_TEST(back.ortho_size() == 4.0f);
+	check_stable(*descs, overlay);
+
+	scn::camera_desc none;
+	none.deserialize(*descs, parse(R"({"clear":"none"})"));
+	BOOST_TEST(ser(none).at("clear").as_string() == "none");
+}
+
+BOOST_AUTO_TEST_CASE(CameraDesc_NonIntegerLayerIsIgnoredAndOutOfRangeIsClamped)
+{
+	scn::camera_desc c;
+	c.deserialize(*descs, parse(R"({"layer":2})"));
+	c.deserialize(*descs, parse(R"({"layer":1.5})"));
+	BOOST_TEST(c.layer() == 2);
+	c.deserialize(*descs, parse(R"({"layer":100})"));
+	BOOST_TEST(c.layer() == 16);
+	c.deserialize(*descs, parse(R"({"layer":-100})"));
+	BOOST_TEST(c.layer() == -16);
+	c.deserialize(*descs, parse(R"({"layer":18446744073709551615})"));
+	BOOST_TEST(c.layer() == 16);
+}
+
+BOOST_AUTO_TEST_CASE(CameraDesc_UnknownLayerWordsKeepTheCurrentValues)
+{
+	scn::camera_desc c;
+	c.deserialize(*descs, parse(R"({"layer":2,"clear":"depth","projection":"ortho"})"));
+	c.deserialize(*descs, parse(R"({"clear":"sideways","projection":7,"layer":"top"})"));
+	BOOST_TEST(c.layer() == 2);
+	BOOST_TEST((c.clear() == scn::camera_clear::depth));
+	BOOST_TEST((c.projection() == scn::camera_projection::ortho));
+}
+
+BOOST_AUTO_TEST_CASE(CameraDesc_AssembleCopiesTheRenderLayersToTheComponent)
+{
+	scn::camera_desc desc;
+	desc.deserialize(*descs, parse(R"({"layer":3,"clear":"none","projection":"ortho","ortho_size":8.0})"));
+	entt::registry reg;
+	const auto ent = reg.create();
+	scn::assemble_camera(reg, ent, desc, "cam");
+	const auto& cam = reg.get<scn::camera_component>(ent);
+	BOOST_TEST(cam.layer == 3);
+	BOOST_TEST((cam.clear == scn::camera_clear::none));
+	BOOST_TEST((cam.projection == scn::camera_projection::ortho));
+	BOOST_TEST(cam.ortho_size == 8.0f);
+}
+
 BOOST_AUTO_TEST_CASE(DescCopyTo_CopiesDataButNotIdentity)
 {
 	auto tag = put("cam.desc", R"({"__type":"camera_desc","fov":33.0})");

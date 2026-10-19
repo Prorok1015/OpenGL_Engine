@@ -3,6 +3,10 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <string_view>
+#include <snk/common/logger/engine_log.h>
 
 namespace {
 	// as_double() throws on JSON integers (`"fov": 60`); to_number accepts any numeric kind.
@@ -19,6 +23,33 @@ namespace {
 		if (str.find("://") != std::string_view::npos)
 			return res::tag(str);
 		return res::tag(res::tag::memory, str);
+	}
+
+	// The words of "clear" and "projection" in the desc; an unknown word keeps the value the camera has.
+	void read_clear(const json::value& v, scn::camera_clear& out)
+	{
+		if (!v.is_string()) return;
+		const std::string_view word = v.as_string();
+		if (word == "all") out = scn::camera_clear::all;
+		else if (word == "depth") out = scn::camera_clear::depth;
+		else if (word == "none") out = scn::camera_clear::none;
+	}
+
+	void read_projection(const json::value& v, scn::camera_projection& out)
+	{
+		if (!v.is_string()) return;
+		const std::string_view word = v.as_string();
+		if (word == "perspective") out = scn::camera_projection::perspective;
+		else if (word == "ortho") out = scn::camera_projection::ortho;
+	}
+
+	std::string_view clear_word(scn::camera_clear clear)
+	{
+		switch (clear) {
+		case scn::camera_clear::depth: return "depth";
+		case scn::camera_clear::none: return "none";
+		default: return "all";
+		}
 	}
 }
 
@@ -56,6 +87,24 @@ void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::o
 		m_tp_accum_target = read_rt_tag(data.at("tp_accum_target"));
 	if (data.contains("tp_reveal_target"))
 		m_tp_reveal_target = read_rt_tag(data.at("tp_reveal_target"));
+
+	// Render layers (W4, #272). A value that is not an integer is ignored with a warning like an unknown word;
+	// an integer outside the range of the inspector (+-16) is clamped to it.
+	if (auto* layer = data.if_contains("layer")) {
+		constexpr std::int64_t max_layer = 16;
+		if (const auto* i = layer->if_int64())
+			m_layer = static_cast<int>(std::clamp<std::int64_t>(*i, -max_layer, max_layer));
+		else if (layer->is_uint64())
+			m_layer = static_cast<int>(max_layer);
+		else
+			egLOG_WARN("scene/camera", "camera layer must be an integer, got '{}'; keeping {}", json::serialize(*layer), m_layer);
+	}
+	if (auto* clear = data.if_contains("clear"))
+		read_clear(*clear, m_clear);
+	if (auto* projection = data.if_contains("projection"))
+		read_projection(*projection, m_projection);
+	if (data.contains("ortho_size"))
+		m_ortho_size = read_number(data.at("ortho_size"));
 }
 
 void scn::camera_desc::serialize(json::object& data) const
@@ -81,6 +130,16 @@ void scn::camera_desc::serialize(json::object& data) const
 		data["tp_accum_target"] = json::string(m_tp_accum_target.string());
 	if (m_tp_reveal_target.is_valid())
 		data["tp_reveal_target"] = json::string(m_tp_reveal_target.string());
+
+	// The defaults are not written, so cameras saved before the fields existed stay byte-identical.
+	if (m_layer != 0)
+		data["layer"] = m_layer;
+	if (m_clear != camera_clear::all)
+		data["clear"] = clear_word(m_clear);
+	if (m_projection != camera_projection::perspective)
+		data["projection"] = "ortho";
+	if (m_ortho_size != default_camera_ortho_size)
+		data["ortho_size"] = m_ortho_size;
 }
 
 void scn::assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name)
@@ -94,6 +153,10 @@ void scn::assemble_camera(entt::registry& reg, entt::entity e, const camera_desc
 	cam_comp.depth_target = desc.depth_target();
 	cam_comp.tp_accum_target = desc.tp_accum_target();
 	cam_comp.tp_reveal_target = desc.tp_reveal_target();
+	cam_comp.layer = desc.layer();
+	cam_comp.clear = desc.clear();
+	cam_comp.projection = desc.projection();
+	cam_comp.ortho_size = desc.ortho_size();
 	reg.emplace_or_replace<scn::camera_component>(e, std::move(cam_comp));
 	
 	scn::mouse_controller_component controller{ .rotation = desc.rotation(), .position = desc.position() };

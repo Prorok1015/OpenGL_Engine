@@ -1,0 +1,135 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "b7a3d9c2-5e41-4f08-9a16-2c8e0d7f3b54",
+    "name" : "smoke_two_worlds",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 3,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "1d4be0a97c3f5628",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "5a1f0c3e7b9d2468",
+                    "name" : "Game Camera",
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 1,
+                            "transform" : {
+                                "rotation" : [-5.0, 0.0, 0.0],
+                                "position" : [0.0, 1.0, 3.0]
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "c4816c9643267e08",
+                    "name" : "skybox",
+                    "components" : {
+                        "skybox" : "res://skybox/skybox.desc"
+                    }
+                },
+                {
+                    "__id" : "3faa0ae2dbe035de",
+                    "name" : "scene",
+                    "transform" : {
+                        "position" : [0.0, -1.0, -6.0],
+                        "scale" : [4.0, 4.0, 4.0]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                }
+            ]
+        },
+        {
+            "__type" : "world_desc",
+            "__version" : 3,
+            "name" : "overlay",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "8e26c1f50a7b4d93",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "2c9d6b41e8f07a35",
+                    "name" : "Overlay Camera",
+                    "components" : {
+                        "camera" : {
+                            "__type" : "camera_desc",
+                            "__version" : 1,
+                            "layer" : 1,
+                            "clear" : "depth",
+                            "projection" : "ortho",
+                            "ortho_size" : 4.0,
+                            "transform" : {
+                                "rotation" : [0.0, 0.0, 0.0],
+                                "position" : [0.0, 0.0, 5.0]
+                            }
+                        }
+                    }
+                },
+                {
+                    "__id" : "f1a07e3b92c84d56",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                },
+                {
+                    "__id" : "6b83d0f4a1e92c77",
+                    "name" : "scene",
+                    "transform" : {
+                        "position" : [-1.0, 0.5, 0.0],
+                        "scale" : [1.5, 1.5, 1.5]
+                    },
+                    "components" : {
+                        "scene" : "res://objects/robot/gen_robot.glb"
+                    }
+                }
+            ]
+        }
+    ]
+}

@@ -39,18 +39,25 @@ void opaque_pass::execute(render_context &context,
           rnd::driver::texture_usage::color_target | rnd::driver::texture_usage::sampled);
     }
 
+    // The camera's clear mode: a lower layer's colour survives under an overlay that clears only the depth.
+    const auto color_load = rnd::clears_color(packet.camera.clear)
+        ? rnd::driver::load_op::clear : rnd::driver::load_op::load;
+    const auto depth_load = rnd::clears_depth(packet.camera.clear)
+        ? rnd::driver::load_op::clear : rnd::driver::load_op::load;
+
     rnd::driver::render_pass_desc pass;
     pass.debug_name = "opaque";
     if (offscreen) {
-      pass.colors.push_back({.texture = color_rt, .load = rnd::driver::load_op::clear});
+      // The depth of an offscreen camera is cleared by the z-prepass.
+      pass.colors.push_back({.texture = color_rt, .load = color_load});
       if (auto *depth = context.find_texture(depth_tag)) {
         pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
       }
     } else {
       // Several cameras share the backbuffer: clear only this camera's rectangle.
       pass.backbuffer = true;
-      pass.colors.push_back({.load = rnd::driver::load_op::clear});
-      pass.depth_stencil = rnd::driver::attachment_desc{.load = rnd::driver::load_op::clear};
+      pass.colors.push_back({.load = color_load});
+      pass.depth_stencil = rnd::driver::attachment_desc{.load = depth_load};
       pass.render_area = glm::ivec4{packet.camera.viewport.x,
                                     packet.camera.viewport.y, vp_width, vp_height};
     }

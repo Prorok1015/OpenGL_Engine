@@ -16,6 +16,10 @@ namespace edt
 	// window's backbuffer (it would be painted over by the UI). Every camera that targets the
 	// backbuffer is given its own texture target instead.
 	//
+	// The cameras of one scope (a context set) that have the same viewport share one texture: the worlds of a
+	// set are layers of one picture, and the render layers (camera_component::layer) draw them on top of each
+	// other. A camera with a viewport of its own gets a target for that viewport.
+	//
 	// The redirector also owns the lifetime of those textures: a target whose camera is gone (entity
 	// destroyed, world unloaded or reloaded) is released through `release` at the end of the pass.
 	// Usage per frame: begin_frame(), redirect() for each registry, end_frame(release).
@@ -25,8 +29,8 @@ namespace edt
 		using release_fn = std::function<void(const res::tag&)>;
 
 		void begin_frame();
-		// `scope` ("set.world") keeps the target tags of different contexts apart. Returns how many
-		// cameras were redirected by this call.
+		// `scope` (the set name) keeps the target tags of different sets apart; the cameras of every registry
+		// redirected with the same scope share their target. Returns how many cameras were redirected by this call.
 		std::size_t redirect(entt::registry& reg, std::string_view scope);
 		void end_frame(const release_fn& release);
 

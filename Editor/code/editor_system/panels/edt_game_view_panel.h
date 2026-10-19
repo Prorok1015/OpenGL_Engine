@@ -21,7 +21,8 @@ namespace edt
 		using registry_visitor = std::function<void(entt::registry&)>;
 
 		void set_registry_getter(std::function<entt::registry*()> getter) { m_get_registry = std::move(getter); }
-		// Visits every world's registry: game cameras of inactive worlds must be switched off too.
+		// Visits every world's registry: the overlay worlds of a set draw into the picked camera's texture, and the
+		// game cameras of everything else must be switched off.
 		void set_all_registries(std::function<void(const registry_visitor&)> for_each) { m_for_each_registry = std::move(for_each); }
 
 		// The image feeds the context `target` names (a play context; none in Edit mode) while hovered.
@@ -43,7 +44,8 @@ namespace edt
 		std::optional<res::tag> m_target;
 		rnd::render_system& m_rnd;
 		gui::gui_system&    m_gui;
-		void turn_off_cameras_except_in(const entt::registry* keep);
+		// Gives the game cameras that draw into `target` (in the registry of any world) `size`, switches the others off.
+		void apply_viewports_to_all(const res::tag& target, glm::ivec2 size, entt::entity picked = entt::null);
 
 		std::function<entt::registry*()> m_get_registry;
 		std::function<void(const registry_visitor&)> m_for_each_registry;
