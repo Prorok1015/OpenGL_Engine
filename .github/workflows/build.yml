@@ -397,7 +397,8 @@ jobs:
 
       # The same deterministic run, but the picture is taken inside the process: capture/on_settled makes the editor
       # run the command viewport.capture (rnd::driver::read_texture -> PNG) once the scene settled. It is the Scene
-      # view alone (no panels, gizmos or overlays), so it has its own reference, made from this path.
+      # view alone (no panels, gizmos or overlays), so it has its own reference, made from this same path
+      # (the reference is the capture scaled to 400 px wide).
       - name: Capture run (viewport.capture)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/capture/final.png \
