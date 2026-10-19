@@ -38,7 +38,8 @@ void gs::register_capture_on_settled(app::frame_stage_registry& registry)
 	const std::string viewport = *cfg_capture_viewport;
 	const auto delay = static_cast<std::uint64_t>(std::max(0, static_cast<int>(cfg_capture_delay_frames)));
 	auto state = std::make_shared<capture_state>();
-	// After `tasks`: the previous frame is complete and the next one has not started to render.
+	// Registered after the `tasks` stage, which is also after `input`: the previous frame is complete and the next
+	// one has not started to render.
 	registry.add_stage("capture_on_settled", app::builtin_stage::input, app::stage_side::after, [=](app::stage_context& c) {
 		if (state->done) {
 			return;

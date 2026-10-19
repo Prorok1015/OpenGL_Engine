@@ -29,11 +29,11 @@ using namespace rnd::driver;
 constexpr int tex_width = 4;
 constexpr int tex_height = 2;
 
-texture_header target_header()
+texture_header target_header(uint32_t width = tex_width, uint32_t height = tex_height)
 {
 	texture_header header;
-	header.data.extent.width = tex_width;
-	header.data.extent.height = tex_height;
+	header.data.extent.width = width;
+	header.data.extent.height = height;
 	header.usage = texture_usage::color_target | texture_usage::sampled;
 	return header;
 }
@@ -164,6 +164,42 @@ BOOST_AUTO_TEST_CASE(Capture_FailsForAnUnknownViewOrOneWithoutATexture)
 	BOOST_CHECK(!empty.capture("").ok());
 }
 
+BOOST_AUTO_TEST_CASE(Capture_RefusesASizeThatWouldNeedTooMuchMemory)
+{
+	// 2 x 8 target: 8192 wide would derive 32768 rows.
+	auto tall = drv.create_texture(target_header(2, 8));
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+
+	const auto derived = service.capture("tall", { rnd::capture_service::max_side, 0 });
+	BOOST_CHECK(derived.status == rnd::capture_status::invalid_size);
+	BOOST_CHECK(derived.image.rgba.empty());
+	BOOST_CHECK(!derived.error.empty());
+
+	// Both sides are fine, the product is not.
+	const auto too_many = service.capture("scene", { rnd::capture_service::max_side, rnd::capture_service::max_side });
+	BOOST_CHECK(too_many.status == rnd::capture_status::invalid_size);
+
+	const auto above = service.capture("scene", { rnd::capture_service::max_side + 1, 1 });
+	BOOST_CHECK(above.status == rnd::capture_status::invalid_size);
+
+	// The limit itself is allowed: 8192 x 4096 would be, so a smaller one surely is.
+	BOOST_CHECK(service.capture("scene", { 64, 0 }).ok());
+}
+
+BOOST_AUTO_TEST_CASE(Capture_FailsBeforeReadingATargetOverThePixelBudget)
+{
+	// The null driver keeps no pixels of a texture, so a huge one costs nothing here; the service must refuse it
+	// before it asks the driver for a buffer of that size.
+	auto huge = drv.create_texture(target_header(8192, 8192));
+	cmd::registration reg = service.add_target("huge", [&huge] { return huge.get(); });
+
+	const auto result = service.capture("huge");
+
+	BOOST_CHECK(result.status == rnd::capture_status::failed);
+	BOOST_CHECK(result.image.rgba.empty());
+	BOOST_CHECK(!service.capture("huge", { 16, 16 }).ok());
+}
+
 BOOST_AUTO_TEST_CASE(Capture_FailsForATextureTheDriverCannotRead)
 {
 	texture_header header = target_header();
@@ -264,6 +300,31 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesBadArguments)
 	BOOST_CHECK_EQUAL(capture(R"({"viewport":""})").code, cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(capture(R"({"viewport":3})").code, cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(capture(R"({"scale":2})").code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
+{
+	auto tall = drv.create_texture(target_header(2, 8));
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+
+	const auto derived = capture(R"({"viewport":"tall","width":8192})");
+	BOOST_CHECK(!derived.ok);
+	BOOST_CHECK_EQUAL(derived.code, cmd::codes::invalid_args);
+
+	const auto product = capture(R"({"width":8192,"height":8192})");
+	BOOST_CHECK(!product.ok);
+	BOOST_CHECK_EQUAL(product.code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_TargetOverThePixelBudgetFails)
+{
+	auto huge = drv.create_texture(target_header(8192, 8192));
+	cmd::registration reg = service.add_target("huge", [&huge] { return huge.get(); });
+
+	const auto result = capture(R"({"viewport":"huge"})");
+
+	BOOST_CHECK(!result.ok);
+	BOOST_CHECK_EQUAL(result.code, cmd::codes::failed);
 }
 
 BOOST_AUTO_TEST_CASE(Capture_UnknownViewportIsNotFound)

@@ -23,13 +23,22 @@ namespace rnd
 		std::vector<std::byte> rgba;
 	};
 
-	// Empty `error`: the capture worked.
+	enum class capture_status : std::uint8_t
+	{
+		ok,
+		unknown_view,	// no such id, or none registered
+		invalid_size,	// the requested size is too big (a side above max_side, more than max_pixels in all)
+		failed,			// the view has no texture, the texture is too big to read back, or the driver cannot read it
+	};
+
+	// `error` says why when `status` is not ok.
 	struct capture_result
 	{
+		capture_status status = capture_status::ok;
 		captured_image image;
 		std::string error;
 
-		bool ok() const { return error.empty(); }
+		bool ok() const { return status == capture_status::ok; }
 	};
 
 	// Reads the final render target of a view back to the CPU. The views are named by whoever owns them (the editor
@@ -57,8 +66,13 @@ namespace rnd
 		// In registration order; the first one is what capture() reads for an empty id.
 		std::vector<std::string> target_ids() const;
 
+		// Limits on what a capture may allocate: a longer side or more pixels than this is refused (the size of the
+		// target counts too, since reading it back is the biggest allocation).
+		static constexpr int max_side = 8192;
+		static constexpr std::int64_t max_pixels = 32LL * 1024 * 1024;
+
 		// `size` > 0 in a component scales the image to it (nearest neighbour); with one component 0 the other
-		// decides and the aspect stays. {0, 0}: the size of the target.
+		// decides and the aspect stays (a derived side above max_side is refused). {0, 0}: the size of the target.
 		capture_result capture(std::string_view id, glm::ivec2 size = { 0, 0 }) const;
 
 		// Opaque RGB PNG; the alpha of the target is dropped. Empty for an empty image.

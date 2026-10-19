@@ -1,14 +1,17 @@
 #include <snk/render/rnd_capture_service.h>
-#include <snk/common/logger/engine_log.h>
-
-#include <cstddef>
-#include <snk/image/image.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
+
+#include <snk/common/logger/engine_log.h>
+#include <snk/image/image.h>
 
 namespace {
 	constexpr int pixel_bytes = 4;
@@ -38,17 +41,36 @@ namespace {
 		return out;
 	}
 
-	// The size a request asks for; a component that is 0 follows the aspect of the source.
-	glm::ivec2 requested_size(glm::ivec2 source, glm::ivec2 wanted)
+	std::int64_t pixels_of(glm::ivec2 size)
+	{
+		return static_cast<std::int64_t>(size.x) * size.y;
+	}
+
+	// The size a request asks for; a component that is 0 follows the aspect of the source. Nullopt when a side
+	// (the derived one included) or the pixel count is over the limits.
+	std::optional<glm::ivec2> requested_size(glm::ivec2 source, glm::ivec2 wanted)
 	{
 		if (wanted.x <= 0 && wanted.y <= 0) {
 			return source;
 		}
+		// 64-bit: a request of 8192 on a 1 x 8192 target derives 8192 * 8192.
 		if (wanted.x <= 0) {
-			wanted.x = std::max(1, static_cast<int>(static_cast<std::int64_t>(wanted.y) * source.x / source.y));
+			const std::int64_t derived = std::max<std::int64_t>(1, static_cast<std::int64_t>(wanted.y) * source.x / source.y);
+			if (derived > rnd::capture_service::max_side) {
+				return std::nullopt;
+			}
+			wanted.x = static_cast<int>(derived);
 		}
 		if (wanted.y <= 0) {
-			wanted.y = std::max(1, static_cast<int>(static_cast<std::int64_t>(wanted.x) * source.y / source.x));
+			const std::int64_t derived = std::max<std::int64_t>(1, static_cast<std::int64_t>(wanted.x) * source.y / source.x);
+			if (derived > rnd::capture_service::max_side) {
+				return std::nullopt;
+			}
+			wanted.y = static_cast<int>(derived);
+		}
+		if (wanted.x > rnd::capture_service::max_side || wanted.y > rnd::capture_service::max_side
+			|| pixels_of(wanted) > rnd::capture_service::max_pixels) {
+			return std::nullopt;
 		}
 		return wanted;
 	}
@@ -102,28 +124,42 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 		found = it == m_targets.end() ? nullptr : &*it;
 	}
 	if (!found) {
+		result.status = capture_status::unknown_view;
 		result.error = id.empty() ? "no viewport is registered for capture" : std::format("unknown viewport '{}'", id);
 		return result;
 	}
 
 	driver::texture_interface* texture = found->provider();
+	result.status = capture_status::failed;
 	if (!texture) {
 		result.error = std::format("viewport '{}' has no render target yet", found->id);
 		return result;
 	}
 	const glm::ivec2 source{ static_cast<int>(texture->width()), static_cast<int>(texture->height()) };
+	// Before anything is allocated: the readback of the target is the biggest buffer a capture makes.
+	if (pixels_of(source) > max_pixels) {
+		result.error = std::format("the render target of viewport '{}' ({}x{}) is too big to capture", found->id, source.x, source.y);
+		return result;
+	}
+	const std::optional<glm::ivec2> target_size = requested_size(source, size);
+	if (!target_size) {
+		result.status = capture_status::invalid_size;
+		result.error = std::format("size {}x{} for a {}x{} target is over the capture limits ({} px a side, {} pixels)",
+			size.x, size.y, source.x, source.y, max_side, max_pixels);
+		return result;
+	}
 	std::vector<std::byte> rows = m_driver.read_texture(*texture, { 0, 0, source.x, source.y });
 	if (rows.size() != static_cast<std::size_t>(source.x) * static_cast<std::size_t>(source.y) * pixel_bytes || rows.empty()) {
 		result.error = std::format("the render target of viewport '{}' ({}x{}) cannot be read back", found->id, source.x, source.y);
 		return result;
 	}
 
-	const glm::ivec2 target_size = requested_size(source, size);
+	result.status = capture_status::ok;
 	result.image.rgba = flip_rows(rows, source.x, source.y);
 	result.image.size = source;
-	if (target_size != source) {
-		result.image.rgba = scale_nearest(result.image.rgba, source, target_size);
-		result.image.size = target_size;
+	if (*target_size != source) {
+		result.image.rgba = scale_nearest(result.image.rgba, source, *target_size);
+		result.image.size = *target_size;
 	}
 	return result;
 }

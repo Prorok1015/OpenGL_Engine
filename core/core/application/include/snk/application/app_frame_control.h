@@ -11,7 +11,7 @@ namespace app
 	// deterministic_time). From the first advance() on, the loop's time is held: every granted frame runs with
 	// `fixed_dt`, every other frame with dt 0, so the scene stays as it is while windows, UI and commands go on.
 	// Generalizes `app/freeze_after_frames`, which freezes once and cannot be thawed.
-	// Main thread only: advance() is a command (`app.advance`), the loop calls the rest.
+	// Main thread only: advance() and release() are commands (`app.advance`, `app.resume`), the loop calls the rest.
 	class SNK_API frame_control
 	{
 	public:
@@ -21,6 +21,10 @@ namespace app
 		// Grants `frames` more frames at `fixed_dt` (kept for the later grants when given; not above 0: ignored).
 		// The first call holds the loop's time.
 		void advance(std::uint64_t frames, std::optional<float> fixed_dt = std::nullopt);
+
+		// Gives the loop its own time back (wall clock, or the fixed dt and freeze of deterministic_time) and drops
+		// the frames not run yet. The way out of the hold for a caller that stepped and is done.
+		void release();
 
 		bool holding() const { return m_holding; }
 		// Granted frames the loop has not run yet.

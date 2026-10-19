@@ -18,6 +18,12 @@ void app::frame_control::advance(std::uint64_t frames, std::optional<float> fixe
 	m_pending += frames;
 }
 
+void app::frame_control::release()
+{
+	m_holding = false;
+	m_pending = 0;
+}
+
 float app::frame_control::take_dt(float loop_dt)
 {
 	if (!m_holding) {

@@ -147,6 +147,20 @@ BOOST_AUTO_TEST_CASE(Loop_RecordsTheFrameTheSceneSettledAt)
 	BOOST_CHECK_EQUAL(*fixture.control.settled_frame(), 2u);
 }
 
+BOOST_AUTO_TEST_CASE(Loop_RunsOnItsOwnTimeAgainAfterRelease)
+{
+	loop_fixture fixture(app::deterministic_time{ 0.5f, 0 });
+	fixture.on_frame = [&fixture](std::uint64_t frame) {
+		if (frame == 1) fixture.control.advance(1, 0.1f);
+		if (frame == 3) fixture.control.release();
+	};
+
+	fixture.step(5);
+
+	const std::vector<float> expected{ 0.5f, 0.1f, 0.f, 0.5f, 0.5f };
+	BOOST_CHECK_EQUAL_COLLECTIONS(fixture.dts.begin(), fixture.dts.end(), expected.begin(), expected.end());
+}
+
 BOOST_AUTO_TEST_CASE(Loop_StartingAgainCountsFromZero)
 {
 	loop_fixture fixture(app::deterministic_time{ 0.5f, 0 });
@@ -163,7 +177,7 @@ struct command_fixture
 {
 	app::frame_control control;
 	cmd::command_registry commands;
-	cmd::registration registration = app::register_frame_commands(commands, control);
+	app::frame_command_registrations registration = app::register_frame_commands(commands, control);
 
 	cmd::result advance(const std::string& args)
 	{
@@ -183,8 +197,28 @@ BOOST_AUTO_TEST_CASE(Registered_WithStrictSchemas)
 	BOOST_CHECK(desc->expose_as_tool);
 	BOOST_CHECK(!desc->mutates);
 	BOOST_CHECK(desc->risk == cmd::danger::none);
+	BOOST_CHECK(commands.contains("app.resume"));
 	BOOST_CHECK(!desc->args_schema.as_object().at("additionalProperties").as_bool());
 	BOOST_CHECK(!desc->result_schema.as_object().at("additionalProperties").as_bool());
+}
+
+BOOST_AUTO_TEST_CASE(Resume_ReleasesTheHoldAndDropsPendingFrames)
+{
+	BOOST_REQUIRE(registration.resume.active());
+	BOOST_REQUIRE(advance(R"({"frames":5})").ok);
+	BOOST_REQUIRE(control.holding());
+
+	const auto result = commands.invoke("app.resume", json::parse("{}"), cmd::origin::test());
+
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_CHECK(!control.holding());
+	BOOST_CHECK_EQUAL(control.pending(), 0u);
+	BOOST_CHECK_EQUAL(control.take_dt(0.3f), 0.3f);
+	BOOST_CHECK_EQUAL(commands.invoke("app.resume", json::parse(R"({"x":1})"), cmd::origin::test()).code, cmd::codes::invalid_args);
+	// Resuming without a hold is harmless, and a new advance holds again.
+	BOOST_CHECK(commands.invoke("app.resume", json::parse("{}"), cmd::origin::test()).ok);
+	BOOST_CHECK(advance(R"({"frames":1})").ok);
+	BOOST_CHECK(control.holding());
 }
 
 BOOST_AUTO_TEST_CASE(Advance_GrantsFramesAndAnswersWithTheTarget)

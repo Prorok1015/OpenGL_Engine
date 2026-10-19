@@ -83,7 +83,11 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 
 		const capture_result captured = service.capture(id, { *width, *height });
 		if (!captured.ok()) {
-			return cmd::result::failure(cmd::codes::failed, captured.error);
+			switch (captured.status) {
+			case capture_status::unknown_view: return cmd::result::failure(cmd::codes::not_found, captured.error);
+			case capture_status::invalid_size: return cmd::result::failure(cmd::codes::invalid_args, captured.error);
+			default: return cmd::result::failure(cmd::codes::failed, captured.error);
+			}
 		}
 		const std::vector<std::byte> png = capture_service::encode_png(captured.image);
 		if (png.empty()) {

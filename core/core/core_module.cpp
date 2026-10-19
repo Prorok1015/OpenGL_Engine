@@ -48,7 +48,7 @@ namespace {
 	struct engine_commands
 	{
 		cmd::registration log;
-		cmd::registration app_frame;
+		app::frame_command_registrations app_frame;
 	};
 
 	std::optional<engine::log_level> parse_known_log_level(std::string_view str)
@@ -158,6 +158,7 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 
 void core::core_module::shutdown_services(ds::app_data_storage& data)
 {
+	// The loop holds a pointer to the frame_control: it goes first, so nothing can step with a dead one.
 	data.destruct<app::app_loop_service_interface>();
 	data.destruct<app::frame_stage_registry>();
 	ecs::ecs_term(data);

@@ -14,11 +14,11 @@ namespace {
 	constexpr std::int64_t max_frames = 1'000'000;
 }
 
-cmd::registration app::register_frame_commands(cmd::command_registry& registry, frame_control& control)
+app::frame_command_registrations app::register_frame_commands(cmd::command_registry& registry, frame_control& control)
 {
 	cmd::command_desc desc;
 	desc.id = "app.advance";
-	desc.summary = "Run the next N frames of simulation time and hold the time between calls (deterministic stepping)";
+	desc.summary = "Run the next N frames of simulation time and hold the time between calls (deterministic stepping); app.resume releases the hold";
 	desc.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
@@ -52,5 +52,23 @@ cmd::registration app::register_frame_commands(cmd::command_registry& registry, 
 			{ "frame", static_cast<std::int64_t>(control.frame()) },
 			{ "target_frame", static_cast<std::int64_t>(control.frame() + control.pending()) } });
 	};
-	return registry.add(std::move(desc));
+	frame_command_registrations registrations;
+	registrations.advance = registry.add(std::move(desc));
+
+	cmd::command_desc resume;
+	resume.id = "app.resume";
+	resume.summary = "Release the time hold of app.advance: the frame loop runs on its own time again";
+	resume.args_schema = json::parse(R"({ "type": "object", "properties": {}, "additionalProperties": false })");
+	resume.result_schema = json::parse(R"({
+		"type": "object",
+		"properties": { "frame": { "type": "integer", "minimum": 0 } },
+		"required": ["frame"],
+		"additionalProperties": false
+	})");
+	resume.invoke = [&control](const cmd::call&) {
+		control.release();
+		return cmd::result::success(json::object{ { "frame", static_cast<std::int64_t>(control.frame()) } });
+	};
+	registrations.resume = registry.add(std::move(resume));
+	return registrations;
 }
