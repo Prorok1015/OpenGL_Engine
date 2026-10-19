@@ -241,7 +241,7 @@ buffer_handle create_buffer(const buffer_desc&); // {size, usage: vertex|index|u
 
 - **Неизменность рендера** на каждом PR:
   - (1) `editor-smoke` (`build.yml:311-377`, `check_smoke.sh`) без изменений;
-  - (2) новая проверка `tools/headless/compare_shots.sh`: эталоны `smoke`/`game_view`/`checklist` (llvmpipe), `compare -metric AE -fuzz 2%` ниже порога;
+  - (2) сравнение с эталонами `smoke`/`game_view`/`checklist` (llvmpipe) в `check_smoke.sh`, блокирующее с 2026-10-19 (fuzz 4%, порог 2%);
   - (3) кадр на null без ошибок валидации;
   - (4) в Debug-сборке validation поверх GL в smoke-прогоне.
   R5 меняет раскладку блоков и шейдеры — эталон обновляется осознанно одним коммитом с объяснением.
