@@ -141,6 +141,7 @@ void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factor
 	for (const auto& world_desc : desc.get_worlds()) {
 		m_desc_world_names.emplace_back(world_desc->get_name());
 		auto& world = create_context(world_desc->get_name(), acquire_free_id(), context_kind::level);
+		world.set_input_layer(world_desc->get_input_layer());
 		add_systems(world, world_desc->get_systems(), sfactory);
 
 		entt::entity e = world.state().create();
@@ -161,6 +162,7 @@ void scn::context_set::reload_context(
 	destroy_by_id(old_id);
 
 	auto& w = create_context(name, old_id, kind);
+	w.set_input_layer(desc.get_input_layer());
 	add_systems(w, desc.get_systems(), sf);
 
 	entt::entity e = w.state().create();
@@ -188,6 +190,7 @@ void scn::context_set::load_systems_from_desc(const level_desc& desc, ecs::syste
 	for (const auto& world_desc : desc.get_worlds()) {
 		if (auto* context = find(world_desc->get_name())) {
 			context->set_systems(world_desc->get_systems());
+			context->set_input_layer(world_desc->get_input_layer());
 		}
 	}
 	rebuild_all_plans(system_factory);

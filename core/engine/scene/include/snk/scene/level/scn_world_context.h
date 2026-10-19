@@ -41,6 +41,10 @@ namespace scn
 		bool extract() const { return m_extract; }
 		void set_extract(bool extract) { m_extract = extract; }
 
+		// Input stacking order: the higher layer gets the mouse first (UI = 1, the rest 0).
+		int input_layer() const { return m_input_layer; }
+		void set_input_layer(int layer) { m_input_layer = layer; }
+
 		// Reseeds the context's `ecs::rng` from the base seed and its id.
 		void seed(uint64_t base_seed);
 
@@ -81,6 +85,7 @@ namespace scn
 		std::string m_name;
 		context_kind m_kind = context_kind::runtime;
 		bool m_extract = true;
+		int m_input_layer = 0;
 		entt::registry m_state;
 
 		std::optional<std::vector<std::string>> m_systems;
