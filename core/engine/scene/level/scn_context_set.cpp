@@ -83,12 +83,7 @@ void scn::context_set::sync_context_mode()
 
 ecs::runtime_context scn::context_set::create_runtime_context(size_t own_id)
 {
-	ecs::runtime_context ctx{ .current_registry = get(static_cast<uint32_t>(own_id)).state(), .current_world_id = own_id };
-	ctx.get_world_registry = [this, own_id](size_t world_id) -> entt::registry& {
-		if (world_id == LEVEL_ID) return get(static_cast<uint32_t>(own_id)).state();
-		return get(static_cast<uint32_t>(world_id)).state();
-	};
-	return ctx;
+	return ecs::runtime_context{ .current_registry = get(static_cast<uint32_t>(own_id)).state(), .current_world_id = own_id };
 }
 
 void scn::context_set::run_phase(size_t order_index, ecs::run_mode mode, int fixed_step)

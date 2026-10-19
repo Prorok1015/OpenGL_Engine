@@ -47,7 +47,7 @@ OpenGL_Engine/
 │
 ├── core/                           ← Top-level dir holding BOTH static libs + main.cpp
 │   ├── core/                       ← "core" lib: engine foundation
-│   │   ├── ecs/                    ← EnTT-based ECS (system_factory, world_salt, bind_res)
+│   │   ├── ecs/                    ← EnTT-based ECS (system_factory, set channel; see docs/roadmap/design/WORLD_MESSAGING.md)
 │   │   ├── resource/               ← Resource system (VFS resolvers, adapters, cache)
 │   │   ├── desc/                   ← Descriptor system (JSON-based, desc_system)
 │   │   ├── config/                 ← Configuration system (cfg_api.h, CFG_VAR_DEF_*)
@@ -61,7 +61,7 @@ OpenGL_Engine/
 │   │   (installed with the SDK, included as <snk/<component>/x.h>); the rest of its directory is internal.
 │   │
 │   └── engine/                     ← "engine" lib: gameplay + rendering systems
-│       ├── scene/                  ← Scene mgmt, descs; scene/level/ (scn_level, world, extractors)
+│       ├── scene/                  ← Scene mgmt, descs; scene/level/ (context_manager, context_set, world_context, extractors)
 │       ├── render/render_system/   ← Render pipeline (passes/, geom/, shader/, skinning/, texture/)
 │       ├── gui/gui_system/         ← ImGui integration
 │       ├── image/                  ← Image loading

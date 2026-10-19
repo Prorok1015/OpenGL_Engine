@@ -124,7 +124,7 @@ how_to_apply:
   struct my_system : ecs::system_interface { /* state only */ };
   // system_interface has NO update()/initialize() — it is just a virtual dtor.
   // The per-frame logic is a free or member function whose args (entt::view,
-  // ecs::bind_res<ID,T>, ...) are injected by the invoker:
+  // ctx resources, ...) are injected by the invoker:
   sfactory.register_system<&my_system::tick, my_system>("my_system",
       { .phase = ecs::phase::update, .after = { "other_system" }, .run_in_edit = false }, ctor_args...);
   // Do not rely on argument types for ordering; add .after/.before. Debug builds warn about
@@ -141,7 +141,7 @@ how_to_apply:
 
 [CONSTRAINT_13C]
 rule: World order is desc order; derive parallel world arrays from one ordered source
-why: scn::level::for_each_world iterates std::unordered_map<string,world> in HASH
+why: scn::level::for_each_world (now context_set::for_each, by id) iterated std::unordered_map<string,world> in HASH
      order — it does NOT preserve desc/insertion order. With >=2 worlds, building
      editor arrays (world_descs/world_names/worlds_systems_list) from for_each_world
      desyncs the parallel arrays.
@@ -149,7 +149,7 @@ how_to_apply:
   - Treat the ordered world_descs vector as single source of truth for order
   - Derive names + per-world systems via edt::derive_world_arrays (index-aligned)
   - populate_worlds_from_level is the single build point on load
-  source: core/engine/scene/include/snk/scene/level/scn_level.h for_each_world (L46-57);
+  source: core/engine/scene/include/snk/scene/level/scn_context_set.h for_each;
           Editor/code/editor_system/controller/edt_level_controller.h derive_world_arrays
 
 [CONSTRAINTS_RESOURCES]

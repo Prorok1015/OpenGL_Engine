@@ -147,7 +147,7 @@ The editor never finds nodes by name (names are display only): hierarchy, viewpo
 **Single source of truth for world order (critical invariant):** the three parallel
 `shared_state` arrays (`world_descs` / `world_names` / `worlds_systems_list`) MUST be
 built from the same ordered source — the desc-ordered world list. Do NOT build them by
-iterating `scn::level::for_each_world`: it walks the contexts by **context id**, which fills
+iterating `scn::context_set::for_each`: it walks the contexts by **context id**, which fills
 gaps left by removed worlds and so is not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
 per-world systems via `edt::derive_world_arrays` (`controller/edt_level_controller.h`), and
 keep `populate_worlds_from_level` as the single build point on load. Covered by
