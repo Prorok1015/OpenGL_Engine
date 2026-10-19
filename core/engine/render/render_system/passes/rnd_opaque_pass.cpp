@@ -82,7 +82,7 @@ void opaque_pass::execute(render_context &context,
       if (!va)
         continue;
 
-      if (!pipelines.bind(dc.variant))
+      if (!pipelines.bind(context.material(dc.material).opaque))
         continue;
       rnd::configure_pass(context, dc.material);
       context.bind_object(packet.opaque_object(i), packet.skin_of(dc));

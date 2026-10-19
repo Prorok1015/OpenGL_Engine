@@ -68,9 +68,11 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
       if (!va)
         continue;
 
-      rnd::variant_id& variant = z_variants[dc.variant.value];
+      // The variant comes from the instance, not from the draw: the instance may have been compiled again after the draw was made.
+      const rnd::variant_id source = context.material(dc.material).opaque;
+      rnd::variant_id& variant = z_variants[source.value];
       if (!variant.is_valid()) {
-        variant = variants.with_program(dc.variant, z_prepass_program);
+        variant = variants.with_program(source, z_prepass_program);
       }
       if (!pipelines.bind(variant))
         continue;

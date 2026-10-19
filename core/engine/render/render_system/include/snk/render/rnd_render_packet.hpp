@@ -178,6 +178,8 @@ namespace rnd {
 		return pass_bits | (pipe << 42) | (mat << sort_key_depth_bits) | depth;
 	}
 
+	// `variant` is the pipeline at extraction time: it orders the draws (sort_key) and nothing else. Passes take the
+	// program from the instance (render_context::material), which may be compiled again after the draw was made.
 	// POD: no tags, strings or pointers. Geometry and skin are ids into the tables of the packet that holds the
 	// draw; the material is an id into the material_instance_cache.
 	struct draw_call_t {

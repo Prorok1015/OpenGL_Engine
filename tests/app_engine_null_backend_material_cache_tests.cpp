@@ -191,22 +191,33 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraStayValidWhenALaterVisitCompilesAgain
 	std::shared_ptr<scn::material_desc> broken;
 
 	const auto check_draws = [&] {
-		// Every draw of every camera names an instance that is in the cache.
+		// Every draw of every camera names an instance that is in the cache, and it is the same instance for every
+		// camera, however often it was compiled.
 		auto& packets = storage.require<rnd::frame_context>().data.require<std::pmr::vector<rnd::render_packet_t>>();
 		BOOST_REQUIRE(!packets.empty());
+		std::vector<std::set<std::uint32_t>> broken_ids;
 		for (const auto& packet : packets) {
+			std::set<std::uint32_t> ids;
 			for (const auto* list : { &packet.opaque_draws, &packet.transparent_draws }) {
+				const bool opaque_list = list == &packet.opaque_draws;
 				for (const auto& dc : *list) {
 					BOOST_REQUIRE(instances().contains(dc.material));
 					const auto& material = instances().get(dc.material);
 					BOOST_CHECK(dc.variant.is_valid());
 					BOOST_CHECK(material.base.is_valid());
+					// The compiles did not change the defines, so the variant of an earlier visit is the final one.
+					BOOST_CHECK(dc.variant == (opaque_list ? material.opaque : material.base));
 					if (broken && material.source.get() == broken.get()) {
 						BOOST_CHECK(!material.complete);
+						ids.insert(dc.material.index);
 						++incomplete_draws;
 					}
 				}
 			}
+			broken_ids.push_back(std::move(ids));
+		}
+		for (const auto& ids : broken_ids) {
+			BOOST_CHECK(ids == broken_ids.front());
 		}
 	};
 
@@ -242,6 +253,78 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraStayValidWhenALaterVisitCompilesAgain
 			BOOST_TEST(compilations[frame] - compilations[frame - 1] <= 2u);
 		}
 	}
+}
+
+BOOST_AUTO_TEST_CASE(ADescEditedByTheLaterOfTwoMeshesReachesTheDrawsOfTheEarlierOne)
+{
+	load_bench_level();
+
+	// Two meshes with one desc: whichever of them extraction visits first, the other one carries the dirty mark in
+	// one of the two edit frames, so the instance is compiled again after draws of the desc were made.
+	mesh_ref meshes[2];
+	std::shared_ptr<scn::material_desc> shared;
+	storage.require<scn::context_manager>().level_set().for_each([&](scn::world_context& w) {
+		if (shared) return;
+		std::map<const scn::material_desc*, std::vector<entt::entity>> by_desc;
+		for (auto [ent, mat] : w.state().view<scn::material_desc_component>().each()) {
+			if (const auto desc = mat.mlt_desc.get()) by_desc[desc.get()].push_back(ent);
+		}
+		for (auto& [desc, ents] : by_desc) {
+			if (ents.size() >= 2) {
+				shared = w.state().get<scn::material_desc_component>(ents.front()).mlt_desc.get();
+				meshes[0] = { &w.state(), ents.front() };
+				meshes[1] = { &w.state(), ents.back() };
+				return;
+			}
+		}
+	});
+	BOOST_REQUIRE_MESSAGE(shared, "the bench level needs two meshes with one material");
+
+	std::map<std::uint32_t, rnd::variant_id> before;	// opaque variant of the shared desc's instances, by id
+	std::size_t checked = 0;
+	std::size_t changed = 0;
+	std::size_t older_hints = 0;
+
+	const auto after_extract = [&] {
+		auto& packets = storage.require<rnd::frame_context>().data.require<std::pmr::vector<rnd::render_packet_t>>();
+		std::map<std::uint32_t, rnd::variant_id> now;
+		for (const auto& packet : packets) {
+			for (const auto* list : { &packet.opaque_draws, &packet.transparent_draws }) {
+				const bool opaque_list = list == &packet.opaque_draws;
+				for (const auto& dc : *list) {
+					const auto& material = instances().get(dc.material);
+					if (material.source.get() != shared.get()) continue;
+					++checked;
+					// The variant stored in the draw may be older than the instance; the passes read the instance.
+					if (dc.variant != (opaque_list ? material.opaque : material.base)) ++older_hints;
+					if (opaque_list) {
+						now[dc.material.index] = material.opaque;
+						const auto old = before.find(dc.material.index);
+						if (old != before.end() && old->second != material.opaque) ++changed;
+					}
+				}
+			}
+		}
+		before = std::move(now);
+	};
+
+	const auto edit = [&](int mesh, const char* define) {
+		return [&, mesh, define] {
+			shared->defines.push_back(define);
+			meshes[mesh].reg->get<scn::material_desc_component>(meshes[mesh].ent).dirty = true;
+		};
+	};
+
+	run_scenario(
+		{ nullptr, edit(1, "SNK_CACHE_TEST_FIRST"), nullptr, edit(0, "SNK_CACHE_TEST_SECOND"), nullptr },
+		{ after_extract, after_extract, after_extract, after_extract, after_extract });
+
+	BOOST_TEST(checked > 0u);
+	// Each edit changed the variant of the instance. In one of the two orders a draw made before the recompile holds
+	// the older variant: that is why the passes take the program from the instance and not from the draw.
+	BOOST_TEST(changed > 0u);
+	BOOST_TEST(older_hints > 0u);
+	BOOST_TEST_MESSAGE("draws of the shared desc " << checked << ", with an older variant in the draw " << older_hints);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
