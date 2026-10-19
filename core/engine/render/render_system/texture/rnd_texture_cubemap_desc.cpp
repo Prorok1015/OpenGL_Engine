@@ -33,6 +33,7 @@ void rnd::texture_cubemap_desc::serialize(json::object& resource) const
 	texture_desc::serialize(resource);
 
 	if (mode == SOURCE_TYPE::SINGLE_FILE) {
+		single_image.wait();
 		if (single_image.is_ready())
 			resource["data"] = json::value_from(single_image->get_tag());
 	} else {

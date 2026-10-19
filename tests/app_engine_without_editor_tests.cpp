@@ -87,6 +87,7 @@ BOOST_AUTO_TEST_CASE(UpdateStageDrivesTheLevelManager)
 	// frames proves the engine's `update` body ran.
 	put("lv.desc", LEVEL_ONE_WORLD);
 	rs->signal_changed(tag);
+	pump();
 	run_frames(2);
 	BOOST_TEST(levels().get_level().get_world_count() == 1u);
 	BOOST_TEST(levels().get_level().has_world("only"));

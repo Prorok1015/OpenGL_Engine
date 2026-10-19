@@ -897,4 +897,37 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 	BOOST_TEST(delivered + dropped.load() == rounds);
 }
 
+BOOST_AUTO_TEST_CASE(TryRunInline_ClaimsAQueuedTaskForABlockedWorker)
+{
+	ds::task_system_config config;
+	config.compute_threads = 1;
+	ds::task_system tasks(config);
+
+	std::atomic<bool> first_started{ false };
+	std::atomic<bool> claimed{ false };
+	std::atomic<bool> claimed_again{ true };
+	std::atomic<bool> second_ran_inside{ false };
+	std::atomic<int> second_runs{ 0 };
+	std::atomic<std::uint64_t> second_id{ 0 };
+	auto first = tasks.run(lane::compute, {}, [&](ds::task_context&) {
+		first_started = true;
+		while (second_id.load() == 0) std::this_thread::sleep_for(1ms);
+		// The only pool thread is this one: the queued task can only run if the waiter takes it.
+		claimed = tasks.try_run_inline(second_id.load());
+		second_ran_inside = second_runs.load() == 1;
+		claimed_again = tasks.try_run_inline(second_id.load());
+	});
+	while (!first_started.load()) std::this_thread::sleep_for(1ms);
+	auto second = tasks.run(lane::compute, {}, [&](ds::task_context&) { ++second_runs; });
+	second_id = second.id();
+	first.wait();
+	second.wait();
+	BOOST_TEST(claimed.load());
+	BOOST_TEST(second_ran_inside.load());
+	BOOST_TEST(!claimed_again.load()); // done already
+	BOOST_TEST(second_runs.load() == 1); // its own pool job found it claimed
+	BOOST_TEST((second.status() == task_status::ready));
+	BOOST_TEST(!tasks.try_run_inline(987654321)); // unknown id
+}
+
 BOOST_AUTO_TEST_SUITE_END()

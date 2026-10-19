@@ -11,6 +11,7 @@
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include "test_manual_tasks.hpp"
 
 namespace json = boost::json;
 
@@ -150,7 +151,8 @@ namespace {
 	{
 		schema_fixture() : ds(rs) {}
 
-		res::resource_system rs;
+		ds::task_system tasks{ test_util::manual_tasks() };
+		res::resource_system rs{ tasks };
 		desc::desc_system ds;
 	};
 

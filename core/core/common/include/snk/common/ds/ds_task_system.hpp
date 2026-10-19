@@ -150,8 +150,8 @@ namespace ds {
 
 			// Cooperative; a task that has not started yet finishes as cancelled and never runs.
 			void cancel();
-			// Runs the body on the calling (lane) thread. No-op unless the task is still pending.
-			void execute();
+			// Runs the body on the calling (lane) thread. No-op unless the task is still pending; true if this call ran it.
+			bool execute();
 			void wait();
 
 			// A continuation of a finished task. `on_main` ones go through post_main(general),
@@ -422,6 +422,12 @@ namespace ds {
 
 		// `manual` policy only: runs the oldest queued task of the lane on the calling thread.
 		bool run_one(lane which);
+
+		// Any policy, any thread: if task `task_id` (task_handle_base::id()) is still queued, claims it and runs it on
+		// the calling thread; its pool job then finds it claimed. False if it is already running, done or unknown.
+		// For a pool thread that must wait for exactly that task: running it beats blocking while the lane is short
+		// of threads, and it runs nothing unrelated, so the stack stays as deep as the dependency chain.
+		bool try_run_inline(std::uint64_t task_id);
 
 		// Not yet finished tasks with task_desc::visible, for the task panel / game UI.
 		[[nodiscard]] std::vector<task_info> snapshot() const;

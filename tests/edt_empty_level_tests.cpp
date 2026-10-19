@@ -29,7 +29,7 @@ struct empty_level_fixture : test_util::scene_env
 	// What level_controller::populate_worlds_from_level does, on the editor's side of the state.
 	void populate(const res::tag& tag)
 	{
-		auto level_res = rs->require_sync<scn::level_desc>(tag);
+		auto level_res = require_loaded<scn::level_desc>(tag);
 		BOOST_REQUIRE(level_res.is_ready());
 		state.world_descs.clear();
 		for (const auto& wh : level_res->get_worlds()) state.world_descs.push_back(*wh.get_sync());
@@ -42,7 +42,7 @@ struct empty_level_fixture : test_util::scene_env
 	void resync()
 	{
 		scn::level& lvl = mgr.get_level();
-		auto level_res = rs->require_sync<scn::level_desc>(lvl.get_tag());
+		auto level_res = require_loaded<scn::level_desc>(lvl.get_tag());
 		BOOST_REQUIRE(level_res.is_ready());
 		std::vector<scn::world_desc> desc_worlds;
 		for (const auto& wh : level_res->get_worlds()) desc_worlds.push_back(*wh.get_sync());
@@ -94,6 +94,7 @@ BOOST_AUTO_TEST_CASE(Reload_ToAnEmptyWorldListClearsTheEditorArrays)
 	mgr.set_on_reload([&] { ++reloads; resync(); });
 	put("lv.desc", LEVEL_NO_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(reloads == 1);
@@ -116,6 +117,7 @@ BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
 	mgr.set_on_reload([&] { resync(); });
 	put("lv.desc", LEVEL_TWO_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(state.active_world_idx == 0);

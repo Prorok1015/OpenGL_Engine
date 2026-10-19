@@ -83,6 +83,7 @@ struct node_id_fixture : test_util::scene_env
 	{
 		scn::prefab_desc d;
 		d.deserialize(*descs, parse_migrated(text));
+		pump();
 		return d;
 	}
 
@@ -97,7 +98,7 @@ struct node_id_fixture : test_util::scene_env
 	{
 		auto tag = res::tag{ std::string("memory://models/") + name };
 		rs->store(tag, test_util::to_bytes(text));
-		return rs->require_sync<scn::prefab_desc>(tag).get_sync();
+		return require_loaded<scn::prefab_desc>(tag).get_sync();
 	}
 };
 
@@ -140,6 +141,7 @@ BOOST_AUTO_TEST_CASE(RoundTrip_LoadSaveLoadKeepsIdsAndSaveIsAFixedPoint)
 	auto saved = serialized(first);
 	scn::prefab_desc second;
 	second.deserialize(*descs, saved);
+	pump();
 
 	BOOST_TEST((ids_of(first) == ids_of(second)));
 	BOOST_TEST(json::value(saved) == json::value(serialized(second)));
@@ -202,6 +204,7 @@ BOOST_AUTO_TEST_CASE(Load_ShorthandNodeKeepsItsIdAcrossSave)
 
 	scn::prefab_desc second;
 	second.deserialize(*descs, serialized(first));
+	pump();
 	BOOST_TEST(second.get_root().children[0].node_id == id);
 	BOOST_TEST(second.get_root().children[0].components.contains("Light"));
 }
@@ -353,6 +356,7 @@ struct instance_fixture : node_id_fixture
 			{"__id":"00000000000000b1","name":"twin"},
 			{"__id":"00000000000000b2","name":"twin"},
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/rig.prefab.desc"}}]})"));
+		pump(); // the parent_desc handles of the instances load in the background
 		state.assembler = assembler.get();
 		editor = std::make_unique<edt::scene_editor>(state);
 	}
@@ -471,6 +475,7 @@ BOOST_FIXTURE_TEST_CASE(Override_RecordsSurviveSaveAndLoad, instance_fixture)
 	world().serialize(saved);
 	scn::world_desc loaded;
 	loaded.deserialize(*descs, saved);
+	pump();
 
 	const auto& robot = loaded.get_root().children[2];
 	BOOST_TEST(robot.node_id == 0xc1ull);
@@ -599,6 +604,7 @@ struct nested_fixture : node_id_fixture
 		state.world_names.push_back("w");
 		world().deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/body.prefab.desc"}}]})"));
+		pump(); // the parent_desc handles of the instances load in the background
 		state.assembler = assembler.get();
 	}
 
@@ -792,6 +798,7 @@ BOOST_AUTO_TEST_CASE(Importer_WrittenIdsSurviveSaveAndReload)
 	BOOST_REQUIRE(a);
 	scn::prefab_desc again;
 	again.deserialize(*descs, serialized(*a));
+	pump();
 	BOOST_TEST((ids_of(*a) == ids_of(again)));
 }
 

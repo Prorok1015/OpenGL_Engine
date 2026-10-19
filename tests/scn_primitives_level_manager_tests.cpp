@@ -190,6 +190,7 @@ BOOST_AUTO_TEST_CASE(HotReload_SameWorldNamesOnlyReloadSystemsNotContent)
 
 	put("lv.desc", LEVEL_V2_SAME_NAMES);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	auto& reg = mgr.get_level().get_world("w0").state();
@@ -204,6 +205,7 @@ BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTriggersFullReload)
 
 	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	auto& lvl = mgr.get_level();
@@ -224,6 +226,7 @@ BOOST_AUTO_TEST_CASE(HotReload_FullReloadKeepsRuntimeCreatedWorlds)
 	mgr.set_on_reload([&reloads] { ++reloads; });
 	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(reloads == 1);
@@ -246,6 +249,7 @@ BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadKeepsRuntimeCreatedWorlds)
 	mgr.set_on_reload([&reloads] { ++reloads; });
 	put("lv.desc", LEVEL_V2_SAME_NAMES);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(reloads == 1); // the editor resyncs its system lists on a systems-only reload too
@@ -266,6 +270,7 @@ BOOST_AUTO_TEST_CASE(HotReload_FailedWorldDescKeepsTheCurrentLevelAndSkipsTheCal
 	put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
 		{"__type":"world_desc","name":"w0","systems":[]},"memory://t/missing_world.desc"]})");
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(reloads == 0);
@@ -285,6 +290,7 @@ BOOST_AUTO_TEST_CASE(HotReload_DescWorldReplacesRuntimeWorldWithTheSameName)
 
 	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(lvl.get_world_count() == 1u);
@@ -301,6 +307,7 @@ BOOST_AUTO_TEST_CASE(HotReload_ReloadingAnotherLevelStopsWatchingTheOldOne)
 	// the first level's file changes afterwards: must not tear down the active level
 	put("lv.desc", LEVEL_V2_SAME_NAMES);
 	rs->signal_changed(tag1);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 	BOOST_TEST(mgr.get_level().has_world("only"));
 	BOOST_TEST(mgr.get_level().get_world_count() == 1u);

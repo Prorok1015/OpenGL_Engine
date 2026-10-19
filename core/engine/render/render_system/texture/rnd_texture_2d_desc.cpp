@@ -13,6 +13,7 @@ void rnd::texture_2d_desc::serialize(json::object& resource) const
 {
 	texture_desc::serialize(resource);
 
+	picture_handle.wait();
 	if (picture_handle.is_ready()) {
 		resource["data"] = json::value_from(picture_handle->get_tag());
 	}
