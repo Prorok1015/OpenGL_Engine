@@ -499,6 +499,10 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
   if (!m_cache.any_of_tag(dependent, [&block](const cache_entry &entry) { return entry.lock() == block; })) {
     return;
   }
+  if (m_depends_on.size() >= m_edge_sweep_at) {
+    prune_released_edges();
+    m_edge_sweep_at = std::max(k_edge_sweep_floor, m_depends_on.size() * 2);
+  }
   if (const auto old = m_depends_on.find(dependent); old != m_depends_on.end()) {
     for (const auto &target : old->second) {
       if (const auto it = m_dependents.find(target); it != m_dependents.end()) {
@@ -522,6 +526,56 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
   }
   if (!targets.empty()) {
     m_depends_on[dependent] = std::move(targets);
+  }
+}
+
+void res::resource_system::prune_released_edges() {
+  const auto is_held = [this](const res::tag &tag) {
+    return m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+  };
+  std::unordered_set<res::tag> released;
+  for (const auto &[tag, targets] : m_depends_on) {
+    if (!is_held(tag)) {
+      released.insert(tag);
+    }
+  }
+  if (released.empty()) {
+    return;
+  }
+
+  // A held tag takes over the dependencies of the released tags it was built through, transitively.
+  for (auto &[tag, targets] : m_depends_on) {
+    if (released.contains(tag)) {
+      continue;
+    }
+    std::unordered_set<res::tag> known(targets.begin(), targets.end());
+    known.insert(tag);
+    for (std::size_t at = 0; at < targets.size(); ++at) {
+      if (!released.contains(targets[at])) {
+        continue;
+      }
+      // `targets` grows below, so the tag is copied before the push_back may move it.
+      const res::tag through = targets[at];
+      for (const auto &inherited : m_depends_on.at(through)) {
+        if (known.insert(inherited).second) {
+          targets.push_back(inherited);
+          m_dependents[inherited].push_back(tag);
+        }
+      }
+    }
+  }
+
+  for (const auto &tag : released) {
+    const auto it = m_depends_on.find(tag);
+    for (const auto &target : it->second) {
+      if (const auto dependents = m_dependents.find(target); dependents != m_dependents.end()) {
+        std::erase(dependents->second, tag);
+        if (dependents->second.empty()) {
+          m_dependents.erase(dependents);
+        }
+      }
+    }
+    m_depends_on.erase(it);
   }
 }
 
@@ -593,6 +647,7 @@ void res::resource_system::signal_changed(const res::tag &tag) {
   std::uint64_t epoch = 0;
   {
     std::unique_lock lock(m_cache_mutex);
+    prune_released_edges();
     batch = changed_batch(tag);
     for (const auto &changed : batch) {
       m_cache.erase_tag(changed);

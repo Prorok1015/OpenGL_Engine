@@ -275,6 +275,11 @@ namespace res
 		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
 		void record_dependencies(const res::tag& dependent, const std::shared_ptr<resource_handle>& block,
 			const std::vector<res_dep>& declared);
+		// Drops the outgoing edges of tags nobody holds any more (their cache entry expired or was evicted). A held tag
+		// that was built through such a tag keeps the dependencies of it as its own, so a change at the bottom of the
+		// chain still reaches it. The edges that lead to a released tag stay: a change of that tag's file still
+		// reaches the ones built from it. m_cache_mutex held (unique).
+		void prune_released_edges();
 		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
@@ -400,6 +405,10 @@ namespace res
 		// desc types of a tag onto one block).
 		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
 		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
+		// Released tags are swept out of the graph when a signal arrives and whenever m_depends_on reaches this size
+		// (then doubled over what is left), so the graph stays proportional to what is loaded.
+		static constexpr std::size_t k_edge_sweep_floor = 256;
+		std::size_t m_edge_sweep_at = k_edge_sweep_floor;
 		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
 		std::unique_ptr<wait_graph> m_graph;
 
