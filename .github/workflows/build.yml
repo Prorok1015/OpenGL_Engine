@@ -404,7 +404,7 @@ jobs:
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/two_worlds/final.png \
             -- --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/two_worlds/final.png headless_out/two_worlds/editor.log \
-            320x360+980+180 0.03
+            320x360+980+180 0.03 tools/headless/reference/two_worlds.png
 
       # The same deterministic run, but the picture is taken inside the process: capture/on_settled makes the editor
       # run the command viewport.capture (rnd::driver::read_texture -> PNG) once the scene settled. It is the Scene
