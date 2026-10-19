@@ -22,6 +22,10 @@ namespace {
 	CFG_VAR_DEF_FLOAT(cfg_tasks_main_budget_ms, "tasks/main_budget_ms", 2.0f);
 	CFG_VAR_DEF_INT(cfg_tasks_gpu_upload_per_frame, "tasks/gpu_upload_per_frame", 4);
 
+	// Headless determinism (tools/run_headless.sh --frames): constant frame dt instead of wall clock.
+	CFG_VAR_DEF_FLOAT(cfg_fixed_frame_dt, "app/fixed_frame_dt", 0.0f);
+	CFG_VAR_DEF_INT(cfg_freeze_after_frames, "app/freeze_after_frames", 0);
+
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
 	//   logger/category_file/resource  → logs/resource.log
@@ -57,7 +61,10 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	stages.add_stage("tasks", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& ctx) {
 		ctx.storage.require<ds::task_system>().drain_main();
 	});
-	data.construct<app::app_loop_service_interface, app::loop_service>(stages);
+	const app::deterministic_time time{ std::max(0.f, static_cast<float>(cfg_fixed_frame_dt)), std::max(0, static_cast<int>(cfg_freeze_after_frames)) };
+	// Kept in storage so the GUI layer can feed ImGui the same dt.
+	data.construct<app::deterministic_time>(time);
+	data.construct<app::app_loop_service_interface, app::loop_service>(stages, time);
 }
 
 void core::core_module::initialize_services(ds::app_data_storage& data)

@@ -30,6 +30,8 @@ namespace gui
 
 		// Display size / scale / delta time / mouse cursor. Call before ImGui::NewFrame().
 		void new_frame();
+		// > 0: ImGui DeltaTime is this constant instead of wall-clock (deterministic headless runs).
+		void set_fixed_delta(float seconds) { m_fixed_delta = seconds; }
 
 		void on_input_event(wnd::handle win, const inp::input_event& evt) override;
 		void on_window_focus_gained(wnd::handle win) override;
@@ -52,6 +54,7 @@ namespace gui
 		void update_modifiers(std::uint8_t previous);
 
 		wnd::window& m_window;
+		float m_fixed_delta = 0.f;
 		std::chrono::steady_clock::time_point m_last_frame{};
 		bool m_has_last_frame = false;
 		// Bit per physical modifier key, so releasing one of two held Shifts keeps Shift down.

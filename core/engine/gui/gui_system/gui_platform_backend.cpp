@@ -232,7 +232,7 @@ void gui::platform_backend::new_frame()
 
 	const auto now = std::chrono::steady_clock::now();
 	const float dt = m_has_last_frame ? std::chrono::duration<float>(now - m_last_frame).count() : 1.f / 60.f;
-	io.DeltaTime = std::max(dt, 1.f / 1000000.f);
+	io.DeltaTime = m_fixed_delta > 0.f ? m_fixed_delta : std::max(dt, 1.f / 1000000.f);
 	m_last_frame = now;
 	m_has_last_frame = true;
 

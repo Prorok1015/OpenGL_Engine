@@ -334,6 +334,8 @@ jobs:
   # Starts the editor on levels/smoke_level.desc under Xvfb + Mesa llvmpipe and checks that it
   # survives, logs no errors and actually draws the scene (tools/headless/check_smoke.sh). The screenshots
   # are also compared with tools/headless/reference/*.png; that comparison only reports for now.
+  # --frames 120: constant frame dt and scene time frozen after 120 frames, so the animation phase of a
+  # shot does not depend on runner speed (the references are only comparable that way).
   editor-smoke:
     name: Editor visual smoke (Linux)
     runs-on: ubuntu-latest
@@ -378,7 +380,7 @@ jobs:
 
       - name: Smoke run (smoke_level)
         run: |
-          tools/run_headless.sh --editor "$EDITOR_BIN" --seconds 20 --size 1600x900 --shot headless_out/smoke/final.png \
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/smoke/final.png \
             -- --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/smoke/final.png headless_out/smoke/editor.log \
             200x200+860+450 0.055 tools/headless/reference/smoke.png
@@ -386,7 +388,7 @@ jobs:
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
       - name: Smoke run (checklist actions)
         run: |
-          tools/run_headless.sh --editor "$EDITOR_BIN" --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
             --shot headless_out/checklist/final.png \
             -- --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/checklist/final.png headless_out/checklist/editor.log \
@@ -396,7 +398,7 @@ jobs:
       # area and must show the "Game Camera" of smoke_level, so a crop of that panel cannot be flat.
       - name: Smoke run (Game view)
         run: |
-          tools/run_headless.sh --editor "$EDITOR_BIN" --seconds 20 --size 1600x900 --shot headless_out/game_view/final.png \
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/game_view/final.png \
             -- --set editor/startup_level levels/smoke_level.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/game_view/final.png headless_out/game_view/editor.log \
             200x200+940+260 0.03 tools/headless/reference/game_view.png

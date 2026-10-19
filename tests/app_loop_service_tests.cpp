@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <string>
+#include <vector>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
 
@@ -84,6 +85,20 @@ BOOST_AUTO_TEST_CASE(RemovedStageAndClearedBodyNoLongerRun) {
 	stages.run(ctx);
 	BOOST_TEST(trace.empty());
 	BOOST_TEST(stages.set_body(app::builtin_stage::ui, mark('u')));
+}
+
+BOOST_AUTO_TEST_CASE(DeterministicTimeFeedsFixedDtThenFreezes) {
+	app::frame_stage_registry stages;
+	std::vector<float> dts;
+	stages.set_body(app::builtin_stage::update, [&](app::stage_context& c) { dts.push_back(c.dt.count()); });
+
+	ds::app_data_storage storage;
+	app::loop_service loop(stages, app::deterministic_time{ 0.25f, 2 });
+	loop.init(storage);
+	for (int i = 0; i < 4; ++i) {
+		loop.on_step(storage);
+	}
+	BOOST_TEST(dts == (std::vector<float>{ 0.25f, 0.25f, 0.f, 0.f }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -11,6 +11,10 @@
 #   --seconds N        run time when no action script is given (default: 20)
 #   --shot PATH        final screenshot             (default: headless_out/final.png)
 #   --size WxH         virtual screen size          (default: 1600x900)
+#   --frames N         deterministic time: the editor advances a constant --frame-dt per frame and freezes
+#                      scene time after N frames; the script waits for that before the actions/screenshot,
+#                      so a shot no longer depends on runner speed. With no action script --seconds is ignored.
+#   --frame-dt SEC     frame step used by --frames  (default: 0.0166667)
 #
 # Action script commands (lines starting with # are comments):
 #   sleep SECONDS            wait (fractions allowed)
@@ -32,6 +36,8 @@ ACTIONS=""
 SECONDS_TO_RUN=20
 SHOT="headless_out/final.png"
 SIZE="1600x900"
+FRAMES=""
+FRAME_DT="0.0166667"
 EXTRA=()
 
 while [[ $# -gt 0 ]]; do
@@ -42,6 +48,8 @@ while [[ $# -gt 0 ]]; do
 		--seconds) SECONDS_TO_RUN="$2"; shift 2 ;;
 		--shot) SHOT="$2"; shift 2 ;;
 		--size) SIZE="$2"; shift 2 ;;
+		--frames) FRAMES="$2"; shift 2 ;;
+		--frame-dt) FRAME_DT="$2"; shift 2 ;;
 		--) shift; EXTRA=("$@"); break ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
@@ -69,6 +77,10 @@ sleep 1
 mkdir -p "$(dirname "$SHOT")"
 LOG="$(dirname "$SHOT")/editor.log"
 
+if [[ -n "$FRAMES" ]]; then
+	EXTRA+=(--set app/fixed_frame_dt "$FRAME_DT" app/freeze_after_frames "$FRAMES")
+fi
+
 # Software rasterizer; vsync off so the virtual display does not throttle frames.
 LIBGL_ALWAYS_SOFTWARE=1 vblank_mode=0 \
 	"$EDITOR" --config "$CONFIG" "${EXTRA[@]}" >"$LOG" 2>&1 &
@@ -82,6 +94,17 @@ for _ in $(seq 1 60); do
 	xdotool search --onlyvisible --name . >/dev/null 2>&1 && break
 	sleep 0.5
 done
+
+if [[ -n "$FRAMES" ]]; then
+	# Logged by app::loop_service on the first frozen frame; a slow runner just takes longer to get here.
+	for _ in $(seq 1 480); do
+		alive || break
+		grep -q 'deterministic time frozen' "$LOG" && break
+		sleep 0.5
+	done
+	grep -q 'deterministic time frozen' "$LOG" || echo "warning: time was not frozen after 240 s" >&2
+	sleep 1 # a few frozen frames, so ImGui hover/fade state settles
+fi
 
 if [[ -n "$ACTIONS" ]]; then
 	while IFS= read -r line || [[ -n "$line" ]]; do
@@ -100,7 +123,7 @@ if [[ -n "$ACTIONS" ]]; then
 			*) echo "unknown action: $cmd" >&2 ;;
 		esac
 	done <"$ACTIONS"
-else
+elif [[ -z "$FRAMES" ]]; then
 	sleep "$SECONDS_TO_RUN"
 fi
 
