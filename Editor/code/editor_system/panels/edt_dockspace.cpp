@@ -1,9 +1,11 @@
 #include "edt_dockspace.h"
+#include "edt_main_menu.h"
 #include <imgui_internal.h>
+#include <algorithm>
 
 namespace edt
 {
-	void dockspace::render(panel_manager& pm)
+	void dockspace::render(panel_registry& panels, action_registry& actions)
 	{
 		const ImGuiViewport* viewport = ImGui::GetMainViewport();
 		ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -26,64 +28,27 @@ namespace edt
 		ImGui::Begin("##dockspace_host", nullptr, host_flags);
 		ImGui::PopStyleVar(3);
 
-		render_menu_bar(pm);
+		if (ImGui::BeginMenuBar())
+		{
+			draw_main_menu(actions, panels);
+			ImGui::EndMenuBar();
+		}
 
 		ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
 		ImGui::DockSpace(dockspace_id, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_PassthruCentralNode);
 
 		if (!m_layout_initialized)
 		{
-			const panel_base* game_view = pm.find_panel("game_view");
-			setup_default_layout(dockspace_id, game_view && game_view->is_open());
+			setup_default_layout(dockspace_id, panels.panels());
 			m_layout_initialized = true;
 		}
 
 		ImGui::End();
 
-		pm.render_all();
+		panels.render_all();
 	}
 
-	void dockspace::render_menu_bar(panel_manager& pm)
-	{
-		if (!ImGui::BeginMenuBar())
-			return;
-
-		// Ctrl+S shortcut (works regardless of menu focus)
-		if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-			if (m_on_quick_save)
-				m_on_quick_save();
-			else if (m_on_save_level)
-				m_on_save_level();
-		}
-
-		if (ImGui::BeginMenu("File"))
-		{
-			if (ImGui::MenuItem("New Level")     && m_on_new_level)   m_on_new_level();
-			if (ImGui::MenuItem("Open Level...")  && m_on_open_level)  m_on_open_level();
-			if (ImGui::MenuItem("Save Level", "Ctrl+S") && m_on_save_level)  m_on_save_level();
-			ImGui::Separator();
-			if (ImGui::MenuItem("Import Model...") && m_on_import_model) m_on_import_model();
-			ImGui::Separator();
-			if (ImGui::MenuItem("Exit")          && m_on_exit)        m_on_exit();
-			ImGui::EndMenu();
-		}
-
-		if (ImGui::BeginMenu("View"))
-		{
-			pm.render_view_menu();
-			ImGui::EndMenu();
-		}
-
-		if (ImGui::BeginMenu("Help"))
-		{
-			ImGui::MenuItem("About");
-			ImGui::EndMenu();
-		}
-
-		ImGui::EndMenuBar();
-	}
-
-	void dockspace::setup_default_layout(ImGuiID dockspace_id, bool split_game_view)
+	void dockspace::setup_default_layout(ImGuiID dockspace_id, const std::vector<panel_info>& panels)
 	{
 		ImGui::DockBuilderRemoveNode(dockspace_id);
 		ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
@@ -97,19 +62,33 @@ namespace edt
 		ImGuiID dock_bottom_right;
 		ImGuiID dock_bottom_left = ImGui::DockBuilderSplitNode(dock_bottom, ImGuiDir_Left, 0.50f, nullptr, &dock_bottom_right);
 
-		ImGui::DockBuilderDockWindow("Scene Hierarchy", dock_left);
-		ImGui::DockBuilderDockWindow("Inspector",       dock_right);
-		// Opened at startup: side by side with the Viewport. Otherwise it joins the Viewport as a tab
-		// when first shown (a split would leave an empty node while the panel is closed).
-		if (split_game_view) {
-			ImGuiID dock_game_view = ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.50f, nullptr, &dock_center);
-			ImGui::DockBuilderDockWindow("Game view", dock_game_view);
-		} else {
-			ImGui::DockBuilderDockWindow("Game view", dock_center);
+		// The first center panel owns the center. Another one that is open now sits side by side with it; a closed
+		// one joins it as a tab when first shown (a split would leave an empty node while the panel is closed).
+		std::vector<const panel_info*> beside;
+		bool center_taken = false;
+		for (const panel_info& panel : panels) {
+			if (panel.slot != dock_slot::center) continue;
+			if (center_taken && panel.open) {
+				ImGuiID dock_side = ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.50f, nullptr, &dock_center);
+				ImGui::DockBuilderDockWindow(panel.title.c_str(), dock_side);
+				beside.push_back(&panel);
+			}
+			center_taken = true;
 		}
-		ImGui::DockBuilderDockWindow("Viewport",        dock_center);
-		ImGui::DockBuilderDockWindow("Asset Browser",   dock_bottom_left);
-		ImGui::DockBuilderDockWindow("Console",         dock_bottom_right);
+
+		for (const panel_info& panel : panels) {
+			switch (panel.slot) {
+			case dock_slot::left:         ImGui::DockBuilderDockWindow(panel.title.c_str(), dock_left); break;
+			case dock_slot::right:        ImGui::DockBuilderDockWindow(panel.title.c_str(), dock_right); break;
+			case dock_slot::bottom_left:  ImGui::DockBuilderDockWindow(panel.title.c_str(), dock_bottom_left); break;
+			case dock_slot::bottom_right: ImGui::DockBuilderDockWindow(panel.title.c_str(), dock_bottom_right); break;
+			case dock_slot::center:
+				if (std::find(beside.begin(), beside.end(), &panel) == beside.end())
+					ImGui::DockBuilderDockWindow(panel.title.c_str(), dock_center);
+				break;
+			case dock_slot::floating:     break;
+			}
+		}
 
 		ImGui::DockBuilderFinish(dockspace_id);
 	}

@@ -21,6 +21,7 @@
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
+#include "edt_main_menu.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
@@ -85,6 +86,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
 		data.require<scn::context_manager>(), data.require<ds::task_system>());
+	editor_layer->set_context(*m_context);
 	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
@@ -140,11 +142,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	});
 
-	// Register panels with manager
-	auto& pm = editor_layer->get_panel_manager();
-	pm.add_panel(m_hierarchy_panel);
-	pm.add_panel(m_inspector_panel);
-	pm.add_panel(m_viewport_panel);
+	// Registration order is the render order and the View menu order.
+	const auto add_panel = [this](const std::shared_ptr<panel_base>& panel, dock_slot slot, bool open_by_default) {
+		m_registrations.push_back(m_context->panels().add({
+			.id = panel->get_id(), .title = panel->get_title(), .slot = slot, .open_by_default = open_by_default, .panel = panel }));
+	};
+	add_panel(m_hierarchy_panel, dock_slot::left, true);
+	add_panel(m_inspector_panel, dock_slot::right, true);
+	add_panel(m_viewport_panel, dock_slot::center, true);
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
 		auto ctx_mgr = m_state.ctx_manager.lock();
@@ -160,11 +165,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	});
 	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_state); });
-	m_game_view_panel->set_open(cfg_show_game_view);
-	pm.add_panel(m_game_view_panel);
-	pm.add_panel(m_console_panel);
-	pm.add_panel(m_asset_browser_panel);
-	pm.add_panel(m_prefab_panel);
+	add_panel(m_game_view_panel, dock_slot::center, cfg_show_game_view);
+	add_panel(m_console_panel, dock_slot::bottom_right, true);
+	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
+	add_panel(m_prefab_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -190,8 +194,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 	hooks.exit = m_exit_action;
 	hooks.resources_path = res::resource_system::get_resources_path();
-	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), std::move(hooks));
-	m_file_menu->attach(editor_layer->get_dockspace());
+	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
+	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
+	m_file_menu->register_actions();
 
 	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
