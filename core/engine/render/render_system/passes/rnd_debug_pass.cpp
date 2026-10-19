@@ -39,7 +39,7 @@ void debug_pass::ensure_resources(driver::driver_interface& drv)
 		.set_vertex_shader(res::tag::make("shaders/debug_line.vert"))
 		.set_fragment_shader(res::tag::make("shaders/debug_line.frag"));
 
-	m_shader = drv.create_shader(cfg.load(m_res_sys));
+	m_shader = drv.create_shader(cfg.load(m_res_sys, drv.bindings()));
 }
 
 void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
@@ -95,6 +95,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		state.depth.write_mask = false;
 		state.topology = driver::RENDER_MODE::LINE;
 		driver::set_target_formats(state, pass);
+		state.set_layouts = context.shaders->layouts().frame_only();
 		pass_pipelines pipelines(drv, *context.shaders, state);
 
 		common_matrix.view = packet.camera.view_matrix;
@@ -103,6 +104,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		common_matrix.time = 0.f;
 
 		context.shaders->update_global_uniform(common_matrix);
+		context.shaders->bind_frame();
 		drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
 			packet.camera.viewport.y, vp_width, vp_height});
 

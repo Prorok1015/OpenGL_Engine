@@ -7,27 +7,20 @@ layout (location = 4) in vec3 aBitangent;
 layout (location = 5) in vec4 aBonesWeight; //TODO: move to texture2D
 layout (location = 6) in vec4 aColor;
 
-layout (std140, binding = 0) uniform Matrices 
-{
-    mat4 projection;
-    mat4 view;
-    float time;
-    vec3 cameraPosition;
-};
+#include "snk_common.glsl"
 
 #include "pipline_struct_lib.glsl"
 
 out PiplineStruct PS;
 
-#include "first_include.vert"
 #include "skinning_lib.glsl"
 
 mat4 getMeshMatrix()
 {
 #ifdef USE_ANIMATION 
-    return culcSkinMatrix(gl_VertexID, uWorldMeshMatr);
+    return culcSkinMatrix(gl_VertexID, world);
 #else
-    return uWorldMeshMatr;
+    return world;
 #endif
 }
 

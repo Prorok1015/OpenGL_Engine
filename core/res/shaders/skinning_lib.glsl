@@ -1,11 +1,12 @@
 #ifdef USE_ANIMATION
 
-layout (std430, binding = 2) buffer BoneMatrices
+// The matrices of every skeleton of the frame; ObjectData::boneOffset is where this object's skeleton starts.
+SNK_SSBO(3, 0) readonly buffer BoneMatrices
 {
     mat4 bones[];
 };
 
-layout (std430, binding = 1) buffer IndexesBuffer
+SNK_SSBO(3, 1) readonly buffer IndexesBuffer
 {
     uint data[];
 };
@@ -26,7 +27,7 @@ mat4 culcSkinMatrix(uint ID, mat4 defaultMatrix)
     {
         uint index = data[indicesStart + colStart + k];
         uint weight = data[indicesStart + colStart + colLength + k];
-        skinMatrix += bones[index] * uintBitsToFloat(weight);
+        skinMatrix += bones[boneOffset + index] * uintBitsToFloat(weight);
     }
 
     if (colLength > 0) {

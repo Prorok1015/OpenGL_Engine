@@ -3,8 +3,20 @@
 #include <snk/driver/rnd_shader_interface.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/shader/rnd_shader_bindings.h>
+#include <snk/common/logger/engine_log.h>
 
-static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys)
+// The engine's own defines: the one source of the light array length (the std140 layout of GlobalLights depends
+// on it, see lights_params) and the stage the source is compiled for.
+static std::string engine_defines(rnd::driver::shader_header::shader_type type)
+{
+    const char* stage = "SNK_VERTEX_SHADER";
+    if (type == rnd::driver::shader_header::shader_type::FRAGMENT) stage = "SNK_FRAGMENT_SHADER";
+    if (type == rnd::driver::shader_header::shader_type::GEOMETRY) stage = "SNK_GEOMETRY_SHADER";
+    return std::format("#define MAX_LIGHT_COUNT {}\n#define {}\n", rnd::lights_params::MAX_LIGHT_COUNT, stage);
+}
+
+static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys, const rnd::driver::binding_table& bindings)
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
@@ -62,17 +74,21 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
     }
 
     for (auto& header : headers) {
-        header.body.insert(header.body.find_first_of('\n') + 1, addition_defines.view());
+        const std::string errors = rnd::expand_binding_macros(header.body, bindings);
+        if (!errors.empty()) {
+            egLOG_ERROR("shader/load", "'{}': {}", header.title, errors);
+        }
+        header.body.insert(header.body.find_first_of('\n') + 1, engine_defines(header.type) + std::string{ addition_defines.view() });
     }
 
 }
 
-std::vector<rnd::driver::shader_header> rnd::shader_config::load(res::resource_system& res_sys) const
+std::vector<rnd::driver::shader_header> rnd::shader_config::load(res::resource_system& res_sys, const driver::binding_table& bindings) const
 {
-	return load(cdata, res_sys);
+	return load(cdata, res_sys, bindings);
 }
 
-std::vector<rnd::driver::shader_header> rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys)
+std::vector<rnd::driver::shader_header> rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
 {
     std::vector<res::tag> tags;
     std::vector<driver::shader_header> headers;
@@ -102,16 +118,11 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load(const constant_
 		}
 	}
 
-    preprocess_shader_code(tags, headers, cdata, res_sys);
+    preprocess_shader_code(tags, headers, cdata, res_sys, bindings);
     return headers;
 }
 
-void rnd::configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader)
-{
-	configure_render_pass(desc.rdata, nullptr, shader);
-}
-
-void rnd::configure_render_pass(const shader_config::runtime_data& rdata, const glm::mat4* world, rnd::driver::shader_interface* shader)
+void rnd::configure_render_pass(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader)
 {
 	for (std::size_t idx = 0; idx < rdata.samplers.size(); ++idx)
 	{
@@ -120,12 +131,13 @@ void rnd::configure_render_pass(const shader_config::runtime_data& rdata, const 
 		}
 	}
 
+	configure_uniforms(rdata, shader);
+}
+
+void rnd::configure_uniforms(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader)
+{
 	for (const auto& [name, data] : rdata.uniforms)
 	{
         shader->uniform(name, data);
-	}
-
-	if (world) {
-		shader->uniform("uWorldMeshMatr", *world);
 	}
 }

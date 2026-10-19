@@ -1,12 +1,13 @@
 #pragma once
 #include <memory_resource>
 #include <optional>
+#include <span>
+#include <utility>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
-#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/common/mem_allocator.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
@@ -89,6 +90,30 @@ namespace rnd {
 		return fallback;
 	};
 
+	// The bone matrices of the skeletons a packet's draws use, copied out of the ECS during extract. A skeleton
+	// shared by several draws is copied once. Frame temporary: the vectors use the frame allocator.
+	struct bone_palette_t {
+		std::pmr::vector<glm::mat4> matrices{ds::frame_allocator()};
+		// Skeletons copied so far: the address of the source palette and where its copy starts in `matrices`.
+		std::pmr::vector<std::pair<const void*, uint32_t>> copies{ds::frame_allocator()};
+
+		// Call before add() with an upper bound of the matrices that will be added, so the copies never reallocate.
+		void reserve(std::size_t matrix_count) { matrices.reserve(matrix_count); }
+
+		// The index of the first matrix of `palette` in `matrices`, copying it on its first use.
+		uint32_t add(const void* source, std::span<const glm::mat4> palette) {
+			for (const auto& [copied, first] : copies) {
+				if (copied == source) {
+					return first;
+				}
+			}
+			const uint32_t first = static_cast<uint32_t>(matrices.size());
+			matrices.insert(matrices.end(), palette.begin(), palette.end());
+			copies.emplace_back(source, first);
+			return first;
+		}
+	};
+
 	struct draw_call_t {
 		uint64_t     sort_key      = 0;
 		res::tag     geometry_tag;
@@ -100,8 +125,10 @@ namespace rnd {
 		uint32_t     ind_begin     = 0;
 		glm::mat4    transform     = glm::mat4{1.0f};
 
+		// Skinned draws: the skin whose weights the shader reads and where the skeleton's matrices start in the
+		// packet's bone palette.
 		res::tag skinning_tag;
-		const std::vector<glm::mat4>* bone_matrices = nullptr;
+		uint32_t bone_offset = 0;
 	};
 
 	struct debug_line_t {
@@ -127,5 +154,14 @@ namespace rnd {
 		std::pmr::vector<draw_call_t> transparent_draws{ds::frame_allocator()};
 		std::optional<skybox_draw_t> skybox_material;
 		debug_draw_data_t debug_draws;
+		bone_palette_t bones;
+
+		// Where the packet's elements start in the frame's object ring and bone buffer. Set by frame_upload_pass,
+		// which puts the opaque draws first and the transparent ones after them.
+		uint32_t object_base = 0;
+		uint32_t bone_base = 0;
+
+		uint32_t opaque_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(draw); }
+		uint32_t transparent_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(opaque_draws.size() + draw); }
 	};
 }

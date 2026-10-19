@@ -7,6 +7,7 @@ namespace rnd {
 	class ShaderManager;
 	class geom_manager;
 	class skinning_manager;
+	class per_draw_data;
 	struct material_compiler_interface;
 
 	struct frame_context {
@@ -19,6 +20,7 @@ namespace rnd {
 		ShaderManager*    shaders  = nullptr;
 		geom_manager*     geometry = nullptr;
 		skinning_manager* skinning = nullptr; // nullable (optional subsystem)
+		per_draw_data*    draw_data = nullptr;
 
 		// Render-side material compiler (EPIC-49 US-49-5): the scene extractor turns POD
 		// scn::material_desc into rnd::shader_config through this instead of a scene-side method.

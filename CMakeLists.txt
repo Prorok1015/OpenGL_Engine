@@ -103,7 +103,7 @@ target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine 
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
 # linked through render (shared: snk_engine).
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>")
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
