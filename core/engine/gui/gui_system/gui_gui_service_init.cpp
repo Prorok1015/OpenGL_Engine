@@ -4,6 +4,7 @@
 #include <snk/gui/gui_debug_layer.h>
 #include "gui_gl_backend.h"
 #include <snk/gui/gui_platform_backend.h>
+#include <snk/application/app_deterministic_time.h>
 #include <snk/common/engine_assert.h>
 #include <filesystem>
 
@@ -23,6 +24,9 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	ASSERT_MSG(window, "gui_init: no active window");
 	auto& platform = data.construct<::gui::platform_backend>(*window);
 	platform.init();
+	if (data.has_value<app::deterministic_time>()) {
+		platform.set_fixed_delta(data.require<app::deterministic_time>().fixed_dt);
+	}
 	// Added at init time, before the input system listener, so ImGui sees every event first; it
 	// never consumes, routing stays with WantCapture*.
 	wnd_system.add_event_listener(data.require_shared<::gui::platform_backend>());
