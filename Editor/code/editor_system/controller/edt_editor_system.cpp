@@ -1,6 +1,8 @@
 #include "edt_editor_system.h"
 #include <snk/editor/edt_editor_context.h>
+#include <snk/common/engine_assert.h>
 #include "edt_init_helpers.h"
+#include "edt_selection_wiring.h"
 #include "edt_prefab_editor_context.h"
 
 #include "edt_editor_layer.h"
@@ -83,6 +85,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.lvl_manager.lock()->get_level().set_mode(ecs::run_mode::edit);
 	m_state.sfactory  = &data.require<ecs::system_factory>();
 	m_state.assembler = &data.require<scn::ecs_assembler>();
+	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory);
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
@@ -105,11 +108,19 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Wire all controller + panel callbacks
 	init_helpers::wire_controller_callbacks(
-		*this, m_scene_editor, m_world_ctrl, m_level_ctrl, *editor_layer,
-		*m_hierarchy_panel, *m_inspector_panel, *m_viewport_panel, m_state);
+		*this, m_scene_editor, m_world_ctrl, m_level_ctrl, *editor_layer, m_state);
 	init_helpers::wire_hierarchy_callbacks(
 		*m_hierarchy_panel, *m_inspector_panel, *m_viewport_panel,
 		m_scene_editor, m_world_ctrl, m_state);
+	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
+		auto lvl_mgr = m_state.lvl_manager.lock();
+		scn::world* found = lvl_mgr ? lvl_mgr->get_level().find_world(world) : nullptr;
+		return found ? &found->state() : nullptr;
+	});
+	m_selection_connections = wire_selection(
+		m_context->events(), m_context->selection(), m_state, m_scene_editor, m_world_ctrl,
+		*m_hierarchy_panel, *m_inspector_panel,
+		[this](ecs::entity ent) { m_viewport_panel->set_selected_entity(ent); });
 
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
