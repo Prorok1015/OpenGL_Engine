@@ -1,15 +1,20 @@
 #include "snk_common.glsl"
 
+// Set 2: the material. The block is rnd::material_params (rnd_material_params.h), the maps are the three
+// texture slots of rnd_bindings.h; a map the material lacks is a placeholder, only the defines say it is used.
+SNK_UBO(2, 0) uniform MaterialParams
+{
+    vec4 diffuseColor;
+    vec4 emissiveColor;
+    float shininess;
+};
+
 #ifdef USE_TXM_AS_DIFFUSE
-layout(binding = 0) uniform sampler2D diffuseTxm;
+SNK_TEX(2, 0) uniform sampler2D diffuseTxm;
 #endif
 #ifdef USE_SPECULAR_MAP
-layout(binding = 1) uniform sampler2D specularTxm;
+SNK_TEX(2, 1) uniform sampler2D specularTxm;
 #endif
-
-uniform float shininess;
-uniform vec4 diffuseColor;
-uniform vec4 emissiveColor;
 
 vec4 getMaterialColor(vec2 uv)
 {

@@ -65,6 +65,7 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::dynamic_offset_alignment: return "dynamic_offset_alignment";
 	case rule::draw_missing_bind_group: return "draw_missing_bind_group";
 	case rule::budget_bind_groups: return "budget_bind_groups";
+	case rule::binding_offset_alignment: return "binding_offset_alignment";
 	}
 	return "unknown";
 }

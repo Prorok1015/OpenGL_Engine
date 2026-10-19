@@ -805,7 +805,6 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	texture->bind(3);
 	texture->generate_mipmaps();
 	auto shader = drv->create_shader(program());
-	shader->uniform("value", uniform_data{ 1.f });
 	auto array = drv->create_vertex_array();
 	drv->set_line_size(2.f);
 	drv->set_viewport({ 1, 2, 3, 4 });

@@ -102,14 +102,17 @@ add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
-# linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass.
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
+# linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass,
+# rnd_shader_load_tests its internal ShaderManager.
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 # desc_repo_roundtrip_tests loads the descs the repository ships.
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/res")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
+# rnd_render_context_tests reads the sources of the render passes to check what they include.
+target_compile_definitions(unit_tests PRIVATE SNK_RENDER_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/engine/render/render_system")
 
 if(WIN32 AND SNK_ENGINE_SHARED)
 	# Windows has no rpath: snk_engine.dll must sit next to the executable.

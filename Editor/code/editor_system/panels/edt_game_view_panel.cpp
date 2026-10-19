@@ -1,5 +1,6 @@
 #include "edt_game_view_panel.h"
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <imgui.h>

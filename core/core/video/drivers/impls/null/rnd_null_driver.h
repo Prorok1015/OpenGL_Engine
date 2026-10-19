@@ -75,6 +75,7 @@ namespace rnd::driver::null
 		const binding_table& bindings() const override { return per_type_binding_table; }
 		// The largest alignment the GL drivers report, so what the null backend accepts any of them does.
 		std::size_t uniform_offset_alignment() const override { return 256; }
+		std::size_t storage_offset_alignment() const override { return 256; }
 
 		buffer_handle create_buffer(const buffer_desc& desc) override;
 		void destroy_buffer(buffer_handle buffer) override;
