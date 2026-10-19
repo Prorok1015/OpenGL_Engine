@@ -26,7 +26,7 @@ Editor/
     │
     ├── edt_component_renderers/      # per-type ImGui renderers for components
     │   ├── edt_component_renderers.cpp/h
-    │   └── edt_cr_*.cpp              # camera, light, skybox, skin
+    │   └── edt_cr_*.cpp              # skybox, skin, animation (camera and light are drawn from their schemas)
     │
     ├── import/                       # Asset import/export pipeline
     │   ├── edt_model_importer.cpp/h
@@ -70,7 +70,7 @@ Controllers communicate via `std::function` callbacks set by `editor_system` dur
 | Panel | Header | Purpose |
 |-------|--------|---------|
 | `scene_hierarchy_panel` | `edt_scene_hierarchy_panel.h` | Prefab node tree + world tabs; callbacks for create/delete/rename/duplicate/reparent |
-| `inspector_panel` | `edt_inspector_panel.h` | Component property editor; looks renderers up in `inspector_registry`, falls back to generic JSON |
+| `inspector_panel` | `edt_inspector_panel.h` | Component property editor; custom renderer from `inspector_registry`, else the UI generated from the desc schema (`edt_schema_inspector.h`), else generic JSON |
 | `viewport_panel` | `edt_viewport_panel.h` | 3D view + transform gizmo + orientation gizmo; fires `on_transform_committed` |
 | `game_view_panel` | `edt_game_view_panel.h` | "Game view" (View menu; `editor/show_game_view` opens it at startup): camera picker + image of the picked game camera; only that camera gets a viewport (logic in `edt_game_view_logic.h`, unit-tested) |
 | `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |

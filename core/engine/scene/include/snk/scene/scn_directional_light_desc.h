@@ -1,7 +1,11 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
+#include <snk/desc/desc_hints.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/snk_api.h>
+
+#include <boost/describe.hpp>
+#include <glm/glm.hpp>
 
 namespace scn {
 	class SNK_API directional_light_desc : public desc::desc_base
@@ -25,7 +29,19 @@ namespace scn {
 		glm::vec4 diffuse{ 0.5f, 0.5f, 0.5f, 1.f };
 		glm::vec4 ambient{ 0.2f, 0.2f, 0.2f, 1.f };
 		glm::vec4 specular{ 1 };
+
+		BOOST_DESCRIBE_CLASS(directional_light_desc, (), (direction, diffuse, ambient, specular), (), ())
 	};
 
 	void assemble_directional_light(entt::registry& reg, entt::entity e, const directional_light_desc& desc, const std::string_view name);
+}
+
+// The schema of the light: all four fields are vec4 (w of the direction is 0, w of a colour is its alpha).
+namespace desc {
+	template<>
+	inline constexpr auto field_attrs<scn::directional_light_desc> = attrs(
+		f("direction").range(-1, 1, 0.01),
+		f("diffuse").color(),
+		f("ambient").color(),
+		f("specular").color());
 }
