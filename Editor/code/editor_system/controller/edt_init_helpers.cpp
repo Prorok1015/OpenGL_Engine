@@ -23,7 +23,7 @@
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/common/eng_transform_3d.hpp>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/level/scn_level.h>
 #include <snk/scene/level/scn_world.h>
@@ -74,11 +74,11 @@ void setup_viewport_panel(
 {
 	viewport = std::make_shared<viewport_panel>(rnd, gui);
 	viewport->set_registry_getter([&state]() -> entt::registry* {
-		auto lvl_mgr = state.lvl_manager.lock();
+		auto ctx_mgr = state.ctx_manager.lock();
 		const std::string* active = state.active_world_name();
-		if (!lvl_mgr || !active) return nullptr;
+		if (!ctx_mgr || !active) return nullptr;
 		const auto& name = *active;
-		auto& level = lvl_mgr->get_level();
+		auto& level = ctx_mgr->get_level();
 		if (!level.has_world(name)) return nullptr;
 		return &level.get_world(name).state();
 	});
@@ -222,8 +222,8 @@ void wire_controller_callbacks(
 	level_ctrl.on_editor_world_reloaded = [] {
 		egLOG("Editor", "Editor world reloaded");
 	};
-	if (auto lvl_mgr = state.lvl_manager.lock()) {
-		lvl_mgr->set_on_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
+	if (auto ctx_mgr = state.ctx_manager.lock()) {
+		ctx_mgr->set_on_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
 	}
 	level_ctrl.on_need_save_dialog = [&layer, &level_ctrl] {
 		layer.register_implicit("edt/save_level", [&level_ctrl] { return level_ctrl.save_level(); });

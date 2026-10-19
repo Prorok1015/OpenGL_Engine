@@ -1,13 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/scene/scn_primitives.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <cmath>
 #include <set>
 #include <tuple>
 
-// Procedural primitives (pure math), level_manager load/hot-reload policy and the world wrapper
+// Procedural primitives (pure math), context_manager load/hot-reload policy and the world wrapper
 // adapter. All headless.
 
 namespace {
@@ -115,7 +115,7 @@ BOOST_AUTO_TEST_CASE(Sphere_HasNoDegenerateTrianglesAndConsistentWinding)
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// ---------------------------------------------------------------- level_manager + worldwrap_adapter
+// ---------------------------------------------------------------- context_manager + worldwrap_adapter
 
 namespace {
 
@@ -148,17 +148,17 @@ struct manager_fixture : test_util::scene_env
 
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
-	scn::level_manager mgr;
+	scn::context_manager mgr;
 };
 
 }
 
-BOOST_FIXTURE_TEST_SUITE(ScnLevelManagerTests, manager_fixture)
+BOOST_FIXTURE_TEST_SUITE(ScnContextManagerTests, manager_fixture)
 
 BOOST_AUTO_TEST_CASE(Load_BuildsTheLevelFromADescTag)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_TEST(mgr.load(tag));
+	BOOST_TEST(mgr.load_level(tag));
 	auto& lvl = mgr.get_level();
 	BOOST_TEST(lvl.get_world_count() == 2u);
 	BOOST_TEST(lvl.get_tag() == tag);
@@ -167,16 +167,16 @@ BOOST_AUTO_TEST_CASE(Load_BuildsTheLevelFromADescTag)
 
 BOOST_AUTO_TEST_CASE(Load_MissingLevelReturnsFalseAndKeepsCurrentLevel)
 {
-	BOOST_REQUIRE(mgr.load(put("lv.desc", LEVEL_V1)));
-	BOOST_TEST(!mgr.load(tag_of("does_not_exist.desc")));
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	BOOST_TEST(!mgr.load_level(tag_of("does_not_exist.desc")));
 	BOOST_TEST(mgr.get_level().get_world_count() == 2u);
 	BOOST_TEST(has_named(mgr.get_level().get_world("w0").state(), "c1"));
 }
 
 BOOST_AUTO_TEST_CASE(Load_SecondLevelReplacesTheFirst)
 {
-	BOOST_REQUIRE(mgr.load(put("lv.desc", LEVEL_V1)));
-	BOOST_REQUIRE(mgr.load(put("lv3.desc", LEVEL_V3_DIFFERENT_WORLDS)));
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	BOOST_REQUIRE(mgr.load_level(put("lv3.desc", LEVEL_V3_DIFFERENT_WORLDS)));
 	auto& lvl = mgr.get_level();
 	BOOST_TEST(lvl.get_world_count() == 1u);
 	BOOST_TEST(lvl.has_world("only"));
@@ -186,7 +186,7 @@ BOOST_AUTO_TEST_CASE(Load_SecondLevelReplacesTheFirst)
 BOOST_AUTO_TEST_CASE(HotReload_SameWorldNamesOnlyReloadSystemsNotContent)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 
 	put("lv.desc", LEVEL_V2_SAME_NAMES);
 	rs->signal_changed(tag);
@@ -201,7 +201,7 @@ BOOST_AUTO_TEST_CASE(HotReload_SameWorldNamesOnlyReloadSystemsNotContent)
 BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTriggersFullReload)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 
 	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
 	rs->signal_changed(tag);
@@ -217,7 +217,7 @@ BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTriggersFullReload)
 BOOST_AUTO_TEST_CASE(HotReload_FullReloadKeepsRuntimeCreatedWorlds)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	auto& lvl = mgr.get_level();
 	auto& rt_reg = lvl.create_world("rt", lvl.acquire_free_world_id()).state();
 	rt_reg.emplace<scn::name_component>(rt_reg.create(), scn::name_component{ "rt_ent" });
@@ -241,7 +241,7 @@ BOOST_AUTO_TEST_CASE(HotReload_FullReloadKeepsRuntimeCreatedWorlds)
 BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadKeepsRuntimeCreatedWorlds)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	auto& lvl = mgr.get_level();
 	lvl.create_world("rt", lvl.acquire_free_world_id());
 
@@ -260,7 +260,7 @@ BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadKeepsRuntimeCreatedWorlds)
 BOOST_AUTO_TEST_CASE(HotReload_FailedWorldDescKeepsTheCurrentLevelAndSkipsTheCallback)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	auto& lvl = mgr.get_level();
 	lvl.create_world("rt", lvl.acquire_free_world_id());
 
@@ -284,7 +284,7 @@ BOOST_AUTO_TEST_CASE(HotReload_FailedWorldDescKeepsTheCurrentLevelAndSkipsTheCal
 BOOST_AUTO_TEST_CASE(HotReload_DescWorldReplacesRuntimeWorldWithTheSameName)
 {
 	auto tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	auto& lvl = mgr.get_level();
 	lvl.create_world("only", lvl.acquire_free_world_id());
 
@@ -301,8 +301,8 @@ BOOST_AUTO_TEST_CASE(HotReload_ReloadingAnotherLevelStopsWatchingTheOldOne)
 {
 	auto tag1 = put("lv.desc", LEVEL_V1);
 	auto tag3 = put("lv3.desc", LEVEL_V3_DIFFERENT_WORLDS);
-	BOOST_REQUIRE(mgr.load(tag1));
-	BOOST_REQUIRE(mgr.load(tag3));
+	BOOST_REQUIRE(mgr.load_level(tag1));
+	BOOST_REQUIRE(mgr.load_level(tag3));
 
 	// the first level's file changes afterwards: must not tear down the active level
 	put("lv.desc", LEVEL_V2_SAME_NAMES);
@@ -311,6 +311,240 @@ BOOST_AUTO_TEST_CASE(HotReload_ReloadingAnotherLevelStopsWatchingTheOldOne)
 	mgr.update(std::chrono::duration<float>(0.001f));
 	BOOST_TEST(mgr.get_level().has_world("only"));
 	BOOST_TEST(mgr.get_level().get_world_count() == 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// ---------------------------------------------------------------- context sets
+
+BOOST_FIXTURE_TEST_SUITE(ScnContextSetsTests, manager_fixture)
+
+namespace {
+
+std::vector<std::string> names_in(scn::context_manager& mgr, std::string_view set)
+{
+	std::vector<std::string> out;
+	mgr.for_each(set, [&out](scn::world_context& c) { out.emplace_back(c.get_name()); });
+	return out;
+}
+
+float delta_of(scn::world_context& c) { return c.state().ctx().get<scn::delta_time>().dt; }
+
+}
+
+BOOST_AUTO_TEST_CASE(LevelSet_ExistsFromTheStartAndIsTheFacadeTarget)
+{
+	BOOST_REQUIRE(mgr.find_set("level"));
+	BOOST_TEST(mgr.find_set("level")->name() == "level");
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+
+	auto* w0 = mgr.find("level", "w0");
+	BOOST_REQUIRE(w0);
+	BOOST_TEST(w0 == &mgr.get_level().get_world("w0"));
+	BOOST_TEST((w0->kind() == scn::context_kind::level));
+	BOOST_TEST(mgr.get_level().get_tag() == mgr.get_set("level").tag());
+}
+
+BOOST_AUTO_TEST_CASE(Sets_AreIsolatedFromEachOther)
+{
+	mgr.create_set("a");
+	mgr.create_set("b");
+	auto& in_a = mgr.create_context("a", "x", scn::context_kind::runtime);
+	auto& in_b = mgr.create_context("b", "x", scn::context_kind::preview);
+	mgr.create_context("b", "y", scn::context_kind::preview);
+
+	BOOST_TEST(&in_a != &in_b);
+	BOOST_TEST(mgr.find("a", "x") == &in_a);
+	BOOST_TEST(mgr.find("b", "x") == &in_b);
+	BOOST_TEST(mgr.find("a", "y") == nullptr);
+	BOOST_TEST(mgr.find("nope", "x") == nullptr);
+	BOOST_TEST(mgr.get_set("a").size() == 1u);
+	BOOST_TEST(mgr.get_set("b").size() == 2u);
+	BOOST_TEST(mgr.get_level().get_world_count() == 0u);
+
+	mgr.destroy_context("b", "x");
+	BOOST_TEST(mgr.find("b", "x") == nullptr);
+	BOOST_TEST(mgr.find("a", "x") == &in_a);
+
+	mgr.destroy_set("b");
+	BOOST_TEST(mgr.find_set("b") == nullptr);
+	BOOST_TEST(mgr.find("a", "x") == &in_a);
+}
+
+BOOST_AUTO_TEST_CASE(CreateSet_WithATakenNameKeepsTheExistingSet)
+{
+	auto& first = mgr.create_set("a");
+	mgr.create_context("a", "x", scn::context_kind::runtime);
+	BOOST_TEST(&mgr.create_set("a") == &first);
+	BOOST_TEST(first.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ForEach_WalksASetInIdOrderAndAllSetsInCreationOrder)
+{
+	mgr.create_set("a");
+	mgr.create_set("b");
+	mgr.create_context("a", "c", scn::context_kind::runtime);
+	mgr.create_context("a", "a", scn::context_kind::runtime);
+	mgr.create_context("a", "b", scn::context_kind::runtime);
+	mgr.create_context("b", "z", scn::context_kind::runtime);
+	BOOST_TEST((names_in(mgr, "a") == std::vector<std::string>{ "c", "a", "b" }));
+
+	// the freed id is reused, so the new context takes the removed one's place
+	mgr.destroy_context("a", "a");
+	mgr.create_context("a", "d", scn::context_kind::runtime);
+	BOOST_TEST((names_in(mgr, "a") == std::vector<std::string>{ "c", "d", "b" }));
+
+	std::vector<std::string> all;
+	mgr.for_each([&all](scn::world_context& c) { all.emplace_back(c.get_name()); });
+	BOOST_TEST((all == std::vector<std::string>{ "c", "d", "b", "z" }));
+}
+
+BOOST_AUTO_TEST_CASE(SetMode_AppliesToOneSetOnly)
+{
+	mgr.create_set("a");
+	mgr.create_set("b");
+	auto& in_a = mgr.create_context("a", "x", scn::context_kind::runtime);
+	auto& in_b = mgr.create_context("b", "x", scn::context_kind::runtime);
+
+	mgr.set_mode("a", ecs::run_mode::pause);
+	BOOST_TEST((in_a.mode() == ecs::run_mode::pause));
+	BOOST_TEST((in_b.mode() == ecs::run_mode::play));
+
+	mgr.update(std::chrono::duration<float>(0.01f));
+	BOOST_TEST(delta_of(in_a) == 0.0f); // frozen
+	BOOST_TEST(delta_of(in_b) > 0.0f);
+
+	// a context created later joins with its set's mode
+	BOOST_TEST((mgr.create_context("a", "y", scn::context_kind::runtime).mode() == ecs::run_mode::pause));
+	// the level set keeps its own mode
+	BOOST_TEST((mgr.get_level().mode() == ecs::run_mode::play));
+}
+
+BOOST_AUTO_TEST_CASE(SetSeed_AppliesToOneSetOnly)
+{
+	mgr.create_set("a");
+	mgr.create_set("b");
+	auto& in_a = mgr.create_context("a", "x", scn::context_kind::runtime);
+	auto& in_b = mgr.create_context("b", "x", scn::context_kind::runtime);
+
+	mgr.set_seed("a", 1234);
+	BOOST_TEST(in_a.state().ctx().get<ecs::rng>().seed() == ecs::derive_seed(1234, in_a.get_id()));
+	BOOST_TEST(in_b.state().ctx().get<ecs::rng>().seed() == ecs::derive_seed(ecs::rng::default_seed, in_b.get_id()));
+	BOOST_TEST(mgr.get_set("a").seed() == 1234u);
+	BOOST_TEST(mgr.get_set("b").seed() == ecs::rng::default_seed);
+}
+
+BOOST_AUTO_TEST_CASE(Update_SkipsAnInactiveSet)
+{
+	mgr.create_set("a");
+	auto& in_a = mgr.create_context("a", "x", scn::context_kind::runtime);
+	mgr.get_set("a").set_active(false);
+	mgr.update(std::chrono::duration<float>(0.01f));
+	BOOST_TEST(delta_of(in_a) == 0.0f);
+
+	mgr.get_set("a").set_active(true);
+	mgr.update(std::chrono::duration<float>(0.01f));
+	BOOST_TEST(delta_of(in_a) > 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(Addresses_StayStableAcrossCreateAndDestroy)
+{
+	mgr.create_set("a");
+	auto& first = mgr.create_context("a", "first", scn::context_kind::runtime);
+	auto* registry = &first.state();
+	mgr.create_context("a", "victim", scn::context_kind::runtime);
+	std::vector<scn::world_context*> more;
+	for (int i = 0; i < 64; ++i) {
+		more.push_back(&mgr.create_context("a", "ctx" + std::to_string(i), scn::context_kind::runtime));
+	}
+	mgr.destroy_context("a", "victim");
+	mgr.create_context("a", "late", scn::context_kind::runtime);
+
+	BOOST_TEST(mgr.find("a", "first") == &first);
+	BOOST_TEST(&first.state() == registry);
+	for (int i = 0; i < 64; ++i) {
+		BOOST_TEST(mgr.find("a", "ctx" + std::to_string(i)) == more[i]);
+	}
+	// sets keep their address as well
+	auto* set_a = &mgr.get_set("a");
+	mgr.create_set("b");
+	mgr.create_set("c");
+	mgr.destroy_set("b");
+	BOOST_TEST(&mgr.get_set("a") == set_a);
+}
+
+BOOST_AUTO_TEST_CASE(CreateContext_BuildsThePlanFromTheGivenSystems)
+{
+	mgr.create_set("a");
+	auto& context = mgr.create_context("a", "x", scn::context_kind::runtime, {});
+	BOOST_TEST(context.plan() != nullptr); // an empty list still gets a plan
+	BOOST_TEST(mgr.get_set("a").plan_of(context.get_id()) == context.plan());
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTouchesOnlyLevelKindContexts)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+
+	auto& rt = mgr.create_context("level", "rt", scn::context_kind::runtime);
+	rt.state().emplace<scn::name_component>(rt.state().create(), scn::name_component{ "rt_ent" });
+	mgr.create_set("preview:p");
+	auto& preview = mgr.create_context("preview:p", "w0", scn::context_kind::preview); // same name as a level world
+	preview.state().emplace<scn::name_component>(preview.state().create(), scn::name_component{ "pv_ent" });
+
+	put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS);
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(mgr.find("level", "w0") == nullptr);
+	BOOST_TEST(mgr.find("level", "w1") == nullptr);
+	BOOST_REQUIRE(mgr.find("level", "only"));
+	BOOST_TEST((mgr.find("level", "only")->kind() == scn::context_kind::level));
+	BOOST_TEST(mgr.find("level", "rt") == &rt);
+	BOOST_TEST(has_named(rt.state(), "rt_ent"));
+	// the other set is not part of the level: neither compared nor rebuilt
+	BOOST_TEST(mgr.find("preview:p", "w0") == &preview);
+	BOOST_TEST(has_named(preview.state(), "pv_ent"));
+	BOOST_TEST(mgr.get_set("preview:p").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_ReorderedWorldsForceAFullReloadSoIdsFollowTheDesc)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+	BOOST_REQUIRE(mgr.find("level", "w0")->get_id() < mgr.find("level", "w1")->get_id());
+
+	put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w1","systems":[]},
+		{"__type":"world_desc","name":"w0","systems":[],"children":{"c2":{"components":{"stat":{"__type":"stat_desc","hp":2}}}}}]})");
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(has_named(mgr.get_level().get_world("w0").state(), "c2")); // rebuilt, not only systems
+	BOOST_TEST(mgr.find("level", "w1")->get_id() < mgr.find("level", "w0")->get_id());
+}
+
+BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadIgnoresContextsOfOtherKinds)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+	mgr.create_context("level", "rt", scn::context_kind::runtime);
+	mgr.create_set("preview:p");
+	mgr.create_context("preview:p", "pv", scn::context_kind::preview);
+
+	int reloads = 0;
+	mgr.set_on_reload([&reloads] { ++reloads; });
+	put("lv.desc", LEVEL_V2_SAME_NAMES);
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(reloads == 1);
+	BOOST_TEST(has_named(mgr.get_level().get_world("w0").state(), "c1")); // not a full reload
+	BOOST_TEST(mgr.get_level().get_world_count() == 3u);
+	BOOST_TEST(mgr.get_set("preview:p").size() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

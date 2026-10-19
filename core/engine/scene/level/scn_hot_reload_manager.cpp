@@ -80,7 +80,7 @@ namespace scn {
 		if (tags_to_reload.empty()) return;
 
 		for (const auto& tag : tags_to_reload) {
-			// External callbacks (e.g. level_manager reload) handle their own typed load.
+			// External callbacks (e.g. context_manager level reload) handle their own typed load.
 			if (m_external_watched_tags.contains(tag)) {
 				m_external_watched_tags.at(tag)(tag);
 				continue;

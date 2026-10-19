@@ -15,6 +15,9 @@
 
 namespace scn
 {
+	// Where a context came from; a reload of the level touches only `level` contexts.
+	enum class context_kind : uint8_t { level, runtime, preview, play };
+
 	// One simulation unit: a single world with its own registry, system list, execution plan,
 	// fixed stepper and run mode. The owner (scn::level for now) decides when its phases run.
 	class SNK_API world_context
@@ -31,6 +34,12 @@ namespace scn
 		entt::registry const& state() const { return m_state; }
 		uint32_t get_id() const { return m_id; }
 		const std::string_view get_name() const { return m_name; }
+
+		context_kind kind() const { return m_kind; }
+		void set_kind(context_kind kind) { m_kind = kind; }
+		// Whether the render extractor takes this context's cameras.
+		bool extract() const { return m_extract; }
+		void set_extract(bool extract) { m_extract = extract; }
 
 		// Reseeds the context's `ecs::rng` from the base seed and its id.
 		void seed(uint64_t base_seed);
@@ -70,6 +79,8 @@ namespace scn
 	private:
 		uint32_t m_id;
 		std::string m_name;
+		context_kind m_kind = context_kind::runtime;
+		bool m_extract = true;
 		entt::registry m_state;
 
 		std::optional<std::vector<std::string>> m_systems;

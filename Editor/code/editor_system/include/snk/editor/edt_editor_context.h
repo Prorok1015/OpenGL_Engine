@@ -6,7 +6,7 @@ namespace desc { class desc_system; }
 namespace res { class resource_system; }
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
-namespace scn { class ecs_assembler; }
+namespace scn { class ecs_assembler; class context_manager; }
 namespace ecs { class system_factory; }
 
 namespace edt
@@ -18,7 +18,8 @@ namespace edt
 	{
 	public:
 		editor_context(desc::desc_system& descs, res::resource_system& resources, rnd::render_system& render,
-			gui::gui_system& gui, scn::ecs_assembler& assembler, ecs::system_factory& systems);
+			gui::gui_system& gui, scn::ecs_assembler& assembler, ecs::system_factory& systems,
+			scn::context_manager& contexts);
 		~editor_context();
 		editor_context(const editor_context&) = delete;
 		editor_context& operator=(const editor_context&) = delete;
@@ -29,6 +30,7 @@ namespace edt
 		gui::gui_system& gui() const { return m_gui; }
 		scn::ecs_assembler& assembler() const { return m_assembler; }
 		ecs::system_factory& systems() const { return m_systems; }
+		scn::context_manager& contexts() const { return m_contexts; }
 
 		editor_events& events() { return m_events; }
 		const editor_events& events() const { return m_events; }
@@ -42,6 +44,7 @@ namespace edt
 		gui::gui_system& m_gui;
 		scn::ecs_assembler& m_assembler;
 		ecs::system_factory& m_systems;
+		scn::context_manager& m_contexts;
 		editor_events m_events;
 		selection_service m_selection{ m_events };
 	};

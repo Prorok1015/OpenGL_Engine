@@ -41,13 +41,13 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
     ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
     ASSERT_MSG(context.shaders, "frame_context shader manager not injected");
-    auto& level = m_level_manager.get_level();
     m_retired_materials.clear();
     auto& variants = context.shaders->variants();
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
 
-    level.for_each_world([&](scn::world& w) {
+    m_contexts.for_each([&](scn::world_context& w) {
+        if (!w.extract()) return;
         auto& reg = w.state();
 
         // Collect per-world lights
