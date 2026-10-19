@@ -9,6 +9,8 @@
 #include "edt_level_controller.h"
 #include "edt_init_helpers.h"
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/editor/edt_editor_events.h>
+#include <vector>
 
 // Forward declarations — full types only needed in .cpp
 namespace desc { class desc_system; class desc_base; }
@@ -41,7 +43,7 @@ namespace edt {
 	{
 		friend void init_helpers::wire_controller_callbacks(
 			editor_system&, scene_editor&, world_controller&, level_controller&,
-			editor_layer&, scene_hierarchy_panel&, inspector_panel&, viewport_panel&, shared_state&);
+			editor_layer&, shared_state&);
 		friend void init_helpers::setup_viewport_panel(
 			std::shared_ptr<viewport_panel>&, std::shared_ptr<input_manager>&,
 			std::shared_ptr<inp::ecs_input_manager>&, editor_system&, shared_state&,
@@ -125,6 +127,9 @@ namespace edt {
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
+
+		// Selection routing between the panels; last member, so it is dropped before the panels are.
+		std::vector<connection> m_selection_connections;
 
 	};
 }

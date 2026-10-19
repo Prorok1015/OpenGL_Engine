@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_editor_events.h"
+#include "edt_selection_service.h"
 
 namespace desc { class desc_system; }
 namespace res { class resource_system; }
@@ -12,7 +13,7 @@ namespace edt
 {
 	// Facade over the engine services and the editor's own services. Created by editor_system::init and
 	// registered in ds::app_data_storage (data.require<edt::editor_context>()). Engine services are
-	// references and are not owned. Registries, documents and selection join it in later steps.
+	// references and are not owned. Registries and documents join it in later steps.
 	class editor_context
 	{
 	public:
@@ -31,6 +32,8 @@ namespace edt
 
 		editor_events& events() { return m_events; }
 		const editor_events& events() const { return m_events; }
+		selection_service& selection() { return m_selection; }
+		const selection_service& selection() const { return m_selection; }
 
 	private:
 		desc::desc_system& m_descs;
@@ -40,5 +43,6 @@ namespace edt
 		scn::ecs_assembler& m_assembler;
 		ecs::system_factory& m_systems;
 		editor_events m_events;
+		selection_service m_selection{ m_events };
 	};
 }

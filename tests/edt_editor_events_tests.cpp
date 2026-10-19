@@ -27,7 +27,7 @@ BOOST_AUTO_TEST_CASE(DeliversArguments)
 BOOST_AUTO_TEST_CASE(EmitWithoutSubscribersIsNoop)
 {
 	edt::editor_events events;
-	events.selection_changed.emit();
+	events.selection_changed.emit(edt::selection{});
 	events.level_reloaded.emit();
 	BOOST_CHECK_EQUAL(events.selection_changed.subscriber_count(), 0u);
 }

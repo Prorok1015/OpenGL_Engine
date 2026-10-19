@@ -96,18 +96,6 @@ void setup_viewport_panel(
 	});
 }
 
-static ecs::entity find_entity_by_path(shared_state& state, std::span<const uint64_t> path)
-{
-	auto lvl_mgr = state.lvl_manager.lock();
-	const std::string* active = state.active_world_name();
-	if (!lvl_mgr || path.empty() || !active)
-		return entt::null;
-	scn::world* world = lvl_mgr->get_level().find_world(*active);
-	if (!world)
-		return entt::null;
-	return scn::node_index::get(world->state()).find(path);
-}
-
 void wire_hierarchy_callbacks(
 	scene_hierarchy_panel& hierarchy,
 	inspector_panel& inspector,
@@ -116,14 +104,6 @@ void wire_hierarchy_callbacks(
 	world_controller& world_ctrl,
 	shared_state& state)
 {
-	hierarchy.set_on_node_selected([&](scn::prefab_desc::prefab_node* node) {
-		inspector.set_selected_node(node);
-		inspector.set_override_target(hierarchy.get_selected_owner(), hierarchy.get_selected_target());
-		ecs::entity found = entt::null;
-		if (node) found = find_entity_by_path(state, hierarchy.get_selected_path());
-		viewport.set_selected_entity(found);
-	});
-
 	hierarchy.set_on_world_changed([&](int idx) {
 		// A refused switch leaves the old world active: resync the tab and the panels to it.
 		if (!world_ctrl.switch_to_world(idx) && world_ctrl.on_world_switched)
@@ -230,35 +210,14 @@ void wire_controller_callbacks(
 	world_controller& world_ctrl,
 	level_controller& level_ctrl,
 	editor_layer& layer,
-	scene_hierarchy_panel& hierarchy,
-	inspector_panel& inspector,
-	viewport_panel& viewport,
 	shared_state& state)
 {
-	scene_ed.on_before_modify = [&hierarchy, &inspector] {
-		hierarchy.set_selected_node(nullptr);
-		inspector.set_selected_node(nullptr);
-	};
-	scene_ed.on_after_push = [&hierarchy, &inspector, &viewport, &state] {
-		inspector.invalidate_view(); // the desc was rewritten: instance expansions are stale
-		if (!hierarchy.get_selected_node()) {
-			viewport.set_selected_entity(entt::null);
-			return;
-		}
-		viewport.set_selected_entity(find_entity_by_path(state, hierarchy.get_selected_path()));
-	};
+	// on_before_modify, on_after_push and on_world_switched go through the selection service (edt_selection_wiring.cpp).
 	scene_ed.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	scene_ed.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
 
 	world_ctrl.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	world_ctrl.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
-	world_ctrl.on_world_switched = [&hierarchy, &inspector, &viewport, &state](int idx) {
-		hierarchy.set_world_desc(state.active_world_desc());
-		hierarchy.set_world_names(state.world_names, idx);
-		inspector.set_selected_node(nullptr);
-		hierarchy.set_selected_node(nullptr);
-		viewport.set_selected_entity(entt::null);
-	};
 
 	level_ctrl.on_editor_world_reloaded = [] {
 		egLOG("Editor", "Editor world reloaded");
