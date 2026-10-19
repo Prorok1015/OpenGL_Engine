@@ -147,8 +147,12 @@ BOOST_AUTO_TEST_CASE(ParentGuid_IsNotInheritedByChild)
 	put("parent.desc", R"({"__type":"camera_desc","__guid":"11111111-2222-4333-8444-555555555555","fov":30.0})");
 
 	const auto tag = res_tag();
-	auto child = std::dynamic_pointer_cast<desc::desc_base>(
-		adapter.deserialize(tag, to_bytes(R"({"__type":"camera_desc","__parent":"memory://t/parent.desc"})")));
+	const auto bytes = to_bytes(R"({"__type":"camera_desc","__parent":"memory://t/parent.desc"})");
+	const auto declared = adapter.collect_dependencies(tag, bytes);
+	BOOST_REQUIRE(declared.size() == 1u);
+	res::res_deps deps;
+	deps.add(declared[0], rs->require_sync<desc::desc_base>(declared[0].target).get_sync());
+	auto child = std::dynamic_pointer_cast<desc::desc_base>(adapter.deserialize(tag, bytes, deps));
 	BOOST_REQUIRE(child);
 	BOOST_TEST(child->get_guid().empty());
 
