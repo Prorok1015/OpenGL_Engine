@@ -7,6 +7,7 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <snk/ecs/ecs_random.hpp>
 #include <snk/ecs/ecs_entity_changer.hpp>
 #include <snk/scene/scn_model.h>
@@ -549,11 +550,54 @@ BOOST_AUTO_TEST_CASE(GamePhaseAddedBetweenPlans_EachSystemRunsInItsOwnPhase)
 	lvl.add_systems(w1, { "f1", "u1", "early1" }, sf);
 
 	lvl.update(std::chrono::duration<float>(0.04f)); // two fixed steps
-	BOOST_TEST(g_log == (names{ "P1", "F0", "F1", "F0", "F1", "U0", "U1" }), boost::test_tools::per_element());
+	BOOST_TEST(g_log == (names{ "F0", "F0", "U0", "P1", "F1", "F1", "U1" }), boost::test_tools::per_element());
 
 	g_log.clear();
 	lvl.update(one_frame); // no step: the fixed systems stay quiet, the game phase runs once
-	BOOST_TEST(g_log == (names{ "P1", "U0", "U1" }), boost::test_tools::per_element());
+	BOOST_TEST(g_log == (names{ "U0", "P1", "U1" }), boost::test_tools::per_element());
+}
+
+// A context plays all its phases before the next context starts its first one.
+BOOST_AUTO_TEST_CASE(Contexts_RunWholeContextEach)
+{
+	auto tagged = [&](const char* name, const char* tag, ecs::phase_id phase) {
+		sf.register_system<&stateful_sys::run, stateful_sys>(name, { .phase = phase }, std::string{ tag });
+	};
+	tagged("a1", "A:p1", ecs::phase::input);
+	tagged("a2", "A:p2", ecs::phase::update);
+	tagged("b1", "B:p1", ecs::phase::input);
+	tagged("b2", "B:p2", ecs::phase::update);
+
+	scn::context_set lvl("level", nullptr);
+	auto& b = lvl.create_context("b", 1);
+	lvl.add_systems(b, { "b2", "b1" }, sf);
+	auto& a = lvl.create_context("a", 0);
+	lvl.add_systems(a, { "a2", "a1" }, sf);
+
+	lvl.update(one_frame);
+	BOOST_TEST(g_log == (names{ "A:p1", "A:p2", "B:p1", "B:p2" }), boost::test_tools::per_element());
+}
+
+// Each context plays its own number of fixed steps inside its turn.
+BOOST_AUTO_TEST_CASE(Contexts_FixedStepsAreEachContextsOwn)
+{
+	auto tagged = [&](const char* name, const char* tag, ecs::phase_id phase) {
+		sf.register_system<&stateful_sys::run, stateful_sys>(name, { .phase = phase }, std::string{ tag });
+	};
+	tagged("fa", "A:F", ecs::phase::fixed_update);
+	tagged("ua", "A:U", ecs::phase::update);
+	tagged("fb", "B:F", ecs::phase::fixed_update);
+	tagged("ub", "B:U", ecs::phase::update);
+
+	scn::context_set lvl("level", nullptr);
+	auto& a = lvl.create_context("a", 0);
+	lvl.add_systems(a, { "fa", "ua" }, sf);
+	auto& b = lvl.create_context("b", 1);
+	lvl.add_systems(b, { "fb", "ub" }, sf);
+	b.set_stepper(ecs::fixed_stepper(1.0 / 30.0)); // 0.04 s: two steps for a (1/60), one for b
+
+	lvl.update(std::chrono::duration<float>(0.04f));
+	BOOST_TEST(g_log == (names{ "A:F", "A:F", "A:U", "B:F", "B:U" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(RebuildAllPlans_PicksUpAGamePhaseAddedAfterLoad)
