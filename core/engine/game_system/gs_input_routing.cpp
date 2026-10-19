@@ -39,7 +39,7 @@ namespace
 
 	// Mouse and keyboard parts of the full state are given out separately: a context may take the
 	// keyboard of a focused text field while the mouse belongs to someone else.
-	void write(const entry& e, bool mouse, bool keyboard)
+	void write(const entry& e, bool mouse, bool keyboard, bool focused)
 	{
 		inp::input_state state = e.routed.state;
 		const inp::input_state neutral = inp::input_router::neutral(state);
@@ -54,7 +54,7 @@ namespace
 		}
 		auto& ctx = e.context->state().ctx();
 		ctx.insert_or_assign(state);
-		ctx.insert_or_assign(inp::input_focus{ e.routed.focused && (mouse || keyboard) });
+		ctx.insert_or_assign(inp::input_focus{ focused });
 	}
 
 	void route_set(inp::input_router& router, scn::context_set& set)
@@ -104,7 +104,7 @@ namespace
 
 		for (const auto& e : entries) {
 			if (!e.routed.focused) {
-				write(e, false, false);
+				write(e, false, false, false);
 				continue;
 			}
 			bool mouse = true;
@@ -116,7 +116,8 @@ namespace
 				mouse = &e == hit;
 			}
 			const bool keyboard = keyboard_owner ? &e == keyboard_owner : true;
-			write(e, mouse, keyboard);
+			// input_focus gates the mouse-driven camera: it follows the mouse, or an explicit keyboard owner
+			write(e, mouse, keyboard, mouse || (keyboard_owner && keyboard));
 		}
 	}
 }
