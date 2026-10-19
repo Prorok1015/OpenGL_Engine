@@ -65,12 +65,13 @@ namespace edt::game_view
 		}
 	}
 
-	void apply_target_viewports(entt::registry& reg, const res::tag& target, glm::ivec2 size)
+	void apply_target_viewports(entt::registry& reg, const res::tag& target, glm::ivec2 size, entt::entity only)
 	{
 		const bool usable = target.is_valid() && size.x > 0 && size.y > 0;
 		for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
 			if (!is_game_camera(cam)) continue;
-			cam.m_viewport.size = (usable && cam.color_targets[0] == target) ? size : glm::ivec2{ 0 };
+			const bool allowed = only == entt::null || ent == only;
+			cam.m_viewport.size = (usable && allowed && cam.color_targets[0] == target) ? size : glm::ivec2{ 0 };
 		}
 	}
 

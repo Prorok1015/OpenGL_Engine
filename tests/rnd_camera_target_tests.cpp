@@ -196,4 +196,37 @@ BOOST_AUTO_TEST_CASE(OnlyTheTargetOfADestroyedCameraIsReleased) {
 	BOOST_TEST(redirector.tracked_count() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(SharedTargetStaysAliveWhileOneCameraOfItRemains) {
+	entt::registry reg;
+	const auto keep = reg.create();
+	const auto drop = reg.create();
+	reg.emplace<scn::camera_component>(keep);
+	reg.emplace<scn::camera_component>(drop);
+	edt::camera_redirector redirector;
+	std::vector<res::tag> released;
+	const auto release = [&released](const res::tag& tag) { released.push_back(tag); };
+
+	redirector.begin_frame();
+	redirector.redirect(reg, "w0");
+	redirector.end_frame(release);
+	const res::tag shared = reg.get<scn::camera_component>(keep).color_targets[0];
+	BOOST_REQUIRE((reg.get<scn::camera_component>(drop).color_targets[0] == shared));
+	reg.destroy(drop);
+
+	// the other camera still draws into the target: it must not be released
+	redirector.begin_frame();
+	redirector.redirect(reg, "w0");
+	redirector.end_frame(release);
+	BOOST_TEST(released.empty());
+	BOOST_TEST(redirector.tracked_count() == 1u);
+
+	// once the last camera is gone, the target is released
+	reg.destroy(keep);
+	redirector.begin_frame();
+	redirector.redirect(reg, "w0");
+	redirector.end_frame(release);
+	BOOST_REQUIRE(released.size() == 1u);
+	BOOST_TEST((released[0] == shared));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

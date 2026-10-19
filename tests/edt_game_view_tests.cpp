@@ -186,6 +186,50 @@ BOOST_AUTO_TEST_CASE(EveryCameraOfThePickedTargetGetsTheViewportAcrossWorlds)
 	BOOST_TEST((viewport_of(overlay, cam_overlay) == glm::ivec2{ 0, 0 }));
 }
 
+BOOST_AUTO_TEST_CASE(OnlyThePickedCameraOfItsOwnWorldGetsTheViewport)
+{
+	// "Game Camera" and "Cam B" of one world share one target; the picker decides which one is shown.
+	entt::registry reg;
+	const auto a = add_game_camera(reg, "Game Camera");
+	const auto b = add_game_camera(reg, "Cam B");
+	redirect(reg);
+	const res::tag target = reg.get<scn::camera_component>(a).color_targets[0];
+	BOOST_REQUIRE((reg.get<scn::camera_component>(b).color_targets[0] == target));
+
+	edt::game_view::apply_target_viewports(reg, target, { 640, 360 }, b);
+	BOOST_TEST((viewport_of(reg, a) == glm::ivec2{ 0, 0 }));
+	BOOST_TEST((viewport_of(reg, b) == glm::ivec2{ 640, 360 }));
+
+	// picking the other one hands the viewport over
+	edt::game_view::apply_target_viewports(reg, target, { 800, 600 }, a);
+	BOOST_TEST((viewport_of(reg, a) == glm::ivec2{ 800, 600 }));
+	BOOST_TEST((viewport_of(reg, b) == glm::ivec2{ 0, 0 }));
+}
+
+BOOST_AUTO_TEST_CASE(PickedWorldHasOnePickedCameraAndOtherWorldsCompositeOnTheSameTarget)
+{
+	entt::registry world_3d;
+	entt::registry overlay;
+	const auto picked = add_game_camera(world_3d, "Game Camera");
+	const auto not_picked = add_game_camera(world_3d, "Cam B");
+	const auto overlay_a = add_game_camera(overlay, "Overlay A");
+	const auto overlay_b = add_game_camera(overlay, "Overlay B");
+	edt::camera_redirector redirector;
+	redirector.begin_frame();
+	redirector.redirect(world_3d, "level");
+	redirector.redirect(overlay, "level");
+	redirector.end_frame({});
+
+	const res::tag target = world_3d.get<scn::camera_component>(picked).color_targets[0];
+	// what the panel does: the picked world gets the picked entity, every other world gets none
+	edt::game_view::apply_target_viewports(world_3d, target, { 800, 450 }, picked);
+	edt::game_view::apply_target_viewports(overlay, target, { 800, 450 });
+	BOOST_TEST((viewport_of(world_3d, picked) == glm::ivec2{ 800, 450 }));
+	BOOST_TEST((viewport_of(world_3d, not_picked) == glm::ivec2{ 0, 0 }));
+	BOOST_TEST((viewport_of(overlay, overlay_a) == glm::ivec2{ 800, 450 }));
+	BOOST_TEST((viewport_of(overlay, overlay_b) == glm::ivec2{ 800, 450 }));
+}
+
 BOOST_AUTO_TEST_CASE(ClosingThePanelTurnsEveryGameCameraOff)
 {
 	entt::registry reg;

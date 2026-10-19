@@ -510,6 +510,20 @@ BOOST_AUTO_TEST_CASE(CameraDesc_RenderLayersRoundTripAndTheDefaultsAreNotWritten
 	BOOST_TEST(ser(none).at("clear").as_string() == "none");
 }
 
+BOOST_AUTO_TEST_CASE(CameraDesc_NonIntegerLayerIsIgnoredAndOutOfRangeIsClamped)
+{
+	scn::camera_desc c;
+	c.deserialize(*descs, parse(R"({"layer":2})"));
+	c.deserialize(*descs, parse(R"({"layer":1.5})"));
+	BOOST_TEST(c.layer() == 2);
+	c.deserialize(*descs, parse(R"({"layer":100})"));
+	BOOST_TEST(c.layer() == 16);
+	c.deserialize(*descs, parse(R"({"layer":-100})"));
+	BOOST_TEST(c.layer() == -16);
+	c.deserialize(*descs, parse(R"({"layer":18446744073709551615})"));
+	BOOST_TEST(c.layer() == 16);
+}
+
 BOOST_AUTO_TEST_CASE(CameraDesc_UnknownLayerWordsKeepTheCurrentValues)
 {
 	scn::camera_desc c;

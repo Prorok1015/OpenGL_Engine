@@ -90,6 +90,7 @@ for _ in $(seq 1 200); do
 	xdotool getdisplaygeometry >/dev/null 2>&1 && break
 	sleep 0.1
 done
+xdotool getdisplaygeometry >/dev/null 2>&1 || { echo "error: Xvfb not ready on $DISPLAY after 20 s" >&2; exit 1; }
 
 mkdir -p "$(dirname "$SHOT")"
 LOG="$(dirname "$SHOT")/editor.log"

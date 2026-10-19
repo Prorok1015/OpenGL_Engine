@@ -3,7 +3,10 @@
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
+#include <algorithm>
+#include <cstdint>
 #include <string_view>
+#include <snk/common/logger/engine_log.h>
 
 namespace {
 	// as_double() throws on JSON integers (`"fov": 60`); to_number accepts any numeric kind.
@@ -85,9 +88,17 @@ void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::o
 	if (data.contains("tp_reveal_target"))
 		m_tp_reveal_target = read_rt_tag(data.at("tp_reveal_target"));
 
-	// Render layers (W4, #272). A number that is not an integer is ignored like an unknown word.
-	if (auto* layer = data.if_contains("layer"); layer && layer->is_number())
-		m_layer = static_cast<int>(layer->to_number<std::int64_t>());
+	// Render layers (W4, #272). A value that is not an integer is ignored with a warning like an unknown word;
+	// an integer outside the range of the inspector (+-16) is clamped to it.
+	if (auto* layer = data.if_contains("layer")) {
+		constexpr std::int64_t max_layer = 16;
+		if (const auto* i = layer->if_int64())
+			m_layer = static_cast<int>(std::clamp<std::int64_t>(*i, -max_layer, max_layer));
+		else if (layer->is_uint64())
+			m_layer = static_cast<int>(max_layer);
+		else
+			egLOG_WARN("scene/camera", "camera layer must be an integer, got '{}'; keeping {}", json::serialize(*layer), m_layer);
+	}
 	if (auto* clear = data.if_contains("clear"))
 		read_clear(*clear, m_clear);
 	if (auto* projection = data.if_contains("projection"))

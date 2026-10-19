@@ -45,7 +45,7 @@ namespace edt
 		rnd::render_system& m_rnd;
 		gui::gui_system&    m_gui;
 		// Gives the game cameras that draw into `target` (in the registry of any world) `size`, switches the others off.
-		void apply_viewports_to_all(const res::tag& target, glm::ivec2 size);
+		void apply_viewports_to_all(const res::tag& target, glm::ivec2 size, entt::entity picked = entt::null);
 
 		std::function<entt::registry*()> m_get_registry;
 		std::function<void(const registry_visitor&)> m_for_each_registry;

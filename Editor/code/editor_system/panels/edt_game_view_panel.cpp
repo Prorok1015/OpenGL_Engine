@@ -16,12 +16,16 @@ namespace edt
 		m_open = false;
 	}
 
-	void game_view_panel::apply_viewports_to_all(const res::tag& target, glm::ivec2 size)
+	void game_view_panel::apply_viewports_to_all(const res::tag& target, glm::ivec2 size, entt::entity picked)
 	{
+		// Only the picked camera draws in its own world; the other worlds' cameras on the same target composite on top.
+		entt::registry* own = m_get_registry ? m_get_registry() : nullptr;
 		if (m_for_each_registry) {
-			m_for_each_registry([&](entt::registry& reg) { game_view::apply_target_viewports(reg, target, size); });
-		} else if (m_get_registry) {
-			if (entt::registry* reg = m_get_registry()) game_view::apply_target_viewports(*reg, target, size);
+			m_for_each_registry([&](entt::registry& reg) {
+				game_view::apply_target_viewports(reg, target, size, &reg == own ? picked : entt::null);
+			});
+		} else if (own) {
+			game_view::apply_target_viewports(*own, target, size, picked);
 		}
 	}
 
@@ -68,7 +72,7 @@ namespace edt
 		const entt::entity picked = m_selection.selected();
 		const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
 		const auto& cam = reg->get<scn::camera_component>(picked);
-		apply_viewports_to_all(cam.color_targets[0], edt::to_framebuffer_size({ avail.x, avail.y }, { fb_scale.x, fb_scale.y }));
+		apply_viewports_to_all(cam.color_targets[0], edt::to_framebuffer_size({ avail.x, avail.y }, { fb_scale.x, fb_scale.y }), picked);
 
 		auto* texture = m_rnd.get_texture_manager().find(cam.color_targets[0]);
 		if (!texture || cam.m_viewport.size.x <= 0 || cam.m_viewport.size.y <= 0) {

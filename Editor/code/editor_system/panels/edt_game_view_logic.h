@@ -44,7 +44,10 @@ namespace edt::game_view
 	// The cameras that draw into `target` (the game cameras of one set share a texture, see camera_redirector) get
 	// `size` as viewport, every other game camera of `reg` is set back to a zero viewport. An invalid `target` or a
 	// non-positive size turns all game cameras off. Call it for the registry of every world.
-	void apply_target_viewports(entt::registry& reg, const res::tag& target, glm::ivec2 size);
+	// `only` (the picked camera, for the picked world's registry): when not null, no other camera of `reg` gets a
+	// viewport even when it shares the target, so the picker decides what that world shows. The cameras of the other
+	// worlds are visited with a null `only`: they composite onto the picked camera's texture by layer.
+	void apply_target_viewports(entt::registry& reg, const res::tag& target, glm::ivec2 size, entt::entity only = entt::null);
 
 	// Largest size with the aspect of `content` that fits into `avail` (zero when either is empty).
 	glm::vec2 fit_letterbox(glm::vec2 avail, glm::vec2 content);
