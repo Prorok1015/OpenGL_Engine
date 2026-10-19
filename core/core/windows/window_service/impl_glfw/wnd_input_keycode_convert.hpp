@@ -1,10 +1,12 @@
 #pragma once
+#include <optional>
+
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <GLFW/glfw3.h>
 
 namespace wnd::convert
 {
-    core::inp::KEY_ACTION to_action(int action)
+    inline core::inp::KEY_ACTION to_action(int action)
     {
         switch (action)
         {
@@ -16,7 +18,7 @@ namespace wnd::convert
         return core::inp::KEY_ACTION::NONE;
     }
 
-    int to_glfw_keycode(core::inp::KEYBOARD_BUTTONS button) {
+    inline int to_glfw_keycode(core::inp::KEYBOARD_BUTTONS button) {
         switch (button) {
         case core::inp::KEYBOARD_BUTTONS::SPACE: return GLFW_KEY_SPACE;
         case core::inp::KEYBOARD_BUTTONS::APOSTROPHE: return GLFW_KEY_APOSTROPHE;
@@ -132,12 +134,18 @@ namespace wnd::convert
         case core::inp::KEYBOARD_BUTTONS::RIGHT_ALT: return GLFW_KEY_RIGHT_ALT;
         case core::inp::KEYBOARD_BUTTONS::RIGHT_SUPER: return GLFW_KEY_RIGHT_SUPER;
         case core::inp::KEYBOARD_BUTTONS::MENU: return GLFW_KEY_MENU;
+        case core::inp::KEYBOARD_BUTTONS::GRAVE_ACCENT: return GLFW_KEY_GRAVE_ACCENT;
+        case core::inp::KEYBOARD_BUTTONS::LEFT_BRACKET: return GLFW_KEY_LEFT_BRACKET;
+        case core::inp::KEYBOARD_BUTTONS::BACKSLASH: return GLFW_KEY_BACKSLASH;
+        case core::inp::KEYBOARD_BUTTONS::RIGHT_BRACKET: return GLFW_KEY_RIGHT_BRACKET;
+        case core::inp::KEYBOARD_BUTTONS::WORLD_1: return GLFW_KEY_WORLD_1;
+        case core::inp::KEYBOARD_BUTTONS::WORLD_2: return GLFW_KEY_WORLD_2;
         case core::inp::KEYBOARD_BUTTONS::COUNT: break;
         }
         return -1;
     }
 
-    std::optional<core::inp::KEYBOARD_BUTTONS> to_keyboard_keycode(int glfw_value) {
+    inline std::optional<core::inp::KEYBOARD_BUTTONS> to_keyboard_keycode(int glfw_value) {
         switch (glfw_value) {
         case GLFW_KEY_SPACE:       return core::inp::KEYBOARD_BUTTONS::SPACE;
         case GLFW_KEY_APOSTROPHE:  return core::inp::KEYBOARD_BUTTONS::APOSTROPHE;
@@ -253,11 +261,17 @@ namespace wnd::convert
         case GLFW_KEY_RIGHT_ALT:   return core::inp::KEYBOARD_BUTTONS::RIGHT_ALT;
         case GLFW_KEY_RIGHT_SUPER: return core::inp::KEYBOARD_BUTTONS::RIGHT_SUPER;
         case GLFW_KEY_MENU:        return core::inp::KEYBOARD_BUTTONS::MENU;
+        case GLFW_KEY_GRAVE_ACCENT:return core::inp::KEYBOARD_BUTTONS::GRAVE_ACCENT;
+        case GLFW_KEY_LEFT_BRACKET:return core::inp::KEYBOARD_BUTTONS::LEFT_BRACKET;
+        case GLFW_KEY_BACKSLASH:   return core::inp::KEYBOARD_BUTTONS::BACKSLASH;
+        case GLFW_KEY_RIGHT_BRACKET:return core::inp::KEYBOARD_BUTTONS::RIGHT_BRACKET;
+        case GLFW_KEY_WORLD_1:     return core::inp::KEYBOARD_BUTTONS::WORLD_1;
+        case GLFW_KEY_WORLD_2:     return core::inp::KEYBOARD_BUTTONS::WORLD_2;
         }
         return std::nullopt;
     }
 
-    int to_glfw_keycode(core::inp::MOUSE_BUTTONS button) {
+    inline int to_glfw_keycode(core::inp::MOUSE_BUTTONS button) {
         switch (button) {
         case core::inp::MOUSE_BUTTONS::LEFT:   return GLFW_MOUSE_BUTTON_LEFT;
         case core::inp::MOUSE_BUTTONS::RIGHT:  return GLFW_MOUSE_BUTTON_RIGHT;
@@ -273,7 +287,7 @@ namespace wnd::convert
         return -1;
     }
 
-    std::optional<core::inp::MOUSE_BUTTONS> to_mouse_keycode(int glfw_value) {
+    inline std::optional<core::inp::MOUSE_BUTTONS> to_mouse_keycode(int glfw_value) {
         switch (glfw_value) {
         case GLFW_MOUSE_BUTTON_LEFT:   return core::inp::MOUSE_BUTTONS::LEFT;
         case GLFW_MOUSE_BUTTON_RIGHT:  return core::inp::MOUSE_BUTTONS::RIGHT;

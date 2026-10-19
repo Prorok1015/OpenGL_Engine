@@ -31,22 +31,14 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 	const ecs::run_mode mode = m_mode;
 	begin_frame_channel(mode);
 
-	int fixed_steps = 0;
 	for (const auto& [id, context] : m_contexts) {
 		context->begin_frame(dt);
-		fixed_steps = std::max(fixed_steps, context->fixed_steps());
 	}
 
-	for (size_t p = 0; p < m_phase_order.size(); ++p) {
-		const bool fixed = m_phase_order[p].builtin() == ecs::phase::fixed_update;
-		if (fixed) {
-			PROFILE_SCOPE("ECS.fixed_update");
-			for (int i = 0; i < fixed_steps; ++i) {
-				run_phase(p, mode, i);
-			}
-		} else {
-			run_phase(p, mode);
-		}
+	// A context runs all its phases back to back, contexts in id order. The set channel
+	// exchanges only above, so this order cannot change what a system reads.
+	for (const auto& [id, context] : m_contexts) {
+		update_context(id, *context, mode);
 	}
 
 	if (mode == ecs::run_mode::step) m_mode = ecs::run_mode::pause;
@@ -86,21 +78,30 @@ ecs::runtime_context scn::context_set::create_runtime_context(size_t own_id)
 	return ecs::runtime_context{ .current_registry = get(static_cast<uint32_t>(own_id)).state(), .current_world_id = own_id };
 }
 
-void scn::context_set::run_phase(size_t order_index, ecs::run_mode mode, int fixed_step)
+void scn::context_set::update_context(uint32_t id, world_context& context, ecs::run_mode mode)
 {
-	// Every context takes part, also one without systems: commands queued into it from outside
-	// (other worlds' systems, the editor) are applied on the same schedule.
-	for (const auto& [world_id, context] : m_contexts) {
-		if (fixed_step >= 0) {
-			if (fixed_step >= context->fixed_steps()) continue;
-			context->write_fixed_time();
+	for (size_t p = 0; p < m_phase_order.size(); ++p) {
+		if (m_phase_order[p].builtin() == ecs::phase::fixed_update) {
+			PROFILE_SCOPE("ECS.fixed_update");
+			for (int i = 0; i < context.fixed_steps(); ++i) {
+				context.write_fixed_time();
+				run_context_phase(id, context, p, mode);
+			}
+		} else {
+			run_context_phase(id, context, p, mode);
 		}
-		if (context->has_phase_work(order_index)) {
-			const ecs::runtime_context ctx = create_runtime_context(world_id);
-			context->run_phase(order_index, mode, ctx);
-		}
-		context->apply_commands();
 	}
+}
+
+void scn::context_set::run_context_phase(uint32_t id, world_context& context, size_t order_index, ecs::run_mode mode)
+{
+	// Also a context without systems: commands queued into it from outside (other contexts'
+	// systems, the editor) are applied on the same schedule, after each phase.
+	if (context.has_phase_work(order_index)) {
+		const ecs::runtime_context ctx = create_runtime_context(id);
+		context.run_phase(order_index, mode, ctx);
+	}
+	context.apply_commands();
 }
 
 scn::world_context& scn::context_set::create_context(std::string_view name, uint32_t id, context_kind kind)
