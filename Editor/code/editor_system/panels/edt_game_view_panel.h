@@ -30,14 +30,14 @@ namespace edt
 			m_input_target = std::move(target);
 		}
 
+		// The render target of the picked camera while the panel shows it; none when it is hidden or has none.
+		// The "game" view of viewport.capture.
+		const std::optional<res::tag>& render_target() const { return m_target; }
+
 	protected:
 		void on_render() override;
 		// Closed, collapsed or in a hidden tab: stop rendering the picked camera.
 		void on_hidden() override;
-
-		// The render target of the picked camera while the panel shows it; none when it is hidden or has none.
-		// The "game" view of viewport.capture.
-		const std::optional<res::tag>& render_target() const { return m_target; }
 
 	private:
 		std::optional<res::tag> m_target;
