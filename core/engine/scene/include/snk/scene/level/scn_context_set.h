@@ -3,6 +3,7 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/level/scn_set_channel.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/ecs/ecs_fixed_stepper.hpp>
 #include <snk/ecs/ecs_invoker.hpp>
@@ -34,7 +35,10 @@ namespace scn
 	class SNK_API context_set
 	{
 	public:
-		context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager);
+		// `channel_types` is the registry of message types shared by the sets of a manager; null gives
+		// the set a registry of its own.
+		context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
+					std::shared_ptr<ecs::channel_registry> channel_types = nullptr);
 		~context_set();
 		context_set(const context_set&) = delete;
 		context_set& operator=(const context_set&) = delete;
@@ -46,6 +50,13 @@ namespace scn
 		// An inactive set is skipped by context_manager::update.
 		bool active() const { return m_active; }
 		void set_active(bool active) { m_active = active; }
+
+		// The data channel of this set (blackboard + mailbox). It is exchanged once at the start of
+		// update(), before the contexts' begin_frame, and only while the set runs: in Edit and Pause it
+		// is frozen together with the time (Step does one exchange). clear() (also a level load) empties it;
+		// the blackboard survives reload_context, the reloaded context's inbox and outbox do not.
+		scn::set_channel& channel() { return m_channel; }
+		const scn::set_channel& channel() const { return m_channel; }
 
 		// One frame of ECS for every context: the phases in order, fixed_update stepped by the
 		// accumulator, the command buffer applied after every phase. What runs depends on the mode.
@@ -161,6 +172,7 @@ namespace scn
 		// fixed_step >= 0: one fixed step, only contexts that still have a step to play take part.
 		void run_phase(size_t order_index, ecs::run_mode mode, int fixed_step = -1);
 		void destroy_by_id(uint32_t id);
+		void begin_frame_channel(ecs::run_mode mode);
 		// Contexts keep their own mode; the set only mirrors its mode into them.
 		void sync_context_mode();
 		ecs::runtime_context create_runtime_context(size_t own_id);
@@ -170,6 +182,9 @@ namespace scn
 		std::vector<std::string> m_desc_world_names;
 		bool m_active = true;
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
+		// Before the contexts: their ctx holds pointers into it, so it must outlive them.
+		scn::set_channel m_channel;
+		std::vector<ecs::channel_participant> m_participants;
 
 		ecs::run_mode m_mode = ecs::run_mode::play;
 		uint64_t m_seed = ecs::rng::default_seed;
