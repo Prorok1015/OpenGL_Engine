@@ -39,6 +39,10 @@ namespace components {
 		auto& stages = data.require<app::frame_stage_registry>();
 		stages.remove_stage("editor_redirect_cameras");
 		stages.clear_body(app::builtin_stage::ui);
+		// Jobs run code owned by editor_system; stop them while it, the context and the task system are all alive.
+		if (data.has_value<edt::editor_context>()) {
+			data.require<edt::editor_context>().jobs().cancel_all_and_wait();
+		}
 		data.destruct<edt::editor_system>();
 		// Registered by editor_system::init, after the system itself.
 		if (data.has_value<edt::editor_context>()) {

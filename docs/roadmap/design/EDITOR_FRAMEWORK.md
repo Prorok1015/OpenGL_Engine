@@ -130,6 +130,9 @@ class document_manager { public: scene_document& scene(); document* active(); vo
 - Тесты подменяют ответы (`dialog_service::set_auto_answer`), без ImGui.
 
 **`job_service`** (#139) над `std::async`. Позже бэкенд меняется на `ds::task_system` (#132/#135), API при этом не трогается (ADR-10).
+
+> Отклонение: backend = ds::task_system сразу (#132 уже есть), API по решению 7.
+
 ```cpp
 struct job_context { std::stop_token stop; void report(float fraction, std::string_view note = {}); };
 template<class R> job<R> run(std::string label, std::function<R(job_context&)> work, std::function<void(R&&)> on_done, std::weak_ptr<void> owner);
