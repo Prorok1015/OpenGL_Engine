@@ -35,7 +35,7 @@
 
 Список tools строится из реестра автоматически. События редактора и задач становятся MCP notifications.
 
-Общее (реестр, схемы, очередь на главный поток, снимок кадра, шаг N кадров, журнал лога) лежит в движке. Поэтому тот же канал работает в игре без редактора: Play, N кадров, скриншот, сравнение. Это автотесты и QA.
+Общее (реестр, схемы, очередь на главный поток, снимок кадра, шаг N кадров, журнал лога) лежит в движке, им пользуются и тесты движка в процессе. Сам MCP-сервер — отдельный статический модуль уровня редактора без зависимостей от движка: в бинарник игры он попасть не может (решение 7, §3.7). Автоматизация запущенной игры (Play, N кадров, скриншот, сравнение) идёт через редактор.
 
 ## 3. API-набросок
 
@@ -124,17 +124,40 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
 - **Очередь на главный поток.** `cmd::main_thread_queue` поверх `ds::task_system` main drain; второго drain нет.
 - **Без дисплея.** Редактор на `render/backend=null` с null-окном даёт команды и чтение без GPU (CI, QA). Для `viewport.capture` нужен реальный GL (Xvfb/llvmpipe).
 
-### 3.7 MCP-сервер (редактор)
+### 3.7 MCP-сервер — отдельный модуль уровня редактора (решение владельца 7)
 
-- `edt::mcp_server` — сервис `editor_context`, подключается через Extension API / `registration_context` (#22). Его можно не загружать.
-- **Транспорт:** JSON-RPC MCP поверх TCP `127.0.0.1:<port>` (asio, без новых зависимостей).
-  - Порт и одноразовый токен (256 бит, на запуск) пишутся в `<project>/.snk/mcp.json` с правами только для пользователя.
-  - Мост `snk_mcp` (маленький exe): MCP-клиент запускает его как stdio-сервер, мост читает `mcp.json`, проверяет токен и прокачивает байты.
-  - Streamable HTTP (Beast) — позже, по запросу (Q1).
-- `tools/list` = `command_registry::list()`, кроме выключенных политикой. Имя tool — id с заменой `.` → `_`, плюс `_v<N>` при version>1. `inputSchema`/`outputSchema` = схемы, `annotations.destructiveHint` = `danger`/`mutates`.
+**Модуль `snk_mcp_server`** — отдельная CMake-цель `STATIC` в `Editor/code/mcp_server/`:
+- Объявляется только в CMake редактора. Линкуется только в `editor` (и в свои тесты, а также в мост `snk_mcp`, если он понадобится).
+- **Ни от чего из движка не зависит:** ни `snk::common`, ни `egLOG`, ни `ds::task_system`. Только сторонние Boost.JSON и Boost.Asio (и Beast, если транспорт — HTTP; см. Q1).
+- Цель: при сборке игры сервер технически не может попасть в бинарник.
+
+**Граница — интерфейс, который реализует редактор:**
+
+```cpp
+namespace mcp {
+struct tool_info { std::string name, description; boost::json::value input_schema, output_schema; bool destructive = false; };
+struct call_result { bool is_error = false; boost::json::value structured; std::vector<content> content; }; // text | image(png base64)
+class host { // реализует редактор; модуль вызывает его со своего io-потока
+public:
+	virtual ~host() = default;
+	virtual std::vector<tool_info> list_tools() = 0;
+	virtual void call_tool(std::string name, boost::json::value args, progress_sink, std::function<void(call_result)> done) = 0; // async
+	virtual std::vector<resource_info> list_resources() = 0;
+	virtual void read_resource(std::string uri, std::function<void(resource_result)> done) = 0;
+	virtual void log(level, std::string_view) = 0; // модуль не знает egLOG
+};
+class server { public: server(host&, server_config); void start(); void stop(); void notify_resource_updated(std::string uri); void notify_tools_changed(); };
+}
+```
+
+- **Адаптер на стороне редактора** (`edt::mcp_bridge_host`) переводит `host` в `cmd::command_registry`/`action_registry`. Вызовы маршалятся на главный поток через `main_thread_queue`. Сюда же входят политика, подтверждения и пометка `origin=agent`. Модуль про это не знает.
+- **Внутри модуля:** протокол MCP (initialize, tools/list|call, resources/list|read|subscribe, notifications/*, progress), транспорт, токен, проверка `Origin`/`Host`, лимиты размера сообщений. Модуль тестируется отдельно, на фейковом `host`, без движка.
+- **CI-проверка** (по образцу `check_no_gl_outside_drivers.sh`): цели движка, игры и SDK не линкуют `snk_mcp_server`; SDK-пакет его не устанавливает.
+- **Транспорт** — вопрос Q1, открыт. Рекомендация: Streamable HTTP в модуле + необязательный stdio-мост.
+- `tools/list` = `command_registry::list()` через адаптер, кроме выключенных политикой и `expose_as_tool=false`. Имя tool — id с заменой `.` → `_`, плюс `_v<N>` при version>1. `inputSchema`/`outputSchema` = схемы, `annotations.destructiveHint` = `danger`/`mutates`.
 - `resources`: `snk://scene/<doc>` (сводка), `snk://node/<ref>`, `snk://assets`, `snk://log`, `snk://problems`, `snk://viewport/<id>.png`, `snk://schema/<type>`.
 - `notifications`: §3.5, плюс `notifications/tools/list_changed`, когда расширение добавило или убрало команды.
-- **Игра без редактора.** Тот же сервер собирается в игровой процесс через `app` (опция `app/automation_port`, выключена по умолчанию, только в dev-сборках), с командами `app.*`, `game.*`, `viewport.capture`, `log.read`. Это канал автотестов и QA.
+- **Игра без редактора.** Сервера в игровом бинарнике нет. Автоматизация игры (Play, N кадров, скриншот, сравнение) идёт через редактор: `play_session` (#39) поднимает набор `play`, а команды `play.*`, `app.advance`, `viewport.capture{viewport:"game"}` выполняются в процессе редактора. Реестр команд, сериализация, захват кадра и шаг кадров остаются в движке (принцип 7), так что ими пользуются и тесты движка в процессе (`app_engine_without_editor_tests`). Вопрос Q7 — нужен ли отдельный dev-хост для автоматизации без редактора.
 
 ## 4. Стыковка с другими эпиками
 
@@ -142,7 +165,7 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
 |---|---|
 | EDITOR_FRAMEWORK #18 | `action_registry` (PR-5 #138) с первого дня несёт схемы и `invoke(args)`; меню собирает аргументы через `dialog_service`. `job_service` (#139) получает события. Documents (#137) дают `document_id`, generation и `commit` — основу `expected_generation` и undo |
 | Undo M3 #29 (#141–#146) | Все `mutates`-команды — команды `command_manager`. Сессия агента — составная транзакция. Пометка «изменено агентом» рядом с save-point (#144) |
-| Extension API #22 | `mcp_server` и команды расширений регистрируются через `registration_context`. Выгрузка `game_editor.dll` снимает её команды и шлёт `tools/list_changed` |
+| Extension API #22 | Адаптер `mcp_bridge_host` и команды расширений регистрируются через `registration_context`. Выгрузка `game_editor.dll` снимает её команды и шлёт `tools/list_changed` |
 | problems #24 | `problems.list` и `snk://problems` читают тот же сборщик диагностик |
 | desc-схемы #128/#130 | JSON Schema компонентов генерируется из `type_schema`. `component.set` проверяется `validate_override`. Формат `node.get` — desc-JSON |
 | WORLD_MESSAGING #268 | `ref` = JSON-форма `ecs::entity_ref{context, path}`. Команды игры могут писать во внешний blackboard канала (`set_channel::external_blackboard`) |
@@ -176,8 +199,9 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
 | A3 | Захват кадра: `read_texture`, `capture_service`, `app::frame_control` (`app.advance`) | после R5b |
 | A4 | Команды чтения: `scene.query`, `node.get`, `component.schema`, `asset.query`, `selection.get`. Требует documents #137 (PR-7/8) и доступа к схемам #130 | после #137 |
 | A5 | Мутирующие команды через `command_manager`, `agent.session.*`, пометка «изменено агентом» | после undo #29 (#141–#146) |
-| A6 | `mcp_server` + `snk_mcp`, токен, политика, подтверждения, notifications | после A5 (см. Q2) |
-| A7 | Канал в игре без редактора: `app/automation_port`, `play.*`, `capture.compare` | после EPIC-63 #39 |
+| A6a | Модуль `snk_mcp_server` (протокол, транспорт, токен, тесты на фейковом `host`) + CI-проверка «не линкуется в движок/игру/SDK»; адаптер редактора, только чтение и скриншоты (решение 2) | после A3 |
+| A6b | Мутирующие tools, политика, подтверждения, пометка «изменено агентом» в адаптере | после A5 |
+| A7 | Автоматизация игры через редактор: `play.*`, `app.advance`, `viewport.capture{game}`, `capture.compare` | после EPIC-63 #39 |
 
 Сервер (A6) стоит после команд, undo и documents, как просил владелец. Q2 предлагает одно обоснованное исключение.
 
@@ -208,3 +232,8 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
 4. Одновременная правка — очередь команд агента на время жеста человека + `expected_generation`; без блокировки документа.
 5. Откат сессии — только команды агента, остановка на первом конфликте с правкой человека и отчёт.
 6. Опасные действия — `confirm` / `deny_by_default` как в §5, белый список `.snk/agent_policy.json` правит только человек, сервер выключен по умолчанию.
+7. MCP-сервер — отдельный CMake-модуль `STATIC` на уровне редактора, без зависимостей от движка, линкуется только в редактор; в бинарник игры технически попасть не может (§3.7).
+
+**Открыто:**
+- Q1 — транспорт (рекомендация: Streamable HTTP в модуле + необязательный stdio-мост).
+- Q7 — автоматизация игры без редактора: только через редактор (рекомендация) или отдельный dev-хост в `tools/`, который линкует модуль и не является игрой.
