@@ -204,15 +204,15 @@ class server { public: server(host&, server_config); void start(); void stop(); 
 
 | PR | Что | Когда |
 |---|---|---|
-| **A0** (#138) | Схемы и `invoke(args)` у `action_registry`, нет действий только через ImGui, тесты headless-вызова. В PR-5 или сразу после | сейчас, в волне |
-| A1 | Модуль `snk::command`: реестр, валидатор схем, `main_thread_queue`. `action_registry` поверх него | после PR-5 |
-| A2 | Журнал лога (seq, sink-список), события `job_service`, id и `dialog.answer` у `dialog_service` | после A1, параллельно с R5b |
-| A3 | Захват кадра: `read_texture`, `capture_service`, `app::frame_control` (`app.advance`) | после R5b |
-| A4 | Команды чтения: `scene.query`, `node.get`, `component.schema`, `asset.query`, `selection.get`. Требует documents #137 (PR-7/8) и доступа к схемам #130 | после #137 |
-| A5 | Мутирующие команды через `command_manager`, `agent.session.*`, пометка «изменено агентом» | после undo #29 (#141–#146) |
-| A6a | Модуль `snk_mcp_server` (протокол, транспорт, токен, тесты на фейковом `host`) + CI-проверка «не линкуется в движок/игру/SDK»; адаптер редактора, только чтение и скриншоты (решение 2) | после A3 |
-| A6b | Мутирующие tools, политика, подтверждения, пометка «изменено агентом» в адаптере | после A5 |
-| A7 | Игровой режим запуска редактора (`--game`, `editor.mode.toggle`) + `play.*`, `app.advance`, `viewport.capture{game}`, `capture.compare` | после EPIC-63 #39 |
+| **A0** (#138, PR #285) | Схемы и `invoke(args)` у `action_registry`, нет действий только через ImGui, тесты headless-вызова. В PR-5 или сразу после | сейчас, в волне |
+| A1 #287 | Модуль `snk::command`: реестр, валидатор схем, `main_thread_queue`. `action_registry` поверх него | после PR-5 |
+| A2 #288 | Журнал лога (seq, sink-список), события `job_service`, id и `dialog.answer` у `dialog_service` | после A1, параллельно с R5b |
+| A3 #289 | Захват кадра: `read_texture`, `capture_service`, `app::frame_control` (`app.advance`) | после R5b |
+| A4 #290 | Команды чтения: `scene.query`, `node.get`, `component.schema`, `asset.query`, `selection.get`. Требует documents #137 (PR-7/8) и доступа к схемам #130 | после #137 |
+| A5 #291 | Мутирующие команды через `command_manager`, `agent.session.*`, пометка «изменено агентом» | после undo #29 (#141–#146) |
+| A6a #292 | Модуль `snk_mcp_server` (протокол, транспорт, токен, тесты на фейковом `host`) + CI-проверка «не линкуется в движок/игру/SDK»; адаптер редактора, только чтение и скриншоты (решение 2) | после A3 |
+| A6b #293 | Мутирующие tools, политика, подтверждения, пометка «изменено агентом» в адаптере | после A5 |
+| A7 #294 | Игровой режим запуска редактора (`--game`, `editor.mode.toggle`) + `play.*`, `app.advance`, `viewport.capture{game}`, `capture.compare` | после EPIC-63 #39 |
 
 Сервер (A6) стоит после команд, undo и documents, как просил владелец. Q2 предлагает одно обоснованное исключение.
 
