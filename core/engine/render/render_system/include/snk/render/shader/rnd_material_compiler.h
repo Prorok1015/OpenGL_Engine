@@ -1,6 +1,9 @@
 #pragma once
+#include <memory>
 #include <snk/common/common.h>
+#include <snk/common/snk_api.h>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
+#include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/scene/scn_material_desc.h>
 
 namespace rnd
@@ -31,4 +34,11 @@ namespace rnd
 	public:
 		rnd::shader_config compile(const scn::material_desc& mat, const material_compile_context& ctx) override;
 	};
+
+	// Compiles `mat` once for reuse across frames: the per-draw world matrix is not baked in (draws supply
+	// their transform), and the pass variants are interned into `variants`. The result is `complete` only
+	// when every sampler texture was resolved; a texture still loading leaves it to be rebuilt next frame.
+	SNK_API std::shared_ptr<compiled_material> build_compiled_material(
+		material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
+		std::shared_ptr<const scn::material_desc> mat, bool skinned);
 }

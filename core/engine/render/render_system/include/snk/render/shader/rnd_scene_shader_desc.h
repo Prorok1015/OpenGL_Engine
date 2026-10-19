@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <string_view>
 #include <snk/common/common.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/resource/res_tag.h>
@@ -90,6 +92,45 @@ namespace rnd
 			std::vector<std::string> defines;
 			shader_program_data program = shader_program_data::build();
 			bool operator==(const constant_data&) const noexcept = default;
+
+			// Platform- and iteration-order-independent: the same program, defines and constants always give
+			// the same value, whatever the order they were added in. `pass_mask` extends the key with the
+			// pass defines the variant cache appends (see shader_config_cache).
+			std::uint64_t variant_hash(std::uint32_t pass_mask = 0) const noexcept {
+				std::uint64_t hash = fnv1a(std::string_view{ "program" });
+				for (const auto& tag : program) {
+					hash = (hash ^ fnv1a(tag.view())) * fnv_prime;
+				}
+
+				std::uint64_t defines_sum = 0;
+				for (const auto& define : defines) {
+					defines_sum += mix(fnv1a(define));
+				}
+
+				std::uint64_t constants_sum = 0;
+				for (const auto& [name, value] : constants) {
+					constants_sum += mix((fnv1a(name) * fnv_prime) ^ fnv1a(value));
+				}
+
+				return mix(hash ^ mix(defines_sum) ^ (mix(constants_sum) << 1) ^ (std::uint64_t{ pass_mask } << 32));
+			}
+
+			static constexpr std::uint64_t fnv_prime = 1099511628211ull;
+
+			static constexpr std::uint64_t fnv1a(std::string_view text) noexcept {
+				std::uint64_t hash = 14695981039346656037ull;
+				for (const char c : text) {
+					hash = (hash ^ static_cast<unsigned char>(c)) * fnv_prime;
+				}
+				return hash;
+			}
+
+			static constexpr std::uint64_t mix(std::uint64_t x) noexcept {
+				x += 0x9e3779b97f4a7c15ull;
+				x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+				x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+				return x ^ (x >> 31);
+			}
 		};
 
 		struct runtime_data
@@ -99,17 +140,7 @@ namespace rnd
 		};
 
 		std::size_t get_hash() const noexcept {
-			std::size_t hash = 0;
-			for (const auto& [_, value] : cdata.constants) {
-				hash ^= std::hash<std::string>{}(value);
-			}
-			for (const auto& define : cdata.defines) {
-				hash ^= std::hash<std::string>{}(define);
-			}
-			for (const auto& tag : cdata.program) {
-				hash ^= std::hash<res::tag>{}(tag);
-			}
-			return hash;
+			return static_cast<std::size_t>(cdata.variant_hash());
 		}
 
 		auto operator==(const shader_config& lhs) const noexcept {
@@ -117,12 +148,14 @@ namespace rnd
 		}
 
 		std::vector<driver::shader_header> load(res::resource_system& res_sys) const;
+		static std::vector<driver::shader_header> load(const constant_data& cdata, res::resource_system& res_sys);
 
 		constant_data cdata;
 		runtime_data rdata;
 	};
 
 	void configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader);
+	void configure_render_pass(const shader_config::runtime_data& rdata, const glm::mat4* world, rnd::driver::shader_interface* shader);
 }
 
 namespace std {

@@ -99,7 +99,8 @@ namespace rnd {
 			m_vbo->set_data_ptr(cube_vertices, 8);
 			m_ibo->set_data_ptr(cube_indices, 36);
 
-			rnd::configure_pass(context, *packet.skybox_material);
+			const auto& sky = *packet.skybox_material;
+			rnd::configure_pass(context, sky.variant, *sky.material, sky.world ? &*sky.world : nullptr);
 			drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, 36);
 
 			if (offscreen) {

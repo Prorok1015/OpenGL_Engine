@@ -77,11 +77,13 @@ rnd::driver::texture_interface* rnd::texture_manager::find(const res::tag& tag) 
 
 void rnd::texture_manager::remove(const res::tag& tag)
 {
-	cache.erase(tag);
+	if (cache.erase(tag) > 0) {
+		++m_generation; // a render-target resize removes its texture too, which costs one material rebuild (perf only)
+	}
 }
 
 void rnd::texture_manager::clear_cache()
-{ 
+{
 	std::vector<res::tag> list_to_delete;
 	for (auto& [key, _] : cache)
 	{
@@ -92,5 +94,8 @@ void rnd::texture_manager::clear_cache()
 
 	for (auto& key : list_to_delete) {
 		cache.erase(key);
+	}
+	if (!list_to_delete.empty()) {
+		++m_generation;
 	}
 }

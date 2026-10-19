@@ -4,7 +4,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/render/rnd_render_system.h>
 
-static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config& desc, res::resource_system& res_sys)
+static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys)
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
@@ -36,13 +36,13 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
     std::vector<std::string> dbg_addition_defines_names;
 
     std::ostringstream addition_defines;
-    for (const auto& [name, value] : desc.cdata.constants) {
+    for (const auto& [name, value] : cdata.constants) {
         auto define = std::vformat("#define {0} {1}\n", std::make_format_args(name, value));
 		addition_defines << define;
         dbg_addition_defines_names.push_back(name);
     }
 
-    for (const auto& def : desc.cdata.defines) {
+    for (const auto& def : cdata.defines) {
         auto define = std::vformat("#define {0}\n", std::make_format_args(def));
 		addition_defines << define;
         dbg_addition_defines_names.push_back(def);
@@ -68,6 +68,11 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
 }
 
 std::vector<rnd::driver::shader_header> rnd::shader_config::load(res::resource_system& res_sys) const
+{
+	return load(cdata, res_sys);
+}
+
+std::vector<rnd::driver::shader_header> rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys)
 {
     std::vector<res::tag> tags;
     std::vector<driver::shader_header> headers;
@@ -97,22 +102,30 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load(res::resource_s
 		}
 	}
 
-    preprocess_shader_code(tags, headers, *this, res_sys);
+    preprocess_shader_code(tags, headers, cdata, res_sys);
     return headers;
 }
 
 void rnd::configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader)
 {
-	for (std::size_t idx = 0; idx < desc.rdata.samplers.size(); ++idx)
+	configure_render_pass(desc.rdata, nullptr, shader);
+}
+
+void rnd::configure_render_pass(const shader_config::runtime_data& rdata, const glm::mat4* world, rnd::driver::shader_interface* shader)
+{
+	for (std::size_t idx = 0; idx < rdata.samplers.size(); ++idx)
 	{
-		if (desc.rdata.samplers[idx]) {
-			desc.rdata.samplers[idx]->bind(static_cast<uint32_t>(idx));
+		if (rdata.samplers[idx]) {
+			rdata.samplers[idx]->bind(static_cast<uint32_t>(idx));
 		}
 	}
 
-	for (const auto& [name, data] : desc.rdata.uniforms)
+	for (const auto& [name, data] : rdata.uniforms)
 	{
         shader->uniform(name, data);
 	}
 
+	if (world) {
+		shader->uniform("uWorldMeshMatr", *world);
+	}
 }
