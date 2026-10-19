@@ -1,10 +1,12 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/window/wnd_null_window_system.h>
+#include <snk/window/wnd_native_key.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <cfloat>
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <imgui.h>
 
 namespace {
@@ -106,6 +108,64 @@ BOOST_AUTO_TEST_CASE(NavigationAndKeypadKeysAreMapped)
 		BOOST_TEST(!ImGui::IsKeyDown(ImGuiKey_RightArrow));
 	});
 	frame([] { BOOST_TEST(ImGui::IsKeyDown(ImGuiKey_KeypadEnter)); });
+}
+
+BOOST_AUTO_TEST_CASE(PunctuationKeysReachImGui)
+{
+	struct pair { KEYBOARD_BUTTONS key; ImGuiKey imgui; };
+	for (const pair p : { pair{ KEYBOARD_BUTTONS::GRAVE_ACCENT, ImGuiKey_GraveAccent }, pair{ KEYBOARD_BUTTONS::LEFT_BRACKET, ImGuiKey_LeftBracket },
+		pair{ KEYBOARD_BUTTONS::RIGHT_BRACKET, ImGuiKey_RightBracket }, pair{ KEYBOARD_BUTTONS::BACKSLASH, ImGuiKey_Backslash } }) {
+		key(p.key, KEY_ACTION::DOWN);
+		frame([&] { BOOST_TEST(ImGui::IsKeyDown(p.imgui)); });
+		key(p.key, KEY_ACTION::UP);
+		frame([&] { BOOST_TEST(!ImGui::IsKeyDown(p.imgui)); });
+	}
+}
+
+BOOST_AUTO_TEST_CASE(EveryGlfwPrintableKeyMapsToEngineKeyAndImGuiKey)
+{
+	// GLFW key tokens are the ASCII codes of the US-layout key caps.
+	std::vector<int> printable = { ' ', '\'', ';', '=', '[', '\\', ']', '`' };
+	for (int k = ','; k <= '9'; ++k) printable.push_back(k);
+	for (int k = 'A'; k <= 'Z'; ++k) printable.push_back(k);
+
+	for (const int glfw_key : printable) {
+		const auto engine_key = wnd::from_native_key(glfw_key);
+		BOOST_REQUIRE_MESSAGE(engine_key.has_value(), "GLFW key " << glfw_key);
+		BOOST_TEST(wnd::to_native_key(*engine_key) == glfw_key);
+
+		key(*engine_key, KEY_ACTION::DOWN);
+		int down = 0;
+		frame([&] {
+			for (int i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END; ++i) {
+				if (ImGui::IsKeyDown(static_cast<ImGuiKey>(i))) ++down;
+			}
+		});
+		BOOST_CHECK_MESSAGE(down == 1, "GLFW key " << glfw_key << " pressed " << down << " ImGui keys");
+		key(*engine_key, KEY_ACTION::UP);
+		frame();
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WorldKeysMapToEngineKeysWithoutImGuiCounterpart)
+{
+	for (const int glfw_key : { 161, 162 }) {
+		const auto engine_key = wnd::from_native_key(glfw_key);
+		BOOST_REQUIRE(engine_key.has_value());
+		BOOST_TEST(wnd::to_native_key(*engine_key) == glfw_key);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(EveryEngineKeyRoundTripsThroughGlfw)
+{
+	for (int i = 0; i < static_cast<int>(KEYBOARD_BUTTONS::COUNT); ++i) {
+		const auto engine_key = static_cast<KEYBOARD_BUTTONS>(i);
+		const int glfw_key = wnd::to_native_key(engine_key);
+		BOOST_REQUIRE_MESSAGE(glfw_key != -1, "engine key " << i);
+		const auto back = wnd::from_native_key(glfw_key);
+		BOOST_REQUIRE_MESSAGE(back.has_value(), "engine key " << i);
+		BOOST_CHECK_MESSAGE(*back == engine_key, "engine key " << i);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ModifierKeysUpdateModifierState)
