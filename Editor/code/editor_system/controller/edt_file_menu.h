@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/window/wnd_window_system.h>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -42,6 +43,10 @@ namespace edt
 		void quick_save();
 		void import_model();
 		void exit();
+
+		// Sends the window's own close request (X button, Alt+F4) through exit(), so it asks about unsaved
+		// changes like File > Exit does and Cancel keeps the editor open.
+		void attach_window_close(wnd::window_system& windows);
 
 		// Puts the File menu items (and the Ctrl+S binding) into the registry. They stay registered while this
 		// menu lives; call it once.

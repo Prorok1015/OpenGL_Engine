@@ -37,6 +37,15 @@ std::vector<std::string> labels_of(const std::vector<edt::menu_item_info>& items
 	return out;
 }
 
+// Id of the File menu item that shows `shortcut_text`; empty if there is none.
+std::string file_item_with_shortcut(edt::action_registry& actions, std::string_view shortcut_text)
+{
+	for (const auto& item : actions.items("File")) {
+		if (item.shortcut_text == shortcut_text) return item.id;
+	}
+	return {};
+}
+
 edt::shortcut chord(std::string_view text)
 {
 	auto parsed = edt::shortcut::parse(text);
@@ -396,6 +405,49 @@ BOOST_AUTO_TEST_CASE(FileMenu_SaveLevelItemAsksForAPath)
 	f.dialogs.set_auto_answer(answer);
 
 	BOOST_CHECK(f.actions.activate("file.save_as"));
+	f.gui.drain();
+	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(FileMenu_SaveItemOverwritesATitledLevelWithoutADialog)
+{
+	file_menu_fixture f;
+	const std::string id = file_item_with_shortcut(f.actions, "Ctrl+S");
+	BOOST_REQUIRE(!id.empty());
+
+	BOOST_CHECK(f.actions.activate(id));
+	f.gui.drain();
+	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save" }));
+	BOOST_TEST(f.dialogs.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(FileMenu_SaveItemOnAnUntitledLevelOpensSaveAs)
+{
+	file_menu_fixture f;
+	f.path.clear();
+	const std::string id = file_item_with_shortcut(f.actions, "Ctrl+S");
+	BOOST_REQUIRE(!id.empty());
+
+	BOOST_CHECK(f.actions.activate(id));
+	BOOST_TEST(f.dialogs.pending() == 1u);
+	BOOST_TEST(f.calls.empty());
+
+	edt::dialog_auto_answer answer;
+	answer.save_as_path = "levels/b.desc";
+	f.dialogs.set_auto_answer(answer);
+	f.gui.drain();
+	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(FileMenu_CtrlShiftSDispatchesSaveAsEvenForATitledLevel)
+{
+	file_menu_fixture f;
+	edt::dialog_auto_answer answer;
+	answer.save_as_path = "levels/b.desc";
+	f.dialogs.set_auto_answer(answer);
+
+	BOOST_CHECK_EQUAL(file_item_with_shortcut(f.actions, "Ctrl+Shift+S"), "file.save_as");
+	BOOST_CHECK(f.actions.dispatch(chord("Ctrl+Shift+S")));
 	f.gui.drain();
 	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
 }

@@ -107,6 +107,13 @@ void edt::file_menu::exit()
 	guard_unsaved([this](bool discard) { invoke("file.exit", json::object{ { "discard_unsaved", discard } }); });
 }
 
+void edt::file_menu::attach_window_close(wnd::window_system& windows)
+{
+	windows.set_close_request_handler([this, alive = std::weak_ptr<void>(m_alive)] {
+		if (alive.lock()) exit();
+	});
+}
+
 void edt::file_menu::open_level()
 {
 	pick_file_options options;

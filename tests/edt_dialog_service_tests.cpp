@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_file_menu.h"
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/window/wnd_null_window_system.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
@@ -122,6 +123,34 @@ struct menu_fixture : dialog_fixture
 	std::vector<std::string> calls;
 	edt::file_menu_hooks hooks;
 	std::unique_ptr<edt::file_menu> menu;
+};
+
+// A File menu wired to a window like the editor does: Exit shuts the window down, the window's own close
+// request goes through the same menu.
+struct closing_editor
+{
+	explicit closing_editor(menu_fixture& base)
+		: window(windows.get_active_window())
+		, menu(base.service, actions, exit_closes_window(base))
+	{
+		menu.register_actions();
+		menu.attach_window_close(windows);
+	}
+
+	edt::file_menu_hooks exit_closes_window(menu_fixture& base)
+	{
+		edt::file_menu_hooks hooks = base.hooks;
+		hooks.exit = [this, &base] {
+			base.calls.push_back("exit");
+			window->shutdown();
+		};
+		return hooks;
+	}
+
+	wnd::null_window_system windows;
+	std::shared_ptr<wnd::window> window;
+	edt::action_registry actions;
+	edt::file_menu menu;
 };
 
 }
@@ -411,6 +440,67 @@ BOOST_AUTO_TEST_CASE(Exit_WhenDirtyAndNothingLoaded_SaveDoesNotExit)
 	menu->exit();
 	drain();
 	BOOST_TEST(calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhenDirty_AsksAndDoesNotExit)
+{
+	closing_editor editor(*this);
+	editor.windows.request_close(*editor.window);
+	BOOST_TEST(!editor.window->is_shutdown());
+	BOOST_TEST(service.pending() == 1u);
+	BOOST_TEST(calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhenDirty_CancelKeepsTheEditorRunning)
+{
+	closing_editor editor(*this);
+	answer_unsaved(edt::unsaved_choice::cancel);
+	editor.windows.request_close(*editor.window);
+	drain();
+	BOOST_TEST(!editor.window->is_shutdown());
+	BOOST_TEST(!editor.windows.is_stop_running());
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(service.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhenDirty_DiscardClosesTheWindow)
+{
+	closing_editor editor(*this);
+	answer_unsaved(edt::unsaved_choice::discard);
+	editor.windows.request_close(*editor.window);
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "discard", "exit" }));
+	BOOST_TEST(editor.window->is_shutdown());
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhenDirty_SaveWritesThenClosesTheWindow)
+{
+	path = "levels/a.desc";
+	closing_editor editor(*this);
+	answer_unsaved(edt::unsaved_choice::save);
+	editor.windows.request_close(*editor.window);
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "quick_save", "exit" }));
+	BOOST_TEST(editor.window->is_shutdown());
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhenClean_ClosesWithoutAsking)
+{
+	dirty = false;
+	closing_editor editor(*this);
+	editor.windows.request_close(*editor.window);
+	BOOST_TEST(editor.window->is_shutdown());
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST((calls == std::vector<std::string>{ "exit" }));
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_RequestedAgainWhileThePromptIsUp_AsksOnce)
+{
+	closing_editor editor(*this);
+	editor.windows.request_close(*editor.window);
+	editor.windows.request_close(*editor.window);
+	BOOST_TEST(service.pending() == 1u);
+	BOOST_TEST(!editor.window->is_shutdown());
 }
 
 BOOST_AUTO_TEST_CASE(SaveLevel_AsksForAPathAndWritesIt)

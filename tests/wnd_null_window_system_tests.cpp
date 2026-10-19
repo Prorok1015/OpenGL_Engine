@@ -65,6 +65,37 @@ BOOST_AUTO_TEST_CASE(ShutdownStopsRunning)
 	BOOST_TEST(!sys.is_stop_running());
 }
 
+BOOST_AUTO_TEST_CASE(CloseRequest_WithoutAHandler_ClosesTheWindow)
+{
+	wnd::null_window_system sys;
+	auto win = sys.get_active_window();
+
+	sys.request_close(*win);
+	BOOST_TEST(win->is_shutdown());
+}
+
+BOOST_AUTO_TEST_CASE(CloseRequest_WithAHandler_IsVetoedUntilTheHandlerShutsDown)
+{
+	wnd::null_window_system sys;
+	auto win = sys.get_active_window();
+	int asked = 0;
+	bool allow = false;
+	sys.set_close_request_handler([&] {
+		++asked;
+		if (allow) win->shutdown();
+	});
+
+	sys.request_close(*win);
+	BOOST_TEST(asked == 1);
+	BOOST_TEST(!win->is_shutdown());
+	BOOST_TEST(!sys.is_stop_running());
+
+	allow = true;
+	sys.request_close(*win);
+	BOOST_TEST(asked == 2);
+	BOOST_TEST(win->is_shutdown());
+}
+
 BOOST_AUTO_TEST_CASE(WindowStoresTitleAndIgnoresEmpty)
 {
 	wnd::null_window_system sys;
