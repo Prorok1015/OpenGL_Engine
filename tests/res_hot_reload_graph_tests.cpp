@@ -431,4 +431,74 @@ BOOST_AUTO_TEST_CASE(OneCacheBlockServesTheBaseTypeAndTheTypeDerivedFromIt)
 	BOOST_TEST(as_derived.get()->str() == "payload");
 }
 
+// The edges of a tag nobody holds any more are stale: the tag is not loaded, and a change of what it was built from
+// must not evict or deliver it (#311).
+BOOST_AUTO_TEST_CASE(ReleasedDependent_IsNotEvictedNorDeliveredAnyMore)
+{
+	const auto p = node("p.node", "p1");
+	const auto c = node("c.node", "c", { p });
+	{
+		auto loaded = rs->require<node_resource>(c);
+		pump();
+		BOOST_REQUIRE(loaded.is_ready());
+	} // released: the cache keeps only an expired entry of c
+
+	watch({ p, c });
+	const int loads_before = node_adapter::loads.load();
+	rs->signal_changed(p);
+	pump();
+
+	BOOST_TEST(delivered.size() == 1u);
+	BOOST_TEST(times_delivered(p) == 1);
+	BOOST_TEST(times_delivered(c) == 0);
+
+	auto again = rs->require<node_resource>(c); // c loads again on demand, and its edges come back
+	pump();
+	BOOST_TEST(node_adapter::loads.load() == loads_before + 1);
+	delivered.clear();
+	rs->signal_changed(p);
+	pump();
+	BOOST_TEST(times_delivered(c) == 1);
+}
+
+// g is held, c (between g and p) is not: a change of p still has to reach g through the released c.
+BOOST_AUTO_TEST_CASE(ReleasedMiddleOfAChain_StillPassesTheChangeOn)
+{
+	const auto p = node("p.node", "p1");
+	const auto c = node("c.node", "c", { p });
+	const auto g = node("g.node", "g", { c });
+	auto held = rs->require<node_resource>(g);
+	pump();
+	BOOST_REQUIRE(held.is_ready());
+	BOOST_REQUIRE(held.get()->str() == "g(c(p1))");
+
+	watch({ p, c, g });
+	rs->signal_changed(p);
+	pump();
+
+	BOOST_TEST(times_delivered(p) == 1);
+	BOOST_TEST(times_delivered(g) == 1);
+	BOOST_TEST(times_delivered(c) == 0);
+	BOOST_TEST(position_of(p) < position_of(g));
+
+	// c itself changing still reaches g
+	delivered.clear();
+	rs->signal_changed(c);
+	pump();
+	BOOST_TEST(times_delivered(g) == 1);
+}
+
+BOOST_AUTO_TEST_CASE(ReleasedResources_DoNotMakeTheGraphGrowWithoutBound)
+{
+	const auto p = node("p.node", "p1");
+	constexpr int count = 1000;
+	for (int i = 0; i < count; ++i) {
+		const auto tag = node("n" + std::to_string(i) + ".node", "n", { p });
+		auto loaded = rs->require<node_resource>(tag);
+		pump();
+		BOOST_REQUIRE(loaded.is_ready());
+	}
+	BOOST_TEST(rs->dependency_edge_count() < static_cast<std::size_t>(count / 2));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

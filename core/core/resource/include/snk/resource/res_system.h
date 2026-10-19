@@ -119,6 +119,16 @@ namespace res
 		// then, each tag of the batch once, parents before the resources that depend on them.
 		void signal_changed(const res::tag& tag);
 
+		// Read-only: how many (tag, dependency) edges the hot reload graph holds. For tests and diagnostics.
+		std::size_t dependency_edge_count() const {
+			std::shared_lock lock(m_cache_mutex);
+			std::size_t count = 0;
+			for (const auto& [tag, targets] : m_depends_on) {
+				count += targets.size();
+			}
+			return count;
+		}
+
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
 			ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
