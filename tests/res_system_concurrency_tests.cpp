@@ -4,7 +4,6 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <chrono>
@@ -468,26 +467,22 @@ BOOST_AUTO_TEST_CASE(WorkerWaitingForAQueuedDependency_DoesNotRunAnUnrelatedLoad
 	const auto r = put("r.bin", x.string());
 	const auto d = put("d.bin", r.string());
 
-	std::array<std::atomic<bool>, 2> release{};
-	std::atomic<int> held{ 0 };
-	for (auto& flag : release) {
-		tasks.run(ds::lane::compute, ds::task_desc{ "gate", "test", false }, [&flag, &held](ds::task_context&) {
-			++held;
-			while (!flag.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		});
-	}
-	while (held.load() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	// The gates own their flags: a gate task polls for up to a timer tick after its flag is set, which can be after
+	// this test has returned. With the flags on this stack the poll read freed stack memory (Release), never saw
+	// "open", and ~task_system waited for the gate forever (#300).
+	gate first_gate(tasks, 1);
+	gate second_gate(tasks, 1);
 
 	// Queue order: R, D, X. Only one worker is freed, so it takes R first.
 	auto r_handle = rs->require<child_resource>(r);
 	auto d_handle = rs->require<grand_resource>(d);
 	auto x_handle = rs->require<res::text_resource>(x);
-	release[0] = true;
+	first_gate.release();
 
 	for (int i = 0; i < 4000 && !(r_handle.is_ready() && d_handle.is_ready()); ++i) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
-	release[1] = true;
+	second_gate.release();
 	BOOST_REQUIRE(r_handle.is_ready());
 	BOOST_REQUIRE(d_handle.is_ready());
 	BOOST_TEST(r_handle.get()->str() == "x data+child");
@@ -501,21 +496,13 @@ BOOST_AUTO_TEST_CASE(ManyChildrenWaitingForAParentQueuedBehindThem_DoNotStarveTh
 	const auto parent = put("parent.txt", "parent data");
 
 	// Both compute threads are held, so the queue order below is exactly the order the tasks run in.
-	std::atomic<bool> release{ false };
-	std::atomic<int> held{ 0 };
-	for (int i = 0; i < 2; ++i) {
-		tasks.run(ds::lane::compute, ds::task_desc{ "gate", "test", false }, [&](ds::task_context&) {
-			++held;
-			while (!release.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		});
-	}
-	while (held.load() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	gate hold(tasks, 2);
 
 	// The children go first; the parent's own load task is queued behind all of them, and its block already exists
 	// when they run, so they only note that they wait for it and give the thread back.
 	const auto children = request_children(5, parent);
 	auto parent_handle = rs->require<res::text_resource>(parent);
-	release = true;
+	hold.release();
 
 	expect_all_loaded(children);
 	BOOST_TEST(parent_handle.is_ready());
