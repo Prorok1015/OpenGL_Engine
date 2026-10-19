@@ -772,6 +772,41 @@ BOOST_AUTO_TEST_CASE(Answer_ThatBreaksTheSchemaOrMeansNothing_IsRejectedAndTheDi
 	BOOST_TEST(calls == 1);
 }
 
+// Esc (or any user action) in the frame an answer lands in wins over the answer, for every kind of dialog.
+BOOST_AUTO_TEST_CASE(Answer_AndEscInTheSameFrame_TheUserWins)
+{
+	imgui_ctx imgui;
+	std::vector<std::string> got;
+	edt::pick_file_options options;
+	options.title = "Pick";
+	options.start_path = std::filesystem::current_path();
+
+	const auto unsaved = service.confirm_unsaved([&](edt::unsaved_choice c) {
+		got.push_back(c == edt::unsaved_choice::cancel ? "cancel" : "other");
+	});
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(unsaved, R"({"choice":"save"})").ok);
+	ImGui::ClosePopupToLevel(0, false);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST((got == std::vector<std::string>{ "cancel" }));
+	BOOST_TEST(service.pending() == 0u);
+
+	const auto save_as = service.save_as("start", [&](const std::string&) { got.push_back("save_as"); });
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(save_as, R"({"path":"levels/x.desc"})").ok);
+	ImGui::ClosePopupToLevel(0, false);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 0u);
+
+	const auto pick = service.pick_file(options, [&](const std::filesystem::path&) { got.push_back("pick"); });
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(pick, R"({"path":"models/m.glb"})").ok);
+	ImGui::ClosePopupToLevel(0, false);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST((got == std::vector<std::string>{ "cancel" })); // neither path dialog reported anything
+}
+
 BOOST_AUTO_TEST_CASE(Answer_UnknownOrAlreadyAnswered)
 {
 	imgui_ctx imgui;

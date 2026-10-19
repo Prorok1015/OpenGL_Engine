@@ -35,7 +35,7 @@ namespace {
 		// Held while `fn` runs; remove_log_sink takes it, so once removal returns `fn` is not running. Recursive:
 		// a listener may log (into itself and the others) or remove its own handle.
 		std::recursive_mutex call_mutex;
-		bool removed = false;
+		std::atomic<bool> removed{ false };
 	};
 	using listener_list = std::vector<std::shared_ptr<listener>>;
 	std::mutex s_listeners_mutex;
@@ -43,6 +43,7 @@ namespace {
 	std::uint64_t s_next_listener_id = 1;
 	// Listeners running on this thread: a message logged from inside one skips the listeners.
 	thread_local int t_listener_depth = 0;
+	thread_local std::uint64_t t_running_listener_id = 0;
 	struct listener_scope
 	{
 		listener_scope() { ++t_listener_depth; }
@@ -170,7 +171,7 @@ void engine::shutdown_logger()
 		if (dropped) {
 			for (const auto& item : *dropped) {
 				std::lock_guard call_lock(item->call_mutex);
-				item->removed = true;
+				item->removed.store(true);
 			}
 		}
 	}
@@ -211,7 +212,21 @@ void engine::log_message(std::string_view category, log_level level, std::string
 	listener_scope scope;
 	for (const auto& item : *listeners) {
 		std::lock_guard call_lock(item->call_mutex);
-		if (!item->removed) item->fn(category, level, message);
+		if (item->removed.load()) continue;
+		t_running_listener_id = item->id;
+		item->fn(category, level, message);
+		t_running_listener_id = 0;
+	}
+}
+
+engine::log_level engine::current_log_level()
+{
+	switch (s_global_level) {
+	case spdlog::level::trace: return log_level::trace;
+	case spdlog::level::debug: return log_level::debug;
+	case spdlog::level::info: return log_level::info;
+	case spdlog::level::warn: return log_level::warn;
+	default: return log_level::error;
 	}
 }
 
@@ -301,9 +316,15 @@ void engine::remove_log_sink(std::uint64_t id)
 		next->erase(next->begin() + (found - s_listeners->begin()));
 		s_listeners = std::move(next);
 	}
-	// Waits for a call in flight on another thread; the flag keeps the ones that already hold a copy of the list away.
+	// From inside another sink's callback, waiting for this sink's call could lock-cycle with it: take effect without
+	// waiting (the flag keeps the ones that already hold a copy of the list away).
+	if (t_listener_depth > 0 && id != t_running_listener_id) {
+		taken->removed.store(true);
+		return;
+	}
+	// Waits for a call in flight on another thread.
 	std::lock_guard call_lock(taken->call_mutex);
-	taken->removed = true;
+	taken->removed.store(true);
 }
 
 void engine::set_log_journal_min_level(std::optional<log_level> level)

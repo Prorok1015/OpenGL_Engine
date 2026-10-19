@@ -136,7 +136,7 @@ public:
 			if (choice) ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();
 		} else {
-			choice = m_answer.value_or(edt::unsaved_choice::cancel);
+			choice = edt::unsaved_choice::cancel; // closed from outside (Esc): the user's action wins over an answer
 		}
 
 		// After the popup is closed, so the answer cannot touch ImGui state mid-modal.
@@ -306,12 +306,12 @@ public:
 		bool is_open = true;
 		// Answered from outside (dialog_service::answer): the dialog closes itself inside its popup, as on OK or Cancel.
 		if (m_answer) m_dialog.request_close();
-		// A click on OK in the same frame wins over the answer.
+		// Whatever the user did in this frame (OK, Cancel, Esc) wins over the answer.
 		if (m_dialog.show(m_options.title.c_str(), &is_open)) {
 			if (m_on_pick) m_on_pick(m_dialog.get_selected_path());
 			return false;
 		}
-		if (m_answer) {
+		if (m_answer && m_dialog.was_closed_by_request()) {
 			if (!m_answer->cancel && m_on_pick) m_on_pick(std::filesystem::path(m_answer->path));
 			return false;
 		}

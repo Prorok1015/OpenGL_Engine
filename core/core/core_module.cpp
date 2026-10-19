@@ -48,6 +48,16 @@ namespace {
 		cmd::registration log;
 	};
 
+	std::optional<engine::log_level> parse_known_log_level(std::string_view str)
+	{
+		if (str == "trace") return engine::log_level::trace;
+		if (str == "debug") return engine::log_level::debug;
+		if (str == "info") return engine::log_level::info;
+		if (str == "warn") return engine::log_level::warn;
+		if (str == "error") return engine::log_level::error;
+		return std::nullopt;
+	}
+
 	engine::log_level parse_log_level(std::string_view str)
 	{
 		if (str == "trace") return engine::log_level::trace;
@@ -106,7 +116,13 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 		engine::set_log_journal_capacity(static_cast<std::size_t>(std::max(0, journal_capacity)));
 
 		const std::string& journal_level = *cfg_log_journal_min_level;
-		if (!journal_level.empty()) engine::set_log_journal_min_level(parse_log_level(journal_level));
+		if (!journal_level.empty()) {
+			if (const auto parsed = parse_known_log_level(journal_level)) {
+				engine::set_log_journal_min_level(*parsed);
+			} else {
+				egLOG_WARN("logger", "logger/journal_min_level '{}' is not trace, debug, info, warn or error: the journal follows the logger's level", journal_level);
+			}
+		}
 
 		const std::string& level_str = *cfg_log_level;
 		if (!level_str.empty()) {

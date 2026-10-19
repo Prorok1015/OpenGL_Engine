@@ -165,6 +165,17 @@ BOOST_AUTO_TEST_CASE(Sink_MayRemoveItselfWhileItRuns)
 	BOOST_TEST(calls == 1);
 }
 
+BOOST_AUTO_TEST_CASE(Sink_MayRemoveAnotherSinkFromInsideItsCallback)
+{
+	int b_calls = 0;
+	engine::log_sink_handle b = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view) { ++b_calls; });
+	engine::log_sink_handle a = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view) { b.reset(); });
+	egLOG_INFO("covtest/remove_other", "one"); // b runs, then a removes it
+	egLOG_INFO("covtest/remove_other", "two");
+	BOOST_TEST(b_calls == 1);
+	BOOST_TEST(!b.active());
+}
+
 BOOST_AUTO_TEST_CASE(Sink_HandleOutlivingTheLoggerShutdownIsHarmless)
 {
 	int calls = 0;
@@ -246,8 +257,10 @@ BOOST_AUTO_TEST_CASE(Sinks_CanBeAddedAndRemovedWhileOtherThreadsLog)
 	BOOST_TEST(delivered.load() == settled);
 }
 
-// reset() and shutdown_logger() return only after a call in flight on another thread has ended. The gate opens only
-// once the test thread is about to wait, so `finished` can be true after the call only if it really waited.
+// reset() and shutdown_logger() promise to return only after a call in flight on another thread has ended. This checks
+// that `finished` (set at the end of the call) is already true when they return. The gate opens just before the
+// call, so a broken wait can still pass if the sink wins the race: the check never fails on a correct build, and
+// catches a missing wait only most of the time.
 BOOST_AUTO_TEST_CASE(Sink_ResetWaitsForACallInFlightOnAnotherThread)
 {
 	std::atomic<bool> inside{ false };
@@ -322,6 +335,7 @@ BOOST_AUTO_TEST_CASE(Journal_KeepsWhatTheLoggerLetsThrough_UnlessAMinLevelSaysOt
 {
 	journal_capacity_guard guard(100);
 	engine::set_log_journal_min_level(std::nullopt);
+	const engine::log_level previous_level = engine::current_log_level();
 	engine::set_log_level(engine::log_level::error);
 	capture cap;
 	const std::uint64_t first = engine::log_journal_next_seq();
@@ -342,7 +356,7 @@ BOOST_AUTO_TEST_CASE(Journal_KeepsWhatTheLoggerLetsThrough_UnlessAMinLevelSaysOt
 	BOOST_TEST((texts_of(engine::read_log_journal(query)) == std::vector<std::string>{ "loud", "kept", "above the floor" }));
 	BOOST_TEST((engine::log_journal_min_level() == engine::log_level::warn));
 
-	engine::set_log_level(engine::log_level::info);
+	engine::set_log_level(previous_level);
 }
 
 BOOST_AUTO_TEST_CASE(Journal_KeepsSeqTimeLevelCategoryAndText)

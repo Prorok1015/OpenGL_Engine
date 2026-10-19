@@ -40,7 +40,8 @@ namespace engine
 
 	// A log listener (editor console, tests, ...). Signature: (category, level, message). It sees every message,
 	// whatever the sink levels say, and runs on the thread that logged, so it must be thread-safe and must not
-	// block. It may remove its own handle. It may log too, but a message logged on a thread that is inside a listener
+	// block. From inside its callback it may remove its own handle only; removing another sink there takes effect at
+	// once but does not wait for that sink's call in flight on another thread (waiting could lock-cycle). It may log too, but a message logged on a thread that is inside a listener
 	// goes to the journal and the log files only, never to a listener (no recursion, no lock-order cycles between
 	// listeners).
 	using log_callback_t = std::function<void(std::string_view, log_level, std::string_view)>;
@@ -121,6 +122,9 @@ namespace engine
 		// since_seq named entries that were already pushed out of the ring.
 		bool dropped = false;
 	};
+
+	// The logger's global level (what set_log_level last set, or the build's default).
+	SNK_API log_level current_log_level();
 
 	// Which messages the journal keeps. Nullopt (the default): the ones the logger itself lets through, i.e. its
 	// global and per-category levels; a level here replaces that rule (trace keeps everything). Listeners are not

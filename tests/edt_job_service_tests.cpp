@@ -445,24 +445,29 @@ BOOST_AUTO_TEST_CASE(List_ShowsRunningJobsOldestFirst_AndInfoKeepsTheOutcome)
 // cancelled too, not wiped from the books while its task keeps running.
 BOOST_AUTO_TEST_CASE(CancelAllAndWait_AlsoStopsAJobStartedByAFinishedSlot)
 {
-	bool follow_up_ran = false;
-	edt::job_service::job_id follow_up = 0;
-	connections.push_back(events.job_finished.subscribe([&](std::uint64_t, edt::job_status, const std::string&) {
-		if (follow_up == 0) {
-			follow_up = start("follow_up", [&follow_up_ran](ds::task_context&) { follow_up_ran = true; return 1; });
+	// Shared with the slot and the job body, which the fixture keeps beyond this test body.
+	struct follow_state
+	{
+		bool ran = false;
+		edt::job_service::job_id id = 0;
+	};
+	auto state = std::make_shared<follow_state>();
+	connections.push_back(events.job_finished.subscribe([this, state](std::uint64_t, edt::job_status, const std::string&) {
+		if (state->id == 0) {
+			state->id = start("follow_up", [state](ds::task_context&) { state->ran = true; return 1; });
 		}
 	}));
 	start("first", [](ds::task_context&) { return 1; });
 
 	jobs->cancel_all_and_wait();
 	BOOST_TEST(jobs->running_count() == 0u);
-	BOOST_REQUIRE(follow_up != 0);
-	BOOST_TEST(!jobs->is_running(follow_up));
-	BOOST_TEST((jobs->info(follow_up)->status == edt::job_status::cancelled));
+	BOOST_REQUIRE(state->id != 0);
+	BOOST_TEST(!jobs->is_running(state->id));
+	BOOST_TEST((jobs->info(state->id)->status == edt::job_status::cancelled));
 
 	run_lane();
 	deliver();
-	BOOST_TEST(!follow_up_ran);
+	BOOST_TEST(!state->ran);
 	BOOST_TEST(tasks->snapshot().empty());
 }
 
