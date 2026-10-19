@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/command/cmd_registry.h>
 #include "null_engine_fixture.hpp"
 #include "edt_builtin_asset_kinds.h"
 #include "edt_inspector_panel.h"
@@ -76,11 +77,12 @@ struct context_fixture : test_util::null_engine_fixture
 		, context(std::make_unique<edt::editor_context>(
 			storage.require<desc::desc_system>(), storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
 			gui, storage.require<scn::ecs_assembler>(), storage.require<ecs::system_factory>(),
-			storage.require<scn::context_manager>(), tasks))
+			storage.require<scn::context_manager>(), tasks, commands))
 	{
 	}
 
 	gui::gui_system gui;
+	cmd::command_registry commands;
 	std::unique_ptr<edt::editor_context> context;
 };
 

@@ -67,7 +67,7 @@ namespace edt
 			std::string label = desc.name;
 			auto handle = m_tasks.run(where, std::move(desc), owner, std::forward<F>(work));
 			const job_id id = handle.id();
-			m_jobs.emplace(id, record{ handle, label });
+			m_jobs.emplace(id, record{ handle, label, 0.f, {} });
 			if (m_events) m_events->job_started.emit(id, label);
 			// Bound to m_life, not to `owner`: the bookkeeping must run even if the owner is gone.
 			handle.then_main(m_life, [this, id, owner_token = owner.token(), on_done = std::move(on_done)](
