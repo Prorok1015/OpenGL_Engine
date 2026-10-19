@@ -128,6 +128,77 @@ BOOST_AUTO_TEST_CASE(DirectionalLight_MalformedVectorsKeepDefaultsInsteadOfZero)
 	BOOST_TEST((l.direction == def.direction));
 }
 
+// #131: the bytes of the light as the hand-written serializer wrote them (compact json::serialize, captured from CI on that code).
+// The generic serializer must keep them.
+BOOST_AUTO_TEST_CASE(DirectionalLight_SerializedBytesMatchReference)
+{
+	BOOST_TEST(json::serialize(ser(scn::directional_light_desc{}))
+		== R"({"direction":[-2.0000000298023224E-1,-1E0,-3.0000001192092896E-1,0E0],)"
+		R"("diffuse":[5E-1,5E-1,5E-1,1E0],"ambient":[2.0000000298023224E-1,2.0000000298023224E-1,2.0000000298023224E-1,1E0],)"
+		R"("specular":[1E0,1E0,1E0,1E0]})");
+
+	// The light of Editor/res/levels/test_level.desc.
+	scn::directional_light_desc l;
+	l.deserialize(*descs, parse(R"({"__type":"directional_light_desc","__version":1,)"
+		R"("direction":[0.3860273063182831,-0.8251869082450867,-0.41237056255340576,0.0],)"
+		R"("diffuse":[1.0,1.0,1.0,1.0],"ambient":[0.0,0.0,0.0,1.0],"specular":[0.0,0.0,0.0,1.0]})"));
+	BOOST_TEST(json::serialize(ser(l))
+		== R"({"direction":[3.860273063182831E-1,-8.251869082450867E-1,-4.1237056255340576E-1,0E0],)"
+		R"("diffuse":[1E0,1E0,1E0,1E0],"ambient":[0E0,0E0,0E0,1E0],"specular":[0E0,0E0,0E0,1E0]})");
+
+	auto created = descs->create_instance("directional_light_desc", res::tag{});
+	BOOST_TEST(json::serialize(ser(*created)) == json::serialize(ser(scn::directional_light_desc{})));
+}
+
+// #131: what reaches the .desc file goes through the desc_system writer; its text for the vectors is what test_level.desc holds.
+BOOST_AUTO_TEST_CASE(DirectionalLight_OnDiskTextMatchesReference)
+{
+	const auto on_disk = [this](const json::value& v) {
+		std::ostringstream ss;
+		descs->write_pretty_json(ss, v);
+		return ss.str();
+	};
+
+	const json::object defaults = ser(scn::directional_light_desc{});
+	BOOST_TEST(defaults.size() == 4u);
+	BOOST_TEST(on_disk(defaults.at("direction")) == "[-0.20000000298023224, -1.0, -0.30000001192092896, 0.0]\n");
+	BOOST_TEST(on_disk(defaults.at("diffuse")) == "[0.5, 0.5, 0.5, 1.0]\n");
+	BOOST_TEST(on_disk(defaults.at("ambient")) == "[0.20000000298023224, 0.20000000298023224, 0.20000000298023224, 1.0]\n");
+	BOOST_TEST(on_disk(defaults.at("specular")) == "[1.0, 1.0, 1.0, 1.0]\n");
+	BOOST_TEST((std::vector<std::string>{ defaults.begin()->key(), (defaults.begin() + 1)->key(), (defaults.begin() + 2)->key(), (defaults.begin() + 3)->key() }
+		== std::vector<std::string>{ "direction", "diffuse", "ambient", "specular" }));
+
+	scn::directional_light_desc l;
+	l.deserialize(*descs, parse(R"({"direction":[0.3860273063182831,-0.8251869082450867,-0.41237056255340576,0.0]})"));
+	BOOST_TEST(on_disk(ser(l).at("direction")) == "[0.3860273063182831, -0.8251869082450867, -0.41237056255340576, 0.0]\n");
+}
+
+// #131: every form the hand-written deserialize accepted.
+BOOST_AUTO_TEST_CASE(DirectionalLight_AcceptsLegacyForms)
+{
+	const scn::directional_light_desc def;
+
+	scn::directional_light_desc empty;
+	empty.deserialize(*descs, parse("{}"));
+	BOOST_TEST((empty.direction == def.direction && empty.diffuse == def.diffuse && empty.ambient == def.ambient && empty.specular == def.specular));
+
+	scn::directional_light_desc l;
+	l.deserialize(*descs, parse(R"({"__type":"directional_light_desc","__version":1,"unknown":[1,2],"direction":[0,-1,0,0],"diffuse":[2,0,1,1],"specular":[1e0,0.25,-3,0]})"));
+	BOOST_TEST((l.direction == glm::vec4{ 0, -1, 0, 0 }));
+	BOOST_TEST((l.diffuse == glm::vec4{ 2, 0, 1, 1 }));
+	BOOST_TEST((l.ambient == def.ambient));
+	BOOST_TEST((l.specular == glm::vec4{ 1, 0.25f, -3, 0 }));
+
+	// null, an object, a longer array and a non-numeric component keep the current value of just that field.
+	scn::directional_light_desc bad;
+	bad.diffuse = glm::vec4{ 0.1f, 0.2f, 0.3f, 1 };
+	bad.deserialize(*descs, parse(R"({"direction":null,"diffuse":{"r":1},"ambient":[1,1,1,1,1],"specular":[true,0,0,1]})"));
+	BOOST_TEST((bad.direction == def.direction));
+	BOOST_TEST((bad.diffuse == glm::vec4{ 0.1f, 0.2f, 0.3f, 1 }));
+	BOOST_TEST((bad.ambient == def.ambient));
+	BOOST_TEST((bad.specular == def.specular));
+}
+
 BOOST_AUTO_TEST_CASE(BoneDesc_RoundTripKeepsMatrixAndIndex)
 {
 	scn::bone_desc b;
