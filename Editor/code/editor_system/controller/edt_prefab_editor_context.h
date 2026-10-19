@@ -32,8 +32,9 @@ namespace edt
 		entt::registry* get_registry();
 		const std::string& prefab_name() const { return m_prefab_name; }
 		const res::tag& source_tag() const { return m_source_tag; }
-		// The preview lives as a context of this name until it becomes a set of its own.
-		static constexpr std::string_view world_name() { return WORLD_NAME; }
+		// The preview is the only context of its own set; the panel binds its input to this target.
+		const std::string& set_name() const { return m_set_name; }
+		static constexpr std::string_view context_name() { return CONTEXT_NAME; }
 
 		static constexpr std::string_view RT_COLOR = "memory://__prefab_camera_rt";
 		static constexpr std::string_view RT_DEPTH = "memory://__prefab_depth_rt";
@@ -49,11 +50,11 @@ namespace edt
 
 		res::tag m_source_tag;
 		std::string m_prefab_name;
-		uint32_t m_world_id = UINT32_MAX;
+		std::string m_set_name;
 		bool m_open = false;
 		bool m_dirty = false;
 		editor_camera_state m_camera_state;
 
-		static constexpr std::string_view WORLD_NAME = "__prefab_preview";
+		static constexpr std::string_view CONTEXT_NAME = "__prefab_preview";
 	};
 }
