@@ -19,7 +19,7 @@ namespace edt
 	{
 	public:
 		// What drew a component in the last frame: the fallback order is custom renderer, schema, generic JSON.
-		enum class component_ui : uint8_t { none, custom, schema, generic };
+		enum class component_ui : std::uint8_t { none, custom, schema, generic };
 
 		inspector_panel();
 

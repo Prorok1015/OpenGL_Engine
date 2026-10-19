@@ -24,7 +24,8 @@ namespace
 
 	constexpr int max_depth = 8;
 	constexpr std::size_t max_listed = 50;
-	constexpr double revert_tolerance = 1e-5;
+	// float32 holds ~7 digits; relative, so a small value (near plane 0.0001) is not compared as if it were ~1
+	constexpr double revert_tolerance = 1e-6;
 
 	json::value zeros(std::size_t count)
 	{
@@ -35,9 +36,9 @@ namespace
 		return json::value(std::move(components));
 	}
 
-	json::value defaults_impl(const desc::type_schema& schema, const desc::schema_registry& registry, int depth);
+	json::value defaults_impl(const desc::type_schema& schema, const desc::schema_registry& registry, int depth, bool fill_missing);
 
-	json::value zero_of(field_kind kind, std::string_view ref_type, const desc::schema_registry& registry, int depth)
+	json::value zero_of(field_kind kind, std::string_view ref_type, const desc::schema_registry& registry, int depth, bool fill_missing = true)
 	{
 		switch (kind) {
 		case field_kind::boolean: return json::value(false);
@@ -70,7 +71,7 @@ namespace
 		case field_kind::structure: {
 			const desc::type_schema* nested = ref_type.empty() ? nullptr : registry.find(ref_type);
 			if (nested && depth < max_depth) {
-				return defaults_impl(*nested, registry, depth + 1);
+				return defaults_impl(*nested, registry, depth + 1, fill_missing);
 			}
 			return json::value(json::object());
 		}
@@ -81,7 +82,7 @@ namespace
 		return json::value();
 	}
 
-	json::value defaults_impl(const desc::type_schema& schema, const desc::schema_registry& registry, int depth)
+	json::value defaults_impl(const desc::type_schema& schema, const desc::schema_registry& registry, int depth, bool fill_missing)
 	{
 		json::value out(json::object{});
 		for (const auto& field : schema.fields) {
@@ -89,12 +90,14 @@ namespace
 				continue;
 			}
 			json::value value = field.default_value;
-			if (value.is_null()) {
-				value = zero_of(field.kind, field.ref_type, registry, depth);
+			if (value.is_null() && (fill_missing || field.kind == field_kind::structure)) {
+				value = zero_of(field.kind, field.ref_type, registry, depth, fill_missing);
 			}
-			if (!value.is_null()) {
-				desc::json_pointer_set(out, field.key, std::move(value));
+			// Without fill_missing a field that has no default stays absent: nothing is inherited for it.
+			if (value.is_null() || (!fill_missing && value.is_object() && value.as_object().empty())) {
+				continue;
 			}
+			desc::json_pointer_set(out, field.key, std::move(value));
 		}
 		return out;
 	}
@@ -149,6 +152,43 @@ namespace
 			}
 			desc::json_pointer_remove(root, parent);
 		}
+	}
+
+	bool same_value(const json::value& a, const json::value& b)
+	{
+		if (a.is_number() && b.is_number()) {
+			const double x = a.to_number<double>();
+			const double y = b.to_number<double>();
+			return x == y || std::fabs(x - y) <= revert_tolerance * std::max(std::fabs(x), std::fabs(y));
+		}
+		if (a.is_array() && b.is_array()) {
+			const json::array& left = a.as_array();
+			const json::array& right = b.as_array();
+			if (left.size() != right.size()) {
+				return false;
+			}
+			for (std::size_t i = 0; i < left.size(); ++i) {
+				if (!same_value(left[i], right[i])) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (a.is_object() && b.is_object()) {
+			const json::object& left = a.as_object();
+			const json::object& right = b.as_object();
+			if (left.size() != right.size()) {
+				return false;
+			}
+			for (const auto& member : left) {
+				const json::value* other = right.if_contains(member.key());
+				if (!other || !same_value(member.value(), *other)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		return a == b;
 	}
 
 	bool all_numbers(const json::array& array)
@@ -453,10 +493,13 @@ namespace
 		}
 		if (asset && ImGui::BeginDragDropTarget()) {
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
-				const std::string path(static_cast<const char*>(payload->Data), static_cast<std::size_t>(payload->DataSize) - 1);
-				if (matches_filter(path, field.filter)) {
-					value = json::string("res://" + path);
-					changed = true;
+				// The browser sends the path below res:// with its terminating zero (the viewport turns it into a tag the same way).
+				if (payload->DataSize > 0) {
+					const std::string path(static_cast<const char*>(payload->Data), static_cast<std::size_t>(payload->DataSize) - 1);
+					if (matches_filter(path, field.filter)) {
+						value = json::string(res::tag::make(path).string());
+						changed = true;
+					}
 				}
 			}
 			ImGui::EndDragDropTarget();
@@ -664,15 +707,15 @@ json::value edt::schema_ui::zero_value(const desc::field_schema& field, const de
 	return zero_of(field.kind, field.ref_type, registry, 0);
 }
 
-json::value edt::schema_ui::defaults_json(const desc::type_schema& schema, const desc::schema_registry& registry)
+json::value edt::schema_ui::defaults_json(const desc::type_schema& schema, const desc::schema_registry& registry, bool fill_missing)
 {
-	return defaults_impl(schema, registry, 0);
+	return defaults_impl(schema, registry, 0, fill_missing);
 }
 
 json::value edt::schema_ui::compose(const desc::type_schema& schema, const desc::schema_registry& registry,
-	std::initializer_list<const json::object*> layers)
+	std::initializer_list<const json::object*> layers, bool fill_missing)
 {
-	json::value result = defaults_json(schema, registry);
+	json::value result = defaults_json(schema, registry, fill_missing);
 	for (const json::object* layer : layers) {
 		if (!layer) {
 			continue;
@@ -696,12 +739,23 @@ std::size_t edt::schema_ui::apply_edit(json::object& overrides, const desc::type
 	if (changes.empty()) {
 		return 0;
 	}
-	json::value holder(std::move(overrides));
+	json::value holder(overrides); // a copy: `overrides` stays intact if anything below throws
 	for (const auto& change : changes) {
 		const json::value* inherited = desc::json_pointer_get(base, change.pointer);
-		if (inherited && desc::json_equal(*inherited, change.value, revert_tolerance)) {
+		if (inherited && same_value(*inherited, change.value)) {
 			if (desc::json_pointer_remove(holder, change.pointer)) {
 				prune_empty_parents(holder, change.pointer);
+			}
+			// the field is inherited again, so its legacy keys must not keep an older value alive
+			for (const auto& field : schema.fields) {
+				if (field.key != change.pointer) {
+					continue;
+				}
+				for (const auto& alias : field.read_aliases) {
+					if (desc::json_pointer_remove(holder, alias)) {
+						prune_empty_parents(holder, alias);
+					}
+				}
 			}
 		} else {
 			desc::json_pointer_set(holder, change.pointer, change.value);

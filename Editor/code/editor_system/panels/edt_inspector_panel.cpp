@@ -89,7 +89,7 @@ namespace edt
 		const desc::schema_registry& registry = m_desc_system->schemas();
 		const boost::json::object* parent = parent_json(key, comp);
 		// base: what the component has without its own data; before/after: what the user sees before and after the edit.
-		const boost::json::value base = schema_ui::compose(schema, registry, { parent });
+		const boost::json::value base = schema_ui::compose(schema, registry, { parent }, false);
 		const boost::json::value before = schema_ui::compose(schema, registry, { parent, &comp.overrides });
 		boost::json::value after = before;
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
@@ -103,7 +103,7 @@ namespace edt
 	bool inspector_panel::render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema)
 	{
 		const desc::schema_registry& registry = m_desc_system->schemas();
-		const boost::json::value base = schema_ui::compose(schema, registry, { &base_json });
+		const boost::json::value base = schema_ui::compose(schema, registry, { &base_json }, false);
 		const boost::json::value before = schema_ui::compose(schema, registry, { &scratch.overrides });
 		boost::json::value after = before;
 		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {

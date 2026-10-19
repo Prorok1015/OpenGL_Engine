@@ -52,13 +52,15 @@ namespace edt::schema_ui
 	// A value of `kind` that is "nothing yet" (0, "", [0,0,0], first enum item, ...); null for custom and entity.
 	boost::json::value zero_value(const desc::field_schema& field, const desc::schema_registry& registry);
 
-	// Every non-optional field at its default, under its key.
-	boost::json::value defaults_json(const desc::type_schema& schema, const desc::schema_registry& registry);
+	// Every non-optional field at its default, under its key. A field with no default gets a zero to show unless
+	// `fill_missing` is false: the base of an edit is built that way, so a value typed into such a field is never
+	// taken for "back to what is inherited" and always written.
+	boost::json::value defaults_json(const desc::type_schema& schema, const desc::schema_registry& registry, bool fill_missing = true);
 
 	// The values the component really has: the schema defaults with each layer (parent data, own overrides, ...) on
 	// top, null layers skipped. A layer that names a field by a read alias fills the field's key.
 	boost::json::value compose(const desc::type_schema& schema, const desc::schema_registry& registry,
-		std::initializer_list<const boost::json::object*> layers);
+		std::initializer_list<const boost::json::object*> layers, bool fill_missing = true);
 
 	struct context
 	{
@@ -75,7 +77,8 @@ namespace edt::schema_ui
 
 	// Writes the difference between `before` and `after` (what one edit did) into `overrides`, one JSON pointer per
 	// changed field. A field the edit sets back to its `base` value loses its pointer (it is inherited again); pointers
-	// the edit did not touch stay as they are. Returns how many pointers were written or removed.
+	// the edit did not touch stay as they are (a revert also drops the field's legacy alias keys). Returns how many
+	// fields the edit changed.
 	std::size_t apply_edit(boost::json::object& overrides, const desc::type_schema& schema, const desc::schema_registry& registry,
 		const boost::json::value& base, const boost::json::value& before, const boost::json::value& after);
 }

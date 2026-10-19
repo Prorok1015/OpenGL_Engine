@@ -8,6 +8,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_camera_desc.h>
 #include <snk/scene/scn_directional_light_desc.h>
+#include <glm/glm.hpp>
 #include <imgui.h>
 #include <algorithm>
 #include <boost/json.hpp>
@@ -51,7 +52,8 @@ namespace
 			{ "name": "ids", "kind": "array", "element": "i32", "default": [1, 2] },
 			{ "name": "serial", "kind": "u32", "default": 7, "read_only": true },
 			{ "name": "secret", "kind": "u32", "default": 1, "editor_hidden": true },
-			{ "name": "extra", "kind": "f32", "optional": true }
+			{ "name": "extra", "kind": "f32", "optional": true },
+			{ "name": "loose", "kind": "f32", "default": null }
 		]
 	})";
 
@@ -328,7 +330,7 @@ BOOST_AUTO_TEST_CASE(ApplyEdit_WritesOnlyTheChangedPointers)
 		"enabled": false, "count": 4, "gain": 0.25, "label": "parent", "offset": [1, 2, 3], "limits": { "min": 1.0, "max": 9.0 }
 	})");
 	json::object overrides;
-	const json::value base = ui::compose(schema, registry, { &parent });
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
 
 	// first edit of a component that only inherits: one pointer, not a copy of the parent
 	json::value before = ui::compose(schema, registry, { &parent, &overrides });
@@ -365,12 +367,99 @@ BOOST_AUTO_TEST_CASE(ApplyEdit_KeepsThePointersTheEditDidNotTouch)
 	const json::object parent = parse(R"({ "enabled": false, "gain": 0.25 })");
 	// the node spells out a value it also inherits: that is presence the editor must not throw away
 	json::object overrides = parse(R"({ "enabled": false, "mystery": 1 })");
-	const json::value base = ui::compose(schema, registry, { &parent });
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
 	const json::value before = ui::compose(schema, registry, { &parent, &overrides });
 	json::value after = before;
 	desc::json_pointer_set(after, "/gain", json::value(0.75));
 	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, schema, registry, base, before, after), 1u);
 	BOOST_CHECK(overrides == parse(R"({ "enabled": false, "mystery": 1, "gain": 0.75 })"));
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_SmallValuesAreComparedRelatively)
+{
+	const desc::type_schema* schema = descs->find_schema(scn::camera_desc::__type);
+	BOOST_REQUIRE(schema);
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "near_distance": 0.0001 })");
+	json::object overrides;
+	const json::value base = ui::compose(*schema, registry, { &parent }, false);
+
+	// 0.00005 is half of what the parent has, not "about equal" to it
+	json::value before = ui::compose(*schema, registry, { &parent, &overrides });
+	json::value after = before;
+	desc::json_pointer_set(after, "/near_distance", json::value(0.00005));
+	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, *schema, registry, base, before, after), 1u);
+	BOOST_REQUIRE(overrides.if_contains("near_distance"));
+	BOOST_TEST(overrides.at("near_distance").to_number<double>() == 0.00005);
+
+	// back to the parent's value (a float32 round trip of it) drops the pointer
+	before = ui::compose(*schema, registry, { &parent, &overrides });
+	after = before;
+	desc::json_pointer_set(after, "/near_distance", json::value(static_cast<double>(0.0001f)));
+	ui::apply_edit(overrides, *schema, registry, base, before, after);
+	BOOST_CHECK(overrides.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_ARevertAlsoDropsTheLegacyAliasKey)
+{
+	const desc::type_schema* schema = descs->find_schema(scn::camera_desc::__type);
+	BOOST_REQUIRE(schema);
+	const auto& registry = descs->schemas();
+	const json::object parent = parse(R"({ "color_targets": ["memory://B"] })");
+	json::object overrides = parse(R"({ "texture": "memory://A" })"); // the old single-target key
+	const json::value base = ui::compose(*schema, registry, { &parent }, false);
+
+	const json::value before = ui::compose(*schema, registry, { &parent, &overrides });
+	BOOST_CHECK(std::string(desc::json_pointer_get(before, "/color_targets")->as_string()) == "memory://A");
+	json::value after = before;
+	desc::json_pointer_set(after, "/color_targets", parent.at("color_targets"));
+	ui::apply_edit(overrides, *schema, registry, base, before, after);
+	BOOST_CHECK(overrides.empty()); // not { "texture": "A" }, which would still win on load
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_AFieldWithoutADefaultIsAlwaysWritten)
+{
+	const auto& schema = widget_schema();
+	const auto& registry = descs->schemas();
+	const json::object parent;
+	json::object overrides = parse(R"({ "loose": 3 })");
+	// the zero shown for "loose" is not something it inherits, so typing 0 must not look like a revert
+	const json::value base = ui::compose(schema, registry, { &parent }, false);
+	BOOST_CHECK(desc::json_pointer_get(base, "/loose") == nullptr);
+	const json::value before = ui::compose(schema, registry, { &parent, &overrides });
+	json::value after = before;
+	desc::json_pointer_set(after, "/loose", json::value(0.0));
+	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, schema, registry, base, before, after), 1u);
+	BOOST_REQUIRE(overrides.if_contains("loose"));
+	BOOST_TEST(overrides.at("loose").to_number<double>() == 0.0);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyEdit_ALightEditLoadsThroughTheDescAndKeepsW)
+{
+	const desc::type_schema* schema = descs->find_schema(scn::directional_light_desc::__type);
+	BOOST_REQUIRE(schema);
+	const auto& registry = descs->schemas();
+	const scn::directional_light_desc defaults;
+	json::object parent;
+	defaults.serialize(parent);
+	json::object overrides;
+	const json::value base = ui::compose(*schema, registry, { &parent }, false);
+
+	// what dragging the x of the direction does: one vec4, w as it was
+	const json::value before = ui::compose(*schema, registry, { &parent, &overrides });
+	json::value after = before;
+	json::array direction = desc::json_pointer_get(after, "/direction")->as_array();
+	direction[0] = 0.5;
+	desc::json_pointer_set(after, "/direction", json::value(direction));
+	BOOST_CHECK_EQUAL(ui::apply_edit(overrides, *schema, registry, base, before, after), 1u);
+	BOOST_REQUIRE(overrides.if_contains("direction"));
+	BOOST_CHECK_EQUAL(overrides.size(), 1u);
+	BOOST_CHECK_EQUAL(overrides.at("direction").as_array().size(), 4u);
+
+	scn::directional_light_desc loaded;
+	loaded.deserialize(*descs, overrides);
+	BOOST_CHECK((loaded.direction == glm::vec4{ 0.5f, defaults.direction.y, defaults.direction.z, defaults.direction.w }));
+	BOOST_CHECK((loaded.diffuse == defaults.diffuse));
 }
 
 BOOST_AUTO_TEST_CASE(ApplyEdit_NoDifferenceWritesNothing)
