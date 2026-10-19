@@ -44,10 +44,10 @@ namespace rnd::driver::validation
 		shader(std::shared_ptr<validator> owner, std::unique_ptr<shader_interface> inner);
 
 		void uniform(std::string_view name, const uniform_data& val) override { m_inner->uniform(name, val); }
-		void use() override;
+
+		const shader_interface& inner() const { return *m_inner; }
 
 	private:
-		std::shared_ptr<validator> m_owner;
 		std::unique_ptr<shader_interface> m_inner;
 		detail::registration m_registration;
 	};

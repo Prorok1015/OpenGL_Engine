@@ -22,17 +22,9 @@ namespace {
 }
 
 rnd::driver::validation::shader::shader(std::shared_ptr<validator> owner, std::unique_ptr<shader_interface> inner)
-	: m_owner(owner)
-	, m_inner(std::move(inner))
-	, m_registration(owner, this, object_kind::shader)
+	: m_inner(std::move(inner))
+	, m_registration(std::move(owner), this, object_kind::shader)
 {
-}
-
-void rnd::driver::validation::shader::use()
-{
-	m_owner->on_program_used();
-	m_owner->note(trace_op::use_program);
-	m_inner->use();
 }
 
 rnd::driver::validation::texture::texture(std::shared_ptr<validator> owner, std::unique_ptr<texture_interface> inner, const texture_header& hdr)

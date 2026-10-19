@@ -65,7 +65,7 @@ void rnd::driver::gl::shader::uniform(std::string_view name, float val)
 	CHECK_GL_ERROR();
 }
 
-void rnd::driver::gl::shader::use()
+void rnd::driver::gl::shader::use() const
 {
 	glUseProgram(id);
 	CHECK_GL_ERROR();

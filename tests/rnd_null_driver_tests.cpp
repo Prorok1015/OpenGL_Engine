@@ -3,6 +3,8 @@
 #include "rnd_null_swapchain.h"
 #include <cstring>
 #include <memory>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 // Contract of the null backend: what the engine may rely on from any driver_interface implementation
@@ -213,13 +215,12 @@ BOOST_AUTO_TEST_CASE(VertexArrayKeepsItsBuffers)
 	BOOST_TEST(null_va->index_buffer() == ibo);
 }
 
-BOOST_AUTO_TEST_CASE(ShaderKeepsItsHeadersAndCountsUse)
+BOOST_AUTO_TEST_CASE(ShaderKeepsItsHeadersAndCountsUniforms)
 {
 	null::driver driver;
 	auto shader = driver.create_shader(valid_program());
 	BOOST_REQUIRE(shader);
 
-	shader->use();
 	shader->uniform("model", 1.f);
 	shader->uniform("model", glm::mat4{ 1.f });
 
@@ -227,8 +228,23 @@ BOOST_AUTO_TEST_CASE(ShaderKeepsItsHeadersAndCountsUse)
 	BOOST_REQUIRE(null_shader);
 	BOOST_REQUIRE(null_shader->headers().size() == 2u);
 	BOOST_TEST(null_shader->headers().front().title == "a.vert");
-	BOOST_TEST(null_shader->use_calls() == 1u);
 	BOOST_TEST(null_shader->uniform_calls() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(BindingAPipelineMakesItsShaderTheOneDrawsUse)
+{
+	null::driver driver;
+	auto shader = driver.create_shader(valid_program());
+	pipeline_desc desc;
+	desc.shader = shader.get();
+	const pipeline_handle pipeline = driver.create_pipeline(desc);
+
+	BOOST_TEST(driver.calls().pipeline_binds == 0u);
+	driver.bind_pipeline(pipeline);
+
+	BOOST_TEST(driver.calls().pipeline_binds == 1u);
+	BOOST_CHECK(driver.bound_pipeline() == pipeline);
+	BOOST_TEST(driver.pipeline_info(driver.bound_pipeline()).shader.object == shader.get());
 }
 
 BOOST_AUTO_TEST_CASE(ShaderWithoutStagesIsRejected)
@@ -431,17 +447,192 @@ BOOST_AUTO_TEST_CASE(StateAndCallsAreRecorded)
 	null::driver driver;
 	driver.set_viewport({ 0, 0, 640, 480 });
 	driver.set_line_size(2.f);
-	driver.set_render_state(render_state::transparent());
+	auto shader = driver.create_shader(valid_program());
+	pipeline_desc desc;
+	desc.shader = shader.get();
+	desc.blend = { blend_state{ .enabled = true } };
+	driver.bind_pipeline(driver.create_pipeline(desc));
 
 	auto va = driver.create_vertex_array();
-	driver.draw_indices(va, RENDER_MODE::TRIANGLE, 36);
-	driver.draw_indices(va.get(), RENDER_MODE::LINE, 2, 0, 0);
+	driver.draw_indices(va, 36);
+	desc.topology = RENDER_MODE::LINE;
+	driver.bind_pipeline(driver.create_pipeline(desc));
+	driver.draw_indices(va.get(), 2, 0, 0);
+	driver.invalidate_state_cache();
 
 	BOOST_TEST((driver.viewport() == glm::ivec4{ 0, 0, 640, 480 }));
 	BOOST_TEST(driver.line_size() == 2.f);
-	BOOST_TEST(driver.current_render_state().blend_states.size() == 1u);
-	BOOST_TEST(driver.calls().render_state_sets == 1u);
+	BOOST_TEST(driver.pipeline_info(driver.bound_pipeline()).blend.size() == 1u);
+	BOOST_TEST(driver.calls().pipeline_binds == 2u);
 	BOOST_TEST(driver.calls().draws == 2u);
+	BOOST_TEST(driver.draws_with(RENDER_MODE::TRIANGLE) == 1u);
+	BOOST_TEST(driver.draws_with(RENDER_MODE::LINE) == 1u);
+	BOOST_TEST(driver.calls().state_cache_invalidations == 1u);
 }
+
+struct pipeline_fixture
+{
+	pipeline_fixture()
+		: shader(driver.create_shader(valid_program()))
+		, other_shader(driver.create_shader(valid_program()))
+	{
+		base.shader = shader.get();
+		base.depth = { .enabled = true, .write_mask = true, .test_func = depth_state::func::LEQUAL };
+		base.color_formats = { texture_format::RGBA8 };
+		base.depth_format = texture_format::D32;
+	}
+
+	null::driver driver;
+	std::unique_ptr<shader_interface> shader;
+	std::unique_ptr<shader_interface> other_shader;
+	pipeline_desc base;
+};
+
+BOOST_FIXTURE_TEST_SUITE(NullDriverPipelines, pipeline_fixture)
+
+BOOST_AUTO_TEST_CASE(OneDescriptionGivesOneHandle)
+{
+	const pipeline_handle first = driver.create_pipeline(base);
+	const pipeline_handle again = driver.create_pipeline(pipeline_desc{ base });
+	pipeline_desc rebuilt;
+	rebuilt.shader = shader.get();
+	rebuilt.depth = { .enabled = true, .write_mask = true, .test_func = depth_state::func::LEQUAL };
+	rebuilt.color_formats = { texture_format::RGBA8 };
+	rebuilt.depth_format = texture_format::D32;
+	const pipeline_handle equal = driver.create_pipeline(rebuilt);
+
+	BOOST_TEST(static_cast<bool>(first));
+	BOOST_CHECK(first == again);
+	BOOST_CHECK(first == equal);
+	BOOST_TEST(driver.pipelines().size() == 1u);
+	BOOST_TEST(driver.pipelines().misses() == 1u);
+	BOOST_TEST(driver.pipelines().hits() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(EveryFieldOfTheDescriptionTellsPipelinesApart)
+{
+	std::vector<pipeline_desc> variants;
+	const auto vary = [&](auto&& change) {
+		pipeline_desc desc = base;
+		change(desc);
+		variants.push_back(desc);
+	};
+	vary([&](pipeline_desc& d) { d.shader = other_shader.get(); });
+	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::LINE; });
+	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::TRIANGLE_STRIP; });
+	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::LINE_STRIP; });
+	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::POINT; });
+	vary([](pipeline_desc& d) { d.depth.enabled = false; });
+	vary([](pipeline_desc& d) { d.depth.write_mask = false; });
+	vary([](pipeline_desc& d) { d.depth.test_func = depth_state::func::ALWAYS; });
+	vary([](pipeline_desc& d) { d.cull.enabled = true; });
+	vary([](pipeline_desc& d) { d.cull = { .enabled = true, .cull_mode = face_culling_state::mode::FRONT }; });
+	vary([](pipeline_desc& d) { d.blend = { blend_state{} }; });
+	vary([](pipeline_desc& d) { d.blend = { blend_state{ .enabled = true } }; });
+	vary([](pipeline_desc& d) { d.blend = { blend_state{ .enabled = true, .src_factor = blend_state::factor::SRC_ALPHA } }; });
+	vary([](pipeline_desc& d) { d.blend = { blend_state{ .enabled = true, .dst_factor = blend_state::factor::ONE } }; });
+	vary([](pipeline_desc& d) { d.blend = { blend_state{ .enabled = true, .blend_eq = blend_state::equation::MAX } }; });
+	vary([](pipeline_desc& d) { d.blend = { blend_state{}, blend_state{} }; });
+	vary([](pipeline_desc& d) { d.color_formats = { texture_format::RGBA16F }; });
+	vary([](pipeline_desc& d) { d.color_formats = { texture_format::RGBA8, texture_format::R8 }; });
+	vary([](pipeline_desc& d) { d.color_formats = { std::nullopt }; });
+	vary([](pipeline_desc& d) { d.color_formats.clear(); });
+	vary([](pipeline_desc& d) { d.depth_format = texture_format::D24_S8; });
+	vary([](pipeline_desc& d) { d.depth_format.reset(); });
+
+	std::vector<pipeline_handle> handles{ driver.create_pipeline(base) };
+	for (const pipeline_desc& desc : variants) {
+		const pipeline_handle handle = driver.create_pipeline(desc);
+		for (const pipeline_handle& seen : handles) {
+			BOOST_CHECK(handle != seen);
+		}
+		handles.push_back(handle);
+	}
+	BOOST_TEST(driver.pipelines().size() == variants.size() + 1);
+	BOOST_TEST(driver.pipelines().hits() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(APipelineCannotChangeAfterItIsCreated)
+{
+	pipeline_desc written = base;
+	const pipeline_handle pipeline = driver.create_pipeline(written);
+
+	// The description was copied: the caller's copy is free to change without touching the pipeline.
+	written.depth.enabled = false;
+	written.topology = RENDER_MODE::POINT;
+	written.blend = { blend_state{ .enabled = true } };
+
+	BOOST_CHECK(driver.pipeline_info(pipeline) == base);
+	BOOST_CHECK(driver.create_pipeline(base) == pipeline);
+	BOOST_CHECK(driver.create_pipeline(written) != pipeline);
+	BOOST_CHECK(driver.pipeline_info(pipeline) == base);
+
+	// The interface offers a read-only view and a handle that carries no state to edit.
+	static_assert(std::is_same_v<decltype(std::declval<const driver_interface&>().pipeline_info(pipeline_handle{})), const pipeline_desc&>);
+	static_assert(sizeof(pipeline_handle) == 8);
+	static_assert(std::is_trivially_copyable_v<pipeline_handle>);
+	static_assert(!std::is_convertible_v<pipeline_handle, bool>);
+	static_assert(!std::is_convertible_v<pipeline_handle, const pipeline_desc&>);
+}
+
+BOOST_AUTO_TEST_CASE(AHandleOfNoPipelineDescribesAnEmptyOne)
+{
+	BOOST_CHECK(driver.pipeline_info({}) == pipeline_desc{});
+	BOOST_CHECK(driver.pipeline_info({ 5, 1 }) == pipeline_desc{});
+	const pipeline_handle pipeline = driver.create_pipeline(base);
+	BOOST_CHECK(driver.pipeline_info({ pipeline.index, pipeline.gen + 1 }) == pipeline_desc{});
+	BOOST_CHECK(!driver.bound_pipeline());
+}
+
+BOOST_AUTO_TEST_CASE(TheDescriptionStaysReadableWhileTheCacheGrows)
+{
+	const pipeline_handle first = driver.create_pipeline(base);
+	const pipeline_desc& view = driver.pipeline_info(first);
+	for (int i = 0; i < 64; ++i) {
+		pipeline_desc other = base;
+		other.blend = { blend_state{ .enabled = true, .src_factor = blend_state::factor::SRC_ALPHA } };
+		other.color_formats.clear();
+		for (int c = 0; c < i % 8; ++c) {
+			other.color_formats.push_back(texture_format::R8);
+		}
+		other.depth.write_mask = (i % 2) == 0;
+		other.cull.enabled = (i % 3) == 0;
+		other.topology = static_cast<RENDER_MODE>(i % 5);
+		driver.create_pipeline(other);
+	}
+	BOOST_CHECK(view == base);
+}
+
+BOOST_AUTO_TEST_CASE(PipelineFormatsFollowThePassTargets)
+{
+	auto color = driver.create_texture(target_of(16, texture_usage::color_target));
+	texture_header depth_header = target_of(16, texture_usage::depth_target);
+	depth_header.data.format = texture_header::TYPE::D32F;
+	auto depth = driver.create_texture(depth_header);
+
+	pipeline_desc desc = base;
+	set_target_formats(desc, pass_of(color.get(), depth.get()));
+	BOOST_REQUIRE(desc.color_formats.size() == 1u);
+	BOOST_TEST((*desc.color_formats[0] == texture_format::RGBA8));
+	BOOST_TEST((desc.depth_format == texture_format::D32F));
+
+	set_target_formats(desc, pass_of(color.get()));
+	BOOST_TEST(!desc.depth_format.has_value());
+
+	render_pass_desc holes = pass_of(nullptr);
+	holes.colors.push_back({});
+	set_target_formats(desc, holes);
+	BOOST_REQUIRE(desc.color_formats.size() == 1u);
+	BOOST_TEST(!desc.color_formats[0].has_value());
+
+	render_pass_desc window;
+	window.backbuffer = true;
+	set_target_formats(desc, window);
+	BOOST_REQUIRE(desc.color_formats.size() == 1u);
+	BOOST_TEST((*desc.color_formats[0] == backbuffer_color_format));
+	BOOST_TEST((desc.depth_format == backbuffer_depth_format));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()

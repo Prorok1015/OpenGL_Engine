@@ -91,12 +91,22 @@ struct validation_fixture
 		}
 	}
 
-	// Passes the whole prologue of a draw: a program in use inside a render pass.
-	void use_program()
+	// A pipeline for the pass in progress: same formats as its targets.
+	pipeline_desc pipeline_for_pass()
+	{
+		program_object = drv->create_shader(program());
+		pipeline_desc desc;
+		desc.shader = program_object.get();
+		desc.color_formats = state().current_formats().colors;
+		desc.depth_format = state().current_formats().depth;
+		return desc;
+	}
+
+	// Passes the whole prologue of a draw: a pipeline bound inside a render pass.
+	void bind_test_pipeline()
 	{
 		open_pass();
-		program_object = drv->create_shader(program());
-		program_object->use();
+		drv->bind_pipeline(drv->create_pipeline(pipeline_for_pass()));
 	}
 
 	vl::swapchain chain;
@@ -135,9 +145,9 @@ BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 		drv->set_viewport({ 0, 0, 64, 32 });
 		ubo->set_data(bytes.data(), 64, 0);
 		ssbo->set_data(bytes.data(), 64, 64);
-		use_program();
-		drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
-		drv->draw_indices(mesh.array, RENDER_MODE::TRIANGLE, 3);
+		bind_test_pipeline();
+		drv->draw_indices(mesh.array.get(), 6, 0, 0);
+		drv->draw_indices(mesh.array, 3);
 		drv->end_render_pass();
 		drv->set_viewport({ 0, 0, 640, 480 });
 		chain.present();
@@ -196,45 +206,56 @@ BOOST_AUTO_TEST_CASE(ViewportOutsideTheRenderTargetIsReported)
 	BOOST_TEST((inner().viewport() == glm::ivec4(-1, 0, 8, 8)));
 }
 
-BOOST_AUTO_TEST_CASE(DrawBeforeAnyShaderUseIsReported)
+BOOST_AUTO_TEST_CASE(DrawBeforeAnyPipelineIsBoundIsReported)
 {
 	auto mesh = make_geometry(*drv, 3);
 	open_pass();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
 
-	expect_only(state(), vl::rule::draw_without_use);
+	expect_only(state(), vl::rule::draw_without_pipeline);
 	BOOST_TEST(inner().calls().draws == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(ShaderUseCoversTheDrawsOfTheFrameAndRestartsAtPresent)
+BOOST_AUTO_TEST_CASE(ABoundPipelineCoversTheDrawsOfThePassAndRestartsAtTheNextPass)
 {
 	auto mesh = make_geometry(*drv, 3);
-	use_program();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	bind_test_pipeline();
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
 	BOOST_TEST(state().total() == 0u);
 
 	drv->end_render_pass();
 	chain.present();
 	open_pass();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
-	expect_only(state(), vl::rule::draw_without_use);
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
+	expect_only(state(), vl::rule::draw_without_pipeline);
+}
+
+BOOST_AUTO_TEST_CASE(APipelineBoundInOnePassDoesNotCoverTheNextPassOfTheSameFrame)
+{
+	auto mesh = make_geometry(*drv, 3);
+	bind_test_pipeline();
+	drv->end_render_pass();
+	open_pass();
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
+
+	expect_only(state(), vl::rule::draw_without_pipeline);
 }
 
 BOOST_AUTO_TEST_CASE(DrawBeyondTheIndexBufferIsReported)
 {
 	auto mesh = make_geometry(*drv, 6);
-	use_program();
+	bind_test_pipeline();
 
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 3);
-	drv->draw_indices(mesh.array, RENDER_MODE::TRIANGLE, 6);
+	drv->draw_indices(mesh.array.get(), 6, 0, 0);
+	drv->draw_indices(mesh.array.get(), 3, 0, 3);
+	drv->draw_indices(mesh.array, 6);
 	BOOST_TEST(state().total() == 0u);
 
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 7, 0, 0);
+	drv->draw_indices(mesh.array.get(), 7, 0, 0);
 	expect_only(state(), vl::rule::draw_index_range, 1);
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 1);
+	drv->draw_indices(mesh.array.get(), 6, 0, 1);
 	expect_only(state(), vl::rule::draw_index_range, 2);
-	drv->draw_indices(mesh.array, RENDER_MODE::TRIANGLE, 9);
+	drv->draw_indices(mesh.array, 9);
 	expect_only(state(), vl::rule::draw_index_range, 3);
 }
 
@@ -246,8 +267,8 @@ BOOST_AUTO_TEST_CASE(DrawWithoutAnIndexBufferIsReported)
 	mesh.vertices->set_layout({ { SHADER_DATA_TYPE::VEC3_F, "position" } });
 	mesh.vertices->set_data(std::vector<float>(9));
 	mesh.array->add_vertex_buffer(mesh.vertices);
-	use_program();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	bind_test_pipeline();
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
 
 	expect_only(state(), vl::rule::draw_index_range);
 }
@@ -256,21 +277,21 @@ BOOST_AUTO_TEST_CASE(IndexBufferSizeIsFixedByItsFirstAllocation)
 {
 	auto mesh = make_geometry(*drv, 3);
 	mesh.indices->set_data(std::vector<unsigned int>(2));
-	use_program();
+	bind_test_pipeline();
 
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
 	BOOST_TEST(state().total() == 0u);
 
 	mesh.indices->reserve(12 * sizeof(unsigned int));
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 12, 0, 0);
+	drv->draw_indices(mesh.array.get(), 12, 0, 0);
 	BOOST_TEST(state().total() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(DrawWithoutAVertexLayoutIsReported)
 {
 	auto mesh = make_geometry(*drv, 3, false);
-	use_program();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	bind_test_pipeline();
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
 
 	expect_only(state(), vl::rule::draw_without_layout);
 }
@@ -279,8 +300,8 @@ BOOST_AUTO_TEST_CASE(ALayoutSetAfterTheBufferWasAttachedDoesNotCount)
 {
 	auto mesh = make_geometry(*drv, 3, false);
 	mesh.vertices->set_layout({ { SHADER_DATA_TYPE::VEC3_F, "position" } });
-	use_program();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	bind_test_pipeline();
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
 
 	expect_only(state(), vl::rule::draw_without_layout);
 }
@@ -346,10 +367,10 @@ BOOST_AUTO_TEST_CASE(DepthAttachmentDeletedBeforeUseIsReported)
 BOOST_AUTO_TEST_CASE(VertexArrayDeletedBeforeADrawIsReportedAndNotDrawn)
 {
 	auto mesh = make_geometry(*drv, 3);
-	use_program();
+	bind_test_pipeline();
 	const vertex_array_interface* stale = mesh.array.get();
 	mesh.array.reset();
-	drv->draw_indices(stale, RENDER_MODE::TRIANGLE, 3, 0, 0);
+	drv->draw_indices(stale, 3, 0, 0);
 
 	expect_only(state(), vl::rule::dead_object);
 	BOOST_TEST(inner().calls().draws == 0u);
@@ -357,8 +378,8 @@ BOOST_AUTO_TEST_CASE(VertexArrayDeletedBeforeADrawIsReportedAndNotDrawn)
 
 BOOST_AUTO_TEST_CASE(ADrawOfNullIsReportedAsADeadObject)
 {
-	use_program();
-	drv->draw_indices(static_cast<const vertex_array_interface*>(nullptr), RENDER_MODE::TRIANGLE, 3, 0, 0);
+	bind_test_pipeline();
+	drv->draw_indices(static_cast<const vertex_array_interface*>(nullptr), 3, 0, 0);
 
 	expect_only(state(), vl::rule::dead_object);
 }
@@ -482,8 +503,8 @@ BOOST_AUTO_TEST_CASE(ACorrectRenderPassFrameProducesNoViolations)
 		pass.render_area = { 8, 8, 16, 16 };
 		drv->begin_render_pass(pass);
 		drv->set_viewport({ 0, 0, 64, 32 });
-		use_program();
-		drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
+		bind_test_pipeline();
+		drv->draw_indices(mesh.array.get(), 6, 0, 0);
 		drv->end_render_pass();
 
 		render_pass_desc window;
@@ -741,8 +762,8 @@ BOOST_AUTO_TEST_CASE(TraceRecordsPassMarkersAndDrawsInOrder)
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto mesh = make_geometry(*drv, 6);
 	drv->begin_render_pass(pass_of(color.get()));
-	use_program();
-	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
+	bind_test_pipeline();
+	drv->draw_indices(mesh.array.get(), 6, 0, 0);
 	drv->end_render_pass();
 
 	std::vector<int> ops;
@@ -756,7 +777,7 @@ BOOST_AUTO_TEST_CASE(TraceRecordsPassMarkersAndDrawsInOrder)
 			draw_count = entry.a;
 		}
 	}
-	const std::vector<int> expected{ static_cast<int>(vl::trace_op::begin_pass), static_cast<int>(vl::trace_op::use_program),
+	const std::vector<int> expected{ static_cast<int>(vl::trace_op::begin_pass), static_cast<int>(vl::trace_op::bind_pipeline),
 		static_cast<int>(vl::trace_op::draw), static_cast<int>(vl::trace_op::end_pass) };
 	BOOST_TEST(ops == expected, boost::test_tools::per_element());
 	BOOST_TEST(draw_count == 6u);
@@ -806,15 +827,20 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	ssbo->bind(7);
 	drv->set_line_size(2.f);
 	drv->set_viewport({ 1, 2, 3, 4 });
-	render_state state_to_set = render_state::opaque();
-	drv->set_render_state(state_to_set);
+	pipeline_desc to_create;
+	to_create.shader = shader.get();
+	to_create.topology = RENDER_MODE::LINE;
+	const pipeline_handle pipeline = drv->create_pipeline(to_create);
+	drv->invalidate_state_cache();
 
 	BOOST_TEST(texture->width() == 8u);
 	BOOST_TEST((texture->get_usage() == texture_usage::sampled));
 	BOOST_TEST(texture->native() != texture.get());
 	BOOST_TEST(inner().line_size() == 2.f);
 	BOOST_TEST((inner().viewport() == glm::ivec4(1, 2, 3, 4)));
-	BOOST_TEST(inner().calls().render_state_sets == 1u);
+	BOOST_TEST(inner().pipelines().size() == 1u);
+	BOOST_TEST((inner().pipeline_info(pipeline).topology == RENDER_MODE::LINE));
+	BOOST_TEST(inner().calls().state_cache_invalidations == 1u);
 	BOOST_TEST(inner().stats().textures.created == 1u);
 	BOOST_TEST(inner().stats().shaders.created == 1u);
 	BOOST_TEST(inner().stats().uniform_buffers.created == 1u);
@@ -896,6 +922,221 @@ BOOST_AUTO_TEST_CASE(BindingATextureWithoutSampledUsageIsReported)
 	auto color = drv->create_texture(texture_of(8, 8, texture_usage::color_target));
 	color->bind(2);
 	expect_only(state(), vl::rule::texture_not_sampled);
+}
+
+BOOST_AUTO_TEST_CASE(APipelineMatchingThePassFormatsProducesNoViolations)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	texture_header depth_header = texture_of(16, 16, texture_usage::depth_target);
+	depth_header.data.format = texture_header::TYPE::D32;
+	auto depth = drv->create_texture(depth_header);
+	auto mesh = make_geometry(*drv, 3);
+
+	drv->begin_render_pass(pass_of(color.get(), depth.get()));
+	pipeline_desc desc;
+	program_object = drv->create_shader(program());
+	desc.shader = program_object.get();
+	desc.color_formats = { texture_format::RGBA8 };
+	desc.depth_format = texture_format::D32;
+	drv->bind_pipeline(drv->create_pipeline(desc));
+	drv->draw_indices(mesh.array.get(), 3, 0, 0);
+	drv->end_render_pass();
+
+	BOOST_TEST(state().total() == 0u);
+	BOOST_TEST(inner().calls().pipeline_binds == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(PipelineWithAnotherColorFormatThanThePassIsReported)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get()));
+	pipeline_desc desc = pipeline_for_pass();
+	desc.color_formats = { texture_format::RGBA16F };
+	drv->bind_pipeline(drv->create_pipeline(desc));
+
+	expect_only(state(), vl::rule::pipeline_format_mismatch);
+}
+
+BOOST_AUTO_TEST_CASE(PipelineWithADepthFormatForAPassWithoutDepthIsReported)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get()));
+	pipeline_desc desc = pipeline_for_pass();
+	desc.depth_format = texture_format::D32;
+	drv->bind_pipeline(drv->create_pipeline(desc));
+
+	expect_only(state(), vl::rule::pipeline_format_mismatch);
+}
+
+BOOST_AUTO_TEST_CASE(PipelineWithoutADepthFormatForAPassWithDepthIsReported)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
+	drv->begin_render_pass(pass_of(color.get(), depth.get()));
+	pipeline_desc desc = pipeline_for_pass();
+	desc.depth_format.reset();
+	drv->bind_pipeline(drv->create_pipeline(desc));
+
+	expect_only(state(), vl::rule::pipeline_format_mismatch);
+}
+
+BOOST_AUTO_TEST_CASE(PipelineWithFewerColorFormatsThanThePassTargetsIsReported)
+{
+	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto second = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	render_pass_desc pass = pass_of(first.get());
+	pass.colors.push_back({ .texture = second.get() });
+	drv->begin_render_pass(pass);
+	pipeline_desc desc = pipeline_for_pass();
+	BOOST_TEST(desc.color_formats.size() == 2u);
+	desc.color_formats.pop_back();
+	drv->bind_pipeline(drv->create_pipeline(desc));
+
+	expect_only(state(), vl::rule::pipeline_format_mismatch);
+}
+
+BOOST_AUTO_TEST_CASE(PipelinesForTheBackbufferDeclareTheWindowFormats)
+{
+	render_pass_desc window;
+	window.backbuffer = true;
+	window.debug_name = "window";
+	drv->begin_render_pass(window);
+	program_object = drv->create_shader(program());
+
+	pipeline_desc right;
+	right.shader = program_object.get();
+	set_target_formats(right, window);
+	drv->bind_pipeline(drv->create_pipeline(right));
+	BOOST_TEST(state().total() == 0u);
+	BOOST_TEST(right.color_formats.size() == 1u);
+	BOOST_TEST((right.depth_format == backbuffer_depth_format));
+
+	pipeline_desc wrong = right;
+	wrong.depth_format.reset();
+	drv->bind_pipeline(drv->create_pipeline(wrong));
+	expect_only(state(), vl::rule::pipeline_format_mismatch);
+}
+
+BOOST_AUTO_TEST_CASE(BindingAPipelineOutsideARenderPassIsReportedAndNotForwarded)
+{
+	program_object = drv->create_shader(program());
+	pipeline_desc desc;
+	desc.shader = program_object.get();
+	drv->bind_pipeline(drv->create_pipeline(desc));
+
+	expect_only(state(), vl::rule::bind_pipeline_outside_pass);
+	BOOST_TEST(inner().calls().pipeline_binds == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(BindingAHandleOfNoPipelineIsReportedAndNotForwarded)
+{
+	open_pass();
+	drv->bind_pipeline({});
+	expect_only(state(), vl::rule::invalid_pipeline, 1);
+	drv->bind_pipeline({ 7, 1 });
+	expect_only(state(), vl::rule::invalid_pipeline, 2);
+
+	pipeline_desc desc = pipeline_for_pass();
+	const pipeline_handle real = drv->create_pipeline(desc);
+	drv->bind_pipeline({ real.index, real.gen + 1 });
+	expect_only(state(), vl::rule::invalid_pipeline, 3);
+	BOOST_TEST(inner().calls().pipeline_binds == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(APipelineWithoutAShaderIsReportedAndNotCreated)
+{
+	const pipeline_handle handle = drv->create_pipeline(pipeline_desc{});
+
+	expect_only(state(), vl::rule::invalid_pipeline);
+	BOOST_TEST(!handle);
+	BOOST_TEST(inner().pipelines().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(APipelineOfADeadShaderIsReportedAsADeadObject)
+{
+	program_object = drv->create_shader(program());
+	pipeline_desc desc;
+	desc.shader = program_object.get();
+	program_object.reset();
+	const pipeline_handle handle = drv->create_pipeline(desc);
+
+	expect_only(state(), vl::rule::dead_object);
+	BOOST_TEST(!handle);
+	BOOST_TEST(inner().pipelines().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(BindingAPipelineWhoseShaderWasDeletedIsReportedAndNotForwarded)
+{
+	open_pass();
+	const pipeline_handle handle = drv->create_pipeline(pipeline_for_pass());
+	BOOST_TEST(state().total() == 0u);
+	program_object.reset();
+	drv->bind_pipeline(handle);
+
+	expect_only(state(), vl::rule::dead_object);
+	BOOST_TEST(inner().calls().pipeline_binds == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(BlendingMoreTargetsThanTheFormatsDeclareIsReported)
+{
+	open_pass();
+	pipeline_desc desc = pipeline_for_pass();
+	desc.blend = { blend_state{}, blend_state{} };
+	drv->create_pipeline(desc);
+
+	expect_only(state(), vl::rule::invalid_pipeline);
+}
+
+BOOST_AUTO_TEST_CASE(TheWrappedDriverGetsItsOwnShaderInThePipeline)
+{
+	open_pass();
+	const pipeline_handle handle = drv->create_pipeline(pipeline_for_pass());
+
+	const auto* wrapper = dynamic_cast<const vl::shader*>(drv->pipeline_info(handle).shader.object);
+	BOOST_REQUIRE(wrapper);
+	BOOST_TEST(inner().pipeline_info(handle).shader.object == &wrapper->inner());
+	BOOST_TEST(state().total() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(OneDescriptionGivesOneHandleThroughTheDecorator)
+{
+	open_pass();
+	const pipeline_desc desc = pipeline_for_pass();
+	const pipeline_handle first = drv->create_pipeline(desc);
+	const pipeline_handle again = drv->create_pipeline(desc);
+	pipeline_desc other = desc;
+	other.cull.enabled = true;
+	const pipeline_handle different = drv->create_pipeline(other);
+
+	BOOST_CHECK(first == again);
+	BOOST_CHECK(first != different);
+	BOOST_TEST(inner().pipelines().size() == 2u);
+	BOOST_TEST(state().current_frame().pipelines == 2u);
+	BOOST_TEST(state().total() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(PipelineBudgetCountsPipelinesCreatedInAFrame)
+{
+	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_pipelines = 2 });
+	auto limited_drv = limited.create_driver();
+	auto shader = limited_drv->create_shader(program());
+
+	pipeline_desc desc;
+	desc.shader = shader.get();
+	for (int i = 0; i < 4; ++i) {
+		desc.topology = static_cast<RENDER_MODE>(i);
+		limited_drv->create_pipeline(desc);
+	}
+	expect_only(limited.state(), vl::rule::budget_pipelines);
+	BOOST_TEST(limited.state().current_frame().pipelines == 4u);
+
+	limited.present();
+	for (int i = 0; i < 4; ++i) {
+		desc.topology = static_cast<RENDER_MODE>(i);
+		limited_drv->create_pipeline(desc);
+	}
+	BOOST_TEST(limited.state().current_frame().pipelines == 0u);
+	BOOST_TEST(limited.state().total() == 1u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

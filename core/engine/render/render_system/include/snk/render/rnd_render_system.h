@@ -70,14 +70,15 @@ namespace rnd
 		std::vector<std::shared_ptr<render_pass_interface>> render_passes;
 	};
 
+	// Sets the material's samplers and uniforms on the program of the pipeline bound for `variant`.
 	template<class T>
 	void configure_pass(const frame_context& context, T& desc)
 	{
-		context.shaders->use(desc);
+		context.shaders->apply(desc);
 	}
 
 	inline void configure_pass(const frame_context& context, variant_id variant, const compiled_material& material, const glm::mat4* world)
 	{
-		context.shaders->use(variant, material.params, world);
+		context.shaders->apply(variant, material.params, world);
 	}
 }

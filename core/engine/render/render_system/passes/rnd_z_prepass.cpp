@@ -1,6 +1,7 @@
 #include "rnd_z_prepass.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_pass_pipelines.h>
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -38,17 +39,16 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
          .mag = rnd::driver::texture_header::FILTERING::NEAREST,
          .wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_BORDER});
 
-    rnd::driver::render_state state;
-    state.depth.enabled = true;
-    state.depth.write_mask = true;
-    state.depth.test_func = rnd::driver::depth_state::func::LESS;
-    drv.set_render_state(state);
-
     rnd::driver::render_pass_desc pass;
     pass.depth_stencil = rnd::driver::attachment_desc{
         .texture = z_pass_rt, .load = rnd::driver::load_op::clear};
     pass.debug_name = "z_prepass";
     drv.begin_render_pass(pass);
+
+    rnd::driver::pipeline_desc state;
+    state.depth = {.enabled = true, .write_mask = true, .test_func = rnd::driver::depth_state::func::LESS};
+    rnd::driver::set_target_formats(state, pass);
+    rnd::pass_pipelines pipelines(drv, *context.shaders, state);
 
     common_matrix.view = packet.camera.view_matrix;
     common_matrix.projection = packet.camera.projection_matrix;
@@ -82,6 +82,8 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       if (!variant.is_valid()) {
         variant = variants.with_program(dc.variant, z_prepass_program);
       }
+      if (!pipelines.bind(variant))
+        continue;
       rnd::configure_pass(context, variant, *dc.material, &dc.transform);
 
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
@@ -90,7 +92,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
           }
       }
 
-      drv.draw_indices(va, rnd::RENDER_MODE::TRIANGLE, dc.indices_count,
+      drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);
     }
 

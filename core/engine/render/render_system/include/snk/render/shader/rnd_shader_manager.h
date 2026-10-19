@@ -95,15 +95,19 @@ namespace rnd
 
 		shader_config_cache& variants() const { return m_variants; }
 
-		void use(const shader_config& desc) const
+		// The program of a variant, compiled on its first use; null when it does not compile.
+		driver::shader_interface* program(variant_id variant) const { return require_program(variant); }
+
+		// Sets the samplers and uniforms of a variant's program. The variant's pipeline has to be bound first:
+		// binding it is what makes the program current.
+		void apply(const shader_config& desc) const
 		{
-			use(m_variants.intern(desc.cdata), desc.rdata, nullptr);
+			apply(m_variants.intern(desc.cdata), desc.rdata, nullptr);
 		}
 
-		void use(variant_id variant, const shader_config::runtime_data& params, const glm::mat4* world) const
+		void apply(variant_id variant, const shader_config::runtime_data& params, const glm::mat4* world) const
 		{
 			if (auto* shader = require_program(variant)) {
-				shader->use();
 				rnd::configure_render_pass(params, world, shader);
 			}
 		}

@@ -141,6 +141,7 @@ namespace rnd::driver
 		// Texture information
 		TEXTURE_TYPE get_type() const { return header.type; }
 		texture_usage get_usage() const { return header.usage; }
+		texture_header::TYPE format() const { return header.data.format; }
 		bool has_usage(texture_usage required) const { return rnd::driver::has_usage(header.usage, required); }
 
 		// Texture dimensions

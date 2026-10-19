@@ -2,6 +2,7 @@
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_pass_pipelines.h>
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -52,7 +53,7 @@ void transparent_pass::execute(frame_context &context,
         txm_manager, tp_reveal_tag, {vp_width, vp_height},
         rnd::driver::texture_header::TYPE::R8, tp_usage, tp_sampling);
 
-    rnd::driver::render_state state;
+    rnd::driver::pipeline_desc state;
     state.depth.enabled = true;
     state.depth.write_mask = false;
     state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
@@ -68,8 +69,7 @@ void transparent_pass::execute(frame_context &context,
     weight_blend.dst_factor =
         rnd::driver::blend_state::factor::ONE_MINUS_SRC_COLOR;
 
-    state.blend_states = {color_blend, weight_blend};
-    drv.set_render_state(state);
+    state.blend = {color_blend, weight_blend};
 
     rnd::driver::render_pass_desc pass;
     pass.colors.push_back({.texture = color_tp_rt,
@@ -83,6 +83,8 @@ void transparent_pass::execute(frame_context &context,
     }
     pass.debug_name = "transparent";
     drv.begin_render_pass(pass);
+    rnd::driver::set_target_formats(state, pass);
+    rnd::pass_pipelines pipelines(drv, *context.shaders, state);
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
@@ -98,6 +100,8 @@ void transparent_pass::execute(frame_context &context,
       if (!va)
         continue;
 
+      if (!pipelines.bind(dc.variant))
+        continue;
       rnd::configure_pass(context, dc.variant, *dc.material, &dc.transform);
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
           if (auto* skm = context.skinning) {
@@ -105,7 +109,7 @@ void transparent_pass::execute(frame_context &context,
           }
       }
 
-      drv.draw_indices(va, rnd::RENDER_MODE::TRIANGLE, dc.indices_count,
+      drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);
     }
 

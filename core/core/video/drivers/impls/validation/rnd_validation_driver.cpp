@@ -1,5 +1,7 @@
 #include "rnd_validation_driver.h"
 
+#include <snk/driver/rnd_pipeline_cache.h>
+
 #include <algorithm>
 #include <array>
 #include <format>
@@ -47,6 +49,23 @@ namespace {
 		case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY: return std::max(texture.layers(), 1u) * 6;
 		default: return 1;
 		}
+	}
+
+	const char* format_name(texture_format format)
+	{
+		static constexpr const char* names[] = { "R8", "RGB8", "RGBA8", "RGBA12", "RGBA16", "RGBA16F", "RGBA32F", "R32I", "R32F",
+			"D32F_S8", "D24_S8", "D32", "D24", "D16", "D32F", "S1", "S4", "S8" };
+		return names[static_cast<std::size_t>(format)];
+	}
+
+	std::string formats_text(const ds::fixed_vector<std::optional<texture_format>, pipeline_desc::max_targets>& colors, const std::optional<texture_format>& depth)
+	{
+		std::string text = "colors [";
+		for (std::size_t i = 0; i < colors.size(); ++i) {
+			text += std::format("{}{}", i ? ", " : "", colors[i] ? format_name(*colors[i]) : "none");
+		}
+		text += std::format("], depth {}", depth ? format_name(*depth) : "none");
+		return text;
 	}
 
 	const char* pass_label(const render_pass_desc& desc)
@@ -177,7 +196,10 @@ void rnd::driver::validation::driver::begin_render_pass(const render_pass_desc& 
 		m_state->drop_begin();
 		return;
 	}
-	m_state->begin_pass(pass_label(desc), target, static_cast<std::uint32_t>(desc.colors.size()), desc.depth_stencil.has_value());
+	pipeline_desc formats;
+	set_target_formats(formats, desc);
+	m_state->begin_pass(pass_label(desc), target, { formats.color_formats, formats.depth_format },
+		static_cast<std::uint32_t>(desc.colors.size()), desc.depth_stencil.has_value());
 	m_inner->begin_render_pass(inner_desc);
 }
 
@@ -219,8 +241,8 @@ const rnd::driver::validation::vertex_array* rnd::driver::validation::driver::ch
 	if (!m_state->in_pass()) {
 		m_state->report(rule::draw_outside_render_pass, "draw outside a render pass");
 	}
-	if (!m_state->program_used()) {
-		m_state->report(rule::draw_without_use, "draw before any shader use() in this frame");
+	if (!m_state->pipeline_bound()) {
+		m_state->report(rule::draw_without_pipeline, "draw before a pipeline is bound in this render pass");
 	}
 	if (!wrapped->has_layout()) {
 		m_state->report(rule::draw_without_layout, "draw with a vertex array that has no vertex buffer layout");
@@ -232,18 +254,87 @@ const rnd::driver::validation::vertex_array* rnd::driver::validation::driver::ch
 	return wrapped;
 }
 
-void rnd::driver::validation::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
+void rnd::driver::validation::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset)
 {
 	if (const vertex_array* wrapped = check_draw(vertices.get(), count, 0)) {
-		m_inner->draw_indices(wrapped->inner(), render_mode, count, offset);
+		m_inner->draw_indices(wrapped->inner(), count, offset);
 	}
 }
 
-void rnd::driver::validation::driver::draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index)
+void rnd::driver::validation::driver::draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index)
 {
 	if (const vertex_array* wrapped = check_draw(va, count, base_index)) {
-		m_inner->draw_indices(wrapped->inner().get(), rm, count, base_vertex, base_index);
+		m_inner->draw_indices(wrapped->inner().get(), count, base_vertex, base_index);
 	}
+}
+
+bool rnd::driver::validation::driver::shader_alive(const shader_ref& ref)
+{
+	if (!m_state->require_live(ref.object, object_kind::shader, "pipeline shader")) {
+		return false;
+	}
+	// A live shader at the address is not the one the pipeline was made for if the pipeline's shader died.
+	if (ref.object->serial() != ref.serial) {
+		m_state->report(rule::dead_object, std::format("pipeline shader {} was deleted, another shader lives at its address", static_cast<const void*>(ref.object)));
+		return false;
+	}
+	return true;
+}
+
+rnd::driver::pipeline_handle rnd::driver::validation::driver::create_pipeline(const pipeline_desc& desc)
+{
+	if (!desc.shader) {
+		m_state->report(rule::invalid_pipeline, "pipeline without a shader");
+		return {};
+	}
+	if (!shader_alive(desc.shader)) {
+		return {};
+	}
+	if (desc.blend.size() > desc.color_formats.size()) {
+		m_state->report(rule::invalid_pipeline, std::format("pipeline blends {} targets but declares {} color formats",
+			desc.blend.size(), desc.color_formats.size()));
+	}
+
+	pipeline_desc inner_desc = desc;
+	inner_desc.shader = &static_cast<const shader*>(desc.shader.object)->inner();
+	const pipeline_handle handle = m_inner->create_pipeline(inner_desc);
+	if (handle.index == m_pipelines.size() + 1) {
+		m_pipelines.push_back({ handle, desc });
+		m_state->on_pipeline_created();
+	}
+	return handle;
+}
+
+void rnd::driver::validation::driver::bind_pipeline(pipeline_handle pipeline)
+{
+	m_state->note(trace_op::bind_pipeline, pipeline.index);
+	if (!m_state->in_pass()) {
+		m_state->report(rule::bind_pipeline_outside_pass, "bind_pipeline outside a render pass");
+		return;
+	}
+	const bool known = pipeline.index != 0 && pipeline.index <= m_pipelines.size() && m_pipelines[pipeline.index - 1].handle == pipeline;
+	if (!known) {
+		m_state->report(rule::invalid_pipeline, std::format("bind_pipeline with a handle of no pipeline (index {}, generation {})", pipeline.index, pipeline.gen));
+		return;
+	}
+	const pipeline_desc& desc = m_pipelines[pipeline.index - 1].desc;
+	if (!shader_alive(desc.shader)) {
+		return;
+	}
+
+	const pass_formats& expected = m_state->current_formats();
+	if (!(desc.color_formats == expected.colors) || desc.depth_format != expected.depth) {
+		m_state->report(rule::pipeline_format_mismatch, std::format("pipeline {} declares {}, render pass '{}' renders to {}",
+			pipeline.index, formats_text(desc.color_formats, desc.depth_format), m_state->pass_name(), formats_text(expected.colors, expected.depth)));
+	}
+	m_state->on_pipeline_bound();
+	m_inner->bind_pipeline(pipeline);
+}
+
+const rnd::driver::pipeline_desc& rnd::driver::validation::driver::pipeline_info(pipeline_handle pipeline) const
+{
+	const bool known = pipeline.index != 0 && pipeline.index <= m_pipelines.size() && m_pipelines[pipeline.index - 1].handle == pipeline;
+	return known ? m_pipelines[pipeline.index - 1].desc : empty_pipeline_desc();
 }
 
 std::unique_ptr<rnd::driver::shader_interface> rnd::driver::validation::driver::create_shader(const std::vector<shader_header>& headers)

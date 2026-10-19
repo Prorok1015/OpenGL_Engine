@@ -4,6 +4,7 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <unordered_map>
+#include <snk/driver/rnd_pipeline.h>
 #include <snk/driver/rnd_render_pass.h>
 
 namespace rnd::driver
@@ -17,135 +18,12 @@ namespace rnd::driver
 	class buffer_interface;
 	class ssbo_buffer_interface;
 
-	// Depth state configuration
-	struct depth_state {
-		enum class func {
-			LESS,
-			LEQUAL,
-			EQUAL,
-			ALWAYS,
-			GREATER,
-			GEQUAL,
-			NOTEQUAL,
-			NEVER
-		};
-		
-		bool enabled = false;
-		bool write_mask = true;
-		func test_func = func::LESS;
-	};
-
-	// Blend state configuration
-	struct blend_state {
-		enum class factor {
-			ZERO,
-			ONE,
-			SRC_COLOR,
-			ONE_MINUS_SRC_COLOR,
-			DST_COLOR,
-			ONE_MINUS_DST_COLOR,
-			SRC_ALPHA,
-			ONE_MINUS_SRC_ALPHA,
-			DST_ALPHA,
-			ONE_MINUS_DST_ALPHA
-		};
-
-		enum class equation {
-			ADD,
-			SUBTRACT,
-			REVERSE_SUBTRACT,
-			MIN,
-			MAX
-		};
-
-		bool enabled = false;
-		factor src_factor = factor::ONE;
-		factor dst_factor = factor::ZERO;
-		equation blend_eq = equation::ADD;
-	};
-
-	// Face culling configuration
-	struct face_culling_state {
-		enum class mode {
-			FRONT,
-			BACK,
-			FRONT_AND_BACK
-		};
-
-		bool enabled = false;
-		mode cull_mode = mode::BACK;
-	};
-
 	struct shader_header
 	{
 		enum class shader_type { VERTEX, FRAGMENT, GEOMETRY };
 		std::string title;
 		std::string body;
 		shader_type type;
-	};
-
-	enum class RENDER_MODE
-	{
-		TRIANGLE,
-		TRIANGLE_STRIP,
-		TRIANGLE_FAN,
-		TRIANGLE_ADJ,
-		TRIANGLE_STRIP_ADJ,
-		LINE,
-		LINE_STRIP,
-		LINE_LOOP,
-		LINE_ADJ,
-		LINE_STRIP_ADJ,
-		POINT,
-	};
-
-	// Combined render state
-	struct render_state {
-		depth_state depth;
-		std::vector<blend_state> blend_states;
-		face_culling_state face_culling;
-
-		// Factory methods for common states
-		static render_state opaque() {
-			render_state state;
-			state.depth.enabled = true;
-			state.depth.write_mask = true;
-			state.depth.test_func = depth_state::func::LESS;
-			state.blend_states = { blend_state{} };
-			state.face_culling.enabled = true;
-			return state;
-		}
-
-		static render_state transparent() {
-			render_state state;
-			state.depth.enabled = true;
-			state.depth.write_mask = false;
-			state.depth.test_func = depth_state::func::LESS;
-			
-			blend_state blend;
-			blend.enabled = true;
-			blend.src_factor = blend_state::factor::SRC_ALPHA;
-			blend.dst_factor = blend_state::factor::ONE_MINUS_SRC_ALPHA;
-			state.blend_states = { blend };
-			
-			state.face_culling.enabled = true;
-			return state;
-		}
-
-		static render_state ui() {
-			render_state state;
-			state.depth.enabled = false;
-			state.depth.write_mask = false;
-			
-			blend_state blend;
-			blend.enabled = true;
-			blend.src_factor = blend_state::factor::SRC_ALPHA;
-			blend.dst_factor = blend_state::factor::ONE_MINUS_SRC_ALPHA;
-			state.blend_states = { blend };
-			
-			state.face_culling.enabled = false;
-			return state;
-		}
 	};
 
 	class driver_interface
@@ -159,8 +37,9 @@ namespace rnd::driver
 
 		virtual void set_viewport(glm::ivec4 rect) = 0;
 		virtual void set_line_size(float size) = 0;
-		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) = 0;
-		virtual void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) = 0;
+		// Draws go through the bound pipeline: its program, fixed-function state and topology.
+		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset = 0) = 0;
+		virtual void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) = 0;
 
 
 		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) = 0;
@@ -170,7 +49,15 @@ namespace rnd::driver
 		virtual std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) = 0;
 		virtual std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) = 0;
 
-		virtual void set_render_state(const render_state& state) = 0;
+		// The same description always gives the same handle. The pipeline is immutable and lives as long as the driver.
+		virtual pipeline_handle create_pipeline(const pipeline_desc& desc) = 0;
+		// Makes the pipeline current for the draws that follow, inside a render pass whose formats it declares.
+		// The state of a previous pipeline is not inherited: everything a draw depends on is in the pipeline.
+		virtual void bind_pipeline(pipeline_handle pipeline) = 0;
+		// The description a pipeline was created from; an empty one for a handle that names no pipeline.
+		virtual const pipeline_desc& pipeline_info(pipeline_handle pipeline) const = 0;
+		// Forget what the driver believes the API state is, after foreign code (ImGui) touched it.
+		virtual void invalidate_state_cache() = 0;
 
 		// GPU timer queries for profiling
 		virtual bool supports_timer_queries() const { return false; }

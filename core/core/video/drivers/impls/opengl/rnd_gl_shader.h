@@ -20,7 +20,9 @@ namespace rnd::driver::gl
 		void uniform(std::string_view name, glm::vec2 val);
 		void uniform(std::string_view name, int val);
 		void uniform(std::string_view name, float val);
-		virtual void use() override;
+		// Makes the program current; the driver does it when a pipeline is bound.
+		void use() const;
+		GLuint program() const { return id; }
 
 	private:
 		GLuint id = 0;
