@@ -49,9 +49,15 @@ namespace wnd
 			m_close_handler = std::move(handler);
 		}
 
-		// Backends call this when the user asks to close `win`.
+		// Backends call this when the user asks to close `win`. The window stays open unless the handler
+		// shuts it down; without a handler it closes at once.
 		void request_close(window& win) {
-			win.shutdown();
+			if (!m_close_handler) {
+				win.shutdown();
+				return;
+			}
+			win.shutdown(false);
+			m_close_handler();
 		}
 
 	private:

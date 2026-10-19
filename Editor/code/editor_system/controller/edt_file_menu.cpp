@@ -62,13 +62,13 @@ bool edt::file_menu::invoke(std::string_view action_id, json::value args)
 	return outcome.ok;
 }
 
-void edt::file_menu::guard_unsaved(std::function<void(bool discard)> action)
+std::optional<edt::dialog_service::dialog_id> edt::file_menu::guard_unsaved(std::function<void(bool discard)> action)
 {
 	if (!m_hooks.is_dirty()) {
 		action(false);
-		return;
+		return std::nullopt;
 	}
-	m_dialogs.confirm_unsaved([this, alive = std::weak_ptr<void>(m_alive), action = std::move(action)](unsaved_choice choice) {
+	return m_dialogs.confirm_unsaved([this, alive = std::weak_ptr<void>(m_alive), action = std::move(action)](unsaved_choice choice) {
 		if (alive.lock()) on_unsaved_choice(choice, action);
 	});
 }
@@ -104,7 +104,9 @@ void edt::file_menu::new_level()
 
 void edt::file_menu::exit()
 {
-	guard_unsaved([this](bool discard) { invoke("file.exit", json::object{ { "discard_unsaved", discard } }); });
+	// A second close request (the X clicked again) must not stack another prompt behind the first.
+	if (m_exit_prompt_id && m_dialogs.is_pending(*m_exit_prompt_id)) return;
+	m_exit_prompt_id = guard_unsaved([this](bool discard) { invoke("file.exit", json::object{ { "discard_unsaved", discard } }); });
 }
 
 void edt::file_menu::attach_window_close(wnd::window_system& windows)
@@ -201,8 +203,16 @@ void edt::file_menu::register_actions()
 		.args_schema = path_schema(true),
 		.activate = [this] { open_level(); } });
 
-	// The menu item always asks for a path; Ctrl+S overwrites the saved level (file.save below).
-	add({ .id = "file.save_as", .label = "Save Level", .menu_path = "File", .shortcut_hint = "Ctrl+S",
+	add({ .id = "file.save", .label = "Save Level", .menu_path = "File", .shortcut = "Ctrl+S",
+		.execute = [this](const json::value&) {
+			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
+			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
+			m_hooks.quick_save();
+			return action_result::success();
+		},
+		.activate = [this] { quick_save(); } });
+
+	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File", .shortcut = "Ctrl+Shift+S",
 		.execute = [this](const json::value& args) {
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			if (!m_hooks.save_level_as(std::string(args.as_object().at("path").as_string())))
@@ -211,15 +221,6 @@ void edt::file_menu::register_actions()
 		},
 		.args_schema = path_schema(false),
 		.activate = [this] { save_level(); } });
-
-	add({ .id = "file.save", .label = "Quick Save", .shortcut = "Ctrl+S",
-		.execute = [this](const json::value&) {
-			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
-			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
-			m_hooks.quick_save();
-			return action_result::success();
-		},
-		.activate = [this] { quick_save(); } });
 
 	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {

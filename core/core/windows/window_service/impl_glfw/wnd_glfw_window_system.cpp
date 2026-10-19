@@ -153,6 +153,13 @@ namespace {
         }
     }
 
+    void window_close_callback(GLFWwindow* window) {
+        auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
+        if (auto win = wndCreator.find_window(window)) {
+            wndCreator.request_close(*win);
+        }
+    }
+
     void window_move_callback(GLFWwindow* window, int xpos, int ypos) {
         auto& wndCreator = *(wnd::glfw_window_system*)glfwGetWindowUserPointer(window);
 
@@ -216,6 +223,7 @@ std::shared_ptr<wnd::glfw_window> wnd::glfw_window_system::make_window()
     glfwSetWindowContentScaleCallback(wid, content_scale_callback);
 
     glfwSetWindowRefreshCallback(wid, window_refresh_callback);
+    glfwSetWindowCloseCallback(wid, window_close_callback);
     glfwSetWindowPosCallback(wid, window_move_callback);
     glfwSetWindowSizeCallback(wid, window_size_callback);
     glfwSetWindowFocusCallback(wid, window_focus_callback);
