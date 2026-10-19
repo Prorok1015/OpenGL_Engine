@@ -93,6 +93,14 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             auto mesh_count = meshes_view.size_hint();
             packet.opaque_draws.reserve(mesh_count);
             packet.transparent_draws.reserve(mesh_count);
+            // Every skeleton is copied at most once per packet, so the palettes together bound the copy.
+            std::size_t bone_estimate = 0;
+            std::size_t skeleton_estimate = 0;
+            for (auto [skel_ent, bones] : reg.view<scn::bone_matrices_component>().each()) {
+                bone_estimate += bones.matrices.size();
+                ++skeleton_estimate;
+            }
+            packet.bones.reserve(bone_estimate, skeleton_estimate);
             for (auto&& [m_ent, name, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
                 const auto mlt_ptr = mat.mlt_desc.get();
@@ -127,7 +135,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
                             auto& matrices = reg.get<scn::bone_matrices_component>(skel_ent);
 
-                            dc.bone_matrices = &matrices.matrices;
+                            dc.bone_offset = packet.bones.add(&matrices.matrices, matrices.matrices);
                             dc.skinning_tag = skin->skinning_tag;
 
                             has_skinning = true;
@@ -164,7 +172,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             auto skys_view = reg.view<scn::sky_component, scn::material_desc_component, scn::renderable>();
             for (auto [sky_ent, sky, mat] : skys_view.each()) {
                 if (const auto sky_desc = mat.mlt_desc.get()) {
-                    // Skybox: no skinning; uWorldMeshMatr only if the sky entity has a world transform.
+                    // Skybox: no skinning; a world transform only if the sky entity has one.
                     rnd::skybox_draw_t sky_draw;
                     if (auto* sky_trans = reg.try_get<scn::world_transform>(sky_ent)) {
                         sky_draw.world = sky_trans->world;

@@ -5,6 +5,7 @@
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/render/shader/rnd_shader_manager.h>
 #include <snk/render/geom/rnd_geom_manager.h>
+#include <snk/render/rnd_per_draw_data.h>
 
 #include <snk/render/rnd_render_pass_interface.h>
 #include <snk/render/rnd_frame_context.h>
@@ -66,18 +67,14 @@ namespace rnd
 		rnd::texture_manager texture_manager;
 		rnd::ShaderManager shader_manager;
 		rnd::geom_manager geom_manager;
+		rnd::per_draw_data draw_data;
 
 		std::vector<std::shared_ptr<render_pass_interface>> render_passes;
 	};
 
-	template<class T>
-	void configure_pass(const frame_context& context, T& desc)
+	// Sets the material's samplers and uniforms on the program of the pipeline bound for `variant`.
+	inline void configure_pass(const frame_context& context, variant_id variant, const compiled_material& material)
 	{
-		context.shaders->use(desc);
-	}
-
-	inline void configure_pass(const frame_context& context, variant_id variant, const compiled_material& material, const glm::mat4* world)
-	{
-		context.shaders->use(variant, material.params, world);
+		context.shaders->apply(variant, material.params);
 	}
 }

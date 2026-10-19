@@ -21,6 +21,7 @@
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
+#include "edt_main_menu.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
@@ -38,7 +39,6 @@
 #include <snk/config/cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
-#include <future>
 #include <fstream>
 
 namespace {
@@ -84,7 +84,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
-		data.require<scn::context_manager>());
+		data.require<scn::context_manager>(), data.require<ds::task_system>());
+	editor_layer->set_context(*m_context);
+	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});
@@ -139,11 +141,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	});
 
-	// Register panels with manager
-	auto& pm = editor_layer->get_panel_manager();
-	pm.add_panel(m_hierarchy_panel);
-	pm.add_panel(m_inspector_panel);
-	pm.add_panel(m_viewport_panel);
+	// Registration order is the render order and the View menu order.
+	const auto add_panel = [this](const std::shared_ptr<panel_base>& panel, dock_slot slot, bool open_by_default) {
+		m_registrations.push_back(m_context->panels().add({
+			.id = panel->get_id(), .title = panel->get_title(), .slot = slot, .open_by_default = open_by_default, .panel = panel }));
+	};
+	add_panel(m_hierarchy_panel, dock_slot::left, true);
+	add_panel(m_inspector_panel, dock_slot::right, true);
+	add_panel(m_viewport_panel, dock_slot::center, true);
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
 		auto ctx_mgr = m_state.ctx_manager.lock();
@@ -159,11 +164,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 	});
 	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_state); });
-	m_game_view_panel->set_open(cfg_show_game_view);
-	pm.add_panel(m_game_view_panel);
-	pm.add_panel(m_console_panel);
-	pm.add_panel(m_asset_browser_panel);
-	pm.add_panel(m_prefab_panel);
+	add_panel(m_game_view_panel, dock_slot::center, cfg_show_game_view);
+	add_panel(m_console_panel, dock_slot::bottom_right, true);
+	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
+	add_panel(m_prefab_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -189,8 +193,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 	hooks.exit = m_exit_action;
 	hooks.resources_path = res::resource_system::get_resources_path();
-	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), std::move(hooks));
-	m_file_menu->attach(editor_layer->get_dockspace());
+	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
+	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
+	m_file_menu->register_actions();
 
 	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
@@ -231,9 +236,21 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 
 	m_import_token = std::make_unique<edt::async_import_token>();
 	m_import_token->display_name = abs_path.filename().string();
-	m_import_token->future = std::async(std::launch::async,
-		[this, abs_path]() -> edt::import_intermediate {
-			return m_model_importer->import_background(abs_path);
+	// compute lane: assimp parsing and mesh building are CPU-bound; the io lane has two threads for blocking files.
+	m_import_token->job = m_context->jobs().start(ds::lane::compute,
+		{ "Import " + m_import_token->display_name, "import" }, m_lifetime,
+		[importer = m_model_importer.get(), abs_path](ds::task_context& ctx) -> edt::import_intermediate {
+			ctx.throw_if_stopped();
+			return importer->import_background(abs_path);
+		},
+		[this](ds::task_result<edt::import_intermediate>& result) {
+			if (!m_import_token) return;
+			m_import_token->finished = true;
+			if (result.ok()) {
+				m_import_token->intermediate = std::move(*result.value);
+			} else {
+				m_import_token->failure = result.error;
+			}
 		});
 	editor_layer->register_implicit("edt/import_model", [this] { return poll_import_pipeline(); });
 }
@@ -241,9 +258,10 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 bool edt::editor_system::poll_import_progress()
 {
 	auto& token = *m_import_token;
-	bool finished = token.future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+	// Not running and not finished: the job was cancelled and its result discarded.
+	const bool waiting = !token.finished && m_context->jobs().is_running(token.job);
 
-	if (!finished) {
+	if (waiting) {
 		ImGui::OpenPopup("Importing##edt_import");
 		if (ImGui::BeginPopupModal("Importing##edt_import", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
@@ -265,7 +283,15 @@ bool edt::editor_system::poll_import_progress()
 		ImGui::EndPopup();
 	}
 
-	auto intermediate = token.future.get();
+	if (!token.intermediate) {
+		if (!token.failure.empty()) {
+			egLOG("Editor/Import", "Async import failed: {}", token.failure);
+		}
+		m_import_token.reset();
+		return false;
+	}
+
+	auto intermediate = std::move(*token.intermediate);
 	m_import_token.reset();
 
 	if (!intermediate.error.empty()) {

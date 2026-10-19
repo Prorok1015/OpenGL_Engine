@@ -11,6 +11,7 @@ void rnd::render_system::begin_frame(frame_context& context)
 	context.shaders  = &shader_manager;
 	context.geometry = &geom_manager;
 	context.skinning = m_skinning_manager; // nullable
+	context.draw_data = &draw_data;
 	context.material_compiler = m_material_compiler.get();
 }
 
@@ -19,6 +20,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, texture_manager(drv.get(), d, res_sys)
 	, shader_manager(drv.get(), res_sys)
 	, geom_manager(drv.get(), d, res_sys)
+	, draw_data(*drv)
 {
 	texture_manager.register_loader("texture_2d_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> std::unique_ptr<rnd::driver::texture_interface> {
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
@@ -136,6 +138,10 @@ void rnd::render_system::render_frame(frame_context& context) const
 {
 	PROFILE_SCOPE("RenderFrame");
 	if (!drv) return;
+
+	drv->begin_frame();
+	// ImGui renders between two frames and leaves its own state behind.
+	drv->invalidate_state_cache();
 
 	auto& gpu = rnd::get_gpu_profiler();
 	gpu.begin_frame(ds::profiler_current_frame());

@@ -2,13 +2,7 @@
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec4 aColor;
 
-layout (std140, binding = 0) uniform Matrices
-{
-    mat4 projection;
-    mat4 view;
-    float time;
-    vec3 cameraPosition;
-};
+#include "snk_common.glsl"
 
 out vec4 vColor;
 

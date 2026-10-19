@@ -1,4 +1,5 @@
 #include "edt_asset_export_dialog.h"
+#include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
 
@@ -7,11 +8,7 @@ edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter)
 {
 }
 
-edt::asset_export_dialog::~asset_export_dialog()
-{
-	if (m_export_future.valid())
-		m_export_future.wait();
-}
+edt::asset_export_dialog::~asset_export_dialog() = default;
 
 void edt::asset_export_dialog::open(import_result result)
 {
@@ -147,18 +144,31 @@ void edt::asset_export_dialog::render_export_form()
 	if (ImGui::Button("Export", { bw, 0.f })) {
 		auto remap = m_exporter.build_remap(m_import, asset_name_s, target_folder_s);
 
+		ASSERT_MSG(m_jobs, "asset_export_dialog: set_jobs() was not called");
 		m_export_progress = std::make_shared<export_progress>();
 		m_exporting = true;
+		m_export_done = false;
 
 		// Capture by value for the background thread
 		auto import_copy = m_import;
 		auto progress_ptr = m_export_progress;
 		auto* exporter_ptr = &m_exporter;
 
-		m_export_future = std::async(std::launch::async,
+		// io lane: the work is writing files to the project; the exporter reports through export_progress.
+		m_export_job = m_jobs->start(ds::lane::io, { "Export " + asset_name_s, "export" }, m_lifetime,
 			[exporter_ptr, import_copy = std::move(import_copy),
-			 remap = std::move(remap), progress_ptr]() {
+			 remap = std::move(remap), progress_ptr](ds::task_context& ctx) {
+				ctx.throw_if_stopped();
 				return exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get());
+			},
+			[this](ds::task_result<bool>& result) {
+				if (!result.ok()) {
+					egLOG_ERROR("edt/export", "Export failed: {}", result.error);
+				} else if (m_export_progress && m_export_progress->success.load()) {
+					m_exported_tag = m_export_progress->exported_tag;
+					egLOG("edt/export", "Export successful: {}", m_exported_tag.view());
+				}
+				m_export_done = true;
 			});
 	}
 	if (!can_export) ImGui::EndDisabled();
@@ -186,17 +196,11 @@ void edt::asset_export_dialog::render_export_progress()
 
 	ImGui::Spacing();
 
-	// Check if export finished
-	if (m_export_progress->finished.load()) {
-		if (m_export_progress->success.load()) {
-			m_exported_tag = m_export_progress->exported_tag;
-			egLOG("edt/export", "Export successful: {}", m_exported_tag.view());
-		}
+	// The job was cancelled and its result discarded: nothing more will arrive.
+	if (!m_export_done && !m_jobs->is_running(m_export_job))
+		m_export_done = true;
 
-		// Wait for future to complete (should be immediate since finished == true)
-		if (m_export_future.valid())
-			m_export_future.get();
-
+	if (m_export_done) {
 		m_exporting = false;
 		m_export_progress.reset();
 		m_is_open = false;

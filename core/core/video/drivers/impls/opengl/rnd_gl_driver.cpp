@@ -2,13 +2,12 @@
 #include "open_gl_specific.h"
 #include "rnd_gl_framebuffers.h"
 #include <snk/common/ds/ds_fixed_vector.hpp>
+#include <algorithm>
 #include <glad/glad.h>
 #include <rnd_gl_shader.h>
 #include <rnd_gl_texture.h>
 #include <rnd_gl_vertex_array.h>
 #include <rnd_gl_buffer.h>
-#include <rnd_gl_uniform_buffer.h>
-#include <rnd_gl_ssbo_buffer.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/engine_assert.h>
 
@@ -16,14 +15,8 @@ const GLenum gRenderModeToGLRenderMode[] =
 {
 	GL_TRIANGLES,
 	GL_TRIANGLE_STRIP,
-	GL_TRIANGLE_FAN,
-	GL_TRIANGLES_ADJACENCY,
-	GL_TRIANGLE_STRIP_ADJACENCY,
 	GL_LINES,
 	GL_LINE_STRIP,
-	GL_LINE_LOOP,
-	GL_LINES_ADJACENCY,
-	GL_LINE_STRIP_ADJACENCY,
 	GL_POINTS,
 };
 
@@ -201,6 +194,9 @@ rnd::driver::gl::driver::driver()
 rnd::driver::gl::driver::~driver()
 {
 	m_framebuffers->release_all();
+	m_buffers.for_each([](buffer_handle, gl_buffer& buffer) {
+		glDeleteBuffers(static_cast<GLsizei>(buffer.copies), buffer.ids.data());
+	});
 }
 
 namespace {
@@ -305,6 +301,8 @@ void rnd::driver::gl::driver::begin_render_pass(const render_pass_desc& desc)
 {
 	ASSERT_MSG(!m_in_pass, "begin_render_pass inside a render pass");
 	m_in_pass = true;
+	// A pass starts without a pipeline; the cached GL state stays, only the binding goes.
+	m_bound = nullptr;
 	if (desc.debug_name && glad_glPushDebugGroup) {
 		glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, desc.debug_name);
 		m_pass_debug_group = true;
@@ -425,16 +423,13 @@ void rnd::driver::gl::driver::set_line_size(float size)
 	CHECK_GL_ERROR();
 }
 
-void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
+void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset)
 {
-	GLenum rm = GL_TRIANGLES;
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	if (!m_bound) {
+		egLOG_ERROR("opengl", "draw without a bound pipeline is skipped");
+		return;
 	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
+	const GLenum rm = m_bound->backend.topology;
 
 	vertices->bind();
 	if (offset > 0) {
@@ -449,70 +444,119 @@ void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_in
 	vertices->unbind();
 }
 
-void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, RENDER_MODE render_mode, unsigned int count, unsigned int base_vertex, unsigned int base_index)
+void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, unsigned int count, unsigned int base_vertex, unsigned int base_index)
 {
-	GLenum rm = GL_TRIANGLES;
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	if (!m_bound) {
+		egLOG_ERROR("opengl", "draw without a bound pipeline is skipped");
+		return;
 	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
+	const GLenum rm = m_bound->backend.topology;
 
 	vertices->bind();
 	glDrawElementsBaseVertex(rm, count, GL_UNSIGNED_INT, (void*)(sizeof(GLuint) * base_index), base_vertex);
 	vertices->unbind();
 }
 
-void rnd::driver::gl::driver::set_render_state(const render_state& state) {
-    m_depth_write = state.depth.enabled && state.depth.write_mask;
-    // Depth state
-    if (state.depth.enabled) {
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(gDepthFuncToGL[static_cast<int>(state.depth.test_func)]);
-        glDepthMask(state.depth.write_mask ? GL_TRUE : GL_FALSE);
-    } else {
-        glDisable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-    }
-    CHECK_GL_ERROR();
+rnd::driver::pipeline_handle rnd::driver::gl::driver::create_pipeline(const pipeline_desc& desc)
+{
+	ASSERT_MSG(desc.shader, "create_pipeline without a shader");
+	return m_pipelines.acquire(desc, [](const pipeline_desc& d) {
+		return gl_pipeline{ gRenderModeToGLRenderMode[static_cast<int>(d.topology)] };
+	});
+}
 
-    // Blend states for each render target
-    if (!state.blend_states.empty()) {
-        if (state.blend_states[0].enabled) {
-            glEnable(GL_BLEND);
-        } else {
-            glDisable(GL_BLEND);
-        }
+const rnd::driver::pipeline_desc& rnd::driver::gl::driver::pipeline_info(pipeline_handle pipeline) const
+{
+	const auto* found = m_pipelines.find(pipeline);
+	return found ? found->desc : empty_pipeline_desc();
+}
 
-        for (size_t i = 0; i < state.blend_states.size(); ++i) {
-            const auto& blend = state.blend_states[i];
-            if (blend.enabled) {
-                glBlendFunci(i, 
-                    gBlendFactorToGL[static_cast<int>(blend.src_factor)],
-                    gBlendFactorToGL[static_cast<int>(blend.dst_factor)]
-                );
-                glBlendEquationi(i, gBlendEquationToGL[static_cast<int>(blend.blend_eq)]);
-            }
-			else {
-				glBlendFunci(i, GL_ONE, GL_ZERO);
-				glBlendEquationi(i, GL_FUNC_ADD);
-			}
-        }
-    } else {
-        glDisable(GL_BLEND);
-    }
-    CHECK_GL_ERROR();
+void rnd::driver::gl::driver::invalidate_state_cache()
+{
+	m_state = {};
+}
 
-    // Face culling state
-    if (state.face_culling.enabled) {
-        glEnable(GL_CULL_FACE);
-        glCullFace(gCullModeToGL[static_cast<int>(state.face_culling.cull_mode)]);
-    } else {
-        glDisable(GL_CULL_FACE);
-    }
-    CHECK_GL_ERROR();
+void rnd::driver::gl::driver::bind_pipeline(pipeline_handle pipeline)
+{
+	const auto* found = m_pipelines.find(pipeline);
+	ASSERT_MSG(found, "bind_pipeline with a handle of no pipeline");
+	apply_pipeline(found->desc);
+	m_bound = found;
+	m_depth_write = found->desc.depth.enabled && found->desc.depth.write_mask;
+}
+
+namespace {
+	// Runs `apply` unless the cache already holds `wanted`.
+	template <class T, class Apply>
+	void change(std::optional<T>& cached, const T& wanted, Apply&& apply)
+	{
+		if (cached && *cached == wanted) {
+			return;
+		}
+		apply();
+		cached = wanted;
+	}
+}
+
+void rnd::driver::gl::driver::apply_pipeline(const pipeline_desc& desc)
+{
+	const auto* program = static_cast<const gl::shader*>(desc.shader.object);
+	change(m_state.program, program->program(), [&] { program->use(); });
+
+	// Without depth test the mask is off too, a pass that does not test does not write.
+	const bool depth_test = desc.depth.enabled;
+	change(m_state.depth_test, depth_test, [&] {
+		if (depth_test) {
+			glEnable(GL_DEPTH_TEST);
+		} else {
+			glDisable(GL_DEPTH_TEST);
+		}
+	});
+	if (depth_test) {
+		change(m_state.depth_func, gDepthFuncToGL[static_cast<int>(desc.depth.test_func)], [&] {
+			glDepthFunc(gDepthFuncToGL[static_cast<int>(desc.depth.test_func)]);
+		});
+	}
+	const bool depth_mask = depth_test && desc.depth.write_mask;
+	change(m_state.depth_mask, depth_mask, [&] { glDepthMask(depth_mask ? GL_TRUE : GL_FALSE); });
+	CHECK_GL_ERROR();
+
+	// GL_BLEND is global and follows the first target; a target that does not blend gets the pass-through function.
+	const bool blend = !desc.blend.empty() && desc.blend[0].enabled;
+	change(m_state.blend, blend, [&] {
+		if (blend) {
+			glEnable(GL_BLEND);
+		} else {
+			glDisable(GL_BLEND);
+		}
+	});
+	for (std::size_t i = 0; i < desc.blend.size(); ++i) {
+		const blend_state& b = desc.blend[i];
+		const state_cache::blend_funcs wanted = b.enabled
+			? state_cache::blend_funcs{ gBlendFactorToGL[static_cast<int>(b.src_factor)], gBlendFactorToGL[static_cast<int>(b.dst_factor)],
+				gBlendEquationToGL[static_cast<int>(b.blend_eq)] }
+			: state_cache::blend_funcs{ GL_ONE, GL_ZERO, GL_FUNC_ADD };
+		change(m_state.target_blend[i], wanted, [&] {
+			glBlendFunci(static_cast<GLuint>(i), wanted.src, wanted.dst);
+			glBlendEquationi(static_cast<GLuint>(i), wanted.equation);
+		});
+	}
+	CHECK_GL_ERROR();
+
+	const bool cull = desc.cull.enabled;
+	change(m_state.cull, cull, [&] {
+		if (cull) {
+			glEnable(GL_CULL_FACE);
+		} else {
+			glDisable(GL_CULL_FACE);
+		}
+	});
+	if (cull) {
+		change(m_state.cull_face, gCullModeToGL[static_cast<int>(desc.cull.cull_mode)], [&] {
+			glCullFace(gCullModeToGL[static_cast<int>(desc.cull.cull_mode)]);
+		});
+	}
+	CHECK_GL_ERROR();
 }
 
 std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_shader(const std::vector<shader_header>& headers)
@@ -588,17 +632,128 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::gl::driver::create_b
 	return std::make_unique<gl::buffer>();
 }
 
-std::unique_ptr<rnd::driver::uniform_buffer_interface> rnd::driver::gl::driver::create_uniform_buffer(std::size_t size, std::size_t binding)
+void rnd::driver::gl::driver::begin_frame()
 {
-	return std::make_unique<gl::uniform_buffer>(size, binding);
+	++m_frame;
+	for (const bind_group_handle group : m_transient_groups) {
+		m_groups.erase(group);
+	}
+	m_transient_groups.clear();
 }
 
-std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::gl::driver::create_ssbo_buffer(std::size_t size, std::size_t binding)
+std::size_t rnd::driver::gl::driver::uniform_offset_alignment() const
 {
-	static_assert(sizeof(GLuint) == sizeof(uint32_t));
-	static_assert(sizeof(GLint) == sizeof(uint32_t));
-	ASSERT_MSG((size / sizeof(GLuint)) == (size / sizeof(uint32_t)), "Missmatch size with OpenGL size");
-	return std::make_unique<gl::gl_ssbo_buffer>(size, binding);
+	if (!m_uniform_offset_alignment) {
+		GLint alignment = 0;
+		glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+		CHECK_GL_ERROR();
+		m_uniform_offset_alignment = static_cast<std::size_t>(alignment > 0 ? alignment : 256);
+	}
+	return *m_uniform_offset_alignment;
+}
+
+rnd::driver::buffer_handle rnd::driver::gl::driver::create_buffer(const buffer_desc& desc)
+{
+	ASSERT_MSG(desc.size > 0, "create_buffer of size 0");
+	gl_buffer buffer{ desc, {}, desc.update == buffer_update::per_frame ? frames_in_flight : 1u };
+	const GLenum usage = desc.update == buffer_update::static_data ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
+	for (std::uint32_t i = 0; i < buffer.copies; ++i) {
+		glCreateBuffers(1, &buffer.ids[i]);
+		glNamedBufferData(buffer.ids[i], static_cast<GLsizeiptr>(desc.size), nullptr, usage);
+		if (desc.debug_name && glad_glObjectLabel) {
+			glObjectLabel(GL_BUFFER, buffer.ids[i], -1, desc.debug_name);
+		}
+		CHECK_GL_ERROR();
+	}
+	return m_buffers.insert(std::move(buffer));
+}
+
+void rnd::driver::gl::driver::destroy_buffer(buffer_handle handle)
+{
+	gl_buffer* buffer = m_buffers.find(handle);
+	ASSERT_MSG(buffer, "destroy_buffer with a handle of no buffer");
+	if (!buffer) {
+		return;
+	}
+	glDeleteBuffers(static_cast<GLsizei>(buffer->copies), buffer->ids.data());
+	CHECK_GL_ERROR();
+	m_buffers.erase(handle);
+}
+
+void rnd::driver::gl::driver::update_buffer(buffer_handle handle, std::size_t offset, std::span<const std::byte> data)
+{
+	const gl_buffer* buffer = m_buffers.find(handle);
+	ASSERT_MSG(buffer, "update_buffer with a handle of no buffer");
+	if (!buffer || data.empty()) {
+		return;
+	}
+	ASSERT_MSG(offset <= buffer->desc.size && data.size() <= buffer->desc.size - offset, "update_buffer past the end of the buffer");
+	glNamedBufferSubData(buffer->current(frame_slot()), static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(data.size()), data.data());
+	CHECK_GL_ERROR();
+}
+
+rnd::driver::bind_group_layout_handle rnd::driver::gl::driver::create_bind_group_layout(const bind_group_layout_desc& desc)
+{
+	return m_layouts.acquire(desc);
+}
+
+rnd::driver::bind_group_handle rnd::driver::gl::driver::create_bind_group(const bind_group_desc& desc, lifetime life)
+{
+	ASSERT_MSG(m_layouts.find(desc.layout), "create_bind_group with a handle of no layout");
+	const bind_group_handle group = m_groups.insert(gl_group{ desc });
+	if (life == lifetime::transient) {
+		m_transient_groups.push_back(group);
+	}
+	return group;
+}
+
+void rnd::driver::gl::driver::destroy_bind_group(bind_group_handle group)
+{
+	const bool erased = m_groups.erase(group);
+	ASSERT_MSG(erased, "destroy_bind_group with a handle of no group");
+}
+
+void rnd::driver::gl::driver::set_bind_group(std::uint32_t set, bind_group_handle handle, std::span<const std::uint32_t> dynamic_offsets)
+{
+	const gl_group* group = m_groups.find(handle);
+	ASSERT_MSG(group, "set_bind_group with a handle of no group");
+	if (!group) {
+		return;
+	}
+	const bind_group_layout_desc* layout = m_layouts.find(group->desc.layout);
+	ASSERT_MSG(layout, "set_bind_group: the layout of the group is gone");
+	if (!layout) {
+		return;
+	}
+
+	std::size_t next_dynamic = 0;
+	for (const binding_decl& decl : layout->entries) {
+		const auto entry = std::find_if(group->desc.entries.begin(), group->desc.entries.end(),
+			[&](const binding_res& e) { return e.type == decl.type && e.slot == decl.slot; });
+		ASSERT_MSG(entry != group->desc.entries.end(), "set_bind_group: the group has no entry for slot {}", decl.slot);
+		const auto binding = per_type_binding_table.resolve(set, decl.slot, decl.type);
+		ASSERT_MSG(binding, "set_bind_group: set {} slot {} is outside the binding table", set, decl.slot);
+		const std::size_t extra = decl.dynamic && next_dynamic < dynamic_offsets.size() ? dynamic_offsets[next_dynamic++] : 0;
+		if (entry == group->desc.entries.end() || !binding) {
+			continue;
+		}
+
+		if (decl.type == binding_type::texture) {
+			ASSERT_MSG(entry->texture, "set_bind_group: the texture at slot {} is null", decl.slot);
+			if (entry->texture) {
+				entry->texture->native()->bind(*binding);
+			}
+			continue;
+		}
+		const gl_buffer* buffer = m_buffers.find(entry->buffer);
+		ASSERT_MSG(buffer, "set_bind_group: the buffer at slot {} is gone", decl.slot);
+		if (!buffer) {
+			continue;
+		}
+		glBindBufferRange(decl.type == binding_type::ubo ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER, *binding,
+			buffer->current(frame_slot()), static_cast<GLintptr>(entry->offset + extra), static_cast<GLsizeiptr>(entry->size));
+		CHECK_GL_ERROR();
+	}
 }
 
 // GPU timer queries

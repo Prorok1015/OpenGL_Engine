@@ -1,0 +1,50 @@
+[META]
+framework: claude-framework
+file_id: workflow.CI_PR
+class: universal
+version: 1.0.0
+
+[CI_PR]
+overview: How AI agents deliver and verify code — through pull requests whose CI is the single source of truth
+purpose: Keep verification reproducible and cheap: CI runs the exact configurations on every push, so agents spend no time or tokens on local builds and never report "works on my machine"
+applies_to: Every code change made by an agent (author agents, orchestrators, reviewers)
+
+[CORE_PRINCIPLE]
+A change is verified by CI on its pull request, not by the agent's local environment.
+Agents do NOT configure, build, run tests or launch the app locally when CI covers that check.
+CI runs are free: push as often as needed, run many PRs in parallel.
+
+[FLOW]
+1. Branch: one branch per task from the current integration branch, named `wip/<issue>-<slug>`
+2. Code: write the change; reference the issue in commits (`refs #N` / `closes #N`)
+3. Push + PR: push the branch and open a DRAFT pull request into the integration branch — CI starts on its own
+4. Red CI: download the failing job's log, find the root cause, fix, push again (CI re-runs on push)
+5. Green CI: every check finished and passed — partial green is not green
+6. Review: an independent reviewer (not the author) reads the diff; findings are fixed by the author on the same branch
+7. Merge: the orchestrator (or the owner) marks the PR ready and squash-merges it; the author agent never merges
+8. Close: close the issue if the merge did not, unsubscribe from the PR
+
+[RULES]
+- No local builds by agents: no configure, build, test run, headless/screenshot run — unless the owner asks or no CI job covers the check
+- CI is the evidence: an agent reports PR URL, head SHA and the CI result (all checks), quoting log lines for gates such as screenshot diffs
+- Parallelism is limited only by file overlap, not by CI capacity — independent tasks go out at the same time
+- Before review: fetch the integration branch; if it moved or files overlap with another open PR, MERGE it into the task branch (merge commit, never rebase)
+- Fix by root cause: never skip, disable or quarantine a test; never push an empty commit or close/reopen a PR to re-trigger CI
+- Re-run a CI job only for an infrastructure failure (runner lost, checkout/install died) — at most once
+- History: never force-push, never rewrite someone else's branch, never delete branches from an agent session
+- Direct commits to the integration branch: documentation only (handoff, design docs); all code goes through a PR
+- Wait for CI to finish: an author agent does not stop while checks are still running
+
+[WRITING_CODE_WITHOUT_A_LOCAL_COMPILER]
+Since CI is the first compiler, write code that survives every configuration on the first push:
+- Include what you use — do not rely on a precompiled header or transitive includes
+- Keep string literals portable across compilers' source/execution charsets (spell non-ASCII bytes explicitly)
+- Keep line endings of each touched file as they are
+- Read the CI matrix once (workflow files) to know which compilers, sanitizers and modes run
+
+[PROJECT_NOTES]
+This project:
+- Integration branch and current wave: see `docs/agent/handoff/PHASE0-STATUS.md`
+- CI matrix: `.github/workflows/build.yml` — Linux GCC/Clang/ASan/TSan/shared/coverage, Windows MSVC Debug/Release/Shared, SDK packages, extract benchmark, editor visual smoke
+- Screenshot gate: the visual smoke job fails when a reference diff exceeds the limit (`tools/headless/check_smoke.sh`); reference PNGs change only with the owner's decision
+- MSVC builds without PCH and without `/utf-8`

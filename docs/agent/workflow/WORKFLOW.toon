@@ -42,6 +42,7 @@ Small modular files in docs/agent/workflow/:
   → GATES.toon             Confirmation gates — when agent MUST stop and ask
   → STATE_TRACKING.toon    Hybrid state: TodoWrite for phase progress + workplan file on disk
   → ESCAPE_HATCH.toon      When the workflow can be skipped entirely
+  → CI_PR.toon             How code is delivered and verified: PR + CI, no local builds by agents
 
 [ANTI_PATTERNS]
 The following are workflow violations, not shortcuts:

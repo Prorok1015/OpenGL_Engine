@@ -176,7 +176,7 @@ Add new System:
 Add new ImGui Panel:
   1. File: Editor/code/editor_system/panels/edt_<name>_panel.h
   2. Extend: edt::panel_base (on_render() body; base wraps ImGui::Begin/End)
-  3. Register: add as shared_ptr member, wired into panel_manager
+  3. Register: add as shared_ptr member, registered via editor_context::panels().add(...) (panel_registry) and keep the returned registration
 
 Add new Descriptor Type:
   1. File: core/engine/scene/scn_<name>_desc.h (inherit desc::desc_base)

@@ -1,6 +1,7 @@
 #include "rnd_debug_pass.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_pass_pipelines.h>
 #include <snk/driver/rnd_buffer_layout.h>
 #include <snk/common/eng_profiler.h>
 
@@ -38,7 +39,7 @@ void debug_pass::ensure_resources(driver::driver_interface& drv)
 		.set_vertex_shader(res::tag::make("shaders/debug_line.vert"))
 		.set_fragment_shader(res::tag::make("shaders/debug_line.frag"));
 
-	m_shader = drv.create_shader(cfg.load(m_res_sys));
+	m_shader = drv.create_shader(cfg.load(m_res_sys, drv.bindings()));
 }
 
 void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
@@ -77,11 +78,6 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		auto color_rt = offscreen ? txm_manager.find(target.texture) : nullptr;
 		if (offscreen && !color_rt) continue;
 
-		driver::render_state state;
-		state.depth.enabled = false;
-		state.depth.write_mask = false;
-		drv.set_render_state(state);
-
 		driver::render_pass_desc pass;
 		pass.debug_name = "debug";
 		if (offscreen) {
@@ -94,12 +90,21 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		}
 		drv.begin_render_pass(pass);
 
+		driver::pipeline_desc state;
+		state.depth.enabled = false;
+		state.depth.write_mask = false;
+		state.topology = driver::RENDER_MODE::LINE;
+		driver::set_target_formats(state, pass);
+		state.set_layouts = context.shaders->layouts().frame_only();
+		pass_pipelines pipelines(drv, *context.shaders, state);
+
 		common_matrix.view = packet.camera.view_matrix;
 		common_matrix.projection = packet.camera.projection_matrix;
 		common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
 		common_matrix.time = 0.f;
 
 		context.shaders->update_global_uniform(common_matrix);
+		context.shaders->bind_frame();
 		drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
 			packet.camera.viewport.y, vp_width, vp_height});
 
@@ -132,10 +137,10 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		}
 		m_index_buffer->set_data(indices.data(), ib_size, driver::BUFFER_BINDING::DYNAMIC);
 
-		m_shader->use();
-		drv.set_line_size(1.0f);
-		drv.draw_indices(m_vao, driver::RENDER_MODE::LINE,
-			static_cast<unsigned int>(indices.size()), 0);
+		if (pipelines.bind(m_shader.get())) {
+			drv.set_line_size(1.0f);
+			drv.draw_indices(m_vao, static_cast<unsigned int>(indices.size()), 0);
+		}
 
 		drv.end_render_pass();
 	}

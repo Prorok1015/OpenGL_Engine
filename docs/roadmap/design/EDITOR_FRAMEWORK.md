@@ -130,13 +130,17 @@ class document_manager { public: scene_document& scene(); document* active(); vo
 - Тесты подменяют ответы (`dialog_service::set_auto_answer`), без ImGui.
 
 **`job_service`** (#139) над `std::async`. Позже бэкенд меняется на `ds::task_system` (#132/#135), API при этом не трогается (ADR-10).
+
+> Отклонение: backend = ds::task_system сразу (#132 уже есть). Реализовано в PR #279; ниже — фактический API (lane передаётся явно, доставка через `ds::lifetime`). Прежний набросок `run`/`watch`/`poll` с `weak_ptr` заменён им.
+
 ```cpp
-struct job_context { std::stop_token stop; void report(float fraction, std::string_view note = {}); };
-template<class R> job<R> run(std::string label, std::function<R(job_context&)> work, std::function<void(R&&)> on_done, std::weak_ptr<void> owner);
-job<void> watch(res::res_handle<T>, std::function<void(res::res_handle<T>&)> on_ready); // загрузка уровня/ассета
-void poll();          // раз в кадр из editor_layer::on_update; on_done — только на главном потоке и при живом owner
-void cancel_all_and_wait(); // в ~editor_system
+job_id start(ds::lane, ds::task_desc, const ds::lifetime& owner,
+             fn(ds::task_context&) work, fn(ds::task_result<R>&) on_done); // on_done — на главном потоке (drain стадии tasks), только при живом owner
+void cancel(job_id); bool is_running(job_id) const; job_progress progress(job_id) const; // {label, fraction, note}
+std::size_t running_count() const;
+void cancel_all_and_wait(); // в editor_term до разрушения editor_system; деструктор тоже
 ```
+Импорт идёт на `lane::compute`, экспорт — на `lane::io`. Опросы `res_handle` (`poll_level_load`, `poll_pending_desc`) остались как были: `watch` не вводился. Хвосты — #280.
 `job` — это `{status, progress, error, cancel()}`. Отмена кооперативная. Импорт (assimp) прервать нельзя: при отмене результат выбрасывается. Результат несёт `diagnostics` — их потом читают problems-панель (#24) и сборка `game.dll` (`DISTRIBUTION.md` §2). Импорт, экспорт и два опроса `res_handle` переходят на `run`/`watch`, а модальный прогресс — на `dialog_service::progress`.
 
 **Удаляются** (#140): `edt_init_helpers.*` (функции камеры уезжают в `edt_editor_camera.cpp`), оба `friend`, `edt_shared_state.h`, `async_import_token`, `dockspace::set_on_*`. `editor_system` остаётся корнем композиции: создаёт сервисы и `editor_context` и регистрирует встроенное.
@@ -158,7 +162,7 @@ void cancel_all_and_wait(); // в ~editor_system
 2. **PR-2 (#136).** `selection_service`; провода hierarchy → inspector/viewport (`:119-125,238-261`) идут через события. Тесты: сброс выделения при `commit` и смене мира, поиск entity по пути.
 3. **PR-3 (#139).** `dialog_service`; меню, confirm и save-as уходят из `init_helpers`; `m_confirm_action` удаляется. Тест с автоответами: New/Exit при dirty.
 4. **PR-4 (#139).** `job_service` (`std::async`). Переводятся импорт, экспорт и опросы загрузки; `cancel_all_and_wait` при выходе. Тест на синхронном исполнителе: прогресс, отмена, `on_done` не зовётся после смерти owner.
-5. **PR-5 (#138).** `panel_registry` и `action_registry`; меню и раскладка dockspace строятся из реестров (порядок и заголовки те же). Тесты переписываются с `panel_manager`.
+5. **PR-5 (#138).** `panel_registry` и `action_registry`; меню и раскладка dockspace строятся из реестров (порядок и заголовки те же). Тесты переписываются с `panel_manager`. **Добавлено владельцем (2026-10-19):** у каждого действия схемы аргументов и результата и `invoke(args)`; действий только через ImGui-ввод нет — основа интеграции с ИИ-агентами, `AI_INTEGRATION.md` (#284), шаг A0.
 6. **PR-6 (#138).** `inspector_registry` и `asset_kind_registry`; тестовое расширение (AC #138).
    — здесь ждём #12 PR-3…PR-5 —
 7. **PR-7 (#137).** `document`, `document_manager`, `scene_document` (`shared_state` переименован, старое имя временно остаётся алиасом), `world_entry`, `commit` во всех 12 местах. Затрагиваются `scn_node_id_tests`, `edt_empty_level_tests`, `edt_world_array_sync_tests`.

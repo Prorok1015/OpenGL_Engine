@@ -1,6 +1,7 @@
 #include "rnd_skybox_pass.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_pass_pipelines.h>
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
 
@@ -79,12 +80,6 @@ namespace rnd {
 			auto color_rt = offscreen ? txm_manager.find(target.texture) : nullptr;
 			if (offscreen && !color_rt) continue;
 
-			rnd::driver::render_state state;
-			state.depth.enabled = true;
-			state.depth.write_mask = false;
-			state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
-			drv.set_render_state(state);
-
 			rnd::driver::render_pass_desc pass;
 			pass.debug_name = "skybox";
 			if (offscreen) {
@@ -96,19 +91,36 @@ namespace rnd {
 				pass.backbuffer = true;
 			}
 			drv.begin_render_pass(pass);
-			
+
+			rnd::driver::pipeline_desc state;
+			state.depth.enabled = true;
+			state.depth.write_mask = false;
+			state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
+			rnd::driver::set_target_formats(state, pass);
+			state.set_layouts = context.shaders->layouts().skybox();
+			rnd::pass_pipelines pipelines(drv, *context.shaders, state);
+
 			common_matrix.view = packet.camera.view_matrix;
 			common_matrix.projection = packet.camera.projection_matrix;
 			common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
 			context.shaders->update_global_uniform(common_matrix);
+			context.shaders->bind_frame();
 			drv.set_viewport(glm::ivec4{packet.camera.viewport.x, packet.camera.viewport.y, vp_width, vp_height});
 
 			m_vbo->set_data_ptr(cube_vertices, 8);
 			m_ibo->set_data_ptr(cube_indices, 36);
 
 			const auto& sky = *packet.skybox_material;
-			rnd::configure_pass(context, sky.variant, *sky.material, sky.world ? &*sky.world : nullptr);
-			drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, 36);
+			// The cubemap is the material's first sampler; a texture that is still loading leaves the sky out.
+			driver::texture_interface* cubemap = sky.material->params.samplers.empty() ? nullptr : sky.material->params.samplers[0];
+			if (cubemap && pipelines.bind(sky.variant)) {
+				driver::bind_group_desc inputs;
+				inputs.layout = context.shaders->layouts().sky;
+				inputs.entries.push_back({ driver::binding_type::texture, bindings::sky_slot, {}, 0, 0, cubemap });
+				drv.set_bind_group(driver::pass_set, drv.create_bind_group(inputs, driver::lifetime::transient));
+				context.shaders->apply_uniforms(sky.variant, sky.material->params);
+				drv.draw_indices(m_va, 36);
+			}
 
 			drv.end_render_pass();
 		}

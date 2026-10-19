@@ -10,7 +10,9 @@
 #include "edt_level_controller.h"
 #include "edt_init_helpers.h"
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_registration.h>
 #include <vector>
 
 // Forward declarations — full types only needed in .cpp
@@ -84,6 +86,8 @@ namespace edt {
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
 		std::unique_ptr<edt::async_import_token> m_import_token;
+		// Owner of the job callbacks; after m_import_token and the importer/dialog they touch, so it dies (and cancels) first.
+		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		void start_import(const std::filesystem::path& abs_path);
 		bool poll_import_pipeline();
 		bool poll_import_progress();
@@ -127,6 +131,8 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
+		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
+		std::vector<registration> m_registrations;
 
 	};
 }

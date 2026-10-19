@@ -6,7 +6,7 @@
 #include <snk/render/shader/rnd_shader_config_cache.h>
 
 #include <snk/driver/rnd_driver_interface.h>
-#include <snk/driver/rnd_uniform_buffer_interface.h>
+#include <snk/render/rnd_bindings.h>
 
 namespace rnd
 {
@@ -78,6 +78,25 @@ namespace rnd
 	static_assert(offsetof(lights_params, point_light_count) == 1732);
 	static_assert(sizeof(lights_params) == 1744);
 
+	// The bind group layouts of the engine's sets, made once. A pass names the ones its shaders read in the
+	// pipelines it builds (pipeline_desc::set_layouts), which is what the validation checks a draw against.
+	struct set_layouts
+	{
+		driver::bind_group_layout_handle frame;
+		driver::bind_group_layout_handle composition;
+		driver::bind_group_layout_handle sky;
+		driver::bind_group_layout_handle object;
+
+		using list = ds::fixed_vector<driver::bind_group_layout_handle, driver::max_bind_sets>;
+
+		// Shaders of the scene: set 0 and the per-draw set 3.
+		list scene() const { return { frame, {}, {}, object }; }
+		// The debug lines read the camera only.
+		list frame_only() const { return { frame }; }
+		list skybox() const { return { frame, sky }; }
+		list composite() const { return { {}, composition }; }
+	};
+
 	class ShaderManager
 	{
 	public:
@@ -95,26 +114,39 @@ namespace rnd
 
 		shader_config_cache& variants() const { return m_variants; }
 
-		void use(const shader_config& desc) const
-		{
-			use(m_variants.intern(desc.cdata), desc.rdata, nullptr);
-		}
+		// The program of a variant, compiled on its first use; null when it does not compile.
+		driver::shader_interface* program(variant_id variant) const { return require_program(variant); }
 
-		void use(variant_id variant, const shader_config::runtime_data& params, const glm::mat4* world) const
+		// Sets the samplers and uniforms of a variant's program. The variant's pipeline has to be bound first:
+		// binding it is what makes the program current.
+		void apply(variant_id variant, const shader_config::runtime_data& params) const
 		{
 			if (auto* shader = require_program(variant)) {
-				shader->use();
-				rnd::configure_render_pass(params, world, shader);
+				rnd::configure_render_pass(params, shader);
 			}
 		}
 
+		// The same without the samplers, for a material whose textures a bind group supplies.
+		void apply_uniforms(variant_id variant, const shader_config::runtime_data& params) const
+		{
+			if (auto* shader = require_program(variant)) {
+				rnd::configure_uniforms(params, shader);
+			}
+		}
+
+		const set_layouts& layouts() const { return m_layouts; }
+
 		void update_global_uniform(const global_params& val) const;
 		void update_global_sun(const lights_params& val) const;
+		// Binds set 0 (Matrices, GlobalLights); inside a render pass, before its draws.
+		void bind_frame() const;
 	private:
 		driver::driver_interface* drv = nullptr;
 		res::resource_system& m_res_sys;
-		std::shared_ptr<rnd::driver::uniform_buffer_interface> _matrices;
-		std::shared_ptr<rnd::driver::uniform_buffer_interface> sun_light;
+		set_layouts m_layouts;
+		driver::buffer_handle m_matrices;
+		driver::buffer_handle m_lights;
+		driver::bind_group_handle m_frame_group;
 		rnd::driver::shader_interface* require_program(variant_id variant) const
 		{
 			if (variant.value >= m_programs.size()) {
@@ -123,7 +155,7 @@ namespace rnd
 
 			auto& slot = m_programs[variant.value];
 			if (!slot) {
-				slot = drv->create_shader(shader_config::load(m_variants.resolve(variant), m_res_sys));
+				slot = drv->create_shader(shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings()));
 			}
 			return slot.get();
 		}

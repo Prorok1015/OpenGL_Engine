@@ -53,13 +53,3 @@ void rnd::driver::null::buffer::set_data(const void* data, size_t size, BUFFER_B
 		std::memcpy(m_bytes.data(), data, size);
 	}
 }
-
-void rnd::driver::null::uniform_buffer::set_data(const void* data, std::size_t size, std::size_t offset)
-{
-	write_range(m_bytes, data, size, offset);
-}
-
-void rnd::driver::null::ssbo_buffer::set_data(const void* data, std::size_t size, std::size_t offset)
-{
-	write_range(m_bytes, data, size, offset);
-}
