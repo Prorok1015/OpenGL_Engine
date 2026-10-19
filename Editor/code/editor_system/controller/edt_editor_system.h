@@ -32,7 +32,6 @@ namespace edt {
 	class model_importer;
 	class asset_exporter;
 	class asset_export_dialog;
-	class component_ui_registry;
 	class scene_hierarchy_panel;
 	class inspector_panel;
 	class viewport_panel;
@@ -95,7 +94,6 @@ namespace edt {
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
-		std::unique_ptr<edt::component_ui_registry> m_component_ui_registry;
 
 		std::shared_ptr<scene_hierarchy_panel> m_hierarchy_panel;
 		std::shared_ptr<inspector_panel>       m_inspector_panel;

@@ -25,7 +25,6 @@ Editor/
     ├── panels/                       # 7 UI panels, all extend panel_base
     │
     ├── edt_component_renderers/      # per-type ImGui renderers for components
-    │   ├── edt_component_ui_registry.h
     │   ├── edt_component_renderers.cpp/h
     │   └── edt_cr_*.cpp              # camera, light, skybox, skin
     │
@@ -71,7 +70,7 @@ Controllers communicate via `std::function` callbacks set by `editor_system` dur
 | Panel | Header | Purpose |
 |-------|--------|---------|
 | `scene_hierarchy_panel` | `edt_scene_hierarchy_panel.h` | Prefab node tree + world tabs; callbacks for create/delete/rename/duplicate/reparent |
-| `inspector_panel` | `edt_inspector_panel.h` | Component property editor; uses component_ui_registry, falls back to generic JSON |
+| `inspector_panel` | `edt_inspector_panel.h` | Component property editor; looks renderers up in `inspector_registry`, falls back to generic JSON |
 | `viewport_panel` | `edt_viewport_panel.h` | 3D view + transform gizmo + orientation gizmo; fires `on_transform_committed` |
 | `game_view_panel` | `edt_game_view_panel.h` | "Game view" (View menu; `editor/show_game_view` opens it at startup): camera picker + image of the picked game camera; only that camera gets a viewport (logic in `edt_game_view_logic.h`, unit-tested) |
 | `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |
@@ -83,19 +82,21 @@ All panels are `shared_ptr` members of `editor_system` and are registered in `ed
 
 Services seen by scripts and agents (A2, `edt_service_commands.h`): `job_service` raises `editor_events::job_started/job_progress/job_finished` (progress is polled once per frame by `job_service::pump()` in the `editor_jobs` frame stage) and serves `job.list`, `job.get{id}`, `job.cancel{id}`; every `dialog_service` request has an id, a kind and an answer schema (`list()`), and `dialog.list` / `dialog.answer{id, answer}` resolve it through the same callback a click uses. The engine log is a ring journal (`engine::read_log_journal`, command `log.read`); `engine::add_log_sink` returns an RAII handle (the console panel is one sink, `editor_system::m_log_sink`).
 
-## Component UI Registry
+## Inspector and Asset-Kind Registries
 
 ```cpp
-// Registration (edt_component_renderers.cpp, called once at init):
-registry.register_renderer<scn::camera_desc>([](prefab_comp_node& n) -> bool { ... });
+// Registration (edt_component_renderers.cpp, called once at init; keep the returned registrations):
+registrations.push_back(context.inspectors().add<scn::camera_desc>([](prefab_comp_node& n) -> bool { ... }));
 
 // Lookup (inspector_panel):
-auto result = registry.invoke(type_name, comp_node);
+auto result = inspectors.invoke(type_name, comp_node);
 // result == nullopt  → fall back to generic JSON editor
 // result == true     → component was mutated, call on_node_changed
 ```
 
-**Adding a new component renderer**: implement lambda in `edt_component_renderers/`, register it in `edt_component_renderers.cpp::register_desc_component_renderers()`. No other file needs changing.
+**Adding a new component renderer**: implement lambda in `edt_component_renderers/`, register it in `edt_component_renderers.cpp::register_desc_component_renderers()`. A second renderer for the same type is refused with an error.
+
+`editor_context::asset_kinds()` (`asset_kind_registry`) maps a res-relative path suffix to `{open, drop_into_scene, icon}`; the longest matching suffix that has the wanted action wins. Built-in kinds (`prefab` = `.prefab.desc` opens the prefab editor, `desc` = any asset dropped onto the viewport is added to the scene) are in `controller/edt_builtin_asset_kinds.cpp`.
 
 ## Desc ↔ ECS Edit Loop
 

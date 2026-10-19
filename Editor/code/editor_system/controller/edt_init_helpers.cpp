@@ -1,4 +1,5 @@
 #include "edt_init_helpers.h"
+#include <snk/editor/edt_editor_context.h>
 #include "edt_editor_system.h"
 #include "edt_editor_layer.h"
 #include "edt_scene_hierarchy_panel.h"
@@ -6,8 +7,6 @@
 #include "edt_viewport_panel.h"
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
-#include "edt_component_ui_registry.h"
-#include "edt_component_renderers.h"
 #include "edt_input_target.h"
 #include "edt_editor_camera.h"
 #include "edt_shared_state.h"
@@ -39,15 +38,13 @@ void setup_panels(
 	std::shared_ptr<viewport_panel>& viewport,
 	std::shared_ptr<console_panel>& console,
 	std::shared_ptr<asset_browser_panel>& asset_browser,
-	component_ui_registry& registry,
 	editor_system& sys,
 	engine::log_sink_handle& log_sink,
 	bool capture_log)
 {
 	hierarchy = std::make_shared<scene_hierarchy_panel>();
 	inspector = std::make_shared<inspector_panel>();
-	register_desc_component_renderers(registry);
-	inspector->set_component_ui_registry(&registry);
+	inspector->set_inspector_registry(&sys.context()->inspectors());
 	console = std::make_shared<console_panel>();
 	asset_browser = std::make_shared<asset_browser_panel>();
 	asset_browser->set_layers(res::resource_system::get_resource_layers());
@@ -87,13 +84,7 @@ void setup_viewport_panel(
 	viewport->set_input_router(&router, [&state] { return active_input_target(state); });
 	viewport->set_on_asset_dropped([&sys](const std::string& res_rel_path) {
 		if (!sys.m_state.editor_tag.is_valid()) return;
-		const std::filesystem::path rel{ res_rel_path };
-		res::tag tag = res::tag::make(res_rel_path);
-		const std::string stem = rel.stem().string();
-		sys.m_pending_desc_handle = sys.m_res.require<desc::desc_base>(tag);
-		sys.m_pending_desc_tag = tag;
-		sys.m_pending_desc_key = sys.m_scene_editor.make_unique_key(stem.empty() ? "Asset" : stem);
-		sys.editor_layer->register_implicit("edt/drop_loading", [&sys] { return sys.poll_pending_desc(); });
+		sys.m_context->asset_kinds().drop_into_scene(*sys.m_context, res::tag::make(res_rel_path));
 	});
 }
 

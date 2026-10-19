@@ -4,10 +4,10 @@
 #include <snk/scene/scn_animation_collection_desc.h>
 #include <imgui.h>
 
-void edt::edt_cr_animation_register(edt::component_ui_registry& registry)
+void edt::edt_cr_animation_register(edt::renderer_registrar& registry)
 {
 	// --- animation_controller_desc ---
-	registry.register_renderer<scn::animation_controller_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::animation_controller_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 
 		// default_animation
@@ -54,7 +54,7 @@ void edt::edt_cr_animation_register(edt::component_ui_registry& registry)
 	});
 
 	// --- animation_collection_desc (read-only) ---
-	registry.register_renderer<scn::animation_collection_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::animation_collection_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		auto it = comp.overrides.find("clips");
 		if (it == comp.overrides.end() || !it->value().is_array()) {
 			ImGui::TextDisabled("No clips");

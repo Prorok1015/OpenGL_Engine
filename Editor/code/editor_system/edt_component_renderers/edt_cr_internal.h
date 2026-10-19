@@ -1,8 +1,10 @@
 #pragma once
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
+#include <snk/editor/edt_inspector_registry.h>
 #include <string_view>
-#include "edt_component_ui_registry.h"
+#include <utility>
+#include <vector>
 
 namespace edt {
 
@@ -37,12 +39,24 @@ inline void write_vec4_override(boost::json::object& overrides, std::string_view
 	                                     static_cast<double>(v.z), static_cast<double>(v.w) };
 }
 
+// Adds renderers to the inspector registry and keeps their registrations.
+struct renderer_registrar {
+	inspector_registry& inspectors;
+	std::vector<registration>& registrations;
+
+	template<typename T>
+	void add(inspector_renderer fn)
+	{
+		registrations.push_back(inspectors.add<T>(std::move(fn)));
+	}
+};
+
 // Internal sub-registration functions — one per component type.
 // Called exclusively from edt_component_renderers.cpp.
-void edt_cr_camera_register(component_ui_registry& registry);
-void edt_cr_light_register(component_ui_registry& registry);
-void edt_cr_skybox_register(component_ui_registry& registry);
-void edt_cr_skin_register(component_ui_registry& registry);
-void edt_cr_animation_register(component_ui_registry& registry);
+void edt_cr_camera_register(renderer_registrar& registry);
+void edt_cr_light_register(renderer_registrar& registry);
+void edt_cr_skybox_register(renderer_registrar& registry);
+void edt_cr_skin_register(renderer_registrar& registry);
+void edt_cr_animation_register(renderer_registrar& registry);
 
 } // namespace edt
