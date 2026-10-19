@@ -65,7 +65,7 @@ Animation & Skinning:
   → core/engine/render/render_system/skinning/ (rnd::skinning_manager)
 
 Input System:
-  → core/engine/input/include/snk/input/inp_input_system.h , inp_ecs_input_manager.h
+  → core/engine/input/include/snk/input/inp_input_system.h , inp_ecs_input_manager.h , inp_input_router.h
 
 GUI:
   → core/engine/gui/gui_system/ (gui::system, ImGui integration)
@@ -90,7 +90,7 @@ Gizmo Transform:
   → Editor/code/editor_system/gizmo/edt_transform_gizmo.hpp (pure ImGui DrawList)
 
 Input / File Dialog:
-  → Editor/code/editor_system/input/edt_input_manager.h , edt_file_dialog.h
+  → Editor/code/editor_system/input/edt_input_manager.h , edt_input_binding.h , edt_file_dialog.h
 
 [DESCRIPTOR_FILES]
 Level & World:

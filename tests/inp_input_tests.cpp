@@ -132,24 +132,21 @@ BOOST_AUTO_TEST_CASE(DeviceId_OrdersByTypeThenIndex)
 BOOST_AUTO_TEST_CASE(EcsManager_TracksKeyboardPressAndRelease)
 {
 	inp::ecs_input_manager mgr;
-	inp::input_state state;
+	const auto& state = mgr.raw();
 
 	mgr.on_handle_event(nullptr, key_event(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
 	BOOST_TEST(state.keyboard[idx(KEYBOARD_BUTTONS::W)]);
 	BOOST_TEST(!state.keyboard[idx(KEYBOARD_BUTTONS::S)]);
 
 	mgr.on_handle_event(nullptr, key_event(KEYBOARD_BUTTONS::W, KEY_ACTION::UP));
-	mgr.update_input_state_system(state);
 	BOOST_TEST(!state.keyboard[idx(KEYBOARD_BUTTONS::W)]);
 }
 
 BOOST_AUTO_TEST_CASE(EcsManager_TracksMouseButtons)
 {
 	inp::ecs_input_manager mgr;
-	inp::input_state state;
+	const auto& state = mgr.raw();
 	mgr.on_handle_event(nullptr, click_event(MOUSE_BUTTONS::RIGHT, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
 	BOOST_TEST(state.mouse[idx(MOUSE_BUTTONS::RIGHT)]);
 	BOOST_TEST(!state.mouse[idx(MOUSE_BUTTONS::LEFT)]);
 }
@@ -161,93 +158,40 @@ BOOST_AUTO_TEST_CASE(EcsManager_NeverConsumesEvents)
 	BOOST_TEST(!mgr.on_handle_event(nullptr, move_event({ 1, 1 })));
 }
 
-BOOST_AUTO_TEST_CASE(EcsManager_CursorMoveWithInputAreaComputesNormalizedDelta)
+BOOST_AUTO_TEST_CASE(EcsManager_CursorMoveKeepsTheRawPixelStep)
 {
 	inp::ecs_input_manager mgr;
-	mgr.set_input_area({ 0, 0, 200, 100 }); // x0 y0 x1 y1 -> window size 200x100
-	inp::input_state state;
 
 	mgr.on_handle_event(nullptr, move_event({ 100, 50 }));
 	mgr.on_handle_event(nullptr, move_event({ 110, 40 }));
-	mgr.update_input_state_system(state);
 
+	const auto& state = mgr.raw();
 	BOOST_TEST((state.mouse_prev == glm::vec2{ 100, 50 }));
 	BOOST_TEST((state.mouse_pos == glm::vec2{ 110, 40 }));
-	// (prev - pos) / (size / 2) = (-10, 10) / (100, 50)
-	BOOST_TEST(state.mouse_dir.x == -0.1f, boost::test_tools::tolerance(1e-5f));
-	BOOST_TEST(state.mouse_dir.y == 0.2f, boost::test_tools::tolerance(1e-5f));
+	// previous - current, in pixels: the router scales it by the size of the binding it routes through
+	BOOST_TEST((state.mouse_dir == glm::vec2{ -10, 10 }));
 }
 
-BOOST_AUTO_TEST_CASE(EcsManager_ClicksOutsideInputAreaAreIgnoredButCursorIsStillTracked)
+BOOST_AUTO_TEST_CASE(EcsManager_KeepsRawStateWhereverTheCursorIs)
 {
 	inp::ecs_input_manager mgr;
-	mgr.set_input_area({ 100, 100, 200, 200 });
-	inp::input_state state;
-
-	mgr.on_handle_event(nullptr, move_event({ 10, 10 }));     // outside: only the position is recorded
+	mgr.on_handle_event(nullptr, move_event({ 10, 10 }));
 	mgr.on_handle_event(nullptr, key_event(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
-	BOOST_TEST((state.mouse_pos == glm::vec2{ 10, 10 }));
-	BOOST_TEST(!state.keyboard[idx(KEYBOARD_BUTTONS::W)]);    // keyboard ignored while the pointer is outside
-	BOOST_TEST((state.mouse_dir == glm::vec2{ 0 }));          // no delta computed outside
-
-	mgr.on_handle_event(nullptr, move_event({ 150, 150 }));   // inside again
-	mgr.on_handle_event(nullptr, key_event(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
-	BOOST_TEST(state.keyboard[idx(KEYBOARD_BUTTONS::W)]);
-}
-
-BOOST_AUTO_TEST_CASE(EcsManager_ClickOutsideAreaStillUpdatesMouseButtonState)
-{
-	inp::ecs_input_manager mgr;
-	mgr.set_input_area({ 100, 100, 200, 200 });
-	inp::input_state state;
-	mgr.on_handle_event(nullptr, move_event({ 5, 5 }));
 	mgr.on_handle_event(nullptr, click_event(MOUSE_BUTTONS::LEFT, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
-	BOOST_TEST(state.mouse[idx(MOUSE_BUTTONS::LEFT)]); // so releasing a drag that left the area is not lost
-}
-
-BOOST_AUTO_TEST_CASE(EcsManager_InvertedAreaHandlesOnlyOutsidePointer)
-{
-	inp::ecs_input_manager mgr;
-	mgr.set_input_area({ 100, 100, 200, 200 }, /*invert*/ true);
-	inp::input_state state;
-
-	mgr.on_handle_event(nullptr, move_event({ 150, 150 })); // inside the excluded rect
-	mgr.on_handle_event(nullptr, key_event(KEYBOARD_BUTTONS::A, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
-	BOOST_TEST(!state.keyboard[idx(KEYBOARD_BUTTONS::A)]);
-
-	mgr.on_handle_event(nullptr, move_event({ 10, 10 }));   // outside the excluded rect
-	mgr.on_handle_event(nullptr, key_event(KEYBOARD_BUTTONS::A, KEY_ACTION::DOWN));
-	mgr.update_input_state_system(state);
-	BOOST_TEST(state.keyboard[idx(KEYBOARD_BUTTONS::A)]);
+	BOOST_TEST(mgr.raw().keyboard[idx(KEYBOARD_BUTTONS::W)]);
+	BOOST_TEST(mgr.raw().mouse[idx(MOUSE_BUTTONS::LEFT)]);
 }
 
 BOOST_AUTO_TEST_CASE(EcsManager_ScrollIsLatchedUntilFrameDeltasReset)
 {
 	inp::ecs_input_manager mgr;
-	inp::input_state state;
+	const auto& state = mgr.raw();
 	mgr.on_handle_event(nullptr, scroll_event({ 0, 3 }));
-	mgr.update_input_state_system(state);
 	BOOST_TEST((state.scroll == glm::vec2{ 0, 3 }));
 
 	mgr.reset_frame_deltas();
-	mgr.update_input_state_system(state);
 	BOOST_TEST((state.scroll == glm::vec2{ 0 }));
 	BOOST_TEST((state.mouse_dir == glm::vec2{ 0 }));
-}
-
-BOOST_AUTO_TEST_CASE(EcsManager_MouseDeltaIsFiniteWithoutConfiguredArea)
-{
-	inp::ecs_input_manager mgr;
-	inp::input_state state;
-	mgr.on_handle_event(nullptr, move_event({ 10, 10 }));
-	mgr.on_handle_event(nullptr, move_event({ 20, 20 }));
-	mgr.update_input_state_system(state);
-	BOOST_TEST(std::isfinite(state.mouse_dir.x));
-	BOOST_TEST(std::isfinite(state.mouse_dir.y));
 }
 
 // ---------------------------------------------------------------- input_system routing
