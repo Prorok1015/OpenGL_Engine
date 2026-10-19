@@ -82,6 +82,7 @@ Controllers communicate via `std::function` callbacks set by `editor_system` dur
 | `viewport_panel` | `edt_viewport_panel.h` | 3D view + transform gizmo + orientation gizmo; fires `on_transform_committed` |
 | `game_view_panel` | `edt_game_view_panel.h` | "Game view" (View menu; `editor/show_game_view` opens it at startup): camera picker + image of the picked game camera; the cameras that draw into the picked camera's texture (the worlds of one set share it, `camera_redirector`) get the viewport, all other game cameras are switched off (logic in `edt_game_view_logic.h`, unit-tested) |
 | `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |
+| `blackboard_panel` | `edt_blackboard_panel.h` | "Blackboard" (View menu, closed by default): read-only table of the committed blackboard of a context set (key, value, type, writer) with a set picker and a key filter; the rows and the value text are `edt_blackboard_view.h` (no ImGui, unit-tested) |
 | `asset_browser_panel` | `edt_asset_browser_panel.h` | Directory tree + file grid; drag-drop to viewport |
 | `dockspace` | `edt_dockspace.h` | ImGui DockSpace + default layout; the menu bar is `draw_main_menu` (`edt_main_menu.h`) |
 | `panel_base` | `edt_panel_base.h` | `render()` wraps ImGui::Begin/End; `virtual on_render()` |

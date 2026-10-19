@@ -14,6 +14,7 @@
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_mesh_node_desc.h>
 #include <snk/scene/scn_object_desc.h>
+#include <snk/scene/scn_screen_anchor_desc.h>
 #include <snk/scene/scn_skin_weights_desc.h>
 #include <snk/scene/scn_skinning_desc.h>
 #include <snk/scene/scn_skybox_desc.h>
@@ -96,6 +97,7 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	scope.desc<scene_anchor_desc>("anchor_desc");
 	scope.desc<camera_desc>(camera_desc::__type, true);
 	scope.desc<directional_light_desc>(directional_light_desc::__type, true);
+	scope.desc<screen_anchor_desc>(screen_anchor_desc::__type, true);
 	scope.desc<skybox_desc>(skybox_desc::__type, true);
 	scope.desc<mesh_node_desc>(mesh_node_desc::__type);
 	scope.desc<object_desc>(object_desc::__type);
@@ -125,6 +127,7 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	simple_spawner<scene_anchor_desc>(scope, "anchor_desc", assemble_scene_anchor);
 	simple_spawner<camera_desc>(scope, camera_desc::__type, assemble_camera);
 	simple_spawner<directional_light_desc>(scope, directional_light_desc::__type, assemble_directional_light);
+	simple_spawner<screen_anchor_desc>(scope, screen_anchor_desc::__type, assemble_screen_anchor);
 	simple_spawner<skybox_desc>(scope, skybox_desc::__type, assemble_skybox);
 	simple_spawner<mesh_node_desc>(scope, mesh_node_desc::__type, assemble_mesh_node);
 	simple_spawner<object_desc>(scope, object_desc::__type, assemble_object);
