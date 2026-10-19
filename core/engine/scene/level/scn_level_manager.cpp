@@ -60,7 +60,6 @@ bool scn::level_manager::load(const res::tag& level_tag)
 						for (const auto& name : new_names) {
 							if (active_lvl.has_world(name)) active_lvl.remove_world(name);
 						}
-						active_lvl.state().clear();
 						active_lvl.load_from_desc(*level_res, m_system_factory, m_assembler);
 						m_desc_world_names = std::move(new_names);
 					} else {

@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <chrono>
+#include <map>
 #include <snk/scene/level/scn_level.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/ecs/ecs_entity_changer.hpp>
@@ -10,11 +11,24 @@ namespace {
 	int g_ticks = 0;
 	void sys_tick() { ++g_ticks; }
 
+	std::map<const entt::registry*, float> g_seen_dt;
+	std::map<const entt::registry*, float> g_seen_level_dt;
+	std::map<const entt::registry*, float> g_seen_fixed;
+	void sys_read_dt(const entt::registry& reg, const scn::delta_time& dt) { g_seen_dt[&reg] = dt.dt; }
+	void sys_read_level_dt(const entt::registry& reg, scn::level_res<const scn::delta_time> dt) { g_seen_level_dt[&reg] = dt->dt; }
+	void sys_read_fixed(const entt::registry& reg, const scn::fixed_time& t) { g_seen_fixed[&reg] = t.dt; }
+
 	struct context_fixture {
 		context_fixture()
 		{
 			g_ticks = 0;
+			g_seen_dt.clear();
+			g_seen_level_dt.clear();
+			g_seen_fixed.clear();
 			sf.register_system<&sys_tick>("tick", { .run_in_edit = false });
+			sf.register_system<&sys_read_dt>("read_dt", { .run_in_edit = true });
+			sf.register_system<&sys_read_level_dt>("read_level_dt", { .run_in_edit = true });
+			sf.register_system<&sys_read_fixed>("read_fixed", { .phase = ecs::phase::fixed_update });
 		}
 
 		void run_frame(const scn::world_context& ctx, ecs::run_mode mode, entt::registry& reg)
@@ -140,6 +154,78 @@ BOOST_AUTO_TEST_CASE(Level_KeepsStepperAndModeIdenticalAcrossContexts)
 
 	lvl.clear();
 	BOOST_TEST(lvl.get_world_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Time_IsPresentInEveryContextFromCreation)
+{
+	scn::world_context ctx(0, "w");
+	BOOST_REQUIRE(ctx.state().ctx().find<scn::delta_time>() != nullptr);
+	BOOST_REQUIRE(ctx.state().ctx().find<scn::update_alpha>() != nullptr);
+	BOOST_REQUIRE(ctx.state().ctx().find<scn::fixed_time>() != nullptr);
+	BOOST_TEST(ctx.state().ctx().get<scn::delta_time>().dt == 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(Time_TwoContextsEachReceiveTheirOwnResources)
+{
+	scn::level lvl(nullptr);
+	auto& a = lvl.create_world("a", 0);
+	auto& b = lvl.create_world("b", 1);
+
+	lvl.update(std::chrono::duration<float>(0.01f));
+
+	for (auto* c : { &a, &b }) {
+		const auto* dt = c->state().ctx().find<scn::delta_time>();
+		const auto* alpha = c->state().ctx().find<scn::update_alpha>();
+		BOOST_REQUIRE(dt && alpha);
+		BOOST_TEST(dt->dt == 0.01f, boost::test_tools::tolerance(1e-6));
+		BOOST_TEST(alpha->dt == a.stepper().alpha());
+	}
+	BOOST_TEST(a.state().ctx().find<scn::delta_time>() != b.state().ctx().find<scn::delta_time>());
+}
+
+BOOST_AUTO_TEST_CASE(Time_SystemInWorldBReadsTheDeltaOfWorldB)
+{
+	scn::level lvl(nullptr);
+	auto& a = lvl.create_world("a", 0);
+	auto& b = lvl.create_world("b", 1);
+	b.set_stepper(ecs::fixed_stepper(1.0 / 60.0, 0.05)); // clamps the frame to 0.05, A keeps 0.25
+	lvl.add_world_systems(a, { "read_dt", "read_level_dt" }, sf);
+	lvl.add_world_systems(b, { "read_dt", "read_level_dt" }, sf);
+
+	lvl.update(std::chrono::duration<float>(0.2f));
+
+	BOOST_REQUIRE(g_seen_dt.size() == 2u);
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 0.2f, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(g_seen_dt.at(&b.state()) == 0.05f, boost::test_tools::tolerance(1e-6));
+	// LEVEL_ID resolves to the system's own context, not to a shared level state
+	BOOST_REQUIRE(g_seen_level_dt.size() == 2u);
+	BOOST_TEST(g_seen_level_dt.at(&a.state()) == 0.2f, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(g_seen_level_dt.at(&b.state()) == 0.05f, boost::test_tools::tolerance(1e-6));
+}
+
+BOOST_AUTO_TEST_CASE(Time_FixedTimeIsWrittenToEveryContextThatSteps)
+{
+	scn::level lvl(nullptr);
+	auto& a = lvl.create_world("a", 0);
+	auto& b = lvl.create_world("b", 1);
+	lvl.add_world_systems(a, { "read_fixed" }, sf);
+	lvl.add_world_systems(b, { "read_fixed" }, sf);
+
+	lvl.update(std::chrono::duration<float>(0.02f));
+
+	BOOST_REQUIRE(g_seen_fixed.size() == 2u);
+	BOOST_TEST(g_seen_fixed.at(&a.state()) == 1.0f / 60.0f, boost::test_tools::tolerance(1e-6));
+	BOOST_TEST(g_seen_fixed.at(&b.state()) == 1.0f / 60.0f, boost::test_tools::tolerance(1e-6));
+}
+
+BOOST_AUTO_TEST_CASE(Time_ContextCreatedLaterJoinsTheStepOfTheOthers)
+{
+	scn::level lvl(nullptr);
+	auto& a = lvl.create_world("a", 0);
+	lvl.update(std::chrono::duration<float>(0.01f)); // leaves a fraction of a step in A
+	auto& b = lvl.create_world("b", 1);
+	BOOST_TEST(b.stepper().alpha() == a.stepper().alpha());
+	BOOST_TEST(b.stepper().alpha() > 0.0f);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

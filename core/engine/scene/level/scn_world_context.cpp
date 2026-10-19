@@ -8,11 +8,53 @@
 scn::world_context::world_context(uint32_t id, std::string_view name)
 	: m_id(id), m_name(name)
 {
+	// Present from the start, so a system never sees a missing time resource.
+	m_state.ctx().insert_or_assign(scn::delta_time{ 0.0f });
+	m_state.ctx().insert_or_assign(scn::update_alpha{ 0.0f });
+	m_state.ctx().insert_or_assign(scn::fixed_time{ m_stepper.step() });
 }
 
 void scn::world_context::seed(uint64_t base_seed)
 {
 	m_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(base_seed, m_id) });
+}
+
+void scn::world_context::begin_frame(std::chrono::duration<float> dt)
+{
+	float frame_dt = 0.0f;
+	m_fixed_steps = 0;
+	switch (m_mode) {
+	case ecs::run_mode::pause:
+		break; // time is frozen
+	case ecs::run_mode::step:
+		frame_dt = m_stepper.step();
+		m_fixed_steps = 1;
+		break;
+	case ecs::run_mode::edit:
+	case ecs::run_mode::play:
+		frame_dt = static_cast<float>(m_stepper.clamp_dt(dt.count()));
+		m_fixed_steps = m_stepper.advance(frame_dt);
+		break;
+	}
+	m_state.ctx().insert_or_assign(scn::delta_time{ frame_dt });
+	m_state.ctx().insert_or_assign(scn::update_alpha{ m_stepper.alpha() });
+}
+
+void scn::world_context::write_fixed_time()
+{
+	m_state.ctx().insert_or_assign(scn::fixed_time{ m_stepper.step() });
+}
+
+void scn::world_context::reset_time()
+{
+	m_stepper.reset();
+	m_state.ctx().insert_or_assign(scn::update_alpha{ 0.0f });
+}
+
+void scn::world_context::set_stepper(const ecs::fixed_stepper& stepper)
+{
+	m_stepper = stepper;
+	m_state.ctx().insert_or_assign(scn::update_alpha{ m_stepper.alpha() });
 }
 
 void scn::world_context::rebuild_plan(const ecs::system_registry& registry)
