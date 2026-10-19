@@ -219,7 +219,6 @@ void edt::scene_editor::on_transform_committed(
 
 bool edt::scene_editor::serialize_and_push()
 {
-	m_state.touch_descs(); // also on the early returns below: the desc may have changed without a push
 	if (!m_state.editor_tag.is_valid()) return false;
 	auto ctx_mgr = m_state.ctx_manager.lock();
 	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return false;

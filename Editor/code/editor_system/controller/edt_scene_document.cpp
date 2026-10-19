@@ -14,10 +14,10 @@ void edt::scene_document::commit(std::string_view label, commit_mode mode)
 	egLOG_TRACE("Editor/Commit", "{}", label);
 	m_dirty = true;
 	touch_descs();
-	if (mode == commit_mode::push && !(m_pusher && m_pusher())) {
-		return;
+	// state_only edits (a new level, a new world) were never announced; only a push that did something is.
+	if (mode == commit_mode::push && m_pusher && m_pusher()) {
+		notify_changed();
 	}
-	notify_changed();
 }
 
 void edt::scene_document::notify_changed()

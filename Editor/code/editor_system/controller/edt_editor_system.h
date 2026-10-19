@@ -49,6 +49,7 @@ namespace edt {
 			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
+		// Closes the prefab preview and releases the scene document in the editor_context before its members die.
 		~editor_system();
 
 		void init(ds::app_data_storage& inp_sys);

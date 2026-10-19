@@ -5,7 +5,10 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_model.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include "edt_level_controller.h"
 #include "edt_prefab_document.h"
+#include "edt_scene_editor.h"
 #include "edt_scene_document.h"
 #include <cstdint>
 #include <memory>
@@ -238,7 +241,7 @@ BOOST_AUTO_TEST_CASE(Commit_WithNothingToPushIsDirtyButSilent)
 	BOOST_TEST(changed.empty());
 }
 
-BOOST_AUTO_TEST_CASE(Commit_StateOnlyDoesNotPushButStillAnnounces)
+BOOST_AUTO_TEST_CASE(Commit_StateOnlyNeitherPushesNorAnnounces)
 {
 	int pushes = 0;
 	scene.set_pusher([&pushes] { ++pushes; return true; });
@@ -247,7 +250,62 @@ BOOST_AUTO_TEST_CASE(Commit_StateOnlyDoesNotPushButStillAnnounces)
 
 	BOOST_TEST(pushes == 0);
 	BOOST_TEST(scene.is_dirty());
-	BOOST_TEST(changed.size() == 1u);
+	BOOST_TEST(changed.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Commit_AddsExactlyOneToTheGeneration)
+{
+	scene.set_pusher([] { return true; });
+	const auto before = scene.generation();
+
+	scene.commit("Create entity");
+	BOOST_TEST(scene.generation() == before + 1);
+
+	scene.commit("Create world", edt::commit_mode::state_only);
+	BOOST_TEST(scene.generation() == before + 2);
+}
+
+BOOST_AUTO_TEST_CASE(SceneEditorEdit_ReachesDocumentChangedThroughTheInstalledPusher)
+{
+	const auto tag = put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":[]}]})");
+	BOOST_REQUIRE(mgr->load_level(tag));
+	auto level_res = require_loaded<scn::level_desc>(tag);
+	BOOST_REQUIRE(level_res.is_ready());
+	for (const auto& wh : level_res->get_worlds()) scene.world_descs.push_back(*wh.get_sync());
+	edt::derive_world_arrays(scene.world_descs, scene.world_names, scene.worlds_systems_list);
+	scene.active_world_idx = 0;
+	scene.editor_tag = tag;
+	edt::scene_editor editor(scene);
+	const auto before = scene.generation();
+	BOOST_REQUIRE(scene.active_world_desc());
+
+	editor.create_entity("Empty");
+
+	BOOST_TEST(scene.active_world_desc()->get_root().children.size() == 1u);
+	BOOST_TEST(scene.is_dirty());
+	BOOST_REQUIRE(changed.size() == 1u);
+	BOOST_TEST(changed[0].first == scene.id());
+	BOOST_TEST(changed[0].second == scene.generation());
+	BOOST_TEST(scene.generation() > before);
+}
+
+BOOST_AUTO_TEST_CASE(Shutdown_ClosesThePreviewAndLetsGoOfTheScene)
+{
+	const auto id = documents.open_prefab(prefab_a).id();
+	const std::string set_name = "preview:" + std::string{ prefab_a.view() };
+	BOOST_REQUIRE(mgr->find_set(set_name));
+
+	documents.shutdown();
+
+	BOOST_TEST(mgr->find_set(set_name) == nullptr);
+	BOOST_TEST(documents.find(id) == nullptr);
+	BOOST_TEST(documents.preview() == nullptr);
+	BOOST_TEST(documents.active() == nullptr);
+	scene.set_pusher([] { return true; });
+	scene.commit("Create entity");
+	BOOST_TEST(changed.empty()); // the scene no longer reports to the manager's events
+	documents.shutdown(); // a second call is harmless
 }
 
 BOOST_AUTO_TEST_CASE(MarkClean_ClearsTheDirtyFlag)

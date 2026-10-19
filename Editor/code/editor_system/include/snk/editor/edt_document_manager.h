@@ -24,8 +24,11 @@ namespace edt
 		document_manager(const document_manager&) = delete;
 		document_manager& operator=(const document_manager&) = delete;
 
-		scene_document& scene() { return m_scene; }
-		const scene_document& scene() const { return m_scene; }
+		scene_document& scene();
+		const scene_document& scene() const;
+		// Closes the preview and lets go of the scene (document_changed stops); to be called before the editor
+		// that owns the scene is destroyed. The manager only has its preview left afterwards.
+		void shutdown();
 
 		// The document edits and menus act on. Never null: the scene is always there.
 		document* active();
@@ -47,7 +50,7 @@ namespace edt
 	private:
 		static void assign_id(document& doc, document_id id) { doc.m_id = id; }
 
-		scene_document& m_scene;
+		scene_document* m_scene;
 		editor_events& m_events;
 		res::resource_system& m_resources;
 		desc::desc_system& m_descs;

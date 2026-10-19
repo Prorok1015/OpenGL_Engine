@@ -22,7 +22,7 @@ namespace edt
 	enum class commit_mode
 	{
 		push,       // the edit changed a desc: reload the active world from it
-		state_only, // the level was changed in place (a world was added, a level was created): nothing to reload
+		state_only, // the level was changed in place (a world was added, a level was created): nothing to reload, no document_changed
 	};
 
 	// The level being edited: its identity, its world descs, the dirty flag and the single entry point for edits
@@ -68,8 +68,9 @@ namespace edt
 		scn::context_set* level_set() const;
 
 		// Every edit of the level ends here: marks the document dirty, bumps the generation, pushes the descs to the
-		// level (commit_mode::push) and tells document_changed. `label` names the edit for the log now and for the
-		// Edit menu once edits are undoable. A push that finds nothing to push to (no level loaded) does not announce.
+		// level (commit_mode::push) and tells document_changed. The generation grows by exactly one per commit (the pusher
+		// must not bump it again). `label` names the edit for the log now and for the Edit menu once edits are undoable.
+		// A push that finds nothing to push to (no level loaded) does not announce; commit_mode::state_only never does.
 		void commit(std::string_view label, commit_mode mode = commit_mode::push);
 		// Announces document_changed for the current generation; commit does it after the push.
 		void notify_changed();

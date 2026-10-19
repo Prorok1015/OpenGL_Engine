@@ -66,7 +66,16 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 {
 }
 
-edt::editor_system::~editor_system() = default;
+edt::editor_system::~editor_system()
+{
+	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
+	if (m_context) {
+		m_context->documents().shutdown();
+	}
+	if (m_prefab_panel) {
+		m_prefab_panel->set_context(nullptr);
+	}
+}
 
 void edt::editor_system::init(ds::app_data_storage& data)
 {
