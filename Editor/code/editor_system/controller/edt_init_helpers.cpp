@@ -41,7 +41,8 @@ void setup_panels(
 	std::shared_ptr<console_panel>& console,
 	std::shared_ptr<asset_browser_panel>& asset_browser,
 	component_ui_registry& registry,
-	editor_system& sys)
+	editor_system& sys,
+	bool capture_log)
 {
 	hierarchy = std::make_shared<scene_hierarchy_panel>();
 	inspector = std::make_shared<inspector_panel>();
@@ -50,6 +51,8 @@ void setup_panels(
 	console = std::make_shared<console_panel>();
 	asset_browser = std::make_shared<asset_browser_panel>();
 	asset_browser->set_layers(res::resource_system::get_resource_layers());
+
+	if (!capture_log) return;
 
 	auto console_weak = std::weak_ptr<console_panel>(console);
 	engine::set_log_callback([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
