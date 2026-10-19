@@ -473,7 +473,7 @@ BOOST_AUTO_TEST_CASE(MinLength_CountsCharacters)
 	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"("")")));
 	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"("a")")));
 	BOOST_CHECK(!edt::json_schema::validate(schema, json_of(R"("ab")")));
-	BOOST_CHECK(!edt::json_schema::validate(schema, json_of("\"\u00e9\u00e9\""))); // two characters, four bytes
+	BOOST_CHECK(!edt::json_schema::validate(schema, json_of("\"\xC3\xA9\xC3\xA9\""))); // two characters, four bytes
 	BOOST_CHECK(edt::json_schema::check_schema(json_of(R"({"minLength":-1})")).has_value());
 	BOOST_CHECK(edt::json_schema::check_schema(json_of(R"({"minLength":"1"})")).has_value());
 }
