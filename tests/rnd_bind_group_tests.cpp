@@ -977,6 +977,12 @@ BOOST_AUTO_TEST_CASE(DefinesGoAfterTheVersionLineWhereverItIs)
 	BOOST_TEST(inserted("#version 450 core", &ok) == "#version 450 core\n#define A\n");
 	BOOST_TEST(ok);
 
+	// A byte order mark in front of the directive is dropped, not mistaken for code.
+	BOOST_TEST(inserted("\xEF\xBB\xBF#version 450 core\nint x;\n", &ok) == "#version 450 core\n#define A\nint x;\n");
+	BOOST_TEST(ok);
+	BOOST_TEST(inserted("\xEF\xBB\xBF// licence\n#version 450 core\n", &ok) == "// licence\n#version 450 core\n#define A\n");
+	BOOST_TEST(ok);
+
 	// Anything else before it: the shader is not valid, the source stays as it was.
 	for (const char* source : { "int x;\n#version 450 core\n", "#define B\n#version 450 core\n", "void main() {}\n", "", "// #version 450 core\n", "#versions 450\n" }) {
 		BOOST_TEST_CONTEXT(source) {

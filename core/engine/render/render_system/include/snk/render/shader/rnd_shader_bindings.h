@@ -20,6 +20,7 @@ namespace rnd
 	SNK_API std::string expand_binding_macros(std::string& source, const driver::binding_table& table);
 
 	// Puts `text` on the lines after the #version directive, which has to be the first thing in the source that
-	// is not a comment or blank. False (and `source` unchanged) when it is not.
+	// is not a comment or blank. A UTF-8 byte order mark in front of it is removed. False (and `source` unchanged,
+	// the mark apart) when the directive is not first.
 	SNK_API bool insert_after_version(std::string& source, std::string_view text);
 }

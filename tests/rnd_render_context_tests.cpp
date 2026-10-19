@@ -72,6 +72,27 @@ std::string read_file(const fs::path& path)
 	return text.str();
 }
 
+// The source with // and /* */ comments blanked out, so a word in a comment is not taken for code.
+std::string without_comments(const std::string& source)
+{
+	std::string result = source;
+	for (std::size_t i = 0; i < source.size(); ++i) {
+		const bool line = source.compare(i, 2, "//") == 0;
+		if (!line && source.compare(i, 2, "/*") != 0) {
+			continue;
+		}
+		const std::size_t end = line ? source.find('\n', i) : source.find("*/", i + 2);
+		const std::size_t stop = end == std::string::npos ? source.size() : (line ? end : end + 2);
+		for (std::size_t j = i; j < stop; ++j) {
+			if (result[j] != '\n') {
+				result[j] = ' ';
+			}
+		}
+		i = stop - 1;
+	}
+	return result;
+}
+
 std::vector<std::string> includes_of(const std::string& source)
 {
 	static const std::regex include_line(R"(^[ \t]*#[ \t]*include[ \t]*[<"]([^>"]+)[>"])");
@@ -108,7 +129,7 @@ BOOST_AUTO_TEST_CASE(ThePassesNeverNameAManagerOrTheFrameContext)
 	}
 	files.push_back(root / "rnd_pass_pipelines.h");
 	for (const fs::path& file : files) {
-		const std::string source = read_file(file);
+		const std::string source = without_comments(read_file(file));
 		BOOST_TEST_CONTEXT(file.filename().string()) {
 			BOOST_REQUIRE(!source.empty());
 			++checked;
@@ -130,7 +151,7 @@ BOOST_AUTO_TEST_CASE(TheRenderSystemHeaderIncludesNoManagerAndTheOnesThatAreInte
 	const fs::path root{ SNK_RENDER_SRC_DIR };
 	for (const char* header : { "rnd_render_system.h", "rnd_frame_context.h", "rnd_render_pass_interface.h", "rnd_render_context.h" }) {
 		BOOST_TEST_CONTEXT(header) {
-			const std::string source = read_file(root / "include" / "snk" / "render" / header);
+			const std::string source = without_comments(read_file(root / "include" / "snk" / "render" / header));
 			BOOST_REQUIRE(!source.empty());
 			for (const std::string& include : includes_of(source)) {
 				BOOST_TEST(!is_manager_header(include), "includes " << include);

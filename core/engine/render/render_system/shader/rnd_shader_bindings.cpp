@@ -195,6 +195,11 @@ std::string rnd::expand_binding_macros(std::string& source, const driver::bindin
 
 bool rnd::insert_after_version(std::string& source, std::string_view text)
 {
+	// A UTF-8 byte order mark ahead of the directive is not part of the shader: drop it, compilers refuse it.
+	constexpr std::string_view bom = "\xEF\xBB\xBF";
+	if (source.starts_with(bom)) {
+		source.erase(0, bom.size());
+	}
 	const std::string code = without_comments(source);
 	std::size_t line_begin = 0;
 	while (line_begin < code.size()) {

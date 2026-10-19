@@ -161,14 +161,66 @@ BOOST_AUTO_TEST_CASE(AGroupIsMadeOnTheFirstDrawAndNothingIsWrittenAfterwards)
 	BOOST_TEST(driver.calls().bind_group_binds == 7u);	// but the bind itself is made for every draw
 }
 
-BOOST_AUTO_TEST_CASE(TwoMaterialsOfTheSameContentsHaveGroupsOfTheirOwn)
+BOOST_AUTO_TEST_CASE(MaterialsOfTheSameContentsShareOneGroup)
 {
-	// The key is the compiled material, not what it holds: rebuilding one for any reason must not find the old group.
-	const auto a = material(params_of(32.f));
-	const auto b = material(params_of(32.f));
-	BOOST_TEST(a->serial != b->serial);
-	BOOST_TEST((bind(*a) != bind(*b)));
-	BOOST_TEST(groups.cached() == 2u);
+	// The key is what the material holds, not the compiled material: a hundred entities with the same material
+	// (each its own compiled_material) use one buffer and one group.
+	const auto created = driver.calls().bind_groups_created;
+	const auto buffers = driver.calls().buffers_created;
+	std::vector<std::shared_ptr<rnd::compiled_material>> entities;
+	for (int i = 0; i < 100; ++i) {
+		entities.push_back(material(params_of(32.f)));
+	}
+	const auto first = bind(*entities.front());
+	for (const auto& entity : entities) {
+		BOOST_REQUIRE((bind(*entity) == first));
+	}
+	BOOST_TEST(groups.groups_created() == 1u);
+	BOOST_TEST(groups.cached() == 1u);
+	BOOST_TEST(driver.calls().bind_groups_created == created + 1);
+	BOOST_TEST(driver.calls().buffers_created == buffers + 1);
+}
+
+BOOST_AUTO_TEST_CASE(AMaterialThatIsRebuiltEveryFrameWithTheSameContentsAllocatesNothing)
+{
+	// A texture that never loads: the extractor builds the material again at every extract.
+	const auto created = driver.calls().bind_groups_created;
+	for (int frame = 0; frame < 30; ++frame) {
+		const auto rebuilt = material(params_of(32.f), { nullptr });
+		bind(*rebuilt);
+		next_frame();
+	}
+	BOOST_TEST(groups.groups_created() == 1u);
+	BOOST_TEST(groups.cached() == 1u);
+	BOOST_TEST(driver.calls().bind_groups_created == created + 1);
+}
+
+BOOST_AUTO_TEST_CASE(ABumpOfTheTextureGenerationWithUnchangedContentsCreatesNoGroup)
+{
+	// A render target was resized: every material is built again, with the textures it had.
+	auto diffuse = driver.create_texture(small_texture());
+	const auto before = bind(*material(params_of(32.f), { diffuse.get() }));
+	next_frame();
+	const auto after = bind(*material(params_of(32.f), { diffuse.get() }));
+	BOOST_TEST((after == before));
+	BOOST_TEST(groups.groups_created() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ARealChangeOfParamsOrOfATextureCreatesExactlyOneGroup)
+{
+	auto diffuse = driver.create_texture(small_texture());
+	auto other = driver.create_texture(small_texture());
+	bind(*material(params_of(32.f), { diffuse.get() }));
+	BOOST_TEST(groups.groups_created() == 1u);
+
+	bind(*material(params_of(64.f), { diffuse.get() }));
+	BOOST_TEST(groups.groups_created() == 2u);
+	bind(*material(params_of(64.f), { other.get() }));
+	BOOST_TEST(groups.groups_created() == 3u);
+	// Back to something seen: found, not made.
+	bind(*material(params_of(32.f), { diffuse.get() }));
+	BOOST_TEST(groups.groups_created() == 3u);
+	BOOST_TEST(groups.cached() == 3u);
 }
 
 BOOST_AUTO_TEST_CASE(AMaterialBuiltAnewForAReloadedTextureGetsANewGroupWithTheNewTexture)
@@ -198,17 +250,30 @@ BOOST_AUTO_TEST_CASE(TheGroupsOfMaterialsThatWereNotDrawnForAFrameAreDestroyed)
 	const auto live_buffers = driver.live_buffers();
 	BOOST_TEST(groups.cached() == 2u);
 
-	// Frame 1 draws only `kept`: `dropped` was drawn in the frame before, it stays for now.
-	next_frame();
-	bind(*kept);
-	BOOST_TEST(groups.cached() == 2u);
-	// Frame 2: `dropped` was not drawn in the frame before.
+	// `dropped` stays for the grace period, drawn or not...
+	for (std::uint64_t frame = 1; frame <= rnd::material_groups::grace_frames; ++frame) {
+		next_frame();
+		bind(*kept);
+		BOOST_TEST(groups.cached() == 2u);
+	}
+	// ...and goes with the next frame.
 	next_frame();
 	bind(*kept);
 	BOOST_TEST(groups.cached() == 1u);
 	BOOST_TEST(driver.live_bind_groups() == live_groups - 1);
 	BOOST_TEST(driver.live_buffers() == live_buffers - 1);
 	BOOST_TEST(driver.group_info(dropped_group) == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(AGroupUsedAgainWithinTheGraceIsNotMadeAgain)
+{
+	const auto m = material(params_of(5.f));
+	const auto first = bind(*m);
+	for (std::uint64_t frame = 0; frame < rnd::material_groups::grace_frames; ++frame) {
+		next_frame();
+	}
+	BOOST_TEST((bind(*m) == first));
+	BOOST_TEST(groups.groups_created() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(ParamsThatAreNotTheSizeOfTheBlockAreCopiedAsFarAsTheyGoAndTheRestKeepsItsDefaults)
