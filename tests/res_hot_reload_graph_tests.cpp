@@ -461,7 +461,8 @@ BOOST_AUTO_TEST_CASE(ReleasedDependent_IsNotEvictedNorDeliveredAnyMore)
 	BOOST_TEST(times_delivered(c) == 1);
 }
 
-// g is held, c (between g and p) is not: a change of p still has to reach g through the released c.
+// g is held, c (between g and p) is not: a change of p still has to reach g through the released c, whose watcher
+// is part of the chain as well.
 BOOST_AUTO_TEST_CASE(ReleasedMiddleOfAChain_StillPassesTheChangeOn)
 {
 	const auto p = node("p.node", "p1");
@@ -478,8 +479,9 @@ BOOST_AUTO_TEST_CASE(ReleasedMiddleOfAChain_StillPassesTheChangeOn)
 
 	BOOST_TEST(times_delivered(p) == 1);
 	BOOST_TEST(times_delivered(g) == 1);
-	BOOST_TEST(times_delivered(c) == 0);
-	BOOST_TEST(position_of(p) < position_of(g));
+	BOOST_TEST(times_delivered(c) == 1);
+	BOOST_TEST(position_of(p) < position_of(c));
+	BOOST_TEST(position_of(c) < position_of(g));
 
 	// c itself changing still reaches g
 	delivered.clear();

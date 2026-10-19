@@ -530,12 +530,15 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
 }
 
 void res::resource_system::prune_released_edges() {
-  const auto is_held = [this](const res::tag &tag) {
-    return m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+  // Released: the cache still has an entry for the tag, but every one of them expired. A tag without any entry was
+  // evicted by a signal and may be loaded again, so its edges stay.
+  const auto is_released = [this](const res::tag &tag) {
+    return m_cache.any_of_tag(tag, [](const cache_entry &entry) { return entry.expired(); }) &&
+           !m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
   };
   std::unordered_set<res::tag> released;
   for (const auto &[tag, targets] : m_depends_on) {
-    if (!is_held(tag)) {
+    if (is_released(tag)) {
       released.insert(tag);
     }
   }
@@ -543,29 +546,29 @@ void res::resource_system::prune_released_edges() {
     return;
   }
 
-  // A held tag takes over the dependencies of the released tags it was built through, transitively.
-  for (auto &[tag, targets] : m_depends_on) {
-    if (released.contains(tag)) {
+  // A released tag that a tag still in use is built through keeps its edges: a change at the bottom of the chain has
+  // to pass through it. Walk down from every tag that is not released.
+  std::unordered_set<res::tag> needed;
+  std::vector<res::tag> pending;
+  for (const auto &[tag, targets] : m_depends_on) {
+    if (!released.contains(tag)) {
+      pending.insert(pending.end(), targets.begin(), targets.end());
+    }
+  }
+  while (!pending.empty()) {
+    const res::tag next = std::move(pending.back());
+    pending.pop_back();
+    if (!released.contains(next) || !needed.insert(next).second) {
       continue;
     }
-    std::unordered_set<res::tag> known(targets.begin(), targets.end());
-    known.insert(tag);
-    for (std::size_t at = 0; at < targets.size(); ++at) {
-      if (!released.contains(targets[at])) {
-        continue;
-      }
-      // `targets` grows below, so the tag is copied before the push_back may move it.
-      const res::tag through = targets[at];
-      for (const auto &inherited : m_depends_on.at(through)) {
-        if (known.insert(inherited).second) {
-          targets.push_back(inherited);
-          m_dependents[inherited].push_back(tag);
-        }
-      }
-    }
+    const auto edges = m_depends_on.find(next);
+    pending.insert(pending.end(), edges->second.begin(), edges->second.end());
   }
 
   for (const auto &tag : released) {
+    if (needed.contains(tag)) {
+      continue;
+    }
     const auto it = m_depends_on.find(tag);
     for (const auto &target : it->second) {
       if (const auto dependents = m_dependents.find(target); dependents != m_dependents.end()) {
