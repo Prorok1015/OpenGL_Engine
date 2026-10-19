@@ -16,6 +16,7 @@ void scn::animation_collection_desc::serialize(json::object& data) const
 {
 	json::array arr;
 	for (auto const& handle : clips) {
+		handle.wait();
 		if (handle.is_ready()) {
 			json::object clip_obj;
 			clip_obj["__type"] = "animation_clip_desc";

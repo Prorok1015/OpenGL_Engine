@@ -45,7 +45,7 @@ BOOST_AUTO_TEST_CASE(Then_WhenAlreadyReady_CallsImmediately) {
 	block.set_ready(10);
 
 	bool called = false;
-	block.then([&](auto& b) {
+	block.on_settled([&](auto& b) {
 		called = true;
 		BOOST_CHECK_EQUAL(b.data, 10);
 	});
@@ -56,7 +56,7 @@ BOOST_AUTO_TEST_CASE(Then_WhenPending_DefersUntilReady) {
 	res_control_block<int> block;
 
 	bool called = false;
-	block.then([&](auto& b) {
+	block.on_settled([&](auto& b) {
 		called = true;
 		BOOST_CHECK_EQUAL(b.data, 99);
 	});
@@ -70,9 +70,9 @@ BOOST_AUTO_TEST_CASE(Then_MultipleCallbacks_AllFired) {
 	res_control_block<int> block;
 
 	int call_count = 0;
-	block.then([&](auto&) { ++call_count; });
-	block.then([&](auto&) { ++call_count; });
-	block.then([&](auto&) { ++call_count; });
+	block.on_settled([&](auto&) { ++call_count; });
+	block.on_settled([&](auto&) { ++call_count; });
+	block.on_settled([&](auto&) { ++call_count; });
 
 	block.set_ready(0);
 	BOOST_CHECK_EQUAL(call_count, 3);
@@ -82,7 +82,7 @@ BOOST_AUTO_TEST_CASE(Then_OnError_CallbackStillFires) {
 	res_control_block<int> block;
 
 	bool called = false;
-	block.then([&](auto& b) {
+	block.on_settled([&](auto& b) {
 		called = true;
 		BOOST_CHECK(b.has_error());
 	});
@@ -93,12 +93,12 @@ BOOST_AUTO_TEST_CASE(Then_OnError_CallbackStillFires) {
 
 BOOST_AUTO_TEST_CASE(SetReady_ClearsCallbackList) {
 	res_control_block<int> block;
-	block.then([](auto&) {});
+	block.on_settled([](auto&) {});
 	block.set_ready(1);
 
 	// Adding callback after ready should fire immediately, not accumulate
 	int count = 0;
-	block.then([&](auto&) { ++count; });
+	block.on_settled([&](auto&) { ++count; });
 	BOOST_CHECK_EQUAL(count, 1);
 }
 
@@ -108,7 +108,7 @@ BOOST_AUTO_TEST_CASE(SetReady_FromAnotherThread) {
 	auto block = std::make_shared<res_control_block<int>>();
 
 	bool called = false;
-	block->then([&](auto& b) {
+	block->on_settled([&](auto& b) {
 		called = true;
 		BOOST_CHECK_EQUAL(b.data, 77);
 	});

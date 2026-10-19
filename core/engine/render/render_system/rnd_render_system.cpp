@@ -24,7 +24,10 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
 		auto picture_handle = tex_2d_desc.get_picture_handle();
 		if (!picture_handle.is_ready()) {
-			egLOG_WARN("render/texture", "Failed to load texture: picture resource with tag {0} is not ready", tex_2d_desc.get_tag().view());
+			// Still loading in the background: the texture manager asks again next frame.
+			if (picture_handle.has_error()) {
+				egLOG_WARN("render/texture", "Failed to load texture: picture resource of {0} failed to load", tex_2d_desc.get_tag().view());
+			}
 			return nullptr;
 		}
 		auto picture = picture_handle.get();
@@ -64,6 +67,14 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		if (tex_cubmap_desc.get_source_type() == rnd::texture_cubemap_desc::SOURCE_TYPE::SINGLE_FILE) {
 			egLOG_WARN("render/texture", "Cubemap texture loading from single file is not implemented yet (tag: {0})", desc.get_tag().view());
 			return nullptr;
+		}
+
+		// The faces load in the background: come back next frame instead of caching a texture with holes.
+		const auto& awaited = tex_cubmap_desc.get_faces();
+		for (const auto* face : { &awaited.right, &awaited.left, &awaited.top, &awaited.bottom, &awaited.front, &awaited.back }) {
+			if (face->is_valid() && !face->is_ready() && !face->has_error()) {
+				return nullptr;
+			}
 		}
 
 		rnd::driver::texture_header header;

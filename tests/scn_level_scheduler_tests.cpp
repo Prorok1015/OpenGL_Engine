@@ -16,6 +16,7 @@
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include "test_manual_tasks.hpp"
 
 namespace json = boost::json;
 
@@ -90,7 +91,8 @@ namespace {
 			return (size_t)std::distance(g_log.begin(), std::ranges::find(g_log, s));
 		}
 
-		res::resource_system rs;
+		ds::task_system tasks{ test_util::manual_tasks() };
+		res::resource_system rs{ tasks };
 		desc::desc_system ds;
 		scn::ecs_assembler assembler;
 		ecs::system_factory sf;

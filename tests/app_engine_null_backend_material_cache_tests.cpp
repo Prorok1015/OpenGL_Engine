@@ -26,7 +26,7 @@ struct material_cache_fixture : test_util::null_engine_fixture
 	std::vector<cached_entity> snapshot()
 	{
 		std::vector<cached_entity> out;
-		storage.require<scn::level_manager>().get_level().for_each_world([&out](scn::world& w) {
+		storage.require<scn::context_manager>().get_level().for_each_world([&out](scn::world& w) {
 			auto& reg = w.state();
 			for (auto [ent, cache] : reg.view<scn::compiled_material_component>().each()) {
 				if (cache.material && cache.material->complete) {
@@ -40,7 +40,7 @@ struct material_cache_fixture : test_util::null_engine_fixture
 	std::set<const rnd::compiled_material*> current_materials()
 	{
 		std::set<const rnd::compiled_material*> out;
-		storage.require<scn::level_manager>().get_level().for_each_world([&out](scn::world& w) {
+		storage.require<scn::context_manager>().get_level().for_each_world([&out](scn::world& w) {
 			for (auto [ent, cache] : w.state().view<scn::compiled_material_component>().each()) {
 				out.insert(cache.material.get());
 			}
@@ -83,8 +83,12 @@ struct material_cache_fixture : test_util::null_engine_fixture
 
 	void load_bench_level()
 	{
-		auto& levels = storage.require<scn::level_manager>();
-		BOOST_REQUIRE(levels.load(res::tag::make("levels/bench_100_meshes.desc")));
+		auto& levels = storage.require<scn::context_manager>();
+		BOOST_REQUIRE(levels.load_level(res::tag::make("levels/bench_100_meshes.desc")));
+		// The materials, and the textures they ask for from the first extract on, load in the background: let
+		// them finish, so the scenario starts from compiled materials as it did when loads were synchronous.
+		test_util::pump(tasks);
+		BOOST_REQUIRE(run_frames(3) == 3);
 		BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
 	}
 };

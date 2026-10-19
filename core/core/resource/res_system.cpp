@@ -3,29 +3,30 @@
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/config/cfg_api.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <algorithm>
 #include <utility>
 #include <vector>
-
-namespace {
-template <class MAP>
-void copy_tag_entries(MAP &map, const res::tag &from, const res::tag &to) {
-  std::vector<std::pair<res::cache_key, typename MAP::mapped_type>> found;
-  for (const auto &[key, value] : map) {
-    if (key.tag == from) {
-      found.emplace_back(key, value);
-    }
-  }
-  for (auto &[key, value] : found) {
-    map[res::cache_key{to, key.type}] = std::move(value);
-  }
-}
-} // namespace
 
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 // Optional lower layer (engine base resources). Empty = single-root setup.
 CFG_VAR_DEF_PATH(cfg_res_base_path, "resource/base_path", "");
 
-res::resource_system::resource_system() {
+namespace {
+thread_local std::vector<const void *> g_loading;
+} // namespace
+
+void core::res::detail::push_loading(const void *block) {
+  g_loading.push_back(block);
+}
+
+void core::res::detail::pop_loading() { g_loading.pop_back(); }
+
+bool core::res::detail::loading_on_this_thread(const void *block) {
+  return std::ranges::find(g_loading, block) != g_loading.end();
+}
+
+res::resource_system::resource_system(ds::task_system &tasks)
+    : m_tasks(tasks) {
   egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
         fs::absolute("./").string(), cfg_res_path->string());
   ASSERT_MSG(std::filesystem::exists(cfg_res_path),
@@ -54,9 +55,100 @@ res::resource_system::resource_system() {
   registrate_adapter<text_adapter>(res::text_adapter::INFO);
 }
 
-void res::resource_system::post_adapter_work(std::function<void()> cb) {
-  if (m_adapter_worker)
-    m_adapter_worker->post(cb);
+res::resource_system::~resource_system() {
+  {
+    std::lock_guard lock(m_stop_mutex);
+    m_stopping = true;
+  }
+  m_lifetime.cancel_tasks();
+  m_tasks.wait_idle(m_lifetime);
+  // The vfs threads are joined only now: the tasks that were running may still store() through them.
+  m_resolvers.clear();
+}
+
+namespace {
+// Owned by the task body: if the body is destroyed without having run, the block it was to settle gets an error.
+struct unrun_guard {
+  explicit unrun_guard(std::shared_ptr<res::resource_system::resource_handle> b)
+      : block(std::move(b)) {}
+  ~unrun_guard() {
+    if (!ran && block) {
+      block->set_error("Load cancelled");
+    }
+  }
+  std::shared_ptr<res::resource_system::resource_handle> block;
+  bool ran = false;
+};
+} // namespace
+
+void res::resource_system::run_on_compute(std::function<void()> cb,
+                                          std::shared_ptr<resource_handle> block) {
+  std::lock_guard lock(m_stop_mutex);
+  if (m_stopping) {
+    if (block) {
+      block->set_error("Load cancelled");
+    }
+    return;
+  }
+  auto guard = std::make_shared<unrun_guard>(std::move(block));
+  const auto* target = guard->block.get();
+  auto task = m_tasks.run(ds::lane::compute, ds::task_desc{"resource load", "resource", false},
+              m_lifetime, [cb = std::move(cb), guard](ds::task_context &) {
+                guard->ran = true;
+                cb();
+              });
+  if (target) {
+    guard->block->load_task_id = task.id();
+  }
+}
+
+void res::resource_system::signal_changed(const res::tag &tag) {
+  std::uint64_t epoch = 0;
+  {
+    std::unique_lock lock(m_cache_mutex);
+    m_cache.erase_tag(tag);
+    epoch = ++m_watch_epoch;
+  }
+
+  m_tasks.post_main([this, tag, epoch, alive = m_lifetime.token()]() {
+    if (!alive.expired()) {
+      deliver_to_watchers(tag, epoch);
+    }
+  });
+}
+
+void res::resource_system::deliver_to_watchers(const res::tag &tag,
+                                               std::uint64_t signal_epoch) {
+  // Only watchers registered before the signal: a load that follows a signal registers its own watcher.
+  std::vector<std::pair<void *, std::uint64_t>> targets;
+  {
+    std::shared_lock lock(m_cache_mutex);
+    if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
+      for (const auto &[owner, entry] : it->second) {
+        if (entry.epoch < signal_epoch) {
+          targets.emplace_back(owner, entry.epoch);
+        }
+      }
+    }
+  }
+
+  for (const auto &[owner, epoch] : targets) {
+    reload_callback callback;
+    {
+      // A previous callback of this delivery may have unwatched (and destroyed) this owner.
+      std::shared_lock lock(m_cache_mutex);
+      auto it = m_watchers.find(tag);
+      if (it == m_watchers.end()) {
+        continue;
+      }
+      auto entry = it->second.find(owner);
+      if (entry == it->second.end() || entry->second.epoch != epoch) {
+        continue;
+      }
+      callback = entry->second.callback;
+    }
+    callback(tag);
+  }
 }
 
 void res::resource_system::register_alias(const res::tag &original,
@@ -68,12 +160,12 @@ void res::resource_system::register_alias(const res::tag &original,
 
   {
     std::unique_lock lock(m_cache_mutex);
-    copy_tag_entries(m_cache, original, alias);
+    m_cache.copy_tag(original, alias, [](const cache_entry &entry) { return !entry.expired(); });
   }
 
   {
     std::unique_lock lock(m_pinning_mutex);
-    copy_tag_entries(m_pinned_resources, original, alias);
+    m_pinned_resources.copy_tag(original, alias, [](const auto &entry) { return entry != nullptr; });
   }
 }
 

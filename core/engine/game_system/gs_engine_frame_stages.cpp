@@ -1,6 +1,6 @@
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/window/wnd_window_system.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/render/rnd_frame_assembler.h>
 #include <snk/render/rnd_frame_context.h>
@@ -12,7 +12,7 @@
 void gs::register_scene_frame_stages(app::frame_stage_registry& registry)
 {
 	registry.set_body(app::builtin_stage::update, [](app::stage_context& c) {
-		c.storage.require<scn::level_manager>().update(c.dt);
+		c.storage.require<scn::context_manager>().update(c.dt);
 	});
 	registry.set_body(app::builtin_stage::post_update, [](app::stage_context& c) {
 		if (auto ecs_input = c.storage.require_shared<inp::ecs_input_manager>()) {

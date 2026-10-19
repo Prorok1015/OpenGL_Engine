@@ -109,7 +109,7 @@ namespace ds::detail {
 		{
 			if (cfg.mode == policy::manual) {
 				std::lock_guard lock(lane_mutex);
-				manual_queues[lane_index(which)].push_back(std::move(fn));
+				lane_queues[lane_index(which)].push_back(std::move(fn));
 				return;
 			}
 			boost::asio::post(*pools[lane_index(which)], std::move(fn));
@@ -120,7 +120,7 @@ namespace ds::detail {
 			std::function<void()> fn;
 			{
 				std::lock_guard lock(lane_mutex);
-				auto& queue = manual_queues[lane_index(which)];
+				auto& queue = lane_queues[lane_index(which)];
 				if (queue.empty()) {
 					return false;
 				}
@@ -182,7 +182,7 @@ namespace ds::detail {
 		std::array<std::unique_ptr<boost::asio::thread_pool>, 2> pools;
 
 		std::mutex lane_mutex;
-		std::array<work_queue, 2> manual_queues;
+		std::array<work_queue, 2> lane_queues;
 
 		std::mutex main_mutex;
 		std::array<work_queue, 2> main_queues;
@@ -256,11 +256,11 @@ namespace ds::detail {
 		return true;
 	}
 
-	void task_state_base::execute()
+	bool task_state_base::execute()
 	{
 		task_status expected = task_status::pending;
 		if (!m_status.compare_exchange_strong(expected, task_status::running, std::memory_order_acq_rel)) {
-			return;
+			return false;
 		}
 
 		task_context ctx;
@@ -291,6 +291,7 @@ namespace ds::detail {
 		}
 		m_status.store(outcome, std::memory_order_release);
 		finalize();
+		return true;
 	}
 
 	void task_state_base::wait()
@@ -463,7 +464,7 @@ namespace ds {
 		std::array<detail::task_system_impl::work_queue, 2> dropped_main;
 		{
 			std::lock_guard lock(impl.lane_mutex);
-			dropped_lane.swap(impl.manual_queues);
+			dropped_lane.swap(impl.lane_queues);
 		}
 		{
 			std::lock_guard lock(impl.main_mutex);
@@ -596,6 +597,22 @@ namespace ds {
 	{
 		ASSERT_MSG(m_impl->cfg.mode == policy::manual, "task_system::run_one: manual policy only");
 		return m_impl->cfg.mode == policy::manual && m_impl->run_one(which);
+	}
+
+	bool task_system::try_run_inline(std::uint64_t task_id)
+	{
+		std::shared_ptr<detail::task_state_base> state;
+		{
+			std::lock_guard lock(m_impl->live_mutex);
+			if (auto it = m_impl->live.find(task_id); it != m_impl->live.end()) {
+				state = it->second.lock();
+			}
+		}
+		if (!state) {
+			return false;
+		}
+		detail::worker_scope scope;
+		return state->execute(); // the pool job of this task finds it claimed and does nothing
 	}
 
 	std::vector<task_info> task_system::snapshot() const

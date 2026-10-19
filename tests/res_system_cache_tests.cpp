@@ -1,7 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/resource/adapters/res_text_adapter.h>
-#include <snk/resource/adapters/res_adapter_worker.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <atomic>
@@ -40,10 +39,30 @@ struct shout_adapter : core::res::adapter_interface
 	}
 };
 
-using test_util::inline_worker;
 using test_util::to_bytes;
 
 std::vector<std::byte> bytes_of(std::string_view s) { return to_bytes(s); }
+
+// Like the vfs resolver: the data arrives later, from another thread.
+class delayed_resolver : public test_util::ram_resolver
+{
+public:
+	explicit delayed_resolver(const std::string_view prt) : ram_resolver(prt) {}
+	~delayed_resolver() override { for (auto& thread : threads) thread.join(); }
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		auto data = files.at(tag);
+		threads.emplace_back([block, data = std::move(data)]() mutable {
+			std::this_thread::sleep_for(std::chrono::milliseconds(30));
+			block->set_ready(std::move(data));
+		});
+		return block;
+	}
+
+	mutable std::vector<std::thread> threads;
+};
 
 struct sys_fixture : test_util::ram_res_env
 {
@@ -149,6 +168,7 @@ BOOST_AUTO_TEST_CASE(SignalChanged_EvictsCacheAndKeepsOldHandleValid)
 	put("evict.txt", "v2");
 
 	sys->signal_changed(tag);
+	pump();
 
 	auto fresh = sys->require_sync<res::text_resource>(tag);
 	BOOST_TEST(fresh.get_control_block() != old_handle.get_control_block());
@@ -167,16 +187,19 @@ BOOST_AUTO_TEST_CASE(Watchers_CalledPerOwnerForMatchingTagOnly)
 	sys->watch(tag, &owner_b, [&](const res::tag&) { ++b_calls; });
 
 	sys->signal_changed(other);
+	pump();
 	BOOST_TEST(a_calls == 0);
 	BOOST_TEST(b_calls == 0);
 
 	sys->signal_changed(tag);
+	pump();
 	BOOST_TEST(a_calls == 1);
 	BOOST_TEST(b_calls == 1);
 	BOOST_TEST(seen == tag);
 
 	sys->unwatch(tag, &owner_a);
 	sys->signal_changed(tag);
+	pump();
 	BOOST_TEST(a_calls == 1);
 	BOOST_TEST(b_calls == 2);
 
@@ -191,6 +214,7 @@ BOOST_AUTO_TEST_CASE(Watch_SameOwnerSameTagReplacesCallback)
 	sys->watch(tag, &owner, [&](const res::tag&) { ++first; });
 	sys->watch(tag, &owner, [&](const res::tag&) { ++second; });
 	sys->signal_changed(tag);
+	pump();
 	BOOST_TEST(first == 0);
 	BOOST_TEST(second == 1);
 }
@@ -204,7 +228,9 @@ BOOST_AUTO_TEST_CASE(Watcher_MayUnwatchItselfDuringCallback)
 		sys->unwatch(t, &owner); // must not deadlock: callbacks run outside the lock
 	});
 	sys->signal_changed(tag);
+	pump();
 	sys->signal_changed(tag);
+	pump();
 	BOOST_TEST(calls == 1);
 }
 
@@ -242,6 +268,7 @@ BOOST_AUTO_TEST_CASE(PinResource_IsServedWithoutLoadAndPersistedWhenMissing)
 	BOOST_TEST(!sys->exists(tag));
 
 	sys->pin_resource(tag, res::text_resource{ tag, bytes_of("pinned data") });
+	pump(); // the missing-file serialization runs on the compute lane
 
 	// served straight from the cache: no load involved
 	auto handle = sys->require<res::text_resource>(tag);
@@ -259,6 +286,7 @@ BOOST_AUTO_TEST_CASE(PinResource_SurvivesHandleReleaseUntilUnpinned)
 {
 	auto tag = tag_of("pin_lifetime.txt");
 	sys->pin_resource(tag, res::text_resource{ tag, bytes_of("v1") });
+	pump(); // the missing-file serialization runs on the compute lane
 	put("pin_lifetime.txt", "v2");
 
 	BOOST_TEST(text(tag) == "v1"); // strong cache wins over the file
@@ -270,9 +298,8 @@ BOOST_AUTO_TEST_CASE(Warmup_KeepsResourceAliveWithoutExternalHandles)
 {
 	auto tag = put("warm.txt", "v1");
 	sys->warmup<res::text_resource>(tag);
+	pump(); // warmup loads asynchronously and pins from the completion callback
 	{
-		// warmup's strong-cache push runs in a completion callback; our own callback is queued
-		// after it, so once ours fires the resource is pinned.
 		auto probe = sys->require_sync<res::text_resource>(tag);
 		BOOST_REQUIRE(probe.get_sync());
 	}
@@ -282,26 +309,260 @@ BOOST_AUTO_TEST_CASE(Warmup_KeepsResourceAliveWithoutExternalHandles)
 	BOOST_TEST(text(tag) == "v2");
 }
 
-BOOST_AUTO_TEST_CASE(AsyncWorker_LoadsOnBackgroundThreadAndNotifiesThen)
+BOOST_AUTO_TEST_CASE(Then_RunsOnTheMainQueueAfterTheLoadTaskFinished)
 {
-	sys->set_adapter_worker(std::make_unique<core::res::async_adapter_worker>());
-	auto tag = put("async.txt", "async payload");
+	auto tag = put("then.txt", "then payload");
+	ds::lifetime owner;
+	std::string seen;
+	int calls = 0;
 
-	std::atomic<bool> called{ false };
 	auto handle = sys->require<res::text_resource>(tag);
-	handle.then([&](res::text_resource& r) {
-		if (r.str() == "async payload") called = true;
+	handle.then(owner, [&](res::text_resource& r) { seen = r.str(); ++calls; });
+
+	BOOST_TEST(!handle.is_ready()); // nothing runs until the test drives the lanes
+	BOOST_TEST(tasks.run_one(ds::lane::compute));
+	BOOST_TEST(handle.is_ready());
+	BOOST_TEST(calls == 0); // settled on the lane, delivery waits for the main queue
+	BOOST_TEST(tasks.drain_main() == 1u);
+	BOOST_TEST(calls == 1);
+	BOOST_TEST(seen == "then payload");
+}
+
+BOOST_AUTO_TEST_CASE(Then_OnAnAlreadyReadyHandleStillGoesThroughTheMainQueue)
+{
+	auto tag = put("then_ready.txt", "ready");
+	auto handle = sys->require_sync<res::text_resource>(tag);
+	ds::lifetime owner;
+	int calls = 0;
+	handle.then(owner, [&](res::text_resource&) { ++calls; });
+	BOOST_TEST(calls == 0);
+	pump();
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Then_IsDroppedWhenTheOwnerIsGone)
+{
+	auto tag = put("then_gone.txt", "x");
+	int calls = 0;
+	auto owner = std::make_unique<ds::lifetime>();
+	sys->require<res::text_resource>(tag).then(*owner, [&](res::text_resource&) { ++calls; });
+	tasks.run_one(ds::lane::compute);
+	owner.reset(); // dies between the load and the delivery
+	pump();
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Then_IsNotCalledForAFailedLoad)
+{
+	ds::lifetime owner;
+	int calls = 0;
+	auto handle = sys->require<res::text_resource>(tag_of("then_missing.txt"));
+	handle.then(owner, [&](res::text_resource&) { ++calls; });
+	pump();
+	BOOST_TEST(handle.has_error());
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Wait_RunsTheQueuedLoadOnAManualSystemAndSettlesEitherWay)
+{
+	auto good = sys->require<res::text_resource>(put("wait_ok.txt", "ok"));
+	auto bad = sys->require<res::text_resource>(tag_of("wait_missing.txt"));
+	BOOST_TEST(!good.is_ready());
+
+	good.wait();
+	BOOST_TEST(good.is_ready());
+	bad.wait(); // no assert, no hang: the failure is for the caller to read
+	BOOST_TEST(bad.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(Wait_OnAManualSystemAlsoCoversAResolverThatAnswersLater)
+{
+	sys->unregistrate_resolver(res::tag::memory);
+	sys->registrate_resolver<delayed_resolver>(res::tag::memory);
+	const auto tag = put("late.txt", "late payload");
+
+	auto handle = sys->require<res::text_resource>(tag);
+	handle.wait(); // the load task only exists once the resolver thread has answered
+	BOOST_REQUIRE(handle.is_ready());
+	BOOST_TEST(handle.get()->str() == "late payload");
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_NotifiesOnlyWatchersRegisteredBeforeTheSignal)
+{
+	auto tag = tag_of("epoch.txt");
+	int before = 0, after = 0, owner_before = 0, owner_after = 0;
+	sys->watch(tag, &owner_before, [&](const res::tag&) { ++before; });
+	sys->signal_changed(tag);
+	sys->watch(tag, &owner_after, [&](const res::tag&) { ++after; }); // e.g. the load that follows a store + signal
+	pump();
+	BOOST_TEST(before == 1);
+	BOOST_TEST(after == 0);
+
+	sys->signal_changed(tag);
+	pump();
+	BOOST_TEST(before == 2);
+	BOOST_TEST(after == 1);
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_ReRegisteringAfterTheSignalDropsTheOldNotification)
+{
+	auto tag = tag_of("epoch_again.txt");
+	int calls = 0, owner = 0;
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
+	sys->signal_changed(tag);
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
+	pump();
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_WatcherRemovedByAnEarlierCallbackOfTheSameDeliveryIsSkipped)
+{
+	auto tag = tag_of("mutual.txt");
+	int calls = 0, a = 0, b = 0;
+	sys->watch(tag, &a, [&](const res::tag& t) { ++calls; sys->unwatch(t, &b); });
+	sys->watch(tag, &b, [&](const res::tag& t) { ++calls; sys->unwatch(t, &a); });
+	sys->signal_changed(tag);
+	pump();
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Destruction_SettlesLoadsThatNeverRanWithAnError)
+{
+	auto handle = sys->require<res::text_resource>(put("never_ran.txt", "x"));
+	BOOST_REQUIRE(!handle.is_ready());
+	rs.reset(); // cancels the queued load task
+	pump();     // the cancelled task leaves the queue
+	BOOST_TEST(handle.has_error());
+	handle.wait(); // must not hang
+}
+
+BOOST_AUTO_TEST_CASE(Wait_OnAHandleBuiltByHandBlocksOnTheBlock)
+{
+	auto block = std::make_shared<core::res::res_resource_block>();
+	const auto tag = tag_of("by_hand.txt");
+	res::res_handle<res::text_resource> handle(block, tag); // no task_system behind it
+	std::thread settler([&] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		block->set_ready(std::make_shared<res::text_resource>(tag, bytes_of("hand")));
 	});
+	handle.wait();
+	settler.join();
+	BOOST_REQUIRE(handle.is_ready());
+	BOOST_TEST(handle.get()->str() == "hand");
+}
 
-	auto ptr = handle.get_sync();
-	BOOST_REQUIRE(ptr);
-	BOOST_TEST(ptr->str() == "async payload");
-	// completion callbacks run on the worker thread right after waiters are woken: wait (bounded) for it
-	for (int i = 0; i < 500 && !called.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(2));
-	BOOST_TEST(called.load());
+BOOST_AUTO_TEST_CASE(SignalChanged_DeliversWatchersOnTheMainQueueNotInline)
+{
+	auto tag = tag_of("deferred.txt");
+	int calls = 0, owner = 0;
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
 
-	// replace the worker with the inline one so the fixture can tear down quietly
-	sys->set_adapter_worker(std::make_unique<inline_worker>());
+	sys->signal_changed(tag);
+	BOOST_TEST(calls == 0);
+	BOOST_TEST(tasks.drain_main() == 1u);
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_EvictsImmediatelyEvenThoughWatchersAreDeferred)
+{
+	auto tag = put("evict_now.txt", "v1");
+	auto old_handle = sys->require_sync<res::text_resource>(tag);
+	put("evict_now.txt", "v2");
+
+	sys->signal_changed(tag); // no drain yet
+	BOOST_TEST(sys->require_sync<res::text_resource>(tag).get()->str() == "v2");
+	pump();
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_SkipsAWatcherRemovedBeforeTheDrain)
+{
+	auto tag = tag_of("unwatched_late.txt");
+	int calls = 0, owner = 0;
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
+	sys->signal_changed(tag);
+	sys->unwatch(tag, &owner);
+	pump();
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_OnAliasTargetEvictsRequestsMadeThroughTheAlias)
+{
+	auto original = tag_of("sig_alias_orig.txt");
+	auto target = put("sig_alias_target.txt", "v1");
+	sys->register_alias(original, target);
+	auto via_alias = sys->require_sync<res::text_resource>(original);
+	put("sig_alias_target.txt", "v2");
+
+	sys->signal_changed(target);
+
+	BOOST_TEST(sys->require_sync<res::text_resource>(original).get_control_block() != via_alias.get_control_block());
+	BOOST_TEST(sys->require_sync<res::text_resource>(original).get()->str() == "v2");
+	pump();
+}
+
+BOOST_AUTO_TEST_CASE(Alias_KeepsALiveEntryOfTheTarget)
+{
+	auto original = put("alias_live_orig.txt", "original");
+	auto target = put("alias_live_target.txt", "target");
+	auto held_original = sys->require_sync<res::text_resource>(original);
+	auto held_target = sys->require_sync<res::text_resource>(target);
+
+	sys->register_alias(original, target);
+
+	auto via_target = sys->require_sync<res::text_resource>(target);
+	BOOST_TEST(via_target.get_control_block() == held_target.get_control_block());
+	BOOST_TEST(via_target.get_control_block() != held_original.get_control_block());
+	BOOST_TEST(via_target.get()->str() == "target");
+}
+
+BOOST_AUTO_TEST_CASE(Alias_ReplacesAnExpiredEntryOfTheTarget)
+{
+	auto original = put("alias_dead_orig.txt", "original");
+	auto target = put("alias_dead_target.txt", "target");
+	auto held_original = sys->require_sync<res::text_resource>(original);
+	{
+		auto dropped = sys->require_sync<res::text_resource>(target);
+		BOOST_REQUIRE(dropped.get_sync());
+	} // nobody holds the target's block any more
+
+	sys->register_alias(original, target);
+
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() == held_original.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(Alias_KeepsAPinnedEntryOfTheTarget)
+{
+	auto original = tag_of("alias_pin_keep_orig.txt");
+	auto target = tag_of("alias_pin_keep_target.txt");
+	sys->pin_resource(original, res::text_resource{ original, bytes_of("original pin") });
+	sys->pin_resource(target, res::text_resource{ target, bytes_of("target pin") });
+	pump();
+
+	sys->register_alias(original, target);
+
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get()->str() == "target pin");
+	sys->unpin_resource(original);
+	sys->unpin_resource(target);
+}
+
+BOOST_AUTO_TEST_CASE(PerTagOperations_LeaveEveryOtherTagAlone)
+{
+	std::vector<res::tag> tags;
+	std::vector<res::res_handle<res::text_resource>> held;
+	for (int i = 0; i < 50; ++i) {
+		tags.push_back(put("many_" + std::to_string(i) + ".txt", "v" + std::to_string(i)));
+		held.push_back(sys->require_sync<res::text_resource>(tags.back()));
+	}
+
+	sys->signal_changed(tags[7]);
+	sys->unpin_resource(tags[8]);
+	sys->register_alias(tags[9], tag_of("many_alias.txt"));
+
+	for (int i = 0; i < 50; ++i) {
+		const bool evicted = i == 7;
+		BOOST_TEST((sys->require_sync<res::text_resource>(tags[i]).get_control_block() == held[i].get_control_block()) != evicted);
+	}
+	pump();
 }
 
 BOOST_AUTO_TEST_CASE(CacheKey_SameTagTwoTypesAreCachedSeparately)
@@ -331,6 +592,7 @@ BOOST_AUTO_TEST_CASE(CacheKey_PinnedResourceIsPerType)
 {
 	auto tag = tag_of("pinned_typed.txt");
 	sys->pin_resource(tag, res::text_resource{ tag, bytes_of("pinned") });
+	pump(); // the missing-file serialization runs on the compute lane
 
 	auto pinned = sys->require<res::text_resource>(tag);
 	BOOST_REQUIRE(pinned.is_ready());
@@ -347,6 +609,7 @@ BOOST_AUTO_TEST_CASE(CacheKey_UnpinReleasesEveryTypeOfTag)
 	auto tag = put("unpin_typed.txt", "v1");
 	sys->warmup<res::text_resource>(tag);
 	sys->warmup<shout_resource>(tag);
+	pump();
 	{
 		auto p1 = sys->require_sync<res::text_resource>(tag);
 		auto p2 = sys->require_sync<shout_resource>(tag);
@@ -370,6 +633,7 @@ BOOST_AUTO_TEST_CASE(SignalChanged_EvictsEveryTypeCachedUnderTag)
 	put("evict_all.txt", "v2");
 
 	sys->signal_changed(tag);
+	pump();
 
 	auto new_text = sys->require_sync<res::text_resource>(tag);
 	auto new_shout = sys->require_sync<shout_resource>(tag);
@@ -389,6 +653,7 @@ BOOST_AUTO_TEST_CASE(SignalChanged_LeavesTypedEntriesOfOtherTagsAlone)
 	auto shout_held = sys->require_sync<shout_resource>(untouched);
 
 	sys->signal_changed(changed);
+	pump();
 
 	BOOST_TEST(sys->require_sync<res::text_resource>(untouched).get_control_block() == text_held.get_control_block());
 	BOOST_TEST(sys->require_sync<shout_resource>(untouched).get_control_block() == shout_held.get_control_block());
@@ -403,6 +668,7 @@ BOOST_AUTO_TEST_CASE(Watchers_FireOncePerSignalRegardlessOfTypesLoaded)
 	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
 
 	sys->signal_changed(tag);
+	pump();
 	BOOST_TEST(calls == 1);
 
 	// watching is per tag: a watcher registered before any type was requested is still reached
@@ -412,6 +678,7 @@ BOOST_AUTO_TEST_CASE(Watchers_FireOncePerSignalRegardlessOfTypesLoaded)
 	put("watch_late.txt", "x");
 	sys->require_sync<shout_resource>(late);
 	sys->signal_changed(late);
+	pump();
 	BOOST_TEST(late_calls == 1);
 }
 
@@ -465,6 +732,7 @@ BOOST_AUTO_TEST_CASE(Alias_CarriesPinnedEntryOfOriginalToTarget)
 	auto original = tag_of("alias_pin_orig.txt");
 	auto target = tag_of("alias_pin_target.txt");
 	sys->pin_resource(original, res::text_resource{ original, bytes_of("pinned") });
+	pump(); // the missing-file serialization runs on the compute lane
 
 	sys->register_alias(original, target);
 	sys->unpin_resource(original);

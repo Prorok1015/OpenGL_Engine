@@ -97,8 +97,8 @@ BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendBench, bench_fixture)
 
 BOOST_AUTO_TEST_CASE(ExtractRenderDataOnHundredMeshes, * tt::disabled())
 {
-	auto& levels = storage.require<scn::level_manager>();
-	BOOST_REQUIRE(levels.load(res::tag::make("levels/bench_100_meshes.desc")));
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/bench_100_meshes.desc")));
 	BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
 
 	std::size_t skinned = 0;

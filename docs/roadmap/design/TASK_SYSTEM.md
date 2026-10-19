@@ -82,7 +82,7 @@ task_handle<void> task_system::when_all(span<handle_base>, lane, fn);   // пр�
 1. **#132:** `task_system` (2 полосы + `manual`), `task_handle`/`task_context`, `when_all`, `post_main` с бюджетами, стадия `tasks`. `core_thread_utils` делается `inline`. Тесты в режиме `manual`: порядок; отмена до и во время выполнения; бюджет на подставных часах; минимум один элемент за кадр; сброс очереди при завершении.
 2. **#133:** `ds::lifetime`, `then_main(lifetime)`, `cancel_on_destroy`, привязка к модулю. Тест: колбэк не вызывается после разрушения владельца.
 3. **EPIC-28 #166–#168:** составной ключ, `signal_changed` по всем типам, alias до построения ключа.
-4. **#134a:** адаптеры на `lane::compute`, `res_handle::then(lifetime)` на главном потоке, watcher'ы через `post_main`, тесты на `manual` вместо `inline_worker`.
+4. **#134a:** адаптеры на `lane::compute`, `res_handle::then(lifetime)` на главном потоке, watcher'ы через `post_main`, тесты на `manual` вместо `inline_worker`. Реализовано: `resource_system(ds::task_system&)`; деструктор отменяет и ждёт свои задачи; `res_handle::get_sync()` в режиме `manual` сам гоняет очередь вместо блокировки (как `task_handle::wait()`); `signal_changed` сразу вытесняет кеш, а watcher'ов зовёт позже на главном потоке из актуального списка; индекс `тег → type_id` в кеше и в pinned.
 5. **#134b:** `collect_dependencies`, граф ожиданий и циклы, миграция `desc_adapter_t` и `worldwrap_adapter`, assert для `require_sync`. Регрессионный тест на описанный дедлок (C и P в очереди, 1 поток), цикл между двумя корнями, `when_all` с ошибкой зависимости.
 6. **#135:** импорт и экспорт как задачи с отменой и прогрессом через `job_service`, если #139 уже готов, иначе напрямую. `std::async` из редактора убирается.
 

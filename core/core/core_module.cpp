@@ -6,7 +6,6 @@
 #include <snk/window/wnd_window_system.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/adapters/res_adapter_worker.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_api.h>
@@ -108,8 +107,6 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 	// Initialize core services here
 	auto& window = data.require<wnd::window_system>();
 	window.init();
-	auto& resource = data.require<::res::resource_system>();
-	resource.set_adapter_worker(std::make_unique<core::res::async_adapter_worker>());
 }
 
 void core::core_module::shutdown_services(ds::app_data_storage& data)

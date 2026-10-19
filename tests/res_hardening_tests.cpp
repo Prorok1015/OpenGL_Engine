@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
+#include "test_manual_tasks.hpp"
 #include <snk/resource/res_system.h>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/adapters/res_text_adapter.h>
@@ -20,14 +22,6 @@ std::vector<std::byte> bytes_of(const std::string& str)
 	std::memcpy(result.data(), str.data(), str.size());
 	return result;
 }
-
-struct inline_worker : adapter_worker_base
-{
-	void start() override {}
-	void stop() override {}
-	bool is_stopped() const override { return false; }
-	void post(std::function<void()> cb) override { cb(); }
-};
 
 struct hardening_test_desc : desc::desc_base
 {
@@ -52,8 +46,7 @@ struct desc_fixture
 	{
 		std::filesystem::create_directories("./res");
 		std::filesystem::create_directories("./sandbox");
-		res_sys = std::make_unique<res::resource_system>();
-		res_sys->set_adapter_worker(std::make_unique<inline_worker>());
+		res_sys = std::make_unique<res::resource_system>(tasks);
 		desc_sys = std::make_unique<desc::desc_system>(*res_sys);
 		desc_sys->register_desc<hardening_test_desc>("hardening_test_desc");
 		res_sys->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*res_sys), std::ref(*desc_sys));
@@ -66,6 +59,7 @@ struct desc_fixture
 		return tag;
 	}
 
+	ds::task_system tasks{ test_util::manual_tasks() };
 	std::unique_ptr<res::resource_system> res_sys;
 	std::unique_ptr<desc::desc_system> desc_sys;
 };
@@ -104,7 +98,7 @@ BOOST_AUTO_TEST_CASE(ControlBlock_ThenRacingWithCompletion_FiresExactlyOnce)
 		std::thread subscriber([&] {
 			while (!go) std::this_thread::yield();
 			// Boost.Test is not thread-safe: record results here, check after join.
-			block.then([&](auto& b) {
+			block.on_settled([&](auto& b) {
 				if (b.data != 7) ++wrong_value;
 				++fired;
 			});
@@ -121,9 +115,9 @@ BOOST_AUTO_TEST_CASE(ControlBlock_ThrowingCallbackKeepsBlockReadyAndOthersFire)
 {
 	res_control_block<int> block;
 	int before = 0, after = 0;
-	block.then([&](auto&) { ++before; });
-	block.then([&](auto&) { throw std::runtime_error("callback failure"); });
-	block.then([&](auto&) { ++after; });
+	block.on_settled([&](auto&) { ++before; });
+	block.on_settled([&](auto&) { throw std::runtime_error("callback failure"); });
+	block.on_settled([&](auto&) { ++after; });
 
 	BOOST_CHECK_NO_THROW(block.set_ready(3));
 	BOOST_CHECK(block.is_ready());
@@ -133,7 +127,7 @@ BOOST_AUTO_TEST_CASE(ControlBlock_ThrowingCallbackKeepsBlockReadyAndOthersFire)
 	BOOST_CHECK_EQUAL(after, 1);
 
 	// A throwing callback registered after completion must not propagate either.
-	BOOST_CHECK_NO_THROW(block.then([](auto&) { throw std::runtime_error("late failure"); }));
+	BOOST_CHECK_NO_THROW(block.on_settled([](auto&) { throw std::runtime_error("late failure"); }));
 }
 
 BOOST_AUTO_TEST_CASE(ControlBlock_SecondCompletionIsIgnored)
@@ -179,7 +173,7 @@ BOOST_AUTO_TEST_CASE(ControlBlock_CallbackMayReenterThen)
 {
 	res_control_block<int> block;
 	int inner = 0;
-	block.then([&](auto& b) { b.then([&](auto&) { ++inner; }); });
+	block.on_settled([&](auto& b) { b.on_settled([&](auto&) { ++inner; }); });
 	block.set_ready(1);
 	BOOST_CHECK_EQUAL(inner, 1);
 }

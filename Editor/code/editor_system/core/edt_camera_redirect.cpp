@@ -54,11 +54,13 @@ void edt::camera_redirector::end_frame(const release_fn& release)
 	m_known = m_live;
 }
 
-void edt::camera_redirector::update(scn::level& level, const release_fn& release)
+void edt::camera_redirector::update(scn::context_manager& contexts, const release_fn& release)
 {
 	begin_frame();
-	level.for_each_world([this](scn::world& world) {
-		redirect(world.state(), world.get_name());
+	contexts.for_each_set([this](scn::context_set& set) {
+		set.for_each([this, &set](scn::world_context& context) {
+			redirect(context.state(), std::format("{}.{}", set.name(), context.get_name()));
+		});
 	});
 	end_frame(release);
 }

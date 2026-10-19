@@ -2,7 +2,7 @@
 #include "edt_shared_state.h"
 #include "edt_editor_camera.h"
 #include <snk/scene/level/scn_level.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/scene/scn_ecs_assembler.h>
@@ -22,11 +22,11 @@ edt::world_controller::world_controller(shared_state& state, res::resource_syste
 
 bool edt::world_controller::switch_to_world(int idx)
 {
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr || idx < 0 || idx >= (int)m_state.world_names.size())
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr || idx < 0 || idx >= (int)m_state.world_names.size())
 		return false;
 
-	scn::level& lvl = lvl_mgr->get_level();
+	scn::level& lvl = ctx_mgr->get_level();
 
 	// The world we leave (or the target) may be gone: a level reload from the desc drops worlds
 	// created at runtime while world_names still lists them. Never assert on a stale name.
@@ -85,10 +85,10 @@ void edt::world_controller::clear_active_world()
 
 void edt::world_controller::create_world(const std::string& name)
 {
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr || !m_state.sfactory || !m_state.assembler) return;
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return;
 
-	if (lvl_mgr->get_level().has_world(name)) {
+	if (ctx_mgr->get_level().has_world(name)) {
 		egLOG_WARN("Editor/CreateWorld", "World '{}' already exists, choose another name", name);
 		return;
 	}
@@ -124,7 +124,7 @@ void edt::world_controller::create_world(const std::string& name)
 		return;
 	}
 
-	scn::level& lvl = lvl_mgr->get_level();
+	scn::level& lvl = ctx_mgr->get_level();
 	uint32_t new_id = lvl.acquire_free_world_id();
 	scn::world& world = lvl.create_world(name, new_id);
 

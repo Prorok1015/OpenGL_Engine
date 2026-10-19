@@ -9,7 +9,7 @@
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_consumable_listener.h>
@@ -47,7 +47,7 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 		// The editor/game builds its worlds synchronously once the level desc is loaded, which is also
 		// when the animation controllers start counting.
 		static_cast<app::loop_service&>(data.require<app::app_loop_service_interface>()).set_ready_probe([](ds::app_data_storage& storage) {
-			return storage.require<scn::level_manager>().get_level().get_world_count() > 0;
+			return storage.require<scn::context_manager>().get_level().get_world_count() > 0;
 		});
 	}
 	m_scene_types.emplace(scn::register_scene_types(

@@ -4,7 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/application/app_frame_stage.h>
 #include "edt_camera_redirect.h"
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_system.h>
 #include <snk/resource/res_system.h>
@@ -29,7 +29,7 @@ namespace components {
 		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
 			[redirector](app::stage_context& c) {
 				auto& textures = c.storage.require<rnd::render_system>().get_texture_manager();
-				redirector->update(c.storage.require<scn::level_manager>().get_level(),
+				redirector->update(c.storage.require<scn::context_manager>(),
 					[&textures](const res::tag& tag) { textures.remove(tag); });
 			});
 	}

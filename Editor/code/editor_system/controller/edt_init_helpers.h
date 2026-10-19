@@ -74,9 +74,6 @@ namespace edt {
 			world_controller& world_ctrl,
 			level_controller& level_ctrl,
 			editor_layer& layer,
-			scene_hierarchy_panel& hierarchy,
-			inspector_panel& inspector,
-			viewport_panel& viewport,
 			shared_state& state);
 
 		// Editor camera ECS operations
