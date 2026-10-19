@@ -1,5 +1,8 @@
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_capture_commands.h>
+#include <snk/render/rnd_capture_service.h>
+#include <snk/command/cmd_registry.h>
 #include <snk/window/wnd_window_system.h>
 #include "rnd_gl_swapchain.h"
 #include "rnd_null_swapchain.h"
@@ -34,6 +37,12 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_validate_max_frame_buffers, "render/validate_max_frame_buffers", 0);
 	CFG_VAR_DEF_INT(cfg_validate_max_programs, "render/validate_max_programs", 0);
 	CFG_VAR_DEF_INT(cfg_validate_max_textures, "render/validate_max_textures", 0);
+
+	// The commands the renderer offers; they leave the registry with this holder.
+	struct render_commands
+	{
+		cmd::registration capture;
+	};
 
 	std::size_t budget_of(int configured)
 	{
@@ -126,6 +135,13 @@ void engine::render::render_init(ds::app_data_storage& data)
 	render_system.add_render_pass(std::make_shared<rnd::debug_pass>(res_sys));
 	render_system.add_render_pass(std::make_shared<rnd::composition_pass>());
 	render_system.set_material_compiler(std::make_shared<rnd::default_material_compiler>());
+	// Views are named by their owners (the editor registers "scene" and "game"); the command is there for the
+	// game without an editor too.
+	auto& capture = data.construct<rnd::capture_service>(*render_system.get_driver());
+	auto& commands = data.construct<render_commands>();
+	if (data.has_value<cmd::command_registry>()) {
+		commands.capture = rnd::register_capture_commands(data.require<cmd::command_registry>(), capture);
+	}
 }
 
 void engine::render::render_term(ds::app_data_storage& data)
@@ -133,6 +149,8 @@ void engine::render::render_term(ds::app_data_storage& data)
 	auto& desc_sys = data.require<desc::desc_system>();
 	unregister_render_descs(desc_sys);
 
+	data.destruct<render_commands>();
+	data.destruct<rnd::capture_service>();
 	data.destruct<rnd::frame_context>();
 	data.destruct<rnd::render_system>();
 	data.destruct<rnd::driver::swapchain_interface>();

@@ -16,6 +16,8 @@
 #                      loads are done before the actions/screenshot,
 #                      so a shot no longer depends on runner speed. With no action script --seconds is ignored.
 #   --frame-dt SEC     frame step used by --frames  (default: 0.0166667)
+#   --wait-for-log RE  with --frames: after the scene settled, also wait until the editor log has a line matching RE
+#                      (e.g. "captured viewport" of capture/on_settled), so the run is not stopped before it happens
 #
 # Action script commands (lines starting with # are comments):
 #   sleep SECONDS            wait (fractions allowed)
@@ -39,6 +41,7 @@ SHOT="headless_out/final.png"
 SIZE="1600x900"
 FRAMES=""
 FRAME_DT="0.0166667"
+WAIT_LOG=""
 EXTRA=()
 
 while [[ $# -gt 0 ]]; do
@@ -51,6 +54,7 @@ while [[ $# -gt 0 ]]; do
 		--size) SIZE="$2"; shift 2 ;;
 		--frames) FRAMES="$2"; shift 2 ;;
 		--frame-dt) FRAME_DT="$2"; shift 2 ;;
+		--wait-for-log) WAIT_LOG="$2"; shift 2 ;;
 		--) shift; EXTRA=("$@"); break ;;
 		*) echo "unknown option: $1" >&2; exit 2 ;;
 	esac
@@ -121,6 +125,18 @@ if [[ -n "$FRAMES" ]]; then
 		exit 1
 	fi
 	sleep 1 # a few frozen frames, so ImGui hover/fade state settles
+	if [[ -n "$WAIT_LOG" ]]; then
+		for _ in $(seq 1 480); do
+			alive || break
+			grep -q -- "$WAIT_LOG" "$LOG" && break
+			sleep 0.5
+		done
+		if ! grep -q -- "$WAIT_LOG" "$LOG"; then
+			echo "error: no line matching '$WAIT_LOG' within 240 s (editor alive: $(alive && echo yes || echo no)); log: $LOG" >&2
+			tail -20 "$LOG" >&2
+			exit 1
+		fi
+	fi
 fi
 
 if [[ -n "$ACTIONS" ]]; then

@@ -17,4 +17,4 @@ target_include_directories(${PROJECT_NAME} PRIVATE "$<TARGET_PROPERTY:drv_opengl
 target_link_libraries(${PROJECT_NAME} PUBLIC snk::scene_material_desc_api)
 
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::input_system PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::drv_null PRIVATE snk::drv_validation PRIVATE snk::config_system PRIVATE snk::engine_logger)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::input_system PUBLIC snk::drv_interface PRIVATE snk::drv_opengl PRIVATE snk::drv_null PRIVATE snk::drv_validation PRIVATE snk::config_system PRIVATE snk::engine_logger PRIVATE snk::command PRIVATE snk::image)

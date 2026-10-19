@@ -4,6 +4,8 @@
 #include <snk/desc/desc_desc_service_init.h>
 #include <snk/ecs/ecs_ecs_service_init.h>
 #include <snk/window/wnd_window_system.h>
+#include <snk/application/app_frame_commands.h>
+#include <snk/application/app_frame_control.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/command/cmd_log_commands.h>
@@ -46,6 +48,7 @@ namespace {
 	struct engine_commands
 	{
 		cmd::registration log;
+		app::frame_command_registrations app_frame;
 	};
 
 	std::optional<engine::log_level> parse_known_log_level(std::string_view str)
@@ -90,7 +93,10 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	const app::deterministic_time time{ std::max(0.f, static_cast<float>(cfg_fixed_frame_dt)), std::max(0, static_cast<int>(cfg_freeze_after_frames)) };
 	// Kept in storage so the GUI layer can feed ImGui the same dt.
 	data.construct<app::deterministic_time>(time);
-	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time);
+	// The frame loop steps by it on `app.advance`; destroyed after the commands that hold a reference to it.
+	auto& frame_control = data.construct<app::frame_control>(time);
+	data.require<engine_commands>().app_frame = app::register_frame_commands(commands, frame_control);
+	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time, &frame_control);
 	if (time.enabled()) {
 		auto* loop_impl = dynamic_cast<app::loop_service*>(&loop);
 		ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
@@ -152,6 +158,7 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 
 void core::core_module::shutdown_services(ds::app_data_storage& data)
 {
+	// The loop holds a pointer to the frame_control: it goes first, so nothing can step with a dead one.
 	data.destruct<app::app_loop_service_interface>();
 	data.destruct<app::frame_stage_registry>();
 	ecs::ecs_term(data);
@@ -159,6 +166,7 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 	desc::desc_term(data);
 	res::resource_term(data);
 	data.destruct<engine_commands>();
+	data.destruct<app::frame_control>();
 	data.destruct<cmd::command_registry>();
 	data.destruct<ds::task_system>();
 }

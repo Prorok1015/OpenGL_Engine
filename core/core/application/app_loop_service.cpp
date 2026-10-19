@@ -2,8 +2,8 @@
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
 
-app::loop_service::loop_service(frame_stage_registry& stages, deterministic_time time)
-	: m_stages(stages), m_time(time)
+app::loop_service::loop_service(frame_stage_registry& stages, deterministic_time time, frame_control* control)
+	: m_stages(stages), m_time(time), m_control(control)
 {
 }
 
@@ -13,6 +13,7 @@ void app::loop_service::init(ds::app_data_storage& storage)
 	m_frames = 0;
 	m_settled = false;
 	m_ready_frame.reset();
+	if (m_control) m_control->restart();
 	m_stages.run_init_hooks(storage);
 	m_previous_time = std::chrono::steady_clock::now();
 }
@@ -25,6 +26,7 @@ void app::loop_service::on_step(ds::app_data_storage& storage)
 	const auto current_time = std::chrono::steady_clock::now();
 	std::chrono::duration<float> dt = current_time - m_previous_time;
 	m_previous_time = current_time;
+	if (m_control) m_control->begin_frame();
 
 	if (m_time.enabled()) {
 		if (!m_ready_frame && (!m_ready_probe || m_ready_probe(storage))) {
@@ -37,12 +39,15 @@ void app::loop_service::on_step(ds::app_data_storage& storage)
 		}
 		if (frozen && !m_settled && (!m_settled_probe || m_settled_probe(storage))) {
 			m_settled = true;
+			if (m_control) m_control->mark_settled();
 			// run_headless.sh waits for this line before it takes a screenshot.
 			egLOG_INFO("app", "deterministic scene settled at frame {}", m_frames);
 		}
 		dt = std::chrono::duration<float>(frozen ? 0.f : m_time.fixed_dt);
 		++m_frames;
 	}
+	// After the freeze: a held time thaws for the frames app.advance granted.
+	if (m_control) dt = std::chrono::duration<float>(m_control->take_dt(dt.count()));
 
 	stage_context ctx{ storage, dt };
 	m_stages.run(ctx);

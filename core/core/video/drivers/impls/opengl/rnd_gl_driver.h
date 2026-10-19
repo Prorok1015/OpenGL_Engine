@@ -48,6 +48,7 @@ namespace rnd::driver::gl
 		virtual void bind_pipeline(pipeline_handle pipeline) override;
 		virtual const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		virtual void invalidate_state_cache() override;
+		virtual std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) override;
 
 		// GPU timer queries
 		virtual bool supports_timer_queries() const override;

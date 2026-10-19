@@ -52,6 +52,9 @@ namespace rnd::driver::validation
 		void bind_pipeline(pipeline_handle pipeline) override;
 		const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		void invalidate_state_cache() override { m_inner->invalidate_state_cache(); }
+		// Reports (invalid_read) and returns nothing for a dead texture, one that cannot be read back and a rect
+		// outside it; otherwise forwards.
+		std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) override;
 
 		bool supports_timer_queries() const override { return m_inner->supports_timer_queries(); }
 		uint32_t create_timer_query() override { return m_inner->create_timer_query(); }
