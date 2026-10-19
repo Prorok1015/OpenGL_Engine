@@ -91,7 +91,7 @@ struct importer_fixture : test_util::scene_env
 	{
 		auto tag = res::tag{ std::string("memory://models/") + name };
 		rs->store(tag, test_util::to_bytes(text));
-		return rs->require_sync<scn::prefab_desc>(tag).get_sync();
+		return require_loaded<scn::prefab_desc>(tag).get_sync();
 	}
 
 	json::object serialized(const scn::prefab_desc& d)

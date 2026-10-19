@@ -604,7 +604,7 @@ BOOST_AUTO_TEST_CASE(HotReload_InstanceKeepsItsRecordsWhenTheBaseChanges)
 		{"__id":"00000000000000a2","name":"leg","components":{"stat":{"__type":"stat_desc","hp":44,"label":"v2"}}}]})");
 	rs->signal_changed(base_tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(base_tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(base_tag));
 
 	BOOST_TEST((child_named(reg, inst, "leg") == leg));
 	BOOST_TEST(reg.get<test_util::stat_component>(leg).hp == 40);          // the record still wins over the new base value
@@ -926,7 +926,7 @@ BOOST_AUTO_TEST_CASE(HotReload_InstanceFollowsAChangedPrefabRootTransform)
 	put("base.prefab.desc", R"({"__type":"prefab_desc","__version":3,"transform":{"position":[9,9,9]}})");
 	rs->signal_changed(base_tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(base_tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(base_tag));
 	BOOST_TEST((translation_of(reg, inst) == glm::vec3{ 9, 9, 9 }));
 }
 
@@ -974,7 +974,7 @@ BOOST_AUTO_TEST_CASE(HotReload_UpdatesLiveChildrenInPlaceAddsNewAndRemovesDroppe
 	})");
 	rs->signal_changed(tag);
 	pump();
-	auto changed = rs->require_sync<desc::desc_base>(tag);
+	auto changed = require_loaded<desc::desc_base>(tag);
 	BOOST_REQUIRE(changed.get_sync());
 
 	scn::trigger_hot_reload(*assembler, reg, changed);
@@ -1011,7 +1011,7 @@ BOOST_AUTO_TEST_CASE(HotReload_RenamedChildIsRecreatedNotMoved_CurrentBehavior)
 	put("base.prefab.desc", R"({"__type":"prefab_desc","children":{"forearm":{"components":{"stat":{"__type":"stat_desc","hp":3}}}}})");
 	rs->signal_changed(tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
 
 	BOOST_TEST(!reg.valid(arm));
 	auto forearm = child_named(reg, root, "forearm");
@@ -1034,7 +1034,7 @@ BOOST_AUTO_TEST_CASE(HotReload_ChildKeepsItsEntityWhenRenamedButKeepsItsId)
 		{"__id":"00000000000000a1","name":"forearm","components":{"stat":{"__type":"stat_desc","hp":8}}}]})");
 	rs->signal_changed(tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
 
 	BOOST_TEST((child_named(reg, root, "forearm") == arm));
 	BOOST_TEST(!reg.valid(child_named(reg, root, "arm")));
@@ -1061,7 +1061,7 @@ BOOST_AUTO_TEST_CASE(HotReload_SameNamedSiblingsAreMatchedByIdNotByName)
 		{"__id":"00000000000000a1","name":"x","components":{"stat":{"__type":"stat_desc","hp":10}}}]})");
 	rs->signal_changed(tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
 
 	const auto after = reg.get<scn::children_component>(root).children;
 	BOOST_REQUIRE(after.size() == 2u);
@@ -1084,7 +1084,7 @@ BOOST_AUTO_TEST_CASE(HotReload_SameNameWithAnotherIdIsANewNode)
 		{"__id":"00000000000000b1","name":"arm"}]})");
 	rs->signal_changed(tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
 
 	BOOST_TEST(!reg.valid(arm));
 	BOOST_REQUIRE(reg.valid(child_named(reg, root, "arm")));
@@ -1133,7 +1133,7 @@ BOOST_AUTO_TEST_CASE(HotReload_ReplacesChildrenEvenWhenNewVersionKeepsOnlyRename
 	put("base.prefab.desc", R"({"__type":"prefab_desc","children":{"b":{"components":{"stat":{"__type":"stat_desc"}}},"c":{"components":{"stat":{"__type":"stat_desc"}}}}})");
 	rs->signal_changed(tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
 
 	auto names = child_names(reg, root);
 	std::ranges::sort(names);
@@ -1152,7 +1152,7 @@ BOOST_AUTO_TEST_CASE(HotReload_RemovingAllChildrenDestroysLiveChildren)
 	put("base.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})");
 	rs->signal_changed(tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag));
 
 	BOOST_TEST(!reg.valid(arm));
 }
@@ -1170,7 +1170,7 @@ BOOST_AUTO_TEST_CASE(HotReload_OnlyReloadsInstancesOfTheChangedPrefab)
 	put("a.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":2}}})");
 	rs->signal_changed(tag_a);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(tag_a));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(tag_a));
 
 	BOOST_TEST(reg.get<test_util::stat_component>(ea).hp == 2);
 	BOOST_TEST(reg.get<test_util::stat_component>(eb).hp == 1);
@@ -1189,7 +1189,7 @@ BOOST_AUTO_TEST_CASE(HotReload_NestedInstanceSeesChangedBasePrefab)
 		{"__id":"00000000000000a2","name":"leg","components":{"stat":{"__type":"stat_desc","hp":44}}}]})");
 	rs->signal_changed(base_tag);
 	pump();
-	scn::trigger_hot_reload(*assembler, reg, rs->require_sync<desc::desc_base>(base_tag));
+	scn::trigger_hot_reload(*assembler, reg, require_loaded<desc::desc_base>(base_tag));
 
 	BOOST_TEST(reg.get<test_util::stat_component>(child_named(reg, e, "leg")).hp == 44);
 }

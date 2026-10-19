@@ -13,7 +13,7 @@ using test_util::stat_component;
 
 struct env_fixture : test_util::scene_env
 {
-	res::res_handle<desc::desc_base> handle(const res::tag& tag) { return rs->require_sync<desc::desc_base>(tag); }
+	res::res_handle<desc::desc_base> handle(const res::tag& tag) { return require_loaded<desc::desc_base>(tag); }
 
 	static entt::entity child_named(entt::registry& reg, entt::entity parent, std::string_view name)
 	{

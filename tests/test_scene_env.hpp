@@ -91,6 +91,15 @@ struct ram_res_env
 
 	void pump() { test_util::pump(tasks); }
 
+	// require_sync, then the async loads it started for the descs' field handles (polled with is_ready()).
+	template<class T>
+	res::res_handle<T> require_loaded(const res::tag& tag)
+	{
+		auto handle = rs->require_sync<T>(tag);
+		pump();
+		return handle;
+	}
+
 	static res::tag tag_of(std::string_view name) { return res::tag{ std::string("memory://t/") + std::string(name) }; }
 
 	res::tag put(std::string_view name, std::string_view content)
@@ -202,7 +211,7 @@ struct scene_env : ram_res_env
 	template<class T>
 	std::shared_ptr<T> load(const res::tag& tag)
 	{
-		return rs->require_sync<T>(tag).get_sync();
+		return require_loaded<T>(tag).get_sync();
 	}
 
 	std::unique_ptr<desc::desc_system> descs;

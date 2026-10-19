@@ -39,6 +39,7 @@ void scn::assemble_animation_controller(entt::registry& reg, entt::entity e,
 	if (auto* clips_comp = reg.try_get<scn::animation_collection_component>(e)) {
 		// If no default specified, pick the first clip
 		if (ctrl.current_animation.empty() && !clips_comp->clips.empty()) {
+			clips_comp->clips[0].wait();
 			if (clips_comp->clips[0].is_ready()) {
 				ctrl.current_animation = clips_comp->clips[0].get_sync()->name;
 			}

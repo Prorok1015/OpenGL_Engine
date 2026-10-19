@@ -342,6 +342,18 @@ BOOST_AUTO_TEST_CASE(Then_IsNotCalledForAFailedLoad)
 	BOOST_TEST(calls == 0);
 }
 
+BOOST_AUTO_TEST_CASE(Wait_RunsTheQueuedLoadOnAManualSystemAndSettlesEitherWay)
+{
+	auto good = sys->require<res::text_resource>(put("wait_ok.txt", "ok"));
+	auto bad = sys->require<res::text_resource>(tag_of("wait_missing.txt"));
+	BOOST_TEST(!good.is_ready());
+
+	good.wait();
+	BOOST_TEST(good.is_ready());
+	bad.wait(); // no assert, no hang: the failure is for the caller to read
+	BOOST_TEST(bad.has_error());
+}
+
 BOOST_AUTO_TEST_CASE(SignalChanged_DeliversWatchersOnTheMainQueueNotInline)
 {
 	auto tag = tag_of("deferred.txt");

@@ -35,9 +35,22 @@ namespace core::res
             return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
+        // Blocks until the load finished, either way (check is_ready() / has_error() after). Main thread only.
+        void wait() const {
+            if (!m_block) return;
+            if (m_tasks && m_tasks->mode() == ds::policy::manual) {
+                while (!m_block->is_ready() && !m_block->has_error()) {
+                    if (!m_tasks->run_one(ds::lane::compute) && !m_tasks->run_one(ds::lane::io)) {
+                        break;
+                    }
+                }
+            }
+            m_block->wait();
+        }
+
         std::shared_ptr<T> get_sync() const {
             if (!m_block) return nullptr;
-            wait_finished();
+            wait();
             if (m_block->has_error() || !m_block->data) {
                 egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), m_block->error_msg);
                 return nullptr;
@@ -84,19 +97,6 @@ namespace core::res
 		}
 
     private:
-        // Like task_handle::wait(): with a manual task_system nothing runs in the background, so the waiter
-        // executes the queued load tasks itself instead of blocking on them.
-        void wait_finished() const {
-            if (m_tasks && m_tasks->mode() == ds::policy::manual) {
-                while (!m_block->is_ready() && !m_block->has_error()) {
-                    if (!m_tasks->run_one(ds::lane::compute) && !m_tasks->run_one(ds::lane::io)) {
-                        break;
-                    }
-                }
-            }
-            m_block->wait();
-        }
-
         std::shared_ptr<resource_control_block> m_block;
         ::res::tag m_tag;
         ds::task_system* m_tasks = nullptr;
