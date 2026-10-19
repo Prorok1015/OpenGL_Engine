@@ -66,7 +66,7 @@ namespace scn {
 			m_layer, m_clear, m_projection, m_ortho_size))
 	};
 
-	void assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name);
+	SNK_API void assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name);
 }
 
 // The schema of the camera: keys and hints of the fields; the defaults come from the members above.
