@@ -555,7 +555,7 @@ BOOST_AUTO_TEST_CASE(Extension_AppearsInPanelsMenusAndLookups)
 	BOOST_CHECK_EQUAL(items[0].label, "Greet");
 	BOOST_CHECK(items[0].enabled);
 	const auto tools = actions.tools();
-	BOOST_CHECK(std::any_of(tools.begin(), tools.end(), [](const edt::action_desc* a) { return a->id == "ext.greet"; }));
+	BOOST_CHECK(std::any_of(tools.begin(), tools.end(), [](const cmd::command_desc* a) { return a->id == "ext.greet"; }));
 
 	// Inspector renderer.
 	auto& inspectors = context->inspectors();
@@ -583,7 +583,7 @@ BOOST_AUTO_TEST_CASE(Extension_ActionRunsThroughInvoke)
 	const auto outcome = actions.invoke("ext.greet", boost::json::parse(R"({"name":"editor"})"));
 	BOOST_CHECK(outcome.ok);
 	BOOST_CHECK_EQUAL(outcome.code, "ok");
-	BOOST_CHECK(outcome.result.as_object().at("greeting").as_string() == "hello editor");
+	BOOST_CHECK(outcome.value.as_object().at("greeting").as_string() == "hello editor");
 	BOOST_CHECK_EQUAL(extension->greetings, 1);
 
 	// The schema is enforced before the action runs.
