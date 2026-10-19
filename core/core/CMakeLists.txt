@@ -9,7 +9,7 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
 # Cross-layer consumers compile against snk::core_api instead (EPIC-49 US-49-1/US-49-3).
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_system PRIVATE snk::application PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::ecs)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_system PRIVATE snk::application PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::command PRIVATE snk::ecs)
 
 # Public contract of the CORE layer (EPIC-49 US-49-3). INTERFACE-only: it carries the curated
 # set of components whose headers upper layers legitimately compile against — NOT drv_opengl
@@ -22,6 +22,7 @@ snk_usage_only(_core_api_libs
 	snk::application
 	snk::ecs
 	snk::desc_system
+	snk::command
 	snk::resource_system
 	snk::core_input
 	snk::drv_interface
@@ -41,6 +42,7 @@ add_library(snk::api ALIAS snk_api)
 target_include_directories(snk_api INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common/include)
 
 add_subdirectory("common")
+add_subdirectory("command")
 add_subdirectory("config")
 add_subdirectory("application")
 add_subdirectory("input")
