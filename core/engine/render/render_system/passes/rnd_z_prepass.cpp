@@ -74,7 +74,7 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
       }
       if (!pipelines.bind(variant))
         continue;
-      rnd::configure_pass(context, packet.material_of(dc));
+      rnd::configure_pass(context, dc.material);
       context.bind_object(packet.opaque_object(i), packet.skin_of(dc));
 
       drv.draw_indices(va, dc.indices_count,

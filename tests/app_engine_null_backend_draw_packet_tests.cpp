@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
 #include <snk/render/rnd_frame_context.h>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/scene/level/scn_world.h>
 #include <snk/scene/scn_material_desc.h>
@@ -125,7 +126,7 @@ BOOST_AUTO_TEST_CASE(SortedPacketsDrawTheSameMeshesAsTheScene)
 	BOOST_TEST_MESSAGE("packets checked " << checked_packets << ", draws " << checked_draws);
 }
 
-BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacket)
+BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacketAndTheMaterialCache)
 {
 	load_bench_level();
 
@@ -139,8 +140,7 @@ BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacket)
 				BOOST_REQUIRE(dc.geometry.index < packet.geometries.size());
 				BOOST_CHECK(packet.geometry_of(dc).is_valid());
 				BOOST_REQUIRE(dc.material.is_valid());
-				BOOST_REQUIRE(dc.material.index < packet.materials.size());
-				BOOST_CHECK(packet.materials[dc.material.index] != nullptr);
+				BOOST_REQUIRE(storage.require<rnd::render_system>().material_instances().contains(dc.material));
 				BOOST_CHECK(dc.variant.is_valid());
 				// The bone range of a skinned draw lies inside the packet's palette.
 				BOOST_CHECK(!dc.skin.is_valid() || dc.bone_count > 0u);
@@ -154,14 +154,11 @@ BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacket)
 			for (const auto& dc : packet.opaque_draws) check(dc);
 			for (const auto& dc : packet.transparent_draws) check(dc);
 
-			// Each distinct geometry and material appears once in its table.
+			// Each distinct geometry appears once in its table.
 			auto geometries = std::vector<std::string>();
 			for (const auto& tag : packet.geometries) geometries.push_back(tag.string());
 			std::ranges::sort(geometries);
 			BOOST_CHECK(std::ranges::adjacent_find(geometries) == geometries.end());
-			auto materials = std::vector<const rnd::compiled_material*>(packet.materials.begin(), packet.materials.end());
-			std::ranges::sort(materials);
-			BOOST_CHECK(std::ranges::adjacent_find(materials) == materials.end());
 		}
 	});
 	BOOST_TEST(checked > 0u);

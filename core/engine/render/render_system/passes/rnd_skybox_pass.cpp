@@ -112,8 +112,9 @@ namespace rnd {
 			m_ibo->set_data_ptr(cube_indices, 36);
 
 			const auto& sky = *packet.skybox_material;
+			const compiled_material& material = context.material(sky.material);
 			// The cubemap is the material's first sampler; a texture that is still loading leaves the sky out.
-			driver::texture_interface* cubemap = sky.material->runtime.samplers.empty() ? nullptr : sky.material->runtime.samplers[0];
+			driver::texture_interface* cubemap = material.runtime.samplers.empty() ? nullptr : material.runtime.samplers[0];
 			if (cubemap && pipelines.bind(sky.variant)) {
 				driver::bind_group_desc inputs;
 				inputs.layout = context.layouts().sky;

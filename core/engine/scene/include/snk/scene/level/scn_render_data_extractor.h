@@ -4,8 +4,6 @@
 #include <memory>
 #include <vector>
 
-namespace rnd { struct compiled_material; }
-
 namespace scn {
 	struct render_data_extractor : public rnd::extractor_interface {
 		render_data_extractor(context_manager& contexts)
@@ -14,7 +12,5 @@ namespace scn {
 		virtual void extract(rnd::frame_context& context) override;
 	private:
 		context_manager& m_contexts;
-		// Materials replaced during this extraction: draws already pushed may still point at them.
-		std::vector<std::shared_ptr<rnd::compiled_material>> m_retired_materials;
 	};
 }

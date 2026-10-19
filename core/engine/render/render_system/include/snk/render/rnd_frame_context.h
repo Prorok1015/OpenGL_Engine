@@ -5,6 +5,7 @@
 namespace rnd {
 	class texture_manager;
 	class shader_config_cache;
+	class material_instance_cache;
 	struct material_compiler_interface;
 
 	// What the extract stage works with: the frame's data (the packets) and the few services extraction needs.
@@ -16,6 +17,9 @@ namespace rnd {
 		// before the extract stage runs.
 		texture_manager*     textures = nullptr;
 		shader_config_cache* variants = nullptr;
+
+		// The material instances draws refer to by id; the extractor asks it for the instance of each mesh's material.
+		material_instance_cache* materials = nullptr;
 
 		// Render-side material compiler (EPIC-49 US-49-5): the scene extractor turns POD
 		// scn::material_desc into rnd::shader_config through this instead of a scene-side method.

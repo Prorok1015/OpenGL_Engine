@@ -21,6 +21,7 @@ namespace rnd
 	class geom_manager;
 	class per_draw_data;
 	class material_groups;
+	class material_instance_cache;
 	class skinning_manager;
 	struct material_compiler_interface;
 }
@@ -66,6 +67,9 @@ namespace rnd
 		void set_material_compiler(std::shared_ptr<material_compiler_interface> mc) { m_material_compiler = std::move(mc); }
 		material_compiler_interface* get_material_compiler() const { return m_material_compiler.get(); }
 
+		// The cache the draws' material ids refer to (valid between begin_frame and the next one).
+		material_instance_cache& material_instances() { return *m_instances; }
+
 	private:
 		rnd::skinning_manager* m_skinning_manager = nullptr;
 		std::shared_ptr<material_compiler_interface> m_material_compiler;
@@ -75,6 +79,7 @@ namespace rnd
 		std::unique_ptr<rnd::geom_manager> m_geometry;
 		std::unique_ptr<rnd::per_draw_data> m_draw_data;
 		std::unique_ptr<rnd::material_groups> m_materials;
+		std::unique_ptr<rnd::material_instance_cache> m_instances;
 
 		std::vector<std::shared_ptr<render_pass_interface>> render_passes;
 	};

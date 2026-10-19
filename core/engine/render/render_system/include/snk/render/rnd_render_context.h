@@ -42,8 +42,10 @@ namespace rnd
 		virtual void write_lights(const lights_params& lights) = 0;
 		virtual void bind_frame() = 0;
 
-		// Set 2: the bind group of a material (its params and maps).
-		virtual void bind_material(const compiled_material& material) = 0;
+		// The material instance a draw (or the skybox) names.
+		virtual const compiled_material& material(material_instance_id id) const = 0;
+		// Set 2: the bind group of a material instance (its params and maps).
+		virtual void bind_material(material_instance_id id) = 0;
 
 		// Set 3: the frame's objects and bone matrices go to the GPU once, before the passes that draw them.
 		virtual void upload_objects(std::span<const object_data> objects, std::span<const glm::mat4> bones) = 0;
@@ -52,7 +54,7 @@ namespace rnd
 	};
 
 	// Binds what a draw of `material` reads from set 2.
-	inline void configure_pass(render_context& context, const compiled_material& material)
+	inline void configure_pass(render_context& context, material_instance_id material)
 	{
 		context.bind_material(material);
 	}
