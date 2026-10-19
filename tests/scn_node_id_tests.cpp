@@ -83,6 +83,7 @@ struct node_id_fixture : test_util::scene_env
 	{
 		scn::prefab_desc d;
 		d.deserialize(*descs, parse_migrated(text));
+		pump();
 		return d;
 	}
 
@@ -140,6 +141,7 @@ BOOST_AUTO_TEST_CASE(RoundTrip_LoadSaveLoadKeepsIdsAndSaveIsAFixedPoint)
 	auto saved = serialized(first);
 	scn::prefab_desc second;
 	second.deserialize(*descs, saved);
+	pump();
 
 	BOOST_TEST((ids_of(first) == ids_of(second)));
 	BOOST_TEST(json::value(saved) == json::value(serialized(second)));
@@ -202,6 +204,7 @@ BOOST_AUTO_TEST_CASE(Load_ShorthandNodeKeepsItsIdAcrossSave)
 
 	scn::prefab_desc second;
 	second.deserialize(*descs, serialized(first));
+	pump();
 	BOOST_TEST(second.get_root().children[0].node_id == id);
 	BOOST_TEST(second.get_root().children[0].components.contains("Light"));
 }
@@ -795,6 +798,7 @@ BOOST_AUTO_TEST_CASE(Importer_WrittenIdsSurviveSaveAndReload)
 	BOOST_REQUIRE(a);
 	scn::prefab_desc again;
 	again.deserialize(*descs, serialized(*a));
+	pump();
 	BOOST_TEST((ids_of(*a) == ids_of(again)));
 }
 

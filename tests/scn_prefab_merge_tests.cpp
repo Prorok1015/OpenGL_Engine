@@ -100,6 +100,7 @@ struct prefab_fixture : test_util::scene_env
 	{
 		scn::prefab_desc d;
 		d.deserialize(*descs, parse_migrated(text));
+		pump();
 		return d;
 	}
 };
@@ -192,6 +193,7 @@ BOOST_AUTO_TEST_CASE(Serialize_ThenParse_IsStable)
 
 	scn::prefab_desc again;
 	again.deserialize(*descs, first);
+	pump();
 	json::object second;
 	again.serialize(second);
 
@@ -214,6 +216,7 @@ BOOST_AUTO_TEST_CASE(Serialize_ParentOnlyComponentIsWrittenAsTagString)
 
 	scn::prefab_desc again;
 	again.deserialize(*descs, out);
+	pump();
 	BOOST_TEST(again.get_root().children[0].node_id == id);
 	BOOST_TEST(again.get_root().children[0].components.at("arm").parent_desc.get_tag() == tag_of("arm.desc"));
 }
@@ -656,6 +659,7 @@ BOOST_AUTO_TEST_CASE(Records_AreWrittenCanonicalAndSurviveAReload)
 	// canonical output is a fixed point of load and save
 	scn::prefab_desc again;
 	again.deserialize(*descs, out);
+	pump();
 	json::object second;
 	again.serialize(second);
 	BOOST_TEST((json::value(out) == json::value(second)));
@@ -783,6 +787,7 @@ BOOST_AUTO_TEST_CASE(Migration_NestedInstanceLayerBecomesRecords)
 	put("base.prefab.desc", BASE_PREFAB);
 	scn::prefab_desc inst;
 	inst.deserialize(*descs, migrated);
+	pump();
 	entt::registry reg;
 	auto e = reg.create();
 	assemble_prefab_node(*assembler, reg, e, inst.get_root());
@@ -840,6 +845,7 @@ BOOST_AUTO_TEST_CASE(Migration_KeepsRecordsAlreadyOnTheNodeAndReplacesWithAStrin
 
 	scn::prefab_desc inst;
 	inst.deserialize(*descs, migrated);
+	pump();
 	entt::registry reg;
 	auto e = reg.create();
 	assemble_prefab_node(*assembler, reg, e, inst.get_root());
@@ -892,6 +898,7 @@ BOOST_AUTO_TEST_CASE(Instance_DraggedToTheOriginStaysThereAfterSaveAndReload)
 
 	scn::prefab_desc again;
 	again.deserialize(*descs, out);
+	pump();
 	entt::registry reg;
 	auto root = reg.create();
 	scn::assemble_prefab(*assembler, reg, root, again, "level", res::tag{});
