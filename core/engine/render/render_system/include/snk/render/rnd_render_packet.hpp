@@ -93,6 +93,7 @@ namespace rnd {
 		uint64_t     sort_key      = 0;
 		res::tag     geometry_tag;
 		variant_id   variant;
+		// Valid from extract to the end of render in the same frame: owned by compiled_material_component or by the extractor's retired list, which the next extract clears.
 		const compiled_material* material = nullptr;
 		uint32_t     indices_count = 0;
 		uint32_t     vx_begin      = 0;

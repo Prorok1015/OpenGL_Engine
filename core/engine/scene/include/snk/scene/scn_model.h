@@ -24,6 +24,7 @@ namespace scn {
     struct material_desc_component {
         res::res_handle<scn::material_desc> mlt_desc;
         // Set by whoever edits the material; the render extractor recompiles it and clears the flag.
+        // An in-place edit of a shared material_desc must set it on every entity using that desc (or bump a desc version); the writer comes with the inspector (#130).
         bool dirty = true;
     };
 

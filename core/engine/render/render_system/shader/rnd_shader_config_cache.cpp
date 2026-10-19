@@ -54,7 +54,10 @@ rnd::variant_id rnd::shader_config_cache::with_program(variant_id source, const 
 	const std::uint64_t memo_key = cdata_t::mix((get(source).key * cdata_t::fnv_prime) ^ program_hash(program));
 
 	if (auto it = m_program_memo.find(memo_key); it != m_program_memo.end()) {
-		if (get(it->second).resolved.program == program) {
+		const auto& hit = get(it->second);
+		const auto& from = get(source).resolved;
+		if (hit.passes == pass_define_none && hit.resolved.program == program
+			&& hit.resolved.defines == from.defines && hit.resolved.constants == from.constants) {
 			return it->second;
 		}
 	}
