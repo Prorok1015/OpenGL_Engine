@@ -63,7 +63,7 @@ void composition_pass::execute(render_context &context,
     rnd::driver::render_pass_desc pass;
     pass.debug_name = "composition";
     if (offscreen) {
-      pass.colors.push_back({.texture = color_rt});
+      pass.colors.push_back({.texture = rnd::driver::handle_of(color_rt)});
     } else {
       pass.backbuffer = true;
     }
@@ -78,7 +78,7 @@ void composition_pass::execute(render_context &context,
     blend.src_factor = rnd::driver::blend_state::factor::SRC_ALPHA;
     blend.dst_factor = rnd::driver::blend_state::factor::ONE_MINUS_SRC_ALPHA;
     state.blend = {blend};
-    rnd::driver::set_target_formats(state, pass);
+    rnd::driver::set_target_formats(drv, state, pass);
     state.set_layouts = context.layouts().composite();
     rnd::pass_pipelines pipelines(drv, context, state);
 
@@ -106,8 +106,8 @@ void composition_pass::execute(render_context &context,
     if (pipelines.bind(variant)) {
       rnd::driver::bind_group_desc inputs;
       inputs.layout = context.layouts().composition;
-      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::accum_slot, {}, 0, 0, color_tp_rt});
-      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::reveal_slot, {}, 0, 0, waight_tp_rt});
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::accum_slot, {}, 0, 0, rnd::driver::handle_of(color_tp_rt)});
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::reveal_slot, {}, 0, 0, rnd::driver::handle_of(waight_tp_rt)});
       drv.set_bind_group(rnd::driver::pass_set, drv.create_bind_group(inputs, rnd::driver::lifetime::transient));
       drv.draw_indices(m_va, std::size(indeces));
     }

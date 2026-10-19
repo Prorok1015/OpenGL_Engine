@@ -114,9 +114,9 @@ rnd::material_groups::entry& rnd::material_groups::acquire(const compiled_materi
 
 	driver::bind_group_desc desc;
 	desc.layout = m_layout;
-	desc.entries.push_back({ driver::binding_type::ubo, bindings::material_params_slot, made.params, 0, sizeof(material_params), nullptr });
+	desc.entries.push_back({ driver::binding_type::ubo, bindings::material_params_slot, made.params, 0, sizeof(material_params), driver::texture_handle{} });
 	for (std::uint32_t slot = 0; slot < bindings::material_texture_count; ++slot) {
-		desc.entries.push_back({ driver::binding_type::texture, slot, {}, 0, 0, textures[slot] });
+		desc.entries.push_back({ driver::binding_type::texture, slot, {}, 0, 0, driver::handle_of(textures[slot]) });
 	}
 	made.group = m_drv.create_bind_group(desc, driver::lifetime::persistent);
 	++m_groups_created;

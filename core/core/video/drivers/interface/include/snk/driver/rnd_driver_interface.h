@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace rnd::driver
@@ -94,7 +95,14 @@ namespace rnd::driver
 		// starting with the texture's row 0 (the bottom row in GL's orientation), 4 bytes a pixel. Waits for the GPU
 		// to finish the writes to the texture. Empty when the texture cannot be read back (can_read_back) or `rect`
 		// is not inside it (read_rect_inside).
-		virtual std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) = 0;
+		virtual std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) = 0;
+
+		// Textures are named by texture_handle (render passes, bind groups, read_texture). The texture object
+		// still belongs to whoever create_texture handed it to, and the handle goes stale when it is destroyed.
+		// The description of a texture; an empty one for a handle that names no live texture.
+		virtual const texture_header& info(texture_handle texture) const = 0;
+		// Whether the handle names a live texture of this driver.
+		virtual bool is_alive(texture_handle texture) const = 0;
 
 		// GPU timer queries for profiling
 		virtual bool supports_timer_queries() const { return false; }
@@ -104,4 +112,22 @@ namespace rnd::driver
 		virtual bool is_query_ready(uint32_t /*id*/) const { return false; }
 		virtual uint64_t get_query_result_ns(uint32_t /*id*/) const { return 0; }
 	};
+
+	// Fills the formats of `desc` with the ones `pass` renders to.
+	inline void set_target_formats(const driver_interface& drv, pipeline_desc& desc, const render_pass_desc& pass)
+	{
+		desc.color_formats.clear();
+		desc.depth_format.reset();
+		if (pass.backbuffer) {
+			desc.color_formats.push_back(backbuffer_color_format);
+			desc.depth_format = backbuffer_depth_format;
+			return;
+		}
+		for (const attachment_desc& color : pass.colors) {
+			desc.color_formats.push_back(drv.is_alive(color.texture) ? std::optional<texture_format>{ drv.info(color.texture).data.format } : std::nullopt);
+		}
+		if (pass.depth_stencil && drv.is_alive(pass.depth_stencil->texture)) {
+			desc.depth_format = drv.info(pass.depth_stencil->texture).data.format;
+		}
+	}
 }

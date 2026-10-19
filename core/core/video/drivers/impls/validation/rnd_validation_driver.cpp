@@ -30,11 +30,6 @@ namespace {
 		}
 	}
 
-	texture_interface* unwrap(texture_interface* wrapped)
-	{
-		return wrapped ? &static_cast<validation::texture*>(wrapped)->inner() : nullptr;
-	}
-
 	std::uint32_t mip_extent(std::uint32_t size, std::uint32_t mip)
 	{
 		return std::max<std::uint32_t>(size >> std::min<std::uint32_t>(mip, 31), 1u);
@@ -96,10 +91,10 @@ bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& 
 
 	bool alive = true;
 	for (const attachment_desc& color : desc.colors) {
-		alive = (!color.texture || m_state->require_live(color.texture, object_kind::texture, "color attachment")) && alive;
+		alive = (!color.texture || live_texture(color.texture, "color attachment")) && alive;
 	}
 	if (desc.depth_stencil) {
-		alive = (!desc.depth_stencil->texture || m_state->require_live(desc.depth_stencil->texture, object_kind::texture, "depth attachment")) && alive;
+		alive = (!desc.depth_stencil->texture || live_texture(desc.depth_stencil->texture, "depth attachment")) && alive;
 	}
 	if (!alive) {
 		return false;
@@ -125,7 +120,7 @@ bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& 
 	std::optional<glm::uvec2> extent;
 	bool size_mismatch = false;
 	const auto visit = [&](const attachment_desc& attachment, bool is_depth) {
-		const texture_interface& texture = *attachment.texture;
+		const texture_interface& texture = *m_textures->find(attachment.texture);
 		const bool usage_ok = is_depth
 			? texture.has_usage(texture_usage::depth_target) || texture.has_usage(texture_usage::stencil_target)
 			: texture.has_usage(texture_usage::color_target);
@@ -176,10 +171,10 @@ bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& 
 
 	inner_desc = desc;
 	for (attachment_desc& color : inner_desc.colors) {
-		color.texture = unwrap(color.texture);
+		color.texture = inner_handle(color.texture);
 	}
 	if (inner_desc.depth_stencil) {
-		inner_desc.depth_stencil->texture = unwrap(inner_desc.depth_stencil->texture);
+		inner_desc.depth_stencil->texture = inner_handle(inner_desc.depth_stencil->texture);
 	}
 	return true;
 }
@@ -199,7 +194,7 @@ void rnd::driver::validation::driver::begin_render_pass(const render_pass_desc& 
 		return;
 	}
 	pipeline_desc formats;
-	set_target_formats(formats, desc);
+	set_target_formats(*this, formats, desc);
 	m_state->begin_pass(pass_label(desc), target, { formats.color_formats, formats.depth_format },
 		static_cast<std::uint32_t>(desc.colors.size()), desc.depth_stencil.has_value());
 	m_bound_sets = {};
@@ -389,7 +384,28 @@ std::unique_ptr<rnd::driver::texture_interface> rnd::driver::validation::driver:
 		return nullptr;
 	}
 	m_state->on_texture_created();
-	return std::make_unique<texture>(m_state, std::move(created), header);
+	auto wrapper = std::make_unique<texture>(m_state, std::move(created), header);
+	m_textures->adopt(*wrapper);
+	return wrapper;
+}
+
+rnd::driver::validation::texture* rnd::driver::validation::driver::live_texture(texture_handle handle, const char* what)
+{
+	if (texture_interface* found = m_textures->find(handle)) {
+		return static_cast<texture*>(found);
+	}
+	if (m_textures->stale(handle)) {
+		m_state->report(rule::stale_handle, std::format("{} names a texture that was destroyed (handle index {}, generation {})", what, handle.index, handle.gen));
+	} else {
+		m_state->report(rule::dead_object, std::format("{} (handle index {}, generation {}) is not a texture of this driver", what, handle.index, handle.gen));
+	}
+	return nullptr;
+}
+
+rnd::driver::texture_handle rnd::driver::validation::driver::inner_handle(texture_handle handle) const
+{
+	const texture_interface* found = m_textures->find(handle);
+	return found ? static_cast<const texture*>(found)->handle_in_inner() : texture_handle{};
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::validation::driver::create_vertex_array()
@@ -402,11 +418,13 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::validation::driver::
 	return std::make_unique<buffer>(m_state, std::shared_ptr<buffer_interface>(m_inner->create_buffer()));
 }
 
-std::vector<std::byte> rnd::driver::validation::driver::read_texture(texture_interface& texture, glm::ivec4 rect)
+std::vector<std::byte> rnd::driver::validation::driver::read_texture(texture_handle handle, glm::ivec4 rect)
 {
-	if (!m_state->require_live(&texture, object_kind::texture, "read_texture")) {
+	const texture_interface* found = live_texture(handle, "read_texture");
+	if (!found) {
 		return {};
 	}
+	const texture_interface& texture = *found;
 	if (!can_read_back(texture)) {
 		m_state->report(rule::invalid_read, std::format("read_texture of a {}x{} texture that is not a 2D color texture", texture.width(), texture.height()));
 		return {};
@@ -416,7 +434,7 @@ std::vector<std::byte> rnd::driver::validation::driver::read_texture(texture_int
 			rect.x, rect.y, rect.z, rect.w, texture.width(), texture.height()));
 		return {};
 	}
-	return m_inner->read_texture(*unwrap(&texture), rect);
+	return m_inner->read_texture(inner_handle(handle), rect);
 }
 
 void rnd::driver::validation::driver::begin_frame()
@@ -560,11 +578,11 @@ rnd::driver::bind_group_handle rnd::driver::validation::driver::create_bind_grou
 			if (!found->texture) {
 				m_state->report(rule::bind_group_layout_mismatch, std::format("bind group entry at texture slot {} has no texture", decl.slot));
 				valid = false;
-			} else if (!m_state->require_live(found->texture, object_kind::texture, "bind group texture")) {
+			} else if (const texture_interface* bound = live_texture(found->texture, "bind group texture"); !bound) {
 				valid = false;
-			} else if (!found->texture->has_usage(texture_usage::sampled)) {
+			} else if (!bound->has_usage(texture_usage::sampled)) {
 				m_state->report(rule::texture_not_sampled, std::format("{}x{} texture with usage {} in a bind group for sampling",
-					found->texture->width(), found->texture->height(), usage_text(found->texture->get_usage())));
+					bound->width(), bound->height(), usage_text(bound->get_usage())));
 				valid = false;
 			}
 		} else {
@@ -584,7 +602,7 @@ rnd::driver::bind_group_handle rnd::driver::validation::driver::create_bind_grou
 	}
 
 	for (binding_res& entry : inner_desc.entries) {
-		entry.texture = unwrap(entry.texture);
+		entry.texture = inner_handle(entry.texture);
 	}
 	const bind_group_handle handle = m_inner->create_bind_group(inner_desc, life);
 	if (handle) {
@@ -657,7 +675,7 @@ void rnd::driver::validation::driver::set_bind_group(std::uint32_t set, bind_gro
 			continue;
 		}
 		if (decl.type == binding_type::texture) {
-			valid = m_state->require_live(entry->texture, object_kind::texture, "bound group texture") && valid;
+			valid = (live_texture(entry->texture, "bound group texture") != nullptr) && valid;
 			continue;
 		}
 		const auto buffer = m_buffers.find(key_of(entry->buffer));

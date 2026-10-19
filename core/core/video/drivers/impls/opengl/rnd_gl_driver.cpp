@@ -202,9 +202,8 @@ rnd::driver::gl::driver::~driver()
 namespace {
 	using namespace rnd::driver;
 
-	void attach(GLuint fbo, GLenum point, const attachment_desc& desc)
+	void attach(GLuint fbo, GLenum point, const attachment_desc& desc, const gl::texture* gl_texture)
 	{
-		const auto* gl_texture = static_cast<const gl::texture*>(desc.texture);
 		switch (gl_texture->get_type()) {
 		case TEXTURE_TYPE::RENDERBUFFER:
 			glNamedFramebufferRenderbuffer(fbo, point, GL_RENDERBUFFER, gl_texture->get_id());
@@ -258,13 +257,15 @@ GLuint rnd::driver::gl::driver::create_framebuffer(const render_pass_desc& desc)
 	GLenum read_buffer = GL_NONE;
 	for (std::size_t i = 0; i < desc.colors.size(); ++i) {
 		const attachment_desc& color = desc.colors[i];
-		if (!color.texture) {
+		const texture* color_texture = texture_of(color.texture);
+		ASSERT_MSG(!color.texture || color_texture, "Color attachment {} names a destroyed texture", i);
+		if (!color_texture) {
 			draw_buffers.push_back(GL_NONE);
 			continue;
 		}
-		ASSERT_MSG(color.texture->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
+		ASSERT_MSG(color_texture->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
 		const GLenum point = GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i);
-		attach(fbo, point, color);
+		attach(fbo, point, color, color_texture);
 		draw_buffers.push_back(point);
 		if (read_buffer == GL_NONE) {
 			read_buffer = point;
@@ -278,11 +279,13 @@ GLuint rnd::driver::gl::driver::create_framebuffer(const render_pass_desc& desc)
 	glNamedFramebufferReadBuffer(fbo, read_buffer);
 	CHECK_GL_ERROR();
 
-	if (desc.depth_stencil && desc.depth_stencil->texture) {
+	const texture* depth_texture = desc.depth_stencil ? texture_of(desc.depth_stencil->texture) : nullptr;
+	ASSERT_MSG(!desc.depth_stencil || !desc.depth_stencil->texture || depth_texture, "The depth attachment names a destroyed texture");
+	if (depth_texture) {
 		const attachment_desc& depth = *desc.depth_stencil;
-		ASSERT_MSG(depth.texture->has_usage(texture_usage::depth_target) || depth.texture->has_usage(texture_usage::stencil_target),
+		ASSERT_MSG(depth_texture->has_usage(texture_usage::depth_target) || depth_texture->has_usage(texture_usage::stencil_target),
 			"Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
-		attach(fbo, static_cast<texture*>(depth.texture)->get_attachment_type(), depth);
+		attach(fbo, depth_texture->get_attachment_type(), depth, depth_texture);
 	}
 
 	check_framebuffer_status(fbo);
@@ -291,8 +294,9 @@ GLuint rnd::driver::gl::driver::create_framebuffer(const render_pass_desc& desc)
 
 GLuint rnd::driver::gl::driver::framebuffer_for(const render_pass_desc& desc)
 {
-	const auto key = make_framebuffer_key(desc, [](texture_handle handle) -> std::uint64_t {
-		return handle ? static_cast<const texture*>(handle)->framebuffer_object() : 0;
+	const auto key = make_framebuffer_key(desc, [this](texture_handle handle) -> std::uint64_t {
+		const texture* found = texture_of(handle);
+		return found ? found->framebuffer_object() : 0;
 	});
 	return m_framebuffers->cache.acquire(key, [&] { return create_framebuffer(desc); });
 }
@@ -314,10 +318,14 @@ void rnd::driver::gl::driver::begin_render_pass(const render_pass_desc& desc)
 	CHECK_GL_ERROR();
 
 	// The window's buffers are addressed by GL_COLOR / GL_DEPTH, a framebuffer's by its attachment points.
-	const auto takes_part = [window](const attachment_desc& a) { return window || a.texture != nullptr; };
+	const auto takes_part = [window](const attachment_desc& a) { return window || static_cast<bool>(a.texture); };
 	const auto color_point = [window](std::size_t i) { return window ? GL_COLOR : GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i); };
-	const auto depth_point = [window](const attachment_desc& a) {
-		return window ? GL_DEPTH : static_cast<texture*>(a.texture)->get_attachment_type();
+	const auto depth_point = [this, window](const attachment_desc& a) -> GLenum {
+		if (window) {
+			return GL_DEPTH;
+		}
+		const texture* found = texture_of(a.texture);
+		return found ? found->get_attachment_type() : GL_DEPTH_ATTACHMENT;
 	};
 
 	std::array<GLenum, render_pass_desc::max_colors + 1> discard{};
@@ -619,7 +627,14 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 
 std::unique_ptr<rnd::driver::texture_interface> rnd::driver::gl::driver::create_texture(const texture_header& header)
 {
-	return std::make_unique<rnd::driver::gl::texture>(header, m_framebuffers);
+	auto created = std::make_unique<rnd::driver::gl::texture>(header, m_framebuffers);
+	m_textures->adopt(*created);
+	return created;
+}
+
+rnd::driver::gl::texture* rnd::driver::gl::driver::texture_of(texture_handle handle) const
+{
+	return static_cast<texture*>(m_textures->find(handle));
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::gl::driver::create_vertex_array()
@@ -632,13 +647,18 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::gl::driver::create_b
 	return std::make_unique<gl::buffer>();
 }
 
-std::vector<std::byte> rnd::driver::gl::driver::read_texture(texture_interface& texture, glm::ivec4 rect)
+std::vector<std::byte> rnd::driver::gl::driver::read_texture(texture_handle handle, glm::ivec4 rect)
 {
-	if (!can_read_back(texture) || !read_rect_inside(texture, rect)) {
-		egLOG_ERROR("render", "read_texture: a {}x{} texture cannot be read at {}, {}, {}x{}", texture.width(), texture.height(), rect.x, rect.y, rect.z, rect.w);
+	const texture* found = texture_of(handle);
+	if (!found) {
+		egLOG_ERROR("render", "read_texture: the handle (index {}, generation {}) names no live texture", handle.index, handle.gen);
 		return {};
 	}
-	const auto& source = static_cast<const gl::texture&>(*texture.native());
+	if (!can_read_back(*found) || !read_rect_inside(*found, rect)) {
+		egLOG_ERROR("render", "read_texture: a {}x{} texture cannot be read at {}, {}, {}x{}", found->width(), found->height(), rect.x, rect.y, rect.z, rect.w);
+		return {};
+	}
+	const auto& source = *found;
 	std::vector<std::byte> bytes(static_cast<std::size_t>(rect.z) * static_cast<std::size_t>(rect.w) * 4);
 	glGetTextureSubImage(source.get_id(), 0, rect.x, rect.y, 0, rect.z, rect.w, 1, GL_RGBA, GL_UNSIGNED_BYTE, static_cast<GLsizei>(bytes.size()), bytes.data());
 	CHECK_GL_ERROR();
@@ -763,9 +783,10 @@ void rnd::driver::gl::driver::set_bind_group(std::uint32_t set, bind_group_handl
 		}
 
 		if (decl.type == binding_type::texture) {
-			ASSERT_MSG(entry->texture, "set_bind_group: the texture at slot {} is null", decl.slot);
-			if (entry->texture) {
-				entry->texture->native()->bind(*binding);
+			texture* bound_texture = texture_of(entry->texture);
+			ASSERT_MSG(bound_texture, "set_bind_group: the texture at slot {} is null or destroyed", decl.slot);
+			if (bound_texture) {
+				bound_texture->bind(*binding);
 			}
 			continue;
 		}

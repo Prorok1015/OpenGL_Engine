@@ -2,6 +2,7 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_pipeline_cache.h>
 #include <snk/driver/rnd_resource_tables.h>
+#include <snk/driver/rnd_texture_pool.h>
 #include <optional>
 #include <array>
 #include <memory>
@@ -11,6 +12,7 @@
 namespace rnd::driver::gl
 {
 	class framebuffer_registry;
+	class texture;
 
 	class driver : public rnd::driver::driver_interface
 	{
@@ -48,7 +50,9 @@ namespace rnd::driver::gl
 		virtual void bind_pipeline(pipeline_handle pipeline) override;
 		virtual const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		virtual void invalidate_state_cache() override;
-		virtual std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) override;
+		virtual std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) override;
+		virtual const texture_header& info(texture_handle texture) const override { return m_textures->info(texture); }
+		virtual bool is_alive(texture_handle texture) const override { return m_textures->find(texture) != nullptr; }
 
 		// GPU timer queries
 		virtual bool supports_timer_queries() const override;
@@ -98,6 +102,8 @@ namespace rnd::driver::gl
 			bind_group_desc desc;
 		};
 
+		// The GL texture behind a handle; null for a handle that names no live texture.
+		texture* texture_of(texture_handle handle) const;
 		std::uint32_t frame_slot() const { return static_cast<std::uint32_t>(m_frame % frames_in_flight); }
 		void apply_pipeline(const pipeline_desc& desc);
 		GLuint framebuffer_for(const render_pass_desc& desc);
@@ -117,6 +123,7 @@ namespace rnd::driver::gl
 		std::uint64_t m_frame = 0;
 		mutable std::optional<std::size_t> m_uniform_offset_alignment;
 		mutable std::optional<std::size_t> m_storage_offset_alignment;
+		std::shared_ptr<texture_pool> m_textures = texture_pool::create();
 		bind_group_layout_cache m_layouts;
 		slot_table<buffer_tag, gl_buffer> m_buffers;
 		slot_table<bind_group_tag, gl_group> m_groups;

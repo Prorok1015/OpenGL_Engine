@@ -29,8 +29,8 @@ rnd::ShaderManager::ShaderManager(driver::driver_interface* ptr, res::resource_s
 
 	driver::bind_group_desc frame;
 	frame.layout = m_layouts.frame;
-	frame.entries.push_back({ driver::binding_type::ubo, bindings::matrices_slot, m_matrices, 0, sizeof(global_params), nullptr });
-	frame.entries.push_back({ driver::binding_type::ubo, bindings::lights_slot, m_lights, 0, sizeof(lights_params), nullptr });
+	frame.entries.push_back({ driver::binding_type::ubo, bindings::matrices_slot, m_matrices, 0, sizeof(global_params), driver::texture_handle{} });
+	frame.entries.push_back({ driver::binding_type::ubo, bindings::lights_slot, m_lights, 0, sizeof(lights_params), driver::texture_handle{} });
 	m_frame_group = drv->create_bind_group(frame, driver::lifetime::persistent);
 }
 

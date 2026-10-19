@@ -89,9 +89,9 @@ rnd::driver::bind_group_handle rnd::per_draw_data::make_group(driver::buffer_han
 {
 	driver::bind_group_desc desc;
 	desc.layout = m_layout;
-	desc.entries.push_back({ driver::binding_type::ubo, bindings::object_slot, m_ring, 0, sizeof(object_data), nullptr });
-	desc.entries.push_back({ driver::binding_type::ssbo, bindings::bones_slot, m_bones, 0, m_bone_capacity * sizeof(glm::mat4), nullptr });
-	desc.entries.push_back({ driver::binding_type::ssbo, bindings::skin_slot, skin, 0, skin_size, nullptr });
+	desc.entries.push_back({ driver::binding_type::ubo, bindings::object_slot, m_ring, 0, sizeof(object_data), driver::texture_handle{} });
+	desc.entries.push_back({ driver::binding_type::ssbo, bindings::bones_slot, m_bones, 0, m_bone_capacity * sizeof(glm::mat4), driver::texture_handle{} });
+	desc.entries.push_back({ driver::binding_type::ssbo, bindings::skin_slot, skin, 0, skin_size, driver::texture_handle{} });
 	++m_groups_created;
 	return m_drv.create_bind_group(desc, driver::lifetime::persistent);
 }
