@@ -52,13 +52,14 @@ struct draw_call_t {
 ```
 
 **AC:**
-- [ ] `shader_config_cache` с intern/resolve, дедупликация по hash
-- [ ] `draw_call_t::material` заменён на `uint32_t shader_config_handle`
-- [ ] Render passes используют `resolve(handle)` вместо прямого доступа к material
-- [ ] `get_shader_desc()` возвращает handle вместо полной структуры
-- [ ] Профайлер: Extract.PushDraws < 0.5ms для 79 мешей
+- [x] `shader_config_cache` с intern/resolve, дедупликация по hash (#127, PR #251; `variant_id` вместо `uint32_t`)
+- [x] `draw_call_t::material` заменён на `variant_id` + указатель на кешированный `compiled_material`
+- [x] Render passes используют `variant_id` и кешированный материал вместо копии конфига
+- [x] Компиляция материала возвращает `variant_id` (base/opaque) в `compiled_material`
+- [x] Профайлер: Extract.PushDraws < 0.5ms для 79 мешей (0.015 мс на 100 мешей, 2 камеры)
 
 ### US-45-2: shader_config на pmr контейнерах
+**Статус:** не делается в #127: кешированные конфиги живут дольше кадра, кадровый аллокатор для них запрещён; аллокации ушли с горячего пути за счёт US-45-1/3.
 **Файлы:** `core/engine/render/render_system/include/snk/render/shader/rnd_scene_shader_desc.h`
 **Зависимости:** может делаться параллельно с US-45-1 или вместо
 
@@ -87,10 +88,10 @@ unordered_map<entt::entity, cached_shader_info> shader_cache_;
 ```
 
 **AC:**
-- [ ] Shader desc кешируется per-entity
-- [ ] Пересоздаётся только при изменении материала (dirty flag)
-- [ ] Профайлер: Extract.ShaderDesc < 0.2ms для неизменённой сцены
-- [ ] При изменении материала (в Inspector) — корректно инвалидируется
+- [x] Shader desc кешируется per-entity (`compiled_material_component`)
+- [x] Пересоздаётся только при изменении материала (`material_desc_component::dirty`, desc, скиннинг, поколение текстур)
+- [x] Профайлер: Extract.ShaderDesc < 0.2ms для неизменённой сцены (0.010 мс)
+- [x] При изменении материала — инвалидируется флагом `dirty` (Inspector материалов пока нет; писатель обязан ставить флаг)
 
 ### US-45-4: Delta extraction — dirty-flag система
 **Файлы:** `core/engine/scene/level/scn_render_data_extractor.cpp/.h`, ECS компоненты

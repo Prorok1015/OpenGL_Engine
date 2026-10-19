@@ -75,4 +75,9 @@ namespace rnd
 	{
 		context.shaders->use(desc);
 	}
+
+	inline void configure_pass(const frame_context& context, variant_id variant, const compiled_material& material, const glm::mat4* world)
+	{
+		context.shaders->use(variant, material.params, world);
+	}
 }

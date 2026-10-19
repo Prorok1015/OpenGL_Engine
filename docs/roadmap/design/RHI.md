@@ -158,6 +158,7 @@ buffer_handle create_buffer(const buffer_desc&); // {size, usage: vertex|index|u
    - кеш материала на entity с dirty-флагом на `material_desc_component`;
    - `OPAQUE` — pass-define, а не мутация конфига в extract.
    Цель: `Extract.ShaderDesc` < 0.5 мс, `Extract.PushDraws` < 0.5 мс на 79 мешей.
+   - **Сделано в R1** (PR #251): `constant_data::variant_hash` (FNV-1a, не зависит от порядка и платформы) и `shader_config_cache` в `ShaderManager`; `draw_call_t` = `variant_id` + указатель на `compiled_material` (компонент на entity, `material_desc_component::dirty`); `OPAQUE` — pass-define варианта; `z_prepass` берёт вариант с подменой программы из кеша. Кеш материала пересобирается при смене desc, флага скиннинга или поколения `texture_manager` (hot reload, ресайз RT). US-45-2 (pmr-контейнеры) не делался: кешированные конфиги живут дольше кадра, кадровый аллокатор для них запрещён.
 2. **#124**: `draw_call_t = { u64 sort_key; geometry_id; material_instance_id; u32 indices_count, vx_begin, ind_begin; mat4 transform; skin_id; u32 bone_offset, bone_count; }` — POD, `std::is_trivially_copyable` в `static_assert`.
    - `skybox_material` → `material_instance_id`.
    - Кости копируются в `pmr`-вектор пакета (кадровый аллокатор; правило «не хранить через кадр» соблюдается).
@@ -181,6 +182,18 @@ buffer_handle create_buffer(const buffer_desc&); // {size, usage: vertex|index|u
      Разброс между запусками на общих раннерах около ±20% (первый запуск того же кода дал `ExtractRenderData` mean 0.201): сравнивать порядок величин, не проценты.
 
      Критерий EPIC-45 (< 2 мс на 100 мешей) на этом baseline выполнен с большим запасом; цели `Extract.ShaderDesc`/`Extract.PushDraws` из п. 1 (< 0.5 мс на 79 мешей) тоже.
+
+   - **После R1** (GCC Release, ubuntu-latest, null-бэкенд, мс за кадр; запуск CI 39179644383 PR #251, коммит 290207c; те же условия и сцена):
+
+     | Зона | mean | p50 | p95 | max | baseline mean |
+     |---|---:|---:|---:|---:|---:|
+     | `ExtractRenderData` | 0.083 | 0.081 | 0.094 | 0.097 | 0.250 |
+     | `Extract.ShaderDesc` | 0.010 | 0.010 | 0.010 | 0.023 | 0.132 |
+     | `Extract.PushDraws` | 0.015 | 0.014 | 0.015 | 0.026 | 0.040 |
+     | `Extract.BuildDC` | 0.009 | 0.009 | 0.009 | 0.024 | 0.010 |
+     | `Extract.Skinning` | 0.008 | 0.008 | 0.008 | 0.020 | 0.010 |
+
+     Сцена не меняется между кадрами, поэтому `Extract.ShaderDesc` — это проверка валидности кеша (< 0.2 мс из US-45-3 с запасом). Разброс раннеров прежний (±20%), но выигрыш в разы выходит за него.
 
 ## 5. План по PR (после PR-5 #109 и #174; волны — `STAGE_D_PLAN.md` §2)
 

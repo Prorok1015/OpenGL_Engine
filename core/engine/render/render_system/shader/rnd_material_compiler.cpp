@@ -41,3 +41,26 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 
 	return rnd::shader_config{ cdata, rdata };
 }
+
+std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
+	material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
+	std::shared_ptr<const scn::material_desc> mat, bool skinned)
+{
+	ASSERT_MSG(mat, "build_compiled_material needs a loaded material");
+	auto out = std::make_shared<compiled_material>();
+	out->source = mat;
+	out->skinned = skinned;
+	out->texture_generation = textures.generation();
+
+	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ nullptr, &textures, skinned });
+	out->base = variants.intern(cfg.cdata);
+	out->opaque = variants.intern(cfg.cdata, pass_define_opaque);
+	out->params = std::move(cfg.rdata);
+
+	for (std::size_t idx = 0; idx < mat->samplers_textures.size(); ++idx) {
+		if (mat->samplers_textures[idx].is_valid() && !out->params.samplers[idx]) {
+			out->complete = false;
+		}
+	}
+	return out;
+}
