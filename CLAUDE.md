@@ -106,11 +106,13 @@ For features / refactors / non-trivial bugfixes — do NOT start coding immediat
 - 🚦 [`GATES.toon`](docs/agent/workflow/GATES.toon) — Where to STOP and ask
 - 💾 [`STATE_TRACKING.toon`](docs/agent/workflow/STATE_TRACKING.toon) — TodoWrite + `.claude/workplan/*.md`
 - ⏩ [`ESCAPE_HATCH.toon`](docs/agent/workflow/ESCAPE_HATCH.toon) — When workflow may be skipped
+- ✅ [`CI_PR.toon`](docs/agent/workflow/CI_PR.toon) — Deliver via draft PR, CI is the verification; agents never build locally
 
 Rules of thumb:
 - No production code before an approved plan
 - "Sounds good" / "maybe" are NOT approval — only explicit "yes / proceed"
 - At start of every turn, check `.claude/workplan/` and resume from recorded phase
+- Code is verified by CI on a draft PR, not locally — agents do not build or run tests themselves (CI is free, run PRs in parallel)
 
 ## 🤝 Delegation to Subagents
 
