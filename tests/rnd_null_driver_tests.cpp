@@ -3,6 +3,7 @@
 #include "rnd_null_swapchain.h"
 #include <cstring>
 #include <memory>
+#include <span>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -92,21 +93,17 @@ BOOST_AUTO_TEST_CASE(ObjectsAreCountedFromCreationToDestruction)
 		auto texture = driver.create_texture(texture_header{});
 		auto va = driver.create_vertex_array();
 		auto vbo = driver.create_buffer();
-		auto ubo = driver.create_uniform_buffer(64, 0);
-		auto ssbo = driver.create_ssbo_buffer(128, 1);
 
 		const auto& stats = driver.stats();
 		BOOST_TEST(stats.shaders.created == 1u);
 		BOOST_TEST(stats.textures.created == 1u);
 		BOOST_TEST(stats.vertex_arrays.created == 1u);
 		BOOST_TEST(stats.buffers.created == 1u);
-		BOOST_TEST(stats.uniform_buffers.created == 1u);
-		BOOST_TEST(stats.ssbo_buffers.created == 1u);
-		BOOST_TEST(stats.live_total() == 6u);
+		BOOST_TEST(stats.live_total() == 4u);
 
 		texture.reset();
 		BOOST_TEST(stats.textures.destroyed == 1u);
-		BOOST_TEST(stats.live_total() == 5u);
+		BOOST_TEST(stats.live_total() == 3u);
 	}
 	BOOST_TEST(driver.stats().live_total() == 0u);
 	BOOST_TEST(driver.stats().textures.created == 1u);
@@ -176,27 +173,29 @@ BOOST_AUTO_TEST_CASE(ReservedBufferIsAllocatedAndZeroed)
 	BOOST_TEST(std::to_integer<int>(null_buffer->bytes().front()) == 0);
 }
 
-BOOST_AUTO_TEST_CASE(ConstantBuffersKeepSizeAndWrittenData)
+BOOST_AUTO_TEST_CASE(GpuBuffersKeepSizeAndWrittenData)
 {
 	null::driver driver;
-	auto ubo = driver.create_uniform_buffer(16, 3);
+	const buffer_handle ubo = driver.create_buffer({ .size = 16, .usage = buffer_usage::uniform });
 	const int value = 42;
-	ubo->set_data(&value, sizeof(value), 8);
+	driver.update_buffer(ubo, 8, std::as_bytes(std::span{ &value, 1 }));
 
-	const auto* null_ubo = dynamic_cast<null::uniform_buffer*>(ubo.get());
-	BOOST_REQUIRE(null_ubo);
-	BOOST_TEST(null_ubo->size() == 16u);
-	BOOST_TEST(null_ubo->binding() == 3u);
+	const buffer_desc* info = driver.buffer_info(ubo);
+	BOOST_REQUIRE(info);
+	BOOST_TEST(info->size == 16u);
+	const auto* bytes = driver.buffer_bytes(ubo);
+	BOOST_REQUIRE(bytes);
+	BOOST_REQUIRE(bytes->size() == 16u);
 	int stored = 0;
-	std::memcpy(&stored, null_ubo->bytes().data() + 8, sizeof(stored));
+	std::memcpy(&stored, bytes->data() + 8, sizeof(stored));
 	BOOST_TEST(stored == 42);
 
-	auto ssbo = driver.create_ssbo_buffer(64, 2);
-	const auto* null_ssbo = dynamic_cast<null::ssbo_buffer*>(ssbo.get());
-	BOOST_REQUIRE(null_ssbo);
-	BOOST_TEST(null_ssbo->size() == 64u);
-	ssbo->bind(5);
-	BOOST_TEST(null_ssbo->binding() == 5u);
+	const buffer_handle ssbo = driver.create_buffer({ .size = 64, .usage = buffer_usage::storage });
+	BOOST_TEST(driver.buffer_info(ssbo)->size == 64u);
+	BOOST_TEST(driver.live_buffers() == 2u);
+	driver.destroy_buffer(ssbo);
+	BOOST_TEST(driver.live_buffers() == 1u);
+	BOOST_TEST(driver.buffer_info(ssbo) == nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(VertexArrayKeepsItsBuffers)

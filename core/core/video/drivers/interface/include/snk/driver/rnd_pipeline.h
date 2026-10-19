@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/driver/rnd_bind_group.h>
 #include <snk/driver/rnd_render_pass.h>
 #include <snk/driver/rnd_shader_interface.h>
 #include <snk/driver/rnd_texture_interface.h>
@@ -91,17 +92,6 @@ namespace rnd::driver
 	inline constexpr texture_format backbuffer_color_format = texture_format::RGBA8;
 	inline constexpr texture_format backbuffer_depth_format = texture_format::D24_S8;
 
-	// Typed index into a driver's table. Index 0 is null; `gen` tells a slot's reuses apart.
-	template <class Tag>
-	struct handle
-	{
-		std::uint32_t index = 0;
-		std::uint32_t gen = 0;
-
-		constexpr explicit operator bool() const noexcept { return index != 0; }
-		friend constexpr bool operator==(const handle&, const handle&) = default;
-	};
-
 	// A shader as a pipeline names it: the object to bind, and its serial, which tells it from a later shader
 	// that happens to live at the same address.
 	struct shader_ref
@@ -135,6 +125,9 @@ namespace rnd::driver
 		// Formats of the pass this pipeline is for; an unused color slot has none. No depth format = no depth attachment.
 		ds::fixed_vector<std::optional<texture_format>, max_targets> color_formats;
 		std::optional<texture_format> depth_format;
+		// The bind group layout the pipeline expects at each set; a null handle (or a set past the end) is a set
+		// the pipeline does not use. A draw needs a group of exactly that layout bound at every set it names.
+		ds::fixed_vector<bind_group_layout_handle, max_bind_sets> set_layouts;
 
 		friend bool operator==(const pipeline_desc&, const pipeline_desc&) = default;
 	};
@@ -178,6 +171,10 @@ namespace rnd::driver
 				mix(format ? static_cast<std::uint64_t>(*format) + 1 : 0);
 			}
 			mix(desc.depth_format ? static_cast<std::uint64_t>(*desc.depth_format) + 1 : 0);
+			mix(desc.set_layouts.size());
+			for (const bind_group_layout_handle& layout : desc.set_layouts) {
+				mix(static_cast<std::uint64_t>(layout.index) | static_cast<std::uint64_t>(layout.gen) << 32);
+			}
 			return static_cast<std::size_t>(h);
 		}
 	};

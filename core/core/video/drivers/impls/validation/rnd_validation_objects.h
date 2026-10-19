@@ -4,8 +4,6 @@
 #include <snk/driver/rnd_texture_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
 #include <snk/driver/rnd_buffer_interface.h>
-#include <snk/driver/rnd_uniform_buffer_interface.h>
-#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/common/snk_api.h>
 
 #include <cstddef>
@@ -126,35 +124,6 @@ namespace rnd::driver::validation
 		std::vector<std::shared_ptr<buffer>> m_vertex_buffers;
 		std::shared_ptr<buffer> m_index_buffer;
 		bool m_has_layout = false;
-		detail::registration m_registration;
-	};
-
-	class SNK_API uniform_buffer final : public uniform_buffer_interface
-	{
-	public:
-		uniform_buffer(std::shared_ptr<validator> owner, std::unique_ptr<uniform_buffer_interface> inner, std::size_t size);
-
-		void set_data(const void* data, std::size_t size, std::size_t offset) override;
-
-	private:
-		std::shared_ptr<validator> m_owner;
-		std::unique_ptr<uniform_buffer_interface> m_inner;
-		std::size_t m_size;
-		detail::registration m_registration;
-	};
-
-	class SNK_API ssbo_buffer final : public ssbo_buffer_interface
-	{
-	public:
-		ssbo_buffer(std::shared_ptr<validator> owner, std::unique_ptr<ssbo_buffer_interface> inner, std::size_t size);
-
-		void set_data(const void* data, std::size_t size, std::size_t offset) override;
-		void bind(std::size_t index) override;
-
-	private:
-		std::shared_ptr<validator> m_owner;
-		std::unique_ptr<ssbo_buffer_interface> m_inner;
-		std::size_t m_size;
 		detail::registration m_registration;
 	};
 }

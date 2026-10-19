@@ -4,7 +4,9 @@
 #include <snk/driver/rnd_swapchain_interface.h>
 #include <snk/common/snk_api.h>
 
+#include <array>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace rnd::driver::validation
@@ -32,8 +34,18 @@ namespace rnd::driver::validation
 		std::unique_ptr<texture_interface> create_texture(const texture_header& header) override;
 		std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		std::unique_ptr<buffer_interface> create_buffer() override;
-		std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) override;
-		std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) override;
+
+		void begin_frame() override;
+		const binding_table& bindings() const override { return m_inner->bindings(); }
+		std::size_t uniform_offset_alignment() const override { return m_inner->uniform_offset_alignment(); }
+
+		buffer_handle create_buffer(const buffer_desc& desc) override;
+		void destroy_buffer(buffer_handle buffer) override;
+		void update_buffer(buffer_handle buffer, std::size_t offset, std::span<const std::byte> data) override;
+		bind_group_layout_handle create_bind_group_layout(const bind_group_layout_desc& desc) override;
+		bind_group_handle create_bind_group(const bind_group_desc& desc, lifetime life = lifetime::persistent) override;
+		void destroy_bind_group(bind_group_handle group) override;
+		void set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets = {}) override;
 
 		pipeline_handle create_pipeline(const pipeline_desc& desc) override;
 		void bind_pipeline(pipeline_handle pipeline) override;
@@ -59,6 +71,14 @@ namespace rnd::driver::validation
 		bool check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target);
 		// Null when the draw cannot be forwarded.
 		const vertex_array* check_draw(const vertex_array_interface* va, unsigned int count, std::size_t base_index);
+		// Every set the bound pipeline names has a group of the pipeline's layout bound.
+		void check_pipeline_sets(std::size_t pipeline_index);
+
+		template <class Tag>
+		static std::uint64_t key_of(handle<Tag> h) { return static_cast<std::uint64_t>(h.index) | static_cast<std::uint64_t>(h.gen) << 32; }
+
+		// Reports and returns false when the buffer range an entry names is not inside a live buffer of the right usage.
+		bool check_buffer_entry(const binding_res& entry, const binding_decl& decl);
 
 		struct known_pipeline
 		{
@@ -66,9 +86,31 @@ namespace rnd::driver::validation
 			pipeline_desc desc;	// as the caller wrote it: the shader is the wrapper, not the wrapped driver's
 		};
 
+		struct known_group
+		{
+			bind_group_layout_handle layout;
+			bind_group_desc desc;	// as the caller wrote it: the textures are the wrappers
+			lifetime life = lifetime::persistent;
+			std::uint64_t epoch = 0;	// the frame a transient group belongs to
+		};
+
+		// A transient group that ended with its frame, remembered for a few frames to tell its late use from a wrong handle.
+		struct expired_group
+		{
+			std::uint64_t key;
+			std::uint64_t epoch;
+		};
+
 		std::unique_ptr<driver_interface> m_inner;
 		std::shared_ptr<validator> m_state;
 		std::vector<known_pipeline> m_pipelines;
+		std::unordered_map<std::uint64_t, buffer_desc> m_buffers;
+		std::unordered_map<std::uint64_t, bind_group_layout_desc> m_layouts;
+		std::unordered_map<std::uint64_t, known_group> m_groups;
+		std::vector<expired_group> m_expired_groups;
+		// What the draws of the render pass in progress see; a pass starts with nothing bound.
+		std::array<bind_group_handle, max_bind_sets> m_bound_sets;
+		std::size_t m_bound_pipeline = 0;	// index (1-based) into m_pipelines, 0 = none
 	};
 
 	// Counts presents for the driver it creates: a frame ends at present().
