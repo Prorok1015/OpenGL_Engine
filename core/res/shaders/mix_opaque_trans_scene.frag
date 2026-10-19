@@ -6,7 +6,7 @@
 in PiplineStruct PS;
 
 #ifdef USE_NORMAL_MAP
-layout(binding = 2) uniform sampler2D normalTxm;
+SNK_TEX(2, 2) uniform sampler2D normalTxm;
 #endif
 
 vec3 getNormalVector()

@@ -14,9 +14,20 @@ on:
       - 'docs/**'
       - '**/*.md'
   pull_request:
+    # ready_for_review: marking a draft PR ready starts the full run (see the tiers below).
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
+
+# Two tiers. FAST runs on every PR event, drafts included, and on pushes; FULL runs only on pushes
+# and on PRs that are not drafts, so a non-draft PR gets one complete run. Whole-job FULL jobs carry
+#   if: github.event_name == 'push' || github.event.pull_request.draft == false
+# Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
+# `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
+# Fast: Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Editor visual smoke.
+# Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared, Linux TSan,
+# SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes only.
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
@@ -31,27 +42,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # PCH is off in the ci-linux-clang-debug preset: it catches headers that compile only thanks to the PCH.
+      # Fast list on draft PRs, full list otherwise.
       matrix:
-        include:
-          - name: Windows MSVC Debug
-            os: windows-latest
-            preset: ci-windows-msvc-debug
-          - name: Windows MSVC Release
-            os: windows-latest
-            preset: ci-windows-msvc-release
-          - name: Windows MSVC Shared
-            os: windows-latest
-            preset: ci-windows-msvc-shared
-          - name: Windows MSVC Shared Release
-            os: windows-latest
-            preset: ci-windows-msvc-shared-release
-          - name: Linux GCC Debug
-            os: ubuntu-latest
-            preset: ci-linux-gcc-debug
-          # PCH is off in this preset: it catches headers that compile only thanks to the PCH.
-          - name: Linux Clang Debug
-            os: ubuntu-latest
-            preset: ci-linux-clang-debug
+        include: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Windows MSVC Release","os":"windows-latest","preset":"ci-windows-msvc-release"},{"name":"Windows MSVC Shared Release","os":"windows-latest","preset":"ci-windows-msvc-shared-release"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -60,11 +54,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      # RHI R0: GL stays inside the GL driver plus the documented allow-list; runs first, it needs no build.
-      - name: Check GL is used only inside the GL driver
-        if: matrix.preset == 'ci-linux-gcc-debug'
-        run: tools/ci/check_no_gl_outside_drivers.sh
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -114,30 +103,11 @@ jobs:
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
-      # Generic desc serialization must reproduce the committed files byte for byte (EPIC-16 #233);
-      # --check lists every file whose re-serialized bytes differ and exits 1 if there is any.
-      - name: Build desc_resave
-        if: matrix.preset == 'ci-linux-gcc-debug'
-        run: cmake --build build/${{ matrix.preset }} --target desc_resave --parallel
-
-      - name: Check desc files are byte-stable
-        if: matrix.preset == 'ci-linux-gcc-debug'
-        shell: bash
-        run: |
-          tool=build/${{ matrix.preset }}/tools/desc_resave/desc_resave
-          status=0
-          echo "::group::core/res"
-          "$tool" core/res --check || status=1
-          echo "::endgroup::"
-          echo "::group::Editor/res"
-          "$tool" Editor/res --base core/res --check || status=1
-          echo "::endgroup::"
-          exit $status
-
   # One shared snk_engine library instead of static components (EPIC-29 #59). The Windows MSVC
-  # variant is the 'Windows MSVC Shared' entry of the build matrix above.
+  # variant is the 'Windows MSVC Shared Release' entry of the build matrix above. FULL tier.
   shared:
     name: Linux GCC Shared
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
 
     env:
@@ -188,14 +158,9 @@ jobs:
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
+      # ASan+UBSan is FAST, TSan is FULL: the matrix is the fast or the full list (see the tiers above).
       matrix:
-        include:
-          - name: Linux ASan+UBSan
-            preset: ci-linux-asan
-            experimental: false
-          - name: Linux TSan
-            preset: ci-linux-tsan
-            experimental: false
+        include: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.draft == false) && '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false},{"name":"Linux TSan","preset":"ci-linux-tsan","experimental":false}]' || '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -245,7 +210,6 @@ jobs:
   coverage:
     name: Coverage (Linux GCC Debug)
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -254,6 +218,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # RHI R0: GL stays inside the GL driver plus the documented allow-list; runs first, it needs no build.
+      - name: Check GL is used only inside the GL driver
+        run: tools/ci/check_no_gl_outside_drivers.sh
 
       - name: Install dependencies
         run: |
@@ -280,12 +248,17 @@ jobs:
       - name: Build unit_tests
         run: cmake --build build/ci-linux-coverage --target unit_tests --parallel
 
+      # Generic desc serialization must reproduce the committed files byte for byte (EPIC-16 #233);
+      # --check lists every file whose re-serialized bytes differ and exits 1 if there is any.
+      - name: Build desc_resave
+        run: cmake --build build/ci-linux-coverage --target desc_resave --parallel
+
       - name: Compiler cache statistics
         if: always()
         run: ccache -s
 
       # Keep going when a test fails: a coverage report of a red run is still useful, and the
-      # step fails at the end so the job is flagged (the job itself is non-blocking).
+      # step fails at the end so the job is red. The job is blocking: it carries the GL-only and desc byte-stability gates; only the report steps are continue-on-error.
       - name: Run unit tests
         timeout-minutes: 10
         working-directory: build/ci-linux-coverage
@@ -295,6 +268,7 @@ jobs:
           echo "UNIT_TESTS_EXIT=$?" >> "$GITHUB_ENV"
 
       - name: Generate coverage report
+        continue-on-error: true  # report tooling may flake; says nothing about the code
         run: |
           mkdir -p build/coverage
           # Product code only: engine/core libraries and the editor. Third-party code, the tests
@@ -323,11 +297,25 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload HTML coverage report
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
           path: build/coverage
           if-no-files-found: warn
+
+      - name: Check desc files are byte-stable
+        shell: bash
+        run: |
+          tool=build/ci-linux-coverage/tools/desc_resave/desc_resave
+          status=0
+          echo "::group::core/res"
+          "$tool" core/res --check || status=1
+          echo "::endgroup::"
+          echo "::group::Editor/res"
+          "$tool" Editor/res --base core/res --check || status=1
+          echo "::endgroup::"
+          exit $status
 
       - name: Fail if unit tests failed
         if: env.UNIT_TESTS_EXIT != '0'
@@ -360,7 +348,7 @@ jobs:
             ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
             xvfb libgl1-mesa-dri xdotool imagemagick
 
-      # Same preset (and so the same cache key) as the Linux GCC Debug job: its objects are reused.
+      # Own ccache key; the preset is the one the removed Linux GCC Debug build job used.
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
         with:
@@ -421,6 +409,8 @@ jobs:
   # a failure here from failing the workflow; the job is not a required check.
   extract-bench:
     name: Extract benchmark (Linux, report-only)
+    # Pushes to aibranch/main only: no value on a PR run.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     continue-on-error: true
 
@@ -488,22 +478,16 @@ jobs:
 
   # Installs the SDK (cmake --install, package `snake_sdk`) and builds tests/package_consumer
   # against it with find_package: proves the export set is complete and self-contained (third-party
-  # libraries are bundled). Static and shared (SNK_ENGINE_SHARED) engine.
+  # libraries are bundled). Static, then shared (SNK_ENGINE_SHARED) engine, in one job. FULL tier.
   sdk-package:
-    name: SDK package (${{ matrix.name }})
+    name: SDK package (Linux)
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: static
-            preset: ci-linux-gcc-debug
-          - name: shared
-            preset: ci-linux-shared
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
-      SDK_PREFIX: ${{ github.workspace }}/sdk-install
+      SDK_PREFIX_STATIC: ${{ github.workspace }}/sdk-install-static
+      SDK_PREFIX_SHARED: ${{ github.workspace }}/sdk-install-shared
 
     steps:
       - uses: actions/checkout@v4
@@ -519,7 +503,7 @@ jobs:
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
         with:
-          key: cc-sdk-${{ matrix.preset }}
+          key: cc-sdk-linux
 
       - name: Cache FetchContent (Boost)
         uses: actions/cache@v4
@@ -527,51 +511,95 @@ jobs:
           path: ${{ env.FC_DIR }}
           key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
 
-      - name: Configure
-        run: cmake --preset ${{ matrix.preset }} "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+      # ---- static ----
+      - name: Configure (static)
+        run: cmake --preset ci-linux-gcc-debug "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
 
       # snk_sdk builds exactly the targets the install step copies.
-      - name: Build SDK targets
-        run: cmake --build build/${{ matrix.preset }} --target snk_sdk --parallel
+      - name: Build SDK targets (static)
+        run: cmake --build build/ci-linux-gcc-debug --target snk_sdk --parallel
 
-      - name: Compiler cache statistics
+      - name: Compiler cache statistics (static)
         if: always()
         run: ccache -s
 
-      - name: Install SDK
-        run: cmake --install build/${{ matrix.preset }} --prefix "${SDK_PREFIX}"
+      - name: Install SDK (static)
+        run: cmake --install build/ci-linux-gcc-debug --prefix "${SDK_PREFIX_STATIC}"
 
       # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
-      - name: Check the installed headers
-        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
+      - name: Check the installed headers (static)
+        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_STATIC}"
 
-      - name: Check the package does not point into the build or source tree
+      - name: Check the package does not point into the build or source tree (static)
         run: |
-          find "${SDK_PREFIX}/lib/cmake/snake_sdk" -type f | sort
-          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX}/lib/cmake"; then
+          find "${SDK_PREFIX_STATIC}/lib/cmake/snake_sdk" -type f | sort
+          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX_STATIC}/lib/cmake"; then
             echo "::error::installed package config references the workspace"
             exit 1
           fi
 
       # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
-      - name: Check the package has no absolute paths
-        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
+      - name: Check the package has no absolute paths (static)
+        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX_STATIC}"
 
-      - name: Configure consumer
+      - name: Configure consumer (static)
         run: |
-          cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
+          cmake -S tests/package_consumer -B build/consumer-static -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX_STATIC}" -DSNK_CONSUMER_HEADER_CHECK=ON
 
-      - name: Build consumer
-        run: cmake --build build/consumer
+      - name: Build consumer (static)
+        run: cmake --build build/consumer-static
 
-      - name: Run consumer
-        run: build/consumer/package_consumer
+      - name: Run consumer (static)
+        run: build/consumer-static/package_consumer
+
+      # ---- shared ----
+      - name: Configure (shared)
+        run: cmake --preset ci-linux-shared "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      # snk_sdk builds exactly the targets the install step copies.
+      - name: Build SDK targets (shared)
+        run: cmake --build build/ci-linux-shared --target snk_sdk --parallel
+
+      - name: Compiler cache statistics (shared)
+        if: always()
+        run: ccache -s
+
+      - name: Install SDK (shared)
+        run: cmake --install build/ci-linux-shared --prefix "${SDK_PREFIX_SHARED}"
+
+      # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
+      - name: Check the installed headers (shared)
+        run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_SHARED}"
+
+      - name: Check the package does not point into the build or source tree (shared)
+        run: |
+          find "${SDK_PREFIX_SHARED}/lib/cmake/snake_sdk" -type f | sort
+          if grep -rIn -e "${GITHUB_WORKSPACE}" "${SDK_PREFIX_SHARED}/lib/cmake"; then
+            echo "::error::installed package config references the workspace"
+            exit 1
+          fi
+
+      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
+      - name: Check the package has no absolute paths (shared)
+        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX_SHARED}"
+
+      - name: Configure consumer (shared)
+        run: |
+          cmake -S tests/package_consumer -B build/consumer-shared -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX_SHARED}" -DSNK_CONSUMER_HEADER_CHECK=ON
+
+      - name: Build consumer (shared)
+        run: cmake --build build/consumer-shared
+
+      - name: Run consumer (shared)
+        run: build/consumer-shared/package_consumer
 
   # The Windows variant of the shared SDK: snk_engine.dll goes to bin/, the import library to
   # lib/snk/, and the consumer copies the DLL next to its executable (no rpath on Windows).
   sdk-package-windows:
     name: SDK package (Windows shared)
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: windows-latest
     defaults:
       run:

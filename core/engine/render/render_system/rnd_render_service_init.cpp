@@ -7,6 +7,7 @@
 #include <snk/config/cfg_api.h>
 #include <snk/common/logger/engine_log.h>
 #include <string>
+#include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/render/texture/rnd_texture_desc.h>

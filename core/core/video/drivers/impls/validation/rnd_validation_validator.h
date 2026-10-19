@@ -50,9 +50,10 @@ namespace rnd::driver::validation
 		dynamic_offset_alignment,
 		draw_missing_bind_group,
 		budget_bind_groups,
+		binding_offset_alignment,
 	};
 
-	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::budget_bind_groups) + 1;
+	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::binding_offset_alignment) + 1;
 
 	SNK_API const char* rule_name(rule r);
 

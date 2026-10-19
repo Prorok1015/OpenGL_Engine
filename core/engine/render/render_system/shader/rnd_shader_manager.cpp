@@ -1,4 +1,4 @@
-#include <snk/render/shader/rnd_shader_manager.h>
+#include "rnd_shader_manager.h"
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 
@@ -10,6 +10,7 @@ rnd::ShaderManager::ShaderManager(driver::driver_interface* ptr, res::resource_s
 	m_layouts.frame = drv->create_bind_group_layout(frame_layout_desc());
 	m_layouts.composition = drv->create_bind_group_layout(composition_layout_desc());
 	m_layouts.sky = drv->create_bind_group_layout(sky_layout_desc());
+	m_layouts.material = drv->create_bind_group_layout(material_layout_desc());
 	m_layouts.object = drv->create_bind_group_layout(object_layout_desc());
 
 	driver::buffer_desc matrices;

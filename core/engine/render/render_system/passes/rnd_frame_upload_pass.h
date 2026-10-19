@@ -7,7 +7,7 @@ namespace rnd {
 // the GPU in one upload each, so a draw only binds its element.
 class SNK_API frame_upload_pass : public render_pass_interface {
 public:
-  virtual void execute(frame_context &context,
+  virtual void execute(render_context &context,
                        driver::driver_interface &drv) override;
 };
 } // namespace rnd

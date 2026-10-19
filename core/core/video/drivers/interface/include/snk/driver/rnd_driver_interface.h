@@ -59,6 +59,9 @@ namespace rnd::driver
 		// Alignment the API demands of the offset of a uniform buffer range: dynamic offsets and the stride of
 		// per-draw data have to be multiples of it.
 		virtual std::size_t uniform_offset_alignment() const = 0;
+		// The same for the offset of a storage buffer range. Every `offset` of a bind group entry is a multiple of
+		// the alignment of its buffer type.
+		virtual std::size_t storage_offset_alignment() const = 0;
 
 		// GPU buffers by handle (uniform and storage buffers; vertex and index data still go through create_buffer()).
 		virtual buffer_handle create_buffer(const buffer_desc& desc) = 0;

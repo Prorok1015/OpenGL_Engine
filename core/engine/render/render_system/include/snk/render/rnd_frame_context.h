@@ -4,23 +4,18 @@
 
 namespace rnd {
 	class texture_manager;
-	class ShaderManager;
-	class geom_manager;
-	class skinning_manager;
-	class per_draw_data;
+	class shader_config_cache;
 	struct material_compiler_interface;
 
+	// What the extract stage works with: the frame's data (the packets) and the few services extraction needs.
+	// The render passes do not get this; they get a render_context, which has none of these services.
 	struct frame_context {
 		ds::app_data_storage data;
 
 		// Borrowed, non-owning; valid for one frame only. Injected by render_system::begin_frame
-		// before the extract/render stages run (EPIC-49 US-49-6) — replaces rnd::get_system() in
-		// the scene extractor and the render passes.
-		texture_manager*  textures = nullptr;
-		ShaderManager*    shaders  = nullptr;
-		geom_manager*     geometry = nullptr;
-		skinning_manager* skinning = nullptr; // nullable (optional subsystem)
-		per_draw_data*    draw_data = nullptr;
+		// before the extract stage runs.
+		texture_manager*     textures = nullptr;
+		shader_config_cache* variants = nullptr;
 
 		// Render-side material compiler (EPIC-49 US-49-5): the scene extractor turns POD
 		// scn::material_desc into rnd::shader_config through this instead of a scene-side method.
