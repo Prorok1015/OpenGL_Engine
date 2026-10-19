@@ -20,6 +20,13 @@
 #include <snk/resource/res_tag.h>
 
 namespace rnd {
+	// What a camera clears in its target before its first pass draws: the colour and the depth, only the depth
+	// (an overlay over what a lower priority left in the colour) or nothing.
+	enum class clear_mode : uint8_t { all, depth, none };
+
+	inline constexpr bool clears_color(clear_mode mode) noexcept { return mode == clear_mode::all; }
+	inline constexpr bool clears_depth(clear_mode mode) noexcept { return mode != clear_mode::none; }
+
 	struct camera_render_data_t {
 		glm::ivec4 viewport; // {left, top, width, height}
 		glm::mat4 view_matrix;
@@ -30,7 +37,10 @@ namespace rnd {
 		res::tag depth_target;                          // depth RT
 		res::tag tp_accum_target;                       // WBOIT accumulation
 		res::tag tp_reveal_target;                      // WBOIT revealage/weight
+		// Packets are rendered in ascending priority; the passes run over all packets of one priority before
+		// the next priority starts (render_system::render_frame). The extractor writes the camera's layer.
 		int render_priority = 0;
+		clear_mode clear = clear_mode::all;
 	};
 
 	// Where a camera's main color goes: straight to the window's default framebuffer, or into a texture.
@@ -251,4 +261,29 @@ namespace rnd {
 		uint32_t opaque_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(draw); }
 		uint32_t transparent_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(opaque_draws.size() + draw); }
 	};
+
+	// Puts the packets in render order: ascending render_priority, packets of one priority in the order they were
+	// extracted in (stable).
+	inline void sort_packets_by_priority(std::span<render_packet_t> packets)
+	{
+		std::stable_sort(packets.begin(), packets.end(),
+			[](const render_packet_t& a, const render_packet_t& b) { return a.camera.render_priority < b.camera.render_priority; });
+	}
+
+	// Calls visit(group) for each run of packets with one render_priority, lowest first. `packets` must be sorted
+	// (sort_packets_by_priority).
+	template<class Visit>
+	void for_each_priority_group(std::span<render_packet_t> packets, Visit&& visit)
+	{
+		std::size_t first = 0;
+		while (first < packets.size()) {
+			const int priority = packets[first].camera.render_priority;
+			std::size_t last = first + 1;
+			while (last < packets.size() && packets[last].camera.render_priority == priority) {
+				++last;
+			}
+			visit(packets.subspan(first, last - first));
+			first = last;
+		}
+	}
 }

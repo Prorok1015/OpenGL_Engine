@@ -72,7 +72,7 @@ Controllers communicate via `std::function` callbacks set by `editor_system` dur
 | `scene_hierarchy_panel` | `edt_scene_hierarchy_panel.h` | Prefab node tree + world tabs; callbacks for create/delete/rename/duplicate/reparent |
 | `inspector_panel` | `edt_inspector_panel.h` | Component property editor; custom renderer from `inspector_registry`, else the UI generated from the desc schema (`edt_schema_inspector.h`), else generic JSON |
 | `viewport_panel` | `edt_viewport_panel.h` | 3D view + transform gizmo + orientation gizmo; fires `on_transform_committed` |
-| `game_view_panel` | `edt_game_view_panel.h` | "Game view" (View menu; `editor/show_game_view` opens it at startup): camera picker + image of the picked game camera; only that camera gets a viewport (logic in `edt_game_view_logic.h`, unit-tested) |
+| `game_view_panel` | `edt_game_view_panel.h` | "Game view" (View menu; `editor/show_game_view` opens it at startup): camera picker + image of the picked game camera; the cameras that draw into the picked camera's texture (the worlds of one set share it, `camera_redirector`) get the viewport, all other game cameras are switched off (logic in `edt_game_view_logic.h`, unit-tested) |
 | `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |
 | `asset_browser_panel` | `edt_asset_browser_panel.h` | Directory tree + file grid; drag-drop to viewport |
 | `dockspace` | `edt_dockspace.h` | ImGui DockSpace + default layout; the menu bar is `draw_main_menu` (`edt_main_menu.h`) |

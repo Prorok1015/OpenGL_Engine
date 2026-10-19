@@ -155,6 +155,37 @@ BOOST_AUTO_TEST_CASE(OnlySelectedCameraGetsAViewport)
 	BOOST_TEST((viewport_of(reg, c) == glm::ivec2{ 800, 600 }));
 }
 
+BOOST_AUTO_TEST_CASE(EveryCameraOfThePickedTargetGetsTheViewportAcrossWorlds)
+{
+	entt::registry world_3d;
+	entt::registry overlay;
+	entt::registry play_world;
+	const auto cam_3d = add_game_camera(world_3d, "Game Camera");
+	const auto cam_overlay = add_game_camera(overlay, "Overlay Camera");
+	const auto other_set = add_game_camera(play_world, "Other");
+	// the two worlds of one set share a texture; the camera of another set belongs to another picture
+	edt::camera_redirector redirector;
+	redirector.begin_frame();
+	redirector.redirect(world_3d, "level");
+	redirector.redirect(overlay, "level");
+	redirector.redirect(play_world, "play");
+	redirector.end_frame({});
+
+	const res::tag picked = world_3d.get<scn::camera_component>(cam_3d).color_targets[0];
+	for (entt::registry* reg : { &world_3d, &overlay, &play_world }) {
+		edt::game_view::apply_target_viewports(*reg, picked, { 800, 450 });
+	}
+	BOOST_TEST((viewport_of(world_3d, cam_3d) == glm::ivec2{ 800, 450 }));
+	BOOST_TEST((viewport_of(overlay, cam_overlay) == glm::ivec2{ 800, 450 }));
+	BOOST_TEST((viewport_of(play_world, other_set) == glm::ivec2{ 0, 0 }));
+
+	// no target (panel closed) or no usable size: everything is off again
+	edt::game_view::apply_target_viewports(world_3d, res::tag{}, { 800, 450 });
+	edt::game_view::apply_target_viewports(overlay, picked, { 0, 450 });
+	BOOST_TEST((viewport_of(world_3d, cam_3d) == glm::ivec2{ 0, 0 }));
+	BOOST_TEST((viewport_of(overlay, cam_overlay) == glm::ivec2{ 0, 0 }));
+}
+
 BOOST_AUTO_TEST_CASE(ClosingThePanelTurnsEveryGameCameraOff)
 {
 	entt::registry reg;

@@ -3,6 +3,7 @@
 #include <vector>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <snk/resource/res_tag.h>
 
 // GL- and ImGui-free part of the Game view: which game cameras exist, which one is picked, and the
 // rule that only the picked camera gets a viewport (the others keep a zero viewport and are skipped
@@ -39,6 +40,11 @@ namespace edt::game_view
 	// `selected` gets `size` as viewport; every other game camera is set back to a zero viewport.
 	// A null `selected` or a non-positive size turns all game cameras off.
 	void apply_viewports(entt::registry& reg, entt::entity selected, glm::ivec2 size);
+
+	// The cameras that draw into `target` (the game cameras of one set share a texture, see camera_redirector) get
+	// `size` as viewport, every other game camera of `reg` is set back to a zero viewport. An invalid `target` or a
+	// non-positive size turns all game cameras off. Call it for the registry of every world.
+	void apply_target_viewports(entt::registry& reg, const res::tag& target, glm::ivec2 size);
 
 	// Largest size with the aspect of `content` that fits into `avail` (zero when either is empty).
 	glm::vec2 fit_letterbox(glm::vec2 avail, glm::vec2 content);

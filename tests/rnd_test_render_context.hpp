@@ -7,6 +7,8 @@
 #include <snk/render/rnd_render_context.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <memory_resource>
+#include <optional>
+#include <span>
 
 namespace test_util {
 
@@ -21,8 +23,16 @@ public:
 	void use_packets(std::pmr::vector<rnd::render_packet_t>* packets) { m_packets = packets; }
 	void use_skins(const rnd::skinning_manager* skins) { m_skins = skins; }
 
+	// From now on the passes see only `group` (one render priority, as render_system::render_frame hands them out);
+	// use_all_packets() gives back what use_packets set.
+	void use_group(std::span<rnd::render_packet_t> group) { m_group = group; }
+	void use_all_packets() { m_group.reset(); }
+
 	std::span<rnd::render_packet_t> packets() override
 	{
+		if (m_group) {
+			return *m_group;
+		}
 		return m_packets ? std::span<rnd::render_packet_t>{ *m_packets } : std::span<rnd::render_packet_t>{};
 	}
 
@@ -64,6 +74,7 @@ private:
 	rnd::per_draw_data* m_draw_data;
 	rnd::material_groups* m_materials;
 	std::pmr::vector<rnd::render_packet_t>* m_packets = nullptr;
+	std::optional<std::span<rnd::render_packet_t>> m_group;
 	const rnd::skinning_manager* m_skins = nullptr;
 	rnd::shader_config_cache m_variants;
 	rnd::set_layouts m_layouts;

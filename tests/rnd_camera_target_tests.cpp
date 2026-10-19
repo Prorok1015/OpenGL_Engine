@@ -76,7 +76,7 @@ BOOST_AUTO_TEST_CASE(EditorRedirectsBackbufferCamerasToTextures) {
 	BOOST_TEST(redirector.tracked_count() == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(RedirectedTargetsDifferBetweenCamerasAndWorlds) {
+BOOST_AUTO_TEST_CASE(RedirectedTargetsAreSharedWithinAScopeAndDifferBetweenScopes) {
 	entt::registry a;
 	entt::registry b;
 	const auto a1 = a.create();
@@ -87,16 +87,60 @@ BOOST_AUTO_TEST_CASE(RedirectedTargetsDifferBetweenCamerasAndWorlds) {
 	b.emplace<scn::camera_component>(b1);
 	edt::camera_redirector redirector;
 	redirector.begin_frame();
-	redirector.redirect(a, "w0");
-	redirector.redirect(b, "w1");
+	redirector.redirect(a, "set0");
+	redirector.redirect(b, "set1");
 	redirector.end_frame({});
 
 	const auto& t_a1 = a.get<scn::camera_component>(a1).color_targets[0];
 	const auto& t_a2 = a.get<scn::camera_component>(a2).color_targets[0];
 	const auto& t_b1 = b.get<scn::camera_component>(b1).color_targets[0];
-	BOOST_TEST((t_a1 != t_a2));
-	BOOST_TEST((t_a1 != t_b1));
-	BOOST_TEST(redirector.tracked_count() == 3u);
+	BOOST_TEST((t_a1 == t_a2)); // layers of one picture
+	BOOST_TEST((t_a1 != t_b1)); // another set is another picture
+	BOOST_TEST(redirector.tracked_count() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(TwoWorldsOfOneScopeDrawIntoOneTarget) {
+	entt::registry world_3d;
+	entt::registry overlay;
+	const auto cam_3d = world_3d.create();
+	const auto cam_overlay = overlay.create();
+	world_3d.emplace<scn::camera_component>(cam_3d);
+	auto& overlay_cam = overlay.emplace<scn::camera_component>(cam_overlay);
+	overlay_cam.layer = 1;
+	overlay_cam.clear = scn::camera_clear::depth;
+
+	edt::camera_redirector redirector;
+	redirector.begin_frame();
+	BOOST_TEST(redirector.redirect(world_3d, "level") == 1u);
+	BOOST_TEST(redirector.redirect(overlay, "level") == 1u);
+	redirector.end_frame({});
+
+	const auto& t_3d = world_3d.get<scn::camera_component>(cam_3d).color_targets;
+	const auto& t_overlay = overlay.get<scn::camera_component>(cam_overlay).color_targets;
+	BOOST_REQUIRE(!t_3d.empty() && !t_overlay.empty());
+	BOOST_TEST((t_3d[0] == t_overlay[0]));
+	BOOST_TEST(edt::is_game_camera_target(t_3d[0]));
+	BOOST_TEST(redirector.tracked_count() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(CamerasWithDifferentViewportsGetTheirOwnTargets) {
+	entt::registry reg;
+	const auto full = reg.create();
+	const auto corner = reg.create();
+	const auto corner2 = reg.create();
+	reg.emplace<scn::camera_component>(full);
+	reg.emplace<scn::camera_component>(corner).m_viewport = scn::viewport{ glm::ivec4{ 0, 0, 320, 180 } };
+	reg.emplace<scn::camera_component>(corner2).m_viewport = scn::viewport{ glm::ivec4{ 0, 0, 320, 180 } };
+
+	edt::camera_redirector redirector;
+	redirector.begin_frame();
+	redirector.redirect(reg, "level");
+	redirector.end_frame({});
+
+	const auto target_of = [&](entt::entity e) { return reg.get<scn::camera_component>(e).color_targets[0]; };
+	BOOST_TEST((target_of(full) != target_of(corner)));
+	BOOST_TEST((target_of(corner) == target_of(corner2)));
+	BOOST_TEST(redirector.tracked_count() == 2u);
 }
 
 BOOST_AUTO_TEST_CASE(TargetsOfDestroyedCamerasAreReleasedAndCountStaysBounded) {
@@ -132,7 +176,8 @@ BOOST_AUTO_TEST_CASE(OnlyTheTargetOfADestroyedCameraIsReleased) {
 	const auto keep = reg.create();
 	const auto drop = reg.create();
 	reg.emplace<scn::camera_component>(keep);
-	reg.emplace<scn::camera_component>(drop);
+	// a viewport of its own gives `drop` a target of its own; the cameras of one viewport share theirs
+	reg.emplace<scn::camera_component>(drop).m_viewport = scn::viewport{ glm::ivec4{ 0, 0, 64, 64 } };
 	edt::camera_redirector redirector;
 	std::vector<res::tag> released;
 	const auto release = [&released](const res::tag& tag) { released.push_back(tag); };

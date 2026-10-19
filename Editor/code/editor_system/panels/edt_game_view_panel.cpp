@@ -16,24 +16,25 @@ namespace edt
 		m_open = false;
 	}
 
-	void game_view_panel::turn_off_cameras_except_in(const entt::registry* keep)
+	void game_view_panel::apply_viewports_to_all(const res::tag& target, glm::ivec2 size)
 	{
-		if (!m_for_each_registry) return;
-		m_for_each_registry([keep](entt::registry& reg) {
-			if (&reg != keep) game_view::apply_viewports(reg, entt::null, {});
-		});
+		if (m_for_each_registry) {
+			m_for_each_registry([&](entt::registry& reg) { game_view::apply_target_viewports(reg, target, size); });
+		} else if (m_get_registry) {
+			if (entt::registry* reg = m_get_registry()) game_view::apply_target_viewports(*reg, target, size);
+		}
 	}
 
 	void game_view_panel::on_hidden()
 	{
-		turn_off_cameras_except_in(nullptr);
+		apply_viewports_to_all({}, {});
 	}
 
 	void game_view_panel::on_render()
 	{
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
-		turn_off_cameras_except_in(reg);
 		if (!reg) {
+			apply_viewports_to_all({}, {});
 			m_selection.refresh(nullptr, {});
 			ImGui::TextDisabled("(no active world)");
 			return;
@@ -41,6 +42,7 @@ namespace edt
 
 		m_selection.refresh(reg, game_view::collect_cameras(*reg));
 		if (m_selection.cameras().empty()) {
+			apply_viewports_to_all({}, {});
 			ImGui::TextDisabled("(no game camera in this world)");
 			return;
 		}
@@ -63,9 +65,9 @@ namespace edt
 		const ImVec2 avail = ImGui::GetContentRegionAvail();
 		const entt::entity picked = m_selection.selected();
 		const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
-		game_view::apply_viewports(*reg, picked, edt::to_framebuffer_size({ avail.x, avail.y }, { fb_scale.x, fb_scale.y }));
-
 		const auto& cam = reg->get<scn::camera_component>(picked);
+		apply_viewports_to_all(cam.color_targets[0], edt::to_framebuffer_size({ avail.x, avail.y }, { fb_scale.x, fb_scale.y }));
+
 		auto* texture = m_rnd.get_texture_manager().find(cam.color_targets[0]);
 		if (!texture || cam.m_viewport.size.x <= 0 || cam.m_viewport.size.y <= 0) {
 			ImGui::TextDisabled("(waiting for the camera to render)");

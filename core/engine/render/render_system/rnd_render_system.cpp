@@ -10,6 +10,8 @@
 #include "texture/rnd_texture_cubemap_desc.h"
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
+#include <optional>
+#include <span>
 
 namespace {
 	// The renderer as the passes of one frame see it: every call goes to the manager that owns the thing, the
@@ -24,11 +26,18 @@ namespace {
 
 		std::span<rnd::render_packet_t> packets() override
 		{
+			if (m_group) {
+				return *m_group;
+			}
 			if (!m_frame.data.has_value<std::pmr::vector<rnd::render_packet_t>>()) {
 				return {};
 			}
 			return m_frame.data.require<std::pmr::vector<rnd::render_packet_t>>();
 		}
+
+		// From now on the passes see only `group`; use_all_packets() gives the whole frame back.
+		void use_group(std::span<rnd::render_packet_t> group) { m_group = group; }
+		void use_all_packets() { m_group.reset(); }
 
 		rnd::driver::texture_interface* find_texture(const res::tag& tag) const override { return m_textures.find(tag); }
 
@@ -54,6 +63,7 @@ namespace {
 		void bind_object(std::uint32_t index, const res::tag& skin) override { m_draw_data.bind_object(index, skin, m_skins); }
 
 	private:
+		std::optional<std::span<rnd::render_packet_t>> m_group;
 		rnd::frame_context& m_frame;
 		rnd::texture_manager& m_textures;
 		rnd::ShaderManager& m_shaders;
@@ -208,9 +218,26 @@ void rnd::render_system::render_frame(frame_context& context) const
 	gpu.begin_frame(ds::profiler_current_frame());
 
 	frame_render_context pass_context(context, *m_textures, *m_shaders, *m_geometry, *m_draw_data, *m_materials, m_skinning_manager);
+
+	// Render layers (W4): the passes that work on the whole frame go first, then the packets are drawn one group
+	// of equal render_priority after the other, lowest first, each group through all the remaining passes. So the
+	// skybox and the transparent draws of a lower layer are done before a higher layer (an overlay) starts.
+	const auto all_packets = pass_context.packets();
+	rnd::sort_packets_by_priority(all_packets);
 	for (auto& pass : render_passes) {
-		pass->execute(pass_context, *drv);
+		if (pass->once_per_frame()) {
+			pass->execute(pass_context, *drv);
+		}
 	}
+	rnd::for_each_priority_group(all_packets, [&](std::span<rnd::render_packet_t> group) {
+		pass_context.use_group(group);
+		for (auto& pass : render_passes) {
+			if (!pass->once_per_frame()) {
+				pass->execute(pass_context, *drv);
+			}
+		}
+	});
+	pass_context.use_all_packets();
 
 	gpu.end_frame();
 }

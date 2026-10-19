@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_hints.hpp>
+#include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 
@@ -8,7 +9,13 @@
 #include <glm/glm.hpp>
 #include <snk/common/snk_api.h>
 
+// Declared in <snk/desc/desc_describe.h> (heavy); a specialization below only needs the name.
+namespace desc { template<typename E> struct enum_names; }
+
 namespace scn {
+	BOOST_DESCRIBE_ENUM(camera_clear, all, depth, none)
+	BOOST_DESCRIBE_ENUM(camera_projection, perspective, ortho)
+
 	class SNK_API camera_desc : public desc::desc_base {
 	public:
 		static constexpr std::string_view __type = "camera_desc";
@@ -34,6 +41,10 @@ namespace scn {
 		res::tag depth_target() const { return m_depth_target; }
 		res::tag tp_accum_target() const { return m_tp_accum_target; }
 		res::tag tp_reveal_target() const { return m_tp_reveal_target; }
+		int layer() const { return m_layer; }
+		camera_clear clear() const { return m_clear; }
+		camera_projection projection() const { return m_projection; }
+		float ortho_size() const { return m_ortho_size; }
 
 	private:
 		float m_fov = 90.f;
@@ -45,9 +56,14 @@ namespace scn {
 		res::tag m_depth_target;
 		res::tag m_tp_accum_target;
 		res::tag m_tp_reveal_target;
+		int m_layer = 0;
+		camera_clear m_clear = camera_clear::all;
+		camera_projection m_projection = camera_projection::perspective;
+		float m_ortho_size = default_camera_ortho_size;
 
 		BOOST_DESCRIBE_CLASS(camera_desc, (), (), (), (m_fov, m_near_distance, m_far_distance, m_rotation, m_position,
-			m_color_targets, m_depth_target, m_tp_accum_target, m_tp_reveal_target))
+			m_color_targets, m_depth_target, m_tp_accum_target, m_tp_reveal_target,
+			m_layer, m_clear, m_projection, m_ortho_size))
 	};
 
 	void assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name);
@@ -65,5 +81,22 @@ namespace desc {
 		f("m_color_targets").key("/color_targets").alias("/texture").write_if_valid().hidden(),
 		f("m_depth_target").key("/depth_target").write_if_valid().hidden(),
 		f("m_tp_accum_target").key("/tp_accum_target").write_if_valid().hidden(),
-		f("m_tp_reveal_target").key("/tp_reveal_target").write_if_valid().hidden());
+		f("m_tp_reveal_target").key("/tp_reveal_target").write_if_valid().hidden(),
+		f("m_layer").key("/layer").range(-16, 16, 1).write_if_not_default().tooltip("Render layer: lower layers draw first, a higher one lands on top"),
+		f("m_clear").key("/clear").write_if_not_default().tooltip("What the camera clears first: all (colour and depth), depth (keeps the colour of lower layers) or none"),
+		f("m_projection").key("/projection").write_if_not_default(),
+		f("m_ortho_size").key("/ortho_size").range(0.01, 100000, 0.1).write_if_not_default().tooltip("Orthographic projection: height of the visible volume in world units"));
+
+	// Written as lower-case words in the desc ("clear": "depth", "projection": "ortho").
+	template<>
+	struct enum_names<scn::camera_clear> {
+		static constexpr std::string_view name = "camera_clear";
+		static constexpr scn::camera_clear fallback = scn::camera_clear::all;
+	};
+
+	template<>
+	struct enum_names<scn::camera_projection> {
+		static constexpr std::string_view name = "camera_projection";
+		static constexpr scn::camera_projection fallback = scn::camera_projection::perspective;
+	};
 }

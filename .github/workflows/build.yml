@@ -396,6 +396,16 @@ jobs:
           tools/headless/check_smoke.sh headless_out/game_view/final.png headless_out/game_view/editor.log \
             200x200+940+260 0.03 tools/headless/reference/game_view.png
 
+      # Two worlds in one level (WORLD_MESSAGING W4, #272): "3d_scene" on render layer 0 and "overlay" on layer 1 (an
+      # orthographic camera that clears only the depth). The Game view shows their shared texture: the overlay
+      # robot must sit over the 3D scene, which must not be wiped.
+      - name: Smoke run (two worlds, Game view)
+        run: |
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/two_worlds/final.png \
+            -- --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
+          tools/headless/check_smoke.sh headless_out/two_worlds/final.png headless_out/two_worlds/editor.log \
+            200x200+940+260 0.03
+
       - name: Upload screenshots, diff images and logs
         if: always()
         uses: actions/upload-artifact@v4
