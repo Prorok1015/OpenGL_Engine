@@ -14,6 +14,7 @@
 #include <functional>
 #include <iterator>
 #include <set>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -90,6 +91,17 @@ struct material_set_fixture : test_util::null_engine_fixture
 		return result;
 	}
 
+	// What a material's group holds, as text: the params bytes and the three maps (null stands for a placeholder).
+	static std::string content_of(const rnd::compiled_material& material)
+	{
+		std::string key(reinterpret_cast<const char*>(material.runtime.material_params.data()), material.runtime.material_params.size());
+		for (std::size_t slot = 0; slot < 3; ++slot) {
+			const rnd::driver::texture_interface* texture = slot < material.runtime.samplers.size() ? material.runtime.samplers[slot] : nullptr;
+			key += '|' + std::to_string(texture ? texture->serial() : 0);
+		}
+		return key;
+	}
+
 	rnd::texture_manager& textures() { return storage.require<rnd::render_system>().get_texture_manager(); }
 };
 
@@ -128,8 +140,9 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
 		BOOST_REQUIRE(!materials.empty());
 		const auto groups = material_groups_bound(log_begin);
 		// One group per distinct contents, whatever the number of materials, draws, passes and cameras that use it.
-		BOOST_TEST(!groups.empty());
-		BOOST_TEST(groups.size() <= materials.size());
+		std::set<std::string> contents;
+		for (const auto* material : materials) contents.insert(content_of(*material));
+		BOOST_TEST(groups.size() == contents.size());
 
 		std::size_t matched = 0;
 		for (std::size_t i = log_begin; i < driver()->bind_log().size(); ++i) {
@@ -213,6 +226,7 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 	entt::registry* registry = nullptr;
 	entt::entity entity = entt::null;
 	std::uint64_t serial_before = 0;
+	bool content_shared = false;
 	std::vector<std::set<std::uint64_t>> bound;
 	std::vector<std::size_t> created;
 	std::vector<std::size_t> buffers;
@@ -243,7 +257,11 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 						if (cache.material && drawn.contains(cache.material.get())) {
 							registry = &w.state();
 							entity = ent;
-							serial_before = cache.material->serial;
+							const rnd::compiled_material* self = cache.material.get();
+							serial_before = self->serial;
+							content_shared = std::ranges::any_of(drawn, [&](const rnd::compiled_material* other) {
+								return other != self && content_of(*other) == content_of(*self);
+							});
 							return;
 						}
 					}
@@ -263,7 +281,8 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 	// Frame 2 built the changed material again: one group and one params buffer, nothing else.
 	BOOST_TEST(created[2] == created[1] + 1);
 	BOOST_TEST(buffers[2] == buffers[1] + 1);
-	BOOST_TEST(bound[2].size() >= bound[1].size());
+	// The old contents are still bound when other entities have them, otherwise the new group replaces them.
+	BOOST_TEST(bound[2].size() == bound[1].size() + (content_shared ? 1u : 0u));
 	std::set<std::uint64_t> replaced;
 	std::ranges::set_difference(bound[2], bound[1], std::inserter(replaced, replaced.end()));
 	BOOST_TEST(replaced.size() == 1u);
@@ -278,7 +297,8 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 	BOOST_TEST(created[4] == created[3]);
 	BOOST_TEST(buffers[4] == buffers[3]);
 	// The group of the old contents stays for its grace period at most (others may still use it).
-	BOOST_TEST(live[5] <= live[1] + 1);
+	// The new group, and the old one (used by others, or kept for its grace period).
+	BOOST_TEST(live[5] == live[1] + 1);
 	expect_no_violations();
 }
 
@@ -337,7 +357,7 @@ BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture)
 	// The materials were built again (the texture manager's generation moved) and so were their groups, the last
 	// ones with the texture that was loaded after the removal.
 	BOOST_TEST(groups_with_the_texture > 0u);
-	BOOST_TEST(created_after >= created_before);
+	BOOST_TEST(created_after > created_before);
 	// The groups made while the texture was loading are gone after their grace period.
 	BOOST_TEST(live_after == live_before);
 	// No group of a destroyed texture was ever bound, no object used after its destruction.
