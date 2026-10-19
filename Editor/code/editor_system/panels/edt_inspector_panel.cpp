@@ -1,5 +1,5 @@
 #include "edt_inspector_panel.h"
-#include "edt_component_ui_registry.h"
+#include <snk/editor/edt_inspector_registry.h>
 #include <snk/desc/desc_system.h>
 #include "edt_override_edit.h"
 #include <imgui.h>
@@ -62,9 +62,9 @@ namespace edt
 		m_on_node_changed = std::move(cb);
 	}
 
-	void inspector_panel::set_component_ui_registry(component_ui_registry* registry)
+	void inspector_panel::set_inspector_registry(inspector_registry* registry)
 	{
-		m_ui_registry = registry;
+		m_inspectors = registry;
 	}
 
 	void inspector_panel::set_desc_system(desc::desc_system* desc_system)
@@ -138,8 +138,8 @@ namespace edt
 				if (!comp.overrides.empty()) {
 					// Has overrides — editable path
 					bool handled = false;
-					if (m_ui_registry && !effective_type.empty()) {
-						auto result = m_ui_registry->invoke(effective_type, comp);
+					if (m_inspectors && !effective_type.empty()) {
+						auto result = m_inspectors->invoke(effective_type, comp);
 						if (result.has_value()) {
 							if (*result && !m_readonly) {
 								changed = true;
@@ -154,11 +154,11 @@ namespace edt
 					// No overrides yet: let a custom renderer show the effective values (parent data or desc
 					// defaults) on a scratch copy; the first edit materialises it as the node's overrides.
 					std::optional<bool> result;
-					if (m_ui_registry && !effective_type.empty()) {
+					if (m_inspectors && !effective_type.empty()) {
 						auto scratch = comp;
 						if (auto it = m_parent_cache.find(key); it != m_parent_cache.end())
 							scratch.overrides = it->second;
-						result = m_ui_registry->invoke(effective_type, scratch);
+						result = m_inspectors->invoke(effective_type, scratch);
 						if (result.has_value() && *result && !m_readonly) {
 							comp.overrides = std::move(scratch.overrides);
 							changed = true;
@@ -251,8 +251,8 @@ namespace edt
 
 			bool edited = false;
 			bool handled = false;
-			if (m_ui_registry && !effective_type.empty()) {
-				if (auto result = m_ui_registry->invoke(effective_type, scratch); result.has_value()) {
+			if (m_inspectors && !effective_type.empty()) {
+				if (auto result = m_inspectors->invoke(effective_type, scratch); result.has_value()) {
 					edited = *result;
 					handled = true;
 				}
