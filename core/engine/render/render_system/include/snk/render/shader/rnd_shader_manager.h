@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <snk/resource/res_tag.h>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
+#include <snk/render/shader/rnd_shader_config_cache.h>
 
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_uniform_buffer_interface.h>
@@ -89,26 +90,21 @@ namespace rnd
 		ShaderManager& operator= (ShaderManager&&) = delete;
 
 		void clear_cache() const {
-			shader_cache.clear();
+			m_programs.clear();
 		}
+
+		shader_config_cache& variants() const { return m_variants; }
 
 		void use(const shader_config& desc) const
 		{
-			auto it = shader_cache.find(desc);
-			rnd::driver::shader_interface* shader = nullptr;
-			if (it == shader_cache.end()) {
-				auto new_shader = drv->create_shader(desc.load(m_res_sys));
-				if (new_shader) {
-					shader = new_shader.get();
-					shader_cache[desc] = std::move(new_shader);
-				}
-			} else {
-				shader = it->second.get();
-			}
+			use(m_variants.intern(desc.cdata), desc.rdata, nullptr);
+		}
 
-			if (shader) {
+		void use(variant_id variant, const shader_config::runtime_data& params, const glm::mat4* world) const
+		{
+			if (auto* shader = require_program(variant)) {
 				shader->use();
-				rnd::configure_render_pass(desc, shader);
+				rnd::configure_render_pass(params, world, shader);
 			}
 		}
 
@@ -119,6 +115,20 @@ namespace rnd
 		res::resource_system& m_res_sys;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> _matrices;
 		std::shared_ptr<rnd::driver::uniform_buffer_interface> sun_light;
-		mutable std::unordered_map<shader_config, std::unique_ptr<rnd::driver::shader_interface>> shader_cache;
+		rnd::driver::shader_interface* require_program(variant_id variant) const
+		{
+			if (variant.value >= m_programs.size()) {
+				m_programs.resize(variant.value + 1);
+			}
+
+			auto& slot = m_programs[variant.value];
+			if (!slot) {
+				slot = drv->create_shader(shader_config::load(m_variants.resolve(variant), m_res_sys));
+			}
+			return slot.get();
+		}
+
+		mutable shader_config_cache m_variants;
+		mutable std::vector<std::unique_ptr<rnd::driver::shader_interface>> m_programs;
 	};
 }

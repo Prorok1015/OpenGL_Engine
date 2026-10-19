@@ -41,6 +41,10 @@ namespace rnd
 
 		void clear_cache();
 
+		// Bumped whenever a texture may have been destroyed, so anything that kept texture pointers
+		// across frames knows to re-resolve them.
+		std::uint64_t generation() const noexcept { return m_generation; }
+
 		void register_loader(const std::string& txm_type, loader_fn fn)
 		{
 			loaders[txm_type] = std::move(fn);
@@ -57,6 +61,7 @@ namespace rnd
 		desc::desc_system& desc_system;
 		res::resource_system& m_res_sys;
 		driver::driver_interface* drv = nullptr;
+		std::uint64_t m_generation = 0;
 	};
 
 }

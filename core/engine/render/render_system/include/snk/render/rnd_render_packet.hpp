@@ -5,6 +5,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
+#include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/common/mem_allocator.h>
@@ -91,7 +92,8 @@ namespace rnd {
 	struct draw_call_t {
 		uint64_t     sort_key      = 0;
 		res::tag     geometry_tag;
-		shader_config material;
+		variant_id   variant;
+		const compiled_material* material = nullptr;
 		uint32_t     indices_count = 0;
 		uint32_t     vx_begin      = 0;
 		uint32_t     ind_begin     = 0;
@@ -111,12 +113,18 @@ namespace rnd {
 		std::pmr::vector<debug_line_t> lines{ds::frame_allocator()};
 	};
 
+	struct skybox_draw_t {
+		variant_id variant;
+		const compiled_material* material = nullptr;
+		std::optional<glm::mat4> world;
+	};
+
 	struct render_packet_t {
 		camera_render_data_t     camera;
 		scene_lights_t           lights;
 		std::pmr::vector<draw_call_t> opaque_draws{ds::frame_allocator()};
 		std::pmr::vector<draw_call_t> transparent_draws{ds::frame_allocator()};
-		std::optional<shader_config> skybox_material;
+		std::optional<skybox_draw_t> skybox_material;
 		debug_draw_data_t debug_draws;
 	};
 }

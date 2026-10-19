@@ -73,6 +73,10 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
         .set_vertex_shader(res::tag::make("shaders/z_prepass.vert"))
         .set_fragment_shader(res::tag::make("shaders/z_prepass.frag"));
 
+    auto& variants = context.shaders->variants();
+    std::pmr::vector<rnd::variant_id> z_variants(ds::frame_allocator());
+    z_variants.resize(variants.size());
+
     for (const auto& dc : packet.opaque_draws) {
       auto *va = geom_manager.require_geometry(dc.geometry_tag);
       if (!va)
@@ -84,10 +88,11 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       // Wait! we need to set the material per object if we are to use their
       // push constants / uniforms. However, z_prepass just needs the transform.
 
-      // Let's use dc.material with `z_prepass` overriden program!
-      rnd::shader_config object_shader = dc.material;
-      object_shader.cdata.program = z_prepass_program;
-      rnd::configure_pass(context, object_shader);
+      rnd::variant_id& variant = z_variants[dc.variant.value];
+      if (!variant.is_valid()) {
+        variant = variants.with_program(dc.variant, z_prepass_program);
+      }
+      rnd::configure_pass(context, variant, *dc.material, &dc.transform);
 
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
           if (auto* skm = context.skinning) {

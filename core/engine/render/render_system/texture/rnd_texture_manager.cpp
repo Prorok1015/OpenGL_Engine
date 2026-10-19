@@ -78,10 +78,12 @@ rnd::driver::texture_interface* rnd::texture_manager::find(const res::tag& tag) 
 void rnd::texture_manager::remove(const res::tag& tag)
 {
 	cache.erase(tag);
+	++m_generation;
 }
 
 void rnd::texture_manager::clear_cache()
-{ 
+{
+	++m_generation;
 	std::vector<res::tag> list_to_delete;
 	for (auto& [key, _] : cache)
 	{

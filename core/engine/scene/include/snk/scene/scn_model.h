@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/common.h>
+#include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/ecs/ecs_entity.h>
 #include <snk/scene/scn_primitives.h>
@@ -22,6 +23,14 @@ namespace scn {
 
     struct material_desc_component {
         res::res_handle<scn::material_desc> mlt_desc;
+        // Set by whoever edits the material; the render extractor recompiles it and clears the flag.
+        bool dirty = true;
+    };
+
+    // Render extractor's per-entity cache of the compiled material; rebuilt when the entity's
+    // material_desc_component is dirty or its inputs (desc, skinning, textures) changed.
+    struct compiled_material_component {
+        std::shared_ptr<rnd::compiled_material> material;
     };
 
     struct name_component {

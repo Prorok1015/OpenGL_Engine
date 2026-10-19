@@ -93,7 +93,7 @@ void opaque_pass::execute(frame_context &context,
       if (!va)
         continue;
 
-      rnd::configure_pass(context, dc.material);
+      rnd::configure_pass(context, dc.variant, *dc.material, &dc.transform);
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
           if (auto* skm = context.skinning) {
               skm->bind_skin(&drv, dc.skinning_tag, *dc.bone_matrices);

@@ -12,13 +12,38 @@
 #include <snk/common/eng_profiler.h>
 #include <snk/common/mem_allocator.h>
 
+namespace {
+    // Returns the entity's compiled material, rebuilding it only when the material was marked dirty or one
+    // of its inputs changed. The pointer stays valid for the frame: a replaced material is parked in `retired`.
+    const rnd::compiled_material* acquire_material(
+        entt::registry& reg, entt::entity ent, scn::material_desc_component& mat,
+        const std::shared_ptr<scn::material_desc>& desc, bool skinned, rnd::frame_context& context,
+        std::vector<std::shared_ptr<rnd::compiled_material>>& retired)
+    {
+        auto& cache = reg.get_or_emplace<scn::compiled_material_component>(ent);
+        const auto generation = context.textures->generation();
+        if (mat.dirty || !cache.material || !cache.material->is_current(desc.get(), skinned, generation)) {
+            if (cache.material) {
+                retired.push_back(std::move(cache.material));
+            }
+            cache.material = rnd::build_compiled_material(
+                *context.material_compiler, context.shaders->variants(), *context.textures, desc, skinned);
+            mat.dirty = false;
+        }
+        return cache.material.get();
+    }
+}
+
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
     // Managers are injected into frame_context by render_system::begin_frame, which the `extract`
     // stage runs before this extractor. Catch a missing/mis-ordered injection early.
     ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
     ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
+    ASSERT_MSG(context.shaders, "frame_context shader manager not injected");
     auto& level = m_level_manager.get_level();
+    m_retired_materials.clear();
+    auto& variants = context.shaders->variants();
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
 
@@ -70,11 +95,12 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.transparent_draws.reserve(mesh_count);
             for (auto&& [m_ent, name, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
-                if (!mat.mlt_desc.is_ready()) {
+                const auto mlt_ptr = mat.mlt_desc.get();
+                if (!mlt_ptr) {
                     continue;
                 }
 
-                auto& mlt = *mat.mlt_desc;
+                auto& mlt = *mlt_ptr;
 
                 rnd::draw_call_t dc;
                 {
@@ -89,7 +115,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 const auto queue = mlt.queue;
 
                 // Resolve skinning before compiling: the compiler bakes USE_ANIMATION from
-                // ctx.has_skinning (was an extractor mutation on the returned shader_cfg).
+                // ctx.has_skinning, which is part of the cached material's validity.
                 bool has_skinning = false;
                 {
                     PROFILE_SCOPE("Extract.Skinning");
@@ -109,36 +135,27 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                     }
                 }
 
-                rnd::shader_config shader_cfg;
+                const rnd::compiled_material* material = nullptr;
                 {
                     PROFILE_SCOPE("Extract.ShaderDesc");
-                    rnd::material_compile_context mctx{ &m_trans.world, context.textures, has_skinning };
-                    shader_cfg = context.material_compiler->compile(mlt, mctx);
+                    material = acquire_material(reg, m_ent, mat, mlt_ptr, has_skinning, context, m_retired_materials);
                 }
+                dc.material = material;
 
                 {
                     PROFILE_SCOPE("Extract.PushDraws");
                     bool needs_opaque = (queue == scn::pass_queue::OPAQUE || queue == scn::pass_queue::MIX);
                     bool needs_transparent = (queue == scn::pass_queue::TRANSPARENT || queue == scn::pass_queue::MIX);
 
-                    if (needs_opaque && needs_transparent) {
+                    if (needs_opaque) {
                         rnd::draw_call_t opaque_dc = dc;
-                        opaque_dc.material = shader_cfg;
-                        opaque_dc.material.cdata.defines.push_back("OPAQUE");
-                        opaque_dc.sort_key = opaque_dc.material.get_hash();
+                        opaque_dc.variant = material->opaque;
+                        opaque_dc.sort_key = variants.key(opaque_dc.variant);
                         packet.opaque_draws.push_back(std::move(opaque_dc));
-
-                        dc.material = std::move(shader_cfg);
-                        dc.sort_key = dc.material.get_hash();
-                        packet.transparent_draws.push_back(std::move(dc));
-                    } else if (needs_opaque) {
-                        dc.material = std::move(shader_cfg);
-                        dc.material.cdata.defines.push_back("OPAQUE");
-                        dc.sort_key = dc.material.get_hash();
-                        packet.opaque_draws.push_back(std::move(dc));
-                    } else if (needs_transparent) {
-                        dc.material = std::move(shader_cfg);
-                        dc.sort_key = dc.material.get_hash();
+                    }
+                    if (needs_transparent) {
+                        dc.variant = material->base;
+                        dc.sort_key = variants.key(dc.variant);
                         packet.transparent_draws.push_back(std::move(dc));
                     }
                 }
@@ -146,15 +163,15 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
             auto skys_view = reg.view<scn::sky_component, scn::material_desc_component, scn::renderable>();
             for (auto [sky_ent, sky, mat] : skys_view.each()) {
-                if (mat.mlt_desc.is_ready()) {
-                    // Skybox: no directional-light/skinning baking; uWorldMeshMatr only if the sky
-                    // entity has a world transform (mirrors old handle.all_of<world_transform>()).
-                    const glm::mat4* sky_world = nullptr;
+                if (const auto sky_desc = mat.mlt_desc.get()) {
+                    // Skybox: no skinning; uWorldMeshMatr only if the sky entity has a world transform.
+                    rnd::skybox_draw_t sky_draw;
                     if (auto* sky_trans = reg.try_get<scn::world_transform>(sky_ent)) {
-                        sky_world = &sky_trans->world;
+                        sky_draw.world = sky_trans->world;
                     }
-                    rnd::material_compile_context mctx{ sky_world, context.textures, false };
-                    packet.skybox_material = context.material_compiler->compile(*mat.mlt_desc, mctx);
+                    sky_draw.material = acquire_material(reg, sky_ent, mat, sky_desc, false, context, m_retired_materials);
+                    sky_draw.variant = sky_draw.material->base;
+                    packet.skybox_material = std::move(sky_draw);
                 }
             }
 
