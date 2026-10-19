@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -139,6 +140,40 @@ BOOST_AUTO_TEST_CASE(ForEachVisitsLiveValuesWithTheirHandles)
 	BOOST_TEST(seen[0].second == 1);
 	BOOST_TEST((seen[1].first == c));
 	BOOST_TEST(seen[1].second == 3);
+}
+
+namespace {
+	// Throws when the value 2 is moved while `armed`.
+	struct throwing_value
+	{
+		static inline bool armed = false;
+		int value = 0;
+		explicit throwing_value(int v) : value(v) {}
+		throwing_value(throwing_value&& other)
+			: value(other.value)
+		{
+			if (armed && other.value == 2) {
+				throw std::runtime_error("move");
+			}
+		}
+	};
+}
+
+BOOST_AUTO_TEST_CASE(InsertThatThrowsLeavesThePoolAsItWas)
+{
+	ds::handle_pool<throwing_value> pool;
+	const auto kept = pool.insert(throwing_value{ 1 });
+
+	throwing_value::armed = true;
+	BOOST_CHECK_THROW(pool.insert(throwing_value{ 2 }), std::runtime_error);
+	throwing_value::armed = false;
+
+	BOOST_TEST(pool.live() == 1u);
+	BOOST_TEST(pool.capacity() == 1u);
+	const auto next = pool.insert(throwing_value{ 3 });
+	BOOST_TEST(next.index == 2u);
+	BOOST_TEST(pool.find(kept)->value == 1);
+	BOOST_TEST(pool.find(next)->value == 3);
 }
 
 namespace {

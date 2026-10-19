@@ -116,7 +116,7 @@ namespace rnd::driver::validation
 		std::unique_ptr<driver_interface> m_inner;
 		std::shared_ptr<validator> m_state;
 		// The wrappers create_texture handed out, by the handles this driver issued (the wrapped driver has its own).
-		std::shared_ptr<texture_pool> m_textures = texture_pool::make();
+		std::shared_ptr<texture_pool> m_textures = texture_pool::create();
 		std::vector<known_pipeline> m_pipelines;
 		std::unordered_map<std::uint64_t, buffer_desc> m_buffers;
 		std::unordered_map<std::uint64_t, bind_group_layout_desc> m_layouts;

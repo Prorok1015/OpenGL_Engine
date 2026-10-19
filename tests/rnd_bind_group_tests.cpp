@@ -812,6 +812,23 @@ BOOST_AUTO_TEST_CASE(ATextureDeletedWhileAGroupHoldsItIsReportedAtBind)
 	BOOST_TEST(inner().calls().bind_group_binds == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(BindGroupTexturesReachTheWrappedDriverTranslated)
+{
+	// The two drivers number their textures from 1: take a slot of the wrapped driver's so the sequences differ.
+	auto occupant = inner().create_texture(texture_of(texture_usage::sampled));
+	auto texture = drv->create_texture(texture_of(texture_usage::sampled));
+	BOOST_REQUIRE((texture->handle() != texture->native()->handle()));
+
+	const auto layout = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0 } }));
+	const auto group = drv->create_bind_group(group_of(layout, { texture_entry(0, texture.get()) }));
+	const bind_group_desc* seen = inner().group_info(group);
+	BOOST_REQUIRE(seen);
+	BOOST_REQUIRE(seen->entries.size() == 1u);
+	BOOST_TEST((seen->entries[0].texture == texture->native()->handle()));
+	BOOST_TEST((seen->entries[0].texture != texture->handle()));
+	BOOST_TEST(state().total() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(PersistentGroupsAreCountedAgainstTheBudgetTransientOnesAreNot)
 {
 	bind_fixture limited(vl::limits{ .max_bind_groups = 2 });

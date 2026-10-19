@@ -162,7 +162,7 @@ namespace rnd::driver::null
 		};
 
 		std::uint64_t m_frame = 0;
-		std::shared_ptr<texture_pool> m_textures = texture_pool::make();
+		std::shared_ptr<texture_pool> m_textures = texture_pool::create();
 		bind_group_layout_cache m_layouts;
 		slot_table<buffer_tag, null_buffer> m_buffers;
 		slot_table<bind_group_tag, null_group> m_groups;

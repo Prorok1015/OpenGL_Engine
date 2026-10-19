@@ -29,18 +29,28 @@ namespace ds
 	public:
 		using handle_type = Handle;
 
+		// The generation is 32 bits and wraps after 2^32 reuses of one slot; a handle that stale could match again,
+		// which is accepted. If T's move constructor throws, the pool is left as it was.
 		handle_type insert(T value)
 		{
 			std::uint32_t index = 0;
 			if (!m_free.empty()) {
 				index = m_free.back();
+				m_slots[index - 1].value.emplace(std::move(value));
 				m_free.pop_back();
 			} else {
+				// Room for every slot in the free list first, so erase() never has to allocate.
+				m_free.reserve(m_slots.size() + 1);
 				m_slots.emplace_back();
 				index = static_cast<std::uint32_t>(m_slots.size());
+				try {
+					m_slots.back().value.emplace(std::move(value));
+				} catch (...) {
+					m_slots.pop_back();
+					throw;
+				}
 			}
 			slot& s = m_slots[index - 1];
-			s.value.emplace(std::move(value));
 			++m_live;
 			return handle_type{ index, s.gen };
 		}
@@ -67,6 +77,7 @@ namespace ds
 			return find(h) == nullptr;
 		}
 
+		// Does not allocate: the free list was reserved by insert().
 		bool erase(handle_type h)
 		{
 			if (!find(h)) {

@@ -133,11 +133,15 @@ namespace rnd::driver
 	public:
 		texture_interface(const texture_header& hdr)
 			: header(hdr) {}
-		// The handle goes stale with the texture: the pool that issued it is told here.
+		// The handle goes stale with the texture: the pool that issued it is told here. The pool locks and does
+		// not allocate; a destructor must not throw, so anything else it might do is swallowed.
 		virtual ~texture_interface()
 		{
 			if (m_release) {
-				m_release(m_handle);
+				try {
+					m_release(m_handle);
+				} catch (...) {
+				}
 			}
 		}
 		texture_interface(const texture_interface&) = delete;

@@ -777,13 +777,18 @@ BOOST_AUTO_TEST_CASE(ADeletedAttachmentDropsTheRenderPass)
 
 BOOST_AUTO_TEST_CASE(RenderPassTexturesReachTheWrappedDriverUnwrapped)
 {
+	// Both drivers number their textures from 1; take a slot of the wrapped driver's so the two sequences differ
+	// and a pass that was not translated would name another texture (or none) there.
+	auto occupant = inner().create_texture(texture_of(4, 4, texture_usage::sampled));
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	BOOST_REQUIRE((color->handle() != color->native()->handle()));
 	drv->begin_render_pass(pass_of(color.get(), nullptr, "forwarded"));
 	drv->end_render_pass();
 
 	const render_pass_desc& seen = inner().last_render_pass();
 	BOOST_REQUIRE(seen.colors.size() == 1u);
 	BOOST_TEST((seen.colors[0].texture == color->native()->handle()));
+	BOOST_TEST((seen.colors[0].texture != color->handle()));
 	BOOST_TEST(std::string(seen.debug_name) == "forwarded");
 }
 
