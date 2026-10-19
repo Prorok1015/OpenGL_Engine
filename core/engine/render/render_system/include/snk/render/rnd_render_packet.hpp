@@ -138,8 +138,8 @@ namespace rnd {
 
 	using geometry_id = draw_ref<struct geometry_table>;
 	using skin_id = draw_ref<struct skin_table>;
-	// Names a compiled_material in the packet's per-frame material table. #125 replaces the table with the
-	// material_instance cache and keeps this id as the handle.
+	// Names a material instance: an index into the renderer's material_instance_cache, valid for the frame
+	// the draw was extracted in.
 	using material_instance_id = draw_ref<struct material_table>;
 
 	// What a draw is sorted within: the list it lives in.
@@ -178,8 +178,10 @@ namespace rnd {
 		return pass_bits | (pipe << 42) | (mat << sort_key_depth_bits) | depth;
 	}
 
-	// POD: no tags, strings or pointers. Geometry, skin and material are ids into the tables of the packet that
-	// holds the draw.
+	// `variant` is the pipeline at extraction time: it orders the draws (sort_key) and nothing else. Passes take the
+	// program from the instance (render_context::material), which may be compiled again after the draw was made.
+	// POD: no tags, strings or pointers. Geometry and skin are ids into the tables of the packet that holds the
+	// draw; the material is an id into the material_instance_cache.
 	struct draw_call_t {
 		uint64_t     sort_key      = 0;
 		geometry_id  geometry;
@@ -219,7 +221,7 @@ namespace rnd {
 
 	struct skybox_draw_t {
 		variant_id variant;
-		const compiled_material* material = nullptr;
+		material_instance_id material;
 		std::optional<glm::mat4> world;
 	};
 
@@ -237,16 +239,14 @@ namespace rnd {
 		uint32_t object_base = 0;
 		uint32_t bone_base = 0;
 
-		// What the draws' ids mean in this packet. Frame temporary like the draws; the materials are owned by
-		// compiled_material_component or by the extractor's retired list and stay valid until the next extract.
+		// What the draws' ids mean in this packet. Frame temporary like the draws. (Materials are not here: their
+		// ids name instances of the material_instance_cache.)
 		std::pmr::vector<res::tag> geometries{ds::frame_allocator()};
 		std::pmr::vector<res::tag> skins{ds::frame_allocator()};
-		std::pmr::vector<const compiled_material*> materials{ds::frame_allocator()};
 
 		const res::tag& geometry_of(const draw_call_t& draw) const { return geometries[draw.geometry.index]; }
 		// The skin tag of a skinned draw; the null tag for a draw without one.
 		const res::tag& skin_of(const draw_call_t& draw) const { return draw.skin.is_valid() ? skins[draw.skin.index] : res::tag::null; }
-		const compiled_material& material_of(const draw_call_t& draw) const { return *materials[draw.material.index]; }
 
 		uint32_t opaque_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(draw); }
 		uint32_t transparent_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(opaque_draws.size() + draw); }

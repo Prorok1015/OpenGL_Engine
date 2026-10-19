@@ -153,18 +153,14 @@ BOOST_AUTO_TEST_CASE(SortedTransparentDrawsComeFarthestFirst)
 
 BOOST_AUTO_TEST_CASE(PacketResolvesIdsAgainstItsTables)
 {
-	rnd::compiled_material material;
 	rnd::render_packet_t packet;
 	packet.geometries.push_back(res::tag::make("geometry/a"));
 	packet.geometries.push_back(res::tag::make("geometry/b"));
 	packet.skins.push_back(res::tag::make("skins/a"));
-	packet.materials.push_back(&material);
 
 	rnd::draw_call_t draw;
 	draw.geometry.index = 1;
-	draw.material.index = 0;
 	BOOST_TEST(packet.geometry_of(draw) == res::tag::make("geometry/b"));
-	BOOST_TEST(&packet.material_of(draw) == &material);
 	BOOST_TEST(!packet.skin_of(draw).is_valid());	// a static draw has no skin
 
 	draw.skin.index = 0;
