@@ -115,6 +115,11 @@ edt::registration edt::action_registry::add(action_desc desc)
 			return {};
 		}
 	}
+	const json::value* args_type = desc.args_schema.as_object().if_contains("type");
+	if (!args_type || *args_type != json::value("object")) {
+		egLOG_ERROR("Editor/Actions", "action '{}' not registered: args_schema must have \"type\":\"object\" at the top level", desc.id);
+		return {};
+	}
 	if (desc.schema_version == 0) {
 		egLOG_ERROR("Editor/Actions", "action '{}' not registered: schema_version starts at 1", desc.id);
 		return {};
@@ -199,6 +204,16 @@ const edt::action_desc* edt::action_registry::find(std::string_view id) const
 	return it != m_actions.end() ? &(*it)->desc : nullptr;
 }
 
+std::vector<const edt::action_desc*> edt::action_registry::tools() const
+{
+	std::vector<const action_desc*> out;
+	out.reserve(m_actions.size());
+	for (const auto& a : m_actions) {
+		if (a->desc.expose_as_tool) out.push_back(&a->desc);
+	}
+	return out;
+}
+
 std::vector<std::string> edt::action_registry::ids() const
 {
 	std::vector<std::string> out;
@@ -211,17 +226,19 @@ edt::action_result edt::action_registry::invoke(std::string_view id, const boost
 {
 	const auto it = std::find_if(m_actions.begin(), m_actions.end(),
 		[id](const std::shared_ptr<entry>& e) { return e->desc.id == id; });
-	if (it == m_actions.end()) return action_result::failure(std::format("no action '{}'", id));
+	if (it == m_actions.end()) return action_result::failure("not_found", std::format("no action '{}'", id));
 	// Held while it runs: the action may unregister itself.
 	const std::shared_ptr<entry> action = *it;
-	if (!action->is_enabled()) return action_result::failure(std::format("action '{}' is disabled", id));
+	if (!action->is_enabled()) return action_result::failure("disabled", std::format("action '{}' is disabled", id));
+	if (!args.is_object()) return action_result::failure("invalid_args", std::format("invalid arguments for '{}': expected an object", id));
 	if (auto problem = json_schema::validate(action->desc.args_schema, args))
-		return action_result::failure(std::format("invalid arguments for '{}': {}", id, *problem));
+		return action_result::failure("invalid_args", std::format("invalid arguments for '{}': {}", id, *problem));
 
 	action_result outcome = action->desc.execute(args);
 	if (outcome.ok) {
 		if (auto problem = json_schema::validate(action->desc.result_schema, outcome.result)) {
-			return action_result::failure(std::format("result of '{}' does not match its schema: {}", id, *problem));
+			egLOG_ERROR("Editor/Actions", "action '{}' ran but returned a malformed result: {}", id, *problem);
+			return action_result::failure("result_invalid", std::format("action '{}' ran but returned a malformed result: {}", id, *problem));
 		}
 	}
 	return outcome;

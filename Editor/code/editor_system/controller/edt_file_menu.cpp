@@ -7,12 +7,15 @@ namespace json = boost::json;
 namespace {
 	constexpr const char* DEFAULT_LEVEL_PATH = "levels/my_level.desc";
 
-	json::value string_property_schema(const char* name)
+	// {name: non-empty string}, plus the optional discard_unsaved flag when `with_discard`.
+	json::value path_schema(bool with_discard)
 	{
+		json::object properties{ { "path", json::object{ { "type", "string" }, { "minLength", 1 } } } };
+		if (with_discard) properties["discard_unsaved"] = json::object{ { "type", "boolean" } };
 		return json::object{
 			{ "type", "object" },
-			{ "properties", json::object{ { name, json::object{ { "type", "string" } } } } },
-			{ "required", json::array{ name } },
+			{ "properties", std::move(properties) },
+			{ "required", json::array{ "path" } },
 			{ "additionalProperties", false } };
 	}
 
@@ -41,6 +44,8 @@ namespace {
 		const json::value* flag = args.as_object().if_contains("discard_unsaved");
 		return flag && flag->as_bool();
 	}
+
+	constexpr const char* UNSAVED_MESSAGE = "the level has unsaved changes: pass discard_unsaved to drop them";
 }
 
 edt::file_menu::file_menu(dialog_service& dialogs, action_registry& actions, file_menu_hooks hooks)
@@ -109,7 +114,8 @@ void edt::file_menu::open_level()
 	options.start_path = m_hooks.resources_path;
 	options.extensions = { ".desc" };
 	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
-		if (alive.lock()) invoke("file.open", json::object{ { "path", to_json_string(picked) } });
+		// Opening a level has never asked about unsaved changes in the UI, so the click passes them on.
+		if (alive.lock()) invoke("file.open", json::object{ { "path", to_json_string(picked) }, { "discard_unsaved", true } });
 	});
 }
 
@@ -171,8 +177,7 @@ void edt::file_menu::register_actions()
 
 	add({ .id = "file.new", .label = "New Level", .menu_path = "File",
 		.execute = [this](const json::value& args) {
-			if (m_hooks.is_dirty() && !wants_discard(args))
-				return action_result::failure("the level has unsaved changes: pass discard_unsaved to drop them");
+			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			if (m_hooks.is_dirty()) m_hooks.discard_changes();
 			m_hooks.new_level();
 			return action_result::success();
@@ -182,27 +187,28 @@ void edt::file_menu::register_actions()
 
 	add({ .id = "file.open", .label = "Open Level...", .menu_path = "File",
 		.execute = [this](const json::value& args) {
+			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			m_hooks.load_level(from_json_string(args.as_object().at("path").as_string()));
 			return action_result::success();
 		},
-		.args_schema = string_property_schema("path"),
+		.args_schema = path_schema(true),
 		.activate = [this] { open_level(); } });
 
 	// The menu item always asks for a path; Ctrl+S overwrites the saved level (file.save below).
 	add({ .id = "file.save_as", .label = "Save Level", .menu_path = "File", .shortcut_hint = "Ctrl+S",
 		.execute = [this](const json::value& args) {
-			if (!m_hooks.has_scene()) return action_result::failure("no level is loaded");
+			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			if (!m_hooks.save_level_as(std::string(args.as_object().at("path").as_string())))
-				return action_result::failure("the level could not be written");
+				return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
 		},
-		.args_schema = string_property_schema("path"),
+		.args_schema = path_schema(false),
 		.activate = [this] { save_level(); } });
 
 	add({ .id = "file.save", .label = "Quick Save", .shortcut = "Ctrl+S",
 		.execute = [this](const json::value&) {
-			if (!m_hooks.has_scene()) return action_result::failure("no level is loaded");
-			if (m_hooks.level_path().empty()) return action_result::failure("the level has no path yet: use file.save_as");
+			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
+			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
 			m_hooks.quick_save();
 			return action_result::success();
 		},
@@ -213,13 +219,12 @@ void edt::file_menu::register_actions()
 			m_hooks.import_model(from_json_string(args.as_object().at("path").as_string()));
 			return action_result::success();
 		},
-		.args_schema = string_property_schema("path"),
+		.args_schema = path_schema(false),
 		.activate = [this] { import_model(); } });
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
-			if (m_hooks.is_dirty() && !wants_discard(args))
-				return action_result::failure("the level has unsaved changes: pass discard_unsaved to drop them");
+			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
 			if (m_hooks.is_dirty()) m_hooks.discard_changes();
 			m_hooks.exit();
 			return action_result::success();

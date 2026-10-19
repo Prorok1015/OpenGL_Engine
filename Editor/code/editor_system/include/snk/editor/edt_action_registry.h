@@ -31,11 +31,16 @@ namespace edt
 	struct action_result
 	{
 		bool ok = true;
+		// Machine-readable outcome: "ok", "invalid_args" (the arguments do not match the schema), "disabled",
+		// "not_found", "needs_input" (a valid call that needs a decision first, e.g. discard_unsaved),
+		// "failed" (the action ran and could not do its job) or "result_invalid" (it ran, but its result
+		// breaks result_schema).
+		std::string code = "ok";
 		boost::json::value result = boost::json::object{};
 		std::string error;
 
-		static action_result success(boost::json::value value = boost::json::object{}) { return { true, std::move(value), {} }; }
-		static action_result failure(std::string message) { return { false, boost::json::object{}, std::move(message) }; }
+		static action_result success(boost::json::value value = boost::json::object{}) { return { true, "ok", std::move(value), {} }; }
+		static action_result failure(std::string code, std::string message) { return { false, std::move(code), boost::json::object{}, std::move(message) }; }
 	};
 
 	using action_fn = std::function<action_result(const boost::json::value& args)>;
@@ -64,12 +69,13 @@ namespace edt
 		bool separator_before = false;
 		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
 		action_fn execute;
-		// JSON Schema (type, required, properties, additionalProperties, enum, minimum, maximum) of the
-		// arguments (an object) and of the result. Null: no_args_schema(). `invoke` validates the arguments
+		// JSON Schema (see edt_json_schema.h) of the arguments (a top-level "type":"object") and of the result. Null: no_args_schema(). `invoke` validates the arguments
 		// before it calls `execute` and the result after it.
 		boost::json::value args_schema;
 		boost::json::value result_schema;
 		std::uint32_t schema_version = 1;
+		// Listed by tools() for agents and scripts. False for placeholders that do nothing.
+		bool expose_as_tool = true;
 		// What a menu click or the shortcut does: normally asks the user for the arguments (dialog_service)
 		// and then calls registry.invoke. Null: invoke with no arguments, which an action with required
 		// arguments cannot do, so it needs one to have a menu item or a shortcut.
@@ -117,10 +123,12 @@ namespace edt
 
 		bool is_enabled(std::string_view id) const;
 		const action_desc* find(std::string_view id) const;
+		// The actions an agent may call, in registration order (expose_as_tool).
+		std::vector<const action_desc*> tools() const;
 		std::vector<std::string> ids() const;
 
 		// The one way to run an action, for the UI, scripts and agents alike. Fails, and `execute` does not
-		// run, if the action does not exist, is disabled or `args` do not match its schema.
+		// run, if the action does not exist, is disabled or `args` do not match its schema (see action_result::code).
 		action_result invoke(std::string_view id, const boost::json::value& args);
 		// What a menu click does: `activate`, or invoke with no arguments. False (nothing runs) if the action
 		// does not exist or is disabled.

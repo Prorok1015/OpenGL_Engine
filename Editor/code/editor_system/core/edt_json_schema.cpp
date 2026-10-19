@@ -1,4 +1,5 @@
 #include <snk/editor/edt_json_schema.h>
+#include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -9,6 +10,18 @@ namespace json = boost::json;
 
 namespace {
 	constexpr std::array<std::string_view, 7> TYPE_NAMES = { "integer", "number", "string", "boolean", "object", "array", "null" };
+
+	constexpr std::array<std::string_view, 10> KEYWORDS = {
+		"type", "properties", "required", "additionalProperties", "enum", "minimum", "maximum", "minLength", "description", "title" };
+
+	std::size_t char_count(std::string_view utf8)
+	{
+		std::size_t count = 0;
+		for (const char c : utf8) {
+			if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) ++count;
+		}
+		return count;
+	}
 
 	bool is_type_name(std::string_view name)
 	{
@@ -37,6 +50,14 @@ namespace {
 	{
 		if (!schema.is_object()) return std::format("{}: a schema must be an object", path);
 		const json::object& obj = schema.as_object();
+
+		for (const auto& [keyword, unused] : obj) {
+			const std::string_view name(keyword);
+			if (std::find(KEYWORDS.begin(), KEYWORDS.end(), name) == KEYWORDS.end())
+				return std::format("{}: unsupported keyword '{}'", path, name);
+		}
+		if (const json::value* length = obj.if_contains("minLength"); length && (!length->is_int64() || length->as_int64() < 0))
+			return std::format("{}: minLength must be a non-negative integer", path);
 
 		if (const json::value* type = obj.if_contains("type")) {
 			const auto is_bad = [](const json::value& name) {
@@ -92,6 +113,10 @@ namespace {
 			const auto& list = values->as_array();
 			if (std::find(list.begin(), list.end(), v) == list.end())
 				return std::format("{}: not one of {}", path, json::serialize(*values));
+		}
+		if (v.is_string()) {
+			if (const json::value* min = schema.if_contains("minLength"); min && char_count(v.as_string()) < static_cast<std::size_t>(min->as_int64()))
+				return std::format("{}: shorter than {} characters", path, min->as_int64());
 		}
 		if (v.is_number()) {
 			const double number = number_of(v);

@@ -66,7 +66,7 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 	out.push_back(actions.add_menu("File"));
 	out.push_back(actions.add_menu(std::string(view_menu_name)));
 	out.push_back(actions.add_menu("Help"));
-	out.push_back(actions.add({ .id = "help.about", .label = "About", .menu_path = "Help", .execute = no_args([] {}) }));
+	out.push_back(actions.add({ .id = "help.about", .label = "About", .menu_path = "Help", .execute = no_args([] {}), .expose_as_tool = false }));
 	return out;
 }
 
