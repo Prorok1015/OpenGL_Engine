@@ -49,8 +49,8 @@ BOOST_AUTO_TEST_CASE(SmokeLevelFramesPassValidationWithoutViolations)
 
 BOOST_AUTO_TEST_CASE(SmokeLevelBuildsNoFramebufferAfterWarmUp)
 {
-	auto& levels = storage.require<scn::level_manager>();
-	BOOST_REQUIRE(levels.load(res::tag::make("levels/smoke_level.desc")));
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
 
 	std::vector<std::size_t> built;
 	auto& stages = storage.require<app::frame_stage_registry>();
