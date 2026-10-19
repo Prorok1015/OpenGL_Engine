@@ -10,7 +10,20 @@ namespace {
 			const char c = name[0];
 			if (c >= 'A' && c <= 'Z') return static_cast<ImGuiKey>(ImGuiKey_A + (c - 'A'));
 			if (c >= '0' && c <= '9') return static_cast<ImGuiKey>(ImGuiKey_0 + (c - '0'));
-			return ImGuiKey_None;
+			switch (c) {
+			case '`': return ImGuiKey_GraveAccent;
+			case '[': return ImGuiKey_LeftBracket;
+			case ']': return ImGuiKey_RightBracket;
+			case '\\': return ImGuiKey_Backslash;
+			case '\'': return ImGuiKey_Apostrophe;
+			case ',': return ImGuiKey_Comma;
+			case '-': return ImGuiKey_Minus;
+			case '.': return ImGuiKey_Period;
+			case '/': return ImGuiKey_Slash;
+			case ';': return ImGuiKey_Semicolon;
+			case '=': return ImGuiKey_Equal;
+			default: return ImGuiKey_None;
+			}
 		}
 		if (name.size() <= 3 && name[0] == 'F') {
 			int number = 0;

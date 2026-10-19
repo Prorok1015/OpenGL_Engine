@@ -77,6 +77,10 @@ namespace {
 		case K::SLASH: return ImGuiKey_Slash;
 		case K::SEMICOLON: return ImGuiKey_Semicolon;
 		case K::EQUAL: return ImGuiKey_Equal;
+		case K::GRAVE_ACCENT: return ImGuiKey_GraveAccent;
+		case K::LEFT_BRACKET: return ImGuiKey_LeftBracket;
+		case K::BACKSLASH: return ImGuiKey_Backslash;
+		case K::RIGHT_BRACKET: return ImGuiKey_RightBracket;
 		case K::ESCAPE: return ImGuiKey_Escape;
 		case K::ENTER: return ImGuiKey_Enter;
 		case K::TAB: return ImGuiKey_Tab;
@@ -146,7 +150,7 @@ namespace {
 		case K::RIGHT_ALT: return ImGuiKey_RightAlt;
 		case K::RIGHT_SUPER: return ImGuiKey_RightSuper;
 		case K::MENU: return ImGuiKey_Menu;
-		// F25 and COUNT have no ImGui counterpart.
+		// F25, WORLD_1/2 and COUNT have no ImGui counterpart.
 		default: return ImGuiKey_None;
 		}
 	}

@@ -5,7 +5,7 @@
 ## 1. Как устроено сейчас (aibranch @ 88af3c4, после PR-4 #264 и #260)
 
 - **Наборы.** `context_manager` обходит наборы в порядке создания, затем `hot_reload->tick()` (`scn_context_manager.cpp:42-51`); `context_set` держит контексты по id, режим, seed, порядок фаз (`scn_context_set.h:174-182`).
-- **Порядок кадра в наборе — всё ещё «фаза × все миры».** `context_set::update`: `begin_frame` всем контекстам, затем внешний цикл по фазам, внутренний по контекстам (`scn_context_set.cpp:25-50`, `run_phase` `:75-90`). Решение владельца 1 («все фазы одного контекста подряд») в коде **не реализовано**: PR-1…PR-3 сохранили чередование. После каждой фазы каждого контекста применяется его command buffer (`:88`).
+- **Порядок кадра в наборе — «мир целиком» (W2 #270).** `context_set::update`: `begin_frame_channel`, `begin_frame` всем контекстам, затем контексты по id; каждый контекст проходит все фазы подряд (`update_context`; fixed_update — свои `fixed_steps()` итераций). После каждой фазы (и каждого fixed-шага) применяется command buffer этого контекста. Раньше было чередование «фаза × все миры» (PR-1…PR-3).
 - **Межмировой доступ (что удаляет PR-6).** `runtime_context{get_world_registry, current_registry, current_world_id}` (`ecs_invoker.hpp:30-35`); `bind_res<ID,T>` резолвится через `get_world_registry(ID)` для view и ctx-ресурсов (`:18-27`, `:45-80`, диспетчер `:89-90`). Набор строит лямбду, где `LEVEL_ID` → **свой** registry, иначе — контекст с этим id (`scn_context_set.cpp:65-73`). `LEVEL_ID`/`level_res` — `scn_context_set.h:26-29`. Трекинг доступа знает `bind_res` (`ecs_system_access.hpp:13,17-18,51,75`), признак типа — `ecs_traits.hpp:7,41-53`.
 - **Пользователи межмирового доступа — в продакшене ноль.** Ни одна система в `core/` и `Editor/` не принимает `bind_res`/`level_res` (последний, `scn_animation_job.cpp`, переведён в PR-2 на `const scn::delta_time&`). Остались: `scn_context_set.cpp:68-70` (сама лямбда), тесты `ecs_invoker_tests.cpp:29,31` (`bind_res<1,shared_state>` чтение/запись), `:61,167,196`; `ecs_system_access_tests.cpp:27-29`; `ecs_system_plan_tests.cpp:39`; `ecs_system_registration_tests.cpp:21`; `scn_world_context_tests.cpp:18,200` (`level_res<const delta_time>` → свой контекст). Устаревшие доки: `README.md:166`, `MEMORY_RULES.md:37`, `PROJECT_STRUCTURE.md:50` («до 5 миров через `world_salt` + `bind_res`», `world_salt` в коде уже нет).
 - **Межмировые команды — механизм есть, пользователей нет.** «Команда в чужой мир» = запись в `ecs::entity_changer` чужого ctx через `bind_res` (`ecs_entity_changer.hpp:40-84`, адресация по **чужому `entt::entity`**, батчи в `unordered_map` по type_id `:82`) или в sandbox `entity_spawner` (`ecs_command_buffer.hpp:15`, применение с remap через `continuous_loader`, `scn_world_context.cpp:97-124`). Пишут только тесты и только в свой мир (`scn_level_scheduler_tests.cpp:609-634`, `scn_world_context_tests.cpp:104`).
@@ -101,7 +101,7 @@ namespace scn {
 | `post_update` | сброс дельт ввода | — | — |
 | `extract` | пакеты, `screen_anchor` → экран | registry всех контекстов набора, текущий кадр | 0 |
 
-**«Фаза × все миры» vs «мир целиком».** Канал от выбора не зависит (обмен только на границе кадра набора). Рекомендация: реализовать утверждённое решение 1 (мир целиком) отдельным нейтральным PR — в контенте один мир на уровень, межмировых зависимостей внутри кадра после PR-6 нет. Свой command buffer по-прежнему применяется после каждой фазы своего контекста.
+**«Фаза × все миры» vs «мир целиком».** Канал от выбора не зависит (обмен только на границе кадра набора). Реализовано в W2 (#270) — утверждённое решение 1 (мир целиком) отдельным нейтральным PR — в контенте один мир на уровень, межмировых зависимостей внутри кадра после PR-6 нет. Свой command buffer по-прежнему применяется после каждой фазы своего контекста.
 
 ## 5. Детерминизм
 
@@ -143,7 +143,7 @@ namespace scn {
 
 1. **W1 #269 (до PR-6).** Типы канала (core/ecs) + `scn::set_channel` в `context_set`, обмен в начале `update`, ctx-ресурсы в контекстах. Тесты: лаг 1 кадр, порядок по id контекста, нет адресата, Edit/Pause, независимость от порядка фаз, изоляция наборов (`level` ↛ `preview:*`/`play`), повторяемость. Пользователей в продакшене нет.
 2. **PR-6** (как в WORLD_CONTEXT) — удаление; тесты `bind_res` заменяются ссылкой на W1.
-3. **W2 #270.** Порядок «мир целиком» (решение 1) в `context_set::update`; `Worlds_RunInIdOrderEveryPhase` и тест независимости канала зелёные.
+3. **W2 #270 — сделано.** Порядок «мир целиком» (решение 1) в `context_set::update`; `Worlds_RunInIdOrderEveryPhase` и тест независимости канала зелёные.
 4. **W3 #271.** `input_layer` + `inp::input_capture` в `route_input`; тест «UI захватил → 3D нейтрален; без захвата — как сейчас»; drag с UI не протекает.
 5. **W4 #272.** Камера `layer/clear/projection`, группы по `render_priority`, общая цель в `camera_redirector`; новый эталон visual-smoke с двумя мирами, старые эталоны без изменений. Согласовать с RHI R3+ (#115b).
 6. **W5 #273 (в EPIC-67).** `screen_anchor`, разрешение в extract; внешний вход `context_manager::post/blackboard`; панель просмотра blackboard в редакторе.

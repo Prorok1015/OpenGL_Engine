@@ -125,6 +125,17 @@ BOOST_AUTO_TEST_CASE(Parse_ReadsModifiersAndKeyInAnyCase)
 	BOOST_CHECK(chord("Alt+Delete").alt);
 }
 
+BOOST_AUTO_TEST_CASE(Parse_AcceptsPunctuationKeysAndRoundTrips)
+{
+	for (const char* key : { "`", "[", "]", "\\", "'", ",", ".", "/", ";", "=", "-" }) {
+		const auto s = chord(std::string("Ctrl+") + key);
+		BOOST_CHECK(s.ctrl);
+		BOOST_CHECK_EQUAL(s.key, key);
+		BOOST_CHECK_EQUAL(s.to_string(), std::string("Ctrl+") + key);
+		BOOST_CHECK(chord(s.to_string()) == s);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(Parse_RejectsMalformedText)
 {
 	for (const char* text : { "", "Ctrl", "Ctrl+", "+S", "Ctrl++S", "S+D", "Ctrl+S+" }) {

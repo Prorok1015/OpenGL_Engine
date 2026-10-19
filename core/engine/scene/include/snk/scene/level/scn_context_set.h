@@ -164,8 +164,9 @@ namespace scn
 		void rebuild_context_plan(uint32_t id, ecs::system_factory& sf);
 		// Takes the phase order from sf and re-resolves every context's phases against it.
 		void refresh_plan_slots(const ecs::system_factory& sf);
-		// fixed_step >= 0: one fixed step, only contexts that still have a step to play take part.
-		void run_phase(size_t order_index, ecs::run_mode mode, int fixed_step = -1);
+		// All phases of one context back to back; fixed_update plays the context's own fixed steps.
+		void update_context(uint32_t id, world_context& context, ecs::run_mode mode);
+		void run_context_phase(uint32_t id, world_context& context, size_t order_index, ecs::run_mode mode);
 		void destroy_by_id(uint32_t id);
 		void begin_frame_channel(ecs::run_mode mode);
 		// Contexts keep their own mode; the set only mirrors its mode into them.
