@@ -41,7 +41,7 @@ namespace scn
 		bool extract() const { return m_extract; }
 		void set_extract(bool extract) { m_extract = extract; }
 
-		// Input stacking order: the higher layer gets the mouse first (UI = 1, the rest 0).
+		// Input stacking order (not inp::input_layer, the window processor stack): the higher layer gets the mouse first (UI = 1, the rest 0).
 		int input_layer() const { return m_input_layer; }
 		void set_input_layer(int layer) { m_input_layer = layer; }
 

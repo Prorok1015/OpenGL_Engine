@@ -14,6 +14,8 @@ namespace inp
 		}
 		virtual ~input_manager_base() {}
 		virtual bool on_handle_event(wnd::handle win, const inp::input_event& evt) = 0;
+		// The window lost focus: a processor holding pressed state must let go of it.
+		virtual void on_focus_lost(wnd::handle) {}
 	private:
 		std::string name = "unknown";
 	};

@@ -19,6 +19,8 @@ namespace inp
 		ecs_input_manager() : inp::input_manager_base("ecs") {}
 
 		virtual bool on_handle_event(wnd::handle win, const inp::input_event& evt) override;
+		// The release events of a window that lost focus never arrive: let go of every button.
+		virtual void on_focus_lost(wnd::handle) override;
 
 		// Raw state. `mouse_dir` is the last cursor step in pixels (previous - current); the router
 		// scales it per binding.

@@ -4,6 +4,8 @@
 #include <snk/common/snk_api.h>
 #include <glm/glm.hpp>
 #include <cstddef>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -56,18 +58,21 @@ namespace inp
 		// The unrouted state the router hands out.
 		const inp::input_state& raw_state() const { return m_source->raw(); }
 
-		// The mouse capture of a pressed button, kept until every button is released. `captured`
-		// is false when the press landed on no capture region; `owner` is the context that
-		// region belongs to otherwise. Written by gs::route_input, which owns the layer rules.
+		// The mouse capture of a pressed button, kept per set until every button is released.
+		// `captured` is false when the press landed on no capture region; `owner` is the context
+		// that region belongs to otherwise. Written by gs::route_input, which owns the layer rules.
 		struct mouse_hold
 		{
 			bool active = false;
 			bool captured = false;
 			input_target owner;
 		};
-		const mouse_hold& hold() const { return m_hold; }
-		void set_hold(mouse_hold hold) { m_hold = std::move(hold); }
-		void clear_hold() { m_hold = {}; }
+		mouse_hold hold(std::string_view set) const {
+			const auto it = m_holds.find(set);
+			return it == m_holds.end() ? mouse_hold{} : it->second;
+		}
+		void set_hold(std::string_view set, mouse_hold hold) { m_holds.insert_or_assign(std::string{ set }, std::move(hold)); }
+		void clear_holds() { m_holds.clear(); }
 
 		// Buttons released, deltas zero, the cursor where it last was.
 		static inp::input_state neutral(const inp::input_state& raw);
@@ -82,6 +87,6 @@ namespace inp
 		std::shared_ptr<const ecs_input_manager> m_source;
 		std::vector<binding> m_bindings;
 		std::optional<input_target> m_default;
-		mouse_hold m_hold;
+		std::map<std::string, mouse_hold, std::less<>> m_holds;
 	};
 }

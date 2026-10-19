@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace
@@ -82,17 +83,23 @@ namespace
 		const auto hit_it = std::ranges::find_if(group, [cursor](const entry* e) { return hits(*e, cursor); });
 		const entry* hit = hit_it != group.end() ? *hit_it : nullptr;
 
-		if (!group.empty() && button_down && !router.hold().active) {
+		const std::string_view set_name = set.name();
+		inp::input_router::mouse_hold hold = router.hold(set_name);
+		if (!group.empty() && button_down && !hold.active) {
 			// The press (or the first sight of an already pressed button) decides who owns the drag.
-			router.set_hold({ true, hit != nullptr, hit ? target_of(set.name(), *hit) : inp::input_target{} });
+			hold = { true, hit != nullptr, hit ? target_of(set_name, *hit) : inp::input_target{} };
+			router.set_hold(set_name, hold);
 		}
 
+		// An owner that is gone (destroyed, or no longer fed by the target) leaves the held
+		// button with nobody until it is released: it must not fall through to the others.
 		const entry* holder = nullptr;
-		if (router.hold().active && router.hold().captured) {
-			const auto it = std::ranges::find_if(group, [&](const entry* e) { return target_of(set.name(), *e) == router.hold().owner; });
+		if (hold.active && hold.captured) {
+			const auto it = std::ranges::find_if(group, [&](const entry* e) { return target_of(set_name, *e) == hold.owner; });
 			if (it != group.end()) holder = *it;
 		}
-		const bool drag_from_outside = router.hold().active && !router.hold().captured;
+		const bool orphaned_drag = hold.active && hold.captured && !holder;
+		const bool drag_from_outside = hold.active && !hold.captured;
 
 		const entry* keyboard_owner = nullptr;
 		for (const entry* e : group) {
@@ -108,7 +115,9 @@ namespace
 				continue;
 			}
 			bool mouse = true;
-			if (holder) {
+			if (orphaned_drag) {
+				mouse = false;
+			} else if (holder) {
 				mouse = &e == holder;
 			} else if (drag_from_outside) {
 				mouse = &e != hit;
@@ -124,10 +133,11 @@ namespace
 
 void gs::route_input(inp::input_router& router, scn::context_manager& contexts)
 {
-	if (!any_mouse_button(router.raw_state())) {
-		router.clear_hold();
-	}
 	contexts.for_each_set([&router](scn::context_set& set) {
 		route_set(router, set);
 	});
+	// Cleared after the pass: on the frame the last button goes up the owner still sees it.
+	if (!any_mouse_button(router.raw_state())) {
+		router.clear_holds();
+	}
 }

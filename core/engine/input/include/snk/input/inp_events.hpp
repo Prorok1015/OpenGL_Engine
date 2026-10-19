@@ -1,6 +1,8 @@
 #pragma once
 #include <snk/core_input/inp_keyboard_event.hpp>
+#include <glm/glm.hpp>
 #include <array>
+#include <type_traits>
 #include <vector>
 
 namespace inp

@@ -9,6 +9,12 @@ void inp::register_ecs_input_system(ecs::system_factory& factory, std::shared_pt
 		{ .phase = ecs::phase::input, .run_in_edit = true }, std::move(manager));
 }
 
+void inp::ecs_input_manager::on_focus_lost(wnd::handle)
+{
+	m_raw.keyboard.fill(false);
+	m_raw.mouse.fill(false);
+}
+
 bool inp::ecs_input_manager::on_handle_event(wnd::handle win, const inp::input_event& evt)
 {
 	if (const auto* payload = evt.get_payload<core::inp::keyboard_event>()) {
