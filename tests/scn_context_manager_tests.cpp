@@ -332,7 +332,7 @@ float delta_of(scn::world_context& c) { return c.state().ctx().get<scn::delta_ti
 
 }
 
-BOOST_AUTO_TEST_CASE(LevelSet_ExistsFromTheStartAndIsTheFacadeTarget)
+BOOST_AUTO_TEST_CASE(LevelSet_ExistsFromTheStart)
 {
 	BOOST_REQUIRE(mgr.find_set("level"));
 	BOOST_TEST(mgr.find_set("level")->name() == "level");
