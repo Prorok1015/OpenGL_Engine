@@ -10,7 +10,6 @@
 #include <snk/desc/desc_guid.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include <imgui.h>
 #include <boost/json.hpp>
 #include <fstream>
 #include <filesystem>
@@ -86,73 +85,16 @@ void edt::level_controller::new_level()
 	m_world_ctrl.select_world(m_state.active_world_idx);
 }
 
-bool edt::level_controller::save_level()
+bool edt::level_controller::save_level_as(const std::string& rel_path)
 {
 	if (!m_state.editor_tag.is_valid()) {
-		egLOG("Editor/Save", "No scene loaded — nothing to save.");
+		egLOG("Editor/Save", "No scene loaded - nothing to save.");
 		return false;
 	}
-
-	if (!m_save_dialog_open) {
-		m_save_dialog_open = true;
-		std::string current = m_state.level_tag.is_valid()
-			? std::string(m_state.level_tag.relative())
-			: "levels/my_level.desc";
-		auto cp = std::format_to_n(m_save_path_buf, sizeof(m_save_path_buf) - 1, "{}", current);
-		*cp.out = '\0';
-		ImGui::OpenPopup("Save Level##edt_save");
-	}
-
-	bool is_open = true;
-	// Run only after the popup is closed so the action can't touch ImGui state mid-modal.
-	std::function<void()> run_after_save;
-	if (ImGui::BeginPopupModal("Save Level##edt_save", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::Text("Path (relative to res://):");
-		ImGui::SetNextItemWidth(480.f);
-		ImGui::InputText("##sp", m_save_path_buf, sizeof(m_save_path_buf));
-
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		const float bw = 110.f;
-		const float avail = ImGui::GetContentRegionAvail().x;
-		ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
-
-		if (ImGui::Button("Save", {bw, 0.f})) {
-			const std::string rel_path_str(m_save_path_buf);
-			if (write_level_to_disk(rel_path_str)) {
-				m_state.level_tag = res::tag::make(rel_path_str);
-				run_after_save = std::move(m_pending_after_save);
-			}
-			m_pending_after_save = nullptr;
-			m_save_dialog_open = false;
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Cancel", {bw, 0.f})) {
-			m_pending_after_save = nullptr;
-			m_save_dialog_open = false;
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::EndPopup();
-	} else if (m_save_dialog_open) {
-		m_pending_after_save = nullptr;
-		m_save_dialog_open = false;
-		is_open = false;
-	}
-
-	if (run_after_save)
-		run_after_save();
-
-	return is_open;
+	if (!write_level_to_disk(rel_path))
+		return false;
+	m_state.level_tag = res::tag::make(rel_path);
+	return true;
 }
 
 void edt::level_controller::quick_save_level()
@@ -161,60 +103,6 @@ void edt::level_controller::quick_save_level()
 		return;
 
 	write_level_to_disk(std::string(m_state.level_tag.relative()));
-}
-
-bool edt::level_controller::show_exit_confirm()
-{
-	ImGui::OpenPopup("Unsaved Changes##edt_exit");
-
-	bool is_open = true;
-	if (ImGui::BeginPopupModal("Unsaved Changes##edt_exit", nullptr,
-		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
-	{
-		ImGui::Text("You have unsaved changes. What would you like to do?");
-		ImGui::Spacing();
-		ImGui::Separator();
-		ImGui::Spacing();
-
-		const float bw = 120.f;
-		const float total = bw * 3.f + ImGui::GetStyle().ItemSpacing.x * 2.f;
-		ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - total) * 0.5f);
-
-		if (ImGui::Button("Save & Continue", {bw, 0.f})) {
-			if (m_state.level_tag.is_valid()) {
-				quick_save_level();
-				if (m_confirm_action) m_confirm_action();
-			} else {
-				// Untitled level: Save-As runs first, the action follows it (see save_level).
-				m_pending_after_save = m_confirm_action;
-				if (on_need_save_dialog) on_need_save_dialog();
-			}
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Discard", {bw, 0.f})) {
-			m_state.is_dirty = false;
-			if (m_confirm_action) m_confirm_action();
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::SameLine();
-
-		if (ImGui::Button("Cancel", {bw, 0.f})) {
-			is_open = false;
-			ImGui::CloseCurrentPopup();
-		}
-
-		ImGui::EndPopup();
-	} else {
-		is_open = false;
-	}
-
-	return is_open;
 }
 
 // ─── Level load finish ──────────────────────────────────────────────────────

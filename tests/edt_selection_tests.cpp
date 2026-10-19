@@ -212,6 +212,27 @@ BOOST_AUTO_TEST_CASE(WorldSwitch_ClearsTheSelectionOnceAndBeforeLaterListeners)
 	BOOST_CHECK(viewport[0] == entt::null);
 }
 
+BOOST_AUTO_TEST_CASE(Service_ReentrantClearDoesNotChangeThePayloadLaterSlotsRead)
+{
+	bool cleared = false;
+	auto first = events.selection_changed.subscribe([&](const edt::selection&) {
+		if (!cleared) {
+			cleared = true;
+			service.clear();
+		}
+	});
+	std::vector<std::vector<uint64_t>> seen;
+	auto second = events.selection_changed.subscribe([&](const edt::selection& s) { seen.push_back(s.path); });
+
+	service.select(at({ 7, 8 }));
+
+	// The nested clear reaches the second slot first; the select that started it still announces its own value.
+	BOOST_REQUIRE(seen.size() == 2u);
+	BOOST_TEST(seen[0].empty());
+	BOOST_TEST((seen[1] == std::vector<uint64_t>{ 7, 8 }));
+	BOOST_TEST(!service.has_selection());
+}
+
 BOOST_AUTO_TEST_CASE(Connections_StopRoutingWhenDropped)
 {
 	connections.clear();

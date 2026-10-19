@@ -20,7 +20,7 @@
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
-#include "edt_file_dialog.h"
+#include "edt_file_menu.h"
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
@@ -55,7 +55,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
 	, m_gui(gui_sys)
-	, m_file_dialog(std::make_unique<edt::file_dialog>())
 	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys, rnd_sys))
 	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
 	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
@@ -67,7 +66,6 @@ edt::editor_system::~editor_system() = default;
 
 void edt::editor_system::init(ds::app_data_storage& data)
 {
-	m_file_dialog->set_current_path(res::resource_system::get_resources_path());
 	m_rnd.get_texture_manager().generate_texture(res::tag(res::tag::memory, "__black"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {0, 0, 0});
 	m_rnd.get_texture_manager().generate_texture(res::tag(res::tag::memory, "__red"),   {1,1}, rnd::driver::texture_header::TYPE::RGB8, {255, 0, 0});
 
@@ -86,6 +84,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
 		data.require<scn::context_manager>());
+	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
+		editor_layer->register_implicit(id, std::move(draw));
+	});
 	// The panels own input routing: whichever scene image is hovered feeds its context, nothing else does.
 	m_input_router = &data.require<inp::input_router>();
 	m_input_router->set_default_target(std::nullopt);
@@ -167,19 +168,36 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			win->shutdown();
 	};
 
-	// Wire dockspace menu actions
-	init_helpers::wire_dockspace_menus(*editor_layer, m_level_ctrl, *this, m_state, *m_file_dialog, m_exit_action);
+	file_menu_hooks hooks;
+	hooks.has_scene = [this] { return m_state.editor_tag.is_valid(); };
+	hooks.is_dirty = [this] { return m_state.is_dirty; };
+	hooks.level_path = [this] {
+		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
+	};
+	hooks.new_level = [this] { m_level_ctrl.new_level(); };
+	hooks.quick_save = [this] { m_level_ctrl.quick_save_level(); };
+	hooks.save_level_as = [this](const std::string& rel_path) { return m_level_ctrl.save_level_as(rel_path); };
+	hooks.discard_changes = [this] { m_state.is_dirty = false; };
+	hooks.load_level = [this](const std::filesystem::path& abs_path) {
+		const auto relative = abs_path.lexically_relative(res::resource_system::get_resources_path());
+		begin_level_load(res::tag::make(relative.string()));
+		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+	};
+	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
+	hooks.exit = m_exit_action;
+	hooks.resources_path = res::resource_system::get_resources_path();
+	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), std::move(hooks));
+	m_file_menu->attach(editor_layer->get_dockspace());
 
 	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
-		// load_level() polls the pending load (and skips the file dialog) while m_loading_level is set.
-		editor_layer->register_implicit("edt/load_level", [this] { return load_level(); });
+		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	}
 }
 
 // ─── Import pipeline ────────────────────────────────────────────────────────
 
-bool edt::editor_system::show_file_dialog()
+bool edt::editor_system::poll_import_pipeline()
 {
 	if (m_export_dialog_active) {
 		bool still_open = m_export_dialog->render();
@@ -201,21 +219,20 @@ bool edt::editor_system::show_file_dialog()
 	if (m_import_token) {
 		return poll_import_progress();
 	}
+	return false;
+}
 
-	bool is_open = true;
-	if (m_file_dialog->show("Import Model", &is_open)) {
-		auto abs_path = m_file_dialog->get_selected_path();
-		std::string display = abs_path.filename().string();
+void edt::editor_system::start_import(const std::filesystem::path& abs_path)
+{
+	if (m_import_token) return;
 
-		m_import_token = std::make_unique<edt::async_import_token>();
-		m_import_token->display_name = display;
-		m_import_token->future = std::async(std::launch::async,
-			[this, abs_path]() -> edt::import_intermediate {
-				return m_model_importer->import_background(abs_path);
-			});
-		return true;
-	}
-	return is_open;
+	m_import_token = std::make_unique<edt::async_import_token>();
+	m_import_token->display_name = abs_path.filename().string();
+	m_import_token->future = std::async(std::launch::async,
+		[this, abs_path]() -> edt::import_intermediate {
+			return m_model_importer->import_background(abs_path);
+		});
+	editor_layer->register_implicit("edt/import_model", [this] { return poll_import_pipeline(); });
 }
 
 bool edt::editor_system::poll_import_progress()
@@ -266,24 +283,6 @@ bool edt::editor_system::poll_import_progress()
 }
 
 // ─── Level load ─────────────────────────────────────────────────────────────
-
-bool edt::editor_system::load_level()
-{
-	if (m_loading_level) {
-		return poll_level_load();
-	}
-
-	bool is_open = false;
-	if (auto ctx_mgr = m_state.ctx_manager.lock()) {
-		is_open = true;
-		if (m_file_dialog->show("Load Level", &is_open)) {
-			auto relateve = m_file_dialog->get_selected_path().lexically_relative(m_file_dialog->get_base_path());
-			begin_level_load(res::tag::make(relateve.string()));
-			return true;
-		}
-	}
-	return is_open;
-}
 
 void edt::editor_system::begin_level_load(const res::tag& original_tag)
 {

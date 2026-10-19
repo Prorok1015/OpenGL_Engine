@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_dialog_service.h"
 #include "edt_editor_events.h"
 #include "edt_selection_service.h"
 
@@ -36,6 +37,7 @@ namespace edt
 		const editor_events& events() const { return m_events; }
 		selection_service& selection() { return m_selection; }
 		const selection_service& selection() const { return m_selection; }
+		dialog_service& dialogs() { return m_dialogs; }
 
 	private:
 		desc::desc_system& m_descs;
@@ -47,5 +49,6 @@ namespace edt
 		scn::context_manager& m_contexts;
 		editor_events m_events;
 		selection_service m_selection{ m_events };
+		dialog_service m_dialogs;
 	};
 }
