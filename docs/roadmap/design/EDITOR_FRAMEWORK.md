@@ -162,7 +162,7 @@ void cancel_all_and_wait(); // в editor_term до разрушения editor_s
 2. **PR-2 (#136).** `selection_service`; провода hierarchy → inspector/viewport (`:119-125,238-261`) идут через события. Тесты: сброс выделения при `commit` и смене мира, поиск entity по пути.
 3. **PR-3 (#139).** `dialog_service`; меню, confirm и save-as уходят из `init_helpers`; `m_confirm_action` удаляется. Тест с автоответами: New/Exit при dirty.
 4. **PR-4 (#139).** `job_service` (`std::async`). Переводятся импорт, экспорт и опросы загрузки; `cancel_all_and_wait` при выходе. Тест на синхронном исполнителе: прогресс, отмена, `on_done` не зовётся после смерти owner.
-5. **PR-5 (#138).** `panel_registry` и `action_registry`; меню и раскладка dockspace строятся из реестров (порядок и заголовки те же). Тесты переписываются с `panel_manager`.
+5. **PR-5 (#138).** `panel_registry` и `action_registry`; меню и раскладка dockspace строятся из реестров (порядок и заголовки те же). Тесты переписываются с `panel_manager`. **Добавлено владельцем (2026-10-19):** у каждого действия схемы аргументов и результата и `invoke(args)`; действий только через ImGui-ввод нет — основа интеграции с ИИ-агентами, `AI_INTEGRATION.md` (#284), шаг A0.
 6. **PR-6 (#138).** `inspector_registry` и `asset_kind_registry`; тестовое расширение (AC #138).
    — здесь ждём #12 PR-3…PR-5 —
 7. **PR-7 (#137).** `document`, `document_manager`, `scene_document` (`shared_state` переименован, старое имя временно остаётся алиасом), `world_entry`, `commit` во всех 12 местах. Затрагиваются `scn_node_id_tests`, `edt_empty_level_tests`, `edt_world_array_sync_tests`.

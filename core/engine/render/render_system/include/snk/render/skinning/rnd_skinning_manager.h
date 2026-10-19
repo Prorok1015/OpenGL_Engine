@@ -1,16 +1,13 @@
 #pragma once
 #include <snk/common/common.h>
 #include <snk/resource/res_tag.h>
-#include <snk/driver/rnd_driver_interface.h>
-#include <snk/driver/rnd_ssbo_buffer_interface.h>
-#include <memory>
-#include <span>
+#include <cstdint>
 #include <unordered_map>
-#include <glm/mat4x4.hpp>
 #include <vector>
 
 namespace rnd
 {
+	// The vertex weights of every skin. The GPU side (index buffer, bone matrices) is rnd::per_draw_data's.
 	class skinning_manager
 	{
 	public:
@@ -25,23 +22,11 @@ namespace rnd
 			m_weights_registry[tag] = std::move(weights);
 		}
 
-		rnd::driver::ssbo_buffer_interface* get_buffer(res::tag skin) const {
-			if (auto it = bone_indices_buffer.find(skin); it != bone_indices_buffer.end()) {
-				return it->second.get();
-			}
-			return nullptr;
-		}
-
-		void bind_skin(rnd::driver::driver_interface* drv, res::tag skin_tag, std::span<const glm::mat4> matrices);
-
-		rnd::driver::ssbo_buffer_interface* get_weights_indeces_buffer(res::tag tag, rnd::driver::driver_interface* driver);
-		rnd::driver::ssbo_buffer_interface* get_bones_matrices_buffer(rnd::driver::driver_interface* driver);
-	private:
-		std::unique_ptr<rnd::driver::ssbo_buffer_interface> create_ssbo_weights_indeces_buffer(res::tag skin, rnd::driver::driver_interface* driver);
+		// The contents of the skin's IndexesBuffer (skinning_lib.glsl): column count, column offsets, then the
+		// bone indices and weights of every column. Empty for a skin without registered weights.
+		std::vector<uint32_t> build_indices(const res::tag& skin) const;
 
 	private:
 		std::unordered_map<res::tag, std::vector<std::vector<uint32_t>>> m_weights_registry;
-		std::unordered_map<res::tag, std::unique_ptr<rnd::driver::ssbo_buffer_interface>> bone_indices_buffer;
-		std::unique_ptr<rnd::driver::ssbo_buffer_interface> bones_matrices_buffer;
 	};
 }

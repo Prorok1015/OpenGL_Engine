@@ -21,7 +21,7 @@ namespace {
 		case trace_op::end_pass: return "end_pass";
 		case trace_op::bind_pipeline: return "bind_pipeline";
 		case trace_op::bind_texture: return "bind_texture";
-		case trace_op::bind_ssbo: return "bind_ssbo";
+		case trace_op::bind_group: return "bind_group";
 		case trace_op::draw: return "draw";
 		case trace_op::create_object: return "create";
 		case trace_op::present: return "present";
@@ -56,6 +56,15 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::budget_programs: return "budget_programs";
 	case rule::budget_textures: return "budget_textures";
 	case rule::budget_pipelines: return "budget_pipelines";
+	case rule::invalid_buffer: return "invalid_buffer";
+	case rule::bind_group_outside_pass: return "bind_group_outside_pass";
+	case rule::invalid_bind_group: return "invalid_bind_group";
+	case rule::bind_group_layout_mismatch: return "bind_group_layout_mismatch";
+	case rule::binding_outside_table: return "binding_outside_table";
+	case rule::transient_group_expired: return "transient_group_expired";
+	case rule::dynamic_offset_alignment: return "dynamic_offset_alignment";
+	case rule::draw_missing_bind_group: return "draw_missing_bind_group";
+	case rule::budget_bind_groups: return "budget_bind_groups";
 	}
 	return "unknown";
 }
@@ -93,8 +102,9 @@ std::string rnd::driver::validation::format_trace_entry(const trace_entry& entry
 		return std::format("#{} draw({})", entry.frame, entry.a);
 	case trace_op::bind_pipeline:
 	case trace_op::bind_texture:
-	case trace_op::bind_ssbo:
 		return std::format("#{} {}({})", entry.frame, trace_op_name(entry.op), entry.a);
+	case trace_op::bind_group:
+		return std::format("#{} bind_group(set {}, group {})", entry.frame, entry.a, entry.b);
 	case trace_op::create_object:
 		return std::format("#{} create(kind {})", entry.frame, entry.a);
 	default:
@@ -238,6 +248,17 @@ void rnd::driver::validation::validator::on_pipeline_created()
 {
 	if (crosses_budget(++m_current.pipelines, m_budget.max_pipelines)) {
 		report(rule::budget_pipelines, std::format("more than {} pipelines created in one frame", m_budget.max_pipelines));
+	}
+}
+
+void rnd::driver::validation::validator::on_bind_group_created(bool transient)
+{
+	if (transient) {
+		++m_current.transient_bind_groups;
+		return;
+	}
+	if (crosses_budget(++m_current.bind_groups, m_budget.max_bind_groups)) {
+		report(rule::budget_bind_groups, std::format("more than {} persistent bind groups created in one frame", m_budget.max_bind_groups));
 	}
 }
 

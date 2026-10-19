@@ -1,43 +1,4 @@
-layout (std140, binding = 0) uniform Matrices 
-{
-    mat4 projection;
-    mat4 view;
-    float time;
-    vec3 cameraPosition;
-};
-
-struct DirectionalLight
-{
-    // vec3 have size 16 as vec4. you should remember it.
-    vec4 direction;
-    vec4 diffuse;
-    vec4 ambient;
-    vec4 specular;
-};
-
-struct PointLight {    
-    vec4 position;
-    vec4 ambient;
-    vec4 diffuse;
-    vec4 specular;
-
-    float constant;
-    float linear;
-    float quadratic;  
-};
-
-#ifdef LIGHTS_ENABLED
-// Must match rnd::lights_params::MAX_LIGHT_COUNT (rnd_shader_manager.h): array lengths are fixed so
-// the std140 offsets never depend on shader variants.
-#define MAX_LIGHT_COUNT 12
-layout (std140, binding = 1) uniform GlobalLights
-{
-    DirectionalLight dirlights[MAX_LIGHT_COUNT];
-    PointLight       pointLights[MAX_LIGHT_COUNT];
-    int              dirLightCount;
-    int              pointLightCount;
-};
-#endif
+#include "snk_common.glsl"
 
 #ifdef USE_TXM_AS_DIFFUSE
 layout(binding = 0) uniform sampler2D diffuseTxm;
@@ -49,13 +10,6 @@ layout(binding = 1) uniform sampler2D specularTxm;
 uniform float shininess;
 uniform vec4 diffuseColor;
 uniform vec4 emissiveColor;
-
-layout(std430, binding = 3) buffer hightlight
-{
-    vec4 hightlight_color;
-    int size;
-    int triangleIds[];
-};
 
 vec4 getMaterialColor(vec2 uv)
 {
@@ -135,14 +89,6 @@ vec4 calculatePhongModel(vec3 norm, vec4 materialColor, vec4 materialSpecular, v
 #endif
     
     vec4 emissive = emissiveColor;
-#ifdef HIGHTLIGHT_TRIANGLES
-    if (gl_PrimitiveID == triangleIds[gl_PrimitiveID]) {
-        emissive = hightlight_color;
-        if (hightlight_color.a < 1.0) {
-            result.a = hightlight_color.a;
-        }
-    }
-#endif
 
     //vec4 gamma = vec4(1/2.2);
     vec4 gamma = vec4(1);

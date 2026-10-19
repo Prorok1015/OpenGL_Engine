@@ -1,7 +1,7 @@
-#version 420 core
+#version 450 core
 in vec3 TexCoords;
   
-layout(binding = 0) uniform samplerCube diffuse;
+SNK_TEX(1, 0) uniform samplerCube diffuse;
 
 out vec4 fragColor;
 

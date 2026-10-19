@@ -18,10 +18,6 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 		}
 	}
 
-	if (ctx.world_matrix) {
-		rdata.uniforms["uWorldMeshMatr"] = *ctx.world_matrix;
-	}
-
 	rdata.uniforms["diffuseColor"] = mat.albedo;
 	rdata.uniforms["emissiveColor"] = mat.emissive;
 	rdata.uniforms["shininess"] = mat.shininess;
@@ -52,7 +48,7 @@ std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	out->skinned = skinned;
 	out->texture_generation = textures.generation();
 
-	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ nullptr, &textures, skinned });
+	rnd::shader_config cfg = compiler.compile(*mat, material_compile_context{ &textures, skinned });
 	out->base = variants.intern(cfg.cdata);
 	out->opaque = variants.intern(cfg.cdata, pass_define_opaque);
 	out->params = std::move(cfg.rdata);

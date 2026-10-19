@@ -12,6 +12,7 @@
 #include <snk/render/texture/rnd_texture_desc.h>
 #include "texture/rnd_texture_2d_desc.h"
 #include "texture/rnd_texture_cubemap_desc.h"
+#include "passes/rnd_frame_upload_pass.h"
 #include "passes/rnd_z_prepass.h"
 #include "passes/rnd_opaque_pass.h"
 #include "passes/rnd_transparent_pass.h"
@@ -116,6 +117,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 	// Per-frame render data shared by the extract and render stages; reset at the end of each frame.
 	data.construct<rnd::frame_context>();
 	register_render_descs(desc_sys);
+	render_system.add_render_pass(std::make_shared<rnd::frame_upload_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::z_prepass>());
 	render_system.add_render_pass(std::make_shared<rnd::opaque_pass>());
 	render_system.add_render_pass(std::make_shared<rnd::skybox_pass>());

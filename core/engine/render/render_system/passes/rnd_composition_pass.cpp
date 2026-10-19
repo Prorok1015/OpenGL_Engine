@@ -79,6 +79,7 @@ void composition_pass::execute(frame_context &context,
     blend.dst_factor = rnd::driver::blend_state::factor::ONE_MINUS_SRC_ALPHA;
     state.blend = {blend};
     rnd::driver::set_target_formats(state, pass);
+    state.set_layouts = context.shaders->layouts().composite();
     rnd::pass_pipelines pipelines(drv, *context.shaders, state);
 
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
@@ -100,11 +101,14 @@ void composition_pass::execute(frame_context &context,
         rnd::shader_config::shader_program_data::build()
             .set_vertex_shader(res::tag::make("shaders/composition.vert"))
             .set_fragment_shader(res::tag::make("shaders/composition.frag"));
-    desc.rdata.samplers = {color_tp_rt, waight_tp_rt};
 
     const auto variant = context.shaders->variants().intern(desc.cdata);
     if (pipelines.bind(variant)) {
-      context.shaders->apply(variant, desc.rdata, nullptr);
+      rnd::driver::bind_group_desc inputs;
+      inputs.layout = context.shaders->layouts().composition;
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::accum_slot, {}, 0, 0, color_tp_rt});
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::reveal_slot, {}, 0, 0, waight_tp_rt});
+      drv.set_bind_group(rnd::driver::pass_set, drv.create_bind_group(inputs, rnd::driver::lifetime::transient));
       drv.draw_indices(m_va, std::size(indeces));
     }
 
