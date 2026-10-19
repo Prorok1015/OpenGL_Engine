@@ -64,6 +64,8 @@ namespace edt
 		void clear_auto_answer() { m_auto_answer.reset(); }
 
 		std::size_t pending() const { return m_queue.size(); }
+		// Asked for and not answered yet (queued or on screen).
+		bool is_pending(dialog_id id) const;
 		// The dialog on screen now.
 		std::optional<dialog_id> current() const;
 

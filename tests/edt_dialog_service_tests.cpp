@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_file_menu.h"
 #include <snk/editor/edt_dialog_service.h>
+#include <imgui.h>
+#include <imgui_internal.h>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -37,6 +39,32 @@ struct fake_gui
 
 	std::vector<std::string> ids;
 	std::vector<std::pair<std::string, std::function<bool()>>> callbacks;
+};
+
+// Headless ImGui context: enough to run popups without a GPU.
+struct imgui_ctx
+{
+	imgui_ctx()
+	{
+		ctx = ImGui::CreateContext();
+		ImGuiIO& io = ImGui::GetIO();
+		io.IniFilename = nullptr;
+		io.DisplaySize = ImVec2(800.f, 600.f);
+		unsigned char* px = nullptr;
+		int w = 0, h = 0;
+		io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+	}
+	~imgui_ctx() { ImGui::DestroyContext(ctx); }
+
+	template<typename F>
+	void frame(F&& body)
+	{
+		ImGui::NewFrame();
+		body();
+		ImGui::EndFrame();
+	}
+
+	ImGuiContext* ctx = nullptr;
 };
 
 struct dialog_fixture
@@ -221,6 +249,33 @@ BOOST_AUTO_TEST_CASE(AutoAnswer_CancelAllReportsCancelOnlyForTheUnsavedPrompt)
 	BOOST_TEST(service.pending() == 0u);
 }
 
+// What Esc does to a modal: ImGui closes the popup, the request must not reopen it but resolve as cancelled.
+BOOST_AUTO_TEST_CASE(Imgui_PopupClosedFromOutsideCancelsAndTheQueueAdvances)
+{
+	imgui_ctx imgui;
+	std::vector<std::string> order;
+	service.confirm_unsaved([&](edt::unsaved_choice c) {
+		order.push_back(c == edt::unsaved_choice::cancel ? "cancel" : "other");
+	});
+	service.save_as("levels/x.desc", [&](const std::string&) { order.push_back("path"); });
+
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(order.empty()); // the first dialog is up and waiting
+	BOOST_TEST(service.pending() == 2u);
+
+	ImGui::ClosePopupToLevel(0, false);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST((order == std::vector<std::string>{ "cancel" }));
+	BOOST_TEST(service.pending() == 1u);
+
+	imgui.frame([&] { service.update(); }); // Save Level opens
+	BOOST_TEST(service.pending() == 1u);
+	ImGui::ClosePopupToLevel(0, false);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST((order == std::vector<std::string>{ "cancel" })); // cancelling a save-as reports nothing
+	BOOST_TEST(service.pending() == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtFileMenuTests, menu_fixture)
@@ -343,6 +398,65 @@ BOOST_AUTO_TEST_CASE(SaveLevel_WithoutAScene_AsksNothing)
 	has_scene = false;
 	menu->save_level();
 	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(SaveLevel_RequestedTwiceOnAnUntitledLevel_OpensOneDialogAndWritesOnce)
+{
+	menu->save_level();
+	menu->save_level();
+	menu->quick_save(); // Ctrl+S while the dialog is open
+	BOOST_TEST(service.pending() == 1u);
+
+	edt::dialog_auto_answer answer;
+	answer.save_as_path = "levels/c.desc";
+	service.set_auto_answer(answer);
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "save_as:levels/c.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(New_SaveAndContinueWhileASaveAsIsOpen_JoinsItAndStillCreates)
+{
+	menu->new_level(); // unsaved prompt first
+	menu->save_level(); // Ctrl+S: Save Level queued behind it
+	BOOST_TEST(service.pending() == 2u);
+
+	edt::dialog_auto_answer answer;
+	answer.unsaved = edt::unsaved_choice::save;
+	answer.save_as_path = "levels/c.desc";
+	service.set_auto_answer(answer);
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "save_as:levels/c.desc", "new" }));
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_AfterACancelledOne_DoesNotRunItsLeftoverAction)
+{
+	edt::dialog_auto_answer cancel;
+	cancel.unsaved = edt::unsaved_choice::save;
+	cancel.cancel_all = true;
+	service.set_auto_answer(cancel);
+	menu->new_level();
+	drain(); // Save & Continue -> Save As -> cancelled
+	BOOST_TEST(calls.empty());
+
+	edt::dialog_auto_answer answer;
+	answer.save_as_path = "levels/c.desc";
+	service.set_auto_answer(answer);
+	menu->save_level();
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "save_as:levels/c.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(Dialogs_AnsweredAfterTheMenuIsGone_CallNothing)
+{
+	menu->new_level();
+	menu->open_level();
+	menu.reset();
+	edt::dialog_auto_answer answer;
+	answer.unsaved = edt::unsaved_choice::discard;
+	answer.picked_file = std::filesystem::path("res/levels/e.desc");
+	service.set_auto_answer(answer);
+	drain();
 	BOOST_TEST(calls.empty());
 }
 

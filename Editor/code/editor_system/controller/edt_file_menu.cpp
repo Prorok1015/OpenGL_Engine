@@ -19,8 +19,8 @@ void edt::file_menu::guard_unsaved(std::function<void()> action)
 		action();
 		return;
 	}
-	m_dialogs.confirm_unsaved([this, action = std::move(action)](unsaved_choice choice) {
-		on_unsaved_choice(choice, action);
+	m_dialogs.confirm_unsaved([this, alive = std::weak_ptr<bool>(m_alive), action = std::move(action)](unsaved_choice choice) {
+		if (alive.lock()) on_unsaved_choice(choice, action);
 	});
 }
 
@@ -38,9 +38,7 @@ void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::functio
 			return;
 		}
 		// Untitled level: Save-As runs first, the action follows a successful write.
-		m_dialogs.save_as(DEFAULT_LEVEL_PATH, [this, action](const std::string& path) {
-			if (m_hooks.save_level_as(path)) action();
-		});
+		ask_save_path(action);
 		return;
 	case unsaved_choice::discard:
 		m_hooks.discard_changes();
@@ -67,8 +65,8 @@ void edt::file_menu::open_level()
 	options.title = "Load Level";
 	options.start_path = m_hooks.resources_path;
 	options.extensions = { ".desc" };
-	m_dialogs.pick_file(std::move(options), [this](const std::filesystem::path& picked) {
-		m_hooks.load_level(picked);
+	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<bool>(m_alive)](const std::filesystem::path& picked) {
+		if (alive.lock()) m_hooks.load_level(picked);
 	});
 }
 
@@ -78,8 +76,8 @@ void edt::file_menu::import_model()
 	options.title = "Import Model";
 	options.start_path = std::filesystem::current_path();
 	options.extensions = { ".glb", ".obj", ".fbx", ".gltf" };
-	m_dialogs.pick_file(std::move(options), [this](const std::filesystem::path& picked) {
-		m_hooks.import_model(picked);
+	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<bool>(m_alive)](const std::filesystem::path& picked) {
+		if (alive.lock()) m_hooks.import_model(picked);
 	});
 }
 
@@ -89,10 +87,26 @@ void edt::file_menu::save_level()
 		egLOG("Editor/Save", "No scene loaded - nothing to save.");
 		return;
 	}
-	std::string current = m_hooks.level_path();
-	if (current.empty()) current = DEFAULT_LEVEL_PATH;
-	m_dialogs.save_as(std::move(current), [this](const std::string& path) {
-		m_hooks.save_level_as(path);
+	ask_save_path({});
+}
+
+void edt::file_menu::ask_save_path(std::function<void()> then)
+{
+	// Ctrl+S is not blocked by a modal: a second request while one is open joins it instead of
+	// opening another dialog that would write again with a stale path.
+	const bool open_already = m_save_as_id && m_dialogs.is_pending(*m_save_as_id);
+	if (!open_already) m_after_save.clear(); // left over from a dialog that was cancelled
+	if (then) m_after_save.push_back(std::move(then));
+	if (open_already) return;
+
+	std::string initial = m_hooks.level_path();
+	if (initial.empty()) initial = DEFAULT_LEVEL_PATH;
+	m_save_as_id = m_dialogs.save_as(std::move(initial), [this, alive = std::weak_ptr<bool>(m_alive)](const std::string& path) {
+		if (!alive.lock()) return;
+		auto after = std::move(m_after_save);
+		m_after_save.clear();
+		if (!m_hooks.save_level_as(path)) return;
+		for (const auto& action : after) action();
 	});
 }
 

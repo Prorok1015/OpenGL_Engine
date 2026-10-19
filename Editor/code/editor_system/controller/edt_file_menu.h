@@ -2,7 +2,10 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <filesystem>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace edt
 {
@@ -44,8 +47,15 @@ namespace edt
 		// Runs `action` right away, or after the user settles the unsaved changes.
 		void guard_unsaved(std::function<void()> action);
 		void on_unsaved_choice(unsaved_choice choice, const std::function<void()>& action);
+		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
+		void ask_save_path(std::function<void()> then);
 
 		dialog_service& m_dialogs;
 		file_menu_hooks m_hooks;
+		std::optional<dialog_service::dialog_id> m_save_as_id;
+		std::vector<std::function<void()>> m_after_save;
+		// The dialog queue belongs to editor_context and can outlive this menu: a dialog answered after
+		// that must not call back into it (or into the hooks, which capture editor_system).
+		std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
 	};
 }

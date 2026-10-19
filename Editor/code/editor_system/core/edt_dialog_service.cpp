@@ -20,7 +20,21 @@ struct edt::dialog_service::request
 
 	std::string popup_label(const char* title) const { return std::format("{}##edt_dialog_{}", title, id); }
 
+	// Opens the popup on the first frame only: one closed from outside (Esc) must stay closed, and
+	// BeginPopupModal returning false afterwards is the request's cancel.
+	bool begin_modal(const std::string& label, int flags)
+	{
+		if (!m_opened) {
+			ImGui::OpenPopup(label.c_str());
+			m_opened = true;
+		}
+		return ImGui::BeginPopupModal(label.c_str(), nullptr, flags);
+	}
+
 	dialog_id id;
+
+private:
+	bool m_opened = false;
 };
 
 namespace {
@@ -55,10 +69,9 @@ public:
 	bool draw() override
 	{
 		const std::string label = popup_label("Unsaved Changes");
-		ImGui::OpenPopup(label.c_str());
 
 		std::optional<edt::unsaved_choice> choice;
-		if (ImGui::BeginPopupModal(label.c_str(), nullptr, MODAL_FLAGS)) {
+		if (begin_modal(label, MODAL_FLAGS)) {
 			ImGui::Text("You have unsaved changes. What would you like to do?");
 			ImGui::Spacing();
 			ImGui::Separator();
@@ -118,11 +131,10 @@ public:
 	bool draw() override
 	{
 		const std::string label = popup_label("Save Level");
-		ImGui::OpenPopup(label.c_str());
 
 		bool is_open = true;
 		bool save = false;
-		if (ImGui::BeginPopupModal(label.c_str(), nullptr, MODAL_FLAGS)) {
+		if (begin_modal(label, MODAL_FLAGS)) {
 			ImGui::Text("Path (relative to res://):");
 			ImGui::SetNextItemWidth(480.f);
 			ImGui::InputText("##sp", m_buffer, sizeof(m_buffer));
@@ -222,10 +234,9 @@ public:
 		const char* title = m_level == edt::message_level::error ? "Error"
 			: m_level == edt::message_level::warning ? "Warning" : "Info";
 		const std::string label = popup_label(title);
-		ImGui::OpenPopup(label.c_str());
 
 		bool is_open = true;
-		if (ImGui::BeginPopupModal(label.c_str(), nullptr, MODAL_FLAGS)) {
+		if (begin_modal(label, MODAL_FLAGS)) {
 			ImGui::TextUnformatted(m_text.c_str());
 			ImGui::Spacing();
 			if (ImGui::Button("OK", {120.f, 0.f})) {
@@ -273,6 +284,11 @@ edt::dialog_service::dialog_id edt::dialog_service::pick_file(pick_file_options 
 edt::dialog_service::dialog_id edt::dialog_service::message(message_level level, std::string text)
 {
 	return enqueue(std::make_unique<message_request>(m_next_id, level, std::move(text)));
+}
+
+bool edt::dialog_service::is_pending(dialog_id id) const
+{
+	return std::any_of(m_queue.begin(), m_queue.end(), [id](const auto& r) { return r->id == id; });
 }
 
 std::optional<edt::dialog_service::dialog_id> edt::dialog_service::current() const
