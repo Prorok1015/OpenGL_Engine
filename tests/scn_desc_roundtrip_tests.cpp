@@ -538,7 +538,8 @@ BOOST_AUTO_TEST_CASE(CameraDesc_UnknownLayerWordsKeepTheCurrentValues)
 // code). The generic serializer must keep them.
 BOOST_AUTO_TEST_CASE(CameraDesc_SerializedBytesMatchReference)
 {
-	BOOST_TEST(json::serialize(ser(scn::camera_desc{})) == "PLACEHOLDER_DEFAULT");
+	BOOST_TEST(json::serialize(ser(scn::camera_desc{})) == R"({"fov":9E1,"near_distance":9.999999747378752E-5,"far_distance":1E3,)"
+		R"("transform":{"rotation":[0E0,0E0,0E0],"position":[0E0,0E0,0E0]}})");
 
 	// Every field set, the keys of the W4 render settings written because they are not the defaults.
 	scn::camera_desc full;
@@ -547,17 +548,24 @@ BOOST_AUTO_TEST_CASE(CameraDesc_SerializedBytesMatchReference)
 		"color_targets":["memory://rt/a.tex","memory://rt/b.tex"],
 		"depth_target":"memory://rt/d.tex","tp_accum_target":"memory://rt/acc.tex","tp_reveal_target":"memory://rt/rev.tex",
 		"layer":-2,"clear":"none","projection":"ortho","ortho_size":4.5})"));
-	BOOST_TEST(json::serialize(ser(full)) == "PLACEHOLDER_FULL");
+	BOOST_TEST(json::serialize(ser(full)) == R"({"fov":3.729999923706055E1,"near_distance":5.000000074505806E-2,"far_distance":2.505E2,)"
+		R"("transform":{"rotation":[1.05E1,9E1,-4.525E1],"position":[1E0,2.5E0,-3E0]},)"
+		R"("color_targets":["memory://rt/a.tex","memory://rt/b.tex"],"depth_target":"memory://rt/d.tex",)"
+		R"("tp_accum_target":"memory://rt/acc.tex","tp_reveal_target":"memory://rt/rev.tex",)"
+		R"("layer":-2,"clear":"none","projection":"ortho","ortho_size":4.5E0})");
 
 	// A camera of the shipped files: no targets, no W4 keys.
 	scn::camera_desc plain;
 	plain.deserialize(*descs, parse(R"({"fov":60.0,"transform":{"rotation":[0,0,0],"position":[0,1,5]}})"));
-	BOOST_TEST(json::serialize(ser(plain)) == "PLACEHOLDER_PLAIN");
+	BOOST_TEST(json::serialize(ser(plain)) == R"({"fov":6E1,"near_distance":9.999999747378752E-5,"far_distance":1E3,)"
+		R"("transform":{"rotation":[0E0,0E0,0E0],"position":[0E0,1E0,5E0]}})");
 
 	// Only some of the W4 keys: "clear":"depth" alone, and layer alone.
 	scn::camera_desc overlay;
 	overlay.deserialize(*descs, parse(R"({"color_targets":["memory://rt/a.tex"],"layer":1,"clear":"depth"})"));
-	BOOST_TEST(json::serialize(ser(overlay)) == "PLACEHOLDER_OVERLAY");
+	BOOST_TEST(json::serialize(ser(overlay)) == R"({"fov":9E1,"near_distance":9.999999747378752E-5,"far_distance":1E3,)"
+		R"("transform":{"rotation":[0E0,0E0,0E0],"position":[0E0,0E0,0E0]},)"
+		R"("color_targets":["memory://rt/a.tex"],"layer":1,"clear":"depth"})");
 
 	auto created = descs->create_instance("camera_desc", res::tag{});
 	BOOST_TEST(json::serialize(ser(*created)) == json::serialize(ser(scn::camera_desc{})));
@@ -577,8 +585,30 @@ BOOST_AUTO_TEST_CASE(CameraDesc_OnDiskTextMatchesReference)
 		"transform":{"rotation":[10.5,90,-45.25],"position":[1,2.5,-3]},
 		"color_targets":["memory://rt/a.tex","memory://rt/b.tex"],"depth_target":"memory://rt/d.tex",
 		"layer":-2,"clear":"none","projection":"ortho","ortho_size":4.5})"));
-	BOOST_TEST(on_disk(ser(full)) == "PLACEHOLDER_ON_DISK_FULL");
-	BOOST_TEST(on_disk(ser(scn::camera_desc{})) == "PLACEHOLDER_ON_DISK_DEFAULT");
+	BOOST_TEST(on_disk(ser(full)) == "{\n"
+		"    \"fov\" : 37.29999923706055,\n"
+		"    \"near_distance\" : 0.05000000074505806,\n"
+		"    \"far_distance\" : 250.5,\n"
+		"    \"transform\" : {\n"
+		"        \"rotation\" : [10.5, 90.0, -45.25],\n"
+		"        \"position\" : [1.0, 2.5, -3.0]\n"
+		"    },\n"
+		"    \"color_targets\" : [\"memory://rt/a.tex\", \"memory://rt/b.tex\"],\n"
+		"    \"depth_target\" : \"memory://rt/d.tex\",\n"
+		"    \"layer\" : -2,\n"
+		"    \"clear\" : \"none\",\n"
+		"    \"projection\" : \"ortho\",\n"
+		"    \"ortho_size\" : 4.5\n"
+		"}\n");
+	BOOST_TEST(on_disk(ser(scn::camera_desc{})) == "{\n"
+		"    \"fov\" : 90.0,\n"
+		"    \"near_distance\" : 9.999999747378752e-05,\n"
+		"    \"far_distance\" : 1000.0,\n"
+		"    \"transform\" : {\n"
+		"        \"rotation\" : [0.0, 0.0, 0.0],\n"
+		"        \"position\" : [0.0, 0.0, 0.0]\n"
+		"    }\n"
+		"}\n");
 
 	// the key order is the order of the members, "transform" sits after far_distance
 	const json::object written = ser(full);
