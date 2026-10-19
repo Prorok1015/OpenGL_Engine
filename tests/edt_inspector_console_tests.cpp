@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_inspector_panel.h"
-#include "edt_component_ui_registry.h"
+#include <snk/editor/edt_inspector_registry.h>
 #include "edt_console_panel.h"
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_camera_desc.h>
@@ -39,9 +39,9 @@ BOOST_AUTO_TEST_CASE(SetOnNodeChanged_Stored)
 
 BOOST_AUTO_TEST_CASE(RegisterRenderer_DoesNotCrash)
 {
-	edt::component_ui_registry registry;
+	edt::inspector_registry registry;
 	bool renderer_called = false;
-	registry.register_renderer<scn::camera_desc>(
+	auto reg = registry.add<scn::camera_desc>(
 		[&](scn::prefab_desc::prefab_comp_node&) -> bool {
 			renderer_called = true;
 			return false;
@@ -51,17 +51,17 @@ BOOST_AUTO_TEST_CASE(RegisterRenderer_DoesNotCrash)
 
 BOOST_AUTO_TEST_CASE(RegisterMultipleRenderers_DoesNotCrash)
 {
-	edt::component_ui_registry registry;
-	registry.register_renderer<scn::camera_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
-	registry.register_renderer<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node&) { return false; });
-	registry.register_renderer<scn::skybox_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	edt::inspector_registry registry;
+	auto reg = registry.add<scn::camera_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
+	auto reg2 = registry.add<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node&) { return false; });
+	auto reg3 = registry.add<scn::skybox_desc>(           [](scn::prefab_desc::prefab_comp_node&) { return false; });
 	BOOST_CHECK(true);
 }
 
 BOOST_AUTO_TEST_CASE(InvokeRenderer_KnownType_ReturnsValue)
 {
-	edt::component_ui_registry registry;
-	registry.register_renderer<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node&) { return true; });
+	edt::inspector_registry registry;
+	auto reg = registry.add<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node&) { return true; });
 	scn::prefab_desc::prefab_comp_node comp;
 	auto result = registry.invoke(scn::camera_desc::__type, comp);
 	BOOST_REQUIRE(result.has_value());
@@ -70,7 +70,7 @@ BOOST_AUTO_TEST_CASE(InvokeRenderer_KnownType_ReturnsValue)
 
 BOOST_AUTO_TEST_CASE(InvokeRenderer_UnknownType_ReturnsNullopt)
 {
-	edt::component_ui_registry registry;
+	edt::inspector_registry registry;
 	scn::prefab_desc::prefab_comp_node comp;
 	auto result = registry.invoke("unknown_desc", comp);
 	BOOST_CHECK(!result.has_value());

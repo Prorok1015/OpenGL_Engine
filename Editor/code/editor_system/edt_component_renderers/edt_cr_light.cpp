@@ -5,9 +5,9 @@
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
 
-void edt::edt_cr_light_register(edt::component_ui_registry& registry)
+void edt::edt_cr_light_register(edt::renderer_registrar& registry)
 {
-	registry.register_renderer<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::directional_light_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 		// Defaults come from the desc itself so a light without overrides shows what is actually rendered.
 		const scn::directional_light_desc def;

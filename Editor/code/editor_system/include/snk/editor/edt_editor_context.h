@@ -1,7 +1,9 @@
 #pragma once
 #include "edt_action_registry.h"
+#include "edt_asset_kind_registry.h"
 #include "edt_dialog_service.h"
 #include "edt_editor_events.h"
+#include "edt_inspector_registry.h"
 #include "edt_job_service.h"
 #include "edt_panel_registry.h"
 #include "edt_selection_service.h"
@@ -18,7 +20,7 @@ namespace edt
 {
 	// Facade over the engine services and the editor's own services. Created by editor_system::init and
 	// registered in ds::app_data_storage (data.require<edt::editor_context>()). Engine services are
-	// references and are not owned. The inspector and asset-kind registries and the documents join it in later steps.
+	// references and are not owned. The documents join it in a later step.
 	class editor_context
 	{
 	public:
@@ -45,6 +47,8 @@ namespace edt
 		job_service& jobs() { return m_jobs; }
 		panel_registry& panels() { return m_panels; }
 		action_registry& actions() { return m_actions; }
+		inspector_registry& inspectors() { return m_inspectors; }
+		asset_kind_registry& asset_kinds() { return m_asset_kinds; }
 
 	private:
 		desc::desc_system& m_descs;
@@ -60,5 +64,7 @@ namespace edt
 		job_service m_jobs;
 		panel_registry m_panels;
 		action_registry m_actions;
+		inspector_registry m_inspectors;
+		asset_kind_registry m_asset_kinds;
 	};
 }
