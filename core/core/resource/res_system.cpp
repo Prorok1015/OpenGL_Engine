@@ -315,7 +315,7 @@ void res::resource_system::collect_stage(const res::tag &tag,
 
     auto declared = ad->collect_dependencies(tag, raw->data);
     // Before the requests: a change of a dependency that lands after them must still find this resource.
-    record_dependencies(tag, declared);
+    record_dependencies(tag, block, declared);
     if (declared.empty()) {
       deserialize_stage(tag, block, raw, ad, res_deps{});
       return;
@@ -485,6 +485,7 @@ void res::resource_system::wait_for_block(const std::shared_ptr<resource_handle>
 }
 
 void res::resource_system::record_dependencies(const res::tag &dependent,
+                                               const std::shared_ptr<resource_handle> &block,
                                                const std::vector<res_dep> &declared) {
   if (declared.empty()) {
     // The common case: nothing to record, and nothing recorded by an earlier load to drop.
@@ -495,6 +496,9 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
   }
 
   std::unique_lock lock(m_cache_mutex);
+  if (!m_cache.any_of_tag(dependent, [&block](const cache_entry &entry) { return entry.lock() == block; })) {
+    return;
+  }
   if (const auto old = m_depends_on.find(dependent); old != m_depends_on.end()) {
     for (const auto &target : old->second) {
       if (const auto it = m_dependents.find(target); it != m_dependents.end()) {

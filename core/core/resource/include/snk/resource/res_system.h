@@ -261,8 +261,10 @@ namespace res
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
 		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
 		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
-		// lands in between still reaches `dependent`.
-		void record_dependencies(const res::tag& dependent, const std::vector<res_dep>& declared);
+		// lands in between still reaches `dependent`. A load that was evicted meanwhile (`block` is no longer cached
+		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
+		void record_dependencies(const res::tag& dependent, const std::shared_ptr<resource_handle>& block,
+			const std::vector<res_dep>& declared);
 		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
@@ -304,10 +306,11 @@ namespace res
 
 		template<class RESOURCE, bool is_sync>
 		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
-			auto found = find_adapter_recursive<RESOURCE>(tag);
+			ds::type_id type = ds::type_id::make<RESOURCE>();
+			auto found = find_adapter_recursive<RESOURCE>(tag, &type);
 			ASSERT_MSG(found, "No adapter found for resource type!");
 
-			auto [block, is_new] = find_or_insert_cache(key_for<RESOURCE>(tag));
+			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, type });
 			if (is_new) {
 				start_loading(tag, block, std::move(found));
 			}
@@ -383,6 +386,8 @@ namespace res
 
 		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it
 		// (what signal_changed follows) and tag -> its dependencies (to replace them when the tag loads again).
+		// Keyed by tag only: a tag has one dependency set whichever adapter type loads it (key_for already maps the
+		// desc types of a tag onto one block).
 		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
 		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
 		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).

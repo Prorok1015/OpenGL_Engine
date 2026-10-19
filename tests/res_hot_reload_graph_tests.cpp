@@ -94,8 +94,44 @@ struct shared_adapter : core::res::adapter_interface
 	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
 };
 
+// Holds the data of the requests it is told to, until release() hands it over: a load whose raw data arrives late.
+class gated_resolver : public test_util::ram_resolver
+{
+public:
+	explicit gated_resolver(const std::string_view prt) : ram_resolver(prt) {}
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		if (!gate) {
+			return ram_resolver::resolve(tag);
+		}
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		held.emplace_back(block, files.at(tag));
+		return block;
+	}
+
+	void release()
+	{
+		for (auto& [block, data] : held) {
+			block->set_ready(std::move(data));
+		}
+		held.clear();
+	}
+
+	bool gate = false;
+	mutable std::vector<std::pair<std::shared_ptr<core::res::res_control_block<std::vector<std::byte>>>, std::vector<std::byte>>> held;
+};
+
 struct graph_env : test_util::ram_res_env
 {
+	~graph_env()
+	{
+		// A task left in the queue must not call into the members below.
+		for (const auto& [tag, owner] : watched) {
+			rs->unwatch(tag, owner);
+		}
+	}
+
 	graph_env()
 	{
 		rs->registrate_adapter<node_adapter>(node_adapter::INFO);
@@ -118,6 +154,7 @@ struct graph_env : test_util::ram_res_env
 	{
 		for (const auto& tag : tags) {
 			owners.push_back(std::make_unique<int>(0));
+			watched.emplace_back(tag, owners.back().get());
 			rs->watch(tag, owners.back().get(), [this](const res::tag& changed) { delivered.push_back(changed.string()); });
 		}
 	}
@@ -134,6 +171,7 @@ struct graph_env : test_util::ram_res_env
 
 	std::vector<std::string> delivered;
 	std::vector<std::unique_ptr<int>> owners;
+	std::vector<std::pair<res::tag, void*>> watched;
 };
 
 }
@@ -346,6 +384,38 @@ BOOST_AUTO_TEST_CASE(DependentWithoutWatchers_IsStillEvicted)
 	pump();
 	BOOST_TEST(rs->require<node_resource>(c).get_control_block() != held.get_control_block());
 	pump();
+}
+
+// Load #1 of c is evicted, load #2 replaces it, and then #1 gets to record: the edges stay those of #2.
+BOOST_AUTO_TEST_CASE(EvictedLoadThatRecordsLate_DoesNotOverwriteTheEdgesOfItsReplacement)
+{
+	rs->unregistrate_resolver(res::tag::memory);
+	auto& gated = rs->registrate_resolver<gated_resolver>(res::tag::memory);
+	const auto d = node("d.node", "d");
+	const auto e = node("e.node", "e");
+	const auto c = node("c.node", "c", { d });
+
+	gated.gate = true;
+	auto first = rs->require<node_resource>(c); // its raw data is held back
+	node("c.node", "c", { e });
+	rs->signal_changed(c);
+	gated.gate = false;
+	auto second = rs->require<node_resource>(c);
+	pump();
+	BOOST_REQUIRE(second.is_ready());
+	BOOST_TEST(second.get()->str() == "c(e)");
+
+	gated.release(); // #1 collects only now, after #2 recorded {e}
+	pump();
+
+	watch({ d, e, c });
+	delivered.clear();
+	rs->signal_changed(d);
+	pump();
+	BOOST_TEST(times_delivered(c) == 0);
+	rs->signal_changed(e);
+	pump();
+	BOOST_TEST(times_delivered(c) == 1);
 }
 
 BOOST_AUTO_TEST_CASE(OneCacheBlockServesTheBaseTypeAndTheTypeDerivedFromIt)

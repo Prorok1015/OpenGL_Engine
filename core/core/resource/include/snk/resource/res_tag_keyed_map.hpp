@@ -58,6 +58,23 @@ namespace res
 			return it == m_entries.end() ? nullptr : &it->second;
 		}
 
+		// Whether pred accepts any entry cached under `tag`, whatever its type.
+		template<class Pred>
+		[[nodiscard]] bool any_of_tag(const tag& tag, Pred&& pred) const
+		{
+			const auto index = m_types.find(tag);
+			if (index == m_types.end()) {
+				return false;
+			}
+			for (const ds::type_id type : index->second) {
+				const auto entry = m_entries.find(cache_key{ tag, type });
+				if (entry != m_entries.end() && pred(entry->second)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
 		void erase_tag(const tag& tag)
 		{
 			auto index = m_types.find(tag);
