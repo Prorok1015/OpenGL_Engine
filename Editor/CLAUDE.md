@@ -200,7 +200,7 @@ Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_ada
 - Bone nodes → `bone_desc` components with offset matrix + global index
 - Animations → `animations_desc` on root, `keyframes_desc` on each animated node
 
-Import in editor: `editor_system::show_file_dialog()` → async import → export dialog → auto-add to scene.
+Import in editor: File menu → `dialog_service::pick_file` → `editor_system::start_import` → async import → export dialog → auto-add to scene.
 
 ## File Dialog
 

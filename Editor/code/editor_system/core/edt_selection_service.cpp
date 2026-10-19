@@ -12,13 +12,20 @@ edt::selection_service::selection_service(editor_events& events)
 void edt::selection_service::select(selection value)
 {
 	m_current = std::move(value);
-	m_events.selection_changed.emit(m_current);
+	emit_current();
 }
 
 void edt::selection_service::clear()
 {
 	m_current = {};
-	m_events.selection_changed.emit(m_current);
+	emit_current();
+}
+
+void edt::selection_service::emit_current()
+{
+	// A slot may select or clear again; slots after it must still read the value this emit announced.
+	const selection announced = m_current;
+	m_events.selection_changed.emit(announced);
 }
 
 ecs::entity edt::selection_service::entity() const

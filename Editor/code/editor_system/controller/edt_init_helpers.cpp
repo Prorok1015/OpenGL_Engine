@@ -14,7 +14,6 @@
 #include "edt_scene_editor.h"
 #include "edt_level_controller.h"
 #include "edt_world_controller.h"
-#include "edt_file_dialog.h"
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
 #include <snk/render/rnd_render_system.h>
@@ -147,64 +146,6 @@ void wire_hierarchy_callbacks(
 		});
 }
 
-void wire_dockspace_menus(
-	editor_layer& layer,
-	level_controller& level_ctrl,
-	editor_system& sys,
-	shared_state& state,
-	file_dialog& dlg,
-	std::function<void()>& exit_action)
-{
-	auto& ds = layer.get_dockspace();
-	ds.set_on_new_level([&] {
-		if (state.is_dirty) {
-			level_ctrl.m_confirm_action = [&] { level_ctrl.new_level(); };
-			layer.register_implicit("edt/new_confirm", [&] {
-				return level_ctrl.show_exit_confirm();
-			});
-		} else {
-			level_ctrl.new_level();
-		}
-	});
-	ds.set_on_open_level([&] {
-		dlg.set_current_path(res::resource_system::get_resources_path());
-		dlg.set_select_mode(edt::file_dialog::SELECT_MODE::FILES_ONLY);
-		dlg.clear_extension_filters();
-		dlg.add_extension_filter(".desc");
-		layer.register_implicit("edt/load_level", [&sys] { return sys.load_level(); });
-	});
-	ds.set_on_save_level([&] {
-		layer.register_implicit("edt/save_level", [&level_ctrl] { return level_ctrl.save_level(); });
-	});
-	ds.set_on_quick_save([&] {
-		if (state.level_tag.is_valid() && state.editor_tag.is_valid()) {
-			level_ctrl.quick_save_level();
-		} else if (state.editor_tag.is_valid()) {
-			layer.register_implicit("edt/save_level", [&level_ctrl] { return level_ctrl.save_level(); });
-		}
-	});
-	ds.set_on_import_model([&] {
-		dlg.set_current_path(std::filesystem::current_path());
-		dlg.set_select_mode(edt::file_dialog::SELECT_MODE::FILES_ONLY);
-		dlg.clear_extension_filters();
-		dlg.add_extension_filter(".glb");
-		dlg.add_extension_filter(".obj");
-		dlg.add_extension_filter(".fbx");
-		dlg.add_extension_filter(".gltf");
-		layer.register_implicit("edt/import_model", [&sys] { return sys.show_file_dialog(); });
-	});
-	ds.set_on_exit([&] {
-		if (state.is_dirty) {
-			level_ctrl.m_confirm_action = exit_action;
-			layer.register_implicit("edt/exit_confirm", [&level_ctrl] {
-				return level_ctrl.show_exit_confirm();
-			});
-		} else {
-			exit_action();
-		}
-	});
-}
-
 void wire_controller_callbacks(
 	editor_system& sys,
 	scene_editor& scene_ed,
@@ -226,9 +167,6 @@ void wire_controller_callbacks(
 	if (auto ctx_mgr = state.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
 	}
-	level_ctrl.on_need_save_dialog = [&layer, &level_ctrl] {
-		layer.register_implicit("edt/save_level", [&level_ctrl] { return level_ctrl.save_level(); });
-	};
 }
 
 void save_camera_state(entt::registry& reg, editor_camera_state& state)

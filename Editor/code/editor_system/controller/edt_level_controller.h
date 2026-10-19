@@ -98,9 +98,9 @@ namespace edt
 		~level_controller();
 
 		void new_level();
-		bool save_level();
+		// Writes the level to `rel_path` and makes it the level's saved path; false if nothing is loaded or the write failed.
+		bool save_level_as(const std::string& rel_path);
 		void quick_save_level();
-		bool show_exit_confirm();
 
 		void finish_level_load(res::res_handle<scn::level_desc>& handle);
 
@@ -113,18 +113,8 @@ namespace edt
 
 		void add_desc_to_scene(const res::res_handle<desc::desc_base>& handle, const std::string& key);
 
-		// Stored confirm action (persists across frames for ImGui modal)
-		std::function<void()> m_confirm_action;
-
-		// Action deferred by "Save & Continue" on an untitled level; run after a successful Save-As.
-		std::function<void()> m_pending_after_save;
-
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
-		std::function<void()> on_need_save_dialog;
-
-		char m_save_path_buf[512] = {};
-		bool m_save_dialog_open = false;
 
 	private:
 		shared_state& m_state;
