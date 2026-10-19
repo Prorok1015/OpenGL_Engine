@@ -534,6 +534,151 @@ BOOST_AUTO_TEST_CASE(CameraDesc_UnknownLayerWordsKeepTheCurrentValues)
 	BOOST_TEST((c.projection() == scn::camera_projection::ortho));
 }
 
+// #131-b: the bytes of the camera as the hand-written serializer wrote them (compact json::serialize, captured from CI on that
+// code). The generic serializer must keep them.
+BOOST_AUTO_TEST_CASE(CameraDesc_SerializedBytesMatchReference)
+{
+	BOOST_TEST(json::serialize(ser(scn::camera_desc{})) == "PLACEHOLDER_DEFAULT");
+
+	// Every field set, the keys of the W4 render settings written because they are not the defaults.
+	scn::camera_desc full;
+	full.deserialize(*descs, parse(R"({"__type":"camera_desc","__version":1,"fov":37.3,"near_distance":0.05,"far_distance":250.5,
+		"transform":{"rotation":[10.5,90,-45.25],"position":[1,2.5,-3]},
+		"color_targets":["memory://rt/a.tex","memory://rt/b.tex"],
+		"depth_target":"memory://rt/d.tex","tp_accum_target":"memory://rt/acc.tex","tp_reveal_target":"memory://rt/rev.tex",
+		"layer":-2,"clear":"none","projection":"ortho","ortho_size":4.5})"));
+	BOOST_TEST(json::serialize(ser(full)) == "PLACEHOLDER_FULL");
+
+	// A camera of the shipped files: no targets, no W4 keys.
+	scn::camera_desc plain;
+	plain.deserialize(*descs, parse(R"({"fov":60.0,"transform":{"rotation":[0,0,0],"position":[0,1,5]}})"));
+	BOOST_TEST(json::serialize(ser(plain)) == "PLACEHOLDER_PLAIN");
+
+	// Only some of the W4 keys: "clear":"depth" alone, and layer alone.
+	scn::camera_desc overlay;
+	overlay.deserialize(*descs, parse(R"({"color_targets":["memory://rt/a.tex"],"layer":1,"clear":"depth"})"));
+	BOOST_TEST(json::serialize(ser(overlay)) == "PLACEHOLDER_OVERLAY");
+
+	auto created = descs->create_instance("camera_desc", res::tag{});
+	BOOST_TEST(json::serialize(ser(*created)) == json::serialize(ser(scn::camera_desc{})));
+}
+
+// #131-b: what reaches the .desc file goes through the desc_system writer.
+BOOST_AUTO_TEST_CASE(CameraDesc_OnDiskTextMatchesReference)
+{
+	const auto on_disk = [this](const json::value& v) {
+		std::ostringstream ss;
+		descs->write_pretty_json(ss, v);
+		return ss.str();
+	};
+
+	scn::camera_desc full;
+	full.deserialize(*descs, parse(R"({"fov":37.3,"near_distance":0.05,"far_distance":250.5,
+		"transform":{"rotation":[10.5,90,-45.25],"position":[1,2.5,-3]},
+		"color_targets":["memory://rt/a.tex","memory://rt/b.tex"],"depth_target":"memory://rt/d.tex",
+		"layer":-2,"clear":"none","projection":"ortho","ortho_size":4.5})"));
+	BOOST_TEST(on_disk(ser(full)) == "PLACEHOLDER_ON_DISK_FULL");
+	BOOST_TEST(on_disk(ser(scn::camera_desc{})) == "PLACEHOLDER_ON_DISK_DEFAULT");
+
+	// the key order is the order of the members, "transform" sits after far_distance
+	const json::object written = ser(full);
+	std::vector<std::string> keys;
+	for (const auto& member : written)
+		keys.emplace_back(member.key());
+	BOOST_TEST((keys == std::vector<std::string>{ "fov", "near_distance", "far_distance", "transform", "color_targets", "depth_target",
+		"layer", "clear", "projection", "ortho_size" }));
+	BOOST_TEST(json::serialize(written.at("transform")) == R"({"rotation":[1.05E1,9E1,-4.525E1],"position":[1E0,2.5E0,-3E0]})");
+}
+
+// #131-b: every form the hand-written deserialize accepted or ignored.
+BOOST_AUTO_TEST_CASE(CameraDesc_AcceptsLegacyAndMalformedForms)
+{
+	const scn::camera_desc def;
+
+	// no transform at all, an unknown key, the legacy "texture" next to a missing "color_targets"
+	scn::camera_desc legacy;
+	legacy.deserialize(*descs, parse(R"({"__type":"camera_desc","unknown":[1,2],"fov":50,"texture":"memory://rt/old.tex"})"));
+	BOOST_TEST(legacy.fov() == 50.0f);
+	BOOST_TEST((legacy.position() == def.position()));
+	BOOST_REQUIRE(legacy.color_targets().size() == 1u);
+	BOOST_TEST(legacy.color_targets()[0] == res::tag{ "memory://rt/old.tex" });
+	const json::object legacy_out = ser(legacy);
+	BOOST_TEST(!legacy_out.contains("texture"));
+	BOOST_TEST(json::serialize(legacy_out.at("color_targets")) == R"(["memory://rt/old.tex"])");
+
+	// "color_targets" wins over the legacy key
+	scn::camera_desc both;
+	both.deserialize(*descs, parse(R"({"texture":"memory://rt/old.tex","color_targets":["memory://rt/new.tex"]})"));
+	BOOST_REQUIRE(both.color_targets().size() == 1u);
+	BOOST_TEST(both.color_targets()[0] == res::tag{ "memory://rt/new.tex" });
+
+	// only one half of the transform
+	scn::camera_desc half;
+	half.deserialize(*descs, parse(R"({"transform":{"position":[4,5,6]}})"));
+	BOOST_TEST((half.position() == glm::vec3{ 4, 5, 6 }));
+	BOOST_TEST((half.rotation() == def.rotation()));
+
+	// invalid tags are not written, empty target lists neither
+	scn::camera_desc tags;
+	tags.deserialize(*descs, parse(R"({"depth_target":"memory://rt/d.tex"})"));
+	const json::object tags_out = ser(tags);
+	BOOST_TEST(tags_out.contains("depth_target"));
+	BOOST_TEST(!tags_out.contains("color_targets"));
+	BOOST_TEST(!tags_out.contains("tp_accum_target"));
+	BOOST_TEST(!tags_out.contains("tp_reveal_target"));
+	BOOST_TEST(!ser(def).contains("depth_target"));
+
+	// a layer that is not an integer (even an integral double) keeps the current one, a clamp applies to integers only
+	scn::camera_desc layered;
+	layered.deserialize(*descs, parse(R"({"layer":5})"));
+	for (const char* bad : { R"({"layer":3.0})", R"({"layer":1.5})", R"({"layer":"7"})", R"({"layer":null})", R"({"layer":true})", R"({"layer":[1]})" }) {
+		layered.deserialize(*descs, parse(bad));
+		BOOST_TEST_INFO(bad);
+		BOOST_TEST(layered.layer() == 5);
+	}
+	layered.deserialize(*descs, parse(R"({"layer":2147483648})"));
+	BOOST_TEST(layered.layer() == 16);
+	layered.deserialize(*descs, parse(R"({"layer":-9223372036854775807})"));
+	BOOST_TEST(layered.layer() == -16);
+
+	// an unknown word, or a value that is not a string, keeps the current "clear" and "projection"
+	scn::camera_desc words;
+	words.deserialize(*descs, parse(R"({"clear":"none","projection":"ortho"})"));
+	for (const char* bad : { R"({"clear":"sideways","projection":"sideways"})", R"({"clear":1,"projection":1})", R"({"clear":null,"projection":false})", R"({"clear":["all"],"projection":["perspective"]})" }) {
+		words.deserialize(*descs, parse(bad));
+		BOOST_TEST_INFO(bad);
+		BOOST_TEST((words.clear() == scn::camera_clear::none));
+		BOOST_TEST_INFO(bad);
+		BOOST_TEST((words.projection() == scn::camera_projection::ortho));
+	}
+
+	// numbers may be integers; a value that is not a number keeps the current one
+	scn::camera_desc numbers;
+	numbers.deserialize(*descs, parse(R"({"fov":60,"near_distance":1,"far_distance":200,"ortho_size":3})"));
+	BOOST_TEST(numbers.fov() == 60.0f);
+	BOOST_TEST(numbers.near_distance() == 1.0f);
+	BOOST_TEST(numbers.far_distance() == 200.0f);
+	BOOST_TEST(numbers.ortho_size() == 3.0f);
+
+	// a transform that is not an object is ignored
+	scn::camera_desc bad_transform;
+	bad_transform.deserialize(*descs, parse(R"({"transform":5,"fov":45})"));
+	BOOST_TEST(bad_transform.fov() == 45.0f);
+	BOOST_TEST((bad_transform.position() == def.position()));
+
+	// more targets than the camera has slots keep the current ones
+	scn::camera_desc many;
+	many.deserialize(*descs, parse(R"({"color_targets":["memory://a"]})"));
+	many.deserialize(*descs, parse(R"({"color_targets":["memory://1","memory://2","memory://3","memory://4","memory://5"]})"));
+	BOOST_REQUIRE(many.color_targets().size() == 1u);
+	BOOST_TEST(many.color_targets()[0] == res::tag{ "memory://a" });
+
+	// the ortho_size written when it differs from the default, however slightly
+	scn::camera_desc ortho;
+	ortho.deserialize(*descs, parse(R"({"ortho_size":10.000001})"));
+	BOOST_TEST(ser(ortho).contains("ortho_size") == (ortho.ortho_size() != def.ortho_size()));
+}
+
 BOOST_AUTO_TEST_CASE(CameraDesc_AssembleCopiesTheRenderLayersToTheComponent)
 {
 	scn::camera_desc desc;
