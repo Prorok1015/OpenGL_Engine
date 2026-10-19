@@ -1,6 +1,7 @@
 #pragma once
 #include <thread>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <condition_variable>
@@ -48,6 +49,15 @@ namespace core::res
             if (is_finished()) return;
             std::unique_lock lock(callback_mtx);
             m_cv.wait(lock, [this] { return is_finished(); });
+        }
+
+        // wait() that gives up after `timeout`; returns whether the block has finished.
+        template<class Rep, class Period>
+        bool wait_for(std::chrono::duration<Rep, Period> timeout)
+        {
+            if (is_finished()) return true;
+            std::unique_lock lock(callback_mtx);
+            return m_cv.wait_for(lock, timeout, [this] { return is_finished(); });
         }
 
         T& get() {

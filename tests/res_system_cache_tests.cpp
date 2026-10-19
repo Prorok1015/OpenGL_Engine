@@ -43,6 +43,27 @@ using test_util::to_bytes;
 
 std::vector<std::byte> bytes_of(std::string_view s) { return to_bytes(s); }
 
+// Like the vfs resolver: the data arrives later, from another thread.
+class delayed_resolver : public test_util::ram_resolver
+{
+public:
+	explicit delayed_resolver(const std::string_view prt) : ram_resolver(prt) {}
+	~delayed_resolver() override { for (auto& thread : threads) thread.join(); }
+
+	async_raw_data resolve(const res::tag& tag) const override
+	{
+		auto block = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+		auto data = files.at(tag);
+		threads.emplace_back([block, data = std::move(data)]() mutable {
+			std::this_thread::sleep_for(std::chrono::milliseconds(30));
+			block->set_ready(std::move(data));
+		});
+		return block;
+	}
+
+	mutable std::vector<std::thread> threads;
+};
+
 struct sys_fixture : test_util::ram_res_env
 {
 	sys_fixture() : sys(rs.get())
@@ -352,6 +373,18 @@ BOOST_AUTO_TEST_CASE(Wait_RunsTheQueuedLoadOnAManualSystemAndSettlesEitherWay)
 	BOOST_TEST(good.is_ready());
 	bad.wait(); // no assert, no hang: the failure is for the caller to read
 	BOOST_TEST(bad.has_error());
+}
+
+BOOST_AUTO_TEST_CASE(Wait_OnAManualSystemAlsoCoversAResolverThatAnswersLater)
+{
+	sys->unregistrate_resolver(res::tag::memory);
+	sys->registrate_resolver<delayed_resolver>(res::tag::memory);
+	const auto tag = put("late.txt", "late payload");
+
+	auto handle = sys->require<res::text_resource>(tag);
+	handle.wait(); // the load task only exists once the resolver thread has answered
+	BOOST_REQUIRE(handle.is_ready());
+	BOOST_TEST(handle.get()->str() == "late payload");
 }
 
 BOOST_AUTO_TEST_CASE(SignalChanged_DeliversWatchersOnTheMainQueueNotInline)

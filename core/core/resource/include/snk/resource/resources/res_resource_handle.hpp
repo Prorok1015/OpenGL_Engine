@@ -39,11 +39,14 @@ namespace core::res
         void wait() const {
             if (!m_block) return;
             if (m_tasks && m_tasks->mode() == ds::policy::manual) {
+                // Nothing runs in the background, so run the queued loads here. When none is queued the block
+                // may still be waiting for a resolver thread, whose completion queues the next one.
                 while (!m_block->is_ready() && !m_block->has_error()) {
                     if (!m_tasks->run_one(ds::lane::compute) && !m_tasks->run_one(ds::lane::io)) {
-                        break;
+                        m_block->wait_for(std::chrono::milliseconds(1));
                     }
                 }
+                return;
             }
             m_block->wait();
         }
