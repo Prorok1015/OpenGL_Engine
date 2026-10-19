@@ -26,7 +26,11 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         window_title += " (*.*)";
     }
     
-    ImGui::OpenPopup(window_title.c_str());
+    // Once: a popup closed from outside (Esc) must stay closed instead of being reopened next frame.
+    if (!opened) {
+        ImGui::OpenPopup(window_title.c_str());
+        opened = true;
+    }
 
     // Set fixed button width and spacing
     const float button_width = 120.0f;
@@ -221,7 +225,11 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         ImGui::PopStyleVar();
 
         ImGui::EndPopup();
+    } else {
+        *p_open = false; // closed from outside: a cancel
     }
+    if (!*p_open)
+        opened = false; // the next show() opens it again
     return result;
 }
 

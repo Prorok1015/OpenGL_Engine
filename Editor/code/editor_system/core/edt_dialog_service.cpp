@@ -261,7 +261,7 @@ edt::dialog_service::dialog_service() = default;
 
 edt::dialog_service::~dialog_service()
 {
-	*m_alive = false;
+	m_alive.reset();
 }
 
 edt::dialog_service::dialog_id edt::dialog_service::confirm_unsaved(std::function<void(unsaved_choice)> on_answer)
@@ -307,9 +307,8 @@ edt::dialog_service::dialog_id edt::dialog_service::enqueue(std::unique_ptr<requ
 		m_pump_registered = true;
 		// A fresh id per registration: the gui keeps a callback that just returned false until the end of the frame.
 		m_registrar(std::format("edt/dialogs/{}", ++m_pump_serial),
-			[this, alive = std::weak_ptr<bool>(m_alive)]() {
-				const auto token = alive.lock();
-				return token && *token && update();
+			[this, alive = std::weak_ptr<void>(m_alive)]() {
+				return !alive.expired() && update();
 			});
 	}
 	return id;

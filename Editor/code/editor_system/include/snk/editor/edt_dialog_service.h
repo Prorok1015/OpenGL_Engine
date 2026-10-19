@@ -82,6 +82,6 @@ namespace edt
 		std::uint64_t m_pump_serial = 0;
 		bool m_pump_registered = false;
 		// The registered callback holds a weak copy: it stops if the service is gone first.
-		std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
+		std::shared_ptr<void> m_alive = std::make_shared<int>(0);
 	};
 }

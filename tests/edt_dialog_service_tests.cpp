@@ -276,6 +276,33 @@ BOOST_AUTO_TEST_CASE(Imgui_PopupClosedFromOutsideCancelsAndTheQueueAdvances)
 	BOOST_TEST(service.pending() == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(Imgui_FilePickerClosedFromOutsideCancelsAndANewOneOpensAgain)
+{
+	imgui_ctx imgui;
+	int picked = 0;
+	edt::pick_file_options options;
+	options.title = "Pick";
+	options.start_path = std::filesystem::current_path();
+	service.pick_file(options, [&](const std::filesystem::path&) { ++picked; });
+
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 1u); // on screen
+
+	ImGui::ClosePopupToLevel(0, false); // Esc
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 0u); // cancelled, not reopened
+	BOOST_TEST(picked == 0);
+
+	// A new picker must show up again, not resolve at once.
+	service.pick_file(options, [&](const std::filesystem::path&) { ++picked; });
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 1u);
+	ImGui::ClosePopupToLevel(0, false);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(picked == 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtFileMenuTests, menu_fixture)

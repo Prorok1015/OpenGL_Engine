@@ -56,6 +56,6 @@ namespace edt
 		std::vector<std::function<void()>> m_after_save;
 		// The dialog queue belongs to editor_context and can outlive this menu: a dialog answered after
 		// that must not call back into it (or into the hooks, which capture editor_system).
-		std::shared_ptr<bool> m_alive = std::make_shared<bool>(true);
+		std::shared_ptr<void> m_alive = std::make_shared<int>(0);
 	};
 }

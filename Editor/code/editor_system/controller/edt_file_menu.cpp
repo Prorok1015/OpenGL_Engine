@@ -19,7 +19,7 @@ void edt::file_menu::guard_unsaved(std::function<void()> action)
 		action();
 		return;
 	}
-	m_dialogs.confirm_unsaved([this, alive = std::weak_ptr<bool>(m_alive), action = std::move(action)](unsaved_choice choice) {
+	m_dialogs.confirm_unsaved([this, alive = std::weak_ptr<void>(m_alive), action = std::move(action)](unsaved_choice choice) {
 		if (alive.lock()) on_unsaved_choice(choice, action);
 	});
 }
@@ -65,7 +65,7 @@ void edt::file_menu::open_level()
 	options.title = "Load Level";
 	options.start_path = m_hooks.resources_path;
 	options.extensions = { ".desc" };
-	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<bool>(m_alive)](const std::filesystem::path& picked) {
+	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
 		if (alive.lock()) m_hooks.load_level(picked);
 	});
 }
@@ -76,7 +76,7 @@ void edt::file_menu::import_model()
 	options.title = "Import Model";
 	options.start_path = std::filesystem::current_path();
 	options.extensions = { ".glb", ".obj", ".fbx", ".gltf" };
-	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<bool>(m_alive)](const std::filesystem::path& picked) {
+	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
 		if (alive.lock()) m_hooks.import_model(picked);
 	});
 }
@@ -101,7 +101,7 @@ void edt::file_menu::ask_save_path(std::function<void()> then)
 
 	std::string initial = m_hooks.level_path();
 	if (initial.empty()) initial = DEFAULT_LEVEL_PATH;
-	m_save_as_id = m_dialogs.save_as(std::move(initial), [this, alive = std::weak_ptr<bool>(m_alive)](const std::string& path) {
+	m_save_as_id = m_dialogs.save_as(std::move(initial), [this, alive = std::weak_ptr<void>(m_alive)](const std::string& path) {
 		if (!alive.lock()) return;
 		auto after = std::move(m_after_save);
 		m_after_save.clear();
