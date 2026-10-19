@@ -20,6 +20,9 @@ namespace rnd::driver::validation
 		driver(std::unique_ptr<driver_interface> inner, std::shared_ptr<validator> state);
 		~driver() override = default;
 
+		void begin_render_pass(const render_pass_desc& desc) override;
+		void end_render_pass() override;
+
 		void push_frame_buffer() override;
 		void pop_frame_buffer() override;
 		void set_render_target(texture_interface* color, texture_interface* depth_stencil = nullptr) override;
@@ -56,6 +59,8 @@ namespace rnd::driver::validation
 
 	private:
 		void check_texture_usage(const texture_header& header);
+		// False when the pass cannot be forwarded; otherwise `inner_desc` is `desc` with the wrapped driver's textures.
+		bool check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target);
 		bool check_targets(std::span<texture_interface* const> colors, texture_interface* depth_stencil);
 		void check_rect(rule kind, const char* what, glm::ivec4 rect);
 		// Null when the draw cannot be forwarded.

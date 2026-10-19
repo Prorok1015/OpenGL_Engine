@@ -7,6 +7,27 @@ rnd::driver::null::driver::driver()
 {
 }
 
+void rnd::driver::null::driver::begin_render_pass(const render_pass_desc& desc)
+{
+	ASSERT_MSG(!m_in_render_pass, "begin_render_pass inside a render pass");
+	if (!desc.backbuffer) {
+		const auto key = make_framebuffer_key(desc, [](texture_handle handle) -> std::uint64_t {
+			return handle ? static_cast<const texture*>(handle)->framebuffer_object() : 0;
+		});
+		m_stats->framebuffers.acquire(key, [this] { return ++m_next_framebuffer; });
+	}
+	m_last_pass = desc;
+	m_in_render_pass = true;
+	++m_calls.render_pass_begins;
+}
+
+void rnd::driver::null::driver::end_render_pass()
+{
+	ASSERT_MSG(m_in_render_pass, "end_render_pass outside a render pass");
+	m_in_render_pass = false;
+	++m_calls.render_pass_ends;
+}
+
 void rnd::driver::null::driver::push_frame_buffer()
 {
 	++m_frame_buffer_depth;

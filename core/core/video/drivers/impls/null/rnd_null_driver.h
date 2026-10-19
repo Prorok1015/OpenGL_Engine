@@ -17,10 +17,15 @@ namespace rnd::driver::null
 			std::size_t pop_frame_buffers = 0;
 			std::size_t render_target_sets = 0;
 			std::size_t render_state_sets = 0;
+			std::size_t render_pass_begins = 0;
+			std::size_t render_pass_ends = 0;
 		};
 
 		driver();
 		~driver() override = default;
+
+		void begin_render_pass(const render_pass_desc& desc) override;
+		void end_render_pass() override;
 
 		void push_frame_buffer() override;
 		void pop_frame_buffer() override;
@@ -53,11 +58,17 @@ namespace rnd::driver::null
 		const glm::ivec4& scissor() const { return m_scissor; }
 		float line_size() const { return m_line_size; }
 		const render_state& current_render_state() const { return m_render_state; }
+		bool in_render_pass() const { return m_in_render_pass; }
+		// The pass begun last, still valid after it ended.
+		const render_pass_desc& last_render_pass() const { return m_last_pass; }
 
 	private:
 		std::shared_ptr<object_stats> m_stats;
 		call_counts m_calls;
 		std::size_t m_frame_buffer_depth = 1;
+		bool m_in_render_pass = false;
+		render_pass_desc m_last_pass;
+		std::uint32_t m_next_framebuffer = 0;
 		glm::ivec4 m_viewport{ 0 };
 		glm::ivec4 m_scissor{ 0 };
 		float m_line_size = 1.f;

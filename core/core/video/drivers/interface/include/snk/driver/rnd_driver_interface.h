@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include <unordered_map>
 #include <snk/common/ds/ds_bit_frags.hpp>
+#include <snk/driver/rnd_render_pass.h>
 
 namespace rnd::driver
 {
@@ -156,6 +157,10 @@ namespace rnd::driver
 	{
 	public:
 		virtual ~driver_interface() {}
+
+		// A pass binds its attachments, applies the load ops and ends with end_render_pass. Passes do not nest.
+		virtual void begin_render_pass(const render_pass_desc& desc) = 0;
+		virtual void end_render_pass() = 0;
 
 		virtual void push_frame_buffer() = 0;
 		virtual void pop_frame_buffer() = 0;

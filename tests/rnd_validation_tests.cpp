@@ -77,6 +77,19 @@ struct validation_fixture
 	std::unique_ptr<shader_interface> program_object;
 };
 
+render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nullptr, const char* name = "test")
+{
+	render_pass_desc pass;
+	if (color) {
+		pass.colors.push_back({ .texture = color });
+	}
+	if (depth) {
+		pass.depth_stencil = attachment_desc{ .texture = depth };
+	}
+	pass.debug_name = name;
+	return pass;
+}
+
 void expect_only(const vl::validator& state, vl::rule kind, std::size_t count = 1)
 {
 	BOOST_TEST(state.total() == count);
@@ -537,6 +550,289 @@ BOOST_AUTO_TEST_CASE(NoBudgetIsEnforcedByDefault)
 		drv->push_frame_buffer();
 		drv->pop_frame_buffer();
 	}
+	BOOST_TEST(state().total() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ACorrectRenderPassFrameProducesNoViolations)
+{
+	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(64, 32, texture_usage::depth_target));
+	auto mesh = make_geometry(*drv, 6);
+
+	for (int frame = 0; frame < 3; ++frame) {
+		render_pass_desc pass = pass_of(color.get(), depth.get());
+		pass.colors[0].load = load_op::clear;
+		pass.depth_stencil->load = load_op::clear;
+		pass.render_area = { 8, 8, 16, 16 };
+		drv->begin_render_pass(pass);
+		drv->set_viewport({ 0, 0, 64, 32 });
+		use_program();
+		drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
+		drv->end_render_pass();
+
+		render_pass_desc window;
+		window.backbuffer = true;
+		window.colors.push_back({ .load = load_op::clear });
+		window.depth_stencil = attachment_desc{ .load = load_op::clear };
+		drv->begin_render_pass(window);
+		drv->set_viewport({ 0, 0, 640, 480 });
+		drv->end_render_pass();
+		chain.present();
+	}
+
+	BOOST_TEST(state().total() == 0u);
+	BOOST_TEST(state().last_frame().frame_buffers == 2u);
+	BOOST_TEST(inner().calls().render_pass_begins == 6u);
+	BOOST_TEST(inner().calls().render_pass_ends == 6u);
+	BOOST_TEST(inner().stats().framebuffers.misses() == 1u);
+	BOOST_TEST(inner().stats().framebuffers.hits() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ANestedRenderPassIsReportedAndNotForwarded)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto other = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+
+	drv->begin_render_pass(pass_of(color.get(), nullptr, "outer"));
+	drv->begin_render_pass(pass_of(other.get(), nullptr, "inner"));
+	expect_only(state(), vl::rule::nested_render_pass);
+	BOOST_TEST(inner().calls().render_pass_begins == 1u);
+
+	// The end of the refused pass is swallowed, the outer pass stays open until its own end.
+	drv->end_render_pass();
+	BOOST_TEST(inner().in_render_pass());
+	drv->end_render_pass();
+	BOOST_TEST(!inner().in_render_pass());
+	chain.present();
+
+	BOOST_TEST(state().total() == 1u);
+	BOOST_TEST(inner().calls().render_pass_ends == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(EndRenderPassWithoutBeginIsReportedAndNotForwarded)
+{
+	drv->end_render_pass();
+
+	expect_only(state(), vl::rule::end_without_begin);
+	BOOST_TEST(inner().calls().render_pass_ends == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ARenderPassStillOpenAtPresentIsReported)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get()));
+	chain.present();
+
+	expect_only(state(), vl::rule::unbalanced_at_present);
+}
+
+BOOST_AUTO_TEST_CASE(RenderPassColorAttachmentWithoutColorTargetUsageIsReported)
+{
+	auto sampled = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get()));
+	drv->end_render_pass();
+	BOOST_TEST(state().total() == 0u);
+
+	drv->begin_render_pass(pass_of(sampled.get()));
+	expect_only(state(), vl::rule::attachment_usage);
+	BOOST_TEST(inner().calls().render_pass_begins == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(RenderPassDepthAttachmentNeedsDepthOrStencilUsage)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto not_depth = drv->create_texture(texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
+	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
+	auto stencil = drv->create_texture(texture_of(16, 16, texture_usage::stencil_target));
+
+	drv->begin_render_pass(pass_of(color.get(), depth.get()));
+	drv->end_render_pass();
+	drv->begin_render_pass(pass_of(color.get(), stencil.get()));
+	drv->end_render_pass();
+	BOOST_TEST(state().total() == 0u);
+
+	drv->begin_render_pass(pass_of(color.get(), not_depth.get()));
+	expect_only(state(), vl::rule::attachment_usage);
+}
+
+BOOST_AUTO_TEST_CASE(EveryColorOfARenderPassIsCheckedForUsage)
+{
+	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto second = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
+	render_pass_desc pass = pass_of(first.get());
+	pass.colors.push_back({ .texture = second.get() });
+	drv->begin_render_pass(pass);
+
+	expect_only(state(), vl::rule::attachment_usage);
+}
+
+BOOST_AUTO_TEST_CASE(RenderPassAttachmentsOfDifferentSizesAreReportedOnce)
+{
+	auto color = drv->create_texture(texture_of(64, 64, texture_usage::color_target));
+	auto second = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(32, 32, texture_usage::depth_target));
+	render_pass_desc pass = pass_of(color.get(), depth.get());
+	pass.colors.push_back({ .texture = second.get() });
+	drv->begin_render_pass(pass);
+
+	expect_only(state(), vl::rule::attachment_size_mismatch);
+}
+
+BOOST_AUTO_TEST_CASE(AttachmentSizesAreTakenAtTheirMipLevel)
+{
+	texture_header mipped = texture_of(64, 64, texture_usage::color_target);
+	mipped.data.mip_levels = 3;
+	auto color = drv->create_texture(mipped);
+	auto small = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	render_pass_desc pass = pass_of(color.get());
+	pass.colors[0].mip = 2;
+	pass.colors.push_back({ .texture = small.get() });
+	drv->begin_render_pass(pass);
+	drv->end_render_pass();
+	BOOST_TEST(state().total() == 0u);
+
+	render_pass_desc past_last_mip = pass_of(color.get());
+	past_last_mip.colors[0].mip = 3;
+	drv->begin_render_pass(past_last_mip);
+	expect_only(state(), vl::rule::invalid_render_pass);
+}
+
+BOOST_AUTO_TEST_CASE(RenderPassLayerOutsideTheTextureIsReported)
+{
+	texture_header array = texture_of(16, 16, texture_usage::color_target);
+	array.type = TEXTURE_TYPE::TEXTURE_2D_ARRAY;
+	array.data.extent.layers = 4;
+	texture_header cube = texture_of(16, 16, texture_usage::color_target);
+	cube.type = TEXTURE_TYPE::TEXTURE_CUBE_MAP;
+	auto layers = drv->create_texture(array);
+	auto faces = drv->create_texture(cube);
+
+	for (const auto& [texture, last] : { std::pair{ layers.get(), 3u }, std::pair{ faces.get(), 5u } }) {
+		render_pass_desc pass = pass_of(texture);
+		pass.colors[0].layer = last;
+		drv->begin_render_pass(pass);
+		drv->end_render_pass();
+	}
+	BOOST_TEST(state().total() == 0u);
+
+	render_pass_desc past_end = pass_of(layers.get());
+	past_end.colors[0].layer = 4;
+	drv->begin_render_pass(past_end);
+	expect_only(state(), vl::rule::invalid_render_pass);
+}
+
+BOOST_AUTO_TEST_CASE(ViewportIsCheckedAgainstTheRenderPassTarget)
+{
+	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get()));
+
+	drv->set_viewport({ 0, 0, 64, 32 });
+	drv->set_viewport({ 16, 8, 48, 24 });
+	BOOST_TEST(state().total() == 0u);
+
+	drv->set_viewport({ 0, 0, 65, 32 });
+	expect_only(state(), vl::rule::viewport_outside_target);
+
+	// Back out of the pass, the window has no known extent.
+	drv->end_render_pass();
+	drv->set_viewport({ 0, 0, 4096, 4096 });
+	BOOST_TEST(state().total() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(RenderAreaOutsideTheTargetIsReported)
+{
+	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	render_pass_desc pass = pass_of(color.get());
+
+	pass.render_area = { 4, 4, 8, 8 };
+	drv->begin_render_pass(pass);
+	drv->end_render_pass();
+	pass.render_area = { 0, 0, 0, 0 };
+	drv->begin_render_pass(pass);
+	drv->end_render_pass();
+	BOOST_TEST(state().total() == 0u);
+
+	pass.render_area = { 60, 0, 8, 8 };
+	drv->begin_render_pass(pass);
+	expect_only(state(), vl::rule::render_area_outside_target);
+}
+
+BOOST_AUTO_TEST_CASE(MalformedRenderPassesAreReported)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+
+	drv->begin_render_pass(render_pass_desc{});
+	expect_only(state(), vl::rule::invalid_render_pass, 1);
+	drv->end_render_pass();
+
+	render_pass_desc window = pass_of(color.get());
+	window.backbuffer = true;
+	drv->begin_render_pass(window);
+	expect_only(state(), vl::rule::invalid_render_pass, 2);
+	drv->end_render_pass();
+
+	render_pass_desc no_depth_texture = pass_of(color.get());
+	no_depth_texture.depth_stencil = attachment_desc{};
+	drv->begin_render_pass(no_depth_texture);
+	expect_only(state(), vl::rule::invalid_render_pass, 3);
+}
+
+BOOST_AUTO_TEST_CASE(ADeletedAttachmentDropsTheRenderPass)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
+	texture_interface* stale = depth.get();
+	depth.reset();
+
+	drv->begin_render_pass(pass_of(color.get(), stale));
+	drv->end_render_pass();
+	chain.present();
+
+	expect_only(state(), vl::rule::dead_object);
+	BOOST_TEST(inner().calls().render_pass_begins == 0u);
+	BOOST_TEST(inner().calls().render_pass_ends == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(RenderPassTexturesReachTheWrappedDriverUnwrapped)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get(), nullptr, "forwarded"));
+	drv->end_render_pass();
+
+	const render_pass_desc& seen = inner().last_render_pass();
+	BOOST_REQUIRE(seen.colors.size() == 1u);
+	BOOST_TEST(seen.colors[0].texture == color->native());
+	BOOST_TEST(std::string(seen.debug_name) == "forwarded");
+}
+
+BOOST_AUTO_TEST_CASE(RenderPassBudgetCountsPassesBegunInAFrame)
+{
+	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_frame_buffers = 2 });
+	auto limited_drv = limited.create_driver();
+	auto color = limited_drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+
+	for (int i = 0; i < 4; ++i) {
+		limited_drv->begin_render_pass(pass_of(color.get()));
+		limited_drv->end_render_pass();
+	}
+	expect_only(limited.state(), vl::rule::budget_frame_buffers);
+	BOOST_TEST(limited.state().current_frame().frame_buffers == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(FramebuffersAreReusedAcrossFramesAndEvictedWithTheirTexture)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	for (int frame = 0; frame < 5; ++frame) {
+		drv->begin_render_pass(pass_of(color.get()));
+		drv->end_render_pass();
+		chain.present();
+	}
+	BOOST_TEST(inner().stats().framebuffers.misses() == 1u);
+	BOOST_TEST(inner().stats().framebuffers.hits() == 4u);
+
+	color.reset();
+	BOOST_TEST(inner().stats().framebuffers.size() == 0u);
 	BOOST_TEST(state().total() == 0u);
 }
 

@@ -22,6 +22,10 @@ namespace rnd::driver::validation
 		texture_usage_flags,
 		texture_not_sampled,
 		attachment_size_mismatch,
+		nested_render_pass,
+		end_without_begin,
+		invalid_render_pass,
+		render_area_outside_target,
 		viewport_outside_target,
 		scissor_outside_target,
 		draw_without_use,
@@ -81,6 +85,8 @@ namespace rnd::driver::validation
 		set_viewport,
 		set_scissor,
 		clear,
+		begin_pass,		// a = color attachment count, b = 1 when a depth/stencil attachment is set
+		end_pass,
 		use_program,
 		bind_texture,	// a = slot
 		bind_ssbo,		// a = slot
@@ -144,8 +150,18 @@ namespace rnd::driver::validation
 		// Oldest first.
 		std::vector<trace_entry> trace() const;
 
+		// The render pass in progress, if any. A pass the validator refused (nested, dead attachment) never
+		// becomes current; its end_render_pass is swallowed by `consume_dropped_begin`.
+		bool in_pass() const { return m_pass_active; }
+		const std::string& pass_name() const { return m_pass_name; }
+		void begin_pass(std::string name, target_info target, std::uint32_t colors, bool depth);
+		// False (and nothing changes) when no pass is in progress.
+		bool end_pass();
+		void drop_begin() { ++m_dropped_begins; }
+		bool consume_dropped_begin();
+
 		std::size_t target_depth() const { return m_targets.size(); }
-		target_info& current_target() { return m_targets.back(); }
+		target_info& current_target() { return m_pass_active ? m_pass_target : m_targets.back(); }
 		void push_target();
 		// False (and nothing changes) when only the backbuffer is left.
 		bool pop_target();
@@ -172,6 +188,10 @@ namespace rnd::driver::validation
 		frame_stats m_last;
 		std::vector<target_info> m_targets{ target_info{} };
 		bool m_program_used = false;
+		bool m_pass_active = false;
+		std::string m_pass_name;
+		target_info m_pass_target;
+		std::size_t m_dropped_begins = 0;
 
 		mutable std::mutex m_registry_mutex;
 		std::unordered_map<const void*, object_kind> m_objects;

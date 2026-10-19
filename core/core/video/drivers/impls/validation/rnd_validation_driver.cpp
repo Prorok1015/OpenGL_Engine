@@ -1,5 +1,6 @@
 #include "rnd_validation_driver.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <optional>
@@ -29,6 +30,29 @@ namespace {
 	{
 		return wrapped ? &static_cast<validation::texture*>(wrapped)->inner() : nullptr;
 	}
+
+	std::uint32_t mip_extent(std::uint32_t size, std::uint32_t mip)
+	{
+		return std::max<std::uint32_t>(size >> std::min<std::uint32_t>(mip, 31), 1u);
+	}
+
+	// Slices a render pass can select with `attachment_desc::layer`.
+	std::uint32_t layer_count(const texture_interface& texture)
+	{
+		switch (texture.get_type()) {
+		case TEXTURE_TYPE::TEXTURE_3D: return std::max(texture.depth(), 1u);
+		case TEXTURE_TYPE::TEXTURE_CUBE_MAP: return 6;
+		case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
+		case TEXTURE_TYPE::TEXTURE_2D_ARRAY: return std::max(texture.layers(), 1u);
+		case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY: return std::max(texture.layers(), 1u) * 6;
+		default: return 1;
+		}
+	}
+
+	const char* pass_label(const render_pass_desc& desc)
+	{
+		return desc.debug_name ? desc.debug_name : "unnamed";
+	}
 }
 
 rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner, limits budget)
@@ -40,6 +64,133 @@ rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner,
 	: m_inner(std::move(inner))
 	, m_state(std::move(state))
 {
+}
+
+bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target)
+{
+	const std::string label = pass_label(desc);
+	const auto invalid = [&](const std::string& why) {
+		m_state->report(rule::invalid_render_pass, std::format("render pass '{}': {}", label, why));
+	};
+
+	bool alive = true;
+	for (const attachment_desc& color : desc.colors) {
+		alive = (!color.texture || m_state->require_live(color.texture, object_kind::texture, "color attachment")) && alive;
+	}
+	if (desc.depth_stencil) {
+		alive = (!desc.depth_stencil->texture || m_state->require_live(desc.depth_stencil->texture, object_kind::texture, "depth attachment")) && alive;
+	}
+	if (!alive) {
+		return false;
+	}
+
+	if (desc.backbuffer) {
+		bool has_texture = desc.depth_stencil && desc.depth_stencil->texture;
+		for (const attachment_desc& color : desc.colors) {
+			has_texture = has_texture || color.texture;
+		}
+		if (has_texture) {
+			invalid("a backbuffer pass takes no texture attachments");
+		}
+	} else {
+		if (desc.colors.empty() && !desc.depth_stencil) {
+			invalid("no attachments and not a backbuffer pass");
+		}
+		if (desc.depth_stencil && !desc.depth_stencil->texture) {
+			invalid("depth/stencil attachment without a texture");
+		}
+	}
+
+	std::optional<glm::uvec2> extent;
+	bool size_mismatch = false;
+	const auto visit = [&](const attachment_desc& attachment, bool is_depth) {
+		const texture_interface& texture = *attachment.texture;
+		const bool usage_ok = is_depth
+			? texture.has_usage(texture_usage::depth_target) || texture.has_usage(texture_usage::stencil_target)
+			: texture.has_usage(texture_usage::color_target);
+		if (!usage_ok) {
+			m_state->report(rule::attachment_usage, std::format("render pass '{}': {} attachment of {}x{} has usage {}, expected {}",
+				label, is_depth ? "depth" : "color", texture.width(), texture.height(), validation::usage_text(texture.get_usage()),
+				is_depth ? "depth_target or stencil_target" : "color_target"));
+		}
+		if (attachment.mip >= std::max(texture.mip_levels(), 1u)) {
+			invalid(std::format("mip {} of a texture with {} mip levels", attachment.mip, texture.mip_levels()));
+		}
+		if (attachment.layer >= layer_count(texture)) {
+			invalid(std::format("layer {} of a texture with {} layers", attachment.layer, layer_count(texture)));
+		}
+		const glm::uvec2 size{ mip_extent(texture.width(), attachment.mip), mip_extent(texture.height(), attachment.mip) };
+		if (!extent) {
+			extent = size;
+		} else if (*extent != size) {
+			size_mismatch = true;
+		}
+	};
+	for (const attachment_desc& color : desc.colors) {
+		if (color.texture) {
+			visit(color, false);
+		}
+	}
+	if (desc.depth_stencil && desc.depth_stencil->texture) {
+		visit(*desc.depth_stencil, true);
+	}
+	if (size_mismatch) {
+		m_state->report(rule::attachment_size_mismatch, std::format("render pass '{}': attachments differ in size", label));
+	}
+
+	target.has_extent = extent.has_value();
+	target.width = extent ? extent->x : 0;
+	target.height = extent ? extent->y : 0;
+
+	const glm::ivec4 area = desc.render_area;
+	if (area.z > 0 && area.w > 0 && target.has_extent) {
+		const bool inside = area.x >= 0 && area.y >= 0
+			&& static_cast<std::int64_t>(area.x) + area.z <= target.width
+			&& static_cast<std::int64_t>(area.y) + area.w <= target.height;
+		if (!inside) {
+			m_state->report(rule::render_area_outside_target, std::format("render pass '{}': render area {{{}, {}, {}, {}}} is outside the {}x{} target",
+				label, area.x, area.y, area.z, area.w, target.width, target.height));
+		}
+	}
+
+	inner_desc = desc;
+	for (attachment_desc& color : inner_desc.colors) {
+		color.texture = unwrap(color.texture);
+	}
+	if (inner_desc.depth_stencil) {
+		inner_desc.depth_stencil->texture = unwrap(inner_desc.depth_stencil->texture);
+	}
+	return true;
+}
+
+void rnd::driver::validation::driver::begin_render_pass(const render_pass_desc& desc)
+{
+	if (m_state->in_pass()) {
+		m_state->report(rule::nested_render_pass, std::format("begin_render_pass('{}') inside the pass '{}'", pass_label(desc), m_state->pass_name()));
+		m_state->drop_begin();
+		return;
+	}
+
+	render_pass_desc inner_desc;
+	target_info target;
+	if (!check_render_pass(desc, inner_desc, target)) {
+		m_state->drop_begin();
+		return;
+	}
+	m_state->begin_pass(pass_label(desc), target, static_cast<std::uint32_t>(desc.colors.size()), desc.depth_stencil.has_value());
+	m_inner->begin_render_pass(inner_desc);
+}
+
+void rnd::driver::validation::driver::end_render_pass()
+{
+	if (m_state->consume_dropped_begin()) {
+		return;
+	}
+	if (!m_state->end_pass()) {
+		m_state->report(rule::end_without_begin, "end_render_pass outside a render pass");
+		return;
+	}
+	m_inner->end_render_pass();
 }
 
 void rnd::driver::validation::driver::push_frame_buffer()

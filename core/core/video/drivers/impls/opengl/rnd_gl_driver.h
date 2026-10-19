@@ -1,15 +1,22 @@
 #pragma once
 #include <snk/driver/rnd_driver_interface.h>
+#include <array>
+#include <memory>
 #include <stack>
 #include <glad/glad.h>
 
 namespace rnd::driver::gl
 {
+	class framebuffer_registry;
+
 	class driver : public rnd::driver::driver_interface
 	{
 	public:
 		driver();
 		virtual ~driver() override;
+
+		virtual void begin_render_pass(const render_pass_desc& desc) override;
+		virtual void end_render_pass() override;
 
 		virtual void push_frame_buffer() override;
 		virtual void pop_frame_buffer() override;
@@ -43,12 +50,24 @@ namespace rnd::driver::gl
 		virtual uint64_t get_query_result_ns(uint32_t id) const override;
 
 	private:
+		GLuint framebuffer_for(const render_pass_desc& desc);
+		GLuint create_framebuffer(const render_pass_desc& desc);
+
 		// Helper methods for framebuffer management
 		void attach_frame_buffer();
 		void detach_frame_buffer();
 		void check_frame_buffer();
 
 		glm::ivec4 viewport{ 0 };
+		std::shared_ptr<framebuffer_registry> m_framebuffers;
+		bool m_in_pass = false;
+		GLuint m_pass_fbo = 0;
+		bool m_pass_debug_group = false;
+		// Depth writes as the last render state left them: a depth clear is subject to the mask.
+		bool m_depth_write = true;
+		// Attachments to invalidate when the pass ends (store_op::dont_care).
+		std::array<GLenum, render_pass_desc::max_colors + 1> m_pass_invalidate{};
+		std::size_t m_pass_invalidate_count = 0;
 		std::stack<std::pair<GLuint, GLuint>> framebuffers;
 	};
 }
