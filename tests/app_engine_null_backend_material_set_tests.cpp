@@ -251,7 +251,7 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 			if (frame == 1) {
 				// A material that is drawn (the sky's is not): the one to dirty.
 				const auto drawn = drawn_materials();
-				storage.require<scn::context_manager>().get_level().for_each_world([&](scn::world& w) {
+				storage.require<scn::context_manager>().level_set().for_each([&](scn::world_context& w) {
 					if (registry) return;
 					for (auto [ent, cache] : w.state().view<scn::compiled_material_component>().each()) {
 						if (cache.material && drawn.contains(cache.material.get())) {
