@@ -95,10 +95,12 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.transparent_draws.reserve(mesh_count);
             // Every skeleton is copied at most once per packet, so the palettes together bound the copy.
             std::size_t bone_estimate = 0;
+            std::size_t skeleton_estimate = 0;
             for (auto [skel_ent, bones] : reg.view<scn::bone_matrices_component>().each()) {
                 bone_estimate += bones.matrices.size();
+                ++skeleton_estimate;
             }
-            packet.bones.reserve(bone_estimate);
+            packet.bones.reserve(bone_estimate, skeleton_estimate);
             for (auto&& [m_ent, name, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
                 const auto mlt_ptr = mat.mlt_desc.get();

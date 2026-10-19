@@ -97,8 +97,11 @@ namespace rnd {
 		// Skeletons copied so far: the address of the source palette and where its copy starts in `matrices`.
 		std::pmr::vector<std::pair<const void*, uint32_t>> copies{ds::frame_allocator()};
 
-		// Call before add() with an upper bound of the matrices that will be added, so the copies never reallocate.
-		void reserve(std::size_t matrix_count) { matrices.reserve(matrix_count); }
+		// Call before add() with upper bounds of the matrices and of the skeletons that will be added.
+		void reserve(std::size_t matrix_count, std::size_t skeleton_count) {
+			matrices.reserve(matrix_count);
+			copies.reserve(skeleton_count);
+		}
 
 		// The index of the first matrix of `palette` in `matrices`, copying it on its first use.
 		uint32_t add(const void* source, std::span<const glm::mat4> palette) {

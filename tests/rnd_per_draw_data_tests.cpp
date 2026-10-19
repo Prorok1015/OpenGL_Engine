@@ -339,7 +339,7 @@ BOOST_AUTO_TEST_CASE(ASkeletonIsCopiedOnceWhateverTheNumberOfDrawsUsingIt)
 	rnd::bone_palette_t palette;
 	const std::vector<glm::mat4> a(3, at_x(1.f));
 	const std::vector<glm::mat4> b(2, at_x(2.f));
-	palette.reserve(a.size() + b.size());
+	palette.reserve(a.size() + b.size(), 2);
 
 	BOOST_TEST(palette.add(&a, a) == 0u);
 	BOOST_TEST(palette.add(&b, b) == 3u);
@@ -356,7 +356,7 @@ BOOST_AUTO_TEST_CASE(ReservedPaletteNeverReallocates)
 	rnd::bone_palette_t palette;
 	const std::vector<glm::mat4> a(10, at_x(1.f));
 	const std::vector<glm::mat4> b(20, at_x(2.f));
-	palette.reserve(a.size() + b.size());
+	palette.reserve(a.size() + b.size(), 2);
 	const glm::mat4* data = palette.matrices.data();
 	palette.add(&a, a);
 	palette.add(&b, b);
@@ -400,7 +400,7 @@ BOOST_AUTO_TEST_CASE(TwoSkinnedMeshesFindTheirOwnSkeletonInTheFrameBuffer)
 	const auto skeleton_c = skeleton_of(4, 300.f);
 
 	rnd::render_packet_t first;
-	first.bones.reserve(skeleton_a.size() + skeleton_b.size());
+	first.bones.reserve(skeleton_a.size() + skeleton_b.size(), 2);
 	first.opaque_draws.push_back(skinned_draw(first.bones, skeleton_a, 1.f, "skins/a"));
 	first.opaque_draws.push_back(skinned_draw(first.bones, skeleton_b, 2.f, "skins/b"));
 	first.transparent_draws.push_back(skinned_draw(first.bones, skeleton_a, 3.f, "skins/a"));
@@ -410,7 +410,7 @@ BOOST_AUTO_TEST_CASE(TwoSkinnedMeshesFindTheirOwnSkeletonInTheFrameBuffer)
 	packets.push_back(std::move(first));
 
 	rnd::render_packet_t second;
-	second.bones.reserve(skeleton_c.size());
+	second.bones.reserve(skeleton_c.size(), 1);
 	second.opaque_draws.push_back(skinned_draw(second.bones, skeleton_c, 5.f, "skins/c"));
 	packets.push_back(std::move(second));
 

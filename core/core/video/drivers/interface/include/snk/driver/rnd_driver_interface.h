@@ -56,8 +56,8 @@ namespace rnd::driver
 
 		// The binding numbers the backend gives (set, slot, type). The shader preprocessor and the validation use it.
 		virtual const binding_table& bindings() const = 0;
-		// Alignment of the offset of a uniform buffer range (GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT): dynamic offsets
-		// and the stride of per-draw data have to be multiples of it.
+		// Alignment the API demands of the offset of a uniform buffer range: dynamic offsets and the stride of
+		// per-draw data have to be multiples of it.
 		virtual std::size_t uniform_offset_alignment() const = 0;
 
 		// GPU buffers by handle (uniform and storage buffers; vertex and index data still go through create_buffer()).

@@ -102,7 +102,7 @@ add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
-# linked through render (shared: snk_engine).
+# linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass.
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # Profiler always enabled for tests (so profiler tests can run)

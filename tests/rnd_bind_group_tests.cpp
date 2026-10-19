@@ -163,12 +163,26 @@ BOOST_AUTO_TEST_CASE(TheTableStaysWithinWhatGlGuarantees)
 
 BOOST_AUTO_TEST_CASE(NullAndValidationDriversHandOutTheTableOfTheirBackend)
 {
+	// By value: the table is an inline constant, a shared engine library has a copy of its own.
+	const auto same_table = [](const binding_table& table) {
+		for (std::uint32_t set = 0; set <= max_bind_sets; ++set) {
+			for (std::uint32_t slot = 0; slot < 16; ++slot) {
+				for (auto type : { binding_type::ubo, binding_type::ssbo, binding_type::texture }) {
+					if (table.resolve(set, slot, type) != per_type_binding_table.resolve(set, slot, type)) {
+						return false;
+					}
+				}
+			}
+		}
+		return true;
+	};
+
 	null::driver driver;
-	BOOST_TEST(&driver.bindings() == &per_type_binding_table);
+	BOOST_TEST(same_table(driver.bindings()));
 	BOOST_TEST(driver.uniform_offset_alignment() == 256u);
 
 	vl::driver validating(std::make_unique<null::driver>());
-	BOOST_TEST(&validating.bindings() == &per_type_binding_table);
+	BOOST_TEST(same_table(validating.bindings()));
 	BOOST_TEST(validating.uniform_offset_alignment() == 256u);
 }
 
