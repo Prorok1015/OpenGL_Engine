@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,11 +20,17 @@ struct log_command_fixture
 {
 	log_command_fixture()
 		: previous_capacity(engine::log_journal_capacity())
+		, previous_level(engine::log_journal_min_level())
 		, registration(cmd::register_log_commands(commands))
 	{
 		engine::set_log_journal_capacity(1000);
+		engine::set_log_journal_min_level(engine::log_level::trace); // the tests log debug on purpose
 	}
-	~log_command_fixture() { engine::set_log_journal_capacity(previous_capacity); }
+	~log_command_fixture()
+	{
+		engine::set_log_journal_capacity(previous_capacity);
+		engine::set_log_journal_min_level(previous_level);
+	}
 
 	// `fields` is the inside of the argument object, e.g. R"("category":"x")".
 	cmd::result read(const std::string& fields)
@@ -41,6 +48,7 @@ struct log_command_fixture
 	}
 
 	std::size_t previous_capacity;
+	std::optional<engine::log_level> previous_level;
 	cmd::command_registry commands;
 	cmd::registration registration;
 };
@@ -146,6 +154,30 @@ BOOST_AUTO_TEST_CASE(Read_SaysDroppedWhenSinceSeqLeftTheRing)
 	const cmd::result fresh = read(std::format(R"("since_seq":{},"category":"covcmd/ring")", first + 2));
 	BOOST_CHECK(!fresh.value.as_object().at("dropped").as_bool());
 	BOOST_TEST((texts(fresh) == std::vector<std::string>{ "r2", "r3", "r4" }));
+}
+
+// A JSON writer may send 5.0 for an integer; the schema accepts it, so the command must read it instead of throwing.
+BOOST_AUTO_TEST_CASE(Read_AcceptsIntegralDoublesForItsIntegerArguments)
+{
+	const std::uint64_t first = engine::log_journal_next_seq();
+	for (int i = 0; i < 4; ++i) egLOG_INFO("covcmd/dbl", "d{}", i);
+
+	const cmd::result result = read(std::format(R"("since_seq":{}.0,"category":"covcmd/dbl","limit":2.0)", first));
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST((texts(result) == std::vector<std::string>{ "d0", "d1" }));
+	BOOST_CHECK_EQUAL(result.value.as_object().at("next_seq").as_int64(), static_cast<std::int64_t>(first + 2));
+
+	BOOST_CHECK_EQUAL(read(R"("limit":600.0)").code, "invalid_args");
+	BOOST_CHECK_EQUAL(read(R"("limit":2.5)").code, "invalid_args");
+	BOOST_CHECK_NO_THROW(read(R"("since_seq":1e30)"));
+}
+
+BOOST_AUTO_TEST_CASE(Read_IsAReadOnlyCommand)
+{
+	const cmd::command_desc* desc = commands.find("log.read");
+	BOOST_REQUIRE(desc != nullptr);
+	BOOST_CHECK(!desc->mutates);
+	BOOST_CHECK(desc->risk == cmd::danger::none);
 }
 
 BOOST_AUTO_TEST_CASE(Read_RejectsArgumentsThatBreakTheSchema)

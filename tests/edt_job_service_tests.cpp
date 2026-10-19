@@ -441,6 +441,31 @@ BOOST_AUTO_TEST_CASE(List_ShowsRunningJobsOldestFirst_AndInfoKeepsTheOutcome)
 	BOOST_TEST(!jobs->info(9999).has_value());
 }
 
+// A slot reacting to a finished job may start another one while the service is being torn down: that one must be
+// cancelled too, not wiped from the books while its task keeps running.
+BOOST_AUTO_TEST_CASE(CancelAllAndWait_AlsoStopsAJobStartedByAFinishedSlot)
+{
+	bool follow_up_ran = false;
+	edt::job_service::job_id follow_up = 0;
+	connections.push_back(events.job_finished.subscribe([&](std::uint64_t, edt::job_status, const std::string&) {
+		if (follow_up == 0) {
+			follow_up = start("follow_up", [&follow_up_ran](ds::task_context&) { follow_up_ran = true; return 1; });
+		}
+	}));
+	start("first", [](ds::task_context&) { return 1; });
+
+	jobs->cancel_all_and_wait();
+	BOOST_TEST(jobs->running_count() == 0u);
+	BOOST_REQUIRE(follow_up != 0);
+	BOOST_TEST(!jobs->is_running(follow_up));
+	BOOST_TEST((jobs->info(follow_up)->status == edt::job_status::cancelled));
+
+	run_lane();
+	deliver();
+	BOOST_TEST(!follow_up_ran);
+	BOOST_TEST(tasks->snapshot().empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {
@@ -544,6 +569,32 @@ BOOST_AUTO_TEST_CASE(JobCommands_RejectBadArguments)
 	BOOST_TEST(call("job.get", R"({"id":-1})").code == "invalid_args");
 	BOOST_TEST(call("job.cancel", R"({"id":"x"})").code == "invalid_args");
 	BOOST_TEST(call("job.list", R"({"extra":1})").code == "invalid_args");
+}
+
+// Python's json writes 3.0 for an integer; the schema accepts it, so the commands must read it instead of throwing.
+BOOST_AUTO_TEST_CASE(JobCommands_AcceptIntegralDoublesForTheId)
+{
+	const auto id = start("work", [](ds::task_context&) { return 1; });
+	const std::string args = std::format(R"({{"id":{}.0}})", id);
+
+	cmd::result got;
+	BOOST_CHECK_NO_THROW(got = call("job.get", args));
+	BOOST_REQUIRE_MESSAGE(got.ok, got.error);
+	BOOST_TEST(got.value.as_object().at("id").as_int64() == static_cast<std::int64_t>(id));
+	BOOST_CHECK_NO_THROW(got = call("job.cancel", args));
+	BOOST_TEST(got.ok);
+	BOOST_TEST(call("job.get", R"({"id":1e30})").code == "invalid_args");
+	BOOST_TEST(call("job.get", R"({"id":2.5})").code == "invalid_args");
+}
+
+BOOST_AUTO_TEST_CASE(JobCommands_OnlyCancelChangesAnything)
+{
+	for (const char* id : { "job.list", "job.get", "job.cancel" }) {
+		const cmd::command_desc* desc = commands.find(id);
+		BOOST_REQUIRE(desc != nullptr);
+		BOOST_TEST(desc->mutates == (std::string(id) == "job.cancel"), id);
+		BOOST_TEST((desc->risk == cmd::danger::none), id);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

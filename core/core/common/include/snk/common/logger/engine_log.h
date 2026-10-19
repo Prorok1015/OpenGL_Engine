@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -39,7 +40,9 @@ namespace engine
 
 	// A log listener (editor console, tests, ...). Signature: (category, level, message). It sees every message,
 	// whatever the sink levels say, and runs on the thread that logged, so it must be thread-safe and must not
-	// block. It may log itself or remove its own handle.
+	// block. It may remove its own handle. It may log too, but a message logged on a thread that is inside a listener
+	// goes to the journal and the log files only, never to a listener (no recursion, no lock-order cycles between
+	// listeners).
 	using log_callback_t = std::function<void(std::string_view, log_level, std::string_view)>;
 
 	SNK_API void remove_log_sink(std::uint64_t id);
@@ -118,6 +121,12 @@ namespace engine
 		// since_seq named entries that were already pushed out of the ring.
 		bool dropped = false;
 	};
+
+	// Which messages the journal keeps. Nullopt (the default): the ones the logger itself lets through, i.e. its
+	// global and per-category levels; a level here replaces that rule (trace keeps everything). Listeners are not
+	// affected: they always see every message.
+	SNK_API void set_log_journal_min_level(std::optional<log_level> level);
+	SNK_API std::optional<log_level> log_journal_min_level();
 
 	// Keeps the newest `entries` messages (0 turns the journal off). Shrinking drops the oldest at once.
 	SNK_API void set_log_journal_capacity(std::size_t entries);

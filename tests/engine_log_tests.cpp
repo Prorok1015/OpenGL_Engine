@@ -7,6 +7,7 @@
 #include <charconv>
 #include <system_error>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -38,12 +39,21 @@ struct capture
 // Sets the journal capacity for one test and puts the old one back.
 struct journal_capacity_guard
 {
-	explicit journal_capacity_guard(std::size_t entries) : previous(engine::log_journal_capacity())
+	// Also keeps every level, so a test does not depend on the logger's level in this build.
+	explicit journal_capacity_guard(std::size_t entries)
+		: previous(engine::log_journal_capacity())
+		, previous_level(engine::log_journal_min_level())
 	{
 		engine::set_log_journal_capacity(entries);
+		engine::set_log_journal_min_level(engine::log_level::trace);
 	}
-	~journal_capacity_guard() { engine::set_log_journal_capacity(previous); }
+	~journal_capacity_guard()
+	{
+		engine::set_log_journal_capacity(previous);
+		engine::set_log_journal_min_level(previous_level);
+	}
 	std::size_t previous;
+	std::optional<engine::log_level> previous_level;
 };
 
 std::vector<std::string> texts_of(const engine::log_page& page)
@@ -236,27 +246,103 @@ BOOST_AUTO_TEST_CASE(Sinks_CanBeAddedAndRemovedWhileOtherThreadsLog)
 	BOOST_TEST(delivered.load() == settled);
 }
 
+// reset() and shutdown_logger() return only after a call in flight on another thread has ended. The gate opens only
+// once the test thread is about to wait, so `finished` can be true after the call only if it really waited.
 BOOST_AUTO_TEST_CASE(Sink_ResetWaitsForACallInFlightOnAnotherThread)
 {
 	std::atomic<bool> inside{ false };
-	std::atomic<bool> release{ false };
+	std::atomic<bool> about_to_reset{ false };
 	std::atomic<bool> finished{ false };
 	auto handle = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view) {
 		inside.store(true);
-		while (!release.load()) std::this_thread::yield();
+		while (!about_to_reset.load()) std::this_thread::yield();
+		std::this_thread::yield();
 		finished.store(true);
 	});
 	std::thread logger_thread([] { engine::log_message("covtest/inflight", engine::log_level::info, "x"); });
 	while (!inside.load()) std::this_thread::yield();
 
-	std::thread releaser([&] {
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
-		release.store(true);
-	});
-	handle.reset(); // blocks until the call returns
+	about_to_reset.store(true);
+	handle.reset();
 	BOOST_TEST(finished.load());
-	releaser.join();
 	logger_thread.join();
+}
+
+BOOST_AUTO_TEST_CASE(ShutdownLogger_WaitsForACallInFlightOnAnotherThread)
+{
+	std::atomic<bool> inside{ false };
+	std::atomic<bool> about_to_shut_down{ false };
+	std::atomic<bool> finished{ false };
+	auto handle = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view) {
+		inside.store(true);
+		while (!about_to_shut_down.load()) std::this_thread::yield();
+		std::this_thread::yield();
+		finished.store(true);
+	});
+	std::thread logger_thread([] { engine::log_message("covtest/inflight2", engine::log_level::info, "x"); });
+	while (!inside.load()) std::this_thread::yield();
+
+	about_to_shut_down.store(true);
+	engine::shutdown_logger();
+	BOOST_TEST(finished.load());
+	logger_thread.join();
+}
+
+// The header promises a sink may log: that message reaches the journal, not a sink, so two sinks that log from inside
+// cannot take each other's locks in opposite orders.
+BOOST_AUTO_TEST_CASE(Sink_ThatLogs_ReachesTheJournalButNoSink)
+{
+	journal_capacity_guard guard(100);
+	std::vector<std::string> seen_a;
+	std::vector<std::string> seen_b;
+	auto a = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view m) {
+		seen_a.emplace_back(m);
+		if (m == "outer") egLOG_INFO("covtest/nest", "from a");
+	});
+	auto b = engine::add_log_sink([&](std::string_view, engine::log_level, std::string_view m) {
+		seen_b.emplace_back(m);
+		if (m == "outer") egLOG_INFO("covtest/nest", "from b");
+	});
+	const std::uint64_t first = engine::log_journal_next_seq();
+	egLOG_INFO("covtest/nest", "outer");
+
+	BOOST_TEST((seen_a == std::vector<std::string>{ "outer" }));
+	BOOST_TEST((seen_b == std::vector<std::string>{ "outer" }));
+	engine::log_query query;
+	query.since_seq = first;
+	query.category = "covtest/nest";
+	BOOST_TEST((texts_of(engine::read_log_journal(query)) == std::vector<std::string>{ "outer", "from a", "from b" }));
+
+	// The depth is per call: the next message from outside reaches the sinks again.
+	egLOG_INFO("covtest/nest", "outer");
+	BOOST_TEST(seen_a.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(Journal_KeepsWhatTheLoggerLetsThrough_UnlessAMinLevelSaysOtherwise)
+{
+	journal_capacity_guard guard(100);
+	engine::set_log_journal_min_level(std::nullopt);
+	engine::set_log_level(engine::log_level::error);
+	capture cap;
+	const std::uint64_t first = engine::log_journal_next_seq();
+	egLOG_INFO("covtest/jlvl", "quiet");
+	egLOG_ERROR("covtest/jlvl", "loud");
+
+	engine::log_query query;
+	query.since_seq = first;
+	query.category = "covtest/jlvl";
+	BOOST_TEST((texts_of(engine::read_log_journal(query)) == std::vector<std::string>{ "loud" }));
+	BOOST_TEST(cap.lines.size() == 2u); // sinks still see everything
+
+	engine::set_log_journal_min_level(engine::log_level::trace);
+	egLOG_INFO("covtest/jlvl", "kept");
+	engine::set_log_journal_min_level(engine::log_level::warn);
+	egLOG_INFO("covtest/jlvl", "below the floor");
+	egLOG_WARN("covtest/jlvl", "above the floor");
+	BOOST_TEST((texts_of(engine::read_log_journal(query)) == std::vector<std::string>{ "loud", "kept", "above the floor" }));
+	BOOST_TEST((engine::log_journal_min_level() == engine::log_level::warn));
+
+	engine::set_log_level(engine::log_level::info);
 }
 
 BOOST_AUTO_TEST_CASE(Journal_KeepsSeqTimeLevelCategoryAndText)

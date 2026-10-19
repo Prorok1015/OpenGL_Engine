@@ -4,6 +4,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -40,12 +41,21 @@ namespace {
 	std::mutex s_listeners_mutex;
 	std::shared_ptr<const listener_list> s_listeners;
 	std::uint64_t s_next_listener_id = 1;
+	// Listeners running on this thread: a message logged from inside one skips the listeners.
+	thread_local int t_listener_depth = 0;
+	struct listener_scope
+	{
+		listener_scope() { ++t_listener_depth; }
+		~listener_scope() { --t_listener_depth; }
+	};
 
 	// The journal: a ring of the newest messages, seq contiguous from front to back.
 	std::mutex s_journal_mutex;
 	std::deque<engine::log_entry> s_journal;
 	std::size_t s_journal_capacity = engine::default_log_journal_capacity;
 	std::uint64_t s_journal_next_seq = 1;
+	// -1: follow the logger's own level; otherwise the lowest engine::log_level the journal keeps.
+	std::atomic<int> s_journal_min_level{ -1 };
 	std::string s_log_file_path = "logs/engine.log";
 
 	spdlog::level::level_enum to_spdlog_level(engine::log_level level)
@@ -148,14 +158,26 @@ void engine::init_logger()
 
 void engine::shutdown_logger()
 {
+	// Before the logger lock: a listener in flight on another thread may be logging, which needs that lock.
+	// The same rule as remove_log_sink: once this returns, no listener is running or will run.
+	{
+		std::shared_ptr<const listener_list> dropped;
+		{
+			std::lock_guard listeners_lock(s_listeners_mutex);
+			dropped = std::move(s_listeners);
+			s_listeners.reset();
+		}
+		if (dropped) {
+			for (const auto& item : *dropped) {
+				std::lock_guard call_lock(item->call_mutex);
+				item->removed = true;
+			}
+		}
+	}
 	std::lock_guard lock(s_logger_mutex);
 	s_loggers.clear();
 	s_sinks.clear();
 	s_file_sink = nullptr;
-	{
-		std::lock_guard listeners_lock(s_listeners_mutex);
-		s_listeners.reset();
-	}
 	{
 		// The sequence continues: a reader holding a seq from before must not see numbers repeat.
 		std::lock_guard journal_lock(s_journal_mutex);
@@ -174,14 +196,19 @@ void engine::log_message(std::string_view category, log_level level, std::string
 		logger->log(spd_level, "{}", message);
 	}
 
-	record_in_journal(category, level, message);
+	const int journal_floor = s_journal_min_level.load(std::memory_order_relaxed);
+	if (journal_floor < 0 ? logger->should_log(spd_level) : static_cast<int>(level) >= journal_floor) {
+		record_in_journal(category, level, message);
+	}
 
+	if (t_listener_depth > 0) return;
 	std::shared_ptr<const listener_list> listeners;
 	{
 		std::lock_guard listeners_lock(s_listeners_mutex);
 		listeners = s_listeners;
 	}
 	if (!listeners) return;
+	listener_scope scope;
 	for (const auto& item : *listeners) {
 		std::lock_guard call_lock(item->call_mutex);
 		if (!item->removed) item->fn(category, level, message);
@@ -277,6 +304,18 @@ void engine::remove_log_sink(std::uint64_t id)
 	// Waits for a call in flight on another thread; the flag keeps the ones that already hold a copy of the list away.
 	std::lock_guard call_lock(taken->call_mutex);
 	taken->removed = true;
+}
+
+void engine::set_log_journal_min_level(std::optional<log_level> level)
+{
+	s_journal_min_level.store(level ? static_cast<int>(*level) : -1, std::memory_order_relaxed);
+}
+
+std::optional<engine::log_level> engine::log_journal_min_level()
+{
+	const int floor = s_journal_min_level.load(std::memory_order_relaxed);
+	if (floor < 0) return std::nullopt;
+	return static_cast<log_level>(floor);
 }
 
 void engine::set_log_journal_capacity(std::size_t entries)

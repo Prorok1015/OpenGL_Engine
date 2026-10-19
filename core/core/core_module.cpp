@@ -21,6 +21,8 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_log_level, "logger/level", "");
 	// How many of the newest log messages the journal keeps (log.read); 0 turns it off.
 	CFG_VAR_DEF_INT(cfg_log_journal_capacity, "logger/journal_capacity", 10000);
+	// Lowest level the journal keeps (trace|debug|info|warn|error); empty: whatever the logger's own level lets through.
+	CFG_VAR_DEF_STRING(cfg_log_journal_min_level, "logger/journal_min_level", "");
 
 	// Main-thread queue limits (ds::task_system, `tasks` frame stage).
 	CFG_VAR_DEF_FLOAT(cfg_tasks_main_budget_ms, "tasks/main_budget_ms", 2.0f);
@@ -102,6 +104,9 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 
 		const int journal_capacity = static_cast<int>(cfg_log_journal_capacity);
 		engine::set_log_journal_capacity(static_cast<std::size_t>(std::max(0, journal_capacity)));
+
+		const std::string& journal_level = *cfg_log_journal_min_level;
+		if (!journal_level.empty()) engine::set_log_journal_min_level(parse_log_level(journal_level));
 
 		const std::string& level_str = *cfg_log_level;
 		if (!level_str.empty()) {

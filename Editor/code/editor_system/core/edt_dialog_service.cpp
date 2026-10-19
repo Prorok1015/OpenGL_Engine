@@ -207,6 +207,7 @@ public:
 
 		bool is_open = true;
 		bool save = false;
+		bool from_answer = false;
 		if (begin_modal(label, MODAL_FLAGS)) {
 			ImGui::Text("Path (relative to res://):");
 			ImGui::SetNextItemWidth(480.f);
@@ -231,6 +232,7 @@ public:
 			// Answered from outside (dialog_service::answer): the same as a click on Save or Cancel.
 			if (is_open && m_answer) {
 				save = !m_answer->cancel;
+				from_answer = true;
 				is_open = false;
 			}
 
@@ -240,8 +242,9 @@ public:
 			is_open = false;
 		}
 
-		// The path of the answer is used as given; the text buffer would cut a long one.
-		if (save) finish(m_answer && !m_answer->cancel ? m_answer->path : std::string(m_buffer));
+		// A click in the same frame wins over the answer, as for every other kind. The path of an answer is used as
+		// given; the text buffer would cut a long one.
+		if (save) finish(from_answer ? m_answer->path : std::string(m_buffer));
 		return is_open;
 	}
 
@@ -250,7 +253,7 @@ public:
 
 	json::value answer_schema() const override
 	{
-		return json::parse(R"({"type":"object","properties":{"path":{"type":"string","minLength":1},"cancel":{"type":"boolean"}},"additionalProperties":false})");
+		return json::parse(R"({"type":"object","properties":{"path":{"type":"string","minLength":1},"cancel":{"type":"boolean"}},"minProperties":1,"additionalProperties":false})");
 	}
 
 	std::optional<std::string> accept(const json::value& answer) override
@@ -303,7 +306,8 @@ public:
 		bool is_open = true;
 		// Answered from outside (dialog_service::answer): the dialog closes itself inside its popup, as on OK or Cancel.
 		if (m_answer) m_dialog.request_close();
-		if (m_dialog.show(m_options.title.c_str(), &is_open) && !m_answer) {
+		// A click on OK in the same frame wins over the answer.
+		if (m_dialog.show(m_options.title.c_str(), &is_open)) {
 			if (m_on_pick) m_on_pick(m_dialog.get_selected_path());
 			return false;
 		}
@@ -319,7 +323,7 @@ public:
 
 	json::value answer_schema() const override
 	{
-		return json::parse(R"({"type":"object","properties":{"path":{"type":"string","minLength":1},"cancel":{"type":"boolean"}},"additionalProperties":false})");
+		return json::parse(R"({"type":"object","properties":{"path":{"type":"string","minLength":1},"cancel":{"type":"boolean"}},"minProperties":1,"additionalProperties":false})");
 	}
 
 	std::optional<std::string> accept(const json::value& answer) override

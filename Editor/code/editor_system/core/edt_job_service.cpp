@@ -70,6 +70,7 @@ std::optional<edt::job_service::job_info> edt::job_service::info(job_id id) cons
 
 void edt::job_service::pump()
 {
+	ASSERT_MSG(m_tasks.on_main(), "job_service::pump: main thread only");
 	if (!m_events) return;
 	struct change
 	{
@@ -123,23 +124,26 @@ void edt::job_service::retire(job_id id, job_status status, std::string error)
 
 void edt::job_service::cancel_all_and_wait()
 {
-	std::vector<ds::task_handle_base> handles;
-	std::vector<job_id> ids;
-	handles.reserve(m_jobs.size());
-	ids.reserve(m_jobs.size());
-	for (auto& [id, job] : m_jobs) {
-		job.handle.cancel();
-		handles.push_back(job.handle);
-		ids.push_back(id);
+	// A job_finished slot may start another job while the ones before it are retired; the next round takes it, so
+	// nothing is left running when this returns.
+	while (!m_jobs.empty()) {
+		std::vector<ds::task_handle_base> handles;
+		std::vector<job_id> ids;
+		handles.reserve(m_jobs.size());
+		ids.reserve(m_jobs.size());
+		for (auto& [id, job] : m_jobs) {
+			job.handle.cancel();
+			handles.push_back(job.handle);
+			ids.push_back(id);
+		}
+		for (const auto& handle : handles) {
+			handle.wait();
+		}
+		// A continuation still queued on main finds its id unknown and delivers nothing.
+		std::sort(ids.begin(), ids.end());
+		for (const job_id id : ids) {
+			retire(id, job_status::cancelled, {});
+		}
 	}
-	for (const auto& handle : handles) {
-		handle.wait();
-	}
-	// A continuation still queued on main finds its id unknown and delivers nothing.
-	std::sort(ids.begin(), ids.end());
-	for (const job_id id : ids) {
-		retire(id, job_status::cancelled, {});
-	}
-	m_jobs.clear();
 	m_cancelled.clear();
 }

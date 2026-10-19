@@ -803,6 +803,44 @@ BOOST_AUTO_TEST_CASE(DialogAnswerCommand_GoesThroughTheSameAnswer)
 	BOOST_TEST(service.is_pending(other));
 }
 
+// An answer decides what a click on Save / Discard does, so it is a mutating command that asks for confirmation.
+BOOST_AUTO_TEST_CASE(DialogCommands_AnswerIsMutatingAndNeedsConfirmation_ListIsReadOnly)
+{
+	const cmd::command_desc* answer_desc = commands.find("dialog.answer");
+	const cmd::command_desc* list_desc = commands.find("dialog.list");
+	BOOST_REQUIRE(answer_desc != nullptr);
+	BOOST_REQUIRE(list_desc != nullptr);
+	BOOST_TEST(answer_desc->mutates);
+	BOOST_TEST((answer_desc->risk == cmd::danger::confirm));
+	BOOST_TEST(!list_desc->mutates);
+	BOOST_TEST((list_desc->risk == cmd::danger::none));
+}
+
+// The answer schema of a dialog that asks for a path must not accept {}: one of path / cancel is required.
+BOOST_AUTO_TEST_CASE(AnswerSchemas_OfPathDialogsRequireSomething)
+{
+	const auto save_as = service.save_as("start", {});
+	const auto pick = service.pick_file({}, {});
+	for (const auto& dialog : service.list()) {
+		if (dialog.id != save_as && dialog.id != pick) continue;
+		BOOST_TEST(cmd::json_schema::validate(dialog.answer_schema, json::parse("{}")).has_value());
+		BOOST_TEST(!cmd::json_schema::validate(dialog.answer_schema, json::parse(R"({"path":"a"})")).has_value());
+		BOOST_TEST(!cmd::json_schema::validate(dialog.answer_schema, json::parse(R"({"cancel":true})")).has_value());
+	}
+}
+
+// Python's json writes 3.0 for an integer; the schema accepts it, so dialog.answer must read it instead of throwing.
+BOOST_AUTO_TEST_CASE(DialogAnswerCommand_AcceptsAnIntegralDoubleId)
+{
+	int got = 0;
+	const auto id = service.confirm_unsaved([&](edt::unsaved_choice) { ++got; });
+	cmd::result result;
+	BOOST_CHECK_NO_THROW(result = call("dialog.answer", std::format(R"({{"id":{}.0,"answer":{{"choice":"cancel"}}}})", id)));
+	BOOST_TEST(result.ok);
+	BOOST_TEST(got == 1);
+	BOOST_TEST(call("dialog.answer", R"({"id":1e30,"answer":{}})").code == "invalid_args");
+}
+
 BOOST_AUTO_TEST_CASE(AutoAnswer_StillWinsOverTheQueue_AndAnswerWorksForWhatItDoesNotCover)
 {
 	edt::dialog_auto_answer auto_answer;
