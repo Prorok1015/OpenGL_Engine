@@ -6,7 +6,7 @@
 
 // Regression guard for the multi-world parallel-array desync (code-review blocker #1).
 //
-// Root cause: world_names used to be built from scn::level::for_each_world (which iterates an
+// Root cause: world_names used to be built from scn::context_set::for_each (which iterates an
 // unordered_map in hash order), while world_descs/worlds_systems_list were built from the level
 // desc (desc order). With >=2 worlds the two orderings diverged, so prefab_editor_context::close()
 // attached one world's systems to another world. The fix derives all three arrays from one ordered

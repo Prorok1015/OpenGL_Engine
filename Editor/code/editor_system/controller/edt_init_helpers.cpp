@@ -23,7 +23,7 @@
 #include <snk/common/eng_transform_3d.hpp>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_node_index.h>
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world.h>
 #include <snk/common/logger/engine_log.h>
 #include <entt/entt.hpp>
@@ -76,9 +76,9 @@ void setup_viewport_panel(
 		const std::string* active = state.active_world_name();
 		if (!ctx_mgr || !active) return nullptr;
 		const auto& name = *active;
-		auto& level = ctx_mgr->get_level();
-		if (!level.has_world(name)) return nullptr;
-		return &level.get_world(name).state();
+		auto& level = ctx_mgr->level_set();
+		if (!level.has(name)) return nullptr;
+		return &level.get(name).state();
 	});
 	viewport->set_input_router(&router, [&state] { return active_input_target(state); });
 	viewport->set_on_asset_dropped([&sys](const std::string& res_rel_path) {

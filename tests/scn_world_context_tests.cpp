@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <chrono>
 #include <map>
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/ecs/ecs_entity_changer.hpp>
 #include <snk/ecs/ecs_random.hpp>
@@ -12,10 +12,8 @@ namespace {
 	void sys_tick() { ++g_ticks; }
 
 	std::map<const entt::registry*, float> g_seen_dt;
-	std::map<const entt::registry*, float> g_seen_level_dt;
 	std::map<const entt::registry*, float> g_seen_fixed;
 	void sys_read_dt(const entt::registry& reg, const scn::delta_time& dt) { g_seen_dt[&reg] = dt.dt; }
-	void sys_read_level_dt(const entt::registry& reg, scn::level_res<const scn::delta_time> dt) { g_seen_level_dt[&reg] = dt->dt; }
 	void sys_read_fixed(const entt::registry& reg, const scn::fixed_time& t) { g_seen_fixed[&reg] = t.dt; }
 
 	struct context_fixture {
@@ -23,11 +21,9 @@ namespace {
 		{
 			g_ticks = 0;
 			g_seen_dt.clear();
-			g_seen_level_dt.clear();
 			g_seen_fixed.clear();
 			sf.register_system<&sys_tick>("tick", { .run_in_edit = false });
 			sf.register_system<&sys_read_dt>("read_dt", { .run_in_edit = true });
-			sf.register_system<&sys_read_level_dt>("read_level_dt", { .run_in_edit = true });
 			sf.register_system<&sys_read_fixed>("read_fixed", { .phase = ecs::phase::fixed_update });
 		}
 
@@ -110,19 +106,19 @@ BOOST_AUTO_TEST_CASE(Frame_ApplyCommandsExecutesQueuedChanges)
 
 BOOST_AUTO_TEST_CASE(Destroy_RemovedWorldLeavesNoContextBehind)
 {
-	scn::level lvl(nullptr);
-	lvl.create_world("a", 0);
-	lvl.create_world("b", 1);
-	lvl.add_world_systems(lvl.get_world("b"), { "tick" }, sf);
+	scn::context_set lvl("level", nullptr);
+	lvl.create_context("a", 0);
+	lvl.create_context("b", 1);
+	lvl.add_systems(lvl.get("b"), { "tick" }, sf);
 	BOOST_REQUIRE(lvl.plan_of(1) != nullptr);
 
-	lvl.remove_world("b");
+	lvl.destroy_context("b");
 
-	BOOST_TEST(lvl.get_world_count() == 1u);
-	BOOST_TEST(!lvl.has_world("b"));
-	BOOST_TEST((lvl.find_world("b") == nullptr));
+	BOOST_TEST(lvl.size() == 1u);
+	BOOST_TEST(!lvl.has("b"));
+	BOOST_TEST((lvl.find("b") == nullptr));
 	BOOST_TEST((lvl.plan_of(1) == nullptr));
-	BOOST_TEST(lvl.acquire_free_world_id() == 1u);
+	BOOST_TEST(lvl.acquire_free_id() == 1u);
 
 	g_ticks = 0;
 	lvl.update(one_frame);
@@ -131,11 +127,11 @@ BOOST_AUTO_TEST_CASE(Destroy_RemovedWorldLeavesNoContextBehind)
 
 BOOST_AUTO_TEST_CASE(Level_KeepsStepperAndModeIdenticalAcrossContexts)
 {
-	scn::level lvl(nullptr);
-	auto& a = lvl.create_world("a", 0);
+	scn::context_set lvl("level", nullptr);
+	auto& a = lvl.create_context("a", 0);
 
 	lvl.set_mode(ecs::run_mode::edit);
-	auto& b = lvl.create_world("b", 1); // created later: takes the level's current mode
+	auto& b = lvl.create_context("b", 1); // created later: takes the level's current mode
 	BOOST_TEST((a.mode() == ecs::run_mode::edit));
 	BOOST_TEST((b.mode() == ecs::run_mode::edit));
 
@@ -153,7 +149,7 @@ BOOST_AUTO_TEST_CASE(Level_KeepsStepperAndModeIdenticalAcrossContexts)
 	BOOST_TEST((b.mode() == ecs::run_mode::pause));
 
 	lvl.clear();
-	BOOST_TEST(lvl.get_world_count() == 0u);
+	BOOST_TEST(lvl.size() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(Time_IsPresentInEveryContextFromCreation)
@@ -167,9 +163,9 @@ BOOST_AUTO_TEST_CASE(Time_IsPresentInEveryContextFromCreation)
 
 BOOST_AUTO_TEST_CASE(Time_TwoContextsEachReceiveTheirOwnResources)
 {
-	scn::level lvl(nullptr);
-	auto& a = lvl.create_world("a", 0);
-	auto& b = lvl.create_world("b", 1);
+	scn::context_set lvl("level", nullptr);
+	auto& a = lvl.create_context("a", 0);
+	auto& b = lvl.create_context("b", 1);
 
 	lvl.update(std::chrono::duration<float>(0.01f));
 
@@ -185,31 +181,27 @@ BOOST_AUTO_TEST_CASE(Time_TwoContextsEachReceiveTheirOwnResources)
 
 BOOST_AUTO_TEST_CASE(Time_SystemInWorldBReadsTheDeltaOfWorldB)
 {
-	scn::level lvl(nullptr);
-	auto& a = lvl.create_world("a", 0);
-	auto& b = lvl.create_world("b", 1);
+	scn::context_set lvl("level", nullptr);
+	auto& a = lvl.create_context("a", 0);
+	auto& b = lvl.create_context("b", 1);
 	b.set_stepper(ecs::fixed_stepper(1.0 / 60.0, 0.05)); // clamps the frame to 0.05, A keeps 0.25
-	lvl.add_world_systems(a, { "read_dt", "read_level_dt" }, sf);
-	lvl.add_world_systems(b, { "read_dt", "read_level_dt" }, sf);
+	lvl.add_systems(a, { "read_dt" }, sf);
+	lvl.add_systems(b, { "read_dt" }, sf);
 
 	lvl.update(std::chrono::duration<float>(0.2f));
 
 	BOOST_REQUIRE(g_seen_dt.size() == 2u);
 	BOOST_TEST(g_seen_dt.at(&a.state()) == 0.2f, boost::test_tools::tolerance(1e-6));
 	BOOST_TEST(g_seen_dt.at(&b.state()) == 0.05f, boost::test_tools::tolerance(1e-6));
-	// LEVEL_ID resolves to the system's own context, not to a shared level state
-	BOOST_REQUIRE(g_seen_level_dt.size() == 2u);
-	BOOST_TEST(g_seen_level_dt.at(&a.state()) == 0.2f, boost::test_tools::tolerance(1e-6));
-	BOOST_TEST(g_seen_level_dt.at(&b.state()) == 0.05f, boost::test_tools::tolerance(1e-6));
 }
 
 BOOST_AUTO_TEST_CASE(Time_FixedTimeIsWrittenToEveryContextThatSteps)
 {
-	scn::level lvl(nullptr);
-	auto& a = lvl.create_world("a", 0);
-	auto& b = lvl.create_world("b", 1);
-	lvl.add_world_systems(a, { "read_fixed" }, sf);
-	lvl.add_world_systems(b, { "read_fixed" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& a = lvl.create_context("a", 0);
+	auto& b = lvl.create_context("b", 1);
+	lvl.add_systems(a, { "read_fixed" }, sf);
+	lvl.add_systems(b, { "read_fixed" }, sf);
 
 	lvl.update(std::chrono::duration<float>(0.02f));
 
@@ -220,10 +212,10 @@ BOOST_AUTO_TEST_CASE(Time_FixedTimeIsWrittenToEveryContextThatSteps)
 
 BOOST_AUTO_TEST_CASE(Time_ContextCreatedLaterJoinsTheStepOfTheOthers)
 {
-	scn::level lvl(nullptr);
-	auto& a = lvl.create_world("a", 0);
+	scn::context_set lvl("level", nullptr);
+	auto& a = lvl.create_context("a", 0);
 	lvl.update(std::chrono::duration<float>(0.01f)); // leaves a fraction of a step in A
-	auto& b = lvl.create_world("b", 1);
+	auto& b = lvl.create_context("b", 1);
 	BOOST_TEST(b.stepper().alpha() == a.stepper().alpha());
 	BOOST_TEST(b.stepper().alpha() > 0.0f);
 }

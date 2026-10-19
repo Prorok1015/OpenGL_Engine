@@ -7,76 +7,15 @@
 
 namespace ecs {
 
-template <class> 
-constexpr bool always_false = false;
-
 // Specialize to true for a ctx resource that the context must have written before any system
 // runs. Asking for it when it is missing asserts instead of creating a zeroed one.
 template <class T>
 inline constexpr bool required_ctx_resource = false;
 
-template <size_t ID, typename T> 
-struct bind_res {
-    T& ref;
-
-    bind_res(T& r) : ref(r) {}
-
-    T* operator->() const { return &ref; }
-    T& operator*() const { return ref; }
-    T& get() const { return ref; }
-};
-
 // Context passed to the invoker at runtime
 struct runtime_context {
-    // Callback to get any world's registry by ID
-    std::function<entt::registry &(size_t)> get_world_registry{};
     entt::registry& current_registry;
     size_t current_world_id = 0;
-};
-
-// Argument Resolver Template
-template <typename T> struct binded_resolver {
-  // Fallback: Try to get T from local context
-  static decltype(auto) resolve(const runtime_context &ctx) {
-      static_assert(always_false<T>, "this type is not equal bind_res");
-  }
-};
-
-template <size_t ID, typename... ARGS> 
-struct binded_resolver<const ecs::bind_res<ID, entt::basic_view<ARGS...>>&> {
-  static decltype(auto) resolve(const runtime_context &ctx) {
-      entt::registry& reg = ctx.get_world_registry(ID);
-      return ecs::bind_res<ID, entt::basic_view<ARGS...>>(static_cast<entt::basic_view<ARGS...>>(entt::as_view{ reg }));
-  }
-};
-
-template <size_t ID, typename... ARGS>
-struct binded_resolver<ecs::bind_res<ID, entt::basic_view<ARGS...>>> {
-  static auto resolve(const runtime_context &ctx) {
-    entt::registry& reg = ctx.get_world_registry(ID);
-    return ecs::bind_res<ID, entt::basic_view<ARGS...>>(static_cast<entt::basic_view<ARGS...>>(entt::as_view{ reg }));
-  }
-};
-
-template <size_t ID, typename T> 
-struct binded_resolver<ecs::bind_res<ID, T>> {
-  static auto resolve(const runtime_context &ctx) {
-    entt::registry& r = ctx.get_world_registry(ID);
-    T& val = r.ctx().get<std::remove_const_t<T>>();
-    return ecs::bind_res<ID, T>(val);
-  }
-};
-
-template <size_t ID, typename T>
-struct binded_resolver<const ecs::bind_res<ID, T>> : binded_resolver<ecs::bind_res<ID, T>> {};
-
-template <size_t ID, typename T>
-struct binded_resolver<const ecs::bind_res<ID, T> &> {
-    static auto resolve(const runtime_context &ctx) {
-        entt::registry &r = ctx.get_world_registry(ID);
-        T& val = r.ctx().get<std::remove_const_t<T>>();
-        return ecs::bind_res<ID, T>(val);
-    }
 };
 
 template<typename TYPE>
@@ -86,8 +25,6 @@ template<typename TYPE>
         return reg;
     } else if constexpr (is_view_v<std::decay_t<TYPE>>) {
         return static_cast<TYPE>(entt::as_view{ reg });
-    } else if constexpr (is_bind_res_v<std::decay_t<TYPE>>) {
-        return binded_resolver<TYPE>::resolve(ctx);   
     } else if constexpr (required_ctx_resource<std::remove_cvref_t<TYPE>>) {
         using res_t = std::remove_cvref_t<TYPE>;
         res_t* res = reg.ctx().template find<res_t>();

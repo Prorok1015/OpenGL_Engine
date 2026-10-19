@@ -1,7 +1,7 @@
 #include "edt_world_controller.h"
 #include "edt_shared_state.h"
 #include "edt_editor_camera.h"
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/ecs/ecs_system.h>
@@ -26,19 +26,19 @@ bool edt::world_controller::switch_to_world(int idx)
 	if (!ctx_mgr || idx < 0 || idx >= (int)m_state.world_names.size())
 		return false;
 
-	scn::level& lvl = ctx_mgr->get_level();
+	scn::context_set& lvl = ctx_mgr->level_set();
 
 	// The world we leave (or the target) may be gone: a level reload from the desc drops worlds
 	// created at runtime while world_names still lists them. Never assert on a stale name.
-	scn::world* target = lvl.find_world(m_state.world_names[idx]);
+	scn::world_context* target = lvl.find(m_state.world_names[idx]);
 	if (!target) {
 		egLOG_ERROR("Editor/SwitchWorld", "World '{}' is not in the level, switch ignored", m_state.world_names[idx]);
 		return false;
 	}
 
-	scn::world* old_world = nullptr;
+	scn::world_context* old_world = nullptr;
 	if (m_state.active_world_idx >= 0 && m_state.active_world_idx < (int)m_state.world_names.size()) {
-		old_world = lvl.find_world(m_state.world_names[m_state.active_world_idx]);
+		old_world = lvl.find(m_state.world_names[m_state.active_world_idx]);
 	}
 
 	if (old_world && on_save_camera) {
@@ -55,7 +55,7 @@ bool edt::world_controller::switch_to_world(int idx)
 
 	m_state.active_world_idx = idx;
 	m_state.touch_descs();
-	scn::world& world = *target;
+	scn::world_context& world = *target;
 
 	if (on_inject_camera) on_inject_camera(world.state());
 	if (on_world_switched) on_world_switched(idx);
@@ -88,7 +88,7 @@ void edt::world_controller::create_world(const std::string& name)
 	auto ctx_mgr = m_state.ctx_manager.lock();
 	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return;
 
-	if (ctx_mgr->get_level().has_world(name)) {
+	if (ctx_mgr->level_set().has(name)) {
 		egLOG_WARN("Editor/CreateWorld", "World '{}' already exists, choose another name", name);
 		return;
 	}
@@ -124,11 +124,11 @@ void edt::world_controller::create_world(const std::string& name)
 		return;
 	}
 
-	scn::level& lvl = ctx_mgr->get_level();
-	uint32_t new_id = lvl.acquire_free_world_id();
-	scn::world& world = lvl.create_world(name, new_id);
+	scn::context_set& lvl = ctx_mgr->level_set();
+	uint32_t new_id = lvl.acquire_free_id();
+	scn::world_context& world = lvl.create_context(name, new_id);
 
-	lvl.add_world_systems(world, world_res->get_systems(), *m_state.sfactory);
+	lvl.add_systems(world, world_res->get_systems(), *m_state.sfactory);
 
 	entt::entity e = world.state().create();
 	m_state.assembler->spawn_from_desc(world.state(), e, *world_res, name);
