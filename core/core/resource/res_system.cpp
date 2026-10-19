@@ -499,6 +499,10 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
   if (!m_cache.any_of_tag(dependent, [&block](const cache_entry &entry) { return entry.lock() == block; })) {
     return;
   }
+  if (m_depends_on.size() >= m_edge_sweep_at) {
+    prune_released_edges();
+    m_edge_sweep_at = std::max(k_edge_sweep_floor, m_depends_on.size() * 2);
+  }
   if (const auto old = m_depends_on.find(dependent); old != m_depends_on.end()) {
     for (const auto &target : old->second) {
       if (const auto it = m_dependents.find(target); it != m_dependents.end()) {
@@ -522,6 +526,59 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
   }
   if (!targets.empty()) {
     m_depends_on[dependent] = std::move(targets);
+  }
+}
+
+void res::resource_system::prune_released_edges() {
+  // Released: the cache still has an entry for the tag, but every one of them expired. A tag without any entry was
+  // evicted by a signal and may be loaded again, so its edges stay.
+  const auto is_released = [this](const res::tag &tag) {
+    return m_cache.any_of_tag(tag, [](const cache_entry &entry) { return entry.expired(); }) &&
+           !m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+  };
+  std::unordered_set<res::tag> released;
+  for (const auto &[tag, targets] : m_depends_on) {
+    if (is_released(tag)) {
+      released.insert(tag);
+    }
+  }
+  if (released.empty()) {
+    return;
+  }
+
+  // A released tag that a tag still in use is built through keeps its edges: a change at the bottom of the chain has
+  // to pass through it. Walk down from every tag that is not released.
+  std::unordered_set<res::tag> needed;
+  std::vector<res::tag> pending;
+  for (const auto &[tag, targets] : m_depends_on) {
+    if (!released.contains(tag)) {
+      pending.insert(pending.end(), targets.begin(), targets.end());
+    }
+  }
+  while (!pending.empty()) {
+    const res::tag next = std::move(pending.back());
+    pending.pop_back();
+    if (!released.contains(next) || !needed.insert(next).second) {
+      continue;
+    }
+    const auto edges = m_depends_on.find(next);
+    pending.insert(pending.end(), edges->second.begin(), edges->second.end());
+  }
+
+  for (const auto &tag : released) {
+    if (needed.contains(tag)) {
+      continue;
+    }
+    const auto it = m_depends_on.find(tag);
+    for (const auto &target : it->second) {
+      if (const auto dependents = m_dependents.find(target); dependents != m_dependents.end()) {
+        std::erase(dependents->second, tag);
+        if (dependents->second.empty()) {
+          m_dependents.erase(dependents);
+        }
+      }
+    }
+    m_depends_on.erase(it);
   }
 }
 
@@ -593,6 +650,7 @@ void res::resource_system::signal_changed(const res::tag &tag) {
   std::uint64_t epoch = 0;
   {
     std::unique_lock lock(m_cache_mutex);
+    prune_released_edges();
     batch = changed_batch(tag);
     for (const auto &changed : batch) {
       m_cache.erase_tag(changed);
