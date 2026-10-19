@@ -163,7 +163,7 @@ Built on [EnTT](https://github.com/skypjack/entt) with engine-specific extension
 | Systems | Classes inheriting `ecs::system_interface`, auto-registered via `system_factory` |
 | Command Buffer | `sandbox_registry` for deferred spawn/despawn operations |
 | Invoker | Automatic dependency resolution from registry context |
-| Multi-World | Up to 5 independent registries via `world_salt` + `bind_res<WorldID, T>` |
+| Multi-World | Contexts (one registry each) grouped into sets; cross-context data goes through the set channel, see [WORLD_MESSAGING.md](docs/roadmap/design/WORLD_MESSAGING.md) |
 | Serialization | `sandbox_loader_archive` with entity remapping |
 
 ### Resource System

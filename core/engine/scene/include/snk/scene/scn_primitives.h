@@ -2,7 +2,7 @@
 #include <snk/common/common.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_mesh_nodes.hpp>
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/common/snk_api.h>
 
 namespace scn

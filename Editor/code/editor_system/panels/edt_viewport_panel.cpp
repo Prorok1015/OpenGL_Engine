@@ -91,7 +91,7 @@ namespace edt
 			render_transform_gizmo(*reg, cam_view, cam_proj);
 
 		// Re-fetch: on_transform_committed inside the gizmo may have triggered
-		// reload_world(), which destroys the old scn::world and its registry.
+		// reload_world(), which destroys the old scn::world_context and its registry.
 		reg = m_get_registry ? m_get_registry() : nullptr;
 
 		if (reg)

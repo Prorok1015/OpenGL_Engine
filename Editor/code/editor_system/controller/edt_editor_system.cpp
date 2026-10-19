@@ -32,7 +32,7 @@
 #include <snk/input/inp_input_router.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_context_manager.h>
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/window/wnd_window_system.h>
@@ -79,7 +79,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Resolve services from data storage → shared state
 	m_state.ctx_manager = data.require_shared<scn::context_manager>();
 	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
-	m_state.ctx_manager.lock()->get_level().set_mode(ecs::run_mode::edit);
+	m_state.ctx_manager.lock()->level_set().set_mode(ecs::run_mode::edit);
 	m_state.sfactory  = &data.require<ecs::system_factory>();
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
@@ -120,7 +120,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_scene_editor, m_world_ctrl, m_state);
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
 		auto ctx_mgr = m_state.ctx_manager.lock();
-		scn::world* found = ctx_mgr ? ctx_mgr->get_level().find_world(world) : nullptr;
+		scn::world_context* found = ctx_mgr ? ctx_mgr->level_set().find(world) : nullptr;
 		return found ? &found->state() : nullptr;
 	});
 	m_selection_connections = wire_selection(
@@ -160,13 +160,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		auto ctx_mgr = m_state.ctx_manager.lock();
 		const std::string* active = m_state.active_world_name();
 		if (!ctx_mgr || !active) return nullptr;
-		auto& level = ctx_mgr->get_level();
+		auto& level = ctx_mgr->level_set();
 		const auto& name = *active;
-		return level.has_world(name) ? &level.get_world(name).state() : nullptr;
+		return level.has(name) ? &level.get(name).state() : nullptr;
 	});
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
 		if (auto ctx_mgr = m_state.ctx_manager.lock()) {
-			ctx_mgr->get_level().for_each_world([&visit](scn::world& world) { visit(world.state()); });
+			ctx_mgr->level_set().for_each([&visit](scn::world_context& world) { visit(world.state()); });
 		}
 	});
 	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_state); });

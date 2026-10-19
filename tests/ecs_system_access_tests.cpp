@@ -24,9 +24,6 @@ void write_counter(counter&) {}
 void read_counter(const counter&) {}
 void read_counter_too(const counter&) {}
 void touch_registry(entt::registry&) {}
-void bound_write(ecs::bind_res<1, counter>) {}
-void bound_write_too(ecs::bind_res<1, counter>) {}
-void bound_read(const ecs::bind_res<1, const counter>&) {}
 void mixed(entt::view<entt::get_t<pos, const vel>>, counter&, const flag&, flag) {}
 
 struct fixture {
@@ -153,22 +150,6 @@ BOOST_AUTO_TEST_CASE(RegistryArgument_IsNotTracked)
 	add<&touch_registry>("A");
 	add<&write_pos>("B");
 	BOOST_TEST(conflicts(build({ "A", "B" })) == 0u);
-}
-
-BOOST_AUTO_TEST_CASE(BoundResource_ConflictsOnlyWithinTheSameTargetWorld)
-{
-	add<&write_counter>("own");     // counter of the system's own world
-	add<&bound_write>("w1_a");      // counter of world 1
-	add<&bound_write_too>("w1_b");
-	add<&bound_read>("w1_r");
-
-	BOOST_TEST(conflicts(build({ "own", "w1_a" })) == 0u); // different worlds
-
-	auto plan = build({ "w1_a", "w1_b" });
-	BOOST_REQUIRE(conflicts(plan) == 1u);
-	BOOST_TEST(contains(plan.diagnostics.front().message, "world 1"));
-
-	BOOST_TEST(conflicts(build({ "w1_a", "w1_r" })) == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(Validation_CanBeSwitchedOff)

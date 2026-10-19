@@ -34,7 +34,7 @@ Example:
 
 Example:
 ```
-"ECS auto-system dispatch supports world IDs 0-4 (max 5 worlds) via world_salt + bind_res"
+"Contexts of a set talk through the set channel (blackboard + mail), see docs/roadmap/design/WORLD_MESSAGING.md"
 "Frame allocator uses bump allocation (deallocate() is no-op)"
 → Save: Architecture-level constraints
 ```
