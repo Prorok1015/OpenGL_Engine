@@ -102,7 +102,10 @@ namespace desc
 	// must fit the field. An unknown pointer logs a "stale override" warning; the record is never removed.
 	SNK_API override_status validate_override(const type_schema& schema, const json_change& record, const schema_registry* resolve = nullptr);
 
-	// Number-aware JSON comparison; tolerance is relative to max(1, |a|, |b|).
+	// Relative tolerance for float32 values (float32 holds ~7 digits); shared by diff and the editor's override edits.
+	inline constexpr double float_relative_tolerance = 1e-6;
+
+	// Number-aware JSON comparison; tolerance is relative: |a - b| <= tolerance * max(|a|, |b|).
 	SNK_API bool json_equal(const json::value& a, const json::value& b, double tolerance = 0.0);
 
 	// True when `value` can be stored in a field of this kind (enumeration: a name or a number the enum knows).
