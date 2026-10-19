@@ -156,7 +156,7 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 			size.x, size.y, source.x, source.y, limits.max_side, limits.max_pixels);
 		return result;
 	}
-	std::vector<std::byte> rows = m_driver.read_texture(*texture, { 0, 0, source.x, source.y });
+	std::vector<std::byte> rows = m_driver.read_texture(texture->handle(), { 0, 0, source.x, source.y });
 	if (rows.size() != static_cast<std::size_t>(source.x) * static_cast<std::size_t>(source.y) * pixel_bytes || rows.empty()) {
 		result.error = std::format("the render target of viewport '{}' ({}x{}) cannot be read back", found->id, source.x, source.y);
 		return result;

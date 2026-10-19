@@ -13,4 +13,9 @@ namespace rnd::driver
 		constexpr explicit operator bool() const noexcept { return index != 0; }
 		friend constexpr bool operator==(const handle&, const handle&) = default;
 	};
+
+	// A texture of a driver. Its backend keeps the texture in a ds::handle_pool; the generation of the handle
+	// tells it from the texture that had the slot before.
+	struct texture_tag;
+	using texture_handle = handle<texture_tag>;
 }

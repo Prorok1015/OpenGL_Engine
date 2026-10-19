@@ -13,8 +13,9 @@ void rnd::driver::null::driver::begin_render_pass(const render_pass_desc& desc)
 {
 	ASSERT_MSG(!m_in_render_pass, "begin_render_pass inside a render pass");
 	if (!desc.backbuffer) {
-		const auto key = make_framebuffer_key(desc, [](texture_handle handle) -> std::uint64_t {
-			return handle ? static_cast<const texture*>(handle)->framebuffer_object() : 0;
+		const auto key = make_framebuffer_key(desc, [this](texture_handle handle) -> std::uint64_t {
+			const texture* found = texture_of(handle);
+			return found ? found->framebuffer_object() : 0;
 		});
 		m_stats->framebuffers.acquire(key, [this] { return ++m_next_framebuffer; });
 	}
@@ -69,7 +70,9 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create
 
 std::unique_ptr<rnd::driver::texture_interface> rnd::driver::null::driver::create_texture(const texture_header& header)
 {
-	return std::make_unique<texture>(m_stats, header);
+	auto created = std::make_unique<texture>(m_stats, header);
+	m_textures->adopt(*created);
+	return created;
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::null::driver::create_vertex_array()
@@ -82,9 +85,13 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::null::driver::create
 	return std::make_unique<buffer>(m_stats);
 }
 
-std::vector<std::byte> rnd::driver::null::driver::read_texture(texture_interface& texture, glm::ivec4 rect)
+std::vector<std::byte> rnd::driver::null::driver::read_texture(texture_handle handle, glm::ivec4 rect)
 {
-	if (!can_read_back(texture) || !read_rect_inside(texture, rect)) {
+	const texture* found = texture_of(handle);
+	if (!ENGINE_VERIFY(found, "null driver: read_texture with a handle of no texture (index {}, generation {})", handle.index, handle.gen)) {
+		return {};
+	}
+	if (!can_read_back(*found) || !read_rect_inside(*found, rect)) {
 		return {};
 	}
 	std::vector<std::byte> bytes;

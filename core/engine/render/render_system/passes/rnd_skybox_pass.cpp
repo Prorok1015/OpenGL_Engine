@@ -84,9 +84,9 @@ namespace rnd {
 			rnd::driver::render_pass_desc pass;
 			pass.debug_name = "skybox";
 			if (offscreen) {
-				pass.colors.push_back({.texture = color_rt});
+				pass.colors.push_back({.texture = rnd::driver::handle_of(color_rt)});
 				if (auto* depth = context.find_texture(depth_tag)) {
-					pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
+					pass.depth_stencil = rnd::driver::attachment_desc{.texture = rnd::driver::handle_of(depth)};
 				}
 			} else {
 				pass.backbuffer = true;
@@ -97,7 +97,7 @@ namespace rnd {
 			state.depth.enabled = true;
 			state.depth.write_mask = false;
 			state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
-			rnd::driver::set_target_formats(state, pass);
+			rnd::driver::set_target_formats(drv, state, pass);
 			state.set_layouts = context.layouts().skybox();
 			rnd::pass_pipelines pipelines(drv, context, state);
 
@@ -118,7 +118,7 @@ namespace rnd {
 			if (cubemap && pipelines.bind(material.base)) {
 				driver::bind_group_desc inputs;
 				inputs.layout = context.layouts().sky;
-				inputs.entries.push_back({ driver::binding_type::texture, bindings::sky_slot, {}, 0, 0, cubemap });
+				inputs.entries.push_back({ driver::binding_type::texture, bindings::sky_slot, {}, 0, 0, driver::handle_of(cubemap) });
 				drv.set_bind_group(driver::pass_set, drv.create_bind_group(inputs, driver::lifetime::transient));
 				drv.draw_indices(m_va, 36);
 			}

@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_render_data_extractor.h>
+#include <snk/scene/level/scn_screen_anchor.h>
 #include <snk/scene/level/scn_world.h>
 #include <memory_resource>
 #include <unordered_map>
@@ -12,6 +13,17 @@
 #include <snk/common/eng_profiler.h>
 #include <snk/common/mem_allocator.h>
 
+namespace {
+    rnd::clear_mode clear_mode_of(scn::camera_clear clear)
+    {
+        switch (clear) {
+        case scn::camera_clear::depth: return rnd::clear_mode::depth;
+        case scn::camera_clear::none: return rnd::clear_mode::none;
+        default: return rnd::clear_mode::all;
+        }
+    }
+}
+
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
     // The services are injected into frame_context by render_system::begin_frame, which the `extract`
@@ -19,6 +31,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     ASSERT_MSG(context.materials, "frame_context material instance cache not injected (RHI R6b)");
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
+
+    // Markers over objects (WORLD_MESSAGING 3): resolved here, after every update of the frame, from the
+    // current transforms and cameras, so a marker never lags behind its target.
+    scn::resolve_screen_anchors(m_contexts, context.backbuffer_size);
 
     m_contexts.for_each([&](scn::world_context& w) {
         if (!w.extract()) return;
@@ -55,13 +71,13 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
             const glm::ivec4 vp_rect = *camera_viewport;
             packet.camera.viewport = vp_rect;
-            packet.camera.projection_matrix = glm::perspective(glm::radians(cam.fov), (float)vp_rect.z / (float)vp_rect.w,
-                cam.near_distance, cam.far_distance);
+            packet.camera.projection_matrix = scn::camera_projection_matrix(cam, vp_rect);
             packet.camera.color_targets = cam.color_targets;
             packet.camera.depth_target = cam.depth_target;
             packet.camera.tp_accum_target = cam.tp_accum_target;
             packet.camera.tp_reveal_target = cam.tp_reveal_target;
-            packet.camera.render_priority = 0;
+            packet.camera.render_priority = cam.layer;
+            packet.camera.clear = clear_mode_of(cam.clear);
 
             auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
             auto mesh_count = meshes_view.size_hint();

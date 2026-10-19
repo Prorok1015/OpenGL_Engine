@@ -3,6 +3,7 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_pipeline_cache.h>
 #include <snk/driver/rnd_resource_tables.h>
+#include <snk/driver/rnd_texture_pool.h>
 #include <snk/common/snk_api.h>
 
 #include <array>
@@ -91,7 +92,9 @@ namespace rnd::driver::null
 		void invalidate_state_cache() override { ++m_calls.state_cache_invalidations; }
 		// A stand-in for the pixels: pixel (x, y) of the texture is {x, y, 0, 255} modulo 256, so a test can tell
 		// which part of the texture came back.
-		std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) override;
+		std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) override;
+		const texture_header& info(texture_handle texture) const override { return m_textures->info(texture); }
+		bool is_alive(texture_handle texture) const override { return m_textures->find(texture) != nullptr; }
 
 		const object_stats& stats() const { return *m_stats; }
 		const call_counts& calls() const { return m_calls; }
@@ -114,6 +117,10 @@ namespace rnd::driver::null
 		// The bytes of a buffer; of a per_frame buffer the copy `copy` (default the current frame's). Null for a dead handle.
 		const std::vector<std::byte>* buffer_bytes(buffer_handle buffer, std::optional<std::uint32_t> copy = std::nullopt) const;
 		std::size_t live_buffers() const { return m_buffers.live(); }
+		// The textures that are alive. A texture is gone with the object create_texture handed out.
+		std::size_t live_textures() const { return m_textures->live(); }
+		// The object behind a handle: null for a handle that names no live texture.
+		texture* texture_of(texture_handle handle) const { return static_cast<texture*>(m_textures->find(handle)); }
 		const bind_group_layout_desc* layout_info(bind_group_layout_handle layout) const { return m_layouts.find(layout); }
 		std::size_t layout_count() const { return m_layouts.size(); }
 		// Null for a handle that names no live group (a transient one is gone after its frame).
@@ -155,6 +162,7 @@ namespace rnd::driver::null
 		};
 
 		std::uint64_t m_frame = 0;
+		std::shared_ptr<texture_pool> m_textures = texture_pool::create();
 		bind_group_layout_cache m_layouts;
 		slot_table<buffer_tag, null_buffer> m_buffers;
 		slot_table<bind_group_tag, null_group> m_groups;

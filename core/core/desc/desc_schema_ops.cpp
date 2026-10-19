@@ -15,7 +15,6 @@ namespace desc
 	namespace
 	{
 		constexpr std::string_view log_category = "desc";
-		constexpr double float_tolerance = 1e-5;
 		constexpr double double_tolerance = 1e-12;
 
 		bool is_number(const json::value& value)
@@ -166,7 +165,7 @@ namespace desc
 			case field_kind::res_tag:
 			case field_kind::node_ref:
 			case field_kind::entity: return 0.0;
-			default: return float_tolerance;
+			default: return float_relative_tolerance;
 			}
 		}
 
@@ -474,7 +473,7 @@ namespace desc
 					out.push_back({ pointer, member.value() });
 				} else if (before->is_object() && member.value().is_object()) {
 					diff_untyped(pointer, *before, member.value(), out);
-				} else if (!json_equal(*before, member.value(), float_tolerance)) {
+				} else if (!json_equal(*before, member.value(), float_relative_tolerance)) {
 					out.push_back({ pointer, member.value() });
 				}
 			}
@@ -585,7 +584,7 @@ namespace desc
 			if (left == right) {
 				return true;
 			}
-			return std::fabs(left - right) <= tolerance * std::max({ 1.0, std::fabs(left), std::fabs(right) });
+			return std::fabs(left - right) <= tolerance * std::max(std::fabs(left), std::fabs(right));
 		}
 		if (a.is_array() && b.is_array()) {
 			const auto& left = a.as_array();

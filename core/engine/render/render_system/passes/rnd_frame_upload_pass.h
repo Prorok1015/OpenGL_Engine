@@ -9,5 +9,7 @@ class SNK_API frame_upload_pass : public render_pass_interface {
 public:
   virtual void execute(render_context &context,
                        driver::driver_interface &drv) override;
+  // The ring of per-draw data covers the packets of every group.
+  virtual bool once_per_frame() const override { return true; }
 };
 } // namespace rnd

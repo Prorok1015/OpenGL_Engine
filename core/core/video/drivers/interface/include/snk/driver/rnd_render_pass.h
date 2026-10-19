@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/ds/ds_fixed_vector.hpp>
+#include <snk/driver/rnd_handle.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -8,11 +9,6 @@
 
 namespace rnd::driver
 {
-	class texture_interface;
-
-	// Until typed handles (RHI R7) a texture handle is the texture object itself.
-	using texture_handle = texture_interface*;
-
 	enum class load_op : uint8_t
 	{
 		load,		// keep the contents the attachment has
@@ -30,7 +26,7 @@ namespace rnd::driver
 	{
 		// Null stands for the swapchain buffer when render_pass_desc::backbuffer is set; elsewhere a null
 		// color leaves its draw buffer slot unused.
-		texture_handle texture = nullptr;
+		texture_handle texture;
 		uint32_t mip = 0;
 		// Every layer of an array, cube or 3D texture is attached (layered rendering) unless one is picked:
 		// an array layer, cube face or 3D slice. Ignored for plain 2D textures.

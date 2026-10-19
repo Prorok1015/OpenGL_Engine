@@ -6,14 +6,14 @@ namespace {
 
 constexpr std::string_view scene_descs[] = {
 	"material_desc", "prefab_desc", "world_desc", "level_desc", "anchor_desc", "camera_desc",
-	"directional_light_desc", "skybox_desc", "mesh_node_desc", "object_desc", "bone_desc",
+	"directional_light_desc", "screen_anchor_desc", "skybox_desc", "mesh_node_desc", "object_desc", "bone_desc",
 	"skinning_desc", "skin_weights_desc", "animation_controller_desc", "animated_node_desc",
 	"animation_clip_desc", "animation_collection_desc",
 };
 
 constexpr std::string_view scene_spawners[] = {
 	"prefab_desc", "world_desc", "anchor_desc", "camera_desc", "directional_light_desc",
-	"skybox_desc", "mesh_node_desc", "object_desc", "bone_desc", "skinning_desc",
+	"screen_anchor_desc", "skybox_desc", "mesh_node_desc", "object_desc", "bone_desc", "skinning_desc",
 	"skin_weights_desc", "animation_controller_desc", "animated_node_desc",
 	"animation_collection_desc",
 };
@@ -44,7 +44,7 @@ BOOST_FIXTURE_TEST_CASE(register_scene_types_registers_everything, scope_fixture
 	BOOST_CHECK_EQUAL(descs.current_version("level_desc"), 2);
 	for (auto type : scene_descs) BOOST_CHECK_MESSAGE(descs.is_registered(type), type);
 	for (auto type : scene_spawners) BOOST_CHECK_MESSAGE(assembler.has_spawner(type), type);
-	BOOST_CHECK_EQUAL(descs.get_component_type_names().size(), 3u);
+	BOOST_CHECK_EQUAL(descs.get_component_type_names().size(), 4u);
 }
 
 BOOST_FIXTURE_TEST_CASE(destroying_scope_restores_registries, scope_fixture)

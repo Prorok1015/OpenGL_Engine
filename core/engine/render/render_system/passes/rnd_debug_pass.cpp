@@ -82,9 +82,9 @@ void debug_pass::execute(render_context& context, driver::driver_interface& drv)
 		driver::render_pass_desc pass;
 		pass.debug_name = "debug";
 		if (offscreen) {
-			pass.colors.push_back({.texture = color_rt});
+			pass.colors.push_back({.texture = rnd::driver::handle_of(color_rt)});
 			if (auto* depth = context.find_texture(depth_tag)) {
-				pass.depth_stencil = driver::attachment_desc{.texture = depth};
+				pass.depth_stencil = driver::attachment_desc{.texture = rnd::driver::handle_of(depth)};
 			}
 		} else {
 			pass.backbuffer = true;
@@ -95,7 +95,7 @@ void debug_pass::execute(render_context& context, driver::driver_interface& drv)
 		state.depth.enabled = false;
 		state.depth.write_mask = false;
 		state.topology = driver::RENDER_MODE::LINE;
-		driver::set_target_formats(state, pass);
+		driver::set_target_formats(drv, state, pass);
 		state.set_layouts = context.layouts().frame_only();
 		pass_pipelines pipelines(drv, context, state);
 

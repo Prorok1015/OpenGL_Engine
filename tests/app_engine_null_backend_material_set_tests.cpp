@@ -173,7 +173,7 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
 				continue;
 			}
 			++textured;
-			const rnd::driver::texture_interface* diffuse = material->runtime.samplers[0]->native();
+			const rnd::driver::texture_handle diffuse = material->runtime.samplers[0]->native()->handle();
 			bool found = false;
 			for (std::size_t i = log_begin; i < driver()->bind_log().size() && !found; ++i) {
 				const auto& bind = driver()->bind_log()[i];
@@ -330,7 +330,7 @@ BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture)
 	std::size_t created_after = 0;
 	std::size_t live_after = 0;
 	std::size_t groups_with_the_texture = 0;
-	const rnd::driver::texture_interface* new_texture = nullptr;
+	rnd::driver::texture_handle new_texture;
 
 	run_with(20,
 		[&](int frame) {
@@ -357,7 +357,7 @@ BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture)
 			}
 			if (frame == 19) {
 				auto* texture = textures().find(reloaded);
-				new_texture = texture ? texture->native() : nullptr;
+				new_texture = texture ? texture->native()->handle() : rnd::driver::texture_handle{};
 				const auto& log = driver()->bind_log();
 				for (std::size_t i = log_begin; i < log.size(); ++i) {
 					const auto* info = log[i].set == material_set ? driver()->group_info(log[i].group) : nullptr;
@@ -369,7 +369,7 @@ BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture)
 			log_begin = driver()->bind_log().size();
 		});
 
-	BOOST_REQUIRE_MESSAGE(new_texture, "the texture was not loaded again");
+	BOOST_REQUIRE_MESSAGE(static_cast<bool>(new_texture), "the texture was not loaded again");
 	// The materials were built again (the texture manager's generation moved) and so were their groups, the last
 	// ones with the texture that was loaded after the removal.
 	BOOST_TEST(groups_with_the_texture > 0u);

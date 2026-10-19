@@ -114,12 +114,12 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsTheParamsAndTheTexturesOfTheMaterial)
 	BOOST_TEST(info->entries[0].size == sizeof(rnd::material_params));
 	BOOST_TEST((driver.buffer_info(info->entries[0].buffer)->usage == buffer_usage::uniform));
 
-	BOOST_TEST(info->entries[1].texture == diffuse.get());
-	BOOST_TEST(info->entries[3].texture == normal.get());
+	BOOST_TEST((info->entries[1].texture == diffuse->handle()));
+	BOOST_TEST((info->entries[3].texture == normal->handle()));
 	// The specular map the material lacks is a texture of the renderer's, never null and never another material's.
-	BOOST_TEST(info->entries[2].texture != nullptr);
-	BOOST_TEST(info->entries[2].texture != diffuse.get());
-	BOOST_TEST(info->entries[2].texture != normal.get());
+	BOOST_TEST(static_cast<bool>(info->entries[2].texture));
+	BOOST_TEST((info->entries[2].texture != diffuse->handle()));
+	BOOST_TEST((info->entries[2].texture != normal->handle()));
 }
 
 BOOST_AUTO_TEST_CASE(AMaterialWithoutMapsGetsPlaceholdersForAllThree)
@@ -128,9 +128,9 @@ BOOST_AUTO_TEST_CASE(AMaterialWithoutMapsGetsPlaceholdersForAllThree)
 	BOOST_REQUIRE(info);
 	BOOST_REQUIRE(info->entries.size() == 4u);
 	for (std::size_t i = 1; i < 4; ++i) {
-		BOOST_TEST(info->entries[i].texture != nullptr);
+		BOOST_TEST(static_cast<bool>(info->entries[i].texture));
 		for (std::size_t j = i + 1; j < 4; ++j) {
-			BOOST_TEST(info->entries[i].texture != info->entries[j].texture);
+			BOOST_TEST((info->entries[i].texture != info->entries[j].texture));
 		}
 	}
 }
@@ -229,7 +229,7 @@ BOOST_AUTO_TEST_CASE(AMaterialBuiltAnewForAReloadedTextureGetsANewGroupWithTheNe
 	auto before = material(params_of(32.f), { old_texture.get() });
 	const auto group_before = bind(*before);
 	BOOST_REQUIRE(driver.group_info(group_before));
-	BOOST_TEST(driver.group_info(group_before)->entries[1].texture == old_texture.get());
+	BOOST_TEST((driver.group_info(group_before)->entries[1].texture == old_texture->handle()));
 
 	// The reload: the texture manager drops the texture, the extractor builds the material again with the new one.
 	auto new_texture = driver.create_texture(small_texture());
@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(AMaterialBuiltAnewForAReloadedTextureGetsANewGroupWithTheNe
 	next_frame();
 	const auto group_after = bind(*after);
 	BOOST_TEST((group_after != group_before));
-	BOOST_TEST(driver.group_info(group_after)->entries[1].texture == new_texture.get());
+	BOOST_TEST((driver.group_info(group_after)->entries[1].texture == new_texture->handle()));
 }
 
 BOOST_AUTO_TEST_CASE(TheGroupsOfMaterialsThatWereNotDrawnForAFrameAreDestroyed)

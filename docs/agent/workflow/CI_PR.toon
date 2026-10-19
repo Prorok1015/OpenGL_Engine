@@ -53,3 +53,4 @@ This project:
 - Merge only after a complete green run on the non-draft head: green draft checks are not enough, mark the PR ready and wait for the full run; a new push to a non-draft PR re-runs everything
 - Screenshot gate: the visual smoke job fails when a reference diff exceeds the limit (`tools/headless/check_smoke.sh`); reference PNGs change only with the owner's decision
 - MSVC builds without PCH and without `/utf-8`
+- Shared builds (Linux GCC Shared, Windows MSVC Shared Release) run only in the full tier: a free function or class in a public engine header that tests or the editor call needs `SNK_API`, otherwise the shared link fails after the draft was green

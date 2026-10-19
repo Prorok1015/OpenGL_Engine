@@ -83,7 +83,14 @@ cleanup() {
 	wait 2>/dev/null || true
 }
 trap cleanup EXIT
-sleep 1
+# Xvfb needs a moment before it accepts connections; a fixed pause lost the race on a slow runner (the editor
+# then died with "X11: Failed to open display"). Wait until the server answers, at most 20 s.
+for _ in $(seq 1 200); do
+	kill -0 "$XVFB_PID" 2>/dev/null || { echo "error: Xvfb exited before it was ready" >&2; exit 1; }
+	xdotool getdisplaygeometry >/dev/null 2>&1 && break
+	sleep 0.1
+done
+xdotool getdisplaygeometry >/dev/null 2>&1 || { echo "error: Xvfb not ready on $DISPLAY after 20 s" >&2; exit 1; }
 
 mkdir -p "$(dirname "$SHOT")"
 LOG="$(dirname "$SHOT")/editor.log"

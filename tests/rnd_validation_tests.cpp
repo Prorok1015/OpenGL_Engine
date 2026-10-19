@@ -59,7 +59,7 @@ geometry make_geometry(driver_interface& drv, std::size_t index_count, bool with
 	return result;
 }
 
-render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nullptr, const char* name = "test")
+render_pass_desc pass_of_handles(texture_handle color, texture_handle depth = {}, const char* name = "test")
 {
 	render_pass_desc pass;
 	if (color) {
@@ -70,6 +70,11 @@ render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nu
 	}
 	pass.debug_name = name;
 	return pass;
+}
+
+render_pass_desc pass_of(const texture_interface* color, const texture_interface* depth = nullptr, const char* name = "test")
+{
+	return pass_of_handles(handle_of(color), handle_of(depth), name);
 }
 
 struct validation_fixture
@@ -331,26 +336,82 @@ BOOST_AUTO_TEST_CASE(BufferWritePastItsSizeIsReportedAndNotForwarded)
 BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
 {
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	texture_interface* stale = color.get();
+	const texture_handle stale = color->handle();
 	BOOST_TEST(state().live_objects(vl::object_kind::texture) == 1u);
+	BOOST_TEST(drv->is_alive(stale));
 	color.reset();
 	BOOST_TEST(state().live_objects(vl::object_kind::texture) == 0u);
+	BOOST_TEST(!drv->is_alive(stale));
 
-	drv->begin_render_pass(pass_of(stale));
+	drv->begin_render_pass(pass_of_handles(stale));
 
-	expect_only(state(), vl::rule::dead_object);
+	expect_only(state(), vl::rule::stale_handle);
 	BOOST_TEST(inner().calls().render_pass_begins == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(HandleOfAReusedSlotDoesNotNameTheNewTexture)
+{
+	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	const texture_handle old_handle = first->handle();
+	first.reset();
+	auto second = drv->create_texture(texture_of(32, 8, texture_usage::color_target));
+	const texture_handle new_handle = second->handle();
+
+	// The freed slot is handed out again, with a higher generation.
+	BOOST_TEST(new_handle.index == old_handle.index);
+	BOOST_TEST(new_handle.gen > old_handle.gen);
+	BOOST_TEST((new_handle != old_handle));
+	BOOST_TEST(drv->is_alive(new_handle));
+	BOOST_TEST(!drv->is_alive(old_handle));
+	BOOST_TEST(drv->info(new_handle).data.extent.width == 32u);
+
+	drv->begin_render_pass(pass_of_handles(old_handle));
+	expect_only(state(), vl::rule::stale_handle);
+	BOOST_TEST(inner().calls().render_pass_begins == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(HandleOfNoTextureIsNotAliveAndHasAnEmptyDescription)
+{
+	BOOST_TEST(!drv->is_alive(texture_handle{}));
+	const texture_header& none = drv->info(texture_handle{});
+	BOOST_TEST(none.data.extent.width == 1u);
+	BOOST_TEST(none.name == "unknown");
+	// An index this driver never issued is not a destroyed texture, just no texture of this driver.
+	const texture_handle foreign{ 1000, 1 };
+	BOOST_TEST(!drv->is_alive(foreign));
+	drv->begin_render_pass(pass_of_handles(foreign));
+	expect_only(state(), vl::rule::dead_object);
+}
+
+BOOST_AUTO_TEST_CASE(ReadingADestroyedTextureIsReportedAsStale)
+{
+	auto color = drv->create_texture(texture_of(8, 4, texture_usage::color_target));
+	const texture_handle stale = color->handle();
+	color.reset();
+
+	BOOST_TEST(drv->read_texture(stale, { 0, 0, 8, 4 }).empty());
+	expect_only(state(), vl::rule::stale_handle);
+}
+
+BOOST_AUTO_TEST_CASE(InfoOfALiveTextureIsItsDescription)
+{
+	auto color = drv->create_texture(texture_of(16, 8, texture_usage::color_target | texture_usage::sampled));
+	const texture_header& info = drv->info(color->handle());
+	BOOST_TEST(info.data.extent.width == 16u);
+	BOOST_TEST(info.data.extent.height == 8u);
+	BOOST_TEST((info.usage == (texture_usage::color_target | texture_usage::sampled)));
+	BOOST_TEST(state().total() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(DepthAttachmentDeletedBeforeUseIsReported)
 {
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
-	texture_interface* stale = depth.get();
+	const texture_handle stale = depth->handle();
 	depth.reset();
-	drv->begin_render_pass(pass_of(color.get(), stale));
+	drv->begin_render_pass(pass_of_handles(color->handle(), stale));
 
-	expect_only(state(), vl::rule::dead_object);
+	expect_only(state(), vl::rule::stale_handle);
 }
 
 BOOST_AUTO_TEST_CASE(VertexArrayDeletedBeforeADrawIsReportedAndNotDrawn)
@@ -583,7 +644,7 @@ BOOST_AUTO_TEST_CASE(EveryColorOfARenderPassIsCheckedForUsage)
 	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto second = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
 	render_pass_desc pass = pass_of(first.get());
-	pass.colors.push_back({ .texture = second.get() });
+	pass.colors.push_back({ .texture = handle_of(second.get()) });
 	drv->begin_render_pass(pass);
 
 	expect_only(state(), vl::rule::attachment_usage);
@@ -595,7 +656,7 @@ BOOST_AUTO_TEST_CASE(RenderPassAttachmentsOfDifferentSizesAreReportedOnce)
 	auto second = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
 	auto depth = drv->create_texture(texture_of(32, 32, texture_usage::depth_target));
 	render_pass_desc pass = pass_of(color.get(), depth.get());
-	pass.colors.push_back({ .texture = second.get() });
+	pass.colors.push_back({ .texture = handle_of(second.get()) });
 	drv->begin_render_pass(pass);
 
 	expect_only(state(), vl::rule::attachment_size_mismatch);
@@ -609,7 +670,7 @@ BOOST_AUTO_TEST_CASE(AttachmentSizesAreTakenAtTheirMipLevel)
 	auto small = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	render_pass_desc pass = pass_of(color.get());
 	pass.colors[0].mip = 2;
-	pass.colors.push_back({ .texture = small.get() });
+	pass.colors.push_back({ .texture = handle_of(small.get()) });
 	drv->begin_render_pass(pass);
 	drv->end_render_pass();
 	BOOST_TEST(state().total() == 0u);
@@ -702,27 +763,32 @@ BOOST_AUTO_TEST_CASE(ADeletedAttachmentDropsTheRenderPass)
 {
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
-	texture_interface* stale = depth.get();
+	const texture_handle stale = depth->handle();
 	depth.reset();
 
-	drv->begin_render_pass(pass_of(color.get(), stale));
+	drv->begin_render_pass(pass_of_handles(color->handle(), stale));
 	drv->end_render_pass();
 	chain.present();
 
-	expect_only(state(), vl::rule::dead_object);
+	expect_only(state(), vl::rule::stale_handle);
 	BOOST_TEST(inner().calls().render_pass_begins == 0u);
 	BOOST_TEST(inner().calls().render_pass_ends == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(RenderPassTexturesReachTheWrappedDriverUnwrapped)
 {
+	// Both drivers number their textures from 1; take a slot of the wrapped driver's so the two sequences differ
+	// and a pass that was not translated would name another texture (or none) there.
+	auto occupant = inner().create_texture(texture_of(4, 4, texture_usage::sampled));
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	BOOST_REQUIRE((color->handle() != color->native()->handle()));
 	drv->begin_render_pass(pass_of(color.get(), nullptr, "forwarded"));
 	drv->end_render_pass();
 
 	const render_pass_desc& seen = inner().last_render_pass();
 	BOOST_REQUIRE(seen.colors.size() == 1u);
-	BOOST_TEST(seen.colors[0].texture == color->native());
+	BOOST_TEST((seen.colors[0].texture == color->native()->handle()));
+	BOOST_TEST((seen.colors[0].texture != color->handle()));
 	BOOST_TEST(std::string(seen.debug_name) == "forwarded");
 }
 
@@ -964,7 +1030,7 @@ BOOST_AUTO_TEST_CASE(PipelineWithFewerColorFormatsThanThePassTargetsIsReported)
 	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto second = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	render_pass_desc pass = pass_of(first.get());
-	pass.colors.push_back({ .texture = second.get() });
+	pass.colors.push_back({ .texture = handle_of(second.get()) });
 	drv->begin_render_pass(pass);
 	pipeline_desc desc = pipeline_for_pass();
 	BOOST_TEST(desc.color_formats.size() == 2u);
@@ -984,7 +1050,7 @@ BOOST_AUTO_TEST_CASE(PipelinesForTheBackbufferDeclareTheWindowFormats)
 
 	pipeline_desc right;
 	right.shader = program_object.get();
-	set_target_formats(right, window);
+	set_target_formats(*drv, right, window);
 	drv->bind_pipeline(drv->create_pipeline(right));
 	BOOST_TEST(state().total() == 0u);
 	BOOST_TEST(right.color_formats.size() == 1u);

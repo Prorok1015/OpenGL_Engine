@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/ds/ds_handle_pool.hpp>
 #include <snk/driver/rnd_bind_group.h>
 
 #include <cstddef>
@@ -11,77 +12,11 @@
 
 namespace rnd::driver
 {
-	// Objects of one kind by handle. A slot freed by erase() is handed out again with a higher generation, so the
-	// old handle finds nothing. Backends share it for the buffers and bind groups they create.
+	// Objects of one kind by handle: a ds::handle_pool whose handles are the driver's typed ones. A slot freed by
+	// erase() is handed out again with a higher generation, so the old handle finds nothing. Backends share it for
+	// the buffers, bind groups and textures they create.
 	template <class Tag, class T>
-	class slot_table
-	{
-	public:
-		using handle_type = handle<Tag>;
-
-		handle_type insert(T value)
-		{
-			std::uint32_t index = 0;
-			if (!m_free.empty()) {
-				index = m_free.back();
-				m_free.pop_back();
-			} else {
-				m_slots.emplace_back();
-				index = static_cast<std::uint32_t>(m_slots.size());
-			}
-			slot& s = m_slots[index - 1];
-			s.value.emplace(std::move(value));
-			++m_live;
-			return handle_type{ index, s.gen };
-		}
-
-		// Null for a handle that names no live object.
-		T* find(handle_type h) { return const_cast<T*>(std::as_const(*this).find(h)); }
-		const T* find(handle_type h) const
-		{
-			if (h.index == 0 || h.index > m_slots.size()) {
-				return nullptr;
-			}
-			const slot& s = m_slots[h.index - 1];
-			return s.gen == h.gen && s.value ? &*s.value : nullptr;
-		}
-
-		bool erase(handle_type h)
-		{
-			if (!find(h)) {
-				return false;
-			}
-			slot& s = m_slots[h.index - 1];
-			s.value.reset();
-			++s.gen;
-			m_free.push_back(h.index);
-			--m_live;
-			return true;
-		}
-
-		std::size_t live() const { return m_live; }
-
-		template <class Visit>
-		void for_each(Visit&& visit)
-		{
-			for (std::size_t i = 0; i < m_slots.size(); ++i) {
-				if (m_slots[i].value) {
-					visit(handle_type{ static_cast<std::uint32_t>(i + 1), m_slots[i].gen }, *m_slots[i].value);
-				}
-			}
-		}
-
-	private:
-		struct slot
-		{
-			std::optional<T> value;
-			std::uint32_t gen = 1;
-		};
-
-		std::vector<slot> m_slots;
-		std::vector<std::uint32_t> m_free;
-		std::size_t m_live = 0;
-	};
+	using slot_table = ds::handle_pool<T, handle<Tag>>;
 
 	// Bind group layouts by description: the same entries always give the same handle, so a pipeline and a
 	// group built apart agree on the layout by comparing handles. Layouts live as long as the cache.
