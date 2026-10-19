@@ -159,6 +159,8 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
 {
 	load_bench_level();
 
+	std::set<const rnd::compiled_material*> drawn;
+
 	run_scenario(
 		{
 			nullptr,
@@ -166,8 +168,9 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
 				// A sampler texture desc that never loads (no such file) leaves the material incomplete, so it is rebuilt on
 				// every visit: the second camera replaces what the first camera's draws still point at.
 				auto cached = snapshot();
-				BOOST_REQUIRE(!cached.empty());
-				auto& source = cached.front().reg->get<scn::material_desc_component>(cached.front().ent);
+				const auto first_drawn = std::ranges::find_if(cached, [&](const cached_entity& e) { return drawn.contains(e.material); });
+				BOOST_REQUIRE_MESSAGE(first_drawn != cached.end(), "no entity of the bench level is drawn");
+				auto& source = first_drawn->reg->get<scn::material_desc_component>(first_drawn->ent);
 				const auto desc = source.mlt_desc.get();
 				desc->samplers_textures.push_back(res::tag::make("textures/__missing_for_the_material_cache_test__.desc"));
 				for (const auto& e : cached) {
@@ -177,11 +180,16 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
 			},
 		},
 		{
-			nullptr,
+			[&] {
+				for (const auto* dc : extracted_draws()) drawn.insert(dc->material);
+				BOOST_REQUIRE(!drawn.empty());
+			},
 			[&] {
 				const auto live = current_materials();
 				const auto draws = extracted_draws();
 				BOOST_REQUIRE(!draws.empty());
+				BOOST_REQUIRE_MESSAGE(std::ranges::any_of(live, [](const rnd::compiled_material* m) { return m && !m->complete; }),
+					"the missing texture did not leave any material incomplete");
 
 				std::size_t superseded = 0;
 				for (const auto* dc : draws) {
