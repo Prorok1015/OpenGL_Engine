@@ -85,7 +85,10 @@ struct material_cache_fixture : test_util::null_engine_fixture
 	{
 		auto& levels = storage.require<scn::level_manager>();
 		BOOST_REQUIRE(levels.load(res::tag::make("levels/bench_100_meshes.desc")));
-		test_util::pump(tasks); // the materials and textures the level's descs reference load in the background
+		// The materials, and the textures they ask for from the first extract on, load in the background: let
+		// them finish, so the scenario starts from compiled materials as it did when loads were synchronous.
+		test_util::pump(tasks);
+		BOOST_REQUIRE(run_frames(3) == 3);
 		BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
 	}
 };
