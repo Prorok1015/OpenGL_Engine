@@ -52,7 +52,7 @@ public:
 
     // Adds a named game phase anchored next to a built-in one; false when the name is rejected.
     // Register game phases before the first level load. Plans built earlier do not know the new
-    // phase (its systems are dropped as unknown_phase); call scn::level::rebuild_all_plans then.
+    // phase (its systems are dropped as unknown_phase); call scn::context_set::rebuild_all_plans then.
     bool add_game_phase(std::string name, phase anchor, phase_side side) {
         return m_registry.phases().add_game_phase(std::move(name), anchor, side);
     }

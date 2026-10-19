@@ -29,7 +29,7 @@ scn::context_manager::context_manager(res::resource_system& resource,
 	, m_assembler(assembler)
 	, m_system_factory(system_factory)
 	, m_resource(resource)
-	, m_level(add_level_set(), hot_manager)
+	, m_level_set(&add_level_set())
 {}
 
 scn::context_manager::~context_manager() = default;

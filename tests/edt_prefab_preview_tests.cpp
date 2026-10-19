@@ -109,9 +109,9 @@ BOOST_AUTO_TEST_CASE(Open_CreatesASetOfItsOwnAndLeavesTheLevelAlone)
 	BOOST_TEST((context->kind() == scn::context_kind::preview));
 	BOOST_TEST((context->mode() == ecs::run_mode::edit));
 	BOOST_TEST(editor->get_registry() == &context->state());
-	BOOST_TEST(mgr->get_level().get_world_count() == 2u);
+	BOOST_TEST(mgr->level_set().size() == 2u);
 	BOOST_TEST(mgr->find("level", edt::prefab_editor_context::context_name()) == nullptr);
-	BOOST_TEST(!mgr->get_level().has_world(edt::prefab_editor_context::context_name()));
+	BOOST_TEST(!mgr->level_set().has(edt::prefab_editor_context::context_name()));
 }
 
 BOOST_AUTO_TEST_CASE(Open_TheRegistryHasTheCameraTheLightAndThePrefab)
@@ -229,8 +229,8 @@ BOOST_AUTO_TEST_CASE(LevelReload_WhileThePreviewIsOpenKeepsItIntact)
 	BOOST_TEST(editor->get_registry() == registry);
 	BOOST_TEST(registry->storage<entt::entity>().size() == entities);
 	BOOST_TEST(preview_sets() == 1u);
-	BOOST_TEST(mgr->get_level().get_world_count() == 1u);
-	BOOST_TEST(mgr->get_level().has_world("only"));
+	BOOST_TEST(mgr->level_set().size() == 1u);
+	BOOST_TEST(mgr->level_set().has("only"));
 }
 
 BOOST_AUTO_TEST_CASE(LevelReload_ALevelWorldWithThePreviewNameDoesNotCollide)

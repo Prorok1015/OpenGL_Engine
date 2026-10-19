@@ -10,11 +10,10 @@
 // explicit order (a debug warning for two unordered writers), never to derive the order itself.
 //  - view<get_t<T>>            : component T, write unless T is const
 //  - X& / const X&             : ctx resource or event X in the system's own world, write unless const
-//  - bind_res<ID, X>           : resource X of world ID (view -> its components), write unless X is const
 //  - entt::registry&           : not tracked (the system reaches components by hand)
 namespace ecs {
 
-// World of the system itself; bind_res targets carry their explicit id.
+// World of the system itself: a system sees only its own context.
 inline constexpr size_t own_world = static_cast<size_t>(-2);
 
 struct access_entry
@@ -45,21 +44,6 @@ struct view_access<entt::basic_view<entt::get_t<GET_TYPES...>, EXCLUDE, Other...
 	}
 };
 
-template <typename T> struct bind_access;
-
-template <size_t ID, typename T>
-struct bind_access<ecs::bind_res<ID, T>>
-{
-	static void collect(std::vector<access_entry>& out)
-	{
-		if constexpr (is_view_v<std::remove_cv_t<T>>) {
-			view_access<std::remove_cv_t<T>>::collect(out, ID);
-		} else {
-			add_access<T>(out, ID, !std::is_const_v<T>);
-		}
-	}
-};
-
 } // namespace detail
 
 template <typename ARG>
@@ -72,8 +56,6 @@ void collect_argument_access(std::vector<access_entry>& out)
 		// untracked
 	} else if constexpr (is_view_v<bare>) {
 		detail::view_access<bare>::collect(out, own_world);
-	} else if constexpr (is_bind_res_v<bare>) {
-		detail::bind_access<bare>::collect(out);
 	} else {
 		detail::add_access<bare>(out, own_world, mutable_ref);
 	}

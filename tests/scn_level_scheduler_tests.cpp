@@ -4,7 +4,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/ecs/ecs_random.hpp>
@@ -108,9 +108,9 @@ BOOST_FIXTURE_TEST_SUITE(ScnLevelSchedulerTests, fixture)
 
 BOOST_AUTO_TEST_CASE(Diamond_EachSystemRunsOnceAndInOrder)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "d", "c", "b", "a" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "d", "c", "b", "a" }, sf);
 
 	lvl.update(one_frame);
 
@@ -127,9 +127,9 @@ BOOST_AUTO_TEST_CASE(Diamond_EachSystemRunsOnceAndInOrder)
 
 BOOST_AUTO_TEST_CASE(Diamond_OrderIsStableAcrossFramesAndLevels)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "a", "b", "c", "d" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "a", "b", "c", "d" }, sf);
 
 	lvl.update(one_frame);
 	auto first = g_log;
@@ -137,9 +137,9 @@ BOOST_AUTO_TEST_CASE(Diamond_OrderIsStableAcrossFramesAndLevels)
 	lvl.update(one_frame);
 	BOOST_TEST(g_log == first);
 
-	scn::level other(nullptr);
-	auto& ow = other.create_world("w0", 0);
-	other.add_world_systems(ow, { "a", "b", "c", "d" }, sf);
+	scn::context_set other("level", nullptr);
+	auto& ow = other.create_context("w0", 0);
+	other.add_systems(ow, { "a", "b", "c", "d" }, sf);
 	g_log.clear();
 	other.update(one_frame);
 	BOOST_TEST(g_log == first);
@@ -147,9 +147,9 @@ BOOST_AUTO_TEST_CASE(Diamond_OrderIsStableAcrossFramesAndLevels)
 
 BOOST_AUTO_TEST_CASE(Plan_IsBuiltOnceNotEveryFrame)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "stateful", "a" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "stateful", "a" }, sf);
 
 	const ecs::system_plan* plan = lvl.plan_of(0);
 	BOOST_REQUIRE(plan != nullptr);
@@ -164,20 +164,20 @@ BOOST_AUTO_TEST_CASE(Plan_IsBuiltOnceNotEveryFrame)
 
 BOOST_AUTO_TEST_CASE(PlanOrder_FollowsConstraintsThenDescListOrder)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "d", "b", "c", "a" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "d", "b", "c", "a" }, sf);
 
 	BOOST_TEST(lvl.plan_of(0)->names_in(ecs::phase::update) == (names{ "a", "b", "c", "d" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(ReloadWorld_KeepsOtherWorldsSystems)
 {
-	scn::level lvl(nullptr);
-	auto& wa = lvl.create_world("wa", 0);
-	lvl.add_world_systems(wa, { "w" }, sf);
-	auto& wb = lvl.create_world("wb", 1);
-	lvl.add_world_systems(wb, { "stateful" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& wa = lvl.create_context("wa", 0);
+	lvl.add_systems(wa, { "w" }, sf);
+	auto& wb = lvl.create_context("wb", 1);
+	lvl.add_systems(wb, { "stateful" }, sf);
 
 	lvl.update(one_frame);
 	BOOST_TEST(count("W") == 1u);
@@ -186,7 +186,7 @@ BOOST_AUTO_TEST_CASE(ReloadWorld_KeepsOtherWorldsSystems)
 	g_log.clear();
 	const ecs::system_plan* plan_a = lvl.plan_of(0);
 	auto desc_b = make_world_desc("wb", { "stateful" });
-	lvl.reload_world("wb", desc_b, sf, assembler);
+	lvl.reload_context("wb", desc_b, sf, assembler);
 	lvl.update(one_frame);
 
 	BOOST_TEST(count("W") == 1u);
@@ -197,10 +197,10 @@ BOOST_AUTO_TEST_CASE(ReloadWorld_KeepsOtherWorldsSystems)
 
 BOOST_AUTO_TEST_CASE(LoadClearLoad_DoesNotDuplicateSystems)
 {
-	scn::level lvl(nullptr);
+	scn::context_set lvl("level", nullptr);
 	{
-		auto& w = lvl.create_world("w0", 0);
-		lvl.add_world_systems(w, { "a", "b", "c", "d" }, sf);
+		auto& w = lvl.create_context("w0", 0);
+		lvl.add_systems(w, { "a", "b", "c", "d" }, sf);
 	}
 	lvl.update(one_frame);
 	BOOST_TEST(g_log.size() == 4u);
@@ -211,8 +211,8 @@ BOOST_AUTO_TEST_CASE(LoadClearLoad_DoesNotDuplicateSystems)
 	BOOST_TEST(g_log.empty());
 
 	{
-		auto& w = lvl.create_world("w0", 0);
-		lvl.add_world_systems(w, { "a", "b", "c", "d" }, sf);
+		auto& w = lvl.create_context("w0", 0);
+		lvl.add_systems(w, { "a", "b", "c", "d" }, sf);
 	}
 	lvl.update(one_frame);
 
@@ -221,43 +221,15 @@ BOOST_AUTO_TEST_CASE(LoadClearLoad_DoesNotDuplicateSystems)
 	BOOST_TEST(count("D") == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(MoveAndSwap_LevelStillRunsSystems)
-{
-	scn::level a(nullptr);
-	{
-		auto& w = a.create_world("w0", 0);
-		a.add_world_systems(w, { "a", "b", "c", "d" }, sf);
-	}
-
-	scn::level moved(std::move(a));
-	moved.update(one_frame);
-	BOOST_TEST(g_log.size() == 4u);
-
-	scn::level other(nullptr);
-	{
-		auto& w = other.create_world("ow", 0);
-		other.add_world_systems(w, { "stateful" }, sf);
-	}
-	g_log.clear();
-	moved.swap(other);
-
-	moved.update(one_frame);
-	BOOST_TEST(g_log == (names{ "S" }));
-
-	g_log.clear();
-	other.update(one_frame);
-	BOOST_TEST(g_log.size() == 4u);
-}
-
 BOOST_AUTO_TEST_CASE(RemoveWorld_DropsItsSystemsKeepsOthers)
 {
-	scn::level lvl(nullptr);
-	auto& wa = lvl.create_world("wa", 0);
-	lvl.add_world_systems(wa, { "w" }, sf);
-	auto& wb = lvl.create_world("wb", 1);
-	lvl.add_world_systems(wb, { "stateful" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& wa = lvl.create_context("wa", 0);
+	lvl.add_systems(wa, { "w" }, sf);
+	auto& wb = lvl.create_context("wb", 1);
+	lvl.add_systems(wb, { "stateful" }, sf);
 
-	lvl.remove_world("wb");
+	lvl.destroy_context("wb");
 	lvl.update(one_frame);
 
 	BOOST_TEST(g_log == (names{ "W" }));
@@ -266,9 +238,9 @@ BOOST_AUTO_TEST_CASE(RemoveWorld_DropsItsSystemsKeepsOthers)
 
 BOOST_AUTO_TEST_CASE(UnknownSystemInWorld_IsDiagnosedAndTheRestStillRuns)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "a", "not_registered", "b" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "a", "not_registered", "b" }, sf);
 
 	BOOST_TEST(lvl.plan_of(0)->has_diagnostic(ecs::diagnostic_kind::unknown_system));
 	lvl.update(one_frame);
@@ -277,11 +249,11 @@ BOOST_AUTO_TEST_CASE(UnknownSystemInWorld_IsDiagnosedAndTheRestStillRuns)
 
 BOOST_AUTO_TEST_CASE(Worlds_RunInIdOrderEveryPhase)
 {
-	scn::level lvl(nullptr);
-	auto& w1 = lvl.create_world("second", 1);
-	lvl.add_world_systems(w1, { "stateful" }, sf);
-	auto& w0 = lvl.create_world("first", 0);
-	lvl.add_world_systems(w0, { "w" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w1 = lvl.create_context("second", 1);
+	lvl.add_systems(w1, { "stateful" }, sf);
+	auto& w0 = lvl.create_context("first", 0);
+	lvl.add_systems(w0, { "w" }, sf);
 
 	lvl.update(one_frame);
 	BOOST_TEST(g_log == (names{ "W", "S" }));
@@ -292,11 +264,11 @@ BOOST_AUTO_TEST_CASE(Worlds_RunInIdOrderEveryPhase)
 // influence each other.
 BOOST_AUTO_TEST_CASE(SameStatelessSystemInTwoWorlds_PlansAreIndependent)
 {
-	scn::level lvl(nullptr);
-	auto& w0 = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w0, { "a", "b", "c", "d" }, sf);
-	auto& w1 = lvl.create_world("w1", 1);
-	lvl.add_world_systems(w1, { "d", "a" }, sf); // same systems, different subset and order
+	scn::context_set lvl("level", nullptr);
+	auto& w0 = lvl.create_context("w0", 0);
+	lvl.add_systems(w0, { "a", "b", "c", "d" }, sf);
+	auto& w1 = lvl.create_context("w1", 1);
+	lvl.add_systems(w1, { "d", "a" }, sf); // same systems, different subset and order
 
 	BOOST_TEST(lvl.plan_of(0)->names_in(ecs::phase::update) == (names{ "a", "b", "c", "d" }), boost::test_tools::per_element());
 	BOOST_TEST(lvl.plan_of(1)->names_in(ecs::phase::update) == (names{ "d", "a" }), boost::test_tools::per_element());
@@ -308,7 +280,7 @@ BOOST_AUTO_TEST_CASE(SameStatelessSystemInTwoWorlds_PlansAreIndependent)
 
 	// changing one world's list leaves the other's plan alone
 	const ecs::system_plan* before = lvl.plan_of(0);
-	lvl.add_world_systems(w1, { "a" }, sf);
+	lvl.add_systems(w1, { "a" }, sf);
 	BOOST_TEST((lvl.plan_of(0) == before));
 	g_log.clear();
 	lvl.update(one_frame);
@@ -317,32 +289,32 @@ BOOST_AUTO_TEST_CASE(SameStatelessSystemInTwoWorlds_PlansAreIndependent)
 
 BOOST_AUTO_TEST_CASE(AcquireFreeWorldId_ReusesGapInsteadOfCount)
 {
-	scn::level lvl(nullptr);
-	lvl.create_world("w0", 0);
-	lvl.create_world("w1", 1);
-	lvl.create_world("w2", 2);
-	BOOST_TEST(lvl.acquire_free_world_id() == 3u);
+	scn::context_set lvl("level", nullptr);
+	lvl.create_context("w0", 0);
+	lvl.create_context("w1", 1);
+	lvl.create_context("w2", 2);
+	BOOST_TEST(lvl.acquire_free_id() == 3u);
 
 	// Reloading keeps ids; ids 0 and 2 alive with 1 missing must yield 1, not get_world_count() == 2.
-	scn::level gap(nullptr);
-	gap.create_world("a", 0);
-	gap.create_world("c", 2);
-	BOOST_TEST(gap.get_world_count() == 2u);
-	BOOST_TEST(gap.acquire_free_world_id() == 1u);
+	scn::context_set gap("level", nullptr);
+	gap.create_context("a", 0);
+	gap.create_context("c", 2);
+	BOOST_TEST(gap.size() == 2u);
+	BOOST_TEST(gap.acquire_free_id() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(CreateWorld_DuplicateNameIsRejectedAndLeavesNoStaleEntries)
 {
-	scn::level lvl(nullptr);
-	auto& first = lvl.create_world("w0", 0);
-	lvl.add_world_systems(first, { "a" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& first = lvl.create_context("w0", 0);
+	lvl.add_systems(first, { "a" }, sf);
 
-	auto& again = lvl.create_world("w0", 5);
+	auto& again = lvl.create_context("w0", 5);
 
 	BOOST_TEST(&again == &first);
-	BOOST_TEST(lvl.get_world_count() == 1u);
-	BOOST_TEST(&lvl.get_world("w0") == &first);
-	BOOST_TEST(lvl.has_world("w0"));
+	BOOST_TEST(lvl.size() == 1u);
+	BOOST_TEST(&lvl.get("w0") == &first);
+	BOOST_TEST(lvl.has("w0"));
 	BOOST_TEST(lvl.plan_of(5) == nullptr);
 	BOOST_TEST(lvl.plan_of(0) != nullptr);
 
@@ -387,9 +359,9 @@ BOOST_AUTO_TEST_CASE(EditorLevelDesc_IsLaidOutAsTheDesignTable)
 
 BOOST_AUTO_TEST_CASE(FixedUpdate_StepsFollowTheAccumulator)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "fixed" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "fixed" }, sf);
 
 	std::vector<size_t> per_frame;
 	for (float dt : { 0.04f, 0.04f, 0.04f, 0.001f }) {
@@ -404,9 +376,9 @@ BOOST_AUTO_TEST_CASE(FixedUpdate_SameDeltasGiveTheSameRunSequence)
 {
 	auto run = [&] {
 		g_log.clear();
-		scn::level lvl(nullptr);
-		auto& w = lvl.create_world("w0", 0);
-		lvl.add_world_systems(w, { "game", "fixed" }, sf);
+		scn::context_set lvl("level", nullptr);
+		auto& w = lvl.create_context("w0", 0);
+		lvl.add_systems(w, { "game", "fixed" }, sf);
 		for (float dt : { 0.03f, 0.02f, 0.05f, 0.016f, 0.2f }) lvl.update(std::chrono::duration<float>(dt));
 		return g_log;
 	};
@@ -415,9 +387,9 @@ BOOST_AUTO_TEST_CASE(FixedUpdate_SameDeltasGiveTheSameRunSequence)
 
 BOOST_AUTO_TEST_CASE(FixedUpdate_RunsBeforeUpdateAndOncePerStep)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "game", "fixed" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "game", "fixed" }, sf);
 
 	lvl.update(std::chrono::duration<float>(0.04f)); // two steps
 	BOOST_TEST(g_log == (names{ "F", "F", "G" }), boost::test_tools::per_element());
@@ -425,9 +397,9 @@ BOOST_AUTO_TEST_CASE(FixedUpdate_RunsBeforeUpdateAndOncePerStep)
 
 BOOST_AUTO_TEST_CASE(FixedUpdate_HugeFrameIsClampedAndStepCountIsCapped)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "fixed", "dt" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "fixed", "dt" }, sf);
 
 	lvl.update(std::chrono::duration<float>(30.0f));
 	BOOST_TEST(count("F") == 8u);
@@ -439,9 +411,9 @@ BOOST_AUTO_TEST_CASE(FixedUpdate_HugeFrameIsClampedAndStepCountIsCapped)
 
 BOOST_AUTO_TEST_CASE(Mode_DefaultsToPlayAndRunsEverything)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "game", "edit", "fixed" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "game", "edit", "fixed" }, sf);
 
 	BOOST_TEST((lvl.mode() == ecs::run_mode::play));
 	lvl.update(std::chrono::duration<float>(1.0f / 60.0f));
@@ -450,9 +422,9 @@ BOOST_AUTO_TEST_CASE(Mode_DefaultsToPlayAndRunsEverything)
 
 BOOST_AUTO_TEST_CASE(Mode_EditRunsOnlyRunInEditSystems)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "game", "edit", "fixed" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "game", "edit", "fixed" }, sf);
 	lvl.set_mode(ecs::run_mode::edit);
 
 	lvl.update(std::chrono::duration<float>(1.0f / 30.0f));
@@ -461,9 +433,9 @@ BOOST_AUTO_TEST_CASE(Mode_EditRunsOnlyRunInEditSystems)
 
 BOOST_AUTO_TEST_CASE(Mode_PauseFreezesTimeAndRunsOnlyEditSystems)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "game", "edit", "fixed", "dt" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "game", "edit", "fixed", "dt" }, sf);
 	lvl.set_mode(ecs::run_mode::pause);
 
 	lvl.update(std::chrono::duration<float>(0.5f));
@@ -480,9 +452,9 @@ BOOST_AUTO_TEST_CASE(Mode_PauseFreezesTimeAndRunsOnlyEditSystems)
 
 BOOST_AUTO_TEST_CASE(Mode_StepRunsExactlyOneFrameThenPauses)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "game", "edit", "fixed", "dt" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "game", "edit", "fixed", "dt" }, sf);
 	lvl.set_mode(ecs::run_mode::step);
 
 	lvl.update(std::chrono::duration<float>(5.0f)); // the real dt is irrelevant for a step
@@ -498,7 +470,7 @@ BOOST_AUTO_TEST_CASE(Mode_StepRunsExactlyOneFrameThenPauses)
 
 BOOST_AUTO_TEST_CASE(Mode_SurvivesClearAndReload)
 {
-	scn::level lvl(nullptr);
+	scn::context_set lvl("level", nullptr);
 	lvl.set_mode(ecs::run_mode::edit);
 	lvl.clear();
 	BOOST_TEST((lvl.mode() == ecs::run_mode::edit));
@@ -510,10 +482,10 @@ BOOST_AUTO_TEST_CASE(Rng_SameSeedReplaysTheSameSequenceThroughTheResource)
 {
 	auto run = [&](uint64_t seed) {
 		g_rolls.clear();
-		scn::level lvl(nullptr);
+		scn::context_set lvl("level", nullptr);
 		lvl.set_seed(seed);
-		auto& w = lvl.create_world("w0", 0);
-		lvl.add_world_systems(w, { "roll" }, sf);
+		auto& w = lvl.create_context("w0", 0);
+		lvl.add_systems(w, { "roll" }, sf);
 		for (int i = 0; i < 5; ++i) lvl.update(one_frame);
 		return g_rolls;
 	};
@@ -526,11 +498,11 @@ BOOST_AUTO_TEST_CASE(Rng_SameSeedReplaysTheSameSequenceThroughTheResource)
 
 BOOST_AUTO_TEST_CASE(Rng_WorldsGetIndependentStreams)
 {
-	scn::level lvl(nullptr);
-	auto& w0 = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w0, { "roll" }, sf);
-	auto& w1 = lvl.create_world("w1", 1);
-	lvl.add_world_systems(w1, { "roll" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w0 = lvl.create_context("w0", 0);
+	lvl.add_systems(w0, { "roll" }, sf);
+	auto& w1 = lvl.create_context("w1", 1);
+	lvl.add_systems(w1, { "roll" }, sf);
 
 	lvl.update(one_frame);
 	BOOST_REQUIRE(g_rolls.size() == 2u);
@@ -539,9 +511,9 @@ BOOST_AUTO_TEST_CASE(Rng_WorldsGetIndependentStreams)
 
 BOOST_AUTO_TEST_CASE(Rng_SetSeedReseedsExistingWorlds)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "roll" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "roll" }, sf);
 
 	lvl.set_seed(7);
 	lvl.update(one_frame);
@@ -569,12 +541,12 @@ BOOST_AUTO_TEST_CASE(GamePhaseAddedBetweenPlans_EachSystemRunsInItsOwnPhase)
 	tagged("u1", "U1", ecs::phase::update);
 	tagged("early1", "P1", "early");
 
-	scn::level lvl(nullptr);
-	auto& w0 = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w0, { "f0", "u0" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w0 = lvl.create_context("w0", 0);
+	lvl.add_systems(w0, { "f0", "u0" }, sf);
 	BOOST_REQUIRE(sf.add_game_phase("early", ecs::phase::fixed_update, ecs::phase_side::before));
-	auto& w1 = lvl.create_world("w1", 1);
-	lvl.add_world_systems(w1, { "f1", "u1", "early1" }, sf);
+	auto& w1 = lvl.create_context("w1", 1);
+	lvl.add_systems(w1, { "f1", "u1", "early1" }, sf);
 
 	lvl.update(std::chrono::duration<float>(0.04f)); // two fixed steps
 	BOOST_TEST(g_log == (names{ "P1", "F0", "F1", "F0", "F1", "U0", "U1" }), boost::test_tools::per_element());
@@ -588,9 +560,9 @@ BOOST_AUTO_TEST_CASE(RebuildAllPlans_PicksUpAGamePhaseAddedAfterLoad)
 {
 	sf.register_system<&sys_game>("late_game", { .phase = "late_phase" });
 
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "a", "late_game" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "a", "late_game" }, sf);
 	BOOST_TEST(lvl.plan_of(0)->has_diagnostic(ecs::diagnostic_kind::unknown_phase));
 	lvl.update(one_frame);
 	BOOST_TEST(g_log == (names{ "A" }), boost::test_tools::per_element());
@@ -608,8 +580,8 @@ BOOST_AUTO_TEST_CASE(RebuildAllPlans_PicksUpAGamePhaseAddedAfterLoad)
 
 BOOST_AUTO_TEST_CASE(WorldWithoutSystems_StillGetsItsCommandsApplied)
 {
-	scn::level lvl(nullptr);
-	auto& empty = lvl.create_world("empty", 0);
+	scn::context_set lvl("level", nullptr);
+	auto& empty = lvl.create_context("empty", 0);
 	auto& reg = empty.state();
 	const entt::entity e = reg.create();
 	reg.ctx().emplace<ecs::entity_changer>().destroy(e);
@@ -621,9 +593,9 @@ BOOST_AUTO_TEST_CASE(WorldWithoutSystems_StillGetsItsCommandsApplied)
 
 BOOST_AUTO_TEST_CASE(WorldWithSystems_GetsItsCommandsAppliedAfterThePhases)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "a" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "a" }, sf);
 	auto& reg = w.state();
 	const entt::entity e = reg.create();
 	reg.ctx().emplace<ecs::entity_changer>().destroy(e);
@@ -637,9 +609,9 @@ BOOST_AUTO_TEST_CASE(WorldWithSystems_GetsItsCommandsAppliedAfterThePhases)
 
 BOOST_AUTO_TEST_CASE(LoadFromDesc_ResetsTheFixedAccumulator)
 {
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "fixed" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "fixed" }, sf);
 	lvl.update(std::chrono::duration<float>(0.01f)); // 0.01 of a 1/60 step left in the accumulator
 	BOOST_TEST(count("F") == 0u);
 
@@ -656,12 +628,12 @@ BOOST_AUTO_TEST_CASE(LoadFromDesc_ResetsTheFixedAccumulator)
 
 BOOST_AUTO_TEST_CASE(Clear_ResetsTheFixedAccumulator)
 {
-	scn::level lvl(nullptr);
+	scn::context_set lvl("level", nullptr);
 	lvl.update(std::chrono::duration<float>(0.01f));
 	lvl.clear();
 
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "fixed" }, sf);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "fixed" }, sf);
 	lvl.update(std::chrono::duration<float>(0.01f));
 	BOOST_TEST(count("F") == 0u);
 }
@@ -673,9 +645,9 @@ BOOST_AUTO_TEST_CASE(SystemsReload_RecreatesPerWorldInstancesKeepsSharedOnes)
 	sf.register_system<&counting_sys::run, counting_sys>("counter_per_world", {}, std::string{ "P" });
 	sf.register_system<&counting_sys::run, counting_sys>("counter_shared", {}, std::make_shared<counting_sys>(std::string{ "H" }));
 
-	scn::level lvl(nullptr);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "counter_per_world", "counter_shared" }, sf);
+	scn::context_set lvl("level", nullptr);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "counter_per_world", "counter_shared" }, sf);
 	lvl.update(one_frame);
 	lvl.update(one_frame);
 	BOOST_TEST(g_log == (names{ "P1", "H1", "P2", "H2" }), boost::test_tools::per_element());
@@ -688,10 +660,10 @@ BOOST_AUTO_TEST_CASE(SystemsReload_RecreatesPerWorldInstancesKeepsSharedOnes)
 
 BOOST_AUTO_TEST_CASE(SystemsReload_KeepsModeSeedAndWorldRng)
 {
-	scn::level lvl(nullptr);
+	scn::context_set lvl("level", nullptr);
 	lvl.set_seed(11);
-	auto& w = lvl.create_world("w0", 0);
-	lvl.add_world_systems(w, { "roll" }, sf);
+	auto& w = lvl.create_context("w0", 0);
+	lvl.add_systems(w, { "roll" }, sf);
 	lvl.update(one_frame); // advances the world's stream
 	lvl.set_mode(ecs::run_mode::edit);
 	ecs::rng expected = w.state().ctx().get<ecs::rng>();

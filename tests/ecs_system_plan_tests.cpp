@@ -36,7 +36,7 @@ struct fixture {
 	void run_all(const ecs::system_plan& plan)
 	{
 		entt::registry reg;
-		ecs::runtime_context ctx{ .get_world_registry = [&reg](size_t) -> entt::registry& { return reg; }, .current_registry = reg };
+		ecs::runtime_context ctx{ .current_registry = reg };
 		for (const auto& phase : plan.phases) {
 			for (const auto& node : phase.nodes) node(ctx);
 		}

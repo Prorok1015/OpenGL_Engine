@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/ecs/ecs_system.h>
 #include <algorithm>
@@ -416,23 +416,23 @@ BOOST_FIXTURE_TEST_CASE(Level_LoadFromDescBuildsOneRegistryPerWorldInOrder, leve
 {
 	auto lv_desc = load_level();
 	BOOST_REQUIRE(lv_desc);
-	scn::level lvl(manager);
+	scn::context_set lvl("level", manager);
 	lvl.load_from_desc(*lv_desc, sf, *assembler);
 
-	BOOST_TEST(lvl.get_world_count() == 2u);
-	BOOST_TEST(lvl.has_world("w0"));
-	BOOST_TEST(lvl.has_world("w1"));
-	BOOST_TEST(!lvl.has_world("w2"));
-	BOOST_TEST(lvl.get_tag() == tag_of("lv.desc"));
+	BOOST_TEST(lvl.size() == 2u);
+	BOOST_TEST(lvl.has("w0"));
+	BOOST_TEST(lvl.has("w1"));
+	BOOST_TEST(!lvl.has("w2"));
+	BOOST_TEST(lvl.tag() == tag_of("lv.desc"));
 	const std::uint32_t first_world_id = 0;
-	BOOST_TEST(lvl.get_world(first_world_id).get_name() == "w0"); // worlds get ids in file order; a literal 0 (even uint32_t{0}, under GCC -Wpedantic) would also convert to string_view
-	BOOST_TEST(lvl.get_world(1u).get_name() == "w1");
-	BOOST_TEST(lvl.acquire_free_world_id() == 2u);
+	BOOST_TEST(lvl.get(first_world_id).get_name() == "w0"); // worlds get ids in file order; a literal 0 (even uint32_t{0}, under GCC -Wpedantic) would also convert to string_view
+	BOOST_TEST(lvl.get(1u).get_name() == "w1");
+	BOOST_TEST(lvl.acquire_free_id() == 2u);
 
-	auto& r0 = lvl.get_world("w0").state();
-	auto& r1 = lvl.get_world("w1").state();
-	BOOST_TEST(lvl.get_world("w0").get_id() == 0u);
-	BOOST_TEST(lvl.get_world("w1").get_id() == 1u);
+	auto& r0 = lvl.get("w0").state();
+	auto& r1 = lvl.get("w1").state();
+	BOOST_TEST(lvl.get("w0").get_id() == 0u);
+	BOOST_TEST(lvl.get("w1").get_id() == 1u);
 
 	// world 0: root has the anchor and a Sun child; world 1 is independent
 	auto root0 = find_named(r0, "w0");
@@ -445,58 +445,58 @@ BOOST_FIXTURE_TEST_CASE(Level_LoadFromDescBuildsOneRegistryPerWorldInOrder, leve
 	BOOST_TEST((find_named(r0, "c") == entt::null));
 }
 
-BOOST_FIXTURE_TEST_CASE(Level_UpdateRunsHotReloadTickForAttachedWorlds, level_fixture)
+BOOST_FIXTURE_TEST_CASE(Level_HotReloadTickRefreshesAttachedWorlds, level_fixture)
 {
 	auto tag = put("lvl.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})");
 	auto lv_desc = load_level();
-	scn::level lvl(manager);
+	scn::context_set lvl("level", manager);
 	lvl.load_from_desc(*lv_desc, sf, *assembler);
 
-	auto& reg = lvl.get_world("w1").state();
+	auto& reg = lvl.get("w1").state();
 	auto e = reg.create();
 	scn::assemble_prefab(*assembler, reg, e, *load<scn::prefab_desc>(tag), "inst", tag);
 
 	put("lvl.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":6}}})");
 	rs->signal_changed(tag);
 	pump();
-	lvl.update(std::chrono::duration<float>(0.001f));
+	manager->tick(); // context_manager::update does this after the sets
 	BOOST_TEST(reg.get<stat_component>(e).hp == 6);
 }
 
 BOOST_FIXTURE_TEST_CASE(Level_ReloadWorldRebuildsOnlyThatWorld, level_fixture)
 {
 	auto lv_desc = load_level();
-	scn::level lvl(manager);
+	scn::context_set lvl("level", manager);
 	lvl.load_from_desc(*lv_desc, sf, *assembler);
-	auto before_w0 = find_named(lvl.get_world("w0").state(), "w0");
+	auto before_w0 = find_named(lvl.get("w0").state(), "w0");
 
 	auto new_w1 = load<scn::world_desc>(put("w1v2.desc", R"({"__type":"world_desc","name":"w1","systems":[],
 		"children":{"d":{"components":{"stat":{"__type":"stat_desc","hp":2}}}}})"));
-	lvl.reload_world("w1", *new_w1, sf, *assembler);
+	lvl.reload_context("w1", *new_w1, sf, *assembler);
 
-	auto& r1 = lvl.get_world("w1").state();
-	BOOST_TEST(lvl.get_world_count() == 2u);
-	BOOST_TEST(lvl.get_world("w1").get_id() == 1u);       // id preserved
+	auto& r1 = lvl.get("w1").state();
+	BOOST_TEST(lvl.size() == 2u);
+	BOOST_TEST(lvl.get("w1").get_id() == 1u);       // id preserved
 	BOOST_TEST((find_named(r1, "c") == entt::null));        // old content gone
 	BOOST_TEST(r1.valid(find_named(r1, "d")));            // new content present
-	BOOST_TEST((find_named(lvl.get_world("w0").state(), "w0") == before_w0)); // other world untouched
+	BOOST_TEST((find_named(lvl.get("w0").state(), "w0") == before_w0)); // other world untouched
 }
 
 BOOST_FIXTURE_TEST_CASE(Level_RemoveWorldFreesItsIdAndClearEmptiesEverything, level_fixture)
 {
 	auto lv_desc = load_level();
-	scn::level lvl(manager);
+	scn::context_set lvl("level", manager);
 	lvl.load_from_desc(*lv_desc, sf, *assembler);
 
-	lvl.remove_world("w0");
-	BOOST_TEST(lvl.get_world_count() == 1u);
-	BOOST_TEST(!lvl.has_world("w0"));
-	BOOST_TEST(lvl.acquire_free_world_id() == 0u); // gap reused
+	lvl.destroy_context("w0");
+	BOOST_TEST(lvl.size() == 1u);
+	BOOST_TEST(!lvl.has("w0"));
+	BOOST_TEST(lvl.acquire_free_id() == 0u); // gap reused
 
 	lvl.clear();
-	BOOST_TEST(lvl.get_world_count() == 0u);
-	BOOST_TEST(!lvl.has_world("w1"));
-	BOOST_TEST(lvl.acquire_free_world_id() == 0u);
+	BOOST_TEST(lvl.size() == 0u);
+	BOOST_TEST(!lvl.has("w1"));
+	BOOST_TEST(lvl.acquire_free_id() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -1,6 +1,5 @@
 #pragma once
 #include <snk/scene/level/scn_context_set.h>
-#include <snk/scene/level/scn_level.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
@@ -44,8 +43,8 @@ namespace scn
 		// Steps every active set, then ticks hot reload once.
 		void update(std::chrono::duration<float> dt);
 
-		// Facade over the set "level".
-		scn::level& get_level() { return m_level; }
+		// The set "level"; lives as long as the manager.
+		scn::context_set& level_set() { return *m_level_set; }
 
 		// Replaces the contents of the set "level" with the worlds of the level desc and watches the
 		// desc for changes. False (and the current level kept) when the desc cannot be loaded.
@@ -124,7 +123,7 @@ namespace scn
 		res::resource_system& m_resource;
 		// Stable addresses; creation order is the update order.
 		std::vector<std::unique_ptr<scn::context_set>> m_sets;
-		scn::level m_level;
+		scn::context_set* m_level_set = nullptr;
 		std::function<void()> m_on_reload;
 	};
 }

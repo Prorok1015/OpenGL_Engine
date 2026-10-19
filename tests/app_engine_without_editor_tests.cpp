@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(UpdateStageDrivesTheLevelManager)
 {
 	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
 	BOOST_REQUIRE(levels().load_level(tag));
-	BOOST_REQUIRE(levels().get_level().get_world_count() == 2u);
+	BOOST_REQUIRE(levels().level_set().size() == 2u);
 
 	// A changed level file is only applied from context_manager::update: seeing it applied after
 	// frames proves the engine's `update` body ran.
@@ -89,8 +89,8 @@ BOOST_AUTO_TEST_CASE(UpdateStageDrivesTheLevelManager)
 	rs->signal_changed(tag);
 	pump();
 	run_frames(2);
-	BOOST_TEST(levels().get_level().get_world_count() == 1u);
-	BOOST_TEST(levels().get_level().has_world("only"));
+	BOOST_TEST(levels().level_set().size() == 1u);
+	BOOST_TEST(levels().level_set().has("only"));
 }
 
 BOOST_AUTO_TEST_CASE(PostUpdateToleratesMissingInputManager)
