@@ -4,36 +4,13 @@
 #include <unordered_map>
 #include <snk/common/eng_transform_3d.hpp>
 #include <snk/render/rnd_light_data.hpp>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
-#include <snk/render/shader/rnd_material_compiler.h>
-#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_model.h>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/mem_allocator.h>
-
-namespace {
-    // Returns the entity's compiled material, rebuilding it only when the material was marked dirty or one
-    // of its inputs changed. The pointer stays valid for the frame: a replaced material is parked in `retired`.
-    const rnd::compiled_material* acquire_material(
-        entt::registry& reg, entt::entity ent, scn::material_desc_component& mat,
-        const std::shared_ptr<scn::material_desc>& desc, bool skinned, rnd::frame_context& context,
-        std::vector<std::shared_ptr<rnd::compiled_material>>& retired)
-    {
-        auto& cache = reg.get_or_emplace<scn::compiled_material_component>(ent);
-        const auto generation = context.textures->generation();
-        if (mat.dirty || !cache.material || !cache.material->is_current(desc.get(), skinned, generation)) {
-            if (cache.material) {
-                retired.push_back(std::move(cache.material));
-            }
-            cache.material = rnd::build_compiled_material(
-                *context.material_compiler, *context.variants, *context.textures, desc, skinned);
-            mat.dirty = false;
-        }
-        return cache.material.get();
-    }
-}
 
 namespace {
     rnd::clear_mode clear_mode_of(scn::camera_clear clear)
@@ -63,10 +40,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
     // The services are injected into frame_context by render_system::begin_frame, which the `extract`
     // stage runs before this extractor. Catch a missing/mis-ordered injection early.
-    ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
-    ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
-    ASSERT_MSG(context.variants, "frame_context shader variant cache not injected");
-    m_retired_materials.clear();
+    ASSERT_MSG(context.materials, "frame_context material instance cache not injected (RHI R6b)");
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
 
@@ -127,16 +101,13 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.bones.reserve(bone_estimate, skeleton_estimate);
             const std::size_t skinned_mesh_estimate = reg.view<scn::skinning_component>().size();
 
-            // Draws name their geometry, skin and material by index into the packet's tables; each distinct
-            // one is added once.
+            // Draws name their geometry and skin by index into the packet's tables; each distinct one is added
+            // once. Their material is an id of the material instance cache.
             packet.geometries.reserve(mesh_count);
             packet.skins.reserve(skinned_mesh_estimate);
-            packet.materials.reserve(mesh_count);
             std::pmr::unordered_map<res::tag, uint32_t> geometry_ids(ds::frame_allocator());
             std::pmr::unordered_map<res::tag, uint32_t> skin_ids(ds::frame_allocator());
-            std::pmr::unordered_map<const rnd::compiled_material*, uint32_t> material_ids(ds::frame_allocator());
             geometry_ids.reserve(mesh_count);
-            material_ids.reserve(mesh_count);
             const auto intern = [](auto& ids, auto& table, const auto& value) {
                 const auto [it, added] = ids.try_emplace(value, static_cast<uint32_t>(table.size()));
                 if (added) {
@@ -165,8 +136,8 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
 
                 const auto queue = mlt.queue;
 
-                // Resolve skinning before compiling: the compiler bakes USE_ANIMATION from
-                // ctx.has_skinning, which is part of the cached material's validity.
+                // Resolve skinning before asking for the instance: the compiler bakes USE_ANIMATION from
+                // ctx.has_skinning, which is part of the instance's key.
                 bool has_skinning = false;
                 {
                     PROFILE_SCOPE("Extract.Skinning");
@@ -192,9 +163,11 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 const rnd::compiled_material* material = nullptr;
                 {
                     PROFILE_SCOPE("Extract.ShaderDesc");
-                    material = acquire_material(reg, m_ent, mat, mlt_ptr, has_skinning, context, m_retired_materials);
+                    // Compiled (and its textures asked for) by the cache, and only when the desc, skinning or a texture changed.
+                    dc.material = context.materials->acquire(mlt_ptr, has_skinning, mat.dirty);
+                    mat.dirty = false;
+                    material = &context.materials->get(dc.material);
                 }
-                dc.material.index = intern(material_ids, packet.materials, material);
                 // Distance along the view axis: the transparent order, and the tie-break among equal opaque draws.
                 const glm::vec4 view_pos = packet.camera.view_matrix * glm::vec4(glm::vec3(m_trans.world[3]), 1.0f);
                 const float view_depth = -view_pos.z;
@@ -234,8 +207,9 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                     if (auto* sky_trans = reg.try_get<scn::world_transform>(sky_ent)) {
                         sky_draw.world = sky_trans->world;
                     }
-                    sky_draw.material = acquire_material(reg, sky_ent, mat, sky_desc, false, context, m_retired_materials);
-                    sky_draw.variant = sky_draw.material->base;
+                    sky_draw.material = context.materials->acquire(sky_desc, false, mat.dirty);
+                    mat.dirty = false;
+                    sky_draw.variant = context.materials->get(sky_draw.material).base;
                     packet.skybox_material = std::move(sky_draw);
                 }
             }

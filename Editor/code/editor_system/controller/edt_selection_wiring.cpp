@@ -3,7 +3,7 @@
 #include "edt_inspector_panel.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include <snk/editor/edt_selection_service.h>
 #include <memory>
 
@@ -19,7 +19,7 @@ namespace {
 std::vector<edt::connection> edt::wire_selection(
 	editor_events& events,
 	selection_service& service,
-	shared_state& state,
+	scene_document& state,
 	scene_editor& scene_ed,
 	world_controller& world_ctrl,
 	scene_hierarchy_panel& hierarchy,
@@ -45,11 +45,10 @@ std::vector<edt::connection> edt::wire_selection(
 	});
 
 	scene_ed.on_before_modify = [&service] { service.clear(); };
-	scene_ed.on_after_push = [&events, &state] { events.document_changed.emit(document_id{ 0 }, state.desc_generation); };
 	world_ctrl.on_world_switched = [&events, &hierarchy, &state](int idx) {
 		hierarchy.set_world_desc(state.active_world_desc());
 		hierarchy.set_world_names(state.world_names, idx);
-		events.active_world_changed.emit(document_id{ 0 });
+		events.active_world_changed.emit(state.id());
 	};
 
 	std::vector<connection> connections;

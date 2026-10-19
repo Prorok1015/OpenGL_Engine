@@ -17,12 +17,12 @@ namespace scn { class level_desc; }
 
 namespace edt
 {
-	struct shared_state;
+	class scene_document;
 	class scene_editor;
 	class world_controller;
 
 	// Derives the parallel multi-world arrays (names, per-world system lists) from the
-	// ordered world list, keeping all three shared_state arrays index-aligned.
+	// ordered world list, keeping all three scene_document arrays index-aligned.
 	// The world list is the single source of truth for world order (desc order), so deriving
 	// names/systems from it avoids the hash-order desync that scn::context_set::for_each
 	// (backed by an unordered_map) would otherwise introduce when there are >=2 worlds.
@@ -84,7 +84,7 @@ namespace edt
 	// world controller which world is active (none at all, or the one to switch to). `desc_lists_worlds` is whether
 	// the level desc names any world; if it does but none of them loaded (`desc_worlds` empty) the state is kept.
 	void apply_world_resync(
-		shared_state& state,
+		scene_document& state,
 		world_controller& worlds,
 		const std::vector<scn::world_desc>& desc_worlds,
 		bool desc_lists_worlds,
@@ -93,7 +93,7 @@ namespace edt
 	class level_controller
 	{
 	public:
-		level_controller(shared_state& state, res::resource_system& res, desc::desc_system& desc,
+		level_controller(scene_document& state, res::resource_system& res, desc::desc_system& desc,
 			scene_editor& scene_ed, world_controller& world_ctrl);
 		~level_controller();
 
@@ -117,7 +117,7 @@ namespace edt
 		std::function<void()> on_editor_world_reloaded;
 
 	private:
-		shared_state& m_state;
+		scene_document& m_state;
 		res::resource_system& m_res;
 		desc::desc_system& m_desc;
 		scene_editor& m_scene_editor;

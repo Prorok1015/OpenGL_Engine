@@ -1,66 +1,59 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
 #include <snk/render/rnd_frame_context.h>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/scene/level/scn_world.h>
 #include <snk/scene/scn_model.h>
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <set>
 #include <vector>
 
-// Extractor-level checks of the per-entity compiled material cache (US-45-3) on the null backend:
-// the bench level has two cameras, so one extract stage visits every mesh twice.
+// Extractor-level checks of the material instance cache (#125, US-45-3) on the null backend: the bench level has
+// two cameras, so one extract stage visits every mesh twice.
 
 namespace {
 
-struct cached_entity
+struct mesh_ref
 {
 	entt::registry* reg = nullptr;
 	entt::entity ent = entt::null;
-	const rnd::compiled_material* material = nullptr;
 };
 
 struct material_cache_fixture : test_util::null_engine_fixture
 {
-	std::vector<cached_entity> snapshot()
+	rnd::material_instance_cache& instances() { return storage.require<rnd::render_system>().material_instances(); }
+
+	// The first mesh entity of the level.
+	mesh_ref first_mesh()
 	{
-		std::vector<cached_entity> out;
+		mesh_ref out;
 		storage.require<scn::context_manager>().level_set().for_each([&out](scn::world_context& w) {
-			auto& reg = w.state();
-			for (auto [ent, cache] : reg.view<scn::compiled_material_component>().each()) {
-				if (cache.material && cache.material->complete) {
-					out.push_back({ &reg, ent, cache.material.get() });
+			if (out.reg) return;
+			for (auto [ent, mat] : w.state().view<scn::material_desc_component>().each()) {
+				if (mat.mlt_desc.get()) {
+					out = { &w.state(), ent };
+					return;
 				}
 			}
 		});
 		return out;
 	}
 
-	std::set<const rnd::compiled_material*> current_materials()
+	// The instances the frame's draws name, with their serial.
+	std::map<std::uint32_t, std::uint64_t> drawn_instances()
 	{
-		std::set<const rnd::compiled_material*> out;
-		storage.require<scn::context_manager>().level_set().for_each([&out](scn::world_context& w) {
-			for (auto [ent, cache] : w.state().view<scn::compiled_material_component>().each()) {
-				out.insert(cache.material.get());
-			}
-		});
-		return out;
-	}
-
-	// An extracted draw with the material its id resolves to in its packet.
-	struct extracted_draw {
-		const rnd::draw_call_t* dc;
-		const rnd::compiled_material* material;
-	};
-
-	std::vector<extracted_draw> extracted_draws()
-	{
-		std::vector<extracted_draw> out;
+		std::map<std::uint32_t, std::uint64_t> out;
 		auto& packets = storage.require<rnd::frame_context>().data.require<std::pmr::vector<rnd::render_packet_t>>();
 		for (const auto& packet : packets) {
-			for (const auto& dc : packet.opaque_draws) out.push_back({ &dc, &packet.material_of(dc) });
-			for (const auto& dc : packet.transparent_draws) out.push_back({ &dc, &packet.material_of(dc) });
+			for (const auto* list : { &packet.opaque_draws, &packet.transparent_draws }) {
+				for (const auto& dc : *list) {
+					BOOST_REQUIRE(instances().contains(dc.material));
+					out[dc.material.index] = instances().get(dc.material).serial;
+				}
+			}
 		}
 		return out;
 	}
@@ -103,115 +96,235 @@ struct material_cache_fixture : test_util::null_engine_fixture
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendMaterialCache, material_cache_fixture)
 
-BOOST_AUTO_TEST_CASE(CleanFrameKeepsMaterialsAndDirtyOrReplacedDescRebuildsOnlyThatEntity)
+BOOST_AUTO_TEST_CASE(CleanFramesCompileNothingAndADirtyDescIsCompiledOncePerInstance)
 {
 	load_bench_level();
 
-	std::vector<cached_entity> first;
-	cached_entity dirtied;
-	cached_entity replaced;
-	const rnd::compiled_material* dirtied_before = nullptr;
-	const rnd::compiled_material* replaced_before = nullptr;
-	std::shared_ptr<scn::material_desc> donor_desc;
+	std::vector<std::uint64_t> compilations;
+	std::vector<std::map<std::uint32_t, std::uint64_t>> drawn;
+	std::vector<std::size_t> alive;
+	std::shared_ptr<scn::material_desc> edited;
+	std::set<std::uint32_t> edited_ids;
+	std::size_t alive_before_replace = 0;
+
+	const auto record = [&] {
+		compilations.push_back(instances().compilations());
+		drawn.push_back(drawn_instances());
+		alive.push_back(instances().size());
+	};
 
 	run_scenario(
 		{
-			nullptr,
-			nullptr,
+			nullptr, nullptr, nullptr,
 			[&] {
-				BOOST_REQUIRE(first.size() > 2u);
-				dirtied = first.front();
-				dirtied_before = dirtied.material;
-				dirtied.reg->get<scn::material_desc_component>(dirtied.ent).dirty = true;
+				// An edit of a desc in place, marked on one mesh only.
+				const mesh_ref mesh = first_mesh();
+				BOOST_REQUIRE(mesh.reg);
+				auto& mat = mesh.reg->get<scn::material_desc_component>(mesh.ent);
+				edited = mat.mlt_desc.get();
+				edited->shininess += 5.f;
+				mat.dirty = true;
 			},
 			[&] {
-				const auto desc_of = [](const cached_entity& e) { return e.reg->get<scn::material_desc_component>(e.ent).mlt_desc.get(); };
-				const auto donor = std::ranges::find_if(first, [&](const cached_entity& e) { return desc_of(e) != desc_of(first.back()); });
-				BOOST_REQUIRE_MESSAGE(donor != first.end(), "the bench level needs two different materials");
-				replaced = first.back();
-				replaced_before = replaced.material;
-				donor_desc = desc_of(*donor);
-				replaced.reg->get<scn::material_desc_component>(replaced.ent).mlt_desc = donor->reg->get<scn::material_desc_component>(donor->ent).mlt_desc;
+				// A mesh gets another mesh's desc: its instance exists already, or is made once.
+				const mesh_ref mesh = first_mesh();
+				const auto own = mesh.reg->get<scn::material_desc_component>(mesh.ent).mlt_desc.get();
+				bool found = false;
+				for (auto [ent, mat] : mesh.reg->view<scn::material_desc_component>().each()) {
+					const auto other = mat.mlt_desc.get();
+					if (!found && other && other != own) {
+						mesh.reg->get<scn::material_desc_component>(mesh.ent).mlt_desc = mat.mlt_desc;
+						found = true;
+					}
+				}
+				BOOST_REQUIRE_MESSAGE(found, "the bench level needs two different materials");
+				alive_before_replace = instances().size();
 			},
+			nullptr,
 		},
 		{
+			[&] { record(); },
+			[&] { record(); },
+			[&] { record(); },
 			[&] {
-				first = snapshot();
-				BOOST_REQUIRE(!first.empty());
-			},
-			[&] {
-				for (const auto& e : first) {
-					BOOST_TEST_CONTEXT("clean frame") {
-						BOOST_CHECK(e.reg->get<scn::compiled_material_component>(e.ent).material.get() == e.material);
-					}
+				record();
+				for (const auto& [id, serial] : drawn.back()) {
+					if (instances().get(rnd::material_instance_id{ id }).source.get() == edited.get()) edited_ids.insert(id);
 				}
 			},
-			[&] {
-				for (const auto& e : first) {
-					const auto* now = e.reg->get<scn::compiled_material_component>(e.ent).material.get();
-					if (e.ent == dirtied.ent && e.reg == dirtied.reg) {
-						BOOST_CHECK(now != dirtied_before);
-						BOOST_CHECK(!e.reg->get<scn::material_desc_component>(e.ent).dirty);
-					} else {
-						BOOST_CHECK(now == e.material);
-					}
-				}
-			},
-			[&] {
-				const auto& cache = replaced.reg->get<scn::compiled_material_component>(replaced.ent);
-				BOOST_CHECK(cache.material.get() != replaced_before);
-				BOOST_CHECK(cache.material->source.get() == donor_desc.get());
-			},
+			[&] { record(); },
+			[&] { record(); },
 		});
+
+	BOOST_REQUIRE(drawn.size() == 6u);
+	BOOST_REQUIRE_MESSAGE(!drawn[0].empty(), "the bench level draws nothing");
+	// A scene that does not change compiles nothing, however many meshes and cameras ask.
+	BOOST_TEST(compilations[1] == compilations[0]);
+	BOOST_TEST(compilations[2] == compilations[1]);
+	BOOST_CHECK(drawn[1] == drawn[0]);
+	BOOST_CHECK(drawn[2] == drawn[0]);
+
+	// The edited desc: its instances (static and skinned) are compiled once each, in place; the others are untouched.
+	BOOST_REQUIRE(!edited_ids.empty());
+	BOOST_TEST(compilations[3] - compilations[2] == edited_ids.size());
+	BOOST_TEST(compilations[3] - compilations[2] <= 2u);
+	BOOST_TEST(drawn[3].size() == drawn[2].size());
+	for (const auto& [id, serial] : drawn[3]) {
+		BOOST_TEST_CONTEXT("instance " << id) {
+			BOOST_REQUIRE(drawn[2].contains(id));
+			BOOST_CHECK((serial != drawn[2].at(id)) == edited_ids.contains(id));
+		}
+	}
+
+	// A mesh moved to another desc compiles at most the instance it did not have yet; the clean frame after it nothing.
+	BOOST_TEST(compilations[4] - compilations[3] <= 1u);
+	BOOST_TEST(compilations[5] == compilations[4]);
+	BOOST_TEST(alive[4] <= alive_before_replace + 1u);
 }
 
-BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
+BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraStayValidWhenALaterVisitCompilesAgain)
 {
 	load_bench_level();
 
-	std::set<const rnd::compiled_material*> drawn;
+	std::vector<std::uint64_t> compilations;
+	std::size_t incomplete_draws = 0;
+	std::shared_ptr<scn::material_desc> broken;
+
+	const auto check_draws = [&] {
+		// Every draw of every camera names an instance that is in the cache, and it is the same instance for every
+		// camera, however often it was compiled.
+		auto& packets = storage.require<rnd::frame_context>().data.require<std::pmr::vector<rnd::render_packet_t>>();
+		BOOST_REQUIRE(!packets.empty());
+		std::vector<std::set<std::uint32_t>> broken_ids;
+		for (const auto& packet : packets) {
+			std::set<std::uint32_t> ids;
+			for (const auto* list : { &packet.opaque_draws, &packet.transparent_draws }) {
+				const bool opaque_list = list == &packet.opaque_draws;
+				for (const auto& dc : *list) {
+					BOOST_REQUIRE(instances().contains(dc.material));
+					const auto& material = instances().get(dc.material);
+					BOOST_CHECK(dc.variant.is_valid());
+					BOOST_CHECK(material.base.is_valid());
+					// The compiles did not change the defines, so the variant of an earlier visit is the final one.
+					BOOST_CHECK(dc.variant == (opaque_list ? material.opaque : material.base));
+					if (broken && material.source.get() == broken.get()) {
+						BOOST_CHECK(!material.complete);
+						ids.insert(dc.material.index);
+						++incomplete_draws;
+					}
+				}
+			}
+			broken_ids.push_back(std::move(ids));
+		}
+		for (const auto& ids : broken_ids) {
+			BOOST_CHECK(ids == broken_ids.front());
+		}
+	};
 
 	run_scenario(
 		{
 			nullptr,
 			[&] {
-				// A sampler texture desc that never loads (no such file) leaves the material incomplete, so it is rebuilt on
-				// every visit: the second camera replaces what the first camera's draws still point at.
-				auto cached = snapshot();
-				const auto first_drawn = std::ranges::find_if(cached, [&](const cached_entity& e) { return drawn.contains(e.material); });
-				BOOST_REQUIRE_MESSAGE(first_drawn != cached.end(), "no entity of the bench level is drawn");
-				auto& source = first_drawn->reg->get<scn::material_desc_component>(first_drawn->ent);
-				const auto desc = source.mlt_desc.get();
-				desc->samplers_textures.push_back(res::tag::make("textures/__missing_for_the_material_cache_test__.desc"));
-				for (const auto& e : cached) {
-					auto& mat = e.reg->get<scn::material_desc_component>(e.ent);
-					if (mat.mlt_desc.get() == desc) mat.dirty = true;
-				}
+				// A sampler texture desc that never loads (no such file) leaves the instances of the material incomplete, so each
+				// frame compiles them again: once per instance, whatever the number of meshes and cameras that use the desc.
+				const mesh_ref mesh = first_mesh();
+				BOOST_REQUIRE(mesh.reg);
+				auto& source = mesh.reg->get<scn::material_desc_component>(mesh.ent);
+				broken = source.mlt_desc.get();
+				broken->samplers_textures.push_back(res::tag::make("textures/__missing_for_the_material_cache_test__.desc"));
+				source.dirty = true;
 			},
+			nullptr,
+			nullptr,
 		},
 		{
-			[&] {
-				for (const auto& draw : extracted_draws()) drawn.insert(draw.material);
-				BOOST_REQUIRE(!drawn.empty());
-			},
-			[&] {
-				const auto live = current_materials();
-				const auto draws = extracted_draws();
-				BOOST_REQUIRE(!draws.empty());
-				BOOST_REQUIRE_MESSAGE(std::ranges::any_of(live, [](const rnd::compiled_material* m) { return m && !m->complete; }),
-					"the missing texture did not leave any material incomplete");
-
-				std::size_t superseded = 0;
-				for (const auto& draw : draws) {
-					BOOST_REQUIRE(draw.material);
-					BOOST_CHECK(draw.dc->variant.is_valid());
-					BOOST_CHECK(draw.material->base.is_valid());
-					BOOST_CHECK(draw.material->source != nullptr);
-					if (!live.contains(draw.material)) ++superseded;
-				}
-				BOOST_TEST(superseded > 0u);
-			},
+			[&] { compilations.push_back(instances().compilations()); },
+			[&] { compilations.push_back(instances().compilations()); check_draws(); },
+			[&] { compilations.push_back(instances().compilations()); check_draws(); },
+			[&] { compilations.push_back(instances().compilations()); check_draws(); },
 		});
+
+	BOOST_REQUIRE(compilations.size() == 4u);
+	BOOST_TEST(incomplete_draws > 0u);
+	// Frame 1 compiled the edited desc (static and skinned instance); frames 2 and 3 retry the incomplete ones only.
+	for (std::size_t frame = 1; frame < compilations.size(); ++frame) {
+		BOOST_TEST_CONTEXT("frame " << frame) {
+			BOOST_TEST(compilations[frame] - compilations[frame - 1] >= 1u);
+			BOOST_TEST(compilations[frame] - compilations[frame - 1] <= 2u);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ADescEditedByTheLaterOfTwoMeshesReachesTheDrawsOfTheEarlierOne)
+{
+	load_bench_level();
+
+	// Two meshes with one desc: whichever of them extraction visits first, the other one carries the dirty mark in
+	// one of the two edit frames, so the instance is compiled again after draws of the desc were made.
+	mesh_ref meshes[2];
+	std::shared_ptr<scn::material_desc> shared;
+	storage.require<scn::context_manager>().level_set().for_each([&](scn::world_context& w) {
+		if (shared) return;
+		std::map<const scn::material_desc*, std::vector<entt::entity>> by_desc;
+		for (auto [ent, mat] : w.state().view<scn::material_desc_component>().each()) {
+			if (const auto desc = mat.mlt_desc.get()) by_desc[desc.get()].push_back(ent);
+		}
+		for (auto& [desc, ents] : by_desc) {
+			if (ents.size() >= 2) {
+				shared = w.state().get<scn::material_desc_component>(ents.front()).mlt_desc.get();
+				meshes[0] = { &w.state(), ents.front() };
+				meshes[1] = { &w.state(), ents.back() };
+				return;
+			}
+		}
+	});
+	BOOST_REQUIRE_MESSAGE(shared, "the bench level needs two meshes with one material");
+
+	std::map<std::uint32_t, rnd::variant_id> before;	// opaque variant of the shared desc's instances, by id
+	std::size_t checked = 0;
+	std::size_t changed = 0;
+	std::size_t older_hints = 0;
+
+	const auto after_extract = [&] {
+		auto& packets = storage.require<rnd::frame_context>().data.require<std::pmr::vector<rnd::render_packet_t>>();
+		std::map<std::uint32_t, rnd::variant_id> now;
+		for (const auto& packet : packets) {
+			for (const auto* list : { &packet.opaque_draws, &packet.transparent_draws }) {
+				const bool opaque_list = list == &packet.opaque_draws;
+				for (const auto& dc : *list) {
+					const auto& material = instances().get(dc.material);
+					if (material.source.get() != shared.get()) continue;
+					++checked;
+					// The variant stored in the draw may be older than the instance; the passes read the instance.
+					if (dc.variant != (opaque_list ? material.opaque : material.base)) ++older_hints;
+					if (opaque_list) {
+						now[dc.material.index] = material.opaque;
+						const auto old = before.find(dc.material.index);
+						if (old != before.end() && old->second != material.opaque) ++changed;
+					}
+				}
+			}
+		}
+		before = std::move(now);
+	};
+
+	const auto edit = [&](int mesh, const char* define) {
+		return [&, mesh, define] {
+			shared->defines.push_back(define);
+			meshes[mesh].reg->get<scn::material_desc_component>(meshes[mesh].ent).dirty = true;
+		};
+	};
+
+	run_scenario(
+		{ nullptr, edit(1, "SNK_CACHE_TEST_FIRST"), nullptr, edit(0, "SNK_CACHE_TEST_SECOND"), nullptr },
+		{ after_extract, after_extract, after_extract, after_extract, after_extract });
+
+	BOOST_TEST(checked > 0u);
+	// Each edit changed the variant of the instance. In one of the two orders a draw made before the recompile holds
+	// the older variant: that is why the passes take the program from the instance and not from the draw.
+	BOOST_TEST(changed > 0u);
+	BOOST_TEST(older_hints > 0u);
+	BOOST_TEST_MESSAGE("draws of the shared desc " << checked << ", with an older variant in the draw " << older_hints);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

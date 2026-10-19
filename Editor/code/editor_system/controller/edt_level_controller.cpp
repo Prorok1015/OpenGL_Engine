@@ -1,5 +1,5 @@
 #include "edt_level_controller.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include <snk/scene/level/scn_context_set.h>
@@ -17,7 +17,7 @@
 #include <snk/common/logger/engine_log.h>
 
 edt::level_controller::level_controller(
-	shared_state& state, res::resource_system& res, desc::desc_system& desc,
+	scene_document& state, res::resource_system& res, desc::desc_system& desc,
 	scene_editor& scene_ed, world_controller& world_ctrl)
 	: m_state(state)
 	, m_res(res)
@@ -81,7 +81,7 @@ void edt::level_controller::new_level()
 	// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
 
 	m_state.active_world_idx = m_state.world_names.empty() ? -1 : 0;
-	m_state.is_dirty = true;
+	m_state.commit("New level", commit_mode::state_only);
 	m_world_ctrl.select_world(m_state.active_world_idx);
 }
 
@@ -132,7 +132,7 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 		if (auto p = m_state.level_name.rfind('/');  p != std::string::npos) m_state.level_name = m_state.level_name.substr(p + 1);
 
 		// world_names/descs/systems already populated (index-aligned) by populate_worlds_from_level.
-		m_state.is_dirty = false;
+		m_state.mark_clean();
 		if (m_state.world_names.empty()) {
 			egLOG_WARN("Editor/LoadLevel", "Level '{}' has no worlds", m_state.level_name);
 			m_world_ctrl.clear_active_world();
@@ -214,7 +214,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 	out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 	m_state.level_guid = guid;
 	m_state.level_name = level_name;
-	m_state.is_dirty   = false;
+	m_state.mark_clean();
 	egLOG("Editor/Save", "Level saved to {}", abs_path.string());
 	return true;
 }
@@ -245,7 +245,7 @@ void edt::level_controller::resync_worlds_after_reload()
 }
 
 void edt::apply_world_resync(
-	shared_state& state,
+	scene_document& state,
 	world_controller& worlds,
 	const std::vector<scn::world_desc>& desc_worlds,
 	bool desc_lists_worlds,

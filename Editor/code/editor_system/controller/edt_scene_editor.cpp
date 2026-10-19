@@ -1,5 +1,5 @@
 #include "edt_scene_editor.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_override_edit.h"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -11,9 +11,15 @@
 #include <entt/entt.hpp>
 #include <algorithm>
 
-edt::scene_editor::scene_editor(shared_state& state)
+edt::scene_editor::scene_editor(scene_document& state)
 	: m_state(state)
 {
+	m_state.set_pusher([this] { return serialize_and_push(); });
+}
+
+edt::scene_editor::~scene_editor()
+{
+	m_state.set_pusher(nullptr);
 }
 
 // ─── Entity CRUD ─────────────────────────────────────────────────────────────
@@ -38,8 +44,7 @@ void edt::scene_editor::create_entity(const std::string& type_name)
 	if (!world) return;
 	if (on_before_modify) on_before_modify();
 	world->get_root().children.push_back(std::move(node));
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Create entity");
 }
 
 void edt::scene_editor::create_entity_from_node(prefab_node node)
@@ -51,8 +56,7 @@ void edt::scene_editor::create_entity_from_node(prefab_node node)
 	if (!world) return;
 	if (on_before_modify) on_before_modify();
 	world->get_root().children.push_back(std::move(node));
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Create entity from node");
 }
 
 void edt::scene_editor::delete_entity(uint64_t node_id)
@@ -62,8 +66,7 @@ void edt::scene_editor::delete_entity(uint64_t node_id)
 	if (!world) return;
 	if (on_before_modify) on_before_modify();
 	remove_node_by_id(world->get_root().children, node_id);
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Delete entity");
 }
 
 void edt::scene_editor::delete_entities(const std::vector<uint64_t>& node_ids)
@@ -75,8 +78,7 @@ void edt::scene_editor::delete_entities(const std::vector<uint64_t>& node_ids)
 	auto& root_children = world->get_root().children;
 	for (uint64_t id : node_ids)
 		remove_node_by_id(root_children, id);
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Delete entities");
 }
 
 void edt::scene_editor::duplicate_entity(uint64_t node_id)
@@ -97,8 +99,7 @@ void edt::scene_editor::duplicate_entity(uint64_t node_id)
 
 	if (on_before_modify) on_before_modify();
 	siblings->insert(it + 1, std::move(copy));
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Duplicate entity");
 }
 
 void edt::scene_editor::duplicate_entities(const std::vector<uint64_t>& node_ids)
@@ -130,8 +131,7 @@ void edt::scene_editor::duplicate_entities(const std::vector<uint64_t>& node_ids
 	});
 	for (auto& c : copies)
 		c.siblings->insert(c.siblings->begin() + static_cast<std::ptrdiff_t>(c.insert_after_idx), std::move(c.node));
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Duplicate entities");
 }
 
 void edt::scene_editor::reparent_entity(uint64_t node_id, uint64_t new_parent_id, int insert_index)
@@ -185,8 +185,7 @@ void edt::scene_editor::reparent_entity(uint64_t node_id, uint64_t new_parent_id
 		}
 	}
 
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Reparent entity");
 }
 
 void edt::scene_editor::on_transform_committed(
@@ -213,28 +212,26 @@ void edt::scene_editor::on_transform_committed(
 		}
 		override_edit::write_transform(*address.owner, address.target, *base, pos, rot, scale);
 	}
-	m_state.is_dirty = true;
-	serialize_and_push();
+	m_state.commit("Move entity");
 }
 
 // ─── Desc ↔ ECS sync ────────────────────────────────────────────────────────
 
-void edt::scene_editor::serialize_and_push()
+bool edt::scene_editor::serialize_and_push()
 {
-	m_state.touch_descs(); // also on the early returns below: the desc may have changed without a push
-	if (!m_state.editor_tag.is_valid()) return;
+	if (!m_state.editor_tag.is_valid()) return false;
 	auto ctx_mgr = m_state.ctx_manager.lock();
-	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return;
+	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return false;
 
 	auto* world_desc = m_state.active_world_desc();
-	if (!world_desc) return;
+	if (!world_desc) return false;
 	const std::string world_name = m_state.active_world_name()
 		? *m_state.active_world_name()
 		: std::string(world_desc->get_name());
 
 	scn::context_set& lvl = ctx_mgr->level_set();
 	if (!lvl.has(world_name))
-		return;
+		return false;
 
 	{
 		scn::world_context& world = lvl.get(world_name);
@@ -246,7 +243,7 @@ void edt::scene_editor::serialize_and_push()
 	scn::world_context& world = lvl.get(world_name);
 	if (on_inject_camera) on_inject_camera(world.state());
 
-	if (on_after_push) on_after_push();
+	return true;
 }
 
 void edt::scene_editor::sync_ecs_transforms_to_desc()

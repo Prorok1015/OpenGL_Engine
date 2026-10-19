@@ -1,9 +1,9 @@
 #include "edt_editor_system.h"
 #include <snk/editor/edt_editor_context.h>
 #include <snk/common/engine_assert.h>
-#include "edt_init_helpers.h"
 #include "edt_selection_wiring.h"
-#include "edt_prefab_editor_context.h"
+#include "edt_prefab_document.h"
+#include <snk/editor/edt_document_manager.h>
 
 #include "edt_editor_layer.h"
 #include "edt_scene_hierarchy_panel.h"
@@ -42,7 +42,9 @@
 #include <snk/config/cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
+#include <format>
 #include <fstream>
+#include <span>
 
 namespace {
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
@@ -65,7 +67,16 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 {
 }
 
-edt::editor_system::~editor_system() = default;
+edt::editor_system::~editor_system()
+{
+	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
+	if (m_context) {
+		m_context->documents().shutdown();
+	}
+	if (m_prefab_panel) {
+		m_prefab_panel->set_context(nullptr);
+	}
+}
 
 void edt::editor_system::init(ds::app_data_storage& data)
 {
@@ -86,7 +97,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
-		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>());
+		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
 	editor_layer->set_context(*m_context);
 	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
@@ -97,12 +108,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_input_router->set_default_target(std::nullopt);
 
 	// Create panels
-	init_helpers::setup_panels(
-		m_hierarchy_panel, m_inspector_panel, m_viewport_panel,
-		m_console_panel, m_asset_browser_panel,
-		*this, m_log_sink,
-		// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
-		!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
+	// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
+	create_panels(!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
 	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
 	m_inspector_panel->set_desc_system(&desc_system);
 	{
@@ -111,18 +118,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_inspector_panel->set_view_cache(view_cache);
 		m_hierarchy_panel->set_view_cache(std::move(view_cache));
 	}
-	init_helpers::setup_viewport_panel(
-		m_viewport_panel, *m_input_router, *this, m_state, m_rnd, m_gui, m_res);
+	create_viewport_panel();
 
 	// Wire all controller + panel callbacks
-	init_helpers::wire_controller_callbacks(
-		*this, m_scene_editor, m_world_ctrl, m_level_ctrl, *editor_layer, m_state);
-	init_helpers::wire_hierarchy_callbacks(
-		*m_hierarchy_panel, *m_inspector_panel, *m_viewport_panel,
-		m_scene_editor, m_world_ctrl, m_state);
+	wire_controller_callbacks();
+	wire_panel_callbacks();
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
-		auto ctx_mgr = m_state.ctx_manager.lock();
-		scn::world_context* found = ctx_mgr ? ctx_mgr->level_set().find(world) : nullptr;
+		scn::context_set* level = m_state.level_set();
+		scn::world_context* found = level ? level->find(world) : nullptr;
 		return found ? &found->state() : nullptr;
 	});
 	m_selection_connections = wire_selection(
@@ -183,16 +186,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			win->shutdown();
 	};
 
+	m_state.set_save_handlers(
+		[this] { return m_level_ctrl.quick_save_level(); },
+		[this](const res::tag& target) { return m_level_ctrl.save_level_as(std::string(target.relative())); });
+
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_state.editor_tag.is_valid(); };
-	hooks.is_dirty = [this] { return m_state.is_dirty; };
+	hooks.is_dirty = [this] { return m_state.is_dirty(); };
 	hooks.level_path = [this] {
 		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
 	};
 	hooks.new_level = [this] { m_level_ctrl.new_level(); };
-	hooks.quick_save = [this] { return m_level_ctrl.quick_save_level(); };
-	hooks.save_level_as = [this](const std::string& rel_path) { return m_level_ctrl.save_level_as(rel_path); };
-	hooks.discard_changes = [this] { m_state.is_dirty = false; };
+	hooks.quick_save = [this] { return m_state.save().saved; };
+	hooks.save_level_as = [this](const std::string& rel_path) { return m_state.save_as(res::tag::make(rel_path)).saved; };
+	hooks.discard_changes = [this] { m_state.mark_clean(); };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(res::resource_system::get_resources_path());
 		begin_level_load(res::tag::make(relative.string()));
@@ -210,6 +217,108 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	}
+}
+
+void edt::editor_system::create_panels(bool capture_log)
+{
+	m_hierarchy_panel = std::make_shared<scene_hierarchy_panel>();
+	m_inspector_panel = std::make_shared<inspector_panel>();
+	m_inspector_panel->set_inspector_registry(&m_context->inspectors());
+	m_console_panel = std::make_shared<console_panel>();
+	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
+	m_asset_browser_panel->set_layers(res::resource_system::get_resource_layers());
+
+	if (!capture_log) return;
+
+	auto console_weak = std::weak_ptr<console_panel>(m_console_panel);
+	m_log_sink = engine::add_log_sink([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
+		auto panel = console_weak.lock();
+		if (!panel) return;
+		edt::log_level edt_level = edt::log_level::info;
+		if (level == engine::log_level::warn)  edt_level = edt::log_level::warning;
+		if (level == engine::log_level::error) edt_level = edt::log_level::error;
+		panel->add_log(edt_level, std::format("[{}] {}", category, message));
+	});
+}
+
+void edt::editor_system::create_viewport_panel()
+{
+	m_viewport_panel = std::make_shared<viewport_panel>(m_rnd, m_gui);
+	m_viewport_panel->set_registry_getter([this]() -> entt::registry* {
+		auto ctx_mgr = m_state.ctx_manager.lock();
+		const std::string* active = m_state.active_world_name();
+		if (!ctx_mgr || !active) return nullptr;
+		const auto& name = *active;
+		auto& level = ctx_mgr->level_set();
+		if (!level.has(name)) return nullptr;
+		return &level.get(name).state();
+	});
+	m_viewport_panel->set_input_router(m_input_router, [this] { return active_input_target(m_state); });
+	m_viewport_panel->set_on_asset_dropped([this](const std::string& res_rel_path) {
+		if (!m_state.editor_tag.is_valid()) return;
+		m_context->asset_kinds().drop_into_scene(*m_context, res::tag::make(res_rel_path));
+	});
+}
+
+void edt::editor_system::wire_controller_callbacks()
+{
+	// on_before_modify and on_world_switched go through the selection service (edt_selection_wiring.cpp).
+	const auto save_camera = [this](entt::registry& reg) { save_camera_state(reg, m_state.camera); };
+	const auto inject_editor_camera = [this](entt::registry& reg) { inject_camera(reg, m_state.camera); };
+	m_scene_editor.on_save_camera = save_camera;
+	m_scene_editor.on_inject_camera = inject_editor_camera;
+
+	m_world_ctrl.on_save_camera = save_camera;
+	m_world_ctrl.on_inject_camera = inject_editor_camera;
+
+	m_level_ctrl.on_editor_world_reloaded = [] {
+		egLOG("Editor", "Editor world reloaded");
+	};
+	if (auto ctx_mgr = m_state.ctx_manager.lock()) {
+		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
+	}
+}
+
+void edt::editor_system::wire_panel_callbacks()
+{
+	m_hierarchy_panel->set_on_world_changed([this](int idx) {
+		// A refused switch leaves the old world active: resync the tab and the panels to it.
+		if (!m_world_ctrl.switch_to_world(idx) && m_world_ctrl.on_world_switched)
+			m_world_ctrl.on_world_switched(m_state.active_world_idx);
+	});
+	m_hierarchy_panel->set_on_create_world([this](const std::string& name) {
+		m_world_ctrl.create_world(name);
+	});
+	m_hierarchy_panel->set_on_create_node([this](const std::string& type_name) {
+		m_scene_editor.create_entity(type_name);
+	});
+	m_hierarchy_panel->set_on_delete_node([this](uint64_t node_id) {
+		m_scene_editor.delete_entity(node_id);
+	});
+	m_hierarchy_panel->set_on_delete_nodes([this](const std::vector<uint64_t>& node_ids) {
+		m_scene_editor.delete_entities(node_ids);
+	});
+	m_hierarchy_panel->set_on_rename_node([this](const std::string& /*old_name*/, const std::string& /*new_name*/) {
+		m_state.commit("Rename node");
+	});
+	m_hierarchy_panel->set_on_duplicate_node([this](uint64_t node_id) {
+		m_scene_editor.duplicate_entity(node_id);
+	});
+	m_hierarchy_panel->set_on_duplicate_nodes([this](const std::vector<uint64_t>& node_ids) {
+		m_scene_editor.duplicate_entities(node_ids);
+	});
+	m_hierarchy_panel->set_on_reparent_node([this](uint64_t node_id, uint64_t new_parent_id, int insert_index) {
+		m_scene_editor.reparent_entity(node_id, new_parent_id, insert_index);
+	});
+
+	m_inspector_panel->set_on_node_changed([this]() {
+		m_state.commit("Edit node");
+	});
+
+	m_viewport_panel->set_on_transform_committed(
+		[this](std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale) {
+			m_scene_editor.on_transform_committed(path, pos, rot, scale);
+		});
 }
 
 // ─── Import pipeline ────────────────────────────────────────────────────────
@@ -233,7 +342,7 @@ bool edt::editor_system::poll_import_pipeline()
 		return true;
 	}
 
-	if (m_import_token) {
+	if (m_importing) {
 		return poll_import_progress();
 	}
 	return false;
@@ -241,44 +350,57 @@ bool edt::editor_system::poll_import_pipeline()
 
 void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 {
-	if (m_import_token) return;
+	if (m_importing) return;
 
-	m_import_token = std::make_unique<edt::async_import_token>();
-	m_import_token->display_name = abs_path.filename().string();
+	m_importing = true;
+	m_import_finished = false;
+	m_import_spinner_t = 0.f;
+	m_import_result.reset();
+	m_import_failure.clear();
+	m_import_name = abs_path.filename().string();
 	// compute lane: assimp parsing and mesh building are CPU-bound; the io lane has two threads for blocking files.
-	m_import_token->job = m_context->jobs().start(ds::lane::compute,
-		{ "Import " + m_import_token->display_name, "import" }, m_lifetime,
+	m_import_job = m_context->jobs().start(ds::lane::compute,
+		{ "Import " + m_import_name, "import" }, m_lifetime,
 		[importer = m_model_importer.get(), abs_path](ds::task_context& ctx) -> edt::import_intermediate {
 			ctx.throw_if_stopped();
 			return importer->import_background(abs_path);
 		},
 		[this](ds::task_result<edt::import_intermediate>& result) {
-			if (!m_import_token) return;
-			m_import_token->finished = true;
+			if (!m_importing) return;
+			m_import_finished = true;
 			if (result.ok()) {
-				m_import_token->intermediate = std::move(*result.value);
+				m_import_result = std::move(*result.value);
 			} else {
-				m_import_token->failure = result.error;
+				m_import_failure = result.error;
 			}
 		});
 	editor_layer->register_implicit("edt/import_model", [this] { return poll_import_pipeline(); });
 }
 
+void edt::editor_system::finish_import()
+{
+	m_importing = false;
+	m_import_finished = false;
+	m_import_job = 0;
+	m_import_result.reset();
+	m_import_failure.clear();
+	m_import_name.clear();
+}
+
 bool edt::editor_system::poll_import_progress()
 {
-	auto& token = *m_import_token;
 	// Not running and not finished: the job was cancelled and its result discarded.
-	const bool waiting = !token.finished && m_context->jobs().is_running(token.job);
+	const bool waiting = !m_import_finished && m_context->jobs().is_running(m_import_job);
 
 	if (waiting) {
 		ImGui::OpenPopup("Importing##edt_import");
 		if (ImGui::BeginPopupModal("Importing##edt_import", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
 		{
-			token.spinner_t += ImGui::GetIO().DeltaTime;
+			m_import_spinner_t += ImGui::GetIO().DeltaTime;
 			const char* spinners[] = { "|", "/", "-", "\\" };
-			int idx = static_cast<int>(token.spinner_t * 8.f) % 4;
-			ImGui::Text("%s  Importing '%s'...", spinners[idx], token.display_name.c_str());
+			int idx = static_cast<int>(m_import_spinner_t * 8.f) % 4;
+			ImGui::Text("%s  Importing '%s'...", spinners[idx], m_import_name.c_str());
 			ImGui::EndPopup();
 		}
 		return true;
@@ -292,16 +414,16 @@ bool edt::editor_system::poll_import_progress()
 		ImGui::EndPopup();
 	}
 
-	if (!token.intermediate) {
-		if (!token.failure.empty()) {
-			egLOG("Editor/Import", "Async import failed: {}", token.failure);
+	if (!m_import_result) {
+		if (!m_import_failure.empty()) {
+			egLOG("Editor/Import", "Async import failed: {}", m_import_failure);
 		}
-		m_import_token.reset();
+		finish_import();
 		return false;
 	}
 
-	auto intermediate = std::move(*token.intermediate);
-	m_import_token.reset();
+	auto intermediate = std::move(*m_import_result);
+	finish_import();
 
 	if (!intermediate.error.empty()) {
 		egLOG("Editor/Import", "Async import failed: {}", intermediate.error);
@@ -412,44 +534,23 @@ bool edt::editor_system::poll_pending_desc()
 	return false;
 }
 
-// ─── Editor camera ──────────────────────────────────────────────────────────
-
-void edt::editor_system::save_editor_camera_state(entt::registry& reg)
-{
-	init_helpers::save_camera_state(reg, m_camera_state);
-}
-
-void edt::editor_system::inject_editor_camera(entt::registry& reg)
-{
-	init_helpers::inject_camera(reg, m_camera_state);
-}
-
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
-	if (!m_prefab_ctx) {
-		m_prefab_ctx = std::make_unique<prefab_editor_context>(m_state, m_res, desc_system);
-	}
-
-	if (m_prefab_ctx->is_open()) {
-		m_prefab_ctx->close();
-	}
-
-	m_prefab_ctx->open(tag);
-
-	if (m_prefab_ctx->is_open()) {
-		m_prefab_panel->set_context(m_prefab_ctx.get());
+	prefab_document& prefab = m_context->documents().open_prefab(tag);
+	if (prefab.is_open()) {
+		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
 	}
 }
 
 void edt::editor_system::close_prefab_editor()
 {
-	if (m_prefab_ctx) {
-		m_prefab_ctx->close();
+	auto& documents = m_context->documents();
+	if (prefab_document* prefab = documents.preview()) {
+		documents.close(prefab->id());
 	}
 	m_prefab_panel->set_context(nullptr);
 	m_prefab_panel->set_open(false);
 }
-

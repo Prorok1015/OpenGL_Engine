@@ -2,6 +2,7 @@
 #include "null_engine_fixture.hpp"
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_frame_context.h>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/render/shader/rnd_material_params.h>
@@ -67,13 +68,14 @@ struct material_set_fixture : test_util::null_engine_fixture
 		BOOST_TEST(state.total() == 0u);
 	}
 
-	// The compiled materials the frame's draws point at.
+	// The material instances the frame's draws point at.
 	std::set<const rnd::compiled_material*> drawn_materials()
 	{
+		const auto& instances = storage.require<rnd::render_system>().material_instances();
 		std::set<const rnd::compiled_material*> result;
 		for (const auto& packet : packets()) {
-			for (const auto& dc : packet.opaque_draws) result.insert(&packet.material_of(dc));
-			for (const auto& dc : packet.transparent_draws) result.insert(&packet.material_of(dc));
+			for (const auto& dc : packet.opaque_draws) result.insert(&instances.get(dc.material));
+			for (const auto& dc : packet.transparent_draws) result.insert(&instances.get(dc.material));
 		}
 		return result;
 	}
@@ -225,7 +227,10 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 
 	entt::registry* registry = nullptr;
 	entt::entity entity = entt::null;
+	const void* desc_of_entity = nullptr;
+	bool skinned_instance = false;
 	std::uint64_t serial_before = 0;
+	std::vector<std::uint64_t> serials;	// the dirtied instance's serial after each frame, from frame 1 on
 	bool content_shared = false;
 	std::vector<std::set<std::uint64_t>> bound;
 	std::vector<std::size_t> created;
@@ -253,11 +258,15 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 				const auto drawn = drawn_materials();
 				storage.require<scn::context_manager>().level_set().for_each([&](scn::world_context& w) {
 					if (registry) return;
-					for (auto [ent, cache] : w.state().view<scn::compiled_material_component>().each()) {
-						if (cache.material && drawn.contains(cache.material.get())) {
+					for (auto [ent, mat] : w.state().view<scn::material_desc_component>().each()) {
+						const auto desc = mat.mlt_desc.get();
+						const auto instance = std::ranges::find_if(drawn, [&](const rnd::compiled_material* m) { return m->source.get() == desc.get(); });
+						if (desc && instance != drawn.end()) {
 							registry = &w.state();
 							entity = ent;
-							const rnd::compiled_material* self = cache.material.get();
+							const rnd::compiled_material* self = *instance;
+							desc_of_entity = desc.get();
+							skinned_instance = self->skinned;
 							serial_before = self->serial;
 							content_shared = std::ranges::any_of(drawn, [&](const rnd::compiled_material* other) {
 								return other != self && content_of(*other) == content_of(*self);
@@ -268,6 +277,11 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 				});
 				BOOST_REQUIRE(registry);
 			}
+			for (const auto* material : drawn_materials()) {
+				if (material->source.get() == desc_of_entity && material->skinned == skinned_instance) {
+					serials.push_back(material->serial);
+				}
+			}
 			bound.push_back(material_groups_bound(log_begin));
 			log_begin = driver()->bind_log().size();
 			created.push_back(driver()->calls().bind_groups_created);
@@ -277,7 +291,9 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 
 	BOOST_REQUIRE(bound.size() == 6u);
 	// Rebuilt: a new compiled_material (its serial is never reused, its address may be).
-	BOOST_TEST(registry->get<scn::compiled_material_component>(entity).material->serial != serial_before);
+	BOOST_REQUIRE(serials.size() == 5u);
+	BOOST_TEST(serials.back() != serial_before);
+	BOOST_TEST(serials.front() == serial_before);
 	// Frame 2 built the changed material again: one group and one params buffer, nothing else.
 	BOOST_TEST(created[2] == created[1] + 1);
 	BOOST_TEST(buffers[2] == buffers[1] + 1);

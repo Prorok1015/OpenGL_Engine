@@ -5,7 +5,7 @@
 #include <snk/scene/level/scn_node_index.h>
 #include "edt_scene_editor.h"
 #include "edt_override_edit.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <set>
@@ -248,7 +248,7 @@ struct editor_fixture : node_id_fixture
 
 	scn::world_desc& world() { return state.world_descs[0]; }
 
-	edt::shared_state state;
+	edt::scene_document state;
 	std::unique_ptr<edt::scene_editor> editor;
 };
 
@@ -364,7 +364,7 @@ struct instance_fixture : node_id_fixture
 	scn::world_desc& world() { return state.world_descs[0]; }
 	std::vector<prefab_node>& nodes() { return world().get_root().children; }
 
-	edt::shared_state state;
+	edt::scene_document state;
 	std::unique_ptr<edt::scene_editor> editor;
 };
 
@@ -611,7 +611,7 @@ struct nested_fixture : node_id_fixture
 	scn::world_desc& world() { return state.world_descs[0]; }
 	prefab_node& robot() { return world().get_root().children[0]; }
 
-	edt::shared_state state;
+	edt::scene_document state;
 };
 
 BOOST_FIXTURE_TEST_CASE(Override_BaseTwoLevelsDeepCarriesTheIntermediateRecords, nested_fixture)

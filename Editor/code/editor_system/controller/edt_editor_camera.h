@@ -2,6 +2,7 @@
 #include <snk/resource/res_tag.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
+#include <entt/entity/fwd.hpp>
 
 namespace edt {
 
@@ -22,5 +23,10 @@ namespace edt {
 		// Render target tag for editor camera
 		static constexpr std::string_view RT_TAG = "memory://__editor_camera_rt";
 	};
+
+	// Copies the pose of the editor camera entity of `reg` into `state` (no-op when there is none).
+	void save_camera_state(entt::registry& reg, editor_camera_state& state);
+	// Replaces the editor camera entity of `reg` with one built from `state`.
+	void inject_camera(entt::registry& reg, const editor_camera_state& state);
 
 } // namespace edt
