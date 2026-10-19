@@ -29,6 +29,7 @@ namespace ecs  { class system_factory; }
 namespace inp  { class input_router; }
 
 namespace edt {
+	class agent_server;
 	class file_menu;
 	class editor_context;
 	class editor_layer;
@@ -141,5 +142,7 @@ namespace edt {
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
+		// The MCP server (editor/agent_server, off by default); null when it is off. Last member: stopped first.
+		std::unique_ptr<agent_server> m_agent_server;
 	};
 }

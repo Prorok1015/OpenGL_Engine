@@ -84,6 +84,10 @@ namespace edt
 		std::uint32_t schema_version = 1;
 		// Listed by tools() for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
+		// Changes the document, the files or the state of the editor (cmd::command_desc::mutates). True unless the
+		// action says it only reads: the MCP server offers an agent the commands that do not mutate, so a forgotten
+		// flag must keep an action out of reach, not put it in.
+		bool mutates = true;
 		std::function<void()> activate;
 		// Null: always enabled.
 		std::function<bool()> enabled;

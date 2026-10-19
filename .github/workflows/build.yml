@@ -25,7 +25,7 @@ on:
 #   if: github.event_name == 'push' || github.event.pull_request.draft == false
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
-# Fast: Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Editor visual smoke.
+# Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Editor visual smoke.
 # Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared, Linux TSan,
 # SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes only.
 
@@ -223,6 +223,12 @@ jobs:
       # RHI R0: GL stays inside the GL driver plus the documented allow-list; runs first, it needs no build.
       - name: Check GL is used only inside the GL driver
         run: tools/ci/check_no_gl_outside_drivers.sh
+
+      # AI A6a: the MCP server module (snk_mcp_server) is wired into the editor and its tests only, never into the engine, a
+      # game or the SDK, and it stays free of the engine; also runs first. The same rule is a CMake check in every configure
+      # (cmake/SnkMcpIsolation.cmake), and the SDK jobs below check the installed package.
+      - name: Check the MCP server module is isolated
+        run: tools/ci/check_mcp_isolation.sh
 
       - name: Install dependencies
         run: |
@@ -543,6 +549,10 @@ jobs:
       - name: Check the installed headers (static)
         run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_STATIC}"
 
+      # The MCP server module is for the editor only: nothing of it in the installed SDK.
+      - name: Check the SDK has no MCP server module (static)
+        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX_STATIC}"
+
       - name: Check the package does not point into the build or source tree (static)
         run: |
           find "${SDK_PREFIX_STATIC}/lib/cmake/snake_sdk" -type f | sort
@@ -584,6 +594,9 @@ jobs:
       # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
       - name: Check the installed headers (shared)
         run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_SHARED}"
+
+      - name: Check the SDK has no MCP server module (shared)
+        run: tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX_SHARED}"
 
       - name: Check the package does not point into the build or source tree (shared)
         run: |
@@ -660,6 +673,9 @@ jobs:
 
       - name: Check the installed headers
         run: bash tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
+
+      - name: Check the SDK has no MCP server module
+        run: bash tools/ci/check_mcp_isolation.sh --sdk "${SDK_PREFIX}"
 
       - name: Check the installed layout
         run: |
