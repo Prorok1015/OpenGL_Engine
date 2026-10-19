@@ -20,6 +20,8 @@ public:
     }
 
     bool show(const char* title, bool* p_open);
+    // The next show() closes the popup as a Cancel click does (and returns false).
+    void request_close() { close_requested = true; }
 
     const std::filesystem::path& get_selected_path() const { return selected_path; }
 	const std::filesystem::path& get_base_path() const { return base_path; }
@@ -39,5 +41,6 @@ private:
     std::vector<std::string> extension_filters;  // Changed to vector
     SELECT_MODE select_mode;
     bool opened = false;
+    bool close_requested = false;
 };
 }

@@ -11,6 +11,7 @@
 #include "edt_init_helpers.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/logger/engine_log.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
 #include <vector>
@@ -101,6 +102,8 @@ namespace edt {
 		std::shared_ptr<viewport_panel>        m_viewport_panel;
 		std::shared_ptr<game_view_panel>       m_game_view_panel;
 		std::shared_ptr<console_panel>         m_console_panel;
+		// The console's feed from the engine log; removed with the editor system.
+		engine::log_sink_handle                m_log_sink;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 		std::shared_ptr<prefab_editor_panel>   m_prefab_panel;
 

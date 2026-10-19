@@ -1,9 +1,16 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_file_menu.h"
+#include <snk/command/cmd_json_schema.h>
+#include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_service_commands.h>
+#include <boost/json/parse.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
+#include <cstdint>
+#include <filesystem>
+#include <format>
 #include <functional>
 #include <memory>
 #include <set>
@@ -519,6 +526,296 @@ BOOST_AUTO_TEST_CASE(OpenLevelAndImportModel_HandOverThePickedFile)
 	menu->import_model();
 	drain();
 	BOOST_TEST((calls == std::vector<std::string>{ "load:res/levels/e.desc", "import:models/m.glb" }));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+namespace json = boost::json;
+
+struct dialog_command_fixture : dialog_fixture
+{
+	dialog_command_fixture()
+		: registrations(edt::register_dialog_commands(commands, service))
+	{
+	}
+
+	cmd::result call(const std::string& id, const std::string& args = "{}")
+	{
+		return commands.invoke(id, json::parse(args), cmd::origin::test());
+	}
+
+	cmd::result answer(edt::dialog_service::dialog_id id, const std::string& answer_json)
+	{
+		return service.answer(id, json::parse(answer_json));
+	}
+
+	cmd::command_registry commands;
+	std::vector<edt::registration> registrations;
+};
+
+bool any_popup_open()
+{
+	return ImGui::GetCurrentContext()->OpenPopupStack.Size > 0;
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtDialogAnswerTests, dialog_command_fixture)
+
+BOOST_AUTO_TEST_CASE(List_ShowsIdKindTextAndAnswerSchemaOfEveryWaitingDialog)
+{
+	edt::pick_file_options options;
+	options.title = "Pick a model";
+	const auto unsaved = service.confirm_unsaved({});
+	const auto save_as = service.save_as("levels/a.desc", {});
+	const auto pick = service.pick_file(options, {});
+	const auto message = service.message(edt::message_level::warning, "careful");
+
+	const auto listed = service.list();
+	BOOST_REQUIRE(listed.size() == 4u);
+	BOOST_TEST(listed[0].id == unsaved);
+	BOOST_TEST(listed[1].id == save_as);
+	BOOST_TEST(listed[2].id == pick);
+	BOOST_TEST(listed[3].id == message);
+	BOOST_TEST(listed[0].kind == "unsaved");
+	BOOST_TEST(listed[1].kind == "save_as");
+	BOOST_TEST(listed[2].kind == "pick_file");
+	BOOST_TEST(listed[3].kind == "message");
+	BOOST_TEST(listed[2].text == "Pick a model");
+	BOOST_TEST(listed[3].text == "careful");
+	for (const auto& dialog : listed) {
+		BOOST_TEST(!dialog.on_screen);
+		BOOST_TEST(!cmd::json_schema::check_schema(dialog.answer_schema).has_value());
+		BOOST_TEST(dialog.answer_schema.as_object().at("type").as_string().c_str() == std::string("object"));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(List_MarksTheDialogThatIsOnScreen)
+{
+	imgui_ctx imgui;
+	service.message(edt::message_level::info, "one");
+	service.message(edt::message_level::info, "two");
+	imgui.frame([&] { service.update(); });
+
+	const auto listed = service.list();
+	BOOST_REQUIRE(listed.size() == 2u);
+	BOOST_TEST(listed[0].on_screen);
+	BOOST_TEST(!listed[1].on_screen);
+}
+
+BOOST_AUTO_TEST_CASE(DialogListCommand_HasTheDocumentedShape)
+{
+	BOOST_TEST(call("dialog.list").value.as_object().at("dialogs").as_array().empty());
+
+	const auto id = service.confirm_unsaved({});
+	const cmd::result listed = call("dialog.list");
+	BOOST_REQUIRE_MESSAGE(listed.ok, listed.error);
+	const json::array& dialogs = listed.value.as_object().at("dialogs").as_array();
+	BOOST_REQUIRE(dialogs.size() == 1u);
+	const json::object& dialog = dialogs[0].as_object();
+	BOOST_TEST(dialog.at("id").as_int64() == static_cast<std::int64_t>(id));
+	BOOST_TEST(dialog.at("kind").as_string().c_str() == std::string("unsaved"));
+	BOOST_TEST(dialog.at("text").is_string());
+	BOOST_TEST(dialog.at("answer_schema").is_object());
+	BOOST_TEST(dialog.at("on_screen").is_bool());
+	BOOST_TEST(dialog.size() == 5u);
+}
+
+BOOST_AUTO_TEST_CASE(Answer_OfADialogNeverDrawn_RunsTheCallbackAtOnce)
+{
+	std::vector<std::string> got;
+	const auto unsaved = service.confirm_unsaved([&](edt::unsaved_choice c) {
+		got.push_back(c == edt::unsaved_choice::discard ? "discard" : "other");
+	});
+	const auto save_as = service.save_as("start", [&](const std::string& p) { got.push_back("path:" + p); });
+	const auto cancelled_save = service.save_as("start", [&](const std::string&) { got.push_back("never"); });
+	const auto pick = service.pick_file({}, [&](const std::filesystem::path& p) { got.push_back("file:" + p.generic_string()); });
+	const auto message = service.message(edt::message_level::info, "x");
+
+	const cmd::result first = answer(unsaved, R"({"choice":"discard"})");
+	BOOST_REQUIRE_MESSAGE(first.ok, first.error);
+	BOOST_TEST(first.value.as_object().at("resolved").as_bool());
+	BOOST_TEST(answer(save_as, R"({"path":"levels/x.desc"})").ok);
+	BOOST_TEST(answer(cancelled_save, R"({"cancel":true})").ok);
+	BOOST_TEST(answer(pick, R"({"path":"models/m.glb"})").ok);
+	BOOST_TEST(answer(message, "{}").ok);
+
+	BOOST_TEST((got == std::vector<std::string>{ "discard", "path:levels/x.desc", "file:models/m.glb" }));
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(!service.is_pending(unsaved));
+}
+
+BOOST_AUTO_TEST_CASE(Answer_OfADialogOnScreen_ClosesItInTheNextFrameLikeAClick)
+{
+	imgui_ctx imgui;
+	std::vector<std::string> got;
+	const auto id = service.confirm_unsaved([&](edt::unsaved_choice c) {
+		got.push_back(c == edt::unsaved_choice::save ? "save" : "other");
+	});
+	service.message(edt::message_level::info, "next");
+
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(any_popup_open());
+	BOOST_TEST(got.empty());
+
+	const cmd::result result = answer(id, R"({"choice":"save"})");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST(!result.value.as_object().at("resolved").as_bool()); // the frame resolves it
+	BOOST_TEST(got.empty());
+	BOOST_TEST(service.pending() == 2u);
+
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST((got == std::vector<std::string>{ "save" }));
+	BOOST_TEST(!any_popup_open()); // the popup was closed inside its own scope
+	BOOST_TEST(service.pending() == 1u);
+	BOOST_REQUIRE(service.current().has_value());
+	BOOST_TEST(*service.current() != id);
+}
+
+BOOST_AUTO_TEST_CASE(Answer_OnScreen_SaveAsAndPickFile_GiveTheirCallbacksTheAnsweredPath)
+{
+	imgui_ctx imgui;
+	std::vector<std::string> got;
+	const auto save_as = service.save_as("start", [&](const std::string& p) { got.push_back("path:" + p); });
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(save_as, R"({"path":"levels/long_enough_to_not_matter.desc"})").ok);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST((got == std::vector<std::string>{ "path:levels/long_enough_to_not_matter.desc" }));
+	BOOST_TEST(!any_popup_open());
+
+	edt::pick_file_options options;
+	options.title = "Pick";
+	options.start_path = std::filesystem::current_path();
+	const auto pick = service.pick_file(options, [&](const std::filesystem::path& p) { got.push_back("file:" + p.generic_string()); });
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(any_popup_open());
+	BOOST_TEST(answer(pick, R"({"path":"models/m.glb"})").ok);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST((got == std::vector<std::string>{ "path:levels/long_enough_to_not_matter.desc", "file:models/m.glb" }));
+	BOOST_TEST(!any_popup_open());
+	BOOST_TEST(service.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Answer_OnScreen_CancelOfAFilePickerReportsNothingAndClosesIt)
+{
+	imgui_ctx imgui;
+	int picked = 0;
+	edt::pick_file_options options;
+	options.title = "Pick";
+	options.start_path = std::filesystem::current_path();
+	const auto pick = service.pick_file(options, [&](const std::filesystem::path&) { ++picked; });
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(pick, R"({"cancel":true})").ok);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(picked == 0);
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(!any_popup_open());
+}
+
+BOOST_AUTO_TEST_CASE(Answer_OnScreen_AMessageIsAcknowledged)
+{
+	imgui_ctx imgui;
+	const auto id = service.message(edt::message_level::error, "failed");
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(any_popup_open());
+	BOOST_TEST(answer(id, "{}").ok);
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(!any_popup_open());
+}
+
+BOOST_AUTO_TEST_CASE(Answer_ADialogBehindTheOneOnScreen_ResolvesWithoutDisturbingIt)
+{
+	imgui_ctx imgui;
+	int first_calls = 0;
+	std::vector<std::string> got;
+	const auto first = service.confirm_unsaved([&](edt::unsaved_choice) { ++first_calls; });
+	const auto second = service.confirm_unsaved([&](edt::unsaved_choice c) {
+		got.push_back(c == edt::unsaved_choice::cancel ? "cancel" : "other");
+	});
+	imgui.frame([&] { service.update(); });
+
+	BOOST_TEST(answer(second, R"({"choice":"cancel"})").value.as_object().at("resolved").as_bool());
+	BOOST_TEST((got == std::vector<std::string>{ "cancel" }));
+	BOOST_TEST(first_calls == 0);
+	BOOST_TEST(service.is_pending(first));
+	BOOST_TEST(!service.is_pending(second));
+	BOOST_TEST(any_popup_open());
+}
+
+BOOST_AUTO_TEST_CASE(Answer_ThatBreaksTheSchemaOrMeansNothing_IsRejectedAndTheDialogStays)
+{
+	int calls = 0;
+	const auto unsaved = service.confirm_unsaved([&](edt::unsaved_choice) { ++calls; });
+	const auto save_as = service.save_as("start", [&](const std::string&) { ++calls; });
+	const auto message = service.message(edt::message_level::info, "x");
+
+	BOOST_TEST(answer(unsaved, R"({"choice":"maybe"})").code == "invalid_args");
+	BOOST_TEST(answer(unsaved, "{}").code == "invalid_args");
+	BOOST_TEST(answer(unsaved, R"({"choice":"save","extra":1})").code == "invalid_args");
+	BOOST_TEST(answer(unsaved, R"({"choice":3})").code == "invalid_args");
+	BOOST_TEST(service.answer(unsaved, json::value("save")).code == "invalid_args"); // not an object
+	BOOST_TEST(answer(save_as, "{}").code == "invalid_args");
+	BOOST_TEST(answer(save_as, R"({"path":""})").code == "invalid_args");
+	BOOST_TEST(answer(save_as, R"({"path":"a","cancel":true})").code == "invalid_args");
+	BOOST_TEST(answer(save_as, R"({"cancel":false})").code == "invalid_args");
+	BOOST_TEST(answer(message, R"({"anything":1})").code == "invalid_args");
+
+	BOOST_TEST(calls == 0);
+	BOOST_TEST(service.pending() == 3u);
+	const cmd::result bad = answer(unsaved, R"({"choice":"maybe"})");
+	BOOST_TEST(bad.error.find("choice") != std::string::npos);
+
+	BOOST_TEST(answer(unsaved, R"({"choice":"cancel"})").ok); // a valid one still works afterwards
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Answer_UnknownOrAlreadyAnswered)
+{
+	imgui_ctx imgui;
+	BOOST_TEST(answer(12345, "{}").code == "not_found");
+
+	const auto id = service.confirm_unsaved({});
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(id, R"({"choice":"cancel"})").ok);
+	BOOST_TEST(answer(id, R"({"choice":"save"})").code == "failed"); // waiting for the frame that closes it
+	imgui.frame([&] { service.update(); });
+	BOOST_TEST(answer(id, R"({"choice":"save"})").code == "not_found");
+}
+
+BOOST_AUTO_TEST_CASE(DialogAnswerCommand_GoesThroughTheSameAnswer)
+{
+	int choice_seen = -1;
+	const auto id = service.confirm_unsaved([&](edt::unsaved_choice c) { choice_seen = static_cast<int>(c); });
+	const cmd::result ok = call("dialog.answer", std::format(R"({{"id":{},"answer":{{"choice":"discard"}}}})", id));
+	BOOST_REQUIRE_MESSAGE(ok.ok, ok.error);
+	BOOST_TEST(ok.value.as_object().at("id").as_int64() == static_cast<std::int64_t>(id));
+	BOOST_TEST(ok.value.as_object().at("resolved").as_bool());
+	BOOST_TEST(choice_seen == static_cast<int>(edt::unsaved_choice::discard));
+
+	const auto other = service.confirm_unsaved({});
+	BOOST_TEST(call("dialog.answer", std::format(R"({{"id":{},"answer":{{"choice":"nope"}}}})", other)).code == "invalid_args");
+	BOOST_TEST(call("dialog.answer", R"({"id":99999,"answer":{}})").code == "not_found");
+	BOOST_TEST(call("dialog.answer", R"({"id":1})").code == "invalid_args");
+	BOOST_TEST(call("dialog.answer", R"({"id":1,"answer":5})").code == "invalid_args");
+	BOOST_TEST(service.is_pending(other));
+}
+
+BOOST_AUTO_TEST_CASE(AutoAnswer_StillWinsOverTheQueue_AndAnswerWorksForWhatItDoesNotCover)
+{
+	edt::dialog_auto_answer auto_answer;
+	auto_answer.unsaved = edt::unsaved_choice::discard;
+	service.set_auto_answer(auto_answer);
+
+	std::vector<std::string> got;
+	service.confirm_unsaved([&](edt::unsaved_choice) { got.push_back("auto"); });
+	const auto uncovered = service.save_as("start", [&](const std::string& p) { got.push_back("path:" + p); });
+	gui.frame(); // the unsaved prompt is answered automatically
+	BOOST_TEST((got == std::vector<std::string>{ "auto" }));
+	BOOST_TEST(answer(uncovered, R"({"path":"levels/z.desc"})").ok);
+	BOOST_TEST((got == std::vector<std::string>{ "auto", "path:levels/z.desc" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

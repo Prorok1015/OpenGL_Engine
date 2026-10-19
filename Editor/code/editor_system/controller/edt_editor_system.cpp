@@ -23,6 +23,7 @@
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
 #include <snk/application/app_deterministic_time.h>
+#include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
@@ -84,7 +85,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
-		data.require<scn::context_manager>(), data.require<ds::task_system>());
+		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>());
 	editor_layer->set_context(*m_context);
 	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
@@ -98,7 +99,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	init_helpers::setup_panels(
 		m_hierarchy_panel, m_inspector_panel, m_viewport_panel,
 		m_console_panel, m_asset_browser_panel,
-		*m_component_ui_registry, *this,
+		*m_component_ui_registry, *this, m_log_sink,
 		// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
 		!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
 	m_inspector_panel->set_desc_system(&desc_system);

@@ -1,6 +1,7 @@
 #pragma once
 #include <functional>
 #include <memory>
+#include <snk/common/logger/engine_log.h>
 #include <entt/entity/fwd.hpp>
 
 namespace inp { class input_router; }
@@ -34,6 +35,8 @@ namespace edt {
 			std::shared_ptr<asset_browser_panel>& asset_browser,
 			component_ui_registry& registry,
 			editor_system& sys,
+			// Receives the sink that feeds `console` from the engine log (when capture_log).
+			engine::log_sink_handle& log_sink,
 			bool capture_log = true);
 
 		// Setup viewport panel with all its dependencies

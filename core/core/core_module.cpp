@@ -6,6 +6,8 @@
 #include <snk/window/wnd_window_system.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
+#include <snk/command/cmd_log_commands.h>
+#include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
@@ -17,6 +19,8 @@
 namespace {
 	CFG_VAR_DEF_STRING(cfg_log_file,  "logger/file",  "logs/engine.log");
 	CFG_VAR_DEF_STRING(cfg_log_level, "logger/level", "");
+	// How many of the newest log messages the journal keeps (log.read); 0 turns it off.
+	CFG_VAR_DEF_INT(cfg_log_journal_capacity, "logger/journal_capacity", 10000);
 
 	// Main-thread queue limits (ds::task_system, `tasks` frame stage).
 	CFG_VAR_DEF_FLOAT(cfg_tasks_main_budget_ms, "tasks/main_budget_ms", 2.0f);
@@ -36,6 +40,12 @@ namespace {
 	//   logger/category_level/resource → warn
 	cfg::variable_map cfg_log_category_levels{"logger/category_level"};
 
+	// Commands the engine itself offers in every process; they leave the registry with this holder.
+	struct engine_commands
+	{
+		cmd::registration log;
+	};
+
 	engine::log_level parse_log_level(std::string_view str)
 	{
 		if (str == "trace") return engine::log_level::trace;
@@ -51,6 +61,10 @@ void core::core_module::register_services(ds::app_data_storage& data)
 {
 	// Before resource_system (and so destroyed after it): resource work will run on its lanes.
 	data.construct<ds::task_system>();
+	// One command registry per process: the engine registers into it here, the editor and the game add theirs.
+	// Created on the main thread, which is the only one that may invoke commands.
+	auto& commands = data.construct<cmd::command_registry>();
+	data.construct<engine_commands>().log = cmd::register_log_commands(commands);
 	res::resource_init(data);// core
 	desc::desc_init(data);// core
 	window::window_init(data);// core
@@ -86,6 +100,9 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 			engine::set_log_file(file);
 		}
 
+		const int journal_capacity = static_cast<int>(cfg_log_journal_capacity);
+		engine::set_log_journal_capacity(static_cast<std::size_t>(std::max(0, journal_capacity)));
+
 		const std::string& level_str = *cfg_log_level;
 		if (!level_str.empty()) {
 			engine::set_log_level(parse_log_level(level_str));
@@ -120,5 +137,7 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 	window::window_term(data);
 	desc::desc_term(data);
 	res::resource_term(data);
+	data.destruct<engine_commands>();
+	data.destruct<cmd::command_registry>();
 	data.destruct<ds::task_system>();
 }

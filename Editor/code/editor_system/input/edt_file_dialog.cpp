@@ -224,12 +224,20 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
 
+        if (close_requested) {
+            // Same as a click on Cancel; the caller knows the answer it asked for.
+            selected_path.clear();
+            *p_open = false;
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     } else {
         *p_open = false; // closed from outside: a cancel
     }
-    if (!*p_open)
+    if (!*p_open) {
         opened = false; // the next show() opens it again
+        close_requested = false;
+    }
     return result;
 }
 

@@ -1,5 +1,6 @@
 #include <snk/command/cmd_main_thread_queue.h>
 #include <snk/common/engine_assert.h>
+#include <exception>
 #include <utility>
 
 namespace {
@@ -21,6 +22,20 @@ namespace {
 			if (!settled) promise.set_value(cmd::result::failure(cmd::codes::failed, "the command was dropped before it ran"));
 		}
 	};
+}
+
+namespace {
+	// A command that throws must not take the drain down or leave the caller with "dropped before it ran".
+	cmd::result run(cmd::command_registry& registry, const std::string& id, const cmd::call& request)
+	{
+		try {
+			return registry.invoke(id, request);
+		} catch (const std::exception& e) {
+			return cmd::result::failure(cmd::codes::failed, e.what());
+		} catch (...) {
+			return cmd::result::failure(cmd::codes::failed, "the command threw an unknown exception");
+		}
+	}
 }
 
 // Touched on the main thread only (post() never reads it, destructor and drain both run there), so no lock.
@@ -52,7 +67,21 @@ std::future<cmd::result> cmd::main_thread_queue::post(std::string id, boost::jso
 			pending->set(result::failure(codes::failed, "the command queue was closed before the command ran"));
 			return;
 		}
-		pending->set(state->registry->invoke(id, request));
+		pending->set(run(*state->registry, id, request));
 	});
+	return outcome;
+}
+
+std::future<cmd::result> cmd::main_thread_queue::call_now_or_post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation)
+{
+	if (!m_tasks.on_main()) return post(std::move(id), std::move(args), std::move(from), expected_generation);
+
+	std::promise<result> inline_outcome;
+	std::future<result> outcome = inline_outcome.get_future();
+	if (m_state->registry == nullptr) {
+		inline_outcome.set_value(result::failure(codes::failed, "the command queue was closed before the command ran"));
+	} else {
+		inline_outcome.set_value(run(*m_state->registry, id, call{ std::move(args), std::move(from), expected_generation }));
+	}
 	return outcome;
 }
