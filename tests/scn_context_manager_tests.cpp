@@ -509,6 +509,23 @@ BOOST_AUTO_TEST_CASE(HotReload_ChangedWorldListTouchesOnlyLevelKindContexts)
 	BOOST_TEST(mgr.get_set("preview:p").size() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(HotReload_ReorderedWorldsForceAFullReloadSoIdsFollowTheDesc)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+	BOOST_REQUIRE(mgr.find("level", "w0")->get_id() < mgr.find("level", "w1")->get_id());
+
+	put("lv.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w1","systems":[]},
+		{"__type":"world_desc","name":"w0","systems":[],"children":{"c2":{"components":{"stat":{"__type":"stat_desc","hp":2}}}}}]})");
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(has_named(mgr.get_level().get_world("w0").state(), "c2")); // rebuilt, not only systems
+	BOOST_TEST(mgr.find("level", "w1")->get_id() < mgr.find("level", "w0")->get_id());
+}
+
 BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadIgnoresContextsOfOtherKinds)
 {
 	auto tag = put("lv.desc", LEVEL_V1);

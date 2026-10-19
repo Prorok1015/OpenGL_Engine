@@ -19,17 +19,6 @@ namespace {
 		}
 		return ok;
 	}
-
-	// Names of the contexts that came from the level desc, sorted; any other context was created at runtime.
-	std::vector<std::string> level_context_names(scn::context_set& set)
-	{
-		std::vector<std::string> names;
-		set.for_each([&names](scn::world_context& context) {
-			if (context.kind() == scn::context_kind::level) names.emplace_back(context.get_name());
-		});
-		std::ranges::sort(names);
-		return names;
-	}
 }
 
 scn::context_manager::context_manager(res::resource_system& resource,
@@ -133,15 +122,14 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 						egLOG_WARN("Level Manager", "level reload '{}': world desc failed to load, keeping the current level", changed_tag.view());
 						return;
 					}
-					// compare against the level contexts only: runtime-created ones are not part of the desc
-					const auto old_names = level_context_names(set);
-					std::ranges::sort(new_names);
+					// compare against the desc's worlds only (in desc order, which decides context ids): runtime-created contexts are not part of it
+					const std::vector<std::string> old_names = set.desc_world_names();
 					const bool is_full_reload = new_names != old_names;
 
 					if (is_full_reload) {
 						// drop only the level contexts; runtime-created ones keep their state
 						for (const auto& name : old_names) {
-							set.destroy_context(name);
+							if (set.has(name)) set.destroy_context(name);
 						}
 						// a runtime context sharing a name with a new desc world is replaced by the desc one
 						for (const auto& name : new_names) {

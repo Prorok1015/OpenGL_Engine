@@ -86,7 +86,7 @@ hot_path_pattern:
 worlds: Independent worlds keyed by name; automatic system dispatch supports
         world IDs 0-4 (max 5, hard-coded switch in registration_dispatcher).
         Per-world component access via world_salt + bind_res<WorldID,T>.
-world_order: scn::level stores worlds in std::unordered_map (HASH order).
+world_order: scn::level iterates worlds by context id (equals creation order, gaps are refilled).
         for_each_world does NOT preserve desc order — see CONSTRAINTS [13C].
         Editor derives parallel world arrays from the ordered world_descs vector
         (edt::derive_world_arrays), making desc order the single source of truth.

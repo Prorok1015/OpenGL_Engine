@@ -111,6 +111,10 @@ namespace scn
 			return *it->second;
 		}
 
+		// Names of the worlds of the last loaded level desc, in desc order. Contexts created later
+		// are not part of it.
+		const std::vector<std::string>& desc_world_names() const { return m_desc_world_names; }
+
 		// One `kind::level` context per world of the desc.
 		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
 
@@ -163,6 +167,7 @@ namespace scn
 
 		std::string m_name;
 		res::tag m_tag;
+		std::vector<std::string> m_desc_world_names;
 		bool m_active = true;
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 

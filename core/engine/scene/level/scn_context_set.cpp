@@ -121,7 +121,9 @@ void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factor
 	for (const auto& [id, context] : m_contexts) {
 		context->reset_time();
 	}
+	m_desc_world_names.clear();
 	for (const auto& world_desc : desc.get_worlds()) {
+		m_desc_world_names.emplace_back(world_desc->get_name());
 		auto& world = create_context(world_desc->get_name(), acquire_free_id(), context_kind::level);
 		add_systems(world, world_desc->get_systems(), sfactory);
 
