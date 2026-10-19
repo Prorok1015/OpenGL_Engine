@@ -333,7 +333,7 @@ jobs:
 
   # Starts the editor on levels/smoke_level.desc under Xvfb + Mesa llvmpipe and checks that it
   # survives, logs no errors and actually draws the scene (tools/headless/check_smoke.sh). The screenshots
-  # are also compared with tools/headless/reference/*.png; that comparison only reports for now.
+  # are also compared with tools/headless/reference/*.png; a comparison above the limit fails the job (owner decision 2026-10-19, #260).
   # --frames 120: constant frame dt and scene time frozen after 120 frames, so the animation phase of a
   # shot does not depend on runner speed (the references are only comparable that way).
   editor-smoke:
@@ -403,7 +403,7 @@ jobs:
           tools/headless/check_smoke.sh headless_out/game_view/final.png headless_out/game_view/editor.log \
             200x200+940+260 0.03 tools/headless/reference/game_view.png
 
-      - name: Upload screenshots and logs
+      - name: Upload screenshots, diff images and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
