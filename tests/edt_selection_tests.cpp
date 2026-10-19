@@ -4,7 +4,7 @@
 #include "edt_scene_editor.h"
 #include "edt_scene_hierarchy_panel.h"
 #include "edt_selection_wiring.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_world_controller.h"
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_selection_service.h>
@@ -25,6 +25,7 @@ struct selection_fixture : test_util::scene_env
 		state.world_descs.emplace_back();
 		state.world_names.push_back("w");
 		state.active_world_idx = 0;
+		state.bind_events(&events);
 		hierarchy.set_world_desc(&state.world_descs[0]);
 		scn::node_index::get(reg); // before the first node_id_component
 		service.set_registry_provider([this](const std::string& world) -> entt::registry* {
@@ -54,7 +55,7 @@ struct selection_fixture : test_util::scene_env
 
 	edt::editor_events events;
 	edt::selection_service service{ events };
-	edt::shared_state state;
+	edt::scene_document state;
 	edt::scene_editor editor{ state };
 	edt::world_controller world_ctrl{ state, *rs, *descs };
 	edt::scene_hierarchy_panel hierarchy;
@@ -171,7 +172,7 @@ BOOST_AUTO_TEST_CASE(Push_FindsTheRespawnedEntityAfterTheListenersOfDocumentChan
 		order.push_back("later");
 	});
 	state.touch_descs();
-	editor.on_after_push();
+	state.notify_changed();
 
 	BOOST_REQUIRE(viewport.size() == 1u);
 	BOOST_CHECK(viewport[0] == new_ent);
@@ -182,7 +183,7 @@ BOOST_AUTO_TEST_CASE(Push_FindsTheRespawnedEntityAfterTheListenersOfDocumentChan
 
 BOOST_AUTO_TEST_CASE(Push_WithoutASelectionClearsTheViewportEntity)
 {
-	editor.on_after_push();
+	state.notify_changed();
 	BOOST_REQUIRE(viewport.size() == 1u);
 	BOOST_CHECK(viewport[0] == entt::null);
 }
@@ -237,7 +238,7 @@ BOOST_AUTO_TEST_CASE(Connections_StopRoutingWhenDropped)
 {
 	connections.clear();
 	service.select(at({ 1 }));
-	editor.on_after_push();
+	state.notify_changed();
 	BOOST_TEST(viewport.empty());
 }
 

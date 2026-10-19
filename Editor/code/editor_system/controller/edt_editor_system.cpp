@@ -3,7 +3,8 @@
 #include <snk/common/engine_assert.h>
 #include "edt_init_helpers.h"
 #include "edt_selection_wiring.h"
-#include "edt_prefab_editor_context.h"
+#include "edt_prefab_document.h"
+#include <snk/editor/edt_document_manager.h>
 
 #include "edt_editor_layer.h"
 #include "edt_scene_hierarchy_panel.h"
@@ -65,7 +66,16 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 {
 }
 
-edt::editor_system::~editor_system() = default;
+edt::editor_system::~editor_system()
+{
+	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
+	if (m_context) {
+		m_context->documents().shutdown();
+	}
+	if (m_prefab_panel) {
+		m_prefab_panel->set_context(nullptr);
+	}
+}
 
 void edt::editor_system::init(ds::app_data_storage& data)
 {
@@ -86,7 +96,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
-		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>());
+		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
 	editor_layer->set_context(*m_context);
 	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
@@ -116,13 +126,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 
 	// Wire all controller + panel callbacks
 	init_helpers::wire_controller_callbacks(
-		*this, m_scene_editor, m_world_ctrl, m_level_ctrl, *editor_layer, m_state);
+		m_scene_editor, m_world_ctrl, m_level_ctrl, *editor_layer, m_state);
 	init_helpers::wire_hierarchy_callbacks(
 		*m_hierarchy_panel, *m_inspector_panel, *m_viewport_panel,
 		m_scene_editor, m_world_ctrl, m_state);
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
-		auto ctx_mgr = m_state.ctx_manager.lock();
-		scn::world_context* found = ctx_mgr ? ctx_mgr->level_set().find(world) : nullptr;
+		scn::context_set* level = m_state.level_set();
+		scn::world_context* found = level ? level->find(world) : nullptr;
 		return found ? &found->state() : nullptr;
 	});
 	m_selection_connections = wire_selection(
@@ -183,16 +193,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			win->shutdown();
 	};
 
+	m_state.set_save_handlers(
+		[this] { return m_level_ctrl.quick_save_level(); },
+		[this](const res::tag& target) { return m_level_ctrl.save_level_as(std::string(target.relative())); });
+
 	file_menu_hooks hooks;
 	hooks.has_scene = [this] { return m_state.editor_tag.is_valid(); };
-	hooks.is_dirty = [this] { return m_state.is_dirty; };
+	hooks.is_dirty = [this] { return m_state.is_dirty(); };
 	hooks.level_path = [this] {
 		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
 	};
 	hooks.new_level = [this] { m_level_ctrl.new_level(); };
-	hooks.quick_save = [this] { return m_level_ctrl.quick_save_level(); };
-	hooks.save_level_as = [this](const std::string& rel_path) { return m_level_ctrl.save_level_as(rel_path); };
-	hooks.discard_changes = [this] { m_state.is_dirty = false; };
+	hooks.quick_save = [this] { return m_state.save().saved; };
+	hooks.save_level_as = [this](const std::string& rel_path) { return m_state.save_as(res::tag::make(rel_path)).saved; };
+	hooks.discard_changes = [this] { m_state.mark_clean(); };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(res::resource_system::get_resources_path());
 		begin_level_load(res::tag::make(relative.string()));
@@ -412,44 +426,23 @@ bool edt::editor_system::poll_pending_desc()
 	return false;
 }
 
-// ─── Editor camera ──────────────────────────────────────────────────────────
-
-void edt::editor_system::save_editor_camera_state(entt::registry& reg)
-{
-	init_helpers::save_camera_state(reg, m_camera_state);
-}
-
-void edt::editor_system::inject_editor_camera(entt::registry& reg)
-{
-	init_helpers::inject_camera(reg, m_camera_state);
-}
-
 // ─── Prefab editor (EPIC-25) ────────────────────────────────────────────────
 
 void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 {
-	if (!m_prefab_ctx) {
-		m_prefab_ctx = std::make_unique<prefab_editor_context>(m_state, m_res, desc_system);
-	}
-
-	if (m_prefab_ctx->is_open()) {
-		m_prefab_ctx->close();
-	}
-
-	m_prefab_ctx->open(tag);
-
-	if (m_prefab_ctx->is_open()) {
-		m_prefab_panel->set_context(m_prefab_ctx.get());
+	prefab_document& prefab = m_context->documents().open_prefab(tag);
+	if (prefab.is_open()) {
+		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
 	}
 }
 
 void edt::editor_system::close_prefab_editor()
 {
-	if (m_prefab_ctx) {
-		m_prefab_ctx->close();
+	auto& documents = m_context->documents();
+	if (prefab_document* prefab = documents.preview()) {
+		documents.close(prefab->id());
 	}
 	m_prefab_panel->set_context(nullptr);
 	m_prefab_panel->set_open(false);
 }
-

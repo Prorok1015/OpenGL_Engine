@@ -4,7 +4,7 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include "edt_level_controller.h"
 #include "edt_scene_editor.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_world_controller.h"
 #include <chrono>
 
@@ -53,7 +53,7 @@ struct empty_level_fixture : test_util::scene_env
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
 	scn::context_manager mgr;
-	edt::shared_state state;
+	edt::scene_document state;
 	edt::world_controller world_ctrl{ state, *rs, *descs };
 };
 

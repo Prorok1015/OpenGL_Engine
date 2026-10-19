@@ -4,7 +4,7 @@
 #include <memory>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
@@ -39,19 +39,17 @@ namespace edt {
 	class console_panel;
 	class asset_browser_panel;
 	class prefab_editor_panel;
-	class prefab_editor_context;
+	class prefab_document;
 	struct async_import_token;
 
 	class editor_system
 	{
-		friend void init_helpers::wire_controller_callbacks(
-			editor_system&, scene_editor&, world_controller&, level_controller&,
-			editor_layer&, shared_state&);
 		friend void init_helpers::setup_viewport_panel(
-			std::shared_ptr<viewport_panel>&, inp::input_router&, editor_system&, shared_state&,
+			std::shared_ptr<viewport_panel>&, inp::input_router&, editor_system&, scene_document&,
 			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
+		// Closes the prefab preview and releases the scene document in the editor_context before its members die.
 		~editor_system();
 
 		void init(ds::app_data_storage& inp_sys);
@@ -64,8 +62,8 @@ namespace edt {
 	private:
 		editor_context* m_context = nullptr;
 
-		// Shared state for all controllers
-		shared_state m_state;
+		// The level being edited; the controllers share it. The documents of the editor_context refer to it.
+		scene_document m_state;
 
 		// Controllers
 		scene_editor m_scene_editor;
@@ -105,15 +103,9 @@ namespace edt {
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 		std::shared_ptr<prefab_editor_panel>   m_prefab_panel;
 
-		// Prefab editor (EPIC-25)
-		std::unique_ptr<prefab_editor_context> m_prefab_ctx;
+		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
 		void close_prefab_editor();
-
-		// Editor camera (EPIC-11)
-		editor_camera_state m_camera_state;
-		void save_editor_camera_state(entt::registry& reg);
-		void inject_editor_camera(entt::registry& reg);
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;

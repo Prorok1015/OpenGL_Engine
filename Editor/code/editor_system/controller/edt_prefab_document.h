@@ -1,8 +1,10 @@
 #pragma once
 #include "edt_editor_camera.h"
+#include <snk/editor/edt_document.h>
 #include <snk/resource/res_tag.h>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <functional>
 #include <entt/entt.hpp>
 
@@ -13,21 +15,27 @@ namespace desc { class desc_system; }
 
 namespace edt
 {
-	struct shared_state;
+	class scene_document;
 
 	// Marker component — distinguishes prefab preview camera from editor camera
 	struct prefab_camera_tag {};
 
-	class prefab_editor_context
+	// A prefab opened for preview: read-only, and the owner of the set "preview:<tag>" while it is open.
+	class prefab_document final : public document
 	{
 	public:
-		prefab_editor_context(shared_state& state, res::resource_system& res, desc::desc_system& desc);
+		prefab_document(scene_document& state, res::resource_system& res, desc::desc_system& desc);
 
 		void open(const res::tag& prefab_tag);
 		void close();
 
 		bool is_open() const { return m_open; }
-		bool is_dirty() const { return m_dirty; }
+		bool is_dirty() const override { return m_dirty; }
+		std::string_view kind() const override { return "prefab"; }
+		const std::string& title() const override { return m_prefab_name; }
+		const res::tag& source() const override { return m_source_tag; }
+		// Nothing edits the preview yet (EPIC-25).
+		std::uint64_t generation() const override { return 0; }
 
 		entt::registry* get_registry();
 		const std::string& prefab_name() const { return m_prefab_name; }
@@ -44,7 +52,7 @@ namespace edt
 	private:
 		void inject_camera(entt::registry& reg);
 
-		shared_state& m_state;
+		scene_document& m_state;
 		res::resource_system& m_res;
 		desc::desc_system& m_desc;
 
