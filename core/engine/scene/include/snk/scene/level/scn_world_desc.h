@@ -25,8 +25,11 @@ namespace scn
 
 		const std::vector<std::string>& get_systems() const { return systems; }
 		std::string_view get_name() const { return name; }
+		// Input stacking of the context (higher is on top, UI = 1); see gs::route_input.
+		int get_input_layer() const { return input_layer; }
 	private:
 		std::string name;
+		int input_layer = 0;
 		std::vector<std::string> systems;
 	};
 }

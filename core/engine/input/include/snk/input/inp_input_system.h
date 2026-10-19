@@ -50,7 +50,7 @@ namespace inp
 		virtual void on_input_event(wnd::handle win, const inp::input_event& evt) override;
 
 		virtual void on_window_focus_gained(wnd::handle win)  override { m_focused_window = win; }
-		virtual void on_window_focus_lost(wnd::handle win)  override { m_focused_window = nullptr; }
+		virtual void on_window_focus_lost(wnd::handle win)  override;
 		virtual void on_window_resize(wnd::handle win, int width, int height) override {};
 		virtual void on_window_moved(wnd::handle win, int xpos, int ypos)  override {};
 		virtual void on_window_close(wnd::handle win)  override {};

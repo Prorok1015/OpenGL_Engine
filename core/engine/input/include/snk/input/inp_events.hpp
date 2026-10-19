@@ -1,6 +1,8 @@
 #pragma once
 #include <snk/core_input/inp_keyboard_event.hpp>
+#include <glm/glm.hpp>
 #include <array>
+#include <type_traits>
 #include <vector>
 
 namespace inp
@@ -21,4 +23,14 @@ namespace inp
 	// Per-world flag: set by viewport panels to gate camera input.
 	// Default active=true so worlds without an explicit panel still work.
 	struct input_focus { bool active = true; };
+
+	// ctx resource written by a UI context's systems: where on screen the context takes the mouse
+	// (rects {x0, y0, x1, y1} in framebuffer pixels, bounds included, from its layout of the
+	// previous frame) and whether it takes the keyboard (a focused text field, a modal).
+	// gs::route_input reads it; contexts without it capture nothing.
+	struct input_capture
+	{
+		std::vector<glm::ivec4> regions;
+		bool keyboard = false;
+	};
 }

@@ -570,4 +570,23 @@ BOOST_AUTO_TEST_CASE(WorldDesc_IdentityReferenceNodeIsWrittenAsANodeWithAReferen
 	check_stable(*descs, w);
 }
 
+// ---------------------------------------------------------------- input_layer (#271)
+
+BOOST_AUTO_TEST_CASE(WorldDesc_InputLayerRoundTripsAndTheDefaultIsNotWritten)
+{
+	scn::world_desc ui;
+	ui.deserialize(*descs, parse(R"({"__type":"world_desc","name":"ui","systems":[],"input_layer":1,"children":[]})"));
+	BOOST_TEST(ui.get_input_layer() == 1);
+	auto out = ser(ui);
+	BOOST_TEST(out.at("input_layer").as_int64() == 1);
+	scn::world_desc back;
+	back.deserialize(*descs, out);
+	BOOST_TEST(back.get_input_layer() == 1);
+
+	scn::world_desc plain;
+	plain.deserialize(*descs, parse(R"({"__type":"world_desc","name":"w","systems":[],"children":[]})"));
+	BOOST_TEST(plain.get_input_layer() == 0);
+	BOOST_TEST(!ser(plain).contains("input_layer")); // levels saved before the field stay byte-identical
+}
+
 BOOST_AUTO_TEST_SUITE_END()

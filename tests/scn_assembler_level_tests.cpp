@@ -482,6 +482,29 @@ BOOST_FIXTURE_TEST_CASE(Level_ReloadWorldRebuildsOnlyThatWorld, level_fixture)
 	BOOST_TEST((find_named(lvl.get("w0").state(), "w0") == before_w0)); // other world untouched
 }
 
+BOOST_FIXTURE_TEST_CASE(Level_InputLayerOfTheDescIsAppliedByLoadReloadAndSystemsReload, level_fixture)
+{
+	auto lv_desc = load<scn::level_desc>(put("layers.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":[]},
+		{"__type":"world_desc","name":"ui","systems":[],"input_layer":1}]})"));
+	BOOST_REQUIRE(lv_desc);
+	scn::context_set lvl("level", manager);
+	lvl.load_from_desc(*lv_desc, sf, *assembler);
+	BOOST_TEST(lvl.get("w0").input_layer() == 0);
+	BOOST_TEST(lvl.get("ui").input_layer() == 1);
+
+	auto new_ui = load<scn::world_desc>(put("ui2.desc", R"({"__type":"world_desc","name":"ui","systems":[],"input_layer":3})"));
+	lvl.reload_context("ui", *new_ui, sf, *assembler);
+	BOOST_TEST(lvl.get("ui").input_layer() == 3);
+
+	auto changed = load<scn::level_desc>(put("layers2.desc", R"({"__type":"level_desc","name":"lv","worlds":[
+		{"__type":"world_desc","name":"w0","systems":[],"input_layer":2},
+		{"__type":"world_desc","name":"ui","systems":[]}]})"));
+	lvl.load_systems_from_desc(*changed, sf);
+	BOOST_TEST(lvl.get("w0").input_layer() == 2);
+	BOOST_TEST(lvl.get("ui").input_layer() == 0);
+}
+
 BOOST_FIXTURE_TEST_CASE(Level_RemoveWorldFreesItsIdAndClearEmptiesEverything, level_fixture)
 {
 	auto lv_desc = load_level();
