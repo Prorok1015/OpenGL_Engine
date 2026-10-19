@@ -21,7 +21,7 @@ QUICK_LINKS.toon: Fast navigation to important files and concepts
 # Universal files — framework-managed (do not edit, will be overwritten on patch)
 learning/: Self-learning system (7 files) — when/how/where to update docs
 delegation/: Subagent delegation rules (6 files) — when and how to route work
-workflow/: Mandatory dev process (8 files) — DISCOVER → PLAN → CONFIRM → IMPLEMENT → VERIFY → REPORT
+workflow/: Mandatory dev process (9 files) — DISCOVER → PLAN → CONFIRM → IMPLEMENT → VERIFY → REPORT; delivery via PR + CI (CI_PR.toon)
 backlog/: Deferred-work queue (5 files + INDEX.toon) — track tasks to do later
 
 [LOAD_ORDER]
