@@ -212,7 +212,7 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 
 	entt::registry* registry = nullptr;
 	entt::entity entity = entt::null;
-	const rnd::compiled_material* dirtied_before = nullptr;
+	std::uint64_t serial_before = 0;
 	std::vector<std::set<std::uint64_t>> bound;
 	std::vector<std::size_t> created;
 	std::vector<std::size_t> buffers;
@@ -243,7 +243,7 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 						if (cache.material && drawn.contains(cache.material.get())) {
 							registry = &w.state();
 							entity = ent;
-							dirtied_before = cache.material.get();
+							serial_before = cache.material->serial;
 							return;
 						}
 					}
@@ -258,7 +258,8 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 		});
 
 	BOOST_REQUIRE(bound.size() == 6u);
-	BOOST_TEST((registry->get<scn::compiled_material_component>(entity).material.get() != dirtied_before));
+	// Rebuilt: a new compiled_material (its serial is never reused, its address may be).
+	BOOST_TEST(registry->get<scn::compiled_material_component>(entity).material->serial != serial_before);
 	// Frame 2 built the changed material again: one group and one params buffer, nothing else.
 	BOOST_TEST(created[2] == created[1] + 1);
 	BOOST_TEST(buffers[2] == buffers[1] + 1);
