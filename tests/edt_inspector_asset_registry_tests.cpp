@@ -490,6 +490,8 @@ public:
 			const std::string name(args.as_object().at("name").as_string());
 			return edt::action_result::success(boost::json::object{ { "greeting", "hello " + name } });
 		};
+		// A menu click would ask for the name through dialog_service; the test supplies one.
+		action.activate = [this] { m_context.actions().invoke("ext.greet", boost::json::object{ { "name", "menu" } }); };
 		m_registrations.push_back(context.actions().add(std::move(action)));
 
 		m_registrations.push_back(context.inspectors().add("ext_desc", [](comp_node& comp) {
@@ -592,8 +594,9 @@ BOOST_AUTO_TEST_CASE(Extension_ActionRunsThroughInvoke)
 	}
 	BOOST_CHECK_EQUAL(extension->greetings, 1);
 
-	// A menu click on an action with required arguments and no `activate` runs nothing visible; the action id still resolves.
-	BOOST_CHECK(actions.find("ext.greet") != nullptr);
+	// The menu click runs `activate`, which supplies the arguments.
+	BOOST_CHECK(actions.activate("ext.greet"));
+	BOOST_CHECK_EQUAL(extension->greetings, 2);
 }
 
 BOOST_AUTO_TEST_CASE(Extension_DestroyingItRemovesEverything)
