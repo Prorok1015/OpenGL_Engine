@@ -74,6 +74,29 @@ namespace {
 		return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 	}
 
+	// The file as it is, if it is a plain file: opened without following a link, and a pipe, a device or a directory is
+	// not read (reading one could block for ever).
+	bool read_small_file(const fs::path& directory, std::string& out)
+	{
+		const fs::path path = directory / file_name;
+		HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+			OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (file == INVALID_HANDLE_VALUE) {
+			return false;
+		}
+		BY_HANDLE_FILE_INFORMATION information;
+		bool ok = GetFileType(file) == FILE_TYPE_DISK && GetFileInformationByHandle(file, &information)
+			&& (information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
+		if (ok) {
+			out.assign(max_file_bytes, '\0');
+			DWORD got = 0;
+			ok = ReadFile(file, out.data(), static_cast<DWORD>(max_file_bytes), &got, nullptr) != 0;
+			out.resize(ok ? static_cast<std::size_t>(got) : 0);
+		}
+		CloseHandle(file);
+		return ok;
+	}
+
 	// Creates a file only the current user can open: the DACL is part of the creation, so the token is never in a
 	// file that others could read, and SE_DACL_PROTECTED keeps the folder's inheritable entries out.
 	std::string write_atomic(const fs::path& directory, const std::string& text)
@@ -140,13 +163,60 @@ namespace {
 		return failure;
 	}
 #else
+	// The directory, opened without following a link, and only if it belongs to the current user: a directory of
+	// someone else is not a place for the token, and its files are not to be trusted. -1 otherwise.
+	int open_owned_directory(const fs::path& directory)
+	{
+		const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		if (fd < 0) {
+			return -1;
+		}
+		struct stat information;
+		if (::fstat(fd, &information) != 0 || information.st_uid != ::geteuid()) {
+			::close(fd);
+			return -1;
+		}
+		return fd;
+	}
+
+	// The file as it is, if it is a plain file. O_NOFOLLOW refuses a link and O_NONBLOCK keeps the open of a FIFO from
+	// waiting for a writer; the type is checked on the descriptor, and a FIFO, a device or a directory is never read.
+	bool read_small_file(const fs::path& directory, std::string& out)
+	{
+		const int dir_fd = open_owned_directory(directory);
+		if (dir_fd < 0) {
+			return false;
+		}
+		const int fd = ::openat(dir_fd, file_name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+		::close(dir_fd);
+		if (fd < 0) {
+			return false;
+		}
+		struct stat information;
+		const bool regular = ::fstat(fd, &information) == 0 && S_ISREG(information.st_mode);
+		if (regular) {
+			out.assign(max_file_bytes, '\0');
+			std::size_t total = 0;
+			while (total < max_file_bytes) {
+				const ssize_t n = ::read(fd, out.data() + total, max_file_bytes - total);
+				if (n <= 0) {
+					break;
+				}
+				total += static_cast<std::size_t>(n);
+			}
+			out.resize(total);
+		}
+		::close(fd);
+		return regular;
+	}
+
 	// Opened relative to the directory's descriptor: the directory is the one that was checked (O_NOFOLLOW refuses a
 	// link), the file is created exclusively and without following links, and rename() puts it in place atomically.
 	std::string write_atomic(const fs::path& directory, const std::string& text)
 	{
-		const int dir_fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+		const int dir_fd = open_owned_directory(directory);
 		if (dir_fd < 0) {
-			return "cannot open " + directory.string() + " (it is a link, or not a directory)";
+			return "cannot use " + directory.string() + " (it is a link, not a directory, or not yours)";
 		}
 		const std::string temp = temp_name();
 		const int fd = ::openat(dir_fd, temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR);
@@ -237,13 +307,10 @@ fs::path mcp::connection_file_path(const fs::path& directory)
 
 std::optional<mcp::connection_info> mcp::read_connection_file(const fs::path& directory)
 {
-	std::ifstream in(connection_file_path(directory), std::ios::binary);
-	if (!in) {
+	std::string text;
+	if (!read_small_file(directory, text)) {
 		return std::nullopt;
 	}
-	std::string text(max_file_bytes, '\0');
-	in.read(text.data(), static_cast<std::streamsize>(text.size()));
-	text.resize(static_cast<std::size_t>(in.gcount()));
 
 	boost::system::error_code ec;
 	const boost::json::value parsed = boost::json::parse(text, ec);
@@ -309,7 +376,7 @@ void mcp::remove_connection_file(const fs::path& directory, const connection_inf
 	std::error_code ec;
 	fs::remove(connection_file_path(directory), ec);
 #else
-	const int dir_fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+	const int dir_fd = open_owned_directory(directory);
 	if (dir_fd >= 0) {
 		::unlinkat(dir_fd, file_name, 0);
 		::close(dir_fd);

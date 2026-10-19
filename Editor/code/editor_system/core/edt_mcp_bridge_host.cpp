@@ -11,6 +11,7 @@
 #include <boost/json/string.hpp>
 #include <boost/json/value.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,7 @@ namespace {
 	// What an agent may ask of viewport.capture. A request for 8192 x 8192 is a quarter of a gigabyte of readback
 	// and copies; the answer is a PNG that has to be base64 encoded and sent.
 	constexpr std::int64_t agent_max_capture_side = 2048;
+	constexpr std::int64_t agent_max_capture_pixels = agent_max_capture_side * agent_max_capture_side;
 	// Width asked when the agent names no size (the design's 1280 pixels on the long side, for a landscape view).
 	constexpr std::int64_t agent_default_capture_width = 1280;
 	// Largest answer sent to an agent, in bytes of JSON or base64 text.
@@ -45,6 +47,9 @@ namespace {
 
 	// Limits the size an agent asks of viewport.capture. A size that is not an integer is left for the schema check of
 	// the registry to refuse. Returns the reason when the request is too big.
+	// The side the agent does not name is derived by the command from the aspect of the view (a tall view and
+	// width=2048 would be 2048 x 8192), so the limits go into the request too (max_side, max_pixels): the command
+	// refuses a derived side or a pixel count over them before it reads the view back.
 	std::optional<std::string> limit_capture_args(json::value& args)
 	{
 		if (!args.is_object()) {
@@ -66,6 +71,18 @@ namespace {
 		if (!sized) {
 			object["width"] = agent_default_capture_width;
 		}
+		// The agent may ask for less than the ceilings, never for more.
+		const auto ceiling = [&object](const char* key, std::int64_t limit) {
+			std::int64_t value = limit;
+			if (const json::value* given = object.if_contains(key)) {
+				if (const std::optional<std::int64_t> number = cmd::json_schema::integer_of(*given)) {
+					value = std::min(*number, limit);
+				}
+			}
+			object[key] = value;
+		};
+		ceiling("max_side", agent_max_capture_side);
+		ceiling("max_pixels", agent_max_capture_pixels);
 		return std::nullopt;
 	}
 

@@ -25,6 +25,9 @@ namespace mcp
 		std::size_t max_sessions = 8;
 		std::size_t max_header_bytes = 16 * 1024;
 		std::size_t max_message_bytes = 1024 * 1024;
+		// Answers waiting to be written to one client. Past this the server stops reading its next requests until the
+		// client has read most of them, so a client that pipelines requests and never reads cannot grow the queue.
+		std::size_t max_pending_output_bytes = 32 * 1024 * 1024;
 		// One deadline per request: from its first byte, the whole request (head and body) must have arrived within
 		// this time. It is not renewed by later bytes, so a client that trickles one byte at a time is cut off.
 		std::chrono::milliseconds request_timeout{ 10000 };

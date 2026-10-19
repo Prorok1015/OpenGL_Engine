@@ -423,6 +423,40 @@ BOOST_AUTO_TEST_CASE(IdleDeadline_ClosesAConnectionThatSendsNothing)
 	BOOST_TEST(client.reaches_end_of_stream());
 }
 
+BOOST_AUTO_TEST_CASE(PipelinedRequestsWithBigAnswers_StopBeingReadPastTheOutputBudgetAndAreAnsweredAllTheSame)
+{
+	fake_host host;
+	mcp::call_result big;
+	big.content.push_back(mcp::content_block::make_text(std::string(200 * 1024, 'x')));
+	host.set_next_result(big);
+	mcp::server_config config = make_config();
+	config.max_pending_output_bytes = 100 * 1024;
+	mcp::server server(host, config);
+	BOOST_REQUIRE(server.start());
+	const std::uint16_t port = server.port();
+
+	test_client client(port);
+	client.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
+	const auto init = client.read_response();
+	BOOST_REQUIRE(init.has_value());
+	const std::string session = session_of(*init);
+
+	// Twelve requests in one write, 200 KiB of answer each: the budget is passed after the first, the server holds the
+	// rest back, and resumes as the client reads. Every answer arrives, in order.
+	std::string batch;
+	for (int i = 0; i < 12; ++i) {
+		batch += request_text(port, "POST", rpc(100 + i, "tools/call", R"({"name":"big"})"), session);
+	}
+	client.send(batch);
+	for (int i = 0; i < 12; ++i) {
+		const auto response = client.read_response();
+		BOOST_REQUIRE(response.has_value());
+		BOOST_REQUIRE_EQUAL(response->status, 200);
+		BOOST_TEST(json_of(response->body).at("id").as_int64() == 100 + i);
+	}
+	BOOST_TEST(host.calls().size() == 12u);
+}
+
 BOOST_AUTO_TEST_CASE(OversizedBody_Is413)
 {
 	fake_host host;

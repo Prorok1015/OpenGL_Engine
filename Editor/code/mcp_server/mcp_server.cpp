@@ -284,6 +284,11 @@ namespace mcp::detail
 			const bool close_after = response.close || !m_keep_alive;
 			write(serialize_response(response), close_after);
 			if (!close_after) {
+				if (m_out_bytes > m_core->config.max_pending_output_bytes) {
+					// The client does not read its answers: no new request until it has. on_written() resumes.
+					m_read_paused = true;
+					return;
+				}
 				// A pipelined request may already be buffered; otherwise this reads.
 				feed(std::string_view());
 			}
@@ -351,6 +356,7 @@ namespace mcp::detail
 			if (m_closed) {
 				return;
 			}
+			m_out_bytes += data.size();
 			m_out.push_back({ std::move(data), close_after });
 			if (!m_writing) {
 				write_next();
@@ -378,12 +384,17 @@ namespace mcp::detail
 				return;
 			}
 			const bool close_after = m_out.front().close_after;
+			m_out_bytes -= m_out.front().data.size();
 			m_out.pop_front();
 			if (close_after) {
 				linger();
 				return;
 			}
 			write_next();
+			if (m_read_paused && m_out_bytes <= m_core->config.max_pending_output_bytes / 2) {
+				m_read_paused = false;
+				feed(std::string_view());
+			}
 		}
 
 		// Ends the connection without a reset: closing a socket that still has unread input (the rest of a refused
@@ -436,6 +447,9 @@ namespace mcp::detail
 		bool m_sent_continue = false;
 		bool m_writing = false;
 		bool m_close_when_idle = false;
+		// Bytes in m_out, and whether reading is held back because they pile up.
+		std::size_t m_out_bytes = 0;
+		bool m_read_paused = false;
 	};
 
 	namespace {
@@ -538,14 +552,24 @@ namespace mcp::detail
 		}
 		// On the I/O thread, which owns the connections. Once the sockets are closed and the work guard is gone,
 		// run() returns after the cancelled operations have released their connections.
+		// Each step on its own: a throw in one must not skip work.reset(), or join() below would wait for ever.
 		asio::post(io, [this] {
 			boost::system::error_code ignored;
 			acceptor.close(ignored);
-			retry_timer.cancel();
-			ep.close_all();
+			try {
+				retry_timer.cancel();
+			} catch (...) {
+			}
+			try {
+				ep.close_all();
+			} catch (...) {
+			}
 			for (const std::weak_ptr<connection>& weak : connections) {
-				if (const std::shared_ptr<connection> alive = weak.lock()) {
-					alive->close();
+				try {
+					if (const std::shared_ptr<connection> alive = weak.lock()) {
+						alive->close();
+					}
+				} catch (...) {
 				}
 			}
 			connections.clear();

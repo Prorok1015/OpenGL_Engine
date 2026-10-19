@@ -48,28 +48,33 @@ namespace {
 
 	// The size a request asks for; a component that is 0 follows the aspect of the source. Nullopt when a side
 	// (the derived one included) or the pixel count is over the limits.
-	std::optional<glm::ivec2> requested_size(glm::ivec2 source, glm::ivec2 wanted)
+	std::optional<glm::ivec2> requested_size(glm::ivec2 source, glm::ivec2 wanted, const rnd::capture_limits& limits)
 	{
 		if (wanted.x <= 0 && wanted.y <= 0) {
+			// The target itself. Under the service defaults it was checked against the pixel budget already; a caller
+			// with tighter limits gets a refusal instead of a picture bigger than it asked for.
+			const bool tighter = limits.max_side < rnd::capture_service::max_side || limits.max_pixels < rnd::capture_service::max_pixels;
+			if (tighter && (source.x > limits.max_side || source.y > limits.max_side || pixels_of(source) > limits.max_pixels)) {
+				return std::nullopt;
+			}
 			return source;
 		}
 		// 64-bit: a request of 8192 on a 1 x 8192 target derives 8192 * 8192.
 		if (wanted.x <= 0) {
 			const std::int64_t derived = std::max<std::int64_t>(1, static_cast<std::int64_t>(wanted.y) * source.x / source.y);
-			if (derived > rnd::capture_service::max_side) {
+			if (derived > limits.max_side) {
 				return std::nullopt;
 			}
 			wanted.x = static_cast<int>(derived);
 		}
 		if (wanted.y <= 0) {
 			const std::int64_t derived = std::max<std::int64_t>(1, static_cast<std::int64_t>(wanted.x) * source.y / source.x);
-			if (derived > rnd::capture_service::max_side) {
+			if (derived > limits.max_side) {
 				return std::nullopt;
 			}
 			wanted.y = static_cast<int>(derived);
 		}
-		if (wanted.x > rnd::capture_service::max_side || wanted.y > rnd::capture_service::max_side
-			|| pixels_of(wanted) > rnd::capture_service::max_pixels) {
+		if (wanted.x > limits.max_side || wanted.y > limits.max_side || pixels_of(wanted) > limits.max_pixels) {
 			return std::nullopt;
 		}
 		return wanted;
@@ -113,8 +118,11 @@ std::vector<std::string> rnd::capture_service::target_ids() const
 	return ids;
 }
 
-rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec2 size) const
+rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec2 size, capture_limits limits) const
 {
+	// The service limits are the ceiling: a caller can ask for less, never for more.
+	limits.max_side = std::min(limits.max_side, max_side);
+	limits.max_pixels = std::min(limits.max_pixels, max_pixels);
 	capture_result result;
 	const target* found = nullptr;
 	if (id.empty()) {
@@ -141,11 +149,11 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 		result.error = std::format("the render target of viewport '{}' ({}x{}) is too big to capture", found->id, source.x, source.y);
 		return result;
 	}
-	const std::optional<glm::ivec2> target_size = requested_size(source, size);
+	const std::optional<glm::ivec2> target_size = requested_size(source, size, limits);
 	if (!target_size) {
 		result.status = capture_status::invalid_size;
 		result.error = std::format("size {}x{} for a {}x{} target is over the capture limits ({} px a side, {} pixels)",
-			size.x, size.y, source.x, source.y, max_side, max_pixels);
+			size.x, size.y, source.x, source.y, limits.max_side, limits.max_pixels);
 		return result;
 	}
 	std::vector<std::byte> rows = m_driver.read_texture(*texture, { 0, 0, source.x, source.y });

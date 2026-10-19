@@ -12,6 +12,7 @@
 #include <utility>
 
 #ifndef _WIN32
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -169,6 +170,32 @@ BOOST_AUTO_TEST_CASE(Write_NeverFollowsALinkAtTheFile)
 	BOOST_TEST(read_all(victim) == "precious");
 	BOOST_TEST(!fs::is_symlink(fs::symlink_status(mcp::connection_file_path(snk_dir))));
 	BOOST_REQUIRE(mcp::read_connection_file(snk_dir).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(Read_NeverBlocksOnAFifoAndWriteReplacesIt)
+{
+	temp_directory dir;
+	fs::create_directories(dir.path);
+	// A FIFO where the file should be: opening it for reading would wait for a writer for ever.
+	BOOST_REQUIRE(::mkfifo(mcp::connection_file_path(dir.path).c_str(), 0600) == 0);
+	BOOST_TEST(!mcp::read_connection_file(dir.path).has_value());
+
+	BOOST_REQUIRE(mcp::write_connection_file(dir.path, make_info(1, "secret", mcp::current_process_id())).empty());
+	BOOST_REQUIRE(mcp::read_connection_file(dir.path).has_value());
+	BOOST_TEST(fs::is_regular_file(mcp::connection_file_path(dir.path)));
+}
+
+BOOST_AUTO_TEST_CASE(Read_DoesNotFollowALink)
+{
+	temp_directory dir;
+	fs::create_directories(dir.path);
+	const fs::path target = dir.path / "target.json";
+	{
+		std::ofstream out(target);
+		out << R"({"url":"u","port":7,"token":"linked","pid":1})";
+	}
+	fs::create_symlink(target, mcp::connection_file_path(dir.path));
+	BOOST_TEST(!mcp::read_connection_file(dir.path).has_value());
 }
 
 BOOST_AUTO_TEST_CASE(Write_RefusesADirectoryThatIsALink)
