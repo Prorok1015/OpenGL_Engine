@@ -7,7 +7,6 @@
 #include <string>
 #include <vector>
 #include <imgui.h>
-#include <GLFW/glfw3.h>
 #include "wnd_input_keycode_convert.hpp"
 
 namespace {
@@ -125,10 +124,10 @@ BOOST_AUTO_TEST_CASE(PunctuationKeysReachImGui)
 
 BOOST_AUTO_TEST_CASE(EveryGlfwPrintableKeyMapsToEngineKeyAndImGuiKey)
 {
-	std::vector<int> printable = { GLFW_KEY_SPACE, GLFW_KEY_APOSTROPHE, GLFW_KEY_SEMICOLON, GLFW_KEY_EQUAL, GLFW_KEY_LEFT_BRACKET,
-		GLFW_KEY_BACKSLASH, GLFW_KEY_RIGHT_BRACKET, GLFW_KEY_GRAVE_ACCENT };
-	for (int k = GLFW_KEY_COMMA; k <= GLFW_KEY_9; ++k) printable.push_back(k);
-	for (int k = GLFW_KEY_A; k <= GLFW_KEY_Z; ++k) printable.push_back(k);
+	// GLFW key tokens are the ASCII codes of the US-layout key caps.
+	std::vector<int> printable = { ' ', '\'', ';', '=', '[', '\\', ']', '`' };
+	for (int k = ','; k <= '9'; ++k) printable.push_back(k);
+	for (int k = 'A'; k <= 'Z'; ++k) printable.push_back(k);
 
 	for (const int glfw_key : printable) {
 		const auto engine_key = wnd::convert::to_keyboard_keycode(glfw_key);
@@ -150,7 +149,7 @@ BOOST_AUTO_TEST_CASE(EveryGlfwPrintableKeyMapsToEngineKeyAndImGuiKey)
 
 BOOST_AUTO_TEST_CASE(WorldKeysMapToEngineKeysWithoutImGuiCounterpart)
 {
-	for (const int glfw_key : { GLFW_KEY_WORLD_1, GLFW_KEY_WORLD_2 }) {
+	for (const int glfw_key : { 161, 162 }) {
 		const auto engine_key = wnd::convert::to_keyboard_keycode(glfw_key);
 		BOOST_REQUIRE(engine_key.has_value());
 		BOOST_TEST(wnd::convert::to_glfw_keycode(*engine_key) == glfw_key);
