@@ -3,8 +3,9 @@
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_frame_context.h>
 #include <snk/render/rnd_render_packet.hpp>
-#include <snk/render/shader/rnd_shader_manager.h>
+#include <snk/render/rnd_gpu_blocks.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -107,6 +108,40 @@ std::string code_of(const std::string& source)
 	return code;
 }
 
+// The `uniform` declarations of the source that are neither blocks nor samplers: values set one by one by name,
+// which the engine's shaders no longer have (a sampler gets its unit from its binding, a block from its binding).
+std::vector<std::string> free_uniforms(const std::string& source)
+{
+	std::string without_blocks;
+	for (std::size_t i = 0; i < source.size(); ++i) {
+		if (source.compare(i, 2, "/*") == 0) {
+			const auto end = source.find("*/", i + 2);
+			i = end == std::string::npos ? source.size() : end + 1;
+		} else {
+			without_blocks += source[i];
+		}
+	}
+	const std::string code = code_of(without_blocks);
+	const auto is_word_char = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; };
+	std::vector<std::string> result;
+	for (std::size_t at = code.find("uniform"); at != std::string::npos; at = code.find("uniform", at + 7)) {
+		if ((at > 0 && is_word_char(code[at - 1])) || (at + 7 < code.size() && is_word_char(code[at + 7]))) {
+			continue;
+		}
+		const auto stop = code.find_first_of(";{", at);
+		if (stop != std::string::npos && code[stop] == '{') {
+			continue;	// a block
+		}
+		std::string declaration = code.substr(at + 7, stop == std::string::npos ? std::string::npos : stop - at - 7);
+		declaration.erase(0, declaration.find_first_not_of(" \t\r\n"));
+		if (declaration.rfind("sampler", 0) == 0) {
+			continue;
+		}
+		result.push_back("uniform " + declaration);
+	}
+	return result;
+}
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendBindGroups, bind_group_fixture)
@@ -131,7 +166,7 @@ BOOST_AUTO_TEST_CASE(EveryDrawHasTheSetsOfItsPipelineBound)
 	BOOST_TEST(with_set(frame_set) > 0u);	// scene, sky and debug draws
 	BOOST_TEST(with_set(pass_set) > 0u);	// the sky's cubemap
 	BOOST_TEST(with_set(object_set) > 0u);	// scene draws
-	BOOST_TEST(with_set(material_set) == 0u);	// materials keep their uniforms until R5b
+	BOOST_TEST(with_set(material_set) == with_set(object_set));	// every scene draw has its material's group too
 	// Only the composition draws lack the frame set, and they have the pass set instead.
 	BOOST_TEST(with_set(frame_set) + with_set(pass_set) >= draws);
 	BOOST_TEST(with_set(object_set) < draws);
@@ -306,6 +341,19 @@ BOOST_AUTO_TEST_CASE(ShadersComeOutOfThePreprocessorWithTheBindingsOfTheBackend)
 					BOOST_TEST(code.find("layout(std430, binding = 0) readonly buffer BoneMatrices") != std::string::npos);
 					BOOST_TEST(code.find("layout(std430, binding = 1) readonly buffer IndexesBuffer") != std::string::npos);
 				}
+				if (code.find("uniform MaterialParams") != std::string::npos) {
+					BOOST_TEST(code.find("layout(std140, binding = 4) uniform MaterialParams") != std::string::npos);
+				}
+				if (code.find("sampler2D diffuseTxm") != std::string::npos) {
+					BOOST_TEST(code.find("layout(binding = 4) uniform sampler2D diffuseTxm") != std::string::npos);
+				}
+				if (code.find("sampler2D specularTxm") != std::string::npos) {
+					BOOST_TEST(code.find("layout(binding = 5) uniform sampler2D specularTxm") != std::string::npos);
+				}
+				if (code.find("sampler2D normalTxm") != std::string::npos) {
+					BOOST_TEST(code.find("layout(binding = 6) uniform sampler2D normalTxm") != std::string::npos);
+				}
+				BOOST_TEST(free_uniforms(code).empty());
 				if (code.find("samplerCube diffuse") != std::string::npos) {
 					BOOST_TEST(code.find("layout(binding = 0) uniform samplerCube diffuse") != std::string::npos);
 				}
@@ -348,6 +396,9 @@ BOOST_AUTO_TEST_CASE(TheLightCountAndTheBindingsComeFromTheEngineNotFromTheSourc
 			BOOST_TEST(code.find("std430") == std::string::npos);
 			BOOST_TEST(code.find("hightlight") == std::string::npos);
 			BOOST_TEST(code.find("uWorldMeshMatr") == std::string::npos);
+			// Nothing is set by name: every uniform is a block or a sampler with a binding of the table (#121).
+			const auto free = free_uniforms(source);
+			BOOST_TEST(free.empty(), "free uniform: " << (free.empty() ? "" : free.front()));
 			const bool has_version = code.find("#version") != std::string::npos;
 			if (has_version) {
 				BOOST_TEST(code.rfind("#version 450 core", 0) == 0u);
@@ -359,6 +410,35 @@ BOOST_AUTO_TEST_CASE(TheLightCountAndTheBindingsComeFromTheEngineNotFromTheSourc
 	const std::string common = read_file(dir / "snk_common.glsl");
 	BOOST_TEST(common.find("#ifndef MAX_LIGHT_COUNT") != std::string::npos);
 	BOOST_TEST(common.find("#error") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheMaterialIsABlockAndThreeMapsOfSet2)
+{
+	const fs::path dir = fs::path{ SNK_CORE_RES_DIR } / "shaders";
+	const std::string phong = code_of(read_file(dir / "phong_model_lib.frag"));
+	BOOST_TEST(phong.find("SNK_UBO(2, 0) uniform MaterialParams") != std::string::npos);
+	for (const char* member : { "vec4 diffuseColor;", "vec4 emissiveColor;", "float shininess;" }) {
+		BOOST_TEST(phong.find(member) != std::string::npos, member);
+	}
+	BOOST_TEST(phong.find("SNK_TEX(2, 0) uniform sampler2D diffuseTxm") != std::string::npos);
+	BOOST_TEST(phong.find("SNK_TEX(2, 1) uniform sampler2D specularTxm") != std::string::npos);
+	for (const char* frag : { "scene.frag", "z_prepass.frag", "mix_opaque_trans_scene.frag" }) {
+		BOOST_TEST(code_of(read_file(dir / frag)).find("SNK_TEX(2, 2) uniform sampler2D normalTxm") != std::string::npos, frag);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(SkinningNeverReadsPastTheBufferItIsGiven)
+{
+	// A skinned variant of a mesh without weights is bound a buffer of zeros (or one shorter than the mesh):
+	// the length is checked before anything is read from it.
+	const std::string skinning = code_of(read_file(fs::path{ SNK_CORE_RES_DIR } / "shaders" / "skinning_lib.glsl"));
+	const auto length = skinning.find("data.length()");
+	const auto first_read = skinning.find("data[0]");
+	BOOST_REQUIRE(length != std::string::npos);
+	BOOST_REQUIRE(first_read != std::string::npos);
+	BOOST_TEST(length < first_read);
+	BOOST_TEST(skinning.find("ID >= numColumns") != std::string::npos);
+	BOOST_TEST(skinning.find("indicesStart + colEnd > size") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

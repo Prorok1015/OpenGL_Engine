@@ -1,10 +1,12 @@
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/resource/res_system.h>
-#include <snk/driver/rnd_shader_interface.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_gpu_blocks.h>
 #include <snk/render/shader/rnd_shader_bindings.h>
+#include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
+#include <format>
+#include <sstream>
 
 // The engine's own defines: the one source of the light array length (the std140 layout of GlobalLights depends
 // on it, see lights_params) and the stage the source is compiled for.
@@ -16,7 +18,8 @@ static std::string engine_defines(rnd::driver::shader_header::shader_type type)
     return std::format("#define MAX_LIGHT_COUNT {}\n#define {}\n", rnd::lights_params::MAX_LIGHT_COUNT, stage);
 }
 
-static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys, const rnd::driver::binding_table& bindings)
+// Returns what is wrong with the stages (empty when they are fit for the compiler).
+static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys, const rnd::driver::binding_table& bindings)
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
@@ -73,22 +76,26 @@ static void preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::
         }
     }
 
+    std::string problems;
     for (auto& header : headers) {
+        // Lines count from the top of the source after the #include lines were replaced by the files.
         const std::string errors = rnd::expand_binding_macros(header.body, bindings);
         if (!errors.empty()) {
-            egLOG_ERROR("shader/load", "'{}': {}", header.title, errors);
+            problems += std::format("'{}': {}", header.title, errors);
         }
-        header.body.insert(header.body.find_first_of('\n') + 1, engine_defines(header.type) + std::string{ addition_defines.view() });
+        if (!rnd::insert_after_version(header.body, engine_defines(header.type) + std::string{ addition_defines.view() })) {
+            problems += std::format("'{}': the source has to begin with a #version directive\n", header.title);
+        }
     }
-
+    return problems;
 }
 
-std::vector<rnd::driver::shader_header> rnd::shader_config::load(res::resource_system& res_sys, const driver::binding_table& bindings) const
+rnd::shader_config::load_result rnd::shader_config::load(res::resource_system& res_sys, const driver::binding_table& bindings) const
 {
 	return load(cdata, res_sys, bindings);
 }
 
-std::vector<rnd::driver::shader_header> rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
+rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
 {
     std::vector<res::tag> tags;
     std::vector<driver::shader_header> headers;
@@ -118,26 +125,15 @@ std::vector<rnd::driver::shader_header> rnd::shader_config::load(const constant_
 		}
 	}
 
-    preprocess_shader_code(tags, headers, cdata, res_sys, bindings);
-    return headers;
-}
-
-void rnd::configure_render_pass(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader)
-{
-	for (std::size_t idx = 0; idx < rdata.samplers.size(); ++idx)
-	{
-		if (rdata.samplers[idx]) {
-			rdata.samplers[idx]->bind(static_cast<uint32_t>(idx));
-		}
-	}
-
-	configure_uniforms(rdata, shader);
-}
-
-void rnd::configure_uniforms(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader)
-{
-	for (const auto& [name, data] : rdata.uniforms)
-	{
-        shader->uniform(name, data);
-	}
+    load_result result;
+    result.error = preprocess_shader_code(tags, headers, cdata, res_sys, bindings);
+    if (result.error.empty() && headers.empty()) {
+        result.error = "no stage of the program could be read\n";
+    }
+    if (!result.error.empty()) {
+        egLOG_ERROR("shader/load", "shader not loaded:\n{}", result.error);
+        return result;
+    }
+    result.headers = std::move(headers);
+    return result;
 }

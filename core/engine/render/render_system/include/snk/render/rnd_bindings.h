@@ -19,6 +19,13 @@ namespace rnd::bindings
 	inline constexpr std::uint32_t reveal_slot = 1;
 	inline constexpr std::uint32_t sky_slot = 0;
 
+	// Set 2, material: the MaterialParams block and the maps of the phong shaders (SNK_TEX(2, n)).
+	inline constexpr std::uint32_t material_params_slot = 0;
+	inline constexpr std::uint32_t diffuse_slot = 0;
+	inline constexpr std::uint32_t specular_slot = 1;
+	inline constexpr std::uint32_t normal_slot = 2;
+	inline constexpr std::uint32_t material_texture_count = 3;
+
 	// Set 3, object: one uniform block moved per draw by a dynamic offset, and two storage buffers.
 	inline constexpr std::uint32_t object_slot = 0;
 	inline constexpr std::uint32_t bones_slot = 0;
@@ -65,6 +72,17 @@ namespace rnd
 		return desc;
 	}
 
+	// Set 2: MaterialParams and the three maps. A map the material does not have is a placeholder texture.
+	inline driver::bind_group_layout_desc material_layout_desc()
+	{
+		driver::bind_group_layout_desc desc;
+		desc.entries.push_back({ driver::binding_type::ubo, bindings::material_params_slot, driver::shader_stage::fragment, false });
+		desc.entries.push_back({ driver::binding_type::texture, bindings::diffuse_slot, driver::shader_stage::fragment, false });
+		desc.entries.push_back({ driver::binding_type::texture, bindings::specular_slot, driver::shader_stage::fragment, false });
+		desc.entries.push_back({ driver::binding_type::texture, bindings::normal_slot, driver::shader_stage::fragment, false });
+		return desc;
+	}
+
 	// Set 3: ObjectData (the offset of the draw's element is dynamic), the frame's bone matrices and the skin's index buffer.
 	inline driver::bind_group_layout_desc object_layout_desc()
 	{
@@ -74,4 +92,27 @@ namespace rnd
 		desc.entries.push_back({ driver::binding_type::ssbo, bindings::skin_slot, driver::shader_stage::vertex, false });
 		return desc;
 	}
+}
+
+namespace rnd
+{
+	// The bind group layouts of the engine's sets, made once. A pass names the ones its shaders read in the
+	// pipelines it builds (pipeline_desc::set_layouts), which is what the validation checks a draw against.
+	struct set_layouts
+	{
+		driver::bind_group_layout_handle frame;
+		driver::bind_group_layout_handle composition;
+		driver::bind_group_layout_handle sky;
+		driver::bind_group_layout_handle material;
+		driver::bind_group_layout_handle object;
+
+		using list = ds::fixed_vector<driver::bind_group_layout_handle, driver::max_bind_sets>;
+
+		// Shaders of the scene: set 0, the material of set 2 and the per-draw set 3.
+		list scene() const { return { frame, {}, material, object }; }
+		// The debug lines read the camera only.
+		list frame_only() const { return { frame }; }
+		list skybox() const { return { frame, sky }; }
+		list composite() const { return { {}, composition }; }
+	};
 }

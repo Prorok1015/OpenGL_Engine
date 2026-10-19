@@ -42,7 +42,9 @@ rnd::per_draw_data::~per_draw_data()
 {
 	destroy_buffers();
 	for (auto& [tag, slot] : m_skins) {
-		m_drv.destroy_buffer(slot.indices);
+		if (slot.indices) {
+			m_drv.destroy_buffer(slot.indices);
+		}
 	}
 	m_drv.destroy_buffer(m_empty_skin);
 }
@@ -118,27 +120,57 @@ void rnd::per_draw_data::upload(std::span<const object_data> objects, std::span<
 	}
 }
 
+void rnd::per_draw_data::release(skin_slot& slot)
+{
+	if (slot.group) {
+		m_drv.destroy_bind_group(slot.group);
+		slot.group = {};
+	}
+	if (slot.indices) {
+		m_drv.destroy_buffer(slot.indices);
+		slot.indices = {};
+	}
+	slot.size = 0;
+}
+
 rnd::driver::bind_group_handle rnd::per_draw_data::group_for(const res::tag& skin, const skinning_manager* skins)
 {
 	if (!skin.is_valid() || !skins) {
 		return m_empty_group;
 	}
+
 	auto found = m_skins.find(skin);
-	if (found == m_skins.end()) {
-		const std::vector<std::uint32_t> indices = skins->build_indices(skin);
-		if (indices.empty()) {
-			return m_empty_group;
+	if (found != m_skins.end() && found->second.checked != skins->generation()) {
+		// Some skin was registered since: only the ones whose weights were registered anew are built again.
+		found->second.checked = skins->generation();
+		if (found->second.version != skins->version(skin)) {
+			release(found->second);
+			m_skins.erase(found);
+			found = m_skins.end();
 		}
-		driver::buffer_desc desc;
-		desc.size = indices.size() * sizeof(std::uint32_t);
-		desc.usage = driver::buffer_usage::storage;
-		desc.update = driver::buffer_update::static_data;
-		desc.debug_name = "skin indices";
-		const driver::buffer_handle buffer = m_drv.create_buffer(desc);
-		m_drv.update_buffer(buffer, 0, std::as_bytes(std::span{ indices }));
-		found = m_skins.emplace(skin, skin_slot{ buffer, desc.size, {} }).first;
 	}
+	if (found == m_skins.end()) {
+		skin_slot made;
+		made.version = skins->version(skin);
+		made.checked = skins->generation();
+		if (made.version != 0) {
+			const std::vector<std::uint32_t> indices = skins->build_indices(skin);
+			driver::buffer_desc desc;
+			desc.size = indices.size() * sizeof(std::uint32_t);
+			desc.usage = driver::buffer_usage::storage;
+			desc.update = driver::buffer_update::static_data;
+			desc.debug_name = "skin indices";
+			made.indices = m_drv.create_buffer(desc);
+			made.size = desc.size;
+			m_drv.update_buffer(made.indices, 0, std::as_bytes(std::span{ indices }));
+		}
+		found = m_skins.emplace(skin, made).first;
+	}
+
 	skin_slot& slot = found->second;
+	if (!slot.indices) {
+		return m_empty_group;
+	}
 	if (!slot.group) {
 		slot.group = make_group(slot.indices, slot.size);
 	}
