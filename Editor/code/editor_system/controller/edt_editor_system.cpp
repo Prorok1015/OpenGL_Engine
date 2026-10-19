@@ -29,7 +29,7 @@
 #include <snk/input/inp_input_system.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level.h>
 #include <snk/scene/level/scn_world.h>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -80,13 +80,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_gui.push_layer(editor_layer);
 
 	// Resolve services from data storage → shared state
-	m_state.lvl_manager = data.require_shared<scn::level_manager>();
+	m_state.ctx_manager = data.require_shared<scn::context_manager>();
 	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
-	m_state.lvl_manager.lock()->get_level().set_mode(ecs::run_mode::edit);
+	m_state.ctx_manager.lock()->get_level().set_mode(ecs::run_mode::edit);
 	m_state.sfactory  = &data.require<ecs::system_factory>();
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
-	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory);
+	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
+		data.require<scn::context_manager>());
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 	ecs_input = data.require_shared<inp::ecs_input_manager>();
@@ -113,8 +114,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		*m_hierarchy_panel, *m_inspector_panel, *m_viewport_panel,
 		m_scene_editor, m_world_ctrl, m_state);
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
-		auto lvl_mgr = m_state.lvl_manager.lock();
-		scn::world* found = lvl_mgr ? lvl_mgr->get_level().find_world(world) : nullptr;
+		auto ctx_mgr = m_state.ctx_manager.lock();
+		scn::world* found = ctx_mgr ? ctx_mgr->get_level().find_world(world) : nullptr;
 		return found ? &found->state() : nullptr;
 	});
 	m_selection_connections = wire_selection(
@@ -144,16 +145,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	pm.add_panel(m_viewport_panel);
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
-		auto lvl_mgr = m_state.lvl_manager.lock();
+		auto ctx_mgr = m_state.ctx_manager.lock();
 		const std::string* active = m_state.active_world_name();
-		if (!lvl_mgr || !active) return nullptr;
-		auto& level = lvl_mgr->get_level();
+		if (!ctx_mgr || !active) return nullptr;
+		auto& level = ctx_mgr->get_level();
 		const auto& name = *active;
 		return level.has_world(name) ? &level.get_world(name).state() : nullptr;
 	});
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
-		if (auto lvl_mgr = m_state.lvl_manager.lock()) {
-			lvl_mgr->get_level().for_each_world([&visit](scn::world& world) { visit(world.state()); });
+		if (auto ctx_mgr = m_state.ctx_manager.lock()) {
+			ctx_mgr->get_level().for_each_world([&visit](scn::world& world) { visit(world.state()); });
 		}
 	});
 	m_game_view_panel->set_open(cfg_show_game_view);
@@ -275,7 +276,7 @@ bool edt::editor_system::load_level()
 	}
 
 	bool is_open = false;
-	if (auto level_manager = m_state.lvl_manager.lock()) {
+	if (auto ctx_mgr = m_state.ctx_manager.lock()) {
 		is_open = true;
 		if (m_file_dialog->show("Load Level", &is_open)) {
 			auto relateve = m_file_dialog->get_selected_path().lexically_relative(m_file_dialog->get_base_path());

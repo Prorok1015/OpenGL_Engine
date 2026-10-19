@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 #include <entt/fwd.hpp>
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/resource/res_tag.h>
 
 namespace edt
@@ -25,13 +25,13 @@ namespace edt
 		using release_fn = std::function<void(const res::tag&)>;
 
 		void begin_frame();
-		// `scope` (the world name) keeps the target tags of different worlds apart. Returns how many
+		// `scope` ("set.world") keeps the target tags of different contexts apart. Returns how many
 		// cameras were redirected by this call.
 		std::size_t redirect(entt::registry& reg, std::string_view scope);
 		void end_frame(const release_fn& release);
 
-		// Convenience for a whole level: begin_frame, redirect every world, end_frame.
-		void update(scn::level& level, const release_fn& release);
+		// Convenience for every context of every set: begin_frame, redirect each, end_frame.
+		void update(scn::context_manager& contexts, const release_fn& release);
 
 		[[nodiscard]] std::size_t tracked_count() const { return m_known.size(); }
 

@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include "edt_level_controller.h"
 #include "edt_scene_editor.h"
@@ -52,7 +52,7 @@ struct empty_level_fixture : test_util::scene_env
 
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
-	scn::level_manager mgr;
+	scn::context_manager mgr;
 	edt::shared_state state;
 	edt::world_controller world_ctrl{ state, *rs, *descs };
 };
@@ -83,7 +83,7 @@ BOOST_AUTO_TEST_CASE(ActiveWorldAccessors_ReturnNullInsteadOfIndexingOutOfBounds
 BOOST_AUTO_TEST_CASE(Reload_ToAnEmptyWorldListClearsTheEditorArrays)
 {
 	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	populate(tag);
 	state.active_world_idx = 1;
 	BOOST_REQUIRE(state.active_world_desc());
@@ -110,7 +110,7 @@ BOOST_AUTO_TEST_CASE(Reload_ToAnEmptyWorldListClearsTheEditorArrays)
 BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
 {
 	const auto tag = put("lv.desc", LEVEL_NO_WORLDS);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	populate(tag);
 	BOOST_TEST(state.active_world_idx == -1);
 
@@ -129,7 +129,7 @@ BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
 BOOST_AUTO_TEST_CASE(Resync_TellsThePanelsEvenWhenTheSwitchIsRefused)
 {
 	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	populate(tag);
 	state.active_world_idx = 1; // "w1", which the reloaded desc no longer has
 
@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE(Resync_TellsThePanelsEvenWhenTheSwitchIsRefused)
 BOOST_AUTO_TEST_CASE(Resync_KeepsTheStateWhenTheDescListsWorldsButNoneLoaded)
 {
 	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
-	BOOST_REQUIRE(mgr.load(tag));
+	BOOST_REQUIRE(mgr.load_level(tag));
 	populate(tag);
 	int switches = 0;
 	world_ctrl.on_world_switched = [&switches](int) { ++switches; };
@@ -204,10 +204,10 @@ BOOST_AUTO_TEST_CASE(SelectWorld_RefusedSwitchClearsAnIndexThatIsOutOfRange)
 BOOST_AUTO_TEST_CASE(SceneEditor_SyncEcsTransformsToDescBumpsTheDescGeneration)
 {
 	const auto tag = put("lv.desc", LEVEL_TWO_WORLDS);
-	auto shared_mgr = std::make_shared<scn::level_manager>(*rs, *assembler, sf, hot);
-	BOOST_REQUIRE(shared_mgr->load(tag));
+	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
+	BOOST_REQUIRE(shared_mgr->load_level(tag));
 	populate(tag);
-	state.lvl_manager = shared_mgr;
+	state.ctx_manager = shared_mgr;
 	edt::scene_editor editor(state);
 
 	const uint64_t generation = state.desc_generation;

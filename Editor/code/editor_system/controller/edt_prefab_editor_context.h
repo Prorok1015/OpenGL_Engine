@@ -6,7 +6,7 @@
 #include <functional>
 #include <entt/entt.hpp>
 
-namespace scn { class ecs_assembler; class level_manager; }
+namespace scn { class ecs_assembler; class context_manager; }
 namespace ecs { class system_factory; }
 namespace res { class resource_system; }
 namespace desc { class desc_system; }

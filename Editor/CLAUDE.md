@@ -59,7 +59,7 @@ Editor/
 | `world_controller` | `controller/edt_world_controller.cpp/h` | Multi-world: `switch_to_world`, `create_world` |
 
 **`shared_state`** (`controller/edt_shared_state.h`) holds mutable state shared between controllers:
-- Service references: `lvl_manager`, `assembler`, `sfactory`
+- Service references: `ctx_manager`, `assembler`, `sfactory`
 - Level identity: `editor_tag`, `level_tag`, `level_name`, `is_dirty`
 - Multi-world: `world_descs`, `world_names`, `worlds_systems_list`, `active_world_idx`
 
@@ -143,13 +143,13 @@ The editor never finds nodes by name (names are display only): hierarchy, viewpo
 **Single source of truth for world order (critical invariant):** the three parallel
 `shared_state` arrays (`world_descs` / `world_names` / `worlds_systems_list`) MUST be
 built from the same ordered source — the desc-ordered world list. Do NOT build them by
-iterating `scn::level::for_each_world`: it walks a `std::unordered_map` in **hash order**,
-not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
+iterating `scn::level::for_each_world`: it walks the contexts by **context id**, which fills
+gaps left by removed worlds and so is not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
 per-world systems via `edt::derive_world_arrays` (`controller/edt_level_controller.h`), and
 keep `populate_worlds_from_level` as the single build point on load. Covered by
 `tests/edt_world_array_sync_tests.cpp`.
 
-**Hot reload:** `scn::level_manager` drops/rebuilds only the desc-owned worlds, so worlds created in the
+**Hot reload:** `scn::context_manager` drops/rebuilds only the `kind==level` contexts of the set `"level"`, so worlds created in the
 editor but not yet saved survive. After every reload (world list or systems only) it calls `level_controller::resync_worlds_after_reload()`
 (`merge_reloaded_worlds` + `derive_world_arrays`), which keeps the arrays aligned with the level. A reload
 whose world desc fails to load is skipped entirely (current level kept, no callback).

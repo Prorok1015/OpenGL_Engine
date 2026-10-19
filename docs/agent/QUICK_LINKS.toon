@@ -50,7 +50,7 @@ Application:
 Scene Management:
   → core/engine/scene/include/snk/scene/level/scn_level.h (scn::level; for_each_world = HASH order!)
   → core/engine/scene/include/snk/scene/level/scn_world.h (world wrapper)
-  → core/engine/scene/include/snk/scene/level/scn_level_manager.h (level load/manager)
+  → core/engine/scene/include/snk/scene/level/scn_context_manager.h (level load, context sets)
   → core/engine/scene/include/snk/scene/scn_ecs_assembler.h (desc → ECS registry assembly)
 
 Rendering Pipeline:

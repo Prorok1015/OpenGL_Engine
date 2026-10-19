@@ -3,7 +3,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
 #include <snk/scene/level/scn_level.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_world.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -32,8 +32,8 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 		close();
 	}
 
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr || !m_state.sfactory || !m_state.assembler) {
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) {
 		egLOG_ERROR("Editor/PrefabCtx", "Cannot open prefab: services not available");
 		return;
 	}
@@ -76,9 +76,9 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 	}
 
 	// Create transient world in level — NOT registered in shared_state
-	scn::level& lvl = lvl_mgr->get_level();
+	scn::level& lvl = ctx_mgr->get_level();
 	m_world_id = lvl.acquire_free_world_id();
-	scn::world& world = lvl.create_world(std::string{WORLD_NAME}, m_world_id);
+	scn::world& world = lvl.create_world(std::string{WORLD_NAME}, m_world_id, scn::context_kind::preview);
 
 	// Register systems from template
 	lvl.add_world_systems(world, world_res->get_systems(), *m_state.sfactory);
@@ -106,9 +106,9 @@ void edt::prefab_editor_context::close()
 {
 	if (!m_open) return;
 
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (lvl_mgr) {
-		scn::level& lvl = lvl_mgr->get_level();
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (ctx_mgr) {
+		scn::level& lvl = ctx_mgr->get_level();
 		if (lvl.has_world(WORLD_NAME)) {
 			lvl.remove_world(WORLD_NAME);
 		}
@@ -127,10 +127,10 @@ entt::registry* edt::prefab_editor_context::get_registry()
 {
 	if (!m_open) return nullptr;
 
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr) return nullptr;
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr) return nullptr;
 
-	scn::level& lvl = lvl_mgr->get_level();
+	scn::level& lvl = ctx_mgr->get_level();
 	if (!lvl.has_world(WORLD_NAME)) return nullptr;
 
 	return &lvl.get_world(WORLD_NAME).state();
