@@ -4,9 +4,9 @@
 #include <imgui.h>
 #include <cstring>
 
-void edt::edt_cr_skybox_register(edt::component_ui_registry& registry)
+void edt::edt_cr_skybox_register(edt::renderer_registrar& registry)
 {
-	registry.register_renderer<scn::skybox_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::skybox_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 		std::string mat;
 		auto it = comp.overrides.find("material");

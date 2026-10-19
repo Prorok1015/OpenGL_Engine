@@ -14,7 +14,8 @@
 #include "edt_console_panel.h"
 #include "edt_asset_browser_panel.h"
 #include "edt_prefab_editor_panel.h"
-#include "edt_component_ui_registry.h"
+#include "edt_component_renderers.h"
+#include "edt_builtin_asset_kinds.h"
 #include "edt_model_importer.h"
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
@@ -60,7 +61,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys, rnd_sys))
 	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
 	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
-	, m_component_ui_registry(std::make_unique<edt::component_ui_registry>())
 {
 }
 
@@ -99,9 +99,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	init_helpers::setup_panels(
 		m_hierarchy_panel, m_inspector_panel, m_viewport_panel,
 		m_console_panel, m_asset_browser_panel,
-		*m_component_ui_registry, *this,
+		*this,
 		// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
 		!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
+	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
 	m_inspector_panel->set_desc_system(&desc_system);
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
@@ -133,13 +134,18 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_prefab_panel->set_on_close([this] { close_prefab_editor(); });
 	m_prefab_panel->set_input_router(m_input_router);
 
-	// Wire asset browser double-click for prefab editing
+	asset_kind_hooks asset_hooks;
+	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
+	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
+		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
+		m_pending_desc_handle = m_res.require<desc::desc_base>(tag);
+		m_pending_desc_tag = tag;
+		m_pending_desc_key = m_scene_editor.make_unique_key(stem.empty() ? "Asset" : stem);
+		editor_layer->register_implicit("edt/drop_loading", [this] { return poll_pending_desc(); });
+	};
+	for (auto& kind : register_builtin_asset_kinds(m_context->asset_kinds(), std::move(asset_hooks))) m_registrations.push_back(std::move(kind));
 	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
-		std::string filename = res_rel.filename().string();
-		if (filename.ends_with(".prefab.desc")) {
-			auto tag = res::tag::make(res_rel.generic_string());
-			open_prefab_for_edit(tag);
-		}
+		m_context->asset_kinds().open(*m_context, res::tag::make(res_rel.generic_string()));
 	});
 
 	// Registration order is the render order and the View menu order.

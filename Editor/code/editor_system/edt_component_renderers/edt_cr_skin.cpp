@@ -4,9 +4,9 @@
 #include <snk/scene/scn_bone_desc.h>
 #include <imgui.h>
 
-void edt::edt_cr_skin_register(edt::component_ui_registry& registry)
+void edt::edt_cr_skin_register(edt::renderer_registrar& registry)
 {
-	registry.register_renderer<scn::skinning_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::skinning_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		auto it = comp.overrides.find("bone_count");
 		int count = (it != comp.overrides.end() && it->value().is_int64())
 			? static_cast<int>(it->value().as_int64()) : 0;
@@ -18,7 +18,7 @@ void edt::edt_cr_skin_register(edt::component_ui_registry& registry)
 		return false;
 	});
 
-	registry.register_renderer<scn::bone_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::bone_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		auto it = comp.overrides.find("index");
 		int idx = (it != comp.overrides.end() && it->value().is_int64())
 			? static_cast<int>(it->value().as_int64()) : -1;
