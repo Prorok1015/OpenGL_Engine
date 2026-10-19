@@ -23,7 +23,7 @@ BOOST_AUTO_TEST_CASE(SmokeLevelRunsThreeFramesWithoutAGpu)
 {
 	auto& levels = storage.require<scn::context_manager>();
 	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
-	BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
+	BOOST_REQUIRE(levels.level_set().size() > 0u);
 
 	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
 	BOOST_TEST(swapchain()->frames_presented() == 3u);

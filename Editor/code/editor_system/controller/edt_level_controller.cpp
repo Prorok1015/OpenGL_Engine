@@ -2,7 +2,7 @@
 #include "edt_shared_state.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
@@ -335,11 +335,11 @@ void edt::level_controller::resync_worlds_after_reload()
 {
 	auto ctx_mgr = m_state.ctx_manager.lock();
 	if (!ctx_mgr) return;
-	scn::level& lvl = ctx_mgr->get_level();
+	scn::context_set& lvl = ctx_mgr->level_set();
 
-	auto level_res = m_res.require_sync<scn::level_desc>(lvl.get_tag());
+	auto level_res = m_res.require_sync<scn::level_desc>(lvl.tag());
 	if (!level_res.is_ready()) {
-		egLOG_WARN("Editor/Reload", "Level desc '{}' not ready after reload, world arrays not resynced", lvl.get_tag().view());
+		egLOG_WARN("Editor/Reload", "Level desc '{}' not ready after reload, world arrays not resynced", lvl.tag().view());
 		return;
 	}
 
@@ -353,7 +353,7 @@ void edt::level_controller::resync_worlds_after_reload()
 	}
 
 	apply_world_resync(m_state, m_world_ctrl, desc_worlds, !level_res->get_worlds().empty(),
-		[&lvl](const scn::world_desc& w) { return lvl.has_world(w.get_name()); });
+		[&lvl](const scn::world_desc& w) { return lvl.has(w.get_name()); });
 }
 
 void edt::apply_world_resync(

@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_transform_system.h>
 #include <snk/scene/scn_animation_job.h>
 #include <snk/scene/scn_camera_controller_system.h>
@@ -20,17 +20,17 @@ using test_util::stat_component;
 
 struct systems_fixture : test_util::scene_env
 {
-	systems_fixture() : lvl(nullptr)
+	systems_fixture() : lvl("level", nullptr)
 	{
 		scn::init_transform_system(sf);
 		scn::init_animation_system(sf);
 		scn::init_mouse_controller_system(sf);
 	}
 
-	scn::world& make_world(std::vector<std::string> systems)
+	scn::world_context& make_world(std::vector<std::string> systems)
 	{
-		auto& w = lvl.create_world("w", 0);
-		lvl.add_world_systems(w, systems, sf);
+		auto& w = lvl.create_context("w", 0);
+		lvl.add_systems(w, systems, sf);
 		return w;
 	}
 
@@ -66,7 +66,7 @@ struct systems_fixture : test_util::scene_env
 	static void emit_hierarchy(entt::registry& reg, entt::entity e) { reg.ctx().emplace<ecs::event<scn::hierarchy_updated>>().emit(e); }
 	static void emit_transform(entt::registry& reg, entt::entity e) { reg.ctx().emplace<ecs::event<scn::transform_updated>>().emit(e); }
 
-	scn::level lvl;
+	scn::context_set lvl;
 	ecs::system_factory sf;
 };
 

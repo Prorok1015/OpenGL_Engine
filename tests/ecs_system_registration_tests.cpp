@@ -18,7 +18,7 @@ struct stateful_bump : ecs::system_interface {
 
 ecs::runtime_context make_ctx(entt::registry& reg)
 {
-	return ecs::runtime_context{ .get_world_registry = [&reg](size_t) -> entt::registry& { return reg; }, .current_registry = reg };
+	return ecs::runtime_context{ .current_registry = reg };
 }
 
 }

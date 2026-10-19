@@ -90,7 +90,7 @@ class SNK_API phase_table
 public:
 	// False (and nothing added) when the name is empty, is a built-in name or is already taken.
 	// Add game phases before the first load: plans already built keep the old phase list until
-	// they are rebuilt (scn::level::rebuild_all_plans).
+	// they are rebuilt (scn::context_set::rebuild_all_plans).
 	bool add_game_phase(std::string name, phase anchor, phase_side side);
 
 	[[nodiscard]] bool contains(const phase_id& id) const;

@@ -14,7 +14,7 @@ overview: Fast navigation to important files and concepts
 ECS Framework:
   → core/core/ecs/include/snk/ecs/ecs_system_interface.hpp (empty system_interface base)
   → core/core/ecs/include/snk/ecs/ecs_system.h (system_factory, register_system with {phase, after, before, run_in_edit})
-  → core/core/ecs/include/snk/ecs/ecs_traits.hpp (world_salt, bind_res, dependency_extractor)
+  → core/core/ecs/include/snk/ecs/ecs_traits.hpp (function_traits, is_view)
   → core/core/ecs/include/snk/ecs/ecs_entity.h (entity helpers)
 
 Resource System:
@@ -48,8 +48,9 @@ Application:
 
 [ENGINE_LAYER]
 Scene Management:
-  → core/engine/scene/include/snk/scene/level/scn_level.h (scn::level; for_each_world = id order)
-  → core/engine/scene/include/snk/scene/level/scn_world.h (world wrapper)
+  → core/engine/scene/include/snk/scene/level/scn_context_set.h (scn::context_set; for_each = id order)
+  → core/engine/scene/include/snk/scene/level/scn_world_context.h (scn::world_context: one world)
+  → core/engine/scene/include/snk/scene/level/scn_set_channel.h (blackboard + mail between contexts of a set)
   → core/engine/scene/include/snk/scene/level/scn_context_manager.h (level load, context sets)
   → core/engine/scene/include/snk/scene/scn_ecs_assembler.h (desc → ECS registry assembly)
 
@@ -140,7 +141,7 @@ Frame Allocator (Memory):
 Multi-World ECS:
   → See: ARCHITECTURE.toon [ECS_SYSTEM], CONSTRAINTS [13B][13C]
   → Code: core/core/ecs/ directory
-  → Max: auto-dispatch world IDs 0-4 (5 worlds); for_each_world = id order
+  → No world limit; context_set::for_each = id order; cross-context data: docs/roadmap/design/WORLD_MESSAGING.md
 
 Descriptor Inheritance:
   → See: ARCHITECTURE.toon [DESCRIPTOR_SYSTEM]

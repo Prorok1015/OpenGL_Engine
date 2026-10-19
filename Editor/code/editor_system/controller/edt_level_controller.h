@@ -24,7 +24,7 @@ namespace edt
 	// Derives the parallel multi-world arrays (names, per-world system lists) from the
 	// ordered world list, keeping all three shared_state arrays index-aligned.
 	// The world list is the single source of truth for world order (desc order), so deriving
-	// names/systems from it avoids the hash-order desync that scn::level::for_each_world
+	// names/systems from it avoids the hash-order desync that scn::context_set::for_each
 	// (backed by an unordered_map) would otherwise introduce when there are >=2 worlds.
 	// Templated on any "world-like" type exposing get_name() and get_systems().
 	template<typename World>
