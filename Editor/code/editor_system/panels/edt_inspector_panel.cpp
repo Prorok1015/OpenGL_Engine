@@ -2,6 +2,7 @@
 #include <snk/editor/edt_inspector_registry.h>
 #include <snk/desc/desc_system.h>
 #include "edt_override_edit.h"
+#include "edt_schema_inspector.h"
 #include <imgui.h>
 #include <boost/json.hpp>
 #include <glm/glm.hpp>
@@ -22,6 +23,7 @@ namespace edt
 		m_readonly = readonly;
 		m_owner = nullptr;
 		m_target.clear();
+		m_ui_sources.clear();
 		invalidate_view();
 		rebuild_parent_cache();
 	}
@@ -49,12 +51,67 @@ namespace edt
 		if (!m_selected_node) return;
 
 		for (auto& [key, comp] : m_selected_node->components) {
-			if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready() && comp.overrides.empty()) {
+			if (comp.parent_desc.is_valid() && comp.parent_desc.is_ready()) {
 				boost::json::object data;
 				comp.parent_desc->serialize(data);
 				m_parent_cache[key] = std::move(data);
 			}
 		}
+	}
+
+	const boost::json::object* inspector_panel::parent_json(const std::string& key, const scn::prefab_desc::prefab_comp_node& comp)
+	{
+		if (auto it = m_parent_cache.find(key); it != m_parent_cache.end())
+			return &it->second;
+		if (!comp.parent_desc.is_valid() || !comp.parent_desc.is_ready())
+			return nullptr;
+		boost::json::object data;
+		comp.parent_desc->serialize(data);
+		return &(m_parent_cache[key] = std::move(data));
+	}
+
+	inspector_panel::component_ui inspector_panel::ui_of(const std::string& component_key) const
+	{
+		const auto it = m_ui_sources.find(component_key);
+		return it == m_ui_sources.end() ? component_ui::none : it->second;
+	}
+
+	namespace
+	{
+		schema_ui::context make_schema_context(const desc::schema_registry& registry, std::function<bool(const std::string&, boost::json::value&)> draw_json)
+		{
+			return schema_ui::context{ registry, std::move(draw_json), {} };
+		}
+	}
+
+	bool inspector_panel::render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema)
+	{
+		const desc::schema_registry& registry = m_desc_system->schemas();
+		const boost::json::object* parent = parent_json(key, comp);
+		// base: what the component has without its own data; before/after: what the user sees before and after the edit.
+		const boost::json::value base = schema_ui::compose(schema, registry, { parent });
+		const boost::json::value before = schema_ui::compose(schema, registry, { parent, &comp.overrides });
+		boost::json::value after = before;
+		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
+			return render_generic_json_value(label, value);
+		});
+		if (!schema_ui::draw_fields(schema, after, ctx))
+			return false;
+		return schema_ui::apply_edit(comp.overrides, schema, registry, base, before, after) > 0;
+	}
+
+	bool inspector_panel::render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema)
+	{
+		const desc::schema_registry& registry = m_desc_system->schemas();
+		const boost::json::value base = schema_ui::compose(schema, registry, { &base_json });
+		const boost::json::value before = schema_ui::compose(schema, registry, { &scratch.overrides });
+		boost::json::value after = before;
+		const auto ctx = make_schema_context(registry, [this](const std::string& label, boost::json::value& value) {
+			return render_generic_json_value(label, value);
+		});
+		if (!schema_ui::draw_fields(schema, after, ctx))
+			return false;
+		return schema_ui::apply_edit(scratch.overrides, schema, registry, base, before, after) > 0;
 	}
 
 	void inspector_panel::set_on_node_changed(std::function<void()> cb)
@@ -135,40 +192,45 @@ namespace edt
 					ImGui::TextDisabled("Source: %s", std::string(comp.parent_desc->get_tag().view()).c_str());
 				}
 
-				if (!comp.overrides.empty()) {
-					// Has overrides — editable path
-					bool handled = false;
-					if (m_inspectors && !effective_type.empty()) {
-						auto result = m_inspectors->invoke(effective_type, comp);
-						if (result.has_value()) {
-							if (*result && !m_readonly) {
-								changed = true;
-							}
-							handled = true;
-						}
+				// Custom renderer from the registry, then the schema, then generic JSON.
+				const bool custom = m_inspectors && !effective_type.empty() && m_inspectors->contains(effective_type);
+				const desc::type_schema* schema = nullptr;
+				if (!custom && m_desc_system && !effective_type.empty()) {
+					schema = m_desc_system->find_schema(effective_type);
+					if (schema && schema->fields.empty())
+						schema = nullptr;
+				}
+
+				if (custom && !comp.overrides.empty()) {
+					m_ui_sources[key] = component_ui::custom;
+					auto result = m_inspectors->invoke(effective_type, comp);
+					if (result.has_value() && *result && !m_readonly) {
+						changed = true;
 					}
-					if (!handled) {
-						changed |= render_generic_json(comp.overrides);
+				} else if (custom) {
+					// No overrides yet: the renderer shows the effective values (parent data) on a scratch copy.
+					// Only what it changed against the parent becomes the node's own data, so the first edit
+					// of one field does not make every other field of the parent an override.
+					m_ui_sources[key] = component_ui::custom;
+					auto scratch = comp;
+					const boost::json::object* parent = parent_json(key, comp);
+					if (parent)
+						scratch.overrides = *parent;
+					auto result = m_inspectors->invoke(effective_type, scratch);
+					if (result.has_value() && *result && !m_readonly) {
+						comp.overrides = override_edit::diff(parent ? *parent : boost::json::object{}, scratch.overrides);
+						changed = true;
 					}
+				} else if (schema) {
+					m_ui_sources[key] = component_ui::schema;
+					changed |= render_schema_component(key, comp, *schema);
 				} else {
-					// No overrides yet: let a custom renderer show the effective values (parent data or desc
-					// defaults) on a scratch copy; the first edit materialises it as the node's overrides.
-					std::optional<bool> result;
-					if (m_inspectors && !effective_type.empty()) {
-						auto scratch = comp;
-						if (auto it = m_parent_cache.find(key); it != m_parent_cache.end())
-							scratch.overrides = it->second;
-						result = m_inspectors->invoke(effective_type, scratch);
-						if (result.has_value() && *result && !m_readonly) {
-							comp.overrides = std::move(scratch.overrides);
-							changed = true;
-						}
-					}
-					if (!result.has_value()) {
-						if (auto it = m_parent_cache.find(key); it != m_parent_cache.end()) {
-							// has parent_desc — show cached parent data read-only
-							render_generic_json_readonly(it->second);
-						}
+					m_ui_sources[key] = component_ui::generic;
+					if (!comp.overrides.empty()) {
+						changed |= render_generic_json(comp.overrides);
+					} else if (auto it = m_parent_cache.find(key); it != m_parent_cache.end()) {
+						// has parent_desc — show cached parent data read-only
+						render_generic_json_readonly(it->second);
 					}
 				}
 
@@ -255,10 +317,21 @@ namespace edt
 				if (auto result = m_inspectors->invoke(effective_type, scratch); result.has_value()) {
 					edited = *result;
 					handled = true;
+					m_ui_sources[key] = component_ui::custom;
 				}
 			}
-			if (!handled)
+			if (!handled && m_desc_system && !effective_type.empty()) {
+				const desc::type_schema* schema = m_desc_system->find_schema(effective_type);
+				if (schema && !schema->fields.empty()) {
+					edited = render_schema_override(scratch, base_json, *schema);
+					handled = true;
+					m_ui_sources[key] = component_ui::schema;
+				}
+			}
+			if (!handled) {
 				edited = render_generic_json(scratch.overrides);
+				m_ui_sources[key] = component_ui::generic;
+			}
 
 			if (edited) {
 				oe::write_component(*m_owner, m_target, key, base_json, scratch.overrides);

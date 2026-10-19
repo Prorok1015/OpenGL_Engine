@@ -1,4 +1,5 @@
 #include <snk/scene/scn_registration_scope.h>
+#include <snk/desc/desc_describe.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/level/scn_world_desc.h>

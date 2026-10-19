@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <boost/json/object.hpp>
 
-namespace desc { class desc_system; }
+namespace desc { class desc_system; struct type_schema; }
 namespace edt  { class inspector_registry; }
 namespace edt::override_edit { class view_cache; }
 
@@ -18,6 +18,9 @@ namespace edt
 	class inspector_panel : public panel_base
 	{
 	public:
+		// What drew a component in the last frame: the fallback order is custom renderer, schema, generic JSON.
+		enum class component_ui : uint8_t { none, custom, schema, generic };
+
 		inspector_panel();
 
 		void set_selected_node(scn::prefab_desc::prefab_node* node, bool readonly = false);
@@ -31,6 +34,7 @@ namespace edt
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		// The desc under the cache changed: the next frame composes again.
 		void invalidate_view();
+		component_ui ui_of(const std::string& component_key) const;
 
 	protected:
 		void on_render() override;
@@ -44,6 +48,12 @@ namespace edt
 		void render_generic_json_value_readonly(const std::string& key, const boost::json::value& val);
 		void draw_add_component_popup();
 		void render_override_target();
+		// The data the component's parent desc defines (serialized once per selection); null without a ready parent.
+		const boost::json::object* parent_json(const std::string& key, const scn::prefab_desc::prefab_comp_node& comp);
+		// Schema UI over the component's own overrides: draws parent data + overrides, writes only the changed pointers back.
+		bool render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema);
+		// Schema UI over a full effective component of an instance node; the edit lands in `scratch.overrides`.
+		bool render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema);
 
 		scn::prefab_desc::prefab_node* m_selected_node  = nullptr;
 		bool                           m_readonly       = false;
@@ -58,5 +68,6 @@ namespace edt
 
 		// Cached serialized parent_desc data — built once on selection change for read-only display
 		std::unordered_map<std::string, boost::json::object> m_parent_cache;
+		std::unordered_map<std::string, component_ui> m_ui_sources;
 	};
 }
