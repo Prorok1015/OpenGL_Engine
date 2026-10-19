@@ -38,7 +38,7 @@ namespace {
 	void sys_roll(ecs::rng& rng) { g_rolls.push_back(rng.next_u32()); }
 
 	std::vector<float> g_dts;
-	void sys_capture_dt(scn::level_res<const scn::delta_time> dt) { g_dts.push_back(dt->dt); }
+	void sys_capture_dt(const scn::delta_time& dt) { g_dts.push_back(dt.dt); }
 
 	struct stateful_sys : ecs::system_interface {
 		explicit stateful_sys(std::string tag) : tag(std::move(tag)) {}
@@ -619,15 +619,18 @@ BOOST_AUTO_TEST_CASE(WorldWithoutSystems_StillGetsItsCommandsApplied)
 	BOOST_TEST(!reg.valid(e));
 }
 
-BOOST_AUTO_TEST_CASE(LevelState_GetsItsCommandsApplied)
+BOOST_AUTO_TEST_CASE(WorldWithSystems_GetsItsCommandsAppliedAfterThePhases)
 {
 	scn::level lvl(nullptr);
-	auto& reg = lvl.state();
+	auto& w = lvl.create_world("w0", 0);
+	lvl.add_world_systems(w, { "a" }, sf);
+	auto& reg = w.state();
 	const entt::entity e = reg.create();
 	reg.ctx().emplace<ecs::entity_changer>().destroy(e);
 
 	lvl.update(one_frame);
 	BOOST_TEST(!reg.valid(e));
+	BOOST_TEST(count("A") == 1u);
 }
 
 // ---------------------------------------------------------------- fixed accumulator on load / clear

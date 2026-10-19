@@ -13,6 +13,7 @@
 #include <snk/common/snk_api.h>
 
 namespace scn {
+    // Resolves to the registry of the context the system runs in.
     inline constexpr size_t LEVEL_ID = ~0u;
     template<class T>
     using level_res = ecs::bind_res<LEVEL_ID, T>;
@@ -32,8 +33,6 @@ namespace scn {
             using std::swap;
             swap(m_current_level_tag, other.m_current_level_tag);
             swap(m_hot_reload_manager, other.m_hot_reload_manager);
-            swap(m_level_state, other.m_level_state);
-            swap(m_stepper, other.m_stepper);
             swap(m_mode, other.m_mode);
             swap(m_seed, other.m_seed);
             swap(m_phase_order, other.m_phase_order);
@@ -53,7 +52,7 @@ namespace scn {
         ecs::run_mode mode() const { return m_mode; }
 
         // Seed of the level's random numbers. Every world owns an `ecs::rng` resource seeded from
-        // it and its id (the level's own is reachable as level_res<ecs::rng>), so the same seed
+        // it and its id, so the same seed
         // reproduces the same sequences. Reseeds the existing worlds; worlds created later derive
         // from it as well.
         void set_seed(uint64_t seed);
@@ -106,9 +105,6 @@ namespace scn {
             return *it->second;
         }
 
-        entt::registry& state() { return m_level_state; }
-        entt::registry const& state() const { return m_level_state; }
-
 		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
 
 		void reload_world(
@@ -154,15 +150,16 @@ namespace scn {
         void rebuild_world_plan(uint32_t world_id, ecs::system_factory& sf);
         // Takes the phase order from sf and re-resolves every world's phases against it.
         void refresh_plan_slots(const ecs::system_factory& sf);
-        void run_phase(size_t order_index, ecs::run_mode mode);
+        // fixed_step >= 0: one fixed step, only contexts that still have a step to play take part.
+        void run_phase(size_t order_index, ecs::run_mode mode, int fixed_step = -1);
         void destroy_context(uint32_t id);
-        // Contexts hold copies of the level's stepper and mode.
-        void sync_context_time();
+        // Contexts keep their own mode; the level only mirrors its mode into them.
+        void sync_context_mode();
 
-        ecs::runtime_context create_runtime_context(size_t world_id) {
-            ecs::runtime_context ctx{ .current_registry = get_world(world_id).state(), .current_world_id = world_id };
-            ctx.get_world_registry = [this](size_t world_id) -> entt::registry& {
-                if (world_id == LEVEL_ID) return m_level_state;
+        ecs::runtime_context create_runtime_context(size_t own_id) {
+            ecs::runtime_context ctx{ .current_registry = get_world(own_id).state(), .current_world_id = own_id };
+            ctx.get_world_registry = [this, own_id](size_t world_id) -> entt::registry& {
+                if (world_id == LEVEL_ID) return get_world(own_id).state();
                 return get_world(world_id).state();
             };
             return ctx;
@@ -170,9 +167,7 @@ namespace scn {
     private:
 		res::tag m_current_level_tag;
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
-        entt::registry m_level_state;
 
-        ecs::fixed_stepper m_stepper; // 60 Hz, dt clamped, steps per frame capped
         ecs::run_mode m_mode = ecs::run_mode::play;
         uint64_t m_seed = ecs::rng::default_seed;
 
