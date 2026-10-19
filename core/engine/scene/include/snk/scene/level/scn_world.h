@@ -8,8 +8,3 @@
 #include <vector>
 #include <string>
 #include <chrono>
-
-namespace scn
-{
-	using world = world_context;
-}

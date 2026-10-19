@@ -83,11 +83,16 @@ hot_path_pattern:
   // automatically freed at frame reset
 
 [ECS_SYSTEM]
-worlds: Independent worlds keyed by name; automatic system dispatch supports
-        world IDs 0-4 (max 5, hard-coded switch in registration_dispatcher).
-        Per-world component access via world_salt + bind_res<WorldID,T>.
-world_order: scn::level iterates worlds by context id (equals creation order, gaps are refilled).
-        for_each_world does NOT preserve desc order — see CONSTRAINTS [13C].
+context: scn::world_context = one world (own registry, time, mode, rng, input, command buffer). A system sees
+        only its own context; there is no cross-context argument type and no limit on their number.
+context_set: scn::context_set groups contexts that step together (one mode, one seed, one phase order);
+        scn::context_manager owns the sets. The level is the set "level" (context_manager::level_set()),
+        a prefab/scene preview is "preview:<tag>", sets run in creation order.
+set_channel: contexts of one set exchange data only through scn::set_channel (ecs::blackboard_reader/writer,
+        outbox/inbox), exchanged at the start of the set's update with a one-frame lag. Design and
+        rules: docs/roadmap/design/WORLD_MESSAGING.md. Sets do not see each other's channels.
+world_order: a set iterates contexts by context id (equals creation order, gaps are refilled).
+        context_set::for_each does NOT preserve desc order — see CONSTRAINTS [13C].
         Editor derives parallel world arrays from the ordered world_descs vector
         (edt::derive_world_arrays), making desc order the single source of truth.
 systems: All inherit ecs::system_interface (empty base), registered via
@@ -96,7 +101,7 @@ systems: All inherit ecs::system_interface (empty base), registered via
         then after/before, ties by the world desc system list (no type-inferred ordering).
 components: POD structs, optional _component suffix
 dependency_resolution: Auto via invoker<Candidate>; system fn arg types
-        (entt::view, ecs::bind_res) resolved through the registry context
+        (entt::view, ctx resources, set-channel handles) resolved through the registry context
 boot_sequence:
   module_loader.add_module(core, engine, editor)
   → register_all_services()
@@ -166,8 +171,8 @@ Each module implements app::modules::module_interface:
 
 [NAMING_PATTERNS]
 namespaces: 2-4 letter abbrev (ds, ecs, scn, gui, rnd, res, inp, edt, gs, cfg, wnd)
-files: prefix_name.hpp/.cpp (scn_level.cpp, res_system.h)
+files: prefix_name.hpp/.cpp (scn_context_set.cpp, res_system.h)
 components: _component suffix if name not self-descriptive
-systems: Inherit system_interface (files like scn_level.cpp / edt_scene_editor.cpp)
+systems: Inherit system_interface (files like scn_context_set.cpp / edt_scene_editor.cpp)
 variables: snake_case always; private members m_ prefix
 macros: UPPER_CASE

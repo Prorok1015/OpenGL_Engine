@@ -315,7 +315,6 @@
     "level/scn_context_manager.h",
     "level/scn_context_set.h",
     "level/scn_hot_reload_manager.h",
-    "level/scn_level.h",
     "level/scn_level_desc.h",
     "level/scn_node_index.h",
     "level/scn_override_record.h",
