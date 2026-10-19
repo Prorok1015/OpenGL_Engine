@@ -1,8 +1,12 @@
 #include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_json_schema.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <cctype>
+#include <format>
 #include <utility>
+
+namespace json = boost::json;
 
 namespace {
 	std::string upper(std::string_view text)
@@ -11,6 +15,11 @@ namespace {
 		for (char& c : out) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
 		return out;
 	}
+}
+
+boost::json::value edt::no_args_schema()
+{
+	return boost::json::value{ { "type", "object" }, { "properties", boost::json::object{} }, { "additionalProperties", false } };
 }
 
 std::optional<edt::shortcut> edt::shortcut::parse(std::string_view text)
@@ -98,6 +107,25 @@ edt::registration edt::action_registry::add(action_desc desc)
 		return {};
 	}
 
+	if (desc.args_schema.is_null()) desc.args_schema = no_args_schema();
+	if (desc.result_schema.is_null()) desc.result_schema = no_args_schema();
+	for (const auto* schema : { &desc.args_schema, &desc.result_schema }) {
+		if (auto problem = json_schema::check_schema(*schema)) {
+			egLOG_ERROR("Editor/Actions", "action '{}' not registered: bad schema {}", desc.id, *problem);
+			return {};
+		}
+	}
+	if (desc.schema_version == 0) {
+		egLOG_ERROR("Editor/Actions", "action '{}' not registered: schema_version starts at 1", desc.id);
+		return {};
+	}
+	const json::value* required = desc.args_schema.as_object().if_contains("required");
+	const bool needs_args = required && !required->as_array().empty();
+	if (needs_args && !desc.activate && (!desc.menu_path.empty() || !desc.shortcut.empty())) {
+		egLOG_ERROR("Editor/Actions", "action '{}' not registered: it has required arguments, so a menu item or shortcut needs `activate`", desc.id);
+		return {};
+	}
+
 	std::optional<shortcut> binding;
 	if (!desc.shortcut.empty()) {
 		binding = shortcut::parse(desc.shortcut);
@@ -164,22 +192,61 @@ bool edt::action_registry::is_enabled(std::string_view id) const
 	return it != m_actions.end() && (*it)->is_enabled();
 }
 
-bool edt::action_registry::run(std::string_view id)
+const edt::action_desc* edt::action_registry::find(std::string_view id) const
+{
+	const auto it = std::find_if(m_actions.begin(), m_actions.end(),
+		[id](const std::shared_ptr<entry>& e) { return e->desc.id == id; });
+	return it != m_actions.end() ? &(*it)->desc : nullptr;
+}
+
+std::vector<std::string> edt::action_registry::ids() const
+{
+	std::vector<std::string> out;
+	out.reserve(m_actions.size());
+	for (const auto& a : m_actions) out.push_back(a->desc.id);
+	return out;
+}
+
+edt::action_result edt::action_registry::invoke(std::string_view id, const boost::json::value& args)
+{
+	const auto it = std::find_if(m_actions.begin(), m_actions.end(),
+		[id](const std::shared_ptr<entry>& e) { return e->desc.id == id; });
+	if (it == m_actions.end()) return action_result::failure(std::format("no action '{}'", id));
+	// Held while it runs: the action may unregister itself.
+	const std::shared_ptr<entry> action = *it;
+	if (!action->is_enabled()) return action_result::failure(std::format("action '{}' is disabled", id));
+	if (auto problem = json_schema::validate(action->desc.args_schema, args))
+		return action_result::failure(std::format("invalid arguments for '{}': {}", id, *problem));
+
+	action_result outcome = action->desc.execute(args);
+	if (outcome.ok) {
+		if (auto problem = json_schema::validate(action->desc.result_schema, outcome.result)) {
+			return action_result::failure(std::format("result of '{}' does not match its schema: {}", id, *problem));
+		}
+	}
+	return outcome;
+}
+
+bool edt::action_registry::activate(std::string_view id)
 {
 	const auto it = std::find_if(m_actions.begin(), m_actions.end(),
 		[id](const std::shared_ptr<entry>& e) { return e->desc.id == id; });
 	if (it == m_actions.end()) return false;
-	// Held while it runs: the action may unregister itself.
 	const std::shared_ptr<entry> action = *it;
 	if (!action->is_enabled()) return false;
-	action->desc.execute();
+	if (action->desc.activate) {
+		action->desc.activate();
+		return true;
+	}
+	const action_result outcome = invoke(id, json::object{});
+	if (!outcome.ok) egLOG_WARN("Editor/Actions", "{}", outcome.error);
 	return true;
 }
 
 bool edt::action_registry::dispatch(const shortcut& chord)
 {
 	for (const auto& a : m_actions) {
-		if (a->binding == chord && a->is_enabled()) return run(a->desc.id);
+		if (a->binding == chord && a->is_enabled()) return activate(a->desc.id);
 	}
 	return false;
 }

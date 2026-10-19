@@ -28,10 +28,13 @@ namespace edt
 	};
 
 	// The File menu: New / Open / Save / Import / Exit, with the "unsaved changes" flow for New and Exit.
+	// Each item is two layers. The action (file.new, file.open, file.save_as, file.save, file.import_model,
+	// file.exit) takes everything as JSON arguments and works without any UI. The methods below are the
+	// frontend a click or Ctrl+S runs: they ask through dialog_service and then invoke the action.
 	class file_menu
 	{
 	public:
-		file_menu(dialog_service& dialogs, file_menu_hooks hooks);
+		file_menu(dialog_service& dialogs, action_registry& actions, file_menu_hooks hooks);
 
 		void new_level();
 		void open_level();
@@ -40,18 +43,22 @@ namespace edt
 		void import_model();
 		void exit();
 
-		// Puts the File menu items (and the Ctrl+S binding) into `actions`. They stay registered while this
+		// Puts the File menu items (and the Ctrl+S binding) into the registry. They stay registered while this
 		// menu lives; call it once.
-		void register_actions(action_registry& actions);
+		void register_actions();
 
 	private:
-		// Runs `action` right away, or after the user settles the unsaved changes.
-		void guard_unsaved(std::function<void()> action);
-		void on_unsaved_choice(unsaved_choice choice, const std::function<void()>& action);
+		// Runs `action` right away (`discard` false), or after the user settles the unsaved changes (`discard`
+		// true: whatever is still unsaved may go).
+		void guard_unsaved(std::function<void(bool discard)> action);
+		void on_unsaved_choice(unsaved_choice choice, const std::function<void(bool discard)>& action);
+		// False (and logged) if the action refused.
+		bool invoke(std::string_view action_id, boost::json::value args);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
 
 		dialog_service& m_dialogs;
+		action_registry& m_actions;
 		file_menu_hooks m_hooks;
 		std::optional<dialog_service::dialog_id> m_save_as_id;
 		std::vector<std::function<void()>> m_after_save;

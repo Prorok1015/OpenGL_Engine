@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_registration.h"
+#include <boost/json/value.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -26,6 +27,30 @@ namespace edt
 		bool operator==(const shortcut&) const = default;
 	};
 
+	// Outcome of invoking an action.
+	struct action_result
+	{
+		bool ok = true;
+		boost::json::value result = boost::json::object{};
+		std::string error;
+
+		static action_result success(boost::json::value value = boost::json::object{}) { return { true, std::move(value), {} }; }
+		static action_result failure(std::string message) { return { false, boost::json::object{}, std::move(message) }; }
+	};
+
+	using action_fn = std::function<action_result(const boost::json::value& args)>;
+
+	// JSON Schema of an action without arguments (and of a result that carries nothing).
+	boost::json::value no_args_schema();
+	// Wraps a body that takes nothing and returns nothing.
+	inline action_fn no_args(std::function<void()> body)
+	{
+		return [body = std::move(body)](const boost::json::value&) {
+			body();
+			return action_result::success();
+		};
+	}
+
 	struct action_desc
 	{
 		std::string id;            // "file.save_level"
@@ -37,7 +62,18 @@ namespace edt
 		// Text shown in the menu instead of the binding (an item whose shortcut triggers another action).
 		std::string shortcut_hint;
 		bool separator_before = false;
-		std::function<void()> execute;
+		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
+		action_fn execute;
+		// JSON Schema (type, required, properties, additionalProperties, enum, minimum, maximum) of the
+		// arguments (an object) and of the result. Null: no_args_schema(). `invoke` validates the arguments
+		// before it calls `execute` and the result after it.
+		boost::json::value args_schema;
+		boost::json::value result_schema;
+		std::uint32_t schema_version = 1;
+		// What a menu click or the shortcut does: normally asks the user for the arguments (dialog_service)
+		// and then calls registry.invoke. Null: invoke with no arguments, which an action with required
+		// arguments cannot do, so it needs one to have a menu item or a shortcut.
+		std::function<void()> activate;
 		// Null: always enabled.
 		std::function<bool()> enabled;
 	};
@@ -80,10 +116,17 @@ namespace edt
 		std::vector<menu_item_info> items(std::string_view menu) const;
 
 		bool is_enabled(std::string_view id) const;
-		// Runs the action. False (and nothing runs) if it does not exist or is disabled.
-		bool run(std::string_view id);
+		const action_desc* find(std::string_view id) const;
+		std::vector<std::string> ids() const;
 
-		// Runs the first enabled action bound to `chord`. False if there is none.
+		// The one way to run an action, for the UI, scripts and agents alike. Fails, and `execute` does not
+		// run, if the action does not exist, is disabled or `args` do not match its schema.
+		action_result invoke(std::string_view id, const boost::json::value& args);
+		// What a menu click does: `activate`, or invoke with no arguments. False (nothing runs) if the action
+		// does not exist or is disabled.
+		bool activate(std::string_view id);
+
+		// Activates the first enabled action bound to `chord`. False if there is none.
 		bool dispatch(const shortcut& chord);
 		// Visits every bound shortcut (not the ones of disabled actions); `visit` must not change the registry.
 		void for_each_shortcut(const std::function<void(const shortcut&)>& visit) const;
