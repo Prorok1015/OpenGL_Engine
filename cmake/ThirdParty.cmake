@@ -72,7 +72,7 @@ include(imgui)
 # --- Boost (FetchContent, 1.84.0) ---
 # Slim build: only configure the sublibraries the engine actually links. The Boost
 # superproject pulls in their transitive dependencies automatically.
-#   Boost::json                -> resource_system, desc_system, application
+#   Boost::json                -> resource_system, desc_system, application, command
 #   Boost::asio                -> resource_system
 #   Boost::program_options     -> config_system
 #   Boost::unit_test_framework -> unit_tests   (the "test" sublibrary)

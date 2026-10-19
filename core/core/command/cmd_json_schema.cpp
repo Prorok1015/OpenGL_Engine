@@ -1,4 +1,4 @@
-#include <snk/editor/edt_json_schema.h>
+#include <snk/command/cmd_json_schema.h>
 #include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <array>
@@ -147,12 +147,12 @@ namespace {
 	}
 }
 
-std::optional<std::string> edt::json_schema::check_schema(const json::value& schema)
+std::optional<std::string> cmd::json_schema::check_schema(const json::value& schema)
 {
 	return check_node(schema, "$");
 }
 
-std::optional<std::string> edt::json_schema::validate(const json::value& schema, const json::value& instance)
+std::optional<std::string> cmd::json_schema::validate(const json::value& schema, const json::value& instance)
 {
 	if (!schema.is_object()) return std::string("$: a schema must be an object");
 	return validate_node(schema.as_object(), instance, "$");
