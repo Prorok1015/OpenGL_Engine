@@ -243,6 +243,7 @@ BOOST_AUTO_TEST_CASE(TheRingAndTheBoneBufferHoldWhatExtractProduced)
 			return stored;
 		};
 		for (const auto& packet : packets()) {
+			// Packets are sorted at extract, so element `index` of the ring must belong to the draw at that position.
 			const auto check = [&](const rnd::draw_call_t& dc, std::uint32_t index) {
 				const rnd::object_data stored = element(index);
 				BOOST_CHECK(stored.world == dc.transform);

@@ -101,11 +101,12 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 ++skeleton_estimate;
             }
             packet.bones.reserve(bone_estimate, skeleton_estimate);
+            const std::size_t skinned_mesh_estimate = reg.view<scn::skinning_component>().size();
 
             // Draws name their geometry, skin and material by index into the packet's tables; each distinct
             // one is added once.
             packet.geometries.reserve(mesh_count);
-            packet.skins.reserve(skeleton_estimate);
+            packet.skins.reserve(skinned_mesh_estimate);
             packet.materials.reserve(mesh_count);
             std::pmr::unordered_map<res::tag, uint32_t> geometry_ids(ds::frame_allocator());
             std::pmr::unordered_map<res::tag, uint32_t> skin_ids(ds::frame_allocator());

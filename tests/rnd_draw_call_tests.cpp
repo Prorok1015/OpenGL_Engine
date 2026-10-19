@@ -1,10 +1,12 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/render/rnd_render_packet.hpp>
+#include <snk/render/shader/rnd_shader_config_cache.h>
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
 #include <limits>
+#include <memory_resource>
 #include <type_traits>
 #include <vector>
 

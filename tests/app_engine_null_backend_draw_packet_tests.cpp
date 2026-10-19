@@ -165,12 +165,19 @@ BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacket)
 		}
 	});
 	BOOST_TEST(checked > 0u);
+	BOOST_TEST(skinned > 0u);
 	BOOST_TEST_MESSAGE("draws checked " << checked << ", skinned " << skinned);
 }
 
 BOOST_AUTO_TEST_CASE(TransparentDrawsComeFarthestFirst)
 {
 	load_bench_level();
+	// The bench level has only opaque materials: draw every mesh in both lists, so the transparent one has depths to order.
+	storage.require<scn::context_manager>().level_set().for_each([](scn::world_context& w) {
+		for (auto [ent, mat] : w.state().view<scn::material_desc_component>().each()) {
+			if (const auto desc = mat.mlt_desc.get()) desc->queue = scn::pass_queue::MIX;
+		}
+	});
 
 	std::size_t checked = 0;
 	run_probed(2, [&] {
@@ -189,6 +196,7 @@ BOOST_AUTO_TEST_CASE(TransparentDrawsComeFarthestFirst)
 			}
 		}
 	});
+	BOOST_TEST(checked > 1u);
 	BOOST_TEST_MESSAGE("transparent draws checked " << checked);
 }
 
