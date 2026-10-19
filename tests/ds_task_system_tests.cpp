@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -513,6 +514,214 @@ BOOST_AUTO_TEST_CASE(SnapshotListsOnlyVisibleUnfinishedTasks)
 
 BOOST_AUTO_TEST_SUITE_END()
 
+BOOST_AUTO_TEST_SUITE(TaskSystemLifetimeTests)
+
+BOOST_AUTO_TEST_CASE(CallbackRunsWhileOwnerIsAlive)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int calls = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) { return 7; });
+	handle.then_main(owner, [&](ds::task_result<int>& result) {
+		++calls;
+		BOOST_CHECK(result.ok());
+		BOOST_TEST(*result.value == 7);
+	});
+	tasks.run_one(lane::compute);
+	tasks.drain_main();
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(CallbackIsSkippedAfterOwnerDestroyed)
+{
+	ds::task_system tasks(manual_config());
+	int calls = 0;
+	auto owner = std::make_unique<ds::lifetime>();
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) {});
+	handle.then_main(*owner, [&](ds::task_result<void>&) { ++calls; });
+	tasks.run_one(lane::compute);
+	BOOST_TEST(tasks.pending_main(main_class::general) == 1u);
+
+	owner.reset();
+	tasks.drain_main();
+	BOOST_TEST(calls == 0);
+	BOOST_TEST(tasks.pending_main(main_class::general) == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(CallbackIsSkippedWhenOwnerDiesBeforeTheTaskFinishes)
+{
+	ds::task_system tasks(manual_config());
+	int calls = 0;
+	auto owner = std::make_unique<ds::lifetime>();
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) {});
+	handle.then_main(*owner, [&](ds::task_result<void>&) { ++calls; });
+	owner.reset();
+	tasks.run_one(lane::compute);
+	tasks.drain_main();
+	BOOST_TEST(calls == 0);
+	BOOST_CHECK(handle.status() == task_status::ready); // no cancel_on_destroy: the task still completes
+}
+
+BOOST_AUTO_TEST_CASE(CallbackOfFinishedTaskIsSkippedAfterOwnerDestroyed)
+{
+	ds::task_system tasks(manual_config());
+	int calls = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) {});
+	tasks.run_one(lane::compute);
+	{
+		ds::lifetime owner;
+		handle.then_main(owner, [&](ds::task_result<void>&) { ++calls; });
+	}
+	tasks.drain_main();
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(PlainThenMainIgnoresLifetimes)
+{
+	ds::task_system tasks(manual_config());
+	int calls = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, [](ds::task_context&) {});
+	handle.then_main([&](ds::task_result<void>&) { ++calls; });
+	tasks.run_one(lane::compute);
+	tasks.drain_main();
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(CancelOnDestroyCancelsPendingTasks)
+{
+	ds::task_system tasks(manual_config());
+	int runs = 0;
+	ds::task_handle<void> handle;
+	{
+		ds::lifetime owner(ds::lifetime_option::cancel_on_destroy);
+		handle = tasks.run(lane::compute, { "t" }, owner, [&](ds::task_context&) { ++runs; });
+		BOOST_CHECK(handle.status() == task_status::pending);
+	}
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+	while (tasks.run_one(lane::compute)) {}
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(CancelOnDestroyAsksRunningTasksToStop)
+{
+	ds::task_system tasks(manual_config());
+	auto owner = std::make_unique<ds::lifetime>(ds::lifetime_option::cancel_on_destroy);
+	bool finished_body = false;
+	auto handle = tasks.run(lane::compute, { "t" }, *owner, [&](ds::task_context& ctx) {
+		owner.reset(); // the owner dies while its task is running
+		ctx.throw_if_stopped();
+		finished_body = true;
+	});
+	tasks.run_one(lane::compute);
+	BOOST_TEST(!finished_body);
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(WithoutCancelOnDestroyTasksOutliveTheOwner)
+{
+	ds::task_system tasks(manual_config());
+	int runs = 0;
+	{
+		ds::lifetime owner;
+		tasks.run(lane::compute, { "t" }, owner, [&](ds::task_context&) { ++runs; });
+	}
+	tasks.run_one(lane::compute);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(CancelTasksOnlyTouchesBoundTasks)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	auto bound = tasks.run(lane::compute, { "bound" }, owner, [](ds::task_context&) {});
+	auto other = tasks.run(lane::compute, { "other" }, [](ds::task_context&) {});
+	owner.cancel_tasks();
+	BOOST_CHECK(bound.status() == task_status::cancelled);
+	BOOST_CHECK(other.status() == task_status::pending);
+}
+
+BOOST_AUTO_TEST_CASE(WaitIdleReturnsOnlyAfterBoundTasksFinish)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int runs = 0;
+	auto a = tasks.run(lane::compute, { "a" }, owner, [&](ds::task_context&) { ++runs; });
+	auto b = tasks.run(lane::io, { "b" }, owner, [&](ds::task_context&) { ++runs; });
+	BOOST_CHECK(!a.done());
+	BOOST_CHECK(!b.done());
+
+	tasks.wait_idle(owner); // manual mode: drives the queues until the bound tasks are done
+	BOOST_CHECK(a.done());
+	BOOST_CHECK(b.done());
+	BOOST_TEST(runs == 2);
+}
+
+BOOST_AUTO_TEST_CASE(WaitIdleWaitsForChildrenBoundByBoundTasks)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int child_runs = 0;
+	ds::task_handle<void> child;
+	tasks.run(lane::compute, { "parent" }, owner, [&](ds::task_context&) {
+		child = tasks.run(lane::io, { "child" }, owner, [&](ds::task_context&) { ++child_runs; });
+	});
+	tasks.wait_idle(owner);
+	BOOST_TEST(child_runs == 1);
+	BOOST_CHECK(child.done());
+}
+
+BOOST_AUTO_TEST_CASE(WaitIdleLeavesUnboundTasksAlone)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	std::string trace;
+	tasks.run(lane::compute, { "unbound" }, [&](ds::task_context&) { trace += 'u'; });
+	tasks.run(lane::compute, { "bound" }, owner, [&](ds::task_context&) { trace += 'b'; });
+	tasks.wait_idle(owner);
+	BOOST_TEST(trace == "ub"); // FIFO queue: the bound one is behind the unbound one
+}
+
+BOOST_AUTO_TEST_CASE(WaitIdleAfterCancelDoesNotRunTheBodies)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int runs = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, owner, [&](ds::task_context&) { ++runs; });
+	owner.cancel_tasks();
+	tasks.wait_idle(owner);
+	BOOST_TEST(runs == 0);
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllTakesTypedHandles)
+{
+	ds::task_system tasks(manual_config());
+	std::vector<ds::task_handle<int>> handles;
+	for (int i = 0; i < 3; ++i) {
+		handles.push_back(tasks.run(lane::compute, { "t" }, [i](ds::task_context&) { return i; }));
+	}
+	bool ran = false;
+	auto all = tasks.when_all(handles, lane::compute, [&](ds::task_context&) { ran = true; });
+	while (tasks.run_one(lane::compute)) {}
+	BOOST_CHECK(all.status() == task_status::ready);
+	BOOST_TEST(ran);
+}
+
+BOOST_AUTO_TEST_CASE(WhenAllTakesAnInitializerList)
+{
+	ds::task_system tasks(manual_config());
+	auto a = tasks.run(lane::compute, { "a" }, [](ds::task_context&) { return 1; });
+	auto b = tasks.run(lane::io, { "b" }, [](ds::task_context&) {});
+	bool ran = false;
+	auto all = tasks.when_all({ a, b }, lane::compute, [&](ds::task_context&) { ran = true; });
+	BOOST_CHECK(all.status() == task_status::pending);
+	while (tasks.run_one(lane::compute) || tasks.run_one(lane::io)) {}
+	BOOST_CHECK(all.status() == task_status::ready);
+	BOOST_TEST(ran);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
 BOOST_AUTO_TEST_SUITE(TaskSystemThreadedTests)
 
 // Real threads: meant for the TSan job. Everything the callbacks touch is main-thread data, so a
@@ -627,6 +836,65 @@ BOOST_AUTO_TEST_CASE(ShutdownCancelsRunningAndQueuedTasks)
 	BOOST_TEST(saw_stop.load());
 	BOOST_CHECK(running.status() == task_status::cancelled);
 	BOOST_CHECK(queued.status() == task_status::cancelled);
+}
+
+BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
+{
+	struct owner_t {
+		explicit owner_t(ds::lifetime_option option) : life(option) {}
+		~owner_t() { *destroyed = true; }
+
+		std::shared_ptr<bool> destroyed = std::make_shared<bool>(false); // main-thread data
+		ds::lifetime life;
+	};
+
+	ds::task_system_config config;
+	config.compute_threads = 3;
+	ds::task_system tasks(config);
+
+	struct probe_t {
+		explicit probe_t(std::atomic<int>& dropped_count) : dropped(dropped_count) {}
+		~probe_t() { dropped += delivered ? 0 : 1; }
+
+		std::atomic<int>& dropped;
+		bool delivered = false; // main-thread data, published to the destructor by the shared_ptr count
+	};
+
+	constexpr int rounds = 300;
+	int delivered = 0;
+	int after_death = 0;
+	std::atomic<int> dropped{ 0 };
+	std::vector<ds::task_handle<int>> handles;
+	handles.reserve(rounds);
+	for (int i = 0; i < rounds; ++i) {
+		auto owner = std::make_unique<owner_t>(i % 2 == 0 ? ds::lifetime_option::cancel_on_destroy
+			: ds::lifetime_option::none);
+		auto handle = tasks.run(lane::compute, { "t" }, owner->life, [](ds::task_context& ctx) {
+			ctx.throw_if_stopped();
+			return 1;
+		});
+		handle.then_main(owner->life, [&, destroyed = owner->destroyed, probe = std::make_shared<probe_t>(dropped)](ds::task_result<int>&) {
+			probe->delivered = true;
+			++delivered;
+			after_death += *destroyed ? 1 : 0;
+		});
+		if (i % 3 == 0) {
+			tasks.drain_main(1ms);
+		}
+		if (i % 4 == 0) {
+			std::this_thread::yield();
+		}
+		owner.reset(); // races with a worker finishing the task
+		handles.push_back(std::move(handle));
+	}
+	for (const auto& handle : handles) {
+		handle.wait();
+	}
+	handles.clear();
+	tasks.drain_main(1ms);
+	BOOST_TEST(after_death == 0);
+	BOOST_TEST(delivered > 0);
+	BOOST_TEST(delivered + dropped.load() == rounds);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
