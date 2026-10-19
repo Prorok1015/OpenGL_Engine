@@ -402,6 +402,23 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::validation::driver::
 	return std::make_unique<buffer>(m_state, std::shared_ptr<buffer_interface>(m_inner->create_buffer()));
 }
 
+std::vector<std::byte> rnd::driver::validation::driver::read_texture(texture_interface& texture, glm::ivec4 rect)
+{
+	if (!m_state->require_live(&texture, object_kind::texture, "read_texture")) {
+		return {};
+	}
+	if (!can_read_back(texture)) {
+		m_state->report(rule::invalid_read, std::format("read_texture of a {}x{} texture that is not a 2D color texture", texture.width(), texture.height()));
+		return {};
+	}
+	if (!read_rect_inside(texture, rect)) {
+		m_state->report(rule::invalid_read, std::format("read_texture of rect {}, {}, {}x{} outside a {}x{} texture",
+			rect.x, rect.y, rect.z, rect.w, texture.width(), texture.height()));
+		return {};
+	}
+	return m_inner->read_texture(*unwrap(&texture), rect);
+}
+
 void rnd::driver::validation::driver::begin_frame()
 {
 	m_state->on_begin_frame();

@@ -182,4 +182,33 @@ namespace rnd::driver
 		texture_header header;
 		const std::uint64_t m_serial = next_shader_serial();
 	};
+
+	// What driver_interface::read_texture can hand out: a 2D texture in a color format. The normalized formats come
+	// back as they are, the float formats clamped to 0..1.
+	inline bool can_read_back(const texture_interface& texture) noexcept
+	{
+		if (texture.get_type() != TEXTURE_TYPE::TEXTURE_2D) {
+			return false;
+		}
+		switch (texture.format()) {
+		case texture_header::TYPE::R8:
+		case texture_header::TYPE::RGB8:
+		case texture_header::TYPE::RGBA8:
+		case texture_header::TYPE::RGBA12:
+		case texture_header::TYPE::RGBA16:
+		case texture_header::TYPE::RGBA16F:
+		case texture_header::TYPE::RGBA32F:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	// `rect` = {x, y, width, height} of mip 0: not empty and inside the texture.
+	inline bool read_rect_inside(const texture_interface& texture, const glm::ivec4& rect) noexcept
+	{
+		return rect.x >= 0 && rect.y >= 0 && rect.z > 0 && rect.w > 0
+			&& static_cast<std::int64_t>(rect.x) + rect.z <= static_cast<std::int64_t>(texture.width())
+			&& static_cast<std::int64_t>(rect.y) + rect.w <= static_cast<std::int64_t>(texture.height());
+	}
 }

@@ -89,6 +89,9 @@ namespace rnd::driver::null
 		void bind_pipeline(pipeline_handle pipeline) override;
 		const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		void invalidate_state_cache() override { ++m_calls.state_cache_invalidations; }
+		// A stand-in for the pixels: pixel (x, y) of the texture is {x, y, 0, 255} modulo 256, so a test can tell
+		// which part of the texture came back.
+		std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) override;
 
 		const object_stats& stats() const { return *m_stats; }
 		const call_counts& calls() const { return m_calls; }

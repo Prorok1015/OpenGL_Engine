@@ -82,6 +82,24 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::null::driver::create
 	return std::make_unique<buffer>(m_stats);
 }
 
+std::vector<std::byte> rnd::driver::null::driver::read_texture(texture_interface& texture, glm::ivec4 rect)
+{
+	if (!can_read_back(texture) || !read_rect_inside(texture, rect)) {
+		return {};
+	}
+	std::vector<std::byte> bytes;
+	bytes.reserve(static_cast<std::size_t>(rect.z) * static_cast<std::size_t>(rect.w) * 4);
+	for (int y = 0; y < rect.w; ++y) {
+		for (int x = 0; x < rect.z; ++x) {
+			bytes.push_back(static_cast<std::byte>((rect.x + x) & 0xff));
+			bytes.push_back(static_cast<std::byte>((rect.y + y) & 0xff));
+			bytes.push_back(std::byte{ 0 });
+			bytes.push_back(std::byte{ 0xff });
+		}
+	}
+	return bytes;
+}
+
 void rnd::driver::null::driver::begin_frame()
 {
 	++m_frame;

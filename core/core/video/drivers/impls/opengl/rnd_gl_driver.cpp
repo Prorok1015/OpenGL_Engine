@@ -632,6 +632,19 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::gl::driver::create_b
 	return std::make_unique<gl::buffer>();
 }
 
+std::vector<std::byte> rnd::driver::gl::driver::read_texture(texture_interface& texture, glm::ivec4 rect)
+{
+	if (!can_read_back(texture) || !read_rect_inside(texture, rect)) {
+		egLOG_ERROR("render", "read_texture: a {}x{} texture cannot be read at {}, {}, {}x{}", texture.width(), texture.height(), rect.x, rect.y, rect.z, rect.w);
+		return {};
+	}
+	const auto& source = static_cast<const gl::texture&>(*texture.native());
+	std::vector<std::byte> bytes(static_cast<std::size_t>(rect.z) * static_cast<std::size_t>(rect.w) * 4);
+	glGetTextureSubImage(source.get_id(), 0, rect.x, rect.y, 0, rect.z, rect.w, 1, GL_RGBA, GL_UNSIGNED_BYTE, static_cast<GLsizei>(bytes.size()), bytes.data());
+	CHECK_GL_ERROR();
+	return bytes;
+}
+
 void rnd::driver::gl::driver::begin_frame()
 {
 	++m_frame;
