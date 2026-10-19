@@ -38,5 +38,6 @@ private:
     std::string filter;
     std::vector<std::string> extension_filters;  // Changed to vector
     SELECT_MODE select_mode;
+    bool opened = false;
 };
 }

@@ -10,7 +10,6 @@ namespace res { class resource_system; }
 
 namespace edt {
 	class editor_system;
-	class file_dialog;
 	class scene_hierarchy_panel;
 	class inspector_panel;
 	class viewport_panel;
@@ -55,15 +54,6 @@ namespace edt {
 			scene_editor& scene_ed,
 			world_controller& world_ctrl,
 			shared_state& state);
-
-		// Wire dockspace menu actions
-		void wire_dockspace_menus(
-			editor_layer& layer,
-			level_controller& level_ctrl,
-			editor_system& sys,
-			shared_state& state,
-			file_dialog& dlg,
-			std::function<void()>& exit_action);
 
 		// Wire controller callbacks (scene_editor, world_ctrl, level_ctrl)
 		void wire_controller_callbacks(

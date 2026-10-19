@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <snk/resource/resources/res_resource_handle.hpp>
@@ -22,7 +23,7 @@ namespace ecs  { class system_factory; }
 namespace inp  { class input_router; }
 
 namespace edt {
-	class file_dialog;
+	class file_menu;
 	class editor_context;
 	class editor_layer;
 	class model_importer;
@@ -56,10 +57,6 @@ namespace edt {
 		// Created in init() and owned by the app_data_storage; null before init().
 		editor_context* context() const { return m_context; }
 
-		bool show_file_dialog();
-
-		//TODO change to renderer
-		bool load_level();
 		void begin_level_load(const res::tag& level_tag);
 
 	private:
@@ -81,13 +78,14 @@ namespace edt {
 
 		// Input
 		inp::input_router* m_input_router = nullptr;
-		std::unique_ptr<edt::file_dialog> m_file_dialog;
 
 		// Import/export
 		std::unique_ptr<edt::model_importer> m_model_importer;
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
 		std::unique_ptr<edt::async_import_token> m_import_token;
+		void start_import(const std::filesystem::path& abs_path);
+		bool poll_import_pipeline();
 		bool poll_import_progress();
 
 		// Editor layer & panels
@@ -125,6 +123,7 @@ namespace edt {
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
+		std::unique_ptr<edt::file_menu> m_file_menu;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

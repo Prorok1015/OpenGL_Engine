@@ -33,6 +33,8 @@ namespace edt
 		ecs::entity entity() const;
 
 	private:
+		void emit_current();
+
 		editor_events& m_events;
 		selection m_current;
 		registry_provider m_registry_of;
