@@ -72,8 +72,8 @@ struct material_set_fixture : test_util::null_engine_fixture
 	{
 		std::set<const rnd::compiled_material*> result;
 		for (const auto& packet : packets()) {
-			for (const auto& dc : packet.opaque_draws) result.insert(dc.material);
-			for (const auto& dc : packet.transparent_draws) result.insert(dc.material);
+			for (const auto& dc : packet.opaque_draws) result.insert(&packet.material_of(dc));
+			for (const auto& dc : packet.transparent_draws) result.insert(&packet.material_of(dc));
 		}
 		return result;
 	}

@@ -248,7 +248,9 @@ BOOST_AUTO_TEST_CASE(TheRingAndTheBoneBufferHoldWhatExtractProduced)
 				BOOST_CHECK(stored.world == dc.transform);
 				BOOST_CHECK(stored.bone_offset == packet.bone_base + dc.bone_offset);
 				++checked_draws;
-				if (dc.skinning_tag.is_valid()) {
+				if (dc.skin.is_valid()) {
+					BOOST_CHECK(packet.skin_of(dc).is_valid());
+					BOOST_CHECK(dc.bone_count > 0u);
 					++skinned_draws;
 					BOOST_REQUIRE((stored.bone_offset + 1) * sizeof(glm::mat4) <= bones->size());
 					glm::mat4 first_bone;

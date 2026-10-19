@@ -462,12 +462,14 @@ BOOST_FIXTURE_TEST_SUITE(RndFrameUploadPassTests, draw_data_fixture)
 
 namespace {
 
-rnd::draw_call_t skinned_draw(rnd::bone_palette_t& palette, const std::vector<glm::mat4>& skeleton, float x, const char* skin)
+rnd::draw_call_t skinned_draw(rnd::render_packet_t& packet, const std::vector<glm::mat4>& skeleton, float x, const char* skin)
 {
 	rnd::draw_call_t draw;
 	draw.transform = at_x(x);
-	draw.skinning_tag = res::tag::make(skin);
-	draw.bone_offset = palette.add(&skeleton, skeleton);
+	draw.skin.index = static_cast<uint32_t>(packet.skins.size());
+	packet.skins.push_back(res::tag::make(skin));
+	draw.bone_offset = packet.bones.add(&skeleton, skeleton);
+	draw.bone_count = static_cast<uint32_t>(skeleton.size());
 	return draw;
 }
 
@@ -494,9 +496,9 @@ BOOST_AUTO_TEST_CASE(TwoSkinnedMeshesFindTheirOwnSkeletonInTheFrameBuffer)
 
 	rnd::render_packet_t first;
 	first.bones.reserve(skeleton_a.size() + skeleton_b.size(), 2);
-	first.opaque_draws.push_back(skinned_draw(first.bones, skeleton_a, 1.f, "skins/a"));
-	first.opaque_draws.push_back(skinned_draw(first.bones, skeleton_b, 2.f, "skins/b"));
-	first.transparent_draws.push_back(skinned_draw(first.bones, skeleton_a, 3.f, "skins/a"));
+	first.opaque_draws.push_back(skinned_draw(first, skeleton_a, 1.f, "skins/a"));
+	first.opaque_draws.push_back(skinned_draw(first, skeleton_b, 2.f, "skins/b"));
+	first.transparent_draws.push_back(skinned_draw(first, skeleton_a, 3.f, "skins/a"));
 	rnd::draw_call_t static_draw;
 	static_draw.transform = at_x(4.f);
 	first.opaque_draws.push_back(static_draw);
@@ -504,7 +506,7 @@ BOOST_AUTO_TEST_CASE(TwoSkinnedMeshesFindTheirOwnSkeletonInTheFrameBuffer)
 
 	rnd::render_packet_t second;
 	second.bones.reserve(skeleton_c.size(), 1);
-	second.opaque_draws.push_back(skinned_draw(second.bones, skeleton_c, 5.f, "skins/c"));
+	second.opaque_draws.push_back(skinned_draw(second, skeleton_c, 5.f, "skins/c"));
 	packets.push_back(std::move(second));
 
 	rnd::frame_upload_pass pass;
