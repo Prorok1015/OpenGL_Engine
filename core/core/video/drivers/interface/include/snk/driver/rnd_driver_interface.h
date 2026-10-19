@@ -47,7 +47,6 @@ namespace rnd::driver
 
 
 		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) = 0;
-		virtual std::unique_ptr<texture_interface> create_texture(const texture_header& header) = 0;
 		virtual std::unique_ptr<vertex_array_interface> create_vertex_array() = 0;
 		virtual std::unique_ptr<buffer_interface> create_buffer() = 0;
 
@@ -97,8 +96,16 @@ namespace rnd::driver
 		// is not inside it (read_rect_inside).
 		virtual std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) = 0;
 
-		// Textures are named by texture_handle (render passes, bind groups, read_texture). The texture object
-		// still belongs to whoever create_texture handed it to, and the handle goes stale when it is destroyed.
+		// Textures belong to the driver and are named by texture_handle (render passes, bind groups, read_texture).
+		// The driver frees every texture that is still alive when it is destroyed.
+		virtual texture_handle create_texture(const texture_header& header) = 0;
+		// The handle goes stale at once; the GPU object may be freed later (a backend defers it while the GPU can
+		// still use it, GL frees at once). A stale or null handle is reported by the validation layer, ignored otherwise.
+		virtual void destroy(texture_handle texture) = 0;
+		// TEMPORARY bridge (removed in R7c, #118): the backend object behind a handle, null for a handle that names
+		// no live texture. Only code that still needs the object (the GL ImGui backend, texture_owner, tests of a
+		// backend) calls it; everything else goes through the handle.
+		virtual texture_interface* resolve(texture_handle texture) const = 0;
 		// The description of a texture; an empty one for a handle that names no live texture.
 		virtual const texture_header& info(texture_handle texture) const = 0;
 		// Whether the handle names a live texture of this driver.

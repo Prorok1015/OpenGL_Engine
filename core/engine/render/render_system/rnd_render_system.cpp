@@ -97,7 +97,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
 {
 	auto& texture_manager = *m_textures;
-	texture_manager.register_loader("texture_2d_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> std::unique_ptr<rnd::driver::texture_interface> {
+	texture_manager.register_loader("texture_2d_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
 		const rnd::texture_2d_desc& tex_2d_desc = static_cast<const rnd::texture_2d_desc&>(desc);
 		auto picture_handle = tex_2d_desc.get_picture_handle();
 		if (!picture_handle.is_ready()) {
@@ -105,7 +105,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 			if (picture_handle.has_error()) {
 				egLOG_WARN("render/texture", "Failed to load texture: picture resource of {0} failed to load", tex_2d_desc.get_tag().view());
 			}
-			return nullptr;
+			return {};
 		}
 		auto picture = picture_handle.get();
 		rnd::driver::texture_header header = desc.get_header();
@@ -131,26 +131,25 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 			default:
 				break;
 		}
-		auto texture = drv->create_texture(header);
-		return texture;
+		return rnd::driver::make_texture(*drv, header);
 
 	});
 
 	rnd::get_gpu_profiler().init(*drv.get());
 
-	texture_manager.register_loader("texture_cubemap_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> std::unique_ptr<rnd::driver::texture_interface> {
+	texture_manager.register_loader("texture_cubemap_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> rnd::driver::texture_owner {
 		const auto& tex_cubmap_desc = static_cast<const rnd::texture_cubemap_desc&>(desc);
 
 		if (tex_cubmap_desc.get_source_type() == rnd::texture_cubemap_desc::SOURCE_TYPE::SINGLE_FILE) {
 			egLOG_WARN("render/texture", "Cubemap texture loading from single file is not implemented yet (tag: {0})", desc.get_tag().view());
-			return nullptr;
+			return {};
 		}
 
 		// The faces load in the background: come back next frame instead of caching a texture with holes.
 		const auto& awaited = tex_cubmap_desc.get_faces();
 		for (const auto* face : { &awaited.right, &awaited.left, &awaited.top, &awaited.bottom, &awaited.front, &awaited.back }) {
 			if (face->is_valid() && !face->is_ready() && !face->has_error()) {
-				return nullptr;
+				return {};
 			}
 		}
 
@@ -198,7 +197,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 			texture_intf->update_data(data.data(), 0, 0, 0, width, height, 1, 0, 0, face); // face parameter is crucial here!
 		};
 
-		auto texture = drv->create_texture(header);
+		auto texture = rnd::driver::make_texture(*drv, header);
 		update_face(texture.get(), faces.right, 0); // Right
 		update_face(texture.get(), faces.left, 1); // Left
 		update_face(texture.get(), faces.bottom, 2); // Bottom

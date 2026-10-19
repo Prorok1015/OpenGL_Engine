@@ -120,7 +120,7 @@ bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& 
 	std::optional<glm::uvec2> extent;
 	bool size_mismatch = false;
 	const auto visit = [&](const attachment_desc& attachment, bool is_depth) {
-		const texture_interface& texture = *m_textures->find(attachment.texture);
+		const texture_interface& texture = *m_textures.find(attachment.texture);
 		const bool usage_ok = is_depth
 			? texture.has_usage(texture_usage::depth_target) || texture.has_usage(texture_usage::stencil_target)
 			: texture.has_usage(texture_usage::color_target);
@@ -376,25 +376,35 @@ void rnd::driver::validation::driver::check_texture_usage(const texture_header& 
 	}
 }
 
-std::unique_ptr<rnd::driver::texture_interface> rnd::driver::validation::driver::create_texture(const texture_header& header)
+rnd::driver::texture_handle rnd::driver::validation::driver::create_texture(const texture_header& header)
 {
 	check_texture_usage(header);
-	auto created = m_inner->create_texture(header);
-	if (!created) {
-		return nullptr;
+	const texture_handle created = m_inner->create_texture(header);
+	texture_interface* const inner_texture = m_inner->resolve(created);
+	if (!inner_texture) {
+		return {};
 	}
 	m_state->on_texture_created();
-	auto wrapper = std::make_unique<texture>(m_state, std::move(created), header);
-	m_textures->adopt(*wrapper);
-	return wrapper;
+	return m_textures.adopt(std::make_unique<texture>(m_state, *inner_texture, created, header));
+}
+
+void rnd::driver::validation::driver::destroy(texture_handle handle)
+{
+	if (!handle || !live_texture(handle, "destroy")) {
+		return;
+	}
+	std::unique_ptr<texture_interface> wrapper = m_textures.release(handle);
+	const texture_handle inner = static_cast<texture&>(*wrapper).handle_in_inner();
+	wrapper.reset();
+	m_inner->destroy(inner);
 }
 
 rnd::driver::validation::texture* rnd::driver::validation::driver::live_texture(texture_handle handle, const char* what)
 {
-	if (texture_interface* found = m_textures->find(handle)) {
+	if (texture_interface* found = m_textures.find(handle)) {
 		return static_cast<texture*>(found);
 	}
-	if (m_textures->stale(handle)) {
+	if (m_textures.stale(handle)) {
 		m_state->report(rule::stale_handle, std::format("{} names a texture that was destroyed (handle index {}, generation {})", what, handle.index, handle.gen));
 	} else {
 		m_state->report(rule::dead_object, std::format("{} (handle index {}, generation {}) is not a texture of this driver", what, handle.index, handle.gen));
@@ -404,7 +414,7 @@ rnd::driver::validation::texture* rnd::driver::validation::driver::live_texture(
 
 rnd::driver::texture_handle rnd::driver::validation::driver::inner_handle(texture_handle handle) const
 {
-	const texture_interface* found = m_textures->find(handle);
+	const texture_interface* found = m_textures.find(handle);
 	return found ? static_cast<const texture*>(found)->handle_in_inner() : texture_handle{};
 }
 

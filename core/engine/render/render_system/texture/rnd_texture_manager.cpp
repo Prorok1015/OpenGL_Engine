@@ -48,7 +48,7 @@ rnd::driver::texture_interface* rnd::texture_manager::generate_texture(const res
 		return texture.get();
 	}
 
-	auto& texture = cache[tag] = drv->create_texture(header);
+	auto& texture = cache[tag] = rnd::driver::make_texture(*drv, header);
     return texture.get();
 }
  

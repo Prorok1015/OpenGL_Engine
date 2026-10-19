@@ -7,7 +7,7 @@
 #include <vector>
 
 namespace {
-	std::unique_ptr<rnd::driver::texture_interface> make_placeholder(rnd::driver::driver_interface& drv, const char* name, std::array<unsigned char, 4> texel)
+	rnd::driver::texture_owner make_placeholder(rnd::driver::driver_interface& drv, const char* name, std::array<unsigned char, 4> texel)
 	{
 		rnd::driver::texture_header header;
 		header.name = name;
@@ -17,7 +17,7 @@ namespace {
 		header.data.initial_data = texel.data();
 		header.min = rnd::driver::texture_header::FILTERING::NEAREST;
 		header.mag = rnd::driver::texture_header::FILTERING::NEAREST;
-		return drv.create_texture(header);
+		return rnd::driver::make_texture(drv, header);
 	}
 }
 

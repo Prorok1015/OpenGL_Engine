@@ -3,6 +3,7 @@
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <boost/json.hpp>
+#include <snk/driver/rnd_texture_owner.h>
 
 // Usage flags of a texture: the bit mask itself, its JSON forms (a string as the shipped .desc files
 // have it, or an array) and the render_targets::ensure helper the passes share.
@@ -55,7 +56,7 @@ BOOST_AUTO_TEST_CASE(TextureQueriesEveryFlagIndependently)
 	texture_header header;
 	header.usage = texture_usage::color_target | texture_usage::sampled;
 	rnd::driver::null::driver null_driver;
-	auto texture = null_driver.create_texture(header);
+	auto texture = make_texture(null_driver, header);
 	BOOST_REQUIRE(texture);
 	BOOST_TEST(texture->has_usage(texture_usage::sampled));
 	BOOST_TEST(texture->has_usage(texture_usage::color_target));

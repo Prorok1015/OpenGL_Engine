@@ -2,51 +2,81 @@
 #include <snk/driver/rnd_resource_tables.h>
 #include <snk/driver/rnd_texture_interface.h>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <utility>
 
 namespace rnd::driver
 {
-	// The textures of one driver by handle. The driver owns a pool for the lifetime of its textures: a texture
-	// keeps the pool alive through the callback adopt() gives it, so a texture that outlives its driver still
-	// leaves the pool cleanly.
+	// The generation of a texture handle is split: the high bits name the driver that issued it, the low bits count
+	// the reuses of the slot. A handle of another driver (or the handle a validation wrapper's inner driver gave
+	// the same texture) therefore fails the generation check of this driver and resolves to nothing.
 	//
-	// Thread safety: the slots are guarded by a mutex, because a texture may be destroyed on whichever thread
-	// drops its last owner. The pointer find() returns is only as good as the texture's lifetime, as always.
+	// 8 bits of driver id: ids 1..255 are handed out in turn, so the 256th driver of a process shares the id of the
+	// first one (two live drivers that far apart in creation order may take each other's handles for their own).
+	// 24 bits of generation: a slot reused 2^24 times wraps, and a handle that stale could match again.
+	inline constexpr std::uint32_t texture_driver_id_shift = 24;
+	inline constexpr std::uint32_t texture_generation_mask = (1u << texture_driver_id_shift) - 1u;
+
+	// The id the next texture_pool will carry in the high bits of its generations (never 0).
+	inline std::uint32_t next_texture_driver_tag()
+	{
+		static std::atomic<std::uint32_t> counter{ 0 };
+		const std::uint32_t id = counter.fetch_add(1, std::memory_order_relaxed) % 255u + 1u;
+		return id << texture_driver_id_shift;
+	}
+
+	// The textures of one driver, by handle. The pool owns them: a texture lives until destroy() (or the pool) and
+	// its slot is then freed with a higher generation, so the handle it had resolves to nothing from then on.
 	//
-	// The pool does not own the textures. It only knows where each one is while it lives; destroying a texture
-	// frees its slot and bumps the generation, so the handle it had resolves to nothing from then on.
-	class texture_pool : public std::enable_shared_from_this<texture_pool>
+	// Thread safety: the slots are guarded by a mutex. The pointer find() returns is only as good as the texture's
+	// lifetime, as always: it stays valid until the texture is destroyed.
+	class texture_pool
 	{
 	public:
-		// Pools are shared (adopt() hands each texture a reference), so they are made here and nowhere else.
-		static std::shared_ptr<texture_pool> create() { return std::shared_ptr<texture_pool>(new texture_pool()); }
+		texture_pool() : m_slots(texture_generation_mask, next_texture_driver_tag()) {}
+		texture_pool(const texture_pool&) = delete;
+		texture_pool& operator=(const texture_pool&) = delete;
 
-		// Registers a freshly made texture and stores its handle in it.
-		texture_handle adopt(texture_interface& texture)
+		// Takes the texture over and stores its handle in it.
+		texture_handle adopt(std::unique_ptr<texture_interface> texture)
 		{
-			texture_handle handle;
+			texture_interface& adopted = *texture;
+			const std::lock_guard lock(m_mutex);
+			const texture_handle handle = m_slots.insert(std::move(texture));
+			adopted.set_handle(handle);
+			return handle;
+		}
+
+		// Frees the slot and gives the texture back, so the caller decides where it dies. Null for a handle that
+		// names no live texture.
+		std::unique_ptr<texture_interface> release(texture_handle handle)
+		{
+			std::optional<std::unique_ptr<texture_interface>> taken;
 			{
 				const std::lock_guard lock(m_mutex);
-				handle = m_slots.insert(&texture);
+				taken = m_slots.extract(handle);
 			}
-			texture.assign_handle(handle, [pool = shared_from_this()](texture_handle gone) {
-				const std::lock_guard lock(pool->m_mutex);
-				pool->m_slots.erase(gone);
-			});
-			return handle;
+			if (!taken) {
+				return nullptr;
+			}
+			return std::move(*taken);
 		}
 
 		// Null for a handle that names no live texture (null, destroyed, or from another driver).
 		texture_interface* find(texture_handle handle) const
 		{
 			const std::lock_guard lock(m_mutex);
-			texture_interface* const* found = m_slots.find(handle);
-			return found ? *found : nullptr;
+			const std::unique_ptr<texture_interface>* found = m_slots.find(handle);
+			return found ? found->get() : nullptr;
 		}
 
-		// True for a handle of a texture that has been destroyed: its slot exists but holds no texture of that generation.
+		// True for a handle of a texture that has been destroyed: its slot exists but holds no texture of that
+		// generation. A handle of another driver is not stale, it is unknown.
 		bool stale(texture_handle handle) const
 		{
 			const std::lock_guard lock(m_mutex);
@@ -68,9 +98,7 @@ namespace rnd::driver
 		}
 
 	private:
-		texture_pool() = default;
-
 		mutable std::mutex m_mutex;
-		slot_table<texture_tag, texture_interface*> m_slots;
+		slot_table<texture_tag, std::unique_ptr<texture_interface>> m_slots;
 	};
 }

@@ -128,34 +128,23 @@ namespace rnd::driver
 		WRAPPING wrap = WRAPPING::CLAMP_TO_EDGE;
 	};
 
+	// A texture is internal to its backend: the driver owns it and hands out a texture_handle (driver_interface::
+	// create_texture / destroy). Only the backends, and for now the code that still needs the object behind a
+	// handle (driver_interface::resolve), touch this class.
 	class texture_interface
 	{
 	public:
 		texture_interface(const texture_header& hdr)
 			: header(hdr) {}
-		// The handle goes stale with the texture: the pool that issued it is told here. The pool locks and does
-		// not allocate; a destructor must not throw, so anything else it might do is swallowed.
-		virtual ~texture_interface()
-		{
-			if (m_release) {
-				try {
-					m_release(m_handle);
-				} catch (...) {
-				}
-			}
-		}
+		virtual ~texture_interface() = default;
 		texture_interface(const texture_interface&) = delete;
 		texture_interface& operator=(const texture_interface&) = delete;
 
 		// The handle of this texture in the driver that made it (null before the driver registered it). Draw
 		// commands and bind groups name a texture by it; it stops resolving once the texture is destroyed.
 		texture_handle handle() const noexcept { return m_handle; }
-		// Called once by the backend that owns the texture pool: `release` runs when the texture is destroyed.
-		void assign_handle(texture_handle owned, std::function<void(texture_handle)> release)
-		{
-			m_handle = owned;
-			m_release = std::move(release);
-		}
+		// Called once by the texture pool that adopts the texture.
+		void set_handle(texture_handle owned) noexcept { m_handle = owned; }
 		const texture_header& info() const noexcept { return header; }
 
 		// Names this texture for as long as the process runs. Unlike its address it is never handed out again,
@@ -210,7 +199,6 @@ namespace rnd::driver
 
 	private:
 		texture_handle m_handle;
-		std::function<void(texture_handle)> m_release;
 	};
 
 	// The handle of `texture`, null for no texture.

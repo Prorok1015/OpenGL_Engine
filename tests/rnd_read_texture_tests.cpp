@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <snk/driver/rnd_texture_owner.h>
 
 // driver_interface::read_texture: the null backend answers with a placeholder that tells which part of the
 // texture was asked for, the validation decorator checks the call and forwards it. The GL driver is covered
@@ -46,7 +47,7 @@ BOOST_AUTO_TEST_SUITE(RndReadTextureTests)
 BOOST_AUTO_TEST_CASE(Null_ReadsThePlaceholderOfTheRect)
 {
 	null::driver drv;
-	auto texture = drv.create_texture(color_texture(8, 4));
+	auto texture = make_texture(drv, color_texture(8, 4));
 
 	const auto bytes = drv.read_texture(texture->handle(), { 2, 1, 3, 2 });
 
@@ -65,7 +66,7 @@ BOOST_AUTO_TEST_CASE(Null_ReadsThePlaceholderOfTheRect)
 BOOST_AUTO_TEST_CASE(Null_ReadsTheWholeTexture)
 {
 	null::driver drv;
-	auto texture = drv.create_texture(color_texture(5, 3, texture_header::TYPE::RGBA16F));
+	auto texture = make_texture(drv, color_texture(5, 3, texture_header::TYPE::RGBA16F));
 
 	const auto bytes = drv.read_texture(texture->handle(), { 0, 0, 5, 3 });
 
@@ -75,19 +76,19 @@ BOOST_AUTO_TEST_CASE(Null_ReadsTheWholeTexture)
 BOOST_AUTO_TEST_CASE(Null_ReadsNothingFromWhatCannotBeRead)
 {
 	null::driver drv;
-	auto texture = drv.create_texture(color_texture(8, 4));
+	auto texture = make_texture(drv, color_texture(8, 4));
 	BOOST_CHECK(drv.read_texture(texture->handle(), { 6, 0, 3, 1 }).empty());	// past the right edge
 	BOOST_CHECK(drv.read_texture(texture->handle(), { 0, 3, 1, 2 }).empty());	// past the top edge
 	BOOST_CHECK(drv.read_texture(texture->handle(), { -1, 0, 2, 2 }).empty());
 	BOOST_CHECK(drv.read_texture(texture->handle(), { 0, 0, 0, 2 }).empty());
 	BOOST_CHECK(drv.read_texture(texture->handle(), { 0, 0, 2, 0 }).empty());
 
-	auto depth = drv.create_texture(depth_texture(8, 4));
+	auto depth = make_texture(drv, depth_texture(8, 4));
 	BOOST_CHECK(drv.read_texture(depth->handle(), { 0, 0, 8, 4 }).empty());
 
 	texture_header cube = color_texture(8, 8);
 	cube.type = TEXTURE_TYPE::TEXTURE_CUBE_MAP;
-	auto cube_texture = drv.create_texture(cube);
+	auto cube_texture = make_texture(drv, cube);
 	BOOST_CHECK(drv.read_texture(cube_texture->handle(), { 0, 0, 8, 8 }).empty());
 }
 
@@ -105,7 +106,7 @@ struct validation_fixture
 
 BOOST_FIXTURE_TEST_CASE(Validation_ForwardsAValidRead, validation_fixture)
 {
-	auto texture = drv->create_texture(color_texture(8, 4));
+	auto texture = make_texture(*drv, color_texture(8, 4));
 
 	const auto bytes = drv->read_texture(texture->handle(), { 1, 1, 2, 2 });
 
@@ -117,7 +118,7 @@ BOOST_FIXTURE_TEST_CASE(Validation_ForwardsAValidRead, validation_fixture)
 
 BOOST_FIXTURE_TEST_CASE(Validation_ReportsAReadOutsideTheTexture, validation_fixture)
 {
-	auto texture = drv->create_texture(color_texture(8, 4));
+	auto texture = make_texture(*drv, color_texture(8, 4));
 
 	BOOST_CHECK(drv->read_texture(texture->handle(), { 4, 0, 8, 4 }).empty());
 
@@ -127,7 +128,7 @@ BOOST_FIXTURE_TEST_CASE(Validation_ReportsAReadOutsideTheTexture, validation_fix
 
 BOOST_FIXTURE_TEST_CASE(Validation_ReportsAReadOfADepthTexture, validation_fixture)
 {
-	auto depth = drv->create_texture(depth_texture(8, 4));
+	auto depth = make_texture(*drv, depth_texture(8, 4));
 
 	BOOST_CHECK(drv->read_texture(depth->handle(), { 0, 0, 8, 4 }).empty());
 

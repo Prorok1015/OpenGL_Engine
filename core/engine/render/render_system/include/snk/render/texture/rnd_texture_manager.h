@@ -4,6 +4,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_texture_interface.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <unordered_map>
 #include <functional>
@@ -16,14 +17,15 @@ namespace rnd
 	class SNK_API texture_manager
 	{
 	public:
-		using loader_fn = std::function<std::unique_ptr<driver::texture_interface>(driver::driver_interface* drv, const rnd::texture_desc& txm)>;
+		// Returns an empty owner while the texture cannot be made yet (the manager asks again later).
+		using loader_fn = std::function<driver::texture_owner(driver::driver_interface* drv, const rnd::texture_desc& txm)>;
 		texture_manager(driver::driver_interface* driver, desc::desc_system& d, res::resource_system& res_sys)
 			: desc_system(d)
 			, m_res_sys(res_sys)
 			, drv(driver)
 		{}
 
-		// dllexport instantiates the implicit copy members, which cannot compile with unique_ptr values
+		// dllexport instantiates the implicit copy members, which cannot compile with move-only values
 		texture_manager(const texture_manager&) = delete;
 		texture_manager& operator=(const texture_manager&) = delete;
 
@@ -34,7 +36,7 @@ namespace rnd
 		driver::texture_interface* find(const res::tag& tag) const;
 		void remove(const res::tag& tag);
 
-		const std::unordered_map<res::tag, std::unique_ptr<driver::texture_interface>>& get_cache() const 
+		const std::unordered_map<res::tag, driver::texture_owner>& get_cache() const 
 		{
 			return cache;
 		}
@@ -56,7 +58,7 @@ namespace rnd
 		}
 	protected:
 		mutable std::unordered_map<std::string, loader_fn> loaders;
-		mutable std::unordered_map<res::tag, std::unique_ptr<driver::texture_interface>> cache;
+		mutable std::unordered_map<res::tag, driver::texture_owner> cache;
 		std::unordered_map<res::tag, res::res_handle<rnd::texture_desc>> loading;
 		desc::desc_system& desc_system;
 		res::resource_system& m_res_sys;
