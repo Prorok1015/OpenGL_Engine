@@ -24,8 +24,6 @@ namespace
 
 	constexpr int max_depth = 8;
 	constexpr std::size_t max_listed = 50;
-	// float32 holds ~7 digits; relative, so a small value (near plane 0.0001) is not compared as if it were ~1
-	constexpr double revert_tolerance = 1e-6;
 
 	json::value zeros(std::size_t count)
 	{
@@ -159,7 +157,7 @@ namespace
 		if (a.is_number() && b.is_number()) {
 			const double x = a.to_number<double>();
 			const double y = b.to_number<double>();
-			return x == y || std::fabs(x - y) <= revert_tolerance * std::max(std::fabs(x), std::fabs(y));
+			return x == y || std::fabs(x - y) <= desc::float_relative_tolerance * std::max(std::fabs(x), std::fabs(y));
 		}
 		if (a.is_array() && b.is_array()) {
 			const json::array& left = a.as_array();
