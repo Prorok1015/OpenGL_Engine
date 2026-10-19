@@ -76,7 +76,7 @@
 3. **PR-3 (#111).** `context_manager` + `context_set`; `scn_level_manager.*` удаляются; правятся service init, стадия `update`, экстрактор, `camera_redirector`, `shared_state`, `world_controller`, `level_controller`, тесты (`scn_primitives_level_manager_tests` → `scn_context_manager_tests`, `app_engine_without_editor_tests`, `edt_*`). Hot reload уровня — только набор `level`.
 4. **PR-4 (#113).** `input_router`, привязки из viewport/префаба/Game view; `input_focus` из привязки; тест «ввод viewport-а префаба не влияет на основной».
 5. **PR-5 (#112).** Превью префаба — набор `preview:<tag>`; тест сохранения без превью и reload уровня при открытом превью.
-6. **PR-6 (чистка).** Удалить `LEVEL_ID`, `level_res`, межмировой `bind_res`, `get_world_registry`, фасад `scn::level` (вызовы → `context_manager`/набор), алиас `world`; поправить `ecs_invoker_tests`, `ecs_system_*_tests`, ARCHITECTURE.toon/доки; перепроверить баг D «мультимир».
+6. **PR-6 (чистка).** Удалить `LEVEL_ID`, `level_res`, межмировой `bind_res`, `get_world_registry`, фасад `scn::level` (вызовы → `context_manager`/набор), алиас `world`; поправить `ecs_invoker_tests`, `ecs_system_*_tests`, ARCHITECTURE.toon/доки; перепроверить баг D «мультимир». **Замена межмирового доступа — канал набора (blackboard + почта), дизайн `WORLD_MESSAGING.md` (#268); PR-6 не мержится до его утверждения, PR W1 канала идёт до PR-6.**
 Затем EPIC-63 строит `play_session` на наборах. #18 (#137) — после PR-5, чтобы документы сразу владели наборами.
 
 ## 5. Риски
