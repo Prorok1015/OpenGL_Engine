@@ -48,13 +48,19 @@ struct material_cache_fixture : test_util::null_engine_fixture
 		return out;
 	}
 
-	std::vector<const rnd::draw_call_t*> extracted_draws()
+	// An extracted draw with the material its id resolves to in its packet.
+	struct extracted_draw {
+		const rnd::draw_call_t* dc;
+		const rnd::compiled_material* material;
+	};
+
+	std::vector<extracted_draw> extracted_draws()
 	{
-		std::vector<const rnd::draw_call_t*> out;
+		std::vector<extracted_draw> out;
 		auto& packets = storage.require<rnd::frame_context>().data.require<std::pmr::vector<rnd::render_packet_t>>();
 		for (const auto& packet : packets) {
-			for (const auto& dc : packet.opaque_draws) out.push_back(&dc);
-			for (const auto& dc : packet.transparent_draws) out.push_back(&dc);
+			for (const auto& dc : packet.opaque_draws) out.push_back({ &dc, &packet.material_of(dc) });
+			for (const auto& dc : packet.transparent_draws) out.push_back({ &dc, &packet.material_of(dc) });
 		}
 		return out;
 	}
@@ -185,7 +191,7 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
 		},
 		{
 			[&] {
-				for (const auto* dc : extracted_draws()) drawn.insert(dc->material);
+				for (const auto& draw : extracted_draws()) drawn.insert(draw.material);
 				BOOST_REQUIRE(!drawn.empty());
 			},
 			[&] {
@@ -196,12 +202,12 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
 					"the missing texture did not leave any material incomplete");
 
 				std::size_t superseded = 0;
-				for (const auto* dc : draws) {
-					BOOST_REQUIRE(dc->material);
-					BOOST_CHECK(dc->variant.is_valid());
-					BOOST_CHECK(dc->material->base.is_valid());
-					BOOST_CHECK(dc->material->source != nullptr);
-					if (!live.contains(dc->material)) ++superseded;
+				for (const auto& draw : draws) {
+					BOOST_REQUIRE(draw.material);
+					BOOST_CHECK(draw.dc->variant.is_valid());
+					BOOST_CHECK(draw.material->base.is_valid());
+					BOOST_CHECK(draw.material->source != nullptr);
+					if (!live.contains(draw.material)) ++superseded;
 				}
 				BOOST_TEST(superseded > 0u);
 			},
