@@ -150,6 +150,29 @@ BOOST_AUTO_TEST_CASE(DirectionalLight_SerializedBytesMatchReference)
 	BOOST_TEST(json::serialize(ser(*created)) == json::serialize(ser(scn::directional_light_desc{})));
 }
 
+// #131: what reaches the .desc file goes through the desc_system writer; its text for the vectors is what test_level.desc holds.
+BOOST_AUTO_TEST_CASE(DirectionalLight_OnDiskTextMatchesReference)
+{
+	const auto on_disk = [this](const json::value& v) {
+		std::ostringstream ss;
+		descs->write_pretty_json(ss, v);
+		return ss.str();
+	};
+
+	const json::object defaults = ser(scn::directional_light_desc{});
+	BOOST_TEST(defaults.size() == 4u);
+	BOOST_TEST(on_disk(defaults.at("direction")) == "[-0.20000000298023224, -1.0, -0.30000001192092896, 0.0]\n");
+	BOOST_TEST(on_disk(defaults.at("diffuse")) == "[0.5, 0.5, 0.5, 1.0]\n");
+	BOOST_TEST(on_disk(defaults.at("ambient")) == "[0.20000000298023224, 0.20000000298023224, 0.20000000298023224, 1.0]\n");
+	BOOST_TEST(on_disk(defaults.at("specular")) == "[1.0, 1.0, 1.0, 1.0]\n");
+	BOOST_TEST((std::vector<std::string>{ defaults.begin()->key(), (defaults.begin() + 1)->key(), (defaults.begin() + 2)->key(), (defaults.begin() + 3)->key() }
+		== std::vector<std::string>{ "direction", "diffuse", "ambient", "specular" }));
+
+	scn::directional_light_desc l;
+	l.deserialize(*descs, parse(R"({"direction":[0.3860273063182831,-0.8251869082450867,-0.41237056255340576,0.0]})"));
+	BOOST_TEST(on_disk(ser(l).at("direction")) == "[0.3860273063182831, -0.8251869082450867, -0.41237056255340576, 0.0]\n");
+}
+
 // #131: every form the hand-written deserialize accepted.
 BOOST_AUTO_TEST_CASE(DirectionalLight_AcceptsLegacyForms)
 {
