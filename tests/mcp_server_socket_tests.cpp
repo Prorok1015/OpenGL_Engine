@@ -442,7 +442,9 @@ BOOST_AUTO_TEST_CASE(DeleteSession_ClosesItsStream)
 
 	test_client rpc_client(port);
 	rpc_client.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
-	const std::string session = session_of(*rpc_client.read_response());
+	const auto session_init = rpc_client.read_response();
+	BOOST_REQUIRE(session_init.has_value());
+	const std::string session = session_of(*session_init);
 
 	test_client stream(port);
 	stream.send(request_text(port, "GET", {}, session, mcp_test::test_token, "Accept: text/event-stream\r\n"));
@@ -465,7 +467,9 @@ BOOST_AUTO_TEST_CASE(SlowTool_AnswersFromAnotherThreadWhileTheServerStaysRespons
 
 	test_client slow(port);
 	slow.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
-	const std::string session = session_of(*slow.read_response());
+	const auto slow_init = slow.read_response();
+	BOOST_REQUIRE(slow_init.has_value());
+	const std::string session = session_of(*slow_init);
 	slow.send(request_text(port, "POST", rpc(2, "tools/call", R"({"name":"slow"})"), session));
 	BOOST_REQUIRE(host.wait_for_deferred(1));
 

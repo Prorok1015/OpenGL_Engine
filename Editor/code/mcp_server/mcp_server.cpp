@@ -112,6 +112,7 @@ namespace mcp::detail
 				return;
 			}
 			m_closed = true;
+			m_awaiting_hold.reset();
 			m_timer.cancel();
 			boost::system::error_code ignored;
 			m_socket.shutdown(tcp::socket::shutdown_both, ignored);
@@ -195,6 +196,9 @@ namespace mcp::detail
 			m_awaiting = true;
 			m_keep_alive = request.keep_alive;
 			m_sent_continue = false;
+			// While the host works no operation is pending on the socket, and the server holds connections weakly:
+			// without this the connection would be gone before the answer is posted back. Released in deliver()/close().
+			m_awaiting_hold = shared_from_this();
 			std::weak_ptr<connection> weak = weak_from_this();
 			std::shared_ptr<server_core> core = m_core;
 			m_core->ep.handle(request, [core, weak](http_response response) {
@@ -212,6 +216,8 @@ namespace mcp::detail
 				return;
 			}
 			m_awaiting = false;
+			// The caller (the posted answer, or a read handler) holds the connection, so this cannot destroy it.
+			m_awaiting_hold.reset();
 			if (response.stream) {
 				start_stream(std::move(response));
 				return;
@@ -359,6 +365,7 @@ namespace mcp::detail
 		std::array<char, 8192> m_chunk{};
 		std::deque<outgoing> m_out;
 		std::shared_ptr<event_channel> m_channel;
+		std::shared_ptr<connection> m_awaiting_hold;
 		bool m_closed = false;
 		bool m_awaiting = false;
 		bool m_keep_alive = true;
