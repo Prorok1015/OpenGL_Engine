@@ -94,7 +94,8 @@ how_to_apply:
   auto mesh = resources.require<mesh_resource>(res::tag{"res://models/backpack"});  // resources: res::resource_system& injected
   no global get_system() accessors exist — inject res::resource_system&, never reintroduce a global
   Never: hardcode filenames in component, always use descriptors
-  source: core/core/resource/include/snk/resource/res_system.h require<T>/require_sync<T> (L170-178)
+  require_sync<T> is main-thread only (asserts on a pool worker). An adapter that needs another resource declares it: override collect_dependencies() returning res::make_dep<T>(tag), read it from the res_deps given to deserialize(); never wait inside an adapter. res::when_all(system, handles...) joins several requests.
+  source: core/core/resource/include/snk/resource/res_system.h require<T>/require_sync<T>/make_dep/when_all
 
 [CONSTRAINT_11]
 rule: Always use <snk/common/engine_assert.h> (ASSERT_MSG, ASSERT_FAIL)

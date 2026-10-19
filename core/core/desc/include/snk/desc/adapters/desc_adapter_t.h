@@ -18,10 +18,14 @@ namespace core::desc
 
 		desc_adapter_t(::res::resource_system& res_system, ::desc::desc_system& desc_system);
 
-		virtual std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag& tag, const std::vector<std::byte>& raw_data) const;
-		virtual std::vector<std::byte> serialize(const ::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const;
+		// "__parent" is a dependency: it is loaded first and handed to deserialize.
+		std::vector<::res::res_dep> collect_dependencies(const ::res::tag& tag, const std::vector<std::byte>& raw_data) const override;
+		using core::res::adapter_interface::deserialize;
+		std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag& tag, const std::vector<std::byte>& raw_data, const ::res::res_deps& deps) const override;
+		// A file with a "__parent" fails without the parent in `deps`; it is not looked up here.
+		std::shared_ptr<::res::resource_entry> deserialize(const ::res::tag& tag, const std::vector<std::byte>& raw_data) const override;
+		std::vector<std::byte> serialize(const ::res::tag& tag, const std::shared_ptr<::res::resource_entry>& resource) const override;
 	private:
-		::res::resource_system& m_res_system;
 		::desc::desc_system& m_desc_system;
 	};
 }
