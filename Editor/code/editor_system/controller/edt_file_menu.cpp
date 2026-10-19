@@ -82,8 +82,8 @@ void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::functio
 			return;
 		}
 		if (!m_hooks.level_path().empty()) {
-			invoke("file.save", json::object{});
-			action(true);
+			// A failed write must not continue into New/Exit: the changes would be lost.
+			if (invoke("file.save", json::object{})) action(true);
 			return;
 		}
 		// Untitled level: Save-As runs first, the action follows a successful write.
@@ -104,8 +104,10 @@ void edt::file_menu::new_level()
 
 void edt::file_menu::exit()
 {
-	// A second close request (the X clicked again) must not stack another prompt behind the first.
+	// A second close request (the X clicked again) must not stack another prompt behind the first, nor
+	// one on top of a Save As that the first prompt's "Save" opened.
 	if (m_exit_prompt_id && m_dialogs.is_pending(*m_exit_prompt_id)) return;
+	if (m_save_as_id && m_dialogs.is_pending(*m_save_as_id)) return;
 	m_exit_prompt_id = guard_unsaved([this](bool discard) { invoke("file.exit", json::object{ { "discard_unsaved", discard } }); });
 }
 
@@ -207,7 +209,7 @@ void edt::file_menu::register_actions()
 		.execute = [this](const json::value&) {
 			if (!m_hooks.has_scene()) return action_result::failure("failed", "no level is loaded");
 			if (m_hooks.level_path().empty()) return action_result::failure("failed", "the level has no path yet: use file.save_as");
-			m_hooks.quick_save();
+			if (!m_hooks.quick_save()) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
 		},
 		.activate = [this] { quick_save(); } });

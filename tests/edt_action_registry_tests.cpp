@@ -89,7 +89,7 @@ struct file_menu_fixture
 		hooks.is_dirty = [this] { return dirty; };
 		hooks.level_path = [this] { return path; };
 		hooks.new_level = [this] { calls.push_back("new"); };
-		hooks.quick_save = [this] { calls.push_back("quick_save"); };
+		hooks.quick_save = [this] { calls.push_back("quick_save"); return true; };
 		hooks.save_level_as = [this](const std::string& p) { calls.push_back("save_as:" + p); return save_ok; };
 		hooks.discard_changes = [this] { dirty = false; };
 		hooks.load_level = [this](const std::filesystem::path& p) { calls.push_back("load:" + p.generic_string()); };

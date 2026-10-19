@@ -19,7 +19,7 @@ namespace edt
 		std::function<bool()> is_dirty;
 		std::function<std::string()> level_path; // res-relative path of the saved level, empty if untitled
 		std::function<void()> new_level;
-		std::function<void()> quick_save;     // overwrite the saved level
+		std::function<bool()> quick_save;     // overwrite the saved level, true if written
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user

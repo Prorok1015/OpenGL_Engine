@@ -90,7 +90,11 @@ struct menu_fixture : dialog_fixture
 		hooks.is_dirty = [this] { return dirty; };
 		hooks.level_path = [this] { return path; };
 		hooks.new_level = [this] { calls.push_back("new"); };
-		hooks.quick_save = [this] { calls.push_back("quick_save"); dirty = false; };
+		hooks.quick_save = [this] {
+			calls.push_back("quick_save");
+			if (quick_save_ok) dirty = false;
+			return quick_save_ok;
+		};
 		hooks.save_level_as = [this](const std::string& p) {
 			calls.push_back("save_as:" + p);
 			if (save_ok) dirty = false;
@@ -119,6 +123,7 @@ struct menu_fixture : dialog_fixture
 	bool has_scene = true;
 	bool dirty = true;
 	bool save_ok = true;
+	bool quick_save_ok = true;
 	std::string path;
 	std::vector<std::string> calls;
 	edt::file_menu_hooks hooks;
@@ -492,6 +497,52 @@ BOOST_AUTO_TEST_CASE(WindowClose_WhenClean_ClosesWithoutAsking)
 	BOOST_TEST(editor.window->is_shutdown());
 	BOOST_TEST(service.pending() == 0u);
 	BOOST_TEST((calls == std::vector<std::string>{ "exit" }));
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhenDirty_FailedSaveKeepsTheEditorOpen)
+{
+	path = "levels/a.desc";
+	quick_save_ok = false;
+	closing_editor editor(*this);
+	answer_unsaved(edt::unsaved_choice::save);
+	editor.windows.request_close(*editor.window);
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "quick_save" }));
+	BOOST_TEST(!editor.window->is_shutdown());
+}
+
+BOOST_AUTO_TEST_CASE(New_WhenDirty_FailedSaveDoesNotCreate)
+{
+	path = "levels/a.desc";
+	quick_save_ok = false;
+	answer_unsaved(edt::unsaved_choice::save);
+	menu->new_level();
+	drain();
+	BOOST_TEST((calls == std::vector<std::string>{ "quick_save" }));
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_WhileSaveAsIsOpen_AsksNothingMore)
+{
+	closing_editor editor(*this);
+	editor.menu.save_level(); // Save As dialog on screen
+	BOOST_TEST(service.pending() == 1u);
+	editor.windows.request_close(*editor.window);
+	BOOST_TEST(service.pending() == 1u);
+	BOOST_TEST(!editor.window->is_shutdown());
+}
+
+BOOST_AUTO_TEST_CASE(WindowClose_AfterTheMenuIsGone_DoesNothing)
+{
+	wnd::null_window_system windows;
+	auto window = windows.get_active_window();
+	{
+		edt::action_registry local_actions;
+		edt::file_menu local(service, local_actions, hooks);
+		local.attach_window_close(windows);
+	}
+	windows.request_close(*window);
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(calls.empty());
 }
 
 BOOST_AUTO_TEST_CASE(WindowClose_RequestedAgainWhileThePromptIsUp_AsksOnce)

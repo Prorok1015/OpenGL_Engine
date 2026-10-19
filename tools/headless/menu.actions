@@ -1,6 +1,5 @@
+# Save Level As (Ctrl+Shift+S): the File menu items shifted, a click would hit Save instead.
 sleep 18
-click 25 29
-sleep 1
-click 50 87
+key ctrl+shift+s
 sleep 2
 shot headless_out/checklist/51_save_dialog.png

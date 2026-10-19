@@ -188,7 +188,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
 	};
 	hooks.new_level = [this] { m_level_ctrl.new_level(); };
-	hooks.quick_save = [this] { m_level_ctrl.quick_save_level(); };
+	hooks.quick_save = [this] { return m_level_ctrl.quick_save_level(); };
 	hooks.save_level_as = [this](const std::string& rel_path) { return m_level_ctrl.save_level_as(rel_path); };
 	hooks.discard_changes = [this] { m_state.is_dirty = false; };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
