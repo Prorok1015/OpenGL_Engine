@@ -44,8 +44,9 @@ struct draw_packet_fixture : test_util::null_engine_fixture
 			auto view = w.state().view<scn::name_component, scn::mesh_component, scn::geometry_component,
 				scn::material_desc_component, scn::world_transform>();
 			for (auto&& [ent, name, mesh, geom, mat, trans] : view.each()) {
-				if (!mat.mlt_desc) continue;
-				const auto queue = mat.mlt_desc->queue;
+				const auto desc = mat.mlt_desc.get();
+				if (!desc) continue;
+				const auto queue = desc->queue;
 				if (queue == scn::pass_queue::OPAQUE || queue == scn::pass_queue::MIX) world.opaque.push_back(bytes_of(trans.world));
 				if (queue == scn::pass_queue::TRANSPARENT || queue == scn::pass_queue::MIX) world.transparent.push_back(bytes_of(trans.world));
 			}
