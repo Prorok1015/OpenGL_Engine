@@ -547,6 +547,10 @@ jobs:
             exit 1
           fi
 
+      # System libraries found by find_library (GLFW: rt, m) must not be exported by full path (#239).
+      - name: Check the package has no absolute paths
+        run: tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
+
       - name: Configure consumer
         run: |
           cmake -S tests/package_consumer -B build/consumer -G Ninja -DCMAKE_BUILD_TYPE=Debug \
@@ -620,6 +624,9 @@ jobs:
             echo "::error::installed package config references the workspace"
             exit 1
           fi
+
+      - name: Check the package has no absolute paths
+        run: bash tools/ci/check_sdk_abs_paths.sh "${SDK_PREFIX}"
 
       - name: Configure consumer
         run: |
