@@ -115,8 +115,8 @@ namespace res
 
 		// Any thread. Drops the cache entries of the tag and of everything built from it (the reverse edges of the
 		// dependency graph, transitively) right away. The watchers are called later on the main thread
-		// (task_system::drain_main): those registered before the signal and still registered by then, each tag once
-		// per drain, parents before the resources that depend on them.
+		// (task_system::drain_main), one task per signal: those registered before the signal and still registered by
+		// then, each tag of the batch once, parents before the resources that depend on them.
 		void signal_changed(const res::tag& tag);
 
 		template<class T, class... ARGS>
@@ -260,7 +260,6 @@ namespace res
 		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
 		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
-		void deliver_pending();
 		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
 		// lands in between still reaches `dependent`.
 		void record_dependencies(const res::tag& dependent, const std::vector<res_dep>& declared);
@@ -386,10 +385,6 @@ namespace res
 		// (what signal_changed follows) and tag -> its dependencies (to replace them when the tag loads again).
 		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
 		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
-		// Signalled tags whose watchers wait for the main-thread drain, in delivery order; guarded by m_cache_mutex.
-		std::vector<std::pair<res::tag, std::uint64_t>> m_pending_delivery;
-		bool m_delivery_scheduled = false;
-
 		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
 		std::unique_ptr<wait_graph> m_graph;
 

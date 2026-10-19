@@ -585,40 +585,26 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
 }
 
 void res::resource_system::signal_changed(const res::tag &tag) {
-  bool schedule = false;
+  std::vector<res::tag> batch;
+  std::uint64_t epoch = 0;
   {
     std::unique_lock lock(m_cache_mutex);
-    const std::uint64_t epoch = ++m_watch_epoch;
-    for (const auto &changed : changed_batch(tag)) {
+    batch = changed_batch(tag);
+    for (const auto &changed : batch) {
       m_cache.erase_tag(changed);
-      // Still waiting from an earlier signal: it moves to this batch's position, so that a parent is never
-      // delivered after what depends on it, and it is delivered once.
-      std::erase_if(m_pending_delivery, [&changed](const auto &entry) { return entry.first == changed; });
-      m_pending_delivery.emplace_back(changed, epoch);
     }
-    schedule = !m_delivery_scheduled;
-    m_delivery_scheduled = true;
+    epoch = ++m_watch_epoch;
   }
 
-  if (schedule) {
-    m_tasks.post_main([this, alive = m_lifetime.token()]() {
-      if (!alive.expired()) {
-        deliver_pending();
-      }
-    });
-  }
-}
-
-void res::resource_system::deliver_pending() {
-  std::vector<std::pair<res::tag, std::uint64_t>> pending;
-  {
-    std::unique_lock lock(m_cache_mutex);
-    pending.swap(m_pending_delivery);
-    m_delivery_scheduled = false;
-  }
-  for (const auto &[tag, epoch] : pending) {
-    deliver_to_watchers(tag, epoch);
-  }
+  // One task per signal, the batch in one piece: its order is the delivery order.
+  m_tasks.post_main([this, batch = std::move(batch), epoch, alive = m_lifetime.token()]() {
+    if (alive.expired()) {
+      return;
+    }
+    for (const auto &changed : batch) {
+      deliver_to_watchers(changed, epoch);
+    }
+  });
 }
 
 void res::resource_system::deliver_to_watchers(const res::tag &tag,

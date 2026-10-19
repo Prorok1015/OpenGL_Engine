@@ -318,7 +318,7 @@ BOOST_AUTO_TEST_CASE(ChildThatNoLongerNeedsTheParent_IsNotFollowedAnyMore)
 	BOOST_TEST(rs->require<node_resource>(c).get_control_block() == second.get_control_block());
 }
 
-BOOST_AUTO_TEST_CASE(SignalsOfOneDrain_DeliverEachTagOnceAndParentsFirst)
+BOOST_AUTO_TEST_CASE(EachSignalDeliversItsOwnBatchInOneMainTask)
 {
 	const auto p = node("p.node", "p1");
 	const auto c = node("c.node", "c", { p });
@@ -326,11 +326,11 @@ BOOST_AUTO_TEST_CASE(SignalsOfOneDrain_DeliverEachTagOnceAndParentsFirst)
 	pump();
 	watch({ p, c });
 
-	rs->signal_changed(c); // the child's own file changed together with the parent's
 	rs->signal_changed(p);
-	BOOST_TEST(tasks.drain_main() == 1u);
+	rs->signal_changed(p);
+	BOOST_TEST(tasks.drain_main() == 2u);
 
-	const std::vector<std::string> expected{ p.string(), c.string() };
+	const std::vector<std::string> expected{ p.string(), c.string(), p.string(), c.string() };
 	BOOST_CHECK_EQUAL_COLLECTIONS(delivered.begin(), delivered.end(), expected.begin(), expected.end());
 	pump();
 }
