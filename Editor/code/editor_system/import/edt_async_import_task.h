@@ -2,7 +2,9 @@
 #include <snk/resource/res_tag.h>
 #include <boost/json.hpp>
 #include <filesystem>
-#include <future>
+#include <cstdint>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace edt {
@@ -25,11 +27,15 @@ namespace edt {
 		std::string                        error;
 	};
 
-	// Held by editor_system to poll a running import.
+	// Held by editor_system while an import job runs; filled by the job's on_done on the main thread.
 	struct async_import_token {
-		std::future<import_intermediate>  future;
+		std::uint64_t                     job = 0;
 		std::string                       display_name;
 		float                             spinner_t = 0.f;
+		bool                              finished = false;
+		std::optional<import_intermediate> intermediate;
+		// Set when the job itself failed (exception); a failed import reports through intermediate->error.
+		std::string                       failure;
 	};
 
 } // namespace edt

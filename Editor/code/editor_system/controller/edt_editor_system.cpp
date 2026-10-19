@@ -38,7 +38,6 @@
 #include <snk/config/cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
-#include <future>
 #include <fstream>
 
 namespace {
@@ -84,7 +83,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
-		data.require<scn::context_manager>());
+		data.require<scn::context_manager>(), data.require<ds::task_system>());
+	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});
@@ -231,9 +231,21 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 
 	m_import_token = std::make_unique<edt::async_import_token>();
 	m_import_token->display_name = abs_path.filename().string();
-	m_import_token->future = std::async(std::launch::async,
-		[this, abs_path]() -> edt::import_intermediate {
-			return m_model_importer->import_background(abs_path);
+	// compute lane: assimp parsing and mesh building are CPU-bound; the io lane has two threads for blocking files.
+	m_import_token->job = m_context->jobs().start(ds::lane::compute,
+		{ "Import " + m_import_token->display_name, "import" }, m_lifetime,
+		[importer = m_model_importer.get(), abs_path](ds::task_context& ctx) -> edt::import_intermediate {
+			ctx.throw_if_stopped();
+			return importer->import_background(abs_path);
+		},
+		[this](ds::task_result<edt::import_intermediate>& result) {
+			if (!m_import_token) return;
+			m_import_token->finished = true;
+			if (result.ok()) {
+				m_import_token->intermediate = std::move(*result.value);
+			} else {
+				m_import_token->failure = result.error;
+			}
 		});
 	editor_layer->register_implicit("edt/import_model", [this] { return poll_import_pipeline(); });
 }
@@ -241,9 +253,10 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 bool edt::editor_system::poll_import_progress()
 {
 	auto& token = *m_import_token;
-	bool finished = token.future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+	// Not running and not finished: the job was cancelled and its result discarded.
+	const bool waiting = !token.finished && m_context->jobs().is_running(token.job);
 
-	if (!finished) {
+	if (waiting) {
 		ImGui::OpenPopup("Importing##edt_import");
 		if (ImGui::BeginPopupModal("Importing##edt_import", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
@@ -265,7 +278,15 @@ bool edt::editor_system::poll_import_progress()
 		ImGui::EndPopup();
 	}
 
-	auto intermediate = token.future.get();
+	if (!token.intermediate) {
+		if (!token.failure.empty()) {
+			egLOG("Editor/Import", "Async import failed: {}", token.failure);
+		}
+		m_import_token.reset();
+		return false;
+	}
+
+	auto intermediate = std::move(*token.intermediate);
 	m_import_token.reset();
 
 	if (!intermediate.error.empty()) {
