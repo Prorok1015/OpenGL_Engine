@@ -48,8 +48,6 @@ namespace edt
 		void for_each(const std::function<void(document&)>& fn);
 
 	private:
-		static void assign_id(document& doc, document_id id) { doc.m_id = id; }
-
 		scene_document* m_scene;
 		editor_events& m_events;
 		res::resource_system& m_resources;

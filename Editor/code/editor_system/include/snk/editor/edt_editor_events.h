@@ -90,13 +90,13 @@ namespace edt
 			}
 		}
 
-	private:
-		template<class... Args> friend class signal;
+		// Made by signal::subscribe; `disconnect` runs once, on disconnect() or destruction.
 		explicit connection(std::function<void()> disconnect)
 			: m_disconnect(std::move(disconnect))
 		{
 		}
 
+	private:
 		std::function<void()> m_disconnect;
 	};
 

@@ -40,8 +40,10 @@ namespace edt
 		virtual save_result save() { return save_result::failure("the document cannot be saved"); }
 		virtual save_result save_as(const res::tag&) { return save_result::failure("the document cannot be saved"); }
 
+		// Called once by the document_manager that takes the document over; nothing else assigns ids.
+		void assign_id(document_id id) { m_id = id; }
+
 	private:
-		friend class document_manager;
 		document_id m_id = 0;
 	};
 }

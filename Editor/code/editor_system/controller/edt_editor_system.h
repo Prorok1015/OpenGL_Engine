@@ -1,14 +1,17 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
-#include "edt_init_helpers.h"
+#include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
@@ -40,13 +43,9 @@ namespace edt {
 	class asset_browser_panel;
 	class prefab_editor_panel;
 	class prefab_document;
-	struct async_import_token;
 
 	class editor_system
 	{
-		friend void init_helpers::setup_viewport_panel(
-			std::shared_ptr<viewport_panel>&, inp::input_router&, editor_system&, scene_document&,
-			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
 		// Closes the prefab preview and releases the scene document in the editor_context before its members die.
@@ -83,12 +82,27 @@ namespace edt {
 		std::unique_ptr<edt::model_importer> m_model_importer;
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
-		std::unique_ptr<edt::async_import_token> m_import_token;
-		// Owner of the job callbacks; after m_import_token and the importer/dialog they touch, so it dies (and cancels) first.
+		// The import in flight (m_importing); the job's on_done fills m_import_result or m_import_failure on the main thread.
+		bool m_importing = false;
+		bool m_import_finished = false;
+		std::uint64_t m_import_job = 0;
+		std::string m_import_name;
+		float m_import_spinner_t = 0.f;
+		std::optional<import_intermediate> m_import_result;
+		// Set when the job itself failed (exception); a failed import reports through m_import_result->error.
+		std::string m_import_failure;
+		// Owner of the job callbacks; after the import state and the importer/dialog they touch, so it dies (and cancels) first.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		void start_import(const std::filesystem::path& abs_path);
 		bool poll_import_pipeline();
 		bool poll_import_progress();
+		void finish_import();
+
+		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
+		void create_panels(bool capture_log);
+		void create_viewport_panel();
+		void wire_controller_callbacks();
+		void wire_panel_callbacks();
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;

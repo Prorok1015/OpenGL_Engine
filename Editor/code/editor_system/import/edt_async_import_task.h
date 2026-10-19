@@ -3,7 +3,6 @@
 #include <boost/json.hpp>
 #include <filesystem>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -25,17 +24,6 @@ namespace edt {
 
 		// Non-empty means failure.
 		std::string                        error;
-	};
-
-	// Held by editor_system while an import job runs; filled by the job's on_done on the main thread.
-	struct async_import_token {
-		std::uint64_t                     job = 0;
-		std::string                       display_name;
-		float                             spinner_t = 0.f;
-		bool                              finished = false;
-		std::optional<import_intermediate> intermediate;
-		// Set when the job itself failed (exception); a failed import reports through intermediate->error.
-		std::string                       failure;
 	};
 
 } // namespace edt
