@@ -12,7 +12,7 @@ edt::document_manager::document_manager(scene_document& scene, editor_events& ev
 	, m_resources(resources)
 	, m_descs(descs)
 {
-	assign_id(*m_scene, m_next_id++);
+	m_scene->assign_id(m_next_id++);
 	m_scene->bind_events(&m_events);
 	m_active = m_scene->id();
 }
@@ -70,7 +70,7 @@ edt::prefab_document& edt::document_manager::open_prefab(const res::tag& prefab_
 
 	m_preview->open(prefab_tag);
 	if (m_preview->is_open()) {
-		assign_id(*m_preview, m_next_id++);
+		m_preview->assign_id(m_next_id++);
 		m_events.document_opened.emit(m_preview->id());
 		set_active(m_preview->id());
 	}

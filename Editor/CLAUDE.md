@@ -14,13 +14,13 @@ Editor/
     │   └── edt_camera_redirect.cpp/h # redirects backbuffer cameras to textures (editor shows them in the viewport)
     │
     ├── controller/                   # Editor controllers (decomposed from editor_system)
-    │   ├── edt_editor_system.cpp/h   # thin coordinator: init, panel wiring, async orchestration
+    │   ├── edt_editor_system.cpp/h   # composition root: creates the services and editor_context, panels, wires callbacks, registers the built-ins, async orchestration
     │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
     │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
     │   ├── edt_world_controller.cpp/h # switch/create world
     │   ├── edt_scene_document.h/.cpp # scene_document: the level being edited, dirty flag, commit()
     │   ├── edt_prefab_document.h/.cpp # prefab_document: read-only prefab preview, owns the preview:<tag> set
-    │   ├── edt_editor_camera.h       # camera state POD
+    │   ├── edt_editor_camera.cpp/h   # camera state POD, save_camera_state / inject_camera
     │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace (main menu + default layout from the editor_context registries)
     │
     ├── panels/                       # 7 UI panels, all extend panel_base
@@ -33,7 +33,7 @@ Editor/
     │   ├── edt_model_importer.cpp/h
     │   ├── edt_asset_exporter.cpp/h
     │   ├── edt_asset_export_dialog.cpp/h
-    │   ├── edt_async_import_task.h
+    │   ├── edt_async_import_task.h   # import_intermediate: background-thread import result
     │   └── edt_filesystem_assimp_io.cpp/h
     │
     ├── gizmo/                        # Transform gizmo
