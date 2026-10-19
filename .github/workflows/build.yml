@@ -404,7 +404,7 @@ jobs:
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/two_worlds/final.png \
             -- --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/two_worlds/final.png headless_out/two_worlds/editor.log \
-            200x200+940+260 0.03
+            200x200+940+260 0.03 tools/headless/reference/two_worlds.png
 
       - name: Upload screenshots, diff images and logs
         if: always()
