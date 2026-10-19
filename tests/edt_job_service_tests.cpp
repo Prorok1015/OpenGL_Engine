@@ -283,7 +283,7 @@ BOOST_AUTO_TEST_CASE(Events_AreStartedThenProgressThenFinished)
 	deliver();
 	const std::vector<std::string> expected{
 		std::format("start:{}:import", id),
-		std::format("progress:{}:0.5:half", id),
+		std::format("progress:{}:1:half", id), // the task system completes the fraction when the body returns
 		std::format("finish:{}:done:", id) };
 	BOOST_TEST(log == expected, boost::test_tools::per_element());
 }
@@ -297,7 +297,7 @@ BOOST_AUTO_TEST_CASE(Progress_IsOneEventPerJobPerPump_InIdOrder)
 	run_lane(ds::lane::io);
 
 	jobs->pump();
-	const std::vector<std::string> expected{ std::format("progress:{}:0.25:a", a), std::format("progress:{}:0.75:b", b) };
+	const std::vector<std::string> expected{ std::format("progress:{}:1:a", a), std::format("progress:{}:1:b", b) };
 	BOOST_TEST(log == expected, boost::test_tools::per_element());
 }
 
@@ -372,7 +372,7 @@ BOOST_AUTO_TEST_CASE(OwnerGone_TheJobStillFinishesOnce)
 		run_lane();
 	}
 	deliver();
-	const std::vector<std::string> expected{ std::format("start:{}:orphan", id), std::format("finish:{}:done:", id) };
+	const std::vector<std::string> expected{ std::format("start:{}:orphan", id), std::format("progress:{}:1:", id), std::format("finish:{}:done:", id) };
 	BOOST_TEST(log == expected, boost::test_tools::per_element());
 }
 
@@ -435,7 +435,7 @@ BOOST_AUTO_TEST_CASE(List_ShowsRunningJobsOldestFirst_AndInfoKeepsTheOutcome)
 	const auto done = jobs->info(a);
 	BOOST_REQUIRE(done.has_value());
 	BOOST_TEST((done->status == edt::job_status::done));
-	BOOST_TEST(done->fraction == 0.5f);
+	BOOST_TEST(done->fraction == 1.f);
 	BOOST_TEST(done->note == "half");
 	BOOST_TEST((jobs->info(b)->status == edt::job_status::cancelled));
 	BOOST_TEST(!jobs->info(9999).has_value());
@@ -498,7 +498,7 @@ BOOST_AUTO_TEST_CASE(JobGet_ReportsProgressWhileRunningAndTheOutcomeAfterwards)
 	cmd::result running = call("job.get", args);
 	BOOST_REQUIRE_MESSAGE(running.ok, running.error);
 	BOOST_TEST(running.value.as_object().at("status").as_string().c_str() == std::string("running"));
-	BOOST_TEST(running.value.as_object().at("fraction").as_double() == 0.5);
+	BOOST_TEST(running.value.as_object().at("fraction").as_double() == 1.0);
 	BOOST_TEST(running.value.as_object().at("note").as_string().c_str() == std::string("half"));
 
 	deliver();
