@@ -353,6 +353,7 @@ struct instance_fixture : node_id_fixture
 			{"__id":"00000000000000b1","name":"twin"},
 			{"__id":"00000000000000b2","name":"twin"},
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/rig.prefab.desc"}}]})"));
+		pump(); // the parent_desc handles of the instances load in the background
 		state.assembler = assembler.get();
 		editor = std::make_unique<edt::scene_editor>(state);
 	}
@@ -471,6 +472,7 @@ BOOST_FIXTURE_TEST_CASE(Override_RecordsSurviveSaveAndLoad, instance_fixture)
 	world().serialize(saved);
 	scn::world_desc loaded;
 	loaded.deserialize(*descs, saved);
+	pump();
 
 	const auto& robot = loaded.get_root().children[2];
 	BOOST_TEST(robot.node_id == 0xc1ull);
@@ -599,6 +601,7 @@ struct nested_fixture : node_id_fixture
 		state.world_names.push_back("w");
 		world().deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/body.prefab.desc"}}]})"));
+		pump(); // the parent_desc handles of the instances load in the background
 		state.assembler = assembler.get();
 	}
 
