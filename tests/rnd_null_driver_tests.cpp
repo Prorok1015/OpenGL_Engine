@@ -214,20 +214,16 @@ BOOST_AUTO_TEST_CASE(VertexArrayKeepsItsBuffers)
 	BOOST_TEST(null_va->index_buffer() == ibo);
 }
 
-BOOST_AUTO_TEST_CASE(ShaderKeepsItsHeadersAndCountsUniforms)
+BOOST_AUTO_TEST_CASE(ShaderKeepsItsHeaders)
 {
 	null::driver driver;
 	auto shader = driver.create_shader(valid_program());
 	BOOST_REQUIRE(shader);
 
-	shader->uniform("model", 1.f);
-	shader->uniform("model", glm::mat4{ 1.f });
-
 	const auto* null_shader = dynamic_cast<null::shader*>(shader.get());
 	BOOST_REQUIRE(null_shader);
 	BOOST_REQUIRE(null_shader->headers().size() == 2u);
 	BOOST_TEST(null_shader->headers().front().title == "a.vert");
-	BOOST_TEST(null_shader->uniform_calls() == 2u);
 }
 
 BOOST_AUTO_TEST_CASE(BindingAPipelineMakesItsShaderTheOneDrawsUse)

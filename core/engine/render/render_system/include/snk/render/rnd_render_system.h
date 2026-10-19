@@ -2,19 +2,28 @@
 #include <snk/common/common.h>
 #include <snk/driver/rnd_driver_interface.h>
 
-#include <snk/render/texture/rnd_texture_manager.h>
-#include <snk/render/shader/rnd_shader_manager.h>
-#include <snk/render/geom/rnd_geom_manager.h>
-#include <snk/render/rnd_per_draw_data.h>
-
 #include <snk/render/rnd_render_pass_interface.h>
 #include <snk/render/rnd_frame_context.h>
+#include <algorithm>
 #include <functional>
+#include <memory>
+#include <vector>
 
-namespace scn { class skybox_desc; }
-namespace rnd { class skinning_manager; }
-namespace rnd { struct material_compiler_interface; }
+namespace desc { class desc_system; }
 namespace res { class resource_system; }
+
+// The managers are the renderer's own: the header only names them. A caller that needs the texture manager
+// includes <snk/render/texture/rnd_texture_manager.h>; the shader and geometry managers are not public.
+namespace rnd
+{
+	class texture_manager;
+	class ShaderManager;
+	class geom_manager;
+	class per_draw_data;
+	class material_groups;
+	class skinning_manager;
+	struct material_compiler_interface;
+}
 
 namespace rnd
 {
@@ -24,24 +33,21 @@ namespace rnd
 	{
 	public:
 		render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d, res::resource_system& res);
-		~render_system() = default;
+		~render_system();
 		render_system(const render_system&) = delete;
 		render_system(render_system&&) = delete;
 		render_system& operator= (const render_system&) = delete;
 		render_system& operator= (render_system&&) = delete;
-		
-		const rnd::texture_manager& get_texture_manager() const { return texture_manager; }
-		rnd::texture_manager& get_texture_manager() { return texture_manager; }
-		const rnd::ShaderManager& get_shader_manager() const { return shader_manager; }
-		rnd::ShaderManager& get_shader_manager() { return shader_manager; }
-		const rnd::geom_manager& get_geom_manager() const { return geom_manager; }
-		rnd::geom_manager& get_geom_manager() { return geom_manager; }
 
+		const rnd::texture_manager& get_texture_manager() const { return *m_textures; }
+		rnd::texture_manager& get_texture_manager() { return *m_textures; }
+
+		// Runs the passes over the packets of `context`. Each pass gets a render_context for the frame, which
+		// hides the managers behind it.
 		void render_frame(frame_context& context) const;
 
-		// Inject the render managers into the per-frame context so the scene extractor and the
-		// render passes read them from frame_context instead of the rnd::get_system() singleton
-		// (EPIC-49 US-49-6). Call once per frame before build_frame / render_frame.
+		// Gives the extract stage the services it needs (frame_context). Call once per frame before
+		// build_frame / render_frame.
 		void begin_frame(frame_context& context);
 
 		void add_render_pass(std::shared_ptr<render_pass_interface> pass) {
@@ -64,17 +70,12 @@ namespace rnd
 		rnd::skinning_manager* m_skinning_manager = nullptr;
 		std::shared_ptr<material_compiler_interface> m_material_compiler;
 		std::unique_ptr<rnd::driver::driver_interface> drv = nullptr;
-		rnd::texture_manager texture_manager;
-		rnd::ShaderManager shader_manager;
-		rnd::geom_manager geom_manager;
-		rnd::per_draw_data draw_data;
+		std::unique_ptr<rnd::texture_manager> m_textures;
+		std::unique_ptr<rnd::ShaderManager> m_shaders;
+		std::unique_ptr<rnd::geom_manager> m_geometry;
+		std::unique_ptr<rnd::per_draw_data> m_draw_data;
+		std::unique_ptr<rnd::material_groups> m_materials;
 
 		std::vector<std::shared_ptr<render_pass_interface>> render_passes;
 	};
-
-	// Sets the material's samplers and uniforms on the program of the pipeline bound for `variant`.
-	inline void configure_pass(const frame_context& context, variant_id variant, const compiled_material& material)
-	{
-		context.shaders->apply(variant, material.params);
-	}
 }

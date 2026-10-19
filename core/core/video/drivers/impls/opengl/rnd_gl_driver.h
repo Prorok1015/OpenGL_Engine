@@ -34,6 +34,7 @@ namespace rnd::driver::gl
 		virtual void begin_frame() override;
 		virtual const binding_table& bindings() const override { return per_type_binding_table; }
 		virtual std::size_t uniform_offset_alignment() const override;
+		virtual std::size_t storage_offset_alignment() const override;
 
 		virtual buffer_handle create_buffer(const buffer_desc& desc) override;
 		virtual void destroy_buffer(buffer_handle buffer) override;
@@ -114,6 +115,7 @@ namespace rnd::driver::gl
 		state_cache m_state;
 		std::uint64_t m_frame = 0;
 		mutable std::optional<std::size_t> m_uniform_offset_alignment;
+		mutable std::optional<std::size_t> m_storage_offset_alignment;
 		bind_group_layout_cache m_layouts;
 		slot_table<buffer_tag, gl_buffer> m_buffers;
 		slot_table<bind_group_tag, gl_group> m_groups;

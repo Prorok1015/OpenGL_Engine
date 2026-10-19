@@ -3,9 +3,10 @@
 
 std::vector<uint32_t> rnd::skinning_manager::build_indices(const res::tag& skin) const
 {
+     ++m_index_builds;
      auto it = m_weights_registry.find(skin);
      if (it == m_weights_registry.end()) return {};
-     const auto& columns = it->second;
+     const auto& columns = it->second.columns;
 
      uint32_t numColumns = static_cast<uint32_t>(columns.size());
 

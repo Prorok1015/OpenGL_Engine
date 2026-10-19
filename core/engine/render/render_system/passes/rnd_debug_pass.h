@@ -12,7 +12,7 @@ class debug_pass : public render_pass_interface {
 public:
 	explicit debug_pass(res::resource_system& res_sys);
 
-	void execute(frame_context& context, driver::driver_interface& drv) override;
+	void execute(render_context& context, driver::driver_interface& drv) override;
 
 private:
 	void ensure_resources(driver::driver_interface& drv);
