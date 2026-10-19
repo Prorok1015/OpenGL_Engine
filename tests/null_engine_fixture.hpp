@@ -12,6 +12,7 @@
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/application/application.h>
+#include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/config/cfg_api.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
@@ -103,6 +104,8 @@ struct null_engine_fixture
 		auto ecs_input = std::make_shared<inp::ecs_input_manager>();
 		inp::register_ecs_input_system(sfactory, ecs_input);
 
+		// The process-wide registry core_module makes: render_init registers viewport.capture into it.
+		storage.construct<cmd::command_registry>();
 		set_render_validate(validate);
 		engine::render::render_init(storage);
 		scn::scene_init(storage);

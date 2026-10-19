@@ -11,6 +11,7 @@
 #include <snk/application/app_loop_service.h>
 #include <snk/common/engine_assert.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/game/gs_capture_on_settled.h>
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_consumable_listener.h>
@@ -44,6 +45,7 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 	auto& stages = data.require<app::frame_stage_registry>();
 	gs::register_scene_frame_stages(stages);
 	gs::register_platform_frame_stages(stages);
+	gs::register_capture_on_settled(stages);
 	if (data.require<app::deterministic_time>().enabled()) {
 		// The editor/game builds its worlds synchronously once the level desc is loaded, which is also
 		// when the animation controllers start counting.

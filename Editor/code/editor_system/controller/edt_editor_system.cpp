@@ -28,6 +28,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
@@ -173,6 +174,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	});
 	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_state); });
 	add_panel(m_game_view_panel, dock_slot::center, cfg_show_game_view);
+	// viewport.capture names the two views by what the panels show; the engine knows only these ids.
+	if (data.has_value<rnd::capture_service>()) {
+		auto& capture = data.require<rnd::capture_service>();
+		m_registrations.push_back(capture.add_target("scene", [this] {
+			return m_rnd.get_texture_manager().find(viewport_panel::render_target_tag());
+		}));
+		m_registrations.push_back(capture.add_target("game", [this]() -> rnd::driver::texture_interface* {
+			const auto& target = m_game_view_panel->render_target();
+			return target ? m_rnd.get_texture_manager().find(*target) : nullptr;
+		}));
+	}
 	add_panel(m_console_panel, dock_slot::bottom_right, true);
 	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
 	add_panel(m_prefab_panel, dock_slot::floating, false);
