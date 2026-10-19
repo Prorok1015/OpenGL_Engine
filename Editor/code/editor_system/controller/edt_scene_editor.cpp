@@ -1,7 +1,7 @@
 #include "edt_scene_editor.h"
 #include "edt_shared_state.h"
 #include "edt_override_edit.h"
-#include <snk/scene/level/scn_level.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/scn_model.h>
@@ -232,18 +232,18 @@ void edt::scene_editor::serialize_and_push()
 		? *m_state.active_world_name()
 		: std::string(world_desc->get_name());
 
-	scn::level& lvl = ctx_mgr->get_level();
-	if (!lvl.has_world(world_name))
+	scn::context_set& lvl = ctx_mgr->level_set();
+	if (!lvl.has(world_name))
 		return;
 
 	{
-		scn::world& world = lvl.get_world(world_name);
+		scn::world_context& world = lvl.get(world_name);
 		if (on_save_camera) on_save_camera(world.state());
 	}
 	// TODO: Better just save the world on a disk. hot reload system will take care of reloading it in the editor and the game.
-	lvl.reload_world(world_name, *world_desc, *m_state.sfactory, *m_state.assembler);
+	lvl.reload_context(world_name, *world_desc, *m_state.sfactory, *m_state.assembler);
 
-	scn::world& world = lvl.get_world(world_name);
+	scn::world_context& world = lvl.get(world_name);
 	if (on_inject_camera) on_inject_camera(world.state());
 
 	if (on_after_push) on_after_push();
@@ -258,7 +258,7 @@ void edt::scene_editor::sync_ecs_transforms_to_desc()
 
 	m_state.touch_descs();
 	auto& children = world_desc->get_root().children;
-	auto& reg = ctx_mgr->get_level().get_world(*world_name).state();
+	auto& reg = ctx_mgr->level_set().get(*world_name).state();
 	reg.view<scn::node_id_component, scn::local_transform>().each(
 		[&children](const scn::node_id_component& id, const scn::local_transform& lt) {
 			if (id.path.empty()) return;

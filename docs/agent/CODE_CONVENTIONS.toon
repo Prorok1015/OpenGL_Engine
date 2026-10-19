@@ -27,7 +27,7 @@ format: prefix_name.hpp / prefix_name.cpp
 where_prefix_is: namespace abbreviation (2-4 chars)
 examples:
   ✅ ds_store.hpp, ds_fixed_vector.hpp
-  ✅ scn_level.cpp, scn_world.h
+  ✅ scn_context_set.cpp, scn_world.h
   ✅ ecs_world.hpp, ecs_system.cpp
   ❌ Store.hpp, renderer.cpp (no prefix)
   ❌ datastructures.hpp (too long prefix)
@@ -56,13 +56,13 @@ examples:
   struct animation_system : ecs::system_interface { ... }
 
 [INCLUDE_ORDER]
-1. Module header (e.g., <snk/scene/level/scn_level.h>)
+1. Module header (e.g., <snk/scene/level/scn_context_set.h>)
 2. Standard library headers (cmath, vector, etc.)
 3. Third-party headers (glm, boost, entt)
 4. Other project headers (from other modules)
 
 Example:
-  #include <snk/scene/level/scn_level.h>
+  #include <snk/scene/level/scn_context_set.h>
   #include <cmath>
   #include <glm/glm.hpp>
   #include <snk/resource/res_system.h>
@@ -166,10 +166,10 @@ return_codes: Prefer for resource loading failures
 [ECS_PATTERNS]
 system_registration: ecs::system_factory::register_system<&fn>(name, { .phase, .after, .before, .run_in_edit }) — stateful: <&T::fn, T>(name, desc, ctor args...) or <&T::fn>(name, desc, shared_ptr<T>)
 system_interface: empty base (virtual dtor only) — NO update()/initialize() methods
-system_logic: free/member fn; args (entt::view, ecs::bind_res<ID,T>, ctx resources) auto-injected by ecs::invoker
+system_logic: free/member fn; args (entt::view, ctx resources) auto-injected by ecs::invoker
 system_order: explicit — phase (input, pre_update, fixed_update, update, post_update, transform, late_update) + after/before by system name; ties broken by order in world_desc.systems. Argument types never decide order, they only feed Debug access-conflict warnings
-world_creation: one execution plan per world (ecs::build_system_plan), built when the world loads or its system list changes; worlds run in id order; bind_res<WorldID,T> reaches another world's ctx
-modes: scn::level::set_mode(ecs::run_mode::edit|play|pause|step) — edit/pause run only run_in_edit systems
+world_creation: one execution plan per world (ecs::build_system_plan), built when the world loads or its system list changes; contexts run in id order; data between contexts of a set goes through scn::set_channel (WORLD_MESSAGING.md)
+modes: scn::context_set::set_mode(ecs::run_mode::edit|play|pause|step) — edit/pause run only run_in_edit systems
 
 [IMGUI_PATTERNS]
 begin_end_pairing:  # End() ALWAYS called; Begin() result only gates drawing

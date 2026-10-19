@@ -99,10 +99,10 @@ BOOST_AUTO_TEST_CASE(ExtractRenderDataOnHundredMeshes, * tt::disabled())
 {
 	auto& levels = storage.require<scn::context_manager>();
 	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/bench_100_meshes.desc")));
-	BOOST_REQUIRE(levels.get_level().get_world_count() > 0u);
+	BOOST_REQUIRE(levels.level_set().size() > 0u);
 
 	std::size_t skinned = 0;
-	levels.get_level().for_each_world([&skinned](scn::world& w) {
+	levels.level_set().for_each([&skinned](scn::world_context& w) {
 		skinned += w.state().view<scn::skinning_component>().size();
 	});
 	BOOST_TEST(skinned == expected_skinned_count);
