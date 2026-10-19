@@ -1,6 +1,6 @@
 #pragma once
+#include <snk/common/shader_serial.h>
 #include <glm/glm.hpp>
-#include <atomic>
 #include <cstdint>
 #include <string_view>
 #include <variant>
@@ -22,12 +22,6 @@ namespace rnd::driver
 		virtual void uniform(std::string_view name, const uniform_data& val) = 0;
 
 	private:
-		static std::uint64_t next_serial() noexcept
-		{
-			static std::atomic<std::uint64_t> counter{ 0 };
-			return ++counter;
-		}
-
-		const std::uint64_t m_serial = next_serial();
+		const std::uint64_t m_serial = next_shader_serial();
 	};
 }

@@ -299,6 +299,8 @@ void rnd::driver::gl::driver::begin_render_pass(const render_pass_desc& desc)
 {
 	ASSERT_MSG(!m_in_pass, "begin_render_pass inside a render pass");
 	m_in_pass = true;
+	// A pass starts without a pipeline; the cached GL state stays, only the binding goes.
+	m_bound = nullptr;
 	if (desc.debug_name && glad_glPushDebugGroup) {
 		glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, desc.debug_name);
 		m_pass_debug_group = true;
