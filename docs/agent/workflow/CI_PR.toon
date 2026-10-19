@@ -49,6 +49,7 @@ This project:
 - CI tiers: a DRAFT PR runs the fast tier only, 5 checks: Coverage (Linux GCC Debug), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Editor visual smoke (the other jobs show as skipped or do not appear)
 - The Coverage job is blocking (it is the only GCC Debug unit-test run and carries the GL-only and desc byte-stability gates); only its report generation and upload steps are non-blocking
 - Marking the PR ready for review (`ready_for_review`) and every push to the integration branch run the full tier: the fast checks plus Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared, Linux TSan, SDK package (Linux), SDK package (Windows shared)
+- `ready_for_review` starts the full run only if the PR head already contains the tiered workflow; for an older branch, merge the integration branch into it first (a real merge, never an empty commit)
 - Merge only after a complete green run on the non-draft head: green draft checks are not enough, mark the PR ready and wait for the full run; a new push to a non-draft PR re-runs everything
 - Screenshot gate: the visual smoke job fails when a reference diff exceeds the limit (`tools/headless/check_smoke.sh`); reference PNGs change only with the owner's decision
 - MSVC builds without PCH and without `/utf-8`

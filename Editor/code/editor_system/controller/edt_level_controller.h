@@ -100,7 +100,7 @@ namespace edt
 		void new_level();
 		// Writes the level to `rel_path` and makes it the level's saved path; false if nothing is loaded or the write failed.
 		bool save_level_as(const std::string& rel_path);
-		void quick_save_level();
+		bool quick_save_level();
 
 		void finish_level_load(res::res_handle<scn::level_desc>& handle);
 

@@ -1,8 +1,6 @@
-# File > Save Level, replace the path, Save. Edit the 'type' line below (path relative to res://).
+# Save Level As (Ctrl+Shift+S), replace the path, Save. Edit the 'type' line below (path relative to res://).
 sleep 18
-click 25 29
-sleep 1
-click 50 87
+key ctrl+shift+s
 sleep 2
 click 960 540
 sleep 0.5

@@ -37,6 +37,15 @@ std::vector<std::string> labels_of(const std::vector<edt::menu_item_info>& items
 	return out;
 }
 
+// Id of the File menu item that shows `shortcut_text`; empty if there is none.
+std::string file_item_with_shortcut(edt::action_registry& actions, std::string_view shortcut_text)
+{
+	for (const auto& item : actions.items("File")) {
+		if (item.shortcut_text == shortcut_text) return item.id;
+	}
+	return {};
+}
+
 edt::shortcut chord(std::string_view text)
 {
 	auto parsed = edt::shortcut::parse(text);
@@ -80,7 +89,7 @@ struct file_menu_fixture
 		hooks.is_dirty = [this] { return dirty; };
 		hooks.level_path = [this] { return path; };
 		hooks.new_level = [this] { calls.push_back("new"); };
-		hooks.quick_save = [this] { calls.push_back("quick_save"); };
+		hooks.quick_save = [this] { calls.push_back("quick_save"); return true; };
 		hooks.save_level_as = [this](const std::string& p) { calls.push_back("save_as:" + p); return save_ok; };
 		hooks.discard_changes = [this] { dirty = false; };
 		hooks.load_level = [this](const std::filesystem::path& p) { calls.push_back("load:" + p.generic_string()); };
@@ -441,12 +450,14 @@ BOOST_AUTO_TEST_CASE(FileMenu_KeepsItsOrderSeparatorsAndShortcutText)
 	BOOST_TEST((f.actions.menus() == std::vector<std::string>{ "File", "View", "Help" }));
 	const auto items = f.actions.items("File");
 	BOOST_TEST((labels_of(items) == std::vector<std::string>{
-		"New Level", "Open Level...", "Save Level", "Import Model...", "Exit" }));
-	const std::vector<bool> separators{ false, false, false, true, true };
+		"New Level", "Open Level...", "Save Level", "Save Level As...", "Import Model...", "Exit" }));
+	const std::vector<bool> separators{ false, false, false, false, true, true };
 	for (std::size_t i = 0; i < items.size(); ++i) {
 		BOOST_TEST_CONTEXT(items[i].label) {
 			BOOST_CHECK_EQUAL(items[i].separator_before, separators[i]);
-			BOOST_CHECK_EQUAL(items[i].shortcut_text, items[i].label == "Save Level" ? "Ctrl+S" : "");
+			const std::string expected = items[i].label == "Save Level" ? "Ctrl+S"
+				: items[i].label == "Save Level As..." ? "Ctrl+Shift+S" : "";
+			BOOST_CHECK_EQUAL(items[i].shortcut_text, expected);
 			BOOST_CHECK(items[i].enabled);
 		}
 	}
@@ -467,6 +478,49 @@ BOOST_AUTO_TEST_CASE(FileMenu_SaveLevelItemAsksForAPath)
 	f.dialogs.set_auto_answer(answer);
 
 	BOOST_CHECK(f.actions.activate("file.save_as"));
+	f.gui.drain();
+	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(FileMenu_SaveItemOverwritesATitledLevelWithoutADialog)
+{
+	file_menu_fixture f;
+	const std::string id = file_item_with_shortcut(f.actions, "Ctrl+S");
+	BOOST_REQUIRE(!id.empty());
+
+	BOOST_CHECK(f.actions.activate(id));
+	f.gui.drain();
+	BOOST_TEST((f.calls == std::vector<std::string>{ "quick_save" }));
+	BOOST_TEST(f.dialogs.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(FileMenu_SaveItemOnAnUntitledLevelOpensSaveAs)
+{
+	file_menu_fixture f;
+	f.path.clear();
+	const std::string id = file_item_with_shortcut(f.actions, "Ctrl+S");
+	BOOST_REQUIRE(!id.empty());
+
+	BOOST_CHECK(f.actions.activate(id));
+	BOOST_TEST(f.dialogs.pending() == 1u);
+	BOOST_TEST(f.calls.empty());
+
+	edt::dialog_auto_answer answer;
+	answer.save_as_path = "levels/b.desc";
+	f.dialogs.set_auto_answer(answer);
+	f.gui.drain();
+	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(FileMenu_CtrlShiftSDispatchesSaveAsEvenForATitledLevel)
+{
+	file_menu_fixture f;
+	edt::dialog_auto_answer answer;
+	answer.save_as_path = "levels/b.desc";
+	f.dialogs.set_auto_answer(answer);
+
+	BOOST_CHECK_EQUAL(file_item_with_shortcut(f.actions, "Ctrl+Shift+S"), "file.save_as");
+	BOOST_CHECK(f.actions.dispatch(chord("Ctrl+Shift+S")));
 	f.gui.drain();
 	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
 }
@@ -699,7 +753,7 @@ BOOST_AUTO_TEST_CASE(Tools_SkipPlaceholdersButTheMenuStillShowsThem)
 	std::vector<std::string> tools;
 	for (const auto* desc : f.actions.tools()) tools.push_back(desc->id);
 	BOOST_TEST((tools == std::vector<std::string>{
-		"file.new", "file.open", "file.save_as", "file.save", "file.import_model", "file.exit" }));
+		"file.new", "file.open", "file.save", "file.save_as", "file.import_model", "file.exit" }));
 	BOOST_CHECK(f.actions.contains("help.about"));
 	BOOST_TEST((labels_of(f.actions.items("Help")) == std::vector<std::string>{ "About" }));
 }
