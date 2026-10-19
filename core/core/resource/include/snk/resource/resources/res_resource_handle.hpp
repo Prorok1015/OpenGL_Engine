@@ -35,9 +35,14 @@ namespace core::res
             return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
-        // Blocks until the load finished, either way (check is_ready() / has_error() after). Main thread only.
+        // Blocks until the load finished, either way (check is_ready() / has_error() after). Main thread only:
+        // a pool thread that waits for a load can starve the very lane that would run it.
+        // A handle built by hand, without a task_system, can only block on the block.
         void wait() const {
             if (!m_block) return;
+            if (m_block->is_ready() || m_block->has_error()) return;
+            ASSERT_MSG(!ds::task_system::on_worker() || (m_tasks && m_tasks->mode() == ds::policy::manual),
+                "res_handle::wait: waiting for an unfinished load on a task_system worker thread");
             if (m_tasks && m_tasks->mode() == ds::policy::manual) {
                 // Nothing runs in the background, so run the queued loads here. When none is queued the block
                 // may still be waiting for a resolver thread, whose completion queues the next one.

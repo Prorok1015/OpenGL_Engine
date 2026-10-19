@@ -387,6 +387,70 @@ BOOST_AUTO_TEST_CASE(Wait_OnAManualSystemAlsoCoversAResolverThatAnswersLater)
 	BOOST_TEST(handle.get()->str() == "late payload");
 }
 
+BOOST_AUTO_TEST_CASE(SignalChanged_NotifiesOnlyWatchersRegisteredBeforeTheSignal)
+{
+	auto tag = tag_of("epoch.txt");
+	int before = 0, after = 0, owner_before = 0, owner_after = 0;
+	sys->watch(tag, &owner_before, [&](const res::tag&) { ++before; });
+	sys->signal_changed(tag);
+	sys->watch(tag, &owner_after, [&](const res::tag&) { ++after; }); // e.g. the load that follows a store + signal
+	pump();
+	BOOST_TEST(before == 1);
+	BOOST_TEST(after == 0);
+
+	sys->signal_changed(tag);
+	pump();
+	BOOST_TEST(before == 2);
+	BOOST_TEST(after == 1);
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_ReRegisteringAfterTheSignalDropsTheOldNotification)
+{
+	auto tag = tag_of("epoch_again.txt");
+	int calls = 0, owner = 0;
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
+	sys->signal_changed(tag);
+	sys->watch(tag, &owner, [&](const res::tag&) { ++calls; });
+	pump();
+	BOOST_TEST(calls == 0);
+}
+
+BOOST_AUTO_TEST_CASE(SignalChanged_WatcherRemovedByAnEarlierCallbackOfTheSameDeliveryIsSkipped)
+{
+	auto tag = tag_of("mutual.txt");
+	int calls = 0, a = 0, b = 0;
+	sys->watch(tag, &a, [&](const res::tag& t) { ++calls; sys->unwatch(t, &b); });
+	sys->watch(tag, &b, [&](const res::tag& t) { ++calls; sys->unwatch(t, &a); });
+	sys->signal_changed(tag);
+	pump();
+	BOOST_TEST(calls == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Destruction_SettlesLoadsThatNeverRanWithAnError)
+{
+	auto handle = sys->require<res::text_resource>(put("never_ran.txt", "x"));
+	BOOST_REQUIRE(!handle.is_ready());
+	rs.reset(); // cancels the queued load task
+	pump();     // the cancelled task leaves the queue
+	BOOST_TEST(handle.has_error());
+	handle.wait(); // must not hang
+}
+
+BOOST_AUTO_TEST_CASE(Wait_OnAHandleBuiltByHandBlocksOnTheBlock)
+{
+	auto block = std::make_shared<core::res::res_resource_block>();
+	const auto tag = tag_of("by_hand.txt");
+	res::res_handle<res::text_resource> handle(block, tag); // no task_system behind it
+	std::thread settler([&] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		block->set_ready(std::make_shared<res::text_resource>(tag, bytes_of("hand")));
+	});
+	handle.wait();
+	settler.join();
+	BOOST_REQUIRE(handle.is_ready());
+	BOOST_TEST(handle.get()->str() == "hand");
+}
+
 BOOST_AUTO_TEST_CASE(SignalChanged_DeliversWatchersOnTheMainQueueNotInline)
 {
 	auto tag = tag_of("deferred.txt");

@@ -51,38 +51,83 @@ res::resource_system::~resource_system() {
   m_resolvers.clear();
 }
 
-void res::resource_system::run_on_compute(std::function<void()> cb) {
+namespace {
+// Owned by the task body: if the body is destroyed without having run, the block it was to settle gets an error.
+struct unrun_guard {
+  explicit unrun_guard(std::shared_ptr<res::resource_system::resource_handle> b)
+      : block(std::move(b)) {}
+  ~unrun_guard() {
+    if (!ran && block) {
+      block->set_error("Load cancelled");
+    }
+  }
+  std::shared_ptr<res::resource_system::resource_handle> block;
+  bool ran = false;
+};
+} // namespace
+
+void res::resource_system::run_on_compute(std::function<void()> cb,
+                                          std::shared_ptr<resource_handle> block) {
   std::lock_guard lock(m_stop_mutex);
   if (m_stopping) {
+    if (block) {
+      block->set_error("Load cancelled");
+    }
     return;
   }
+  auto guard = std::make_shared<unrun_guard>(std::move(block));
   m_tasks.run(ds::lane::compute, ds::task_desc{"resource load", "resource", false},
-              m_lifetime, [cb = std::move(cb)](ds::task_context &) { cb(); });
+              m_lifetime, [cb = std::move(cb), guard](ds::task_context &) {
+                guard->ran = true;
+                cb();
+              });
 }
 
 void res::resource_system::signal_changed(const res::tag &tag) {
+  std::uint64_t epoch = 0;
   {
     std::unique_lock lock(m_cache_mutex);
     m_cache.erase_tag(tag);
+    epoch = ++m_watch_epoch;
   }
 
-  m_tasks.post_main([this, tag, alive = m_lifetime.token()]() {
+  m_tasks.post_main([this, tag, epoch, alive = m_lifetime.token()]() {
     if (!alive.expired()) {
-      deliver_to_watchers(tag);
+      deliver_to_watchers(tag, epoch);
     }
   });
 }
 
-void res::resource_system::deliver_to_watchers(const res::tag &tag) {
-  std::unordered_map<void *, reload_callback> callbacks;
+void res::resource_system::deliver_to_watchers(const res::tag &tag,
+                                               std::uint64_t signal_epoch) {
+  // Only watchers registered before the signal: a load that follows a signal registers its own watcher.
+  std::vector<std::pair<void *, std::uint64_t>> targets;
   {
     std::shared_lock lock(m_cache_mutex);
     if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
-      callbacks = it->second;
+      for (const auto &[owner, entry] : it->second) {
+        if (entry.epoch < signal_epoch) {
+          targets.emplace_back(owner, entry.epoch);
+        }
+      }
     }
   }
 
-  for (auto &[owner, callback] : callbacks) {
+  for (const auto &[owner, epoch] : targets) {
+    reload_callback callback;
+    {
+      // A previous callback of this delivery may have unwatched (and destroyed) this owner.
+      std::shared_lock lock(m_cache_mutex);
+      auto it = m_watchers.find(tag);
+      if (it == m_watchers.end()) {
+        continue;
+      }
+      auto entry = it->second.find(owner);
+      if (entry == it->second.end() || entry->second.epoch != epoch) {
+        continue;
+      }
+      callback = entry->second.callback;
+    }
     callback(tag);
   }
 }

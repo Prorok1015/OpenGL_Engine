@@ -79,7 +79,7 @@ namespace res
 
 		void watch(const res::tag& tag, void* owner, reload_callback cb) {
 			std::lock_guard lock(m_cache_mutex);
-			m_watchers[tag][owner] = std::move(cb);
+			m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch };
 		}
 
 		void unwatch(const res::tag& tag, void* owner) {
@@ -90,7 +90,7 @@ namespace res
 		}
 
 		// Any thread. Drops the tag's cache entries right away; the watchers are called later on the main thread
-		// (task_system::drain_main), and only those still registered by then.
+		// (task_system::drain_main): those registered before the signal and still registered by then.
 		void signal_changed(const res::tag& tag);
 
 		template<class T, class... ARGS>
@@ -189,7 +189,9 @@ namespace res
 			push_resource_to_cache(key, block);
 
 			if (!exists(tag)) {
-				run_on_compute([this, tag, block]() {
+				// Main thread: serializing may wait for field handles, which a pool thread must not do.
+				m_tasks.post_main([this, tag, block, alive = m_lifetime.token()]() {
+					if (alive.expired()) return;
 					try {
 						auto adapter = find_adapter_recursive<RESOURCE>(tag);
 						if (!adapter) {
@@ -220,8 +222,9 @@ namespace res
 		}
 
 	private:
-		void run_on_compute(std::function<void()> cb);
-		void deliver_to_watchers(const res::tag& tag);
+		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
+		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
+		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
 		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key) {
 			std::unique_lock lock(m_cache_mutex);
@@ -306,8 +309,8 @@ namespace res
 				raw_data_block->wait();
 				adapter_cb();
 			} else {
-				raw_data_block->on_settled([this, adapter_cb](auto&) {
-					run_on_compute(adapter_cb);
+				raw_data_block->on_settled([this, adapter_cb, final_cb](auto&) {
+					run_on_compute(adapter_cb, final_cb);
 				});
 			}
 		}
@@ -369,7 +372,12 @@ namespace res
 		tag_keyed_map<cache_entry> m_cache;
 		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
 
-		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
+		struct watcher {
+			reload_callback callback;
+			std::uint64_t epoch = 0; // m_watch_epoch value at registration
+		};
+		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
+		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
 
 		ds::task_system& m_tasks;
 		std::mutex m_stop_mutex;
