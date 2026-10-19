@@ -5,6 +5,8 @@
 #include <snk/scene/scn_model.h>
 #include "edt_level_controller.h"
 #include "edt_prefab_editor_context.h"
+#include "edt_scene_editor.h"
+#include "edt_world_controller.h"
 #include "edt_shared_state.h"
 #include <chrono>
 #include <memory>
@@ -192,11 +194,15 @@ BOOST_AUTO_TEST_CASE(Save_TheLevelFileDoesNotIncludeThePreview)
 	BOOST_REQUIRE(mgr->load_level(tag));
 	auto level_res = require_loaded<scn::level_desc>(tag);
 	BOOST_REQUIRE(level_res.is_ready());
-	for (const auto& world : level_res->get_worlds()) state.world_descs.push_back(*world.get_sync());
+	// the editor's own load and save path (what Ctrl+S serializes), not a hand-filled list
+	edt::scene_editor scene_ed(state);
+	edt::world_controller world_ctrl(state, *rs, *descs);
+	edt::level_controller level_ctrl(state, *rs, *descs, scene_ed, world_ctrl);
+	level_ctrl.populate_worlds_from_level(level_res);
 	editor->open(prefab_a);
 	BOOST_REQUIRE(editor->is_open());
 
-	const auto json = scn::level_desc::build_json("lv", state.world_descs, *descs);
+	const auto json = level_ctrl.build_level_json();
 	const std::string text = boost::json::serialize(json);
 
 	BOOST_TEST(text.find(std::string{ edt::prefab_editor_context::context_name() }) == std::string::npos);
