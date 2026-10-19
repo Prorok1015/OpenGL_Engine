@@ -163,13 +163,13 @@ BOOST_AUTO_TEST_CASE(DrawsOfAnEarlierCameraSurviveARebuildLaterInTheSameExtract)
 		{
 			nullptr,
 			[&] {
-				// A sampler texture that never loads leaves the material incomplete, so it is rebuilt on
+				// A sampler texture desc that never loads (no such file) leaves the material incomplete, so it is rebuilt on
 				// every visit: the second camera replaces what the first camera's draws still point at.
 				auto cached = snapshot();
 				BOOST_REQUIRE(!cached.empty());
 				auto& source = cached.front().reg->get<scn::material_desc_component>(cached.front().ent);
 				const auto desc = source.mlt_desc.get();
-				desc->samplers_textures.push_back(res::tag::make("textures/__missing_for_the_material_cache_test__.png"));
+				desc->samplers_textures.push_back(res::tag::make("textures/__missing_for_the_material_cache_test__.desc"));
 				for (const auto& e : cached) {
 					auto& mat = e.reg->get<scn::material_desc_component>(e.ent);
 					if (mat.mlt_desc.get() == desc) mat.dirty = true;
