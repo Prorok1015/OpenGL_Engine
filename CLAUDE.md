@@ -59,7 +59,7 @@ Key tech: C++20, OpenGL 4.5+, ImGui, CMake, EnTT ECS, Assimp, Boost 1.84.0
 
 - **Language:** English (code/comments), Russian (docs/epics/)
 - **Namespaces:** 2-4 letter abbrev (`ds`, `ecs`, `scn`, `rnd`, `res`, `edt`, etc.)
-- **Files:** `prefix_name.hpp/.cpp` (e.g. `scn_level.cpp`, `res_system.h`)
+- **Files:** `prefix_name.hpp/.cpp` (e.g. `scn_context_set.cpp`, `res_system.h`)
 - **Private members:** `m_` prefix (`m_worlds`)
 - **Components:** POD structs, optional `_component` suffix
 - **Systems:** Inherit `ecs::system_interface` (auto-registered)
