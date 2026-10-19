@@ -547,6 +547,126 @@ BOOST_AUTO_TEST_CASE(HotReload_SystemsOnlyReloadIgnoresContextsOfOtherKinds)
 	BOOST_TEST(mgr.get_set("preview:p").size() == 1u);
 }
 
+// ---------------------------------------------------------------- previews (#112)
+
+BOOST_AUTO_TEST_CASE(Preview_IsASetOfItsOwnWithOnePreviewContextInEditMode)
+{
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	auto& preview = mgr.create_preview("res://a.prefab.desc", "pv");
+
+	BOOST_TEST(scn::context_manager::preview_set_name("res://a.prefab.desc") == "preview:res://a.prefab.desc");
+	auto* set = mgr.find_set("preview:res://a.prefab.desc");
+	BOOST_REQUIRE(set);
+	BOOST_TEST(set->size() == 1u);
+	BOOST_TEST(set->active());
+	BOOST_TEST((set->mode() == ecs::run_mode::edit));
+	BOOST_TEST((preview.kind() == scn::context_kind::preview));
+	BOOST_TEST((preview.mode() == ecs::run_mode::edit));
+	BOOST_TEST(preview.extract());
+	BOOST_TEST(mgr.find_preview("res://a.prefab.desc") == &preview);
+	BOOST_TEST(mgr.find("preview:res://a.prefab.desc", "pv") == &preview);
+	// the level did not get a context
+	BOOST_TEST(mgr.find("level", "pv") == nullptr);
+	BOOST_TEST(mgr.get_level().get_world_count() == 2u);
+	BOOST_TEST((mgr.get_level().mode() == ecs::run_mode::play)); // the preview's mode is its own
+}
+
+BOOST_AUTO_TEST_CASE(Preview_HasItsOwnTime)
+{
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	auto& preview = mgr.create_preview("p", "pv");
+	auto& level_world = mgr.get_level().get_world("w0");
+
+	mgr.set_mode("level", ecs::run_mode::pause);
+	mgr.update(std::chrono::duration<float>(0.01f));
+	BOOST_TEST(delta_of(level_world) == 0.0f); // frozen
+	BOOST_TEST(delta_of(preview) > 0.0f);      // not affected by the level
+	BOOST_TEST((preview.mode() == ecs::run_mode::edit));
+}
+
+BOOST_AUTO_TEST_CASE(Preview_DestroyRemovesTheSetAndReopeningStartsClean)
+{
+	auto& first = mgr.create_preview("p", "pv");
+	first.state().emplace<scn::name_component>(first.state().create(), scn::name_component{ "pv_ent" });
+	BOOST_REQUIRE(mgr.find_preview("p"));
+
+	mgr.destroy_preview("p");
+	BOOST_TEST(mgr.find_set("preview:p") == nullptr);
+	BOOST_TEST(mgr.find_preview("p") == nullptr);
+	BOOST_TEST(mgr.find_set("level") != nullptr);
+	mgr.destroy_preview("p"); // nothing to destroy: not an error
+
+	auto& again = mgr.create_preview("p", "pv");
+	BOOST_TEST(!has_named(again.state(), "pv_ent"));
+	BOOST_TEST(mgr.get_set("preview:p").size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Preview_CreatingForTheSameTagReplacesThePreviousOne)
+{
+	auto& first = mgr.create_preview("p", "pv");
+	first.state().emplace<scn::name_component>(first.state().create(), scn::name_component{ "old" });
+
+	auto& second = mgr.create_preview("p", "pv");
+
+	BOOST_TEST(mgr.find_preview("p") == &second);
+	BOOST_TEST(!has_named(second.state(), "old"));
+	std::size_t previews = 0;
+	mgr.for_each_set([&previews](scn::context_set& set) {
+		if (set.name().starts_with(scn::context_manager::preview_set_prefix)) ++previews;
+	});
+	BOOST_TEST(previews == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Preview_TagsDoNotShareASet)
+{
+	auto& a = mgr.create_preview("a", "pv");
+	auto& b = mgr.create_preview("b", "pv"); // same context name in another set
+
+	BOOST_TEST(&a != &b);
+	BOOST_TEST(mgr.find_preview("a") == &a);
+	BOOST_TEST(mgr.find_preview("b") == &b);
+
+	mgr.destroy_preview("a");
+	BOOST_TEST(mgr.find_preview("a") == nullptr);
+	BOOST_TEST(mgr.find_preview("b") == &b);
+}
+
+BOOST_AUTO_TEST_CASE(Preview_LevelReloadKeepsItIntactEvenWithANameOfTheLevel)
+{
+	auto tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(tag));
+	auto& preview = mgr.create_preview("p", "w0"); // the name of a level world
+	preview.state().emplace<scn::name_component>(preview.state().create(), scn::name_component{ "pv_ent" });
+	auto* registry = &preview.state();
+
+	for (const char* next : { LEVEL_V3_DIFFERENT_WORLDS, LEVEL_V1 }) { // twice, the second one brings "w0" back
+		put("lv.desc", next);
+		rs->signal_changed(tag);
+		pump();
+		mgr.update(std::chrono::duration<float>(0.001f));
+
+		BOOST_TEST(mgr.find_preview("p") == &preview);
+		BOOST_TEST(&preview.state() == registry);
+		BOOST_TEST(has_named(preview.state(), "pv_ent"));
+		BOOST_TEST(mgr.get_set("preview:p").size() == 1u);
+	}
+	BOOST_REQUIRE(mgr.find("level", "w0"));
+	BOOST_TEST(mgr.find("level", "w0") != &preview);
+	BOOST_TEST((mgr.find("level", "w0")->kind() == scn::context_kind::level));
+}
+
+BOOST_AUTO_TEST_CASE(Preview_TheLevelSetNeverContainsIt)
+{
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	mgr.create_preview("p", "pv");
+
+	mgr.get_set("level").for_each([](scn::world_context& context) {
+		BOOST_TEST((context.kind() != scn::context_kind::preview));
+	});
+	BOOST_TEST(mgr.get_level().get_world_count() == 2u);
+	BOOST_TEST(mgr.get_set("level").desc_world_names().size() == 2u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(ScnWorldWrapAdapterTests, test_util::scene_env)

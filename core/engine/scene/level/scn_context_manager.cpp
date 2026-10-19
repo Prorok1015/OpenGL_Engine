@@ -100,6 +100,38 @@ scn::world_context* scn::context_manager::find(std::string_view set, std::string
 	return target ? target->find(name) : nullptr;
 }
 
+scn::world_context& scn::context_manager::create_preview(std::string_view tag, std::string_view name,
+														  const std::vector<std::string>& systems)
+{
+	const std::string set_name = preview_set_name(tag);
+	if (find_set(set_name)) {
+		destroy_set(set_name);
+	}
+	auto& set = create_set(set_name);
+	// before the context exists: a context takes the mode of its set when it is created
+	set.set_mode(ecs::run_mode::edit);
+	return create_context(set_name, name, context_kind::preview, systems);
+}
+
+void scn::context_manager::destroy_preview(std::string_view tag)
+{
+	const std::string set_name = preview_set_name(tag);
+	if (find_set(set_name)) {
+		destroy_set(set_name);
+	}
+}
+
+scn::world_context* scn::context_manager::find_preview(std::string_view tag) const
+{
+	const auto* set = find_set(preview_set_name(tag));
+	if (!set) return nullptr;
+	scn::world_context* found = nullptr;
+	set->for_each([&found](scn::world_context& context) {
+		if (!found && context.kind() == context_kind::preview) found = &context;
+	});
+	return found;
+}
+
 bool scn::context_manager::load_level(const res::tag& level_tag)
 {
 	auto level_res = m_resource.require_sync<scn::level_desc>(level_tag);
