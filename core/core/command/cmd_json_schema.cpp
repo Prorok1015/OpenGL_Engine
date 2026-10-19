@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <format>
 #include <string_view>
 
@@ -11,8 +13,9 @@ namespace json = boost::json;
 namespace {
 	constexpr std::array<std::string_view, 7> TYPE_NAMES = { "integer", "number", "string", "boolean", "object", "array", "null" };
 
-	constexpr std::array<std::string_view, 10> KEYWORDS = {
-		"type", "properties", "required", "additionalProperties", "enum", "minimum", "maximum", "minLength", "description", "title" };
+	constexpr std::array<std::string_view, 12> KEYWORDS = {
+		"type", "properties", "required", "additionalProperties", "enum", "minimum", "maximum", "minLength", "minProperties", "items",
+		"description", "title" };
 
 	std::size_t char_count(std::string_view utf8)
 	{
@@ -44,6 +47,21 @@ namespace {
 		if (v.is_int64()) return static_cast<double>(v.as_int64());
 		if (v.is_uint64()) return static_cast<double>(v.as_uint64());
 		return v.as_double();
+	}
+
+	// True if the schema's "type" is `name` or a list holding it. A keyword that only means something for one type is
+	// refused on any other, so a schema never validates less than it says.
+	bool declares_type(const json::object& obj, std::string_view name)
+	{
+		const json::value* type = obj.if_contains("type");
+		if (!type) return false;
+		if (type->is_string()) return type->as_string() == name;
+		if (type->is_array()) {
+			for (const auto& entry : type->as_array()) {
+				if (entry.is_string() && entry.as_string() == name) return true;
+			}
+		}
+		return false;
 	}
 
 	std::optional<std::string> check_node(const json::value& schema, const std::string& path)
@@ -87,6 +105,14 @@ namespace {
 				if (auto err = check_node(sub, std::format("{}.{}", path, std::string_view(name)))) return err;
 			}
 		}
+		if (const json::value* count = obj.if_contains("minProperties")) {
+			if (!count->is_int64() || count->as_int64() < 0) return std::format("{}: minProperties must be a non-negative integer", path);
+			if (!declares_type(obj, "object")) return std::format("{}: minProperties needs type object", path);
+		}
+		if (const json::value* items = obj.if_contains("items")) {
+			if (!declares_type(obj, "array")) return std::format("{}: items needs type array", path);
+			if (auto err = check_node(*items, path + "[]")) return err;
+		}
 		if (const json::value* extra = obj.if_contains("additionalProperties"); extra && !extra->is_bool())
 			return std::format("{}: additionalProperties must be a boolean", path);
 		if (const json::value* values = obj.if_contains("enum"); values && (!values->is_array() || values->as_array().empty()))
@@ -125,8 +151,19 @@ namespace {
 			if (const json::value* hi = schema.if_contains("maximum"); hi && number > number_of(*hi))
 				return std::format("{}: {} is above the maximum {}", path, json::serialize(v), json::serialize(*hi));
 		}
+		if (v.is_array()) {
+			if (const json::value* items = schema.if_contains("items")) {
+				std::size_t index = 0;
+				for (const auto& element : v.as_array()) {
+					if (auto err = validate_node(items->as_object(), element, std::format("{}[{}]", path, index))) return err;
+					++index;
+				}
+			}
+		}
 		if (v.is_object()) {
 			const json::object& obj = v.as_object();
+			if (const json::value* min = schema.if_contains("minProperties"); min && obj.size() < static_cast<std::size_t>(min->as_int64()))
+				return std::format("{}: needs at least {} properties", path, min->as_int64());
 			const json::value* props = schema.if_contains("properties");
 			if (const json::value* required = schema.if_contains("required")) {
 				for (const auto& name : required->as_array()) {
@@ -145,6 +182,23 @@ namespace {
 		}
 		return std::nullopt;
 	}
+}
+
+std::optional<std::int64_t> cmd::json_schema::integer_of(const json::value& value)
+{
+	if (value.is_int64()) return value.get_int64();
+	if (value.is_uint64()) {
+		const std::uint64_t big = value.get_uint64();
+		if (big > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) return std::nullopt;
+		return static_cast<std::int64_t>(big);
+	}
+	if (value.is_double()) {
+		const double d = value.get_double();
+		// 2^63 is exactly representable; anything from it up (or NaN) does not fit.
+		if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0) || std::floor(d) != d) return std::nullopt;
+		return static_cast<std::int64_t>(d);
+	}
+	return std::nullopt;
 }
 
 std::optional<std::string> cmd::json_schema::check_schema(const json::value& schema)

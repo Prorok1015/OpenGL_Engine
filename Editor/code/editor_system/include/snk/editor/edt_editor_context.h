@@ -7,6 +7,7 @@
 #include "edt_job_service.h"
 #include "edt_panel_registry.h"
 #include "edt_selection_service.h"
+#include <vector>
 
 namespace desc { class desc_system; }
 namespace res { class resource_system; }
@@ -15,18 +16,21 @@ namespace gui { class gui_system; }
 namespace scn { class ecs_assembler; class context_manager; }
 namespace ecs { class system_factory; }
 namespace ds { class task_system; }
+namespace cmd { class command_registry; }
 
 namespace edt
 {
 	// Facade over the engine services and the editor's own services. Created by editor_system::init and
 	// registered in ds::app_data_storage (data.require<edt::editor_context>()). Engine services are
-	// references and are not owned. The documents join it in a later step.
+	// references and are not owned; `commands` is the process-wide command registry that actions() adds the
+	// editor's part to (and that the engine registered log.read into). The job.* and dialog.* commands are
+	// registered here and live as long as the context. The documents join it in a later step.
 	class editor_context
 	{
 	public:
 		editor_context(desc::desc_system& descs, res::resource_system& resources, rnd::render_system& render,
 			gui::gui_system& gui, scn::ecs_assembler& assembler, ecs::system_factory& systems,
-			scn::context_manager& contexts, ds::task_system& tasks);
+			scn::context_manager& contexts, ds::task_system& tasks, cmd::command_registry& commands);
 		~editor_context();
 		editor_context(const editor_context&) = delete;
 		editor_context& operator=(const editor_context&) = delete;
@@ -66,5 +70,7 @@ namespace edt
 		action_registry m_actions;
 		inspector_registry m_inspectors;
 		asset_kind_registry m_asset_kinds;
+		// After the services they call and the registry they live in: destroyed first.
+		std::vector<registration> m_service_commands;
 	};
 }

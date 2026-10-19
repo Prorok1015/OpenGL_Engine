@@ -26,6 +26,10 @@ namespace components {
 		});
 		// The 3D view is shown inside an ImGui panel: game cameras draw into textures, not the backbuffer.
 		// The redirector also releases the textures of cameras that no longer exist.
+		// Job progress is polled once per frame, after the `tasks` stage delivered the jobs that finished.
+		stages.add_stage("editor_jobs", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_context>()) c.storage.require<edt::editor_context>().jobs().pump();
+		});
 		auto redirector = std::make_shared<edt::camera_redirector>();
 		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
 			[redirector](app::stage_context& c) {
@@ -39,6 +43,7 @@ namespace components {
 	{
 		auto& stages = data.require<app::frame_stage_registry>();
 		stages.remove_stage("editor_redirect_cameras");
+		stages.remove_stage("editor_jobs");
 		stages.clear_body(app::builtin_stage::ui);
 		// Jobs run code owned by editor_system; stop them while it, the context and the task system are all alive.
 		if (data.has_value<edt::editor_context>()) {
@@ -51,4 +56,4 @@ namespace components {
 		}
 	}
 
-}
+}

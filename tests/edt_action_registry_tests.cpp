@@ -369,6 +369,66 @@ BOOST_AUTO_TEST_CASE(ActionMayUnregisterItselfWhileRunning)
 	BOOST_CHECK(!actions.contains("once"));
 }
 
+// The callback of a menu click may drop its own registration and register the same id again (a menu that rebuilds
+// itself): the removal must be effective at once, not when the callback returns.
+BOOST_AUTO_TEST_CASE(ActivateCallback_MayReplaceItsOwnRegistrationUnderTheSameId)
+{
+	edt::action_registry actions;
+	edt::registration reg;
+	edt::registration replacement;
+	int old_runs = 0;
+	int new_runs = 0;
+	bool free_inside = false;
+	bool replaced_inside = false;
+
+	edt::action_desc desc = make_action("swap", "Swap", "File", [&] { ++old_runs; });
+	desc.activate = [&] {
+		reg.reset();
+		free_inside = !actions.contains("swap") && !actions.commands().contains("swap");
+		replacement = actions.add(make_action("swap", "Swap", "File", [&] { ++new_runs; }, "Ctrl+W"));
+		replaced_inside = replacement.active();
+	};
+	reg = actions.add(std::move(desc));
+
+	BOOST_CHECK(actions.activate("swap"));
+	BOOST_CHECK(free_inside);
+	BOOST_CHECK(replaced_inside);
+	BOOST_CHECK_EQUAL(old_runs, 0);
+	BOOST_CHECK(actions.contains("swap"));
+	BOOST_CHECK_EQUAL(actions.items("File").size(), 1u);
+
+	BOOST_CHECK(actions.activate("swap")); // the replacement has no frontend: it runs the action itself
+	BOOST_CHECK_EQUAL(new_runs, 1);
+	BOOST_CHECK(actions.dispatch(chord("Ctrl+W")));
+	BOOST_CHECK_EQUAL(new_runs, 2);
+}
+
+BOOST_AUTO_TEST_CASE(SharedRegistry_EngineCommandsAreInvokableAndListedAsTools)
+{
+	cmd::command_registry shared;
+	cmd::command_desc ping;
+	ping.id = "engine.ping";
+	ping.invoke = [](const cmd::call&) { return cmd::result::success(); };
+	auto engine_registration = shared.add(std::move(ping));
+
+	{
+		edt::action_registry actions(shared);
+		BOOST_CHECK(&actions.commands() == &shared);
+		auto reg = actions.add(make_action("editor.thing", "Thing", "File", [] {}));
+		BOOST_CHECK(shared.contains("editor.thing"));
+		BOOST_CHECK(actions.contains("engine.ping"));
+		BOOST_CHECK(actions.invoke("engine.ping", boost::json::object{}).ok);
+
+		std::vector<std::string> tool_ids;
+		for (const auto* tool : actions.tools()) tool_ids.push_back(tool->id);
+		BOOST_TEST((tool_ids == std::vector<std::string>{ "engine.ping", "editor.thing" }));
+		// No menu item or shortcut for a command the engine registered.
+		BOOST_TEST((labels_of(actions.items("File")) == std::vector<std::string>{ "Thing" }));
+	}
+	BOOST_CHECK(!shared.contains("editor.thing")); // the editor's part left with the action registry
+	BOOST_CHECK(shared.contains("engine.ping"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(EdtBuiltinMenuTests)

@@ -39,6 +39,7 @@ void setup_panels(
 	std::shared_ptr<console_panel>& console,
 	std::shared_ptr<asset_browser_panel>& asset_browser,
 	editor_system& sys,
+	engine::log_sink_handle& log_sink,
 	bool capture_log)
 {
 	hierarchy = std::make_shared<scene_hierarchy_panel>();
@@ -51,7 +52,7 @@ void setup_panels(
 	if (!capture_log) return;
 
 	auto console_weak = std::weak_ptr<console_panel>(console);
-	engine::set_log_callback([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
+	log_sink = engine::add_log_sink([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
 		auto panel = console_weak.lock();
 		if (!panel) return;
 		edt::log_level edt_level = edt::log_level::info;

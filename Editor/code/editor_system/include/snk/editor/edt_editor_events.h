@@ -28,6 +28,20 @@ namespace edt
 		bool empty() const { return path.empty(); }
 	};
 
+	// Where a job (job_service) is. `running` also covers queued and finished-but-not-delivered.
+	enum class job_status : std::uint8_t { running, done, failed, cancelled };
+
+	inline const char* job_status_name(job_status status)
+	{
+		switch (status) {
+		case job_status::running: return "running";
+		case job_status::done: return "done";
+		case job_status::failed: return "failed";
+		case job_status::cancelled: return "cancelled";
+		}
+		return "running";
+	}
+
 	template<class... Args> class signal;
 
 	namespace detail
@@ -131,8 +145,8 @@ namespace edt
 	};
 
 	// Editor-wide notifications, reached through editor_context::events(). Today's producers: selection_service
-	// (selection_changed), scene_editor/world_controller wiring (document_changed, active_world_changed);
-	// the rest arrive with the document model.
+	// (selection_changed), scene_editor/world_controller wiring (document_changed, active_world_changed),
+	// job_service (job_started, job_progress, job_finished); the rest arrive with the document model.
 	class editor_events
 	{
 	public:
@@ -143,5 +157,11 @@ namespace edt
 		signal<document_id> active_world_changed;
 		signal<const selection&> selection_changed;
 		signal<> level_reloaded;
+		// Per job, in this order: job_started once, job_progress whenever the fraction or the note changed (at most
+		// once per job_service::pump(), i.e. per frame), job_finished once. A job cancelled before it ran finishes
+		// with `cancelled` and no progress.
+		signal<std::uint64_t, const std::string&> job_started; // (id, label)
+		signal<std::uint64_t, float, const std::string&> job_progress; // (id, fraction in [0, 1], note)
+		signal<std::uint64_t, job_status, const std::string&> job_finished; // (id, done | failed | cancelled, error text)
 	};
 }

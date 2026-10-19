@@ -67,7 +67,17 @@ struct edt::action_registry::menu_decl
 	std::string name;
 };
 
-edt::action_registry::action_registry() = default;
+edt::action_registry::action_registry()
+	: m_owned(std::make_unique<cmd::command_registry>())
+	, m_commands(*m_owned)
+{
+}
+
+edt::action_registry::action_registry(cmd::command_registry& shared)
+	: m_commands(shared)
+{
+}
+
 edt::action_registry::~action_registry() = default;
 
 std::shared_ptr<edt::action_registry::ui_entry> edt::action_registry::find_ui(std::string_view id) const
@@ -249,10 +259,13 @@ edt::action_result edt::action_registry::invoke(std::string_view id, const cmd::
 bool edt::action_registry::activate(std::string_view id)
 {
 	if (!m_commands.is_enabled(id)) return false;
-	// Held while it runs: the activate callback may unregister its own action.
-	const std::shared_ptr<ui_entry> entry = find_ui(id);
+	std::shared_ptr<ui_entry> entry = find_ui(id);
 	if (entry && entry->ui.activate) {
-		entry->ui.activate();
+		// The callback may unregister its own action, even to add the same id again. Its own copy keeps it alive
+		// while it runs; the entry is let go first, so the removal takes effect at once (the entry owns the command).
+		const std::function<void()> run = entry->ui.activate;
+		entry.reset();
+		run();
 		return true;
 	}
 	const action_result outcome = invoke(id, json::object{});

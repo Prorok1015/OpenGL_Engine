@@ -6,6 +6,7 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -206,6 +207,112 @@ BOOST_AUTO_TEST_CASE(Post_ACommandMayPostAnotherOneWithoutDeadlock)
 	BOOST_REQUIRE(inner.valid());
 	BOOST_CHECK(inner.get().ok);
 	BOOST_CHECK_EQUAL(inner_runs, 1);
+}
+
+BOOST_AUTO_TEST_CASE(Post_ACommandThatThrows_AnswersFailedWithTheExceptionText)
+{
+	cmd::command_desc std_throw;
+	std_throw.id = "test.throws";
+	std_throw.invoke = [](const cmd::call&) -> cmd::result { throw std::runtime_error("boom"); };
+	cmd::command_desc odd_throw;
+	odd_throw.id = "test.throws_odd";
+	odd_throw.invoke = [](const cmd::call&) -> cmd::result { throw 42; };
+	int later_runs = 0;
+	cmd::command_desc fine;
+	fine.id = "test.fine";
+	fine.invoke = [&later_runs](const cmd::call&) { ++later_runs; return cmd::result::success(); };
+	auto r1 = commands.add(std::move(std_throw));
+	auto r2 = commands.add(std::move(odd_throw));
+	auto r3 = commands.add(std::move(fine));
+
+	auto thrown = queue.post("test.throws", json_of("{}"), cmd::origin::test());
+	auto thrown_odd = queue.post("test.throws_odd", json_of("{}"), cmd::origin::test());
+	auto after = queue.post("test.fine", json_of("{}"), cmd::origin::test());
+	BOOST_CHECK_NO_THROW(drain());
+
+	const cmd::result first = thrown.get();
+	BOOST_CHECK(!first.ok);
+	BOOST_CHECK_EQUAL(first.code, "failed");
+	BOOST_CHECK_EQUAL(first.error, "boom");
+	const cmd::result second = thrown_odd.get();
+	BOOST_CHECK_EQUAL(second.code, "failed");
+	BOOST_CHECK(second.error.find("unknown exception") != std::string::npos);
+	// The drain survived: the call posted behind them still ran.
+	BOOST_CHECK(after.get().ok);
+	BOOST_CHECK_EQUAL(later_runs, 1);
+}
+
+BOOST_AUTO_TEST_CASE(CallNowOrPost_OnTheMainThreadRunsAtOnce_SoWaitingOnTheFutureCannotDeadlock)
+{
+	int runs = 0;
+	cmd::command_desc desc;
+	desc.id = "test.now";
+	desc.invoke = [&runs](const cmd::call&) { ++runs; return cmd::result::success(); };
+	auto reg = commands.add(std::move(desc));
+
+	auto outcome = queue.call_now_or_post("test.now", json_of("{}"), cmd::origin::test());
+	BOOST_CHECK_EQUAL(runs, 1); // before any drain
+	BOOST_REQUIRE(is_ready(outcome));
+	BOOST_CHECK(outcome.get().ok);
+	BOOST_CHECK_EQUAL(tasks.pending_main(ds::main_class::general), 0u);
+}
+
+BOOST_AUTO_TEST_CASE(CallNowOrPost_OnTheMainThreadAnswersUnknownAndThrowingCommands)
+{
+	cmd::command_desc desc;
+	desc.id = "test.now_throws";
+	desc.invoke = [](const cmd::call&) -> cmd::result { throw std::runtime_error("inline boom"); };
+	auto reg = commands.add(std::move(desc));
+
+	auto unknown = queue.call_now_or_post("test.nothing", json_of("{}"), cmd::origin::test());
+	auto thrown = queue.call_now_or_post("test.now_throws", json_of("{}"), cmd::origin::test());
+	BOOST_REQUIRE(is_ready(unknown));
+	BOOST_REQUIRE(is_ready(thrown));
+	BOOST_CHECK_EQUAL(unknown.get().code, "not_found");
+	const cmd::result result = thrown.get();
+	BOOST_CHECK_EQUAL(result.code, "failed");
+	BOOST_CHECK_EQUAL(result.error, "inline boom");
+}
+
+BOOST_AUTO_TEST_CASE(CallNowOrPost_FromAWorker_IsAPostAndWaitsForTheDrain)
+{
+	std::thread::id ran_on;
+	cmd::command_desc desc;
+	desc.id = "test.later";
+	desc.invoke = [&ran_on](const cmd::call&) { ran_on = std::this_thread::get_id(); return cmd::result::success(); };
+	auto reg = commands.add(std::move(desc));
+
+	std::future<cmd::result> outcome;
+	std::thread worker([&] { outcome = queue.call_now_or_post("test.later", json_of("{}"), cmd::origin::test()); });
+	worker.join();
+	BOOST_REQUIRE(outcome.valid());
+	BOOST_CHECK(!is_ready(outcome));
+
+	drain();
+	BOOST_REQUIRE(is_ready(outcome));
+	BOOST_CHECK(outcome.get().ok);
+	BOOST_CHECK(ran_on == std::this_thread::get_id());
+}
+
+BOOST_AUTO_TEST_CASE(CallNowOrPost_RunsAheadOfCallsAlreadyWaitingInTheQueue)
+{
+	std::vector<std::string> order;
+	cmd::command_desc desc;
+	desc.id = "test.tag";
+	desc.args_schema = json_of(R"({"type":"object","properties":{"name":{"type":"string"}},"required":["name"]})");
+	desc.invoke = [&order](const cmd::call& request) {
+		order.emplace_back(request.args.as_object().at("name").as_string());
+		return cmd::result::success();
+	};
+	auto reg = commands.add(std::move(desc));
+
+	auto queued = queue.post("test.tag", json_of(R"({"name":"queued"})"), cmd::origin::test());
+	auto inline_call = queue.call_now_or_post("test.tag", json_of(R"({"name":"inline"})"), cmd::origin::test());
+	drain();
+	BOOST_CHECK(queued.get().ok);
+	BOOST_CHECK(inline_call.get().ok);
+	const std::vector<std::string> expected{ "inline", "queued" };
+	BOOST_TEST(order == expected, boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

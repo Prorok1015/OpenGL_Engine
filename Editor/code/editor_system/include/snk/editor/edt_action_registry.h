@@ -107,7 +107,12 @@ namespace edt
 	class action_registry
 	{
 	public:
+		// Owns a registry of its own.
 		action_registry();
+		// Adds the editor's part to a registry that outlives this object and is shared with the engine and the game
+		// (they register log.read and the like into it). Commands registered there show up in tools() and invoke();
+		// size() counts them too.
+		explicit action_registry(cmd::command_registry& shared);
 		~action_registry();
 		action_registry(const action_registry&) = delete;
 		action_registry& operator=(const action_registry&) = delete;
@@ -161,7 +166,8 @@ namespace edt
 
 		std::shared_ptr<ui_entry> find_ui(std::string_view id) const;
 
-		cmd::command_registry m_commands;
+		std::unique_ptr<cmd::command_registry> m_owned;
+		cmd::command_registry& m_commands;
 		std::vector<std::shared_ptr<ui_entry>> m_ui;
 		std::vector<std::shared_ptr<menu_decl>> m_menus;
 		std::uint64_t m_next_key = 1;

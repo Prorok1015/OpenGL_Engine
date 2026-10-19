@@ -1,4 +1,6 @@
 #pragma once
+#include <snk/command/cmd_types.h>
+#include <boost/json/value.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -33,7 +35,8 @@ namespace edt
 	};
 
 	// Modal dialogs of the editor. They are queued and shown one at a time, in the order they were asked for;
-	// each has its own id (also its ImGui popup id). The service draws inside a gui implicit callback, so the
+	// each has its own id (also its ImGui popup id), a kind and a JSON Schema of its answer (list()), so a script or
+	// an agent can answer what a person would click (answer()). The service draws inside a gui implicit callback, so the
 	// ImGui context and popup id stack stay as they were. Main thread only.
 	class dialog_service
 	{
@@ -43,6 +46,19 @@ namespace edt
 		using implicit_registrar = std::function<void(std::string_view id, std::function<bool()> draw)>;
 
 		struct request;
+
+		// One waiting dialog as list() shows it.
+		struct dialog_info
+		{
+			dialog_id id = 0;
+			// "unsaved", "save_as", "pick_file" or "message".
+			std::string kind;
+			std::string text;
+			// JSON Schema (cmd_json_schema.h) of what answer() takes.
+			boost::json::value answer_schema;
+			// Drawn at least once: a person can see it.
+			bool on_screen = false;
+		};
 
 		dialog_service();
 		~dialog_service();
@@ -64,6 +80,15 @@ namespace edt
 		void clear_auto_answer() { m_auto_answer.reset(); }
 
 		std::size_t pending() const { return m_queue.size(); }
+		// Everything asked for and not answered yet, in the order they will be shown.
+		std::vector<dialog_info> list() const;
+		// Answers a dialog the way a click would: the same callback runs with the same value. `answer` must match
+		// the dialog's answer_schema (unsaved: {"choice": "save|discard|cancel"}; save_as and pick_file: {"path": "..."}
+		// or {"cancel": true}; message: {}). Codes: "not_found" (no such pending dialog), "invalid_args" (the answer
+		// breaks the schema or means nothing), "failed" (already answered). A dialog that is on screen closes in the
+		// next update() (value {"resolved": false} until then); one that was never drawn resolves at once
+		// ({"resolved": true}), so a headless run needs no frames.
+		cmd::result answer(dialog_id id, const boost::json::value& answer);
 		// Asked for and not answered yet (queued or on screen).
 		bool is_pending(dialog_id id) const;
 		// The dialog on screen now.

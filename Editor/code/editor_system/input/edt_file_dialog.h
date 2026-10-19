@@ -20,6 +20,11 @@ public:
     }
 
     bool show(const char* title, bool* p_open);
+    // The next show() closes the popup as a Cancel click does (and returns false), unless the user closed it in that
+    // frame (OK, Cancel, Esc): then the user's action stands and closed_by_request() stays false.
+    void request_close() { close_requested = true; }
+    // The last show() closed the popup because of request_close().
+    bool was_closed_by_request() const { return closed_by_request; }
 
     const std::filesystem::path& get_selected_path() const { return selected_path; }
 	const std::filesystem::path& get_base_path() const { return base_path; }
@@ -39,5 +44,7 @@ private:
     std::vector<std::string> extension_filters;  // Changed to vector
     SELECT_MODE select_mode;
     bool opened = false;
+    bool close_requested = false;
+    bool closed_by_request = false;
 };
 }

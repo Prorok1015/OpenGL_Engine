@@ -171,11 +171,10 @@ struct log_capture
 {
 	log_capture()
 	{
-		engine::set_log_callback([this](std::string_view category, engine::log_level level, std::string_view message) {
+		sink = engine::add_log_sink([this](std::string_view category, engine::log_level level, std::string_view message) {
 			if (level == engine::log_level::warn) warnings.push_back(std::format("{}: {}", category, message));
 		});
 	}
-	~log_capture() { engine::set_log_callback(nullptr); }
 
 	bool has(std::string_view part) const
 	{
@@ -186,6 +185,7 @@ struct log_capture
 	}
 
 	std::vector<std::string> warnings;
+	engine::log_sink_handle sink; // last: removed first
 };
 
 }

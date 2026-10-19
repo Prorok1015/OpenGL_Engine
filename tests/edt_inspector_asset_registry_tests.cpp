@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/command/cmd_registry.h>
 #include "null_engine_fixture.hpp"
 #include "edt_builtin_asset_kinds.h"
 #include "edt_inspector_panel.h"
@@ -76,11 +77,12 @@ struct context_fixture : test_util::null_engine_fixture
 		, context(std::make_unique<edt::editor_context>(
 			storage.require<desc::desc_system>(), storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
 			gui, storage.require<scn::ecs_assembler>(), storage.require<ecs::system_factory>(),
-			storage.require<scn::context_manager>(), tasks))
+			storage.require<scn::context_manager>(), tasks, commands))
 	{
 	}
 
 	gui::gui_system gui;
+	cmd::command_registry commands;
 	std::unique_ptr<edt::editor_context> context;
 };
 
@@ -616,7 +618,10 @@ BOOST_AUTO_TEST_CASE(Extension_DestroyingItRemovesEverything)
 	const auto menus = context->actions().menus();
 	BOOST_CHECK(std::find(menus.begin(), menus.end(), "Ext") == menus.end());
 	BOOST_CHECK(context->actions().items("Ext").empty());
-	BOOST_CHECK(context->actions().tools().empty());
+	// What stays are the commands the context registers itself (job.*, dialog.*); none of the extension's.
+	for (const auto* tool : context->actions().tools()) {
+		BOOST_CHECK_MESSAGE(tool->id.rfind("ext.", 0) != 0, tool->id);
+	}
 
 	BOOST_CHECK(!context->inspectors().contains("ext_desc"));
 	comp_node comp;

@@ -2,6 +2,8 @@
 #include <snk/command/cmd_json_schema.h>
 #include <snk/command/cmd_registry.h>
 #include <boost/json/parse.hpp>
+#include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -54,7 +56,7 @@ BOOST_AUTO_TEST_CASE(MinLength_CountsCharacters)
 
 BOOST_AUTO_TEST_CASE(CheckSchema_RefusesKeywordsItDoesNotImplement)
 {
-	for (const char* text : { R"({"pattern":"a"})", R"({"items":{"type":"string"}})", R"({"maxLength":3})",
+	for (const char* text : { R"({"pattern":"a"})", R"({"uniqueItems":true})", R"({"maxLength":3})",
 		R"({"oneOf":[]})", R"({"$ref":"#/x"})", R"({"default":1})",
 		R"({"type":"object","properties":{"a":{"format":"uri"}}})" }) {
 		BOOST_TEST(cmd::json_schema::check_schema(json_of(text)).has_value(), text);
@@ -72,8 +74,75 @@ BOOST_AUTO_TEST_CASE(CheckSchema_RejectsBrokenSchemas)
 {
 	for (const char* text : { "1", R"({"type":"thing"})", R"({"type":[]})", R"({"properties":3})",
 		R"({"required":["a"]})", R"({"required":[1],"properties":{"a":{}}})", R"({"additionalProperties":"no"})",
-		R"({"enum":[]})", R"({"minimum":"1"})", R"({"properties":{"a":{"type":"x"}}})" }) {
+		R"({"enum":[]})", R"({"minimum":"1"})", R"({"properties":{"a":{"type":"x"}}})",
+		R"({"type":"array","items":3})", R"({"type":"array","items":{"type":"x"}})",
+		R"({"type":"object","minProperties":-1})", R"({"type":"object","minProperties":"1"})" }) {
 		BOOST_TEST(cmd::json_schema::check_schema(json_of(text)).has_value(), text);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Items_ValidatesEveryElementAndNamesTheOffender)
+{
+	const auto schema = json_of(R"({"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"}},
+		"required":["id"],"additionalProperties":false}})");
+	BOOST_REQUIRE(!cmd::json_schema::check_schema(schema));
+	BOOST_CHECK(!cmd::json_schema::validate(schema, json_of("[]")));
+	BOOST_CHECK(!cmd::json_schema::validate(schema, json_of(R"([{"id":1},{"id":2}])")));
+	const auto bad_type = cmd::json_schema::validate(schema, json_of(R"([{"id":1},{"id":"x"}])"));
+	BOOST_REQUIRE(bad_type.has_value());
+	BOOST_CHECK(bad_type->find("[1]") != std::string::npos);
+	BOOST_CHECK(cmd::json_schema::validate(schema, json_of(R"([{"id":1,"extra":true}])")));
+	BOOST_CHECK(cmd::json_schema::validate(schema, json_of(R"([{}])")));
+}
+
+// items means something for arrays and minProperties for objects only: elsewhere they are refused, not ignored.
+BOOST_AUTO_TEST_CASE(ItemsAndMinProperties_AreRefusedOnTheWrongType)
+{
+	for (const char* text : { R"({"type":"object","items":{}})", R"({"items":{}})", R"({"type":"string","items":{"type":"string"}})",
+		R"({"type":"array","minProperties":1})", R"({"minProperties":1})", R"({"type":"string","minProperties":0})" }) {
+		BOOST_TEST(cmd::json_schema::check_schema(json_of(text)).has_value(), text);
+	}
+	BOOST_CHECK(!cmd::json_schema::check_schema(json_of(R"({"type":["array","null"],"items":{"type":"integer"}})")));
+	BOOST_CHECK(!cmd::json_schema::check_schema(json_of(R"({"type":["object","null"],"minProperties":1})")));
+}
+
+BOOST_AUTO_TEST_CASE(MinProperties_NeedsAtLeastThatManyKeys)
+{
+	const auto schema = json_of(R"({"type":"object","properties":{"a":{"type":"string"},"b":{"type":"boolean"}},
+		"minProperties":1,"additionalProperties":false})");
+	BOOST_REQUIRE(!cmd::json_schema::check_schema(schema));
+	BOOST_CHECK(cmd::json_schema::validate(schema, json_of("{}")));
+	BOOST_CHECK(!cmd::json_schema::validate(schema, json_of(R"({"a":"x"})")));
+	BOOST_CHECK(!cmd::json_schema::validate(schema, json_of(R"({"b":true})")));
+}
+
+BOOST_AUTO_TEST_CASE(IntegerOf_ReadsInt64Uint64AndIntegralDoubles)
+{
+	using cmd::json_schema::integer_of;
+	BOOST_CHECK_EQUAL(*integer_of(json_of("5")), 5);
+	BOOST_CHECK_EQUAL(*integer_of(json_of("-7")), -7);
+	BOOST_CHECK_EQUAL(*integer_of(json_of("5.0")), 5);
+	BOOST_CHECK_EQUAL(*integer_of(json_of("1e3")), 1000);
+	BOOST_CHECK_EQUAL(*integer_of(boost::json::value(std::uint64_t{ 9 })), 9);
+	// What the schema type "integer" accepts but no int64 holds, and what it rejects, gives nothing.
+	BOOST_CHECK(!integer_of(json_of("18446744073709551615")));
+	BOOST_CHECK(!integer_of(json_of("1e30")));
+	BOOST_CHECK(!integer_of(json_of("5.5")));
+	BOOST_CHECK(!integer_of(json_of(R"("5")")));
+	BOOST_CHECK(!integer_of(json_of("null")));
+	BOOST_CHECK(!integer_of(json_of("true")));
+}
+
+BOOST_AUTO_TEST_CASE(IntegerSchema_AcceptsExactlyWhatIntegerOfReads)
+{
+	const auto schema = json_of(R"({"type":"integer"})");
+	for (const char* text : { "5", "5.0", "-3", "1e3" }) {
+		BOOST_TEST(!cmd::json_schema::validate(schema, json_of(text)), text);
+		BOOST_TEST(cmd::json_schema::integer_of(json_of(text)).has_value(), text);
+	}
+	for (const char* text : { "5.5", R"("5")", "null" }) {
+		BOOST_TEST(cmd::json_schema::validate(schema, json_of(text)).has_value(), text);
+		BOOST_TEST(!cmd::json_schema::integer_of(json_of(text)).has_value(), text);
 	}
 }
 

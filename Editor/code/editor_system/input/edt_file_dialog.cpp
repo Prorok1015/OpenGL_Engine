@@ -10,6 +10,7 @@
 bool edt::file_dialog::show(const char* title, bool* p_open)
 {
     bool result = false;
+    closed_by_request = false;
 
     // Create title with extension filter info
     std::string window_title = title;
@@ -224,12 +225,22 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
 
+        // Only when the user did nothing this frame: an OK or Cancel click already ended the dialog (*p_open is false)
+        // and wins over the request, so the selected path of an OK click is kept.
+        if (close_requested && *p_open) {
+            selected_path.clear();
+            *p_open = false;
+            closed_by_request = true;
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     } else {
         *p_open = false; // closed from outside: a cancel
     }
-    if (!*p_open)
+    if (!*p_open) {
         opened = false; // the next show() opens it again
+        close_requested = false;
+    }
     return result;
 }
 
