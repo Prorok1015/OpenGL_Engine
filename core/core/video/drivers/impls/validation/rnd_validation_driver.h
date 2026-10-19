@@ -5,6 +5,7 @@
 #include <snk/common/snk_api.h>
 
 #include <memory>
+#include <vector>
 
 namespace rnd::driver::validation
 {
@@ -24,8 +25,8 @@ namespace rnd::driver::validation
 
 		void set_viewport(glm::ivec4 rect) override;
 		void set_line_size(float size) override { m_inner->set_line_size(size); }
-		void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) override;
-		void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
+		void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset = 0) override;
+		void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
 
 		std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) override;
 		std::unique_ptr<texture_interface> create_texture(const texture_header& header) override;
@@ -34,7 +35,10 @@ namespace rnd::driver::validation
 		std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) override;
 		std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) override;
 
-		void set_render_state(const render_state& state) override { m_inner->set_render_state(state); }
+		pipeline_handle create_pipeline(const pipeline_desc& desc) override;
+		void bind_pipeline(pipeline_handle pipeline) override;
+		const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
+		void invalidate_state_cache() override { m_inner->invalidate_state_cache(); }
 
 		bool supports_timer_queries() const override { return m_inner->supports_timer_queries(); }
 		uint32_t create_timer_query() override { return m_inner->create_timer_query(); }
@@ -49,13 +53,22 @@ namespace rnd::driver::validation
 
 	private:
 		void check_texture_usage(const texture_header& header);
+		// Reports and returns false for a shader the pipeline names that is gone.
+		bool shader_alive(const shader_ref& ref);
 		// False when the pass cannot be forwarded; otherwise `inner_desc` is `desc` with the wrapped driver's textures.
 		bool check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target);
 		// Null when the draw cannot be forwarded.
 		const vertex_array* check_draw(const vertex_array_interface* va, unsigned int count, std::size_t base_index);
 
+		struct known_pipeline
+		{
+			pipeline_handle handle;
+			pipeline_desc desc;	// as the caller wrote it: the shader is the wrapper, not the wrapped driver's
+		};
+
 		std::unique_ptr<driver_interface> m_inner;
 		std::shared_ptr<validator> m_state;
+		std::vector<known_pipeline> m_pipelines;
 	};
 
 	// Counts presents for the driver it creates: a frame ends at present().

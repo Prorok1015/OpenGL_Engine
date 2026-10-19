@@ -137,6 +137,9 @@ void rnd::render_system::render_frame(frame_context& context) const
 	PROFILE_SCOPE("RenderFrame");
 	if (!drv) return;
 
+	// ImGui renders between two frames and leaves its own state behind.
+	drv->invalidate_state_cache();
+
 	auto& gpu = rnd::get_gpu_profiler();
 	gpu.begin_frame(ds::profiler_current_frame());
 

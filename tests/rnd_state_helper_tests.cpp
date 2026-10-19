@@ -37,20 +37,20 @@ BOOST_AUTO_TEST_CASE(FromString_Unknown_DefaultsToTriangle) {
 	BOOST_CHECK(rnd::render_mode_from_string("INVALID") == RENDER_MODE::TRIANGLE);
 }
 
+BOOST_AUTO_TEST_CASE(FromString_TrimmedTopologies_DefaultToTriangle) {
+	for (const char* removed : { "TRIANGLE_FAN", "TRIANGLE_ADJ", "TRIANGLE_STRIP_ADJ", "LINE_LOOP", "LINE_ADJ", "LINE_STRIP_ADJ" }) {
+		BOOST_CHECK(rnd::render_mode_from_string(removed) == RENDER_MODE::TRIANGLE);
+	}
+}
+
 // --- Roundtrip ---
 
 BOOST_AUTO_TEST_CASE(Roundtrip_AllModes) {
 	RENDER_MODE modes[] = {
 		RENDER_MODE::TRIANGLE,
 		RENDER_MODE::TRIANGLE_STRIP,
-		RENDER_MODE::TRIANGLE_FAN,
-		RENDER_MODE::TRIANGLE_ADJ,
-		RENDER_MODE::TRIANGLE_STRIP_ADJ,
 		RENDER_MODE::LINE,
 		RENDER_MODE::LINE_STRIP,
-		RENDER_MODE::LINE_LOOP,
-		RENDER_MODE::LINE_ADJ,
-		RENDER_MODE::LINE_STRIP_ADJ,
 		RENDER_MODE::POINT
 	};
 	for (auto mode : modes) {

@@ -2,6 +2,7 @@
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_pass_pipelines.h>
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -45,14 +46,6 @@ void opaque_pass::execute(frame_context &context,
           rnd::driver::texture_usage::color_target | rnd::driver::texture_usage::sampled);
     }
 
-    rnd::driver::render_state state;
-    state.depth.enabled = true;
-    state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
-    // The backbuffer has no z-prepass depth attached: this pass writes the depth the later
-    // passes (skybox) test against.
-    state.depth.write_mask = !offscreen;
-    drv.set_render_state(state);
-
     rnd::driver::render_pass_desc pass;
     pass.debug_name = "opaque";
     if (offscreen) {
@@ -70,6 +63,15 @@ void opaque_pass::execute(frame_context &context,
     }
     drv.begin_render_pass(pass);
 
+    rnd::driver::pipeline_desc state;
+    state.depth.enabled = true;
+    state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
+    // The backbuffer has no z-prepass depth attached: this pass writes the depth the later
+    // passes (skybox) test against.
+    state.depth.write_mask = !offscreen;
+    rnd::driver::set_target_formats(state, pass);
+    rnd::pass_pipelines pipelines(drv, *context.shaders, state);
+
     common_matrix.view = packet.camera.view_matrix;
     common_matrix.projection = packet.camera.projection_matrix;
     common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
@@ -84,6 +86,8 @@ void opaque_pass::execute(frame_context &context,
       if (!va)
         continue;
 
+      if (!pipelines.bind(dc.variant))
+        continue;
       rnd::configure_pass(context, dc.variant, *dc.material, &dc.transform);
       if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
           if (auto* skm = context.skinning) {
@@ -91,7 +95,7 @@ void opaque_pass::execute(frame_context &context,
           }
       }
 
-      drv.draw_indices(va, rnd::RENDER_MODE::TRIANGLE, dc.indices_count,
+      drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);
     }
 

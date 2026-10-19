@@ -16,14 +16,8 @@ const GLenum gRenderModeToGLRenderMode[] =
 {
 	GL_TRIANGLES,
 	GL_TRIANGLE_STRIP,
-	GL_TRIANGLE_FAN,
-	GL_TRIANGLES_ADJACENCY,
-	GL_TRIANGLE_STRIP_ADJACENCY,
 	GL_LINES,
 	GL_LINE_STRIP,
-	GL_LINE_LOOP,
-	GL_LINES_ADJACENCY,
-	GL_LINE_STRIP_ADJACENCY,
 	GL_POINTS,
 };
 
@@ -425,16 +419,13 @@ void rnd::driver::gl::driver::set_line_size(float size)
 	CHECK_GL_ERROR();
 }
 
-void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
+void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, unsigned int count, unsigned int offset)
 {
-	GLenum rm = GL_TRIANGLES;
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	if (!m_bound) {
+		egLOG_ERROR("opengl", "draw without a bound pipeline is skipped");
+		return;
 	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
+	const GLenum rm = m_bound->backend.topology;
 
 	vertices->bind();
 	if (offset > 0) {
@@ -449,70 +440,119 @@ void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_in
 	vertices->unbind();
 }
 
-void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, RENDER_MODE render_mode, unsigned int count, unsigned int base_vertex, unsigned int base_index)
+void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, unsigned int count, unsigned int base_vertex, unsigned int base_index)
 {
-	GLenum rm = GL_TRIANGLES;
-	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	if (!m_bound) {
+		egLOG_ERROR("opengl", "draw without a bound pipeline is skipped");
+		return;
 	}
-	else {
-		glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-		rm = gRenderModeToGLRenderMode[(int)render_mode];
-	}
+	const GLenum rm = m_bound->backend.topology;
 
 	vertices->bind();
 	glDrawElementsBaseVertex(rm, count, GL_UNSIGNED_INT, (void*)(sizeof(GLuint) * base_index), base_vertex);
 	vertices->unbind();
 }
 
-void rnd::driver::gl::driver::set_render_state(const render_state& state) {
-    m_depth_write = state.depth.enabled && state.depth.write_mask;
-    // Depth state
-    if (state.depth.enabled) {
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(gDepthFuncToGL[static_cast<int>(state.depth.test_func)]);
-        glDepthMask(state.depth.write_mask ? GL_TRUE : GL_FALSE);
-    } else {
-        glDisable(GL_DEPTH_TEST);
-        glDepthMask(GL_FALSE);
-    }
-    CHECK_GL_ERROR();
+rnd::driver::pipeline_handle rnd::driver::gl::driver::create_pipeline(const pipeline_desc& desc)
+{
+	ASSERT_MSG(desc.shader, "create_pipeline without a shader");
+	return m_pipelines.acquire(desc, [](const pipeline_desc& d) {
+		return gl_pipeline{ gRenderModeToGLRenderMode[static_cast<int>(d.topology)] };
+	});
+}
 
-    // Blend states for each render target
-    if (!state.blend_states.empty()) {
-        if (state.blend_states[0].enabled) {
-            glEnable(GL_BLEND);
-        } else {
-            glDisable(GL_BLEND);
-        }
+const rnd::driver::pipeline_desc& rnd::driver::gl::driver::pipeline_info(pipeline_handle pipeline) const
+{
+	const auto* found = m_pipelines.find(pipeline);
+	return found ? found->desc : empty_pipeline_desc();
+}
 
-        for (size_t i = 0; i < state.blend_states.size(); ++i) {
-            const auto& blend = state.blend_states[i];
-            if (blend.enabled) {
-                glBlendFunci(i, 
-                    gBlendFactorToGL[static_cast<int>(blend.src_factor)],
-                    gBlendFactorToGL[static_cast<int>(blend.dst_factor)]
-                );
-                glBlendEquationi(i, gBlendEquationToGL[static_cast<int>(blend.blend_eq)]);
-            }
-			else {
-				glBlendFunci(i, GL_ONE, GL_ZERO);
-				glBlendEquationi(i, GL_FUNC_ADD);
-			}
-        }
-    } else {
-        glDisable(GL_BLEND);
-    }
-    CHECK_GL_ERROR();
+void rnd::driver::gl::driver::invalidate_state_cache()
+{
+	m_state = {};
+}
 
-    // Face culling state
-    if (state.face_culling.enabled) {
-        glEnable(GL_CULL_FACE);
-        glCullFace(gCullModeToGL[static_cast<int>(state.face_culling.cull_mode)]);
-    } else {
-        glDisable(GL_CULL_FACE);
-    }
-    CHECK_GL_ERROR();
+void rnd::driver::gl::driver::bind_pipeline(pipeline_handle pipeline)
+{
+	const auto* found = m_pipelines.find(pipeline);
+	ASSERT_MSG(found, "bind_pipeline with a handle of no pipeline");
+	apply_pipeline(found->desc);
+	m_bound = found;
+	m_depth_write = found->desc.depth.enabled && found->desc.depth.write_mask;
+}
+
+namespace {
+	// Runs `apply` unless the cache already holds `wanted`.
+	template <class T, class Apply>
+	void change(std::optional<T>& cached, const T& wanted, Apply&& apply)
+	{
+		if (cached && *cached == wanted) {
+			return;
+		}
+		apply();
+		cached = wanted;
+	}
+}
+
+void rnd::driver::gl::driver::apply_pipeline(const pipeline_desc& desc)
+{
+	const auto* program = static_cast<const gl::shader*>(desc.shader.object);
+	change(m_state.program, program->program(), [&] { program->use(); });
+
+	// Without depth test the mask is off too, a pass that does not test does not write.
+	const bool depth_test = desc.depth.enabled;
+	change(m_state.depth_test, depth_test, [&] {
+		if (depth_test) {
+			glEnable(GL_DEPTH_TEST);
+		} else {
+			glDisable(GL_DEPTH_TEST);
+		}
+	});
+	if (depth_test) {
+		change(m_state.depth_func, gDepthFuncToGL[static_cast<int>(desc.depth.test_func)], [&] {
+			glDepthFunc(gDepthFuncToGL[static_cast<int>(desc.depth.test_func)]);
+		});
+	}
+	const bool depth_mask = depth_test && desc.depth.write_mask;
+	change(m_state.depth_mask, depth_mask, [&] { glDepthMask(depth_mask ? GL_TRUE : GL_FALSE); });
+	CHECK_GL_ERROR();
+
+	// GL_BLEND is global and follows the first target; a target that does not blend gets the pass-through function.
+	const bool blend = !desc.blend.empty() && desc.blend[0].enabled;
+	change(m_state.blend, blend, [&] {
+		if (blend) {
+			glEnable(GL_BLEND);
+		} else {
+			glDisable(GL_BLEND);
+		}
+	});
+	for (std::size_t i = 0; i < desc.blend.size(); ++i) {
+		const blend_state& b = desc.blend[i];
+		const state_cache::blend_funcs wanted = b.enabled
+			? state_cache::blend_funcs{ gBlendFactorToGL[static_cast<int>(b.src_factor)], gBlendFactorToGL[static_cast<int>(b.dst_factor)],
+				gBlendEquationToGL[static_cast<int>(b.blend_eq)] }
+			: state_cache::blend_funcs{ GL_ONE, GL_ZERO, GL_FUNC_ADD };
+		change(m_state.target_blend[i], wanted, [&] {
+			glBlendFunci(static_cast<GLuint>(i), wanted.src, wanted.dst);
+			glBlendEquationi(static_cast<GLuint>(i), wanted.equation);
+		});
+	}
+	CHECK_GL_ERROR();
+
+	const bool cull = desc.cull.enabled;
+	change(m_state.cull, cull, [&] {
+		if (cull) {
+			glEnable(GL_CULL_FACE);
+		} else {
+			glDisable(GL_CULL_FACE);
+		}
+	});
+	if (cull) {
+		change(m_state.cull_face, gCullModeToGL[static_cast<int>(desc.cull.cull_mode)], [&] {
+			glCullFace(gCullModeToGL[static_cast<int>(desc.cull.cull_mode)]);
+		});
+	}
+	CHECK_GL_ERROR();
 }
 
 std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_shader(const std::vector<shader_header>& headers)

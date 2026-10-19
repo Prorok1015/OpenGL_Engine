@@ -69,4 +69,54 @@ BOOST_AUTO_TEST_CASE(SmokeLevelBuildsNoFramebufferAfterWarmUp)
 	BOOST_TEST(!driver()->in_render_pass());
 }
 
+BOOST_AUTO_TEST_CASE(SmokeLevelBuildsNoPipelineAfterWarmUp)
+{
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+
+	std::vector<std::size_t> built;
+	auto& stages = storage.require<app::frame_stage_registry>();
+	stages.add_stage("test_pipeline_probe", app::builtin_stage::present, app::stage_side::after,
+		[&](app::stage_context&) { built.push_back(driver()->pipelines().misses()); });
+	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(8) == 8));
+	stages.remove_stage("test_pipeline_probe");
+
+	BOOST_REQUIRE(built.size() == 8u);
+	BOOST_TEST(built.back() > 0u);
+	for (std::size_t frame = 4; frame < built.size(); ++frame) {
+		BOOST_TEST(built[frame] == built[3], "frame " << frame << " built a pipeline");
+	}
+	BOOST_TEST(driver()->pipelines().size() == driver()->pipelines().misses());
+	BOOST_TEST(driver()->pipelines().hits() > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(SmokeLevelDrawsOnlyThroughBoundPipelines)
+{
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+
+	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
+
+	BOOST_TEST(driver()->calls().pipeline_binds > 0u);
+	BOOST_TEST(driver()->calls().draws > 0u);
+	BOOST_TEST(validating_driver()->state().count(vl::rule::draw_without_pipeline) == 0u);
+	BOOST_TEST(validating_driver()->state().count(vl::rule::pipeline_format_mismatch) == 0u);
+	std::size_t by_topology = 0;
+	for (auto topology : { rnd::driver::RENDER_MODE::TRIANGLE, rnd::driver::RENDER_MODE::LINE }) {
+		by_topology += driver()->draws_with(topology);
+	}
+	BOOST_TEST(by_topology == driver()->calls().draws);
+	BOOST_TEST(driver()->draws_with(rnd::driver::RENDER_MODE::TRIANGLE) > 0u);
+}
+
+BOOST_AUTO_TEST_CASE(EveryFrameStartsFromAnInvalidatedStateCache)
+{
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+
+	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(3) == 3));
+
+	BOOST_TEST(driver()->calls().state_cache_invalidations == 3u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

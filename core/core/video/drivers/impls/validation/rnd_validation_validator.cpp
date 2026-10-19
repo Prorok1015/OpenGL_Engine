@@ -19,7 +19,7 @@ namespace {
 		case trace_op::set_viewport: return "viewport";
 		case trace_op::begin_pass: return "begin_pass";
 		case trace_op::end_pass: return "end_pass";
-		case trace_op::use_program: return "use";
+		case trace_op::bind_pipeline: return "bind_pipeline";
 		case trace_op::bind_texture: return "bind_texture";
 		case trace_op::bind_ssbo: return "bind_ssbo";
 		case trace_op::draw: return "draw";
@@ -44,7 +44,10 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::render_area_outside_target: return "render_area_outside_target";
 	case rule::viewport_outside_target: return "viewport_outside_target";
 	case rule::draw_outside_render_pass: return "draw_outside_render_pass";
-	case rule::draw_without_use: return "draw_without_use";
+	case rule::draw_without_pipeline: return "draw_without_pipeline";
+	case rule::bind_pipeline_outside_pass: return "bind_pipeline_outside_pass";
+	case rule::invalid_pipeline: return "invalid_pipeline";
+	case rule::pipeline_format_mismatch: return "pipeline_format_mismatch";
 	case rule::draw_index_range: return "draw_index_range";
 	case rule::draw_without_layout: return "draw_without_layout";
 	case rule::buffer_write_range: return "buffer_write_range";
@@ -52,6 +55,7 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::budget_frame_buffers: return "budget_frame_buffers";
 	case rule::budget_programs: return "budget_programs";
 	case rule::budget_textures: return "budget_textures";
+	case rule::budget_pipelines: return "budget_pipelines";
 	}
 	return "unknown";
 }
@@ -87,6 +91,7 @@ std::string rnd::driver::validation::format_trace_entry(const trace_entry& entry
 		return std::format("#{} begin_pass({} color{})", entry.frame, entry.a, entry.b ? " + depth" : "");
 	case trace_op::draw:
 		return std::format("#{} draw({})", entry.frame, entry.a);
+	case trace_op::bind_pipeline:
 	case trace_op::bind_texture:
 	case trace_op::bind_ssbo:
 		return std::format("#{} {}({})", entry.frame, trace_op_name(entry.op), entry.a);
@@ -179,11 +184,13 @@ std::string rnd::driver::validation::validator::recent_trace(std::size_t count) 
 	return text.empty() ? "(no commands)" : text;
 }
 
-void rnd::driver::validation::validator::begin_pass(std::string name, target_info target, std::uint32_t colors, bool depth)
+void rnd::driver::validation::validator::begin_pass(std::string name, target_info target, pass_formats formats, std::uint32_t colors, bool depth)
 {
 	m_pass_active = true;
 	m_pass_name = std::move(name);
 	m_pass_target = target;
+	m_pass_formats = std::move(formats);
+	m_pipeline_bound = false;
 	note(trace_op::begin_pass, colors, depth ? 1u : 0u);
 	if (crosses_budget(++m_current.frame_buffers, m_budget.max_frame_buffers)) {
 		report(rule::budget_frame_buffers, std::format("more than {} render passes begun in one frame", m_budget.max_frame_buffers));
@@ -198,6 +205,8 @@ bool rnd::driver::validation::validator::end_pass()
 	m_pass_active = false;
 	m_pass_name.clear();
 	m_pass_target = {};
+	m_pass_formats = {};
+	m_pipeline_bound = false;
 	note(trace_op::end_pass);
 	return true;
 }
@@ -225,6 +234,13 @@ void rnd::driver::validation::validator::on_program_created()
 	}
 }
 
+void rnd::driver::validation::validator::on_pipeline_created()
+{
+	if (crosses_budget(++m_current.pipelines, m_budget.max_pipelines)) {
+		report(rule::budget_pipelines, std::format("more than {} pipelines created in one frame", m_budget.max_pipelines));
+	}
+}
+
 void rnd::driver::validation::validator::on_present()
 {
 	note(trace_op::present);
@@ -233,6 +249,5 @@ void rnd::driver::validation::validator::on_present()
 	}
 	m_last = m_current;
 	m_current = {};
-	m_program_used = false;
 	++m_frame;
 }

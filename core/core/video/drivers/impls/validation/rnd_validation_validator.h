@@ -1,5 +1,7 @@
 #pragma once
+#include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/common/snk_api.h>
+#include <snk/driver/rnd_pipeline.h>
 #include <snk/driver/rnd_texture_interface.h>
 
 #include <array>
@@ -7,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,7 +29,10 @@ namespace rnd::driver::validation
 		render_area_outside_target,
 		viewport_outside_target,
 		draw_outside_render_pass,
-		draw_without_use,
+		draw_without_pipeline,
+		bind_pipeline_outside_pass,
+		invalid_pipeline,
+		pipeline_format_mismatch,
 		draw_index_range,
 		draw_without_layout,
 		buffer_write_range,
@@ -34,9 +40,10 @@ namespace rnd::driver::validation
 		budget_frame_buffers,
 		budget_programs,
 		budget_textures,
+		budget_pipelines,
 	};
 
-	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::budget_textures) + 1;
+	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::budget_pipelines) + 1;
 
 	SNK_API const char* rule_name(rule r);
 
@@ -48,6 +55,7 @@ namespace rnd::driver::validation
 		std::size_t max_frame_buffers = unlimited;
 		std::size_t max_programs = unlimited;
 		std::size_t max_textures = unlimited;
+		std::size_t max_pipelines = unlimited;
 	};
 
 	struct frame_stats
@@ -55,6 +63,7 @@ namespace rnd::driver::validation
 		std::size_t frame_buffers = 0;
 		std::size_t programs = 0;
 		std::size_t textures = 0;
+		std::size_t pipelines = 0;
 		std::size_t draws = 0;
 	};
 
@@ -80,7 +89,7 @@ namespace rnd::driver::validation
 		set_viewport,
 		begin_pass,		// a = color attachment count, b = 1 when a depth/stencil attachment is set
 		end_pass,
-		use_program,
+		bind_pipeline,	// a = pipeline index
 		bind_texture,	// a = slot
 		bind_ssbo,		// a = slot
 		draw,			// a = count
@@ -107,6 +116,13 @@ namespace rnd::driver::validation
 		bool has_extent = false;
 		std::uint32_t width = 0;
 		std::uint32_t height = 0;
+	};
+
+	// Formats the render pass in progress renders to: what a pipeline bound in it has to declare.
+	struct pass_formats
+	{
+		ds::fixed_vector<std::optional<texture_format>, pipeline_desc::max_targets> colors;
+		std::optional<texture_format> depth;
 	};
 
 	// Shared by the validating driver, swapchain and every object they create: objects may outlive the
@@ -147,19 +163,22 @@ namespace rnd::driver::validation
 		// becomes current; its end_render_pass is swallowed by `consume_dropped_begin`.
 		bool in_pass() const { return m_pass_active; }
 		const std::string& pass_name() const { return m_pass_name; }
-		void begin_pass(std::string name, target_info target, std::uint32_t colors, bool depth);
+		void begin_pass(std::string name, target_info target, pass_formats formats, std::uint32_t colors, bool depth);
 		// False (and nothing changes) when no pass is in progress.
 		bool end_pass();
 		void drop_begin() { ++m_dropped_begins; }
 		bool consume_dropped_begin();
 
 		const target_info& current_target() const { return m_pass_target; }
+		const pass_formats& current_formats() const { return m_pass_formats; }
 
-		void on_program_used() { m_program_used = true; }
-		bool program_used() const { return m_program_used; }
+		// A pipeline is bound for the rest of the pass; the next pass starts without one.
+		void on_pipeline_bound() { m_pipeline_bound = true; }
+		bool pipeline_bound() const { return m_pipeline_bound; }
 		void on_draw() { ++m_current.draws; }
 		void on_texture_created();
 		void on_program_created();
+		void on_pipeline_created();
 
 		// The end of a frame: no render pass may be open; per-frame state restarts.
 		void on_present();
@@ -175,10 +194,11 @@ namespace rnd::driver::validation
 		std::uint64_t m_frame = 0;
 		frame_stats m_current;
 		frame_stats m_last;
-		bool m_program_used = false;
+		bool m_pipeline_bound = false;
 		bool m_pass_active = false;
 		std::string m_pass_name;
 		target_info m_pass_target;
+		pass_formats m_pass_formats;
 		std::size_t m_dropped_begins = 0;
 
 		mutable std::mutex m_registry_mutex;

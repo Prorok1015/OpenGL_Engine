@@ -1,6 +1,7 @@
 #include "rnd_composition_pass.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/rnd_pass_pipelines.h>
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
 
@@ -59,17 +60,6 @@ void composition_pass::execute(frame_context &context,
     if ((offscreen && !color_rt) || !color_tp_rt || !waight_tp_rt)
       continue;
 
-    rnd::driver::render_state state;
-    state.depth.enabled = true;
-    state.depth.test_func = rnd::driver::depth_state::func::ALWAYS;
-    state.depth.write_mask = false;
-    rnd::driver::blend_state blend;
-    blend.enabled = true;
-    blend.src_factor = rnd::driver::blend_state::factor::SRC_ALPHA;
-    blend.dst_factor = rnd::driver::blend_state::factor::ONE_MINUS_SRC_ALPHA;
-    state.blend_states = {blend};
-    drv.set_render_state(state);
-
     rnd::driver::render_pass_desc pass;
     pass.debug_name = "composition";
     if (offscreen) {
@@ -78,6 +68,19 @@ void composition_pass::execute(frame_context &context,
       pass.backbuffer = true;
     }
     drv.begin_render_pass(pass);
+
+    rnd::driver::pipeline_desc state;
+    state.depth.enabled = true;
+    state.depth.test_func = rnd::driver::depth_state::func::ALWAYS;
+    state.depth.write_mask = false;
+    rnd::driver::blend_state blend;
+    blend.enabled = true;
+    blend.src_factor = rnd::driver::blend_state::factor::SRC_ALPHA;
+    blend.dst_factor = rnd::driver::blend_state::factor::ONE_MINUS_SRC_ALPHA;
+    state.blend = {blend};
+    rnd::driver::set_target_formats(state, pass);
+    rnd::pass_pipelines pipelines(drv, *context.shaders, state);
+
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
@@ -99,8 +102,11 @@ void composition_pass::execute(frame_context &context,
             .set_fragment_shader(res::tag::make("shaders/composition.frag"));
     desc.rdata.samplers = {color_tp_rt, waight_tp_rt};
 
-    rnd::configure_pass(context, desc);
-    drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, std::size(indeces));
+    const auto variant = context.shaders->variants().intern(desc.cdata);
+    if (pipelines.bind(variant)) {
+      context.shaders->apply(variant, desc.rdata, nullptr);
+      drv.draw_indices(m_va, std::size(indeces));
+    }
 
     drv.end_render_pass();
   }

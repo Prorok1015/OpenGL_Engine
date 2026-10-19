@@ -75,17 +75,14 @@ namespace rnd::driver::null
 			: m_token(std::move(stats), &object_stats::shaders), m_headers(std::move(headers)) {}
 
 		void uniform(std::string_view /*name*/, const uniform_data& /*val*/) override { ++m_uniform_calls; }
-		void use() override { ++m_use_calls; }
 
 		const std::vector<shader_header>& headers() const { return m_headers; }
 		std::size_t uniform_calls() const { return m_uniform_calls; }
-		std::size_t use_calls() const { return m_use_calls; }
 
 	private:
 		detail::lifetime_token m_token;
 		std::vector<shader_header> m_headers;
 		std::size_t m_uniform_calls = 0;
-		std::size_t m_use_calls = 0;
 	};
 
 	class SNK_API texture final : public texture_interface
