@@ -363,11 +363,11 @@ BOOST_AUTO_TEST_CASE(Resolve_OnlyContextsThatAreExtractedHoldMarkers)
 	const auto s = make_scene({ 0, 0, -5 });
 	mgr.find("level", "ui")->set_extract(false);
 	scn::resolve_screen_anchors(mgr, screen);
-	BOOST_TEST(!s.ui->all_of<scn::screen_anchor_result>());
+	BOOST_TEST(!s.ui->all_of<scn::screen_anchor_result>(s.marker));
 
 	mgr.find("level", "ui")->set_extract(true);
 	scn::resolve_screen_anchors(mgr, screen);
-	BOOST_TEST(s.ui->all_of<scn::screen_anchor_result>());
+	BOOST_TEST(s.ui->all_of<scn::screen_anchor_result>(s.marker));
 }
 
 BOOST_AUTO_TEST_CASE(Resolve_AReferenceNeverReachesAnotherSet)
