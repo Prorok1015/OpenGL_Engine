@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <filesystem>
 #include <functional>
@@ -9,8 +10,6 @@
 
 namespace edt
 {
-	class dockspace;
-
 	// What the File menu needs from the rest of the editor. Plain callbacks, so the menu flow can run
 	// without a level, a resource system or ImGui.
 	struct file_menu_hooks
@@ -41,7 +40,9 @@ namespace edt
 		void import_model();
 		void exit();
 
-		void attach(dockspace& menu);
+		// Puts the File menu items (and the Ctrl+S binding) into `actions`. They stay registered while this
+		// menu lives; call it once.
+		void register_actions(action_registry& actions);
 
 	private:
 		// Runs `action` right away, or after the user settles the unsaved changes.
@@ -57,5 +58,7 @@ namespace edt
 		// The dialog queue belongs to editor_context and can outlive this menu: a dialog answered after
 		// that must not call back into it (or into the hooks, which capture editor_system).
 		std::shared_ptr<void> m_alive = std::make_shared<int>(0);
+		// Last: the actions capture `this` and are removed before the rest is destroyed.
+		std::vector<registration> m_registrations;
 	};
 }

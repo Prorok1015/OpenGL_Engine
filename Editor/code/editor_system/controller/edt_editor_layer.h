@@ -2,10 +2,11 @@
 #include <snk/gui/gui_layer_interface.h>
 #include <snk/gui/gui_menu_layout.h>
 #include "edt_dockspace.h"
-#include "edt_panel_manager.h"
 #include <chrono>
 
 namespace edt {
+	class editor_context;
+
 	class editor_layer : public gui::layer_interface {
 	public:
 		using UI_CALLBACK = gui::menu_layout_manager::UI_CALLBACK;
@@ -24,12 +25,12 @@ namespace edt {
 			m_manager.unregister_implicit(id);
 		}
 
-		panel_manager& get_panel_manager() { return m_panel_manager; }
-		dockspace& get_dockspace() { return m_dockspace; }
+		// The registries the dockspace draws; nothing is drawn before this is set.
+		void set_context(editor_context& context) { m_context = &context; }
 
 	private:
 		gui::menu_layout_manager m_manager;
 		dockspace m_dockspace;
-		panel_manager m_panel_manager;
+		editor_context* m_context = nullptr;
 	};
 }

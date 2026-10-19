@@ -12,6 +12,7 @@
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_registration.h>
 #include <vector>
 
 // Forward declarations — full types only needed in .cpp
@@ -130,6 +131,8 @@ namespace edt {
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
+		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
+		std::vector<registration> m_registrations;
 
 	};
 }

@@ -1,5 +1,4 @@
 #include "edt_file_menu.h"
-#include "edt_dockspace.h"
 #include <snk/common/logger/engine_log.h>
 #include <utility>
 
@@ -120,12 +119,16 @@ void edt::file_menu::quick_save()
 	}
 }
 
-void edt::file_menu::attach(dockspace& menu)
+void edt::file_menu::register_actions(action_registry& actions)
 {
-	menu.set_on_new_level([this] { new_level(); });
-	menu.set_on_open_level([this] { open_level(); });
-	menu.set_on_save_level([this] { save_level(); });
-	menu.set_on_quick_save([this] { quick_save(); });
-	menu.set_on_import_model([this] { import_model(); });
-	menu.set_on_exit([this] { exit(); });
+	const auto add = [this, &actions](action_desc desc) {
+		m_registrations.push_back(actions.add(std::move(desc)));
+	};
+	add({ .id = "file.new_level", .label = "New Level", .menu_path = "File", .execute = [this] { new_level(); } });
+	add({ .id = "file.open_level", .label = "Open Level...", .menu_path = "File", .execute = [this] { open_level(); } });
+	// The menu item always asks for a path; Ctrl+S overwrites the saved level (file.quick_save below).
+	add({ .id = "file.save_level", .label = "Save Level", .menu_path = "File", .shortcut_hint = "Ctrl+S", .execute = [this] { save_level(); } });
+	add({ .id = "file.quick_save", .label = "Quick Save", .shortcut = "Ctrl+S", .execute = [this] { quick_save(); } });
+	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true, .execute = [this] { import_model(); } });
+	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true, .execute = [this] { exit(); } });
 }

@@ -20,7 +20,7 @@ Editor/
     │   ├── edt_world_controller.cpp/h # switch/create world
     │   ├── edt_shared_state.h        # shared mutable state for all controllers
     │   ├── edt_editor_camera.h       # camera state POD
-    │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace + panel_manager + menus
+    │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace (main menu + default layout from the editor_context registries)
     │
     ├── panels/                       # 7 UI panels, all extend panel_base
     │
@@ -76,10 +76,10 @@ Controllers communicate via `std::function` callbacks set by `editor_system` dur
 | `game_view_panel` | `edt_game_view_panel.h` | "Game view" (View menu; `editor/show_game_view` opens it at startup): camera picker + image of the picked game camera; only that camera gets a viewport (logic in `edt_game_view_logic.h`, unit-tested) |
 | `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |
 | `asset_browser_panel` | `edt_asset_browser_panel.h` | Directory tree + file grid; drag-drop to viewport |
-| `dockspace` | `edt_dockspace.h` | ImGui DockSpace + menu bar (File/Edit/View/Help) |
+| `dockspace` | `edt_dockspace.h` | ImGui DockSpace + default layout; the menu bar is `draw_main_menu` (`edt_main_menu.h`) |
 | `panel_base` | `edt_panel_base.h` | `render()` wraps ImGui::Begin/End; `virtual on_render()` |
 
-All panels are `shared_ptr` members of `editor_system`. `panel_manager` calls `render_all()` each frame.
+All panels are `shared_ptr` members of `editor_system` and are registered in `editor_context::panels()` (`panel_registry`: id, title, `dock_slot`, `open_by_default`; registration order = render order = View menu order). `dockspace` calls `render_all()` each frame. Menu items and shortcuts are `editor_context::actions()` (`action_registry`); `file_menu::register_actions` adds the File items. `add()` returns a RAII `registration` (keep it as long as the entry should exist).
 
 ## Component UI Registry
 
