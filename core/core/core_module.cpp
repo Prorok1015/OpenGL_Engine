@@ -64,7 +64,15 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	const app::deterministic_time time{ std::max(0.f, static_cast<float>(cfg_fixed_frame_dt)), std::max(0, static_cast<int>(cfg_freeze_after_frames)) };
 	// Kept in storage so the GUI layer can feed ImGui the same dt.
 	data.construct<app::deterministic_time>(time);
-	data.construct<app::app_loop_service_interface, app::loop_service>(stages, time);
+	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time);
+	if (time.enabled()) {
+		static_cast<app::loop_service&>(loop).set_settled_probe([](ds::app_data_storage& storage) {
+			auto& tasks = storage.require<ds::task_system>();
+			return storage.require<::res::resource_system>().pending_loads() == 0
+				&& tasks.pending_main(ds::main_class::general) == 0
+				&& tasks.pending_main(ds::main_class::gpu_upload) == 0;
+		});
+	}
 }
 
 void core::core_module::initialize_services(ds::app_data_storage& data)

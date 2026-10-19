@@ -107,6 +107,22 @@ namespace res
 			}
 		}
 
+		// Read-only: cached resources that were requested but have neither finished nor failed yet.
+		// Used to tell that the scene has settled (deterministic headless runs).
+		std::size_t pending_loads() const {
+			std::shared_lock lock(m_cache_mutex);
+			std::size_t count = 0;
+			for (const auto& entry : m_cache) {
+				if (const auto block = entry.second.lock()) {
+					const auto status = block->status.load();
+					if (status != core::res::res_status::ready && status != core::res::res_status::error) {
+						++count;
+					}
+				}
+			}
+			return count;
+		}
+
 		void signal_changed(const res::tag& tag) {
 			std::unordered_map<void*, reload_callback> callbacks;
 			{

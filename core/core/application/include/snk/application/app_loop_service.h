@@ -1,6 +1,8 @@
 #pragma once
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service_interface.h>
@@ -21,6 +23,12 @@ namespace app
 		void on_step(ds::app_data_storage& storage) override;
 		// Runs the registry's term hooks (reverse order).
 		void term(ds::app_data_storage& storage) override;
+		// Deterministic time only. The freeze counts frames from the first frame `ready` returns true
+		// (the scene was instantiated: animation clocks start there). No probe: ready at once.
+		void set_ready_probe(std::function<bool(ds::app_data_storage&)> ready) { m_ready_probe = std::move(ready); }
+		// Deterministic time only. After the freeze the loop logs "scene settled" on the first frame
+		// `settled` returns true (no loads in flight), so a screenshot shows the finished frame.
+		void set_settled_probe(std::function<bool(ds::app_data_storage&)> settled) { m_settled_probe = std::move(settled); }
 		bool should_stop() const override { return m_stop_requested; }
 		void request_stop() override { m_stop_requested = true; }
 
@@ -28,6 +36,10 @@ namespace app
 		frame_stage_registry& m_stages;
 		deterministic_time m_time;
 		std::uint64_t m_frames = 0;
+		std::function<bool(ds::app_data_storage&)> m_ready_probe;
+		std::function<bool(ds::app_data_storage&)> m_settled_probe;
+		bool m_settled = false;
+		std::optional<std::uint64_t> m_ready_frame;
 		bool m_stop_requested = false;
 		std::chrono::steady_clock::time_point m_previous_time;
 	};

@@ -101,4 +101,21 @@ BOOST_AUTO_TEST_CASE(DeterministicTimeFeedsFixedDtThenFreezes) {
 	BOOST_TEST(dts == (std::vector<float>{ 0.25f, 0.25f, 0.f, 0.f }));
 }
 
+BOOST_AUTO_TEST_CASE(DeterministicTimeCountsFramesFromReady) {
+	app::frame_stage_registry stages;
+	std::vector<float> dts;
+	stages.set_body(app::builtin_stage::update, [&](app::stage_context& c) { dts.push_back(c.dt.count()); });
+
+	ds::app_data_storage storage;
+	app::loop_service loop(stages, app::deterministic_time{ 0.25f, 2 });
+	int step = 0;
+	// Not ready on frames 0-1; the count starts at frame 2, so the dt is frozen from frame 4.
+	loop.set_ready_probe([&](ds::app_data_storage&) { return step++ >= 2; });
+	loop.init(storage);
+	for (int i = 0; i < 7; ++i) {
+		loop.on_step(storage);
+	}
+	BOOST_TEST(dts == (std::vector<float>{ 0.25f, 0.25f, 0.25f, 0.25f, 0.f, 0.f, 0.f }));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

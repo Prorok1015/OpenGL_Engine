@@ -12,7 +12,8 @@
 #   --shot PATH        final screenshot             (default: headless_out/final.png)
 #   --size WxH         virtual screen size          (default: 1600x900)
 #   --frames N         deterministic time: the editor advances a constant --frame-dt per frame and freezes
-#                      scene time after N frames; the script waits for that before the actions/screenshot,
+#                      scene time N frames after the level is instantiated; the script waits until that and all
+#                      loads are done before the actions/screenshot,
 #                      so a shot no longer depends on runner speed. With no action script --seconds is ignored.
 #   --frame-dt SEC     frame step used by --frames  (default: 0.0166667)
 #
@@ -96,13 +97,13 @@ for _ in $(seq 1 60); do
 done
 
 if [[ -n "$FRAMES" ]]; then
-	# Logged by app::loop_service on the first frozen frame; a slow runner just takes longer to get here.
+	# Logged by app::loop_service once time is frozen and no loads are in flight; a slow runner just takes longer.
 	for _ in $(seq 1 480); do
 		alive || break
-		grep -q 'deterministic time frozen' "$LOG" && break
+		grep -q 'deterministic scene settled' "$LOG" && break
 		sleep 0.5
 	done
-	grep -q 'deterministic time frozen' "$LOG" || echo "warning: time was not frozen after 240 s" >&2
+	grep -q 'deterministic scene settled' "$LOG" || echo "warning: scene did not settle within 240 s" >&2
 	sleep 1 # a few frozen frames, so ImGui hover/fade state settles
 fi
 
