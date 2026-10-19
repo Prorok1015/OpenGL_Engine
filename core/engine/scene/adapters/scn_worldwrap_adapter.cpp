@@ -3,13 +3,43 @@
 #include <stdexcept>
 #include <string>
 
-scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system& res_system, ::desc::desc_system& desc_system)
-	: m_res_system(res_system)
-	, m_desc_system(desc_system)
+scn::worldwrap_adapter::worldwrap_adapter(::res::resource_system&, ::desc::desc_system& desc_system)
+	: m_desc_system(desc_system)
 {
 }
 
+std::vector<::res::res_dep> scn::worldwrap_adapter::collect_dependencies(const::res::tag& tag, const std::vector<std::byte>& data) const
+{
+    // Most files have no parent: skip parsing them twice.
+    constexpr std::string_view marker = "\"__parent\"";
+    const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
+    if (text.find(marker) == std::string_view::npos) {
+        return {};
+    }
+
+    json::parse_options options;
+    options.max_depth = 128;
+    auto json_body = json::parse(text, {}, options).as_object();
+    try {
+        m_desc_system.migrate_tree(json_body, tag.view());
+    } catch (const std::exception& e) {
+        throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': " + e.what());
+    }
+
+    const auto* type = json_body.if_contains("__type");
+    const auto* parent = json_body.if_contains("__parent");
+    if (!type || !type->is_string() || !parent || json::value_to<std::string>(*type) != scn::world_desc::__type) {
+        return {};
+    }
+    return { ::res::make_dep<::desc::desc_base>(json::value_to<::res::tag>(*parent)) };
+}
+
 std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
+{
+    return deserialize(tag, data, ::res::res_deps{});
+}
+
+std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
 {
     std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
     json::parse_options options;
@@ -33,8 +63,7 @@ std::shared_ptr<::res::resource_entry> scn::worldwrap_adapter::deserialize(const
     if (type_id == scn::world_desc::__type) {
         if (json_body.contains("__parent")) {
             auto parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
-            auto parent = m_res_system.require_sync<::desc::desc_base>(parent_tag);
-            const auto parent_desc = parent.get_sync();
+            const auto parent_desc = deps.get<::desc::desc_base>(parent_tag);
             if (!parent_desc) {
                 throw std::runtime_error("world desc '" + std::string{ tag.view() } + "': failed to load '__parent' '" + std::string{ parent_tag.view() } + "'");
             }

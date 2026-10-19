@@ -40,8 +40,9 @@ Editor/
     │   ├── edt_transform_gizmo.hpp
     │   └── edt_guizmo.hpp
     │
-    ├── input/                        # Editor input & file dialog
-    │   ├── edt_input_manager.cpp/h
+    ├── input/                        # Input binding helpers & file dialog
+    │   ├── edt_input_manager.h       # make_input_area / to_framebuffer_size (window units -> framebuffer pixels)
+    │   ├── edt_input_binding.h       # bind_item_input: a hovered panel image binds its rect to a context in inp::input_router
     │   └── edt_file_dialog.cpp/h
     │
     └── CMakeLists.txt
@@ -225,7 +226,7 @@ Non-blocking ImGui modal — must be called every frame while open.
 
 - **EnTT `registry::each()` does not exist** — use `registry.storage<entt::entity>()` to iterate all entities
 - **EnTT forward declare** — use `#include <entt/fwd.hpp>`, not `namespace entt { class registry; }`
-- **Input rect**: editor input is gated to viewport rect — mouse outside viewport is not forwarded to ECS
+- **Input routing**: ECS input is routed by `inp::input_router`; a panel binds its hovered image every frame (`bind_item_input`), the context under the cursor gets the full `inp::input_state`, all others a neutral one. Never set `inp::input_focus` by hand
 - **`serialize_and_push()` is destructive** — tears down and rebuilds the entire ECS world; don't hold raw pointers to registry components across it
 - **Camera state**: always call `save_editor_camera_state` before `serialize_and_push`, `inject_editor_camera` after — otherwise camera resets
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`

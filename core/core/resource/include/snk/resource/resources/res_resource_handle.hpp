@@ -37,23 +37,15 @@ namespace core::res
         }
 
         // Blocks until the load finished, either way (check is_ready() / has_error() after).
-        // On a task_system worker (an adapter that needs another resource) it runs the load task of exactly this
-        // resource inline if that task is still queued, so the load cannot be stuck behind the workers that are all
-        // waiting, and nothing unrelated is nested on the stack. A load running on another thread is waited for.
-        // Waiting for a resource that this very thread is loading (further up its stack) is a dependency cycle:
-        // asserts in debug, logs and returns without a result otherwise. Cycles through several threads are not
-        // detected here (that is the wait graph of #134b); a wait that goes on for long is logged.
-        // A handle built by hand, without a task_system, can only block on the block.
+        // Not for a task_system worker: adapters declare what they need (adapter_interface::collect_dependencies)
+        // instead of waiting, and a worker that waits for a load queued behind it stalls the pool. Under
+        // policy::manual the queued loads are run right here, since nothing runs in the background.
         void wait() const {
             if (!m_block) return;
             if (m_block->is_ready() || m_block->has_error()) return;
-            if (m_tasks && m_tasks->mode() == ds::policy::threaded && ds::task_system::on_worker()) {
-                help_until_finished();
-                return;
-            }
             if (m_tasks && m_tasks->mode() == ds::policy::manual) {
-                // Nothing runs in the background, so run the queued loads here. When none is queued the block
-                // may still be waiting for a resolver thread, whose completion queues the next one.
+                // When no task is queued the block may still be waiting for a resolver thread, whose completion
+                // queues the next one.
                 while (!m_block->is_ready() && !m_block->has_error()) {
                     if (!m_tasks->run_one(ds::lane::compute) && !m_tasks->run_one(ds::lane::io)) {
                         m_block->wait_for(std::chrono::milliseconds(1));
@@ -61,6 +53,7 @@ namespace core::res
                 }
                 return;
             }
+            ASSERT_MSG(!(m_tasks && ds::task_system::on_worker()), "res_handle::wait on a pool thread: '{}' is not ready, declare it as a dependency instead", m_tag.view());
             m_block->wait();
         }
 
@@ -113,25 +106,6 @@ namespace core::res
 		}
 
     private:
-        void help_until_finished() const {
-            const auto start = std::chrono::steady_clock::now();
-            bool reported = false;
-            while (!m_block->is_ready() && !m_block->has_error()) {
-                if (core::res::detail::loading_on_this_thread(m_block.get())) {
-                    ASSERT_MSG(false, "res_handle::wait: '{}' is being loaded further up this thread's stack: dependency cycle", m_tag.view());
-                    egLOG_ERROR("resource", "wait for '{}' on the thread that is loading it: dependency cycle", m_tag.view());
-                    return;
-                }
-                const auto task_id = m_block->load_task_id.load();
-                if (task_id != 0 && m_tasks->try_run_inline(task_id)) continue;
-                m_block->wait_for(std::chrono::milliseconds(1));
-                if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
-                    reported = true;
-                    egLOG_ERROR("resource", "still waiting for '{}' on a worker thread after 10 s: dependency cycle?", m_tag.view());
-                }
-            }
-        }
-
         std::shared_ptr<resource_control_block> m_block;
         ::res::tag m_tag;
         ds::task_system* m_tasks = nullptr;

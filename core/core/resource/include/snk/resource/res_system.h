@@ -5,14 +5,18 @@
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
+#include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include <mutex>
+#include <memory>
 #include <set>
 #include <shared_mutex>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
+#include <utility>
+#include <vector>
 
 namespace std {
 	template<> struct hash<std::pair<ds::type_id, std::string>> {
@@ -26,6 +30,9 @@ namespace res
 {
 	template<class T>
 	using res_handle = core::res::res_handle<T>;
+
+	// The value of a res::when_all handle: carries nothing, the handles that were joined hold the resources.
+	struct SNK_API when_all_result : resource_entry {};
 
 	class SNK_API resource_system
 	{
@@ -181,10 +188,19 @@ namespace res
 			return require_resource_internal<RESOURCE, false>(tag, resolve_alias(tag));
 		}
 
+		// Blocks until the resource is ready or failed. Main thread only: a pool worker that waits stalls the pool
+		// (asserts on one, except under policy::manual, where the tests pump the lanes themselves). The adapter of a
+		// resource that needs others declares them instead (adapter_interface::collect_dependencies).
 		template<class RESOURCE>
 		auto require_sync(const res::tag& tag) {
+			ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
+				"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
 			return require_resource_internal<RESOURCE, true>(tag, resolve_alias(tag));
 		}
+
+		// A handle that is ready once every block is ready, and failed once all of them have finished and any failed:
+		// the ones that loaded are still delivered and cached. Prefer res::when_all(...) below.
+		res_handle<when_all_result> when_all_blocks(std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks);
 
 		template<class T>
 		void warmup(const res::tag& tag)
@@ -264,81 +280,31 @@ namespace res
 			m_pinned_resources[key] = resource;
 		}
 
-		template<typename T, bool is_sync>
-		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle> final_cb) {
-			// The cache slot already holds final_cb: any escape from here would leave waiters blocked forever.
-			try {
-				start_loading_unguarded<T, is_sync>(tag, final_cb);
-			} catch (const std::exception& e) {
-				egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
-				final_cb->set_error(std::string{ "Load error: " } + e.what());
-			} catch (...) {
-				egLOG_ERROR("res/resolver", "Failed to start loading {}: unknown exception", tag.view());
-				final_cb->set_error("Load error: unknown exception");
-			}
-		}
+		struct wait_graph;
+		struct await_state;
 
-		template<typename T, bool is_sync>
-		void start_loading_unguarded(const res::tag& tag, const std::shared_ptr<resource_handle>& final_cb) {
-			auto resolver_it = m_resolvers.find(tag.protocol());
-			if (resolver_it == m_resolvers.end()) {
-				egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
-				final_cb->set_error(std::string{ "Unsupported protocol: " } + std::string{ tag.protocol() });
-				return;
-			}
-
-			auto raw_data_block = resolver_it->second->resolve(tag);
-			if (!raw_data_block) {
-				egLOG_ERROR("res/resolver", "Resolver returned no data block for {}", tag.view());
-				final_cb->set_error("Resolver returned no data");
-				return;
-			}
-
-			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
-				const core::res::detail::loading_scope loading(final_cb.get());
-				if (raw_data_block->has_error()) {
-					final_cb->set_error(std::string{ "Resolver error: " } + raw_data_block->error_msg);
-					egLOG_ERROR("res/resolver", "Failed to resolve resource {0}: {1}", tag.view(), raw_data_block->error_msg);
-					return;
-				}
-
-				try {
-					auto adapter = find_adapter_recursive<T>(tag);
-					if (!adapter) {
-						throw std::runtime_error("No adapter found for resource type");
-					}
-
-					final_cb->status = core::res::res_status::processing;
-					auto parsed_obj = adapter->deserialize(tag, raw_data_block->data);
-
-					final_cb->set_ready(std::move(parsed_obj));
-				} catch (const std::exception& e) {
-					final_cb->set_error(std::string{ "Adapter error: " } + e.what());
-					egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
-				} catch (...) {
-					final_cb->set_error("Adapter error: unknown exception");
-					egLOG_ERROR("res/adapter", "Failed to deserialize resource {}: unknown exception", tag.view());
-				}
-			};
-
-			if constexpr (is_sync)
-			{
-				raw_data_block->wait();
-				adapter_cb();
-			} else {
-				raw_data_block->on_settled([this, adapter_cb, final_cb](auto&) {
-					run_on_compute(adapter_cb, final_cb);
-				});
-			}
-		}
+		// The pipeline: resolve -> collect_dependencies (compute) -> require each dependency, no waiting ->
+		// deserialize (compute) once all are ready. A block with no dependencies is one compute task.
+		void start_loading(const res::tag& tag, const std::shared_ptr<resource_handle>& block, adapter ad);
+		void collect_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad);
+		void deserialize_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad, const res_deps& deps);
+		// Calls `on_done` (any thread) once every block has settled without error, and fails `owner` if any failed.
+		// The waits go through the wait graph, which fails the blocks of a cycle instead of letting them wait forever.
+		void await_blocks(const std::shared_ptr<resource_handle>& owner, const res::tag& owner_tag,
+			std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks, std::function<void()> on_done);
+		void wait_for_block(const std::shared_ptr<resource_handle>& block) const;
 
 		template<class RESOURCE, bool is_sync>
 		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
-			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
+			auto found = find_adapter_recursive<RESOURCE>(tag);
+			ASSERT_MSG(found, "No adapter found for resource type!");
 
 			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, ds::type_id::make<RESOURCE>() });
 			if (is_new) {
-				start_loading_t<RESOURCE, is_sync>(tag, block);
+				start_loading(tag, block, std::move(found));
+			}
+			if constexpr (is_sync) {
+				wait_for_block(block);
 			}
 			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
 			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
@@ -396,10 +362,44 @@ namespace res
 		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
 
+		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
+		std::unique_ptr<wait_graph> m_graph;
+
 		ds::task_system& m_tasks;
 		std::mutex m_stop_mutex;
 		bool m_stopping = false;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
 		ds::lifetime m_lifetime;
 	};
+
+	// A dependency of `target` as T, for adapter_interface::collect_dependencies.
+	template<class T>
+	res_dep make_dep(const res::tag& target)
+	{
+		return res_dep{ target, ds::type_id::make<T>(), [](resource_system& system, const res::tag& tag) {
+			return system.require<T>(tag).get_control_block();
+		} };
+	}
+
+	// Joins resources that are requested separately (for example, what a level needs): ready when all are,
+	// failed when all have finished and any failed. Delivers on any thread; use .then(lifetime, cb) for the main one.
+	template<class... T>
+	res_handle<when_all_result> when_all(resource_system& system, const res_handle<T>&... handles)
+	{
+		std::vector<std::pair<std::shared_ptr<resource_system::resource_handle>, res::tag>> blocks;
+		blocks.reserve(sizeof...(T));
+		(blocks.emplace_back(handles.get_control_block(), handles.get_tag()), ...);
+		return system.when_all_blocks(std::move(blocks));
+	}
+
+	template<class T>
+	res_handle<when_all_result> when_all(resource_system& system, const std::vector<res_handle<T>>& handles)
+	{
+		std::vector<std::pair<std::shared_ptr<resource_system::resource_handle>, res::tag>> blocks;
+		blocks.reserve(handles.size());
+		for (const auto& handle : handles) {
+			blocks.emplace_back(handle.get_control_block(), handle.get_tag());
+		}
+		return system.when_all_blocks(std::move(blocks));
+	}
 }

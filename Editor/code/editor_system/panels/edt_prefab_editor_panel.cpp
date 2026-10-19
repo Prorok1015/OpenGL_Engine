@@ -1,10 +1,8 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_editor_context.h"
-#include "edt_input_manager.h"
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_system.h>
-#include <snk/input/inp_ecs_input_manager.h>
-#include <snk/input/inp_events.hpp>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/resource/res_tag.h>
 #include <imgui.h>
@@ -78,23 +76,10 @@ namespace edt
 			// UV (0,1)->(1,0) flips Y for OpenGL convention
 			ImGui::Image(tex_id, size, ImVec2(0, 1), ImVec2(1, 0));
 
-			// Route ECS input when cursor is over the prefab viewport
-			if (ImGui::IsItemHovered()) {
-				ImVec2 win_pos = ImGui::GetWindowPos();
-				const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
-				const glm::ivec4 rect = edt::make_input_area({ win_pos.x, win_pos.y }, { size.x, size.y }, { fb_scale.x, fb_scale.y });
-				if (m_ecs_input)
-					m_ecs_input->set_input_area(rect);
-				// Disable editor input blocking so mouse events reach ecs_input
-				if (m_editor_input)
-					m_editor_input->set_input_area(glm::zero<glm::ivec4>(), true);
-			}
-
-			// Gate per-world camera input: only active when this viewport is hovered
-			if (entt::registry* reg = m_ctx->get_registry()) {
-				auto& focus = reg->ctx().emplace<inp::input_focus>();
-				focus.active = ImGui::IsItemHovered();
-			}
+			// The preview context gets input only while its image is hovered
+			bind_item_input(m_router, inp::input_target{
+				.set = std::string{ scn::context_manager::level_set_name },
+				.context = std::string{ prefab_editor_context::world_name() } });
 		} else {
 			ImGui::TextDisabled("(waiting for render target...)");
 		}

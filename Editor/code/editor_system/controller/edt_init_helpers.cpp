@@ -8,7 +8,7 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_component_ui_registry.h"
 #include "edt_component_renderers.h"
-#include "edt_input_manager.h"
+#include "edt_input_target.h"
 #include "edt_editor_camera.h"
 #include "edt_shared_state.h"
 #include "edt_scene_editor.h"
@@ -19,7 +19,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_system.h>
-#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_input_router.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/common/eng_transform_3d.hpp>
@@ -67,8 +67,7 @@ void setup_panels(
 
 void setup_viewport_panel(
 	std::shared_ptr<viewport_panel>& viewport,
-	std::shared_ptr<input_manager>& input,
-	std::shared_ptr<inp::ecs_input_manager>& ecs_input,
+	inp::input_router& router,
 	editor_system& sys,
 	shared_state& state,
 	rnd::render_system& rnd,
@@ -85,8 +84,7 @@ void setup_viewport_panel(
 		if (!level.has_world(name)) return nullptr;
 		return &level.get_world(name).state();
 	});
-	viewport->set_input_manager(input);
-	viewport->set_ecs_input_manager(ecs_input);
+	viewport->set_input_router(&router, [&state] { return active_input_target(state); });
 	viewport->set_on_asset_dropped([&sys](const std::string& res_rel_path) {
 		if (!sys.m_state.editor_tag.is_valid()) return;
 		const std::filesystem::path rel{ res_rel_path };
