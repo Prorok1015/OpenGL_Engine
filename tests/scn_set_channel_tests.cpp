@@ -280,13 +280,13 @@ BOOST_AUTO_TEST_CASE(Order_ExternalFirstThenContextsByAscendingIdThenSend)
 	set->channel().post_external<msg>({}, msg{ 2 });
 	set->update(one_frame);
 
-	const std::vector<int> expected{ 1, 2, 21, 22, 51, 52 };
-	BOOST_TEST((seen(hi).inbox_values[1] == expected));
-	BOOST_TEST((seen(lo).inbox_values[1] == expected));
-	BOOST_TEST((seen(lo).inbox_from[1] == std::vector<std::string>{ "", "", "lo", "lo", "hi", "hi" }));
+	// a broadcast does not come back to its sender
+	BOOST_TEST((seen(hi).inbox_values[1] == std::vector<int>{ 1, 2, 21, 22 }));
+	BOOST_TEST((seen(lo).inbox_values[1] == std::vector<int>{ 1, 2, 51, 52 }));
+	BOOST_TEST((seen(lo).inbox_from[1] == std::vector<std::string>{ "", "", "hi", "hi" }));
 }
 
-BOOST_AUTO_TEST_CASE(Delivery_BroadcastReachesEveryContextAddressedOnlyItsTarget)
+BOOST_AUTO_TEST_CASE(Delivery_BroadcastReachesOthersNotTheSenderSelfAddressReachesTheSender)
 {
 	auto set = make_set();
 	auto& a = add(*set, "a", 0, { "script_early" }, [](entt::registry& reg, int frame) {
@@ -295,6 +295,7 @@ BOOST_AUTO_TEST_CASE(Delivery_BroadcastReachesEveryContextAddressedOnlyItsTarget
 		auto& out = reg.ctx().get<ecs::outbox<msg>>();
 		out.send({ "b" }, msg{ 1 });
 		out.send({}, msg{ 2 });
+		out.send({ "a" }, msg{ 3 });
 	});
 	auto& b = add(*set, "b", 1, { "script_early" }, [](entt::registry& reg, int) { record(reg); });
 	auto& c = add(*set, "c", 2, { "script_early" }, [](entt::registry& reg, int) { record(reg); });
@@ -302,7 +303,7 @@ BOOST_AUTO_TEST_CASE(Delivery_BroadcastReachesEveryContextAddressedOnlyItsTarget
 	set->update(one_frame);
 	set->update(one_frame);
 
-	BOOST_TEST((seen(a).inbox_values[1] == std::vector<int>{ 2 })); // a broadcast also reaches its sender
+	BOOST_TEST((seen(a).inbox_values[1] == std::vector<int>{ 3 })); // only the explicit self-address
 	BOOST_TEST((seen(b).inbox_values[1] == std::vector<int>{ 1, 2 }));
 	BOOST_TEST((seen(c).inbox_values[1] == std::vector<int>{ 2 }));
 }

@@ -32,7 +32,7 @@ struct entity_ref
 	bool operator==(const entity_ref&) const = default;
 };
 
-// An empty context name addresses every context of the set.
+// An empty context name addresses every other context of the set (not the sender).
 struct address
 {
 	std::string context;
@@ -263,8 +263,9 @@ public:
 			}
 			if (msg.to.context.empty()) {
 				++delivered;
-				for (auto* in : inboxes) {
-					if (in) in->m_messages.push_back(msg);
+				for (size_t i = 0; i < inboxes.size(); ++i) {
+					// a context that wants its own message addresses itself by name
+					if (inboxes[i] && !(contexts[i].name == msg.from && !msg.from.empty())) inboxes[i]->m_messages.push_back(msg);
 				}
 				return;
 			}
