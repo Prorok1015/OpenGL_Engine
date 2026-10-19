@@ -36,7 +36,7 @@ scn::context_manager::~context_manager() = default;
 
 scn::context_set& scn::context_manager::add_level_set()
 {
-	return *m_sets.emplace_back(std::make_unique<scn::context_set>(std::string{ level_set_name }, m_hot_reload_manager));
+	return *m_sets.emplace_back(std::make_unique<scn::context_set>(std::string{ level_set_name }, m_hot_reload_manager, m_channel_types));
 }
 
 void scn::context_manager::update(std::chrono::duration<float> dt)
@@ -56,7 +56,7 @@ scn::context_set& scn::context_manager::create_set(std::string_view name)
 		egLOG_ERROR("scene", "create_set: set '{}' already exists, keeping the existing one", name);
 		return *existing;
 	}
-	return *m_sets.emplace_back(std::make_unique<scn::context_set>(std::string{ name }, m_hot_reload_manager));
+	return *m_sets.emplace_back(std::make_unique<scn::context_set>(std::string{ name }, m_hot_reload_manager, m_channel_types));
 }
 
 void scn::context_manager::destroy_set(std::string_view name)

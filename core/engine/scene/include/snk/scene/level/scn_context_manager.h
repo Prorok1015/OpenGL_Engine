@@ -6,6 +6,7 @@
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
+#include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/common/engine_assert.h>
 #include <snk/common/snk_api.h>
@@ -99,10 +100,25 @@ namespace scn
 		void set_mode(std::string_view set, ecs::run_mode mode) { get_set(set).set_mode(mode); }
 		void set_seed(std::string_view set, uint64_t seed) { get_set(set).set_seed(seed); }
 
+		// Message types the sets can carry; shared by every set (also the ones created later). Modules
+		// register theirs at init: `channels().add<my_message>()`.
+		ecs::channel_registry& channels() { return *m_channel_types; }
+
+		// Entry of code outside the phases (editor, game shell) into the channel of a set. The
+		// message is delivered at the next exchange of that set, before the contexts' own messages.
+		template <typename T>
+		void post(std::string_view set, ecs::address to, T payload)
+		{
+			get_set(set).channel().post_external<T>(std::move(to), std::move(payload));
+		}
+		// Writer for values from outside the phases; visible after the next exchange of the set.
+		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
+
 	private:
 		scn::context_set& add_level_set();
 
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
+		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();
 		scn::ecs_assembler& m_assembler;
 		ecs::system_factory& m_system_factory;
 		res::resource_system& m_resource;

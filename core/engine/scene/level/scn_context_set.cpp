@@ -3,9 +3,11 @@
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
 
-scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager)
+scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
+							  std::shared_ptr<ecs::channel_registry> channel_types)
 	: m_name(std::move(name))
 	, m_hot_reload_manager(std::move(hot_manager))
+	, m_channel(m_name, std::move(channel_types))
 {
 }
 
@@ -27,6 +29,8 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 	PROFILE_SCOPE("LevelUpdate");
 
 	const ecs::run_mode mode = m_mode;
+	begin_frame_channel(mode);
+
 	int fixed_steps = 0;
 	for (const auto& [id, context] : m_contexts) {
 		context->begin_frame(dt);
@@ -47,6 +51,21 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 
 	if (mode == ecs::run_mode::step) m_mode = ecs::run_mode::pause;
 	sync_context_mode();
+}
+
+void scn::context_set::begin_frame_channel(ecs::run_mode mode)
+{
+	m_participants.clear();
+	m_participants.reserve(m_contexts.size());
+	for (const auto& [id, context] : m_contexts) {
+		m_participants.push_back(ecs::channel_participant{ id, context->get_name(), &context->state() });
+	}
+
+	if (mode == ecs::run_mode::play || mode == ecs::run_mode::step) {
+		m_channel.begin_frame(m_participants);
+	} else {
+		m_channel.skip_frame(m_participants);
+	}
 }
 
 void scn::context_set::set_mode(ecs::run_mode mode)
@@ -102,6 +121,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	auto& w = *(m_contexts[id] = std::make_unique<scn::world_context>(id, name));
 	m_context_ids[std::string{ name }] = id;
 	w.set_kind(kind);
+	m_channel.attach(id, w.get_name(), w.state());
 	w.seed(m_seed);
 	w.set_mode(m_mode);
 	// lockstep: a context created later joins at the same point of the step as the others
@@ -218,4 +238,5 @@ void scn::context_set::clear()
 
 	m_contexts.clear();
 	m_context_ids.clear();
+	m_channel.clear();
 }
