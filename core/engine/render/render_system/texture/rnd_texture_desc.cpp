@@ -4,28 +4,62 @@
 namespace rnd::driver
 {
 	namespace {
-		std::string_view txm_usage_to_string(TEXTURE_USAGE usage)
+		struct usage_name
 		{
-			switch (usage)
-			{
-			case TEXTURE_USAGE::COLOR_TARGET: return "color_target";
-			case TEXTURE_USAGE::DEPTH_TARGET: return "depth_target";
-			case TEXTURE_USAGE::SAMPLED: return "sampled";
-			case TEXTURE_USAGE::STENCIL_TARGET: return "stencil_target";
-			case TEXTURE_USAGE::STORAGE: return "storage";
-			case TEXTURE_USAGE::NONE: break;
+			texture_usage flag;
+			std::string_view name;
+		};
+
+		constexpr usage_name k_usage_names[] = {
+			{texture_usage::sampled, "sampled"},
+			{texture_usage::storage, "storage"},
+			{texture_usage::color_target, "color_target"},
+			{texture_usage::depth_target, "depth_target"},
+			{texture_usage::stencil_target, "stencil_target"},
+		};
+
+		// A single flag is written as a string (the original format), several as an array of strings.
+		json::value txm_usage_to_json(texture_usage usage)
+		{
+			json::array names;
+			for (const auto& entry : k_usage_names) {
+				if (has_usage(usage, entry.flag)) {
+					names.emplace_back(json::string{entry.name});
+				}
 			}
-			return "unknown";
+			if (names.empty()) {
+				return json::string{"unknown"};
+			}
+			if (names.size() == 1) {
+				return names.front();
+			}
+			return names;
 		}
 
-		TEXTURE_USAGE txm_usage_from_string(const std::string_view& usage)
+		texture_usage txm_usage_from_string(const std::string_view& usage)
 		{
-			if (usage == "color_target") return TEXTURE_USAGE::COLOR_TARGET;
-			if (usage == "depth_target") return TEXTURE_USAGE::DEPTH_TARGET;
-			if (usage == "sampled") return TEXTURE_USAGE::SAMPLED;
-			if (usage == "stencil_target") return TEXTURE_USAGE::STENCIL_TARGET;
-			if (usage == "storage") return TEXTURE_USAGE::STORAGE;
-			return TEXTURE_USAGE::NONE;
+			for (const auto& entry : k_usage_names) {
+				if (usage == entry.name) {
+					return entry.flag;
+				}
+			}
+			return texture_usage::none;
+		}
+
+		texture_usage txm_usage_from_json(const json::value& usage)
+		{
+			if (usage.is_string()) {
+				return txm_usage_from_string(usage.as_string());
+			}
+			texture_usage result = texture_usage::none;
+			if (usage.is_array()) {
+				for (const auto& item : usage.as_array()) {
+					if (item.is_string()) {
+						result |= txm_usage_from_string(item.as_string());
+					}
+				}
+			}
+			return result;
 		}
 
 		std::string txm_wrap_to_string(texture_header::WRAPPING wrap)
@@ -151,7 +185,7 @@ namespace rnd::driver
 	{
 		out = {
 			{"type", txm_type_to_string(c.type)},
-			{"usage", txm_usage_to_string(c.usage)},
+			{"usage", txm_usage_to_json(c.usage)},
 			{"wrap", txm_wrap_to_string(c.wrap)},
 			{"mag", txm_filtering_to_string(c.mag)},
 			{"min", txm_filtering_to_string(c.min)},
@@ -183,7 +217,7 @@ namespace rnd::driver
 		if (obj.contains("type"))
 			c.type = txm_type_from_string(obj.at("type").as_string());
 		if (obj.contains("usage"))
-			c.usage = txm_usage_from_string(obj.at("usage").as_string());
+			c.usage = txm_usage_from_json(obj.at("usage"));
 		if (obj.contains("wrap"))
 			c.wrap = txm_wrap_from_string(obj.at("wrap").as_string());
 		if (obj.contains("mag"))
@@ -230,7 +264,7 @@ void rnd::texture_desc::serialize(json::object& resource) const
 		{
 			name: "texture",
 			header: {
-				usage: "texture_usage",
+				usage: "texture_usage" | ["texture_usage", ...],
 				wrap: "wrapping",
 				mag: "filtering",
 				min: "filtering",

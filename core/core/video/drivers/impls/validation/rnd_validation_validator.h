@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/snk_api.h>
+#include <snk/driver/rnd_texture_interface.h>
 
 #include <array>
 #include <cstddef>
@@ -18,6 +19,8 @@ namespace rnd::driver::validation
 		unbalanced_at_present,
 		render_target_without_push,
 		attachment_usage,
+		texture_usage_flags,
+		texture_not_sampled,
 		attachment_size_mismatch,
 		viewport_outside_target,
 		scissor_outside_target,
@@ -95,6 +98,9 @@ namespace rnd::driver::validation
 	};
 
 	SNK_API std::string format_trace_entry(const trace_entry& entry);
+
+	// "sampled|color_target", or "none".
+	SNK_API std::string usage_text(texture_usage usage);
 
 	// The render target the commands currently go to. The backbuffer (depth 1) has no known extent.
 	struct target_info

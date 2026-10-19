@@ -55,6 +55,7 @@ namespace rnd::driver::validation
 		const validator& state() const { return *m_state; }
 
 	private:
+		void check_texture_usage(const texture_header& header);
 		bool check_targets(std::span<texture_interface* const> colors, texture_interface* depth_stencil);
 		void check_rect(rule kind, const char* what, glm::ivec4 rect);
 		// Null when the draw cannot be forwarded.

@@ -101,13 +101,13 @@ BOOST_AUTO_TEST_CASE(TextureKeepsItsHeader)
 	header.data.extent.width = 64;
 	header.data.extent.height = 32;
 	header.data.format = texture_header::TYPE::RGBA16F;
-	header.usage = TEXTURE_USAGE::COLOR_TARGET;
+	header.usage = texture_usage::color_target;
 
 	auto texture = driver.create_texture(header);
 	BOOST_REQUIRE(texture);
 	BOOST_TEST(texture->width() == 64u);
 	BOOST_TEST(texture->height() == 32u);
-	BOOST_TEST((texture->get_usage() == TEXTURE_USAGE::COLOR_TARGET));
+	BOOST_TEST((texture->get_usage() == texture_usage::color_target));
 
 	const auto* null_texture = dynamic_cast<null::texture*>(texture.get());
 	BOOST_REQUIRE(null_texture);

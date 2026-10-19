@@ -40,6 +40,8 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::unbalanced_at_present: return "unbalanced_at_present";
 	case rule::render_target_without_push: return "render_target_without_push";
 	case rule::attachment_usage: return "attachment_usage";
+	case rule::texture_usage_flags: return "texture_usage_flags";
+	case rule::texture_not_sampled: return "texture_not_sampled";
 	case rule::attachment_size_mismatch: return "attachment_size_mismatch";
 	case rule::viewport_outside_target: return "viewport_outside_target";
 	case rule::scissor_outside_target: return "scissor_outside_target";
@@ -53,6 +55,30 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::budget_textures: return "budget_textures";
 	}
 	return "unknown";
+}
+
+std::string rnd::driver::validation::usage_text(texture_usage usage)
+{
+	struct named
+	{
+		texture_usage flag;
+		const char* name;
+	};
+	constexpr named names[] = {
+		{ texture_usage::sampled, "sampled" },
+		{ texture_usage::storage, "storage" },
+		{ texture_usage::color_target, "color_target" },
+		{ texture_usage::depth_target, "depth_target" },
+		{ texture_usage::stencil_target, "stencil_target" },
+	};
+	std::string text;
+	for (const named& entry : names) {
+		if (has_usage(usage, entry.flag)) {
+			text += text.empty() ? "" : "|";
+			text += entry.name;
+		}
+	}
+	return text.empty() ? "none" : text;
 }
 
 std::string rnd::driver::validation::format_trace_entry(const trace_entry& entry)

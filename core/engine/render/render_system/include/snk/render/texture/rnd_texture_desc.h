@@ -1,11 +1,12 @@
 #pragma once
 #include <snk/common/common.h>
+#include <snk/common/snk_api.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/driver/rnd_texture_interface.h>
 
 namespace rnd
 {
-	class texture_desc : public desc::desc_base
+	class SNK_API texture_desc : public desc::desc_base
 	{
 	public:
 		using base_type = desc::desc_base;
