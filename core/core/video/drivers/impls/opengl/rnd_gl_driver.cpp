@@ -1,5 +1,6 @@
 #include "rnd_gl_driver.h"
 #include "open_gl_specific.h"
+#include "rnd_gl_framebuffers.h"
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <glad/glad.h>
 #include <rnd_gl_shader.h>
@@ -193,139 +194,220 @@ gl_type to_gl_type(rnd::driver::texture_header::TYPE type)
 }
 
 rnd::driver::gl::driver::driver()
+	: m_framebuffers(std::make_shared<framebuffer_registry>())
 {
-	framebuffers.push({ 0, 0 });
 }
 
 rnd::driver::gl::driver::~driver()
 {
+	m_framebuffers->release_all();
 }
 
-void rnd::driver::gl::driver::attach_frame_buffer()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-}
+namespace {
+	using namespace rnd::driver;
 
-void rnd::driver::gl::driver::detach_frame_buffer()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void rnd::driver::gl::driver::check_frame_buffer()
-{
-	attach_frame_buffer();
-	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	if (status != GL_FRAMEBUFFER_COMPLETE) {
-		std::string errorString;
-		switch (status) {
-		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
+	void attach(GLuint fbo, GLenum point, const attachment_desc& desc)
+	{
+		const auto* gl_texture = static_cast<const gl::texture*>(desc.texture);
+		switch (gl_texture->get_type()) {
+		case TEXTURE_TYPE::RENDERBUFFER:
+			glNamedFramebufferRenderbuffer(fbo, point, GL_RENDERBUFFER, gl_texture->get_id());
 			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
-			break;
-		case GL_FRAMEBUFFER_UNSUPPORTED:
-			errorString = "GL_FRAMEBUFFER_UNSUPPORTED";
-			break;
-
-		default:
-			errorString = "Unknown Framebuffer Error";
-			break;
-		}
-
-		egLOG("opengl", "Framebuffer is not complete: {0}", errorString);
-		ASSERT_FAIL("ERROR");
-	}
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::push_frame_buffer()
-{
-	GLuint framebuffer = 0;
-	glCreateFramebuffers(1, &framebuffer);
-	CHECK_GL_ERROR();
-	framebuffers.push({ framebuffer, 0 });
-}
-
-void rnd::driver::gl::driver::pop_frame_buffer()
-{
-	if (framebuffers.size() == 1) {
-		ASSERT_FAIL("Trying to pop backbuffer");
-		return;
-	}
-
-	auto [framebuffer, depth_stencil] = framebuffers.top();
-	framebuffers.pop();
-	glDeleteRenderbuffers(1, &depth_stencil);
-	CHECK_GL_ERROR();
-	glDeleteFramebuffers(1, &framebuffer);
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::set_render_target(texture_interface* color, texture_interface* depth_stencil /* = nullptr*/)
-{
-	set_render_targets({ color }, depth_stencil);
-}
-
-void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil /* = nullptr*/)
-{
-	auto& [fb, ds_b] = framebuffers.top();
-	constexpr std::size_t MAX_COLOR_ATTACHMENTS = (GL_COLOR_ATTACHMENT31 - GL_COLOR_ATTACHMENT0 + 1);
-	ASSERT_MSG(colors.size() <= MAX_COLOR_ATTACHMENTS, "Max color attachment is reached!");
-
-	glm::ivec2 rt_size{ 0 };
-	std::size_t color_count = std::min(colors.size(), MAX_COLOR_ATTACHMENTS);
-	ds::fixed_vector<GLenum, MAX_COLOR_ATTACHMENTS> drawBuffers;
-
-	for (std::size_t i = 0; i < color_count; ++i) {
-		if (auto* color = colors[i]) {
-			ASSERT_MSG(color->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
-			auto* gl_color = static_cast<texture*>(color);
-			
-			if (color->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
-				glNamedFramebufferRenderbuffer(fb, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, gl_color->get_id());
+		case TEXTURE_TYPE::TEXTURE_3D:
+		case TEXTURE_TYPE::TEXTURE_CUBE_MAP:
+		case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
+		case TEXTURE_TYPE::TEXTURE_2D_ARRAY:
+		case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY:
+			if (desc.layer == attachment_desc::all_layers) {
+				glNamedFramebufferTexture(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip));
 			} else {
-				glNamedFramebufferTexture(fb, GL_COLOR_ATTACHMENT0 + i, gl_color->get_id(), 0);
+				glNamedFramebufferTextureLayer(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip), static_cast<GLint>(desc.layer));
 			}
-			CHECK_GL_ERROR();
-			rt_size = { gl_color->width(), gl_color->height() };
-			drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + i);
-		}
-		else {
-			drawBuffers.push_back(GL_NONE);
-		}
-	}
-
-	if (!drawBuffers.empty()) {
-		glNamedFramebufferDrawBuffers(fb, drawBuffers.size(), drawBuffers.data());
-	} else {
-		glNamedFramebufferDrawBuffers(fb, 0, nullptr);
-	}
-	CHECK_GL_ERROR();
-
-	if (depth_stencil) {
-		ASSERT_MSG(depth_stencil->has_usage(texture_usage::depth_target) || 
-			   depth_stencil->has_usage(texture_usage::stencil_target), "Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
-		auto* gl_depth_stencil = static_cast<texture*>(depth_stencil);
-		
-		if (depth_stencil->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
-			glNamedFramebufferRenderbuffer(fb, gl_depth_stencil->get_attachment_type(), GL_RENDERBUFFER, gl_depth_stencil->get_id());
-		} else {
-			glNamedFramebufferTexture(fb, gl_depth_stencil->get_attachment_type(), gl_depth_stencil->get_id(), 0);
+			break;
+		default:
+			glNamedFramebufferTexture(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip));
+			break;
 		}
 		CHECK_GL_ERROR();
 	}
 
-	check_frame_buffer();
+	void check_framebuffer_status(GLuint fbo)
+	{
+		const GLenum status = glCheckNamedFramebufferStatus(fbo, GL_DRAW_FRAMEBUFFER);
+		if (status == GL_FRAMEBUFFER_COMPLETE) {
+			return;
+		}
+		const char* reason = "Unknown Framebuffer Error";
+		switch (status) {
+		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT: reason = "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT: reason = "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS: reason = "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER: reason = "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER"; break;
+		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE: reason = "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE"; break;
+		case GL_FRAMEBUFFER_UNSUPPORTED: reason = "GL_FRAMEBUFFER_UNSUPPORTED"; break;
+		default: break;
+		}
+		egLOG("opengl", "Framebuffer is not complete: {0}", reason);
+		ASSERT_FAIL("ERROR");
+	}
+}
+
+GLuint rnd::driver::gl::driver::create_framebuffer(const render_pass_desc& desc)
+{
+	GLuint fbo = 0;
+	glCreateFramebuffers(1, &fbo);
+	CHECK_GL_ERROR();
+
+	ds::fixed_vector<GLenum, render_pass_desc::max_colors> draw_buffers;
+	GLenum read_buffer = GL_NONE;
+	for (std::size_t i = 0; i < desc.colors.size(); ++i) {
+		const attachment_desc& color = desc.colors[i];
+		if (!color.texture) {
+			draw_buffers.push_back(GL_NONE);
+			continue;
+		}
+		ASSERT_MSG(color.texture->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
+		const GLenum point = GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i);
+		attach(fbo, point, color);
+		draw_buffers.push_back(point);
+		if (read_buffer == GL_NONE) {
+			read_buffer = point;
+		}
+	}
+	if (draw_buffers.empty()) {
+		glNamedFramebufferDrawBuffer(fbo, GL_NONE);
+	} else {
+		glNamedFramebufferDrawBuffers(fbo, static_cast<GLsizei>(draw_buffers.size()), draw_buffers.data());
+	}
+	glNamedFramebufferReadBuffer(fbo, read_buffer);
+	CHECK_GL_ERROR();
+
+	if (desc.depth_stencil && desc.depth_stencil->texture) {
+		const attachment_desc& depth = *desc.depth_stencil;
+		ASSERT_MSG(depth.texture->has_usage(texture_usage::depth_target) || depth.texture->has_usage(texture_usage::stencil_target),
+			"Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
+		attach(fbo, static_cast<texture*>(depth.texture)->get_attachment_type(), depth);
+	}
+
+	check_framebuffer_status(fbo);
+	return fbo;
+}
+
+GLuint rnd::driver::gl::driver::framebuffer_for(const render_pass_desc& desc)
+{
+	const auto key = make_framebuffer_key(desc, [](texture_handle handle) -> std::uint64_t {
+		return handle ? static_cast<const texture*>(handle)->framebuffer_object() : 0;
+	});
+	return m_framebuffers->cache.acquire(key, [&] { return create_framebuffer(desc); });
+}
+
+void rnd::driver::gl::driver::begin_render_pass(const render_pass_desc& desc)
+{
+	ASSERT_MSG(!m_in_pass, "begin_render_pass inside a render pass");
+	m_in_pass = true;
+	if (desc.debug_name && glad_glPushDebugGroup) {
+		glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, desc.debug_name);
+		m_pass_debug_group = true;
+	}
+
+	const bool window = desc.backbuffer;
+	m_pass_fbo = window ? 0 : framebuffer_for(desc);
+	glBindFramebuffer(GL_FRAMEBUFFER, m_pass_fbo);
+	CHECK_GL_ERROR();
+
+	// The window's buffers are addressed by GL_COLOR / GL_DEPTH, a framebuffer's by its attachment points.
+	const auto takes_part = [window](const attachment_desc& a) { return window || a.texture != nullptr; };
+	const auto color_point = [window](std::size_t i) { return window ? GL_COLOR : GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i); };
+	const auto depth_point = [window](const attachment_desc& a) {
+		return window ? GL_DEPTH : static_cast<texture*>(a.texture)->get_attachment_type();
+	};
+
+	std::array<GLenum, render_pass_desc::max_colors + 1> discard{};
+	std::size_t discard_count = 0;
+	m_pass_invalidate_count = 0;
+	bool any_clear = false;
+	const auto note_ops = [&](const attachment_desc& a, GLenum point) {
+		any_clear = any_clear || a.load == load_op::clear;
+		if (a.load == load_op::dont_care) {
+			discard[discard_count++] = point;
+		}
+		if (a.store == store_op::dont_care) {
+			m_pass_invalidate[m_pass_invalidate_count++] = point;
+		}
+	};
+	for (std::size_t i = 0; i < desc.colors.size(); ++i) {
+		if (takes_part(desc.colors[i])) {
+			note_ops(desc.colors[i], color_point(i));
+		}
+	}
+	const bool depth_takes_part = desc.depth_stencil && takes_part(*desc.depth_stencil);
+	if (depth_takes_part) {
+		note_ops(*desc.depth_stencil, depth_point(*desc.depth_stencil));
+	}
+
+	if (discard_count > 0) {
+		glInvalidateNamedFramebufferData(m_pass_fbo, static_cast<GLsizei>(discard_count), discard.data());
+		CHECK_GL_ERROR();
+	}
+
+	const bool has_area = desc.render_area.z > 0 && desc.render_area.w > 0;
+	if (any_clear) {
+		if (has_area) {
+			glEnable(GL_SCISSOR_TEST);
+			glScissor(desc.render_area.x, desc.render_area.y, desc.render_area.z, desc.render_area.w);
+		} else {
+			glDisable(GL_SCISSOR_TEST);
+		}
+
+		for (std::size_t i = 0; i < desc.colors.size(); ++i) {
+			const attachment_desc& color = desc.colors[i];
+			if (takes_part(color) && color.load == load_op::clear) {
+				glClearNamedFramebufferfv(m_pass_fbo, GL_COLOR, static_cast<GLint>(i), glm::value_ptr(color.clear_color));
+				CHECK_GL_ERROR();
+			}
+		}
+
+		if (depth_takes_part && desc.depth_stencil->load == load_op::clear) {
+			const attachment_desc& depth = *desc.depth_stencil;
+			const bool with_stencil = !window && depth_point(depth) == GL_DEPTH_STENCIL_ATTACHMENT;
+			if (!m_depth_write) {
+				glDepthMask(GL_TRUE);
+			}
+			if (with_stencil) {
+				glClearNamedFramebufferfi(m_pass_fbo, GL_DEPTH_STENCIL, 0, depth.clear_depth, static_cast<GLint>(depth.clear_stencil));
+			} else {
+				glClearNamedFramebufferfv(m_pass_fbo, GL_DEPTH, 0, &depth.clear_depth);
+			}
+			if (!m_depth_write) {
+				glDepthMask(GL_FALSE);
+			}
+			CHECK_GL_ERROR();
+		}
+
+		if (has_area) {
+			glDisable(GL_SCISSOR_TEST);
+		}
+	}
+
+	if (has_area) {
+		set_viewport(desc.render_area);
+	}
+}
+
+void rnd::driver::gl::driver::end_render_pass()
+{
+	ASSERT_MSG(m_in_pass, "end_render_pass outside a render pass");
+	if (m_pass_invalidate_count > 0) {
+		glInvalidateNamedFramebufferData(m_pass_fbo, static_cast<GLsizei>(m_pass_invalidate_count), m_pass_invalidate.data());
+		CHECK_GL_ERROR();
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	if (m_pass_debug_group) {
+		glPopDebugGroup();
+		m_pass_debug_group = false;
+	}
+	m_pass_fbo = 0;
+	m_in_pass = false;
 }
 
 void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
@@ -337,77 +419,6 @@ void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 	}
 }
 
-void rnd::driver::gl::driver::set_scissor(glm::ivec4 rect)
-{
-	if (rect.z < 1 || rect.w < 1) {
-		glDisable(GL_SCISSOR_TEST);
-	} else {
-		glEnable(GL_SCISSOR_TEST);
-		glScissor(rect[0], rect[1], rect[2], rect[3]);
-	}
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags)
-{
-	attach_frame_buffer();
-	glClearDepth(1.0);
-	GLbitfield gl_flags = 0;
-	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) gl_flags |= GL_COLOR_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_BUFFER)) gl_flags |= GL_DEPTH_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::STENCIL_BUFFER)) gl_flags |= GL_STENCIL_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_STENCIL_BUFFER)) gl_flags |= (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-	glClear(gl_flags);
-	CHECK_GL_ERROR();
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags, glm::vec4 color)
-{
-	clear(flags, std::vector<glm::vec4>{color});
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags, const std::vector<glm::vec4>& colors)
-{
-	if (colors.empty()) {
-		return;
-	}
-
-	attach_frame_buffer();
-
-	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) {
-		int i = 0;
-		for (auto& color : colors) {
-			glClearBufferfv(GL_COLOR, i, glm::value_ptr(color));
-			CHECK_GL_ERROR();
-			i++;
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferfv(GL_DEPTH, 0, glm::value_ptr(colors[0]));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::STENCIL_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferiv(GL_STENCIL, 0, reinterpret_cast<const GLint*>(glm::value_ptr(colors[0])));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_STENCIL_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferfi(GL_DEPTH_STENCIL, 0, colors[0].r, static_cast<GLint>(colors[0].g));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	detach_frame_buffer();
-}
-
 void rnd::driver::gl::driver::set_line_size(float size)
 {
 	glLineWidth(size);
@@ -417,7 +428,6 @@ void rnd::driver::gl::driver::set_line_size(float size)
 void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
 {
 	GLenum rm = GL_TRIANGLES;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
 	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
 		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 	}
@@ -437,14 +447,11 @@ void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_in
 
 
 	vertices->unbind();
-
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, RENDER_MODE render_mode, unsigned int count, unsigned int base_vertex, unsigned int base_index)
 {
 	GLenum rm = GL_TRIANGLES;
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
 	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
 		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 	}
@@ -456,11 +463,10 @@ void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertice
 	vertices->bind();
 	glDrawElementsBaseVertex(rm, count, GL_UNSIGNED_INT, (void*)(sizeof(GLuint) * base_index), base_vertex);
 	vertices->unbind();
-
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void rnd::driver::gl::driver::set_render_state(const render_state& state) {
+    m_depth_write = state.depth.enabled && state.depth.write_mask;
     // Depth state
     if (state.depth.enabled) {
         glEnable(GL_DEPTH_TEST);
@@ -569,7 +575,7 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 
 std::unique_ptr<rnd::driver::texture_interface> rnd::driver::gl::driver::create_texture(const texture_header& header)
 {
-	return std::make_unique<rnd::driver::gl::texture>(header);
+	return std::make_unique<rnd::driver::gl::texture>(header, m_framebuffers);
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::gl::driver::create_vertex_array()

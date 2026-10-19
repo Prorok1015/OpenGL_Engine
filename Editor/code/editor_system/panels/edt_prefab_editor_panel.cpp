@@ -78,8 +78,8 @@ namespace edt
 
 			// The preview context gets input only while its image is hovered
 			bind_item_input(m_router, inp::input_target{
-				.set = std::string{ scn::context_manager::level_set_name },
-				.context = std::string{ prefab_editor_context::world_name() } });
+				.set = m_ctx->set_name(),
+				.context = std::string{ prefab_editor_context::context_name() } });
 		} else {
 			ImGui::TextDisabled("(waiting for render target...)");
 		}

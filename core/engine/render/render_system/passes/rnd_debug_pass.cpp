@@ -82,10 +82,17 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		state.depth.write_mask = false;
 		drv.set_render_state(state);
 
+		driver::render_pass_desc pass;
+		pass.debug_name = "debug";
 		if (offscreen) {
-			drv.push_frame_buffer();
-			drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+			pass.colors.push_back({.texture = color_rt});
+			if (auto* depth = txm_manager.find(depth_tag)) {
+				pass.depth_stencil = driver::attachment_desc{.texture = depth};
+			}
+		} else {
+			pass.backbuffer = true;
 		}
+		drv.begin_render_pass(pass);
 
 		common_matrix.view = packet.camera.view_matrix;
 		common_matrix.projection = packet.camera.projection_matrix;
@@ -130,9 +137,7 @@ void debug_pass::execute(frame_context& context, driver::driver_interface& drv)
 		drv.draw_indices(m_vao, driver::RENDER_MODE::LINE,
 			static_cast<unsigned int>(indices.size()), 0);
 
-		if (offscreen) {
-			drv.pop_frame_buffer();
-		}
+		drv.end_render_pass();
 	}
 }
 } // namespace rnd

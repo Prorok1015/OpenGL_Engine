@@ -44,6 +44,14 @@ namespace res
 			return it->second;
 		}
 
+		template<class Fn>
+		void for_each(Fn&& fn) const
+		{
+			for (const auto& entry : m_entries) {
+				fn(entry.second);
+			}
+		}
+
 		[[nodiscard]] V* find(const cache_key& key)
 		{
 			auto it = m_entries.find(key);

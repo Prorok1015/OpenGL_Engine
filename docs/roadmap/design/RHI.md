@@ -65,6 +65,12 @@ void begin_render_pass(const render_pass_desc&); void end_render_pass();
 - До шага 4 `texture_handle` — псевдоним `texture_interface*`; тип меняется в R7.
 - GL-реализация хранит кеш FBO: ключ — (id и mip/layer всех attachments), значение — FBO с настроенными draw buffers. При удалении текстуры драйвер выкидывает записи, где она встречается. `clear` превращается в load-op; `dont_care`/`store=dont_care` → `glInvalidateNamedFramebufferData`.
 - Вложенных pass нет: validation проверяет это. После миграции из интерфейса удаляются `push/pop_frame_buffer`, `set_render_target(s)`, `clear(...)`, `set_scissor`.
+- **Сделано в R3** (#115, часть b): `render_pass_desc` — `snk/driver/rnd_render_pass.h`, кеш FBO — `snk/driver/rnd_framebuffer_cache.h` (общий для GL и null, ключ — идентичность текстуры + mip/layer каждого attachment). Уточнения к схеме выше:
+  - окно: `backbuffer = true`; attachment с нулевой `texture` задаёт load/store цвета окна (`colors[0]`) и его глубины (`depth_stencil`); пустой список — просто load. Нулевая `texture` в обычном pass — неиспользуемый слот draw buffer;
+  - `render_area` — только ограничение clear (scissor на время очистки, потом выключается) и viewport по умолчанию; для offscreen-целей `{0}` очищает всю текстуру, как раньше;
+  - clear глубины не зависит от маски записи глубины в последнем `set_render_state` (драйвер её помнит);
+  - текстура при удалении сама выбрасывает свои FBO из кеша (общий `framebuffer_registry`, живёт дольше драйвера);
+  - validation: бюджет `max_frame_buffers` считает pass за кадр (раньше push), кадр на null-бэкенде не строит FBO после прогрева (`SmokeLevelBuildsNoFramebufferAfterWarmUp`).
 
 **Шаг 2 — неизменяемый pipeline (#116).**
 - `shader_config` сейчас смешивает три вещи. Они разводятся:

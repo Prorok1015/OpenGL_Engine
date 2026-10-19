@@ -53,19 +53,22 @@ void opaque_pass::execute(frame_context &context,
     state.depth.write_mask = !offscreen;
     drv.set_render_state(state);
 
+    rnd::driver::render_pass_desc pass;
+    pass.debug_name = "opaque";
     if (offscreen) {
-      drv.push_frame_buffer();
-      drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+      pass.colors.push_back({.texture = color_rt, .load = rnd::driver::load_op::clear});
+      if (auto *depth = txm_manager.find(depth_tag)) {
+        pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
+      }
     } else {
       // Several cameras share the backbuffer: clear only this camera's rectangle.
-      drv.set_scissor(glm::ivec4{packet.camera.viewport.x,
-                                 packet.camera.viewport.y, vp_width, vp_height});
-      drv.clear(rnd::driver::CLEAR_FLAGS::DEPTH_BUFFER);
+      pass.backbuffer = true;
+      pass.colors.push_back({.load = rnd::driver::load_op::clear});
+      pass.depth_stencil = rnd::driver::attachment_desc{.load = rnd::driver::load_op::clear};
+      pass.render_area = glm::ivec4{packet.camera.viewport.x,
+                                    packet.camera.viewport.y, vp_width, vp_height};
     }
-    drv.clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER, {glm::vec4(0)});
-    if (!offscreen) {
-      drv.set_scissor(glm::ivec4{0});
-    }
+    drv.begin_render_pass(pass);
 
     common_matrix.view = packet.camera.view_matrix;
     common_matrix.projection = packet.camera.projection_matrix;
@@ -92,9 +95,7 @@ void opaque_pass::execute(frame_context &context,
                        dc.vx_begin, dc.ind_begin);
     }
 
-    if (offscreen) {
-      drv.pop_frame_buffer();
-    }
+    drv.end_render_pass();
   }
 }
 } // namespace rnd

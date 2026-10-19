@@ -33,7 +33,8 @@ namespace edt {
 			std::shared_ptr<console_panel>& console,
 			std::shared_ptr<asset_browser_panel>& asset_browser,
 			component_ui_registry& registry,
-			editor_system& sys);
+			editor_system& sys,
+			bool capture_log = true);
 
 		// Setup viewport panel with all its dependencies
 		void setup_viewport_panel(

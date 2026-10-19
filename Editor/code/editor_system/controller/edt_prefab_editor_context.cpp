@@ -2,9 +2,7 @@
 #include "edt_shared_state.h"
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
-#include <snk/scene/level/scn_level.h>
 #include <snk/scene/level/scn_context_manager.h>
-#include <snk/scene/level/scn_world.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_ecs_assembler.h>
@@ -75,24 +73,21 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 		return;
 	}
 
-	// Create transient world in level — NOT registered in shared_state
-	scn::level& lvl = ctx_mgr->get_level();
-	m_world_id = lvl.acquire_free_world_id();
-	scn::world& world = lvl.create_world(std::string{WORLD_NAME}, m_world_id, scn::context_kind::preview);
-
-	// Register systems from template
-	lvl.add_world_systems(world, world_res->get_systems(), *m_state.sfactory);
+	// The preview is a set of its own, so it neither shares the level's time nor its names.
+	scn::world_context& preview = ctx_mgr->create_preview(prefab_tag.view(), CONTEXT_NAME, world_res->get_systems());
+	m_set_name = scn::context_manager::preview_set_name(prefab_tag.view());
+	entt::registry& reg = preview.state();
 
 	// Assemble template (anchor, light, etc.)
-	entt::entity root = world.state().create();
-	m_state.assembler->spawn_from_desc(world.state(), root, *world_res, WORLD_NAME);
+	entt::entity root = reg.create();
+	m_state.assembler->spawn_from_desc(reg, root, *world_res, CONTEXT_NAME);
 
 	// Inject prefab camera with separate render targets
-	inject_camera(world.state());
+	inject_camera(reg);
 
 	// Load the prefab into the world
-	entt::entity prefab_root = world.state().create();
-	scn::assemble_prefab(*m_state.assembler, world.state(), prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
+	entt::entity prefab_root = reg.create();
+	scn::assemble_prefab(*m_state.assembler, reg, prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
 
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
@@ -106,17 +101,13 @@ void edt::prefab_editor_context::close()
 {
 	if (!m_open) return;
 
-	auto ctx_mgr = m_state.ctx_manager.lock();
-	if (ctx_mgr) {
-		scn::level& lvl = ctx_mgr->get_level();
-		if (lvl.has_world(WORLD_NAME)) {
-			lvl.remove_world(WORLD_NAME);
-		}
+	if (auto ctx_mgr = m_state.ctx_manager.lock()) {
+		ctx_mgr->destroy_preview(m_source_tag.view());
 	}
 
 	m_open = false;
 	m_dirty = false;
-	m_world_id = UINT32_MAX;
+	m_set_name.clear();
 	m_source_tag = res::tag::null;
 	m_prefab_name.clear();
 
@@ -130,10 +121,8 @@ entt::registry* edt::prefab_editor_context::get_registry()
 	auto ctx_mgr = m_state.ctx_manager.lock();
 	if (!ctx_mgr) return nullptr;
 
-	scn::level& lvl = ctx_mgr->get_level();
-	if (!lvl.has_world(WORLD_NAME)) return nullptr;
-
-	return &lvl.get_world(WORLD_NAME).state();
+	scn::world_context* preview = ctx_mgr->find_preview(m_source_tag.view());
+	return preview ? &preview->state() : nullptr;
 }
 
 void edt::prefab_editor_context::inject_camera(entt::registry& reg)

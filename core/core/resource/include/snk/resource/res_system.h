@@ -96,6 +96,22 @@ namespace res
 			}
 		}
 
+		// Read-only: cached resources that were requested but have neither finished nor failed yet.
+		// Used to tell that the scene has settled (deterministic headless runs).
+		std::size_t pending_loads() const {
+			std::shared_lock lock(m_cache_mutex);
+			std::size_t count = 0;
+			m_cache.for_each([&count](const cache_entry& entry) {
+				if (const auto block = entry.lock()) {
+					const auto status = block->status.load();
+					if (status != core::res::res_status::ready && status != core::res::res_status::error) {
+						++count;
+					}
+				}
+			});
+			return count;
+		}
+
 		// Any thread. Drops the tag's cache entries right away; the watchers are called later on the main thread
 		// (task_system::drain_main): those registered before the signal and still registered by then.
 		void signal_changed(const res::tag& tag);

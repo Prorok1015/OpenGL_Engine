@@ -70,10 +70,14 @@ void composition_pass::execute(frame_context &context,
     state.blend_states = {blend};
     drv.set_render_state(state);
 
+    rnd::driver::render_pass_desc pass;
+    pass.debug_name = "composition";
     if (offscreen) {
-      drv.push_frame_buffer();
-      drv.set_render_target(color_rt);
+      pass.colors.push_back({.texture = color_rt});
+    } else {
+      pass.backbuffer = true;
     }
+    drv.begin_render_pass(pass);
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
@@ -98,9 +102,7 @@ void composition_pass::execute(frame_context &context,
     rnd::configure_pass(context, desc);
     drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, std::size(indeces));
 
-    if (offscreen) {
-      drv.pop_frame_buffer();
-    }
+    drv.end_render_pass();
   }
 }
 } // namespace rnd

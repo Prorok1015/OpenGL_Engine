@@ -29,6 +29,34 @@ std::vector<shader_header> valid_program()
 	};
 }
 
+texture_header target_of(uint32_t size, texture_usage usage, uint32_t mips = 1)
+{
+	texture_header header;
+	header.data.extent.width = size;
+	header.data.extent.height = size;
+	header.data.mip_levels = mips;
+	header.usage = usage;
+	return header;
+}
+
+render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nullptr)
+{
+	render_pass_desc pass;
+	if (color) {
+		pass.colors.push_back({ .texture = color });
+	}
+	if (depth) {
+		pass.depth_stencil = attachment_desc{ .texture = depth };
+	}
+	return pass;
+}
+
+void run_pass(null::driver& driver, const render_pass_desc& pass)
+{
+	driver.begin_render_pass(pass);
+	driver.end_render_pass();
+}
+
 }
 
 BOOST_AUTO_TEST_SUITE(RndNullDriverTests)
@@ -243,39 +271,176 @@ BOOST_AUTO_TEST_CASE(ValidateShaderHeadersNamesTheReason)
 	BOOST_TEST(null::validate_shader_headers(headers).find("a.vert") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(FrameBufferStackStartsAtTheBackbuffer)
+BOOST_AUTO_TEST_CASE(RenderPassesAreCountedAndTheLastOneIsKept)
 {
 	null::driver driver;
-	BOOST_TEST(driver.frame_buffer_depth() == 1u);
-	driver.push_frame_buffer();
-	driver.push_frame_buffer();
-	BOOST_TEST(driver.frame_buffer_depth() == 3u);
-	driver.pop_frame_buffer();
-	driver.pop_frame_buffer();
-	BOOST_TEST(driver.frame_buffer_depth() == 1u);
-	BOOST_TEST(driver.calls().push_frame_buffers == 2u);
-	BOOST_TEST(driver.calls().pop_frame_buffers == 2u);
+	auto color = driver.create_texture(target_of(32, texture_usage::color_target));
+	BOOST_TEST(!driver.in_render_pass());
+
+	render_pass_desc pass = pass_of(color.get());
+	pass.colors[0].load = load_op::clear;
+	pass.render_area = { 0, 0, 16, 16 };
+	pass.debug_name = "probe";
+	driver.begin_render_pass(pass);
+	BOOST_TEST(driver.in_render_pass());
+	driver.end_render_pass();
+
+	BOOST_TEST(!driver.in_render_pass());
+	BOOST_TEST(driver.calls().render_pass_begins == 1u);
+	BOOST_TEST(driver.calls().render_pass_ends == 1u);
+	BOOST_TEST(driver.last_render_pass().colors.size() == 1u);
+	BOOST_TEST((driver.last_render_pass().colors[0].load == load_op::clear));
+	BOOST_TEST((driver.last_render_pass().render_area == glm::ivec4{ 0, 0, 16, 16 }));
+	BOOST_TEST(std::string(driver.last_render_pass().debug_name) == "probe");
+}
+
+BOOST_AUTO_TEST_CASE(PassesWithTheSameAttachmentsShareOneFramebuffer)
+{
+	null::driver driver;
+	auto color = driver.create_texture(target_of(32, texture_usage::color_target));
+	auto depth = driver.create_texture(target_of(32, texture_usage::depth_target));
+	const auto& fbos = driver.stats().framebuffers;
+
+	for (int i = 0; i < 3; ++i) {
+		run_pass(driver, pass_of(color.get(), depth.get()));
+	}
+	BOOST_TEST(fbos.size() == 1u);
+	BOOST_TEST(fbos.misses() == 1u);
+	BOOST_TEST(fbos.hits() == 2u);
+
+	// Load and store ops, the render area and the label are not part of the identity.
+	render_pass_desc other_ops = pass_of(color.get(), depth.get());
+	other_ops.colors[0].load = load_op::clear;
+	other_ops.depth_stencil->store = store_op::dont_care;
+	other_ops.render_area = { 0, 0, 8, 8 };
+	other_ops.debug_name = "other";
+	run_pass(driver, other_ops);
+	BOOST_TEST(fbos.size() == 1u);
+	BOOST_TEST(fbos.hits() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(AnotherAttachmentMipOrLayerOrSetBuildsAnotherFramebuffer)
+{
+	null::driver driver;
+	auto color = driver.create_texture(target_of(32, texture_usage::color_target, 3));
+	auto second = driver.create_texture(target_of(32, texture_usage::color_target));
+	auto depth = driver.create_texture(target_of(32, texture_usage::depth_target));
+	const auto& fbos = driver.stats().framebuffers;
+
+	run_pass(driver, pass_of(color.get()));
+	render_pass_desc mip1 = pass_of(color.get());
+	mip1.colors[0].mip = 1;
+	run_pass(driver, mip1);
+	render_pass_desc layer1 = pass_of(color.get());
+	layer1.colors[0].layer = 1;
+	run_pass(driver, layer1);
+	run_pass(driver, pass_of(color.get(), depth.get()));
+	run_pass(driver, pass_of(second.get()));
+	BOOST_TEST(fbos.misses() == 5u);
+	BOOST_TEST(fbos.hits() == 0u);
+
+	// A depth-only pass and one with an unused color slot are different framebuffers.
+	run_pass(driver, pass_of(nullptr, depth.get()));
+	render_pass_desc hole = pass_of(nullptr, depth.get());
+	hole.colors.push_back({});
+	run_pass(driver, hole);
+	BOOST_TEST(fbos.misses() == 7u);
+}
+
+BOOST_AUTO_TEST_CASE(LayeredAndSingleLayerAttachmentsOfOneTextureAreDifferentFramebuffers)
+{
+	null::driver driver;
+	texture_header header = target_of(32, texture_usage::color_target);
+	header.type = TEXTURE_TYPE::TEXTURE_2D_ARRAY;
+	header.data.extent.layers = 4;
+	auto array = driver.create_texture(header);
+	const auto& fbos = driver.stats().framebuffers;
+
+	render_pass_desc layered = pass_of(array.get());
+	BOOST_TEST(layered.colors[0].layer == attachment_desc::all_layers);
+	render_pass_desc layer0 = pass_of(array.get());
+	layer0.colors[0].layer = 0;
+	render_pass_desc layer2 = pass_of(array.get());
+	layer2.colors[0].layer = 2;
+
+	run_pass(driver, layered);
+	run_pass(driver, layer0);
+	run_pass(driver, layer2);
+	BOOST_TEST(fbos.misses() == 3u);
+	run_pass(driver, layered);
+	run_pass(driver, layer0);
+	BOOST_TEST(fbos.hits() == 2u);
+	BOOST_TEST(fbos.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(BackbufferPassesNeedNoFramebuffer)
+{
+	null::driver driver;
+	render_pass_desc window;
+	window.backbuffer = true;
+	window.colors.push_back({ .load = load_op::clear });
+	run_pass(driver, window);
+	run_pass(driver, window);
+
+	BOOST_TEST(driver.calls().render_pass_begins == 2u);
+	BOOST_TEST(driver.stats().framebuffers.size() == 0u);
+	BOOST_TEST(driver.stats().framebuffers.misses() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(DestroyingATextureEvictsTheFramebuffersBuiltFromIt)
+{
+	null::driver driver;
+	auto first = driver.create_texture(target_of(32, texture_usage::color_target));
+	auto second = driver.create_texture(target_of(32, texture_usage::color_target));
+	auto depth = driver.create_texture(target_of(32, texture_usage::depth_target));
+	const auto& fbos = driver.stats().framebuffers;
+
+	run_pass(driver, pass_of(first.get(), depth.get()));
+	run_pass(driver, pass_of(second.get(), depth.get()));
+	run_pass(driver, pass_of(second.get()));
+	BOOST_TEST(fbos.size() == 3u);
+
+	first.reset();
+	BOOST_TEST(fbos.size() == 2u);
+
+	depth.reset();
+	BOOST_TEST(fbos.size() == 1u);
+
+	second.reset();
+	BOOST_TEST(fbos.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ARecreatedTextureNeverMatchesAnEvictedFramebuffer)
+{
+	null::driver driver;
+	const auto& fbos = driver.stats().framebuffers;
+
+	for (int generation = 0; generation < 4; ++generation) {
+		// The allocator is free to hand the same address out again.
+		auto color = driver.create_texture(target_of(32, texture_usage::color_target));
+		run_pass(driver, pass_of(color.get()));
+		run_pass(driver, pass_of(color.get()));
+	}
+	BOOST_TEST(fbos.misses() == 4u);
+	BOOST_TEST(fbos.hits() == 4u);
+	BOOST_TEST(fbos.size() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(StateAndCallsAreRecorded)
 {
 	null::driver driver;
 	driver.set_viewport({ 0, 0, 640, 480 });
-	driver.set_scissor({ 1, 2, 3, 4 });
 	driver.set_line_size(2.f);
 	driver.set_render_state(render_state::transparent());
-	driver.clear(CLEAR_FLAGS::COLOR_BUFFER);
 
 	auto va = driver.create_vertex_array();
 	driver.draw_indices(va, RENDER_MODE::TRIANGLE, 36);
 	driver.draw_indices(va.get(), RENDER_MODE::LINE, 2, 0, 0);
 
 	BOOST_TEST((driver.viewport() == glm::ivec4{ 0, 0, 640, 480 }));
-	BOOST_TEST((driver.scissor() == glm::ivec4{ 1, 2, 3, 4 }));
 	BOOST_TEST(driver.line_size() == 2.f);
 	BOOST_TEST(driver.current_render_state().blend_states.size() == 1u);
 	BOOST_TEST(driver.calls().render_state_sets == 1u);
-	BOOST_TEST(driver.calls().clears == 1u);
 	BOOST_TEST(driver.calls().draws == 2u);
 }
 

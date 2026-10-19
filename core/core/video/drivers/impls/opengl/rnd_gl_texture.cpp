@@ -1,5 +1,6 @@
 #include "rnd_gl_texture.h"
 #include "open_gl_specific.h"
+#include "rnd_gl_framebuffers.h"
 #include <snk/common/engine_assert.h>
 #include <algorithm>
 
@@ -117,8 +118,9 @@ namespace rnd::driver::gl
 		}
 	}
 
-	texture::texture(const texture_header& hdr)
+	texture::texture(const texture_header& hdr, std::shared_ptr<framebuffer_registry> framebuffers)
 		: texture_interface(hdr)
+		, m_framebuffers(std::move(framebuffers))
 		, target(texture_type_to_gl_target(hdr.type))
 	{
 		create_texture();
@@ -141,6 +143,9 @@ namespace rnd::driver::gl
 
 	texture::~texture() 
 	{
+		if (m_framebuffers) {
+			m_framebuffers->evict_texture(framebuffer_object());
+		}
 		if (header.type == TEXTURE_TYPE::RENDERBUFFER) {
 			glDeleteRenderbuffers(1, &id);
 		} else {

@@ -7,45 +7,25 @@ rnd::driver::null::driver::driver()
 {
 }
 
-void rnd::driver::null::driver::push_frame_buffer()
+void rnd::driver::null::driver::begin_render_pass(const render_pass_desc& desc)
 {
-	++m_frame_buffer_depth;
-	++m_calls.push_frame_buffers;
-}
-
-void rnd::driver::null::driver::pop_frame_buffer()
-{
-	if (m_frame_buffer_depth == 1) {
-		ASSERT_FAIL("Trying to pop backbuffer");
-		return;
+	ASSERT_MSG(!m_in_render_pass, "begin_render_pass inside a render pass");
+	if (!desc.backbuffer) {
+		const auto key = make_framebuffer_key(desc, [](texture_handle handle) -> std::uint64_t {
+			return handle ? static_cast<const texture*>(handle)->framebuffer_object() : 0;
+		});
+		m_stats->framebuffers.acquire(key, [this] { return ++m_next_framebuffer; });
 	}
-	--m_frame_buffer_depth;
-	++m_calls.pop_frame_buffers;
+	m_last_pass = desc;
+	m_in_render_pass = true;
+	++m_calls.render_pass_begins;
 }
 
-void rnd::driver::null::driver::set_render_target(texture_interface* /*color*/, texture_interface* /*depth_stencil*/)
+void rnd::driver::null::driver::end_render_pass()
 {
-	++m_calls.render_target_sets;
-}
-
-void rnd::driver::null::driver::set_render_targets(std::vector<texture_interface*> /*colors*/, texture_interface* /*depth_stencil*/)
-{
-	++m_calls.render_target_sets;
-}
-
-void rnd::driver::null::driver::clear(clear_flags /*flags*/)
-{
-	++m_calls.clears;
-}
-
-void rnd::driver::null::driver::clear(clear_flags /*flags*/, glm::vec4 /*color*/)
-{
-	++m_calls.clears;
-}
-
-void rnd::driver::null::driver::clear(clear_flags /*flags*/, const std::vector<glm::vec4>& /*colors*/)
-{
-	++m_calls.clears;
+	ASSERT_MSG(m_in_render_pass, "end_render_pass outside a render pass");
+	m_in_render_pass = false;
+	++m_calls.render_pass_ends;
 }
 
 void rnd::driver::null::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& /*vertices*/, RENDER_MODE /*render_mode*/, unsigned int /*count*/, unsigned int /*offset*/)

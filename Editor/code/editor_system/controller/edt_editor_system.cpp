@@ -21,6 +21,7 @@
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
+#include <snk/application/app_deterministic_time.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
@@ -95,7 +96,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	init_helpers::setup_panels(
 		m_hierarchy_panel, m_inspector_panel, m_viewport_panel,
 		m_console_panel, m_asset_browser_panel,
-		*m_component_ui_registry, *this);
+		*m_component_ui_registry, *this,
+		// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
+		!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
 	m_inspector_panel->set_desc_system(&desc_system);
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.

@@ -5,14 +5,13 @@
 #include <snk/common/snk_api.h>
 
 #include <memory>
-#include <span>
 
 namespace rnd::driver::validation
 {
 	// Decorator over any driver_interface: checks the command stream against the rules of rnd_validation_validator.h,
 	// reports violations (log category "rnd.validate" plus counters) and forwards every call. Calls that would
-	// crash the wrapped driver (a dead object, a write past the end of a buffer, a pop of the backbuffer) are
-	// reported and dropped.
+	// crash the wrapped driver (a dead object, a write past the end of a buffer, a nested or unmatched render
+	// pass) are reported and dropped.
 	class SNK_API driver final : public rnd::driver::driver_interface
 	{
 	public:
@@ -20,16 +19,10 @@ namespace rnd::driver::validation
 		driver(std::unique_ptr<driver_interface> inner, std::shared_ptr<validator> state);
 		~driver() override = default;
 
-		void push_frame_buffer() override;
-		void pop_frame_buffer() override;
-		void set_render_target(texture_interface* color, texture_interface* depth_stencil = nullptr) override;
-		void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) override;
+		void begin_render_pass(const render_pass_desc& desc) override;
+		void end_render_pass() override;
 
 		void set_viewport(glm::ivec4 rect) override;
-		void set_scissor(glm::ivec4 rect) override;
-		void clear(clear_flags flags) override;
-		void clear(clear_flags flags, glm::vec4 color) override;
-		void clear(clear_flags flags, const std::vector<glm::vec4>& colors) override;
 		void set_line_size(float size) override { m_inner->set_line_size(size); }
 		void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) override;
 		void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
@@ -56,8 +49,8 @@ namespace rnd::driver::validation
 
 	private:
 		void check_texture_usage(const texture_header& header);
-		bool check_targets(std::span<texture_interface* const> colors, texture_interface* depth_stencil);
-		void check_rect(rule kind, const char* what, glm::ivec4 rect);
+		// False when the pass cannot be forwarded; otherwise `inner_desc` is `desc` with the wrapped driver's textures.
+		bool check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target);
 		// Null when the draw cannot be forwarded.
 		const vertex_array* check_draw(const vertex_array_interface* va, unsigned int count, std::size_t base_index);
 

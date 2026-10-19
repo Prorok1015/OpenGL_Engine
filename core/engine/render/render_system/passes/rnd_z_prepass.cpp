@@ -44,10 +44,11 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     state.depth.test_func = rnd::driver::depth_state::func::LESS;
     drv.set_render_state(state);
 
-    drv.push_frame_buffer();
-    drv.set_render_target(nullptr, z_pass_rt);
-    drv.clear(rnd::driver::CLEAR_FLAGS::DEPTH_BUFFER);
-    drv.clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER);
+    rnd::driver::render_pass_desc pass;
+    pass.depth_stencil = rnd::driver::attachment_desc{
+        .texture = z_pass_rt, .load = rnd::driver::load_op::clear};
+    pass.debug_name = "z_prepass";
+    drv.begin_render_pass(pass);
 
     common_matrix.view = packet.camera.view_matrix;
     common_matrix.projection = packet.camera.projection_matrix;
@@ -93,7 +94,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
                        dc.vx_begin, dc.ind_begin);
     }
 
-    drv.pop_frame_buffer();
+    drv.end_render_pass();
   }
 }
 } // namespace rnd

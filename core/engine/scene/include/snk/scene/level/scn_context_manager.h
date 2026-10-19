@@ -25,6 +25,10 @@ namespace scn
 	{
 	public:
 		static constexpr std::string_view level_set_name = "level";
+		static constexpr std::string_view preview_set_prefix = "preview:";
+
+		// Name of the set that holds the preview of `tag`.
+		static std::string preview_set_name(std::string_view tag) { return std::string{ preview_set_prefix }.append(tag); }
 
 		context_manager(res::resource_system& resource,
 						scn::ecs_assembler& assembler,
@@ -79,6 +83,17 @@ namespace scn
 		void for_each_set(Fn&& fn) {
 			for (const auto& s : m_sets) fn(*s);
 		}
+
+		// Preview of an asset (prefab, scene, ...): the set "preview:<tag>" with one `kind::preview`
+		// context. It has its own time, runs in Edit mode and takes part in hot reload, and being a
+		// set of its own it is neither part of the level nor affected by a level reload. Creating a
+		// preview for a tag that already has one replaces it.
+		scn::world_context& create_preview(std::string_view tag, std::string_view name,
+										   const std::vector<std::string>& systems = {});
+		// Destroys the set; a no-op when the tag has no preview.
+		void destroy_preview(std::string_view tag);
+		// Null when the tag has no preview.
+		scn::world_context* find_preview(std::string_view tag) const;
 
 		// Mode and seed of every context of the set.
 		void set_mode(std::string_view set, ecs::run_mode mode) { get_set(set).set_mode(mode); }

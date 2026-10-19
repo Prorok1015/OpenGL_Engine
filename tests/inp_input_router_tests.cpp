@@ -308,6 +308,45 @@ BOOST_AUTO_TEST_CASE(Contexts_ViewportInputOfThePrefabDoesNotReachTheMainContext
 	BOOST_TEST(!state_of(preview).keyboard[idx(KEYBOARD_BUTTONS::W)]);
 }
 
+BOOST_AUTO_TEST_CASE(Contexts_ThePreviewSetIsIsolatedFromTheLevelAndItsBindingGoesWithIt)
+{
+	auto& main_ctx = make("level", "main");
+	auto& preview = mgr.create_preview("p", "__prefab_preview", { "test::probe_input" });
+	preview.state().ctx().emplace<probe>();
+	const inp::input_target preview_target{ .set = scn::context_manager::preview_set_name("p"), .context = "__prefab_preview" };
+
+	router.bind({ "level", "main" }, LEFT_RECT);
+	router.bind(preview_target, RIGHT_RECT);
+	move_to({ 300, 50 }); // over the preview
+	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
+	gs::route_input(router, mgr);
+	mgr.update(std::chrono::duration<float>(0.01f));
+
+	BOOST_TEST(focus_of(preview));
+	BOOST_TEST(state_of(preview).keyboard[idx(KEYBOARD_BUTTONS::W)]);
+	BOOST_TEST(!focus_of(main_ctx));
+	BOOST_TEST(!state_of(main_ctx).keyboard[idx(KEYBOARD_BUTTONS::W)]);
+	BOOST_TEST(preview.state().ctx().get<probe>().runs == 1); // it runs although the level set is not the one hovered
+	BOOST_TEST(preview.state().ctx().get<probe>().key_w);
+	BOOST_TEST(!main_ctx.state().ctx().get<probe>().key_w);
+
+	// the preview is closed: the binding of this frame has nothing to feed, the level is not affected
+	mgr.destroy_preview("p");
+	router.clear_bindings();
+	router.bind({ "level", "main" }, LEFT_RECT);
+	router.bind(preview_target, RIGHT_RECT);
+	gs::route_input(router, mgr);
+	BOOST_TEST(!focus_of(main_ctx));
+	BOOST_TEST(!state_of(main_ctx).keyboard[idx(KEYBOARD_BUTTONS::W)]);
+
+	// reopened under the same tag: the same target is live again
+	auto& reopened = mgr.create_preview("p", "__prefab_preview");
+	gs::route_input(router, mgr);
+	BOOST_TEST(focus_of(reopened));
+	BOOST_TEST(state_of(reopened).keyboard[idx(KEYBOARD_BUTTONS::W)]);
+	BOOST_TEST(!focus_of(main_ctx));
+}
+
 BOOST_AUTO_TEST_CASE(Contexts_ANonFocusedContextGetsNeutralState)
 {
 	auto& focused = make("level", "a");

@@ -47,4 +47,26 @@ BOOST_AUTO_TEST_CASE(SmokeLevelFramesPassValidationWithoutViolations)
 	BOOST_TEST(state.last_frame().draws > 0u);
 }
 
+BOOST_AUTO_TEST_CASE(SmokeLevelBuildsNoFramebufferAfterWarmUp)
+{
+	auto& levels = storage.require<scn::context_manager>();
+	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));
+
+	std::vector<std::size_t> built;
+	auto& stages = storage.require<app::frame_stage_registry>();
+	stages.add_stage("test_framebuffer_probe", app::builtin_stage::present, app::stage_side::after,
+		[&](app::stage_context&) { built.push_back(driver()->stats().framebuffers.misses()); });
+	BOOST_REQUIRE_NO_THROW(BOOST_TEST(run_frames(6) == 6));
+	stages.remove_stage("test_framebuffer_probe");
+
+	BOOST_REQUIRE(built.size() == 6u);
+	BOOST_TEST(built.back() > 0u);
+	for (std::size_t frame = 2; frame < built.size(); ++frame) {
+		BOOST_TEST(built[frame] == built[1], "frame " << frame << " built a framebuffer");
+	}
+	BOOST_TEST(driver()->stats().framebuffers.hits() > 0u);
+	BOOST_TEST(driver()->calls().render_pass_begins == driver()->calls().render_pass_ends);
+	BOOST_TEST(!driver()->in_render_pass());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
