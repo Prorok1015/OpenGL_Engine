@@ -78,14 +78,14 @@ void opaque_pass::execute(render_context &context,
 
     for (std::size_t i = 0; i < packet.opaque_draws.size(); ++i) {
       const auto &dc = packet.opaque_draws[i];
-      auto *va = context.geometry(dc.geometry_tag);
+      auto *va = context.geometry(packet.geometry_of(dc));
       if (!va)
         continue;
 
       if (!pipelines.bind(dc.variant))
         continue;
-      rnd::configure_pass(context, *dc.material);
-      context.bind_object(packet.opaque_object(i), dc.skinning_tag);
+      rnd::configure_pass(context, packet.material_of(dc));
+      context.bind_object(packet.opaque_object(i), packet.skin_of(dc));
 
       drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);

@@ -243,12 +243,15 @@ BOOST_AUTO_TEST_CASE(TheRingAndTheBoneBufferHoldWhatExtractProduced)
 			return stored;
 		};
 		for (const auto& packet : packets()) {
+			// Packets are sorted at extract, so element `index` of the ring must belong to the draw at that position.
 			const auto check = [&](const rnd::draw_call_t& dc, std::uint32_t index) {
 				const rnd::object_data stored = element(index);
 				BOOST_CHECK(stored.world == dc.transform);
 				BOOST_CHECK(stored.bone_offset == packet.bone_base + dc.bone_offset);
 				++checked_draws;
-				if (dc.skinning_tag.is_valid()) {
+				if (dc.skin.is_valid()) {
+					BOOST_CHECK(packet.skin_of(dc).is_valid());
+					BOOST_CHECK(dc.bone_count > 0u);
 					++skinned_draws;
 					BOOST_REQUIRE((stored.bone_offset + 1) * sizeof(glm::mat4) <= bones->size());
 					glm::mat4 first_bone;

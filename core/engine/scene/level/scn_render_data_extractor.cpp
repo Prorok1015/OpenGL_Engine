@@ -1,6 +1,7 @@
 #include <snk/scene/level/scn_render_data_extractor.h>
 #include <snk/scene/level/scn_world.h>
 #include <memory_resource>
+#include <unordered_map>
 #include <snk/common/eng_transform_3d.hpp>
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_render_packet.hpp>
@@ -42,7 +43,6 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
     ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
     ASSERT_MSG(context.variants, "frame_context shader variant cache not injected");
     m_retired_materials.clear();
-    auto& variants = *context.variants;
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
 
@@ -101,6 +101,25 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 ++skeleton_estimate;
             }
             packet.bones.reserve(bone_estimate, skeleton_estimate);
+            const std::size_t skinned_mesh_estimate = reg.view<scn::skinning_component>().size();
+
+            // Draws name their geometry, skin and material by index into the packet's tables; each distinct
+            // one is added once.
+            packet.geometries.reserve(mesh_count);
+            packet.skins.reserve(skinned_mesh_estimate);
+            packet.materials.reserve(mesh_count);
+            std::pmr::unordered_map<res::tag, uint32_t> geometry_ids(ds::frame_allocator());
+            std::pmr::unordered_map<res::tag, uint32_t> skin_ids(ds::frame_allocator());
+            std::pmr::unordered_map<const rnd::compiled_material*, uint32_t> material_ids(ds::frame_allocator());
+            geometry_ids.reserve(mesh_count);
+            material_ids.reserve(mesh_count);
+            const auto intern = [](auto& ids, auto& table, const auto& value) {
+                const auto [it, added] = ids.try_emplace(value, static_cast<uint32_t>(table.size()));
+                if (added) {
+                    table.push_back(value);
+                }
+                return it->second;
+            };
             for (auto&& [m_ent, name, mesh, geom, mat, m_trans] : meshes_view.each()) {
 
                 const auto mlt_ptr = mat.mlt_desc.get();
@@ -113,7 +132,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                 rnd::draw_call_t dc;
                 {
                     PROFILE_SCOPE("Extract.BuildDC");
-                    dc.geometry_tag = geom.geom_tag;
+                    dc.geometry.index = intern(geometry_ids, packet.geometries, geom.geom_tag);
                     dc.indices_count = static_cast<uint32_t>(mesh.mesh.get_indices_count());
                     dc.vx_begin = static_cast<uint32_t>(mesh.mesh.vx_begin);
                     dc.ind_begin = static_cast<uint32_t>(mesh.mesh.ind_begin);
@@ -136,7 +155,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                             auto& matrices = reg.get<scn::bone_matrices_component>(skel_ent);
 
                             dc.bone_offset = packet.bones.add(&matrices.matrices, matrices.matrices);
-                            dc.skinning_tag = skin->skinning_tag;
+                            dc.bone_count = static_cast<uint32_t>(matrices.matrices.size());
+                            if (skin->skinning_tag.is_valid()) {
+                                dc.skin.index = intern(skin_ids, packet.skins, skin->skinning_tag);
+                            }
 
                             has_skinning = true;
                         }
@@ -148,7 +170,10 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                     PROFILE_SCOPE("Extract.ShaderDesc");
                     material = acquire_material(reg, m_ent, mat, mlt_ptr, has_skinning, context, m_retired_materials);
                 }
-                dc.material = material;
+                dc.material.index = intern(material_ids, packet.materials, material);
+                // Distance along the view axis: the transparent order, and the tie-break among equal opaque draws.
+                const glm::vec4 view_pos = packet.camera.view_matrix * glm::vec4(glm::vec3(m_trans.world[3]), 1.0f);
+                const float view_depth = -view_pos.z;
 
                 {
                     PROFILE_SCOPE("Extract.PushDraws");
@@ -158,15 +183,23 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
                     if (needs_opaque) {
                         rnd::draw_call_t opaque_dc = dc;
                         opaque_dc.variant = material->opaque;
-                        opaque_dc.sort_key = variants.key(opaque_dc.variant);
+                        opaque_dc.sort_key = rnd::make_sort_key(
+                            rnd::draw_pass::opaque, opaque_dc.variant.value, opaque_dc.material.index, view_depth);
                         packet.opaque_draws.push_back(std::move(opaque_dc));
                     }
                     if (needs_transparent) {
                         dc.variant = material->base;
-                        dc.sort_key = variants.key(dc.variant);
+                        dc.sort_key = rnd::make_sort_key(
+                            rnd::draw_pass::transparent, dc.variant.value, dc.material.index, view_depth);
                         packet.transparent_draws.push_back(std::move(dc));
                     }
                 }
+            }
+
+            {
+                PROFILE_SCOPE("Extract.SortDraws");
+                rnd::sort_draws(packet.opaque_draws);
+                rnd::sort_draws(packet.transparent_draws);
             }
 
             auto skys_view = reg.view<scn::sky_component, scn::material_desc_component, scn::renderable>();
