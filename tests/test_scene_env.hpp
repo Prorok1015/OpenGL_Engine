@@ -4,6 +4,8 @@
 // ecs_assembler with the production spawners plus one test-only component ("stat_desc") that makes
 // override/merge behavior easy to observe.
 #include <snk/resource/res_system.h>
+#include "test_manual_tasks.hpp"
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
@@ -37,14 +39,6 @@
 #include <unordered_map>
 
 namespace test_util {
-
-struct inline_worker : core::res::adapter_worker_base
-{
-	void start() override {}
-	void stop() override {}
-	bool is_stopped() const override { return false; }
-	void post(std::function<void()> cb) override { cb(); }
-};
 
 inline std::vector<std::byte> to_bytes(std::string_view s)
 {
@@ -83,18 +77,19 @@ public:
 	std::unordered_map<res::tag, std::vector<std::byte>> files;
 };
 
-// resource_system with the memory protocol replaced by ram_resolver and a synchronous worker.
+// resource_system with the memory protocol replaced by ram_resolver and a manual task_system.
 struct ram_res_env
 {
 	ram_res_env()
 	{
 		std::filesystem::create_directories("./res"); // resource_system's vfs root
 		std::filesystem::create_directories("./sandbox");
-		rs = std::make_unique<res::resource_system>();
+		rs = std::make_unique<res::resource_system>(tasks);
 		rs->unregistrate_resolver(res::tag::memory);
 		ram = &rs->registrate_resolver<ram_resolver>(res::tag::memory);
-		rs->set_adapter_worker(std::make_unique<inline_worker>());
 	}
+
+	void pump() { test_util::pump(tasks); }
 
 	static res::tag tag_of(std::string_view name) { return res::tag{ std::string("memory://t/") + std::string(name) }; }
 
@@ -105,6 +100,7 @@ struct ram_res_env
 		return tag;
 	}
 
+	ds::task_system tasks{ manual_tasks() }; // outlives rs
 	std::unique_ptr<res::resource_system> rs;
 	ram_resolver* ram = nullptr;
 };

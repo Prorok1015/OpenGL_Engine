@@ -3,34 +3,18 @@
 #include <snk/resource/res_tag.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
-#include <snk/resource/adapters/res_adapter_worker_base.hpp>
+#include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
+#include <mutex>
 #include <set>
 #include <shared_mutex>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 
-namespace res {
-	struct cache_key
-	{
-		res::tag tag;
-		ds::type_id type;
-
-		bool operator==(const cache_key&) const = default;
-	};
-}
-
 namespace std {
-	template<> struct hash<res::cache_key> {
-		std::size_t operator()(const res::cache_key& k) const {
-			const std::size_t h1 = std::hash<res::tag>{}(k.tag);
-			const std::size_t h2 = std::hash<ds::type_id>{}(k.type);
-			return h1 ^ (h2 + static_cast<std::size_t>(0x9e3779b97f4a7c15ull) + (h1 << 6) + (h1 >> 2));
-		}
-	};
-
 	template<> struct hash<std::pair<ds::type_id, std::string>> {
 		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
 			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
@@ -61,8 +45,11 @@ namespace res
 
 		using adapter_key = std::pair<ds::type_id, std::string>;
 	public:
-		resource_system();
-		~resource_system() = default;
+		// Adapter work runs on `tasks` (lane::compute); watcher callbacks and res_handle::then are delivered through
+		// its main-thread queue. `tasks` must outlive this system, and so must the thread that drains it.
+		explicit resource_system(ds::task_system& tasks);
+		// Cancels the load tasks that have not started and waits for the running ones: main thread only.
+		~resource_system();
 		resource_system(const resource_system&) = delete;
 		resource_system& operator= (const resource_system&) = delete;
 		resource_system(resource_system&&) = delete;
@@ -90,11 +77,6 @@ namespace res
 		}
 
 
-		void set_adapter_worker(std::unique_ptr<core::res::adapter_worker_base>&& worker) {
-			m_adapter_worker = std::move(worker);
-			m_adapter_worker->start();
-		}
-
 		void watch(const res::tag& tag, void* owner, reload_callback cb) {
 			std::lock_guard lock(m_cache_mutex);
 			m_watchers[tag][owner] = std::move(cb);
@@ -107,20 +89,9 @@ namespace res
 			}
 		}
 
-		void signal_changed(const res::tag& tag) {
-			std::unordered_map<void*, reload_callback> callbacks;
-			{
-				std::unique_lock lock(m_cache_mutex);
-				std::erase_if(m_cache, [&tag](const auto& entry) { return entry.first.tag == tag; });
-				if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
-					callbacks = it->second;
-				}
-			}
-
-			for (auto& [owner, callback] : callbacks) {
-				callback(tag);
-			}
-		}
+		// Any thread. Drops the tag's cache entries right away; the watchers are called later on the main thread
+		// (task_system::drain_main), and only those still registered by then.
+		void signal_changed(const res::tag& tag);
 
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
@@ -203,7 +174,7 @@ namespace res
 		void warmup(const res::tag& tag)
 		{
 			res::res_handle<T> res = require<T>(tag);
-			res.then([this, res, tag](auto&) {
+			res.get_control_block()->on_settled([this, res, tag](auto&) {
 				if (res.has_error()) return;
 				push_resource_to_strong_cache(cache_key{ tag, ds::type_id::make<T>() }, res.get_control_block());
 			});
@@ -218,7 +189,7 @@ namespace res
 			push_resource_to_cache(key, block);
 
 			if (!exists(tag)) {
-				post_adapter_work([this, tag, block]() {
+				run_on_compute([this, tag, block]() {
 					try {
 						auto adapter = find_adapter_recursive<RESOURCE>(tag);
 						if (!adapter) {
@@ -235,7 +206,7 @@ namespace res
 
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
-			std::erase_if(m_pinned_resources, [&tag](const auto& entry) { return entry.first.tag == tag; });
+			m_pinned_resources.erase_tag(tag);
 		}
 
 		void register_alias(const res::tag& original, const res::tag& alias);
@@ -249,7 +220,8 @@ namespace res
 		}
 
 	private:
-		void post_adapter_work(std::function<void()> cb);
+		void run_on_compute(std::function<void()> cb);
+		void deliver_to_watchers(const res::tag& tag);
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
 		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key) {
 			std::unique_lock lock(m_cache_mutex);
@@ -323,6 +295,9 @@ namespace res
 				} catch (const std::exception& e) {
 					final_cb->set_error(std::string{ "Adapter error: " } + e.what());
 					egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
+				} catch (...) {
+					final_cb->set_error("Adapter error: unknown exception");
+					egLOG_ERROR("res/adapter", "Failed to deserialize resource {}: unknown exception", tag.view());
 				}
 			};
 
@@ -331,8 +306,8 @@ namespace res
 				raw_data_block->wait();
 				adapter_cb();
 			} else {
-				raw_data_block->then([this, adapter_cb](auto& raw_block) {
-					post_adapter_work(adapter_cb);
+				raw_data_block->on_settled([this, adapter_cb](auto&) {
+					run_on_compute(adapter_cb);
 				});
 			}
 		}
@@ -347,7 +322,7 @@ namespace res
 			}
 			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
 			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
-			return res_handle<RESOURCE>(block, requested);
+			return res_handle<RESOURCE>(block, requested, &m_tasks);
 		}
 
 		template<class T>
@@ -391,10 +366,15 @@ namespace res
 		std::unordered_map<res::tag, res::tag> m_aliases;
 
 		std::unordered_map<protocol, resolver> m_resolvers;
-		std::unordered_map<cache_key, cache_entry> m_cache;
-		std::unordered_map<cache_key, std::shared_ptr<resource_handle>> m_pinned_resources;
+		tag_keyed_map<cache_entry> m_cache;
+		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
 
 		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
-		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;
+
+		ds::task_system& m_tasks;
+		std::mutex m_stop_mutex;
+		bool m_stopping = false;
+		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
+		ds::lifetime m_lifetime;
 	};
 }

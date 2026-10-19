@@ -55,9 +55,10 @@ namespace core::res
             return data;
         }
 
-        // Fires exactly once, immediately (on the caller thread) if already finished.
-        // Callbacks never run under the lock, so they may re-enter this block.
-        void then(std::function<void(res_control_block<T>&)> callback)
+        // Resource-pipeline hook, not for gameplay code (res_handle::then delivers on the main thread).
+        // Fires exactly once, on whichever thread settles the block, or immediately (on the caller
+        // thread) if it already has. Callbacks never run under the lock, so they may re-enter this block.
+        void on_settled(std::function<void(res_control_block<T>&)> callback)
         {
             {
                 std::lock_guard lock(callback_mtx);
@@ -70,7 +71,7 @@ namespace core::res
         }
 
         void set_ready(T&& result) {
-            // data is published before the release store of status, under the same lock that guards then()/wait()
+            // data is published before the release store of status, under the same lock that guards on_settled()/wait()
             finish(res_status::ready, [&] { data = std::move(result); });
         }
 
@@ -109,9 +110,9 @@ namespace core::res
             try {
                 cb(*this);
             } catch (const std::exception& e) {
-                egLOG_ERROR("resource", "then() callback threw: {}", e.what());
+                egLOG_ERROR("resource", "on_settled() callback threw: {}", e.what());
             } catch (...) {
-                egLOG_ERROR("resource", "then() callback threw an unknown exception");
+                egLOG_ERROR("resource", "on_settled() callback threw an unknown exception");
             }
         }
 

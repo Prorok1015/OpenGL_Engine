@@ -94,6 +94,7 @@ BOOST_AUTO_TEST_CASE(Reload_ToAnEmptyWorldListClearsTheEditorArrays)
 	mgr.set_on_reload([&] { ++reloads; resync(); });
 	put("lv.desc", LEVEL_NO_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(reloads == 1);
@@ -116,6 +117,7 @@ BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)
 	mgr.set_on_reload([&] { resync(); });
 	put("lv.desc", LEVEL_TWO_WORLDS);
 	rs->signal_changed(tag);
+	pump();
 	mgr.update(std::chrono::duration<float>(0.001f));
 
 	BOOST_TEST(state.active_world_idx == 0);

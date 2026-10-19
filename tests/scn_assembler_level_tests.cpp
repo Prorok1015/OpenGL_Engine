@@ -160,6 +160,7 @@ BOOST_AUTO_TEST_CASE(AssembleAndApply_HotReloadUsesPatcherAndKeepsTracking)
 
 	put("s.desc", R"({"__type":"stat_desc","hp":2})");
 	rs->signal_changed(tag);
+	pump();
 	assembler->assemble_and_apply(reg, e, "stat_desc", handle(tag), {}, "stat", /*is_hot_reload*/ true);
 
 	BOOST_TEST(reg.get<stat_component>(e).hp == 2);
@@ -188,6 +189,7 @@ BOOST_AUTO_TEST_CASE(TriggerHotReloadForComponent_PatchesOnlyEntitiesTrackingTha
 
 	put("a.desc", R"({"__type":"stat_desc","hp":2,"label":"A2"})");
 	rs->signal_changed(tag_a);
+	pump();
 	assembler->trigger_hot_reload_for_component(reg, handle(tag_a));
 
 	BOOST_TEST(reg.get<stat_component>(with_override).hp == 50);       // local override survives
@@ -216,6 +218,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ReloadsPrefabInstancesOnTickAfterResourceC
 
 	put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":8}}})");
 	rs->signal_changed(tag);
+	pump();
 	BOOST_TEST(reg.get<stat_component>(e).hp == 1); // reload is deferred to tick()
 	mgr.tick();
 	BOOST_TEST(reg.get<stat_component>(e).hp == 8);
@@ -236,6 +239,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_DetachedRegistryIsNotReloaded)
 
 	put("m.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":5}}})");
 	rs->signal_changed(tag);
+	pump();
 	mgr.tick();
 
 	BOOST_TEST(attached.get<stat_component>(ea).hp == 5);
@@ -254,6 +258,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ExternalWatchReplacesInternalReloadAndDedu
 
 	rs->signal_changed(tag);
 	rs->signal_changed(tag); // queued twice, delivered once
+	pump();
 	BOOST_TEST(calls == 0);
 	mgr.tick();
 	BOOST_TEST(calls == 1);
@@ -271,6 +276,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_UnwatchedNonPrefabDescDoesNotAbort)
 	mgr.watch_resource(tag, [&](const res::tag&) { ++calls; });
 	mgr.unwatch_resource(tag);
 	rs->signal_changed(tag);
+	pump();
 	mgr.tick();
 	BOOST_TEST(calls == 0);
 }
@@ -288,6 +294,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ReloadsEntitiesUsingAChangedComponentDesc)
 
 	put("c.desc", R"({"__type":"stat_desc","hp":1,"label":"v2"})");
 	rs->signal_changed(tag);
+	pump();
 	mgr.tick();
 
 	BOOST_TEST(reg.get<stat_component>(e).label == "v2");
@@ -305,6 +312,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_DestructionUnhooksRegistryAndWatchers)
 	}
 	// manager gone: signalling and mutating the registry must not call into a dead manager
 	BOOST_CHECK_NO_THROW(rs->signal_changed(tag));
+	BOOST_CHECK_NO_THROW(pump());
 	BOOST_CHECK_NO_THROW(reg.emplace_or_replace<scn::prefab_instance>(e, scn::prefab_instance{ tag, {} }));
 }
 
@@ -450,6 +458,7 @@ BOOST_FIXTURE_TEST_CASE(Level_UpdateRunsHotReloadTickForAttachedWorlds, level_fi
 
 	put("lvl.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":6}}})");
 	rs->signal_changed(tag);
+	pump();
 	lvl.update(std::chrono::duration<float>(0.001f));
 	BOOST_TEST(reg.get<stat_component>(e).hp == 6);
 }

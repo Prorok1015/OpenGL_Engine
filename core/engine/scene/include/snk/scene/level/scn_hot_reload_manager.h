@@ -1,6 +1,5 @@
 #pragma once
 #include <entt/fwd.hpp>
-#include <mutex>
 #include <vector>
 #include <unordered_set>
 #include <snk/resource/res_tag.h>
@@ -44,7 +43,7 @@ namespace scn {
 		std::unordered_set<res::tag> m_watched_tags;
 		std::unordered_map<res::tag, res::resource_system::reload_callback> m_external_watched_tags;
 
-		std::mutex m_queue_mtx;
+		// Filled by the watcher callbacks, which resource_system delivers on the main thread; drained by tick().
 		std::vector<res::tag> m_reload_queue;
 	};
 }

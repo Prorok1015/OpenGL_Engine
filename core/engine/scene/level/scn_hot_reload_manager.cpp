@@ -51,7 +51,6 @@ namespace scn {
 
 		if (m_watched_tags.insert(tag).second) {
 			m_res_sys.watch(tag, this, [this] (const res::tag& changed_tag) {
-				std::lock_guard<std::mutex> lock(m_queue_mtx);
 				if (std::find(m_reload_queue.begin(), m_reload_queue.end(), changed_tag) == m_reload_queue.end()) {
 					m_reload_queue.push_back(changed_tag);
 				}
@@ -75,19 +74,13 @@ namespace scn {
 
 	void hot_reload_manager::tick()
 	{
-		std::vector<res::tag> tags_to_reload;
-
-		{
-			std::lock_guard<std::mutex> lock(m_queue_mtx);
-			tags_to_reload = std::move(m_reload_queue);
-			m_reload_queue.clear();
-		}
+		std::vector<res::tag> tags_to_reload = std::move(m_reload_queue);
+		m_reload_queue.clear();
 
 		if (tags_to_reload.empty()) return;
 
 		for (const auto& tag : tags_to_reload) {
 			// External callbacks (e.g. level_manager reload) handle their own typed load.
-			// Don't do a desc_base load first — it would collide in the type-agnostic cache.
 			if (m_external_watched_tags.contains(tag)) {
 				m_external_watched_tags.at(tag)(tag);
 				continue;

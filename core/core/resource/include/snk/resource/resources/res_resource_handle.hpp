@@ -3,6 +3,7 @@
 #include <snk/resource/res_tag.h>
 #include <snk/common/ds/ds_polymorphic_cast.hpp>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <memory>
 #include <functional>
 
@@ -15,8 +16,8 @@ namespace core::res
 
         res_handle() = default;
         ~res_handle() = default;
-        res_handle(std::shared_ptr<resource_control_block> block, const ::res::tag& tag)
-            : m_block(std::move(block)), m_tag(tag) {
+        res_handle(std::shared_ptr<resource_control_block> block, const ::res::tag& tag, ds::task_system* tasks = nullptr)
+            : m_block(std::move(block)), m_tag(tag), m_tasks(tasks) {
         }
 		res_handle(const res_handle<T>&) = default;
 		res_handle(res_handle<T>&&) = default;
@@ -36,7 +37,7 @@ namespace core::res
 
         std::shared_ptr<T> get_sync() const {
             if (!m_block) return nullptr;
-            m_block->wait();
+            wait_finished();
             if (m_block->has_error() || !m_block->data) {
                 egLOG_ERROR("resource", "get_sync on failed resource '{}': {}", m_tag.view(), m_block->error_msg);
                 return nullptr;
@@ -44,10 +45,20 @@ namespace core::res
             return ds::polymorphic_pointer_cast<T>(m_block->data);
         }
 
-        void then(std::function<void(T&)> cb) {
+        // Runs `cb` on the main thread (next task_system::drain_main) once the resource is ready; never for a
+        // failed one, and dropped if `owner` is destroyed first. Pending callbacks are bound to the handle's
+        // task_system, so a handle that was not obtained from resource_system::require cannot use it.
+        void then(const ds::lifetime& owner, std::function<void(T&)> cb) const {
             if (!m_block) return;
-            m_block->then([cb](auto& block) {
-                if (block.data) cb(*ds::polymorphic_pointer_cast<T>(block.data));
+            ASSERT_MSG(m_tasks, "res_handle::then: the handle has no task_system");
+            if (!m_tasks) return;
+            m_block->on_settled([tasks = m_tasks, weak = owner.token(), cb = std::move(cb)](auto& block) {
+                if (!block.data) return;
+                tasks->post_main([weak, cb, data = block.data]() {
+                    if (!weak.expired()) {
+                        cb(*ds::polymorphic_pointer_cast<T>(data));
+                    }
+                });
             });
         }
 
@@ -73,8 +84,22 @@ namespace core::res
 		}
 
     private:
+        // Like task_handle::wait(): with a manual task_system nothing runs in the background, so the waiter
+        // executes the queued load tasks itself instead of blocking on them.
+        void wait_finished() const {
+            if (m_tasks && m_tasks->mode() == ds::policy::manual) {
+                while (!m_block->is_ready() && !m_block->has_error()) {
+                    if (!m_tasks->run_one(ds::lane::compute) && !m_tasks->run_one(ds::lane::io)) {
+                        break;
+                    }
+                }
+            }
+            m_block->wait();
+        }
+
         std::shared_ptr<resource_control_block> m_block;
         ::res::tag m_tag;
+        ds::task_system* m_tasks = nullptr;
     };
 
 }
