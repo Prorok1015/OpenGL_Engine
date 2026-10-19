@@ -3,6 +3,7 @@
 #include <entt/fwd.hpp>
 #include "edt_panel_base.h"
 #include "edt_game_view_logic.h"
+#include "edt_input_binding.h"
 
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
@@ -21,6 +22,12 @@ namespace edt
 		// Visits every world's registry: game cameras of inactive worlds must be switched off too.
 		void set_all_registries(std::function<void(const registry_visitor&)> for_each) { m_for_each_registry = std::move(for_each); }
 
+		// The image feeds the context `target` names (the active world) while hovered.
+		void set_input_router(inp::input_router* router, input_target_getter target) {
+			m_router = router;
+			m_input_target = std::move(target);
+		}
+
 	protected:
 		void on_render() override;
 		// Closed, collapsed or in a hidden tab: stop rendering the picked camera.
@@ -34,5 +41,7 @@ namespace edt
 		std::function<entt::registry*()> m_get_registry;
 		std::function<void(const registry_visitor&)> m_for_each_registry;
 		game_view::selection m_selection;
+		inp::input_router* m_router = nullptr;
+		input_target_getter m_input_target;
 	};
 }

@@ -2,9 +2,8 @@
 #include "edt_panel_base.h"
 #include <snk/ecs/ecs_entity.h>
 
-#include "edt_input_manager.h"
+#include "edt_input_binding.h"
 #include "edt_transform_gizmo.hpp"
-#include <snk/input/inp_ecs_input_manager.h>
 #include <glm/glm.hpp>
 #include <functional>
 #include <memory>
@@ -28,8 +27,11 @@ namespace edt
 		void set_registry_getter(std::function<entt::registry*()> getter);
 		void set_selected_entity(ecs::entity ent) { m_selected = ent; }
 
-		void set_input_manager(std::shared_ptr<edt::input_manager> input) { m_input = std::move(input); }
-		void set_ecs_input_manager(std::shared_ptr<inp::ecs_input_manager> ecs_input) { m_ecs_input = std::move(ecs_input); }
+		// The viewport feeds the context `target` names (the active world of the level) while hovered.
+		void set_input_router(inp::input_router* router, input_target_getter target) {
+			m_router = router;
+			m_input_target = std::move(target);
+		}
 
 		// Called when a file is dropped onto the viewport from the Asset Browser.
 		// Argument: absolute filesystem path of the dropped asset.
@@ -56,8 +58,8 @@ namespace edt
 		gui::gui_system&    m_gui;
 
 		std::function<entt::registry*()> m_get_registry;
-		std::shared_ptr<edt::input_manager> m_input;
-		std::shared_ptr<inp::ecs_input_manager> m_ecs_input;
+		inp::input_router* m_router = nullptr;
+		input_target_getter m_input_target;
 		ecs::entity m_selected = entt::null;
 		glm::vec2 m_image_pos = {};      // screen pos of the scene image (after toolbar)
 		glm::vec2 m_viewport_size = {800.f, 600.f};

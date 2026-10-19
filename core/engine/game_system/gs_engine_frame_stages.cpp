@@ -1,7 +1,9 @@
 #include <snk/game/gs_engine_frame_stages.h>
 #include <snk/window/wnd_window_system.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/game/gs_input_routing.h>
 #include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_input_router.h>
 #include <snk/render/rnd_frame_assembler.h>
 #include <snk/render/rnd_frame_context.h>
 #include <snk/render/rnd_render_system.h>
@@ -12,7 +14,14 @@
 void gs::register_scene_frame_stages(app::frame_stage_registry& registry)
 {
 	registry.set_body(app::builtin_stage::update, [](app::stage_context& c) {
-		c.storage.require<scn::context_manager>().update(c.dt);
+		auto& contexts = c.storage.require<scn::context_manager>();
+		// Bindings come from the panels of the previous ui stage; they are rebuilt every frame.
+		if (c.storage.has_value<inp::input_router>()) {
+			auto& router = c.storage.require<inp::input_router>();
+			gs::route_input(router, contexts);
+			router.clear_bindings();
+		}
+		contexts.update(c.dt);
 	});
 	registry.set_body(app::builtin_stage::post_update, [](app::stage_context& c) {
 		if (auto ecs_input = c.storage.require_shared<inp::ecs_input_manager>()) {

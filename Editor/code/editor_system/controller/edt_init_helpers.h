@@ -3,14 +3,13 @@
 #include <memory>
 #include <entt/entity/fwd.hpp>
 
-namespace inp { class ecs_input_manager; }
+namespace inp { class input_router; }
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
 namespace res { class resource_system; }
 
 namespace edt {
 	class editor_system;
-	class input_manager;
 	class file_dialog;
 	class scene_hierarchy_panel;
 	class inspector_panel;
@@ -40,8 +39,7 @@ namespace edt {
 		// Setup viewport panel with all its dependencies
 		void setup_viewport_panel(
 			std::shared_ptr<viewport_panel>& viewport,
-			std::shared_ptr<input_manager>& input,
-			std::shared_ptr<inp::ecs_input_manager>& ecs_input,
+			inp::input_router& router,
 			editor_system& sys,
 			shared_state& state,
 			rnd::render_system& rnd,

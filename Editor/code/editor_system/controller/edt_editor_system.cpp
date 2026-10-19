@@ -19,15 +19,14 @@
 #include "edt_asset_exporter.h"
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
-#include "edt_input_manager.h"
+#include "edt_input_target.h"
 #include "edt_file_dialog.h"
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_system.h>
-#include <snk/input/inp_input_system.h>
-#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_input_router.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level.h>
@@ -62,7 +61,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
 	, m_component_ui_registry(std::make_unique<edt::component_ui_registry>())
 {
-	input = std::make_shared<edt::input_manager>();
 }
 
 edt::editor_system::~editor_system() = default;
@@ -88,9 +86,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
 		data.require<scn::context_manager>());
-	auto& inp_sys = data.require<inp::input_system>();
-	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
-	ecs_input = data.require_shared<inp::ecs_input_manager>();
+	// The panels own input routing: whichever scene image is hovered feeds its context, nothing else does.
+	m_input_router = &data.require<inp::input_router>();
+	m_input_router->set_default_target(std::nullopt);
 
 	// Create panels
 	init_helpers::setup_panels(
@@ -105,7 +103,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_hierarchy_panel->set_view_cache(std::move(view_cache));
 	}
 	init_helpers::setup_viewport_panel(
-		m_viewport_panel, input, ecs_input, *this, m_state, m_rnd, m_gui, m_res);
+		m_viewport_panel, *m_input_router, *this, m_state, m_rnd, m_gui, m_res);
 
 	// Wire all controller + panel callbacks
 	init_helpers::wire_controller_callbacks(
@@ -126,8 +124,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Create prefab editor panel (EPIC-25)
 	m_prefab_panel = std::make_shared<prefab_editor_panel>(m_rnd, m_gui);
 	m_prefab_panel->set_on_close([this] { close_prefab_editor(); });
-	m_prefab_panel->set_ecs_input_manager(ecs_input);
-	m_prefab_panel->set_editor_input(input);
+	m_prefab_panel->set_input_router(m_input_router);
 
 	// Wire asset browser double-click for prefab editing
 	m_asset_browser_panel->set_on_file_double_clicked([this](const std::filesystem::path& res_rel) {
@@ -157,6 +154,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			ctx_mgr->get_level().for_each_world([&visit](scn::world& world) { visit(world.state()); });
 		}
 	});
+	m_game_view_panel->set_input_router(m_input_router, [this] { return active_input_target(m_state); });
 	m_game_view_panel->set_open(cfg_show_game_view);
 	pm.add_panel(m_game_view_panel);
 	pm.add_panel(m_console_panel);

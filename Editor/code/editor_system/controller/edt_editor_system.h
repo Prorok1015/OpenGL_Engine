@@ -19,9 +19,9 @@ namespace rnd  { class render_system; }
 namespace gui  { class gui_system; }
 namespace scn  { class ecs_assembler; class level_desc; }
 namespace ecs  { class system_factory; }
+namespace inp  { class input_router; }
 
 namespace edt {
-	class input_manager;
 	class file_dialog;
 	class editor_context;
 	class editor_layer;
@@ -45,8 +45,7 @@ namespace edt {
 			editor_system&, scene_editor&, world_controller&, level_controller&,
 			editor_layer&, shared_state&);
 		friend void init_helpers::setup_viewport_panel(
-			std::shared_ptr<viewport_panel>&, std::shared_ptr<input_manager>&,
-			std::shared_ptr<inp::ecs_input_manager>&, editor_system&, shared_state&,
+			std::shared_ptr<viewport_panel>&, inp::input_router&, editor_system&, shared_state&,
 			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
@@ -81,8 +80,7 @@ namespace edt {
 		gui::gui_system&      m_gui;
 
 		// Input
-		std::shared_ptr<edt::input_manager> input;
-		std::shared_ptr<inp::ecs_input_manager> ecs_input;
+		inp::input_router* m_input_router = nullptr;
 		std::unique_ptr<edt::file_dialog> m_file_dialog;
 
 		// Import/export

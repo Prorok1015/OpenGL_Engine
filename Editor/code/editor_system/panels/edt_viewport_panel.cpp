@@ -60,14 +60,6 @@ namespace edt
 			}
 		}
 
-		// Block ECS input by default; allow only when cursor is over the viewport
-		ImVec2 win_pos = ImGui::GetWindowPos();
-		const glm::ivec4 rect = edt::make_input_area({ win_pos.x, win_pos.y }, { size.x, size.y }, { fb_scale.x, fb_scale.y });
-		if (m_ecs_input)
-			m_ecs_input->set_input_area(glm::zero<glm::ivec4>(), true);
-		if (m_input)
-			m_input->set_input_area(rect, true);
-
 		// Display the editor camera render target texture
 		auto* texture = m_rnd.get_texture_manager().find(s_editor_cam_tag);
 		if (texture) {
@@ -90,15 +82,9 @@ namespace edt
 			ImGui::TextDisabled("(no render target — load a level first)");
 		}
 
-		// Let ECS input through only when cursor is over the image
-		if (ImGui::IsItemHovered() && m_ecs_input)
-			m_ecs_input->set_input_area(rect);
-
-		// Gate per-world camera input: only active when this viewport is hovered
-		if (reg) {
-			auto& focus = reg->ctx().emplace<inp::input_focus>();
-			focus.active = ImGui::IsItemHovered();
-		}
+		// Input (and the camera focus derived from it) reaches the world only while the image is hovered
+		if (m_input_target)
+			bind_item_input(m_router, m_input_target());
 
 		// Interactive transform gizmo (drawn on top of scene image)
 		if (reg && m_selected != entt::null && reg->valid(m_selected))
