@@ -2,6 +2,7 @@
 #include <snk/window/wnd_window.h>
 #include <snk/window/wnd_window_event_listener_interface.h>
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <vector>
 #include <snk/common/snk_api.h>
@@ -41,7 +42,26 @@ namespace wnd
 			return m_event_listeners;
 		}
 
+		// Called for a close request from the user (X button, Alt+F4) instead of closing at once.
+		// The handler decides: window::shutdown() closes, doing nothing keeps the window open.
+		using close_request_handler = std::function<void()>;
+		void set_close_request_handler(close_request_handler handler) {
+			m_close_handler = std::move(handler);
+		}
+
+		// Backends call this when the user asks to close `win`. The window stays open unless the handler
+		// shuts it down; without a handler it closes at once.
+		void request_close(window& win) {
+			if (!m_close_handler) {
+				win.shutdown();
+				return;
+			}
+			win.shutdown(false);
+			m_close_handler();
+		}
+
 	private:
 		std::vector<std::shared_ptr<window_listener_interface>> m_event_listeners;
+		close_request_handler m_close_handler;
 	};
 }

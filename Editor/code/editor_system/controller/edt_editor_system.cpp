@@ -189,7 +189,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
 	};
 	hooks.new_level = [this] { m_level_ctrl.new_level(); };
-	hooks.quick_save = [this] { m_level_ctrl.quick_save_level(); };
+	hooks.quick_save = [this] { return m_level_ctrl.quick_save_level(); };
 	hooks.save_level_as = [this](const std::string& rel_path) { return m_level_ctrl.save_level_as(rel_path); };
 	hooks.discard_changes = [this] { m_state.is_dirty = false; };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
@@ -203,6 +203,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
+	m_file_menu->attach_window_close(wnd_sys);
 
 	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));

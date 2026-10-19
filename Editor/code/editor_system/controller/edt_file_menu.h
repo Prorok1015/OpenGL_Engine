@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/window/wnd_window_system.h>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -18,7 +19,7 @@ namespace edt
 		std::function<bool()> is_dirty;
 		std::function<std::string()> level_path; // res-relative path of the saved level, empty if untitled
 		std::function<void()> new_level;
-		std::function<void()> quick_save;     // overwrite the saved level
+		std::function<bool()> quick_save;     // overwrite the saved level, true if written
 		std::function<bool(const std::string&)> save_level_as; // true if written
 		std::function<void()> discard_changes;
 		std::function<void(const std::filesystem::path&)> load_level; // absolute path picked by the user
@@ -27,10 +28,10 @@ namespace edt
 		std::filesystem::path resources_path;  // where "Open Level" starts
 	};
 
-	// The File menu: New / Open / Save / Import / Exit, with the "unsaved changes" flow for New and Exit.
-	// Each item is two layers. The action (file.new, file.open, file.save_as, file.save, file.import_model,
+	// The File menu: New / Open / Save / Save As / Import / Exit, with the "unsaved changes" flow for New and Exit.
+	// Each item is two layers. The action (file.new, file.open, file.save, file.save_as, file.import_model,
 	// file.exit) takes everything as JSON arguments and works without any UI. The methods below are the
-	// frontend a click or Ctrl+S runs: they ask through dialog_service and then invoke the action.
+	// frontend a click or a shortcut runs: they ask through dialog_service and then invoke the action.
 	class file_menu
 	{
 	public:
@@ -38,19 +39,25 @@ namespace edt
 
 		void new_level();
 		void open_level();
+		// Save As: always asks for a path (Ctrl+Shift+S).
 		void save_level();
+		// Save: overwrites the saved level, asks for a path if it has none yet (Ctrl+S).
 		void quick_save();
 		void import_model();
 		void exit();
 
-		// Puts the File menu items (and the Ctrl+S binding) into the registry. They stay registered while this
+		// Sends the window's own close request (X button, Alt+F4) through exit(), so it asks about unsaved
+		// changes like File > Exit does and Cancel keeps the editor open.
+		void attach_window_close(wnd::window_system& windows);
+
+		// Puts the File menu items (and their shortcuts) into the registry. They stay registered while this
 		// menu lives; call it once.
 		void register_actions();
 
 	private:
 		// Runs `action` right away (`discard` false), or after the user settles the unsaved changes (`discard`
-		// true: whatever is still unsaved may go).
-		void guard_unsaved(std::function<void(bool discard)> action);
+		// true: whatever is still unsaved may go). Returns the prompt it queued, if any.
+		std::optional<dialog_service::dialog_id> guard_unsaved(std::function<void(bool discard)> action);
 		void on_unsaved_choice(unsaved_choice choice, const std::function<void(bool discard)>& action);
 		// False (and logged) if the action refused.
 		bool invoke(std::string_view action_id, boost::json::value args);
@@ -61,6 +68,7 @@ namespace edt
 		action_registry& m_actions;
 		file_menu_hooks m_hooks;
 		std::optional<dialog_service::dialog_id> m_save_as_id;
+		std::optional<dialog_service::dialog_id> m_exit_prompt_id;
 		std::vector<std::function<void()>> m_after_save;
 		// The dialog queue belongs to editor_context and can outlive this menu: a dialog answered after
 		// that must not call back into it (or into the hooks, which capture editor_system).

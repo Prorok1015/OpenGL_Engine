@@ -97,12 +97,12 @@ bool edt::level_controller::save_level_as(const std::string& rel_path)
 	return true;
 }
 
-void edt::level_controller::quick_save_level()
+bool edt::level_controller::quick_save_level()
 {
 	if (!m_state.level_tag.is_valid())
-		return;
+		return false;
 
-	write_level_to_disk(std::string(m_state.level_tag.relative()));
+	return write_level_to_disk(std::string(m_state.level_tag.relative()));
 }
 
 // ─── Level load finish ──────────────────────────────────────────────────────
