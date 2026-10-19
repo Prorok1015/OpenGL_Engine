@@ -3,9 +3,9 @@
 #include <snk/scene/scn_camera_desc.h>
 #include <imgui.h>
 
-void edt::edt_cr_camera_register(edt::component_ui_registry& registry)
+void edt::edt_cr_camera_register(edt::renderer_registrar& registry)
 {
-	registry.register_renderer<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
+	registry.add<scn::camera_desc>([](scn::prefab_desc::prefab_comp_node& comp) -> bool {
 		bool changed = false;
 		auto get_float = [&](const std::string& key, float def) -> float {
 			auto it = comp.overrides.find(key);

@@ -10,7 +10,7 @@
 #include <boost/json/object.hpp>
 
 namespace desc { class desc_system; }
-namespace edt  { class component_ui_registry; }
+namespace edt  { class inspector_registry; }
 namespace edt::override_edit { class view_cache; }
 
 namespace edt
@@ -25,7 +25,7 @@ namespace edt
 		// Edits then become override records on `owner`; null owner = the selected node is edited itself.
 		void set_override_target(scn::prefab_desc::prefab_node* owner, std::vector<uint64_t> target);
 		void set_on_node_changed(std::function<void()> cb);
-		void set_component_ui_registry(component_ui_registry* registry);
+		void set_inspector_registry(inspector_registry* registry);
 		void set_desc_system(desc::desc_system* desc_system);
 		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
@@ -49,7 +49,7 @@ namespace edt
 		bool                           m_readonly       = false;
 		scn::prefab_desc::prefab_node* m_owner          = nullptr;
 		std::vector<uint64_t>          m_target;
-		component_ui_registry*         m_ui_registry    = nullptr;
+		inspector_registry*            m_inspectors     = nullptr;
 		desc::desc_system*             m_desc_system    = nullptr;
 		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;

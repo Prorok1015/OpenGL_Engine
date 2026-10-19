@@ -15,7 +15,6 @@ namespace edt {
 	class viewport_panel;
 	class console_panel;
 	class asset_browser_panel;
-	class component_ui_registry;
 	class editor_layer;
 	class scene_editor;
 	class level_controller;
@@ -32,7 +31,6 @@ namespace edt {
 			std::shared_ptr<viewport_panel>& viewport,
 			std::shared_ptr<console_panel>& console,
 			std::shared_ptr<asset_browser_panel>& asset_browser,
-			component_ui_registry& registry,
 			editor_system& sys,
 			bool capture_log = true);
 
