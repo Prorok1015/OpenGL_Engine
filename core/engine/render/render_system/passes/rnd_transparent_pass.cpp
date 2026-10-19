@@ -71,11 +71,18 @@ void transparent_pass::execute(frame_context &context,
     state.blend_states = {color_blend, weight_blend};
     drv.set_render_state(state);
 
-    drv.push_frame_buffer();
-    drv.set_render_targets({color_tp_rt, waight_tp_rt},
-                           txm_manager.find(depth_tag));
-    drv.clear(rnd::driver::CLEAR_FLAGS::COLOR_BUFFER,
-              {glm::vec4(0), glm::vec4(1)});
+    rnd::driver::render_pass_desc pass;
+    pass.colors.push_back({.texture = color_tp_rt,
+                           .load = rnd::driver::load_op::clear,
+                           .clear_color = glm::vec4(0)});
+    pass.colors.push_back({.texture = waight_tp_rt,
+                           .load = rnd::driver::load_op::clear,
+                           .clear_color = glm::vec4(1)});
+    if (auto *depth = txm_manager.find(depth_tag)) {
+      pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
+    }
+    pass.debug_name = "transparent";
+    drv.begin_render_pass(pass);
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
@@ -102,7 +109,7 @@ void transparent_pass::execute(frame_context &context,
                        dc.vx_begin, dc.ind_begin);
     }
 
-    drv.pop_frame_buffer();
+    drv.end_render_pass();
   }
 }
 } // namespace rnd
