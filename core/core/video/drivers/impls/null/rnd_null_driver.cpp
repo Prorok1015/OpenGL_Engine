@@ -2,6 +2,8 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
+#include <cstring>
+
 rnd::driver::null::driver::driver()
 	: m_stats(std::make_shared<object_stats>())
 {
@@ -18,6 +20,9 @@ void rnd::driver::null::driver::begin_render_pass(const render_pass_desc& desc)
 	}
 	m_last_pass = desc;
 	m_in_render_pass = true;
+	for (bound_set& set : m_bound_sets) {
+		set = {};
+	}
 	++m_calls.render_pass_begins;
 }
 
@@ -28,16 +33,25 @@ void rnd::driver::null::driver::end_render_pass()
 	++m_calls.render_pass_ends;
 }
 
-void rnd::driver::null::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& /*vertices*/, unsigned int /*count*/, unsigned int /*offset*/)
+void rnd::driver::null::driver::count_draw()
 {
 	++m_calls.draws;
 	++m_draws_by_topology[static_cast<std::size_t>(pipeline_info(m_bound).topology)];
+	for (std::size_t set = 0; set < max_bind_sets; ++set) {
+		if (m_bound_sets[set].group) {
+			++m_draws_with_set[set];
+		}
+	}
+}
+
+void rnd::driver::null::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& /*vertices*/, unsigned int /*count*/, unsigned int /*offset*/)
+{
+	count_draw();
 }
 
 void rnd::driver::null::driver::draw_indices(const vertex_array_interface* /*va*/, unsigned int /*count*/, unsigned int /*base_vertex*/, unsigned int /*base_index*/)
 {
-	++m_calls.draws;
-	++m_draws_by_topology[static_cast<std::size_t>(pipeline_info(m_bound).topology)];
+	count_draw();
 }
 
 std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create_shader(const std::vector<shader_header>& headers)
@@ -46,6 +60,9 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create
 	if (!error.empty()) {
 		egLOG_ERROR("shader/load", "null driver rejected the shader: {}", error);
 		return nullptr;
+	}
+	if (m_record_shader_sources) {
+		m_shader_sources.push_back(headers);
 	}
 	return std::make_unique<shader>(m_stats, headers);
 }
@@ -65,14 +82,103 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::null::driver::create
 	return std::make_unique<buffer>(m_stats);
 }
 
-std::unique_ptr<rnd::driver::uniform_buffer_interface> rnd::driver::null::driver::create_uniform_buffer(std::size_t size, std::size_t binding)
+void rnd::driver::null::driver::begin_frame()
 {
-	return std::make_unique<uniform_buffer>(m_stats, size, binding);
+	++m_frame;
+	++m_calls.frames_begun;
+	for (const bind_group_handle group : m_transient_groups) {
+		m_groups.erase(group);
+	}
+	m_transient_groups.clear();
 }
 
-std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::null::driver::create_ssbo_buffer(std::size_t size, std::size_t binding)
+rnd::driver::buffer_handle rnd::driver::null::driver::create_buffer(const buffer_desc& desc)
 {
-	return std::make_unique<ssbo_buffer>(m_stats, size, binding);
+	null_buffer buffer{ desc, {} };
+	const std::size_t copies = desc.update == buffer_update::per_frame ? frames_in_flight : 1;
+	buffer.copies.assign(copies, std::vector<std::byte>(desc.size));
+	++m_calls.buffers_created;
+	return m_buffers.insert(std::move(buffer));
+}
+
+void rnd::driver::null::driver::destroy_buffer(buffer_handle buffer)
+{
+	ENGINE_VERIFY(m_buffers.erase(buffer), "null driver: destroy_buffer with a handle of no buffer (index {}, generation {})", buffer.index, buffer.gen);
+}
+
+void rnd::driver::null::driver::update_buffer(buffer_handle buffer, std::size_t offset, std::span<const std::byte> data)
+{
+	null_buffer* target = m_buffers.find(buffer);
+	if (!ENGINE_VERIFY(target, "null driver: update_buffer with a handle of no buffer (index {}, generation {})", buffer.index, buffer.gen)) {
+		return;
+	}
+	std::vector<std::byte>& bytes = target->copies[target->desc.update == buffer_update::per_frame ? frame_slot() : 0];
+	if (!ENGINE_VERIFY(offset <= bytes.size() && data.size() <= bytes.size() - offset,
+		"null driver: update of {} bytes at offset {} exceeds the buffer size {}", data.size(), offset, bytes.size())) {
+		return;
+	}
+	if (!data.empty()) {
+		std::memcpy(bytes.data() + offset, data.data(), data.size());
+	}
+	++m_calls.buffer_updates;
+}
+
+rnd::driver::bind_group_layout_handle rnd::driver::null::driver::create_bind_group_layout(const bind_group_layout_desc& desc)
+{
+	return m_layouts.acquire(desc);
+}
+
+rnd::driver::bind_group_handle rnd::driver::null::driver::create_bind_group(const bind_group_desc& desc, lifetime life)
+{
+	ASSERT_MSG(m_layouts.find(desc.layout), "create_bind_group with a handle of no layout");
+	const bind_group_handle group = m_groups.insert({ desc, life });
+	if (life == lifetime::transient) {
+		m_transient_groups.push_back(group);
+		++m_calls.transient_bind_groups_created;
+	} else {
+		++m_calls.bind_groups_created;
+	}
+	return group;
+}
+
+void rnd::driver::null::driver::destroy_bind_group(bind_group_handle group)
+{
+	ENGINE_VERIFY(m_groups.erase(group), "null driver: destroy_bind_group with a handle of no group (index {}, generation {})", group.index, group.gen);
+}
+
+void rnd::driver::null::driver::set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets)
+{
+	if (!ENGINE_VERIFY(set < max_bind_sets, "null driver: set_bind_group at set {}, the table has {}", set, max_bind_sets)
+		|| !ENGINE_VERIFY(m_groups.find(group), "null driver: set_bind_group with a handle of no group (index {}, generation {})", group.index, group.gen)) {
+		return;
+	}
+	m_bound_sets[set] = { group, std::vector<std::uint32_t>(dynamic_offsets.begin(), dynamic_offsets.end()) };
+	++m_calls.bind_group_binds;
+	if (m_record_bindings) {
+		m_bind_log.push_back({ m_frame, frame_slot(), set, group, m_bound_sets[set].dynamic_offsets });
+	}
+}
+
+const rnd::driver::buffer_desc* rnd::driver::null::driver::buffer_info(buffer_handle buffer) const
+{
+	const null_buffer* found = m_buffers.find(buffer);
+	return found ? &found->desc : nullptr;
+}
+
+const std::vector<std::byte>* rnd::driver::null::driver::buffer_bytes(buffer_handle buffer, std::optional<std::uint32_t> copy) const
+{
+	const null_buffer* found = m_buffers.find(buffer);
+	if (!found) {
+		return nullptr;
+	}
+	const std::size_t index = found->desc.update == buffer_update::per_frame ? copy.value_or(frame_slot()) : 0;
+	return index < found->copies.size() ? &found->copies[index] : nullptr;
+}
+
+const rnd::driver::bind_group_desc* rnd::driver::null::driver::group_info(bind_group_handle group) const
+{
+	const null_group* found = m_groups.find(group);
+	return found ? &found->desc : nullptr;
 }
 
 rnd::driver::pipeline_handle rnd::driver::null::driver::create_pipeline(const pipeline_desc& desc)

@@ -3,6 +3,7 @@
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
 #include <memory>
+#include <span>
 #include <vector>
 
 // Contract of the validation decorator over the null backend: each rule gets a deliberately wrong call
@@ -133,8 +134,8 @@ BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
 	auto depth = drv->create_texture(texture_of(64, 32, texture_usage::depth_target));
 	auto mesh = make_geometry(*drv, 6);
-	auto ubo = drv->create_uniform_buffer(64, 0);
-	auto ssbo = drv->create_ssbo_buffer(128, 1);
+	const buffer_handle ubo = drv->create_buffer({ .size = 64, .usage = buffer_usage::uniform });
+	const buffer_handle ssbo = drv->create_buffer({ .size = 128, .usage = buffer_usage::storage });
 	std::vector<std::byte> bytes(64);
 
 	for (int frame = 0; frame < 3; ++frame) {
@@ -143,8 +144,8 @@ BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 		pass.render_area = { 8, 8, 16, 16 };
 		drv->begin_render_pass(pass);
 		drv->set_viewport({ 0, 0, 64, 32 });
-		ubo->set_data(bytes.data(), 64, 0);
-		ssbo->set_data(bytes.data(), 64, 64);
+		drv->update_buffer(ubo, 0, bytes);
+		drv->update_buffer(ssbo, 64, bytes);
 		bind_test_pipeline();
 		drv->draw_indices(mesh.array.get(), 6, 0, 0);
 		drv->draw_indices(mesh.array, 3);
@@ -306,37 +307,25 @@ BOOST_AUTO_TEST_CASE(ALayoutSetAfterTheBufferWasAttachedDoesNotCount)
 	expect_only(state(), vl::rule::draw_without_layout);
 }
 
-BOOST_AUTO_TEST_CASE(UniformBufferWritePastItsSizeIsReportedAndNotForwarded)
+BOOST_AUTO_TEST_CASE(BufferWritePastItsSizeIsReportedAndNotForwarded)
 {
-	auto ubo = drv->create_uniform_buffer(32, 0);
+	const buffer_handle ubo = drv->create_buffer({ .size = 32, .usage = buffer_usage::uniform });
 	std::vector<std::byte> bytes(64, std::byte{ 1 });
+	const std::span<const std::byte> all{ bytes };
 
-	ubo->set_data(bytes.data(), 32, 0);
-	ubo->set_data(bytes.data(), 16, 16);
-	ubo->set_data(bytes.data(), 0, 32);
+	drv->update_buffer(ubo, 0, all.first(32));
+	drv->update_buffer(ubo, 16, all.first(16));
+	drv->update_buffer(ubo, 32, all.first(0));
 	BOOST_TEST(state().total() == 0u);
+	BOOST_TEST(inner().calls().buffer_updates == 3u);
 
-	ubo->set_data(bytes.data(), 33, 0);
+	drv->update_buffer(ubo, 0, all.first(33));
 	expect_only(state(), vl::rule::buffer_write_range, 1);
-	ubo->set_data(bytes.data(), 16, 24);
+	drv->update_buffer(ubo, 24, all.first(16));
 	expect_only(state(), vl::rule::buffer_write_range, 2);
-	ubo->set_data(bytes.data(), 1, 33);
+	drv->update_buffer(ubo, 33, all.first(1));
 	expect_only(state(), vl::rule::buffer_write_range, 3);
-}
-
-BOOST_AUTO_TEST_CASE(SsboWritePastItsSizeIsReported)
-{
-	auto ssbo = drv->create_ssbo_buffer(64, 0);
-	std::vector<std::byte> bytes(128, std::byte{ 1 });
-
-	ssbo->set_data(bytes.data(), 64);
-	ssbo->reserve(64);
-	BOOST_TEST(state().total() == 0u);
-
-	ssbo->set_data(bytes.data(), 65);
-	expect_only(state(), vl::rule::buffer_write_range, 1);
-	ssbo->set_data(bytes.data(), 8, 60);
-	expect_only(state(), vl::rule::buffer_write_range, 2);
+	BOOST_TEST(inner().calls().buffer_updates == 3u);
 }
 
 BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
@@ -391,18 +380,14 @@ BOOST_AUTO_TEST_CASE(ObjectsOfEveryKindAreRegisteredWhileTheyLive)
 		auto texture = drv->create_texture(texture_of(4, 4, texture_usage::sampled));
 		auto array = drv->create_vertex_array();
 		auto buffer = drv->create_buffer();
-		auto ubo = drv->create_uniform_buffer(16, 0);
-		auto ssbo = drv->create_ssbo_buffer(16, 1);
 		BOOST_TEST(state().live_objects(vl::object_kind::shader) == 1u);
 		BOOST_TEST(state().live_objects(vl::object_kind::texture) == 1u);
 		BOOST_TEST(state().live_objects(vl::object_kind::vertex_array) == 1u);
 		BOOST_TEST(state().live_objects(vl::object_kind::buffer) == 1u);
-		BOOST_TEST(state().live_objects(vl::object_kind::uniform_buffer) == 1u);
-		BOOST_TEST(state().live_objects(vl::object_kind::ssbo_buffer) == 1u);
 	}
 	BOOST_TEST(inner().stats().live_total() == 0u);
 	for (auto kind : { vl::object_kind::shader, vl::object_kind::texture, vl::object_kind::vertex_array,
-		vl::object_kind::buffer, vl::object_kind::uniform_buffer, vl::object_kind::ssbo_buffer }) {
+		vl::object_kind::buffer }) {
 		BOOST_TEST(state().live_objects(kind) == 0u);
 	}
 }
@@ -822,9 +807,6 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	auto shader = drv->create_shader(program());
 	shader->uniform("value", uniform_data{ 1.f });
 	auto array = drv->create_vertex_array();
-	auto ubo = drv->create_uniform_buffer(8, 4);
-	auto ssbo = drv->create_ssbo_buffer(8, 5);
-	ssbo->bind(7);
 	drv->set_line_size(2.f);
 	drv->set_viewport({ 1, 2, 3, 4 });
 	pipeline_desc to_create;
@@ -843,8 +825,6 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	BOOST_TEST(inner().calls().state_cache_invalidations == 1u);
 	BOOST_TEST(inner().stats().textures.created == 1u);
 	BOOST_TEST(inner().stats().shaders.created == 1u);
-	BOOST_TEST(inner().stats().uniform_buffers.created == 1u);
-	BOOST_TEST(inner().stats().ssbo_buffers.created == 1u);
 	BOOST_TEST(!drv->supports_timer_queries());
 	BOOST_TEST(state().total() == 0u);
 }

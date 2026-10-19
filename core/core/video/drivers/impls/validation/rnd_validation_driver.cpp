@@ -7,6 +7,8 @@
 #include <format>
 #include <optional>
 
+#include <snk/driver/rnd_bind_group.h>
+
 namespace {
 	using namespace rnd::driver;
 
@@ -200,6 +202,8 @@ void rnd::driver::validation::driver::begin_render_pass(const render_pass_desc& 
 	set_target_formats(formats, desc);
 	m_state->begin_pass(pass_label(desc), target, { formats.color_formats, formats.depth_format },
 		static_cast<std::uint32_t>(desc.colors.size()), desc.depth_stencil.has_value());
+	m_bound_sets = {};
+	m_bound_pipeline = 0;
 	m_inner->begin_render_pass(inner_desc);
 }
 
@@ -243,6 +247,8 @@ const rnd::driver::validation::vertex_array* rnd::driver::validation::driver::ch
 	}
 	if (!m_state->pipeline_bound()) {
 		m_state->report(rule::draw_without_pipeline, "draw before a pipeline is bound in this render pass");
+	} else if (m_bound_pipeline != 0) {
+		check_pipeline_sets(m_bound_pipeline);
 	}
 	if (!wrapped->has_layout()) {
 		m_state->report(rule::draw_without_layout, "draw with a vertex array that has no vertex buffer layout");
@@ -295,6 +301,13 @@ rnd::driver::pipeline_handle rnd::driver::validation::driver::create_pipeline(co
 			desc.blend.size(), desc.color_formats.size()));
 	}
 
+	for (const bind_group_layout_handle& layout : desc.set_layouts) {
+		if (layout && !m_layouts.contains(key_of(layout))) {
+			m_state->report(rule::invalid_pipeline, std::format("pipeline names a bind group layout that is not one of this driver's (index {}, generation {})", layout.index, layout.gen));
+			return {};
+		}
+	}
+
 	pipeline_desc inner_desc = desc;
 	inner_desc.shader = &static_cast<const shader*>(desc.shader.object)->inner();
 	const pipeline_handle handle = m_inner->create_pipeline(inner_desc);
@@ -328,6 +341,7 @@ void rnd::driver::validation::driver::bind_pipeline(pipeline_handle pipeline)
 			pipeline.index, formats_text(desc.color_formats, desc.depth_format), m_state->pass_name(), formats_text(expected.colors, expected.depth)));
 	}
 	m_state->on_pipeline_bound();
+	m_bound_pipeline = pipeline.index;
 	m_inner->bind_pipeline(pipeline);
 }
 
@@ -388,14 +402,294 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::validation::driver::
 	return std::make_unique<buffer>(m_state, std::shared_ptr<buffer_interface>(m_inner->create_buffer()));
 }
 
-std::unique_ptr<rnd::driver::uniform_buffer_interface> rnd::driver::validation::driver::create_uniform_buffer(std::size_t size, std::size_t binding)
+void rnd::driver::validation::driver::begin_frame()
 {
-	return std::make_unique<uniform_buffer>(m_state, m_inner->create_uniform_buffer(size, binding), size);
+	m_state->on_begin_frame();
+	const std::uint64_t epoch = m_state->frame_epoch();
+	for (auto it = m_groups.begin(); it != m_groups.end();) {
+		if (it->second.life == lifetime::transient) {
+			m_expired_groups.push_back({ it->first, epoch });
+			it = m_groups.erase(it);
+		} else {
+			++it;
+		}
+	}
+	constexpr std::uint64_t remembered_frames = 8;
+	std::erase_if(m_expired_groups, [&](const expired_group& e) { return e.epoch + remembered_frames < epoch; });
+	m_inner->begin_frame();
 }
 
-std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::validation::driver::create_ssbo_buffer(std::size_t size, std::size_t binding)
+rnd::driver::buffer_handle rnd::driver::validation::driver::create_buffer(const buffer_desc& desc)
 {
-	return std::make_unique<ssbo_buffer>(m_state, m_inner->create_ssbo_buffer(size, binding), size);
+	if (desc.size == 0) {
+		m_state->report(rule::invalid_buffer, "create_buffer of size 0");
+		return {};
+	}
+	const buffer_handle handle = m_inner->create_buffer(desc);
+	if (handle) {
+		m_buffers[key_of(handle)] = desc;
+	}
+	return handle;
+}
+
+void rnd::driver::validation::driver::destroy_buffer(buffer_handle buffer)
+{
+	if (m_buffers.erase(key_of(buffer)) == 0) {
+		m_state->report(rule::invalid_buffer, std::format("destroy_buffer with a handle of no buffer (index {}, generation {})", buffer.index, buffer.gen));
+		return;
+	}
+	m_inner->destroy_buffer(buffer);
+}
+
+void rnd::driver::validation::driver::update_buffer(buffer_handle buffer, std::size_t offset, std::span<const std::byte> data)
+{
+	const auto it = m_buffers.find(key_of(buffer));
+	if (it == m_buffers.end()) {
+		m_state->report(rule::invalid_buffer, std::format("update_buffer with a handle of no buffer (index {}, generation {})", buffer.index, buffer.gen));
+		return;
+	}
+	const std::size_t capacity = it->second.size;
+	if (offset > capacity || data.size() > capacity - offset) {
+		m_state->report(rule::buffer_write_range, std::format("update_buffer of {} bytes at offset {} exceeds the buffer size {}", data.size(), offset, capacity));
+		return;
+	}
+	m_inner->update_buffer(buffer, offset, data);
+}
+
+rnd::driver::bind_group_layout_handle rnd::driver::validation::driver::create_bind_group_layout(const bind_group_layout_desc& desc)
+{
+	bool valid = true;
+	const auto reject = [&](rule kind, const std::string& why) {
+		m_state->report(kind, "bind group layout: " + why);
+		valid = false;
+	};
+	const binding_table& table = bindings();
+	for (std::size_t i = 0; i < desc.entries.size(); ++i) {
+		const binding_decl& decl = desc.entries[i];
+		const std::uint32_t slots_anywhere = std::max({ table.slots(0, decl.type), table.slots(1, decl.type), table.slots(2, decl.type), table.slots(3, decl.type) });
+		if (decl.slot >= slots_anywhere) {
+			reject(rule::binding_outside_table, std::format("slot {} of type {} exists in no set of the binding table (at most {})",
+				decl.slot, static_cast<int>(decl.type), slots_anywhere));
+		}
+		if (decl.dynamic && decl.type != binding_type::ubo) {
+			reject(rule::bind_group_layout_mismatch, std::format("slot {} is dynamic but not a uniform buffer", decl.slot));
+		}
+		if (static_cast<std::uint8_t>(decl.stages) == 0) {
+			reject(rule::bind_group_layout_mismatch, std::format("slot {} is visible to no shader stage", decl.slot));
+		}
+		for (std::size_t j = 0; j < i; ++j) {
+			if (desc.entries[j].type == decl.type && desc.entries[j].slot == decl.slot) {
+				reject(rule::bind_group_layout_mismatch, std::format("slot {} of type {} is declared twice", decl.slot, static_cast<int>(decl.type)));
+			}
+		}
+	}
+	if (!valid) {
+		return {};
+	}
+	const bind_group_layout_handle handle = m_inner->create_bind_group_layout(desc);
+	if (handle) {
+		m_layouts[key_of(handle)] = desc;
+	}
+	return handle;
+}
+
+bool rnd::driver::validation::driver::check_buffer_entry(const binding_res& entry, const binding_decl& decl)
+{
+	const auto buffer = m_buffers.find(key_of(entry.buffer));
+	if (buffer == m_buffers.end()) {
+		m_state->report(rule::invalid_buffer, std::format("bind group entry at slot {} names a buffer that is not live (index {}, generation {})",
+			entry.slot, entry.buffer.index, entry.buffer.gen));
+		return false;
+	}
+	const buffer_usage wanted = decl.type == binding_type::ubo ? buffer_usage::uniform : buffer_usage::storage;
+	bool valid = true;
+	if (buffer->second.usage != wanted) {
+		m_state->report(rule::bind_group_layout_mismatch, std::format("bind group entry at slot {} is a {} binding but the buffer is not a {} buffer",
+			entry.slot, decl.type == binding_type::ubo ? "uniform" : "storage", decl.type == binding_type::ubo ? "uniform" : "storage"));
+		valid = false;
+	}
+	if (entry.size == 0 || entry.offset > buffer->second.size || entry.size > buffer->second.size - entry.offset) {
+		m_state->report(rule::invalid_bind_group, std::format("bind group entry at slot {} covers {} bytes from offset {} of a buffer of {} bytes",
+			entry.slot, entry.size, entry.offset, buffer->second.size));
+		valid = false;
+	}
+	return valid;
+}
+
+rnd::driver::bind_group_handle rnd::driver::validation::driver::create_bind_group(const bind_group_desc& desc, lifetime life)
+{
+	const auto layout = m_layouts.find(key_of(desc.layout));
+	if (layout == m_layouts.end()) {
+		m_state->report(rule::invalid_bind_group, std::format("create_bind_group with a layout that is not one of this driver's (index {}, generation {})",
+			desc.layout.index, desc.layout.gen));
+		return {};
+	}
+
+	bool valid = true;
+	if (desc.entries.size() != layout->second.entries.size()) {
+		m_state->report(rule::bind_group_layout_mismatch, std::format("bind group has {} entries, its layout has {}", desc.entries.size(), layout->second.entries.size()));
+		valid = false;
+	}
+	bind_group_desc inner_desc = desc;
+	for (const binding_decl& decl : layout->second.entries) {
+		const auto found = std::find_if(desc.entries.begin(), desc.entries.end(),
+			[&](const binding_res& e) { return e.type == decl.type && e.slot == decl.slot; });
+		if (found == desc.entries.end()) {
+			m_state->report(rule::bind_group_layout_mismatch, std::format("bind group has no entry for slot {} of type {}", decl.slot, static_cast<int>(decl.type)));
+			valid = false;
+			continue;
+		}
+		if (decl.type == binding_type::texture) {
+			if (!found->texture) {
+				m_state->report(rule::bind_group_layout_mismatch, std::format("bind group entry at texture slot {} has no texture", decl.slot));
+				valid = false;
+			} else if (!m_state->require_live(found->texture, object_kind::texture, "bind group texture")) {
+				valid = false;
+			} else if (!found->texture->has_usage(texture_usage::sampled)) {
+				m_state->report(rule::texture_not_sampled, std::format("{}x{} texture with usage {} in a bind group for sampling",
+					found->texture->width(), found->texture->height(), usage_text(found->texture->get_usage())));
+				valid = false;
+			}
+		} else {
+			valid = check_buffer_entry(*found, decl) && valid;
+		}
+	}
+	for (const binding_res& entry : desc.entries) {
+		const bool declared = std::any_of(layout->second.entries.begin(), layout->second.entries.end(),
+			[&](const binding_decl& d) { return d.type == entry.type && d.slot == entry.slot; });
+		if (!declared) {
+			m_state->report(rule::bind_group_layout_mismatch, std::format("bind group entry at slot {} of type {} is not in its layout", entry.slot, static_cast<int>(entry.type)));
+			valid = false;
+		}
+	}
+	if (!valid) {
+		return {};
+	}
+
+	for (binding_res& entry : inner_desc.entries) {
+		entry.texture = unwrap(entry.texture);
+	}
+	const bind_group_handle handle = m_inner->create_bind_group(inner_desc, life);
+	if (handle) {
+		m_groups[key_of(handle)] = { desc.layout, desc, life, m_state->frame_epoch() };
+		m_state->on_bind_group_created(life == lifetime::transient);
+	}
+	return handle;
+}
+
+void rnd::driver::validation::driver::destroy_bind_group(bind_group_handle group)
+{
+	if (m_groups.erase(key_of(group)) == 0) {
+		m_state->report(rule::invalid_bind_group, std::format("destroy_bind_group with a handle of no group (index {}, generation {})", group.index, group.gen));
+		return;
+	}
+	m_inner->destroy_bind_group(group);
+}
+
+void rnd::driver::validation::driver::set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets)
+{
+	m_state->note(trace_op::bind_group, set, group.index);
+	if (!m_state->in_pass()) {
+		m_state->report(rule::bind_group_outside_pass, std::format("set_bind_group({}) outside a render pass", set));
+		return;
+	}
+	if (set >= max_bind_sets) {
+		m_state->report(rule::binding_outside_table, std::format("set_bind_group at set {}, the binding table has {} sets", set, max_bind_sets));
+		return;
+	}
+
+	const auto found = m_groups.find(key_of(group));
+	if (found == m_groups.end()) {
+		const bool expired = std::any_of(m_expired_groups.begin(), m_expired_groups.end(), [&](const expired_group& e) { return e.key == key_of(group); });
+		if (expired) {
+			m_state->report(rule::transient_group_expired, std::format("transient bind group {} was made in an earlier frame (now frame {}) and is gone", group.index, m_state->frame_epoch()));
+		} else {
+			m_state->report(rule::invalid_bind_group, std::format("set_bind_group with a handle of no group (index {}, generation {})", group.index, group.gen));
+		}
+		return;
+	}
+	const known_group& known = found->second;
+	if (known.life == lifetime::transient && known.epoch != m_state->frame_epoch()) {
+		m_state->report(rule::transient_group_expired, std::format("transient bind group {} was made in frame {}, used in frame {}", group.index, known.epoch, m_state->frame_epoch()));
+		return;
+	}
+
+	const bind_group_layout_desc& layout = m_layouts.at(key_of(known.layout));
+	const binding_table& table = bindings();
+	bool valid = true;
+	for (const binding_decl& decl : layout.entries) {
+		if (!table.contains(set, decl.slot, decl.type)) {
+			m_state->report(rule::binding_outside_table, std::format("slot {} of type {} is outside the binding table at set {} (it has {})",
+				decl.slot, static_cast<int>(decl.type), set, table.slots(set, decl.type)));
+			valid = false;
+		}
+	}
+
+	const std::size_t dynamic_count = dynamic_entry_count(layout);
+	if (dynamic_offsets.size() != dynamic_count) {
+		m_state->report(rule::invalid_bind_group, std::format("set_bind_group({}) gives {} dynamic offsets, the layout has {} dynamic bindings", set, dynamic_offsets.size(), dynamic_count));
+		valid = false;
+	}
+	const std::size_t alignment = uniform_offset_alignment();
+	std::size_t next_dynamic = 0;
+	for (const binding_decl& decl : layout.entries) {
+		const auto entry = std::find_if(known.desc.entries.begin(), known.desc.entries.end(),
+			[&](const binding_res& e) { return e.type == decl.type && e.slot == decl.slot; });
+		if (entry == known.desc.entries.end()) {
+			continue;
+		}
+		if (decl.type == binding_type::texture) {
+			valid = m_state->require_live(entry->texture, object_kind::texture, "bound group texture") && valid;
+			continue;
+		}
+		const auto buffer = m_buffers.find(key_of(entry->buffer));
+		if (buffer == m_buffers.end()) {
+			m_state->report(rule::invalid_buffer, std::format("bind group {} names a buffer that was destroyed (slot {})", group.index, entry->slot));
+			valid = false;
+			continue;
+		}
+		if (!decl.dynamic || next_dynamic >= dynamic_offsets.size()) {
+			continue;
+		}
+		const std::size_t extra = dynamic_offsets[next_dynamic++];
+		if (extra % alignment != 0) {
+			m_state->report(rule::dynamic_offset_alignment, std::format("dynamic offset {} at slot {} is not a multiple of the uniform offset alignment {}", extra, decl.slot, alignment));
+			valid = false;
+		} else if (entry->offset + extra + entry->size > buffer->second.size) {
+			m_state->report(rule::invalid_bind_group, std::format("dynamic offset {} moves the {} byte range at slot {} past the end of the {} byte buffer",
+				extra, entry->size, decl.slot, buffer->second.size));
+			valid = false;
+		}
+	}
+	if (!valid) {
+		return;
+	}
+	m_bound_sets[set] = group;
+	m_inner->set_bind_group(set, group, dynamic_offsets);
+}
+
+void rnd::driver::validation::driver::check_pipeline_sets(std::size_t pipeline_index)
+{
+	const pipeline_desc& desc = m_pipelines[pipeline_index - 1].desc;
+	for (std::uint32_t set = 0; set < desc.set_layouts.size(); ++set) {
+		const bind_group_layout_handle needed = desc.set_layouts[set];
+		if (!needed) {
+			continue;
+		}
+		const bind_group_handle bound = m_bound_sets[set];
+		if (!bound) {
+			m_state->report(rule::draw_missing_bind_group, std::format("draw with pipeline {} needs a bind group at set {}, none is bound in render pass '{}'",
+				pipeline_index, set, m_state->pass_name()));
+			continue;
+		}
+		const auto group = m_groups.find(key_of(bound));
+		if (group == m_groups.end()) {
+			m_state->report(rule::invalid_bind_group, std::format("draw with pipeline {}: the bind group at set {} was destroyed after it was bound", pipeline_index, set));
+		} else if (group->second.layout != needed) {
+			m_state->report(rule::bind_group_layout_mismatch, std::format("draw with pipeline {}: the bind group at set {} has layout {}, the pipeline expects layout {}",
+				pipeline_index, set, group->second.layout.index, needed.index));
+		}
+	}
 }
 
 rnd::driver::validation::swapchain::swapchain(std::unique_ptr<swapchain_interface> inner, limits budget)

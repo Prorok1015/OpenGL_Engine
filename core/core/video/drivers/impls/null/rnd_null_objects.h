@@ -3,8 +3,6 @@
 #include <snk/driver/rnd_texture_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
 #include <snk/driver/rnd_buffer_interface.h>
-#include <snk/driver/rnd_uniform_buffer_interface.h>
-#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_framebuffer_cache.h>
 #include <snk/common/snk_api.h>
@@ -32,15 +30,12 @@ namespace rnd::driver::null
 		object_counts textures;
 		object_counts vertex_arrays;
 		object_counts buffers;
-		object_counts uniform_buffers;
-		object_counts ssbo_buffers;
 		// The framebuffers begin_render_pass built, by attachment set: the model of what a GPU backend caches.
 		framebuffer_cache<std::uint32_t> framebuffers;
 
 		std::size_t live_total() const
 		{
-			return shaders.live() + textures.live() + vertex_arrays.live() + buffers.live()
-				+ uniform_buffers.live() + ssbo_buffers.live();
+			return shaders.live() + textures.live() + vertex_arrays.live() + buffers.live();
 		}
 	};
 
@@ -165,42 +160,5 @@ namespace rnd::driver::null
 		detail::lifetime_token m_token;
 		std::vector<std::shared_ptr<buffer_interface>> m_vertex_buffers;
 		std::shared_ptr<buffer_interface> m_index_buffer;
-	};
-
-	class SNK_API uniform_buffer final : public uniform_buffer_interface
-	{
-	public:
-		uniform_buffer(std::shared_ptr<object_stats> stats, std::size_t size, std::size_t binding)
-			: m_token(std::move(stats), &object_stats::uniform_buffers), m_bytes(size), m_binding(binding) {}
-
-		void set_data(const void* data, std::size_t size, std::size_t offset) override;
-
-		std::size_t size() const { return m_bytes.size(); }
-		std::size_t binding() const { return m_binding; }
-		const std::vector<std::byte>& bytes() const { return m_bytes; }
-
-	private:
-		detail::lifetime_token m_token;
-		std::vector<std::byte> m_bytes;
-		std::size_t m_binding;
-	};
-
-	class SNK_API ssbo_buffer final : public ssbo_buffer_interface
-	{
-	public:
-		ssbo_buffer(std::shared_ptr<object_stats> stats, std::size_t size, std::size_t binding)
-			: m_token(std::move(stats), &object_stats::ssbo_buffers), m_bytes(size), m_binding(binding) {}
-
-		void set_data(const void* data, std::size_t size, std::size_t offset) override;
-		void bind(std::size_t index) override { m_binding = index; }
-
-		std::size_t size() const { return m_bytes.size(); }
-		std::size_t binding() const { return m_binding; }
-		const std::vector<std::byte>& bytes() const { return m_bytes; }
-
-	private:
-		detail::lifetime_token m_token;
-		std::vector<std::byte> m_bytes;
-		std::size_t m_binding;
 	};
 }

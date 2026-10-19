@@ -3,7 +3,6 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/rnd_pass_pipelines.h>
 #include <snk/render/texture/rnd_render_targets.h>
-#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
@@ -48,6 +47,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     rnd::driver::pipeline_desc state;
     state.depth = {.enabled = true, .write_mask = true, .test_func = rnd::driver::depth_state::func::LESS};
     rnd::driver::set_target_formats(state, pass);
+    state.set_layouts = context.shaders->layouts().scene();
     rnd::pass_pipelines pipelines(drv, *context.shaders, state);
 
     common_matrix.view = packet.camera.view_matrix;
@@ -55,6 +55,7 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
 
     context.shaders->update_global_uniform(common_matrix);
+    context.shaders->bind_frame();
 
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
@@ -67,16 +68,11 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
     std::pmr::vector<rnd::variant_id> z_variants(ds::frame_allocator());
     z_variants.resize(variants.size());
 
-    for (const auto& dc : packet.opaque_draws) {
+    for (std::size_t i = 0; i < packet.opaque_draws.size(); ++i) {
+      const auto& dc = packet.opaque_draws[i];
       auto *va = geom_manager.require_geometry(dc.geometry_tag);
       if (!va)
         continue;
-      // Set transform per object (not supported cleanly by the old
-      // update_global_uniform, usually shaders have model matrix) The new
-      // architecture needs to set "model" uniform per draw call
-      // shader_desc.cdata.constants["model"] = ...?
-      // Wait! we need to set the material per object if we are to use their
-      // push constants / uniforms. However, z_prepass just needs the transform.
 
       rnd::variant_id& variant = z_variants[dc.variant.value];
       if (!variant.is_valid()) {
@@ -84,13 +80,8 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
       }
       if (!pipelines.bind(variant))
         continue;
-      rnd::configure_pass(context, variant, *dc.material, &dc.transform);
-
-      if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
-          if (auto* skm = context.skinning) {
-              skm->bind_skin(&drv, dc.skinning_tag, *dc.bone_matrices);
-          }
-      }
+      rnd::configure_pass(context, variant, *dc.material);
+      context.draw_data->bind_object(packet.opaque_object(i), dc.skinning_tag, context.skinning);
 
       drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);

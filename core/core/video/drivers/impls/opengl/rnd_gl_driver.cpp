@@ -2,13 +2,12 @@
 #include "open_gl_specific.h"
 #include "rnd_gl_framebuffers.h"
 #include <snk/common/ds/ds_fixed_vector.hpp>
+#include <algorithm>
 #include <glad/glad.h>
 #include <rnd_gl_shader.h>
 #include <rnd_gl_texture.h>
 #include <rnd_gl_vertex_array.h>
 #include <rnd_gl_buffer.h>
-#include <rnd_gl_uniform_buffer.h>
-#include <rnd_gl_ssbo_buffer.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/engine_assert.h>
 
@@ -195,6 +194,9 @@ rnd::driver::gl::driver::driver()
 rnd::driver::gl::driver::~driver()
 {
 	m_framebuffers->release_all();
+	m_buffers.for_each([](buffer_handle, gl_buffer& buffer) {
+		glDeleteBuffers(static_cast<GLsizei>(buffer.copies), buffer.ids.data());
+	});
 }
 
 namespace {
@@ -630,17 +632,128 @@ std::unique_ptr<rnd::driver::buffer_interface> rnd::driver::gl::driver::create_b
 	return std::make_unique<gl::buffer>();
 }
 
-std::unique_ptr<rnd::driver::uniform_buffer_interface> rnd::driver::gl::driver::create_uniform_buffer(std::size_t size, std::size_t binding)
+void rnd::driver::gl::driver::begin_frame()
 {
-	return std::make_unique<gl::uniform_buffer>(size, binding);
+	++m_frame;
+	for (const bind_group_handle group : m_transient_groups) {
+		m_groups.erase(group);
+	}
+	m_transient_groups.clear();
 }
 
-std::unique_ptr<rnd::driver::ssbo_buffer_interface> rnd::driver::gl::driver::create_ssbo_buffer(std::size_t size, std::size_t binding)
+std::size_t rnd::driver::gl::driver::uniform_offset_alignment() const
 {
-	static_assert(sizeof(GLuint) == sizeof(uint32_t));
-	static_assert(sizeof(GLint) == sizeof(uint32_t));
-	ASSERT_MSG((size / sizeof(GLuint)) == (size / sizeof(uint32_t)), "Missmatch size with OpenGL size");
-	return std::make_unique<gl::gl_ssbo_buffer>(size, binding);
+	if (!m_uniform_offset_alignment) {
+		GLint alignment = 0;
+		glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+		CHECK_GL_ERROR();
+		m_uniform_offset_alignment = static_cast<std::size_t>(alignment > 0 ? alignment : 256);
+	}
+	return *m_uniform_offset_alignment;
+}
+
+rnd::driver::buffer_handle rnd::driver::gl::driver::create_buffer(const buffer_desc& desc)
+{
+	ASSERT_MSG(desc.size > 0, "create_buffer of size 0");
+	gl_buffer buffer{ desc, {}, desc.update == buffer_update::per_frame ? frames_in_flight : 1u };
+	const GLenum usage = desc.update == buffer_update::static_data ? GL_STATIC_DRAW : GL_DYNAMIC_DRAW;
+	for (std::uint32_t i = 0; i < buffer.copies; ++i) {
+		glCreateBuffers(1, &buffer.ids[i]);
+		glNamedBufferData(buffer.ids[i], static_cast<GLsizeiptr>(desc.size), nullptr, usage);
+		if (desc.debug_name && glad_glObjectLabel) {
+			glObjectLabel(GL_BUFFER, buffer.ids[i], -1, desc.debug_name);
+		}
+		CHECK_GL_ERROR();
+	}
+	return m_buffers.insert(std::move(buffer));
+}
+
+void rnd::driver::gl::driver::destroy_buffer(buffer_handle handle)
+{
+	gl_buffer* buffer = m_buffers.find(handle);
+	ASSERT_MSG(buffer, "destroy_buffer with a handle of no buffer");
+	if (!buffer) {
+		return;
+	}
+	glDeleteBuffers(static_cast<GLsizei>(buffer->copies), buffer->ids.data());
+	CHECK_GL_ERROR();
+	m_buffers.erase(handle);
+}
+
+void rnd::driver::gl::driver::update_buffer(buffer_handle handle, std::size_t offset, std::span<const std::byte> data)
+{
+	const gl_buffer* buffer = m_buffers.find(handle);
+	ASSERT_MSG(buffer, "update_buffer with a handle of no buffer");
+	if (!buffer || data.empty()) {
+		return;
+	}
+	ASSERT_MSG(offset <= buffer->desc.size && data.size() <= buffer->desc.size - offset, "update_buffer past the end of the buffer");
+	glNamedBufferSubData(buffer->current(frame_slot()), static_cast<GLintptr>(offset), static_cast<GLsizeiptr>(data.size()), data.data());
+	CHECK_GL_ERROR();
+}
+
+rnd::driver::bind_group_layout_handle rnd::driver::gl::driver::create_bind_group_layout(const bind_group_layout_desc& desc)
+{
+	return m_layouts.acquire(desc);
+}
+
+rnd::driver::bind_group_handle rnd::driver::gl::driver::create_bind_group(const bind_group_desc& desc, lifetime life)
+{
+	ASSERT_MSG(m_layouts.find(desc.layout), "create_bind_group with a handle of no layout");
+	const bind_group_handle group = m_groups.insert(gl_group{ desc });
+	if (life == lifetime::transient) {
+		m_transient_groups.push_back(group);
+	}
+	return group;
+}
+
+void rnd::driver::gl::driver::destroy_bind_group(bind_group_handle group)
+{
+	const bool erased = m_groups.erase(group);
+	ASSERT_MSG(erased, "destroy_bind_group with a handle of no group");
+}
+
+void rnd::driver::gl::driver::set_bind_group(std::uint32_t set, bind_group_handle handle, std::span<const std::uint32_t> dynamic_offsets)
+{
+	const gl_group* group = m_groups.find(handle);
+	ASSERT_MSG(group, "set_bind_group with a handle of no group");
+	if (!group) {
+		return;
+	}
+	const bind_group_layout_desc* layout = m_layouts.find(group->desc.layout);
+	ASSERT_MSG(layout, "set_bind_group: the layout of the group is gone");
+	if (!layout) {
+		return;
+	}
+
+	std::size_t next_dynamic = 0;
+	for (const binding_decl& decl : layout->entries) {
+		const auto entry = std::find_if(group->desc.entries.begin(), group->desc.entries.end(),
+			[&](const binding_res& e) { return e.type == decl.type && e.slot == decl.slot; });
+		ASSERT_MSG(entry != group->desc.entries.end(), "set_bind_group: the group has no entry for slot {}", decl.slot);
+		const auto binding = per_type_binding_table.resolve(set, decl.slot, decl.type);
+		ASSERT_MSG(binding, "set_bind_group: set {} slot {} is outside the binding table", set, decl.slot);
+		const std::size_t extra = decl.dynamic && next_dynamic < dynamic_offsets.size() ? dynamic_offsets[next_dynamic++] : 0;
+		if (entry == group->desc.entries.end() || !binding) {
+			continue;
+		}
+
+		if (decl.type == binding_type::texture) {
+			ASSERT_MSG(entry->texture, "set_bind_group: the texture at slot {} is null", decl.slot);
+			if (entry->texture) {
+				entry->texture->native()->bind(*binding);
+			}
+			continue;
+		}
+		const gl_buffer* buffer = m_buffers.find(entry->buffer);
+		ASSERT_MSG(buffer, "set_bind_group: the buffer at slot {} is gone", decl.slot);
+		if (!buffer) {
+			continue;
+		}
+		glBindBufferRange(decl.type == binding_type::ubo ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER, *binding,
+			buffer->current(frame_slot()), static_cast<GLintptr>(entry->offset + extra), static_cast<GLsizeiptr>(entry->size));
+		CHECK_GL_ERROR();
+	}
 }
 
 // GPU timer queries

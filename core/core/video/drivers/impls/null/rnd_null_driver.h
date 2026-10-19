@@ -2,9 +2,13 @@
 #include "rnd_null_objects.h"
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_pipeline_cache.h>
+#include <snk/driver/rnd_resource_tables.h>
 #include <snk/common/snk_api.h>
 
 #include <array>
+#include <optional>
+#include <span>
+#include <vector>
 
 namespace rnd::driver::null
 {
@@ -22,6 +26,33 @@ namespace rnd::driver::null
 			std::size_t state_cache_invalidations = 0;
 			std::size_t render_pass_begins = 0;
 			std::size_t render_pass_ends = 0;
+			std::size_t frames_begun = 0;
+			std::size_t buffers_created = 0;
+			std::size_t buffer_updates = 0;
+			// Persistent groups cost a driver object each; transient ones only live for the frame.
+			std::size_t bind_groups_created = 0;
+			std::size_t transient_bind_groups_created = 0;
+			std::size_t bind_group_binds = 0;
+		};
+
+		// Per set, the draws that had a bind group bound there.
+		using draws_per_set = std::array<std::size_t, max_bind_sets>;
+
+		// One set_bind_group call, kept when record_bindings(true) was asked for.
+		struct bind_record
+		{
+			std::uint64_t frame = 0;
+			std::uint32_t frame_slot = 0;
+			std::uint32_t set = 0;
+			bind_group_handle group;
+			std::vector<std::uint32_t> dynamic_offsets;
+		};
+
+		// What is bound at a set right now (cleared when a render pass begins).
+		struct bound_set
+		{
+			bind_group_handle group;
+			std::vector<std::uint32_t> dynamic_offsets;
 		};
 
 		driver();
@@ -39,8 +70,19 @@ namespace rnd::driver::null
 		std::unique_ptr<texture_interface> create_texture(const texture_header& header) override;
 		std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		std::unique_ptr<buffer_interface> create_buffer() override;
-		std::unique_ptr<uniform_buffer_interface> create_uniform_buffer(std::size_t size, std::size_t binding) override;
-		std::unique_ptr<ssbo_buffer_interface> create_ssbo_buffer(std::size_t size, std::size_t binding) override;
+
+		void begin_frame() override;
+		const binding_table& bindings() const override { return per_type_binding_table; }
+		// The largest alignment the GL drivers report, so what the null backend accepts any of them does.
+		std::size_t uniform_offset_alignment() const override { return 256; }
+
+		buffer_handle create_buffer(const buffer_desc& desc) override;
+		void destroy_buffer(buffer_handle buffer) override;
+		void update_buffer(buffer_handle buffer, std::size_t offset, std::span<const std::byte> data) override;
+		bind_group_layout_handle create_bind_group_layout(const bind_group_layout_desc& desc) override;
+		bind_group_handle create_bind_group(const bind_group_desc& desc, lifetime life = lifetime::persistent) override;
+		void destroy_bind_group(bind_group_handle group) override;
+		void set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets = {}) override;
 
 		pipeline_handle create_pipeline(const pipeline_desc& desc) override;
 		void bind_pipeline(pipeline_handle pipeline) override;
@@ -60,6 +102,30 @@ namespace rnd::driver::null
 		// The pass begun last, still valid after it ended.
 		const render_pass_desc& last_render_pass() const { return m_last_pass; }
 
+		// Frames begun so far and the copy of per_frame buffers the current one writes and binds.
+		std::uint64_t frame() const { return m_frame; }
+		std::uint32_t frame_slot() const { return static_cast<std::uint32_t>(m_frame % frames_in_flight); }
+
+		const buffer_desc* buffer_info(buffer_handle buffer) const;
+		// The bytes of a buffer; of a per_frame buffer the copy `copy` (default the current frame's). Null for a dead handle.
+		const std::vector<std::byte>* buffer_bytes(buffer_handle buffer, std::optional<std::uint32_t> copy = std::nullopt) const;
+		std::size_t live_buffers() const { return m_buffers.live(); }
+		const bind_group_layout_desc* layout_info(bind_group_layout_handle layout) const { return m_layouts.find(layout); }
+		std::size_t layout_count() const { return m_layouts.size(); }
+		// Null for a handle that names no live group (a transient one is gone after its frame).
+		const bind_group_desc* group_info(bind_group_handle group) const;
+		std::size_t live_bind_groups() const { return m_groups.live(); }
+		const bound_set& bound(std::uint32_t set) const { return m_bound_sets[set]; }
+
+		// Keeps every set_bind_group call in bind_log(); off by default, a long run would collect them all.
+		void record_bindings(bool on) { m_record_bindings = on; }
+		const std::vector<bind_record>& bind_log() const { return m_bind_log; }
+		const draws_per_set& draws_with_set() const { return m_draws_with_set; }
+
+		// Keeps the sources of the programs created from now on in shader_sources(); off by default.
+		void record_shader_sources(bool on) { m_record_shader_sources = on; }
+		const std::vector<std::vector<shader_header>>& shader_sources() const { return m_shader_sources; }
+
 	private:
 		std::shared_ptr<object_stats> m_stats;
 		call_counts m_calls;
@@ -71,5 +137,31 @@ namespace rnd::driver::null
 		pipeline_cache<pipeline_record> m_pipelines;
 		pipeline_handle m_bound;
 		std::array<std::size_t, 5> m_draws_by_topology{};
+
+		struct null_buffer
+		{
+			buffer_desc desc;
+			// One copy, or frames_in_flight for a per_frame buffer.
+			std::vector<std::vector<std::byte>> copies;
+		};
+		struct null_group
+		{
+			bind_group_desc desc;
+			lifetime life = lifetime::persistent;
+		};
+
+		std::uint64_t m_frame = 0;
+		bind_group_layout_cache m_layouts;
+		slot_table<buffer_tag, null_buffer> m_buffers;
+		slot_table<bind_group_tag, null_group> m_groups;
+		std::vector<bind_group_handle> m_transient_groups;
+		std::array<bound_set, max_bind_sets> m_bound_sets;
+		bool m_record_bindings = false;
+		std::vector<bind_record> m_bind_log;
+		draws_per_set m_draws_with_set{};
+		bool m_record_shader_sources = false;
+		std::vector<std::vector<shader_header>> m_shader_sources;
+
+		void count_draw();
 	};
 }

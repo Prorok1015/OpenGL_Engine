@@ -147,15 +147,17 @@ namespace rnd
 			return cdata == lhs.cdata;
 		}
 
-		std::vector<driver::shader_header> load(res::resource_system& res_sys) const;
-		static std::vector<driver::shader_header> load(const constant_data& cdata, res::resource_system& res_sys);
+		// The source of every stage with includes and defines resolved and the binding macros expanded for `bindings`.
+		std::vector<driver::shader_header> load(res::resource_system& res_sys, const driver::binding_table& bindings) const;
+		static std::vector<driver::shader_header> load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings);
 
 		constant_data cdata;
 		runtime_data rdata;
 	};
 
-	void configure_render_pass(const shader_config& desc, rnd::driver::shader_interface* shader);
-	void configure_render_pass(const shader_config::runtime_data& rdata, const glm::mat4* world, rnd::driver::shader_interface* shader);
+	// Binds the samplers and sets the uniforms of a material on the program that is current.
+	void configure_render_pass(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader);
+	void configure_uniforms(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader);
 }
 
 namespace std {

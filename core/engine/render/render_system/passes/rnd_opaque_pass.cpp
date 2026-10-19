@@ -4,7 +4,6 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/rnd_pass_pipelines.h>
 #include <snk/render/texture/rnd_render_targets.h>
-#include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/common/timer.hpp>
 #include <snk/common/eng_profiler.h>
@@ -70,6 +69,7 @@ void opaque_pass::execute(frame_context &context,
     // passes (skybox) test against.
     state.depth.write_mask = !offscreen;
     rnd::driver::set_target_formats(state, pass);
+    state.set_layouts = context.shaders->layouts().scene();
     rnd::pass_pipelines pipelines(drv, *context.shaders, state);
 
     common_matrix.view = packet.camera.view_matrix;
@@ -78,22 +78,20 @@ void opaque_pass::execute(frame_context &context,
     common_matrix.time = (float)Timer::now();
 
     context.shaders->update_global_uniform(common_matrix);
+    context.shaders->bind_frame();
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,
                                 packet.camera.viewport.y, vp_width, vp_height});
 
-    for (const auto &dc : packet.opaque_draws) {
+    for (std::size_t i = 0; i < packet.opaque_draws.size(); ++i) {
+      const auto &dc = packet.opaque_draws[i];
       auto *va = geom_manager.require_geometry(dc.geometry_tag);
       if (!va)
         continue;
 
       if (!pipelines.bind(dc.variant))
         continue;
-      rnd::configure_pass(context, dc.variant, *dc.material, &dc.transform);
-      if (dc.bone_matrices && !dc.bone_matrices->empty() && dc.skinning_tag.is_valid()) {
-          if (auto* skm = context.skinning) {
-              skm->bind_skin(&drv, dc.skinning_tag, *dc.bone_matrices);
-          }
-      }
+      rnd::configure_pass(context, dc.variant, *dc.material);
+      context.draw_data->bind_object(packet.opaque_object(i), dc.skinning_tag, context.skinning);
 
       drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);

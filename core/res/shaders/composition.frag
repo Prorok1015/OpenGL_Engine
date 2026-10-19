@@ -5,10 +5,10 @@ in vec2 uv;
 layout (location = 0) out vec4 frag;
 
 // color accumulation buffer
-layout (binding = 0) uniform sampler2D accum;
+SNK_TEX(1, 0) uniform sampler2D accum;
 
 // revealage threshold buffer
-layout (binding = 1) uniform sampler2D reveal;
+SNK_TEX(1, 1) uniform sampler2D reveal;
 
 // epsilon number
 const float EPSILON = 0.00001f;

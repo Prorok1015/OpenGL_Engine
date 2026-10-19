@@ -41,9 +41,18 @@ namespace rnd::driver::validation
 		budget_programs,
 		budget_textures,
 		budget_pipelines,
+		invalid_buffer,
+		bind_group_outside_pass,
+		invalid_bind_group,
+		bind_group_layout_mismatch,
+		binding_outside_table,
+		transient_group_expired,
+		dynamic_offset_alignment,
+		draw_missing_bind_group,
+		budget_bind_groups,
 	};
 
-	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::budget_pipelines) + 1;
+	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::budget_bind_groups) + 1;
 
 	SNK_API const char* rule_name(rule r);
 
@@ -56,6 +65,8 @@ namespace rnd::driver::validation
 		std::size_t max_programs = unlimited;
 		std::size_t max_textures = unlimited;
 		std::size_t max_pipelines = unlimited;
+		// Persistent bind groups only: a transient group is meant to be made again every frame.
+		std::size_t max_bind_groups = unlimited;
 	};
 
 	struct frame_stats
@@ -64,6 +75,8 @@ namespace rnd::driver::validation
 		std::size_t programs = 0;
 		std::size_t textures = 0;
 		std::size_t pipelines = 0;
+		std::size_t bind_groups = 0;
+		std::size_t transient_bind_groups = 0;
 		std::size_t draws = 0;
 	};
 
@@ -80,8 +93,6 @@ namespace rnd::driver::validation
 		texture,
 		vertex_array,
 		buffer,
-		uniform_buffer,
-		ssbo_buffer,
 	};
 
 	enum class trace_op : std::uint8_t
@@ -91,7 +102,7 @@ namespace rnd::driver::validation
 		end_pass,
 		bind_pipeline,	// a = pipeline index
 		bind_texture,	// a = slot
-		bind_ssbo,		// a = slot
+		bind_group,		// a = set, b = group index
 		draw,			// a = count
 		create_object,	// a = object_kind
 		present,
@@ -179,6 +190,11 @@ namespace rnd::driver::validation
 		void on_texture_created();
 		void on_program_created();
 		void on_pipeline_created();
+		void on_bind_group_created(bool transient);
+
+		// Frames the renderer began (driver_interface::begin_frame): what a transient bind group's life is measured in.
+		std::uint64_t frame_epoch() const { return m_epoch; }
+		void on_begin_frame() { ++m_epoch; }
 
 		// The end of a frame: no render pass may be open; per-frame state restarts.
 		void on_present();
@@ -192,6 +208,7 @@ namespace rnd::driver::validation
 		std::vector<violation> m_violations;
 
 		std::uint64_t m_frame = 0;
+		std::uint64_t m_epoch = 0;
 		frame_stats m_current;
 		frame_stats m_last;
 		bool m_pipeline_bound = false;
