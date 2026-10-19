@@ -2,6 +2,7 @@
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_render_targets.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/common/timer.hpp>
@@ -36,25 +37,12 @@ void opaque_pass::execute(frame_context &context,
     const bool offscreen = target.kind == rnd::render_target_kind::texture;
     res::tag target_tag = target.texture;
     res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-    driver::texture_interface *color_rt =
-        offscreen ? txm_manager.find(target_tag) : nullptr;
-
-    if (offscreen && color_rt &&
-        (color_rt->width() != static_cast<uint32_t>(vp_width) || color_rt->height() != static_cast<uint32_t>(vp_height))) {
-      txm_manager.remove(target_tag);
-      color_rt = nullptr;
-    }
-
-    if (offscreen && !color_rt) {
-      rnd::driver::texture_header header;
-      header.data.extent.width = vp_width;
-      header.data.extent.height = vp_height;
-      header.data.format = rnd::driver::texture_header::TYPE::RGBA8;
-      header.usage = rnd::driver::TEXTURE_USAGE::COLOR_TARGET;
-      header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_EDGE;
-      header.mag = rnd::driver::texture_header::FILTERING::NEAREST;
-      header.min = rnd::driver::texture_header::FILTERING::NEAREST;
-      color_rt = txm_manager.generate_texture(target_tag, header);
+    driver::texture_interface *color_rt = nullptr;
+    if (offscreen) {
+      color_rt = rnd::render_targets::ensure(
+          txm_manager, target_tag, {vp_width, vp_height},
+          rnd::driver::texture_header::TYPE::RGBA8,
+          rnd::driver::texture_usage::color_target | rnd::driver::texture_usage::sampled);
     }
 
     rnd::driver::render_state state;

@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/common.h>
 #include <snk/common/ds/ds_bit_frags.hpp>
+#include <cstdint>
 #include <glm/glm.hpp>
 
 namespace rnd::driver
@@ -18,16 +19,43 @@ namespace rnd::driver
 		RENDERBUFFER
 	};
 
-	// Texture usage (how it will be used)
-	enum class TEXTURE_USAGE
+	// Texture usage (how it will be used): a bit mask, a texture may be e.g. both a color target and sampled
+	enum class texture_usage : uint8_t
 	{
-		NONE = 0,
-		SAMPLED,		// Can be used as a sampler in shader
-		STORAGE,		// Can be used as storage image
-		COLOR_TARGET,	// Can be used as color attachment
-		DEPTH_TARGET,	// Can be used as depth attachment
-		STENCIL_TARGET, // Can be used as stencil attachment
+		none = 0,
+		sampled = 1,		// Can be used as a sampler in shader
+		storage = 2,		// Can be used as storage image
+		color_target = 4,	// Can be used as color attachment
+		depth_target = 8,	// Can be used as depth attachment
+		stencil_target = 16	// Can be used as stencil attachment
 	};
+
+	constexpr texture_usage operator|(texture_usage lhs, texture_usage rhs) noexcept
+	{
+		return static_cast<texture_usage>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+	}
+
+	constexpr texture_usage operator&(texture_usage lhs, texture_usage rhs) noexcept
+	{
+		return static_cast<texture_usage>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+	}
+
+	constexpr texture_usage& operator|=(texture_usage& lhs, texture_usage rhs) noexcept
+	{
+		return lhs = lhs | rhs;
+	}
+
+	// True when `usage` contains every bit of `required` (and `required` is not empty).
+	constexpr bool has_usage(texture_usage usage, texture_usage required) noexcept
+	{
+		return required != texture_usage::none && (usage & required) == required;
+	}
+
+	// True when `usage` contains at least one bit of `any_of`.
+	constexpr bool has_any_usage(texture_usage usage, texture_usage any_of) noexcept
+	{
+		return (usage & any_of) != texture_usage::none;
+	}
 
 
 	// Extended texture header
@@ -89,7 +117,7 @@ namespace rnd::driver
 
 		std::string name = "unknown";
 		TEXTURE_TYPE type = TEXTURE_TYPE::TEXTURE_2D;
-		TEXTURE_USAGE usage = TEXTURE_USAGE::SAMPLED;
+		texture_usage usage = texture_usage::sampled;
 		texture_data data;
 		FILTERING min = FILTERING::LINEAR;
 		FILTERING mag = FILTERING::LINEAR;
@@ -112,10 +140,8 @@ namespace rnd::driver
 
 		// Texture information
 		TEXTURE_TYPE get_type() const { return header.type; }
-		TEXTURE_USAGE get_usage() const { return header.usage; }
-		bool has_usage(TEXTURE_USAGE usage) const { 
-			return header.usage == usage;
-		}
+		texture_usage get_usage() const { return header.usage; }
+		bool has_usage(texture_usage required) const { return rnd::driver::has_usage(header.usage, required); }
 
 		// Texture dimensions
 		uint32_t width() const { return header.data.extent.width; }

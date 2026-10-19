@@ -2,6 +2,7 @@
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_render_targets.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/common/timer.hpp>
@@ -39,33 +40,17 @@ void transparent_pass::execute(frame_context &context,
     res::tag tp_accum_tag = rnd::resolve_tp_accum_target(packet.camera);
     res::tag tp_reveal_tag = rnd::resolve_tp_reveal_target(packet.camera);
 
-    auto color_tp_rt = txm_manager.find(tp_accum_tag);
-    auto waight_tp_rt = txm_manager.find(tp_reveal_tag);
-
-    if (color_tp_rt && (color_tp_rt->width() != static_cast<uint32_t>(vp_width) ||
-                        color_tp_rt->height() != static_cast<uint32_t>(vp_height))) {
-      txm_manager.remove(tp_accum_tag);
-      txm_manager.remove(tp_reveal_tag);
-      color_tp_rt = nullptr;
-      waight_tp_rt = nullptr;
-    }
-
-    if (!color_tp_rt) {
-      rnd::driver::texture_header header;
-      header.data.extent.width = vp_width;
-      header.data.extent.height = vp_height;
-      header.data.format = rnd::driver::texture_header::TYPE::RGBA16F;
-      header.usage = rnd::driver::TEXTURE_USAGE::COLOR_TARGET;
-      header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_EDGE;
-      header.mag = rnd::driver::texture_header::FILTERING::LINEAR;
-      header.min = rnd::driver::texture_header::FILTERING::LINEAR;
-      color_tp_rt =
-          txm_manager.generate_texture(tp_accum_tag, header);
-
-      header.data.format = rnd::driver::texture_header::TYPE::R8;
-      waight_tp_rt =
-          txm_manager.generate_texture(tp_reveal_tag, header);
-    }
+    constexpr auto tp_usage = rnd::driver::texture_usage::color_target | rnd::driver::texture_usage::sampled;
+    constexpr rnd::render_targets::sampling tp_sampling{
+        .min = rnd::driver::texture_header::FILTERING::LINEAR,
+        .mag = rnd::driver::texture_header::FILTERING::LINEAR,
+        .wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_EDGE};
+    auto color_tp_rt = rnd::render_targets::ensure(
+        txm_manager, tp_accum_tag, {vp_width, vp_height},
+        rnd::driver::texture_header::TYPE::RGBA16F, tp_usage, tp_sampling);
+    auto waight_tp_rt = rnd::render_targets::ensure(
+        txm_manager, tp_reveal_tag, {vp_width, vp_height},
+        rnd::driver::texture_header::TYPE::R8, tp_usage, tp_sampling);
 
     rnd::driver::render_state state;
     state.depth.enabled = true;

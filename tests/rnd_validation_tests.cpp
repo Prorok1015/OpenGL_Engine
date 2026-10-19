@@ -13,7 +13,7 @@ namespace {
 using namespace rnd::driver;
 namespace vl = rnd::driver::validation;
 
-texture_header texture_of(uint32_t width, uint32_t height, TEXTURE_USAGE usage)
+texture_header texture_of(uint32_t width, uint32_t height, texture_usage usage)
 {
 	texture_header header;
 	header.data.extent.width = width;
@@ -92,8 +92,8 @@ BOOST_FIXTURE_TEST_SUITE(RndValidationTests, validation_fixture)
 
 BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 {
-	auto color = drv->create_texture(texture_of(64, 32, TEXTURE_USAGE::COLOR_TARGET));
-	auto depth = drv->create_texture(texture_of(64, 32, TEXTURE_USAGE::DEPTH_TARGET));
+	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(64, 32, texture_usage::depth_target));
 	auto mesh = make_geometry(*drv, 6);
 	auto ubo = drv->create_uniform_buffer(64, 0);
 	auto ssbo = drv->create_ssbo_buffer(128, 1);
@@ -155,7 +155,7 @@ BOOST_AUTO_TEST_CASE(AFrameBufferStillPushedAtPresentIsReported)
 
 BOOST_AUTO_TEST_CASE(SetRenderTargetWithoutPushIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	drv->set_render_target(color.get());
 
 	expect_only(state(), vl::rule::render_target_without_push);
@@ -168,7 +168,7 @@ BOOST_AUTO_TEST_CASE(SetRenderTargetWithoutPushIsReported)
 
 BOOST_AUTO_TEST_CASE(ColorAttachmentWithoutColorTargetUsageIsReported)
 {
-	auto sampled = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::SAMPLED));
+	auto sampled = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
 	drv->push_frame_buffer();
 	drv->set_render_target(sampled.get());
 
@@ -177,9 +177,9 @@ BOOST_AUTO_TEST_CASE(ColorAttachmentWithoutColorTargetUsageIsReported)
 
 BOOST_AUTO_TEST_CASE(DepthAttachmentWithoutDepthOrStencilUsageIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
-	auto not_depth = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
-	auto stencil = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::STENCIL_TARGET));
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto not_depth = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto stencil = drv->create_texture(texture_of(16, 16, texture_usage::stencil_target));
 	drv->push_frame_buffer();
 	drv->set_render_target(color.get(), stencil.get());
 	BOOST_TEST(state().total() == 0u);
@@ -190,8 +190,8 @@ BOOST_AUTO_TEST_CASE(DepthAttachmentWithoutDepthOrStencilUsageIsReported)
 
 BOOST_AUTO_TEST_CASE(EveryColorOfSetRenderTargetsIsCheckedForUsage)
 {
-	auto first = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
-	auto second = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::SAMPLED));
+	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto second = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
 	drv->push_frame_buffer();
 	drv->set_render_targets({ first.get(), second.get() }, nullptr);
 
@@ -201,9 +201,9 @@ BOOST_AUTO_TEST_CASE(EveryColorOfSetRenderTargetsIsCheckedForUsage)
 
 BOOST_AUTO_TEST_CASE(AttachmentsOfDifferentSizesAreReportedOnce)
 {
-	auto color = drv->create_texture(texture_of(64, 64, TEXTURE_USAGE::COLOR_TARGET));
-	auto second = drv->create_texture(texture_of(64, 32, TEXTURE_USAGE::COLOR_TARGET));
-	auto depth = drv->create_texture(texture_of(32, 32, TEXTURE_USAGE::DEPTH_TARGET));
+	auto color = drv->create_texture(texture_of(64, 64, texture_usage::color_target));
+	auto second = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(32, 32, texture_usage::depth_target));
 	drv->push_frame_buffer();
 	drv->set_render_targets({ color.get(), second.get() }, depth.get());
 
@@ -212,7 +212,7 @@ BOOST_AUTO_TEST_CASE(AttachmentsOfDifferentSizesAreReportedOnce)
 
 BOOST_AUTO_TEST_CASE(NullAttachmentsAreSkippedByTheChecks)
 {
-	auto depth = drv->create_texture(texture_of(64, 64, TEXTURE_USAGE::DEPTH_TARGET));
+	auto depth = drv->create_texture(texture_of(64, 64, texture_usage::depth_target));
 	drv->push_frame_buffer();
 	drv->set_render_target(nullptr, depth.get());
 	drv->set_render_targets({ nullptr, nullptr }, nullptr);
@@ -222,7 +222,7 @@ BOOST_AUTO_TEST_CASE(NullAttachmentsAreSkippedByTheChecks)
 
 BOOST_AUTO_TEST_CASE(ViewportOutsideTheRenderTargetIsReported)
 {
-	auto color = drv->create_texture(texture_of(64, 32, TEXTURE_USAGE::COLOR_TARGET));
+	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
 	drv->push_frame_buffer();
 	drv->set_render_target(color.get());
 
@@ -241,8 +241,8 @@ BOOST_AUTO_TEST_CASE(ViewportOutsideTheRenderTargetIsReported)
 
 BOOST_AUTO_TEST_CASE(ViewportAfterPopIsCheckedAgainstTheTargetBelow)
 {
-	auto small = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
-	auto large = drv->create_texture(texture_of(128, 128, TEXTURE_USAGE::COLOR_TARGET));
+	auto small = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto large = drv->create_texture(texture_of(128, 128, texture_usage::color_target));
 	drv->push_frame_buffer();
 	drv->set_render_target(large.get());
 	drv->push_frame_buffer();
@@ -258,7 +258,7 @@ BOOST_AUTO_TEST_CASE(ViewportAfterPopIsCheckedAgainstTheTargetBelow)
 
 BOOST_AUTO_TEST_CASE(ScissorOutsideTheRenderTargetIsReportedAndZeroLiftsIt)
 {
-	auto color = drv->create_texture(texture_of(64, 32, TEXTURE_USAGE::COLOR_TARGET));
+	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
 	drv->push_frame_buffer();
 	drv->set_render_target(color.get());
 
@@ -391,7 +391,7 @@ BOOST_AUTO_TEST_CASE(SsboWritePastItsSizeIsReported)
 
 BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	texture_interface* stale = color.get();
 	BOOST_TEST(state().live_objects(vl::object_kind::texture) == 1u);
 	color.reset();
@@ -406,8 +406,8 @@ BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
 
 BOOST_AUTO_TEST_CASE(DepthAttachmentDeletedBeforeUseIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
-	auto depth = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::DEPTH_TARGET));
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
 	texture_interface* stale = depth.get();
 	depth.reset();
 	drv->push_frame_buffer();
@@ -440,7 +440,7 @@ BOOST_AUTO_TEST_CASE(ObjectsOfEveryKindAreRegisteredWhileTheyLive)
 {
 	{
 		auto shader = drv->create_shader(program());
-		auto texture = drv->create_texture(texture_of(4, 4, TEXTURE_USAGE::SAMPLED));
+		auto texture = drv->create_texture(texture_of(4, 4, texture_usage::sampled));
 		auto array = drv->create_vertex_array();
 		auto buffer = drv->create_buffer();
 		auto ubo = drv->create_uniform_buffer(16, 0);
@@ -522,9 +522,9 @@ BOOST_AUTO_TEST_CASE(TextureBudgetCountsTexturesCreatedInAFrame)
 	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_textures = 1 });
 	auto limited_drv = limited.create_driver();
 
-	auto first = limited_drv->create_texture(texture_of(4, 4, TEXTURE_USAGE::SAMPLED));
+	auto first = limited_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
 	BOOST_TEST(limited.state().total() == 0u);
-	auto second = limited_drv->create_texture(texture_of(4, 4, TEXTURE_USAGE::SAMPLED));
+	auto second = limited_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
 
 	expect_only(limited.state(), vl::rule::budget_textures);
 }
@@ -533,7 +533,7 @@ BOOST_AUTO_TEST_CASE(NoBudgetIsEnforcedByDefault)
 {
 	std::vector<std::unique_ptr<texture_interface>> textures;
 	for (int i = 0; i < 100; ++i) {
-		textures.push_back(drv->create_texture(texture_of(4, 4, TEXTURE_USAGE::SAMPLED)));
+		textures.push_back(drv->create_texture(texture_of(4, 4, texture_usage::sampled)));
 		drv->push_frame_buffer();
 		drv->pop_frame_buffer();
 	}
@@ -542,7 +542,7 @@ BOOST_AUTO_TEST_CASE(NoBudgetIsEnforcedByDefault)
 
 BOOST_AUTO_TEST_CASE(TraceRecordsPassMarkersAndDrawsInOrder)
 {
-	auto color = drv->create_texture(texture_of(16, 16, TEXTURE_USAGE::COLOR_TARGET));
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto mesh = make_geometry(*drv, 6);
 	use_program();
 	drv->push_frame_buffer();
@@ -597,7 +597,7 @@ BOOST_AUTO_TEST_CASE(ViolationsKeepTheirMessageAndTheFrameTheyHappenedIn)
 
 BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 {
-	auto texture = drv->create_texture(texture_of(8, 8, TEXTURE_USAGE::SAMPLED));
+	auto texture = drv->create_texture(texture_of(8, 8, texture_usage::sampled));
 	texture->set_filtering(texture_header::FILTERING::NEAREST, texture_header::FILTERING::NEAREST);
 	texture->bind(3);
 	texture->generate_mipmaps();
@@ -613,7 +613,7 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	drv->set_render_state(state_to_set);
 
 	BOOST_TEST(texture->width() == 8u);
-	BOOST_TEST((texture->get_usage() == TEXTURE_USAGE::SAMPLED));
+	BOOST_TEST((texture->get_usage() == texture_usage::sampled));
 	BOOST_TEST(texture->native() != texture.get());
 	BOOST_TEST(inner().line_size() == 2.f);
 	BOOST_TEST((inner().scissor() == glm::ivec4(1, 2, 3, 4)));
@@ -633,12 +633,73 @@ BOOST_AUTO_TEST_CASE(ObjectsMayOutliveTheDriverAndTheSwapchain)
 	{
 		vl::swapchain short_lived(std::make_unique<null::swapchain>());
 		auto short_drv = short_lived.create_driver();
-		texture = short_drv->create_texture(texture_of(4, 4, TEXTURE_USAGE::SAMPLED));
+		texture = short_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
 		buffer = short_drv->create_buffer();
 	}
 	buffer->set_data(std::vector<float>(3));
 	texture.reset();
 	buffer.reset();
+}
+
+BOOST_AUTO_TEST_CASE(RenderTargetThatIsAlsoSampledPassesEveryUsageRule)
+{
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
+	color->bind(0);
+	drv->push_frame_buffer();
+	drv->set_render_target(color.get());
+	drv->pop_frame_buffer();
+	BOOST_TEST(state().total() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TextureWithoutAnyUsageIsReportedOnCreation)
+{
+	auto texture = drv->create_texture(texture_of(8, 8, texture_usage::none));
+	BOOST_TEST(static_cast<bool>(texture));
+	expect_only(state(), vl::rule::texture_usage_flags);
+}
+
+BOOST_AUTO_TEST_CASE(DepthFormatWithoutDepthOrStencilTargetIsReportedOnCreation)
+{
+	texture_header header = texture_of(8, 8, texture_usage::sampled);
+	header.data.format = texture_header::TYPE::D32;
+	drv->create_texture(header);
+	expect_only(state(), vl::rule::texture_usage_flags);
+}
+
+BOOST_AUTO_TEST_CASE(DepthFormatAsColorTargetIsReportedOnCreation)
+{
+	texture_header header = texture_of(8, 8, texture_usage::depth_target | texture_usage::color_target);
+	header.data.format = texture_header::TYPE::D24_S8;
+	drv->create_texture(header);
+	expect_only(state(), vl::rule::texture_usage_flags);
+}
+
+BOOST_AUTO_TEST_CASE(DepthTargetThatIsAlsoSampledIsAccepted)
+{
+	texture_header header = texture_of(8, 8, texture_usage::depth_target | texture_usage::sampled);
+	header.data.format = texture_header::TYPE::D32;
+	drv->create_texture(header);
+	BOOST_TEST(state().total() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(InitialDataRequiresSampledUsage)
+{
+	const unsigned char pixels[4] = { 1, 2, 3, 4 };
+	texture_header header = texture_of(1, 1, texture_usage::color_target);
+	header.data.initial_data = pixels;
+	drv->create_texture(header);
+	expect_only(state(), vl::rule::texture_usage_flags);
+
+	header.usage = texture_usage::color_target | texture_usage::sampled;
+	drv->create_texture(header);
+	BOOST_TEST(state().total() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(BindingATextureWithoutSampledUsageIsReported)
+{
+	auto color = drv->create_texture(texture_of(8, 8, texture_usage::color_target));
+	color->bind(2);
+	expect_only(state(), vl::rule::texture_not_sampled);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

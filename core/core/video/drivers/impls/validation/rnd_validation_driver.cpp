@@ -7,6 +7,24 @@
 namespace {
 	using namespace rnd::driver;
 
+	bool is_depth_or_stencil_format(texture_header::TYPE format)
+	{
+		switch (format) {
+		case texture_header::TYPE::D32F_S8:
+		case texture_header::TYPE::D24_S8:
+		case texture_header::TYPE::D32:
+		case texture_header::TYPE::D24:
+		case texture_header::TYPE::D16:
+		case texture_header::TYPE::D32F:
+		case texture_header::TYPE::S1:
+		case texture_header::TYPE::S4:
+		case texture_header::TYPE::S8:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	texture_interface* unwrap(texture_interface* wrapped)
 	{
 		return wrapped ? &static_cast<validation::texture*>(wrapped)->inner() : nullptr;
@@ -57,12 +75,12 @@ bool rnd::driver::validation::driver::check_targets(std::span<texture_interface*
 	bool size_mismatch = false;
 	const auto visit = [&](const texture_interface& attachment, bool is_depth) {
 		const bool usage_ok = is_depth
-			? attachment.has_usage(TEXTURE_USAGE::DEPTH_TARGET) || attachment.has_usage(TEXTURE_USAGE::STENCIL_TARGET)
-			: attachment.has_usage(TEXTURE_USAGE::COLOR_TARGET);
+			? attachment.has_usage(texture_usage::depth_target) || attachment.has_usage(texture_usage::stencil_target)
+			: attachment.has_usage(texture_usage::color_target);
 		if (!usage_ok) {
 			m_state->report(rule::attachment_usage, std::format("{} attachment of {}x{} has usage {}, expected {}",
-				is_depth ? "depth" : "color", attachment.width(), attachment.height(), static_cast<int>(attachment.get_usage()),
-				is_depth ? "DEPTH_TARGET or STENCIL_TARGET" : "COLOR_TARGET"));
+				is_depth ? "depth" : "color", attachment.width(), attachment.height(), validation::usage_text(attachment.get_usage()),
+				is_depth ? "depth_target or stencil_target" : "color_target"));
 		}
 		const glm::uvec2 size{ attachment.width(), attachment.height() };
 		if (!extent) {
@@ -207,8 +225,29 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::validation::driver::
 	return std::make_unique<shader>(m_state, std::move(created));
 }
 
+void rnd::driver::validation::driver::check_texture_usage(const texture_header& header)
+{
+	const std::string what = std::format("{}x{} texture '{}'", header.data.extent.width, header.data.extent.height, header.name);
+	if (header.usage == texture_usage::none) {
+		m_state->report(rule::texture_usage_flags, what + " has no usage flags");
+		return;
+	}
+	if (is_depth_or_stencil_format(header.data.format)) {
+		if (!has_any_usage(header.usage, texture_usage::depth_target | texture_usage::stencil_target)) {
+			m_state->report(rule::texture_usage_flags, std::format("{} has a depth/stencil format but usage {}", what, usage_text(header.usage)));
+		}
+		if (has_usage(header.usage, texture_usage::color_target)) {
+			m_state->report(rule::texture_usage_flags, what + " has a depth/stencil format and the color_target usage");
+		}
+	}
+	if (header.data.initial_data && !has_usage(header.usage, texture_usage::sampled)) {
+		m_state->report(rule::texture_usage_flags, std::format("{} has initial data but usage {}, expected sampled", what, usage_text(header.usage)));
+	}
+}
+
 std::unique_ptr<rnd::driver::texture_interface> rnd::driver::validation::driver::create_texture(const texture_header& header)
 {
+	check_texture_usage(header);
 	auto created = m_inner->create_texture(header);
 	if (!created) {
 		return nullptr;
