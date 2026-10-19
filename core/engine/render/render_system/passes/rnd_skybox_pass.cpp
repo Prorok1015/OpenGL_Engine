@@ -1,7 +1,10 @@
 #include "rnd_skybox_pass.h"
 #include <snk/render/rnd_render_packet.hpp>
-#include <snk/render/rnd_render_system.h>
-#include <snk/render/rnd_pass_pipelines.h>
+#include <snk/render/rnd_render_context.h>
+#include <snk/driver/rnd_buffer_interface.h>
+#include <snk/driver/rnd_buffer_layout.h>
+#include <snk/driver/rnd_vertex_array_interface.h>
+#include "rnd_pass_pipelines.h"
 #include <snk/common/eng_profiler.h>
 #include "rnd_gpu_profiler.h"
 
@@ -34,10 +37,11 @@ namespace rnd {
 
 	skybox_pass::skybox_pass() {}
 
-	void skybox_pass::execute(frame_context& context, driver::driver_interface& drv) {
+	void skybox_pass::execute(render_context& context, driver::driver_interface& drv) {
 		PROFILE_SCOPE("Pass.Skybox");
 		PROFILE_GPU_SCOPE("Pass.Skybox");
-		if (!context.data.has_value<std::pmr::vector<rnd::render_packet_t>>()) {
+		const auto packets = context.packets();
+		if (packets.empty()) {
 			return;
 		}
 
@@ -59,9 +63,6 @@ namespace rnd {
 			m_va->set_index_buffer(m_ibo);
 		}
 
-		auto& packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
-
-		auto& txm_manager = *context.textures;
 		rnd::global_params common_matrix;
 
 		for (const auto& packet : packets) {
@@ -77,14 +78,14 @@ namespace rnd {
 			const auto target = rnd::select_camera_target(packet.camera);
 			const bool offscreen = target.kind == rnd::render_target_kind::texture;
 			res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-			auto color_rt = offscreen ? txm_manager.find(target.texture) : nullptr;
+			auto color_rt = offscreen ? context.find_texture(target.texture) : nullptr;
 			if (offscreen && !color_rt) continue;
 
 			rnd::driver::render_pass_desc pass;
 			pass.debug_name = "skybox";
 			if (offscreen) {
 				pass.colors.push_back({.texture = color_rt});
-				if (auto* depth = txm_manager.find(depth_tag)) {
+				if (auto* depth = context.find_texture(depth_tag)) {
 					pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
 				}
 			} else {
@@ -97,14 +98,14 @@ namespace rnd {
 			state.depth.write_mask = false;
 			state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
 			rnd::driver::set_target_formats(state, pass);
-			state.set_layouts = context.shaders->layouts().skybox();
-			rnd::pass_pipelines pipelines(drv, *context.shaders, state);
+			state.set_layouts = context.layouts().skybox();
+			rnd::pass_pipelines pipelines(drv, context, state);
 
 			common_matrix.view = packet.camera.view_matrix;
 			common_matrix.projection = packet.camera.projection_matrix;
 			common_matrix.view_position = glm::vec4(packet.camera.view_position, 1.0f);
-			context.shaders->update_global_uniform(common_matrix);
-			context.shaders->bind_frame();
+			context.write_view(common_matrix);
+			context.bind_frame();
 			drv.set_viewport(glm::ivec4{packet.camera.viewport.x, packet.camera.viewport.y, vp_width, vp_height});
 
 			m_vbo->set_data_ptr(cube_vertices, 8);
@@ -112,13 +113,12 @@ namespace rnd {
 
 			const auto& sky = *packet.skybox_material;
 			// The cubemap is the material's first sampler; a texture that is still loading leaves the sky out.
-			driver::texture_interface* cubemap = sky.material->params.samplers.empty() ? nullptr : sky.material->params.samplers[0];
+			driver::texture_interface* cubemap = sky.material->runtime.samplers.empty() ? nullptr : sky.material->runtime.samplers[0];
 			if (cubemap && pipelines.bind(sky.variant)) {
 				driver::bind_group_desc inputs;
-				inputs.layout = context.shaders->layouts().sky;
+				inputs.layout = context.layouts().sky;
 				inputs.entries.push_back({ driver::binding_type::texture, bindings::sky_slot, {}, 0, 0, cubemap });
 				drv.set_bind_group(driver::pass_set, drv.create_bind_group(inputs, driver::lifetime::transient));
-				context.shaders->apply_uniforms(sky.variant, sky.material->params);
 				drv.draw_indices(m_va, 36);
 			}
 

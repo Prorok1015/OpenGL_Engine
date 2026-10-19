@@ -1,22 +1,19 @@
 #include "rnd_frame_upload_pass.h"
 #include <snk/render/rnd_bindings.h>
-#include <snk/render/rnd_per_draw_data.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/mem_allocator.h>
 #include "rnd_gpu_profiler.h"
 
 namespace rnd {
-void frame_upload_pass::execute(frame_context &context,
+void frame_upload_pass::execute(render_context &context,
                                 driver::driver_interface & /*drv*/) {
   PROFILE_SCOPE("Pass.FrameUpload");
   PROFILE_GPU_SCOPE("Pass.FrameUpload");
-  if (!context.data.has_value<std::pmr::vector<rnd::render_packet_t>>() ||
-      !context.draw_data) {
+  const auto packets = context.packets();
+  if (packets.empty()) {
     return;
   }
-
-  auto &packets = context.data.require<std::pmr::vector<rnd::render_packet_t>>();
 
   std::size_t object_count = 0;
   std::size_t bone_count = 0;
@@ -44,6 +41,6 @@ void frame_upload_pass::execute(frame_context &context,
     }
   }
 
-  context.draw_data->upload(objects, bones);
+  context.upload_objects(objects, bones);
 }
 } // namespace rnd

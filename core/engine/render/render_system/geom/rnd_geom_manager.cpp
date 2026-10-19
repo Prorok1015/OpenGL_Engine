@@ -1,4 +1,4 @@
-#include <snk/render/geom/rnd_geom_manager.h>
+#include "rnd_geom_manager.h"
 #include <snk/driver/rnd_buffer_interface.h>
 #include <snk/resource/res_system.h>
 

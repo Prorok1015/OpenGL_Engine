@@ -56,14 +56,20 @@ namespace rnd
 		std::unordered_map<std::uint64_t, variant_id> m_program_memo;
 	};
 
-	// A material compiled once and reused across frames: the shader variants it draws with and the
-	// samplers and uniforms that do not change per draw. Immutable after it is built; a draw call refers to
+	// A name for a compiled material that is never given to another one, whatever happens to its address.
+	SNK_API std::uint64_t next_material_serial() noexcept;
+
+	// A material compiled once and reused across frames: the shader variants it draws with, and the samplers
+	// and MaterialParams bytes that do not change per draw. Immutable after it is built; a draw call refers to
 	// it by pointer for the frame it was extracted in.
+	// The bind group of set 2 is cached by `serial`: a material rebuilt for any reason (its description was
+	// marked dirty, a texture was reloaded) is a new compiled_material with a new serial and gets a new group.
 	struct compiled_material
 	{
 		variant_id base;
 		variant_id opaque;
-		shader_config::runtime_data params;
+		shader_config::runtime_data runtime;
+		std::uint64_t serial = next_material_serial();
 
 		std::shared_ptr<const void> source;
 		bool skinned = false;

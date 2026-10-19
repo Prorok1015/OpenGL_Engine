@@ -1,7 +1,7 @@
 #pragma once
 #include <snk/common/mem_allocator.h>
 #include <snk/driver/rnd_driver_interface.h>
-#include <snk/render/shader/rnd_shader_manager.h>
+#include <snk/render/rnd_render_context.h>
 
 #include <memory_resource>
 #include <vector>
@@ -15,13 +15,13 @@ namespace rnd
 	class pass_pipelines
 	{
 	public:
-		pass_pipelines(driver::driver_interface& drv, const ShaderManager& shaders, driver::pipeline_desc base)
+		pass_pipelines(driver::driver_interface& drv, render_context& context, driver::pipeline_desc base)
 			: m_drv(drv)
-			, m_shaders(shaders)
+			, m_context(context)
 			, m_base(std::move(base))
 			, m_by_variant(ds::frame_allocator())
 		{
-			m_by_variant.reserve(m_shaders.variants().size() + 8);
+			m_by_variant.reserve(m_context.variants().size() + 8);
 		}
 
 		// Binds the pipeline of a variant, unless it is the one bound already. False when the variant has no
@@ -31,7 +31,7 @@ namespace rnd
 			return bind(get(variant));
 		}
 
-		// The same for a program that does not come from the shader manager.
+		// The same for a program that does not come from a material variant.
 		bool bind(const driver::shader_interface* program)
 		{
 			return bind(build(program));
@@ -61,7 +61,7 @@ namespace rnd
 			}
 			driver::pipeline_handle& slot = m_by_variant[variant.value];
 			if (!slot) {
-				slot = build(m_shaders.program(variant));
+				slot = build(m_context.program(variant));
 			}
 			return slot;
 		}
@@ -77,7 +77,7 @@ namespace rnd
 		}
 
 		driver::driver_interface& m_drv;
-		const ShaderManager& m_shaders;
+		render_context& m_context;
 		driver::pipeline_desc m_base;
 		std::pmr::vector<driver::pipeline_handle> m_by_variant;
 		driver::pipeline_handle m_bound;

@@ -652,6 +652,17 @@ std::size_t rnd::driver::gl::driver::uniform_offset_alignment() const
 	return *m_uniform_offset_alignment;
 }
 
+std::size_t rnd::driver::gl::driver::storage_offset_alignment() const
+{
+	if (!m_storage_offset_alignment) {
+		GLint alignment = 0;
+		glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &alignment);
+		CHECK_GL_ERROR();
+		m_storage_offset_alignment = static_cast<std::size_t>(alignment > 0 ? alignment : 256);
+	}
+	return *m_storage_offset_alignment;
+}
+
 rnd::driver::buffer_handle rnd::driver::gl::driver::create_buffer(const buffer_desc& desc)
 {
 	ASSERT_MSG(desc.size > 0, "create_buffer of size 0");

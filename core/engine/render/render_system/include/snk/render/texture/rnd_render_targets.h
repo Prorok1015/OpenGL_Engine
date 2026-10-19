@@ -1,10 +1,11 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/driver/rnd_texture_interface.h>
-#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/resource/res_tag.h>
 
 #include <glm/glm.hpp>
+
+namespace rnd { class texture_manager; }
 
 namespace rnd::render_targets
 {

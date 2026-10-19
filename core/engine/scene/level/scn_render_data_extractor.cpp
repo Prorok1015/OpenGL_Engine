@@ -4,8 +4,8 @@
 #include <snk/common/eng_transform_3d.hpp>
 #include <snk/render/rnd_light_data.hpp>
 #include <snk/render/rnd_render_packet.hpp>
-#include <snk/render/rnd_render_system.h>
 #include <snk/render/shader/rnd_material_compiler.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_model.h>
@@ -27,7 +27,7 @@ namespace {
                 retired.push_back(std::move(cache.material));
             }
             cache.material = rnd::build_compiled_material(
-                *context.material_compiler, context.shaders->variants(), *context.textures, desc, skinned);
+                *context.material_compiler, *context.variants, *context.textures, desc, skinned);
             mat.dirty = false;
         }
         return cache.material.get();
@@ -36,13 +36,13 @@ namespace {
 
 void scn::render_data_extractor::extract(rnd::frame_context& context) {
     PROFILE_SCOPE("ExtractRenderData");
-    // Managers are injected into frame_context by render_system::begin_frame, which the `extract`
+    // The services are injected into frame_context by render_system::begin_frame, which the `extract`
     // stage runs before this extractor. Catch a missing/mis-ordered injection early.
     ASSERT_MSG(context.textures, "frame_context render managers not injected (EPIC-49 US-49-6)");
     ASSERT_MSG(context.material_compiler, "frame_context material_compiler not injected (EPIC-49 US-49-5)");
-    ASSERT_MSG(context.shaders, "frame_context shader manager not injected");
+    ASSERT_MSG(context.variants, "frame_context shader variant cache not injected");
     m_retired_materials.clear();
-    auto& variants = context.shaders->variants();
+    auto& variants = *context.variants;
 
     std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
 

@@ -78,6 +78,11 @@ binding_res ssbo_entry(std::uint32_t slot, buffer_handle buffer, std::size_t siz
 	return { binding_type::ssbo, slot, buffer, 0, size, nullptr };
 }
 
+binding_res ssbo_entry_at(std::uint32_t slot, buffer_handle buffer, std::size_t size, std::size_t offset)
+{
+	return { binding_type::ssbo, slot, buffer, offset, size, nullptr };
+}
+
 binding_res texture_entry(std::uint32_t slot, texture_handle texture)
 {
 	return { binding_type::texture, slot, {}, 0, 0, texture };
@@ -603,6 +608,33 @@ BOOST_AUTO_TEST_CASE(ADynamicOffsetThatIsNotAlignedIsReportedAndNotForwarded)
 	BOOST_TEST(inner().calls().bind_group_binds == 2u);
 }
 
+BOOST_AUTO_TEST_CASE(AStaticOffsetOfABufferRangeHasToBeAlignedToo)
+{
+	const buffer_handle uniform_buffer = drv->create_buffer({ .size = 4096, .usage = buffer_usage::uniform });
+	const buffer_handle storage_buffer = drv->create_buffer({ .size = 4096, .usage = buffer_usage::storage });
+	const auto uniform_layout = drv->create_bind_group_layout(layout_of({ { binding_type::ubo, 0, shader_stage::vertex, false } }));
+	const auto storage_layout = drv->create_bind_group_layout(layout_of({ { binding_type::ssbo, 0, shader_stage::vertex, false } }));
+	BOOST_TEST(drv->storage_offset_alignment() == 256u);
+	open_pass();
+
+	// Aligned offsets are fine; a group made at an unaligned one is reported when it is bound and not forwarded.
+	const auto uniform_ok = drv->create_bind_group(group_of(uniform_layout, { ubo_entry(0, uniform_buffer, 64, 512) }));
+	const auto storage_ok = drv->create_bind_group(group_of(storage_layout, { ssbo_entry_at(0, storage_buffer, 64, 256) }));
+	drv->set_bind_group(frame_set, uniform_ok);
+	drv->set_bind_group(object_set, storage_ok);
+	BOOST_TEST(state().total() == 0u);
+	BOOST_TEST(inner().calls().bind_group_binds == 2u);
+
+	const auto uniform_bad = drv->create_bind_group(group_of(uniform_layout, { ubo_entry(0, uniform_buffer, 64, 16) }));
+	drv->set_bind_group(frame_set, uniform_bad);
+	expect_only(vl::rule::binding_offset_alignment);
+	const auto storage_bad = drv->create_bind_group(group_of(storage_layout, { ssbo_entry_at(0, storage_buffer, 64, 128) }));
+	drv->set_bind_group(object_set, storage_bad);
+	expect_only(vl::rule::binding_offset_alignment, 2);
+	BOOST_TEST(inner().calls().bind_group_binds == 2u);
+	BOOST_TEST(std::string(vl::rule_name(vl::rule::binding_offset_alignment)) == "binding_offset_alignment");
+}
+
 BOOST_AUTO_TEST_CASE(TheAlignmentIsTheOneOfTheBackend)
 {
 	BOOST_TEST(drv->uniform_offset_alignment() == 256u);
@@ -869,6 +901,89 @@ BOOST_AUTO_TEST_CASE(AMacroOutsideTheTableIsReportedAndLeftInTheSource)
 	BOOST_TEST(!errors.empty());
 	expanded("SNK_TEX(4, 0) uniform sampler2D c;", &errors);
 	BOOST_TEST(!errors.empty());
+}
+
+BOOST_AUTO_TEST_CASE(MacrosInBlockCommentsAreLeftAlone)
+{
+	std::string errors;
+	const std::string one_line = "/* SNK_UBO(0, 0) uniform A {}; */ int x;\n";
+	BOOST_TEST(expanded(one_line, &errors) == one_line);
+	BOOST_TEST(errors.empty());
+
+	const std::string spanning = "int a;\n/*\n   SNK_SSBO(3, 0) buffer B {};\n   // not a line comment inside, SNK_TEX(9, 9)\n*/\nint b;\n";
+	BOOST_TEST(expanded(spanning, &errors) == spanning);
+	BOOST_TEST(errors.empty());
+
+	// The comment ends where it says: a macro behind it, on the same line or the next, is expanded.
+	BOOST_TEST(expanded("/* SNK_UBO(0, 0) */ SNK_UBO(0, 1) uniform A {};") == "/* SNK_UBO(0, 0) */ layout(std140, binding = 1) uniform A {};");
+	BOOST_TEST(expanded("/* a */\nSNK_TEX(1, 0) uniform sampler2D t;") == "/* a */\nlayout(binding = 0) uniform sampler2D t;");
+
+	// Neither comment form hides the other.
+	BOOST_TEST(expanded("// /* SNK_UBO(0, 1) uniform A {};\n") == "// /* SNK_UBO(0, 1) uniform A {};\n");
+	BOOST_TEST(expanded("// start /*\nSNK_UBO(0, 1) uniform A {};\n") == "// start /*\nlayout(std140, binding = 1) uniform A {};\n");
+	BOOST_TEST(expanded("/* // */ SNK_UBO(0, 1) uniform A {};") == "/* // */ layout(std140, binding = 1) uniform A {};");
+	// A line comment goes on over a backslash at the end of the line.
+	BOOST_TEST(expanded("// continued \\\nSNK_UBO(0, 1) uniform A {};\n") == "// continued \\\nSNK_UBO(0, 1) uniform A {};\n");
+	BOOST_TEST(errors.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ABadMacroInsideACommentCannotFailAShader)
+{
+	std::string errors;
+	expanded("/* SNK_UBO(7, 7) and SNK_FOO(1) and SNK_TEX */\n// SNK_BAR(2)\n", &errors);
+	BOOST_TEST(errors.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnotherNameCalledLikeAMacroIsReportedWithItsLine)
+{
+	std::string errors;
+	const std::string source = "int a;\nSNK_UBOO(0, 0) uniform A {};\nSNK_BUFFER (1, 1) buffer B {};\n";
+	BOOST_TEST(expanded(source, &errors) == source);
+	BOOST_TEST(errors.find("line 2: SNK_UBOO") != std::string::npos);
+	BOOST_TEST(errors.find("line 3: SNK_BUFFER") != std::string::npos);
+
+	// The engine's own defines and names that are not calls are not macros.
+	expanded("#ifdef SNK_VERTEX_SHADER\n#endif\n#ifdef SNK_FRAGMENT_SHADER\n#endif\nint SNK_value = 1;\n", &errors);
+	BOOST_TEST(errors.empty());
+}
+
+BOOST_AUTO_TEST_CASE(EveryProblemIsReportedWithItsLine)
+{
+	std::string errors;
+	expanded("SNK_UBO(0, 9) uniform A {};\n\nSNK_TEX 0 uniform sampler2D c;\nSNK_SSBO(0, 0) buffer B {};\n", &errors);
+	BOOST_TEST(errors.find("line 1: SNK_UBO(0, 9) is outside the binding table") != std::string::npos);
+	BOOST_TEST(errors.find("line 3: SNK_TEX needs (set, slot)") != std::string::npos);
+	BOOST_TEST(errors.find("line 4: SNK_SSBO(0, 0) is outside the binding table") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(DefinesGoAfterTheVersionLineWhereverItIs)
+{
+	const auto inserted = [](std::string source, bool* ok = nullptr) {
+		const bool result = rnd::insert_after_version(source, "#define A\n");
+		if (ok) {
+			*ok = result;
+		}
+		return source;
+	};
+	bool ok = false;
+	BOOST_TEST(inserted("#version 450 core\nvoid main() {}\n", &ok) == "#version 450 core\n#define A\nvoid main() {}\n");
+	BOOST_TEST(ok);
+	// Leading comments and blank lines do not move it, and a #version in a comment is not the directive.
+	BOOST_TEST(inserted("// licence\n\n/* more\n#version 100\n*/\n  #  version 450 core\nint x;\n", &ok)
+		== "// licence\n\n/* more\n#version 100\n*/\n  #  version 450 core\n#define A\nint x;\n");
+	BOOST_TEST(ok);
+	BOOST_TEST(inserted("#version 450 core\r\nint x;\r\n", &ok) == "#version 450 core\r\n#define A\nint x;\r\n");
+	BOOST_TEST(ok);
+	BOOST_TEST(inserted("#version 450 core", &ok) == "#version 450 core\n#define A\n");
+	BOOST_TEST(ok);
+
+	// Anything else before it: the shader is not valid, the source stays as it was.
+	for (const char* source : { "int x;\n#version 450 core\n", "#define B\n#version 450 core\n", "void main() {}\n", "", "// #version 450 core\n", "#versions 450\n" }) {
+		BOOST_TEST_CONTEXT(source) {
+			BOOST_TEST(inserted(source, &ok) == source);
+			BOOST_TEST(!ok);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(AMalformedMacroIsReported)

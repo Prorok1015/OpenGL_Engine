@@ -26,6 +26,7 @@
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/input/inp_input_router.h>
 #include <snk/scene/level/scn_level_desc.h>

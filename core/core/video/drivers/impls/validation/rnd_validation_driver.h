@@ -38,6 +38,7 @@ namespace rnd::driver::validation
 		void begin_frame() override;
 		const binding_table& bindings() const override { return m_inner->bindings(); }
 		std::size_t uniform_offset_alignment() const override { return m_inner->uniform_offset_alignment(); }
+		std::size_t storage_offset_alignment() const override { return m_inner->storage_offset_alignment(); }
 
 		buffer_handle create_buffer(const buffer_desc& desc) override;
 		void destroy_buffer(buffer_handle buffer) override;
