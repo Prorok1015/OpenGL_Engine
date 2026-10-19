@@ -51,7 +51,7 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 		ASSERT_MSG(loop_impl, "engine_module: the frame loop is not app::loop_service");
 		if (loop_impl) {
 			loop_impl->set_ready_probe([](ds::app_data_storage& storage) {
-				return storage.require<scn::context_manager>().get_level().get_world_count() > 0;
+				return storage.require<scn::context_manager>().level_set().size() > 0;
 			});
 		}
 	}

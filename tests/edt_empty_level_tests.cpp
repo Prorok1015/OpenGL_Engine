@@ -41,13 +41,13 @@ struct empty_level_fixture : test_util::scene_env
 	// edt::apply_world_resync on the reloaded level desc.
 	void resync()
 	{
-		scn::level& lvl = mgr.get_level();
-		auto level_res = require_loaded<scn::level_desc>(lvl.get_tag());
+		scn::context_set& lvl = mgr.level_set();
+		auto level_res = require_loaded<scn::level_desc>(lvl.tag());
 		BOOST_REQUIRE(level_res.is_ready());
 		std::vector<scn::world_desc> desc_worlds;
 		for (const auto& wh : level_res->get_worlds()) desc_worlds.push_back(*wh.get_sync());
 		edt::apply_world_resync(state, world_ctrl, desc_worlds, !level_res->get_worlds().empty(),
-			[&lvl](const scn::world_desc& w) { return lvl.has_world(w.get_name()); });
+			[&lvl](const scn::world_desc& w) { return lvl.has(w.get_name()); });
 	}
 
 	std::shared_ptr<scn::hot_reload_manager> hot;
@@ -104,7 +104,7 @@ BOOST_AUTO_TEST_CASE(Reload_ToAnEmptyWorldListClearsTheEditorArrays)
 	BOOST_TEST(state.world_names.empty());
 	BOOST_TEST(state.worlds_systems_list.empty());
 	BOOST_TEST(state.active_world_desc() == nullptr);
-	BOOST_TEST(mgr.get_level().get_world_count() == 0u);
+	BOOST_TEST(mgr.level_set().size() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(Reload_FromAnEmptyListToWorldsPicksTheFirstWorld)

@@ -24,13 +24,8 @@
 
 namespace scn
 {
-	// Resolves to the registry of the context the system runs in.
-	inline constexpr size_t LEVEL_ID = ~0u;
-	template<class T>
-	using level_res = ecs::bind_res<LEVEL_ID, T>;
-
 	// A group of contexts stepped together: one mode, one seed, one phase order. Owned by the
-	// context_manager (the level is the set "level"); a standalone scn::level owns one as well.
+	// context_manager (the level is the set "level").
 	// A context keeps its address until it is destroyed.
 	class SNK_API context_set
 	{

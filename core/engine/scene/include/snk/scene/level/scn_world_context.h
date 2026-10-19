@@ -19,7 +19,7 @@ namespace scn
 	enum class context_kind : uint8_t { level, runtime, preview, play };
 
 	// One simulation unit: a single world with its own registry, system list, execution plan,
-	// fixed stepper and run mode. The owner (scn::level for now) decides when its phases run.
+	// fixed stepper and run mode. The owning context_set decides when its phases run.
 	class SNK_API world_context
 	{
 	public:

@@ -4,8 +4,6 @@
 #include <type_traits>
 
 namespace ecs {
-    template <size_t WorldID, typename T> struct bind_res;
-
     template <typename> struct function_traits;
 
     template <typename R, typename... ARGS> struct function_traits<R (*)(ARGS...)> {
@@ -37,19 +35,5 @@ namespace ecs {
 
     template<typename T>
     inline constexpr bool is_view_v = is_view<T>::value;
-
-    template <typename T> struct is_bind_res : std::false_type {};
-
-    template <size_t ID, typename T>
-    struct is_bind_res<ecs::bind_res<ID, T>> : std::true_type {};
-
-    template <size_t ID, typename T>
-    struct is_bind_res<const ecs::bind_res<ID, T> &> : std::true_type {};
-
-    template <size_t ID, typename T>
-    struct is_bind_res<ecs::bind_res<ID, T> &> : std::true_type {};
-
-    template<typename T>
-    inline constexpr bool is_bind_res_v = is_bind_res<T>::value;
 
 } // namespace ecs

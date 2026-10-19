@@ -3,17 +3,15 @@
 #include <entt/entt.hpp>
 #include <vector>
 
-// Argument injection of ecs::invoker: registry, views, ctx resources and cross-world bind_res.
+// Argument injection of ecs::invoker: registry, views, ctx resources.
 // Plus system_factory behavior that does not need a full level.
 
 namespace {
 
 struct hp { int value = 0; };
 struct tick_counter { int ticks = 0; };
-struct shared_state { int value = 0; };
 
 int g_sum = 0;
-int g_seen_world_value = -1;
 entt::registry* g_seen_registry = nullptr;
 
 void sys_registry(entt::registry& reg) { g_seen_registry = &reg; }
@@ -25,10 +23,6 @@ void sys_view(entt::view<entt::get_t<hp>> view)
 }
 
 void sys_increment_resource(tick_counter& counter) { ++counter.ticks; }
-
-void sys_read_other_world(const ecs::bind_res<1, shared_state>& other) { g_seen_world_value = other->value; }
-
-void sys_write_other_world(ecs::bind_res<1, shared_state> other) { other->value += 5; }
 
 struct stateful
 {
@@ -48,24 +42,21 @@ struct invoker_fixture
 	invoker_fixture()
 	{
 		g_sum = 0;
-		g_seen_world_value = -1;
 		g_seen_registry = nullptr;
 		ctx.current_registry = &world0;
 		ctx.world_id = 0;
-		ctx.getter = [this](size_t id) -> entt::registry& { return id == 0 ? world0 : world1; };
 	}
 
 	// runtime_context holds a reference member, so it is rebuilt on demand
 	ecs::runtime_context make()
 	{
-		return ecs::runtime_context{ .get_world_registry = ctx.getter, .current_registry = *ctx.current_registry, .current_world_id = ctx.world_id };
+		return ecs::runtime_context{ .current_registry = *ctx.current_registry, .current_world_id = ctx.world_id };
 	}
 
 	struct holder
 	{
 		entt::registry* current_registry = nullptr;
 		size_t world_id = 0;
-		std::function<entt::registry&(size_t)> getter;
 	} ctx;
 
 	entt::registry world0;
@@ -99,17 +90,6 @@ BOOST_AUTO_TEST_CASE(PlainReferenceArgumentIsAContextSingletonCreatedOnDemand)
 	BOOST_REQUIRE(world0.ctx().find<tick_counter>() != nullptr);
 	BOOST_TEST(world0.ctx().get<tick_counter>().ticks == 3); // same object every call
 	BOOST_TEST(world1.ctx().find<tick_counter>() == nullptr);
-}
-
-BOOST_AUTO_TEST_CASE(BindResReadsAndWritesAnotherWorldsContext)
-{
-	world1.ctx().emplace<shared_state>().value = 7;
-
-	ecs::invoker<&sys_read_other_world>::invoke(make());
-	BOOST_TEST(g_seen_world_value == 7);
-
-	ecs::invoker<&sys_write_other_world>::invoke(make());
-	BOOST_TEST(world1.ctx().get<shared_state>().value == 12);
 }
 
 BOOST_AUTO_TEST_CASE(MemberFunctionInvokerPassesInstanceAndInjectedArguments)
@@ -164,7 +144,7 @@ BOOST_AUTO_TEST_CASE(Factory_StatefulSystemIsConstructedPerInstanceWithRegistere
 	BOOST_TEST(static_cast<stateful_system&>(*a.owner).counter == 100);
 
 	entt::registry reg;
-	auto ctx = ecs::runtime_context{ .get_world_registry = [&reg](size_t) -> entt::registry& { return reg; }, .current_registry = reg };
+	auto ctx = ecs::runtime_context{ .current_registry = reg };
 	entry->run(a.self, ctx);
 	BOOST_TEST(static_cast<stateful_system&>(*a.owner).counter == 101);
 	BOOST_TEST(static_cast<stateful_system&>(*b.owner).counter == 100); // the other instance is untouched
@@ -193,7 +173,7 @@ BOOST_AUTO_TEST_CASE(Factory_StatelessFunctionHasNoInstanceAndRunsThroughTheInvo
 	BOOST_TEST(inst.owner == nullptr);
 
 	entt::registry reg;
-	auto ctx = ecs::runtime_context{ .get_world_registry = [&reg](size_t) -> entt::registry& { return reg; }, .current_registry = reg };
+	auto ctx = ecs::runtime_context{ .current_registry = reg };
 	entry->run(inst.self, ctx);
 	entry->run(inst.self, ctx);
 	BOOST_TEST(reg.ctx().get<tick_counter>().ticks == 2);
