@@ -11,7 +11,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <cmath>
 
-// The REAL transform / animation / camera systems, scheduled by scn::level exactly like at
+// The REAL transform / animation / camera systems, scheduled by scn::context_set exactly like at
 // runtime (no copies of the system code). Headless: only registries and a system_factory.
 
 namespace {
