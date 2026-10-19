@@ -218,7 +218,11 @@ namespace {
 		case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
 		case TEXTURE_TYPE::TEXTURE_2D_ARRAY:
 		case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY:
-			glNamedFramebufferTextureLayer(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip), static_cast<GLint>(desc.layer));
+			if (desc.layer == attachment_desc::all_layers) {
+				glNamedFramebufferTexture(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip));
+			} else {
+				glNamedFramebufferTextureLayer(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip), static_cast<GLint>(desc.layer));
+			}
 			break;
 		default:
 			glNamedFramebufferTexture(fbo, point, gl_texture->get_id(), static_cast<GLint>(desc.mip));

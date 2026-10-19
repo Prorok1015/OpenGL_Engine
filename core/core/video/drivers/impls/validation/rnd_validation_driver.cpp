@@ -116,7 +116,7 @@ bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& 
 		if (attachment.mip >= std::max(texture.mip_levels(), 1u)) {
 			invalid(std::format("mip {} of a texture with {} mip levels", attachment.mip, texture.mip_levels()));
 		}
-		if (attachment.layer >= layer_count(texture)) {
+		if (attachment.layer != attachment_desc::all_layers && attachment.layer >= layer_count(texture)) {
 			invalid(std::format("layer {} of a texture with {} layers", attachment.layer, layer_count(texture)));
 		}
 		const glm::uvec2 size{ mip_extent(texture.width(), attachment.mip), mip_extent(texture.height(), attachment.mip) };

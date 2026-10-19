@@ -347,6 +347,32 @@ BOOST_AUTO_TEST_CASE(AnotherAttachmentMipOrLayerOrSetBuildsAnotherFramebuffer)
 	BOOST_TEST(fbos.misses() == 7u);
 }
 
+BOOST_AUTO_TEST_CASE(LayeredAndSingleLayerAttachmentsOfOneTextureAreDifferentFramebuffers)
+{
+	null::driver driver;
+	texture_header header = target_of(32, texture_usage::color_target);
+	header.type = TEXTURE_TYPE::TEXTURE_2D_ARRAY;
+	header.data.extent.layers = 4;
+	auto array = driver.create_texture(header);
+	const auto& fbos = driver.stats().framebuffers;
+
+	render_pass_desc layered = pass_of(array.get());
+	BOOST_TEST(layered.colors[0].layer == attachment_desc::all_layers);
+	render_pass_desc layer0 = pass_of(array.get());
+	layer0.colors[0].layer = 0;
+	render_pass_desc layer2 = pass_of(array.get());
+	layer2.colors[0].layer = 2;
+
+	run_pass(driver, layered);
+	run_pass(driver, layer0);
+	run_pass(driver, layer2);
+	BOOST_TEST(fbos.misses() == 3u);
+	run_pass(driver, layered);
+	run_pass(driver, layer0);
+	BOOST_TEST(fbos.hits() == 2u);
+	BOOST_TEST(fbos.size() == 3u);
+}
+
 BOOST_AUTO_TEST_CASE(BackbufferPassesNeedNoFramebuffer)
 {
 	null::driver driver;

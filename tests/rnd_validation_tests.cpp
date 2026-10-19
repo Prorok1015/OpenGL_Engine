@@ -632,6 +632,12 @@ BOOST_AUTO_TEST_CASE(RenderPassLayerOutsideTheTextureIsReported)
 	}
 	BOOST_TEST(state().total() == 0u);
 
+	drv->begin_render_pass(pass_of(layers.get()));
+	drv->end_render_pass();
+	drv->begin_render_pass(pass_of(faces.get()));
+	drv->end_render_pass();
+	BOOST_TEST(state().total() == 0u);
+
 	render_pass_desc past_end = pass_of(layers.get());
 	past_end.colors[0].layer = 4;
 	drv->begin_render_pass(past_end);

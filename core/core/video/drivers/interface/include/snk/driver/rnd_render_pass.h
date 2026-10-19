@@ -32,7 +32,10 @@ namespace rnd::driver
 		// color leaves its draw buffer slot unused.
 		texture_handle texture = nullptr;
 		uint32_t mip = 0;
-		uint32_t layer = 0;	// array layer, cube face or 3D slice
+		// Every layer of an array, cube or 3D texture is attached (layered rendering) unless one is picked:
+		// an array layer, cube face or 3D slice. Ignored for plain 2D textures.
+		static constexpr uint32_t all_layers = 0xFFFFFFFFu;
+		uint32_t layer = all_layers;
 		load_op load = load_op::load;
 		store_op store = store_op::store;
 		glm::vec4 clear_color{ 0.f };
