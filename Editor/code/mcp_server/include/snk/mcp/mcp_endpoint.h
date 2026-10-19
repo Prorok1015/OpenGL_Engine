@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -66,6 +67,10 @@ namespace mcp
 
 		void handle(const http_request& request, responder respond);
 
+		// The Host, Origin and token checks alone: nullopt when the request may go on, otherwise the refusal (403 or
+		// 401, closing the connection). The server asks before it sends "100 Continue" for a body it would refuse.
+		std::optional<http_response> check_access(const http_request& request) const;
+
 		// To the sessions that subscribed to `uri` and have an event stream open.
 		void notify_resource_updated(const std::string& uri);
 		// To every session that has an event stream open.
@@ -81,6 +86,15 @@ namespace mcp
 			std::uint64_t serial = 0; // creation order, for eviction
 			std::set<std::string> subscriptions;
 			std::shared_ptr<event_channel> channel;
+		};
+
+		// What the sessions are, behind a shared_ptr: an answer of the host that comes after the endpoint is gone
+		// (a subscribe waiting for the resource list) still finds valid state.
+		struct shared_state
+		{
+			std::mutex mutex;
+			std::map<std::string, session> sessions;
+			std::uint64_t next_serial = 1;
 		};
 
 		void route(const http_request& request, const responder& respond);
@@ -109,8 +123,6 @@ namespace mcp
 		endpoint_config m_config;
 		std::atomic<std::uint16_t> m_port{ 0 };
 
-		mutable std::mutex m_mutex;
-		std::map<std::string, session> m_sessions;
-		std::uint64_t m_next_serial = 1;
+		std::shared_ptr<shared_state> m_state;
 	};
 }

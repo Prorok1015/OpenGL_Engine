@@ -47,6 +47,8 @@ constexpr const char* capture_result_schema = R"({
 	"additionalProperties": false
 })";
 
+constexpr const char* capture_args_schema = R"({"type":"object","properties":{"viewport":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"}},"additionalProperties":false})";
+
 struct bridge_fixture
 {
 	ds::task_system tasks{ test_util::manual_tasks() };
@@ -123,7 +125,7 @@ BOOST_AUTO_TEST_SUITE(EdtAgentPolicyTests)
 BOOST_AUTO_TEST_CASE(ReadCommandsInAReadDomain_AreAllowed)
 {
 	cmd::command_desc desc;
-	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture", "scene.query", "node.get", "selection.get" }) {
+	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_TEST(edt::agent_may_use(desc));
@@ -159,9 +161,12 @@ BOOST_AUTO_TEST_CASE(MutatingRiskyLongRunningAndHiddenCommands_AreNot)
 BOOST_AUTO_TEST_CASE(ADomainOutsideTheReadList_IsNotAllowedEvenIfTheMetadataSaysRead)
 {
 	// The metadata of file.* and app.* does not say mutates, yet they save, quit and stop time: only a known read
-	// domain is exposed.
+	// domain is exposed. The same holds for the query domains of A4 until A4 adds them: a command that is registered
+	// there tomorrow with mutates=false (the default) is not offered to an agent today.
 	cmd::command_desc desc;
-	for (const char* id : { "file.save", "file.exit", "file.new", "app.advance", "app.resume", "help.about", "edit.undo", "nodot", "" }) {
+	for (const char* id : { "file.save", "file.exit", "file.new", "app.advance", "app.resume", "help.about", "edit.undo",
+		"scene.query", "scene.delete", "node.get", "node.delete", "component.set", "asset.query", "selection.get", "problems.list",
+		"nodot", "" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_TEST(!edt::agent_may_use(desc));
@@ -318,6 +323,7 @@ BOOST_AUTO_TEST_CASE(CallTool_AFailureIsAnErrorResultWithTheCode)
 BOOST_AUTO_TEST_CASE(CallTool_ACapturedPngBecomesAnImageBlock)
 {
 	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
 	capture.result_schema = json_of(capture_result_schema);
 	capture.invoke = [](const cmd::call&) {
 		return cmd::result::success(json_of(R"({"viewport":"scene","width":2,"height":1,"format":"png","png_base64":"QUJD"})"));
@@ -335,6 +341,67 @@ BOOST_AUTO_TEST_CASE(CallTool_ACapturedPngBecomesAnImageBlock)
 	BOOST_TEST(!result.structured.as_object().contains("png_base64"));
 	BOOST_TEST(result.structured.at("width").as_int64() == 2);
 	BOOST_TEST(text_of(result.structured.at("viewport")) == "scene");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ACaptureSizeIsLimitedForAnAgent)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+
+	for (const char* args : { R"({"width":4096})", R"({"height":2049})", R"({"width":8192,"height":8192})", R"({"viewport":"scene","width":2049})" }) {
+		const mcp::call_result refused = call_tool("viewport_capture", args);
+		BOOST_TEST_CONTEXT(args) {
+			BOOST_TEST(refused.is_error);
+			BOOST_REQUIRE_EQUAL(refused.content.size(), 1u);
+			BOOST_TEST(refused.content[0].text.find("limited to 2048") != std::string::npos);
+		}
+	}
+	BOOST_TEST(seen.empty());
+
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":2048,"height":2048})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"height":600})").is_error);
+	// No size named: a default width, not the native size of a possibly huge view.
+	BOOST_TEST(!call_tool("viewport_capture", "{}").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	BOOST_TEST(seen[0] == R"({"width":2048,"height":2048})");
+	BOOST_TEST(seen[1] == R"({"height":600})");
+	BOOST_TEST(seen[2] == R"({"width":1280})");
+}
+
+BOOST_AUTO_TEST_CASE(CallTool_ATooLargeResultIsAnErrorNotAMegabyteWall)
+{
+	cmd::command_desc big = make("log.read");
+	big.result_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"}},"required":["text"]})");
+	big.invoke = [](const cmd::call&) {
+		return cmd::result::success(json::object{ { "text", std::string(17u * 1024u * 1024u, 'x') } });
+	};
+	add(std::move(big));
+	cmd::command_desc capture = make("viewport.capture");
+	capture.args_schema = json_of(capture_args_schema);
+	capture.result_schema = json_of(capture_result_schema);
+	capture.invoke = [](const cmd::call&) {
+		return cmd::result::success(json::object{ { "viewport", "scene" }, { "width", 1 }, { "height", 1 }, { "format", "png" },
+			{ "png_base64", std::string(17u * 1024u * 1024u, 'A') } });
+	};
+	add(std::move(capture));
+
+	const mcp::call_result text = call_tool("log_read");
+	BOOST_TEST(text.is_error);
+	BOOST_REQUIRE_EQUAL(text.content.size(), 1u);
+	BOOST_TEST(text.content[0].text.find("too large") != std::string::npos);
+	BOOST_TEST(text.structured.is_null());
+
+	const mcp::call_result image = call_tool("viewport_capture", R"({"width":10})");
+	BOOST_TEST(image.is_error);
+	BOOST_REQUIRE_EQUAL(image.content.size(), 1u);
+	BOOST_TEST((image.content[0].type == mcp::content_block::kind::text));
+	BOOST_TEST(image.content[0].text.find("too large") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(HostGoneBeforeTheDrain_AnswersWithAnError)
@@ -389,7 +456,7 @@ BOOST_AUTO_TEST_CASE(ReadResource_RunsTheCommandAndReturnsTextOrABlob)
 	log.invoke = [](const cmd::call&) { return cmd::result::success(json_of(R"({"entries":[]})")); };
 	add(std::move(log));
 	cmd::command_desc capture = make("viewport.capture");
-	capture.args_schema = json_of(R"({"type":"object","properties":{"viewport":{"type":"string"}},"additionalProperties":false})");
+	capture.args_schema = json_of(capture_args_schema);
 	capture.result_schema = json_of(capture_result_schema);
 	capture.invoke = [&viewports](const cmd::call& request) {
 		viewports.push_back(text_of(request.args.as_object().at("viewport")));
@@ -421,7 +488,7 @@ BOOST_AUTO_TEST_CASE(ReadResource_UnknownOrUnavailableOrFailing)
 	BOOST_TEST(!read_resource("snk://log").found);
 
 	cmd::command_desc capture = make("viewport.capture");
-	capture.args_schema = json_of(R"({"type":"object","properties":{"viewport":{"type":"string"}},"additionalProperties":false})");
+	capture.args_schema = json_of(capture_args_schema);
 	capture.invoke = [](const cmd::call&) { return cmd::result::failure(cmd::codes::not_found, "unknown viewport 'game'"); };
 	add(std::move(capture));
 	const mcp::resource_result failed = read_resource("snk://viewport/game.png");

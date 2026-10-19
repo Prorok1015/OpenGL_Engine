@@ -1,5 +1,6 @@
 #include "edt_mcp_bridge_host.h"
 
+#include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
@@ -11,7 +12,10 @@
 #include <boost/json/value.hpp>
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <future>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,11 +24,56 @@
 namespace json = boost::json;
 
 namespace {
-	// The domains (the part of a command id before the first dot) whose commands only read. A6a exposes nothing else;
-	// the query commands of A4 (scene, node, component, asset, selection, problems) are listed so they appear
-	// the day they are registered, provided their metadata says they do not mutate.
-	constexpr std::array<std::string_view, 10> read_domains = {
-		"log", "job", "dialog", "viewport", "scene", "node", "component", "asset", "selection", "problems" };
+	// The domains (the part of a command id before the first dot) whose commands only read, and that exist today.
+	// `mutates` defaults to false for a command, so a domain that is listed here before its commands exist would
+	// expose whatever gets registered under it, flag or no flag: the query domains of A4 (scene, node, component,
+	// asset, selection, problems) are added by A4 itself, one reviewed domain at a time.
+	constexpr std::array<std::string_view, 4> read_domains = { "log", "job", "dialog", "viewport" };
+
+	// What an agent may ask of viewport.capture. A request for 8192 x 8192 is a quarter of a gigabyte of readback
+	// and copies; the answer is a PNG that has to be base64 encoded and sent.
+	constexpr std::int64_t agent_max_capture_side = 2048;
+	// Width asked when the agent names no size (the design's 1280 pixels on the long side, for a landscape view).
+	constexpr std::int64_t agent_default_capture_width = 1280;
+	// Largest answer sent to an agent, in bytes of JSON or base64 text.
+	constexpr std::size_t agent_max_response_bytes = 16u * 1024u * 1024u;
+
+	bool is_capture(std::string_view command_id)
+	{
+		return command_id == "viewport.capture";
+	}
+
+	// Limits the size an agent asks of viewport.capture. A size that is not an integer is left for the schema check of
+	// the registry to refuse. Returns the reason when the request is too big.
+	std::optional<std::string> limit_capture_args(json::value& args)
+	{
+		if (!args.is_object()) {
+			return std::nullopt;
+		}
+		json::object& object = args.as_object();
+		bool sized = false;
+		for (const char* side : { "width", "height" }) {
+			const json::value* value = object.if_contains(side);
+			if (value == nullptr) {
+				continue;
+			}
+			sized = true;
+			const std::optional<std::int64_t> number = cmd::json_schema::integer_of(*value);
+			if (number && *number > agent_max_capture_side) {
+				return std::string(side) + " is limited to " + std::to_string(agent_max_capture_side) + " pixels for an agent";
+			}
+		}
+		if (!sized) {
+			object["width"] = agent_default_capture_width;
+		}
+		return std::nullopt;
+	}
+
+	std::string too_large_text(std::size_t bytes)
+	{
+		return "the result is too large to send (" + std::to_string(bytes) + " bytes, the limit is "
+			+ std::to_string(agent_max_response_bytes) + "); ask for less (a smaller size, a smaller page)";
+	}
 
 	std::string_view domain_of(std::string_view id)
 	{
@@ -90,10 +139,19 @@ namespace {
 			json::object& object = value.as_object();
 			const json::value* png = object.if_contains("png_base64");
 			if (png != nullptr && png->is_string()) {
+				if (png->as_string().size() > agent_max_response_bytes) {
+					return error_result(too_large_text(png->as_string().size()));
+				}
 				result.content.push_back(mcp::content_block::make_image(text_of(png->as_string()), "image/png"));
 				object.erase("png_base64");
 				result.content.push_back(mcp::content_block::make_text(json::serialize(value)));
+				result.structured = std::move(value);
+				return result;
 			}
+		}
+		const std::size_t size = json::serialize(value).size();
+		if (size > agent_max_response_bytes) {
+			return error_result(too_large_text(size));
 		}
 		result.structured = std::move(value);
 		return result;
@@ -212,7 +270,14 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 		}
 		// Copied first: the command may unregister itself while it runs.
 		const std::string id = command->id;
-		std::future<cmd::result> outcome = state->queue->call_now_or_post(id, args, cmd::origin::agent(session));
+		json::value limited = args;
+		if (is_capture(id)) {
+			if (const std::optional<std::string> refusal = limit_capture_args(limited)) {
+				done(error_result(*refusal));
+				return;
+			}
+		}
+		std::future<cmd::result> outcome = state->queue->call_now_or_post(id, std::move(limited), cmd::origin::agent(session));
 		// Ready: this runs on the main thread, where call_now_or_post runs the command inline.
 		done(to_call_result(outcome.get()));
 	});
@@ -259,7 +324,11 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 			return;
 		}
 		const std::string id = command->id;
-		std::future<cmd::result> outcome = state->queue->call_now_or_post(id, json::parse(def->args), cmd::origin::agent(session));
+		json::value resource_args = json::parse(def->args);
+		if (is_capture(id)) {
+			limit_capture_args(resource_args);
+		}
+		std::future<cmd::result> outcome = state->queue->call_now_or_post(id, std::move(resource_args), cmd::origin::agent(session));
 		cmd::result result = outcome.get();
 		if (!result.ok) {
 			done(unavailable(result.code + ": " + result.error));
@@ -275,6 +344,10 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 			content.blob = text_of(png->as_string());
 		} else {
 			content.text = json::serialize(result.value);
+		}
+		if (content.blob.size() + content.text.size() > agent_max_response_bytes) {
+			done(unavailable(too_large_text(content.blob.size() + content.text.size())));
+			return;
 		}
 		mcp::resource_result found;
 		found.found = true;

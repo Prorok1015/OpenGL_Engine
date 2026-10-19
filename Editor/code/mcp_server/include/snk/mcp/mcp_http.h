@@ -95,6 +95,10 @@ namespace mcp
 		http_request take();
 		// Headers are complete, the body is not, and the client waits for "100 Continue".
 		bool expects_continue() const { return m_headers_done && m_expect_continue; }
+		// The request whose head is complete (its body may still be missing); valid while expects_continue().
+		const http_request& pending_request() const { return m_request; }
+		// Bytes received that no request has consumed yet: a request has begun.
+		bool buffered() const { return !m_buffer.empty(); }
 
 		int error_status() const { return m_error_status; }
 		const std::string& error_message() const { return m_error_message; }

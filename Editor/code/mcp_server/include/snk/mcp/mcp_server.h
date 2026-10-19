@@ -25,8 +25,11 @@ namespace mcp
 		std::size_t max_sessions = 8;
 		std::size_t max_header_bytes = 16 * 1024;
 		std::size_t max_message_bytes = 1024 * 1024;
-		// A request must arrive within this time of the connection opening or of the previous response.
-		std::chrono::milliseconds read_timeout{ 60000 };
+		// One deadline per request: from its first byte, the whole request (head and body) must have arrived within
+		// this time. It is not renewed by later bytes, so a client that trickles one byte at a time is cut off.
+		std::chrono::milliseconds request_timeout{ 10000 };
+		// A connection that sends no first byte of a request this long after it opened or after the last response is closed.
+		std::chrono::milliseconds idle_timeout{ 60000 };
 		server_info info;
 	};
 

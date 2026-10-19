@@ -238,6 +238,7 @@ namespace {
 mcp::endpoint::endpoint(host& application, endpoint_config config)
 	: m_host(application)
 	, m_config(std::move(config))
+	, m_state(std::make_shared<shared_state>())
 {
 }
 
@@ -253,8 +254,8 @@ void mcp::endpoint::set_port(std::uint16_t port)
 
 std::size_t mcp::endpoint::session_count() const
 {
-	std::lock_guard lock(m_mutex);
-	return m_sessions.size();
+	std::lock_guard lock(m_state->mutex);
+	return m_state->sessions.size();
 }
 
 bool mcp::endpoint::host_header_ok(const http_request& request) const
@@ -319,21 +320,27 @@ void mcp::endpoint::handle(const http_request& request, responder respond)
 	}
 }
 
-void mcp::endpoint::route(const http_request& request, const responder& respond)
+std::optional<mcp::http_response> mcp::endpoint::check_access(const http_request& request) const
 {
 	// DNS rebinding: a page on another origin can make the browser connect to 127.0.0.1 under its own host name.
 	if (!host_header_ok(request)) {
-		respond(error_response(403, invalid_request, "forbidden host", true));
-		return;
+		return error_response(403, invalid_request, "forbidden host", true);
 	}
 	if (!origin_ok(request)) {
-		respond(error_response(403, invalid_request, "forbidden origin", true));
-		return;
+		return error_response(403, invalid_request, "forbidden origin", true);
 	}
 	if (!token_ok(request)) {
 		http_response response = error_response(401, invalid_request, "a bearer token is required", true);
 		response.set_header("WWW-Authenticate", "Bearer realm=\"snk-editor\"");
-		respond(std::move(response));
+		return response;
+	}
+	return std::nullopt;
+}
+
+void mcp::endpoint::route(const http_request& request, const responder& respond)
+{
+	if (std::optional<http_response> denied = check_access(request)) {
+		respond(std::move(*denied));
 		return;
 	}
 	if (path_of(request.target) != m_config.path) {
@@ -361,9 +368,9 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 		error = error_response(400, invalid_request, "the Mcp-Session-Id header is required");
 		return false;
 	}
-	std::lock_guard lock(m_mutex);
-	const auto found = m_sessions.find(*header);
-	if (found == m_sessions.end()) {
+	std::lock_guard lock(m_state->mutex);
+	const auto found = m_state->sessions.find(*header);
+	if (found == m_state->sessions.end()) {
 		error = error_response(404, invalid_request, "unknown session, initialize again");
 		return false;
 	}
@@ -376,11 +383,11 @@ std::string mcp::endpoint::create_session()
 {
 	std::string id = random_hex(16);
 	{
-		std::lock_guard lock(m_mutex);
+		std::lock_guard lock(m_state->mutex);
 		// A client that never sent DELETE must not lock the others out: the oldest session makes room.
-		while (!m_sessions.empty() && m_sessions.size() >= m_config.max_sessions) {
-			auto oldest = m_sessions.begin();
-			for (auto it = m_sessions.begin(); it != m_sessions.end(); ++it) {
+		while (!m_state->sessions.empty() && m_state->sessions.size() >= m_config.max_sessions) {
+			auto oldest = m_state->sessions.begin();
+			for (auto it = m_state->sessions.begin(); it != m_state->sessions.end(); ++it) {
 				if (it->second.serial < oldest->second.serial) {
 					oldest = it;
 				}
@@ -388,11 +395,11 @@ std::string mcp::endpoint::create_session()
 			if (oldest->second.channel) {
 				oldest->second.channel->close();
 			}
-			m_sessions.erase(oldest);
+			m_state->sessions.erase(oldest);
 		}
 		session created;
-		created.serial = m_next_serial++;
-		m_sessions.emplace(id, std::move(created));
+		created.serial = m_state->next_serial++;
+		m_state->sessions.emplace(id, std::move(created));
 	}
 	return id;
 }
@@ -637,26 +644,44 @@ void mcp::endpoint::on_subscribe(const json::value& id, const json::object& para
 		return;
 	}
 	const std::string text(uri->get_string().c_str(), uri->get_string().size());
-	bool too_many = false;
-	{
-		std::lock_guard lock(m_mutex);
-		const auto found = m_sessions.find(session_id);
-		if (found != m_sessions.end()) {
-			auto& subscriptions = found->second.subscriptions;
-			if (!subscribe) {
-				subscriptions.erase(text);
-			} else if (subscriptions.size() >= m_config.max_subscriptions_per_session && subscriptions.count(text) == 0) {
-				too_many = true;
-			} else {
-				subscriptions.insert(text);
+	if (!subscribe) {
+		{
+			std::lock_guard lock(m_state->mutex);
+			const auto found = m_state->sessions.find(session_id);
+			if (found != m_state->sessions.end()) {
+				found->second.subscriptions.erase(text);
 			}
 		}
-	}
-	if (too_many) {
-		respond(json_response(rpc_error(id, invalid_params, "too many subscriptions")));
+		respond(json_response(rpc_result(id, json::object{})));
 		return;
 	}
-	respond(json_response(rpc_result(id, json::object{})));
+	// Only a resource the host offers can be subscribed to; the list may arrive later, so the state is captured.
+	const std::size_t limit = m_config.max_subscriptions_per_session;
+	m_host.list_resources([state = m_state, limit, id, session_id, text, respond](std::vector<resource_info> resources) {
+		const bool known = std::any_of(resources.begin(), resources.end(), [&text](const resource_info& r) { return r.uri == text; });
+		if (!known) {
+			respond(json_response(rpc_error(id, invalid_params, "unknown resource")));
+			return;
+		}
+		bool too_many = false;
+		{
+			std::lock_guard lock(state->mutex);
+			const auto found = state->sessions.find(session_id);
+			if (found != state->sessions.end()) {
+				auto& subscriptions = found->second.subscriptions;
+				if (subscriptions.size() >= limit && subscriptions.count(text) == 0) {
+					too_many = true;
+				} else {
+					subscriptions.insert(text);
+				}
+			}
+		}
+		if (too_many) {
+			respond(json_response(rpc_error(id, invalid_params, "too many subscriptions")));
+			return;
+		}
+		respond(json_response(rpc_result(id, json::object{})));
+	});
 }
 
 void mcp::endpoint::handle_get(const http_request& request, const responder& respond)
@@ -678,9 +703,9 @@ void mcp::endpoint::handle_get(const http_request& request, const responder& res
 	// The first frame tells the client the stream is attached: whatever is notified after it is delivered.
 	channel->push(": stream open\n\n");
 	{
-		std::lock_guard lock(m_mutex);
-		const auto found = m_sessions.find(session_id);
-		if (found == m_sessions.end()) {
+		std::lock_guard lock(m_state->mutex);
+		const auto found = m_state->sessions.find(session_id);
+		if (found == m_state->sessions.end()) {
 			// Deleted between the lookup and now.
 			respond(error_response(404, invalid_request, "unknown session, initialize again"));
 			return;
@@ -711,8 +736,8 @@ void mcp::endpoint::handle_delete(const http_request& request, const responder& 
 		return;
 	}
 	{
-		std::lock_guard lock(m_mutex);
-		m_sessions.erase(session_id);
+		std::lock_guard lock(m_state->mutex);
+		m_state->sessions.erase(session_id);
 	}
 	if (channel) {
 		channel->close();
@@ -724,8 +749,8 @@ void mcp::endpoint::notify_sessions(const std::string* uri, const std::string& f
 {
 	std::vector<std::shared_ptr<event_channel>> targets;
 	{
-		std::lock_guard lock(m_mutex);
-		for (const auto& entry : m_sessions) {
+		std::lock_guard lock(m_state->mutex);
+		for (const auto& entry : m_state->sessions) {
 			const session& s = entry.second;
 			if (!s.channel) {
 				continue;
@@ -756,8 +781,8 @@ void mcp::endpoint::close_all()
 {
 	std::map<std::string, session> dropped;
 	{
-		std::lock_guard lock(m_mutex);
-		dropped.swap(m_sessions);
+		std::lock_guard lock(m_state->mutex);
+		dropped.swap(m_state->sessions);
 	}
 	for (auto& entry : dropped) {
 		if (entry.second.channel) {

@@ -111,6 +111,17 @@ BOOST_AUTO_TEST_CASE(ExpectContinue_IsReportedBeforeTheBody)
 	BOOST_TEST(!parser.expects_continue());
 }
 
+BOOST_AUTO_TEST_CASE(PendingRequest_IsReadableBeforeTheBodyArrives)
+{
+	mcp::http_request_parser parser;
+	BOOST_TEST(!parser.buffered());
+	BOOST_REQUIRE(parser.feed("POST /mcp HTTP/1.1\r\nExpect: 100-continue\r\nAuthorization: Bearer t\r\nContent-Length: 2\r\n\r\n") == state::need_more);
+	BOOST_TEST(parser.buffered());
+	BOOST_REQUIRE(parser.expects_continue());
+	BOOST_REQUIRE(parser.pending_request().header("authorization") != nullptr);
+	BOOST_TEST(*parser.pending_request().header("authorization") == "Bearer t");
+}
+
 BOOST_AUTO_TEST_CASE(HeadTooLarge_Is431)
 {
 	mcp::http_limits limits;
@@ -227,6 +238,17 @@ BOOST_AUTO_TEST_CASE(StreamHead_HasNoContentLength)
 	response.set_header("Content-Type", "text/event-stream");
 	BOOST_TEST(mcp::serialize_stream_head(response)
 		== "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n\r\n");
+}
+
+BOOST_AUTO_TEST_CASE(ReasonPhrase_NamesTheStatusesTheServerSends)
+{
+	BOOST_TEST(mcp::reason_phrase(500) == "Internal Server Error");
+	BOOST_TEST(mcp::reason_phrase(403) == "Forbidden");
+	BOOST_TEST(mcp::reason_phrase(401) == "Unauthorized");
+	BOOST_TEST(mcp::reason_phrase(413) == "Payload Too Large");
+	mcp::http_response response;
+	response.status = 500;
+	BOOST_TEST(mcp::serialize_response(response).rfind("HTTP/1.1 500 Internal Server Error\r\n", 0) == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(SseMessage_IsOneEvent)

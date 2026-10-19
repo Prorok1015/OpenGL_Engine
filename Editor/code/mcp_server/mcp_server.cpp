@@ -39,6 +39,7 @@
 #include <deque>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -52,6 +53,10 @@ namespace mcp::detail
 {
 	class connection;
 
+	// How many frames of an event stream may wait to be written. A subscriber that does not read falls behind and is
+	// dropped instead of growing the write queue.
+	constexpr std::size_t max_stream_backlog = 256;
+
 	// Everything the server shares with its connections. The connections hold it by shared_ptr, and it holds them
 	// only weakly, so no cycle keeps it alive after stop().
 	class server_core : public std::enable_shared_from_this<server_core>
@@ -62,6 +67,10 @@ namespace mcp::detail
 
 		bool start();
 		void stop();
+		bool running() const
+		{
+			return running_flag.load() && !thread_done.load();
+		}
 
 		host& application;
 		server_config config;
@@ -72,6 +81,8 @@ namespace mcp::detail
 		asio::executor_work_guard<asio::io_context::executor_type> work{ asio::make_work_guard(io) };
 		std::thread thread;
 		std::atomic<bool> running_flag{ false };
+		// Set when the I/O thread has left run(), however it got there.
+		std::atomic<bool> thread_done{ false };
 		std::atomic<std::uint16_t> bound_port{ 0 };
 		std::atomic<std::size_t> open_connections{ 0 };
 		// I/O thread only.
@@ -84,6 +95,7 @@ namespace mcp::detail
 
 	// One client socket: reads requests, hands them to the endpoint, writes the responses, and feeds an event stream.
 	// All members are touched on the I/O thread only; answers that come from other threads are posted to it.
+	// Every handler runs inside guarded(): an exception ends that connection, not the I/O loop.
 	class connection : public std::enable_shared_from_this<connection>
 	{
 	public:
@@ -103,7 +115,7 @@ namespace mcp::detail
 
 		void start()
 		{
-			read_more();
+			guarded([this] { read_more(); });
 		}
 
 		void close()
@@ -123,6 +135,17 @@ namespace mcp::detail
 			}
 		}
 
+		// The answer of the host, posted to the I/O thread.
+		void deliver_from_host(http_response response)
+		{
+			guarded([&] { deliver(std::move(response)); });
+		}
+
+		void flush_from_stream()
+		{
+			guarded([this] { flush_stream(); });
+		}
+
 	private:
 		struct outgoing
 		{
@@ -130,9 +153,27 @@ namespace mcp::detail
 			bool close_after = false;
 		};
 
-		void arm_timer()
+		template<class F>
+		void guarded(F&& body)
 		{
-			m_timer.expires_after(m_core->config.read_timeout);
+			try {
+				body();
+			} catch (const std::exception& e) {
+				fail(e.what());
+			} catch (...) {
+				fail("unknown exception");
+			}
+		}
+
+		void fail(const char* what)
+		{
+			m_core->application.log(log_level::error, std::string("an MCP connection failed and was closed: ") + what);
+			close();
+		}
+
+		void arm_timer(std::chrono::milliseconds limit)
+		{
+			m_timer.expires_after(limit);
 			auto self = shared_from_this();
 			m_timer.async_wait([self](const boost::system::error_code& ec) {
 				if (!ec) {
@@ -146,23 +187,40 @@ namespace mcp::detail
 			if (m_closed) {
 				return;
 			}
-			arm_timer();
+			// Waiting for the first byte of a request: the idle limit. Once a request has begun its one deadline
+			// (armed in feed) keeps running; a byte arriving does not renew it.
+			if (!m_in_request) {
+				arm_timer(m_core->config.idle_timeout);
+			}
 			auto self = shared_from_this();
 			m_socket.async_read_some(asio::buffer(m_chunk), [self](const boost::system::error_code& ec, std::size_t count) {
-				if (ec) {
-					self->close();
-					return;
-				}
-				self->feed(std::string_view(self->m_chunk.data(), count));
+				self->guarded([&] {
+					if (ec) {
+						self->close();
+						return;
+					}
+					self->feed(std::string_view(self->m_chunk.data(), count));
+				});
 			});
 		}
 
 		void feed(std::string_view data)
 		{
-			switch (m_parser.feed(data)) {
+			const http_request_parser::state outcome = m_parser.feed(data);
+			if (!m_in_request && (!data.empty() || m_parser.buffered())) {
+				m_in_request = true;
+				arm_timer(m_core->config.request_timeout);
+			}
+			switch (outcome) {
 			case http_request_parser::state::need_more:
 				if (m_parser.expects_continue() && !m_sent_continue) {
 					m_sent_continue = true;
+					// "100 Continue" invites the client to send the body; not for a request that would be refused.
+					if (std::optional<http_response> denied = m_core->ep.check_access(m_parser.pending_request())) {
+						m_awaiting = true;
+						deliver(std::move(*denied));
+						return;
+					}
 					write("HTTP/1.1 100 Continue\r\n\r\n", false);
 				}
 				read_more();
@@ -193,6 +251,7 @@ namespace mcp::detail
 		{
 			// The host may take as long as it needs; only the wait for the client is timed.
 			m_timer.cancel();
+			m_in_request = false;
 			m_awaiting = true;
 			m_keep_alive = request.keep_alive;
 			m_sent_continue = false;
@@ -204,7 +263,7 @@ namespace mcp::detail
 			m_core->ep.handle(request, [core, weak](http_response response) {
 				asio::post(core->io, [weak, response = std::move(response)]() mutable {
 					if (auto self = weak.lock()) {
-						self->deliver(std::move(response));
+						self->deliver_from_host(std::move(response));
 					}
 				});
 			});
@@ -233,6 +292,7 @@ namespace mcp::detail
 		void start_stream(http_response response)
 		{
 			m_channel = std::move(response.stream);
+			m_timer.cancel();
 			write(serialize_stream_head(response), false);
 			std::weak_ptr<connection> weak = weak_from_this();
 			std::weak_ptr<server_core> weak_core = m_core;
@@ -243,7 +303,7 @@ namespace mcp::detail
 				}
 				asio::post(core->io, [weak] {
 					if (auto self = weak.lock()) {
-						self->flush_stream();
+						self->flush_from_stream();
 					}
 				});
 			});
@@ -257,6 +317,11 @@ namespace mcp::detail
 			}
 			std::vector<std::string> frames = m_channel->take();
 			const bool closed = m_channel->closed();
+			if (m_out.size() + frames.size() > max_stream_backlog) {
+				m_core->application.log(log_level::warn, "an MCP event stream does not keep up and was closed");
+				close();
+				return;
+			}
 			for (std::string& frame : frames) {
 				write(std::move(frame), false);
 			}
@@ -271,11 +336,13 @@ namespace mcp::detail
 		{
 			auto self = shared_from_this();
 			m_socket.async_read_some(asio::buffer(m_chunk), [self](const boost::system::error_code& ec, std::size_t) {
-				if (ec) {
-					self->close();
-					return;
-				}
-				self->watch_peer();
+				self->guarded([&] {
+					if (ec) {
+						self->close();
+						return;
+					}
+					self->watch_peer();
+				});
 			});
 		}
 
@@ -300,7 +367,7 @@ namespace mcp::detail
 			m_writing = true;
 			auto self = shared_from_this();
 			asio::async_write(m_socket, asio::buffer(m_out.front().data), [self](const boost::system::error_code& ec, std::size_t) {
-				self->on_written(ec);
+				self->guarded([&] { self->on_written(ec); });
 			});
 		}
 
@@ -329,13 +396,7 @@ namespace mcp::detail
 			}
 			boost::system::error_code ignored;
 			m_socket.shutdown(tcp::socket::shutdown_send, ignored);
-			m_timer.expires_after(std::chrono::seconds(5));
-			auto self = shared_from_this();
-			m_timer.async_wait([self](const boost::system::error_code& ec) {
-				if (!ec) {
-					self->close();
-				}
-			});
+			arm_timer(std::chrono::seconds(5));
 			drain_input();
 		}
 
@@ -343,11 +404,13 @@ namespace mcp::detail
 		{
 			auto self = shared_from_this();
 			m_socket.async_read_some(asio::buffer(m_chunk), [self](const boost::system::error_code& ec, std::size_t) {
-				if (ec) {
-					self->close();
-					return;
-				}
-				self->drain_input();
+				self->guarded([&] {
+					if (ec) {
+						self->close();
+						return;
+					}
+					self->drain_input();
+				});
 			});
 		}
 
@@ -368,6 +431,7 @@ namespace mcp::detail
 		std::shared_ptr<connection> m_awaiting_hold;
 		bool m_closed = false;
 		bool m_awaiting = false;
+		bool m_in_request = false;
 		bool m_keep_alive = true;
 		bool m_sent_continue = false;
 		bool m_writing = false;
@@ -411,8 +475,15 @@ namespace mcp::detail
 		const tcp::endpoint local(asio::ip::address_v4::loopback(), config.port);
 		acceptor.open(local.protocol(), ec);
 		if (!ec) {
-#ifndef _WIN32
-			// Lets a restarted editor take its port back at once. On Windows the option would allow port theft.
+#ifdef _WIN32
+			// SO_REUSEADDR on Windows would let another process bind the same port; the exclusive option forbids it.
+			int exclusive = 1;
+			if (::setsockopt(acceptor.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+				reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
+				application.log(log_level::warn, "the MCP server could not take its port exclusively");
+			}
+#else
+			// Lets a restarted editor take its port back at once.
 			boost::system::error_code option_ec;
 			acceptor.set_option(tcp::acceptor::reuse_address(true), option_ec);
 #endif
@@ -443,13 +514,21 @@ namespace mcp::detail
 
 	void server_core::run()
 	{
-		try {
-			io.run();
-		} catch (const std::exception& e) {
-			application.log(log_level::error, std::string("the MCP server I/O thread failed: ") + e.what());
-		} catch (...) {
-			application.log(log_level::error, "the MCP server I/O thread failed");
+		// A handler that throws ends run(), not the server: log it and go on, unless the context was stopped.
+		for (;;) {
+			try {
+				io.run();
+				break;
+			} catch (const std::exception& e) {
+				application.log(log_level::error, std::string("the MCP server I/O loop caught an exception: ") + e.what());
+			} catch (...) {
+				application.log(log_level::error, "the MCP server I/O loop caught an exception");
+			}
+			if (io.stopped()) {
+				break;
+			}
 		}
+		thread_done = true;
 	}
 
 	void server_core::stop()
@@ -483,27 +562,35 @@ namespace mcp::detail
 			if (ec == asio::error::operation_aborted) {
 				return;
 			}
-			if (ec) {
-				application.log(log_level::warn, "the MCP server could not accept a connection: " + ec.message());
-				// A persistent failure (out of descriptors) must not spin.
-				retry_timer.expires_after(std::chrono::milliseconds(100));
-				retry_timer.async_wait([this](const boost::system::error_code& wait_ec) {
-					if (!wait_ec && acceptor.is_open()) {
-						accept_next();
-					}
-				});
-				return;
+			try {
+				if (ec) {
+					application.log(log_level::warn, "the MCP server could not accept a connection: " + ec.message());
+					// A persistent failure (out of descriptors) must not spin.
+					retry_timer.expires_after(std::chrono::milliseconds(100));
+					retry_timer.async_wait([this](const boost::system::error_code& wait_ec) {
+						if (!wait_ec && acceptor.is_open()) {
+							accept_next();
+						}
+					});
+					return;
+				}
+				if (open_connections.load() >= config.max_connections) {
+					boost::system::error_code ignored;
+					socket.close(ignored);
+				} else {
+					std::erase_if(connections, [](const std::weak_ptr<connection>& weak) { return weak.expired(); });
+					auto client = std::make_shared<connection>(shared_from_this(), std::move(socket));
+					connections.push_back(client);
+					client->start();
+				}
+			} catch (const std::exception& e) {
+				application.log(log_level::error, std::string("the MCP server failed to take a connection: ") + e.what());
+			} catch (...) {
+				application.log(log_level::error, "the MCP server failed to take a connection");
 			}
-			if (open_connections.load() >= config.max_connections) {
-				boost::system::error_code ignored;
-				socket.close(ignored);
-			} else {
-				std::erase_if(connections, [](const std::weak_ptr<connection>& weak) { return weak.expired(); });
-				auto client = std::make_shared<connection>(shared_from_this(), std::move(socket));
-				connections.push_back(client);
-				client->start();
+			if (acceptor.is_open()) {
+				accept_next();
 			}
-			accept_next();
 		});
 	}
 }
@@ -530,7 +617,7 @@ void mcp::server::stop()
 
 bool mcp::server::running() const
 {
-	return m_core->running_flag.load();
+	return m_core->running();
 }
 
 std::uint16_t mcp::server::port() const

@@ -18,6 +18,7 @@ target_link_libraries(snk_mcp_server
 	PUBLIC Boost::json
 	PRIVATE Boost::asio Threads::Threads snk::sanitizers snk::compiler_warnings)
 if(WIN32)
-	# Sockets: asio links them through #pragma comment on MSVC; this keeps other toolchains and the consumers honest.
-	target_link_libraries(snk_mcp_server PUBLIC ws2_32 mswsock)
+	# Sockets (asio links them through #pragma comment on MSVC; this keeps other toolchains and the consumers honest)
+	# and the owner-only access list of the token file (advapi32).
+	target_link_libraries(snk_mcp_server PUBLIC ws2_32 mswsock advapi32)
 endif()

@@ -364,6 +364,65 @@ BOOST_AUTO_TEST_CASE(WrongHostAndOrigin_Are403)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(ExpectContinue_IsAnsweredOnlyForARequestThatPassesTheChecks)
+{
+	fake_host host;
+	mcp::server server(host, make_config());
+	BOOST_REQUIRE(server.start());
+	const std::uint16_t port = server.port();
+	const std::string body = rpc(1, "initialize", initialize_params);
+
+	{
+		// Allowed: "100 Continue", then the body is sent and the real answer comes.
+		test_client client(port);
+		std::string head = request_text(port, "POST", body, {}, mcp_test::test_token, "Expect: 100-continue\r\n");
+		head.resize(head.size() - body.size());
+		client.send(head);
+		const auto interim = client.read_response();
+		BOOST_REQUIRE(interim.has_value());
+		BOOST_TEST(interim->status == 100);
+		client.send(body);
+		const auto final_response = client.read_response();
+		BOOST_REQUIRE(final_response.has_value());
+		BOOST_TEST(final_response->status == 200);
+	}
+	{
+		// No token: refused straight away, the invitation to send the body is never made.
+		test_client client(port);
+		std::string head = request_text(port, "POST", body, {}, {}, "Expect: 100-continue\r\n");
+		head.resize(head.size() - body.size());
+		client.send(head);
+		const auto response = client.read_response();
+		BOOST_REQUIRE(response.has_value());
+		BOOST_TEST(response->status == 401);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(RequestDeadline_CutsOffAClientThatNeverFinishesTheHead)
+{
+	fake_host host;
+	mcp::server_config config = make_config();
+	config.request_timeout = std::chrono::milliseconds(100);
+	mcp::server server(host, config);
+	BOOST_REQUIRE(server.start());
+
+	test_client client(server.port());
+	client.send("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+	BOOST_TEST(client.reaches_end_of_stream());
+}
+
+BOOST_AUTO_TEST_CASE(IdleDeadline_ClosesAConnectionThatSendsNothing)
+{
+	fake_host host;
+	mcp::server_config config = make_config();
+	config.idle_timeout = std::chrono::milliseconds(100);
+	mcp::server server(host, config);
+	BOOST_REQUIRE(server.start());
+
+	test_client client(server.port());
+	BOOST_TEST(client.reaches_end_of_stream());
+}
+
 BOOST_AUTO_TEST_CASE(OversizedBody_Is413)
 {
 	fake_host host;
@@ -397,6 +456,10 @@ BOOST_AUTO_TEST_CASE(Garbage_Is400)
 BOOST_AUTO_TEST_CASE(EventStream_DeliversNotificationsAndEndsOnStop)
 {
 	fake_host host;
+	mcp::resource_info log_resource;
+	log_resource.uri = "snk://log";
+	log_resource.name = "Log";
+	host.set_resources({ log_resource });
 	mcp::server server(host, make_config());
 	BOOST_REQUIRE(server.start());
 	const std::uint16_t port = server.port();

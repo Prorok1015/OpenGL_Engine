@@ -55,6 +55,7 @@ struct edt::agent_server::impl
 	cmd::main_thread_queue queue;
 	mcp_bridge_host bridge;
 	mcp::server server;
+	mcp::connection_info file_info;
 	bool file_written = false;
 };
 
@@ -68,13 +69,16 @@ edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system
 	mcp::connection_info info;
 	info.port = m_impl->server.port();
 	info.token = m_impl->token;
-	// A server nobody can find the token of is no use, and one whose token file cannot be protected is not safe.
+	info.pid = mcp::current_process_id();
+	// A server nobody can find the token of is no use, one whose token file cannot be protected is not safe, and a
+	// project that another running editor already serves would have two editors fighting over one file.
 	const std::string failure = mcp::write_connection_file(snk_dir_of(m_impl->options), info);
 	if (!failure.empty()) {
 		egLOG_ERROR("mcp", "the agent server is stopped: {}", failure);
 		m_impl->server.stop();
 		return;
 	}
+	m_impl->file_info = info;
 	m_impl->file_written = true;
 	egLOG_INFO("mcp", "agent server: {} (port and token in {})", info.url(),
 		mcp::connection_file_path(snk_dir_of(m_impl->options)).string());
@@ -87,7 +91,8 @@ edt::agent_server::~agent_server()
 	}
 	m_impl->server.stop();
 	if (m_impl->file_written) {
-		mcp::remove_connection_file(snk_dir_of(m_impl->options));
+		// Only our own file: another editor may have taken the project over since.
+		mcp::remove_connection_file(snk_dir_of(m_impl->options), m_impl->file_info);
 	}
 }
 

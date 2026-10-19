@@ -25,6 +25,14 @@ using mcp_test::json_of;
 
 constexpr std::uint16_t test_port = 4711;
 
+mcp::resource_info make_resource(std::string uri)
+{
+	mcp::resource_info info;
+	info.name = uri;
+	info.uri = std::move(uri);
+	return info;
+}
+
 std::string text_of(const json::value& value)
 {
 	const json::string& text = value.as_string();
@@ -149,6 +157,30 @@ std::vector<json::value> events_of(const std::vector<std::string>& frames)
 }
 
 BOOST_FIXTURE_TEST_SUITE(McpEndpointGuardTests, endpoint_fixture)
+
+BOOST_AUTO_TEST_CASE(CheckAccess_RefusesWithoutHandlingTheRequest)
+{
+	const mcp::http_request good = make_request("POST", rpc("1", "ping"));
+	BOOST_TEST(!ep.check_access(good).has_value());
+
+	mcp::http_request no_token = good;
+	remove_header(no_token, "authorization");
+	const std::optional<mcp::http_response> unauthorized = ep.check_access(no_token);
+	BOOST_REQUIRE(unauthorized.has_value());
+	BOOST_TEST(unauthorized->status == 401);
+	BOOST_TEST(unauthorized->close);
+
+	mcp::http_request bad_host = good;
+	set_header(bad_host, "host", "evil.example:4711");
+	const std::optional<mcp::http_response> forbidden = ep.check_access(bad_host);
+	BOOST_REQUIRE(forbidden.has_value());
+	BOOST_TEST(forbidden->status == 403);
+
+	mcp::http_request bad_origin = good;
+	set_header(bad_origin, "origin", "http://evil.example");
+	BOOST_REQUIRE(ep.check_access(bad_origin).has_value());
+	BOOST_TEST(host.calls().empty());
+}
 
 BOOST_AUTO_TEST_CASE(NoToken_Is401AndTheConnectionCloses)
 {
@@ -594,8 +626,25 @@ BOOST_AUTO_TEST_CASE(Get_NeedsTheEventStreamAcceptAndASession)
 	BOOST_TEST(send(get_stream(*this, "ffffffffffffffffffffffffffffffff")).status == 404);
 }
 
+BOOST_AUTO_TEST_CASE(Subscribe_OnlyToAResourceTheHostOffers)
+{
+	const std::string session = initialize();
+	const json::value unknown = call(session, "resources/subscribe", R"({"uri":"snk://nope"})");
+	BOOST_TEST(unknown.at("error").at("code").as_int64() == -32602);
+	// Nothing was recorded for it: a later notification finds no subscriber.
+	const auto stream = send(get_stream(*this, session)).stream;
+	stream->take();
+	ep.notify_resource_updated("snk://nope");
+	BOOST_TEST(stream->take().empty());
+
+	host.set_resources({ make_resource("snk://log") });
+	BOOST_TEST(call(session, "resources/subscribe", R"({"uri":"snk://log"})").at("result").as_object().empty());
+	BOOST_TEST(call(session, "resources/subscribe", "{}").at("error").at("code").as_int64() == -32602);
+}
+
 BOOST_AUTO_TEST_CASE(ResourceUpdates_GoOnlyToSubscribers)
 {
+	host.set_resources({ make_resource("snk://log"), make_resource("snk://other") });
 	const std::string subscriber = initialize();
 	const std::string bystander = initialize();
 	const auto subscriber_stream = send(get_stream(*this, subscriber)).stream;
@@ -753,6 +802,7 @@ BOOST_AUTO_TEST_CASE(TooManySessions_TheOldestMakesRoom)
 BOOST_AUTO_TEST_CASE(TooManySubscriptions_AreRefused)
 {
 	fake_host host;
+	host.set_resources({ make_resource("snk://a"), make_resource("snk://b"), make_resource("snk://c") });
 	mcp::endpoint_config config = make_config();
 	config.max_subscriptions_per_session = 2;
 	mcp::endpoint ep(host, config);
