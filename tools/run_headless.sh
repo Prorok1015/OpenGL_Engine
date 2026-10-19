@@ -56,6 +56,12 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# 0 would mean "never freeze", and the run would wait out the whole settle timeout.
+if [[ -n "$FRAMES" && ! "$FRAMES" =~ ^[1-9][0-9]*$ ]]; then
+	echo "--frames needs a positive integer, got: $FRAMES" >&2
+	exit 2
+fi
+
 for tool in Xvfb xdotool import; do
 	command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 2; }
 done
@@ -103,7 +109,11 @@ if [[ -n "$FRAMES" ]]; then
 		grep -q 'deterministic scene settled' "$LOG" && break
 		sleep 0.5
 	done
-	grep -q 'deterministic scene settled' "$LOG" || echo "warning: scene did not settle within 240 s" >&2
+	if ! grep -q 'deterministic scene settled' "$LOG"; then
+		echo "error: scene did not settle within 240 s (editor alive: $(alive && echo yes || echo no)); log: $LOG" >&2
+		tail -20 "$LOG" >&2
+		exit 1
+	fi
 	sleep 1 # a few frozen frames, so ImGui hover/fade state settles
 fi
 

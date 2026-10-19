@@ -7,6 +7,7 @@
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_api.h>
 
@@ -65,7 +66,9 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	data.construct<app::deterministic_time>(time);
 	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time);
 	if (time.enabled()) {
-		static_cast<app::loop_service&>(loop).set_settled_probe([](ds::app_data_storage& storage) {
+		auto* loop_impl = dynamic_cast<app::loop_service*>(&loop);
+		ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
+		if (loop_impl) loop_impl->set_settled_probe([](ds::app_data_storage& storage) {
 			auto& tasks = storage.require<ds::task_system>();
 			return storage.require<::res::resource_system>().pending_loads() == 0
 				&& tasks.pending_main(ds::main_class::general) == 0
