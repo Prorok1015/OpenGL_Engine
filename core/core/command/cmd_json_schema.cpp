@@ -49,6 +49,21 @@ namespace {
 		return v.as_double();
 	}
 
+	// True if the schema's "type" is `name` or a list holding it. A keyword that only means something for one type is
+	// refused on any other, so a schema never validates less than it says.
+	bool declares_type(const json::object& obj, std::string_view name)
+	{
+		const json::value* type = obj.if_contains("type");
+		if (!type) return false;
+		if (type->is_string()) return type->as_string() == name;
+		if (type->is_array()) {
+			for (const auto& entry : type->as_array()) {
+				if (entry.is_string() && entry.as_string() == name) return true;
+			}
+		}
+		return false;
+	}
+
 	std::optional<std::string> check_node(const json::value& schema, const std::string& path)
 	{
 		if (!schema.is_object()) return std::format("{}: a schema must be an object", path);
@@ -90,9 +105,12 @@ namespace {
 				if (auto err = check_node(sub, std::format("{}.{}", path, std::string_view(name)))) return err;
 			}
 		}
-		if (const json::value* count = obj.if_contains("minProperties"); count && (!count->is_int64() || count->as_int64() < 0))
-			return std::format("{}: minProperties must be a non-negative integer", path);
+		if (const json::value* count = obj.if_contains("minProperties")) {
+			if (!count->is_int64() || count->as_int64() < 0) return std::format("{}: minProperties must be a non-negative integer", path);
+			if (!declares_type(obj, "object")) return std::format("{}: minProperties needs type object", path);
+		}
 		if (const json::value* items = obj.if_contains("items")) {
+			if (!declares_type(obj, "array")) return std::format("{}: items needs type array", path);
 			if (auto err = check_node(*items, path + "[]")) return err;
 		}
 		if (const json::value* extra = obj.if_contains("additionalProperties"); extra && !extra->is_bool())

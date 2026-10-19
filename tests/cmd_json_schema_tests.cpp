@@ -75,7 +75,8 @@ BOOST_AUTO_TEST_CASE(CheckSchema_RejectsBrokenSchemas)
 	for (const char* text : { "1", R"({"type":"thing"})", R"({"type":[]})", R"({"properties":3})",
 		R"({"required":["a"]})", R"({"required":[1],"properties":{"a":{}}})", R"({"additionalProperties":"no"})",
 		R"({"enum":[]})", R"({"minimum":"1"})", R"({"properties":{"a":{"type":"x"}}})",
-		R"({"items":3})", R"({"items":{"type":"x"}})", R"({"minProperties":-1})", R"({"minProperties":"1"})" }) {
+		R"({"type":"array","items":3})", R"({"type":"array","items":{"type":"x"}})",
+		R"({"type":"object","minProperties":-1})", R"({"type":"object","minProperties":"1"})" }) {
 		BOOST_TEST(cmd::json_schema::check_schema(json_of(text)).has_value(), text);
 	}
 }
@@ -92,6 +93,17 @@ BOOST_AUTO_TEST_CASE(Items_ValidatesEveryElementAndNamesTheOffender)
 	BOOST_CHECK(bad_type->find("[1]") != std::string::npos);
 	BOOST_CHECK(cmd::json_schema::validate(schema, json_of(R"([{"id":1,"extra":true}])")));
 	BOOST_CHECK(cmd::json_schema::validate(schema, json_of(R"([{}])")));
+}
+
+// items means something for arrays and minProperties for objects only: elsewhere they are refused, not ignored.
+BOOST_AUTO_TEST_CASE(ItemsAndMinProperties_AreRefusedOnTheWrongType)
+{
+	for (const char* text : { R"({"type":"object","items":{}})", R"({"items":{}})", R"({"type":"string","items":{"type":"string"}})",
+		R"({"type":"array","minProperties":1})", R"({"minProperties":1})", R"({"type":"string","minProperties":0})" }) {
+		BOOST_TEST(cmd::json_schema::check_schema(json_of(text)).has_value(), text);
+	}
+	BOOST_CHECK(!cmd::json_schema::check_schema(json_of(R"({"type":["array","null"],"items":{"type":"integer"}})")));
+	BOOST_CHECK(!cmd::json_schema::check_schema(json_of(R"({"type":["object","null"],"minProperties":1})")));
 }
 
 BOOST_AUTO_TEST_CASE(MinProperties_NeedsAtLeastThatManyKeys)
