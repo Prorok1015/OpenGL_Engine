@@ -271,20 +271,6 @@ BOOST_AUTO_TEST_CASE(ValidateShaderHeadersNamesTheReason)
 	BOOST_TEST(null::validate_shader_headers(headers).find("a.vert") != std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(FrameBufferStackStartsAtTheBackbuffer)
-{
-	null::driver driver;
-	BOOST_TEST(driver.frame_buffer_depth() == 1u);
-	driver.push_frame_buffer();
-	driver.push_frame_buffer();
-	BOOST_TEST(driver.frame_buffer_depth() == 3u);
-	driver.pop_frame_buffer();
-	driver.pop_frame_buffer();
-	BOOST_TEST(driver.frame_buffer_depth() == 1u);
-	BOOST_TEST(driver.calls().push_frame_buffers == 2u);
-	BOOST_TEST(driver.calls().pop_frame_buffers == 2u);
-}
-
 BOOST_AUTO_TEST_CASE(RenderPassesAreCountedAndTheLastOneIsKept)
 {
 	null::driver driver;
@@ -418,21 +404,17 @@ BOOST_AUTO_TEST_CASE(StateAndCallsAreRecorded)
 {
 	null::driver driver;
 	driver.set_viewport({ 0, 0, 640, 480 });
-	driver.set_scissor({ 1, 2, 3, 4 });
 	driver.set_line_size(2.f);
 	driver.set_render_state(render_state::transparent());
-	driver.clear(CLEAR_FLAGS::COLOR_BUFFER);
 
 	auto va = driver.create_vertex_array();
 	driver.draw_indices(va, RENDER_MODE::TRIANGLE, 36);
 	driver.draw_indices(va.get(), RENDER_MODE::LINE, 2, 0, 0);
 
 	BOOST_TEST((driver.viewport() == glm::ivec4{ 0, 0, 640, 480 }));
-	BOOST_TEST((driver.scissor() == glm::ivec4{ 1, 2, 3, 4 }));
 	BOOST_TEST(driver.line_size() == 2.f);
 	BOOST_TEST(driver.current_render_state().blend_states.size() == 1u);
 	BOOST_TEST(driver.calls().render_state_sets == 1u);
-	BOOST_TEST(driver.calls().clears == 1u);
 	BOOST_TEST(driver.calls().draws == 2u);
 }
 

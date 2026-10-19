@@ -196,7 +196,6 @@ gl_type to_gl_type(rnd::driver::texture_header::TYPE type)
 rnd::driver::gl::driver::driver()
 	: m_framebuffers(std::make_shared<framebuffer_registry>())
 {
-	framebuffers.push({ 0, 0 });
 }
 
 rnd::driver::gl::driver::~driver()
@@ -407,133 +406,6 @@ void rnd::driver::gl::driver::end_render_pass()
 	m_in_pass = false;
 }
 
-void rnd::driver::gl::driver::attach_frame_buffer()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-}
-
-void rnd::driver::gl::driver::detach_frame_buffer()
-{
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-void rnd::driver::gl::driver::check_frame_buffer()
-{
-	attach_frame_buffer();
-	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-	if (status != GL_FRAMEBUFFER_COMPLETE) {
-		std::string errorString;
-		switch (status) {
-		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER";
-			break;
-		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:
-			errorString = "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
-			break;
-		case GL_FRAMEBUFFER_UNSUPPORTED:
-			errorString = "GL_FRAMEBUFFER_UNSUPPORTED";
-			break;
-
-		default:
-			errorString = "Unknown Framebuffer Error";
-			break;
-		}
-
-		egLOG("opengl", "Framebuffer is not complete: {0}", errorString);
-		ASSERT_FAIL("ERROR");
-	}
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::push_frame_buffer()
-{
-	GLuint framebuffer = 0;
-	glCreateFramebuffers(1, &framebuffer);
-	CHECK_GL_ERROR();
-	framebuffers.push({ framebuffer, 0 });
-}
-
-void rnd::driver::gl::driver::pop_frame_buffer()
-{
-	if (framebuffers.size() == 1) {
-		ASSERT_FAIL("Trying to pop backbuffer");
-		return;
-	}
-
-	auto [framebuffer, depth_stencil] = framebuffers.top();
-	framebuffers.pop();
-	glDeleteRenderbuffers(1, &depth_stencil);
-	CHECK_GL_ERROR();
-	glDeleteFramebuffers(1, &framebuffer);
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::set_render_target(texture_interface* color, texture_interface* depth_stencil /* = nullptr*/)
-{
-	set_render_targets({ color }, depth_stencil);
-}
-
-void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil /* = nullptr*/)
-{
-	auto& [fb, ds_b] = framebuffers.top();
-	constexpr std::size_t MAX_COLOR_ATTACHMENTS = (GL_COLOR_ATTACHMENT31 - GL_COLOR_ATTACHMENT0 + 1);
-	ASSERT_MSG(colors.size() <= MAX_COLOR_ATTACHMENTS, "Max color attachment is reached!");
-
-	glm::ivec2 rt_size{ 0 };
-	std::size_t color_count = std::min(colors.size(), MAX_COLOR_ATTACHMENTS);
-	ds::fixed_vector<GLenum, MAX_COLOR_ATTACHMENTS> drawBuffers;
-
-	for (std::size_t i = 0; i < color_count; ++i) {
-		if (auto* color = colors[i]) {
-			ASSERT_MSG(color->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
-			auto* gl_color = static_cast<texture*>(color);
-			
-			if (color->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
-				glNamedFramebufferRenderbuffer(fb, GL_COLOR_ATTACHMENT0 + i, GL_RENDERBUFFER, gl_color->get_id());
-			} else {
-				glNamedFramebufferTexture(fb, GL_COLOR_ATTACHMENT0 + i, gl_color->get_id(), 0);
-			}
-			CHECK_GL_ERROR();
-			rt_size = { gl_color->width(), gl_color->height() };
-			drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + i);
-		}
-		else {
-			drawBuffers.push_back(GL_NONE);
-		}
-	}
-
-	if (!drawBuffers.empty()) {
-		glNamedFramebufferDrawBuffers(fb, drawBuffers.size(), drawBuffers.data());
-	} else {
-		glNamedFramebufferDrawBuffers(fb, 0, nullptr);
-	}
-	CHECK_GL_ERROR();
-
-	if (depth_stencil) {
-		ASSERT_MSG(depth_stencil->has_usage(texture_usage::depth_target) || 
-			   depth_stencil->has_usage(texture_usage::stencil_target), "Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
-		auto* gl_depth_stencil = static_cast<texture*>(depth_stencil);
-		
-		if (depth_stencil->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
-			glNamedFramebufferRenderbuffer(fb, gl_depth_stencil->get_attachment_type(), GL_RENDERBUFFER, gl_depth_stencil->get_id());
-		} else {
-			glNamedFramebufferTexture(fb, gl_depth_stencil->get_attachment_type(), gl_depth_stencil->get_id(), 0);
-		}
-		CHECK_GL_ERROR();
-	}
-
-	check_frame_buffer();
-}
-
 void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 {
 	if (viewport != rect) {
@@ -541,77 +413,6 @@ void rnd::driver::gl::driver::set_viewport(glm::ivec4 rect)
 		glViewport(rect[0], rect[1], rect[2], rect[3]);
 		CHECK_GL_ERROR();
 	}
-}
-
-void rnd::driver::gl::driver::set_scissor(glm::ivec4 rect)
-{
-	if (rect.z < 1 || rect.w < 1) {
-		glDisable(GL_SCISSOR_TEST);
-	} else {
-		glEnable(GL_SCISSOR_TEST);
-		glScissor(rect[0], rect[1], rect[2], rect[3]);
-	}
-	CHECK_GL_ERROR();
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags)
-{
-	attach_frame_buffer();
-	glClearDepth(1.0);
-	GLbitfield gl_flags = 0;
-	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) gl_flags |= GL_COLOR_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_BUFFER)) gl_flags |= GL_DEPTH_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::STENCIL_BUFFER)) gl_flags |= GL_STENCIL_BUFFER_BIT;
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_STENCIL_BUFFER)) gl_flags |= (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-	glClear(gl_flags);
-	CHECK_GL_ERROR();
-	detach_frame_buffer();
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags, glm::vec4 color)
-{
-	clear(flags, std::vector<glm::vec4>{color});
-}
-
-void rnd::driver::gl::driver::clear(clear_flags flags, const std::vector<glm::vec4>& colors)
-{
-	if (colors.empty()) {
-		return;
-	}
-
-	attach_frame_buffer();
-
-	if (flags.has_flag(CLEAR_FLAGS::COLOR_BUFFER)) {
-		int i = 0;
-		for (auto& color : colors) {
-			glClearBufferfv(GL_COLOR, i, glm::value_ptr(color));
-			CHECK_GL_ERROR();
-			i++;
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferfv(GL_DEPTH, 0, glm::value_ptr(colors[0]));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::STENCIL_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferiv(GL_STENCIL, 0, reinterpret_cast<const GLint*>(glm::value_ptr(colors[0])));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	if (flags.has_flag(CLEAR_FLAGS::DEPTH_STENCIL_BUFFER)) {
-		if (!colors.empty()) {
-			glClearBufferfi(GL_DEPTH_STENCIL, 0, colors[0].r, static_cast<GLint>(colors[0].g));
-			CHECK_GL_ERROR();
-		}
-	}
-
-	detach_frame_buffer();
 }
 
 void rnd::driver::gl::driver::set_line_size(float size)
@@ -623,9 +424,6 @@ void rnd::driver::gl::driver::set_line_size(float size)
 void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset)
 {
 	GLenum rm = GL_TRIANGLES;
-	if (!m_in_pass) {
-		glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-	}
 	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
 		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 	}
@@ -645,18 +443,11 @@ void rnd::driver::gl::driver::draw_indices(const std::unique_ptr<vertex_array_in
 
 
 	vertices->unbind();
-
-	if (!m_in_pass) {
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	}
 }
 
 void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertices, RENDER_MODE render_mode, unsigned int count, unsigned int base_vertex, unsigned int base_index)
 {
 	GLenum rm = GL_TRIANGLES;
-	if (!m_in_pass) {
-		glBindFramebuffer(GL_FRAMEBUFFER, framebuffers.top().first);
-	}
 	if (render_mode == RENDER_MODE::LINE_STRIP_ADJ) {
 		glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 	}
@@ -668,10 +459,6 @@ void rnd::driver::gl::driver::draw_indices(const vertex_array_interface* vertice
 	vertices->bind();
 	glDrawElementsBaseVertex(rm, count, GL_UNSIGNED_INT, (void*)(sizeof(GLuint) * base_index), base_vertex);
 	vertices->unbind();
-
-	if (!m_in_pass) {
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	}
 }
 
 void rnd::driver::gl::driver::set_render_state(const render_state& state) {

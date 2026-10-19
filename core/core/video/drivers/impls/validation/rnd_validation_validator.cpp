@@ -16,12 +16,7 @@ namespace {
 	{
 		using rnd::driver::validation::trace_op;
 		switch (op) {
-		case trace_op::push_target: return "push";
-		case trace_op::pop_target: return "pop";
-		case trace_op::set_targets: return "targets";
 		case trace_op::set_viewport: return "viewport";
-		case trace_op::set_scissor: return "scissor";
-		case trace_op::clear: return "clear";
 		case trace_op::begin_pass: return "begin_pass";
 		case trace_op::end_pass: return "end_pass";
 		case trace_op::use_program: return "use";
@@ -38,9 +33,7 @@ namespace {
 const char* rnd::driver::validation::rule_name(rule r)
 {
 	switch (r) {
-	case rule::pop_without_push: return "pop_without_push";
 	case rule::unbalanced_at_present: return "unbalanced_at_present";
-	case rule::render_target_without_push: return "render_target_without_push";
 	case rule::attachment_usage: return "attachment_usage";
 	case rule::texture_usage_flags: return "texture_usage_flags";
 	case rule::texture_not_sampled: return "texture_not_sampled";
@@ -50,7 +43,7 @@ const char* rnd::driver::validation::rule_name(rule r)
 	case rule::invalid_render_pass: return "invalid_render_pass";
 	case rule::render_area_outside_target: return "render_area_outside_target";
 	case rule::viewport_outside_target: return "viewport_outside_target";
-	case rule::scissor_outside_target: return "scissor_outside_target";
+	case rule::draw_outside_render_pass: return "draw_outside_render_pass";
 	case rule::draw_without_use: return "draw_without_use";
 	case rule::draw_index_range: return "draw_index_range";
 	case rule::draw_without_layout: return "draw_without_layout";
@@ -90,8 +83,6 @@ std::string rnd::driver::validation::usage_text(texture_usage usage)
 std::string rnd::driver::validation::format_trace_entry(const trace_entry& entry)
 {
 	switch (entry.op) {
-	case trace_op::set_targets:
-		return std::format("#{} targets({} color{})", entry.frame, entry.a, entry.b ? " + depth" : "");
 	case trace_op::begin_pass:
 		return std::format("#{} begin_pass({} color{})", entry.frame, entry.a, entry.b ? " + depth" : "");
 	case trace_op::draw:
@@ -188,15 +179,6 @@ std::string rnd::driver::validation::validator::recent_trace(std::size_t count) 
 	return text.empty() ? "(no commands)" : text;
 }
 
-void rnd::driver::validation::validator::push_target()
-{
-	m_targets.emplace_back();
-	note(trace_op::push_target);
-	if (crosses_budget(++m_current.frame_buffers, m_budget.max_frame_buffers)) {
-		report(rule::budget_frame_buffers, std::format("more than {} frame buffers pushed in one frame", m_budget.max_frame_buffers));
-	}
-}
-
 void rnd::driver::validation::validator::begin_pass(std::string name, target_info target, std::uint32_t colors, bool depth)
 {
 	m_pass_active = true;
@@ -215,6 +197,7 @@ bool rnd::driver::validation::validator::end_pass()
 	}
 	m_pass_active = false;
 	m_pass_name.clear();
+	m_pass_target = {};
 	note(trace_op::end_pass);
 	return true;
 }
@@ -225,17 +208,6 @@ bool rnd::driver::validation::validator::consume_dropped_begin()
 		return false;
 	}
 	--m_dropped_begins;
-	return true;
-}
-
-bool rnd::driver::validation::validator::pop_target()
-{
-	if (m_targets.size() == 1) {
-		report(rule::pop_without_push, "pop_frame_buffer with only the backbuffer on the stack");
-		return false;
-	}
-	m_targets.pop_back();
-	note(trace_op::pop_target);
 	return true;
 }
 
@@ -256,9 +228,6 @@ void rnd::driver::validation::validator::on_program_created()
 void rnd::driver::validation::validator::on_present()
 {
 	note(trace_op::present);
-	if (m_targets.size() != 1) {
-		report(rule::unbalanced_at_present, std::format("frame buffer stack is {} deep at present, expected 1", m_targets.size()));
-	}
 	if (m_pass_active) {
 		report(rule::unbalanced_at_present, std::format("render pass '{}' is still open at present", m_pass_name));
 	}

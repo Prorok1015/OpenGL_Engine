@@ -15,9 +15,7 @@ namespace rnd::driver::validation
 {
 	enum class rule : std::uint8_t
 	{
-		pop_without_push,
 		unbalanced_at_present,
-		render_target_without_push,
 		attachment_usage,
 		texture_usage_flags,
 		texture_not_sampled,
@@ -27,7 +25,7 @@ namespace rnd::driver::validation
 		invalid_render_pass,
 		render_area_outside_target,
 		viewport_outside_target,
-		scissor_outside_target,
+		draw_outside_render_pass,
 		draw_without_use,
 		draw_index_range,
 		draw_without_layout,
@@ -79,12 +77,7 @@ namespace rnd::driver::validation
 
 	enum class trace_op : std::uint8_t
 	{
-		push_target,	// begins a pass-like scope
-		pop_target,		// ends it
-		set_targets,	// a = color attachment count, b = 1 when a depth/stencil attachment is set
 		set_viewport,
-		set_scissor,
-		clear,
 		begin_pass,		// a = color attachment count, b = 1 when a depth/stencil attachment is set
 		end_pass,
 		use_program,
@@ -108,7 +101,7 @@ namespace rnd::driver::validation
 	// "sampled|color_target", or "none".
 	SNK_API std::string usage_text(texture_usage usage);
 
-	// The render target the commands currently go to. The backbuffer (depth 1) has no known extent.
+	// The render target the commands currently go to. The backbuffer has no known extent.
 	struct target_info
 	{
 		bool has_extent = false;
@@ -160,11 +153,7 @@ namespace rnd::driver::validation
 		void drop_begin() { ++m_dropped_begins; }
 		bool consume_dropped_begin();
 
-		std::size_t target_depth() const { return m_targets.size(); }
-		target_info& current_target() { return m_pass_active ? m_pass_target : m_targets.back(); }
-		void push_target();
-		// False (and nothing changes) when only the backbuffer is left.
-		bool pop_target();
+		const target_info& current_target() const { return m_pass_target; }
 
 		void on_program_used() { m_program_used = true; }
 		bool program_used() const { return m_program_used; }
@@ -172,7 +161,7 @@ namespace rnd::driver::validation
 		void on_texture_created();
 		void on_program_created();
 
-		// The end of a frame: the stack must be back at the backbuffer; per-frame state restarts.
+		// The end of a frame: no render pass may be open; per-frame state restarts.
 		void on_present();
 
 	private:
@@ -186,7 +175,6 @@ namespace rnd::driver::validation
 		std::uint64_t m_frame = 0;
 		frame_stats m_current;
 		frame_stats m_last;
-		std::vector<target_info> m_targets{ target_info{} };
 		bool m_program_used = false;
 		bool m_pass_active = false;
 		std::string m_pass_name;

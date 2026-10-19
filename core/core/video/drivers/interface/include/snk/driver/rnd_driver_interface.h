@@ -4,7 +4,6 @@
 #include <memory>
 #include <glm/glm.hpp>
 #include <unordered_map>
-#include <snk/common/ds/ds_bit_frags.hpp>
 #include <snk/driver/rnd_render_pass.h>
 
 namespace rnd::driver
@@ -17,10 +16,6 @@ namespace rnd::driver
 	class uniform_buffer_interface;
 	class buffer_interface;
 	class ssbo_buffer_interface;
-
-	enum class CLEAR_FLAGS { COLOR_BUFFER, DEPTH_BUFFER, STENCIL_BUFFER, DEPTH_STENCIL_BUFFER };
-
-	using clear_flags = ds::bit_flags<CLEAR_FLAGS>;
 
 	// Depth state configuration
 	struct depth_state {
@@ -162,17 +157,7 @@ namespace rnd::driver
 		virtual void begin_render_pass(const render_pass_desc& desc) = 0;
 		virtual void end_render_pass() = 0;
 
-		virtual void push_frame_buffer() = 0;
-		virtual void pop_frame_buffer() = 0;
-		virtual void set_render_target(texture_interface* color, texture_interface* depth_stencil = nullptr) = 0;
-		virtual void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) = 0;
-
 		virtual void set_viewport(glm::ivec4 rect) = 0;
-		// Limits clears and draws to `rect` ({left, top, width, height}); {0,0,0,0} lifts the limit.
-		virtual void set_scissor(glm::ivec4 /*rect*/) {}
-		virtual void clear(clear_flags flags) = 0;
-		virtual void clear(clear_flags flags, glm::vec4 color) = 0;
-		virtual void clear(clear_flags flags, const std::vector<glm::vec4>& colors) = 0;
 		virtual void set_line_size(float size) = 0;
 		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) = 0;
 		virtual void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) = 0;

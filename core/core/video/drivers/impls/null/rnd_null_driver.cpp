@@ -28,47 +28,6 @@ void rnd::driver::null::driver::end_render_pass()
 	++m_calls.render_pass_ends;
 }
 
-void rnd::driver::null::driver::push_frame_buffer()
-{
-	++m_frame_buffer_depth;
-	++m_calls.push_frame_buffers;
-}
-
-void rnd::driver::null::driver::pop_frame_buffer()
-{
-	if (m_frame_buffer_depth == 1) {
-		ASSERT_FAIL("Trying to pop backbuffer");
-		return;
-	}
-	--m_frame_buffer_depth;
-	++m_calls.pop_frame_buffers;
-}
-
-void rnd::driver::null::driver::set_render_target(texture_interface* /*color*/, texture_interface* /*depth_stencil*/)
-{
-	++m_calls.render_target_sets;
-}
-
-void rnd::driver::null::driver::set_render_targets(std::vector<texture_interface*> /*colors*/, texture_interface* /*depth_stencil*/)
-{
-	++m_calls.render_target_sets;
-}
-
-void rnd::driver::null::driver::clear(clear_flags /*flags*/)
-{
-	++m_calls.clears;
-}
-
-void rnd::driver::null::driver::clear(clear_flags /*flags*/, glm::vec4 /*color*/)
-{
-	++m_calls.clears;
-}
-
-void rnd::driver::null::driver::clear(clear_flags /*flags*/, const std::vector<glm::vec4>& /*colors*/)
-{
-	++m_calls.clears;
-}
-
 void rnd::driver::null::driver::draw_indices(const std::unique_ptr<vertex_array_interface>& /*vertices*/, RENDER_MODE /*render_mode*/, unsigned int /*count*/, unsigned int /*offset*/)
 {
 	++m_calls.draws;

@@ -58,25 +58,6 @@ geometry make_geometry(driver_interface& drv, std::size_t index_count, bool with
 	return result;
 }
 
-struct validation_fixture
-{
-	validation_fixture()
-		: chain(std::make_unique<null::swapchain>())
-		, drv(chain.create_driver())
-	{
-	}
-
-	vl::validator& state() { return chain.state(); }
-	null::driver& inner() { return dynamic_cast<null::driver&>(dynamic_cast<vl::driver&>(*drv).inner()); }
-
-	// Passes the whole prologue of a draw: a program in use and a render target pushed.
-	void use_program() { program_object = drv->create_shader(program()); program_object->use(); }
-
-	vl::swapchain chain;
-	std::unique_ptr<driver_interface> drv;
-	std::unique_ptr<shader_interface> program_object;
-};
-
 render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nullptr, const char* name = "test")
 {
 	render_pass_desc pass;
@@ -89,6 +70,40 @@ render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nu
 	pass.debug_name = name;
 	return pass;
 }
+
+struct validation_fixture
+{
+	validation_fixture()
+		: chain(std::make_unique<null::swapchain>())
+		, drv(chain.create_driver())
+	{
+	}
+
+	vl::validator& state() { return chain.state(); }
+	null::driver& inner() { return dynamic_cast<null::driver&>(dynamic_cast<vl::driver&>(*drv).inner()); }
+
+	// A render pass on a small color target, unless one is already open: draws are only valid inside a pass.
+	void open_pass()
+	{
+		if (!state().in_pass()) {
+			pass_target = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+			drv->begin_render_pass(pass_of(pass_target.get()));
+		}
+	}
+
+	// Passes the whole prologue of a draw: a program in use inside a render pass.
+	void use_program()
+	{
+		open_pass();
+		program_object = drv->create_shader(program());
+		program_object->use();
+	}
+
+	vl::swapchain chain;
+	std::unique_ptr<driver_interface> drv;
+	std::unique_ptr<shader_interface> program_object;
+	std::unique_ptr<texture_interface> pass_target;
+};
 
 void expect_only(const vl::validator& state, vl::rule kind, std::size_t count = 1)
 {
@@ -113,18 +128,17 @@ BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 	std::vector<std::byte> bytes(64);
 
 	for (int frame = 0; frame < 3; ++frame) {
-		drv->push_frame_buffer();
-		drv->set_render_target(color.get(), depth.get());
+		render_pass_desc pass = pass_of(color.get(), depth.get());
+		pass.colors[0].load = load_op::clear;
+		pass.render_area = { 8, 8, 16, 16 };
+		drv->begin_render_pass(pass);
 		drv->set_viewport({ 0, 0, 64, 32 });
-		drv->set_scissor({ 8, 8, 16, 16 });
-		drv->clear(CLEAR_FLAGS::COLOR_BUFFER);
 		ubo->set_data(bytes.data(), 64, 0);
 		ssbo->set_data(bytes.data(), 64, 64);
 		use_program();
 		drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
 		drv->draw_indices(mesh.array, RENDER_MODE::TRIANGLE, 3);
-		drv->set_scissor({ 0, 0, 0, 0 });
-		drv->pop_frame_buffer();
+		drv->end_render_pass();
 		drv->set_viewport({ 0, 0, 640, 480 });
 		chain.present();
 	}
@@ -134,101 +148,32 @@ BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 	BOOST_TEST(state().last_frame().draws == 2u);
 	BOOST_TEST(state().last_frame().frame_buffers == 1u);
 	BOOST_TEST(inner().calls().draws == 6u);
-	BOOST_TEST(inner().calls().push_frame_buffers == 3u);
-	BOOST_TEST(inner().calls().pop_frame_buffers == 3u);
+	BOOST_TEST(inner().calls().render_pass_begins == 3u);
+	BOOST_TEST(inner().calls().render_pass_ends == 3u);
 }
 
-BOOST_AUTO_TEST_CASE(PopWithoutPushIsReportedAndNotForwarded)
+BOOST_AUTO_TEST_CASE(PassesBalancedByEndsLeaveNothingOpenAtPresent)
 {
-	drv->pop_frame_buffer();
-
-	expect_only(state(), vl::rule::pop_without_push);
-	BOOST_TEST(inner().calls().pop_frame_buffers == 0u);
-	BOOST_TEST(inner().frame_buffer_depth() == 1u);
-}
-
-BOOST_AUTO_TEST_CASE(PushesBalancedByPopsKeepTheStackAtOneAtPresent)
-{
-	drv->push_frame_buffer();
-	drv->push_frame_buffer();
-	drv->pop_frame_buffer();
-	drv->pop_frame_buffer();
+	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	drv->begin_render_pass(pass_of(color.get()));
+	drv->end_render_pass();
+	drv->begin_render_pass(pass_of(color.get()));
+	drv->end_render_pass();
 	chain.present();
 
 	BOOST_TEST(state().total() == 0u);
-}
-
-BOOST_AUTO_TEST_CASE(AFrameBufferStillPushedAtPresentIsReported)
-{
-	drv->push_frame_buffer();
-	chain.present();
-
-	expect_only(state(), vl::rule::unbalanced_at_present);
-}
-
-BOOST_AUTO_TEST_CASE(SetRenderTargetWithoutPushIsReported)
-{
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	drv->set_render_target(color.get());
-
-	expect_only(state(), vl::rule::render_target_without_push);
-
-	drv->push_frame_buffer();
-	drv->set_render_target(color.get());
-	drv->pop_frame_buffer();
-	BOOST_TEST(state().total() == 1u);
-}
-
-BOOST_AUTO_TEST_CASE(ColorAttachmentWithoutColorTargetUsageIsReported)
-{
-	auto sampled = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
-	drv->push_frame_buffer();
-	drv->set_render_target(sampled.get());
-
-	expect_only(state(), vl::rule::attachment_usage);
-}
-
-BOOST_AUTO_TEST_CASE(DepthAttachmentWithoutDepthOrStencilUsageIsReported)
-{
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto not_depth = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto stencil = drv->create_texture(texture_of(16, 16, texture_usage::stencil_target));
-	drv->push_frame_buffer();
-	drv->set_render_target(color.get(), stencil.get());
-	BOOST_TEST(state().total() == 0u);
-
-	drv->set_render_target(color.get(), not_depth.get());
-	expect_only(state(), vl::rule::attachment_usage);
-}
-
-BOOST_AUTO_TEST_CASE(EveryColorOfSetRenderTargetsIsCheckedForUsage)
-{
-	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto second = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
-	drv->push_frame_buffer();
-	drv->set_render_targets({ first.get(), second.get() }, nullptr);
-
-	expect_only(state(), vl::rule::attachment_usage);
-	BOOST_TEST(inner().calls().render_target_sets == 1u);
-}
-
-BOOST_AUTO_TEST_CASE(AttachmentsOfDifferentSizesAreReportedOnce)
-{
-	auto color = drv->create_texture(texture_of(64, 64, texture_usage::color_target));
-	auto second = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(32, 32, texture_usage::depth_target));
-	drv->push_frame_buffer();
-	drv->set_render_targets({ color.get(), second.get() }, depth.get());
-
-	expect_only(state(), vl::rule::attachment_size_mismatch);
 }
 
 BOOST_AUTO_TEST_CASE(NullAttachmentsAreSkippedByTheChecks)
 {
 	auto depth = drv->create_texture(texture_of(64, 64, texture_usage::depth_target));
-	drv->push_frame_buffer();
-	drv->set_render_target(nullptr, depth.get());
-	drv->set_render_targets({ nullptr, nullptr }, nullptr);
+	drv->begin_render_pass(pass_of(nullptr, depth.get()));
+	drv->end_render_pass();
+	render_pass_desc holes = pass_of(nullptr, depth.get());
+	holes.colors.push_back({});
+	holes.colors.push_back({});
+	drv->begin_render_pass(holes);
+	drv->end_render_pass();
 
 	BOOST_TEST(state().total() == 0u);
 }
@@ -236,8 +181,7 @@ BOOST_AUTO_TEST_CASE(NullAttachmentsAreSkippedByTheChecks)
 BOOST_AUTO_TEST_CASE(ViewportOutsideTheRenderTargetIsReported)
 {
 	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
-	drv->push_frame_buffer();
-	drv->set_render_target(color.get());
+	drv->begin_render_pass(pass_of(color.get()));
 
 	drv->set_viewport({ 0, 0, 64, 32 });
 	drv->set_viewport({ 16, 8, 48, 24 });
@@ -252,40 +196,10 @@ BOOST_AUTO_TEST_CASE(ViewportOutsideTheRenderTargetIsReported)
 	BOOST_TEST((inner().viewport() == glm::ivec4(-1, 0, 8, 8)));
 }
 
-BOOST_AUTO_TEST_CASE(ViewportAfterPopIsCheckedAgainstTheTargetBelow)
-{
-	auto small = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto large = drv->create_texture(texture_of(128, 128, texture_usage::color_target));
-	drv->push_frame_buffer();
-	drv->set_render_target(large.get());
-	drv->push_frame_buffer();
-	drv->set_render_target(small.get());
-	drv->pop_frame_buffer();
-	drv->set_viewport({ 0, 0, 128, 128 });
-	BOOST_TEST(state().total() == 0u);
-
-	drv->pop_frame_buffer();
-	drv->set_viewport({ 0, 0, 4096, 4096 });
-	BOOST_TEST(state().total() == 0u);
-}
-
-BOOST_AUTO_TEST_CASE(ScissorOutsideTheRenderTargetIsReportedAndZeroLiftsIt)
-{
-	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
-	drv->push_frame_buffer();
-	drv->set_render_target(color.get());
-
-	drv->set_scissor({ 4, 4, 8, 8 });
-	drv->set_scissor({ 0, 0, 0, 0 });
-	BOOST_TEST(state().total() == 0u);
-
-	drv->set_scissor({ 60, 0, 8, 8 });
-	expect_only(state(), vl::rule::scissor_outside_target);
-}
-
 BOOST_AUTO_TEST_CASE(DrawBeforeAnyShaderUseIsReported)
 {
 	auto mesh = make_geometry(*drv, 3);
+	open_pass();
 	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
 
 	expect_only(state(), vl::rule::draw_without_use);
@@ -299,7 +213,9 @@ BOOST_AUTO_TEST_CASE(ShaderUseCoversTheDrawsOfTheFrameAndRestartsAtPresent)
 	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
 	BOOST_TEST(state().total() == 0u);
 
+	drv->end_render_pass();
 	chain.present();
+	open_pass();
 	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 3, 0, 0);
 	expect_only(state(), vl::rule::draw_without_use);
 }
@@ -410,11 +326,10 @@ BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
 	color.reset();
 	BOOST_TEST(state().live_objects(vl::object_kind::texture) == 0u);
 
-	drv->push_frame_buffer();
-	drv->set_render_target(stale);
+	drv->begin_render_pass(pass_of(stale));
 
 	expect_only(state(), vl::rule::dead_object);
-	BOOST_TEST(inner().calls().render_target_sets == 0u);
+	BOOST_TEST(inner().calls().render_pass_begins == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(DepthAttachmentDeletedBeforeUseIsReported)
@@ -423,8 +338,7 @@ BOOST_AUTO_TEST_CASE(DepthAttachmentDeletedBeforeUseIsReported)
 	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
 	texture_interface* stale = depth.get();
 	depth.reset();
-	drv->push_frame_buffer();
-	drv->set_render_targets({ color.get() }, stale);
+	drv->begin_render_pass(pass_of(color.get(), stale));
 
 	expect_only(state(), vl::rule::dead_object);
 }
@@ -489,23 +403,25 @@ BOOST_AUTO_TEST_CASE(FrameBufferBudgetIsReportedOncePerFrameAndRestartsAtPresent
 	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_frame_buffers = 2 });
 	auto limited_drv = limited.create_driver();
 
+	auto color = limited_drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	const auto run_pass = [&] {
+		limited_drv->begin_render_pass(pass_of(color.get()));
+		limited_drv->end_render_pass();
+	};
+
 	for (int i = 0; i < 4; ++i) {
-		limited_drv->push_frame_buffer();
-		limited_drv->pop_frame_buffer();
+		run_pass();
 	}
 	expect_only(limited.state(), vl::rule::budget_frame_buffers);
 
 	limited.present();
-	limited_drv->push_frame_buffer();
-	limited_drv->pop_frame_buffer();
-	limited_drv->push_frame_buffer();
-	limited_drv->pop_frame_buffer();
+	run_pass();
+	run_pass();
 	limited.present();
 	expect_only(limited.state(), vl::rule::budget_frame_buffers);
 
 	for (int i = 0; i < 3; ++i) {
-		limited_drv->push_frame_buffer();
-		limited_drv->pop_frame_buffer();
+		run_pass();
 	}
 	limited.present();
 	expect_only(limited.state(), vl::rule::budget_frame_buffers, 2);
@@ -546,9 +462,9 @@ BOOST_AUTO_TEST_CASE(NoBudgetIsEnforcedByDefault)
 {
 	std::vector<std::unique_ptr<texture_interface>> textures;
 	for (int i = 0; i < 100; ++i) {
-		textures.push_back(drv->create_texture(texture_of(4, 4, texture_usage::sampled)));
-		drv->push_frame_buffer();
-		drv->pop_frame_buffer();
+		textures.push_back(drv->create_texture(texture_of(4, 4, texture_usage::sampled | texture_usage::color_target)));
+		drv->begin_render_pass(pass_of(textures.back().get()));
+		drv->end_render_pass();
 	}
 	BOOST_TEST(state().total() == 0u);
 }
@@ -722,22 +638,14 @@ BOOST_AUTO_TEST_CASE(RenderPassLayerOutsideTheTextureIsReported)
 	expect_only(state(), vl::rule::invalid_render_pass);
 }
 
-BOOST_AUTO_TEST_CASE(ViewportIsCheckedAgainstTheRenderPassTarget)
+BOOST_AUTO_TEST_CASE(ViewportAfterTheEndOfAPassIsNotCheckedAgainstItsTarget)
 {
 	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
-
-	drv->set_viewport({ 0, 0, 64, 32 });
-	drv->set_viewport({ 16, 8, 48, 24 });
-	BOOST_TEST(state().total() == 0u);
-
-	drv->set_viewport({ 0, 0, 65, 32 });
-	expect_only(state(), vl::rule::viewport_outside_target);
-
-	// Back out of the pass, the window has no known extent.
 	drv->end_render_pass();
 	drv->set_viewport({ 0, 0, 4096, 4096 });
-	BOOST_TEST(state().total() == 1u);
+
+	BOOST_TEST(state().total() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(RenderAreaOutsideTheTargetIsReported)
@@ -806,20 +714,6 @@ BOOST_AUTO_TEST_CASE(RenderPassTexturesReachTheWrappedDriverUnwrapped)
 	BOOST_TEST(std::string(seen.debug_name) == "forwarded");
 }
 
-BOOST_AUTO_TEST_CASE(RenderPassBudgetCountsPassesBegunInAFrame)
-{
-	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_frame_buffers = 2 });
-	auto limited_drv = limited.create_driver();
-	auto color = limited_drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-
-	for (int i = 0; i < 4; ++i) {
-		limited_drv->begin_render_pass(pass_of(color.get()));
-		limited_drv->end_render_pass();
-	}
-	expect_only(limited.state(), vl::rule::budget_frame_buffers);
-	BOOST_TEST(limited.state().current_frame().frame_buffers == 4u);
-}
-
 BOOST_AUTO_TEST_CASE(FramebuffersAreReusedAcrossFramesAndEvictedWithTheirTexture)
 {
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
@@ -840,11 +734,10 @@ BOOST_AUTO_TEST_CASE(TraceRecordsPassMarkersAndDrawsInOrder)
 {
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
 	auto mesh = make_geometry(*drv, 6);
+	drv->begin_render_pass(pass_of(color.get()));
 	use_program();
-	drv->push_frame_buffer();
-	drv->set_render_target(color.get());
 	drv->draw_indices(mesh.array.get(), RENDER_MODE::TRIANGLE, 6, 0, 0);
-	drv->pop_frame_buffer();
+	drv->end_render_pass();
 
 	std::vector<int> ops;
 	std::uint32_t draw_count = 0;
@@ -857,8 +750,8 @@ BOOST_AUTO_TEST_CASE(TraceRecordsPassMarkersAndDrawsInOrder)
 			draw_count = entry.a;
 		}
 	}
-	const std::vector<int> expected{ static_cast<int>(vl::trace_op::use_program), static_cast<int>(vl::trace_op::push_target),
-		static_cast<int>(vl::trace_op::set_targets), static_cast<int>(vl::trace_op::draw), static_cast<int>(vl::trace_op::pop_target) };
+	const std::vector<int> expected{ static_cast<int>(vl::trace_op::begin_pass), static_cast<int>(vl::trace_op::use_program),
+		static_cast<int>(vl::trace_op::draw), static_cast<int>(vl::trace_op::end_pass) };
 	BOOST_TEST(ops == expected, boost::test_tools::per_element());
 	BOOST_TEST(draw_count == 6u);
 }
@@ -871,11 +764,13 @@ BOOST_AUTO_TEST_CASE(TraceKeepsOnlyTheMostRecentCommands)
 	for (int i = 0; i < 10; ++i) {
 		small_trace.set_viewport({ 0, 0, i, i });
 	}
-	small_trace.clear(CLEAR_FLAGS::COLOR_BUFFER);
+	render_pass_desc window;
+	window.backbuffer = true;
+	small_trace.begin_render_pass(window);
 
 	const auto trace = shared->trace();
 	BOOST_TEST(trace.size() == 4u);
-	BOOST_TEST(static_cast<int>(trace.back().op) == static_cast<int>(vl::trace_op::clear));
+	BOOST_TEST(static_cast<int>(trace.back().op) == static_cast<int>(vl::trace_op::begin_pass));
 	BOOST_TEST(static_cast<int>(trace.front().op) == static_cast<int>(vl::trace_op::set_viewport));
 }
 
@@ -883,12 +778,12 @@ BOOST_AUTO_TEST_CASE(ViolationsKeepTheirMessageAndTheFrameTheyHappenedIn)
 {
 	chain.present();
 	chain.present();
-	drv->pop_frame_buffer();
+	drv->end_render_pass();
 
 	BOOST_REQUIRE(state().violations().size() == 1u);
 	BOOST_TEST(state().violations().front().frame == 2u);
 	BOOST_TEST(!state().violations().front().message.empty());
-	BOOST_TEST(std::string(vl::rule_name(state().violations().front().kind)) == "pop_without_push");
+	BOOST_TEST(std::string(vl::rule_name(state().violations().front().kind)) == "end_without_begin");
 }
 
 BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
@@ -904,7 +799,7 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	auto ssbo = drv->create_ssbo_buffer(8, 5);
 	ssbo->bind(7);
 	drv->set_line_size(2.f);
-	drv->set_scissor({ 1, 2, 3, 4 });
+	drv->set_viewport({ 1, 2, 3, 4 });
 	render_state state_to_set = render_state::opaque();
 	drv->set_render_state(state_to_set);
 
@@ -912,7 +807,7 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 	BOOST_TEST((texture->get_usage() == texture_usage::sampled));
 	BOOST_TEST(texture->native() != texture.get());
 	BOOST_TEST(inner().line_size() == 2.f);
-	BOOST_TEST((inner().scissor() == glm::ivec4(1, 2, 3, 4)));
+	BOOST_TEST((inner().viewport() == glm::ivec4(1, 2, 3, 4)));
 	BOOST_TEST(inner().calls().render_state_sets == 1u);
 	BOOST_TEST(inner().stats().textures.created == 1u);
 	BOOST_TEST(inner().stats().shaders.created == 1u);
@@ -941,9 +836,8 @@ BOOST_AUTO_TEST_CASE(RenderTargetThatIsAlsoSampledPassesEveryUsageRule)
 {
 	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
 	color->bind(0);
-	drv->push_frame_buffer();
-	drv->set_render_target(color.get());
-	drv->pop_frame_buffer();
+	drv->begin_render_pass(pass_of(color.get()));
+	drv->end_render_pass();
 	BOOST_TEST(state().total() == 0u);
 }
 

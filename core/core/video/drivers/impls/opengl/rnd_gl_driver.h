@@ -2,7 +2,6 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include <array>
 #include <memory>
-#include <stack>
 #include <glad/glad.h>
 
 namespace rnd::driver::gl
@@ -18,16 +17,7 @@ namespace rnd::driver::gl
 		virtual void begin_render_pass(const render_pass_desc& desc) override;
 		virtual void end_render_pass() override;
 
-		virtual void push_frame_buffer() override;
-		virtual void pop_frame_buffer() override;
-		virtual void set_render_target(texture_interface* color, texture_interface* depth_stencil = nullptr) override;
-		virtual void set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil = nullptr) override;
-
 		virtual void set_viewport(glm::ivec4 rect) override;
-		virtual void set_scissor(glm::ivec4 rect) override;
-		virtual void clear(clear_flags flags) override;
-		virtual void clear(clear_flags flags, glm::vec4 color) override;
-		virtual void clear(clear_flags flags, const std::vector<glm::vec4>& colors) override;
 		virtual void set_line_size(float size) override;
 		virtual void draw_indices(const std::unique_ptr<vertex_array_interface>& vertices, RENDER_MODE render_mode, unsigned int count, unsigned int offset = 0) override;
 		virtual void draw_indices(const vertex_array_interface* va, RENDER_MODE rm, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
@@ -53,11 +43,6 @@ namespace rnd::driver::gl
 		GLuint framebuffer_for(const render_pass_desc& desc);
 		GLuint create_framebuffer(const render_pass_desc& desc);
 
-		// Helper methods for framebuffer management
-		void attach_frame_buffer();
-		void detach_frame_buffer();
-		void check_frame_buffer();
-
 		glm::ivec4 viewport{ 0 };
 		std::shared_ptr<framebuffer_registry> m_framebuffers;
 		bool m_in_pass = false;
@@ -68,6 +53,5 @@ namespace rnd::driver::gl
 		// Attachments to invalidate when the pass ends (store_op::dont_care).
 		std::array<GLenum, render_pass_desc::max_colors + 1> m_pass_invalidate{};
 		std::size_t m_pass_invalidate_count = 0;
-		std::stack<std::pair<GLuint, GLuint>> framebuffers;
 	};
 }
