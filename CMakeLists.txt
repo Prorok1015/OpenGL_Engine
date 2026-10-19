@@ -106,7 +106,7 @@ target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine 
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # gui_platform_backend_tests checks the GLFW -> engine key table; GLFW stays private to window otherwise.
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:window,SOURCE_DIR>/impl_glfw" "$<TARGET_PROPERTY:glfw,SOURCE_DIR>/include")
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:window,SOURCE_DIR>/impl_glfw" "$<TARGET_PROPERTY:glfw,INTERFACE_INCLUDE_DIRECTORIES>")
 target_compile_definitions(unit_tests PRIVATE GLFW_INCLUDE_NONE=1)
 
 # Profiler always enabled for tests (so profiler tests can run)
