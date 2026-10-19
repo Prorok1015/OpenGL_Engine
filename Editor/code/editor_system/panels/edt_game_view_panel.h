@@ -22,7 +22,7 @@ namespace edt
 		// Visits every world's registry: game cameras of inactive worlds must be switched off too.
 		void set_all_registries(std::function<void(const registry_visitor&)> for_each) { m_for_each_registry = std::move(for_each); }
 
-		// The image feeds the context `target` names (the active world) while hovered.
+		// The image feeds the context `target` names (a play context; none in Edit mode) while hovered.
 		void set_input_router(inp::input_router* router, input_target_getter target) {
 			m_router = router;
 			m_input_target = std::move(target);

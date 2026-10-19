@@ -84,7 +84,7 @@ public: // движок (не владеет)
 	// редактор (владеет)
 	document_manager& documents(); selection_service& selection(); editor_events& events();
 	panel_registry& panels(); action_registry& actions(); inspector_registry& inspectors(); asset_kind_registry& asset_kinds();
-	dialog_service& dialogs(); job_service& jobs(); editor_input& input(); // input = edt::input_manager + привязки #113
+	dialog_service& dialogs(); job_service& jobs(); editor_input& input(); // input = `inp::input_router` + привязки панелей (#113)
 };
 ```
 - Панель получает `editor_context&` в фабрике. Сеттеры-лямбды заменяются подписками.

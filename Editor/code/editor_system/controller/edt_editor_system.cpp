@@ -154,7 +154,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			ctx_mgr->get_level().for_each_world([&visit](scn::world& world) { visit(world.state()); });
 		}
 	});
-	m_game_view_panel->set_input_router(m_input_router, [this] { return active_input_target(m_state); });
+	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_state); });
 	m_game_view_panel->set_open(cfg_show_game_view);
 	pm.add_panel(m_game_view_panel);
 	pm.add_panel(m_console_panel);

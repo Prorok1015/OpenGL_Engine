@@ -77,6 +77,8 @@ edt::prefab_editor_context {
 
 Архитектура инпута построена на стеке `input_layer` в `inp::input_system`. Слои обрабатываются сверху вниз (LIFO). Каждый слой может захватить событие и заблокировать нижние (`blocks_lower_layers`).
 
+> **Устарело (#113, PR #264):** `edt::input_manager` (блокирующий слой) и `input_area` удалены. `ecs_input_manager` хранит только сырое состояние, `inp::input_router` по привязкам панелей (`bind_item_input`, hovered-изображение) даёт полное состояние контексту под курсором, остальным — нейтральное; `input_focus` выводится из привязки. Ниже — исходное обоснование.
+
 **Текущий стек (до PP):**
 ```
 [TOP]  edt::input_manager     blocks=true   ← блокирует mouse clicks вне main VP rect

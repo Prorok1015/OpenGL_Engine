@@ -9,6 +9,8 @@
 #include <snk/input/inp_events.hpp>
 #include <snk/input/inp_input_router.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include "edt_input_target.h"
+#include "edt_shared_state.h"
 #include <cmath>
 #include <memory>
 
@@ -358,6 +360,68 @@ BOOST_AUTO_TEST_CASE(Contexts_ThePlayTwinTakesTheInputFromTheLevelContextOfTheSa
 
 	BOOST_TEST(focus_of(play));
 	BOOST_TEST(!focus_of(level));
+}
+
+BOOST_AUTO_TEST_CASE(GameView_InEditModeWithoutAPlaySetLeavesEveryLevelContextNeutral)
+{
+	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
+	shared_mgr->create_context("level", "w", scn::context_kind::level, { "test::probe_input" });
+	shared_mgr->create_context("level", "v", scn::context_kind::level, { "test::probe_input" });
+	edt::shared_state state;
+	state.ctx_manager = shared_mgr;
+	state.world_descs.emplace_back();
+	state.world_names.push_back("w");
+
+	// No play set: the Game view binds nothing, even though it is hovered.
+	BOOST_TEST(!edt::active_play_input_target(state).has_value());
+	if (auto target = edt::active_play_input_target(state)) router.bind(*target, LEFT_RECT);
+	move_to({ 50, 50 });
+	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
+
+	gs::route_input(router, *shared_mgr);
+	for (auto* name : { "w", "v" }) {
+		auto& context = *shared_mgr->find("level", name);
+		BOOST_TEST(!focus_of(context));
+		BOOST_TEST(!state_of(context).keyboard[idx(KEYBOARD_BUTTONS::W)]);
+	}
+
+	// The viewport target is unchanged: the level context.
+	BOOST_TEST((edt::active_input_target(state) == inp::input_target{ "level", "w" }));
+
+	// With a play twin the Game view feeds it.
+	shared_mgr->create_set("play");
+	shared_mgr->create_context("play", "w", scn::context_kind::play, { "test::probe_input" });
+	BOOST_TEST((edt::active_play_input_target(state) == inp::input_target{ "play", "w" }));
+}
+
+BOOST_AUTO_TEST_CASE(EditorTargets_ViewportPrefersThePlayTwinThenTheLevelThenNothing)
+{
+	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
+	edt::shared_state state;
+	state.ctx_manager = shared_mgr;
+
+	// No active world: nothing to feed.
+	BOOST_TEST(!edt::active_input_target(state).has_value());
+	BOOST_TEST(!edt::active_play_input_target(state).has_value());
+
+	state.world_descs.emplace_back();
+	state.world_names.push_back("w");
+
+	// Active world named, but the level has no such context.
+	BOOST_TEST(!edt::active_input_target(state).has_value());
+
+	shared_mgr->create_context("level", "w", scn::context_kind::level);
+	BOOST_TEST((edt::active_input_target(state) == inp::input_target{ "level", "w" }));
+	BOOST_TEST(!edt::active_play_input_target(state).has_value());
+
+	shared_mgr->create_set("play");
+	shared_mgr->create_context("play", "w", scn::context_kind::play);
+	BOOST_TEST((edt::active_input_target(state) == inp::input_target{ "play", "w" }));
+	BOOST_TEST((edt::active_play_input_target(state) == inp::input_target{ "play", "w" }));
+
+	state.ctx_manager.reset(); // the manager is gone
+	BOOST_TEST(!edt::active_input_target(state).has_value());
+	BOOST_TEST(!edt::active_play_input_target(state).has_value());
 }
 
 // ---------------------------------------------------------------- update stage
