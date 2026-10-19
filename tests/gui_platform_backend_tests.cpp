@@ -5,7 +5,10 @@
 #include <cfloat>
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <imgui.h>
+#include <GLFW/glfw3.h>
+#include "wnd_input_keycode_convert.hpp"
 
 namespace {
 
@@ -106,6 +109,64 @@ BOOST_AUTO_TEST_CASE(NavigationAndKeypadKeysAreMapped)
 		BOOST_TEST(!ImGui::IsKeyDown(ImGuiKey_RightArrow));
 	});
 	frame([] { BOOST_TEST(ImGui::IsKeyDown(ImGuiKey_KeypadEnter)); });
+}
+
+BOOST_AUTO_TEST_CASE(PunctuationKeysReachImGui)
+{
+	struct pair { KEYBOARD_BUTTONS key; ImGuiKey imgui; };
+	for (const pair p : { pair{ KEYBOARD_BUTTONS::GRAVE_ACCENT, ImGuiKey_GraveAccent }, pair{ KEYBOARD_BUTTONS::LEFT_BRACKET, ImGuiKey_LeftBracket },
+		pair{ KEYBOARD_BUTTONS::RIGHT_BRACKET, ImGuiKey_RightBracket }, pair{ KEYBOARD_BUTTONS::BACKSLASH, ImGuiKey_Backslash } }) {
+		key(p.key, KEY_ACTION::DOWN);
+		frame([&] { BOOST_TEST(ImGui::IsKeyDown(p.imgui)); });
+		key(p.key, KEY_ACTION::UP);
+		frame([&] { BOOST_TEST(!ImGui::IsKeyDown(p.imgui)); });
+	}
+}
+
+BOOST_AUTO_TEST_CASE(EveryGlfwPrintableKeyMapsToEngineKeyAndImGuiKey)
+{
+	std::vector<int> printable = { GLFW_KEY_SPACE, GLFW_KEY_APOSTROPHE, GLFW_KEY_SEMICOLON, GLFW_KEY_EQUAL, GLFW_KEY_LEFT_BRACKET,
+		GLFW_KEY_BACKSLASH, GLFW_KEY_RIGHT_BRACKET, GLFW_KEY_GRAVE_ACCENT };
+	for (int k = GLFW_KEY_COMMA; k <= GLFW_KEY_9; ++k) printable.push_back(k);
+	for (int k = GLFW_KEY_A; k <= GLFW_KEY_Z; ++k) printable.push_back(k);
+
+	for (const int glfw_key : printable) {
+		const auto engine_key = wnd::convert::to_keyboard_keycode(glfw_key);
+		BOOST_REQUIRE_MESSAGE(engine_key.has_value(), "GLFW key " << glfw_key);
+		BOOST_TEST(wnd::convert::to_glfw_keycode(*engine_key) == glfw_key);
+
+		key(*engine_key, KEY_ACTION::DOWN);
+		int down = 0;
+		frame([&] {
+			for (int i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END; ++i) {
+				if (ImGui::IsKeyDown(static_cast<ImGuiKey>(i))) ++down;
+			}
+		});
+		BOOST_CHECK_MESSAGE(down == 1, "GLFW key " << glfw_key << " pressed " << down << " ImGui keys");
+		key(*engine_key, KEY_ACTION::UP);
+		frame();
+	}
+}
+
+BOOST_AUTO_TEST_CASE(WorldKeysMapToEngineKeysWithoutImGuiCounterpart)
+{
+	for (const int glfw_key : { GLFW_KEY_WORLD_1, GLFW_KEY_WORLD_2 }) {
+		const auto engine_key = wnd::convert::to_keyboard_keycode(glfw_key);
+		BOOST_REQUIRE(engine_key.has_value());
+		BOOST_TEST(wnd::convert::to_glfw_keycode(*engine_key) == glfw_key);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(EveryEngineKeyRoundTripsThroughGlfw)
+{
+	for (int i = 0; i < static_cast<int>(KEYBOARD_BUTTONS::COUNT); ++i) {
+		const auto engine_key = static_cast<KEYBOARD_BUTTONS>(i);
+		const int glfw_key = wnd::convert::to_glfw_keycode(engine_key);
+		BOOST_REQUIRE_MESSAGE(glfw_key != -1, "engine key " << i);
+		const auto back = wnd::convert::to_keyboard_keycode(glfw_key);
+		BOOST_REQUIRE_MESSAGE(back.has_value(), "engine key " << i);
+		BOOST_CHECK_MESSAGE(*back == engine_key, "engine key " << i);
+	}
 }
 
 BOOST_AUTO_TEST_CASE(ModifierKeysUpdateModifierState)

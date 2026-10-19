@@ -105,6 +105,10 @@ target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine 
 # linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass.
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
+# gui_platform_backend_tests checks the GLFW -> engine key table; GLFW stays private to window otherwise.
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:window,SOURCE_DIR>/impl_glfw" "$<TARGET_PROPERTY:glfw,SOURCE_DIR>/include")
+target_compile_definitions(unit_tests PRIVATE GLFW_INCLUDE_NONE=1)
+
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 # desc_repo_roundtrip_tests loads the descs the repository ships.
