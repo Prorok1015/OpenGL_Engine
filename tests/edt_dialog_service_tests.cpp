@@ -78,6 +78,7 @@ struct dialog_fixture
 
 	fake_gui gui;
 	edt::dialog_service service;
+	edt::action_registry actions;
 };
 
 struct menu_fixture : dialog_fixture
@@ -88,16 +89,18 @@ struct menu_fixture : dialog_fixture
 		hooks.is_dirty = [this] { return dirty; };
 		hooks.level_path = [this] { return path; };
 		hooks.new_level = [this] { calls.push_back("new"); };
-		hooks.quick_save = [this] { calls.push_back("quick_save"); };
+		hooks.quick_save = [this] { calls.push_back("quick_save"); dirty = false; };
 		hooks.save_level_as = [this](const std::string& p) {
 			calls.push_back("save_as:" + p);
+			if (save_ok) dirty = false;
 			return save_ok;
 		};
 		hooks.discard_changes = [this] { calls.push_back("discard"); };
 		hooks.load_level = [this](const std::filesystem::path& p) { calls.push_back("load:" + p.generic_string()); };
 		hooks.import_model = [this](const std::filesystem::path& p) { calls.push_back("import:" + p.generic_string()); };
 		hooks.exit = [this] { calls.push_back("exit"); };
-		menu = std::make_unique<edt::file_menu>(service, hooks);
+		menu = std::make_unique<edt::file_menu>(service, actions, hooks);
+		menu->register_actions();
 	}
 
 	void answer_unsaved(edt::unsaved_choice choice)

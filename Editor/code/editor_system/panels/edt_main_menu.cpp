@@ -66,7 +66,7 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 	out.push_back(actions.add_menu("File"));
 	out.push_back(actions.add_menu(std::string(view_menu_name)));
 	out.push_back(actions.add_menu("Help"));
-	out.push_back(actions.add({ .id = "help.about", .label = "About", .menu_path = "Help", .execute = [] {} }));
+	out.push_back(actions.add({ .id = "help.about", .label = "About", .menu_path = "Help", .execute = no_args([] {}), .expose_as_tool = false }));
 	return out;
 }
 
@@ -81,7 +81,7 @@ void edt::draw_main_menu(action_registry& actions, panel_registry& panels)
 			if (item.separator_before) ImGui::Separator();
 			const char* shortcut_text = item.shortcut_text.empty() ? nullptr : item.shortcut_text.c_str();
 			if (ImGui::MenuItem(item.label.c_str(), shortcut_text, false, item.enabled))
-				actions.run(item.id);
+				actions.activate(item.id);
 		}
 		if (menu == view_menu_name) draw_panel_toggles(panels);
 		ImGui::EndMenu();

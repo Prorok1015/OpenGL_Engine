@@ -3,7 +3,10 @@
 #include <snk/editor/edt_action_registry.h>
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
+#include <snk/editor/edt_json_schema.h>
 #include <algorithm>
+#include <boost/json/parse.hpp>
+#include <boost/json/serialize.hpp>
 #include <functional>
 #include <memory>
 #include <string>
@@ -23,7 +26,7 @@ edt::action_desc make_action(std::string id, std::string label, std::string menu
 	desc.label = std::move(label);
 	desc.menu_path = std::move(menu);
 	desc.shortcut = std::move(shortcut_text);
-	desc.execute = std::move(run);
+	if (run) desc.execute = edt::no_args(std::move(run));
 	return desc;
 }
 
@@ -73,18 +76,18 @@ struct file_menu_fixture
 		dialogs.set_registrar([this](std::string_view id, std::function<bool()> draw) {
 			gui.register_implicit(id, std::move(draw));
 		});
-		hooks.has_scene = [] { return true; };
+		hooks.has_scene = [this] { return has_scene; };
 		hooks.is_dirty = [this] { return dirty; };
 		hooks.level_path = [this] { return path; };
 		hooks.new_level = [this] { calls.push_back("new"); };
 		hooks.quick_save = [this] { calls.push_back("quick_save"); };
-		hooks.save_level_as = [this](const std::string& p) { calls.push_back("save_as:" + p); return true; };
-		hooks.discard_changes = [] {};
-		hooks.load_level = [](const std::filesystem::path&) {};
-		hooks.import_model = [](const std::filesystem::path&) {};
+		hooks.save_level_as = [this](const std::string& p) { calls.push_back("save_as:" + p); return save_ok; };
+		hooks.discard_changes = [this] { dirty = false; };
+		hooks.load_level = [this](const std::filesystem::path& p) { calls.push_back("load:" + p.generic_string()); };
+		hooks.import_model = [this](const std::filesystem::path& p) { calls.push_back("import:" + p.generic_string()); };
 		hooks.exit = [this] { calls.push_back("exit"); };
-		menu = std::make_unique<edt::file_menu>(dialogs, hooks);
-		menu->register_actions(actions);
+		menu = std::make_unique<edt::file_menu>(dialogs, actions, hooks);
+		menu->register_actions();
 	}
 
 	fake_gui gui;
@@ -93,6 +96,8 @@ struct file_menu_fixture
 	edt::file_menu_hooks hooks;
 	std::unique_ptr<edt::file_menu> menu;
 	bool dirty = false;
+	bool has_scene = true;
+	bool save_ok = true;
 	std::string path = "levels/saved.desc";
 	std::vector<std::string> calls;
 };
@@ -136,9 +141,9 @@ BOOST_AUTO_TEST_CASE(Run_ExecutesTheRegisteredAction)
 	auto reg = actions.add(make_action("x.run", "Run", "File", [&] { ++runs; }));
 	BOOST_CHECK(reg.active());
 	BOOST_CHECK(actions.contains("x.run"));
-	BOOST_CHECK(actions.run("x.run"));
+	BOOST_CHECK(actions.activate("x.run"));
 	BOOST_CHECK_EQUAL(runs, 1);
-	BOOST_CHECK(!actions.run("x.missing"));
+	BOOST_CHECK(!actions.activate("x.missing"));
 }
 
 BOOST_AUTO_TEST_CASE(ItemsAndMenus_FollowRegistrationOrder)
@@ -210,7 +215,7 @@ BOOST_AUTO_TEST_CASE(DisabledAction_DoesNotExecute)
 
 	BOOST_CHECK(!actions.is_enabled("guarded"));
 	BOOST_CHECK(!actions.items("File")[0].enabled);
-	BOOST_CHECK(!actions.run("guarded"));
+	BOOST_CHECK(!actions.activate("guarded"));
 	BOOST_CHECK(!actions.dispatch(chord("Ctrl+G")));
 	BOOST_CHECK_EQUAL(runs, 0);
 
@@ -288,7 +293,7 @@ BOOST_AUTO_TEST_CASE(DuplicateId_IsRefusedAndTheFirstActionStays)
 	BOOST_CHECK(r1.active());
 	BOOST_CHECK(!r2.active());
 	BOOST_CHECK_EQUAL(actions.size(), 1u);
-	actions.run("same");
+	actions.activate("same");
 	BOOST_CHECK(first == 1 && second == 0);
 	r2.reset();
 	BOOST_CHECK(actions.contains("same"));
@@ -339,7 +344,7 @@ BOOST_AUTO_TEST_CASE(ActionMayUnregisterItselfWhileRunning)
 		++runs;
 		reg.reset();
 	}));
-	BOOST_CHECK(actions.run("once"));
+	BOOST_CHECK(actions.activate("once"));
 	BOOST_CHECK_EQUAL(runs, 1);
 	BOOST_CHECK(!actions.contains("once"));
 }
@@ -354,7 +359,7 @@ BOOST_AUTO_TEST_CASE(Menus_AreFileViewHelp_EvenBeforeAnyActionIsRegistered)
 	auto menus = edt::register_builtin_menus(actions);
 	BOOST_TEST((actions.menus() == std::vector<std::string>{ "File", "View", "Help" }));
 	BOOST_TEST((labels_of(actions.items("Help")) == std::vector<std::string>{ "About" }));
-	BOOST_CHECK(actions.run("help.about")); // a placeholder, as before
+	BOOST_CHECK(actions.activate("help.about")); // a placeholder, as before
 }
 
 BOOST_AUTO_TEST_CASE(FileMenu_KeepsItsOrderSeparatorsAndShortcutText)
@@ -390,7 +395,7 @@ BOOST_AUTO_TEST_CASE(FileMenu_SaveLevelItemAsksForAPath)
 	answer.save_as_path = "levels/b.desc";
 	f.dialogs.set_auto_answer(answer);
 
-	BOOST_CHECK(f.actions.run("file.save_level"));
+	BOOST_CHECK(f.actions.activate("file.save_as"));
 	f.gui.drain();
 	BOOST_TEST((f.calls == std::vector<std::string>{ "save_as:levels/b.desc" }));
 }
@@ -403,13 +408,13 @@ BOOST_AUTO_TEST_CASE(FileMenu_ExitWithUnsavedChangesWaitsForTheAnswer)
 	answer.unsaved = edt::unsaved_choice::cancel;
 	f.dialogs.set_auto_answer(answer);
 
-	BOOST_CHECK(f.actions.run("file.exit"));
+	BOOST_CHECK(f.actions.activate("file.exit"));
 	f.gui.drain();
 	BOOST_CHECK(f.calls.empty());
 
 	answer.unsaved = edt::unsaved_choice::discard;
 	f.dialogs.set_auto_answer(answer);
-	BOOST_CHECK(f.actions.run("file.exit"));
+	BOOST_CHECK(f.actions.activate("file.exit"));
 	f.gui.drain();
 	BOOST_TEST((f.calls == std::vector<std::string>{ "exit" }));
 }
@@ -421,6 +426,368 @@ BOOST_AUTO_TEST_CASE(FileMenu_DestroyedMenuTakesItsActionsAway)
 	f.menu.reset();
 	BOOST_CHECK_EQUAL(f.actions.size(), 0u);
 	BOOST_CHECK(!f.actions.dispatch(chord("Ctrl+S")));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+	boost::json::value json_of(std::string_view text)
+	{
+		return boost::json::parse(text);
+	}
+}
+
+BOOST_AUTO_TEST_SUITE(EdtJsonSchemaTests)
+
+BOOST_AUTO_TEST_CASE(NoArgsSchema_AcceptsOnlyAnEmptyObject)
+{
+	const auto schema = edt::no_args_schema();
+	BOOST_CHECK(!edt::json_schema::check_schema(schema));
+	BOOST_CHECK(!edt::json_schema::validate(schema, json_of("{}")));
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"x":1})")));
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of("[]")));
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of("null")));
+}
+
+BOOST_AUTO_TEST_CASE(Validate_ChecksTypeRequiredEnumAndRange)
+{
+	const auto schema = json_of(R"({"type":"object","properties":{
+		"name":{"type":"string"},"mode":{"enum":["a","b"]},"count":{"type":"integer","minimum":1,"maximum":5},
+		"flag":{"type":["boolean","null"]}},"required":["name"],"additionalProperties":false})");
+	BOOST_REQUIRE(!edt::json_schema::check_schema(schema));
+	BOOST_CHECK(!edt::json_schema::validate(schema, json_of(R"({"name":"x","mode":"a","count":3,"flag":null})")));
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({})")));                           // required
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":1})")));                   // type
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":"x","mode":"c"})")));      // enum
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":"x","count":0})")));       // minimum
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":"x","count":6})")));       // maximum
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":"x","count":1.5})")));     // integer
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":"x","flag":"yes"})")));    // type list
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"({"name":"x","other":1})")));       // additionalProperties
+}
+
+BOOST_AUTO_TEST_CASE(MinLength_CountsCharacters)
+{
+	const auto schema = json_of(R"({"type":"string","minLength":2})");
+	BOOST_REQUIRE(!edt::json_schema::check_schema(schema));
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"("")")));
+	BOOST_CHECK(edt::json_schema::validate(schema, json_of(R"("a")")));
+	BOOST_CHECK(!edt::json_schema::validate(schema, json_of(R"("ab")")));
+	BOOST_CHECK(!edt::json_schema::validate(schema, json_of("\"\xC3\xA9\xC3\xA9\""))); // two characters, four bytes
+	BOOST_CHECK(edt::json_schema::check_schema(json_of(R"({"minLength":-1})")).has_value());
+	BOOST_CHECK(edt::json_schema::check_schema(json_of(R"({"minLength":"1"})")).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(CheckSchema_RefusesKeywordsItDoesNotImplement)
+{
+	for (const char* text : { R"({"pattern":"a"})", R"({"items":{"type":"string"}})", R"({"maxLength":3})",
+		R"({"oneOf":[]})", R"({"$ref":"#/x"})", R"({"default":1})",
+		R"({"type":"object","properties":{"a":{"format":"uri"}}})" }) {
+		BOOST_TEST(edt::json_schema::check_schema(json_of(text)).has_value(), text);
+	}
+	BOOST_CHECK(!edt::json_schema::check_schema(json_of(R"({"type":"string","description":"d","title":"t"})")));
+}
+
+BOOST_AUTO_TEST_CASE(AdditionalProperties_AreAllowedUnlessForbidden)
+{
+	const auto schema = json_of(R"({"type":"object","properties":{"a":{"type":"string"}}})");
+	BOOST_CHECK(!edt::json_schema::validate(schema, json_of(R"({"a":"x","b":2})")));
+}
+
+BOOST_AUTO_TEST_CASE(CheckSchema_RejectsBrokenSchemas)
+{
+	for (const char* text : { "1", R"({"type":"thing"})", R"({"type":[]})", R"({"properties":3})",
+		R"({"required":["a"]})", R"({"required":[1],"properties":{"a":{}}})", R"({"additionalProperties":"no"})",
+		R"({"enum":[]})", R"({"minimum":"1"})", R"({"properties":{"a":{"type":"x"}}})" }) {
+		BOOST_TEST(edt::json_schema::check_schema(json_of(text)).has_value(), text);
+	}
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtActionSchemaTests)
+
+namespace {
+	edt::action_desc echo_action(int& runs)
+	{
+		edt::action_desc desc;
+		desc.id = "test.echo";
+		desc.label = "Echo";
+		desc.args_schema = json_of(R"({"type":"object","properties":{"text":{"type":"string"},"times":{"type":"integer","minimum":1}},
+			"required":["text"],"additionalProperties":false})");
+		desc.result_schema = json_of(R"({"type":"object","properties":{"echo":{"type":"string"}},"required":["echo"],"additionalProperties":false})");
+		desc.execute = [&runs](const boost::json::value& args) {
+			++runs;
+			return edt::action_result::success(boost::json::object{ { "echo", args.as_object().at("text") } });
+		};
+		return desc;
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Invoke_ValidatesThenRunsAndReturnsTheResult)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	auto reg = actions.add(echo_action(runs));
+	BOOST_REQUIRE(reg.active());
+
+	const auto outcome = actions.invoke("test.echo", json_of(R"({"text":"hi","times":2})"));
+	BOOST_CHECK(outcome.ok);
+	BOOST_CHECK_EQUAL(boost::json::serialize(outcome.result), R"({"echo":"hi"})");
+	BOOST_CHECK_EQUAL(runs, 1);
+}
+
+BOOST_AUTO_TEST_CASE(Invoke_RejectsInvalidArgumentsWithoutRunning)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	auto reg = actions.add(echo_action(runs));
+
+	for (const char* args : { "{}", R"({"text":3})", R"({"text":"x","times":0})", R"({"text":"x","extra":true})", "[]", "null" }) {
+		const auto outcome = actions.invoke("test.echo", json_of(args));
+		BOOST_TEST_CONTEXT(args) {
+			BOOST_CHECK(!outcome.ok);
+			BOOST_CHECK_EQUAL(outcome.code, "invalid_args");
+			BOOST_CHECK(outcome.error.find("invalid arguments") != std::string::npos);
+		}
+	}
+	BOOST_CHECK_EQUAL(runs, 0);
+}
+
+BOOST_AUTO_TEST_CASE(Invoke_FailsForMissingAndDisabledActions)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	auto desc = echo_action(runs);
+	desc.enabled = [] { return false; };
+	auto reg = actions.add(std::move(desc));
+
+	BOOST_CHECK_EQUAL(actions.invoke("test.missing", json_of("{}")).code, "not_found");
+	const auto outcome = actions.invoke("test.echo", json_of(R"({"text":"x"})"));
+	BOOST_CHECK(!outcome.ok);
+	BOOST_CHECK_EQUAL(outcome.code, "disabled");
+	BOOST_CHECK_EQUAL(runs, 0);
+}
+
+BOOST_AUTO_TEST_CASE(Invoke_ReportsAFailingAction)
+{
+	edt::action_registry actions;
+	edt::action_desc desc;
+	desc.id = "test.fail";
+	desc.label = "Fail";
+	desc.execute = [](const boost::json::value&) { return edt::action_result::failure("failed", "nope"); };
+	auto reg = actions.add(std::move(desc));
+	const auto outcome = actions.invoke("test.fail", json_of("{}"));
+	BOOST_CHECK(!outcome.ok);
+	BOOST_CHECK_EQUAL(outcome.code, "failed");
+	BOOST_CHECK_EQUAL(outcome.error, "nope");
+}
+
+BOOST_AUTO_TEST_CASE(Invoke_RejectsAResultThatBreaksItsSchema)
+{
+	edt::action_registry actions;
+	edt::action_desc desc;
+	desc.id = "test.bad_result";
+	desc.label = "Bad result";
+	desc.result_schema = json_of(R"({"type":"object","properties":{"n":{"type":"integer"}},"required":["n"]})");
+	desc.execute = [](const boost::json::value&) { return edt::action_result::success(); };
+	auto reg = actions.add(std::move(desc));
+	const auto outcome = actions.invoke("test.bad_result", json_of("{}"));
+	BOOST_CHECK(!outcome.ok);
+	BOOST_CHECK_EQUAL(outcome.code, "result_invalid");
+	BOOST_CHECK(outcome.error.find("ran but returned a malformed result") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Add_FillsDefaultSchemasAndVersion)
+{
+	edt::action_registry actions;
+	auto reg = actions.add(make_action("plain", "Plain", "", [] {}));
+	const auto* desc = actions.find("plain");
+	BOOST_REQUIRE(desc != nullptr);
+	BOOST_CHECK(desc->args_schema == edt::no_args_schema());
+	BOOST_CHECK(desc->result_schema == edt::no_args_schema());
+	BOOST_CHECK_EQUAL(desc->schema_version, 1u);
+}
+
+BOOST_AUTO_TEST_CASE(Add_RefusesBadSchemasAndUnactivatableMenuItems)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	auto bad_schema = echo_action(runs);
+	bad_schema.id = "bad";
+	bad_schema.args_schema = json_of(R"({"type":"nonsense"})");
+	BOOST_CHECK(!actions.add(std::move(bad_schema)).active());
+
+	auto bad_version = echo_action(runs);
+	bad_version.id = "bad_version";
+	bad_version.schema_version = 0;
+	BOOST_CHECK(!actions.add(std::move(bad_version)).active());
+
+	auto unsupported = echo_action(runs);
+	unsupported.id = "unsupported";
+	unsupported.result_schema = json_of(R"({"type":"object","pattern":"x"})");
+	BOOST_CHECK(!actions.add(std::move(unsupported)).active());
+
+	auto not_an_object = echo_action(runs);
+	not_an_object.id = "not_an_object";
+	not_an_object.args_schema = json_of(R"({"type":"string"})");
+	BOOST_CHECK(!actions.add(std::move(not_an_object)).active());
+
+	auto untyped = echo_action(runs);
+	untyped.id = "untyped";
+	untyped.args_schema = json_of(R"({"properties":{}})");
+	BOOST_CHECK(!actions.add(std::move(untyped)).active());
+
+	auto in_menu = echo_action(runs);
+	in_menu.id = "in_menu";
+	in_menu.menu_path = "File"; // required arguments, nothing to collect them
+	BOOST_CHECK(!actions.add(std::move(in_menu)).active());
+
+	auto with_frontend = echo_action(runs);
+	with_frontend.id = "with_frontend";
+	with_frontend.menu_path = "File";
+	with_frontend.activate = [] {};
+	BOOST_CHECK(actions.add(std::move(with_frontend)).active());
+}
+
+BOOST_AUTO_TEST_CASE(Activate_RunsTheFrontendWhichInvokesTheSameAction)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	auto desc = echo_action(runs);
+	desc.menu_path = "File";
+	edt::action_registry* registry = &actions;
+	desc.activate = [registry] { registry->invoke("test.echo", boost::json::object{ { "text", "from menu" } }); };
+	auto reg = actions.add(std::move(desc));
+
+	BOOST_CHECK(actions.activate("test.echo"));
+	BOOST_CHECK_EQUAL(runs, 1);
+	BOOST_CHECK(actions.invoke("test.echo", json_of(R"({"text":"from script"})")).ok);
+	BOOST_CHECK_EQUAL(runs, 2);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtBuiltinActionSchemaTests)
+
+BOOST_AUTO_TEST_CASE(EveryRegisteredActionHasValidSchemas)
+{
+	file_menu_fixture f;
+	auto menus = edt::register_builtin_menus(f.actions);
+	const auto ids = f.actions.ids();
+	BOOST_CHECK_EQUAL(ids.size(), 7u);
+	for (const auto& id : ids) {
+		const auto* desc = f.actions.find(id);
+		BOOST_REQUIRE(desc != nullptr);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_CHECK(!edt::json_schema::check_schema(desc->args_schema));
+			BOOST_CHECK(!edt::json_schema::check_schema(desc->result_schema));
+			BOOST_CHECK(desc->args_schema.as_object().at("type") == "object");
+			BOOST_CHECK(desc->schema_version >= 1u);
+			BOOST_CHECK(static_cast<bool>(desc->execute));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Tools_SkipPlaceholdersButTheMenuStillShowsThem)
+{
+	file_menu_fixture f;
+	auto menus = edt::register_builtin_menus(f.actions);
+	std::vector<std::string> tools;
+	for (const auto* desc : f.actions.tools()) tools.push_back(desc->id);
+	BOOST_TEST((tools == std::vector<std::string>{
+		"file.new", "file.open", "file.save_as", "file.save", "file.import_model", "file.exit" }));
+	BOOST_CHECK(f.actions.contains("help.about"));
+	BOOST_TEST((labels_of(f.actions.items("Help")) == std::vector<std::string>{ "About" }));
+}
+
+BOOST_AUTO_TEST_CASE(EachBuiltinActionRunsHeadlessWithJsonArguments)
+{
+	file_menu_fixture f;
+	auto menus = edt::register_builtin_menus(f.actions);
+
+	BOOST_CHECK(f.actions.invoke("file.new", json_of(R"({})")).ok);
+	BOOST_CHECK(f.actions.invoke("file.open", json_of(R"({"path":"/res/levels/a.desc"})")).ok);
+	BOOST_CHECK(f.actions.invoke("file.save_as", json_of(R"({"path":"levels/b.desc"})")).ok);
+	BOOST_CHECK(f.actions.invoke("file.save", json_of("{}")).ok);
+	BOOST_CHECK(f.actions.invoke("file.import_model", json_of(R"({"path":"/models/m.glb"})")).ok);
+	BOOST_CHECK(f.actions.invoke("file.exit", json_of("{}")).ok);
+	BOOST_CHECK(f.actions.invoke("help.about", json_of("{}")).ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{
+		"new", "load:/res/levels/a.desc", "save_as:levels/b.desc", "quick_save", "import:/models/m.glb", "exit" }));
+	BOOST_CHECK(f.gui.callbacks.empty()); // no dialog was asked for
+}
+
+BOOST_AUTO_TEST_CASE(BuiltinActions_RejectBadArgumentsAndDoNotRun)
+{
+	file_menu_fixture f;
+	const auto code = [&f](const char* id, const char* args) { return f.actions.invoke(id, json_of(args)).code; };
+	BOOST_CHECK_EQUAL(code("file.open", "{}"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.open", R"({"path":4})"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.open", R"({"path":""})"), "invalid_args"); // minLength 1
+	BOOST_CHECK_EQUAL(code("file.save_as", R"({"path":""})"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.import_model", R"({"path":""})"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.save_as", R"({"path":"a","x":1})"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.new", R"({"discard_unsaved":"yes"})"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.exit", R"({"other":true})"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.exit", "[]"), "invalid_args");
+	BOOST_CHECK_EQUAL(code("file.exit", "null"), "invalid_args");
+	BOOST_CHECK(f.calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(NewAndExit_NeedDiscardUnsavedWhenTheLevelIsDirty)
+{
+	file_menu_fixture f;
+	f.dirty = true;
+	const auto code = [&f](const char* id, const char* args) { return f.actions.invoke(id, json_of(args)).code; };
+	BOOST_CHECK_EQUAL(code("file.new", "{}"), "needs_input");
+	BOOST_CHECK_EQUAL(code("file.exit", R"({"discard_unsaved":false})"), "needs_input");
+	BOOST_CHECK_EQUAL(code("file.open", R"({"path":"/res/a.desc"})"), "needs_input");
+	BOOST_CHECK(f.calls.empty());
+	BOOST_CHECK(f.dirty); // a refused call changed nothing
+
+	BOOST_CHECK_EQUAL(code("file.new", R"({"discard_unsaved":true})"), "ok");
+	BOOST_CHECK(!f.dirty); // the flag really dropped the changes
+	BOOST_TEST((f.calls == std::vector<std::string>{ "new" }));
+}
+
+BOOST_AUTO_TEST_CASE(Open_WithDiscardUnsavedReplacesADirtyLevel)
+{
+	file_menu_fixture f;
+	f.dirty = true;
+	BOOST_CHECK(f.actions.invoke("file.open", json_of(R"({"path":"/res/a.desc","discard_unsaved":true})")).ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "load:/res/a.desc" }));
+}
+
+BOOST_AUTO_TEST_CASE(SaveActions_FailWithoutALevelOrAPath)
+{
+	file_menu_fixture f;
+	f.path.clear();
+	BOOST_CHECK_EQUAL(f.actions.invoke("file.save", json_of("{}")).code, "failed"); // untitled: needs file.save_as
+	f.save_ok = false;
+	BOOST_CHECK_EQUAL(f.actions.invoke("file.save_as", json_of(R"({"path":"levels/x.desc"})")).code, "failed");
+	f.has_scene = false;
+	BOOST_CHECK_EQUAL(f.actions.invoke("file.save_as", json_of(R"({"path":"levels/x.desc"})")).code, "failed");
+}
+
+BOOST_AUTO_TEST_CASE(MenuClick_AndInvokeReachTheSameCode)
+{
+	file_menu_fixture f;
+	edt::dialog_auto_answer answer;
+	answer.picked_file = std::filesystem::path("/res/levels/a.desc");
+	answer.save_as_path = "levels/b.desc";
+	f.dialogs.set_auto_answer(answer);
+
+	BOOST_CHECK(f.actions.activate("file.open"));
+	BOOST_CHECK(f.actions.activate("file.save_as"));
+	f.gui.drain();
+	const auto clicked = f.calls;
+	f.calls.clear();
+
+	BOOST_CHECK(f.actions.invoke("file.open", json_of(R"({"path":"/res/levels/a.desc"})")).ok);
+	BOOST_CHECK(f.actions.invoke("file.save_as", json_of(R"({"path":"levels/b.desc"})")).ok);
+	BOOST_TEST((f.calls == clicked));
+	BOOST_TEST((clicked == std::vector<std::string>{ "load:/res/levels/a.desc", "save_as:levels/b.desc" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

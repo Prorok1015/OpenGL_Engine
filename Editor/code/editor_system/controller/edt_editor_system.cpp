@@ -193,9 +193,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 	hooks.exit = m_exit_action;
 	hooks.resources_path = res::resource_system::get_resources_path();
-	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), std::move(hooks));
+	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
-	m_file_menu->register_actions(m_context->actions());
+	m_file_menu->register_actions();
 
 	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
