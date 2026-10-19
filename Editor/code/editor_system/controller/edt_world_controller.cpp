@@ -1,5 +1,5 @@
 #include "edt_world_controller.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_editor_camera.h"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -13,7 +13,7 @@
 #include <boost/json.hpp>
 #include <snk/common/logger/engine_log.h>
 
-edt::world_controller::world_controller(shared_state& state, res::resource_system& res, desc::desc_system& desc)
+edt::world_controller::world_controller(scene_document& state, res::resource_system& res, desc::desc_system& desc)
 	: m_state(state)
 	, m_res(res)
 	, m_desc(desc)
@@ -136,6 +136,6 @@ void edt::world_controller::create_world(const std::string& name)
 	m_state.world_names.push_back(name);
 	m_state.world_descs.push_back(*world_res);
 	m_state.worlds_systems_list.push_back(world_res->get_systems());
-	m_state.is_dirty = true;
+	m_state.commit("Create world", commit_mode::state_only);
 	select_world((int)m_state.world_names.size() - 1);
 }

@@ -1,5 +1,5 @@
-#include "edt_prefab_editor_context.h"
-#include "edt_shared_state.h"
+#include "edt_prefab_document.h"
+#include "edt_scene_document.h"
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -17,14 +17,14 @@
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
 
-edt::prefab_editor_context::prefab_editor_context(shared_state& state, res::resource_system& res, desc::desc_system& desc)
+edt::prefab_document::prefab_document(scene_document& state, res::resource_system& res, desc::desc_system& desc)
 	: m_state(state)
 	, m_res(res)
 	, m_desc(desc)
 {
 }
 
-void edt::prefab_editor_context::open(const res::tag& prefab_tag)
+void edt::prefab_document::open(const res::tag& prefab_tag)
 {
 	if (m_open) {
 		close();
@@ -97,7 +97,7 @@ void edt::prefab_editor_context::open(const res::tag& prefab_tag)
 	egLOG("Editor/PrefabCtx", "Opened prefab '{}' for editing", prefab_tag.view());
 }
 
-void edt::prefab_editor_context::close()
+void edt::prefab_document::close()
 {
 	if (!m_open) return;
 
@@ -114,7 +114,7 @@ void edt::prefab_editor_context::close()
 	egLOG("Editor/PrefabCtx", "Closed prefab editor");
 }
 
-entt::registry* edt::prefab_editor_context::get_registry()
+entt::registry* edt::prefab_document::get_registry()
 {
 	if (!m_open) return nullptr;
 
@@ -125,7 +125,7 @@ entt::registry* edt::prefab_editor_context::get_registry()
 	return preview ? &preview->state() : nullptr;
 }
 
-void edt::prefab_editor_context::inject_camera(entt::registry& reg)
+void edt::prefab_document::inject_camera(entt::registry& reg)
 {
 	entt::entity cam = reg.create();
 	reg.emplace<edt::prefab_camera_tag>(cam);

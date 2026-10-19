@@ -18,7 +18,8 @@ Editor/
     │   ├── edt_scene_editor.cpp/h    # entity CRUD, desc tree helpers, serialize_and_push
     │   ├── edt_level_controller.cpp/h # new/load/save/quicksave level, write_to_disk
     │   ├── edt_world_controller.cpp/h # switch/create world
-    │   ├── edt_shared_state.h        # shared mutable state for all controllers
+    │   ├── edt_scene_document.h/.cpp # scene_document: the level being edited, dirty flag, commit()
+    │   ├── edt_prefab_document.h/.cpp # prefab_document: read-only prefab preview, owns the preview:<tag> set
     │   ├── edt_editor_camera.h       # camera state POD
     │   └── edt_editor_layer.cpp/h    # ImGui layer: dockspace (main menu + default layout from the editor_context registries)
     │
@@ -49,7 +50,7 @@ Editor/
 
 ## Controller Decomposition
 
-`editor_system` was split into 4 classes connected via `shared_state` and callbacks:
+`editor_system` was split into 4 classes connected via `scene_document` and callbacks:
 
 | Class | File | Responsibility |
 |-------|------|----------------|
@@ -58,10 +59,17 @@ Editor/
 | `level_controller` | `controller/edt_level_controller.cpp/h` | Level I/O: new/load/save/quicksave, `write_level_to_disk`, `populate_worlds_from_level`, templates |
 | `world_controller` | `controller/edt_world_controller.cpp/h` | Multi-world: `switch_to_world`, `create_world` |
 
-**`shared_state`** (`controller/edt_shared_state.h`) holds mutable state shared between controllers:
-- Service references: `ctx_manager`, `assembler`, `sfactory`
-- Level identity: `editor_tag`, `level_tag`, `level_name`, `is_dirty`
+**Documents** (`include/snk/editor/edt_document.h`, `edt_document_manager.h`; `editor_context::documents()`): `document` has `id/kind/title/source/is_dirty/generation/can_save/save/save_as`. `document_manager` holds the one `scene_document` (owned by `editor_system`, the controllers are built on it) and at most one `prefab_document` preview: `scene()`, `active()`, `set_active(id)`, `open_prefab(tag)`, `preview()`, `close(id)` (the scene cannot be closed), `for_each`. It raises `document_opened/closed/activated`.
+
+**`scene_document`** (`controller/edt_scene_document.h`) holds mutable state shared between controllers:
+- Service references: `ctx_manager`, `assembler`, `sfactory`; `level_set()` is the `level` context set
+- Level identity: `editor_tag`, `level_tag`, `level_name`; the dirty flag is `is_dirty()` / `mark_clean()`
 - Multi-world: `world_descs`, `world_names`, `worlds_systems_list`, `active_world_idx`
+- `camera` (editor camera state, survives the world reload)
+
+**Every edit ends in `scene_document::commit(label, mode)`**: it marks the document dirty, bumps `desc_generation`, pushes the descs into the level (`scene_editor::serialize_and_push`, installed by `scene_editor` through `set_pusher`) and emits `events.document_changed(id, generation)`. A push that finds no level emits nothing. `commit_mode::state_only` skips the push (new level, new world: the contexts are already built). Never set the dirty flag or call `serialize_and_push` from an edit directly. Save / Save As go through `document::save()/save_as()` (handlers set by `editor_system`); the File menu and the exit prompt still go through `file_menu` and `dialog_service`.
+
+**`prefab_document`** (`controller/edt_prefab_document.h`): read-only (`can_save()` false), opened with `document_manager::open_prefab`, owns the set `preview:<tag>` while open.
 
 Controllers communicate via `std::function` callbacks set by `editor_system` during `init()`.
 
@@ -103,7 +111,7 @@ auto result = inspectors.invoke(type_name, comp_node);
 ```
 User edits in Inspector
   → inspector on_node_changed callback
-  → scene_editor::serialize_and_push()
+  → scene_document::commit("Edit node") → scene_editor::serialize_and_push()
       → active_world_desc serialized to JSON
       → desc_system re-parses level desc
       → ecs_assembler re-assembles world registry
@@ -114,7 +122,7 @@ Gizmo drag committed
   → scene_editor::resolve_node_path in active_world_desc → { owner, target }
   → target empty: update owner.position / rotation / scale
   → target non-empty (node inside a prefab instance): override_edit::write_transform → override_record on owner
-  → serialize_and_push()
+  → scene_document::commit("Move entity")
 ```
 
 The editor never finds nodes by name (names are display only): hierarchy, viewport and `scene_editor` pass `node_id`s / id paths. Inspector edits of a node inside a prefab instance go through `edt_override_edit.h` (records on the instance node; "Reset to base" drops them).
@@ -135,17 +143,17 @@ The editor never finds nodes by name (names are display only): hierarchy, viewpo
 }
 ```
 
-`level_controller::build_level_json()` is the single source of truth. `level_controller::populate_worlds_from_level()` reconstructs `shared_state::world_descs` on load.
+`level_controller::build_level_json()` is the single source of truth. `level_controller::populate_worlds_from_level()` reconstructs `scene_document::world_descs` on load.
 
 ## Multi-World
 
-- `shared_state::world_descs` — vector, indexed by `active_world_idx`
-- `shared_state::active_world_desc()` / `active_world_name()` — pointers, null when the level has no worlds (`active_world_idx = -1`, arrays empty; `world_controller::clear_active_world()`). Never index `world_descs[active_world_idx]` directly.
+- `scene_document::world_descs` — vector, indexed by `active_world_idx`
+- `scene_document::active_world_desc()` / `active_world_name()` — pointers, null when the level has no worlds (`active_world_idx = -1`, arrays empty; `world_controller::clear_active_world()`). Never index `world_descs[active_world_idx]` directly.
 - Hierarchy panel shows a tab per world; switching calls `world_controller::switch_to_world(idx)` which saves editor camera, tears down old registry, rebuilds new one
-- `shared_state::worlds_systems_list` — per-world list of system names (parallel to `world_descs`)
+- `scene_document::worlds_systems_list` — per-world list of system names (parallel to `world_descs`)
 
 **Single source of truth for world order (critical invariant):** the three parallel
-`shared_state` arrays (`world_descs` / `world_names` / `worlds_systems_list`) MUST be
+`scene_document` arrays (`world_descs` / `world_names` / `worlds_systems_list`) MUST be
 built from the same ordered source — the desc-ordered world list. Do NOT build them by
 iterating `scn::context_set::for_each`: it walks the contexts by **context id**, which fills
 gaps left by removed worlds and so is not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
@@ -230,8 +238,8 @@ Non-blocking ImGui modal — must be called every frame while open.
 - **EnTT `registry::each()` does not exist** — use `registry.storage<entt::entity>()` to iterate all entities
 - **EnTT forward declare** — use `#include <entt/fwd.hpp>`, not `namespace entt { class registry; }`
 - **Input routing**: ECS input is routed by `inp::input_router`; a panel binds its hovered image every frame (`bind_item_input`), the context under the cursor gets the full `inp::input_state`, all others a neutral one. Never set `inp::input_focus` by hand
-- **`serialize_and_push()` is destructive** — tears down and rebuilds the entire ECS world; don't hold raw pointers to registry components across it
-- **Camera state**: always call `save_editor_camera_state` before `serialize_and_push`, `inject_editor_camera` after — otherwise camera resets
+- **Edits go through `scene_document::commit()`**, which calls `serialize_and_push()` - destructive — tears down and rebuilds the entire ECS world; don't hold raw pointers to registry components across it
+- **Camera state**: `scene_editor::on_save_camera` runs before the push and `on_inject_camera` after (state in `scene_document::camera`) — otherwise camera resets
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`
 - **`get_field_desc<T>` with inline objects** requires `__type` field present in the JSON object
 - **`children` is a JSON array of named nodes (v2)** — iterate via `as_array()`; a v1 object is only valid before `migrate_tree`

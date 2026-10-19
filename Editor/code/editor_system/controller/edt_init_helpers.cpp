@@ -9,7 +9,7 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_input_target.h"
 #include "edt_editor_camera.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_level_controller.h"
 #include "edt_world_controller.h"
@@ -66,7 +66,7 @@ void setup_viewport_panel(
 	std::shared_ptr<viewport_panel>& viewport,
 	inp::input_router& router,
 	editor_system& sys,
-	shared_state& state,
+	scene_document& state,
 	rnd::render_system& rnd,
 	gui::gui_system& gui,
 	res::resource_system& res)
@@ -94,7 +94,7 @@ void wire_hierarchy_callbacks(
 	viewport_panel& viewport,
 	scene_editor& scene_ed,
 	world_controller& world_ctrl,
-	shared_state& state)
+	scene_document& state)
 {
 	hierarchy.set_on_world_changed([&](int idx) {
 		// A refused switch leaves the old world active: resync the tab and the panels to it.
@@ -114,8 +114,7 @@ void wire_hierarchy_callbacks(
 		scene_ed.delete_entities(node_ids);
 	});
 	hierarchy.set_on_rename_node([&](const std::string& /*old_name*/, const std::string& /*new_name*/) {
-		state.is_dirty = true;
-		scene_ed.serialize_and_push();
+		state.commit("Rename node");
 	});
 	hierarchy.set_on_duplicate_node([&](uint64_t node_id) {
 		scene_ed.duplicate_entity(node_id);
@@ -128,8 +127,7 @@ void wire_hierarchy_callbacks(
 	});
 
 	inspector.set_on_node_changed([&]() {
-		state.is_dirty = true;
-		scene_ed.serialize_and_push();
+		state.commit("Edit node");
 	});
 
 	viewport.set_on_transform_committed(
@@ -139,19 +137,20 @@ void wire_hierarchy_callbacks(
 }
 
 void wire_controller_callbacks(
-	editor_system& sys,
 	scene_editor& scene_ed,
 	world_controller& world_ctrl,
 	level_controller& level_ctrl,
 	editor_layer& layer,
-	shared_state& state)
+	scene_document& state)
 {
-	// on_before_modify, on_after_push and on_world_switched go through the selection service (edt_selection_wiring.cpp).
-	scene_ed.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
-	scene_ed.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
+	// on_before_modify and on_world_switched go through the selection service (edt_selection_wiring.cpp).
+	const auto save_camera = [&state](entt::registry& reg) { save_camera_state(reg, state.camera); };
+	const auto inject_editor_camera = [&state](entt::registry& reg) { inject_camera(reg, state.camera); };
+	scene_ed.on_save_camera = save_camera;
+	scene_ed.on_inject_camera = inject_editor_camera;
 
-	world_ctrl.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
-	world_ctrl.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
+	world_ctrl.on_save_camera = save_camera;
+	world_ctrl.on_inject_camera = inject_editor_camera;
 
 	level_ctrl.on_editor_world_reloaded = [] {
 		egLOG("Editor", "Editor world reloaded");

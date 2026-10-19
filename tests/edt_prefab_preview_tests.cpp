@@ -4,10 +4,10 @@
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/scn_model.h>
 #include "edt_level_controller.h"
-#include "edt_prefab_editor_context.h"
+#include "edt_prefab_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include <chrono>
 #include <memory>
 #include <string>
@@ -60,7 +60,7 @@ struct preview_fixture : test_util::scene_env
 		state.ctx_manager = mgr;
 		state.assembler = assembler.get();
 		state.sfactory = &sf;
-		editor = std::make_unique<edt::prefab_editor_context>(state, *rs, *descs);
+		editor = std::make_unique<edt::prefab_document>(state, *rs, *descs);
 	}
 
 	std::size_t preview_sets() const
@@ -85,8 +85,8 @@ struct preview_fixture : test_util::scene_env
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
 	std::shared_ptr<scn::context_manager> mgr;
-	edt::shared_state state;
-	std::unique_ptr<edt::prefab_editor_context> editor;
+	edt::scene_document state;
+	std::unique_ptr<edt::prefab_document> editor;
 };
 
 }
@@ -104,14 +104,14 @@ BOOST_AUTO_TEST_CASE(Open_CreatesASetOfItsOwnAndLeavesTheLevelAlone)
 	auto* set = mgr->find_set(editor->set_name());
 	BOOST_REQUIRE(set);
 	BOOST_TEST(set->size() == 1u);
-	auto* context = mgr->find(editor->set_name(), edt::prefab_editor_context::context_name());
+	auto* context = mgr->find(editor->set_name(), edt::prefab_document::context_name());
 	BOOST_REQUIRE(context);
 	BOOST_TEST((context->kind() == scn::context_kind::preview));
 	BOOST_TEST((context->mode() == ecs::run_mode::edit));
 	BOOST_TEST(editor->get_registry() == &context->state());
 	BOOST_TEST(mgr->level_set().size() == 2u);
-	BOOST_TEST(mgr->find("level", edt::prefab_editor_context::context_name()) == nullptr);
-	BOOST_TEST(!mgr->level_set().has(edt::prefab_editor_context::context_name()));
+	BOOST_TEST(mgr->find("level", edt::prefab_document::context_name()) == nullptr);
+	BOOST_TEST(!mgr->level_set().has(edt::prefab_document::context_name()));
 }
 
 BOOST_AUTO_TEST_CASE(Open_TheRegistryHasTheCameraTheLightAndThePrefab)
@@ -205,7 +205,7 @@ BOOST_AUTO_TEST_CASE(Save_TheLevelFileDoesNotIncludeThePreview)
 	const auto json = level_ctrl.build_level_json();
 	const std::string text = boost::json::serialize(json);
 
-	BOOST_TEST(text.find(std::string{ edt::prefab_editor_context::context_name() }) == std::string::npos);
+	BOOST_TEST(text.find(std::string{ edt::prefab_document::context_name() }) == std::string::npos);
 	BOOST_TEST(text.find("PrefabLight") == std::string::npos);
 	BOOST_TEST(text.find("\"w0\"") != std::string::npos);
 	BOOST_TEST(text.find("\"w1\"") != std::string::npos);
@@ -240,18 +240,18 @@ BOOST_AUTO_TEST_CASE(LevelReload_ALevelWorldWithThePreviewNameDoesNotCollide)
 	editor->open(prefab_a);
 	BOOST_REQUIRE(editor->is_open());
 	auto* preview = mgr->find_preview(prefab_a.view());
-	auto* level_world = mgr->find("level", edt::prefab_editor_context::context_name());
+	auto* level_world = mgr->find("level", edt::prefab_document::context_name());
 	BOOST_REQUIRE(preview);
 	BOOST_REQUIRE(level_world);
 	BOOST_TEST(preview != level_world);
 
 	pump_reload(tag, LEVEL_TWO_WORLDS); // removes the level's namesake...
 	BOOST_TEST(mgr->find_preview(prefab_a.view()) == preview);
-	BOOST_TEST(mgr->find("level", edt::prefab_editor_context::context_name()) == nullptr);
+	BOOST_TEST(mgr->find("level", edt::prefab_document::context_name()) == nullptr);
 
 	pump_reload(tag, LEVEL_WITH_PREVIEW_NAME); // ...and brings it back
 	BOOST_TEST(mgr->find_preview(prefab_a.view()) == preview);
-	BOOST_TEST(mgr->find("level", edt::prefab_editor_context::context_name()) != nullptr);
+	BOOST_TEST(mgr->find("level", edt::prefab_document::context_name()) != nullptr);
 	BOOST_TEST(editor->get_registry() == &preview->state());
 }
 

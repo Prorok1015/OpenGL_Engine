@@ -1,5 +1,5 @@
 #include "edt_prefab_editor_panel.h"
-#include "edt_prefab_editor_context.h"
+#include "edt_prefab_document.h"
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
@@ -11,7 +11,7 @@
 
 namespace edt
 {
-	static const res::tag s_prefab_cam_tag = res::tag{ prefab_editor_context::RT_COLOR };
+	static const res::tag s_prefab_cam_tag = res::tag{ prefab_document::RT_COLOR };
 
 	prefab_editor_panel::prefab_editor_panel(rnd::render_system& rnd, gui::gui_system& gui)
 		: panel_base("prefab_editor", "Prefab Editor")
@@ -80,7 +80,7 @@ namespace edt
 			// The preview context gets input only while its image is hovered
 			bind_item_input(m_router, inp::input_target{
 				.set = m_ctx->set_name(),
-				.context = std::string{ prefab_editor_context::context_name() } });
+				.context = std::string{ prefab_document::context_name() } });
 		} else {
 			ImGui::TextDisabled("(waiting for render target...)");
 		}

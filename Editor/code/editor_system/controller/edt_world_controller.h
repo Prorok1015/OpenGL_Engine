@@ -8,12 +8,12 @@ namespace desc { class desc_system; }
 
 namespace edt
 {
-	struct shared_state;
+	class scene_document;
 
 	class world_controller
 	{
 	public:
-		world_controller(shared_state& state, res::resource_system& res, desc::desc_system& desc);
+		world_controller(scene_document& state, res::resource_system& res, desc::desc_system& desc);
 
 		// False when it could not switch (no level, or the world is not in it); the state is left as it was then.
 		bool switch_to_world(int idx);
@@ -31,7 +31,7 @@ namespace edt
 		std::function<void(entt::registry&)> on_inject_camera;
 
 	private:
-		shared_state& m_state;
+		scene_document& m_state;
 		res::resource_system& m_res;
 		desc::desc_system& m_desc;
 	};

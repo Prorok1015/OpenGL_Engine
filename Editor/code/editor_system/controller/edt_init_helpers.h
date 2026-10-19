@@ -21,7 +21,7 @@ namespace edt {
 	class level_controller;
 	class world_controller;
 	struct editor_camera_state;
-	struct shared_state;
+	class scene_document;
 
 	namespace init_helpers {
 
@@ -42,7 +42,7 @@ namespace edt {
 			std::shared_ptr<viewport_panel>& viewport,
 			inp::input_router& router,
 			editor_system& sys,
-			shared_state& state,
+			scene_document& state,
 			rnd::render_system& rnd,
 			gui::gui_system& gui,
 			res::resource_system& res);
@@ -54,16 +54,15 @@ namespace edt {
 			viewport_panel& viewport,
 			scene_editor& scene_ed,
 			world_controller& world_ctrl,
-			shared_state& state);
+			scene_document& state);
 
 		// Wire controller callbacks (scene_editor, world_ctrl, level_ctrl)
 		void wire_controller_callbacks(
-			editor_system& sys,
 			scene_editor& scene_ed,
 			world_controller& world_ctrl,
 			level_controller& level_ctrl,
 			editor_layer& layer,
-			shared_state& state);
+			scene_document& state);
 
 		// Editor camera ECS operations
 		void save_camera_state(entt::registry& reg, editor_camera_state& state);

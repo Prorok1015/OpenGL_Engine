@@ -1,8 +1,8 @@
 #include "edt_input_target.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include <snk/scene/level/scn_context_manager.h>
 
-std::optional<inp::input_target> edt::active_play_input_target(const shared_state& state)
+std::optional<inp::input_target> edt::active_play_input_target(const scene_document& state)
 {
 	const auto contexts = state.ctx_manager.lock();
 	const std::string* name = state.active_world_name();
@@ -10,7 +10,7 @@ std::optional<inp::input_target> edt::active_play_input_target(const shared_stat
 	return inp::input_target{ .set = "play", .context = *name };
 }
 
-std::optional<inp::input_target> edt::active_input_target(const shared_state& state)
+std::optional<inp::input_target> edt::active_input_target(const scene_document& state)
 {
 	if (auto play = active_play_input_target(state)) return play;
 
