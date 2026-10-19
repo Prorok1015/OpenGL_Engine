@@ -89,7 +89,8 @@ namespace scn {
 			// A level without worlds has no registry, but its own reload callback above must still run.
 			if (m_registries.empty()) continue;
 
-			// Internal component-tracker hot-reload: load as desc_base.
+			// Internal component-tracker hot-reload. A desc whose __parent changed arrives under its own tag, after the
+			// parent: resource_system follows the dependency graph. desc_base shares one cache block with the concrete desc type.
 			auto changed_desc_handle = m_res_sys.require_sync<desc::desc_base>(tag);
 			if (!ENGINE_VERIFY(changed_desc_handle.is_ready(), "hot reload: '{}' failed to reload, keeping previous state", tag.view())) {
 				continue;

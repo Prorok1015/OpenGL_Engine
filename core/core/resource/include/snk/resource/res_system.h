@@ -13,6 +13,7 @@
 #include <memory>
 #include <set>
 #include <shared_mutex>
+#include <unordered_map>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <utility>
@@ -112,8 +113,10 @@ namespace res
 			return count;
 		}
 
-		// Any thread. Drops the tag's cache entries right away; the watchers are called later on the main thread
-		// (task_system::drain_main): those registered before the signal and still registered by then.
+		// Any thread. Drops the cache entries of the tag and of everything built from it (the reverse edges of the
+		// dependency graph, transitively) right away. The watchers are called later on the main thread
+		// (task_system::drain_main): those registered before the signal and still registered by then, each tag once
+		// per drain, parents before the resources that depend on them.
 		void signal_changed(const res::tag& tag);
 
 		template<class T, class... ARGS>
@@ -208,7 +211,7 @@ namespace res
 			res::res_handle<T> res = require<T>(tag);
 			res.get_control_block()->on_settled([this, res, tag](auto&) {
 				if (res.has_error()) return;
-				push_resource_to_strong_cache(cache_key{ tag, ds::type_id::make<T>() }, res.get_control_block());
+				push_resource_to_strong_cache(key_for<T>(tag), res.get_control_block());
 			});
 		}
 
@@ -216,7 +219,7 @@ namespace res
 		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
 			auto block = std::make_shared<resource_handle>();
 			block->set_ready(std::make_shared<RESOURCE>(std::forward<RESOURCE>(resource)));
-			const cache_key key{ tag, ds::type_id::make<RESOURCE>() };
+			const cache_key key = key_for<RESOURCE>(tag);
 			push_resource_to_strong_cache(key, block);
 			push_resource_to_cache(key, block);
 
@@ -257,6 +260,12 @@ namespace res
 		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
 		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
+		void deliver_pending();
+		// Replaces the dependencies `dependent` is built from. Called before they are requested, so a change that
+		// lands in between still reaches `dependent`.
+		void record_dependencies(const res::tag& dependent, const std::vector<res_dep>& declared);
+		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
+		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
 		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key) {
 			std::unique_lock lock(m_cache_mutex);
@@ -299,7 +308,7 @@ namespace res
 			auto found = find_adapter_recursive<RESOURCE>(tag);
 			ASSERT_MSG(found, "No adapter found for resource type!");
 
-			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, ds::type_id::make<RESOURCE>() });
+			auto [block, is_new] = find_or_insert_cache(key_for<RESOURCE>(tag));
 			if (is_new) {
 				start_loading(tag, block, std::move(found));
 			}
@@ -311,21 +320,32 @@ namespace res
 			return res_handle<RESOURCE>(block, requested, &m_tasks);
 		}
 
+		// `loaded_as` is set to the type the adapter was registered for: a resource whose adapter is its base type's
+		// (desc_base's, for every desc) is one cache block shared with that base, not one block per requested type.
 		template<class T>
-		adapter find_adapter_recursive(const res::tag& tag) const {			
+		adapter find_adapter_recursive(const res::tag& tag, ds::type_id* loaded_as = nullptr) const {
 			if (auto adapter = find_adapter<T>(tag.extension())) {
+				if (loaded_as) *loaded_as = ds::type_id::make<T>();
 				return adapter;
 			}
 
 			if (auto adapter = find_adapter<T>("*")) {
+				if (loaded_as) *loaded_as = ds::type_id::make<T>();
 				return adapter;
 			}
 
 			if constexpr (requires { typename T::base_type; }) {
-				return find_adapter_recursive<typename T::base_type>(tag);
+				return find_adapter_recursive<typename T::base_type>(tag, loaded_as);
 			}
 
 			return nullptr;
+		}
+
+		template<class T>
+		cache_key key_for(const res::tag& tag) const {
+			ds::type_id type = ds::type_id::make<T>();
+			find_adapter_recursive<T>(tag, &type);
+			return cache_key{ tag, type };
 		}
 
 		template<class T>
@@ -361,6 +381,14 @@ namespace res
 		};
 		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
+
+		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it
+		// (what signal_changed follows) and tag -> its dependencies (to replace them when the tag loads again).
+		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
+		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
+		// Signalled tags whose watchers wait for the main-thread drain, in delivery order; guarded by m_cache_mutex.
+		std::vector<std::pair<res::tag, std::uint64_t>> m_pending_delivery;
+		bool m_delivery_scheduled = false;
 
 		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
 		std::unique_ptr<wait_graph> m_graph;

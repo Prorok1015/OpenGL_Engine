@@ -314,6 +314,8 @@ void res::resource_system::collect_stage(const res::tag &tag,
     }
 
     auto declared = ad->collect_dependencies(tag, raw->data);
+    // Before the requests: a change of a dependency that lands after them must still find this resource.
+    record_dependencies(tag, declared);
     if (declared.empty()) {
       deserialize_stage(tag, block, raw, ad, res_deps{});
       return;
@@ -482,19 +484,141 @@ void res::resource_system::wait_for_block(const std::shared_ptr<resource_handle>
   block->wait();
 }
 
-void res::resource_system::signal_changed(const res::tag &tag) {
-  std::uint64_t epoch = 0;
-  {
-    std::unique_lock lock(m_cache_mutex);
-    m_cache.erase_tag(tag);
-    epoch = ++m_watch_epoch;
+void res::resource_system::record_dependencies(const res::tag &dependent,
+                                               const std::vector<res_dep> &declared) {
+  if (declared.empty()) {
+    // The common case: nothing to record, and nothing recorded by an earlier load to drop.
+    std::shared_lock lock(m_cache_mutex);
+    if (!m_depends_on.contains(dependent)) {
+      return;
+    }
   }
 
-  m_tasks.post_main([this, tag, epoch, alive = m_lifetime.token()]() {
-    if (!alive.expired()) {
-      deliver_to_watchers(tag, epoch);
+  std::unique_lock lock(m_cache_mutex);
+  if (const auto old = m_depends_on.find(dependent); old != m_depends_on.end()) {
+    for (const auto &target : old->second) {
+      if (const auto it = m_dependents.find(target); it != m_dependents.end()) {
+        std::erase(it->second, dependent);
+        if (it->second.empty()) {
+          m_dependents.erase(it);
+        }
+      }
     }
-  });
+    m_depends_on.erase(old);
+  }
+
+  std::vector<res::tag> targets;
+  targets.reserve(declared.size());
+  for (const auto &dep : declared) {
+    // A resource that names itself fails on its own; it needs no edge to be reloaded with itself.
+    if (dep.target != dependent && std::ranges::find(targets, dep.target) == targets.end()) {
+      targets.push_back(dep.target);
+      m_dependents[dep.target].push_back(dependent);
+    }
+  }
+  if (!targets.empty()) {
+    m_depends_on[dependent] = std::move(targets);
+  }
+}
+
+std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) const {
+  // Breadth first over the reverse edges; `seen` is what keeps a cycle from looping.
+  std::vector<res::tag> reached{root};
+  std::unordered_set<res::tag> seen{root};
+  for (std::size_t at = 0; at < reached.size(); ++at) {
+    const auto it = m_dependents.find(reached[at]);
+    if (it == m_dependents.end()) {
+      continue;
+    }
+    for (const auto &dependent : it->second) {
+      if (seen.insert(dependent).second) {
+        reached.push_back(dependent);
+      }
+    }
+  }
+  if (reached.size() == 1) {
+    return reached;
+  }
+
+  // Parents first (Kahn): a tag goes out once every dependency of it that is in the batch has. The members of a
+  // cycle never get there and follow in the order they were reached.
+  std::unordered_map<res::tag, std::size_t> waiting;
+  waiting.reserve(reached.size());
+  for (const auto &member : reached) {
+    std::size_t count = 0;
+    if (const auto it = m_depends_on.find(member); it != m_depends_on.end()) {
+      for (const auto &target : it->second) {
+        count += seen.contains(target) ? 1 : 0;
+      }
+    }
+    waiting.emplace(member, count);
+  }
+
+  std::vector<res::tag> ordered;
+  ordered.reserve(reached.size());
+  for (const auto &member : reached) {
+    if (waiting.at(member) == 0) {
+      ordered.push_back(member);
+    }
+  }
+  for (std::size_t at = 0; at < ordered.size(); ++at) {
+    const auto it = m_dependents.find(ordered[at]);
+    if (it == m_dependents.end()) {
+      continue;
+    }
+    for (const auto &dependent : it->second) {
+      if (--waiting.at(dependent) == 0) {
+        ordered.push_back(dependent);
+      }
+    }
+  }
+
+  if (ordered.size() != reached.size()) {
+    const std::unordered_set<res::tag> done(ordered.begin(), ordered.end());
+    for (const auto &member : reached) {
+      if (!done.contains(member)) {
+        ordered.push_back(member);
+      }
+    }
+  }
+  return ordered;
+}
+
+void res::resource_system::signal_changed(const res::tag &tag) {
+  bool schedule = false;
+  {
+    std::unique_lock lock(m_cache_mutex);
+    const std::uint64_t epoch = ++m_watch_epoch;
+    for (const auto &changed : changed_batch(tag)) {
+      m_cache.erase_tag(changed);
+      // Still waiting from an earlier signal: it moves to this batch's position, so that a parent is never
+      // delivered after what depends on it, and it is delivered once.
+      std::erase_if(m_pending_delivery, [&changed](const auto &entry) { return entry.first == changed; });
+      m_pending_delivery.emplace_back(changed, epoch);
+    }
+    schedule = !m_delivery_scheduled;
+    m_delivery_scheduled = true;
+  }
+
+  if (schedule) {
+    m_tasks.post_main([this, alive = m_lifetime.token()]() {
+      if (!alive.expired()) {
+        deliver_pending();
+      }
+    });
+  }
+}
+
+void res::resource_system::deliver_pending() {
+  std::vector<std::pair<res::tag, std::uint64_t>> pending;
+  {
+    std::unique_lock lock(m_cache_mutex);
+    pending.swap(m_pending_delivery);
+    m_delivery_scheduled = false;
+  }
+  for (const auto &[tag, epoch] : pending) {
+    deliver_to_watchers(tag, epoch);
+  }
 }
 
 void res::resource_system::deliver_to_watchers(const res::tag &tag,
