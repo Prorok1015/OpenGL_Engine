@@ -631,6 +631,7 @@ void rnd::driver::validation::driver::set_bind_group(std::uint32_t set, bind_gro
 		valid = false;
 	}
 	const std::size_t alignment = uniform_offset_alignment();
+	const std::size_t storage_alignment = storage_offset_alignment();
 	std::size_t next_dynamic = 0;
 	for (const binding_decl& decl : layout.entries) {
 		const auto entry = std::find_if(known.desc.entries.begin(), known.desc.entries.end(),
@@ -647,6 +648,13 @@ void rnd::driver::validation::driver::set_bind_group(std::uint32_t set, bind_gro
 			m_state->report(rule::invalid_buffer, std::format("bind group {} names a buffer that was destroyed (slot {})", group.index, entry->slot));
 			valid = false;
 			continue;
+		}
+		// The offset the group itself gives (a dynamic offset is added to it, and checked below).
+		const std::size_t static_alignment = decl.type == binding_type::ubo ? alignment : storage_alignment;
+		if (entry->offset % static_alignment != 0) {
+			m_state->report(rule::binding_offset_alignment, std::format("offset {} of the {} entry at slot {} is not a multiple of the {} offset alignment {}",
+				entry->offset, decl.type == binding_type::ubo ? "uniform" : "storage", decl.slot, decl.type == binding_type::ubo ? "uniform" : "storage", static_alignment));
+			valid = false;
 		}
 		if (!decl.dynamic || next_dynamic >= dynamic_offsets.size()) {
 			continue;

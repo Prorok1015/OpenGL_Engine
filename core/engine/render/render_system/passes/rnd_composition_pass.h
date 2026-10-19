@@ -1,12 +1,13 @@
 #pragma once
+#include <snk/common/snk_api.h>
 #include <snk/render/rnd_render_pass_interface.h>
 
 namespace rnd {
-class composition_pass : public render_pass_interface {
+class SNK_API composition_pass : public render_pass_interface {
 public:
   composition_pass();
   virtual ~composition_pass() = default;
-  virtual void execute(frame_context &context,
+  virtual void execute(render_context &context,
                        driver::driver_interface &drv) override;
 
 private:

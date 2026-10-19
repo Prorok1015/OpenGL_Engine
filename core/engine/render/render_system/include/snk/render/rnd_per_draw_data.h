@@ -32,7 +32,10 @@ namespace rnd
 		void upload(std::span<const object_data> objects, std::span<const glm::mat4> bones);
 
 		// Binds set 3 for element `index` of the objects given to upload(). A skinned draw names its skin; a draw
-		// without one, or with a skin nobody registered weights for, sees an empty index buffer.
+		// without one, or with a skin nobody registered weights for, sees an empty index buffer. The index buffer
+		// of a skin is built once and again when the skin's weights are registered anew (a hot reload); a skin
+		// without weights is remembered as such, so its weights are not looked for at every draw.
+
 		void bind_object(std::uint32_t index, const res::tag& skin, const skinning_manager* skins);
 
 		// Bytes between two elements of the ring.
@@ -45,15 +48,20 @@ namespace rnd
 	private:
 		struct skin_slot
 		{
-			driver::buffer_handle indices;
+			driver::buffer_handle indices;	// null while the skin has no weights
 			std::size_t size = 0;
 			driver::bind_group_handle group;
+			// skinning_manager::version of the skin when the slot was made, and the manager's generation when that
+			// was last compared.
+			std::uint64_t version = 0;
+			std::uint64_t checked = 0;
 		};
 
 		void create_buffers(std::size_t objects, std::size_t bones);
 		void destroy_buffers();
 		driver::bind_group_handle make_group(driver::buffer_handle skin, std::size_t skin_size);
 		driver::bind_group_handle group_for(const res::tag& skin, const skinning_manager* skins);
+		void release(skin_slot& slot);
 
 		driver::driver_interface& m_drv;
 		driver::bind_group_layout_handle m_layout;

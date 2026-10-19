@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/common.h>
 #include <snk/common/ds/ds_bit_frags.hpp>
+#include <snk/common/shader_serial.h>
 #include <cstdint>
 #include <glm/glm.hpp>
 
@@ -131,6 +132,10 @@ namespace rnd::driver
 			: header(hdr) {}
 		virtual ~texture_interface() = default;
 
+		// Names this texture for as long as the process runs. Unlike its address it is never handed out again,
+		// so a cache keyed by texture cannot take a new texture for an old one that lived at the same place.
+		std::uint64_t serial() const noexcept { return m_serial; }
+
 		// The texture a backend-specific consumer may downcast; decorators (validation) return the one they wrap.
 		virtual texture_interface* native() { return this; }
 
@@ -175,5 +180,6 @@ namespace rnd::driver
 
 	protected:
 		texture_header header;
+		const std::uint64_t m_serial = next_shader_serial();
 	};
 }

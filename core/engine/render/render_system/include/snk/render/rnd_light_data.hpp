@@ -1,7 +1,7 @@
 #pragma once
 #include <memory_resource>
 #include <glm/vec4.hpp>
-#include <snk/render/shader/rnd_shader_manager.h>
+#include <snk/render/rnd_gpu_blocks.h>
 #include <snk/common/mem_allocator.h>
 
 // rnd_light_data.hpp
@@ -24,7 +24,7 @@ namespace rnd {
 
 		std::pmr::vector<directional_light_t> directional{ds::frame_allocator()};
 
-		// Convert to GPU-ready lights_params for ShaderManager::update_global_sun().
+		// Convert to GPU-ready lights_params for render_context::write_lights().
 		// Respects lights_params::MAX_LIGHT_COUNT limit.
 		rnd::lights_params to_gpu_params() const {
 			rnd::lights_params result{};

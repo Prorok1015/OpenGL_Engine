@@ -1,10 +1,14 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 #include <snk/common/common.h>
+#include <snk/common/snk_api.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/resource/res_tag.h>
-#include <snk/driver/rnd_shader_interface.h>
 #include <snk/driver/rnd_driver_interface.h>
 
 namespace res { class resource_system; }
@@ -133,10 +137,13 @@ namespace rnd
 			}
 		};
 
+		// What a material feeds the program with, ready to bind: the textures at the sampler slots of set 2
+		// (null while one is still loading) and the bytes of the MaterialParams block (std140, see
+		// rnd_material_params.h). Nothing is set by name.
 		struct runtime_data
 		{
 			std::vector<rnd::driver::texture_interface*> samplers;
-			std::unordered_map<std::string, driver::uniform_data> uniforms;
+			std::vector<std::byte> material_params;
 		};
 
 		std::size_t get_hash() const noexcept {
@@ -148,16 +155,22 @@ namespace rnd
 		}
 
 		// The source of every stage with includes and defines resolved and the binding macros expanded for `bindings`.
-		std::vector<driver::shader_header> load(res::resource_system& res_sys, const driver::binding_table& bindings) const;
-		static std::vector<driver::shader_header> load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings);
+		// A source the engine cannot prepare (an unreadable binding macro, no #version) is not returned: `error`
+		// says why and the shader must not reach the compiler.
+		struct load_result
+		{
+			std::vector<driver::shader_header> headers;
+			std::string error;
+
+			bool ok() const noexcept { return error.empty() && !headers.empty(); }
+		};
+
+		SNK_API load_result load(res::resource_system& res_sys, const driver::binding_table& bindings) const;
+		SNK_API static load_result load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings);
 
 		constant_data cdata;
 		runtime_data rdata;
 	};
-
-	// Binds the samplers and sets the uniforms of a material on the program that is current.
-	void configure_render_pass(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader);
-	void configure_uniforms(const shader_config::runtime_data& rdata, rnd::driver::shader_interface* shader);
 }
 
 namespace std {
