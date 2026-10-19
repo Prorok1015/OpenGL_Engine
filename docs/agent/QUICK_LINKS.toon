@@ -28,6 +28,11 @@ Descriptor System:
   → core/core/desc/include/snk/desc/desc_base.hpp (descriptor base)
   → docs/epics/desc-driven/ (architecture docs)
 
+Command Registry:
+  → core/core/command/include/snk/command/cmd_registry.h (cmd::command_registry: id, JSON schemas, invoke; main thread only)
+  → core/core/command/include/snk/command/cmd_main_thread_queue.h (cmd::main_thread_queue: post from any thread, run by the ds::task_system main drain)
+  → core/core/command/include/snk/command/cmd_json_schema.h (cmd::json_schema: schema subset validator)
+
 Memory Allocators:
   → core/core/common/include/snk/common/mem_allocator.h (ds::frame_allocator(), frame_allocator_reset())
   → core/core/common/include/snk/common/mem_linear_allocator.h (custom scope)
