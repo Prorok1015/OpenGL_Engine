@@ -122,7 +122,7 @@
                     "__id" : "6b83d0f4a1e92c77",
                     "name" : "scene",
                     "transform" : {
-                        "position" : [-0.25, 0.25, 0.0],
+                        "position" : [-1.0, 0.5, 0.0],
                         "scale" : [1.5, 1.5, 1.5]
                     },
                     "components" : {
