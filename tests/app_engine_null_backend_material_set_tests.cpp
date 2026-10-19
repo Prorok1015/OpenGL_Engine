@@ -2,6 +2,7 @@
 #include "null_engine_fixture.hpp"
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_frame_context.h>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/shader/rnd_material_compiler.h>
 #include <snk/render/shader/rnd_material_params.h>
