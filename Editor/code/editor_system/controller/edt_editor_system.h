@@ -1,14 +1,17 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
-#include "edt_init_helpers.h"
+#include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/logger/engine_log.h>
@@ -39,19 +42,13 @@ namespace edt {
 	class console_panel;
 	class asset_browser_panel;
 	class prefab_editor_panel;
-	class prefab_editor_context;
-	struct async_import_token;
+	class prefab_document;
 
 	class editor_system
 	{
-		friend void init_helpers::wire_controller_callbacks(
-			editor_system&, scene_editor&, world_controller&, level_controller&,
-			editor_layer&, shared_state&);
-		friend void init_helpers::setup_viewport_panel(
-			std::shared_ptr<viewport_panel>&, inp::input_router&, editor_system&, shared_state&,
-			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
+		// Closes the prefab preview and releases the scene document in the editor_context before its members die.
 		~editor_system();
 
 		void init(ds::app_data_storage& inp_sys);
@@ -64,8 +61,8 @@ namespace edt {
 	private:
 		editor_context* m_context = nullptr;
 
-		// Shared state for all controllers
-		shared_state m_state;
+		// The level being edited; the controllers share it. The documents of the editor_context refer to it.
+		scene_document m_state;
 
 		// Controllers
 		scene_editor m_scene_editor;
@@ -85,12 +82,27 @@ namespace edt {
 		std::unique_ptr<edt::model_importer> m_model_importer;
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
-		std::unique_ptr<edt::async_import_token> m_import_token;
-		// Owner of the job callbacks; after m_import_token and the importer/dialog they touch, so it dies (and cancels) first.
+		// The import in flight (m_importing); the job's on_done fills m_import_result or m_import_failure on the main thread.
+		bool m_importing = false;
+		bool m_import_finished = false;
+		std::uint64_t m_import_job = 0;
+		std::string m_import_name;
+		float m_import_spinner_t = 0.f;
+		std::optional<import_intermediate> m_import_result;
+		// Set when the job itself failed (exception); a failed import reports through m_import_result->error.
+		std::string m_import_failure;
+		// Owner of the job callbacks; after the import state and the importer/dialog they touch, so it dies (and cancels) first.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		void start_import(const std::filesystem::path& abs_path);
 		bool poll_import_pipeline();
 		bool poll_import_progress();
+		void finish_import();
+
+		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
+		void create_panels(bool capture_log);
+		void create_viewport_panel();
+		void wire_controller_callbacks();
+		void wire_panel_callbacks();
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
@@ -105,15 +117,9 @@ namespace edt {
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
 		std::shared_ptr<prefab_editor_panel>   m_prefab_panel;
 
-		// Prefab editor (EPIC-25)
-		std::unique_ptr<prefab_editor_context> m_prefab_ctx;
+		// Prefab editor (EPIC-25); the preview document itself is owned by the editor_context's document_manager
 		void open_prefab_for_edit(const res::tag& tag);
 		void close_prefab_editor();
-
-		// Editor camera (EPIC-11)
-		editor_camera_state m_camera_state;
-		void save_editor_camera_state(entt::registry& reg);
-		void inject_editor_camera(entt::registry& reg);
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;

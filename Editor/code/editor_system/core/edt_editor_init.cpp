@@ -49,6 +49,7 @@ namespace components {
 		if (data.has_value<edt::editor_context>()) {
 			data.require<edt::editor_context>().jobs().cancel_all_and_wait();
 		}
+		// Order matters: ~editor_system releases the scene document (and closes the preview) in the context's document_manager.
 		data.destruct<edt::editor_system>();
 		// Registered by editor_system::init, after the system itself.
 		if (data.has_value<edt::editor_context>()) {

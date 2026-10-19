@@ -64,18 +64,20 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
 
     for (std::size_t i = 0; i < packet.opaque_draws.size(); ++i) {
       const auto& dc = packet.opaque_draws[i];
-      auto *va = context.geometry(dc.geometry_tag);
+      auto *va = context.geometry(packet.geometry_of(dc));
       if (!va)
         continue;
 
-      rnd::variant_id& variant = z_variants[dc.variant.value];
+      // The variant comes from the instance, not from the draw: the instance may have been compiled again after the draw was made.
+      const rnd::variant_id source = context.material(dc.material).opaque;
+      rnd::variant_id& variant = z_variants[source.value];
       if (!variant.is_valid()) {
-        variant = variants.with_program(dc.variant, z_prepass_program);
+        variant = variants.with_program(source, z_prepass_program);
       }
       if (!pipelines.bind(variant))
         continue;
-      rnd::configure_pass(context, *dc.material);
-      context.bind_object(packet.opaque_object(i), dc.skinning_tag);
+      rnd::configure_pass(context, dc.material);
+      context.bind_object(packet.opaque_object(i), packet.skin_of(dc));
 
       drv.draw_indices(va, dc.indices_count,
                        dc.vx_begin, dc.ind_begin);

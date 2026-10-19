@@ -1,10 +1,12 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_service_commands.h>
+#include "edt_scene_document.h"
 #include <utility>
 
 edt::editor_context::editor_context(desc::desc_system& descs, res::resource_system& resources, rnd::render_system& render,
 	gui::gui_system& gui, scn::ecs_assembler& assembler, ecs::system_factory& systems,
-	scn::context_manager& contexts, ds::task_system& tasks, cmd::command_registry& commands)
+	scn::context_manager& contexts, ds::task_system& tasks, cmd::command_registry& commands,
+	scene_document& scene)
 	: m_descs(descs)
 	, m_resources(resources)
 	, m_render(render)
@@ -12,6 +14,7 @@ edt::editor_context::editor_context(desc::desc_system& descs, res::resource_syst
 	, m_assembler(assembler)
 	, m_systems(systems)
 	, m_contexts(contexts)
+	, m_documents(scene, m_events, resources, descs)
 	, m_jobs(tasks, &m_events)
 	, m_actions(commands)
 {

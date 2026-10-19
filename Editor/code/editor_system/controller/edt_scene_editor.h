@@ -10,7 +10,7 @@
 
 namespace edt
 {
-	struct shared_state;
+	class scene_document;
 
 	class scene_editor
 	{
@@ -25,7 +25,10 @@ namespace edt
 			std::vector<uint64_t> target;
 		};
 
-		explicit scene_editor(shared_state& state);
+		explicit scene_editor(scene_document& state);
+		~scene_editor();
+		scene_editor(const scene_editor&) = delete;
+		scene_editor& operator=(const scene_editor&) = delete;
 
 		void create_entity(const std::string& type_name);
 		void create_entity_from_node(prefab_node node);
@@ -37,7 +40,9 @@ namespace edt
 		void reparent_entity(uint64_t node_id, uint64_t new_parent_id, int insert_index);
 		void on_transform_committed(std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale);
 
-		void serialize_and_push();
+		// Reloads the active world from its desc. False when there is nothing to push to (no level, no such world).
+		// Edits do not call this directly: scene_document::commit does.
+		bool serialize_and_push();
 		void sync_ecs_transforms_to_desc();
 
 		// Copies a live transform into the node. A node that references a desc and has no transform of its own is
@@ -54,11 +59,10 @@ namespace edt
 
 		// Callbacks set by the coordinator
 		std::function<void()> on_before_modify;
-		std::function<void()> on_after_push;
 		std::function<void(entt::registry&)> on_save_camera;
 		std::function<void(entt::registry&)> on_inject_camera;
 
 	private:
-		shared_state& m_state;
+		scene_document& m_state;
 	};
 }

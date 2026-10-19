@@ -198,7 +198,8 @@ jobs:
         run: ccache -s
 
       - name: Run unit tests under sanitizer
-        timeout-minutes: 10
+        # TSan runs the null-backend scene tests ~10x slower (about 25 s each); the limit only guards against hangs.
+        timeout-minutes: 25
         working-directory: build/${{ matrix.preset }}
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1

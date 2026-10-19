@@ -1,6 +1,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/render/rnd_material_groups.h>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_per_draw_data.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -18,8 +19,9 @@ namespace {
 	{
 	public:
 		frame_render_context(rnd::frame_context& frame, rnd::texture_manager& textures, rnd::ShaderManager& shaders,
-			rnd::geom_manager& geometry, rnd::per_draw_data& draw_data, rnd::material_groups& materials, const rnd::skinning_manager* skins)
-			: m_frame(frame), m_textures(textures), m_shaders(shaders), m_geometry(geometry), m_draw_data(draw_data), m_materials(materials), m_skins(skins)
+			rnd::geom_manager& geometry, rnd::per_draw_data& draw_data, rnd::material_groups& materials,
+			rnd::material_instance_cache& instances, const rnd::skinning_manager* skins)
+			: m_frame(frame), m_textures(textures), m_shaders(shaders), m_geometry(geometry), m_draw_data(draw_data), m_materials(materials), m_instances(instances), m_skins(skins)
 		{}
 
 		std::span<rnd::render_packet_t> packets() override
@@ -48,7 +50,8 @@ namespace {
 		void write_lights(const rnd::lights_params& lights) override { m_shaders.update_global_sun(lights); }
 		void bind_frame() override { m_shaders.bind_frame(); }
 
-		void bind_material(const rnd::compiled_material& material) override { m_materials.bind(material); }
+		const rnd::compiled_material& material(rnd::material_instance_id id) const override { return m_instances.get(id); }
+		void bind_material(rnd::material_instance_id id) override { m_materials.bind(m_instances.get(id)); }
 
 		void upload_objects(std::span<const rnd::object_data> objects, std::span<const glm::mat4> bones) override { m_draw_data.upload(objects, bones); }
 		void bind_object(std::uint32_t index, const res::tag& skin) override { m_draw_data.bind_object(index, skin, m_skins); }
@@ -60,6 +63,7 @@ namespace {
 		rnd::geom_manager& m_geometry;
 		rnd::per_draw_data& m_draw_data;
 		rnd::material_groups& m_materials;
+		rnd::material_instance_cache& m_instances;
 		const rnd::skinning_manager* m_skins;
 	};
 }
@@ -69,6 +73,8 @@ void rnd::render_system::begin_frame(frame_context& context)
 	context.textures = m_textures.get();
 	context.variants = &m_shaders->variants();
 	context.material_compiler = m_material_compiler.get();
+	m_instances->begin_frame(m_material_compiler.get());
+	context.materials = m_instances.get();
 }
 
 rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d, res::resource_system& res_sys)
@@ -78,6 +84,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), d, res_sys))
 	, m_draw_data(std::make_unique<rnd::per_draw_data>(*drv))
 	, m_materials(std::make_unique<rnd::material_groups>(*drv))
+	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
 {
 	auto& texture_manager = *m_textures;
 	texture_manager.register_loader("texture_2d_desc", [](driver::driver_interface* drv, const rnd::texture_desc& desc) -> std::unique_ptr<rnd::driver::texture_interface> {
@@ -207,7 +214,7 @@ void rnd::render_system::render_frame(frame_context& context) const
 	auto& gpu = rnd::get_gpu_profiler();
 	gpu.begin_frame(ds::profiler_current_frame());
 
-	frame_render_context pass_context(context, *m_textures, *m_shaders, *m_geometry, *m_draw_data, *m_materials, m_skinning_manager);
+	frame_render_context pass_context(context, *m_textures, *m_shaders, *m_geometry, *m_draw_data, *m_materials, *m_instances, m_skinning_manager);
 	for (auto& pass : render_passes) {
 		pass->execute(pass_context, *drv);
 	}

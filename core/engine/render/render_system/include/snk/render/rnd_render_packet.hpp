@@ -1,7 +1,12 @@
 #pragma once
+#include <algorithm>
+#include <bit>
+#include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <utility>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
@@ -9,8 +14,10 @@
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/render/rnd_light_data.hpp>
+#include <snk/common/engine_assert.h>
 #include <snk/common/mem_allocator.h>
 #include <snk/common/ds/ds_fixed_vector.hpp>
+#include <snk/resource/res_tag.h>
 
 namespace rnd {
 	struct camera_render_data_t {
@@ -117,22 +124,90 @@ namespace rnd {
 		}
 	};
 
+	// An index into one of the packet's frame tables (geometries, skins, materials). Plain data, so a draw call
+	// stays trivially copyable; the table that resolves it belongs to the packet and lives for the frame.
+	template<class Table>
+	struct draw_ref {
+		static constexpr uint32_t none = ~0u;
+
+		uint32_t index = none;
+
+		constexpr bool is_valid() const noexcept { return index != none; }
+		constexpr auto operator<=>(const draw_ref&) const noexcept = default;
+	};
+
+	using geometry_id = draw_ref<struct geometry_table>;
+	using skin_id = draw_ref<struct skin_table>;
+	// Names a material instance: an index into the renderer's material_instance_cache, valid for the frame
+	// the draw was extracted in.
+	using material_instance_id = draw_ref<struct material_table>;
+
+	// What a draw is sorted within: the list it lives in.
+	enum class draw_pass : uint8_t { opaque = 0, transparent = 1 };
+
+	// Sort key layout, high bits first.
+	//   opaque:      pass(2) | pipeline(20) | material(22) | depth(20), nearest first: fewer state changes, early-z.
+	//   transparent: pass(2) | depth(20)    | pipeline(20) | material(22), farthest first: the blend order.
+	// `depth` is the view-space distance along the camera axis, quantized from the top bits of the float (distances
+	// are not negative, so the bit pattern grows with the value).
+	inline constexpr uint32_t sort_key_depth_bits = 20;
+	inline constexpr uint32_t sort_key_pipeline_bits = 20;
+	inline constexpr uint32_t sort_key_material_bits = 22;
+
+	inline uint32_t quantize_view_depth(float view_depth)
+	{
+		const float distance = view_depth > 0.0f ? view_depth : 0.0f; // also catches NaN
+		return std::bit_cast<uint32_t>(distance) >> (31 - sort_key_depth_bits);
+	}
+
+	inline uint64_t make_sort_key(draw_pass pass, uint32_t pipeline, uint32_t material, float view_depth)
+	{
+		ASSERT_MSG(pipeline < (1u << sort_key_pipeline_bits), "pipeline {} does not fit the sort key", pipeline);
+		ASSERT_MSG(material < (1u << sort_key_material_bits), "material {} does not fit the sort key", material);
+		constexpr uint64_t depth_mask = (uint64_t{1} << sort_key_depth_bits) - 1;
+		constexpr uint64_t pipeline_mask = (uint64_t{1} << sort_key_pipeline_bits) - 1;
+		constexpr uint64_t material_mask = (uint64_t{1} << sort_key_material_bits) - 1;
+		const uint64_t pass_bits = static_cast<uint64_t>(pass) << 62;
+		const uint64_t depth = quantize_view_depth(view_depth) & depth_mask;
+		const uint64_t pipe = pipeline & pipeline_mask;
+		const uint64_t mat = material & material_mask;
+		if (pass == draw_pass::transparent) {
+			const uint64_t far_first = depth_mask - depth;
+			return pass_bits | (far_first << 42) | (pipe << sort_key_material_bits) | mat;
+		}
+		return pass_bits | (pipe << 42) | (mat << sort_key_depth_bits) | depth;
+	}
+
+	// `variant` is the pipeline at extraction time: it orders the draws (sort_key) and nothing else. Passes take the
+	// program from the instance (render_context::material), which may be compiled again after the draw was made.
+	// POD: no tags, strings or pointers. Geometry and skin are ids into the tables of the packet that holds the
+	// draw; the material is an id into the material_instance_cache.
 	struct draw_call_t {
 		uint64_t     sort_key      = 0;
-		res::tag     geometry_tag;
+		geometry_id  geometry;
 		variant_id   variant;
-		// Valid from extract to the end of render in the same frame: owned by compiled_material_component or by the extractor's retired list, which the next extract clears.
-		const compiled_material* material = nullptr;
+		material_instance_id material;
 		uint32_t     indices_count = 0;
 		uint32_t     vx_begin      = 0;
 		uint32_t     ind_begin     = 0;
 		glm::mat4    transform     = glm::mat4{1.0f};
 
-		// Skinned draws: the skin whose weights the shader reads and where the skeleton's matrices start in the
-		// packet's bone palette.
-		res::tag skinning_tag;
+		// Skinned draws: the skin whose weights the shader reads, and where the skeleton's matrices start in the
+		// packet's bone palette and how many there are.
+		skin_id  skin;
 		uint32_t bone_offset = 0;
+		uint32_t bone_count  = 0;
 	};
+	static_assert(std::is_trivially_copyable_v<draw_call_t>, "a draw call is copied and sorted as plain data");
+	static_assert(std::is_standard_layout_v<draw_call_t>);
+	static_assert(std::is_trivially_destructible_v<draw_call_t>);
+
+	// Orders draws by sort_key. Draws with equal keys keep their extraction order.
+	inline void sort_draws(std::span<draw_call_t> draws)
+	{
+		std::stable_sort(draws.begin(), draws.end(),
+			[](const draw_call_t& a, const draw_call_t& b) { return a.sort_key < b.sort_key; });
+	}
 
 	struct debug_line_t {
 		glm::vec3 start;
@@ -146,7 +221,7 @@ namespace rnd {
 
 	struct skybox_draw_t {
 		variant_id variant;
-		const compiled_material* material = nullptr;
+		material_instance_id material;
 		std::optional<glm::mat4> world;
 	};
 
@@ -163,6 +238,15 @@ namespace rnd {
 		// which puts the opaque draws first and the transparent ones after them.
 		uint32_t object_base = 0;
 		uint32_t bone_base = 0;
+
+		// What the draws' ids mean in this packet. Frame temporary like the draws. (Materials are not here: their
+		// ids name instances of the material_instance_cache.)
+		std::pmr::vector<res::tag> geometries{ds::frame_allocator()};
+		std::pmr::vector<res::tag> skins{ds::frame_allocator()};
+
+		const res::tag& geometry_of(const draw_call_t& draw) const { return geometries[draw.geometry.index]; }
+		// The skin tag of a skinned draw; the null tag for a draw without one.
+		const res::tag& skin_of(const draw_call_t& draw) const { return draw.skin.is_valid() ? skins[draw.skin.index] : res::tag::null; }
 
 		uint32_t opaque_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(draw); }
 		uint32_t transparent_object(std::size_t draw) const { return object_base + static_cast<uint32_t>(opaque_draws.size() + draw); }

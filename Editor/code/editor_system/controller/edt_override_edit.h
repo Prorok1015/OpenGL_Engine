@@ -11,7 +11,7 @@
 
 // How the editor turns an edit inside a prefab instance into override records on the instance node.
 // `owner` is the node of the edited desc that instantiates the prefab, `target` the node-id path below it.
-namespace edt { struct shared_state; }
+namespace edt { class scene_document; }
 
 namespace edt::override_edit
 {
@@ -37,12 +37,12 @@ namespace edt::override_edit
 
 	// Expanding an instance copies prefab content and logs about broken input, so the panels do it once per selection or
 	// edit instead of once per frame. Results are kept per (active world, owner node id, target) and dropped as a whole
-	// when shared_state::desc_generation moves, so correctness does not depend on anyone calling invalidate().
+	// when scene_document::desc_generation moves, so correctness does not depend on anyone calling invalidate().
 	// Callers get shared ownership: what they hold stays valid whatever the cache does meanwhile.
 	class view_cache
 	{
 	public:
-		view_cache(scn::ecs_assembler& assembler, const shared_state& state) : m_assembler(assembler), m_state(state) {}
+		view_cache(scn::ecs_assembler& assembler, const scene_document& state) : m_assembler(assembler), m_state(state) {}
 
 		void invalidate();
 		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
@@ -60,7 +60,7 @@ namespace edt::override_edit
 		void sync_generation();
 
 		scn::ecs_assembler& m_assembler;
-		const shared_state& m_state;
+		const scene_document& m_state;
 		uint64_t m_generation = 0;
 		std::vector<entry<std::optional<prefab_node>>> m_bases;
 		std::vector<entry<std::vector<listed_node>>> m_children;

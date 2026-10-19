@@ -3,6 +3,7 @@
 // upload and the binds to a per_draw_data, and has nothing else to offer (a pass that asks for a texture, a
 // program or a vertex array gets none).
 #include <snk/render/rnd_material_groups.h>
+#include <snk/render/rnd_material_instance_cache.h>
 #include <snk/render/rnd_per_draw_data.h>
 #include <snk/render/rnd_render_context.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -13,8 +14,9 @@ namespace test_util {
 class test_render_context final : public rnd::render_context
 {
 public:
-	explicit test_render_context(rnd::per_draw_data* draw_data = nullptr, rnd::material_groups* materials = nullptr)
-		: m_draw_data(draw_data), m_materials(materials)
+	explicit test_render_context(rnd::per_draw_data* draw_data = nullptr, rnd::material_groups* materials = nullptr,
+		rnd::material_instance_cache* instances = nullptr)
+		: m_draw_data(draw_data), m_materials(materials), m_instances(instances)
 	{}
 
 	// The packets the passes see; nullptr leaves the frame without any.
@@ -39,10 +41,16 @@ public:
 	void write_lights(const rnd::lights_params&) override {}
 	void bind_frame() override {}
 
-	void bind_material(const rnd::compiled_material& material) override
+	const rnd::compiled_material& material(rnd::material_instance_id id) const override
 	{
-		if (m_materials) {
-			m_materials->bind(material);
+		ASSERT_MSG(m_instances, "this test context was made without a material_instance_cache");
+		return m_instances->get(id);
+	}
+
+	void bind_material(rnd::material_instance_id id) override
+	{
+		if (m_materials && m_instances) {
+			m_materials->bind(m_instances->get(id));
 		}
 	}
 
@@ -63,6 +71,7 @@ public:
 private:
 	rnd::per_draw_data* m_draw_data;
 	rnd::material_groups* m_materials;
+	rnd::material_instance_cache* m_instances;
 	std::pmr::vector<rnd::render_packet_t>* m_packets = nullptr;
 	const rnd::skinning_manager* m_skins = nullptr;
 	rnd::shader_config_cache m_variants;

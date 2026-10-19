@@ -11,10 +11,10 @@ namespace edt
 	class scene_editor;
 	class world_controller;
 	class selection_service;
-	struct shared_state;
+	class scene_document;
 
 	// Routes the selection between the hierarchy, the inspector and the viewport through selection_service
-	// and editor_events instead of direct callbacks. Sets scene_editor::on_before_modify / on_after_push,
+	// and editor_events instead of direct callbacks. Sets scene_editor::on_before_modify,
 	// world_controller::on_world_switched and the hierarchy's node-selected callback. The returned
 	// connections keep the subscriptions alive; subscription order is the order the old callbacks ran in.
 	// The hierarchy panel still draws and edits its own selection; a selection made elsewhere is not mirrored
@@ -22,7 +22,7 @@ namespace edt
 	[[nodiscard]] std::vector<connection> wire_selection(
 		editor_events& events,
 		selection_service& service,
-		shared_state& state,
+		scene_document& state,
 		scene_editor& scene_ed,
 		world_controller& world_ctrl,
 		scene_hierarchy_panel& hierarchy,

@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_document.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -10,9 +11,6 @@
 
 namespace edt
 {
-	// Placeholder until the document model (#137) introduces a real type.
-	using document_id = std::uint64_t;
-
 	// What is selected in the active document. Nodes are addressed by stable ids, never by pointers into
 	// the desc, so the value stays meaningful across edits (see selection_service).
 	struct selection
@@ -92,13 +90,13 @@ namespace edt
 			}
 		}
 
-	private:
-		template<class... Args> friend class signal;
+		// Made by signal::subscribe; `disconnect` runs once, on disconnect() or destruction.
 		explicit connection(std::function<void()> disconnect)
 			: m_disconnect(std::move(disconnect))
 		{
 		}
 
+	private:
 		std::function<void()> m_disconnect;
 	};
 
@@ -144,9 +142,9 @@ namespace edt
 		std::shared_ptr<detail::signal_state<Args...>> m_state = std::make_shared<detail::signal_state<Args...>>();
 	};
 
-	// Editor-wide notifications, reached through editor_context::events(). Today's producers: selection_service
-	// (selection_changed), scene_editor/world_controller wiring (document_changed, active_world_changed),
-	// job_service (job_started, job_progress, job_finished); the rest arrive with the document model.
+	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
+	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
+	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished).
 	class editor_events
 	{
 	public:

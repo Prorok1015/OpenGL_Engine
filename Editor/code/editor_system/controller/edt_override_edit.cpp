@@ -1,7 +1,7 @@
 #include "edt_override_edit.h"
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_json_ops.h>
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>

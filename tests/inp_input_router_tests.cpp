@@ -12,7 +12,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_world_context.h>
 #include "edt_input_target.h"
-#include "edt_shared_state.h"
+#include "edt_scene_document.h"
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -731,7 +731,7 @@ BOOST_AUTO_TEST_CASE(GameView_InEditModeWithoutAPlaySetLeavesEveryLevelContextNe
 	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
 	shared_mgr->create_context("level", "w", scn::context_kind::level, { "test::probe_input" });
 	shared_mgr->create_context("level", "v", scn::context_kind::level, { "test::probe_input" });
-	edt::shared_state state;
+	edt::scene_document state;
 	state.ctx_manager = shared_mgr;
 	state.world_descs.emplace_back();
 	state.world_names.push_back("w");
@@ -761,7 +761,7 @@ BOOST_AUTO_TEST_CASE(GameView_InEditModeWithoutAPlaySetLeavesEveryLevelContextNe
 BOOST_AUTO_TEST_CASE(EditorTargets_ViewportPrefersThePlayTwinThenTheLevelThenNothing)
 {
 	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
-	edt::shared_state state;
+	edt::scene_document state;
 	state.ctx_manager = shared_mgr;
 
 	// No active world: nothing to feed.
