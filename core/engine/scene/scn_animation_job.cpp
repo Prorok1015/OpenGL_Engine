@@ -32,12 +32,12 @@ void update_bone_offsets_system(
 }
 
 void update_animation_controllers_system(
-    scn::level_res<const scn::delta_time> dt,
+    const scn::delta_time& dt,
     entt::view<entt::get_t<scn::animation_controller_component>> controllers)
 {
     for (auto [ent, ctrl] : controllers.each()) {
         if (!ctrl.playing) continue;
-        ctrl.current_time += dt->dt * ctrl.speed;
+        ctrl.current_time += dt.dt * ctrl.speed;
         const float tps = ctrl.ticks_per_second > 0 ? ctrl.ticks_per_second : 25.0f;
         const float time_in_ticks = ctrl.current_time * tps;
         if (time_in_ticks > ctrl.duration) {

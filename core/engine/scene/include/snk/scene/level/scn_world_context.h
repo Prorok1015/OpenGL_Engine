@@ -3,8 +3,10 @@
 #include <snk/ecs/ecs_invoker.hpp>
 #include <snk/ecs/ecs_system_plan.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/scene/scn_time.h>
 #include <snk/common/snk_api.h>
 #include <entt/entity/registry.hpp>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -50,12 +52,18 @@ namespace scn
 		void apply_commands() { apply_commands(m_state); }
 		static void apply_commands(entt::registry& state);
 
-		// The owner keeps these identical across its contexts.
-		void sync_time(const ecs::fixed_stepper& stepper, ecs::run_mode mode)
-		{
-			m_stepper = stepper;
-			m_mode = mode;
-		}
+		// The context owns its time. begin_frame advances the stepper by the mode's rules and
+		// writes delta_time and update_alpha into the registry ctx; the fixed steps it allows are
+		// then played one by one through write_fixed_time().
+		void begin_frame(std::chrono::duration<float> dt);
+		int fixed_steps() const { return m_fixed_steps; }
+		void write_fixed_time();
+		// Forgets the leftover fraction of a step (a fresh load); alpha goes back to 0.
+		void reset_time();
+
+		// The owner keeps stepper and mode identical across the contexts of a set (lockstep).
+		void set_mode(ecs::run_mode mode) { m_mode = mode; }
+		void set_stepper(const ecs::fixed_stepper& stepper);
 		const ecs::fixed_stepper& stepper() const { return m_stepper; }
 		ecs::run_mode mode() const { return m_mode; }
 
@@ -71,5 +79,6 @@ namespace scn
 
 		ecs::fixed_stepper m_stepper;
 		ecs::run_mode m_mode = ecs::run_mode::play;
+		int m_fixed_steps = 0;
 	};
 } // namespace scn
