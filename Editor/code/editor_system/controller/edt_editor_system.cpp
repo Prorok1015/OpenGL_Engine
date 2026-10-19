@@ -1,4 +1,5 @@
 #include "edt_editor_system.h"
+#include <snk/editor/edt_editor_context.h>
 #include "edt_init_helpers.h"
 #include "edt_prefab_editor_context.h"
 
@@ -82,6 +83,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_state.lvl_manager.lock()->get_level().set_mode(ecs::run_mode::edit);
 	m_state.sfactory  = &data.require<ecs::system_factory>();
 	m_state.assembler = &data.require<scn::ecs_assembler>();
+	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory);
 	auto& inp_sys = data.require<inp::input_system>();
 	inp_sys.push_input_layer(inp_sys.get_focused_window(), inp::input_layer{ input, true });
 	ecs_input = data.require_shared<inp::ecs_input_manager>();

@@ -21,6 +21,7 @@ namespace ecs  { class system_factory; }
 namespace edt {
 	class input_manager;
 	class file_dialog;
+	class editor_context;
 	class editor_layer;
 	class model_importer;
 	class asset_exporter;
@@ -51,6 +52,9 @@ namespace edt {
 
 		void init(ds::app_data_storage& inp_sys);
 
+		// Created in init() and owned by the app_data_storage; null before init().
+		editor_context* context() const { return m_context; }
+
 		bool show_file_dialog();
 
 		//TODO change to renderer
@@ -58,6 +62,8 @@ namespace edt {
 		void begin_level_load(const res::tag& level_tag);
 
 	private:
+		editor_context* m_context = nullptr;
+
 		// Shared state for all controllers
 		shared_state m_state;
 
