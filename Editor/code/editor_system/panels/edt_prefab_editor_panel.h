@@ -1,17 +1,16 @@
 #pragma once
 #include "edt_panel_base.h"
+#include "edt_input_binding.h"
 #include <functional>
 #include <memory>
 #include <glm/glm.hpp>
 
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
-namespace inp { class ecs_input_manager; }
 
 namespace edt
 {
 	class prefab_editor_context;
-	class input_manager;
 
 	class prefab_editor_panel : public panel_base
 	{
@@ -20,8 +19,7 @@ namespace edt
 
 		void set_context(prefab_editor_context* ctx) { m_ctx = ctx; }
 		void set_on_close(std::function<void()> cb) { m_on_close = std::move(cb); }
-		void set_ecs_input_manager(std::shared_ptr<inp::ecs_input_manager> mgr) { m_ecs_input = std::move(mgr); }
-		void set_editor_input(std::shared_ptr<edt::input_manager> mgr) { m_editor_input = std::move(mgr); }
+		void set_input_router(inp::input_router* router) { m_router = router; }
 
 	protected:
 		void on_render() override;
@@ -35,7 +33,6 @@ namespace edt
 		gui::gui_system& m_gui;
 		prefab_editor_context* m_ctx = nullptr;
 		std::function<void()> m_on_close;
-		std::shared_ptr<inp::ecs_input_manager> m_ecs_input;
-		std::shared_ptr<edt::input_manager> m_editor_input;
+		inp::input_router* m_router = nullptr;
 	};
 }

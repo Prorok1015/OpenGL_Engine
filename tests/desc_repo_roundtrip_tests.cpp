@@ -91,7 +91,7 @@ struct repo_fixture : test_util::scene_env
 
 	std::shared_ptr<desc::desc_base> load_desc(const res::tag& tag)
 	{
-		return rs->require_sync<desc::desc_base>(tag).get_sync();
+		return require_loaded<desc::desc_base>(tag).get_sync();
 	}
 
 	static json::value parse(const std::vector<std::byte>& bytes)

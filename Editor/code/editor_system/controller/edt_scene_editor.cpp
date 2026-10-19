@@ -2,7 +2,7 @@
 #include "edt_shared_state.h"
 #include "edt_override_edit.h"
 #include <snk/scene/level/scn_level.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/scn_model.h>
 #include <snk/desc/desc_node_id.h>
@@ -223,8 +223,8 @@ void edt::scene_editor::serialize_and_push()
 {
 	m_state.touch_descs(); // also on the early returns below: the desc may have changed without a push
 	if (!m_state.editor_tag.is_valid()) return;
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr || !m_state.sfactory || !m_state.assembler) return;
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return;
 
 	auto* world_desc = m_state.active_world_desc();
 	if (!world_desc) return;
@@ -232,7 +232,7 @@ void edt::scene_editor::serialize_and_push()
 		? *m_state.active_world_name()
 		: std::string(world_desc->get_name());
 
-	scn::level& lvl = lvl_mgr->get_level();
+	scn::level& lvl = ctx_mgr->get_level();
 	if (!lvl.has_world(world_name))
 		return;
 
@@ -251,14 +251,14 @@ void edt::scene_editor::serialize_and_push()
 
 void edt::scene_editor::sync_ecs_transforms_to_desc()
 {
-	auto lvl_mgr = m_state.lvl_manager.lock();
+	auto ctx_mgr = m_state.ctx_manager.lock();
 	auto* world_desc = m_state.active_world_desc();
 	const std::string* world_name = m_state.active_world_name();
-	if (!lvl_mgr || !world_desc || !world_name) return;
+	if (!ctx_mgr || !world_desc || !world_name) return;
 
 	m_state.touch_descs();
 	auto& children = world_desc->get_root().children;
-	auto& reg = lvl_mgr->get_level().get_world(*world_name).state();
+	auto& reg = ctx_mgr->get_level().get_world(*world_name).state();
 	reg.view<scn::node_id_component, scn::local_transform>().each(
 		[&children](const scn::node_id_component& id, const scn::local_transform& lt) {
 			if (id.path.empty()) return;

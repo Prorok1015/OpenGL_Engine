@@ -48,8 +48,8 @@ BOOST_AUTO_TEST_CASE(Handle_ReportsRequestedTagAndSharesTheTargetBlock)
 {
 	rs->register_alias(original, generated);
 
-	auto via_original = rs->require_sync<desc::desc_base>(original);
-	auto via_generated = rs->require_sync<desc::desc_base>(generated);
+	auto via_original = require_loaded<desc::desc_base>(original);
+	auto via_generated = require_loaded<desc::desc_base>(generated);
 
 	BOOST_TEST(via_original.get_tag() == original);
 	BOOST_TEST(via_generated.get_tag() == generated);

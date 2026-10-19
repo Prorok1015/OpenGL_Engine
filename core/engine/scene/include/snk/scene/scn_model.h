@@ -7,12 +7,9 @@
 #include <snk/scene/scn_material_desc.h>
 #include <snk/scene/scn_mesh_nodes.hpp>
 #include <snk/ecs/ecs_event.hpp>
+#include <snk/scene/scn_time.h>
 
 namespace scn {
-
-    struct delta_time { float dt; };
-    struct fixed_time { float dt; };
-    struct update_alpha { float dt; };
 
     struct transform_updated {};
     struct hierarchy_updated {};

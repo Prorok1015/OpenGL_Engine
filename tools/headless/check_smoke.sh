@@ -5,7 +5,8 @@
 #   GEOMETRY    ImageMagick crop of the viewport centre   (default: 200x200+860+450)
 #   MIN_STDDEV  minimum normalized pixel standard deviation of that crop (default: 0.055)
 #   REFERENCE   reference PNG (tools/headless/reference: a downscaled llvmpipe screenshot); the screenshot is
-#               scaled to its size and compared. REPORT-ONLY for now: the metric is printed, the exit code is
+#               scaled to its size and compared. The references are only comparable for runs made with
+#               run_headless.sh --frames (constant frame dt); with wall-clock time the robot pose varies. REPORT-ONLY for now: the metric is printed, the exit code is
 #               not affected. SNK_SMOKE_FUZZ (per-pixel colour tolerance, default 4%) and SNK_SMOKE_MAX_DIFF_PCT
 #               (share of differing pixels that is flagged, default 2) tune the comparison.
 #

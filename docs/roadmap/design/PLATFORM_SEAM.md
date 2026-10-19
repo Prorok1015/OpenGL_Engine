@@ -31,7 +31,7 @@
 **События и координаты** (#103):
 - Новые payload'ы в `core/core/input/`: `char_event` (UTF-32), `framebuffer_resized`, `content_scale_changed`; колбэки `glfwSetCharCallback`, `glfwSetFramebufferSizeCallback`, `glfwSetWindowContentScaleCallback`.
 - Курсор в событиях — в координатах framebuffer (позиция окна × framebuffer/window). При 100% DPI значения не меняются.
-- Редактор: прямоугольники `input_area` берутся из ImGui в координатах окна — переводить их умножением на `DisplayFramebufferScale` в одном месте (`edt_input_manager`).
+- Редактор: прямоугольники привязок `inp::input_router` берутся из ImGui в координатах окна — переводить их умножением на `DisplayFramebufferScale` в одном месте (`make_input_area` в `edt_input_manager.h`).
 - Content scale при смене монитора — пересборка шрифта ImGui по событию.
 
 **ImGui на две половины** (#104):
@@ -56,7 +56,7 @@
 
 1. #101: интерфейсы `wnd::window`/`window_system`, GLFW-реализация за ними, keycode-таблица в `.cpp`, `null_window_system` + тест. Поведение не меняется.
 2. #102: `wnd::gl_surface`, `gl::swapchain` в `drv_opengl`, `present` через swapchain; `window` перестаёт линковать `glad`/`drv_opengl`.
-3. #103: char / framebuffer resize / content scale, курсор в framebuffer-координатах, перевод `input_area`, пересборка шрифта по смене scale; `wnd::window` получает форму курсора и буфер обмена.
+3. #103: char / framebuffer resize / content scale, курсор в framebuffer-координатах, перевод прямоугольников привязок ввода, пересборка шрифта по смене scale; `wnd::window` получает форму курсора и буфер обмена.
 4. #104: своя ImGui-платформа на событиях `wnd` + renderer на `imgui_impl_opengl3`; `imgui_impl_glfw` удаляется. **Сделано.** Известные ограничения: клавиш grave/скобок/backslash нет в enum клавиш движка; трансляции клавиш для неамериканских раскладок нет.
 
 Порядок строго последовательный: #104 нужны события и координаты из #103.

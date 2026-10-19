@@ -4,21 +4,68 @@
 #include <snk/desc/desc_guid.h>
 #include <algorithm>
 #include <format>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
-core::desc::desc_adapter_t::desc_adapter_t(::res::resource_system& res_system, ::desc::desc_system& desc_system)
-	: m_res_system(res_system)
-	, m_desc_system(desc_system)
+core::desc::desc_adapter_t::desc_adapter_t(::res::resource_system&, ::desc::desc_system& desc_system)
+	: m_desc_system(desc_system)
 {
+}
+
+namespace {
+// The "__parent" of a desc file, if it names one.
+std::optional<::res::tag> read_parent(const ::res::tag& tag, const json::object& json_body)
+{
+	const auto* field = json_body.if_contains("__parent");
+	if (!field) {
+		return std::nullopt;
+	}
+
+	::res::tag parent_tag;
+	try {
+		parent_tag = json::value_to<::res::tag>(*field);
+	} catch (const std::exception& e) {
+		throw std::runtime_error(std::format("desc '{}': invalid '__parent': {}", tag.view(), e.what()));
+	}
+	if (parent_tag == tag) {
+		throw std::runtime_error(std::format("desc '{}': '__parent' cycle through '{}'", tag.view(), parent_tag.view()));
+	}
+	return parent_tag;
+}
+
+json::object parse_body(const std::vector<std::byte>& data)
+{
+	std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
+	json::parse_options options;
+	options.max_depth = 128;
+	return json::parse(json_data, {}, options).as_object();
+}
+}
+
+std::vector<::res::res_dep> core::desc::desc_adapter_t::collect_dependencies(const ::res::tag& tag, const std::vector<std::byte>& data) const
+{
+	// Most files have no parent: skip parsing them twice.
+	constexpr std::string_view marker = "\"__parent\"";
+	const std::string_view text(reinterpret_cast<const char*>(data.data()), data.size());
+	if (text.find(marker) == std::string_view::npos) {
+		return {};
+	}
+
+	if (const auto parent_tag = read_parent(tag, parse_body(data))) {
+		return { ::res::make_dep<::desc::desc_base>(*parent_tag) };
+	}
+	return {};
 }
 
 std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(const::res::tag& tag, const std::vector<std::byte>& data) const
 {
-    std::string_view json_data(reinterpret_cast<const char*>(data.data()), data.size());
-	json::parse_options options;
-	options.max_depth = 128;
-    auto json_body = json::parse(json_data, {}, options).as_object();
+	return deserialize(tag, data, ::res::res_deps{});
+}
+
+std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(const::res::tag& tag, const std::vector<std::byte>& data, const ::res::res_deps& deps) const
+{
+	auto json_body = parse_body(data);
 
 	auto fail = [&tag](const std::string& reason) {
 		throw std::runtime_error(std::format("desc '{}': {}", tag.view(), reason));
@@ -40,39 +87,13 @@ std::shared_ptr<::res::resource_entry> core::desc::desc_adapter_t::deserialize(c
 		fail(std::format("unknown '__type' '{}'", type_id));
 	}
 
-    if (json_body.contains("__parent")) {
-		// require_sync runs the parent's adapter on this thread, so a cycle shows up as a repeated tag on this stack.
-		// Waiting on a pending ancestor instead would deadlock.
-		thread_local std::vector<::res::tag> loading_stack;
-		constexpr size_t max_parent_depth = 32;
-
-		::res::tag parent_tag;
-		try {
-			parent_tag = json::value_to<::res::tag>(json_body.at("__parent"));
-		} catch (const std::exception& e) {
-			fail(std::format("invalid '__parent': {}", e.what()));
-		}
-
-		if (parent_tag == tag || std::ranges::find(loading_stack, parent_tag) != loading_stack.end()) {
-			fail(std::format("'__parent' cycle through '{}'", parent_tag.view()));
-		}
-		if (loading_stack.size() >= max_parent_depth) {
-			fail("'__parent' chain is too deep");
-		}
-
-		struct stack_guard {
-			std::vector<::res::tag>& stack;
-			stack_guard(std::vector<::res::tag>& s, const ::res::tag& t) : stack(s) { stack.push_back(t); }
-			~stack_guard() { stack.pop_back(); }
-		} guard(loading_stack, tag);
-
-        auto parent_handle = m_res_system.require_sync<::desc::desc_base>(parent_tag);
-		auto parent = parent_handle.get_sync();
+	if (const auto parent_tag = read_parent(tag, json_body)) {
+		const auto parent = deps.get<::desc::desc_base>(*parent_tag);
 		if (!parent) {
-			fail(std::format("failed to load '__parent' '{}'", parent_tag.view()));
+			fail(std::format("failed to load '__parent' '{}'", parent_tag->view()));
 		}
-        parent->copy_to(*instance);
-    }
+		parent->copy_to(*instance);
+	}
 
     instance->deserialize(m_desc_system, json_body);
 

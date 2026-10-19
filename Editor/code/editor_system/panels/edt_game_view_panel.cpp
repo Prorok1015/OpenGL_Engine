@@ -1,5 +1,4 @@
 #include "edt_game_view_panel.h"
-#include "edt_input_manager.h"
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_system.h>
 #include <snk/scene/scn_camera_component.hpp>
@@ -78,5 +77,7 @@ namespace edt
 		ImTextureID tex_id = m_gui.get_backend_interface()->get_imgui_texture_from_texture(texture);
 		// UV (0,1)->(1,0) flips Y for OpenGL convention
 		ImGui::Image(tex_id, { fit.x, fit.y }, ImVec2(0, 1), ImVec2(1, 0));
+		if (m_input_target)
+			bind_item_input(m_router, m_input_target());
 	}
 }

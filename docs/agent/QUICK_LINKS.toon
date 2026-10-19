@@ -48,9 +48,9 @@ Application:
 
 [ENGINE_LAYER]
 Scene Management:
-  → core/engine/scene/include/snk/scene/level/scn_level.h (scn::level; for_each_world = HASH order!)
+  → core/engine/scene/include/snk/scene/level/scn_level.h (scn::level; for_each_world = id order)
   → core/engine/scene/include/snk/scene/level/scn_world.h (world wrapper)
-  → core/engine/scene/include/snk/scene/level/scn_level_manager.h (level load/manager)
+  → core/engine/scene/include/snk/scene/level/scn_context_manager.h (level load, context sets)
   → core/engine/scene/include/snk/scene/scn_ecs_assembler.h (desc → ECS registry assembly)
 
 Rendering Pipeline:
@@ -65,7 +65,7 @@ Animation & Skinning:
   → core/engine/render/render_system/skinning/ (rnd::skinning_manager)
 
 Input System:
-  → core/engine/input/include/snk/input/inp_input_system.h , inp_ecs_input_manager.h
+  → core/engine/input/include/snk/input/inp_input_system.h , inp_ecs_input_manager.h , inp_input_router.h
 
 GUI:
   → core/engine/gui/gui_system/ (gui::system, ImGui integration)
@@ -90,7 +90,7 @@ Gizmo Transform:
   → Editor/code/editor_system/gizmo/edt_transform_gizmo.hpp (pure ImGui DrawList)
 
 Input / File Dialog:
-  → Editor/code/editor_system/input/edt_input_manager.h , edt_file_dialog.h
+  → Editor/code/editor_system/input/edt_input_manager.h , edt_input_binding.h , edt_file_dialog.h
 
 [DESCRIPTOR_FILES]
 Level & World:
@@ -140,7 +140,7 @@ Frame Allocator (Memory):
 Multi-World ECS:
   → See: ARCHITECTURE.toon [ECS_SYSTEM], CONSTRAINTS [13B][13C]
   → Code: core/core/ecs/ directory
-  → Max: auto-dispatch world IDs 0-4 (5 worlds); for_each_world = HASH order
+  → Max: auto-dispatch world IDs 0-4 (5 worlds); for_each_world = id order
 
 Descriptor Inheritance:
   → See: ARCHITECTURE.toon [DESCRIPTOR_SYSTEM]

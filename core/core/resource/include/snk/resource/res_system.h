@@ -3,34 +3,22 @@
 #include <snk/resource/res_tag.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
-#include <snk/resource/adapters/res_adapter_worker_base.hpp>
+#include <snk/resource/res_tag_keyed_map.hpp>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
+#include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
+#include <mutex>
+#include <memory>
 #include <set>
 #include <shared_mutex>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
-
-namespace res {
-	struct cache_key
-	{
-		res::tag tag;
-		ds::type_id type;
-
-		bool operator==(const cache_key&) const = default;
-	};
-}
+#include <utility>
+#include <vector>
 
 namespace std {
-	template<> struct hash<res::cache_key> {
-		std::size_t operator()(const res::cache_key& k) const {
-			const std::size_t h1 = std::hash<res::tag>{}(k.tag);
-			const std::size_t h2 = std::hash<ds::type_id>{}(k.type);
-			return h1 ^ (h2 + static_cast<std::size_t>(0x9e3779b97f4a7c15ull) + (h1 << 6) + (h1 >> 2));
-		}
-	};
-
 	template<> struct hash<std::pair<ds::type_id, std::string>> {
 		std::size_t operator()(const std::pair<ds::type_id, std::string>& k) const {
 			return std::hash<ds::type_id>{}(k.first) ^ std::hash<std::string>{}(k.second);
@@ -42,6 +30,9 @@ namespace res
 {
 	template<class T>
 	using res_handle = core::res::res_handle<T>;
+
+	// The value of a res::when_all handle: carries nothing, the handles that were joined hold the resources.
+	struct SNK_API when_all_result : resource_entry {};
 
 	class SNK_API resource_system
 	{
@@ -61,8 +52,11 @@ namespace res
 
 		using adapter_key = std::pair<ds::type_id, std::string>;
 	public:
-		resource_system();
-		~resource_system() = default;
+		// Adapter work runs on `tasks` (lane::compute); watcher callbacks and res_handle::then are delivered through
+		// its main-thread queue. `tasks` must outlive this system, and so must the thread that drains it.
+		explicit resource_system(ds::task_system& tasks);
+		// Cancels the load tasks that have not started and waits for the running ones: main thread only.
+		~resource_system();
 		resource_system(const resource_system&) = delete;
 		resource_system& operator= (const resource_system&) = delete;
 		resource_system(resource_system&&) = delete;
@@ -90,14 +84,9 @@ namespace res
 		}
 
 
-		void set_adapter_worker(std::unique_ptr<core::res::adapter_worker_base>&& worker) {
-			m_adapter_worker = std::move(worker);
-			m_adapter_worker->start();
-		}
-
 		void watch(const res::tag& tag, void* owner, reload_callback cb) {
 			std::lock_guard lock(m_cache_mutex);
-			m_watchers[tag][owner] = std::move(cb);
+			m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch };
 		}
 
 		void unwatch(const res::tag& tag, void* owner) {
@@ -107,20 +96,25 @@ namespace res
 			}
 		}
 
-		void signal_changed(const res::tag& tag) {
-			std::unordered_map<void*, reload_callback> callbacks;
-			{
-				std::unique_lock lock(m_cache_mutex);
-				std::erase_if(m_cache, [&tag](const auto& entry) { return entry.first.tag == tag; });
-				if (auto it = m_watchers.find(tag); it != m_watchers.end()) {
-					callbacks = it->second;
+		// Read-only: cached resources that were requested but have neither finished nor failed yet.
+		// Used to tell that the scene has settled (deterministic headless runs).
+		std::size_t pending_loads() const {
+			std::shared_lock lock(m_cache_mutex);
+			std::size_t count = 0;
+			m_cache.for_each([&count](const cache_entry& entry) {
+				if (const auto block = entry.lock()) {
+					const auto status = block->status.load();
+					if (status != core::res::res_status::ready && status != core::res::res_status::error) {
+						++count;
+					}
 				}
-			}
-
-			for (auto& [owner, callback] : callbacks) {
-				callback(tag);
-			}
+			});
+			return count;
 		}
+
+		// Any thread. Drops the tag's cache entries right away; the watchers are called later on the main thread
+		// (task_system::drain_main): those registered before the signal and still registered by then.
+		void signal_changed(const res::tag& tag);
 
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
@@ -194,16 +188,25 @@ namespace res
 			return require_resource_internal<RESOURCE, false>(tag, resolve_alias(tag));
 		}
 
+		// Blocks until the resource is ready or failed. Main thread only: a pool worker that waits stalls the pool
+		// (asserts on one, except under policy::manual, where the tests pump the lanes themselves). The adapter of a
+		// resource that needs others declares them instead (adapter_interface::collect_dependencies).
 		template<class RESOURCE>
 		auto require_sync(const res::tag& tag) {
+			ASSERT_MSG(!(m_tasks.mode() == ds::policy::threaded && ds::task_system::on_worker()),
+				"require_sync('{}') on a pool thread: declare it as a dependency of the adapter instead", tag.view());
 			return require_resource_internal<RESOURCE, true>(tag, resolve_alias(tag));
 		}
+
+		// A handle that is ready once every block is ready, and failed once all of them have finished and any failed:
+		// the ones that loaded are still delivered and cached. Prefer res::when_all(...) below.
+		res_handle<when_all_result> when_all_blocks(std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks);
 
 		template<class T>
 		void warmup(const res::tag& tag)
 		{
 			res::res_handle<T> res = require<T>(tag);
-			res.then([this, res, tag](auto&) {
+			res.get_control_block()->on_settled([this, res, tag](auto&) {
 				if (res.has_error()) return;
 				push_resource_to_strong_cache(cache_key{ tag, ds::type_id::make<T>() }, res.get_control_block());
 			});
@@ -218,7 +221,9 @@ namespace res
 			push_resource_to_cache(key, block);
 
 			if (!exists(tag)) {
-				post_adapter_work([this, tag, block]() {
+				// Main thread: serializing may wait for field handles, which a pool thread must not do.
+				m_tasks.post_main([this, tag, block, alive = m_lifetime.token()]() {
+					if (alive.expired()) return;
 					try {
 						auto adapter = find_adapter_recursive<RESOURCE>(tag);
 						if (!adapter) {
@@ -235,7 +240,7 @@ namespace res
 
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
-			std::erase_if(m_pinned_resources, [&tag](const auto& entry) { return entry.first.tag == tag; });
+			m_pinned_resources.erase_tag(tag);
 		}
 
 		void register_alias(const res::tag& original, const res::tag& alias);
@@ -249,7 +254,9 @@ namespace res
 		}
 
 	private:
-		void post_adapter_work(std::function<void()> cb);
+		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
+		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
+		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
 		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key) {
 			std::unique_lock lock(m_cache_mutex);
@@ -273,81 +280,35 @@ namespace res
 			m_pinned_resources[key] = resource;
 		}
 
-		template<typename T, bool is_sync>
-		void start_loading_t(res::tag tag, std::shared_ptr<resource_handle> final_cb) {
-			// The cache slot already holds final_cb: any escape from here would leave waiters blocked forever.
-			try {
-				start_loading_unguarded<T, is_sync>(tag, final_cb);
-			} catch (const std::exception& e) {
-				egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
-				final_cb->set_error(std::string{ "Load error: " } + e.what());
-			} catch (...) {
-				egLOG_ERROR("res/resolver", "Failed to start loading {}: unknown exception", tag.view());
-				final_cb->set_error("Load error: unknown exception");
-			}
-		}
+		struct wait_graph;
+		struct await_state;
 
-		template<typename T, bool is_sync>
-		void start_loading_unguarded(const res::tag& tag, const std::shared_ptr<resource_handle>& final_cb) {
-			auto resolver_it = m_resolvers.find(tag.protocol());
-			if (resolver_it == m_resolvers.end()) {
-				egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
-				final_cb->set_error(std::string{ "Unsupported protocol: " } + std::string{ tag.protocol() });
-				return;
-			}
-
-			auto raw_data_block = resolver_it->second->resolve(tag);
-			if (!raw_data_block) {
-				egLOG_ERROR("res/resolver", "Resolver returned no data block for {}", tag.view());
-				final_cb->set_error("Resolver returned no data");
-				return;
-			}
-
-			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
-				if (raw_data_block->has_error()) {
-					final_cb->set_error(std::string{ "Resolver error: " } + raw_data_block->error_msg);
-					egLOG_ERROR("res/resolver", "Failed to resolve resource {0}: {1}", tag.view(), raw_data_block->error_msg);
-					return;
-				}
-
-				try {
-					auto adapter = find_adapter_recursive<T>(tag);
-					if (!adapter) {
-						throw std::runtime_error("No adapter found for resource type");
-					}
-
-					final_cb->status = core::res::res_status::processing;
-					auto parsed_obj = adapter->deserialize(tag, raw_data_block->data);
-
-					final_cb->set_ready(std::move(parsed_obj));
-				} catch (const std::exception& e) {
-					final_cb->set_error(std::string{ "Adapter error: " } + e.what());
-					egLOG_ERROR("res/adapter", "Failed to deserialize resource {0}: {1}", tag.view(), e.what());
-				}
-			};
-
-			if constexpr (is_sync)
-			{
-				raw_data_block->wait();
-				adapter_cb();
-			} else {
-				raw_data_block->then([this, adapter_cb](auto& raw_block) {
-					post_adapter_work(adapter_cb);
-				});
-			}
-		}
+		// The pipeline: resolve -> collect_dependencies (compute) -> require each dependency, no waiting ->
+		// deserialize (compute) once all are ready. A block with no dependencies is one compute task.
+		void start_loading(const res::tag& tag, const std::shared_ptr<resource_handle>& block, adapter ad);
+		void collect_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad);
+		void deserialize_stage(const res::tag& tag, const std::shared_ptr<resource_handle>& block, const data& raw, const adapter& ad, const res_deps& deps);
+		// Calls `on_done` (any thread) once every block has settled without error, and fails `owner` if any failed.
+		// The waits go through the wait graph, which fails the blocks of a cycle instead of letting them wait forever.
+		void await_blocks(const std::shared_ptr<resource_handle>& owner, const res::tag& owner_tag,
+			std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks, std::function<void()> on_done);
+		void wait_for_block(const std::shared_ptr<resource_handle>& block) const;
 
 		template<class RESOURCE, bool is_sync>
 		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
-			ASSERT_MSG(find_adapter_recursive<RESOURCE>(tag), "No adapter found for resource type!");
+			auto found = find_adapter_recursive<RESOURCE>(tag);
+			ASSERT_MSG(found, "No adapter found for resource type!");
 
 			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, ds::type_id::make<RESOURCE>() });
 			if (is_new) {
-				start_loading_t<RESOURCE, is_sync>(tag, block);
+				start_loading(tag, block, std::move(found));
+			}
+			if constexpr (is_sync) {
+				wait_for_block(block);
 			}
 			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
 			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
-			return res_handle<RESOURCE>(block, requested);
+			return res_handle<RESOURCE>(block, requested, &m_tasks);
 		}
 
 		template<class T>
@@ -391,10 +352,54 @@ namespace res
 		std::unordered_map<res::tag, res::tag> m_aliases;
 
 		std::unordered_map<protocol, resolver> m_resolvers;
-		std::unordered_map<cache_key, cache_entry> m_cache;
-		std::unordered_map<cache_key, std::shared_ptr<resource_handle>> m_pinned_resources;
+		tag_keyed_map<cache_entry> m_cache;
+		tag_keyed_map<std::shared_ptr<resource_handle>> m_pinned_resources;
 
-		std::unordered_map<res::tag, std::unordered_map<void*, reload_callback>> m_watchers;
-		std::unique_ptr<core::res::adapter_worker_base> m_adapter_worker = nullptr;
+		struct watcher {
+			reload_callback callback;
+			std::uint64_t epoch = 0; // m_watch_epoch value at registration
+		};
+		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
+		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
+
+		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
+		std::unique_ptr<wait_graph> m_graph;
+
+		ds::task_system& m_tasks;
+		std::mutex m_stop_mutex;
+		bool m_stopping = false;
+		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
+		ds::lifetime m_lifetime;
 	};
+
+	// A dependency of `target` as T, for adapter_interface::collect_dependencies.
+	template<class T>
+	res_dep make_dep(const res::tag& target)
+	{
+		return res_dep{ target, ds::type_id::make<T>(), [](resource_system& system, const res::tag& tag) {
+			return system.require<T>(tag).get_control_block();
+		} };
+	}
+
+	// Joins resources that are requested separately (for example, what a level needs): ready when all are,
+	// failed when all have finished and any failed. Delivers on any thread; use .then(lifetime, cb) for the main one.
+	template<class... T>
+	res_handle<when_all_result> when_all(resource_system& system, const res_handle<T>&... handles)
+	{
+		std::vector<std::pair<std::shared_ptr<resource_system::resource_handle>, res::tag>> blocks;
+		blocks.reserve(sizeof...(T));
+		(blocks.emplace_back(handles.get_control_block(), handles.get_tag()), ...);
+		return system.when_all_blocks(std::move(blocks));
+	}
+
+	template<class T>
+	res_handle<when_all_result> when_all(resource_system& system, const std::vector<res_handle<T>>& handles)
+	{
+		std::vector<std::pair<std::shared_ptr<resource_system::resource_handle>, res::tag>> blocks;
+		blocks.reserve(handles.size());
+		for (const auto& handle : handles) {
+			blocks.emplace_back(handle.get_control_block(), handle.get_tag());
+		}
+		return system.when_all_blocks(std::move(blocks));
+	}
 }

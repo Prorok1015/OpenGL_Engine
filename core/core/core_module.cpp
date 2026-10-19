@@ -6,8 +6,8 @@
 #include <snk/window/wnd_window_system.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/resource/res_system.h>
-#include <snk/resource/adapters/res_adapter_worker.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_api.h>
 
@@ -21,6 +21,10 @@ namespace {
 	// Main-thread queue limits (ds::task_system, `tasks` frame stage).
 	CFG_VAR_DEF_FLOAT(cfg_tasks_main_budget_ms, "tasks/main_budget_ms", 2.0f);
 	CFG_VAR_DEF_INT(cfg_tasks_gpu_upload_per_frame, "tasks/gpu_upload_per_frame", 4);
+
+	// Headless determinism (tools/run_headless.sh --frames): constant frame dt instead of wall clock.
+	CFG_VAR_DEF_FLOAT(cfg_fixed_frame_dt, "app/fixed_frame_dt", 0.0f);
+	CFG_VAR_DEF_INT(cfg_freeze_after_frames, "app/freeze_after_frames", 0);
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -57,7 +61,20 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	stages.add_stage("tasks", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& ctx) {
 		ctx.storage.require<ds::task_system>().drain_main();
 	});
-	data.construct<app::app_loop_service_interface, app::loop_service>(stages);
+	const app::deterministic_time time{ std::max(0.f, static_cast<float>(cfg_fixed_frame_dt)), std::max(0, static_cast<int>(cfg_freeze_after_frames)) };
+	// Kept in storage so the GUI layer can feed ImGui the same dt.
+	data.construct<app::deterministic_time>(time);
+	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time);
+	if (time.enabled()) {
+		auto* loop_impl = dynamic_cast<app::loop_service*>(&loop);
+		ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
+		if (loop_impl) loop_impl->set_settled_probe([](ds::app_data_storage& storage) {
+			auto& tasks = storage.require<ds::task_system>();
+			return storage.require<::res::resource_system>().pending_loads() == 0
+				&& tasks.pending_main(ds::main_class::general) == 0
+				&& tasks.pending_main(ds::main_class::gpu_upload) == 0;
+		});
+	}
 }
 
 void core::core_module::initialize_services(ds::app_data_storage& data)
@@ -93,8 +110,6 @@ void core::core_module::initialize_services(ds::app_data_storage& data)
 	// Initialize core services here
 	auto& window = data.require<wnd::window_system>();
 	window.init();
-	auto& resource = data.require<::res::resource_system>();
-	resource.set_adapter_worker(std::make_unique<core::res::async_adapter_worker>());
 }
 
 void core::core_module::shutdown_services(ds::app_data_storage& data)

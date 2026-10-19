@@ -3,11 +3,17 @@
 #include <entt/entt.hpp>
 #include <functional>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 
 namespace ecs {
 
 template <class> 
 constexpr bool always_false = false;
+
+// Specialize to true for a ctx resource that the context must have written before any system
+// runs. Asking for it when it is missing asserts instead of creating a zeroed one.
+template <class T>
+inline constexpr bool required_ctx_resource = false;
 
 template <size_t ID, typename T> 
 struct bind_res {
@@ -82,6 +88,14 @@ template<typename TYPE>
         return static_cast<TYPE>(entt::as_view{ reg });
     } else if constexpr (is_bind_res_v<std::decay_t<TYPE>>) {
         return binded_resolver<TYPE>::resolve(ctx);   
+    } else if constexpr (required_ctx_resource<std::remove_cvref_t<TYPE>>) {
+        using res_t = std::remove_cvref_t<TYPE>;
+        res_t* res = reg.ctx().template find<res_t>();
+        if (!res) {
+            ASSERT_FAIL("system requests ctx resource '{}' that its context did not write", entt::type_name<res_t>::value());
+            res = &reg.ctx().template emplace<res_t>(); // release builds only
+        }
+        return *res;
     } else {
         return reg.ctx().template emplace<std::remove_reference_t<TYPE>>();
     }

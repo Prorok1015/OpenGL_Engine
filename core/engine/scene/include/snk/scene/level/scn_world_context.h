@@ -3,8 +3,10 @@
 #include <snk/ecs/ecs_invoker.hpp>
 #include <snk/ecs/ecs_system_plan.hpp>
 #include <snk/ecs/ecs_system_registry.hpp>
+#include <snk/scene/scn_time.h>
 #include <snk/common/snk_api.h>
 #include <entt/entity/registry.hpp>
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,6 +15,9 @@
 
 namespace scn
 {
+	// Where a context came from; a reload of the level touches only `level` contexts.
+	enum class context_kind : uint8_t { level, runtime, preview, play };
+
 	// One simulation unit: a single world with its own registry, system list, execution plan,
 	// fixed stepper and run mode. The owner (scn::level for now) decides when its phases run.
 	class SNK_API world_context
@@ -29,6 +34,12 @@ namespace scn
 		entt::registry const& state() const { return m_state; }
 		uint32_t get_id() const { return m_id; }
 		const std::string_view get_name() const { return m_name; }
+
+		context_kind kind() const { return m_kind; }
+		void set_kind(context_kind kind) { m_kind = kind; }
+		// Whether the render extractor takes this context's cameras.
+		bool extract() const { return m_extract; }
+		void set_extract(bool extract) { m_extract = extract; }
 
 		// Reseeds the context's `ecs::rng` from the base seed and its id.
 		void seed(uint64_t base_seed);
@@ -50,18 +61,26 @@ namespace scn
 		void apply_commands() { apply_commands(m_state); }
 		static void apply_commands(entt::registry& state);
 
-		// The owner keeps these identical across its contexts.
-		void sync_time(const ecs::fixed_stepper& stepper, ecs::run_mode mode)
-		{
-			m_stepper = stepper;
-			m_mode = mode;
-		}
+		// The context owns its time. begin_frame advances the stepper by the mode's rules and
+		// writes delta_time and update_alpha into the registry ctx; the fixed steps it allows are
+		// then played one by one through write_fixed_time().
+		void begin_frame(std::chrono::duration<float> dt);
+		int fixed_steps() const { return m_fixed_steps; }
+		void write_fixed_time();
+		// Forgets the leftover fraction of a step (a fresh load); alpha goes back to 0.
+		void reset_time();
+
+		// The owner keeps stepper and mode identical across the contexts of a set (lockstep).
+		void set_mode(ecs::run_mode mode) { m_mode = mode; }
+		void set_stepper(const ecs::fixed_stepper& stepper);
 		const ecs::fixed_stepper& stepper() const { return m_stepper; }
 		ecs::run_mode mode() const { return m_mode; }
 
 	private:
 		uint32_t m_id;
 		std::string m_name;
+		context_kind m_kind = context_kind::runtime;
+		bool m_extract = true;
 		entt::registry m_state;
 
 		std::optional<std::vector<std::string>> m_systems;
@@ -71,5 +90,6 @@ namespace scn
 
 		ecs::fixed_stepper m_stepper;
 		ecs::run_mode m_mode = ecs::run_mode::play;
+		int m_fixed_steps = 0;
 	};
 } // namespace scn

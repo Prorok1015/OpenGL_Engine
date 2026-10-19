@@ -8,7 +8,7 @@
 #include "edt_asset_browser_panel.h"
 #include "edt_component_ui_registry.h"
 #include "edt_component_renderers.h"
-#include "edt_input_manager.h"
+#include "edt_input_target.h"
 #include "edt_editor_camera.h"
 #include "edt_shared_state.h"
 #include "edt_scene_editor.h"
@@ -19,11 +19,11 @@
 #include <snk/desc/desc_system.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_system.h>
-#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_input_router.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <snk/common/eng_transform_3d.hpp>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <snk/scene/level/scn_level.h>
 #include <snk/scene/level/scn_world.h>
@@ -41,7 +41,8 @@ void setup_panels(
 	std::shared_ptr<console_panel>& console,
 	std::shared_ptr<asset_browser_panel>& asset_browser,
 	component_ui_registry& registry,
-	editor_system& sys)
+	editor_system& sys,
+	bool capture_log)
 {
 	hierarchy = std::make_shared<scene_hierarchy_panel>();
 	inspector = std::make_shared<inspector_panel>();
@@ -50,6 +51,8 @@ void setup_panels(
 	console = std::make_shared<console_panel>();
 	asset_browser = std::make_shared<asset_browser_panel>();
 	asset_browser->set_layers(res::resource_system::get_resource_layers());
+
+	if (!capture_log) return;
 
 	auto console_weak = std::weak_ptr<console_panel>(console);
 	engine::set_log_callback([console_weak](std::string_view category, engine::log_level level, std::string_view message) {
@@ -64,8 +67,7 @@ void setup_panels(
 
 void setup_viewport_panel(
 	std::shared_ptr<viewport_panel>& viewport,
-	std::shared_ptr<input_manager>& input,
-	std::shared_ptr<inp::ecs_input_manager>& ecs_input,
+	inp::input_router& router,
 	editor_system& sys,
 	shared_state& state,
 	rnd::render_system& rnd,
@@ -74,16 +76,15 @@ void setup_viewport_panel(
 {
 	viewport = std::make_shared<viewport_panel>(rnd, gui);
 	viewport->set_registry_getter([&state]() -> entt::registry* {
-		auto lvl_mgr = state.lvl_manager.lock();
+		auto ctx_mgr = state.ctx_manager.lock();
 		const std::string* active = state.active_world_name();
-		if (!lvl_mgr || !active) return nullptr;
+		if (!ctx_mgr || !active) return nullptr;
 		const auto& name = *active;
-		auto& level = lvl_mgr->get_level();
+		auto& level = ctx_mgr->get_level();
 		if (!level.has_world(name)) return nullptr;
 		return &level.get_world(name).state();
 	});
-	viewport->set_input_manager(input);
-	viewport->set_ecs_input_manager(ecs_input);
+	viewport->set_input_router(&router, [&state] { return active_input_target(state); });
 	viewport->set_on_asset_dropped([&sys](const std::string& res_rel_path) {
 		if (!sys.m_state.editor_tag.is_valid()) return;
 		const std::filesystem::path rel{ res_rel_path };
@@ -96,18 +97,6 @@ void setup_viewport_panel(
 	});
 }
 
-static ecs::entity find_entity_by_path(shared_state& state, std::span<const uint64_t> path)
-{
-	auto lvl_mgr = state.lvl_manager.lock();
-	const std::string* active = state.active_world_name();
-	if (!lvl_mgr || path.empty() || !active)
-		return entt::null;
-	scn::world* world = lvl_mgr->get_level().find_world(*active);
-	if (!world)
-		return entt::null;
-	return scn::node_index::get(world->state()).find(path);
-}
-
 void wire_hierarchy_callbacks(
 	scene_hierarchy_panel& hierarchy,
 	inspector_panel& inspector,
@@ -116,14 +105,6 @@ void wire_hierarchy_callbacks(
 	world_controller& world_ctrl,
 	shared_state& state)
 {
-	hierarchy.set_on_node_selected([&](scn::prefab_desc::prefab_node* node) {
-		inspector.set_selected_node(node);
-		inspector.set_override_target(hierarchy.get_selected_owner(), hierarchy.get_selected_target());
-		ecs::entity found = entt::null;
-		if (node) found = find_entity_by_path(state, hierarchy.get_selected_path());
-		viewport.set_selected_entity(found);
-	});
-
 	hierarchy.set_on_world_changed([&](int idx) {
 		// A refused switch leaves the old world active: resync the tab and the panels to it.
 		if (!world_ctrl.switch_to_world(idx) && world_ctrl.on_world_switched)
@@ -230,41 +211,20 @@ void wire_controller_callbacks(
 	world_controller& world_ctrl,
 	level_controller& level_ctrl,
 	editor_layer& layer,
-	scene_hierarchy_panel& hierarchy,
-	inspector_panel& inspector,
-	viewport_panel& viewport,
 	shared_state& state)
 {
-	scene_ed.on_before_modify = [&hierarchy, &inspector] {
-		hierarchy.set_selected_node(nullptr);
-		inspector.set_selected_node(nullptr);
-	};
-	scene_ed.on_after_push = [&hierarchy, &inspector, &viewport, &state] {
-		inspector.invalidate_view(); // the desc was rewritten: instance expansions are stale
-		if (!hierarchy.get_selected_node()) {
-			viewport.set_selected_entity(entt::null);
-			return;
-		}
-		viewport.set_selected_entity(find_entity_by_path(state, hierarchy.get_selected_path()));
-	};
+	// on_before_modify, on_after_push and on_world_switched go through the selection service (edt_selection_wiring.cpp).
 	scene_ed.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	scene_ed.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
 
 	world_ctrl.on_save_camera = [&sys](entt::registry& reg) { sys.save_editor_camera_state(reg); };
 	world_ctrl.on_inject_camera = [&sys](entt::registry& reg) { sys.inject_editor_camera(reg); };
-	world_ctrl.on_world_switched = [&hierarchy, &inspector, &viewport, &state](int idx) {
-		hierarchy.set_world_desc(state.active_world_desc());
-		hierarchy.set_world_names(state.world_names, idx);
-		inspector.set_selected_node(nullptr);
-		hierarchy.set_selected_node(nullptr);
-		viewport.set_selected_entity(entt::null);
-	};
 
 	level_ctrl.on_editor_world_reloaded = [] {
 		egLOG("Editor", "Editor world reloaded");
 	};
-	if (auto lvl_mgr = state.lvl_manager.lock()) {
-		lvl_mgr->set_on_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
+	if (auto ctx_mgr = state.ctx_manager.lock()) {
+		ctx_mgr->set_on_reload([&level_ctrl] { level_ctrl.resync_worlds_after_reload(); });
 	}
 	level_ctrl.on_need_save_dialog = [&layer, &level_ctrl] {
 		layer.register_implicit("edt/save_level", [&level_ctrl] { return level_ctrl.save_level(); });

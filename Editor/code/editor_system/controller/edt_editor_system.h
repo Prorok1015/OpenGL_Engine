@@ -9,6 +9,8 @@
 #include "edt_level_controller.h"
 #include "edt_init_helpers.h"
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/editor/edt_editor_events.h>
+#include <vector>
 
 // Forward declarations — full types only needed in .cpp
 namespace desc { class desc_system; class desc_base; }
@@ -17,10 +19,11 @@ namespace rnd  { class render_system; }
 namespace gui  { class gui_system; }
 namespace scn  { class ecs_assembler; class level_desc; }
 namespace ecs  { class system_factory; }
+namespace inp  { class input_router; }
 
 namespace edt {
-	class input_manager;
 	class file_dialog;
+	class editor_context;
 	class editor_layer;
 	class model_importer;
 	class asset_exporter;
@@ -40,16 +43,18 @@ namespace edt {
 	{
 		friend void init_helpers::wire_controller_callbacks(
 			editor_system&, scene_editor&, world_controller&, level_controller&,
-			editor_layer&, scene_hierarchy_panel&, inspector_panel&, viewport_panel&, shared_state&);
+			editor_layer&, shared_state&);
 		friend void init_helpers::setup_viewport_panel(
-			std::shared_ptr<viewport_panel>&, std::shared_ptr<input_manager>&,
-			std::shared_ptr<inp::ecs_input_manager>&, editor_system&, shared_state&,
+			std::shared_ptr<viewport_panel>&, inp::input_router&, editor_system&, shared_state&,
 			rnd::render_system&, gui::gui_system&, res::resource_system&);
 	public:
 		editor_system(desc::desc_system& desc_system, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys);
 		~editor_system();
 
 		void init(ds::app_data_storage& inp_sys);
+
+		// Created in init() and owned by the app_data_storage; null before init().
+		editor_context* context() const { return m_context; }
 
 		bool show_file_dialog();
 
@@ -58,6 +63,8 @@ namespace edt {
 		void begin_level_load(const res::tag& level_tag);
 
 	private:
+		editor_context* m_context = nullptr;
+
 		// Shared state for all controllers
 		shared_state m_state;
 
@@ -73,8 +80,7 @@ namespace edt {
 		gui::gui_system&      m_gui;
 
 		// Input
-		std::shared_ptr<edt::input_manager> input;
-		std::shared_ptr<inp::ecs_input_manager> ecs_input;
+		inp::input_router* m_input_router = nullptr;
 		std::unique_ptr<edt::file_dialog> m_file_dialog;
 
 		// Import/export
@@ -119,6 +125,9 @@ namespace edt {
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
+
+		// Selection routing between the panels; last member, so it is dropped before the panels are.
+		std::vector<connection> m_selection_connections;
 
 	};
 }

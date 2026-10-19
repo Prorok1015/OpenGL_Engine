@@ -3,7 +3,7 @@
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include <snk/scene/level/scn_level.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/desc/desc_system.h>
@@ -32,16 +32,16 @@ edt::level_controller::~level_controller()
 {
 	if (m_state.editor_tag.is_valid())
 		m_res.unwatch(m_state.editor_tag, this);
-	if (auto lvl_mgr = m_state.lvl_manager.lock())
-		lvl_mgr->set_on_reload(nullptr);
+	if (auto ctx_mgr = m_state.ctx_manager.lock())
+		ctx_mgr->set_on_reload(nullptr);
 }
 
 // ─── New / Save / Quick-save ─────────────────────────────────────────────────
 
 void edt::level_controller::new_level()
 {
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr) return;
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr) return;
 
 	namespace json = boost::json;
 
@@ -60,7 +60,7 @@ void edt::level_controller::new_level()
 	m_res.store(mem_tag, m_desc.serialize_to_bytes(json::value{ level_json }));
 	m_res.signal_changed(mem_tag);
 
-	if (!lvl_mgr->load(mem_tag)) {
+	if (!ctx_mgr->load_level(mem_tag)) {
 		egLOG("Editor/NewLevel", "Failed to create new level via desc pipeline");
 		return;
 	}
@@ -224,10 +224,10 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 	// Cleared first so a failed load cannot leave the previous level's guid to be written into the new file.
 	m_state.level_guid.clear();
 
-	auto level_manager = m_state.lvl_manager.lock();
-	if (!level_manager) return;
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr) return;
 
-	if (level_manager->load(m_state.editor_tag)) {
+	if (ctx_mgr->load_level(m_state.editor_tag)) {
 		m_res.watch(m_state.editor_tag, this, [this](const res::tag&) {
 			if (on_editor_world_reloaded) on_editor_world_reloaded();
 		});
@@ -333,9 +333,9 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 
 void edt::level_controller::resync_worlds_after_reload()
 {
-	auto lvl_mgr = m_state.lvl_manager.lock();
-	if (!lvl_mgr) return;
-	scn::level& lvl = lvl_mgr->get_level();
+	auto ctx_mgr = m_state.ctx_manager.lock();
+	if (!ctx_mgr) return;
+	scn::level& lvl = ctx_mgr->get_level();
 
 	auto level_res = m_res.require_sync<scn::level_desc>(lvl.get_tag());
 	if (!level_res.is_ready()) {

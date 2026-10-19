@@ -40,8 +40,9 @@ Editor/
     │   ├── edt_transform_gizmo.hpp
     │   └── edt_guizmo.hpp
     │
-    ├── input/                        # Editor input & file dialog
-    │   ├── edt_input_manager.cpp/h
+    ├── input/                        # Input binding helpers & file dialog
+    │   ├── edt_input_manager.h       # make_input_area / to_framebuffer_size (window units -> framebuffer pixels)
+    │   ├── edt_input_binding.h       # bind_item_input: a hovered panel image binds its rect to a context in inp::input_router
     │   └── edt_file_dialog.cpp/h
     │
     └── CMakeLists.txt
@@ -59,7 +60,7 @@ Editor/
 | `world_controller` | `controller/edt_world_controller.cpp/h` | Multi-world: `switch_to_world`, `create_world` |
 
 **`shared_state`** (`controller/edt_shared_state.h`) holds mutable state shared between controllers:
-- Service references: `lvl_manager`, `assembler`, `sfactory`
+- Service references: `ctx_manager`, `assembler`, `sfactory`
 - Level identity: `editor_tag`, `level_tag`, `level_name`, `is_dirty`
 - Multi-world: `world_descs`, `world_names`, `worlds_systems_list`, `active_world_idx`
 
@@ -143,13 +144,13 @@ The editor never finds nodes by name (names are display only): hierarchy, viewpo
 **Single source of truth for world order (critical invariant):** the three parallel
 `shared_state` arrays (`world_descs` / `world_names` / `worlds_systems_list`) MUST be
 built from the same ordered source — the desc-ordered world list. Do NOT build them by
-iterating `scn::level::for_each_world`: it walks a `std::unordered_map` in **hash order**,
-not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
+iterating `scn::level::for_each_world`: it walks the contexts by **context id**, which fills
+gaps left by removed worlds and so is not desc/insertion order, so with >=2 worlds the parallel arrays desync. Derive names and
 per-world systems via `edt::derive_world_arrays` (`controller/edt_level_controller.h`), and
 keep `populate_worlds_from_level` as the single build point on load. Covered by
 `tests/edt_world_array_sync_tests.cpp`.
 
-**Hot reload:** `scn::level_manager` drops/rebuilds only the desc-owned worlds, so worlds created in the
+**Hot reload:** `scn::context_manager` drops/rebuilds only the `kind==level` contexts of the set `"level"`, so worlds created in the
 editor but not yet saved survive. After every reload (world list or systems only) it calls `level_controller::resync_worlds_after_reload()`
 (`merge_reloaded_worlds` + `derive_world_arrays`), which keeps the arrays aligned with the level. A reload
 whose world desc fails to load is skipped entirely (current level kept, no callback).
@@ -225,7 +226,7 @@ Non-blocking ImGui modal — must be called every frame while open.
 
 - **EnTT `registry::each()` does not exist** — use `registry.storage<entt::entity>()` to iterate all entities
 - **EnTT forward declare** — use `#include <entt/fwd.hpp>`, not `namespace entt { class registry; }`
-- **Input rect**: editor input is gated to viewport rect — mouse outside viewport is not forwarded to ECS
+- **Input routing**: ECS input is routed by `inp::input_router`; a panel binds its hovered image every frame (`bind_item_input`), the context under the cursor gets the full `inp::input_state`, all others a neutral one. Never set `inp::input_focus` by hand
 - **`serialize_and_push()` is destructive** — tears down and rebuilds the entire ECS world; don't hold raw pointers to registry components across it
 - **Camera state**: always call `save_editor_camera_state` before `serialize_and_push`, `inject_editor_camera` after — otherwise camera resets
 - **Memory resources**: `memory://` protocol stores resources at runtime; `res://` resolves from filesystem via `resource.path`

@@ -6,7 +6,7 @@
 #include <string>
 #include <memory>
 
-namespace scn { class level_manager; class ecs_assembler; }
+namespace scn { class context_manager; class ecs_assembler; }
 namespace ecs { class system_factory; }
 
 namespace edt
@@ -14,7 +14,7 @@ namespace edt
 	struct shared_state
 	{
 		// Service references (set during init, not owned)
-		std::weak_ptr<scn::level_manager> lvl_manager;
+		std::weak_ptr<scn::context_manager> ctx_manager;
 		scn::ecs_assembler* assembler = nullptr;
 		ecs::system_factory* sfactory = nullptr;
 

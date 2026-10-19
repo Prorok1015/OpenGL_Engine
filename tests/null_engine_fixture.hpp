@@ -23,7 +23,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
-#include <snk/scene/level/scn_level_manager.h>
+#include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_registration_scope.h>
 #include <snk/scene/scn_scene_service_init.h>
@@ -81,8 +81,7 @@ struct null_engine_fixture
 		fs::create_directories("./sandbox");
 
 		storage.construct<wnd::window_system, wnd::null_window_system>();
-		auto& rs = storage.construct<res::resource_system>();
-		rs.set_adapter_worker(std::make_unique<test_util::inline_worker>());
+		auto& rs = storage.construct<res::resource_system>(std::ref(tasks));
 		rs.unregistrate_resolver(res::tag::memory);
 		rs.registrate_resolver<test_util::ram_resolver>(res::tag::memory);
 		rs.unregistrate_resolver(res::tag::default_protocol());
@@ -95,6 +94,10 @@ struct null_engine_fixture
 
 		auto& stages = storage.construct<app::frame_stage_registry>();
 		app::register_core_frame_stages(stages);
+		stages.add_stage("tasks", app::builtin_stage::input, app::stage_side::after, [this](app::stage_context&) {
+			// Stands in for the production `tasks` stage; it also finishes the load tasks, as no pool thread does.
+			test_util::pump(tasks);
+		});
 		storage.construct<app::app_loop_service_interface, app::loop_service>(stages);
 
 		auto ecs_input = std::make_shared<inp::ecs_input_manager>();
@@ -158,6 +161,7 @@ struct null_engine_fixture
 		return done;
 	}
 
+	ds::task_system tasks{ test_util::manual_tasks() }; // outlives the services in `storage`
 	ds::app_data_storage storage;
 	std::optional<scn::registration_scope> scene_types;
 };

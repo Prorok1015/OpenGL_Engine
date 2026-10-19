@@ -15,6 +15,7 @@ namespace scn {
 		const animation_clip_desc* find(const std::string& anim_name) const
 		{
 			for (auto& handle : clips) {
+				handle.wait(); // loaded in the background; a clip that is still pending could be the one asked for
 				if (handle.is_ready()) {
 					auto& clip = *handle.get_sync();
 					if (clip.name == anim_name) {

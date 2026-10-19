@@ -9,7 +9,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
-#include <snk/resource/adapters/res_adapter_worker_base.hpp>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #include <snk/config/cfg_api.h>
 #include <snk/common/logger/engine_log.h>
@@ -29,14 +29,6 @@ namespace fs = std::filesystem;
 CFG_VAR_EXT_PATH(cfg_res_base_path);
 
 namespace {
-
-	struct inline_worker : core::res::adapter_worker_base
-	{
-		void start() override {}
-		void stop() override {}
-		bool is_stopped() const override { return false; }
-		void post(std::function<void()> cb) override { cb(); }
-	};
 
 	std::vector<std::byte> read_file(const fs::path& path)
 	{
@@ -86,8 +78,11 @@ int main(int argc, char** argv)
 	std::error_code ec;
 	fs::create_directories("./sandbox", ec);
 
-	res::resource_system res_sys;
-	res_sys.set_adapter_worker(std::make_unique<inline_worker>());
+	// No threads: get_sync() on a manual task_system runs the queued loads itself.
+	ds::task_system_config tasks_config;
+	tasks_config.mode = ds::policy::manual;
+	ds::task_system tasks(tasks_config);
+	res::resource_system res_sys(tasks);
 	desc::desc_system desc_sys(res_sys);
 	res_sys.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(res_sys), std::ref(desc_sys));
 	scn::ecs_assembler assembler(desc_sys, res_sys);
