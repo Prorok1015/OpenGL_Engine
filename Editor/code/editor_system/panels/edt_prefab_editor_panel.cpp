@@ -1,6 +1,7 @@
 #include "edt_prefab_editor_panel.h"
 #include "edt_prefab_editor_context.h"
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_camera_component.hpp>

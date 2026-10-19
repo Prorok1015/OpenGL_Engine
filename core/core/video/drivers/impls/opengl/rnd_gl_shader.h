@@ -1,7 +1,6 @@
 #pragma once
 #include <snk/driver/rnd_shader_interface.h>
 #include <glad/glad.h>
-#include <glm/ext/matrix_float4x4.hpp>
 
 namespace rnd::driver::gl
 {
@@ -11,15 +10,6 @@ namespace rnd::driver::gl
 		shader(GLuint shader_id) : id(shader_id) {}
 		virtual ~shader() override;
 
-		virtual void uniform(std::string_view name, const uniform_data& val) override;
-
-		void uniform(std::string_view name, glm::mat4 val);
-		void uniform(std::string_view name, glm::ivec4 val);
-		void uniform(std::string_view name, glm::vec4 val);
-		void uniform(std::string_view name, glm::vec3 val);
-		void uniform(std::string_view name, glm::vec2 val);
-		void uniform(std::string_view name, int val);
-		void uniform(std::string_view name, float val);
 		// Makes the program current; the driver does it when a pipeline is bound.
 		void use() const;
 		GLuint program() const { return id; }

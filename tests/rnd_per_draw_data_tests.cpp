@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "rnd_null_driver.h"
 #include "rnd_frame_upload_pass.h"
+#include "rnd_test_render_context.hpp"
 #include <snk/common/mem_allocator.h>
-#include <snk/render/rnd_frame_context.h>
 #include <snk/render/rnd_per_draw_data.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/skinning/rnd_skinning_manager.h>
@@ -295,6 +295,99 @@ BOOST_AUTO_TEST_CASE(ASkinWithoutWeightsOrWithoutAManagerSeesTheEmptyBuffer)
 	BOOST_TEST((bind(0, res::tag{}, &skins) == empty));
 }
 
+BOOST_AUTO_TEST_CASE(ASkinWhoseWeightsAreRegisteredAgainGetsAFreshIndexBuffer)
+{
+	// The weights are reloaded (a hot reload registers the skin once more): draws must not keep the old data.
+	rnd::skinning_manager skins;
+	const res::tag a = res::tag::make("skins/a");
+	skins.register_weights(a, { { 1, 2, 3 }, { 4 } });
+	const auto before = bind(0, a, &skins);
+	BOOST_TEST(skins.index_builds() == 1u);
+	const auto buffers = driver.live_buffers();
+	const auto groups = driver.live_bind_groups();
+
+	skins.register_weights(a, { { 9 } });
+	const auto after = bind(0, a, &skins);
+	BOOST_TEST((after != before));
+	BOOST_TEST(skins.index_builds() == 2u);
+	// The old buffer and group are gone, not kept next to the new ones.
+	BOOST_TEST(driver.live_buffers() == buffers);
+	BOOST_TEST(driver.live_bind_groups() == groups);
+	BOOST_TEST(driver.group_info(before) == nullptr);
+
+	const auto* info = driver.group_info(after);
+	BOOST_REQUIRE(info);
+	const auto* bytes = driver.buffer_bytes(info->entries[2].buffer);
+	BOOST_REQUIRE(bytes);
+	const std::vector<std::uint32_t> expected{ 1, 0, 1, 9 };
+	BOOST_REQUIRE(bytes->size() == expected.size() * sizeof(std::uint32_t));
+	BOOST_TEST(std::memcmp(bytes->data(), expected.data(), bytes->size()) == 0);
+	BOOST_TEST(info->entries[2].size == bytes->size());
+
+	// And it is cached again.
+	BOOST_TEST((bind(1, a, &skins) == after));
+	BOOST_TEST(skins.index_builds() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(RegisteringAnotherSkinDoesNotRebuildTheOnesAlreadyCached)
+{
+	rnd::skinning_manager skins;
+	const res::tag a = res::tag::make("skins/a");
+	const res::tag b = res::tag::make("skins/b");
+	skins.register_weights(a, { { 1 } });
+	const auto group_a = bind(0, a, &skins);
+	BOOST_TEST(skins.index_builds() == 1u);
+
+	skins.register_weights(b, { { 2 } });
+	BOOST_TEST((bind(0, a, &skins) == group_a));
+	BOOST_TEST(skins.index_builds() == 1u);
+	bind(0, b, &skins);
+	BOOST_TEST(skins.index_builds() == 2u);
+	BOOST_TEST((bind(0, a, &skins) == group_a));
+	BOOST_TEST(skins.index_builds() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ASkinNobodyRegisteredIsRememberedAsSuchUntilItIs)
+{
+	rnd::skinning_manager skins;
+	const res::tag later = res::tag::make("skins/later");
+	const auto empty = bind(0);
+	const auto groups = data.groups_created();
+	const auto buffers = driver.calls().buffers_created;
+
+	for (int draw = 0; draw < 5; ++draw) {
+		BOOST_TEST((bind(draw, later, &skins) == empty));
+	}
+	// Not looked up for the weights again at each draw, and nothing was made for it.
+	BOOST_TEST(skins.index_builds() == 0u);
+	BOOST_TEST(data.groups_created() == groups);
+	BOOST_TEST(driver.calls().buffers_created == buffers);
+
+	skins.register_weights(later, { { 5, 6 } });
+	const auto real = bind(0, later, &skins);
+	BOOST_TEST((real != empty));
+	BOOST_TEST(skins.index_builds() == 1u);
+	BOOST_TEST(data.groups_created() == groups + 1);
+	BOOST_TEST((bind(3, later, &skins) == real));
+	BOOST_TEST(skins.index_builds() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ADrawWithoutASkinSeesABufferTheShaderCanTellIsEmpty)
+{
+	// A skinned variant of a mesh whose skin has no weights reads set 3 binding 1: a zeroed buffer (no columns),
+	// bound, not absent. The shader (skinning_lib.glsl) checks the length before reading it.
+	const auto* info = driver.group_info(bind(0));
+	BOOST_REQUIRE(info);
+	BOOST_TEST((info->entries[2].type == binding_type::ssbo));
+	BOOST_TEST(info->entries[2].size >= 2 * sizeof(std::uint32_t));
+	const auto* bytes = driver.buffer_bytes(info->entries[2].buffer);
+	BOOST_REQUIRE(bytes);
+	BOOST_TEST(bytes->size() == info->entries[2].size);
+	for (const std::byte b : *bytes) {
+		BOOST_REQUIRE(b == std::byte{ 0 });
+	}
+}
+
 BOOST_AUTO_TEST_CASE(GrowingTheRingRebuildsTheGroupsOfTheSkinsOnTheirNextUse)
 {
 	rnd::skinning_manager skins;
@@ -391,9 +484,9 @@ std::vector<glm::mat4> skeleton_of(std::size_t bones, float first)
 
 BOOST_AUTO_TEST_CASE(TwoSkinnedMeshesFindTheirOwnSkeletonInTheFrameBuffer)
 {
-	rnd::frame_context context;
-	context.draw_data = &data;
-	auto& packets = context.data.construct<std::pmr::vector<rnd::render_packet_t>>(ds::frame_allocator());
+	test_util::test_render_context context(&data);
+	std::pmr::vector<rnd::render_packet_t> packets(ds::frame_allocator());
+	context.use_packets(&packets);
 
 	const auto skeleton_a = skeleton_of(3, 100.f);
 	const auto skeleton_b = skeleton_of(2, 200.f);
@@ -452,14 +545,14 @@ BOOST_AUTO_TEST_CASE(TwoSkinnedMeshesFindTheirOwnSkeletonInTheFrameBuffer)
 
 BOOST_AUTO_TEST_CASE(NoPacketsMeansNoUploadAndNoFailure)
 {
-	rnd::frame_context context;
-	context.draw_data = &data;
+	test_util::test_render_context context(&data);
 	const auto updates = driver.calls().buffer_updates;
 	rnd::frame_upload_pass pass;
 	BOOST_REQUIRE_NO_THROW(pass.execute(context, driver));
 	BOOST_TEST(driver.calls().buffer_updates == updates);
 
-	context.data.construct<std::pmr::vector<rnd::render_packet_t>>(ds::frame_allocator());
+	std::pmr::vector<rnd::render_packet_t> none(ds::frame_allocator());
+	context.use_packets(&none);
 	BOOST_REQUIRE_NO_THROW(pass.execute(context, driver));
 	BOOST_TEST(driver.calls().buffer_updates == updates);
 }

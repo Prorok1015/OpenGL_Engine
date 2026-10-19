@@ -41,8 +41,6 @@ namespace rnd::driver::validation
 	public:
 		shader(std::shared_ptr<validator> owner, std::unique_ptr<shader_interface> inner);
 
-		void uniform(std::string_view name, const uniform_data& val) override { m_inner->uniform(name, val); }
-
 		const shader_interface& inner() const { return *m_inner; }
 
 	private:

@@ -1,5 +1,6 @@
 #include <snk/render/shader/rnd_shader_config_cache.h>
 #include <algorithm>
+#include <atomic>
 #include <snk/common/engine_assert.h>
 
 namespace
@@ -21,6 +22,12 @@ namespace
 			&& a.constants == b.constants
 			&& std::is_permutation(a.defines.begin(), a.defines.end(), b.defines.begin(), b.defines.end());
 	}
+}
+
+std::uint64_t rnd::next_material_serial() noexcept
+{
+	static std::atomic<std::uint64_t> counter{ 0 };
+	return ++counter;
 }
 
 rnd::variant_id rnd::shader_config_cache::intern(const shader_config::constant_data& cdata, pass_define_mask passes)
