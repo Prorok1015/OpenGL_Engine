@@ -85,10 +85,17 @@ namespace rnd {
 			state.depth.test_func = rnd::driver::depth_state::func::LEQUAL;
 			drv.set_render_state(state);
 
+			rnd::driver::render_pass_desc pass;
+			pass.debug_name = "skybox";
 			if (offscreen) {
-				drv.push_frame_buffer();
-				drv.set_render_target(color_rt, txm_manager.find(depth_tag));
+				pass.colors.push_back({.texture = color_rt});
+				if (auto* depth = txm_manager.find(depth_tag)) {
+					pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
+				}
+			} else {
+				pass.backbuffer = true;
 			}
+			drv.begin_render_pass(pass);
 			
 			common_matrix.view = packet.camera.view_matrix;
 			common_matrix.projection = packet.camera.projection_matrix;
@@ -103,9 +110,7 @@ namespace rnd {
 			rnd::configure_pass(context, sky.variant, *sky.material, sky.world ? &*sky.world : nullptr);
 			drv.draw_indices(m_va, rnd::RENDER_MODE::TRIANGLE, 36);
 
-			if (offscreen) {
-				drv.pop_frame_buffer();
-			}
+			drv.end_render_pass();
 		}
 	}
 }

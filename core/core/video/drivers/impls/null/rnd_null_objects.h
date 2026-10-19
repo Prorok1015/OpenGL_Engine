@@ -6,6 +6,7 @@
 #include <snk/driver/rnd_uniform_buffer_interface.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_framebuffer_cache.h>
 #include <snk/common/snk_api.h>
 
 #include <cstddef>
@@ -33,6 +34,8 @@ namespace rnd::driver::null
 		object_counts buffers;
 		object_counts uniform_buffers;
 		object_counts ssbo_buffers;
+		// The framebuffers begin_render_pass built, by attachment set: the model of what a GPU backend caches.
+		framebuffer_cache<std::uint32_t> framebuffers;
 
 		std::size_t live_total() const
 		{
@@ -89,7 +92,14 @@ namespace rnd::driver::null
 	{
 	public:
 		texture(std::shared_ptr<object_stats> stats, const texture_header& hdr)
-			: texture_interface(hdr), m_token(std::move(stats), &object_stats::textures) {}
+			: texture_interface(hdr), m_stats(stats), m_token(std::move(stats), &object_stats::textures) {}
+		~texture() override
+		{
+			m_stats->framebuffers.evict(framebuffer_object(), [](std::uint32_t&) {});
+		}
+
+		// Identity in a framebuffer cache key.
+		std::uint64_t framebuffer_object() const { return reinterpret_cast<std::uintptr_t>(this); }
 
 		void bind(uint32_t /*position*/) override { ++m_bind_calls; }
 		void unbind(uint32_t /*position*/) override {}
@@ -111,6 +121,7 @@ namespace rnd::driver::null
 		std::size_t mipmap_calls() const { return m_mipmap_calls; }
 
 	private:
+		std::shared_ptr<object_stats> m_stats;
 		detail::lifetime_token m_token;
 		std::size_t m_bind_calls = 0;
 		std::size_t m_update_calls = 0;

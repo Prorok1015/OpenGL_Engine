@@ -1,5 +1,6 @@
 #include "rnd_validation_driver.h"
 
+#include <algorithm>
 #include <array>
 #include <format>
 #include <optional>
@@ -29,6 +30,29 @@ namespace {
 	{
 		return wrapped ? &static_cast<validation::texture*>(wrapped)->inner() : nullptr;
 	}
+
+	std::uint32_t mip_extent(std::uint32_t size, std::uint32_t mip)
+	{
+		return std::max<std::uint32_t>(size >> std::min<std::uint32_t>(mip, 31), 1u);
+	}
+
+	// Slices a render pass can select with `attachment_desc::layer`.
+	std::uint32_t layer_count(const texture_interface& texture)
+	{
+		switch (texture.get_type()) {
+		case TEXTURE_TYPE::TEXTURE_3D: return std::max(texture.depth(), 1u);
+		case TEXTURE_TYPE::TEXTURE_CUBE_MAP: return 6;
+		case TEXTURE_TYPE::TEXTURE_1D_ARRAY:
+		case TEXTURE_TYPE::TEXTURE_2D_ARRAY: return std::max(texture.layers(), 1u);
+		case TEXTURE_TYPE::TEXTURE_CUBE_ARRAY: return std::max(texture.layers(), 1u) * 6;
+		default: return 1;
+		}
+	}
+
+	const char* pass_label(const render_pass_desc& desc)
+	{
+		return desc.debug_name ? desc.debug_name : "unnamed";
+	}
 }
 
 rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner, limits budget)
@@ -42,141 +66,145 @@ rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner,
 {
 }
 
-void rnd::driver::validation::driver::push_frame_buffer()
+bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target)
 {
-	m_state->push_target();
-	m_inner->push_frame_buffer();
-}
-
-void rnd::driver::validation::driver::pop_frame_buffer()
-{
-	if (m_state->pop_target()) {
-		m_inner->pop_frame_buffer();
-	}
-}
-
-bool rnd::driver::validation::driver::check_targets(std::span<texture_interface* const> colors, texture_interface* depth_stencil)
-{
-	const bool on_backbuffer = m_state->target_depth() == 1;
-	if (on_backbuffer) {
-		m_state->report(rule::render_target_without_push, "set_render_target(s) with only the backbuffer on the stack");
-	}
+	const std::string label = pass_label(desc);
+	const auto invalid = [&](const std::string& why) {
+		m_state->report(rule::invalid_render_pass, std::format("render pass '{}': {}", label, why));
+	};
 
 	bool alive = true;
-	for (texture_interface* color : colors) {
-		alive = (!color || m_state->require_live(color, object_kind::texture, "color attachment")) && alive;
+	for (const attachment_desc& color : desc.colors) {
+		alive = (!color.texture || m_state->require_live(color.texture, object_kind::texture, "color attachment")) && alive;
 	}
-	alive = (!depth_stencil || m_state->require_live(depth_stencil, object_kind::texture, "depth attachment")) && alive;
+	if (desc.depth_stencil) {
+		alive = (!desc.depth_stencil->texture || m_state->require_live(desc.depth_stencil->texture, object_kind::texture, "depth attachment")) && alive;
+	}
 	if (!alive) {
 		return false;
 	}
 
+	if (desc.backbuffer) {
+		bool has_texture = desc.depth_stencil && desc.depth_stencil->texture;
+		for (const attachment_desc& color : desc.colors) {
+			has_texture = has_texture || color.texture;
+		}
+		if (has_texture) {
+			invalid("a backbuffer pass takes no texture attachments");
+		}
+	} else {
+		if (desc.colors.empty() && !desc.depth_stencil) {
+			invalid("no attachments and not a backbuffer pass");
+		}
+		if (desc.depth_stencil && !desc.depth_stencil->texture) {
+			invalid("depth/stencil attachment without a texture");
+		}
+	}
+
 	std::optional<glm::uvec2> extent;
 	bool size_mismatch = false;
-	const auto visit = [&](const texture_interface& attachment, bool is_depth) {
+	const auto visit = [&](const attachment_desc& attachment, bool is_depth) {
+		const texture_interface& texture = *attachment.texture;
 		const bool usage_ok = is_depth
-			? attachment.has_usage(texture_usage::depth_target) || attachment.has_usage(texture_usage::stencil_target)
-			: attachment.has_usage(texture_usage::color_target);
+			? texture.has_usage(texture_usage::depth_target) || texture.has_usage(texture_usage::stencil_target)
+			: texture.has_usage(texture_usage::color_target);
 		if (!usage_ok) {
-			m_state->report(rule::attachment_usage, std::format("{} attachment of {}x{} has usage {}, expected {}",
-				is_depth ? "depth" : "color", attachment.width(), attachment.height(), validation::usage_text(attachment.get_usage()),
+			m_state->report(rule::attachment_usage, std::format("render pass '{}': {} attachment of {}x{} has usage {}, expected {}",
+				label, is_depth ? "depth" : "color", texture.width(), texture.height(), validation::usage_text(texture.get_usage()),
 				is_depth ? "depth_target or stencil_target" : "color_target"));
 		}
-		const glm::uvec2 size{ attachment.width(), attachment.height() };
+		if (attachment.mip >= std::max(texture.mip_levels(), 1u)) {
+			invalid(std::format("mip {} of a texture with {} mip levels", attachment.mip, texture.mip_levels()));
+		}
+		if (attachment.layer != attachment_desc::all_layers && attachment.layer >= layer_count(texture)) {
+			invalid(std::format("layer {} of a texture with {} layers", attachment.layer, layer_count(texture)));
+		}
+		const glm::uvec2 size{ mip_extent(texture.width(), attachment.mip), mip_extent(texture.height(), attachment.mip) };
 		if (!extent) {
 			extent = size;
 		} else if (*extent != size) {
 			size_mismatch = true;
 		}
 	};
-	for (const texture_interface* color : colors) {
-		if (color) {
-			visit(*color, false);
+	for (const attachment_desc& color : desc.colors) {
+		if (color.texture) {
+			visit(color, false);
 		}
 	}
-	if (depth_stencil) {
-		visit(*depth_stencil, true);
+	if (desc.depth_stencil && desc.depth_stencil->texture) {
+		visit(*desc.depth_stencil, true);
 	}
 	if (size_mismatch) {
-		m_state->report(rule::attachment_size_mismatch, "attachments of one render target differ in size");
+		m_state->report(rule::attachment_size_mismatch, std::format("render pass '{}': attachments differ in size", label));
 	}
 
-	if (!on_backbuffer) {
-		target_info& target = m_state->current_target();
-		target.has_extent = extent.has_value();
-		target.width = extent ? extent->x : 0;
-		target.height = extent ? extent->y : 0;
+	target.has_extent = extent.has_value();
+	target.width = extent ? extent->x : 0;
+	target.height = extent ? extent->y : 0;
+
+	const glm::ivec4 area = desc.render_area;
+	if (area.z > 0 && area.w > 0 && target.has_extent) {
+		const bool inside = area.x >= 0 && area.y >= 0
+			&& static_cast<std::int64_t>(area.x) + area.z <= target.width
+			&& static_cast<std::int64_t>(area.y) + area.w <= target.height;
+		if (!inside) {
+			m_state->report(rule::render_area_outside_target, std::format("render pass '{}': render area {{{}, {}, {}, {}}} is outside the {}x{} target",
+				label, area.x, area.y, area.z, area.w, target.width, target.height));
+		}
 	}
-	m_state->note(trace_op::set_targets, static_cast<std::uint32_t>(colors.size()), depth_stencil ? 1u : 0u);
+
+	inner_desc = desc;
+	for (attachment_desc& color : inner_desc.colors) {
+		color.texture = unwrap(color.texture);
+	}
+	if (inner_desc.depth_stencil) {
+		inner_desc.depth_stencil->texture = unwrap(inner_desc.depth_stencil->texture);
+	}
 	return true;
 }
 
-void rnd::driver::validation::driver::set_render_target(texture_interface* color, texture_interface* depth_stencil)
+void rnd::driver::validation::driver::begin_render_pass(const render_pass_desc& desc)
 {
-	const std::array<texture_interface*, 1> colors{ color };
-	if (check_targets(colors, depth_stencil)) {
-		m_inner->set_render_target(unwrap(color), unwrap(depth_stencil));
-	}
-}
-
-void rnd::driver::validation::driver::set_render_targets(std::vector<texture_interface*> colors, texture_interface* depth_stencil)
-{
-	if (!check_targets(colors, depth_stencil)) {
+	if (m_state->in_pass()) {
+		m_state->report(rule::nested_render_pass, std::format("begin_render_pass('{}') inside the pass '{}'", pass_label(desc), m_state->pass_name()));
+		m_state->drop_begin();
 		return;
 	}
-	for (texture_interface*& color : colors) {
-		color = unwrap(color);
-	}
-	m_inner->set_render_targets(std::move(colors), unwrap(depth_stencil));
-}
 
-void rnd::driver::validation::driver::check_rect(rule kind, const char* what, glm::ivec4 rect)
-{
-	const target_info& target = m_state->current_target();
-	if (!target.has_extent) {
+	render_pass_desc inner_desc;
+	target_info target;
+	if (!check_render_pass(desc, inner_desc, target)) {
+		m_state->drop_begin();
 		return;
 	}
-	const bool inside = rect.x >= 0 && rect.y >= 0 && rect.z >= 0 && rect.w >= 0
-		&& static_cast<std::int64_t>(rect.x) + rect.z <= target.width
-		&& static_cast<std::int64_t>(rect.y) + rect.w <= target.height;
-	if (!inside) {
-		m_state->report(kind, std::format("{} {{{}, {}, {}, {}}} is outside the {}x{} render target",
-			what, rect.x, rect.y, rect.z, rect.w, target.width, target.height));
+	m_state->begin_pass(pass_label(desc), target, static_cast<std::uint32_t>(desc.colors.size()), desc.depth_stencil.has_value());
+	m_inner->begin_render_pass(inner_desc);
+}
+
+void rnd::driver::validation::driver::end_render_pass()
+{
+	if (m_state->consume_dropped_begin()) {
+		return;
 	}
+	if (!m_state->end_pass()) {
+		m_state->report(rule::end_without_begin, "end_render_pass outside a render pass");
+		return;
+	}
+	m_inner->end_render_pass();
 }
 
 void rnd::driver::validation::driver::set_viewport(glm::ivec4 rect)
 {
 	m_state->note(trace_op::set_viewport);
-	check_rect(rule::viewport_outside_target, "viewport", rect);
-	m_inner->set_viewport(rect);
-}
-
-void rnd::driver::validation::driver::set_scissor(glm::ivec4 rect)
-{
-	m_state->note(trace_op::set_scissor);
-	if (rect.z >= 1 && rect.w >= 1) {
-		check_rect(rule::scissor_outside_target, "scissor", rect);
+	const target_info& target = m_state->current_target();
+	const bool inside = !target.has_extent || (rect.x >= 0 && rect.y >= 0 && rect.z >= 0 && rect.w >= 0
+		&& static_cast<std::int64_t>(rect.x) + rect.z <= target.width
+		&& static_cast<std::int64_t>(rect.y) + rect.w <= target.height);
+	if (!inside) {
+		m_state->report(rule::viewport_outside_target, std::format("viewport {{{}, {}, {}, {}}} is outside the {}x{} render target",
+			rect.x, rect.y, rect.z, rect.w, target.width, target.height));
 	}
-	m_inner->set_scissor(rect);
-}
-
-void rnd::driver::validation::driver::clear(clear_flags flags)
-{
-	m_state->note(trace_op::clear);
-	m_inner->clear(flags);
-}
-
-void rnd::driver::validation::driver::clear(clear_flags flags, glm::vec4 color)
-{
-	m_state->note(trace_op::clear);
-	m_inner->clear(flags, color);
-}
-
-void rnd::driver::validation::driver::clear(clear_flags flags, const std::vector<glm::vec4>& colors)
-{
-	m_state->note(trace_op::clear);
-	m_inner->clear(flags, colors);
+	m_inner->set_viewport(rect);
 }
 
 const rnd::driver::validation::vertex_array* rnd::driver::validation::driver::check_draw(
@@ -188,6 +216,9 @@ const rnd::driver::validation::vertex_array* rnd::driver::validation::driver::ch
 	const auto* wrapped = static_cast<const vertex_array*>(va);
 	m_state->note(trace_op::draw, count);
 	m_state->on_draw();
+	if (!m_state->in_pass()) {
+		m_state->report(rule::draw_outside_render_pass, "draw outside a render pass");
+	}
 	if (!m_state->program_used()) {
 		m_state->report(rule::draw_without_use, "draw before any shader use() in this frame");
 	}
