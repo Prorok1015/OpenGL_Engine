@@ -25,6 +25,11 @@ namespace edt
 
 
 
+	const res::tag& viewport_panel::render_target_tag()
+	{
+		return s_editor_cam_tag;
+	}
+
 	void viewport_panel::set_registry_getter(std::function<entt::registry*()> getter)
 	{
 		m_get_registry = std::move(getter);

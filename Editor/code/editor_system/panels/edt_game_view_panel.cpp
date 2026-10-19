@@ -26,11 +26,13 @@ namespace edt
 
 	void game_view_panel::on_hidden()
 	{
+		m_target.reset();
 		turn_off_cameras_except_in(nullptr);
 	}
 
 	void game_view_panel::on_render()
 	{
+		m_target.reset();
 		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
 		turn_off_cameras_except_in(reg);
 		if (!reg) {
@@ -72,6 +74,7 @@ namespace edt
 			return;
 		}
 
+		m_target = cam.color_targets[0];
 		const glm::vec2 fit = game_view::fit_letterbox({ avail.x, avail.y }, glm::vec2(cam.m_viewport.size));
 		const ImVec2 origin = ImGui::GetCursorPos();
 		ImGui::SetCursorPos({ origin.x + (avail.x - fit.x) * 0.5f, origin.y + (avail.y - fit.y) * 0.5f });

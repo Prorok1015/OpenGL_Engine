@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_panel_base.h"
 #include <snk/ecs/ecs_entity.h>
+#include <snk/resource/res_tag.h>
 
 #include "edt_input_binding.h"
 #include "edt_transform_gizmo.hpp"
@@ -38,6 +39,9 @@ namespace edt
 		void set_on_asset_dropped(std::function<void(const std::string&)> cb) { m_on_asset_dropped = std::move(cb); }
 
 		void set_on_transform_committed(std::function<void(std::span<const uint64_t>, glm::vec3, glm::vec3, glm::vec3)> cb) { m_on_transform_committed = std::move(cb); }
+
+		// The texture the editor camera renders to; the "scene" view of viewport.capture.
+		static const res::tag& render_target_tag();
 
 		glm::vec2 get_viewport_pos() const { return m_image_pos; }
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }

@@ -396,6 +396,18 @@ jobs:
           tools/headless/check_smoke.sh headless_out/game_view/final.png headless_out/game_view/editor.log \
             200x200+940+260 0.03 tools/headless/reference/game_view.png
 
+      # The same deterministic run, but the picture is taken inside the process: capture/on_settled makes the editor
+      # run the command viewport.capture (rnd::driver::read_texture -> PNG) once the scene settled. It is the Scene
+      # view alone (no panels, gizmos or overlays), so it has its own reference, made from this same path
+      # (the reference is the capture scaled to 400 px wide).
+      - name: Capture run (viewport.capture)
+        run: |
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/capture/final.png \
+            --wait-for-log 'captured viewport' \
+            -- --set editor/startup_level levels/smoke_level.desc capture/on_settled "$PWD/headless_out/capture/scene.png"
+          tools/headless/check_smoke.sh headless_out/capture/scene.png headless_out/capture/editor.log \
+            100x100+100+100 0 tools/headless/reference/capture_scene.png
+
       - name: Upload screenshots, diff images and logs
         if: always()
         uses: actions/upload-artifact@v4

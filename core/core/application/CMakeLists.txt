@@ -7,4 +7,5 @@ file(GLOB_RECURSE SE_APP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/
 target_sources(${PROJECT_NAME} PRIVATE ${SE_APP_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common)
+# app.advance registers into the process-wide command registry (cmd_registry.h is in its public header).
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::command PRIVATE snk::common)

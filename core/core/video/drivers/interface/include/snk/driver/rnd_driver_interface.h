@@ -90,6 +90,12 @@ namespace rnd::driver
 		// Forget what the driver believes the API state is, after foreign code (ImGui) touched it.
 		virtual void invalidate_state_cache() = 0;
 
+		// Copies `rect` = {x, y, width, height} of mip 0 of a 2D color texture to the CPU as RGBA8, row after row
+		// starting with the texture's row 0 (the bottom row in GL's orientation), 4 bytes a pixel. Waits for the GPU
+		// to finish the writes to the texture. Empty when the texture cannot be read back (can_read_back) or `rect`
+		// is not inside it (read_rect_inside).
+		virtual std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) = 0;
+
 		// GPU timer queries for profiling
 		virtual bool supports_timer_queries() const { return false; }
 		virtual uint32_t create_timer_query() { return 0; }

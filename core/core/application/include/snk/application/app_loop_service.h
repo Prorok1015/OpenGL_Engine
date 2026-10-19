@@ -4,6 +4,7 @@
 #include <functional>
 #include <optional>
 #include <snk/application/app_deterministic_time.h>
+#include <snk/application/app_frame_control.h>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service_interface.h>
 #include <snk/common/snk_api.h>
@@ -16,7 +17,8 @@ namespace app
 	class SNK_API loop_service : public app_loop_service_interface
 	{
 	public:
-		explicit loop_service(frame_stage_registry& stages, deterministic_time time = {});
+		// `control` (optional, must outlive the loop) steps the frame time on command (frame_control).
+		explicit loop_service(frame_stage_registry& stages, deterministic_time time = {}, frame_control* control = nullptr);
 
 		// Runs the registry's init hooks and starts the frame clock.
 		void init(ds::app_data_storage& storage) override;
@@ -35,6 +37,7 @@ namespace app
 	private:
 		frame_stage_registry& m_stages;
 		deterministic_time m_time;
+		frame_control* m_control;
 		std::uint64_t m_frames = 0;
 		std::function<bool(ds::app_data_storage&)> m_ready_probe;
 		std::function<bool(ds::app_data_storage&)> m_settled_probe;
