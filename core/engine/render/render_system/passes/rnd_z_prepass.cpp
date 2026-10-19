@@ -1,6 +1,7 @@
 #include "rnd_z_prepass.h"
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_render_targets.h>
 #include <snk/driver/rnd_ssbo_buffer_interface.h>
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/common/eng_profiler.h>
@@ -29,25 +30,13 @@ void z_prepass::execute(frame_context &context, driver::driver_interface &drv) {
 
     res::tag z_pass_tag = rnd::resolve_depth_target(packet.camera);
 
-    auto z_pass_rt = txm_manager.find(z_pass_tag);
-
-    if (z_pass_rt &&
-        (z_pass_rt->width() != static_cast<uint32_t>(vp_width) || z_pass_rt->height() != static_cast<uint32_t>(vp_height))) {
-      txm_manager.remove(z_pass_tag);
-      z_pass_rt = nullptr;
-    }
-
-    if (!z_pass_rt) {
-      rnd::driver::texture_header header;
-      header.data.extent.width = vp_width;
-      header.data.extent.height = vp_height;
-      header.data.format = rnd::driver::texture_header::TYPE::D32;
-      header.usage = rnd::driver::TEXTURE_USAGE::DEPTH_TARGET;
-      header.wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_BORDER;
-      header.mag = rnd::driver::texture_header::FILTERING::NEAREST;
-      header.min = rnd::driver::texture_header::FILTERING::NEAREST;
-      z_pass_rt = txm_manager.generate_texture(z_pass_tag, header);
-    }
+    auto z_pass_rt = rnd::render_targets::ensure(
+        txm_manager, z_pass_tag, {vp_width, vp_height},
+        rnd::driver::texture_header::TYPE::D32,
+        rnd::driver::texture_usage::depth_target,
+        {.min = rnd::driver::texture_header::FILTERING::NEAREST,
+         .mag = rnd::driver::texture_header::FILTERING::NEAREST,
+         .wrap = rnd::driver::texture_header::WRAPPING::CLAMP_TO_BORDER});
 
     rnd::driver::render_state state;
     state.depth.enabled = true;

@@ -46,6 +46,10 @@ rnd::driver::validation::texture::texture(std::shared_ptr<validator> owner, std:
 void rnd::driver::validation::texture::bind(uint32_t position)
 {
 	m_owner->note(trace_op::bind_texture, position);
+	if (!has_usage(texture_usage::sampled)) {
+		m_owner->report(rule::texture_not_sampled, std::format("{}x{} texture with usage {} bound to unit {} for sampling",
+			width(), height(), usage_text(get_usage()), position));
+	}
 	m_inner->bind(position);
 }
 

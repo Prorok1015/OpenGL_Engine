@@ -36,12 +36,9 @@ namespace scn {
             swap(m_stepper, other.m_stepper);
             swap(m_mode, other.m_mode);
             swap(m_seed, other.m_seed);
-            swap(m_plans, other.m_plans);
             swap(m_phase_order, other.m_phase_order);
-            swap(m_plan_slots, other.m_plan_slots);
-            swap(m_worlds, other.m_worlds);
-            swap(m_worlds_by_id, other.m_worlds_by_id);
-            swap(m_world_systems, other.m_world_systems);
+            swap(m_contexts, other.m_contexts);
+            swap(m_context_ids, other.m_context_ids);
         }
 
         // One frame of ECS: the phases in order, fixed_update stepped by the accumulator, the
@@ -52,7 +49,7 @@ namespace scn {
         // time frozen (delta_time 0, no fixed steps). Step: the next update() runs exactly one
         // frame (one fixed step, the other phases once, delta_time = fixed step), then the mode
         // becomes Pause. The mode survives clear() and level loads.
-        void set_mode(ecs::run_mode mode) { m_mode = mode; }
+        void set_mode(ecs::run_mode mode);
         ecs::run_mode mode() const { return m_mode; }
 
         // Seed of the level's random numbers. Every world owns an `ecs::rng` resource seeded from
@@ -64,47 +61,49 @@ namespace scn {
 
         scn::world& create_world(const std::string_view type, uint32_t world_id);
 
-		std::size_t get_world_count() const { return m_worlds.size(); }
-		bool has_world(const std::string_view name) const { return m_worlds.contains(std::string{ name }); }
+		std::size_t get_world_count() const { return m_contexts.size(); }
+		bool has_world(const std::string_view name) const { return m_context_ids.contains(std::string{ name }); }
 
 		// Smallest non-negative world id not currently in use. Fills gaps left by remove_world,
 		// so ids stay small. Prefer this over get_world_count() when picking an id for a new
 		// world — count collides when ids are non-contiguous (e.g. after a remove).
 		uint32_t acquire_free_world_id() const {
 			uint32_t id = 0;
-			while (m_worlds_by_id.contains(id)) ++id;
+			while (m_contexts.contains(id)) ++id;
 			return id;
 		}
 
 		template<typename Fn>
 		void for_each_world(Fn&& fn) {
-			for (auto& [name, world_ptr] : m_worlds) {
-				fn(*world_ptr);
+			for (const auto& [name, id] : m_context_ids) {
+				fn(*m_contexts.at(id));
 			}
 		}
 
 		template<typename Fn>
 		void for_each_world(Fn&& fn) const {
-			for (const auto& [name, world_ptr] : m_worlds) {
-				fn(*world_ptr);
+			for (const auto& [name, id] : m_context_ids) {
+				fn(*m_contexts.at(id));
 			}
 		}
 
         scn::world& get_world(const std::string_view type) {
-            ASSERT_MSG(m_worlds.contains(std::string{ type }), "level doesn't contain this type of world");
-            return *m_worlds[std::string{ type }];
+            auto it = m_context_ids.find(std::string{ type });
+            ASSERT_MSG(it != m_context_ids.end(), "level doesn't contain this type of world");
+            return *m_contexts.at(it->second);
         }
 
         // Null when there is no such world: for callers holding a name that can outlive the world
         // (a level reload rebuilds the worlds from the desc and drops runtime-created ones).
         scn::world* find_world(const std::string_view name) const {
-            auto it = m_worlds.find(std::string{ name });
-            return it == m_worlds.end() ? nullptr : it->second.get();
+            auto it = m_context_ids.find(std::string{ name });
+            return it == m_context_ids.end() ? nullptr : m_contexts.at(it->second).get();
         }
 
         scn::world& get_world(uint32_t id) const {
-            ASSERT_MSG(m_worlds_by_id.contains(id), "level doesn't contain world with this ID");
-            return *m_worlds_by_id.at(id);
+            auto it = m_contexts.find(id);
+            ASSERT_MSG(it != m_contexts.end(), "level doesn't contain world with this ID");
+            return *it->second;
         }
 
         entt::registry& state() { return m_level_state; }
@@ -143,8 +142,8 @@ namespace scn {
 
 		// Plan of a world, null when the world has no systems registered.
 		const ecs::system_plan* plan_of(uint32_t world_id) const {
-			auto it = m_plans.find(world_id);
-			return it == m_plans.end() ? nullptr : &it->second;
+			auto it = m_contexts.find(world_id);
+			return it == m_contexts.end() ? nullptr : it->second->plan();
 		}
 
         void clear();
@@ -156,7 +155,9 @@ namespace scn {
         // Takes the phase order from sf and re-resolves every world's phases against it.
         void refresh_plan_slots(const ecs::system_factory& sf);
         void run_phase(size_t order_index, ecs::run_mode mode);
-        static void apply_commands(entt::registry& state);
+        void destroy_context(uint32_t id);
+        // Contexts hold copies of the level's stepper and mode.
+        void sync_context_time();
 
         ecs::runtime_context create_runtime_context(size_t world_id) {
             ecs::runtime_context ctx{ .current_registry = get_world(world_id).state(), .current_world_id = world_id };
@@ -175,16 +176,11 @@ namespace scn {
         ecs::run_mode m_mode = ecs::run_mode::play;
         uint64_t m_seed = ecs::rng::default_seed;
 
-        // Per world name: the system names the world runs (data from world_desc.systems).
-        std::unordered_map<std::string, std::vector<std::string>> m_world_systems;
-        // Per world id (ordered, so worlds always run in id order): the plan built from that list.
-        std::map<uint32_t, ecs::system_plan> m_plans;
-        // Phase order the level runs (copy of the table at the last plan build) and, per world id,
-        // that world's phase_plan for every position of it (null where the plan has no such phase).
-        // Resolved by phase id when plans are built, so a frame does no searching.
+        // Phase order the level runs (copy of the table at the last plan build). Each context
+        // resolves its plan against it when plans are built, so a frame does no searching.
         std::vector<ecs::phase_id> m_phase_order = ecs::phase_table{}.ordered();
-        std::map<uint32_t, std::vector<const ecs::phase_plan*>> m_plan_slots;
-        std::unordered_map<std::string, std::unique_ptr<scn::world>> m_worlds;
-        std::map<uint32_t, scn::world *> m_worlds_by_id;
+        // Ordered by id, so contexts always run in id order.
+        std::map<uint32_t, std::unique_ptr<scn::world_context>> m_contexts;
+        std::unordered_map<std::string, uint32_t> m_context_ids;
     };
 } // namespace scn

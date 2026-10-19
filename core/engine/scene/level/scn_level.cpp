@@ -19,8 +19,8 @@ void scn::level::set_seed(uint64_t seed)
 {
     m_seed = seed;
     m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) });
-    for (const auto& [id, world] : m_worlds_by_id) {
-        world->state().ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, id) });
+    for (const auto& [id, context] : m_contexts) {
+        context->seed(m_seed);
     }
 }
 
@@ -67,47 +67,54 @@ void scn::level::update(std::chrono::duration<float> dt)
     }
 
     if (mode == ecs::run_mode::step) m_mode = ecs::run_mode::pause;
+    sync_context_time();
 
     if (m_hot_reload_manager) {
         m_hot_reload_manager->tick();
 	}
 }
 
+void scn::level::set_mode(ecs::run_mode mode)
+{
+    m_mode = mode;
+    sync_context_time();
+}
+
+void scn::level::sync_context_time()
+{
+    for (const auto& [id, context] : m_contexts) {
+        context->sync_time(m_stepper, m_mode);
+    }
+}
+
 void scn::level::run_phase(size_t order_index, ecs::run_mode mode)
 {
-    // Every world takes part, also one without systems: commands queued into it from outside
+    // Every context takes part, also one without systems: commands queued into it from outside
     // (other worlds' systems, the editor) are applied on the same schedule.
-    for (const auto& [world_id, world] : m_worlds_by_id) {
-        const ecs::phase_plan* phase = nullptr;
-        if (auto slots = m_plan_slots.find(world_id); slots != m_plan_slots.end()) {
-            phase = slots->second[order_index];
-        }
-        if (phase && !phase->nodes.empty()) {
-            PROFILE_SCOPE(phase->id.name().c_str());
+    for (const auto& [world_id, context] : m_contexts) {
+        if (context->has_phase_work(order_index)) {
             const ecs::runtime_context ctx = create_runtime_context(world_id);
-            for (const auto& node : phase->nodes) {
-                if (!ecs::mode_runs_system(mode, node.run_in_edit)) continue;
-                PROFILE_SCOPE(node.name.c_str());
-                node(ctx);
-            }
+            context->run_phase(order_index, mode, ctx);
         }
-        apply_commands(world->state());
+        context->apply_commands();
     }
     // Systems reach the level state through get_world_registry(LEVEL_ID) as well.
-    apply_commands(m_level_state);
+    world_context::apply_commands(m_level_state);
 }
 
 scn::world& scn::level::create_world(const std::string_view type, uint32_t world_id)
 {
-    if (auto it = m_worlds.find(std::string{ type }); it != m_worlds.end()) {
-        // replacing would free a world that m_worlds_by_id and m_plans still point at
+    if (auto it = m_context_ids.find(std::string{ type }); it != m_context_ids.end()) {
+        // replacing would free a context that the id map still points at
         egLOG_ERROR("scene", "create_world: world '{}' already exists, keeping the existing one", type);
-        return *it->second;
+        return *m_contexts.at(it->second);
     }
+    ASSERT_MSG(!m_contexts.contains(world_id), "create_world: world id is already in use");
 
-    auto& w = *(m_worlds[std::string{ type }] = std::make_unique<scn::world>(world_id, type));
-    m_worlds_by_id[world_id] = &w; // Register in ID map
-    w.state().ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, world_id) });
+    auto& w = *(m_contexts[world_id] = std::make_unique<scn::world_context>(world_id, type));
+    m_context_ids[std::string{ type }] = world_id;
+    w.seed(m_seed);
+    w.sync_time(m_stepper, m_mode);
 
     if (m_hot_reload_manager) {
         m_hot_reload_manager->attach_registry(w.state());
@@ -121,6 +128,7 @@ void scn::level::load_from_desc(const level_desc& desc, ecs::system_factory& sfa
 	m_current_level_tag = desc.get_tag();
 	m_level_state.ctx().insert_or_assign(ecs::rng{ ecs::derive_seed(m_seed, LEVEL_ID) }); // a fresh load replays from the seed
 	m_stepper.reset(); // no leftover fraction of a step from the previous level
+	sync_context_time();
 	m_level_state.ctx().insert_or_assign<scn::update_alpha>({ 0.0f });
     for (const auto& world_desc : desc.get_worlds()) {
         auto& world = create_world(world_desc->get_name(), acquire_free_world_id());
@@ -137,22 +145,13 @@ void scn::level::reload_world(
 	ecs::system_factory& sf,
 	scn::ecs_assembler& assambler)
 {
-	ASSERT_MSG(m_worlds.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
+	ASSERT_MSG(m_context_ids.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
 
-	uint32_t old_id = m_worlds[std::string{name}]->get_id();
-
-	if (m_hot_reload_manager) {
-		m_hot_reload_manager->detach_registry(m_worlds[std::string{name}]->state());
-	}
-
-	m_plans.erase(old_id);
-	m_plan_slots.erase(old_id);
-	m_worlds_by_id.erase(old_id);
-	m_worlds.erase(std::string{name});
+	const uint32_t old_id = m_context_ids[std::string{name}];
+	destroy_context(old_id);
 
 	auto& w = create_world(name, old_id);
-	m_world_systems[std::string{ name }] = desc.get_systems();
-	rebuild_world_plan(old_id, sf);
+	add_world_systems(w, desc.get_systems(), sf);
 
 	entt::entity e = w.state().create();
 	assambler.spawn_from_desc(w.state(), e, desc, name);
@@ -160,27 +159,26 @@ void scn::level::reload_world(
 
 void scn::level::remove_world(const std::string_view name)
 {
-	std::string key{name};
-	ASSERT_MSG(m_worlds.contains(key), "remove_world: level doesn't contain world with this name");
+	ASSERT_MSG(m_context_ids.contains(std::string{name}), "remove_world: level doesn't contain world with this name");
+	destroy_context(m_context_ids[std::string{name}]);
+}
 
-	auto& world = m_worlds[key];
-	uint32_t id = world->get_id();
-
+void scn::level::destroy_context(uint32_t id)
+{
+	auto it = m_contexts.find(id);
 	if (m_hot_reload_manager) {
-		m_hot_reload_manager->detach_registry(world->state());
+		m_hot_reload_manager->detach_registry(it->second->state());
 	}
-
-	m_plans.erase(id);
-	m_plan_slots.erase(id);
-	m_worlds_by_id.erase(id);
-	m_worlds.erase(key);
-	m_world_systems.erase(key);
+	m_context_ids.erase(std::string{ it->second->get_name() });
+	m_contexts.erase(it);
 }
 
 void scn::level::load_systems_from_desc(const level_desc& desc, ecs::system_factory& system_factory)
 {
     for (const auto& world_desc : desc.get_worlds()) {
-        m_world_systems[std::string{ world_desc->get_name() }] = world_desc->get_systems();
+        if (auto* context = find_world(world_desc->get_name())) {
+            context->set_systems(world_desc->get_systems());
+        }
     }
     rebuild_all_plans(system_factory);
 }
@@ -190,27 +188,20 @@ void scn::level::add_world_systems(
     const std::vector<std::string>& systems,
     ecs::system_factory& sf)
 {
-    m_world_systems[std::string{ world.get_name() }] = systems;
+    world.set_systems(systems);
     rebuild_world_plan(world.get_id(), sf);
 }
 
 void scn::level::rebuild_world_plan(uint32_t world_id, ecs::system_factory& sf)
 {
-    const scn::world& world = get_world(world_id);
-    auto it = m_world_systems.find(std::string{ world.get_name() });
-    if (it == m_world_systems.end()) {
-        m_plans.erase(world_id);
-    } else {
-        m_plans.insert_or_assign(world_id, ecs::build_system_plan(sf.registry(), it->second));
-    }
+    get_world(world_id).rebuild_plan(sf.registry());
     refresh_plan_slots(sf);
 }
 
 void scn::level::rebuild_all_plans(ecs::system_factory& sf)
 {
-    m_plans.clear();
-    for (const auto& [id, world] : m_worlds_by_id) {
-        rebuild_world_plan(id, sf);
+    for (const auto& [id, context] : m_contexts) {
+        context->rebuild_plan(sf.registry());
     }
     refresh_plan_slots(sf); // also when there are no worlds: the phase order still follows the table
 }
@@ -218,58 +209,21 @@ void scn::level::rebuild_all_plans(ecs::system_factory& sf)
 void scn::level::refresh_plan_slots(const ecs::system_factory& sf)
 {
     m_phase_order = sf.registry().phases().ordered();
-    m_plan_slots.clear();
-    for (const auto& [id, plan] : m_plans) {
-        auto& slots = m_plan_slots[id];
-        slots.reserve(m_phase_order.size());
-        for (const auto& pid : m_phase_order) {
-            slots.push_back(plan.find_phase(pid));
-        }
+    for (const auto& [id, context] : m_contexts) {
+        context->resolve_slots(m_phase_order);
     }
 }
 
 void scn::level::clear()
 {
-	for (const auto& [name, world] : m_worlds) {
+	for (const auto& [id, context] : m_contexts) {
         if (m_hot_reload_manager) {
-            m_hot_reload_manager->detach_registry(world->state());
+            m_hot_reload_manager->detach_registry(context->state());
         }
     }
 
-    m_plans.clear();
-    m_plan_slots.clear();
     m_stepper.reset();
-    m_world_systems.clear();
     m_level_state.clear();
-    m_worlds.clear();
-    m_worlds_by_id.clear();
-}
-
-void scn::level::apply_commands(entt::registry& state)
-{
-    if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
-        changer->apply(state);
-    }
-
-    if (auto* sandbox = state.ctx().find<ecs::entity_spawner>()) {
-        entt::continuous_loader loader{ state };
-        {
-            const auto& entity_storage = sandbox->storage<ecs::sandbox_entity>();
-            ecs::sandbox_loader_archive archive{ loader, entity_storage };
-            loader.get<entt::entity>(archive);
-        }
-
-        for (auto [id, storage] : sandbox->storage()) {
-            if (id == entt::type_hash<ecs::sandbox_entity>::value()) continue;
-            if (storage.empty()) continue;
-
-            if (auto type = entt::resolve(id)) {
-                if (auto func = type.func(ecs::loader_get_h)) {
-                    func.invoke({}, &loader, static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
-                }
-            }
-        }
-
-        sandbox->clear();
-    }
+    m_contexts.clear();
+    m_context_ids.clear();
 }

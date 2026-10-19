@@ -288,7 +288,7 @@ void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*>
 
 	for (std::size_t i = 0; i < color_count; ++i) {
 		if (auto* color = colors[i]) {
-			ASSERT_MSG(color->has_usage(TEXTURE_USAGE::COLOR_TARGET), "Texture must have COLOR_TARGET usage flag");
+			ASSERT_MSG(color->has_usage(texture_usage::color_target), "Texture must have COLOR_TARGET usage flag");
 			auto* gl_color = static_cast<texture*>(color);
 			
 			if (color->get_type() == TEXTURE_TYPE::RENDERBUFFER) {
@@ -313,8 +313,8 @@ void rnd::driver::gl::driver::set_render_targets(std::vector<texture_interface*>
 	CHECK_GL_ERROR();
 
 	if (depth_stencil) {
-		ASSERT_MSG(depth_stencil->has_usage(TEXTURE_USAGE::DEPTH_TARGET) || 
-			   depth_stencil->has_usage(TEXTURE_USAGE::STENCIL_TARGET), "Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
+		ASSERT_MSG(depth_stencil->has_usage(texture_usage::depth_target) || 
+			   depth_stencil->has_usage(texture_usage::stencil_target), "Texture must have DEPTH_TARGET or STENCIL_TARGET usage flag");
 		auto* gl_depth_stencil = static_cast<texture*>(depth_stencil);
 		
 		if (depth_stencil->get_type() == TEXTURE_TYPE::RENDERBUFFER) {

@@ -108,7 +108,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		header.min = rnd::driver::texture_header::FILTERING::LINEAR;
 		header.mag = rnd::driver::texture_header::FILTERING::LINEAR;
 		header.type = rnd::driver::TEXTURE_TYPE::TEXTURE_CUBE_MAP;
-		header.usage = rnd::driver::TEXTURE_USAGE::SAMPLED;
+		header.usage = rnd::driver::texture_usage::sampled;
 		header.data.mip_levels = 1;
 
 		auto update_face = [&] (rnd::driver::texture_interface* texture_intf, res::res_handle<res::picture_resource> pic, uint32_t face) {
