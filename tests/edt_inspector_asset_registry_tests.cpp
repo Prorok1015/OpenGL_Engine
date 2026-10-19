@@ -618,7 +618,10 @@ BOOST_AUTO_TEST_CASE(Extension_DestroyingItRemovesEverything)
 	const auto menus = context->actions().menus();
 	BOOST_CHECK(std::find(menus.begin(), menus.end(), "Ext") == menus.end());
 	BOOST_CHECK(context->actions().items("Ext").empty());
-	BOOST_CHECK(context->actions().tools().empty());
+	// What stays are the commands the context registers itself (job.*, dialog.*); none of the extension's.
+	for (const auto* tool : context->actions().tools()) {
+		BOOST_CHECK_MESSAGE(tool->id.rfind("ext.", 0) != 0, tool->id);
+	}
 
 	BOOST_CHECK(!context->inspectors().contains("ext_desc"));
 	comp_node comp;
