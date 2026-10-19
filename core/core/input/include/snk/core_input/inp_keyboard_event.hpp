@@ -31,6 +31,10 @@ namespace core::inp
 		GRAVE_ACCENT, LEFT_BRACKET, BACKSLASH, RIGHT_BRACKET, WORLD_1, WORLD_2, COUNT
 	};
 
+	// Append-only: values index key-state arrays, so keys added after MENU must not shift it.
+	static_assert(static_cast<int>(KEYBOARD_BUTTONS::MENU) == 113 && KEYBOARD_BUTTONS::GRAVE_ACCENT > KEYBOARD_BUTTONS::MENU
+		&& KEYBOARD_BUTTONS::WORLD_2 < KEYBOARD_BUTTONS::COUNT);
+
 	enum class MOUSE_BUTTONS : uint8_t
 	{
 		LEFT,

@@ -261,8 +261,8 @@ namespace wnd::convert
         case GLFW_KEY_RIGHT_ALT:   return core::inp::KEYBOARD_BUTTONS::RIGHT_ALT;
         case GLFW_KEY_RIGHT_SUPER: return core::inp::KEYBOARD_BUTTONS::RIGHT_SUPER;
         case GLFW_KEY_MENU:        return core::inp::KEYBOARD_BUTTONS::MENU;
-        case GLFW_KEY_GRAVE_ACCENT: return core::inp::KEYBOARD_BUTTONS::GRAVE_ACCENT;
-        case GLFW_KEY_LEFT_BRACKET: return core::inp::KEYBOARD_BUTTONS::LEFT_BRACKET;
+        case GLFW_KEY_GRAVE_ACCENT:return core::inp::KEYBOARD_BUTTONS::GRAVE_ACCENT;
+        case GLFW_KEY_LEFT_BRACKET:return core::inp::KEYBOARD_BUTTONS::LEFT_BRACKET;
         case GLFW_KEY_BACKSLASH:   return core::inp::KEYBOARD_BUTTONS::BACKSLASH;
         case GLFW_KEY_RIGHT_BRACKET:return core::inp::KEYBOARD_BUTTONS::RIGHT_BRACKET;
         case GLFW_KEY_WORLD_1:     return core::inp::KEYBOARD_BUTTONS::WORLD_1;

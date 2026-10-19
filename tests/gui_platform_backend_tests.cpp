@@ -1,13 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/window/wnd_null_window_system.h>
+#include <snk/window/wnd_native_key.h>
 #include <snk/core_input/inp_keyboard_event.hpp>
 #include <cfloat>
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <imgui.h>
-#include "wnd_input_keycode_convert.hpp"
 
 namespace {
 
@@ -130,9 +130,9 @@ BOOST_AUTO_TEST_CASE(EveryGlfwPrintableKeyMapsToEngineKeyAndImGuiKey)
 	for (int k = 'A'; k <= 'Z'; ++k) printable.push_back(k);
 
 	for (const int glfw_key : printable) {
-		const auto engine_key = wnd::convert::to_keyboard_keycode(glfw_key);
+		const auto engine_key = wnd::from_native_key(glfw_key);
 		BOOST_REQUIRE_MESSAGE(engine_key.has_value(), "GLFW key " << glfw_key);
-		BOOST_TEST(wnd::convert::to_glfw_keycode(*engine_key) == glfw_key);
+		BOOST_TEST(wnd::to_native_key(*engine_key) == glfw_key);
 
 		key(*engine_key, KEY_ACTION::DOWN);
 		int down = 0;
@@ -150,9 +150,9 @@ BOOST_AUTO_TEST_CASE(EveryGlfwPrintableKeyMapsToEngineKeyAndImGuiKey)
 BOOST_AUTO_TEST_CASE(WorldKeysMapToEngineKeysWithoutImGuiCounterpart)
 {
 	for (const int glfw_key : { 161, 162 }) {
-		const auto engine_key = wnd::convert::to_keyboard_keycode(glfw_key);
+		const auto engine_key = wnd::from_native_key(glfw_key);
 		BOOST_REQUIRE(engine_key.has_value());
-		BOOST_TEST(wnd::convert::to_glfw_keycode(*engine_key) == glfw_key);
+		BOOST_TEST(wnd::to_native_key(*engine_key) == glfw_key);
 	}
 }
 
@@ -160,9 +160,9 @@ BOOST_AUTO_TEST_CASE(EveryEngineKeyRoundTripsThroughGlfw)
 {
 	for (int i = 0; i < static_cast<int>(KEYBOARD_BUTTONS::COUNT); ++i) {
 		const auto engine_key = static_cast<KEYBOARD_BUTTONS>(i);
-		const int glfw_key = wnd::convert::to_glfw_keycode(engine_key);
+		const int glfw_key = wnd::to_native_key(engine_key);
 		BOOST_REQUIRE_MESSAGE(glfw_key != -1, "engine key " << i);
-		const auto back = wnd::convert::to_keyboard_keycode(glfw_key);
+		const auto back = wnd::from_native_key(glfw_key);
 		BOOST_REQUIRE_MESSAGE(back.has_value(), "engine key " << i);
 		BOOST_CHECK_MESSAGE(*back == engine_key, "engine key " << i);
 	}
