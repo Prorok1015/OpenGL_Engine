@@ -1,38 +1,23 @@
 #pragma once
-#include "edt_panel_manager.h"
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_panel_registry.h>
 // ImGuiID is an imgui integer typedef (unsigned int). Re-declared here to keep <imgui.h>
 // out of this header (EPIC-49 US-49-4); the .cpp pulls in the full imgui API. Same-type
 // redefinition is legal alongside <imgui.h>.
 using ImGuiID = unsigned int;
-#include <functional>
+#include <vector>
 
 namespace edt
 {
+	// The full-window dock host: main menu bar and the default layout, both built from the registries.
 	class dockspace
 	{
 	public:
-		using action = std::function<void()>;
-
-		void set_on_open_level(action cb)  { m_on_open_level  = std::move(cb); }
-		void set_on_new_level(action cb)   { m_on_new_level   = std::move(cb); }
-		void set_on_save_level(action cb)  { m_on_save_level  = std::move(cb); }
-		void set_on_quick_save(action cb)  { m_on_quick_save  = std::move(cb); }
-		void set_on_exit(action cb)        { m_on_exit        = std::move(cb); }
-		void set_on_import_model(action cb){ m_on_import_model = std::move(cb); }
-
-		void render(panel_manager& pm);
+		void render(panel_registry& panels, action_registry& actions);
 
 	private:
-		void render_menu_bar(panel_manager& pm);
-		void setup_default_layout(ImGuiID dockspace_id, bool split_game_view);
+		void setup_default_layout(ImGuiID dockspace_id, const std::vector<panel_info>& panels);
 
 		bool m_layout_initialized = false;
-
-		action m_on_open_level;
-		action m_on_new_level;
-		action m_on_save_level;
-		action m_on_quick_save;
-		action m_on_exit;
-		action m_on_import_model;
 	};
 }
