@@ -52,9 +52,10 @@ namespace rnd::driver::validation
 		budget_bind_groups,
 		binding_offset_alignment,
 		invalid_read,
+		stale_handle,
 	};
 
-	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::invalid_read) + 1;
+	inline constexpr std::size_t rule_count = static_cast<std::size_t>(rule::stale_handle) + 1;
 
 	SNK_API const char* rule_name(rule r);
 

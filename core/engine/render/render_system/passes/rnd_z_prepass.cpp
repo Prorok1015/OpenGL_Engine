@@ -34,14 +34,14 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
 
     rnd::driver::render_pass_desc pass;
     pass.depth_stencil = rnd::driver::attachment_desc{
-        .texture = z_pass_rt,
+        .texture = rnd::driver::handle_of(z_pass_rt),
         .load = rnd::clears_depth(packet.camera.clear) ? rnd::driver::load_op::clear : rnd::driver::load_op::load};
     pass.debug_name = "z_prepass";
     drv.begin_render_pass(pass);
 
     rnd::driver::pipeline_desc state;
     state.depth = {.enabled = true, .write_mask = true, .test_func = rnd::driver::depth_state::func::LESS};
-    rnd::driver::set_target_formats(state, pass);
+    rnd::driver::set_target_formats(drv, state, pass);
     state.set_layouts = context.layouts().scene();
     rnd::pass_pipelines pipelines(drv, context, state);
 

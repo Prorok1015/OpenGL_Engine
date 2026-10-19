@@ -65,18 +65,18 @@ void transparent_pass::execute(render_context &context,
     state.blend = {color_blend, weight_blend};
 
     rnd::driver::render_pass_desc pass;
-    pass.colors.push_back({.texture = color_tp_rt,
+    pass.colors.push_back({.texture = rnd::driver::handle_of(color_tp_rt),
                            .load = rnd::driver::load_op::clear,
                            .clear_color = glm::vec4(0)});
-    pass.colors.push_back({.texture = waight_tp_rt,
+    pass.colors.push_back({.texture = rnd::driver::handle_of(waight_tp_rt),
                            .load = rnd::driver::load_op::clear,
                            .clear_color = glm::vec4(1)});
     if (auto *depth = context.find_texture(depth_tag)) {
-      pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
+      pass.depth_stencil = rnd::driver::attachment_desc{.texture = rnd::driver::handle_of(depth)};
     }
     pass.debug_name = "transparent";
     drv.begin_render_pass(pass);
-    rnd::driver::set_target_formats(state, pass);
+    rnd::driver::set_target_formats(drv, state, pass);
     state.set_layouts = context.layouts().scene();
     rnd::pass_pipelines pipelines(drv, context, state);
     drv.set_viewport(glm::ivec4{packet.camera.viewport.x,

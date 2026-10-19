@@ -132,24 +132,6 @@ namespace rnd::driver
 		friend bool operator==(const pipeline_desc&, const pipeline_desc&) = default;
 	};
 
-	// Fills the formats of `desc` with the ones `pass` renders to.
-	inline void set_target_formats(pipeline_desc& desc, const render_pass_desc& pass)
-	{
-		desc.color_formats.clear();
-		desc.depth_format.reset();
-		if (pass.backbuffer) {
-			desc.color_formats.push_back(backbuffer_color_format);
-			desc.depth_format = backbuffer_depth_format;
-			return;
-		}
-		for (const attachment_desc& color : pass.colors) {
-			desc.color_formats.push_back(color.texture ? std::optional<texture_format>{ color.texture->format() } : std::nullopt);
-		}
-		if (pass.depth_stencil && pass.depth_stencil->texture) {
-			desc.depth_format = pass.depth_stencil->texture->format();
-		}
-	}
-
 	struct pipeline_desc_hash
 	{
 		std::size_t operator()(const pipeline_desc& desc) const noexcept

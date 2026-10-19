@@ -70,22 +70,22 @@ bind_group_desc group_of(bind_group_layout_handle layout, std::initializer_list<
 
 binding_res ubo_entry(std::uint32_t slot, buffer_handle buffer, std::size_t size, std::size_t offset = 0)
 {
-	return { binding_type::ubo, slot, buffer, offset, size, nullptr };
+	return { binding_type::ubo, slot, buffer, offset, size, {} };
 }
 
 binding_res ssbo_entry(std::uint32_t slot, buffer_handle buffer, std::size_t size)
 {
-	return { binding_type::ssbo, slot, buffer, 0, size, nullptr };
+	return { binding_type::ssbo, slot, buffer, 0, size, {} };
 }
 
 binding_res ssbo_entry_at(std::uint32_t slot, buffer_handle buffer, std::size_t size, std::size_t offset)
 {
-	return { binding_type::ssbo, slot, buffer, offset, size, nullptr };
+	return { binding_type::ssbo, slot, buffer, offset, size, {} };
 }
 
-binding_res texture_entry(std::uint32_t slot, texture_handle texture)
+binding_res texture_entry(std::uint32_t slot, const texture_interface* texture)
 {
-	return { binding_type::texture, slot, {}, 0, 0, texture };
+	return { binding_type::texture, slot, {}, 0, 0, handle_of(texture) };
 }
 
 int read_int(const std::vector<std::byte>* bytes, std::size_t offset = 0)
@@ -808,7 +808,7 @@ BOOST_AUTO_TEST_CASE(ATextureDeletedWhileAGroupHoldsItIsReportedAtBind)
 	texture.reset();
 	open_pass();
 	drv->set_bind_group(pass_set, group);
-	expect_only(vl::rule::dead_object);
+	expect_only(vl::rule::stale_handle);
 	BOOST_TEST(inner().calls().bind_group_binds == 0u);
 }
 

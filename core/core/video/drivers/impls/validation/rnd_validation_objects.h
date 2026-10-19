@@ -55,6 +55,8 @@ namespace rnd::driver::validation
 
 		texture_interface* native() override { return m_inner->native(); }
 		texture_interface& inner() { return *m_inner; }
+		// The handle the wrapped driver gave the texture.
+		texture_handle handle_in_inner() const { return m_inner->handle(); }
 
 		void bind(uint32_t position) override;
 		void unbind(uint32_t position) override { m_inner->unbind(position); }

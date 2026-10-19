@@ -145,7 +145,7 @@ namespace rnd::driver
 		std::size_t offset = 0;
 		std::size_t size = 0;
 		// texture: the texture with the sampling state it carries.
-		texture_handle texture = nullptr;
+		texture_handle texture;
 
 		friend bool operator==(const binding_res&, const binding_res&) = default;
 	};

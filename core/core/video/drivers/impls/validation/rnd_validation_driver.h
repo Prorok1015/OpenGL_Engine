@@ -2,6 +2,7 @@
 #include "rnd_validation_objects.h"
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_swapchain_interface.h>
+#include <snk/driver/rnd_texture_pool.h>
 #include <snk/common/snk_api.h>
 
 #include <array>
@@ -52,9 +53,11 @@ namespace rnd::driver::validation
 		void bind_pipeline(pipeline_handle pipeline) override;
 		const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		void invalidate_state_cache() override { m_inner->invalidate_state_cache(); }
-		// Reports (invalid_read) and returns nothing for a dead texture, one that cannot be read back and a rect
-		// outside it; otherwise forwards.
-		std::vector<std::byte> read_texture(texture_interface& texture, glm::ivec4 rect) override;
+		// Reports (stale_handle or dead_object) and returns nothing for a handle of no live texture; reports
+		// (invalid_read) for one that cannot be read back and a rect outside it; otherwise forwards.
+		std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) override;
+		const texture_header& info(texture_handle texture) const override { return m_textures->info(texture); }
+		bool is_alive(texture_handle texture) const override { return m_textures->find(texture) != nullptr; }
 
 		bool supports_timer_queries() const override { return m_inner->supports_timer_queries(); }
 		uint32_t create_timer_query() override { return m_inner->create_timer_query(); }
@@ -69,6 +72,11 @@ namespace rnd::driver::validation
 
 	private:
 		void check_texture_usage(const texture_header& header);
+		// The wrapper behind a handle. A handle that names no live texture is reported (stale_handle for one whose
+		// texture was destroyed, dead_object for one this driver never issued) and gives null.
+		validation::texture* live_texture(texture_handle handle, const char* what);
+		// The handle the wrapped driver gave the texture a wrapper stands for; null for a handle of no live texture.
+		texture_handle inner_handle(texture_handle handle) const;
 		// Reports and returns false for a shader the pipeline names that is gone.
 		bool shader_alive(const shader_ref& ref);
 		// False when the pass cannot be forwarded; otherwise `inner_desc` is `desc` with the wrapped driver's textures.
@@ -107,6 +115,8 @@ namespace rnd::driver::validation
 
 		std::unique_ptr<driver_interface> m_inner;
 		std::shared_ptr<validator> m_state;
+		// The wrappers create_texture handed out, by the handles this driver issued (the wrapped driver has its own).
+		std::shared_ptr<texture_pool> m_textures = texture_pool::make();
 		std::vector<known_pipeline> m_pipelines;
 		std::unordered_map<std::uint64_t, buffer_desc> m_buffers;
 		std::unordered_map<std::uint64_t, bind_group_layout_desc> m_layouts;

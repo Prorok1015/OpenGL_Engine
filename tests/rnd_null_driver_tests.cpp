@@ -42,14 +42,14 @@ texture_header target_of(uint32_t size, texture_usage usage, uint32_t mips = 1)
 	return header;
 }
 
-render_pass_desc pass_of(texture_interface* color, texture_interface* depth = nullptr)
+render_pass_desc pass_of(const texture_interface* color, const texture_interface* depth = nullptr)
 {
 	render_pass_desc pass;
 	if (color) {
-		pass.colors.push_back({ .texture = color });
+		pass.colors.push_back({ .texture = handle_of(color) });
 	}
 	if (depth) {
-		pass.depth_stencil = attachment_desc{ .texture = depth };
+		pass.depth_stencil = attachment_desc{ .texture = handle_of(depth) };
 	}
 	return pass;
 }
@@ -140,6 +140,56 @@ BOOST_AUTO_TEST_CASE(TextureKeepsItsHeader)
 	BOOST_REQUIRE(null_texture);
 	BOOST_TEST(null_texture->get_header().name == "albedo");
 	BOOST_TEST((null_texture->get_header().data.format == texture_header::TYPE::RGBA16F));
+}
+
+BOOST_AUTO_TEST_CASE(TexturesAreNamedByHandlesThatGoStaleWithTheTexture)
+{
+	null::driver driver;
+	texture_header header;
+	header.name = "target";
+	header.data.extent.width = 8;
+	header.data.extent.height = 4;
+	header.usage = texture_usage::color_target;
+
+	auto first = driver.create_texture(header);
+	BOOST_REQUIRE(first);
+	const texture_handle first_handle = first->handle();
+	BOOST_TEST(static_cast<bool>(first_handle));
+	BOOST_TEST(driver.is_alive(first_handle));
+	BOOST_TEST(driver.live_textures() == 1u);
+	BOOST_TEST(driver.info(first_handle).name == "target");
+	BOOST_TEST(driver.info(first_handle).data.extent.width == 8u);
+	BOOST_TEST((driver.texture_of(first_handle) == first.get()));
+
+	// A second texture gets another slot.
+	auto second = driver.create_texture(header);
+	BOOST_TEST((second->handle() != first_handle));
+	BOOST_TEST(driver.live_textures() == 2u);
+
+	first.reset();
+	BOOST_TEST(!driver.is_alive(first_handle));
+	BOOST_TEST(driver.live_textures() == 1u);
+	BOOST_TEST((driver.texture_of(first_handle) == nullptr));
+	BOOST_TEST(driver.info(first_handle).name == "unknown");
+
+	// The freed slot comes back with the next generation: the old handle still names nothing.
+	auto third = driver.create_texture(header);
+	BOOST_TEST(third->handle().index == first_handle.index);
+	BOOST_TEST(third->handle().gen == first_handle.gen + 1);
+	BOOST_TEST(!driver.is_alive(first_handle));
+	BOOST_TEST(driver.is_alive(third->handle()));
+}
+
+BOOST_AUTO_TEST_CASE(ATextureMayOutliveTheDriverThatMadeIt)
+{
+	std::unique_ptr<texture_interface> texture;
+	{
+		null::driver driver;
+		texture = driver.create_texture(texture_header{});
+		BOOST_TEST(static_cast<bool>(texture->handle()));
+	}
+	BOOST_REQUIRE(texture);
+	texture.reset();
 }
 
 BOOST_AUTO_TEST_CASE(BufferKeepsSizeAndData)
@@ -606,23 +656,23 @@ BOOST_AUTO_TEST_CASE(PipelineFormatsFollowThePassTargets)
 	auto depth = driver.create_texture(depth_header);
 
 	pipeline_desc desc = base;
-	set_target_formats(desc, pass_of(color.get(), depth.get()));
+	set_target_formats(driver, desc, pass_of(color.get(), depth.get()));
 	BOOST_REQUIRE(desc.color_formats.size() == 1u);
 	BOOST_TEST((*desc.color_formats[0] == texture_format::RGBA8));
 	BOOST_TEST((desc.depth_format == texture_format::D32F));
 
-	set_target_formats(desc, pass_of(color.get()));
+	set_target_formats(driver, desc, pass_of(color.get()));
 	BOOST_TEST(!desc.depth_format.has_value());
 
 	render_pass_desc holes = pass_of(nullptr);
 	holes.colors.push_back({});
-	set_target_formats(desc, holes);
+	set_target_formats(driver, desc, holes);
 	BOOST_REQUIRE(desc.color_formats.size() == 1u);
 	BOOST_TEST(!desc.color_formats[0].has_value());
 
 	render_pass_desc window;
 	window.backbuffer = true;
-	set_target_formats(desc, window);
+	set_target_formats(driver, desc, window);
 	BOOST_REQUIRE(desc.color_formats.size() == 1u);
 	BOOST_TEST((*desc.color_formats[0] == backbuffer_color_format));
 	BOOST_TEST((desc.depth_format == backbuffer_depth_format));

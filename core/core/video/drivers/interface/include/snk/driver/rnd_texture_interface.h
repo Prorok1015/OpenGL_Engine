@@ -2,7 +2,10 @@
 #include <snk/common/common.h>
 #include <snk/common/ds/ds_bit_frags.hpp>
 #include <snk/common/shader_serial.h>
+#include <snk/driver/rnd_handle.h>
 #include <cstdint>
+#include <functional>
+#include <utility>
 #include <glm/glm.hpp>
 
 namespace rnd::driver
@@ -130,7 +133,26 @@ namespace rnd::driver
 	public:
 		texture_interface(const texture_header& hdr)
 			: header(hdr) {}
-		virtual ~texture_interface() = default;
+		// The handle goes stale with the texture: the pool that issued it is told here.
+		virtual ~texture_interface()
+		{
+			if (m_release) {
+				m_release(m_handle);
+			}
+		}
+		texture_interface(const texture_interface&) = delete;
+		texture_interface& operator=(const texture_interface&) = delete;
+
+		// The handle of this texture in the driver that made it (null before the driver registered it). Draw
+		// commands and bind groups name a texture by it; it stops resolving once the texture is destroyed.
+		texture_handle handle() const noexcept { return m_handle; }
+		// Called once by the backend that owns the texture pool: `release` runs when the texture is destroyed.
+		void assign_handle(texture_handle owned, std::function<void(texture_handle)> release)
+		{
+			m_handle = owned;
+			m_release = std::move(release);
+		}
+		const texture_header& info() const noexcept { return header; }
 
 		// Names this texture for as long as the process runs. Unlike its address it is never handed out again,
 		// so a cache keyed by texture cannot take a new texture for an old one that lived at the same place.
@@ -181,7 +203,17 @@ namespace rnd::driver
 	protected:
 		texture_header header;
 		const std::uint64_t m_serial = next_shader_serial();
+
+	private:
+		texture_handle m_handle;
+		std::function<void(texture_handle)> m_release;
 	};
+
+	// The handle of `texture`, null for no texture.
+	inline texture_handle handle_of(const texture_interface* texture) noexcept
+	{
+		return texture ? texture->handle() : texture_handle{};
+	}
 
 	// What driver_interface::read_texture can hand out: a 2D texture in a color format. The normalized formats come
 	// back as they are, the float formats clamped to 0..1.
