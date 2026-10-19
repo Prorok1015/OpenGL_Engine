@@ -17,8 +17,9 @@ if [[ ! -d "${cmake_dir}" ]]; then
 fi
 
 # A path starts after a quote, ';', ':' (generator expression argument), ',', '(' or whitespace,
-# and is POSIX-absolute or has a drive letter.
-path_re='(^|["(;:,[:space:]])(/[^]"();,[:space:]$<>]+|[A-Za-z]:[/\\][^]"();,[:space:]$<>]*)'
+# and is POSIX-absolute or has a drive letter. A POSIX path needs a second component: MSVC flags
+# such as /wd4251 or /utf-8 sit in the same generator-expression positions and are not paths.
+path_re='(^|["(;:,[:space:]])(/[^]/"();,[:space:]$<>]+/[^]"();,[:space:]$<>]*|[A-Za-z]:[/\\][^]"();,[:space:]$<>]*)'
 
 prefix_posix="${prefix}"
 if command -v cygpath >/dev/null 2>&1; then
