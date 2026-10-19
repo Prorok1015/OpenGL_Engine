@@ -454,7 +454,7 @@ BOOST_AUTO_TEST_CASE(ReleasedDependent_IsNotEvictedNorDeliveredAnyMore)
 
 	auto again = rs->require<node_resource>(c); // c loads again on demand, and its edges come back
 	pump();
-	BOOST_TEST(node_adapter::loads.load() == loads_before + 1);
+	BOOST_TEST(node_adapter::loads.load() == loads_before + 2); // c, and p which the signal evicted
 	delivered.clear();
 	rs->signal_changed(p);
 	pump();
