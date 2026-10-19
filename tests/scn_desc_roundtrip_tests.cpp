@@ -128,13 +128,14 @@ BOOST_AUTO_TEST_CASE(DirectionalLight_MalformedVectorsKeepDefaultsInsteadOfZero)
 	BOOST_TEST((l.direction == def.direction));
 }
 
-// #131: the bytes of the light as the hand-written serializer wrote them. The generic serializer must keep them.
+// #131: the bytes of the light as the hand-written serializer wrote them (compact json::serialize, captured from CI on that code).
+// The generic serializer must keep them.
 BOOST_AUTO_TEST_CASE(DirectionalLight_SerializedBytesMatchReference)
 {
 	BOOST_TEST(json::serialize(ser(scn::directional_light_desc{}))
-		== R"({"direction":[-0.20000000298023224,-1.0,-0.30000001192092896,0.0],)"
-		R"("diffuse":[0.5,0.5,0.5,1.0],"ambient":[0.20000000298023224,0.20000000298023224,0.20000000298023224,1.0],)"
-		R"("specular":[1.0,1.0,1.0,1.0]})");
+		== R"({"direction":[-2.0000000298023224E-1,-1E0,-3.0000001192092896E-1,0E0],)"
+		R"("diffuse":[5E-1,5E-1,5E-1,1E0],"ambient":[2.0000000298023224E-1,2.0000000298023224E-1,2.0000000298023224E-1,1E0],)"
+		R"("specular":[1E0,1E0,1E0,1E0]})");
 
 	// The light of Editor/res/levels/test_level.desc.
 	scn::directional_light_desc l;
@@ -142,8 +143,8 @@ BOOST_AUTO_TEST_CASE(DirectionalLight_SerializedBytesMatchReference)
 		R"("direction":[0.3860273063182831,-0.8251869082450867,-0.41237056255340576,0.0],)"
 		R"("diffuse":[1.0,1.0,1.0,1.0],"ambient":[0.0,0.0,0.0,1.0],"specular":[0.0,0.0,0.0,1.0]})"));
 	BOOST_TEST(json::serialize(ser(l))
-		== R"({"direction":[0.3860273063182831,-0.8251869082450867,-0.41237056255340576,0.0],)"
-		R"("diffuse":[1.0,1.0,1.0,1.0],"ambient":[0.0,0.0,0.0,1.0],"specular":[0.0,0.0,0.0,1.0]})");
+		== R"({"direction":[3.860273063182831E-1,-8.251869082450867E-1,-4.1237056255340576E-1,0E0],)"
+		R"("diffuse":[1E0,1E0,1E0,1E0],"ambient":[0E0,0E0,0E0,1E0],"specular":[0E0,0E0,0E0,1E0]})");
 
 	auto created = descs->create_instance("directional_light_desc", res::tag{});
 	BOOST_TEST(json::serialize(ser(*created)) == json::serialize(ser(scn::directional_light_desc{})));
