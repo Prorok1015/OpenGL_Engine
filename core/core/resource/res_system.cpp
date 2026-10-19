@@ -3,12 +3,27 @@
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/config/cfg_api.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <algorithm>
 #include <utility>
 #include <vector>
 
 CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 // Optional lower layer (engine base resources). Empty = single-root setup.
 CFG_VAR_DEF_PATH(cfg_res_base_path, "resource/base_path", "");
+
+namespace {
+thread_local std::vector<const void *> g_loading;
+} // namespace
+
+void core::res::detail::push_loading(const void *block) {
+  g_loading.push_back(block);
+}
+
+void core::res::detail::pop_loading() { g_loading.pop_back(); }
+
+bool core::res::detail::loading_on_this_thread(const void *block) {
+  return std::ranges::find(g_loading, block) != g_loading.end();
+}
 
 res::resource_system::resource_system(ds::task_system &tasks)
     : m_tasks(tasks) {
@@ -76,11 +91,15 @@ void res::resource_system::run_on_compute(std::function<void()> cb,
     return;
   }
   auto guard = std::make_shared<unrun_guard>(std::move(block));
-  m_tasks.run(ds::lane::compute, ds::task_desc{"resource load", "resource", false},
+  const auto* target = guard->block.get();
+  auto task = m_tasks.run(ds::lane::compute, ds::task_desc{"resource load", "resource", false},
               m_lifetime, [cb = std::move(cb), guard](ds::task_context &) {
                 guard->ran = true;
                 cb();
               });
+  if (target) {
+    guard->block->load_task_id = task.id();
+  }
 }
 
 void res::resource_system::signal_changed(const res::tag &tag) {

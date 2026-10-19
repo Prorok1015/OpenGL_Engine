@@ -3,6 +3,7 @@
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <chrono>
@@ -86,26 +87,36 @@ struct child_resource : res::text_resource
 	using res::text_resource::text_resource;
 };
 
-struct child_adapter : core::res::adapter_interface
+struct grand_resource : res::text_resource
 {
-	static inline auto INFO = res::adapter_info::make<child_resource>();
+	using res::text_resource::text_resource;
+};
 
-	explicit child_adapter(res::resource_system& rs) : m_rs(rs) {}
+// Its raw data is the tag of the resource it needs.
+template<class Out, class Dep>
+struct dependent_adapter : core::res::adapter_interface
+{
+	static inline auto INFO = res::adapter_info::make<Out>();
+
+	explicit dependent_adapter(res::resource_system& rs) : m_rs(rs) {}
 
 	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
 	{
 		const std::string parent_tag(reinterpret_cast<const char*>(raw.data()), raw.size());
-		auto parent = m_rs.require_sync<res::text_resource>(res::tag{ parent_tag }).get_sync();
+		auto parent = m_rs.require_sync<Dep>(res::tag{ parent_tag }).get_sync();
 		if (!parent) {
-			throw std::runtime_error("parent failed to load");
+			throw std::runtime_error("dependency failed to load");
 		}
-		return std::make_shared<child_resource>(tag, test_util::to_bytes(parent->str() + "+child"));
+		return std::make_shared<Out>(tag, test_util::to_bytes(parent->str() + (std::is_same_v<Out, child_resource> ? "+child" : "+grand")));
 	}
 
 	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
 
 	res::resource_system& m_rs;
 };
+
+using child_adapter = dependent_adapter<child_resource, res::text_resource>;
+using grand_adapter = dependent_adapter<grand_resource, child_resource>;
 
 // A regression here is a deadlock: end the process with a message instead of letting CI hang until its timeout.
 struct deadline_guard
@@ -157,6 +168,7 @@ struct two_thread_env : threaded_env
 	two_thread_env() : threaded_env(config())
 	{
 		rs->registrate_adapter<child_adapter>(child_adapter::INFO, std::ref(*rs));
+		rs->registrate_adapter<grand_adapter>(grand_adapter::INFO, std::ref(*rs));
 	}
 
 	std::vector<res::res_handle<child_resource>> request_children(int count, const res::tag& parent)
@@ -327,6 +339,42 @@ BOOST_AUTO_TEST_CASE(TwoChildrenRacingOnTheSameUnloadedParent_BothGetItsData)
 	const auto parent = put("parent.txt", "parent data");
 	const auto children = request_children(2, parent);
 	expect_all_loaded(children);
+}
+
+// Worker A loads R, R needs X, which is still queued behind D, and D needs R. Running just X (not whatever is
+// next in the queue) keeps D off A's stack, where it would wait for R, which A cannot finish.
+BOOST_AUTO_TEST_CASE(WorkerWaitingForAQueuedDependency_DoesNotRunAnUnrelatedLoaderThatNeedsItsOwnResource)
+{
+	deadline_guard deadline(60);
+	const auto x = put("x.txt", "x data");
+	const auto r = put("r.bin", x.string());
+	const auto d = put("d.bin", r.string());
+
+	std::array<std::atomic<bool>, 2> release{};
+	std::atomic<int> held{ 0 };
+	for (auto& flag : release) {
+		tasks.run(ds::lane::compute, ds::task_desc{ "gate", "test", false }, [&flag, &held](ds::task_context&) {
+			++held;
+			while (!flag.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		});
+	}
+	while (held.load() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+	// Queue order: R, D, X. Only one worker is freed, so it takes R first.
+	auto r_handle = rs->require<child_resource>(r);
+	auto d_handle = rs->require<grand_resource>(d);
+	auto x_handle = rs->require<res::text_resource>(x);
+	release[0] = true;
+
+	for (int i = 0; i < 4000 && !(r_handle.is_ready() && d_handle.is_ready()); ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	release[1] = true;
+	BOOST_REQUIRE(r_handle.is_ready());
+	BOOST_REQUIRE(d_handle.is_ready());
+	BOOST_TEST(r_handle.get()->str() == "x data+child");
+	BOOST_TEST(d_handle.get()->str() == "x data+child+grand");
+	BOOST_TEST(x_handle.is_ready());
 }
 
 BOOST_AUTO_TEST_CASE(ManyChildrenWaitingForAParentQueuedBehindThem_DoNotStarveTheLane)

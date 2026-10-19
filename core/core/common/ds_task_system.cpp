@@ -105,17 +105,14 @@ namespace ds::detail {
 			}
 		}
 
-		// Work waits in lane_queues[which]. In threaded mode every item also posts one pool job that takes the oldest
-		// item, so a pool thread that blocks on a result can take items itself (try_run_one) without losing any.
 		void enqueue(lane which, std::function<void()> fn)
 		{
-			{
+			if (cfg.mode == policy::manual) {
 				std::lock_guard lock(lane_mutex);
 				lane_queues[lane_index(which)].push_back(std::move(fn));
+				return;
 			}
-			if (cfg.mode == policy::threaded) {
-				boost::asio::post(*pools[lane_index(which)], [this, which] { run_one(which); });
-			}
+			boost::asio::post(*pools[lane_index(which)], std::move(fn));
 		}
 
 		bool run_one(lane which)
@@ -259,11 +256,11 @@ namespace ds::detail {
 		return true;
 	}
 
-	void task_state_base::execute()
+	bool task_state_base::execute()
 	{
 		task_status expected = task_status::pending;
 		if (!m_status.compare_exchange_strong(expected, task_status::running, std::memory_order_acq_rel)) {
-			return;
+			return false;
 		}
 
 		task_context ctx;
@@ -294,6 +291,7 @@ namespace ds::detail {
 		}
 		m_status.store(outcome, std::memory_order_release);
 		finalize();
+		return true;
 	}
 
 	void task_state_base::wait()
@@ -601,9 +599,20 @@ namespace ds {
 		return m_impl->cfg.mode == policy::manual && m_impl->run_one(which);
 	}
 
-	bool task_system::try_run_one(lane which)
+	bool task_system::try_run_inline(std::uint64_t task_id)
 	{
-		return m_impl->run_one(which);
+		std::shared_ptr<detail::task_state_base> state;
+		{
+			std::lock_guard lock(m_impl->live_mutex);
+			if (auto it = m_impl->live.find(task_id); it != m_impl->live.end()) {
+				state = it->second.lock();
+			}
+		}
+		if (!state) {
+			return false;
+		}
+		detail::worker_scope scope;
+		return state->execute(); // the pool job of this task finds it claimed and does nothing
 	}
 
 	std::vector<task_info> task_system::snapshot() const

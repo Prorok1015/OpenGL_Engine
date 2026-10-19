@@ -279,6 +279,7 @@ namespace res
 			}
 
 			auto adapter_cb = [this, tag, final_cb, raw_data_block]() {
+				const core::res::detail::loading_scope loading(final_cb.get());
 				if (raw_data_block->has_error()) {
 					final_cb->set_error(std::string{ "Resolver error: " } + raw_data_block->error_msg);
 					egLOG_ERROR("res/resolver", "Failed to resolve resource {0}: {1}", tag.view(), raw_data_block->error_msg);

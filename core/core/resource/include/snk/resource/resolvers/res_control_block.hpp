@@ -1,6 +1,7 @@
 #pragma once
 #include <thread>
 #include <atomic>
+#include <cstdint>
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -9,8 +10,26 @@
 #include <vector>
 #include <memory>
 #include <snk/common/engine_assert.h>
+#include <snk/common/snk_api.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/resources/res_resource_base.h>
+
+namespace core::res::detail
+{
+	// The blocks whose adapter runs on this thread right now, innermost last. A wait for one of them from the same
+	// thread would wait for itself.
+	SNK_API void push_loading(const void* block);
+	SNK_API void pop_loading();
+	[[nodiscard]] SNK_API bool loading_on_this_thread(const void* block);
+
+	struct loading_scope
+	{
+		explicit loading_scope(const void* block) { push_loading(block); }
+		~loading_scope() { pop_loading(); }
+		loading_scope(const loading_scope&) = delete;
+		loading_scope& operator=(const loading_scope&) = delete;
+	};
+}
 
 namespace core::res
 {
@@ -26,6 +45,8 @@ namespace core::res
         std::string error_msg;
         std::atomic<res_status> status = res_status::pending;
         mutable std::mutex callback_mtx;
+        // ds::task_system task that runs the adapter for this block while it is queued; 0 until known / for inline loads.
+        std::atomic<std::uint64_t> load_task_id{ 0 };
 
         virtual ~res_control_block_base() = default;
     };

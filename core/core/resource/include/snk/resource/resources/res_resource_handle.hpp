@@ -37,10 +37,12 @@ namespace core::res
         }
 
         // Blocks until the load finished, either way (check is_ready() / has_error() after).
-        // On a task_system worker (an adapter that needs another resource) it runs queued compute tasks while it
-        // waits, so the load it waits for cannot be stuck behind the workers that are all waiting. A load that is
-        // already running on another thread is just waited for. Cycles through several threads are not detected
-        // here (that is the wait graph of #134b); a wait that goes on for long is logged.
+        // On a task_system worker (an adapter that needs another resource) it runs the load task of exactly this
+        // resource inline if that task is still queued, so the load cannot be stuck behind the workers that are all
+        // waiting, and nothing unrelated is nested on the stack. A load running on another thread is waited for.
+        // Waiting for a resource that this very thread is loading (further up its stack) is a dependency cycle:
+        // asserts in debug, logs and returns without a result otherwise. Cycles through several threads are not
+        // detected here (that is the wait graph of #134b); a wait that goes on for long is logged.
         // A handle built by hand, without a task_system, can only block on the block.
         void wait() const {
             if (!m_block) return;
@@ -115,7 +117,13 @@ namespace core::res
             const auto start = std::chrono::steady_clock::now();
             bool reported = false;
             while (!m_block->is_ready() && !m_block->has_error()) {
-                if (m_tasks->try_run_one(ds::lane::compute)) continue;
+                if (core::res::detail::loading_on_this_thread(m_block.get())) {
+                    ASSERT_MSG(false, "res_handle::wait: '{}' is being loaded further up this thread's stack: dependency cycle", m_tag.view());
+                    egLOG_ERROR("resource", "wait for '{}' on the thread that is loading it: dependency cycle", m_tag.view());
+                    return;
+                }
+                const auto task_id = m_block->load_task_id.load();
+                if (task_id != 0 && m_tasks->try_run_inline(task_id)) continue;
                 m_block->wait_for(std::chrono::milliseconds(1));
                 if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
                     reported = true;
