@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/scene/level/scn_world_context.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/ecs/ecs_system_interface.hpp>
 #include <snk/scene/level/scn_level_desc.h>
@@ -10,25 +11,5 @@
 
 namespace scn
 {
-	class world
-	{
-	public:
-		world(uint32_t id, std::string_view name)
-			: m_id(id), m_name(name) {
-		}
-		~world() = default;
-		world& operator=(const world&) = delete;
-		world& operator=(world&&) = default;
-		world(const world&) = delete;
-		world(world&&) = default;
-
-		entt::registry& state() { return m_state; }
-		entt::registry const& state() const { return m_state; }
-		uint32_t get_id() const { return m_id; }
-		const std::string_view get_name() const { return m_name; }
-	private:
-		uint32_t m_id;
-		std::string m_name;
-		entt::registry m_state;
-	};
+	using world = world_context;
 }
