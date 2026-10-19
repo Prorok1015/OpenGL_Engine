@@ -210,7 +210,6 @@ jobs:
   coverage:
     name: Coverage (Linux GCC Debug)
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -259,7 +258,7 @@ jobs:
         run: ccache -s
 
       # Keep going when a test fails: a coverage report of a red run is still useful, and the
-      # step fails at the end so the job is flagged (the job itself is non-blocking).
+      # step fails at the end so the job is red. The job is blocking: it carries the GL-only and desc byte-stability gates; only the report steps are continue-on-error.
       - name: Run unit tests
         timeout-minutes: 10
         working-directory: build/ci-linux-coverage
@@ -269,6 +268,7 @@ jobs:
           echo "UNIT_TESTS_EXIT=$?" >> "$GITHUB_ENV"
 
       - name: Generate coverage report
+        continue-on-error: true  # report tooling may flake; says nothing about the code
         run: |
           mkdir -p build/coverage
           # Product code only: engine/core libraries and the editor. Third-party code, the tests
@@ -297,6 +297,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload HTML coverage report
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
