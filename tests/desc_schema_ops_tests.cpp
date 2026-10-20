@@ -98,6 +98,7 @@ namespace ops_test {
 	{
 	public:
 		static constexpr std::string_view __type = "ops.target";
+		using base_type = desc::desc_base; // resource_system finds the desc adapter through base_type
 
 		int hp = 1;
 
@@ -620,10 +621,10 @@ BOOST_FIXTURE_TEST_CASE(RuntimeSchemasHonorNullIfEmptyAndNever, ops_fixture)
 	BOOST_TEST(written.at("defs").is_null());
 	BOOST_TEST(written.at("strict").as_string() == "opaque"); // no policy: the null does not fit
 	BOOST_TEST(!written.contains("old"));
-	BOOST_TEST(first->get("old") == json::value(7.0));
+	BOOST_TEST(first->get("/old") == json::value(7.0));
 
 	first->copy_to(*second);
-	BOOST_TEST(second->get("old") == json::value(7.0));
+	BOOST_TEST(second->get("/old") == json::value(7.0));
 }
 
 BOOST_FIXTURE_TEST_CASE(DescRefReadsATagAndWritesIt, ref_fixture)
