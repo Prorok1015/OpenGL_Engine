@@ -65,9 +65,10 @@ namespace rnd
 		void clear_cache();
 
 		// Bumped whenever a texture was destroyed (remove, clear_cache), so a compiled material looks again. This is
-		// not only a cost: texture_manager::require is what starts a load, and a material compilation is the only
-		// caller of it, so a texture that was removed to be reloaded (the file changed on disk) is asked for again
-		// by the material recompiling on this counter. Bind groups do not need it: they key by (id, slot generation).
+		// not only a cost: require() is what starts a load and a material compilation is the only caller of it, so a
+		// slot that was emptied and has a loader behind it (a future reload; today remove() is called by the camera
+		// redirector and render_targets::ensure on render targets, clear_cache by no production code) is asked for
+		// again by the material recompiling on this counter. Bind groups do not need it: they key by (id, slot generation).
 		std::uint64_t generation() const noexcept { return m_generation; }
 
 		void register_loader(const std::string& txm_type, loader_fn fn)

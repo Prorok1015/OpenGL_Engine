@@ -29,7 +29,7 @@ namespace gui
         // What ImGui::Image takes for the texture behind `texture`: the name the driver's API gives it, which the
         // renderer half draws with. 0 for a null, stale or foreign handle (ImGui then draws nothing useful, and the
         // caller should have asked whether the target exists). A panel passes the handle it got from the render
-        // targets or the texture manager; the id is good for the frame it is asked in.
+        // targets or the texture manager; the id is valid until the texture is destroyed or recreated.
         virtual ImTextureID to_imgui(rnd::driver::texture_handle texture) const {
             return static_cast<ImTextureID>(m_driver.native_texture_name(texture));
         }

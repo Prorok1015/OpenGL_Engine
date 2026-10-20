@@ -126,7 +126,7 @@ namespace rnd::driver::validation
 		};
 
 		std::unique_ptr<driver_interface> m_inner;
-		// The same object as m_inner: how the wrappers get the wrapped driver's texture objects.
+		// The same object as m_inner, null when it gives no access (create_texture then fails): how the wrappers get the wrapped driver's texture objects.
 		const texture_object_access* m_inner_textures = nullptr;
 		std::shared_ptr<validator> m_state;
 		// The wrappers create_texture handed out, by the handles this driver issued (the wrapped driver has its own).

@@ -14,4 +14,5 @@ target_sources(${PROJECT_NAME} PRIVATE
 "${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_opengl3.cpp"
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::gui_backend_interface PRIVATE imgui PRIVATE snk::drv_interface PRIVATE snk::drv_opengl)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::gui_backend_interface PRIVATE imgui PRIVATE snk::drv_interface)
+# No drv_opengl link: imgui_impl_opengl3 uses its embedded loader (no IMGUI_IMPL_OPENGL_LOADER_* define is set anywhere).

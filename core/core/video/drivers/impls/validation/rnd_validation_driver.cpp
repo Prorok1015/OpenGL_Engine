@@ -82,7 +82,8 @@ rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner,
 	, m_inner_textures(dynamic_cast<const texture_object_access*>(m_inner.get()))
 	, m_state(std::move(state))
 {
-	ASSERT_MSG(m_inner_textures, "the validation driver wraps a driver that gives access to its texture objects (texture_object_access)");
+	// Not an assert: it must hold in release builds too. Without the access create_texture fails closed.
+	ENGINE_VERIFY(m_inner_textures, "the validation driver wraps a driver that gives no access to its texture objects (texture_object_access); it cannot make textures");
 }
 
 bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target)
@@ -382,6 +383,9 @@ void rnd::driver::validation::driver::check_texture_usage(const texture_header& 
 rnd::driver::texture_handle rnd::driver::validation::driver::create_texture(const texture_header& header)
 {
 	check_texture_usage(header);
+	if (!m_inner_textures) {
+		return {};
+	}
 	const texture_handle created = m_inner->create_texture(header);
 	texture_interface* const inner_texture = m_inner_textures->texture_object(created);
 	if (!inner_texture) {
