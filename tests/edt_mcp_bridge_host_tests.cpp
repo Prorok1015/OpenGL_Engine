@@ -158,15 +158,40 @@ BOOST_AUTO_TEST_CASE(MutatingRiskyLongRunningAndHiddenCommands_AreNot)
 	BOOST_TEST(!edt::agent_may_use(desc));
 }
 
+BOOST_AUTO_TEST_CASE(StateQueries_AreAllowedByCommandId)
+{
+	cmd::command_desc desc;
+	for (const char* id : { "scene.query", "node.get", "component.schema", "asset.query", "selection.get" }) {
+		desc.id = id;
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(edt::agent_may_use(desc));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(StateQueriesStayClosedWhenTheMetadataSaysMutateOrRisk)
+{
+	cmd::command_desc desc;
+	desc.id = "node.get";
+	desc.mutates = true;
+	BOOST_TEST(!edt::agent_may_use(desc));
+	desc.mutates = false;
+	desc.risk = cmd::danger::confirm;
+	BOOST_TEST(!edt::agent_may_use(desc));
+	desc.risk = cmd::danger::none;
+	desc.expose_as_tool = false;
+	BOOST_TEST(!edt::agent_may_use(desc));
+}
+
 BOOST_AUTO_TEST_CASE(ADomainOutsideTheReadList_IsNotAllowedEvenIfTheMetadataSaysRead)
 {
 	// The metadata of file.* and app.* does not say mutates, yet they save, quit and stop time: only a known read
-	// domain is exposed. The same holds for the query domains of A4 until A4 adds them: a command that is registered
-	// there tomorrow with mutates=false (the default) is not offered to an agent today.
+	// domain is exposed. The same holds for the other commands of the query domains: a command that is registered
+	// there tomorrow with mutates=false (the default) is not offered to an agent until it is listed by id.
 	cmd::command_desc desc;
 	for (const char* id : { "file.save", "file.exit", "file.new", "app.advance", "app.resume", "help.about", "edit.undo",
-		"scene.query", "scene.delete", "node.get", "node.delete", "component.set", "asset.query", "selection.get", "problems.list",
-		"nodot", "" }) {
+		"scene.delete", "scene.node.create", "scene.query_all", "node.delete", "node.get_all", "component.set", "component.schema2",
+		"asset.import", "asset.query.all", "selection.set", "problems.list", "nodot", "" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_TEST(!edt::agent_may_use(desc));

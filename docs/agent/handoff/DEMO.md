@@ -37,7 +37,7 @@
 | 13 | Esc в диалогах Save As и Open | Диалог закрывается как отмена |
 | 14 | Клавиши `` ` [ ] \ `` в текстовых полях; не-US раскладка | Символы вводятся |
 | 15 | Посмотреть лог (консоль и `logs/engine.log`) | Нет error/assert, предупреждения записать |
-| 16 | MCP-сервер (#292): в конфиге `editor/agent_server = true`, перезапустить редактор; подключить Claude Code (`claude mcp add --transport http` с адресом и токеном из `.snk/mcp.json` проекта) или MCP Inspector | Видны только инструменты чтения (`log.read`, `job.*`, `dialog.list`, `viewport.capture`); `viewport.capture` возвращает картинку вьюпорта; изменяющих команд в списке нет. Итог — комментарием в #292, закрыть его при ✅ |
+| 16 | MCP-сервер (#292): в конфиге `editor/agent_server = true`, перезапустить редактор; подключить Claude Code (`claude mcp add --transport http` с адресом и токеном из `.snk/mcp.json` проекта) или MCP Inspector | Видны только инструменты чтения (`log_read`, `job_list`, `job_get`, `dialog_list`, `viewport_capture` и состояние сцены A4: `scene_query`, `node_get`, `component_schema`, `asset_query`, `selection_get`); `scene_query` с `page_size` больше 200 отклоняется, а `node_get` с `ref` из ответа `scene_query` возвращает узел и его компоненты; `viewport.capture` возвращает картинку вьюпорта; изменяющих команд в списке нет. Итог — комментарием в #292, закрыть его при ✅ |
 
 **Записать о машине:** GPU, драйвер, версию Windows, разрешение и масштаб экрана (HiDPI), FPS на шаге 2.
 

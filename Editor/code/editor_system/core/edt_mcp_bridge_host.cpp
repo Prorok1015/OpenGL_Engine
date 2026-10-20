@@ -27,9 +27,13 @@ namespace json = boost::json;
 namespace {
 	// The domains (the part of a command id before the first dot) whose commands only read, and that exist today.
 	// `mutates` defaults to false for a command, so a domain that is listed here before its commands exist would
-	// expose whatever gets registered under it, flag or no flag: the query domains of A4 (scene, node, component,
-	// asset, selection, problems) are added by A4 itself, one reviewed domain at a time.
+	// expose whatever gets registered under it, flag or no flag.
 	constexpr std::array<std::string_view, 4> read_domains = { "log", "job", "dialog", "viewport" };
+
+	// The state queries of A4 are allowed one command at a time, not by domain: scene.* and node.* will also hold the
+	// mutating commands of A5, and a new command in these domains stays hidden from an agent until it is reviewed and
+	// listed here.
+	constexpr std::array<std::string_view, 5> read_commands = { "scene.query", "node.get", "component.schema", "asset.query", "selection.get" };
 
 	// What an agent may ask of viewport.capture. A request for 8192 x 8192 is a quarter of a gigabyte of readback
 	// and copies; the answer is a PNG that has to be base64 encoded and sent.
@@ -206,6 +210,11 @@ bool edt::agent_may_use(const cmd::command_desc& command)
 {
 	if (!command.expose_as_tool || command.mutates || command.long_running || command.risk != cmd::danger::none) {
 		return false;
+	}
+	for (const std::string_view allowed : read_commands) {
+		if (command.id == allowed) {
+			return true;
+		}
 	}
 	const std::string_view domain = domain_of(command.id);
 	for (const std::string_view allowed : read_domains) {

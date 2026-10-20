@@ -19,6 +19,8 @@ namespace cmd
 		inline constexpr const char* needs_input = "needs_input";
 		// The command ran and could not do its job.
 		inline constexpr const char* failed = "failed";
+		// The state the call was built on has changed (a page cursor, later an expected generation): read again.
+		inline constexpr const char* stale = "stale";
 		// The command ran, but its result breaks result_schema.
 		inline constexpr const char* result_invalid = "result_invalid";
 	}

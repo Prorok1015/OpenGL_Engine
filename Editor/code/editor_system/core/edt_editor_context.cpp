@@ -1,5 +1,7 @@
 #include <snk/editor/edt_editor_context.h>
 #include <snk/editor/edt_service_commands.h>
+#include <snk/editor/edt_state_commands.h>
+#include <snk/resource/res_system.h>
 #include "edt_scene_document.h"
 #include <utility>
 
@@ -23,6 +25,9 @@ edt::editor_context::editor_context(desc::desc_system& descs, res::resource_syst
 	};
 	add_all(register_job_commands(m_actions.commands(), m_jobs));
 	add_all(register_dialog_commands(m_actions.commands(), m_dialogs));
+	add_all(register_state_commands(m_actions.commands(), state_command_sources{
+		m_documents, m_selection, m_descs, m_assembler, m_asset_kinds,
+		[] { return res::resource_system::get_resource_layers(); } }));
 }
 
 edt::editor_context::~editor_context() = default;
