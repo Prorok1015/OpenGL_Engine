@@ -11,6 +11,9 @@
 #include <vector>
 
 namespace {
+	// Every level of the recursion holds two copies of a file's text; distinct files alone do not bound the depth.
+	constexpr std::size_t max_include_depth = 32;
+
 	struct include_context
 	{
 		res::resource_system& res_sys;
@@ -99,6 +102,10 @@ namespace {
 			const std::string key = target.string();
 			if (std::ranges::find(ctx.chain, key) != ctx.chain.end()) {
 				ctx.errors += std::format("{}: include cycle {}\n", where, chain_text(ctx, key));
+				continue;
+			}
+			if (ctx.chain.size() >= max_include_depth) {
+				ctx.errors += std::format("{}: include depth exceeded ({} files deep) {}\n", where, max_include_depth, chain_text(ctx, key));
 				continue;
 			}
 			if (!ctx.expanded.insert(key).second) {

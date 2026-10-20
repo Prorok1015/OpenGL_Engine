@@ -16,6 +16,9 @@ namespace rnd
 	// `#pragma once`. The second include of a file leaves nothing in its place, so declarations shared by several
 	// libraries (snk_common.glsl) never collide.
 	//
+	// A file counts as expanded on its first include even inside an inactive #if / #ifdef, so a later include of
+	// the same file is dropped: stricter than the compiler's #pragma once. Nesting is limited to 32 files.
+	//
 	// Includes in comments are left alone. Returns what could not be expanded, one problem per line
 	// ("'file' line N: ..."): a file that cannot be read, an include that closes a cycle (the chain is named, the
 	// recursion stops there), an include that is not written as "name". Empty when everything was.
