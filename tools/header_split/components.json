@@ -257,10 +257,7 @@
    "internal": [
     "gui_gl_backend.h"
    ],
-   "note": "only included by gui_system .cpp; GUI backend gets PRIVATE access (owner decision 6.3)",
-   "private_access": [
-    "drv_opengl:rnd_gl_texture.h"
-   ]
+   "note": "only included by gui_system .cpp; GUI backend gets PRIVATE access (owner decision 6.3)"
   },
   {
    "name": "render",

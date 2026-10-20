@@ -80,6 +80,21 @@ void rnd::driver::null::driver::destroy(texture_handle texture)
 	}
 }
 
+void rnd::driver::null::driver::update_texture(texture_handle handle, const void* data, const texture_region& region)
+{
+	texture* found = texture_of(handle);
+	if (!ENGINE_VERIFY(found, "null driver: update_texture with a handle of no texture (index {}, generation {})", handle.index, handle.gen)) {
+		return;
+	}
+	found->update_data(data, region.x, region.y, region.z, region.width, region.height, region.depth, region.level, region.layer, region.face);
+}
+
+std::uint64_t rnd::driver::null::driver::native_texture_name(texture_handle handle) const
+{
+	const texture* found = texture_of(handle);
+	return found ? found->serial() : 0;
+}
+
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::null::driver::create_vertex_array()
 {
 	return std::make_unique<vertex_array>(m_stats);

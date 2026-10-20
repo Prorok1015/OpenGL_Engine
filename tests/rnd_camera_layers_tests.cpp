@@ -389,7 +389,8 @@ BOOST_AUTO_TEST_CASE(TwoCamerasOfDifferentLayersShareOneTarget)
 	BOOST_TEST((seen[1].target == shared));
 
 	// both groups drew into the one texture, which the first of them made and the second reused
-	BOOST_TEST(storage.require<rnd::render_system>().get_texture_manager().find(shared) != nullptr);
+	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	BOOST_TEST(textures.is_ready(textures.id_of(shared)));
 	const vl::validator& state = validating_driver()->state();
 	for (const auto& violation : state.violations()) {
 		BOOST_ERROR("frame " << violation.frame << ", " << vl::rule_name(violation.kind) << ": " << violation.message);

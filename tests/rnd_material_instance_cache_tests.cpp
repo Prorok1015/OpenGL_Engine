@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_CASE(ATextureReloadOrRenderTargetResizeRebuildsTheInstance)
 	rnd::material_instance_cache cache(variants, textures());
 	const auto tag = res::tag(res::tag::memory, "__material_instance_cache_map");
 	const auto usage = texture_usage::color_target | texture_usage::sampled;
-	auto* first_map = rnd::render_targets::ensure(textures(), tag, { 8, 8 }, texture_header::TYPE::RGBA8, usage);
+	const auto first_map = rnd::render_targets::ensure(textures(), tag, { 8, 8 }, texture_header::TYPE::RGBA8, usage);
 	BOOST_REQUIRE(first_map);
 	const auto desc = make_desc(32.f, { tag });
 
@@ -151,7 +151,7 @@ BOOST_AUTO_TEST_CASE(ATextureReloadOrRenderTargetResizeRebuildsTheInstance)
 	BOOST_TEST(cache.compilations() == 1u);
 
 	// What a hot reload of the picture does to the texture manager: the texture is replaced, the generation moves.
-	auto* second_map = rnd::render_targets::ensure(textures(), tag, { 16, 16 }, texture_header::TYPE::RGBA8, usage);
+	const auto second_map = rnd::render_targets::ensure(textures(), tag, { 16, 16 }, texture_header::TYPE::RGBA8, usage);
 	BOOST_REQUIRE(second_map);
 	next_frame(cache);
 	BOOST_CHECK(cache.acquire(desc, false, false) == id);

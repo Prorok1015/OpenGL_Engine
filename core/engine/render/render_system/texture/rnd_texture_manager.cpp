@@ -3,6 +3,7 @@
 #include <snk/resource/resources/res_resource_picture.h>
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/engine_assert.h>
 
 #include <utility>
 
@@ -41,6 +42,7 @@ void rnd::texture_manager::empty(slot& s)
 
 rnd::texture_id rnd::texture_manager::require(const res::tag& tag)
 {
+	ASSERT_MSG(on_owner_thread(), "texture_manager::require: main thread only");
 	const texture_id id = slot_of(tag);
 	slot& target = m_slots[id.index - 1];
 	if (target.owner) {
@@ -78,6 +80,7 @@ rnd::texture_id rnd::texture_manager::require(const res::tag& tag)
 
 rnd::texture_id rnd::texture_manager::generate(const res::tag& tag, rnd::driver::texture_header header)
 {
+	ASSERT_MSG(on_owner_thread(), "texture_manager::generate: main thread only");
 	const texture_id id = slot_of(tag);
 	slot& target = m_slots[id.index - 1];
 	if (!target.owner) {
@@ -100,6 +103,7 @@ bool rnd::texture_manager::is_ready(texture_id id) const
 
 rnd::texture_binding rnd::texture_manager::binding(texture_id id) const
 {
+	ASSERT_MSG(on_owner_thread(), "texture_manager::binding: main thread only");
 	const slot* found = find_slot(id);
 	if (!found) {
 		return {};
@@ -107,12 +111,14 @@ rnd::texture_binding rnd::texture_manager::binding(texture_id id) const
 	return { found->owner.handle(), found->generation };
 }
 
-rnd::driver::texture_interface* rnd::texture_manager::generate_texture(const res::tag& tag, rnd::driver::texture_header header)
+const rnd::driver::texture_header& rnd::texture_manager::info(texture_id id) const
 {
-	return find_slot(generate(tag, header))->owner.get();
+	static const driver::texture_header none{};
+	const slot* found = find_slot(id);
+	return found && found->owner ? drv->info(found->owner.handle()) : none;
 }
 
-rnd::driver::texture_interface* rnd::texture_manager::generate_texture(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data)
+rnd::texture_id rnd::texture_manager::generate(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data)
 {
 	rnd::driver::texture_header header;
 	header.data.extent.width = size.x;
@@ -121,17 +127,12 @@ rnd::driver::texture_interface* rnd::texture_manager::generate_texture(const res
 	header.data.initial_data = data.data();
 	header.data.mip_levels = 1;
 
-	return generate_texture(tag, header);
-}
-
-rnd::driver::texture_interface* rnd::texture_manager::find(const res::tag& tag) const
-{
-	const slot* found = find_slot(id_of(tag));
-	return found ? found->owner.get() : nullptr;
+	return generate(tag, header);
 }
 
 void rnd::texture_manager::remove(const res::tag& tag)
 {
+	ASSERT_MSG(on_owner_thread(), "texture_manager::remove: main thread only");
 	const auto it = m_ids.find(tag);
 	if (it == m_ids.end()) {
 		return;
@@ -145,6 +146,7 @@ void rnd::texture_manager::remove(const res::tag& tag)
 
 void rnd::texture_manager::clear_cache()
 {
+	ASSERT_MSG(on_owner_thread(), "texture_manager::clear_cache: main thread only");
 	bool removed = false;
 	for (auto& target : m_slots) {
 		if (target.owner && target.tag.protocol() != res::tag::memory) {

@@ -1,13 +1,14 @@
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 
-rnd::driver::texture_interface* rnd::render_targets::ensure(texture_manager& textures, const res::tag& tag, glm::ivec2 size,
+rnd::driver::texture_handle rnd::render_targets::ensure(texture_manager& textures, const res::tag& tag, glm::ivec2 size,
 	driver::texture_header::TYPE format, driver::texture_usage usage, const sampling& params)
 {
-	if (auto* existing = textures.find(tag)) {
-		if (existing->width() == static_cast<uint32_t>(size.x) && existing->height() == static_cast<uint32_t>(size.y)
-			&& existing->format() == format && existing->get_usage() == usage) {
-			return existing;
+	if (const texture_id existing = textures.id_of(tag); textures.is_ready(existing)) {
+		const driver::texture_header& have = textures.info(existing);
+		if (have.data.extent.width == static_cast<uint32_t>(size.x) && have.data.extent.height == static_cast<uint32_t>(size.y)
+			&& have.data.format == format && have.usage == usage) {
+			return textures.binding(existing).handle;
 		}
 		textures.remove(tag);
 	}
@@ -20,7 +21,7 @@ rnd::driver::texture_interface* rnd::render_targets::ensure(texture_manager& tex
 	header.wrap = params.wrap;
 	header.min = params.min;
 	header.mag = params.mag;
-	return textures.generate_texture(tag, header);
+	return textures.binding(textures.generate(tag, header)).handle;
 }
 
 rnd::render_targets::registry::registry(driver::driver_interface& drv)
@@ -31,8 +32,8 @@ rnd::render_targets::registry::registry(driver::driver_interface& drv)
 rnd::render_targets::target_id rnd::render_targets::registry::ensure(texture_manager& textures, const res::tag& tag, glm::ivec2 size,
 	driver::texture_header::TYPE format, driver::texture_usage usage, const sampling& params)
 {
-	const driver::texture_interface* texture = render_targets::ensure(textures, tag, size, format, usage, params);
-	if (!texture) {
+	const driver::texture_handle handle = render_targets::ensure(textures, tag, size, format, usage, params);
+	if (!handle) {
 		return {};
 	}
 	std::uint32_t& index = m_by_tag[tag];
@@ -41,7 +42,6 @@ rnd::render_targets::target_id rnd::render_targets::registry::ensure(texture_man
 		index = static_cast<std::uint32_t>(m_slots.size());
 	}
 	slot& entry = m_slots[index - 1];
-	const driver::texture_handle handle = texture->handle();
 	if (entry.handle != handle) {
 		entry.handle = handle;
 		++entry.gen;

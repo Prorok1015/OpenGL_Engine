@@ -178,9 +178,9 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
 			// The group is recorded by the backend under the handle the backend gave the texture, which the
 			// validation layer's handle (what binding() returns) is not.
 			const auto& tag = static_cast<const scn::material_desc*>(material->source.get())->samplers_textures[0];
-			auto* backend_texture = textures().find(tag);
-			BOOST_REQUIRE(backend_texture);
-			const rnd::driver::texture_handle diffuse = backend_texture->native()->handle();
+			const rnd::texture_id texture_slot = textures().id_of(tag);
+			BOOST_REQUIRE(textures().is_ready(texture_slot));
+			const rnd::driver::texture_handle diffuse = validating_driver()->inner_handle(textures().binding(texture_slot).handle);
 			bool found = false;
 			for (std::size_t i = log_begin; i < driver()->bind_log().size() && !found; ++i) {
 				const auto& bind = driver()->bind_log()[i];
@@ -358,13 +358,13 @@ BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture)
 					}
 				}
 				BOOST_REQUIRE_MESSAGE(reloaded.is_valid(), "no drawn material of the smoke level has a diffuse map");
-				BOOST_REQUIRE(textures().find(reloaded));
+				BOOST_REQUIRE(textures().is_ready(textures().id_of(reloaded)));
 				created_before = driver()->calls().bind_groups_created;
 				live_before = driver()->live_bind_groups();
 			}
 			if (frame == 19) {
-				auto* texture = textures().find(reloaded);
-				new_texture = texture ? texture->native()->handle() : rnd::driver::texture_handle{};
+				const rnd::driver::texture_handle loaded = textures().binding(textures().id_of(reloaded)).handle;
+				new_texture = validating_driver()->inner_handle(loaded);
 				const auto& log = driver()->bind_log();
 				for (std::size_t i = log_begin; i < log.size(); ++i) {
 					const auto* info = log[i].set == material_set ? driver()->group_info(log[i].group) : nullptr;

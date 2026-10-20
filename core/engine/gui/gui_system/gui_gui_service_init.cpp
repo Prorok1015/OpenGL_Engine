@@ -1,6 +1,7 @@
 #include <snk/gui/gui_gui_service_init.h>
 #include <snk/gui/gui_system.h>
 #include <snk/window/wnd_window_system.h>
+#include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_debug_layer.h>
 #include "gui_gl_backend.h"
 #include <snk/gui/gui_platform_backend.h>
@@ -14,7 +15,10 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	// The GUI layer owns both ImGui halves; only this function names the concrete backends.
 	// The GL context already exists (created by window_system in core_module init, which runs
 	// before this engine init).
-	auto& backend = data.construct<::gui::gl::gl_imgui_backend>();
+	// The panels show render targets: the backend turns their texture handles into ImGui ids through the driver.
+	auto* driver = data.require<rnd::render_system>().get_driver();
+	ASSERT_MSG(driver, "gui_init: the render system has no driver");
+	auto& backend = data.construct<::gui::gl::gl_imgui_backend>(*driver);
 	backend.set_dpi_scale(wnd_system.get_active_content_scale());
 	backend.init();
 	const auto is_exist = std::filesystem::exists(backend.get_settings_filename());

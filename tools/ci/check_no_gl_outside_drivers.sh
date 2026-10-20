@@ -6,11 +6,11 @@
 # Scans the C/C++ files git tracks (third-party trees under lib3dparty are skipped) for GL API use:
 # gl* calls, GL_* constants, GL* types, glad/GLFW/GL headers, the internal rnd_gl_* driver headers,
 # ImGui's OpenGL backend and rnd::driver::gl::. The GL driver directory is the one place they belong.
-# Everything else that exists today is in ALLOW below, with the reason; the strict criterion "no GL
-# outside drv_*" is R7 (#118) and each entry is debt that R7 removes.
+# The only other places GL may appear are the documented exceptions in ALLOW below (R7c, #118; the same
+# list is in docs/roadmap/design/RHI.md). Anything else is a leak of the API out of the driver.
 #
 # The allow-list is tight in both directions: a hit outside it fails the check, and an entry that no
-# longer has a hit fails it too, so the list shrinks as the debt is paid.
+# longer has a hit fails it too, so a stale exception cannot linger.
 set -euo pipefail
 
 DRIVER_DIR='core/core/video/drivers/impls/opengl'
@@ -18,7 +18,7 @@ DRIVER_DIR='core/core/video/drivers/impls/opengl'
 # 'path prefix|reason'. A prefix ending in '/' covers a directory, otherwise it names one file.
 ALLOW=(
 	'core/core/windows/window_service/impl_glfw/|GLFW window backend: creates the GL context (window hints), makes it current, swaps buffers, loads glad through glfwGetProcAddress'
-	'core/engine/gui/backends/opengl/|ImGui OpenGL3 renderer backend: imgui_impl_opengl3 plus the gl::texture id lookup; replaced by gui::renderer_backend::to_imgui in R7'
+	'core/engine/gui/backends/opengl/|stock ImGui OpenGL3 renderer (imgui_impl_opengl3), kept by the owner; textures reach it as ids from imgui_backend_interface::to_imgui, it knows no driver class'
 	'core/engine/render/render_system/rnd_render_service_init.cpp|backend selection (render/backend): constructs rnd::driver::gl::swapchain next to the null and validation ones'
 )
 

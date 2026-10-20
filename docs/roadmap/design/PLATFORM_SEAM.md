@@ -37,7 +37,7 @@
 **ImGui на две половины** (#104):
 - `gui::platform_backend` — **свой**, без GLFW: питается событиями `wnd` (key/char/mouse/scroll/focus/cursor leave) через тот же слушатель, что и `inp::input_system`; `DisplaySize`/`DisplayFramebufferScale` и `dt` — из `wnd::window`; клавиши — наши коды → `ImGuiKey`; форма курсора и буфер обмена — через `wnd::window` (`set_cursor_shape`, `get/set_clipboard`). `imgui_impl_glfw` уходит. Один путь событий: кто получает ввод (ImGui или слои движка, `WantCapture*`) решается в одном месте; UI можно гонять подставными событиями в тестах.
 - Не переносим сейчас: геймпад (`NavEnableGamepad` снимается до задачи про геймпад в шве) и multi-viewport (не включён; docking работает).
-- `gui::renderer_backend` — `imgui_impl_opengl3` + `get_imgui_texture_from_texture` (без GLFW).
+- `gui::renderer_backend` — `imgui_impl_opengl3` + `to_imgui(texture_handle)` (без GLFW; R7c).
 - `gui_system` держит обе; собирает их `gui_init` (единственное место, где названы конкретные бэкенды). Мёртвые `set_display_size`/`set_input` удаляются.
 - Новые цели CMake добавить в whole-archive список `snk_engine` (`core/engine/CMakeLists.txt:62-64`).
 

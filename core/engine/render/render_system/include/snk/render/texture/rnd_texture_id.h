@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/common/snk_api.h>
 #include <snk/driver/rnd_handle.h>
 
 #include <cstddef>
@@ -30,7 +31,8 @@ namespace rnd
 	};
 
 	// The part of the texture manager that the draw side needs: ids to what is behind them.
-	class texture_resolver
+	// SNK_API: texture_manager (exported) derives from it, and an exported class needs an exported base (MSVC C4275).
+	class SNK_API texture_resolver
 	{
 	public:
 		virtual ~texture_resolver() = default;

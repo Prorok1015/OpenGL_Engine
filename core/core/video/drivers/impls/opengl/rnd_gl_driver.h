@@ -2,6 +2,7 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_pipeline_cache.h>
 #include <snk/driver/rnd_resource_tables.h>
+#include <snk/driver/rnd_texture_backend.h>
 #include <snk/driver/rnd_texture_pool.h>
 #include <optional>
 #include <array>
@@ -14,7 +15,7 @@ namespace rnd::driver::gl
 	class framebuffer_registry;
 	class texture;
 
-	class driver : public rnd::driver::driver_interface
+	class driver : public rnd::driver::driver_interface, public rnd::driver::texture_object_access
 	{
 	public:
 		driver();
@@ -53,7 +54,9 @@ namespace rnd::driver::gl
 		virtual texture_handle create_texture(const texture_header& header) override;
 		// GL frees the texture at once: the driver keeps the GPU work in order, so nothing needs to be waited for.
 		virtual void destroy(texture_handle texture) override;
-		virtual texture_interface* resolve(texture_handle texture) const override { return m_textures.find(texture); }
+		virtual void update_texture(texture_handle texture, const void* data, const texture_region& region) override;
+		virtual std::uint64_t native_texture_name(texture_handle texture) const override;
+		virtual texture_interface* texture_object(texture_handle texture) const override { return m_textures.find(texture); }
 		virtual const texture_header& info(texture_handle texture) const override { return m_textures.info(texture); }
 		virtual bool is_alive(texture_handle texture) const override { return m_textures.find(texture) != nullptr; }
 

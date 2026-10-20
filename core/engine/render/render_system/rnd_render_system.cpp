@@ -41,17 +41,14 @@ namespace {
 		void use_group(std::span<rnd::render_packet_t> group) { m_group = group; }
 		void use_all_packets() { m_group.reset(); }
 
-		rnd::driver::texture_interface* find_texture(const res::tag& tag) const override { return m_textures.find(tag); }
+		rnd::driver::texture_handle find_texture(const res::tag& tag) const override { return m_textures.binding(m_textures.id_of(tag)).handle; }
 
 		rnd::driver::texture_handle texture(rnd::texture_id id) const override { return m_textures.binding(id).handle; }
 
-		rnd::driver::texture_interface* ensure_render_target(const res::tag& tag, glm::ivec2 size,
+		rnd::driver::texture_handle ensure_render_target(const res::tag& tag, glm::ivec2 size,
 			rnd::driver::texture_header::TYPE format, rnd::driver::texture_usage usage, const rnd::render_targets::sampling& params) override
 		{
-			if (!m_targets.ensure(m_textures, tag, size, format, usage, params)) {
-				return nullptr;
-			}
-			return m_textures.find(tag);
+			return m_targets.resolve(m_targets.ensure(m_textures, tag, size, format, usage, params));
 		}
 
 		rnd::driver::vertex_array_interface* geometry(const res::tag& tag) override { return m_geometry.require_geometry(tag); }
@@ -194,23 +191,24 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		header.usage = rnd::driver::texture_usage::sampled;
 		header.data.mip_levels = 1;
 
-		auto update_face = [&] (rnd::driver::texture_interface* texture_intf, res::res_handle<res::picture_resource> pic, uint32_t face) {
+		auto texture = rnd::driver::make_texture(*drv, header);
+		auto update_face = [&] (res::res_handle<res::picture_resource> pic, uint32_t face) {
 			if (!pic.is_ready()) {
 				egLOG_WARN("render/texture", "Failed to load cubemap texture: picture resource with tag is not ready");
 				return;
 
 			}
 			auto [data, format, width, height] = load_face_data(pic);
-			texture_intf->update_data(data.data(), 0, 0, 0, width, height, 1, 0, 0, face); // face parameter is crucial here!
+			// face parameter is crucial here!
+			drv->update_texture(texture.handle(), data.data(), rnd::driver::texture_region{ .width = width, .height = height, .face = face });
 		};
 
-		auto texture = rnd::driver::make_texture(*drv, header);
-		update_face(texture.get(), faces.right, 0); // Right
-		update_face(texture.get(), faces.left, 1); // Left
-		update_face(texture.get(), faces.bottom, 2); // Bottom
-		update_face(texture.get(), faces.top, 3); // Top
-		update_face(texture.get(), faces.front, 4); // Front
-		update_face(texture.get(), faces.back, 5); // Back
+		update_face(faces.right, 0); // Right
+		update_face(faces.left, 1); // Left
+		update_face(faces.bottom, 2); // Bottom
+		update_face(faces.top, 3); // Top
+		update_face(faces.front, 4); // Front
+		update_face(faces.back, 5); // Back
 		return texture;
 	});
 }

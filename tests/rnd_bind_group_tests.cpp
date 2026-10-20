@@ -84,9 +84,9 @@ binding_res ssbo_entry_at(std::uint32_t slot, buffer_handle buffer, std::size_t 
 	return { binding_type::ssbo, slot, buffer, offset, size, {} };
 }
 
-binding_res texture_entry(std::uint32_t slot, const texture_interface* texture)
+binding_res texture_entry(std::uint32_t slot, texture_handle texture)
 {
-	return { binding_type::texture, slot, {}, 0, 0, handle_of(texture) };
+	return { binding_type::texture, slot, {}, 0, 0, texture };
 }
 
 int read_int(const std::vector<std::byte>* bytes, std::size_t offset = 0)
@@ -376,6 +376,8 @@ struct bind_fixture
 
 	vl::validator& state() { return chain.state(); }
 	null::driver& inner() { return dynamic_cast<null::driver&>(dynamic_cast<vl::driver&>(*drv).inner()); }
+	// The handle the wrapped driver gave a texture of the validation driver.
+	texture_handle inner_handle_of(texture_handle texture) { return dynamic_cast<vl::driver&>(*drv).inner_handle(texture); }
 
 	void open_pass()
 	{
@@ -431,7 +433,7 @@ BOOST_AUTO_TEST_CASE(ACorrectUseOfBindGroupsProducesNoViolations)
 		drv->update_buffer(ring, 0, bytes_of(frame));
 		open_pass();
 		drv->bind_pipeline(pipeline);
-		const auto inputs = drv->create_bind_group(group_of(pass_layout, { texture_entry(0, texture.get()) }), lifetime::transient);
+		const auto inputs = drv->create_bind_group(group_of(pass_layout, { texture_entry(0, texture.handle()) }), lifetime::transient);
 		drv->set_bind_group(pass_set, inputs);
 		for (std::uint32_t draw = 0; draw < 3; ++draw) {
 			const std::uint32_t offset = draw * 256;
@@ -520,13 +522,13 @@ BOOST_AUTO_TEST_CASE(AGroupThatDoesNotMatchItsLayoutIsRejected)
 	// a texture slot that holds no texture, and a texture that cannot be sampled
 	BOOST_TEST(!drv->create_bind_group(group_of(tex, { texture_entry(0, nullptr) })));
 	BOOST_TEST(state().count(vl::rule::bind_group_layout_mismatch) == 6u);
-	BOOST_TEST(!drv->create_bind_group(group_of(tex, { texture_entry(0, target_only.get()) })));
+	BOOST_TEST(!drv->create_bind_group(group_of(tex, { texture_entry(0, target_only.handle()) })));
 	BOOST_TEST(state().count(vl::rule::texture_not_sampled) == 1u);
 
 	BOOST_TEST(state().total() == 7u);
 	BOOST_TEST(inner().live_bind_groups() == 0u);
 
-	BOOST_TEST(static_cast<bool>(drv->create_bind_group(group_of(tex, { texture_entry(0, sampled.get()) }))));
+	BOOST_TEST(static_cast<bool>(drv->create_bind_group(group_of(tex, { texture_entry(0, sampled.handle()) }))));
 	BOOST_TEST(static_cast<bool>(drv->create_bind_group(group_of(one, { ubo_entry(0, uniform, 64) }))));
 	BOOST_TEST(state().total() == 7u);
 }
@@ -805,7 +807,7 @@ BOOST_AUTO_TEST_CASE(ATextureDeletedWhileAGroupHoldsItIsReportedAtBind)
 {
 	const auto layout = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0 } }));
 	auto texture = make_texture(*drv, texture_of(texture_usage::sampled));
-	const auto group = drv->create_bind_group(group_of(layout, { texture_entry(0, texture.get()) }));
+	const auto group = drv->create_bind_group(group_of(layout, { texture_entry(0, texture.handle()) }));
 	texture.reset();
 	open_pass();
 	drv->set_bind_group(pass_set, group);
@@ -818,15 +820,15 @@ BOOST_AUTO_TEST_CASE(BindGroupTexturesReachTheWrappedDriverTranslated)
 	// The two drivers number their textures from 1: take a slot of the wrapped driver's so the sequences differ.
 	auto occupant = make_texture(inner(), texture_of(texture_usage::sampled));
 	auto texture = make_texture(*drv, texture_of(texture_usage::sampled));
-	BOOST_REQUIRE((texture->handle() != texture->native()->handle()));
+	BOOST_REQUIRE((texture.handle() != inner_handle_of(texture.handle())));
 
 	const auto layout = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0 } }));
-	const auto group = drv->create_bind_group(group_of(layout, { texture_entry(0, texture.get()) }));
+	const auto group = drv->create_bind_group(group_of(layout, { texture_entry(0, texture.handle()) }));
 	const bind_group_desc* seen = inner().group_info(group);
 	BOOST_REQUIRE(seen);
 	BOOST_REQUIRE(seen->entries.size() == 1u);
-	BOOST_TEST((seen->entries[0].texture == texture->native()->handle()));
-	BOOST_TEST((seen->entries[0].texture != texture->handle()));
+	BOOST_TEST((seen->entries[0].texture == inner_handle_of(texture.handle())));
+	BOOST_TEST((seen->entries[0].texture != texture.handle()));
 	BOOST_TEST(state().total() == 0u);
 }
 

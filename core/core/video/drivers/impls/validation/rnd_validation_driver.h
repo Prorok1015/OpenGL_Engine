@@ -2,6 +2,7 @@
 #include "rnd_validation_objects.h"
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_swapchain_interface.h>
+#include <snk/driver/rnd_texture_backend.h>
 #include <snk/driver/rnd_texture_pool.h>
 #include <snk/common/snk_api.h>
 
@@ -16,7 +17,7 @@ namespace rnd::driver::validation
 	// reports violations (log category "rnd.validate" plus counters) and forwards every call. Calls that would
 	// crash the wrapped driver (a dead object, a write past the end of a buffer, a nested or unmatched render
 	// pass) are reported and dropped.
-	class SNK_API driver final : public rnd::driver::driver_interface
+	class SNK_API driver final : public rnd::driver::driver_interface, public rnd::driver::texture_object_access
 	{
 	public:
 		explicit driver(std::unique_ptr<driver_interface> inner, limits budget = {});
@@ -61,8 +62,14 @@ namespace rnd::driver::validation
 		// Reports (stale_handle or dead_object) a handle of no live texture; otherwise destroys the wrapper and then
 		// the wrapped driver's texture.
 		void destroy(texture_handle texture) override;
+		// Reports (stale_handle or dead_object) a handle of no live texture; otherwise writes through the wrapper.
+		void update_texture(texture_handle texture, const void* data, const texture_region& region) override;
+		// The name the wrapped driver gives the texture; 0 for a handle of no live texture of this driver (silent).
+		std::uint64_t native_texture_name(texture_handle texture) const override { return m_inner->native_texture_name(inner_handle(texture)); }
 		// The wrapper behind the handle (its native() is the wrapped driver's object); silent, null for no live texture.
-		texture_interface* resolve(texture_handle texture) const override { return m_textures.find(texture); }
+		texture_interface* texture_object(texture_handle texture) const override { return m_textures.find(texture); }
+		// The handle the wrapped driver gave the texture a wrapper stands for; null for a handle of no live texture.
+		texture_handle inner_handle(texture_handle handle) const;
 		const texture_header& info(texture_handle texture) const override { return m_textures.info(texture); }
 		bool is_alive(texture_handle texture) const override { return m_textures.find(texture) != nullptr; }
 
@@ -82,8 +89,6 @@ namespace rnd::driver::validation
 		// The wrapper behind a handle. A handle that names no live texture is reported (stale_handle for one whose
 		// texture was destroyed, dead_object for one this driver never issued) and gives null.
 		validation::texture* live_texture(texture_handle handle, const char* what);
-		// The handle the wrapped driver gave the texture a wrapper stands for; null for a handle of no live texture.
-		texture_handle inner_handle(texture_handle handle) const;
 		// Reports and returns false for a shader the pipeline names that is gone.
 		bool shader_alive(const shader_ref& ref);
 		// False when the pass cannot be forwarded; otherwise `inner_desc` is `desc` with the wrapped driver's textures.
@@ -121,6 +126,8 @@ namespace rnd::driver::validation
 		};
 
 		std::unique_ptr<driver_interface> m_inner;
+		// The same object as m_inner: how the wrappers get the wrapped driver's texture objects.
+		const texture_object_access* m_inner_textures = nullptr;
 		std::shared_ptr<validator> m_state;
 		// The wrappers create_texture handed out, by the handles this driver issued (the wrapped driver has its own).
 		texture_pool m_textures;

@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 #include <snk/common/snk_api.h>
 
@@ -21,6 +22,9 @@ namespace rnd
 	// the slot keeps its id while the texture behind it is loaded, replaced (reload, render-target resize) or
 	// removed, and its generation grows with each of those. Everything that holds a texture across frames holds
 	// the id and asks binding() for the handle when it draws.
+	//
+	// Main thread only, the thread that made the manager: it takes no lock. The extract stage, the passes and the
+	// editor run there, and a request from another thread (viewport.capture through MCP) is marshalled to it first.
 	class SNK_API texture_manager final : public texture_resolver
 	{
 	public:
@@ -41,26 +45,29 @@ namespace rnd
 		texture_id require(const res::tag& tag);
 		// Makes the texture of `tag` from `header` if the slot has none; the slot keeps the texture it has otherwise.
 		texture_id generate(const res::tag& tag, rnd::driver::texture_header header);
+		// The same for a 2D texture of `size` in format `channels` with `data` as its pixels.
+		texture_id generate(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data);
 		// The slot of `tag` if it was asked for, otherwise no id. The slot may be empty.
 		texture_id id_of(const res::tag& tag) const;
 		// Whether the slot has a texture now.
 		bool is_ready(texture_id id) const;
 
 		texture_binding binding(texture_id id) const override;
+		// What the slot's texture is (size, format, usage); an empty header while the slot has none.
+		const driver::texture_header& info(texture_id id) const;
 
-		// Bridge for the render targets, the capture service and the editor until they hold ids (R7b3, R7c): the
-		// backend object behind the tag, null while the slot has none.
-		driver::texture_interface* generate_texture(const res::tag& tag, glm::ivec2 size, rnd::driver::texture_header::TYPE channels, std::vector<unsigned char> data);
-		driver::texture_interface* generate_texture(const res::tag& tag, rnd::driver::texture_header header);
-		driver::texture_interface* find(const res::tag& tag) const;
+		// Whether the calling thread is the one the manager belongs to (the one that made it).
+		bool on_owner_thread() const noexcept { return std::this_thread::get_id() == m_owner_thread; }
 
 		// Destroys the texture of `tag`; the slot and its id stay (its generation grows).
 		void remove(const res::tag& tag);
 		// Destroys every texture that is not a memory:// one; the slots stay.
 		void clear_cache();
 
-		// Bumped whenever a texture may have been destroyed, so anything that kept the result of a compilation
-		// across frames knows to look again.
+		// Bumped whenever a texture was destroyed (remove, clear_cache), so a compiled material looks again. This is
+		// not only a cost: texture_manager::require is what starts a load, and a material compilation is the only
+		// caller of it, so a texture that was removed to be reloaded (the file changed on disk) is asked for again
+		// by the material recompiling on this counter. Bind groups do not need it: they key by (id, slot generation).
 		std::uint64_t generation() const noexcept { return m_generation; }
 
 		void register_loader(const std::string& txm_type, loader_fn fn)
@@ -94,6 +101,7 @@ namespace rnd
 		desc::desc_system& desc_system;
 		res::resource_system& m_res_sys;
 		driver::driver_interface* drv = nullptr;
+		std::thread::id m_owner_thread = std::this_thread::get_id();
 		std::uint64_t m_generation = 0;
 	};
 
