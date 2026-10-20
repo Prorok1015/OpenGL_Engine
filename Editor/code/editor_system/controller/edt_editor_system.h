@@ -8,6 +8,7 @@
 #include <snk/resource/resources/res_resource_handle.hpp>
 #include "edt_editor_camera.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
@@ -65,6 +66,10 @@ namespace edt {
 		// The context is registered after this system, so a storage that is torn down without editor_term() destroys
 		// it first: the destructor reaches it through this, never through m_context.
 		std::weak_ptr<editor_context> m_context_alive;
+
+		// The engine services the controllers, the documents and the editor_context work through; filled in init().
+		// Declared before everything that refers to it, so it is destroyed after all of it. Document reloads never touch it.
+		editor_services m_services;
 
 		// The level being edited; the controllers share it. The documents of the editor_context refer to it.
 		scene_document m_state;

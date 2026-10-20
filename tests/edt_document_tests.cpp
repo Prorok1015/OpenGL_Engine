@@ -3,6 +3,7 @@
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/editor/edt_editor_services.h>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/level/scn_level_desc.h>
@@ -50,9 +51,9 @@ struct document_fixture : test_util::scene_env
 
 		hot = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
 		mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
-		scene.ctx_manager = mgr;
-		scene.assembler = assembler.get();
-		scene.sfactory = &sf;
+		services.ctx_manager = mgr;
+		services.assembler = assembler.get();
+		services.sfactory = &sf;
 
 		connections.push_back(events.document_opened.subscribe([this](edt::document_id id) { log.push_back("opened:" + std::to_string(id)); }));
 		connections.push_back(events.document_closed.subscribe([this](edt::document_id id) { log.push_back("closed:" + std::to_string(id)); }));
@@ -74,9 +75,10 @@ struct document_fixture : test_util::scene_env
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
 	std::shared_ptr<scn::context_manager> mgr;
+	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, events, *rs, *descs };
+	edt::document_manager documents{ scene, services, events, *rs, *descs };
 	std::vector<edt::connection> connections;
 	std::vector<std::string> log;
 	std::vector<std::pair<edt::document_id, std::uint64_t>> changed;
@@ -276,7 +278,7 @@ BOOST_AUTO_TEST_CASE(SceneEditorEdit_ReachesDocumentChangedThroughTheInstalledPu
 	edt::derive_world_arrays(scene.world_descs, scene.world_names, scene.worlds_systems_list);
 	scene.active_world_idx = 0;
 	scene.editor_tag = tag;
-	edt::scene_editor editor(scene);
+	edt::scene_editor editor(scene, services);
 	const auto before = scene.generation();
 	BOOST_REQUIRE(scene.active_world_desc());
 
@@ -293,7 +295,7 @@ BOOST_AUTO_TEST_CASE(SceneEditorEdit_ReachesDocumentChangedThroughTheInstalledPu
 
 BOOST_AUTO_TEST_CASE(SceneEditorEdit_ThatDoesNothing_LeavesTheGenerationAndTheDocumentAlone)
 {
-	edt::scene_editor editor(scene);
+	edt::scene_editor editor(scene, services);
 	const auto before = scene.generation();
 	BOOST_REQUIRE(!scene.active_world_desc());
 
@@ -375,16 +377,20 @@ BOOST_AUTO_TEST_CASE(SceneSave_ReportsAFailedWrite)
 	BOOST_TEST(!result.error.empty());
 }
 
-BOOST_AUTO_TEST_CASE(SceneDocument_ExposesTheLevelSetAndItsIdentity)
+BOOST_AUTO_TEST_CASE(SceneDocument_ExposesItsIdentity)
 {
-	BOOST_TEST(scene.level_set() == &mgr->level_set());
 	scene.level_name = "lv";
 	scene.level_tag = res::tag::make("levels/lv.desc");
 	BOOST_TEST(scene.title() == "lv");
 	BOOST_TEST((scene.source() == scene.level_tag));
+}
 
-	scene.ctx_manager.reset();
-	BOOST_TEST(scene.level_set() == nullptr);
+BOOST_AUTO_TEST_CASE(EditorServices_LevelSetIsTheContextManagersAndNullOnceItIsGone)
+{
+	BOOST_TEST(services.level_set() == &mgr->level_set());
+
+	services.ctx_manager.reset();
+	BOOST_TEST(services.level_set() == nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

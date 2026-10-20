@@ -1,5 +1,6 @@
 #include "edt_scene_editor.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include "edt_override_edit.h"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -11,8 +12,9 @@
 #include <entt/entt.hpp>
 #include <algorithm>
 
-edt::scene_editor::scene_editor(scene_document& state)
+edt::scene_editor::scene_editor(scene_document& state, editor_services& services)
 	: m_state(state)
+	, m_services(services)
 {
 	m_state.set_pusher([this] { return serialize_and_push(); });
 }
@@ -196,8 +198,8 @@ void edt::scene_editor::on_transform_committed(
 		node.scale    = scale;
 		node.has_transform = true;
 	} else {
-		if (!m_state.assembler) return;
-		const auto base = override_edit::find_base_node(*m_state.assembler, *address.owner, address.target);
+		if (!m_services.assembler) return;
+		const auto base = override_edit::find_base_node(*m_services.assembler, *address.owner, address.target);
 		if (!base) {
 			egLOG_WARN("editor", "no node below '{}' for the committed transform", address.owner->name);
 			return;
@@ -212,8 +214,8 @@ void edt::scene_editor::on_transform_committed(
 bool edt::scene_editor::serialize_and_push()
 {
 	if (!m_state.editor_tag.is_valid()) return false;
-	auto ctx_mgr = m_state.ctx_manager.lock();
-	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return false;
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr || !m_services.sfactory || !m_services.assembler) return false;
 
 	auto* world_desc = m_state.active_world_desc();
 	if (!world_desc) return false;
@@ -230,7 +232,7 @@ bool edt::scene_editor::serialize_and_push()
 		if (on_save_camera) on_save_camera(world.state());
 	}
 	// TODO: Better just save the world on a disk. hot reload system will take care of reloading it in the editor and the game.
-	lvl.reload_context(world_name, *world_desc, *m_state.sfactory, *m_state.assembler);
+	lvl.reload_context(world_name, *world_desc, *m_services.sfactory, *m_services.assembler);
 
 	scn::world_context& world = lvl.get(world_name);
 	if (on_inject_camera) on_inject_camera(world.state());
@@ -240,7 +242,7 @@ bool edt::scene_editor::serialize_and_push()
 
 void edt::scene_editor::sync_ecs_transforms_to_desc()
 {
-	auto ctx_mgr = m_state.ctx_manager.lock();
+	auto ctx_mgr = m_services.ctx_manager.lock();
 	auto* world_desc = m_state.active_world_desc();
 	const std::string* world_name = m_state.active_world_name();
 	if (!ctx_mgr || !world_desc || !world_name) return;

@@ -8,6 +8,7 @@
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include <chrono>
 #include <memory>
 #include <string>
@@ -57,10 +58,10 @@ struct preview_fixture : test_util::scene_env
 
 		hot = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
 		mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
-		state.ctx_manager = mgr;
-		state.assembler = assembler.get();
-		state.sfactory = &sf;
-		editor = std::make_unique<edt::prefab_document>(state, *rs, *descs);
+		services.ctx_manager = mgr;
+		services.assembler = assembler.get();
+		services.sfactory = &sf;
+		editor = std::make_unique<edt::prefab_document>(services, *rs, *descs);
 	}
 
 	std::size_t preview_sets() const
@@ -85,6 +86,7 @@ struct preview_fixture : test_util::scene_env
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
 	std::shared_ptr<scn::context_manager> mgr;
+	edt::editor_services services;
 	edt::scene_document state;
 	std::unique_ptr<edt::prefab_document> editor;
 };
@@ -195,9 +197,9 @@ BOOST_AUTO_TEST_CASE(Save_TheLevelFileDoesNotIncludeThePreview)
 	auto level_res = require_loaded<scn::level_desc>(tag);
 	BOOST_REQUIRE(level_res.is_ready());
 	// the editor's own load and save path (what Ctrl+S serializes), not a hand-filled list
-	edt::scene_editor scene_ed(state);
-	edt::world_controller world_ctrl(state, *rs, *descs);
-	edt::level_controller level_ctrl(state, *rs, *descs, scene_ed, world_ctrl);
+	edt::scene_editor scene_ed(state, services);
+	edt::world_controller world_ctrl(state, services, *rs, *descs);
+	edt::level_controller level_ctrl(state, services, *rs, *descs, scene_ed, world_ctrl);
 	level_ctrl.populate_worlds_from_level(level_res);
 	editor->open(prefab_a);
 	BOOST_REQUIRE(editor->is_open());

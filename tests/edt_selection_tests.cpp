@@ -7,6 +7,7 @@
 #include "edt_scene_document.h"
 #include "edt_world_controller.h"
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/scene/level/scn_node_index.h>
 #include <string>
@@ -55,9 +56,10 @@ struct selection_fixture : test_util::scene_env
 
 	edt::editor_events events;
 	edt::selection_service service{ events };
+	edt::editor_services services;
 	edt::scene_document state;
-	edt::scene_editor editor{ state };
-	edt::world_controller world_ctrl{ state, *rs, *descs };
+	edt::scene_editor editor{ state, services };
+	edt::world_controller world_ctrl{ state, services, *rs, *descs };
 	edt::scene_hierarchy_panel hierarchy;
 	edt::inspector_panel inspector;
 	entt::registry reg;

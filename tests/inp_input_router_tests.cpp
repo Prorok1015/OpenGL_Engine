@@ -13,6 +13,7 @@
 #include <snk/scene/level/scn_world_context.h>
 #include "edt_input_target.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -731,14 +732,15 @@ BOOST_AUTO_TEST_CASE(GameView_InEditModeWithoutAPlaySetLeavesEveryLevelContextNe
 	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
 	shared_mgr->create_context("level", "w", scn::context_kind::level, { "test::probe_input" });
 	shared_mgr->create_context("level", "v", scn::context_kind::level, { "test::probe_input" });
+	edt::editor_services services;
 	edt::scene_document state;
-	state.ctx_manager = shared_mgr;
+	services.ctx_manager = shared_mgr;
 	state.world_descs.emplace_back();
 	state.world_names.push_back("w");
 
 	// No play set: the Game view binds nothing, even though it is hovered.
-	BOOST_TEST(!edt::active_play_input_target(state).has_value());
-	if (auto target = edt::active_play_input_target(state)) router.bind(*target, LEFT_RECT);
+	BOOST_TEST(!edt::active_play_input_target(services, state).has_value());
+	if (auto target = edt::active_play_input_target(services, state)) router.bind(*target, LEFT_RECT);
 	move_to({ 50, 50 });
 	key(KEYBOARD_BUTTONS::W, KEY_ACTION::DOWN);
 
@@ -750,42 +752,43 @@ BOOST_AUTO_TEST_CASE(GameView_InEditModeWithoutAPlaySetLeavesEveryLevelContextNe
 	}
 
 	// The viewport target is unchanged: the level context.
-	BOOST_TEST((edt::active_input_target(state) == inp::input_target{ "level", "w" }));
+	BOOST_TEST((edt::active_input_target(services, state) == inp::input_target{ "level", "w" }));
 
 	// With a play twin the Game view feeds it.
 	shared_mgr->create_set("play");
 	shared_mgr->create_context("play", "w", scn::context_kind::play, { "test::probe_input" });
-	BOOST_TEST((edt::active_play_input_target(state) == inp::input_target{ "play", "w" }));
+	BOOST_TEST((edt::active_play_input_target(services, state) == inp::input_target{ "play", "w" }));
 }
 
 BOOST_AUTO_TEST_CASE(EditorTargets_ViewportPrefersThePlayTwinThenTheLevelThenNothing)
 {
 	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
+	edt::editor_services services;
 	edt::scene_document state;
-	state.ctx_manager = shared_mgr;
+	services.ctx_manager = shared_mgr;
 
 	// No active world: nothing to feed.
-	BOOST_TEST(!edt::active_input_target(state).has_value());
-	BOOST_TEST(!edt::active_play_input_target(state).has_value());
+	BOOST_TEST(!edt::active_input_target(services, state).has_value());
+	BOOST_TEST(!edt::active_play_input_target(services, state).has_value());
 
 	state.world_descs.emplace_back();
 	state.world_names.push_back("w");
 
 	// Active world named, but the level has no such context.
-	BOOST_TEST(!edt::active_input_target(state).has_value());
+	BOOST_TEST(!edt::active_input_target(services, state).has_value());
 
 	shared_mgr->create_context("level", "w", scn::context_kind::level);
-	BOOST_TEST((edt::active_input_target(state) == inp::input_target{ "level", "w" }));
-	BOOST_TEST(!edt::active_play_input_target(state).has_value());
+	BOOST_TEST((edt::active_input_target(services, state) == inp::input_target{ "level", "w" }));
+	BOOST_TEST(!edt::active_play_input_target(services, state).has_value());
 
 	shared_mgr->create_set("play");
 	shared_mgr->create_context("play", "w", scn::context_kind::play);
-	BOOST_TEST((edt::active_input_target(state) == inp::input_target{ "play", "w" }));
-	BOOST_TEST((edt::active_play_input_target(state) == inp::input_target{ "play", "w" }));
+	BOOST_TEST((edt::active_input_target(services, state) == inp::input_target{ "play", "w" }));
+	BOOST_TEST((edt::active_play_input_target(services, state) == inp::input_target{ "play", "w" }));
 
-	state.ctx_manager.reset(); // the manager is gone
-	BOOST_TEST(!edt::active_input_target(state).has_value());
-	BOOST_TEST(!edt::active_play_input_target(state).has_value());
+	services.ctx_manager.reset(); // the manager is gone
+	BOOST_TEST(!edt::active_input_target(services, state).has_value());
+	BOOST_TEST(!edt::active_play_input_target(services, state).has_value());
 }
 
 // ---------------------------------------------------------------- update stage

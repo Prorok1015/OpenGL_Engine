@@ -1,5 +1,6 @@
 #include "edt_world_controller.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include "edt_editor_camera.h"
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -13,8 +14,9 @@
 #include <boost/json.hpp>
 #include <snk/common/logger/engine_log.h>
 
-edt::world_controller::world_controller(scene_document& state, res::resource_system& res, desc::desc_system& desc)
+edt::world_controller::world_controller(scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc)
 	: m_state(state)
+	, m_services(services)
 	, m_res(res)
 	, m_desc(desc)
 {
@@ -22,7 +24,7 @@ edt::world_controller::world_controller(scene_document& state, res::resource_sys
 
 bool edt::world_controller::switch_to_world(int idx)
 {
-	auto ctx_mgr = m_state.ctx_manager.lock();
+	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr || idx < 0 || idx >= (int)m_state.world_names.size())
 		return false;
 
@@ -85,8 +87,8 @@ void edt::world_controller::clear_active_world()
 
 void edt::world_controller::create_world(const std::string& name)
 {
-	auto ctx_mgr = m_state.ctx_manager.lock();
-	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) return;
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr || !m_services.sfactory || !m_services.assembler) return;
 
 	if (ctx_mgr->level_set().has(name)) {
 		egLOG_WARN("Editor/CreateWorld", "World '{}' already exists, choose another name", name);
@@ -128,10 +130,10 @@ void edt::world_controller::create_world(const std::string& name)
 	uint32_t new_id = lvl.acquire_free_id();
 	scn::world_context& world = lvl.create_context(name, new_id);
 
-	lvl.add_systems(world, world_res->get_systems(), *m_state.sfactory);
+	lvl.add_systems(world, world_res->get_systems(), *m_services.sfactory);
 
 	entt::entity e = world.state().create();
-	m_state.assembler->spawn_from_desc(world.state(), e, *world_res, name);
+	m_services.assembler->spawn_from_desc(world.state(), e, *world_res, name);
 
 	m_state.world_names.push_back(name);
 	m_state.world_descs.push_back(*world_res);

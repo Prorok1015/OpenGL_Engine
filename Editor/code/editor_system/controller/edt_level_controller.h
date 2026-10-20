@@ -18,6 +18,7 @@ namespace scn { class level_desc; }
 namespace edt
 {
 	class scene_document;
+	struct editor_services;
 	class scene_editor;
 	class world_controller;
 
@@ -93,7 +94,7 @@ namespace edt
 	class level_controller
 	{
 	public:
-		level_controller(scene_document& state, res::resource_system& res, desc::desc_system& desc,
+		level_controller(scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc,
 			scene_editor& scene_ed, world_controller& world_ctrl);
 		~level_controller();
 
@@ -118,6 +119,7 @@ namespace edt
 
 	private:
 		scene_document& m_state;
+		editor_services& m_services;
 		res::resource_system& m_res;
 		desc::desc_system& m_desc;
 		scene_editor& m_scene_editor;
