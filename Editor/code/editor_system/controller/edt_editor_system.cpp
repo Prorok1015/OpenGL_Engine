@@ -191,11 +191,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	if (data.has_value<rnd::capture_service>()) {
 		auto& capture = data.require<rnd::capture_service>();
 		m_registrations.push_back(capture.add_target("scene", [this] {
-			return m_rnd.get_texture_manager().find(viewport_panel::render_target_tag());
+			return m_rnd.get_render_targets().current(viewport_panel::render_target_tag());
 		}));
-		m_registrations.push_back(capture.add_target("game", [this]() -> rnd::driver::texture_interface* {
+		m_registrations.push_back(capture.add_target("game", [this] {
 			const auto& target = m_game_view_panel->render_target();
-			return target ? m_rnd.get_texture_manager().find(*target) : nullptr;
+			return target ? m_rnd.get_render_targets().current(*target) : rnd::driver::texture_handle{};
 		}));
 	}
 	add_panel(m_console_panel, dock_slot::bottom_right, true);

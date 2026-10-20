@@ -20,10 +20,10 @@ namespace {
 	class frame_render_context final : public rnd::render_context
 	{
 	public:
-		frame_render_context(rnd::frame_context& frame, rnd::texture_manager& textures, rnd::ShaderManager& shaders,
+		frame_render_context(rnd::frame_context& frame, rnd::texture_manager& textures, rnd::render_targets::registry& targets, rnd::ShaderManager& shaders,
 			rnd::geom_manager& geometry, rnd::per_draw_data& draw_data, rnd::material_groups& materials,
 			rnd::material_instance_cache& instances, const rnd::skinning_manager* skins)
-			: m_frame(frame), m_textures(textures), m_shaders(shaders), m_geometry(geometry), m_draw_data(draw_data), m_materials(materials), m_instances(instances), m_skins(skins)
+			: m_frame(frame), m_textures(textures), m_targets(targets), m_shaders(shaders), m_geometry(geometry), m_draw_data(draw_data), m_materials(materials), m_instances(instances), m_skins(skins)
 		{}
 
 		std::span<rnd::render_packet_t> packets() override
@@ -43,10 +43,15 @@ namespace {
 
 		rnd::driver::texture_interface* find_texture(const res::tag& tag) const override { return m_textures.find(tag); }
 
+		rnd::driver::texture_handle texture(rnd::texture_id id) const override { return m_textures.binding(id).handle; }
+
 		rnd::driver::texture_interface* ensure_render_target(const res::tag& tag, glm::ivec2 size,
 			rnd::driver::texture_header::TYPE format, rnd::driver::texture_usage usage, const rnd::render_targets::sampling& params) override
 		{
-			return rnd::render_targets::ensure(m_textures, tag, size, format, usage, params);
+			if (!m_targets.ensure(m_textures, tag, size, format, usage, params)) {
+				return nullptr;
+			}
+			return m_textures.find(tag);
 		}
 
 		rnd::driver::vertex_array_interface* geometry(const res::tag& tag) override { return m_geometry.require_geometry(tag); }
@@ -69,6 +74,7 @@ namespace {
 		std::optional<std::span<rnd::render_packet_t>> m_group;
 		rnd::frame_context& m_frame;
 		rnd::texture_manager& m_textures;
+		rnd::render_targets::registry& m_targets;
 		rnd::ShaderManager& m_shaders;
 		rnd::geom_manager& m_geometry;
 		rnd::per_draw_data& m_draw_data;
@@ -90,10 +96,11 @@ void rnd::render_system::begin_frame(frame_context& context)
 rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface> driver, desc::desc_system& d, res::resource_system& res_sys)
 	: drv(std::move(driver))
 	, m_textures(std::make_unique<rnd::texture_manager>(drv.get(), d, res_sys))
+	, m_targets(std::make_unique<rnd::render_targets::registry>(*drv))
 	, m_shaders(std::make_unique<rnd::ShaderManager>(drv.get(), res_sys))
 	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), d, res_sys))
 	, m_draw_data(std::make_unique<rnd::per_draw_data>(*drv))
-	, m_materials(std::make_unique<rnd::material_groups>(*drv))
+	, m_materials(std::make_unique<rnd::material_groups>(*drv, *m_textures))
 	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
 {
 	auto& texture_manager = *m_textures;
@@ -223,7 +230,7 @@ void rnd::render_system::render_frame(frame_context& context) const
 	auto& gpu = rnd::get_gpu_profiler();
 	gpu.begin_frame(ds::profiler_current_frame());
 
-	frame_render_context pass_context(context, *m_textures, *m_shaders, *m_geometry, *m_draw_data, *m_materials, *m_instances, m_skinning_manager);
+	frame_render_context pass_context(context, *m_textures, *m_targets, *m_shaders, *m_geometry, *m_draw_data, *m_materials, *m_instances, m_skinning_manager);
 
 	// Render layers (W4): the passes that work on the whole frame go first, then the packets are drawn one group
 	// of equal render_priority after the other, lowest first, each group through all the remaining passes. So the

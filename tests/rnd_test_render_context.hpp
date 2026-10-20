@@ -39,6 +39,7 @@ public:
 	}
 
 	rnd::driver::texture_interface* find_texture(const res::tag&) const override { return nullptr; }
+	rnd::driver::texture_handle texture(rnd::texture_id) const override { return {}; }
 	rnd::driver::texture_interface* ensure_render_target(const res::tag&, glm::ivec2, rnd::driver::texture_header::TYPE,
 		rnd::driver::texture_usage, const rnd::render_targets::sampling&) override { return nullptr; }
 	rnd::driver::vertex_array_interface* geometry(const res::tag&) override { return nullptr; }

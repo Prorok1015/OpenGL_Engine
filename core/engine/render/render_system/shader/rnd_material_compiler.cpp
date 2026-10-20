@@ -13,9 +13,9 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 	for (std::size_t idx = 0; idx < mat.samplers_textures.size(); ++idx)
 	{
 		if (mat.samplers_textures[idx].is_valid()) {
-			rdata.samplers[idx] = ctx.textures->require_texture(mat.samplers_textures[idx]);
+			rdata.samplers[idx] = ctx.textures->require(mat.samplers_textures[idx]);
 		} else {
-			rdata.samplers[idx] = nullptr;
+			rdata.samplers[idx] = texture_id{};
 		}
 	}
 
@@ -60,7 +60,7 @@ std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	out->runtime = std::move(cfg.rdata);
 
 	for (std::size_t idx = 0; idx < mat->samplers_textures.size(); ++idx) {
-		if (mat->samplers_textures[idx].is_valid() && !out->runtime.samplers[idx]) {
+		if (mat->samplers_textures[idx].is_valid() && !textures.is_ready(out->runtime.samplers[idx])) {
 			out->complete = false;
 		}
 	}
