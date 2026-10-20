@@ -187,6 +187,44 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesASizeThatWouldNeedTooMuchMemory)
 	BOOST_CHECK(service.capture("scene", { 64, 0 }).ok());
 }
 
+BOOST_AUTO_TEST_CASE(Capture_LimitsOfTheCallerBoundTheDerivedSideBeforeReading)
+{
+	// 2 x 8 target: a width of 64 derives 256 rows; fine under the defaults, over a ceiling of 100.
+	auto tall = drv.create_texture(target_header(2, 8));
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+	BOOST_CHECK(service.capture("tall", { 64, 0 }).ok());
+
+	rnd::capture_limits side;
+	side.max_side = 100;
+	const auto derived = service.capture("tall", { 64, 0 }, side);
+	BOOST_CHECK(derived.status == rnd::capture_status::invalid_size);
+	BOOST_CHECK(derived.image.rgba.empty());
+	BOOST_CHECK(derived.error.find("100 px a side") != std::string::npos);
+
+	rnd::capture_limits pixels;
+	pixels.max_pixels = 7;
+	BOOST_CHECK(service.capture("scene", { 4, 2 }, pixels).status == rnd::capture_status::invalid_size);
+	pixels.max_pixels = 8;
+	BOOST_CHECK(service.capture("scene", { 4, 2 }, pixels).ok());
+
+	// A limit cannot raise the ceiling of the service.
+	rnd::capture_limits above;
+	above.max_side = 100000;
+	above.max_pixels = 1LL << 40;
+	BOOST_CHECK(service.capture("scene", { rnd::capture_service::max_side + 1, 1 }, above).status == rnd::capture_status::invalid_size);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_TighterLimitsAlsoApplyToTheNativeSize)
+{
+	rnd::capture_limits narrow;
+	narrow.max_side = 3;
+	BOOST_CHECK(service.capture("scene", { 0, 0 }, narrow).status == rnd::capture_status::invalid_size);
+	narrow.max_side = tex_width;
+	BOOST_CHECK(service.capture("scene", { 0, 0 }, narrow).ok());
+	// Default limits keep returning the target as it is.
+	BOOST_CHECK(service.capture("scene").ok());
+}
+
 BOOST_AUTO_TEST_CASE(Capture_FailsBeforeReadingATargetOverThePixelBudget)
 {
 	// The null driver keeps no pixels of a texture, so a huge one costs nothing here; the service must refuse it
@@ -315,6 +353,25 @@ BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
 	const auto product = capture(R"({"width":8192,"height":8192})");
 	BOOST_CHECK(!product.ok);
 	BOOST_CHECK_EQUAL(product.code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
+{
+	auto tall = drv.create_texture(target_header(2, 8));
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+
+	BOOST_CHECK(capture(R"({"viewport":"tall","width":64})").ok);
+	const auto side = capture(R"({"viewport":"tall","width":64,"max_side":100})");
+	BOOST_CHECK(!side.ok);
+	BOOST_CHECK_EQUAL(side.code, cmd::codes::invalid_args);
+	const auto pixels = capture(R"({"width":4,"height":2,"max_pixels":7})");
+	BOOST_CHECK_EQUAL(pixels.code, cmd::codes::invalid_args);
+	BOOST_CHECK(capture(R"({"width":4,"height":2,"max_pixels":8,"max_side":4})").ok);
+
+	BOOST_CHECK_EQUAL(capture(R"({"max_side":0})").code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"max_side":8193})").code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"max_pixels":33554433})").code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"max_pixels":"many"})").code, cmd::codes::invalid_args);
 }
 
 BOOST_AUTO_TEST_CASE(Capture_TargetOverThePixelBudgetFails)

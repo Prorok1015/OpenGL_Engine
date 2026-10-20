@@ -9,6 +9,8 @@ else()
 	add_executable(${PROJECT_NAME} WIN32 "main.cpp")
 endif()
 
+# The MCP server module: no engine dependency, linked into the editor only (see cmake/SnkMcpIsolation.cmake).
+add_subdirectory("code/mcp_server")
 add_subdirectory("code/editor_system")
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE snk::sanitizers)
 if(WIN32 AND SNK_ENGINE_SHARED)

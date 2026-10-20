@@ -848,10 +848,6 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 		ds::lifetime life;
 	};
 
-	ds::task_system_config config;
-	config.compute_threads = 3;
-	ds::task_system tasks(config);
-
 	struct probe_t {
 		explicit probe_t(std::atomic<int>& dropped_count) : dropped(dropped_count) {}
 		~probe_t() { dropped += delivered ? 0 : 1; }
@@ -864,34 +860,45 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 	int delivered = 0;
 	int after_death = 0;
 	std::atomic<int> dropped{ 0 };
-	std::vector<ds::task_handle<int>> handles;
-	handles.reserve(rounds);
-	for (int i = 0; i < rounds; ++i) {
-		auto owner = std::make_unique<owner_t>(i % 2 == 0 ? ds::lifetime_option::cancel_on_destroy
-			: ds::lifetime_option::none);
-		auto handle = tasks.run(lane::compute, { "t" }, owner->life, [](ds::task_context& ctx) {
-			ctx.throw_if_stopped();
-			return 1;
-		});
-		handle.then_main(owner->life, [&, destroyed = owner->destroyed, probe = std::make_shared<probe_t>(dropped)](ds::task_result<int>&) {
-			probe->delivered = true;
-			++delivered;
-			after_death += *destroyed ? 1 : 0;
-		});
-		if (i % 3 == 0) {
-			tasks.drain_main(1ms);
+	{
+		ds::task_system_config config;
+		config.compute_threads = 3;
+		ds::task_system tasks(config);
+
+		std::vector<ds::task_handle<int>> handles;
+		handles.reserve(rounds);
+		for (int i = 0; i < rounds; ++i) {
+			auto owner = std::make_unique<owner_t>(i % 2 == 0 ? ds::lifetime_option::cancel_on_destroy
+				: ds::lifetime_option::none);
+			auto handle = tasks.run(lane::compute, { "t" }, owner->life, [](ds::task_context& ctx) {
+				ctx.throw_if_stopped();
+				return 1;
+			});
+			handle.then_main(owner->life, [&, destroyed = owner->destroyed, probe = std::make_shared<probe_t>(dropped)](ds::task_result<int>&) {
+				probe->delivered = true;
+				++delivered;
+				after_death += *destroyed ? 1 : 0;
+			});
+			if (i % 3 == 0) {
+				tasks.drain_main(1ms);
+			}
+			if (i % 4 == 0) {
+				std::this_thread::yield();
+			}
+			owner.reset(); // races with a worker finishing the task
+			handles.push_back(std::move(handle));
 		}
-		if (i % 4 == 0) {
-			std::this_thread::yield();
+		for (const auto& handle : handles) {
+			handle.wait();
 		}
-		owner.reset(); // races with a worker finishing the task
-		handles.push_back(std::move(handle));
+		handles.clear();
+		tasks.drain_main(1ms);
+
+		// `wait()` returns when the task is done, which is published before the worker has handed its
+		// continuations to the main queue, and drain_main(budget) may stop early. A continuation can thus
+		// be legitimately still in flight here; the destructor joins the workers and destroys whatever
+		// is left in the queues, so every probe is accounted for once `tasks` is gone.
 	}
-	for (const auto& handle : handles) {
-		handle.wait();
-	}
-	handles.clear();
-	tasks.drain_main(1ms);
 	BOOST_TEST(after_death == 0);
 	BOOST_TEST(delivered > 0);
 	BOOST_TEST(delivered + dropped.load() == rounds);

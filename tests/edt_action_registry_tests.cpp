@@ -581,6 +581,26 @@ namespace {
 	}
 }
 
+BOOST_AUTO_TEST_CASE(Mutates_DefaultsToTrueAndIsCarriedToTheCommand)
+{
+	edt::action_registry actions;
+	int runs = 0;
+	edt::action_desc unflagged = echo_action(runs);
+	unflagged.id = "test.unflagged";
+	edt::action_desc reading = echo_action(runs);
+	reading.id = "test.reading";
+	reading.mutates = false;
+	auto first = actions.add(std::move(unflagged));
+	auto second = actions.add(std::move(reading));
+	BOOST_REQUIRE(first.active());
+	BOOST_REQUIRE(second.active());
+
+	BOOST_REQUIRE(actions.find("test.unflagged") != nullptr);
+	BOOST_CHECK(actions.find("test.unflagged")->mutates);
+	BOOST_REQUIRE(actions.find("test.reading") != nullptr);
+	BOOST_CHECK(!actions.find("test.reading")->mutates);
+}
+
 BOOST_AUTO_TEST_CASE(Invoke_ValidatesThenRunsAndReturnsTheResult)
 {
 	edt::action_registry actions;

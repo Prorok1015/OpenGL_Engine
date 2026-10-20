@@ -43,7 +43,9 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 		"properties": {
 			"viewport": { "type": "string", "minLength": 1 },
 			"width": { "type": "integer", "minimum": 1, "maximum": 8192 },
-			"height": { "type": "integer", "minimum": 1, "maximum": 8192 }
+			"height": { "type": "integer", "minimum": 1, "maximum": 8192 },
+			"max_side": { "type": "integer", "minimum": 1, "maximum": 8192 },
+			"max_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 }
 		},
 		"additionalProperties": false
 	})");
@@ -81,7 +83,24 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 			id = ids.front();
 		}
 
-		const capture_result captured = service.capture(id, { *width, *height });
+		// Optional ceilings on the picture, for a caller that serves an untrusted client; the derived side counts.
+		capture_limits limits;
+		if (const json::value* max_side = args.if_contains("max_side")) {
+			const auto number = cmd::json_schema::integer_of(*max_side);
+			if (!number || *number < 1 || *number > limits.max_side) {
+				return cmd::result::failure(cmd::codes::invalid_args, "max_side is an integer in 1..8192");
+			}
+			limits.max_side = static_cast<int>(*number);
+		}
+		if (const json::value* max_pixels = args.if_contains("max_pixels")) {
+			const auto number = cmd::json_schema::integer_of(*max_pixels);
+			if (!number || *number < 1 || *number > limits.max_pixels) {
+				return cmd::result::failure(cmd::codes::invalid_args, "max_pixels is an integer in 1..33554432");
+			}
+			limits.max_pixels = *number;
+		}
+
+		const capture_result captured = service.capture(id, { *width, *height }, limits);
 		if (!captured.ok()) {
 			switch (captured.status) {
 			case capture_status::unknown_view: return cmd::result::failure(cmd::codes::not_found, captured.error);
