@@ -26,7 +26,7 @@ void rnd::material_instance_cache::begin_frame(material_compiler_interface* comp
 
 void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<scn::material_desc>& desc, bool skinned)
 {
-	// The compiler resolves the maps (texture_manager::require_texture): the only place a material asks for a texture.
+	// The compiler resolves the maps (texture_manager::require, which gives the id): the only place a material asks for a texture.
 	s.material = build_compiled_material(*m_compiler, m_variants, m_textures, desc, skinned);
 	s.built_frame = m_frame;
 	++m_compilations;

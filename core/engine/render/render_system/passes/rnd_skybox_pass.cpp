@@ -114,11 +114,11 @@ namespace rnd {
 			const auto& sky = *packet.skybox_material;
 			const compiled_material& material = context.material(sky.material);
 			// The cubemap is the material's first sampler; a texture that is still loading leaves the sky out.
-			driver::texture_interface* cubemap = material.runtime.samplers.empty() ? nullptr : material.runtime.samplers[0];
+			const driver::texture_handle cubemap = material.runtime.samplers.empty() ? driver::texture_handle{} : context.texture(material.runtime.samplers[0]);
 			if (cubemap && pipelines.bind(material.base)) {
 				driver::bind_group_desc inputs;
 				inputs.layout = context.layouts().sky;
-				inputs.entries.push_back({ driver::binding_type::texture, bindings::sky_slot, {}, 0, 0, driver::handle_of(cubemap) });
+				inputs.entries.push_back({ driver::binding_type::texture, bindings::sky_slot, {}, 0, 0, cubemap });
 				drv.set_bind_group(driver::pass_set, drv.create_bind_group(inputs, driver::lifetime::transient));
 				drv.draw_indices(m_va, 36);
 			}

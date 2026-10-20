@@ -2,6 +2,7 @@
 #include "null_engine_fixture.hpp"
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_desc.h>
+#include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/driver/rnd_texture_owner.h>
 #include <boost/json.hpp>
 
@@ -128,6 +129,50 @@ BOOST_AUTO_TEST_CASE(EnsureRecreatesATargetWhenTheSizeChanges)
 	BOOST_TEST(resized->height() == 96u);
 	BOOST_TEST(textures.find(tag) == resized);
 	BOOST_TEST(textures.generation() > generation);
+}
+
+BOOST_AUTO_TEST_CASE(ATextureKeepsItsIdWhenItsTargetIsResizedAndItsGenerationMoves)
+{
+	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	const auto tag = res::tag(res::tag::memory, "__rt_slot");
+	BOOST_TEST(!textures.id_of(tag).is_valid());
+	const auto usage = texture_usage::color_target | texture_usage::sampled;
+	rnd::render_targets::ensure(textures, tag, { 32, 32 }, texture_header::TYPE::RGBA8, usage);
+	const rnd::texture_id id = textures.id_of(tag);
+	BOOST_REQUIRE(id.is_valid());
+	const auto first = textures.binding(id);
+	BOOST_TEST(static_cast<bool>(first.handle));
+
+	rnd::render_targets::ensure(textures, tag, { 32, 32 }, texture_header::TYPE::RGBA8, usage);
+	BOOST_TEST((textures.binding(id).handle == first.handle));	// same size: nothing moved
+	BOOST_TEST(textures.binding(id).generation == first.generation);
+
+	rnd::render_targets::ensure(textures, tag, { 48, 16 }, texture_header::TYPE::RGBA8, usage);
+	const auto second = textures.binding(id);
+	BOOST_TEST((textures.id_of(tag) == id));	// the slot survived the resize
+	BOOST_TEST(static_cast<bool>(second.handle));
+	BOOST_TEST((second.handle != first.handle));
+	BOOST_TEST(second.generation != first.generation);
+}
+
+BOOST_AUTO_TEST_CASE(ARemovedTextureLeavesItsSlotEmptyAndAnUnknownIdBindsToNothing)
+{
+	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	const auto tag = res::tag(res::tag::memory, "__rt_removed");
+	rnd::render_targets::ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	const rnd::texture_id id = textures.id_of(tag);
+	BOOST_REQUIRE(textures.is_ready(id));
+	const auto generation = textures.binding(id).generation;
+
+	textures.remove(tag);
+	BOOST_TEST(!textures.is_ready(id));
+	BOOST_TEST(!static_cast<bool>(textures.binding(id).handle));
+	BOOST_TEST(textures.binding(id).generation != generation);
+	BOOST_TEST(textures.find(tag) == nullptr);
+	BOOST_TEST((textures.id_of(tag) == id));
+
+	BOOST_TEST(!static_cast<bool>(textures.binding(rnd::texture_id{}).handle));
+	BOOST_TEST(!static_cast<bool>(textures.binding(rnd::texture_id{ 100000 }).handle));
 }
 
 BOOST_AUTO_TEST_CASE(EnsureCreatesTargetsThatPassValidation)

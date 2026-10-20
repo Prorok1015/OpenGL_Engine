@@ -3,6 +3,7 @@
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_material_groups.h>
 #include <snk/render/shader/rnd_material_params.h>
+#include <snk/render/texture/rnd_texture_id.h>
 #include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
@@ -40,12 +41,36 @@ rnd::material_params params_of(float shininess, glm::vec4 diffuse = glm::vec4{ 1
 	return params;
 }
 
+// The slots of a texture manager, without one: a slot is a handle and a generation that grows when the handle changes.
+struct fake_textures final : rnd::texture_resolver
+{
+	rnd::texture_id add(texture_handle handle)
+	{
+		slots.push_back({ handle, 1 });
+		return rnd::texture_id{ static_cast<std::uint32_t>(slots.size()) };
+	}
+
+	// What a reload, a resize or the end of a load does to a slot.
+	void replace(rnd::texture_id id, texture_handle handle)
+	{
+		slots[id.index - 1].handle = handle;
+		++slots[id.index - 1].generation;
+	}
+
+	rnd::texture_binding binding(rnd::texture_id id) const override
+	{
+		return id.is_valid() && id.index <= slots.size() ? slots[id.index - 1] : rnd::texture_binding{};
+	}
+
+	std::vector<rnd::texture_binding> slots;
+};
+
 struct material_fixture
 {
 	material_fixture() { driver.record_bindings(true); }
 
 	// A compiled material as the compiler leaves it, with the given params and textures.
-	std::shared_ptr<rnd::compiled_material> material(const rnd::material_params& params, std::vector<texture_interface*> samplers = {})
+	std::shared_ptr<rnd::compiled_material> material(const rnd::material_params& params, std::vector<rnd::texture_id> samplers = {})
 	{
 		auto result = std::make_shared<rnd::compiled_material>();
 		result->runtime.samplers = std::move(samplers);
@@ -71,7 +96,8 @@ struct material_fixture
 	}
 
 	null::driver driver;
-	rnd::material_groups groups{ driver };
+	fake_textures textures;
+	rnd::material_groups groups{ driver, textures };
 };
 
 }
@@ -101,7 +127,9 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsTheParamsAndTheTexturesOfTheMaterial)
 {
 	auto diffuse = make_texture(driver, small_texture());
 	auto normal = make_texture(driver, small_texture());
-	const auto m = material(params_of(12.f, glm::vec4{ 0.25f, 0.5f, 0.75f, 1.f }), { diffuse.get(), nullptr, normal.get() });
+	const auto diffuse_id = textures.add(diffuse.handle());
+	const auto normal_id = textures.add(normal.handle());
+	const auto m = material(params_of(12.f, glm::vec4{ 0.25f, 0.5f, 0.75f, 1.f }), { diffuse_id, rnd::texture_id{}, normal_id });
 
 	const auto* info = driver.group_info(bind(*m));
 	BOOST_REQUIRE(info);
@@ -115,12 +143,12 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsTheParamsAndTheTexturesOfTheMaterial)
 	BOOST_TEST(info->entries[0].size == sizeof(rnd::material_params));
 	BOOST_TEST((driver.buffer_info(info->entries[0].buffer)->usage == buffer_usage::uniform));
 
-	BOOST_TEST((info->entries[1].texture == diffuse->handle()));
-	BOOST_TEST((info->entries[3].texture == normal->handle()));
+	BOOST_TEST((info->entries[1].texture == diffuse.handle()));
+	BOOST_TEST((info->entries[3].texture == normal.handle()));
 	// The specular map the material lacks is a texture of the renderer's, never null and never another material's.
 	BOOST_TEST(static_cast<bool>(info->entries[2].texture));
-	BOOST_TEST((info->entries[2].texture != diffuse->handle()));
-	BOOST_TEST((info->entries[2].texture != normal->handle()));
+	BOOST_TEST((info->entries[2].texture != diffuse.handle()));
+	BOOST_TEST((info->entries[2].texture != normal.handle()));
 }
 
 BOOST_AUTO_TEST_CASE(AMaterialWithoutMapsGetsPlaceholdersForAllThree)
@@ -187,7 +215,7 @@ BOOST_AUTO_TEST_CASE(AMaterialThatIsRebuiltEveryFrameWithTheSameContentsAllocate
 	// A texture that never loads: the extractor builds the material again at every extract.
 	const auto created = driver.calls().bind_groups_created;
 	for (int frame = 0; frame < 30; ++frame) {
-		const auto rebuilt = material(params_of(32.f), { nullptr });
+		const auto rebuilt = material(params_of(32.f), { rnd::texture_id{} });
 		bind(*rebuilt);
 		next_frame();
 	}
@@ -200,9 +228,10 @@ BOOST_AUTO_TEST_CASE(ABumpOfTheTextureGenerationWithUnchangedContentsCreatesNoGr
 {
 	// A render target was resized: every material is built again, with the textures it had.
 	auto diffuse = make_texture(driver, small_texture());
-	const auto before = bind(*material(params_of(32.f), { diffuse.get() }));
+	const auto diffuse_id = textures.add(diffuse.handle());
+	const auto before = bind(*material(params_of(32.f), { diffuse_id }));
 	next_frame();
-	const auto after = bind(*material(params_of(32.f), { diffuse.get() }));
+	const auto after = bind(*material(params_of(32.f), { diffuse_id }));
 	BOOST_TEST((after == before));
 	BOOST_TEST(groups.groups_created() == 1u);
 }
@@ -211,34 +240,61 @@ BOOST_AUTO_TEST_CASE(ARealChangeOfParamsOrOfATextureCreatesExactlyOneGroup)
 {
 	auto diffuse = make_texture(driver, small_texture());
 	auto other = make_texture(driver, small_texture());
-	bind(*material(params_of(32.f), { diffuse.get() }));
+	const auto diffuse_id = textures.add(diffuse.handle());
+	const auto other_id = textures.add(other.handle());
+	bind(*material(params_of(32.f), { diffuse_id }));
 	BOOST_TEST(groups.groups_created() == 1u);
 
-	bind(*material(params_of(64.f), { diffuse.get() }));
+	bind(*material(params_of(64.f), { diffuse_id }));
 	BOOST_TEST(groups.groups_created() == 2u);
-	bind(*material(params_of(64.f), { other.get() }));
+	bind(*material(params_of(64.f), { other_id }));
 	BOOST_TEST(groups.groups_created() == 3u);
 	// Back to something seen: found, not made.
-	bind(*material(params_of(32.f), { diffuse.get() }));
+	bind(*material(params_of(32.f), { diffuse_id }));
 	BOOST_TEST(groups.groups_created() == 3u);
 	BOOST_TEST(groups.cached() == 3u);
 }
 
-BOOST_AUTO_TEST_CASE(AMaterialBuiltAnewForAReloadedTextureGetsANewGroupWithTheNewTexture)
+BOOST_AUTO_TEST_CASE(ASlotWhoseTextureWasReloadedGetsANewGroupWithTheNewTexture)
 {
 	auto old_texture = make_texture(driver, small_texture());
-	auto before = material(params_of(32.f), { old_texture.get() });
-	const auto group_before = bind(*before);
+	const auto slot = textures.add(old_texture.handle());
+	const auto m = material(params_of(32.f), { slot });
+	const auto group_before = bind(*m);
 	BOOST_REQUIRE(driver.group_info(group_before));
-	BOOST_TEST((driver.group_info(group_before)->entries[1].texture == old_texture->handle()));
+	BOOST_TEST((driver.group_info(group_before)->entries[1].texture == old_texture.handle()));
 
-	// The reload: the texture manager drops the texture, the extractor builds the material again with the new one.
+	// The reload: the id stays, the texture behind it is another one and the generation of the slot moves.
+	// The material itself is the same object; it is not built again.
 	auto new_texture = make_texture(driver, small_texture());
-	auto after = material(params_of(32.f), { new_texture.get() });
+	textures.replace(slot, new_texture.handle());
 	next_frame();
-	const auto group_after = bind(*after);
+	const auto group_after = bind(*m);
 	BOOST_TEST((group_after != group_before));
-	BOOST_TEST((driver.group_info(group_after)->entries[1].texture == new_texture->handle()));
+	BOOST_TEST((driver.group_info(group_after)->entries[1].texture == new_texture.handle()));
+	BOOST_TEST(groups.groups_created() == 2u);
+
+	// And a frame after it nothing is made again.
+	next_frame();
+	BOOST_TEST((bind(*m) == group_after));
+	BOOST_TEST(groups.groups_created() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ASlotThatIsStillLoadingReadsAsThePlaceholderUntilItsTextureArrives)
+{
+	const auto slot = textures.add(texture_handle{});	// the id exists, the texture is not there yet
+	const auto m = material(params_of(32.f), { slot });
+	const auto loading = bind(*m);
+	const auto placeholder = driver.group_info(loading)->entries[1].texture;
+	BOOST_TEST(static_cast<bool>(placeholder));
+	BOOST_TEST((bind(*material(params_of(32.f))) == loading));	// the same as a material without the map
+
+	auto arrived = make_texture(driver, small_texture());
+	textures.replace(slot, arrived.handle());
+	next_frame();
+	const auto loaded = bind(*m);
+	BOOST_TEST((loaded != loading));
+	BOOST_TEST((driver.group_info(loaded)->entries[1].texture == arrived.handle()));
 }
 
 BOOST_AUTO_TEST_CASE(TheGroupsOfMaterialsThatWereNotDrawnForAFrameAreDestroyed)
@@ -295,7 +351,7 @@ BOOST_AUTO_TEST_CASE(NothingIsLeftWhenTheGroupsAreDestroyed)
 	null::driver outliving;
 	const auto m = material(params_of(32.f));
 	{
-		rnd::material_groups scoped(outliving);
+		rnd::material_groups scoped(outliving, textures);
 		outliving.begin_render_pass(backbuffer_pass());
 		scoped.bind(*m);
 		outliving.end_render_pass();

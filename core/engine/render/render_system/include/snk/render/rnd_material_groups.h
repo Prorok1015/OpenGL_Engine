@@ -1,11 +1,11 @@
 #pragma once
 #include <snk/common/snk_api.h>
 #include <snk/driver/rnd_driver_interface.h>
-#include <snk/driver/rnd_texture_interface.h>
 #include <snk/driver/rnd_texture_owner.h>
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/shader/rnd_material_params.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
+#include <snk/render/texture/rnd_texture_id.h>
 
 #include <array>
 #include <cstddef>
@@ -21,10 +21,11 @@ namespace rnd
 	// A group is built the first time a material with its contents is drawn: the params bytes go into a buffer
 	// once, the textures the material resolved (a placeholder for a map it does not have, or one that is still
 	// loading) into the group. Nothing is written after that. The cache key is the contents (the params bytes
-	// and the three textures, placeholders included), compared in full: materials that are equal share one
-	// buffer and group however many entities have them, and a compiled_material rebuilt with the same contents
-	// (a texture still loading, a render target resized) allocates nothing. A change of params or of a texture
-	// is a different key and so a new group. Groups not used for `grace_frames` frames are destroyed.
+	// and the three texture slots, each as (texture_id, generation of the slot), placeholders included),
+	// compared in full: materials that are equal share one buffer and group however many entities have them,
+	// and a compiled_material rebuilt with the same contents allocates nothing. A change of params, or a slot
+	// whose texture changed (it finished loading, was reloaded, a render target was resized: the generation of the
+	// slot moved) is a different key and so a new group. Groups not used for `grace_frames` frames are destroyed.
 	//
 	// This is the part of the material instance (#125) that lives on the GPU.
 	class SNK_API material_groups
@@ -34,7 +35,8 @@ namespace rnd
 		// the frustum, does not make the groups again for every draw.
 		static constexpr std::uint64_t grace_frames = 8;
 
-		explicit material_groups(driver::driver_interface& drv);
+		// `textures` says what a texture_id is bound to now; it must outlive the groups.
+		material_groups(driver::driver_interface& drv, const texture_resolver& textures);
 		~material_groups();
 		material_groups(const material_groups&) = delete;
 		material_groups& operator=(const material_groups&) = delete;
@@ -55,7 +57,7 @@ namespace rnd
 		struct content_key
 		{
 			std::array<std::byte, sizeof(material_params)> block{};
-			// Serials, not addresses: a texture destroyed and replaced at the same address is another texture.
+			// (texture_id index << 32) | slot generation; 0 for the placeholder.
 			std::array<std::uint64_t, bindings::material_texture_count> textures{};
 
 			bool operator==(const content_key&) const = default;
@@ -74,12 +76,13 @@ namespace rnd
 		};
 
 		entry& acquire(const compiled_material& material);
-		using texture_set = std::array<driver::texture_interface*, bindings::material_texture_count>;
+		using texture_set = std::array<driver::texture_handle, bindings::material_texture_count>;
 		// The textures the group binds (placeholders for the missing ones) and the key they and the params make.
 		content_key key_of(const compiled_material& material, texture_set& textures) const;
 		void destroy(entry& e);
 
 		driver::driver_interface& m_drv;
+		const texture_resolver& m_textures;
 		driver::bind_group_layout_handle m_layout;
 		std::array<driver::texture_owner, bindings::material_texture_count> m_placeholders;
 		std::unordered_map<content_key, entry, content_hash> m_entries;

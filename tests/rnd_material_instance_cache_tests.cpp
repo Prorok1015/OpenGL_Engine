@@ -139,7 +139,10 @@ BOOST_AUTO_TEST_CASE(ATextureReloadOrRenderTargetResizeRebuildsTheInstance)
 	const auto id = cache.acquire(desc, false, false);
 	BOOST_REQUIRE(cache.get(id).complete);
 	BOOST_REQUIRE(cache.get(id).runtime.samplers.size() == 1u);
-	BOOST_TEST(cache.get(id).runtime.samplers[0] == first_map);
+	const rnd::texture_id slot = textures().id_of(tag);
+	BOOST_REQUIRE(slot.is_valid());
+	BOOST_TEST((cache.get(id).runtime.samplers[0] == slot));	// the material holds the id, not the texture
+	const auto generation_before = textures().binding(slot).generation;
 	const std::uint64_t serial = cache.get(id).serial;
 
 	// Nothing changed: nothing compiled.
@@ -154,7 +157,9 @@ BOOST_AUTO_TEST_CASE(ATextureReloadOrRenderTargetResizeRebuildsTheInstance)
 	BOOST_CHECK(cache.acquire(desc, false, false) == id);
 	BOOST_TEST(cache.compilations() == 2u);
 	BOOST_TEST(cache.get(id).serial != serial);
-	BOOST_TEST(cache.get(id).runtime.samplers[0] == second_map);
+	BOOST_TEST((cache.get(id).runtime.samplers[0] == slot));	// the slot survived the resize...
+	BOOST_TEST((textures().id_of(tag) == slot));
+	BOOST_TEST(textures().binding(slot).generation != generation_before);	// ...and its generation moved
 
 	// And the frame after it is quiet again.
 	next_frame(cache);
