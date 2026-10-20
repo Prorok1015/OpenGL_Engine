@@ -15,7 +15,7 @@ namespace edt::schema_ui
 {
 	enum class widget : std::uint8_t
 	{
-		hidden,   // editor_hidden
+		hidden,   // editor_hidden, or a read-only key (write = never)
 		checkbox,
 		integer,  // i32 u32 i64 u64
 		real,     // f32 f64

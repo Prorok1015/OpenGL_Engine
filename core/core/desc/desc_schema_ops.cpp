@@ -296,8 +296,12 @@ namespace desc
 			}
 		}
 
-		bool rt_from_json(const field_ops& ops, void* obj, const json::value& in)
+		bool rt_from_json(const field_ops& ops, void* obj, const json::value& in, const read_context& ctx)
 		{
+			// write_policy::null_if_empty declares that a null stands for the empty tag or text.
+			if (in.is_null() && ops.accepts_null && (ops.kind == field_kind::res_tag || ops.kind == field_kind::string)) {
+				return rt_from_json(ops, obj, json::value(std::string_view{}), ctx);
+			}
 			std::byte* address = blob_address(obj, ops);
 			std::int64_t signed_value = 0;
 			std::uint64_t unsigned_value = 0;
@@ -387,7 +391,7 @@ namespace desc
 				}
 				const auto* ref = static_cast<const dyn_ref*>(obj);
 				dyn_ref child{ ref->blob, ref->base + ops.offset };
-				deserialize(*ops.nested, &child, in.as_object());
+				deserialize(*ops.nested, &child, in.as_object(), ctx);
 				return true;
 			}
 			default: {
@@ -432,11 +436,25 @@ namespace desc
 				json::value value;
 				rt_to_json(ops, src, value);
 				if (!value.is_null()) {
-					rt_from_json(ops, dst, value);
+					rt_from_json(ops, dst, value, read_context{});
 				}
 				return;
 			}
 			std::memmove(blob_address(dst, ops), blob_address(src, ops), layout_of(ops.kind).size);
+		}
+
+		// What write_policy::null_if_empty turns into an explicit null: no value, an empty tag/string/array, or the
+		// enumerator the enum declares as its null.
+		bool is_empty_value(const field_ops& ops, const json::value& value)
+		{
+			if (!is_valid_value(value)) {
+				return true;
+			}
+			if (ops.kind == field_kind::enumeration && ops.enumeration && ops.enumeration->null_value) {
+				const auto converted = enum_from_json(*ops.enumeration, value);
+				return converted && *converted == *ops.enumeration->null_value;
+			}
+			return false;
 		}
 
 		std::shared_ptr<const enum_schema> resolve_enum(const field_schema& field, const schema_registry& resolve)
@@ -455,7 +473,7 @@ namespace desc
 				const field_ops& ops = binding.ops[i];
 				const json::value& value = binding.schema->fields[i].default_value;
 				if (!value.is_null()) {
-					ops.from_json(ops, &ref, value);
+					ops.from_json(ops, &ref, value, read_context{});
 				} else if (ops.nested) {
 					apply_defaults(*ops.nested, dyn_ref{ ref.blob, ref.base + ops.offset });
 				}
@@ -661,6 +679,9 @@ namespace desc
 
 	std::optional<std::int64_t> enum_from_json(const enum_schema& schema, const json::value& value)
 	{
+		if (value.is_null()) {
+			return schema.null_value;
+		}
 		if (value.is_string()) {
 			if (const enum_item* item = schema.find(std::string_view{ value.as_string() })) {
 				return item->value;
@@ -729,6 +750,7 @@ namespace desc
 			ops.element = field.element;
 			ops.offset = field.offset;
 			ops.enumeration = resolve_enum(field, resolve);
+			ops.accepts_null = field.write == write_policy::null_if_empty;
 
 			std::uint32_t size = layout_of(field.kind).size;
 			if (field.kind == field_kind::structure) {
@@ -762,9 +784,14 @@ namespace desc
 		const auto& fields = binding.schema->fields;
 		for (std::size_t i = 0; i < fields.size(); ++i) {
 			const field_schema& field = fields[i];
+			if (field.write == write_policy::never) {
+				continue;
+			}
 			json::value value;
 			binding.ops[i].to_json(binding.ops[i], obj, value);
-			if (value.is_null()) {
+			if (field.write == write_policy::null_if_empty && is_empty_value(binding.ops[i], value)) {
+				value = json::value();
+			} else if (value.is_null()) {
 				continue;
 			}
 			if (field.write == write_policy::if_valid && !is_valid_value(value)) {
@@ -781,6 +808,11 @@ namespace desc
 	}
 
 	void deserialize(const schema_binding& binding, void* obj, const json::object& in)
+	{
+		deserialize(binding, obj, in, read_context{});
+	}
+
+	void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx)
 	{
 		const auto& fields = binding.schema->fields;
 		std::vector<std::string> known;
@@ -802,7 +834,7 @@ namespace desc
 					value = pointer_get_in_object(in, alias);
 				}
 			}
-			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value)) {
+			if (value && !binding.ops[i].from_json(binding.ops[i], obj, *value, ctx)) {
 				egLOG_WARN(log_category, "'{}': value of '{}' does not fit {}, keeping the current one", binding.schema->name, field.key, to_string(field.kind));
 			}
 		}
