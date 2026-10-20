@@ -84,9 +84,12 @@ namespace edt {
 		inp::input_router* m_input_router = nullptr;
 
 		// Import/export
+#if SNK_HAS_ASSIMP
 		std::unique_ptr<edt::model_importer> m_model_importer;
+#endif
 		std::unique_ptr<edt::asset_exporter> m_asset_exporter;
 		std::unique_ptr<edt::asset_export_dialog> m_export_dialog;
+#if SNK_HAS_ASSIMP
 		// The import in flight (m_importing); the job's on_done fills m_import_result or m_import_failure on the main thread.
 		bool m_importing = false;
 		bool m_import_finished = false;
@@ -99,9 +102,10 @@ namespace edt {
 		// Owner of the job callbacks; after the import state and the importer/dialog they touch, so it dies (and cancels) first.
 		ds::lifetime m_lifetime{ ds::lifetime_option::cancel_on_destroy };
 		void start_import(const std::filesystem::path& abs_path);
-		bool poll_import_pipeline();
 		bool poll_import_progress();
 		void finish_import();
+#endif
+		bool poll_import_pipeline();
 
 		// init() steps: the panels, their dependencies and the callbacks between panels and controllers.
 		void create_panels(bool capture_log);

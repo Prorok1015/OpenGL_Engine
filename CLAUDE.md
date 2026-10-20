@@ -162,6 +162,7 @@ Build speed (CMake options, so local/IDE/CI behave the same):
 - `SNK_COMPILER_CACHE=AUTO|ON|OFF` — launcher via ccache (sccache on Windows); a user-set `CMAKE_<LANG>_COMPILER_LAUNCHER` wins
 - `SNK_PCH=AUTO|ON|OFF` — one shared PCH (`cmake/pch/snk_pch.h`) for project targets; AUTO = ON except MSVC with a cache. Missing include that PCH hides? Build with `-DSNK_PCH=OFF` (CI job `ci-linux-clang-debug` does)
 - `SNK_WARNINGS_AS_ERRORS=ON|OFF` — `-Werror` (GCC/Clang) / `/WX` (MSVC) for project targets only, never for `lib3dparty`/Boost/Assimp; ON in every preset and in CI. New compiler with fresh warnings? Build locally with `-DSNK_WARNINGS_AS_ERRORS=OFF`, then fix them
+- `SNK_WITH_ASSIMP=ON|OFF` — OFF (preset `no-assimp`, CI `ci-linux-no-assimp`): assimp is not configured, `scn::model_importer_adapter` and the editor model import are not compiled or registered (`SNK_HAS_ASSIMP=0`), "Import Model" is disabled; loading a `.glb/.gltf/.obj/.fbx` logs "No adapter found" and fails the load. Tests that need it (`scn_model_importer_tests`, `edt_import_cancel_tests`, `desc_repo_roundtrip_tests`) are left out. Code outside the importer must not use assimp; guard new importer-dependent code with `#if SNK_HAS_ASSIMP`
 - `SNK_ASSIMP_FORMATS=MINIMAL|ALL` — MINIMAL (default) builds only the glTF/glb, OBJ, FBX importers and no exporters; `release` preset and `release.yml` use ALL. Need another format locally? `-DSNK_ASSIMP_FORMATS=ALL`
 
 ---

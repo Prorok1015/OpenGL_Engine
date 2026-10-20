@@ -187,6 +187,18 @@ CMakeLists.txt (root)
 - [ ] Assimp-зависимые `.cpp/.h` файлы из `scene/adapters/` помечены или перемещены
 - [ ] Проект собирается (адаптеры временно могут быть отключены до завершения US-34-8)
 
+> **Реализация (#105):** вместо переноса в отдельный модуль (US-34-8) сделана CMake-опция **`SNK_WITH_ASSIMP`** (ON по умолчанию;
+> `ENABLE_ASSIMP_IMPORTER` из пресета и EPIC-34 заменена ею). OFF: `cmake/ThirdParty.cmake` не настраивает assimp,
+> `add_subdirectory(assimp)` не вызывается, `PRIVATE assimp` убран из `resource_system` (там он не использовался) и не
+> добавляется в `scene`/`editor_system`/`snk_engine`; `scn_model_importer_adapter.cpp`, `scn_assimp_resource_system_wrapper.cpp`,
+> `edt_model_importer.cpp`, `edt_filesystem_assimp_io.cpp` не компилируются; макрос `SNK_HAS_ASSIMP=0/1` виден всем таргетам.
+> Редактор: адаптер не регистрируется, `file.import_model` отключён (tooltip с причиной, `invoke` возвращает `disabled`);
+> загрузка `.glb/.gltf/.obj/.fbx` пишет в лог `No adapter found ...` и завершается ошибкой ресурса (раньше `ASSERT_MSG`).
+> Тесты с assimp (`scn_model_importer_tests`, `edt_import_cancel_tests`, `desc_repo_roundtrip_tests`) не собираются при OFF.
+> CI: быстрый job «Linux GCC no Assimp» (пресет `ci-linux-no-assimp`); в полном tier он же ставит SDK и собирает потребителя
+> (в SDK нет ни assimp-таргетов, ни библиотеки). Перенос кода в отдельную библиотеку `assimp_importer` и объединение парсеров
+> остаются в EPIC-34 US-34-8.
+
 ### US-41-8: Убрать хардкод путей и неявные зависимости
 **Файлы:** `Editor/CMakeLists.txt`, `core/core/resource/CMakeLists.txt`, `core/core/video/drivers/impls/opengl/CMakeLists.txt`
 
@@ -205,10 +217,10 @@ CMakeLists.txt (root)
 
 **AC:**
 - [ ] Создан `CMakePresets.json` с пресетами:
-  - `dev-debug` — Debug build, `ENABLE_ASSIMP_IMPORTER=ON`, `ENGINE_PROFILE_MODE=INTERNAL`
+  - `dev-debug` — Debug build, `SNK_WITH_ASSIMP=ON`, `ENGINE_PROFILE_MODE=INTERNAL`
   - `dev-release` — RelWithDebInfo build
   - `release` — Release build, без профайлера
-  - `no-assimp` — Debug build, `ENABLE_ASSIMP_IMPORTER=OFF` (для тестирования сборки без Assimp)
+  - `no-assimp` — Debug build, `SNK_WITH_ASSIMP=OFF` (для тестирования сборки без Assimp)
 - [ ] Build presets: `build-debug`, `build-release`
 - [ ] `cmake --preset dev-debug && cmake --build --preset build-debug` работает из корня проекта
 - [ ] `CMakeUserPresets.json` добавлен в `.gitignore` (для локальных оверрайдов)

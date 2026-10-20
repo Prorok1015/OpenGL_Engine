@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
+#endif
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/level/scn_node_index.h>
 #include "edt_scene_editor.h"
@@ -38,6 +40,7 @@ constexpr const char* TREE_WITH_IDS = R"({
 	}
 })";
 
+#if SNK_HAS_ASSIMP
 // glTF: node "Dup" (carrying a mesh) appears twice under "P"; Assimp keeps both names.
 constexpr const char* GLTF_SAME_NAMES = R"GLTF({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"name":"P","children":[1,2]},{"name":"Dup","mesh":0,"translation":[1,0,0]},{"name":"Dup","mesh":0,"translation":[2,0,0],"children":[3]},{"name":"Leaf"}],"meshes":[{"name":"TriMesh","primitives":[{"attributes":{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2},"indices":3,"material":0}]}],"materials":[{"name":"Red","pbrMetallicRoughness":{"baseColorFactor":[1,0,0,1]}}],"animations":[{"name":"Move","samplers":[{"input":4,"output":5,"interpolation":"LINEAR"}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}],"buffers":[{"byteLength":136,"uri":"data:application/octet-stream;base64,AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAD8AAIA/AAABAAIAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAIEEAAAAAAAAAAA=="}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},{"buffer":0,"byteOffset":72,"byteLength":24},{"buffer":0,"byteOffset":96,"byteLength":6},{"buffer":0,"byteOffset":104,"byteLength":8},{"buffer":0,"byteOffset":112,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,0],"max":[1,1,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},{"bufferView":2,"componentType":5126,"count":3,"type":"VEC2"},{"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},{"bufferView":4,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[2]},{"bufferView":5,"componentType":5126,"count":2,"type":"VEC3"}]})GLTF";
 
@@ -52,6 +55,7 @@ f 1 2 3
 g Tri
 f 4 5 6
 )";
+#endif
 
 void collect_ids(const prefab_node& node, std::vector<uint64_t>& out)
 {
@@ -66,18 +70,22 @@ std::vector<uint64_t> ids_of(const scn::prefab_desc& d)
 	return out;
 }
 
+#if SNK_HAS_ASSIMP
 void collect_names(const prefab_node& node, std::vector<std::string>& out)
 {
 	out.push_back(node.name);
 	for (const auto& child : node.children) collect_names(child, out);
 }
+#endif
 
 struct node_id_fixture : test_util::scene_env
 {
+#if SNK_HAS_ASSIMP
 	node_id_fixture()
 	{
 		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
 	}
+#endif
 
 	scn::prefab_desc parse(const char* text)
 	{
@@ -94,12 +102,14 @@ struct node_id_fixture : test_util::scene_env
 		return o;
 	}
 
+#if SNK_HAS_ASSIMP
 	std::shared_ptr<scn::prefab_desc> import(const char* name, const char* text)
 	{
 		auto tag = res::tag{ std::string("memory://models/") + name };
 		rs->store(tag, test_util::to_bytes(text));
 		return require_loaded<scn::prefab_desc>(tag).get_sync();
 	}
+#endif
 };
 
 }
@@ -762,6 +772,8 @@ BOOST_FIXTURE_TEST_CASE(Editor_TransformCommitInsideANestedInstanceIsRelativeToT
 
 // ---------------------------------------------------------------- importer
 
+#if SNK_HAS_ASSIMP
+
 BOOST_AUTO_TEST_CASE(Importer_IdsAreDeterministicAcrossImports)
 {
 	auto a = import("d1/x.obj", OBJ_TWO_SAME_NAME);
@@ -801,6 +813,8 @@ BOOST_AUTO_TEST_CASE(Importer_WrittenIdsSurviveSaveAndReload)
 	pump();
 	BOOST_TEST((ids_of(*a) == ids_of(again)));
 }
+
+#endif
 
 // ---------------------------------------------------------------- node_index
 

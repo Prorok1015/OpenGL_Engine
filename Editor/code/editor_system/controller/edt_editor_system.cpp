@@ -70,7 +70,9 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
 	, m_gui(gui_sys)
+#if SNK_HAS_ASSIMP
 	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys))
+#endif
 	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
 	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
 {
@@ -234,7 +236,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		begin_level_load(res::tag::make(relative.string()));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	};
+#if SNK_HAS_ASSIMP
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
+#endif
 	hooks.exit = m_exit_action;
 	hooks.resources_path = res::resource_system::get_resources_path();
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
@@ -380,12 +384,15 @@ bool edt::editor_system::poll_import_pipeline()
 		return true;
 	}
 
+#if SNK_HAS_ASSIMP
 	if (m_importing) {
 		return poll_import_progress();
 	}
+#endif
 	return false;
 }
 
+#if SNK_HAS_ASSIMP
 void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 {
 	if (m_importing) return;
@@ -480,6 +487,7 @@ bool edt::editor_system::poll_import_progress()
 	egLOG("Editor/Import", "Failed to finalize import");
 	return false;
 }
+#endif
 
 // ─── Level load ─────────────────────────────────────────────────────────────
 

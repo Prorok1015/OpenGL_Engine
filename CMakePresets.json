@@ -49,9 +49,9 @@
       "name": "no-assimp",
       "inherits": "dev-debug",
       "displayName": "Dev Debug (no Assimp importer)",
-      "description": "Debug build to validate compilation without the Assimp importer (option lands in EPIC-34)",
+      "description": "Debug build without the Assimp importer (SNK_WITH_ASSIMP=OFF): assimp is not configured, the model importer and the editor model import are not compiled",
       "cacheVariables": {
-        "ENABLE_ASSIMP_IMPORTER": "OFF"
+        "SNK_WITH_ASSIMP": "OFF"
       }
     },
 
@@ -98,6 +98,13 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "SNK_PCH": "OFF"
       }
+    },
+    {
+      "name": "ci-linux-no-assimp",
+      "inherits": "ci-linux",
+      "displayName": "CI Linux GCC without Assimp",
+      "description": "SNK_WITH_ASSIMP=OFF: the model importer and the editor model import are not compiled",
+      "cacheVariables": { "SNK_WITH_ASSIMP": "OFF" }
     },
     {
       "name": "ci-linux-asan",

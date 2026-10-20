@@ -6,7 +6,9 @@
 #include <snk/input/inp_input_system.h>
 #include "edt_editor_system.h"
 #include <snk/config/cfg_api.h>
+#if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
+#endif
 #include <snk/desc/desc_system.h>
 
 #include <snk/render/rnd_frame_assembler.h>
@@ -27,8 +29,12 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& res = data.require<res::resource_system>();
 	auto& win_service = data.require<wnd::window_system>();
 
+#if SNK_HAS_ASSIMP
 	auto& desc_system = data.require<desc::desc_system>();
 	res.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_system), std::ref(res));
+#else
+	egLOG_WARN("Editor/Import", "built without assimp (SNK_WITH_ASSIMP=OFF): .glb/.gltf/.obj/.fbx models cannot be loaded or imported");
+#endif
 
 	auto logo = res.require_sync<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
 	// A missing logo is cosmetic: keep starting the editor without it.
@@ -46,5 +52,7 @@ void editor::editor_module::shutdown_services(ds::app_data_storage& data)
 {
 	using namespace components;
 	editor_term(data);
+#if SNK_HAS_ASSIMP
 	data.require<res::resource_system>().unregistrate_adapter(scn::model_importer_adapter::INFO);
+#endif
 }

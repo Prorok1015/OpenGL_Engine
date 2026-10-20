@@ -330,7 +330,11 @@ namespace res
 		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
 			ds::type_id type = ds::type_id::make<RESOURCE>();
 			auto found = find_adapter_recursive<RESOURCE>(tag, &type);
-			ASSERT_MSG(found, "No adapter found for resource type!");
+			if (!found) {
+				// Not fatal: a format whose importer is not built in (SNK_WITH_ASSIMP=OFF) ends up here. The block below
+				// settles with an error, so whoever waits for it fails instead of the process.
+				egLOG_ERROR("res/adapter", "No adapter found for '{}' (extension '{}'): the importer for this format is not registered or not built in", tag.view(), tag.extension());
+			}
 
 			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, type });
 			if (is_new) {

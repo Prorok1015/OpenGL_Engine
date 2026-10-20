@@ -206,7 +206,7 @@ prefab_comp_node { type_name, parent_desc, overrides(json::object) }
 
 ## Model Import Pipeline
 
-Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_adapter`:
+Models (`.glb`, `.obj`, `.fbx`, `.gltf`) are loaded via `scn::model_importer_adapter` (only with `SNK_WITH_ASSIMP=ON`; with OFF there is no adapter, "Import Model" is disabled and loading such a file fails with a "No adapter found" log):
 - Outputs `prefab_desc` (not legacy prototype)
 - Geometry stored at `memory://path/name.geom.desc` (separate resource)
 - Mesh nodes → `mesh_node_desc` components referencing geometry by tag
