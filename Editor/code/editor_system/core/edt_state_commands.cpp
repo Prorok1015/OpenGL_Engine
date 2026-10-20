@@ -4,6 +4,7 @@
 #include <snk/editor/edt_selection_service.h>
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_json_schema.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/desc/desc_system.h>
@@ -375,6 +376,9 @@ namespace {
 			if (const json::value* ref = filter.if_contains("under")) {
 				located at;
 				if (!locate(*scene, *ref, at, error)) return error;
+				if (at.world.name != world.name) {
+					return cmd::result::failure(cmd::codes::invalid_args, std::format("under is a node of world '{}', but the query is for world '{}'; pass world", at.world.name, world.name));
+				}
 				if (!at.target.empty()) {
 					return cmd::result::failure(cmd::codes::invalid_args, "under is inside a prefab instance; scene.query lists the nodes of the world desc, use node.get for the content of an instance");
 				}
@@ -528,27 +532,31 @@ namespace {
 			bool has_children = false;
 		};
 		std::vector<child_row> rows;
+		std::size_t child_total = 0;
 		const bool composed = !at.target.empty() || !at.owner->overrides.empty() || references_prefab(*at.owner);
+		// The cap applies before any child is expanded: expanding costs a copy of the prefab content of each one.
 		if (composed) {
-			for (const auto& listed : edt::override_edit::list_children(sources.assembler, *at.owner, at.target)) {
+			for (const auto& listed : edt::override_edit::list_children(sources.assembler, *at.owner, at.target, max_children_listed, &child_total)) {
 				rows.push_back({ listed.node.node_id, listed.node.name, sorted_keys(listed.node.components), listed.has_children });
 			}
 		} else {
+			child_total = at.owner->children.size();
 			for (const auto& child : at.owner->children) {
+				if (rows.size() >= max_children_listed) break;
 				rows.push_back({ child.node_id, child.name, sorted_keys(child.components), !child.children.empty() });
 			}
 		}
 		json::array children;
-		for (std::size_t i = 0; i < rows.size() && i < max_children_listed; ++i) {
+		for (auto& row_data : rows) {
 			json::object row;
-			row["ref"] = ref_json(at.world.name, at.path, rows[i].id);
-			row["name"] = json::string(rows[i].name);
-			row["components"] = std::move(rows[i].components);
-			row["has_children"] = rows[i].has_children;
+			row["ref"] = ref_json(at.world.name, at.path, row_data.id);
+			row["name"] = json::string(row_data.name);
+			row["components"] = std::move(row_data.components);
+			row["has_children"] = row_data.has_children;
 			children.push_back(std::move(row));
 		}
-		out["child_count"] = static_cast<std::uint64_t>(rows.size());
-		out["children_truncated"] = rows.size() > max_children_listed;
+		out["child_count"] = static_cast<std::uint64_t>(child_total);
+		out["children_truncated"] = child_total > rows.size();
 		out["children"] = std::move(children);
 
 		// The records the owner holds: all of them for the node itself, those aimed at this node inside an instance.
@@ -593,23 +601,132 @@ namespace {
 		std::size_t layer = 0;
 	};
 
+	struct scan_state
+	{
+		std::size_t scanned = 0;
+		std::size_t bad_names = 0;
+		bool truncated = false;
+	};
+
+	bool valid_utf8(std::string_view text)
+	{
+		std::size_t i = 0;
+		while (i < text.size()) {
+			const auto c = static_cast<unsigned char>(text[i]);
+			if (c < 0x80) {
+				++i;
+				continue;
+			}
+			std::size_t extra = 0;
+			std::uint32_t code = 0;
+			if (c >= 0xC2 && c <= 0xDF) {
+				extra = 1;
+				code = c & 0x1Fu;
+			} else if (c >= 0xE0 && c <= 0xEF) {
+				extra = 2;
+				code = c & 0x0Fu;
+			} else if (c >= 0xF0 && c <= 0xF4) {
+				extra = 3;
+				code = c & 0x07u;
+			} else {
+				return false;
+			}
+			if (i + extra >= text.size()) return false;
+			for (std::size_t k = 1; k <= extra; ++k) {
+				const auto next = static_cast<unsigned char>(text[i + k]);
+				if ((next & 0xC0) != 0x80) return false;
+				code = (code << 6) | (next & 0x3Fu);
+			}
+			if (extra == 2 && (code < 0x800 || (code >= 0xD800 && code <= 0xDFFF))) return false;
+			if (extra == 3 && (code < 0x10000 || code > 0x10FFFF)) return false;
+			i += extra + 1;
+		}
+		return true;
+	}
+
+	// Control characters (a NUL ends a path at the OS call) and backslashes (a separator on Windows) never belong in a
+	// path or a pattern the agent sends.
+	bool safe_text(std::string_view text)
+	{
+		return std::ranges::none_of(text, [](char c) {
+			const auto u = static_cast<unsigned char>(c);
+			return u < 0x20 || u == 0x7f || c == '\\';
+		});
+	}
+
+	// `candidate` lies inside `root` once both are normalised.
+	bool is_under(const fs::path& root, const fs::path& candidate)
+	{
+		const fs::path relative = candidate.lexically_normal().lexically_relative(root.lexically_normal());
+		return !relative.empty() && *relative.begin() != "..";
+	}
+
+	// Every component of root/relative is a real directory, not a link.
+	bool plain_directory(const fs::path& root, const fs::path& relative)
+	{
+		fs::path current = root;
+		for (const auto& part : relative) {
+			if (part.empty()) continue;
+			current /= part;
+			std::error_code ec;
+			const auto status = fs::symlink_status(current, ec);
+			if (ec || status.type() != fs::file_type::directory) return false;
+		}
+		return true;
+	}
+
 	void collect_assets(const std::vector<fs::path>& layers, const fs::path& directory, int depth,
-		std::vector<asset_row>& out, std::size_t& scanned, bool& truncated)
+		std::vector<asset_row>& out, scan_state& state)
 	{
 		if (depth > max_asset_depth) {
-			truncated = true;
+			state.truncated = true;
 			return;
 		}
-		for (const auto& entry : edt::list_merged_directory(layers, directory)) {
-			if (scanned >= max_asset_scan) {
-				truncated = true;
-				return;
+#ifdef _WIN32
+		constexpr bool case_insensitive = true;
+#else
+		constexpr bool case_insensitive = false;
+#endif
+		struct found
+		{
+			std::string name;
+			fs::path path;
+			bool is_dir = false;
+			std::size_t layer = 0;
+		};
+		// An entry of an upper layer shadows the same name below, whatever its kind.
+		std::map<std::string, found> merged;
+		for (std::size_t i = 0; i < layers.size() && !state.truncated; ++i) {
+			const fs::path dir = layers[i] / directory;
+			if (!is_under(layers[i], dir) || !plain_directory(layers[i], directory)) continue;
+			std::error_code ec;
+			for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator{}; it.increment(ec)) {
+				if (state.scanned >= max_asset_scan) {
+					state.truncated = true;
+					break;
+				}
+				++state.scanned;
+				std::error_code status_ec;
+				const fs::file_status status = it->symlink_status(status_ec);
+				if (status_ec) continue;
+				const bool is_dir = status.type() == fs::file_type::directory;
+				// Links, devices and sockets are not assets (and a link could lead out of the layer).
+				if (!is_dir && status.type() != fs::file_type::regular) continue;
+				std::string name = it->path().filename().string();
+				if (!valid_utf8(name)) {
+					++state.bad_names;
+					continue;
+				}
+				const std::string key = edt::layer_merge_key(name, case_insensitive);
+				merged[key] = found{ std::move(name), it->path(), is_dir, i };
 			}
-			++scanned;
+		}
+		for (const auto& [key, entry] : merged) {
+			const fs::path relative = directory / entry.name;
 			if (entry.is_dir) {
-				collect_assets(layers, entry.relative, depth + 1, out, scanned, truncated);
+				if (!state.truncated) collect_assets(layers, relative, depth + 1, out, state);
 			} else {
-				out.push_back({ entry.relative.generic_string(), entry.path, entry.layer });
+				out.push_back({ relative.generic_string(), entry.path, entry.layer });
 			}
 		}
 	}
@@ -652,10 +769,24 @@ namespace {
 		if (const json::value* v = args.if_contains("kind")) kind = text_of(v->as_string());
 		if (const json::value* v = args.if_contains("directory")) directory = text_of(v->as_string());
 
+		// The schema subset has no maxLength or pattern, so the limits are enforced here.
+		constexpr std::size_t max_text = 512;
+		if (glob.size() > max_text || kind.size() > max_text || directory.size() > max_text) {
+			return cmd::result::failure(cmd::codes::invalid_args, "glob, kind and directory are limited to 512 characters");
+		}
+		if (!safe_text(glob) || !safe_text(kind) || !safe_text(directory)) {
+			return cmd::result::failure(cmd::codes::invalid_args, "glob, kind and directory take no control characters and no backslashes");
+		}
+		if (directory.starts_with("res://")) directory.erase(0, 6);
 		fs::path relative = fs::path(directory).lexically_normal();
-		if (relative.is_absolute() || relative.has_root_name() || relative.has_root_directory()
-			|| std::ranges::any_of(relative, [](const fs::path& part) { return part == ".."; })) {
-			return cmd::result::failure(cmd::codes::invalid_args, "directory is a path under res:// (no leading slash, no ..)");
+		bool plain = directory.find(':') == std::string::npos && !relative.is_absolute() && !relative.has_root_name() && !relative.has_root_directory();
+		for (const auto& part : relative) {
+			const std::string text = part.string();
+			// Windows drops a trailing dot or space from a name, so "..." or ".. " would reach the parent there.
+			if (text == ".." || (text != "." && !text.empty() && (text.back() == '.' || text.back() == ' '))) plain = false;
+		}
+		if (!plain) {
+			return cmd::result::failure(cmd::codes::invalid_args, "directory is a path under res:// (no leading slash, no .., no drive or stream colon)");
 		}
 		if (relative == ".") relative.clear();
 
@@ -673,9 +804,11 @@ namespace {
 
 		const std::vector<fs::path> layers = sources.asset_layers ? sources.asset_layers() : std::vector<fs::path>{};
 		std::vector<asset_row> rows;
-		std::size_t scanned = 0;
-		bool truncated = false;
-		if (!layers.empty()) collect_assets(layers, relative, 0, rows, scanned, truncated);
+		scan_state state;
+		if (!layers.empty()) collect_assets(layers, relative, 0, rows, state);
+		if (state.bad_names > 0) {
+			egLOG_WARN("editor", "asset.query skipped {} names that are not valid UTF-8", state.bad_names);
+		}
 
 		// Keyset paging over the sorted paths: an asset added or removed between two pages moves no other row.
 		std::ranges::sort(rows, {}, &asset_row::path);
@@ -705,7 +838,8 @@ namespace {
 
 		json::object out;
 		out["items"] = std::move(items);
-		out["scan_truncated"] = truncated;
+		out["scan_truncated"] = state.truncated;
+		out["skipped_names"] = static_cast<std::uint64_t>(state.bad_names);
 		if (more) out["next_cursor"] = json::string(std::format("{:x}.{}", filter, hex_encode(last)));
 		return cmd::result::success(std::move(out));
 	}
@@ -898,7 +1032,8 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 				}
 			},
 			"next_cursor": { "type": "string" },
-			"scan_truncated": { "type": "boolean" }
+			"scan_truncated": { "type": "boolean" },
+			"skipped_names": { "type": "integer" }
 		},
 		"required": ["items", "scan_truncated"]
 	})", "asset.query result");

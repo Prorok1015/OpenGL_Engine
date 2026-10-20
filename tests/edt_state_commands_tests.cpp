@@ -40,6 +40,27 @@ constexpr const char* WORLD = R"({
 	]
 })";
 
+// A second world: Inst instantiates a prefab with two nodes and holds override records for both.
+constexpr const char* PREFAB = R"({
+	"__type": "prefab_desc", "__version": 3,
+	"children": [
+		{ "__id": "00000000000000c1", "name": "arm", "components": { "stat": { "__type": "stat_desc", "hp": 3 } } },
+		{ "__id": "00000000000000c2", "name": "leg", "components": { "stat": { "__type": "stat_desc", "hp": 4 } } }
+	]
+})";
+
+constexpr const char* WORLD_1 = R"({
+	"__type": "world_desc", "__version": 3, "name": "w1", "systems": [],
+	"children": [
+		{ "__id": "00000000000000e1", "name": "Inst",
+		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/crate.prefab.desc" } },
+		  "overrides": [
+			{ "target": ["00000000000000c1"], "component": "stat", "path": "/hp", "value": 9 },
+			{ "target": ["00000000000000c2"], "component": "stat", "path": "/hp", "value": 5 } ] },
+		{ "__id": "00000000000000e2", "name": "Other" }
+	]
+})";
+
 // Two resource layers on disk: the upper one shadows models/ship.glb of the lower one.
 struct temp_layers
 {
@@ -83,6 +104,11 @@ struct state_fixture : test_util::scene_env
 		scene.world_descs.push_back(*world);
 		scene.world_names.push_back("w0");
 		scene.active_world_idx = 0;
+		put("crate.prefab.desc", PREFAB);
+		auto world_1 = load<scn::world_desc>(put("w1.desc", WORLD_1));
+		BOOST_REQUIRE(world_1);
+		scene.world_descs.push_back(*world_1);
+		scene.world_names.push_back("w1");
 
 		edt::asset_kind_desc prefab_kind;
 		prefab_kind.id = "prefab";
@@ -309,6 +335,76 @@ BOOST_AUTO_TEST_CASE(NodeGet_ReturnsTheNodeItsComponentsAsDescJsonAndItsChildren
 	BOOST_TEST(json::serialize(at(lid, "/parent")) == R"({"context":"w0","path":["00000000000000a3"]})");
 }
 
+BOOST_AUTO_TEST_CASE(NodeGet_ANodeInsideAPrefabInstanceIsTheBaseWithTheOwnersRecordsOnTop)
+{
+	const std::string inst = "00000000000000e1";
+
+	const auto arm = call("node.get", R"({"ref":)" + ref({ inst, "00000000000000c1" }, "w1") + "}");
+	BOOST_REQUIRE_MESSAGE(arm.ok, arm.error);
+	BOOST_TEST(at(arm, "/in_instance").as_bool());
+	BOOST_TEST(at(arm, "/name").as_string() == "arm");
+	BOOST_TEST(at(arm, "/components/stat/__type").as_string() == "stat_desc");
+	BOOST_TEST(at(arm, "/components/stat/hp").to_number<int>() == 9); // the prefab says 3
+	BOOST_TEST(at(arm, "/overrides").as_array().size() == 1u);
+	BOOST_TEST(json::serialize(at(arm, "/overrides/0/target")) == R"(["00000000000000c1"])");
+	BOOST_TEST(at(arm, "/overrides/0/component").as_string() == "stat");
+	BOOST_TEST(at(arm, "/transform").is_object());
+
+	const auto leg = call("node.get", R"({"ref":)" + ref({ inst, "00000000000000c2" }, "w1") + "}");
+	BOOST_REQUIRE_MESSAGE(leg.ok, leg.error);
+	BOOST_TEST(at(leg, "/components/stat/hp").to_number<int>() == 5);
+	BOOST_TEST(at(leg, "/overrides").as_array().size() == 1u);
+
+	// The instance node itself: its prefab, the content as children, all of its records.
+	const auto owner = call("node.get", R"({"ref":)" + ref({ inst }, "w1") + "}");
+	BOOST_REQUIRE_MESSAGE(owner.ok, owner.error);
+	BOOST_TEST(!at(owner, "/in_instance").as_bool());
+	BOOST_TEST(at(owner, "/prefab").as_string() == "memory://t/crate.prefab.desc");
+	BOOST_TEST(at(owner, "/components").as_object().empty());
+	BOOST_TEST(at(owner, "/children").as_array().size() == 2u);
+	BOOST_TEST(at(owner, "/children/0/name").as_string() == "arm");
+	BOOST_TEST(at(owner, "/overrides").as_array().size() == 2u);
+
+	BOOST_TEST(call("node.get", R"({"ref":)" + ref({ inst, "00000000000000ee" }, "w1") + "}").code == cmd::codes::not_found);
+}
+
+BOOST_AUTO_TEST_CASE(NodeGet_ListsAtMostTwoHundredChildrenAndSaysSo)
+{
+	scene.world_descs.push_back(scene.world_descs[0]);
+	scene.world_names.push_back("big");
+	auto& root = scene.world_descs.back().get_root();
+	root.children.clear();
+	for (std::uint64_t i = 1; i <= 205; ++i) {
+		scn::prefab_desc::prefab_node node;
+		node.name = "n" + std::to_string(i);
+		node.node_id = 0x1000 + i;
+		root.children.push_back(std::move(node));
+	}
+
+	const auto result = call("node.get", R"({"ref":)" + ref({}, "big") + "}");
+
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_TEST(at(result, "/child_count").as_uint64() == 205u);
+	BOOST_TEST(at(result, "/children").as_array().size() == 200u);
+	BOOST_TEST(at(result, "/children_truncated").as_bool());
+}
+
+BOOST_AUTO_TEST_CASE(SceneQuery_UnderMustBeANodeOfTheQueriedWorld)
+{
+	const std::string other_world_node = ref({ "00000000000000a3" }, "w0");
+
+	const auto crossed = call("scene.query", R"({"world":"w1","filter":{"under":)" + other_world_node + "}}");
+	BOOST_TEST(!crossed.ok);
+	BOOST_TEST(crossed.code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"filter":{"under":)" + ref({ "00000000000000e1" }, "w1") + "}}").code == cmd::codes::invalid_args);
+
+	const auto own = call("scene.query", R"({"world":"w1","filter":{"under":)" + ref({}, "w1") + "}}");
+	BOOST_REQUIRE_MESSAGE(own.ok, own.error);
+	BOOST_TEST((names_of(own) == std::vector<std::string>{ "Inst", "Other" }));
+	BOOST_TEST(at(own, "/world").as_string() == "w1");
+	BOOST_TEST(at(own, "/items/0/ref/context").as_string() == "w1");
+}
+
 BOOST_AUTO_TEST_CASE(NodeGet_TheWorldRootIsTheEmptyPathAndComponentsCanBeFiltered)
 {
 	const auto root = call("node.get", R"({"ref":)" + ref({}) + "}");
@@ -437,6 +533,42 @@ BOOST_AUTO_TEST_CASE(ComponentSchema_OfTheCameraHasRangesDefaultsNestedKeysAndEn
 	BOOST_TEST(has_depth);
 }
 
+BOOST_AUTO_TEST_CASE(ComponentSchema_ARangeWithoutSpanIsNoBound)
+{
+	// camera_desc /transform/rotation is range(0, 0, 0.5): only a drag step, no bounds.
+	const auto result = call("component.schema", R"({"type":"camera_desc"})");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	boost::system::error_code ec;
+	BOOST_TEST(result.value.find_pointer("/schema/properties/transform/properties/rotation/items/minimum", ec) == nullptr);
+	BOOST_TEST(result.value.find_pointer("/schema/properties/transform/properties/rotation/items/maximum", ec) == nullptr);
+	BOOST_TEST(result.value.find_pointer("/schema/properties/transform/properties/rotation/minimum", ec) == nullptr);
+	// A bounded field keeps both.
+	BOOST_TEST(at(result, "/schema/properties/far_distance/minimum").to_number<double>() == 1.0);
+	BOOST_TEST(at(result, "/schema/properties/far_distance/maximum").to_number<double>() == 100000.0);
+}
+
+BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_StructuresThatRefereToThemselvesStayBounded)
+{
+	desc::schema_registry registry;
+	desc::type_schema node;
+	node.name = "loop";
+	for (const char* name : { "a", "b", "c", "d" }) {
+		desc::field_schema field;
+		field.name = name;
+		field.key = std::string("/") + name;
+		field.kind = desc::field_kind::structure;
+		field.ref_type = "loop";
+		node.fields.push_back(field);
+	}
+	const desc::type_schema* stored = registry.add(node);
+	BOOST_REQUIRE(stored != nullptr);
+
+	const json::object out = desc::to_json_schema(*stored, registry);
+
+	// 4 fields per level, 8 levels deep is 87381 nodes unbounded; the budget stops it far earlier.
+	BOOST_TEST(json::serialize(out).size() < 600000u);
+}
+
 BOOST_AUTO_TEST_CASE(ComponentSchema_UnknownAndSchemalessTypesAreNotFound)
 {
 	const auto unknown = call("component.schema", R"({"type":"no_such_desc"})");
@@ -512,6 +644,64 @@ BOOST_AUTO_TEST_CASE(AssetQuery_FiltersByGlobKindAndDirectory)
 			BOOST_TEST(call("asset.query", std::string(R"({"directory":")") + bad + "\"}").code == cmd::codes::invalid_args);
 		}
 	}
+}
+
+BOOST_AUTO_TEST_CASE(AssetQuery_DirectoryAndPatternsCannotReachOutsideTheLayers)
+{
+	// An embedded NUL ends the path at the OS call: "..\0x" would be ".." there.
+	for (const char* args : {
+		R"({"directory":"..\u0000x"})",
+		R"({"directory":"models\u0000"})",
+		R"({"directory":"models\\..\\.."})",
+		R"({"directory":"..\\"})",
+		R"({"directory":"C:\\"})",
+		R"({"directory":"c:"})",
+		R"({"directory":"models:stream"})",
+		R"({"directory":"..."})",
+		R"({"directory":".. "})",
+		R"({"directory":"res://../x"})",
+		R"({"directory":"res:///etc"})",
+		R"({"directory":"models\n"})",
+		R"({"glob":"a\u0000b"})",
+		R"({"kind":"\u0001"})" }) {
+		BOOST_TEST_CONTEXT(args) {
+			const auto result = call("asset.query", args);
+			BOOST_TEST(!result.ok);
+			BOOST_TEST(result.code == cmd::codes::invalid_args);
+		}
+	}
+	BOOST_TEST(call("asset.query", std::string(R"({"directory":")") + std::string(513, 'a') + ""}").code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(AssetQuery_ADirectoryMayCarryTheResPrefix)
+{
+	BOOST_TEST((names_of_tags(call("asset.query", R"({"directory":"res://models"})")) == std::vector<std::string>{ "res://models/ship.glb" }));
+	BOOST_TEST(names_of_tags(call("asset.query", R"({"directory":"res://"})")).size() == 4u);
+}
+
+BOOST_AUTO_TEST_CASE(AssetQuery_SkipsLinksAndNamesThatAreNotUtf8)
+{
+	std::error_code ec;
+	fs::create_symlink(disk.layers[0] / "a.txt", disk.layers[1] / "link.txt", ec);
+	const bool file_link = !ec;
+	fs::create_directory_symlink(disk.layers[0] / "models", disk.layers[1] / "models_link", ec);
+	const bool dir_link = !ec;
+	// A file name that is not UTF-8 would make the JSON of the answer invalid; not every file system takes one.
+	const std::string bad_name = "bad\xff.txt";
+	std::ofstream bad(disk.layers[1] / bad_name, std::ios::binary);
+	const bool bad_made = bad.good();
+	bad.close();
+
+	const auto result = call("asset.query");
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+
+	const auto tags = names_of_tags(result);
+	BOOST_TEST((tags == std::vector<std::string>{
+		"res://a.txt", "res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
+	BOOST_TEST(at(result, "/skipped_names").as_uint64() == (bad_made ? 1u : 0u));
+	(void)file_link;
+	(void)dir_link;
+	BOOST_TEST_MESSAGE("links made: file " << file_link << ", directory " << dir_link << ", non-utf8 name " << bad_made);
 }
 
 BOOST_AUTO_TEST_CASE(AssetQuery_PagesWithAKeysetCursorThatSurvivesChangesOfTheAssets)

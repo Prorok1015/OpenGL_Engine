@@ -33,7 +33,10 @@ namespace edt::override_edit
 
 	// The children of the node `target` addresses (empty target: the owner itself), composed like find_base_node does,
 	// with the owner's own records applied. For an owner these include the owner's own children.
-	std::vector<listed_node> list_children(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target);
+	// `limit` bounds the children that are expanded (each one costs a copy of its prefab content); `total`, if given,
+	// receives how many children there are.
+	std::vector<listed_node> list_children(scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target,
+		std::size_t limit = static_cast<std::size_t>(-1), std::size_t* total = nullptr);
 
 	// Expanding an instance copies prefab content and logs about broken input, so the panels do it once per selection or
 	// edit instead of once per frame. Results are kept per (active world, owner node id, target) and dropped as a whole

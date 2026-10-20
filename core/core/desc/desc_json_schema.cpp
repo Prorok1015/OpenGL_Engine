@@ -10,6 +10,9 @@
 namespace {
 	// Nested structures are bounded so a cyclic registry cannot recurse forever.
 	constexpr int max_depth = 8;
+	// Fields turned into schema nodes over one call; a registry whose structures refer to each other would otherwise
+	// grow with the number of paths through it, not with its size.
+	constexpr int max_fields = 2000;
 
 	std::size_t components_of(desc::field_kind kind)
 	{
@@ -28,9 +31,9 @@ namespace {
 		return boost::json::object{ { "type", boost::json::string(type) } };
 	}
 
-	boost::json::object object_schema(const desc::type_schema& schema, const desc::schema_registry& resolve, int depth);
+	boost::json::object object_schema(const desc::type_schema& schema, const desc::schema_registry& resolve, int depth, int& budget);
 
-	boost::json::object value_schema(desc::field_kind kind, const std::string& ref_type, const desc::schema_registry& resolve, int depth)
+	boost::json::object value_schema(desc::field_kind kind, const std::string& ref_type, const desc::schema_registry& resolve, int depth, int& budget)
 	{
 		using desc::field_kind;
 		switch (kind) {
@@ -86,8 +89,8 @@ namespace {
 		}
 		case field_kind::structure: {
 			const desc::type_schema* nested = resolve.find(ref_type);
-			if (nested && depth < max_depth) {
-				return object_schema(*nested, resolve, depth + 1);
+			if (nested && depth < max_depth && budget > 0) {
+				return object_schema(*nested, resolve, depth + 1, budget);
 			}
 			return typed("object");
 		}
@@ -97,19 +100,20 @@ namespace {
 		return boost::json::object{};
 	}
 
-	boost::json::object field_schema_of(const desc::field_schema& field, const desc::schema_registry& resolve, int depth)
+	boost::json::object field_schema_of(const desc::field_schema& field, const desc::schema_registry& resolve, int depth, int& budget)
 	{
 		boost::json::object out;
 		if (field.kind == desc::field_kind::array) {
 			out = typed("array");
-			out["items"] = value_schema(field.element, field.ref_type, resolve, depth);
+			out["items"] = value_schema(field.element, field.ref_type, resolve, depth, budget);
 		} else {
-			out = value_schema(field.kind, field.ref_type, resolve, depth);
+			out = value_schema(field.kind, field.ref_type, resolve, depth, budget);
 		}
-		if (field.range) {
-			// A vector or colour keeps the bounds on its components.
+		// max <= min means "no bounds" (the inspector reads it so: a drag step only), not a value that must be exactly min.
+		if (field.range && field.range->max > field.range->min) {
+			// A vector, colour or array keeps the bounds on its elements.
 			boost::json::object* bounded = &out;
-			if (components_of(field.kind) != 0) {
+			if (components_of(field.kind) != 0 || field.kind == desc::field_kind::array) {
 				bounded = &out["items"].as_object();
 			}
 			(*bounded)["minimum"] = field.range->min;
@@ -182,7 +186,7 @@ namespace {
 		place(it->value().as_object()["properties"].as_object(), tokens, index + 1, std::move(leaf));
 	}
 
-	boost::json::object object_schema(const desc::type_schema& schema, const desc::schema_registry& resolve, int depth)
+	boost::json::object object_schema(const desc::type_schema& schema, const desc::schema_registry& resolve, int depth, int& budget)
 	{
 		boost::json::object properties;
 		for (const auto& field : schema.fields) {
@@ -190,7 +194,8 @@ namespace {
 			if (tokens.empty() || tokens.front().empty()) {
 				continue;
 			}
-			place(properties, tokens, 0, field_schema_of(field, resolve, depth));
+			--budget;
+			place(properties, tokens, 0, field_schema_of(field, resolve, depth, budget));
 		}
 		boost::json::object out;
 		out["type"] = "object";
@@ -201,7 +206,8 @@ namespace {
 
 boost::json::object desc::to_json_schema(const type_schema& schema, const schema_registry& resolve)
 {
-	boost::json::object out = object_schema(schema, resolve, 0);
+	int budget = max_fields;
+	boost::json::object out = object_schema(schema, resolve, 0, budget);
 	out["$schema"] = "https://json-schema.org/draft/2020-12/schema";
 	out["title"] = boost::json::string(schema.name);
 	out["x-version"] = schema.version;
