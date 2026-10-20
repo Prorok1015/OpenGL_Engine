@@ -109,6 +109,7 @@ struct state_fixture : test_util::scene_env
 	static std::vector<std::string> names_of(const cmd::result& result)
 	{
 		std::vector<std::string> names;
+		BOOST_REQUIRE_MESSAGE(result.ok && result.value.as_object().contains("items"), "no items in the result: " + result.error);
 		for (const auto& item : result.value.as_object().at("items").as_array()) {
 			names.emplace_back(item.at_pointer("/name").as_string().c_str());
 		}
@@ -118,6 +119,7 @@ struct state_fixture : test_util::scene_env
 	static std::vector<std::string> names_of_tags(const cmd::result& result)
 	{
 		std::vector<std::string> tags;
+		BOOST_REQUIRE_MESSAGE(result.ok && result.value.as_object().contains("items"), "no items in the result: " + result.error);
 		for (const auto& item : result.value.as_object().at("items").as_array()) {
 			tags.emplace_back(item.at_pointer("/tag").as_string().c_str());
 		}
@@ -247,7 +249,8 @@ BOOST_AUTO_TEST_CASE(SceneQuery_ACursorFromBeforeAnEditIsStale)
 	const auto stale = call("scene.query", args);
 	BOOST_TEST(!stale.ok);
 	BOOST_TEST(stale.code == cmd::codes::stale);
-	BOOST_TEST(names_of(stale).empty());
+	BOOST_TEST(!stale.error.empty());
+	BOOST_TEST(!stale.value.as_object().contains("items"));
 
 	const auto again = call("scene.query", R"({"page_size":2})");
 	BOOST_REQUIRE(again.ok);
