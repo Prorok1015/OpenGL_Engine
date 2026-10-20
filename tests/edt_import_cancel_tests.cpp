@@ -87,6 +87,7 @@ BOOST_AUTO_TEST_CASE(Export_StoppedBeforeTheFirstFile_ThrowsCancelled)
 {
 	edt::asset_exporter exporter(*rs);
 	edt::import_result imported;
+	imported.source_path = "tri.obj";
 	imported.root_tag = res::tag{ res::tag::memory, "tri/tri.prefab.desc" };
 	imported.all_tags.push_back(imported.root_tag);
 	rs->store(imported.root_tag, test_util::to_bytes("{}"));
