@@ -9,6 +9,7 @@
 
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/resource/res_path_sanitize.h>
 
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
@@ -117,7 +118,7 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 		std::string_view texture_name = str.C_Str();
 		if (auto* pEmbededTxm = scene->GetEmbeddedTexture(texture_name.data()))
 		{
-			const std::string_view embedded_filename{ pEmbededTxm->mFilename.C_Str() };
+			const std::string embedded_filename = res::sanitize_relative_path(pEmbededTxm->mFilename.C_Str());
 			const std::string_view embedded_format{ pEmbededTxm->achFormatHint };
 			std::string embedded_path = std::format("__embedded_txm_{0}/{1}.{2}",
 					tag.pure_name(),

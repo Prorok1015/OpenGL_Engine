@@ -29,7 +29,9 @@ namespace res
 
 	private:
 		bool is_shadowed(const fs::path& path) const;
-		fs::path resolve_tag(const tag& tag) const;
+		// The only place a tag becomes a file path: nullopt when the tag would leave `root`.
+		std::optional<fs::path> safe_path(const fs::path& root, const tag& tag) const;
+		std::optional<fs::path> resolve_tag(const tag& tag) const;
 		void save_pending_write(res::tag tag, fs::path path, core::res::res_resolver_interface::async_raw_data data);
 		void resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const;
 

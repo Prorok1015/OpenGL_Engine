@@ -10,6 +10,7 @@
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/scn_mesh_nodes.hpp>
@@ -110,7 +111,8 @@ json::value find_material_texture(
 		std::string_view texture_name = str.C_Str();
 
 		if (auto* pEmbTxm = scene->GetEmbeddedTexture(texture_name.data())) {
-			const std::string_view emb_name{ pEmbTxm->mFilename.C_Str() };
+			// Model files are untrusted: keep the name from leaving __embedded_txm/ in the tag.
+			const std::string emb_name = res::sanitize_relative_path(pEmbTxm->mFilename.C_Str());
 			const std::string_view emb_fmt{ pEmbTxm->achFormatHint };
 
 			std::string emb_path = std::format("__embedded_txm/{0}.{1}",
@@ -170,7 +172,8 @@ json::value find_material_texture(
 		}
 
 		// External texture file — read from model's directory and store in memory://
-		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + std::string(texture_name));
+		const std::string safe_texture_name = res::sanitize_relative_path(texture_name);
+		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + safe_texture_name);
 
 		if (!res_sys.exists(tex_data_tag)) {
 			std::filesystem::path tex_path = model_dir / std::string(texture_name);
@@ -188,7 +191,7 @@ json::value find_material_texture(
 		out_tags.push_back(tex_data_tag);
 
 		res::tag desc_tag = res::tag{ res::tag::memory,
-			std::format("{0}textures/{1}.txm.desc", mem_prefix, texture_name) };
+			std::format("{0}textures/{1}.txm.desc", mem_prefix, safe_texture_name) };
 
 		if (!res_sys.exists(desc_tag)) {
 			json::object desc;
