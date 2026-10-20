@@ -3,7 +3,7 @@
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/common/engine_assert.h>
 
-rnd::shader_config rnd::default_material_compiler::compile(const scn::material_desc& mat, const material_compile_context& ctx)
+rnd::shader_config rnd::default_material_compiler::compile(const material_desc& mat, const material_compile_context& ctx)
 {
 	ASSERT_MSG(ctx.textures, "material_compile_context.textures must be set");
 
@@ -28,7 +28,7 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 	ASSERT_MSG(packed.ok(), "the phong params schema does not match what the material compiler gives: {}", packed.error);
 	rdata.material_params = std::move(packed.bytes);
 
-	// --- constant_data: program tags + defines (was scn::material_desc::cdata) ---
+	// --- constant_data: program tags + defines (was material_desc::cdata) ---
 	rnd::shader_config::constant_data cdata;
 	cdata.program = rnd::shader_config::shader_program_data::build();
 	cdata.program.set_vertex_shader(mat.vertex_shader);
@@ -46,7 +46,7 @@ rnd::shader_config rnd::default_material_compiler::compile(const scn::material_d
 
 std::shared_ptr<rnd::compiled_material> rnd::build_compiled_material(
 	material_compiler_interface& compiler, shader_config_cache& variants, texture_manager& textures,
-	std::shared_ptr<const scn::material_desc> mat, bool skinned)
+	std::shared_ptr<const material_desc> mat, bool skinned)
 {
 	ASSERT_MSG(mat, "build_compiled_material needs a loaded material");
 	auto out = std::make_shared<compiled_material>();

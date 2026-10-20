@@ -24,7 +24,7 @@ void rnd::material_instance_cache::begin_frame(material_compiler_interface* comp
 	}
 }
 
-void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<scn::material_desc>& desc, bool skinned)
+void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<material_desc>& desc, bool skinned)
 {
 	// The compiler resolves the maps (texture_manager::require, which gives the id): the only place a material asks for a texture.
 	s.material = build_compiled_material(*m_compiler, m_variants, m_textures, desc, skinned);
@@ -32,7 +32,7 @@ void rnd::material_instance_cache::compile(slot& s, const std::shared_ptr<scn::m
 	++m_compilations;
 }
 
-rnd::material_instance_id rnd::material_instance_cache::acquire(const std::shared_ptr<scn::material_desc>& desc, bool skinned, bool desc_changed)
+rnd::material_instance_id rnd::material_instance_cache::acquire(const std::shared_ptr<material_desc>& desc, bool skinned, bool desc_changed)
 {
 	ASSERT_MSG(desc, "a material instance needs a loaded material");
 	ASSERT_MSG(m_compiler, "material_instance_cache::begin_frame must run before acquire");

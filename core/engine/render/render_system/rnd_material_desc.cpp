@@ -1,11 +1,11 @@
-#include <snk/scene/scn_material_desc.h>
+#include <snk/render/rnd_material_desc.h>
 #include <snk/common/logger/engine_log.h>
 
 #include <algorithm>
 #include <array>
 #include <string_view>
 
-void scn::material_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
+void rnd::material_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
 	// The schema reads everything the hand-written reader read but one form, settled here on a copy of the object: a queue
 	// that is neither a word nor null was no queue (the generic reader would take a number that names an enumerator).
@@ -20,7 +20,7 @@ void scn::material_desc::deserialize(desc::desc_system& desc_system, const json:
 	if (const auto* mode = rest.if_contains("render_mode"); mode && mode->is_string()) {
 		const std::string_view word{ mode->as_string() };
 		if (std::ranges::find(removed_render_modes, word) != removed_render_modes.end()) {
-			egLOG_WARN("scene/material", "render_mode \"{}\" does not exist any more, the material is drawn as TRIANGLE", word);
+			egLOG_WARN("render/material", "render_mode \"{}\" does not exist any more, the material is drawn as TRIANGLE", word);
 		}
 	}
 
