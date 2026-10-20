@@ -23,10 +23,10 @@ namespace desc
 		desc_base::copy_to(other);
 	}
 
-	void dynamic_desc::deserialize(desc_system&, const json::object& object)
+	void dynamic_desc::deserialize(desc_system& system, const json::object& object)
 	{
 		dyn_ref ref{ &m_blob, 0 };
-		desc::deserialize(*m_binding, &ref, object);
+		desc::deserialize(*m_binding, &ref, object, read_context{ &system, this });
 	}
 
 	void dynamic_desc::serialize(json::object& object) const
@@ -55,7 +55,7 @@ namespace desc
 		for (std::size_t i = 0; i < fields.size(); ++i) {
 			if (fields[i].key == key) {
 				dyn_ref ref{ &m_blob, 0 };
-				return m_binding->ops[i].from_json(m_binding->ops[i], &ref, value);
+				return m_binding->ops[i].from_json(m_binding->ops[i], &ref, value, read_context{});
 			}
 		}
 		return false;

@@ -1,8 +1,16 @@
 #pragma once
+// desc_system.h (included below, desc references call get_field_desc) uses these without including them.
+#include <cstring>
+#include <format>
+#include <sstream>
 #include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/desc/desc_describe.h>
 #include <snk/desc/desc_schema_ops.h>
+#include <snk/desc/desc_system.h>
+#include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
+#include <snk/resource/resources/res_resource_handle.hpp>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -11,15 +19,87 @@
 #include <type_traits>
 #include <typeinfo>
 #include <vector>
+#include <boost/json/value.hpp>
 
 // field_ops and schema_binding for C++ types described with Boost.Describe. Heavy like desc_describe.h: include it
 // only where a described type is declared or registered.
 namespace desc
 {
+	// field_kind::desc_ref for a res::res_handle<T> member (set the kind with field_attr::kind, the handle itself is a
+	// custom type to the deduction). Reads what desc_system::get_field_desc<T> reads: a string tag, or an inline
+	// object with "__type" that is stored once under a deterministic memory:// tag of the owner and required from there.
+	// An empty string clears the handle (so does a null on a field with write_null_if_empty). Written as the tag of the
+	// handle, an empty string while it is not set (so write_if_valid() leaves the key out). A handle whose tag is one of
+	// those memory://overrides/ copies is written as the inline object again (the loaded desc's own serialize plus
+	// "__type"): the copy lives in the memory store of this process only, and a saved tag would not resolve in the next
+	// one. A value that is neither a tag nor an object with "__type", a read without a desc_system and owner in the
+	// context, or an inline object of an owner without a tag, does not fit: the field keeps its handle. Only the
+	// handle itself is a desc_ref: the elements of a vector of handles are custom fields.
+	template<typename T>
+	struct desc_ref_traits<res::res_handle<T>>
+	{
+		static bool from_json(res::res_handle<T>& handle, const json::value& in, const read_context& ctx)
+		{
+			if (in.is_string() && in.as_string().empty()) {
+				handle = res::res_handle<T>{};
+				return true;
+			}
+			bool inline_desc = false;
+			if (in.is_object()) {
+				const json::value* type = in.as_object().if_contains("__type");
+				inline_desc = type && type->is_string();
+			}
+			if (!in.is_string() && !inline_desc) {
+				return false;
+			}
+			if (!ctx.system || !ctx.owner) {
+				egLOG_WARN("desc", "a desc reference needs the desc_system and the owner desc to be read, keeping the current one");
+				return false;
+			}
+			if (inline_desc && ctx.owner->get_tag().view().empty()) {
+				egLOG_WARN("desc", "an inline desc needs an owner with a tag to name its memory copy, keeping the current reference");
+				return false;
+			}
+			handle = ctx.system->get_field_desc<T>(*ctx.owner, in);
+			return true;
+		}
+
+		static json::value to_json(const res::res_handle<T>& handle)
+		{
+			if (!handle.is_valid()) {
+				return json::value(std::string_view{});
+			}
+			const std::string_view tag = handle.get_tag().view();
+			if (tag.starts_with("memory://overrides/")) { // see desc_system::make_mem_tag_deterministic
+				if (const auto instance = handle.get_sync()) {
+					json::object inline_desc;
+					instance->serialize(inline_desc);
+					if (!instance->get_type().empty()) {
+						inline_desc["__type"] = std::string{ instance->get_type() };
+					}
+					return json::value(std::move(inline_desc));
+				}
+			}
+			return json::value(tag);
+		}
+	};
+
 	namespace detail
 	{
 		template<typename M>
 		field_ops make_value_context(const field_attr_data* attr);
+
+		// The codec's read, with the context when the codec takes one.
+		template<typename M>
+		bool codec_from_json(M& value, const json::value& in, const read_context& ctx)
+		{
+			if constexpr (has_contextual_json_codec<M>) {
+				return json_codec<M>::from_json(value, in, ctx);
+			} else {
+				(void)ctx;
+				return json_codec<M>::from_json(value, in);
+			}
+		}
 
 		template<typename M>
 		std::shared_ptr<const schema_binding> bind_nested(std::string_view name);
@@ -30,6 +110,12 @@ namespace desc
 			static void to_json(const field_ops& ops, const M& value, json::value& out)
 			{
 				constexpr field_kind natural = kind_of<M>;
+				if constexpr (has_desc_ref_traits<M>) {
+					if (ops.kind == field_kind::desc_ref) {
+						out = desc_ref_traits<M>::to_json(value);
+						return;
+					}
+				}
 				if constexpr (has_json_codec<M>) {
 					if (ops.kind == field_kind::custom) {
 						out = json_codec<M>::to_json(value);
@@ -63,12 +149,21 @@ namespace desc
 				}
 			}
 
-			static bool from_json(const field_ops& ops, M& value, const json::value& in)
+			static bool from_json(const field_ops& ops, M& value, const json::value& in, const read_context& ctx)
 			{
 				constexpr field_kind natural = kind_of<M>;
+				if constexpr (has_desc_ref_traits<M>) {
+					if (ops.kind == field_kind::desc_ref) {
+						if (in.is_null() && ops.accepts_null) {
+							value = M{};
+							return true;
+						}
+						return desc_ref_traits<M>::from_json(value, in, ctx);
+					}
+				}
 				if constexpr (has_json_codec<M>) {
 					if (ops.kind == field_kind::custom) {
-						return json_codec<M>::from_json(value, in);
+						return codec_from_json<M>(value, in, ctx);
 					}
 				}
 				if constexpr (natural == field_kind::boolean) {
@@ -128,18 +223,30 @@ namespace desc
 					value.w = static_cast<float>(c[3]);
 					return true;
 				} else if constexpr (natural == field_kind::string) {
+					if (in.is_null() && ops.accepts_null) {
+						value = std::string{};
+						return true;
+					}
 					if (!in.is_string()) {
 						return false;
 					}
 					value = std::string{ in.as_string() };
 					return true;
 				} else if constexpr (natural == field_kind::res_tag) {
+					if (in.is_null() && ops.accepts_null) {
+						value = res::tag{};
+						return true;
+					}
 					if (!in.is_string()) {
 						return false;
 					}
 					value = in.as_string().empty() ? res::tag{} : res::tag{ std::string_view{ in.as_string() } };
 					return true;
 				} else if constexpr (natural == field_kind::enumeration) {
+					if (in.is_null() && ops.accepts_null && ops.enumeration && ops.enumeration->null_value) {
+						value = static_cast<M>(*ops.enumeration->null_value);
+						return true;
+					}
 					const auto converted = ops.enumeration ? enum_from_json(*ops.enumeration, in) : std::nullopt;
 					if (!converted) {
 						return false;
@@ -148,6 +255,10 @@ namespace desc
 					return true;
 				} else if constexpr (natural == field_kind::array) {
 					using element_type = typename detail::sequence_traits<M>::element;
+					if (in.is_null() && ops.accepts_null) {
+						value = M{};
+						return true;
+					}
 					if (!in.is_array()) {
 						return false;
 					}
@@ -161,7 +272,7 @@ namespace desc
 					parsed.reserve(source.size());
 					for (const auto& item : source) {
 						element_type element{};
-						if (!value_ops<element_type>::from_json(*ops.element_ops, element, item)) {
+						if (!value_ops<element_type>::from_json(*ops.element_ops, element, item, ctx)) {
 							return false;
 						}
 						parsed.push_back(std::move(element));
@@ -178,11 +289,11 @@ namespace desc
 					if (!in.is_object()) {
 						return false;
 					}
-					deserialize(*ops.nested, &value, in.as_object());
+					deserialize(*ops.nested, &value, in.as_object(), ctx);
 					return true;
 				} else {
 					if constexpr (has_json_codec<M>) {
-						return json_codec<M>::from_json(value, in);
+						return codec_from_json<M>(value, in, ctx);
 					} else {
 						return false;
 					}
@@ -249,9 +360,9 @@ namespace desc
 				value_ops<member_type>::to_json(ops, static_cast<const T*>(obj)->*Pointer, out);
 			}
 
-			static bool from_json(const field_ops& ops, void* obj, const json::value& in)
+			static bool from_json(const field_ops& ops, void* obj, const json::value& in, const read_context& ctx)
 			{
-				return value_ops<member_type>::from_json(ops, static_cast<T*>(obj)->*Pointer, in);
+				return value_ops<member_type>::from_json(ops, static_cast<T*>(obj)->*Pointer, in, ctx);
 			}
 
 			static bool equal(const field_ops& ops, const void* a, const void* b)
@@ -298,6 +409,7 @@ namespace desc
 					"The schema does not match the members of '{}' (field {})", binding->schema->name, member);
 				field_ops ops = detail::member_ops<T, descriptor_type::pointer>::make(attr);
 				ops.kind = binding->schema->fields[index].kind;
+				ops.accepts_null = binding->schema->fields[index].write == write_policy::null_if_empty;
 				binding->ops.push_back(std::move(ops));
 			}
 			(void)descriptor;

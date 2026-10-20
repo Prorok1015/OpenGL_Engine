@@ -17,7 +17,7 @@ namespace desc
 			"string", "enumeration", "res_tag", "desc_ref", "node_ref", "entity",
 			"structure", "array", "custom",
 		};
-		constexpr std::string_view write_policy_names[] = { "always", "if_valid", "if_not_default" };
+		constexpr std::string_view write_policy_names[] = { "always", "if_valid", "if_not_default", "null_if_empty", "never" };
 		constexpr std::string_view schema_kind_names[] = { "desc", "component", "struct" };
 
 		template<typename E, std::size_t N>
@@ -320,7 +320,7 @@ namespace desc
 			if (const json::value* write = find_value(object, "write")) {
 				const auto policy = write->is_string() ? write_policy_from_string(write->as_string()) : std::nullopt;
 				if (!policy) {
-					fail(where, "'write' must be always, if_valid or if_not_default");
+					fail(where, "'write' must be always, if_valid, if_not_default, null_if_empty or never");
 				}
 				field.write = *policy;
 			}
@@ -523,7 +523,7 @@ namespace desc
 
 	enum_schema parse_enum_schema(const json::object& object)
 	{
-		check_keys(object, { "name", "items", "fallback" }, "enum");
+		check_keys(object, { "name", "items", "fallback", "null_item" }, "enum");
 
 		enum_schema schema;
 		schema.name = read_string(object, "name", "enum", true);
@@ -572,6 +572,13 @@ namespace desc
 		}
 		if (const json::value* fallback = find_value(object, "fallback")) {
 			schema.fallback = read_value(*fallback);
+		}
+		if (const json::value* null_item = find_value(object, "null_item")) {
+			const enum_item* item = null_item->is_string() ? schema.find(std::string_view{ null_item->as_string() }) : nullptr;
+			if (!item) {
+				fail(path, "'null_item' must name one of the items");
+			}
+			schema.null_value = item->value;
 		}
 		return schema;
 	}

@@ -20,12 +20,24 @@
 namespace desc
 {
 	struct schema_binding;
+	class desc_base;
+	class desc_system;
+
+	// What a field kind that resolves other resources needs while reading (desc_ref: DESC_SCHEMA.md section 2): the
+	// desc_system that loads them and the desc being read, whose tag names the memory:// copies of inline objects.
+	// Both stay null for a read that has no desc around (a runtime blob edit, a test); such a read cannot resolve a
+	// desc_ref and the field keeps its value.
+	struct read_context
+	{
+		desc_system* system = nullptr;
+		const desc_base* owner = nullptr;
+	};
 
 	// obj is the address of the whole object (a T* for C++ bindings, a dyn_ref* for runtime ones).
 	struct field_ops
 	{
 		using to_json_fn = void (*)(const field_ops& ops, const void* obj, json::value& out);
-		using from_json_fn = bool (*)(const field_ops& ops, void* obj, const json::value& in);
+		using from_json_fn = bool (*)(const field_ops& ops, void* obj, const json::value& in, const read_context& ctx);
 		using equal_fn = bool (*)(const field_ops& ops, const void* a, const void* b);
 		using assign_fn = void (*)(const field_ops& ops, void* dst, const void* src);
 
@@ -36,6 +48,7 @@ namespace desc
 
 		field_kind kind = field_kind::custom;
 		field_kind element = field_kind::boolean;
+		bool accepts_null = false; // the field has write_policy::null_if_empty: a JSON null reads as the empty value (tag, string, array, desc_ref) or as the enum's null_value
 		std::uint32_t offset = 0; // runtime bindings
 		std::shared_ptr<const enum_schema> enumeration; // enumeration fields (and array elements of enumerations)
 		std::shared_ptr<const schema_binding> nested; // structure fields
@@ -79,13 +92,16 @@ namespace desc
 	// A zeroed blob of schema.layout.size bytes with every field set to its default.
 	SNK_API dyn_blob make_blob(const schema_binding& binding);
 
-	// Writes every field under its key in `out`, in schema order, honoring the field's write policy. Keys already in
-	// `out` stay.
+	// Writes every field under its key in `out`, in schema order, honoring the field's write policy (write_policy::never
+	// skips the field, null_if_empty writes an explicit null for an empty value). Keys already in `out` stay.
 	SNK_API void serialize(const schema_binding& binding, const void* obj, json::object& out);
 
 	// A key (or alias) missing from `in` leaves the field untouched; a value that does not fit logs a warning and
-	// leaves the field as it was; keys the schema does not know are ignored (debug log).
+	// leaves the field as it was; keys the schema does not know are ignored (debug log). `ctx` reaches the fields
+	// that resolve other descs (desc_ref) and the codecs that take a context; the overload without it reads with an
+	// empty context.
 	SNK_API void deserialize(const schema_binding& binding, void* obj, const json::object& in);
+	SNK_API void deserialize(const schema_binding& binding, void* obj, const json::object& in, const read_context& ctx);
 
 	// Same schema and object type: member-wise. Otherwise serialize(src) -> deserialize(dst), so only keys both
 	// sides know cross over, with a warning.
@@ -108,10 +124,13 @@ namespace desc
 	// Number-aware JSON comparison; tolerance is relative: |a - b| <= tolerance * max(|a|, |b|).
 	SNK_API bool json_equal(const json::value& a, const json::value& b, double tolerance = 0.0);
 
-	// True when `value` can be stored in a field of this kind (enumeration: a name or a number the enum knows).
-	SNK_API bool json_fits(field_kind kind, field_kind element, const enum_schema* enumeration, const json::value& value);
+	// True when `value` can be stored in a field of this kind (enumeration: a name or a number the enum knows;
+	// desc_ref: a string or an object with a string "__type"). `accepts_null`: the field has write_policy::null_if_empty,
+	// so a null fits a string, res_tag, desc_ref or array field, and an enumeration whose enum has a null_value.
+	SNK_API bool json_fits(field_kind kind, field_kind element, const enum_schema* enumeration, const json::value& value, bool accepts_null = false);
 
 	// Enum <-> string through the schema. An unknown name takes the schema's fallback; without one it is nullopt.
+	// A null is never an enumerator here: the fields whose policy is null_if_empty map it to enum_schema::null_value.
 	SNK_API std::optional<std::int64_t> enum_from_json(const enum_schema& schema, const json::value& value);
 	SNK_API json::value enum_to_json(const enum_schema& schema, std::int64_t value);
 
@@ -120,7 +139,7 @@ namespace desc
 	SNK_API bool json_to_int64(const json::value& value, std::int64_t& out);
 	SNK_API bool json_to_uint64(const json::value& value, std::uint64_t& out);
 
-	// Skipped by write_policy::if_valid: null, empty string, empty array.
+	// Skipped by write_policy::if_valid (and written as null by null_if_empty): null, empty string, empty array.
 	SNK_API bool is_valid_value(const json::value& value);
 
 	// Supplies a JSON codec to custom-kind fields of a C++ type:
@@ -128,9 +147,26 @@ namespace desc
 	//       static json::value to_json(const ds::fixed_vector<res::tag, 4>&);
 	//       static bool from_json(ds::fixed_vector<res::tag, 4>&, const json::value&);
 	//   };
+	// A codec that needs the desc being read (to resolve other descs) declares a third parameter instead:
+	//       static bool from_json(T&, const json::value&, const read_context&);
 	template<typename T>
 	struct json_codec;
 
 	template<typename T>
 	concept has_json_codec = requires { sizeof(json_codec<T>); };
+
+	template<typename T>
+	concept has_contextual_json_codec = has_json_codec<T>
+		&& requires(T& value, const json::value& in, const read_context& ctx) { json_codec<T>::from_json(value, in, ctx); };
+
+	// Binds a C++ member type to field_kind::desc_ref (field_attr::kind). desc_describe_ops.h specializes it for
+	// res::res_handle<T>: a string tag or an inline object with "__type" (desc_system::get_field_desc), written as the
+	// tag. A specialization provides:
+	//       static bool from_json(M&, const json::value&, const read_context&);
+	//       static json::value to_json(const M&); // the tag; an empty string for an unset reference
+	template<typename M>
+	struct desc_ref_traits;
+
+	template<typename M>
+	concept has_desc_ref_traits = requires { sizeof(desc_ref_traits<M>); };
 }

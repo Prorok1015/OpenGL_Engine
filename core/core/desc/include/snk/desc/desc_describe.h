@@ -23,6 +23,7 @@ namespace desc
 	//       static constexpr std::string_view name = "pass_queue";
 	//       static constexpr std::array<std::pair<pass_queue, std::string_view>, 1> overrides{{ { pass_queue::OPAQUE, "opaque" } }};
 	//       static constexpr pass_queue fallback = pass_queue::OPAQUE;
+	//       static constexpr pass_queue null_value = pass_queue::NONE; // read from / written as JSON null (write_null_if_empty)
 	//   };
 	// Every member is optional; enumerators without an override are written under their Describe name.
 	template<typename E>
@@ -66,6 +67,9 @@ namespace desc
 		if constexpr (has_enum_names<E>) {
 			if constexpr (requires { enum_names<E>::fallback; }) {
 				schema.fallback = static_cast<std::int64_t>(enum_names<E>::fallback);
+			}
+			if constexpr (requires { enum_names<E>::null_value; }) {
+				schema.null_value = static_cast<std::int64_t>(enum_names<E>::null_value);
 			}
 		}
 		boost::mp11::mp_for_each<boost::describe::describe_enumerators<E>>([&](auto enumerator) {

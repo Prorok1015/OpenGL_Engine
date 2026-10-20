@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_describe_ops.h>
 #include <snk/desc/desc_dynamic.h>
 #include <snk/desc/desc_json_ops.h>
@@ -47,6 +49,74 @@ namespace ops_test {
 		BOOST_DESCRIBE_CLASS(widget, (), (position, label, state, ids, nested, fov, texture, count, rotation), (), ())
 	};
 
+	// Write policies for the keys a legacy format needs: an explicit null for "nothing", a key that is read but never written.
+	enum class queue { none, opaque, mix };
+	BOOST_DESCRIBE_ENUM(queue, none, opaque, mix)
+
+	class legacy : public desc::schema_desc<legacy, desc::schema_kind::component>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.legacy";
+
+		res::tag shader;
+		res::tag plain;
+		queue pass = queue::opaque;
+		float shininess = 32.0f;
+		float gloss = 1.0f;
+		std::vector<std::string> defines;
+		queue strict = queue::opaque; // the enum has a null_value, the field no write_null_if_empty
+
+		BOOST_DESCRIBE_CLASS(legacy, (), (shader, plain, pass, shininess, gloss, defines, strict), (), ())
+	};
+
+	// A value that remembers which desc it was read for: the codec takes the read_context.
+	struct tagged
+	{
+		std::string text;
+	};
+
+	struct ctx_inner
+	{
+		tagged value;
+	};
+	BOOST_DESCRIBE_STRUCT(ctx_inner, (), (value))
+
+	class ctx_holder : public desc::schema_desc<ctx_holder>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.ctx_holder";
+
+		tagged direct;
+		ctx_inner nested;
+		std::vector<tagged> list;
+
+		BOOST_DESCRIBE_CLASS(ctx_holder, (), (direct, nested, list), (), ())
+	};
+
+	// A desc other descs point to, and one that points to it.
+	class target : public desc::schema_desc<target>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.target";
+		using base_type = desc::desc_base; // resource_system finds the desc adapter through base_type
+
+		int hp = 1;
+
+		BOOST_DESCRIBE_CLASS(target, (), (hp), (), ())
+	};
+
+	class holder : public desc::schema_desc<holder, desc::schema_kind::component>
+	{
+	public:
+		static constexpr std::string_view __type = "ops.holder";
+
+		int hp = 5;
+		res::res_handle<target> link;
+		res::res_handle<target> extra;
+
+		BOOST_DESCRIBE_CLASS(holder, (), (hp, link, extra), (), ())
+	};
+
 	class sibling : public desc::schema_desc<sibling>
 	{
 	public:
@@ -69,6 +139,41 @@ namespace desc {
 		static constexpr std::array<std::pair<ops_test::mode, std::string_view>, 1> overrides{ { { ops_test::mode::on, "ON" } } };
 		static constexpr ops_test::mode fallback = ops_test::mode::off;
 	};
+
+	template<>
+	struct enum_names<ops_test::queue>
+	{
+		static constexpr std::string_view name = "ops_queue";
+		static constexpr ops_test::queue null_value = ops_test::queue::none;
+	};
+
+	template<>
+	inline constexpr auto field_attrs<ops_test::legacy> = attrs(
+		f("shader").write_null_if_empty(),
+		f("pass").write_null_if_empty(),
+		f("shininess").key("/uniforms/shininess").write_never(),
+		f("gloss").key("/uniforms/gloss"),
+		f("defines").write_null_if_empty());
+
+	template<>
+	struct json_codec<ops_test::tagged>
+	{
+		static json::value to_json(const ops_test::tagged& value) { return json::value(value.text); }
+
+		static bool from_json(ops_test::tagged& value, const json::value& in, const read_context& ctx)
+		{
+			if (!in.is_string()) {
+				return false;
+			}
+			value.text = std::string{ in.as_string() } + "@" + (ctx.owner ? std::string{ ctx.owner->get_tag().view() } : std::string{ "none" });
+			return true;
+		}
+	};
+
+	template<>
+	inline constexpr auto field_attrs<ops_test::holder> = attrs(
+		f("link").kind(field_kind::desc_ref).ref("ops.target").write_if_valid(),
+		f("extra").kind(field_kind::desc_ref).ref("ops.target").write_null_if_empty());
 
 	template<>
 	inline constexpr auto field_attrs<ops_test::widget> = attrs(
@@ -104,6 +209,23 @@ namespace {
 		}
 
 		desc::desc_system ds;
+	};
+
+	// ops_fixture with the desc adapter, so that desc references load from the ram store.
+	struct ref_fixture : ops_fixture
+	{
+		ref_fixture()
+		{
+			rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(ds));
+			ds.register_desc<ops_test::target>("ops.target");
+			ds.register_component_desc<ops_test::holder>("ops.holder");
+			ds.register_desc<ops_test::ctx_holder>("ops.ctx_holder");
+		}
+
+		std::shared_ptr<ops_test::holder> spawn_holder()
+		{
+			return std::dynamic_pointer_cast<ops_test::holder>(ds.create_instance("ops.holder", tag_of("owner.desc")));
+		}
 	};
 
 	constexpr const char* k_inner_schema = R"({
@@ -350,6 +472,313 @@ BOOST_AUTO_TEST_CASE(DescribedTypeRegisteredThroughTheSystemKeepsItsFactory)
 	auto instance = fx.ds.create_instance("ops.widget", res::tag{});
 	BOOST_REQUIRE(instance);
 	BOOST_CHECK(dynamic_cast<ops_test::widget*>(instance.get()) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(WriteNullIfEmptyWritesAnExplicitNullAndReadsItBack)
+{
+	ops_test::legacy value;
+	value.shader = res::tag{};
+	value.pass = ops_test::queue::none;
+	json::object written = serialized(value);
+	BOOST_REQUIRE(written.contains("shader"));
+	BOOST_TEST(written.at("shader").is_null());
+	BOOST_REQUIRE(written.contains("pass"));
+	BOOST_TEST(written.at("pass").is_null());
+
+	value.shader = res::tag{ "shd://obj.geom" };
+	value.pass = ops_test::queue::mix;
+	written = serialized(value);
+	BOOST_TEST(written.at("shader").as_string() == "shd://obj.geom");
+	BOOST_TEST(written.at("pass").as_string() == "mix");
+
+	// Back from the null the fields are empty again, without a warning for the null.
+	ops_test::legacy back;
+	back.shader = res::tag{ "shd://old.glsl" };
+	back.pass = ops_test::queue::mix;
+	desc::deserialize(ops_test::legacy::binding(), &back, parse(R"({ "shader": null, "pass": null })"));
+	BOOST_TEST((back.shader == res::tag{}));
+	BOOST_TEST((back.pass == ops_test::queue::none));
+
+	BOOST_TEST(json::value(serialized(back)) == json::value(parse(R"({ "shader": null, "plain": "", "pass": null, "uniforms": { "gloss": 1.0 }, "defines": null, "strict": "opaque" })")));
+
+	// An empty array is written as null as well, and the null empties it again.
+	back.defines = { "USE_A", "USE_B" };
+	written = serialized(back);
+	BOOST_REQUIRE(written.at("defines").is_array());
+	BOOST_TEST(written.at("defines").as_array().size() == 2u);
+	desc::deserialize(ops_test::legacy::binding(), &back, parse(R"({ "defines": null })"));
+	BOOST_TEST(back.defines.empty());
+	BOOST_TEST(serialized(back).at("defines").is_null());
+}
+
+BOOST_AUTO_TEST_CASE(NullIsOnlyAcceptedWhereTheSchemaDeclaresIt)
+{
+	ops_test::legacy value;
+	value.plain = res::tag{ "res://plain.png" };
+	desc::deserialize(ops_test::legacy::binding(), &value, parse(R"({ "plain": null })"));
+	BOOST_TEST(value.plain.view() == "res://plain.png");
+
+	// A null the enum has no mapping for does not fit either.
+	ops_test::widget widget;
+	widget.state = ops_test::mode::automatic;
+	desc::deserialize(ops_test::widget::binding(), &widget, parse(R"({ "state": null })"));
+	BOOST_TEST((widget.state == ops_test::mode::automatic));
+
+	// The enum of "strict" has a null_value too, but the field does not declare the policy.
+	ops_test::legacy strict;
+	strict.strict = ops_test::queue::mix;
+	desc::deserialize(ops_test::legacy::binding(), &strict, parse(R"({ "strict": null })"));
+	BOOST_TEST((strict.strict == ops_test::queue::mix));
+
+	// A null array without the policy does not fit either: a plain std::vector field keeps its items.
+	ops_test::widget widget_with_ids;
+	desc::deserialize(ops_test::widget::binding(), &widget_with_ids, parse(R"({ "ids": null })"));
+	BOOST_TEST((widget_with_ids.ids == std::vector<int>{ 1, 2 }));
+
+	const auto queue = ops_test::legacy::binding().ops[2].enumeration;
+	BOOST_REQUIRE(queue);
+	BOOST_REQUIRE(queue->null_value.has_value());
+	BOOST_TEST(*queue->null_value == static_cast<std::int64_t>(ops_test::queue::none));
+	BOOST_TEST(!desc::enum_from_json(*queue, json::value()).has_value());
+	BOOST_TEST(desc::json_fits(desc::field_kind::enumeration, desc::field_kind::boolean, queue.get(), json::value(), true));
+	BOOST_TEST(!desc::json_fits(desc::field_kind::enumeration, desc::field_kind::boolean, queue.get(), json::value()));
+}
+
+BOOST_AUTO_TEST_CASE(OverrideRecordsMayCarryNullWhereTheSchemaWritesIt)
+{
+	const auto& schema = *ops_test::legacy::binding().schema;
+	desc::schema_registry registry;
+	registry.add_enum(desc::make_enum_schema<ops_test::queue>());
+
+	const json::value base = parse(R"({ "shader": "shd://a.glsl", "plain": "res://p.png", "pass": "mix", "strict": "mix" })");
+	const json::value edited = parse(R"({ "shader": null, "plain": null, "pass": null, "strict": null })");
+	const auto changes = desc::diff(schema, base, edited, &registry);
+	BOOST_REQUIRE_EQUAL(changes.size(), 4u);
+
+	for (const auto& change : changes) {
+		BOOST_TEST(change.value.is_null());
+		const bool declared = change.pointer == "/shader" || change.pointer == "/pass";
+		const auto status = desc::validate_override(schema, change, &registry);
+		BOOST_TEST_INFO(change.pointer);
+		BOOST_TEST((status == (declared ? desc::override_status::valid : desc::override_status::bad_value)));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(NeverWrittenKeyIsReadCopiedAndComparedButNotWritten)
+{
+	const auto* schema_field = ops_test::legacy::binding().schema->find_field("/uniforms/shininess");
+	BOOST_REQUIRE(schema_field);
+	BOOST_TEST((schema_field->write == desc::write_policy::never));
+	BOOST_TEST(!schema_field->read_only);
+
+	ops_test::legacy value;
+	desc::deserialize(ops_test::legacy::binding(), &value, parse(R"({ "uniforms": { "shininess": 8.0, "gloss": 2.0 } })"));
+	BOOST_TEST(value.shininess == 8.0f);
+	BOOST_TEST(value.gloss == 2.0f);
+
+	const json::object written = serialized(value);
+	BOOST_REQUIRE(written.contains("uniforms"));
+	BOOST_TEST(!written.at("uniforms").as_object().contains("shininess"));
+	BOOST_TEST(written.at("uniforms").at("gloss").as_double() == 2.0);
+
+	ops_test::legacy copy;
+	desc::copy(ops_test::legacy::binding(), &value, ops_test::legacy::binding(), &copy);
+	BOOST_TEST(copy.shininess == 8.0f);
+	BOOST_TEST(desc::equal(ops_test::legacy::binding(), &value, &copy));
+	copy.shininess = 9.0f;
+	BOOST_TEST(!desc::equal(ops_test::legacy::binding(), &value, &copy));
+}
+
+BOOST_FIXTURE_TEST_CASE(RuntimeSchemasHonorNullIfEmptyAndNever, ops_fixture)
+{
+	ds.schemas().add_enum(desc::parse_enum_schema(parse(R"({ "name": "ops_queue2", "items": { "none": 0, "opaque": 1 }, "null_item": "none" })")));
+	ds.register_schema(desc::parse_type_schema(parse(R"({
+		"name": "mymod.legacy", "kind": "component",
+		"fields": [
+			{ "name": "shader", "kind": "res_tag", "default": "", "write": "null_if_empty" },
+			{ "name": "queue", "kind": "enumeration", "ref_type": "ops_queue2", "default": "opaque", "write": "null_if_empty" },
+			{ "name": "old", "kind": "f32", "default": 5, "write": "never" },
+			{ "name": "defs", "kind": "array", "element": "string", "default": ["X"], "write": "null_if_empty" },
+			{ "name": "strict", "kind": "enumeration", "ref_type": "ops_queue2", "default": "opaque" }
+		]
+	})"), &ds.schemas()));
+
+	auto first = spawn("mymod.legacy");
+	auto second = spawn("mymod.legacy");
+	BOOST_REQUIRE(first);
+	BOOST_REQUIRE(second);
+
+	json::object written = serialized(*first);
+	BOOST_TEST(written.at("shader").is_null());
+	BOOST_TEST(written.at("queue").as_string() == "opaque");
+	BOOST_TEST(!written.contains("old"));
+
+	BOOST_TEST(written.at("defs").as_array().size() == 1u);
+
+	first->deserialize(ds, parse(R"({ "queue": null, "old": 7, "defs": null, "strict": null })"));
+	written = serialized(*first);
+	BOOST_TEST(written.at("queue").is_null());
+	BOOST_TEST(written.at("defs").is_null());
+	BOOST_TEST(written.at("strict").as_string() == "opaque"); // no policy: the null does not fit
+	BOOST_TEST(!written.contains("old"));
+	BOOST_TEST(first->get("/old") == json::value(7.0));
+
+	first->copy_to(*second);
+	BOOST_TEST(second->get("/old") == json::value(7.0));
+}
+
+BOOST_FIXTURE_TEST_CASE(DescRefReadsATagAndWritesIt, ref_fixture)
+{
+	const res::tag child = put("child.desc", R"({ "__type": "ops.target", "hp": 7 })");
+	auto owner = spawn_holder();
+	BOOST_REQUIRE(owner);
+
+	owner->deserialize(ds, parse(("{ \"link\": \"" + child.string() + "\" }").c_str()));
+	BOOST_REQUIRE(owner->link.is_valid());
+	BOOST_TEST((owner->link.get_tag() == child));
+	const auto loaded = owner->link.get_sync();
+	BOOST_REQUIRE(loaded);
+	BOOST_TEST(loaded->hp == 7);
+
+	const json::object written = serialized(*owner);
+	BOOST_REQUIRE(written.contains("link"));
+	BOOST_TEST(std::string_view{ written.at("link").as_string() } == child.view());
+}
+
+BOOST_FIXTURE_TEST_CASE(DescRefReadsAnInlineObjectUnderADeterministicMemoryTag, ref_fixture)
+{
+	auto owner = spawn_holder();
+	BOOST_REQUIRE(owner);
+
+	const json::object data = parse(R"({ "link": { "__type": "ops.target", "hp": 9 } })");
+	owner->deserialize(ds, data);
+
+	const res::tag expected = ds.make_mem_tag_deterministic(*owner, "ops.target", data.at("link"));
+	BOOST_REQUIRE(owner->link.is_valid());
+	BOOST_TEST((owner->link.get_tag() == expected));
+	BOOST_TEST(ram->files.contains(expected));
+	const auto loaded = owner->link.get_sync();
+	BOOST_REQUIRE(loaded);
+	BOOST_TEST(loaded->hp == 9);
+
+	// The same object again finds the stored copy and gives the same tag.
+	auto again = spawn_holder();
+	again->deserialize(ds, data);
+	BOOST_TEST((again->link.get_tag() == expected));
+	BOOST_TEST(ram->files.size() == 1u);
+
+	// The reference is saved as the inline object again: the memory copy does not exist in the next process.
+	const json::object written = serialized(*owner);
+	BOOST_REQUIRE(written.at("link").is_object());
+	BOOST_TEST(written.at("link").at("__type").as_string() == "ops.target");
+	BOOST_TEST(written.at("link").at("hp").as_int64() == 9);
+}
+
+BOOST_AUTO_TEST_CASE(InlineDescRefSurvivesASaveIntoAFreshSystem)
+{
+	json::object saved;
+	{
+		ref_fixture first;
+		auto owner = first.spawn_holder();
+		BOOST_REQUIRE(owner);
+		owner->deserialize(first.ds, parse(R"({ "link": { "__type": "ops.target", "hp": 9 } })"));
+		saved = serialized(*owner);
+	}
+	BOOST_REQUIRE(saved.at("link").is_object());
+
+	ref_fixture second;
+	auto reloaded = second.spawn_holder();
+	BOOST_REQUIRE(reloaded);
+	reloaded->deserialize(second.ds, saved);
+	BOOST_REQUIRE(reloaded->link.is_valid());
+	const auto loaded = reloaded->link.get_sync();
+	BOOST_REQUIRE(loaded);
+	BOOST_TEST(loaded->hp == 9);
+	BOOST_TEST(json::value(serialized(*reloaded)) == json::value(saved));
+}
+
+BOOST_FIXTURE_TEST_CASE(DescRefNullClearsOnlyWhereTheFieldDeclaresIt, ref_fixture)
+{
+	const res::tag child = put("child.desc", R"({ "__type": "ops.target", "hp": 3 })");
+	auto owner = spawn_holder();
+	BOOST_REQUIRE(owner);
+	owner->deserialize(ds, parse(("{ \"link\": \"" + child.string() + "\", \"extra\": \"" + child.string() + "\" }").c_str()));
+	BOOST_REQUIRE(owner->link.is_valid());
+	BOOST_REQUIRE(owner->extra.is_valid());
+
+	owner->deserialize(ds, parse(R"({ "link": null, "extra": null })"));
+	BOOST_TEST(owner->link.is_valid()); // no policy: kept
+	BOOST_TEST(!owner->extra.is_valid());
+	BOOST_TEST(serialized(*owner).at("extra").is_null());
+}
+
+BOOST_FIXTURE_TEST_CASE(InlineDescRefNeedsAnOwnerWithATag, ref_fixture)
+{
+	auto owner = std::dynamic_pointer_cast<ops_test::holder>(ds.create_instance("ops.holder", res::tag{}));
+	BOOST_REQUIRE(owner);
+	owner->deserialize(ds, parse(R"({ "link": { "__type": "ops.target", "hp": 9 } })"));
+	BOOST_TEST(!owner->link.is_valid());
+	BOOST_TEST(ram->files.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(ReadContextReachesCodecsInNestedStructsAndArrayElements, ref_fixture)
+{
+	auto owner = std::dynamic_pointer_cast<ops_test::ctx_holder>(ds.create_instance("ops.ctx_holder", tag_of("ctx.desc")));
+	BOOST_REQUIRE(owner);
+	owner->deserialize(ds, parse(R"({ "direct": "a", "nested": { "value": "b" }, "list": ["c", "d"] })"));
+
+	const std::string at = "@" + std::string{ owner->get_tag().view() };
+	BOOST_TEST(owner->direct.text == "a" + at);
+	BOOST_TEST(owner->nested.value.text == "b" + at);
+	BOOST_REQUIRE_EQUAL(owner->list.size(), 2u);
+	BOOST_TEST(owner->list[0].text == "c" + at);
+	BOOST_TEST(owner->list[1].text == "d" + at);
+
+	// Without a context the codec sees none.
+	ops_test::ctx_holder bare;
+	desc::deserialize(ops_test::ctx_holder::binding(), &bare, parse(R"({ "direct": "a", "nested": { "value": "b" }, "list": ["c"] })"));
+	BOOST_TEST(bare.direct.text == "a@none");
+	BOOST_TEST(bare.nested.value.text == "b@none");
+	BOOST_REQUIRE_EQUAL(bare.list.size(), 1u);
+	BOOST_TEST(bare.list[0].text == "c@none");
+}
+
+BOOST_FIXTURE_TEST_CASE(DescRefKeepsItsHandleWhenTheValueDoesNotFit, ref_fixture)
+{
+	const res::tag child = put("child.desc", R"({ "__type": "ops.target", "hp": 3 })");
+	auto owner = spawn_holder();
+	BOOST_REQUIRE(owner);
+	BOOST_TEST(!serialized(*owner).contains("link")); // not set: write_if_valid leaves the key out
+
+	owner->deserialize(ds, parse(("{ \"link\": \"" + child.string() + "\" }").c_str()));
+	BOOST_REQUIRE(owner->link.is_valid());
+
+	owner->deserialize(ds, parse(R"({ "link": 5 })"));
+	BOOST_TEST((owner->link.get_tag() == child));
+	owner->deserialize(ds, parse(R"({ "link": { "hp": 1 } })")); // an object without __type
+	BOOST_TEST((owner->link.get_tag() == child));
+	owner->deserialize(ds, parse(R"({ "link": null })"));
+	BOOST_TEST((owner->link.get_tag() == child));
+
+	// Without a desc_system and an owner in the context a reference cannot be resolved.
+	desc::deserialize(ops_test::holder::binding(), owner.get(), parse(R"({ "link": "memory://t/other.desc" })"));
+	BOOST_TEST((owner->link.get_tag() == child));
+
+	owner->deserialize(ds, parse(R"({ "link": "" })"));
+	BOOST_TEST(!owner->link.is_valid());
+}
+
+BOOST_AUTO_TEST_CASE(DescRefIsTheKindOfTheFieldInTheSchema)
+{
+	const auto& schema = *ops_test::holder::binding().schema;
+	const auto* link = schema.find_field("/link");
+	BOOST_REQUIRE(link);
+	BOOST_TEST((link->kind == desc::field_kind::desc_ref));
+	BOOST_TEST(link->ref_type == "ops.target");
+	BOOST_TEST((link->write == desc::write_policy::if_valid));
+	BOOST_TEST(link->default_value.is_null());
+	BOOST_TEST((desc::json_fits(desc::field_kind::desc_ref, desc::field_kind::boolean, nullptr, parse(R"({ "__type": "x" })"))));
+	BOOST_TEST(!desc::json_fits(desc::field_kind::desc_ref, desc::field_kind::boolean, nullptr, parse(R"({ "hp": 1 })")));
 }
 
 BOOST_AUTO_TEST_CASE(CopyBetweenSameSchemaIsMemberWise)

@@ -284,7 +284,7 @@ namespace
 		}
 		bool changed = false;
 		for (const auto& field : schema.fields) {
-			if (field.editor_hidden) {
+			if (field.editor_hidden || field.write == desc::write_policy::never) {
 				continue;
 			}
 			const std::string pointer = prefix + field.key;
@@ -446,11 +446,17 @@ namespace
 		return changed;
 	}
 
-	bool edit_combo(const char* label, const desc::enum_schema& enumeration, json::value& value)
+	// `null_form`: the field writes its null-mapped enumerator (enum_schema::null_value) as an explicit JSON null, so
+	// a null reads as that enumerator and picking it writes a null again.
+	bool edit_combo(const char* label, const desc::enum_schema& enumeration, json::value& value, bool null_form)
 	{
 		const desc::enum_item* current = nullptr;
 		std::string unknown;
-		if (value.is_string()) {
+		if (value.is_null()) {
+			if (enumeration.null_value) {
+				current = enumeration.find_value(*enumeration.null_value);
+			}
+		} else if (value.is_string()) {
 			current = enumeration.find(value.as_string());
 			if (!current) {
 				unknown = std::string(value.as_string());
@@ -467,7 +473,8 @@ namespace
 			for (const auto& item : enumeration.items) {
 				const bool selected = &item == current;
 				if (ImGui::Selectable(item.name.c_str(), selected)) {
-					value = desc::enum_to_json(enumeration, item.value);
+					const bool is_null_item = null_form && enumeration.null_value && item.value == *enumeration.null_value;
+					value = is_null_item ? json::value() : desc::enum_to_json(enumeration, item.value);
 					changed = true;
 				}
 				if (selected) {
@@ -587,7 +594,9 @@ namespace
 		if (spec.kind == widget::hidden) {
 			return false;
 		}
-		if (!suits(field, spec.kind, value)) {
+		const bool null_form = enumeration && enumeration->null_value && field.write == desc::write_policy::null_if_empty;
+		const bool null_combo = spec.kind == widget::combo && null_form && value.is_null();
+		if (!null_combo && !suits(field, spec.kind, value)) {
 			spec.kind = widget::json;
 		}
 		if (ctx.on_field) {
@@ -605,7 +614,7 @@ namespace
 		case widget::real: changed = edit_real(label.c_str(), field, spec, value); break;
 		case widget::vector: changed = edit_vector(label.c_str(), spec, value); break;
 		case widget::color: changed = edit_color(label.c_str(), value); break;
-		case widget::combo: changed = edit_combo(label.c_str(), *enumeration, value); break;
+		case widget::combo: changed = edit_combo(label.c_str(), *enumeration, value, null_form); break;
 		case widget::text: changed = edit_text(label.c_str(), field, false, value); break;
 		case widget::asset: changed = edit_text(label.c_str(), field, true, value); break;
 		case widget::group: changed = edit_group(label.c_str(), field, spec, *nested, value, pointer, ctx, depth); break;
@@ -636,7 +645,8 @@ edt::schema_ui::widget_spec edt::schema_ui::describe_widget(const desc::field_sc
 		spec.speed = field.range->step;
 	}
 
-	if (field.editor_hidden) {
+	// A key that is only read (write = never) is never saved again, so an edit of it would be lost: not shown.
+	if (field.editor_hidden || field.write == desc::write_policy::never) {
 		spec.kind = widget::hidden;
 		return spec;
 	}

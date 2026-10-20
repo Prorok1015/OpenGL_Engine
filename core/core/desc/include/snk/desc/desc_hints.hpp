@@ -67,6 +67,11 @@ namespace desc
 		}
 		constexpr field_attr write_if_valid() const { auto c = *this; c.m_data.write = write_policy::if_valid; return c; }
 		constexpr field_attr write_if_not_default() const { auto c = *this; c.m_data.write = write_policy::if_not_default; return c; }
+		// Written as is, but an empty value (empty tag/string/array, the null-mapped enumerator of the enum) as an explicit null;
+		// a null is read back as the empty value.
+		constexpr field_attr write_null_if_empty() const { auto c = *this; c.m_data.write = write_policy::null_if_empty; return c; }
+		// A read-only key: still read, copied and compared, never written (so not diffed). Not the editor flag read_only().
+		constexpr field_attr write_never() const { auto c = *this; c.m_data.write = write_policy::never; return c; }
 		constexpr field_attr optional() const { auto c = *this; c.m_data.optional = true; return c; }
 		constexpr field_attr hidden() const { auto c = *this; c.m_data.hidden = true; return c; }
 		constexpr field_attr read_only() const { auto c = *this; c.m_data.read_only = true; return c; }

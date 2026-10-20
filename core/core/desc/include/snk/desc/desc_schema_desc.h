@@ -27,9 +27,10 @@ namespace desc
 			desc_base::copy_to(other);
 		}
 
-		void deserialize(desc_system&, const json::object& object) override
+		// The desc_system and this desc reach the fields that resolve other descs (field_kind::desc_ref).
+		void deserialize(desc_system& system, const json::object& object) override
 		{
-			desc::deserialize(binding(), self(), object);
+			desc::deserialize(binding(), self(), object, read_context{ &system, this });
 		}
 
 		void serialize(json::object& object) const override
