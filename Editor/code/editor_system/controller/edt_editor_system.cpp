@@ -70,7 +70,7 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
 	, m_gui(gui_sys)
-	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys, rnd_sys))
+	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys))
 	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
 	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
 {
@@ -81,8 +81,11 @@ edt::editor_system::~editor_system()
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
-	if (m_context) {
-		m_context->documents().shutdown();
+	// Gone already (storage torn down without editor_term): its destructor stopped the jobs and let go of the document.
+	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
+		// Jobs run the importer and exporter of this system: none may be left running when they are destroyed.
+		context->jobs().cancel_all_and_wait();
+		context->documents().shutdown();
 	}
 	if (m_prefab_panel) {
 		m_prefab_panel->set_context(nullptr);
@@ -109,6 +112,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
 		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
+	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
 	m_export_dialog->set_jobs(m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
@@ -397,7 +401,7 @@ void edt::editor_system::start_import(const std::filesystem::path& abs_path)
 		{ "Import " + m_import_name, "import" }, m_lifetime,
 		[importer = m_model_importer.get(), abs_path](ds::task_context& ctx) -> edt::import_intermediate {
 			ctx.throw_if_stopped();
-			return importer->import_background(abs_path);
+			return importer->import_background(abs_path, &ctx);
 		},
 		[this](ds::task_result<edt::import_intermediate>& result) {
 			if (!m_importing) return;
@@ -461,6 +465,7 @@ bool edt::editor_system::poll_import_progress()
 
 	if (!intermediate.error.empty()) {
 		egLOG("Editor/Import", "Async import failed: {}", intermediate.error);
+		m_context->dialogs().message(message_level::error, std::format("Import of '{}' failed: {}", intermediate.source_path.filename().string(), intermediate.error));
 		return false;
 	}
 

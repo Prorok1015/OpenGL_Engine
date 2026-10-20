@@ -172,7 +172,7 @@ void edt::asset_export_dialog::render_export_form()
 			[exporter_ptr, import_copy = std::move(import_copy),
 			 remap = std::move(remap), progress_ptr](ds::task_context& ctx) {
 				ctx.throw_if_stopped();
-				return exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get());
+				return exporter_ptr->export_to_project(import_copy, remap, progress_ptr.get(), &ctx);
 			},
 			[this](ds::task_result<bool>& result) {
 				if (!result.ok()) {

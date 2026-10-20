@@ -28,6 +28,7 @@ edt::editor_context::editor_context(desc::desc_system& descs, res::resource_syst
 	add_all(register_state_commands(m_actions.commands(), state_command_sources{
 		m_documents, m_selection, m_descs, m_assembler, m_asset_kinds,
 		[] { return res::resource_system::get_resource_layers(); } }));
+	m_job_failures = report_failed_jobs(m_events, m_jobs, m_dialogs);
 }
 
 edt::editor_context::~editor_context() = default;
