@@ -94,6 +94,39 @@ struct sys_fixture : test_util::ram_res_env
 	res::resource_system* const sys;
 };
 
+// The importer's way: the first load of the original stores derived data under another tag and registers it as alias.
+struct import_resource : res::text_resource
+{
+	import_resource(const res::tag& tag, std::string text) : res::text_resource(tag, {})
+	{
+		content = std::move(text);
+	}
+};
+
+struct import_adapter : core::res::adapter_interface
+{
+	static inline auto INFO = res::adapter_info::make<import_resource>({ "mdl" });
+	static inline std::atomic<int> imports{ 0 };
+
+	explicit import_adapter(res::resource_system& sys) : m_sys(sys) {}
+
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
+	{
+		const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
+		if (text.starts_with("src:")) {
+			++imports;
+			const res::tag stored{ "memory://t/imported_" + std::string(tag.pure_name()) + ".mdl" };
+			m_sys.store(stored, to_bytes("done:" + text.substr(4)));
+			m_sys.register_alias(tag, stored);
+			return std::make_shared<import_resource>(tag, text.substr(4));
+		}
+		return std::make_shared<import_resource>(tag, text.substr(5));
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+
+	res::resource_system& m_sys;
+};
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(ResSystemCacheTests, sys_fixture)
@@ -585,39 +618,6 @@ BOOST_AUTO_TEST_CASE(Alias_OfItself_IsANoOpAndKeepsTheExistingEdge)
 	BOOST_TEST(sys->resolve_alias(original) == target);
 	BOOST_TEST(sys->resolve_alias(target) == target);
 }
-
-// The importer's way: the first load of the original stores derived data under another tag and registers it as alias.
-struct import_resource : res::text_resource
-{
-	import_resource(const res::tag& tag, std::string text) : res::text_resource(tag, {})
-	{
-		content = std::move(text);
-	}
-};
-
-struct import_adapter : core::res::adapter_interface
-{
-	static inline auto INFO = res::adapter_info::make<import_resource>({ "mdl" });
-	static inline std::atomic<int> imports{ 0 };
-
-	explicit import_adapter(res::resource_system& sys) : m_sys(sys) {}
-
-	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
-	{
-		const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
-		if (text.starts_with("src:")) {
-			++imports;
-			const res::tag stored{ "memory://t/imported_" + std::string(tag.pure_name()) + ".mdl" };
-			m_sys.store(stored, to_bytes("done:" + text.substr(4)));
-			m_sys.register_alias(tag, stored);
-			return std::make_shared<import_resource>(tag, text.substr(4));
-		}
-		return std::make_shared<import_resource>(tag, text.substr(5));
-	}
-	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
-
-	res::resource_system& m_sys;
-};
 
 BOOST_AUTO_TEST_CASE(Alias_SignalOnTheOriginal_DropsTheAliasSoTheImporterRunsAgain)
 {

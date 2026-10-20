@@ -555,7 +555,7 @@ void res::resource_system::prune_released_edges() {
       return false;
     }
     // Edges sit under the tag the block is cached by (the alias target); the watcher may have used the original tag.
-    // m_alias_mutex is never held while m_cache_mutex is taken, so this order cannot deadlock.
+    // Lock order: m_cache_mutex first, m_alias_mutex nested inside it (as in signal_changed); never the reverse.
     std::shared_lock alias_lock(m_alias_mutex);
     return std::ranges::none_of(m_aliases, [&](const auto &pair) { return pair.second == tag && has_watchers(pair.first); });
   };
