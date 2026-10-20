@@ -520,7 +520,7 @@ BOOST_AUTO_TEST_CASE(AGroupThatDoesNotMatchItsLayoutIsRejected)
 	BOOST_TEST(state().count(vl::rule::bind_group_layout_mismatch) == 5u);
 
 	// a texture slot that holds no texture, and a texture that cannot be sampled
-	BOOST_TEST(!drv->create_bind_group(group_of(tex, { texture_entry(0, nullptr) })));
+	BOOST_TEST(!drv->create_bind_group(group_of(tex, { texture_entry(0, texture_handle{}) })));
 	BOOST_TEST(state().count(vl::rule::bind_group_layout_mismatch) == 6u);
 	BOOST_TEST(!drv->create_bind_group(group_of(tex, { texture_entry(0, target_only.handle()) })));
 	BOOST_TEST(state().count(vl::rule::texture_not_sampled) == 1u);

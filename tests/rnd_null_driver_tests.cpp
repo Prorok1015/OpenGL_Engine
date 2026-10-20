@@ -745,7 +745,7 @@ BOOST_AUTO_TEST_CASE(PipelineFormatsFollowThePassTargets)
 	set_target_formats(driver, desc, pass_of(color.handle()));
 	BOOST_TEST(!desc.depth_format.has_value());
 
-	render_pass_desc holes = pass_of(nullptr);
+	render_pass_desc holes = pass_of(texture_handle{});
 	holes.colors.push_back({});
 	set_target_formats(driver, desc, holes);
 	BOOST_REQUIRE(desc.color_formats.size() == 1u);
