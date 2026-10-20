@@ -28,9 +28,13 @@ namespace desc
 	// field_kind::desc_ref for a res::res_handle<T> member (set the kind with field_attr::kind, the handle itself is a
 	// custom type to the deduction). Reads what desc_system::get_field_desc<T> reads: a string tag, or an inline
 	// object with "__type" that is stored once under a deterministic memory:// tag of the owner and required from there.
-	// An empty string clears the handle. Written as the tag of the handle, an empty string while it is not set (so
-	// write_if_valid() leaves the key out). A value that is neither, or a read without a desc_system and owner in the
-	// context, does not fit: the field keeps its handle.
+	// An empty string clears the handle (so does a null on a field with write_null_if_empty). Written as the tag of the
+	// handle, an empty string while it is not set (so write_if_valid() leaves the key out). A handle whose tag is one of
+	// those memory://overrides/ copies is written as the inline object again (the loaded desc's own serialize plus
+	// "__type"): the copy lives in the memory store of this process only, and a saved tag would not resolve in the next
+	// one. A value that is neither a tag nor an object with "__type", a read without a desc_system and owner in the
+	// context, or an inline object of an owner without a tag, does not fit: the field keeps its handle. Only the
+	// handle itself is a desc_ref: the elements of a vector of handles are custom fields.
 	template<typename T>
 	struct desc_ref_traits<res::res_handle<T>>
 	{
@@ -52,16 +56,31 @@ namespace desc
 				egLOG_WARN("desc", "a desc reference needs the desc_system and the owner desc to be read, keeping the current one");
 				return false;
 			}
+			if (inline_desc && ctx.owner->get_tag().view().empty()) {
+				egLOG_WARN("desc", "an inline desc needs an owner with a tag to name its memory copy, keeping the current reference");
+				return false;
+			}
 			handle = ctx.system->get_field_desc<T>(*ctx.owner, in);
 			return true;
 		}
 
 		static json::value to_json(const res::res_handle<T>& handle)
 		{
-			if (handle.is_valid()) {
-				return json::value(handle.get_tag().view());
+			if (!handle.is_valid()) {
+				return json::value(std::string_view{});
 			}
-			return json::value(std::string_view{});
+			const std::string_view tag = handle.get_tag().view();
+			if (tag.starts_with("memory://overrides/")) { // see desc_system::make_mem_tag_deterministic
+				if (const auto instance = handle.get_sync()) {
+					json::object inline_desc;
+					instance->serialize(inline_desc);
+					if (!instance->get_type().empty()) {
+						inline_desc["__type"] = std::string{ instance->get_type() };
+					}
+					return json::value(std::move(inline_desc));
+				}
+			}
+			return json::value(tag);
 		}
 	};
 
@@ -135,6 +154,10 @@ namespace desc
 				constexpr field_kind natural = kind_of<M>;
 				if constexpr (has_desc_ref_traits<M>) {
 					if (ops.kind == field_kind::desc_ref) {
+						if (in.is_null() && ops.accepts_null) {
+							value = M{};
+							return true;
+						}
 						return desc_ref_traits<M>::from_json(value, in, ctx);
 					}
 				}
@@ -220,6 +243,10 @@ namespace desc
 					value = in.as_string().empty() ? res::tag{} : res::tag{ std::string_view{ in.as_string() } };
 					return true;
 				} else if constexpr (natural == field_kind::enumeration) {
+					if (in.is_null() && ops.accepts_null && ops.enumeration && ops.enumeration->null_value) {
+						value = static_cast<M>(*ops.enumeration->null_value);
+						return true;
+					}
 					const auto converted = ops.enumeration ? enum_from_json(*ops.enumeration, in) : std::nullopt;
 					if (!converted) {
 						return false;
@@ -228,6 +255,10 @@ namespace desc
 					return true;
 				} else if constexpr (natural == field_kind::array) {
 					using element_type = typename detail::sequence_traits<M>::element;
+					if (in.is_null() && ops.accepts_null) {
+						value = M{};
+						return true;
+					}
 					if (!in.is_array()) {
 						return false;
 					}

@@ -298,9 +298,20 @@ namespace desc
 
 		bool rt_from_json(const field_ops& ops, void* obj, const json::value& in, const read_context& ctx)
 		{
-			// write_policy::null_if_empty declares that a null stands for the empty tag or text.
-			if (in.is_null() && ops.accepts_null && (ops.kind == field_kind::res_tag || ops.kind == field_kind::string)) {
-				return rt_from_json(ops, obj, json::value(std::string_view{}), ctx);
+			// write_policy::null_if_empty declares that a null stands for the empty value of the field.
+			if (in.is_null() && ops.accepts_null) {
+				switch (ops.kind) {
+				case field_kind::res_tag:
+				case field_kind::string:
+				case field_kind::desc_ref: return rt_from_json(ops, obj, json::value(std::string_view{}), ctx);
+				case field_kind::array: return rt_from_json(ops, obj, json::value(json::array{}), ctx);
+				case field_kind::enumeration:
+					if (ops.enumeration && ops.enumeration->null_value) {
+						return rt_from_json(ops, obj, enum_to_json(*ops.enumeration, *ops.enumeration->null_value), ctx);
+					}
+					break;
+				default: break;
+				}
 			}
 			std::byte* address = blob_address(obj, ops);
 			std::int64_t signed_value = 0;
@@ -395,7 +406,7 @@ namespace desc
 				return true;
 			}
 			default: {
-				if (!json_fits(ops.kind, ops.element, ops.enumeration.get(), in)) {
+				if (!json_fits(ops.kind, ops.element, ops.enumeration.get(), in, ops.accepts_null)) {
 					return false;
 				}
 				auto& handles = static_cast<const dyn_ref*>(obj)->blob->handles;
@@ -532,7 +543,7 @@ namespace desc
 			for (const auto& field : schema.fields) {
 				const bool is_alias = std::ranges::find(field.read_aliases, pointer, [](const std::string& alias) { return std::string_view{ alias }; }) != field.read_aliases.end();
 				if (pointer == field.key || is_alias) {
-					return json_fits(field.kind, field.element, enum_of(field, resolve), value) ? override_status::valid : override_status::bad_value;
+					return json_fits(field.kind, field.element, enum_of(field, resolve), value, field.write == write_policy::null_if_empty) ? override_status::valid : override_status::bad_value;
 				}
 			}
 			for (const auto& field : schema.fields) {
@@ -634,10 +645,20 @@ namespace desc
 		return a == b;
 	}
 
-	bool json_fits(field_kind kind, field_kind element, const enum_schema* enumeration, const json::value& value)
+	bool json_fits(field_kind kind, field_kind element, const enum_schema* enumeration, const json::value& value, bool accepts_null)
 	{
 		std::int64_t signed_value = 0;
 		std::uint64_t unsigned_value = 0;
+		if (value.is_null() && accepts_null) {
+			switch (kind) {
+			case field_kind::string:
+			case field_kind::res_tag:
+			case field_kind::desc_ref:
+			case field_kind::array: return true;
+			case field_kind::enumeration: return enumeration && enumeration->null_value.has_value();
+			default: break;
+			}
+		}
 		switch (kind) {
 		case field_kind::boolean: return value.is_bool();
 		case field_kind::i32:
@@ -662,7 +683,8 @@ namespace desc
 				return enum_from_json(*enumeration, value).has_value();
 			}
 			return value.is_string() || is_integer(value);
-		case field_kind::desc_ref: return value.is_string() || value.is_object();
+		case field_kind::desc_ref:
+			return value.is_string() || (value.is_object() && value.as_object().if_contains("__type") && value.as_object().at("__type").is_string());
 		case field_kind::node_ref: return read_node_ref(value, unsigned_value);
 		case field_kind::structure: return value.is_object();
 		case field_kind::array:
@@ -679,9 +701,6 @@ namespace desc
 
 	std::optional<std::int64_t> enum_from_json(const enum_schema& schema, const json::value& value)
 	{
-		if (value.is_null()) {
-			return schema.null_value;
-		}
 		if (value.is_string()) {
 			if (const enum_item* item = schema.find(std::string_view{ value.as_string() })) {
 				return item->value;

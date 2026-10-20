@@ -48,7 +48,7 @@ namespace desc
 
 		field_kind kind = field_kind::custom;
 		field_kind element = field_kind::boolean;
-		bool accepts_null = false; // a res_tag/string field with write_policy::null_if_empty: a JSON null reads as the empty value
+		bool accepts_null = false; // the field has write_policy::null_if_empty: a JSON null reads as the empty value (tag, string, array, desc_ref) or as the enum's null_value
 		std::uint32_t offset = 0; // runtime bindings
 		std::shared_ptr<const enum_schema> enumeration; // enumeration fields (and array elements of enumerations)
 		std::shared_ptr<const schema_binding> nested; // structure fields
@@ -124,10 +124,13 @@ namespace desc
 	// Number-aware JSON comparison; tolerance is relative: |a - b| <= tolerance * max(|a|, |b|).
 	SNK_API bool json_equal(const json::value& a, const json::value& b, double tolerance = 0.0);
 
-	// True when `value` can be stored in a field of this kind (enumeration: a name or a number the enum knows).
-	SNK_API bool json_fits(field_kind kind, field_kind element, const enum_schema* enumeration, const json::value& value);
+	// True when `value` can be stored in a field of this kind (enumeration: a name or a number the enum knows;
+	// desc_ref: a string or an object with a string "__type"). `accepts_null`: the field has write_policy::null_if_empty,
+	// so a null fits a string, res_tag, desc_ref or array field, and an enumeration whose enum has a null_value.
+	SNK_API bool json_fits(field_kind kind, field_kind element, const enum_schema* enumeration, const json::value& value, bool accepts_null = false);
 
 	// Enum <-> string through the schema. An unknown name takes the schema's fallback; without one it is nullopt.
+	// A null is never an enumerator here: the fields whose policy is null_if_empty map it to enum_schema::null_value.
 	SNK_API std::optional<std::int64_t> enum_from_json(const enum_schema& schema, const json::value& value);
 	SNK_API json::value enum_to_json(const enum_schema& schema, std::int64_t value);
 

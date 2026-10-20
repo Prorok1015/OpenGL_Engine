@@ -41,8 +41,9 @@ namespace desc
 
 	// always: written as is. if_valid: skipped when empty (null, "", []). if_not_default: skipped when equal to the
 	// default. null_if_empty: written as is, but an empty value (a null-mapped enumerator, see enum_schema::null_value)
-	// becomes an explicit JSON null. never: a read-only key (a legacy key that is still read but never written back);
-	// the member is still copied, compared and diffed.
+	// becomes an explicit JSON null (and a null reads back as the empty value). never: a read-only key (a legacy key
+	// that is still read but never written back); the member is still copied and compared, but as it is not in the
+	// serialized JSON it is not diffed or overridden, and a copy between different types (through JSON) skips it.
 	enum class write_policy : std::uint8_t { always, if_valid, if_not_default, null_if_empty, never };
 
 	enum class schema_kind : std::uint8_t { desc, component, structure };
