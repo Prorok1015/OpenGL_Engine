@@ -8,9 +8,9 @@ if(NOT SNK_WITH_ASSIMP)
 	list(FILTER SE_EDT_SOURCES EXCLUDE REGEX "/import/edt_(model_importer|filesystem_assimp_io)\\.cpp$")
 endif()
 target_sources(${PROJECT_NAME} PRIVATE ${SE_EDT_SOURCES})
-target_include_directories(${PROJECT_NAME} PUBLIC
-	"${CMAKE_CURRENT_SOURCE_DIR}"
-	"${CMAKE_CURRENT_SOURCE_DIR}/include"
+# Only include/ is public (snk/editor/*); the source root and the subdirs are PRIVATE internals.
+snk_component_headers(${PROJECT_NAME})
+target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/core"
 	"${CMAKE_CURRENT_SOURCE_DIR}/controller"
 	"${CMAKE_CURRENT_SOURCE_DIR}/panels"

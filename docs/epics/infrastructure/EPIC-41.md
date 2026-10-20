@@ -5,6 +5,8 @@
 **Theme:** infrastructure
 **Dependencies:** none (standalone, но US-41-7 координируется с EPIC-34 US-34-8)
 
+> **Заголовки public/internal (editor_system):** этап 2 физического разделения сделан — PUBLIC только `include/snk/editor/` (`editor_module.h` перенесён), остальное PRIVATE; см. EPIC-49 US-49-1.
+
 > **Прогресс (2026-05-31, срез 1):** низкорисковый срез — **US-41-2** (один CXX_STANDARD в root),
 > **US-41-3** (явный STATIC на всех либах, вкл. engine_logger/editor_system сверх списка),
 > **US-41-5** (CONFIGURE_DEPENDS на оставшихся GLOB: root TEST_SOURCES + boost-natvis; удалён

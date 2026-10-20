@@ -26,6 +26,12 @@ namespace core::res
 		}
 
 
+		// Removes the data stored under the tag; false when this resolver cannot (the default) or the tag is not its own.
+		virtual bool erase(const ::res::tag& tag) {
+			(void)tag;
+			return false;
+		}
+
 		virtual bool exists(::res::tag const& tag) const {
 			(void)tag;
 			return false;

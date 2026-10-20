@@ -42,6 +42,50 @@ private:
 	ds::task_context& m_ctx;
 };
 
+// `all`: every tag the import refers to. `created`: the ones this run stored itself, because they did not exist yet;
+// only those may be erased again (the others belong to an earlier import of the same model).
+struct import_tags
+{
+	std::vector<res::tag>& all;
+	std::vector<res::tag>& created;
+};
+
+// Erases the memory:// tags a failed or cancelled import has stored so far.
+class stored_tags_guard
+{
+public:
+	stored_tags_guard(res::resource_system& res, const std::vector<res::tag>& tags) : m_res(res), m_tags(tags) {}
+	~stored_tags_guard()
+	{
+		if (!m_armed) return;
+		for (const auto& tag : m_tags) {
+			m_res.erase(tag);
+		}
+	}
+	stored_tags_guard(const stored_tags_guard&) = delete;
+	stored_tags_guard& operator=(const stored_tags_guard&) = delete;
+
+	void disarm() { m_armed = false; }
+
+private:
+	res::resource_system& m_res;
+	const std::vector<res::tag>& m_tags;
+	bool m_armed = true;
+};
+
+// Always overwrites (a re-import refreshes geometry and prefab), but only a tag that was not there before is the
+// import's own to erase on a cancel; one that was keeps its new data.
+void store_tracked(res::resource_system& res_sys, const res::tag& tag, const std::vector<std::byte>& data, std::vector<res::tag>& created)
+{
+	const bool existed = res_sys.exists(tag);
+	res_sys.store(tag, data);
+	if (existed) {
+		egLOG_WARN("edt/import", "'{}' was already there and is kept if the import is cancelled", tag.view());
+	} else {
+		created.push_back(tag);
+	}
+}
+
 glm::quat convert_to_glm(const aiQuaternion& v)
 {
 	return glm::quat(v.w, v.x, v.y, v.z);
@@ -103,7 +147,7 @@ json::value find_material_texture(
 	const std::string& mem_prefix,
 	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
-	std::vector<res::tag>& out_tags)
+	import_tags& out_tags)
 {
 	for (unsigned int i = 0; i < mat->GetTextureCount(type); i++) {
 		aiString str;
@@ -148,8 +192,9 @@ json::value find_material_texture(
 				}
 
 				res_sys.store(emb_tag, data_byte);
+				out_tags.created.push_back(emb_tag);
 			}
-			out_tags.push_back(emb_tag);
+			out_tags.all.push_back(emb_tag);
 
 			res::tag desc_tag = res::tag{ res::tag::memory,
 				std::format("{0}{1}.txm.desc", emb_tag.path(), emb_tag.pure_name()) };
@@ -165,8 +210,9 @@ json::value find_material_texture(
 				std::vector<std::byte> desc_data(s.size());
 				std::memcpy(desc_data.data(), s.data(), s.size());
 				res_sys.store(desc_tag, desc_data);
+				out_tags.created.push_back(desc_tag);
 			}
-			out_tags.push_back(desc_tag);
+			out_tags.all.push_back(desc_tag);
 
 			return json::value_from(desc_tag);
 		}
@@ -179,11 +225,12 @@ json::value find_material_texture(
 			// The name comes from the model file: only regular files inside the model dir are read.
 			if (auto tex_bytes = res::read_file_within_dir(model_dir, texture_name)) {
 				res_sys.store(tex_data_tag, *tex_bytes);
+				out_tags.created.push_back(tex_data_tag);
 			} else {
 				egLOG_WARN("edt/import", "External texture skipped (missing, outside the model directory, not a regular file or too big): {}", texture_name);
 			}
 		}
-		out_tags.push_back(tex_data_tag);
+		out_tags.all.push_back(tex_data_tag);
 
 		res::tag desc_tag = res::tag{ res::tag::memory,
 			std::format("{0}textures/{1}.txm.desc", mem_prefix, safe_texture_name) };
@@ -199,8 +246,9 @@ json::value find_material_texture(
 			std::vector<std::byte> desc_data(s.size());
 			std::memcpy(desc_data.data(), s.data(), s.size());
 			res_sys.store(desc_tag, desc_data);
+			out_tags.created.push_back(desc_tag);
 		}
-		out_tags.push_back(desc_tag);
+		out_tags.all.push_back(desc_tag);
 
 		return json::value_from(desc_tag);
 	}
@@ -214,7 +262,7 @@ json::value process_material(
 	const std::string& mem_prefix,
 	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
-	std::vector<res::tag>& out_tags)
+	import_tags& out_tags)
 {
 	TXM_LOG(aiTextureType_DIFFUSE);
 	TXM_LOG(aiTextureType_SPECULAR);
@@ -290,8 +338,9 @@ json::value process_material(
 		std::vector<std::byte> data(s.size());
 		std::memcpy(data.data(), s.data(), s.size());
 		res_sys.store(mat_tag, data);
+		out_tags.created.push_back(mat_tag);
 	}
-	out_tags.push_back(mat_tag);
+	out_tags.all.push_back(mat_tag);
 
 	return json::value_from(mat_tag);
 }
@@ -422,7 +471,7 @@ json::object build_prefab_node(
 	const std::string& mem_prefix,
 	const std::filesystem::path& model_dir,
 	res::resource_system& res_sys,
-	std::vector<res::tag>& out_tags,
+	import_tags& out_tags,
 	res::tag prefab_tag,
 	const std::string& node_path,
 	std::string_view node_key = {})
@@ -543,6 +592,9 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 {
 	import_intermediate im;
 	im.source_path = abs_path;
+	std::vector<res::tag> created_tags;
+	import_tags tags{ im.all_tags, created_tags };
+	stored_tags_guard cleanup(m_res, created_tags);
 	checkpoint(ctx);
 
 	// 1. Read file from disk
@@ -675,7 +727,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	res::tag prefab_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".prefab.desc" };
 	json::object prefab_root = build_prefab_node(
 		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
-		animated_node_names, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags, prefab_tag,
+		animated_node_names, im.skin_weights, mem_prefix, model_dir, m_res, tags, prefab_tag,
 		scene->mRootNode->mName.C_Str());
 
 	checkpoint(ctx);
@@ -737,7 +789,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	std::string geom_str = json::serialize(jsgeometry);
 	std::vector<std::byte> geom_bytes(geom_str.size());
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
-	m_res.store(geom_tag, geom_bytes);
+	store_tracked(m_res, geom_tag, geom_bytes, created_tags);
 	im.all_tags.push_back(geom_tag);
 
 	checkpoint(ctx);
@@ -751,7 +803,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 
 	im.prefab_tag = prefab_tag;
 
-	m_res.store(prefab_tag, m_desc.serialize_to_bytes(jsdata));
+	store_tracked(m_res, prefab_tag, m_desc.serialize_to_bytes(jsdata), created_tags);
 	im.all_tags.push_back(prefab_tag);
 
 	// Save prefab JSON for main-thread finalization (owned copy)
@@ -769,6 +821,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	for (const auto& t : im.all_tags) {
 		egLOG("edt/import", "  tag: {}", t.view());
 	}
+	cleanup.disarm();
 	return im;
 }
 

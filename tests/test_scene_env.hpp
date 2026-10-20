@@ -72,6 +72,8 @@ public:
 		return true;
 	}
 
+	bool erase(const res::tag& tag) override { return files.erase(tag) != 0; }
+
 	bool exists(const res::tag& tag) const override { return files.contains(tag); }
 
 	std::unordered_map<res::tag, std::vector<std::byte>> files;
