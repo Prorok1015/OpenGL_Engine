@@ -94,6 +94,39 @@ struct sys_fixture : test_util::ram_res_env
 	res::resource_system* const sys;
 };
 
+// The importer's way: the first load of the original stores derived data under another tag and registers it as alias.
+struct import_resource : res::text_resource
+{
+	import_resource(const res::tag& tag, std::string text) : res::text_resource(tag, {})
+	{
+		content = std::move(text);
+	}
+};
+
+struct import_adapter : core::res::adapter_interface
+{
+	static inline auto INFO = res::adapter_info::make<import_resource>({ "mdl" });
+	static inline std::atomic<int> imports{ 0 };
+
+	explicit import_adapter(res::resource_system& sys) : m_sys(sys) {}
+
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
+	{
+		const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
+		if (text.starts_with("src:")) {
+			++imports;
+			const res::tag stored{ "memory://t/imported_" + std::string(tag.pure_name()) + ".mdl" };
+			m_sys.store(stored, to_bytes("done:" + text.substr(4)));
+			m_sys.register_alias(tag, stored);
+			return std::make_shared<import_resource>(tag, text.substr(4));
+		}
+		return std::make_shared<import_resource>(tag, text.substr(5));
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+
+	res::resource_system& m_sys;
+};
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(ResSystemCacheTests, sys_fixture)
@@ -513,6 +546,121 @@ BOOST_AUTO_TEST_CASE(Alias_KeepsALiveEntryOfTheTarget)
 	BOOST_TEST(via_target.get_control_block() == held_target.get_control_block());
 	BOOST_TEST(via_target.get_control_block() != held_original.get_control_block());
 	BOOST_TEST(via_target.get()->str() == "target");
+}
+
+BOOST_AUTO_TEST_CASE(Alias_SignalOnTheOriginalEvictsTheLiveTarget)
+{
+	auto original = put("alias_edge_orig.txt", "original");
+	auto target = put("alias_edge_target.txt", "v1");
+	auto held_target = sys->require_sync<res::text_resource>(target);
+	sys->register_alias(original, target); // keeps the live target, see Alias_KeepsALiveEntryOfTheTarget
+	BOOST_REQUIRE(sys->require_sync<res::text_resource>(target).get_control_block() == held_target.get_control_block());
+	put("alias_edge_target.txt", "v2");
+
+	sys->signal_changed(original);
+	pump();
+
+	auto fresh = sys->require_sync<res::text_resource>(target);
+	BOOST_TEST(fresh.get_control_block() != held_target.get_control_block());
+	BOOST_TEST(fresh.get()->str() == "v2");
+}
+
+BOOST_AUTO_TEST_CASE(Alias_RegisteredTwice_HoldsOneEdge)
+{
+	auto original = put("alias_twice_orig.txt", "original");
+	auto target = put("alias_twice_target.txt", "target");
+	auto other = put("alias_twice_other.txt", "other");
+
+	sys->register_alias(original, target);
+	sys->register_alias(original, target);
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+
+	sys->register_alias(original, other); // the original has one alias: the new one replaces the old edge
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	auto held_target = sys->require_sync<res::text_resource>(target);
+	auto held_other = sys->require_sync<res::text_resource>(other);
+	sys->signal_changed(original);
+	pump();
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() == held_target.get_control_block());
+	BOOST_TEST(sys->require_sync<res::text_resource>(other).get_control_block() != held_other.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(Alias_EdgeSurvivesTheSweepsOfOtherSignals)
+{
+	auto original = put("alias_sweep_orig.txt", "original");
+	auto target = put("alias_sweep_target.txt", "v1");
+	auto unrelated = put("alias_sweep_unrelated.txt", "u");
+	auto held_target = sys->require_sync<res::text_resource>(target);
+	sys->register_alias(original, target);
+
+	for (int i = 0; i < 40; ++i) {
+		sys->signal_changed(unrelated); // a small graph is swept on every signal
+	}
+	pump();
+
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() == held_target.get_control_block());
+	sys->signal_changed(original);
+	pump();
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() != held_target.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(Alias_OfItself_IsANoOpAndKeepsTheExistingEdge)
+{
+	auto original = put("alias_self_orig.txt", "o");
+	auto target = put("alias_self_target.txt", "t");
+	sys->register_alias(original, target);
+
+	sys->register_alias(original, original);
+	sys->register_alias(target, target);
+
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	BOOST_TEST(sys->resolve_alias(original) == target);
+	BOOST_TEST(sys->resolve_alias(target) == target);
+}
+
+BOOST_AUTO_TEST_CASE(Alias_SignalOnTheOriginal_DropsTheAliasSoTheImporterRunsAgain)
+{
+	sys->registrate_adapter<import_adapter>(import_adapter::INFO, *sys);
+	import_adapter::imports = 0;
+	const auto original = put("reimport.mdl", "src:v1");
+
+	auto first = sys->require_sync<import_resource>(original);
+	BOOST_REQUIRE(first.get_sync());
+	BOOST_TEST(first.get()->str() == "v1");
+	BOOST_TEST(import_adapter::imports.load() == 1);
+	BOOST_TEST(sys->resolve_alias(original) != original);
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	BOOST_TEST(sys->require_sync<import_resource>(original).get_control_block() == first.get_control_block());
+	BOOST_TEST(import_adapter::imports.load() == 1); // served through the alias
+
+	put("reimport.mdl", "src:v2");
+	sys->signal_changed(original);
+	pump();
+	BOOST_TEST(sys->resolve_alias(original) == original);
+	BOOST_TEST(sys->alias_edge_count() == 0u);
+
+	auto second = sys->require_sync<import_resource>(original);
+	BOOST_REQUIRE(second.get_sync());
+	BOOST_TEST(import_adapter::imports.load() == 2);
+	BOOST_TEST(second.get()->str() == "v2");
+	BOOST_TEST(sys->resolve_alias(original) != original); // re-registered by the second import
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+}
+
+// A register_alias that lands after the signal is a fresh mapping and stays.
+BOOST_AUTO_TEST_CASE(Alias_RegisteredAfterTheSignal_IsKept)
+{
+	auto original = put("alias_late_orig.txt", "o");
+	auto first = put("alias_late_first.txt", "1");
+	auto second = put("alias_late_second.txt", "2");
+	sys->register_alias(original, first);
+	sys->signal_changed(original);
+	sys->register_alias(original, second);
+	pump();
+
+	BOOST_TEST(sys->resolve_alias(original) == second);
+	BOOST_TEST(sys->alias_edge_count() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(Alias_ReplacesAnExpiredEntryOfTheTarget)
