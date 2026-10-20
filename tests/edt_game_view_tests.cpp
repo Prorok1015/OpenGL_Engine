@@ -136,25 +136,6 @@ BOOST_AUTO_TEST_CASE(WorldSwitchResetsThePick)
 	BOOST_TEST((sel.selected() == first_of_w1));
 }
 
-BOOST_AUTO_TEST_CASE(OnlySelectedCameraGetsAViewport)
-{
-	entt::registry reg;
-	const auto a = add_game_camera(reg, "A");
-	const auto b = add_game_camera(reg, "B");
-	const auto c = add_game_camera(reg, "C");
-	redirect(reg);
-
-	edt::game_view::apply_viewports(reg, b, { 640, 360 });
-	BOOST_TEST((viewport_of(reg, a) == glm::ivec2{ 0, 0 }));
-	BOOST_TEST((viewport_of(reg, b) == glm::ivec2{ 640, 360 }));
-	BOOST_TEST((viewport_of(reg, c) == glm::ivec2{ 0, 0 }));
-
-	// Picking another camera hands the viewport over and turns the old one off again.
-	edt::game_view::apply_viewports(reg, c, { 800, 600 });
-	BOOST_TEST((viewport_of(reg, b) == glm::ivec2{ 0, 0 }));
-	BOOST_TEST((viewport_of(reg, c) == glm::ivec2{ 800, 600 }));
-}
-
 BOOST_AUTO_TEST_CASE(EveryCameraOfThePickedTargetGetsTheViewportAcrossWorlds)
 {
 	entt::registry world_3d;
@@ -235,12 +216,14 @@ BOOST_AUTO_TEST_CASE(ClosingThePanelTurnsEveryGameCameraOff)
 	entt::registry reg;
 	const auto a = add_game_camera(reg, "A");
 	redirect(reg);
-	edt::game_view::apply_viewports(reg, a, { 640, 360 });
+	const res::tag target = reg.get<scn::camera_component>(a).color_targets[0];
+	edt::game_view::apply_target_viewports(reg, target, { 640, 360 });
+	BOOST_TEST((viewport_of(reg, a) == glm::ivec2{ 640, 360 }));
 
-	edt::game_view::apply_viewports(reg, entt::null, {});
+	edt::game_view::apply_target_viewports(reg, res::tag{}, {});
 	BOOST_TEST((viewport_of(reg, a) == glm::ivec2{ 0, 0 }));
 
-	edt::game_view::apply_viewports(reg, a, { 0, 100 }); // collapsed panel: no usable size
+	edt::game_view::apply_target_viewports(reg, target, { 0, 100 }); // collapsed panel: no usable size
 	BOOST_TEST((viewport_of(reg, a) == glm::ivec2{ 0, 0 }));
 }
 
@@ -254,8 +237,9 @@ BOOST_AUTO_TEST_CASE(NonGameCamerasKeepTheirViewport)
 	editor_cam.m_viewport.size = { 1280, 720 };
 	redirect(reg);
 
-	edt::game_view::apply_viewports(reg, game, { 320, 200 });
-	edt::game_view::apply_viewports(reg, entt::null, {});
+	const res::tag target = reg.get<scn::camera_component>(game).color_targets[0];
+	edt::game_view::apply_target_viewports(reg, target, { 320, 200 });
+	edt::game_view::apply_target_viewports(reg, res::tag{}, {});
 	BOOST_TEST((viewport_of(reg, editor) == glm::ivec2{ 1280, 720 }));
 }
 

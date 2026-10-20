@@ -37,10 +37,6 @@ namespace edt::game_view
 		entt::entity m_selected = entt::null;
 	};
 
-	// `selected` gets `size` as viewport; every other game camera is set back to a zero viewport.
-	// A null `selected` or a non-positive size turns all game cameras off.
-	void apply_viewports(entt::registry& reg, entt::entity selected, glm::ivec2 size);
-
 	// The cameras that draw into `target` (the game cameras of one set share a texture, see camera_redirector) get
 	// `size` as viewport, every other game camera of `reg` is set back to a zero viewport. An invalid `target` or a
 	// non-positive size turns all game cameras off. Call it for the registry of every world.
