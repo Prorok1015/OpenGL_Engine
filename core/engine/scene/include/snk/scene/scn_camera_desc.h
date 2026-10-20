@@ -100,6 +100,11 @@ namespace scn {
 		camera_desc& operator=(const camera_desc&) = default;
 		camera_desc& operator=(camera_desc&&) = default;
 
+		// Member-wise copy as before: the copy of the schema leaves the type name of the instance behind.
+		virtual void copy_to(desc_base& other) const override {
+			copy_to_same(*this, other);
+		}
+
 		// Generic read of the schema, after the few forms it cannot say: see scn_camera_desc.cpp.
 		virtual void deserialize(desc::desc_system& desc_system, const json::object& data) override;
 
