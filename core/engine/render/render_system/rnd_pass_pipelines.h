@@ -8,6 +8,12 @@
 
 namespace rnd
 {
+	// The polygon mode the scene passes draw a camera's geometry with.
+	inline driver::polygon_mode scene_polygon(const camera_render_data_t& camera)
+	{
+		return camera.wireframe ? driver::polygon_mode::LINE : driver::polygon_mode::FILL;
+	}
+
 	// The pipelines one render pass draws with. The pass states what is fixed for all its draws (fixed-function
 	// state and the formats of its targets); each material variant adds its program. The driver's pipeline cache
 	// makes a pipeline once per distinct description, this only spares it a lookup for every draw.

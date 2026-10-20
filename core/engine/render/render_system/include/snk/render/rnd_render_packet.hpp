@@ -41,6 +41,9 @@ namespace rnd {
 		// the next priority starts (render_system::render_frame). The extractor writes the camera's layer.
 		int render_priority = 0;
 		clear_mode clear = clear_mode::all;
+		// Debug view of this camera only: the scene passes (z-prepass, opaque, transparent) draw lines instead of
+		// filled triangles. The sky, the composition and the debug lines stay filled.
+		bool wireframe = false;
 	};
 
 	// Where a camera's main color goes: straight to the window's default framebuffer, or into a texture.

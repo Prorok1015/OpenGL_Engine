@@ -47,6 +47,10 @@ namespace edt
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }
 		bool is_focused() const { return m_focused; }
 
+		// Wireframe view of the editor camera. A state of this viewport, not of the level: it is not saved.
+		bool wireframe() const { return m_wireframe; }
+		void set_wireframe(bool on) { m_wireframe = on; }
+
 	protected:
 		void on_render() override;
 
@@ -68,6 +72,7 @@ namespace edt
 		glm::vec2 m_image_pos = {};      // screen pos of the scene image (after toolbar)
 		glm::vec2 m_viewport_size = {800.f, 600.f};
 		bool m_focused = false;
+		bool m_wireframe = false;
 		int            m_gizmo_op     = 0;            // 0=translate, 1=rotate, 2=scale
 		entt::entity   m_rotate_ent   = entt::null;   // gizmo rotate ring state
 		int            m_active_ring  = -1;

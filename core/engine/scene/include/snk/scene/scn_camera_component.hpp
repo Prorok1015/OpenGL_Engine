@@ -42,6 +42,8 @@ namespace scn
 		int layer = 0;
 		camera_clear clear = camera_clear::all;
 		camera_projection projection = camera_projection::perspective;
+		// Debug view, never saved: this camera draws the scene as wireframe (the editor viewport's toggle).
+		bool wireframe = false;
 		// Orthographic projection: the height of the visible volume in world units (the width follows the aspect).
 		float ortho_size = default_camera_ortho_size;
 

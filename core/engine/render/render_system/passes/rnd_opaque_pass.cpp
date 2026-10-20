@@ -69,6 +69,7 @@ void opaque_pass::execute(render_context &context,
     // The backbuffer has no z-prepass depth attached: this pass writes the depth the later
     // passes (skybox) test against.
     state.depth.write_mask = !offscreen;
+    state.polygon = rnd::scene_polygon(packet.camera);
     rnd::driver::set_target_formats(drv, state, pass);
     state.set_layouts = context.layouts().scene();
     rnd::pass_pipelines pipelines(drv, context, state);
