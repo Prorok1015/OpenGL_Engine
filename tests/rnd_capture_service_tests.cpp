@@ -190,7 +190,7 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesASizeThatWouldNeedTooMuchMemory)
 BOOST_AUTO_TEST_CASE(Capture_LimitsOfTheCallerBoundTheDerivedSideBeforeReading)
 {
 	// 2 x 8 target: a width of 64 derives 256 rows; fine under the defaults, over a ceiling of 100.
-	auto tall = drv.create_texture(target_header(2, 8));
+	auto tall = make_texture(drv, target_header(2, 8));
 	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
 	BOOST_CHECK(service.capture("tall", { 64, 0 }).ok());
 
@@ -357,7 +357,7 @@ BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
 
 BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 {
-	auto tall = drv.create_texture(target_header(2, 8));
+	auto tall = make_texture(drv, target_header(2, 8));
 	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
 
 	BOOST_CHECK(capture(R"({"viewport":"tall","width":64})").ok);
