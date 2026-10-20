@@ -170,14 +170,15 @@ json::value find_material_texture(const aiScene* scene, aiMaterial* mat, aiTextu
 			return json::value_from(desc_tag);
 		}
 
-		res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", tag.path(), texture_name) };
+		const std::string data_name = (texture_name.find("://") == std::string_view::npos) ? std::string(texture_name) : res::sanitize_relative_path(texture_name);
+		res::tag desc_tag = res::tag{ res::tag::memory, std::format("{0}{1}.txm.desc", tag.path(), res::sanitize_relative_path(texture_name)) };
 
 		if (!res_sys.exists(desc_tag)) {
 			json::object desc;
 			desc["__type"] = "texture_2d_desc";
 			desc["__parent"] = "res://base_texture.desc";
 			desc["name"] = texture_name;
-			desc["data"] = json::value_from(tag + res::tag::make(texture_name));
+			desc["data"] = json::value_from(tag + res::tag::make(data_name));
 
 			std::string data = json::serialize(desc);
 			std::vector<std::byte> desc_data(data.size());

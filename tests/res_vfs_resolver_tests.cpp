@@ -394,6 +394,25 @@ BOOST_FIXTURE_TEST_CASE(SymlinkedSubdirPointingOutside_IsRejected, sandbox_fixtu
 	BOOST_TEST(!std::filesystem::exists(sibling / "new.txt"));
 }
 
+BOOST_FIXTURE_TEST_CASE(NulAndEmptyTags_AreRejected, sandbox_fixture)
+{
+	auto rp = make();
+	res::vfs_resolver& r = *rp;
+	const res::tag nul_tag{ std::string("memory://a\0b.txt", 16) };
+	const res::tag empty_tag{ "memory://" };
+	const res::tag ctrl_tag{ "memory://a\nb.txt" };
+
+	for (const res::tag* tg : { &nul_tag, &empty_tag, &ctrl_tag }) {
+		BOOST_TEST_CONTEXT("tag size " << tg->string().size()) {
+			BOOST_TEST(!r.exists(*tg));
+			BOOST_TEST(!r.store(*tg, to_bytes("x")));
+			auto block = r.resolve(*tg);
+			block->wait();
+			BOOST_TEST(block->has_error());
+		}
+	}
+}
+
 BOOST_FIXTURE_TEST_CASE(InsideTags_StillWork, sandbox_fixture)
 {
 	auto rp = make();

@@ -2,6 +2,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/common.h>
 #include <snk/common/core_thread_utils.hpp>
+#include <snk/resource/res_path_sanitize.h>
 #include <cctype>
 #include <fstream>
 #include <shared_mutex>
@@ -183,6 +184,10 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 	const std::string_view rel_view = tag.relative();
 	const fs::path rel{ rel_view };
 
+	// An empty tag would map to the root itself; control characters have no business in a file name.
+	if (rel_view.empty() || res::has_control_chars(rel_view)) {
+		return std::nullopt;
+	}
 	if (rel.has_root_name() || rel.has_root_directory()) {
 		return std::nullopt;
 	}

@@ -176,16 +176,11 @@ json::value find_material_texture(
 		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + safe_texture_name);
 
 		if (!res_sys.exists(tex_data_tag)) {
-			std::filesystem::path tex_path = model_dir / std::string(texture_name);
-			std::ifstream tex_in(tex_path, std::ios::binary | std::ios::ate);
-			if (tex_in) {
-				auto tex_size = static_cast<std::streamsize>(tex_in.tellg());
-				tex_in.seekg(0);
-				std::vector<std::byte> tex_bytes(static_cast<size_t>(tex_size));
-				tex_in.read(reinterpret_cast<char*>(tex_bytes.data()), tex_size);
-				res_sys.store(tex_data_tag, tex_bytes);
+			// The name comes from the model file: only regular files inside the model dir are read.
+			if (auto tex_bytes = res::read_file_within_dir(model_dir, texture_name)) {
+				res_sys.store(tex_data_tag, *tex_bytes);
 			} else {
-				egLOG_WARN("edt/import", "External texture not found: {}", tex_path.string());
+				egLOG_WARN("edt/import", "External texture skipped (missing, outside the model directory, not a regular file or too big): {}", texture_name);
 			}
 		}
 		out_tags.push_back(tex_data_tag);
@@ -288,7 +283,7 @@ json::value process_material(
 
 	// Store as separate memory:// resource instead of inlining in prefab
 	res::tag mat_tag = res::tag{ res::tag::memory,
-		std::format("{0}materials/{1}.mat.desc", mem_prefix, mat_name) };
+		std::format("{0}materials/{1}.mat.desc", mem_prefix, res::sanitize_relative_path(mat_name)) };
 
 	if (!res_sys.exists(mat_tag)) {
 		std::string s = json::serialize(jsmaterial);
