@@ -879,6 +879,18 @@ BOOST_AUTO_TEST_CASE(OwnerDestroyedOnMainWhileTaskCompletesOnWorker)
 				++delivered;
 				after_death += *destroyed ? 1 : 0;
 			});
+			if (i == 0) {
+				// Deterministic delivery: keep the owner alive until its continuation has really run, so
+				// `delivered > 0` does not depend on scheduling. The other rounds keep racing the owner's death.
+				handle.wait();
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+				while (delivered == 0 && std::chrono::steady_clock::now() < deadline) {
+					tasks.drain_main(1ms);
+				}
+				if (delivered == 0) {
+					BOOST_FAIL("continuation of the first round was not delivered to the main queue within 5 s");
+				}
+			}
 			if (i % 3 == 0) {
 				tasks.drain_main(1ms);
 			}
