@@ -47,6 +47,44 @@ BOOST_AUTO_TEST_CASE(VariantHash_ConstantNamesMatter)
 	BOOST_TEST(a.variant_hash() != b.variant_hash());
 }
 
+BOOST_AUTO_TEST_CASE(VariantHash_ConstantValuesMatter)
+{
+	auto a = make_cdata();
+	auto b = make_cdata();
+	a.constants["COUNT"] = "4";
+	b.constants["COUNT"] = "5";
+	BOOST_TEST(a.variant_hash() != b.variant_hash());
+}
+
+BOOST_AUTO_TEST_CASE(VariantHash_IgnoresInsertionOrderOfManyKeys)
+{
+	const char* names[] = { "K0", "K1", "K2", "K3", "K4", "K5", "K6", "K7" };
+	auto forward = make_cdata();
+	auto backward = make_cdata();
+	for (int i = 0; i < 8; ++i) {
+		forward.defines.emplace_back(names[i]);
+		forward.constants[names[i]] = std::to_string(i);
+		backward.defines.emplace_back(names[7 - i]);
+		backward.constants[names[7 - i]] = std::to_string(7 - i);
+	}
+	BOOST_TEST(forward.variant_hash() == backward.variant_hash());
+	BOOST_TEST(forward.variant_hash(rnd::pass_define_opaque) == backward.variant_hash(rnd::pass_define_opaque));
+}
+
+// The key is FNV-1a over the bytes of the tags, defines and constants (no std::hash, no pointers, no container
+// order), so the value is the same on every platform and run. If this constant has to change, every cached
+// variant key changes with it: do it on purpose.
+BOOST_AUTO_TEST_CASE(VariantHash_HasAKnownValueForAFixedInput)
+{
+	rnd::shader_config::constant_data cdata;
+	cdata.program.set_vertex_shader(res::tag{ "memory://t/a.vert" });
+	cdata.program.set_fragment_shader(res::tag{ "memory://t/a.frag" });
+	cdata.program.set_geometry_shader(res::tag{ "memory://t/a.geom" });
+	cdata.defines = { "USE_ANIMATION", "LIGHTS_ENABLED" };
+	cdata.constants["COUNT"] = "4";
+	BOOST_TEST(cdata.variant_hash() == 0x93a70b97ced321c8ull);
+}
+
 BOOST_AUTO_TEST_CASE(VariantHash_PassMaskMatters)
 {
 	const auto cdata = make_cdata();

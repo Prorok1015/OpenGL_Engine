@@ -3,6 +3,7 @@
 #include "rnd_null_driver.h"
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
+#include <snk/render/shader/rnd_shader_includes.h>
 #include <snk/render/rnd_gpu_blocks.h>
 #include <string>
 
@@ -100,6 +101,110 @@ BOOST_AUTO_TEST_CASE(ASourceWithoutAVersionDirectiveIsNotLoaded)
 
 	const auto late = load(program_of(put("late.vert", "int x;\n#version 450 core\nvoid main() {}\n"), put("late.frag", good_fragment)));
 	BOOST_TEST(!late.ok());
+}
+
+namespace {
+	std::size_t count_of(const std::string& text, std::string_view needle)
+	{
+		std::size_t count = 0;
+		for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) {
+			++count;
+		}
+		return count;
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AFileIncludedTwiceIsExpandedOnce)
+{
+	put("shared.glsl", "float shared_marker;\n");
+	put("mid.glsl", "#include \"shared.glsl\"\nfloat mid_marker;\n");
+	const auto vertex = put("twice.vert", "#version 450 core\n#include \"shared.glsl\"\n#include \"mid.glsl\"\n#include \"shared.glsl\"\nvoid main() {}\n");
+	const auto result = load(program_of(vertex, put("twice.frag", good_fragment)));
+	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
+	const std::string& body = result.headers[0].body;
+	BOOST_TEST(count_of(body, "float shared_marker;") == 1u);
+	BOOST_TEST(count_of(body, "float mid_marker;") == 1u);
+	BOOST_TEST(body.find("#include") == std::string::npos);
+	BOOST_TEST(body.find("void main()") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AnIncludeCycleIsReportedAndStopsTheLoad)
+{
+	put("ping.glsl", "#include \"pong.glsl\"\nfloat ping;\n");
+	put("pong.glsl", "#include \"ping.glsl\"\nfloat pong;\n");
+	const auto vertex = put("cycle.vert", "#version 450 core\n#include \"ping.glsl\"\nvoid main() {}\n");
+	const auto result = load(program_of(vertex, put("cycle.frag", good_fragment)));
+	BOOST_TEST(!result.ok());
+	BOOST_TEST(result.headers.empty());
+	BOOST_TEST(result.error.find("include cycle") != std::string::npos);
+	BOOST_TEST(result.error.find("ping.glsl -> ") != std::string::npos);
+	BOOST_TEST(result.error.find("pong.glsl") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AShaderThatIncludesItselfIsReportedAsACycle)
+{
+	const auto vertex = put("self.vert", "#version 450 core\n#include \"self.vert\"\nvoid main() {}\n");
+	const auto result = load(program_of(vertex, put("self.frag", good_fragment)));
+	BOOST_TEST(!result.ok());
+	BOOST_TEST(result.error.find("include cycle") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AMissingIncludeIsReportedWithItsLine)
+{
+	const auto vertex = put("missing.vert", "#version 450 core\n\n#include \"not_there.glsl\"\nvoid main() {}\n");
+	const auto result = load(program_of(vertex, put("missing.frag", good_fragment)));
+	BOOST_TEST(!result.ok());
+	BOOST_TEST(result.headers.empty());
+	BOOST_TEST(result.error.find("missing.vert' line 3") != std::string::npos);
+	BOOST_TEST(result.error.find("cannot read include \"not_there.glsl\"") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AVeryDeepIncludeChainIsReportedInsteadOfOverflowingTheStack)
+{
+	for (int i = 0; i < 40; ++i) {
+		put("deep" + std::to_string(i) + ".glsl", "#include \"deep" + std::to_string(i + 1) + ".glsl\"\n");
+	}
+	put("deep40.glsl", "float end;\n");
+	const auto vertex = put("deep.vert", "#version 450 core\n#include \"deep0.glsl\"\nvoid main() {}\n");
+	const auto result = load(program_of(vertex, put("deep.frag", good_fragment)));
+	BOOST_TEST(!result.ok());
+	BOOST_TEST(result.error.find("include depth exceeded") != std::string::npos);
+	BOOST_TEST(result.error.find("deep0.glsl -> ") != std::string::npos);
+}
+
+// The include line is replaced by the file's text and nothing else: no blank line is left behind, and a CRLF
+// source keeps its CRLF (the loader used to leave an empty line per include).
+BOOST_AUTO_TEST_CASE(TheExpansionOfACrlfSourceIsExact)
+{
+	put("crlf_lib.glsl", "float a;\r\nfloat b;\r\n");
+	std::string source = "#version 450 core\r\n#include \"crlf_lib.glsl\"\r\nvoid main() {}\r\n";
+	const auto origin = put("crlf.vert", source);
+	BOOST_TEST(rnd::expand_includes(source, origin, *env.rs).empty());
+	BOOST_TEST(source == "#version 450 core\r\nfloat a;\r\nfloat b;\r\nvoid main() {}\r\n");
+}
+
+BOOST_AUTO_TEST_CASE(AnIncludeWithoutAQuotedNameIsReportedAndOneInACommentIsIgnored)
+{
+	put("lib.glsl", "float lib_marker;\n");
+	const auto bad = load(program_of(put("angle.vert", "#version 450 core\n#include <lib.glsl>\nvoid main() {}\n"), put("angle.frag", good_fragment)));
+	BOOST_TEST(!bad.ok());
+	BOOST_TEST(bad.error.find("needs a file name in double quotes") != std::string::npos);
+
+	const auto commented = load(program_of(put("quiet.vert", "#version 450 core\n// #include \"nowhere.glsl\"\n/*\n#include \"lib.glsl\"\n*/\nvoid main() {}\n"), put("quiet.frag", good_fragment)));
+	BOOST_REQUIRE_MESSAGE(commented.ok(), commented.error);
+	BOOST_TEST(commented.headers[0].body.find("lib_marker") == std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(TheNumberOfLightsDoesNotAddADefineToAProgram)
+{
+	auto cdata = program_of(put("lit.vert", "#version 450 core\nvoid main() {}\n"), put("lit.frag", good_fragment));
+	cdata.defines.push_back("LIGHTS_ENABLED");
+	const auto result = load(cdata);
+	BOOST_REQUIRE_MESSAGE(result.ok(), result.error);
+	const std::string& body = result.headers[0].body;
+	// The array length is the one fixed constant of the engine; counts live in the GlobalLights block.
+	BOOST_TEST(count_of(body, "LIGHT_COUNT") == 1u);
+	BOOST_TEST(body.find("#define MAX_LIGHT_COUNT " + std::to_string(lights_params::MAX_LIGHT_COUNT) + "\n") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AProgramWithoutAnyReadableStageIsNotLoaded)

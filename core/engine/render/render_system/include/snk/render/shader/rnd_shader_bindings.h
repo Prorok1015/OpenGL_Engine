@@ -23,4 +23,8 @@ namespace rnd
 	// is not a comment or blank. A UTF-8 byte order mark in front of it is removed. False (and `source` unchanged,
 	// the mark apart) when the directive is not first.
 	SNK_API bool insert_after_version(std::string& source, std::string_view text);
+
+	// The source with every comment character turned into a space and the newlines kept, so offsets and line
+	// numbers stay the same: what is left is the text the compiler reads.
+	SNK_API std::string blank_comments(const std::string& source);
 }

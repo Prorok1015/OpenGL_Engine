@@ -234,3 +234,8 @@ bool rnd::insert_after_version(std::string& source, std::string_view text)
 	}
 	return false;
 }
+
+std::string rnd::blank_comments(const std::string& source)
+{
+	return without_comments(source);
+}

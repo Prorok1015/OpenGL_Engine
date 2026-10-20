@@ -3,6 +3,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/render/rnd_gpu_blocks.h>
 #include <snk/render/shader/rnd_shader_bindings.h>
+#include <snk/render/shader/rnd_shader_includes.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <format>
@@ -23,27 +24,13 @@ static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vecto
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
+    std::string problems;
     std::size_t index = 0;
     for (auto& header : headers)
     {
-        std::string_view body_view = header.body;
-        std::string& body = header.body;
-        std::size_t offset = body.find("#include");
-        while (offset != std::string_view::npos) {
-            std::size_t begin = body.find_first_of('"', offset);
-            std::size_t end = body.find_first_of('"', begin + 1);
-
-            if (begin != std::string_view::npos && end != std::string_view::npos) {
-                std::string_view include = body_view.substr(begin + 1, end - begin - 1);
-
-                auto include_code = res_sys.require_sync<res::text_resource>(tags[index] + res::tag::make(include)).get_sync();
-                if (include_code) {
-                    std::size_t line_end = body.find_first_of('\n', offset);
-                    body_view = header.body.replace(offset, line_end - offset, include_code->c_str());
-                }
-            }
-
-            offset = body.find("#include", offset);
+        const std::string errors = rnd::expand_includes(header.body, tags[index], res_sys);
+        if (!errors.empty()) {
+            problems += std::format("'{}': {}", header.title, errors);
         }
         ++index;
     }
@@ -76,7 +63,6 @@ static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vecto
         }
     }
 
-    std::string problems;
     for (auto& header : headers) {
         // Lines count from the top of the source after the #include lines were replaced by the files.
         const std::string errors = rnd::expand_binding_macros(header.body, bindings);
