@@ -13,8 +13,8 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_TypeConstant)
 	BOOST_TEST(scn::material_desc::__type == "material_desc");
 }
 
-// material_desc::deserialize does not touch its desc_system argument (it only reads JSON into POD
-// members after EPIC-49 US-49-5). Constructing a real desc_system here is impossible — the project's
+// material_desc::deserialize only hands its desc_system argument on to the schema reader as the context of desc_ref
+// fields, and material_desc has none (it only reads JSON into POD members after EPIC-49 US-49-5). Constructing a real desc_system here is impossible — the project's
 // tests deliberately avoid resource_system, which asserts on a real resources path. So we pass a
 // reference that is never dereferenced. Keep deserialize free of desc_system use or this breaks.
 static desc::desc_system& shared_desc_system()
@@ -35,6 +35,7 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
 	src.queue = scn::pass_queue::MIX;
 	src.albedo = ds::color{ 0.1f, 0.2f, 0.3f, 0.4f };
 	src.emissive = ds::color{ 0.5f, 0.6f, 0.7f, 0.8f };
+	src.shininess = 48.0f;
 	src.samplers_textures = { res::tag{ "res://tex0.desc" }, res::tag{ "res://tex1.desc" } };
 
 	json::object data;
@@ -50,9 +51,7 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
 	BOOST_TEST((dst.queue == scn::pass_queue::MIX));
 	BOOST_TEST(dst.albedo == src.albedo);
 	BOOST_TEST(dst.emissive == src.emissive);
-	// NOTE: serialize() intentionally does NOT emit shininess (preserved pre-EPIC-49 behavior — only
-	// albedo/emissive are written under "uniforms"), so it does not round-trip and stays at default.
-	BOOST_TEST(dst.shininess == 32.0f);
+	BOOST_TEST(dst.shininess == 48.0f); // #321: a non-default shininess is written and read back
 	BOOST_TEST(dst.samplers_textures.size() == src.samplers_textures.size());
 	BOOST_TEST(dst.samplers_textures[0] == src.samplers_textures[0]);
 	BOOST_TEST(dst.samplers_textures[1] == src.samplers_textures[1]);

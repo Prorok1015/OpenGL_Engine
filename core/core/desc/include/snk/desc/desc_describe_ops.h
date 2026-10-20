@@ -64,13 +64,17 @@ namespace desc
 			return true;
 		}
 
+		// Main thread only: the inline memory copy is read with get_sync (it waits for the load).
 		static json::value to_json(const res::res_handle<T>& handle)
 		{
+			// The resource system finds the desc adapter through T::base_type.
+			static_assert(requires { typename T::base_type; }, "a desc_ref target must declare 'using base_type = desc::desc_base;'");
 			if (!handle.is_valid()) {
 				return json::value(std::string_view{});
 			}
 			const std::string_view tag = handle.get_tag().view();
-			if (tag.starts_with("memory://overrides/")) { // see desc_system::make_mem_tag_deterministic
+			// A failed handle keeps its tag; get_sync would log an error on every save.
+			if (tag.starts_with("memory://overrides/") && !handle.has_error()) { // see desc_system::make_mem_tag_deterministic
 				if (const auto instance = handle.get_sync()) {
 					json::object inline_desc;
 					instance->serialize(inline_desc);
