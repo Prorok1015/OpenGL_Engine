@@ -29,13 +29,14 @@ public:
 	bool store(const res::tag& tag, const std::vector<std::byte>& data) override
 	{
 		const bool stored = ram_resolver::store(tag, data);
-		if (++stores == 1) {
+		if (armed && ++stores == 1) {
 			m_source->request_stop();
 		}
 		return stored;
 	}
 
 	int stores = 0;
+	bool armed = true;
 
 private:
 	std::stop_source* m_source;
@@ -95,6 +96,31 @@ BOOST_AUTO_TEST_CASE(Import_StoppedAfterTheMaterialPhase_LeavesNoMemoryTagBehind
 
 	BOOST_TEST(stopping.stores >= 1); // something was stored before the stop
 	BOOST_TEST(stopping.files.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Import_ReImportCancelled_KeepsTheTagsOfTheFirstImport)
+{
+	std::stop_source source;
+	rs->unregistrate_resolver(res::tag::memory);
+	auto& stopping = rs->registrate_resolver<stopping_resolver>(res::tag::memory, &source);
+	stopping.armed = false;
+	edt::model_importer importer(*descs, *rs);
+	BOOST_REQUIRE(importer.import_background(model).error.empty());
+	std::vector<res::tag> before;
+	for (const auto& [tag, data] : stopping.files) {
+		before.push_back(tag);
+	}
+	BOOST_REQUIRE(!before.empty());
+
+	// The same model again: everything exists already, the stop comes with the first store (the geometry).
+	stopping.armed = true;
+	ds::task_context ctx = context_of(source.get_token());
+	BOOST_CHECK_THROW(importer.import_background(model, &ctx), ds::task_cancelled);
+
+	for (const auto& tag : before) {
+		BOOST_TEST_CONTEXT(tag.string()) BOOST_TEST(stopping.files.contains(tag));
+	}
+	BOOST_TEST(stopping.files.size() == before.size());
 }
 
 BOOST_AUTO_TEST_CASE(Import_WithAContextThatIsNotStopped_RunsToTheEnd)

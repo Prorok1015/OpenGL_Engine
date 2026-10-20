@@ -10,7 +10,7 @@
 #include <stack>
 #include <shared_mutex>
 #include <unordered_map>
-#include <unordered_set>
+#include <cstdint>
 #include <snk/common/snk_api.h>
 
 namespace res
@@ -27,7 +27,8 @@ namespace res
 		std::optional<res::tag> path_mapper(const fs::path& path) const;
 		virtual core::res::res_resolver_interface::async_raw_data resolve(const res::tag& tag) const override;
 		virtual bool store(const ::res::tag& tag, const std::vector<std::byte>& data) override;
-		// Only for the memory protocol (scratch data); the other protocols keep their files and return false.
+		// Only for the memory protocol (scratch data); false for the other protocols (their files stay) and for a tag
+		// this resolver does not hold.
 		virtual bool erase(const ::res::tag& tag) override;
 		virtual bool exists(const ::res::tag& tag) const override;
 
@@ -45,8 +46,9 @@ namespace res
 		res::file_watcher watcher;
 		mutable std::shared_mutex m_pending_mutex;
 		std::unordered_map<res::tag, core::res::res_resolver_interface::async_raw_data> m_pending_writes;
-		// Erased tags whose file the io thread has not removed yet; resolve() and exists() treat them as absent.
-		// Guarded by m_pending_mutex.
-		std::unordered_set<res::tag> m_erased;
+		// Erased tags whose file the io thread has not removed yet -> generation of the erase; resolve() and exists()
+		// treat them as absent. Guarded by m_pending_mutex.
+		std::unordered_map<res::tag, std::uint64_t> m_erased;
+		std::uint64_t m_erase_generation = 0;
 	};
 }

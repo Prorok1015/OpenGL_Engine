@@ -136,7 +136,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	{
 		std::unique_lock lock(m_pending_mutex);
 		m_pending_writes[tag] = data_ptr;
-		m_erased.erase(tag);
+		m_erased.erase(tag); // a store after an erase: the pending erase task finds no mark and leaves the file alone
 	}
 
 	if (entries_stack.empty()) {
@@ -159,29 +159,42 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 		return false;
 	}
 
+	if (!exists(tag)) {
+		return false;
+	}
+
+	std::uint64_t generation = 0;
 	{
 		std::unique_lock lock(m_pending_mutex);
 		m_pending_writes.erase(tag);
-		m_erased.insert(tag);
+		generation = ++m_erase_generation;
+		m_erased[tag] = generation;
 	}
 
 	if (entries_stack.empty()) {
 		return true;
 	}
 
-	// On the io thread, behind any save_pending_write already queued for the tag. A store() that came in meanwhile
-	// takes the tag out of m_erased and queues its own save after this task, so the file is not removed then.
-	boost::asio::post(io, [this, tag, path = entries_stack.top() / tag.relative()]() {
-		{
-			std::unique_lock lock(m_pending_mutex);
-			if (m_erased.erase(tag) == 0) {
-				return;
-			}
+	// On the io thread, behind any save_pending_write already queued for the tag. The mark holds the generation of the
+	// erase that set it: a later store() clears it and a later erase() replaces it, and then this task leaves the file
+	// to whoever did that. The mark goes only after the file is gone, so resolve() and exists() never see the old file.
+	boost::asio::post(io, [this, tag, generation, path = entries_stack.top() / tag.relative()]() {
+		const auto still_current = [&]() {
+			std::shared_lock lock(m_pending_mutex);
+			const auto it = m_erased.find(tag);
+			return it != m_erased.end() && it->second == generation;
+		};
+		if (!still_current()) {
+			return;
 		}
 		std::error_code ec;
 		fs::remove(path, ec);
 		if (ec) {
 			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), ec.message());
+		}
+		std::unique_lock lock(m_pending_mutex);
+		if (const auto it = m_erased.find(tag); it != m_erased.end() && it->second == generation) {
+			m_erased.erase(it);
 		}
 	});
 	return true;

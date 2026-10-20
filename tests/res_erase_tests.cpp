@@ -1,7 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include <snk/resource/res_system.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <chrono>
+#include <filesystem>
+#include <thread>
 #include <memory>
 #include <string>
 #include <vector>
@@ -159,6 +163,121 @@ BOOST_AUTO_TEST_CASE(Erase_OnAResolverThatCannot_ReturnsFalse)
 	rs->registrate_resolver<keep_resolver>(res::tag::memory);
 
 	BOOST_TEST(!rs->erase(tag));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The vfs resolver over a real directory: the memory protocol erases, the files go on the io thread.
+
+namespace {
+
+bool wait_until_gone(const std::filesystem::path& file)
+{
+	for (int i = 0; i < 500; ++i) {
+		if (!std::filesystem::exists(file)) return true;
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	return false;
+}
+
+bool wait_until_there(const std::filesystem::path& file)
+{
+	for (int i = 0; i < 500; ++i) {
+		if (std::filesystem::exists(file)) return true;
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	return false;
+}
+
+struct vfs_erase_fixture
+{
+	vfs_erase_fixture()
+	{
+		root = std::filesystem::temp_directory_path() / "snk_res_erase_vfs_tests";
+		std::error_code ignored;
+		std::filesystem::remove_all(root, ignored);
+		std::filesystem::create_directories(root);
+	}
+
+	~vfs_erase_fixture()
+	{
+		std::error_code ignored;
+		std::filesystem::remove_all(root, ignored);
+	}
+
+	std::filesystem::path root;
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(VfsResolverEraseTests, vfs_erase_fixture)
+
+BOOST_AUTO_TEST_CASE(Erase_OfATagItDoesNotHold_ReturnsFalse)
+{
+	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
+
+	BOOST_TEST(!memory.erase(res::tag{ "memory://nothing/here.txt" }));
+}
+
+BOOST_AUTO_TEST_CASE(Erase_OfAStoredTag_HidesItAtOnceAndRemovesTheFile)
+{
+	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
+	const res::tag tag{ "memory://m/a.txt" };
+	BOOST_REQUIRE(memory.store(tag, test_util::to_bytes("x")));
+	BOOST_REQUIRE(wait_until_there(root / "m" / "a.txt"));
+
+	BOOST_TEST(memory.erase(tag));
+	BOOST_TEST(!memory.exists(tag));
+	BOOST_TEST(wait_until_gone(root / "m" / "a.txt"));
+	BOOST_TEST(!memory.exists(tag));
+}
+
+BOOST_AUTO_TEST_CASE(StoreEraseStoreErase_EndsWithTheFileGone)
+{
+	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
+	const res::tag tag{ "memory://m/b.txt" };
+
+	BOOST_REQUIRE(memory.store(tag, test_util::to_bytes("1")));
+	BOOST_REQUIRE(memory.erase(tag));
+	BOOST_REQUIRE(memory.store(tag, test_util::to_bytes("2")));
+	BOOST_REQUIRE(memory.erase(tag));
+
+	BOOST_TEST(!memory.exists(tag));
+	// a sentinel stored after the last erase is saved behind every queued task
+	const res::tag sentinel{ "memory://m/sentinel.txt" };
+	BOOST_REQUIRE(memory.store(sentinel, test_util::to_bytes("s")));
+	BOOST_REQUIRE(wait_until_there(root / "m" / "sentinel.txt"));
+	BOOST_TEST(!std::filesystem::exists(root / "m" / "b.txt"));
+	BOOST_TEST(!memory.exists(tag));
+}
+
+BOOST_AUTO_TEST_CASE(Store_AfterErase_KeepsTheNewFile)
+{
+	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
+	const res::tag tag{ "memory://m/c.txt" };
+	BOOST_REQUIRE(memory.store(tag, test_util::to_bytes("1")));
+	BOOST_REQUIRE(memory.erase(tag));
+	BOOST_REQUIRE(memory.store(tag, test_util::to_bytes("2")));
+
+	BOOST_TEST(memory.exists(tag));
+	BOOST_REQUIRE(wait_until_there(root / "m" / "c.txt"));
+	const res::tag sentinel{ "memory://m/sentinel.txt" };
+	BOOST_REQUIRE(memory.store(sentinel, test_util::to_bytes("s")));
+	BOOST_REQUIRE(wait_until_there(root / "m" / "sentinel.txt"));
+	BOOST_TEST(std::filesystem::exists(root / "m" / "c.txt"));
+	BOOST_TEST(memory.exists(tag));
+}
+
+BOOST_AUTO_TEST_CASE(Erase_OnAnotherProtocol_ReturnsFalseAndKeepsTheFile)
+{
+	res::vfs_resolver layer{ "res", std::vector<std::filesystem::path>{ root } };
+	const res::tag tag{ "res://m/d.txt" };
+	BOOST_REQUIRE(layer.store(tag, test_util::to_bytes("x")));
+	BOOST_REQUIRE(wait_until_there(root / "m" / "d.txt"));
+
+	BOOST_TEST(!layer.erase(tag));
+	BOOST_TEST(layer.exists(tag));
+	BOOST_TEST(std::filesystem::exists(root / "m" / "d.txt"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
