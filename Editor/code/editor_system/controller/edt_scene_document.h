@@ -11,9 +11,6 @@
 #include <utility>
 #include <vector>
 
-namespace scn { class context_manager; class context_set; class ecs_assembler; }
-namespace ecs { class system_factory; }
-
 namespace edt
 {
 	class editor_events;
@@ -26,15 +23,10 @@ namespace edt
 	};
 
 	// The level being edited: its identity, its world descs, the dirty flag and the single entry point for edits
-	// (commit). The level's context set is owned by the context_manager and reached through level_set().
+	// (commit). The level's context set belongs to the context_manager (editor_services::level_set()).
 	class scene_document final : public document
 	{
 	public:
-		// Service references (set during init, not owned)
-		std::weak_ptr<scn::context_manager> ctx_manager;
-		scn::ecs_assembler* assembler = nullptr;
-		ecs::system_factory* sfactory = nullptr;
-
 		// Level identity
 		res::tag editor_tag;
 		res::tag level_tag;
@@ -63,9 +55,6 @@ namespace edt
 		{
 			return has_active_world() && active_world_idx < static_cast<int>(world_names.size()) ? &world_names[active_world_idx] : nullptr;
 		}
-
-		// The context set of the level; null while the context manager is gone.
-		scn::context_set* level_set() const;
 
 		// Every edit of the level ends here: marks the document dirty, bumps the generation, pushes the descs to the
 		// level (commit_mode::push) and tells document_changed. The generation grows by exactly one per commit (the pusher

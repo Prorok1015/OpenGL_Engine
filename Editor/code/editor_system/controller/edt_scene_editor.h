@@ -11,6 +11,7 @@
 namespace edt
 {
 	class scene_document;
+	struct editor_services;
 
 	class scene_editor
 	{
@@ -25,7 +26,7 @@ namespace edt
 			std::vector<uint64_t> target;
 		};
 
-		explicit scene_editor(scene_document& state);
+		scene_editor(scene_document& state, editor_services& services);
 		~scene_editor();
 		scene_editor(const scene_editor&) = delete;
 		scene_editor& operator=(const scene_editor&) = delete;
@@ -64,5 +65,6 @@ namespace edt
 
 	private:
 		scene_document& m_state;
+		editor_services& m_services;
 	};
 }

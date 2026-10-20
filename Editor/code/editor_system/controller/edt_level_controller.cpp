@@ -1,5 +1,6 @@
 #include "edt_level_controller.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include <snk/scene/level/scn_context_set.h>
@@ -17,9 +18,10 @@
 #include <snk/common/logger/engine_log.h>
 
 edt::level_controller::level_controller(
-	scene_document& state, res::resource_system& res, desc::desc_system& desc,
+	scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc,
 	scene_editor& scene_ed, world_controller& world_ctrl)
 	: m_state(state)
+	, m_services(services)
 	, m_res(res)
 	, m_desc(desc)
 	, m_scene_editor(scene_ed)
@@ -31,7 +33,7 @@ edt::level_controller::~level_controller()
 {
 	if (m_state.editor_tag.is_valid())
 		m_res.unwatch(m_state.editor_tag, this);
-	if (auto ctx_mgr = m_state.ctx_manager.lock())
+	if (auto ctx_mgr = m_services.ctx_manager.lock())
 		ctx_mgr->set_on_reload(nullptr);
 }
 
@@ -39,7 +41,7 @@ edt::level_controller::~level_controller()
 
 void edt::level_controller::new_level()
 {
-	auto ctx_mgr = m_state.ctx_manager.lock();
+	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
 
 	namespace json = boost::json;
@@ -112,7 +114,7 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 	// Cleared first so a failed load cannot leave the previous level's guid to be written into the new file.
 	m_state.level_guid.clear();
 
-	auto ctx_mgr = m_state.ctx_manager.lock();
+	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
 
 	if (ctx_mgr->load_level(m_state.editor_tag)) {
@@ -221,7 +223,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 
 void edt::level_controller::resync_worlds_after_reload()
 {
-	auto ctx_mgr = m_state.ctx_manager.lock();
+	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
 	scn::context_set& lvl = ctx_mgr->level_set();
 

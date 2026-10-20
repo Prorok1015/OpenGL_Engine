@@ -1,13 +1,6 @@
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_events.h>
-#include <snk/scene/level/scn_context_manager.h>
 #include <snk/common/logger/engine_log.h>
-
-scn::context_set* edt::scene_document::level_set() const
-{
-	const auto contexts = ctx_manager.lock();
-	return contexts ? &contexts->level_set() : nullptr;
-}
 
 void edt::scene_document::commit(std::string_view label, commit_mode mode)
 {

@@ -1,5 +1,5 @@
 #include "edt_prefab_document.h"
-#include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include <snk/resource/res_system.h>
 #include <snk/desc/desc_system.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -17,8 +17,8 @@
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
 
-edt::prefab_document::prefab_document(scene_document& state, res::resource_system& res, desc::desc_system& desc)
-	: m_state(state)
+edt::prefab_document::prefab_document(editor_services& services, res::resource_system& res, desc::desc_system& desc)
+	: m_services(services)
 	, m_res(res)
 	, m_desc(desc)
 {
@@ -30,8 +30,8 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 		close();
 	}
 
-	auto ctx_mgr = m_state.ctx_manager.lock();
-	if (!ctx_mgr || !m_state.sfactory || !m_state.assembler) {
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr || !m_services.sfactory || !m_services.assembler) {
 		egLOG_ERROR("Editor/PrefabCtx", "Cannot open prefab: services not available");
 		return;
 	}
@@ -80,14 +80,14 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// Assemble template (anchor, light, etc.)
 	entt::entity root = reg.create();
-	m_state.assembler->spawn_from_desc(reg, root, *world_res, CONTEXT_NAME);
+	m_services.assembler->spawn_from_desc(reg, root, *world_res, CONTEXT_NAME);
 
 	// Inject prefab camera with separate render targets
 	inject_camera(reg);
 
 	// Load the prefab into the world
 	entt::entity prefab_root = reg.create();
-	scn::assemble_prefab(*m_state.assembler, reg, prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
+	scn::assemble_prefab(*m_services.assembler, reg, prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
 
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
@@ -101,7 +101,7 @@ void edt::prefab_document::close()
 {
 	if (!m_open) return;
 
-	if (auto ctx_mgr = m_state.ctx_manager.lock()) {
+	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->destroy_preview(m_source_tag.view());
 	}
 
@@ -118,7 +118,7 @@ entt::registry* edt::prefab_document::get_registry()
 {
 	if (!m_open) return nullptr;
 
-	auto ctx_mgr = m_state.ctx_manager.lock();
+	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return nullptr;
 
 	scn::world_context* preview = ctx_mgr->find_preview(m_source_tag.view());

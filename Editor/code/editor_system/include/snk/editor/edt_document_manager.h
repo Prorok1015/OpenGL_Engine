@@ -12,14 +12,16 @@ namespace edt
 	class editor_events;
 	class scene_document;
 	class prefab_document;
+	struct editor_services;
 
 	// The documents of the editor: the one scene, and at most one prefab preview (stage D). The scene is owned
 	// by the editor, which builds its controllers on it before the editor_context exists; the manager gives it
-	// its id, binds its document_changed to `events` and owns the preview.
+	// its id, binds its document_changed to `events` and owns the preview. `services` (also the editor's) is what
+	// the preview works through; it outlives the manager's use of it.
 	class document_manager
 	{
 	public:
-		document_manager(scene_document& scene, editor_events& events, res::resource_system& resources, desc::desc_system& descs);
+		document_manager(scene_document& scene, editor_services& services, editor_events& events, res::resource_system& resources, desc::desc_system& descs);
 		~document_manager();
 		document_manager(const document_manager&) = delete;
 		document_manager& operator=(const document_manager&) = delete;
@@ -49,6 +51,7 @@ namespace edt
 
 	private:
 		scene_document* m_scene;
+		editor_services& m_services;
 		editor_events& m_events;
 		res::resource_system& m_resources;
 		desc::desc_system& m_descs;

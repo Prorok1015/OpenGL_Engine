@@ -63,9 +63,9 @@ namespace {
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
-	: m_scene_editor(m_state)
-	, m_world_ctrl(m_state, res_sys, desc_system_)
-	, m_level_ctrl(m_state, res_sys, desc_system_, m_scene_editor, m_world_ctrl)
+	: m_scene_editor(m_state, m_services)
+	, m_world_ctrl(m_state, m_services, res_sys, desc_system_)
+	, m_level_ctrl(m_state, m_services, res_sys, desc_system_, m_scene_editor, m_world_ctrl)
 	, desc_system(desc_system_)
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
@@ -105,15 +105,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	editor_layer = std::make_shared<edt::editor_layer>();
 	m_gui.push_layer(editor_layer);
 
-	// Resolve services from data storage → shared state
-	m_state.ctx_manager = data.require_shared<scn::context_manager>();
+	// Resolve services from data storage -> editor_services (the controllers were built on it already)
+	m_services.ctx_manager = data.require_shared<scn::context_manager>();
 	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
-	m_state.ctx_manager.lock()->level_set().set_mode(ecs::run_mode::edit);
-	m_state.sfactory  = &data.require<ecs::system_factory>();
-	m_state.assembler = &data.require<scn::ecs_assembler>();
+	m_services.ctx_manager.lock()->level_set().set_mode(ecs::run_mode::edit);
+	m_services.sfactory  = &data.require<ecs::system_factory>();
+	m_services.assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
-	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, *m_state.assembler, *m_state.sfactory,
-		data.require<scn::context_manager>(), data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
+	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, m_services,
+		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
 	m_export_dialog->set_jobs(m_context->jobs());
@@ -131,7 +131,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_inspector_panel->set_desc_system(&desc_system);
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
-		auto view_cache = std::make_shared<override_edit::view_cache>(*m_state.assembler, m_state);
+		auto view_cache = std::make_shared<override_edit::view_cache>(*m_services.assembler, m_state);
 		m_inspector_panel->set_view_cache(view_cache);
 		m_hierarchy_panel->set_view_cache(std::move(view_cache));
 	}
@@ -141,7 +141,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	wire_controller_callbacks();
 	wire_panel_callbacks();
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
-		scn::context_set* level = m_state.level_set();
+		scn::context_set* level = m_services.level_set();
 		scn::world_context* found = level ? level->find(world) : nullptr;
 		return found ? &found->state() : nullptr;
 	});
@@ -179,7 +179,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	add_panel(m_viewport_panel, dock_slot::center, true);
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
 	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
-		auto ctx_mgr = m_state.ctx_manager.lock();
+		auto ctx_mgr = m_services.ctx_manager.lock();
 		const std::string* active = m_state.active_world_name();
 		if (!ctx_mgr || !active) return nullptr;
 		auto& level = ctx_mgr->level_set();
@@ -187,11 +187,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return level.has(name) ? &level.get(name).state() : nullptr;
 	});
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
-		if (auto ctx_mgr = m_state.ctx_manager.lock()) {
+		if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 			ctx_mgr->level_set().for_each([&visit](scn::world_context& world) { visit(world.state()); });
 		}
 	});
-	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_state); });
+	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_services, m_state); });
 	add_panel(m_game_view_panel, dock_slot::center, cfg_show_game_view);
 	// viewport.capture names the two views by what the panels show; the engine knows only these ids.
 	if (data.has_value<rnd::capture_service>()) {
@@ -206,7 +206,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	}
 	add_panel(m_console_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
-	m_blackboard_panel->set_manager_getter([this] { return m_state.ctx_manager.lock(); });
+	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
 	add_panel(m_blackboard_panel, dock_slot::bottom_right, false);
 	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
 	add_panel(m_prefab_panel, dock_slot::floating, false);
@@ -287,7 +287,7 @@ void edt::editor_system::create_viewport_panel()
 {
 	m_viewport_panel = std::make_shared<viewport_panel>(m_rnd, m_gui);
 	m_viewport_panel->set_registry_getter([this]() -> entt::registry* {
-		auto ctx_mgr = m_state.ctx_manager.lock();
+		auto ctx_mgr = m_services.ctx_manager.lock();
 		const std::string* active = m_state.active_world_name();
 		if (!ctx_mgr || !active) return nullptr;
 		const auto& name = *active;
@@ -295,7 +295,7 @@ void edt::editor_system::create_viewport_panel()
 		if (!level.has(name)) return nullptr;
 		return &level.get(name).state();
 	});
-	m_viewport_panel->set_input_router(m_input_router, [this] { return active_input_target(m_state); });
+	m_viewport_panel->set_input_router(m_input_router, [this] { return active_input_target(m_services, m_state); });
 	m_viewport_panel->set_on_asset_dropped([this](const std::string& res_rel_path) {
 		if (!m_state.editor_tag.is_valid()) return;
 		m_context->asset_kinds().drop_into_scene(*m_context, res::tag::make(res_rel_path));
@@ -316,7 +316,7 @@ void edt::editor_system::wire_controller_callbacks()
 	m_level_ctrl.on_editor_world_reloaded = [] {
 		egLOG("Editor", "Editor world reloaded");
 	};
-	if (auto ctx_mgr = m_state.ctx_manager.lock()) {
+	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
 	}
 }

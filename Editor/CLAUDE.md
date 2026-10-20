@@ -62,10 +62,11 @@ Editor/
 **Documents** (`include/snk/editor/edt_document.h`, `edt_document_manager.h`; `editor_context::documents()`): `document` has `id/kind/title/source/is_dirty/generation/can_save/save/save_as`. `document_manager` holds the one `scene_document` (owned by `editor_system`, the controllers are built on it) and at most one `prefab_document` preview: `scene()`, `active()`, `set_active(id)`, `open_prefab(tag)`, `preview()`, `close(id)` (the scene cannot be closed), `for_each`. It raises `document_opened/closed/activated`.
 
 **`scene_document`** (`controller/edt_scene_document.h`) holds mutable state shared between controllers:
-- Service references: `ctx_manager`, `assembler`, `sfactory`; `level_set()` is the `level` context set
 - Level identity: `editor_tag`, `level_tag`, `level_name`; the dirty flag is `is_dirty()` / `mark_clean()`
 - Multi-world: `world_descs`, `world_names`, `worlds_systems_list`, `active_world_idx`
 - `camera` (editor camera state, survives the world reload)
+
+**`editor_services`** (`include/snk/editor/edt_editor_services.h`): `ctx_manager` (weak_ptr), `assembler`, `sfactory`, and `level_set()` (the `level` context set). Owned by `editor_system` (declared before the controllers, filled in `init()`); the controllers, `prefab_document`, `document_manager` and `editor_context` take it by reference. It lives as long as `editor_system`, not as long as a document.
 
 **Every edit ends in `scene_document::commit(label, mode)`**: it marks the document dirty, bumps `desc_generation`, pushes the descs into the level (`scene_editor::serialize_and_push`, installed by `scene_editor` through `set_pusher`) and emits `events.document_changed(id, generation)`. A push that finds no level emits nothing. `commit_mode::state_only` skips the push and the announcement (new level, new world: the contexts are already built; nothing was announced before either). `~editor_system` calls `document_manager::shutdown()` (closes the preview, drops the scene) because the context outlives the system. Never set the dirty flag or call `serialize_and_push` from an edit directly. Save / Save As go through `document::save()/save_as()` (handlers set by `editor_system`); the File menu and the exit prompt still go through `file_menu` and `dialog_service`.
 
