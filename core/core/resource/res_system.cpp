@@ -555,7 +555,7 @@ void res::resource_system::prune_released_edges() {
       return false;
     }
     // Edges sit under the tag the block is cached by (the alias target); the watcher may have used the original tag.
-    // m_alias_mutex is never held while m_cache_mutex is taken, so this order cannot deadlock.
+    // Lock order: m_cache_mutex first, m_alias_mutex nested inside it (as in signal_changed); never the reverse.
     std::shared_lock alias_lock(m_alias_mutex);
     return std::ranges::none_of(m_aliases, [&](const auto &pair) { return pair.second == tag && has_watchers(pair.first); });
   };
@@ -607,18 +607,29 @@ void res::resource_system::prune_released_edges() {
 
 std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) const {
   // Breadth first over the reverse edges; `seen` is what keeps a cycle from looping.
+  // An alias edge (original -> alias) is followed like a recorded one but kept apart from them: pruning and the
+  // reload of a tag rewrite the recorded ones, and must not drop it.
+  // `tag` by value: the callers pass an element of the vector that `visit` appends to, and the alias lookup runs
+  // after the visits, so a reference would dangle once that vector grows.
+  const auto for_each_dependent = [this](const res::tag tag, const auto &visit) {
+    if (const auto it = m_dependents.find(tag); it != m_dependents.end()) {
+      for (const auto &dependent : it->second) {
+        visit(dependent);
+      }
+    }
+    if (const auto alias = m_alias_edges.find(tag); alias != m_alias_edges.end()) {
+      visit(alias->second);
+    }
+  };
+
   std::vector<res::tag> reached{root};
   std::unordered_set<res::tag> seen{root};
   for (std::size_t at = 0; at < reached.size(); ++at) {
-    const auto it = m_dependents.find(reached[at]);
-    if (it == m_dependents.end()) {
-      continue;
-    }
-    for (const auto &dependent : it->second) {
+    for_each_dependent(reached[at], [&](const res::tag &dependent) {
       if (seen.insert(dependent).second) {
         reached.push_back(dependent);
       }
-    }
+    });
   }
   if (reached.size() == 1) {
     return reached;
@@ -629,13 +640,11 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
   std::unordered_map<res::tag, std::size_t> waiting;
   waiting.reserve(reached.size());
   for (const auto &member : reached) {
-    std::size_t count = 0;
-    if (const auto it = m_depends_on.find(member); it != m_depends_on.end()) {
-      for (const auto &target : it->second) {
-        count += seen.contains(target) ? 1 : 0;
-      }
-    }
-    waiting.emplace(member, count);
+    waiting.emplace(member, 0);
+  }
+  // Counted over the same edges the loop below releases, so alias edges balance too.
+  for (const auto &member : reached) {
+    for_each_dependent(member, [&](const res::tag &dependent) { ++waiting.at(dependent); });
   }
 
   std::vector<res::tag> ordered;
@@ -646,15 +655,11 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
     }
   }
   for (std::size_t at = 0; at < ordered.size(); ++at) {
-    const auto it = m_dependents.find(ordered[at]);
-    if (it == m_dependents.end()) {
-      continue;
-    }
-    for (const auto &dependent : it->second) {
+    for_each_dependent(ordered[at], [&](const res::tag &dependent) {
       if (--waiting.at(dependent) == 0) {
         ordered.push_back(dependent);
       }
-    }
+    });
   }
 
   if (ordered.size() != reached.size()) {
@@ -681,6 +686,23 @@ void res::resource_system::signal_changed(const res::tag &tag) {
     batch = changed_batch(tag);
     for (const auto &changed : batch) {
       m_cache.erase_tag(changed);
+    }
+    // A changed original has to run its adapter again (it stores fresh data and registers the alias anew), so its
+    // alias goes with its edge; the alias entry itself was evicted above as a dependent. The alias lock is taken inside
+    // the cache lock, the order prune_released_edges() uses too (register_alias holds one at a time). A mapping that a
+    // concurrent register_alias has replaced meanwhile is a different one and stays.
+    {
+      std::unique_lock alias_lock(m_alias_mutex);
+      for (const auto &changed : batch) {
+        const auto edge = m_alias_edges.find(changed);
+        if (edge == m_alias_edges.end()) {
+          continue;
+        }
+        if (const auto mapped = m_aliases.find(changed); mapped != m_aliases.end() && mapped->second == edge->second) {
+          m_aliases.erase(mapped);
+        }
+        m_alias_edges.erase(edge);
+      }
     }
     epoch = ++m_watch_epoch;
   }
@@ -732,6 +754,9 @@ void res::resource_system::deliver_to_watchers(const res::tag &tag,
 
 void res::resource_system::register_alias(const res::tag &original,
                                           const res::tag &alias) {
+  if (original == alias) {
+    return;
+  }
   {
     std::unique_lock lock(m_alias_mutex);
     m_aliases[original] = alias;
@@ -740,6 +765,8 @@ void res::resource_system::register_alias(const res::tag &original,
   {
     std::unique_lock lock(m_cache_mutex);
     m_cache.copy_tag(original, alias, [](const cache_entry &entry) { return !entry.expired(); });
+    // One alias per original, as in m_aliases: registering the same pair again changes nothing, another alias replaces it.
+    m_alias_edges.insert_or_assign(original, alias);
   }
 
   {

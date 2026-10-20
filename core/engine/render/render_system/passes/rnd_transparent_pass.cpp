@@ -63,6 +63,7 @@ void transparent_pass::execute(render_context &context,
         rnd::driver::blend_state::factor::ONE_MINUS_SRC_COLOR;
 
     state.blend = {color_blend, weight_blend};
+    state.polygon = rnd::scene_polygon(packet.camera);
 
     rnd::driver::render_pass_desc pass;
     pass.colors.push_back({.texture = color_tp_rt,

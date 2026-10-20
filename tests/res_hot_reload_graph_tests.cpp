@@ -616,4 +616,44 @@ BOOST_AUTO_TEST_CASE(SignalSweeps_AreThrottledOnALargeGraph)
 	BOOST_TEST(rs->dependency_edge_count() == 300u); // all held: nothing to drop
 }
 
+// original -> alias -> c: a change of the original reaches c, built from the alias, through the alias edge (#302).
+BOOST_AUTO_TEST_CASE(AliasEdge_PassesTheChangeOnToWhatDependsOnTheAlias)
+{
+	const auto original = node("orig.node", "o");
+	const auto alias = node("alias.node", "a1");
+	const auto c = node("c.node", "c", { alias });
+	rs->register_alias(original, alias);
+	auto held = rs->require<node_resource>(c);
+	pump();
+	BOOST_REQUIRE(held.is_ready());
+	watch({ alias, c });
+
+	rs->signal_changed(original);
+	pump();
+
+	BOOST_TEST(times_delivered(alias) == 1);
+	BOOST_TEST(times_delivered(c) == 1);
+	BOOST_TEST(position_of(alias) < position_of(c));
+	auto again = rs->require<node_resource>(c);
+	pump();
+	BOOST_TEST(again.get_control_block() != held.get_control_block());
+	BOOST_TEST(rs->resolve_alias(original) == original); // dropped until the next load registers it
+}
+
+// Two aliases pointing at each other: the signal follows the loop once.
+BOOST_AUTO_TEST_CASE(AliasEdge_Cycle_DeliversEachTagOnce)
+{
+	const auto a = node("a.node", "a");
+	const auto b = node("b.node", "b");
+	rs->register_alias(a, b);
+	rs->register_alias(b, a);
+	watch({ a, b });
+
+	rs->signal_changed(a);
+	pump();
+
+	BOOST_TEST(times_delivered(a) == 1);
+	BOOST_TEST(times_delivered(b) == 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

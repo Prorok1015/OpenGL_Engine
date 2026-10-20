@@ -78,6 +78,7 @@ void scn::render_data_extractor::extract(rnd::frame_context& context) {
             packet.camera.tp_reveal_target = cam.tp_reveal_target;
             packet.camera.render_priority = cam.layer;
             packet.camera.clear = clear_mode_of(cam.clear);
+            packet.camera.wireframe = cam.wireframe;
 
             auto meshes_view = reg.view<scn::name_component, scn::mesh_component, scn::geometry_component, scn::material_desc_component, scn::world_transform>();
             auto mesh_count = meshes_view.size_hint();
