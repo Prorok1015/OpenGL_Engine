@@ -71,7 +71,8 @@ void edt::asset_exporter::remap_json_strings(
 bool edt::asset_exporter::export_to_project(
 	const import_result& result,
 	const std::unordered_map<res::tag, res::tag>& remap,
-	export_progress* progress) const
+	export_progress* progress,
+	ds::task_context* ctx) const
 {
 	// Process tags in order: leaves first (textures, geometry), then prefab (root) last.
 	// root_tag is already known from import_result — no filename guessing needed.
@@ -91,6 +92,7 @@ bool edt::asset_exporter::export_to_project(
 	}
 
 	for (const auto& mem_tag : ordered_tags) {
+		if (ctx) ctx->throw_if_stopped();
 		auto remap_it = remap.find(mem_tag);
 		if (remap_it == remap.end()) {
 			egLOG_WARN("edt/export", "No remap for tag '{}'", mem_tag.view());

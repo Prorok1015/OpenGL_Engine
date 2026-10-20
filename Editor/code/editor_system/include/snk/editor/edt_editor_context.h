@@ -27,7 +27,8 @@ namespace edt
 	// registered in ds::app_data_storage (data.require<edt::editor_context>()). Engine services are
 	// references and are not owned; `commands` is the process-wide command registry that actions() adds the
 	// editor's part to (and that the engine registered log.read into). The job.* and dialog.* commands are
-	// registered here and live as long as the context. The scene document belongs to the editor (its controllers are built
+	// registered here and live as long as the context. A job that failed (threw) is logged and shown as an error
+	// message dialog; the destructor waits for the running jobs, so build the context after what they use. The scene document belongs to the editor (its controllers are built
 	// on it before the context exists); the context's document_manager refers to it and owns the prefab preview.
 	class editor_context
 	{
@@ -80,5 +81,7 @@ namespace edt
 		asset_kind_registry m_asset_kinds;
 		// After the services they call and the registry they live in: destroyed first.
 		std::vector<registration> m_service_commands;
+		// Shows a failed job to the person; uses m_jobs and m_dialogs, so it goes first.
+		connection m_job_failures;
 	};
 }

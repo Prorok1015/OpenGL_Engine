@@ -47,7 +47,7 @@ constexpr const char* capture_result_schema = R"({
 	"additionalProperties": false
 })";
 
-constexpr const char* capture_args_schema = R"({"type":"object","properties":{"viewport":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"max_side":{"type":"integer"},"max_pixels":{"type":"integer"}},"additionalProperties":false})";
+constexpr const char* capture_args_schema = R"({"type":"object","properties":{"viewport":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"max_side":{"type":"integer"},"max_pixels":{"type":"integer"},"max_source_pixels":{"type":"integer"}},"additionalProperties":false})";
 
 struct bridge_fixture
 {
@@ -395,9 +395,9 @@ BOOST_AUTO_TEST_CASE(CallTool_ACaptureSizeIsLimitedForAnAgent)
 	BOOST_TEST(!call_tool("viewport_capture", "{}").is_error);
 	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
 	// The ceilings travel with the request: the command derives the side the agent did not name and checks it against them.
-	BOOST_TEST(seen[0] == R"({"width":2048,"height":2048,"max_side":2048,"max_pixels":4194304})");
-	BOOST_TEST(seen[1] == R"({"height":600,"max_side":2048,"max_pixels":4194304})");
-	BOOST_TEST(seen[2] == R"({"width":1280,"max_side":2048,"max_pixels":4194304})");
+	BOOST_TEST(seen[0] == R"({"width":2048,"height":2048,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[1] == R"({"height":600,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[2] == R"({"width":1280,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
 }
 
 BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
@@ -412,10 +412,10 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
 	add(std::move(capture));
 
 	BOOST_TEST(!call_tool("viewport_capture", R"({"width":100,"max_side":512,"max_pixels":1000})").is_error);
-	BOOST_TEST(!call_tool("viewport_capture", R"({"width":100,"max_side":8192,"max_pixels":33554432})").is_error);
+	BOOST_TEST(!call_tool("viewport_capture", R"({"width":100,"max_side":8192,"max_pixels":33554432,"max_source_pixels":33554432})").is_error);
 	BOOST_REQUIRE_EQUAL(seen.size(), 2u);
-	BOOST_TEST(seen[0] == R"({"width":100,"max_side":512,"max_pixels":1000})");
-	BOOST_TEST(seen[1] == R"({"width":100,"max_side":2048,"max_pixels":4194304})");
+	BOOST_TEST(seen[0] == R"({"width":100,"max_side":512,"max_pixels":1000,"max_source_pixels":8388608})");
+	BOOST_TEST(seen[1] == R"({"width":100,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
 }
 
 BOOST_AUTO_TEST_CASE(CallTool_ATooLargeResultIsAnErrorNotAMegabyteWall)

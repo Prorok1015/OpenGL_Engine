@@ -1,5 +1,8 @@
 #include <snk/editor/edt_job_service.h>
+#include <snk/editor/edt_dialog_service.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <format>
 #include <vector>
 
 edt::job_service::job_service(ds::task_system& tasks, editor_events* events)
@@ -146,4 +149,18 @@ void edt::job_service::cancel_all_and_wait()
 		}
 	}
 	m_cancelled.clear();
+}
+
+edt::connection edt::report_failed_jobs(editor_events& events, const job_service& jobs, dialog_service& dialogs)
+{
+	return events.job_finished.subscribe([&jobs, &dialogs](std::uint64_t id, job_status status, const std::string& error) {
+		if (status != job_status::failed) return;
+		// The outcome is in the history before job_finished is raised.
+		const auto outcome = jobs.info(id);
+		const std::string label = outcome ? outcome->label : std::format("#{}", id);
+		egLOG_ERROR("edt/job", "Job '{}' failed: {}", label, error);
+		if (dialogs.can_show()) {
+			dialogs.message(message_level::error, std::format("'{}' failed: {}", label, error));
+		}
+	});
 }

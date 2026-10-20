@@ -56,15 +56,6 @@ namespace edt::game_view
 		return it == m_cameras.end() ? -1 : static_cast<int>(it - m_cameras.begin());
 	}
 
-	void apply_viewports(entt::registry& reg, entt::entity selected, glm::ivec2 size)
-	{
-		const bool usable = size.x > 0 && size.y > 0;
-		for (auto [ent, cam] : reg.view<scn::camera_component>().each()) {
-			if (!is_game_camera(cam)) continue;
-			cam.m_viewport.size = (ent == selected && usable) ? size : glm::ivec2{ 0 };
-		}
-	}
-
 	void apply_target_viewports(entt::registry& reg, const res::tag& target, glm::ivec2 size, entt::entity only)
 	{
 		const bool usable = target.is_valid() && size.x > 0 && size.y > 0;

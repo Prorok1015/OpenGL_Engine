@@ -247,6 +247,28 @@ BOOST_AUTO_TEST_CASE(Capture_TighterLimitsAlsoApplyToTheNativeSize)
 	BOOST_CHECK(service.capture("scene").ok());
 }
 
+BOOST_AUTO_TEST_CASE(Capture_SourceLimitOfTheCallerRefusesABigTargetEvenWhenTheAnswerIsSmall)
+{
+	auto big = make_texture(drv, target_header(64, 64));
+	cmd::registration reg = service.add_target("big", [&big] { return big.handle(); });
+	BOOST_CHECK(service.capture("big", { 8, 8 }).ok());
+
+	rnd::capture_limits limits;
+	limits.max_source_pixels = 64 * 64 - 1;
+	const auto refused = service.capture("big", { 8, 8 }, limits);
+	BOOST_CHECK(refused.status == rnd::capture_status::failed);
+	BOOST_CHECK(refused.image.rgba.empty());
+
+	limits.max_source_pixels = 64 * 64;
+	BOOST_CHECK(service.capture("big", { 8, 8 }, limits).ok());
+
+	// A limit cannot raise the ceiling of the service.
+	auto oversized = make_texture(drv, target_header(8192, 8192));
+	cmd::registration oversized_reg = service.add_target("oversized", [&oversized] { return oversized.handle(); });
+	limits.max_source_pixels = 1LL << 40;
+	BOOST_CHECK(service.capture("oversized", { 8, 8 }, limits).status == rnd::capture_status::failed);
+}
+
 BOOST_AUTO_TEST_CASE(Capture_FailsBeforeReadingATargetOverThePixelBudget)
 {
 	// The null driver keeps no pixels of a texture, so a huge one costs nothing here; the service must refuse it
@@ -394,6 +416,20 @@ BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 	BOOST_CHECK_EQUAL(capture(R"({"max_side":8193})").code, cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(capture(R"({"max_pixels":33554433})").code, cmd::codes::invalid_args);
 	BOOST_CHECK_EQUAL(capture(R"({"max_pixels":"many"})").code, cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Capture_MaxSourcePixelsRefusesABigViewBeforeReadingIt)
+{
+	auto big = make_texture(drv, target_header(64, 64));
+	cmd::registration reg = service.add_target("big", [&big] { return big.handle(); });
+
+	BOOST_CHECK(capture(R"({"viewport":"big","width":8,"height":8,"max_source_pixels":4096})").ok);
+	const auto refused = capture(R"({"viewport":"big","width":8,"height":8,"max_source_pixels":4095})");
+	BOOST_CHECK(!refused.ok);
+	BOOST_CHECK_EQUAL(refused.code, cmd::codes::failed);
+
+	BOOST_CHECK_EQUAL(capture(R"({"max_source_pixels":0})").code, cmd::codes::invalid_args);
+	BOOST_CHECK_EQUAL(capture(R"({"max_source_pixels":33554433})").code, cmd::codes::invalid_args);
 }
 
 BOOST_AUTO_TEST_CASE(Capture_TargetOverThePixelBudgetFails)

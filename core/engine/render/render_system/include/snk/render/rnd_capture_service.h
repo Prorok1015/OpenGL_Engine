@@ -29,6 +29,9 @@ namespace rnd
 	{
 		int max_side = 8192;
 		std::int64_t max_pixels = 32LL * 1024 * 1024;
+		// The target itself is read back whole before it is scaled, so this bounds the source: a target with more
+		// pixels is refused (status failed) whatever size is asked. The service ceiling applies.
+		std::int64_t max_source_pixels = 32LL * 1024 * 1024;
 	};
 
 	enum class capture_status : std::uint8_t

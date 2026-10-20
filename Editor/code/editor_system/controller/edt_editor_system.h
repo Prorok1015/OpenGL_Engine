@@ -62,6 +62,9 @@ namespace edt {
 
 	private:
 		editor_context* m_context = nullptr;
+		// The context is registered after this system, so a storage that is torn down without editor_term() destroys
+		// it first: the destructor reaches it through this, never through m_context.
+		std::weak_ptr<editor_context> m_context_alive;
 
 		// The level being edited; the controllers share it. The documents of the editor_context refer to it.
 		scene_document m_state;

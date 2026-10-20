@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/editor/edt_job_service.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_service_commands.h>
 #include <boost/json/parse.hpp>
 #include <format>
@@ -199,6 +200,19 @@ BOOST_AUTO_TEST_CASE(CancelAllAndWait_LeavesNothingRunningOrDelivered)
 	BOOST_TEST(tasks->snapshot().empty());
 }
 
+BOOST_AUTO_TEST_CASE(Destructor_DiscardsAResultThatWasReadyButNotDelivered)
+{
+	// The body ran, the result waits for the main drain; the service goes first: nothing may call back into it.
+	int delivered = 0;
+	jobs->start(ds::lane::compute, { "work", "test" }, owner,
+		[](ds::task_context&) { return 1; },
+		[&delivered](ds::task_result<int>&) { ++delivered; });
+	run_lane();
+	jobs.reset();
+	deliver();
+	BOOST_TEST(delivered == 0);
+}
+
 BOOST_AUTO_TEST_CASE(Destructor_CancelsWhatIsLeft)
 {
 	bool ran = false;
@@ -360,6 +374,50 @@ BOOST_AUTO_TEST_CASE(FailedJob_FinishesWithItsError)
 	deliver();
 	const std::vector<std::string> expected{ std::format("start:{}:work", id), std::format("finish:{}:failed:boom", id) };
 	BOOST_TEST(log == expected, boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(FailedJob_IsShownAsAnErrorDialogWithItsLabelAndError)
+{
+	edt::dialog_service dialogs;
+	dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+	const edt::connection shown = edt::report_failed_jobs(events, *jobs, dialogs);
+
+	start("Import tri.fbx", [](ds::task_context&) -> int { throw std::runtime_error("boom"); });
+	run_lane();
+	deliver();
+
+	const auto waiting = dialogs.list();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_TEST(waiting[0].kind == "message");
+	BOOST_TEST(waiting[0].text.find("Import tri.fbx") != std::string::npos);
+	BOOST_TEST(waiting[0].text.find("boom") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(DoneAndCancelledJobs_ShowNoDialog)
+{
+	edt::dialog_service dialogs;
+	dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+	const edt::connection shown = edt::report_failed_jobs(events, *jobs, dialogs);
+
+	start("fine", [](ds::task_context&) { return 1; });
+	const auto cancelled = start("stopped", [](ds::task_context&) { return 1; });
+	jobs->cancel(cancelled);
+	run_lane();
+	deliver();
+
+	BOOST_TEST(dialogs.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(FailedJob_WithoutADialogRegistrar_IsOnlyLogged)
+{
+	edt::dialog_service dialogs;
+	const edt::connection shown = edt::report_failed_jobs(events, *jobs, dialogs);
+
+	start("work", [](ds::task_context&) -> int { throw std::runtime_error("boom"); });
+	run_lane();
+	deliver();
+
+	BOOST_TEST(dialogs.pending() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(OwnerGone_TheJobStillFinishesOnce)

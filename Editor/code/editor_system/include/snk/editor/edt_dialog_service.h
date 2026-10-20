@@ -67,6 +67,8 @@ namespace edt
 
 		// Must be set before the first dialog is asked for.
 		void set_registrar(implicit_registrar registrar) { m_registrar = std::move(registrar); }
+		// False until the registrar is set: asking for a dialog before that is a programming error.
+		bool can_show() const { return static_cast<bool>(m_registrar); }
 
 		// "Save / Discard / Cancel" prompt. Reports `cancel` also when the popup is closed without a choice.
 		dialog_id confirm_unsaved(std::function<void(unsaved_choice)> on_answer);

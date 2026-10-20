@@ -2,6 +2,7 @@
 #include "edt_filesystem_assimp_io.h"
 
 #include <assimp/Importer.hpp>
+#include <assimp/ProgressHandler.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
@@ -23,6 +24,22 @@ namespace json = boost::json;
 // ─── Helpers (same as in scn_model_importer_adapter.cpp) ─────────────────────
 
 namespace {
+
+void checkpoint(ds::task_context* ctx)
+{
+	if (ctx) ctx->throw_if_stopped();
+}
+
+// Assimp polls it while it reads a file; false aborts the import (the importer then returns no scene).
+class stop_progress_handler final : public Assimp::ProgressHandler
+{
+public:
+	explicit stop_progress_handler(ds::task_context& ctx) : m_ctx(ctx) {}
+	bool Update(float) override { return !m_ctx.stop.stop_requested(); }
+
+private:
+	ds::task_context& m_ctx;
+};
 
 glm::quat convert_to_glm(const aiQuaternion& v)
 {
@@ -518,17 +535,17 @@ json::object build_prefab_node(
 
 // ─── model_importer implementation ───────────────────────────────────────────
 
-edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system& rs, rnd::render_system& rnd)
+edt::model_importer::model_importer(desc::desc_system& ds, res::resource_system& rs)
 	: m_desc(ds)
 	, m_res(rs)
-	, m_rnd(rnd)
 {
 }
 
-edt::import_intermediate edt::model_importer::import_background(const std::filesystem::path& abs_path)
+edt::import_intermediate edt::model_importer::import_background(const std::filesystem::path& abs_path, ds::task_context* ctx)
 {
 	import_intermediate im;
 	im.source_path = abs_path;
+	checkpoint(ctx);
 
 	// 1. Read file from disk
 	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
@@ -543,12 +560,16 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	std::vector<std::byte> file_data(static_cast<size_t>(file_size));
 	in.read(reinterpret_cast<char*>(file_data.data()), file_size);
 	in.close();
+	checkpoint(ctx);
 
 	// 2. Import via Assimp with filesystem IO
 	Assimp::Importer importer;
+	if (ctx) importer.SetProgressHandler(new stop_progress_handler(*ctx));
 	constexpr unsigned int flags = aiProcess_Triangulate | aiProcess_GenSmoothNormals | aiProcess_CalcTangentSpace;
 	importer.SetIOHandler(new edt::filesystem_assimp_io(abs_path, file_data));
 	const aiScene* scene = importer.ReadFile(abs_path.string(), flags);
+	// An aborted parse also returns no scene: that is a cancel, not an import error.
+	checkpoint(ctx);
 
 	if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
 		im.error = std::format("ASSIMP error: {}", importer.GetErrorString());
@@ -637,6 +658,8 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 		}
 	}
 
+	checkpoint(ctx);
+
 	// 7. Geometry tag
 	res::tag geom_tag = res::tag{ res::tag::memory, mem_prefix + model_name + ".geom.desc" };
 	im.geom_tag = geom_tag;
@@ -656,6 +679,8 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 		scene, scene->mRootNode, geometry, geom_tag, bone_index_map,
 		animated_node_names, im.skin_weights, mem_prefix, model_dir, m_res, im.all_tags, prefab_tag,
 		scene->mRootNode->mName.C_Str());
+
+	checkpoint(ctx);
 
 	// 9. Add animation_collection_desc to root (inline clips)
 	if (!clip_map.empty()) {
@@ -703,6 +728,9 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 			prefab_root["components"] = json::object{ {"skin_weights_desc", sw_comp} };
 	}
 
+	// Last safe point: from here the results are stored in the resource system.
+	checkpoint(ctx);
+
 	// 10. Store geometry (res_sys.store is mutex-protected)
 	json::object jsgeometry;
 	jsgeometry["__type"] = "geometry_desc";
@@ -713,6 +741,8 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	std::memcpy(geom_bytes.data(), geom_str.data(), geom_str.size());
 	m_res.store(geom_tag, geom_bytes);
 	im.all_tags.push_back(geom_tag);
+
+	checkpoint(ctx);
 
 	// 11. Build and store prefab JSON
 	json::object jsdata;

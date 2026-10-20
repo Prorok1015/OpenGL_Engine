@@ -287,7 +287,24 @@ BOOST_AUTO_TEST_CASE(SceneEditorEdit_ReachesDocumentChangedThroughTheInstalledPu
 	BOOST_REQUIRE(changed.size() == 1u);
 	BOOST_TEST(changed[0].first == scene.id());
 	BOOST_TEST(changed[0].second == scene.generation());
-	BOOST_TEST(scene.generation() > before);
+	// One edit, one step: the edit method does not bump the generation besides commit().
+	BOOST_TEST(scene.generation() == before + 1);
+}
+
+BOOST_AUTO_TEST_CASE(SceneEditorEdit_ThatDoesNothing_LeavesTheGenerationAndTheDocumentAlone)
+{
+	edt::scene_editor editor(scene);
+	const auto before = scene.generation();
+	BOOST_REQUIRE(!scene.active_world_desc());
+
+	editor.create_entity("Empty");
+	editor.delete_entity(1);
+	editor.duplicate_entity(1);
+	editor.reparent_entity(1, 2, -1);
+
+	BOOST_TEST(scene.generation() == before);
+	BOOST_TEST(!scene.is_dirty());
+	BOOST_TEST(changed.empty());
 }
 
 BOOST_AUTO_TEST_CASE(Shutdown_ClosesThePreviewAndLetsGoOfTheScene)
