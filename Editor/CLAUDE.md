@@ -27,7 +27,7 @@ Editor/
     │
     ├── edt_component_renderers/      # per-type ImGui renderers for components
     │   ├── edt_component_renderers.cpp/h
-    │   └── edt_cr_*.cpp              # skybox, skin, animation (camera and light are drawn from their schemas)
+    │   └── edt_cr_*.cpp              # skin, animation (camera, light and skybox are drawn from their schemas)
     │
     ├── import/                       # Asset import/export pipeline
     │   ├── edt_model_importer.cpp/h

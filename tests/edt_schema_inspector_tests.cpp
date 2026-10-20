@@ -630,4 +630,30 @@ BOOST_AUTO_TEST_CASE(MaterialInspectorFieldsComeFromTheSchema)
 	BOOST_CHECK(!was_drawn(drawn, "/uniforms/ambient")); // not a field of the file, so not of the inspector
 }
 
+// ---------------------------------------------------------------- the skybox (#131-d)
+
+BOOST_AUTO_TEST_CASE(SkyboxInspectorFieldComesFromTheSchema)
+{
+	const desc::type_schema* schema = descs->find_schema(scn::skybox_desc::__type);
+	BOOST_REQUIRE(schema);
+
+	// the material is a desc reference: an asset field, not the text box the hand-written renderer drew
+	const ui::widget_spec material = spec_of(*schema, "material");
+	BOOST_CHECK(material.kind == ui::widget::asset);
+
+	// without data the inspector shows no material, as the desc writes none
+	const json::value shown = ui::compose(*schema, descs->schemas(), {});
+	const json::value* shown_material = desc::json_pointer_get(shown, "/material");
+	BOOST_REQUIRE(shown_material);
+	BOOST_REQUIRE(shown_material->is_string());
+	BOOST_TEST(shown_material->as_string().empty());
+
+	imgui_ctx imgui;
+	json::value value = shown;
+	bool changed = false;
+	const drawn_list drawn = draw_twice(imgui, *schema, descs->schemas(), value, &changed);
+	BOOST_CHECK(widget_at(drawn, "/material") == ui::widget::asset);
+	BOOST_CHECK(!changed);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

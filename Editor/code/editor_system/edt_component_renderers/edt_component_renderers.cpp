@@ -5,7 +5,6 @@ std::vector<edt::registration> edt::register_desc_component_renderers(edt::inspe
 {
 	std::vector<registration> registrations;
 	renderer_registrar registrar{ registry, registrations };
-	edt::edt_cr_skybox_register(registrar);
 	edt::edt_cr_skin_register(registrar);
 	edt::edt_cr_animation_register(registrar);
 	return registrations;
