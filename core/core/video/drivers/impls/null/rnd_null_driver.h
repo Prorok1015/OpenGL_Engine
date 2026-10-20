@@ -87,6 +87,7 @@ namespace rnd::driver::null
 		void set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets = {}) override;
 
 		pipeline_handle create_pipeline(const pipeline_desc& desc) override;
+		void destroy_pipelines_of(const shader_ref& shader) override;
 		void bind_pipeline(pipeline_handle pipeline) override;
 		const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		void invalidate_state_cache() override { ++m_calls.state_cache_invalidations; }

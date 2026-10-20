@@ -19,8 +19,9 @@ void copy_to_buffer(char (&dst)[N], std::string_view text)
 
 }
 
-edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter)
+edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter, job_service& jobs)
 	: m_exporter(exporter)
+	, m_jobs(jobs)
 {
 }
 
@@ -157,7 +158,6 @@ void edt::asset_export_dialog::render_export_form()
 	if (ImGui::Button("Export", { bw, 0.f })) {
 		auto remap = m_exporter.build_remap(m_import, asset_name_s, target_folder_s);
 
-		ASSERT_MSG(m_jobs, "asset_export_dialog: set_jobs() was not called");
 		m_export_progress = std::make_shared<export_progress>();
 		m_exporting = true;
 		m_export_done = false;
@@ -168,7 +168,7 @@ void edt::asset_export_dialog::render_export_form()
 		auto* exporter_ptr = &m_exporter;
 
 		// io lane: the work is writing files to the project; the exporter reports through export_progress.
-		m_export_job = m_jobs->start(ds::lane::io, { "Export " + asset_name_s, "export" }, m_lifetime,
+		m_export_job = m_jobs.start(ds::lane::io, { "Export " + asset_name_s, "export" }, m_lifetime,
 			[exporter_ptr, import_copy = std::move(import_copy),
 			 remap = std::move(remap), progress_ptr](ds::task_context& ctx) {
 				ctx.throw_if_stopped();
@@ -210,7 +210,7 @@ void edt::asset_export_dialog::render_export_progress()
 	ImGui::Spacing();
 
 	// The job was cancelled and its result discarded: nothing more will arrive.
-	if (!m_export_done && !m_jobs->is_running(m_export_job))
+	if (!m_export_done && !m_jobs.is_running(m_export_job))
 		m_export_done = true;
 
 	if (m_export_done) {

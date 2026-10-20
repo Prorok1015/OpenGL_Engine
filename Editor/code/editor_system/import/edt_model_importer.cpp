@@ -10,6 +10,7 @@
 #include <snk/render/skinning/rnd_skinning_manager.h>
 #include <snk/render/geom/rnd_geometry_desc.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_node_id.h>
 #include <snk/scene/scn_mesh_nodes.hpp>
@@ -154,7 +155,8 @@ json::value find_material_texture(
 		std::string_view texture_name = str.C_Str();
 
 		if (auto* pEmbTxm = scene->GetEmbeddedTexture(texture_name.data())) {
-			const std::string_view emb_name{ pEmbTxm->mFilename.C_Str() };
+			// Model files are untrusted: keep the name from leaving __embedded_txm/ in the tag.
+			const std::string emb_name = res::sanitize_relative_path(pEmbTxm->mFilename.C_Str());
 			const std::string_view emb_fmt{ pEmbTxm->achFormatHint };
 
 			std::string emb_path = std::format("__embedded_txm/{0}.{1}",
@@ -216,26 +218,22 @@ json::value find_material_texture(
 		}
 
 		// External texture file — read from model's directory and store in memory://
-		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + std::string(texture_name));
+		const std::string safe_texture_name = res::sanitize_relative_path(texture_name);
+		res::tag tex_data_tag = res::tag(res::tag::memory, mem_prefix + "textures/" + safe_texture_name);
 
 		if (!res_sys.exists(tex_data_tag)) {
-			std::filesystem::path tex_path = model_dir / std::string(texture_name);
-			std::ifstream tex_in(tex_path, std::ios::binary | std::ios::ate);
-			if (tex_in) {
-				auto tex_size = static_cast<std::streamsize>(tex_in.tellg());
-				tex_in.seekg(0);
-				std::vector<std::byte> tex_bytes(static_cast<size_t>(tex_size));
-				tex_in.read(reinterpret_cast<char*>(tex_bytes.data()), tex_size);
-				res_sys.store(tex_data_tag, tex_bytes);
+			// The name comes from the model file: only regular files inside the model dir are read.
+			if (auto tex_bytes = res::read_file_within_dir(model_dir, texture_name)) {
+				res_sys.store(tex_data_tag, *tex_bytes);
 				out_tags.created.push_back(tex_data_tag);
 			} else {
-				egLOG_WARN("edt/import", "External texture not found: {}", tex_path.string());
+				egLOG_WARN("edt/import", "External texture skipped (missing, outside the model directory, not a regular file or too big): {}", texture_name);
 			}
 		}
 		out_tags.all.push_back(tex_data_tag);
 
 		res::tag desc_tag = res::tag{ res::tag::memory,
-			std::format("{0}textures/{1}.txm.desc", mem_prefix, texture_name) };
+			std::format("{0}textures/{1}.txm.desc", mem_prefix, safe_texture_name) };
 
 		if (!res_sys.exists(desc_tag)) {
 			json::object desc;
@@ -333,7 +331,7 @@ json::value process_material(
 
 	// Store as separate memory:// resource instead of inlining in prefab
 	res::tag mat_tag = res::tag{ res::tag::memory,
-		std::format("{0}materials/{1}.mat.desc", mem_prefix, mat_name) };
+		std::format("{0}materials/{1}.mat.desc", mem_prefix, res::sanitize_relative_path(mat_name)) };
 
 	if (!res_sys.exists(mat_tag)) {
 		std::string s = json::serialize(jsmaterial);

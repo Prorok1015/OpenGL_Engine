@@ -13,11 +13,8 @@ namespace edt {
 
 	class asset_export_dialog {
 	public:
-		asset_export_dialog(asset_exporter& exporter);
+		asset_export_dialog(asset_exporter& exporter, job_service& jobs);
 		~asset_export_dialog();
-
-		// Must be set before the first Export click.
-		void set_jobs(job_service& jobs) { m_jobs = &jobs; }
 
 		// Set the import result to export
 		void open(import_result result);
@@ -46,7 +43,7 @@ namespace edt {
 		res::tag m_exported_tag;
 
 		// Async export state
-		job_service* m_jobs = nullptr;
+		job_service& m_jobs;
 		std::uint64_t m_export_job = 0;
 		std::shared_ptr<export_progress> m_export_progress;
 		bool m_exporting = false;

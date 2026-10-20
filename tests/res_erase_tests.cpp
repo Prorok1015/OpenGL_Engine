@@ -5,6 +5,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include <memory>
 #include <string>
@@ -266,6 +267,30 @@ BOOST_AUTO_TEST_CASE(Store_AfterErase_KeepsTheNewFile)
 	BOOST_REQUIRE(wait_until_there(root / "m" / "sentinel.txt"));
 	BOOST_TEST(std::filesystem::exists(root / "m" / "c.txt"));
 	BOOST_TEST(memory.exists(tag));
+}
+
+BOOST_AUTO_TEST_CASE(Erase_OfATagThatEscapesTheRoot_ReturnsFalseAndKeepsTheFileOutside)
+{
+	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
+	const auto outside = root.parent_path() / "snk_res_erase_outside.txt";
+	{
+		std::ofstream file(outside, std::ios::binary);
+		file << "keep";
+	}
+	const res::tag dotdot{ "memory://../snk_res_erase_outside.txt" };
+	const res::tag absolute{ res::tag::memory, outside.generic_string() };
+
+	BOOST_TEST(!memory.erase(dotdot));
+	BOOST_TEST(!memory.erase(absolute));
+
+	// a sentinel behind the queue: if an erase task had been posted it has run by now
+	const res::tag sentinel{ "memory://m/sentinel.txt" };
+	BOOST_REQUIRE(memory.store(sentinel, test_util::to_bytes("s")));
+	BOOST_REQUIRE(wait_until_there(root / "m" / "sentinel.txt"));
+	const bool kept = std::filesystem::exists(outside);
+	std::error_code ignored;
+	std::filesystem::remove(outside, ignored);
+	BOOST_TEST(kept);
 }
 
 BOOST_AUTO_TEST_CASE(Erase_OnAnotherProtocol_ReturnsFalseAndKeepsTheFile)

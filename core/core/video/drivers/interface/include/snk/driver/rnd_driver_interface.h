@@ -94,8 +94,12 @@ namespace rnd::driver
 		// Bindings do not survive the render pass.
 		virtual void set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets = {}) = 0;
 
-		// The same description always gives the same handle. The pipeline is immutable and lives as long as the driver.
+		// The same description always gives the same handle. The pipeline is immutable and lives until the driver is
+		// gone or destroy_pipelines_of drops it.
 		virtual pipeline_handle create_pipeline(const pipeline_desc& desc) = 0;
+		// Drops every pipeline made for `shader`; their handles name nothing afterwards. Call it before the shader
+		// is deleted, outside a render pass: a pipeline keeps the address of its shader, which a later one may be given.
+		virtual void destroy_pipelines_of(const shader_ref& shader) = 0;
 		// Makes the pipeline current for the draws that follow, inside a render pass whose formats it declares.
 		// The state of a previous pipeline is not inherited: everything a draw depends on is in the pipeline.
 		virtual void bind_pipeline(pipeline_handle pipeline) = 0;

@@ -478,6 +478,18 @@ rnd::driver::pipeline_handle rnd::driver::gl::driver::create_pipeline(const pipe
 	});
 }
 
+void rnd::driver::gl::driver::destroy_pipelines_of(const shader_ref& shader)
+{
+	if (m_bound && m_bound->desc.shader == shader) {
+		m_bound = nullptr;
+	}
+	// GL may hand the name of the program that is deleted next to a new one, which would then pass for the cached current program.
+	if (const auto* program = static_cast<const gl::shader*>(shader.object); program && m_state.program == program->program()) {
+		m_state.program.reset();
+	}
+	m_pipelines.erase_if([&](const pipeline_desc& desc) { return desc.shader == shader; });
+}
+
 const rnd::driver::pipeline_desc& rnd::driver::gl::driver::pipeline_info(pipeline_handle pipeline) const
 {
 	const auto* found = m_pipelines.find(pipeline);

@@ -782,6 +782,44 @@ BOOST_AUTO_TEST_CASE(PipelineFormatsFollowThePassTargets)
 	BOOST_TEST((desc.depth_format == backbuffer_depth_format));
 }
 
+BOOST_AUTO_TEST_CASE(DroppingThePipelinesOfAShaderLeavesTheOthersAndFreesTheSlots)
+{
+	pipeline_desc other = base;
+	other.shader = other_shader.get();
+	const pipeline_handle doomed = driver.create_pipeline(base);
+	const pipeline_handle kept = driver.create_pipeline(other);
+	pipeline_desc lines = base;
+	lines.topology = RENDER_MODE::LINE;
+	const pipeline_handle doomed_lines = driver.create_pipeline(lines);
+	BOOST_TEST(driver.pipelines().size() == 3u);
+
+	driver.destroy_pipelines_of(shader.get());
+	BOOST_TEST(driver.pipelines().size() == 1u);
+	BOOST_CHECK(driver.pipeline_info(doomed) == empty_pipeline_desc());
+	BOOST_CHECK(driver.pipeline_info(doomed_lines) == empty_pipeline_desc());
+	BOOST_CHECK(driver.pipeline_info(kept) == other);
+	BOOST_CHECK(driver.create_pipeline(other) == kept);
+
+	// The slots are reused, and a handle of the dropped pipelines does not name the pipeline that took its slot.
+	const pipeline_handle again = driver.create_pipeline(base);
+	BOOST_TEST(driver.pipelines().size() == 2u);
+	BOOST_CHECK(again != doomed);
+	BOOST_CHECK(driver.pipeline_info(doomed) == empty_pipeline_desc());
+	BOOST_CHECK(driver.pipeline_info(again) == base);
+
+	driver.destroy_pipelines_of(shader.get());
+	driver.destroy_pipelines_of(shader.get());	// nothing left: no effect
+	BOOST_TEST(driver.pipelines().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheBoundPipelineIsUnboundWhenItsShaderIsDropped)
+{
+	driver.bind_pipeline(driver.create_pipeline(base));
+	BOOST_TEST(static_cast<bool>(driver.bound_pipeline()));
+	driver.destroy_pipelines_of(shader.get());
+	BOOST_TEST(!driver.bound_pipeline());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE_END()
