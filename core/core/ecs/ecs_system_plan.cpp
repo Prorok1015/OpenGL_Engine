@@ -242,9 +242,8 @@ ecs::system_plan ecs::build_system_plan(
 				std::vector<std::string> one_writes;
 				for (const auto& ea : items[a].entry->access) {
 					for (const auto& eb : items[b].entry->access) {
-						if (ea.type != eb.type || ea.world != eb.world || !(ea.write || eb.write)) continue;
+						if (ea.type != eb.type || !(ea.write || eb.write)) continue;
 						std::string label{ ea.name };
-						if (ea.world != own_world) label += std::format(" (world {})", ea.world);
 						auto& bucket = (ea.write && eb.write) ? both_write : one_writes;
 						if (std::ranges::find(bucket, label) == bucket.end()) bucket.push_back(std::move(label));
 					}

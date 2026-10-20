@@ -13,24 +13,20 @@
 //  - entt::registry&           : not tracked (the system reaches components by hand)
 namespace ecs {
 
-// World of the system itself: a system sees only its own context.
-inline constexpr size_t own_world = static_cast<size_t>(-2);
-
 struct access_entry
 {
 	entt::id_type type = 0;
 	std::string_view name;
-	size_t world = own_world;
 	bool write = false;
 };
 
 namespace detail {
 
 template <typename T>
-void add_access(std::vector<access_entry>& out, size_t world, bool write)
+void add_access(std::vector<access_entry>& out, bool write)
 {
 	using bare = std::remove_cv_t<T>;
-	out.push_back(access_entry{ entt::type_hash<bare>::value(), entt::type_name<bare>::value(), world, write });
+	out.push_back(access_entry{ entt::type_hash<bare>::value(), entt::type_name<bare>::value(), write });
 }
 
 template <typename View> struct view_access;
@@ -38,9 +34,9 @@ template <typename View> struct view_access;
 template <typename... GET_TYPES, typename EXCLUDE, typename... Other>
 struct view_access<entt::basic_view<entt::get_t<GET_TYPES...>, EXCLUDE, Other...>>
 {
-	static void collect(std::vector<access_entry>& out, size_t world)
+	static void collect(std::vector<access_entry>& out)
 	{
-		(add_access<typename std::remove_const_t<GET_TYPES>::value_type>(out, world, !std::is_const_v<GET_TYPES>), ...);
+		(add_access<typename std::remove_const_t<GET_TYPES>::value_type>(out, !std::is_const_v<GET_TYPES>), ...);
 	}
 };
 
@@ -55,9 +51,9 @@ void collect_argument_access(std::vector<access_entry>& out)
 	if constexpr (std::is_same_v<bare, entt::registry>) {
 		// untracked
 	} else if constexpr (is_view_v<bare>) {
-		detail::view_access<bare>::collect(out, own_world);
+		detail::view_access<bare>::collect(out);
 	} else {
-		detail::add_access<bare>(out, own_world, mutable_ref);
+		detail::add_access<bare>(out, mutable_ref);
 	}
 }
 

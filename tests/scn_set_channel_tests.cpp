@@ -623,7 +623,6 @@ BOOST_AUTO_TEST_CASE(Access_ChannelResourcesAreTrackedAsOrdinaryCtxResources)
 	BOOST_TEST(access[1].write);
 	BOOST_TEST(!access[2].write);
 	BOOST_TEST(access[3].write);
-	for (const auto& entry : access) BOOST_TEST(entry.world == ecs::own_world);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
