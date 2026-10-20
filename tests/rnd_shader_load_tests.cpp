@@ -5,6 +5,7 @@
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_includes.h>
 #include <snk/render/rnd_gpu_blocks.h>
+#include <algorithm>
 #include <string>
 
 // What the engine does to a shader source before the compiler sees it: includes, defines after the #version line,
@@ -232,6 +233,106 @@ BOOST_AUTO_TEST_CASE(TheShaderManagerNeverHandsABadSourceToTheDriver)
 	BOOST_TEST(shaders.program(good) == program);
 	BOOST_TEST(drv.shader_sources().size() == 1u);
 	BOOST_TEST(drv.stats().shaders.created == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(TheFilesOfASourceAreTheStagesAndEveryFileIncludedHoweverDeep)
+{
+	const auto inner = put("inner.glsl", "float inner;\n");
+	const auto outer = put("outer.glsl", "#include \"inner.glsl\"\nfloat outer;\n");
+	const auto missing = res::tag{ "memory://t/missing.glsl" };
+	const auto vertex = put("files.vert", "#version 450 core\n#include \"outer.glsl\"\n#include \"missing.glsl\"\nvoid main() {}\n");
+	const auto fragment = put("files.frag", good_fragment);
+
+	const auto result = load(program_of(vertex, fragment));
+	BOOST_TEST(!result.ok());	// the missing include is an error, and still one of the files
+	for (const auto& file : { vertex, fragment, outer, inner, missing }) {
+		BOOST_TEST(std::ranges::count(result.files, file) == 1, file.view());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ChangingAnIncludedFileCompilesOnlyTheProgramsThatUseItAgain)
+{
+	driver::null::driver drv;
+	drv.record_shader_sources(true);
+	ShaderManager shaders(&drv, *env.rs);
+
+	const auto lib = put("hot_lib.glsl", "float lib_v1;\n");
+	const auto nested = put("hot_nested.glsl", "#include \"hot_lib.glsl\"\nfloat nested;\n");
+	const auto direct = shaders.variants().intern(program_of(put("hot_a.vert", "#version 450 core\n#include \"hot_lib.glsl\"\nvoid main() {}\n"), put("hot_a.frag", good_fragment)));
+	const auto deep = shaders.variants().intern(program_of(put("hot_b.vert", "#version 450 core\n#include \"hot_nested.glsl\"\nvoid main() {}\n"), put("hot_b.frag", good_fragment)));
+	const auto unrelated = shaders.variants().intern(program_of(put("hot_c.vert", "#version 450 core\nvoid main() {}\n"), put("hot_c.frag", good_fragment)));
+
+	driver::shader_interface* const direct_program = shaders.program(direct);
+	driver::shader_interface* const deep_program = shaders.program(deep);
+	driver::shader_interface* const unrelated_program = shaders.program(unrelated);
+	BOOST_REQUIRE(direct_program && deep_program && unrelated_program);
+	BOOST_TEST(drv.stats().shaders.created == 3u);
+
+	put("hot_lib.glsl", "float lib_v2;\n");
+	env.rs->signal_changed(lib);
+	env.pump();
+
+	BOOST_TEST(shaders.program(unrelated) == unrelated_program);
+	BOOST_TEST(drv.stats().shaders.created == 3u);
+	driver::shader_interface* const direct_again = shaders.program(direct);
+	BOOST_TEST(direct_again != nullptr);
+	BOOST_TEST(shaders.program(deep) != nullptr);
+	BOOST_TEST(drv.stats().shaders.created == 5u);
+	BOOST_TEST(shaders.program(direct) == direct_again);	// compiled once per change, not at every draw
+	BOOST_TEST(drv.stats().shaders.created == 5u);
+
+	bool new_text = false;
+	for (const auto& sources : drv.shader_sources()) {
+		for (const auto& source : sources) {
+			new_text = new_text || source.body.find("lib_v2") != std::string::npos;
+		}
+	}
+	BOOST_TEST(new_text);
+
+	// A change of the file an include goes through reaches the programs that include that one.
+	put("hot_nested.glsl", "#include \"hot_lib.glsl\"\nfloat nested_v2;\n");
+	env.rs->signal_changed(nested);
+	env.pump();
+	BOOST_TEST(shaders.program(deep) != nullptr);
+	BOOST_TEST(shaders.program(direct) == direct_again);
+	BOOST_TEST(drv.stats().shaders.created == 6u);
+}
+
+BOOST_AUTO_TEST_CASE(AnIncludedFileThatNoLongerCompilesLeavesTheLastGoodProgramInPlace)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+
+	const auto lib = put("keep_lib.glsl", "float ok;\n");
+	const auto variant = shaders.variants().intern(program_of(put("keep.vert", "#version 450 core\n#include \"keep_lib.glsl\"\nvoid main() {}\n"), put("keep.frag", good_fragment)));
+	driver::shader_interface* const good = shaders.program(variant);
+	BOOST_REQUIRE(good);
+
+	put("keep_lib.glsl", "SNK_UBOO(0, 0) uniform M { mat4 p; };\n");
+	env.rs->signal_changed(lib);
+	env.pump();
+	BOOST_TEST(shaders.program(variant) == good);
+	BOOST_TEST(drv.stats().shaders.created == 1u);
+
+	put("keep_lib.glsl", "float fixed_again;\n");
+	env.rs->signal_changed(lib);
+	env.pump();
+	BOOST_TEST(shaders.program(variant) != nullptr);
+	BOOST_TEST(drv.stats().shaders.created == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(AnIncludeThatAppearsLaterIsPickedUpByTheProgramThatFailedWithoutIt)
+{
+	driver::null::driver drv;
+	ShaderManager shaders(&drv, *env.rs);
+
+	const auto variant = shaders.variants().intern(program_of(put("late.vert", "#version 450 core\n#include \"late_lib.glsl\"\nvoid main() {}\n"), put("late.frag", good_fragment)));
+	BOOST_TEST(shaders.program(variant) == nullptr);
+
+	const auto lib = put("late_lib.glsl", "float late;\n");
+	env.rs->signal_changed(lib);
+	env.pump();
+	BOOST_TEST(shaders.program(variant) != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

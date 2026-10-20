@@ -1,6 +1,8 @@
 #include "rnd_shader_manager.h"
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
+#include <snk/common/logger/engine_log.h>
+#include <algorithm>
 
 
 rnd::ShaderManager::ShaderManager(driver::driver_interface* ptr, res::resource_system& res_sys)
@@ -36,9 +38,63 @@ rnd::ShaderManager::ShaderManager(driver::driver_interface* ptr, res::resource_s
 
 rnd::ShaderManager::~ShaderManager()
 {
+	for (const auto& user : m_users) {
+		m_res_sys.unwatch(user.first, this);
+	}
 	drv->destroy_bind_group(m_frame_group);
 	drv->destroy_buffer(m_matrices);
 	drv->destroy_buffer(m_lights);
+}
+
+rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id variant) const
+{
+	if (variant.value >= m_programs.size()) {
+		m_programs.resize(variant.value + 1);
+	}
+
+	auto& slot = m_programs[variant.value];
+	if (slot.stale || (!slot.program && !slot.failed)) {
+		slot.stale = false;
+		auto source = shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings());
+		track_files(variant, source.files);
+		std::unique_ptr<driver::shader_interface> fresh;
+		if (source.ok()) {
+			fresh = drv->create_shader(source.headers);
+		}
+		if (fresh) {
+			if (slot.program) {
+				m_retired.push_back(std::move(slot.program));
+			}
+			slot.program = std::move(fresh);
+		}
+		slot.failed = !slot.program;
+	}
+	return slot.program.get();
+}
+
+void rnd::ShaderManager::track_files(variant_id variant, const std::vector<res::tag>& files) const
+{
+	for (const res::tag& file : files) {
+		auto [it, added] = m_users.try_emplace(file);
+		if (added) {
+			m_res_sys.watch(file, const_cast<ShaderManager*>(this), [this](const res::tag& changed) { on_file_changed(changed); });
+		}
+		if (std::ranges::find(it->second, variant.value) == it->second.end()) {
+			it->second.push_back(variant.value);
+		}
+	}
+}
+
+void rnd::ShaderManager::on_file_changed(const res::tag& file) const
+{
+	const auto users = m_users.find(file);
+	if (users == m_users.end()) {
+		return;
+	}
+	egLOG_INFO("shader/reload", "'{}' changed: {} program(s) will be compiled again", file.view(), users->second.size());
+	for (const std::uint32_t variant : users->second) {
+		m_programs[variant].stale = true;
+	}
 }
 
 void rnd::ShaderManager::update_global_uniform(const global_params& val) const

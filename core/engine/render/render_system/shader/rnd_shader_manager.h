@@ -3,6 +3,8 @@
 #include <snk/common/snk_api.h>
 #include <cstddef>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <snk/resource/res_tag.h>
 #include <snk/render/shader/rnd_scene_shader_desc.h>
@@ -34,7 +36,9 @@ namespace rnd
 		shader_config_cache& variants() const { return m_variants; }
 
 		// The program of a variant, compiled on its first use; null when it does not compile. A variant whose
-		// source cannot be prepared or compiled is tried once, not again at every draw.
+		// source cannot be prepared or compiled is tried once, not again at every draw, until a file its source
+		// is made of changes (a stage or an included file): the next call compiles it again. A program that does
+		// not compile after such a change is not put in place of the one that did.
 		driver::shader_interface* program(variant_id variant) const { return require_program(variant); }
 
 		const set_layouts& layouts() const { return m_layouts; }
@@ -48,6 +52,7 @@ namespace rnd
 		{
 			std::unique_ptr<rnd::driver::shader_interface> program;
 			bool failed = false;
+			bool stale = false;	// a file of its source changed since it was compiled
 		};
 
 		driver::driver_interface* drv = nullptr;
@@ -56,24 +61,16 @@ namespace rnd
 		driver::buffer_handle m_matrices;
 		driver::buffer_handle m_lights;
 		driver::bind_group_handle m_frame_group;
-		rnd::driver::shader_interface* require_program(variant_id variant) const
-		{
-			if (variant.value >= m_programs.size()) {
-				m_programs.resize(variant.value + 1);
-			}
-
-			auto& slot = m_programs[variant.value];
-			if (!slot.program && !slot.failed) {
-				auto source = shader_config::load(m_variants.resolve(variant), m_res_sys, drv->bindings());
-				if (source.ok()) {
-					slot.program = drv->create_shader(source.headers);
-				}
-				slot.failed = !slot.program;
-			}
-			return slot.program.get();
-		}
+		rnd::driver::shader_interface* require_program(variant_id variant) const;
+		// Remembers that `variant` is made of `files` and starts watching the ones not watched yet.
+		void track_files(variant_id variant, const std::vector<res::tag>& files) const;
+		void on_file_changed(const res::tag& file) const;
 
 		mutable shader_config_cache m_variants;
 		mutable std::vector<program_slot> m_programs;
+		mutable std::unordered_map<res::tag, std::vector<std::uint32_t>> m_users;	// file -> the variants made of it
+		// A pipeline holds the address of its program for as long as the driver lives, so a replaced program is
+		// kept instead of freed: a new one could be given its address.
+		mutable std::vector<std::unique_ptr<rnd::driver::shader_interface>> m_retired;
 	};
 }
