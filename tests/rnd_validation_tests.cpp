@@ -1210,9 +1210,9 @@ BOOST_AUTO_TEST_CASE(AWireframePipelineIsForwardedAsItIs)
 {
 	open_pass();
 	pipeline_desc desc = pipeline_for_pass();
+	const pipeline_handle filled = drv->create_pipeline(desc);
 	desc.polygon = polygon_mode::LINE;
 	const pipeline_handle wireframe = drv->create_pipeline(desc);
-	const pipeline_handle filled = drv->create_pipeline(pipeline_for_pass());
 	drv->bind_pipeline(wireframe);
 
 	BOOST_TEST(state().total() == 0u);
