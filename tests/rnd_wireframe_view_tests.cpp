@@ -71,6 +71,7 @@ public:
 	variant_id variant() const { return m_material.base; }
 
 private:
+	std::pmr::vector<render_packet_t>* m_packets = nullptr;
 	driver::texture_handle m_texture;
 	std::unique_ptr<driver::vertex_array_interface> m_vertex_array;
 	std::unique_ptr<driver::shader_interface> m_program;
