@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <fstream>
+#include <iterator>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -304,6 +307,123 @@ BOOST_FIXTURE_TEST_CASE(Layers_RemovingTopOverrideRevealsBaseOnNextResolve, moun
 	std::filesystem::remove(high / "a.txt");
 	// the file watcher does not report deletions, but lookups see the base file again
 	BOOST_TEST(load(r, "res://a.txt") == "low-a");
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// A tag comes from untrusted data (model files, scene descs): it must never reach a file outside the mount.
+BOOST_AUTO_TEST_SUITE(ResVfsResolverContainmentTests)
+
+namespace {
+
+struct sandbox_fixture
+{
+	test_util::temp_dir dir{ "vfs_contain" };
+	std::filesystem::path root = dir.path() / "sandbox";
+	// Shares the "sandbox" string prefix on purpose: a string-prefix containment check would accept it.
+	std::filesystem::path sibling = dir.path() / "sandbox2";
+
+	sandbox_fixture()
+	{
+		dir.write("sandbox/a/b/c.txt", "inside");
+		dir.write("sandbox2/secret.txt", "secret");
+		dir.write("outside.txt", "outside");
+	}
+
+	std::unique_ptr<res::vfs_resolver> make() const
+	{
+		return std::make_unique<res::vfs_resolver>("memory", std::vector<std::filesystem::path>{ root });
+	}
+};
+
+std::string slurp(const std::filesystem::path& p)
+{
+	std::ifstream in(p, std::ios::binary);
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+}
+
+BOOST_FIXTURE_TEST_CASE(EscapingTags_AreRejectedByAllOperations, sandbox_fixture)
+{
+	auto rp = make();
+	res::vfs_resolver& r = *rp;
+	for (const char* t : {
+		"memory://../x",
+		"memory://a/../../x",
+		"memory://../outside.txt",
+		"memory://../sandbox2/secret.txt",
+		"memory://..\\x",
+		"memory:///etc/x",
+		"memory://C:/x",
+		"memory://C:\\x" }) {
+		BOOST_TEST_CONTEXT("tag " << t) {
+			const res::tag tg{ t };
+			BOOST_TEST(!r.exists(tg));
+			const auto text = load(r, t);
+			BOOST_TEST(text.rfind("ERR:", 0) == 0u);
+			BOOST_TEST(text.find("escapes") != std::string::npos);
+			BOOST_TEST(!r.store(tg, to_bytes("pwned")));
+			// a rejected store must not leave pending data behind either
+			BOOST_TEST(load(r, t).rfind("ERR:", 0) == 0u);
+		}
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	BOOST_TEST(!std::filesystem::exists(dir.path() / "x"));
+	BOOST_TEST(slurp(dir.path() / "outside.txt") == "outside");
+	BOOST_TEST(slurp(sibling / "secret.txt") == "secret");
+}
+
+BOOST_FIXTURE_TEST_CASE(SymlinkedSubdirPointingOutside_IsRejected, sandbox_fixture)
+{
+	std::error_code ec;
+	std::filesystem::create_directory_symlink(sibling, root / "link", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("cannot create a directory symlink here (" << ec.message() << "), skipping");
+		return;
+	}
+	auto rp = make();
+	res::vfs_resolver& r = *rp;
+	const res::tag tg{ "memory://link/secret.txt" };
+	BOOST_TEST(!r.exists(tg));
+	BOOST_TEST(load(r, "memory://link/secret.txt").rfind("ERR:", 0) == 0u);
+	BOOST_TEST(!r.store(tg, to_bytes("pwned")));
+	BOOST_TEST(!r.store(res::tag{ "memory://link/new.txt" }, to_bytes("pwned")));
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	BOOST_TEST(slurp(sibling / "secret.txt") == "secret");
+	BOOST_TEST(!std::filesystem::exists(sibling / "new.txt"));
+}
+
+BOOST_FIXTURE_TEST_CASE(NulAndEmptyTags_AreRejected, sandbox_fixture)
+{
+	auto rp = make();
+	res::vfs_resolver& r = *rp;
+	const res::tag nul_tag{ std::string("memory://a\0b.txt", 16) };
+	const res::tag empty_tag{ "memory://" };
+	const res::tag ctrl_tag{ "memory://a\nb.txt" };
+
+	for (const res::tag* tg : { &nul_tag, &empty_tag, &ctrl_tag }) {
+		BOOST_TEST_CONTEXT("tag size " << tg->string().size()) {
+			BOOST_TEST(!r.exists(*tg));
+			BOOST_TEST(!r.store(*tg, to_bytes("x")));
+			auto block = r.resolve(*tg);
+			block->wait();
+			BOOST_TEST(block->has_error());
+		}
+	}
+}
+
+BOOST_FIXTURE_TEST_CASE(InsideTags_StillWork, sandbox_fixture)
+{
+	auto rp = make();
+	res::vfs_resolver& r = *rp;
+	BOOST_TEST(r.exists(res::tag{ "memory://a/b/c.txt" }));
+	BOOST_TEST(load(r, "memory://a/b/c.txt") == "inside");
+	BOOST_TEST(!r.exists(res::tag{ "memory://a/b/missing.txt" }));
+
+	BOOST_TEST(r.store(res::tag{ "memory://a/b/new.txt" }, to_bytes("fresh")));
+	BOOST_TEST(wait_for_file(root / "a" / "b" / "new.txt"));
+	BOOST_TEST(load(r, "memory://a/b/new.txt") == "fresh");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

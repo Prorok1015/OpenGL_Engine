@@ -2,6 +2,8 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/common.h>
 #include <snk/common/core_thread_utils.hpp>
+#include <snk/resource/res_path_sanitize.h>
+#include <cctype>
 #include <fstream>
 #include <shared_mutex>
 
@@ -118,13 +120,27 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 
 	auto data_sp = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
 	auto path = resolve_tag(tag);
+	if (!path.has_value()) {
+		egLOG_WARN("resource", "Rejected resolve of '{}': path escapes the resource root", tag.view());
+		data_sp->set_error("Tag escapes the resource root: " + tag.string());
+		return data_sp;
+	}
 
-	boost::asio::post(io.get_executor(), std::bind(&vfs_resolver::resolfy_pending_writes, this, data_sp, path));
+	boost::asio::post(io.get_executor(), std::bind(&vfs_resolver::resolfy_pending_writes, this, data_sp, *path));
 	return data_sp;
 }
 
 bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>& data)
 {
+	std::optional<fs::path> target_path;
+	if (!entries_stack.empty()) {
+		target_path = safe_path(entries_stack.top(), tag);
+		if (!target_path.has_value()) {
+			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
+			return false;
+		}
+	}
+
 	auto data_ptr = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
 	data_ptr->set_ready(std::vector<std::byte>{ data });
 
@@ -139,9 +155,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 		return false;
 	}
 
-	fs::path target_path = entries_stack.top() / tag.relative();
-
-	boost::asio::post(io, std::bind(&vfs_resolver::save_pending_write, this, tag, target_path, data_ptr));
+	boost::asio::post(io, std::bind(&vfs_resolver::save_pending_write, this, tag, *target_path, data_ptr));
 
 	return true;
 }
@@ -154,9 +168,9 @@ bool res::vfs_resolver::exists(const::res::tag& tag) const
 	}
 	auto stack = entries_stack;
 	while (!stack.empty()) {
-		fs::path path = stack.top() / std::string{ tag.relative() };
-
-		if (fs::exists(path)) {
+		const auto path = safe_path(stack.top(), tag);
+		std::error_code ec;
+		if (path.has_value() && fs::exists(*path, ec)) {
 			return true;
 		}
 
@@ -165,21 +179,74 @@ bool res::vfs_resolver::exists(const::res::tag& tag) const
 	return false;
 }
 
-fs::path res::vfs_resolver::resolve_tag(const tag& tag) const
+std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const tag& tag) const
+{
+	const std::string_view rel_view = tag.relative();
+	const fs::path rel{ rel_view };
+
+	// An empty tag would map to the root itself; control characters have no business in a file name.
+	if (rel_view.empty() || res::has_control_chars(rel_view)) {
+		return std::nullopt;
+	}
+	if (rel.has_root_name() || rel.has_root_directory()) {
+		return std::nullopt;
+	}
+	for (const auto& part : rel) {
+		const std::string name = part.generic_string();
+		if (name == "..") {
+			return std::nullopt;
+		}
+		// A drive letter is not a root name on POSIX, but the same tag must be rejected everywhere.
+		if (name.size() >= 2 && std::isalpha(static_cast<unsigned char>(name[0])) && name[1] == ':') {
+			return std::nullopt;
+		}
+	}
+
+	std::error_code ec;
+	fs::path canon_root = fs::weakly_canonical(root, ec);
+	if (ec) {
+		return std::nullopt;
+	}
+	fs::path candidate = fs::weakly_canonical(canon_root / rel, ec);
+	if (ec) {
+		return std::nullopt;
+	}
+
+	if (!canon_root.has_filename()) {
+		canon_root = canon_root.parent_path();
+	}
+	// Compare whole components: "/sandbox2" must not count as inside "/sandbox".
+	auto cand_it = candidate.begin();
+	for (auto root_it = canon_root.begin(); root_it != canon_root.end(); ++root_it, ++cand_it) {
+		if (cand_it == candidate.end() || *root_it != *cand_it) {
+			return std::nullopt;
+		}
+	}
+	return candidate;
+}
+
+std::optional<fs::path> res::vfs_resolver::resolve_tag(const tag& tag) const
 {
 	auto stack = entries_stack;
+	std::optional<fs::path> first_accepted;
 	while (!stack.empty())
 	{
-		fs::path path = stack.top() / tag.relative();
-		
-		if (fs::exists(path)) {
-			return path;
+		auto path = safe_path(stack.top(), tag);
+		if (path.has_value()) {
+			std::error_code ec;
+			if (fs::exists(*path, ec)) {
+				return path;
+			}
+			if (!first_accepted.has_value()) {
+				first_accepted = std::move(path);
+			}
 		}
 
 		stack.pop();
 	}
 
-	return tag.relative();
+	// Missing everywhere: report the path in the top layer; nullopt when every layer rejected the tag.
+	return first_accepted;
 }
 
 void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, core::res::res_resolver_interface::async_raw_data data_ptr)
