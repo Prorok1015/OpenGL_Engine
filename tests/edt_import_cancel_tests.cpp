@@ -24,13 +24,13 @@ f 1 2 3
 class stopping_resolver : public test_util::ram_resolver
 {
 public:
-	stopping_resolver(const std::string_view prt, std::stop_source& source) : ram_resolver(prt), m_source(source) {}
+	stopping_resolver(const std::string_view prt, std::stop_source* source) : ram_resolver(prt), m_source(source) {}
 
 	bool store(const res::tag& tag, const std::vector<std::byte>& data) override
 	{
 		const bool stored = ram_resolver::store(tag, data);
 		if (++stores == 1) {
-			m_source.request_stop();
+			m_source->request_stop();
 		}
 		return stored;
 	}
@@ -38,7 +38,7 @@ public:
 	int stores = 0;
 
 private:
-	std::stop_source& m_source;
+	std::stop_source* m_source;
 };
 
 struct cancel_fixture : test_util::scene_env
@@ -87,7 +87,7 @@ BOOST_AUTO_TEST_CASE(Import_StoppedAfterTheMaterialPhase_LeavesNoMemoryTagBehind
 {
 	std::stop_source source;
 	rs->unregistrate_resolver(res::tag::memory);
-	auto& stopping = rs->registrate_resolver<stopping_resolver>(res::tag::memory, source);
+	auto& stopping = rs->registrate_resolver<stopping_resolver>(res::tag::memory, &source);
 	edt::model_importer importer(*descs, *rs);
 	ds::task_context ctx = context_of(source.get_token());
 
