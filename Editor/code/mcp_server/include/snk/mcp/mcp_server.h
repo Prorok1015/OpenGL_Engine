@@ -33,6 +33,12 @@ namespace mcp
 		std::chrono::milliseconds request_timeout{ 10000 };
 		// A connection that sends no first byte of a request this long after it opened or after the last response is closed.
 		std::chrono::milliseconds idle_timeout{ 60000 };
+		// One deadline per queued answer or stream frame: the client has to take it within this time. Without it a
+		// client that stops reading would hold its connection slot for ever.
+		std::chrono::milliseconds write_timeout{ 30000 };
+		// Bytes of an event stream that may wait to be written, besides the limit on their number; past it the
+		// subscriber is dropped.
+		std::size_t max_stream_backlog_bytes = 1024 * 1024;
 		server_info info;
 	};
 

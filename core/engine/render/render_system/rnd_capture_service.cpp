@@ -124,6 +124,7 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 	// The service limits are the ceiling: a caller can ask for less, never for more.
 	limits.max_side = std::min(limits.max_side, max_side);
 	limits.max_pixels = std::min(limits.max_pixels, max_pixels);
+	limits.max_source_pixels = std::min(limits.max_source_pixels, max_pixels);
 	capture_result result;
 	const target* found = nullptr;
 	if (id.empty()) {
@@ -147,7 +148,7 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 	const driver::texture_header& header = m_driver.info(texture);
 	const glm::ivec2 source{ static_cast<int>(header.data.extent.width), static_cast<int>(header.data.extent.height) };
 	// Before anything is allocated: the readback of the target is the biggest buffer a capture makes.
-	if (pixels_of(source) > max_pixels) {
+	if (pixels_of(source) > limits.max_source_pixels) {
 		result.error = std::format("the render target of viewport '{}' ({}x{}) is too big to capture", found->id, source.x, source.y);
 		return result;
 	}

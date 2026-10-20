@@ -103,6 +103,7 @@ namespace mcp::detail
 			: m_core(std::move(core))
 			, m_socket(std::move(socket))
 			, m_timer(m_core->io)
+			, m_write_timer(m_core->io)
 			, m_parser(http_limits{ m_core->config.max_header_bytes, 64, m_core->config.max_message_bytes })
 		{
 			++m_core->open_connections;
@@ -126,6 +127,7 @@ namespace mcp::detail
 			m_closed = true;
 			m_awaiting_hold.reset();
 			m_timer.cancel();
+			m_write_timer.cancel();
 			boost::system::error_code ignored;
 			m_socket.shutdown(tcp::socket::shutdown_both, ignored);
 			m_socket.close(ignored);
@@ -322,7 +324,11 @@ namespace mcp::detail
 			}
 			std::vector<std::string> frames = m_channel->take();
 			const bool closed = m_channel->closed();
-			if (m_out.size() + frames.size() > max_stream_backlog) {
+			std::size_t new_bytes = 0;
+			for (const std::string& frame : frames) {
+				new_bytes += frame.size();
+			}
+			if (m_out.size() + frames.size() > max_stream_backlog || m_out_bytes + new_bytes > m_core->config.max_stream_backlog_bytes) {
 				m_core->application.log(log_level::warn, "an MCP event stream does not keep up and was closed");
 				close();
 				return;
@@ -372,6 +378,16 @@ namespace mcp::detail
 			}
 			m_writing = true;
 			auto self = shared_from_this();
+			// The sequence number tells a deadline that was already queued when the write finished from the one of the
+			// write in flight.
+			const std::uint64_t write_id = ++m_write_seq;
+			m_write_timer.expires_after(m_core->config.write_timeout);
+			m_write_timer.async_wait([self, write_id](const boost::system::error_code& ec) {
+				if (!ec && self->m_writing && self->m_write_seq == write_id) {
+					self->m_core->application.log(log_level::warn, "an MCP client does not read its answers and was closed");
+					self->close();
+				}
+			});
 			asio::async_write(m_socket, asio::buffer(m_out.front().data), [self](const boost::system::error_code& ec, std::size_t) {
 				self->guarded([&] { self->on_written(ec); });
 			});
@@ -379,6 +395,7 @@ namespace mcp::detail
 
 		void on_written(const boost::system::error_code& ec)
 		{
+			m_write_timer.cancel();
 			if (ec || m_closed) {
 				close();
 				return;
@@ -435,6 +452,8 @@ namespace mcp::detail
 		std::shared_ptr<server_core> m_core;
 		tcp::socket m_socket;
 		asio::steady_timer m_timer;
+		asio::steady_timer m_write_timer;
+		std::uint64_t m_write_seq = 0;
 		http_request_parser m_parser;
 		std::array<char, 8192> m_chunk{};
 		std::deque<outgoing> m_out;

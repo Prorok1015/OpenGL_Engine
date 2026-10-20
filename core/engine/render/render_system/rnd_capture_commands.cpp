@@ -45,7 +45,8 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 			"width": { "type": "integer", "minimum": 1, "maximum": 8192 },
 			"height": { "type": "integer", "minimum": 1, "maximum": 8192 },
 			"max_side": { "type": "integer", "minimum": 1, "maximum": 8192 },
-			"max_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 }
+			"max_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 },
+			"max_source_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 }
 		},
 		"additionalProperties": false
 	})");
@@ -98,6 +99,13 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 				return cmd::result::failure(cmd::codes::invalid_args, "max_pixels is an integer in 1..33554432");
 			}
 			limits.max_pixels = *number;
+		}
+		if (const json::value* max_source = args.if_contains("max_source_pixels")) {
+			const auto number = cmd::json_schema::integer_of(*max_source);
+			if (!number || *number < 1 || *number > limits.max_source_pixels) {
+				return cmd::result::failure(cmd::codes::invalid_args, "max_source_pixels is an integer in 1..33554432");
+			}
+			limits.max_source_pixels = *number;
 		}
 
 		const capture_result captured = service.capture(id, { *width, *height }, limits);

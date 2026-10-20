@@ -23,6 +23,7 @@
 #include <boost/asio/write.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/system/error_code.hpp>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -156,9 +157,9 @@ public:
 	bool reaches_end_of_stream()
 	{
 		boost::system::error_code ec;
-		char byte = 0;
+		std::array<char, 16384> sink{};
 		while (!ec) {
-			m_socket.read_some(asio::buffer(&byte, 1), ec);
+			m_socket.read_some(asio::buffer(sink), ec);
 		}
 		return ec == asio::error::eof || ec == asio::error::connection_reset;
 	}
@@ -528,6 +529,59 @@ BOOST_AUTO_TEST_CASE(EventStream_DeliversNotificationsAndEndsOnStop)
 	server.stop();
 	BOOST_TEST(stream.reaches_end_of_stream());
 	BOOST_TEST(rpc_client.reaches_end_of_stream());
+}
+
+BOOST_AUTO_TEST_CASE(EventStream_ASubscriberOverTheByteBacklogIsDropped)
+{
+	fake_host host;
+	mcp::server_config config = make_config();
+	config.max_stream_backlog_bytes = 16;
+	mcp::server server(host, config);
+	BOOST_REQUIRE(server.start());
+	const std::uint16_t port = server.port();
+
+	test_client rpc_client(port);
+	rpc_client.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
+	const auto init = rpc_client.read_response();
+	BOOST_REQUIRE(init.has_value());
+	const std::string session = session_of(*init);
+
+	test_client stream(port);
+	stream.send(request_text(port, "GET", {}, session, mcp_test::test_token, "Accept: text/event-stream\r\n"));
+	BOOST_REQUIRE(!stream.read_until_text(": stream open\n\n").empty());
+
+	// One notification frame is longer than 16 bytes: the stream is closed instead of written.
+	server.notify_tools_changed();
+	BOOST_TEST(stream.reaches_end_of_stream());
+}
+
+BOOST_AUTO_TEST_CASE(WriteDeadline_ClosesAClientThatPipelinesAndNeverReads)
+{
+	fake_host host;
+	mcp::call_result big;
+	big.content.push_back(mcp::content_block::make_text(std::string(1024 * 1024, 'x')));
+	host.set_next_result(big);
+	mcp::server_config config = make_config();
+	config.write_timeout = std::chrono::milliseconds(50);
+	mcp::server server(host, config);
+	BOOST_REQUIRE(server.start());
+	const std::uint16_t port = server.port();
+
+	test_client client(port);
+	client.send(request_text(port, "POST", rpc(1, "initialize", initialize_params)));
+	const auto init = client.read_response();
+	BOOST_REQUIRE(init.has_value());
+	const std::string session = session_of(*init);
+
+	// 48 MiB of answers are asked for and none is read: more than the sockets can hold, so a write stalls.
+	std::string batch;
+	for (int i = 0; i < 48; ++i) {
+		batch += request_text(port, "POST", rpc(100 + i, "tools/call", R"({"name":"big"})"), session);
+	}
+	client.send(batch);
+	// The only wait of this file: the client must not read before the deadline has passed, or the write would finish.
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+	BOOST_TEST(client.reaches_end_of_stream());
 }
 
 BOOST_AUTO_TEST_CASE(DeleteSession_ClosesItsStream)

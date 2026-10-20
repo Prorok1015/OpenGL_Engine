@@ -39,6 +39,9 @@ namespace {
 	// and copies; the answer is a PNG that has to be base64 encoded and sent.
 	constexpr std::int64_t agent_max_capture_side = 2048;
 	constexpr std::int64_t agent_max_capture_pixels = agent_max_capture_side * agent_max_capture_side;
+	// The view is read back whole before it is scaled down to that, on the main thread: a view of 8 Mpixels (4K UHD
+	// fits) is 32 MiB, plus the flipped copy. A bigger view is refused for an agent instead of read.
+	constexpr std::int64_t agent_max_source_pixels = 8LL * 1024 * 1024;
 	// Width asked when the agent names no size (the design's 1280 pixels on the long side, for a landscape view).
 	constexpr std::int64_t agent_default_capture_width = 1280;
 	// Largest answer sent to an agent, in bytes of JSON or base64 text.
@@ -87,6 +90,7 @@ namespace {
 		};
 		ceiling("max_side", agent_max_capture_side);
 		ceiling("max_pixels", agent_max_capture_pixels);
+		ceiling("max_source_pixels", agent_max_source_pixels);
 		return std::nullopt;
 	}
 
