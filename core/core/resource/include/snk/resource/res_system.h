@@ -263,6 +263,13 @@ namespace res
 			}
 		}
 
+		// Any thread. Removes what store() put under the tag, for the memory protocol only (false for the others, whose
+		// files stay, and for a protocol without a resolver or a tag the resolver does not hold). Then drops the pin,
+		// the alias mappings that point at the tag (resolve_alias of their original is the original again; the original's
+		// own data stays), and signals the tag as changed: its cache entries and those of everything built from it go,
+		// watchers are called. An erased original loses its alias mapping the same way (the alias' resolver data stays).
+		bool erase(const res::tag& tag);
+
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
 			m_pinned_resources.erase_tag(tag);

@@ -110,6 +110,11 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 		if (it != m_pending_writes.end()) {
 			return it->second;
 		}
+		if (m_erased.contains(tag)) {
+			auto erased_sp = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+			erased_sp->set_error("Resource was erased: " + tag.string());
+			return erased_sp;
+		}
 	}
 
 	if (entries_stack.empty()) {
@@ -147,6 +152,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	{
 		std::unique_lock lock(m_pending_mutex);
 		m_pending_writes[tag] = data_ptr;
+		m_erased.erase(tag); // a store after an erase: the pending erase task finds no mark and leaves the file alone
 	}
 
 	if (entries_stack.empty()) {
@@ -160,11 +166,69 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	return true;
 }
 
+bool res::vfs_resolver::erase(const::res::tag& tag)
+{
+	if (protocol != ::res::tag::memory) {
+		egLOG_WARN("resource/erase", "Refusing to erase '{}': only the memory protocol can be erased", tag.view());
+		return false;
+	}
+
+	std::optional<fs::path> target_path;
+	if (!entries_stack.empty()) {
+		target_path = safe_path(entries_stack.top(), tag);
+		if (!target_path.has_value()) {
+			egLOG_WARN("resource/erase", "Rejected erase of '{}': path escapes the resource root", tag.view());
+			return false;
+		}
+	}
+
+	if (!exists(tag)) {
+		return false;
+	}
+
+	std::uint64_t generation = 0;
+	{
+		std::unique_lock lock(m_pending_mutex);
+		m_pending_writes.erase(tag);
+		generation = ++m_erase_generation;
+		m_erased[tag] = generation;
+	}
+
+	if (entries_stack.empty()) {
+		return true;
+	}
+
+	// On the io thread, behind any save_pending_write already queued for the tag. The mark holds the generation of the
+	// erase that set it: a later store() clears it and a later erase() replaces it, and then this task leaves the file
+	// to whoever did that. The mark goes only after the file is gone, so resolve() and exists() never see the old file.
+	boost::asio::post(io, [this, tag, generation, path = *target_path]() {
+		const auto still_current = [&]() {
+			std::shared_lock lock(m_pending_mutex);
+			const auto it = m_erased.find(tag);
+			return it != m_erased.end() && it->second == generation;
+		};
+		if (!still_current()) {
+			return;
+		}
+		std::error_code ec;
+		fs::remove(path, ec);
+		if (ec) {
+			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), ec.message());
+		}
+		std::unique_lock lock(m_pending_mutex);
+		if (const auto it = m_erased.find(tag); it != m_erased.end() && it->second == generation) {
+			m_erased.erase(it);
+		}
+	});
+	return true;
+}
+
 bool res::vfs_resolver::exists(const::res::tag& tag) const
 {
 	{
 		std::shared_lock lock(m_pending_mutex);
 		if (m_pending_writes.contains(tag)) return true;
+		if (m_erased.contains(tag)) return false;
 	}
 	auto stack = entries_stack;
 	while (!stack.empty()) {
