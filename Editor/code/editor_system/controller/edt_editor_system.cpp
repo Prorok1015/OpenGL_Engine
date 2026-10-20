@@ -72,7 +72,6 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 	, m_gui(gui_sys)
 	, m_model_importer(std::make_unique<edt::model_importer>(desc_system_, res_sys))
 	, m_asset_exporter(std::make_unique<edt::asset_exporter>(res_sys))
-	, m_export_dialog(std::make_unique<edt::asset_export_dialog>(*m_asset_exporter))
 {
 }
 
@@ -114,7 +113,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
-	m_export_dialog->set_jobs(m_context->jobs());
+	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs());
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});

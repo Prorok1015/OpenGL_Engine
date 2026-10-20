@@ -21,11 +21,13 @@ std::unordered_map<res::tag, res::tag> edt::asset_exporter::build_remap(
 
 		// Strip the model_name/ prefix from relative path
 		std::string prefix = model_name + "/";
-		if (rel.starts_with(prefix))
+		if (!model_name.empty() && rel.starts_with(prefix))
 			rel = rel.substr(prefix.size());
 
 		// Replace model name with asset name in the filename
 		auto replace_stem = [&](std::string& path, const std::string& old_name, const std::string& new_name) {
+			if (old_name.empty())
+				return; // "" matches at every position, so the loop below would never end
 			size_t pos = 0;
 			while ((pos = path.find(old_name, pos)) != std::string::npos) {
 				path.replace(pos, old_name.size(), new_name);
