@@ -51,7 +51,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 	auto vertexBuffer = std::static_pointer_cast<gl::buffer>(vertexBuffer_in);
 	const auto& layout = vertexBuffer->get_layout();
 
-	int binding_index = m_VertexBuffers.size();
+	const GLuint binding_index = static_cast<GLuint>(m_VertexBuffers.size());
 	glVertexArrayVertexBuffer(vertex_array_id, binding_index, vertexBuffer->get_id(), 0/*offset*/, layout.get_stride());
 	
 	for (const auto& element : layout)
@@ -66,7 +66,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			uint32_t count = element.get_component_count();
 			GLenum type = ShaderDataTypeToOpenGLBaseType(element.Type);
 			GLint isNormalize = element.Normalized ? GL_TRUE : GL_FALSE;
-			glVertexArrayAttribFormat(vertex_array_id, m_VertexBufferIndex, count, type, isNormalize, element.Offset);
+			glVertexArrayAttribFormat(vertex_array_id, m_VertexBufferIndex, count, type, isNormalize, static_cast<GLuint>(element.Offset));
 			CHECK_GL_ERROR();
 			glVertexArrayAttribBinding(vertex_array_id, m_VertexBufferIndex, binding_index);
 			CHECK_GL_ERROR();
@@ -84,7 +84,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			uint32_t count = element.get_component_count();
 			GLenum type = ShaderDataTypeToOpenGLBaseType(element.Type);
 			//GLint isNormalize = element.Normalized ? GL_TRUE : GL_FALSE;
-			glVertexArrayAttribIFormat(vertex_array_id, m_VertexBufferIndex, count, type, element.Offset);
+			glVertexArrayAttribIFormat(vertex_array_id, m_VertexBufferIndex, count, type, static_cast<GLuint>(element.Offset));
 			CHECK_GL_ERROR();
 			glVertexArrayAttribBinding(vertex_array_id, m_VertexBufferIndex, binding_index);
 			CHECK_GL_ERROR();
@@ -101,7 +101,7 @@ void rnd::driver::gl::vertex_array::add_vertex_buffer(const std::shared_ptr<rnd:
 			{
 				GLenum type = ShaderDataTypeToOpenGLBaseType(element.Type);
 				GLint isNormalize = element.Normalized ? GL_TRUE : GL_FALSE;
-				std::size_t offset = (element.Offset + sizeof(float) * count * i);
+				const GLuint offset = static_cast<GLuint>(element.Offset + sizeof(float) * count * i);
 				glVertexArrayAttribFormat(vertex_array_id, m_VertexBufferIndex, count, type, isNormalize, offset);
 				glVertexArrayAttribBinding(vertex_array_id, m_VertexBufferIndex, binding_index);
 				glEnableVertexArrayAttrib(vertex_array_id, m_VertexBufferIndex);

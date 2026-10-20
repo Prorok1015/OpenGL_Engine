@@ -32,8 +32,8 @@ namespace ds
 
 					if (wastedArea > maxWastedArea) {
 						maxWastedArea = wastedArea;
-						seed1 = i;
-						seed2 = j;
+						seed1 = static_cast<typename NODE::index_type>(i);
+						seed2 = static_cast<typename NODE::index_type>(j);
 					}
 				}
 			}
@@ -102,7 +102,7 @@ namespace ds
 
 			data[current] = left;
 			data.push_back(right); // oldnode can be realloced after this
-			auto new_idx = data.size() - 1;
+			const auto new_idx = static_cast<typename NODE::index_type>(data.size() - 1);
 
 			if (current == root)
 			{

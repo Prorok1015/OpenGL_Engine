@@ -234,15 +234,15 @@ namespace rnd::driver
 		if (data.contains("extent")) {
 			auto& extent = data.at("extent").as_object();
 			if (extent.contains("width"))
-				c.data.extent.width = extent.at("width").as_int64();
+				c.data.extent.width = static_cast<uint32_t>(extent.at("width").as_int64());
 			if (extent.contains("height"))
-				c.data.extent.height = extent.at("height").as_int64();
+				c.data.extent.height = static_cast<uint32_t>(extent.at("height").as_int64());
 			if (extent.contains("depth"))
-				c.data.extent.depth = extent.at("depth").as_int64();
+				c.data.extent.depth = static_cast<uint32_t>(extent.at("depth").as_int64());
 		}
 
 		if (data.contains("mip_levels"))
-			c.data.mip_levels = data.at("mip_levels").as_int64();
+			c.data.mip_levels = static_cast<uint32_t>(data.at("mip_levels").as_int64());
 		if (data.contains("format"))
 			c.data.format = txm_data_type_from_string(data.at("format").as_string());
 

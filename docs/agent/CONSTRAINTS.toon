@@ -204,3 +204,8 @@ how_to_apply:
   Frame start: ds::frame_allocator_reset()
   → clears all frame-temp data
   → next frame has clean slate
+
+[CONSTRAINTS_BUILD]
+[CONSTRAINT_20]
+rule: Warnings are errors (SNK_WARNINGS_AS_ERRORS=ON, -Werror / /WX): new code must be warning-free on MSVC, GCC and Clang
+why: CI builds every preset with the option ON; third-party code is exempt, project code is not (-DSNK_WARNINGS_AS_ERRORS=OFF is a local escape hatch only)

@@ -16,16 +16,16 @@ namespace edt
 	// What the editor does with one kind of asset.
 	struct asset_kind_desc
 	{
-		std::string id;       // "prefab"
+		std::string id{};     // "prefab"
 		// Matches the assets whose res-relative path ends with this text, e.g. ".prefab.desc" (case-sensitive).
 		// Empty: matches every asset, so it is the fallback of the kinds that have a longer suffix.
-		std::string suffix;
+		std::string suffix{};
 		// Short text the asset browser may show in front of the name.
-		std::string icon;
+		std::string icon{};
 		// Double-click in the asset browser. Null: this kind has no open action.
-		std::function<void(editor_context&, const res::tag&)> open;
+		std::function<void(editor_context&, const res::tag&)> open{};
 		// Drop onto the viewport. Null: this kind cannot be dropped into the scene.
-		std::function<void(editor_context&, const res::tag&)> drop_into_scene;
+		std::function<void(editor_context&, const res::tag&)> drop_into_scene{};
 	};
 
 	// Asset kinds in registration order. For a path the kind with the longest matching suffix that has the

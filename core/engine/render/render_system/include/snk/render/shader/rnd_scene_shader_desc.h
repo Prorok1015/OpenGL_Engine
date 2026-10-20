@@ -74,7 +74,7 @@ namespace rnd
 			}
 
 			int size() const noexcept {
-				return shader_tags.size();
+				return static_cast<int>(shader_tags.size());
 			}
 
 			bool empty() const noexcept {

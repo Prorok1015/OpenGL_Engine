@@ -34,7 +34,7 @@ namespace stb_image {
 		int channels_count() const { return channels_; };
 		int width() const { return width_; };
 		int height() const { return height_; };
-		int size() const { return size_; }
+		size_t size() const { return size_; }
 		void flip(ImageFlip fp) { flipFlag_ = fp; }
 
 		static void free_image_data(unsigned char* data);

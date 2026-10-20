@@ -17,8 +17,8 @@ namespace inp
 	// Names the contexts a binding feeds. An empty `context` means every context of the set.
 	struct input_target
 	{
-		std::string set;
-		std::string context;
+		std::string set{};
+		std::string context{};
 
 		bool matches(std::string_view set_name, std::string_view context_name) const {
 			return set == set_name && (context.empty() || context == context_name);

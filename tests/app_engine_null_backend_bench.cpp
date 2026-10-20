@@ -35,6 +35,22 @@ constexpr std::uint32_t expected_mesh_count = 100;
 constexpr std::uint32_t expected_camera_count = 2;
 constexpr std::size_t expected_skinned_count = 10;
 
+// Value of an environment variable, empty when it is not set. std::getenv is deprecated on MSVC (C4996).
+std::string env_value(const char* name)
+{
+#ifdef _MSC_VER
+	char* buffer = nullptr;
+	std::size_t length = 0;
+	if (_dupenv_s(&buffer, &length, name) != 0 || buffer == nullptr) return {};
+	std::string value(buffer);
+	std::free(buffer);
+	return value;
+#else
+	const char* value = std::getenv(name);
+	return value ? std::string(value) : std::string();
+#endif
+}
+
 struct zone_series
 {
 	std::vector<double> total_ms;
@@ -159,8 +175,8 @@ BOOST_AUTO_TEST_CASE(ExtractRenderDataOnHundredMeshes, * tt::disabled())
 		{ "frames", measured_frames },
 		{ "zones", zones } };
 
-	const char* path_env = std::getenv("SNK_BENCH_JSON");
-	const std::string path = path_env && *path_env ? path_env : "bench_extract.json";
+	const std::string path_env = env_value("SNK_BENCH_JSON");
+	const std::string path = path_env.empty() ? "bench_extract.json" : path_env;
 	std::ofstream out(path, std::ios::binary | std::ios::trunc);
 	out << json::serialize(report) << '\n';
 	BOOST_TEST(out.good());
