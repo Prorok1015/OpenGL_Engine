@@ -50,6 +50,7 @@ namespace rnd::driver::validation
 		void set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets = {}) override;
 
 		pipeline_handle create_pipeline(const pipeline_desc& desc) override;
+		void destroy_pipelines_of(const shader_ref& shader) override;
 		void bind_pipeline(pipeline_handle pipeline) override;
 		const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		void invalidate_state_cache() override { m_inner->invalidate_state_cache(); }
@@ -131,7 +132,7 @@ namespace rnd::driver::validation
 		std::shared_ptr<validator> m_state;
 		// The wrappers create_texture handed out, by the handles this driver issued (the wrapped driver has its own).
 		texture_pool m_textures;
-		std::vector<known_pipeline> m_pipelines;
+		std::vector<known_pipeline> m_pipelines;	// by the index of the handle; a dropped pipeline leaves a null handle
 		std::unordered_map<std::uint64_t, buffer_desc> m_buffers;
 		std::unordered_map<std::uint64_t, bind_group_layout_desc> m_layouts;
 		std::unordered_map<std::uint64_t, known_group> m_groups;

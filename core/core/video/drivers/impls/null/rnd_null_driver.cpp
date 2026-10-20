@@ -233,6 +233,14 @@ rnd::driver::pipeline_handle rnd::driver::null::driver::create_pipeline(const pi
 	return m_pipelines.acquire(desc, [](const pipeline_desc&) { return pipeline_record{}; });
 }
 
+void rnd::driver::null::driver::destroy_pipelines_of(const shader_ref& shader)
+{
+	if (const auto* bound = m_pipelines.find(m_bound); bound && bound->desc.shader == shader) {
+		m_bound = {};
+	}
+	m_pipelines.erase_if([&](const pipeline_desc& desc) { return desc.shader == shader; });
+}
+
 void rnd::driver::null::driver::bind_pipeline(pipeline_handle pipeline)
 {
 	ASSERT_MSG(m_pipelines.find(pipeline), "bind_pipeline with a handle of no pipeline");

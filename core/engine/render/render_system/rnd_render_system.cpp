@@ -221,6 +221,7 @@ void rnd::render_system::render_frame(frame_context& context) const
 	if (!drv) return;
 
 	drv->begin_frame();
+	m_shaders->begin_frame();
 	// ImGui renders between two frames and leaves its own state behind.
 	drv->invalidate_state_cache();
 	m_materials->begin_frame();

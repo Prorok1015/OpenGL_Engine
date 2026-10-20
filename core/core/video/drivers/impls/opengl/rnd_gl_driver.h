@@ -47,6 +47,7 @@ namespace rnd::driver::gl
 		virtual void set_bind_group(std::uint32_t set, bind_group_handle group, std::span<const std::uint32_t> dynamic_offsets = {}) override;
 
 		virtual pipeline_handle create_pipeline(const pipeline_desc& desc) override;
+		virtual void destroy_pipelines_of(const shader_ref& shader) override;
 		virtual void bind_pipeline(pipeline_handle pipeline) override;
 		virtual const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		virtual void invalidate_state_cache() override;
