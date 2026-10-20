@@ -2,6 +2,7 @@
 #include <snk/common/snk_api.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_texture_interface.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/shader/rnd_material_params.h>
 #include <snk/render/shader/rnd_shader_config_cache.h>
@@ -80,7 +81,7 @@ namespace rnd
 
 		driver::driver_interface& m_drv;
 		driver::bind_group_layout_handle m_layout;
-		std::array<std::unique_ptr<driver::texture_interface>, bindings::material_texture_count> m_placeholders;
+		std::array<driver::texture_owner, bindings::material_texture_count> m_placeholders;
 		std::unordered_map<content_key, entry, content_hash> m_entries;
 		std::uint64_t m_frame = 0;
 		std::size_t m_groups_created = 0;

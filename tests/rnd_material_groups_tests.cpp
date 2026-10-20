@@ -3,6 +3,7 @@
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_material_groups.h>
 #include <snk/render/shader/rnd_material_params.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -98,8 +99,8 @@ BOOST_AUTO_TEST_CASE(TheLayoutHoldsTheParamsBlockAndThreeMaps)
 
 BOOST_AUTO_TEST_CASE(TheGroupHoldsTheParamsAndTheTexturesOfTheMaterial)
 {
-	auto diffuse = driver.create_texture(small_texture());
-	auto normal = driver.create_texture(small_texture());
+	auto diffuse = make_texture(driver, small_texture());
+	auto normal = make_texture(driver, small_texture());
 	const auto m = material(params_of(12.f, glm::vec4{ 0.25f, 0.5f, 0.75f, 1.f }), { diffuse.get(), nullptr, normal.get() });
 
 	const auto* info = driver.group_info(bind(*m));
@@ -198,7 +199,7 @@ BOOST_AUTO_TEST_CASE(AMaterialThatIsRebuiltEveryFrameWithTheSameContentsAllocate
 BOOST_AUTO_TEST_CASE(ABumpOfTheTextureGenerationWithUnchangedContentsCreatesNoGroup)
 {
 	// A render target was resized: every material is built again, with the textures it had.
-	auto diffuse = driver.create_texture(small_texture());
+	auto diffuse = make_texture(driver, small_texture());
 	const auto before = bind(*material(params_of(32.f), { diffuse.get() }));
 	next_frame();
 	const auto after = bind(*material(params_of(32.f), { diffuse.get() }));
@@ -208,8 +209,8 @@ BOOST_AUTO_TEST_CASE(ABumpOfTheTextureGenerationWithUnchangedContentsCreatesNoGr
 
 BOOST_AUTO_TEST_CASE(ARealChangeOfParamsOrOfATextureCreatesExactlyOneGroup)
 {
-	auto diffuse = driver.create_texture(small_texture());
-	auto other = driver.create_texture(small_texture());
+	auto diffuse = make_texture(driver, small_texture());
+	auto other = make_texture(driver, small_texture());
 	bind(*material(params_of(32.f), { diffuse.get() }));
 	BOOST_TEST(groups.groups_created() == 1u);
 
@@ -225,14 +226,14 @@ BOOST_AUTO_TEST_CASE(ARealChangeOfParamsOrOfATextureCreatesExactlyOneGroup)
 
 BOOST_AUTO_TEST_CASE(AMaterialBuiltAnewForAReloadedTextureGetsANewGroupWithTheNewTexture)
 {
-	auto old_texture = driver.create_texture(small_texture());
+	auto old_texture = make_texture(driver, small_texture());
 	auto before = material(params_of(32.f), { old_texture.get() });
 	const auto group_before = bind(*before);
 	BOOST_REQUIRE(driver.group_info(group_before));
 	BOOST_TEST((driver.group_info(group_before)->entries[1].texture == old_texture->handle()));
 
 	// The reload: the texture manager drops the texture, the extractor builds the material again with the new one.
-	auto new_texture = driver.create_texture(small_texture());
+	auto new_texture = make_texture(driver, small_texture());
 	auto after = material(params_of(32.f), { new_texture.get() });
 	next_frame();
 	const auto group_after = bind(*after);

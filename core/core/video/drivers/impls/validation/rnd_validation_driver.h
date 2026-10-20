@@ -32,7 +32,6 @@ namespace rnd::driver::validation
 		void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
 
 		std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) override;
-		std::unique_ptr<texture_interface> create_texture(const texture_header& header) override;
 		std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		std::unique_ptr<buffer_interface> create_buffer() override;
 
@@ -56,8 +55,16 @@ namespace rnd::driver::validation
 		// Reports (stale_handle or dead_object) and returns nothing for a handle of no live texture; reports
 		// (invalid_read) for one that cannot be read back and a rect outside it; otherwise forwards.
 		std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) override;
-		const texture_header& info(texture_handle texture) const override { return m_textures->info(texture); }
-		bool is_alive(texture_handle texture) const override { return m_textures->find(texture) != nullptr; }
+		// Creates the texture in the wrapped driver and a wrapper for it; the handle is this driver's own (its
+		// driver id differs from the wrapped driver's, so the inner handle is not accepted here).
+		texture_handle create_texture(const texture_header& header) override;
+		// Reports (stale_handle or dead_object) a handle of no live texture; otherwise destroys the wrapper and then
+		// the wrapped driver's texture.
+		void destroy(texture_handle texture) override;
+		// The wrapper behind the handle (its native() is the wrapped driver's object); silent, null for no live texture.
+		texture_interface* resolve(texture_handle texture) const override { return m_textures.find(texture); }
+		const texture_header& info(texture_handle texture) const override { return m_textures.info(texture); }
+		bool is_alive(texture_handle texture) const override { return m_textures.find(texture) != nullptr; }
 
 		bool supports_timer_queries() const override { return m_inner->supports_timer_queries(); }
 		uint32_t create_timer_query() override { return m_inner->create_timer_query(); }
@@ -116,7 +123,7 @@ namespace rnd::driver::validation
 		std::unique_ptr<driver_interface> m_inner;
 		std::shared_ptr<validator> m_state;
 		// The wrappers create_texture handed out, by the handles this driver issued (the wrapped driver has its own).
-		std::shared_ptr<texture_pool> m_textures = texture_pool::create();
+		texture_pool m_textures;
 		std::vector<known_pipeline> m_pipelines;
 		std::unordered_map<std::uint64_t, buffer_desc> m_buffers;
 		std::unordered_map<std::uint64_t, bind_group_layout_desc> m_layouts;

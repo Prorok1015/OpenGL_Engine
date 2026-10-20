@@ -625,16 +625,24 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::gl::driver::create_s
 	return std::make_unique<rnd::driver::gl::shader>(id);
 }
 
-std::unique_ptr<rnd::driver::texture_interface> rnd::driver::gl::driver::create_texture(const texture_header& header)
+rnd::driver::texture_handle rnd::driver::gl::driver::create_texture(const texture_header& header)
 {
-	auto created = std::make_unique<rnd::driver::gl::texture>(header, m_framebuffers);
-	m_textures->adopt(*created);
-	return created;
+	return m_textures.adopt(std::make_unique<rnd::driver::gl::texture>(header, m_framebuffers));
+}
+
+void rnd::driver::gl::driver::destroy(texture_handle handle)
+{
+	if (!handle) {
+		return;
+	}
+	if (!m_textures.release(handle)) {
+		egLOG_WARN("render", "destroy: the handle (index {}, generation {}) names no live texture", handle.index, handle.gen);
+	}
 }
 
 rnd::driver::gl::texture* rnd::driver::gl::driver::texture_of(texture_handle handle) const
 {
-	return static_cast<texture*>(m_textures->find(handle));
+	return static_cast<texture*>(m_textures.find(handle));
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::gl::driver::create_vertex_array()

@@ -7,6 +7,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/render/rnd_capture_commands.h>
 #include <snk/render/rnd_capture_service.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <chrono>
@@ -63,7 +64,7 @@ bool is_png(const std::vector<std::byte>& bytes)
 struct capture_fixture
 {
 	null::driver drv;
-	std::unique_ptr<texture_interface> texture = drv.create_texture(target_header());
+	texture_owner texture = make_texture(drv, target_header());
 	rnd::capture_service service{ drv };
 	cmd::registration scene = service.add_target("scene", [this] { return texture.get(); });
 };
@@ -167,7 +168,7 @@ BOOST_AUTO_TEST_CASE(Capture_FailsForAnUnknownViewOrOneWithoutATexture)
 BOOST_AUTO_TEST_CASE(Capture_RefusesASizeThatWouldNeedTooMuchMemory)
 {
 	// 2 x 8 target: 8192 wide would derive 32768 rows.
-	auto tall = drv.create_texture(target_header(2, 8));
+	auto tall = make_texture(drv, target_header(2, 8));
 	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
 
 	const auto derived = service.capture("tall", { rnd::capture_service::max_side, 0 });
@@ -189,7 +190,7 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesASizeThatWouldNeedTooMuchMemory)
 BOOST_AUTO_TEST_CASE(Capture_LimitsOfTheCallerBoundTheDerivedSideBeforeReading)
 {
 	// 2 x 8 target: a width of 64 derives 256 rows; fine under the defaults, over a ceiling of 100.
-	auto tall = drv.create_texture(target_header(2, 8));
+	auto tall = make_texture(drv, target_header(2, 8));
 	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
 	BOOST_CHECK(service.capture("tall", { 64, 0 }).ok());
 
@@ -228,7 +229,7 @@ BOOST_AUTO_TEST_CASE(Capture_FailsBeforeReadingATargetOverThePixelBudget)
 {
 	// The null driver keeps no pixels of a texture, so a huge one costs nothing here; the service must refuse it
 	// before it asks the driver for a buffer of that size.
-	auto huge = drv.create_texture(target_header(8192, 8192));
+	auto huge = make_texture(drv, target_header(8192, 8192));
 	cmd::registration reg = service.add_target("huge", [&huge] { return huge.get(); });
 
 	const auto result = service.capture("huge");
@@ -243,7 +244,7 @@ BOOST_AUTO_TEST_CASE(Capture_FailsForATextureTheDriverCannotRead)
 	texture_header header = target_header();
 	header.data.format = texture_header::TYPE::D24_S8;
 	header.usage = texture_usage::depth_target;
-	auto depth = drv.create_texture(header);
+	auto depth = make_texture(drv, header);
 	cmd::registration reg = service.add_target("depth", [&depth] { return depth.get(); });
 
 	BOOST_CHECK(!service.capture("depth").ok());
@@ -342,7 +343,7 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesBadArguments)
 
 BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
 {
-	auto tall = drv.create_texture(target_header(2, 8));
+	auto tall = make_texture(drv, target_header(2, 8));
 	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
 
 	const auto derived = capture(R"({"viewport":"tall","width":8192})");
@@ -356,7 +357,7 @@ BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
 
 BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 {
-	auto tall = drv.create_texture(target_header(2, 8));
+	auto tall = make_texture(drv, target_header(2, 8));
 	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
 
 	BOOST_CHECK(capture(R"({"viewport":"tall","width":64})").ok);
@@ -375,7 +376,7 @@ BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 
 BOOST_AUTO_TEST_CASE(Capture_TargetOverThePixelBudgetFails)
 {
-	auto huge = drv.create_texture(target_header(8192, 8192));
+	auto huge = make_texture(drv, target_header(8192, 8192));
 	cmd::registration reg = service.add_target("huge", [&huge] { return huge.get(); });
 
 	const auto result = capture(R"({"viewport":"huge"})");
@@ -434,7 +435,7 @@ BOOST_AUTO_TEST_CASE(CaptureOfARenderTarget_PassesTheValidationDecorator)
 {
 	auto& commands = storage.require<cmd::command_registry>();
 	auto& service = storage.require<rnd::capture_service>();
-	auto texture = storage.require<rnd::render_system>().get_driver()->create_texture(target_header());
+	auto texture = rnd::driver::make_texture(*storage.require<rnd::render_system>().get_driver(), target_header());
 	cmd::registration view = service.add_target("test", [&texture] { return texture.get(); });
 
 	const auto result = commands.invoke("viewport.capture", json::parse(R"({"viewport":"test"})"), cmd::origin::test());

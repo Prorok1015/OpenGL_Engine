@@ -51,12 +51,14 @@ namespace rnd::driver::validation
 	class SNK_API texture final : public texture_interface
 	{
 	public:
-		texture(std::shared_ptr<validator> owner, std::unique_ptr<texture_interface> inner, const texture_header& hdr);
+		// `inner` is the texture of the wrapped driver, which owns it; `inner_handle` names it there. The wrapper
+		// never outlives it: the validation driver destroys the wrapper first and then the inner texture.
+		texture(std::shared_ptr<validator> owner, texture_interface& inner, texture_handle inner_handle, const texture_header& hdr);
 
 		texture_interface* native() override { return m_inner->native(); }
 		texture_interface& inner() { return *m_inner; }
 		// The handle the wrapped driver gave the texture.
-		texture_handle handle_in_inner() const { return m_inner->handle(); }
+		texture_handle handle_in_inner() const { return m_inner_handle; }
 
 		void bind(uint32_t position) override;
 		void unbind(uint32_t position) override { m_inner->unbind(position); }
@@ -74,7 +76,8 @@ namespace rnd::driver::validation
 
 	private:
 		std::shared_ptr<validator> m_owner;
-		std::unique_ptr<texture_interface> m_inner;
+		texture_interface* m_inner;
+		texture_handle m_inner_handle;
 		detail::registration m_registration;
 	};
 

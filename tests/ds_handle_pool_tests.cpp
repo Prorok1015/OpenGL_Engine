@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -196,6 +197,44 @@ BOOST_AUTO_TEST_CASE(PoolBuildsTheHandleTypeItIsGiven)
 	BOOST_TEST(*pool.find(h) == "beta");
 	pool.erase(h);
 	BOOST_TEST(pool.stale(h));
+}
+
+BOOST_AUTO_TEST_CASE(ATaggedPoolStampsItsHandlesAndRejectsForeignOnes)
+{
+	// 8 bits of owner id above 24 bits of generation, as the render drivers use them.
+	constexpr std::uint32_t mask = (1u << 24) - 1u;
+	ds::handle_pool<std::string, my_handle> mine(mask, 3u << 24);
+	ds::handle_pool<std::string, my_handle> theirs(mask, 4u << 24);
+	const my_handle a = mine.insert("a");
+	const my_handle b = theirs.insert("b");
+
+	BOOST_TEST(a.index == b.index);
+	BOOST_TEST(a.gen == ((3u << 24) | 1u));
+	BOOST_TEST(b.gen == ((4u << 24) | 1u));
+	BOOST_REQUIRE(mine.find(a));
+	BOOST_TEST(!mine.find(b));
+	// A handle of another pool is unknown here, not stale.
+	BOOST_TEST(!mine.stale(b));
+
+	mine.erase(a);
+	BOOST_TEST(mine.stale(a));
+	const my_handle again = mine.insert("again");
+	BOOST_TEST(again.index == a.index);
+	BOOST_TEST(again.gen == ((3u << 24) | 2u));
+	BOOST_TEST(!mine.find(a));
+}
+
+BOOST_AUTO_TEST_CASE(ExtractHandsTheObjectOverAndFreesTheSlot)
+{
+	ds::handle_pool<std::string> pool;
+	const auto h = pool.insert("moved out");
+
+	const std::optional<std::string> taken = pool.extract(h);
+	BOOST_REQUIRE(taken.has_value());
+	BOOST_TEST(*taken == "moved out");
+	BOOST_TEST(pool.live() == 0u);
+	BOOST_TEST(pool.stale(h));
+	BOOST_TEST(!pool.extract(h).has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

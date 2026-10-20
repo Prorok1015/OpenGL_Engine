@@ -68,11 +68,16 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create
 	return std::make_unique<shader>(m_stats, headers);
 }
 
-std::unique_ptr<rnd::driver::texture_interface> rnd::driver::null::driver::create_texture(const texture_header& header)
+rnd::driver::texture_handle rnd::driver::null::driver::create_texture(const texture_header& header)
 {
-	auto created = std::make_unique<texture>(m_stats, header);
-	m_textures->adopt(*created);
-	return created;
+	return m_textures.adopt(std::make_unique<texture>(m_stats, header));
+}
+
+void rnd::driver::null::driver::destroy(texture_handle texture)
+{
+	if (texture) {
+		m_textures.release(texture);
+	}
 }
 
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::null::driver::create_vertex_array()

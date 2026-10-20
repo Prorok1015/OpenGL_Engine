@@ -2,6 +2,7 @@
 #include "rnd_validation_driver.h"
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
+#include <snk/driver/rnd_texture_owner.h>
 #include <memory>
 #include <span>
 #include <vector>
@@ -92,7 +93,7 @@ struct validation_fixture
 	void open_pass()
 	{
 		if (!state().in_pass()) {
-			pass_target = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+			pass_target = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 			drv->begin_render_pass(pass_of(pass_target.get()));
 		}
 	}
@@ -118,7 +119,7 @@ struct validation_fixture
 	vl::swapchain chain;
 	std::unique_ptr<driver_interface> drv;
 	std::unique_ptr<shader_interface> program_object;
-	std::unique_ptr<texture_interface> pass_target;
+	texture_owner pass_target;
 };
 
 void expect_only(const vl::validator& state, vl::rule kind, std::size_t count = 1)
@@ -136,8 +137,8 @@ BOOST_FIXTURE_TEST_SUITE(RndValidationTests, validation_fixture)
 
 BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 {
-	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(64, 32, texture_usage::depth_target));
+	auto color = make_texture(*drv, texture_of(64, 32, texture_usage::color_target));
+	auto depth = make_texture(*drv, texture_of(64, 32, texture_usage::depth_target));
 	auto mesh = make_geometry(*drv, 6);
 	const buffer_handle ubo = drv->create_buffer({ .size = 64, .usage = buffer_usage::uniform });
 	const buffer_handle ssbo = drv->create_buffer({ .size = 128, .usage = buffer_usage::storage });
@@ -170,7 +171,7 @@ BOOST_AUTO_TEST_CASE(ACorrectFrameProducesNoViolations)
 
 BOOST_AUTO_TEST_CASE(PassesBalancedByEndsLeaveNothingOpenAtPresent)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 	drv->end_render_pass();
 	drv->begin_render_pass(pass_of(color.get()));
@@ -182,7 +183,7 @@ BOOST_AUTO_TEST_CASE(PassesBalancedByEndsLeaveNothingOpenAtPresent)
 
 BOOST_AUTO_TEST_CASE(NullAttachmentsAreSkippedByTheChecks)
 {
-	auto depth = drv->create_texture(texture_of(64, 64, texture_usage::depth_target));
+	auto depth = make_texture(*drv, texture_of(64, 64, texture_usage::depth_target));
 	drv->begin_render_pass(pass_of(nullptr, depth.get()));
 	drv->end_render_pass();
 	render_pass_desc holes = pass_of(nullptr, depth.get());
@@ -196,7 +197,7 @@ BOOST_AUTO_TEST_CASE(NullAttachmentsAreSkippedByTheChecks)
 
 BOOST_AUTO_TEST_CASE(ViewportOutsideTheRenderTargetIsReported)
 {
-	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(64, 32, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 
 	drv->set_viewport({ 0, 0, 64, 32 });
@@ -335,7 +336,7 @@ BOOST_AUTO_TEST_CASE(BufferWritePastItsSizeIsReportedAndNotForwarded)
 
 BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	const texture_handle stale = color->handle();
 	BOOST_TEST(state().live_objects(vl::object_kind::texture) == 1u);
 	BOOST_TEST(drv->is_alive(stale));
@@ -351,10 +352,10 @@ BOOST_AUTO_TEST_CASE(TextureUsedAsATargetAfterItWasDeletedIsReported)
 
 BOOST_AUTO_TEST_CASE(HandleOfAReusedSlotDoesNotNameTheNewTexture)
 {
-	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto first = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	const texture_handle old_handle = first->handle();
 	first.reset();
-	auto second = drv->create_texture(texture_of(32, 8, texture_usage::color_target));
+	auto second = make_texture(*drv, texture_of(32, 8, texture_usage::color_target));
 	const texture_handle new_handle = second->handle();
 
 	// The freed slot is handed out again, with a higher generation.
@@ -383,9 +384,62 @@ BOOST_AUTO_TEST_CASE(HandleOfNoTextureIsNotAliveAndHasAnEmptyDescription)
 	expect_only(state(), vl::rule::dead_object);
 }
 
+BOOST_AUTO_TEST_CASE(HandleOfAnotherDriverIsRejected)
+{
+	vl::swapchain other_chain(std::make_unique<null::swapchain>());
+	auto other = other_chain.create_driver();
+	auto theirs = make_texture(*other, texture_of(16, 16, texture_usage::color_target));
+	auto mine = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+
+	// The first texture of each driver takes the same slot: only the driver id in the generation tells them apart.
+	BOOST_REQUIRE(theirs->handle().index == mine->handle().index);
+	BOOST_TEST(!drv->is_alive(theirs->handle()));
+	BOOST_TEST(other->is_alive(theirs->handle()));
+	BOOST_TEST(drv->is_alive(mine->handle()));
+
+	drv->begin_render_pass(pass_of_handles(theirs->handle()));
+	expect_only(state(), vl::rule::dead_object);
+	BOOST_TEST(inner().calls().render_pass_begins == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheInnerHandleOfAWrappedTextureIsRejected)
+{
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	const texture_handle inner_handle = color->native()->handle();
+
+	BOOST_REQUIRE((inner_handle != color->handle()));
+	BOOST_TEST(inner().is_alive(inner_handle));
+	BOOST_TEST(!drv->is_alive(inner_handle));
+
+	drv->begin_render_pass(pass_of_handles(inner_handle));
+	expect_only(state(), vl::rule::dead_object);
+	BOOST_TEST(inner().calls().render_pass_begins == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(DestroyFreesTheTextureInBothDriversAndTheHandleGoesStale)
+{
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	const texture_handle handle = color->handle();
+	const texture_handle inner_handle = color->native()->handle();
+	BOOST_TEST(inner().is_alive(inner_handle));
+
+	drv->destroy(color.release());
+	BOOST_TEST(!drv->is_alive(handle));
+	BOOST_TEST(!inner().is_alive(inner_handle));
+	BOOST_TEST(state().live_objects(vl::object_kind::texture) == 0u);
+	BOOST_TEST(state().total() == 0u);
+
+	drv->begin_render_pass(pass_of_handles(handle));
+	expect_only(state(), vl::rule::stale_handle);
+
+	// Destroying it again is reported as well.
+	drv->destroy(handle);
+	BOOST_TEST(state().count(vl::rule::stale_handle) == 2u);
+}
+
 BOOST_AUTO_TEST_CASE(ReadingADestroyedTextureIsReportedAsStale)
 {
-	auto color = drv->create_texture(texture_of(8, 4, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(8, 4, texture_usage::color_target));
 	const texture_handle stale = color->handle();
 	color.reset();
 
@@ -395,7 +449,7 @@ BOOST_AUTO_TEST_CASE(ReadingADestroyedTextureIsReportedAsStale)
 
 BOOST_AUTO_TEST_CASE(InfoOfALiveTextureIsItsDescription)
 {
-	auto color = drv->create_texture(texture_of(16, 8, texture_usage::color_target | texture_usage::sampled));
+	auto color = make_texture(*drv, texture_of(16, 8, texture_usage::color_target | texture_usage::sampled));
 	const texture_header& info = drv->info(color->handle());
 	BOOST_TEST(info.data.extent.width == 16u);
 	BOOST_TEST(info.data.extent.height == 8u);
@@ -405,8 +459,8 @@ BOOST_AUTO_TEST_CASE(InfoOfALiveTextureIsItsDescription)
 
 BOOST_AUTO_TEST_CASE(DepthAttachmentDeletedBeforeUseIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto depth = make_texture(*drv, texture_of(16, 16, texture_usage::depth_target));
 	const texture_handle stale = depth->handle();
 	depth.reset();
 	drv->begin_render_pass(pass_of_handles(color->handle(), stale));
@@ -438,7 +492,7 @@ BOOST_AUTO_TEST_CASE(ObjectsOfEveryKindAreRegisteredWhileTheyLive)
 {
 	{
 		auto shader = drv->create_shader(program());
-		auto texture = drv->create_texture(texture_of(4, 4, texture_usage::sampled));
+		auto texture = make_texture(*drv, texture_of(4, 4, texture_usage::sampled));
 		auto array = drv->create_vertex_array();
 		auto buffer = drv->create_buffer();
 		BOOST_TEST(state().live_objects(vl::object_kind::shader) == 1u);
@@ -470,7 +524,7 @@ BOOST_AUTO_TEST_CASE(FrameBufferBudgetIsReportedOncePerFrameAndRestartsAtPresent
 	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_frame_buffers = 2 });
 	auto limited_drv = limited.create_driver();
 
-	auto color = limited_drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*limited_drv, texture_of(16, 16, texture_usage::color_target));
 	const auto run_pass = [&] {
 		limited_drv->begin_render_pass(pass_of(color.get()));
 		limited_drv->end_render_pass();
@@ -518,18 +572,18 @@ BOOST_AUTO_TEST_CASE(TextureBudgetCountsTexturesCreatedInAFrame)
 	vl::swapchain limited(std::make_unique<null::swapchain>(), vl::limits{ .max_textures = 1 });
 	auto limited_drv = limited.create_driver();
 
-	auto first = limited_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
+	auto first = make_texture(*limited_drv, texture_of(4, 4, texture_usage::sampled));
 	BOOST_TEST(limited.state().total() == 0u);
-	auto second = limited_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
+	auto second = make_texture(*limited_drv, texture_of(4, 4, texture_usage::sampled));
 
 	expect_only(limited.state(), vl::rule::budget_textures);
 }
 
 BOOST_AUTO_TEST_CASE(NoBudgetIsEnforcedByDefault)
 {
-	std::vector<std::unique_ptr<texture_interface>> textures;
+	std::vector<texture_owner> textures;
 	for (int i = 0; i < 100; ++i) {
-		textures.push_back(drv->create_texture(texture_of(4, 4, texture_usage::sampled | texture_usage::color_target)));
+		textures.push_back(make_texture(*drv, texture_of(4, 4, texture_usage::sampled | texture_usage::color_target)));
 		drv->begin_render_pass(pass_of(textures.back().get()));
 		drv->end_render_pass();
 	}
@@ -538,8 +592,8 @@ BOOST_AUTO_TEST_CASE(NoBudgetIsEnforcedByDefault)
 
 BOOST_AUTO_TEST_CASE(ACorrectRenderPassFrameProducesNoViolations)
 {
-	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(64, 32, texture_usage::depth_target));
+	auto color = make_texture(*drv, texture_of(64, 32, texture_usage::color_target));
+	auto depth = make_texture(*drv, texture_of(64, 32, texture_usage::depth_target));
 	auto mesh = make_geometry(*drv, 6);
 
 	for (int frame = 0; frame < 3; ++frame) {
@@ -573,8 +627,8 @@ BOOST_AUTO_TEST_CASE(ACorrectRenderPassFrameProducesNoViolations)
 
 BOOST_AUTO_TEST_CASE(ANestedRenderPassIsReportedAndNotForwarded)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto other = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto other = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 
 	drv->begin_render_pass(pass_of(color.get(), nullptr, "outer"));
 	drv->begin_render_pass(pass_of(other.get(), nullptr, "inner"));
@@ -602,7 +656,7 @@ BOOST_AUTO_TEST_CASE(EndRenderPassWithoutBeginIsReportedAndNotForwarded)
 
 BOOST_AUTO_TEST_CASE(ARenderPassStillOpenAtPresentIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 	chain.present();
 
@@ -611,8 +665,8 @@ BOOST_AUTO_TEST_CASE(ARenderPassStillOpenAtPresentIsReported)
 
 BOOST_AUTO_TEST_CASE(RenderPassColorAttachmentWithoutColorTargetUsageIsReported)
 {
-	auto sampled = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto sampled = make_texture(*drv, texture_of(16, 16, texture_usage::sampled));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 	drv->end_render_pass();
 	BOOST_TEST(state().total() == 0u);
@@ -624,10 +678,10 @@ BOOST_AUTO_TEST_CASE(RenderPassColorAttachmentWithoutColorTargetUsageIsReported)
 
 BOOST_AUTO_TEST_CASE(RenderPassDepthAttachmentNeedsDepthOrStencilUsage)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto not_depth = drv->create_texture(texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
-	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
-	auto stencil = drv->create_texture(texture_of(16, 16, texture_usage::stencil_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto not_depth = make_texture(*drv, texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
+	auto depth = make_texture(*drv, texture_of(16, 16, texture_usage::depth_target));
+	auto stencil = make_texture(*drv, texture_of(16, 16, texture_usage::stencil_target));
 
 	drv->begin_render_pass(pass_of(color.get(), depth.get()));
 	drv->end_render_pass();
@@ -641,8 +695,8 @@ BOOST_AUTO_TEST_CASE(RenderPassDepthAttachmentNeedsDepthOrStencilUsage)
 
 BOOST_AUTO_TEST_CASE(EveryColorOfARenderPassIsCheckedForUsage)
 {
-	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto second = drv->create_texture(texture_of(16, 16, texture_usage::sampled));
+	auto first = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto second = make_texture(*drv, texture_of(16, 16, texture_usage::sampled));
 	render_pass_desc pass = pass_of(first.get());
 	pass.colors.push_back({ .texture = handle_of(second.get()) });
 	drv->begin_render_pass(pass);
@@ -652,9 +706,9 @@ BOOST_AUTO_TEST_CASE(EveryColorOfARenderPassIsCheckedForUsage)
 
 BOOST_AUTO_TEST_CASE(RenderPassAttachmentsOfDifferentSizesAreReportedOnce)
 {
-	auto color = drv->create_texture(texture_of(64, 64, texture_usage::color_target));
-	auto second = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(32, 32, texture_usage::depth_target));
+	auto color = make_texture(*drv, texture_of(64, 64, texture_usage::color_target));
+	auto second = make_texture(*drv, texture_of(64, 32, texture_usage::color_target));
+	auto depth = make_texture(*drv, texture_of(32, 32, texture_usage::depth_target));
 	render_pass_desc pass = pass_of(color.get(), depth.get());
 	pass.colors.push_back({ .texture = handle_of(second.get()) });
 	drv->begin_render_pass(pass);
@@ -666,8 +720,8 @@ BOOST_AUTO_TEST_CASE(AttachmentSizesAreTakenAtTheirMipLevel)
 {
 	texture_header mipped = texture_of(64, 64, texture_usage::color_target);
 	mipped.data.mip_levels = 3;
-	auto color = drv->create_texture(mipped);
-	auto small = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, mipped);
+	auto small = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	render_pass_desc pass = pass_of(color.get());
 	pass.colors[0].mip = 2;
 	pass.colors.push_back({ .texture = handle_of(small.get()) });
@@ -688,8 +742,8 @@ BOOST_AUTO_TEST_CASE(RenderPassLayerOutsideTheTextureIsReported)
 	array.data.extent.layers = 4;
 	texture_header cube = texture_of(16, 16, texture_usage::color_target);
 	cube.type = TEXTURE_TYPE::TEXTURE_CUBE_MAP;
-	auto layers = drv->create_texture(array);
-	auto faces = drv->create_texture(cube);
+	auto layers = make_texture(*drv, array);
+	auto faces = make_texture(*drv, cube);
 
 	for (const auto& [texture, last] : { std::pair{ layers.get(), 3u }, std::pair{ faces.get(), 5u } }) {
 		render_pass_desc pass = pass_of(texture);
@@ -713,7 +767,7 @@ BOOST_AUTO_TEST_CASE(RenderPassLayerOutsideTheTextureIsReported)
 
 BOOST_AUTO_TEST_CASE(ViewportAfterTheEndOfAPassIsNotCheckedAgainstItsTarget)
 {
-	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(64, 32, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 	drv->end_render_pass();
 	drv->set_viewport({ 0, 0, 4096, 4096 });
@@ -723,7 +777,7 @@ BOOST_AUTO_TEST_CASE(ViewportAfterTheEndOfAPassIsNotCheckedAgainstItsTarget)
 
 BOOST_AUTO_TEST_CASE(RenderAreaOutsideTheTargetIsReported)
 {
-	auto color = drv->create_texture(texture_of(64, 32, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(64, 32, texture_usage::color_target));
 	render_pass_desc pass = pass_of(color.get());
 
 	pass.render_area = { 4, 4, 8, 8 };
@@ -741,7 +795,7 @@ BOOST_AUTO_TEST_CASE(RenderAreaOutsideTheTargetIsReported)
 
 BOOST_AUTO_TEST_CASE(MalformedRenderPassesAreReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 
 	drv->begin_render_pass(render_pass_desc{});
 	expect_only(state(), vl::rule::invalid_render_pass, 1);
@@ -761,8 +815,8 @@ BOOST_AUTO_TEST_CASE(MalformedRenderPassesAreReported)
 
 BOOST_AUTO_TEST_CASE(ADeletedAttachmentDropsTheRenderPass)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto depth = make_texture(*drv, texture_of(16, 16, texture_usage::depth_target));
 	const texture_handle stale = depth->handle();
 	depth.reset();
 
@@ -779,8 +833,8 @@ BOOST_AUTO_TEST_CASE(RenderPassTexturesReachTheWrappedDriverUnwrapped)
 {
 	// Both drivers number their textures from 1; take a slot of the wrapped driver's so the two sequences differ
 	// and a pass that was not translated would name another texture (or none) there.
-	auto occupant = inner().create_texture(texture_of(4, 4, texture_usage::sampled));
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto occupant = make_texture(inner(), texture_of(4, 4, texture_usage::sampled));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	BOOST_REQUIRE((color->handle() != color->native()->handle()));
 	drv->begin_render_pass(pass_of(color.get(), nullptr, "forwarded"));
 	drv->end_render_pass();
@@ -794,7 +848,7 @@ BOOST_AUTO_TEST_CASE(RenderPassTexturesReachTheWrappedDriverUnwrapped)
 
 BOOST_AUTO_TEST_CASE(FramebuffersAreReusedAcrossFramesAndEvictedWithTheirTexture)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	for (int frame = 0; frame < 5; ++frame) {
 		drv->begin_render_pass(pass_of(color.get()));
 		drv->end_render_pass();
@@ -810,7 +864,7 @@ BOOST_AUTO_TEST_CASE(FramebuffersAreReusedAcrossFramesAndEvictedWithTheirTexture
 
 BOOST_AUTO_TEST_CASE(TraceRecordsPassMarkersAndDrawsInOrder)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	auto mesh = make_geometry(*drv, 6);
 	drv->begin_render_pass(pass_of(color.get()));
 	bind_test_pipeline();
@@ -866,7 +920,7 @@ BOOST_AUTO_TEST_CASE(ViolationsKeepTheirMessageAndTheFrameTheyHappenedIn)
 
 BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 {
-	auto texture = drv->create_texture(texture_of(8, 8, texture_usage::sampled));
+	auto texture = make_texture(*drv, texture_of(8, 8, texture_usage::sampled));
 	texture->set_filtering(texture_header::FILTERING::NEAREST, texture_header::FILTERING::NEAREST);
 	texture->bind(3);
 	texture->generate_mipmaps();
@@ -896,22 +950,23 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 
 BOOST_AUTO_TEST_CASE(ObjectsMayOutliveTheDriverAndTheSwapchain)
 {
-	std::unique_ptr<texture_interface> texture;
 	std::unique_ptr<buffer_interface> buffer;
+	const auto state = std::make_shared<vl::validator>();
 	{
-		vl::swapchain short_lived(std::make_unique<null::swapchain>());
-		auto short_drv = short_lived.create_driver();
-		texture = short_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
-		buffer = short_drv->create_buffer();
+		vl::driver short_drv(std::make_unique<null::driver>(), state);
+		// A texture belongs to the driver: it is freed with it, nothing is left to outlive it.
+		short_drv.create_texture(texture_of(4, 4, texture_usage::sampled));
+		BOOST_TEST(state->live_objects(vl::object_kind::texture) == 1u);
+		buffer = short_drv.create_buffer();
 	}
+	BOOST_TEST(state->live_objects(vl::object_kind::texture) == 0u);
 	buffer->set_data(std::vector<float>(3));
-	texture.reset();
 	buffer.reset();
 }
 
 BOOST_AUTO_TEST_CASE(RenderTargetThatIsAlsoSampledPassesEveryUsageRule)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target | texture_usage::sampled));
 	color->bind(0);
 	drv->begin_render_pass(pass_of(color.get()));
 	drv->end_render_pass();
@@ -920,7 +975,7 @@ BOOST_AUTO_TEST_CASE(RenderTargetThatIsAlsoSampledPassesEveryUsageRule)
 
 BOOST_AUTO_TEST_CASE(TextureWithoutAnyUsageIsReportedOnCreation)
 {
-	auto texture = drv->create_texture(texture_of(8, 8, texture_usage::none));
+	auto texture = make_texture(*drv, texture_of(8, 8, texture_usage::none));
 	BOOST_TEST(static_cast<bool>(texture));
 	expect_only(state(), vl::rule::texture_usage_flags);
 }
@@ -929,7 +984,7 @@ BOOST_AUTO_TEST_CASE(DepthFormatWithoutDepthOrStencilTargetIsReportedOnCreation)
 {
 	texture_header header = texture_of(8, 8, texture_usage::sampled);
 	header.data.format = texture_header::TYPE::D32;
-	drv->create_texture(header);
+	make_texture(*drv, header);
 	expect_only(state(), vl::rule::texture_usage_flags);
 }
 
@@ -937,7 +992,7 @@ BOOST_AUTO_TEST_CASE(DepthFormatAsColorTargetIsReportedOnCreation)
 {
 	texture_header header = texture_of(8, 8, texture_usage::depth_target | texture_usage::color_target);
 	header.data.format = texture_header::TYPE::D24_S8;
-	drv->create_texture(header);
+	make_texture(*drv, header);
 	expect_only(state(), vl::rule::texture_usage_flags);
 }
 
@@ -945,7 +1000,7 @@ BOOST_AUTO_TEST_CASE(DepthTargetThatIsAlsoSampledIsAccepted)
 {
 	texture_header header = texture_of(8, 8, texture_usage::depth_target | texture_usage::sampled);
 	header.data.format = texture_header::TYPE::D32;
-	drv->create_texture(header);
+	make_texture(*drv, header);
 	BOOST_TEST(state().total() == 0u);
 }
 
@@ -954,27 +1009,27 @@ BOOST_AUTO_TEST_CASE(InitialDataRequiresSampledUsage)
 	const unsigned char pixels[4] = { 1, 2, 3, 4 };
 	texture_header header = texture_of(1, 1, texture_usage::color_target);
 	header.data.initial_data = pixels;
-	drv->create_texture(header);
+	make_texture(*drv, header);
 	expect_only(state(), vl::rule::texture_usage_flags);
 
 	header.usage = texture_usage::color_target | texture_usage::sampled;
-	drv->create_texture(header);
+	make_texture(*drv, header);
 	BOOST_TEST(state().total() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(BindingATextureWithoutSampledUsageIsReported)
 {
-	auto color = drv->create_texture(texture_of(8, 8, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(8, 8, texture_usage::color_target));
 	color->bind(2);
 	expect_only(state(), vl::rule::texture_not_sampled);
 }
 
 BOOST_AUTO_TEST_CASE(APipelineMatchingThePassFormatsProducesNoViolations)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	texture_header depth_header = texture_of(16, 16, texture_usage::depth_target);
 	depth_header.data.format = texture_header::TYPE::D32;
-	auto depth = drv->create_texture(depth_header);
+	auto depth = make_texture(*drv, depth_header);
 	auto mesh = make_geometry(*drv, 3);
 
 	drv->begin_render_pass(pass_of(color.get(), depth.get()));
@@ -993,7 +1048,7 @@ BOOST_AUTO_TEST_CASE(APipelineMatchingThePassFormatsProducesNoViolations)
 
 BOOST_AUTO_TEST_CASE(PipelineWithAnotherColorFormatThanThePassIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 	pipeline_desc desc = pipeline_for_pass();
 	desc.color_formats = { texture_format::RGBA16F };
@@ -1004,7 +1059,7 @@ BOOST_AUTO_TEST_CASE(PipelineWithAnotherColorFormatThanThePassIsReported)
 
 BOOST_AUTO_TEST_CASE(PipelineWithADepthFormatForAPassWithoutDepthIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	drv->begin_render_pass(pass_of(color.get()));
 	pipeline_desc desc = pipeline_for_pass();
 	desc.depth_format = texture_format::D32;
@@ -1015,8 +1070,8 @@ BOOST_AUTO_TEST_CASE(PipelineWithADepthFormatForAPassWithoutDepthIsReported)
 
 BOOST_AUTO_TEST_CASE(PipelineWithoutADepthFormatForAPassWithDepthIsReported)
 {
-	auto color = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto depth = drv->create_texture(texture_of(16, 16, texture_usage::depth_target));
+	auto color = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto depth = make_texture(*drv, texture_of(16, 16, texture_usage::depth_target));
 	drv->begin_render_pass(pass_of(color.get(), depth.get()));
 	pipeline_desc desc = pipeline_for_pass();
 	desc.depth_format.reset();
@@ -1027,8 +1082,8 @@ BOOST_AUTO_TEST_CASE(PipelineWithoutADepthFormatForAPassWithDepthIsReported)
 
 BOOST_AUTO_TEST_CASE(PipelineWithFewerColorFormatsThanThePassTargetsIsReported)
 {
-	auto first = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
-	auto second = drv->create_texture(texture_of(16, 16, texture_usage::color_target));
+	auto first = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
+	auto second = make_texture(*drv, texture_of(16, 16, texture_usage::color_target));
 	render_pass_desc pass = pass_of(first.get());
 	pass.colors.push_back({ .texture = handle_of(second.get()) });
 	drv->begin_render_pass(pass);

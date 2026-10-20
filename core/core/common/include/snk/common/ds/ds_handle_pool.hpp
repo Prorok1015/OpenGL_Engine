@@ -23,14 +23,24 @@ namespace ds
 	//
 	// `Handle` is any aggregate with `index` and `gen` members of std::uint32_t (rnd::driver::handle<Tag> is one):
 	// the pool builds handles as `Handle{ index, gen }` and never stores anything else of them.
+	//
+	// The `gen` of a handle is `tag | (slot generation & mask)`. By default the mask is all 32 bits and the tag 0. An
+	// owner that wants a handle of another pool to be told apart passes a tag in the bits the mask leaves out (the
+	// drivers put an 8 bit driver id there and keep 24 bits of generation): a handle with a foreign tag finds nothing
+	// and is not stale, it is simply unknown to this pool.
 	template <class T, class Handle = pool_handle>
 	class handle_pool
 	{
 	public:
 		using handle_type = Handle;
 
-		// The generation is 32 bits and wraps after 2^32 reuses of one slot; a handle that stale could match again,
-		// which is accepted. If T's move constructor throws, the pool is left as it was.
+		handle_pool() = default;
+		// `tag` must not overlap `mask`.
+		handle_pool(std::uint32_t mask, std::uint32_t tag) : m_mask(mask), m_tag(tag & ~mask) {}
+
+		// The generation counts 32 bits, of which the mask keeps some; it wraps after 2^(mask bits) reuses of one
+		// slot, and a handle that stale could match again, which is accepted. If T's move constructor throws, the
+		// pool is left as it was.
 		handle_type insert(T value)
 		{
 			std::uint32_t index = 0;
@@ -52,7 +62,7 @@ namespace ds
 			}
 			slot& s = m_slots[index - 1];
 			++m_live;
-			return handle_type{ index, s.gen };
+			return handle_type{ index, visible(s.gen) };
 		}
 
 		// Null for a handle that names no live object.
@@ -63,7 +73,7 @@ namespace ds
 				return nullptr;
 			}
 			const slot& s = m_slots[h.index - 1];
-			return s.gen == h.gen && s.value ? &*s.value : nullptr;
+			return visible(s.gen) == h.gen && s.value ? &*s.value : nullptr;
 		}
 
 		// True for a handle whose slot exists but holds no object of that generation: the object was erased,
@@ -71,7 +81,7 @@ namespace ds
 		// had, is not stale (it is just unknown).
 		bool stale(handle_type h) const
 		{
-			if (h.index == 0 || h.index > m_slots.size()) {
+			if (h.index == 0 || h.index > m_slots.size() || (h.gen & ~m_mask) != m_tag) {
 				return false;
 			}
 			return find(h) == nullptr;
@@ -80,15 +90,23 @@ namespace ds
 		// Does not allocate: the free list was reserved by insert().
 		bool erase(handle_type h)
 		{
+			return extract(h).has_value();
+		}
+
+		// Takes the object out of its slot and frees the slot, like erase(), but hands the object over, so the
+		// caller destroys it wherever it likes (outside a lock, say). Empty for a handle that names no live object.
+		std::optional<T> extract(handle_type h)
+		{
 			if (!find(h)) {
-				return false;
+				return std::nullopt;
 			}
 			slot& s = m_slots[h.index - 1];
+			std::optional<T> taken = std::move(s.value);
 			s.value.reset();
 			++s.gen;
 			m_free.push_back(h.index);
 			--m_live;
-			return true;
+			return taken;
 		}
 
 		std::size_t live() const { return m_live; }
@@ -100,7 +118,7 @@ namespace ds
 		{
 			for (std::size_t i = 0; i < m_slots.size(); ++i) {
 				if (m_slots[i].value) {
-					visit(handle_type{ static_cast<std::uint32_t>(i + 1), m_slots[i].gen }, *m_slots[i].value);
+					visit(handle_type{ static_cast<std::uint32_t>(i + 1), visible(m_slots[i].gen) }, *m_slots[i].value);
 				}
 			}
 		}
@@ -112,6 +130,10 @@ namespace ds
 			std::uint32_t gen = 1;
 		};
 
+		std::uint32_t visible(std::uint32_t gen) const noexcept { return m_tag | (gen & m_mask); }
+
+		std::uint32_t m_mask = 0xffffffffu;
+		std::uint32_t m_tag = 0;
 		std::vector<slot> m_slots;
 		std::vector<std::uint32_t> m_free;
 		std::size_t m_live = 0;

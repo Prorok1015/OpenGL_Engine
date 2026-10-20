@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
 #include <span>
@@ -90,7 +91,7 @@ BOOST_AUTO_TEST_CASE(ObjectsAreCountedFromCreationToDestruction)
 	null::driver driver;
 	{
 		auto shader = driver.create_shader(valid_program());
-		auto texture = driver.create_texture(texture_header{});
+		auto texture = make_texture(driver, texture_header{});
 		auto va = driver.create_vertex_array();
 		auto vbo = driver.create_buffer();
 
@@ -130,7 +131,7 @@ BOOST_AUTO_TEST_CASE(TextureKeepsItsHeader)
 	header.data.format = texture_header::TYPE::RGBA16F;
 	header.usage = texture_usage::color_target;
 
-	auto texture = driver.create_texture(header);
+	auto texture = make_texture(driver, header);
 	BOOST_REQUIRE(texture);
 	BOOST_TEST(texture->width() == 64u);
 	BOOST_TEST(texture->height() == 32u);
@@ -151,7 +152,7 @@ BOOST_AUTO_TEST_CASE(TexturesAreNamedByHandlesThatGoStaleWithTheTexture)
 	header.data.extent.height = 4;
 	header.usage = texture_usage::color_target;
 
-	auto first = driver.create_texture(header);
+	auto first = make_texture(driver, header);
 	BOOST_REQUIRE(first);
 	const texture_handle first_handle = first->handle();
 	BOOST_TEST(static_cast<bool>(first_handle));
@@ -162,7 +163,7 @@ BOOST_AUTO_TEST_CASE(TexturesAreNamedByHandlesThatGoStaleWithTheTexture)
 	BOOST_TEST((driver.texture_of(first_handle) == first.get()));
 
 	// A second texture gets another slot.
-	auto second = driver.create_texture(header);
+	auto second = make_texture(driver, header);
 	BOOST_TEST((second->handle() != first_handle));
 	BOOST_TEST(driver.live_textures() == 2u);
 
@@ -173,23 +174,72 @@ BOOST_AUTO_TEST_CASE(TexturesAreNamedByHandlesThatGoStaleWithTheTexture)
 	BOOST_TEST(driver.info(first_handle).name == "unknown");
 
 	// The freed slot comes back with the next generation: the old handle still names nothing.
-	auto third = driver.create_texture(header);
+	auto third = make_texture(driver, header);
 	BOOST_TEST(third->handle().index == first_handle.index);
 	BOOST_TEST(third->handle().gen == first_handle.gen + 1);
 	BOOST_TEST(!driver.is_alive(first_handle));
 	BOOST_TEST(driver.is_alive(third->handle()));
 }
 
-BOOST_AUTO_TEST_CASE(ATextureMayOutliveTheDriverThatMadeIt)
+BOOST_AUTO_TEST_CASE(TexturesStillAliveAreFreedWithTheDriver)
 {
-	std::unique_ptr<texture_interface> texture;
+	// The driver owns its textures: nothing outlives it, and its handles name nothing in another driver.
+	texture_handle handle;
+	std::shared_ptr<const null::object_stats> stats;
 	{
 		null::driver driver;
-		texture = driver.create_texture(texture_header{});
-		BOOST_TEST(static_cast<bool>(texture->handle()));
+		stats = driver.shared_stats();
+		handle = driver.create_texture(texture_header{});
+		BOOST_TEST(static_cast<bool>(handle));
+		BOOST_TEST(driver.is_alive(handle));
+		BOOST_TEST(driver.live_textures() == 1u);
+		BOOST_TEST(stats->textures.destroyed == 0u);
 	}
-	BOOST_REQUIRE(texture);
-	texture.reset();
+	BOOST_TEST(stats->textures.created == 1u);
+	BOOST_TEST(stats->textures.destroyed == 1u);
+	BOOST_TEST(stats->textures.live() == 0u);
+	null::driver other;
+	BOOST_TEST(!other.is_alive(handle));
+}
+
+BOOST_AUTO_TEST_CASE(DestroyFreesTheTextureAndTheHandleGoesStale)
+{
+	null::driver driver;
+	const texture_handle handle = driver.create_texture(texture_header{});
+	BOOST_REQUIRE(driver.is_alive(handle));
+	BOOST_TEST((driver.resolve(handle) != nullptr));
+	BOOST_TEST(driver.stats().textures.live() == 1u);
+
+	driver.destroy(handle);
+	BOOST_TEST(!driver.is_alive(handle));
+	BOOST_TEST((driver.resolve(handle) == nullptr));
+	BOOST_TEST(driver.live_textures() == 0u);
+	BOOST_TEST(driver.stats().textures.destroyed == 1u);
+
+	// A second destroy, or one of the null handle, changes nothing.
+	driver.destroy(handle);
+	driver.destroy(texture_handle{});
+	BOOST_TEST(driver.stats().textures.destroyed == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AHandleOfAnotherDriverNamesNoTexture)
+{
+	null::driver first;
+	null::driver second;
+	const texture_handle mine = first.create_texture(texture_header{});
+	const texture_handle theirs = second.create_texture(texture_header{});
+
+	// Same slot, different driver id in the generation.
+	BOOST_TEST(mine.index == theirs.index);
+	BOOST_TEST((mine.gen != theirs.gen));
+	BOOST_TEST(first.is_alive(mine));
+	BOOST_TEST(!first.is_alive(theirs));
+	BOOST_TEST((first.resolve(theirs) == nullptr));
+
+	// Destroying a foreign handle frees nothing.
+	first.destroy(theirs);
+	BOOST_TEST(second.is_alive(theirs));
+	BOOST_TEST(first.is_alive(mine));
 }
 
 BOOST_AUTO_TEST_CASE(BufferKeepsSizeAndData)
@@ -335,7 +385,7 @@ BOOST_AUTO_TEST_CASE(ValidateShaderHeadersNamesTheReason)
 BOOST_AUTO_TEST_CASE(RenderPassesAreCountedAndTheLastOneIsKept)
 {
 	null::driver driver;
-	auto color = driver.create_texture(target_of(32, texture_usage::color_target));
+	auto color = make_texture(driver, target_of(32, texture_usage::color_target));
 	BOOST_TEST(!driver.in_render_pass());
 
 	render_pass_desc pass = pass_of(color.get());
@@ -358,8 +408,8 @@ BOOST_AUTO_TEST_CASE(RenderPassesAreCountedAndTheLastOneIsKept)
 BOOST_AUTO_TEST_CASE(PassesWithTheSameAttachmentsShareOneFramebuffer)
 {
 	null::driver driver;
-	auto color = driver.create_texture(target_of(32, texture_usage::color_target));
-	auto depth = driver.create_texture(target_of(32, texture_usage::depth_target));
+	auto color = make_texture(driver, target_of(32, texture_usage::color_target));
+	auto depth = make_texture(driver, target_of(32, texture_usage::depth_target));
 	const auto& fbos = driver.stats().framebuffers;
 
 	for (int i = 0; i < 3; ++i) {
@@ -383,9 +433,9 @@ BOOST_AUTO_TEST_CASE(PassesWithTheSameAttachmentsShareOneFramebuffer)
 BOOST_AUTO_TEST_CASE(AnotherAttachmentMipOrLayerOrSetBuildsAnotherFramebuffer)
 {
 	null::driver driver;
-	auto color = driver.create_texture(target_of(32, texture_usage::color_target, 3));
-	auto second = driver.create_texture(target_of(32, texture_usage::color_target));
-	auto depth = driver.create_texture(target_of(32, texture_usage::depth_target));
+	auto color = make_texture(driver, target_of(32, texture_usage::color_target, 3));
+	auto second = make_texture(driver, target_of(32, texture_usage::color_target));
+	auto depth = make_texture(driver, target_of(32, texture_usage::depth_target));
 	const auto& fbos = driver.stats().framebuffers;
 
 	run_pass(driver, pass_of(color.get()));
@@ -414,7 +464,7 @@ BOOST_AUTO_TEST_CASE(LayeredAndSingleLayerAttachmentsOfOneTextureAreDifferentFra
 	texture_header header = target_of(32, texture_usage::color_target);
 	header.type = TEXTURE_TYPE::TEXTURE_2D_ARRAY;
 	header.data.extent.layers = 4;
-	auto array = driver.create_texture(header);
+	auto array = make_texture(driver, header);
 	const auto& fbos = driver.stats().framebuffers;
 
 	render_pass_desc layered = pass_of(array.get());
@@ -451,9 +501,9 @@ BOOST_AUTO_TEST_CASE(BackbufferPassesNeedNoFramebuffer)
 BOOST_AUTO_TEST_CASE(DestroyingATextureEvictsTheFramebuffersBuiltFromIt)
 {
 	null::driver driver;
-	auto first = driver.create_texture(target_of(32, texture_usage::color_target));
-	auto second = driver.create_texture(target_of(32, texture_usage::color_target));
-	auto depth = driver.create_texture(target_of(32, texture_usage::depth_target));
+	auto first = make_texture(driver, target_of(32, texture_usage::color_target));
+	auto second = make_texture(driver, target_of(32, texture_usage::color_target));
+	auto depth = make_texture(driver, target_of(32, texture_usage::depth_target));
 	const auto& fbos = driver.stats().framebuffers;
 
 	run_pass(driver, pass_of(first.get(), depth.get()));
@@ -478,7 +528,7 @@ BOOST_AUTO_TEST_CASE(ARecreatedTextureNeverMatchesAnEvictedFramebuffer)
 
 	for (int generation = 0; generation < 4; ++generation) {
 		// The allocator is free to hand the same address out again.
-		auto color = driver.create_texture(target_of(32, texture_usage::color_target));
+		auto color = make_texture(driver, target_of(32, texture_usage::color_target));
 		run_pass(driver, pass_of(color.get()));
 		run_pass(driver, pass_of(color.get()));
 	}
@@ -650,10 +700,10 @@ BOOST_AUTO_TEST_CASE(TheDescriptionStaysReadableWhileTheCacheGrows)
 
 BOOST_AUTO_TEST_CASE(PipelineFormatsFollowThePassTargets)
 {
-	auto color = driver.create_texture(target_of(16, texture_usage::color_target));
+	auto color = make_texture(driver, target_of(16, texture_usage::color_target));
 	texture_header depth_header = target_of(16, texture_usage::depth_target);
 	depth_header.data.format = texture_header::TYPE::D32F;
-	auto depth = driver.create_texture(depth_header);
+	auto depth = make_texture(driver, depth_header);
 
 	pipeline_desc desc = base;
 	set_target_formats(driver, desc, pass_of(color.get(), depth.get()));

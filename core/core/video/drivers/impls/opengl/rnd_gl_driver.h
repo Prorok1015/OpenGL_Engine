@@ -29,7 +29,6 @@ namespace rnd::driver::gl
 		virtual void draw_indices(const vertex_array_interface* va, unsigned int count, unsigned int base_vertex, unsigned int base_index) override;
 
 		virtual std::unique_ptr<shader_interface> create_shader(const std::vector<shader_header>& headers) override;
-		virtual std::unique_ptr<texture_interface> create_texture(const texture_header& header) override;
 		virtual std::unique_ptr<vertex_array_interface> create_vertex_array() override;
 		virtual std::unique_ptr<buffer_interface> create_buffer() override;
 
@@ -51,8 +50,12 @@ namespace rnd::driver::gl
 		virtual const pipeline_desc& pipeline_info(pipeline_handle pipeline) const override;
 		virtual void invalidate_state_cache() override;
 		virtual std::vector<std::byte> read_texture(texture_handle texture, glm::ivec4 rect) override;
-		virtual const texture_header& info(texture_handle texture) const override { return m_textures->info(texture); }
-		virtual bool is_alive(texture_handle texture) const override { return m_textures->find(texture) != nullptr; }
+		virtual texture_handle create_texture(const texture_header& header) override;
+		// GL frees the texture at once: the driver keeps the GPU work in order, so nothing needs to be waited for.
+		virtual void destroy(texture_handle texture) override;
+		virtual texture_interface* resolve(texture_handle texture) const override { return m_textures.find(texture); }
+		virtual const texture_header& info(texture_handle texture) const override { return m_textures.info(texture); }
+		virtual bool is_alive(texture_handle texture) const override { return m_textures.find(texture) != nullptr; }
 
 		// GPU timer queries
 		virtual bool supports_timer_queries() const override;
@@ -123,7 +126,7 @@ namespace rnd::driver::gl
 		std::uint64_t m_frame = 0;
 		mutable std::optional<std::size_t> m_uniform_offset_alignment;
 		mutable std::optional<std::size_t> m_storage_offset_alignment;
-		std::shared_ptr<texture_pool> m_textures = texture_pool::create();
+		texture_pool m_textures;
 		bind_group_layout_cache m_layouts;
 		slot_table<buffer_tag, gl_buffer> m_buffers;
 		slot_table<bind_group_tag, gl_group> m_groups;

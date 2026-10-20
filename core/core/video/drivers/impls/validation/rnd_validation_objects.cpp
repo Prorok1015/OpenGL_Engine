@@ -7,10 +7,11 @@ rnd::driver::validation::shader::shader(std::shared_ptr<validator> owner, std::u
 {
 }
 
-rnd::driver::validation::texture::texture(std::shared_ptr<validator> owner, std::unique_ptr<texture_interface> inner, const texture_header& hdr)
+rnd::driver::validation::texture::texture(std::shared_ptr<validator> owner, texture_interface& inner, texture_handle inner_handle, const texture_header& hdr)
 	: texture_interface(hdr)
 	, m_owner(owner)
-	, m_inner(std::move(inner))
+	, m_inner(&inner)
+	, m_inner_handle(inner_handle)
 	, m_registration(owner, this, object_kind::texture)
 {
 }

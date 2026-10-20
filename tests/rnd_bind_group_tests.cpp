@@ -4,6 +4,7 @@
 #include "rnd_validation_driver.h"
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/shader/rnd_shader_bindings.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
 #include <span>
@@ -417,7 +418,7 @@ BOOST_AUTO_TEST_CASE(ACorrectUseOfBindGroupsProducesNoViolations)
 {
 	const buffer_handle ring = drv->create_buffer({ .size = 1024, .usage = buffer_usage::uniform, .update = buffer_update::per_frame });
 	const buffer_handle bones = drv->create_buffer({ .size = 256, .usage = buffer_usage::storage });
-	auto texture = drv->create_texture(texture_of(texture_usage::sampled));
+	auto texture = make_texture(*drv, texture_of(texture_usage::sampled));
 	const auto object_layout = drv->create_bind_group_layout(layout_of({
 		{ binding_type::ubo, 0, shader_stage::vertex, true }, { binding_type::ssbo, 0, shader_stage::vertex, false } }));
 	const auto pass_layout = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0, shader_stage::fragment, false } }));
@@ -497,8 +498,8 @@ BOOST_AUTO_TEST_CASE(AGroupThatDoesNotMatchItsLayoutIsRejected)
 {
 	const buffer_handle uniform = drv->create_buffer({ .size = 64, .usage = buffer_usage::uniform });
 	const buffer_handle storage = drv->create_buffer({ .size = 64, .usage = buffer_usage::storage });
-	auto sampled = drv->create_texture(texture_of(texture_usage::sampled));
-	auto target_only = drv->create_texture(texture_of(texture_usage::color_target));
+	auto sampled = make_texture(*drv, texture_of(texture_usage::sampled));
+	auto target_only = make_texture(*drv, texture_of(texture_usage::color_target));
 	const auto two = drv->create_bind_group_layout(layout_of({ { binding_type::ubo, 0 }, { binding_type::ubo, 1 } }));
 	const auto one = drv->create_bind_group_layout(layout_of({ { binding_type::ubo, 0 } }));
 	const auto tex = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0 } }));
@@ -803,7 +804,7 @@ BOOST_AUTO_TEST_CASE(AGroupWhoseBufferWasDestroyedCannotBeBound)
 BOOST_AUTO_TEST_CASE(ATextureDeletedWhileAGroupHoldsItIsReportedAtBind)
 {
 	const auto layout = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0 } }));
-	auto texture = drv->create_texture(texture_of(texture_usage::sampled));
+	auto texture = make_texture(*drv, texture_of(texture_usage::sampled));
 	const auto group = drv->create_bind_group(group_of(layout, { texture_entry(0, texture.get()) }));
 	texture.reset();
 	open_pass();
@@ -815,8 +816,8 @@ BOOST_AUTO_TEST_CASE(ATextureDeletedWhileAGroupHoldsItIsReportedAtBind)
 BOOST_AUTO_TEST_CASE(BindGroupTexturesReachTheWrappedDriverTranslated)
 {
 	// The two drivers number their textures from 1: take a slot of the wrapped driver's so the sequences differ.
-	auto occupant = inner().create_texture(texture_of(texture_usage::sampled));
-	auto texture = drv->create_texture(texture_of(texture_usage::sampled));
+	auto occupant = make_texture(inner(), texture_of(texture_usage::sampled));
+	auto texture = make_texture(*drv, texture_of(texture_usage::sampled));
 	BOOST_REQUIRE((texture->handle() != texture->native()->handle()));
 
 	const auto layout = drv->create_bind_group_layout(layout_of({ { binding_type::texture, 0 } }));
