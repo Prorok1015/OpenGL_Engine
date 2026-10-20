@@ -500,8 +500,7 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
     return;
   }
   if (m_depends_on.size() >= m_edge_sweep_at) {
-    prune_released_edges();
-    m_edge_sweep_at = std::max(k_edge_sweep_floor, m_depends_on.size() * 2);
+    sweep_edges();
   }
   if (const auto old = m_depends_on.find(dependent); old != m_depends_on.end()) {
     for (const auto &target : old->second) {
@@ -529,12 +528,18 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
   }
 }
 
+void res::resource_system::sweep_edges() {
+  prune_released_edges();
+  m_signals_since_sweep = 0;
+  ++m_edge_sweeps;
+  m_edge_sweep_at = std::max(k_edge_sweep_floor, m_depends_on.size() * 2);
+}
+
 void res::resource_system::prune_released_edges() {
-  // Released: the cache still has an entry for the tag, but every one of them expired. A tag without any entry was
-  // evicted by a signal and may be loaded again, so its edges stay.
+  // Released: no live cache entry is left for the tag, either because all of them expired or because a signal evicted
+  // it (#326). A load in flight has an entry, and a tag that loads again records its edges anew, so nothing is lost.
   const auto is_released = [this](const res::tag &tag) {
-    return m_cache.any_of_tag(tag, [](const cache_entry &entry) { return entry.expired(); }) &&
-           !m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+    return !m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
   };
   std::unordered_set<res::tag> released;
   for (const auto &[tag, targets] : m_depends_on) {
@@ -650,7 +655,11 @@ void res::resource_system::signal_changed(const res::tag &tag) {
   std::uint64_t epoch = 0;
   {
     std::unique_lock lock(m_cache_mutex);
-    prune_released_edges();
+    // A small graph is swept every time (cheap, and a released tag is then never evicted or delivered). A large one only
+    // every k_signal_sweep_every signals, so a burst of file events does not hold the exclusive lock for a sweep each.
+    if (m_depends_on.size() < k_edge_sweep_floor || ++m_signals_since_sweep >= k_signal_sweep_every) {
+      sweep_edges();
+    }
     batch = changed_batch(tag);
     for (const auto &changed : batch) {
       m_cache.erase_tag(changed);

@@ -20,6 +20,8 @@
 #include <glm/gtx/euler_angles.hpp>
 
 #include <snk/common/ds/ds_svg_writer.hpp>
+#include <stdexcept>
+#include <string>
 #include <unordered_set>
 
 void process_model(const aiScene* scene, json::object& data, res::tag tag, res::tag prefab_tag, res::resource_system& res_sys);
@@ -89,8 +91,7 @@ std::shared_ptr<desc::desc_base> scn::model_importer_adapter::operator()(const r
     // check for errors
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
     {
-        egLOG("scene/model/load", "ERROR::ASSIMP::{}", importer.GetErrorString());
-        return {};
+        throw std::runtime_error("model '" + std::string{ tag.view() } + "': " + importer.GetErrorString());
     }
 
 	std::string path = std::format("memory://{0}{1}.desc", tag.path(), tag.pure_name());
