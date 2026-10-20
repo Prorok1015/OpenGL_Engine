@@ -194,23 +194,22 @@ BOOST_AUTO_TEST_CASE(RegistryTargetRemovedFromTheManagerIsDeadWithoutEnsure)
 	BOOST_CHECK(!registry.current(tag));
 }
 
-BOOST_AUTO_TEST_CASE(RegistryTargetsDropByClearCacheAreDeadWithoutEnsure)
+BOOST_AUTO_TEST_CASE(RegistryTargetSurvivesClearCacheBecauseItsTagIsInMemory)
 {
+	// Render targets have memory tags, which clear_cache() keeps (only loaded assets are dropped): the id stays
+	// valid and nothing is made again.
 	auto& system = storage.require<rnd::render_system>();
 	auto& textures = system.get_texture_manager();
 	rnd::render_targets::registry registry(*system.get_driver());
 	const auto tag = res::tag(res::tag::memory, "__rt_registry_cleared");
 	const auto id = registry.ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
 	BOOST_REQUIRE(registry.resolve(id));
+	const texture_handle handle = registry.resolve(id);
 
 	textures.clear_cache();
-	BOOST_CHECK(!registry.resolve(id));
-	BOOST_CHECK(!registry.current(tag));
-	// Made again, the slot is the same and the generation moved on.
-	const auto again = registry.ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
-	BOOST_TEST(again.slot == id.slot);
-	BOOST_TEST(again.gen > id.gen);
-	BOOST_CHECK(registry.resolve(again));
+	BOOST_CHECK(registry.is_current(id));
+	BOOST_CHECK(registry.resolve(id) == handle);
+	BOOST_CHECK(registry.ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target) == id);
 }
 
 BOOST_AUTO_TEST_CASE(RegistryIdsAreNullForAnUnknownTargetAndPerTag)
