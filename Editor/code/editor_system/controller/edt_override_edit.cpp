@@ -107,15 +107,18 @@ namespace
 }
 
 std::vector<edt::override_edit::listed_node> edt::override_edit::list_children(
-	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target)
+	scn::ecs_assembler& assembler, const prefab_node& owner, std::span<const uint64_t> target, std::size_t limit, std::size_t* total)
 {
 	std::vector<listed_node> out;
+	if (total) *total = 0;
 	auto path = compose_path(assembler, owner, target, false);
 	if (!path) return out;
 
+	if (total) *total = path->composed->children.size();
 	std::vector<std::unique_ptr<prefab_node>> keep;
-	out.reserve(path->composed->children.size());
+	out.reserve(std::min(path->composed->children.size(), limit));
 	for (const auto& child : path->composed->children) {
+		if (out.size() >= limit) break;
 		const prefab_node* expanded = expand_node(assembler, child, keep);
 		listed_node listed;
 		listed.node.name = child.name;

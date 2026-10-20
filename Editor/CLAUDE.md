@@ -91,6 +91,8 @@ All panels are `shared_ptr` members of `editor_system` and are registered in `ed
 
 Services seen by scripts and agents (A2, `edt_service_commands.h`): `job_service` raises `editor_events::job_started/job_progress/job_finished` (progress is polled once per frame by `job_service::pump()` in the `editor_jobs` frame stage) and serves `job.list`, `job.get{id}`, `job.cancel{id}`; every `dialog_service` request has an id, a kind and an answer schema (`list()`), and `dialog.list` / `dialog.answer{id, answer}` resolve it through the same callback a click uses. The engine log is a ring journal (`engine::read_log_journal`, command `log.read`); `engine::add_log_sink` returns an RAII handle (the console panel is one sink, `editor_system::m_log_sink`).
 
+State queries for agents (A4, `edt_state_commands.h`, registered by `editor_context`): `scene.query`, `node.get`, `component.schema`, `asset.query`, `selection.get`, all read-only. A node is addressed by `ref = {context: world name, path: [16-char hex node ids]}`; `scene.query` pages through the world desc (`page_size` <= 200) with an opaque cursor bound to the document generation (`stale` after an edit). The MCP bridge allows them by command id (`read_commands` in `edt_mcp_bridge_host.cpp`), never by domain.
+
 ## Inspector and Asset-Kind Registries
 
 ```cpp
