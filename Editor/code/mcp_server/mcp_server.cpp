@@ -383,10 +383,12 @@ namespace mcp::detail
 			const std::uint64_t write_id = ++m_write_seq;
 			m_write_timer.expires_after(m_core->config.write_timeout);
 			m_write_timer.async_wait([self, write_id](const boost::system::error_code& ec) {
-				if (!ec && self->m_writing && self->m_write_seq == write_id) {
-					self->m_core->application.log(log_level::warn, "an MCP client does not read its answers and was closed");
-					self->close();
-				}
+				self->guarded([&] {
+					if (!ec && self->m_writing && self->m_write_seq == write_id) {
+						self->m_core->application.log(log_level::warn, "an MCP client does not read its answers and was closed");
+						self->close();
+					}
+				});
 			});
 			asio::async_write(m_socket, asio::buffer(m_out.front().data), [self](const boost::system::error_code& ec, std::size_t) {
 				self->guarded([&] { self->on_written(ec); });

@@ -26,8 +26,9 @@ namespace edt {
 		// Background-safe phase: Assimp parse + geometry + materials + store.
 		// Does NOT touch desc_sys.create_instance or skinning_manager.
 		// `ctx` (null: not cancellable) is checked between the phases and by Assimp while it parses; a stop request
-		// throws ds::task_cancelled. Nothing is stored in the resource system before the last phases, so a job
-		// stopped earlier leaves no memory:// resources behind.
+		// throws ds::task_cancelled. The helpers store textures, descs and materials as they go and the geometry
+		// and prefab at the end, so a job stopped after the first of those leaves memory:// resources behind that
+		// nothing removes yet (the resource system has no erase).
 		import_intermediate import_background(const std::filesystem::path& abs_path, ds::task_context* ctx = nullptr);
 
 		// Main-thread finalization: desc_sys.create_instance + deserialize + skinning.

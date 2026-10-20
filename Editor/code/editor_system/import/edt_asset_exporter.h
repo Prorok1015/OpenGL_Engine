@@ -32,7 +32,8 @@ namespace edt {
 		// Write all resources to disk, remapping memory:// → res:// in JSON files.
 		// Thread-safe — can run on background thread.
 		// `ctx` (null: not cancellable) is checked before each file; a stop request throws ds::task_cancelled.
-		// The files written before that stay on disk: a file is never left half written.
+		// The files written before that stay on disk: each write is as atomic as res::resource_system::store(), but a
+		// cancelled export can leave a partial project (some leaves written, no root prefab).
 		bool export_to_project(
 			const import_result& result,
 			const std::unordered_map<res::tag, res::tag>& remap,

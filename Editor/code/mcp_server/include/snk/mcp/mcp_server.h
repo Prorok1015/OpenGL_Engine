@@ -37,7 +37,7 @@ namespace mcp
 		// client that stops reading would hold its connection slot for ever.
 		std::chrono::milliseconds write_timeout{ 30000 };
 		// Bytes of an event stream that may wait to be written, besides the limit on their number; past it the
-		// subscriber is dropped.
+		// subscriber is dropped. A single frame bigger than this drops it too (fail-closed).
 		std::size_t max_stream_backlog_bytes = 1024 * 1024;
 		server_info info;
 	};
