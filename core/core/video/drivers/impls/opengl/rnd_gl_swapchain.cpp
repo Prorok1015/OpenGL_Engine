@@ -1,4 +1,4 @@
-#include "rnd_gl_swapchain.h"
+#include <snk/driver_gl/rnd_gl_swapchain.h>
 #include <snk/common/common.h>
 #include <glad/glad.h>
 #include "rnd_gl_driver.h"

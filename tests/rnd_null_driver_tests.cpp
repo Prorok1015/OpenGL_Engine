@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "rnd_null_driver.h"
-#include "rnd_null_swapchain.h"
+#include <snk/driver_null/rnd_null_swapchain.h>
 #include <snk/driver/rnd_texture_owner.h>
 #include <array>
 #include <cstring>

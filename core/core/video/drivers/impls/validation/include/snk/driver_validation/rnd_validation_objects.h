@@ -1,5 +1,5 @@
 #pragma once
-#include "rnd_validation_validator.h"
+#include <snk/driver_validation/rnd_validation_validator.h>
 #include <snk/driver/rnd_shader_interface.h>
 #include <snk/driver/rnd_texture_interface.h>
 #include <snk/driver/rnd_vertex_array_interface.h>
