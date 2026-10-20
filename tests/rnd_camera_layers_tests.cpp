@@ -398,7 +398,7 @@ BOOST_AUTO_TEST_CASE(TwoCamerasOfDifferentLayersShareOneTarget)
 	BOOST_TEST(state.total() == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(TheTwoWorldSmokeLevelDrawsBothLayersWithoutViolations)
+BOOST_AUTO_TEST_CASE(TheTwoWorldSmokeLevelDrawsBothLayersWithoutViolations, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	auto& levels = storage.require<scn::context_manager>();
 	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_two_worlds.desc")));

@@ -23,7 +23,9 @@
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/resource/res_system.h>
+#if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
+#endif
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_registration_scope.h>
@@ -90,7 +92,9 @@ struct null_engine_fixture
 
 		auto& descs = storage.construct<desc::desc_system>(std::ref(rs));
 		rs.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(rs), std::ref(descs));
+#if SNK_HAS_ASSIMP
 		rs.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(descs), std::ref(rs));
+#endif
 		auto& sfactory = storage.construct<ecs::system_factory>();
 
 		auto& stages = storage.construct<app::frame_stage_registry>();
@@ -121,7 +125,9 @@ struct null_engine_fixture
 		engine::render::render_term(storage);
 		set_render_validate(false);
 		auto& rs = storage.require<res::resource_system>();
+#if SNK_HAS_ASSIMP
 		rs.unregistrate_adapter(scn::model_importer_adapter::INFO);
+#endif
 		rs.unregistrate_adapter(core::desc::desc_adapter_t::INFO);
 	}
 

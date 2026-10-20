@@ -225,12 +225,15 @@ void edt::file_menu::register_actions()
 		.activate = [this] { save_level(); } });
 
 	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
+		.disabled_tooltip = "Model import is not available: this editor was built without assimp (SNK_WITH_ASSIMP=OFF).",
 		.execute = [this](const json::value& args) {
+			if (!m_hooks.import_model) return action_result::failure("failed", "model import is not built in");
 			m_hooks.import_model(from_json_string(args.as_object().at("path").as_string()));
 			return action_result::success();
 		},
 		.args_schema = path_schema(false),
-		.activate = [this] { import_model(); } });
+		.activate = [this] { import_model(); },
+		.enabled = [this] { return static_cast<bool>(m_hooks.import_model); } });
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {

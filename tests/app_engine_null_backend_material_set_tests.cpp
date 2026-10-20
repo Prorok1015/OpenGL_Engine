@@ -113,7 +113,7 @@ struct material_set_fixture : test_util::null_engine_fixture
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendMaterialSet, material_set_fixture)
 
-BOOST_AUTO_TEST_CASE(EveryDrawOfAMaterialHasItsGroupBound)
+BOOST_AUTO_TEST_CASE(EveryDrawOfAMaterialHasItsGroupBound, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	const auto before = driver()->draws_with_set();
@@ -131,7 +131,7 @@ BOOST_AUTO_TEST_CASE(EveryDrawOfAMaterialHasItsGroupBound)
 	expect_no_violations();
 }
 
-BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
+BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	driver()->record_bindings(true);
@@ -197,7 +197,7 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
 	expect_no_violations();
 }
 
-BOOST_AUTO_TEST_CASE(NoGroupIsRebuiltOnceTheSceneIsWarm)
+BOOST_AUTO_TEST_CASE(NoGroupIsRebuiltOnceTheSceneIsWarm, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	driver()->record_bindings(true);
@@ -227,7 +227,7 @@ BOOST_AUTO_TEST_CASE(NoGroupIsRebuiltOnceTheSceneIsWarm)
 	expect_no_violations();
 }
 
-BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShininessGetsOne)
+BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShininessGetsOne, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	driver()->record_bindings(true);
@@ -325,7 +325,7 @@ BOOST_AUTO_TEST_CASE(AMaterialRebuiltWithTheSameContentsKeepsItsGroupAndANewShin
 	expect_no_violations();
 }
 
-BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture)
+BOOST_AUTO_TEST_CASE(ReloadingATextureBuildsTheGroupsAgainWithTheNewTexture, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	driver()->record_bindings(true);
