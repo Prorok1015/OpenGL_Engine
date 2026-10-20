@@ -281,9 +281,9 @@ namespace res
 		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
 		void record_dependencies(const res::tag& dependent, const std::shared_ptr<resource_handle>& block,
 			const std::vector<res_dep>& declared);
-		// Drops the outgoing edges of released tags (no live cache entry: all expired, or evicted by a signal), except
-		// the ones a tag still in use is built through: a change at the bottom of such a chain must pass through them
-		// to reach it. m_cache_mutex held (unique).
+		// Drops the outgoing edges of released tags (all cache entries expired, or none left after a signal evicted the
+		// tag and nothing watches it), except the ones a tag still in use is built through: a change at the bottom of
+		// such a chain must pass through them to reach it. m_cache_mutex held (unique).
 		void prune_released_edges();
 		// prune_released_edges() plus the bookkeeping that throttles the next sweeps. m_cache_mutex held (unique).
 		void sweep_edges();

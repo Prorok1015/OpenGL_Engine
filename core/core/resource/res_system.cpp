@@ -536,10 +536,19 @@ void res::resource_system::sweep_edges() {
 }
 
 void res::resource_system::prune_released_edges() {
-  // Released: no live cache entry is left for the tag, either because all of them expired or because a signal evicted
-  // it (#326). A load in flight has an entry, and a tag that loads again records its edges anew, so nothing is lost.
+  // Released: the tag has no live cache entry. Either every entry expired, or a signal evicted it (#326) and nobody
+  // watches it: a watched tag evicted by a signal keeps its edges, because its watcher is told about the next change
+  // whether or not the tag has been loaded again. A load in flight has an entry, and a tag that loads again records
+  // its edges anew, so nothing is lost.
   const auto is_released = [this](const res::tag &tag) {
-    return !m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); });
+    if (m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); })) {
+      return false;
+    }
+    if (m_cache.any_of_tag(tag, [](const cache_entry &) { return true; })) {
+      return true;
+    }
+    const auto watched = m_watchers.find(tag);
+    return watched == m_watchers.end() || watched->second.empty();
   };
   std::unordered_set<res::tag> released;
   for (const auto &[tag, targets] : m_depends_on) {

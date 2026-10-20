@@ -523,6 +523,29 @@ BOOST_AUTO_TEST_CASE(EvictedAndNeverReloaded_LosesItsEdgesAtTheNextSweep)
 	BOOST_TEST(rs->dependency_edge_count() == 0u);
 }
 
+// A watcher is told about the next change of an evicted tag whether or not the tag was loaded again, so the edges
+// stay while the tag is watched and go once nobody watches it.
+BOOST_AUTO_TEST_CASE(EvictedButWatched_KeepsItsEdgesUntilUnwatched)
+{
+	const auto p = node("p.node", "p1");
+	const auto c = node("c.node", "c", { p });
+	const auto other = node("q.node", "q");
+	auto held = rs->require<node_resource>(c);
+	pump();
+	watch({ c });
+
+	rs->signal_changed(p);
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 1u);
+
+	rs->unwatch(c, owners.front().get());
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 0u);
+	watched.clear(); // the fixture would unwatch it a second time
+}
+
 // The tags still in use keep their edges while the evicted ones lose theirs.
 BOOST_AUTO_TEST_CASE(LiveDependent_KeepsItsEdgesWhenEvictedOnesAreDropped)
 {
