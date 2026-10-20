@@ -23,6 +23,14 @@ namespace rnd
 		std::vector<std::byte> rgba;
 	};
 
+	// What a request may ask for as the picture (not the target): a longer side or more pixels is refused before the
+	// target is read. The defaults are the limits of the service; a caller that serves an untrusted client asks for less.
+	struct capture_limits
+	{
+		int max_side = 8192;
+		std::int64_t max_pixels = 32LL * 1024 * 1024;
+	};
+
 	enum class capture_status : std::uint8_t
 	{
 		ok,
@@ -72,8 +80,10 @@ namespace rnd
 		static constexpr std::int64_t max_pixels = 32LL * 1024 * 1024;
 
 		// `size` > 0 in a component scales the image to it (nearest neighbour); with one component 0 the other
-		// decides and the aspect stays (a derived side above max_side is refused). {0, 0}: the size of the target.
-		capture_result capture(std::string_view id, glm::ivec2 size = { 0, 0 }) const;
+		// decides and the aspect stays (a derived side above the limit is refused). {0, 0}: the size of the target.
+		// `limits` bound the picture; they are checked before the target is read, the derived side included. With limits
+		// tighter than the defaults the size of the target has to fit them too when no size is asked.
+		capture_result capture(std::string_view id, glm::ivec2 size = { 0, 0 }, capture_limits limits = {}) const;
 
 		// Opaque RGB PNG; the alpha of the target is dropped. Empty for an empty image.
 		static std::vector<std::byte> encode_png(const captured_image& image);

@@ -16,6 +16,8 @@ build-release/
 .vscode/
 .cache/
 .claude/
+# Port and token of the editor MCP server (editor/agent_server): per user, never committed.
+.snk/
 **/lib3dparty/natvis
 CMakeSettings.json
 CMakeUserPresets.json

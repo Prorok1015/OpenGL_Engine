@@ -159,6 +159,13 @@ class server { public: server(host&, server_config); void start(); void stop(); 
 - `resources`: `snk://scene/<doc>` (сводка), `snk://node/<ref>`, `snk://assets`, `snk://log`, `snk://problems`, `snk://viewport/<id>.png`, `snk://schema/<type>`.
 - `notifications`: §3.5, плюс `notifications/tools/list_changed`, когда расширение добавило или убрало команды.
 - **Игра без редактора.** Сервера в игровом бинарнике нет. Автоматизация игры — через игровой режим запуска редактора (§3.8).
+- **Как сделан A6a (#292).** Отличия от наброска выше:
+  - Все методы `host` асинхронны (`done` вызывается один раз, из любого потока): `list_tools`/`list_resources` тоже, иначе I/O-поток ждал бы главный. В `call_tool`/`read_resource` добавлен `request_context{session_id}` для `origin=agent(session)`.
+  - HTTP разбирается своим небольшим парсером поверх Boost.Asio (`Content-Length`, keep-alive, лимиты заголовков и тела; chunked отклоняется). Boost.Beast не подключён: он не входит в `BOOST_INCLUDE_LIBRARIES`, новый компонент Boost не понадобился. Перейти на Beast можно позже, не меняя `host` и `endpoint`.
+  - `mcp::endpoint` — протокол и сессии без сокетов (HTTP-запрос на входе, ответ на выходе), `mcp::server` — Asio-поток, слушающий `127.0.0.1`. Тесты модуля идут через `endpoint` и через сокеты с порта 0, на фейковом `host`.
+  - Адаптер выбирает tools из метаданных (`expose_as_tool`, не `mutates`, нет `risk`, не `long_running`) **и** из белого списка доменов чтения, которые уже есть (`log`, `job`, `dialog`, `viewport`): у `file.*` и `app.*` флаг `mutates` не стоит, а они сохраняют, выходят и останавливают время, и `mutates` у команды по умолчанию `false`. Домены A4 (`scene`, `node`, `component`, `asset`, `selection`, `problems`) добавляет сам A4 после проверки. `action_desc::mutates` по умолчанию `true`. Агенту `viewport.capture` отдаёт не больше 2048 px по стороне (без размера — ширина 1280) и не больше 16 МБ ответа.
+  - Вызов идёт так: I/O-поток → `ds::task_system::post_main` → на главном потоке `cmd::main_thread_queue::call_now_or_post` → `done`. Сервер включается `editor/agent_server=true`; порт, токен и pid пишутся в `<editor/project_dir или рабочий каталог>/.snk/mcp.json`: файл создаётся атомарно (временный файл + rename, ссылки не разыменовываются, каталог-ссылка отвергается), на POSIX с правами 0600, на Windows с DACL только для текущего пользователя (не удалось задать — сервер не стартует). Файл живого другого редактора не затирается; при выходе удаляется только свой.
+  - Уведомления `resources/updated` и `tools/list_changed` модуль умеет рассылать (`server::notify_*`), редактор их пока не вызывает: подписка на события редактора придёт с A4/A6b.
 
 ### 3.8 Игровой режим запуска редактора (решение 9)
 

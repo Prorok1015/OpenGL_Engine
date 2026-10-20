@@ -82,6 +82,8 @@ include(SnkTarget)
 include(SnkPch)
 # snk_install_sdk(): install/export rules and the snake_sdk package (called at the end).
 include(SnkInstall)
+# snk_check_mcp_isolation(): the MCP server module stays out of the engine, games and the SDK.
+include(SnkMcpIsolation)
 
 # Engine layers (core/core + core/engine). Brought in here so the Editor and the
 # unit_tests executable consume the already-configured targets instead of having
@@ -100,6 +102,8 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp"
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+# The MCP server module is tested on its own (tests/mcp_*.cpp): a fake host over sockets and in process. The socket tests use Asio directly.
+target_link_libraries(unit_tests PRIVATE snk::mcp_server PRIVATE Boost::asio)
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
 # linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass,
@@ -125,6 +129,8 @@ add_test(NAME unit_tests COMMAND unit_tests)
 
 snk_pch_create_owner()
 snk_apply_target_defaults()
+# Fails the configure if the engine, a game target or the SDK can reach snk_mcp_server (tools/ci/check_mcp_isolation.sh is the source-level twin).
+snk_check_mcp_isolation()
 snk_install_sdk()
 
 # Assimp hard-codes /Zi into its Debug C++ flags (lib3dparty/assimp/CMakeLists.txt); sccache then

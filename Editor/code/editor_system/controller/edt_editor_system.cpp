@@ -24,6 +24,7 @@
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
+#include "edt_agent_server.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
@@ -53,6 +54,12 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
+	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
+	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
+	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
+	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
+	// Where .snk/mcp.json goes; empty: the working directory.
+	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -71,6 +78,8 @@ edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource
 
 edt::editor_system::~editor_system()
 {
+	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
+	m_agent_server.reset();
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
 	if (m_context) {
 		m_context->documents().shutdown();
@@ -232,6 +241,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+	}
+
+	if (cfg_agent_server) {
+		agent_server_options options;
+		const int port = cfg_agent_server_port;
+		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
+		const std::string project_dir = cfg_project_dir;
+		options.project_dir = project_dir.empty() ? std::filesystem::current_path() : std::filesystem::path(project_dir);
+		m_agent_server = std::make_unique<agent_server>(data.require<cmd::command_registry>(), data.require<ds::task_system>(), std::move(options));
 	}
 }
 
