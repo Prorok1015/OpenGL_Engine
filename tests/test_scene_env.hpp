@@ -100,7 +100,13 @@ struct ram_res_env
 		return handle;
 	}
 
-	static res::tag tag_of(std::string_view name) { return res::tag{ std::string("memory://t/") + std::string(name) }; }
+	// Appending instead of operator+ of two temporaries: GCC 13 -O3 reports a false -Warray-bounds on the latter.
+	static res::tag tag_of(std::string_view name)
+	{
+		std::string path{ "memory://t/" };
+		path.append(name);
+		return res::tag{ std::move(path) };
+	}
 
 	res::tag put(std::string_view name, std::string_view content)
 	{
