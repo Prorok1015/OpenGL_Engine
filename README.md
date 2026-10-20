@@ -237,7 +237,7 @@ Pre-allocated buffers: 8M vertices, 800K indices.
 - `skinning_lib.glsl` — skeletal animation via SSBO (bone matrices)
 - `pipline_struct_lib.glsl` — shared vertex output struct (UV, TBN, normals)
 
-Render modes: `TRIANGLE`, `LINE_LOOP`, `POINT`, `WIREFRAME`.
+Render modes (topology of a draw, `rnd::driver::RENDER_MODE`): `TRIANGLE`, `TRIANGLE_STRIP`, `LINE`, `LINE_STRIP`, `POINT`. Wireframe is not a mode: it is the `polygon` field of the pipeline description (`polygon_mode::LINE`), off by default.
 
 ---
 

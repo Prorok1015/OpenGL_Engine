@@ -22,7 +22,7 @@ namespace rnd {
 		material_instance_cache* materials = nullptr;
 
 		// Render-side material compiler (EPIC-49 US-49-5): the scene extractor turns POD
-		// scn::material_desc into rnd::shader_config through this instead of a scene-side method.
+		// material_desc into rnd::shader_config through this instead of a scene-side method.
 		material_compiler_interface* material_compiler = nullptr;
 
 		// Size in pixels of the window's default framebuffer ({0,0} when unknown). A camera that

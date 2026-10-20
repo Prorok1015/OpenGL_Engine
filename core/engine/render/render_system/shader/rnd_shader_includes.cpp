@@ -20,6 +20,7 @@ namespace {
 		std::vector<std::string> chain;				// the files being expanded, outermost first
 		std::unordered_set<std::string> expanded;	// every file that already stands in the output
 		std::string errors;
+		std::vector<res::tag>* files = nullptr;
 	};
 
 	// `found` tells the line is an include directive at all; `name` is empty when it is not written as "name".
@@ -111,6 +112,9 @@ namespace {
 			if (!ctx.expanded.insert(key).second) {
 				continue;
 			}
+			if (ctx.files) {
+				ctx.files->push_back(target);
+			}
 			const auto included = ctx.res_sys.require_sync<res::text_resource>(target).get_sync();
 			if (!included) {
 				ctx.errors += std::format("{}: cannot read include \"{}\" ({})\n", where, include.name, key);
@@ -129,9 +133,9 @@ namespace {
 	}
 }
 
-std::string rnd::expand_includes(std::string& source, const res::tag& origin, res::resource_system& res_sys)
+std::string rnd::expand_includes(std::string& source, const res::tag& origin, res::resource_system& res_sys, std::vector<res::tag>* files)
 {
-	include_context ctx{ res_sys, {}, {}, {} };
+	include_context ctx{ res_sys, {}, {}, {}, files };
 	ctx.chain.push_back(origin.string());
 	ctx.expanded.insert(origin.string());
 	expand(source, origin, ctx);

@@ -52,6 +52,11 @@ const GLenum gBlendFactorToGL[] = {
 	GL_ONE_MINUS_DST_ALPHA
 };
 
+const GLenum gPolygonModeToGL[] = {
+	GL_FILL,
+	GL_LINE
+};
+
 const GLenum gCullModeToGL[] = {
 	GL_FRONT,
 	GL_BACK,
@@ -549,6 +554,11 @@ void rnd::driver::gl::driver::apply_pipeline(const pipeline_desc& desc)
 			glBlendEquationi(static_cast<GLuint>(i), wanted.equation);
 		});
 	}
+	CHECK_GL_ERROR();
+
+	change(m_state.polygon, gPolygonModeToGL[static_cast<int>(desc.polygon)], [&] {
+		glPolygonMode(GL_FRONT_AND_BACK, gPolygonModeToGL[static_cast<int>(desc.polygon)]);
+	});
 	CHECK_GL_ERROR();
 
 	const bool cull = desc.cull.enabled;

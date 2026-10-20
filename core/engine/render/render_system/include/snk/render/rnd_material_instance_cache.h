@@ -2,7 +2,7 @@
 #include <snk/common/snk_api.h>
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/shader/rnd_shader_config_cache.h>
-#include <snk/scene/scn_material_desc.h>
+#include <snk/render/rnd_material_desc.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -47,7 +47,7 @@ namespace rnd
 
 		// The instance of `desc` for a skinned or static mesh. `desc_changed` says the description was edited in
 		// place since the last call; a description replaced by another object needs no flag, it is another key.
-		material_instance_id acquire(const std::shared_ptr<scn::material_desc>& desc, bool skinned, bool desc_changed);
+		material_instance_id acquire(const std::shared_ptr<material_desc>& desc, bool skinned, bool desc_changed);
 
 		// The instance an id from acquire() names; valid until the next begin_frame.
 		const compiled_material& get(material_instance_id id) const;
@@ -83,7 +83,7 @@ namespace rnd
 			std::uint64_t built_frame = 0;
 		};
 
-		void compile(slot& s, const std::shared_ptr<scn::material_desc>& desc, bool skinned);
+		void compile(slot& s, const std::shared_ptr<material_desc>& desc, bool skinned);
 
 		shader_config_cache& m_variants;
 		texture_manager& m_textures;

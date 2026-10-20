@@ -1054,14 +1054,14 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_QueueReadsWordsAndNullAndWritesNullForNone)
 BOOST_AUTO_TEST_CASE(MaterialDesc_RenderModeUsesTheEnumeratorNames)
 {
 	const material_io io{ *descs };
-	for (const char* name : { "TRIANGLE", "TRIANGLE_STRIP", "TRIANGLE_FAN", "TRIANGLE_ADJ", "TRIANGLE_STRIP_ADJ", "LINE", "LINE_STRIP",
-			"LINE_LOOP", "LINE_ADJ", "LINE_STRIP_ADJ", "POINT" }) {
+	for (const char* name : { "TRIANGLE", "TRIANGLE_STRIP", "LINE", "LINE_STRIP", "POINT" }) {
 		const std::string text = std::string(R"({"render_mode":")") + name + R"("})";
 		BOOST_TEST_CONTEXT(name) BOOST_TEST(ser(io.read(text.c_str())).at("render_mode").as_string() == name);
 	}
-	BOOST_CHECK((io.read(R"({"render_mode":"BOGUS"})").render_mode == scn::material_render_mode::TRIANGLE));
-	BOOST_CHECK((io.read(R"({})").render_mode == scn::material_render_mode::TRIANGLE));
-	BOOST_CHECK((io.read(R"({"render_mode":"POINT"})").render_mode == scn::material_render_mode::POINT));
+	BOOST_CHECK((io.read(R"({"render_mode":"BOGUS"})").render_mode == rnd::driver::RENDER_MODE::TRIANGLE));
+	BOOST_CHECK((io.read(R"({"render_mode":"LINE_LOOP"})").render_mode == rnd::driver::RENDER_MODE::TRIANGLE));	// removed in R4
+	BOOST_CHECK((io.read(R"({})").render_mode == rnd::driver::RENDER_MODE::TRIANGLE));
+	BOOST_CHECK((io.read(R"({"render_mode":"POINT"})").render_mode == rnd::driver::RENDER_MODE::POINT));
 }
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_EmptyTagsAreWrittenAsNullAndNullOrEmptyReadAsEmpty)
@@ -1169,11 +1169,11 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
 	BOOST_CHECK(queue->find("opaque") != nullptr);
 	BOOST_CHECK(queue->find("OPAQUE") == nullptr);
 
-	const desc::enum_schema* mode = descs->schemas().find_enum("material_render_mode");
+	const desc::enum_schema* mode = descs->schemas().find_enum("render_mode");
 	BOOST_REQUIRE(mode);
 	BOOST_REQUIRE(mode->fallback);
-	BOOST_TEST(*mode->fallback == static_cast<std::int64_t>(scn::material_render_mode::TRIANGLE));
-	BOOST_TEST(mode->items.size() == 11u);
+	BOOST_TEST(*mode->fallback == static_cast<std::int64_t>(rnd::driver::RENDER_MODE::TRIANGLE));
+	BOOST_TEST(mode->items.size() == 5u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

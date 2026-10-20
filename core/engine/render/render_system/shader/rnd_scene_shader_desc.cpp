@@ -20,7 +20,7 @@ static std::string engine_defines(rnd::driver::shader_header::shader_type type)
 }
 
 // Returns what is wrong with the stages (empty when they are fit for the compiler).
-static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys, const rnd::driver::binding_table& bindings)
+static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vector<rnd::driver::shader_header>& headers, const rnd::shader_config::constant_data& cdata, res::resource_system& res_sys, const rnd::driver::binding_table& bindings, std::vector<res::tag>& files)
 {
     ASSERT_MSG(tags.size() == headers.size(), "tags and headers sizes should be equal");
 
@@ -28,7 +28,7 @@ static std::string preprocess_shader_code(std::vector<res::tag> tags, std::vecto
     std::size_t index = 0;
     for (auto& header : headers)
     {
-        const std::string errors = rnd::expand_includes(header.body, tags[index], res_sys);
+        const std::string errors = rnd::expand_includes(header.body, tags[index], res_sys, &files);
         if (!errors.empty()) {
             problems += std::format("'{}': {}", header.title, errors);
         }
@@ -84,6 +84,7 @@ rnd::shader_config::load_result rnd::shader_config::load(res::resource_system& r
 rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
 {
     std::vector<res::tag> tags;
+    std::vector<res::tag> unreadable;	// stages that could not be read: still files of the source, one may appear later
     std::vector<driver::shader_header> headers;
 	headers.reserve(3);
     tags.reserve(3);
@@ -108,11 +109,15 @@ rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cd
                 .type = culc_shader_type(tag.extension())
                 });
 			tags.push_back(tag);
+		} else {
+			unreadable.push_back(tag);
 		}
 	}
 
     load_result result;
-    result.error = preprocess_shader_code(tags, headers, cdata, res_sys, bindings);
+    result.files = tags;
+    result.files.insert(result.files.end(), unreadable.begin(), unreadable.end());
+    result.error = preprocess_shader_code(tags, headers, cdata, res_sys, bindings, result.files);
     if (result.error.empty() && headers.empty()) {
         result.error = "no stage of the program could be read\n";
     }

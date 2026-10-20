@@ -184,7 +184,7 @@
 | `queue` | `queue` | `null_if_empty` | слова `opaque/transparent/mix`; `NONE` = `null_value`, пишется `null`; неизвестное слово — `fallback = NONE` |
 | `uniforms/albedo`, `uniforms/emissive` | `albedo`, `emissive` | `always` | `color` |
 | `uniforms/shininess` | `shininess` | `if_not_default` | **#321, решение владельца (б)**: пишется, когда не равен 32 (диапазон 0–1000) |
-| `render_mode` | `render_mode` | `always` | имена элементов enum; неизвестное слово — `fallback = TRIANGLE` |
+| `render_mode` | `render_mode` | `always` | имена элементов `rnd::driver::RENDER_MODE` (5 топологий, #277); неизвестное слово — `fallback = TRIANGLE`, имена, удалённые в R4, дополнительно дают предупреждение |
 
 - `ambient` и `specular` в файле не было никогда и нет сейчас: в схему они не входят, но `copy_to` (член-в-член) их переносит.
 - Политика `never` материалу не понадобилась: shininess не «только читается», а пишется по `if_not_default`. Файл со `shininess: 32` при пересохранении теряет ключ (раньше ключ не писали вовсе).

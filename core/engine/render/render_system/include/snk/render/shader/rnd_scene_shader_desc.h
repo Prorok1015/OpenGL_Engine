@@ -162,6 +162,9 @@ namespace rnd
 		{
 			std::vector<driver::shader_header> headers;
 			std::string error;
+			// Every file the source was made of: the stages and the files they include, however deep. Filled
+			// when the load failed as well; whoever caches the result drops it when one of these changes.
+			std::vector<res::tag> files;
 
 			bool ok() const noexcept { return error.empty() && !headers.empty(); }
 		};

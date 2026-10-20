@@ -1,6 +1,6 @@
 # Дизайн: физический public/ split заголовков (задача #109, эпик #11)
 
-**Issue:** #109 (эпик #11 «EPIC-41 CMake hygiene») · **Основа:** ADR-03 (`docs/roadmap/CHIMERA_ROADMAP.md:125,137`), #108 (install/export, пакет `snake_sdk`) · **Статус:** реализовано (PR #214, #215, #228, #234, #235, #237); удаление переходного `snk::scene_material_desc_api` вынесено в #236 («да, по рекомендациям», решения — §6)
+**Issue:** #109 (эпик #11 «EPIC-41 CMake hygiene») · **Основа:** ADR-03 (`docs/roadmap/CHIMERA_ROADMAP.md:125,137`), #108 (install/export, пакет `snake_sdk`) · **Статус:** реализовано (PR #214, #215, #228, #234, #235, #237); переходный `snk::scene_material_desc_api` удалён в #236: описание материала (`material_desc`, `pass_queue`) переехало из scene в render (`snk/render/rnd_material_desc.h`, namespace `rnd`), `snk/scene/scn_material_desc.h` оставляет псевдонимы `scn::material_desc` и `scn::pass_queue`, scene линкует render PUBLIC; render не включает заголовков `snk/scene/*` (решения — §6)
 
 ## 1. Как устроено сейчас
 

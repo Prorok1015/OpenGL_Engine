@@ -3,6 +3,7 @@
 #include <snk/resource/res_tag.h>
 
 #include <string>
+#include <vector>
 
 namespace res { class resource_system; }
 
@@ -22,5 +23,8 @@ namespace rnd
 	// Includes in comments are left alone. Returns what could not be expanded, one problem per line
 	// ("'file' line N: ..."): a file that cannot be read, an include that closes a cycle (the chain is named, the
 	// recursion stops there), an include that is not written as "name". Empty when everything was.
-	SNK_API std::string expand_includes(std::string& source, const res::tag& origin, res::resource_system& res_sys);
+	//
+	// `files`, when given, receives the tag of every file the expansion asked for, each once, in the order it was
+	// reached: the ones that could not be read as well, so the caller learns when one of them appears or changes.
+	SNK_API std::string expand_includes(std::string& source, const res::tag& origin, res::resource_system& res_sys, std::vector<res::tag>* files = nullptr);
 }

@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/json.hpp>
 #include <snk/scene/scn_material_desc.h>
+#include <snk/render/rnd_state_helper.h>
 #include <snk/resource/res_tag_json.h>
 #include <snk/scene/scn_glm_json_convert.h>
 
@@ -59,18 +60,13 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_ShaderTagsAndScalars)
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_AllRenderModes)
 {
-	const scn::material_render_mode modes[] = {
-		scn::material_render_mode::TRIANGLE,
-		scn::material_render_mode::TRIANGLE_STRIP,
-		scn::material_render_mode::TRIANGLE_FAN,
-		scn::material_render_mode::TRIANGLE_ADJ,
-		scn::material_render_mode::TRIANGLE_STRIP_ADJ,
-		scn::material_render_mode::LINE,
-		scn::material_render_mode::LINE_STRIP,
-		scn::material_render_mode::LINE_LOOP,
-		scn::material_render_mode::LINE_ADJ,
-		scn::material_render_mode::LINE_STRIP_ADJ,
-		scn::material_render_mode::POINT,
+	using rnd::driver::RENDER_MODE;
+	const RENDER_MODE modes[] = {
+		RENDER_MODE::TRIANGLE,
+		RENDER_MODE::TRIANGLE_STRIP,
+		RENDER_MODE::LINE,
+		RENDER_MODE::LINE_STRIP,
+		RENDER_MODE::POINT,
 	};
 
 	for (auto mode : modes) {
@@ -89,12 +85,30 @@ BOOST_AUTO_TEST_CASE(MaterialDesc_RoundTrip_AllRenderModes)
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_RenderMode_StringTable)
 {
-	// Lock the exact emitted strings so the scene-side table stays in sync with rnd_state_helper.
-	scn::material_desc m;
-	m.render_mode = scn::material_render_mode::LINE_STRIP_ADJ;
-	json::object data;
-	m.serialize(data);
-	BOOST_TEST(json::value_to<std::string>(data.at("render_mode")) == "LINE_STRIP_ADJ");
+	// The strings are the names of the driver's enumerators, the same ones rnd::to_string gives.
+	for (const auto mode : { rnd::driver::RENDER_MODE::TRIANGLE, rnd::driver::RENDER_MODE::TRIANGLE_STRIP, rnd::driver::RENDER_MODE::LINE,
+			rnd::driver::RENDER_MODE::LINE_STRIP, rnd::driver::RENDER_MODE::POINT }) {
+		scn::material_desc m;
+		m.render_mode = mode;
+		json::object data;
+		m.serialize(data);
+		BOOST_TEST(json::value_to<std::string>(data.at("render_mode")) == rnd::to_string(mode));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_RemovedRenderModesReadAsTriangle)
+{
+	// RHI R4 removed these topologies from the driver; a file that still names one is drawn as triangles.
+	for (const char* name : { "TRIANGLE_FAN", "TRIANGLE_ADJ", "TRIANGLE_STRIP_ADJ", "LINE_LOOP", "LINE_ADJ", "LINE_STRIP_ADJ" }) {
+		json::object data;
+		data["render_mode"] = name;
+
+		scn::material_desc material;
+		material.render_mode = rnd::driver::RENDER_MODE::POINT;
+		material.deserialize(shared_desc_system(), data);
+
+		BOOST_TEST_CONTEXT(name) BOOST_TEST((material.render_mode == rnd::driver::RENDER_MODE::TRIANGLE));
+	}
 }
 
 BOOST_AUTO_TEST_CASE(MaterialDesc_QueueValues_RoundTrip)

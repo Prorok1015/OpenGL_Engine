@@ -648,6 +648,7 @@ BOOST_AUTO_TEST_CASE(EveryFieldOfTheDescriptionTellsPipelinesApart)
 	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::TRIANGLE_STRIP; });
 	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::LINE_STRIP; });
 	vary([](pipeline_desc& d) { d.topology = RENDER_MODE::POINT; });
+	vary([](pipeline_desc& d) { d.polygon = polygon_mode::LINE; });
 	vary([](pipeline_desc& d) { d.depth.enabled = false; });
 	vary([](pipeline_desc& d) { d.depth.write_mask = false; });
 	vary([](pipeline_desc& d) { d.depth.test_func = depth_state::func::ALWAYS; });
@@ -676,6 +677,28 @@ BOOST_AUTO_TEST_CASE(EveryFieldOfTheDescriptionTellsPipelinesApart)
 	}
 	BOOST_TEST(driver.pipelines().size() == variants.size() + 1);
 	BOOST_TEST(driver.pipelines().hits() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(ThePolygonModeIsFillUnlessThePipelineAsksForWireframe)
+{
+	BOOST_CHECK(base.polygon == polygon_mode::FILL);
+	pipeline_desc wire = base;
+	wire.polygon = polygon_mode::LINE;
+	const pipeline_handle filled = driver.create_pipeline(base);
+	const pipeline_handle wireframe = driver.create_pipeline(wire);
+	BOOST_CHECK(filled != wireframe);
+	BOOST_CHECK(driver.pipeline_info(filled).polygon == polygon_mode::FILL);
+	BOOST_CHECK(driver.pipeline_info(wireframe).polygon == polygon_mode::LINE);
+
+	auto va = driver.create_vertex_array();
+	driver.bind_pipeline(filled);
+	driver.draw_indices(va.get(), 3, 0, 0);
+	driver.bind_pipeline(wireframe);
+	driver.draw_indices(va.get(), 3, 0, 0);
+	driver.draw_indices(va.get(), 3, 0, 0);
+	BOOST_TEST(driver.draws_with(polygon_mode::FILL) == 1u);
+	BOOST_TEST(driver.draws_with(polygon_mode::LINE) == 2u);
+	BOOST_TEST(driver.draws_with(RENDER_MODE::TRIANGLE) == 3u);	// the topology is counted apart from the polygon mode
 }
 
 BOOST_AUTO_TEST_CASE(APipelineCannotChangeAfterItIsCreated)

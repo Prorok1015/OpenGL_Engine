@@ -114,6 +114,8 @@ namespace rnd::driver::null
 		pipeline_handle bound_pipeline() const { return m_bound; }
 		// Draws per topology, to tell a line pass from a triangle pass.
 		std::size_t draws_with(RENDER_MODE topology) const { return m_draws_by_topology[static_cast<std::size_t>(topology)]; }
+		// Draws per polygon mode, to tell a wireframe pass from a filled one.
+		std::size_t draws_with(polygon_mode polygon) const { return m_draws_by_polygon[static_cast<std::size_t>(polygon)]; }
 		bool in_render_pass() const { return m_in_render_pass; }
 		// The pass begun last, still valid after it ended.
 		const render_pass_desc& last_render_pass() const { return m_last_pass; }
@@ -157,6 +159,7 @@ namespace rnd::driver::null
 		pipeline_cache<pipeline_record> m_pipelines;
 		pipeline_handle m_bound;
 		std::array<std::size_t, 5> m_draws_by_topology{};
+		std::array<std::size_t, 2> m_draws_by_polygon{};
 
 		struct null_buffer
 		{
