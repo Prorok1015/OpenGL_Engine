@@ -100,6 +100,8 @@ namespace rnd::driver::null
 		bool is_alive(texture_handle texture) const override { return m_textures.find(texture) != nullptr; }
 
 		const object_stats& stats() const { return *m_stats; }
+		// The counters outlive the driver, so a test can look at them after it is gone.
+		std::shared_ptr<const object_stats> shared_stats() const { return m_stats; }
 		const call_counts& calls() const { return m_calls; }
 		const glm::ivec4& viewport() const { return m_viewport; }
 		float line_size() const { return m_line_size; }

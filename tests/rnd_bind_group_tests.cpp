@@ -4,12 +4,12 @@
 #include "rnd_validation_driver.h"
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/shader/rnd_shader_bindings.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <string>
 #include <vector>
-#include <snk/driver/rnd_texture_owner.h>
 
 // Bind groups, buffers by handle and the (set, slot, type) binding table: the contract of the null backend, the
 // rules of the validation decorator (one wrong call sequence per rule, and a correct one that passes), and the

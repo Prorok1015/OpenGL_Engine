@@ -2,10 +2,10 @@
 #include "rnd_validation_driver.h"
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
+#include <snk/driver/rnd_texture_owner.h>
 #include <memory>
 #include <span>
 #include <vector>
-#include <snk/driver/rnd_texture_owner.h>
 
 // Contract of the validation decorator over the null backend: each rule gets a deliberately wrong call
 // sequence that must produce exactly the expected violation, and a correct sequence that produces none.
@@ -951,13 +951,15 @@ BOOST_AUTO_TEST_CASE(TheDecoratorForwardsTheRestOfTheInterface)
 BOOST_AUTO_TEST_CASE(ObjectsMayOutliveTheDriverAndTheSwapchain)
 {
 	std::unique_ptr<buffer_interface> buffer;
+	const auto state = std::make_shared<vl::validator>();
 	{
-		vl::swapchain short_lived(std::make_unique<null::swapchain>());
-		auto short_drv = short_lived.create_driver();
+		vl::driver short_drv(std::make_unique<null::driver>(), state);
 		// A texture belongs to the driver: it is freed with it, nothing is left to outlive it.
-		short_drv->create_texture(texture_of(4, 4, texture_usage::sampled));
-		buffer = short_drv->create_buffer();
+		short_drv.create_texture(texture_of(4, 4, texture_usage::sampled));
+		BOOST_TEST(state->live_objects(vl::object_kind::texture) == 1u);
+		buffer = short_drv.create_buffer();
 	}
+	BOOST_TEST(state->live_objects(vl::object_kind::texture) == 0u);
 	buffer->set_data(std::vector<float>(3));
 	buffer.reset();
 }

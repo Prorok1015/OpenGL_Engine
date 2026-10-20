@@ -2,8 +2,8 @@
 #include "null_engine_fixture.hpp"
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_desc.h>
-#include <boost/json.hpp>
 #include <snk/driver/rnd_texture_owner.h>
+#include <boost/json.hpp>
 
 // Usage flags of a texture: the bit mask itself, its JSON forms (a string as the shipped .desc files
 // have it, or an array) and the render_targets::ensure helper the passes share.

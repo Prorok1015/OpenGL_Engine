@@ -2,12 +2,12 @@
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
 #include "rnd_validation_driver.h"
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
-#include <snk/driver/rnd_texture_owner.h>
 
 // driver_interface::read_texture: the null backend answers with a placeholder that tells which part of the
 // texture was asked for, the validation decorator checks the call and forwards it. The GL driver is covered

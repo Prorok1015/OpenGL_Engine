@@ -103,8 +103,9 @@ namespace rnd::driver
 		// still use it, GL frees at once). A stale or null handle is reported by the validation layer, ignored otherwise.
 		virtual void destroy(texture_handle texture) = 0;
 		// TEMPORARY bridge (removed in R7c, #118): the backend object behind a handle, null for a handle that names
-		// no live texture. Only code that still needs the object (the GL ImGui backend, texture_owner, tests of a
-		// backend) calls it; everything else goes through the handle.
+		// no live texture. Today its callers are texture_owner::get() (so texture_manager, material_groups and
+		// the tests that hold an owner) and the validation driver's own wrappers; everything else goes through
+		// the handle. The GL ImGui backend gets its object from texture_manager, not from here.
 		virtual texture_interface* resolve(texture_handle texture) const = 0;
 		// The description of a texture; an empty one for a handle that names no live texture.
 		virtual const texture_header& info(texture_handle texture) const = 0;

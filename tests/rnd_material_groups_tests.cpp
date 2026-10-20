@@ -3,10 +3,10 @@
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_material_groups.h>
 #include <snk/render/shader/rnd_material_params.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
 #include <vector>
-#include <snk/driver/rnd_texture_owner.h>
 
 // Set 2 on the null backend: the bind group of a material is made when it is first drawn and never written
 // again, a material that is built anew (the description changed, a texture was reloaded) gets a group of its own,

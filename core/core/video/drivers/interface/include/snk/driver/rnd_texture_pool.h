@@ -1,8 +1,8 @@
 #pragma once
+#include <snk/common/shader_serial.h>
 #include <snk/driver/rnd_resource_tables.h>
 #include <snk/driver/rnd_texture_interface.h>
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -25,9 +25,7 @@ namespace rnd::driver
 	// The id the next texture_pool will carry in the high bits of its generations (never 0).
 	inline std::uint32_t next_texture_driver_tag()
 	{
-		static std::atomic<std::uint32_t> counter{ 0 };
-		const std::uint32_t id = counter.fetch_add(1, std::memory_order_relaxed) % 255u + 1u;
-		return id << texture_driver_id_shift;
+		return next_texture_driver_id() << texture_driver_id_shift;
 	}
 
 	// The textures of one driver, by handle. The pool owns them: a texture lives until destroy() (or the pool) and

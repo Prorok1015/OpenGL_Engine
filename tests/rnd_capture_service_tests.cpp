@@ -7,6 +7,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/render/rnd_capture_commands.h>
 #include <snk/render/rnd_capture_service.h>
+#include <snk/driver/rnd_texture_owner.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <chrono>
@@ -16,7 +17,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <snk/driver/rnd_texture_owner.h>
 
 // rnd::capture_service and the viewport.capture command on the null backend. The null driver answers with a
 // placeholder (pixel (x, y) is {x, y, 0, 255}), so the pictures here are known without a GPU; the real frame

@@ -1,13 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
+#include <snk/driver/rnd_texture_owner.h>
 #include <cstring>
 #include <memory>
 #include <span>
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <snk/driver/rnd_texture_owner.h>
 
 // Contract of the null backend: what the engine may rely on from any driver_interface implementation
 // that is not a GPU (objects keep their state, lifetimes are counted, bad shaders are rejected).
@@ -185,13 +185,19 @@ BOOST_AUTO_TEST_CASE(TexturesStillAliveAreFreedWithTheDriver)
 {
 	// The driver owns its textures: nothing outlives it, and its handles name nothing in another driver.
 	texture_handle handle;
+	std::shared_ptr<const null::object_stats> stats;
 	{
 		null::driver driver;
+		stats = driver.shared_stats();
 		handle = driver.create_texture(texture_header{});
 		BOOST_TEST(static_cast<bool>(handle));
 		BOOST_TEST(driver.is_alive(handle));
 		BOOST_TEST(driver.live_textures() == 1u);
+		BOOST_TEST(stats->textures.destroyed == 0u);
 	}
+	BOOST_TEST(stats->textures.created == 1u);
+	BOOST_TEST(stats->textures.destroyed == 1u);
+	BOOST_TEST(stats->textures.live() == 0u);
 	null::driver other;
 	BOOST_TEST(!other.is_alive(handle));
 }
