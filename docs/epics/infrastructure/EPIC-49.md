@@ -235,6 +235,7 @@ US-49-9 (нарушения слоёв)
 
 ## Критерии готовности
 - [~] Ни один АГРЕГАТОР (core/engine) не открывает корень как PUBLIC (US-49-1); компонентные dirs пока PUBLIC (физический public/ split отложен)
+  - Этап 2 (физический split) выполнен для editor_system: PUBLIC только `include/snk/editor/`, корень и подкаталоги PRIVATE, white-box тесты через PRIVATE-список в `unit_tests` (refs #11).
 - [x] `common` — самодостаточная STATIC-либа; editor_system не реконфигурирует core (US-49-2)
 - [x] `engine_api`/`core_api` INTERFACE-контракты; агрегаторы PRIVATE (US-49-3)
 - [x] Тяжёлые заголовки (res::tag/desc_base/entt/imgui) изолированы (US-49-4); время компиляции снижено

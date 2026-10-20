@@ -5,7 +5,7 @@
 #include <snk/core/core_module.h>
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
-#include "editor_module.h"
+#include <snk/editor/editor_module.h>
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
