@@ -136,6 +136,40 @@ BOOST_AUTO_TEST_CASE(AssembleAndApply_OverridesLayerOverParentCopy)
 	BOOST_TEST(reg.get<scn::component_tracker>(e).tracked_components.at("stat").local_overrides.at("hp").as_int64() == 99);
 }
 
+// The temporary desc of an override has no tag, so an inline desc_ref in the merged data is refused with a warning; the
+// parent's handle was copied into it first, so the component still gets the parent's material (#131-d).
+BOOST_AUTO_TEST_CASE(AssembleAndApply_SkyboxWithAnInlineMaterialKeepsItUnderAnUnrelatedOverride)
+{
+	auto tag = put("sky.desc", R"({"__type":"skybox_desc","material":{"__type":"material_desc","queue":"transparent",
+		"shader_vertex":"res://shaders/sky.vert"}})");
+	auto parent = handle(tag);
+	auto parent_sky = std::dynamic_pointer_cast<scn::skybox_desc>(parent.get_sync());
+	BOOST_REQUIRE(parent_sky);
+	BOOST_REQUIRE(parent_sky->material.is_valid());
+	const res::tag inline_tag = parent_sky->material.get_tag();
+	BOOST_TEST(inline_tag.view().starts_with("memory://overrides/"));
+
+	entt::registry reg;
+	auto e = reg.create();
+	assembler->assemble_and_apply(reg, e, "skybox_desc", parent, json::parse(R"({"exposure":2})").as_object(), "sky");
+	for (const bool hot_reload : { false, true }) {
+		BOOST_TEST_CONTEXT(hot_reload ? "hot reload" : "spawn") {
+			if (hot_reload) {
+				assembler->assemble_and_apply(reg, e, "skybox_desc", parent, json::parse(R"({"exposure":2})").as_object(), "sky", true);
+			}
+			const auto* component = reg.try_get<scn::material_desc_component>(e);
+			BOOST_REQUIRE(component);
+			BOOST_REQUIRE(component->mlt_desc.is_valid());
+			BOOST_TEST((component->mlt_desc.get_tag() == inline_tag));
+			pump();
+			const auto material = component->mlt_desc.get_sync();
+			BOOST_REQUIRE(material);
+			BOOST_TEST((material->queue == scn::pass_queue::TRANSPARENT));
+			BOOST_TEST(material->vertex_shader.string() == "res://shaders/sky.vert");
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(AssembleAndApply_StructuralSpawnersAreNotTracked)
 {
 	auto tag = put("p.prefab.desc", R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":3}}})");
