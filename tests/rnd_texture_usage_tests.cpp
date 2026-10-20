@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "null_engine_fixture.hpp"
+#include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_render_targets.h>
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/driver/rnd_texture_owner.h>
@@ -128,6 +129,56 @@ BOOST_AUTO_TEST_CASE(EnsureRecreatesATargetWhenTheSizeChanges)
 	BOOST_TEST(resized->height() == 96u);
 	BOOST_TEST(textures.find(tag) == resized);
 	BOOST_TEST(textures.generation() > generation);
+}
+
+BOOST_AUTO_TEST_CASE(RegistryKeepsTheSlotAndBumpsTheGenerationOnResize)
+{
+	auto& system = storage.require<rnd::render_system>();
+	auto& textures = system.get_texture_manager();
+	rnd::render_targets::registry registry;
+	const auto tag = res::tag(res::tag::memory, "__rt_registry");
+	const auto usage = texture_usage::color_target | texture_usage::sampled;
+
+	const auto first = registry.ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, usage);
+	BOOST_REQUIRE(first);
+	BOOST_CHECK(registry.ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, usage) == first);
+	const texture_handle old_handle = registry.resolve(first);
+	BOOST_REQUIRE(system.get_driver()->is_alive(old_handle));
+
+	const auto resized = registry.ensure(textures, tag, { 128, 96 }, texture_header::TYPE::RGBA8, usage);
+	BOOST_REQUIRE(resized);
+	BOOST_TEST(resized.slot == first.slot);
+	BOOST_TEST(resized.gen > first.gen);
+	// The id kept across the resize is stale; it does not resolve to the new texture, nor to the freed one.
+	BOOST_CHECK(!registry.is_current(first));
+	BOOST_CHECK(!registry.resolve(first));
+	BOOST_CHECK(!system.get_driver()->is_alive(old_handle));
+	BOOST_CHECK(registry.is_current(resized));
+	const texture_handle current = registry.resolve(resized);
+	BOOST_REQUIRE(system.get_driver()->is_alive(current));
+	BOOST_TEST(system.get_driver()->info(current).data.extent.width == 128u);
+	BOOST_CHECK(registry.find(tag) == resized);
+	BOOST_CHECK(registry.current(tag) == current);
+}
+
+BOOST_AUTO_TEST_CASE(RegistryIdsAreNullForAnUnknownTargetAndPerTag)
+{
+	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	rnd::render_targets::registry registry;
+	const auto usage = texture_usage::color_target | texture_usage::sampled;
+	const auto a_tag = res::tag(res::tag::memory, "__rt_registry_a");
+	const auto b_tag = res::tag(res::tag::memory, "__rt_registry_b");
+
+	BOOST_CHECK(!registry.find(a_tag));
+	BOOST_CHECK(!registry.current(a_tag));
+	BOOST_CHECK(!registry.resolve({}));
+	BOOST_CHECK(!registry.is_current({ 7, 1 }));
+	const auto a = registry.ensure(textures, a_tag, { 8, 8 }, texture_header::TYPE::RGBA8, usage);
+	const auto b = registry.ensure(textures, b_tag, { 8, 8 }, texture_header::TYPE::RGBA8, usage);
+	BOOST_REQUIRE(a);
+	BOOST_REQUIRE(b);
+	BOOST_TEST(a.slot != b.slot);
+	BOOST_CHECK(registry.resolve(a) != registry.resolve(b));
 }
 
 BOOST_AUTO_TEST_CASE(EnsureCreatesTargetsThatPassValidation)
