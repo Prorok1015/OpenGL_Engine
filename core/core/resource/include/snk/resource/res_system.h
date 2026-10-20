@@ -269,7 +269,9 @@ namespace res
 		}
 
 		// Besides copying the cache entries of `original` (the ones the alias lacks), makes `alias` depend on it: a
-		// signal_changed(original) evicts the alias too, and reaches what depends on the alias.
+		// signal_changed(original) evicts the alias too, and reaches what depends on the alias. One alias per
+		// original; a new one replaces the edge; a change signalled on the original drops the alias until the next
+		// load re-registers it. register_alias(x, x) does nothing.
 		void register_alias(const res::tag& original, const res::tag& alias);
 		res::tag resolve_alias(const res::tag& tag) const {
 			std::shared_lock lock(m_alias_mutex);
@@ -420,8 +422,9 @@ namespace res
 		// desc types of a tag onto one block).
 		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
 		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
-		// original -> alias, set by register_alias(): a change of the original evicts the alias as well. Never pruned
-		// (aliases are not released), and not part of m_depends_on. Guarded by m_cache_mutex.
+		// original -> alias, set by register_alias(): a change of the original evicts the alias as well, and removes the
+		// edge together with the m_aliases mapping. Never pruned, and not part of m_depends_on. Guarded by m_cache_mutex;
+		// signal_changed() also holds m_alias_mutex (inside it) when it erases.
 		std::unordered_map<res::tag, res::tag> m_alias_edges;
 		// Released tags are swept out of the graph whenever m_depends_on reaches m_edge_sweep_at (then doubled over what
 		// is left) and on a signal: every signal while the graph is below the floor, every k_signal_sweep_every-th

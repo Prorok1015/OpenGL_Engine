@@ -572,16 +572,95 @@ BOOST_AUTO_TEST_CASE(Alias_EdgeSurvivesTheSweepsOfOtherSignals)
 	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() != held_target.get_control_block());
 }
 
-BOOST_AUTO_TEST_CASE(Alias_OfItself_AddsNoEdgeAndSignalTerminates)
+BOOST_AUTO_TEST_CASE(Alias_OfItself_IsANoOpAndKeepsTheExistingEdge)
 {
-	auto tag = put("alias_self.txt", "v1");
-	auto held = sys->require_sync<res::text_resource>(tag);
-	sys->register_alias(tag, tag);
+	auto original = put("alias_self_orig.txt", "o");
+	auto target = put("alias_self_target.txt", "t");
+	sys->register_alias(original, target);
+
+	sys->register_alias(original, original);
+	sys->register_alias(target, target);
+
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	BOOST_TEST(sys->resolve_alias(original) == target);
+	BOOST_TEST(sys->resolve_alias(target) == target);
+}
+
+// The importer's way: the first load of the original stores derived data under another tag and registers it as alias.
+struct import_resource : res::text_resource
+{
+	import_resource(const res::tag& tag, std::string text) : res::text_resource(tag, {})
+	{
+		content = std::move(text);
+	}
+};
+
+struct import_adapter : core::res::adapter_interface
+{
+	static inline auto INFO = res::adapter_info::make<import_resource>({ "mdl" });
+	static inline std::atomic<int> imports{ 0 };
+
+	explicit import_adapter(res::resource_system& sys) : m_sys(sys) {}
+
+	std::shared_ptr<res::resource_entry> deserialize(const res::tag& tag, const std::vector<std::byte>& raw) const override
+	{
+		const std::string text(reinterpret_cast<const char*>(raw.data()), raw.size());
+		if (text.starts_with("src:")) {
+			++imports;
+			const res::tag stored{ "memory://t/imported_" + std::string(tag.pure_name()) + ".mdl" };
+			m_sys.store(stored, to_bytes("done:" + text.substr(4)));
+			m_sys.register_alias(tag, stored);
+			return std::make_shared<import_resource>(tag, text.substr(4));
+		}
+		return std::make_shared<import_resource>(tag, text.substr(5));
+	}
+	std::vector<std::byte> serialize(const res::tag&, const std::shared_ptr<res::resource_entry>&) const override { return {}; }
+
+	res::resource_system& m_sys;
+};
+
+BOOST_AUTO_TEST_CASE(Alias_SignalOnTheOriginal_DropsTheAliasSoTheImporterRunsAgain)
+{
+	sys->registrate_adapter<import_adapter>(import_adapter::INFO, *sys);
+	import_adapter::imports = 0;
+	const auto original = put("reimport.mdl", "src:v1");
+
+	auto first = sys->require_sync<import_resource>(original);
+	BOOST_REQUIRE(first.get_sync());
+	BOOST_TEST(first.get()->str() == "v1");
+	BOOST_TEST(import_adapter::imports.load() == 1);
+	BOOST_TEST(sys->resolve_alias(original) != original);
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	BOOST_TEST(sys->require_sync<import_resource>(original).get_control_block() == first.get_control_block());
+	BOOST_TEST(import_adapter::imports.load() == 1); // served through the alias
+
+	put("reimport.mdl", "src:v2");
+	sys->signal_changed(original);
+	pump();
+	BOOST_TEST(sys->resolve_alias(original) == original);
 	BOOST_TEST(sys->alias_edge_count() == 0u);
 
-	sys->signal_changed(tag);
+	auto second = sys->require_sync<import_resource>(original);
+	BOOST_REQUIRE(second.get_sync());
+	BOOST_TEST(import_adapter::imports.load() == 2);
+	BOOST_TEST(second.get()->str() == "v2");
+	BOOST_TEST(sys->resolve_alias(original) != original); // re-registered by the second import
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+}
+
+// A register_alias that lands after the signal is a fresh mapping and stays.
+BOOST_AUTO_TEST_CASE(Alias_RegisteredAfterTheSignal_IsKept)
+{
+	auto original = put("alias_late_orig.txt", "o");
+	auto first = put("alias_late_first.txt", "1");
+	auto second = put("alias_late_second.txt", "2");
+	sys->register_alias(original, first);
+	sys->signal_changed(original);
+	sys->register_alias(original, second);
 	pump();
-	BOOST_TEST(sys->require_sync<res::text_resource>(tag).get_control_block() != held.get_control_block());
+
+	BOOST_TEST(sys->resolve_alias(original) == second);
+	BOOST_TEST(sys->alias_edge_count() == 1u);
 }
 
 BOOST_AUTO_TEST_CASE(Alias_ReplacesAnExpiredEntryOfTheTarget)

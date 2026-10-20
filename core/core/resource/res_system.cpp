@@ -685,6 +685,23 @@ void res::resource_system::signal_changed(const res::tag &tag) {
     for (const auto &changed : batch) {
       m_cache.erase_tag(changed);
     }
+    // A changed original has to run its adapter again (it stores fresh data and registers the alias anew), so its
+    // alias goes with its edge; the alias entry itself was evicted above as a dependent. The alias lock is taken inside
+    // the cache lock, the order prune_released_edges() uses too (register_alias holds one at a time). A mapping that a
+    // concurrent register_alias has replaced meanwhile is a different one and stays.
+    {
+      std::unique_lock alias_lock(m_alias_mutex);
+      for (const auto &changed : batch) {
+        const auto edge = m_alias_edges.find(changed);
+        if (edge == m_alias_edges.end()) {
+          continue;
+        }
+        if (const auto mapped = m_aliases.find(changed); mapped != m_aliases.end() && mapped->second == edge->second) {
+          m_aliases.erase(mapped);
+        }
+        m_alias_edges.erase(edge);
+      }
+    }
     epoch = ++m_watch_epoch;
   }
 
@@ -735,6 +752,9 @@ void res::resource_system::deliver_to_watchers(const res::tag &tag,
 
 void res::resource_system::register_alias(const res::tag &original,
                                           const res::tag &alias) {
+  if (original == alias) {
+    return;
+  }
   {
     std::unique_lock lock(m_alias_mutex);
     m_aliases[original] = alias;
@@ -744,11 +764,7 @@ void res::resource_system::register_alias(const res::tag &original,
     std::unique_lock lock(m_cache_mutex);
     m_cache.copy_tag(original, alias, [](const cache_entry &entry) { return !entry.expired(); });
     // One alias per original, as in m_aliases: registering the same pair again changes nothing, another alias replaces it.
-    if (original == alias) {
-      m_alias_edges.erase(original);
-    } else {
-      m_alias_edges.insert_or_assign(original, alias);
-    }
+    m_alias_edges.insert_or_assign(original, alias);
   }
 
   {

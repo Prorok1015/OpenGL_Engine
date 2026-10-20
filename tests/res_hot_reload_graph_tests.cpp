@@ -637,6 +637,7 @@ BOOST_AUTO_TEST_CASE(AliasEdge_PassesTheChangeOnToWhatDependsOnTheAlias)
 	auto again = rs->require<node_resource>(c);
 	pump();
 	BOOST_TEST(again.get_control_block() != held.get_control_block());
+	BOOST_TEST(rs->resolve_alias(original) == original); // dropped until the next load registers it
 }
 
 // Two aliases pointing at each other: the signal follows the loop once.
