@@ -159,7 +159,7 @@
 - Четыре места, где общий читатель отличался от прежнего, закрыты в `camera_desc::deserialize` до вызова общего чтения (по копии объекта), без изменения `core/core/desc`: теги `depth_target`/`tp_accum_target`/`tp_reveal_target` без протокола получают `memory://` (у `res_tag` нет такой нормализации, а `res::tag(строка)` режет мусор из строки без протокола); `clear` и `projection`, которые не строка, игнорируются (общий читатель принял бы число, названное индексом, например `"projection": 1`); `layer` читается прежним кодом (`if_int64`, зажим до ±16, `uint64` даёт 16, не целое, в том числе `3.0`, игнорируется с предупреждением; общий читатель принял бы `3.0` и оставил бы текущее значение при `100`); `enum_names` камеры без `fallback`, чтобы неизвестное слово оставляло значение, а не ставило умолчание.
 - Единственное намеренное расхождение — только на битом входе, который сохранение не порождает: `rotation`/`position` не из трёх чисел раньше обнуляли поле, теперь предупреждение и текущее значение (как у света в #131-a); не число в `fov`/`near_distance`/`far_distance`/`ortho_size`, не объект в `transform` и не строка в теге раньше бросали исключение, теперь предупреждение или пропуск.
 - Тесты: `CameraDesc_SerializedBytesMatchReference` (эталон снят с рукописного кода до перевода и подтверждён тем же CI), `CameraDesc_OnDiskTextMatchesReference` (через `write_pretty_json`), `CameraDesc_AcceptsLegacyAndMalformedForms`, прежние `CameraDesc_*`, `desc_repo_roundtrip_tests`, `desc_resave --check` в CI.
-- Осталось по #131: материал (#131-c), четвёртым skybox.
+- Осталось по #131: четвёртым skybox (материал переведён, см. «Материал (#131-c)» в конце).
 
 ## Расширение схемы для material/skybox (2026-10-20, решение владельца)
 
@@ -171,3 +171,24 @@
 - **Инспектор и null-enum.** Поле enum с `null_if_empty` и `null_value`: `null` в значении показывается как этот элемент, а выбор его в списке пишет `null` (а не имя).
 - **Совместимость.** Существующие типы (свет, камера) политик не используют, их вывод побайтно прежний. Цена подключения `desc_ref`: `desc_describe_ops.h` теперь включает `desc_system.h`.
 - Тесты: `tests/desc_schema_ops_tests.cpp` — `WriteNullIfEmptyWritesAnExplicitNullAndReadsItBack`, `NullIsOnlyAcceptedWhereTheSchemaDeclaresIt`, `NeverWrittenKeyIsReadCopiedAndComparedButNotWritten`, `RuntimeSchemasHonorNullIfEmptyAndNever`, `DescRefReadsATagAndWritesIt`, `DescRefReadsAnInlineObjectUnderADeterministicMemoryTag`, `DescRefKeepsItsHandleWhenTheValueDoesNotFit`, `DescRefIsTheKindOfTheFieldInTheSchema`.
+
+## Материал (#131-c, 2026-10-20)
+
+`material_desc` описан схемой (`schema_desc<material_desc, schema_kind::desc>`, `scn_material_desc.h`); рукописные `serialize` и таблица строк `render_mode` удалены, инспектор строится из схемы. `deserialize` остался только ради одной формы: `queue` не строка и не `null` читается как `NONE` (раньше любое неподходящее значение давало «нет очереди», а общий читатель принял бы число, называющее элемент enum). Файлы `core/res/*.desc` и порядок ключей — побайтно прежние (`MaterialDesc_ShippedFilesResaveToTheSameBytes`, `desc_resave --check`).
+
+| Ключ в файле | Член | Политика записи | Заметка |
+|---|---|---|---|
+| `defines` | `defines` | `always` | пустой массив пишется `[]` |
+| `samplers` | `samplers_textures` | `always`, вид `custom` | кодек: пустой тег ↔ `null` (пустой слот `[null, "…"]` пишет импортёр); массив схемы не принял бы `null` в элементе |
+| `shader_vertex` / `shader_fragment` / `shader_geometry` | `*_shader` | `null_if_empty` | пустой тег пишется `null`, читается `null` и `""` |
+| `queue` | `queue` | `null_if_empty` | слова `opaque/transparent/mix`; `NONE` = `null_value`, пишется `null`; неизвестное слово — `fallback = NONE` |
+| `uniforms/albedo`, `uniforms/emissive` | `albedo`, `emissive` | `always` | `color` |
+| `uniforms/shininess` | `shininess` | `if_not_default` | **#321, решение владельца (б)**: пишется, когда не равен 32 (диапазон 0–1000) |
+| `render_mode` | `render_mode` | `always` | имена элементов enum; неизвестное слово — `fallback = TRIANGLE` |
+
+- `ambient` и `specular` в файле не было никогда и нет сейчас: в схему они не входят, но `copy_to` (член-в-член) их переносит.
+- Политика `never` материалу не понадобилась: shininess не «только читается», а пишется по `if_not_default`. Файл со `shininess: 32` при пересохранении теряет ключ (раньше ключ не писали вовсе).
+- Намеренное расхождение — только на битом входе, которого сохранение не порождает: вектор не из четырёх чисел или значение другого типа в теге/числе теперь дают предупреждение и оставляют текущее значение (раньше нулевой вектор, пустой тег или исключение).
+- Поле `samplers` в инспекторе — JSON-редактор, а не список ассетов (вид `custom`): цена байтовой стабильности формы с `null` в слотах. Вернуть список можно, научив схему `null` в элементе массива.
+- `desc_ref_traits::to_json` (`desc_describe_ops.h`): только главный поток (inline-копия читается `get_sync`); хендл с ошибкой пишется своим тегом без `get_sync` и без лога на каждое сохранение; `static_assert` на `T::base_type`.
+- Байты файлов меняются только у материалов с `shininess` не по умолчанию; в репозитории таких `.desc` нет (импортёр создаёт их при импорте модели), см. описание PR.

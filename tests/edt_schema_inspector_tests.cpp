@@ -587,4 +587,47 @@ BOOST_AUTO_TEST_CASE(LightDefaultsComeFromTheSchema)
 	}
 }
 
+// ---------------------------------------------------------------- the material (#131-c)
+
+BOOST_AUTO_TEST_CASE(MaterialInspectorFieldsComeFromTheSchema)
+{
+	const desc::type_schema* schema = descs->find_schema(scn::material_desc::__type);
+	BOOST_REQUIRE(schema);
+
+	BOOST_CHECK(spec_of(*schema, "albedo").kind == ui::widget::color);
+	BOOST_CHECK(spec_of(*schema, "emissive").kind == ui::widget::color);
+	BOOST_CHECK(spec_of(*schema, "queue").kind == ui::widget::combo);
+	BOOST_CHECK(spec_of(*schema, "render_mode").kind == ui::widget::combo);
+	BOOST_CHECK(spec_of(*schema, "vertex_shader").kind == ui::widget::asset);
+	BOOST_CHECK(spec_of(*schema, "geometry_shader").kind == ui::widget::asset);
+	BOOST_CHECK(spec_of(*schema, "defines").kind == ui::widget::list);
+	BOOST_CHECK(spec_of(*schema, "samplers_textures").kind == ui::widget::json);
+
+	// shininess is an ordinary number field now that it is saved: bounded by the range of the header
+	const ui::widget_spec shininess = spec_of(*schema, "shininess");
+	BOOST_CHECK(shininess.kind == ui::widget::real);
+	BOOST_CHECK(shininess.bounded);
+	BOOST_TEST(shininess.min == 0.0);
+	BOOST_TEST(shininess.max == 1000.0);
+
+	// what the inspector shows for a material without data is what the desc holds
+	const json::value shown = ui::compose(*schema, descs->schemas(), {});
+	BOOST_TEST(number_at(shown, "/uniforms/shininess") == 32.0);
+	BOOST_TEST(number_at(shown, "/uniforms/albedo/0") == 1.0);
+	BOOST_TEST(number_at(shown, "/uniforms/emissive/3") == 0.0);
+	BOOST_REQUIRE(desc::json_pointer_get(shown, "/queue"));
+	BOOST_TEST(desc::json_pointer_get(shown, "/queue")->as_string() == "opaque");
+	BOOST_REQUIRE(desc::json_pointer_get(shown, "/render_mode"));
+	BOOST_TEST(desc::json_pointer_get(shown, "/render_mode")->as_string() == "TRIANGLE");
+
+	imgui_ctx imgui;
+	json::value value = shown;
+	const drawn_list drawn = draw_twice(imgui, *schema, descs->schemas(), value);
+	BOOST_CHECK(widget_at(drawn, "/uniforms/shininess") == ui::widget::real);
+	BOOST_CHECK(widget_at(drawn, "/uniforms/albedo") == ui::widget::color);
+	BOOST_CHECK(widget_at(drawn, "/queue") == ui::widget::combo);
+	BOOST_CHECK(widget_at(drawn, "/shader_fragment") == ui::widget::asset);
+	BOOST_CHECK(!was_drawn(drawn, "/uniforms/ambient")); // not a field of the file, so not of the inspector
+}
+
 BOOST_AUTO_TEST_SUITE_END()

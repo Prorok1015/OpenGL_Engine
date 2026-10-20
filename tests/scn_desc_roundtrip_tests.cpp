@@ -909,4 +909,271 @@ BOOST_AUTO_TEST_CASE(WorldDesc_InputLayerRoundTripsAndTheDefaultIsNotWritten)
 	BOOST_TEST(!ser(plain).contains("input_layer")); // levels saved before the field stay byte-identical
 }
 
+// ---------------------------------------------------------------- material_desc (#131-c, #321)
+
+namespace {
+
+// What a material file reads and writes back: the bytes of the compact json (the pretty writer is the same for every desc).
+struct material_io
+{
+	desc::desc_system& descs;
+
+	scn::material_desc read(const char* text) const
+	{
+		scn::material_desc m;
+		m.deserialize(descs, json::parse(text).as_object());
+		return m;
+	}
+
+	std::string resave(const char* text) const { return json::serialize(ser(read(text))); }
+};
+
+}
+
+// The two materials of core/res, header keys as they are on disk. The generic writer must give the bytes the hand-written
+// one gave (desc_resave --check holds the files themselves).
+BOOST_AUTO_TEST_CASE(MaterialDesc_ShippedFilesResaveToTheSameBytes)
+{
+	const material_io io{ *descs };
+	BOOST_TEST(io.resave(R"({"__type":"material_desc","__version":1,"__guid":"f90d3c03-865c-4193-aa09-cb2f98315634",
+		"defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert","shader_fragment":"res://shaders/scene.frag",
+		"shader_geometry":null,"queue":"opaque","uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},
+		"render_mode":"TRIANGLE"})")
+		== R"({"defines":[],"samplers":[],"shader_vertex":"res://shaders/scene.vert","shader_fragment":"res://shaders/scene.frag",)"
+		R"("shader_geometry":null,"queue":"opaque","uniforms":{"albedo":[1E0,1E0,1E0,1E0],"emissive":[0E0,0E0,0E0,0E0]},)"
+		R"("render_mode":"TRIANGLE"})");
+
+	BOOST_TEST(io.resave(R"({"__type":"material_desc","defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],
+		"shader_vertex":"res://shaders/sky.vert","shader_fragment":"res://shaders/sky.frag","shader_geometry":null,"queue":"opaque",
+		"uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})")
+		== R"({"defines":[],"samplers":["res://skybox/sky_texture_cubemap.desc"],"shader_vertex":"res://shaders/sky.vert",)"
+		R"("shader_fragment":"res://shaders/sky.frag","shader_geometry":null,"queue":"opaque",)"
+		R"("uniforms":{"albedo":[1E0,1E0,1E0,1E0],"emissive":[0E0,0E0,0E0,0E0]},"render_mode":"TRIANGLE"})");
+}
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_OnDiskTextMatchesTheShippedFile)
+{
+	std::ostringstream ss;
+	descs->write_pretty_json(ss, ser(material_io{ *descs }.read(R"({"defines":[],"samplers":[],
+		"shader_vertex":"res://shaders/scene.vert","shader_fragment":"res://shaders/scene.frag","shader_geometry":null,
+		"queue":"opaque","uniforms":{"albedo":[1.0,1.0,1.0,1.0],"emissive":[0.0,0.0,0.0,0.0]},"render_mode":"TRIANGLE"})")));
+	BOOST_TEST(ss.str() == "{\n"
+		"    \"defines\" : [],\n"
+		"    \"samplers\" : [],\n"
+		"    \"shader_vertex\" : \"res://shaders/scene.vert\",\n"
+		"    \"shader_fragment\" : \"res://shaders/scene.frag\",\n"
+		"    \"shader_geometry\" : null,\n"
+		"    \"queue\" : \"opaque\",\n"
+		"    \"uniforms\" : {\n"
+		"        \"albedo\" : [1.0, 1.0, 1.0, 1.0],\n"
+		"        \"emissive\" : [0.0, 0.0, 0.0, 0.0]\n"
+		"    },\n"
+		"    \"render_mode\" : \"TRIANGLE\"\n"
+		"}\n");
+}
+
+// What the model importer writes: a hole in the sampler slots is a null, the tags of the shaders come from the parent (so
+// they are empty here and written as null), shininess is a number of the file.
+BOOST_AUTO_TEST_CASE(MaterialDesc_ImporterFormKeepsTheSlotHoleAndNowKeepsShininess)
+{
+	const material_io io{ *descs };
+	const char* imported = R"({"name":"mat","defines":["LIGHTS_ENABLED","USE_SPECULAR_MAP"],"samplers":[null,"res://spec.png"],
+		"uniforms":{"albedo":[0.5,0.25,0.5,1],"emissive":[0,0,0,1],"shininess":16}})";
+	const scn::material_desc m = io.read(imported);
+	BOOST_TEST(m.samplers_textures.size() == 2u);
+	BOOST_TEST(!m.samplers_textures[0].is_valid());
+	BOOST_TEST(m.samplers_textures[1].string() == "res://spec.png");
+	BOOST_TEST(m.shininess == 16.0f);
+
+	const std::string written = json::serialize(ser(m));
+	BOOST_TEST(written == R"({"defines":["LIGHTS_ENABLED","USE_SPECULAR_MAP"],"samplers":[null,"res://spec.png"],)"
+		R"("shader_vertex":null,"shader_fragment":null,"shader_geometry":null,"queue":"opaque",)"
+		R"("uniforms":{"albedo":[5E-1,2.5E-1,5E-1,1E0],"emissive":[0E0,0E0,0E0,1E0],"shininess":1.6E1},"render_mode":"TRIANGLE"})");
+	// and a second round trip is a fixed point
+	BOOST_TEST(io.resave(written.c_str()) == written);
+}
+
+// #321: shininess was read from uniforms but never written, so a changed value was lost on the next save.
+BOOST_AUTO_TEST_CASE(MaterialDesc_ShininessIsWrittenWhenItIsNotTheDefault)
+{
+	const material_io io{ *descs };
+
+	scn::material_desc changed;
+	changed.shininess = 64.0f;
+	const json::object written = ser(changed);
+	BOOST_REQUIRE(written.at("uniforms").as_object().if_contains("shininess"));
+	BOOST_TEST(written.at("uniforms").at("shininess").to_number<double>() == 64.0);
+	BOOST_TEST(reload(*descs, changed).shininess == 64.0f);
+	// after the colours, so the keys of the files without it keep their places
+	std::vector<std::string> keys;
+	for (const auto& member : written.at("uniforms").as_object())
+		keys.emplace_back(member.key());
+	BOOST_TEST((keys == std::vector<std::string>{ "albedo", "emissive", "shininess" }));
+
+	// zero is not the default either
+	scn::material_desc none;
+	none.shininess = 0.0f;
+	BOOST_TEST(ser(none).at("uniforms").as_object().if_contains("shininess") != nullptr);
+	BOOST_TEST(reload(*descs, none).shininess == 0.0f);
+
+	// the default is not written, so the files that never had it stay as they are
+	BOOST_TEST(!ser(scn::material_desc{}).at("uniforms").as_object().contains("shininess"));
+	BOOST_TEST(!ser(io.read(R"({"uniforms":{"shininess":32}})")).at("uniforms").as_object().contains("shininess"));
+	BOOST_TEST(io.read(R"({"uniforms":{"shininess":32}})").shininess == 32.0f);
+	BOOST_TEST(io.read(R"({"uniforms":{"albedo":[1,1,1,1]}})").shininess == 32.0f); // the key is optional
+}
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_QueueReadsWordsAndNullAndWritesNullForNone)
+{
+	const material_io io{ *descs };
+	const std::pair<const char*, scn::pass_queue> forms[] = {
+		{ R"({"queue":"opaque"})", scn::pass_queue::OPAQUE },
+		{ R"({"queue":"transparent"})", scn::pass_queue::TRANSPARENT },
+		{ R"({"queue":"mix"})", scn::pass_queue::MIX },
+		{ R"({"queue":null})", scn::pass_queue::NONE },
+		{ R"({"queue":"bogus"})", scn::pass_queue::NONE }, // an unknown word was no queue
+		{ R"({"queue":"OPAQUE"})", scn::pass_queue::NONE }, // the words are lower case
+		{ R"({"queue":1})", scn::pass_queue::NONE },       // a number is not a word, even one that names an enumerator
+		{ R"({"queue":true})", scn::pass_queue::NONE },
+		{ R"({})", scn::pass_queue::OPAQUE },               // absent: the default stays
+	};
+	for (const auto& [text, expected] : forms) {
+		BOOST_TEST_CONTEXT(text) BOOST_CHECK((io.read(text).queue == expected));
+	}
+
+	for (const char* word : { "opaque", "transparent", "mix" }) {
+		const std::string text = std::string(R"({"queue":")") + word + R"("})";
+		const json::object out = ser(io.read(text.c_str()));
+		BOOST_TEST_CONTEXT(word) BOOST_TEST(out.at("queue").as_string() == word);
+	}
+	const json::object none = ser(io.read(R"({"queue":null})"));
+	BOOST_REQUIRE(none.if_contains("queue"));
+	BOOST_TEST(none.at("queue").is_null()); // an explicit null, not a missing key and not "NONE"
+}
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_RenderModeUsesTheEnumeratorNames)
+{
+	const material_io io{ *descs };
+	for (const char* name : { "TRIANGLE", "TRIANGLE_STRIP", "TRIANGLE_FAN", "TRIANGLE_ADJ", "TRIANGLE_STRIP_ADJ", "LINE", "LINE_STRIP",
+			"LINE_LOOP", "LINE_ADJ", "LINE_STRIP_ADJ", "POINT" }) {
+		const std::string text = std::string(R"({"render_mode":")") + name + R"("})";
+		BOOST_TEST_CONTEXT(name) BOOST_TEST(ser(io.read(text.c_str())).at("render_mode").as_string() == name);
+	}
+	BOOST_CHECK((io.read(R"({"render_mode":"BOGUS"})").render_mode == scn::material_render_mode::TRIANGLE));
+	BOOST_CHECK((io.read(R"({})").render_mode == scn::material_render_mode::TRIANGLE));
+	BOOST_CHECK((io.read(R"({"render_mode":"POINT"})").render_mode == scn::material_render_mode::POINT));
+}
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_EmptyTagsAreWrittenAsNullAndNullOrEmptyReadAsEmpty)
+{
+	const material_io io{ *descs };
+	for (const char* text : { R"({})", R"({"shader_vertex":null,"shader_fragment":"","shader_geometry":null})" }) {
+		const scn::material_desc m = io.read(text);
+		BOOST_TEST_CONTEXT(text) {
+			BOOST_TEST(!m.vertex_shader.is_valid());
+			BOOST_TEST(!m.fragment_shader.is_valid());
+			BOOST_TEST(!m.geometry_shader.is_valid());
+			const json::object out = ser(m);
+			for (const char* key : { "shader_vertex", "shader_fragment", "shader_geometry" }) {
+				BOOST_REQUIRE_MESSAGE(out.if_contains(key), key);
+				BOOST_CHECK_MESSAGE(out.at(key).is_null(), key);
+			}
+		}
+	}
+	// null clears a tag that was set, as it did
+	scn::material_desc m = io.read(R"({"shader_geometry":"res://g.geom"})");
+	BOOST_TEST(m.geometry_shader.string() == "res://g.geom");
+	m.deserialize(*descs, json::parse(R"({"shader_geometry":null})").as_object());
+	BOOST_TEST(!m.geometry_shader.is_valid());
+	// a sampler that is not a string is an empty slot
+	const scn::material_desc slots = io.read(R"({"samplers":[1,"res://a.png",null]})");
+	BOOST_REQUIRE_EQUAL(slots.samplers_textures.size(), 3u);
+	BOOST_TEST(!slots.samplers_textures[0].is_valid());
+	BOOST_TEST(slots.samplers_textures[1].string() == "res://a.png");
+	BOOST_TEST(!slots.samplers_textures[2].is_valid());
+}
+
+// The members the file never had are neither read nor written, but a copy of the desc (a prefab layer) carries them.
+BOOST_AUTO_TEST_CASE(MaterialDesc_AmbientAndSpecularStayOutOfTheFileButSurviveACopy)
+{
+	const material_io io{ *descs };
+	const scn::material_desc m = io.read(R"({"uniforms":{"ambient":[0,1,0,1],"specular":[0,0,1,1]}})");
+	BOOST_CHECK((m.ambient == ds::color(1.0f)));
+	BOOST_CHECK((m.specular == ds::color(1.0f)));
+	const json::object out = ser(m);
+	BOOST_TEST(!out.at("uniforms").as_object().contains("ambient"));
+	BOOST_TEST(!out.at("uniforms").as_object().contains("specular"));
+	BOOST_TEST(!out.contains("ambient"));
+
+	scn::material_desc source;
+	source.ambient = ds::color(0.25f);
+	source.specular = ds::color(0.5f);
+	source.shininess = 8.0f;
+	scn::material_desc target;
+	source.copy_to(target);
+	BOOST_CHECK((target.ambient == ds::color(0.25f)));
+	BOOST_CHECK((target.specular == ds::color(0.5f)));
+	BOOST_TEST(target.shininess == 8.0f);
+}
+
+BOOST_AUTO_TEST_CASE(MaterialDesc_ADamagedValueKeepsWhatTheMaterialHas)
+{
+	scn::material_desc m;
+	m.albedo = ds::color(0.5f);
+	m.deserialize(*descs, json::parse(R"({"uniforms":{"albedo":[1,2],"emissive":"x","shininess":"hard"},"defines":3})").as_object());
+	BOOST_CHECK((m.albedo == ds::color(0.5f)));
+	BOOST_CHECK((m.emissive == ds::color(0.0f)));
+	BOOST_TEST(m.shininess == 32.0f);
+	BOOST_TEST(m.defines.empty());
+}
+
+// The declaration of the schema: the keys (the file), the policies (what is written when), the enums.
+BOOST_AUTO_TEST_CASE(MaterialDesc_SchemaDeclaresTheKeysAndThePolicies)
+{
+	const desc::type_schema* schema = descs->find_schema(scn::material_desc::__type);
+	BOOST_REQUIRE(schema);
+	using wp = desc::write_policy;
+	struct expected { const char* name; const char* key; desc::field_kind kind; wp write; };
+	const expected fields[] = {
+		{ "defines", "/defines", desc::field_kind::array, wp::always },
+		{ "samplers_textures", "/samplers", desc::field_kind::custom, wp::always },
+		{ "vertex_shader", "/shader_vertex", desc::field_kind::res_tag, wp::null_if_empty },
+		{ "fragment_shader", "/shader_fragment", desc::field_kind::res_tag, wp::null_if_empty },
+		{ "geometry_shader", "/shader_geometry", desc::field_kind::res_tag, wp::null_if_empty },
+		{ "queue", "/queue", desc::field_kind::enumeration, wp::null_if_empty },
+		{ "albedo", "/uniforms/albedo", desc::field_kind::vec4, wp::always },
+		{ "emissive", "/uniforms/emissive", desc::field_kind::vec4, wp::always },
+		{ "shininess", "/uniforms/shininess", desc::field_kind::f32, wp::if_not_default },
+		{ "render_mode", "/render_mode", desc::field_kind::enumeration, wp::always },
+	};
+	BOOST_REQUIRE_EQUAL(schema->fields.size(), std::size(fields));
+	for (std::size_t i = 0; i < std::size(fields); ++i) {
+		BOOST_TEST_CONTEXT(fields[i].name) {
+			BOOST_TEST(schema->fields[i].name == fields[i].name);
+			BOOST_TEST(schema->fields[i].key == fields[i].key);
+			BOOST_CHECK(schema->fields[i].kind == fields[i].kind);
+			BOOST_CHECK(schema->fields[i].write == fields[i].write);
+		}
+	}
+	BOOST_TEST(schema->fields[8].default_value.to_number<double>() == 32.0);
+	BOOST_REQUIRE(schema->fields[8].range);
+	BOOST_TEST(schema->fields[8].range->min == 0.0);
+	BOOST_TEST(schema->fields[8].range->max == 1000.0);
+
+	const desc::enum_schema* queue = descs->schemas().find_enum("pass_queue");
+	BOOST_REQUIRE(queue);
+	BOOST_REQUIRE(queue->null_value);
+	BOOST_TEST(*queue->null_value == static_cast<std::int64_t>(scn::pass_queue::NONE));
+	BOOST_REQUIRE(queue->fallback);
+	BOOST_TEST(*queue->fallback == static_cast<std::int64_t>(scn::pass_queue::NONE));
+	BOOST_CHECK(queue->find("opaque") != nullptr);
+	BOOST_CHECK(queue->find("OPAQUE") == nullptr);
+
+	const desc::enum_schema* mode = descs->schemas().find_enum("material_render_mode");
+	BOOST_REQUIRE(mode);
+	BOOST_REQUIRE(mode->fallback);
+	BOOST_TEST(*mode->fallback == static_cast<std::int64_t>(scn::material_render_mode::TRIANGLE));
+	BOOST_TEST(mode->items.size() == 11u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
