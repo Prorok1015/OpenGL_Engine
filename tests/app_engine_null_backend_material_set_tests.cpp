@@ -178,7 +178,7 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
 			// The group is recorded by the backend under the handle the backend gave the texture, which the
 			// validation layer's handle (what binding() returns) is not.
 			const auto& tag = static_cast<const scn::material_desc*>(material->source.get())->samplers_textures[0];
-			const auto* backend_texture = textures().find(tag);
+			auto* backend_texture = textures().find(tag);
 			BOOST_REQUIRE(backend_texture);
 			const rnd::driver::texture_handle diffuse = backend_texture->native()->handle();
 			bool found = false;
