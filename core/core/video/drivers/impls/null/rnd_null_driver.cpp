@@ -37,7 +37,9 @@ void rnd::driver::null::driver::end_render_pass()
 void rnd::driver::null::driver::count_draw()
 {
 	++m_calls.draws;
-	++m_draws_by_topology[static_cast<std::size_t>(pipeline_info(m_bound).topology)];
+	const pipeline_desc& bound = pipeline_info(m_bound);
+	++m_draws_by_topology[static_cast<std::size_t>(bound.topology)];
+	++m_draws_by_polygon[static_cast<std::size_t>(bound.polygon)];
 	for (std::size_t set = 0; set < max_bind_sets; ++set) {
 		if (m_bound_sets[set].group) {
 			++m_draws_with_set[set];

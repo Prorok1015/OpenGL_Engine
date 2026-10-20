@@ -1206,6 +1206,34 @@ BOOST_AUTO_TEST_CASE(BindingAPipelineWhoseShaderWasDeletedIsReportedAndNotForwar
 	BOOST_TEST(inner().calls().pipeline_binds == 0u);
 }
 
+BOOST_AUTO_TEST_CASE(AWireframePipelineIsForwardedAsItIs)
+{
+	open_pass();
+	pipeline_desc desc = pipeline_for_pass();
+	desc.polygon = polygon_mode::LINE;
+	const pipeline_handle wireframe = drv->create_pipeline(desc);
+	const pipeline_handle filled = drv->create_pipeline(pipeline_for_pass());
+	drv->bind_pipeline(wireframe);
+
+	BOOST_TEST(state().total() == 0u);
+	BOOST_CHECK(wireframe != filled);
+	BOOST_CHECK(drv->pipeline_info(wireframe).polygon == polygon_mode::LINE);
+	BOOST_CHECK(drv->pipeline_info(filled).polygon == polygon_mode::FILL);
+	BOOST_REQUIRE(inner().bound_pipeline());
+	BOOST_CHECK(inner().pipeline_info(inner().bound_pipeline()).polygon == polygon_mode::LINE);
+}
+
+BOOST_AUTO_TEST_CASE(APolygonModeThatDoesNotExistIsReportedAndNotCreated)
+{
+	pipeline_desc desc = pipeline_for_pass();
+	desc.polygon = static_cast<polygon_mode>(7);
+	const pipeline_handle handle = drv->create_pipeline(desc);
+
+	expect_only(state(), vl::rule::invalid_pipeline);
+	BOOST_TEST(!handle);
+	BOOST_TEST(inner().pipelines().size() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(BlendingMoreTargetsThanTheFormatsDeclareIsReported)
 {
 	open_pass();

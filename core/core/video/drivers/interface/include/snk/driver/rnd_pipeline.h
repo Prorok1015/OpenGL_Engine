@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/driver/rnd_bind_group.h>
+#include <snk/driver/rnd_render_mode.h>
 #include <snk/driver/rnd_render_pass.h>
 #include <snk/driver/rnd_shader_interface.h>
 #include <snk/driver/rnd_texture_interface.h>
@@ -76,14 +77,11 @@ namespace rnd::driver
 		friend bool operator==(const face_culling_state&, const face_culling_state&) = default;
 	};
 
-	// How the indices of a draw assemble into primitives.
-	enum class RENDER_MODE
+	// How the rasterizer fills the primitives: whole (the default), or only their edges (wireframe).
+	enum class polygon_mode
 	{
-		TRIANGLE,
-		TRIANGLE_STRIP,
+		FILL,
 		LINE,
-		LINE_STRIP,
-		POINT,
 	};
 
 	using texture_format = texture_header::TYPE;
@@ -118,6 +116,7 @@ namespace rnd::driver
 		// The program. The shader must outlive every use of the pipeline.
 		shader_ref shader;
 		RENDER_MODE topology = RENDER_MODE::TRIANGLE;
+		polygon_mode polygon = polygon_mode::FILL;
 		depth_state depth;
 		face_culling_state cull;
 		// One entry per color target, in draw buffer order; targets past the end do not blend.
@@ -140,6 +139,7 @@ namespace rnd::driver
 			const auto mix = [&h](std::uint64_t v) { h = (h ^ v) * 0x100000001b3ull; h ^= h >> 29; };
 			mix(desc.shader.serial);
 			mix(static_cast<std::uint64_t>(desc.topology));
+			mix(static_cast<std::uint64_t>(desc.polygon));
 			mix(static_cast<std::uint64_t>(desc.depth.enabled) | static_cast<std::uint64_t>(desc.depth.write_mask) << 1
 				| static_cast<std::uint64_t>(desc.depth.test_func) << 8);
 			mix(static_cast<std::uint64_t>(desc.cull.enabled) | static_cast<std::uint64_t>(desc.cull.cull_mode) << 8);

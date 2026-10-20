@@ -90,6 +90,7 @@ namespace rnd::driver::gl
 			std::array<std::optional<blend_funcs>, pipeline_desc::max_targets> target_blend;
 			std::optional<bool> cull;
 			std::optional<GLenum> cull_face;
+			std::optional<GLenum> polygon;
 		};
 
 		// A buffer's GL objects: one, or frames_in_flight for a per_frame buffer (the copy of the frame is bound).

@@ -295,6 +295,10 @@ rnd::driver::pipeline_handle rnd::driver::validation::driver::create_pipeline(co
 	if (!shader_alive(desc.shader)) {
 		return {};
 	}
+	if (static_cast<std::uint32_t>(desc.polygon) > static_cast<std::uint32_t>(polygon_mode::LINE)) {
+		m_state->report(rule::invalid_pipeline, std::format("pipeline names polygon mode {} that does not exist", static_cast<std::uint32_t>(desc.polygon)));
+		return {};
+	}
 	if (desc.blend.size() > desc.color_formats.size()) {
 		m_state->report(rule::invalid_pipeline, std::format("pipeline blends {} targets but declares {} color formats",
 			desc.blend.size(), desc.color_formats.size()));

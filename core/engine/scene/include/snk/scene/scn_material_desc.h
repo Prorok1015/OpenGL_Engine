@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/desc/desc_hints.hpp>
 #include <snk/desc/desc_schema_desc.h>
+#include <snk/driver/rnd_render_mode.h>
 #include <snk/resource/res_tag.h>
 #include <array>
 #include <string>
@@ -15,27 +16,7 @@ namespace scn
 {
 	enum class pass_queue { NONE, OPAQUE, TRANSPARENT, MIX };
 
-	// Mirrors rnd::driver::RENDER_MODE enumerators exactly (same order/names). Kept scene-side so
-	// material_desc stays a POD with no render/driver header dependency (EPIC-49 US-49-5). The
-	// render-side material compiler maps this to rnd::driver::RENDER_MODE when needed.
-	enum class material_render_mode
-	{
-		TRIANGLE,
-		TRIANGLE_STRIP,
-		TRIANGLE_FAN,
-		TRIANGLE_ADJ,
-		TRIANGLE_STRIP_ADJ,
-		LINE,
-		LINE_STRIP,
-		LINE_LOOP,
-		LINE_ADJ,
-		LINE_STRIP_ADJ,
-		POINT,
-	};
-
 	BOOST_DESCRIBE_ENUM(pass_queue, NONE, OPAQUE, TRANSPARENT, MIX)
-	BOOST_DESCRIBE_ENUM(material_render_mode, TRIANGLE, TRIANGLE_STRIP, TRIANGLE_FAN, TRIANGLE_ADJ, TRIANGLE_STRIP_ADJ,
-		LINE, LINE_STRIP, LINE_LOOP, LINE_ADJ, LINE_STRIP_ADJ, POINT)
 
 	class material_desc;
 }
@@ -100,11 +81,12 @@ namespace desc
 		static constexpr scn::pass_queue null_value = scn::pass_queue::NONE;
 	};
 
-	// The names of the enumerators; an unknown word reads as TRIANGLE.
+	// The names of the topologies of the driver; an unknown word reads as TRIANGLE (material_desc::deserialize warns
+	// about the ones that were removed from the driver in RHI R4).
 	template<>
-	struct enum_names<scn::material_render_mode> {
-		static constexpr std::string_view name = "material_render_mode";
-		static constexpr scn::material_render_mode fallback = scn::material_render_mode::TRIANGLE;
+	struct enum_names<rnd::driver::RENDER_MODE> {
+		static constexpr std::string_view name = "render_mode";
+		static constexpr rnd::driver::RENDER_MODE fallback = rnd::driver::RENDER_MODE::TRIANGLE;
 	};
 }
 
@@ -141,7 +123,7 @@ namespace scn
 		ds::color albedo = ds::color(1.0f);
 		ds::color emissive = ds::color(0.0f);
 		float shininess = 32.0f; // 0.0 -> 1000
-		material_render_mode render_mode = material_render_mode::TRIANGLE;
+		rnd::driver::RENDER_MODE render_mode = rnd::driver::RENDER_MODE::TRIANGLE;
 
 		// Not in the file: neither read nor written.
 		ds::color specular = ds::color(1.0f);
