@@ -607,18 +607,27 @@ void res::resource_system::prune_released_edges() {
 
 std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) const {
   // Breadth first over the reverse edges; `seen` is what keeps a cycle from looping.
+  // An alias edge (original -> alias) is followed like a recorded one but kept apart from them: pruning and the
+  // reload of a tag rewrite the recorded ones, and must not drop it.
+  const auto for_each_dependent = [this](const res::tag &tag, const auto &visit) {
+    if (const auto it = m_dependents.find(tag); it != m_dependents.end()) {
+      for (const auto &dependent : it->second) {
+        visit(dependent);
+      }
+    }
+    if (const auto alias = m_alias_edges.find(tag); alias != m_alias_edges.end()) {
+      visit(alias->second);
+    }
+  };
+
   std::vector<res::tag> reached{root};
   std::unordered_set<res::tag> seen{root};
   for (std::size_t at = 0; at < reached.size(); ++at) {
-    const auto it = m_dependents.find(reached[at]);
-    if (it == m_dependents.end()) {
-      continue;
-    }
-    for (const auto &dependent : it->second) {
+    for_each_dependent(reached[at], [&](const res::tag &dependent) {
       if (seen.insert(dependent).second) {
         reached.push_back(dependent);
       }
-    }
+    });
   }
   if (reached.size() == 1) {
     return reached;
@@ -629,13 +638,11 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
   std::unordered_map<res::tag, std::size_t> waiting;
   waiting.reserve(reached.size());
   for (const auto &member : reached) {
-    std::size_t count = 0;
-    if (const auto it = m_depends_on.find(member); it != m_depends_on.end()) {
-      for (const auto &target : it->second) {
-        count += seen.contains(target) ? 1 : 0;
-      }
-    }
-    waiting.emplace(member, count);
+    waiting.emplace(member, 0);
+  }
+  // Counted over the same edges the loop below releases, so alias edges balance too.
+  for (const auto &member : reached) {
+    for_each_dependent(member, [&](const res::tag &dependent) { ++waiting.at(dependent); });
   }
 
   std::vector<res::tag> ordered;
@@ -646,15 +653,11 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
     }
   }
   for (std::size_t at = 0; at < ordered.size(); ++at) {
-    const auto it = m_dependents.find(ordered[at]);
-    if (it == m_dependents.end()) {
-      continue;
-    }
-    for (const auto &dependent : it->second) {
+    for_each_dependent(ordered[at], [&](const res::tag &dependent) {
       if (--waiting.at(dependent) == 0) {
         ordered.push_back(dependent);
       }
-    }
+    });
   }
 
   if (ordered.size() != reached.size()) {
@@ -740,6 +743,12 @@ void res::resource_system::register_alias(const res::tag &original,
   {
     std::unique_lock lock(m_cache_mutex);
     m_cache.copy_tag(original, alias, [](const cache_entry &entry) { return !entry.expired(); });
+    // One alias per original, as in m_aliases: registering the same pair again changes nothing, another alias replaces it.
+    if (original == alias) {
+      m_alias_edges.erase(original);
+    } else {
+      m_alias_edges.insert_or_assign(original, alias);
+    }
   }
 
   {

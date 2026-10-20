@@ -129,6 +129,12 @@ namespace res
 			return count;
 		}
 
+		// Read-only: how many alias edges register_alias() holds. For tests and diagnostics.
+		std::size_t alias_edge_count() const {
+			std::shared_lock lock(m_cache_mutex);
+			return m_alias_edges.size();
+		}
+
 		// Read-only: how many sweeps of the hot reload graph have run. For tests and diagnostics.
 		std::size_t edge_sweep_count() const {
 			std::shared_lock lock(m_cache_mutex);
@@ -262,6 +268,8 @@ namespace res
 			m_pinned_resources.erase_tag(tag);
 		}
 
+		// Besides copying the cache entries of `original` (the ones the alias lacks), makes `alias` depend on it: a
+		// signal_changed(original) evicts the alias too, and reaches what depends on the alias.
 		void register_alias(const res::tag& original, const res::tag& alias);
 		res::tag resolve_alias(const res::tag& tag) const {
 			std::shared_lock lock(m_alias_mutex);
@@ -412,6 +420,9 @@ namespace res
 		// desc types of a tag onto one block).
 		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
 		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
+		// original -> alias, set by register_alias(): a change of the original evicts the alias as well. Never pruned
+		// (aliases are not released), and not part of m_depends_on. Guarded by m_cache_mutex.
+		std::unordered_map<res::tag, res::tag> m_alias_edges;
 		// Released tags are swept out of the graph whenever m_depends_on reaches m_edge_sweep_at (then doubled over what
 		// is left) and on a signal: every signal while the graph is below the floor, every k_signal_sweep_every-th
 		// above it. The graph stays proportional to what is loaded. All guarded by m_cache_mutex.

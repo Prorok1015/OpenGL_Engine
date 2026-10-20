@@ -515,6 +515,75 @@ BOOST_AUTO_TEST_CASE(Alias_KeepsALiveEntryOfTheTarget)
 	BOOST_TEST(via_target.get()->str() == "target");
 }
 
+BOOST_AUTO_TEST_CASE(Alias_SignalOnTheOriginalEvictsTheLiveTarget)
+{
+	auto original = put("alias_edge_orig.txt", "original");
+	auto target = put("alias_edge_target.txt", "v1");
+	auto held_target = sys->require_sync<res::text_resource>(target);
+	sys->register_alias(original, target); // keeps the live target, see Alias_KeepsALiveEntryOfTheTarget
+	BOOST_REQUIRE(sys->require_sync<res::text_resource>(target).get_control_block() == held_target.get_control_block());
+	put("alias_edge_target.txt", "v2");
+
+	sys->signal_changed(original);
+	pump();
+
+	auto fresh = sys->require_sync<res::text_resource>(target);
+	BOOST_TEST(fresh.get_control_block() != held_target.get_control_block());
+	BOOST_TEST(fresh.get()->str() == "v2");
+}
+
+BOOST_AUTO_TEST_CASE(Alias_RegisteredTwice_HoldsOneEdge)
+{
+	auto original = put("alias_twice_orig.txt", "original");
+	auto target = put("alias_twice_target.txt", "target");
+	auto other = put("alias_twice_other.txt", "other");
+
+	sys->register_alias(original, target);
+	sys->register_alias(original, target);
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+
+	sys->register_alias(original, other); // the original has one alias: the new one replaces the old edge
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	auto held_target = sys->require_sync<res::text_resource>(target);
+	auto held_other = sys->require_sync<res::text_resource>(other);
+	sys->signal_changed(original);
+	pump();
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() == held_target.get_control_block());
+	BOOST_TEST(sys->require_sync<res::text_resource>(other).get_control_block() != held_other.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(Alias_EdgeSurvivesTheSweepsOfOtherSignals)
+{
+	auto original = put("alias_sweep_orig.txt", "original");
+	auto target = put("alias_sweep_target.txt", "v1");
+	auto unrelated = put("alias_sweep_unrelated.txt", "u");
+	auto held_target = sys->require_sync<res::text_resource>(target);
+	sys->register_alias(original, target);
+
+	for (int i = 0; i < 40; ++i) {
+		sys->signal_changed(unrelated); // a small graph is swept on every signal
+	}
+	pump();
+
+	BOOST_TEST(sys->alias_edge_count() == 1u);
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() == held_target.get_control_block());
+	sys->signal_changed(original);
+	pump();
+	BOOST_TEST(sys->require_sync<res::text_resource>(target).get_control_block() != held_target.get_control_block());
+}
+
+BOOST_AUTO_TEST_CASE(Alias_OfItself_AddsNoEdgeAndSignalTerminates)
+{
+	auto tag = put("alias_self.txt", "v1");
+	auto held = sys->require_sync<res::text_resource>(tag);
+	sys->register_alias(tag, tag);
+	BOOST_TEST(sys->alias_edge_count() == 0u);
+
+	sys->signal_changed(tag);
+	pump();
+	BOOST_TEST(sys->require_sync<res::text_resource>(tag).get_control_block() != held.get_control_block());
+}
+
 BOOST_AUTO_TEST_CASE(Alias_ReplacesAnExpiredEntryOfTheTarget)
 {
 	auto original = put("alias_dead_orig.txt", "original");
