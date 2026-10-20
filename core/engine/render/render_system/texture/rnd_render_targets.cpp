@@ -5,7 +5,8 @@ rnd::driver::texture_interface* rnd::render_targets::ensure(texture_manager& tex
 	driver::texture_header::TYPE format, driver::texture_usage usage, const sampling& params)
 {
 	if (auto* existing = textures.find(tag)) {
-		if (existing->width() == static_cast<uint32_t>(size.x) && existing->height() == static_cast<uint32_t>(size.y)) {
+		if (existing->width() == static_cast<uint32_t>(size.x) && existing->height() == static_cast<uint32_t>(size.y)
+			&& existing->format() == format && existing->get_usage() == usage) {
 			return existing;
 		}
 		textures.remove(tag);
@@ -20,6 +21,11 @@ rnd::driver::texture_interface* rnd::render_targets::ensure(texture_manager& tex
 	header.min = params.min;
 	header.mag = params.mag;
 	return textures.generate_texture(tag, header);
+}
+
+rnd::render_targets::registry::registry(driver::driver_interface& drv)
+	: m_driver(&drv)
+{
 }
 
 rnd::render_targets::target_id rnd::render_targets::registry::ensure(texture_manager& textures, const res::tag& tag, glm::ivec2 size,
@@ -52,7 +58,7 @@ rnd::render_targets::target_id rnd::render_targets::registry::find(const res::ta
 	return { it->second, m_slots[it->second - 1].gen };
 }
 
-rnd::driver::texture_handle rnd::render_targets::registry::resolve(target_id id) const noexcept
+rnd::driver::texture_handle rnd::render_targets::registry::resolve(target_id id) const
 {
 	if (!is_current(id)) {
 		return {};
@@ -60,12 +66,17 @@ rnd::driver::texture_handle rnd::render_targets::registry::resolve(target_id id)
 	return m_slots[id.slot - 1].handle;
 }
 
-bool rnd::render_targets::registry::is_current(target_id id) const noexcept
+bool rnd::render_targets::registry::is_current(target_id id) const
 {
-	return id.slot != 0 && id.slot <= m_slots.size() && m_slots[id.slot - 1].gen == id.gen;
+	if (id.slot == 0 || id.slot > m_slots.size()) {
+		return false;
+	}
+	const slot& entry = m_slots[id.slot - 1];
+	// The texture can be gone without ensure() having seen it (texture_manager::remove, clear_cache).
+	return entry.gen == id.gen && m_driver->is_alive(entry.handle);
 }
 
-rnd::driver::texture_handle rnd::render_targets::registry::current(const res::tag& tag) const noexcept
+rnd::driver::texture_handle rnd::render_targets::registry::current(const res::tag& tag) const
 {
 	return resolve(find(tag));
 }

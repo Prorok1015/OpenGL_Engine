@@ -135,7 +135,7 @@ BOOST_AUTO_TEST_CASE(RegistryKeepsTheSlotAndBumpsTheGenerationOnResize)
 {
 	auto& system = storage.require<rnd::render_system>();
 	auto& textures = system.get_texture_manager();
-	rnd::render_targets::registry registry;
+	rnd::render_targets::registry registry(*storage.require<rnd::render_system>().get_driver());
 	const auto tag = res::tag(res::tag::memory, "__rt_registry");
 	const auto usage = texture_usage::color_target | texture_usage::sampled;
 
@@ -161,10 +161,62 @@ BOOST_AUTO_TEST_CASE(RegistryKeepsTheSlotAndBumpsTheGenerationOnResize)
 	BOOST_CHECK(registry.current(tag) == current);
 }
 
+BOOST_AUTO_TEST_CASE(RegistryRecreatesATargetWhenTheFormatOrUsageChanges)
+{
+	auto& system = storage.require<rnd::render_system>();
+	rnd::render_targets::registry registry(*system.get_driver());
+	const auto tag = res::tag(res::tag::memory, "__rt_registry_format");
+	const auto first = registry.ensure(system.get_texture_manager(), tag, { 16, 16 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	const auto same = registry.ensure(system.get_texture_manager(), tag, { 16, 16 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	BOOST_CHECK(same == first);
+	const auto format = registry.ensure(system.get_texture_manager(), tag, { 16, 16 }, texture_header::TYPE::RGBA16F, texture_usage::color_target);
+	BOOST_TEST(format.slot == first.slot);
+	BOOST_TEST(format.gen > first.gen);
+	const auto usage = registry.ensure(system.get_texture_manager(), tag, { 16, 16 }, texture_header::TYPE::RGBA16F,
+		texture_usage::color_target | texture_usage::sampled);
+	BOOST_TEST(usage.gen > format.gen);
+	BOOST_CHECK(!registry.is_current(format));
+}
+
+BOOST_AUTO_TEST_CASE(RegistryTargetRemovedFromTheManagerIsDeadWithoutEnsure)
+{
+	auto& system = storage.require<rnd::render_system>();
+	auto& textures = system.get_texture_manager();
+	rnd::render_targets::registry registry(*system.get_driver());
+	const auto tag = res::tag(res::tag::memory, "__rt_registry_removed");
+	const auto id = registry.ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	BOOST_REQUIRE(registry.resolve(id));
+	BOOST_REQUIRE(registry.current(tag));
+
+	textures.remove(tag);
+	BOOST_CHECK(!registry.is_current(id));
+	BOOST_CHECK(!registry.resolve(id));
+	BOOST_CHECK(!registry.current(tag));
+}
+
+BOOST_AUTO_TEST_CASE(RegistryTargetsDropByClearCacheAreDeadWithoutEnsure)
+{
+	auto& system = storage.require<rnd::render_system>();
+	auto& textures = system.get_texture_manager();
+	rnd::render_targets::registry registry(*system.get_driver());
+	const auto tag = res::tag(res::tag::memory, "__rt_registry_cleared");
+	const auto id = registry.ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	BOOST_REQUIRE(registry.resolve(id));
+
+	textures.clear_cache();
+	BOOST_CHECK(!registry.resolve(id));
+	BOOST_CHECK(!registry.current(tag));
+	// Made again, the slot is the same and the generation moved on.
+	const auto again = registry.ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	BOOST_TEST(again.slot == id.slot);
+	BOOST_TEST(again.gen > id.gen);
+	BOOST_CHECK(registry.resolve(again));
+}
+
 BOOST_AUTO_TEST_CASE(RegistryIdsAreNullForAnUnknownTargetAndPerTag)
 {
 	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
-	rnd::render_targets::registry registry;
+	rnd::render_targets::registry registry(*storage.require<rnd::render_system>().get_driver());
 	const auto usage = texture_usage::color_target | texture_usage::sampled;
 	const auto a_tag = res::tag(res::tag::memory, "__rt_registry_a");
 	const auto b_tag = res::tag(res::tag::memory, "__rt_registry_b");

@@ -133,11 +133,16 @@ BOOST_AUTO_TEST_CASE(Capture_EmptyIdTakesTheFirstView)
 
 BOOST_AUTO_TEST_CASE(Capture_DanglingHandleIsAMissingTarget)
 {
-	// A provider that kept the handle of a target which was destroyed (and whose slot is taken by a new one): the
-	// generation of the handle says it is gone; the new texture is not read in its place.
+	// A provider that kept the handle of a target which was destroyed. A new texture takes the freed slot with a
+	// bumped generation: the old handle is rejected, the new one is read.
 	const texture_handle old_handle = texture.handle();
 	texture.reset();
 	texture = make_texture(drv, target_header(8, 8));
+	const texture_handle new_handle = texture.handle();
+	BOOST_REQUIRE(new_handle);
+	BOOST_CHECK(old_handle != new_handle);
+	BOOST_CHECK(!drv.is_alive(old_handle));
+	BOOST_CHECK(drv.is_alive(new_handle));
 	auto stale = service.add_target("stale", [old_handle] { return old_handle; });
 
 	const auto result = service.capture("stale");
