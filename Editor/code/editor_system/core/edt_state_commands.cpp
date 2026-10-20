@@ -55,6 +55,51 @@ namespace {
 		return std::string(text.data(), text.size());
 	}
 
+	bool valid_utf8(std::string_view text);
+	bool safe_text(std::string_view text);
+
+	// Text that goes into the answer: bytes that are not valid UTF-8 would make the JSON of the whole reply invalid
+	// (an MCP client drops it), so such a string is sent with its non-ASCII bytes replaced.
+	json::string safe_string(std::string_view text)
+	{
+		if (valid_utf8(text)) return json::string(text);
+		std::string cleaned(text);
+		for (char& c : cleaned) {
+			if (static_cast<unsigned char>(c) >= 0x80) c = '?';
+		}
+		return json::string(cleaned);
+	}
+
+	constexpr std::size_t max_glob_length = 128;
+	constexpr std::size_t max_glob_stars = 16;
+	constexpr std::size_t max_cursor_length = 512;
+
+	// A pattern costs text x pattern per tested name on the main thread, so its size and its stars are limited. The
+	// runs of stars are collapsed (a*****b is a*b). Returns why the pattern is refused, empty if it is fine.
+	std::string check_glob(std::string& glob)
+	{
+		if (glob.size() > max_glob_length) return std::format("a glob is limited to {} characters", max_glob_length);
+		if (!safe_text(glob)) return "a glob takes no control characters and no backslashes";
+		std::string collapsed;
+		collapsed.reserve(glob.size());
+		std::size_t stars = 0;
+		for (const char c : glob) {
+			if (c == '*') {
+				if (!collapsed.empty() && collapsed.back() == '*') continue;
+				++stars;
+			}
+			collapsed += c;
+		}
+		if (stars > max_glob_stars) return std::format("a glob takes at most {} * wildcards", max_glob_stars);
+		glob = std::move(collapsed);
+		return {};
+	}
+
+	bool cursor_ok(std::string_view cursor)
+	{
+		return cursor.size() <= max_cursor_length && safe_text(cursor);
+	}
+
 	json::value parse_schema(std::string_view text, std::string_view what)
 	{
 		boost::system::error_code ec;
@@ -168,7 +213,7 @@ namespace {
 	json::object ref_json(const std::string& world, std::span<const std::uint64_t> path)
 	{
 		json::object out;
-		out["context"] = json::string(world);
+		out["context"] = safe_string(world);
 		out["path"] = path_json(path);
 		return out;
 	}
@@ -193,7 +238,7 @@ namespace {
 		std::ranges::sort(keys);
 		json::array out;
 		out.reserve(keys.size());
-		for (const auto& key : keys) out.emplace_back(json::string(key));
+		for (const auto& key : keys) out.emplace_back(safe_string(key));
 		return out;
 	}
 
@@ -385,6 +430,9 @@ namespace {
 				under = std::move(at);
 			}
 		}
+		if (!name_glob.empty()) {
+			if (const std::string why = check_glob(name_glob); !why.empty()) return cmd::result::failure(cmd::codes::invalid_args, why);
+		}
 		std::ranges::sort(wanted);
 
 		// What the cursor is bound to besides the generation: the same query must come back with it.
@@ -399,6 +447,9 @@ namespace {
 
 		std::uint64_t offset = 0;
 		if (const json::value* text = args.if_contains("cursor")) {
+			if (!cursor_ok(std::string_view(text->as_string()))) {
+				return cmd::result::failure(cmd::codes::invalid_args, "the cursor is not one this command returned");
+			}
 			const auto cursor = decode_cursor(std::string_view(text->as_string()));
 			if (!cursor) return cmd::result::failure(cmd::codes::invalid_args, "the cursor is not one this command returned");
 			if (cursor->document != expected.document || cursor->filter != expected.filter) {
@@ -432,16 +483,16 @@ namespace {
 			}
 			json::object item;
 			item["ref"] = ref_json(world.name, node_path);
-			item["name"] = json::string(node.name);
+			item["name"] = safe_string(node.name);
 			item["components"] = sorted_keys(node.components);
-			if (const std::string prefab = prefab_of(node); !prefab.empty()) item["prefab"] = json::string(prefab);
+			if (const std::string prefab = prefab_of(node); !prefab.empty()) item["prefab"] = safe_string(prefab);
 			items.push_back(std::move(item));
 			return true;
 		});
 
 		json::object out;
 		out["document"] = scene->id();
-		out["world"] = json::string(world.name);
+		out["world"] = safe_string(world.name);
 		out["generation"] = scene->generation();
 		out["items"] = std::move(items);
 		if (more) {
@@ -496,7 +547,7 @@ namespace {
 		for (const auto& [key, comp] : sorted) {
 			json::object body = edt::override_edit::component_json(*comp);
 			if (!at.target.empty()) body = edt::override_edit::effective_component(*at.owner, at.target, key, std::move(body));
-			if (!body.contains("__type")) body["__type"] = json::string(comp->type_name);
+			if (!body.contains("__type")) body["__type"] = safe_string(comp->type_name);
 			components[key] = std::move(body);
 		}
 
@@ -504,8 +555,8 @@ namespace {
 		out["ref"] = ref_json(at.world.name, at.path);
 		out["document"] = scene.id();
 		out["generation"] = scene.generation();
-		out["world"] = json::string(at.world.name);
-		out["name"] = json::string(at.is_root && subject->name.empty() ? std::string(at.world.desc->get_name()) : subject->name);
+		out["world"] = safe_string(at.world.name);
+		out["name"] = safe_string(at.is_root && subject->name.empty() ? std::string(at.world.desc->get_name()) : subject->name);
 		if (at.path.empty()) {
 			out["parent"] = nullptr;
 		} else {
@@ -513,7 +564,7 @@ namespace {
 		}
 		out["in_instance"] = !at.target.empty();
 		if (at.target.empty()) {
-			if (const std::string prefab = prefab_of(*at.owner); !prefab.empty()) out["prefab"] = json::string(prefab);
+			if (const std::string prefab = prefab_of(*at.owner); !prefab.empty()) out["prefab"] = safe_string(prefab);
 			if (at.owner->has_transform) out["transform"] = transform_json(at.owner->position, at.owner->rotation, at.owner->scale);
 		} else {
 			glm::vec3 position = base->position;
@@ -550,7 +601,7 @@ namespace {
 		for (auto& row_data : rows) {
 			json::object row;
 			row["ref"] = ref_json(at.world.name, at.path, row_data.id);
-			row["name"] = json::string(row_data.name);
+			row["name"] = safe_string(row_data.name);
 			row["components"] = std::move(row_data.components);
 			row["has_children"] = row_data.has_children;
 			children.push_back(std::move(row));
@@ -771,6 +822,9 @@ namespace {
 
 		// The schema subset has no maxLength or pattern, so the limits are enforced here.
 		constexpr std::size_t max_text = 512;
+		if (!glob.empty()) {
+			if (const std::string why = check_glob(glob); !why.empty()) return cmd::result::failure(cmd::codes::invalid_args, why);
+		}
 		if (glob.size() > max_text || kind.size() > max_text || directory.size() > max_text) {
 			return cmd::result::failure(cmd::codes::invalid_args, "glob, kind and directory are limited to 512 characters");
 		}
@@ -793,6 +847,9 @@ namespace {
 		const std::uint64_t filter = hash_text(glob + '\n' + kind + '\n' + relative.generic_string());
 		std::optional<std::string> after;
 		if (const json::value* text = args.if_contains("cursor")) {
+			if (!cursor_ok(std::string_view(text->as_string()))) {
+				return cmd::result::failure(cmd::codes::invalid_args, "the cursor is not one this command returned");
+			}
 			const auto parts = split(std::string_view(text->as_string()), '.');
 			const auto cursor_filter = parts.size() == 2 ? parse_hex(parts[0]) : std::nullopt;
 			after = parts.size() == 2 ? hex_decode(parts[1]) : std::nullopt;
@@ -825,6 +882,9 @@ namespace {
 				more = true;
 				break;
 			}
+			// The listing may be old by now: a file swapped for a link since the scan is not followed.
+			std::error_code status_ec;
+			if (fs::symlink_status(it->physical, status_ec).type() != fs::file_type::regular || status_ec) continue;
 			std::error_code ec;
 			const std::uintmax_t size = fs::file_size(it->physical, ec);
 			json::object item;
@@ -862,7 +922,7 @@ namespace {
 				cmd::result ignored;
 				json::value ref = ref_json(selection.world, selection.path);
 				if (locate(sources.documents.scene(), ref, at, ignored) && at.target.empty()) {
-					item["name"] = json::string(at.owner->name);
+					item["name"] = safe_string(at.owner->name);
 				}
 			}
 			items.push_back(std::move(item));

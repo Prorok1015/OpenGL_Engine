@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <string>
 #include <system_error>
@@ -547,6 +548,34 @@ BOOST_AUTO_TEST_CASE(ComponentSchema_ARangeWithoutSpanIsNoBound)
 	BOOST_TEST(at(result, "/schema/properties/far_distance/maximum").to_number<double>() == 100000.0);
 }
 
+BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_ARangeOfAnArrayOfVectorsBoundsTheNumbers)
+{
+	desc::schema_registry registry;
+	desc::type_schema schema;
+	schema.name = "points";
+	desc::field_schema points;
+	points.name = "points";
+	points.key = "/points";
+	points.kind = desc::field_kind::array;
+	points.element = desc::field_kind::vec3;
+	points.range = desc::field_range{ 0.0, 5.0, 1.0 };
+	desc::field_schema weights;
+	weights.name = "weights";
+	weights.key = "/weights";
+	weights.kind = desc::field_kind::array;
+	weights.element = desc::field_kind::f32;
+	weights.range = desc::field_range{ 0.0, 1.0, 0.1 };
+	schema.fields = { points, weights };
+
+	const json::value root = desc::to_json_schema(schema, registry);
+
+	boost::system::error_code ec;
+	BOOST_TEST(root.at_pointer("/properties/points/items/items/minimum").to_number<double>() == 0.0);
+	BOOST_TEST(root.at_pointer("/properties/points/items/items/maximum").to_number<double>() == 5.0);
+	BOOST_TEST(root.find_pointer("/properties/points/items/minimum", ec) == nullptr);
+	BOOST_TEST(root.at_pointer("/properties/weights/items/maximum").to_number<double>() == 1.0);
+}
+
 BOOST_AUTO_TEST_CASE(JsonSchemaGenerator_StructuresThatRefereToThemselvesStayBounded)
 {
 	desc::schema_registry registry;
@@ -670,7 +699,46 @@ BOOST_AUTO_TEST_CASE(AssetQuery_DirectoryAndPatternsCannotReachOutsideTheLayers)
 			BOOST_TEST(result.code == cmd::codes::invalid_args);
 		}
 	}
-	BOOST_TEST(call("asset.query", std::string(R"({"directory":")") + std::string(513, 'a') + ""}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("asset.query", std::format(R"({{"directory":"{}"}})", std::string(513, 'a')).c_str()).code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Globs_AreBoundedAndCursorsMustBePlainText)
+{
+	const std::string many_stars = "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b";
+	BOOST_TEST(call("asset.query", R"({"glob":")" + many_stars + "\"}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":")" + many_stars + "\"}}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("asset.query", R"({"glob":")" + std::string(129, 'a') + "\"}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":")" + std::string(129, 'a') + "\"}}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.query", R"({"filter":{"name_glob":"a\u0000"}})").code == cmd::codes::invalid_args);
+
+	// A run of stars is one star: the same answer, and it does not count against the limit.
+	const std::string run(40, '*');
+	BOOST_TEST((names_of_tags(call("asset.query", R"({"glob":")" + run + "ship" + run + "\"}")) == std::vector<std::string>{ "res://models/ship.glb" }));
+	BOOST_TEST((names_of(call("scene.query", R"({"filter":{"name_glob":"C)" + run + R"(2"}})")) == std::vector<std::string>{ "Crate2" }));
+
+	for (const char* cursor_json : { R"({"cursor":"1.2.3.\u0001"})", R"({"cursor":"a\\b"})" }) {
+		BOOST_TEST_CONTEXT(cursor_json) {
+			BOOST_TEST(call("scene.query", cursor_json).code == cmd::codes::invalid_args);
+			BOOST_TEST(call("asset.query", cursor_json).code == cmd::codes::invalid_args);
+		}
+	}
+	const std::string long_cursor = std::string(600, '1');
+	BOOST_TEST(call("scene.query", R"({"cursor":")" + long_cursor + "\"}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("asset.query", R"({"cursor":")" + long_cursor + "\"}").code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(Replies_NeverCarryBytesThatAreNotUtf8)
+{
+	scene.world_descs[0].get_root().children[0].name = "Su\xff" "n";
+
+	const auto query = call("scene.query");
+	BOOST_REQUIRE_MESSAGE(query.ok, query.error);
+	BOOST_TEST(at(query, "/items/0/name").as_string() == "Su?n");
+	const auto node = call("node.get", R"({"ref":)" + ref({ "00000000000000a1" }) + "}");
+	BOOST_REQUIRE_MESSAGE(node.ok, node.error);
+	BOOST_TEST(at(node, "/name").as_string() == "Su?n");
+	// What the reply holds must survive a round trip through the JSON text.
+	BOOST_TEST(json::parse(json::serialize(query.value)).is_object());
 }
 
 BOOST_AUTO_TEST_CASE(AssetQuery_ADirectoryMayCarryTheResPrefix)
@@ -699,8 +767,15 @@ BOOST_AUTO_TEST_CASE(AssetQuery_SkipsLinksAndNamesThatAreNotUtf8)
 	BOOST_TEST((tags == std::vector<std::string>{
 		"res://a.txt", "res://models/ship.glb", "res://prefabs/crate.prefab.desc", "res://z.txt" }));
 	BOOST_TEST(at(result, "/skipped_names").as_uint64() == (bad_made ? 1u : 0u));
-	(void)file_link;
-	(void)dir_link;
+#ifndef _WIN32
+	// Not vacuous on the Linux runner: the links and the odd name must have been made for the checks above to mean anything.
+	BOOST_REQUIRE(file_link);
+	BOOST_REQUIRE(dir_link);
+	BOOST_REQUIRE(bad_made);
+#endif
+	// A directory that is a link is not entered: nothing comes back, nothing outside the layer is read.
+	const auto linked = call("asset.query", R"({"directory":"models_link"})");
+	BOOST_TEST((!linked.ok || names_of_tags(linked).empty()));
 	BOOST_TEST_MESSAGE("links made: file " << file_link << ", directory " << dir_link << ", non-utf8 name " << bad_made);
 }
 

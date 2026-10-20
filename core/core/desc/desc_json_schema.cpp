@@ -113,8 +113,12 @@ namespace {
 		if (field.range && field.range->max > field.range->min) {
 			// A vector, colour or array keeps the bounds on its elements.
 			boost::json::object* bounded = &out;
-			if (components_of(field.kind) != 0 || field.kind == desc::field_kind::array) {
+			if (components_of(field.kind) != 0) {
 				bounded = &out["items"].as_object();
+			} else if (field.kind == desc::field_kind::array) {
+				bounded = &out["items"].as_object();
+				// An array of vectors keeps the bounds on the numbers inside each vector.
+				if (components_of(field.element) != 0) bounded = &(*bounded)["items"].as_object();
 			}
 			(*bounded)["minimum"] = field.range->min;
 			(*bounded)["maximum"] = field.range->max;
