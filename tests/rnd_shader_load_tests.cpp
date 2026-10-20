@@ -18,6 +18,8 @@ namespace {
 
 using namespace rnd;
 
+constexpr const char* good_fragment = "#version 450 core\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
+
 struct shader_load_fixture
 {
 	res::tag put(std::string_view name, std::string_view content) { return env.put(name, content); }
@@ -85,8 +87,6 @@ struct shader_load_fixture
 
 	test_util::ram_res_env env;
 };
-
-constexpr const char* good_fragment = "#version 450 core\nout vec4 c;\nvoid main() { c = vec4(1.0); }\n";
 
 }
 
