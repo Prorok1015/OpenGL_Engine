@@ -546,6 +546,26 @@ BOOST_AUTO_TEST_CASE(EvictedButWatched_KeepsItsEdgesUntilUnwatched)
 	watched.clear(); // the fixture would unwatch it a second time
 }
 
+// The block is cached under the alias target, the watcher may have been put on the original tag: the edges stay.
+BOOST_AUTO_TEST_CASE(EvictedAndWatchedThroughAnAlias_KeepsItsEdges)
+{
+	const auto p = node("p.node", "p1");
+	const auto original = node("orig.node", "orig");
+	const auto generated = node("gen.node", "gen", { p });
+	const auto other = node("q.node", "q");
+	rs->register_alias(original, generated);
+	auto held = rs->require<node_resource>(original);
+	pump();
+	BOOST_REQUIRE(held.is_ready());
+	BOOST_REQUIRE(rs->dependency_edge_count() == 1u);
+	watch({ original });
+
+	rs->signal_changed(p);
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 1u);
+}
+
 // The tags still in use keep their edges while the evicted ones lose theirs.
 BOOST_AUTO_TEST_CASE(LiveDependent_KeepsItsEdgesWhenEvictedOnesAreDropped)
 {

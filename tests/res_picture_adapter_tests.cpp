@@ -52,6 +52,7 @@ BOOST_FIXTURE_TEST_CASE(UndecodablePicture_EndsInAnErrorNotInAReadyNull, test_ut
 
 	BOOST_TEST(handle.has_error());
 	BOOST_TEST(!handle.is_ready());
+	BOOST_TEST(handle.get_control_block()->error_msg.find("Adapter error") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

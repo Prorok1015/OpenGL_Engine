@@ -37,9 +37,10 @@ std::shared_ptr<res::picture_resource> res::raw_image_adapter::operator()(res::t
 		static_cast<std::size_t>(header.size.x) * static_cast<std::size_t>(header.channels) > available / static_cast<std::size_t>(header.size.y)) {
 		throw std::runtime_error("raw image '" + std::string{ tag.view() } + "' has a header that does not match its data");
 	}
-	auto raw_data = new unsigned char[header.size.x * header.size.y * header.channels];
+	const std::size_t byte_count = static_cast<std::size_t>(header.size.x) * static_cast<std::size_t>(header.size.y) * static_cast<std::size_t>(header.channels);
+	auto raw_data = new unsigned char[byte_count];
 	auto* data_ptr = reinterpret_cast<const unsigned char*>(data.data() + HEADER_SIZE);
-	auto* data_end = data_ptr + header.size.x * header.size.y * header.channels;
+	auto* data_end = data_ptr + byte_count;
 	std::copy(data_ptr, data_end, raw_data);
 
 	return std::make_shared<res::picture_resource>(tag, header.size, header.channels, raw_data);

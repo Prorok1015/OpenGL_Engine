@@ -547,8 +547,17 @@ void res::resource_system::prune_released_edges() {
     if (m_cache.any_of_tag(tag, [](const cache_entry &) { return true; })) {
       return true;
     }
-    const auto watched = m_watchers.find(tag);
-    return watched == m_watchers.end() || watched->second.empty();
+    const auto has_watchers = [this](const res::tag &key) {
+      const auto it = m_watchers.find(key);
+      return it != m_watchers.end() && !it->second.empty();
+    };
+    if (has_watchers(tag)) {
+      return false;
+    }
+    // Edges sit under the tag the block is cached by (the alias target); the watcher may have used the original tag.
+    // m_alias_mutex is never held while m_cache_mutex is taken, so this order cannot deadlock.
+    std::shared_lock alias_lock(m_alias_mutex);
+    return std::ranges::none_of(m_aliases, [&](const auto &pair) { return pair.second == tag && has_watchers(pair.first); });
   };
   std::unordered_set<res::tag> released;
   for (const auto &[tag, targets] : m_depends_on) {
