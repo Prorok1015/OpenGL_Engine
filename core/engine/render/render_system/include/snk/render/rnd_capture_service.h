@@ -2,7 +2,7 @@
 #include <snk/command/cmd_registration.h>
 #include <snk/common/snk_api.h>
 #include <snk/driver/rnd_driver_interface.h>
-#include <snk/driver/rnd_texture_interface.h>
+#include <snk/driver/rnd_handle.h>
 
 #include <glm/glm.hpp>
 
@@ -58,8 +58,10 @@ namespace rnd
 	class SNK_API capture_service
 	{
 	public:
-		// The texture a view renders to right now; null while it has none (nothing loaded, view hidden).
-		using target_provider = std::function<driver::texture_interface*()>;
+		// The texture a view renders to right now; null while it has none (nothing loaded, view hidden). It is asked
+		// on every capture and the handle is checked against the driver then, so a target that was destroyed or made
+		// again (a resize) since is a missing target, not a read of whatever took its place.
+		using target_provider = std::function<driver::texture_handle()>;
 
 		// `drv` must outlive the service.
 		explicit capture_service(driver::driver_interface& drv);

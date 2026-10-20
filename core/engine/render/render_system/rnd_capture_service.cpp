@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <snk/common/logger/engine_log.h>
+#include <snk/driver/rnd_texture_interface.h>
 #include <snk/image/image.h>
 
 namespace {
@@ -137,13 +138,14 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 		return result;
 	}
 
-	driver::texture_interface* texture = found->provider();
+	const driver::texture_handle texture = found->provider();
 	result.status = capture_status::failed;
-	if (!texture) {
+	if (!texture || !m_driver.is_alive(texture)) {
 		result.error = std::format("viewport '{}' has no render target yet", found->id);
 		return result;
 	}
-	const glm::ivec2 source{ static_cast<int>(texture->width()), static_cast<int>(texture->height()) };
+	const driver::texture_header& header = m_driver.info(texture);
+	const glm::ivec2 source{ static_cast<int>(header.data.extent.width), static_cast<int>(header.data.extent.height) };
 	// Before anything is allocated: the readback of the target is the biggest buffer a capture makes.
 	if (pixels_of(source) > max_pixels) {
 		result.error = std::format("the render target of viewport '{}' ({}x{}) is too big to capture", found->id, source.x, source.y);
@@ -156,7 +158,7 @@ rnd::capture_result rnd::capture_service::capture(std::string_view id, glm::ivec
 			size.x, size.y, source.x, source.y, limits.max_side, limits.max_pixels);
 		return result;
 	}
-	std::vector<std::byte> rows = m_driver.read_texture(texture->handle(), { 0, 0, source.x, source.y });
+	std::vector<std::byte> rows = m_driver.read_texture(texture, { 0, 0, source.x, source.y });
 	if (rows.size() != static_cast<std::size_t>(source.x) * static_cast<std::size_t>(source.y) * pixel_bytes || rows.empty()) {
 		result.error = std::format("the render target of viewport '{}' ({}x{}) cannot be read back", found->id, source.x, source.y);
 		return result;

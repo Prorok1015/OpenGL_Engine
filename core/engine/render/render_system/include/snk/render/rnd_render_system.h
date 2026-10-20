@@ -4,6 +4,7 @@
 
 #include <snk/render/rnd_render_pass_interface.h>
 #include <snk/render/rnd_frame_context.h>
+#include <snk/render/texture/rnd_render_targets.h>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -43,6 +44,10 @@ namespace rnd
 		const rnd::texture_manager& get_texture_manager() const { return *m_textures; }
 		rnd::texture_manager& get_texture_manager() { return *m_textures; }
 
+		// The slots of the render targets the passes make (stable per tag, the generation grows on re-creation).
+		const rnd::render_targets::registry& get_render_targets() const { return *m_targets; }
+		rnd::render_targets::registry& get_render_targets() { return *m_targets; }
+
 		// Runs the passes over the packets of `context`. Each pass gets a render_context for the frame, which
 		// hides the managers behind it.
 		void render_frame(frame_context& context) const;
@@ -75,6 +80,7 @@ namespace rnd
 		std::shared_ptr<material_compiler_interface> m_material_compiler;
 		std::unique_ptr<rnd::driver::driver_interface> drv = nullptr;
 		std::unique_ptr<rnd::texture_manager> m_textures;
+		std::unique_ptr<rnd::render_targets::registry> m_targets;
 		std::unique_ptr<rnd::ShaderManager> m_shaders;
 		std::unique_ptr<rnd::geom_manager> m_geometry;
 		std::unique_ptr<rnd::per_draw_data> m_draw_data;

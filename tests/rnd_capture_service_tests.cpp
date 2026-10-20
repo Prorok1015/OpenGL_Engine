@@ -66,7 +66,7 @@ struct capture_fixture
 	null::driver drv;
 	texture_owner texture = make_texture(drv, target_header());
 	rnd::capture_service service{ drv };
-	cmd::registration scene = service.add_target("scene", [this] { return texture.get(); });
+	cmd::registration scene = service.add_target("scene", [this] { return texture.handle(); });
 };
 
 }
@@ -76,8 +76,8 @@ BOOST_FIXTURE_TEST_SUITE(RndCaptureServiceTests, capture_fixture)
 BOOST_AUTO_TEST_CASE(AddTarget_RefusesAnEmptyOrTakenId)
 {
 	BOOST_CHECK(scene.active());
-	auto empty = service.add_target("", [this] { return texture.get(); });
-	auto taken = service.add_target("scene", [this] { return texture.get(); });
+	auto empty = service.add_target("", [this] { return texture.handle(); });
+	auto taken = service.add_target("scene", [this] { return texture.handle(); });
 	auto no_provider = service.add_target("other", nullptr);
 	BOOST_CHECK(!empty.active());
 	BOOST_CHECK(!taken.active());
@@ -87,7 +87,7 @@ BOOST_AUTO_TEST_CASE(AddTarget_RefusesAnEmptyOrTakenId)
 
 BOOST_AUTO_TEST_CASE(AddTarget_RegistrationRemovesTheView)
 {
-	auto game = service.add_target("game", [this] { return texture.get(); });
+	auto game = service.add_target("game", [this] { return texture.handle(); });
 	BOOST_CHECK(service.has_target("game"));
 	BOOST_CHECK(service.target_ids() == (std::vector<std::string>{ "scene", "game" }));
 	game.reset();
@@ -101,7 +101,7 @@ BOOST_AUTO_TEST_CASE(Registration_OutlivingTheServiceIsHarmless)
 	{
 		null::driver other_drv;
 		rnd::capture_service other(other_drv);
-		kept = other.add_target("x", []() -> texture_interface* { return nullptr; });
+		kept = other.add_target("x", [] { return texture_handle{}; });
 		BOOST_CHECK(kept.active());
 	}
 	BOOST_CHECK_NO_THROW(kept.reset());
@@ -126,9 +126,31 @@ BOOST_AUTO_TEST_CASE(Capture_PutsTheTopRowFirst)
 
 BOOST_AUTO_TEST_CASE(Capture_EmptyIdTakesTheFirstView)
 {
-	auto game = service.add_target("game", []() -> texture_interface* { return nullptr; });
+	auto game = service.add_target("game", [] { return texture_handle{}; });
 	const auto result = service.capture("");
 	BOOST_CHECK(result.ok());
+}
+
+BOOST_AUTO_TEST_CASE(Capture_DanglingHandleIsAMissingTarget)
+{
+	// A provider that kept the handle of a target which was destroyed. A new texture takes the freed slot with a
+	// bumped generation: the old handle is rejected, the new one is read.
+	const texture_handle old_handle = texture.handle();
+	texture.reset();
+	texture = make_texture(drv, target_header(8, 8));
+	const texture_handle new_handle = texture.handle();
+	BOOST_REQUIRE(new_handle);
+	BOOST_CHECK(old_handle != new_handle);
+	BOOST_CHECK(!drv.is_alive(old_handle));
+	BOOST_CHECK(drv.is_alive(new_handle));
+	auto stale = service.add_target("stale", [old_handle] { return old_handle; });
+
+	const auto result = service.capture("stale");
+	BOOST_CHECK(result.status == rnd::capture_status::failed);
+	BOOST_CHECK(!result.error.empty());
+	const auto current = service.capture("scene");
+	BOOST_REQUIRE(current.ok());
+	BOOST_CHECK_EQUAL(current.image.size.x, 8);
 }
 
 BOOST_AUTO_TEST_CASE(Capture_Scales)
@@ -156,7 +178,7 @@ BOOST_AUTO_TEST_CASE(Capture_Scales)
 BOOST_AUTO_TEST_CASE(Capture_FailsForAnUnknownViewOrOneWithoutATexture)
 {
 	BOOST_CHECK(!service.capture("nope").ok());
-	cmd::registration hidden = service.add_target("hidden", []() -> texture_interface* { return nullptr; });
+	cmd::registration hidden = service.add_target("hidden", [] { return texture_handle{}; });
 	const auto result = service.capture("hidden");
 	BOOST_CHECK(!result.ok());
 	BOOST_CHECK(result.image.rgba.empty());
@@ -169,7 +191,7 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesASizeThatWouldNeedTooMuchMemory)
 {
 	// 2 x 8 target: 8192 wide would derive 32768 rows.
 	auto tall = make_texture(drv, target_header(2, 8));
-	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.handle(); });
 
 	const auto derived = service.capture("tall", { rnd::capture_service::max_side, 0 });
 	BOOST_CHECK(derived.status == rnd::capture_status::invalid_size);
@@ -191,7 +213,7 @@ BOOST_AUTO_TEST_CASE(Capture_LimitsOfTheCallerBoundTheDerivedSideBeforeReading)
 {
 	// 2 x 8 target: a width of 64 derives 256 rows; fine under the defaults, over a ceiling of 100.
 	auto tall = make_texture(drv, target_header(2, 8));
-	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.handle(); });
 	BOOST_CHECK(service.capture("tall", { 64, 0 }).ok());
 
 	rnd::capture_limits side;
@@ -230,7 +252,7 @@ BOOST_AUTO_TEST_CASE(Capture_FailsBeforeReadingATargetOverThePixelBudget)
 	// The null driver keeps no pixels of a texture, so a huge one costs nothing here; the service must refuse it
 	// before it asks the driver for a buffer of that size.
 	auto huge = make_texture(drv, target_header(8192, 8192));
-	cmd::registration reg = service.add_target("huge", [&huge] { return huge.get(); });
+	cmd::registration reg = service.add_target("huge", [&huge] { return huge.handle(); });
 
 	const auto result = service.capture("huge");
 
@@ -245,7 +267,7 @@ BOOST_AUTO_TEST_CASE(Capture_FailsForATextureTheDriverCannotRead)
 	header.data.format = texture_header::TYPE::D24_S8;
 	header.usage = texture_usage::depth_target;
 	auto depth = make_texture(drv, header);
-	cmd::registration reg = service.add_target("depth", [&depth] { return depth.get(); });
+	cmd::registration reg = service.add_target("depth", [&depth] { return depth.handle(); });
 
 	BOOST_CHECK(!service.capture("depth").ok());
 }
@@ -314,7 +336,7 @@ BOOST_AUTO_TEST_CASE(Capture_ReturnsThePngAsBase64)
 
 BOOST_AUTO_TEST_CASE(Capture_NamesTheViewportAndScales)
 {
-	auto game = service.add_target("game", [this] { return texture.get(); });
+	auto game = service.add_target("game", [this] { return texture.handle(); });
 
 	const auto result = capture(R"({"viewport":"game","width":8,"height":6})");
 
@@ -344,7 +366,7 @@ BOOST_AUTO_TEST_CASE(Capture_RefusesBadArguments)
 BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
 {
 	auto tall = make_texture(drv, target_header(2, 8));
-	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.handle(); });
 
 	const auto derived = capture(R"({"viewport":"tall","width":8192})");
 	BOOST_CHECK(!derived.ok);
@@ -358,7 +380,7 @@ BOOST_AUTO_TEST_CASE(Capture_SizeOverTheLimitsIsInvalidArgs)
 BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 {
 	auto tall = make_texture(drv, target_header(2, 8));
-	cmd::registration reg = service.add_target("tall", [&tall] { return tall.get(); });
+	cmd::registration reg = service.add_target("tall", [&tall] { return tall.handle(); });
 
 	BOOST_CHECK(capture(R"({"viewport":"tall","width":64})").ok);
 	const auto side = capture(R"({"viewport":"tall","width":64,"max_side":100})");
@@ -377,7 +399,7 @@ BOOST_AUTO_TEST_CASE(Capture_MaxSideAndMaxPixelsBoundTheDerivedSide)
 BOOST_AUTO_TEST_CASE(Capture_TargetOverThePixelBudgetFails)
 {
 	auto huge = make_texture(drv, target_header(8192, 8192));
-	cmd::registration reg = service.add_target("huge", [&huge] { return huge.get(); });
+	cmd::registration reg = service.add_target("huge", [&huge] { return huge.handle(); });
 
 	const auto result = capture(R"({"viewport":"huge"})");
 
@@ -436,7 +458,7 @@ BOOST_AUTO_TEST_CASE(CaptureOfARenderTarget_PassesTheValidationDecorator)
 	auto& commands = storage.require<cmd::command_registry>();
 	auto& service = storage.require<rnd::capture_service>();
 	auto texture = rnd::driver::make_texture(*storage.require<rnd::render_system>().get_driver(), target_header());
-	cmd::registration view = service.add_target("test", [&texture] { return texture.get(); });
+	cmd::registration view = service.add_target("test", [&texture] { return texture.handle(); });
 
 	const auto result = commands.invoke("viewport.capture", json::parse(R"({"viewport":"test"})"), cmd::origin::test());
 
