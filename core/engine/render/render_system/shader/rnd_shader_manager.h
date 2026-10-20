@@ -71,6 +71,7 @@ namespace rnd
 		mutable std::unordered_map<res::tag, std::vector<std::uint32_t>> m_users;	// file -> the variants made of it
 		// A pipeline holds the address of its program for as long as the driver lives, so a replaced program is
 		// kept instead of freed: a new one could be given its address.
+		// TODO(#349): free retired programs once pipeline_cache can drop their pipelines.
 		mutable std::vector<std::unique_ptr<rnd::driver::shader_interface>> m_retired;
 	};
 }

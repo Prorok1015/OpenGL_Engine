@@ -335,4 +335,25 @@ BOOST_AUTO_TEST_CASE(AnIncludeThatAppearsLaterIsPickedUpByTheProgramThatFailedWi
 	BOOST_TEST(shaders.program(variant) != nullptr);
 }
 
+BOOST_AUTO_TEST_CASE(AStageThatAppearsLaterIsPickedUpByTheProgramThatFailedWithoutIt)
+{
+	driver::null::driver drv;
+	drv.record_shader_sources(true);
+	ShaderManager shaders(&drv, *env.rs);
+
+	const auto fragment = put("stage_late.frag", good_fragment);
+	const res::tag vertex{ "memory://t/stage_late.vert" };
+	const auto variant = shaders.variants().intern(program_of(vertex, fragment));
+	BOOST_TEST(shaders.program(variant) != nullptr);	// compiled from the one stage that could be read
+	BOOST_REQUIRE(drv.shader_sources().size() == 1u);
+	BOOST_TEST(drv.shader_sources()[0].size() == 1u);
+
+	put("stage_late.vert", "#version 450 core\nvoid main() {}\n");
+	env.rs->signal_changed(vertex);
+	env.pump();
+	BOOST_TEST(shaders.program(variant) != nullptr);
+	BOOST_REQUIRE(drv.shader_sources().size() == 2u);
+	BOOST_TEST(drv.shader_sources()[1].size() == 2u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

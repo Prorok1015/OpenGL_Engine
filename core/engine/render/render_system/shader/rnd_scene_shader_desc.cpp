@@ -84,6 +84,7 @@ rnd::shader_config::load_result rnd::shader_config::load(res::resource_system& r
 rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cdata, res::resource_system& res_sys, const driver::binding_table& bindings)
 {
     std::vector<res::tag> tags;
+    std::vector<res::tag> unreadable;	// stages that could not be read: still files of the source, one may appear later
     std::vector<driver::shader_header> headers;
 	headers.reserve(3);
     tags.reserve(3);
@@ -108,11 +109,14 @@ rnd::shader_config::load_result rnd::shader_config::load(const constant_data& cd
                 .type = culc_shader_type(tag.extension())
                 });
 			tags.push_back(tag);
+		} else {
+			unreadable.push_back(tag);
 		}
 	}
 
     load_result result;
     result.files = tags;
+    result.files.insert(result.files.end(), unreadable.begin(), unreadable.end());
     result.error = preprocess_shader_code(tags, headers, cdata, res_sys, bindings, result.files);
     if (result.error.empty() && headers.empty()) {
         result.error = "no stage of the program could be read\n";

@@ -270,6 +270,7 @@
     "rnd_frame_context.h",
     "rnd_gpu_blocks.h",
     "rnd_light_data.hpp",
+    "rnd_material_desc.h",
     "rnd_material_groups.h",
     "rnd_render_context.h",
     "rnd_render_packet.hpp",
