@@ -153,7 +153,7 @@ BOOST_AUTO_TEST_CASE(AssembleAndApply_SkyboxWithAnInlineMaterialKeepsItUnderAnUn
 	auto e = reg.create();
 	assembler->assemble_and_apply(reg, e, "skybox_desc", parent, json::parse(R"({"exposure":2})").as_object(), "sky");
 	for (const bool hot_reload : { false, true }) {
-		BOOST_TEST_CONTEXT(hot_reload ? "hot reload" : "spawn") {
+		BOOST_TEST_CONTEXT((hot_reload ? "hot reload" : "spawn")) {
 			if (hot_reload) {
 				assembler->assemble_and_apply(reg, e, "skybox_desc", parent, json::parse(R"({"exposure":2})").as_object(), "sky", true);
 			}
