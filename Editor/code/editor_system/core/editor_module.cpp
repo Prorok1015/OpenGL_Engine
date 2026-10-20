@@ -1,4 +1,4 @@
-#include "editor_module.h"
+#include <snk/editor/editor_module.h>
 #include "edt_editor_init.h"
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_picture.h>

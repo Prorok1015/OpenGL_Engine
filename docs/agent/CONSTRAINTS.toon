@@ -209,3 +209,7 @@ how_to_apply:
 [CONSTRAINT_20]
 rule: Warnings are errors (SNK_WARNINGS_AS_ERRORS=ON, -Werror / /WX): new code must be warning-free on MSVC, GCC and Clang
 why: CI builds every preset with the option ON; third-party code is exempt, project code is not (-DSNK_WARNINGS_AS_ERRORS=OFF is a local escape hatch only)
+
+[CONSTRAINT_21]
+rule: A component exposes only include/ PUBLIC; its source root and subdirs are PRIVATE (snk_component_headers + a PRIVATE subdir list); tests get white-box access to internal headers only through the explicit PRIVATE include list on unit_tests
+why: consumers (Editor/main.cpp, other targets) see only <snk/...> public headers; a loose internal header in a consumer fails the configure/build instead of silently widening the API (EPIC-49 US-49-1, editor_system done)
