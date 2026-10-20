@@ -503,4 +503,117 @@ BOOST_AUTO_TEST_CASE(ReleasedResources_DoNotMakeTheGraphGrowWithoutBound)
 	BOOST_TEST(rs->dependency_edge_count() < static_cast<std::size_t>(count / 2));
 }
 
+// A signal evicts c and leaves its edge behind; c is not loaded again. The next sweep drops it (#326).
+BOOST_AUTO_TEST_CASE(EvictedAndNeverReloaded_LosesItsEdgesAtTheNextSweep)
+{
+	const auto p = node("p.node", "p1");
+	const auto c = node("c.node", "c", { p });
+	const auto other = node("q.node", "q");
+	auto held = rs->require<node_resource>(c);
+	pump();
+	BOOST_REQUIRE(held.is_ready());
+	BOOST_REQUIRE(rs->dependency_edge_count() == 1u);
+
+	rs->signal_changed(p); // c is evicted, its handle is stale
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 1u); // the sweep of that signal ran before the eviction
+
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 0u);
+}
+
+// A watcher is told about the next change of an evicted tag whether or not the tag was loaded again, so the edges
+// stay while the tag is watched and go once nobody watches it.
+BOOST_AUTO_TEST_CASE(EvictedButWatched_KeepsItsEdgesUntilUnwatched)
+{
+	const auto p = node("p.node", "p1");
+	const auto c = node("c.node", "c", { p });
+	const auto other = node("q.node", "q");
+	auto held = rs->require<node_resource>(c);
+	pump();
+	watch({ c });
+
+	rs->signal_changed(p);
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 1u);
+
+	rs->unwatch(c, owners.front().get());
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 0u);
+	watched.clear(); // the fixture would unwatch it a second time
+}
+
+// The block is cached under the alias target, the watcher may have been put on the original tag: the edges stay.
+BOOST_AUTO_TEST_CASE(EvictedAndWatchedThroughAnAlias_KeepsItsEdges)
+{
+	const auto p = node("p.node", "p1");
+	const auto original = node("orig.node", "orig");
+	const auto generated = node("gen.node", "gen", { p });
+	const auto other = node("q.node", "q");
+	rs->register_alias(original, generated);
+	auto held = rs->require<node_resource>(original);
+	pump();
+	BOOST_REQUIRE(held.is_ready());
+	BOOST_REQUIRE(rs->dependency_edge_count() == 1u);
+	watch({ original });
+
+	rs->signal_changed(p);
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 1u);
+}
+
+// The tags still in use keep their edges while the evicted ones lose theirs.
+BOOST_AUTO_TEST_CASE(LiveDependent_KeepsItsEdgesWhenEvictedOnesAreDropped)
+{
+	const auto p = node("p.node", "p1");
+	const auto p2 = node("p2.node", "p2");
+	const auto gone = node("gone.node", "gone", { p });
+	const auto live = node("live.node", "live", { p2 });
+	const auto other = node("q.node", "q");
+	auto held_gone = rs->require<node_resource>(gone);
+	auto held_live = rs->require<node_resource>(live);
+	pump();
+	BOOST_REQUIRE(held_live.is_ready());
+	BOOST_REQUIRE(rs->dependency_edge_count() == 2u);
+
+	rs->signal_changed(p);
+	rs->signal_changed(other);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 1u);
+
+	watch({ live });
+	rs->signal_changed(p2);
+	pump();
+	BOOST_TEST(times_delivered(live) == 1);
+}
+
+// Above the floor a burst of signals sweeps once per k_signal_sweep_every, not once per signal.
+BOOST_AUTO_TEST_CASE(SignalSweeps_AreThrottledOnALargeGraph)
+{
+	const auto p = node("p.node", "p1");
+	const auto other = node("q.node", "q");
+	std::vector<res::res_handle<node_resource>> held;
+	for (int i = 0; i < 300; ++i) {
+		held.push_back(rs->require<node_resource>(node("n" + std::to_string(i) + ".node", "n", { p })));
+		pump();
+		BOOST_REQUIRE(held.back().is_ready());
+	}
+	BOOST_REQUIRE(rs->dependency_edge_count() == 300u);
+
+	const auto before = rs->edge_sweep_count();
+	constexpr int signals = 32;
+	for (int i = 0; i < signals; ++i) {
+		rs->signal_changed(other);
+	}
+	pump();
+	const auto sweeps = rs->edge_sweep_count() - before;
+	BOOST_TEST(sweeps >= 1u);
+	BOOST_TEST(sweeps <= 2u);
+	BOOST_TEST(rs->dependency_edge_count() == 300u); // all held: nothing to drop
+}
+
 BOOST_AUTO_TEST_SUITE_END()

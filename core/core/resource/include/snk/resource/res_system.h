@@ -129,6 +129,12 @@ namespace res
 			return count;
 		}
 
+		// Read-only: how many sweeps of the hot reload graph have run. For tests and diagnostics.
+		std::size_t edge_sweep_count() const {
+			std::shared_lock lock(m_cache_mutex);
+			return m_edge_sweeps;
+		}
+
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
 			ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
@@ -275,10 +281,12 @@ namespace res
 		// for the tag) records nothing: it must not overwrite the edges of the load that replaced it.
 		void record_dependencies(const res::tag& dependent, const std::shared_ptr<resource_handle>& block,
 			const std::vector<res_dep>& declared);
-		// Drops the outgoing edges of released tags (their cache entries all expired), except the ones a tag still in use
-		// is built through: a change at the bottom of such a chain must pass through them to reach it. Tags evicted by a
-		// signal (no entry) keep their edges until they load again. m_cache_mutex held (unique).
+		// Drops the outgoing edges of released tags (all cache entries expired, or none left after a signal evicted the
+		// tag and nothing watches it), except the ones a tag still in use is built through: a change at the bottom of
+		// such a chain must pass through them to reach it. m_cache_mutex held (unique).
 		void prune_released_edges();
+		// prune_released_edges() plus the bookkeeping that throttles the next sweeps. m_cache_mutex held (unique).
+		void sweep_edges();
 		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
@@ -404,10 +412,14 @@ namespace res
 		// desc types of a tag onto one block).
 		std::unordered_map<res::tag, std::vector<res::tag>> m_dependents;
 		std::unordered_map<res::tag, std::vector<res::tag>> m_depends_on;
-		// Released tags are swept out of the graph when a signal arrives and whenever m_depends_on reaches this size
-		// (then doubled over what is left), so the graph stays proportional to what is loaded.
+		// Released tags are swept out of the graph whenever m_depends_on reaches m_edge_sweep_at (then doubled over what
+		// is left) and on a signal: every signal while the graph is below the floor, every k_signal_sweep_every-th
+		// above it. The graph stays proportional to what is loaded. All guarded by m_cache_mutex.
 		static constexpr std::size_t k_edge_sweep_floor = 256;
+		static constexpr std::size_t k_signal_sweep_every = 16;
 		std::size_t m_edge_sweep_at = k_edge_sweep_floor;
+		std::size_t m_signals_since_sweep = 0;
+		std::size_t m_edge_sweeps = 0;
 		// Which pending block waits for which, to find cycles (see wait_graph in res_system.cpp).
 		std::unique_ptr<wait_graph> m_graph;
 
