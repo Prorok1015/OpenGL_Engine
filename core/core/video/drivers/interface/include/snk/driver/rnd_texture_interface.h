@@ -129,8 +129,8 @@ namespace rnd::driver
 	};
 
 	// A texture is internal to its backend: the driver owns it and hands out a texture_handle (driver_interface::
-	// create_texture / destroy). Only the backends, and for now the code that still needs the object behind a
-	// handle (driver_interface::resolve), touch this class.
+	// create_texture / destroy). Only the backends touch this class (texture_object_access is how a decorator and the
+	// driver tests reach it); everyone else works with the handle.
 	class texture_interface
 	{
 	public:

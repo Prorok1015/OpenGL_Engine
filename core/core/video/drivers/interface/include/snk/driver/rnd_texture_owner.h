@@ -38,11 +38,6 @@ namespace rnd::driver
 		texture_handle handle() const noexcept { return m_handle; }
 		explicit operator bool() const noexcept { return static_cast<bool>(m_handle); }
 
-		// The object behind the handle (driver_interface::resolve, a temporary bridge); null once it is gone.
-		texture_interface* get() const { return (m_driver && m_handle) ? m_driver->resolve(m_handle) : nullptr; }
-		texture_interface* operator->() const { return get(); }
-		texture_interface& operator*() const { return *get(); }
-
 		// Destroys the texture now.
 		void reset()
 		{

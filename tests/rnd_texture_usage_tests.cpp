@@ -6,6 +6,7 @@
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/driver/rnd_texture_owner.h>
 #include <boost/json.hpp>
+#include <thread>
 
 // Usage flags of a texture: the bit mask itself, its JSON forms (a string as the shipped .desc files
 // have it, or an array) and the render_targets::ensure helper the passes share.
@@ -60,9 +61,10 @@ BOOST_AUTO_TEST_CASE(TextureQueriesEveryFlagIndependently)
 	rnd::driver::null::driver null_driver;
 	auto texture = make_texture(null_driver, header);
 	BOOST_REQUIRE(texture);
-	BOOST_TEST(texture->has_usage(texture_usage::sampled));
-	BOOST_TEST(texture->has_usage(texture_usage::color_target));
-	BOOST_TEST(!texture->has_usage(texture_usage::depth_target));
+	const texture_usage usage = null_driver.info(texture.handle()).usage;
+	BOOST_TEST(has_usage(usage, texture_usage::sampled));
+	BOOST_TEST(has_usage(usage, texture_usage::color_target));
+	BOOST_TEST(!has_usage(usage, texture_usage::depth_target));
 }
 
 BOOST_AUTO_TEST_CASE(ASingleUsageStringIsStillRead)
@@ -105,30 +107,33 @@ BOOST_AUTO_TEST_CASE(SeveralUsagesAreWrittenAsAnArrayAndRoundTrip)
 
 BOOST_AUTO_TEST_CASE(EnsureKeepsATargetOfTheSameSize)
 {
-	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	auto& system = storage.require<rnd::render_system>();
+	auto& textures = system.get_texture_manager();
 	const auto tag = res::tag(res::tag::memory, "__rt_keep");
 	const auto usage = texture_usage::color_target | texture_usage::sampled;
-	auto* first = rnd::render_targets::ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, usage);
+	const texture_handle first = rnd::render_targets::ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, usage);
 	BOOST_REQUIRE(first);
-	BOOST_TEST(first->width() == 64u);
-	BOOST_TEST(first->height() == 32u);
-	BOOST_TEST((first->get_usage() == usage));
+	BOOST_TEST(system.get_driver()->info(first).data.extent.width == 64u);
+	BOOST_TEST(system.get_driver()->info(first).data.extent.height == 32u);
+	BOOST_TEST((system.get_driver()->info(first).usage == usage));
+	BOOST_TEST(textures.info(textures.id_of(tag)).data.extent.width == 64u);
 	const auto generation = textures.generation();
-	BOOST_TEST(rnd::render_targets::ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, usage) == first);
+	BOOST_TEST((rnd::render_targets::ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, usage) == first));
 	BOOST_TEST(textures.generation() == generation);
 }
 
 BOOST_AUTO_TEST_CASE(EnsureRecreatesATargetWhenTheSizeChanges)
 {
-	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	auto& system = storage.require<rnd::render_system>();
+	auto& textures = system.get_texture_manager();
 	const auto tag = res::tag(res::tag::memory, "__rt_resize");
 	rnd::render_targets::ensure(textures, tag, { 64, 32 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
 	const auto generation = textures.generation();
-	auto* resized = rnd::render_targets::ensure(textures, tag, { 128, 96 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
+	const texture_handle resized = rnd::render_targets::ensure(textures, tag, { 128, 96 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
 	BOOST_REQUIRE(resized);
-	BOOST_TEST(resized->width() == 128u);
-	BOOST_TEST(resized->height() == 96u);
-	BOOST_TEST(textures.find(tag) == resized);
+	BOOST_TEST(system.get_driver()->info(resized).data.extent.width == 128u);
+	BOOST_TEST(system.get_driver()->info(resized).data.extent.height == 96u);
+	BOOST_TEST((textures.binding(textures.id_of(tag)).handle == resized));
 	BOOST_TEST(textures.generation() > generation);
 }
 
@@ -264,17 +269,47 @@ BOOST_AUTO_TEST_CASE(ARemovedTextureLeavesItsSlotEmptyAndAnUnknownIdBindsToNothi
 	rnd::render_targets::ensure(textures, tag, { 8, 8 }, texture_header::TYPE::RGBA8, texture_usage::color_target);
 	const rnd::texture_id id = textures.id_of(tag);
 	BOOST_REQUIRE(textures.is_ready(id));
+	BOOST_TEST(textures.info(id).data.extent.width == 8u);
 	const auto generation = textures.binding(id).generation;
 
 	textures.remove(tag);
 	BOOST_TEST(!textures.is_ready(id));
 	BOOST_TEST(!static_cast<bool>(textures.binding(id).handle));
 	BOOST_TEST(textures.binding(id).generation != generation);
-	BOOST_TEST(textures.find(tag) == nullptr);
+	BOOST_TEST(textures.info(id).data.extent.width == 1u);	// an empty slot has no header of its own
 	BOOST_TEST((textures.id_of(tag) == id));
 
 	BOOST_TEST(!static_cast<bool>(textures.binding(rnd::texture_id{}).handle));
 	BOOST_TEST(!static_cast<bool>(textures.binding(rnd::texture_id{ 100000 }).handle));
+}
+
+BOOST_AUTO_TEST_CASE(GenerateMakesA2DTextureOfTheGivenPixelsAndKeepsItsSlot)
+{
+	auto& system = storage.require<rnd::render_system>();
+	auto& textures = system.get_texture_manager();
+	const auto tag = res::tag(res::tag::memory, "__generated");
+	const rnd::texture_id id = textures.generate(tag, { 2, 3 }, texture_header::TYPE::RGB8, std::vector<unsigned char>(2 * 3 * 3, 7));
+	BOOST_REQUIRE(id.is_valid());
+	BOOST_TEST(textures.is_ready(id));
+	BOOST_TEST(textures.info(id).data.extent.width == 2u);
+	BOOST_TEST(textures.info(id).data.extent.height == 3u);
+	const auto binding = textures.binding(id);
+	BOOST_TEST(system.get_driver()->is_alive(binding.handle));
+
+	// A second generate for the same tag keeps the texture it has.
+	BOOST_TEST((textures.generate(tag, { 9, 9 }, texture_header::TYPE::RGB8, std::vector<unsigned char>(9 * 9 * 3)) == id));
+	BOOST_TEST((textures.binding(id).handle == binding.handle));
+	BOOST_TEST(textures.binding(id).generation == binding.generation);
+}
+
+BOOST_AUTO_TEST_CASE(TheTextureManagerBelongsToTheThreadThatMadeIt)
+{
+	auto& textures = storage.require<rnd::render_system>().get_texture_manager();
+	BOOST_TEST(textures.on_owner_thread());
+	bool seen_from_elsewhere = true;
+	std::thread other([&] { seen_from_elsewhere = textures.on_owner_thread(); });
+	other.join();
+	BOOST_TEST(!seen_from_elsewhere);
 }
 
 BOOST_AUTO_TEST_CASE(EnsureCreatesTargetsThatPassValidation)

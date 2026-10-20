@@ -78,15 +78,15 @@ namespace rnd {
 			const auto target = rnd::select_camera_target(packet.camera);
 			const bool offscreen = target.kind == rnd::render_target_kind::texture;
 			res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-			auto color_rt = offscreen ? context.find_texture(target.texture) : nullptr;
+			const rnd::driver::texture_handle color_rt = offscreen ? context.find_texture(target.texture) : rnd::driver::texture_handle{};
 			if (offscreen && !color_rt) continue;
 
 			rnd::driver::render_pass_desc pass;
 			pass.debug_name = "skybox";
 			if (offscreen) {
-				pass.colors.push_back({.texture = rnd::driver::handle_of(color_rt)});
-				if (auto* depth = context.find_texture(depth_tag)) {
-					pass.depth_stencil = rnd::driver::attachment_desc{.texture = rnd::driver::handle_of(depth)};
+				pass.colors.push_back({.texture = color_rt});
+				if (const auto depth = context.find_texture(depth_tag)) {
+					pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
 				}
 			} else {
 				pass.backbuffer = true;

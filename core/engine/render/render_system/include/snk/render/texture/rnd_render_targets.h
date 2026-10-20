@@ -23,8 +23,8 @@ namespace rnd::render_targets
 	};
 
 	// The render target stored under `tag`: kept while it has the requested size, otherwise dropped
-	// from the cache and created again.
-	SNK_API driver::texture_interface* ensure(texture_manager& textures, const res::tag& tag, glm::ivec2 size,
+	// from the cache and created again. Null when it cannot be made.
+	SNK_API driver::texture_handle ensure(texture_manager& textures, const res::tag& tag, glm::ivec2 size,
 		driver::texture_header::TYPE format, driver::texture_usage usage, const sampling& params = {});
 
 	// A render target named by a stable slot. The slot of a tag stays the same when the target is created again

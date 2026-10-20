@@ -67,10 +67,10 @@ namespace edt
 		}
 
 		// Display the editor camera render target texture
-		auto* texture = m_rnd.get_texture_manager().find(s_editor_cam_tag);
-		if (texture) {
+		auto& textures = m_rnd.get_texture_manager();
+		if (const auto texture = textures.binding(textures.id_of(s_editor_cam_tag)).handle) {
 			auto* backend = m_gui.get_backend_interface();
-			ImTextureID tex_id = backend->get_imgui_texture_from_texture(texture);
+			ImTextureID tex_id = backend->to_imgui(texture);
 			// UV (0,1)→(1,0) flips Y for OpenGL convention
 			ImGui::Image(tex_id, size, ImVec2(0, 1), ImVec2(1, 0));
 

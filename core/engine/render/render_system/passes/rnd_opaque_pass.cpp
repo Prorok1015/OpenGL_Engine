@@ -32,7 +32,7 @@ void opaque_pass::execute(render_context &context,
     const bool offscreen = target.kind == rnd::render_target_kind::texture;
     res::tag target_tag = target.texture;
     res::tag depth_tag = rnd::resolve_depth_target(packet.camera);
-    driver::texture_interface *color_rt = nullptr;
+    driver::texture_handle color_rt;
     if (offscreen) {
       color_rt = context.ensure_render_target(target_tag, {vp_width, vp_height},
           rnd::driver::texture_header::TYPE::RGBA8,
@@ -49,9 +49,9 @@ void opaque_pass::execute(render_context &context,
     pass.debug_name = "opaque";
     if (offscreen) {
       // The depth of an offscreen camera is cleared by the z-prepass.
-      pass.colors.push_back({.texture = rnd::driver::handle_of(color_rt), .load = color_load});
-      if (auto *depth = context.find_texture(depth_tag)) {
-        pass.depth_stencil = rnd::driver::attachment_desc{.texture = rnd::driver::handle_of(depth)};
+      pass.colors.push_back({.texture = color_rt, .load = color_load});
+      if (const auto depth = context.find_texture(depth_tag)) {
+        pass.depth_stencil = rnd::driver::attachment_desc{.texture = depth};
       }
     } else {
       // Several cameras share the backbuffer: clear only this camera's rectangle.

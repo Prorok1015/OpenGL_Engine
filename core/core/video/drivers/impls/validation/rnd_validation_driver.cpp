@@ -1,6 +1,7 @@
 #include "rnd_validation_driver.h"
 
 #include <snk/driver/rnd_pipeline_cache.h>
+#include <snk/common/engine_assert.h>
 
 #include <algorithm>
 #include <array>
@@ -78,8 +79,11 @@ rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner,
 
 rnd::driver::validation::driver::driver(std::unique_ptr<driver_interface> inner, std::shared_ptr<validator> state)
 	: m_inner(std::move(inner))
+	, m_inner_textures(dynamic_cast<const texture_object_access*>(m_inner.get()))
 	, m_state(std::move(state))
 {
+	// Not an assert: it must hold in release builds too. Without the access create_texture fails closed.
+	ENGINE_VERIFY(m_inner_textures, "the validation driver wraps a driver that gives no access to its texture objects (texture_object_access); it cannot make textures");
 }
 
 bool rnd::driver::validation::driver::check_render_pass(const render_pass_desc& desc, render_pass_desc& inner_desc, target_info& target)
@@ -379,8 +383,11 @@ void rnd::driver::validation::driver::check_texture_usage(const texture_header& 
 rnd::driver::texture_handle rnd::driver::validation::driver::create_texture(const texture_header& header)
 {
 	check_texture_usage(header);
+	if (!m_inner_textures) {
+		return {};
+	}
 	const texture_handle created = m_inner->create_texture(header);
-	texture_interface* const inner_texture = m_inner->resolve(created);
+	texture_interface* const inner_texture = m_inner_textures->texture_object(created);
 	if (!inner_texture) {
 		return {};
 	}
@@ -410,6 +417,15 @@ rnd::driver::validation::texture* rnd::driver::validation::driver::live_texture(
 		m_state->report(rule::dead_object, std::format("{} (handle index {}, generation {}) is not a texture of this driver", what, handle.index, handle.gen));
 	}
 	return nullptr;
+}
+
+void rnd::driver::validation::driver::update_texture(texture_handle handle, const void* data, const texture_region& region)
+{
+	validation::texture* const found = live_texture(handle, "update_texture");
+	if (!found) {
+		return;
+	}
+	found->update_data(data, region.x, region.y, region.z, region.width, region.height, region.depth, region.level, region.layer, region.face);
 }
 
 rnd::driver::texture_handle rnd::driver::validation::driver::inner_handle(texture_handle handle) const

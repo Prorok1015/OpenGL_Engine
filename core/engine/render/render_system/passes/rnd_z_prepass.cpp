@@ -34,7 +34,7 @@ void z_prepass::execute(render_context &context, driver::driver_interface &drv) 
 
     rnd::driver::render_pass_desc pass;
     pass.depth_stencil = rnd::driver::attachment_desc{
-        .texture = rnd::driver::handle_of(z_pass_rt),
+        .texture = z_pass_rt,
         .load = rnd::clears_depth(packet.camera.clear) ? rnd::driver::load_op::clear : rnd::driver::load_op::load};
     pass.debug_name = "z_prepass";
     drv.begin_render_pass(pass);

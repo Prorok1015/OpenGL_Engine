@@ -645,6 +645,22 @@ rnd::driver::gl::texture* rnd::driver::gl::driver::texture_of(texture_handle han
 	return static_cast<texture*>(m_textures.find(handle));
 }
 
+void rnd::driver::gl::driver::update_texture(texture_handle handle, const void* data, const texture_region& region)
+{
+	texture* found = texture_of(handle);
+	if (!found) {
+		egLOG_ERROR("render", "update_texture: the handle (index {}, generation {}) names no live texture", handle.index, handle.gen);
+		return;
+	}
+	found->update_data(data, region.x, region.y, region.z, region.width, region.height, region.depth, region.level, region.layer, region.face);
+}
+
+std::uint64_t rnd::driver::gl::driver::native_texture_name(texture_handle handle) const
+{
+	const texture* found = texture_of(handle);
+	return found ? found->get_id() : 0;
+}
+
 std::unique_ptr<rnd::driver::vertex_array_interface> rnd::driver::gl::driver::create_vertex_array()
 {
 	return std::make_unique<gl::vertex_array>();

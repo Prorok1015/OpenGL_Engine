@@ -74,7 +74,8 @@ namespace edt
 		const auto& cam = reg->get<scn::camera_component>(picked);
 		apply_viewports_to_all(cam.color_targets[0], edt::to_framebuffer_size({ avail.x, avail.y }, { fb_scale.x, fb_scale.y }), picked);
 
-		auto* texture = m_rnd.get_texture_manager().find(cam.color_targets[0]);
+		auto& textures = m_rnd.get_texture_manager();
+		const auto texture = textures.binding(textures.id_of(cam.color_targets[0])).handle;
 		if (!texture || cam.m_viewport.size.x <= 0 || cam.m_viewport.size.y <= 0) {
 			ImGui::TextDisabled("(waiting for the camera to render)");
 			return;
@@ -84,7 +85,7 @@ namespace edt
 		const glm::vec2 fit = game_view::fit_letterbox({ avail.x, avail.y }, glm::vec2(cam.m_viewport.size));
 		const ImVec2 origin = ImGui::GetCursorPos();
 		ImGui::SetCursorPos({ origin.x + (avail.x - fit.x) * 0.5f, origin.y + (avail.y - fit.y) * 0.5f });
-		ImTextureID tex_id = m_gui.get_backend_interface()->get_imgui_texture_from_texture(texture);
+		ImTextureID tex_id = m_gui.get_backend_interface()->to_imgui(texture);
 		// UV (0,1)->(1,0) flips Y for OpenGL convention
 		ImGui::Image(tex_id, { fit.x, fit.y }, ImVec2(0, 1), ImVec2(1, 0));
 		if (m_input_target)

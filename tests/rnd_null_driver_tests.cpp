@@ -2,6 +2,7 @@
 #include "rnd_null_driver.h"
 #include "rnd_null_swapchain.h"
 #include <snk/driver/rnd_texture_owner.h>
+#include <array>
 #include <cstring>
 #include <memory>
 #include <span>
@@ -43,14 +44,14 @@ texture_header target_of(uint32_t size, texture_usage usage, uint32_t mips = 1)
 	return header;
 }
 
-render_pass_desc pass_of(const texture_interface* color, const texture_interface* depth = nullptr)
+render_pass_desc pass_of(texture_handle color, texture_handle depth = {})
 {
 	render_pass_desc pass;
 	if (color) {
-		pass.colors.push_back({ .texture = handle_of(color) });
+		pass.colors.push_back({ .texture = color });
 	}
 	if (depth) {
-		pass.depth_stencil = attachment_desc{ .texture = handle_of(depth) };
+		pass.depth_stencil = attachment_desc{ .texture = depth };
 	}
 	return pass;
 }
@@ -133,11 +134,12 @@ BOOST_AUTO_TEST_CASE(TextureKeepsItsHeader)
 
 	auto texture = make_texture(driver, header);
 	BOOST_REQUIRE(texture);
-	BOOST_TEST(texture->width() == 64u);
-	BOOST_TEST(texture->height() == 32u);
-	BOOST_TEST((texture->get_usage() == texture_usage::color_target));
+	const texture_header& info = driver.info(texture.handle());
+	BOOST_TEST(info.data.extent.width == 64u);
+	BOOST_TEST(info.data.extent.height == 32u);
+	BOOST_TEST((info.usage == texture_usage::color_target));
 
-	const auto* null_texture = dynamic_cast<null::texture*>(texture.get());
+	const auto* null_texture = driver.texture_of(texture.handle());
 	BOOST_REQUIRE(null_texture);
 	BOOST_TEST(null_texture->get_header().name == "albedo");
 	BOOST_TEST((null_texture->get_header().data.format == texture_header::TYPE::RGBA16F));
@@ -154,17 +156,18 @@ BOOST_AUTO_TEST_CASE(TexturesAreNamedByHandlesThatGoStaleWithTheTexture)
 
 	auto first = make_texture(driver, header);
 	BOOST_REQUIRE(first);
-	const texture_handle first_handle = first->handle();
+	const texture_handle first_handle = first.handle();
 	BOOST_TEST(static_cast<bool>(first_handle));
 	BOOST_TEST(driver.is_alive(first_handle));
 	BOOST_TEST(driver.live_textures() == 1u);
 	BOOST_TEST(driver.info(first_handle).name == "target");
 	BOOST_TEST(driver.info(first_handle).data.extent.width == 8u);
-	BOOST_TEST((driver.texture_of(first_handle) == first.get()));
+	BOOST_TEST((driver.texture_of(first_handle) != nullptr));
+	BOOST_TEST((driver.texture_object(first_handle) == driver.texture_of(first_handle)));
 
 	// A second texture gets another slot.
 	auto second = make_texture(driver, header);
-	BOOST_TEST((second->handle() != first_handle));
+	BOOST_TEST((second.handle() != first_handle));
 	BOOST_TEST(driver.live_textures() == 2u);
 
 	first.reset();
@@ -175,10 +178,10 @@ BOOST_AUTO_TEST_CASE(TexturesAreNamedByHandlesThatGoStaleWithTheTexture)
 
 	// The freed slot comes back with the next generation: the old handle still names nothing.
 	auto third = make_texture(driver, header);
-	BOOST_TEST(third->handle().index == first_handle.index);
-	BOOST_TEST(third->handle().gen == first_handle.gen + 1);
+	BOOST_TEST(third.handle().index == first_handle.index);
+	BOOST_TEST(third.handle().gen == first_handle.gen + 1);
 	BOOST_TEST(!driver.is_alive(first_handle));
-	BOOST_TEST(driver.is_alive(third->handle()));
+	BOOST_TEST(driver.is_alive(third.handle()));
 }
 
 BOOST_AUTO_TEST_CASE(TexturesStillAliveAreFreedWithTheDriver)
@@ -207,12 +210,12 @@ BOOST_AUTO_TEST_CASE(DestroyFreesTheTextureAndTheHandleGoesStale)
 	null::driver driver;
 	const texture_handle handle = driver.create_texture(texture_header{});
 	BOOST_REQUIRE(driver.is_alive(handle));
-	BOOST_TEST((driver.resolve(handle) != nullptr));
+	BOOST_TEST((driver.texture_object(handle) != nullptr));
 	BOOST_TEST(driver.stats().textures.live() == 1u);
 
 	driver.destroy(handle);
 	BOOST_TEST(!driver.is_alive(handle));
-	BOOST_TEST((driver.resolve(handle) == nullptr));
+	BOOST_TEST((driver.texture_object(handle) == nullptr));
 	BOOST_TEST(driver.live_textures() == 0u);
 	BOOST_TEST(driver.stats().textures.destroyed == 1u);
 
@@ -234,12 +237,40 @@ BOOST_AUTO_TEST_CASE(AHandleOfAnotherDriverNamesNoTexture)
 	BOOST_TEST((mine.gen != theirs.gen));
 	BOOST_TEST(first.is_alive(mine));
 	BOOST_TEST(!first.is_alive(theirs));
-	BOOST_TEST((first.resolve(theirs) == nullptr));
+	BOOST_TEST((first.texture_object(theirs) == nullptr));
 
 	// Destroying a foreign handle frees nothing.
 	first.destroy(theirs);
 	BOOST_TEST(second.is_alive(theirs));
 	BOOST_TEST(first.is_alive(mine));
+}
+
+BOOST_AUTO_TEST_CASE(UpdateTextureWritesThroughTheHandle)
+{
+	null::driver driver;
+	auto texture = make_texture(driver, texture_header{});
+	const std::array<unsigned char, 4> texel{ 1, 2, 3, 4 };
+	BOOST_TEST(driver.texture_of(texture.handle())->update_calls() == 0u);
+
+	driver.update_texture(texture.handle(), texel.data(), texture_region{ .face = 2 });
+	driver.update_texture(texture.handle(), texel.data(), texture_region{});
+	BOOST_TEST(driver.texture_of(texture.handle())->update_calls() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(TheNativeNameOfATextureIsOneOfAKindAndGoneWithTheTexture)
+{
+	null::driver driver;
+	auto first = make_texture(driver, texture_header{});
+	auto second = make_texture(driver, texture_header{});
+	const texture_handle stale = first.handle();
+
+	BOOST_TEST(driver.native_texture_name(first.handle()) != 0u);
+	BOOST_TEST(driver.native_texture_name(first.handle()) != driver.native_texture_name(second.handle()));
+	BOOST_TEST(driver.native_texture_name(texture_handle{}) == 0u);
+
+	first.reset();
+	BOOST_TEST(driver.native_texture_name(stale) == 0u);
+	BOOST_TEST(driver.native_texture_name(second.handle()) != 0u);
 }
 
 BOOST_AUTO_TEST_CASE(BufferKeepsSizeAndData)
@@ -388,7 +419,7 @@ BOOST_AUTO_TEST_CASE(RenderPassesAreCountedAndTheLastOneIsKept)
 	auto color = make_texture(driver, target_of(32, texture_usage::color_target));
 	BOOST_TEST(!driver.in_render_pass());
 
-	render_pass_desc pass = pass_of(color.get());
+	render_pass_desc pass = pass_of(color.handle());
 	pass.colors[0].load = load_op::clear;
 	pass.render_area = { 0, 0, 16, 16 };
 	pass.debug_name = "probe";
@@ -413,14 +444,14 @@ BOOST_AUTO_TEST_CASE(PassesWithTheSameAttachmentsShareOneFramebuffer)
 	const auto& fbos = driver.stats().framebuffers;
 
 	for (int i = 0; i < 3; ++i) {
-		run_pass(driver, pass_of(color.get(), depth.get()));
+		run_pass(driver, pass_of(color.handle(), depth.handle()));
 	}
 	BOOST_TEST(fbos.size() == 1u);
 	BOOST_TEST(fbos.misses() == 1u);
 	BOOST_TEST(fbos.hits() == 2u);
 
 	// Load and store ops, the render area and the label are not part of the identity.
-	render_pass_desc other_ops = pass_of(color.get(), depth.get());
+	render_pass_desc other_ops = pass_of(color.handle(), depth.handle());
 	other_ops.colors[0].load = load_op::clear;
 	other_ops.depth_stencil->store = store_op::dont_care;
 	other_ops.render_area = { 0, 0, 8, 8 };
@@ -438,21 +469,21 @@ BOOST_AUTO_TEST_CASE(AnotherAttachmentMipOrLayerOrSetBuildsAnotherFramebuffer)
 	auto depth = make_texture(driver, target_of(32, texture_usage::depth_target));
 	const auto& fbos = driver.stats().framebuffers;
 
-	run_pass(driver, pass_of(color.get()));
-	render_pass_desc mip1 = pass_of(color.get());
+	run_pass(driver, pass_of(color.handle()));
+	render_pass_desc mip1 = pass_of(color.handle());
 	mip1.colors[0].mip = 1;
 	run_pass(driver, mip1);
-	render_pass_desc layer1 = pass_of(color.get());
+	render_pass_desc layer1 = pass_of(color.handle());
 	layer1.colors[0].layer = 1;
 	run_pass(driver, layer1);
-	run_pass(driver, pass_of(color.get(), depth.get()));
-	run_pass(driver, pass_of(second.get()));
+	run_pass(driver, pass_of(color.handle(), depth.handle()));
+	run_pass(driver, pass_of(second.handle()));
 	BOOST_TEST(fbos.misses() == 5u);
 	BOOST_TEST(fbos.hits() == 0u);
 
 	// A depth-only pass and one with an unused color slot are different framebuffers.
-	run_pass(driver, pass_of(nullptr, depth.get()));
-	render_pass_desc hole = pass_of(nullptr, depth.get());
+	run_pass(driver, pass_of({}, depth.handle()));
+	render_pass_desc hole = pass_of({}, depth.handle());
 	hole.colors.push_back({});
 	run_pass(driver, hole);
 	BOOST_TEST(fbos.misses() == 7u);
@@ -467,11 +498,11 @@ BOOST_AUTO_TEST_CASE(LayeredAndSingleLayerAttachmentsOfOneTextureAreDifferentFra
 	auto array = make_texture(driver, header);
 	const auto& fbos = driver.stats().framebuffers;
 
-	render_pass_desc layered = pass_of(array.get());
+	render_pass_desc layered = pass_of(array.handle());
 	BOOST_TEST(layered.colors[0].layer == attachment_desc::all_layers);
-	render_pass_desc layer0 = pass_of(array.get());
+	render_pass_desc layer0 = pass_of(array.handle());
 	layer0.colors[0].layer = 0;
-	render_pass_desc layer2 = pass_of(array.get());
+	render_pass_desc layer2 = pass_of(array.handle());
 	layer2.colors[0].layer = 2;
 
 	run_pass(driver, layered);
@@ -506,9 +537,9 @@ BOOST_AUTO_TEST_CASE(DestroyingATextureEvictsTheFramebuffersBuiltFromIt)
 	auto depth = make_texture(driver, target_of(32, texture_usage::depth_target));
 	const auto& fbos = driver.stats().framebuffers;
 
-	run_pass(driver, pass_of(first.get(), depth.get()));
-	run_pass(driver, pass_of(second.get(), depth.get()));
-	run_pass(driver, pass_of(second.get()));
+	run_pass(driver, pass_of(first.handle(), depth.handle()));
+	run_pass(driver, pass_of(second.handle(), depth.handle()));
+	run_pass(driver, pass_of(second.handle()));
 	BOOST_TEST(fbos.size() == 3u);
 
 	first.reset();
@@ -529,8 +560,8 @@ BOOST_AUTO_TEST_CASE(ARecreatedTextureNeverMatchesAnEvictedFramebuffer)
 	for (int generation = 0; generation < 4; ++generation) {
 		// The allocator is free to hand the same address out again.
 		auto color = make_texture(driver, target_of(32, texture_usage::color_target));
-		run_pass(driver, pass_of(color.get()));
-		run_pass(driver, pass_of(color.get()));
+		run_pass(driver, pass_of(color.handle()));
+		run_pass(driver, pass_of(color.handle()));
 	}
 	BOOST_TEST(fbos.misses() == 4u);
 	BOOST_TEST(fbos.hits() == 4u);
@@ -706,15 +737,15 @@ BOOST_AUTO_TEST_CASE(PipelineFormatsFollowThePassTargets)
 	auto depth = make_texture(driver, depth_header);
 
 	pipeline_desc desc = base;
-	set_target_formats(driver, desc, pass_of(color.get(), depth.get()));
+	set_target_formats(driver, desc, pass_of(color.handle(), depth.handle()));
 	BOOST_REQUIRE(desc.color_formats.size() == 1u);
 	BOOST_TEST((*desc.color_formats[0] == texture_format::RGBA8));
 	BOOST_TEST((desc.depth_format == texture_format::D32F));
 
-	set_target_formats(driver, desc, pass_of(color.get()));
+	set_target_formats(driver, desc, pass_of(color.handle()));
 	BOOST_TEST(!desc.depth_format.has_value());
 
-	render_pass_desc holes = pass_of(nullptr);
+	render_pass_desc holes = pass_of(texture_handle{});
 	holes.colors.push_back({});
 	set_target_formats(driver, desc, holes);
 	BOOST_REQUIRE(desc.color_formats.size() == 1u);

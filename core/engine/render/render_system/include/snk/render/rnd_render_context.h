@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/driver/rnd_driver_interface.h>
+#include <snk/driver/rnd_handle.h>
 #include <snk/driver/rnd_texture_interface.h>
 #include <snk/render/rnd_bindings.h>
 #include <snk/render/rnd_gpu_blocks.h>
@@ -25,9 +26,10 @@ namespace rnd
 		// The packets extraction made for the frame; none when it made none.
 		virtual std::span<render_packet_t> packets() = 0;
 
-		// Textures by tag. A render target is made on the first call and again when its size changes.
-		virtual driver::texture_interface* find_texture(const res::tag& tag) const = 0;
-		virtual driver::texture_interface* ensure_render_target(const res::tag& tag, glm::ivec2 size,
+		// Textures by tag. A render target is made on the first call and again when its size changes. Null while the
+		// texture is not there; the handle is good for the frame (a resize or a removal makes another).
+		virtual driver::texture_handle find_texture(const res::tag& tag) const = 0;
+		virtual driver::texture_handle ensure_render_target(const res::tag& tag, glm::ivec2 size,
 			driver::texture_header::TYPE format, driver::texture_usage usage, const render_targets::sampling& params = {}) = 0;
 
 		// The texture an id names now (a material's map, the sky); null while it is still loading or was removed.

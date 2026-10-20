@@ -3,9 +3,11 @@
 #include <imgui_internal.h>
 
 #include "backends/imgui_impl_opengl3.h"
-#include "rnd_gl_texture.h"
 
-gui::gl::gl_imgui_backend::gl_imgui_backend() = default;
+gui::gl::gl_imgui_backend::gl_imgui_backend(rnd::driver::driver_interface& drv)
+    : imgui_backend_interface(drv)
+{
+}
 gui::gl::gl_imgui_backend::~gl_imgui_backend() = default;
 
 void gui::gl::gl_imgui_backend::init()
@@ -70,15 +72,4 @@ void gui::gl::gl_imgui_backend::shutdown()
     ImGui::SaveIniSettingsToDisk(get_settings_filename().c_str());
     ImGui_ImplOpenGL3_Shutdown();
     ImGui::DestroyContext();
-}
-
-ImTextureID gui::gl::gl_imgui_backend::get_imgui_texture_from_texture(rnd::driver::texture_interface* txm)
-{
-    if (!txm) {
-        return 0;
-    }
-
-    auto* gl_txm = static_cast<rnd::driver::gl::texture*>(txm->native());
-
-    return gl_txm->get_id();
 }

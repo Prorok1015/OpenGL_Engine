@@ -53,7 +53,7 @@ void composition_pass::execute(render_context &context,
     const bool offscreen = target.kind == rnd::render_target_kind::texture;
     res::tag tp_accum_tag = rnd::resolve_tp_accum_target(packet.camera);
     res::tag tp_reveal_tag = rnd::resolve_tp_reveal_target(packet.camera);
-    auto color_rt = offscreen ? context.find_texture(target.texture) : nullptr;
+    const rnd::driver::texture_handle color_rt = offscreen ? context.find_texture(target.texture) : rnd::driver::texture_handle{};
     auto color_tp_rt = context.find_texture(tp_accum_tag);
     auto waight_tp_rt = context.find_texture(tp_reveal_tag);
 
@@ -63,7 +63,7 @@ void composition_pass::execute(render_context &context,
     rnd::driver::render_pass_desc pass;
     pass.debug_name = "composition";
     if (offscreen) {
-      pass.colors.push_back({.texture = rnd::driver::handle_of(color_rt)});
+      pass.colors.push_back({.texture = color_rt});
     } else {
       pass.backbuffer = true;
     }
@@ -106,8 +106,8 @@ void composition_pass::execute(render_context &context,
     if (pipelines.bind(variant)) {
       rnd::driver::bind_group_desc inputs;
       inputs.layout = context.layouts().composition;
-      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::accum_slot, {}, 0, 0, rnd::driver::handle_of(color_tp_rt)});
-      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::reveal_slot, {}, 0, 0, rnd::driver::handle_of(waight_tp_rt)});
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::accum_slot, {}, 0, 0, color_tp_rt});
+      inputs.entries.push_back({rnd::driver::binding_type::texture, rnd::bindings::reveal_slot, {}, 0, 0, waight_tp_rt});
       drv.set_bind_group(rnd::driver::pass_set, drv.create_bind_group(inputs, rnd::driver::lifetime::transient));
       drv.draw_indices(m_va, std::size(indeces));
     }

@@ -3,6 +3,7 @@
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_pipeline_cache.h>
 #include <snk/driver/rnd_resource_tables.h>
+#include <snk/driver/rnd_texture_backend.h>
 #include <snk/driver/rnd_texture_pool.h>
 #include <snk/common/snk_api.h>
 
@@ -17,7 +18,7 @@ namespace rnd::driver::null
 	struct pipeline_record {};
 
 	// Runs the whole driver_interface without a GPU: objects keep what tests inspect, calls are counted.
-	class SNK_API driver final : public rnd::driver::driver_interface
+	class SNK_API driver final : public rnd::driver::driver_interface, public rnd::driver::texture_object_access
 	{
 	public:
 		struct call_counts
@@ -95,7 +96,10 @@ namespace rnd::driver::null
 		texture_handle create_texture(const texture_header& header) override;
 		// Immediate: the null backend has no GPU to wait for.
 		void destroy(texture_handle texture) override;
-		texture_interface* resolve(texture_handle texture) const override { return m_textures.find(texture); }
+		void update_texture(texture_handle texture, const void* data, const texture_region& region) override;
+		// A stand-in for the API name: the serial of the texture (never 0, never handed out twice).
+		std::uint64_t native_texture_name(texture_handle texture) const override;
+		texture_interface* texture_object(texture_handle texture) const override { return m_textures.find(texture); }
 		const texture_header& info(texture_handle texture) const override { return m_textures.info(texture); }
 		bool is_alive(texture_handle texture) const override { return m_textures.find(texture) != nullptr; }
 

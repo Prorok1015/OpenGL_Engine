@@ -22,6 +22,20 @@ namespace rnd::driver
 	class vertex_array_interface;
 	class buffer_interface;
 
+	// A box of a texture to write to: texels {x, y, z} .. +{width, height, depth} of one mip level, layer and cube face.
+	struct texture_region
+	{
+		std::uint32_t x = 0;
+		std::uint32_t y = 0;
+		std::uint32_t z = 0;
+		std::uint32_t width = 1;
+		std::uint32_t height = 1;
+		std::uint32_t depth = 1;
+		std::uint32_t level = 0;
+		std::uint32_t layer = 0;
+		std::uint32_t face = 0;
+	};
+
 	struct shader_header
 	{
 		enum class shader_type { VERTEX, FRAGMENT, GEOMETRY };
@@ -102,11 +116,13 @@ namespace rnd::driver
 		// The handle goes stale at once; the GPU object may be freed later (a backend defers it while the GPU can
 		// still use it, GL frees at once). A stale or null handle is reported by the validation layer, ignored otherwise.
 		virtual void destroy(texture_handle texture) = 0;
-		// TEMPORARY bridge (removed in R7c, #118): the backend object behind a handle, null for a handle that names
-		// no live texture. Today its callers are texture_owner::get() (so texture_manager, material_groups and
-		// the tests that hold an owner) and the validation driver's own wrappers; everything else goes through
-		// the handle. The GL ImGui backend gets its object from texture_manager, not from here.
-		virtual texture_interface* resolve(texture_handle texture) const = 0;
+		// Writes `data` (texels in the format of the texture, row after row) into `region`. A handle that names no
+		// live texture is reported by the validation layer and ignored.
+		virtual void update_texture(texture_handle texture, const void* data, const texture_region& region) = 0;
+		// The name the backend's API calls the texture by (the GL texture name), for code that talks to that API
+		// itself: the ImGui renderer. 0 for a handle that names no live texture. The name is not an identity: it is
+		// only good while the texture lives.
+		virtual std::uint64_t native_texture_name(texture_handle texture) const = 0;
 		// The description of a texture; an empty one for a handle that names no live texture.
 		virtual const texture_header& info(texture_handle texture) const = 0;
 		// Whether the handle names a live texture of this driver.
