@@ -6,6 +6,7 @@
 #include <snk/render/rnd_render_packet.hpp>
 #include <snk/render/shader/rnd_shader_config_cache.h>
 #include <snk/render/texture/rnd_render_targets.h>
+#include <snk/render/texture/rnd_texture_id.h>
 #include <snk/resource/res_tag.h>
 
 #include <cstdint>
@@ -28,6 +29,9 @@ namespace rnd
 		virtual driver::texture_interface* find_texture(const res::tag& tag) const = 0;
 		virtual driver::texture_interface* ensure_render_target(const res::tag& tag, glm::ivec2 size,
 			driver::texture_header::TYPE format, driver::texture_usage usage, const render_targets::sampling& params = {}) = 0;
+
+		// The texture an id names now (a material's map, the sky); null while it is still loading or was removed.
+		virtual driver::texture_handle texture(texture_id id) const = 0;
 
 		// The vertex array of a geometry; null while it is still loading.
 		virtual driver::vertex_array_interface* geometry(const res::tag& tag) = 0;
