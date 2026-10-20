@@ -5,6 +5,7 @@
 #include "edt_level_controller.h"
 #include "edt_scene_editor.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include "edt_world_controller.h"
 #include <chrono>
 
@@ -53,8 +54,9 @@ struct empty_level_fixture : test_util::scene_env
 	std::shared_ptr<scn::hot_reload_manager> hot;
 	ecs::system_factory sf;
 	scn::context_manager mgr;
+	edt::editor_services services;
 	edt::scene_document state;
-	edt::world_controller world_ctrl{ state, *rs, *descs };
+	edt::world_controller world_ctrl{ state, services, *rs, *descs };
 };
 
 }
@@ -207,8 +209,8 @@ BOOST_AUTO_TEST_CASE(SceneEditor_SyncEcsTransformsToDescBumpsTheDescGeneration)
 	auto shared_mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
 	BOOST_REQUIRE(shared_mgr->load_level(tag));
 	populate(tag);
-	state.ctx_manager = shared_mgr;
-	edt::scene_editor editor(state);
+	services.ctx_manager = shared_mgr;
+	edt::scene_editor editor(state, services);
 
 	const uint64_t generation = state.desc_generation;
 	editor.sync_ecs_transforms_to_desc();
@@ -229,7 +231,7 @@ BOOST_AUTO_TEST_CASE(SceneEditor_EditsWithoutAnActiveWorldDoNothing)
 {
 	for (const int idx : { 0, -1 }) {
 		state.active_world_idx = idx; // both the default and the explicit "no world"
-		edt::scene_editor editor(state);
+		edt::scene_editor editor(state, services);
 		int modified = 0;
 		editor.on_before_modify = [&modified] { ++modified; };
 

@@ -6,6 +6,7 @@
 #include "edt_scene_editor.h"
 #include "edt_override_edit.h"
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <set>
@@ -243,11 +244,12 @@ struct editor_fixture : node_id_fixture
 		state.world_descs.emplace_back();
 		state.world_names.push_back("w");
 		world().deserialize(*descs, parse_migrated(TREE_WITH_IDS));
-		editor = std::make_unique<edt::scene_editor>(state);
+		editor = std::make_unique<edt::scene_editor>(state, services);
 	}
 
 	scn::world_desc& world() { return state.world_descs[0]; }
 
+	edt::editor_services services;
 	edt::scene_document state;
 	std::unique_ptr<edt::scene_editor> editor;
 };
@@ -357,13 +359,14 @@ struct instance_fixture : node_id_fixture
 			{"__id":"00000000000000b2","name":"twin"},
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/rig.prefab.desc"}}]})"));
 		pump(); // the parent_desc handles of the instances load in the background
-		state.assembler = assembler.get();
-		editor = std::make_unique<edt::scene_editor>(state);
+		services.assembler = assembler.get();
+		editor = std::make_unique<edt::scene_editor>(state, services);
 	}
 
 	scn::world_desc& world() { return state.world_descs[0]; }
 	std::vector<prefab_node>& nodes() { return world().get_root().children; }
 
+	edt::editor_services services;
 	edt::scene_document state;
 	std::unique_ptr<edt::scene_editor> editor;
 };
@@ -605,12 +608,13 @@ struct nested_fixture : node_id_fixture
 		world().deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/body.prefab.desc"}}]})"));
 		pump(); // the parent_desc handles of the instances load in the background
-		state.assembler = assembler.get();
+		services.assembler = assembler.get();
 	}
 
 	scn::world_desc& world() { return state.world_descs[0]; }
 	prefab_node& robot() { return world().get_root().children[0]; }
 
+	edt::editor_services services;
 	edt::scene_document state;
 };
 
@@ -752,7 +756,7 @@ BOOST_FIXTURE_TEST_CASE(Override_ViewCacheResultsOutliveInvalidation, nested_fix
 BOOST_FIXTURE_TEST_CASE(Editor_TransformCommitInsideANestedInstanceIsRelativeToTheComposedBase, nested_fixture)
 {
 	const std::vector<uint64_t> path{ 0xc1ull, 0xb1ull, 0xa1ull };
-	edt::scene_editor editor_under_test(state);
+	edt::scene_editor editor_under_test(state, services);
 	editor_under_test.on_transform_committed(path, glm::vec3{ 2, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });
 	BOOST_TEST(robot().overrides.empty()); // body already puts it at {2,0,0}
 	editor_under_test.on_transform_committed(path, glm::vec3{ 5, 0, 0 }, glm::vec3{ 0 }, glm::vec3{ 1 });

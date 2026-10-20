@@ -10,6 +10,7 @@
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_editor_context.h>
+#include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_inspector_registry.h>
 #include <snk/editor/edt_panel_registry.h>
 #include <snk/gui/gui_system.h>
@@ -75,15 +76,17 @@ struct context_fixture : test_util::null_engine_fixture
 	context_fixture()
 		: null_engine_fixture(false)
 		, gui(nullptr, nullptr)
+		, services{ .ctx_manager = storage.require_shared<scn::context_manager>(),
+			.assembler = &storage.require<scn::ecs_assembler>(), .sfactory = &storage.require<ecs::system_factory>() }
 		, context(std::make_unique<edt::editor_context>(
 			storage.require<desc::desc_system>(), storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
-			gui, storage.require<scn::ecs_assembler>(), storage.require<ecs::system_factory>(),
-			storage.require<scn::context_manager>(), tasks, commands, scene))
+			gui, services, tasks, commands, scene))
 	{
 	}
 
 	gui::gui_system gui;
 	cmd::command_registry commands;
+	edt::editor_services services;
 	edt::scene_document scene;
 	std::unique_ptr<edt::editor_context> context;
 };

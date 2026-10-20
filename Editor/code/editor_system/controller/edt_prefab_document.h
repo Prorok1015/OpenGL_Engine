@@ -8,14 +8,12 @@
 #include <functional>
 #include <entt/entt.hpp>
 
-namespace scn { class ecs_assembler; class context_manager; }
-namespace ecs { class system_factory; }
 namespace res { class resource_system; }
 namespace desc { class desc_system; }
 
 namespace edt
 {
-	class scene_document;
+	struct editor_services;
 
 	// Marker component — distinguishes prefab preview camera from editor camera
 	struct prefab_camera_tag {};
@@ -24,7 +22,7 @@ namespace edt
 	class prefab_document final : public document
 	{
 	public:
-		prefab_document(scene_document& state, res::resource_system& res, desc::desc_system& desc);
+		prefab_document(editor_services& services, res::resource_system& res, desc::desc_system& desc);
 
 		void open(const res::tag& prefab_tag);
 		void close();
@@ -52,7 +50,7 @@ namespace edt
 	private:
 		void inject_camera(entt::registry& reg);
 
-		scene_document& m_state;
+		editor_services& m_services;
 		res::resource_system& m_res;
 		desc::desc_system& m_desc;
 

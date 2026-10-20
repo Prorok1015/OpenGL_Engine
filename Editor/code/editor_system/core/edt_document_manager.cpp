@@ -5,9 +5,10 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 
-edt::document_manager::document_manager(scene_document& scene, editor_events& events,
+edt::document_manager::document_manager(scene_document& scene, editor_services& services, editor_events& events,
 	res::resource_system& resources, desc::desc_system& descs)
 	: m_scene(&scene)
+	, m_services(services)
 	, m_events(events)
 	, m_resources(resources)
 	, m_descs(descs)
@@ -62,7 +63,7 @@ void edt::document_manager::set_active(document_id id)
 edt::prefab_document& edt::document_manager::open_prefab(const res::tag& prefab_tag)
 {
 	if (!m_preview) {
-		m_preview = std::make_unique<prefab_document>(scene(), m_resources, m_descs);
+		m_preview = std::make_unique<prefab_document>(m_services, m_resources, m_descs);
 	}
 	if (m_preview->is_open()) {
 		close(m_preview->id());

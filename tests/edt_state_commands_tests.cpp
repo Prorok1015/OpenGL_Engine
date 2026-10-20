@@ -7,6 +7,7 @@
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/editor/edt_state_commands.h>
 #include <boost/json/parse.hpp>
@@ -168,9 +169,10 @@ struct state_fixture : test_util::scene_env
 	}
 
 	temp_layers disk;
+	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, events, *rs, *descs };
+	edt::document_manager documents{ scene, services, events, *rs, *descs };
 	edt::selection_service selection{ events };
 	edt::asset_kind_registry kinds;
 	edt::registration kind_registration;
