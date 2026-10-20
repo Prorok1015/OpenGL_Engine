@@ -10,6 +10,7 @@
 #include <snk/common/ds/ds_fixed_vector.hpp>
 #include <snk/resource/res_tag.h>
 #include <snk/driver/rnd_driver_interface.h>
+#include <snk/render/texture/rnd_texture_id.h>
 
 namespace res { class resource_system; }
 
@@ -138,11 +139,11 @@ namespace rnd
 		};
 
 		// What a material feeds the program with, ready to bind: the textures at the sampler slots of set 2
-		// (null while one is still loading) and the bytes of the MaterialParams block (std140, see
+		// as ids (no id for a slot without a map; an id whose texture is still loading has no handle yet) and the bytes of the MaterialParams block (std140, see
 		// rnd_material_params.h). Nothing is set by name.
 		struct runtime_data
 		{
-			std::vector<rnd::driver::texture_interface*> samplers;
+			std::vector<rnd::texture_id> samplers;
 			std::vector<std::byte> material_params;
 		};
 

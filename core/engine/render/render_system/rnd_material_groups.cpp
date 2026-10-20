@@ -21,8 +21,9 @@ namespace {
 	}
 }
 
-rnd::material_groups::material_groups(driver::driver_interface& drv)
+rnd::material_groups::material_groups(driver::driver_interface& drv, const texture_resolver& textures)
 	: m_drv(drv)
+	, m_textures(textures)
 	, m_layout(drv.create_bind_group_layout(material_layout_desc()))
 {
 	// What a map the material lacks reads as: white colour, no specular, a normal straight out of the surface.
@@ -81,9 +82,15 @@ rnd::material_groups::content_key rnd::material_groups::key_of(const compiled_ma
 		std::memcpy(key.block.data(), bytes.data(), std::min(bytes.size(), key.block.size()));
 	}
 	for (std::uint32_t slot = 0; slot < bindings::material_texture_count; ++slot) {
-		driver::texture_interface* texture = slot < material.runtime.samplers.size() ? material.runtime.samplers[slot] : nullptr;
-		textures[slot] = texture ? texture : m_placeholders[slot].get();
-		key.textures[slot] = textures[slot]->serial();
+		const texture_id id = slot < material.runtime.samplers.size() ? material.runtime.samplers[slot] : texture_id{};
+		const texture_binding bound = m_textures.binding(id);
+		if (bound.handle) {
+			textures[slot] = bound.handle;
+			key.textures[slot] = (std::uint64_t{ id.index } << 32) | bound.generation;
+		} else {
+			textures[slot] = m_placeholders[slot].handle();
+			key.textures[slot] = 0;
+		}
 	}
 	return key;
 }
@@ -116,7 +123,7 @@ rnd::material_groups::entry& rnd::material_groups::acquire(const compiled_materi
 	desc.layout = m_layout;
 	desc.entries.push_back({ driver::binding_type::ubo, bindings::material_params_slot, made.params, 0, sizeof(material_params), driver::texture_handle{} });
 	for (std::uint32_t slot = 0; slot < bindings::material_texture_count; ++slot) {
-		desc.entries.push_back({ driver::binding_type::texture, slot, {}, 0, 0, driver::handle_of(textures[slot]) });
+		desc.entries.push_back({ driver::binding_type::texture, slot, {}, 0, 0, textures[slot] });
 	}
 	made.group = m_drv.create_bind_group(desc, driver::lifetime::persistent);
 	++m_groups_created;

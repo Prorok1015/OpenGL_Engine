@@ -94,12 +94,14 @@ struct material_set_fixture : test_util::null_engine_fixture
 	}
 
 	// What a material's group holds, as text: the params bytes and the three maps (null stands for a placeholder).
-	static std::string content_of(const rnd::compiled_material& material)
+	std::string content_of(const rnd::compiled_material& material)
 	{
 		std::string key(reinterpret_cast<const char*>(material.runtime.material_params.data()), material.runtime.material_params.size());
 		for (std::size_t slot = 0; slot < 3; ++slot) {
-			const rnd::driver::texture_interface* texture = slot < material.runtime.samplers.size() ? material.runtime.samplers[slot] : nullptr;
-			key += '|' + std::to_string(texture ? texture->serial() : 0);
+			const rnd::texture_id id = slot < material.runtime.samplers.size() ? material.runtime.samplers[slot] : rnd::texture_id{};
+			const rnd::texture_binding bound = textures().binding(id);
+			// The slot and its generation, as the group is keyed; a slot with no texture reads as a placeholder.
+			key += '|' + std::to_string(bound.handle ? (std::uint64_t{ id.index } << 32) | bound.generation : 0);
 		}
 		return key;
 	}
@@ -169,11 +171,16 @@ BOOST_AUTO_TEST_CASE(TheGroupHoldsWhatTheCompilerProducedForTheMaterial)
 
 		// A material with a diffuse map is drawn with that map at slot 0 (the validation checks it is alive and sampled).
 		for (const auto* material : materials) {
-			if (material->runtime.samplers.empty() || !material->runtime.samplers[0]) {
+			if (material->runtime.samplers.empty() || !textures().is_ready(material->runtime.samplers[0])) {
 				continue;
 			}
 			++textured;
-			const rnd::driver::texture_handle diffuse = material->runtime.samplers[0]->native()->handle();
+			// The group is recorded by the backend under the handle the backend gave the texture, which the
+			// validation layer's handle (what binding() returns) is not.
+			const auto& tag = static_cast<const scn::material_desc*>(material->source.get())->samplers_textures[0];
+			auto* backend_texture = textures().find(tag);
+			BOOST_REQUIRE(backend_texture);
+			const rnd::driver::texture_handle diffuse = backend_texture->native()->handle();
 			bool found = false;
 			for (std::size_t i = log_begin; i < driver()->bind_log().size() && !found; ++i) {
 				const auto& bind = driver()->bind_log()[i];
@@ -403,7 +410,7 @@ BOOST_AUTO_TEST_CASE(TheCompilerPacksTheMaterialIntoThePodBlockOfTheShader)
 	BOOST_REQUIRE(config.rdata.material_params.size() == sizeof(expected));
 	BOOST_TEST(std::memcmp(config.rdata.material_params.data(), &expected, sizeof(expected)) == 0);
 	BOOST_REQUIRE(config.rdata.samplers.size() == 2u);
-	BOOST_TEST(config.rdata.samplers[0] == nullptr);
+	BOOST_TEST(!config.rdata.samplers[0].is_valid());
 
 	// The block is bytes: nothing is left that the driver would set by name.
 	static_assert(std::is_same_v<decltype(config.rdata.material_params), std::vector<std::byte>>);

@@ -43,6 +43,8 @@ namespace {
 
 		rnd::driver::texture_interface* find_texture(const res::tag& tag) const override { return m_textures.find(tag); }
 
+		rnd::driver::texture_handle texture(rnd::texture_id id) const override { return m_textures.binding(id).handle; }
+
 		rnd::driver::texture_interface* ensure_render_target(const res::tag& tag, glm::ivec2 size,
 			rnd::driver::texture_header::TYPE format, rnd::driver::texture_usage usage, const rnd::render_targets::sampling& params) override
 		{
@@ -98,7 +100,7 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 	, m_shaders(std::make_unique<rnd::ShaderManager>(drv.get(), res_sys))
 	, m_geometry(std::make_unique<rnd::geom_manager>(drv.get(), d, res_sys))
 	, m_draw_data(std::make_unique<rnd::per_draw_data>(*drv))
-	, m_materials(std::make_unique<rnd::material_groups>(*drv))
+	, m_materials(std::make_unique<rnd::material_groups>(*drv, *m_textures))
 	, m_instances(std::make_unique<rnd::material_instance_cache>(m_shaders->variants(), *m_textures))
 {
 	auto& texture_manager = *m_textures;
