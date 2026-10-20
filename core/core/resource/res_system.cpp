@@ -609,7 +609,9 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
   // Breadth first over the reverse edges; `seen` is what keeps a cycle from looping.
   // An alias edge (original -> alias) is followed like a recorded one but kept apart from them: pruning and the
   // reload of a tag rewrite the recorded ones, and must not drop it.
-  const auto for_each_dependent = [this](const res::tag &tag, const auto &visit) {
+  // `tag` by value: the callers pass an element of the vector that `visit` appends to, and the alias lookup runs
+  // after the visits, so a reference would dangle once that vector grows.
+  const auto for_each_dependent = [this](const res::tag tag, const auto &visit) {
     if (const auto it = m_dependents.find(tag); it != m_dependents.end()) {
       for (const auto &dependent : it->second) {
         visit(dependent);
