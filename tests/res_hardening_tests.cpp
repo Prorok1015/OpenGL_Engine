@@ -205,7 +205,7 @@ BOOST_AUTO_TEST_CASE(RequireSync_NoAdapterForExtension_ReturnsErrorWithoutCrash)
 	desc_fixture f;
 	const auto tag = res::tag{ "memory://hardening/model.gltf" };
 	BOOST_REQUIRE(f.res_sys->store(tag, bytes_of("{}")));
-	auto handle = f.res_sys->require_sync<res::text_resource>(tag);
+	auto handle = f.res_sys->require_sync<desc::desc_base>(tag);
 	BOOST_CHECK(handle.get_sync() == nullptr);
 	BOOST_CHECK(handle.has_error());
 }

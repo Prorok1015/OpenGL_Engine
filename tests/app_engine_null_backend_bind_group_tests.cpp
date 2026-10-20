@@ -146,7 +146,7 @@ std::vector<std::string> free_uniforms(const std::string& source)
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendBindGroups, bind_group_fixture)
 
-BOOST_AUTO_TEST_CASE(EveryDrawHasTheSetsOfItsPipelineBound)
+BOOST_AUTO_TEST_CASE(EveryDrawHasTheSetsOfItsPipelineBound, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	const auto draws_before = driver()->calls().draws;
@@ -172,7 +172,7 @@ BOOST_AUTO_TEST_CASE(EveryDrawHasTheSetsOfItsPipelineBound)
 	BOOST_TEST(with_set(object_set) < draws);
 }
 
-BOOST_AUTO_TEST_CASE(ObjectOffsetsAreAlignedStartOverEveryFrameAndWrapTheFramesInFlight)
+BOOST_AUTO_TEST_CASE(ObjectOffsetsAreAlignedStartOverEveryFrameAndWrapTheFramesInFlight, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	driver()->record_bindings(true);
@@ -217,7 +217,7 @@ BOOST_AUTO_TEST_CASE(ObjectOffsetsAreAlignedStartOverEveryFrameAndWrapTheFramesI
 	expect_no_violations();
 }
 
-BOOST_AUTO_TEST_CASE(TheRingAndTheBoneBufferHoldWhatExtractProduced)
+BOOST_AUTO_TEST_CASE(TheRingAndTheBoneBufferHoldWhatExtractProduced, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	driver()->record_bindings(true);
@@ -271,7 +271,7 @@ BOOST_AUTO_TEST_CASE(TheRingAndTheBoneBufferHoldWhatExtractProduced)
 	BOOST_TEST_MESSAGE("draws checked " << checked_draws << ", of them skinned " << skinned_draws);
 }
 
-BOOST_AUTO_TEST_CASE(NoBindGroupOrBufferIsCreatedAfterWarmUpExceptTransientGroups)
+BOOST_AUTO_TEST_CASE(NoBindGroupOrBufferIsCreatedAfterWarmUpExceptTransientGroups, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_warm_smoke_level();
 	std::vector<std::size_t> persistent;
@@ -301,7 +301,7 @@ BOOST_AUTO_TEST_CASE(NoBindGroupOrBufferIsCreatedAfterWarmUpExceptTransientGroup
 	expect_no_violations();
 }
 
-BOOST_AUTO_TEST_CASE(ShadersComeOutOfThePreprocessorWithTheBindingsOfTheBackend)
+BOOST_AUTO_TEST_CASE(ShadersComeOutOfThePreprocessorWithTheBindingsOfTheBackend, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	driver()->record_shader_sources(true);
 	auto& levels = storage.require<scn::context_manager>();
