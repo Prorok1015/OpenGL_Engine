@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "rnd_null_driver.h"
+#include "rnd_null_swapchain.h"
+#include "rnd_validation_driver.h"
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_includes.h>
@@ -30,6 +32,55 @@ struct shader_load_fixture
 	shader_config::load_result load(const shader_config::constant_data& cdata)
 	{
 		return shader_config::load(cdata, *env.rs, driver::per_type_binding_table);
+	}
+
+	// N reloads of one shader next to one that never changes: what the driver keeps alive for them, counted after the
+	// frame that follows each reload.
+	template <class Live, class Pipelines>
+	void reload_and_count(driver::driver_interface& drv, Live&& live_programs, Pipelines&& pipelines)
+	{
+		ShaderManager shaders(&drv, *env.rs);
+		const auto lib = put("free_lib.glsl", "float v0;\n");
+		const auto changing = shaders.variants().intern(program_of(put("free_a.vert", "#version 450 core\n#include \"free_lib.glsl\"\nvoid main() {}\n"), put("free_a.frag", good_fragment)));
+		const auto steady = shaders.variants().intern(program_of(put("free_b.vert", "#version 450 core\nvoid main() {}\n"), put("free_b.frag", good_fragment)));
+
+		driver::pipeline_handle steady_pipeline;
+		auto frame = [&] {
+			shaders.begin_frame();
+			driver::pipeline_desc desc;
+			desc.shader = shaders.program(changing);
+			BOOST_REQUIRE(desc.shader.object != nullptr);
+			BOOST_TEST(static_cast<bool>(drv.create_pipeline(desc)));
+			desc.shader = shaders.program(steady);
+			BOOST_REQUIRE(desc.shader.object != nullptr);
+			const auto pipeline = drv.create_pipeline(desc);
+			if (!steady_pipeline) {
+				steady_pipeline = pipeline;
+			}
+			BOOST_CHECK(pipeline == steady_pipeline);
+		};
+
+		frame();
+		BOOST_TEST(live_programs() == 2u);
+		BOOST_TEST(pipelines() == 2u);
+
+		for (int reload = 1; reload <= 5; ++reload) {
+			put("free_lib.glsl", "float v" + std::to_string(reload) + ";\n");
+			env.rs->signal_changed(lib);
+			env.pump();
+			frame();
+			// The replaced program is still there in the frame that replaced it.
+			BOOST_TEST(live_programs() == 3u);
+			BOOST_TEST(pipelines() == 3u);
+
+			shaders.begin_frame();
+			BOOST_TEST_CONTEXT("reload " << reload)
+			{
+				BOOST_TEST(live_programs() == 2u);
+				BOOST_TEST(pipelines() == 2u);
+			}
+			BOOST_CHECK(drv.pipeline_info(steady_pipeline).shader.object == shaders.program(steady));
+		}
 	}
 
 	test_util::ram_res_env env;
@@ -354,6 +405,21 @@ BOOST_AUTO_TEST_CASE(AStageThatAppearsLaterIsPickedUpByTheProgramThatFailedWitho
 	BOOST_TEST(shaders.program(variant) != nullptr);
 	BOOST_REQUIRE(drv.shader_sources().size() == 2u);
 	BOOST_TEST(drv.shader_sources()[1].size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ReloadingAShaderOverAndOverKeepsTheProgramsAndPipelinesOfTheNullDriverConstant)
+{
+	driver::null::driver drv;
+	reload_and_count(drv, [&] { return drv.stats().shaders.live(); }, [&] { return drv.pipelines().size(); });
+}
+
+BOOST_AUTO_TEST_CASE(ReloadingAShaderOverAndOverKeepsTheProgramsAndPipelinesBehindTheValidationDriverConstant)
+{
+	driver::validation::swapchain chain(std::make_unique<driver::null::swapchain>());
+	auto drv = chain.create_driver();
+	auto& inner = dynamic_cast<driver::null::driver&>(dynamic_cast<driver::validation::driver&>(*drv).inner());
+	reload_and_count(*drv, [&] { return inner.stats().shaders.live(); }, [&] { return inner.pipelines().size(); });
+	BOOST_TEST(chain.state().total() == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

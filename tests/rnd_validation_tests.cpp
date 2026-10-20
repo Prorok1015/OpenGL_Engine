@@ -1296,4 +1296,54 @@ BOOST_AUTO_TEST_CASE(PipelineBudgetCountsPipelinesCreatedInAFrame)
 	BOOST_TEST(limited.state().total() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(DroppingThePipelinesOfAShaderMakesTheirHandlesStaleAndLeavesTheOthers)
+{
+	open_pass();
+	auto doomed = drv->create_shader(program());
+	auto kept = drv->create_shader(program());
+	pipeline_desc desc;
+	desc.color_formats = state().current_formats().colors;
+	desc.depth_format = state().current_formats().depth;
+	desc.shader = doomed.get();
+	const pipeline_handle gone = drv->create_pipeline(desc);
+	desc.shader = kept.get();
+	const pipeline_handle live = drv->create_pipeline(desc);
+
+	drv->destroy_pipelines_of(doomed.get());
+	BOOST_TEST(inner().pipelines().size() == 1u);
+	BOOST_CHECK(drv->pipeline_info(gone) == empty_pipeline_desc());
+	BOOST_CHECK(drv->pipeline_info(live) == desc);
+	drv->bind_pipeline(live);
+	BOOST_TEST(state().total() == 0u);
+
+	doomed.reset();
+	BOOST_TEST(state().total() == 0u);
+
+	drv->bind_pipeline(gone);
+	expect_only(state(), vl::rule::invalid_pipeline);
+	BOOST_TEST(inner().calls().pipeline_binds == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(APipelineMadeAfterADropTakesTheFreedSlotWithoutBeingReportedAsStale)
+{
+	open_pass();
+	auto first = drv->create_shader(program());
+	pipeline_desc desc;
+	desc.color_formats = state().current_formats().colors;
+	desc.depth_format = state().current_formats().depth;
+	desc.shader = first.get();
+	const pipeline_handle old_handle = drv->create_pipeline(desc);
+	drv->destroy_pipelines_of(first.get());
+	first.reset();
+
+	auto second = drv->create_shader(program());
+	desc.shader = second.get();
+	const pipeline_handle fresh = drv->create_pipeline(desc);
+	BOOST_CHECK(fresh != old_handle);
+	BOOST_TEST(inner().pipelines().size() == 1u);
+	drv->bind_pipeline(fresh);
+	BOOST_TEST(state().total() == 0u);
+	BOOST_TEST(inner().calls().pipeline_binds == 1u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

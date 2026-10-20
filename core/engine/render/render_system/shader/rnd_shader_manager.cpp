@@ -46,6 +46,14 @@ rnd::ShaderManager::~ShaderManager()
 	drv->destroy_buffer(m_lights);
 }
 
+void rnd::ShaderManager::begin_frame() const
+{
+	for (const auto& program : m_retired) {
+		drv->destroy_pipelines_of(program.get());
+	}
+	m_retired.clear();
+}
+
 rnd::driver::shader_interface* rnd::ShaderManager::require_program(variant_id variant) const
 {
 	if (variant.value >= m_programs.size()) {

@@ -314,11 +314,29 @@ rnd::driver::pipeline_handle rnd::driver::validation::driver::create_pipeline(co
 	pipeline_desc inner_desc = desc;
 	inner_desc.shader = &static_cast<const shader*>(desc.shader.object)->inner();
 	const pipeline_handle handle = m_inner->create_pipeline(inner_desc);
-	if (handle.index == m_pipelines.size() + 1) {
-		m_pipelines.push_back({ handle, desc });
+	if (handle && (handle.index > m_pipelines.size() || m_pipelines[handle.index - 1].handle != handle)) {
+		if (handle.index > m_pipelines.size()) {
+			m_pipelines.resize(handle.index);
+		}
+		m_pipelines[handle.index - 1] = { handle, desc };
 		m_state->on_pipeline_created();
 	}
 	return handle;
+}
+
+void rnd::driver::validation::driver::destroy_pipelines_of(const shader_ref& shader)
+{
+	for (known_pipeline& known : m_pipelines) {
+		if (known.handle && known.desc.shader == shader) {
+			if (known.handle.index == m_bound_pipeline) {
+				m_bound_pipeline = 0;
+			}
+			known = {};
+		}
+	}
+	if (shader.object && m_state->require_live(shader.object, object_kind::shader, "destroy_pipelines_of shader")) {
+		m_inner->destroy_pipelines_of(&static_cast<const validation::shader*>(shader.object)->inner());
+	}
 }
 
 void rnd::driver::validation::driver::bind_pipeline(pipeline_handle pipeline)

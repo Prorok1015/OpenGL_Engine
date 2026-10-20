@@ -41,6 +41,10 @@ namespace rnd
 		// not compile after such a change is not put in place of the one that did.
 		driver::shader_interface* program(variant_id variant) const { return require_program(variant); }
 
+		// Frees the programs that were replaced since the last call, with the pipelines made for them. At the start
+		// of a frame, when no pass_pipelines is alive to hold one of those pipelines.
+		void begin_frame() const;
+
 		const set_layouts& layouts() const { return m_layouts; }
 
 		void update_global_uniform(const global_params& val) const;
@@ -69,9 +73,7 @@ namespace rnd
 		mutable shader_config_cache m_variants;
 		mutable std::vector<program_slot> m_programs;
 		mutable std::unordered_map<res::tag, std::vector<std::uint32_t>> m_users;	// file -> the variants made of it
-		// A pipeline holds the address of its program for as long as the driver lives, so a replaced program is
-		// kept instead of freed: a new one could be given its address.
-		// TODO(#349): free retired programs once pipeline_cache can drop their pipelines.
+		// A replaced program waits here for begin_frame: a pass may still draw with it in the frame it was replaced in.
 		mutable std::vector<std::unique_ptr<rnd::driver::shader_interface>> m_retired;
 	};
 }
