@@ -1,96 +1,45 @@
 #include <snk/scene/scn_camera_desc.h>
-#include <snk/scene/scn_glm_json_convert.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/scene/scn_camera_controller_component.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <snk/common/logger/engine_log.h>
 
-namespace {
-	// as_double() throws on JSON integers (`"fov": 60`); to_number accepts any numeric kind.
-	float read_number(const json::value& v)
-	{
-		return v.to_number<float>();
-	}
-
-	// Runtime render targets live in the memory:// store. res::tag(std::string) slices garbage
-	// from a string without a protocol, so add the canonical one when it is missing.
-	res::tag read_rt_tag(const json::value& v)
-	{
-		const std::string_view str = v.as_string();
-		if (str.find("://") != std::string_view::npos)
-			return res::tag(str);
-		return res::tag(res::tag::memory, str);
-	}
-
-	// The words of "clear" and "projection" in the desc; an unknown word keeps the value the camera has.
-	void read_clear(const json::value& v, scn::camera_clear& out)
-	{
-		if (!v.is_string()) return;
-		const std::string_view word = v.as_string();
-		if (word == "all") out = scn::camera_clear::all;
-		else if (word == "depth") out = scn::camera_clear::depth;
-		else if (word == "none") out = scn::camera_clear::none;
-	}
-
-	void read_projection(const json::value& v, scn::camera_projection& out)
-	{
-		if (!v.is_string()) return;
-		const std::string_view word = v.as_string();
-		if (word == "perspective") out = scn::camera_projection::perspective;
-		else if (word == "ortho") out = scn::camera_projection::ortho;
-	}
-
-	std::string_view clear_word(scn::camera_clear clear)
-	{
-		switch (clear) {
-		case scn::camera_clear::depth: return "depth";
-		case scn::camera_clear::none: return "none";
-		default: return "all";
-		}
-	}
-}
-
 void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::object& data)
 {
-	if (data.contains("fov"))
-		m_fov = read_number(data.at("fov"));
-	if (data.contains("near_distance"))
-		m_near_distance = read_number(data.at("near_distance"));
-	if (data.contains("far_distance"))
-		m_far_distance = read_number(data.at("far_distance"));
+	// The schema reads everything the hand-written reader read, but three forms it treats differently. They are settled
+	// here, on a copy of the object, before the generic read.
+	json::object rest = data;
 
-	if (auto* trans = data.if_contains("transform")) {
-		if (trans->as_object().contains("rotation"))
-			m_rotation = json::value_to<glm::vec3>(trans->at("rotation"));
-		if (trans->as_object().contains("position"))
-			m_position = json::value_to<glm::vec3>(trans->at("position"));
-	}
-
-	// Render targets
-	// Replace (not append) so an override layered on a copy of its parent does not duplicate targets.
-	if (auto* arr = data.if_contains("color_targets")) {
-		m_color_targets.clear();
-		for (const auto& v : arr->as_array()) {
-			m_color_targets.push_back(read_rt_tag(v));
+	// A render-target tag without a protocol lives in the memory:// store (the color_targets and the legacy "texture" are
+	// normalized by their codec).
+	for (const std::string_view key : { "depth_target", "tp_accum_target", "tp_reveal_target" }) {
+		const auto* v = rest.if_contains(key);
+		if (v && v->is_string() && v->as_string().find("://") == std::string_view::npos) {
+			const std::string tagged = std::string("memory://").append(v->as_string());
+			rest[key] = json::value(std::string_view{ tagged });
 		}
-	} else if (data.contains("texture")) {
-		// Backward compatibility: old single "texture" field → color_targets[0]
-		m_color_targets.clear();
-		m_color_targets.push_back(read_rt_tag(data.at("texture")));
 	}
-	if (data.contains("depth_target"))
-		m_depth_target = read_rt_tag(data.at("depth_target"));
-	if (data.contains("tp_accum_target"))
-		m_tp_accum_target = read_rt_tag(data.at("tp_accum_target"));
-	if (data.contains("tp_reveal_target"))
-		m_tp_reveal_target = read_rt_tag(data.at("tp_reveal_target"));
 
-	// Render layers (W4, #272). A value that is not an integer is ignored with a warning like an unknown word;
-	// an integer outside the range of the inspector (+-16) is clamped to it.
-	if (auto* layer = data.if_contains("layer")) {
+	// "clear" and "projection" take words only: a number that happens to name an enumerator is not one.
+	for (const std::string_view key : { "clear", "projection" }) {
+		const auto* v = rest.if_contains(key);
+		if (v && !v->is_string())
+			rest.erase(key);
+	}
+
+	// Render layers (W4, #272). A value that is not an integer is ignored with a warning like an unknown word (the generic
+	// reader would take an integral double); an integer outside the range of the inspector (+-16) is clamped to it
+	// (the generic reader would keep the current value).
+	const json::value* layer = data.if_contains("layer");
+	rest.erase("layer");
+
+	desc::schema_desc<camera_desc, desc::schema_kind::component>::deserialize(desc_system, rest);
+
+	if (layer) {
 		constexpr std::int64_t max_layer = 16;
 		if (const auto* i = layer->if_int64())
 			m_layer = static_cast<int>(std::clamp<std::int64_t>(*i, -max_layer, max_layer));
@@ -99,47 +48,6 @@ void scn::camera_desc::deserialize(desc::desc_system& desc_system, const json::o
 		else
 			egLOG_WARN("scene/camera", "camera layer must be an integer, got '{}'; keeping {}", json::serialize(*layer), m_layer);
 	}
-	if (auto* clear = data.if_contains("clear"))
-		read_clear(*clear, m_clear);
-	if (auto* projection = data.if_contains("projection"))
-		read_projection(*projection, m_projection);
-	if (data.contains("ortho_size"))
-		m_ortho_size = read_number(data.at("ortho_size"));
-}
-
-void scn::camera_desc::serialize(json::object& data) const
-{
-	data["fov"] = m_fov;
-	data["near_distance"] = m_near_distance;
-	data["far_distance"] = m_far_distance;
-
-	json::object transform;
-	transform["rotation"] = json::value_from(m_rotation);
-	transform["position"] = json::value_from(m_position);
-	data["transform"] = std::move(transform);
-
-	if (!m_color_targets.empty()) {
-		json::array arr;
-		for (const auto& t : m_color_targets)
-			arr.push_back(json::string(t.string()));
-		data["color_targets"] = std::move(arr);
-	}
-	if (m_depth_target.is_valid())
-		data["depth_target"] = json::string(m_depth_target.string());
-	if (m_tp_accum_target.is_valid())
-		data["tp_accum_target"] = json::string(m_tp_accum_target.string());
-	if (m_tp_reveal_target.is_valid())
-		data["tp_reveal_target"] = json::string(m_tp_reveal_target.string());
-
-	// The defaults are not written, so cameras saved before the fields existed stay byte-identical.
-	if (m_layer != 0)
-		data["layer"] = m_layer;
-	if (m_clear != camera_clear::all)
-		data["clear"] = clear_word(m_clear);
-	if (m_projection != camera_projection::perspective)
-		data["projection"] = "ortho";
-	if (m_ortho_size != default_camera_ortho_size)
-		data["ortho_size"] = m_ortho_size;
 }
 
 void scn::assemble_camera(entt::registry& reg, entt::entity e, const camera_desc& desc, const std::string_view name)
