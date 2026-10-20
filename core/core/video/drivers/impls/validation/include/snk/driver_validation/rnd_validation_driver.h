@@ -1,5 +1,5 @@
 #pragma once
-#include "rnd_validation_objects.h"
+#include <snk/driver_validation/rnd_validation_objects.h>
 #include <snk/driver/rnd_driver_interface.h>
 #include <snk/driver/rnd_swapchain_interface.h>
 #include <snk/driver/rnd_texture_backend.h>

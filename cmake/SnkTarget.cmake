@@ -35,7 +35,13 @@ endfunction()
 #   <component>/ (root)                  sources and internal headers, PRIVATE to the component
 #
 # Every component must have an include/ directory; SnkInstall.cmake installs it to <prefix>/include.
+# SDK_INTERNAL: backend headers are engine-internal (render picks the backend), so include/ is for in-tree
+# consumers only: it is neither installed into the SDK nor part of the exported interface.
 function(snk_component_headers tgt)
+	cmake_parse_arguments(PARSE_ARGV 1 _arg "SDK_INTERNAL" "" "")
+	if(_arg_SDK_INTERNAL)
+		set_property(TARGET ${tgt} PROPERTY SNK_SDK_INTERNAL_HEADERS TRUE)
+	endif()
 	get_target_property(_type ${tgt} TYPE)
 	if(_type STREQUAL "INTERFACE_LIBRARY")
 		set(_scope INTERFACE)

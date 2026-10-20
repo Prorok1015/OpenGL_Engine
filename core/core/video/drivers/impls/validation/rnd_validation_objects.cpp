@@ -1,4 +1,4 @@
-#include "rnd_validation_objects.h"
+#include <snk/driver_validation/rnd_validation_objects.h>
 #include <format>
 
 rnd::driver::validation::shader::shader(std::shared_ptr<validator> owner, std::unique_ptr<shader_interface> inner)

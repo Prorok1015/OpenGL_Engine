@@ -3,7 +3,7 @@
 #include <snk/window/wnd_window_system.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_debug_layer.h>
-#include "gui_gl_backend.h"
+#include <snk/gui_gl/gui_gl_backend.h>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/application/app_deterministic_time.h>
 #include <snk/common/engine_assert.h>

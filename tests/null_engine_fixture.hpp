@@ -7,8 +7,8 @@
 
 #include "test_scene_env.hpp"
 #include "rnd_null_driver.h"
-#include "rnd_null_swapchain.h"
-#include "rnd_validation_driver.h"
+#include <snk/driver_null/rnd_null_swapchain.h>
+#include <snk/driver_validation/rnd_validation_driver.h>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
 #include <snk/application/application.h>

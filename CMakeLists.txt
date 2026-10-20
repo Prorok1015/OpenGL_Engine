@@ -114,6 +114,9 @@ add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
 # The MCP server module is tested on its own (tests/mcp_*.cpp): a fake host over sockets and in process. The socket tests use Asio directly.
 target_link_libraries(unit_tests PRIVATE snk::mcp_server PRIVATE Boost::asio)
+# The tests create the null and validation backends: their public headers (snk/driver_null, snk/driver_validation).
+snk_usage_only(_snk_test_drivers snk::drv_null snk::drv_validation)
+target_link_libraries(unit_tests PRIVATE ${_snk_test_drivers})
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
 # linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass,

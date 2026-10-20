@@ -55,7 +55,7 @@ gl_re+='|(\bGL_[A-Z0-9_]+\b)'
 gl_re+='|(\bGL(u?(int|byte|short)|enum|float|boolean|sizei|bitfield|char|sync|sizeiptr|intptr|double|clampf)\b)'
 gl_re+='|(\bGLAD_[A-Z0-9_]+)'
 gl_re+='|(#[[:space:]]*include[[:space:]]*[<"](glad|GLFW|GL|OpenGL|KHR)/)'
-gl_re+='|(#[[:space:]]*include[[:space:]]*[<"](rnd_gl_[A-Za-z0-9_]+|open_gl_specific)\.h[>"])'
+gl_re+='|(#[[:space:]]*include[[:space:]]*[<"]([A-Za-z0-9_./-]*/)?(rnd_gl_[A-Za-z0-9_]+|open_gl_specific)\.h[>"])'
 gl_re+='|(imgui_impl_opengl|ImGui_ImplOpenGL)'
 gl_re+='|(\bdriver::gl::)'
 

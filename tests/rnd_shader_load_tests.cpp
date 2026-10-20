@@ -1,8 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "rnd_null_driver.h"
-#include "rnd_null_swapchain.h"
-#include "rnd_validation_driver.h"
+#include <snk/driver_null/rnd_null_swapchain.h>
+#include <snk/driver_validation/rnd_validation_driver.h>
 #include "shader/rnd_shader_manager.h"
 #include <snk/render/shader/rnd_scene_shader_desc.h>
 #include <snk/render/shader/rnd_shader_includes.h>
