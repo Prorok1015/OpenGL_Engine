@@ -39,7 +39,6 @@ void edt::scene_editor::create_entity(const std::string& type_name)
 		node.components[type_name] = std::move(comp);
 	}
 
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (!world) return;
 	if (on_before_modify) on_before_modify();
@@ -51,7 +50,6 @@ void edt::scene_editor::create_entity_from_node(prefab_node node)
 {
 	if (node.node_id == desc::invalid_node_id)
 		node.node_id = desc::new_node_id();
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (!world) return;
 	if (on_before_modify) on_before_modify();
@@ -61,7 +59,6 @@ void edt::scene_editor::create_entity_from_node(prefab_node node)
 
 void edt::scene_editor::delete_entity(uint64_t node_id)
 {
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (!world) return;
 	if (on_before_modify) on_before_modify();
@@ -71,7 +68,6 @@ void edt::scene_editor::delete_entity(uint64_t node_id)
 
 void edt::scene_editor::delete_entities(const std::vector<uint64_t>& node_ids)
 {
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (node_ids.empty() || !world) return;
 	if (on_before_modify) on_before_modify();
@@ -83,7 +79,6 @@ void edt::scene_editor::delete_entities(const std::vector<uint64_t>& node_ids)
 
 void edt::scene_editor::duplicate_entity(uint64_t node_id)
 {
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (!world) return;
 	auto* siblings = find_parent_children(world->get_root().children, node_id);
@@ -104,7 +99,6 @@ void edt::scene_editor::duplicate_entity(uint64_t node_id)
 
 void edt::scene_editor::duplicate_entities(const std::vector<uint64_t>& node_ids)
 {
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (node_ids.empty() || !world) return;
 	if (on_before_modify) on_before_modify();
@@ -136,7 +130,6 @@ void edt::scene_editor::duplicate_entities(const std::vector<uint64_t>& node_ids
 
 void edt::scene_editor::reparent_entity(uint64_t node_id, uint64_t new_parent_id, int insert_index)
 {
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (!world) return;
 	auto& root_children = world->get_root().children;
@@ -191,7 +184,6 @@ void edt::scene_editor::reparent_entity(uint64_t node_id, uint64_t new_parent_id
 void edt::scene_editor::on_transform_committed(
 	std::span<const uint64_t> path, glm::vec3 pos, glm::vec3 rot, glm::vec3 scale)
 {
-	m_state.touch_descs();
 	auto* world = m_state.active_world_desc();
 	if (!world) return;
 	auto address = resolve_node_path(world->get_root().children, path);
