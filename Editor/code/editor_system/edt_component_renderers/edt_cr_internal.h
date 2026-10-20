@@ -31,7 +31,6 @@ struct renderer_registrar {
 
 // Internal sub-registration functions — one per component type.
 // Called exclusively from edt_component_renderers.cpp.
-void edt_cr_skybox_register(renderer_registrar& registry);
 void edt_cr_skin_register(renderer_registrar& registry);
 void edt_cr_animation_register(renderer_registrar& registry);
 
