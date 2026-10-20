@@ -14,5 +14,10 @@ target_sources(${PROJECT_NAME} PRIVATE
 "${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_opengl3.cpp"
 )
 
+# Third-party source inside a project target (which carries -Werror / /WX): its warnings stay visible
+# but are not errors (#258).
+set_source_files_properties("${THIRD_PARTY_PATH}/imgui/backends/imgui_impl_opengl3.cpp" PROPERTIES
+	COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/WX-,-Wno-error>")
+
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::gui_backend_interface PRIVATE imgui PRIVATE snk::drv_interface)
 # No drv_opengl link: imgui_impl_opengl3 uses its embedded loader (no IMGUI_IMPL_OPENGL_LOADER_* define is set anywhere).

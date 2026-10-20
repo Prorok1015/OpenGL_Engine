@@ -1,5 +1,8 @@
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/image/image.h>
+#include <snk/common/logger/engine_log.h>
+#include <cstddef>
+#include <limits>
 
 std::optional<res::raw_image_adapter::raw_image_header> res::raw_image_adapter::read_header(const std::vector<std::byte>& data) const
 {
@@ -56,7 +59,11 @@ res::pct_adapter::pct_adapter()
 
 std::shared_ptr<res::picture_resource> res::pct_adapter::operator()(res::tag tag, const std::vector<std::byte>& data) const
 {
-	auto img = stb_image::Image::read_from_memory( reinterpret_cast<const unsigned char*>(data.data()), data.size());
+	if (data.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+		egLOG_ERROR("resource", "picture '{}' is too large to decode: {} bytes", tag.view(), data.size());
+		return nullptr;
+	}
+	auto img = stb_image::Image::read_from_memory( reinterpret_cast<const unsigned char*>(data.data()), static_cast<int>(data.size()));
 	glm::ivec2 size(img.width(), img.height());
 	auto raw_data = new unsigned char[img.size()];
 	std::memcpy(raw_data, img.data(), img.size());

@@ -60,7 +60,7 @@ trs_result decompose_aimatrix(const aiMatrix4x4& m)
 
 void store_data(std::vector<std::byte>& data, const auto& value)
 {
-	int begin = data.size();
+	const size_t begin = data.size();
 	data.resize(data.size() + sizeof(value));
 	std::memcpy((data.data() + begin), &value, sizeof(value));
 }

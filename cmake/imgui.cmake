@@ -18,7 +18,8 @@ add_library(imgui STATIC
 )
 add_library(imgui::imgui ALIAS imgui)
 
-target_include_directories(imgui PUBLIC
+# SYSTEM: <imgui.h> in project code must not report warnings (-Werror / /WX, #258).
+target_include_directories(imgui SYSTEM PUBLIC
 	"${THIRD_PARTY_PATH}/imgui"
 	"${THIRD_PARTY_PATH}/imgui/misc/cpp"
 )

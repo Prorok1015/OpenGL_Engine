@@ -1,14 +1,34 @@
 # snk::compiler_warnings — warning flags for project code only (EPIC-41 US-41-10).
 # Carried by an INTERFACE target that is linked by snk::common (which every project target
 # consumes, same as snk::sanitizers). Third-party code (lib3dparty/*, FetchContent Boost) never
-# links it, so it keeps its own flags. Warnings are informational: no -Werror.
+# links it, so it keeps its own flags and its own warnings never fail the build.
+#
+# SNK_WARNINGS_AS_ERRORS (default ON, #258): the warnings of project code are errors (-Werror on
+# GCC/Clang, /WX on MSVC), in CI and in local builds. Escape hatch for a new compiler that finds
+# fresh warnings: -DSNK_WARNINGS_AS_ERRORS=OFF. CI never sets it.
+option(SNK_WARNINGS_AS_ERRORS "Treat warnings of project code (not third-party) as errors" ON)
+
 add_library(snk_compiler_warnings INTERFACE)
 if(MSVC)
 	# /W3, not /W4: /W4 is too noisy with third-party headers.
 	target_compile_options(snk_compiler_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/W3>)
+	# Headers behind SYSTEM include directories (/external:I, see snk_isolate_third_party_warnings
+	# below) report nothing, so a third-party header cannot fail a project translation unit.
+	if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND CMAKE_INCLUDE_SYSTEM_FLAG_CXX MATCHES "external")
+		target_compile_options(snk_compiler_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/external:W0>)
+	endif()
+	if(SNK_WARNINGS_AS_ERRORS)
+		target_compile_options(snk_compiler_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/WX>)
+	endif()
 else()
 	target_compile_options(snk_compiler_warnings INTERFACE
 		$<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic -Wno-unused-parameter>)
+	if(SNK_WARNINGS_AS_ERRORS)
+		target_compile_options(snk_compiler_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-Werror>)
+	endif()
+endif()
+if(SNK_WARNINGS_AS_ERRORS)
+	message(STATUS "Warnings are errors for project code (SNK_WARNINGS_AS_ERRORS=ON)")
 endif()
 add_library(snk::compiler_warnings ALIAS snk_compiler_warnings)
 

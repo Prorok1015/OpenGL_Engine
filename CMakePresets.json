@@ -10,7 +10,8 @@
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "SNK_COMPILER_CACHE": "AUTO",
-        "SNK_PCH": "AUTO"
+        "SNK_PCH": "AUTO",
+        "SNK_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {

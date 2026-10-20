@@ -69,18 +69,18 @@ namespace edt
 	// action_ui.
 	struct action_desc
 	{
-		std::string id;            // "file.save_level"
-		std::string label;
-		std::string menu_path;
-		std::string shortcut;
-		std::string shortcut_hint;
+		std::string id{};          // "file.save_level"
+		std::string label{};
+		std::string menu_path{};
+		std::string shortcut{};
+		std::string shortcut_hint{};
 		bool separator_before = false;
 		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
-		action_fn execute;
+		action_fn execute{};
 		// JSON Schema (see cmd_json_schema.h) of the arguments (a top-level "type":"object") and of the result. Null: no_args_schema(). `invoke` validates the arguments
 		// before it calls `execute` and the result after it.
-		boost::json::value args_schema;
-		boost::json::value result_schema;
+		boost::json::value args_schema{};
+		boost::json::value result_schema{};
 		std::uint32_t schema_version = 1;
 		// Listed by tools() for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
@@ -88,9 +88,9 @@ namespace edt
 		// action says it only reads: the MCP server offers an agent the commands that do not mutate, so a forgotten
 		// flag must keep an action out of reach, not put it in.
 		bool mutates = true;
-		std::function<void()> activate;
+		std::function<void()> activate{};
 		// Null: always enabled.
-		std::function<bool()> enabled;
+		std::function<bool()> enabled{};
 	};
 
 	// One menu item as the main menu draws it.

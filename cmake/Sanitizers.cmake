@@ -18,6 +18,13 @@ if(SNK_SANITIZE AND NOT SNK_SANITIZE STREQUAL "none")
 			set(_snk_san_flags -fsanitize=address,undefined -fno-sanitize-recover=undefined)
 		elseif(SNK_SANITIZE STREQUAL "thread")
 			set(_snk_san_flags -fsanitize=thread)
+			# GCC -Wtsan: "atomic_thread_fence is not supported with -fsanitize=thread". The only
+			# fences in our TUs are Boost.Asio's (std_fenced_block), reported through inlining even
+			# though the header is SYSTEM, so SYSTEM cannot silence it; it stays visible but is not an error.
+			# A known TSan limitation, not actionable in project code.
+			if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+				target_compile_options(snk_sanitizers INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-Wno-error=tsan>)
+			endif()
 		else()
 			message(FATAL_ERROR "SNK_SANITIZE must be none, address or thread (got '${SNK_SANITIZE}')")
 		endif()

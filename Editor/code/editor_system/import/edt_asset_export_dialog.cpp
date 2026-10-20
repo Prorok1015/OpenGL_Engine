@@ -2,6 +2,22 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/resource/res_system.h>
 #include <imgui.h>
+#include <algorithm>
+#include <cstddef>
+#include <string_view>
+
+namespace {
+
+// Copies `text` into a fixed ImGui text buffer, truncating it, and always terminates it.
+template<std::size_t N>
+void copy_to_buffer(char (&dst)[N], std::string_view text)
+{
+	const std::size_t count = std::min(text.size(), N - 1);
+	std::copy_n(text.data(), count, dst);
+	dst[count] = '\0';
+}
+
+}
 
 edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter)
 	: m_exporter(exporter)
@@ -18,12 +34,10 @@ void edt::asset_export_dialog::open(import_result result)
 	m_exporting = false;
 
 	std::string name = m_import.source_path.stem().string();
-	strncpy(m_asset_name, name.c_str(), sizeof(m_asset_name) - 1);
-	m_asset_name[sizeof(m_asset_name) - 1] = '\0';
+	copy_to_buffer(m_asset_name, name);
 
 	std::string folder = "assets/" + name;
-	strncpy(m_target_folder, folder.c_str(), sizeof(m_target_folder) - 1);
-	m_target_folder[sizeof(m_target_folder) - 1] = '\0';
+	copy_to_buffer(m_target_folder, folder);
 
 	m_browse_folder = false;
 	m_needs_open = true;
@@ -49,8 +63,7 @@ bool edt::asset_export_dialog::render()
 			auto selected = m_folder_dialog.get_selected_path();
 			auto base = res::resource_system::get_resources_path();
 			auto rel = selected.lexically_relative(base);
-			strncpy(m_target_folder, rel.string().c_str(), sizeof(m_target_folder) - 1);
-			m_target_folder[sizeof(m_target_folder) - 1] = '\0';
+			copy_to_buffer(m_target_folder, rel.string());
 			m_browse_folder = false;
 			m_needs_open = true; // re-open the export popup (ImGui closed it while folder dialog was active)
 		}

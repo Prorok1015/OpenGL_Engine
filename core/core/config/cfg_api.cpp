@@ -123,7 +123,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 
 	if (vm.count("set")) {
 		auto& tokens = vm["set"].as<std::vector<std::string>>();
-		for (int i = 1; i < tokens.size(); i += 2) {
+		for (std::size_t i = 1; i < tokens.size(); i += 2) {
 			std::string name = tokens[i - 1];
 			std::string val = tokens[i];
 			auto var_it = cfg::config_manager::instance().registered_variables.find(name);

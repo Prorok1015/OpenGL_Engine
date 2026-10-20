@@ -7,7 +7,7 @@ file(GLOB_RECURSE SE_CONFIG_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DI
 target_sources(${PROJECT_NAME} PRIVATE ${SE_CONFIG_SOURCES})
 
 snk_component_headers(${PROJECT_NAME})
-target_link_libraries(${PROJECT_NAME} PUBLIC snk::api)
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::api PRIVATE $<BUILD_INTERFACE:snk::compiler_warnings>)
 
 add_subdirectory(${THIRD_PARTY_PATH}/yaml yaml-cpp)
 
