@@ -57,6 +57,7 @@ namespace edt
 				auto& cam = reg->get<scn::camera_component>(ent);
 				if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
 				cam.m_viewport.size = edt::to_framebuffer_size({ size.x, size.y }, { fb_scale.x, fb_scale.y });
+				cam.wireframe = m_wireframe;
 
 				if (reg->all_of<scn::local_transform>(ent))
 					cam_view = glm::inverse(reg->get<scn::local_transform>(ent).local);
@@ -118,6 +119,18 @@ namespace edt
 			if (active)
 				ImGui::PopStyleColor();
 			ImGui::SameLine();
+		}
+
+		ImGui::TextDisabled("|");
+		ImGui::SameLine();
+		{
+			const bool active = m_wireframe;
+			if (active)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+			if (ImGui::Button("Wireframe"))
+				m_wireframe = !m_wireframe;
+			if (active)
+				ImGui::PopStyleColor();
 		}
 
 		// Show Skeleton toggle — find skeleton_component on selected entity or its ancestors
