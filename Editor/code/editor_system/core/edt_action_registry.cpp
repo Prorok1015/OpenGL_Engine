@@ -127,6 +127,7 @@ edt::registration edt::action_registry::add(action_desc desc)
 	ui.shortcut = std::move(desc.shortcut);
 	ui.shortcut_hint = std::move(desc.shortcut_hint);
 	ui.separator_before = desc.separator_before;
+	ui.disabled_tooltip = std::move(desc.disabled_tooltip);
 	ui.activate = std::move(desc.activate);
 	return add(std::move(command), std::move(ui));
 }
@@ -216,7 +217,8 @@ std::vector<edt::menu_item_info> edt::action_registry::items(std::string_view me
 			a->ui.label,
 			a->ui.shortcut_hint.empty() ? a->ui.shortcut : a->ui.shortcut_hint,
 			a->ui.separator_before,
-			m_commands.is_enabled(a->id) });
+			m_commands.is_enabled(a->id),
+			a->ui.disabled_tooltip });
 	}
 	return out;
 }

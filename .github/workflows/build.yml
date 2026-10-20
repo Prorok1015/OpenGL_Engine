@@ -25,7 +25,7 @@ on:
 #   if: github.event_name == 'push' || github.event.pull_request.draft == false
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
-# Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Editor visual smoke.
+# Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
 # Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared, Linux TSan,
 # SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes only.
 
@@ -149,6 +149,95 @@ jobs:
         timeout-minutes: 10
         working-directory: build/ci-linux-shared
         run: ./unit_tests --log_level=test_suite
+
+  # SNK_WITH_ASSIMP=OFF (EPIC-41 US-41-7, #105): assimp is not configured, the model importer and the editor
+  # model import are not compiled. Cheap (no assimp to build), so FAST tier: it is the only guard that keeps the option
+  # from rotting. The SDK checks (nothing of assimp installed or exported, the consumer still builds) run in the FULL tier.
+  no-assimp:
+    name: Linux GCC no Assimp
+    runs-on: ubuntu-latest
+
+    env:
+      FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
+      SDK_PREFIX: ${{ github.workspace }}/sdk-install-no-assimp
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+
+      - name: Set up compiler cache
+        uses: ./.github/actions/compiler-cache
+        with:
+          key: cc-ci-linux-no-assimp
+
+      - name: Cache FetchContent (Boost)
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FC_DIR }}
+          key: fc-ubuntu-latest-Debug-g++-${{ hashFiles('cmake/ThirdParty.cmake') }}
+
+      - name: Configure
+        run: cmake --preset ci-linux-no-assimp "-DFETCHCONTENT_BASE_DIR=${FC_DIR}"
+
+      - name: Check assimp is not part of the build
+        run: |
+          if grep -q '^ASSIMP_' build/ci-linux-no-assimp/CMakeCache.txt; then
+            echo "::error::assimp was configured although SNK_WITH_ASSIMP=OFF"
+            exit 1
+          fi
+
+      - name: Build editor and unit_tests
+        run: cmake --build build/ci-linux-no-assimp --target editor unit_tests --parallel
+
+      - name: Compiler cache statistics
+        if: always()
+        run: ccache -s
+
+      - name: Run unit tests
+        timeout-minutes: 10
+        working-directory: build/ci-linux-no-assimp
+        run: ./unit_tests --log_level=test_suite
+
+      - name: Build SDK targets
+        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        run: cmake --build build/ci-linux-no-assimp --target snk_sdk --parallel
+
+      - name: Install SDK
+        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        run: cmake --install build/ci-linux-no-assimp --prefix "${SDK_PREFIX}"
+
+      - name: Check the SDK has no assimp
+        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        run: |
+          if grep -rIil assimp "${SDK_PREFIX}/lib/cmake"; then
+            echo "::error::the package config mentions assimp"
+            exit 1
+          fi
+          if find "${SDK_PREFIX}/lib" -iname '*assimp*' | grep -q .; then
+            echo "::error::assimp was installed"
+            exit 1
+          fi
+
+      - name: Configure consumer
+        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        run: |
+          cmake -S tests/package_consumer -B build/consumer-no-assimp -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
+
+      - name: Build consumer
+        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        run: cmake --build build/consumer-no-assimp
+
+      - name: Run consumer
+        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        run: build/consumer-no-assimp/package_consumer
 
   # Sanitizer builds (Linux only; project targets instrumented, third-party is not).
   # GCC is used because the Clang build is currently broken (see the Linux Clang Debug job).

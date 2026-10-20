@@ -10,7 +10,9 @@
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
+#endif
 #include <snk/config/cfg_api.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/render/rnd_render_service_init.h>
@@ -89,8 +91,10 @@ int main(int argc, char** argv)
 	rnd::skinning_manager skinning;
 	auto scene_types = scn::register_scene_types(desc_sys, assembler, skinning);
 	engine::render::register_render_descs(desc_sys);
+#if SNK_HAS_ASSIMP
 	// Levels reference models (.glb) that are imported into prefabs while they load.
 	res_sys.registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(desc_sys), std::ref(res_sys));
+#endif
 	core::desc::desc_adapter_t adapter(res_sys, desc_sys);
 
 	std::vector<fs::path> files;

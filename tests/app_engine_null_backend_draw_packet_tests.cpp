@@ -97,7 +97,7 @@ std::vector<transform_bytes> transforms_of(const std::pmr::vector<rnd::draw_call
 
 BOOST_FIXTURE_TEST_SUITE(AppEngineNullBackendDrawPacket, draw_packet_fixture)
 
-BOOST_AUTO_TEST_CASE(SortedPacketsDrawTheSameMeshesAsTheScene)
+BOOST_AUTO_TEST_CASE(SortedPacketsDrawTheSameMeshesAsTheScene, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_bench_level();
 	const auto worlds = expected();
@@ -126,7 +126,7 @@ BOOST_AUTO_TEST_CASE(SortedPacketsDrawTheSameMeshesAsTheScene)
 	BOOST_TEST_MESSAGE("packets checked " << checked_packets << ", draws " << checked_draws);
 }
 
-BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacketAndTheMaterialCache)
+BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacketAndTheMaterialCache, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_bench_level();
 
@@ -166,7 +166,7 @@ BOOST_AUTO_TEST_CASE(DrawIdsResolveInsideTheirPacketAndTheMaterialCache)
 	BOOST_TEST_MESSAGE("draws checked " << checked << ", skinned " << skinned);
 }
 
-BOOST_AUTO_TEST_CASE(TransparentDrawsComeFarthestFirst)
+BOOST_AUTO_TEST_CASE(TransparentDrawsComeFarthestFirst, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	load_bench_level();
 	// The bench level has only opaque materials: draw every mesh in both lists, so the transparent one has depths to order.

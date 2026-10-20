@@ -183,7 +183,7 @@ Assimp извлекает `aiCamera` и `aiLight`. Нужно генериров
 - `core/engine/assimp_importer/scn_assimp_resource_system_wrapper.cpp` (перемещён из `scene/adapters/`)
 - `core/engine/scene/CMakeLists.txt` (убрать `PRIVATE assimp`)
 - `Editor/code/editor_system/CMakeLists.txt` (заменить `PRIVATE assimp` → `PRIVATE assimp_importer`)
-- `CMakeLists.txt` (корневой — опция `ENABLE_ASSIMP_IMPORTER`)
+- `CMakeLists.txt` (корневой — опция `SNK_WITH_ASSIMP`, уже добавлена в #105; ранее называлась `SNK_WITH_ASSIMP`)
 **Зависимости:** нет (фундаментальная задача, предшествует US-34-1 и US-34-2)
 
 Сейчас Assimp линкуется в двух местах: `scene` (`target_link_libraries(... PRIVATE assimp)` — с комментарием `#temporary`) и `editor_system` (`PRIVATE assimp`). Парсинг модели дублируется в `scn_model_importer_adapter.cpp` (~600 строк) и `edt_model_importer.cpp` (~700 строк). Нужно:
@@ -191,7 +191,7 @@ Assimp извлекает `aiCamera` и `aiLight`. Нужно генериров
 1. **Создать отдельную static library `assimp_importer`** — единственный таргет, который линкует Assimp.
 2. **Перенести весь Assimp-зависимый код** из `scene/adapters/` и `editor_system/import/` в новый модуль.
 3. **Объединить дублированный парсинг** в `scn_assimp_scene_parser` — единую точку входа для преобразования `aiScene*` в `parse_result` (prefab JSON + geometry + skinning weights + tags).
-4. **Сделать модуль опциональным** через CMake-опцию `ENABLE_ASSIMP_IMPORTER` (по умолчанию `ON`).
+4. **Сделать модуль опциональным** через CMake-опцию `SNK_WITH_ASSIMP` (по умолчанию `ON`).
 
 #### Архитектура модуля
 
@@ -208,9 +208,9 @@ core/engine/assimp_importer/         ← новая static library
 
 ```cmake
 # CMakeLists.txt (корневой или core/engine/)
-option(ENABLE_ASSIMP_IMPORTER "Build Assimp model importer module" ON)
+option(SNK_WITH_ASSIMP "Build Assimp model importer module" ON)
 
-if(ENABLE_ASSIMP_IMPORTER)
+if(SNK_WITH_ASSIMP)
     add_subdirectory("assimp_importer")
 endif()
 ```
@@ -287,7 +287,7 @@ parse_result parse_assimp_scene(
 #endif
 ```
 
-Без `ENABLE_ASSIMP_IMPORTER` — engine собирается без Assimp, runtime-загрузка `.glb`/`.fbx` недоступна, но все остальные ресурсы (desc, textures, geometry) работают как обычно.
+Без `SNK_WITH_ASSIMP` — engine собирается без Assimp, runtime-загрузка `.glb`/`.fbx` недоступна, но все остальные ресурсы (desc, textures, geometry) работают как обычно.
 
 #### Что остаётся в `editor_system/import/`
 
@@ -305,8 +305,8 @@ parse_result parse_assimp_scene(
 - [ ] Дублированный код (`convert_to_glm`, `decompose_aimatrix`, `store_data`, `process_mesh_geometry`, `build_mesh_skin_weights`, `build_prefab_node`, `find_material_texture`, `process_material`) существует только в `assimp_importer/`, не в editor и не в scene
 - [ ] `edt_model_importer.cpp` уменьшен до ~100-150 строк (I/O + async split + вызов `parse_assimp_scene`)
 - [ ] `scn_model_importer_adapter.cpp` уменьшен до ~50-80 строк (I/O + вызов `parse_assimp_scene` + finalize)
-- [ ] CMake-опция `ENABLE_ASSIMP_IMPORTER=OFF` → проект собирается без Assimp, адаптер не регистрируется
-- [ ] CMake-опция `ENABLE_ASSIMP_IMPORTER=ON` (default) → всё работает как раньше
+- [ ] CMake-опция `SNK_WITH_ASSIMP=OFF` → проект собирается без Assimp, адаптер не регистрируется
+- [ ] CMake-опция `SNK_WITH_ASSIMP=ON` (default) → всё работает как раньше
 - [ ] Импорт `.glb` через editor работает как раньше
 - [ ] Импорт `.glb` через `res::require<>()` в runtime работает как раньше
 
@@ -333,7 +333,7 @@ US-34-5 (import options UI) — параллельно с US-34-8
 ## Критерии завершения эпика
 
 - [ ] Весь Assimp-зависимый код изолирован в `assimp_importer` — ни `scene`, ни `editor_system` не линкуют Assimp напрямую
-- [ ] Проект собирается с `ENABLE_ASSIMP_IMPORTER=OFF` без ошибок линковки
+- [ ] Проект собирается с `SNK_WITH_ASSIMP=OFF` без ошибок линковки
 - [ ] Нет дублированного кода между `edt_model_importer` и `scn_model_importer_adapter`
 - [ ] PBR-модель (glTF с metalness/roughness) импортируется с корректными текстурными слотами
 - [ ] Layout строится по всем мешам, а не по первому

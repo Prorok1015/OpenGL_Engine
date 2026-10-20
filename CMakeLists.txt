@@ -59,6 +59,12 @@ endif()
 # any add_subdirectory so every submodule sees consistent options (EPIC-41 US-41-1).
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(ThirdParty)
+# 1/0 for `#if SNK_HAS_ASSIMP` in the editor, tools and tests; every project target sees it.
+if(SNK_WITH_ASSIMP)
+    add_compile_definitions(SNK_HAS_ASSIMP=1)
+else()
+    add_compile_definitions(SNK_HAS_ASSIMP=0)
+endif()
 # FetchContent'd Boost lives outside the source tree: remap it too, plus the symlink-resolved
 # source root (e.g. submodules linked from another checkout).
 if(MSVC)
@@ -98,6 +104,10 @@ enable_testing()
 
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "tests/*.cpp")
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp")
+if(NOT SNK_WITH_ASSIMP)
+    # These drive the assimp importers, or load the shipped levels that reference models.
+    list(FILTER TEST_SOURCES EXCLUDE REGEX "/tests/(scn_model_importer_tests|edt_import_cancel_tests|desc_repo_roundtrip_tests)\\.cpp$")
+endif()
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 

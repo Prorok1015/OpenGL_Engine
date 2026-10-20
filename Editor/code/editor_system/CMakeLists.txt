@@ -4,6 +4,9 @@ add_library(${PROJECT_NAME} STATIC)
 add_library(snk::editor_system ALIAS ${PROJECT_NAME})
 
 file(GLOB_RECURSE SE_EDT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+if(NOT SNK_WITH_ASSIMP)
+	list(FILTER SE_EDT_SOURCES EXCLUDE REGEX "/import/edt_(model_importer|filesystem_assimp_io)\\.cpp$")
+endif()
 target_sources(${PROJECT_NAME} PRIVATE ${SE_EDT_SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}"
@@ -20,8 +23,11 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface
 # (EPIC-49 US-49-1/US-49-3). The umbrella no longer leaks all component headers.
 # assimp: the editor calls it directly; in the shared build it lives in snk_engine.
-snk_usage_only(_edt_assimp assimp)
-if(SNK_ENGINE_SHARED AND MSVC)
+set(_edt_assimp "")
+if(SNK_WITH_ASSIMP)
+	snk_usage_only(_edt_assimp assimp)
+endif()
+if(SNK_WITH_ASSIMP AND SNK_ENGINE_SHARED AND MSVC)
 	# A DLL exports nothing it was not told to: assimp and Boost.JSON are linked into the editor
 	# as their own static copy. assimp's DefaultLogger is a per-module global, so logging set up in
 	# the editor is not seen by the DLL's copy (aiScene does not cross core headers).

@@ -795,6 +795,28 @@ BOOST_AUTO_TEST_CASE(EachBuiltinActionRunsHeadlessWithJsonArguments)
 	BOOST_CHECK(f.gui.callbacks.empty()); // no dialog was asked for
 }
 
+// An editor built without assimp sets no import hook: the item stays in the menu, disabled, with the reason.
+BOOST_AUTO_TEST_CASE(ImportModel_WithoutAnImportHookIsDisabledWithAReason)
+{
+	file_menu_fixture f;
+	edt::action_registry actions;
+	edt::file_menu_hooks hooks = f.hooks;
+	hooks.import_model = nullptr;
+	edt::file_menu menu(f.dialogs, actions, hooks);
+	menu.register_actions();
+
+	BOOST_CHECK(!actions.is_enabled("file.import_model"));
+	BOOST_CHECK_EQUAL(actions.invoke("file.import_model", json_of(R"({"path":"/models/m.glb"})")).code, "disabled");
+	bool found = false;
+	for (const auto& item : actions.items("File")) {
+		if (item.id != "file.import_model") continue;
+		found = true;
+		BOOST_CHECK(!item.enabled);
+		BOOST_CHECK(!item.disabled_tooltip.empty());
+	}
+	BOOST_CHECK(found);
+}
+
 BOOST_AUTO_TEST_CASE(BuiltinActions_RejectBadArgumentsAndDoNotRun)
 {
 	file_menu_fixture f;

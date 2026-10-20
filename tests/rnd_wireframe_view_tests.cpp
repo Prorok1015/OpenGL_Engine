@@ -237,7 +237,7 @@ BOOST_AUTO_TEST_CASE(TheCameraComponentFlagReachesItsPacketOnly)
 	BOOST_TEST(filled == 1u);
 }
 
-BOOST_AUTO_TEST_CASE(TheWireframeCameraOfTheSmokeLevelTurnsItsSceneDrawsIntoLinesAndNothingElse)
+BOOST_AUTO_TEST_CASE(TheWireframeCameraOfTheSmokeLevelTurnsItsSceneDrawsIntoLinesAndNothingElse, * boost::unit_test::enable_if<(SNK_HAS_ASSIMP != 0)>())
 {
 	auto& levels = storage.require<scn::context_manager>();
 	BOOST_REQUIRE(levels.load_level(res::tag::make("levels/smoke_level.desc")));

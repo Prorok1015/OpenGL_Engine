@@ -17,48 +17,53 @@ set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 
-# --- Assimp (resource_system) ---
-set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
-set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-# MSVC Release: Assimp adds /Zi (shared PDB written through mspdbsrv, serialised across parallel
-# compiles, not cacheable by sccache) to its flags when this is ON; its PDBs are never shipped.
-set(ASSIMP_INSTALL_PDB OFF CACHE BOOL "" FORCE)
-# Assimp would set a GLOBAL ccache RULE_LAUNCH_COMPILE/LINK for the whole build (project targets
-# included), stacking a second ccache in front of the launcher chosen by SNK_COMPILER_CACHE.
-set(ASSIMP_BUILD_USE_CCACHE OFF CACHE BOOL "" FORCE)
+# --- Assimp (model importer) ---
+# OFF: assimp is neither configured nor linked, scn::model_importer_adapter and the editor model import
+# are not compiled (SNK_HAS_ASSIMP=0); .glb/.gltf/.obj/.fbx then have no resource adapter. EPIC-41 US-41-7.
+option(SNK_WITH_ASSIMP "Build the Assimp-based model importer (glb, gltf, obj, fbx)" ON)
+if(SNK_WITH_ASSIMP)
+	set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+	set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+	set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+	set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+	# MSVC Release: Assimp adds /Zi (shared PDB written through mspdbsrv, serialised across parallel
+	# compiles, not cacheable by sccache) to its flags when this is ON; its PDBs are never shipped.
+	set(ASSIMP_INSTALL_PDB OFF CACHE BOOL "" FORCE)
+	# Assimp would set a GLOBAL ccache RULE_LAUNCH_COMPILE/LINK for the whole build (project targets
+	# included), stacking a second ccache in front of the launcher chosen by SNK_COMPILER_CACHE.
+	set(ASSIMP_BUILD_USE_CCACHE OFF CACHE BOOL "" FORCE)
 
-# MINIMAL builds only the formats the editor imports (glTF/glb, OBJ, FBX) and no exporters (the
-# engine never exports through Assimp): most of Assimp's compile time is its ~70 other importers.
-# Releases use ALL (`release` preset, release.yml).
-set(SNK_ASSIMP_FORMATS "MINIMAL" CACHE STRING "Assimp formats: MINIMAL (glTF, OBJ, FBX importers) or ALL")
-set_property(CACHE SNK_ASSIMP_FORMATS PROPERTY STRINGS MINIMAL ALL)
-set(SNK_ASSIMP_MINIMAL_IMPORTERS GLTF OBJ FBX)
-if(SNK_ASSIMP_FORMATS STREQUAL "ALL")
-	set(_snk_assimp_all ON)
-else()
-	set(_snk_assimp_all OFF)
-endif()
-set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT ${_snk_assimp_all} CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT ${_snk_assimp_all} CACHE BOOL "" FORCE)
-if(_snk_assimp_all)
-	set(ASSIMP_NO_EXPORT OFF CACHE BOOL "" FORCE)
-else()
-	set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
-endif()
-# Assimp caches one option per format on the first configure. Drop them so they are re-created
-# from the defaults above, otherwise switching SNK_ASSIMP_FORMATS on an existing build dir is a no-op.
-get_cmake_property(_snk_cache_vars CACHE_VARIABLES)
-foreach(_var IN LISTS _snk_cache_vars)
-	if(_var MATCHES "^ASSIMP_BUILD_.+_(IM|EX)PORTER$")
-		unset(${_var} CACHE)
+	# MINIMAL builds only the formats the editor imports (glTF/glb, OBJ, FBX) and no exporters (the
+	# engine never exports through Assimp): most of Assimp's compile time is its ~70 other importers.
+	# Releases use ALL (`release` preset, release.yml).
+	set(SNK_ASSIMP_FORMATS "MINIMAL" CACHE STRING "Assimp formats: MINIMAL (glTF, OBJ, FBX importers) or ALL")
+	set_property(CACHE SNK_ASSIMP_FORMATS PROPERTY STRINGS MINIMAL ALL)
+	set(SNK_ASSIMP_MINIMAL_IMPORTERS GLTF OBJ FBX)
+	if(SNK_ASSIMP_FORMATS STREQUAL "ALL")
+		set(_snk_assimp_all ON)
+	else()
+		set(_snk_assimp_all OFF)
 	endif()
-endforeach()
-if(NOT _snk_assimp_all)
-	foreach(_fmt IN LISTS SNK_ASSIMP_MINIMAL_IMPORTERS)
-		set(ASSIMP_BUILD_${_fmt}_IMPORTER ON CACHE BOOL "" FORCE)
+	set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT ${_snk_assimp_all} CACHE BOOL "" FORCE)
+	set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT ${_snk_assimp_all} CACHE BOOL "" FORCE)
+	if(_snk_assimp_all)
+		set(ASSIMP_NO_EXPORT OFF CACHE BOOL "" FORCE)
+	else()
+		set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+	endif()
+	# Assimp caches one option per format on the first configure. Drop them so they are re-created
+	# from the defaults above, otherwise switching SNK_ASSIMP_FORMATS on an existing build dir is a no-op.
+	get_cmake_property(_snk_cache_vars CACHE_VARIABLES)
+	foreach(_var IN LISTS _snk_cache_vars)
+		if(_var MATCHES "^ASSIMP_BUILD_.+_(IM|EX)PORTER$")
+			unset(${_var} CACHE)
+		endif()
 	endforeach()
+	if(NOT _snk_assimp_all)
+		foreach(_fmt IN LISTS SNK_ASSIMP_MINIMAL_IMPORTERS)
+			set(ASSIMP_BUILD_${_fmt}_IMPORTER ON CACHE BOOL "" FORCE)
+		endforeach()
+	endif()
 endif()
 
 # --- spdlog (engine_logger) ---
