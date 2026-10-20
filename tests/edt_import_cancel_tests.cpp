@@ -19,6 +19,28 @@ o Tri
 f 1 2 3
 )";
 
+// Asks for a stop right after the first store: the material is the first thing a model import stores, so the next
+// checkpoint after the prefab is built finds the job cancelled with tags already in the resolver.
+class stopping_resolver : public test_util::ram_resolver
+{
+public:
+	stopping_resolver(const std::string_view prt, std::stop_source& source) : ram_resolver(prt), m_source(source) {}
+
+	bool store(const res::tag& tag, const std::vector<std::byte>& data) override
+	{
+		const bool stored = ram_resolver::store(tag, data);
+		if (++stores == 1) {
+			m_source.request_stop();
+		}
+		return stored;
+	}
+
+	int stores = 0;
+
+private:
+	std::stop_source& m_source;
+};
+
 struct cancel_fixture : test_util::scene_env
 {
 	cancel_fixture()
@@ -59,6 +81,20 @@ BOOST_AUTO_TEST_CASE(Import_StoppedBeforeItStarts_ThrowsCancelledAndStoresNothin
 
 	BOOST_CHECK_THROW(importer.import_background(model, &ctx), ds::task_cancelled);
 	BOOST_TEST(ram->files.empty());
+}
+
+BOOST_AUTO_TEST_CASE(Import_StoppedAfterTheMaterialPhase_LeavesNoMemoryTagBehind)
+{
+	std::stop_source source;
+	rs->unregistrate_resolver(res::tag::memory);
+	auto& stopping = rs->registrate_resolver<stopping_resolver>(res::tag::memory, source);
+	edt::model_importer importer(*descs, *rs);
+	ds::task_context ctx = context_of(source.get_token());
+
+	BOOST_CHECK_THROW(importer.import_background(model, &ctx), ds::task_cancelled);
+
+	BOOST_TEST(stopping.stores >= 1); // something was stored before the stop
+	BOOST_TEST(stopping.files.empty());
 }
 
 BOOST_AUTO_TEST_CASE(Import_WithAContextThatIsNotStopped_RunsToTheEnd)

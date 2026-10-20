@@ -718,6 +718,28 @@ void res::resource_system::signal_changed(const res::tag &tag) {
   });
 }
 
+bool res::resource_system::erase(const res::tag &tag) {
+  const auto found = m_resolvers.find(tag.protocol());
+  if (found == m_resolvers.end()) {
+    egLOG_WARN("resource/erase", "Protocol '{}' is not supported!", tag.protocol());
+    return false;
+  }
+  if (!found->second->erase(tag)) {
+    return false;
+  }
+
+  unpin_resource(tag);
+  {
+    // Lock order as in signal_changed: cache first, alias nested inside.
+    std::unique_lock lock(m_cache_mutex);
+    std::unique_lock alias_lock(m_alias_mutex);
+    std::erase_if(m_alias_edges, [&](const auto &edge) { return edge.second == tag; });
+    std::erase_if(m_aliases, [&](const auto &mapped) { return mapped.second == tag; });
+  }
+  signal_changed(tag);
+  return true;
+}
+
 void res::resource_system::deliver_to_watchers(const res::tag &tag,
                                                std::uint64_t signal_epoch) {
   // Only watchers registered before the signal: a load that follows a signal registers its own watcher.

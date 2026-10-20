@@ -108,6 +108,11 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 		if (it != m_pending_writes.end()) {
 			return it->second;
 		}
+		if (m_erased.contains(tag)) {
+			auto erased_sp = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
+			erased_sp->set_error("Resource was erased: " + tag.string());
+			return erased_sp;
+		}
 	}
 
 	if (entries_stack.empty()) {
@@ -131,6 +136,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	{
 		std::unique_lock lock(m_pending_mutex);
 		m_pending_writes[tag] = data_ptr;
+		m_erased.erase(tag);
 	}
 
 	if (entries_stack.empty()) {
@@ -146,11 +152,47 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	return true;
 }
 
+bool res::vfs_resolver::erase(const::res::tag& tag)
+{
+	if (protocol != ::res::tag::memory) {
+		egLOG_WARN("resource/erase", "Refusing to erase '{}': only the memory protocol can be erased", tag.view());
+		return false;
+	}
+
+	{
+		std::unique_lock lock(m_pending_mutex);
+		m_pending_writes.erase(tag);
+		m_erased.insert(tag);
+	}
+
+	if (entries_stack.empty()) {
+		return true;
+	}
+
+	// On the io thread, behind any save_pending_write already queued for the tag. A store() that came in meanwhile
+	// takes the tag out of m_erased and queues its own save after this task, so the file is not removed then.
+	boost::asio::post(io, [this, tag, path = entries_stack.top() / tag.relative()]() {
+		{
+			std::unique_lock lock(m_pending_mutex);
+			if (m_erased.erase(tag) == 0) {
+				return;
+			}
+		}
+		std::error_code ec;
+		fs::remove(path, ec);
+		if (ec) {
+			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), ec.message());
+		}
+	});
+	return true;
+}
+
 bool res::vfs_resolver::exists(const::res::tag& tag) const
 {
 	{
 		std::shared_lock lock(m_pending_mutex);
 		if (m_pending_writes.contains(tag)) return true;
+		if (m_erased.contains(tag)) return false;
 	}
 	auto stack = entries_stack;
 	while (!stack.empty()) {

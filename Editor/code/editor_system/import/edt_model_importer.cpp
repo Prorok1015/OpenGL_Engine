@@ -41,6 +41,29 @@ private:
 	ds::task_context& m_ctx;
 };
 
+// Erases the memory:// tags a failed or cancelled import has stored so far (they are collected as they are stored).
+class stored_tags_guard
+{
+public:
+	stored_tags_guard(res::resource_system& res, const std::vector<res::tag>& tags) : m_res(res), m_tags(tags) {}
+	~stored_tags_guard()
+	{
+		if (!m_armed) return;
+		for (const auto& tag : m_tags) {
+			m_res.erase(tag);
+		}
+	}
+	stored_tags_guard(const stored_tags_guard&) = delete;
+	stored_tags_guard& operator=(const stored_tags_guard&) = delete;
+
+	void disarm() { m_armed = false; }
+
+private:
+	res::resource_system& m_res;
+	const std::vector<res::tag>& m_tags;
+	bool m_armed = true;
+};
+
 glm::quat convert_to_glm(const aiQuaternion& v)
 {
 	return glm::quat(v.w, v.x, v.y, v.z);
@@ -545,6 +568,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 {
 	import_intermediate im;
 	im.source_path = abs_path;
+	stored_tags_guard cleanup(m_res, im.all_tags);
 	checkpoint(ctx);
 
 	// 1. Read file from disk
@@ -771,6 +795,7 @@ edt::import_intermediate edt::model_importer::import_background(const std::files
 	for (const auto& t : im.all_tags) {
 		egLOG("edt/import", "  tag: {}", t.view());
 	}
+	cleanup.disarm();
 	return im;
 }
 
