@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+    # Demo build of aibranch (#55): release.yml is not on main yet, so workflow_dispatch is unavailable.
+    branches: ['wip/demo-release']
   workflow_dispatch:
 
 concurrency:
