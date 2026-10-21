@@ -10,11 +10,29 @@
 
 ## Как получить сборку
 
-1. **Основной путь — без локальной сборки.** Запустить workflow **Release** (`.github/workflows/release.yml`, `workflow_dispatch`) на ветке `aibranch`. Результат — артефакт `SnakeEditor-windows-x64` (zip с `editor.exe`, `config/`, `res/`, `res_core/`), его нужно скачать и распаковать.
-2. **Запасной путь — локальная сборка**, если артефакт не запускается или нужен отладчик. Нужны Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja и Git:
-   - `git submodule update --init --recursive`;
+Репозиторий: `Prorok1015/OpenGL_Engine`, рабочая ветка `aibranch`.
+
+1. **Основной путь — готовый пакет из CI, без локальной сборки.**
+   - `release.yml` пока есть только в `aibranch`, не в `main`, поэтому «Run workflow» (`workflow_dispatch`) в GitHub недоступен. Демо-сборку делает ветка **`wip/demo-release`** (это `aibranch` плюс триггер Release на push в неё; в `aibranch` не мержится).
+   - Скачать последний успешный прогон (нужен `gh`, залогиненный в GitHub; артефакты скачиваются только с авторизацией):
+     ```powershell
+     gh run list --repo Prorok1015/OpenGL_Engine --workflow Release --branch wip/demo-release --status success --limit 1
+     gh run download <RUN_ID> --repo Prorok1015/OpenGL_Engine --name SnakeEditor-windows-x64 --dir C:\snk-demo
+     ```
+     Внутри — `SnakeEditor-<sha>-windows-x64.zip`; распаковать в папку вне репозитория. Без `gh`: страница Actions → workflow Release → прогон на `wip/demo-release` → Artifacts → `SnakeEditor-windows-x64`.
+   - Свежая сборка нужна, если `aibranch` ушла вперёд: влить `aibranch` в `wip/demo-release` и запушить — Release запустится сам (≈30–40 мин).
+   - Раскладка пакета: `bin\editor.exe`, `config\editor.cfg`, `res\` (ресурсы редактора), `res_core\` (базовые ресурсы движка), `README.txt`. Папки держать рядом: конфиг ссылается на `..\res\` и `..\res_core\`.
+   - Запуск из корня распакованной папки: `bin\editor.exe --config config\editor.cfg`. Лог — `config\logs\engine.log` (пути логов в конфиге относительны файлу конфига), лог импорта — `config\logs\edt_import.log`.
+   - Требования: Windows 10/11 x64, видеокарта с драйвером OpenGL 4.5+.
+2. **Запасной путь — локальная сборка**, если пакет не запускается или нужен отладчик. Нужны Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja и Git:
+   - `git checkout aibranch`, `git submodule update --init --recursive`;
    - `cmake --preset dev-release` и `cmake --build build/dev-release --target editor` из Developer PowerShell;
-   - запуск: `build/dev-release/Editor/editor --config Editor/config/editor.cfg`.
+   - запуск: `build/dev-release/Editor/editor --config Editor/config/editor.cfg`, лог — `Editor/config/logs/engine.log`.
+
+**Переменные конфига из командной строки:** `--set <имя> <значение>` (можно несколько раз), список всех — `--help`. Нужны для шага 16:
+- `editor/agent_server true` — включить MCP-сервер (по умолчанию выключен);
+- `editor/project_dir <папка>` — куда писать `.snk/mcp.json` (пусто — текущая рабочая папка);
+- `editor/agent_server_port <порт>` — 0 (по умолчанию) — свободный порт выбирает ОС.
 
 ## Сценарий (15–20 минут)
 
@@ -37,7 +55,7 @@
 | 13 | Esc в диалогах Save As и Open | Диалог закрывается как отмена |
 | 14 | Клавиши `` ` [ ] \ `` в текстовых полях; не-US раскладка | Символы вводятся |
 | 15 | Посмотреть лог (консоль и `logs/engine.log`) | Нет error/assert, предупреждения записать |
-| 16 | MCP-сервер (#292): в конфиге `editor/agent_server = true`, перезапустить редактор; подключить Claude Code (`claude mcp add --transport http` с адресом и токеном из `.snk/mcp.json` проекта) или MCP Inspector | Видны только инструменты чтения (`log_read`, `job_list`, `job_get`, `dialog_list`, `viewport_capture` и состояние сцены A4: `scene_query`, `node_get`, `component_schema`, `asset_query`, `selection_get`); `scene_query` с `page_size` больше 200 отклоняется, а `node_get` с `ref` из ответа `scene_query` возвращает узел и его компоненты; `viewport.capture` возвращает картинку вьюпорта; изменяющих команд в списке нет. Итог — комментарием в #292, закрыть его при ✅ |
+| 16 | MCP-сервер (#292). Перезапустить редактор с `--set editor/agent_server true --set editor/project_dir C:\snk-demo`. В логе строка `the MCP server listens on http://127.0.0.1:<порт>/mcp`; в `C:\snk-demo\.snk\mcp.json` — `url`, `port`, `token`, `pid`. Подключить Claude Code: `claude mcp add --transport http snk-editor <url> --header "Authorization: Bearer <token>"` (или MCP Inspector с тем же URL и заголовком) | Видны только инструменты чтения (`log_read`, `job_list`, `job_get`, `dialog_list`, `viewport_capture` и состояние сцены A4: `scene_query`, `node_get`, `component_schema`, `asset_query`, `selection_get`); `scene_query` с `page_size` больше 200 отклоняется, а `node_get` с `ref` из ответа `scene_query` возвращает узел и его компоненты; `viewport_capture` возвращает картинку вьюпорта; изменяющих команд нет; без токена — 401. Итог — комментарием в #292, закрыть его при ✅ |
 | 17 | Кнопка Wireframe на тулбаре вьюпорта (#352): включить, покрутить камеру, выключить; открыть Game view | Во вьюпорте сцена рисуется сеткой, небо остаётся заливкой; после выключения — как было; Game view и превью префаба сеткой не рисуются никогда |
 | 18 | Повторный импорт той же модели (#351): начать File → Import Model уже импортированной модели и отменить в окне прогресса | Отмена срабатывает быстро; ассеты прошлого импорта на месте и открываются, сцена с ними не ломается; в логе нет ошибок загрузки |
 
@@ -60,19 +78,20 @@
 1. Подготовка:
    - git fetch и checkout ветки aibranch, git pull, git submodule update --init --recursive.
    - Определи ОС, GPU и драйвер, разрешение и масштаб экрана, запиши их.
-2. Сборка, основной путь:
-   - Если у меня есть gh или GitHub-доступ, запусти workflow "Release" (release.yml, workflow_dispatch) на aibranch.
-   - Дождись его, скачай артефакт SnakeEditor-windows-x64, распакуй в отдельную папку вне репозитория.
+2. Сборка, основной путь (раздел «Как получить сборку» в DEMO.md):
+   - Проверь gh (gh auth status). Найди последний успешный прогон workflow Release на ветке wip/demo-release и скачай артефакт SnakeEditor-windows-x64 командами из DEMO.md.
+   - Если прогона нет или он старее aibranch — скажи мне; новую сборку запускает только push в wip/demo-release, сам не пушь без моего «да».
+   - Распакуй zip в отдельную папку вне репозитория (например C:\snk-demo).
    - Если это невозможно — запасной путь из DEMO.md:
      - проверь наличие Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja;
      - если чего-то нет — скажи, что поставить, сам не ставь без моего согласия;
      - собери cmake --preset dev-release и цель editor.
    - Локальная сборка здесь разрешена: это ручная проверка по моей просьбе, исключение из правила CI_PR.toon.
-3. Запуск: запусти редактор (из пакета или build/dev-release/Editor/editor --config Editor/config/editor.cfg) и убедись, что окно открылось и в логе нет ошибок.
+3. Запуск: из корня пакета bin\editor.exe --config config\editor.cfg (или build/dev-release/Editor/editor --config Editor/config/editor.cfg); убедись, что окно открылось и в config\logs\engine.log нет ошибок. Для шага 16 перезапусти с --set editor/agent_server true --set editor/project_dir <папка пакета> и подключи MCP по DEMO.md.
 4. Проведи меня по сценарию из DEMO.md по одному шагу:
    - говори, что сделать и что я должен увидеть;
    - жди моего ответа ✅ / ❌ / ⚠️ с описанием;
-   - по ❌ сразу смотри лог (консоль и logs/engine.log) и сохраняй нужные строки;
+   - по ❌ сразу смотри лог (консоль и config\logs\engine.log) и сохраняй нужные строки;
    - код не правь.
 5. В конце:
    - покажи мне черновик комментария в #55: таблица шагов, данные о машине, ссылки на логи и скриншоты;
