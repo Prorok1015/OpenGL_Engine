@@ -22,6 +22,7 @@ namespace edt
 		void set_input_router(inp::input_router* router) { m_router = router; }
 
 	protected:
+		void on_before_begin() override;
 		void on_render() override;
 
 	private:

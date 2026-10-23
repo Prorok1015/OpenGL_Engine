@@ -188,7 +188,9 @@ void edt::asset_export_dialog::render_export_form()
 
 	ImGui::SameLine();
 
-	if (ImGui::Button("Cancel", { bw, 0.f })) {
+	if (ImGui::Button("Cancel", { bw, 0.f }) ||
+		(ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+		 ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
 		m_is_open = false;
 		ImGui::CloseCurrentPopup();
 	}
@@ -212,6 +214,12 @@ void edt::asset_export_dialog::render_export_progress()
 	// The job was cancelled and its result discarded: nothing more will arrive.
 	if (!m_export_done && !m_jobs.is_running(m_export_job))
 		m_export_done = true;
+
+	if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+		ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+		m_jobs.cancel(m_export_job);
+		m_export_done = true;
+	}
 
 	if (m_export_done) {
 		m_exporting = false;

@@ -6,6 +6,7 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <snk/resource/res_tag.h>
+#include <cfloat>
 #include <imgui.h>
 #include <entt/entt.hpp>
 
@@ -20,6 +21,12 @@ namespace edt
 	{
 		m_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 		m_open = false; // hidden by default until a prefab is opened
+	}
+
+	void prefab_editor_panel::on_before_begin()
+	{
+		ImGui::SetNextWindowSize(ImVec2(900.f, 650.f), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(480.f, 320.f), ImVec2(FLT_MAX, FLT_MAX));
 	}
 
 	void prefab_editor_panel::on_render()

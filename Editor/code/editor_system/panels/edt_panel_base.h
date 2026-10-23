@@ -21,6 +21,7 @@ namespace edt
 		const std::string& get_title() const { return m_title; }
 
 	protected:
+		virtual void on_before_begin() {}
 		virtual void on_render() = 0;
 		// Called instead of on_render() when the panel is closed, collapsed or in a hidden tab.
 		virtual void on_hidden() {}

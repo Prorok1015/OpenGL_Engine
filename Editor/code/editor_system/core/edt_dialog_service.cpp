@@ -43,7 +43,15 @@ struct edt::dialog_service::request
 			ImGui::OpenPopup(label.c_str());
 			m_opened = true;
 		}
-		return ImGui::BeginPopupModal(label.c_str(), nullptr, flags);
+		if (!ImGui::BeginPopupModal(label.c_str(), nullptr, flags)) return false;
+		// ImGui does not dismiss modal popups on Escape. Return through each request's cancel path.
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+			ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return false;
+		}
+		return true;
 	}
 
 	dialog_id id;

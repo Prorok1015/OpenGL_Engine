@@ -14,6 +14,7 @@ namespace edt
 			on_hidden();
 			return;
 		}
+		on_before_begin();
 		if (ImGui::Begin(m_title.c_str(), &m_open, m_flags))
 			on_render();
 		else

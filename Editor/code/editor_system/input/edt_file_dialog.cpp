@@ -47,6 +47,16 @@ bool edt::file_dialog::show(const char* title, bool* p_open)
     
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     if (ImGui::BeginPopupModal(window_title.c_str(), p_open, flags)) {
+		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+			ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+			selected_path.clear();
+			*p_open = false;
+			opened = false;
+			close_requested = false;
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return false;
+		}
         // Path navigation bar with better styling
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
         
