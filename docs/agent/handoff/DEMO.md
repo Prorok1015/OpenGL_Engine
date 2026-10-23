@@ -27,7 +27,7 @@
 2. **Запасной путь — локальная сборка**, если пакет не запускается или нужен отладчик. Нужны Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja и Git:
    - `git checkout aibranch`, `git submodule update --init --recursive`;
    - `cmake --preset dev-release` и `cmake --build build/dev-release --target editor` из Developer PowerShell;
-   - запуск: `build/dev-release/Editor/editor --config Editor/config/editor.cfg`, лог — `Editor/config/logs/engine.log`.
+   - запуск: `build/dev-release/Editor/editor --config Editor/config/editor.cfg`, лог — `logs/engine.log` в рабочей папке.
 
 **Переменные конфига из командной строки:** `--set <имя> <значение>` (можно несколько раз), список всех — `--help`. Нужны для шага 16:
 - `editor/agent_server true` — включить MCP-сервер (по умолчанию выключен);
