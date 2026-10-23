@@ -270,6 +270,39 @@ BOOST_AUTO_TEST_CASE(ParentDescChangeReachesTheLoadedTexture)
 	BOOST_CHECK(bind(instance) != group);
 }
 
+BOOST_AUTO_TEST_CASE(InheritedPicturesReloadEvenWhileTheParentDescIsHeld)
+{
+	for (bool cubemap : { false, true }) {
+		const res::tag image{ "memory://reload/held_picture.raw" };
+		const res::tag parent{ cubemap ? "memory://reload/held_cube.desc" : "memory://reload/held_2d.desc" };
+		const res::tag child{ cubemap ? "memory://reload/child_cube.desc" : "memory://reload/child_2d.desc" };
+		const char* type = cubemap ? "texture_cubemap_desc" : "texture_2d_desc";
+		picture(image, 14);
+		json::value data = std::string(image.view());
+		if (cubemap) {
+			json::object faces;
+			for (const char* name : { "right", "left", "bottom", "top", "front", "back" }) faces[name] = data;
+			data = std::move(faces);
+		}
+		description(parent, { { "__type", type }, { "data", data } });
+		description(child, { { "__type", type }, { "__parent", std::string(parent.view()) } });
+		const auto held_parent = resources().require_sync<rnd::texture_desc>(parent);
+		BOOST_REQUIRE(held_parent.is_ready());
+		const auto desc = material(child);
+		const auto instance = settle(desc);
+		const auto slot = textures.id_of(child);
+		const auto before = textures.binding(slot);
+		const auto group = bind(instance);
+		picture(image, 83);
+		resources().signal_changed(image);
+		BOOST_CHECK(settle(desc) == instance);
+		const auto after = textures.binding(slot);
+		BOOST_TEST(after.generation != before.generation);
+		for (std::uint32_t face = 0; face < (cubemap ? 6u : 1u); ++face) expect_pixels(after.handle, face, 83);
+		BOOST_CHECK(bind(instance) != group);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(QueuedSourceNotificationDoesNotOutliveTheTextureManager)
 {
 	const res::tag image{ "memory://reload/lifetime.raw" };
