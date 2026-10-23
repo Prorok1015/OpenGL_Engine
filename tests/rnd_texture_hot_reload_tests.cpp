@@ -336,6 +336,39 @@ BOOST_AUTO_TEST_CASE(AFailedCubemapFaceCanBeRepairedByASourceSignal)
 	BOOST_CHECK(gpu.group_info(group)->entries[1].texture == loaded.handle);
 }
 
+BOOST_AUTO_TEST_CASE(UploadedTexturesReleaseDecodedPictures)
+{
+	for (bool cubemap : { false, true }) {
+		const res::tag texture{ cubemap ? "memory://release/cube.desc" : "memory://release/2d.desc" };
+		const std::array<const char*, 6> names{ "right", "left", "bottom", "top", "front", "back" };
+		std::vector<std::weak_ptr<res::picture_resource>> pixels;
+		pixels.reserve(6);
+		const auto desc = material(texture);
+		{
+			std::vector<res::res_handle<res::picture_resource>> held;
+			held.reserve(6);
+			json::object faces;
+			for (std::size_t face = 0; face < (cubemap ? 6u : 1u); ++face) {
+				const res::tag image{ std::string("memory://release/") + (cubemap ? "cube_" : "2d_") + names[face] + ".raw" };
+				picture(image, 35);
+				held.push_back(resources().require_sync<res::picture_resource>(image));
+				BOOST_REQUIRE(held.back().is_ready());
+				pixels.push_back(held.back().get());
+				faces[names[face]] = std::string(image.view());
+			}
+			json::value data = cubemap ? json::value(faces) : faces.at("right");
+			description(texture, { { "__type", cubemap ? "texture_cubemap_desc" : "texture_2d_desc" }, { "data", data } });
+			settle(desc);
+		}
+		test_util::pump(tasks);
+		for (const auto& pixel : pixels) BOOST_TEST(pixel.expired());
+		const auto binding = textures.binding(textures.id_of(texture));
+		for (std::uint32_t face = 0; face < (cubemap ? 6u : 1u); ++face) expect_pixels(binding.handle, face, 35);
+		textures.clear_cache();
+		for (const auto& pixel : pixels) BOOST_TEST(pixel.expired());
+	}
+}
+
 BOOST_AUTO_TEST_CASE(QueuedSourceNotificationDoesNotOutliveTheTextureManager)
 {
 	const res::tag image{ "memory://reload/lifetime.raw" };
