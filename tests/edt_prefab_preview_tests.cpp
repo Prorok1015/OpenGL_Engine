@@ -5,11 +5,24 @@
 #include <snk/scene/scn_model.h>
 #include "edt_level_controller.h"
 #include "edt_prefab_document.h"
+#include "edt_prefab_editor_panel.h"
+#include "rnd_null_driver.h"
+#include <snk/gui/gui_system.h>
+#include <snk/gui/gui_backend_interface.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_events.hpp>
+#include <snk/input/inp_input_router.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
+#include <imgui.h>
+#include <imgui_internal.h>
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_editor_services.h>
 #include <chrono>
+#include <cstddef>
+#include <optional>
 #include <memory>
 #include <string>
 
@@ -94,6 +107,120 @@ struct preview_fixture : test_util::scene_env
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtPrefabPreviewTests, preview_fixture)
+
+BOOST_AUTO_TEST_CASE(PreviewDrag_KeepsWindowStillAndRoutesOnlyToPreview_TitleDragMovesWindow)
+{
+	struct imgui_context
+	{
+		imgui_context()
+		{
+			ctx = ImGui::CreateContext();
+			auto& io = ImGui::GetIO();
+			io.IniFilename = nullptr;
+			io.DisplaySize = ImVec2(1200.f, 900.f);
+			io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+			io.ConfigWindowsMoveFromTitleBarOnly = false;
+			unsigned char* pixels = nullptr;
+			int width = 0, height = 0;
+			io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+		}
+		~imgui_context() { ImGui::DestroyContext(ctx); }
+		ImGuiContext* ctx = nullptr;
+	} imgui;
+	struct stub_backend : gui::imgui_backend_interface
+	{
+		using imgui_backend_interface::imgui_backend_interface;
+		void init() override {}
+		void new_frame() override {}
+		void render() override {}
+		void shutdown() override {}
+	};
+	struct observed_panel : edt::prefab_editor_panel
+	{
+		using prefab_editor_panel::prefab_editor_panel;
+		void on_render() override
+		{
+			prefab_editor_panel::on_render();
+			image_min = ImGui::GetItemRectMin();
+			image_max = ImGui::GetItemRectMax();
+		}
+		ImVec2 image_min, image_max;
+	};
+
+	editor->open(prefab_a);
+	BOOST_REQUIRE(editor->is_open());
+	rnd::render_system renderer(std::make_unique<rnd::driver::null::driver>(), *descs, *rs);
+	stub_backend backend(*renderer.get_driver());
+	gui::gui_system gui(&backend, nullptr);
+	rnd::driver::texture_header header;
+	header.data.extent.width = 4;
+	header.data.extent.height = 4;
+	renderer.get_texture_manager().generate(res::tag{ edt::prefab_document::RT_COLOR }, header);
+	auto source = std::make_shared<inp::ecs_input_manager>();
+	inp::input_router router(source);
+	router.set_default_target(std::nullopt);
+	observed_panel panel(renderer, gui);
+	panel.set_context(editor.get());
+	panel.set_input_router(&router);
+	panel.set_open(true);
+	auto frame = [&] {
+		router.clear_bindings();
+		ImGui::NewFrame();
+		panel.render();
+		ImGui::EndFrame();
+	};
+	ImGui::NewFrame();
+	ImGui::SetNextWindowPos(ImVec2(80.f, 80.f));
+	ImGui::SetNextWindowSize(ImVec2(600.f, 450.f));
+	ImGui::SetNextWindowDockID(0);
+	panel.render();
+	ImGui::EndFrame();
+	frame();
+	auto* window = ImGui::FindWindowByName("Prefab Editor");
+	BOOST_REQUIRE(window);
+	BOOST_REQUIRE(!window->DockIsActive);
+	const ImVec2 initial = window->Pos;
+	BOOST_REQUIRE(panel.image_max.x > panel.image_min.x);
+	BOOST_REQUIRE(panel.image_max.y > panel.image_min.y);
+	const ImVec2 image_center((panel.image_min.x + panel.image_max.x) * 0.5f,
+		(panel.image_min.y + panel.image_max.y) * 0.5f);
+	auto move = [&](ImVec2 pos) {
+		ImGui::GetIO().AddMousePosEvent(pos.x, pos.y);
+		inp::input_event event;
+		event.construct_payload<core::inp::cursor_move_event>(core::inp::cursor_move_event{ { pos.x, pos.y } });
+		source->on_handle_event(nullptr, event);
+		frame();
+	};
+	auto click = [&](bool down) {
+		ImGui::GetIO().AddMouseButtonEvent(0, down);
+		inp::input_event event;
+		event.construct_payload<core::inp::mouse_click_event>(core::inp::mouse_click_event{
+			core::inp::MOUSE_BUTTONS::LEFT, down ? core::inp::KEY_ACTION::DOWN : core::inp::KEY_ACTION::UP });
+		source->on_handle_event(nullptr, event);
+		frame();
+	};
+	move(image_center);
+	click(true);
+	move(ImVec2(image_center.x + 60.f, image_center.y + 40.f));
+	frame();
+	BOOST_TEST(window->Pos.x == initial.x);
+	BOOST_TEST(window->Pos.y == initial.y);
+	const auto preview = router.route(editor->set_name(), edt::prefab_document::context_name());
+	BOOST_TEST(preview.focused);
+	BOOST_TEST(preview.state.mouse[static_cast<std::size_t>(core::inp::MOUSE_BUTTONS::LEFT)]);
+	const auto level = router.route("level", "main");
+	BOOST_TEST(!level.focused);
+	BOOST_TEST(!level.state.mouse[static_cast<std::size_t>(core::inp::MOUSE_BUTTONS::LEFT)]);
+	click(false);
+
+	move(ImVec2(initial.x + 200.f, initial.y + window->TitleBarHeight * 0.5f));
+	click(true);
+	move(ImVec2(initial.x + 240.f, initial.y + window->TitleBarHeight * 0.5f + 30.f));
+	frame();
+	BOOST_TEST(window->Pos.x == initial.x + 40.f);
+	BOOST_TEST(window->Pos.y == initial.y + 30.f);
+	click(false);
+}
 
 BOOST_AUTO_TEST_CASE(Open_CreatesASetOfItsOwnAndLeavesTheLevelAlone)
 {
