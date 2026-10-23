@@ -6,7 +6,7 @@
 #include "edt_level_controller.h"
 #include "edt_prefab_document.h"
 #include "edt_prefab_editor_panel.h"
-#include "rnd_null_driver.h"
+#include "null_engine_fixture.hpp"
 #include <snk/gui/gui_system.h>
 #include <snk/gui/gui_backend_interface.h>
 #include <snk/input/inp_ecs_input_manager.h>
@@ -149,7 +149,8 @@ BOOST_AUTO_TEST_CASE(PreviewDrag_KeepsWindowStillAndRoutesOnlyToPreview_TitleDra
 
 	editor->open(prefab_a);
 	BOOST_REQUIRE(editor->is_open());
-	rnd::render_system renderer(std::make_unique<rnd::driver::null::driver>(), *descs, *rs);
+	test_util::null_engine_fixture rendering(false);
+	auto& renderer = rendering.storage.require<rnd::render_system>();
 	stub_backend backend(*renderer.get_driver());
 	gui::gui_system gui(&backend, nullptr);
 	rnd::driver::texture_header header;
