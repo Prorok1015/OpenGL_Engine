@@ -441,6 +441,14 @@ bool edt::editor_system::poll_import_progress()
 		if (ImGui::BeginPopupModal("Importing##edt_import", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
 		{
+			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+				m_context->jobs().cancel(m_import_job);
+				finish_import();
+				ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+				return false;
+			}
 			m_import_spinner_t += ImGui::GetIO().DeltaTime;
 			const char* spinners[] = { "|", "/", "-", "\\" };
 			int idx = static_cast<int>(m_import_spinner_t * 8.f) % 4;
@@ -528,6 +536,14 @@ bool edt::editor_system::poll_level_load()
 		if (ImGui::BeginPopupModal("Loading Level##edt_load", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
 		{
+			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+				m_loading_level = false;
+				m_loading_level_handle = {};
+				ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+				return false;
+			}
 			ImGui::Text("Loading level...");
 			ImGui::EndPopup();
 		}
@@ -561,6 +577,13 @@ bool edt::editor_system::poll_pending_desc()
 		if (ImGui::BeginPopupModal("Loading Asset##edt_drop", nullptr,
 			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar))
 		{
+			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+				m_pending_desc_handle = {};
+				ImGui::CloseCurrentPopup();
+				ImGui::EndPopup();
+				return false;
+			}
 			ImGui::Text("Loading '%s'...", m_pending_desc_key.c_str());
 			ImGui::EndPopup();
 		}

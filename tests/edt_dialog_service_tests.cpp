@@ -19,8 +19,8 @@
 #include <utility>
 #include <vector>
 
-// dialog_service and the File menu flow on top of it, driven with auto answers: nothing here draws ImGui.
-// Not covered headless: the ImGui drawing of each dialog and the dockspace wiring (attach).
+// Dialog service and File menu flows, including popup input in a headless ImGui context.
+// Dockspace wiring (attach) is not covered here.
 
 namespace {
 
@@ -168,6 +168,61 @@ struct closing_editor
 }
 
 BOOST_FIXTURE_TEST_SUITE(EdtDialogServiceTests, dialog_fixture)
+
+BOOST_AUTO_TEST_CASE(Escape_CancelsEveryDialogWithoutAcceptingPaths)
+{
+	imgui_ctx imgui;
+	int accepted_paths = 0;
+	int cancelled = 0;
+	service.confirm_unsaved([&](edt::unsaved_choice choice) {
+		BOOST_CHECK(choice == edt::unsaved_choice::cancel);
+		++cancelled;
+	});
+	service.save_as("levels/start.desc", [&](const std::string&) { ++accepted_paths; });
+	edt::pick_file_options options;
+	options.title = "Open Level";
+	options.start_path = std::filesystem::current_path();
+	service.pick_file(options, [&](const std::filesystem::path&) { ++accepted_paths; });
+	service.message(edt::message_level::info, "Message");
+
+	for (std::size_t remaining = 4; remaining > 0; --remaining) {
+		imgui.frame([&] { service.update(); });
+		imgui.frame([&] { service.update(); });
+		BOOST_REQUIRE(service.pending() == remaining);
+		ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+		imgui.frame([&] { service.update(); });
+		BOOST_TEST(service.pending() == remaining - 1);
+		BOOST_TEST(imgui.ctx->OpenPopupStack.empty());
+		ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+		imgui.frame([] {});
+	}
+	BOOST_TEST(cancelled == 1);
+	BOOST_TEST(accepted_paths == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Escape_WinsOverAcceptedPathAnswer)
+{
+	imgui_ctx imgui;
+	int accepted_paths = 0;
+	for (bool pick_file : { false, true }) {
+		edt::pick_file_options options;
+		options.title = "Open Level";
+		options.start_path = std::filesystem::current_path();
+		const auto id = pick_file
+			? service.pick_file(options, [&](const std::filesystem::path&) { ++accepted_paths; })
+			: service.save_as("start", [&](const std::string&) { ++accepted_paths; });
+		imgui.frame([&] { service.update(); });
+		imgui.frame([&] { service.update(); });
+		BOOST_REQUIRE(service.answer(id, boost::json::parse(R"({"path":"levels/x.desc"})")).ok);
+		ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+		imgui.frame([&] { service.update(); });
+		BOOST_TEST(service.pending() == 0u);
+		BOOST_TEST(imgui.ctx->OpenPopupStack.empty());
+		BOOST_TEST(accepted_paths == 0);
+		ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+		imgui.frame([] {});
+	}
+}
 
 BOOST_AUTO_TEST_CASE(Ids_AreUniqueAcrossKindsAndCalls)
 {

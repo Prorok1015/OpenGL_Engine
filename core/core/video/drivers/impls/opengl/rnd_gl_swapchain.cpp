@@ -15,11 +15,17 @@ namespace {
 }
 
 void APIENTRY DebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* message, const void* userParam) {
-	if (type == GL_DEBUG_TYPE_OTHER) {
-		return;
+	switch (severity) {
+	case GL_DEBUG_SEVERITY_NOTIFICATION:
+		egLOG_TRACE("opengl/debug", "OpenGL Debug Message: {}", message);
+		break;
+	case GL_DEBUG_SEVERITY_HIGH:
+		egLOG_ERROR("opengl/debug", "OpenGL Debug Message: {}", message);
+		break;
+	default:
+		egLOG_WARN("opengl/debug", "OpenGL Debug Message: {}", message);
+		break;
 	}
-
-	egLOG("opengl/debug", "OpenGL Debug Message: \"{0}\"", message);
 }
 
 rnd::driver::gl::swapchain::swapchain(wnd::gl_surface& surface)
