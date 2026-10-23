@@ -78,7 +78,8 @@ jobs:
           Keep the bin/, config/, res/ and res_core/ folders side by side: the config
           refers to the resources as ../res/ (editor layer, wins) and ../res_core/
           (engine base layer) relative to the config file. Logs are written
-          to config\logs\.
+          to logs\ relative to the working directory. When launched from the package
+          root, the log file is <package>\logs\engine.log.
           TXT
           cp LICENSE "${PKG}/" 2>/dev/null || true
 
