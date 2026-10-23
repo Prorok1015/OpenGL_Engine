@@ -152,7 +152,10 @@ rnd::render_system::render_system(std::unique_ptr<rnd::driver::driver_interface>
 		// The faces load in the background: come back next frame instead of caching a texture with holes.
 		const auto& awaited = tex_cubmap_desc.get_faces();
 		for (const auto* face : { &awaited.right, &awaited.left, &awaited.top, &awaited.bottom, &awaited.front, &awaited.back }) {
-			if (face->is_valid() && !face->is_ready() && !face->has_error()) {
+			if (!face->is_ready()) {
+				if (face->has_error()) {
+					egLOG_WARN("render/texture", "Failed to load cubemap face '{}'", face->get_tag().view());
+				}
 				return {};
 			}
 		}

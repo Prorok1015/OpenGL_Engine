@@ -305,6 +305,37 @@ BOOST_AUTO_TEST_CASE(InheritedPicturesReloadEvenWhileTheParentDescIsHeld)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(AFailedCubemapFaceCanBeRepairedByASourceSignal)
+{
+	const res::tag image{ "memory://reload/ready.raw" };
+	const res::tag late{ "memory://reload/late.raw" };
+	const res::tag texture{ "memory://reload/repaired_cube.desc" };
+	picture(image, 64);
+	json::object faces;
+	for (const char* name : { "right", "left", "bottom", "top", "front", "back" })
+		faces[name] = std::string(image.view());
+	faces["front"] = std::string(late.view());
+	description(texture, { { "__type", "texture_cubemap_desc" }, { "data", faces } });
+	const auto desc = material(texture);
+	cache.begin_frame(render.get_material_compiler());
+	const auto instance = cache.acquire(desc, false, false);
+	test_util::pump(tasks);
+	cache.begin_frame(render.get_material_compiler());
+	BOOST_CHECK(cache.acquire(desc, false, false) == instance);
+	BOOST_TEST(!cache.get(instance).complete);
+	const auto slot = textures.id_of(texture);
+	BOOST_TEST(!textures.is_ready(slot));
+
+	picture(late, 88);
+	resources().signal_changed(late);
+	BOOST_CHECK(settle(desc) == instance);
+	const auto loaded = textures.binding(slot);
+	for (std::uint32_t face = 0; face < 6; ++face) expect_pixels(loaded.handle, face, face == 4 ? 88 : 64);
+	const auto group = bind(instance);
+	BOOST_REQUIRE(gpu.group_info(group));
+	BOOST_CHECK(gpu.group_info(group)->entries[1].texture == loaded.handle);
+}
+
 BOOST_AUTO_TEST_CASE(QueuedSourceNotificationDoesNotOutliveTheTextureManager)
 {
 	const res::tag image{ "memory://reload/lifetime.raw" };
