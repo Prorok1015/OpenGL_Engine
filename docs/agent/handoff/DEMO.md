@@ -22,7 +22,7 @@
      Внутри — `SnakeEditor-<sha>-windows-x64.zip`; распаковать в папку вне репозитория. Без `gh`: страница Actions → workflow Release → прогон на `wip/demo-release` → Artifacts → `SnakeEditor-windows-x64`.
    - Свежая сборка нужна, если `aibranch` ушла вперёд: влить `aibranch` в `wip/demo-release` и запушить — Release запустится сам (≈30–40 мин).
    - Раскладка пакета: `bin\editor.exe`, `config\editor.cfg`, `res\` (ресурсы редактора), `res_core\` (базовые ресурсы движка), `README.txt`. Папки держать рядом: конфиг ссылается на `..\res\` и `..\res_core\`.
-   - Запуск из корня распакованной папки: `bin\editor.exe --config config\editor.cfg`. Лог — `config\logs\engine.log` (пути логов в конфиге относительны файлу конфига), лог импорта — `config\logs\edt_import.log`.
+   - Запуск из корня распакованной папки: `bin\editor.exe --config config\editor.cfg`. Лог — `logs\engine.log` в рабочей папке (запуск из корня пакета → `<пакет>\logs\`), лог импорта — `logs\edt_import.log`. `README.txt` пакета называет `config\logs\` — это неверно.
    - Требования: Windows 10/11 x64, видеокарта с драйвером OpenGL 4.5+.
 2. **Запасной путь — локальная сборка**, если пакет не запускается или нужен отладчик. Нужны Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja и Git:
    - `git checkout aibranch`, `git submodule update --init --recursive`;
@@ -87,11 +87,11 @@
      - если чего-то нет — скажи, что поставить, сам не ставь без моего согласия;
      - собери cmake --preset dev-release и цель editor.
    - Локальная сборка здесь разрешена: это ручная проверка по моей просьбе, исключение из правила CI_PR.toon.
-3. Запуск: из корня пакета bin\editor.exe --config config\editor.cfg (или build/dev-release/Editor/editor --config Editor/config/editor.cfg); убедись, что окно открылось и в config\logs\engine.log нет ошибок. Для шага 16 перезапусти с --set editor/agent_server true --set editor/project_dir <папка пакета> и подключи MCP по DEMO.md.
+3. Запуск: из корня пакета bin\editor.exe --config config\editor.cfg (или build/dev-release/Editor/editor --config Editor/config/editor.cfg); убедись, что окно открылось и в logs\engine.log нет ошибок. Для шага 16 перезапусти с --set editor/agent_server true --set editor/project_dir <папка пакета> и подключи MCP по DEMO.md.
 4. Проведи меня по сценарию из DEMO.md по одному шагу:
    - говори, что сделать и что я должен увидеть;
    - жди моего ответа ✅ / ❌ / ⚠️ с описанием;
-   - по ❌ сразу смотри лог (консоль и config\logs\engine.log) и сохраняй нужные строки;
+   - по ❌ сразу смотри лог (консоль и logs\engine.log) и сохраняй нужные строки;
    - код не правь.
 5. В конце:
    - покажи мне черновик комментария в #55: таблица шагов, данные о машине, ссылки на логи и скриншоты;
