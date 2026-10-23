@@ -14,6 +14,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -192,6 +193,103 @@ BOOST_AUTO_TEST_CASE(EveryCubemapFaceSignalReloadsTheCubeAndItsMaterialGroup)
 		BOOST_CHECK(gpu.group_info(fresh_group)->entries[1].texture == after.handle);
 		group = fresh_group;
 	}
+}
+
+BOOST_AUTO_TEST_CASE(SharedPictureAndDescChangesRefreshOnlyTheirCurrentUsers)
+{
+	const res::tag image{ "memory://reload/shared.raw" };
+	const res::tag replacement{ "memory://reload/replacement.raw" };
+	const res::tag first{ "memory://reload/first.desc" };
+	const res::tag second{ "memory://reload/second.desc" };
+	picture(image, 23);
+	picture(replacement, 67);
+	for (const auto& tag : { first, second })
+		description(tag, { { "__type", "texture_2d_desc" }, { "data", std::string(image.view()) } });
+	const auto a = material(first);
+	const auto b = material(second);
+	const auto instance_a = settle(a);
+	const auto instance_b = settle(b);
+	const auto slot_a = textures.id_of(first);
+	const auto slot_b = textures.id_of(second);
+	const auto before_a = textures.binding(slot_a);
+	const auto before_b = textures.binding(slot_b);
+	const auto group_a = bind(instance_a);
+	const auto group_b = bind(instance_b);
+
+	picture(image, 42);
+	std::thread notifier([&] { resources().signal_changed(image); });
+	notifier.join();
+	BOOST_CHECK(textures.binding(slot_a).handle == before_a.handle);
+	BOOST_CHECK(textures.binding(slot_b).handle == before_b.handle);
+	settle(a);
+	settle(b);
+	expect_pixels(textures.binding(slot_a).handle, 0, 42);
+	expect_pixels(textures.binding(slot_b).handle, 0, 42);
+	BOOST_CHECK(bind(instance_a) != group_a);
+	BOOST_CHECK(bind(instance_b) != group_b);
+
+	// Changing a desc must update subscriptions as well as the GPU texture.
+	description(first, { { "__type", "texture_2d_desc" }, { "data", std::string(replacement.view()) } });
+	resources().signal_changed(first);
+	settle(a);
+	const auto replaced = textures.binding(slot_a);
+	expect_pixels(replaced.handle, 0, 67);
+	const auto replaced_group = bind(instance_a);
+	const auto shared_before = textures.binding(slot_b);
+	picture(image, 99);
+	resources().signal_changed(image);
+	settle(a);
+	settle(b);
+	BOOST_CHECK(textures.binding(slot_a).handle == replaced.handle);
+	BOOST_TEST(textures.binding(slot_a).generation == replaced.generation);
+	BOOST_CHECK(bind(instance_a) == replaced_group);
+	BOOST_TEST(textures.binding(slot_b).generation != shared_before.generation);
+	expect_pixels(textures.binding(slot_b).handle, 0, 99);
+}
+
+BOOST_AUTO_TEST_CASE(ParentDescChangeReachesTheLoadedTexture)
+{
+	const res::tag first{ "memory://reload/inherited_a.raw" };
+	const res::tag second{ "memory://reload/inherited_b.raw" };
+	const res::tag parent{ "memory://reload/parent.desc" };
+	const res::tag child{ "memory://reload/child.desc" };
+	picture(first, 18);
+	picture(second, 72);
+	description(parent, { { "__type", "texture_2d_desc" }, { "data", std::string(first.view()) } });
+	description(child, { { "__type", "texture_2d_desc" }, { "__parent", std::string(parent.view()) } });
+	const auto desc = material(child);
+	const auto instance = settle(desc);
+	const auto slot = textures.id_of(child);
+	const auto group = bind(instance);
+	expect_pixels(textures.binding(slot).handle, 0, 18);
+	description(parent, { { "__type", "texture_2d_desc" }, { "data", std::string(second.view()) } });
+	resources().signal_changed(parent);
+	BOOST_CHECK(settle(desc) == instance);
+	BOOST_CHECK(textures.id_of(child) == slot);
+	expect_pixels(textures.binding(slot).handle, 0, 72);
+	BOOST_CHECK(bind(instance) != group);
+}
+
+BOOST_AUTO_TEST_CASE(QueuedSourceNotificationDoesNotOutliveTheTextureManager)
+{
+	const res::tag image{ "memory://reload/lifetime.raw" };
+	const res::tag texture{ "memory://reload/lifetime.desc" };
+	picture(image, 12);
+	description(texture, { { "__type", "texture_2d_desc" }, { "data", std::string(image.view()) } });
+	const auto live = gpu.live_textures();
+	{
+		rnd::texture_manager temporary(&gpu, storage.require<desc::desc_system>(), resources());
+		temporary.register_loader("texture_2d_desc", [](driver_interface* driver, const rnd::texture_desc& desc) {
+			return make_texture(*driver, desc.get_header());
+		});
+		const auto slot = temporary.require(texture);
+		test_util::pump(tasks);
+		BOOST_CHECK(temporary.require(texture) == slot);
+		BOOST_REQUIRE(temporary.is_ready(slot));
+		resources().signal_changed(image);
+	}
+	test_util::pump(tasks); // a queued callback must not dereference the destroyed manager (ASan/TSan)
+	BOOST_TEST(gpu.live_textures() == live);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
