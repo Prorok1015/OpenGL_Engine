@@ -81,8 +81,12 @@ namespace edt
 		if (const auto texture = textures.binding(textures.id_of(s_prefab_cam_tag)).handle) {
 			auto* backend = m_gui.get_backend_interface();
 			ImTextureID tex_id = backend->to_imgui(texture);
+			const ImVec2 image_pos = ImGui::GetCursorScreenPos();
 			// UV (0,1)->(1,0) flips Y for OpenGL convention
 			ImGui::Image(tex_id, size, ImVec2(0, 1), ImVec2(1, 0));
+			// Give the preview drag an active item so ImGui does not also move the floating window.
+			ImGui::SetCursorScreenPos(image_pos);
+			ImGui::InvisibleButton("##prefab_preview_input", size);
 
 			// The preview context gets input only while its image is hovered
 			bind_item_input(m_router, inp::input_target{
