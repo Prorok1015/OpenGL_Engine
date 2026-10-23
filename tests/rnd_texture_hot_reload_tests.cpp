@@ -279,7 +279,7 @@ BOOST_AUTO_TEST_CASE(InheritedPicturesReloadEvenWhileTheParentDescIsHeld)
 		const res::tag child{ cubemap ? "memory://reload/child_cube.desc" : "memory://reload/child_2d.desc" };
 		const char* type = cubemap ? "texture_cubemap_desc" : "texture_2d_desc";
 		picture(image, 14);
-		json::value data = std::string(image.view());
+		json::value data = json::value_from(std::string(image.view()));
 		if (cubemap) {
 			json::object faces;
 			for (const char* name : { "right", "left", "bottom", "top", "front", "back" }) faces[name] = data;
