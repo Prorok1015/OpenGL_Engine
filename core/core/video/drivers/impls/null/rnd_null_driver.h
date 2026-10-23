@@ -8,6 +8,8 @@
 #include <snk/common/snk_api.h>
 
 #include <array>
+#include <functional>
+#include <utility>
 #include <optional>
 #include <span>
 #include <vector>
@@ -149,7 +151,12 @@ namespace rnd::driver::null
 		void record_shader_sources(bool on) { m_record_shader_sources = on; }
 		const std::vector<std::vector<shader_header>>& shader_sources() const { return m_shader_sources; }
 
+		// Optional diagnostic observer. The data pointer is valid only during this synchronous call.
+		using texture_upload_observer = std::function<void(texture_handle, const void*, const texture_region&)>;
+		void observe_texture_uploads(texture_upload_observer observer) { m_texture_upload_observer = std::move(observer); }
+
 	private:
+		texture_upload_observer m_texture_upload_observer;
 		std::shared_ptr<object_stats> m_stats;
 		call_counts m_calls;
 		bool m_in_render_pass = false;
