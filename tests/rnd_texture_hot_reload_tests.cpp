@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -273,7 +274,7 @@ BOOST_AUTO_TEST_CASE(ParentDescChangeReachesTheLoadedTexture)
 BOOST_AUTO_TEST_CASE(InheritedPicturesReloadEvenWhileTheParentDescIsHeld)
 {
 	for (bool cubemap : { false, true }) {
-		const res::tag image{ "memory://reload/held_picture.raw" };
+		const res::tag image{ cubemap ? "memory://reload/held_cube.raw" : "memory://reload/held_2d.raw" };
 		const res::tag parent{ cubemap ? "memory://reload/held_cube.desc" : "memory://reload/held_2d.desc" };
 		const res::tag child{ cubemap ? "memory://reload/child_cube.desc" : "memory://reload/child_2d.desc" };
 		const char* type = cubemap ? "texture_cubemap_desc" : "texture_2d_desc";
@@ -293,6 +294,7 @@ BOOST_AUTO_TEST_CASE(InheritedPicturesReloadEvenWhileTheParentDescIsHeld)
 		const auto slot = textures.id_of(child);
 		const auto before = textures.binding(slot);
 		const auto group = bind(instance);
+		for (std::uint32_t face = 0; face < (cubemap ? 6u : 1u); ++face) expect_pixels(before.handle, face, 14);
 		picture(image, 83);
 		resources().signal_changed(image);
 		BOOST_CHECK(settle(desc) == instance);
