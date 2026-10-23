@@ -101,7 +101,7 @@ namespace rnd
 		mutable std::unordered_map<std::string, loader_fn> loaders;
 		std::unordered_map<res::tag, texture_id> m_ids;
 		std::vector<slot> m_slots; // m_slots[id.index - 1]
-		// Keep loaded descs alive too: they retain picture handles and the resource graph's parent edges.
+		// In-flight descriptions only; watches retain dependency edges after GPU upload.
 		std::unordered_map<res::tag, res::res_handle<rnd::texture_desc>> m_descriptions;
 		std::unordered_map<res::tag, std::vector<texture_id>> m_file_users;
 		desc::desc_system& desc_system;

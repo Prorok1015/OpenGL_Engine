@@ -55,7 +55,7 @@ void rnd::texture_manager::track_files(texture_id id, const texture_desc* descri
 	for (const auto& file : files) {
 		auto [users, added] = m_file_users.try_emplace(file);
 		if (added) {
-			m_res_sys.watch(file, this, [this](const res::tag& changed) { on_file_changed(changed); });
+			m_res_sys.watch(file, this, [this](const res::tag& changed) { on_file_changed(changed); }, file == target.tag);
 		}
 		if (std::ranges::find(users->second, id) == users->second.end()) users->second.push_back(id);
 	}
@@ -149,6 +149,8 @@ rnd::texture_id rnd::texture_manager::require(const res::tag& tag)
 	if (loaders.end() != loader_it) {
 		if (auto texture = loader_it->second(drv, *handle)) {
 			fill(target, std::move(texture));
+			// The watch retains parent edges; decoded source pixels are no longer needed after upload.
+			m_descriptions.erase(tag);
 		}
 	}
 

@@ -339,7 +339,7 @@ BOOST_AUTO_TEST_CASE(AFailedCubemapFaceCanBeRepairedByASourceSignal)
 BOOST_AUTO_TEST_CASE(UploadedTexturesReleaseDecodedPictures)
 {
 	for (bool cubemap : { false, true }) {
-		const res::tag texture{ cubemap ? "memory://release/cube.desc" : "memory://release/2d.desc" };
+		const res::tag texture{ cubemap ? "res://release/cube.desc" : "res://release/2d.desc" };
 		const std::array<const char*, 6> names{ "right", "left", "bottom", "top", "front", "back" };
 		std::vector<std::weak_ptr<res::picture_resource>> pixels;
 		pixels.reserve(6);
@@ -365,7 +365,11 @@ BOOST_AUTO_TEST_CASE(UploadedTexturesReleaseDecodedPictures)
 		const auto binding = textures.binding(textures.id_of(texture));
 		for (std::uint32_t face = 0; face < (cubemap ? 6u : 1u); ++face) expect_pixels(binding.handle, face, 35);
 		textures.clear_cache();
+		BOOST_TEST(!textures.is_ready(textures.id_of(texture)));
 		for (const auto& pixel : pixels) BOOST_TEST(pixel.expired());
+		settle(desc);
+		const auto reloaded = textures.binding(textures.id_of(texture));
+		for (std::uint32_t face = 0; face < (cubemap ? 6u : 1u); ++face) expect_pixels(reloaded.handle, face, 35);
 	}
 }
 

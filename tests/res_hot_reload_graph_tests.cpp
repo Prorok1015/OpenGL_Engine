@@ -150,12 +150,12 @@ struct graph_env : test_util::ram_res_env
 		return put(name, body);
 	}
 
-	void watch(const std::vector<res::tag>& tags)
+	void watch(const std::vector<res::tag>& tags, bool keep_dependencies = false)
 	{
 		for (const auto& tag : tags) {
 			owners.push_back(std::make_unique<int>(0));
 			watched.emplace_back(tag, owners.back().get());
-			rs->watch(tag, owners.back().get(), [this](const res::tag& changed) { delivered.push_back(changed.string()); });
+			rs->watch(tag, owners.back().get(), [this](const res::tag& changed) { delivered.push_back(changed.string()); }, keep_dependencies);
 		}
 	}
 
@@ -488,6 +488,62 @@ BOOST_AUTO_TEST_CASE(ReleasedMiddleOfAChain_StillPassesTheChangeOn)
 	rs->signal_changed(c);
 	pump();
 	BOOST_TEST(times_delivered(g) == 1);
+}
+
+BOOST_AUTO_TEST_CASE(DependencyWatch_KeepsReleasedAncestorEdgesUntilUnwatched)
+{
+	const auto p = node("p.node", "p1");
+	const auto c = node("c.node", "c", { p });
+	const auto g = node("g.node", "g", { c });
+	std::weak_ptr<node_resource> data;
+	{
+		auto loaded = rs->require<node_resource>(g);
+		pump();
+		BOOST_REQUIRE(loaded.is_ready());
+		data = loaded.get();
+		watch({ g }, true);
+	}
+	BOOST_TEST(data.expired());
+	rs->signal_changed(p);
+	pump();
+	BOOST_TEST(times_delivered(g) == 1);
+	BOOST_TEST(rs->dependency_edge_count() == 2u);
+	delivered.clear();
+	rs->signal_changed(p);
+	pump();
+	BOOST_TEST(times_delivered(g) == 1);
+	rs->unwatch(g, owners.front().get());
+	rs->signal_changed(p);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 0u);
+	BOOST_TEST(times_delivered(g) == 1);
+	watched.clear();
+}
+
+BOOST_AUTO_TEST_CASE(DependencyWatch_ThroughAliasKeepsReleasedEdges)
+{
+	const auto p = node("p.node", "p1");
+	const auto original = node("orig.node", "orig");
+	const auto generated = node("gen.node", "gen", { p });
+	rs->register_alias(original, generated);
+	std::weak_ptr<node_resource> data;
+	{
+		auto loaded = rs->require<node_resource>(original);
+		pump();
+		BOOST_REQUIRE(loaded.is_ready());
+		data = loaded.get();
+		watch({ original }, true);
+	}
+	BOOST_TEST(data.expired());
+	rs->signal_changed(p);
+	pump();
+	BOOST_TEST(times_delivered(original) == 0); // alias notifications follow original -> generated
+	BOOST_TEST(rs->dependency_edge_count() == 1u);
+	rs->unwatch(original, owners.front().get());
+	rs->signal_changed(p);
+	pump();
+	BOOST_TEST(rs->dependency_edge_count() == 0u);
+	watched.clear();
 }
 
 BOOST_AUTO_TEST_CASE(ReleasedResources_DoNotMakeTheGraphGrowWithoutBound)
