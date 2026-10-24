@@ -5,8 +5,12 @@ void rnd::texture_2d_desc::deserialize(desc::desc_system& system, const json::ob
 {
 	texture_desc::deserialize(system, resource);
 
-	if (resource.contains("data") && resource.at("data").is_string())
+	if (resource.contains("data") && resource.at("data").is_string()) {
 		picture_handle = system.get_field_desc<res::picture_resource>(*this, resource.at("data"));
+	} else if (picture_handle.is_valid()) {
+		// A cached parent may still hold the picture from before a file change.
+		picture_handle = system.get_field_desc<res::picture_resource>(*this, json::value_from(picture_handle.get_tag()));
+	}
 }
 
 void rnd::texture_2d_desc::serialize(json::object& resource) const

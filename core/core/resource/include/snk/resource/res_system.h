@@ -85,9 +85,10 @@ namespace res
 		}
 
 
-		void watch(const res::tag& tag, void* owner, reload_callback cb) {
+		// keep_dependencies retains graph edges until unwatch, without retaining resource data.
+		void watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies = false) {
 			std::lock_guard lock(m_cache_mutex);
-			m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch };
+			m_watchers[tag][owner] = watcher{ std::move(cb), ++m_watch_epoch, keep_dependencies };
 		}
 
 		void unwatch(const res::tag& tag, void* owner) {
@@ -423,6 +424,7 @@ namespace res
 		struct watcher {
 			reload_callback callback;
 			std::uint64_t epoch = 0; // m_watch_epoch value at registration
+			bool keep_dependencies = false;
 		};
 		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex

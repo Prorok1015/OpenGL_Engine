@@ -1,11 +1,86 @@
 #include <snk/render/texture/rnd_texture_manager.h>
+#include "rnd_texture_2d_desc.h"
+#include "rnd_texture_cubemap_desc.h"
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_picture.h>
 #include <snk/render/texture/rnd_texture_desc.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/engine_assert.h>
 
+#include <algorithm>
 #include <utility>
+
+rnd::texture_manager::~texture_manager()
+{
+	ASSERT_MSG(on_owner_thread(), "texture_manager destruction: main thread only");
+	for (const auto& user : m_file_users) {
+		m_res_sys.unwatch(user.first, this);
+	}
+}
+
+void rnd::texture_manager::track_files(texture_id id, const texture_desc* description)
+{
+	ASSERT_MSG(on_owner_thread(), "texture_manager::track_files: main thread only");
+	slot& target = m_slots[id.index - 1];
+	std::vector<res::tag> files;
+	files.reserve(7);
+	files.push_back(target.tag);
+	auto add_picture = [&](const res::res_handle<res::picture_resource>& picture) {
+		const auto& tag = picture.get_tag();
+		if (tag.is_valid() && std::ranges::find(files, tag) == files.end()) files.push_back(tag);
+	};
+	if (const auto* image = dynamic_cast<const texture_2d_desc*>(description)) {
+		add_picture(image->get_picture_handle());
+	} else if (const auto* cube = dynamic_cast<const texture_cubemap_desc*>(description)) {
+		if (cube->get_source_type() == texture_cubemap_desc::SOURCE_TYPE::SINGLE_FILE) {
+			add_picture(cube->get_single_image());
+		} else {
+			const auto& faces = cube->get_faces();
+			for (const auto* face : { &faces.right, &faces.left, &faces.bottom, &faces.top, &faces.front, &faces.back })
+				add_picture(*face);
+		}
+	}
+	if (files == target.files) return;
+
+	for (const auto& file : target.files) {
+		if (std::ranges::find(files, file) != files.end()) continue;
+		const auto users = m_file_users.find(file);
+		if (users == m_file_users.end()) continue;
+		std::erase(users->second, id);
+		if (users->second.empty()) {
+			m_res_sys.unwatch(file, this);
+			m_file_users.erase(users);
+		}
+	}
+	for (const auto& file : files) {
+		auto [users, added] = m_file_users.try_emplace(file);
+		if (added) {
+			m_res_sys.watch(file, this, [this](const res::tag& changed) { on_file_changed(changed); }, file == target.tag);
+		}
+		if (std::ranges::find(users->second, id) == users->second.end()) users->second.push_back(id);
+	}
+	target.files = std::move(files);
+}
+
+void rnd::texture_manager::on_file_changed(const res::tag& file)
+{
+	ASSERT_MSG(on_owner_thread(), "texture_manager::on_file_changed: main thread only");
+	const auto found = m_file_users.find(file);
+	if (found == m_file_users.end()) return;
+	const auto users = found->second;
+	for (const auto id : users) {
+		const auto& tag = m_slots[id.index - 1].tag;
+		if (file != tag) {
+			// Picture fields are not graph dependencies. Evict the desc too, otherwise its handles still
+			// point at the old picture. Its watch will invalidate the GPU slot on the main-thread queue.
+			m_res_sys.signal_changed(tag);
+			continue;
+		}
+		m_descriptions.erase(tag);
+		remove(tag);
+		egLOG_DEBUG("render/texture", "'{}' changed: texture will be loaded again", tag.view());
+	}
+}
 
 rnd::texture_id rnd::texture_manager::slot_of(const res::tag& tag)
 {
@@ -48,18 +123,20 @@ rnd::texture_id rnd::texture_manager::require(const res::tag& tag)
 	if (target.owner) {
 		return id;
 	}
+	// Generated render targets return above and are never watched as resource-backed textures.
+	if (target.files.empty()) track_files(id);
 
-	auto it = loading.find(tag);
+	auto it = m_descriptions.find(tag);
 	res::res_handle<rnd::texture_desc> handle;
-	if (it == loading.end()) {
+	if (it == m_descriptions.end()) {
 		handle = m_res_sys.require<rnd::texture_desc>(tag);
-		loading[tag] = handle;
+		m_descriptions[tag] = handle;
 	} else {
 		handle = it->second;
 	}
 
 	if (handle.has_error()) {
-		loading.erase(tag);
+		m_descriptions.erase(tag);
 		egLOG_ERROR("render/geometry", "Failed to load texture desc with name {0}", tag.view());
 	}
 
@@ -67,11 +144,13 @@ rnd::texture_id rnd::texture_manager::require(const res::tag& tag)
 		return id;
 	}
 
+	track_files(id, handle.get().get());
 	auto loader_it = loaders.find(std::string{ handle->get_type() });
 	if (loaders.end() != loader_it) {
 		if (auto texture = loader_it->second(drv, *handle)) {
-			loading.erase(tag);
 			fill(target, std::move(texture));
+			// The watch retains parent edges; decoded source pixels are no longer needed after upload.
+			m_descriptions.erase(tag);
 		}
 	}
 

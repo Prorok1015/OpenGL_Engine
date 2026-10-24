@@ -72,7 +72,13 @@ std::unique_ptr<rnd::driver::shader_interface> rnd::driver::null::driver::create
 
 rnd::driver::texture_handle rnd::driver::null::driver::create_texture(const texture_header& header)
 {
-	return m_textures.adopt(std::make_unique<texture>(m_stats, header));
+	const auto handle = m_textures.adopt(std::make_unique<texture>(m_stats, header));
+	if (m_texture_upload_observer && header.data.initial_data) {
+		const auto& extent = header.data.extent;
+		m_texture_upload_observer(handle, header.data.initial_data,
+			texture_region{ .width = extent.width, .height = extent.height, .depth = extent.depth });
+	}
+	return handle;
 }
 
 void rnd::driver::null::driver::destroy(texture_handle texture)
@@ -89,6 +95,9 @@ void rnd::driver::null::driver::update_texture(texture_handle handle, const void
 		return;
 	}
 	found->update_data(data, region.x, region.y, region.z, region.width, region.height, region.depth, region.level, region.layer, region.face);
+	if (m_texture_upload_observer && data) {
+		m_texture_upload_observer(handle, data, region);
+	}
 }
 
 std::uint64_t rnd::driver::null::driver::native_texture_name(texture_handle handle) const

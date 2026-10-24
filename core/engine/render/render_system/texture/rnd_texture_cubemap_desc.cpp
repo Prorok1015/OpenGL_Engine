@@ -26,6 +26,16 @@ void rnd::texture_cubemap_desc::deserialize(desc::desc_system& system, const boo
 				cube_faces.back = system.get_field_desc<res::picture_resource>(*this, *f);
 		}
 	}
+	// Refresh inherited handles too: the parent desc can remain cached across a picture reload.
+	auto refresh = [&](res::res_handle<res::picture_resource>& image) {
+		if (image.is_valid()) image = system.get_field_desc<res::picture_resource>(*this, json::value_from(image.get_tag()));
+	};
+	if (mode == SOURCE_TYPE::SINGLE_FILE) {
+		refresh(single_image);
+	} else {
+		for (auto* face : { &cube_faces.right, &cube_faces.left, &cube_faces.bottom,
+			&cube_faces.top, &cube_faces.front, &cube_faces.back }) refresh(*face);
+	}
 }
 
 void rnd::texture_cubemap_desc::serialize(json::object& resource) const

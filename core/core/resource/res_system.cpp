@@ -538,18 +538,19 @@ void res::resource_system::sweep_edges() {
 void res::resource_system::prune_released_edges() {
   // Released: the tag has no live cache entry. Either every entry expired, or a signal evicted it (#326) and nobody
   // watches it: a watched tag evicted by a signal keeps its edges, because its watcher is told about the next change
-  // whether or not the tag has been loaded again. A load in flight has an entry, and a tag that loads again records
-  // its edges anew, so nothing is lost.
+  // whether or not the tag has been loaded again. An opt-in watcher also keeps edges after the last handle expires,
+  // so a GPU-resident resource can follow dependency changes without keeping decoded data. A load in flight has an
+  // entry, and a tag that loads again records its edges anew, so nothing is lost.
   const auto is_released = [this](const res::tag &tag) {
     if (m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); })) {
       return false;
     }
-    if (m_cache.any_of_tag(tag, [](const cache_entry &) { return true; })) {
-      return true;
-    }
-    const auto has_watchers = [this](const res::tag &key) {
+    const bool expired_entry = m_cache.any_of_tag(tag, [](const cache_entry &) { return true; });
+    const auto has_watchers = [this, expired_entry](const res::tag &key) {
       const auto it = m_watchers.find(key);
-      return it != m_watchers.end() && !it->second.empty();
+      return it != m_watchers.end() && std::ranges::any_of(it->second, [expired_entry](const auto &entry) {
+        return !expired_entry || entry.second.keep_dependencies;
+      });
     };
     if (has_watchers(tag)) {
       return false;
