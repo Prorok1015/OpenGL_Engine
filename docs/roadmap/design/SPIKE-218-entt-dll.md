@@ -41,7 +41,9 @@
 | [40520701077](https://github.com/Prorok1015/OpenGL_Engine/actions/runs/40520701077) | эксп. 2: `ENTT_ID_TYPE=std::uint64_t` только в модуле | ❌ мусор в общих структурах (сдвинулась раскладка `module_probe`), SIGABRT, SIGSEGV | ❌ access violation, segfault процесса |
 | [40521901085](https://github.com/Prorok1015/OpenGL_Engine/actions/runs/40521901085) | эксп. 3: `ENTT_API_IMPORT` только в модуле | ✅ тесты проходят, но `type_index` по-прежнему свой, и **образ остаётся загруженным после `dlclose`** | ❌ LNK2019: `__imp_entt::type_index<spike::velocity_component>::value` и ещё 6 типов |
 
-Эксперименты 1–3 откачены. Защиты из §1 переводят ошибки 1 и 2 из рантайма в compile/configure time.
+| [40525078856](https://github.com/Prorok1015/OpenGL_Engine/actions/runs/40525078856) | итог: эксперименты откачены, защиты `ENTT_*` | ✅ | ✅ (зелёный весь full tier) |
+
+Защиты из §1 переводят ошибки экспериментов 1 и 2 из рантайма в compile/configure time.
 
 ## 3. Факты
 
