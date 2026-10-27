@@ -2,6 +2,7 @@
 #include <snk/resource/res_tag.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resolvers/res_file_watcher.h>
+#include <snk/resource/resolvers/res_write_policy.h>
 #include <vector>
 #include <string>
 #include <filesystem>
@@ -22,6 +23,8 @@ namespace res
 		vfs_resolver(const std::string_view prt)
 			: core::res::res_resolver_interface(prt), watcher(io) {}
 		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points);
+		// `policy` limits where store() may write (the default allows every path).
+		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, write_policy policy);
 		~vfs_resolver();
 
 		std::optional<res::tag> path_mapper(const fs::path& path) const;
@@ -45,6 +48,7 @@ namespace res
 		std::unique_ptr<io::executor_work_guard<io::io_context::executor_type>> work_guard;
 		std::thread io_thread;
 		std::stack<fs::path> entries_stack;
+		write_policy m_write_policy = write_policy::allow_all();
 		res::file_watcher watcher;
 		mutable std::shared_mutex m_pending_mutex;
 		std::unordered_map<res::tag, core::res::res_resolver_interface::async_raw_data> m_pending_writes;

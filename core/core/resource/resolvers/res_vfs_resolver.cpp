@@ -6,9 +6,16 @@
 #include <cctype>
 #include <fstream>
 #include <shared_mutex>
+#include <utility>
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points)
+	: vfs_resolver(prt, points, write_policy::allow_all())
+{
+}
+
+res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, write_policy policy)
 	: core::res::res_resolver_interface(prt)
+	, m_write_policy(std::move(policy))
 	, watcher(io, [this](fs::path pth) {
 			auto otag = path_mapper(pth);
 			if (otag.has_value() && !is_shadowed(pth)) {
@@ -142,6 +149,11 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 		target_path = safe_path(entries_stack.top(), tag);
 		if (!target_path.has_value()) {
 			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
+			return false;
+		}
+		const std::string normalized = fs::path{ tag.relative() }.lexically_normal().generic_string();
+		if (!m_write_policy.allows(normalized)) {
+			egLOG_WARN("resource", "Rejected store of '{}': the path is not writable for this protocol", tag.view());
 			return false;
 		}
 	}
