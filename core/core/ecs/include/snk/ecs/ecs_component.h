@@ -5,6 +5,16 @@
 #include <entt/meta/context.hpp>
 #include <entt/locator/locator.hpp>
 #include <snk/common/snk_api.h>
+#include <cstdint>
+#include <type_traits>
+
+// Component ids cross binaries (a game module and snk_engine) as entt::type_hash, which needs the
+// pretty-function names: under ENTT_STANDARD_CPP it is a per-binary counter (#218, SPIKE-218-entt-dll.md).
+#if defined(ENTT_STANDARD_CPP)
+#error "ENTT_STANDARD_CPP is not supported: entt::type_hash must be stable across the engine and game modules"
+#endif
+static_assert(std::is_same_v<entt::id_type, std::uint32_t>, "entt::id_type is part of the engine ABI; do not redefine ENTT_ID_TYPE");
+
 namespace ecs
 {
     using namespace entt::literals;

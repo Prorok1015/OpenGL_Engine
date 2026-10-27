@@ -107,7 +107,7 @@
 
 ## 5. Риски и открытые вопросы
 
-- **EnTT.** Если `type_hash` или внутренние вызовы EnTT через `type_index` окажутся нестабильны между DLL, понадобятся `ENTT_API` (dllexport `type_index`) или собственный `type_info` по стабильным именам. Это меняет `ecs_component.h` и всё, что берёт `type_hash`. Поэтому S1 идёт первым.
+- **EnTT.** Если `type_hash` или внутренние вызовы EnTT через `type_index` окажутся нестабильны между DLL, понадобятся `ENTT_API` (dllexport `type_index`) или собственный `type_info` по стабильным именам. Это меняет `ecs_component.h` и всё, что берёт `type_hash`. Поэтому S1 идёт первым. **Итог S1 (#218, [SPIKE-218-entt-dll.md](SPIKE-218-entt-dll.md)):** `type_hash` стабилен между DLL одного компилятора, `type_index` ни на что не влияет, `ENTT_API` и свой `type_info` не нужны; `ENTT_STANDARD_CPP`/`ENTT_ID_TYPE` запрещены; meta — один контекст `snk_engine` (`ecs::meta_context_handle()`); перед выгрузкой снимаются пулы типов модуля, системы, desc и meta.
 - **Висящие указатели после FreeLibrary**: `std::function`, vtable, meta-функции, спавнеры, подписки на события и ресурсы, `thread_local` в DLL. Контроль — счётчик регистраций области до и после (по образцу `storage.size()` в `module_loader`) и тест «выгрузить → `rebuild_all_plans` → ни одной записи модуля».
 - **Hot reload во время Play** (ADR-07: Play = отдельный level). Варианты: (а) Stop → reload → Start; (б) reload с переносом снимка Play-level. Рекомендация — (а). Вопрос владельцу.
 - **Минимальный MSVC**: 14.44 (VS 2022 17.14) против только VS 18 (14.50). Чем ниже минимум, тем шире аудитория; движок обязан собираться самым старым поддерживаемым toolset.
