@@ -59,7 +59,14 @@ namespace res
 		// Mounts config_mount_table().
 		explicit resource_system(ds::task_system& tasks);
 		resource_system(ds::task_system& tasks, mount_table mounts);
-		// Cancels the load tasks that have not started and waits for the running ones: main thread only.
+		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
+		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
+		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a
+		// desc adapter on the layer's desc_system) and what is pinned in it lives and dies with the layer. Changes are
+		// signalled from the root to every layer. The parent outlives the layer.
+		explicit resource_system(resource_system& parent);
+		// Cancels the load tasks that have not started and waits for the running ones: main thread only. A layer then
+		// reports the resources it loaded that are still referenced (their code may belong to a module being unloaded).
 		~resource_system();
 		resource_system(const resource_system&) = delete;
 		resource_system& operator= (const resource_system&) = delete;
@@ -83,20 +90,22 @@ namespace res
 		static std::filesystem::path configured_engine_base();
 
 		bool exists(const tag& tag) const {
-			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
+			const auto& resolvers = root().m_resolvers;
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
 				egLOG_WARN("resource/exists", "Protocol '{}' is not supported!", tag.protocol());
 				return false;
 			}
-			return m_resolvers.at(tag.protocol())->exists(tag);
+			return resolvers.at(tag.protocol())->exists(tag);
 		}
 
 		bool store(const tag& tag, const std::vector<std::byte>& data) {
-			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
+			const auto& resolvers = root().m_resolvers;
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
 				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
 				return false;
 			}
 
-			return m_resolvers.at(tag.protocol())->store(tag, data);
+			return resolvers.at(tag.protocol())->store(tag, data);
 		}
 
 
@@ -135,6 +144,22 @@ namespace res
 		// then, each tag of the batch once, parents before the resources that depend on them.
 		void signal_changed(const res::tag& tag);
 
+		// Read-only: cached resources of this system (a layer: of the layer only) that someone still references, pinned
+		// ones included. For tests and diagnostics.
+		std::size_t live_resources() const {
+			std::shared_lock lock(m_cache_mutex);
+			std::size_t count = 0;
+			m_cache.for_each([&count](const cache_entry& entry) {
+				if (!entry.expired()) {
+					++count;
+				}
+			});
+			return count;
+		}
+
+		// The system this one is a layer of; null for the root.
+		resource_system* parent() const { return m_parent; }
+
 		// Read-only: how many (tag, dependency) edges the hot reload graph holds. For tests and diagnostics.
 		std::size_t dependency_edge_count() const {
 			std::shared_lock lock(m_cache_mutex);
@@ -159,6 +184,7 @@ namespace res
 
 		template<class T, class... ARGS>
 		T& registrate_resolver(protocol prt, ARGS... args) {
+			ASSERT_MSG(!m_parent, "A resource layer uses the resolvers of its root");
 			ASSERT_MSG(m_resolvers.find(prt) == m_resolvers.end(), "That protocol already has resolver!");
 			return *std::static_pointer_cast<T>(m_resolvers[prt] = std::make_unique<T>(prt, std::forward<ARGS>(args)...));
 		}
@@ -216,12 +242,13 @@ namespace res
 
 		data fetch_data(const tag& tag) const
 		{
-			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
+			const auto& resolvers = root().m_resolvers;
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
 				egLOG_WARN("resource/require", "Protocol '{}' is not supported!", tag.protocol());
 				return data{};
 			}
 
-			return m_resolvers.at(tag.protocol())->resolve(tag);
+			return resolvers.at(tag.protocol())->resolve(tag);
 		}
 
 		template<class RESOURCE>
@@ -247,9 +274,12 @@ namespace res
 		void warmup(const res::tag& tag)
 		{
 			res::res_handle<T> res = require<T>(tag);
-			res.get_control_block()->on_settled([this, res, tag](auto&) {
+			// In a layer the block may be the parent's and settle after the layer is gone.
+			res.get_control_block()->on_settled([gate = m_gate, res, tag](auto&) {
 				if (res.has_error()) return;
-				push_resource_to_strong_cache(key_for<T>(tag), res.get_control_block());
+				gate->with([&](resource_system& self) {
+					self.push_resource_to_strong_cache(self.key_for<T>(tag), res.get_control_block());
+				});
 			});
 		}
 
@@ -279,7 +309,7 @@ namespace res
 			}
 		}
 
-		// Any thread. Removes what store() put under the tag, for the memory protocol only (false for the others, whose
+		// Any thread; a layer forwards to its root. Removes what store() put under the tag, for the memory protocol only (false for the others, whose
 		// files stay, and for a protocol without a resolver or a tag the resolver does not hold). Then drops the pin,
 		// the alias mappings that point at the tag (resolve_alias of their original is the original again; the original's
 		// own data stays), and signals the tag as changed: its cache entries and those of everything built from it go,
@@ -296,16 +326,50 @@ namespace res
 		// original; a new one replaces the edge; a change signalled on the original drops the alias until the next
 		// load re-registers it. register_alias(x, x) does nothing.
 		void register_alias(const res::tag& original, const res::tag& alias);
+		// A layer's own aliases first, then its parent's.
 		res::tag resolve_alias(const res::tag& tag) const {
-			std::shared_lock lock(m_alias_mutex);
-			auto it = m_aliases.find(tag);
-			if (it != m_aliases.end()) {
-				return it->second;
+			{
+				std::shared_lock lock(m_alias_mutex);
+				auto it = m_aliases.find(tag);
+				if (it != m_aliases.end()) {
+					return it->second;
+				}
 			}
-			return tag;
+			return m_parent ? m_parent->resolve_alias(tag) : tag;
 		}
 
 	private:
+		// Callbacks that run on other systems' blocks or on resolver threads (on_settled) reach this system only through
+		// the gate. The destructor closes it before the members go away; a late callback then fails its block instead.
+		struct gate {
+			std::recursive_mutex mutex;
+			resource_system* self = nullptr;
+
+			// False when the gate is closed (fn not called).
+			template<class Fn>
+			bool with(Fn&& fn) {
+				std::lock_guard lock(mutex);
+				if (!self) {
+					return false;
+				}
+				fn(*self);
+				return true;
+			}
+		};
+
+		const resource_system& root() const { return m_parent ? m_parent->root() : *this; }
+		resource_system& root() { return m_parent ? m_parent->root() : *this; }
+		// signal_changed() on this system and, through m_layers, on its layers.
+		void signal_changed_local(const res::tag& tag);
+		// erase(): drops the pin and the alias mappings of the tag here and in every layer.
+		void forget_erased(const res::tag& tag);
+
+		std::shared_ptr<resource_handle> find_cached(const cache_key& key) {
+			std::shared_lock lock(m_cache_mutex);
+			const cache_entry* slot = m_cache.find(key);
+			return slot ? slot->lock() : nullptr;
+		}
+
 		// A task that never runs (cancelled, shutting down) settles `block` with an error so nobody waits on it forever.
 		void run_on_compute(std::function<void()> cb, std::shared_ptr<resource_handle> block);
 		void deliver_to_watchers(const res::tag& tag, std::uint64_t signal_epoch);
@@ -363,6 +427,16 @@ namespace res
 		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
 			ds::type_id type = ds::type_id::make<RESOURCE>();
 			auto found = find_adapter_recursive<RESOURCE>(tag, &type);
+			if (!found && m_parent) {
+				// Not this layer's kind of resource: the parent's block, unless the layer pinned one.
+				if (auto pinned = find_cached(cache_key{ tag, type })) {
+					if constexpr (is_sync) {
+						wait_for_block(pinned);
+					}
+					return res_handle<RESOURCE>(pinned, requested, &m_tasks);
+				}
+				return m_parent->require_resource_internal<RESOURCE, is_sync>(requested, tag);
+			}
 			if (!found) {
 				// Not fatal: a format whose importer is not built in (SNK_WITH_ASSIMP=OFF) ends up here. The block below
 				// settles with an error, so whoever waits for it fails instead of the process.
@@ -467,6 +541,11 @@ namespace res
 
 		ds::task_system& m_tasks;
 		mount_table m_mounts;
+		resource_system* m_parent = nullptr;
+		// The layers over this system, for signal_changed() and erase(); a layer adds and removes itself.
+		std::mutex m_layers_mutex;
+		std::vector<resource_system*> m_layers;
+		std::shared_ptr<gate> m_gate = std::make_shared<gate>();
 		std::mutex m_stop_mutex;
 		bool m_stopping = false;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.

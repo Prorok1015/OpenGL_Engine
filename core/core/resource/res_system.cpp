@@ -199,6 +199,7 @@ res::resource_system::resource_system(ds::task_system &tasks)
 res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts)
     : m_graph(std::make_unique<wait_graph>()), m_tasks(tasks),
       m_mounts(std::move(mounts)) {
+  m_gate->self = this;
   for (const auto &mount : m_mounts) {
     egLOG("resource/system", "Mount {}:// ({}): {}", mount.protocol,
           mount.access == mount_access::read_only ? "read-only" : "read-write",
@@ -215,7 +216,23 @@ res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts
   registrate_adapter<binary_adapter>(res::binary_adapter::INFO);
 }
 
+res::resource_system::resource_system(resource_system &parent)
+    : m_graph(std::make_unique<wait_graph>()), m_tasks(parent.m_tasks), m_parent(&parent) {
+  m_gate->self = this;
+  std::lock_guard lock(parent.m_layers_mutex);
+  parent.m_layers.push_back(this);
+}
+
 res::resource_system::~resource_system() {
+  if (m_parent) {
+    // First: a signal from the root may be walking the layers right now.
+    std::lock_guard lock(m_parent->m_layers_mutex);
+    std::erase(m_parent->m_layers, this);
+  }
+  {
+    std::lock_guard lock(m_gate->mutex);
+    m_gate->self = nullptr;
+  }
   {
     std::lock_guard lock(m_stop_mutex);
     m_stopping = true;
@@ -224,6 +241,15 @@ res::resource_system::~resource_system() {
   m_tasks.wait_idle(m_lifetime);
   // The vfs threads are joined only now: the tasks that were running may still store() through them.
   m_resolvers.clear();
+  if (m_parent) {
+    {
+      std::unique_lock lock(m_pinning_mutex);
+      m_pinned_resources = {};
+    }
+    if (const std::size_t live = live_resources(); live > 0) {
+      egLOG_WARN("resource/layer", "{} resources loaded through a destroyed layer are still referenced", live);
+    }
+  }
 }
 
 namespace {
@@ -263,8 +289,9 @@ void res::resource_system::start_loading(const res::tag &tag,
                                          adapter ad) {
   // The cache slot already holds `block`: any escape from here would leave waiters blocked forever.
   try {
-    auto resolver_it = m_resolvers.find(tag.protocol());
-    if (resolver_it == m_resolvers.end()) {
+    const auto &resolvers = root().m_resolvers;
+    auto resolver_it = resolvers.find(tag.protocol());
+    if (resolver_it == resolvers.end()) {
       egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
       block->set_error(std::string{"Unsupported protocol: "} + std::string{tag.protocol()});
       return;
@@ -277,8 +304,14 @@ void res::resource_system::start_loading(const res::tag &tag,
       return;
     }
 
-    raw->on_settled([this, tag, block, raw, ad = std::move(ad)](auto &) {
-      run_on_compute([this, tag, block, raw, ad] { collect_stage(tag, block, raw, ad); }, block);
+    // A resolver thread of the root settles `raw`, possibly after this layer is gone.
+    raw->on_settled([gate = m_gate, tag, block, raw, ad = std::move(ad)](auto &) {
+      const bool open = gate->with([&](resource_system &self) {
+        self.run_on_compute([system = &self, tag, block, raw, ad] { system->collect_stage(tag, block, raw, ad); }, block);
+      });
+      if (!open && !is_finished(*block)) {
+        block->set_error("Load cancelled");
+      }
     });
   } catch (const std::exception &e) {
     egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
@@ -439,15 +472,21 @@ void res::resource_system::await_blocks(
       return;
     }
 
-    dep->on_settled([this, state, i, one_settled](auto &settled) {
-      m_graph->remove_edge(state->owner.get(), &settled);
-      if (settled.has_error()) {
-        std::lock_guard lock(state->mutex);
-        if (state->failure.empty()) {
-          state->failure = "Dependency failed: " + std::string{state->blocks[i].second.view()} + ": " + settled.error_msg;
+    // A dependency may be the parent's block, which settles after this layer is gone.
+    dep->on_settled([gate = m_gate, state, i, one_settled](auto &settled) {
+      const bool open = gate->with([&](resource_system &self) {
+        self.m_graph->remove_edge(state->owner.get(), &settled);
+        if (settled.has_error()) {
+          std::lock_guard lock(state->mutex);
+          if (state->failure.empty()) {
+            state->failure = "Dependency failed: " + std::string{state->blocks[i].second.view()} + ": " + settled.error_msg;
+          }
         }
+        one_settled(state);
+      });
+      if (!open && !is_finished(*state->owner)) {
+        state->owner->set_error("Load cancelled");
       }
-      one_settled(state);
     });
   }
 }
@@ -668,6 +707,14 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
 }
 
 void res::resource_system::signal_changed(const res::tag &tag) {
+  if (m_parent) {
+    root().signal_changed(tag);
+    return;
+  }
+  signal_changed_local(tag);
+}
+
+void res::resource_system::signal_changed_local(const res::tag &tag) {
   std::vector<res::tag> batch;
   std::uint64_t epoch = 0;
   {
@@ -710,9 +757,18 @@ void res::resource_system::signal_changed(const res::tag &tag) {
       deliver_to_watchers(changed, epoch);
     }
   });
+
+  // Held while the layers handle the signal: a layer removes itself under this lock before it goes away.
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->signal_changed_local(tag);
+  }
 }
 
 bool res::resource_system::erase(const res::tag &tag) {
+  if (m_parent) {
+    return root().erase(tag);
+  }
   const auto found = m_resolvers.find(tag.protocol());
   if (found == m_resolvers.end()) {
     egLOG_WARN("resource/erase", "Protocol '{}' is not supported!", tag.protocol());
@@ -722,6 +778,12 @@ bool res::resource_system::erase(const res::tag &tag) {
     return false;
   }
 
+  forget_erased(tag);
+  signal_changed(tag);
+  return true;
+}
+
+void res::resource_system::forget_erased(const res::tag &tag) {
   unpin_resource(tag);
   {
     // Lock order as in signal_changed: cache first, alias nested inside.
@@ -730,8 +792,10 @@ bool res::resource_system::erase(const res::tag &tag) {
     std::erase_if(m_alias_edges, [&](const auto &edge) { return edge.second == tag; });
     std::erase_if(m_aliases, [&](const auto &mapped) { return mapped.second == tag; });
   }
-  signal_changed(tag);
-  return true;
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->forget_erased(tag);
+  }
 }
 
 void res::resource_system::deliver_to_watchers(const res::tag &tag,
@@ -797,6 +861,9 @@ std::filesystem::path res::resource_system::get_resources_path() const {
 }
 
 std::vector<std::filesystem::path> res::resource_system::get_resource_layers() const {
+  if (m_parent) {
+    return m_parent->get_resource_layers();
+  }
   for (const auto &mount : m_mounts) {
     if (mount.protocol == tag::default_protocol()) {
       return mount.roots;
