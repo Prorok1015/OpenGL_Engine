@@ -1,0 +1,37 @@
+#pragma once
+#include <compare>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <snk/common/snk_api.h>
+
+namespace prj
+{
+	struct engine_version
+	{
+		int major = 0;
+		int minor = 0;
+		int patch = 0;
+
+		auto operator<=>(const engine_version&) const = default;
+	};
+
+	// How a project's engine_version relates to the running editor. Projects are compatible within one MAJOR.MINOR
+	// (before 1.0 a minor bump is a breaking one, so the rule is the same on both sides of 1.0); the patch is free.
+	enum class version_match
+	{
+		exact,
+		patch_differs,
+		project_older,
+		project_newer,
+	};
+
+	// The version of the engine this binary was built from (SNK_SDK_VERSION in cmake/SnkInstall.cmake).
+	SNK_API engine_version current_engine_version();
+
+	// Strict "MAJOR.MINOR.PATCH" of non-negative decimal numbers; nullopt for anything else.
+	SNK_API std::optional<engine_version> parse_engine_version(std::string_view text);
+	SNK_API std::string to_string(const engine_version& version);
+
+	SNK_API version_match compare_engine_versions(const engine_version& project, const engine_version& editor);
+}
