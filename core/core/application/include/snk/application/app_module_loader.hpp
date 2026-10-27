@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
+#include <snk/application/app_module_layer.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
@@ -38,6 +39,8 @@ namespace app::modules {
 			module_state state = module_state::added;
 			std::size_t size_before = 0; // storage.size() right before this module registered
 			std::size_t provided = 0;    // services it left in the storage after register + initialize
+			// A layered() module's layer; declared after `module`, so it goes first when the entry is destroyed.
+			std::unique_ptr<module_layer> layer;
 		};
 
 		std::vector<entry> m_entries;
@@ -65,15 +68,33 @@ namespace app::modules {
 			return "?";
 		}
 
+		// The storage the module registers into: its layer's, or the root.
+		static ds::app_data_storage& storage_of(entry& e, ds::app_data_storage& data) {
+			return e.layer ? e.layer->storage() : data;
+		}
+
+		void create_layer(entry& e, ds::app_data_storage& data) {
+			if (!e.module->layered() || e.layer) {
+				return;
+			}
+			const auto factory = data.require_shared<module_layer_factory>();
+			if (!factory) {
+				fail(std::format("module_loader: cannot load '{}': it needs a layer and the storage has no module_layer_factory", e.module->name()));
+			}
+			e.layer = factory->create(data, e.module->name());
+		}
+
 		void shutdown_entry(entry& e, ds::app_data_storage& data) {
 			e.state = module_state::shut_down;
 			try {
-				e.module->shutdown_services(data);
+				e.module->shutdown_services(storage_of(e, data));
 			} catch (const std::exception& ex) {
 				egLOG_ERROR("app", "module '{}' threw during shutdown: {}", e.module->name(), ex.what());
 			} catch (...) {
 				egLOG_ERROR("app", "module '{}' threw unknown exception during shutdown", e.module->name());
 			}
+			// Right away, not with the entry: the layer belongs to services of modules that shut down after this one.
+			e.layer.reset();
 		}
 
 		// Shuts down the given entries (indices into m_entries) in reverse order.
@@ -164,7 +185,8 @@ namespace app::modules {
 					continue;
 				}
 				e.size_before = data.size();
-				e.module->register_services(data);
+				create_layer(e, data);
+				e.module->register_services(storage_of(e, data));
 				e.state = module_state::registered;
 			}
 		}
@@ -184,8 +206,9 @@ namespace app::modules {
 					}
 					if (e.state == module_state::added) {
 						e.size_before = data.size();
+						create_layer(e, data);
 					}
-					e.module->initialize_services(data);
+					e.module->initialize_services(storage_of(e, data));
 					e.state = module_state::initialized;
 					e.provided = data.size() - e.size_before;
 					done.push_back(i);
@@ -238,10 +261,11 @@ namespace app::modules {
 
 			entry e{ std::move(module) };
 			e.size_before = data.size();
-			e.module->register_services(data);
+			create_layer(e, data);
+			e.module->register_services(storage_of(e, data));
 			e.state = module_state::registered;
 			try {
-				e.module->initialize_services(data);
+				e.module->initialize_services(storage_of(e, data));
 			} catch (...) {
 				shutdown_entry(e, data);
 				if (data.size() != e.size_before) {

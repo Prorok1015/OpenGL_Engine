@@ -76,6 +76,15 @@ namespace ds {
 			return add<KEY, INSTANCE>(std::forward<A>(args)...);
 		}
 
+		// Puts an object owned elsewhere under T; `object` may be an aliasing shared_ptr that owns nothing (a
+		// layer's storage refers to the layer's services this way).
+		template<class T>
+		T& attach(std::shared_ptr<T> object) {
+			T& ref = *object;
+			insert(type_key<T>(), type_name<T>(), std::move(object));
+			return ref;
+		}
+
 		template<class T>
 		void destruct() {
 			const std::uint64_t key = type_key<T>();
