@@ -115,12 +115,13 @@ editor:
 Подготовить директорию для пользовательских настроек. Сами настройки (layout, recent files) будут реализованы в будущих эпиках — здесь только инфраструктура.
 
 **AC:**
-- [ ] `Editor/data/settings/` создана (может быть пустой с `.gitkeep`)
-- [ ] `Editor/data/settings/` добавлена в `.gitignore` (кроме `.gitkeep`)
+- [x] ~~`Editor/data/settings/` с `.gitkeep`~~ и ~~запись в `.gitignore`~~ заменены пользовательским корнем `edt://` (см. решение ниже)
 - [ ] `edt://settings/` доступен для чтения/записи через resource system
 - [ ] Хелпер-функция или документация: как сохранить/прочитать файл в `edt://settings/`
 
-**Хелпер:** `Editor/code/editor_system/core/edt_settings.h` — `edt::write_setting(res, "recent_files.json", text)` и `edt::read_setting(res, "recent_files.json")` (возвращает `std::optional<std::string>`, `nullopt` при первом запуске, когда файла ещё нет); `edt::settings_tag(name)` даёт тег `edt://settings/<name>`. Запись идёт через `resource_system::store` (асинхронно на io-потоке резолвера) и сбрасывает кэш, чтение — только с главного потока. Каталог `Editor/data/settings/` в git пуст (`.gitkeep`), содержимое игнорируется.
+**Решение владельца (2026-10-27, вопрос 9 плана EPIC-42):** настройки не пишутся в каталог установки. У `edt://` два корня: `Editor/data` (из `editor.data_path`, считается от `editor.cfg`) только читается, поверх него пользовательский каталог на запись: `%APPDATA%/Snake/Editor/` (Windows) или `$XDG_DATA_HOME/snake/editor/`, по умолчанию `~/.local/share/snake/editor/` (Linux); переопределение — `editor/user_data_path`. `Editor/data/settings/` в репозитории не создаётся, `.gitignore` не нужен. `vfs_resolver` читает сверху вниз и пишет только в верхний корень, поэтому запись по любому тегу `edt://` уходит в пользовательский каталог.
+
+**Хелпер:** `Editor/code/editor_system/core/edt_settings.h` — `edt::write_setting(res, "recent_files.json", text)` и `edt::read_setting(res, "recent_files.json")` (возвращает `std::optional<std::string>`, `nullopt` при первом запуске, когда файла ещё нет); `edt::settings_tag(name)` даёт тег `edt://settings/<name>`. Запись идёт через `resource_system::store` (асинхронно на io-потоке резолвера) и сбрасывает кэш, чтение — только с главного потока.
 
 ### US-36-5: Asset Browser — скрыть `edt://` ресурсы
 **Файлы:** `Editor/code/editor_system/panels/edt_asset_browser_panel.cpp`

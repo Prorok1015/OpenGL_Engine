@@ -10,7 +10,7 @@
 #include <string>
 #include <thread>
 
-// edt://settings/ (#164): per-user editor settings are written to and read back through the resource system.
+// edt://settings/ (#164): per-user editor settings are written to the user root of edt:// and read back through the resource system.
 
 namespace {
 
@@ -18,11 +18,12 @@ struct settings_fixture : test_util::ram_res_env
 {
 	test_util::temp_dir dir{ "edt_settings" };
 	std::filesystem::path data = dir.path() / "data";
+	std::filesystem::path user = dir.path() / "user";
 
 	settings_fixture()
 	{
-		BOOST_REQUIRE(std::filesystem::create_directories(data / "settings"));
-		BOOST_REQUIRE(edt::register_data_protocol(*rs, data));
+		BOOST_REQUIRE(std::filesystem::create_directories(data));
+		BOOST_REQUIRE(edt::register_data_protocol(*rs, data, user));
 	}
 
 	// Joins the vfs io thread before the scratch directory goes away.
@@ -73,11 +74,12 @@ BOOST_AUTO_TEST_CASE(WriteSetting_Twice_ReadSeesTheLatestText)
 	BOOST_TEST(edt::read_setting(*rs, "user_prefs.cfg").value_or("") == "theme: light");
 }
 
-BOOST_AUTO_TEST_CASE(WriteSetting_LandsAsAFileUnderDataSettings)
+BOOST_AUTO_TEST_CASE(WriteSetting_LandsInTheUserRootNeverInTheShippedData)
 {
 	BOOST_REQUIRE(edt::write_setting(*rs, "layout.ini", "[Window][Main]"));
 
-	BOOST_TEST(wait_for_text(data / "settings" / "layout.ini", "[Window][Main]"));
+	BOOST_TEST(wait_for_text(user / "settings" / "layout.ini", "[Window][Main]"));
+	BOOST_TEST(!std::filesystem::exists(data / "settings"));
 }
 
 BOOST_AUTO_TEST_CASE(WriteSetting_NameEscapingTheSettingsFolder_IsNotReadBack)
