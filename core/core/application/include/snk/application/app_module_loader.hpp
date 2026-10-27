@@ -40,7 +40,7 @@ namespace app::modules {
 			std::size_t size_before = 0; // storage.size() right before this module registered
 			std::size_t provided = 0;    // services it left in the storage after register + initialize
 			// A layered() module's layer; declared after `module`, so it goes first when the entry is destroyed.
-			std::unique_ptr<module_layer> layer;
+			std::unique_ptr<module_layer> layer{};
 		};
 
 		std::vector<entry> m_entries;
