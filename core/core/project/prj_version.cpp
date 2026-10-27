@@ -11,7 +11,8 @@ namespace
 {
 	bool parse_component(std::string_view text, int& out)
 	{
-		if (text.empty() || text.size() > 9) {
+		// A leading zero would not round-trip through to_string.
+		if (text.empty() || text.size() > 9 || (text.size() > 1 && text.front() == '0')) {
 			return false;
 		}
 		for (const char c : text) {

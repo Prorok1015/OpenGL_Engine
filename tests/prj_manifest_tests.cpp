@@ -1,7 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_manifest.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include "test_temp_dir.hpp"
+#include <boost/json/array.hpp>
+#include <boost/json/object.hpp>
+#include <boost/json/serialize.hpp>
 #include <algorithm>
+#include <cstddef>
+#include <vector>
 #include <string>
 #include <string_view>
 
@@ -146,7 +152,9 @@ BOOST_AUTO_TEST_CASE(Parse_FormatVersionFromTheFutureIsRejected)
 BOOST_AUTO_TEST_CASE(Parse_ContentRootsMustStayInsideTheProject)
 {
 	for (const std::string_view root : { R"("")", R"(".")", R"("..")", R"("../engine/res")", R"("res/../../x")", R"("/abs/res")",
-			R"("\\server\\share")", R"("C:/res")", R"("res:x")", R"("res//x")", R"("./res")" }) {
+			R"("\\server\\share")", R"("C:/res")", R"("C:foo")", R"("res:x")", R"("res//x")", R"("./res")", R"("res/./x")",
+			R"("res\\..\\x")", R"("res\\.\\x")", R"("content\\shared")", R"("CON")", R"("res/nul.txt")", R"("Com1")",
+			R"("lpt9/res")", R"("res\u0000x")", R"("res\nx")", R"("res\u007fx")" }) {
 		BOOST_TEST_INFO("root: " << root);
 		check_error(prj::parse_manifest(minimal_with("content_roots", "[" + std::string{ root } + "]")), "$.content_roots[0]");
 	}
@@ -155,9 +163,9 @@ BOOST_AUTO_TEST_CASE(Parse_ContentRootsMustStayInsideTheProject)
 
 BOOST_AUTO_TEST_CASE(Parse_ContentRootsAcceptNestedAndTrailingSeparator)
 {
-	const auto result = prj::parse_manifest(minimal_with("content_roots", R"(["res/", "content\\shared"])"));
+	const auto result = prj::parse_manifest(minimal_with("content_roots", R"(["res/", "content/shared", "console", "com10"])"));
 	BOOST_REQUIRE(result.data.has_value());
-	BOOST_TEST(result.data->content_roots.size() == 2u);
+	BOOST_TEST(result.data->content_roots.size() == 4u);
 }
 
 BOOST_AUTO_TEST_CASE(Parse_DuplicatesAreRejected)
@@ -170,9 +178,70 @@ BOOST_AUTO_TEST_CASE(Parse_DuplicatesAreRejected)
 BOOST_AUTO_TEST_CASE(Parse_StartSceneMustBeAResTagInsideTheProject)
 {
 	for (const std::string_view scene : { R"("levels/a.desc")", R"("memory://a.desc")", R"("res://")", R"("res://../a.desc")",
-			R"("res:///abs.desc")", R"("res://levels/")" }) {
+			R"("res:///abs.desc")", R"("res://levels/")", R"("res://levels\\a.desc")", R"("res://levels/./a.desc")",
+			R"("res://con.desc")", R"("res://a\u0000.desc")", R"("res://a\n.desc")" }) {
 		BOOST_TEST_INFO("scene: " << scene);
 		check_error(prj::parse_manifest(minimal_with("start_scene", scene)), "$.start_scene");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Parse_ControlCharactersAreRejectedInEveryStringField)
+{
+	for (const std::string_view bad : { R"("a\u0000b")", R"("a\nb")", R"("a\u007fb")" }) {
+		BOOST_TEST_INFO("value: " << bad);
+		const std::string value{ bad };
+		check_error(prj::parse_manifest(R"({ "format_version": 1, "engine_version": "0.2.0", "name": )" + value + " }"), "$.name");
+		check_error(prj::parse_manifest(minimal_with("platforms", "[" + value + "]")), "$.platforms[0]");
+		check_error(prj::parse_manifest(minimal_with("modules", R"([{ "name": )" + value + " }]")), "$.modules[0].name");
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Parse_FormatVersionBeyondInt64IsOutOfRange)
+{
+	const auto result = prj::parse_manifest(
+		R"({ "format_version": 18446744073709551615, "name": "Mini", "engine_version": "0.2.0" })");
+	check_error(result, "$.format_version");
+	BOOST_TEST(result.error->reason.find("range") != std::string::npos);
+}
+
+// Boost.JSON keeps the last of duplicate keys and does not report them; pinned here (EPIC-42-PLAN.md §2.1).
+BOOST_AUTO_TEST_CASE(Parse_DuplicateKeysKeepTheLastValue)
+{
+	const auto result = prj::parse_manifest(
+		R"({ "format_version": 1, "name": "First", "engine_version": "0.2.0", "name": "Last" })");
+	BOOST_REQUIRE(result.data.has_value());
+	BOOST_TEST(result.data->name == "Last");
+}
+
+BOOST_AUTO_TEST_CASE(Parse_UnknownKeysAreEscapedInWarnings)
+{
+	const auto result = prj::parse_manifest(
+		R"({ "format_version": 1, "name": "Mini", "engine_version": "0.2.0", "evil\nproject: forged": 1 })");
+	BOOST_REQUIRE(result.data.has_value());
+	BOOST_REQUIRE(result.warnings.size() == 1u);
+	BOOST_TEST(result.warnings[0].find('\n') == std::string::npos);
+	BOOST_TEST(result.warnings[0].find("evil\\u000aproject") != std::string::npos);
+}
+
+// The manifest refuses at least what the resolver refuses: a start scene or content root the resolver would reject
+// as leaving its root never gets that far.
+BOOST_AUTO_TEST_CASE(Parse_RejectsEveryPathTheResolverRejects)
+{
+	test_util::temp_dir dir("prj_manifest_vs_vfs");
+	res::vfs_resolver resolver("res", { dir.path() });
+	const std::vector<std::byte> bytes{ std::byte{ 'x' } };
+
+	for (const std::string_view rel : { "../x.desc", "a/../../x.desc", "/abs/x.desc", "C:/x.desc", "C:x.desc", "a\x01" "b.desc" }) {
+		BOOST_TEST_INFO("path: " << rel);
+		BOOST_TEST(!resolver.store(res::tag{ "res://" + std::string{ rel } }, bytes));
+
+		boost::json::object scene_manifest{ { "format_version", 1 }, { "name", "Mini" }, { "engine_version", "0.2.0" } };
+		scene_manifest["start_scene"] = "res://" + std::string{ rel };
+		check_error(prj::parse_manifest(boost::json::serialize(scene_manifest)), "$.start_scene");
+
+		boost::json::object root_manifest{ { "format_version", 1 }, { "name", "Mini" }, { "engine_version", "0.2.0" } };
+		root_manifest["content_roots"] = boost::json::array{ boost::json::string{ rel } };
+		check_error(prj::parse_manifest(boost::json::serialize(root_manifest)), "$.content_roots[0]");
 	}
 }
 
