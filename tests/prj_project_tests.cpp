@@ -79,4 +79,31 @@ BOOST_AUTO_TEST_CASE(Open_ContentRootSymlinkLeavingTheProjectIsRejected)
 	BOOST_TEST(opened.error.find("outside the project") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(Verify_CatchesAContentRootReplacedAfterOpening)
+{
+	test_util::temp_dir dir("prj_verify_later");
+	dir.write("game/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	fs::create_directories(dir.path() / "game" / "res");
+	fs::create_directories(dir.path() / "outside");
+
+	auto opened = prj::open_project(dir.path() / "game");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	BOOST_TEST(!prj::verify_content_roots(*opened.context).has_value());
+
+	fs::remove_all(dir.path() / "game" / "res");
+	const auto removed = prj::verify_content_roots(*opened.context);
+	BOOST_REQUIRE(removed.has_value());
+	BOOST_TEST(removed->find("not a directory") != std::string::npos);
+
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "outside", dir.path() / "game" / "res", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	const auto escaped = prj::verify_content_roots(*opened.context);
+	BOOST_REQUIRE(escaped.has_value());
+	BOOST_TEST(escaped->find("outside the project") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
