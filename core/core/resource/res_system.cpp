@@ -194,29 +194,21 @@ private:
 };
 
 res::resource_system::resource_system(ds::task_system &tasks)
-    : m_graph(std::make_unique<wait_graph>()), m_tasks(tasks) {
-  egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
-        fs::absolute("./").string(), cfg_res_path->string());
-  ASSERT_MSG(std::filesystem::exists(cfg_res_path),
-             "Resources path does not exist!");
+    : resource_system(tasks, config_mount_table()) {}
 
-  // Mount order: base first, top last (the last mount wins and receives writes).
-  std::vector<fs::path> layers = get_resource_layers();
-  if (!cfg_res_base_path->empty()) {
-    ASSERT_MSG(std::filesystem::exists(cfg_res_base_path),
-               "Base resources path does not exist!");
+res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts)
+    : m_graph(std::make_unique<wait_graph>()), m_tasks(tasks),
+      m_mounts(std::move(mounts)) {
+  m_gate->self = this;
+  for (const auto &mount : m_mounts) {
+    egLOG("resource/system", "Mount {}:// ({}): {}", mount.protocol,
+          mount.access == mount_access::read_only ? "read-only" : "read-write",
+          mount.roots.empty() ? std::string{} : mount.roots.back().string());
+    auto &resolver =
+        registrate_resolver<vfs_resolver>(mount.protocol, mount.roots, mount.access);
+    resolver.set_resource_changed_callback(
+        [this](const res::tag &tag) { signal_changed(tag); });
   }
-
-  auto &res_resolver =
-      registrate_resolver<vfs_resolver>(tag::default_protocol(), layers);
-  res_resolver.set_resource_changed_callback(
-      [this](const res::tag &tag) { signal_changed(tag); });
-  fs::path memory_path = fs::path{cfg_res_path->string()} /
-                         "../sandbox"; // TODO: make configurable
-  auto &memory_resolver = registrate_resolver<vfs_resolver>(
-      res::tag::memory, std::vector<fs::path>{memory_path});
-  memory_resolver.set_resource_changed_callback(
-      [this](const res::tag &tag) { signal_changed(tag); });
 
   registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);
   registrate_adapter<pct_adapter>(res::pct_adapter::INFO);
@@ -224,7 +216,23 @@ res::resource_system::resource_system(ds::task_system &tasks)
   registrate_adapter<binary_adapter>(res::binary_adapter::INFO);
 }
 
+res::resource_system::resource_system(resource_system &parent)
+    : m_graph(std::make_unique<wait_graph>()), m_tasks(parent.m_tasks), m_parent(&parent) {
+  m_gate->self = this;
+  std::lock_guard lock(parent.m_layers_mutex);
+  parent.m_layers.push_back(this);
+}
+
 res::resource_system::~resource_system() {
+  if (m_parent) {
+    // First: a signal from the root may be walking the layers right now.
+    std::lock_guard lock(m_parent->m_layers_mutex);
+    std::erase(m_parent->m_layers, this);
+  }
+  {
+    std::lock_guard lock(m_gate->mutex);
+    m_gate->self = nullptr;
+  }
   {
     std::lock_guard lock(m_stop_mutex);
     m_stopping = true;
@@ -233,6 +241,15 @@ res::resource_system::~resource_system() {
   m_tasks.wait_idle(m_lifetime);
   // The vfs threads are joined only now: the tasks that were running may still store() through them.
   m_resolvers.clear();
+  if (m_parent) {
+    {
+      std::unique_lock lock(m_pinning_mutex);
+      m_pinned_resources = {};
+    }
+    if (const std::size_t live = live_resources(); live > 0) {
+      egLOG_WARN("resource/layer", "{} resources loaded through a destroyed layer are still referenced", live);
+    }
+  }
 }
 
 namespace {
@@ -272,8 +289,9 @@ void res::resource_system::start_loading(const res::tag &tag,
                                          adapter ad) {
   // The cache slot already holds `block`: any escape from here would leave waiters blocked forever.
   try {
-    auto resolver_it = m_resolvers.find(tag.protocol());
-    if (resolver_it == m_resolvers.end()) {
+    const auto &resolvers = root().m_resolvers;
+    auto resolver_it = resolvers.find(tag.protocol());
+    if (resolver_it == resolvers.end()) {
       egLOG_ERROR("res/resolver", "Protocol '{0}' is not supported, cannot load {1}", tag.protocol(), tag.view());
       block->set_error(std::string{"Unsupported protocol: "} + std::string{tag.protocol()});
       return;
@@ -286,8 +304,14 @@ void res::resource_system::start_loading(const res::tag &tag,
       return;
     }
 
-    raw->on_settled([this, tag, block, raw, ad = std::move(ad)](auto &) {
-      run_on_compute([this, tag, block, raw, ad] { collect_stage(tag, block, raw, ad); }, block);
+    // A resolver thread of the root settles `raw`, possibly after this layer is gone.
+    raw->on_settled([gate = m_gate, tag, block, raw, ad = std::move(ad)](auto &) {
+      const bool open = gate->with([&](resource_system &self) {
+        self.run_on_compute([system = &self, tag, block, raw, ad] { system->collect_stage(tag, block, raw, ad); }, block);
+      });
+      if (!open && !is_finished(*block)) {
+        block->set_error("Load cancelled");
+      }
     });
   } catch (const std::exception &e) {
     egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
@@ -448,15 +472,21 @@ void res::resource_system::await_blocks(
       return;
     }
 
-    dep->on_settled([this, state, i, one_settled](auto &settled) {
-      m_graph->remove_edge(state->owner.get(), &settled);
-      if (settled.has_error()) {
-        std::lock_guard lock(state->mutex);
-        if (state->failure.empty()) {
-          state->failure = "Dependency failed: " + std::string{state->blocks[i].second.view()} + ": " + settled.error_msg;
+    // A dependency may be the parent's block, which settles after this layer is gone.
+    dep->on_settled([gate = m_gate, state, i, one_settled](auto &settled) {
+      const bool open = gate->with([&](resource_system &self) {
+        self.m_graph->remove_edge(state->owner.get(), &settled);
+        if (settled.has_error()) {
+          std::lock_guard lock(state->mutex);
+          if (state->failure.empty()) {
+            state->failure = "Dependency failed: " + std::string{state->blocks[i].second.view()} + ": " + settled.error_msg;
+          }
         }
+        one_settled(state);
+      });
+      if (!open && !is_finished(*state->owner)) {
+        state->owner->set_error("Load cancelled");
       }
-      one_settled(state);
     });
   }
 }
@@ -677,6 +707,14 @@ std::vector<res::tag> res::resource_system::changed_batch(const res::tag &root) 
 }
 
 void res::resource_system::signal_changed(const res::tag &tag) {
+  if (m_parent) {
+    root().signal_changed(tag);
+    return;
+  }
+  signal_changed_local(tag);
+}
+
+void res::resource_system::signal_changed_local(const res::tag &tag) {
   std::vector<res::tag> batch;
   std::uint64_t epoch = 0;
   {
@@ -719,9 +757,18 @@ void res::resource_system::signal_changed(const res::tag &tag) {
       deliver_to_watchers(changed, epoch);
     }
   });
+
+  // Held while the layers handle the signal: a layer removes itself under this lock before it goes away.
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->signal_changed_local(tag);
+  }
 }
 
 bool res::resource_system::erase(const res::tag &tag) {
+  if (m_parent) {
+    return root().erase(tag);
+  }
   const auto found = m_resolvers.find(tag.protocol());
   if (found == m_resolvers.end()) {
     egLOG_WARN("resource/erase", "Protocol '{}' is not supported!", tag.protocol());
@@ -731,6 +778,12 @@ bool res::resource_system::erase(const res::tag &tag) {
     return false;
   }
 
+  forget_erased(tag);
+  signal_changed(tag);
+  return true;
+}
+
+void res::resource_system::forget_erased(const res::tag &tag) {
   unpin_resource(tag);
   {
     // Lock order as in signal_changed: cache first, alias nested inside.
@@ -739,8 +792,10 @@ bool res::resource_system::erase(const res::tag &tag) {
     std::erase_if(m_alias_edges, [&](const auto &edge) { return edge.second == tag; });
     std::erase_if(m_aliases, [&](const auto &mapped) { return mapped.second == tag; });
   }
-  signal_changed(tag);
-  return true;
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->forget_erased(tag);
+  }
 }
 
 void res::resource_system::deliver_to_watchers(const res::tag &tag,
@@ -800,15 +855,84 @@ void res::resource_system::register_alias(const res::tag &original,
   }
 }
 
-std::filesystem::path res::resource_system::get_resources_path() {
-  return cfg_res_path;
+std::filesystem::path res::resource_system::get_resources_path() const {
+  const auto layers = get_resource_layers();
+  return layers.empty() ? std::filesystem::path{} : layers.back();
 }
 
-std::vector<std::filesystem::path> res::resource_system::get_resource_layers() {
-  std::vector<std::filesystem::path> layers;
-  if (!cfg_res_base_path->empty())
-    layers.push_back(cfg_res_base_path->string());
+std::vector<std::filesystem::path> res::resource_system::get_resource_layers() const {
+  if (m_parent) {
+    return m_parent->get_resource_layers();
+  }
+  for (const auto &mount : m_mounts) {
+    if (mount.protocol == tag::default_protocol()) {
+      return mount.roots;
+    }
+  }
+  return {};
+}
+
+namespace {
+// Empty when resource/base_path is not set; asserts it exists otherwise.
+std::filesystem::path engine_base_path() {
+  if (cfg_res_base_path->empty()) {
+    return {};
+  }
+  ASSERT_MSG(std::filesystem::exists(cfg_res_base_path),
+             "Base resources path does not exist!");
+  return cfg_res_base_path->string();
+}
+
+void add_engine_mount(res::mount_table &table, const std::filesystem::path &engine_base) {
+  if (engine_base.empty()) {
+    return;
+  }
+  table.push_back(res::mount{res::tag::engine, {engine_base}, res::mount_access::read_only});
+}
+} // namespace
+
+std::filesystem::path res::resource_system::configured_engine_base() {
+  return cfg_res_base_path->empty() ? std::filesystem::path{} : std::filesystem::path{cfg_res_base_path->string()};
+}
+
+res::mount_table res::resource_system::config_mount_table() {
+  egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
+        fs::absolute("./").string(), cfg_res_path->string());
+  ASSERT_MSG(std::filesystem::exists(cfg_res_path),
+             "Resources path does not exist!");
+
+  const auto engine_base = engine_base_path();
+  // Mount order: base first, top last (the last mount wins and receives writes).
+  std::vector<fs::path> layers;
+  if (!engine_base.empty())
+    layers.push_back(engine_base);
   layers.push_back(cfg_res_path->string());
-  return layers;
+
+  mount_table table;
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
+  table.push_back(mount{tag::memory, {fs::path{cfg_res_path->string()} / "../sandbox"}, mount_access::read_write}); // TODO: make configurable
+  add_engine_mount(table, engine_base);
+  return table;
+}
+
+res::mount_table res::resource_system::project_mount_table(
+    const std::filesystem::path &engine_base,
+    const std::vector<std::filesystem::path> &content_roots,
+    const std::filesystem::path &memory_root) {
+  ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
+  if (engine_base.empty()) {
+    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
+  }
+
+  std::vector<fs::path> layers;
+  if (!engine_base.empty())
+    layers.push_back(engine_base);
+  layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
+
+  mount_table table;
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
+  table.push_back(mount{tag::memory, {memory_root}, mount_access::read_write});
+  add_engine_mount(table, engine_base);
+  return table;
 }
 

@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/config/cfg_api.h>
 #include "test_temp_dir.hpp"
+#include <filesystem>
 #include <vector>
 
 // NOTE: cfg::initialize_configs(path) is guarded by a process-wide "already initialized" flag,
@@ -21,6 +22,22 @@ int run_cli(std::vector<std::string> args)
 }
 
 BOOST_AUTO_TEST_SUITE(CfgConfigTests)
+
+BOOST_AUTO_TEST_CASE(Cli_ProjectIsSetProjectFileAndSetStillWins)
+{
+	// Stands in for core_module's variable of the same name for the length of the test.
+	cfg::variable<std::filesystem::path> project_file{ "project/file", "" };
+
+	run_cli({ "--project", "games/sandbox" });
+	const std::filesystem::path via_project = project_file;
+	run_cli({ "--set", "project/file", "games/sandbox" });
+	const std::filesystem::path via_set = project_file;
+	BOOST_TEST(via_project == via_set);
+	BOOST_TEST(via_project == std::filesystem::current_path() / "games/sandbox");
+
+	run_cli({ "--project", "a", "--set", "project/file", "b" });
+	BOOST_TEST(static_cast<std::filesystem::path>(project_file) == std::filesystem::current_path() / "b");
+}
 
 // ---- variable<T>::update parsing ----
 

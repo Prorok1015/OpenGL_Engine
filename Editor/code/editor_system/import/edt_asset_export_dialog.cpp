@@ -19,9 +19,10 @@ void copy_to_buffer(char (&dst)[N], std::string_view text)
 
 }
 
-edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter, job_service& jobs)
+edt::asset_export_dialog::asset_export_dialog(asset_exporter& exporter, job_service& jobs, res::resource_system& resources)
 	: m_exporter(exporter)
 	, m_jobs(jobs)
+	, m_resources(resources)
 {
 }
 
@@ -42,7 +43,7 @@ void edt::asset_export_dialog::open(import_result result)
 
 	m_browse_folder = false;
 	m_needs_open = true;
-	m_folder_dialog.set_current_path(res::resource_system::get_resources_path());
+	m_folder_dialog.set_current_path(m_resources.get_resources_path());
 	m_folder_dialog.set_select_mode(file_dialog::SELECT_MODE::FOLDERS_ONLY);
 	m_folder_dialog.clear_extension_filters();
 }
@@ -62,7 +63,7 @@ bool edt::asset_export_dialog::render()
 		bool folder_open = true;
 		if (m_folder_dialog.show("Select Target Folder", &folder_open)) {
 			auto selected = m_folder_dialog.get_selected_path();
-			auto base = res::resource_system::get_resources_path();
+			auto base = m_resources.get_resources_path();
 			auto rel = selected.lexically_relative(base);
 			copy_to_buffer(m_target_folder, rel.string());
 			m_browse_folder = false;
@@ -133,7 +134,7 @@ void edt::asset_export_dialog::render_export_form()
 		for (const auto& [mem_tag, res_tag] : remap) {
 			std::string rel(res_tag.relative());
 			bool exists = std::filesystem::exists(
-				res::resource_system::get_resources_path() / rel);
+				m_resources.get_resources_path() / rel);
 			if (exists)
 				ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "%s [overwrite]", rel.c_str());
 			else
