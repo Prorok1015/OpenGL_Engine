@@ -267,8 +267,8 @@ struct module_dll_fixture
 		return count;
 	}
 
-	// Every meta type that appeared in the engine's context while the module was loaded, explicit
-	// registrations and nodes created implicitly by entt::resolve<T>() in module code alike.
+	// Every meta type that appeared in the engine's context while the module was loaded: a safety net for
+	// registrations the module forgot to reset.
 	void reset_module_meta()
 	{
 		for (const auto id : meta_ids()) {
@@ -410,9 +410,11 @@ BOOST_FIXTURE_TEST_CASE(unload_detaches_module_data_and_reload_registers_again, 
 			symbol<spike_emplace_module_only_fn>("spike_emplace_module_only")(&reg, keeper, 42);
 			BOOST_TEST(reg.get<spike::module_only_component>(keeper).value == 42);
 
-			// An engine type resolved from module code gets its meta node from the module (type_info, functions).
+			// entt::resolve<T>() of an unregistered type returns a node built by the calling binary (type_info in
+			// the module) without inserting it into the context: only a meta_type the host keeps can dangle.
 			const void* implicit_info = symbol<spike_resolve_engine_type_fn>("spike_resolve_engine_type")();
 			BOOST_TEST(lib->contains(implicit_info));
+			BOOST_TEST(!entt::resolve(ecs::meta_context(), entt::type_hash<scn::depth_level>::value()));
 
 			unload();
 			BOOST_TEST_MESSAGE("cycle " << cycle << ": module storages detached " << detached_storages
@@ -420,7 +422,7 @@ BOOST_FIXTURE_TEST_CASE(unload_detaches_module_data_and_reload_registers_again, 
 				<< ", image still mapped after unload " << resident_after_unload);
 			BOOST_TEST(detached_storages >= 3u); // velocity in the world and in the sandbox, module_only
 			BOOST_TEST(!registrations_left);
-			BOOST_TEST(meta_nodes_after_shutdown >= 1u); // the implicit node outlives the module's own meta_reset
+			BOOST_TEST(meta_nodes_after_shutdown == 0u); // the module's own meta_reset is enough
 			BOOST_TEST(meta_nodes_left == 0u);
 			BOOST_TEST(unloaded_cleanly);
 
