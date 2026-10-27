@@ -35,6 +35,10 @@ namespace prj
 	// `path` is a project.snkproj file or the directory holding one.
 	SNK_API open_result open_project(const std::filesystem::path& path);
 
+	// Every content root is (still) an existing directory inside the canonical project root, symlinks resolved.
+	// open_project checks it, and the resource system again right before it mounts the roots. nullopt when they are.
+	SNK_API std::optional<std::string> verify_content_roots(const project_context& project);
+
 	// The project given on the command line could not be opened; the host exits with a dedicated code.
 	class SNK_API project_error : public std::runtime_error
 	{
