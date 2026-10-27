@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/ecs/ecs_phase.hpp>
 #include <snk/ecs/ecs_system.h>
+#include <snk/common/logger/engine_log.h>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -12,8 +13,9 @@ namespace ecs {
 
 // Owns a set of system and game-phase registrations in a system_factory and removes them, in
 // reverse order, on destruction (the counterpart of scn::registration_scope for systems).
-// Plans built while the scope was alive keep the systems until they are rebuilt
-// (scn::context_set::rebuild_all_plans): rebuild them before the code of the systems goes away.
+// Teardown contract: destroy the scope between frames, with no task running a plan, then rebuild the
+// plans (scn::context_set::rebuild_all_plans) before the code of the systems goes away: plans hold
+// the run functions and system instances. The module loader does both for a game module (#220 PR-6).
 class system_scope
 {
 public:
@@ -45,40 +47,34 @@ public:
 		return *this;
 	}
 
+	// Each returns false (nothing recorded, so the scope never removes someone else's entry) when the
+	// factory rejects the name.
 	template <auto Candidate>
-	void system(const std::string& name, system_desc desc = {})
+	bool system(const std::string& name, system_desc desc = {})
 	{
-		m_factory->register_system<Candidate>(name, std::move(desc));
-		m_entries.push_back({ entry_kind::system, name });
+		return record(entry_kind::system, name, [&] { return m_factory->register_system<Candidate>(name, std::move(desc)); });
 	}
 
 	template <auto Candidate, typename T>
 	requires std::is_base_of_v<ecs::system_interface, T>
-	void system(const std::string& name, system_desc desc, std::shared_ptr<T> instance)
+	bool system(const std::string& name, system_desc desc, std::shared_ptr<T> instance)
 	{
-		m_factory->register_system<Candidate, T>(name, std::move(desc), std::move(instance));
-		m_entries.push_back({ entry_kind::system, name });
+		return record(entry_kind::system, name, [&] { return m_factory->register_system<Candidate, T>(name, std::move(desc), std::move(instance)); });
 	}
 
 	template <auto Candidate, typename T, class... ARGS>
 	requires std::is_base_of_v<ecs::system_interface, T>
-	void system(const std::string& name, system_desc desc, ARGS... args)
+	bool system(const std::string& name, system_desc desc, ARGS... args)
 	{
-		m_factory->register_system<Candidate, T, ARGS...>(name, std::move(desc), args...);
-		m_entries.push_back({ entry_kind::system, name });
+		return record(entry_kind::system, name, [&] { return m_factory->register_system<Candidate, T, ARGS...>(name, std::move(desc), args...); });
 	}
 
-	// False (nothing recorded) when the factory rejects the name.
 	bool game_phase(std::string name, phase anchor, phase_side side)
 	{
-		if (!m_factory->add_game_phase(name, anchor, side)) {
-			return false;
-		}
-		m_entries.push_back({ entry_kind::phase, std::move(name) });
-		return true;
+		return record(entry_kind::phase, name, [&] { return m_factory->add_game_phase(name, anchor, side); });
 	}
 
-	std::size_t size() const { return m_entries.size(); }
+	[[nodiscard]] std::size_t size() const { return m_entries.size(); }
 
 private:
 	enum class entry_kind { system, phase };
@@ -87,13 +83,27 @@ private:
 		std::string name;
 	};
 
+	// The entry is built and the storage reserved before the registration, so recording cannot throw
+	// after the factory has accepted it.
+	template <class Fn>
+	bool record(entry_kind kind, const std::string& name, Fn&& registration)
+	{
+		entry recorded{ kind, name };
+		m_entries.reserve(m_entries.size() + 1);
+		if (!registration()) {
+			return false;
+		}
+		m_entries.push_back(std::move(recorded));
+		return true;
+	}
+
 	void release()
 	{
 		for (auto it = m_entries.rbegin(); it != m_entries.rend(); ++it) {
-			if (it->kind == entry_kind::system) {
-				m_factory->unregister_system(it->name);
-			} else {
-				m_factory->remove_game_phase(it->name);
+			const bool removed = it->kind == entry_kind::system ? m_factory->unregister_system(it->name)
+																: m_factory->remove_game_phase(it->name);
+			if (!removed) {
+				egLOG_WARN("ecs", "system_scope: '{}' was already removed from the factory", it->name);
 			}
 		}
 		m_entries.clear();

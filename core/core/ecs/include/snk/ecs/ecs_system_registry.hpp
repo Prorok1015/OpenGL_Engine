@@ -68,8 +68,9 @@ public:
 		return m_entries.emplace(key, std::move(entry)).second;
 	}
 
-	// False when nothing is registered under the name. Plans built earlier still hold the system's
-	// run function and instances: rebuild them (scn::context_set::rebuild_all_plans) before the code goes away.
+	// False when nothing is registered under the name. Not synchronised: remove between frames, with no task
+	// running a plan. Plans built earlier still hold the system's run function and instances: rebuild them
+	// (scn::context_set::rebuild_all_plans) before the code goes away.
 	bool remove(const std::string& name)
 	{
 		return m_entries.erase(name) != 0;

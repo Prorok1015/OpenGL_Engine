@@ -2,6 +2,7 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/ecs/ecs_system_plan.hpp>
 #include <snk/ecs/ecs_system_scope.hpp>
+#include <snk/common/engine_assert.h>
 #include <entt/entt.hpp>
 #include <memory>
 #include <optional>
@@ -134,5 +135,79 @@ BOOST_AUTO_TEST_CASE(remove_reports_unknown_names)
 	BOOST_TEST(!sf.remove_game_phase("nope"));
 	BOOST_TEST(!sf.remove_game_phase("update")); // built-ins stay
 }
+
+BOOST_AUTO_TEST_CASE(removed_game_phase_disappears_from_the_rebuilt_plan)
+{
+	std::optional<ecs::system_scope> scope{ std::in_place, sf };
+	scope->game_phase("game::ai", ecs::phase::update, ecs::phase_side::before);
+	scope->system<&sys_count>("game::free", { .phase = "game::ai" });
+	BOOST_TEST(static_cast<bool>(build({ "game::free" }).find_phase(ecs::phase_id{ "game::ai" })));
+
+	scope.reset();
+	const auto rebuilt = build({});
+	BOOST_TEST(!rebuilt.find_phase(ecs::phase_id{ "game::ai" }));
+	BOOST_TEST(rebuilt.phases.size() == ecs::builtin_phase_count);
+}
+
+BOOST_AUTO_TEST_CASE(a_system_left_on_a_removed_phase_gets_unknown_phase)
+{
+	{
+		ecs::system_scope scope{ sf };
+		scope.game_phase("game::ai", ecs::phase::update, ecs::phase_side::before);
+		sf.register_system<&sys_count>("engine::on_game_phase", { .phase = "game::ai" }); // not the scope's
+	}
+	const auto plan = build({ "engine::on_game_phase" });
+	BOOST_TEST(plan.has_diagnostic(ecs::diagnostic_kind::unknown_phase));
+	BOOST_TEST(plan.system_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(move_assignment_releases_the_targets_own_entries)
+{
+	ecs::system_scope target{ sf };
+	target.system<&sys_count>("game::old");
+	ecs::system_scope source{ sf };
+	source.system<&sys_count>("game::new");
+
+	target = std::move(source);
+	BOOST_TEST(!sf.registry().find("game::old"));
+	BOOST_TEST(static_cast<bool>(sf.registry().find("game::new")));
+	BOOST_TEST(target.size() == 1u);
+	BOOST_TEST(source.size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(self_move_assignment_keeps_the_entries)
+{
+	ecs::system_scope scope{ sf };
+	scope.system<&sys_count>("game::free");
+	auto& same = scope;
+	scope = std::move(same);
+	BOOST_TEST(scope.size() == 1u);
+	BOOST_TEST(static_cast<bool>(sf.registry().find("game::free")));
+}
+
+BOOST_AUTO_TEST_CASE(an_entry_removed_behind_the_scope_is_skipped_at_release)
+{
+	{
+		ecs::system_scope scope{ sf };
+		scope.system<&sys_count>("game::free");
+		BOOST_TEST(sf.unregister_system("game::free"));
+		BOOST_TEST(!sf.unregister_system("game::free")); // the second removal is a no-op
+	}
+	BOOST_TEST(sf.registry().size() == 0u);
+}
+
+#if !SNK_ASSERTS_ENABLED
+// With asserts on, registering a taken name aborts; without them the scope must not record it.
+BOOST_AUTO_TEST_CASE(a_rejected_duplicate_is_not_removed_by_the_scope)
+{
+	sf.register_system<&sys_count>("engine::kept");
+	{
+		ecs::system_scope scope{ sf };
+		BOOST_TEST(!scope.system<&sys_count>("engine::kept"));
+		BOOST_TEST(scope.size() == 0u);
+	}
+	BOOST_TEST(static_cast<bool>(sf.registry().find("engine::kept")));
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
