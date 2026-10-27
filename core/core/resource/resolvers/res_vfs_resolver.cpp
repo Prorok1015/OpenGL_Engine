@@ -271,8 +271,19 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 	if (ec) {
 		return std::nullopt;
 	}
-	fs::path candidate = fs::weakly_canonical(canon_root / rel, ec);
+	// Only the directory is canonicalized: an erase on the io thread may remove the file while
+	// weakly_canonical probes it, which fails the whole call and rejected a valid store.
+	const fs::path joined = canon_root / rel;
+	if (!joined.has_filename()) {
+		return std::nullopt;
+	}
+	fs::path candidate = fs::weakly_canonical(joined.parent_path(), ec);
 	if (ec) {
+		return std::nullopt;
+	}
+	candidate /= joined.filename();
+	// The last component is not resolved above, so a symlink there could point anywhere.
+	if (fs::is_symlink(fs::symlink_status(candidate, ec))) {
 		return std::nullopt;
 	}
 
