@@ -106,6 +106,34 @@ BOOST_AUTO_TEST_CASE(Verify_CatchesAContentRootReplacedAfterOpening)
 	BOOST_TEST(escaped->find("outside the project") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(Open_ComparesTheEngineVersion)
+{
+	test_util::temp_dir dir("prj_open_engine");
+	fs::create_directories(dir.path() / "res");
+
+	dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": ")"
+		+ prj::to_string(prj::current_engine_version()) + R"(" })");
+	const auto same = prj::open_project(dir.path());
+	BOOST_REQUIRE_MESSAGE(same.context.has_value(), same.error);
+	BOOST_TEST((same.context->engine_match == prj::version_match::exact));
+
+	dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "999.0.0" })");
+	const auto newer = prj::open_project(dir.path());
+	BOOST_REQUIRE_MESSAGE(newer.context.has_value(), newer.error);
+	BOOST_TEST((newer.context->engine_match == prj::version_match::project_newer));
+}
+
+BOOST_AUTO_TEST_CASE(HeldProject_ExitsWithAnErrorUnlessTheUserWentOn)
+{
+	prj::held_project held;
+	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_engine_version);
+	held.answer = prj::held_project::decision::quit;
+	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_engine_version);
+	held.answer = prj::held_project::decision::continue_without_project;
+	BOOST_TEST(prj::exit_code_for(held) == 0);
+	BOOST_TEST(prj::k_exit_engine_version != prj::k_exit_project_error);
+}
+
 BOOST_AUTO_TEST_CASE(Verify_RefusesOverlappingContentRoots)
 {
 	test_util::temp_dir dir("prj_overlap");

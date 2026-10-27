@@ -81,7 +81,8 @@ BOOST_AUTO_TEST_CASE(Action_PerMatchWithAndWithoutTheMismatchFlag)
 	BOOST_TEST((prj::version_action_for(version_match::project_older, false) == version_action::ask_open_or_quit));
 	BOOST_TEST((prj::version_action_for(version_match::project_older, true) == version_action::open_with_notice));
 	BOOST_TEST((prj::version_action_for(version_match::project_newer, false) == version_action::refuse));
-	BOOST_TEST((prj::version_action_for(version_match::project_newer, true) == version_action::open_with_notice));
+	// The flag never opens a project of a newer engine.
+	BOOST_TEST((prj::version_action_for(version_match::project_newer, true) == version_action::refuse));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

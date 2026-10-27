@@ -81,7 +81,8 @@ prj::version_action prj::version_action_for(version_match match, bool mismatch_a
 	case version_match::project_older:
 		return mismatch_allowed ? version_action::open_with_notice : version_action::ask_open_or_quit;
 	case version_match::project_newer:
-		return mismatch_allowed ? version_action::open_with_notice : version_action::refuse;
+		// The editor cannot know what a newer engine wrote: no flag opens it.
+		return version_action::refuse;
 	}
 	return version_action::refuse;
 }

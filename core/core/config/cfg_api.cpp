@@ -102,7 +102,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		("config,c", po::value<std::string>(), "set a path to a config entry")
 		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var")
 		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it")
-		("allow-engine-version-mismatch", "open a project made for another engine version without asking");
+		("allow-engine-version-mismatch", "open a project made for an older engine version without asking");
 	
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);

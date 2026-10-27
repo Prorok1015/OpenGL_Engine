@@ -25,6 +25,7 @@
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
+#include "edt_engine_version_prompt.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
@@ -62,29 +63,6 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
 	// Where .snk/mcp.json goes; empty: the working directory.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
-
-	// Asks before working on a project of another engine version (EPIC-42 #156). False when the project must not be
-	// used: the editor then quits on any answer.
-	bool confirm_engine_version(edt::dialog_service& dialogs, const prj::project_context& project, std::function<void()> quit)
-	{
-		const auto action = prj::version_action_for(project.engine_match, project.engine_mismatch_allowed);
-		const std::string versions = std::format("The project '{}' was made for engine {}; this editor is engine {}.",
-			project.data.name, prj::to_string(project.data.engine), prj::to_string(prj::current_engine_version()));
-
-		if (action == prj::version_action::ask_open_or_quit) {
-			dialogs.choose("Engine Version", versions + "\nOpen it anyway? Nothing is migrated.", { "Open Anyway", "Quit" },
-				[quit = std::move(quit)](std::optional<std::size_t> picked) {
-					if (picked != std::size_t{ 0 }) quit();
-				});
-			return true;
-		}
-		if (action == prj::version_action::refuse) {
-			dialogs.choose("Engine Version", versions + "\nOpen it with that editor version or a newer one.", { "Quit" },
-				[quit = std::move(quit)](std::optional<std::size_t>) { quit(); });
-			return false;
-		}
-		return true;
-	}
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -270,14 +248,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu->register_actions();
 	m_file_menu->attach_window_close(wnd_sys);
 
-	const bool project_usable = !data.has_value<prj::project_context>()
-		|| confirm_engine_version(m_context->dialogs(), data.require<prj::project_context>(), m_exit_action);
+	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
+	const bool project_held = data.has_value<prj::held_project>();
+	if (project_held) {
+		ask_about_held_project(m_context->dialogs(), data.require<prj::held_project>(), m_exit_action);
+	}
 
 	std::string startup_level = cfg_startup_level;
 	if (startup_level.empty() && data.has_value<prj::project_context>()) {
 		startup_level = data.require<prj::project_context>().data.start_scene;
 	}
-	if (project_usable && !startup_level.empty()) {
+	if (!project_held && !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	}

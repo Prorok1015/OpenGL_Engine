@@ -35,8 +35,8 @@ namespace prj
 
 	SNK_API version_match compare_engine_versions(const engine_version& project, const engine_version& editor);
 
-	// What the editor does with a project of that match. `mismatch_allowed`: the user already agreed to open a
-	// project of another MAJOR.MINOR (--allow-engine-version-mismatch).
+	// What the editor does with a project of that match. `mismatch_allowed`: the user already agreed to open an
+	// older project (--allow-engine-version-mismatch); a newer one is refused whatever the flag.
 	enum class version_action
 	{
 		open,

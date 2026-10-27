@@ -64,6 +64,11 @@ prj::open_result prj::open_project(const fs::path& path)
 	return result;
 }
 
+int prj::exit_code_for(const held_project& project)
+{
+	return project.answer == held_project::decision::continue_without_project ? 0 : k_exit_engine_version;
+}
+
 std::optional<std::string> prj::verify_project_mounts(const project_context& project, const fs::path& engine_base)
 {
 	std::error_code ec;
