@@ -11,11 +11,12 @@ namespace edt {
 
 	// Persistent state (survives hot-reload)
 	struct editor_camera_state {
-		// The default pose is the identity matrix: the camera renders from the origin until it moves, and
-		// the pose it is rebuilt from after a world reload must be the same one.
-		glm::vec3 position      { 0.f, 0.f, 0.f };
+		// The default pose is the identity matrix (position + rotation * (0, 0, distance)): the camera
+		// renders from the origin until it moves, and the pose rebuilt after a world reload is the same.
+		// The orbit pivot sits `distance` in front of it so zoom and orbit work from the first input.
+		glm::vec3 position      { 0.f, 0.f, -1.f };
 		glm::vec3 rotation      { 0.f, 0.f, 0.f };            // pitch/yaw/roll radians
-		float     distance      = 0.f;
+		float     distance      = 1.f;
 		float     movement_speed  = 3.f;
 		float     rotating_speed  = glm::radians(90.f);
 		float     fov             = 60.f;
