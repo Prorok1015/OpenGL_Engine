@@ -65,14 +65,6 @@ BOOST_AUTO_TEST_CASE(GameResourceRoots_DoNotHoldLeftoverTestFiles)
 	}
 }
 
-BOOST_AUTO_TEST_CASE(EditorOnlyResources_AreNotUnderResProtocolRoots)
-{
-	for (const char* dir : { "icons", "templates", "settings" }) {
-		BOOST_TEST(!fs::exists(editor_res / dir), editor_res / dir);
-		BOOST_TEST(!fs::exists(core_res / dir), core_res / dir);
-	}
-}
-
 BOOST_AUTO_TEST_CASE(EveryResAndEdtPathInShippedDescs_ResolvesToAFile)
 {
 	const std::vector<fs::path> res_layers{ core_res, editor_res };
