@@ -540,14 +540,12 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_state.editor_tag = res::tag{ "memory://editor/" + stem + ".desc" };
 	m_state.level_tag = original_tag;
 
-	auto abs_path = m_res.get_resources_path() / std::string(original_tag.relative());
-	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
-	if (in) {
-		auto size = (std::streamsize)in.tellg();
-		in.seekg(0);
-		std::vector<std::byte> bytes(static_cast<size_t>(size));
-		in.read(reinterpret_cast<char*>(bytes.data()), size);
-		m_res.store(m_state.editor_tag, bytes);
+	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
+	if (const auto raw = m_res.fetch_data(original_tag)) {
+		raw->wait();
+		if (raw->is_ready()) {
+			m_res.store(m_state.editor_tag, raw->data);
+		}
 	}
 
 	m_loading_level_handle = m_res.require<scn::level_desc>(m_state.editor_tag);
