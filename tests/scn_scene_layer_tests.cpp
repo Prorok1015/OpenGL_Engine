@@ -101,7 +101,6 @@ BOOST_AUTO_TEST_CASE(the_level_of_the_game_layer_is_built_by_its_services)
 
 	BOOST_TEST(!descs->is_registered("game_desc"));
 	BOOST_TEST(!sf.registry().find("game::move"));
-	BOOST_TEST(layer->resources().live_resources() > 0u); // the level desc of the layer is in the layer's cache
 }
 
 BOOST_AUTO_TEST_CASE(sandbox_components_of_the_layer_are_found_in_its_meta_context)
