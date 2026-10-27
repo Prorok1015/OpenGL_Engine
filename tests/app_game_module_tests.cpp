@@ -1,12 +1,9 @@
 #include <boost/test/unit_test.hpp>
-#include "test_scene_env.hpp"
-#include <snk/application/app_module_layer.h>
-#include <snk/application/app_module_loader.hpp>
+#include "test_module_env.hpp"
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/scene/level/scn_context_manager.h>
-#include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
@@ -75,42 +72,9 @@ constexpr const char* GAME_LEVEL = R"({"__type":"level_desc","name":"lv","worlds
 	{"__type":"world_desc","name":"w0","systems":["game::move"],
 	 "components":{"g":{"__type":"game_desc","value":2}}}]})";
 
-template<class T>
-std::shared_ptr<T> borrowed(T& object)
-{
-	return std::shared_ptr<T>(std::shared_ptr<void>{}, &object);
 }
 
-struct module_fixture : test_util::scene_env {
-	module_fixture()
-		: hot(std::make_shared<scn::hot_reload_manager>(*assembler, *rs))
-	{
-		root.attach(borrowed(*rs));
-		root.attach(borrowed(*descs));
-		root.attach(borrowed(*assembler));
-		root.attach(borrowed(sf));
-		auto& contexts = root.construct<scn::context_manager>(*rs, *assembler, sf, hot);
-		root.construct<app::modules::module_layer_factory, gs::game_layer_factory>(contexts);
-	}
-
-	~module_fixture()
-	{
-		// A module still loaded goes first: its layer belongs to the context_manager in `root`.
-		loader.shutdown_all_services(root);
-		root = ds::app_data_storage{};
-	}
-
-	scn::context_manager& contexts() { return root.require<scn::context_manager>(); }
-
-	std::shared_ptr<scn::hot_reload_manager> hot;
-	ecs::system_factory sf;
-	ds::app_data_storage root;
-	app::modules::module_loader loader;
-};
-
-}
-
-BOOST_FIXTURE_TEST_SUITE(app_game_module_tests, module_fixture)
+BOOST_FIXTURE_TEST_SUITE(app_game_module_tests, test_util::module_env)
 
 BOOST_AUTO_TEST_CASE(a_game_module_registers_into_its_layer_and_its_worlds_run)
 {

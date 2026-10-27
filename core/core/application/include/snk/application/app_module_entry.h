@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/application/app_module_interface.h>
+#include <entt/config/config.h>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -34,6 +35,9 @@ namespace app::modules {
 		inline constexpr std::uint32_t static_crt = 1u << 1;  // MSVC /MT or /MTd
 		inline constexpr std::uint32_t libcxx = 1u << 2;      // LLVM libc++ (otherwise libstdc++ / MSVC STL)
 		inline constexpr std::uint32_t old_stl_abi = 1u << 3; // libstdc++ _GLIBCXX_USE_CXX11_ABI=0
+		// EnTT type ids and container layouts cross the boundary, so EnTT's mode is part of the ABI (#218).
+		inline constexpr std::uint32_t entt_standard_cpp = 1u << 4; // ENTT_STANDARD_CPP
+		inline constexpr std::uint32_t entt_wide_id = 1u << 5;      // ENTT_ID_TYPE other than 32 bits
 	}
 
 	namespace compiler_id {
@@ -75,6 +79,12 @@ namespace app::modules {
 #if defined(_GLIBCXX_USE_CXX11_ABI) && _GLIBCXX_USE_CXX11_ABI == 0
 		flags |= build_flag::old_stl_abi;
 #endif
+#if defined(ENTT_STANDARD_CPP)
+		flags |= build_flag::entt_standard_cpp;
+#endif
+		if constexpr (sizeof(ENTT_ID_TYPE) != sizeof(std::uint32_t)) {
+			flags |= build_flag::entt_wide_id;
+		}
 		return snk_module_build_info{ SNK_MODULE_API_VERSION, compiler, flags };
 	}
 
@@ -94,8 +104,7 @@ namespace app::modules {
 	};
 	using module_ptr = std::unique_ptr<module_interface, module_deleter>;
 
-	// The four exported functions of a module binary, resolved by whoever loads it
-	// (dlopen / LoadLibrary in EPIC-52 #21; the unit tests take the addresses directly).
+	// The four exported functions of a module binary, resolved by a module_source (app_module_source.h).
 	struct module_entry
 	{
 		std::uint32_t (*api_version)() = nullptr;
@@ -138,7 +147,7 @@ namespace app::modules {
 		}
 		if (info->flags != host.flags) {
 			return "build flags differ (module " + std::to_string(info->flags) + ", host "
-				+ std::to_string(host.flags) + "): debug/release, CRT or standard library mismatch";
+				+ std::to_string(host.flags) + "): debug/release, CRT, standard library or EnTT mode mismatch";
 		}
 		return {};
 	}
