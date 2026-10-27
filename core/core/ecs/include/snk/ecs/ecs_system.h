@@ -88,7 +88,7 @@ private:
                    std::function<system_instance()> make, std::vector<access_entry> access) {
         if (const auto* parent = m_registry.parent(); parent && parent->find(name)) {
             egLOG_ERROR("ecs", "system '{}' not registered: the name belongs to the parent context", name);
-            return;
+            return false;
         }
         const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make), std::move(access) });
         ASSERT_MSG(added, "ecs system already registered in the factory!");
