@@ -2,12 +2,17 @@
 #include <snk/resource/res_system.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/project/prj_project.h>
+#include <format>
 
 void core::res::resource_init(ds::app_data_storage& data)
 {
 	auto& tasks = data.require<ds::task_system>();
 	if (data.has_value<prj::project_context>()) {
 		const auto& project = data.require<prj::project_context>();
+		// The directories may have changed since the project was opened: nothing outside it gets mounted.
+		if (auto problem = prj::verify_content_roots(project)) {
+			throw prj::project_error(std::format("project '{}': {}", project.data.name, *problem));
+		}
 		data.construct<::res::resource_system>(std::ref(tasks),
 			::res::resource_system::project_mount_table(project.content_roots, project.cache_dir(), project.user_profile_dir()));
 		return;

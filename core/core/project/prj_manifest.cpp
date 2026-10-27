@@ -1,4 +1,5 @@
 #include <snk/project/prj_manifest.h>
+#include <cctype>
 #include <cstdint>
 #include <format>
 #include <fstream>
@@ -40,25 +41,40 @@ namespace
 		return false;
 	}
 
-	// A content root must stay inside the project: no absolute paths, drives, "." or ".." parts, empty parts
-	// or ':' (which would also spell a protocol). Backslashes count as separators on every platform.
+	// CON, PRN, AUX, NUL, COM1-9, LPT1-9: Windows opens a device for them, with any extension and in any case.
+	bool is_windows_device_name(std::string_view part)
+	{
+		const std::string_view stem = part.substr(0, part.find('.'));
+		std::string upper;
+		for (const char c : stem) {
+			upper += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+		}
+		if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL") {
+			return true;
+		}
+		return upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '1' && upper[3] <= '9';
+	}
+
+	// A content root must stay inside the project and mean the same directory on every platform: only '/' separates,
+	// no absolute paths, drives or ':' (which would also spell a protocol), no backslashes, no "." or ".." or empty
+	// parts, no Windows device names. A trailing '/' is allowed.
 	bool is_safe_relative_dir(std::string_view text)
 	{
-		if (text.empty() || has_control_chars(text) || text.find(':') != std::string_view::npos) {
+		if (text.empty() || has_control_chars(text) || text.find_first_of(":\\") != std::string_view::npos) {
 			return false;
 		}
-		if (text.front() == '/' || text.front() == '\\') {
+		if (text.front() == '/') {
 			return false;
 		}
 		std::size_t pos = 0;
 		while (pos <= text.size()) {
-			std::size_t end = text.find_first_of("/\\", pos);
+			std::size_t end = text.find('/', pos);
 			if (end == std::string_view::npos) {
 				end = text.size();
 			}
 			const std::string_view part = text.substr(pos, end - pos);
 			const bool trailing_separator = part.empty() && end == text.size() && pos != 0;
-			if ((part.empty() && !trailing_separator) || part == "." || part == "..") {
+			if ((part.empty() && !trailing_separator) || part == "." || part == ".." || is_windows_device_name(part)) {
 				return false;
 			}
 			pos = end + 1;
@@ -66,17 +82,28 @@ namespace
 		return true;
 	}
 
-	// `res\levels/` and `res/levels` name the same directory.
+	// "res/" and "res" name the same directory.
 	std::string normalized_dir(std::string_view text)
 	{
 		std::string out{ text };
-		for (char& c : out) {
-			if (c == '\\') {
-				c = '/';
-			}
-		}
 		while (!out.empty() && out.back() == '/') {
 			out.pop_back();
+		}
+		return out;
+	}
+
+	// Unknown keys come from the file: control characters would forge log lines, so they are shown as \u00XX.
+	std::string printable(std::string_view text)
+	{
+		std::string out;
+		out.reserve(text.size());
+		for (const char c : text) {
+			const auto u = static_cast<unsigned char>(c);
+			if (u < 0x20 || u == 0x7f) {
+				out += std::format("\\u{:04x}", static_cast<unsigned>(u));
+			} else {
+				out += c;
+			}
 		}
 		return out;
 	}
@@ -88,7 +115,7 @@ namespace
 			return false;
 		}
 		const std::string_view rel = text.substr(prefix.size());
-		return is_safe_relative_dir(rel) && rel.back() != '/' && rel.back() != '\\';
+		return is_safe_relative_dir(rel) && rel.back() != '/';
 	}
 
 	// The view points into `value`, which outlives the parse.
@@ -145,7 +172,7 @@ namespace
 				is_known = is_known || key == name;
 			}
 			if (!is_known) {
-				warnings.push_back(std::format("{}.{}: unknown field, ignored", path, key));
+				warnings.push_back(std::format("{}.{}: unknown field, ignored", path, printable(key)));
 			}
 		}
 	}
