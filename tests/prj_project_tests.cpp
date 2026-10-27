@@ -3,6 +3,7 @@
 #include "test_temp_dir.hpp"
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 namespace {
@@ -34,7 +35,7 @@ BOOST_AUTO_TEST_CASE(Open_ResolvesRootAndContentRoots)
 		BOOST_TEST(ctx.content_roots[1] == ctx.root / "shared");
 		BOOST_TEST(ctx.cache_dir() == ctx.root / ".cache");
 		BOOST_TEST(ctx.user_profile_dir() == ctx.root / ".cache" / "user_profile");
-		BOOST_TEST(ctx.build_dir() == ctx.root / "build");
+		BOOST_TEST(ctx.snk_dir() == ctx.root / ".snk");
 	}
 }
 
@@ -162,6 +163,43 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesSymlinkedWritableFolders)
 	const auto memory_link = prj::open_project(dir.path() / "game");
 	BOOST_TEST(!memory_link.context.has_value());
 	BOOST_TEST(memory_link.error.find("symlink") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsOverPrivateFolders)
+{
+	for (const std::string_view root : { ".snk", ".cache", ".cache/user_profile", ".cache/memory" }) {
+		BOOST_TEST_INFO("content root: " << root);
+		test_util::temp_dir dir("prj_private_root");
+		dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0", "content_roots": [")"
+			+ std::string{ root } + R"("] })");
+		fs::create_directories(dir.path() / root);
+
+		const auto opened = prj::open_project(dir.path());
+		BOOST_TEST(!opened.context.has_value());
+		BOOST_TEST(opened.error.find("private folder") != std::string::npos);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Verify_RefusesASymlinkedUserProfileAndSnk)
+{
+	for (const std::string_view link : { ".cache/user_profile", ".snk" }) {
+		BOOST_TEST_INFO("link: " << link);
+		test_util::temp_dir dir("prj_private_link");
+		dir.write("game/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+		fs::create_directories(dir.path() / "game" / "res");
+		fs::create_directories(dir.path() / "game" / ".cache");
+		fs::create_directories(dir.path() / "outside");
+
+		std::error_code ec;
+		fs::create_directory_symlink(dir.path() / "outside", dir.path() / "game" / link, ec);
+		if (ec) {
+			BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+			return;
+		}
+		const auto opened = prj::open_project(dir.path() / "game");
+		BOOST_TEST(!opened.context.has_value());
+		BOOST_TEST(opened.error.find("symlink") != std::string::npos);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

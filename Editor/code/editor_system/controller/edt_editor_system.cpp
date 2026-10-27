@@ -260,13 +260,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const int port = cfg_agent_server_port;
 		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
 		const std::string project_dir = cfg_project_dir;
-		if (!project_dir.empty()) {
-			options.project_dir = project_dir;
-		} else if (data.has_value<prj::project_context>()) {
-			options.project_dir = data.require<prj::project_context>().root;
-		} else {
-			options.project_dir = std::filesystem::current_path();
-		}
+		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
+			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
 		m_agent_server = std::make_unique<agent_server>(data.require<cmd::command_registry>(), data.require<ds::task_system>(), std::move(options));
 	}
 }
