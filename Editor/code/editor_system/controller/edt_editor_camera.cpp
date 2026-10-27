@@ -54,7 +54,9 @@ void inject_camera(entt::registry& reg, const editor_camera_state& state)
 		* orientation
 		* glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, ctrl.distance));
 	reg.emplace<scn::local_transform>(cam, scn::local_transform{ cam_matrix });
-	reg.emplace<scn::world_transform>(cam);
+	// The camera has no parent and nothing emits transform_updated for it until it moves, so the
+	// transform system would leave an identity world matrix (and the render camera at the origin).
+	reg.emplace<scn::world_transform>(cam, scn::world_transform{ cam_matrix });
 	reg.emplace<scn::name_component>(cam, "Editor Camera");
 	reg.emplace<scn::depth_level>(cam);
 }
