@@ -2,6 +2,9 @@
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <entt/meta/meta.hpp>
 #include <entt/meta/factory.hpp>
+#include <entt/meta/context.hpp>
+#include <entt/locator/locator.hpp>
+#include <snk/common/snk_api.h>
 namespace ecs
 {
     using namespace entt::literals;
@@ -32,11 +35,23 @@ namespace ecs
         loader->get<T>(archive);
     }
 
+    // The engine's meta context. Every binary (the editor, a game module) has its own
+    // entt::locator<entt::meta_ctx> under hidden visibility or as a DLL, so meta registered or resolved
+    // there is invisible to the engine's entt::resolve until the binary attaches to this one (#218):
+    //   entt::locator<entt::meta_ctx>::reset(ecs::meta_context_handle());
+    [[nodiscard]] SNK_API entt::meta_ctx& meta_context();
+    [[nodiscard]] SNK_API entt::locator<entt::meta_ctx>::node_type meta_context_handle();
+
     template<typename T>
-    decltype(auto) register_component(const char* name) {
-        return entt::meta<T>()
+    entt::meta_factory<T> register_component(entt::meta_ctx& ctx) {
+        return entt::meta_factory<T>{ ctx }
             .type(entt::type_hash<T>::value())
             .template func<&meta_snapshot_get<T>>(snapshot_get_h)
             .template func<&meta_loader_get<T>>(loader_get_h);
+    }
+
+    template<typename T>
+    entt::meta_factory<T> register_component(const char* name) {
+        return register_component<T>(entt::locator<entt::meta_ctx>::value_or());
     }
 }

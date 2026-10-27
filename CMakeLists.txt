@@ -143,6 +143,10 @@ endif()
 
 add_test(NAME unit_tests COMMAND unit_tests)
 
+if(SNK_ENGINE_SHARED)
+    add_subdirectory(tests/module_dll)
+endif()
+
 snk_pch_create_owner()
 snk_apply_target_defaults()
 # Fails the configure if the engine, a game target or the SDK can reach snk_mcp_server (tools/ci/check_mcp_isolation.sh is the source-level twin).

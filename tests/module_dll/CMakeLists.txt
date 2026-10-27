@@ -1,0 +1,14 @@
+# Spike #218: a game module as its own shared library, loaded by unit_tests with dlopen / LoadLibrary
+# (docs/roadmap/design/SPIKE-218-entt-dll.md). Shared engine only: the module links snk_engine like a
+# game.dll would; with a static engine it would carry its own copy of every engine singleton.
+add_library(spike_game SHARED spike_game_module.cpp)
+target_link_libraries(spike_game PRIVATE snk::engine snk::engine_api snk::sanitizers)
+# The ENTT_* experiments of the spike change definitions on this target only; the shared PCH was
+# built without them.
+set_target_properties(spike_game PROPERTIES DISABLE_PRECOMPILE_HEADERS ON)
+
+target_sources(unit_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/app_module_dll_tests.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/app_module_dll_tests.cpp" TARGET_DIRECTORY unit_tests
+	PROPERTIES COMPILE_DEFINITIONS "SNK_SPIKE_GAME_PATH=\"$<TARGET_FILE:spike_game>\"" SKIP_PRECOMPILE_HEADERS ON)
+target_link_libraries(unit_tests PRIVATE ${CMAKE_DL_LIBS})
+add_dependencies(unit_tests spike_game)
