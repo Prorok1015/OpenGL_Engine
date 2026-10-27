@@ -6,6 +6,8 @@
 #include <cctype>
 #include <fstream>
 #include <shared_mutex>
+#include <chrono>
+#include <thread>
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points)
 	: core::res::res_resolver_interface(prt)
@@ -338,7 +340,19 @@ void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, c
 				file.write(reinterpret_cast<const char*>(data_ptr->data.data()), data_ptr->data.size());
 			}
 		}
-		fs::rename(tmp_path, target_path);
+		// On Windows a file that was just removed (an erase on this thread) can stay delete-pending while
+		// another handle (watcher, indexer, antivirus) is open on it, and renaming onto it is denied for a moment.
+		std::error_code rename_error;
+		for (int attempt = 0; attempt < 50; ++attempt) {
+			fs::rename(tmp_path, target_path, rename_error);
+			if (!rename_error) {
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		if (rename_error) {
+			throw fs::filesystem_error("rename", tmp_path, target_path, rename_error);
+		}
 
 		// Update file_watcher snapshot so it doesn't treat our own write as an external change.
 		watcher.mark_written(target_path);
