@@ -120,6 +120,8 @@ editor:
 - [ ] `edt://settings/` доступен для чтения/записи через resource system
 - [ ] Хелпер-функция или документация: как сохранить/прочитать файл в `edt://settings/`
 
+**Хелпер:** `Editor/code/editor_system/core/edt_settings.h` — `edt::write_setting(res, "recent_files.json", text)` и `edt::read_setting(res, "recent_files.json")` (возвращает `std::optional<std::string>`, `nullopt` при первом запуске, когда файла ещё нет); `edt::settings_tag(name)` даёт тег `edt://settings/<name>`. Запись идёт через `resource_system::store` (асинхронно на io-потоке резолвера) и сбрасывает кэш, чтение — только с главного потока. Каталог `Editor/data/settings/` в git пуст (`.gitkeep`), содержимое игнорируется.
+
 ### US-36-5: Asset Browser — скрыть `edt://` ресурсы
 **Файлы:** `Editor/code/editor_system/panels/edt_asset_browser_panel.cpp`
 **Зависимости:** US-36-2

@@ -6,6 +6,8 @@
 **/x86
 **/.vs
 Editor/sandbox/
+Editor/data/settings/*
+!Editor/data/settings/.gitkeep
 Editor/res/objects/
 Editor/res/assets/
 out/
