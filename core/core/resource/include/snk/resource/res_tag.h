@@ -18,6 +18,8 @@ namespace res
 		static const tag null;
 		static const std::string_view default_protocol() { return "res"; }
 		static constexpr std::string_view memory = "memory";
+		// The engine's base resources only, read-only: the layer res:// falls back to, without a project's overrides.
+		static constexpr std::string_view engine = "engine";
 		static tag make(const std::string_view path) {
 			return tag{ default_protocol(), path };
 		}

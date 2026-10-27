@@ -9,7 +9,7 @@
 #include <chrono>
 #include <thread>
 
-res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points)
+res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access)
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			auto otag = path_mapper(pth);
@@ -17,6 +17,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 				notify_resource_changed(otag.value());
 			}
 		})
+	, m_access(access)
 {
 	if (points.empty())
 		return;
@@ -139,12 +140,22 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 
 bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>& data)
 {
+	if (m_access == mount_access::read_only) {
+		egLOG_WARN("resource", "Rejected store of '{}': protocol '{}' is read-only", tag.view(), protocol);
+		return false;
+	}
+
 	std::optional<fs::path> target_path;
 	if (!entries_stack.empty()) {
 		target_path = safe_path(entries_stack.top(), tag);
 		if (!target_path.has_value()) {
 			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
 			return false;
+		}
+		std::error_code ec;
+		if (!fs::exists(*target_path, ec) && exists_below_top(tag)) {
+			egLOG_WARN("resource", "Store of '{}' creates '{}', which now overrides the file of a lower layer",
+				tag.view(), target_path->string());
 		}
 	}
 
@@ -240,6 +251,24 @@ bool res::vfs_resolver::exists(const::res::tag& tag) const
 			return true;
 		}
 
+		stack.pop();
+	}
+	return false;
+}
+
+bool res::vfs_resolver::exists_below_top(const tag& tag) const
+{
+	auto stack = entries_stack;
+	if (stack.empty()) {
+		return false;
+	}
+	stack.pop();
+	while (!stack.empty()) {
+		const auto path = safe_path(stack.top(), tag);
+		std::error_code ec;
+		if (path.has_value() && fs::exists(*path, ec)) {
+			return true;
+		}
 		stack.pop();
 	}
 	return false;

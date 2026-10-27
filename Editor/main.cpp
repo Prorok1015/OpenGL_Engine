@@ -6,6 +6,7 @@
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
+#include <snk/project/prj_project.h>
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
@@ -66,6 +67,9 @@ int main(int argc, char* argv[])
 
 		app::application editor;
 		result = editor.run(app_storage);
+	} catch (const prj::project_error& e) {
+		egLOG_ERROR("app", "{}", e.what());
+		result = 2;
 	} catch (const std::exception& e) {
 		egLOG_ERROR("app", "fatal error: {}", e.what());
 		result = -1;

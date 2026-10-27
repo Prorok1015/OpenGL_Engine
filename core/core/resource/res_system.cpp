@@ -194,29 +194,20 @@ private:
 };
 
 res::resource_system::resource_system(ds::task_system &tasks)
-    : m_graph(std::make_unique<wait_graph>()), m_tasks(tasks) {
-  egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
-        fs::absolute("./").string(), cfg_res_path->string());
-  ASSERT_MSG(std::filesystem::exists(cfg_res_path),
-             "Resources path does not exist!");
+    : resource_system(tasks, config_mount_table()) {}
 
-  // Mount order: base first, top last (the last mount wins and receives writes).
-  std::vector<fs::path> layers = get_resource_layers();
-  if (!cfg_res_base_path->empty()) {
-    ASSERT_MSG(std::filesystem::exists(cfg_res_base_path),
-               "Base resources path does not exist!");
+res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts)
+    : m_graph(std::make_unique<wait_graph>()), m_tasks(tasks),
+      m_mounts(std::move(mounts)) {
+  for (const auto &mount : m_mounts) {
+    egLOG("resource/system", "Mount {}:// ({}): {}", mount.protocol,
+          mount.access == mount_access::read_only ? "read-only" : "read-write",
+          mount.roots.empty() ? std::string{} : mount.roots.back().string());
+    auto &resolver =
+        registrate_resolver<vfs_resolver>(mount.protocol, mount.roots, mount.access);
+    resolver.set_resource_changed_callback(
+        [this](const res::tag &tag) { signal_changed(tag); });
   }
-
-  auto &res_resolver =
-      registrate_resolver<vfs_resolver>(tag::default_protocol(), layers);
-  res_resolver.set_resource_changed_callback(
-      [this](const res::tag &tag) { signal_changed(tag); });
-  fs::path memory_path = fs::path{cfg_res_path->string()} /
-                         "../sandbox"; // TODO: make configurable
-  auto &memory_resolver = registrate_resolver<vfs_resolver>(
-      res::tag::memory, std::vector<fs::path>{memory_path});
-  memory_resolver.set_resource_changed_callback(
-      [this](const res::tag &tag) { signal_changed(tag); });
 
   registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);
   registrate_adapter<pct_adapter>(res::pct_adapter::INFO);
@@ -800,15 +791,84 @@ void res::resource_system::register_alias(const res::tag &original,
   }
 }
 
-std::filesystem::path res::resource_system::get_resources_path() {
-  return cfg_res_path;
+std::filesystem::path res::resource_system::get_resources_path() const {
+  const auto layers = get_resource_layers();
+  return layers.empty() ? std::filesystem::path{} : layers.back();
 }
 
-std::vector<std::filesystem::path> res::resource_system::get_resource_layers() {
-  std::vector<std::filesystem::path> layers;
-  if (!cfg_res_base_path->empty())
-    layers.push_back(cfg_res_base_path->string());
+std::vector<std::filesystem::path> res::resource_system::get_resource_layers() const {
+  for (const auto &mount : m_mounts) {
+    if (mount.protocol == tag::default_protocol()) {
+      return mount.roots;
+    }
+  }
+  return {};
+}
+
+namespace {
+// Empty when resource/base_path is not set; asserts it exists otherwise.
+std::filesystem::path engine_base_path() {
+  if (cfg_res_base_path->empty()) {
+    return {};
+  }
+  ASSERT_MSG(std::filesystem::exists(cfg_res_base_path),
+             "Base resources path does not exist!");
+  return cfg_res_base_path->string();
+}
+
+void add_engine_mount(res::mount_table &table, const std::filesystem::path &engine_base) {
+  if (engine_base.empty()) {
+    return;
+  }
+  table.push_back(res::mount{res::tag::engine, {engine_base}, res::mount_access::read_only});
+}
+} // namespace
+
+res::mount_table res::resource_system::config_mount_table() {
+  egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
+        fs::absolute("./").string(), cfg_res_path->string());
+  ASSERT_MSG(std::filesystem::exists(cfg_res_path),
+             "Resources path does not exist!");
+
+  const auto engine_base = engine_base_path();
+  // Mount order: base first, top last (the last mount wins and receives writes).
+  std::vector<fs::path> layers;
+  if (!engine_base.empty())
+    layers.push_back(engine_base);
   layers.push_back(cfg_res_path->string());
-  return layers;
+
+  mount_table table;
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
+  table.push_back(mount{tag::memory, {fs::path{cfg_res_path->string()} / "../sandbox"}, mount_access::read_write}); // TODO: make configurable
+  add_engine_mount(table, engine_base);
+  return table;
+}
+
+res::mount_table res::resource_system::project_mount_table(
+    const std::vector<std::filesystem::path> &content_roots,
+    const std::filesystem::path &memory_root) {
+  ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
+  const auto engine_base = engine_base_path();
+  if (engine_base.empty()) {
+    egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
+  }
+
+  std::vector<fs::path> layers;
+  if (!engine_base.empty())
+    layers.push_back(engine_base);
+  layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
+
+  // The resolver canonicalizes its roots; a root that does not exist yet would not resolve.
+  std::error_code ec;
+  fs::create_directories(memory_root, ec);
+  if (ec) {
+    egLOG_WARN("resource/system", "cannot create '{}': {}", memory_root.string(), ec.message());
+  }
+
+  mount_table table;
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
+  table.push_back(mount{tag::memory, {memory_root}, mount_access::read_write});
+  add_engine_mount(table, engine_base);
+  return table;
 }
 
