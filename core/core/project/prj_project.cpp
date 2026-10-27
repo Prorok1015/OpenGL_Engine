@@ -51,7 +51,7 @@ prj::open_result prj::open_project(const fs::path& path)
 	for (const auto& rel : context.data.content_roots) {
 		context.content_roots.push_back((context.root / rel).lexically_normal());
 	}
-	if (auto problem = verify_content_roots(context)) {
+	if (auto problem = verify_project_mounts(context)) {
 		result.error = std::format("project '{}': {}", context.data.name, *problem);
 		return result;
 	}
@@ -63,15 +63,17 @@ prj::open_result prj::open_project(const fs::path& path)
 	return result;
 }
 
-std::optional<std::string> prj::verify_content_roots(const project_context& project)
+std::optional<std::string> prj::verify_project_mounts(const project_context& project, const fs::path& engine_base)
 {
 	std::error_code ec;
 	const fs::path root = fs::canonical(project.root, ec);
 	if (ec) {
 		return std::format("project directory '{}' cannot be resolved: {}", project.root.string(), ec.message());
 	}
+
 	// The manifest already refused "..", absolute paths, drives and device names; canonical() also catches a
 	// symlink that leads out of the project, which a resolver rooted at the content root would then follow.
+	std::vector<fs::path> roots;
 	for (const auto& dir : project.content_roots) {
 		const fs::path content_root = fs::canonical(dir, ec);
 		if (ec || !fs::is_directory(content_root, ec)) {
@@ -79,6 +81,48 @@ std::optional<std::string> prj::verify_content_roots(const project_context& proj
 		}
 		if (!is_inside(root, content_root)) {
 			return std::format("content root '{}' leads outside the project", dir.generic_string());
+		}
+		// One file would be reachable under two tags, and a store through the outer root would land in the inner one.
+		for (const auto& other : roots) {
+			if (is_inside(other, content_root) || is_inside(content_root, other)) {
+				return std::format("content roots '{}' and '{}' overlap", other.generic_string(), content_root.generic_string());
+			}
+		}
+		roots.push_back(content_root);
+	}
+
+	// A content root over the engine's resources would make res:// stores write into the engine.
+	if (!engine_base.empty()) {
+		const fs::path base = fs::weakly_canonical(engine_base, ec);
+		if (ec) {
+			return std::format("engine resources '{}' cannot be resolved: {}", engine_base.string(), ec.message());
+		}
+		for (const auto& content_root : roots) {
+			if (is_inside(base, content_root) || is_inside(content_root, base)) {
+				return std::format("content root '{}' overlaps the engine resources '{}'", content_root.generic_string(),
+					base.generic_string());
+			}
+		}
+	}
+
+	// A project that ships .cache (or a folder in it) as a symlink would send every memory:// write elsewhere.
+	for (const auto& dir : project.writable_dirs()) {
+		const auto status = fs::symlink_status(dir, ec);
+		if (status.type() == fs::file_type::not_found) {
+			continue;
+		}
+		if (ec) {
+			return std::format("'{}' cannot be checked: {}", dir.generic_string(), ec.message());
+		}
+		if (fs::is_symlink(status)) {
+			return std::format("'{}' is a symlink; the project's writable folders must be real folders", dir.generic_string());
+		}
+		if (!fs::is_directory(status)) {
+			return std::format("'{}' is not a directory", dir.generic_string());
+		}
+		const fs::path real = fs::canonical(dir, ec);
+		if (ec || !is_inside(root, real)) {
+			return std::format("'{}' leads outside the project", dir.generic_string());
 		}
 	}
 	return std::nullopt;
