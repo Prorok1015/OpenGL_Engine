@@ -62,4 +62,20 @@ BOOST_AUTO_TEST_CASE(SaveThenInject_KeepsMovedCameraPose)
 	BOOST_CHECK(rebuilt.get<scn::mouse_controller_component>(cam2).position == glm::vec3(-7.f, 1.f, 9.f));
 }
 
+BOOST_AUTO_TEST_CASE(DefaultState_RendersFromIdentity)
+{
+	// The startup view (smoke reference) is the identity camera; the default pose must reproduce it,
+	// otherwise the first world reload would move the camera.
+	entt::registry reg;
+	edt::inject_camera(reg, edt::editor_camera_state{});
+
+	const auto cam = find_editor_camera(reg);
+	BOOST_REQUIRE(cam != entt::null);
+	const glm::mat4& world = reg.get<scn::world_transform>(cam).world;
+	for (int c = 0; c < 4; ++c)
+		for (int r = 0; r < 4; ++r)
+			BOOST_TEST_CONTEXT("column " << c << " row " << r)
+				BOOST_CHECK_SMALL(world[c][r] - (c == r ? 1.f : 0.f), 1e-6f);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
