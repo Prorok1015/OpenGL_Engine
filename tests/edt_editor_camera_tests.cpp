@@ -8,6 +8,7 @@
 #include <snk/scene/scn_camera_controller_system.h>
 #include <snk/input/inp_events.hpp>
 #include <entt/entt.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 // Bug #368: a committed edit rebuilds the world and re-injects the editor camera. The new entity must
 // render from the saved pose at once: nothing emits transform_updated for it until the camera moves.
@@ -40,8 +41,8 @@ namespace
 		void step() { lvl.update(std::chrono::duration<float>(0.016f)); }
 		glm::vec3 world_pos() const { return glm::vec3(reg->get<scn::world_transform>(cam).world[3]); }
 
-		scn::context_set lvl;
 		ecs::system_factory sf;
+		scn::context_set lvl;
 		entt::registry* reg = nullptr;
 		inp::input_state* input = nullptr;
 		entt::entity cam = entt::null;
@@ -67,8 +68,13 @@ BOOST_AUTO_TEST_CASE(InjectCamera_WorldTransformMatchesPose)
 	for (int c = 0; c < 4; ++c)
 		for (int r = 0; r < 4; ++r)
 			BOOST_TEST_CONTEXT("column " << c << " row " << r)
-				BOOST_CHECK_CLOSE(world[c][r] + 1.f, local[c][r] + 1.f, 1e-3);
-	BOOST_CHECK_CLOSE(world[3][0], 3.f + local[3][0] - 3.f, 1e-3);
+				BOOST_CHECK_SMALL(world[c][r] - local[c][r], 1e-6f);
+
+	// The eye sits `distance` behind the pivot along the rotated view axis.
+	const glm::vec3 eye = state.position + glm::quat(state.rotation) * glm::vec3(0.f, 0.f, state.distance);
+	BOOST_CHECK_SMALL(world[3][0] - eye.x, 1e-5f);
+	BOOST_CHECK_SMALL(world[3][1] - eye.y, 1e-5f);
+	BOOST_CHECK_SMALL(world[3][2] - eye.z, 1e-5f);
 }
 
 BOOST_AUTO_TEST_CASE(SaveThenInject_KeepsMovedCameraPose)
@@ -89,7 +95,10 @@ BOOST_AUTO_TEST_CASE(SaveThenInject_KeepsMovedCameraPose)
 	const auto cam2 = find_editor_camera(rebuilt);
 	BOOST_REQUIRE(cam2 != entt::null);
 	const glm::mat4& world = rebuilt.get<scn::world_transform>(cam2).world;
-	BOOST_CHECK_CLOSE(world[3][0] + 100.f, -7.f + 100.f + (world[3][0] - -7.f) * 0.f + 0.f, 100.0);
+	// Default rotation 0 and distance 1: the eye is the moved pivot pushed one unit along +Z.
+	BOOST_CHECK_SMALL(world[3][0] - -7.f, 1e-5f);
+	BOOST_CHECK_SMALL(world[3][1] - 1.f, 1e-5f);
+	BOOST_CHECK_SMALL(world[3][2] - 10.f, 1e-5f);
 	BOOST_CHECK(rebuilt.get<scn::mouse_controller_component>(cam2).position == glm::vec3(-7.f, 1.f, 9.f));
 }
 
