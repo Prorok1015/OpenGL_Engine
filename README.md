@@ -104,12 +104,14 @@ OpenGL_Engine/
 │   ├── main.cpp                    # Entry point
 │   ├── config/editor.cfg           # Editor configuration
 │   ├── code/editor_system/         # Editor systems (UI, spawn, input, gizmos)
-│   └── res/                        # Assets
-│       ├── shaders/                # GLSL 420/460 shaders + library includes
-│       ├── objects/                # 3D models (glb, gltf, fbx, obj)
-│       ├── levels/                 # Level descriptors (.desc)
-│       ├── skybox/                 # Cubemap face textures
-│       └── icons/                  # Editor branding
+│   ├── res/                        # Assets (res://)
+│   │   ├── shaders/                # GLSL 420/460 shaders + library includes
+│   │   ├── objects/                # 3D models (glb, gltf, fbx, obj)
+│   │   ├── levels/                 # Level descriptors (.desc)
+│   │   └── skybox/                 # Cubemap face textures
+│   └── data/                       # Editor-only resources (edt://)
+│       ├── icons/                  # Editor branding
+│       └── templates/              # Level / world / prefab preview templates
 │
 ├── lib3dparty/                     # Third-party dependencies (git submodules)
 │   ├── entt, glfw, glm, imgui, assimp, spdlog, yaml

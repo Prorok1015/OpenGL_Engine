@@ -40,7 +40,7 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	egLOG_WARN("Editor/Import", "built without assimp (SNK_WITH_ASSIMP=OFF): .glb/.gltf/.obj/.fbx models cannot be loaded or imported");
 #endif
 
-	auto logo = res.require_sync<res::picture_resource>(res::tag::make("icons/editor_engine_logo.png"));
+	auto logo = res.require_sync<res::picture_resource>(res::tag("edt://icons/editor_engine_logo.png"));
 	// A missing logo is cosmetic: keep starting the editor without it.
 	if (const auto logo_res = logo.get_sync(); ENGINE_VERIFY(logo_res, "editor logo failed to load, window icon skipped")) {
 		ds::fixed_vector<wnd::window_image, 2> images;

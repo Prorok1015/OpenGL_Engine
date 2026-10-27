@@ -78,7 +78,8 @@ OpenGL_Engine/
 │   │   ├── import/                 ← Model import/export pipeline
 │   │   └── input/                  ← Editor input + file dialog
 │   ├── config/                     ← editor.cfg
-│   └── res/                        ← Editor resources (levels, objects, templates, shaders, skybox)
+│   ├── res/                        ← Game resources, res:// (levels, objects, shaders, skybox)
+│   └── data/                       ← Editor-only resources, edt:// (icons, templates)
 │
 ├── tests/                      ← Boost.Test test suite (auto-discovered)
 │

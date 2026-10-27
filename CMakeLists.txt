@@ -130,6 +130,7 @@ target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,S
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
 # desc_repo_roundtrip_tests loads the descs the repository ships.
 target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/res")
+target_compile_definitions(unit_tests PRIVATE SNK_EDITOR_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Editor/data")
 target_compile_definitions(unit_tests PRIVATE SNK_CORE_RES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/res")
 # rnd_render_context_tests reads the sources of the render passes to check what they include.
 target_compile_definitions(unit_tests PRIVATE SNK_RENDER_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/core/engine/render/render_system")

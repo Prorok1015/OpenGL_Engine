@@ -44,7 +44,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	}
 
 	// Load preview template
-	auto template_tag = res::tag::make("templates/prefab_preview.desc");
+	auto template_tag = res::tag("edt://templates/prefab_preview.desc");
 	auto template_text = m_res.require_sync<res::text_resource>(template_tag);
 	if (!template_text.is_ready()) {
 		egLOG_ERROR("Editor/PrefabCtx", "Failed to load prefab_preview.desc template");
