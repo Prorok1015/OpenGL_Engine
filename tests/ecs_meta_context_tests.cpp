@@ -50,6 +50,17 @@ BOOST_FIXTURE_TEST_CASE(registered_component_is_resolved_by_its_type_hash, meta_
 	BOOST_TEST(!entt::resolve(ecs::meta_context(), unregistered_hash));
 }
 
+BOOST_AUTO_TEST_CASE(registration_by_name_goes_to_the_engine_context)
+{
+	struct named_component {};
+	const auto saved = entt::locator<entt::meta_ctx>::handle();
+	entt::locator<entt::meta_ctx>::reset(); // this binary's own locator, not the engine's in a shared build
+	ecs::register_component<named_component>("named_component");
+	BOOST_TEST(static_cast<bool>(entt::resolve(ecs::meta_context(), entt::type_hash<named_component>::value())));
+	entt::meta_reset<named_component>(ecs::meta_context());
+	entt::locator<entt::meta_ctx>::reset(saved);
+}
+
 BOOST_FIXTURE_TEST_CASE(meta_reset_removes_the_registration, meta_fixture)
 {
 	entt::meta_reset<registered_component>(ecs::meta_context());
