@@ -1,6 +1,7 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/resource/adapters/res_text_adapter.h>
+#include <snk/resource/adapters/res_binary_adapter.h>
 #include <snk/config/cfg_api.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <algorithm>
@@ -220,6 +221,7 @@ res::resource_system::resource_system(ds::task_system &tasks)
   registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);
   registrate_adapter<pct_adapter>(res::pct_adapter::INFO);
   registrate_adapter<text_adapter>(res::text_adapter::INFO);
+  registrate_adapter<binary_adapter>(res::binary_adapter::INFO);
 }
 
 res::resource_system::~resource_system() {
