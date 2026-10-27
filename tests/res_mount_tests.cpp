@@ -2,13 +2,17 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
-#include "test_scene_env.hpp"
+// Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>, whose OPAQUE/TRANSPARENT macros
+// break the render headers that one includes.
+#include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
+#include <cstddef>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -16,6 +20,13 @@
 namespace {
 
 namespace fs = std::filesystem;
+
+std::vector<std::byte> to_bytes(std::string_view s)
+{
+	std::vector<std::byte> out(s.size());
+	for (std::size_t i = 0; i < s.size(); ++i) out[i] = static_cast<std::byte>(s[i]);
+	return out;
+}
 
 std::string load(const res::vfs_resolver& r, const char* tag)
 {
@@ -72,7 +83,7 @@ BOOST_FIXTURE_TEST_CASE(ProjectLayer_OverridesEngineAndFallsBack, layers_fixture
 BOOST_FIXTURE_TEST_CASE(Store_WritesToTheProjectEvenForAnEngineOnlyFile, layers_fixture)
 {
 	res::vfs_resolver r("res", { engine, project });
-	BOOST_TEST(r.store(res::tag{ "res://shaders/only_engine.frag" }, test_util::to_bytes("override")));
+	BOOST_TEST(r.store(res::tag{ "res://shaders/only_engine.frag" }, to_bytes("override")));
 
 	BOOST_TEST(wait_for_content(project / "shaders" / "only_engine.frag", "override"));
 	BOOST_TEST(read_file(engine / "shaders" / "only_engine.frag") == "engine-only");
@@ -82,8 +93,8 @@ BOOST_FIXTURE_TEST_CASE(Store_WritesToTheProjectEvenForAnEngineOnlyFile, layers_
 BOOST_FIXTURE_TEST_CASE(ReadOnlyMount_RefusesStoreAndKeepsServing, layers_fixture)
 {
 	res::vfs_resolver r("engine", { engine }, res::mount_access::read_only);
-	BOOST_TEST(!r.store(res::tag{ "engine://shaders/pbr.frag" }, test_util::to_bytes("x")));
-	BOOST_TEST(!r.store(res::tag{ "engine://shaders/new.frag" }, test_util::to_bytes("x")));
+	BOOST_TEST(!r.store(res::tag{ "engine://shaders/pbr.frag" }, to_bytes("x")));
+	BOOST_TEST(!r.store(res::tag{ "engine://shaders/new.frag" }, to_bytes("x")));
 
 	BOOST_TEST(load(r, "engine://shaders/pbr.frag") == "engine-pbr");
 	BOOST_TEST(read_file(engine / "shaders" / "pbr.frag") == "engine-pbr");
@@ -97,7 +108,7 @@ BOOST_FIXTURE_TEST_CASE(EveryMount_RejectsTagsLeavingItsRoots, layers_fixture)
 	res::vfs_resolver engine_only("engine", { engine }, res::mount_access::read_only);
 	BOOST_TEST(load(layered, "res://../engine/shaders/pbr.frag").rfind("ERR:", 0) == 0u);
 	BOOST_TEST(load(engine_only, "engine://../project/res/levels/main.desc").rfind("ERR:", 0) == 0u);
-	BOOST_TEST(!layered.store(res::tag{ "res://../escape.txt" }, test_util::to_bytes("x")));
+	BOOST_TEST(!layered.store(res::tag{ "res://../escape.txt" }, to_bytes("x")));
 	BOOST_TEST(!fs::exists(dir.path() / "project" / "escape.txt"));
 }
 
@@ -121,7 +132,7 @@ BOOST_FIXTURE_TEST_CASE(ResourceSystem_ExposesLayersOfTheMountTable, layers_fixt
 	BOOST_TEST(sys.exists(res::tag{ "res://levels/main.desc" }));
 	BOOST_TEST(sys.exists(res::tag{ "engine://shaders/pbr.frag" }));
 	BOOST_TEST(!sys.exists(res::tag{ "engine://levels/main.desc" }));
-	BOOST_TEST(!sys.store(res::tag{ "engine://shaders/pbr.frag" }, test_util::to_bytes("x")));
+	BOOST_TEST(!sys.store(res::tag{ "engine://shaders/pbr.frag" }, to_bytes("x")));
 }
 
 BOOST_FIXTURE_TEST_CASE(ProjectMountTable_PutsTheFirstContentRootOnTop, layers_fixture)
