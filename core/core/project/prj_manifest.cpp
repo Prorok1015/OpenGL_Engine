@@ -110,12 +110,13 @@ namespace
 		return std::string{ text };
 	}
 
-	const json::array& require_array(const json::value& value, const std::string& path)
+	// Checks only: binding the result of a reference-returning helper that takes a temporary path string trips
+	// GCC's -Wdangling-reference, so callers take value.get_array() themselves.
+	void require_array(const json::value& value, const std::string& path)
 	{
 		if (!value.is_array()) {
 			fail(path, "expected an array");
 		}
-		return value.get_array();
 	}
 
 	int require_int(const json::value& value, const std::string& path)
@@ -227,7 +228,8 @@ namespace
 		}
 
 		if (const auto* roots = root.if_contains("content_roots")) {
-			const auto& array = require_array(*roots, "$.content_roots");
+			require_array(*roots, "$.content_roots");
+			const auto& array = roots->get_array();
 			if (array.empty()) {
 				fail("$.content_roots", "expected at least one content root");
 			}
@@ -248,7 +250,8 @@ namespace
 		}
 
 		if (const auto* modules = root.if_contains("modules")) {
-			const auto& array = require_array(*modules, "$.modules");
+			require_array(*modules, "$.modules");
+			const auto& array = modules->get_array();
 			std::set<std::string> seen;
 			for (std::size_t i = 0; i < array.size(); ++i) {
 				const std::string path = std::format("$.modules[{}]", i);
@@ -261,7 +264,8 @@ namespace
 		}
 
 		if (const auto* platforms = root.if_contains("platforms")) {
-			const auto& array = require_array(*platforms, "$.platforms");
+			require_array(*platforms, "$.platforms");
+			const auto& array = platforms->get_array();
 			for (std::size_t i = 0; i < array.size(); ++i) {
 				result.platforms.push_back(require_non_empty_string(array[i], std::format("$.platforms[{}]", i)));
 			}
