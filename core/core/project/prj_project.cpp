@@ -49,21 +49,38 @@ prj::open_result prj::open_project(const fs::path& path)
 	context.data = std::move(*loaded.data);
 	context.engine_match = compare_engine_versions(context.data.engine, current_engine_version());
 
-	// The manifest already refused "..", absolute paths and drives; canonical() also catches a symlink that leads
-	// out of the project, which a resolver rooted at the content root would then follow.
 	for (const auto& rel : context.data.content_roots) {
-		const fs::path content_root = fs::canonical(context.root / rel, ec);
-		if (ec || !fs::is_directory(content_root, ec)) {
-			result.error = std::format("project '{}': content root '{}' is not a directory", context.data.name, rel.generic_string());
-			return result;
-		}
-		if (!is_inside(context.root, content_root)) {
-			result.error = std::format("project '{}': content root '{}' leads outside the project", context.data.name, rel.generic_string());
-			return result;
-		}
-		context.content_roots.push_back(content_root);
+		context.content_roots.push_back((context.root / rel).lexically_normal());
+	}
+	if (auto problem = verify_content_roots(context)) {
+		result.error = std::format("project '{}': {}", context.data.name, *problem);
+		return result;
+	}
+	for (auto& content_root : context.content_roots) {
+		content_root = fs::canonical(content_root, ec);
 	}
 
 	result.context = std::move(context);
 	return result;
+}
+
+std::optional<std::string> prj::verify_content_roots(const project_context& project)
+{
+	std::error_code ec;
+	const fs::path root = fs::canonical(project.root, ec);
+	if (ec) {
+		return std::format("project directory '{}' cannot be resolved: {}", project.root.string(), ec.message());
+	}
+	// The manifest already refused "..", absolute paths, drives and device names; canonical() also catches a
+	// symlink that leads out of the project, which a resolver rooted at the content root would then follow.
+	for (const auto& dir : project.content_roots) {
+		const fs::path content_root = fs::canonical(dir, ec);
+		if (ec || !fs::is_directory(content_root, ec)) {
+			return std::format("content root '{}' is not a directory", dir.generic_string());
+		}
+		if (!is_inside(root, content_root)) {
+			return std::format("content root '{}' leads outside the project", dir.generic_string());
+		}
+	}
+	return std::nullopt;
 }
