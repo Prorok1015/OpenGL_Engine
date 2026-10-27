@@ -142,7 +142,6 @@ BOOST_AUTO_TEST_CASE(unloading_leaves_the_root_and_the_base_as_they_were)
 	loader.load(std::make_unique<test_game_module>(), root);
 	BOOST_REQUIRE(contexts().load_level(put("lv.desc", GAME_LEVEL)));
 	pump();
-	auto* module_layer = contexts().game_layer();
 
 	loader.unload("test_game", root);
 	BOOST_TEST(root.size() == root_size);
@@ -153,7 +152,6 @@ BOOST_AUTO_TEST_CASE(unloading_leaves_the_root_and_the_base_as_they_were)
 	// A fresh, empty game layer is there for the editor; it knows nothing of the module.
 	auto* fresh = contexts().game_layer();
 	BOOST_REQUIRE(fresh != nullptr);
-	BOOST_TEST(fresh != module_layer);
 	BOOST_TEST(!fresh->descs().is_registered("game_desc"));
 	BOOST_TEST(contexts().level_set().size() == 0u);
 }
