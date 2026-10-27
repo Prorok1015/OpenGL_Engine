@@ -50,8 +50,8 @@ namespace scn {
 		if (overrides.empty() && parent_desc.is_valid()) {
 			if (is_hot_reload && found->patch) {
 				found->patch(reg, e, *parent_desc);
-			} else if (found->spawn) {
-				found->spawn(reg, e, *parent_desc, name);
+			} else {
+				run_spawner(*found, reg, e, *parent_desc, name);
 			}
 			return;
 		}
@@ -79,8 +79,8 @@ namespace scn {
 
 		if (is_hot_reload && found->patch) {
 			found->patch(reg, e, *temp_desc);
-		} else if (found->spawn) {
-			found->spawn(reg, e, *temp_desc, name);
+		} else {
+			run_spawner(*found, reg, e, *temp_desc, name);
 		}
 	}
 

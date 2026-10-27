@@ -133,6 +133,25 @@ BOOST_AUTO_TEST_CASE(layer_assembler_spawns_layer_and_base_types)
 	BOOST_TEST(!reg.all_of<game_component>(other));
 }
 
+BOOST_AUTO_TEST_CASE(a_base_prefab_spawned_by_the_layer_assembles_with_the_layers_services)
+{
+	auto obj = boost::json::parse(R"({ "__type": "prefab_desc", "components": { "g": { "__type": "game_desc", "value": 7 } } })").as_object();
+	layer_descs->migrate_tree(obj, "test");
+	auto prefab = layer_descs->create_instance("prefab_desc", res::tag{});
+	BOOST_REQUIRE(prefab);
+	prefab->deserialize(*layer_descs, obj);
+
+	entt::registry reg;
+	const auto through_layer = reg.create();
+	layer_assembler->spawn_from_desc(reg, through_layer, *prefab, "p");
+	BOOST_REQUIRE(reg.all_of<game_component>(through_layer)); // the base's prefab spawner ran with the layer's assembler
+	BOOST_TEST(reg.get<game_component>(through_layer).value == 7);
+
+	const auto through_base = reg.create();
+	base_assembler.spawn_from_desc(reg, through_base, *prefab, "p");
+	BOOST_TEST(!reg.all_of<game_component>(through_base));
+}
+
 BOOST_AUTO_TEST_CASE(base_is_unchanged_after_the_layer_goes_away)
 {
 	const auto components = base_descs.get_component_type_names();
