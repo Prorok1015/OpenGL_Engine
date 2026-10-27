@@ -90,10 +90,10 @@ BOOST_AUTO_TEST_CASE(Verify_CatchesAContentRootReplacedAfterOpening)
 
 	auto opened = prj::open_project(dir.path() / "game");
 	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
-	BOOST_TEST(!prj::verify_content_roots(*opened.context).has_value());
+	BOOST_TEST(!prj::verify_project_mounts(*opened.context).has_value());
 
 	fs::remove_all(dir.path() / "game" / "res");
-	const auto removed = prj::verify_content_roots(*opened.context);
+	const auto removed = prj::verify_project_mounts(*opened.context);
 	BOOST_REQUIRE(removed.has_value());
 	BOOST_TEST(removed->find("not a directory") != std::string::npos);
 
@@ -103,9 +103,65 @@ BOOST_AUTO_TEST_CASE(Verify_CatchesAContentRootReplacedAfterOpening)
 		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
 		return;
 	}
-	const auto escaped = prj::verify_content_roots(*opened.context);
+	const auto escaped = prj::verify_project_mounts(*opened.context);
 	BOOST_REQUIRE(escaped.has_value());
 	BOOST_TEST(escaped->find("outside the project") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Verify_RefusesOverlappingContentRoots)
+{
+	test_util::temp_dir dir("prj_overlap");
+	dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0",
+		"content_roots": ["res", "res/sub"] })");
+	fs::create_directories(dir.path() / "res" / "sub");
+
+	const auto opened = prj::open_project(dir.path());
+	BOOST_TEST(!opened.context.has_value());
+	BOOST_TEST(opened.error.find("overlap") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsOverTheEngineBase)
+{
+	test_util::temp_dir dir("prj_engine_overlap");
+	dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	fs::create_directories(dir.path() / "res" / "engine_inside");
+	const auto opened = prj::open_project(dir.path());
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+
+	BOOST_TEST(!prj::verify_project_mounts(*opened.context, dir.path() / "elsewhere").has_value());
+	for (const fs::path& base : { dir.path() / "res", dir.path() / "res" / "engine_inside", dir.path() }) {
+		BOOST_TEST_INFO("engine base: " << base.string());
+		const auto problem = prj::verify_project_mounts(*opened.context, base);
+		BOOST_REQUIRE(problem.has_value());
+		BOOST_TEST(problem->find("engine resources") != std::string::npos);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Verify_RefusesSymlinkedWritableFolders)
+{
+	test_util::temp_dir dir("prj_cache_link");
+	dir.write("game/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	fs::create_directories(dir.path() / "game" / "res");
+	fs::create_directories(dir.path() / "outside");
+
+	std::error_code ec;
+	fs::create_directory_symlink(dir.path() / "outside", dir.path() / "game" / ".cache", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	const auto cache_link = prj::open_project(dir.path() / "game");
+	BOOST_TEST(!cache_link.context.has_value());
+	BOOST_TEST(cache_link.error.find("symlink") != std::string::npos);
+
+	// A real .cache with memory as the link.
+	fs::remove(dir.path() / "game" / ".cache");
+	fs::create_directories(dir.path() / "game" / ".cache");
+	fs::create_directory_symlink(dir.path() / "outside", dir.path() / "game" / ".cache" / "memory", ec);
+	BOOST_REQUIRE(!ec);
+	const auto memory_link = prj::open_project(dir.path() / "game");
+	BOOST_TEST(!memory_link.context.has_value());
+	BOOST_TEST(memory_link.error.find("symlink") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

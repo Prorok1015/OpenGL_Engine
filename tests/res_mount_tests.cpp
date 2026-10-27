@@ -2,11 +2,18 @@
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/resource/res_resource_service_init.h>
+#include <snk/project/prj_project.h>
+#include <snk/common/ds/ds_store.hpp>
+#include <snk/common/logger/engine_log.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>, whose OPAQUE/TRANSPARENT macros
 // break the render headers that one includes.
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <cstddef>
+#include <mutex>
+#include <system_error>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -135,34 +142,42 @@ BOOST_FIXTURE_TEST_CASE(ResourceSystem_ExposesLayersOfTheMountTable, layers_fixt
 	BOOST_TEST(!sys.store(res::tag{ "engine://shaders/pbr.frag" }, to_bytes("x")));
 }
 
-BOOST_FIXTURE_TEST_CASE(ProjectMountTable_PutsTheFirstContentRootOnTop, layers_fixture)
+BOOST_FIXTURE_TEST_CASE(ProjectMountTable_EngineUnderTheContentRootsFirstOnTop, layers_fixture)
 {
-	// resource/base_path is empty in the unit tests, so there is no engine layer and no engine:// here.
 	const fs::path shared = dir.path() / "project" / "shared";
-	fs::create_directories(shared);
 	const fs::path cache = dir.path() / "project" / ".cache";
 	const fs::path memory = cache / "memory";
 	const fs::path user = cache / "user_profile";
 
-	const auto table = res::resource_system::project_mount_table({ project, shared }, cache, user);
+	const auto table = res::resource_system::project_mount_table(engine, { project, shared }, cache, user);
 
-	BOOST_TEST(fs::is_directory(memory));
-	BOOST_TEST(fs::is_directory(user));
-	BOOST_REQUIRE(table.size() == 4u);
+	BOOST_REQUIRE(table.size() == 5u);
 	BOOST_TEST(table[0].protocol == res::tag::default_protocol());
-	BOOST_REQUIRE(table[0].roots.size() == 2u);
-	BOOST_TEST(table[0].roots[0] == shared);
-	BOOST_TEST(table[0].roots[1] == project);
+	BOOST_TEST((table[0].roots == std::vector<fs::path>{ engine, shared, project }));
 	BOOST_TEST((table[0].access == res::mount_access::read_write));
 	BOOST_TEST(table[1].protocol == res::tag::memory);
-	BOOST_REQUIRE(table[1].roots.size() == 1u);
-	BOOST_TEST(table[1].roots[0] == memory);
+	BOOST_TEST((table[1].roots == std::vector<fs::path>{ memory }));
 	BOOST_TEST(table[2].protocol == res::tag::cache);
-	BOOST_REQUIRE(table[2].roots.size() == 1u);
-	BOOST_TEST(table[2].roots[0] == cache);
+	BOOST_TEST((table[2].roots == std::vector<fs::path>{ cache }));
 	BOOST_TEST(table[3].protocol == res::tag::user);
-	BOOST_REQUIRE(table[3].roots.size() == 1u);
-	BOOST_TEST(table[3].roots[0] == user);
+	BOOST_TEST((table[3].roots == std::vector<fs::path>{ user }));
+	BOOST_TEST(table[4].protocol == res::tag::engine);
+	BOOST_TEST((table[4].roots == std::vector<fs::path>{ engine }));
+	BOOST_TEST((table[4].access == res::mount_access::read_only));
+	// Only a table: the caller creates the folders.
+	BOOST_TEST(!fs::exists(memory));
+}
+
+BOOST_FIXTURE_TEST_CASE(ProjectMountTable_WithoutEngineBaseHasNoEngineLayer, layers_fixture)
+{
+	const fs::path cache = dir.path() / "project" / ".cache";
+	const auto table = res::resource_system::project_mount_table({}, { project }, cache, cache / "user_profile");
+
+	BOOST_REQUIRE(table.size() == 4u);
+	BOOST_TEST((table[0].roots == std::vector<fs::path>{ project }));
+	for (const auto& mount : table) {
+		BOOST_TEST(mount.protocol != res::tag::engine);
+	}
 }
 
 BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_fixture)
@@ -170,7 +185,9 @@ BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_f
 	ds::task_system tasks{ test_util::manual_tasks() };
 	const fs::path cache = dir.path() / "project" / ".cache";
 	const fs::path user = cache / "user_profile";
-	res::resource_system sys(tasks, res::resource_system::project_mount_table({ project }, cache, user));
+	fs::create_directories(cache / "memory");
+	fs::create_directories(user);
+	res::resource_system sys(tasks, res::resource_system::project_mount_table({}, { project }, cache, user));
 
 	BOOST_TEST(sys.store(res::tag{ "cache://thumbs/a.png" }, to_bytes("thumb")));
 	BOOST_TEST(sys.store(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
@@ -183,6 +200,101 @@ BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_f
 	BOOST_TEST(!sys.exists(res::tag{ "res://thumbs/a.png" }));
 	BOOST_TEST(!sys.exists(res::tag{ "res://saves/slot1.json" }));
 	BOOST_TEST(!sys.store(res::tag{ "user://../../escape.txt" }, to_bytes("x")));
+}
+
+BOOST_FIXTURE_TEST_CASE(Store_OverAnEngineOnlyFileIsLogged, layers_fixture)
+{
+	std::mutex m;
+	std::vector<std::string> warnings;
+	auto sink = engine::add_log_sink([&](std::string_view, engine::log_level level, std::string_view message) {
+		if (level != engine::log_level::warn) return;
+		std::lock_guard lock(m);
+		warnings.emplace_back(message);
+	});
+	const auto shadow_warnings = [&] {
+		std::lock_guard lock(m);
+		return std::count_if(warnings.begin(), warnings.end(),
+			[](const std::string& w) { return w.find("overrides the file of a lower layer") != std::string::npos; });
+	};
+
+	res::vfs_resolver r("res", { engine, project });
+	BOOST_TEST(r.store(res::tag{ "res://shaders/only_engine.frag" }, to_bytes("override")));
+	BOOST_TEST(shadow_warnings() == 1);
+	BOOST_TEST(wait_for_content(project / "shaders" / "only_engine.frag", "override"));
+
+	// The project has its own copy now, and a file the engine lacks is no override: neither is logged.
+	BOOST_TEST(r.store(res::tag{ "res://shaders/only_engine.frag" }, to_bytes("again")));
+	BOOST_TEST(r.store(res::tag{ "res://levels/new.desc" }, to_bytes("new")));
+	BOOST_TEST(shadow_warnings() == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(ReadOnlyMount_RefusesErase, layers_fixture)
+{
+	res::vfs_resolver r("engine", { engine }, res::mount_access::read_only);
+	BOOST_TEST(!r.erase(res::tag{ "engine://shaders/pbr.frag" }));
+	BOOST_TEST(fs::exists(engine / "shaders" / "pbr.frag"));
+}
+
+BOOST_FIXTURE_TEST_CASE(PinnedRoot_ARootSwappedForASymlinkDoesNotMoveTheMount, layers_fixture)
+{
+	const fs::path outside = dir.path() / "outside";
+	fs::create_directories(outside);
+	res::vfs_resolver r("res", { project });
+
+	const fs::path moved = dir.path() / "project" / "res_moved";
+	fs::rename(project, moved);
+	std::error_code ec;
+	fs::create_directory_symlink(outside, project, ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	BOOST_TEST(!r.store(res::tag{ "res://planted.txt" }, to_bytes("x")));
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	BOOST_TEST(!fs::exists(outside / "planted.txt"));
+}
+
+BOOST_FIXTURE_TEST_CASE(ResourceInit_MountsAValidProjectAndCreatesItsWritableFolders, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	core::res::resource_init(data);
+
+	const auto& project_ctx = data.require<prj::project_context>();
+	BOOST_TEST(fs::is_directory(project_ctx.memory_dir()));
+	BOOST_TEST(fs::is_directory(project_ctx.user_profile_dir()));
+	BOOST_TEST(data.require<res::resource_system>().get_resources_path() == fs::canonical(project));
+	BOOST_TEST(data.require<res::resource_system>().exists(res::tag{ "res://levels/main.desc" }));
+	core::res::resource_term(data);
+}
+
+BOOST_FIXTURE_TEST_CASE(ResourceInit_RefusesASymlinkedCacheWithAProjectError, layers_fixture)
+{
+	dir.write("project/project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0" })");
+	auto opened = prj::open_project(dir.path() / "project");
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+
+	const fs::path outside = dir.path() / "outside";
+	fs::create_directories(outside);
+	std::error_code ec;
+	fs::create_directory_symlink(outside, opened.context->cache_dir(), ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	ds::app_data_storage data;
+	data.construct<ds::task_system>(test_util::manual_tasks());
+	data.construct<prj::project_context>(*opened.context);
+	BOOST_CHECK_THROW(core::res::resource_init(data), prj::project_error);
+	BOOST_TEST(!data.has_value<res::resource_system>());
+	BOOST_TEST(!fs::exists(outside / "memory"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

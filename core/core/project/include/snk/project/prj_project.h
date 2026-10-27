@@ -23,8 +23,12 @@ namespace prj
 
 		// <root>/.cache: regenerated data, never committed.
 		std::filesystem::path cache_dir() const { return root / ".cache"; }
+		// memory:// (data made at runtime, e.g. imports) inside the cache.
+		std::filesystem::path memory_dir() const { return cache_dir() / "memory"; }
 		// user:// while the editor runs: a test profile, so the editor never touches the player's real data.
 		std::filesystem::path user_profile_dir() const { return cache_dir() / "user_profile"; }
+		// What the resource system mounts for writing besides the content roots, parents first.
+		std::vector<std::filesystem::path> writable_dirs() const { return { cache_dir(), memory_dir(), user_profile_dir() }; }
 		// Where the game code is built (#160); not a protocol.
 		std::filesystem::path build_dir() const { return root / "build"; }
 	};
@@ -39,9 +43,13 @@ namespace prj
 	// `path` is a project.snkproj file or the directory holding one.
 	SNK_API open_result open_project(const std::filesystem::path& path);
 
-	// Every content root is (still) an existing directory inside the canonical project root, symlinks resolved.
-	// open_project checks it, and the resource system again right before it mounts the roots. nullopt when they are.
-	SNK_API std::optional<std::string> verify_content_roots(const project_context& project);
+	// What the resource system mounts for the project stays inside it. open_project checks it (without an engine base),
+	// the resource system again right before it mounts. nullopt when everything holds:
+	// - every content root is an existing directory inside the canonical project root, symlinks resolved;
+	// - no content root lies inside another one, and none lies inside `engine_base` or contains it (empty: no base);
+	// - each writable dir that exists is a real directory (not a symlink) inside the project.
+	SNK_API std::optional<std::string> verify_project_mounts(const project_context& project,
+		const std::filesystem::path& engine_base = {});
 
 	// The project given on the command line could not be opened; the host exits with a dedicated code.
 	class SNK_API project_error : public std::runtime_error

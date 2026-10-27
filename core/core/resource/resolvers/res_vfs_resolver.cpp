@@ -22,9 +22,16 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 	if (points.empty())
 		return;
 
-	for (auto& root : points) {
-		watcher.add_path(root);
-		entries_stack.push(root);
+	for (const auto& root : points) {
+		// Pinned once: safe_path checks containment against this value, so a root swapped for a symlink later does
+		// not move the mount.
+		std::error_code ec;
+		fs::path pinned = fs::weakly_canonical(root, ec);
+		if (ec) {
+			pinned = root;
+		}
+		watcher.add_path(pinned);
+		entries_stack.push(pinned);
 	}
 	
 	watcher.start();
@@ -60,7 +67,12 @@ res::vfs_resolver::~vfs_resolver()
 
 std::optional<res::tag> res::vfs_resolver::path_mapper(const fs::path& path) const
 {
-	fs::path full_path = fs::absolute(path).lexically_normal();
+	// The mounted roots are canonical, so the path is too: a symlink in either would otherwise break the match.
+	std::error_code ec;
+	fs::path full_path = fs::weakly_canonical(path, ec);
+	if (ec) {
+		full_path = fs::absolute(path).lexically_normal();
+	}
 	auto stack = entries_stack;
 
 	while (!stack.empty()) {
@@ -298,10 +310,8 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 	}
 
 	std::error_code ec;
-	fs::path canon_root = fs::weakly_canonical(root, ec);
-	if (ec) {
-		return std::nullopt;
-	}
+	// The constructor pinned the root canonical; it is not resolved again.
+	fs::path canon_root = root;
 	// Only the directory is canonicalized: an erase on the io thread may remove the file while
 	// weakly_canonical probes it, which fails the whole call and rejected a valid store.
 	const fs::path joined = canon_root / rel;

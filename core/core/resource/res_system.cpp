@@ -824,6 +824,10 @@ void add_engine_mount(res::mount_table &table, const std::filesystem::path &engi
 }
 } // namespace
 
+std::filesystem::path res::resource_system::configured_engine_base() {
+  return cfg_res_base_path->empty() ? std::filesystem::path{} : std::filesystem::path{cfg_res_base_path->string()};
+}
+
 res::mount_table res::resource_system::config_mount_table() {
   egLOG("resource/system", "Resources path swd '{0}', cfg '{1}'",
         fs::absolute("./").string(), cfg_res_path->string());
@@ -845,11 +849,11 @@ res::mount_table res::resource_system::config_mount_table() {
 }
 
 res::mount_table res::resource_system::project_mount_table(
+    const std::filesystem::path &engine_base,
     const std::vector<std::filesystem::path> &content_roots,
     const std::filesystem::path &cache_dir,
     const std::filesystem::path &user_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
-  const auto engine_base = engine_base_path();
   if (engine_base.empty()) {
     egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
   }
@@ -859,19 +863,9 @@ res::mount_table res::resource_system::project_mount_table(
     layers.push_back(engine_base);
   layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
 
-  const fs::path memory_root = cache_dir / "memory";
-  // The resolver canonicalizes its roots; a root that does not exist yet would not resolve.
-  for (const auto &dir : {memory_root, user_dir}) {
-    std::error_code ec;
-    fs::create_directories(dir, ec);
-    if (ec) {
-      egLOG_WARN("resource/system", "cannot create '{}': {}", dir.string(), ec.message());
-    }
-  }
-
   mount_table table;
   table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
-  table.push_back(mount{tag::memory, {memory_root}, mount_access::read_write});
+  table.push_back(mount{tag::memory, {cache_dir / "memory"}, mount_access::read_write});
   table.push_back(mount{tag::cache, {cache_dir}, mount_access::read_write});
   table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
   add_engine_mount(table, engine_base);
