@@ -57,6 +57,16 @@ public:
         return m_registry.phases().add_game_phase(std::move(name), anchor, side);
     }
 
+    // False when the name is not a game phase. See phase_table::remove_game_phase.
+    bool remove_game_phase(std::string_view name) {
+        return m_registry.phases().remove_game_phase(name);
+    }
+
+    // False when no system has this name. See system_registry::remove.
+    bool unregister_system(const std::string& name) {
+        return m_registry.remove(name);
+    }
+
     system_registry& registry() { return m_registry; }
     const system_registry& registry() const { return m_registry; }
 

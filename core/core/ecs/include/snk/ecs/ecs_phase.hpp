@@ -92,6 +92,9 @@ public:
 	// Add game phases before the first load: plans already built keep the old phase list until
 	// they are rebuilt (scn::context_set::rebuild_all_plans).
 	bool add_game_phase(std::string name, phase anchor, phase_side side);
+	// False when no game phase has this name (built-ins cannot be removed). Plans built earlier keep
+	// the phase until they are rebuilt.
+	bool remove_game_phase(std::string_view name);
 
 	[[nodiscard]] bool contains(const phase_id& id) const;
 	[[nodiscard]] const std::vector<game_phase>& game_phases() const noexcept { return m_game; }
