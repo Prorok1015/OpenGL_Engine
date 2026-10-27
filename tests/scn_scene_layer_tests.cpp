@@ -124,10 +124,11 @@ BOOST_AUTO_TEST_CASE(sandbox_components_of_the_layer_are_found_in_its_meta_conte
 
 BOOST_AUTO_TEST_CASE(a_module_attaches_to_the_meta_context_of_its_layer)
 {
+	BOOST_TEST(&layer->meta() != &ecs::meta_context());
+	// In a static build this binary's locator is the engine's: put it back before anything else resolves.
 	const auto saved = entt::locator<entt::meta_ctx>::handle();
 	entt::locator<entt::meta_ctx>::reset(layer->meta_handle());
 	BOOST_TEST(&entt::locator<entt::meta_ctx>::value_or() == &layer->meta());
-	BOOST_TEST(&layer->meta() != &ecs::meta_context());
 	entt::locator<entt::meta_ctx>::reset(saved);
 }
 
