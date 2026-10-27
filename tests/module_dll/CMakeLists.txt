@@ -17,5 +17,5 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/app_module_dll_tests.cp
 	PROPERTIES COMPILE_DEFINITIONS "SNK_SPIKE_GAME_PATH=\"$<TARGET_FILE:spike_game>\"" SKIP_PRECOMPILE_HEADERS ON)
 target_link_libraries(unit_tests PRIVATE ${CMAKE_DL_LIBS})
 add_dependencies(unit_tests spike_game)
-# EXPERIMENT (spike #218, reverted next): the module alone in standard C++ mode.
-target_compile_definitions(spike_game PRIVATE ENTT_STANDARD_CPP)
+# EXPERIMENT (spike #218, reverted next): the module alone with 64-bit EnTT ids.
+target_compile_definitions(spike_game PRIVATE "ENTT_ID_TYPE=std::uint64_t")
