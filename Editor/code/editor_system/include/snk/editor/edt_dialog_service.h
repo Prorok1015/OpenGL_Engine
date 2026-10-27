@@ -51,7 +51,7 @@ namespace edt
 		struct dialog_info
 		{
 			dialog_id id = 0;
-			// "unsaved", "save_as", "pick_file" or "message".
+			// "unsaved", "save_as", "pick_file", "message" or "choice".
 			std::string kind;
 			std::string text;
 			// JSON Schema (cmd_json_schema.h) of what answer() takes.
@@ -77,6 +77,10 @@ namespace edt
 		// Own file dialog per call, so filters and start folder of one call never leak into another.
 		dialog_id pick_file(pick_file_options options, std::function<void(const std::filesystem::path&)> on_pick);
 		dialog_id message(message_level level, std::string text);
+		// One button per option. `on_answer` gets the index of the button, or nullopt when the dialog is closed
+		// without one (Esc, an auto answer that cancels everything).
+		dialog_id choose(std::string title, std::string text, std::vector<std::string> options,
+			std::function<void(std::optional<std::size_t>)> on_answer);
 
 		void set_auto_answer(dialog_auto_answer answer) { m_auto_answer = std::move(answer); }
 		void clear_auto_answer() { m_auto_answer.reset(); }
@@ -86,7 +90,7 @@ namespace edt
 		std::vector<dialog_info> list() const;
 		// Answers a dialog the way a click would: the same callback runs with the same value. `answer` must match
 		// the dialog's answer_schema (unsaved: {"choice": "save|discard|cancel"}; save_as and pick_file: {"path": "..."}
-		// or {"cancel": true}; message: {}). Codes: "not_found" (no such pending dialog), "invalid_args" (the answer
+		// or {"cancel": true}; message: {}; choice: {"index": N} or {"cancel": true}). Codes: "not_found" (no such pending dialog), "invalid_args" (the answer
 		// breaks the schema or means nothing), "failed" (already answered). A dialog that is on screen closes in the
 		// next update() (value {"resolved": false} until then); one that was never drawn resolves at once
 		// ({"resolved": true}), so a headless run needs no frames.

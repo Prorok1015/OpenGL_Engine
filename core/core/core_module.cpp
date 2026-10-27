@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <format>
 #include <utility>
 
 namespace {
@@ -38,6 +39,8 @@ namespace {
 
 	// --project <project.snkproj or its directory>; empty: no project, res:// comes from resource/path.
 	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
+	// --allow-engine-version-mismatch: open a project of another engine MAJOR.MINOR without asking.
+	CFG_VAR_DEF_BOOL(cfg_allow_engine_version_mismatch, "project/allow_engine_version_mismatch", false);
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -89,8 +92,20 @@ namespace {
 		if (!opened.context) {
 			throw prj::project_error(opened.error);
 		}
-		egLOG_INFO("project", "opened project '{}' ({})", opened.context->data.name, opened.context->manifest_file.string());
-		data.construct<prj::project_context>(std::move(*opened.context));
+		auto& project = *opened.context;
+		egLOG_INFO("project", "opened project '{}' ({})", project.data.name, project.manifest_file.string());
+
+		project.engine_mismatch_allowed = cfg_allow_engine_version_mismatch;
+		const auto action = prj::version_action_for(project.engine_match, project.engine_mismatch_allowed);
+		const auto engine_line = std::format("project '{}' was made for engine {}, this is engine {}", project.data.name,
+			prj::to_string(project.data.engine), prj::to_string(prj::current_engine_version()));
+		if (action == prj::version_action::open_with_notice) {
+			egLOG_INFO("project", "{}", engine_line);
+		} else if (action != prj::version_action::open) {
+			// The editor asks (ask_open_or_quit) or refuses (refuse).
+			egLOG_WARN("project", "{}", engine_line);
+		}
+		data.construct<prj::project_context>(std::move(project));
 	}
 }
 

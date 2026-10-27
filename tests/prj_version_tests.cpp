@@ -59,4 +59,17 @@ BOOST_AUTO_TEST_CASE(Compare_MajorAndMinorAfterOne)
 	BOOST_TEST((prj::compare_engine_versions(v(3, 0, 0), v(2, 9, 9)) == prj::version_match::project_newer));
 }
 
+BOOST_AUTO_TEST_CASE(Action_PerMatchWithAndWithoutTheMismatchFlag)
+{
+	using prj::version_action;
+	using prj::version_match;
+	BOOST_TEST((prj::version_action_for(version_match::exact, false) == version_action::open));
+	BOOST_TEST((prj::version_action_for(version_match::exact, true) == version_action::open));
+	BOOST_TEST((prj::version_action_for(version_match::patch_differs, false) == version_action::open_with_notice));
+	BOOST_TEST((prj::version_action_for(version_match::project_older, false) == version_action::ask_open_or_quit));
+	BOOST_TEST((prj::version_action_for(version_match::project_older, true) == version_action::open_with_notice));
+	BOOST_TEST((prj::version_action_for(version_match::project_newer, false) == version_action::refuse));
+	BOOST_TEST((prj::version_action_for(version_match::project_newer, true) == version_action::open_with_notice));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

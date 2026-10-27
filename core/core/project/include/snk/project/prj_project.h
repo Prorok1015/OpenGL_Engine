@@ -21,6 +21,11 @@ namespace prj
 		// Absolute, highest priority first (the order of the manifest); every one exists and is inside `root`.
 		std::vector<std::filesystem::path> content_roots;
 
+		// The manifest's engine_version against current_engine_version().
+		version_match engine_match = version_match::exact;
+		// Set by the host from --allow-engine-version-mismatch.
+		bool engine_mismatch_allowed = false;
+
 		// <root>/.cache: regenerated data, never committed.
 		std::filesystem::path cache_dir() const { return root / ".cache"; }
 	};

@@ -34,4 +34,18 @@ namespace prj
 	SNK_API std::string to_string(const engine_version& version);
 
 	SNK_API version_match compare_engine_versions(const engine_version& project, const engine_version& editor);
+
+	// What the editor does with a project of that match. `mismatch_allowed`: the user already agreed to open a
+	// project of another MAJOR.MINOR (--allow-engine-version-mismatch).
+	enum class version_action
+	{
+		open,
+		open_with_notice,
+		// The project is older: open it without migrating, or quit.
+		ask_open_or_quit,
+		// The project is newer than the editor: it cannot be opened.
+		refuse,
+	};
+
+	SNK_API version_action version_action_for(version_match match, bool mismatch_allowed);
 }

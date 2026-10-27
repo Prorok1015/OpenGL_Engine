@@ -47,6 +47,7 @@ prj::open_result prj::open_project(const fs::path& path)
 	}
 	context.manifest_file = context.root / manifest_file.filename();
 	context.data = std::move(*loaded.data);
+	context.engine_match = compare_engine_versions(context.data.engine, current_engine_version());
 
 	// The manifest already refused "..", absolute paths and drives; canonical() also catches a symlink that leads
 	// out of the project, which a resolver rooted at the content root would then follow.

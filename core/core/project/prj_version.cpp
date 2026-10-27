@@ -69,3 +69,18 @@ prj::version_match prj::compare_engine_versions(const engine_version& project, c
 	}
 	return project.patch == editor.patch ? version_match::exact : version_match::patch_differs;
 }
+
+prj::version_action prj::version_action_for(version_match match, bool mismatch_allowed)
+{
+	switch (match) {
+	case version_match::exact:
+		return version_action::open;
+	case version_match::patch_differs:
+		return version_action::open_with_notice;
+	case version_match::project_older:
+		return mismatch_allowed ? version_action::open_with_notice : version_action::ask_open_or_quit;
+	case version_match::project_newer:
+		return mismatch_allowed ? version_action::open_with_notice : version_action::refuse;
+	}
+	return version_action::refuse;
+}
