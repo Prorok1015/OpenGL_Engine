@@ -1,45 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_modules.h>
-#include <memory>
-#include <stdexcept>
+#include <snk/common/logger/engine_log.h>
+#include <algorithm>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
-
-struct game_state
-{
-	int value = 0;
-};
-
-class fake_module : public app::modules::module_interface
-{
-public:
-	fake_module(std::string name, bool throw_on_init, std::vector<std::string_view> deps)
-		: m_name(std::move(name))
-		, m_throw_on_init(throw_on_init)
-		, m_deps(std::move(deps))
-	{
-	}
-
-	void register_services(ds::app_data_storage& data) override { data.construct<game_state>(); }
-	void initialize_services(ds::app_data_storage& data) override
-	{
-		if (m_throw_on_init) {
-			throw std::runtime_error("broken game module");
-		}
-		data.require<game_state>().value = 42;
-	}
-	void shutdown_services(ds::app_data_storage& data) override { data.destruct<game_state>(); }
-	std::string_view name() const override { return m_name; }
-	std::vector<std::string_view> depends_on() const override { return m_deps; }
-
-private:
-	std::string m_name;
-	bool m_throw_on_init = false;
-	std::vector<std::string_view> m_deps;
-};
 
 prj::manifest manifest_with(std::vector<prj::module_ref> modules)
 {
@@ -49,84 +17,70 @@ prj::manifest manifest_with(std::vector<prj::module_ref> modules)
 	return m;
 }
 
-prj::module_catalog::factory make_module(std::string name, bool throw_on_init = false, std::vector<std::string_view> deps = {})
+struct warning_capture
 {
-	return [name, throw_on_init, deps] { return std::make_unique<fake_module>(name, throw_on_init, deps); };
-}
+	warning_capture()
+	{
+		sink = engine::add_log_sink([this](std::string_view, engine::log_level level, std::string_view message) {
+			if (level != engine::log_level::warn) return;
+			std::lock_guard lock(m);
+			warnings.emplace_back(message);
+		});
+	}
 
-struct loader_fixture
-{
-	~loader_fixture() { loader.shutdown_all_services(data); }
+	bool mentions(std::string_view name)
+	{
+		std::lock_guard lock(m);
+		return std::ranges::any_of(warnings, [name](const std::string& w) { return w.find(name) != std::string::npos; });
+	}
 
-	ds::app_data_storage data;
-	app::modules::module_loader loader;
-	prj::module_catalog catalog;
+	std::mutex m;
+	std::vector<std::string> warnings;
+	engine::log_sink_handle sink;
 };
 
 }
 
-BOOST_FIXTURE_TEST_SUITE(PrjModulesTests, loader_fixture)
+BOOST_AUTO_TEST_SUITE(PrjModulesTests)
 
-BOOST_AUTO_TEST_CASE(Catalog_FindsByNameAndLaterAddReplaces)
+BOOST_AUTO_TEST_CASE(Resolve_SortsManifestModulesByWhatTheHostKnows)
 {
-	BOOST_TEST(catalog.empty());
-	catalog.add("game", make_module("first"));
-	catalog.add("game", make_module("second"));
-	BOOST_TEST(!catalog.empty());
-	BOOST_TEST(catalog.find("other") == nullptr);
-	BOOST_REQUIRE(catalog.find("game") != nullptr);
-	BOOST_TEST((*catalog.find("game"))()->name() == "second");
-}
-
-BOOST_AUTO_TEST_CASE(Load_StartsTheManifestModuleFromTheCatalog)
-{
-	catalog.add("game", make_module("game"));
-	const auto report = prj::load_project_modules(
-		manifest_with({ { "game", prj::module_kind::runtime, false } }), catalog, true, loader, data);
-
-	BOOST_TEST(report.loaded == std::vector<std::string>{ "game" });
-	BOOST_TEST(report.missing.empty());
-	BOOST_TEST(report.failed.empty());
-	BOOST_TEST(data.require<game_state>().value == 42);
-	BOOST_TEST((loader.state("game") == app::modules::module_state::initialized));
-}
-
-BOOST_AUTO_TEST_CASE(Load_MissingModulesAreReportedNotThrown)
-{
-	const auto report = prj::load_project_modules(manifest_with({
+	const auto result = prj::resolve_modules(manifest_with({
 		{ "game", prj::module_kind::runtime, false },
-		{ "game_editor", prj::module_kind::editor, true },
-	}), catalog, true, loader, data);
+		{ "physics", prj::module_kind::runtime, false },
+		{ "extras", prj::module_kind::runtime, true },
+		{ "game_editor", prj::module_kind::editor, false },
+	}), { "game", "game_editor" }, true);
 
-	BOOST_TEST(report.loaded.empty());
-	BOOST_TEST((report.missing == std::vector<std::string>{ "game", "game_editor" }));
-	BOOST_TEST(!data.has_value<game_state>());
+	BOOST_REQUIRE(result.resolved.size() == 2u);
+	BOOST_TEST(result.resolved[0].name == "game");
+	BOOST_TEST(result.resolved[1].name == "game_editor");
+	BOOST_TEST(result.missing_required == std::vector<std::string>{ "physics" });
+	BOOST_TEST(result.missing_optional == std::vector<std::string>{ "extras" });
 }
 
-BOOST_AUTO_TEST_CASE(Load_SkipsEditorModulesWhenAskedTo)
+BOOST_AUTO_TEST_CASE(Resolve_SkipsEditorModulesWhenAskedTo)
 {
-	catalog.add("game_editor", make_module("game_editor"));
-	const auto report = prj::load_project_modules(
-		manifest_with({ { "game_editor", prj::module_kind::editor, false } }), catalog, false, loader, data);
+	const auto result = prj::resolve_modules(manifest_with({
+		{ "game_editor", prj::module_kind::editor, false },
+		{ "tools", prj::module_kind::editor, false },
+	}), { "game_editor" }, false);
 
-	BOOST_TEST(report.loaded.empty());
-	BOOST_TEST(report.missing.empty());
-	BOOST_TEST(!data.has_value<game_state>());
+	BOOST_TEST(result.resolved.empty());
+	BOOST_TEST(result.missing_required.empty());
+	BOOST_TEST(result.missing_optional.empty());
 }
 
-BOOST_AUTO_TEST_CASE(Load_AFailingModuleIsReportedAndLeavesNothingBehind)
+BOOST_AUTO_TEST_CASE(Resolve_WarnsForAMissingRequiredModuleOnly)
 {
-	catalog.add("broken", make_module("broken", true));
-	catalog.add("needs_engine", make_module("needs_engine", false, { "engine" }));
-	const auto report = prj::load_project_modules(manifest_with({
-		{ "broken", prj::module_kind::runtime, false },
-		{ "needs_engine", prj::module_kind::runtime, false },
-	}), catalog, true, loader, data);
+	warning_capture capture;
+	prj::resolve_modules(manifest_with({
+		{ "needed", prj::module_kind::runtime, false },
+		{ "nice_to_have", prj::module_kind::runtime, true },
+	}), {}, true);
 
-	BOOST_TEST(report.loaded.empty());
-	BOOST_TEST((report.failed == std::vector<std::string>{ "broken", "needs_engine" }));
-	BOOST_TEST(!data.has_value<game_state>());
-	BOOST_TEST(data.size() == 0u);
+	BOOST_TEST(capture.mentions("'needed'"));
+	BOOST_TEST(!capture.mentions("'nice_to_have'"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

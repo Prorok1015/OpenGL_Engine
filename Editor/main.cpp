@@ -7,7 +7,6 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
 #include <snk/project/prj_project.h>
-#include <snk/project/prj_modules.h>
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
@@ -65,12 +64,6 @@ int main(int argc, char* argv[])
 		module_loader.register_all_services(app_storage);
 		module_loader.initialize_all_services(app_storage);
 		initialized = true;
-
-		// The source build links no game module yet: the project template (#160) adds its own here.
-		const prj::module_catalog game_modules;
-		if (app_storage.has_value<prj::project_context>()) {
-			prj::load_project_modules(app_storage.require<prj::project_context>().data, game_modules, true, module_loader, app_storage);
-		}
 
 		app::application editor;
 		result = editor.run(app_storage);
