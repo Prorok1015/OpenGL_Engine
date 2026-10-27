@@ -475,7 +475,6 @@ jobs:
 
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
       - name: Smoke run (checklist actions)
-        continue-on-error: true
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
             --shot headless_out/checklist/final.png \
@@ -486,7 +485,6 @@ jobs:
       # Game view opened at startup (editor/show_game_view): it docks to the right half of the central
       # area and must show the "Game Camera" of smoke_level, so a crop of that panel cannot be flat.
       - name: Smoke run (Game view)
-        continue-on-error: true
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/game_view/final.png \
             -- --set editor/startup_level levels/smoke_level.desc editor/show_game_view true
@@ -497,7 +495,6 @@ jobs:
       # orthographic camera that clears only the depth). The Game view shows their shared texture: the overlay
       # robot must sit over the 3D scene, which must not be wiped.
       - name: Smoke run (two worlds, Game view)
-        continue-on-error: true
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/two_worlds/final.png \
             -- --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
@@ -509,7 +506,6 @@ jobs:
       # view alone (no panels, gizmos or overlays), so it has its own reference, made from this same path
       # (the reference is the capture scaled to 400 px wide).
       - name: Capture run (viewport.capture)
-        continue-on-error: true
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/capture/final.png \
             --wait-for-log 'captured viewport' \
