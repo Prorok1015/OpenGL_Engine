@@ -3,13 +3,21 @@
 #include <snk/resource/adapters/res_binary_adapter.h>
 
 #include <cstddef>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <initializer_list>
+#include <iterator>
 #include <memory>
 #include <vector>
 
 // gui::ui_font picks between the shipped TTF and ImGui's built-in font, and builds the glyph ranges the TTF is
-// loaded with. No real TTF is shipped with the tests, so what is covered is the selection and the ranges, over a
-// bare ImFontAtlas (no window, no GL context): the TTF decoding itself is ImGui's.
+// loaded with. Everything runs over a bare ImFontAtlas (no window, no GL context); the shipped
+// core/res/fonts/NotoSans-Regular.ttf is checked for the Cyrillic glyphs the editor UI needs.
+
+#ifndef SNK_CORE_RES_DIR
+#error "SNK_CORE_RES_DIR must point at core/res"
+#endif
 
 namespace {
 
@@ -30,6 +38,15 @@ std::vector<std::byte> bytes_of(std::initializer_list<unsigned> values)
 	for (unsigned v : values) {
 		out.push_back(static_cast<std::byte>(v));
 	}
+	return out;
+}
+
+std::vector<std::byte> read_bytes(const std::filesystem::path& path)
+{
+	std::ifstream in(path, std::ios::binary);
+	const std::vector<char> raw{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	std::vector<std::byte> out(raw.size());
+	std::memcpy(out.data(), raw.data(), raw.size());
 	return out;
 }
 
@@ -105,6 +122,23 @@ BOOST_AUTO_TEST_CASE(TheBinaryAdapterKeepsTheBytesAsTheyAre)
 	BOOST_REQUIRE(binary != nullptr);
 	BOOST_TEST((binary->bytes() == raw));
 	BOOST_TEST((adapter.serialize(tag, entry) == raw));
+}
+
+BOOST_AUTO_TEST_CASE(TheShippedFontHasCyrillicGlyphs)
+{
+	gui::ui_font font;
+	font.set_bytes(read_bytes(std::filesystem::path{ SNK_CORE_RES_DIR } / "fonts" / "NotoSans-Regular.ttf"));
+	BOOST_REQUIRE(font.usable());
+
+	ImFontAtlas atlas;
+	ImFont* added = font.add_to(atlas, 13.f);
+	BOOST_REQUIRE(added != nullptr);
+	BOOST_REQUIRE(atlas.Build());
+
+	BOOST_TEST(added->FindGlyphNoFallback(0x0416) != nullptr); // Ж
+	BOOST_TEST(added->FindGlyphNoFallback(0x044F) != nullptr); // я
+	BOOST_TEST(added->FindGlyphNoFallback(0x03A9) != nullptr); // Ω
+	BOOST_TEST(added->FindGlyphNoFallback('A') != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
