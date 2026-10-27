@@ -140,12 +140,15 @@ BOOST_FIXTURE_TEST_CASE(ProjectMountTable_PutsTheFirstContentRootOnTop, layers_f
 	// resource/base_path is empty in the unit tests, so there is no engine layer and no engine:// here.
 	const fs::path shared = dir.path() / "project" / "shared";
 	fs::create_directories(shared);
-	const fs::path memory = dir.path() / "project" / ".cache" / "memory";
+	const fs::path cache = dir.path() / "project" / ".cache";
+	const fs::path memory = cache / "memory";
+	const fs::path user = cache / "user_profile";
 
-	const auto table = res::resource_system::project_mount_table({ project, shared }, memory);
+	const auto table = res::resource_system::project_mount_table({ project, shared }, cache, user);
 
 	BOOST_TEST(fs::is_directory(memory));
-	BOOST_REQUIRE(table.size() == 2u);
+	BOOST_TEST(fs::is_directory(user));
+	BOOST_REQUIRE(table.size() == 4u);
 	BOOST_TEST(table[0].protocol == res::tag::default_protocol());
 	BOOST_REQUIRE(table[0].roots.size() == 2u);
 	BOOST_TEST(table[0].roots[0] == shared);
@@ -154,6 +157,32 @@ BOOST_FIXTURE_TEST_CASE(ProjectMountTable_PutsTheFirstContentRootOnTop, layers_f
 	BOOST_TEST(table[1].protocol == res::tag::memory);
 	BOOST_REQUIRE(table[1].roots.size() == 1u);
 	BOOST_TEST(table[1].roots[0] == memory);
+	BOOST_TEST(table[2].protocol == res::tag::cache);
+	BOOST_REQUIRE(table[2].roots.size() == 1u);
+	BOOST_TEST(table[2].roots[0] == cache);
+	BOOST_TEST(table[3].protocol == res::tag::user);
+	BOOST_REQUIRE(table[3].roots.size() == 1u);
+	BOOST_TEST(table[3].roots[0] == user);
+}
+
+BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path cache = dir.path() / "project" / ".cache";
+	const fs::path user = cache / "user_profile";
+	res::resource_system sys(tasks, res::resource_system::project_mount_table({ project }, cache, user));
+
+	BOOST_TEST(sys.store(res::tag{ "cache://thumbs/a.png" }, to_bytes("thumb")));
+	BOOST_TEST(sys.store(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
+	BOOST_TEST(wait_for_content(cache / "thumbs" / "a.png", "thumb"));
+	BOOST_TEST(wait_for_content(user / "saves" / "slot1.json", "save"));
+	BOOST_TEST(sys.exists(res::tag{ "cache://thumbs/a.png" }));
+	BOOST_TEST(sys.exists(res::tag{ "user://saves/slot1.json" }));
+
+	// Neither leaks into the content: the project's res:// does not see them.
+	BOOST_TEST(!sys.exists(res::tag{ "res://thumbs/a.png" }));
+	BOOST_TEST(!sys.exists(res::tag{ "res://saves/slot1.json" }));
+	BOOST_TEST(!sys.store(res::tag{ "user://../../escape.txt" }, to_bytes("x")));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

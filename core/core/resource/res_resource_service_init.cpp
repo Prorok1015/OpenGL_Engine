@@ -9,7 +9,7 @@ void core::res::resource_init(ds::app_data_storage& data)
 	if (data.has_value<prj::project_context>()) {
 		const auto& project = data.require<prj::project_context>();
 		data.construct<::res::resource_system>(std::ref(tasks),
-			::res::resource_system::project_mount_table(project.content_roots, project.cache_dir() / "memory"));
+			::res::resource_system::project_mount_table(project.content_roots, project.cache_dir(), project.user_profile_dir()));
 		return;
 	}
 	data.construct<::res::resource_system>(std::ref(tasks));

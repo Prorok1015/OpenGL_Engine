@@ -33,6 +33,8 @@ BOOST_AUTO_TEST_CASE(Open_ResolvesRootAndContentRoots)
 		BOOST_TEST(ctx.content_roots[0] == ctx.root / "res");
 		BOOST_TEST(ctx.content_roots[1] == ctx.root / "shared");
 		BOOST_TEST(ctx.cache_dir() == ctx.root / ".cache");
+		BOOST_TEST(ctx.user_profile_dir() == ctx.root / ".cache" / "user_profile");
+		BOOST_TEST(ctx.build_dir() == ctx.root / "build");
 	}
 }
 

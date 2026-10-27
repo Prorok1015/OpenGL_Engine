@@ -846,7 +846,8 @@ res::mount_table res::resource_system::config_mount_table() {
 
 res::mount_table res::resource_system::project_mount_table(
     const std::vector<std::filesystem::path> &content_roots,
-    const std::filesystem::path &memory_root) {
+    const std::filesystem::path &cache_dir,
+    const std::filesystem::path &user_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
   const auto engine_base = engine_base_path();
   if (engine_base.empty()) {
@@ -858,16 +859,21 @@ res::mount_table res::resource_system::project_mount_table(
     layers.push_back(engine_base);
   layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
 
+  const fs::path memory_root = cache_dir / "memory";
   // The resolver canonicalizes its roots; a root that does not exist yet would not resolve.
-  std::error_code ec;
-  fs::create_directories(memory_root, ec);
-  if (ec) {
-    egLOG_WARN("resource/system", "cannot create '{}': {}", memory_root.string(), ec.message());
+  for (const auto &dir : {memory_root, user_dir}) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    if (ec) {
+      egLOG_WARN("resource/system", "cannot create '{}': {}", dir.string(), ec.message());
+    }
   }
 
   mount_table table;
   table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
   table.push_back(mount{tag::memory, {memory_root}, mount_access::read_write});
+  table.push_back(mount{tag::cache, {cache_dir}, mount_access::read_write});
+  table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
   add_engine_mount(table, engine_base);
   return table;
 }

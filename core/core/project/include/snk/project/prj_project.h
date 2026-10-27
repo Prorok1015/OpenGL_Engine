@@ -23,6 +23,10 @@ namespace prj
 
 		// <root>/.cache: regenerated data, never committed.
 		std::filesystem::path cache_dir() const { return root / ".cache"; }
+		// user:// while the editor runs: a test profile, so the editor never touches the player's real data.
+		std::filesystem::path user_profile_dir() const { return cache_dir() / "user_profile"; }
+		// Where the game code is built (#160); not a protocol.
+		std::filesystem::path build_dir() const { return root / "build"; }
 	};
 
 	struct open_result

@@ -20,6 +20,10 @@ namespace res
 		static constexpr std::string_view memory = "memory";
 		// The engine's base resources only, read-only: the layer res:// falls back to, without a project's overrides.
 		static constexpr std::string_view engine = "engine";
+		// <project>/.cache: regenerated data (asset database, thumbnails, autosave), never committed.
+		static constexpr std::string_view cache = "cache";
+		// The player's data (saves, settings); a test profile while the editor runs.
+		static constexpr std::string_view user = "user";
 		static tag make(const std::string_view path) {
 			return tag{ default_protocol(), path };
 		}
