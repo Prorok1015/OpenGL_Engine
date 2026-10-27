@@ -14,8 +14,10 @@ namespace components {
 
 	void editor_init(ds::app_data_storage& data)
 	{
-		auto& desc_system = data.require<desc::desc_system>();
-		auto& res_sys     = data.require<res::resource_system>();
+		// The editor edits the game worlds, so it works with the services of their layer (MODULE_LAYER.md).
+		auto* game = data.require<scn::context_manager>().game_layer();
+		auto& desc_system = game ? game->descs() : data.require<desc::desc_system>();
+		auto& res_sys     = game ? game->resources() : data.require<res::resource_system>();
 		auto& rnd_sys     = data.require<rnd::render_system>();
 		auto& gui_sys     = data.require<gui::gui_system>();
 		data.construct<edt::editor_system>(desc_system, res_sys, rnd_sys, gui_sys);

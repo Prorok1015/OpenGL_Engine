@@ -44,6 +44,25 @@ namespace ecs
     [[nodiscard]] SNK_API entt::meta_ctx& meta_context();
     [[nodiscard]] SNK_API entt::locator<entt::meta_ctx>::node_type meta_context_handle();
 
+    // A fresh meta context (a module layer's, MODULE_LAYER.md) and a locator handle that keeps it alive; another binary
+    // attaches with entt::locator<entt::meta_ctx>::reset(handle). Main thread, between frames: it passes through the
+    // engine's locator for a moment.
+    struct meta_context_owner {
+        entt::locator<entt::meta_ctx>::node_type handle;
+        entt::meta_ctx* context = nullptr;
+    };
+    [[nodiscard]] SNK_API meta_context_owner make_meta_context();
+
+    // `id` in the layer's context first (none: null), then in the engine's.
+    [[nodiscard]] inline entt::meta_type find_meta(const entt::meta_ctx* layer, entt::id_type id) {
+        if (layer) {
+            if (auto type = entt::resolve(*layer, id)) {
+                return type;
+            }
+        }
+        return entt::resolve(meta_context(), id);
+    }
+
     template<typename T>
     entt::meta_factory<T> register_component(entt::meta_ctx& ctx) {
         return entt::meta_factory<T>{ ctx }

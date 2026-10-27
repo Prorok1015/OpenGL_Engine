@@ -109,8 +109,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_services.ctx_manager = data.require_shared<scn::context_manager>();
 	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
 	m_services.ctx_manager.lock()->level_set().set_mode(ecs::run_mode::edit);
-	m_services.sfactory  = &data.require<ecs::system_factory>();
-	m_services.assembler = &data.require<scn::ecs_assembler>();
+	if (auto* game = m_services.ctx_manager.lock()->game_layer()) {
+		m_services.sfactory  = &game->systems();
+		m_services.assembler = &game->assembler();
+	} else {
+		m_services.sfactory  = &data.require<ecs::system_factory>();
+		m_services.assembler = &data.require<scn::ecs_assembler>();
+	}
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
 	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, m_services,
 		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
