@@ -57,14 +57,28 @@ namespace scn {
 			, m_res_sys(res_sys)
 		{}
 
+		// A layer over `parent` (MODULE_LAYER.md): spawners fall through to it, a desc type it has a spawner for
+		// cannot get one here. `desc_sys` is the layer's desc system.
+		ecs_assembler(desc::desc_system& desc_sys, res::resource_system& res_sys, const ecs_assembler* parent)
+			: m_desc_sys(desc_sys)
+			, m_res_sys(res_sys)
+			, m_parent(parent)
+		{}
+
 		~ecs_assembler() = default;
 		ecs_assembler(const ecs_assembler&) = delete;
 		ecs_assembler& operator=(const ecs_assembler&) = delete;
 		ecs_assembler(ecs_assembler&&) = default;
 		ecs_assembler& operator=(ecs_assembler&&) = delete;
 
-		void register_desc_spawner(const std::string_view desc_type, desc_spawner_fn spawner, desc_patcher_fn patcher = nullptr, spawner_category category = spawner_category::component) {
+		// False (logged, nothing registered) when the parent has a spawner for the type.
+		bool register_desc_spawner(const std::string_view desc_type, desc_spawner_fn spawner, desc_patcher_fn patcher = nullptr, spawner_category category = spawner_category::component) {
+			if (m_parent && m_parent->has_spawner(desc_type)) {
+				egLOG_ERROR("assembler/error", "Spawner for '{}' not registered: the type belongs to the parent assembler", desc_type);
+				return false;
+			}
 			m_spawners[std::string{ desc_type }] = { std::move(spawner), std::move(patcher), category };
+			return true;
 		}
 
 		void unregister_desc_spawner(const std::string_view desc_type) {
@@ -72,7 +86,16 @@ namespace scn {
 		}
 
 		bool has_spawner(const std::string_view desc_type) const {
-			return m_spawners.contains(std::string{ desc_type });
+			return find_spawner(desc_type) != nullptr;
+		}
+
+		// The spawner for `desc_type` here or in the parent; null when there is none.
+		const spawner_pair* find_spawner(const std::string_view desc_type) const {
+			auto it = m_spawners.find(std::string{ desc_type });
+			if (it != m_spawners.end()) {
+				return &it->second;
+			}
+			return m_parent ? m_parent->find_spawner(desc_type) : nullptr;
 		}
 
 		desc::desc_system& get_desc_system() const { return m_desc_sys; }
@@ -80,9 +103,9 @@ namespace scn {
 
 		void spawn_from_desc(entt::registry& reg, entt::entity e, const desc::desc_base& desc, const std::string_view name = "") const
 		{
-			auto it = m_spawners.find(std::string{ desc.get_type() });
-			if (it != m_spawners.end() && it->second.spawn) {
-				it->second.spawn(reg, e, desc, name);
+			const spawner_pair* found = find_spawner(desc.get_type());
+			if (found && found->spawn) {
+				found->spawn(reg, e, desc, name);
 			} else {
 				egLOG_WARN("assembler/warning", "No spawner registered for desc type: {0}", desc.get_type());
 			}
@@ -101,6 +124,7 @@ namespace scn {
 	private:
 		desc::desc_system& m_desc_sys;
 		res::resource_system& m_res_sys;
+		const ecs_assembler* m_parent = nullptr;
 		std::unordered_map<std::string, spawner_pair> m_spawners;
 	};
 }
