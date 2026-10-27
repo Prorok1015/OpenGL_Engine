@@ -88,7 +88,7 @@ namespace scn {
 				egLOG_ERROR("assembler/error", "Spawner for '{}' not registered: the type belongs to the parent assembler", desc_type);
 				return false;
 			}
-			m_spawners[std::string{ desc_type }] = { std::move(spawner), std::move(patcher), category };
+			m_spawners[std::string{ desc_type }] = { std::move(spawner), std::move(patcher), category, nullptr };
 			return true;
 		}
 
