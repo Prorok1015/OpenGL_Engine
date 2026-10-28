@@ -166,10 +166,14 @@ BOOST_AUTO_TEST_CASE(base_resources_a_library_requested_settle_and_go_after_it_i
 	const auto base = put("dll_base.txt", "base text");
 	BOOST_REQUIRE(base.view() == dll_game::base_tag);
 	const res::tag missing{ std::string{ dll_game::base_missing_tag } };
+	const std::size_t base_live = rs->live_resources();
 	loader.load(game_library(), root);
 	auto* layer = contexts().game_layer();
 	BOOST_REQUIRE(layer != nullptr);
 	BOOST_REQUIRE(ds::detail::held_count(layer->tasks()) == 3u); // its task, the two texts
+	// The library's two requests made their blocks in the BASE's cache, before the host asks for anything.
+	BOOST_REQUIRE(rs->live_resources() == base_live + 2u);
+	BOOST_REQUIRE(layer->resources().live_resources() == 0u);
 	{
 		// Both in the base's cache, both still loading.
 		const auto pending = rs->require<res::text_resource>(base);
