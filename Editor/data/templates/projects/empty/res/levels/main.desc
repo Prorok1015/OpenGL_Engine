@@ -1,0 +1,41 @@
+{
+    "__type" : "level_desc",
+    "__version" : 2,
+    "__guid" : "093dae88-2128-4ab5-9cbe-5fcc65454f4b",
+    "name" : "main",
+    "worlds" : [
+        {
+            "__type" : "world_desc",
+            "__version" : 3,
+            "name" : "3d_scene",
+            "systems" : [
+                "inp::update_input_state",
+                "scn::animation_controller_update",
+                "scn::animation_system_node",
+                "scn::depth_system",
+                "scn::transform_system",
+                "scn::animation_system_matrix",
+                "scn::update_camera_matrix_system"
+            ],
+            "__id" : "cbf29ce484222325",
+            "components" : {
+                "anchor" : {
+                    "__type" : "anchor_desc",
+                    "__version" : 1
+                }
+            },
+            "children" : [
+                {
+                    "__id" : "93d77f8c2348f13e",
+                    "name" : "Directional Light",
+                    "components" : {
+                        "Directional Light" : {
+                            "__type" : "directional_light_desc",
+                            "__version" : 1
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}
