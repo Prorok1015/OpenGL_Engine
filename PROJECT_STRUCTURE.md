@@ -78,8 +78,9 @@ OpenGL_Engine/
 │   │   ├── import/                 ← Model import/export pipeline
 │   │   └── input/                  ← Editor input + file dialog
 │   ├── config/                     ← editor.cfg
-│   ├── res/                        ← Game resources, res:// (levels, objects, shaders, skybox)
-│   └── data/                       ← Editor-only resources, edt:// (icons, templates)
+│   └── data/                       ← Editor-only resources, edt:// (icons, templates, project templates)
+│
+├── projects/sandbox/           ← The test project (EPIC-42): project.snkproj + res/ (game content and test levels, res://)
 │
 ├── tests/                      ← Boost.Test test suite (auto-discovered)
 │
