@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/application/app_module_interface.h>
+#include <entt/config/config.h>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -34,6 +35,14 @@ namespace app::modules {
 		inline constexpr std::uint32_t static_crt = 1u << 1;  // MSVC /MT or /MTd
 		inline constexpr std::uint32_t libcxx = 1u << 2;      // LLVM libc++ (otherwise libstdc++ / MSVC STL)
 		inline constexpr std::uint32_t old_stl_abi = 1u << 3; // libstdc++ _GLIBCXX_USE_CXX11_ABI=0
+		// EnTT type ids and container layouts cross the boundary, so EnTT's mode is part of the ABI (#218).
+		inline constexpr std::uint32_t entt_standard_cpp = 1u << 4; // ENTT_STANDARD_CPP
+		inline constexpr std::uint32_t entt_wide_id = 1u << 5;      // ENTT_ID_TYPE other than 32 bits
+		inline constexpr std::uint32_t entt_custom_page = 1u << 6;  // ENTT_SPARSE_PAGE / ENTT_PACKED_PAGE not the defaults
+		// With entt_custom_page, log2 of ENTT_SPARSE_PAGE in bits 8..15 and of ENTT_PACKED_PAGE in bits 16..23: two
+		// different custom sizes differ too.
+		inline constexpr std::uint32_t entt_sparse_page_shift = 8;
+		inline constexpr std::uint32_t entt_packed_page_shift = 16;
 	}
 
 	namespace compiler_id {
@@ -41,6 +50,16 @@ namespace app::modules {
 		inline constexpr std::uint32_t msvc = 1;
 		inline constexpr std::uint32_t gcc = 2;
 		inline constexpr std::uint32_t clang = 3;
+	}
+
+	constexpr std::uint32_t log2_of(std::uint64_t value) noexcept
+	{
+		std::uint32_t bits = 0;
+		while (value > 1) {
+			value >>= 1;
+			++bits;
+		}
+		return bits;
 	}
 
 	constexpr std::uint32_t api_major(std::uint32_t version) noexcept { return version >> 16; }
@@ -75,6 +94,18 @@ namespace app::modules {
 #if defined(_GLIBCXX_USE_CXX11_ABI) && _GLIBCXX_USE_CXX11_ABI == 0
 		flags |= build_flag::old_stl_abi;
 #endif
+#if defined(ENTT_STANDARD_CPP)
+		flags |= build_flag::entt_standard_cpp;
+#endif
+		if constexpr (sizeof(ENTT_ID_TYPE) != sizeof(std::uint32_t)) {
+			flags |= build_flag::entt_wide_id;
+		}
+		// The storages' page sizes: a registry built with others does not index the same pools the same way.
+		if constexpr (ENTT_SPARSE_PAGE != 4096 || ENTT_PACKED_PAGE != 1024) {
+			flags |= build_flag::entt_custom_page
+				| (log2_of(ENTT_SPARSE_PAGE) << build_flag::entt_sparse_page_shift)
+				| (log2_of(ENTT_PACKED_PAGE) << build_flag::entt_packed_page_shift);
+		}
 		return snk_module_build_info{ SNK_MODULE_API_VERSION, compiler, flags };
 	}
 
@@ -94,8 +125,7 @@ namespace app::modules {
 	};
 	using module_ptr = std::unique_ptr<module_interface, module_deleter>;
 
-	// The four exported functions of a module binary, resolved by whoever loads it
-	// (dlopen / LoadLibrary in EPIC-52 #21; the unit tests take the addresses directly).
+	// The four exported functions of a module binary, resolved by a module_source (app_module_source.h).
 	struct module_entry
 	{
 		std::uint32_t (*api_version)() = nullptr;
@@ -138,7 +168,7 @@ namespace app::modules {
 		}
 		if (info->flags != host.flags) {
 			return "build flags differ (module " + std::to_string(info->flags) + ", host "
-				+ std::to_string(host.flags) + "): debug/release, CRT or standard library mismatch";
+				+ std::to_string(host.flags) + "): debug/release, CRT, standard library or EnTT mode mismatch";
 		}
 		return {};
 	}

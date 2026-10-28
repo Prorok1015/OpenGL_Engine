@@ -6,29 +6,34 @@
 #include <cctype>
 #include <fstream>
 #include <shared_mutex>
+#include <chrono>
+#include <thread>
 #include <utility>
 
-res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points)
-	: vfs_resolver(prt, points, write_policy::allow_all())
-{
-}
-
-res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, write_policy policy)
+res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy)
 	: core::res::res_resolver_interface(prt)
-	, m_write_policy(std::move(policy))
 	, watcher(io, [this](fs::path pth) {
 			auto otag = path_mapper(pth);
 			if (otag.has_value() && !is_shadowed(pth)) {
 				notify_resource_changed(otag.value());
 			}
 		})
+	, m_access(access)
+	, m_write_policy(std::move(policy))
 {
 	if (points.empty())
 		return;
 
-	for (auto& root : points) {
-		watcher.add_path(root);
-		entries_stack.push(root);
+	for (const auto& root : points) {
+		// Pinned once: safe_path checks containment against this value, so a root swapped for a symlink later does
+		// not move the mount.
+		std::error_code ec;
+		fs::path pinned = fs::weakly_canonical(root, ec);
+		if (ec) {
+			pinned = root;
+		}
+		watcher.add_path(pinned);
+		entries_stack.push(pinned);
 	}
 	
 	watcher.start();
@@ -64,7 +69,12 @@ res::vfs_resolver::~vfs_resolver()
 
 std::optional<res::tag> res::vfs_resolver::path_mapper(const fs::path& path) const
 {
-	fs::path full_path = fs::absolute(path).lexically_normal();
+	// The mounted roots are canonical, so the path is too: a symlink in either would otherwise break the match.
+	std::error_code ec;
+	fs::path full_path = fs::weakly_canonical(path, ec);
+	if (ec) {
+		full_path = fs::absolute(path).lexically_normal();
+	}
 	auto stack = entries_stack;
 
 	while (!stack.empty()) {
@@ -144,6 +154,11 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 
 bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>& data)
 {
+	if (m_access == mount_access::read_only) {
+		egLOG_WARN("resource", "Rejected store of '{}': protocol '{}' is read-only", tag.view(), protocol);
+		return false;
+	}
+
 	std::optional<fs::path> target_path;
 	if (!entries_stack.empty()) {
 		target_path = safe_path(entries_stack.top(), tag);
@@ -151,10 +166,18 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
 			return false;
 		}
-		const std::string normalized = fs::path{ tag.relative() }.lexically_normal().generic_string();
-		if (!m_write_policy.allows(normalized)) {
+		// Both the tag and the file it resolves to must be writable: a link inside the root may lead to a folder
+		// the policy does not cover.
+		const std::string tag_path = fs::path{ tag.relative() }.lexically_normal().generic_string();
+		const std::string file_path = target_path->lexically_relative(entries_stack.top()).generic_string();
+		if (!m_write_policy.allows(tag_path) || !m_write_policy.allows(file_path)) {
 			egLOG_WARN("resource", "Rejected store of '{}': the path is not writable for this protocol", tag.view());
 			return false;
+		}
+		std::error_code ec;
+		if (!fs::exists(*target_path, ec) && exists_below_top(tag)) {
+			egLOG_WARN("resource", "Store of '{}' creates '{}', which now overrides the file of a lower layer",
+				tag.view(), target_path->string());
 		}
 	}
 
@@ -255,6 +278,24 @@ bool res::vfs_resolver::exists(const::res::tag& tag) const
 	return false;
 }
 
+bool res::vfs_resolver::exists_below_top(const tag& tag) const
+{
+	auto stack = entries_stack;
+	if (stack.empty()) {
+		return false;
+	}
+	stack.pop();
+	while (!stack.empty()) {
+		const auto path = safe_path(stack.top(), tag);
+		std::error_code ec;
+		if (path.has_value() && fs::exists(*path, ec)) {
+			return true;
+		}
+		stack.pop();
+	}
+	return false;
+}
+
 std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const tag& tag) const
 {
 	const std::string_view rel_view = tag.relative();
@@ -279,12 +320,21 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 	}
 
 	std::error_code ec;
-	fs::path canon_root = fs::weakly_canonical(root, ec);
+	// The constructor pinned the root canonical; it is not resolved again.
+	fs::path canon_root = root;
+	// Only the directory is canonicalized: an erase on the io thread may remove the file while
+	// weakly_canonical probes it, which fails the whole call and rejected a valid store.
+	const fs::path joined = canon_root / rel;
+	if (!joined.has_filename()) {
+		return std::nullopt;
+	}
+	fs::path candidate = fs::weakly_canonical(joined.parent_path(), ec);
 	if (ec) {
 		return std::nullopt;
 	}
-	fs::path candidate = fs::weakly_canonical(canon_root / rel, ec);
-	if (ec) {
+	candidate /= joined.filename();
+	// The last component is not resolved above, so a symlink there could point anywhere.
+	if (fs::is_symlink(fs::symlink_status(candidate, ec))) {
 		return std::nullopt;
 	}
 
@@ -339,7 +389,19 @@ void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, c
 				file.write(reinterpret_cast<const char*>(data_ptr->data.data()), data_ptr->data.size());
 			}
 		}
-		fs::rename(tmp_path, target_path);
+		// On Windows a file that was just removed (an erase on this thread) can stay delete-pending while
+		// another handle (watcher, indexer, antivirus) is open on it, and renaming onto it is denied for a moment.
+		std::error_code rename_error;
+		for (int attempt = 0; attempt < 50; ++attempt) {
+			fs::rename(tmp_path, target_path, rename_error);
+			if (!rename_error) {
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		if (rename_error) {
+			throw fs::filesystem_error("rename", tmp_path, target_path, rename_error);
+		}
 
 		// Update file_watcher snapshot so it doesn't treat our own write as an external change.
 		watcher.mark_written(target_path);

@@ -4,7 +4,7 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_context_set.h>
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <chrono>
 #include <format>
 #include <functional>

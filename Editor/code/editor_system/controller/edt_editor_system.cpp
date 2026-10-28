@@ -25,11 +25,14 @@
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
+#include "edt_engine_version_prompt.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/project/prj_project.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -42,12 +45,13 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/window/wnd_window_system.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <format>
 #include <fstream>
 #include <span>
+#include <utility>
 
 namespace {
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
@@ -58,14 +62,14 @@ namespace {
 	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
-	// Where .snk/mcp.json goes; empty: the working directory.
+	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
 	: m_scene_editor(m_state, m_services)
-	, m_world_ctrl(m_state, m_services, res_sys, desc_system_)
-	, m_level_ctrl(m_state, m_services, res_sys, desc_system_, m_scene_editor, m_world_ctrl)
+	, m_world_ctrl(m_state, m_services)
+	, m_level_ctrl(m_state, m_services, m_scene_editor, m_world_ctrl)
 	, desc_system(desc_system_)
 	, m_res(res_sys)
 	, m_rnd(rnd_sys)
@@ -91,6 +95,9 @@ edt::editor_system::~editor_system()
 	if (m_prefab_panel) {
 		m_prefab_panel->set_context(nullptr);
 	}
+	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
+		ctx_mgr->set_on_game_layer_change(nullptr);
+	}
 }
 
 void edt::editor_system::init(ds::app_data_storage& data)
@@ -108,14 +115,16 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_services.ctx_manager = data.require_shared<scn::context_manager>();
 	// The editor scene is authored, not played: only run_in_edit systems tick (transforms, camera, animation preview).
 	m_services.ctx_manager.lock()->level_set().set_mode(ecs::run_mode::edit);
-	m_services.sfactory  = &data.require<ecs::system_factory>();
-	m_services.assembler = &data.require<scn::ecs_assembler>();
+	m_services.base_descs     = &desc_system;
+	m_services.base_resources = &m_res;
+	m_services.base_sfactory  = &data.require<ecs::system_factory>();
+	m_services.base_assembler = &data.require<scn::ecs_assembler>();
 	ASSERT_MSG(!data.has_value<edt::editor_context>(), "editor_system::init called twice: editor_context is already registered");
-	m_context = &data.construct<edt::editor_context>(desc_system, m_res, m_rnd, m_gui, m_services,
+	m_context = &data.construct<edt::editor_context>(m_res, m_rnd, m_gui, m_services,
 		data.require<ds::task_system>(), data.require<cmd::command_registry>(), m_state);
 	m_context_alive = data.require_shared<edt::editor_context>();
 	editor_layer->set_context(*m_context);
-	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs());
+	m_export_dialog = std::make_unique<edt::asset_export_dialog>(*m_asset_exporter, m_context->jobs(), m_res);
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});
@@ -127,10 +136,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Load order, absolute paths and timings in the log text differ between runs and would show in screenshots.
 	create_panels(!(data.has_value<app::deterministic_time>() && data.require<app::deterministic_time>().enabled()));
 	for (auto& renderer : register_desc_component_renderers(m_context->inspectors())) m_registrations.push_back(std::move(renderer));
-	m_inspector_panel->set_desc_system(&desc_system);
+	m_inspector_panel->set_desc_source([this] { return m_services.descs(); });
 	{
 		// One composed view of the instances for the inspector and the hierarchy; edits and pushes invalidate it.
-		auto view_cache = std::make_shared<override_edit::view_cache>(*m_services.assembler, m_state);
+		auto view_cache = std::make_shared<override_edit::view_cache>(m_services, m_state);
 		m_inspector_panel->set_view_cache(view_cache);
 		m_hierarchy_panel->set_view_cache(std::move(view_cache));
 	}
@@ -158,7 +167,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	asset_hooks.open_prefab = [this](const res::tag& tag) { open_prefab_for_edit(tag); };
 	asset_hooks.add_desc_to_scene = [this](const res::tag& tag) {
 		const std::string stem = std::filesystem::path(std::string(tag.relative())).stem().string();
-		m_pending_desc_handle = m_res.require<desc::desc_base>(tag);
+		m_pending_desc_handle = m_services.resources()->require<desc::desc_base>(tag);
 		m_pending_desc_tag = tag;
 		m_pending_desc_key = m_scene_editor.make_unique_key(stem.empty() ? "Asset" : stem);
 		editor_layer->register_implicit("edt/drop_loading", [this] { return poll_pending_desc(); });
@@ -231,7 +240,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.save_level_as = [this](const std::string& rel_path) { return m_state.save_as(res::tag::make(rel_path)).saved; };
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
-		const auto relative = abs_path.lexically_relative(res::resource_system::get_resources_path());
+		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());
 		begin_level_load(res::tag::make(relative.string()));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	};
@@ -239,13 +248,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 #endif
 	hooks.exit = m_exit_action;
-	hooks.resources_path = res::resource_system::get_resources_path();
+	hooks.resources_path = m_res.get_resources_path();
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
 	m_file_menu->attach_window_close(wnd_sys);
 
-	if (const std::string startup_level = cfg_startup_level; !startup_level.empty()) {
+	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
+	const bool project_held = data.has_value<prj::held_project>();
+	if (project_held) {
+		ask_about_held_project(m_context->dialogs(), data.require<prj::held_project>(), m_exit_action);
+	}
+
+	std::string startup_level = cfg_startup_level;
+	if (startup_level.empty() && data.has_value<prj::project_context>()) {
+		startup_level = data.require<prj::project_context>().data.start_scene;
+	}
+	if (!project_held && !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	}
@@ -255,7 +274,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const int port = cfg_agent_server_port;
 		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
 		const std::string project_dir = cfg_project_dir;
-		options.project_dir = project_dir.empty() ? std::filesystem::current_path() : std::filesystem::path(project_dir);
+		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
+			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
 		m_agent_server = std::make_unique<agent_server>(data.require<cmd::command_registry>(), data.require<ds::task_system>(), std::move(options));
 	}
 }
@@ -267,7 +287,7 @@ void edt::editor_system::create_panels(bool capture_log)
 	m_inspector_panel->set_inspector_registry(&m_context->inspectors());
 	m_console_panel = std::make_shared<console_panel>();
 	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
-	m_asset_browser_panel->set_layers(res::resource_system::get_resource_layers());
+	m_asset_browser_panel->set_layers(m_res.get_resource_layers());
 
 	if (!capture_log) return;
 
@@ -317,6 +337,33 @@ void edt::editor_system::wire_controller_callbacks()
 	};
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
+		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
+			on_game_layer_change(change == scn::context_manager::game_layer_change::before);
+		});
+	}
+}
+
+void edt::editor_system::on_game_layer_change(bool before)
+{
+	if (before) {
+		// Nothing of the editor may refer to the old layer once it goes: the preview set, the loads in flight, the level.
+		close_prefab_editor();
+		m_pending_desc_handle = {};
+		m_level_after_layer_change = res::tag{};
+		if (m_loading_level) {
+			m_level_after_layer_change = m_state.level_tag;
+			m_loading_level = false;
+			m_loading_level_handle = {};
+		}
+		m_level_ctrl.detach_from_game_layer();
+		return;
+	}
+	if (scn::context_set* level = m_services.level_set()) {
+		level->set_mode(ecs::run_mode::edit);
+	}
+	m_level_ctrl.attach_to_game_layer();
+	if (m_level_after_layer_change.is_valid()) {
+		begin_level_load(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
 }
 
@@ -373,7 +420,7 @@ bool edt::editor_system::poll_import_pipeline()
 			auto exported_tag = m_export_dialog->get_exported_tag();
 			if (exported_tag.is_valid() && m_state.editor_tag.is_valid()) {
 				std::string name_str = std::string(exported_tag.pure_name());
-				m_pending_desc_handle = m_res.require<desc::desc_base>(exported_tag);
+				m_pending_desc_handle = m_services.resources()->require<desc::desc_base>(exported_tag);
 				m_pending_desc_tag = exported_tag;
 				m_pending_desc_key = m_scene_editor.make_unique_key(name_str.empty() ? "ImportedModel" : name_str);
 				editor_layer->register_implicit("edt/export_add", [this] { return poll_pending_desc(); });
@@ -500,25 +547,22 @@ bool edt::editor_system::poll_import_progress()
 
 void edt::editor_system::begin_level_load(const res::tag& original_tag)
 {
-	if (m_state.editor_tag.is_valid()) {
-		m_res.unwatch(m_state.editor_tag, &m_level_ctrl);
-	}
+	m_level_ctrl.unwatch_level();
 
 	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();
 	m_state.editor_tag = res::tag{ "memory://editor/" + stem + ".desc" };
 	m_state.level_tag = original_tag;
 
-	auto abs_path = res::resource_system::get_resources_path() / std::string(original_tag.relative());
-	std::ifstream in(abs_path, std::ios::binary | std::ios::ate);
-	if (in) {
-		auto size = (std::streamsize)in.tellg();
-		in.seekg(0);
-		std::vector<std::byte> bytes(static_cast<size_t>(size));
-		in.read(reinterpret_cast<char*>(bytes.data()), size);
-		m_res.store(m_state.editor_tag, bytes);
+	// Through the resolver: a level in any res:// layer (a lower content root, the engine) is found.
+	auto& game_resources = *m_services.resources();
+	if (const auto raw = game_resources.fetch_data(original_tag)) {
+		raw->wait();
+		if (raw->is_ready()) {
+			m_services.writable_resources()->store(m_state.editor_tag, raw->data);
+		}
 	}
 
-	m_loading_level_handle = m_res.require<scn::level_desc>(m_state.editor_tag);
+	m_loading_level_handle = game_resources.require<scn::level_desc>(m_state.editor_tag);
 	m_loading_level = true;
 }
 
@@ -566,6 +610,8 @@ bool edt::editor_system::poll_level_load()
 
 bool edt::editor_system::poll_pending_desc()
 {
+	// Dropped when the game layer changed under the load.
+	if (!m_pending_desc_handle.is_valid()) return false;
 	if (m_pending_desc_handle.has_error()) {
 		egLOG_ERROR("Editor/Drop", "Failed to load desc '{}'", m_pending_desc_tag.view());
 		m_pending_desc_handle = {};

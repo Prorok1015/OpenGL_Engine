@@ -80,7 +80,7 @@ bool edt::register_data_protocol(res::resource_system& res, const std::filesyste
 
 	// The vfs resolver reads top-down and stores into the top root only, so the shipped data stays untouched.
 	auto& resolver = res.registrate_resolver<res::vfs_resolver>(DATA_PROTOCOL, std::vector<std::filesystem::path>{ data_path, user_path },
-		res::write_policy{ DATA_PROTOCOL, write_patterns });
+		res::mount_access::read_write, res::write_policy{ DATA_PROTOCOL, write_patterns });
 	resolver.set_resource_changed_callback([&res](const res::tag& tag) { res.signal_changed(tag); });
 	return exists;
 }

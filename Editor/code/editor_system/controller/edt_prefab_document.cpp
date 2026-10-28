@@ -17,10 +17,8 @@
 #include <glm/gtx/quaternion.hpp>
 #include <boost/json.hpp>
 
-edt::prefab_document::prefab_document(editor_services& services, res::resource_system& res, desc::desc_system& desc)
+edt::prefab_document::prefab_document(editor_services& services)
 	: m_services(services)
-	, m_res(res)
-	, m_desc(desc)
 {
 }
 
@@ -31,13 +29,13 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 	}
 
 	auto ctx_mgr = m_services.ctx_manager.lock();
-	if (!ctx_mgr || !m_services.sfactory || !m_services.assembler) {
+	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) {
 		egLOG_ERROR("Editor/PrefabCtx", "Cannot open prefab: services not available");
 		return;
 	}
 
 	// Load prefab resource
-	auto prefab_handle = m_res.require_sync<scn::prefab_desc>(prefab_tag);
+	auto prefab_handle = m_services.resources()->require_sync<scn::prefab_desc>(prefab_tag);
 	if (!prefab_handle.is_ready()) {
 		egLOG_ERROR("Editor/PrefabCtx", "Failed to load prefab '{}'", prefab_tag.view());
 		return;
@@ -45,7 +43,7 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// Load preview template
 	auto template_tag = res::tag::make("templates/prefab_preview.desc");
-	auto template_text = m_res.require_sync<res::text_resource>(template_tag);
+	auto template_text = m_services.resources()->require_sync<res::text_resource>(template_tag);
 	if (!template_text.is_ready()) {
 		egLOG_ERROR("Editor/PrefabCtx", "Failed to load prefab_preview.desc template");
 		return;
@@ -64,10 +62,10 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// Store template as memory resource for desc_system to parse
 	res::tag mem_tag{ "memory://editor/__prefab_preview.desc" };
-	m_res.store(mem_tag, m_desc.serialize_to_bytes(json::value{ world_json }));
-	m_res.signal_changed(mem_tag);
+	m_services.writable_resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ world_json }));
+	m_services.resources()->signal_changed(mem_tag);
 
-	auto world_res = m_res.require_sync<scn::world_desc>(mem_tag);
+	auto world_res = m_services.resources()->require_sync<scn::world_desc>(mem_tag);
 	if (!world_res.is_ready()) {
 		egLOG_ERROR("Editor/PrefabCtx", "Failed to create world desc for prefab preview");
 		return;
@@ -80,14 +78,14 @@ void edt::prefab_document::open(const res::tag& prefab_tag)
 
 	// Assemble template (anchor, light, etc.)
 	entt::entity root = reg.create();
-	m_services.assembler->spawn_from_desc(reg, root, *world_res, CONTEXT_NAME);
+	m_services.assembler()->spawn_from_desc(reg, root, *world_res, CONTEXT_NAME);
 
 	// Inject prefab camera with separate render targets
 	inject_camera(reg);
 
 	// Load the prefab into the world
 	entt::entity prefab_root = reg.create();
-	scn::assemble_prefab(*m_services.assembler, reg, prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
+	scn::assemble_prefab(*m_services.assembler(), reg, prefab_root, *prefab_handle, prefab_handle->get_root().name, prefab_tag);
 
 	m_source_tag = prefab_tag;
 	m_prefab_name = std::string(prefab_tag.pure_name());
@@ -153,7 +151,9 @@ void edt::prefab_document::inject_camera(entt::registry& reg)
 		* orientation
 		* glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, ctrl.distance));
 	reg.emplace<scn::local_transform>(cam, scn::local_transform{ cam_matrix });
-	reg.emplace<scn::world_transform>(cam);
+	// The camera has no parent and nothing emits transform_updated for it until it moves, so the
+	// transform system would leave an identity world matrix (and the render camera at the origin).
+	reg.emplace<scn::world_transform>(cam, scn::world_transform{ cam_matrix });
 	reg.emplace<scn::name_component>(cam, "Prefab Camera");
 	reg.emplace<scn::depth_level>(cam);
 }

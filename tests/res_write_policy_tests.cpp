@@ -1,9 +1,12 @@
 #include <boost/test/unit_test.hpp>
+#include <snk/resource/res_mount_table.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/resolvers/res_write_policy.h>
 #include "test_temp_dir.hpp"
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -128,7 +131,8 @@ BOOST_AUTO_TEST_CASE(Store_AllowedPath_IsWritten)
 {
 	test_util::temp_dir dir{ "write_policy_allowed" };
 	{
-		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() }, edt_policy({ "edt://settings/**" }) };
+		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() },
+			res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
 
 		BOOST_TEST(resolver.store(res::tag{ "edt://settings/layout.ini" }, bytes_of("x")));
 		BOOST_TEST(wait_for_file(dir.path() / "settings" / "layout.ini"));
@@ -139,7 +143,8 @@ BOOST_AUTO_TEST_CASE(Store_PathOutsideThePatterns_IsRefusedAndNothingIsWritten)
 {
 	test_util::temp_dir dir{ "write_policy_refused" };
 	{
-		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() }, edt_policy({ "edt://settings/**" }) };
+		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() },
+			res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
 
 		BOOST_TEST(!resolver.store(res::tag{ "edt://icons/x.png" }, bytes_of("x")));
 		BOOST_TEST(!resolver.store(res::tag{ "edt://settings_evil/x" }, bytes_of("x")));
@@ -150,11 +155,56 @@ BOOST_AUTO_TEST_CASE(Store_PathOutsideThePatterns_IsRefusedAndNothingIsWritten)
 	BOOST_TEST(!std::filesystem::exists(dir.path() / "settings_evil"));
 }
 
+BOOST_AUTO_TEST_CASE(Store_TagInTheWrongCase_IsRefused)
+{
+	test_util::temp_dir dir{ "write_policy_case" };
+	{
+		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() },
+			res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
+
+		BOOST_TEST(!resolver.store(res::tag{ "edt://Settings/a.ini" }, bytes_of("x")));
+		BOOST_TEST(!resolver.store(res::tag{ "edt://SETTINGS/a.ini" }, bytes_of("x")));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Store_PatternsOfAnotherProtocol_DoNotOpenThisOne)
+{
+	test_util::temp_dir dir{ "write_policy_other_protocol" };
+	{
+		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() },
+			res::mount_access::read_write, edt_policy({ "res://**", "engine://settings/**" }) };
+
+		BOOST_TEST(!resolver.store(res::tag{ "edt://settings/a.ini" }, bytes_of("x")));
+	}
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(Store_ThroughALinkIntoAFolderTheListDoesNotCover_IsRefused)
+{
+	test_util::temp_dir dir{ "write_policy_link" };
+	dir.write("icons/real.txt", "shipped");
+	dir.write("settings/inside/real.txt", "mine");
+	std::filesystem::create_symlink("../icons/real.txt", dir.path() / "settings" / "to_icons.txt");
+	std::filesystem::create_symlink("inside/real.txt", dir.path() / "settings" / "to_inside.txt");
+	{
+		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() },
+			res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
+
+		BOOST_TEST(!resolver.store(res::tag{ "edt://settings/to_icons.txt" }, bytes_of("overwritten")));
+		BOOST_TEST(resolver.store(res::tag{ "edt://settings/to_inside.txt" }, bytes_of("updated")));
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
+	std::ifstream shipped(dir.path() / "icons" / "real.txt");
+	const std::string content{ std::istreambuf_iterator<char>(shipped), std::istreambuf_iterator<char>() };
+	BOOST_TEST(content == "shipped");
+}
+#endif
+
 BOOST_AUTO_TEST_CASE(Store_ReadOnlyPolicy_RefusesEverythingButStillResolvesFiles)
 {
 	test_util::temp_dir dir{ "write_policy_read_only" };
 	dir.write("a.txt", "shipped");
-	res::vfs_resolver resolver{ "engine", std::vector<std::filesystem::path>{ dir.path() }, res::write_policy::read_only() };
+	res::vfs_resolver resolver{ "engine", std::vector<std::filesystem::path>{ dir.path() }, res::mount_access::read_write, res::write_policy::read_only() };
 
 	BOOST_TEST(!resolver.store(res::tag{ "engine://b.txt" }, bytes_of("x")));
 	BOOST_TEST(resolver.exists(res::tag{ "engine://a.txt" }));

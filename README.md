@@ -85,7 +85,7 @@ OpenGL_Engine/
 │   │   ├── resource/               # VFS, async loading, caching, adapters
 │   │   ├── desc/                   # Descriptor system (.desc JSON files)
 │   │   ├── input/                  # Low-level input events
-│   │   ├── config/                 # Macro-based configuration (CFG_VAR_*)
+│   │   ├── config/                 # Configuration: CFG_VAR_* (base-only cfg_variables.h), read-only cfg_api.h
 │   │   ├── application/            # App base class, module lifecycle
 │   │   ├── windows/                # GLFW window management
 │   │   └── video/drivers/          # Graphics API abstraction (RHI)
@@ -204,7 +204,7 @@ Hierarchy: `level_desc` → `world_desc` → `prefab_desc` → `prefab_node` →
 
 ### Configuration System
 
-Macro-based tunable parameters:
+Macro-based tunable parameters, defined by the engine and the editor (`<snk/config/cfg_variables.h>`, base-only, not in the SDK; a game module reads them through `gs::module_context::config()`, a read-only `cfg::config_view` from `<snk/config/cfg_api.h>`):
 
 ```cpp
 CFG_VAR_DEF_INT(my_var, "path.to.var", 42);

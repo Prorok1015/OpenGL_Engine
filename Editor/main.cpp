@@ -1,11 +1,12 @@
 #include <snk/application/application.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/core/core_module.h>
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
+#include <snk/project/prj_project.h>
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
@@ -66,6 +67,18 @@ int main(int argc, char* argv[])
 
 		app::application editor;
 		result = editor.run(app_storage);
+		// Read before shutdown, which removes it.
+		if (app_storage.has_value<prj::held_project>()) {
+			const auto& held = app_storage.require<prj::held_project>();
+			if (const int code = prj::exit_code_for(held); code != 0) {
+				egLOG_ERROR("app", "project '{}' was not opened: its engine version {} does not match this editor",
+					held.name, prj::to_string(held.engine));
+				result = code;
+			}
+		}
+	} catch (const prj::project_error& e) {
+		egLOG_ERROR("app", "{}", e.what());
+		result = prj::k_exit_project_error;
 	} catch (const std::exception& e) {
 		egLOG_ERROR("app", "fatal error: {}", e.what());
 		result = -1;

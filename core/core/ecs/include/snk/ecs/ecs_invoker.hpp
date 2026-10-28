@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/ecs/ecs_entt_abi.h>
 #include <snk/ecs/ecs_traits.hpp>
 #include <entt/entt.hpp>
 #include <functional>

@@ -3,9 +3,6 @@
 #include <functional>
 #include <entt/fwd.hpp>
 
-namespace res { class resource_system; }
-namespace desc { class desc_system; }
-
 namespace edt
 {
 	class scene_document;
@@ -14,7 +11,7 @@ namespace edt
 	class world_controller
 	{
 	public:
-		world_controller(scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc);
+		world_controller(scene_document& state, editor_services& services);
 
 		// False when it could not switch (no level, or the world is not in it); the state is left as it was then.
 		bool switch_to_world(int idx);
@@ -34,7 +31,5 @@ namespace edt
 	private:
 		scene_document& m_state;
 		editor_services& m_services;
-		res::resource_system& m_res;
-		desc::desc_system& m_desc;
 	};
 }

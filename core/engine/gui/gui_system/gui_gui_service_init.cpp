@@ -7,7 +7,30 @@
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/application/app_deterministic_time.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_binary.h>
 #include <filesystem>
+#include <vector>
+
+namespace {
+// The shipped UI font (core/res, base layer). Not an error when it is absent: the backend keeps the built-in
+// ImGui font, so the editor starts and looks as it did before the font was added.
+std::vector<std::byte> load_ui_font_bytes(res::resource_system& resources)
+{
+	const res::tag font_tag{ "res://fonts/NotoSans-Regular.ttf" };
+	if (!resources.exists(font_tag)) {
+		egLOG_WARN("gui", "UI font '{}' not found, using the built-in ImGui font (no Cyrillic)", font_tag.view());
+		return {};
+	}
+	auto font = resources.require_sync<res::binary_resource>(font_tag).get_sync();
+	if (!font) {
+		egLOG_WARN("gui", "UI font '{}' failed to load, using the built-in ImGui font (no Cyrillic)", font_tag.view());
+		return {};
+	}
+	return font->bytes();
+}
+}
 
 void engine::gui::gui_init(ds::app_data_storage& data)
 {
@@ -20,6 +43,7 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	ASSERT_MSG(driver, "gui_init: the render system has no driver");
 	auto& backend = data.construct<::gui::gl::gl_imgui_backend>(*driver);
 	backend.set_dpi_scale(wnd_system.get_active_content_scale());
+	backend.set_ui_font_bytes(load_ui_font_bytes(data.require<res::resource_system>()));
 	backend.init();
 	const auto is_exist = std::filesystem::exists(backend.get_settings_filename());
 	backend.set_initial_layout_by_default(!is_exist);

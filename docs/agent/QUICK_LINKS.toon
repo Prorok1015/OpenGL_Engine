@@ -44,7 +44,8 @@ Logging / Assert:
   → core/core/common/include/snk/common/engine_assert.h (ASSERT_MSG/ASSERT_FAIL, _DEBUG only)
 
 Configuration:
-  → core/core/config/include/snk/config/cfg_api.h (config API)
+  → core/core/config/include/snk/config/cfg_api.h (read-only cfg::config_view, what a game module gets)
+  → core/core/config/include_base/snk/config/cfg_variables.h (cfg::variable, CFG_VAR_*: base-only, not in the SDK)
 
 Application:
   → core/core/application/include/snk/application/app_module_interface.h (module_interface lifecycle, depends_on)

@@ -24,6 +24,8 @@
 
 namespace scn
 {
+	class scene_layer;
+
 	// A group of contexts stepped together: one mode, one seed, one phase order. Owned by the
 	// context_manager (the level is the set "level").
 	// A context keeps its address until it is destroyed.
@@ -42,6 +44,10 @@ namespace scn
 
 		const std::string& name() const { return m_name; }
 		const res::tag& tag() const { return m_tag; }
+		// The layer whose worlds these are (MODULE_LAYER.md); null: the base's. Set by the context_manager before
+		// the first context: a context takes the layer's meta context when it is created.
+		scene_layer* layer() const { return m_layer; }
+		void set_layer(scene_layer* layer) { m_layer = layer; }
 		// An inactive set is skipped by context_manager::update.
 		bool active() const { return m_active; }
 		void set_active(bool active) { m_active = active; }
@@ -175,6 +181,7 @@ namespace scn
 
 		std::string m_name;
 		res::tag m_tag;
+		scene_layer* m_layer = nullptr;
 		std::vector<std::string> m_desc_world_names;
 		bool m_active = true;
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;

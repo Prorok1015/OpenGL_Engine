@@ -14,6 +14,8 @@ namespace components {
 
 	void editor_init(ds::app_data_storage& data)
 	{
+		// The base services, for the editor's own tools and assets; the game data goes through the game layer at the
+		// moment of use (editor_services), since a game module replaces that layer.
 		auto& desc_system = data.require<desc::desc_system>();
 		auto& res_sys     = data.require<res::resource_system>();
 		auto& rnd_sys     = data.require<rnd::render_system>();

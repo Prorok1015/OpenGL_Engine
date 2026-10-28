@@ -1,4 +1,4 @@
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -300,6 +300,12 @@ engine::log_sink_handle engine::add_log_sink(log_callback_t callback)
 	next->push_back(added);
 	s_listeners = std::move(next);
 	return log_sink_handle(added->id);
+}
+
+std::size_t engine::log_sink_count()
+{
+	std::lock_guard lock(s_listeners_mutex);
+	return s_listeners ? s_listeners->size() : 0;
 }
 
 void engine::remove_log_sink(std::uint64_t id)

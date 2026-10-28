@@ -168,7 +168,16 @@ namespace desc
 	class SNK_API schema_registry
 	{
 	public:
-		// Both add functions return nullptr and keep the registry unchanged when the name (or the id) is taken.
+		schema_registry() = default;
+		// A layer over `parent` (MODULE_LAYER.md): lookups fall through to it, its names and ids cannot be
+		// added here, and add/remove/set_version change only this layer.
+		explicit schema_registry(const schema_registry* parent)
+			: m_parent(parent)
+		{
+		}
+
+		// Both add functions return nullptr and keep the registry unchanged when the name (or the id) is taken,
+		// here or in the parent.
 		const type_schema* add(type_schema schema);
 		bool remove(std::string_view name);
 		// Keeps a stored schema in step with current_version(name); false if there is no such schema.
@@ -181,10 +190,12 @@ namespace desc
 		bool remove_enum(std::string_view name);
 		const enum_schema* find_enum(std::string_view name) const;
 
+		// This layer's own schemas; type_names() lists the parent's too.
 		std::size_t size() const { return m_types.size(); }
 		std::vector<std::string> type_names() const;
 
 	private:
+		const schema_registry* m_parent = nullptr;
 		// node-based maps: returned pointers stay valid until the entry is removed
 		std::unordered_map<std::string, type_schema> m_types;
 		std::unordered_map<std::uint64_t, std::string> m_names_by_id;
