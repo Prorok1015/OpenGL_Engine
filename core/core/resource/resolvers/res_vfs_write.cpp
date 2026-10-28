@@ -513,18 +513,42 @@ namespace {
 			static_cast<int>(expected->size()), TRUE) == CSTR_EQUAL;
 	}
 
+	// NtSetInformationFile (wdm.h), looked up rather than declared: winternl.h does not have it.
+	using set_information_file_t = NTSTATUS(NTAPI*)(HANDLE, IO_STATUS_BLOCK*, void*, ULONG, ULONG);
+	constexpr ULONG k_file_rename_information = 10;
+
+	set_information_file_t set_information_file()
+	{
+		static const auto function = reinterpret_cast<set_information_file_t>(
+			reinterpret_cast<void*>(::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile")));
+		return function;
+	}
+
 	// Renames the open file to `name` inside the folder `folder` holds, replacing what is there; a link at the target
-	// is replaced itself.
+	// is replaced itself. Not SetFileInformationByHandle: it turns a relative name into a path below the current
+	// directory, which together with RootDirectory is an invalid parameter.
 	bool rename_to(HANDLE file, HANDLE folder, const fs::path& name)
 	{
+		const auto set_information = set_information_file();
+		if (!set_information) {
+			::SetLastError(ERROR_PROC_NOT_FOUND);
+			return false;
+		}
 		const std::wstring& text = name.native();
+		// FILE_RENAME_INFORMATION has FILE_RENAME_INFO's layout.
 		std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + text.size() * sizeof(wchar_t));
 		auto* info = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
 		info->ReplaceIfExists = TRUE;
 		info->RootDirectory = folder;
 		info->FileNameLength = static_cast<DWORD>(text.size() * sizeof(wchar_t));
 		std::memcpy(info->FileName, text.data(), text.size() * sizeof(wchar_t));
-		return ::SetFileInformationByHandle(file, FileRenameInfo, info, static_cast<DWORD>(buffer.size())) != 0;
+		IO_STATUS_BLOCK status_block{};
+		const NTSTATUS status = set_information(file, &status_block, info, static_cast<ULONG>(buffer.size()), k_file_rename_information);
+		if (status < 0) {
+			::SetLastError(::RtlNtStatusToDosError(status));
+			return false;
+		}
+		return true;
 	}
 
 }
