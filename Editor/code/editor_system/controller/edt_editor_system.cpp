@@ -61,6 +61,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -128,7 +129,7 @@ namespace {
 			if (std::filesystem::is_regular_file(installed / "snake_sdkConfig.cmake", ec)) return installed;
 		}
 #ifdef SNK_BUILD_TREE_SDK_DIR
-		return std::filesystem::path(SNK_BUILD_TREE_SDK_DIR);
+		return std::filesystem::path(std::u8string_view{ SNK_BUILD_TREE_SDK_DIR });
 #else
 		return {};
 #endif

@@ -51,6 +51,13 @@ namespace edt
 	std::optional<std::filesystem::path> parse_vswhere_output(const std::vector<std::string>& lines);
 	// The "NAME=value" lines of cmd's `set`; banners, blank lines and cmd's hidden "=C:=C:\dir" entries are dropped.
 	std::vector<std::string> parse_set_output(const std::vector<std::string>& lines);
+	// What `cmd /u` writes for `set`: UTF-16LE bytes as read (raw_output), decoded and parsed like parse_set_output.
+	std::vector<std::string> parse_set_output_utf16le(std::string_view bytes);
+	// A leading BOM is dropped, a last odd byte (output cut short) too; an unpaired surrogate becomes U+FFFD.
+	std::string utf16le_to_utf8(std::string_view bytes);
+	// The text for the person when `path` cannot be handed to cmd.exe: %VAR% (and !VAR!) expand even inside quotes,
+	// and & | < > ^ would split or redirect the command if the quoting ever slipped. Nullopt when it is safe.
+	std::optional<std::string> cmd_unsafe_path_error(const std::filesystem::path& path);
 
 	std::optional<std::string> variable_of(const std::vector<std::string>& environment, std::string_view name,
 		env_flavor flavor = k_native_env);

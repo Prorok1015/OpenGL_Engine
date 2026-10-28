@@ -38,4 +38,5 @@ endif()
 # snk::mcp_server: the agent server of the editor (edt_agent_server, edt_mcp_bridge_host). Nothing under core/ links it.
 target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp} PRIVATE snk::mcp_server)
 # Build > Build Game: the SDK of this build tree (snake_sdkConfig.cmake, exported there) when the editor is not installed.
-target_compile_definitions(${PROJECT_NAME} PRIVATE "SNK_BUILD_TREE_SDK_DIR=\"${CMAKE_BINARY_DIR}/snake_sdk\"")
+# A u8 literal: the build path may hold non-ASCII characters, and MSVC without /utf-8 would recode a narrow one.
+target_compile_definitions(${PROJECT_NAME} PRIVATE "SNK_BUILD_TREE_SDK_DIR=u8\"${CMAKE_BINARY_DIR}/snake_sdk\"")

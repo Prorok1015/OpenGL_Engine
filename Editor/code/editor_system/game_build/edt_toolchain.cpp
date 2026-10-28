@@ -55,6 +55,25 @@ namespace {
 		return nullptr;
 	}
 
+	void append_utf8(std::string& out, char32_t c)
+	{
+		if (c < 0x80) {
+			out += static_cast<char>(c);
+		} else if (c < 0x800) {
+			out += static_cast<char>(0xC0 | (c >> 6));
+			out += static_cast<char>(0x80 | (c & 0x3F));
+		} else if (c < 0x10000) {
+			out += static_cast<char>(0xE0 | (c >> 12));
+			out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+			out += static_cast<char>(0x80 | (c & 0x3F));
+		} else {
+			out += static_cast<char>(0xF0 | (c >> 18));
+			out += static_cast<char>(0x80 | ((c >> 12) & 0x3F));
+			out += static_cast<char>(0x80 | ((c >> 6) & 0x3F));
+			out += static_cast<char>(0x80 | (c & 0x3F));
+		}
+	}
+
 	bool is_file(const fs::path& path)
 	{
 		std::error_code ec;
@@ -110,19 +129,25 @@ namespace {
 		const fs::path vcvars = vs / "VC" / "Auxiliary" / "Build" / "vcvars64.bat";
 		if (!is_file(vcvars)) return no_vs(std::format("'{}' has no VC\\Auxiliary\\Build\\vcvars64.bat", utf8_of(vs)));
 
+		if (auto unsafe = edt::cmd_unsafe_path_error(vcvars)) return std::move(*unsafe);
+
 		std::string comspec = own_variable("ComSpec");
 		if (comspec.empty()) comspec = own_variable("SystemRoot") + "\\System32\\cmd.exe";
 		// The command after /c starts with an unquoted word, so cmd strips no quote (/s rule): the quotes that
 		// quote_windows_arg puts around the path of vcvars64.bat (it has spaces) reach `call` as they are.
-		std::vector<std::string> lines;
-		const auto result = run(path_of(comspec), { "/d", "/s", "/c", "call", utf8_of(vcvars), ">nul", "&&", "set" }, {},
-			[&lines](std::string_view line) { lines.emplace_back(line); }, stop);
+		// /u: `set` writes UTF-16LE, not the OEM code page, so non-ASCII values (C:\Users\<name>) survive. Everything
+		// vcvars64.bat prints goes to nul, or its 8-bit text would break the UTF-16 stream.
+		platform::process_options raw;
+		raw.raw_output = true;
+		std::string output;
+		const auto result = run(path_of(comspec), { "/u", "/d", "/v:off", "/s", "/c", "call", utf8_of(vcvars), ">nul", "2>&1",
+			"&&", "set" }, raw, [&output](std::string_view chunk) { output.append(chunk); }, stop);
 		if (result.cancelled) return std::string{ "cancelled" };
 		if (!result.error.empty() || result.exit_code != 0) {
 			return std::format("The Visual Studio environment could not be set up ('{}' failed: {})", utf8_of(vcvars),
 				result.error.empty() ? std::format("exit code {}", result.exit_code) : result.error);
 		}
-		std::vector<std::string> environment = edt::parse_set_output(lines);
+		std::vector<std::string> environment = edt::parse_set_output_utf16le(output);
 		if (!edt::variable_of(environment, "PATH", edt::env_flavor::windows)) {
 			return std::format("The Visual Studio environment could not be set up ('{}' printed no PATH)", utf8_of(vcvars));
 		}
@@ -205,6 +230,50 @@ std::vector<std::string> edt::parse_set_output(const std::vector<std::string>& l
 		if (name_ok) out.emplace_back(line);
 	}
 	return out;
+}
+
+std::string edt::utf16le_to_utf8(std::string_view bytes)
+{
+	const auto unit = [bytes](std::size_t index) {
+		return static_cast<char32_t>(static_cast<unsigned char>(bytes[2 * index])
+			| (static_cast<unsigned>(static_cast<unsigned char>(bytes[2 * index + 1])) << 8));
+	};
+	const std::size_t count = bytes.size() / 2;
+	std::string out;
+	out.reserve(bytes.size());
+	std::size_t i = count > 0 && unit(0) == 0xFEFF ? 1 : 0;
+	for (; i < count; ++i) {
+		char32_t c = unit(i);
+		if (c >= 0xD800 && c <= 0xDBFF && i + 1 < count && unit(i + 1) >= 0xDC00 && unit(i + 1) <= 0xDFFF) {
+			c = static_cast<char32_t>(0x10000 + ((c - 0xD800) << 10) + (unit(i + 1) - 0xDC00));
+			++i;
+		} else if (c >= 0xD800 && c <= 0xDFFF) {
+			c = 0xFFFD;
+		}
+		append_utf8(out, c);
+	}
+	return out;
+}
+
+std::vector<std::string> edt::parse_set_output_utf16le(std::string_view bytes)
+{
+	const std::string text = utf16le_to_utf8(bytes);
+	std::vector<std::string> lines;
+	std::size_t start = 0;
+	while (start < text.size()) {
+		const std::size_t end = std::min(text.find('\n', start), text.size());
+		lines.push_back(text.substr(start, end - start));
+		start = end + 1;
+	}
+	return parse_set_output(lines);
+}
+
+std::optional<std::string> edt::cmd_unsafe_path_error(const fs::path& path)
+{
+	const std::string text = utf8_of(path);
+	if (text.find_first_of("&|<>^%!") == std::string::npos) return std::nullopt;
+	return std::format("The Visual Studio path '{}' contains a character that cmd.exe interprets (& | < > ^ % !): "
+		"use an installation in a folder without them (build/vs_path)", text);
 }
 
 std::optional<std::string> edt::variable_of(const std::vector<std::string>& environment, std::string_view name, env_flavor flavor)

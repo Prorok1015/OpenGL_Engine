@@ -1,15 +1,45 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_toolchain.h"
+#include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The pure parts of the game build's toolchain discovery (#434): vswhere and `set` output, PATH handling.
 
 namespace fs = std::filesystem;
 using edt::env_flavor;
+
+namespace {
+
+// What cmd /u writes: UTF-16LE code units, byte by byte.
+std::string utf16le(std::u16string_view text)
+{
+	std::string out;
+	for (const char16_t unit : text) {
+		out += static_cast<char>(unit & 0xFF);
+		out += static_cast<char>(unit >> 8);
+	}
+	return out;
+}
+
+std::string utf8(std::u8string_view text)
+{
+	return std::string(text.begin(), text.end());
+}
+
+fs::path unique_temp_dir(std::string_view name)
+{
+	static int counter = 0;
+	return fs::temp_directory_path() / std::format("snk_{}_{}_{}", name,
+		std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
+}
+
+}
 
 BOOST_AUTO_TEST_SUITE(EdtToolchainTests)
 
@@ -104,7 +134,7 @@ BOOST_AUTO_TEST_CASE(SetVariable_ReplacesOrAppends)
 
 BOOST_AUTO_TEST_CASE(FindOnPath_LooksInTheGivenPathOnly)
 {
-	const fs::path dir = fs::temp_directory_path() / "snk_edt_toolchain_tests";
+	const fs::path dir = unique_temp_dir("edt_toolchain_tests");
 	fs::remove_all(dir);
 	fs::create_directories(dir / "a");
 	fs::create_directories(dir / "b");
@@ -119,6 +149,54 @@ BOOST_AUTO_TEST_CASE(FindOnPath_LooksInTheGivenPathOnly)
 	BOOST_CHECK(!edt::find_on_path(env, "cmake").has_value());
 	BOOST_CHECK(!edt::find_on_path({}, "ninja").has_value());
 	fs::remove_all(dir);
+}
+
+BOOST_AUTO_TEST_CASE(SetOutputUtf16_KeepsCyrillicValues)
+{
+	// A Cyrillic user name: cmd /u gives the values exactly, where the OEM code page would have lost them.
+	const std::string bytes = utf16le(u"\uFEFFALLUSERSPROFILE=C:\\ProgramData\r\n"
+		u"Path=C:\\VS\\bin;C:\\Users\\\u0418\u0432\u0430\u043d\\tools\r\n"
+		u"USERPROFILE=C:\\Users\\\u0418\u0432\u0430\u043d\r\n"
+		u"=C:=C:\\\r\n");
+	const auto env = edt::parse_set_output_utf16le(bytes);
+	BOOST_TEST((env == std::vector<std::string>{
+		"ALLUSERSPROFILE=C:\\ProgramData",
+		utf8(u8"Path=C:\\VS\\bin;C:\\Users\\\u0418\u0432\u0430\u043d\\tools"),
+		utf8(u8"USERPROFILE=C:\\Users\\\u0418\u0432\u0430\u043d") }));
+}
+
+BOOST_AUTO_TEST_CASE(SetOutputUtf16_TruncatedAndOddInput)
+{
+	BOOST_CHECK(edt::utf16le_to_utf8({}).empty());
+	BOOST_CHECK(edt::utf16le_to_utf8(std::string(1, 'A')).empty());
+	// A last odd byte is dropped.
+	BOOST_CHECK_EQUAL(edt::utf16le_to_utf8(utf16le(u"AB") + "C"), "AB");
+	// A surrogate pair is one character; one cut off (or unpaired) is U+FFFD.
+	BOOST_CHECK_EQUAL(edt::utf16le_to_utf8(utf16le(u"\U0001F600")), utf8(u8"\U0001F600"));
+	BOOST_CHECK_EQUAL(edt::utf16le_to_utf8(utf16le(std::u16string(1, char16_t{ 0xD83D }))), utf8(u8"\uFFFD"));
+	BOOST_CHECK_EQUAL(edt::utf16le_to_utf8(utf16le(std::u16string{ char16_t{ 0xDE00 }, u'x' })), utf8(u8"\uFFFDx"));
+	// Output cut in the middle of a variable: what came whole is kept.
+	const std::string bytes = utf16le(u"A=1\r\nB=2\r\nC=");
+	const auto env = edt::parse_set_output_utf16le(std::string_view(bytes).substr(0, bytes.size() - 1));
+	BOOST_TEST((env == std::vector<std::string>{ "A=1", "B=2" }));
+}
+
+BOOST_AUTO_TEST_CASE(SetOutputUtf16_AMultiLineValueDoesNotSpoilTheNextVariables)
+{
+	const auto env = edt::parse_set_output_utf16le(utf16le(u"A=first\r\nsecond line of A\r\n  third\r\nB=2\r\n"));
+	BOOST_TEST((env == std::vector<std::string>{ "A=first", "B=2" }));
+}
+
+BOOST_AUTO_TEST_CASE(CmdUnsafePath_RefusesCmdMetacharacters)
+{
+	BOOST_CHECK(!edt::cmd_unsafe_path_error(fs::path("C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools")).has_value());
+	for (const char* bad : { "C:\\VS&calc", "C:\\a|b", "C:\\a<b", "C:\\a>b", "C:\\a^b", "C:\\%TEMP%\\VS", "C:\\VS!x!" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			const auto error = edt::cmd_unsafe_path_error(fs::path(bad));
+			BOOST_REQUIRE(error.has_value());
+			BOOST_CHECK(error->find(bad) != std::string::npos);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

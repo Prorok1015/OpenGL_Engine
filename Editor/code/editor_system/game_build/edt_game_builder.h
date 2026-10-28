@@ -73,6 +73,8 @@ namespace edt
 
 	// "[n/m]" at the start of a ninja line.
 	std::optional<std::pair<int, int>> parse_ninja_progress(std::string_view line);
+	// The setup error for an SDK dir without snake_sdkConfig.cmake (`tried` empty: none was found at all).
+	std::string sdk_not_found_message(const std::filesystem::path& tried);
 	// <name>.dll on Windows, lib<name>.so elsewhere (what the template's add_library(SHARED) produces).
 	std::string module_file_name(std::string_view module);
 

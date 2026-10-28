@@ -95,6 +95,16 @@ void platform::detail::take_lines(std::string& pending, std::string_view chunk, 
 	pending.erase(0, start);
 }
 
+void platform::detail::take_output(bool raw, std::string& pending, std::string_view chunk, bool end_of_output,
+	const std::function<void(std::string_view line)>& on_line)
+{
+	if (!raw) {
+		take_lines(pending, chunk, end_of_output, on_line);
+	} else if (!chunk.empty()) {
+		on_line(chunk);
+	}
+}
+
 namespace
 {
 	template <class Char>
@@ -428,9 +438,9 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		char buffer[k_read_size];
 		DWORD got = 0;
 		while (ReadFile(read_end.get(), buffer, static_cast<DWORD>(sizeof(buffer)), &got, nullptr)) {
-			detail::take_lines(pending, std::string_view{ buffer, got }, false, on_line);
+			detail::take_output(options.raw_output, pending, std::string_view{ buffer, got }, false, on_line);
 		}
-		detail::take_lines(pending, {}, true, on_line);
+		detail::take_output(options.raw_output, pending, {}, true, on_line);
 		WaitForSingleObject(process_handle.get(), INFINITE);
 		result.cancelled = stop.stop_requested();
 	}
@@ -704,12 +714,12 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		}
 		const ssize_t got = ::read(read_end.get(), buffer, sizeof(buffer));
 		if (got > 0) {
-			detail::take_lines(pending, std::string_view{ buffer, static_cast<std::size_t>(got) }, false, on_line);
+			detail::take_output(options.raw_output, pending, std::string_view{ buffer, static_cast<std::size_t>(got) }, false, on_line);
 		} else if (got == 0 || (errno != EINTR && errno != EAGAIN)) {
 			pipe_open = false;
 		}
 	}
-	detail::take_lines(pending, {}, true, on_line);
+	detail::take_output(options.raw_output, pending, {}, true, on_line);
 
 	process_result result;
 	result.cancelled = stop.stop_requested();

@@ -39,6 +39,9 @@ namespace platform
 		std::filesystem::path working_dir;
 		// The child's whole environment ("NAME=value" each) when set; the parent's environment otherwise.
 		std::optional<std::vector<std::string>> environment;
+		// `on_line` gets the output bytes in the chunks they were read in, not split into lines: for output that is
+		// not 8-bit text (cmd /u writes UTF-16LE, where a 0x0A byte is not always a line break).
+		bool raw_output = false;
 	};
 
 	struct process_result
@@ -74,6 +77,9 @@ namespace platform
 		// Appends `chunk` to `pending`, hands every complete line in it to `on_line` and keeps the rest; at the end of
 		// the output the rest too, when there is any. Pure, so it is tested on every platform.
 		SNK_API void take_lines(std::string& pending, std::string_view chunk, bool end_of_output,
+			const std::function<void(std::string_view line)>& on_line);
+		// take_lines, or with `raw` every non-empty chunk as it is (process_options::raw_output). Pure.
+		SNK_API void take_output(bool raw, std::string& pending, std::string_view chunk, bool end_of_output,
 			const std::function<void(std::string_view line)>& on_line);
 	}
 }

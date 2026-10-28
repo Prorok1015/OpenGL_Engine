@@ -52,8 +52,7 @@ namespace {
 		edt::game_build_result result;
 		std::error_code ec;
 		if (in.sdk_dir.empty() || !fs::is_regular_file(in.sdk_dir / "snake_sdkConfig.cmake", ec)) {
-			result.setup_error = std::format("The engine SDK was not found: no snake_sdkConfig.cmake in '{}' (set build/sdk_dir)",
-				utf8_of(in.sdk_dir));
+			result.setup_error = edt::sdk_not_found_message(in.sdk_dir);
 			return result;
 		}
 
@@ -131,6 +130,14 @@ std::optional<std::pair<int, int>> edt::parse_ninja_progress(std::string_view li
 	return std::pair{ done, total };
 }
 
+std::string edt::sdk_not_found_message(const fs::path& tried)
+{
+	constexpr std::string_view order = "looked up in order: cfg build/sdk_dir, <editor>/../lib/cmake/snake_sdk, "
+		"the engine build tree's snake_sdk";
+	if (tried.empty()) return std::format("The engine SDK (snake_sdkConfig.cmake) was not found; {}", order);
+	return std::format("The engine SDK was not found: no snake_sdkConfig.cmake in '{}'; {}", utf8_of(tried), order);
+}
+
 std::string edt::module_file_name(std::string_view module)
 {
 #ifdef _WIN32
@@ -166,51 +173,63 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 		tooltip = "Open a project first";
 	}
 
-	m_action = actions.add({ .id = k_action_id, .label = "Build Game", .menu_path = "Build", .shortcut = "Ctrl+B",
-		.disabled_tooltip = std::move(tooltip),
-		.execute = [this](const json::value& args) {
-			if (is_building()) return action_result::failure("busy", "A build is already running");
-			if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
-			const game_project project = *m_options.project();
+	cmd::command_desc command;
+	command.id = k_action_id;
+	command.summary = "Build Game";
+	command.args_schema = args_schema();
+	command.result_schema = result_schema();
+	command.expose_as_tool = true;
+	command.mutates = true;
+	// It runs the project's CMake code, i.e. anything: an agent never gets it without the person's approval
+	// (edt::agent_may_use refuses any risk; the highest level, for when approvals exist).
+	command.risk = cmd::danger::deny_by_default;
+	command.enabled = [this] { return disabled_reason().empty(); };
+	command.invoke = [this](const cmd::call& request) {
+		const json::value& args = request.args;
+		if (is_building()) return action_result::failure("busy", "A build is already running");
+		if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
+		const game_project project = *m_options.project();
 
-			build_input input;
-			input.root = project.root;
-			input.modules = project.modules;
-			input.sdk_dir = m_options.sdk_dir;
-			input.configuration = m_options.default_configuration;
-			if (const json::value* chosen = args.as_object().if_contains("configuration")) input.configuration = std::string(chosen->as_string());
-			input.run = m_options.run;
-			input.find_toolchain = m_options.find_toolchain;
-			m_configuration = input.configuration;
+		build_input input;
+		input.root = project.root;
+		input.modules = project.modules;
+		input.sdk_dir = m_options.sdk_dir;
+		input.configuration = m_options.default_configuration;
+		if (const json::value* chosen = args.as_object().if_contains("configuration")) input.configuration = std::string(chosen->as_string());
+		input.run = m_options.run;
+		input.find_toolchain = m_options.find_toolchain;
+		m_configuration = input.configuration;
 
-			m_problems.clear("build");
-			egLOG_INFO("editor/build", "building the game module ({}) in '{}'", input.configuration, utf8_of(project.root / "code"));
-			m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
-				[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
-				[this](ds::task_result<game_build_result>& result) {
-					if (!result.ok()) {
-						egLOG_WARN("editor/build", "the build job failed: {}", result.error);
-						return;
-					}
-					finish(*result.value);
-				});
-			if (m_options.show_progress) {
-				m_spinner_t = 0.f;
-				m_options.show_progress("edt/build_game", [this, alive = std::weak_ptr<int>(m_alive)] {
-					return !alive.expired() && draw_progress();
-				});
-			}
-			return action_result::success(json::object{ { "started", true }, { "job", m_job } });
-		},
-		.args_schema = args_schema(),
-		.result_schema = result_schema(),
-		.expose_as_tool = true,
-		.mutates = true,
-		.activate = [this, &actions] {
-			const auto outcome = actions.invoke(k_action_id, json::object{});
-			if (!outcome.ok) m_dialogs.message(message_level::warning, std::format("The game was not built: {}", outcome.error));
-		},
-		.enabled = [this] { return disabled_reason().empty(); } });
+		m_problems.clear("build");
+		egLOG_INFO("editor/build", "building the game module ({}) in '{}'", input.configuration, utf8_of(project.root / "code"));
+		m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
+			[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
+			[this](ds::task_result<game_build_result>& result) {
+				if (!result.ok()) {
+					egLOG_WARN("editor/build", "the build job failed: {}", result.error);
+					return;
+				}
+				finish(*result.value);
+			});
+		if (m_options.show_progress) {
+			m_spinner_t = 0.f;
+			m_options.show_progress("edt/build_game", [this, alive = std::weak_ptr<int>(m_alive)] {
+				return !alive.expired() && draw_progress();
+			});
+		}
+		return action_result::success(json::object{ { "started", true }, { "job", m_job } });
+	};
+
+	action_ui ui;
+	ui.label = "Build Game";
+	ui.menu_path = "Build";
+	ui.shortcut = "Ctrl+B";
+	ui.disabled_tooltip = std::move(tooltip);
+	ui.activate = [this, &actions] {
+		const auto outcome = actions.invoke(k_action_id, json::object{});
+		if (!outcome.ok) m_dialogs.message(message_level::warning, std::format("The game was not built: {}", outcome.error));
+	};
+	m_action = actions.add(std::move(command), std::move(ui));
 }
 
 edt::game_builder::~game_builder() = default;
@@ -253,7 +272,12 @@ void edt::game_builder::finish(game_build_result& result)
 			text += '\n';
 			text += line;
 		}
-		egLOG_DEBUG("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
+		// A failure's message points at the log, so its output must not hide below the default level.
+		if (result.ok()) {
+			egLOG_DEBUG("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
+		} else {
+			egLOG_WARN("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
+		}
 	}
 
 	if (!result.setup_error.empty()) {
