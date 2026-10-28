@@ -101,7 +101,7 @@ namespace {
 				[&lines](std::string_view line) { lines.emplace_back(line); }, stop);
 			if (!result.error.empty()) return no_vs(result.error);
 			if (result.cancelled) return std::string{ "cancelled" };
-			const auto found = parse_vswhere_output(lines);
+			const auto found = edt::parse_vswhere_output(lines);
 			if (!found) return no_vs(result.exit_code == 0 ? std::string{ "no matching installation" }
 				: std::format("exit code {}", result.exit_code));
 			vs = *found;
