@@ -320,6 +320,20 @@ BOOST_AUTO_TEST_CASE(a_change_below_a_base_resource_reaches_the_layer_resource_b
 	layer->unwatch(l, this);
 }
 
+BOOST_AUTO_TEST_CASE(destroying_the_layer_releases_what_it_kept_in_the_parent)
+{
+	rs->registrate_adapter<base_node_adapter>(base_node_adapter::INFO);
+	layer->registrate_adapter<layer_node_adapter>(layer_node_adapter::INFO);
+	const auto x = put("x.node", "x");
+	const auto b = put("b.node", "b\n" + x.string());
+	const auto l = put("l.lnode", "l\n" + b.string());
+
+	BOOST_REQUIRE(load<layer_node>(*layer, l).is_ready());
+	BOOST_TEST(rs->layer_needs_count() > 0u);
+	layer.reset();
+	BOOST_TEST(rs->layer_needs_count() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(destroying_the_layer_drops_its_adapters_while_the_root_still_loads)
 {
 	rs->unregistrate_resolver(res::tag::memory);
