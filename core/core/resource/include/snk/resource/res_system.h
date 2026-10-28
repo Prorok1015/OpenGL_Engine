@@ -411,6 +411,13 @@ namespace res
 		void prune_released_edges();
 		// prune_released_edges() plus the bookkeeping that throttles the next sweeps. m_cache_mutex held (unique).
 		void sweep_edges();
+		// A layer's live resources built on `target` (a dependency the layer recorded): the parents keep the edges of
+		// `target` while any layer needs it, though nothing of their own uses it any more, so a change below `target`
+		// still reaches the layer through their batch. Counted; the layer holds its m_cache_mutex, the parents' count
+		// has its own leaf lock.
+		void retain_in_parents(const res::tag& target);
+		void release_in_parents(const res::tag& target);
+		bool needed_by_layers(const res::tag& tag) const;
 		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
@@ -580,6 +587,8 @@ namespace res
 		std::mutex m_layers_mutex;
 		std::vector<resource_system*> m_layers;
 		std::shared_ptr<gate> m_gate = std::make_shared<gate>();
+		mutable std::mutex m_layer_needs_mutex;
+		std::unordered_map<res::tag, std::size_t> m_layer_needs;
 		std::mutex m_parked_mutex;
 		std::unordered_map<std::uint64_t, parked> m_parked;
 		std::unordered_map<std::uint64_t, std::shared_ptr<await_state>> m_awaits;
