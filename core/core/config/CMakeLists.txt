@@ -11,4 +11,4 @@ target_link_libraries(${PROJECT_NAME} PUBLIC snk::api PRIVATE $<BUILD_INTERFACE:
 
 add_subdirectory(${THIRD_PARTY_PATH}/yaml yaml-cpp)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE yaml-cpp PRIVATE Boost::program_options)
+target_link_libraries(${PROJECT_NAME} PRIVATE yaml-cpp PRIVATE Boost::program_options PRIVATE snk::common)

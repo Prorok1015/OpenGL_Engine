@@ -1,4 +1,5 @@
 #include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <unordered_map>
 #include <optional>
@@ -35,6 +36,18 @@ namespace cfg {
 			if (auto it = registered_variables.find(std::string{ name }); it != registered_variables.end()) {
 				for (auto* var : it->second) {
 					var->update(location, value);
+				}
+			}
+		}
+
+		// Every variable of the name takes the list; one that is not a list reports it and keeps its value.
+		void update_list(std::string_view name, const std::vector<std::string>& values)
+		{
+			if (auto it = registered_variables.find(std::string{ name }); it != registered_variables.end()) {
+				for (auto* var : it->second) {
+					if (!var->update_list(values)) {
+						cfg::warn_wrong_kind(name, "a list was given but the variable is not a list");
+					}
 				}
 			}
 		}
@@ -89,6 +102,21 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 					}
 					path = prefix;
 				}
+			}
+		} else if (value.IsSequence()) {
+			std::vector<std::string> values;
+			bool flat = true;
+			for (const auto& element : value) {
+				if (!element.IsScalar()) {
+					flat = false;
+					break;
+				}
+				values.push_back(element.as<std::string>());
+			}
+			if (!flat) {
+				cfg::warn_wrong_kind(current, "a list holds scalars only: nested lists and maps are not allowed");
+			} else if (cfg::config_manager::instance().registered_variables.contains(current)) {
+				cfg::config_manager::instance().update_list(current, values);
 			}
 		} else if (value.IsMap()) {
 			load_map(config_location, current, value);
@@ -165,13 +193,114 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	if (vm.count("set")) {
 		auto& tokens = vm["set"].as<std::vector<std::string>>();
 		for (std::size_t i = 1; i < tokens.size(); i += 2) {
-			std::string name = tokens[i - 1];
-			std::string val = tokens[i];
-			cfg::config_manager::instance().update_variable(name, std::filesystem::current_path(), val);
+			cfg::set_variable(tokens[i - 1], tokens[i]);
 		}
 	}
 
 	return true;
+}
+
+bool cfg::load_config_text(std::string_view yaml_text, const std::filesystem::path& location)
+{
+	try {
+		load_map(location, "", YAML::Load(std::string{ yaml_text }));
+		return true;
+	} catch (const YAML::Exception& e) {
+		egLOG_ERROR("config", "invalid yaml: {}", e.what());
+		return false;
+	}
+}
+
+namespace {
+
+// nullopt (after a warning) when `value` starts a flow sequence that is not a flat list of scalars.
+std::optional<std::vector<std::string>> parse_list_argument(std::string_view name, std::string_view value)
+{
+	const auto first = value.find_first_not_of(" \t");
+	if (first == std::string_view::npos || value[first] != '[') {
+		return std::vector<std::string>{ std::string{ value } };
+	}
+	try {
+		const YAML::Node node = YAML::Load(std::string{ value });
+		if (node.IsSequence()) {
+			std::vector<std::string> values;
+			for (const auto& element : node) {
+				if (!element.IsScalar()) {
+					values.clear();
+					break;
+				}
+				values.push_back(element.as<std::string>());
+			}
+			if (values.size() == node.size()) {
+				return values;
+			}
+		}
+	} catch (const YAML::Exception&) {
+	}
+	cfg::warn_wrong_kind(name, "--set expects a flat list such as \"[a, b]\" (quote elements that start with '*' or hold ',')");
+	return std::nullopt;
+}
+
+}
+
+void cfg::set_variable(std::string_view name, std::string_view value)
+{
+	const auto& vars = cfg::config_manager::instance().registered_variables;
+	const auto it = vars.find(std::string{ name });
+	if (it == vars.end()) {
+		return;
+	}
+	bool list_parsed = false;
+	std::optional<std::vector<std::string>> list;
+	for (auto* var : it->second) {
+		if (!var->is_list()) {
+			var->update(std::filesystem::current_path(), value);
+			continue;
+		}
+		if (!list_parsed) {
+			list = parse_list_argument(name, value);
+			list_parsed = true;
+		}
+		if (list) {
+			var->update_list(*list);
+		}
+	}
+}
+
+std::string cfg::format_list(const std::vector<std::string>& values)
+{
+	std::string out = "[";
+	for (std::size_t i = 0; i < values.size(); ++i) {
+		if (i != 0) {
+			out += ',';
+		}
+		out += '"';
+		for (const char ch : values[i]) {
+			switch (ch) {
+			case '"': out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default:
+				if (static_cast<unsigned char>(ch) < 0x20) {
+					char escaped[8];
+					std::snprintf(escaped, sizeof(escaped), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(ch)));
+					out += escaped;
+				} else {
+					out += ch;
+				}
+			}
+		}
+		out += '"';
+	}
+	out += ']';
+	return out;
+}
+
+void cfg::warn_wrong_kind(std::string_view name, std::string_view problem)
+{
+	egLOG_WARN("config", "'{}': {}; the value is ignored", name, problem);
 }
 
 void cfg::registrate_variable(std::string_view name, variable_base* var)
@@ -192,6 +321,21 @@ void cfg::registrate_prefix(std::string_view prefix, variable_map* var)
 void cfg::unregistrate_prefix(std::string_view prefix, variable_map* var)
 {
 	cfg::remove_registration(cfg::config_manager::instance().registered_prefixes, prefix, var);
+}
+
+std::optional<std::vector<std::string>> cfg::config_view::list(std::string_view name) const
+{
+	const auto& vars = cfg::config_manager::instance().registered_variables;
+	const auto it = vars.find(std::string{ name });
+	if (it == vars.end()) {
+		return std::nullopt;
+	}
+	for (const auto* var : it->second) {
+		if (auto values = var->list()) {
+			return values;
+		}
+	}
+	return std::nullopt;
 }
 
 std::optional<std::string> cfg::config_view::value(std::string_view name) const
