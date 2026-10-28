@@ -13,7 +13,7 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/project/prj_project.h>
 
 #include <algorithm>

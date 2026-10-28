@@ -50,15 +50,17 @@ BOOST_FIXTURE_TEST_CASE(registered_component_is_resolved_by_its_type_hash, meta_
 	BOOST_TEST(!entt::resolve(ecs::meta_context(), unregistered_hash));
 }
 
-BOOST_AUTO_TEST_CASE(registration_by_name_goes_to_the_engine_context)
+// A module registers into its layer's context (scene_layer::meta()), never into the engine's (#405).
+BOOST_AUTO_TEST_CASE(a_registration_in_a_layer_context_stays_out_of_the_engine_context)
 {
-	struct named_component {};
-	const auto saved = entt::locator<entt::meta_ctx>::handle();
-	entt::locator<entt::meta_ctx>::reset(); // this binary's own locator, not the engine's in a shared build
-	ecs::register_component<named_component>("named_component");
-	BOOST_TEST(static_cast<bool>(entt::resolve(ecs::meta_context(), entt::type_hash<named_component>::value())));
-	entt::meta_reset<named_component>(ecs::meta_context());
-	entt::locator<entt::meta_ctx>::reset(saved);
+	struct layer_component {};
+	constexpr entt::id_type id = entt::type_hash<layer_component>::value();
+	entt::meta_ctx layer;
+	ecs::register_component<layer_component>(layer);
+	BOOST_TEST(static_cast<bool>(entt::resolve(layer, id)));
+	BOOST_TEST(!entt::resolve(ecs::meta_context(), id));
+	BOOST_TEST(static_cast<bool>(ecs::find_meta(&layer, id)));
+	BOOST_TEST(!ecs::find_meta(nullptr, id));
 }
 
 BOOST_FIXTURE_TEST_CASE(meta_reset_removes_the_registration, meta_fixture)

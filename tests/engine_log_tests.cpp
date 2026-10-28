@@ -1,5 +1,5 @@
 #include <boost/test/unit_test.hpp>
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <atomic>
 #include <chrono>

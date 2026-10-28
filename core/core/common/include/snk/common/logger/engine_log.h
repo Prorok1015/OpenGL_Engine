@@ -43,51 +43,9 @@ namespace engine
 	// block. From inside its callback it may remove its own handle only; removing another sink there takes effect at
 	// once but does not wait for that sink's call in flight on another thread (waiting could lock-cycle). It may log too, but a message logged on a thread that is inside a listener
 	// goes to the journal and the log files only, never to a listener (no recursion, no lock-order cycles between
-	// listeners).
+	// listeners). Installing one is base-only (<snk/common/logger/engine_log_sinks.h>); a game module installs one
+	// through gs::module_context::add_log_sink.
 	using log_callback_t = std::function<void(std::string_view, log_level, std::string_view)>;
-
-	SNK_API void remove_log_sink(std::uint64_t id);
-
-	// Move-only RAII handle of one sink: the sink is removed when the handle is destroyed or reset. After reset()
-	// returns, the sink is not running and is never called again (a call in flight on another thread is waited
-	// for). Harmless after shutdown_logger().
-	class log_sink_handle
-	{
-	public:
-		log_sink_handle() = default;
-		explicit log_sink_handle(std::uint64_t id) noexcept : m_id(id) {}
-		log_sink_handle(const log_sink_handle&) = delete;
-		log_sink_handle& operator=(const log_sink_handle&) = delete;
-		log_sink_handle(log_sink_handle&& other) noexcept : m_id(other.m_id) { other.m_id = 0; }
-		log_sink_handle& operator=(log_sink_handle&& other) noexcept
-		{
-			if (this != &other) {
-				reset();
-				m_id = other.m_id;
-				other.m_id = 0;
-			}
-			return *this;
-		}
-		~log_sink_handle() { reset(); }
-
-		bool active() const noexcept { return m_id != 0; }
-		void reset()
-		{
-			if (m_id != 0) {
-				remove_log_sink(m_id);
-				m_id = 0;
-			}
-		}
-
-	private:
-		std::uint64_t m_id = 0;
-	};
-
-	// Any number of sinks may be installed at once; they are called in the order they were added.
-	// A null callback adds nothing (the handle is inactive).
-	[[nodiscard]] SNK_API log_sink_handle add_log_sink(log_callback_t callback);
-	// Sinks installed now. For tests and diagnostics (a module must leave as many as it found).
-	[[nodiscard]] SNK_API std::size_t log_sink_count();
 
 	// ---- Journal -------------------------------------------------------------------------------------------
 	// Every logged message also goes into a ring buffer, so a reader that was not listening (an agent, a bug

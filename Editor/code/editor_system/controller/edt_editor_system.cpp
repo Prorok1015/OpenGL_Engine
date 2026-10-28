@@ -45,7 +45,7 @@
 #include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/window/wnd_window_system.h>
 #include <snk/resource/resources/res_resource_text.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
 #include <format>
@@ -558,7 +558,7 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	if (const auto raw = game_resources.fetch_data(original_tag)) {
 		raw->wait();
 		if (raw->is_ready()) {
-			game_resources.store(m_state.editor_tag, raw->data);
+			m_services.writable_resources()->store(m_state.editor_tag, raw->data);
 		}
 	}
 

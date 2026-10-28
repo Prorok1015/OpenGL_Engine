@@ -61,10 +61,4 @@ namespace ecs
             .template func<&meta_snapshot_get<T>>(snapshot_get_h)
             .template func<&meta_loader_get<T>>(loader_get_h);
     }
-
-    // Always the engine's context: the locator of the calling binary is not the engine's in a shared build.
-    template<typename T>
-    entt::meta_factory<T> register_component(const char* name) {
-        return register_component<T>(meta_context());
-    }
 }

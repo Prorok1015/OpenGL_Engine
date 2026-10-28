@@ -1,7 +1,8 @@
 #include <boost/test/unit_test.hpp>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include "test_temp_dir.hpp"
 #include <filesystem>
+#include <string>
 #include <vector>
 
 // NOTE: cfg::initialize_configs(path) is guarded by a process-wide "already initialized" flag,
@@ -170,6 +171,33 @@ BOOST_AUTO_TEST_CASE(Cli_HelpReturnsFalseAndSkipsOverrides)
 }
 
 // ---- config file: extends chain + prefix maps + path vars (runs ONCE per process) ----
+
+// ---- variables of the same name, config_view (#405) ----
+
+BOOST_AUTO_TEST_CASE(Variables_OfTheSameNameAreAllSetAndLeaveOnTheirOwn)
+{
+	cfg::variable<int> first{ "cfgtest/shared", 1 };
+	{
+		cfg::variable<int> second{ "cfgtest/shared", 2 };
+		run_cli({ "--set", "cfgtest/shared", "5" });
+		BOOST_TEST(static_cast<int>(first) == 5);
+		BOOST_TEST(static_cast<int>(second) == 5);
+	}
+	// The second one leaving does not take the first one's registration with it.
+	run_cli({ "--set", "cfgtest/shared", "6" });
+	BOOST_TEST(static_cast<int>(first) == 6);
+	BOOST_TEST(cfg::config_view{}.value("cfgtest/shared").value_or("") == "6");
+}
+
+BOOST_AUTO_TEST_CASE(ConfigView_ReadsRegisteredVariablesAsText)
+{
+	const cfg::config_view view;
+	cfg::variable<bool> flag{ "cfgtest/view_bool", true };
+	cfg::variable<std::string> text{ "cfgtest/view_string", "abc" };
+	BOOST_TEST(view.value("cfgtest/view_bool").value_or("") == "true");
+	BOOST_TEST(view.value("cfgtest/view_string").value_or("") == "abc");
+	BOOST_TEST(!view.has("cfgtest/view_missing"));
+}
 
 BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningFile)
 {

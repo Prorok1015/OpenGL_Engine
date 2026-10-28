@@ -76,7 +76,9 @@ namespace ds {
 		lifetime(const lifetime&) = delete;
 		lifetime& operator=(const lifetime&) = delete;
 
-		// Requests stop on every task bound so far (cancel_on_destroy does this in the destructor).
+		// Requests stop on every task bound so far (cancel_on_destroy does this in the destructor). A task that has
+		// not started drops its body here, on the calling thread: a capture must not hold the last reference to the
+		// lifetime's owner, or the owner dies inside this call.
 		void cancel_tasks() const;
 		[[nodiscard]] std::weak_ptr<detail::lifetime_state> token() const { return m_state; }
 
@@ -157,7 +159,8 @@ namespace ds {
 			// A continuation of a finished task. `on_main` ones go through post_main(general),
 			// the others run inline on the thread that completes the task (keep them short).
 			void add_continuation(bool on_main, std::function<void()> fn);
-			// pending -> `outcome`; false if the task already left `pending`.
+			// pending -> `outcome`; false if the task already left `pending`. While its body is dropped the task reads as
+			// running (snapshot() may list it so for that moment).
 			bool finish_pending(task_status outcome, std::string message);
 
 			void set_progress(float value, std::string_view text);

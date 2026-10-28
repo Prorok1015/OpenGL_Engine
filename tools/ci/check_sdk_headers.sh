@@ -7,6 +7,9 @@
 # under passes/, anything with glad/GLFW in its path, and headers that #include <glad/...> or
 # <GLFW/...>. Bundled third-party trees (snk/boost, snk/lib3dparty, snk/_generated) are not checked.
 #
+# Base-only API (<component>/include_base, #405 / MODULE_LAYER.md) must not reach the SDK either: no file of it, no
+# installed header that includes it or declares what it holds. Always enforced.
+#
 # Enforcing by default since every public header lives in <component>/include (#109).
 # SNK_SDK_HEADERS_ENFORCE=0|1 or --enforce/--report override it.
 set -euo pipefail
@@ -34,6 +37,9 @@ fi
 
 path_re='(^|/)(impl_[^/]*|rnd_gl_[^/]*|passes|[^/]*glad[^/]*|[^/]*GLFW[^/]*)(/|$)'
 include_re='^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"](glad|GLFW)/'
+base_only_files_re='(^|/)(engine_log_sinks|cfg_variables)\.h$'
+base_only_include_re='^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]snk/(common/logger/engine_log_sinks|config/cfg_variables)\.h[>"]'
+base_only_decl_re='SNK_API[^;]*[[:space:]](add_log_sink|remove_log_sink|registrate_variable|registrate_prefix)[[:space:]]*\('
 third_party_re='^snk/(boost|lib3dparty|_generated)/'
 
 found=()
@@ -55,6 +61,25 @@ for entry in ${found[@]+"${found[@]}"}; do
 	done
 	((allowed)) || would_fail+=("${entry}")
 done
+
+base_only=()
+while IFS= read -r rel; do
+	[[ "${rel}" =~ ${third_party_re} ]] && continue
+	if [[ "${rel}" =~ ${base_only_files_re} ]]; then
+		base_only+=("${rel}  (base-only header)")
+	elif grep -qE "${base_only_include_re}" "${root}/${rel}"; then
+		base_only+=("${rel}  (includes a base-only header)")
+	elif grep -qE "${base_only_decl_re}" "${root}/${rel}"; then
+		base_only+=("${rel}  (declares base-only API)")
+	fi
+done < <(cd "${root}" && find snk -type f | LC_ALL=C sort)
+for entry in ${base_only[@]+"${base_only[@]}"}; do
+	echo "  base-only: ${entry}"
+done
+if ((${#base_only[@]} > 0)); then
+	echo "::error::${#base_only[@]} installed header(s) expose base-only API (include_base/, MODULE_LAYER.md)"
+	exit 1
+fi
 
 total=$(cd "${root}" && find snk -type f | wc -l)
 echo "SDK headers: ${total} files installed under include/snk, ${#would_fail[@]} internal"

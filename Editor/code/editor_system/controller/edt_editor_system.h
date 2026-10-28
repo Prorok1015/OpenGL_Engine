@@ -15,7 +15,7 @@
 #include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
 #include <vector>

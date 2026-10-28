@@ -35,5 +35,8 @@ namespace edt
 		res::resource_system* resources() const;
 		scn::ecs_assembler* assembler() const;
 		ecs::system_factory* sfactory() const;
+		// Where the editor stores and erases: the base resource system, else resources(). A game layer only writes
+		// under its module's memory://modules/<name>/ (MODULE_LAYER.md), and the editor's tags are not the module's.
+		res::resource_system* writable_resources() const;
 	};
 }

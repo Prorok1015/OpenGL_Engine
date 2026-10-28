@@ -2,7 +2,7 @@
 #include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/resource/adapters/res_binary_adapter.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <algorithm>
 #include <atomic>
@@ -793,7 +793,30 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
   }
 }
 
+void res::resource_system::limit_writes_to(std::string prefix) {
+  ASSERT_MSG(m_parent, "limit_writes_to: a layer only, the root writes everywhere");
+  m_write_prefix = std::move(prefix);
+}
+
+void res::resource_system::check_writable(const res::tag &tag) const {
+  if (m_write_prefix.empty()) {
+    return;
+  }
+  const std::string_view full = tag.view();
+  bool inside = full.size() > m_write_prefix.size() && full.starts_with(m_write_prefix);
+  if (inside) {
+    // "memory://modules/a/../b/x" names another module's data.
+    const std::string rest = "/" + std::string{full.substr(m_write_prefix.size())} + "/";
+    inside = rest.find("/../") == std::string::npos && rest.find("/./") == std::string::npos;
+  }
+  if (!inside) {
+    throw std::logic_error("res::resource_system: '" + std::string{full} + "' is outside what this layer may write (" +
+                           m_write_prefix + ")");
+  }
+}
+
 bool res::resource_system::erase(const res::tag &tag) {
+  check_writable(tag);
   auto &resolvers = root().m_resolvers;
   const auto found = resolvers.find(tag.protocol());
   if (found == resolvers.end()) {

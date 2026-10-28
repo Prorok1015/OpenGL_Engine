@@ -5,6 +5,7 @@
 #include <snk/resource/res_resource_service_init.h>
 #include <snk/project/prj_project.h>
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/common/logger/engine_log.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>, whose OPAQUE/TRANSPARENT macros
 // break the render headers that one includes.

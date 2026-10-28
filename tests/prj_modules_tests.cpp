@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_modules.h>
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
 #include <mutex>
 #include <string>

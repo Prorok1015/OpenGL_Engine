@@ -150,7 +150,8 @@ function(_snk_sdk_prepare_includes tgt ok)
 		get_filename_component(_abs "${_entry}" ABSOLUTE)
 		get_target_property(_internal ${tgt} SNK_SDK_INTERNAL_HEADERS)
 		get_target_property(_src ${tgt} SOURCE_DIR)
-		if(_internal AND _abs STREQUAL "${_src}/include")
+		# include_base/ (snk_component_headers): base-only headers, never installed either.
+		if((_internal AND _abs STREQUAL "${_src}/include") OR _abs STREQUAL "${_src}/include_base")
 			# snk_component_headers(SDK_INTERNAL): in-tree consumers only, nothing installed or exported.
 			list(APPEND _new "$<BUILD_INTERFACE:${_abs}>")
 			list(APPEND _new_sys "$<BUILD_INTERFACE:${_abs}>")
