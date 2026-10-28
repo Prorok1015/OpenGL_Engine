@@ -86,11 +86,12 @@ BOOST_AUTO_TEST_CASE(Variable_IntParsesDecimalAndNegative)
 	BOOST_TEST(static_cast<int>(v) == -5);
 }
 
-BOOST_AUTO_TEST_CASE(Variable_IntRejectsGarbageWithException)
+// A warning, not an exception (#415); cfg_numeric_tests covers the cases.
+BOOST_AUTO_TEST_CASE(Variable_IntIgnoresGarbage)
 {
 	cfg::variable<int> v{ "cfgtest/int_bad", 3 };
-	BOOST_CHECK_THROW(v.update({}, "abc"), std::invalid_argument);
-	BOOST_TEST(static_cast<int>(v) == 3); // value unchanged after a failed parse
+	BOOST_CHECK_NO_THROW(v.update({}, "abc"));
+	BOOST_TEST(static_cast<int>(v) == 3);
 }
 
 BOOST_AUTO_TEST_CASE(Variable_FloatParses)
