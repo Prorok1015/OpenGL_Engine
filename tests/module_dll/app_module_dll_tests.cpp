@@ -134,15 +134,22 @@ BOOST_AUTO_TEST_CASE(callbacks_of_an_unloaded_library_leave_nothing_of_it_in_the
 // usual, and the library unloads with nothing of it left held.
 BOOST_AUTO_TEST_CASE(a_failed_resource_drops_the_library_callback_without_a_call)
 {
-	const auto failing = put("dll_failing.desc", "not a desc");
+	const auto failing = put("dll_failing.desc", R"({"__type":"no_such_desc_type"})");
 	BOOST_REQUIRE(failing.view() == dll_game::failing_tag);
 	loader.load(game_library(), root);
 	auto* layer = contexts().game_layer();
 	BOOST_REQUIRE(layer != nullptr);
 	BOOST_REQUIRE(ds::detail::held_count(layer->tasks()) == 2u);
-	pump();
-	// The failed block is not kept (nothing holds it once it settled), so it is not asked again here. Its callback left
-	// the owner only through drop_held: a block destroyed unsettled would leave it held.
+	{
+		// The block the library waits on: a failed block is not kept once settled, so it is held from here (the
+		// library's own request found it in the cache, it is the same block).
+		const auto failed = layer->resources().require<desc::desc_base>(failing);
+		for (int i = 0; i < 100 && !failed.is_ready() && !failed.has_error(); ++i) {
+			pump();
+		}
+		BOOST_REQUIRE(failed.has_error());
+	}
+	pump(); // the task's continuation
 	BOOST_TEST(ds::detail::held_count(layer->tasks()) == 0u);
 	loader.unload(dll_game::module_name, root);
 	BOOST_TEST(!resident(g_module_path));
