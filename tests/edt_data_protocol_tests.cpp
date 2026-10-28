@@ -3,12 +3,7 @@
 #include "test_temp_dir.hpp"
 #include "edt_data_protocol.h"
 #include <snk/resource/resources/res_resource_text.h>
-#include <chrono>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <string>
-#include <thread>
 
 #ifndef SNK_EDITOR_RES_DIR
 #error "SNK_EDITOR_RES_DIR must point at Editor/res"
@@ -25,26 +20,11 @@ struct edt_data_fixture : test_util::ram_res_env
 {
 	test_util::temp_dir dir{ "edt_data" };
 	std::filesystem::path data = dir.path() / "data";
-	std::filesystem::path user = dir.path() / "user";
 
 	edt_data_fixture()
 	{
 		dir.write("data/icons/logo.txt", "logo-bytes");
 		dir.write("secret.txt", "outside the data directory");
-	}
-
-	// Joins the vfs io threads before the scratch directory goes away.
-	~edt_data_fixture() { rs.reset(); }
-
-	static bool wait_for_text(const std::filesystem::path& file, const std::string& text)
-	{
-		for (int i = 0; i < 500; ++i) {
-			std::ifstream in(file, std::ios::binary);
-			const std::string content{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-			if (in.is_open() && content == text) return true;
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
-		}
-		return false;
 	}
 
 	res::res_handle<res::text_resource> load(std::string_view tag)
@@ -61,7 +41,7 @@ BOOST_FIXTURE_TEST_SUITE(EdtDataProtocol, edt_data_fixture)
 
 BOOST_AUTO_TEST_CASE(Register_ExistingDirectory_ResolvesFilesUnderEdt)
 {
-	BOOST_TEST(edt::register_data_protocol(*rs, data, user));
+	BOOST_TEST(edt::register_data_protocol(*rs, data));
 
 	BOOST_TEST(rs->exists(res::tag{ "edt://icons/logo.txt" }));
 	auto handle = load("edt://icons/logo.txt");
@@ -71,14 +51,14 @@ BOOST_AUTO_TEST_CASE(Register_ExistingDirectory_ResolvesFilesUnderEdt)
 
 BOOST_AUTO_TEST_CASE(Register_ExistingDirectory_DoesNotServeResProtocolFiles)
 {
-	edt::register_data_protocol(*rs, data, user);
+	edt::register_data_protocol(*rs, data);
 
 	BOOST_TEST(!rs->exists(res::tag{ "res://icons/logo.txt" }));
 }
 
 BOOST_AUTO_TEST_CASE(Resolve_ParentDirectoryEscape_IsRejected)
 {
-	edt::register_data_protocol(*rs, data, user);
+	edt::register_data_protocol(*rs, data);
 
 	BOOST_TEST(!rs->exists(res::tag{ "edt://../secret.txt" }));
 	BOOST_TEST(load("edt://../secret.txt").has_error());
@@ -87,7 +67,7 @@ BOOST_AUTO_TEST_CASE(Resolve_ParentDirectoryEscape_IsRejected)
 
 BOOST_AUTO_TEST_CASE(Register_MissingDirectory_ReturnsFalseAndLoadsFail)
 {
-	BOOST_TEST(!edt::register_data_protocol(*rs, dir.path() / "no_such_data", user));
+	BOOST_TEST(!edt::register_data_protocol(*rs, dir.path() / "no_such_data"));
 
 	BOOST_TEST(!rs->exists(res::tag{ "edt://icons/logo.txt" }));
 	BOOST_TEST(load("edt://icons/logo.txt").has_error());
@@ -105,39 +85,15 @@ BOOST_AUTO_TEST_CASE(ShippedEditorData_HoldsIconsAndTemplates_ResRootDoesNot)
 	}
 }
 
-BOOST_AUTO_TEST_CASE(Store_GoesToTheUserRootAndNeverIntoTheDataDirectory)
+BOOST_AUTO_TEST_CASE(Store_IntoEdt_IsRefusedAndNothingIsWritten)
 {
-	edt::register_data_protocol(*rs, data, user);
+	edt::register_data_protocol(*rs, data);
 
-	BOOST_REQUIRE(rs->store(res::tag{ "edt://settings/layout.ini" }, test_util::to_bytes("layout")));
+	BOOST_TEST(!rs->store(res::tag{ "edt://icons/logo.txt" }, test_util::to_bytes("overwritten")));
+	BOOST_TEST(!rs->store(res::tag{ "edt://settings/layout.ini" }, test_util::to_bytes("x")));
 
-	BOOST_TEST(wait_for_text(user / "settings" / "layout.ini", "layout"));
 	BOOST_TEST(!std::filesystem::exists(data / "settings"));
-}
-
-BOOST_AUTO_TEST_CASE(Load_UserRootShadowsTheShippedFile)
-{
-	edt::register_data_protocol(*rs, data, user);
-	BOOST_REQUIRE(load("edt://icons/logo.txt").get_sync()->str() == "logo-bytes");
-
-	dir.write("user/icons/logo.txt", "user-logo");
-
-	BOOST_TEST(rs->exists(res::tag{ "edt://icons/logo.txt" }));
-	rs->signal_changed(res::tag{ "edt://icons/logo.txt" });
-	BOOST_TEST(load("edt://icons/logo.txt").get_sync()->str() == "user-logo");
-	BOOST_TEST(wait_for_text(data / "icons" / "logo.txt", "logo-bytes"));
-}
-
-BOOST_AUTO_TEST_CASE(DefaultUserDataDir_NamesTheEditorFolderOfTheProduct)
-{
-	const auto path = edt::default_user_data_dir();
-
-	BOOST_TEST(!path.empty());
-#ifdef _WIN32
-	BOOST_TEST(path.filename() == "Editor");
-#else
-	BOOST_TEST(path.filename() == "editor");
-#endif
+	BOOST_TEST(load("edt://icons/logo.txt").get_sync()->str() == "logo-bytes");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

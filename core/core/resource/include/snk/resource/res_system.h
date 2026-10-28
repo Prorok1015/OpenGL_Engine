@@ -63,6 +63,9 @@ namespace res
 		// Mounts config_mount_table().
 		explicit resource_system(ds::task_system& tasks);
 		resource_system(ds::task_system& tasks, mount_table mounts);
+		// Mounts one more protocol after construction (the editor's edt://), like a mount of the constructor: logged,
+		// changes signalled. Main thread, before the protocol is used; not on a layer (it shares its root's resolvers).
+		void add_mount(mount added);
 		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
 		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
 		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a
@@ -361,6 +364,7 @@ namespace res
 		}
 
 	private:
+		void register_mount(const mount& mounted);
 		// Callbacks that run on other systems' blocks or on resolver threads (on_settled) reach this system only through
 		// the gate. The destructor closes it before the members go away; a late callback then fails its block instead.
 		struct gate {
