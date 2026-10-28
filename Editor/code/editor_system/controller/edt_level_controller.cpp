@@ -12,7 +12,6 @@
 #include <snk/resource/res_system.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <boost/json.hpp>
-#include <fstream>
 #include <filesystem>
 #include <format>
 #include <snk/common/logger/engine_log.h>
@@ -254,6 +253,11 @@ boost::json::object edt::level_controller::build_level_json() const
 
 bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 {
+	// A path typed into Save As (or sent by an agent) becomes a res:// tag; one that already names a protocol cannot.
+	if (rel_path.find("://") != std::string::npos) {
+		egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
+		return false;
+	}
 	m_scene_editor.sync_ecs_transforms_to_desc();
 
 	std::filesystem::path frel(rel_path);
@@ -266,22 +270,20 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 
 	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, *m_services.descs(), guid);
 
-	std::filesystem::path abs_path = m_services.resources()->get_resources_path() / frel;
-	std::error_code ec;
-	std::filesystem::create_directories(abs_path.parent_path(), ec);
-	std::ofstream out(abs_path, std::ios::binary);
-	if (!out) {
-		egLOG("Editor/Save", "Failed to open file for writing: {}", abs_path.string());
-		return false;
-	}
-
 	// Same writer as every other desc save, so level files are indented and diff well.
 	const auto bytes = m_services.descs()->serialize_to_bytes(boost::json::value{ level_json });
-	out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+	// Through the resolver, which keeps the file (and its temp file) inside the resource root: a Save As path with
+	// "..", an absolute path or a symlinked leaf is refused there. Waits for the write: the document is marked clean
+	// only once the level is on disk, or exit would no longer ask about the changes.
+	const auto tag = res::tag::make(rel_path);
+	if (!m_services.writable_resources()->store_sync(tag, bytes)) {
+		egLOG_ERROR("Editor/Save", "Level not saved: '{}' could not be written; the changes are kept", tag.view());
+		return false;
+	}
 	m_state.level_guid = guid;
 	m_state.level_name = level_name;
 	m_state.mark_clean();
-	egLOG("Editor/Save", "Level saved to {}", abs_path.string());
+	egLOG("Editor/Save", "Level saved to {}", tag.view());
 	return true;
 }
 

@@ -4,7 +4,9 @@
 #include <snk/common/core_thread_utils.hpp>
 #include <snk/resource/res_path_sanitize.h>
 #include <cctype>
+#include <format>
 #include <fstream>
+#include <random>
 #include <shared_mutex>
 #include <chrono>
 #include <thread>
@@ -12,6 +14,9 @@
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access)
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
+			if (m_closing) {
+				return;
+			}
 			auto otag = path_mapper(pth);
 			if (otag.has_value() && !is_shadowed(pth)) {
 				notify_resource_changed(otag.value());
@@ -57,9 +62,12 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 
 res::vfs_resolver::~vfs_resolver()
 {
+	// No io.stop(): it would drop the writes still queued, e.g. a level saved right before the editor exits.
+	// With the guard gone and the watcher stopped (behind those writes, on the io thread), run() returns once the
+	// queue is empty.
+	m_closing = true;
 	work_guard.reset();
-	watcher.stop();
-	io.stop();
+	boost::asio::post(io, [this] { watcher.stop(); });
 	if (io_thread.joinable()) {
 		io_thread.join();
 	}
@@ -152,15 +160,35 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 
 bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>& data)
 {
+	return queue_store(tag, data, nullptr);
+}
+
+bool res::vfs_resolver::store_sync(const::res::tag& tag, const std::vector<std::byte>& data)
+{
+	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "store_sync on the io thread would wait for itself");
+	auto done = std::make_shared<std::promise<bool>>();
+	auto written = done->get_future();
+	if (!queue_store(tag, data, done)) {
+		return false;
+	}
+	return written.get();
+}
+
+bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std::byte>& data,
+	std::shared_ptr<std::promise<bool>> done)
+{
 	if (m_access == mount_access::read_only) {
 		egLOG_WARN("resource", "Rejected store of '{}': protocol '{}' is read-only", tag.view(), protocol);
 		return false;
 	}
 
 	std::optional<fs::path> target_path;
+	const res::tag tmp_tag = make_temp_tag(tag);
+	std::optional<fs::path> tmp_path;
 	if (!entries_stack.empty()) {
 		target_path = safe_path(entries_stack.top(), tag);
-		if (!target_path.has_value()) {
+		tmp_path = safe_path(entries_stack.top(), tmp_tag);
+		if (!target_path.has_value() || !tmp_path.has_value()) {
 			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
 			return false;
 		}
@@ -186,7 +214,18 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 		return false;
 	}
 
-	boost::asio::post(io, std::bind(&vfs_resolver::save_pending_write, this, tag, *target_path, data_ptr));
+	boost::asio::post(io, [this, tag, target = *target_path, tmp_tag, tmp = *tmp_path, data_ptr, done = std::move(done)] {
+		// The promise is fulfilled exactly once, whatever happens: a broken one would throw out of store_sync.
+		bool written = false;
+		try {
+			written = write_pending(tag, target, tmp_tag, tmp, data_ptr);
+		} catch (...) {
+			written = false;
+		}
+		if (done) {
+			done->set_value(written);
+		}
+	});
 
 	return true;
 }
@@ -223,7 +262,7 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 		return true;
 	}
 
-	// On the io thread, behind any save_pending_write already queued for the tag. The mark holds the generation of the
+	// On the io thread, behind any write_pending already queued for the tag. The mark holds the generation of the
 	// erase that set it: a later store() clears it and a later erase() replaces it, and then this task leaves the file
 	// to whoever did that. The mark goes only after the file is gone, so resolve() and exists() never see the old file.
 	boost::asio::post(io, [this, tag, generation, path = *target_path]() {
@@ -365,20 +404,57 @@ std::optional<fs::path> res::vfs_resolver::resolve_tag(const tag& tag) const
 	return first_accepted;
 }
 
-void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, core::res::res_resolver_interface::async_raw_data data_ptr)
+res::tag res::vfs_resolver::make_temp_tag(const tag& tag)
 {
-	try {
-		fs::create_directories(target_path.parent_path());
+	thread_local std::mt19937_64 random{ std::random_device{}() };
+	const std::string_view full = tag.view();
+	const std::string_view folder = full.substr(0, full.size() - tag.name().size());
+	return res::tag{ std::format("{}.{}.{:016x}.tmp", folder, tag.name(), random()) };
+}
 
-		auto tmp_path = target_path;
-		tmp_path.replace_extension(".tmp");
+bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& target_path, const res::tag& tmp_tag,
+	const fs::path& tmp_path, const core::res::res_resolver_interface::async_raw_data& data_ptr)
+{
+	const auto fail = [&](std::string_view why, bool remove_tmp) {
+		egLOG_ERROR("resource/write", "Failed to store '{}': {}", tag.view(), why);
+		if (remove_tmp) {
+			std::error_code ignored;
+			fs::remove(tmp_path, ignored);
+		}
+		// A newer store of the tag keeps its own entry.
+		std::unique_lock lock(m_pending_mutex);
+		if (auto it = m_pending_writes.find(tag); it != m_pending_writes.end() && it->second == data_ptr) {
+			m_pending_writes.erase(it);
+		}
+		return false;
+	};
+
+	try {
+		// Again right before anything is created: a parent or a leaf may have become a symlink since store(), and
+		// removing the temp file through such a parent could hit a file outside the root.
+		if (safe_path(entries_stack.top(), tag) != target_path || safe_path(entries_stack.top(), tmp_tag) != tmp_path) {
+			return fail("its file or temp file no longer stays inside the resource root", false);
+		}
+
+		std::error_code ec;
+		fs::create_directories(target_path.parent_path(), ec);
+		if (ec) {
+			return fail(std::format("cannot create '{}': {}", target_path.parent_path().string(), ec.message()), false);
+		}
 
 		{
 			std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
-			if (file.is_open()) {
-				file.write(reinterpret_cast<const char*>(data_ptr->data.data()), data_ptr->data.size());
+			if (!file.is_open()) {
+				return fail(std::format("cannot open '{}' for writing", tmp_path.string()), true);
+			}
+			file.write(reinterpret_cast<const char*>(data_ptr->data.data()), static_cast<std::streamsize>(data_ptr->data.size()));
+			// close() flushes: a full disk shows up here, and a truncated file must not replace the good one.
+			file.close();
+			if (file.fail()) {
+				return fail(std::format("writing '{}' failed", tmp_path.string()), true);
 			}
 		}
+
 		// On Windows a file that was just removed (an erase on this thread) can stay delete-pending while
 		// another handle (watcher, indexer, antivirus) is open on it, and renaming onto it is denied for a moment.
 		std::error_code rename_error;
@@ -390,7 +466,7 @@ void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, c
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
 		if (rename_error) {
-			throw fs::filesystem_error("rename", tmp_path, target_path, rename_error);
+			return fail(std::format("cannot replace '{}': {}", target_path.string(), rename_error.message()), true);
 		}
 
 		// Update file_watcher snapshot so it doesn't treat our own write as an external change.
@@ -398,13 +474,14 @@ void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, c
 
 		{
 			std::unique_lock lock(m_pending_mutex);
-			m_pending_writes.erase(tag);
-			egLOG("resource/write", "Stored resource '{}'", tag.view());
+			if (auto it = m_pending_writes.find(tag); it != m_pending_writes.end() && it->second == data_ptr) {
+				m_pending_writes.erase(it);
+			}
 		}
-
-	} catch (std::exception& ex) {
-		egLOG("resource/error", "Failed to store resource '{0}': {1}", tag.view(), ex.what());
-		ASSERT_FAIL("Storing a file failed!");
+		egLOG("resource/write", "Stored resource '{}'", tag.view());
+		return true;
+	} catch (const std::exception& ex) {
+		return fail(ex.what(), true);
 	}
 }
 
@@ -413,8 +490,19 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 	try {
 		egLOG("resource/resolver", "loading file '{}'", path.string());
 
-		if (!fs::exists(path)) {
+		std::error_code ec;
+		const auto status = fs::status(path, ec);
+		if (status.type() == fs::file_type::not_found) {
 			data_sp->set_error("File does not exist: " + path.string());
+			return;
+		}
+		if (ec) {
+			data_sp->set_error("Cannot access '" + path.string() + "': " + ec.message());
+			return;
+		}
+		// A folder opens as a stream on Linux, and tellg() then reports LLONG_MAX.
+		if (!fs::is_regular_file(status)) {
+			data_sp->set_error("Not a regular file: " + path.string());
 			return;
 		}
 
@@ -424,7 +512,13 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 			return;
 		}
 
+		// The file may have been swapped since status(): a size the file system does not confirm is not allocated.
 		auto size = file.tellg();
+		const auto file_bytes = fs::file_size(path, ec);
+		if (size < 0 || ec || static_cast<std::uintmax_t>(size) > file_bytes) {
+			data_sp->set_error("Failed to get the size of: " + path.string());
+			return;
+		}
 		std::vector<std::byte> data;
 
 		if (size > 0) {

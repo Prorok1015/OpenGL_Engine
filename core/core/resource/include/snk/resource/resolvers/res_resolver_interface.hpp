@@ -25,6 +25,12 @@ namespace core::res
 			return false;
 		}
 
+		// store(), but returns only once the data is where resolve() reads it from (on disk for a file resolver), and
+		// whether it got there: a caller that must not lose the data (a saved level) waits for this.
+		virtual bool store_sync(const ::res::tag& tag, const std::vector<std::byte>& data) {
+			return store(tag, data);
+		}
+
 
 		// Removes the data stored under the tag; false when this resolver cannot (the default) or the tag is not its own.
 		virtual bool erase(const ::res::tag& tag) {
