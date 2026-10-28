@@ -225,7 +225,7 @@ BOOST_AUTO_TEST_CASE(DisplayFile_IsRelativeUnderTheProjectRoot_ElseAsPrinted)
 BOOST_AUTO_TEST_CASE(DisplayFile_OfInvalidUtf8_IsAsPrinted_AndDoesNotThrow)
 {
 	const std::filesystem::path root = std::filesystem::current_path();
-	for (const std::string file : { std::string("C:\\Users\\\xC8\xE2\xE0\xED\\a.cpp"), std::string("/home/\xC8\xE2/a.cpp"),
+	for (const std::string& file : { std::string("C:\\Users\\\xC8\xE2\xE0\xED\\a.cpp"), std::string("/home/\xC8\xE2/a.cpp"),
 		(root / "x").string() + "\xFF/a.cpp" }) {
 		std::string shown;
 		BOOST_CHECK_NO_THROW(shown = edt::problem_display_file(file, root));
