@@ -693,6 +693,22 @@ BOOST_AUTO_TEST_CASE(WaitIdleAfterCancelDoesNotRunTheBodies)
 	BOOST_CHECK(handle.status() == task_status::cancelled);
 }
 
+BOOST_AUTO_TEST_CASE(CancelReleasesTheCapturesOfAQueuedTask)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	auto capture = std::make_shared<int>(0);
+	const std::weak_ptr<int> watched = capture;
+	auto handle = tasks.run(lane::compute, { "t" }, owner, [capture](ds::task_context&) {});
+	capture.reset();
+	BOOST_TEST(!watched.expired()); // the queued task holds it
+
+	owner.cancel_tasks();
+	tasks.wait_idle(owner);
+	BOOST_TEST(watched.expired()); // gone although the task is still in the queue
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+}
+
 BOOST_AUTO_TEST_CASE(WhenAllTakesTypedHandles)
 {
 	ds::task_system tasks(manual_config());

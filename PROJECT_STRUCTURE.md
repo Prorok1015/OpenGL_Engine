@@ -50,7 +50,7 @@ OpenGL_Engine/
 │   │   ├── ecs/                    ← EnTT-based ECS (system_factory, set channel; see docs/roadmap/design/WORLD_MESSAGING.md)
 │   │   ├── resource/               ← Resource system (VFS resolvers, adapters, cache)
 │   │   ├── desc/                   ← Descriptor system (JSON-based, desc_system)
-│   │   ├── config/                 ← Configuration system (cfg_api.h, CFG_VAR_DEF_*)
+│   │   ├── config/                 ← Configuration system (include_base/cfg_variables.h: CFG_VAR_DEF_*, base-only; cfg_api.h: read-only config_view)
 │   │   ├── application/            ← App lifecycle, module_loader (module states, depends_on order)
 │   │   ├── video/                  ← Render driver abstraction (OpenGL impls)
 │   │   ├── windows/                ← Platform window service

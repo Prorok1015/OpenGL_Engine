@@ -350,11 +350,11 @@ namespace desc
 
 	const type_schema* schema_registry::add(type_schema schema)
 	{
-		if (m_types.contains(schema.name)) {
+		if (contains(schema.name)) {
 			return nullptr;
 		}
 		const std::uint64_t id = schema.id;
-		if (m_names_by_id.contains(id)) {
+		if (find(id)) {
 			return nullptr;
 		}
 		const std::string name = schema.name;
@@ -386,23 +386,29 @@ namespace desc
 	const type_schema* schema_registry::find(std::string_view name) const
 	{
 		auto it = m_types.find(std::string{ name });
-		return it == m_types.end() ? nullptr : &it->second;
+		if (it != m_types.end()) {
+			return &it->second;
+		}
+		return m_parent ? m_parent->find(name) : nullptr;
 	}
 
 	const type_schema* schema_registry::find(std::uint64_t id) const
 	{
 		auto it = m_names_by_id.find(id);
-		return it == m_names_by_id.end() ? nullptr : find(it->second);
+		if (it != m_names_by_id.end()) {
+			return find(it->second);
+		}
+		return m_parent ? m_parent->find(id) : nullptr;
 	}
 
 	bool schema_registry::contains(std::string_view name) const
 	{
-		return m_types.contains(std::string{ name });
+		return find(name) != nullptr;
 	}
 
 	const enum_schema* schema_registry::add_enum(enum_schema schema)
 	{
-		if (m_enums.contains(schema.name)) {
+		if (find_enum(schema.name)) {
 			return nullptr;
 		}
 		const std::string name = schema.name;
@@ -417,13 +423,16 @@ namespace desc
 	const enum_schema* schema_registry::find_enum(std::string_view name) const
 	{
 		auto it = m_enums.find(std::string{ name });
-		return it == m_enums.end() ? nullptr : &it->second;
+		if (it != m_enums.end()) {
+			return &it->second;
+		}
+		return m_parent ? m_parent->find_enum(name) : nullptr;
 	}
 
 	std::vector<std::string> schema_registry::type_names() const
 	{
-		std::vector<std::string> names;
-		names.reserve(m_types.size());
+		std::vector<std::string> names = m_parent ? m_parent->type_names() : std::vector<std::string>{};
+		names.reserve(names.size() + m_types.size());
 		for (const auto& entry : m_types) {
 			names.push_back(entry.first);
 		}

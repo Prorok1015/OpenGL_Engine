@@ -2,6 +2,7 @@
 #include <snk/ecs/ecs_phase.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_interface.hpp>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -60,23 +61,52 @@ struct system_entry
 class system_registry
 {
 public:
-	// False when the name is taken.
+	system_registry() = default;
+	// A layer over `parent` (MODULE_LAYER.md): find() and the phase list fall through to it, a name
+	// it has cannot be added here, and add/remove change only this layer.
+	explicit system_registry(const system_registry* parent)
+		: m_parent(parent)
+		, m_phases(parent ? &parent->m_phases : nullptr)
+	{
+	}
+
+	// False when the name is taken (here or in the parent).
 	bool add(system_entry entry)
 	{
+		if (m_parent && m_parent->find(entry.name)) {
+			return false;
+		}
 		const std::string key = entry.name;
 		return m_entries.emplace(key, std::move(entry)).second;
 	}
 
+	// False when nothing is registered under the name. Not synchronised: remove between frames, with no task
+	// running a plan. Plans built earlier still hold the system's run function and instances: rebuild them
+	// (scn::context_set::rebuild_all_plans) before the code goes away.
+	bool remove(const std::string& name)
+	{
+		return m_entries.erase(name) != 0;
+	}
+
+	// This layer's own systems, without the parent's.
+	[[nodiscard]] std::size_t size() const noexcept { return m_entries.size(); }
+
 	[[nodiscard]] const system_entry* find(const std::string& name) const
 	{
 		auto it = m_entries.find(name);
-		return it == m_entries.end() ? nullptr : &it->second;
+		if (it != m_entries.end()) {
+			return &it->second;
+		}
+		return m_parent ? m_parent->find(name) : nullptr;
 	}
+
+	[[nodiscard]] const system_registry* parent() const noexcept { return m_parent; }
 
 	[[nodiscard]] phase_table& phases() noexcept { return m_phases; }
 	[[nodiscard]] const phase_table& phases() const noexcept { return m_phases; }
 
 private:
+	const system_registry* m_parent = nullptr;
 	std::unordered_map<std::string, system_entry> m_entries;
 	phase_table m_phases;
 };

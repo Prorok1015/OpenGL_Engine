@@ -4,6 +4,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/scene/level/scn_world_desc.h>
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -12,7 +13,6 @@
 #include <boost/json/object.hpp>
 
 namespace res { class resource_system; }
-namespace desc { class desc_system; }
 namespace scn { class level_desc; }
 
 namespace edt
@@ -94,8 +94,7 @@ namespace edt
 	class level_controller
 	{
 	public:
-		level_controller(scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc,
-			scene_editor& scene_ed, world_controller& world_ctrl);
+		level_controller(scene_document& state, editor_services& services, scene_editor& scene_ed, world_controller& world_ctrl);
 		~level_controller();
 
 		void new_level();
@@ -114,15 +113,30 @@ namespace edt
 
 		void add_desc_to_scene(const res::res_handle<desc::desc_base>& handle, const std::string& key);
 
+		// Hot reload of the edited level (editor_tag): watched on the resource system of the layer that loaded it, and
+		// unwatched there even after the game layer changed.
+		void watch_level();
+		void unwatch_level();
+
+		// The game layer is about to be replaced (a game module loads or unloads): keeps the edited level as JSON,
+		// built with the old layer's descs, and lets go of everything that refers to that layer (the watch, the world
+		// descs and their handles); no world is active then.
+		void detach_from_game_layer();
+		// The new game layer is in place: rebuilds the level kept by detach_from_game_layer in it and returns to the
+		// world that was active. Desc types the new layer does not know are dropped (logged by the desc system).
+		void attach_to_game_layer();
+
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
 
 	private:
 		scene_document& m_state;
 		editor_services& m_services;
-		res::resource_system& m_res;
-		desc::desc_system& m_desc;
 		scene_editor& m_scene_editor;
 		world_controller& m_world_ctrl;
+		res::resource_system* m_watched_resources = nullptr;
+		res::tag m_watched_tag;
+		std::optional<boost::json::object> m_detached_level;
+		int m_detached_world = -1;
 	};
 }

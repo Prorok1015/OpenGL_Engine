@@ -59,7 +59,7 @@ struct selection_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document state;
 	edt::scene_editor editor{ state, services };
-	edt::world_controller world_ctrl{ state, services, *rs, *descs };
+	edt::world_controller world_ctrl{ state, services };
 	edt::scene_hierarchy_panel hierarchy;
 	edt::inspector_panel inspector;
 	entt::registry reg;

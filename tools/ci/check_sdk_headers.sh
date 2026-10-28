@@ -7,6 +7,9 @@
 # under passes/, anything with glad/GLFW in its path, and headers that #include <glad/...> or
 # <GLFW/...>. Bundled third-party trees (snk/boost, snk/lib3dparty, snk/_generated) are not checked.
 #
+# Base-only API (<component>/include_base, #405 / MODULE_LAYER.md) must not reach the SDK either: no file of it, no
+# installed header that includes it or declares what it holds. Always enforced.
+#
 # Enforcing by default since every public header lives in <component>/include (#109).
 # SNK_SDK_HEADERS_ENFORCE=0|1 or --enforce/--report override it.
 set -euo pipefail
@@ -55,6 +58,12 @@ for entry in ${found[@]+"${found[@]}"}; do
 	done
 	((allowed)) || would_fail+=("${entry}")
 done
+
+# Base-only API: the names come from the include_base trees; the self-test proves the check still catches a leak.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python="$(command -v python3 || command -v python)" # Windows runners have only `python`
+"${python}" "${here}/check_sdk_base_only.py" --self-test
+"${python}" "${here}/check_sdk_base_only.py" "${prefix}"
 
 total=$(cd "${root}" && find snk -type f | wc -l)
 echo "SDK headers: ${total} files installed under include/snk, ${#would_fail[@]} internal"

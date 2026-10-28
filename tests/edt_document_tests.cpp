@@ -53,8 +53,10 @@ struct document_fixture : test_util::scene_env
 		hot = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
 		mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
 		services.ctx_manager = mgr;
-		services.assembler = assembler.get();
-		services.sfactory = &sf;
+		services.base_descs = descs.get();
+		services.base_resources = rs.get();
+		services.base_assembler = assembler.get();
+		services.base_sfactory = &sf;
 
 		connections.push_back(events.document_opened.subscribe([this](edt::document_id id) { log.push_back("opened:" + std::to_string(id)); }));
 		connections.push_back(events.document_closed.subscribe([this](edt::document_id id) { log.push_back("closed:" + std::to_string(id)); }));
@@ -79,7 +81,7 @@ struct document_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events, *rs, *descs };
+	edt::document_manager documents{ scene, services, events };
 	std::vector<edt::connection> connections;
 	std::vector<std::string> log;
 	std::vector<std::pair<edt::document_id, std::uint64_t>> changed;
