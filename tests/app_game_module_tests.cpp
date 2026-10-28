@@ -1,28 +1,38 @@
 #include <boost/test/unit_test.hpp>
-#include "test_scene_env.hpp"
-#include <snk/application/app_module_layer.h>
-#include <snk/application/app_module_loader.hpp>
+#include "test_module_env.hpp"
+#include <snk/common/logger/engine_log.h>
+#include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/scene/level/scn_context_manager.h>
-#include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <chrono>
 #include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
-// A game module in the same binary (#220 PR-6, MODULE_LAYER.md): module_loader gives it a layer, it registers
-// a desc type with its spawner, a system, a component's meta and a service of its own there, and unloading it
-// leaves the root storage and the base registries as they were.
+// A game module in the same binary (#220 PR-6, MODULE_LAYER.md): module_loader gives it a layer, it registers a desc
+// type with its spawner, a system, a component's meta, a message type and a service of its own there, keeps its
+// registrations in base registries and its tasks in the layer, and unloading it leaves the root storage and the base
+// registries as they were.
 
 namespace {
 
 struct game_component {
+	int value = 0;
+};
+
+struct base_component {
+	int ticks = 0;
+};
+
+struct game_message {
 	int value = 0;
 };
 
@@ -36,7 +46,13 @@ struct game_desc : desc::desc_base {
 	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
 };
 
+// What the module did, for the tests to look at.
+std::vector<std::string> g_teardown;
+bool g_task_ran = false;
+std::optional<ds::task_handle<void>> g_task;
+
 struct game_service {
+	~game_service() { g_teardown.emplace_back("service"); }
 	int frames = 0;
 };
 
@@ -44,6 +60,19 @@ void game_move(entt::view<entt::get_t<game_component>> view)
 {
 	for (auto&& [entity, component] : view.each()) {
 		++component.value;
+	}
+}
+
+// One instance per world that runs it: destroyed with the world.
+struct game_world_system : ecs::system_interface {
+	~game_world_system() override { g_teardown.emplace_back("world"); }
+	void run() {}
+};
+
+void base_tick(entt::view<entt::get_t<base_component>> view)
+{
+	for (auto&& [entity, component] : view.each()) {
+		++component.ticks;
 	}
 }
 
@@ -60,57 +89,70 @@ protected:
 			reg.emplace_or_replace<game_component>(e, game_component{ static_cast<const game_desc&>(base).value });
 		});
 		layer.systems().register_system<&game_move>("game::move");
+		layer.systems().register_system<&game_world_system::run, game_world_system>("game::world", {});
 		layer.components().add<game_component>("game.component");
+		layer.channels().add<game_message>();
 		ecs::register_component<game_component>(layer.meta());
 		data.construct<game_service>();
-	}
 
-	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override
-	{
-		data.destruct<game_service>();
+		cmd::command_desc ping;
+		ping.id = "game.ping";
+		ping.summary = "Answers.";
+		ping.invoke = [](const cmd::call&) { return cmd::result::success(); };
+		layer.keep(data.require<cmd::command_registry>().add(std::move(ping)));
+		layer.keep(engine::add_log_sink([](std::string_view, engine::log_level, std::string_view) {}));
+		g_task = data.require<ds::task_system>().run(ds::lane::compute, ds::task_desc{ .name = "game.background" }, layer.tasks(),
+			[](ds::task_context&) { g_task_ran = true; });
 	}
+	// game_service stays in the layer's storage: it goes after the layer.
+};
+
+class other_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "other_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage&) override
+	{
+		layer.descs().register_component_desc<game_desc>("other_desc");
+	}
+};
+
+bool g_throwing_shut_down = false;
+
+class throwing_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "throwing_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage&) override
+	{
+		layer.descs().register_component_desc<game_desc>("throwing_desc");
+		throw std::runtime_error("registration failed");
+	}
+	void shutdown_content(scn::scene_layer&, ds::app_data_storage&) override { g_throwing_shut_down = true; }
 };
 
 constexpr const char* GAME_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[
-	{"__type":"world_desc","name":"w0","systems":["game::move"],
+	{"__type":"world_desc","name":"w0","systems":["game::move","game::world"],
 	 "components":{"g":{"__type":"game_desc","value":2}}}]})";
 
-template<class T>
-std::shared_ptr<T> borrowed(T& object)
-{
-	return std::shared_ptr<T>(std::shared_ptr<void>{}, &object);
-}
-
-struct module_fixture : test_util::scene_env {
-	module_fixture()
-		: hot(std::make_shared<scn::hot_reload_manager>(*assembler, *rs))
+struct game_module_fixture : test_util::module_env {
+	game_module_fixture()
 	{
-		root.attach(borrowed(*rs));
-		root.attach(borrowed(*descs));
-		root.attach(borrowed(*assembler));
-		root.attach(borrowed(sf));
-		auto& contexts = root.construct<scn::context_manager>(*rs, *assembler, sf, hot);
-		root.construct<app::modules::module_layer_factory, gs::game_layer_factory>(contexts);
+		root.attach(test_util::borrowed(tasks));
+		g_teardown.clear();
+		g_task_ran = false;
+		g_task.reset();
+		g_throwing_shut_down = false;
 	}
-
-	~module_fixture()
-	{
-		// A module still loaded goes first: its layer belongs to the context_manager in `root`.
-		loader.shutdown_all_services(root);
-		root = ds::app_data_storage{};
-	}
-
-	scn::context_manager& contexts() { return root.require<scn::context_manager>(); }
-
-	std::shared_ptr<scn::hot_reload_manager> hot;
-	ecs::system_factory sf;
-	ds::app_data_storage root;
-	app::modules::module_loader loader;
 };
 
 }
 
-BOOST_FIXTURE_TEST_SUITE(app_game_module_tests, module_fixture)
+BOOST_FIXTURE_TEST_SUITE(app_game_module_tests, game_module_fixture)
 
 BOOST_AUTO_TEST_CASE(a_game_module_registers_into_its_layer_and_its_worlds_run)
 {
@@ -124,6 +166,8 @@ BOOST_AUTO_TEST_CASE(a_game_module_registers_into_its_layer_and_its_worlds_run)
 	BOOST_TEST(!descs->is_registered("game_desc"));
 	BOOST_TEST(!sf.registry().find("game::move"));
 	BOOST_TEST(!root.has_value<game_service>());
+	BOOST_TEST(layer->channels().contains<game_message>());
+	BOOST_TEST(!contexts().channels().contains<game_message>());
 
 	BOOST_REQUIRE(contexts().load_level(put("lv.desc", GAME_LEVEL)));
 	pump();
@@ -139,21 +183,54 @@ BOOST_AUTO_TEST_CASE(unloading_leaves_the_root_and_the_base_as_they_were)
 {
 	const std::size_t root_size = root.size();
 	const auto base_components = descs->get_component_type_names();
+	const std::size_t base_systems = sf.registry().size();
+	const std::size_t base_commands = commands.size();
+	const std::size_t base_channels = contexts().channels().size();
+	const std::size_t base_sinks = engine::log_sink_count();
+
 	loader.load(std::make_unique<test_game_module>(), root);
 	BOOST_REQUIRE(contexts().load_level(put("lv.desc", GAME_LEVEL)));
 	pump();
+	BOOST_TEST(commands.size() == base_commands + 1u);
+	BOOST_TEST(engine::log_sink_count() == base_sinks + 1u);
+	BOOST_TEST(contexts().game_layer()->kept_count() == 2u);
 
 	loader.unload("test_game", root);
 	BOOST_TEST(root.size() == root_size);
 	BOOST_TEST((loader.state("test_game") == app::modules::module_state::unloaded));
 	BOOST_TEST(descs->get_component_type_names() == base_components, boost::test_tools::per_element());
 	BOOST_TEST(!assembler->has_spawner("game_desc"));
+	BOOST_TEST(sf.registry().size() == base_systems);
+	BOOST_TEST(commands.size() == base_commands);
+	BOOST_TEST(contexts().channels().size() == base_channels);
+	BOOST_TEST(engine::log_sink_count() == base_sinks);
 
 	// A fresh, empty game layer is there for the editor; it knows nothing of the module.
 	auto* fresh = contexts().game_layer();
 	BOOST_REQUIRE(fresh != nullptr);
 	BOOST_TEST(!fresh->descs().is_registered("game_desc"));
 	BOOST_TEST(contexts().level_set().size() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(the_module_tasks_are_stopped_before_its_layer_goes)
+{
+	loader.load(std::make_unique<test_game_module>(), root);
+	BOOST_REQUIRE(g_task.has_value());
+	loader.unload("test_game", root);
+	BOOST_TEST(g_task->done());
+	BOOST_TEST((g_task->status() == ds::task_status::cancelled));
+	BOOST_TEST(!g_task_ran);
+}
+
+BOOST_AUTO_TEST_CASE(unloading_takes_the_worlds_then_the_layer_then_the_module_services)
+{
+	loader.load(std::make_unique<test_game_module>(), root);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", GAME_LEVEL)));
+	pump();
+	g_teardown.clear();
+
+	loader.unload("test_game", root);
+	BOOST_TEST(g_teardown == (std::vector<std::string>{ "world", "service" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(the_module_loads_again_after_unloading)
@@ -166,6 +243,56 @@ BOOST_AUTO_TEST_CASE(the_module_loads_again_after_unloading)
 			loader.unload("test_game", root);
 		}
 	}
+}
+
+BOOST_AUTO_TEST_CASE(a_second_game_module_is_refused)
+{
+	loader.load(std::make_unique<test_game_module>(), root);
+	auto* first = contexts().game_layer();
+
+	BOOST_CHECK_THROW(loader.load(std::make_unique<other_game_module>(), root), std::logic_error);
+	BOOST_TEST(!loader.state("other_game").has_value());
+	BOOST_TEST(contexts().game_layer() == first); // the first module's layer is untouched
+	BOOST_TEST(first->descs().is_registered("game_desc"));
+
+	loader.unload("test_game", root);
+	loader.load(std::make_unique<other_game_module>(), root);
+	BOOST_TEST(contexts().game_layer()->descs().is_registered("other_desc"));
+	loader.unload("other_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_whose_registration_throws_is_shut_down_and_its_layer_dropped)
+{
+	const std::size_t root_size = root.size();
+	BOOST_CHECK_THROW(loader.load(std::make_unique<throwing_game_module>(), root), std::runtime_error);
+	BOOST_TEST(g_throwing_shut_down);
+	BOOST_TEST(!loader.state("throwing_game").has_value());
+	BOOST_TEST(root.size() == root_size);
+	BOOST_REQUIRE(contexts().game_layer() != nullptr);
+	BOOST_TEST(!contexts().game_layer()->descs().is_registered("throwing_desc"));
+
+	loader.load(std::make_unique<test_game_module>(), root); // the factory is free again
+	loader.unload("test_game", root);
+}
+
+// The base sets are built from the base registries alone, and the module's sets go with its layer: no plan refers
+// to the module, so unloading it needs no rebuild_all_plans.
+BOOST_AUTO_TEST_CASE(base_sets_keep_running_without_a_plan_rebuild)
+{
+	sf.register_system<&base_tick>("base::tick", { .run_in_edit = true });
+	contexts().create_set("base");
+	auto& world = contexts().create_context("base", "bw", scn::context_kind::runtime, { "base::tick" });
+	const auto entity = world.state().create();
+	world.state().emplace<base_component>(entity);
+
+	contexts().update(std::chrono::duration<float>(0.016f));
+	const int before = world.state().get<base_component>(entity).ticks;
+	BOOST_REQUIRE(before > 0);
+
+	loader.load(std::make_unique<test_game_module>(), root);
+	loader.unload("test_game", root);
+	contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_TEST(world.state().get<base_component>(entity).ticks > before);
 }
 
 BOOST_AUTO_TEST_CASE(a_layered_module_needs_a_layer_factory)

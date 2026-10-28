@@ -44,7 +44,7 @@ void engine::engine_module::register_services(ds::app_data_storage& data)
 	gui::gui_init(data);//engine
 	scn::scene_init(data);//engine
 	// Game modules (layered()) get their layer from here (MODULE_LAYER.md).
-	data.construct<app::modules::module_layer_factory, gs::game_layer_factory>(data.require<scn::context_manager>());
+	data.construct<app::modules::module_layer_factory, gs::game_layer_factory>(data.require<scn::context_manager>(), &data.require<ds::task_system>());
 	auto& stages = data.require<app::frame_stage_registry>();
 	gs::register_scene_frame_stages(stages);
 	gs::register_platform_frame_stages(stages);

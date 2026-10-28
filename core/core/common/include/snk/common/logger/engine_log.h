@@ -86,6 +86,8 @@ namespace engine
 	// Any number of sinks may be installed at once; they are called in the order they were added.
 	// A null callback adds nothing (the handle is inactive).
 	[[nodiscard]] SNK_API log_sink_handle add_log_sink(log_callback_t callback);
+	// Sinks installed now. For tests and diagnostics (a module must leave as many as it found).
+	[[nodiscard]] SNK_API std::size_t log_sink_count();
 
 	// ---- Journal -------------------------------------------------------------------------------------------
 	// Every logged message also goes into a ring buffer, so a reader that was not listening (an agent, a bug

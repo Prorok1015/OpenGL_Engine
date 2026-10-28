@@ -222,8 +222,8 @@ namespace app::modules {
 		// Loads one module after startup: every module it depends on must already be initialized,
 		// otherwise nothing is registered and std::logic_error is thrown. The module is appended
 		// (its dependencies are all ahead of it), registered and initialized; if either phase
-		// throws the exception propagates and nothing is kept. If initialize_services throws, the
-		// module has already registered services, so it is shut down (a throw there is logged),
+		// throws the exception propagates and nothing is kept. If register_services or initialize_services
+		// throws, the module may have registered services, so it is shut down (a throw there is logged),
 		// the storage size is checked against the pre-load size (error log if it differs) and the
 		// module is dropped, which lets the same module be loaded again later.
 		void load(std::unique_ptr<module_interface> module, ds::app_data_storage& data) {
@@ -262,9 +262,9 @@ namespace app::modules {
 			entry e{ std::move(module) };
 			e.size_before = data.size();
 			create_layer(e, data);
-			e.module->register_services(storage_of(e, data));
-			e.state = module_state::registered;
 			try {
+				e.module->register_services(storage_of(e, data));
+				e.state = module_state::registered;
 				e.module->initialize_services(storage_of(e, data));
 			} catch (...) {
 				shutdown_entry(e, data);

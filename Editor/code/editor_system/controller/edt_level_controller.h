@@ -4,6 +4,7 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/scene/level/scn_world_desc.h>
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -117,6 +118,14 @@ namespace edt
 		void watch_level();
 		void unwatch_level();
 
+		// The game layer is about to be replaced (a game module loads or unloads): keeps the edited level as JSON,
+		// built with the old layer's descs, and lets go of everything that refers to that layer (the watch, the world
+		// descs and their handles); no world is active then.
+		void detach_from_game_layer();
+		// The new game layer is in place: rebuilds the level kept by detach_from_game_layer in it and returns to the
+		// world that was active. Desc types the new layer does not know are dropped (logged by the desc system).
+		void attach_to_game_layer();
+
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
 
@@ -127,5 +136,7 @@ namespace edt
 		world_controller& m_world_ctrl;
 		res::resource_system* m_watched_resources = nullptr;
 		res::tag m_watched_tag;
+		std::optional<boost::json::object> m_detached_level;
+		int m_detached_world = -1;
 	};
 }

@@ -48,14 +48,22 @@ namespace scn
 		// The set "level". It lives as long as the manager, but set_game_layer() replaces it.
 		scn::context_set& level_set() { return *m_level_set; }
 
-		// A layer over the manager's services; lives until destroy_layer() or the manager.
-		scn::scene_layer& create_layer();
-		// Destroys the sets of the layer, then the layer. The game layer's set "level" goes back to the base, empty.
+		// A layer over the manager's services; lives until destroy_layer() or the manager. `tasks`: the task system the
+		// layer's tasks (scene_layer::tasks) run on.
+		scn::scene_layer& create_layer(ds::task_system* tasks = nullptr);
+		// Stops the layer's tasks, destroys its sets, then the layer. The game layer's set "level" goes back to the
+		// base, empty.
 		void destroy_layer(scn::scene_layer& layer);
 		// The layer the set "level" and the previews belong to; null: the base services.
 		scn::scene_layer* game_layer() const { return m_game_layer; }
-		// Replaces the set "level" with an empty one on `layer` (null: the base) and makes it the game layer.
+		// Replaces the set "level" with an empty one on `layer` (null: the base) and makes it the game layer. Mode,
+		// seed and the active flag of the set carry over.
 		void set_game_layer(scn::scene_layer* layer);
+
+		enum class game_layer_change { before, after };
+		// Called by set_game_layer: `before` while the old game layer and its set "level" are still there (let go
+		// of what refers to them), `after` once the new one is in place. One listener (the editor); null removes it.
+		void set_on_game_layer_change(std::function<void(game_layer_change)> cb) { m_on_game_layer_change = std::move(cb); }
 
 		// Replaces the contents of the set "level" with the worlds of the level desc and watches the
 		// desc for changes. False (and the current level kept) when the desc cannot be loaded.
@@ -144,5 +152,6 @@ namespace scn
 		std::vector<std::unique_ptr<scn::context_set>> m_sets;
 		scn::context_set* m_level_set = nullptr;
 		std::function<void()> m_on_reload;
+		std::function<void(game_layer_change)> m_on_game_layer_change;
 	};
 }
