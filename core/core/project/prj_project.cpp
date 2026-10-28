@@ -105,8 +105,20 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		}
 	}
 
-	// A project that ships .cache (or a folder in it) as a symlink would send every memory:// write elsewhere.
-	for (const auto& dir : project.writable_dirs()) {
+	for (const auto& dir : project.private_dirs()) {
+		for (const auto& content_root : roots) {
+			if (is_inside(dir, content_root) || is_inside(content_root, dir)) {
+				return std::format("content root '{}' overlaps the project's private folder '{}'", content_root.generic_string(),
+					dir.generic_string());
+			}
+		}
+	}
+
+	// A project that ships .cache (or a folder in it) as a symlink would send every memory:// write elsewhere; a
+	// symlinked .snk would put the agent token elsewhere.
+	auto real_dirs = project.writable_dirs();
+	real_dirs.push_back(project.snk_dir());
+	for (const auto& dir : real_dirs) {
 		const auto status = fs::symlink_status(dir, ec);
 		if (status.type() == fs::file_type::not_found) {
 			continue;

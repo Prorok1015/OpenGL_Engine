@@ -173,6 +173,24 @@ BOOST_AUTO_TEST_CASE(Parse_DuplicatesAreRejected)
 	check_error(prj::parse_manifest(minimal_with("content_roots", R"(["res", "res/"])")), "$.content_roots[1]");
 	check_error(prj::parse_manifest(minimal_with("modules", R"([{ "name": "game" }, { "name": "game", "kind": "editor" }])")),
 		"$.modules[1].name");
+	check_error(prj::parse_manifest(minimal_with("modules", R"([{ "name": "game" }, { "name": "Game" }])")), "$.modules[1].name");
+}
+
+BOOST_AUTO_TEST_CASE(Parse_ModuleNamesMustBeSafeFileNames)
+{
+	const std::string too_long = "m" + std::string(64, 'x');
+	for (const std::string& name : { std::string{ "../evil" }, std::string{ "a/b" }, std::string{ R"(a\\b)" }, std::string{ "." },
+			std::string{ "" }, std::string{ "1game" }, std::string{ "game name" }, std::string{ "C:x" }, std::string{ "_game" },
+			std::string{ R"(g\u00e9)" }, too_long }) {
+		BOOST_TEST_INFO("name: " << name);
+		check_error(prj::parse_manifest(minimal_with("modules", R"([{ "name": ")" + name + R"(" }])")), "$.modules[0].name");
+	}
+
+	const std::string longest = "m" + std::string(63, 'x');
+	const auto ok = prj::parse_manifest(minimal_with("modules",
+		R"([{ "name": "Game_Editor-2" }, { "name": ")" + longest + R"(" }])"));
+	BOOST_REQUIRE(ok.data.has_value());
+	BOOST_TEST(ok.data->modules.size() == 2u);
 }
 
 BOOST_AUTO_TEST_CASE(Parse_StartSceneMustBeAResTagInsideTheProject)
