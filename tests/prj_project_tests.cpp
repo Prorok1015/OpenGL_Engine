@@ -230,4 +230,40 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesASymlinkedUserProfileAndSnk)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(RefuseWithoutAsking_OnlyAHeldProjectInANonInteractiveRun)
+{
+	using prj::version_action;
+	// -n never asks: what would be a question is refused, never opened.
+	BOOST_TEST(prj::refuse_without_asking(version_action::ask_open_or_quit, true));
+	BOOST_TEST(prj::refuse_without_asking(version_action::refuse, true));
+	BOOST_TEST(!prj::refuse_without_asking(version_action::open, true));
+	BOOST_TEST(!prj::refuse_without_asking(version_action::open_with_notice, true));
+	// Someone can answer: the project is held and the dialog asks.
+	for (const auto action : { version_action::open, version_action::open_with_notice, version_action::ask_open_or_quit,
+			version_action::refuse }) {
+		BOOST_TEST(!prj::refuse_without_asking(action, false));
+	}
+}
+
+// -n on an older project: refused like a newer one, unless --allow-engine-version-mismatch opened it already.
+BOOST_AUTO_TEST_CASE(RefuseWithoutAsking_AnOlderProjectOpensOnlyWithTheMismatchFlag)
+{
+	const auto older = prj::version_match::project_older;
+	BOOST_TEST(prj::refuse_without_asking(prj::version_action_for(older, false), true));
+	BOOST_TEST(!prj::refuse_without_asking(prj::version_action_for(older, true), true));
+	BOOST_TEST(prj::refuse_without_asking(prj::version_action_for(prj::version_match::project_newer, true), true));
+}
+
+BOOST_AUTO_TEST_CASE(EngineVersionError_IsAProjectError)
+{
+	try {
+		throw prj::engine_version_error("newer");
+	} catch (const prj::project_error& e) {
+		BOOST_TEST(std::string{ e.what() } == "newer");
+		BOOST_TEST(dynamic_cast<const prj::engine_version_error*>(&e) != nullptr);
+		return;
+	}
+	BOOST_FAIL("engine_version_error was not caught as a project_error");
+}
+
 BOOST_AUTO_TEST_SUITE_END()
