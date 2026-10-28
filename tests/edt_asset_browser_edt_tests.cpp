@@ -57,12 +57,12 @@ BOOST_AUTO_TEST_CASE(ShippedEditorData_IsNotReachableThroughTheResLayers)
 
 BOOST_FIXTURE_TEST_CASE(RegisteringEdt_DoesNotAddALayerToTheBrowser, test_util::ram_res_env)
 {
-	const auto layers_before = res::resource_system::get_resource_layers();
+	const auto layers_before = rs->get_resource_layers();
 
 	test_util::temp_dir data("asset_browser_edt_data");
 	BOOST_REQUIRE(edt::register_data_protocol(*rs, data.path(), data.path() / "user"));
 
-	const auto layers_after = res::resource_system::get_resource_layers();
+	const auto layers_after = rs->get_resource_layers();
 	BOOST_TEST((layers_before == layers_after));
 	for (const fs::path& layer : layers_after) {
 		BOOST_TEST(layer != data.path(), layer);
