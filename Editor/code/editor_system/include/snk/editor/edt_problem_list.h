@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -41,7 +42,7 @@ namespace edt
 	};
 
 	// The editor's problems, grouped by source ("build", later "desc"); each source replaces its own set as a whole.
-	// Main thread only. Every change raises editor_events::problems_changed(source) and bumps generation().
+	// Main thread only (the thread that created it), asserted by set() and clear(). Every change raises editor_events::problems_changed(source) and bumps generation().
 	class problem_list
 	{
 	public:
@@ -68,5 +69,6 @@ namespace edt
 		editor_events* m_events = nullptr;
 		std::vector<std::pair<std::string, std::vector<problem>>> m_sources;
 		std::uint64_t m_generation = 0;
+		std::thread::id m_main_thread = std::this_thread::get_id();
 	};
 }

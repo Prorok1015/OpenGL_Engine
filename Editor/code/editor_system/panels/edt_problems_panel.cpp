@@ -18,12 +18,53 @@ namespace {
 		}
 		return { 1.f, 1.f, 1.f, 1.f };
 	}
+
+	// Well-formed UTF-8 (no overlongs, no surrogates, at most U+10FFFF).
+	bool is_utf8(std::string_view text)
+	{
+		std::size_t i = 0;
+		while (i < text.size()) {
+			const auto lead = static_cast<unsigned char>(text[i]);
+			std::size_t length = 0;
+			unsigned char low = 0x80;
+			unsigned char high = 0xBF;
+			if (lead < 0x80) {
+				++i;
+				continue;
+			} else if (lead >= 0xC2 && lead <= 0xDF) {
+				length = 2;
+			} else if (lead >= 0xE0 && lead <= 0xEF) {
+				length = 3;
+				if (lead == 0xE0) low = 0xA0;
+				if (lead == 0xED) high = 0x9F;
+			} else if (lead >= 0xF0 && lead <= 0xF4) {
+				length = 4;
+				if (lead == 0xF0) low = 0x90;
+				if (lead == 0xF4) high = 0x8F;
+			} else {
+				return false;
+			}
+			if (text.size() - i < length) return false;
+			for (std::size_t k = 1; k < length; ++k) {
+				const auto next = static_cast<unsigned char>(text[i + k]);
+				if (next < (k == 1 ? low : 0x80) || next > (k == 1 ? high : 0xBF)) return false;
+			}
+			i += length;
+		}
+		return true;
+	}
+
+	// The first line: a row of the table is one line high.
+	std::string_view first_line(std::string_view text)
+	{
+		return text.substr(0, text.find('\n'));
+	}
 }
 
 std::string edt::problem_display_file(std::string_view file, const std::filesystem::path& root)
 {
-	if (file.empty() || root.empty()) return std::string(file);
-	// Compiler output is UTF-8; a std::string would be read in the ANSI code page on Windows.
+	// cl and link print in the console code page; converting that as UTF-8 throws on Windows.
+	if (file.empty() || root.empty() || !is_utf8(file)) return std::string(file);
 	const std::filesystem::path path(std::u8string_view(reinterpret_cast<const char8_t*>(file.data()), file.size()));
 	if (!path.is_absolute()) return std::string(file);
 	std::filesystem::path base = root.lexically_normal();
@@ -39,7 +80,11 @@ std::string edt::problem_copy_text(const problem& item)
 	std::string out;
 	if (!item.file.empty()) {
 		out += item.file;
-		if (item.line > 0) out += std::format("({})", item.line);
+		if (item.line > 0 && item.column > 0) {
+			out += std::format("({},{})", item.line, item.column);
+		} else if (item.line > 0) {
+			out += std::format("({})", item.line);
+		}
 		out += ": ";
 	}
 	out += problem_severity_name(item.severity);
@@ -49,6 +94,10 @@ std::string edt::problem_copy_text(const problem& item)
 	}
 	out += ": ";
 	out += item.message;
+	for (const auto& note : item.notes) {
+		out += '\n';
+		out += note;
+	}
 	return out;
 }
 
@@ -69,9 +118,24 @@ void edt::problems_panel::refresh()
 		row added;
 		added.location = problem_display_file(entry.item.file, m_root);
 		if (entry.item.line > 0) added.location += std::format(":{}", entry.item.line);
+		added.tooltip = entry.item.message;
+		for (const auto& note : entry.item.notes) {
+			added.tooltip += '\n';
+			added.tooltip += note;
+		}
 		added.item = std::move(entry.item);
 		++m_counts[index_of(added.item.severity)];
 		m_rows.push_back(std::move(added));
+	}
+	filter();
+}
+
+void edt::problems_panel::filter()
+{
+	m_visible.clear();
+	m_visible.reserve(m_rows.size());
+	for (std::size_t i = 0; i < m_rows.size(); ++i) {
+		if (m_shown[index_of(m_rows[i].item.severity)]) m_visible.push_back(i);
 	}
 }
 
@@ -83,7 +147,7 @@ void edt::problems_panel::on_render()
 	for (std::size_t i = 0; i < m_shown.size(); ++i) {
 		if (i > 0) ImGui::SameLine();
 		const std::string label = std::format("{} ({})###problems_filter_{}", labels[i], m_counts[i], i);
-		ImGui::Checkbox(label.c_str(), &m_shown[i]);
+		if (ImGui::Checkbox(label.c_str(), &m_shown[i])) filter();
 	}
 	ImGui::Separator();
 
@@ -100,37 +164,43 @@ void edt::problems_panel::on_render()
 		ImGui::TableSetupColumn("Location", ImGuiTableColumnFlags_WidthStretch, 1.f);
 		ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch, 3.f);
 		ImGui::TableHeadersRow();
-		for (std::size_t i = 0; i < m_rows.size(); ++i) {
-			const row& entry = m_rows[i];
-			const problem_severity severity = entry.item.severity;
-			if (!m_shown[index_of(severity)]) continue;
 
-			ImGui::PushID(static_cast<int>(i));
-			ImGui::TableNextRow();
-			ImGui::TableSetColumnIndex(0);
-			ImGui::PushStyleColor(ImGuiCol_Text, color_of(severity));
-			ImGui::Selectable(problem_severity_name(severity), false, ImGuiSelectableFlags_SpanAllColumns);
-			ImGui::PopStyleColor();
-			if (ImGui::BeginPopupContextItem("##problem_menu")) {
-				if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(problem_copy_text(entry.item).c_str());
-				ImGui::EndPopup();
-			}
+		ImGuiListClipper clipper;
+		clipper.Begin(static_cast<int>(m_visible.size()));
+		while (clipper.Step()) {
+			for (int visible = clipper.DisplayStart; visible < clipper.DisplayEnd; ++visible) {
+				const std::size_t index = m_visible[static_cast<std::size_t>(visible)];
+				const row& entry = m_rows[index];
+				const problem_severity severity = entry.item.severity;
 
-			ImGui::TableSetColumnIndex(1);
-			ImGui::TextUnformatted(entry.location.c_str());
+				ImGui::PushID(static_cast<int>(index));
+				ImGui::TableNextRow();
+				ImGui::TableSetColumnIndex(0);
+				ImGui::PushStyleColor(ImGuiCol_Text, color_of(severity));
+				ImGui::Selectable(problem_severity_name(severity), false, ImGuiSelectableFlags_SpanAllColumns);
+				ImGui::PopStyleColor();
+				if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", entry.tooltip.c_str());
+				if (ImGui::BeginPopupContextItem("##problem_menu")) {
+					if (ImGui::MenuItem("Copy")) ImGui::SetClipboardText(problem_copy_text(entry.item).c_str());
+					ImGui::EndPopup();
+				}
 
-			ImGui::TableSetColumnIndex(2);
-			if (!entry.item.code.empty()) {
-				ImGui::TextDisabled("%s", entry.item.code.c_str());
-				ImGui::SameLine();
+				ImGui::TableSetColumnIndex(1);
+				ImGui::TextUnformatted(entry.location.c_str());
+
+				ImGui::TableSetColumnIndex(2);
+				if (!entry.item.code.empty()) {
+					ImGui::TextDisabled("%s", entry.item.code.c_str());
+					ImGui::SameLine();
+				}
+				const std::string_view message = first_line(entry.item.message);
+				ImGui::TextUnformatted(message.data(), message.data() + message.size());
+				if (!entry.item.notes.empty()) {
+					ImGui::SameLine();
+					ImGui::TextDisabled("(+%zu notes)", entry.item.notes.size());
+				}
+				ImGui::PopID();
 			}
-			ImGui::TextWrapped("%s", entry.item.message.c_str());
-			if (!entry.item.notes.empty()) {
-				ImGui::Indent();
-				for (const auto& note : entry.item.notes) ImGui::TextDisabled("%s", note.c_str());
-				ImGui::Unindent();
-			}
-			ImGui::PopID();
 		}
 		ImGui::EndTable();
 	}

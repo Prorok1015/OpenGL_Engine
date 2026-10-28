@@ -221,6 +221,18 @@ BOOST_AUTO_TEST_CASE(DisplayFile_IsRelativeUnderTheProjectRoot_ElseAsPrinted)
 	BOOST_TEST(edt::problem_display_file("", root) == "");
 }
 
+// cl prints paths in the console code page (here "Ivan" in Cyrillic, CP1251), which is not UTF-8.
+BOOST_AUTO_TEST_CASE(DisplayFile_OfInvalidUtf8_IsAsPrinted_AndDoesNotThrow)
+{
+	const std::filesystem::path root = std::filesystem::current_path();
+	for (const std::string file : { std::string("C:\\Users\\\xC8\xE2\xE0\xED\\a.cpp"), std::string("/home/\xC8\xE2/a.cpp"),
+		(root / "x").string() + "\xFF/a.cpp" }) {
+		std::string shown;
+		BOOST_CHECK_NO_THROW(shown = edt::problem_display_file(file, root));
+		BOOST_TEST(shown == file);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(CopyText_IsFileLineSeverityCodeMessage)
 {
 	edt::problem item = make(edt::problem_severity::error, "'x': undeclared identifier", "a.cpp", 12);
@@ -229,6 +241,11 @@ BOOST_AUTO_TEST_CASE(CopyText_IsFileLineSeverityCodeMessage)
 
 	BOOST_TEST(edt::problem_copy_text(make(edt::problem_severity::warning, "unused", "b.cpp")) == "b.cpp: warning: unused");
 	BOOST_TEST(edt::problem_copy_text(make(edt::problem_severity::error, "ld returned 1 exit status")) == "error: ld returned 1 exit status");
+
+	edt::problem detailed = make(edt::problem_severity::error, "boom", "/p/a.cpp", 3);
+	detailed.column = 5;
+	detailed.notes = { "/p/a.h:1:1: note: here" };
+	BOOST_TEST(edt::problem_copy_text(detailed) == "/p/a.cpp(3,5): error: boom\n/p/a.h:1:1: note: here");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

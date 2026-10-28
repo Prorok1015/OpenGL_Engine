@@ -1,5 +1,6 @@
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_editor_events.h>
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 
 const char* edt::problem_severity_name(problem_severity severity)
@@ -27,6 +28,7 @@ edt::problem_list::problem_list(editor_events* events)
 
 void edt::problem_list::set(std::string_view source, std::vector<problem> items)
 {
+	ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "problem_list::set('{}'): main thread only", source);
 	auto it = std::find_if(m_sources.begin(), m_sources.end(), [source](const auto& s) { return s.first == source; });
 	if (it == m_sources.end()) {
 		m_sources.emplace_back(std::string(source), std::move(items));
@@ -39,6 +41,7 @@ void edt::problem_list::set(std::string_view source, std::vector<problem> items)
 
 void edt::problem_list::clear(std::string_view source)
 {
+	ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "problem_list::clear('{}'): main thread only", source);
 	auto it = std::find_if(m_sources.begin(), m_sources.end(), [source](const auto& s) { return s.first == source; });
 	if (it == m_sources.end()) return;
 	std::string name = std::move(it->first);
