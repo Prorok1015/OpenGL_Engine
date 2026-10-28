@@ -10,6 +10,7 @@
 #include <snk/resource/resources/res_resource_base.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resources/res_resource_handle.hpp>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <shared_mutex>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <snk/common/ds/ds_task_system.hpp>
@@ -458,16 +460,9 @@ namespace res
 		// `root` and everything that depends on it, transitively, each once, parents first. m_cache_mutex held.
 		std::vector<res::tag> changed_batch(const res::tag& root) const;
 		// Atomic find-or-insert: concurrent requests for one tag share a single block, only the creator starts the load.
-		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key) {
-			std::unique_lock lock(m_cache_mutex);
-			auto& slot = m_cache[key];
-			if (auto sp = slot.lock()) {
-				return { std::move(sp), false };
-			}
-			auto created = std::make_shared<resource_handle>();
-			slot = created;
-			return { std::move(created), true };
-		}
+		// In the .cpp: the block (its control block and vtable) is made by the engine, never by the code of a game module
+		// that requested it (#416).
+		std::pair<std::shared_ptr<resource_handle>, bool> find_or_insert_cache(const cache_key& key);
 
 		void push_resource_to_cache(const cache_key& key, std::shared_ptr<resource_handle> resource) {
 			std::unique_lock lock(m_cache_mutex);
@@ -493,83 +488,77 @@ namespace res
 			std::vector<std::pair<std::shared_ptr<resource_handle>, res::tag>> blocks, std::function<void()> on_done);
 		void wait_for_block(const std::shared_ptr<resource_handle>& block) const;
 
-		template<class RESOURCE, bool is_sync>
-		auto require_resource_internal(const res::tag& requested, const res::tag& tag) {
-			ds::type_id type = ds::type_id::make<RESOURCE>();
-			const resource_system* owner = nullptr;
-			auto found = find_adapter_in_chain<RESOURCE>(tag, &type, &owner);
-			if (m_parent && owner != this) {
-				// The most specific adapter is a parent's (or there is none): the parent's block, unless the layer
-				// pinned one (warmup and pin_resource also put it in the layer's cache, which a change evicts).
-				if (auto pinned = find_cached(cache_key{ tag, type })) {
-					if constexpr (is_sync) {
-						wait_for_block(pinned);
-					}
-					return res_handle<RESOURCE>(pinned, requested, &m_tasks);
-				}
-				return m_parent->require_resource_internal<RESOURCE, is_sync>(requested, tag);
+		// T, then its base_type, and so on: the type levels an adapter is looked up for, on the stack.
+		template<class T>
+		static constexpr std::size_t type_chain_length()
+		{
+			if constexpr (requires { typename T::base_type; }) {
+				return 1 + type_chain_length<typename T::base_type>();
+			} else {
+				return 1;
 			}
-			if (!found) {
-				// Not fatal: a format whose importer is not built in (SNK_WITH_ASSIMP=OFF) ends up here. The block below
-				// settles with an error, so whoever waits for it fails instead of the process.
-				egLOG_ERROR("res/adapter", "No adapter found for '{}' (extension '{}'): the importer for this format is not registered or not built in", tag.view(), tag.extension());
-			}
-
-			auto [block, is_new] = find_or_insert_cache(cache_key{ tag, type });
-			if (is_new) {
-				start_loading(tag, block, std::move(found));
-			}
-			if constexpr (is_sync) {
-				wait_for_block(block);
-			}
-			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
-			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
-			return res_handle<RESOURCE>(block, requested, &m_tasks);
 		}
 
-		// The most specific adapter for T in this system and its parents: each type level (T, then its base_type ...)
-		// is looked up in this system first and then in the parents, so a parent's adapter for the derived type wins over
-		// a layer's adapter for its base (world_desc's own adapter over the desc adapter of a layer). `loaded_as` is set
-		// to the type the adapter was registered for: a resource whose adapter is its base type's (desc_base's, for every
-		// desc) is one cache block shared with that base, not one block per requested type. `owner`: the system the
-		// adapter belongs to, which loads and caches the resource.
+		template<class T, std::size_t N>
+		static void fill_type_chain(std::array<ds::type_id, N>& chain, std::size_t at)
+		{
+			chain[at] = ds::type_id::make<T>();
+			if constexpr (requires { typename T::base_type; }) {
+				fill_type_chain<typename T::base_type>(chain, at + 1);
+			}
+		}
+
+		template<class T>
+		static std::array<ds::type_id, type_chain_length<T>()> type_chain()
+		{
+			std::array<ds::type_id, type_chain_length<T>()> chain{};
+			fill_type_chain<T>(chain, 0);
+			return chain;
+		}
+
+		// Only the handle is made here, in whatever binary asks: the block comes from require_block (#416).
+		template<class RESOURCE, bool is_sync>
+		res_handle<RESOURCE> require_resource_internal(const res::tag& requested, const res::tag& tag) {
+			const auto chain = type_chain<RESOURCE>();
+			// The cache is keyed by the alias target, but the handle remembers what the caller asked for,
+			// so serializing it writes the tag the caller knows (an alias target may be RAM-only).
+			return res_handle<RESOURCE>(require_block(tag, chain, is_sync), requested, &m_tasks);
+		}
+
+		// The block of `tag` for the type levels `chain` (type_chain): found in the cache or made and loaded, in this
+		// system or, when the most specific adapter is a parent's, in that parent. Not a template, so the engine makes
+		// the block whoever asks: a game module's request for a base resource must not leave a block made by the
+		// module's code in the base's cache (#416).
+		std::shared_ptr<resource_handle> require_block(const res::tag& tag, std::span<const ds::type_id> chain, bool sync);
+
+		// The most specific adapter for the type levels `chain` in this system and its parents: each type level (T, then
+		// its base_type ...) is looked up in this system first and then in the parents, so a parent's adapter for the
+		// derived type wins over a layer's adapter for its base (world_desc's own adapter over the desc adapter of a
+		// layer). `loaded_as` is set to the type the adapter was registered for: a resource whose adapter is its base
+		// type's (desc_base's, for every desc) is one cache block shared with that base, not one block per requested
+		// type. `owner`: the system the adapter belongs to, which loads and caches the resource.
+		adapter find_adapter_in_chain(const res::tag& tag, std::span<const ds::type_id> chain, ds::type_id* loaded_as = nullptr,
+			const resource_system** owner = nullptr) const;
+
 		template<class T>
 		adapter find_adapter_in_chain(const res::tag& tag, ds::type_id* loaded_as = nullptr, const resource_system** owner = nullptr) const {
-			for (const resource_system* system = this; system; system = system->m_parent) {
-				auto adapter = system->find_adapter<T>(tag.extension());
-				if (!adapter) {
-					adapter = system->find_adapter<T>("*");
-				}
-				if (adapter) {
-					if (loaded_as) *loaded_as = ds::type_id::make<T>();
-					if (owner) *owner = system;
-					return adapter;
-				}
-			}
-
-			if constexpr (requires { typename T::base_type; }) {
-				return find_adapter_in_chain<typename T::base_type>(tag, loaded_as, owner);
-			}
-
-			return nullptr;
+			const auto chain = type_chain<T>();
+			return find_adapter_in_chain(tag, chain, loaded_as, owner);
 		}
 
 		template<class T>
 		cache_key key_for(const res::tag& tag) const {
-			ds::type_id type = ds::type_id::make<T>();
-			find_adapter_in_chain<T>(tag, &type);
+			const auto chain = type_chain<T>();
+			ds::type_id type = chain.front();
+			find_adapter_in_chain(tag, chain, &type);
 			return cache_key{ tag, type };
 		}
 
+		adapter find_adapter(ds::type_id type, std::string_view ext) const;
+
 		template<class T>
 		adapter find_adapter(const std::string_view ext) const {
-			auto key = adapter_key{ ds::type_id::make<T>(), std::string(ext) };
-			if (m_extensions_with_magic.contains(key)) {
-				// Need to check magic number
-			}
-			auto it = m_adapters.find(key);
-			if (it != m_adapters.end()) return it->second;
-			return nullptr;
+			return find_adapter(ds::type_id::make<T>(), ext);
 		}
 
 

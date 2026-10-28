@@ -318,6 +318,88 @@ void res::resource_system::run_on_compute(std::function<void()> cb,
               });
 }
 
+std::pair<std::shared_ptr<res::resource_system::resource_handle>, bool>
+res::resource_system::find_or_insert_cache(const cache_key &key) {
+  std::unique_lock lock(m_cache_mutex);
+  auto &slot = m_cache[key];
+  if (auto sp = slot.lock()) {
+    return {std::move(sp), false};
+  }
+  auto created = std::make_shared<resource_handle>();
+  slot = created;
+  return {std::move(created), true};
+}
+
+res::resource_system::adapter res::resource_system::find_adapter(ds::type_id type, std::string_view ext) const {
+  auto key = adapter_key{type, std::string(ext)};
+  if (m_extensions_with_magic.contains(key)) {
+    // Need to check magic number
+  }
+  auto it = m_adapters.find(key);
+  if (it != m_adapters.end()) {
+    return it->second;
+  }
+  return nullptr;
+}
+
+res::resource_system::adapter res::resource_system::find_adapter_in_chain(const res::tag &tag,
+                                                                          std::span<const ds::type_id> chain,
+                                                                          ds::type_id *loaded_as,
+                                                                          const resource_system **owner) const {
+  for (const ds::type_id type : chain) {
+    for (const resource_system *system = this; system; system = system->m_parent) {
+      auto found = system->find_adapter(type, tag.extension());
+      if (!found) {
+        found = system->find_adapter(type, "*");
+      }
+      if (found) {
+        if (loaded_as) {
+          *loaded_as = type;
+        }
+        if (owner) {
+          *owner = system;
+        }
+        return found;
+      }
+    }
+  }
+  return nullptr;
+}
+
+std::shared_ptr<res::resource_system::resource_handle>
+res::resource_system::require_block(const res::tag &tag, std::span<const ds::type_id> chain, bool sync) {
+  ds::type_id type = chain.front();
+  const resource_system *owner = nullptr;
+  auto found = find_adapter_in_chain(tag, chain, &type, &owner);
+  if (m_parent && owner != this) {
+    // The most specific adapter is a parent's (or there is none): the parent's block, unless the layer
+    // pinned one (warmup and pin_resource also put it in the layer's cache, which a change evicts).
+    if (auto pinned = find_cached(cache_key{tag, type})) {
+      if (sync) {
+        wait_for_block(pinned);
+      }
+      return pinned;
+    }
+    return m_parent->require_block(tag, chain, sync);
+  }
+  if (!found) {
+    // Not fatal: a format whose importer is not built in (SNK_WITH_ASSIMP=OFF) ends up here. The block below
+    // settles with an error, so whoever waits for it fails instead of the process.
+    egLOG_ERROR("res/adapter",
+                "No adapter found for '{}' (extension '{}'): the importer for this format is not registered or not built in",
+                tag.view(), tag.extension());
+  }
+
+  auto [block, is_new] = find_or_insert_cache(cache_key{tag, type});
+  if (is_new) {
+    start_loading(tag, block, std::move(found));
+  }
+  if (sync) {
+    wait_for_block(block);
+  }
+  return block;
+}
+
 void res::resource_system::start_loading(const res::tag &tag,
                                          const std::shared_ptr<resource_handle> &block,
                                          adapter ad) {

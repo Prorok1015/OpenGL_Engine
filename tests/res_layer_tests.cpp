@@ -158,6 +158,19 @@ public:
 		}
 	}
 
+	// Like release(), but every held request fails.
+	void fail()
+	{
+		decltype(held) taken;
+		{
+			std::lock_guard lock(mutex);
+			taken.swap(held);
+		}
+		for (auto& [block, data] : taken) {
+			block->set_error("gated failure");
+		}
+	}
+
 	std::atomic<bool> gate{ false };
 	mutable std::mutex mutex;
 	mutable std::vector<std::pair<std::shared_ptr<core::res::res_control_block<std::vector<std::byte>>>, std::vector<std::byte>>> held;
@@ -546,6 +559,46 @@ BOOST_AUTO_TEST_CASE(destroying_a_layer_during_threaded_loads)
 		}
 	}
 	threaded.drain_main(std::chrono::milliseconds(50));
+}
+
+// #416 / #409: a callback of a layer's user (a game module) on a BASE block that fails on a worker while its owner goes
+// on the main thread. The worker drops the callback (drop_held) while ~lifetime empties the same slot: the callback's
+// captures go exactly once, before ~lifetime returns or by the worker under the slot's lock (TSan).
+BOOST_AUTO_TEST_CASE(a_base_block_failing_on_a_worker_while_the_callback_owner_goes)
+{
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	auto& gated = root.registrate_resolver<gated_resolver>(res::tag::memory);
+	constexpr int rounds = 50;
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			const res::tag tag{ "memory://threaded/base" + std::to_string(round) + ".txt" };
+			BOOST_REQUIRE(root.store(tag, test_util::to_bytes("text")));
+			auto in_layer = std::make_unique<res::resource_system>(root);
+			auto owner = std::make_unique<ds::lifetime>();
+			gated.gate = true;
+			const auto handle = in_layer->require<res::text_resource>(tag); // the base's adapter: a block of the root
+			auto capture = std::make_shared<int>(0);
+			const std::weak_ptr<int> watched = capture;
+			int calls = 0;
+			handle.then(*owner, [capture, &calls](res::text_resource&) { ++calls; });
+			capture.reset();
+
+			std::thread worker([&gated] { gated.fail(); });
+			owner.reset();
+			worker.join();
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!handle.has_error() && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			BOOST_REQUIRE(handle.has_error());
+			in_layer.reset();
+			gated.gate = false;
+			threaded.drain_main(std::chrono::milliseconds(50));
+			BOOST_TEST(watched.expired());
+			BOOST_TEST(calls == 0);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
