@@ -1,7 +1,10 @@
 #pragma once
 #include <snk/application/app_module_interface.h>
 #include <snk/application/app_module_layer.h>
+#include <snk/command/cmd_types.h>
 #include <snk/common/ds/ds_store.hpp>
+#include <snk/common/engine_assert.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/common/snk_api.h>
@@ -11,6 +14,7 @@
 #include <vector>
 
 namespace scn { class context_manager; }
+namespace cmd { class command_registry; }
 
 namespace gs
 {
@@ -20,10 +24,11 @@ namespace gs
 	//
 	// Everything the module adds goes through the layer: systems, phases, descs, spawners, component names, meta
 	// (ecs::register_component<T>(layer.meta()), never a binary's entt::locator), message types (layer.channels()).
-	// Registrations it makes in a base registry outside the layer (a command, a log sink) are kept by the layer
-	// (layer.keep(handle)), and its tasks are bound to layer.tasks(); the layer drops both before it goes. Its own
-	// services go into `data` (the layer's storage) and are destroyed after the layer. The base sets are built from
-	// the base registries alone and the module's sets go with its layer, so unloading needs no rebuild_all_plans.
+	// `data` (the layer's storage) is isolated: the base's registries are not handed out, and what the module registers
+	// in the engine outside the layer (commands, log sinks, tasks) goes through gs::module_context, which the layer
+	// keeps and removes before it goes. Its own services go into `data` and are destroyed after the layer. The base
+	// sets are built from the base registries alone and the module's sets go with its layer, so unloading needs no
+	// rebuild_all_plans.
 	class game_module : public app::modules::module_interface
 	{
 	public:
@@ -39,6 +44,33 @@ namespace gs
 		virtual void initialize_content(scn::scene_layer&, ds::app_data_storage&) {}
 		// Stops what runs the module's code outside what the layer drops by itself.
 		virtual void shutdown_content(scn::scene_layer&, ds::app_data_storage&) {}
+	};
+
+	// What a game module registers in the engine outside its layer (MODULE_LAYER.md §5), in its layer's storage
+	// (data.require<gs::module_context>()). Every registration is kept by the layer and removed when the layer goes, so
+	// the engine holds nothing that refers to the module.
+	class SNK_API module_context
+	{
+	public:
+		module_context(scn::scene_layer& layer, cmd::command_registry* commands, ds::task_system* tasks)
+			: m_layer(layer), m_commands(commands), m_tasks(tasks) {}
+
+		// A command in the process-wide registry; false when there is none or it refused the command (logged).
+		bool add_command(cmd::command_desc desc);
+		// A listener of the engine log (engine::add_log_sink).
+		void add_log_sink(engine::log_callback_t callback);
+		// A task bound to the layer: cancelled and waited for before the layer's worlds go.
+		template<class F>
+		auto run(ds::lane lane, ds::task_desc desc, F&& fn)
+		{
+			ASSERT_MSG(m_tasks, "module_context::run: the layer has no task system");
+			return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::forward<F>(fn));
+		}
+
+	private:
+		scn::scene_layer& m_layer;
+		cmd::command_registry* m_commands = nullptr;
+		ds::task_system* m_tasks = nullptr;
 	};
 
 	// The engine's module_layer_factory: while a game module is loaded its layer is the game layer, and a fresh empty

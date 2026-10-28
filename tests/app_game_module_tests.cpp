@@ -95,14 +95,14 @@ protected:
 		ecs::register_component<game_component>(layer.meta());
 		data.construct<game_service>();
 
+		auto& context = data.require<gs::module_context>();
 		cmd::command_desc ping;
 		ping.id = "game.ping";
 		ping.summary = "Answers.";
 		ping.invoke = [](const cmd::call&) { return cmd::result::success(); };
-		layer.keep(data.require<cmd::command_registry>().add(std::move(ping)));
-		layer.keep(engine::add_log_sink([](std::string_view, engine::log_level, std::string_view) {}));
-		g_task = data.require<ds::task_system>().run(ds::lane::compute, ds::task_desc{ .name = "game.background" }, layer.tasks(),
-			[](ds::task_context&) { g_task_ran = true; });
+		context.add_command(std::move(ping));
+		context.add_log_sink([](std::string_view, engine::log_level, std::string_view) {});
+		g_task = context.run(ds::lane::compute, ds::task_desc{ .name = "game.background" }, [](ds::task_context&) { g_task_ran = true; });
 	}
 	// game_service stays in the layer's storage: it goes after the layer.
 };
@@ -120,6 +120,42 @@ protected:
 };
 
 bool g_throwing_shut_down = false;
+
+// What the module's storage gives it of the base.
+struct probe_result {
+	bool commands_visible = true;
+	bool tasks_visible = true;
+	bool contexts_visible = true;
+	bool require_refused = false;
+	bool own_layer_visible = false;
+};
+probe_result g_probe;
+
+class probing_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "probing_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		g_probe.commands_visible = data.has_value<cmd::command_registry>();
+		g_probe.tasks_visible = data.has_value<ds::task_system>();
+		g_probe.contexts_visible = data.has_value<scn::context_manager>();
+		cmd::command_desc sneaky;
+		sneaky.id = "game.sneaky";
+		sneaky.invoke = [](const cmd::call&) { return cmd::result::success(); };
+		try {
+			m_kept = data.require<cmd::command_registry>().add(std::move(sneaky));
+		} catch (const std::logic_error&) {
+			g_probe.require_refused = true;
+		}
+		g_probe.own_layer_visible = data.has_value<scn::scene_layer>() && data.has_value<gs::module_context>();
+	}
+
+private:
+	cmd::registration m_kept;
+};
 
 class throwing_game_module final : public gs::game_module {
 public:
@@ -147,6 +183,7 @@ struct game_module_fixture : test_util::module_env {
 		g_task_ran = false;
 		g_task.reset();
 		g_throwing_shut_down = false;
+		g_probe = {};
 	}
 };
 
@@ -293,6 +330,19 @@ BOOST_AUTO_TEST_CASE(base_sets_keep_running_without_a_plan_rebuild)
 	loader.unload("test_game", root);
 	contexts().update(std::chrono::duration<float>(0.016f));
 	BOOST_TEST(world.state().get<base_component>(entity).ticks > before);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_cannot_reach_the_base_registries_directly)
+{
+	const std::size_t base_commands = commands.size();
+	loader.load(std::make_unique<probing_game_module>(), root);
+	BOOST_TEST(!g_probe.commands_visible);
+	BOOST_TEST(!g_probe.tasks_visible);
+	BOOST_TEST(!g_probe.contexts_visible);
+	BOOST_TEST(g_probe.require_refused);
+	BOOST_TEST(g_probe.own_layer_visible);
+	BOOST_TEST(commands.size() == base_commands);
+	loader.unload("probing_game", root);
 }
 
 BOOST_AUTO_TEST_CASE(a_layered_module_needs_a_layer_factory)
