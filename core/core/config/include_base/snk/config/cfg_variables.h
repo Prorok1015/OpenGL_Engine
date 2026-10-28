@@ -40,6 +40,11 @@ namespace cfg {
 	// Reports a value of the wrong kind (a scalar for a list variable or the other way round); the value is ignored.
 	SNK_API void warn_wrong_kind(std::string_view name, std::string_view problem);
 
+	// The whole of `text` as a number of that type; nullopt when it is not one ("abc", "1.5" for an int, "12px") or
+	// does not fit. Never throws: a bad value in a config file or --set must not stop the program (#415).
+	SNK_API std::optional<int> parse_int(std::string_view text);
+	SNK_API std::optional<float> parse_float(std::string_view text);
+
 	struct variable_base
 	{
 		virtual ~variable_base() = default;
@@ -71,9 +76,17 @@ namespace cfg {
 
 		virtual void update(const std::filesystem::path& location, std::string_view val) override {
 			if constexpr (std::is_same_v<T, int>) {
-				value_ = std::stoi(std::string(val));
+				if (const auto number = parse_int(val)) {
+					value_ = *number;
+				} else {
+					warn_wrong_kind(name_, "'" + std::string(val) + "' is not an int in range");
+				}
 			} else if constexpr (std::is_same_v<T, float>) {
-				value_ = std::stof(std::string(val));
+				if (const auto number = parse_float(val)) {
+					value_ = *number;
+				} else {
+					warn_wrong_kind(name_, "'" + std::string(val) + "' is not a float in range");
+				}
 			} else if constexpr (std::is_same_v<T, bool>) {
 				value_ = (val == "true" || val == "1");
 			} else if constexpr (std::is_same_v<T, std::string>) {
