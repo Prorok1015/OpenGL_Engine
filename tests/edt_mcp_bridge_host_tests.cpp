@@ -201,7 +201,7 @@ BOOST_AUTO_TEST_CASE(ADomainOutsideTheReadList_IsNotAllowedEvenIfTheMetadataSays
 	cmd::command_desc desc;
 	for (const char* id : { "file.save", "file.exit", "file.new", "app.advance", "app.resume", "help.about", "edit.undo",
 		"scene.delete", "scene.node.create", "scene.query_all", "node.delete", "node.get_all", "component.set", "component.schema2",
-		"asset.import", "asset.query.all", "selection.set", "problems.list", "nodot", "" }) {
+		"asset.import", "asset.query.all", "selection.set", "problems.clear", "nodot", "" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_TEST(!edt::agent_may_use(desc));
