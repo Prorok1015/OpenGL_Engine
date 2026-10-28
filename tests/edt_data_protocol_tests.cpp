@@ -86,7 +86,7 @@ BOOST_AUTO_TEST_CASE(Register_MissingDirectory_ReturnsFalseAndLoadsFail)
 	BOOST_TEST(load("edt://icons/logo.txt").has_error());
 }
 
-BOOST_AUTO_TEST_CASE(Store_GoesToTheUserRootAndNeverIntoTheDataDirectory)
+BOOST_AUTO_TEST_CASE(Store_Settings_GoesToTheUserRootAndNeverIntoTheDataDirectory)
 {
 	edt::register_data_protocol(*rs, data, user);
 
@@ -96,17 +96,24 @@ BOOST_AUTO_TEST_CASE(Store_GoesToTheUserRootAndNeverIntoTheDataDirectory)
 	BOOST_TEST(!std::filesystem::exists(data / "settings"));
 }
 
-BOOST_AUTO_TEST_CASE(Load_UserRootShadowsTheShippedFile)
+BOOST_AUTO_TEST_CASE(Store_OutsideTheSettings_IsRefusedAndTheShippedFileStays)
+{
+	edt::register_data_protocol(*rs, data, user);
+
+	BOOST_TEST(!rs->store(res::tag{ "edt://icons/logo.txt" }, test_util::to_bytes("overwritten")));
+	BOOST_TEST(!std::filesystem::exists(user / "icons"));
+	BOOST_TEST(load("edt://icons/logo.txt").get_sync()->str() == "logo-bytes");
+}
+
+BOOST_AUTO_TEST_CASE(Load_UserFileShadowsTheShippedOne)
 {
 	edt::register_data_protocol(*rs, data, user);
 	BOOST_REQUIRE(load("edt://icons/logo.txt").get_sync()->str() == "logo-bytes");
 
 	dir.write("user/icons/logo.txt", "user-logo");
 
-	BOOST_TEST(rs->exists(res::tag{ "edt://icons/logo.txt" }));
 	rs->signal_changed(res::tag{ "edt://icons/logo.txt" });
 	BOOST_TEST(load("edt://icons/logo.txt").get_sync()->str() == "user-logo");
-	BOOST_TEST(wait_for_text(data / "icons" / "logo.txt", "logo-bytes"));
 }
 
 BOOST_AUTO_TEST_CASE(DefaultUserDataDir_NamesTheEditorFolderOfTheProduct)

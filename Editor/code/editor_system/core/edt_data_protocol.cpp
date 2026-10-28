@@ -1,7 +1,6 @@
 #include "edt_data_protocol.h"
 #include <snk/common/logger/engine_log.h>
-#include <snk/resource/resolvers/res_vfs_resolver.h>
-#include <snk/resource/resolvers/res_write_policy.h>
+#include <snk/resource/res_mount_table.h>
 #include <cstdlib>
 #include <string>
 #include <system_error>
@@ -78,9 +77,8 @@ bool edt::register_data_protocol(res::resource_system& res, const std::filesyste
 		egLOG_WARN("editor/data", "editor data directory '{}' not found: shipped edt:// resources are unavailable", data_path.string());
 	}
 
-	// The vfs resolver reads top-down and stores into the top root only, so the shipped data stays untouched.
-	auto& resolver = res.registrate_resolver<res::vfs_resolver>(DATA_PROTOCOL, std::vector<std::filesystem::path>{ data_path, user_path },
-		res::mount_access::read_write, res::write_policy{ DATA_PROTOCOL, write_patterns });
-	resolver.set_resource_changed_callback([&res](const res::tag& tag) { res.signal_changed(tag); });
+	// The vfs resolver reads top-down and stores into the top root only, so the shipped data stays untouched; the policy
+	// keeps even that root to the paths of `write_patterns`.
+	res.add_mount(res::mount{ DATA_PROTOCOL, { data_path, user_path }, res::mount_access::read_write, res::write_policy{ DATA_PROTOCOL, write_patterns } });
 	return exists;
 }

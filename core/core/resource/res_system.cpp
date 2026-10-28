@@ -201,19 +201,29 @@ res::resource_system::resource_system(ds::task_system &tasks, mount_table mounts
       m_mounts(std::move(mounts)) {
   m_gate->self = this;
   for (const auto &mount : m_mounts) {
-    egLOG("resource/system", "Mount {}:// ({}): {}", mount.protocol,
-          mount.access == mount_access::read_only ? "read-only" : "read-write",
-          mount.roots.empty() ? std::string{} : mount.roots.back().string());
-    auto &resolver =
-        registrate_resolver<vfs_resolver>(mount.protocol, mount.roots, mount.access);
-    resolver.set_resource_changed_callback(
-        [this](const res::tag &tag) { signal_changed(tag); });
+    register_mount(mount);
   }
 
   registrate_adapter<raw_image_adapter>(res::raw_image_adapter::INFO);
   registrate_adapter<pct_adapter>(res::pct_adapter::INFO);
   registrate_adapter<text_adapter>(res::text_adapter::INFO);
   registrate_adapter<binary_adapter>(res::binary_adapter::INFO);
+}
+
+void res::resource_system::register_mount(const mount &mounted) {
+  egLOG("resource/system", "Mount {}:// ({}): {}", mounted.protocol,
+        mounted.access == mount_access::read_only ? "read-only" : "read-write",
+        mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
+  auto &resolver =
+      registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access, mounted.writable);
+  resolver.set_resource_changed_callback(
+      [this](const res::tag &tag) { signal_changed(tag); });
+}
+
+void res::resource_system::add_mount(mount added) {
+  ASSERT_MSG(!m_parent, "A resource layer uses the mounts of its root");
+  register_mount(added);
+  m_mounts.push_back(std::move(added));
 }
 
 res::resource_system::resource_system(resource_system &parent)
