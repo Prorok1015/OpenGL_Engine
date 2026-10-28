@@ -1,10 +1,13 @@
 #include <snk/platform/plt_process.h>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <format>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -20,6 +23,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -64,20 +68,25 @@ std::wstring platform::quote_windows_arg(std::wstring_view arg)
 void platform::detail::take_lines(std::string& pending, std::string_view chunk, bool end_of_output,
 	const std::function<void(std::string_view line)>& on_line)
 {
-	// What was pending holds no line break, so the search starts at the new text.
-	const std::size_t search_from = pending.size();
+	// What was pending holds no line break but perhaps a last '\r', so the search starts there.
+	std::size_t search_from = pending.empty() ? 0 : pending.size() - 1;
 	pending.append(chunk);
 	std::size_t start = 0;
-	const auto deliver = [&](std::size_t end) {
-		std::string_view line{ pending.data() + start, end - start };
-		if (!line.empty() && line.back() == '\r') {
-			line.remove_suffix(1);
+	const auto deliver = [&](std::size_t end) { on_line(std::string_view{ pending.data() + start, end - start }); };
+	for (std::size_t end = pending.find_first_of("\r\n", search_from); end != std::string::npos;
+		end = pending.find_first_of("\r\n", search_from)) {
+		const bool carriage_return = pending[end] == '\r';
+		if (carriage_return && end + 1 == pending.size() && !end_of_output) {
+			break; // the '\n' of a "\r\n" may come with the next chunk
 		}
-		on_line(line);
-	};
-	for (std::size_t end = pending.find('\n', search_from); end != std::string::npos; end = pending.find('\n', start)) {
 		deliver(end);
-		start = end + 1;
+		const bool pair = carriage_return && end + 1 < pending.size() && pending[end + 1] == '\n';
+		start = end + (pair ? 2 : 1);
+		search_from = start;
+	}
+	while (pending.size() - start >= k_max_line_size) {
+		deliver(start + k_max_line_size);
+		start += k_max_line_size;
 	}
 	if (end_of_output && start < pending.size()) {
 		deliver(pending.size());
@@ -88,6 +97,46 @@ void platform::detail::take_lines(std::string& pending, std::string_view chunk, 
 
 namespace
 {
+	template <class Char>
+	std::vector<std::basic_string_view<Char>> pieces_of(std::basic_string_view<Char> text, Char separator)
+	{
+		std::vector<std::basic_string_view<Char>> out;
+		std::size_t start = 0;
+		while (start <= text.size()) {
+			std::size_t end = text.find(separator, start);
+			if (end == std::basic_string_view<Char>::npos) {
+				end = text.size();
+			}
+			if (end > start) {
+				out.push_back(text.substr(start, end - start));
+			}
+			start = end + 1;
+		}
+		return out;
+	}
+
+	// The value of `name` among "NAME=value" entries; Windows names ignore case.
+	std::optional<std::string> variable_in(const std::vector<std::string>& environment, std::string_view name,
+		bool ignore_case)
+	{
+		const auto upper = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; };
+		for (const auto& entry : environment) {
+			// From 1: Windows keeps entries such as "=C:=C:\dir".
+			const std::size_t equals = entry.find('=', 1);
+			if (equals != name.size()) {
+				continue;
+			}
+			bool same = true;
+			for (std::size_t i = 0; i < name.size() && same; ++i) {
+				same = ignore_case ? upper(entry[i]) == upper(name[i]) : entry[i] == name[i];
+			}
+			if (same) {
+				return entry.substr(equals + 1);
+			}
+		}
+		return std::nullopt;
+	}
+
 	template <class F>
 	class scope_exit
 	{
@@ -158,6 +207,59 @@ namespace
 	void CALLBACK end_leftovers(PVOID job, BOOLEAN)
 	{
 		TerminateJobObject(static_cast<HANDLE>(job), 1);
+	}
+
+	std::wstring own_variable(const wchar_t* name)
+	{
+		const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+		if (size == 0) {
+			return {};
+		}
+		std::wstring value(size, L'\0');
+		value.resize(GetEnvironmentVariableW(name, value.data(), size));
+		return value;
+	}
+
+	// Only PATH (of the environment the child gets): CreateProcessW would also search the current and the
+	// application directory, and with this process's PATH.
+	std::optional<fs::path> find_in_path(const fs::path& program, const platform::process_options& options)
+	{
+		std::wstring path_value;
+		std::wstring extensions;
+		if (options.environment) {
+			path_value = widen(variable_in(*options.environment, "PATH", true).value_or(std::string{}));
+			extensions = widen(variable_in(*options.environment, "PATHEXT", true).value_or(std::string{}));
+		} else {
+			path_value = own_variable(L"PATH");
+			extensions = own_variable(L"PATHEXT");
+		}
+		if (extensions.empty()) {
+			extensions = L".COM;.EXE;.BAT;.CMD";
+		}
+		std::vector<std::wstring_view> suffixes;
+		if (program.has_extension()) {
+			suffixes.emplace_back();
+		}
+		for (const auto extension : pieces_of(std::wstring_view{ extensions }, L';')) {
+			suffixes.push_back(extension);
+		}
+		for (auto dir : pieces_of(std::wstring_view{ path_value }, L';')) {
+			if (dir.size() >= 2 && dir.front() == L'"' && dir.back() == L'"') {
+				dir = dir.substr(1, dir.size() - 2);
+			}
+			if (dir.empty()) {
+				continue;
+			}
+			for (const auto suffix : suffixes) {
+				fs::path candidate = fs::path{ dir } / program;
+				candidate += suffix;
+				std::error_code ec;
+				if (fs::is_regular_file(candidate, ec)) {
+					return candidate;
+				}
+			}
+		}
+		return std::nullopt;
 	}
 }
 
@@ -264,10 +366,20 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		environment.push_back(L'\0');
 	}
 
+	fs::path resolved = program;
+	if (!program.has_parent_path()) {
+		auto found = find_in_path(program, options);
+		if (!found) {
+			process_result result;
+			result.error = std::format("cannot find '{}' in PATH", utf8_of(program));
+			return result;
+		}
+		resolved = std::move(*found);
+	}
+
 	PROCESS_INFORMATION process{};
-	// Without a directory the system searches for the program (PATH among other places) and appends ".exe".
-	if (!CreateProcessW(program.has_parent_path() ? program.c_str() : nullptr, command_line.data(), nullptr, nullptr,
-			TRUE, CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+	if (!CreateProcessW(resolved.c_str(), command_line.data(), nullptr, nullptr, TRUE,
+			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
 			options.environment ? environment.data() : nullptr,
 			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process)) {
 		return system_failure("cannot start", program);
@@ -300,16 +412,17 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	HANDLE exit_wait = nullptr;
 	if (!RegisterWaitForSingleObject(&exit_wait, process_handle.get(), end_leftovers, job.get(), INFINITE,
 			WT_EXECUTEONLYONCE)) {
-		exit_wait = nullptr;
+		auto result = system_failure("cannot watch the exit of", program);
+		TerminateJobObject(job.get(), 1);
+		WaitForSingleObject(process_handle.get(), INFINITE);
+		return result;
 	}
 	// Declared after the job, so it is undone first: the callback must not run on a closed job handle.
-	const scope_exit unregister_wait{ [exit_wait] {
-		if (exit_wait != nullptr) {
-			UnregisterWaitEx(exit_wait, INVALID_HANDLE_VALUE);
-		}
-	} };
+	const scope_exit unregister_wait{ [exit_wait] { UnregisterWaitEx(exit_wait, INVALID_HANDLE_VALUE); } };
+	process_result result;
 	{
-		// Ending the job closes the pipe along with the processes, so the blocking ReadFile returns.
+		// Ending the job closes the pipe along with the processes, so the blocking ReadFile returns; it stays in
+		// place for the wait, as a child that closed its output early is still running.
 		const std::stop_callback cancel{ stop, [job = job.get()] { TerminateJobObject(job, 1); } };
 		std::string pending;
 		char buffer[k_read_size];
@@ -318,11 +431,10 @@ platform::process_result platform::run_process(const fs::path& program, const st
 			detail::take_lines(pending, std::string_view{ buffer, got }, false, on_line);
 		}
 		detail::take_lines(pending, {}, true, on_line);
+		WaitForSingleObject(process_handle.get(), INFINITE);
+		result.cancelled = stop.stop_requested();
 	}
 
-	process_result result;
-	result.cancelled = stop.stop_requested();
-	WaitForSingleObject(process_handle.get(), INFINITE);
 	DWORD exit_code = 0;
 	if (!GetExitCodeProcess(process_handle.get(), &exit_code)) {
 		return system_failure("cannot read the exit code of", program);
@@ -411,7 +523,30 @@ namespace
 	bool has_exited(pid_t pid)
 	{
 		siginfo_t info{};
-		return ::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == pid;
+		if (::waitid(P_PID, static_cast<id_t>(pid), &info, WEXITED | WNOHANG | WNOWAIT) != 0) {
+			// ECHILD: reaped elsewhere (SIGCHLD ignored), so it is gone.
+			return errno != EINTR;
+		}
+		return info.si_pid == pid;
+	}
+
+	// Only PATH of the environment the child gets: posix_spawnp would search the one of this process.
+	std::optional<fs::path> find_in_path(const fs::path& program, const platform::process_options& options)
+	{
+		std::string path_value;
+		if (options.environment) {
+			path_value = variable_in(*options.environment, "PATH", false).value_or(std::string{});
+		} else if (const char* own = std::getenv("PATH")) {
+			path_value = own;
+		}
+		for (const auto dir : pieces_of(std::string_view{ path_value }, ':')) {
+			const fs::path candidate = fs::path{ dir } / program;
+			struct stat info{};
+			if (::stat(candidate.c_str(), &info) == 0 && S_ISREG(info.st_mode) && ::access(candidate.c_str(), X_OK) == 0) {
+				return candidate;
+			}
+		}
+		return std::nullopt;
 	}
 
 	constexpr std::chrono::seconds k_kill_after{ 2 };
@@ -422,6 +557,17 @@ namespace
 platform::process_result platform::run_process(const fs::path& program, const std::vector<std::string>& args,
 	const process_options& options, const std::function<void(std::string_view line)>& on_line, std::stop_token stop)
 {
+	fs::path resolved = program;
+	if (!program.has_parent_path()) {
+		auto found = find_in_path(program, options);
+		if (!found) {
+			process_result result;
+			result.error = std::format("cannot find '{}' in PATH", program.string());
+			return result;
+		}
+		resolved = std::move(*found);
+	}
+
 	int pipe_ends[2] = { -1, -1 };
 	if (::pipe2(pipe_ends, O_CLOEXEC) != 0) {
 		return failure("cannot create the output pipe of", program, errno);
@@ -432,22 +578,33 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	posix_spawn_file_actions_t file_actions;
 	posix_spawn_file_actions_init(&file_actions);
 	const scope_exit destroy_file_actions{ [&file_actions] { posix_spawn_file_actions_destroy(&file_actions); } };
-	posix_spawn_file_actions_adddup2(&file_actions, write_end.get(), STDOUT_FILENO);
-	posix_spawn_file_actions_adddup2(&file_actions, write_end.get(), STDERR_FILENO);
-	posix_spawn_file_actions_addopen(&file_actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+	int action_error = posix_spawn_file_actions_adddup2(&file_actions, write_end.get(), STDOUT_FILENO);
+	if (action_error == 0) {
+		action_error = posix_spawn_file_actions_adddup2(&file_actions, write_end.get(), STDERR_FILENO);
+	}
+	if (action_error == 0) {
+		action_error = posix_spawn_file_actions_addopen(&file_actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+	}
 #if defined(__GLIBC__)
 #if __GLIBC_PREREQ(2, 34)
 	// Only stdin/out/err go along: Asio does not open its sockets close-on-exec, so the build would otherwise hold
 	// the listening socket of the editor (and its log files) for as long as it runs.
-	posix_spawn_file_actions_addclosefrom_np(&file_actions, 3);
+	if (action_error == 0) {
+		action_error = posix_spawn_file_actions_addclosefrom_np(&file_actions, 3);
+	}
 #endif
 #endif
 	if (!options.working_dir.empty()) {
 #if SNK_PLT_SPAWN_CHDIR
-		posix_spawn_file_actions_addchdir_np(&file_actions, options.working_dir.c_str());
+		if (action_error == 0) {
+			action_error = posix_spawn_file_actions_addchdir_np(&file_actions, options.working_dir.c_str());
+		}
 #else
 		return failure("cannot set the working directory of", program, ENOSYS);
 #endif
+	}
+	if (action_error != 0) {
+		return failure("cannot prepare the start of", program, action_error);
 	}
 
 	posix_spawnattr_t attributes;
@@ -488,8 +645,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	}
 
 	pid_t pid = 0;
-	// posix_spawnp: a program without a '/' is looked up in PATH ("cmake").
-	const int spawned = ::posix_spawnp(&pid, program_name.c_str(), &file_actions, &attributes, argv.data(),
+	const int spawned = ::posix_spawn(&pid, resolved.c_str(), &file_actions, &attributes, argv.data(),
 		options.environment ? envp.data() : environ);
 	write_end.reset();
 	if (spawned != 0) {
@@ -510,6 +666,8 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	std::optional<steady::time_point> terminated_at;
 	bool killed = false;
 	std::optional<steady::time_point> exited_at;
+	// The child may close its output long before it exits: a stop is honoured until then.
+	bool pipe_open = true;
 	std::string pending;
 	char buffer[k_read_size];
 	for (;;) {
@@ -522,28 +680,33 @@ platform::process_result platform::run_process(const fs::path& program, const st
 			::kill(-pid, SIGKILL);
 			killed = true;
 		}
+		if (!exited_at && has_exited(pid)) {
+			exited_at = now;
+			// Whatever it left running in its group would hold the pipe open.
+			::kill(-pid, SIGKILL);
+		}
 		// A descendant that left the group may hold the pipe for good.
-		if (exited_at && now - *exited_at >= k_drain_after) {
+		if (exited_at && (!pipe_open || now - *exited_at >= k_drain_after)) {
 			break;
+		}
+		if (!pipe_open) {
+			::poll(nullptr, 0, k_poll_ms);
+			continue;
 		}
 		pollfd watched{ read_end.get(), POLLIN, 0 };
 		const int ready = ::poll(&watched, 1, k_poll_ms);
-		if (ready < 0 && errno != EINTR) {
-			break;
+		if (ready < 0) {
+			pipe_open = errno == EINTR;
+			continue;
 		}
-		if (ready <= 0) {
-			if (!exited_at && has_exited(pid)) {
-				exited_at = steady::now();
-				// Whatever it left running in its group would hold the pipe open.
-				::kill(-pid, SIGKILL);
-			}
+		if (ready == 0) {
 			continue;
 		}
 		const ssize_t got = ::read(read_end.get(), buffer, sizeof(buffer));
 		if (got > 0) {
 			detail::take_lines(pending, std::string_view{ buffer, static_cast<std::size_t>(got) }, false, on_line);
 		} else if (got == 0 || (errno != EINTR && errno != EAGAIN)) {
-			break;
+			pipe_open = false;
 		}
 	}
 	detail::take_lines(pending, {}, true, on_line);

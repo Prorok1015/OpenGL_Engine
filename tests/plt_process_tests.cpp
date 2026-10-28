@@ -2,6 +2,7 @@
 #include <snk/platform/plt_process.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -52,6 +53,8 @@ namespace {
 	constexpr std::string_view k_talk_flag = "--plt-talk";
 	constexpr std::string_view k_late_marker_flag = "--plt-late-marker";
 	constexpr std::string_view k_tree_flag = "--plt-tree";
+	constexpr std::string_view k_quiet_flag = "--plt-quiet";
+	constexpr std::string_view k_probe_name = "snk_plt_path_probe";
 	constexpr std::string_view k_test_variable = "SNK_PLT_TEST";
 
 	std::string argument_after(std::string_view flag)
@@ -86,7 +89,7 @@ namespace {
 	bool is_child_run()
 	{
 		return !marker_argument().empty() || has_argument(k_talk_flag) || has_argument(k_late_marker_flag)
-			|| has_argument(k_tree_flag);
+			|| has_argument(k_tree_flag) || has_argument(k_quiet_flag);
 	}
 
 	fs::path path_of_utf8(const std::string& utf8)
@@ -178,6 +181,62 @@ namespace {
 	{
 		return platform::run_process(platform::current_executable(), args, options,
 			[&lines](std::string_view line) { lines.emplace_back(line); }, {});
+	}
+
+	// This test program under the name k_probe_name in `dir`, removed again with the object.
+	class path_probe
+	{
+	public:
+		explicit path_probe(const fs::path& dir) : m_file(dir / std::string{ k_probe_name })
+		{
+			std::error_code ec;
+#ifdef _WIN32
+			m_file += ".exe";
+			fs::remove(m_file, ec);
+			fs::copy_file(platform::current_executable(), m_file);
+#else
+			fs::remove(m_file, ec);
+			fs::create_symlink(platform::current_executable(), m_file);
+#endif
+		}
+		~path_probe()
+		{
+			std::error_code ec;
+			fs::remove(m_file, ec);
+		}
+		path_probe(const path_probe&) = delete;
+		path_probe& operator=(const path_probe&) = delete;
+
+	private:
+		fs::path m_file;
+	};
+
+	// The parent environment with `dir` and the directory of this program at the front of PATH (the rest stays for
+	// what a sanitizer runtime or a DLL of this program needs).
+	std::vector<std::string> environment_with_path_first(const fs::path& dir)
+	{
+#ifdef _WIN32
+		constexpr char separator = ';';
+		const auto same_name = [](std::string_view a, std::string_view b) {
+			const auto upper = [](char c) { return c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A') : c; };
+			return a.size() == b.size()
+				&& std::equal(a.begin(), a.end(), b.begin(), [&upper](char x, char y) { return upper(x) == upper(y); });
+		};
+#else
+		constexpr char separator = ':';
+		const auto same_name = [](std::string_view a, std::string_view b) { return a == b; };
+#endif
+		const std::string front = utf8_of(dir) + separator + utf8_of(platform::current_executable().parent_path());
+		std::vector<std::string> environment = parent_environment();
+		for (auto& entry : environment) {
+			const std::size_t equals = entry.find('=', 1);
+			if (equals != std::string::npos && same_name(std::string_view{ entry }.substr(0, equals), "PATH")) {
+				entry = entry.substr(0, equals + 1) + front + separator + entry.substr(equals + 1);
+				return environment;
+			}
+		}
+		environment.push_back("PATH=" + front);
+		return environment;
 	}
 
 	std::string read_text(const fs::path& file)
@@ -363,6 +422,40 @@ BOOST_AUTO_TEST_CASE(TakeLines_SplitsOnLfAndCrLfAcrossChunks)
 	BOOST_TEST(pending.empty());
 }
 
+// Progress output rewrites its line with a lone '\r'; a "\r\n" split across two reads is still one break.
+BOOST_AUTO_TEST_CASE(TakeLines_EndsALineAtALoneCarriageReturn)
+{
+	std::vector<std::string> lines;
+	const auto collect = [&lines](std::string_view line) { lines.emplace_back(line); };
+	std::string pending;
+
+	platform::detail::take_lines(pending, "10%\r20%\r", false, collect);
+	BOOST_TEST(pending == "20%\r"); // the '\n' of a "\r\n" may still come
+	platform::detail::take_lines(pending, "\ndone\r", false, collect);
+	platform::detail::take_lines(pending, "next\r", false, collect);
+	platform::detail::take_lines(pending, {}, true, collect);
+
+	const std::vector<std::string> expected{ "10%", "20%", "done", "next" };
+	BOOST_TEST(lines == expected, boost::test_tools::per_element());
+	BOOST_TEST(pending.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TakeLines_CutsALineAtTheCap)
+{
+	constexpr std::size_t cap = platform::detail::k_max_line_size;
+	std::vector<std::string> lines;
+	const auto collect = [&lines](std::string_view line) { lines.emplace_back(line); };
+	std::string pending;
+
+	platform::detail::take_lines(pending, std::string(cap - 1, 'a'), false, collect);
+	BOOST_TEST(lines.empty());
+	platform::detail::take_lines(pending, std::string(cap + 10, 'b'), false, collect);
+	BOOST_REQUIRE(lines.size() == 2u);
+	BOOST_TEST(lines[0] == std::string(cap - 1, 'a') + "b");
+	BOOST_TEST(lines[1] == std::string(cap, 'b'));
+	BOOST_TEST(pending.size() == 9u);
+}
+
 // Does nothing in a normal run; with --plt-talk it writes known lines to stdout and stderr, the value of SNK_PLT_TEST
 // and its working directory, a last line without a break, and exits with 7.
 BOOST_AUTO_TEST_CASE(RunHelper_Talks)
@@ -503,6 +596,121 @@ BOOST_AUTO_TEST_CASE(RunProcess_StopEndsTheWholeProcessTree)
 	// A grandchild that survived writes its marker 3 s after it was ready.
 	std::this_thread::sleep_for(std::chrono::seconds{ 6 });
 	BOOST_TEST(!fs::exists(marker));
+}
+
+// Does nothing in a normal run; with --plt-quiet it says "going quiet", sends its output to the null device (so the
+// parent's pipe reaches its end) and sleeps until it is ended.
+BOOST_AUTO_TEST_CASE(RunHelper_GoesQuiet)
+{
+	if (!has_argument(k_quiet_flag)) {
+		return;
+	}
+	print_line(stdout, "going quiet");
+#ifdef _WIN32
+	const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+	const HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
+	const HANDLE null_device = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	SetStdHandle(STD_OUTPUT_HANDLE, null_device);
+	SetStdHandle(STD_ERROR_HANDLE, null_device);
+	// Not through _dup2: descriptors 1 and 2 share one handle, which the second _dup2 would close again. Neither is
+	// written to any more.
+	CloseHandle(output);
+	if (error != output) {
+		CloseHandle(error);
+	}
+#else
+	const int null_device = ::open("/dev/null", O_WRONLY);
+	::dup2(null_device, STDOUT_FILENO);
+	::dup2(null_device, STDERR_FILENO);
+	::close(null_device);
+#endif
+	std::this_thread::sleep_for(std::chrono::seconds{ 120 });
+}
+
+BOOST_AUTO_TEST_CASE(RunProcess_StopEndsAChildThatClosedItsOutput)
+{
+	if (is_child_run()) {
+		return;
+	}
+	using steady = std::chrono::steady_clock;
+	std::atomic<bool> quiet = false;
+	std::stop_source stop;
+	steady::time_point stopped_at{};
+	std::jthread stopper([&](std::stop_token own) {
+		const auto give_up = steady::now() + std::chrono::seconds{ 120 };
+		while (!quiet && !own.stop_requested() && steady::now() < give_up) {
+			std::this_thread::sleep_for(std::chrono::milliseconds{ 20 });
+		}
+		// Meanwhile the pipe reaches its end: the stop comes while run_process waits for the exit.
+		std::this_thread::sleep_for(std::chrono::seconds{ 2 });
+		stopped_at = steady::now();
+		stop.request_stop();
+	});
+
+	const auto result = platform::run_process(platform::current_executable(),
+		{ "--run_test=PltProcessTests/RunHelper_GoesQuiet", "--", std::string{ k_quiet_flag } }, {},
+		[&quiet](std::string_view line) {
+			if (line.find("going quiet") != std::string_view::npos) {
+				quiet = true;
+			}
+		},
+		stop.get_token());
+	const auto returned_at = steady::now();
+	stopper.request_stop();
+	stopper.join();
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST(quiet.load());
+	BOOST_TEST(result.cancelled);
+	// The child would sleep 120 s.
+	BOOST_TEST((returned_at - stopped_at < std::chrono::seconds{ 60 }));
+}
+
+BOOST_AUTO_TEST_CASE(RunProcess_FindsABareNameInThePathOfItsEnvironment)
+{
+	if (is_child_run()) {
+		return;
+	}
+	test_util::temp_dir dir("plt run path");
+	const path_probe probe(dir.path());
+	platform::process_options options;
+	options.environment = environment_with_path_first(dir.path());
+	std::vector<std::string> lines;
+
+	const auto result = platform::run_process(fs::path{ std::string{ k_probe_name } },
+		{ "--run_test=PltProcessTests/RunHelper_Talks", "--", std::string{ k_talk_flag } }, options,
+		[&lines](std::string_view line) { lines.emplace_back(line); }, {});
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST_INFO("output: " << joined(lines));
+	BOOST_TEST(result.exit_code == 7);
+	BOOST_TEST(contains_in_order(lines, { "out one", "err one" }));
+}
+
+// Neither the current directory of this process nor the child's working directory is searched.
+BOOST_AUTO_TEST_CASE(RunProcess_ABareNameOutsideThePathIsAnError)
+{
+	if (is_child_run()) {
+		return;
+	}
+	test_util::temp_dir dir("plt run not in path");
+	const path_probe in_working_dir(dir.path());
+	const path_probe in_current_dir(fs::current_path());
+	platform::process_options options;
+	options.working_dir = dir.path();
+	options.environment = parent_environment();
+	bool any_line = false;
+
+	const auto result = platform::run_process(fs::path{ std::string{ k_probe_name } },
+		{ "--run_test=PltProcessTests/RunHelper_Talks", "--", std::string{ k_talk_flag } }, options,
+		[&any_line](std::string_view) { any_line = true; }, {});
+
+	BOOST_TEST(!result);
+	BOOST_TEST(result.exit_code == -1);
+	BOOST_TEST_INFO("error: " << result.error);
+	BOOST_TEST(result.error.find("cannot find") != std::string::npos);
+	BOOST_TEST(!any_line);
 }
 
 BOOST_AUTO_TEST_CASE(RunProcess_AMissingProgramIsAnError)
