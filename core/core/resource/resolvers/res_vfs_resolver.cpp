@@ -206,8 +206,13 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 		// the policy does not cover.
 		const std::string tag_path = fs::path{ tag.relative() }.lexically_normal().generic_string();
 		const std::string file_path = target_path->lexically_relative(entries_stack.top()).generic_string();
-		if (!m_write_policy.allows(tag_path) || !m_write_policy.allows(file_path)) {
-			egLOG_WARN("resource", "Rejected store of '{}': the path is not writable for this protocol", tag.view());
+		if (!m_write_policy.allows(tag_path)) {
+			egLOG_WARN("resource", "Rejected store of '{}': no write pattern of protocol '{}' matches '{}'", tag.view(), protocol, tag_path);
+			return false;
+		}
+		if (!m_write_policy.allows(file_path)) {
+			egLOG_WARN("resource", "Rejected store of '{}': its file resolves to '{}' below the root (through a link, or a "
+				"folder in another case), which no write pattern of protocol '{}' matches", tag.view(), file_path, protocol);
 			return false;
 		}
 		std::error_code ec;
