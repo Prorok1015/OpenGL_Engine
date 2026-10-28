@@ -636,6 +636,37 @@ BOOST_AUTO_TEST_CASE(TheOwnerHoldsTheCapturesOfItsCallbacks)
 	}
 }
 
+// #406: what a game module's layer runs before it goes: the queued continuations of its own tasks, once, and nothing
+// else of the main queue.
+BOOST_AUTO_TEST_CASE(RunPendingMainRunsOnlyTheContinuationsOfTheBoundTasks)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int bound_calls = 0;
+	int other_calls = 0;
+	auto bound = tasks.run(lane::compute, { "bound" }, owner, [](ds::task_context&) {});
+	auto other = tasks.run(lane::compute, { "other" }, [](ds::task_context&) {});
+	bound.then_main([&](ds::task_result<void>&) { ++bound_calls; });
+	other.then_main([&](ds::task_result<void>&) { ++other_calls; });
+	tasks.run_one(lane::compute);
+	tasks.run_one(lane::compute);
+	BOOST_TEST(tasks.pending_main(main_class::general) == 2u);
+
+	ds::detail::run_pending_main(owner);
+	BOOST_TEST(bound_calls == 1);
+	BOOST_TEST(other_calls == 0);
+	tasks.drain_main();
+	BOOST_TEST(bound_calls == 1); // its queue entry does nothing now
+	BOOST_TEST(other_calls == 1);
+
+	// A continuation added after the task finished is queued at once, and found the same way.
+	bound.then_main([&](ds::task_result<void>&) { ++bound_calls; });
+	ds::detail::run_pending_main(owner);
+	BOOST_TEST(bound_calls == 2);
+	tasks.drain_main();
+	BOOST_TEST(bound_calls == 2);
+}
+
 BOOST_AUTO_TEST_CASE(PlainThenMainIgnoresLifetimes)
 {
 	ds::task_system tasks(manual_config());

@@ -47,6 +47,20 @@ namespace ds::detail {
 		return g_on_worker;
 	}
 
+	// A main-thread continuation of a task bound to a lifetime: run once, by the queue or by run_pending_main.
+	struct main_item {
+		std::function<void()> fn;
+		std::atomic<bool> taken{ false };
+
+		void run()
+		{
+			if (!taken.exchange(true)) {
+				auto call = std::move(fn); // the captures go with it, right after the call
+				run_guarded(call, "main-thread task");
+			}
+		}
+	};
+
 	struct lifetime_state {
 		explicit lifetime_state(bool cancel) : cancel_on_destroy(cancel) {}
 
@@ -56,6 +70,8 @@ namespace ds::detail {
 		std::vector<std::weak_ptr<task_state_base>> tasks;
 		// Callbacks the owner holds (hold_callback); cleared by ~lifetime.
 		std::unordered_map<const void*, std::shared_ptr<void>> held;
+		// Queued main-thread continuations of the bound tasks (the queue owns them).
+		std::vector<std::weak_ptr<main_item>> main_items;
 	};
 
 	void hold_callback(const std::weak_ptr<lifetime_state>& owner, std::shared_ptr<void> callback)
@@ -344,6 +360,58 @@ namespace ds::detail {
 		m_cv.wait(lock, [this] { return done(); });
 	}
 
+	void task_state_base::set_origin(std::weak_ptr<lifetime_state> origin)
+	{
+		std::lock_guard lock(m_mutex);
+		m_origin = std::move(origin);
+	}
+
+	std::function<void()> task_state_base::for_main(std::function<void()> fn)
+	{
+		std::weak_ptr<lifetime_state> origin;
+		{
+			std::lock_guard lock(m_mutex);
+			origin = m_origin;
+		}
+		const auto state = origin.lock();
+		if (!state) {
+			return fn;
+		}
+		auto item = std::make_shared<main_item>();
+		item->fn = std::move(fn);
+		{
+			std::lock_guard lock(state->mutex);
+			std::erase_if(state->main_items, [](const std::weak_ptr<main_item>& weak) {
+				const auto queued = weak.lock();
+				return !queued || queued->taken.load();
+			});
+			state->main_items.push_back(item);
+		}
+		return [item] { item->run(); };
+	}
+
+	void run_pending_main(const lifetime& owner)
+	{
+		const auto state = owner.token().lock();
+		if (!state) {
+			return;
+		}
+		ASSERT_MSG(std::this_thread::get_id() == state->owner_thread, "run_pending_main: the owner's thread only");
+		std::vector<std::shared_ptr<main_item>> items;
+		{
+			std::lock_guard lock(state->mutex);
+			for (const auto& weak : state->main_items) {
+				if (auto queued = weak.lock()) {
+					items.push_back(std::move(queued));
+				}
+			}
+			state->main_items.clear();
+		}
+		for (const auto& item : items) {
+			item->run();
+		}
+	}
+
 	void task_state_base::add_continuation(bool on_main, std::function<void()> fn)
 	{
 		{
@@ -356,7 +424,7 @@ namespace ds::detail {
 		if (!on_main) {
 			run_guarded(fn, "task continuation");
 		} else if (auto sys = m_sys.lock()) {
-			sys->post_main(std::move(fn), main_class::general);
+			sys->post_main(for_main(std::move(fn)), main_class::general);
 		}
 	}
 
@@ -376,7 +444,7 @@ namespace ds::detail {
 			if (!c.on_main) {
 				run_guarded(c.fn, "task continuation");
 			} else if (sys) {
-				sys->post_main(std::move(c.fn), main_class::general);
+				sys->post_main(for_main(std::move(c.fn)), main_class::general);
 			}
 		}
 	}
@@ -413,6 +481,7 @@ namespace ds {
 
 	void lifetime::bind(const std::shared_ptr<detail::task_state_base>& state) const
 	{
+		state->set_origin(m_state);
 		std::vector<std::shared_ptr<detail::task_state_base>> released; // destructed after the unlock
 		std::lock_guard lock(m_state->mutex);
 		std::erase_if(m_state->tasks, [&released](const std::weak_ptr<detail::task_state_base>& weak) {

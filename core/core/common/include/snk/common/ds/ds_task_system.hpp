@@ -97,6 +97,10 @@ namespace ds {
 		SNK_API void hold_callback(const std::weak_ptr<lifetime_state>& owner, std::shared_ptr<void> callback);
 		// After the call: the owner stops holding it.
 		SNK_API void release_callback(const std::weak_ptr<lifetime_state>& owner, const void* callback);
+		// Main thread, owner's thread: runs now, in their order, the main-thread continuations of the tasks bound to
+		// `owner` that are queued and have not run; their entries in the queue then do nothing. Only those: the rest
+		// of the queue waits for drain_main. What a game module's layer does before it goes (#406).
+		SNK_API void run_pending_main(const lifetime& owner);
 
 		template<class F>
 		[[nodiscard]] std::weak_ptr<F> held_by(const lifetime& owner, F fn)
@@ -176,6 +180,9 @@ namespace ds {
 			// A continuation of a finished task. `on_main` ones go through post_main(general),
 			// the others run inline on the thread that completes the task (keep them short).
 			void add_continuation(bool on_main, std::function<void()> fn);
+			// The lifetime the task is bound to (lifetime::bind): its queued main-thread continuations can be run
+			// early through it (run_pending_main).
+			void set_origin(std::weak_ptr<lifetime_state> origin);
 			// pending -> `outcome`; false if the task already left `pending`. While its body is dropped the task reads as
 			// running (snapshot() may list it so for that moment).
 			bool finish_pending(task_status outcome, std::string message);
@@ -190,6 +197,8 @@ namespace ds {
 			// pending -> `outcome` without running the body, whose captures go before the task reads as done.
 			bool finish_unrun(task_status outcome);
 			void finalize();
+			// What goes into the main queue for an `on_main` continuation: registered with the task's lifetime, if any.
+			std::function<void()> for_main(std::function<void()> fn);
 
 			const task_desc m_desc;
 			const std::uint64_t m_id;
@@ -204,6 +213,7 @@ namespace ds {
 			std::string m_error;
 			struct continuation { bool on_main; std::function<void()> fn; };
 			std::vector<continuation> m_continuations;
+			std::weak_ptr<lifetime_state> m_origin;
 		};
 
 		struct void_value {};
