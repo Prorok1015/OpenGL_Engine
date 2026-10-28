@@ -47,6 +47,17 @@ BOOST_AUTO_TEST_CASE(Cli_NonInteractiveSetsItsVariableInBothForms)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(Cli_NonInteractiveAfterAMultitokenSetIsStillAFlag)
+{
+	// Stand in for core_module's variable and some other variable for the length of the test.
+	cfg::variable<bool> non_interactive{ "app/non_interactive", false };
+	cfg::variable<std::string> other{ "test/cli_other", "" };
+	run_cli({ "-s", "test/cli_other", "value", "-n" });
+	BOOST_TEST(static_cast<bool>(non_interactive));
+	const std::string got = other;
+	BOOST_TEST(got == "value");
+}
+
 BOOST_AUTO_TEST_CASE(Cli_ProjectIsSetProjectFileAndSetStillWins)
 {
 	// Stands in for core_module's variable of the same name for the length of the test.

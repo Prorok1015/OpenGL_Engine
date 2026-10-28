@@ -41,7 +41,8 @@ namespace {
 	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
 	// --allow-engine-version-mismatch: open a project of an older engine MAJOR.MINOR without asking (never a newer one).
 	CFG_VAR_DEF_BOOL(cfg_allow_engine_version_mismatch, "project/allow_engine_version_mismatch", false);
-	// --non-interactive / -n: nobody can answer a question, so none is asked and each takes its safe answer.
+	// --non-interactive / -n: nobody can answer a question, so none is asked and each takes its safe answer. Today
+	// only the engine version check asks (prj::refuse_without_asking).
 	CFG_VAR_DEF_BOOL(cfg_non_interactive, "app/non_interactive", false);
 
 	// Captures all keys under "logger/category_file":

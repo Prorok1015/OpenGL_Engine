@@ -85,7 +85,8 @@ namespace prj
 
 	// True when the project must not be held for a question but refused at once: a non-interactive run
 	// (--non-interactive, -n) never asks and takes the safe answer, and for a project of another engine version that
-	// is not opening it. Never "yes to everything": only --allow-engine-version-mismatch opens an older project.
+	// is not opening it. That covers an older project too (a headless run on one exits with 3); -n is never "yes to
+	// everything": only --allow-engine-version-mismatch opens an older project, and then nothing is asked.
 	SNK_API bool refuse_without_asking(version_action action, bool non_interactive);
 
 	// The project given on the command line could not be opened; the host exits with k_exit_project_error.

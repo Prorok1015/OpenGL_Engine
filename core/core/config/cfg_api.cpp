@@ -131,8 +131,9 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var")
 		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it")
 		("allow-engine-version-mismatch", "open a project made for an older engine version without asking")
-		("non-interactive,n", "never ask the user anything: every question takes its safe answer (this is not --yes); "
-			"a project of another engine version is not opened and the editor exits with code 3");
+		("non-interactive,n", "do not wait for answers, take the safe one (this is not --yes). Today it covers the "
+			"engine version check: a project made for another engine version is refused with exit code 3 instead of "
+			"asking; an older one still opens with --allow-engine-version-mismatch");
 	
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);

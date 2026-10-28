@@ -245,6 +245,15 @@ BOOST_AUTO_TEST_CASE(RefuseWithoutAsking_OnlyAHeldProjectInANonInteractiveRun)
 	}
 }
 
+// -n on an older project: refused like a newer one, unless --allow-engine-version-mismatch opened it already.
+BOOST_AUTO_TEST_CASE(RefuseWithoutAsking_AnOlderProjectOpensOnlyWithTheMismatchFlag)
+{
+	const auto older = prj::version_match::project_older;
+	BOOST_TEST(prj::refuse_without_asking(prj::version_action_for(older, false), true));
+	BOOST_TEST(!prj::refuse_without_asking(prj::version_action_for(older, true), true));
+	BOOST_TEST(prj::refuse_without_asking(prj::version_action_for(prj::version_match::project_newer, true), true));
+}
+
 BOOST_AUTO_TEST_CASE(EngineVersionError_IsAProjectError)
 {
 	try {
