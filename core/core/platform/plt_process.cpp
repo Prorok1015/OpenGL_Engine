@@ -81,7 +81,7 @@ fs::path platform::current_executable()
 	return {};
 }
 
-std::optional<std::string> platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
+platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
 {
 	std::wstring command_line = quoted(program.native());
 	for (const auto& arg : args) {
@@ -96,11 +96,11 @@ std::optional<std::string> platform::spawn_detached(const fs::path& program, con
 	if (!CreateProcessW(program.c_str(), command_line.data(), nullptr, nullptr, FALSE,
 			DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &process)) {
 		const auto error = std::error_code{ static_cast<int>(GetLastError()), std::system_category() };
-		return std::format("cannot start '{}': {}", program.string(), error.message());
+		return { 0, std::format("cannot start '{}': {}", program.string(), error.message()) };
 	}
 	CloseHandle(process.hThread);
 	CloseHandle(process.hProcess);
-	return std::nullopt;
+	return { process.dwProcessId, {} };
 }
 
 #else
@@ -112,7 +112,7 @@ fs::path platform::current_executable()
 	return ec ? fs::path{} : path;
 }
 
-std::optional<std::string> platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
+platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
 {
 	std::string program_name = program.string();
 	std::vector<std::string> owned = args;
@@ -134,9 +134,9 @@ std::optional<std::string> platform::spawn_detached(const fs::path& program, con
 	const int result = posix_spawn(&pid, program_name.c_str(), nullptr, &attributes, argv.data(), environ);
 	posix_spawnattr_destroy(&attributes);
 	if (result != 0) {
-		return std::format("cannot start '{}': {}", program_name, std::generic_category().message(result));
+		return { 0, std::format("cannot start '{}': {}", program_name, std::generic_category().message(result)) };
 	}
-	return std::nullopt;
+	return { static_cast<std::uint64_t>(pid), {} };
 }
 
 #endif

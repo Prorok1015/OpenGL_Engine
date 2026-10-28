@@ -87,7 +87,11 @@ namespace {
 			args.push_back("--allow-engine-version-mismatch");
 		}
 		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", manifest_file.string());
-		return platform::spawn_detached(program, args);
+		auto started = platform::spawn_detached(program, args);
+		if (!started) {
+			return started.error;
+		}
+		return std::nullopt;
 	}
 
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).

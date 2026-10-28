@@ -2,11 +2,28 @@
 #include <snk/platform/plt_process.h>
 #include "test_temp_dir.hpp"
 #include <chrono>
+#include <cstdint>
+#include <iterator>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <csignal>
+#include <sys/types.h>
+#include <sys/wait.h>
+#endif
 
 // snk::platform (EPIC-42 #158): what the editor needs to restart itself into another project.
 
@@ -27,14 +44,41 @@ namespace {
 		return {};
 	}
 
-	bool wait_for_file(const fs::path& file)
+	// Until the file appears, at most `limit`: a child that never writes it fails the test instead of hanging the run.
+	bool wait_for_file(const fs::path& file, std::chrono::seconds limit)
 	{
-		// Sanitizer builds start slowly.
-		for (int i = 0; i < 600; ++i) {
+		const auto deadline = std::chrono::steady_clock::now() + limit;
+		while (std::chrono::steady_clock::now() < deadline) {
 			if (fs::exists(file)) return true;
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		}
-		return false;
+		return fs::exists(file);
+	}
+
+	// Ends the child (if it still runs) and waits for it, so no test leaves a process behind.
+	void stop_child(std::uint64_t process_id, const fs::path& program)
+	{
+#ifdef _WIN32
+		HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+			static_cast<DWORD>(process_id));
+		if (process == nullptr) {
+			return; // already gone
+		}
+		// An id is reused once its process is gone: only our own program is ended.
+		wchar_t image[32768];
+		DWORD length = static_cast<DWORD>(std::size(image));
+		std::error_code ec;
+		if (QueryFullProcessImageNameW(process, 0, image, &length) && fs::equivalent(fs::path{ image }, program, ec)) {
+			TerminateProcess(process, 1);
+			WaitForSingleObject(process, 30000);
+		}
+		CloseHandle(process);
+#else
+		(void)program;
+		// Our child: its id stays reserved (a zombie) until waitpid below, so the signal cannot reach another process.
+		kill(static_cast<pid_t>(process_id), SIGKILL);
+		waitpid(static_cast<pid_t>(process_id), nullptr, 0);
+#endif
 	}
 }
 
@@ -70,21 +114,27 @@ BOOST_AUTO_TEST_CASE(SpawnDetached_RunsTheProgramWithItsArguments)
 	fs::create_directories(marker.parent_path());
 	const std::u8string utf8 = marker.u8string();
 
-	const auto error = platform::spawn_detached(platform::current_executable(), { "--run_test=PltProcessTests/SpawnHelper_WritesTheMarker",
+	const fs::path program = platform::current_executable();
+
+	const auto started = platform::spawn_detached(program, { "--run_test=PltProcessTests/SpawnHelper_WritesTheMarker",
 		"--", std::string{ k_marker_flag }, std::string{ utf8.begin(), utf8.end() } });
 
-	BOOST_REQUIRE_MESSAGE(!error.has_value(), error.value_or(""));
-	BOOST_TEST(wait_for_file(marker));
+	BOOST_REQUIRE_MESSAGE(static_cast<bool>(started), started.error);
+	BOOST_TEST(started.process_id != 0u);
+	// Sanitizer builds start slowly.
+	BOOST_TEST(wait_for_file(marker, std::chrono::seconds{ 120 }));
+	stop_child(started.process_id, program);
 }
 
 BOOST_AUTO_TEST_CASE(SpawnDetached_AMissingProgramIsAnError)
 {
 	test_util::temp_dir dir("plt missing");
 
-	const auto error = platform::spawn_detached(dir.path() / "no_such_program", {});
+	const auto started = platform::spawn_detached(dir.path() / "no_such_program", {});
 
-	BOOST_REQUIRE(error.has_value());
-	BOOST_TEST(error->find("no_such_program") != std::string::npos);
+	BOOST_TEST(!started);
+	BOOST_TEST(started.process_id == 0u);
+	BOOST_TEST(started.error.find("no_such_program") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
