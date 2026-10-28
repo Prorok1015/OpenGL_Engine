@@ -78,6 +78,16 @@ namespace {
 			{ "additionalProperties", false } };
 	}
 
+	// What file.new_project and file.open_project give back: the manifest the new editor opens.
+	json::value switched_project_schema()
+	{
+		return json::object{
+			{ "type", "object" },
+			{ "properties", json::object{ { "manifest", json::object{ { "type", "string" } } } } },
+			{ "required", json::array{ "manifest" } },
+			{ "additionalProperties", false } };
+	}
+
 	bool flag(const json::value& args, std::string_view key)
 	{
 		const json::value* value = args.as_object().if_contains(key);
@@ -334,6 +344,7 @@ void edt::file_menu::register_actions()
 			return switch_to_project(created.manifest_file, false);
 		},
 		.args_schema = new_project_schema(),
+		.result_schema = switched_project_schema(),
 		.activate = [this] { new_project(); } });
 
 	add({ .id = "file.open_project", .label = "Open Project...", .menu_path = "File",
@@ -343,6 +354,7 @@ void edt::file_menu::register_actions()
 			return switch_to_project(from_json_string(args.as_object().at("path").as_string()), flag(args, "allow_engine_version_mismatch"));
 		},
 		.args_schema = open_project_schema(),
+		.result_schema = switched_project_schema(),
 		.activate = [this] { open_project(); } });
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
