@@ -11,6 +11,15 @@
 #include <string>
 #include <utility>
 
+std::filesystem::path edt::agent_project_dir(const std::filesystem::path& configured,
+	const std::optional<std::filesystem::path>& project_root)
+{
+	if (!configured.empty()) {
+		return configured;
+	}
+	return project_root ? *project_root : std::filesystem::current_path();
+}
+
 namespace {
 	// Version of the command set an agent sees (serverInfo.snk_api, AI_INTEGRATION.md section 5): bump it when a
 	// tool is renamed or changes its schema in a breaking way.
