@@ -162,7 +162,11 @@ void edt::level_controller::detach_from_game_layer()
 	unwatch_level();
 	m_detached_level.reset();
 	m_detached_world = m_state.active_world_idx;
-	if (!m_state.editor_tag.is_valid()) return;
+	if (!m_state.editor_tag.is_valid()) {
+		// No level: the new layer has no worlds for the editor either.
+		m_world_ctrl.clear_active_world();
+		return;
+	}
 
 	if (auto ctx_mgr = m_services.ctx_manager.lock(); ctx_mgr && m_world_ctrl.on_save_camera) {
 		const std::string* name = m_state.active_world_name();
