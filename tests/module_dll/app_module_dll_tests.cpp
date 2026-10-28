@@ -2,6 +2,8 @@
 #include "../test_module_env.hpp"
 #include "test_game_dll_api.h"
 #include <snk/application/app_module_source.h>
+#include <snk/common/ds/ds_task_system.hpp>
+#include <snk/desc/desc_base.hpp>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
 #include <chrono>
@@ -99,6 +101,59 @@ BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)
 			BOOST_TEST(!contexts().game_layer()->descs().is_registered(dll_game::desc_type));
 		}
 	}
+}
+
+// #406: the library's callbacks on a resource still loading (a block of its layer) and on its task, then the library
+// goes before either settles. What the engine holds of them afterwards is its own code: settling and draining after
+// the library is unmapped runs nothing of it. Shared configurations only (Linux GCC Shared, Windows MSVC Shared
+// Release), without a sanitizer; the static tests of the same paths run under ASan/TSan.
+BOOST_AUTO_TEST_CASE(callbacks_of_an_unloaded_library_leave_nothing_of_it_in_the_engine)
+{
+	const auto waited = put("dll_waited.desc", R"({"__type":"dll_desc","value":1})");
+	BOOST_REQUIRE(waited.view() == dll_game::waited_tag);
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(resident(g_module_path));
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	// The task's continuation and the callback on the resource: both registered, both still waiting.
+	BOOST_REQUIRE(ds::detail::held_count(layer->tasks()) == 2u);
+	{
+		const auto pending = layer->resources().require<desc::desc_base>(waited);
+		BOOST_REQUIRE(!pending.is_ready());
+		BOOST_REQUIRE(!pending.has_error());
+	}
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+	pump();
+	for (int i = 0; i < 4; ++i) {
+		tasks.drain_main();
+	}
+}
+
+// The resource the library waits for fails: its callback is dropped without a call (drop_held), the task's goes as
+// usual, and the library unloads with nothing of it left held.
+BOOST_AUTO_TEST_CASE(a_failed_resource_drops_the_library_callback_without_a_call)
+{
+	const auto failing = put("dll_failing.desc", R"({"__type":"no_such_desc_type"})");
+	BOOST_REQUIRE(failing.view() == dll_game::failing_tag);
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_REQUIRE(ds::detail::held_count(layer->tasks()) == 2u);
+	{
+		// The block the library waits on: a failed block is not kept once settled, so it is held from here (the
+		// library's own request found it in the cache, it is the same block).
+		const auto failed = layer->resources().require<desc::desc_base>(failing);
+		for (int i = 0; i < 100 && !failed.is_ready() && !failed.has_error(); ++i) {
+			pump();
+		}
+		BOOST_REQUIRE(failed.has_error());
+	}
+	pump(); // the task's continuation
+	BOOST_TEST(ds::detail::held_count(layer->tasks()) == 0u);
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+	pump();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

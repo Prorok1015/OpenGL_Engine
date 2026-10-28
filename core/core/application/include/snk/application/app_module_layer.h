@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/common/ds/ds_store.hpp>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace app::modules {
@@ -15,6 +16,10 @@ namespace app::modules {
 		// The module has registered and initialized: the layer goes into use (the game worlds move to it), so
 		// whatever is built on it sees everything the module registered.
 		virtual void activate() {}
+		// Empty when the layer may go now, else why not; module_loader::unload refuses then (std::logic_error) and the
+		// module stays loaded. A game module's layer refuses while one of its callbacks runs: the unload would destroy
+		// the code running it (#406).
+		virtual std::string unload_refusal() const { return {}; }
 	};
 
 	// Put in the root storage by the engine; module_loader asks it for the layer of a layered() module.

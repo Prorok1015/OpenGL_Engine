@@ -12,5 +12,10 @@ namespace dll_game {
 	inline constexpr std::string_view desc_type = "dll_desc";
 	inline constexpr std::string_view system_name = "dll::move";
 	inline constexpr std::string_view component_name = "dll.component";
+	// When the host stored it before loading, the module waits for it with res_handle::then (#406): a callback of the
+	// library's code on a block that settles after the library is gone.
+	inline constexpr std::string_view waited_tag = "memory://t/dll_waited.desc";
+	// Same, for a resource that fails to load: its callback is dropped without a call.
+	inline constexpr std::string_view failing_tag = "memory://t/dll_failing.desc";
 
 }
