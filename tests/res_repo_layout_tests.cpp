@@ -173,7 +173,7 @@ std::vector<std::string> dangling_desc_references(const resource_layout& layout,
 }
 
 // Literals "res://x", "engine://x", "edt://x" and res::tag::make("x") of the C++ sources below `source_roots`, outside
-// comment lines. A bare prefix ("res://"), a pattern ('#', '{', '%') or a path ending in '/' names no file.
+// comment lines. A bare prefix ("res://"), a pattern ('#', '{', '%', a glob with '*' or '?') or a path ending in '/' names no file.
 std::vector<std::string> dangling_source_references(const resource_layout& layout, const std::vector<fs::path>& source_roots,
 	const fs::path& skipped)
 {
@@ -206,7 +206,7 @@ std::vector<std::string> dangling_source_references(const resource_layout& layou
 				}
 				for (const std::string& reference : references) {
 					const std::string path = reference.substr(reference.find("://") + 3);
-					if (path.empty() || path.back() == '/' || path.find_first_of("#{%") != std::string::npos) continue;
+					if (path.empty() || path.back() == '/' || path.find_first_of("#{%*?") != std::string::npos) continue;
 					if (const std::string problem = reference_problem(layout, reference); !problem.empty()) {
 						problems.push_back(entry.path().lexically_relative(root).generic_string() + ":" + std::to_string(number) + " " + reference + " (" + problem + ")");
 					}
@@ -302,14 +302,18 @@ BOOST_AUTO_TEST_CASE(DanglingSourceReferences_CatchesMissingFilesAndSkipsComment
 		"// auto e = res::tag{ \"res://commented.png\" };\n"
 		"ImGui::TreeNodeEx(\"res://##root\");\n"
 		"starts_with(\"res://\");\n"
-		"auto f = \"memory://scratch/x\";\n");
+		"auto f = \"memory://scratch/x\";\n"
+		"auto g = res::tag{ \"edt://settings/**\" };\n"
+		"auto h = res::tag{ \"res://shaders/pass?.frag\" };\n"
+		"auto i = res::tag{ \"edt://settings/missing.json\" };\n");
 	const resource_layout layout{ { dir.path() / "res" }, { dir.path() / "res" }, {} };
 
 	const auto problems = dangling_source_references(layout, { dir.path() / "src" }, {});
 
 	BOOST_TEST((problems == std::vector<std::string>{
 		"a.cpp:2 res://missing.png (no such file)",
-		"a.cpp:3 res://made_missing.png (no such file)" }), joined(problems));
+		"a.cpp:3 res://made_missing.png (no such file)",
+		"a.cpp:11 edt://settings/missing.json (no such file)" }), joined(problems));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
