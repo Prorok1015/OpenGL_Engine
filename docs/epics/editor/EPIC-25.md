@@ -132,7 +132,7 @@ edt::prefab_editor_context {
 - `core/engine/scene/include/snk/scene/level/scn_level.h/.cpp` — добавить `remove_world()`
 - Новый `Editor/code/editor_system/controller/edt_prefab_editor_context.h/.cpp`
 - Новый `Editor/code/editor_system/panels/edt_prefab_editor_panel.h/.cpp`
-- Новый `Editor/res/templates/prefab_preview.desc`
+- Новый `Editor/data/templates/prefab_preview.desc` (изначально `Editor/res/templates/`, перенесён в EPIC-36)
 - `Editor/code/editor_system/controller/edt_editor_system.h/.cpp` — `open_prefab_for_edit`, `close_prefab_editor`
 - `Editor/code/editor_system/panels/edt_asset_browser_panel.h/.cpp` — double-click callback
 - `Editor/code/editor_system/controller/edt_init_helpers.cpp` — wiring
