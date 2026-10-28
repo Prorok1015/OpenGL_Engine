@@ -5,16 +5,21 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string_view>
+#include <utility>
 
-// Every .desc the repository ships (core/res + Editor/res layers) must load, be a fixed point of the engine's own save, and
+// Every .desc the repository ships (core/res + Editor/res layers, Editor/data as edt://) must load, be a fixed point of the engine's own save, and
 // carry the current __version on every typed object. When a format changes, run tools/desc_resave on
-// core/res and Editor/res: this test fails on files that are still in an older format.
+// core/res, Editor/res and Editor/data: this test fails on files that are still in an older format.
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
 
 #ifndef SNK_EDITOR_RES_DIR
 #error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#endif
+#ifndef SNK_EDITOR_DATA_DIR
+#error "SNK_EDITOR_DATA_DIR must point at Editor/data"
 #endif
 #ifndef SNK_CORE_RES_DIR
 #error "SNK_CORE_RES_DIR must point at core/res"
@@ -23,7 +28,7 @@ namespace fs = std::filesystem;
 namespace {
 
 struct repo_file {
-	std::string rel;
+	res::tag tag;
 	std::vector<std::byte> bytes;
 	bool is_desc = false;
 };
@@ -33,22 +38,27 @@ const std::vector<repo_file>& repo_files()
 {
 	static const std::vector<repo_file> files = [] {
 		std::vector<repo_file> out;
-		// Base layer first; a file of the editor layer replaces the base file at the same path.
-		for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_EDITOR_RES_DIR } }) {
+		// Base layer first; a file of the editor layer replaces the base file at the same path. Editor/data is its own protocol.
+		const std::pair<fs::path, std::string_view> roots[] = {
+			{ fs::path{ SNK_CORE_RES_DIR }, res::tag::default_protocol() },
+			{ fs::path{ SNK_EDITOR_RES_DIR }, res::tag::default_protocol() },
+			{ fs::path{ SNK_EDITOR_DATA_DIR }, "edt" },
+		};
+		for (const auto& [root, protocol] : roots) {
 			for (const auto& entry : fs::recursive_directory_iterator(root)) {
 				if (!entry.is_regular_file()) continue;
 				std::ifstream in(entry.path(), std::ios::binary);
 				std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 				repo_file file;
-				file.rel = fs::relative(entry.path(), root).generic_string();
+				file.tag = res::tag{ protocol, fs::relative(entry.path(), root).generic_string() };
 				file.bytes.resize(text.size());
 				std::memcpy(file.bytes.data(), text.data(), text.size());
 				file.is_desc = entry.path().extension() == ".desc";
-				std::erase_if(out, [&](const repo_file& f) { return f.rel == file.rel; });
+				std::erase_if(out, [&](const repo_file& f) { return f.tag == file.tag; });
 				out.push_back(std::move(file));
 			}
 		}
-		std::ranges::sort(out, {}, &repo_file::rel);
+		std::ranges::sort(out, {}, [](const repo_file& f) -> const std::string& { return f.tag.string(); });
 		return out;
 	}();
 	return files;
@@ -62,11 +72,12 @@ struct repo_fixture : test_util::scene_env
 		engine::render::register_render_descs(*descs);
 		// Levels reference models that are imported into prefabs while they load.
 		rs->registrate_adapter<scn::model_importer_adapter>(scn::model_importer_adapter::INFO, std::ref(*descs), std::ref(*rs));
-		// Serve the repository's res:// files from RAM so the test never touches the working directory.
+		// Serve the repository's res:// and edt:// files from RAM so the test never touches the working directory.
 		rs->unregistrate_resolver(res::tag::default_protocol());
 		auto& ram_res = rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
+		auto& ram_edt = rs->registrate_resolver<test_util::ram_resolver>("edt");
 		for (const auto& file : repo_files()) {
-			ram_res.files[res::tag::make(file.rel)] = file.bytes;
+			(file.tag.protocol() == "edt" ? ram_edt : ram_res).files[file.tag] = file.bytes;
 		}
 	}
 
@@ -82,8 +93,8 @@ struct repo_fixture : test_util::scene_env
 		for (const auto& file : repo_files()) {
 			if (!file.is_desc) continue;
 			++count;
-			BOOST_TEST_CONTEXT("res://" << file.rel) {
-				fn(res::tag::make(file.rel), file);
+			BOOST_TEST_CONTEXT(file.tag.string()) {
+				fn(file.tag, file);
 			}
 		}
 		BOOST_TEST(count > 0u);
@@ -137,7 +148,7 @@ BOOST_AUTO_TEST_CASE(SavingALoadedFileGivesTheFileBack)
 		auto loaded = load_desc(tag);
 		BOOST_REQUIRE(loaded);
 		const auto saved = parse(adapter.serialize(tag, loaded));
-		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on core/res and Editor/res");
+		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on core/res, Editor/res and Editor/data");
 	});
 }
 

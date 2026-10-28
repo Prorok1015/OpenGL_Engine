@@ -57,6 +57,9 @@ namespace ds {
 		[[nodiscard]] SNK_API bool on_worker_thread() noexcept;
 
 		struct lifetime_state;
+		// A callback made in the caller's binary (a game module's), held for its owner (#406). Defined in the engine:
+		// the engine's queues and blocks hold its own call of a slot, never the caller's functor.
+		struct held_slot;
 	}
 
 	enum class lifetime_option : std::uint8_t {
@@ -89,6 +92,29 @@ namespace ds {
 
 		std::shared_ptr<detail::lifetime_state> m_state;
 	};
+
+	namespace detail {
+		// Callbacks of the caller's binary (#406). The functor lives in an engine slot that `owner` holds; the engine's
+		// queues, task continuations and resource blocks hold only the engine's call of the slot. ~lifetime takes the
+		// functor out of every slot it holds and destroys it there, so nothing made by a game module's code is left
+		// in the engine's containers once its lifetimes are gone. Only then_main on a task bound to no lifetime (the
+		// engine's own tasks) makes a slot no owner holds: its queued call alone keeps it.
+		[[nodiscard]] SNK_API std::shared_ptr<held_slot> hold(const lifetime& owner, std::function<void(void*)> fn);
+		// Main thread: the one call of the slot (none if it is empty or was called); the owner lets go of it.
+		SNK_API void call_held(const std::shared_ptr<held_slot>& slot, void* arg);
+		// Any thread: empties the slot without a call (a block that failed); the owner lets go of it.
+		SNK_API void drop_held(const std::shared_ptr<held_slot>& slot);
+		// Slots `owner` holds with a functor not called yet. For tests and diagnostics.
+		[[nodiscard]] SNK_API std::size_t held_count(const lifetime& owner);
+		// Main thread, owner's thread: runs now, in their order, the main-thread continuations of the tasks bound to
+		// `owner` that are queued and have not run, also those they queue in turn; their entries in the queue then do
+		// nothing. Only those: the rest of the queue waits for drain_main. What a game module's layer does before it
+		// goes (#406).
+		SNK_API void run_pending_main(const lifetime& owner);
+		// How many callbacks held by `owner` (or continuations of its tasks) are running now: a game module's layer
+		// refuses to go from inside one of them.
+		[[nodiscard]] SNK_API int running_callbacks(const lifetime& owner);
+	}
 
 	class task_context
 	{
@@ -159,6 +185,19 @@ namespace ds {
 			// A continuation of a finished task. `on_main` ones go through post_main(general),
 			// the others run inline on the thread that completes the task (keep them short).
 			void add_continuation(bool on_main, std::function<void()> fn);
+			// The lifetime the task is bound to (lifetime::bind): its queued main-thread continuations can be run
+			// early through it (run_pending_main).
+			void set_origin(std::weak_ptr<lifetime_state> origin);
+			// then_main with a functor of the caller's binary: the task keeps and queues the engine's call of a slot.
+			// With a slot (then_main(owner, ...)): the owner holds the functor. Without: the lifetime the task is bound
+			// to holds it; for a task bound to none, the queued call alone does.
+			void continue_on_main(std::shared_ptr<held_slot> slot);
+			void continue_on_main(std::function<void(void*)> fn);
+			// finalize() has returned: the continuations are queued (or ran inline) and nothing of the task's runs any
+			// more. Later than done(), which the status store makes true before finalize().
+			[[nodiscard]] bool finalized() const;
+			// Main thread. finalize() never waits for the main thread (it only queues), so this cannot deadlock.
+			void wait_finalized();
 			// pending -> `outcome`; false if the task already left `pending`. While its body is dropped the task reads as
 			// running (snapshot() may list it so for that moment).
 			bool finish_pending(task_status outcome, std::string message);
@@ -173,6 +212,8 @@ namespace ds {
 			// pending -> `outcome` without running the body, whose captures go before the task reads as done.
 			bool finish_unrun(task_status outcome);
 			void finalize();
+			// What goes into the main queue for an `on_main` continuation: registered with the task's lifetime, if any.
+			std::function<void()> for_main(std::function<void()> fn);
 
 			const task_desc m_desc;
 			const std::uint64_t m_id;
@@ -187,6 +228,8 @@ namespace ds {
 			std::string m_error;
 			struct continuation { bool on_main; std::function<void()> fn; };
 			std::vector<continuation> m_continuations;
+			std::weak_ptr<lifetime_state> m_origin;
+			bool m_finalized = false;
 		};
 
 		struct void_value {};
@@ -283,31 +326,30 @@ namespace ds {
 		// Runs `fn` on the main thread (post_main, general class) once the task has finished,
 		// whatever the outcome. If it has finished already, `fn` is queued right away.
 		// `fn` must be copyable (std::function): move-only captures do not compile.
+		// The lifetime the task is bound to holds `fn` (see detail::hold): it is dropped without a call if that
+		// lifetime goes first. A task bound to none runs it whatever happens.
 		void then_main(callback_t fn) const
 		{
 			ASSERT_MSG(m_state, "task_handle::then_main: empty handle");
 			if (!m_state) {
 				return;
 			}
-			m_state->add_continuation(true, [st = std::static_pointer_cast<state_t>(m_state), fn = std::move(fn)]() {
+			m_state->continue_on_main([st = std::static_pointer_cast<state_t>(m_state), fn = std::move(fn)](void*) {
 				deliver(*st, fn);
 			});
 		}
 
 		// Same, but dropped without a call if `owner` is already destroyed; checked on the main
 		// thread right before the call, where the owner dies too, so it cannot die in between.
+		// `owner` holds `fn`: its captures go when the owner does, even while the call is still queued.
 		void then_main(const lifetime& owner, callback_t fn) const
 		{
 			ASSERT_MSG(m_state, "task_handle::then_main: empty handle");
 			if (!m_state) {
 				return;
 			}
-			m_state->add_continuation(true, [st = std::static_pointer_cast<state_t>(m_state), weak = owner.token(),
-				fn = std::move(fn)]() {
-				if (!weak.expired()) {
-					deliver(*st, fn);
-				}
-			});
+			m_state->continue_on_main(detail::hold(owner,
+				[st = std::static_pointer_cast<state_t>(m_state), fn = std::move(fn)](void*) { deliver(*st, fn); }));
 		}
 
 	private:

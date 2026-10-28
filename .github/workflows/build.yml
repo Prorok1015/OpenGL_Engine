@@ -408,8 +408,8 @@ jobs:
           echo "::group::core/res"
           "$tool" core/res --check || status=1
           echo "::endgroup::"
-          echo "::group::Editor/res"
-          "$tool" Editor/res --base core/res --check || status=1
+          echo "::group::Editor/res + Editor/data"
+          "$tool" Editor/res --base core/res --edt Editor/data --check || status=1
           echo "::endgroup::"
           exit $status
 

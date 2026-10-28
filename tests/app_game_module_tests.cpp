@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_module_env.hpp"
+#include <snk/application/app_module_source.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <snk/config/cfg_variables.h>
 #include <snk/ecs/ecs_channel.hpp>
@@ -8,6 +9,7 @@
 #include <snk/game/gs_game_module.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
@@ -186,6 +188,30 @@ private:
 	cmd::registration m_kept;
 };
 
+// Continuations of the module's task, with and without an owner; their captures stand for the module's code (#406).
+std::weak_ptr<int> g_plain_capture;
+std::weak_ptr<int> g_owned_capture;
+int g_plain_calls = 0;
+
+class continuing_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "continuing_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
+	{
+		auto task = data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "game.continued" },
+			[](ds::task_context&) {});
+		auto plain = std::make_shared<int>(0);
+		g_plain_capture = plain;
+		task.then_main([plain](ds::task_result<void>&) { ++g_plain_calls; });
+		auto owned = std::make_shared<int>(0);
+		g_owned_capture = owned;
+		task.then_main(layer.tasks(), [owned](ds::task_result<void>&) {});
+	}
+};
+
 class throwing_game_module final : public gs::game_module {
 public:
 	std::string_view name() const override { return "throwing_game"; }
@@ -212,6 +238,76 @@ constexpr const char* PREFAB_LEVEL = R"({"__type":"level_desc","name":"lv","worl
 
 constexpr const char* RIG_PREFAB = R"({"__type":"prefab_desc","__version":3,"children":[
 	{"__id":"00000000000000a1","name":"bone"}]})";
+
+// A continuation of the module's task that tries to unload the module it belongs to (#406).
+app::modules::module_loader* g_unloader = nullptr;
+ds::app_data_storage* g_unload_root = nullptr;
+std::string g_unload_refusal;
+
+class self_unloading_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "self_unloading_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		data.require<gs::module_context>()
+			.run(ds::lane::compute, ds::task_desc{ .name = "game.self_unload" }, [](ds::task_context&) {})
+			.then_main([](ds::task_result<void>&) {
+				try {
+					g_unloader->unload("self_unloading_game", *g_unload_root);
+				} catch (const std::logic_error& e) {
+					g_unload_refusal = e.what();
+				}
+			});
+	}
+};
+
+// Callbacks of the module with an owner that are still waiting when it unloads: a continuation in the main queue and
+// the callback of a resource still loading. Their captures must be gone before the module's source is closed (#406).
+std::weak_ptr<int> g_queued_capture;
+std::weak_ptr<int> g_loading_capture;
+bool g_captures_alive_at_close = true;
+const res::tag LOADING_TAG{ "memory://t/loading.txt" };
+
+class observed_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "observed_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
+	{
+		auto queued = std::make_shared<int>(0);
+		g_queued_capture = queued;
+		data.require<gs::module_context>()
+			.run(ds::lane::compute, ds::task_desc{ .name = "game.observed" }, [](ds::task_context&) {})
+			.then_main(layer.tasks(), [queued](ds::task_result<void>&) {});
+		auto loading = std::make_shared<int>(0);
+		g_loading_capture = loading;
+		layer.resources().require<res::text_resource>(LOADING_TAG).then(layer.tasks(), [loading](res::text_resource&) {});
+	}
+};
+
+}
+
+SNK_DECLARE_MODULE_PREFIXED(observed_test_, observed_game_module)
+
+namespace {
+
+// Notes, when the loader closes it, whether anything the module's callbacks captured is still alive.
+class closing_source final : public app::modules::module_source {
+public:
+	std::string open() override { return {}; }
+	const app::modules::module_entry& entry() const override { return m_entry; }
+	void close() override { g_captures_alive_at_close = !g_queued_capture.expired() || !g_loading_capture.expired(); }
+	std::string describe() const override { return "closing"; }
+
+private:
+	app::modules::module_entry m_entry{ &observed_test_module_api_version, &observed_test_module_build_info,
+		&observed_test_create_module, &observed_test_destroy_module };
+};
 
 struct game_module_fixture : test_util::module_env {
 	game_module_fixture()
@@ -295,6 +391,76 @@ BOOST_AUTO_TEST_CASE(the_module_tasks_are_stopped_before_its_layer_goes)
 	BOOST_TEST(g_task->done());
 	BOOST_TEST((g_task->status() == ds::task_status::cancelled));
 	BOOST_TEST(!g_task_ran);
+}
+
+// Stopping the module's tasks queues their continuations; the unload runs them while the layer is there, so nothing
+// of the module's code waits in the main queue for the next frame, after its source is closed.
+BOOST_AUTO_TEST_CASE(unloading_runs_and_drops_the_continuations_of_the_module_tasks)
+{
+	g_plain_calls = 0;
+	loader.load(std::make_unique<continuing_game_module>(), root);
+	BOOST_REQUIRE(!g_plain_capture.expired());
+	BOOST_REQUIRE(!g_owned_capture.expired());
+	loader.unload("continuing_game", root);
+	BOOST_TEST(g_plain_calls == 1);
+	BOOST_TEST(g_plain_capture.expired());
+	BOOST_TEST(g_owned_capture.expired());
+}
+
+// An editor command or an agent call unloads from inside a main-queue item: the unload runs the continuations of the
+// module's tasks only, the base items queued around it keep their turn.
+BOOST_AUTO_TEST_CASE(an_unload_from_a_main_queue_item_runs_only_the_module_continuations)
+{
+	g_plain_calls = 0;
+	loader.load(std::make_unique<continuing_game_module>(), root);
+	int base_calls = 0;
+	int base_calls_at_unload = -1;
+	int plain_calls_at_unload = -1;
+	tasks.post_main([&] { ++base_calls; });
+	tasks.post_main([&] {
+		loader.unload("continuing_game", root);
+		base_calls_at_unload = base_calls;
+		plain_calls_at_unload = g_plain_calls;
+	});
+	tasks.post_main([&] { ++base_calls; });
+	while (tasks.pending_main(ds::main_class::general) > 0) {
+		tasks.drain_main();
+	}
+	BOOST_TEST(base_calls_at_unload == 1);
+	BOOST_TEST(plain_calls_at_unload == 1);
+	BOOST_TEST(base_calls == 2);
+	BOOST_TEST(g_plain_calls == 1); // its entry in the queue did nothing afterwards
+	BOOST_TEST(g_plain_capture.expired());
+	BOOST_TEST(g_owned_capture.expired());
+}
+
+BOOST_AUTO_TEST_CASE(an_unload_from_inside_the_module_callback_is_refused)
+{
+	g_unloader = &loader;
+	g_unload_root = &root;
+	g_unload_refusal.clear();
+	loader.load(std::make_unique<self_unloading_game_module>(), root);
+	tasks.run_one(ds::lane::compute);
+	tasks.drain_main();
+	BOOST_TEST(g_unload_refusal.find("inside one of the module's callbacks") != std::string::npos);
+	BOOST_TEST((loader.state("self_unloading_game") == app::modules::module_state::initialized));
+	loader.unload("self_unloading_game", root); // from outside it goes
+	BOOST_TEST((loader.state("self_unloading_game") == app::modules::module_state::unloaded));
+}
+
+BOOST_AUTO_TEST_CASE(the_module_callbacks_are_gone_before_its_source_closes)
+{
+	put("loading.txt", "text");
+	g_captures_alive_at_close = true;
+	loader.load(std::make_unique<closing_source>(), root);
+	BOOST_REQUIRE((loader.state("observed_game") == app::modules::module_state::initialized));
+	tasks.run_one(ds::lane::compute); // the module's task: its continuation waits in the main queue
+	BOOST_REQUIRE(tasks.pending_main(ds::main_class::general) > 0u);
+	BOOST_REQUIRE(!g_queued_capture.expired());
+	BOOST_REQUIRE(!g_loading_capture.expired()); // the resource is still loading
+	loader.unload("observed_game", root);
+	BOOST_TEST(!g_captures_alive_at_close);
+	pump();
 }
 
 BOOST_AUTO_TEST_CASE(unloading_takes_the_worlds_then_the_layer_then_the_module_services)

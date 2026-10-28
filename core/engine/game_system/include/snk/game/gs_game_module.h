@@ -9,6 +9,7 @@
 #include <snk/config/cfg_api.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/common/snk_api.h>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -66,13 +67,10 @@ namespace gs
 		void add_log_sink(engine::log_callback_t callback);
 		// The configuration, read-only: defining or writing a variable is base-only.
 		const cfg::config_view& config() const { return m_config; }
-		// A task bound to the layer: cancelled and waited for before the layer's worlds go.
-		template<class F>
-		auto run(ds::lane lane, ds::task_desc desc, F&& fn)
-		{
-			ASSERT_MSG(m_tasks, "module_context::run: the layer has no task system");
-			return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::forward<F>(fn));
-		}
+		// A task bound to the layer: cancelled and waited for before the layer's worlds go. Not a template: the task's
+		// state is made by the engine, not by the module's code, whose control block and vtable would otherwise stay
+		// in the engine's queues after the module is gone (#406). A result goes back through what `fn` captures.
+		ds::task_handle<void> run(ds::lane lane, ds::task_desc desc, std::function<void(ds::task_context&)> fn);
 
 	private:
 		scn::scene_layer& m_layer;

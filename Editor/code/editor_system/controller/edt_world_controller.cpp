@@ -95,7 +95,7 @@ void edt::world_controller::create_world(const std::string& name)
 
 	namespace json = boost::json;
 
-	auto tag = res::tag::make("templates/world.desc");
+	auto tag = res::tag("edt://templates/world.desc");
 	auto text = m_services.resources()->require_sync<res::text_resource>(tag);
 	json::object world_json;
 	if (text.is_ready()) {
