@@ -15,6 +15,7 @@
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -57,6 +58,17 @@ bool resident(const std::filesystem::path& file)
 		::dlclose(again);
 	}
 	return again != nullptr;
+#endif
+}
+
+// The file name core::load_project_modules looks for in <root>/build/bin; the built test library may carry a debug
+// postfix.
+std::string project_library_name(std::string_view module)
+{
+#if defined(_WIN32)
+	return std::string{ module } + ".dll";
+#else
+	return "lib" + std::string{ module } + ".so";
 #endif
 }
 
@@ -206,7 +218,7 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	test_util::temp_dir dir("dll_project_module");
 	fs::create_directories(dir.path() / "game" / "build" / "bin");
 	const fs::path game = fs::canonical(dir.path() / "game");
-	const fs::path built = game / "build" / "bin" / g_module_path.filename();
+	const fs::path built = game / "build" / "bin" / project_library_name(dll_game::module_name);
 	fs::copy_file(g_module_path, built);
 
 	prj::project_context project;
@@ -244,9 +256,7 @@ BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its
 	fs::create_directories(dir.path() / "game" / "build" / "bin");
 	const fs::path game = fs::canonical(dir.path() / "game");
 	// The library of test_game_dll under the file name the manifest's "other_game" looks for.
-	std::string other_file = g_module_path.filename().string();
-	other_file.replace(other_file.find(dll_game::module_name), dll_game::module_name.size(), "other_game");
-	fs::copy_file(g_module_path, game / "build" / "bin" / other_file);
+	fs::copy_file(g_module_path, game / "build" / "bin" / project_library_name("other_game"));
 
 	prj::project_context project;
 	project.root = game;
