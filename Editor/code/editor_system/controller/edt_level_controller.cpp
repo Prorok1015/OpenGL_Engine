@@ -202,7 +202,7 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 
 	const auto level_json = scn::level_desc::build_json(level_name, m_state.world_descs, m_desc, guid);
 
-	std::filesystem::path abs_path = res::resource_system::get_resources_path() / frel;
+	std::filesystem::path abs_path = m_res.get_resources_path() / frel;
 	std::error_code ec;
 	std::filesystem::create_directories(abs_path.parent_path(), ec);
 	std::ofstream out(abs_path, std::ios::binary);

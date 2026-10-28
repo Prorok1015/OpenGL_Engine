@@ -14,9 +14,11 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/config/cfg_api.h>
+#include <snk/project/prj_project.h>
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 namespace {
 	CFG_VAR_DEF_STRING(cfg_log_file,  "logger/file",  "logs/engine.log");
@@ -33,6 +35,9 @@ namespace {
 	// Headless determinism (tools/run_headless.sh --frames): constant frame dt instead of wall clock.
 	CFG_VAR_DEF_FLOAT(cfg_fixed_frame_dt, "app/fixed_frame_dt", 0.0f);
 	CFG_VAR_DEF_INT(cfg_freeze_after_frames, "app/freeze_after_frames", 0);
+
+	// --project <project.snkproj or its directory>; empty: no project, res:// comes from resource/path.
+	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -72,6 +77,23 @@ namespace {
 	}
 }
 
+namespace {
+	// Before resource_init, which mounts the project's content roots.
+	void open_cli_project(ds::app_data_storage& data)
+	{
+		const std::filesystem::path file = *cfg_project_file;
+		if (file.empty()) {
+			return;
+		}
+		auto opened = prj::open_project(file);
+		if (!opened.context) {
+			throw prj::project_error(opened.error);
+		}
+		egLOG_INFO("project", "opened project '{}' ({})", opened.context->data.name, opened.context->manifest_file.string());
+		data.construct<prj::project_context>(std::move(*opened.context));
+	}
+}
+
 void core::core_module::register_services(ds::app_data_storage& data)
 {
 	// Before resource_system (and so destroyed after it): resource work will run on its lanes.
@@ -80,6 +102,7 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	// Created on the main thread, which is the only one that may invoke commands.
 	auto& commands = data.construct<cmd::command_registry>();
 	data.construct<engine_commands>().log = cmd::register_log_commands(commands);
+	open_cli_project(data);
 	res::resource_init(data);// core
 	desc::desc_init(data);// core
 	window::window_init(data);// core
@@ -165,6 +188,9 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 	window::window_term(data);
 	desc::desc_term(data);
 	res::resource_term(data);
+	if (data.has_value<prj::project_context>()) {
+		data.destruct<prj::project_context>();
+	}
 	data.destruct<engine_commands>();
 	data.destruct<app::frame_control>();
 	data.destruct<cmd::command_registry>();

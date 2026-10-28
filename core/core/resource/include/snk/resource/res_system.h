@@ -4,6 +4,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/adapters/res_adapter_info.hpp>
 #include <snk/resource/res_tag_keyed_map.hpp>
+#include <snk/resource/res_mount_table.h>
 #include <snk/resource/adapters/res_adapter_interface.hpp>
 #include <snk/resource/adapters/res_dependencies.hpp>
 #include <snk/resource/resources/res_resource_base.h>
@@ -55,7 +56,9 @@ namespace res
 	public:
 		// Adapter work runs on `tasks` (lane::compute); watcher callbacks and res_handle::then are delivered through
 		// its main-thread queue. `tasks` must outlive this system, and so must the thread that drains it.
+		// Mounts config_mount_table().
 		explicit resource_system(ds::task_system& tasks);
+		resource_system(ds::task_system& tasks, mount_table mounts);
 		// Cancels the load tasks that have not started and waits for the running ones: main thread only.
 		~resource_system();
 		resource_system(const resource_system&) = delete;
@@ -63,9 +66,23 @@ namespace res
 		resource_system(resource_system&&) = delete;
 		resource_system& operator= (resource_system&&) = delete;
 
-		static std::filesystem::path get_resources_path();
+		// The top (writable) root of res://; empty when res:// is not mounted from directories.
+		std::filesystem::path get_resources_path() const;
 		// Physical roots behind res://, lowest layer first, top (writable) layer last; the same list the vfs resolver mounts.
-		static std::vector<std::filesystem::path> get_resource_layers();
+		std::vector<std::filesystem::path> get_resource_layers() const;
+
+		// No project open: res:// over resource/base_path (if set) and resource/path, memory:// next to resource/path,
+		// engine:// on resource/base_path (if set).
+		static mount_table config_mount_table();
+		// A project open: res:// over `engine_base` (empty: none) and `content_roots` (highest priority first, as in the
+		// manifest; the first one receives writes), cache:// in `cache_dir` with memory:// in its "memory" folder,
+		// user:// in `user_dir`, engine:// on `engine_base`. Only builds the table: the caller checks and creates the
+		// directories (core::res::resource_init).
+		static mount_table project_mount_table(const std::filesystem::path& engine_base,
+			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& cache_dir,
+			const std::filesystem::path& user_dir);
+		// resource/base_path as configured, empty when not set; not checked.
+		static std::filesystem::path configured_engine_base();
 
 		bool exists(const tag& tag) const {
 			if (m_resolvers.find(tag.protocol()) == m_resolvers.end()) {
@@ -451,6 +468,7 @@ namespace res
 		std::unique_ptr<wait_graph> m_graph;
 
 		ds::task_system& m_tasks;
+		mount_table m_mounts;
 		std::mutex m_stop_mutex;
 		bool m_stopping = false;
 		// Binds the load tasks: the destructor cancels and waits for them before the members they touch go away.
