@@ -538,6 +538,27 @@ jobs:
           tools/headless/check_smoke.sh headless_out/capture/scene.png headless_out/capture/editor.log \
             100x100+100+100 0 tools/headless/reference/capture_scene.png
 
+      # #419: the click-driven editor actions behind US-36-2/#165. File -> New Level and "+" (a new world) each log their
+      # success (Editor/NewLevel, Editor/CreateWorld) and, when they fail, a line of the same category; the Asset Browser
+      # drag-drop onto the viewport logs "Added '...' to scene" (Editor/Drop). The screenshots of every step are in the
+      # artifact; no reference image is compared (the layouts differ from the checklist reference on purpose).
+      - name: Smoke run (New Level, new world)
+        run: |
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/new_level_world.actions --size 1920x1080 \
+            --shot headless_out/new_level_world/final.png \
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+          tools/headless/check_smoke.sh headless_out/new_level_world/final.png headless_out/new_level_world/editor.log 200x200+860+450 0
+          tools/headless/check_log.sh headless_out/new_level_world/editor.log 'Editor/NewLevel|Editor/CreateWorld' \
+            'Created a new level with [0-9]+ world' "Created world 'world2'"
+
+      - name: Smoke run (drag-drop from the Asset Browser)
+        run: |
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/drag_drop_asset.actions --size 1920x1080 \
+            --shot headless_out/drag_drop/final.png \
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
+          tools/headless/check_smoke.sh headless_out/drag_drop/final.png headless_out/drag_drop/editor.log 200x200+860+450 0
+          tools/headless/check_log.sh headless_out/drag_drop/editor.log 'Editor/Drop' "Added 'base_material' to scene"
+
       - name: Upload screenshots, diff images and logs
         if: always()
         uses: actions/upload-artifact@v4

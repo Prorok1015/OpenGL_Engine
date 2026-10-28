@@ -1,0 +1,8 @@
+# #419: drag an asset from the Asset Browser onto the viewport. Layout of the 1920x1080 checklist run with
+# startup_level levels/smoke_level.desc: the res:// root listing shows base_material.desc at (610,1010); the viewport
+# centre is (960,400). Any dropped asset is added through its desc: the editor logs "Added 'base_material' to scene".
+sleep 1
+shot headless_out/drag_drop/00_start.png
+drag 610 1010 960 400
+sleep 3
+shot headless_out/drag_drop/01_after_drop.png
