@@ -16,8 +16,6 @@ projects/*/sandbox/
 out/
 bin/
 build/
-# Editor sources (the editor's build tooling), not a build tree.
-!Editor/code/editor_system/build/
 build-release/
 .idea/
 .vscode/

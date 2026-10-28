@@ -137,7 +137,7 @@ target_link_libraries(unit_tests PRIVATE ${_snk_test_drivers})
 target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:drv_null,SOURCE_DIR>" "$<TARGET_PROPERTY:drv_validation,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>" "$<TARGET_PROPERTY:render,SOURCE_DIR>/passes")
 
 # White-box tests: PRIVATE access to the internal (non-public) editor_system headers, test-only.
-target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/build")
+target_include_directories(unit_tests PRIVATE "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/core" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/controller" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/panels" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/edt_component_renderers" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/import" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/gizmo" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/input" "$<TARGET_PROPERTY:editor_system,SOURCE_DIR>/game_build")
 
 # Profiler always enabled for tests (so profiler tests can run)
 target_compile_definitions(unit_tests PRIVATE ENGINE_PROFILE_INTERNAL=1)
