@@ -5,6 +5,7 @@
 #include <snk/window/wnd_window_system.h>
 #include <snk/input/inp_input_system.h>
 #include "edt_editor_system.h"
+#include "edt_data_protocol.h"
 #include <snk/config/cfg_variables.h>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
@@ -18,6 +19,7 @@
 #include <snk/render/skinning/rnd_skinning_manager.h>
 
 CFG_VAR_EXT_PATH(cfg_res_path);
+CFG_VAR_DEF_PATH(cfg_edt_data_path, "editor/data_path", "../data/");
 
 void editor::editor_module::register_services(ds::app_data_storage& data)
 {
@@ -30,6 +32,8 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 {
 	auto& res = data.require<res::resource_system>();
 	auto& win_service = data.require<wnd::window_system>();
+
+	edt::register_data_protocol(res, cfg_edt_data_path);
 
 #if SNK_HAS_ASSIMP
 	auto& desc_system = data.require<desc::desc_system>();
