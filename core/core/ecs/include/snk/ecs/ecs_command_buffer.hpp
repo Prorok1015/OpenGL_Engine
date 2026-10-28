@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/ecs/ecs_entt_abi.h>
 #include <snk/ecs/ecs_entity_changer.hpp>
 #include <cstdint>
 #include <entt/entity/registry.hpp>

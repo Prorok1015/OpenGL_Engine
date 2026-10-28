@@ -95,6 +95,19 @@ include(SnkMcpIsolation)
 # unit_tests executable consume the already-configured targets instead of having
 # editor_system re-configure core via add_subdirectory (EPIC-49 US-49-2).
 add_subdirectory(core)
+# EnTT ids cross binaries (game modules, snk_engine) only in the default mode: ENTT_STANDARD_CPP turns
+# entt::type_hash into a per-binary counter and ENTT_ID_TYPE changes the ABI (#218). A definition set on a
+# single target is caught by snk/ecs/ecs_entt_abi.h, which every ECS header with EnTT includes.
+set(_snk_entt_flags "${CMAKE_CXX_FLAGS}")
+foreach(_snk_config IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL ${CMAKE_CONFIGURATION_TYPES} ${CMAKE_BUILD_TYPE})
+    string(TOUPPER "${_snk_config}" _snk_config)
+    string(APPEND _snk_entt_flags " ${CMAKE_CXX_FLAGS_${_snk_config}}")
+endforeach()
+get_directory_property(_snk_dir_defs COMPILE_DEFINITIONS)
+get_target_property(_snk_entt_defs EnTT INTERFACE_COMPILE_DEFINITIONS)
+if("${_snk_entt_flags} ${_snk_dir_defs} ${_snk_entt_defs}" MATCHES "ENTT_STANDARD_CPP|ENTT_ID_TYPE")
+    message(FATAL_ERROR "ENTT_STANDARD_CPP / ENTT_ID_TYPE are not supported (docs/roadmap/design/SPIKE-218-entt-dll.md)")
+endif()
 
 add_subdirectory(Editor)
 add_subdirectory(tools/desc_resave)

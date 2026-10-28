@@ -75,10 +75,12 @@ namespace res
 		// engine:// on resource/base_path (if set).
 		static mount_table config_mount_table();
 		// A project open: res:// over `engine_base` (empty: none) and `content_roots` (highest priority first, as in the
-		// manifest; the first one receives writes), memory:// in `memory_root`, engine:// on `engine_base`. Only builds
-		// the table: the caller checks and creates the directories (core::res::resource_init).
+		// manifest; the first one receives writes), cache:// in `cache_dir` with memory:// in its "memory" folder,
+		// user:// in `user_dir`, engine:// on `engine_base`. Only builds the table: the caller checks and creates the
+		// directories (core::res::resource_init).
 		static mount_table project_mount_table(const std::filesystem::path& engine_base,
-			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& memory_root);
+			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& cache_dir,
+			const std::filesystem::path& user_dir);
 		// resource/base_path as configured, empty when not set; not checked.
 		static std::filesystem::path configured_engine_base();
 
