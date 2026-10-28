@@ -79,7 +79,8 @@ namespace edt {
 		world_controller m_world_ctrl;
 		level_controller m_level_ctrl;
 
-		// Services (not owned)
+		// Services (not owned): the base ones, for the importer, the exporter and the editor's assets. The game data
+		// goes through m_services.
 		desc::desc_system&    desc_system;
 		res::resource_system& m_res;
 		rnd::render_system&   m_rnd;

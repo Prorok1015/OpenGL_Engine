@@ -81,9 +81,13 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	if (auto* hot_reload = hot_reload_of(*m_level_set); hot_reload && m_level_set->tag().is_valid()) {
 		hot_reload->unwatch_resource(m_level_set->tag());
 	}
-	// The set "level" stays first in the update order.
+	// The set "level" stays first in the update order and keeps how it runs; its worlds go with the old layer.
 	const auto it = std::ranges::find_if(m_sets, [this](const auto& set) { return set.get() == m_level_set; });
-	*it = make_set(level_set_name, layer);
+	auto replacement = make_set(level_set_name, layer);
+	replacement->set_mode(m_level_set->mode());
+	replacement->set_seed(m_level_set->seed());
+	replacement->set_active(m_level_set->active());
+	*it = std::move(replacement);
 	m_level_set = it->get();
 	m_game_layer = layer;
 }

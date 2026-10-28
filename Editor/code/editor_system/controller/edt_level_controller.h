@@ -12,7 +12,6 @@
 #include <boost/json/object.hpp>
 
 namespace res { class resource_system; }
-namespace desc { class desc_system; }
 namespace scn { class level_desc; }
 
 namespace edt
@@ -94,8 +93,7 @@ namespace edt
 	class level_controller
 	{
 	public:
-		level_controller(scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc,
-			scene_editor& scene_ed, world_controller& world_ctrl);
+		level_controller(scene_document& state, editor_services& services, scene_editor& scene_ed, world_controller& world_ctrl);
 		~level_controller();
 
 		void new_level();
@@ -114,15 +112,20 @@ namespace edt
 
 		void add_desc_to_scene(const res::res_handle<desc::desc_base>& handle, const std::string& key);
 
+		// Hot reload of the edited level (editor_tag): watched on the resource system of the layer that loaded it, and
+		// unwatched there even after the game layer changed.
+		void watch_level();
+		void unwatch_level();
+
 		// Callbacks set by the coordinator
 		std::function<void()> on_editor_world_reloaded;
 
 	private:
 		scene_document& m_state;
 		editor_services& m_services;
-		res::resource_system& m_res;
-		desc::desc_system& m_desc;
 		scene_editor& m_scene_editor;
 		world_controller& m_world_ctrl;
+		res::resource_system* m_watched_resources = nullptr;
+		res::tag m_watched_tag;
 	};
 }

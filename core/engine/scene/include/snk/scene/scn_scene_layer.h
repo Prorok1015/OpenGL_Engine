@@ -6,7 +6,6 @@
 #include <snk/resource/res_system.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/common/snk_api.h>
-#include <entt/locator/locator.hpp>
 #include <entt/meta/context.hpp>
 #include <memory>
 
@@ -34,14 +33,14 @@ namespace scn
 		ecs_assembler& assembler() { return m_assembler; }
 		ecs::system_factory& systems() { return m_systems; }
 		ecs::component_registry& components() { return m_components; }
-		entt::meta_ctx& meta() { return *m_meta.context; }
-		const entt::meta_ctx& meta() const { return *m_meta.context; }
-		// For entt::locator<entt::meta_ctx>::reset in a module binary.
-		const entt::locator<entt::meta_ctx>::node_type& meta_handle() const { return m_meta.handle; }
+		// Never attached to a binary's entt::locator: module code passes it explicitly (ecs::register_component(meta()),
+		// entt::resolve(meta(), id)), and the engine finds it through ecs::find_meta.
+		entt::meta_ctx& meta() { return m_meta; }
+		const entt::meta_ctx& meta() const { return m_meta; }
 		const std::shared_ptr<hot_reload_manager>& hot_reload() const { return m_hot_reload; }
 
 	private:
-		ecs::meta_context_owner m_meta;
+		entt::meta_ctx m_meta;
 		std::unique_ptr<res::resource_system> m_resources;
 		desc::desc_system m_descs;
 		ecs_assembler m_assembler;

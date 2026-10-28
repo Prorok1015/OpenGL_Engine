@@ -5,8 +5,7 @@
 #include <functional>
 
 scn::scene_layer::scene_layer(res::resource_system& base_resources, ecs_assembler& base_assembler, ecs::system_factory& base_systems)
-	: m_meta(ecs::make_meta_context())
-	, m_resources(std::make_unique<res::resource_system>(base_resources))
+	: m_resources(std::make_unique<res::resource_system>(base_resources))
 	, m_descs(*m_resources, &base_assembler.get_desc_system())
 	, m_assembler(m_descs, *m_resources, &base_assembler)
 	, m_systems(&base_systems)

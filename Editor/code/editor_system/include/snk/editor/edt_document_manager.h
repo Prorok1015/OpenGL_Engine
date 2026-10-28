@@ -4,9 +4,6 @@
 #include <functional>
 #include <memory>
 
-namespace desc { class desc_system; }
-namespace res { class resource_system; }
-
 namespace edt
 {
 	class editor_events;
@@ -21,7 +18,7 @@ namespace edt
 	class document_manager
 	{
 	public:
-		document_manager(scene_document& scene, editor_services& services, editor_events& events, res::resource_system& resources, desc::desc_system& descs);
+		document_manager(scene_document& scene, editor_services& services, editor_events& events);
 		~document_manager();
 		document_manager(const document_manager&) = delete;
 		document_manager& operator=(const document_manager&) = delete;
@@ -53,8 +50,6 @@ namespace edt
 		scene_document* m_scene;
 		editor_services& m_services;
 		editor_events& m_events;
-		res::resource_system& m_resources;
-		desc::desc_system& m_descs;
 		std::unique_ptr<prefab_document> m_preview;
 		document_id m_active = 0;
 		document_id m_next_id = 1;
