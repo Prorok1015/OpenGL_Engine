@@ -15,17 +15,25 @@
 #include <cstdint>
 #include <atomic>
 #include <future>
+#include <functional>
 #include <memory>
 #include <snk/common/snk_api.h>
 
 namespace res
 {
+	namespace detail {
+		class pinned_root;
+		struct write_hook_access;
+		// Where a store's write may be paused by a test hook (res_vfs_test_hook.h, base only): after the path was checked
+		// again on the io thread, and with the temp file written, before the rename.
+		enum class write_stage : int { after_check, folders_held, before_rename };
+	}
+
 	namespace io = boost::asio;
 	class SNK_API vfs_resolver : public core::res::res_resolver_interface
 	{
 	public:
-		vfs_resolver(const std::string_view prt)
-			: core::res::res_resolver_interface(prt), watcher(io) {}
+		explicit vfs_resolver(const std::string_view prt);
 		// `policy` limits which paths store() may write (checked against the tag and against the file it resolves to);
 		// the default allows every path.
 		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access = mount_access::read_write,
@@ -75,5 +83,12 @@ namespace res
 		write_policy m_write_policy = write_policy::allow_all();
 		// Set first in the destructor: a watcher poll still queued must not signal a resource_system being destroyed.
 		std::atomic<bool> m_closing{ false };
+		// The top root, where stores write (#414): opened on the io thread at the first write, used only there.
+		std::unique_ptr<detail::pinned_root> m_write_root;
+		// Tests only (detail::write_hook_access): set and cleared while no store is in flight, read on the io thread.
+		std::function<void(detail::write_stage, const fs::path& tmp_path)> m_write_hook;
+		// Stores queued and not finished: the hook may change only while none is.
+		std::atomic<int> m_writes_in_flight{ 0 };
+		friend struct detail::write_hook_access;
 	};
 }
