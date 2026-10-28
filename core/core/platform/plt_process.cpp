@@ -1,5 +1,7 @@
 #include <snk/platform/plt_process.h>
+#include <cstddef>
 #include <format>
+#include <string_view>
 #include <system_error>
 
 #ifdef _WIN32
@@ -10,7 +12,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <string_view>
 #else
 #include <spawn.h>
 #include <sys/types.h>
@@ -18,6 +19,33 @@ extern char** environ;
 #endif
 
 namespace fs = std::filesystem;
+
+std::wstring platform::quote_windows_arg(std::wstring_view arg)
+{
+	if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) {
+		return std::wstring{ arg };
+	}
+	std::wstring out = L"\"";
+	for (auto it = arg.begin();; ++it) {
+		std::size_t backslashes = 0;
+		while (it != arg.end() && *it == L'\\') {
+			++it;
+			++backslashes;
+		}
+		if (it == arg.end()) {
+			out.append(backslashes * 2, L'\\');
+			break;
+		}
+		if (*it == L'"') {
+			out.append(backslashes * 2 + 1, L'\\');
+		} else {
+			out.append(backslashes, L'\\');
+		}
+		out.push_back(*it);
+	}
+	out.push_back(L'"');
+	return out;
+}
 
 #ifdef _WIN32
 
@@ -31,34 +59,6 @@ namespace
 		const int size = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
 		std::wstring out(static_cast<std::size_t>(size), L'\0');
 		MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), size);
-		return out;
-	}
-
-	// The quoting CommandLineToArgvW (and the C runtime) undoes: backslashes are literal unless they precede a quote.
-	std::wstring quoted(std::wstring_view arg)
-	{
-		if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) {
-			return std::wstring{ arg };
-		}
-		std::wstring out = L"\"";
-		for (auto it = arg.begin();; ++it) {
-			std::size_t backslashes = 0;
-			while (it != arg.end() && *it == L'\\') {
-				++it;
-				++backslashes;
-			}
-			if (it == arg.end()) {
-				out.append(backslashes * 2, L'\\');
-				break;
-			}
-			if (*it == L'"') {
-				out.append(backslashes * 2 + 1, L'\\');
-			} else {
-				out.append(backslashes, L'\\');
-			}
-			out.push_back(*it);
-		}
-		out.push_back(L'"');
 		return out;
 	}
 }
@@ -83,10 +83,10 @@ fs::path platform::current_executable()
 
 platform::spawn_result platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
 {
-	std::wstring command_line = quoted(program.native());
+	std::wstring command_line = quote_windows_arg(program.native());
 	for (const auto& arg : args) {
 		command_line += L' ';
-		command_line += quoted(widen(arg));
+		command_line += quote_windows_arg(widen(arg));
 	}
 
 	STARTUPINFOW startup{};

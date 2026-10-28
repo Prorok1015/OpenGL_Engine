@@ -84,6 +84,27 @@ namespace {
 
 BOOST_AUTO_TEST_SUITE(PltProcessTests)
 
+// What CommandLineToArgvW gives back is the argument as given (MSDN, "Everyone quotes command line arguments the
+// wrong way").
+BOOST_AUTO_TEST_CASE(QuoteWindowsArg_FollowsTheCommandLineToArgvWRules)
+{
+	struct quoting { std::wstring_view arg; std::wstring_view quoted; };
+	for (const quoting& q : {
+			quoting{ L"plain", L"plain" },
+			quoting{ L"", L"\"\"" },
+			quoting{ L"with space", L"\"with space\"" },
+			quoting{ L"tab\there", L"\"tab\there\"" },
+			quoting{ L"say \"hi\"", L"\"say \\\"hi\\\"\"" },
+			quoting{ LR"(C:\dir\file)", LR"(C:\dir\file)" },        // backslashes alone stay as they are
+			quoting{ LR"(trailing\)", LR"(trailing\)" },             // no quotes needed: nothing to double
+			quoting{ LR"(a dir\)", LR"("a dir\\")" },               // before the closing quote: doubled
+			quoting{ LR"(a\"b)", LR"("a\\\"b")" },                 // \" -> \\\" inside quotes
+			quoting{ LR"(a\\"b c)", LR"("a\\\\\"b c")" } }) {
+		BOOST_TEST_INFO("arg #" << q.arg.size());
+		BOOST_TEST((platform::quote_windows_arg(q.arg) == q.quoted));
+	}
+}
+
 BOOST_AUTO_TEST_CASE(CurrentExecutable_IsThisTestProgram)
 {
 	const fs::path exe = platform::current_executable();
