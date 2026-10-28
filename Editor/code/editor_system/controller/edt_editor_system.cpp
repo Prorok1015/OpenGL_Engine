@@ -25,6 +25,7 @@
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
+#include "edt_game_builder.h"
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
 #include "edt_engine_version_prompt.h"
@@ -108,6 +109,30 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
+	// Build > Build Game (#434). Empty paths: found by the editor (see game_build_sdk_dir, edt_toolchain.h).
+	CFG_VAR_DEF_PATH(cfg_build_sdk_dir, "build/sdk_dir", "");
+	CFG_VAR_DEF_PATH(cfg_build_cmake, "build/cmake", "");
+	CFG_VAR_DEF_PATH(cfg_build_vs_path, "build/vs_path", "");
+	CFG_VAR_DEF_STRING(cfg_build_vs_min_version, "build/vs_min_version", "17.14");
+	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
+
+	// The SDK the game module is built against: build/sdk_dir, else the installed editor's, else the engine build
+	// tree's (where this editor was built).
+	std::filesystem::path game_build_sdk_dir()
+	{
+		if (!cfg_build_sdk_dir->empty()) return *cfg_build_sdk_dir;
+		const std::filesystem::path program = platform::current_executable();
+		if (!program.empty()) {
+			const auto installed = (program.parent_path() / ".." / "lib" / "cmake" / "snake_sdk").lexically_normal();
+			std::error_code ec;
+			if (std::filesystem::is_regular_file(installed / "snake_sdkConfig.cmake", ec)) return installed;
+		}
+#ifdef SNK_BUILD_TREE_SDK_DIR
+		return std::filesystem::path(SNK_BUILD_TREE_SDK_DIR);
+#else
+		return {};
+#endif
+	}
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -316,6 +341,26 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
 	m_file_menu->attach_window_close(wnd_sys);
+
+	game_builder_options build_options;
+	if (data.has_value<prj::project_context>()) {
+		const auto& project = data.require<prj::project_context>();
+		game_project game{ project.root, {} };
+		for (const auto& module : project.data.modules) {
+			if (module.kind == prj::module_kind::runtime) game.modules.push_back(module.name);
+		}
+		build_options.project = [game] { return std::optional<game_project>{ game }; };
+	} else {
+		build_options.project = [] { return std::optional<game_project>{}; };
+	}
+	build_options.sdk_dir = game_build_sdk_dir();
+	build_options.default_configuration = *cfg_build_configuration;
+	build_options.toolchain = { *cfg_build_cmake, *cfg_build_vs_path, *cfg_build_vs_min_version };
+	build_options.show_progress = [this](std::string_view id, std::function<bool()> draw) {
+		editor_layer->register_implicit(id, std::move(draw));
+	};
+	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
+		m_context->actions(), std::move(build_options));
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
