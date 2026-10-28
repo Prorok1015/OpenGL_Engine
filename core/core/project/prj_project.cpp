@@ -34,6 +34,7 @@ prj::open_result prj::open_project(const fs::path& path)
 	}
 	context.manifest_file = context.root / manifest_file.filename();
 	context.data = std::move(*loaded.data);
+	context.engine_match = compare_engine_versions(context.data.engine, current_engine_version());
 
 	for (const auto& rel : context.data.content_roots) {
 		context.content_roots.push_back((context.root / rel).lexically_normal());
@@ -48,6 +49,11 @@ prj::open_result prj::open_project(const fs::path& path)
 
 	result.context = std::move(context);
 	return result;
+}
+
+int prj::exit_code_for(const held_project& project)
+{
+	return project.answer == held_project::decision::continue_without_project ? 0 : k_exit_engine_version;
 }
 
 std::optional<std::string> prj::verify_project_mounts(const project_context& project, const fs::path& engine_base)

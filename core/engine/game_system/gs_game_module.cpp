@@ -57,8 +57,10 @@ namespace {
 		void activate() override
 		{
 			auto* previous = m_contexts.game_layer();
-			m_contexts.set_game_layer(m_layer);
+			// Before the swap: a throwing layer-change callback leaves m_layer as the game layer, and the destructor
+			// must then put a fresh one in its place.
 			m_active = true;
+			m_contexts.set_game_layer(m_layer);
 			if (previous) {
 				m_contexts.destroy_layer(*previous);
 			}

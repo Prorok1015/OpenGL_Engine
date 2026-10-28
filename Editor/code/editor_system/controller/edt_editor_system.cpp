@@ -25,12 +25,14 @@
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
+#include "edt_engine_version_prompt.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
 #include <snk/project/prj_project.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
@@ -252,11 +254,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu->register_actions();
 	m_file_menu->attach_window_close(wnd_sys);
 
+	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
+	const bool project_held = data.has_value<prj::held_project>();
+	if (project_held) {
+		ask_about_held_project(m_context->dialogs(), data.require<prj::held_project>(), m_exit_action);
+	}
+
 	std::string startup_level = cfg_startup_level;
 	if (startup_level.empty() && data.has_value<prj::project_context>()) {
 		startup_level = data.require<prj::project_context>().data.start_scene;
 	}
-	if (!startup_level.empty()) {
+	if (!project_held && !startup_level.empty()) {
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	}

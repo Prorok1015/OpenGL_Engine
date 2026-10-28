@@ -67,9 +67,18 @@ int main(int argc, char* argv[])
 
 		app::application editor;
 		result = editor.run(app_storage);
+		// Read before shutdown, which removes it.
+		if (app_storage.has_value<prj::held_project>()) {
+			const auto& held = app_storage.require<prj::held_project>();
+			if (const int code = prj::exit_code_for(held); code != 0) {
+				egLOG_ERROR("app", "project '{}' was not opened: its engine version {} does not match this editor",
+					held.name, prj::to_string(held.engine));
+				result = code;
+			}
+		}
 	} catch (const prj::project_error& e) {
 		egLOG_ERROR("app", "{}", e.what());
-		result = 2;
+		result = prj::k_exit_project_error;
 	} catch (const std::exception& e) {
 		egLOG_ERROR("app", "fatal error: {}", e.what());
 		result = -1;
