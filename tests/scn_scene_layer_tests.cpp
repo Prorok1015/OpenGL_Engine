@@ -121,14 +121,30 @@ BOOST_AUTO_TEST_CASE(sandbox_components_of_the_layer_are_found_in_its_meta_conte
 	BOOST_TEST(static_cast<bool>(entt::resolve(layer->meta(), game_hash)));
 }
 
-BOOST_AUTO_TEST_CASE(a_module_attaches_to_the_meta_context_of_its_layer)
+BOOST_AUTO_TEST_CASE(a_new_layer_leaves_the_engine_meta_context_alone)
 {
-	BOOST_TEST(&layer->meta() != &ecs::meta_context());
-	// In a static build this binary's locator is the engine's: put it back before anything else resolves.
-	const auto saved = entt::locator<entt::meta_ctx>::handle();
-	entt::locator<entt::meta_ctx>::reset(layer->meta_handle());
-	BOOST_TEST(&entt::locator<entt::meta_ctx>::value_or() == &layer->meta());
-	entt::locator<entt::meta_ctx>::reset(saved);
+	const entt::meta_ctx* engine = &ecs::meta_context();
+	auto& extra = mgr.create_layer();
+	BOOST_TEST(&ecs::meta_context() == engine);
+	BOOST_TEST(&extra.meta() != engine);
+	BOOST_TEST(&extra.meta() != &layer->meta());
+	mgr.destroy_layer(extra);
+}
+
+BOOST_AUTO_TEST_CASE(a_new_game_layer_keeps_how_the_level_set_runs)
+{
+	mgr.level_set().set_mode(ecs::run_mode::edit);
+	mgr.level_set().set_seed(42u);
+	mgr.level_set().set_active(false);
+
+	auto& next = mgr.create_layer();
+	mgr.set_game_layer(&next);
+	BOOST_TEST(mgr.level_set().layer() == &next);
+	BOOST_TEST((mgr.level_set().mode() == ecs::run_mode::edit));
+	BOOST_TEST(mgr.level_set().seed() == 42u);
+	BOOST_TEST(!mgr.level_set().active());
+	mgr.set_game_layer(layer);
+	mgr.destroy_layer(next);
 }
 
 BOOST_AUTO_TEST_CASE(previews_belong_to_the_game_layer)

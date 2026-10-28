@@ -86,7 +86,7 @@ namespace edt
 
 	bool inspector_panel::render_schema_component(const std::string& key, scn::prefab_desc::prefab_comp_node& comp, const desc::type_schema& schema)
 	{
-		const desc::schema_registry& registry = m_desc_system->schemas();
+		const desc::schema_registry& registry = descs()->schemas();
 		const boost::json::object* parent = parent_json(key, comp);
 		// base: what the component has without its own data; before/after: what the user sees before and after the edit.
 		const boost::json::value base = schema_ui::compose(schema, registry, { parent }, false);
@@ -102,7 +102,7 @@ namespace edt
 
 	bool inspector_panel::render_schema_override(scn::prefab_desc::prefab_comp_node& scratch, const boost::json::object& base_json, const desc::type_schema& schema)
 	{
-		const desc::schema_registry& registry = m_desc_system->schemas();
+		const desc::schema_registry& registry = descs()->schemas();
 		const boost::json::value base = schema_ui::compose(schema, registry, { &base_json }, false);
 		const boost::json::value before = schema_ui::compose(schema, registry, { &scratch.overrides });
 		boost::json::value after = before;
@@ -126,7 +126,12 @@ namespace edt
 
 	void inspector_panel::set_desc_system(desc::desc_system* desc_system)
 	{
-		m_desc_system = desc_system;
+		m_desc_source = [desc_system] { return desc_system; };
+	}
+
+	void inspector_panel::set_desc_source(std::function<desc::desc_system*()> source)
+	{
+		m_desc_source = std::move(source);
 	}
 
 	void inspector_panel::on_render()
@@ -195,8 +200,8 @@ namespace edt
 				// Custom renderer from the registry, then the schema, then generic JSON.
 				const bool custom = m_inspectors && !effective_type.empty() && m_inspectors->contains(effective_type);
 				const desc::type_schema* schema = nullptr;
-				if (!custom && m_desc_system && !effective_type.empty()) {
-					schema = m_desc_system->find_schema(effective_type);
+				if (!custom && descs() && !effective_type.empty()) {
+					schema = descs()->find_schema(effective_type);
 					if (schema && schema->fields.empty())
 						schema = nullptr;
 				}
@@ -320,8 +325,8 @@ namespace edt
 					m_ui_sources[key] = component_ui::custom;
 				}
 			}
-			if (!handled && m_desc_system && !effective_type.empty()) {
-				const desc::type_schema* schema = m_desc_system->find_schema(effective_type);
+			if (!handled && descs() && !effective_type.empty()) {
+				const desc::type_schema* schema = descs()->find_schema(effective_type);
 				if (schema && !schema->fields.empty()) {
 					edited = render_schema_override(scratch, base_json, *schema);
 					handled = true;
@@ -513,8 +518,8 @@ namespace edt
 
 		if (ImGui::BeginPopup("add_comp_desc")) {
 			bool changed = false;
-			if (m_desc_system) {
-				for (const auto& type_name : m_desc_system->get_component_type_names()) {
+			if (descs()) {
+				for (const auto& type_name : descs()->get_component_type_names()) {
 					if (!m_selected_node->components.count(type_name)) {
 						if (ImGui::MenuItem(type_name.c_str())) {
 							scn::prefab_desc::prefab_comp_node comp;

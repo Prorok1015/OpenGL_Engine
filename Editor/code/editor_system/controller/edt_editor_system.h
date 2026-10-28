@@ -79,7 +79,8 @@ namespace edt {
 		world_controller m_world_ctrl;
 		level_controller m_level_ctrl;
 
-		// Services (not owned)
+		// Services (not owned): the base ones, for the importer, the exporter and the editor's assets. The game data
+		// goes through m_services.
 		desc::desc_system&    desc_system;
 		res::resource_system& m_res;
 		rnd::render_system&   m_rnd;
@@ -138,6 +139,11 @@ namespace edt {
 
 		// Async level load (US-24-4)
 		res::res_handle<scn::level_desc> m_loading_level_handle;
+		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
+		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
+		void on_game_layer_change(bool before);
+		// The level whose load the change interrupted; loaded again into the new layer.
+		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
 		bool poll_level_load();
 

@@ -2,6 +2,7 @@
 #include "test_scene_env.hpp"
 #include <snk/application/app_module_layer.h>
 #include <snk/application/app_module_loader.hpp>
+#include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
@@ -9,8 +10,9 @@
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <memory>
 
-// The engine side a game module is loaded into: the scene services in a root storage, a context_manager and the
-// engine's layer factory, as engine_module sets them up (MODULE_LAYER.md).
+// The engine side a game module is loaded into: the scene services and the command registry in a root storage, a
+// context_manager with an empty game layer, and the engine's layer factory, as engine_module sets them up
+// (MODULE_LAYER.md).
 namespace test_util {
 
 	template<class T>
@@ -27,8 +29,10 @@ namespace test_util {
 			root.attach(borrowed(*descs));
 			root.attach(borrowed(*assembler));
 			root.attach(borrowed(sf));
+			root.attach(borrowed(commands));
 			auto& contexts = root.construct<scn::context_manager>(*rs, *assembler, sf, hot);
-			root.construct<app::modules::module_layer_factory, gs::game_layer_factory>(contexts);
+			contexts.set_game_layer(&contexts.create_layer(&tasks));
+			root.construct<app::modules::module_layer_factory, gs::game_layer_factory>(contexts, &tasks);
 		}
 
 		~module_env()
@@ -42,6 +46,7 @@ namespace test_util {
 
 		std::shared_ptr<scn::hot_reload_manager> hot;
 		ecs::system_factory sf;
+		cmd::command_registry commands;
 		ds::app_data_storage root;
 		app::modules::module_loader loader;
 	};

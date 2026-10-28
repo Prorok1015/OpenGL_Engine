@@ -302,6 +302,12 @@ engine::log_sink_handle engine::add_log_sink(log_callback_t callback)
 	return log_sink_handle(added->id);
 }
 
+std::size_t engine::log_sink_count()
+{
+	std::lock_guard lock(s_listeners_mutex);
+	return s_listeners ? s_listeners->size() : 0;
+}
+
 void engine::remove_log_sink(std::uint64_t id)
 {
 	std::shared_ptr<listener> taken;
