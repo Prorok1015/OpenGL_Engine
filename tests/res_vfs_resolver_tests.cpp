@@ -8,6 +8,8 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <system_error>
 #include <thread>
 
 namespace {
@@ -130,7 +132,47 @@ BOOST_FIXTURE_TEST_CASE(Store_WritesToTopMountOnlyAndCreatesFolders, mounts_fixt
 	BOOST_TEST(wait_for_file(high / "gen/out/new.bin"));
 	BOOST_TEST(!std::filesystem::exists(low / "gen/out/new.bin"));
 	// the atomic-rename temp file is gone
-	BOOST_TEST(!std::filesystem::exists(high / "gen/out/new.tmp"));
+	BOOST_TEST(!std::filesystem::exists(high / "gen/out/new.bin.tmp"));
+}
+
+// #394: a temp file planted as a symlink must not carry the write out of the root (the old temp name and the new one).
+BOOST_FIXTURE_TEST_CASE(Store_RefusesATempFileThatIsASymlink, mounts_fixture)
+{
+	dir.write("outside.txt", "keep");
+	std::filesystem::create_directories(high / "gen");
+	std::error_code ec;
+	for (const char* planted : { "gen/x.tmp", "gen/x.txt.tmp" }) {
+		std::filesystem::create_symlink(dir.path() / "outside.txt", high / planted, ec);
+		if (ec) {
+			BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+			return;
+		}
+	}
+
+	{
+		res::vfs_resolver r("res", { low, high });
+		BOOST_TEST(!r.store(res::tag{ "res://gen/x.txt" }, to_bytes("payload")));
+	} // the io thread has finished whatever it had queued
+
+	std::ifstream in(dir.path() / "outside.txt", std::ios::binary);
+	BOOST_TEST(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()) == "keep");
+	BOOST_TEST(!std::filesystem::exists(high / "gen/x.txt"));
+}
+
+// A store right before shutdown (a level saved, then the editor closed) still reaches the disk.
+BOOST_FIXTURE_TEST_CASE(Store_IsWrittenBeforeTheResolverIsDestroyed, mounts_fixture)
+{
+	constexpr int count = 50;
+	{
+		res::vfs_resolver r("res", { low, high });
+		for (int i = 0; i < count; ++i) {
+			BOOST_REQUIRE(r.store(res::tag{ "res://flush/" + std::to_string(i) + ".bin" }, to_bytes("payload")));
+		}
+	}
+	for (int i = 0; i < count; ++i) {
+		BOOST_TEST_INFO("file " << i);
+		BOOST_TEST(std::filesystem::exists(high / "flush" / (std::to_string(i) + ".bin")));
+	}
 }
 
 BOOST_FIXTURE_TEST_CASE(Store_OverwritesShadowedLowerMountFile, mounts_fixture)

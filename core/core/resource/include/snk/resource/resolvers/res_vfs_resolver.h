@@ -39,7 +39,9 @@ namespace res
 		// The only place a tag becomes a file path: nullopt when the tag would leave `root`.
 		std::optional<fs::path> safe_path(const fs::path& root, const tag& tag) const;
 		std::optional<fs::path> resolve_tag(const tag& tag) const;
-		void save_pending_write(res::tag tag, fs::path path, core::res::res_resolver_interface::async_raw_data data);
+		// The file a store writes first and then renames over the target: a tag of its own, so safe_path checks it too.
+		static res::tag temp_tag_of(const tag& tag);
+		void save_pending_write(res::tag tag, fs::path path, fs::path tmp_path, core::res::res_resolver_interface::async_raw_data data);
 		void resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const;
 
 	private:

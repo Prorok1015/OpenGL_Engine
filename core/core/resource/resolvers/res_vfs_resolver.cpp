@@ -57,9 +57,11 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 
 res::vfs_resolver::~vfs_resolver()
 {
+	// No io.stop(): it would drop the writes still queued, e.g. a level saved right before the editor exits.
+	// With the guard gone and the watcher stopped (behind those writes, on the io thread), run() returns once the
+	// queue is empty.
 	work_guard.reset();
-	watcher.stop();
-	io.stop();
+	boost::asio::post(io, [this] { watcher.stop(); });
 	if (io_thread.joinable()) {
 		io_thread.join();
 	}
@@ -158,9 +160,11 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 	}
 
 	std::optional<fs::path> target_path;
+	std::optional<fs::path> tmp_path;
 	if (!entries_stack.empty()) {
 		target_path = safe_path(entries_stack.top(), tag);
-		if (!target_path.has_value()) {
+		tmp_path = safe_path(entries_stack.top(), temp_tag_of(tag));
+		if (!target_path.has_value() || !tmp_path.has_value()) {
 			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
 			return false;
 		}
@@ -186,7 +190,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 		return false;
 	}
 
-	boost::asio::post(io, std::bind(&vfs_resolver::save_pending_write, this, tag, *target_path, data_ptr));
+	boost::asio::post(io, std::bind(&vfs_resolver::save_pending_write, this, tag, *target_path, *tmp_path, data_ptr));
 
 	return true;
 }
@@ -365,13 +369,27 @@ std::optional<fs::path> res::vfs_resolver::resolve_tag(const tag& tag) const
 	return first_accepted;
 }
 
-void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, core::res::res_resolver_interface::async_raw_data data_ptr)
+res::tag res::vfs_resolver::temp_tag_of(const tag& tag)
+{
+	return res::tag{ tag.string() + ".tmp" };
+}
+
+void res::vfs_resolver::save_pending_write(res::tag tag, fs::path target_path, fs::path tmp_path,
+	core::res::res_resolver_interface::async_raw_data data_ptr)
 {
 	try {
 		fs::create_directories(target_path.parent_path());
 
-		auto tmp_path = target_path;
-		tmp_path.replace_extension(".tmp");
+		// Checked again right before writing: a symlink may have been planted at either leaf since store().
+		if (safe_path(entries_stack.top(), tag) != target_path || safe_path(entries_stack.top(), temp_tag_of(tag)) != tmp_path) {
+			egLOG_WARN("resource", "Rejected store of '{}': its file or temp file no longer stays inside the resource root",
+				tag.view());
+			std::unique_lock lock(m_pending_mutex);
+			if (auto it = m_pending_writes.find(tag); it != m_pending_writes.end() && it->second == data_ptr) {
+				m_pending_writes.erase(it);
+			}
+			return;
+		}
 
 		{
 			std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
