@@ -220,6 +220,7 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	const fs::path game = fs::canonical(dir.path() / "game");
 	const fs::path built = game / "build" / "bin" / project_library_name(dll_game::module_name);
 	fs::copy_file(g_module_path, built);
+	BOOST_REQUIRE_MESSAGE(fs::is_regular_file(built), "not at the lookup path: " << built.string());
 
 	prj::project_context project;
 	project.root = game;
@@ -256,7 +257,9 @@ BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its
 	fs::create_directories(dir.path() / "game" / "build" / "bin");
 	const fs::path game = fs::canonical(dir.path() / "game");
 	// The library of test_game_dll under the file name the manifest's "other_game" looks for.
-	fs::copy_file(g_module_path, game / "build" / "bin" / project_library_name("other_game"));
+	const fs::path built = game / "build" / "bin" / project_library_name("other_game");
+	fs::copy_file(g_module_path, built);
+	BOOST_REQUIRE_MESSAGE(fs::is_regular_file(built), "not at the lookup path: " << built.string());
 
 	prj::project_context project;
 	project.root = game;
