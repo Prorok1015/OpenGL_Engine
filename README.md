@@ -29,7 +29,7 @@ Snake Engine (`snk::`) is a modular C++20 game engine built on OpenGL with an in
 The project supports two development environments:
 
 - **Project IDX** (Nix) — all dependencies pre-configured in `.idx/dev.nix`
-- **Local build** — requires CMake 3.16+, a C++20 compiler, Boost, and platform windowing libraries
+- **Local build** — requires CMake 3.26+, a C++20 compiler, Boost, and platform windowing libraries
 
 ### Getting the sources
 
