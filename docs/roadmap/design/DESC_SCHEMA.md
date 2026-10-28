@@ -195,7 +195,7 @@
 
 ## Skybox (#131-d, 2026-10-20)
 
-`skybox_desc` описан схемой (`schema_desc<skybox_desc, schema_kind::component>`, `scn_skybox_desc.h`); рукописные `serialize`/`deserialize` удалены, `scn_skybox_desc.cpp` держит только `assemble_skybox`. Кастомный рендерер `edt_cr_skybox.cpp` (текстовое поле «Material Tag») удалён: инспектор строится из схемы, материал в нём — поле ассета. Член `sky_material_desc` переименован в `material`, как ключ в файле. Файлы `core/res/skybox/skybox.desc`, `Editor/res/templates/prefab_preview.desc` и компоненты в уровнях побайтно прежние (`SkyboxDesc_ShippedFileResavesToTheSameBytes`, `desc_resave --check`).
+`skybox_desc` описан схемой (`schema_desc<skybox_desc, schema_kind::component>`, `scn_skybox_desc.h`); рукописные `serialize`/`deserialize` удалены, `scn_skybox_desc.cpp` держит только `assemble_skybox`. Кастомный рендерер `edt_cr_skybox.cpp` (текстовое поле «Material Tag») удалён: инспектор строится из схемы, материал в нём — поле ассета. Член `sky_material_desc` переименован в `material`, как ключ в файле. Файлы `core/res/skybox/skybox.desc`, `Editor/data/templates/prefab_preview.desc` и компоненты в уровнях побайтно прежние (`SkyboxDesc_ShippedFileResavesToTheSameBytes`, `desc_resave --check`).
 
 | Ключ в файле | Член | Политика записи | Заметка |
 |---|---|---|---|
