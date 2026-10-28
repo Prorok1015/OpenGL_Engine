@@ -56,12 +56,8 @@ BOOST_AUTO_TEST_CASE(Store_WithAnEmptyPatternList_RefusesEverything)
 	BOOST_TEST(!rs->store(res::tag{ "edt://settings/layout.ini" }, test_util::to_bytes("x")));
 }
 
-BOOST_AUTO_TEST_CASE(ParseWritePatterns_SplitsAtSemicolonsAndTrims)
+BOOST_AUTO_TEST_CASE(DefaultWritePatterns_AreTheSettingsFolderOnly)
 {
-	const auto patterns = edt::parse_write_patterns(" edt://settings/** ;edt://cache/*;; ");
-
-	BOOST_TEST((patterns == std::vector<std::string>{ "edt://settings/**", "edt://cache/*" }));
-	BOOST_TEST(edt::parse_write_patterns("").empty());
 	BOOST_TEST((edt::default_write_patterns() == std::vector<std::string>{ "edt://settings/**" }));
 }
 

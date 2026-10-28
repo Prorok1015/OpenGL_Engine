@@ -21,7 +21,7 @@
 CFG_VAR_EXT_PATH(cfg_res_path);
 CFG_VAR_DEF_PATH(cfg_edt_data_path, "editor/data_path", "../data/");
 CFG_VAR_DEF_PATH(cfg_edt_user_data_path, "editor/user_data_path", "");
-CFG_VAR_DEF_STRING(cfg_edt_write_patterns, "editor/edt_write_patterns", "edt://settings/**");
+cfg::variable<std::vector<std::string>> cfg_edt_write_patterns{ "editor/edt_write_patterns", edt::default_write_patterns() };
 
 void editor::editor_module::register_services(ds::app_data_storage& data)
 {
@@ -36,7 +36,7 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 	auto& win_service = data.require<wnd::window_system>();
 
 	const auto user_data_path = cfg_edt_user_data_path->empty() ? edt::default_user_data_dir() : std::filesystem::path{ *cfg_edt_user_data_path };
-	edt::register_data_protocol(res, cfg_edt_data_path, user_data_path, edt::parse_write_patterns(*cfg_edt_write_patterns));
+	edt::register_data_protocol(res, cfg_edt_data_path, user_data_path, *cfg_edt_write_patterns);
 
 #if SNK_HAS_ASSIMP
 	auto& desc_system = data.require<desc::desc_system>();

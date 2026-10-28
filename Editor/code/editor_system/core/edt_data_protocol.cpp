@@ -53,21 +53,6 @@ std::vector<std::string> edt::default_write_patterns()
 	return { "edt://settings/**" };
 }
 
-std::vector<std::string> edt::parse_write_patterns(std::string_view text)
-{
-	std::vector<std::string> out;
-	while (!text.empty()) {
-		const std::size_t end = text.find(';');
-		std::string_view token = text.substr(0, end);
-		const std::size_t first = token.find_first_not_of(" \t");
-		if (first != std::string_view::npos) {
-			out.emplace_back(token.substr(first, token.find_last_not_of(" \t") - first + 1));
-		}
-		text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
-	}
-	return out;
-}
-
 bool edt::register_data_protocol(res::resource_system& res, const std::filesystem::path& data_path, const std::filesystem::path& user_path,
 	const std::vector<std::string>& write_patterns)
 {

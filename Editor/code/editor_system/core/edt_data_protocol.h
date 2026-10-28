@@ -13,11 +13,9 @@ namespace edt {
 	// Falls back to a folder in the temp directory when the environment names no home.
 	std::filesystem::path default_user_data_dir();
 
-	// What edt:// may store into: only the per-user settings (see res::write_policy for the pattern syntax).
+	// What edt:// may store into: only the per-user settings (see res::write_policy for the pattern syntax). The default
+	// of the editor/edt_write_patterns setting, a list in the config.
 	std::vector<std::string> default_write_patterns();
-
-	// Splits a ';'-separated list (the editor/edt_write_patterns setting) into trimmed, non-empty patterns.
-	std::vector<std::string> parse_write_patterns(std::string_view text);
 
 	// Mounts edt:// (editor-only resources: icons, templates, settings) over two roots: `data_path` (Editor/data, shipped
 	// with the editor, only ever read) under `user_path` (per-user, the only root edt:// writes go to).
