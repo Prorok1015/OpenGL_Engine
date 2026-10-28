@@ -1,14 +1,18 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
+#include <snk/resource/res_vfs_test_hook.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 
@@ -543,6 +547,185 @@ BOOST_FIXTURE_TEST_CASE(InsideTags_StillWork, sandbox_fixture)
 	BOOST_TEST(r.store(res::tag{ "memory://a/b/new.txt" }, to_bytes("fresh")));
 	BOOST_TEST(wait_for_file(root / "a" / "b" / "new.txt"));
 	BOOST_TEST(load(r, "memory://a/b/new.txt") == "fresh");
+}
+
+// ---- #414: no race between the path check and the write -------------------------------------------------------------
+// A hook pauses the write on the io thread right after the path was checked again (after_check) or with the temp file
+// written (before_rename), and swaps a folder or a file for a link there. Nothing outside the root is ever created or
+// changed. Linux runs every case; Windows skips when it cannot make links (no developer mode / privilege).
+
+namespace {
+
+namespace fs = std::filesystem;
+
+struct swap_fixture : mounts_fixture
+{
+	fs::path outside = dir.path() / "outside";
+
+	swap_fixture()
+	{
+		fs::create_directories(outside);
+		dir.write("outside/keep.txt", "keep");
+	}
+
+	// Links can be made here (always on Linux; on Windows only with the privilege).
+	bool links_available()
+	{
+		std::error_code ec;
+		fs::create_symlink(outside / "keep.txt", dir.path() / "probe.link", ec);
+		if (ec) {
+			BOOST_TEST_MESSAGE("symlinks unavailable, skipping: " << ec.message());
+			return false;
+		}
+		fs::remove(dir.path() / "probe.link", ec);
+		return true;
+	}
+
+	bool outside_untouched() const
+	{
+		std::error_code ec;
+		std::size_t entries = 0;
+		for (const auto& entry : fs::directory_iterator(outside, ec)) {
+			static_cast<void>(entry);
+			++entries;
+		}
+		return entries == 1u && read_text(outside / "keep.txt") == "keep";
+	}
+
+	// Stores with `hook` set for that one store.
+	bool store_with(res::vfs_resolver& r, const char* tag, std::string_view text,
+		std::function<void(res::detail::write_stage, const fs::path&)> hook)
+	{
+		res::detail::write_hook_access::set(r, std::move(hook));
+		const bool stored = r.store_sync(res::tag{ tag }, to_bytes(text));
+		res::detail::write_hook_access::set(r, nullptr);
+		return stored;
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(Write_AParentSwappedForALinkAfterTheCheckIsRefused, swap_fixture)
+{
+	if (!links_available()) return;
+	dir.write("high/levels/old.txt", "old");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code swapped;
+	const bool stored = store_with(r, "res://levels/a.txt", "payload", [&](res::detail::write_stage stage, const fs::path&) {
+		if (stage == res::detail::write_stage::after_check) {
+			fs::rename(high / "levels", high / "levels_moved", swapped);
+			if (!swapped) {
+				fs::create_directory_symlink(outside, high / "levels", swapped);
+			}
+		}
+	});
+	BOOST_REQUIRE(!swapped);
+	BOOST_TEST(!stored);
+	BOOST_TEST(outside_untouched());
+	BOOST_TEST(read_text(high / "levels_moved/old.txt") == "old");
+	BOOST_TEST(temp_files_in(high / "levels_moved") == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(Write_AFolderToBeCreatedThatAppearsAsALinkIsRefused, swap_fixture)
+{
+	if (!links_available()) return;
+	res::vfs_resolver r("res", { low, high });
+	std::error_code swapped;
+	const bool stored = store_with(r, "res://fresh/deeper/a.txt", "payload", [&](res::detail::write_stage stage, const fs::path&) {
+		if (stage == res::detail::write_stage::after_check) {
+			fs::create_directory_symlink(outside, high / "fresh", swapped);
+		}
+	});
+	BOOST_REQUIRE(!swapped);
+	BOOST_TEST(!stored);
+	BOOST_TEST(outside_untouched());
+	BOOST_TEST(!fs::exists(outside / "deeper"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Write_ALinkPlantedAtTheTempNameIsNotOpened, swap_fixture)
+{
+	if (!links_available()) return;
+	fs::create_directories(high / "gen");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code planted;
+	const bool stored = store_with(r, "res://gen/x.txt", "payload", [&](res::detail::write_stage stage, const fs::path& tmp) {
+		if (stage == res::detail::write_stage::after_check) {
+			fs::create_symlink(outside / "keep.txt", tmp, planted);
+		}
+	});
+	BOOST_REQUIRE(!planted);
+	BOOST_TEST(!stored);
+	BOOST_TEST(outside_untouched());
+	BOOST_TEST(!fs::exists(high / "gen/x.txt"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Write_ATargetSwappedForALinkBeforeTheRenameReplacesTheLinkItself, swap_fixture)
+{
+	if (!links_available()) return;
+	dir.write("high/gen/x.txt", "old");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code swapped;
+	const bool stored = store_with(r, "res://gen/x.txt", "payload", [&](res::detail::write_stage stage, const fs::path&) {
+		if (stage == res::detail::write_stage::before_rename) {
+			if (fs::remove(high / "gen/x.txt", swapped) && !swapped) {
+				fs::create_symlink(outside / "keep.txt", high / "gen/x.txt", swapped);
+			}
+		}
+	});
+	BOOST_REQUIRE(!swapped);
+	BOOST_TEST(stored);
+	BOOST_TEST(outside_untouched());
+	BOOST_TEST(!fs::is_symlink(high / "gen/x.txt"));
+	BOOST_TEST(read_text(high / "gen/x.txt") == "payload");
+}
+
+BOOST_FIXTURE_TEST_CASE(Write_AParentSwappedBeforeTheRenameKeepsTheFileInTheOpenedFolder, swap_fixture)
+{
+	if (!links_available()) return;
+	dir.write("high/gen/old.txt", "old");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code moved;
+	std::error_code linked;
+	const bool stored = store_with(r, "res://gen/x.txt", "payload", [&](res::detail::write_stage stage, const fs::path&) {
+		if (stage == res::detail::write_stage::before_rename) {
+			fs::rename(high / "gen", high / "gen_moved", moved);
+			if (!moved) {
+				fs::create_directory_symlink(outside, high / "gen", linked);
+			}
+		}
+	});
+	BOOST_TEST(outside_untouched());
+	if (moved) {
+		// Windows: the folder is held without FILE_SHARE_DELETE for the write, so it cannot be moved at all.
+		BOOST_TEST_MESSAGE("the folder could not be moved during the write: " << moved.message());
+		BOOST_TEST(stored);
+		BOOST_TEST(read_text(high / "gen/x.txt") == "payload");
+		return;
+	}
+	BOOST_REQUIRE(!linked);
+	// POSIX: the rename happens inside the folder that was opened, which is now gen_moved: still inside the root.
+	BOOST_TEST(stored);
+	BOOST_TEST(read_text(high / "gen_moved/x.txt") == "payload");
+	BOOST_TEST(temp_files_in(high / "gen_moved") == 0u);
+}
+
+// The root may not exist when it is mounted (a user folder on first run, a project made later): it is opened on the
+// first write, and made then if still missing.
+BOOST_FIXTURE_TEST_CASE(Write_ARootMountedBeforeItExistsIsWrittenOnceItDoes, mounts_fixture)
+{
+	const fs::path later = dir.path() / "later";
+	const fs::path never = dir.path() / "never";
+	{
+		res::vfs_resolver r("res", { low, later });
+		fs::create_directories(later);
+		BOOST_TEST(r.store_sync(res::tag{ "res://sub/a.txt" }, to_bytes("made later")));
+		BOOST_TEST(read_text(later / "sub/a.txt") == "made later");
+	}
+	{
+		res::vfs_resolver r("res", { low, never });
+		BOOST_TEST(r.store_sync(res::tag{ "res://sub/b.txt" }, to_bytes("made by the store")));
+		BOOST_TEST(read_text(never / "sub/b.txt") == "made by the store");
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()

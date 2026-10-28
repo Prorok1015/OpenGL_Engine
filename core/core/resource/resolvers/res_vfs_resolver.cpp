@@ -3,6 +3,7 @@
 #include <snk/common/common.h>
 #include <snk/common/core_thread_utils.hpp>
 #include <snk/resource/res_path_sanitize.h>
+#include "res_vfs_write.h"
 #include <cctype>
 #include <format>
 #include <fstream>
@@ -11,6 +12,11 @@
 #include <chrono>
 #include <thread>
 #include <utility>
+
+res::vfs_resolver::vfs_resolver(const std::string_view prt)
+	: core::res::res_resolver_interface(prt), watcher(io)
+{
+}
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy)
 	: core::res::res_resolver_interface(prt)
@@ -40,6 +46,8 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 		watcher.add_path(pinned);
 		entries_stack.push(pinned);
 	}
+	// Opened on the first write: the root may not exist yet (a user folder, a project made after the mount).
+	m_write_root = std::make_unique<detail::pinned_root>(entries_stack.top());
 	
 	watcher.start();
 	work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(boost::asio::make_work_guard(io));
@@ -284,10 +292,13 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 		if (!still_current()) {
 			return;
 		}
-		std::error_code ec;
-		fs::remove(path, ec);
-		if (ec) {
-			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), ec.message());
+		// Through the opened folders, like a store: a parent swapped for a link is not followed (#414).
+		const fs::path relative = path.lexically_relative(m_write_root->path());
+		const std::string error = relative.empty() || *relative.begin() == ".."
+			? std::string{ "its file does not lie below the resource root" }
+			: detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename().string());
+		if (!error.empty()) {
+			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), error);
 		}
 		std::unique_lock lock(m_pending_mutex);
 		if (const auto it = m_erased.find(tag); it != m_erased.end() && it->second == generation) {
@@ -425,12 +436,9 @@ res::tag res::vfs_resolver::make_temp_tag(const tag& tag)
 bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& target_path, const res::tag& tmp_tag,
 	const fs::path& tmp_path, const core::res::res_resolver_interface::async_raw_data& data_ptr)
 {
-	const auto fail = [&](std::string_view why, bool remove_tmp) {
+	// The temp file is never removed by path here: write_beneath removes its own, inside the folder it opened.
+	const auto fail = [&](std::string_view why) {
 		egLOG_ERROR("resource/write", "Failed to store '{}': {}", tag.view(), why);
-		if (remove_tmp) {
-			std::error_code ignored;
-			fs::remove(tmp_path, ignored);
-		}
 		// A newer store of the tag keeps its own entry.
 		std::unique_lock lock(m_pending_mutex);
 		if (auto it = m_pending_writes.find(tag); it != m_pending_writes.end() && it->second == data_ptr) {
@@ -443,40 +451,30 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		// Again right before anything is created: a parent or a leaf may have become a symlink since store(), and
 		// removing the temp file through such a parent could hit a file outside the root.
 		if (safe_path(entries_stack.top(), tag) != target_path || safe_path(entries_stack.top(), tmp_tag) != tmp_path) {
-			return fail("its file or temp file no longer stays inside the resource root", false);
+			return fail("its file or temp file no longer stays inside the resource root");
 		}
 
-		std::error_code ec;
-		fs::create_directories(target_path.parent_path(), ec);
-		if (ec) {
-			return fail(std::format("cannot create '{}': {}", target_path.parent_path().string(), ec.message()), false);
+		if (m_write_hook) {
+			m_write_hook(detail::write_stage::after_check, tmp_path);
 		}
 
-		{
-			std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
-			if (!file.is_open()) {
-				return fail(std::format("cannot open '{}' for writing", tmp_path.string()), true);
-			}
-			file.write(reinterpret_cast<const char*>(data_ptr->data.data()), static_cast<std::streamsize>(data_ptr->data.size()));
-			// close() flushes: a full disk shows up here, and a truncated file must not replace the good one.
-			file.close();
-			if (file.fail()) {
-				return fail(std::format("writing '{}' failed", tmp_path.string()), true);
-			}
+		// From here on nothing goes by path: the folders below the root are opened one by one without following a
+		// link, so one swapped for a link since the check above is refused instead of followed (#414).
+		const fs::path relative = target_path.lexically_relative(m_write_root->path());
+		if (relative.empty() || *relative.begin() == ".." || tmp_path.parent_path() != target_path.parent_path()) {
+			return fail("its file does not lie below the resource root");
 		}
-
-		// On Windows a file that was just removed (an erase on this thread) can stay delete-pending while
-		// another handle (watcher, indexer, antivirus) is open on it, and renaming onto it is denied for a moment.
-		std::error_code rename_error;
-		for (int attempt = 0; attempt < 50; ++attempt) {
-			fs::rename(tmp_path, target_path, rename_error);
-			if (!rename_error) {
-				break;
-			}
-			std::this_thread::sleep_for(std::chrono::milliseconds(10));
-		}
-		if (rename_error) {
-			return fail(std::format("cannot replace '{}': {}", target_path.string(), rename_error.message()), true);
+		detail::write_request request;
+		request.folder = relative.parent_path();
+		request.leaf = relative.filename().string();
+		request.tmp_leaf = tmp_path.filename().string();
+		request.data = data_ptr->data;
+		// Scratch data of the process: not worth an fsync per store (#417).
+		request.durable = protocol != ::res::tag::memory;
+		request.hook = &m_write_hook;
+		request.tmp_path = tmp_path;
+		if (const std::string error = detail::write_beneath(*m_write_root, request); !error.empty()) {
+			return fail(error);
 		}
 
 		// Update file_watcher snapshot so it doesn't treat our own write as an external change.
@@ -491,7 +489,7 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		egLOG("resource/write", "Stored resource '{}'", tag.view());
 		return true;
 	} catch (const std::exception& ex) {
-		return fail(ex.what(), true);
+		return fail(ex.what());
 	}
 }
 
