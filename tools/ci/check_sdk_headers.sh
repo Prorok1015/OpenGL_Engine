@@ -37,9 +37,6 @@ fi
 
 path_re='(^|/)(impl_[^/]*|rnd_gl_[^/]*|passes|[^/]*glad[^/]*|[^/]*GLFW[^/]*)(/|$)'
 include_re='^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"](glad|GLFW)/'
-base_only_files_re='(^|/)(engine_log_sinks|cfg_variables)\.h$'
-base_only_include_re='^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]snk/(common/logger/engine_log_sinks|config/cfg_variables)\.h[>"]'
-base_only_decl_re='SNK_API[^;]*[[:space:]](add_log_sink|remove_log_sink|registrate_variable|registrate_prefix)[[:space:]]*\('
 third_party_re='^snk/(boost|lib3dparty|_generated)/'
 
 found=()
@@ -62,24 +59,11 @@ for entry in ${found[@]+"${found[@]}"}; do
 	((allowed)) || would_fail+=("${entry}")
 done
 
-base_only=()
-while IFS= read -r rel; do
-	[[ "${rel}" =~ ${third_party_re} ]] && continue
-	if [[ "${rel}" =~ ${base_only_files_re} ]]; then
-		base_only+=("${rel}  (base-only header)")
-	elif grep -qE "${base_only_include_re}" "${root}/${rel}"; then
-		base_only+=("${rel}  (includes a base-only header)")
-	elif grep -qE "${base_only_decl_re}" "${root}/${rel}"; then
-		base_only+=("${rel}  (declares base-only API)")
-	fi
-done < <(cd "${root}" && find snk -type f | LC_ALL=C sort)
-for entry in ${base_only[@]+"${base_only[@]}"}; do
-	echo "  base-only: ${entry}"
-done
-if ((${#base_only[@]} > 0)); then
-	echo "::error::${#base_only[@]} installed header(s) expose base-only API (include_base/, MODULE_LAYER.md)"
-	exit 1
-fi
+# Base-only API: the names come from the include_base trees; the self-test proves the check still catches a leak.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python="$(command -v python3 || command -v python)" # Windows runners have only `python`
+"${python}" "${here}/check_sdk_base_only.py" --self-test
+"${python}" "${here}/check_sdk_base_only.py" "${prefix}"
 
 total=$(cd "${root}" && find snk -type f | wc -l)
 echo "SDK headers: ${total} files installed under include/snk, ${#would_fail[@]} internal"

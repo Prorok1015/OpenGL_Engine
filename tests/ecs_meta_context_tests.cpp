@@ -1,8 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <snk/ecs/ecs_component.h>
+#include <snk/ecs/ecs_meta_context.h>
 #include <snk/scene/level/scn_world_context.h>
 #include <entt/entt.hpp>
+#include <type_traits>
 
 // The engine's meta context (#220 PR-1, spike #218): components registered there are what
 // world_context::apply_commands moves from the sandbox into the world.
@@ -21,8 +23,8 @@ namespace {
 	constexpr entt::id_type unregistered_hash = entt::type_hash<unregistered_component>::value();
 
 	struct meta_fixture {
-		meta_fixture() { ecs::register_component<registered_component>(ecs::meta_context()); }
-		~meta_fixture() { entt::meta_reset<registered_component>(ecs::meta_context()); }
+		meta_fixture() { ecs::register_component<registered_component>(ecs::mutable_meta_context()); }
+		~meta_fixture() { entt::meta_reset<registered_component>(ecs::mutable_meta_context()); }
 
 		meta_fixture(const meta_fixture&) = delete;
 		meta_fixture& operator=(const meta_fixture&) = delete;
@@ -31,6 +33,9 @@ namespace {
 }
 
 BOOST_AUTO_TEST_SUITE(ecs_meta_context_tests)
+
+// What a module sees of the engine's context is read-only (#408 review).
+static_assert(std::is_same_v<decltype(ecs::meta_context()), const entt::meta_ctx&>);
 
 BOOST_AUTO_TEST_CASE(attaching_the_locator_shares_the_engine_context)
 {
@@ -65,7 +70,7 @@ BOOST_AUTO_TEST_CASE(a_registration_in_a_layer_context_stays_out_of_the_engine_c
 
 BOOST_FIXTURE_TEST_CASE(meta_reset_removes_the_registration, meta_fixture)
 {
-	entt::meta_reset<registered_component>(ecs::meta_context());
+	entt::meta_reset<registered_component>(ecs::mutable_meta_context());
 	BOOST_TEST(!entt::resolve(ecs::meta_context(), registered_hash));
 }
 

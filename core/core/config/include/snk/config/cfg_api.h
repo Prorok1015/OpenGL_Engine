@@ -11,7 +11,8 @@ namespace cfg {
 	class SNK_API config_view
 	{
 	public:
-		// The value of a registered variable as text; nullopt when no variable has that name.
+		// The value of a registered variable as text; nullopt when no variable has that name. Main thread: the
+		// configuration has no lock (variables are registered and set on the main thread), so a worker must not call it.
 		std::optional<std::string> value(std::string_view name) const;
 		bool has(std::string_view name) const { return value(name).has_value(); }
 	};

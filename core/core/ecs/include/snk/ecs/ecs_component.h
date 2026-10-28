@@ -37,12 +37,10 @@ namespace ecs
         loader->get<T>(archive);
     }
 
-    // The engine's meta context. Every binary (the editor, a game module) has its own
-    // entt::locator<entt::meta_ctx> under hidden visibility or as a DLL, so meta registered or resolved
-    // there is invisible to the engine's entt::resolve until the binary attaches to this one (#218):
-    //   entt::locator<entt::meta_ctx>::reset(ecs::meta_context_handle());
-    [[nodiscard]] SNK_API entt::meta_ctx& meta_context();
-    [[nodiscard]] SNK_API entt::locator<entt::meta_ctx>::node_type meta_context_handle();
+    // The engine's meta context, read-only: a game module registers into its layer's context (scene_layer::meta()).
+    // Registering into the engine's one, or attaching a binary's locator to it, is base-only
+    // (<snk/ecs/ecs_meta_context.h>, MODULE_LAYER.md).
+    [[nodiscard]] SNK_API const entt::meta_ctx& meta_context();
 
     // `id` in the layer's context first (none: null), then in the engine's.
     [[nodiscard]] inline entt::meta_type find_meta(const entt::meta_ctx* layer, entt::id_type id) {

@@ -1,13 +1,17 @@
-#include <snk/ecs/ecs_component.h>
+#include <snk/ecs/ecs_meta_context.h>
 
-entt::meta_ctx& ecs::meta_context()
+entt::meta_ctx& ecs::mutable_meta_context()
 {
 	return entt::locator<entt::meta_ctx>::value_or();
 }
 
-entt::locator<entt::meta_ctx>::node_type ecs::meta_context_handle()
+const entt::meta_ctx& ecs::meta_context()
 {
-	static_cast<void>(meta_context());
-	return entt::locator<entt::meta_ctx>::handle();
+	return mutable_meta_context();
 }
 
+entt::locator<entt::meta_ctx>::node_type ecs::meta_context_handle()
+{
+	static_cast<void>(mutable_meta_context());
+	return entt::locator<entt::meta_ctx>::handle();
+}

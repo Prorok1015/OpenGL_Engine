@@ -185,11 +185,13 @@ namespace res
 		}
 
 		// The system this one is a layer of; null for the root.
-		resource_system* parent() const { return m_parent; }
+		// Const: a layer's user (a game module) must not write past the layer into the base.
+		const resource_system* parent() const { return m_parent; }
 
-		// A layer only: store and erase (and what serialize stores) accept only tags that start with `prefix` (a game
-		// module's memory://modules/<name>/, MODULE_LAYER.md); any other tag throws std::logic_error, like a service the
-		// module's storage does not expose. Empty: no limit. Main thread, before the layer is handed out.
+		// A layer only: store, erase and pin_resource of a tag not stored yet accept only tags that start with `prefix`
+		// (a game module's memory://modules/<name>/, MODULE_LAYER.md); any other tag throws std::logic_error, like a
+		// service the module's storage does not expose. The layer's desc_system keeps its inline sub-descs under
+		// <prefix>overrides/ (desc::override_root). Empty: no limit. Main thread, before the layer is handed out.
 		void limit_writes_to(std::string prefix);
 		const std::string& write_prefix() const { return m_write_prefix; }
 
@@ -312,13 +314,17 @@ namespace res
 
 		template<class RESOURCE>
 		void pin_resource(const res::tag& tag, RESOURCE&& resource) {
+			const bool stored = exists(tag);
+			if (!stored) {
+				check_writable(tag); // a pin that is not stored yet is written out: refused before anything is pinned
+			}
 			auto block = std::make_shared<resource_handle>();
 			block->set_ready(std::make_shared<RESOURCE>(std::forward<RESOURCE>(resource)));
 			const cache_key key = key_for<RESOURCE>(tag);
 			push_resource_to_strong_cache(key, block);
 			push_resource_to_cache(key, block);
 
-			if (!exists(tag)) {
+			if (!stored) {
 				serialize_pinned(tag, block, find_adapter_in_chain<RESOURCE>(tag));
 			}
 		}
