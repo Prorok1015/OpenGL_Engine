@@ -1,11 +1,13 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_file_menu.h"
 #include <snk/project/prj_create.h>
+#include <snk/project/prj_project.h>
 #include "test_temp_dir.hpp"
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>

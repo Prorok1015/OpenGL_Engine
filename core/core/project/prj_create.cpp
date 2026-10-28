@@ -1,12 +1,14 @@
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project/prj_version.h>
+#include <cstddef>
 #include <format>
 #include <fstream>
 #include <iterator>
 #include <random>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
