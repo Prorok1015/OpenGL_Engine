@@ -41,6 +41,9 @@
 #ifndef SNK_EDITOR_RES_DIR
 #error "SNK_EDITOR_RES_DIR must point at Editor/res"
 #endif
+#ifndef SNK_EDITOR_DATA_DIR
+#error "SNK_EDITOR_DATA_DIR must point at Editor/data"
+#endif
 #ifndef SNK_CORE_RES_DIR
 #error "SNK_CORE_RES_DIR must point at core/res"
 #endif
@@ -62,17 +65,22 @@ inline void set_render_validate(bool on)
 }
 
 // Serves the repository's res:// files (core/res, overridden by Editor/res) from RAM.
+inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::string_view protocol)
+{
+	for (const auto& entry : fs::recursive_directory_iterator(root)) {
+		if (!entry.is_regular_file()) continue;
+		std::ifstream in(entry.path(), std::ios::binary);
+		const std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+		std::vector<std::byte> bytes(text.size());
+		std::memcpy(bytes.data(), text.data(), text.size());
+		ram.files[res::tag{ protocol, fs::relative(entry.path(), root).generic_string() }] = std::move(bytes);
+	}
+}
+
 inline void mount_repo_res(test_util::ram_resolver& ram)
 {
 	for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_EDITOR_RES_DIR } }) {
-		for (const auto& entry : fs::recursive_directory_iterator(root)) {
-			if (!entry.is_regular_file()) continue;
-			std::ifstream in(entry.path(), std::ios::binary);
-			const std::vector<char> text{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
-			std::vector<std::byte> bytes(text.size());
-			std::memcpy(bytes.data(), text.data(), text.size());
-			ram.files[res::tag::make(fs::relative(entry.path(), root).generic_string())] = std::move(bytes);
-		}
+		mount_dir(ram, root, res::tag::default_protocol());
 	}
 }
 
@@ -89,6 +97,7 @@ struct null_engine_fixture
 		rs.registrate_resolver<test_util::ram_resolver>(res::tag::memory);
 		rs.unregistrate_resolver(res::tag::default_protocol());
 		mount_repo_res(rs.registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol()));
+		mount_dir(rs.registrate_resolver<test_util::ram_resolver>("edt"), SNK_EDITOR_DATA_DIR, "edt");
 
 		auto& descs = storage.construct<desc::desc_system>(std::ref(rs));
 		rs.registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(rs), std::ref(descs));

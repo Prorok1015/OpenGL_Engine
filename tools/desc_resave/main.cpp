@@ -1,12 +1,14 @@
 // desc_resave: loads every .desc file under a resources directory through the engine (older formats are
 // migrated on load) and writes it back in the current format, indented. Run it after a format change.
 //
-//   desc_resave <path to a resources directory named "res"> [--base <res dir>] [--check]
+//   desc_resave <path to a resources directory named "res"> [--base <res dir>] [--edt <data dir>] [--check]
 //
 // --check writes nothing and exits with 1 when any file would change.
 // --base mounts a lower layer under the directory (Editor/res needs core/res for its base descs);
-// only the descs of the first directory are touched.
+// only the descs of the first directory (and of --edt) are touched.
+// --edt mounts a directory as the edt:// protocol (Editor/data) and resaves its descs as well.
 #include <snk/resource/res_system.h>
+#include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/desc/desc_system.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/common/ds/ds_task_system.hpp>
@@ -24,6 +26,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -52,12 +55,15 @@ int main(int argc, char** argv)
 	const fs::path res_dir = fs::absolute(argv[1]).lexically_normal();
 	bool check_only = false;
 	fs::path base_dir;
+	fs::path edt_dir;
 	for (int i = 2; i < argc; ++i) {
 		const std::string arg{ argv[i] };
 		if (arg == "--check") {
 			check_only = true;
 		} else if (arg == "--base" && i + 1 < argc) {
 			base_dir = fs::absolute(argv[++i]).lexically_normal();
+		} else if (arg == "--edt" && i + 1 < argc) {
+			edt_dir = fs::absolute(argv[++i]).lexically_normal();
 		} else {
 			egLOG_ERROR("desc_resave", "unknown argument '{}'", arg);
 			return 2;
@@ -76,6 +82,10 @@ int main(int argc, char** argv)
 			return 2;
 		}
 		*cfg_res_base_path = base_dir;
+	}
+	if (!edt_dir.empty() && !fs::is_directory(edt_dir)) {
+		egLOG_ERROR("desc_resave", "edt directory '{}' does not exist", edt_dir.string());
+		return 2;
 	}
 	std::error_code ec;
 	fs::create_directories("./sandbox", ec);
@@ -97,19 +107,34 @@ int main(int argc, char** argv)
 #endif
 	core::desc::desc_adapter_t adapter(res_sys, desc_sys);
 
-	std::vector<fs::path> files;
-	for (const auto& entry : fs::recursive_directory_iterator(res_dir)) {
-		if (entry.is_regular_file() && entry.path().extension() == ".desc") {
-			files.push_back(entry.path());
-		}
+	if (!edt_dir.empty()) {
+		res_sys.registrate_resolver<res::vfs_resolver>("edt", std::vector<fs::path>{ edt_dir });
 	}
-	std::ranges::sort(files);
+
+	struct desc_file {
+		fs::path path;
+		res::tag tag;
+	};
+	std::vector<desc_file> files;
+	const auto collect = [&files](const fs::path& dir, std::string_view protocol) {
+		std::vector<desc_file> found;
+		for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+			if (entry.is_regular_file() && entry.path().extension() == ".desc") {
+				found.push_back({ entry.path(), res::tag{ protocol, fs::relative(entry.path(), dir).generic_string() } });
+			}
+		}
+		std::ranges::sort(found, {}, &desc_file::path);
+		files.insert(files.end(), found.begin(), found.end());
+	};
+	collect(res_dir, res::tag::default_protocol());
+	if (!edt_dir.empty()) {
+		collect(edt_dir, "edt");
+	}
 
 	int failed = 0;
 	int changed = 0;
-	for (const auto& path : files) {
-		const std::string rel = fs::relative(path, res_dir).generic_string();
-		const res::tag tag = res::tag::make(rel);
+	for (const auto& [path, tag] : files) {
+		const std::string rel = tag.string();
 		auto handle = res_sys.require_sync<desc::desc_base>(tag);
 		auto loaded = handle.get_sync();
 		if (!loaded) {

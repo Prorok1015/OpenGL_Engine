@@ -105,8 +105,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_rnd.get_texture_manager().generate(res::tag(res::tag::memory, "__black"), {1,1}, rnd::driver::texture_header::TYPE::RGB8, {0, 0, 0});
 	m_rnd.get_texture_manager().generate(res::tag(res::tag::memory, "__red"),   {1,1}, rnd::driver::texture_header::TYPE::RGB8, {255, 0, 0});
 
-	m_res.warmup<res::text_resource>(res::tag::make("templates/level.desc"));
-	m_res.warmup<res::text_resource>(res::tag::make("templates/world.desc"));
+	m_res.warmup<res::text_resource>(res::tag("edt://templates/level.desc"));
+	m_res.warmup<res::text_resource>(res::tag("edt://templates/world.desc"));
 
 	editor_layer = std::make_shared<edt::editor_layer>();
 	m_gui.push_layer(editor_layer);

@@ -65,9 +65,10 @@ struct preview_fixture : test_util::scene_env
 	{
 		rs->unregistrate_resolver(res::tag::default_protocol());
 		auto& res_ram = rs->registrate_resolver<test_util::ram_resolver>(res::tag::default_protocol());
-		res_ram.store(res::tag::make("templates/prefab_preview.desc"), test_util::to_bytes(PREVIEW_TEMPLATE));
 		res_ram.store(prefab_a, test_util::to_bytes(PREFAB));
 		res_ram.store(prefab_b, test_util::to_bytes(PREFAB));
+		auto& edt_ram = rs->registrate_resolver<test_util::ram_resolver>("edt");
+		edt_ram.store(res::tag("edt://templates/prefab_preview.desc"), test_util::to_bytes(PREVIEW_TEMPLATE));
 
 		hot = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
 		mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);

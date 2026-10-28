@@ -230,7 +230,7 @@ void edt::level_controller::add_desc_to_scene(const res::res_handle<desc::desc_b
 boost::json::object edt::level_controller::load_desc_template(const std::string& filename)
 {
 	namespace json = boost::json;
-	auto tag = res::tag::make("templates/" + filename);
+	auto tag = res::tag("edt://templates/" + filename);
 	auto text = m_services.resources()->require_sync<res::text_resource>(tag);
 	if (text.is_ready()) {
 		try {
