@@ -41,6 +41,9 @@ namespace {
 	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
 	// --allow-engine-version-mismatch: open a project of an older engine MAJOR.MINOR without asking (never a newer one).
 	CFG_VAR_DEF_BOOL(cfg_allow_engine_version_mismatch, "project/allow_engine_version_mismatch", false);
+	// --non-interactive / -n: nobody can answer a question, so none is asked and each takes its safe answer. Today
+	// only the engine version check asks (prj::refuse_without_asking).
+	CFG_VAR_DEF_BOOL(cfg_non_interactive, "app/non_interactive", false);
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -97,6 +100,10 @@ namespace {
 		const auto action = prj::version_action_for(project.engine_match, cfg_allow_engine_version_mismatch);
 		const auto engine_line = std::format("project '{}' was made for engine {}, this is engine {}", project.data.name,
 			prj::to_string(project.data.engine), prj::to_string(prj::current_engine_version()));
+		if (prj::refuse_without_asking(action, cfg_non_interactive)) {
+			throw prj::engine_version_error(std::format("{}; not opened: a non-interactive run does not ask{}", engine_line,
+				action == prj::version_action::ask_open_or_quit ? " (start with --allow-engine-version-mismatch to open it)" : ""));
+		}
 		if (action == prj::version_action::ask_open_or_quit || action == prj::version_action::refuse) {
 			// Not mounted: the host runs without a project and asks (or tells) the user; see prj::held_project.
 			egLOG_WARN("project", "{}; not opened{}", engine_line, action == prj::version_action::ask_open_or_quit

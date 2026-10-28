@@ -101,7 +101,7 @@ fi
 
 # Software rasterizer; vsync off so the virtual display does not throttle frames.
 LIBGL_ALWAYS_SOFTWARE=1 vblank_mode=0 \
-	"$EDITOR" --config "$CONFIG" "${EXTRA[@]}" >"$LOG" 2>&1 &
+	"$EDITOR" --config "$CONFIG" --non-interactive "${EXTRA[@]}" >"$LOG" 2>&1 &
 EDITOR_PID=$!
 
 alive() { kill -0 "$EDITOR_PID" 2>/dev/null; }
