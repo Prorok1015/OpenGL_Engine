@@ -343,7 +343,7 @@ namespace {
 	// The component of `node` that makes it an instance of a prefab: a typed { "__parent": X } component or a
 	// plain string reference that resolves to a prefab. Looked up by tag every time, a handle kept in the node
 	// goes stale when the prefab is reloaded.
-	std::optional<prefab_ref> find_prefab_ref(scn::ecs_assembler& assembler, const prefab_node& node)
+	std::optional<prefab_ref> find_prefab_ref(const scn::ecs_assembler& assembler, const prefab_node& node)
 	{
 		std::vector<const std::pair<const std::string, prefab_comp_node>*> candidates;
 		for (const auto& entry : node.components) {
@@ -483,7 +483,7 @@ namespace {
 
 	// Applies the records to a tree that is already a private copy. A record that targets a node below an
 	// instance of another prefab is handed down to that instance, which resolves it once it is expanded.
-	void apply_records(scn::ecs_assembler& assembler, const desc::desc_base& owner, prefab_node& root, const std::vector<scn::override_record>& records)
+	void apply_records(const scn::ecs_assembler& assembler, const desc::desc_base& owner, prefab_node& root, const std::vector<scn::override_record>& records)
 	{
 		auto& desc_system = assembler.get_desc_system();
 		for (const auto& record : records) {
@@ -537,7 +537,7 @@ namespace {
 	// What `node` stands for when it is more than its own fields: the prefab it references (itself expanded)
 	// plus the node's own extra components and children, then the node's override records. False for a plain
 	// node without records. `source` is the referenced prefab, empty when there is none.
-	bool materialize(scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source, int depth)
+	bool materialize(const scn::ecs_assembler& assembler, const prefab_node& node, prefab_node& out, res::tag& source, int depth)
 	{
 		std::optional<prefab_ref> ref = find_prefab_ref(assembler, node);
 		if (ref && depth >= max_instance_depth) {
@@ -673,13 +673,13 @@ json::object scn::compose_component_json(const prefab_desc::prefab_comp_node& cn
 }
 
 bool scn::expand_instance(
-	ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
+	const ecs_assembler& assembler, const prefab_desc::prefab_node& node, prefab_desc::prefab_node& out, res::tag& source)
 {
 	return materialize(assembler, node, out, source, 0);
 }
 
 void scn::reconcile(
-	scn::ecs_assembler& assembler,
+	const scn::ecs_assembler& assembler,
 	entt::registry& reg,
 	entt::entity live,
 	const scn::prefab_desc::prefab_node& node,
@@ -1010,7 +1010,7 @@ SNK_API void assemble_prefab_node(scn::ecs_assembler& assembler, entt::registry&
 	scn::reconcile(assembler, reg, e, node, scn::reconcile_mode::spawn);
 }
 
-void scn::assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab)
+void scn::assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab)
 {
 	const auto& root_node = prefab.get_root();
 

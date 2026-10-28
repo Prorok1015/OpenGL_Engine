@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/common.h>
+#include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/resource/res_tag_json.h> // get_field_desc<T> (inline template below) does json::value_to<res::tag>
@@ -33,6 +34,9 @@ namespace desc
 		}
 
 		desc_system(res::resource_system& res_system);
+		// A layer over `parent` (MODULE_LAYER.md): factories, migrations, schemas and component names fall
+		// through to it; a type the parent knows cannot be registered or migrated here (logged, not asserted).
+		desc_system(res::resource_system& res_system, const desc_system* parent);
 		~desc_system() = default;
 		desc_system(const desc_system&) = delete;
 		desc_system& operator=(const desc_system&) = delete;
@@ -53,8 +57,9 @@ namespace desc
 		template<typename T>
 		void register_component_desc(const std::string_view type_name)
 		{
-			add_desc<T>(type_name, schema_kind::component);
-			m_component_type_names.push_back(std::string{ type_name });
+			if (add_desc<T>(type_name, schema_kind::component)) {
+				m_component_type_names.push_back(std::string{ type_name });
+			}
 		}
 
 		void unregister_desc(const std::string_view type_name)
@@ -72,6 +77,10 @@ namespace desc
 		// Returns the stored schema, or nullptr when the name (or its id) is already taken.
 		const type_schema* register_schema(type_schema schema)
 		{
+			if (owned_by_parent(schema.name)) {
+				egLOG_ERROR("desc/error", "Schema '{}' not registered: the type belongs to the parent desc system", schema.name);
+				return nullptr;
+			}
 			ASSERT_MSG(schema.version == current_version(schema.name), "Schema '{}' is version {}, but the registered migrations lead to version {}!",
 				schema.name, schema.version, current_version(schema.name));
 			ASSERT_MSG(!m_schemas.contains(schema.name), "Schema '{}' is already registered!", schema.name);
@@ -94,18 +103,27 @@ namespace desc
 
 		bool is_registered(const std::string_view type_name) const
 		{
-			return factory_map.contains(std::string{ type_name });
+			return find_factory(type_name) != nullptr;
 		}
 
-		const std::vector<std::string>& get_component_type_names() const
+		// The parent's names first, then this layer's.
+		std::vector<std::string> get_component_type_names() const
 		{
-			return m_component_type_names;
+			std::vector<std::string> names = m_parent ? m_parent->get_component_type_names() : std::vector<std::string>{};
+			names.insert(names.end(), m_component_type_names.begin(), m_component_type_names.end());
+			return names;
 		}
+
+		const desc_system* parent() const { return m_parent; }
 
 		// Migration step: upgrades an object of `type` from `from_version` to `from_version + 1`.
 		// Objects without __version are version 1. A duplicate (type, from_version) keeps the first one.
 		void register_migration(std::string_view type, int from_version, std::function<void(json::object&)> fn)
 		{
+			if (owned_by_parent(type)) {
+				egLOG_ERROR("desc/error", "Migration for '{}' not registered: the type belongs to the parent desc system", type);
+				return;
+			}
 			auto& steps = m_migrations[std::string{ type }];
 			ASSERT_MSG(!steps.contains(from_version), "Migration for '{}' from version {} is already registered!", type, from_version);
 			steps.emplace(from_version, std::move(fn));
@@ -120,11 +138,11 @@ namespace desc
 
 		int current_version(std::string_view type) const
 		{
-			auto it = m_migrations.find(std::string{ type });
-			if (it == m_migrations.end() || it->second.empty()) {
+			const auto* steps = find_migrations(type);
+			if (!steps || steps->empty()) {
 				return 1;
 			}
-			return it->second.rbegin()->first + 1;
+			return steps->rbegin()->first + 1;
 		}
 
 		// Brings every typed object under `root` up to current_version. Throws std::runtime_error on
@@ -190,12 +208,12 @@ namespace desc
 
 		std::shared_ptr<desc::desc_base> create_instance(const std::string_view type_id, const res::tag& tag) const
 		{
-            auto it = factory_map.find(std::string{ type_id });
-			if (it == factory_map.end()) {
+			const auto* factory = find_factory(type_id);
+			if (!factory) {
 				egLOG("desc/error", "Failed to create desc instance of type '{0}': type not registered", type_id);
 				return nullptr;
 			}
-			auto instance = it->second();
+			auto instance = (*factory)();
 			instance->m_system = const_cast<desc_system*>(this);
 			instance->set_tag(tag);
             instance->set_type(type_id);
@@ -377,9 +395,40 @@ namespace desc
 		}
 
 	private:
-		template<typename T>
-		void add_desc(const std::string_view type_name, const schema_kind kind)
+		using factory_fn = std::function<std::shared_ptr<desc::desc_base>()>;
+		using migration_steps = std::map<int, std::function<void(json::object&)>>;
+
+		const factory_fn* find_factory(std::string_view type_name) const
 		{
+			auto it = factory_map.find(std::string{ type_name });
+			if (it != factory_map.end()) {
+				return &it->second;
+			}
+			return m_parent ? m_parent->find_factory(type_name) : nullptr;
+		}
+
+		const migration_steps* find_migrations(std::string_view type) const
+		{
+			auto it = m_migrations.find(std::string{ type });
+			if (it != m_migrations.end()) {
+				return &it->second;
+			}
+			return m_parent ? m_parent->find_migrations(type) : nullptr;
+		}
+
+		bool owned_by_parent(std::string_view type_name) const
+		{
+			return m_parent && (m_parent->is_registered(type_name) || m_parent->find_schema(type_name) || m_parent->find_migrations(type_name));
+		}
+
+		// False (nothing registered) when the parent owns the type.
+		template<typename T>
+		bool add_desc(const std::string_view type_name, const schema_kind kind)
+		{
+			if (owned_by_parent(type_name)) {
+				egLOG_ERROR("desc/error", "Desc type '{}' not registered: the type belongs to the parent desc system", type_name);
+				return false;
+			}
 			ASSERT_MSG(!factory_map.contains(std::string{ type_name }), "That desc type is already registered!");
 			factory_map[std::string{ type_name }] = []() -> std::shared_ptr<desc::desc_base> { return std::make_shared<T>(); };
 			if constexpr (desc::is_described<T>) {
@@ -389,6 +438,7 @@ namespace desc
 				}
 				register_schema(desc::schema_generator<T>::make(type_name, current_version(type_name), kind));
 			}
+			return true;
 		}
 
 		// Migrates the object itself first, then its members, so children a migration creates are visited too.
@@ -447,7 +497,7 @@ namespace desc
 				throw std::runtime_error(std::format("{}: '{}' version {} is newer than supported {}", context, type, version, current));
 			}
 			if (version < current) {
-				const auto& steps = m_migrations.at(type);
+				const auto& steps = *find_migrations(type);
 				for (int from = version; from < current; ++from) {
 					auto step = steps.find(from);
 					if (step == steps.end()) {
@@ -460,8 +510,9 @@ namespace desc
 		}
 
 		res::resource_system& m_res_system;
-		std::unordered_map<std::string, std::function<std::shared_ptr<desc::desc_base>()>> factory_map;
-		std::unordered_map<std::string, std::map<int, std::function<void(json::object&)>>> m_migrations;
+		const desc_system* m_parent = nullptr;
+		std::unordered_map<std::string, factory_fn> factory_map;
+		std::unordered_map<std::string, migration_steps> m_migrations;
 		std::vector<std::string> m_component_type_names;
 		schema_registry m_schemas;
 	};
