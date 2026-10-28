@@ -5,8 +5,8 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <filesystem>
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
 #endif
 #ifndef SNK_EDITOR_DATA_DIR
 #error "SNK_EDITOR_DATA_DIR must point at Editor/data"
@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(ShippedEditorData_HoldsIconsAndTemplates_ResRootDoesNot)
 		BOOST_TEST(fs::is_regular_file(fs::path{ SNK_EDITOR_DATA_DIR } / file), file);
 	}
 	for (const char* dir : { "icons", "templates" }) {
-		BOOST_TEST(!fs::exists(fs::path{ SNK_EDITOR_RES_DIR } / dir), dir);
+		BOOST_TEST(!fs::exists((fs::path{ SNK_TEST_PROJECT_DIR } / "res") / dir), dir);
 	}
 }
 

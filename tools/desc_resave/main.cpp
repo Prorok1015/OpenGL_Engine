@@ -4,7 +4,7 @@
 //   desc_resave <path to a resources directory named "res"> [--base <res dir>] [--edt <data dir>] [--check]
 //
 // --check writes nothing and exits with 1 when any file would change.
-// --base mounts a lower layer under the directory (Editor/res needs core/res for its base descs);
+// --base mounts a lower layer under the directory (projects/sandbox/res needs core/res for its base descs);
 // only the descs of the first directory (and of --edt) are touched.
 // --edt mounts a directory as the edt:// protocol (Editor/data) and resaves its descs as well.
 #include <snk/resource/res_system.h>

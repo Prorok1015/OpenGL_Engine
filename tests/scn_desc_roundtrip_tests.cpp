@@ -137,7 +137,7 @@ BOOST_AUTO_TEST_CASE(DirectionalLight_SerializedBytesMatchReference)
 		R"("diffuse":[5E-1,5E-1,5E-1,1E0],"ambient":[2.0000000298023224E-1,2.0000000298023224E-1,2.0000000298023224E-1,1E0],)"
 		R"("specular":[1E0,1E0,1E0,1E0]})");
 
-	// The light of Editor/res/levels/test_level.desc.
+	// The light of projects/sandbox/res/levels/test_level.desc.
 	scn::directional_light_desc l;
 	l.deserialize(*descs, parse(R"({"__type":"directional_light_desc","__version":1,)"
 		R"("direction":[0.3860273063182831,-0.8251869082450867,-0.41237056255340576,0.0],)"

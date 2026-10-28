@@ -21,6 +21,6 @@
 	path = lib3dparty/entt
 	url = https://github.com/skypjack/entt.git
 [submodule "Editor/res/samples"]
-	path = Editor/res/samples
+	path = projects/sandbox/res/samples
 	url = https://github.com/Prorok1015/OpenGL_Engine_samples.git
 	update = none

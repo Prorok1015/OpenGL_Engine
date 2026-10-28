@@ -38,8 +38,8 @@
 #include <optional>
 #include <string>
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
 #endif
 #ifndef SNK_EDITOR_DATA_DIR
 #error "SNK_EDITOR_DATA_DIR must point at Editor/data"
@@ -64,7 +64,7 @@ inline void set_render_validate(bool on)
 	cfg::initialize_configs(static_cast<int>(std::size(argv)), argv);
 }
 
-// Serves the repository's res:// files (core/res, overridden by Editor/res) from RAM.
+// Serves the repository's res:// files (core/res, overridden by the test project projects/sandbox/res) from RAM.
 inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::string_view protocol)
 {
 	for (const auto& entry : fs::recursive_directory_iterator(root)) {
@@ -79,7 +79,7 @@ inline void mount_dir(test_util::ram_resolver& ram, const fs::path& root, std::s
 
 inline void mount_repo_res(test_util::ram_resolver& ram)
 {
-	for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_EDITOR_RES_DIR } }) {
+	for (const fs::path& root : { fs::path{ SNK_CORE_RES_DIR }, (fs::path{ SNK_TEST_PROJECT_DIR } / "res") }) {
 		mount_dir(ram, root, res::tag::default_protocol());
 	}
 }

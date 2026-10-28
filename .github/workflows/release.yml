@@ -54,20 +54,24 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then ver="${GITHUB_REF_NAME}"; else ver="${GITHUB_SHA::8}"; fi
           echo "VERSION=${ver}" >> "$GITHUB_ENV"
 
-          # Layout keeps editor.cfg's `resource: path: ../res/` and `editor: data_path: ../data/`
-          # valid (resolved relative to the cfg file): config/../res == SnakeEditor/res,
-          # config/../data == SnakeEditor/data (edt://, editor-only icons and templates).
-          # Engine base resources (core/res) ship as res_core/ and the packaged
-          # cfg's base_path is rewritten from the in-repo ../../core/res/.
+          # Paths in editor.cfg resolve relative to the cfg file: config/../data == SnakeEditor/data (edt://,
+          # editor-only icons and templates). Engine base resources (core/res) ship as res_core/, the test
+          # project as projects/sandbox/ (EPIC-42 #157); the packaged cfg's base_path and resource path (used
+          # when the editor runs without --project) are rewritten from the in-repo ones.
           mkdir -p "${PKG}/bin" "${PKG}/config"
           BUILD_DIR=build/ci-windows-msvc-release
           cp "${BUILD_DIR}/Editor/editor.exe" "${PKG}/bin/" || cp "$(find "${BUILD_DIR}" -name editor.exe | head -n1)" "${PKG}/bin/"
           # Runtime DLLs (libs are static by default, so normally none).
           find "${BUILD_DIR}/Editor" -maxdepth 1 -name '*.dll' -exec cp {} "${PKG}/bin/" \;
-          sed 's#base_path: ../../core/res/#base_path: ../res_core/#' Editor/config/editor.cfg > "${PKG}/config/editor.cfg"
+          sed -e 's#base_path: ../../core/res/#base_path: ../res_core/#' \
+              -e 's#path: ../../projects/sandbox/res/#path: ../projects/sandbox/res/#' \
+              Editor/config/editor.cfg > "${PKG}/config/editor.cfg"
           grep -q 'base_path: ../res_core/' "${PKG}/config/editor.cfg"
+          grep -q ' path: ../projects/sandbox/res/' "${PKG}/config/editor.cfg"
           cp -r core/res "${PKG}/res_core"
-          cp -r Editor/res "${PKG}/res"
+          mkdir -p "${PKG}/projects"
+          cp -r projects/sandbox "${PKG}/projects/sandbox"
+          rm -rf "${PKG}/projects/sandbox/.cache" "${PKG}/projects/sandbox/.snk"
           cp -r Editor/data "${PKG}/data"
           cat > "${PKG}/README.txt" <<'TXT'
           SnakeEditor - OpenGL Engine editor
@@ -75,12 +79,12 @@ jobs:
           Requirements: Windows 10/11 x64, GPU with OpenGL 4.5+ drivers.
 
           Run from this folder:
-              bin\editor.exe --config config\editor.cfg
+              bin\editor.exe --config config\editor.cfg --project projects\sandbox
 
-          Keep the bin/, config/, data/, res/ and res_core/ folders side by side: the config
-          refers to the resources as ../res/ (editor layer, wins) and ../res_core/
-          (engine base layer), and to the editor's own icons and templates as ../data/,
-          relative to the config file. Logs are written
+          Keep the bin/, config/, data/, projects/ and res_core/ folders side by side: the
+          config refers to the engine's base resources as ../res_core/ and to the editor's
+          own icons and templates as ../data/, relative to the config file. projects\sandbox
+          is the test project; open another one with --project <folder>. Logs are written
           to logs\ relative to the working directory. When launched from the package
           root, the log file is <package>\logs\engine.log.
           TXT
