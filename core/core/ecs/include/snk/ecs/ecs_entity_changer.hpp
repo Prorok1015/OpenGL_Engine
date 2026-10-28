@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/ecs/ecs_entt_abi.h>
 #include <snk/common/ds/ds_type_id.hpp>
 #include <entt/entity/registry.hpp>
 #include <unordered_map>

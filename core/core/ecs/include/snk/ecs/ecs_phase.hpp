@@ -88,18 +88,33 @@ struct game_phase
 class SNK_API phase_table
 {
 public:
+	phase_table() = default;
+	// A layer over `parent` (MODULE_LAYER.md): the parent's game phases are visible here and their
+	// names cannot be added again; this table adds and removes only its own.
+	explicit phase_table(const phase_table* parent)
+		: m_parent(parent)
+	{
+	}
+
 	// False (and nothing added) when the name is empty, is a built-in name or is already taken.
 	// Add game phases before the first load: plans already built keep the old phase list until
 	// they are rebuilt (scn::context_set::rebuild_all_plans).
 	bool add_game_phase(std::string name, phase anchor, phase_side side);
+	// False when no game phase has this name (built-ins cannot be removed). Between frames only; plans built
+	// earlier keep the phase until they are rebuilt, and a system still registered for it then gets unknown_phase.
+	bool remove_game_phase(std::string_view name);
 
 	[[nodiscard]] bool contains(const phase_id& id) const;
+	// This table's own game phases, without the parent's.
 	[[nodiscard]] const std::vector<game_phase>& game_phases() const noexcept { return m_game; }
+	// The parent's game phases, then this table's.
+	[[nodiscard]] std::vector<game_phase> all_game_phases() const;
 
 	// Execution order: before-anchored game phases, the built-in, after-anchored game phases.
 	[[nodiscard]] std::vector<phase_id> ordered() const;
 
 private:
+	const phase_table* m_parent = nullptr;
 	std::vector<game_phase> m_game;
 };
 

@@ -102,7 +102,7 @@ namespace scn {
 	// the live children on a reload by node id. Every spawned node gets its node_id_component, which fills
 	// the registry's node_index.
 	SNK_API void reconcile(
-		ecs_assembler& assembler,
+		const ecs_assembler& assembler,
 		entt::registry& reg,
 		entt::entity live,
 		const prefab_desc::prefab_node& node,
@@ -113,7 +113,7 @@ namespace scn {
 	// False (`out` untouched) for a plain node without records; `source` is the prefab's tag, empty if none.
 	// Nested instances below `out` stay unexpanded: call it again on the child you descend into.
 	SNK_API bool expand_instance(
-		ecs_assembler& assembler,
+		const ecs_assembler& assembler,
 		const prefab_desc::prefab_node& node,
 		prefab_desc::prefab_node& out,
 		res::tag& source);
@@ -122,5 +122,5 @@ namespace scn {
 	SNK_API boost::json::object compose_component_json(const prefab_desc::prefab_comp_node& cnode, const desc::desc_base* parent);
 
 	SNK_API void trigger_hot_reload(scn::ecs_assembler& assembler, entt::registry& reg, res::res_handle<desc::desc_base> changed_prefab);
-	SNK_API void assemble_prefab(scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
+	SNK_API void assemble_prefab(const scn::ecs_assembler& assembler, entt::registry& reg, entt::entity e, const prefab_desc& prefab, const std::string_view name, res::tag source_prefab);
 }

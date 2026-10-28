@@ -14,11 +14,9 @@
 #include <boost/json.hpp>
 #include <snk/common/logger/engine_log.h>
 
-edt::world_controller::world_controller(scene_document& state, editor_services& services, res::resource_system& res, desc::desc_system& desc)
+edt::world_controller::world_controller(scene_document& state, editor_services& services)
 	: m_state(state)
 	, m_services(services)
-	, m_res(res)
-	, m_desc(desc)
 {
 }
 
@@ -88,7 +86,7 @@ void edt::world_controller::clear_active_world()
 void edt::world_controller::create_world(const std::string& name)
 {
 	auto ctx_mgr = m_services.ctx_manager.lock();
-	if (!ctx_mgr || !m_services.sfactory || !m_services.assembler) return;
+	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) return;
 
 	if (ctx_mgr->level_set().has(name)) {
 		egLOG_WARN("Editor/CreateWorld", "World '{}' already exists, choose another name", name);
@@ -98,7 +96,7 @@ void edt::world_controller::create_world(const std::string& name)
 	namespace json = boost::json;
 
 	auto tag = res::tag::make("templates/world.desc");
-	auto text = m_res.require_sync<res::text_resource>(tag);
+	auto text = m_services.resources()->require_sync<res::text_resource>(tag);
 	json::object world_json;
 	if (text.is_ready()) {
 		try {
@@ -117,10 +115,10 @@ void edt::world_controller::create_world(const std::string& name)
 	world_json["name"] = name;
 
 	res::tag mem_tag{ "memory://editor/world_" + name + ".desc" };
-	m_res.store(mem_tag, m_desc.serialize_to_bytes(json::value{ world_json }));
-	m_res.signal_changed(mem_tag);
+	m_services.writable_resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ world_json }));
+	m_services.resources()->signal_changed(mem_tag);
 
-	auto world_res = m_res.require_sync<scn::world_desc>(mem_tag);
+	auto world_res = m_services.resources()->require_sync<scn::world_desc>(mem_tag);
 	if (!world_res.is_ready()) {
 		egLOG("Editor/CreateWorld", "Failed to create world desc for '{}'", name);
 		return;
@@ -130,10 +128,10 @@ void edt::world_controller::create_world(const std::string& name)
 	uint32_t new_id = lvl.acquire_free_id();
 	scn::world_context& world = lvl.create_context(name, new_id);
 
-	lvl.add_systems(world, world_res->get_systems(), *m_services.sfactory);
+	lvl.add_systems(world, world_res->get_systems(), *m_services.sfactory());
 
 	entt::entity e = world.state().create();
-	m_services.assembler->spawn_from_desc(world.state(), e, *world_res, name);
+	m_services.assembler()->spawn_from_desc(world.state(), e, *world_res, name);
 
 	m_state.world_names.push_back(name);
 	m_state.world_descs.push_back(*world_res);

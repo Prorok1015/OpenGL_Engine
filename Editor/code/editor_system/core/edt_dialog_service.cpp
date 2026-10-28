@@ -408,6 +408,99 @@ private:
 	bool m_acknowledged = false;
 };
 
+class choice_request final : public request
+{
+public:
+	choice_request(dialog_id request_id, std::string title, std::string text, std::vector<std::string> options,
+		std::function<void(std::optional<std::size_t>)> on_answer)
+		: request(request_id)
+		, m_title(std::move(title))
+		, m_text(std::move(text))
+		, m_options(std::move(options))
+		, m_on_answer(std::move(on_answer))
+	{
+	}
+
+	bool answer_automatically(const edt::dialog_auto_answer& answer) override
+	{
+		if (!answer.cancel_all) return false;
+		finish(std::nullopt);
+		return true;
+	}
+
+	bool draw() override
+	{
+		const std::string label = popup_label(m_title.c_str());
+
+		std::optional<std::optional<std::size_t>> picked;
+		if (begin_modal(label, MODAL_FLAGS)) {
+			ImGui::TextUnformatted(m_text.c_str());
+			ImGui::Spacing();
+			ImGui::Separator();
+			ImGui::Spacing();
+			for (std::size_t i = 0; i < m_options.size(); ++i) {
+				if (i > 0) ImGui::SameLine();
+				if (ImGui::Button(m_options[i].c_str(), {140.f, 0.f})) picked = i;
+			}
+			// Answered from outside (dialog_service::answer): the same as a click.
+			if (!picked) picked = m_answer;
+			if (picked) ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		} else {
+			picked.emplace(); // closed from outside (Esc): a cancel
+		}
+
+		if (!picked) return true;
+		finish(*picked);
+		return false;
+	}
+
+	const char* kind() const override { return "choice"; }
+	std::string text() const override { return m_text; }
+
+	json::value answer_schema() const override
+	{
+		return json::parse(R"({"type":"object","properties":{"index":{"type":"integer","minimum":0},"cancel":{"type":"boolean"}},"additionalProperties":false})");
+	}
+
+	std::optional<std::string> accept(const json::value& answer) override
+	{
+		const json::object& fields = answer.as_object();
+		const json::value* index = fields.if_contains("index");
+		const json::value* cancel = fields.if_contains("cancel");
+		const bool wants_cancel = cancel && cancel->is_bool() && cancel->as_bool();
+		if (wants_cancel && index) return "give either an index or cancel, not both";
+		if (wants_cancel) {
+			m_answer.emplace();
+			return std::nullopt;
+		}
+		if (index && index->is_int64() && index->as_int64() >= 0
+			&& static_cast<std::uint64_t>(index->as_int64()) < m_options.size()) {
+			m_answer = static_cast<std::size_t>(index->as_int64());
+			return std::nullopt;
+		}
+		return std::format("the answer needs an index below {}, or cancel: true", m_options.size());
+	}
+
+	void settle() override
+	{
+		if (m_answer) finish(*m_answer);
+	}
+
+private:
+	void finish(std::optional<std::size_t> picked)
+	{
+		if (m_on_answer) m_on_answer(picked);
+	}
+
+	std::string m_title;
+	std::string m_text;
+	std::vector<std::string> m_options;
+	std::function<void(std::optional<std::size_t>)> m_on_answer;
+	// Outer: an answer arrived through dialog_service::answer; inner: the button, or nullopt for a cancel.
+	std::optional<std::optional<std::size_t>> m_answer;
+};
+
 } // namespace
 
 edt::dialog_service::dialog_service() = default;
@@ -437,6 +530,14 @@ edt::dialog_service::dialog_id edt::dialog_service::pick_file(pick_file_options 
 edt::dialog_service::dialog_id edt::dialog_service::message(message_level level, std::string text)
 {
 	return enqueue(std::make_unique<message_request>(m_next_id, level, std::move(text)));
+}
+
+edt::dialog_service::dialog_id edt::dialog_service::choose(std::string title, std::string text,
+	std::vector<std::string> options, std::function<void(std::optional<std::size_t>)> on_answer)
+{
+	ASSERT_MSG(!options.empty(), "dialog_service::choose needs at least one option");
+	return enqueue(std::make_unique<choice_request>(m_next_id, std::move(title), std::move(text), std::move(options),
+		std::move(on_answer)));
 }
 
 std::vector<edt::dialog_service::dialog_info> edt::dialog_service::list() const

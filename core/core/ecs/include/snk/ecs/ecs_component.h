@@ -1,7 +1,12 @@
 #pragma once
+#include <snk/ecs/ecs_entt_abi.h>
 #include <snk/ecs/ecs_command_buffer.hpp>
 #include <entt/meta/meta.hpp>
 #include <entt/meta/factory.hpp>
+#include <entt/meta/context.hpp>
+#include <entt/locator/locator.hpp>
+#include <snk/common/snk_api.h>
+
 namespace ecs
 {
     using namespace entt::literals;
@@ -32,9 +37,24 @@ namespace ecs
         loader->get<T>(archive);
     }
 
+    // The engine's meta context, read-only: a game module registers into its layer's context (scene_layer::meta()).
+    // Registering into the engine's one, or attaching a binary's locator to it, is base-only
+    // (<snk/ecs/ecs_meta_context.h>, MODULE_LAYER.md).
+    [[nodiscard]] SNK_API const entt::meta_ctx& meta_context();
+
+    // `id` in the layer's context first (none: null), then in the engine's.
+    [[nodiscard]] inline entt::meta_type find_meta(const entt::meta_ctx* layer, entt::id_type id) {
+        if (layer) {
+            if (auto type = entt::resolve(*layer, id)) {
+                return type;
+            }
+        }
+        return entt::resolve(meta_context(), id);
+    }
+
     template<typename T>
-    decltype(auto) register_component(const char* name) {
-        return entt::meta<T>()
+    entt::meta_factory<T> register_component(entt::meta_ctx& ctx) {
+        return entt::meta_factory<T>{ ctx }
             .type(entt::type_hash<T>::value())
             .template func<&meta_snapshot_get<T>>(snapshot_get_h)
             .template func<&meta_loader_get<T>>(loader_get_h);

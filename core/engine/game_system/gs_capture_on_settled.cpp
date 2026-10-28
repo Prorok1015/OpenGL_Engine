@@ -3,7 +3,7 @@
 #include <snk/command/cmd_base64.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/common/logger/engine_log.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 
 #include <boost/json/object.hpp>
 

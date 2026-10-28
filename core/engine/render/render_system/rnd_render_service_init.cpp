@@ -7,7 +7,7 @@
 #include <snk/driver_gl/rnd_gl_swapchain.h>
 #include <snk/driver_null/rnd_null_swapchain.h>
 #include <snk/driver_validation/rnd_validation_driver.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <string>
 #include <snk/desc/desc_system.h>

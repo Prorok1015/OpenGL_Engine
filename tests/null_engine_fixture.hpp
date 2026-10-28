@@ -14,7 +14,7 @@
 #include <snk/application/application.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_store.hpp>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/desc/adapters/desc_adapter_t.h>
 #include <snk/desc/desc_system.h>
 #include <snk/ecs/ecs_system.h>

@@ -11,7 +11,7 @@
 
 // How the editor turns an edit inside a prefab instance into override records on the instance node.
 // `owner` is the node of the edited desc that instantiates the prefab, `target` the node-id path below it.
-namespace edt { class scene_document; }
+namespace edt { class scene_document; struct editor_services; }
 
 namespace edt::override_edit
 {
@@ -45,7 +45,8 @@ namespace edt::override_edit
 	class view_cache
 	{
 	public:
-		view_cache(scn::ecs_assembler& assembler, const scene_document& state) : m_assembler(assembler), m_state(state) {}
+		// The prefabs are expanded with the assembler of the game layer current at each lookup.
+		view_cache(const editor_services& services, const scene_document& state) : m_services(services), m_state(state) {}
 
 		void invalidate();
 		std::shared_ptr<const std::optional<prefab_node>> base(const prefab_node& owner, std::span<const uint64_t> target);
@@ -62,7 +63,7 @@ namespace edt::override_edit
 
 		void sync_generation();
 
-		scn::ecs_assembler& m_assembler;
+		const editor_services& m_services;
 		const scene_document& m_state;
 		uint64_t m_generation = 0;
 		std::vector<entry<std::optional<prefab_node>>> m_bases;

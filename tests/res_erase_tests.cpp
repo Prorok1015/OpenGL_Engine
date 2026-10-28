@@ -252,6 +252,20 @@ BOOST_AUTO_TEST_CASE(StoreEraseStoreErase_EndsWithTheFileGone)
 	BOOST_TEST(!memory.exists(tag));
 }
 
+BOOST_AUTO_TEST_CASE(StoreAndEraseInALoop_EveryStoreIsAccepted)
+{
+	// The io thread removes the file while the next store checks its path: that check must not fail.
+	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
+	const res::tag tag{ "memory://m/loop.txt" };
+	for (int i = 0; i < 300; ++i) {
+		BOOST_TEST_CONTEXT("round " << i) {
+			BOOST_REQUIRE(memory.store(tag, test_util::to_bytes("v")));
+			BOOST_REQUIRE(memory.erase(tag));
+		}
+	}
+	BOOST_TEST(!memory.exists(tag));
+}
+
 BOOST_AUTO_TEST_CASE(Store_AfterErase_KeepsTheNewFile)
 {
 	res::vfs_resolver memory{ res::tag::memory, std::vector<std::filesystem::path>{ root } };
