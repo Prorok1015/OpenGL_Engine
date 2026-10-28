@@ -179,9 +179,57 @@ BOOST_AUTO_TEST_CASE(Store_PatternsOfAnotherProtocol_DoNotOpenThisOne)
 }
 
 #ifndef _WIN32
-BOOST_AUTO_TEST_CASE(Store_ThroughALinkIntoAFolderTheListDoesNotCover_IsRefused)
+// safe_path refuses a link as the last component, so a link can only matter through a linked folder in the path:
+// the tag then names a writable place while the file lands in another folder of the same root.
+namespace {
+
+std::string content_of(const std::filesystem::path& file)
 {
-	test_util::temp_dir dir{ "write_policy_link" };
+	std::ifstream in(file);
+	return std::string{ std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(Store_ThroughALinkedFolderIntoAFolderTheListDoesNotCover_IsRefusedByThePolicy)
+{
+	test_util::temp_dir dir{ "write_policy_linked_folder" };
+	dir.write("icons/real.txt", "shipped");
+	std::filesystem::create_directories(dir.path() / "settings");
+	std::filesystem::create_symlink("../icons", dir.path() / "settings" / "linked");
+	const std::vector<std::filesystem::path> roots{ dir.path() };
+	{
+		// Control: without a policy safe_path accepts this tag, so the refusal below comes from the policy.
+		res::vfs_resolver open{ "edt", roots };
+		BOOST_REQUIRE(open.store(res::tag{ "edt://settings/linked/probe.txt" }, bytes_of("probe")));
+		BOOST_REQUIRE(wait_for_file(dir.path() / "icons" / "probe.txt"));
+	}
+	{
+		res::vfs_resolver resolver{ "edt", roots, res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
+
+		BOOST_TEST(!resolver.store(res::tag{ "edt://settings/linked/real.txt" }, bytes_of("overwritten")));
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
+	BOOST_TEST(content_of(dir.path() / "icons" / "real.txt") == "shipped");
+}
+
+BOOST_AUTO_TEST_CASE(Store_ThroughALinkedFolderInsideTheList_IsAccepted)
+{
+	test_util::temp_dir dir{ "write_policy_linked_inside" };
+	dir.write("settings/inside/keep.txt", "x");
+	std::filesystem::create_symlink("inside", dir.path() / "settings" / "alias");
+	{
+		res::vfs_resolver resolver{ "edt", std::vector<std::filesystem::path>{ dir.path() },
+			res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
+
+		BOOST_TEST(resolver.store(res::tag{ "edt://settings/alias/new.txt" }, bytes_of("x")));
+		BOOST_TEST(wait_for_file(dir.path() / "settings" / "inside" / "new.txt"));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Store_ALinkAsTheLastComponent_IsRefusedWhereverItLeads)
+{
+	test_util::temp_dir dir{ "write_policy_leaf_link" };
 	dir.write("icons/real.txt", "shipped");
 	dir.write("settings/inside/real.txt", "mine");
 	std::filesystem::create_symlink("../icons/real.txt", dir.path() / "settings" / "to_icons.txt");
@@ -191,12 +239,11 @@ BOOST_AUTO_TEST_CASE(Store_ThroughALinkIntoAFolderTheListDoesNotCover_IsRefused)
 			res::mount_access::read_write, edt_policy({ "edt://settings/**" }) };
 
 		BOOST_TEST(!resolver.store(res::tag{ "edt://settings/to_icons.txt" }, bytes_of("overwritten")));
-		BOOST_TEST(resolver.store(res::tag{ "edt://settings/to_inside.txt" }, bytes_of("updated")));
+		BOOST_TEST(!resolver.store(res::tag{ "edt://settings/to_inside.txt" }, bytes_of("updated")));
 		std::this_thread::sleep_for(std::chrono::milliseconds(200));
 	}
-	std::ifstream shipped(dir.path() / "icons" / "real.txt");
-	const std::string content{ std::istreambuf_iterator<char>(shipped), std::istreambuf_iterator<char>() };
-	BOOST_TEST(content == "shipped");
+	BOOST_TEST(content_of(dir.path() / "icons" / "real.txt") == "shipped");
+	BOOST_TEST(content_of(dir.path() / "settings" / "inside" / "real.txt") == "mine");
 }
 #endif
 
