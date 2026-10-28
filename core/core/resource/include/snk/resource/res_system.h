@@ -116,6 +116,17 @@ namespace res
 			return resolvers.at(tag.protocol())->store(tag, data);
 		}
 
+		// store() that returns once the data is written, and whether it was (resolver::store_sync). Blocks the caller.
+		bool store_sync(const tag& tag, const std::vector<std::byte>& data) {
+			check_writable(tag);
+			const auto& resolvers = root().m_resolvers;
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				return false;
+			}
+			return resolvers.at(tag.protocol())->store_sync(tag, data);
+		}
+
 
 		// keep_dependencies retains graph edges until unwatch, without retaining resource data.
 		void watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies = false) {

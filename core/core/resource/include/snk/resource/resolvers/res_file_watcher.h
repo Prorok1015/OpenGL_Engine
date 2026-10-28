@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <filesystem>
 #include <chrono>
 #include <mutex>
@@ -94,7 +95,7 @@ namespace res {
 
         std::function<void(fs::path)> m_notify_cb;
         boost::asio::steady_timer timer;
-        bool m_stopped = false;
+        std::atomic<bool> m_stopped{ false };
         std::vector<fs::path> watch_paths;
         std::mutex m_state_mutex;
         std::unordered_map<fs::path, fs::file_time_type> file_states;

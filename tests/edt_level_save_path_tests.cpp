@@ -8,29 +8,30 @@
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <system_error>
-#include <thread>
 
 // Saving a level writes through the resource system, never to a path of its own (#394): a Save As path that leaves
-// the resource root, or a level file that is a symlink, is refused and nothing is written outside the root.
+// the resource root, or a level file that is a symlink, is refused and nothing is written outside the root. The save
+// waits for the write (store_sync), so these checks need no polling, and a failed write leaves the document dirty.
 
 namespace {
 
 namespace fs = std::filesystem;
 
-bool wait_for_file(const fs::path& p)
+// The temp files of the writes in `folder` (".<name>.<random>.tmp"): none may be left behind.
+std::size_t temp_files_in(const fs::path& folder)
 {
-	for (int i = 0; i < 500; ++i) {
-		if (fs::exists(p)) return true;
-		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	std::size_t count = 0;
+	std::error_code ec;
+	for (const auto& entry : fs::directory_iterator(folder, ec)) {
+		if (entry.path().extension() == ".tmp") ++count;
 	}
-	return false;
+	return count;
 }
 
 std::string read_file(const fs::path& p)
@@ -79,11 +80,34 @@ BOOST_FIXTURE_TEST_SUITE(EdtLevelSavePathTests, level_save_fixture)
 
 BOOST_AUTO_TEST_CASE(SaveAs_WritesTheLevelInsideTheRoot)
 {
+	state.commit("edit", edt::commit_mode::state_only);
 	BOOST_REQUIRE(level_ctrl.save_level_as("levels/new.desc"));
 
-	BOOST_TEST(wait_for_file(content / "levels" / "new.desc"));
+	BOOST_TEST(fs::exists(content / "levels" / "new.desc"));
+	BOOST_TEST(!state.is_dirty());
 	BOOST_TEST((state.level_tag == res::tag::make("levels/new.desc")));
 	BOOST_TEST(read_file(content / "levels" / "new.desc").find("\"worlds\"") != std::string::npos);
+	BOOST_TEST(temp_files_in(content / "levels") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_AFailedWriteKeepsTheDocumentDirty)
+{
+	// A folder where the level file should be: the write itself succeeds, replacing the target cannot.
+	dir.write("content/levels/busy.desc/keep.txt", "keep");
+	state.commit("edit", edt::commit_mode::state_only);
+
+	BOOST_TEST(!level_ctrl.save_level_as("levels/busy.desc"));
+
+	BOOST_TEST(state.is_dirty());
+	BOOST_TEST(!state.level_tag.is_valid());
+	BOOST_TEST(read_file(content / "levels" / "busy.desc" / "keep.txt") == "keep");
+	BOOST_TEST(temp_files_in(content / "levels") == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(SaveAs_RefusesAPathWithAProtocol)
+{
+	BOOST_TEST(!level_ctrl.save_level_as("memory://levels/x.desc"));
+	BOOST_TEST(!state.level_tag.is_valid());
 }
 
 BOOST_AUTO_TEST_CASE(SaveAs_RefusesAPathThatLeavesTheRoot)
@@ -95,7 +119,6 @@ BOOST_AUTO_TEST_CASE(SaveAs_RefusesAPathThatLeavesTheRoot)
 		BOOST_TEST(!level_ctrl.save_level_as(path));
 		BOOST_TEST(!state.level_tag.is_valid());
 	}
-	// The io thread has nothing queued, so nothing can still appear.
 	BOOST_TEST(!fs::exists(dir.path() / "escape.desc"));
 	BOOST_TEST(!fs::exists(absolute));
 }

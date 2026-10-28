@@ -237,7 +237,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	hooks.new_level = [this] { m_level_ctrl.new_level(); };
 	hooks.quick_save = [this] { return m_state.save().saved; };
-	hooks.save_level_as = [this](const std::string& rel_path) { return m_state.save_as(res::tag::make(rel_path)).saved; };
+	hooks.save_level_as = [this](const std::string& rel_path) {
+		if (rel_path.find("://") != std::string::npos) {
+			egLOG_ERROR("Editor/Save", "Level not saved: '{}' must be a path inside the project, without a protocol", rel_path);
+			return false;
+		}
+		return m_state.save_as(res::tag::make(rel_path)).saved;
+	};
 	hooks.discard_changes = [this] { m_state.mark_clean(); };
 	hooks.load_level = [this](const std::filesystem::path& abs_path) {
 		const auto relative = abs_path.lexically_relative(m_res.get_resources_path());

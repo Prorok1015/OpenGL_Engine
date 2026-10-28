@@ -705,6 +705,24 @@ BOOST_AUTO_TEST_CASE(New_WhenDirty_FailedSaveDoesNotCreate)
 	BOOST_TEST((calls == std::vector<std::string>{ "quick_save" }));
 }
 
+// #394: a write that failed is shown to the user, not only logged; a script calling file.save gets the failure instead.
+BOOST_AUTO_TEST_CASE(QuickSave_AFailedWriteShowsAnError)
+{
+	path = "levels/a.desc";
+	dirty = true;
+	quick_save_ok = false;
+	menu->quick_save();
+
+	const auto shown = service.list();
+	BOOST_REQUIRE(shown.size() == 1u);
+	BOOST_TEST(shown[0].kind == "message");
+	BOOST_TEST(dirty);
+
+	const auto scripted = actions.invoke("file.save", boost::json::object{});
+	BOOST_TEST(!scripted.ok);
+	BOOST_TEST(service.list().size() == 1u);
+}
+
 BOOST_AUTO_TEST_CASE(WindowClose_WhileSaveAsIsOpen_AsksNothingMore)
 {
 	closing_editor editor(*this);

@@ -46,6 +46,22 @@ bool wait_for_file(const std::filesystem::path& p)
 	return false;
 }
 
+std::string read_text(const std::filesystem::path& p)
+{
+	std::ifstream in(p, std::ios::binary);
+	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+}
+
+std::size_t temp_files_in(const std::filesystem::path& folder)
+{
+	std::size_t count = 0;
+	std::error_code ec;
+	for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+		if (entry.path().extension() == ".tmp") ++count;
+	}
+	return count;
+}
+
 // Mount order matters: the LAST point is the top of the stack and wins.
 struct mounts_fixture
 {
@@ -132,11 +148,11 @@ BOOST_FIXTURE_TEST_CASE(Store_WritesToTopMountOnlyAndCreatesFolders, mounts_fixt
 	BOOST_TEST(wait_for_file(high / "gen/out/new.bin"));
 	BOOST_TEST(!std::filesystem::exists(low / "gen/out/new.bin"));
 	// the atomic-rename temp file is gone
-	BOOST_TEST(!std::filesystem::exists(high / "gen/out/new.bin.tmp"));
+	BOOST_TEST(temp_files_in(high / "gen/out") == 0u);
 }
 
-// #394: a temp file planted as a symlink must not carry the write out of the root (the old temp name and the new one).
-BOOST_FIXTURE_TEST_CASE(Store_RefusesATempFileThatIsASymlink, mounts_fixture)
+// #394: the temp file of a store has a name nobody can guess, so links planted at the old names are never followed.
+BOOST_FIXTURE_TEST_CASE(StoreSync_IgnoresTempFileLinksAtGuessableNames, mounts_fixture)
 {
 	dir.write("outside.txt", "keep");
 	std::filesystem::create_directories(high / "gen");
@@ -149,14 +165,68 @@ BOOST_FIXTURE_TEST_CASE(Store_RefusesATempFileThatIsASymlink, mounts_fixture)
 		}
 	}
 
-	{
-		res::vfs_resolver r("res", { low, high });
-		BOOST_TEST(!r.store(res::tag{ "res://gen/x.txt" }, to_bytes("payload")));
-	} // the io thread has finished whatever it had queued
+	res::vfs_resolver r("res", { low, high });
+	BOOST_TEST(r.store_sync(res::tag{ "res://gen/x.txt" }, to_bytes("payload")));
 
-	std::ifstream in(dir.path() / "outside.txt", std::ios::binary);
-	BOOST_TEST(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()) == "keep");
-	BOOST_TEST(!std::filesystem::exists(high / "gen/x.txt"));
+	BOOST_TEST(read_text(high / "gen/x.txt") == "payload");
+	BOOST_TEST(read_text(dir.path() / "outside.txt") == "keep");
+	BOOST_TEST(std::filesystem::is_symlink(high / "gen/x.tmp"));
+}
+
+// #394: a write that fails leaves what was there, removes its temp file and does not serve the lost bytes.
+BOOST_FIXTURE_TEST_CASE(StoreSync_AFailedReplaceLeavesTheTargetAndNoTempFile, mounts_fixture)
+{
+	dir.write("high/gen/busy.bin/keep.txt", "keep"); // a folder where the file should go: the rename fails
+
+	res::vfs_resolver r("res", { low, high });
+	BOOST_TEST(!r.store_sync(res::tag{ "res://gen/busy.bin" }, to_bytes("payload")));
+
+	BOOST_TEST(read_text(high / "gen/busy.bin/keep.txt") == "keep");
+	BOOST_TEST(temp_files_in(high / "gen") == 0u);
+	BOOST_TEST(load(r, "res://gen/busy.bin") != "payload");
+}
+
+BOOST_FIXTURE_TEST_CASE(StoreSync_AFailedOpenLeavesTheOldFile, mounts_fixture)
+{
+	dir.write("high/ro/old.txt", "old");
+	namespace fs = std::filesystem;
+	fs::permissions(high / "ro", fs::perms::owner_read | fs::perms::owner_exec, fs::perm_options::replace);
+	{
+		std::ofstream probe(high / "ro" / "probe");
+		if (probe.is_open()) {
+			// Root, or a file system without permissions (Windows): the folder is still writable.
+			probe.close();
+			fs::permissions(high / "ro", fs::perms::owner_all, fs::perm_options::replace);
+			BOOST_TEST_MESSAGE("a read-only folder cannot be made here, skipping");
+			return;
+		}
+	}
+
+	res::vfs_resolver r("res", { low, high });
+	const bool stored = r.store_sync(res::tag{ "res://ro/old.txt" }, to_bytes("new"));
+	fs::permissions(high / "ro", fs::perms::owner_all, fs::perm_options::replace);
+
+	BOOST_TEST(!stored);
+	BOOST_TEST(read_text(high / "ro/old.txt") == "old");
+	BOOST_TEST(temp_files_in(high / "ro") == 0u);
+	BOOST_TEST(load(r, "res://ro/old.txt") == "old");
+}
+
+// #394: a symlinked parent folder gets no folders made through it.
+BOOST_FIXTURE_TEST_CASE(StoreSync_RefusesASymlinkedParentFolder, mounts_fixture)
+{
+	std::filesystem::create_directories(dir.path() / "outside");
+	std::error_code ec;
+	std::filesystem::create_directory_symlink(dir.path() / "outside", high / "linkdir", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	res::vfs_resolver r("res", { low, high });
+	BOOST_TEST(!r.store_sync(res::tag{ "res://linkdir/sub/x.bin" }, to_bytes("payload")));
+
+	BOOST_TEST(!std::filesystem::exists(dir.path() / "outside" / "sub"));
 }
 
 // A store right before shutdown (a level saved, then the editor closed) still reaches the disk.

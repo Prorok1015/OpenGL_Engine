@@ -62,6 +62,17 @@ bool edt::file_menu::invoke(std::string_view action_id, json::value args)
 	return outcome.ok;
 }
 
+bool edt::file_menu::save_or_report(std::string_view action_id, json::value args)
+{
+	const action_result outcome = m_actions.invoke(action_id, args);
+	if (!outcome.ok) {
+		egLOG_WARN("Editor/File", "{}", outcome.error);
+		m_dialogs.message(message_level::error, "The level was not saved: " + outcome.error + ". The changes are kept; "
+			"the console has the cause.");
+	}
+	return outcome.ok;
+}
+
 std::optional<edt::dialog_service::dialog_id> edt::file_menu::guard_unsaved(std::function<void(bool discard)> action)
 {
 	if (!m_hooks.is_dirty()) {
@@ -83,7 +94,7 @@ void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::functio
 		}
 		if (!m_hooks.level_path().empty()) {
 			// A failed write must not continue into New/Exit: the changes would be lost.
-			if (invoke("file.save", json::object{})) action(true);
+			if (save_or_report("file.save", json::object{})) action(true);
 			return;
 		}
 		// Untitled level: Save-As runs first, the action follows a successful write.
@@ -165,7 +176,7 @@ void edt::file_menu::ask_save_path(std::function<void()> then)
 		if (!alive.lock()) return;
 		auto after = std::move(m_after_save);
 		m_after_save.clear();
-		if (!invoke("file.save_as", json::object{ { "path", path } })) return;
+		if (!save_or_report("file.save_as", json::object{ { "path", path } })) return;
 		for (const auto& action : after) action();
 	});
 }
@@ -174,7 +185,7 @@ void edt::file_menu::quick_save()
 {
 	if (!m_hooks.has_scene()) return;
 	if (!m_hooks.level_path().empty()) {
-		invoke("file.save", json::object{});
+		save_or_report("file.save", json::object{});
 	} else {
 		save_level();
 	}

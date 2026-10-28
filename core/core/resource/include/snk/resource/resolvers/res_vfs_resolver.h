@@ -12,6 +12,9 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include <cstdint>
+#include <atomic>
+#include <future>
+#include <memory>
 #include <snk/common/snk_api.h>
 
 namespace res
@@ -28,6 +31,9 @@ namespace res
 		std::optional<res::tag> path_mapper(const fs::path& path) const;
 		virtual core::res::res_resolver_interface::async_raw_data resolve(const res::tag& tag) const override;
 		virtual bool store(const ::res::tag& tag, const std::vector<std::byte>& data) override;
+		// Waits for the io thread to write the file (behind the stores queued before it); false when it was refused or
+		// the write failed, and then the file on disk is the one that was there before.
+		virtual bool store_sync(const ::res::tag& tag, const std::vector<std::byte>& data) override;
 		// Only for the memory protocol (scratch data); false for the other protocols (their files stay) and for a tag
 		// this resolver does not hold.
 		virtual bool erase(const ::res::tag& tag) override;
@@ -40,8 +46,13 @@ namespace res
 		std::optional<fs::path> safe_path(const fs::path& root, const tag& tag) const;
 		std::optional<fs::path> resolve_tag(const tag& tag) const;
 		// The file a store writes first and then renames over the target: a tag of its own, so safe_path checks it too.
-		static res::tag temp_tag_of(const tag& tag);
-		void save_pending_write(res::tag tag, fs::path path, fs::path tmp_path, core::res::res_resolver_interface::async_raw_data data);
+		// Hidden and unique per store, so it never lands on a real resource or on a link planted at a guessed name.
+		static res::tag make_temp_tag(const tag& tag);
+		bool queue_store(const ::res::tag& tag, const std::vector<std::byte>& data, std::shared_ptr<std::promise<bool>> done);
+		// On the io thread. On any failure the target is left as it was, the temp file is removed and the pending entry
+		// dropped, so resolve() does not serve bytes that never reached the disk.
+		bool write_pending(const res::tag& tag, const fs::path& target_path, const res::tag& tmp_tag, const fs::path& tmp_path,
+			const core::res::res_resolver_interface::async_raw_data& data);
 		void resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const;
 
 	private:
@@ -57,5 +68,7 @@ namespace res
 		std::unordered_map<res::tag, std::uint64_t> m_erased;
 		std::uint64_t m_erase_generation = 0;
 		mount_access m_access = mount_access::read_write;
+		// Set first in the destructor: a watcher poll still queued must not signal a resource_system being destroyed.
+		std::atomic<bool> m_closing{ false };
 	};
 }
