@@ -242,6 +242,14 @@ res::resource_system::~resource_system() {
   // The gate is closed: nothing parked runs any more, and what it holds (adapters, blocks) goes now, not when the root
   // settles what it waited for.
   cancel_parked();
+  if (m_parent) {
+    std::unique_lock lock(m_cache_mutex);
+    for (const auto &[dependent, targets] : m_depends_on) {
+      for (const auto &target : targets) {
+        release_in_parents(target);
+      }
+    }
+  }
   // The vfs threads are joined only now: the tasks that were running may still store() through them.
   m_resolvers.clear();
   if (m_parent) {
@@ -550,6 +558,7 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
           m_dependents.erase(it);
         }
       }
+      release_in_parents(target);
     }
     m_depends_on.erase(old);
   }
@@ -561,6 +570,7 @@ void res::resource_system::record_dependencies(const res::tag &dependent,
     if (dep.target != dependent && std::ranges::find(targets, dep.target) == targets.end()) {
       targets.push_back(dep.target);
       m_dependents[dep.target].push_back(dependent);
+      retain_in_parents(dep.target);
     }
   }
   if (!targets.empty()) {
@@ -583,6 +593,9 @@ void res::resource_system::prune_released_edges() {
   // entry, and a tag that loads again records its edges anew, so nothing is lost.
   const auto is_released = [this](const res::tag &tag) {
     if (m_cache.any_of_tag(tag, [](const cache_entry &entry) { return !entry.expired(); })) {
+      return false;
+    }
+    if (needed_by_layers(tag)) {
       return false;
     }
     const bool expired_entry = m_cache.any_of_tag(tag, [](const cache_entry &) { return true; });
@@ -641,6 +654,7 @@ void res::resource_system::prune_released_edges() {
           m_dependents.erase(dependents);
         }
       }
+      release_in_parents(target);
     }
     m_depends_on.erase(it);
   }
@@ -1053,4 +1067,25 @@ void res::resource_system::serialize_pinned(const res::tag &tag, std::shared_ptr
       step->run();
     }
   });
+}
+
+void res::resource_system::retain_in_parents(const res::tag &target) {
+  for (resource_system *parent = m_parent; parent; parent = parent->m_parent) {
+    std::lock_guard lock(parent->m_layer_needs_mutex);
+    ++parent->m_layer_needs[target];
+  }
+}
+
+void res::resource_system::release_in_parents(const res::tag &target) {
+  for (resource_system *parent = m_parent; parent; parent = parent->m_parent) {
+    std::lock_guard lock(parent->m_layer_needs_mutex);
+    if (const auto it = parent->m_layer_needs.find(target); it != parent->m_layer_needs.end() && --it->second == 0) {
+      parent->m_layer_needs.erase(it);
+    }
+  }
+}
+
+bool res::resource_system::needed_by_layers(const res::tag &tag) const {
+  std::lock_guard lock(m_layer_needs_mutex);
+  return m_layer_needs.contains(tag);
 }
