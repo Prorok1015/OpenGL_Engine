@@ -4,11 +4,13 @@
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/desc/desc_base.hpp>
+#include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <system_error>
 
 #if defined(_WIN32)
@@ -154,6 +156,39 @@ BOOST_AUTO_TEST_CASE(a_failed_resource_drops_the_library_callback_without_a_call
 	loader.unload(dll_game::module_name, root);
 	BOOST_TEST(!resident(g_module_path));
 	pump();
+}
+
+// #416: the library requests resources of the BASE (texts: the base's adapter) and waits for them; the blocks sit in
+// the base's cache. Unloaded and unmapped before they settle, then they settle (one is ready, one fails) and the base
+// drops them: the blocks are the engine's, so nothing of the library runs or is freed through its code.
+BOOST_AUTO_TEST_CASE(base_resources_a_library_requested_settle_and_go_after_it_is_gone)
+{
+	const auto base = put("dll_base.txt", "base text");
+	BOOST_REQUIRE(base.view() == dll_game::base_tag);
+	const res::tag missing{ std::string{ dll_game::base_missing_tag } };
+	loader.load(game_library(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_REQUIRE(ds::detail::held_count(layer->tasks()) == 3u); // its task, the two texts
+	{
+		// Both in the base's cache, both still loading.
+		const auto pending = rs->require<res::text_resource>(base);
+		const auto failing = rs->require<res::text_resource>(missing);
+		BOOST_REQUIRE(!pending.is_ready() && !pending.has_error());
+		BOOST_REQUIRE(!failing.is_ready() && !failing.has_error());
+	}
+	loader.unload(dll_game::module_name, root);
+	BOOST_REQUIRE(!resident(g_module_path));
+
+	pump();
+	for (int i = 0; i < 4; ++i) {
+		tasks.drain_main();
+	}
+	// The base lets go of the blocks: the last references go through their control blocks.
+	rs->erase(base);
+	rs->signal_changed(missing);
+	pump();
+	BOOST_TEST(rs->require_sync<res::text_resource>(base).has_error()); // erased: a fresh, engine-made block
 }
 
 BOOST_AUTO_TEST_SUITE_END()
