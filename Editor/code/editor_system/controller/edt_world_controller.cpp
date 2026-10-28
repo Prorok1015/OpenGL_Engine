@@ -138,4 +138,5 @@ void edt::world_controller::create_world(const std::string& name)
 	m_state.worlds_systems_list.push_back(world_res->get_systems());
 	m_state.commit("Create world", commit_mode::state_only);
 	select_world((int)m_state.world_names.size() - 1);
+	egLOG("Editor/CreateWorld", "Created world '{}'", name);
 }

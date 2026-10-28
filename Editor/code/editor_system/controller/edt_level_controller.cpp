@@ -96,6 +96,7 @@ void edt::level_controller::new_level()
 	m_state.active_world_idx = m_state.world_names.empty() ? -1 : 0;
 	m_state.commit("New level", commit_mode::state_only);
 	m_world_ctrl.select_world(m_state.active_world_idx);
+	egLOG("Editor/NewLevel", "Created a new level with {} world(s)", m_state.world_names.size());
 }
 
 bool edt::level_controller::save_level_as(const std::string& rel_path)
