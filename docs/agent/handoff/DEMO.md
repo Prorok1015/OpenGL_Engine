@@ -24,7 +24,7 @@
    - Раскладка пакета: `bin\editor.exe`, `config\editor.cfg`, `res\` (ресурсы редактора), `res_core\` (базовые ресурсы движка), `README.txt`. Папки держать рядом: конфиг ссылается на `..\res\` и `..\res_core\`.
    - Запуск из корня распакованной папки: `bin\editor.exe --config config\editor.cfg`. Лог — `logs\engine.log` в рабочей папке (запуск из корня пакета → `<пакет>\logs\`), лог импорта — `logs\edt_import.log`. `README.txt` пакета называет `config\logs\` — это неверно.
    - Требования: Windows 10/11 x64, видеокарта с драйвером OpenGL 4.5+.
-2. **Запасной путь — локальная сборка**, если пакет не запускается или нужен отладчик. Нужны Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja и Git:
+2. **Запасной путь — локальная сборка**, если пакет не запускается или нужен отладчик. Нужны Visual Studio 2022 (C++), CMake ≥ 3.26, Ninja и Git:
    - `git checkout aibranch`, `git submodule update --init --recursive`;
    - `cmake --preset dev-release` и `cmake --build build/dev-release --target editor` из Developer PowerShell;
    - запуск: `build/dev-release/Editor/editor --config Editor/config/editor.cfg`, лог — `logs/engine.log` в рабочей папке.
@@ -83,7 +83,7 @@
    - Если прогона нет или он старее aibranch — скажи мне; новую сборку запускает только push в wip/demo-release, сам не пушь без моего «да».
    - Распакуй zip в отдельную папку вне репозитория (например C:\snk-demo).
    - Если это невозможно — запасной путь из DEMO.md:
-     - проверь наличие Visual Studio 2022 (C++), CMake ≥ 3.25, Ninja;
+     - проверь наличие Visual Studio 2022 (C++), CMake ≥ 3.26, Ninja;
      - если чего-то нет — скажи, что поставить, сам не ставь без моего согласия;
      - собери cmake --preset dev-release и цель editor.
    - Локальная сборка здесь разрешена: это ручная проверка по моей просьбе, исключение из правила CI_PR.toon.

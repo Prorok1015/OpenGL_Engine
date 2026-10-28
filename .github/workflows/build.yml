@@ -26,7 +26,8 @@ on:
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
 # Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
-# Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared, Linux TSan,
+# Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared (both also build the project
+# template's game module, #434), Linux TSan,
 # SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes only.
 
 concurrency:
@@ -103,6 +104,26 @@ jobs:
         shell: bash
         run: ./unit_tests --log_level=test_suite
 
+      # The project template's game module (#434) against the installed SDK of this shared Release engine (the /MD
+      # runtime the template uses): both configurations land in <project>/build/bin as game.dll, without a postfix.
+      - name: Build the project template's game module against the SDK
+        if: matrix.preset == 'ci-windows-msvc-shared-release'
+        shell: bash
+        run: |
+          cmake --build "build/${{ matrix.preset }}" --target snk_sdk --parallel
+          cmake --install "build/${{ matrix.preset }}" --prefix "${RUNNER_TEMP}/sdk"
+          proj="${RUNNER_TEMP}/template_project"
+          rm -rf "$proj"
+          cp -r Editor/data/templates/projects/empty "$proj"
+          export SNAKE_SDK_DIR="${RUNNER_TEMP}/sdk/lib/cmake/snake_sdk"
+          for preset in release debuggame; do
+            (cd "$proj/code" && cmake --preset "$preset" && cmake --build --preset "$preset")
+          done
+          ls -l "$proj/build/bin"
+          test -f "$proj/build/bin/game.dll"
+          test -f "$proj/build/bin/game.pdb"
+          if ls "$proj/build/bin" | grep -qi "^gamed\."; then echo "::error::the module has a debug postfix"; exit 1; fi
+
   # One shared snk_engine library instead of static components (EPIC-29 #59). The Windows MSVC
   # variant is the 'Windows MSVC Shared Release' entry of the build matrix above. FULL tier.
   shared:
@@ -122,7 +143,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev
+            ninja-build ccache libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
+            xvfb libgl1-mesa-dri xdotool imagemagick
 
       - name: Set up compiler cache
         uses: ./.github/actions/compiler-cache
@@ -149,6 +171,39 @@ jobs:
         timeout-minutes: 10
         working-directory: build/ci-linux-shared
         run: ./unit_tests --log_level=test_suite
+
+      # The project template's game module (#434), built against this build tree's SDK (<build>/snake_sdk, no
+      # cmake --install) in both configurations; DebugGame last, the one that matches this Debug engine.
+      - name: Build the project template's game module against the build tree SDK
+        run: |
+          cmake --build build/ci-linux-shared --target snk_sdk --parallel
+          proj="${RUNNER_TEMP}/template_project"
+          rm -rf "$proj"
+          cp -r Editor/data/templates/projects/empty "$proj"
+          export SNAKE_SDK_DIR="${GITHUB_WORKSPACE}/build/ci-linux-shared/snake_sdk"
+          for preset in release debuggame; do
+            (cd "$proj/code" && cmake --preset "$preset" && cmake --build --preset "$preset")
+          done
+          ls -l "$proj/build/bin"
+          test -f "$proj/build/bin/libgame.so"
+          if ls "$proj/build/bin" | grep -q "gamed\."; then echo "::error::the module has a debug postfix"; exit 1; fi
+
+      # The shared editor opens the project and loads the module from build/bin (#428). The template's
+      # engine_version is a placeholder (New Project stamps the real one), hence the mismatch flag.
+      - name: The editor loads the template's game module
+        run: |
+          tools/run_headless.sh --editor build/ci-linux-shared/Editor/editor --frames 30 --shot headless_out/template/final.png \
+            -- --project "${RUNNER_TEMP}/template_project" --allow-engine-version-mismatch
+          grep -E "module 'game' (loaded|refused)" headless_out/template/editor.log || true
+          grep -q "module 'game' loaded" headless_out/template/editor.log
+
+      - name: Upload the template run log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: template-module-log
+          path: headless_out/template/
+          if-no-files-found: warn
 
   # SNK_WITH_ASSIMP=OFF (EPIC-41 US-41-7, #105): assimp is not configured, the model importer and the editor
   # model import are not compiled. Cheap (no assimp to build), so FAST tier: it is the only guard that keeps the option

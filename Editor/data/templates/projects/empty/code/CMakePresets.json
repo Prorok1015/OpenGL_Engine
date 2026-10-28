@@ -1,0 +1,30 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../build/${presetName}",
+            "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+        },
+        {
+            "name": "debuggame",
+            "displayName": "DebugGame",
+            "description": "The game unoptimized, with symbols, against the release engine",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "DebugGame" }
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "inherits": "base",
+            "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+        }
+    ],
+    "buildPresets": [
+        { "name": "debuggame", "configurePreset": "debuggame" },
+        { "name": "release", "configurePreset": "release" }
+    ]
+}

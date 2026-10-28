@@ -304,6 +304,19 @@ function(snk_install_sdk)
 		DESTINATION ${SNK_SDK_CMAKE_DIR}
 		COMPONENT snake_sdk)
 
+	# The same package for this build tree, in <build>/snake_sdk (#434): an editor run from the build tree builds a
+	# project's game module against it without `cmake --install`. Paths point into the build and source trees.
+	set(_tree_dir "${CMAKE_BINARY_DIR}/snake_sdk")
+	export(EXPORT ${SNK_SDK_EXPORT_SET}
+		NAMESPACE snk::
+		FILE "${_tree_dir}/snake_sdkTargets.cmake")
+	configure_package_config_file(
+		"${CMAKE_SOURCE_DIR}/cmake/snake_sdkConfig.cmake.in"
+		"${_tree_dir}/snake_sdkConfig.cmake"
+		INSTALL_DESTINATION "${_tree_dir}"
+		INSTALL_PREFIX "${CMAKE_BINARY_DIR}")
+	configure_file("${CMAKE_BINARY_DIR}/snake_sdkConfigVersion.cmake" "${_tree_dir}/snake_sdkConfigVersion.cmake" COPYONLY)
+
 	# Builds exactly what `cmake --install` copies (INTERFACE libraries have nothing to build).
 	set(_buildable "")
 	foreach(_t IN LISTS _closure)
