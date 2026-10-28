@@ -385,7 +385,8 @@ namespace {
 		attributes.Attributes = OBJ_CASE_INSENSITIVE; // as Win32 opens names
 		IO_STATUS_BLOCK status_block{};
 		HANDLE handle = nullptr;
-		const NTSTATUS status = ::NtCreateFile(&handle, access | SYNCHRONIZE, &attributes, &status_block, nullptr,
+		// FILE_READ_ATTRIBUTES as CreateFileW adds it: GetFileInformationByHandle and GetFinalPathNameByHandleW need it.
+		const NTSTATUS status = ::NtCreateFile(&handle, access | SYNCHRONIZE | FILE_READ_ATTRIBUTES, &attributes, &status_block, nullptr,
 			FILE_ATTRIBUTE_NORMAL, share, disposition, options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT, nullptr, 0);
 		if (status < 0) {
 			::SetLastError(::RtlNtStatusToDosError(status));
@@ -397,8 +398,10 @@ namespace {
 	bool is_real_folder(HANDLE folder)
 	{
 		BY_HANDLE_FILE_INFORMATION information{};
-		if (!::GetFileInformationByHandle(folder, &information)
-			|| (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
+		if (!::GetFileInformationByHandle(folder, &information)) {
+			return false; // its own error, not "a reparse point"
+		}
+		if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
 			|| (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
 			::SetLastError(ERROR_CANT_ACCESS_FILE);
 			return false;
@@ -407,8 +410,7 @@ namespace {
 	}
 
 	// Held without FILE_SHARE_DELETE: while the handle is open nobody can rename, remove or replace the folder.
-	// FILE_READ_ATTRIBUTES for is_real_folder: NtCreateFile does not add it as CreateFileW does.
-	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
+	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE;
 	constexpr ULONG k_folder_share = FILE_SHARE_READ | FILE_SHARE_WRITE;
 
 	// The root and every folder down to `parts`, each opened from the handle of the one above it and all held until
@@ -545,8 +547,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	}
 	const fs::path target = reached / request.leaf;
 	// FILE_CREATE: nothing planted at the temp name is opened, not even a link.
-	handle_holder file = open_in(chain.back().get(), request.tmp_leaf, FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, 0,
-		FILE_CREATE, FILE_NON_DIRECTORY_FILE);
+	handle_holder file = open_in(chain.back().get(), request.tmp_leaf, FILE_GENERIC_WRITE | DELETE, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE);
 	if (!file.valid()) {
 		return last_error_text("cannot create", request.tmp_path);
 	}
