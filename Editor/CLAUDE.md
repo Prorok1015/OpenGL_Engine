@@ -6,7 +6,8 @@
 Editor/
 ├── main.cpp                          # Module bootstrap: Core → Engine → Editor
 ├── config/editor.cfg                 # resource.path = ../res/
-├── res/                              # icons, levels, objects, shaders, skybox, templates
+├── res/                              # res://: levels, objects, shaders, skybox
+├── data/                             # edt:// (editor.data_path): icons, templates
 └── code/editor_system/
     ├── core/                         # Module lifecycle & frame loop
     │   ├── editor_module.cpp/h       # register/initialize/shutdown lifecycle

@@ -102,7 +102,7 @@ Input / File Dialog:
 [DESCRIPTOR_FILES]
 Level & World:
   → Editor/res/levels/ (.desc level files)
-  → Editor/res/templates/ (desc templates)
+  → Editor/data/templates/ (desc templates, edt://templates/)
 
 Objects & Assets:
   → Editor/res/objects/ (imported objects / prefab descs)

@@ -362,6 +362,27 @@ BOOST_AUTO_TEST_CASE(an_inline_desc_loads_in_a_layer_with_a_write_limit)
 	rs->unregistrate_adapter(core::desc::desc_adapter_t::INFO);
 }
 
+// #406: the owner holds what res_handle::then captures, also while the resource is still loading.
+BOOST_AUTO_TEST_CASE(the_owner_holds_the_callback_of_a_resource_still_loading)
+{
+	const auto tag = put("loading.txt", "text");
+	const auto handle = rs->require<res::text_resource>(tag);
+	BOOST_REQUIRE(!handle.is_ready());
+
+	auto capture = std::make_shared<int>(0);
+	const std::weak_ptr<int> watched = capture;
+	int calls = 0;
+	auto owner = std::make_unique<ds::lifetime>();
+	handle.then(*owner, [capture, &calls](res::text_resource&) { ++calls; });
+	capture.reset();
+	BOOST_TEST(!watched.expired());
+	owner.reset();
+	BOOST_TEST(watched.expired());
+	pump();
+	BOOST_TEST(handle.is_ready());
+	BOOST_TEST(calls == 0);
+}
+
 BOOST_AUTO_TEST_CASE(the_most_specific_adapter_wins_across_the_chain)
 {
 	rs->registrate_adapter<item_adapter>(res::adapter_info::make<item_derived>({ "item" }), std::string{ "base" });

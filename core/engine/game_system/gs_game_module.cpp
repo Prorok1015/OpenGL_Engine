@@ -46,12 +46,27 @@ namespace {
 			// Its tasks, its worlds (the set "level" goes with the change of the game layer), the rest of the layer,
 			// then the module's services: none of them may run the module's code after the layer is gone.
 			m_layer->stop_tasks();
+			// Stopping them queued the main-thread continuations of the module's tasks (then_main, with an owner or
+			// without): they run now, while the layer is there, so none of them holds the module's code past its unload
+			// (#406). Only those: the rest of the main queue waits for its frame.
+			ds::detail::run_pending_main(m_layer->tasks());
 			if (m_active) {
 				m_contexts.set_game_layer(&m_contexts.create_layer(m_tasks));
 			}
 			m_contexts.destroy_layer(*m_layer);
 			m_storage = ds::app_data_storage{};
 			m_current.clear();
+		}
+
+		// From inside one of the module's callbacks (a continuation of its tasks, or a callback held by layer.tasks())
+		// the unload would destroy the code that runs it.
+		std::string unload_refusal() const override
+		{
+			if (ds::detail::running_callbacks(m_layer->tasks()) > 0) {
+				return "called from inside one of the module's callbacks; unload from a main-queue item of the engine "
+					"(task_system::post_main) instead";
+			}
+			return {};
 		}
 
 		// The new layer becomes the game layer before the empty one goes, so the game layer changes once.
@@ -95,6 +110,15 @@ bool gs::module_context::add_command(cmd::command_desc desc)
 	}
 	m_layer.keep(std::move(added));
 	return true;
+}
+
+ds::task_handle<void> gs::module_context::run(ds::lane lane, ds::task_desc desc, std::function<void(ds::task_context&)> fn)
+{
+	ASSERT_MSG(m_tasks, "module_context::run: the layer has no task system");
+	if (!m_tasks) {
+		return {};
+	}
+	return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::move(fn));
 }
 
 std::string gs::module_resource_prefix(std::string_view module)

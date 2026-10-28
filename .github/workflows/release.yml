@@ -54,8 +54,9 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then ver="${GITHUB_REF_NAME}"; else ver="${GITHUB_SHA::8}"; fi
           echo "VERSION=${ver}" >> "$GITHUB_ENV"
 
-          # Layout keeps editor.cfg's `resource: path: ../res/` valid (resolved
-          # relative to the cfg file): config/../res == SnakeEditor/res.
+          # Layout keeps editor.cfg's `resource: path: ../res/` and `editor: data_path: ../data/`
+          # valid (resolved relative to the cfg file): config/../res == SnakeEditor/res,
+          # config/../data == SnakeEditor/data (edt://, editor-only icons and templates).
           # Engine base resources (core/res) ship as res_core/ and the packaged
           # cfg's base_path is rewritten from the in-repo ../../core/res/.
           mkdir -p "${PKG}/bin" "${PKG}/config"
@@ -67,6 +68,7 @@ jobs:
           grep -q 'base_path: ../res_core/' "${PKG}/config/editor.cfg"
           cp -r core/res "${PKG}/res_core"
           cp -r Editor/res "${PKG}/res"
+          cp -r Editor/data "${PKG}/data"
           cat > "${PKG}/README.txt" <<'TXT'
           SnakeEditor - OpenGL Engine editor
 
@@ -75,9 +77,10 @@ jobs:
           Run from this folder:
               bin\editor.exe --config config\editor.cfg
 
-          Keep the bin/, config/, res/ and res_core/ folders side by side: the config
+          Keep the bin/, config/, data/, res/ and res_core/ folders side by side: the config
           refers to the resources as ../res/ (editor layer, wins) and ../res_core/
-          (engine base layer) relative to the config file. Logs are written
+          (engine base layer), and to the editor's own icons and templates as ../data/,
+          relative to the config file. Logs are written
           to logs\ relative to the working directory. When launched from the package
           root, the log file is <package>\logs\engine.log.
           TXT

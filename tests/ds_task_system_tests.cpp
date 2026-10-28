@@ -576,6 +576,101 @@ BOOST_AUTO_TEST_CASE(CallbackOfFinishedTaskIsSkippedAfterOwnerDestroyed)
 	BOOST_TEST(calls == 0);
 }
 
+// #406: the owner holds what then_main(owner, ...) captures, so the captures (a game module's code among them) go when
+// the owner does, wherever the call waits: on a task not run yet, in the main queue, on a cancelled task.
+BOOST_AUTO_TEST_CASE(TheOwnerHoldsTheCapturesOfItsCallbacks)
+{
+	ds::task_system tasks(manual_config());
+	const auto watch = [](std::weak_ptr<int>& watched) {
+		auto capture = std::make_shared<int>(0);
+		watched = capture;
+		return [capture](auto&) {};
+	};
+
+	{ // the task has not run yet
+		std::weak_ptr<int> watched;
+		auto owner = std::make_unique<ds::lifetime>();
+		auto handle = tasks.run(lane::compute, { "not run" }, [](ds::task_context&) {});
+		handle.then_main(*owner, watch(watched));
+		BOOST_TEST(!watched.expired());
+		owner.reset();
+		BOOST_TEST(watched.expired());
+		tasks.run_one(lane::compute);
+		tasks.drain_main();
+	}
+	{ // the call is in the main queue
+		std::weak_ptr<int> watched;
+		auto owner = std::make_unique<ds::lifetime>();
+		auto handle = tasks.run(lane::compute, { "queued" }, [](ds::task_context&) {});
+		handle.then_main(*owner, watch(watched));
+		tasks.run_one(lane::compute);
+		BOOST_TEST(tasks.pending_main(main_class::general) == 1u);
+		owner.reset();
+		BOOST_TEST(watched.expired());
+		tasks.drain_main();
+	}
+	{ // the task was cancelled
+		std::weak_ptr<int> watched;
+		ds::lifetime task_owner;
+		auto owner = std::make_unique<ds::lifetime>();
+		auto handle = tasks.run(lane::compute, { "cancelled" }, task_owner, [](ds::task_context&) {});
+		handle.then_main(*owner, watch(watched));
+		task_owner.cancel_tasks();
+		owner.reset();
+		BOOST_TEST(watched.expired());
+		// The cancelled task's entry stays in the lane until a worker pops it; without this the next run_one takes it.
+		while (tasks.run_one(lane::compute)) {}
+		tasks.drain_main();
+	}
+	{ // delivered: the owner lets go of it after the call
+		std::weak_ptr<int> watched;
+		ds::lifetime owner;
+		int calls = 0;
+		auto capture = std::make_shared<int>(0);
+		watched = capture;
+		auto handle = tasks.run(lane::compute, { "delivered" }, [](ds::task_context&) {});
+		handle.then_main(owner, [capture, &calls](ds::task_result<void>&) { ++calls; });
+		capture.reset();
+		BOOST_REQUIRE(tasks.run_one(lane::compute));
+		BOOST_REQUIRE(handle.done());
+		tasks.drain_main();
+		BOOST_TEST(calls == 1);
+		BOOST_TEST(watched.expired());
+		BOOST_TEST(ds::detail::held_count(owner) == 0u);
+	}
+}
+
+// #406: what a game module's layer runs before it goes: the queued continuations of its own tasks, once, and nothing
+// else of the main queue.
+BOOST_AUTO_TEST_CASE(RunPendingMainRunsOnlyTheContinuationsOfTheBoundTasks)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	int bound_calls = 0;
+	int other_calls = 0;
+	auto bound = tasks.run(lane::compute, { "bound" }, owner, [](ds::task_context&) {});
+	auto other = tasks.run(lane::compute, { "other" }, [](ds::task_context&) {});
+	bound.then_main([&](ds::task_result<void>&) { ++bound_calls; });
+	other.then_main([&](ds::task_result<void>&) { ++other_calls; });
+	tasks.run_one(lane::compute);
+	tasks.run_one(lane::compute);
+	BOOST_TEST(tasks.pending_main(main_class::general) == 2u);
+
+	ds::detail::run_pending_main(owner);
+	BOOST_TEST(bound_calls == 1);
+	BOOST_TEST(other_calls == 0);
+	tasks.drain_main();
+	BOOST_TEST(bound_calls == 1); // its queue entry does nothing now
+	BOOST_TEST(other_calls == 1);
+
+	// A continuation added after the task finished is queued at once, and found the same way.
+	bound.then_main([&](ds::task_result<void>&) { ++bound_calls; });
+	ds::detail::run_pending_main(owner);
+	BOOST_TEST(bound_calls == 2);
+	tasks.drain_main();
+	BOOST_TEST(bound_calls == 2);
+}
+
 BOOST_AUTO_TEST_CASE(PlainThenMainIgnoresLifetimes)
 {
 	ds::task_system tasks(manual_config());
@@ -742,6 +837,49 @@ BOOST_AUTO_TEST_SUITE(TaskSystemThreadedTests)
 
 // Real threads: meant for the TSan job. Everything the callbacks touch is main-thread data, so a
 // race here is a task_system bug.
+
+// #406 B1: what a game module's layer does when it goes, right after its task finished on a worker. The worker stores
+// the status before it queues the continuations: wait_idle must wait for that too, or run_pending_main misses them
+// and they run later, after the module is gone.
+BOOST_AUTO_TEST_CASE(ContinuationsOfAFinishedTaskAreQueuedBeforeWaitIdleReturns)
+{
+	ds::task_system_config config;
+	config.compute_threads = 2;
+	ds::task_system tasks(config);
+
+	constexpr int rounds = 50;
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			bool gone = false;
+			int plain_calls = 0;
+			int owned_calls = 0;
+			int calls_after_gone = 0;
+			auto layer = std::make_unique<ds::lifetime>(ds::lifetime_option::cancel_on_destroy);
+			auto owner = std::make_unique<ds::lifetime>();
+			auto handle = tasks.run(lane::compute, { "module task" }, *layer, [](ds::task_context&) {});
+			handle.then_main([&](ds::task_result<void>&) { ++(gone ? calls_after_gone : plain_calls); });
+			handle.then_main(*owner, [&](ds::task_result<void>&) { ++(gone ? calls_after_gone : owned_calls); });
+			while (!handle.done()) {
+				std::this_thread::yield();
+			}
+
+			layer->cancel_tasks();
+			tasks.wait_idle(*layer);
+			ds::detail::run_pending_main(*layer);
+			owner.reset();
+			layer.reset();
+			gone = true;
+
+			for (int i = 0; i < 4; ++i) {
+				tasks.drain_main();
+			}
+			BOOST_TEST(plain_calls == 1);
+			BOOST_TEST(owned_calls == 1);
+			BOOST_TEST(calls_after_gone == 0);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(ThenMainRunsOnTheMainThreadAfterCompletion)
 {
 	ds::task_system_config config;
