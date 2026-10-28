@@ -64,6 +64,11 @@ namespace app::modules {
 			throw std::logic_error(std::move(message));
 		}
 
+		// A load refused: not logged here, whoever asked for the load logs it once, with its own context.
+		[[noreturn]] static void refuse(std::string message) {
+			throw std::logic_error(std::move(message));
+		}
+
 		entry* find(std::string_view name) {
 			const auto it = std::ranges::find_if(m_entries, [&](const entry& e) { return e.module->name() == name; });
 			return it == m_entries.end() ? nullptr : &*it;
@@ -91,7 +96,7 @@ namespace app::modules {
 			}
 			const auto factory = data.require_shared<module_layer_factory>();
 			if (!factory) {
-				fail(std::format("module_loader: cannot load '{}': it needs a layer and the storage has no module_layer_factory", e.module->name()));
+				refuse(std::format("module_loader: cannot load '{}': it needs a layer and the storage has no module_layer_factory", e.module->name()));
 			}
 			e.layer = factory->create(data, e.module->name());
 		}
@@ -257,17 +262,47 @@ namespace app::modules {
 			load_entry(make_entry(nullptr, std::move(module)), data);
 		}
 
-		// Same, for a module whose code comes from `source` (a shared library, or compiled in). The source is
-		// opened here and closed after the module is destroyed: when it is unloaded, when the loader goes away,
-		// or right away when the load fails (std::logic_error when the source cannot be opened or its entry is refused).
-		void load(std::unique_ptr<module_source> source, ds::app_data_storage& data) {
-			ASSERT_MSG(source, "module_loader::load: null module source");
+		// A module created from its source and checked against this host, with nothing registered: no layer, no
+		// services. Lets the host check a module (its name, say) before load() gives it a layer; dropping it destroys
+		// the module, then closes the source.
+		class prepared_module {
+		public:
+			prepared_module(prepared_module&&) noexcept = default;
+			// Not assignable: member-wise assignment would close the old source before destroying its module.
+			prepared_module& operator=(prepared_module&&) = delete;
+
+			std::string_view name() const { return m_module->name(); }
+			std::string describe() const { return m_source->describe(); }
+
+		private:
+			friend class module_loader;
+			prepared_module(source_ptr source, module_ptr module) : m_source(std::move(source)), m_module(std::move(module)) {}
+
+			source_ptr m_source; // declared first, so it is closed after the module is destroyed
+			module_ptr m_module;
+		};
+
+		// Opens `source` and creates its module. std::logic_error (the source closed again) when the source cannot be
+		// opened or its entry is refused.
+		static prepared_module prepare(std::unique_ptr<module_source> source) {
+			ASSERT_MSG(source, "module_loader::prepare: null module source");
 			source_ptr opened{ source.release() };
 			if (const std::string problem = opened->open(); !problem.empty()) {
-				fail(std::format("module_loader: refusing module {}: {}", opened->describe(), problem));
+				refuse(std::format("module_loader: refusing module {}: {}", opened->describe(), problem));
 			}
 			module_ptr module = create_module(opened->entry(), opened->describe());
-			load_entry(make_entry(std::move(opened), std::move(module)), data);
+			return prepared_module{ std::move(opened), std::move(module) };
+		}
+
+		// Same as load(module), for a prepared one. Its source is closed after the module is destroyed: when it is
+		// unloaded, when the loader goes away, or right away when the load fails.
+		void load(prepared_module prepared, ds::app_data_storage& data) {
+			load_entry(make_entry(std::move(prepared.m_source), std::move(prepared.m_module)), data);
+		}
+
+		// Same, for a module whose code comes from `source` (a shared library, or compiled in): prepare() and load().
+		void load(std::unique_ptr<module_source> source, ds::app_data_storage& data) {
+			load(prepare(std::move(source)), data);
 		}
 
 	private:
@@ -280,11 +315,11 @@ namespace app::modules {
 
 		static module_ptr create_module(const module_entry& exports, const std::string& origin) {
 			if (const std::string problem = check_module_entry(exports); !problem.empty()) {
-				fail(std::format("module_loader: refusing {}: {}", origin, problem));
+				refuse(std::format("module_loader: refusing {}: {}", origin, problem));
 			}
 			module_ptr module{ exports.create(), module_deleter{ exports.destroy } };
 			if (!module) {
-				fail(std::format("module_loader: refusing {}: snk_create_module returned null", origin));
+				refuse(std::format("module_loader: refusing {}: snk_create_module returned null", origin));
 			}
 			return module;
 		}
@@ -293,12 +328,12 @@ namespace app::modules {
 			ASSERT_MSG(e.module, "module_loader::load: null module");
 			const std::string name{ e.module->name() };
 			if (find(name)) {
-				fail(std::format("module_loader: cannot load '{}': a module with this name is already present", name));
+				refuse(std::format("module_loader: cannot load '{}': a module with this name is already present", name));
 			}
 			for (const auto dep : e.module->depends_on()) {
 				const entry* d = find(dep);
 				if (!d || d->state != module_state::initialized) {
-					fail(std::format("module_loader: cannot load '{}': dependency '{}' is {}", name, dep,
+					refuse(std::format("module_loader: cannot load '{}': dependency '{}' is {}", name, dep,
 						d ? state_name(d->state) : std::string_view{ "not loaded" }));
 				}
 			}
