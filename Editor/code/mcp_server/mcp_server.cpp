@@ -9,6 +9,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#else
+#include <fcntl.h>
 #endif
 
 #include <snk/mcp/mcp_server.h>
@@ -518,6 +520,10 @@ namespace mcp::detail
 				application.log(log_level::warn, "the MCP server could not take its port exclusively");
 			}
 #else
+			// A program this editor starts (File > Open Project restarts it) must not inherit the listening socket.
+			if (::fcntl(acceptor.native_handle(), F_SETFD, FD_CLOEXEC) != 0) {
+				application.log(log_level::warn, "the MCP server socket could not be made close-on-exec");
+			}
 			// Lets a restarted editor take its port back at once.
 			boost::system::error_code option_ec;
 			acceptor.set_option(tcp::acceptor::reuse_address(true), option_ec);

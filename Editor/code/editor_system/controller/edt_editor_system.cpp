@@ -87,9 +87,10 @@ namespace {
 		if (allow_engine_version_mismatch) {
 			args.push_back("--allow-engine-version-mismatch");
 		}
-		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", manifest_file.string());
+		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", utf8_of(manifest_file));
 		auto started = platform::spawn_detached(program, args);
 		if (!started) {
+			egLOG_ERROR("Editor/Project", "the editor was not restarted on '{}': {}", utf8_of(manifest_file), started.error);
 			return started.error;
 		}
 		return std::nullopt;
@@ -297,6 +298,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.exit = m_exit_action;
 	hooks.resources_path = m_res.get_resources_path();
 	hooks.open_project = start_editor_on;
+	// From disk, not through res::: a recursive copy into a folder that no mount covers yet.
 	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
 		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name);
 	};

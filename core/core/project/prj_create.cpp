@@ -18,6 +18,20 @@ namespace json = boost::json;
 
 namespace
 {
+	// Not path::string(): on Windows it goes through the ANSI code page and throws for what that cannot hold.
+	std::string utf8_of(const fs::path& path)
+	{
+		const std::u8string text = path.u8string();
+		return std::string(text.begin(), text.end());
+	}
+
+	// `inner` is `outer` or lies under it; both already absolute and normalized.
+	bool is_within(const fs::path& inner, const fs::path& outer)
+	{
+		const fs::path relative = inner.lexically_relative(outer);
+		return !relative.empty() && *relative.begin() != "..";
+	}
+
 	// Boost.JSON writes one line; a manifest is read and edited by people.
 	void write_indented(std::string& out, const json::value& value, int depth)
 	{
@@ -81,7 +95,7 @@ namespace
 		std::error_code ec;
 		json::value root = json::parse(read_text(manifest_file), ec);
 		if (ec || !root.is_object()) {
-			return std::format("the template manifest '{}' is not a JSON object", manifest_file.string());
+			return std::format("the template manifest '{}' is not a JSON object", utf8_of(manifest_file));
 		}
 		root.as_object()["name"] = name;
 		root.as_object()["engine_version"] = prj::to_string(prj::current_engine_version());
@@ -93,7 +107,7 @@ namespace
 		out << text;
 		out.close();
 		if (out.fail()) {
-			return std::format("cannot write '{}'", manifest_file.string());
+			return std::format("cannot write '{}'", utf8_of(manifest_file));
 		}
 		return std::nullopt;
 	}
@@ -108,7 +122,7 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 		target_dir = target_dir.parent_path(); // "games/new/"
 	}
 	if (ec || !target_dir.has_filename()) {
-		result.error = std::format("'{}' cannot be the folder of a project", requested_dir.string());
+		result.error = std::format("'{}' cannot be the folder of a project", utf8_of(requested_dir));
 		return result;
 	}
 	if (!is_valid_name(name)) {
@@ -116,22 +130,37 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 		return result;
 	}
 	if (const auto checked = load_manifest(template_dir / k_manifest_file_name); !checked.data) {
-		result.error = std::format("the project template '{}' is not usable: {}", template_dir.string(),
+		result.error = std::format("the project template '{}' is not usable: {}", utf8_of(template_dir),
 			checked.error ? to_string(*checked.error) : std::string{ "unknown error" });
 		return result;
+	}
+
+	// The staging folder would be made inside the tree being copied.
+	{
+		std::error_code canonical_ec;
+		const fs::path template_real = fs::weakly_canonical(fs::absolute(template_dir, canonical_ec), canonical_ec);
+		const fs::path target_real = fs::weakly_canonical(target_dir, canonical_ec);
+		if (canonical_ec || is_within(target_real, template_real)) {
+			result.error = std::format("'{}' cannot be made inside the project template '{}'", utf8_of(target_dir),
+				utf8_of(template_dir));
+			return result;
+		}
 	}
 
 	const auto status = fs::symlink_status(target_dir, ec);
 	if (fs::exists(status)) {
 		if (!fs::is_directory(status) || !fs::is_empty(target_dir, ec) || ec) {
-			result.error = std::format("'{}' already exists and is not an empty folder", target_dir.string());
+			result.error = std::format("'{}' already exists and is not an empty folder", utf8_of(target_dir));
 			return result;
 		}
 	}
 
 	// Built next to the target and renamed into place, so a failure halfway never leaves a half-made project there.
 	std::random_device random;
-	const fs::path staging = target_dir.parent_path() / std::format(".{}.{:08x}.new", target_dir.filename().string(), random());
+	fs::path staging_name{ "." };
+	staging_name += target_dir.filename();
+	staging_name += std::format(".{:08x}.new", random());
+	const fs::path staging = target_dir.parent_path() / staging_name;
 	const auto fail = [&](std::string message) {
 		std::error_code ignored;
 		fs::remove_all(staging, ignored);
@@ -141,11 +170,11 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 
 	fs::create_directories(target_dir.parent_path(), ec);
 	if (ec) {
-		return fail(std::format("cannot create '{}': {}", target_dir.parent_path().string(), ec.message()));
+		return fail(std::format("cannot create '{}': {}", utf8_of(target_dir.parent_path()), ec.message()));
 	}
 	fs::copy(template_dir, staging, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
 	if (ec) {
-		return fail(std::format("cannot copy the template to '{}': {}", target_dir.string(), ec.message()));
+		return fail(std::format("cannot copy the template to '{}': {}", utf8_of(target_dir), ec.message()));
 	}
 	if (auto problem = stamp_manifest(staging / k_manifest_file_name, name)) {
 		return fail(std::move(*problem));
@@ -155,7 +184,7 @@ prj::create_result prj::create_project(const fs::path& template_dir, const fs::p
 	}
 	fs::rename(staging, target_dir, ec);
 	if (ec) {
-		return fail(std::format("cannot move the new project to '{}': {}", target_dir.string(), ec.message()));
+		return fail(std::format("cannot move the new project to '{}': {}", utf8_of(target_dir), ec.message()));
 	}
 	result.manifest_file = target_dir / k_manifest_file_name;
 	return result;

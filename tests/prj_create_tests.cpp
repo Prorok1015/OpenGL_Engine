@@ -107,4 +107,20 @@ BOOST_AUTO_TEST_CASE(Create_FromAFolderWithoutAManifest_IsRefusedAndLeavesNothin
 	BOOST_TEST(entries_in(dir.path()) == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(Create_InsideTheTemplate_IsRefusedAndLeavesItAsItWas)
+{
+	test_util::temp_dir dir("prj_create_inside");
+	fs::copy(k_empty_template, dir.path() / "tpl", fs::copy_options::recursive);
+	const std::size_t before = entries_in(dir.path() / "tpl");
+
+	for (const char* target : { "tpl/game", "tpl/res/game" }) {
+		BOOST_TEST_INFO("target: " << target);
+		const auto created = prj::create_project(dir.path() / "tpl", dir.path() / target, "Game");
+		BOOST_TEST(created.error.find("template") != std::string::npos);
+	}
+	BOOST_TEST(entries_in(dir.path() / "tpl") == before);
+	BOOST_TEST(!fs::exists(dir.path() / "tpl" / "game"));
+	BOOST_TEST(!fs::exists(dir.path() / "tpl" / "res" / "game"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

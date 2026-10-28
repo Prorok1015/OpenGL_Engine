@@ -14,7 +14,9 @@
 namespace po = boost::program_options;
 
 bool is_initialized = false;
-std::filesystem::path loaded_config_file;
+namespace {
+	std::filesystem::path loaded_config_file;
+}
 
 constexpr auto EXTENDS_KEY = "extends";
 constexpr auto SEPARATOR = '/';

@@ -21,8 +21,17 @@
 #include <windows.h>
 #else
 #include <csignal>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+// spawn_detached closes the inherited descriptors where glibc can (posix_spawn_file_actions_addclosefrom_np).
+#if defined(__linux__) && defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 34)
+#define SNK_TEST_SPAWN_CLOSES_FDS 1
+#endif
 #endif
 
 // snk::platform (EPIC-42 #158): what the editor needs to restart itself into another project.
@@ -31,17 +40,29 @@ namespace {
 	namespace fs = std::filesystem;
 
 	constexpr std::string_view k_marker_flag = "--plt-marker";
+	constexpr std::string_view k_fd_flag = "--plt-fd";
 
-	// The marker path when this run is the child started by SpawnDetached_RunsTheProgramWithItsArguments.
-	std::string marker_argument()
+	std::string argument_after(std::string_view flag)
 	{
 		const auto& suite = boost::unit_test::framework::master_test_suite();
 		for (int i = 0; i + 1 < suite.argc; ++i) {
-			if (suite.argv[i] == k_marker_flag) {
+			if (suite.argv[i] == flag) {
 				return suite.argv[i + 1];
 			}
 		}
 		return {};
+	}
+
+	// The marker path when this run is a child started by one of the SpawnDetached tests.
+	std::string marker_argument()
+	{
+		return argument_after(k_marker_flag);
+	}
+
+	std::string read_text(const fs::path& file)
+	{
+		std::ifstream in(file, std::ios::binary);
+		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 	}
 
 	// Until the file appears, at most `limit`: a child that never writes it fails the test instead of hanging the run.
@@ -114,14 +135,26 @@ BOOST_AUTO_TEST_CASE(CurrentExecutable_IsThisTestProgram)
 	BOOST_TEST(exe.stem().string().find("unit_tests") != std::string::npos);
 }
 
-// Does nothing in a normal run; in the child it writes the file named after --plt-marker.
+// Does nothing in a normal run; in the child it writes the file named after --plt-marker: "spawned", or with --plt-fd
+// what that descriptor is open on ("closed" if it is not open). Written aside and renamed, so a marker that exists is
+// complete.
 BOOST_AUTO_TEST_CASE(SpawnHelper_WritesTheMarker)
 {
 	const std::string marker = marker_argument();
 	if (marker.empty()) {
 		return;
 	}
-	std::ofstream{ fs::path{ std::u8string{ marker.begin(), marker.end() } } } << "spawned";
+	std::string text = "spawned";
+	if (const std::string fd = argument_after(k_fd_flag); !fd.empty()) {
+		std::error_code ec;
+		const fs::path target = fs::read_symlink(fs::path{ "/proc/self/fd" } / fd, ec);
+		text = ec ? std::string{ "closed" } : target.string();
+	}
+	const fs::path file{ std::u8string{ marker.begin(), marker.end() } };
+	fs::path part = file;
+	part += ".part";
+	std::ofstream{ part } << text;
+	fs::rename(part, file);
 }
 
 BOOST_AUTO_TEST_CASE(SpawnDetached_RunsTheProgramWithItsArguments)
@@ -146,6 +179,40 @@ BOOST_AUTO_TEST_CASE(SpawnDetached_RunsTheProgramWithItsArguments)
 	BOOST_TEST(wait_for_file(marker, std::chrono::seconds{ 120 }));
 	stop_child(started.process_id, program);
 }
+
+#if SNK_TEST_SPAWN_CLOSES_FDS
+// A descriptor without close-on-exec (as Asio opens the MCP listening socket) must not reach the new editor.
+BOOST_AUTO_TEST_CASE(SpawnDetached_DoesNotHandDownOpenDescriptors)
+{
+	if (!marker_argument().empty()) {
+		return;
+	}
+	test_util::temp_dir dir("plt fds");
+	const fs::path witness = dir.write("witness.txt", "x");
+	const fs::path marker = dir.path() / "marker.txt";
+
+	const int opened = ::open(witness.c_str(), O_RDONLY);
+	BOOST_REQUIRE(opened >= 0);
+	// High above what the child opens while it starts, so a reused number cannot pass for the inherited one.
+	const int inheritable = ::fcntl(opened, F_DUPFD, 200);
+	::close(opened);
+	BOOST_REQUIRE(inheritable >= 0);
+	BOOST_REQUIRE((::fcntl(inheritable, F_GETFD) & FD_CLOEXEC) == 0);
+
+	const fs::path program = platform::current_executable();
+	const auto started = platform::spawn_detached(program, { "--run_test=PltProcessTests/SpawnHelper_WritesTheMarker",
+		"--", std::string{ k_marker_flag }, marker.string(), std::string{ k_fd_flag }, std::to_string(inheritable) });
+	::close(inheritable);
+
+	BOOST_REQUIRE_MESSAGE(static_cast<bool>(started), started.error);
+	BOOST_TEST(wait_for_file(marker, std::chrono::seconds{ 120 }));
+	const std::string seen = read_text(marker);
+	BOOST_TEST(!seen.empty());
+	BOOST_TEST_INFO("descriptor in the child: " << seen);
+	BOOST_TEST(seen.find("witness.txt") == std::string::npos);
+	stop_child(started.process_id, program);
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(SpawnDetached_AMissingProgramIsAnError)
 {

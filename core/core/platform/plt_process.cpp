@@ -51,6 +51,12 @@ std::wstring platform::quote_windows_arg(std::wstring_view arg)
 
 namespace
 {
+	std::string utf8_of(const fs::path& path)
+	{
+		const std::u8string text = path.u8string();
+		return std::string(text.begin(), text.end());
+	}
+
 	std::wstring widen(const std::string& utf8)
 	{
 		if (utf8.empty()) {
@@ -96,7 +102,7 @@ platform::spawn_result platform::spawn_detached(const fs::path& program, const s
 	if (!CreateProcessW(program.c_str(), command_line.data(), nullptr, nullptr, FALSE,
 			DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &process)) {
 		const auto error = std::error_code{ static_cast<int>(GetLastError()), std::system_category() };
-		return { 0, std::format("cannot start '{}': {}", program.string(), error.message()) };
+		return { 0, std::format("cannot start '{}': {}", utf8_of(program), error.message()) };
 	}
 	CloseHandle(process.hThread);
 	CloseHandle(process.hProcess);
@@ -130,8 +136,18 @@ platform::spawn_result platform::spawn_detached(const fs::path& program, const s
 	// Its own session: closing the terminal (or the process group) of this editor does not take the new one along.
 	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
 #endif
+	posix_spawn_file_actions_t file_actions;
+	posix_spawn_file_actions_init(&file_actions);
+#if defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 34)
+	// Only stdin/out/err go along: Asio does not open its sockets close-on-exec, so the new editor would otherwise
+	// hold the listening socket of this one (and its log files) for as long as it runs.
+	posix_spawn_file_actions_addclosefrom_np(&file_actions, 3);
+#endif
+#endif
 	pid_t pid = 0;
-	const int result = posix_spawn(&pid, program_name.c_str(), nullptr, &attributes, argv.data(), environ);
+	const int result = posix_spawn(&pid, program_name.c_str(), &file_actions, &attributes, argv.data(), environ);
+	posix_spawn_file_actions_destroy(&file_actions);
 	posix_spawnattr_destroy(&attributes);
 	if (result != 0) {
 		return { 0, std::format("cannot start '{}': {}", program_name, std::generic_category().message(result)) };
