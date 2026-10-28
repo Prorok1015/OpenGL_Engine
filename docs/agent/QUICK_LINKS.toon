@@ -101,12 +101,12 @@ Input / File Dialog:
 
 [DESCRIPTOR_FILES]
 Level & World:
-  → Editor/res/levels/ (.desc level files)
+  → projects/sandbox/res/levels/ (.desc level files)
   → Editor/data/templates/ (desc templates, edt://templates/)
 
 Objects & Assets:
-  → Editor/res/objects/ (imported objects / prefab descs)
-  → Editor/res/assets/ (editor layer, wins) , core/res/shaders/ , core/res/skybox/ (engine base layer; res:// = core/res under Editor/res)
+  → projects/sandbox/res/objects/ (imported objects / prefab descs)
+  → projects/sandbox/res/assets/ (editor layer, wins) , core/res/shaders/ , core/res/skybox/ (engine base layer; res:// = core/res under the project's res)
 
 [BUILD_SYSTEM]
 Main CMake:

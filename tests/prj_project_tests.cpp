@@ -6,6 +6,10 @@
 #include <string_view>
 #include <system_error>
 
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
+#endif
+
 namespace {
 	namespace fs = std::filesystem;
 
@@ -264,6 +268,20 @@ BOOST_AUTO_TEST_CASE(EngineVersionError_IsAProjectError)
 		return;
 	}
 	BOOST_FAIL("engine_version_error was not caught as a project_error");
+}
+
+// projects/sandbox is what CI and the release zip open (EPIC-42 #157). Raising SNK_SDK_VERSION past it would make
+// every smoke run exit with 3 (they pass -n): bump its engine_version together with the SDK version.
+BOOST_AUTO_TEST_CASE(TestProject_OpensWithThisEngineWithoutAsking)
+{
+	const auto opened = prj::open_project(SNK_TEST_PROJECT_DIR);
+	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
+	const auto action = prj::version_action_for(opened.context->engine_match, false);
+	BOOST_TEST((action == prj::version_action::open || action == prj::version_action::open_with_notice));
+
+	const std::string_view start = opened.context->data.start_scene;
+	BOOST_REQUIRE(start.starts_with("res://"));
+	BOOST_TEST(fs::is_regular_file(opened.context->content_roots.front() / start.substr(6)));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

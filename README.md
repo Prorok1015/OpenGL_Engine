@@ -36,10 +36,10 @@ The project supports two development environments:
 ```bash
 git clone --recursive https://github.com/Prorok1015/OpenGL_Engine.git
 # Optional: test 3D models for the editor (~650 MB, separate repo, not fetched by default)
-git submodule update --init --checkout Editor/res/samples
+git submodule update --init --checkout projects/sandbox/res/samples
 ```
 
-`Editor/res/objects/robot` (small skinned + animated glb) stays in the repo for a quick check; larger test
+`projects/sandbox/res/objects/robot` (small skinned + animated glb) stays in the repo for a quick check; larger test
 models live in [OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples) (`res://samples/...`).
 
 ### Building
@@ -65,8 +65,8 @@ Produces two executables:
 # With config file
 ./Editor/editor --config ../Editor/config/editor.cfg
 
-# Or override resource path directly
-./Editor/editor --set resource/path ../Editor/res
+# Open the test project (projects/sandbox: game content and test levels, EPIC-42)
+./Editor/editor --config ../Editor/config/editor.cfg --project ../projects/sandbox
 ```
 
 ---

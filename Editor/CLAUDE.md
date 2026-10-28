@@ -5,8 +5,8 @@
 ```
 Editor/
 ├── main.cpp                          # Module bootstrap: Core → Engine → Editor
-├── config/editor.cfg                 # resource.path = ../res/
-├── res/                              # res://: levels, objects, shaders, skybox
+├── config/editor.cfg                 # resource.path = ../../projects/sandbox/res/ (without --project)
+├── data/                             # edt://: icons, templates (editor-only)
 ├── data/                             # edt:// (editor.data_path): icons, templates
 └── code/editor_system/
     ├── core/                         # Module lifecycle & frame loop

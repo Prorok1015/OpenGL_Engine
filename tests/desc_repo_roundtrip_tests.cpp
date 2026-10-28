@@ -8,15 +8,15 @@
 #include <string_view>
 #include <utility>
 
-// Every .desc the repository ships (core/res + Editor/res layers, Editor/data as edt://) must load, be a fixed point of the engine's own save, and
+// Every .desc the repository ships (core/res + the test project's res layers, Editor/data as edt://) must load, be a fixed point of the engine's own save, and
 // carry the current __version on every typed object. When a format changes, run tools/desc_resave on
-// core/res, Editor/res and Editor/data: this test fails on files that are still in an older format.
+// core/res, projects/sandbox/res and Editor/data: this test fails on files that are still in an older format.
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
 #endif
 #ifndef SNK_EDITOR_DATA_DIR
 #error "SNK_EDITOR_DATA_DIR must point at Editor/data"
@@ -41,7 +41,7 @@ const std::vector<repo_file>& repo_files()
 		// Base layer first; a file of the editor layer replaces the base file at the same path. Editor/data is its own protocol.
 		const std::pair<fs::path, std::string_view> roots[] = {
 			{ fs::path{ SNK_CORE_RES_DIR }, res::tag::default_protocol() },
-			{ fs::path{ SNK_EDITOR_RES_DIR }, res::tag::default_protocol() },
+			{ (fs::path{ SNK_TEST_PROJECT_DIR } / "res"), res::tag::default_protocol() },
 			{ fs::path{ SNK_EDITOR_DATA_DIR }, "edt" },
 		};
 		for (const auto& [root, protocol] : roots) {
@@ -148,7 +148,7 @@ BOOST_AUTO_TEST_CASE(SavingALoadedFileGivesTheFileBack)
 		auto loaded = load_desc(tag);
 		BOOST_REQUIRE(loaded);
 		const auto saved = parse(adapter.serialize(tag, loaded));
-		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on core/res, Editor/res and Editor/data");
+		BOOST_CHECK_MESSAGE(saved == parse(file.bytes), "run tools/desc_resave on core/res, projects/sandbox/res and Editor/data");
 	});
 }
 

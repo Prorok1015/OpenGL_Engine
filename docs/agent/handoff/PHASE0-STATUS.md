@@ -23,7 +23,7 @@
 - Явные фазы ECS по схеме §9.5 (фаза — свойство системы в коде, набор систем — в `world_desc`, tie-break по порядку desc, `run_in_edit`).
 - Приватные члены — префикс `m_`.
 - GitHub Issues — основной трекер; `refs #N` / `closes #N` в коммитах.
-- Тестовые модели — в сабмодуле `Editor/res/samples` ([OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples), `update = none`); `robot.glb` остаётся в движке. История git переписывается один раз при мерже `aibranch` → `main`.
+- Тестовые модели — в сабмодуле `projects/sandbox/res/samples` ([OpenGL_Engine_samples](https://github.com/Prorok1015/OpenGL_Engine_samples), `update = none`); `robot.glb` остаётся в движке. История git переписывается один раз при мерже `aibranch` → `main`.
 
 ## 3. Что сделано
 
@@ -34,7 +34,7 @@
 **Инфраструктура качества:**
 - CI: Windows MSVC Debug/Release, Linux GCC/Clang (все блокирующие), ASan+UBSan, TSan, coverage (неблокирующий, HTML-артефакт). Релиз редактора по тегу `v*` (`release.yml`).
 - Тесты: `tests/` (было `unittests/`), ~596 кейсов, покрытие строк 16% → 35%.
-- Headless-запуск редактора без GPU: `tools/run_headless.sh` (Xvfb + Mesa llvmpipe, xdotool, скриншоты), сценарии `tools/headless/*.actions`, уровень `Editor/res/levels/smoke_level.desc`, опция `--set editor/startup_level levels/smoke_level.desc`.
+- Headless-запуск редактора без GPU: `tools/run_headless.sh` (Xvfb + Mesa llvmpipe, xdotool, скриншоты), сценарии `tools/headless/*.actions`, уровень `projects/sandbox/res/levels/smoke_level.desc`, опция `--set editor/startup_level levels/smoke_level.desc`.
 - Ручной чек-лист рендера после EPIC-49 пройден headless (9/9).
 
 **Баги, найденные тестами/QA:** исправлены №3–15, №17 (и race логгера). Открыты: №1, №2 (sentinel-трансформы, поверхностный merge — решаются эпиком «Форматы данных»), №16, A (правка света в инспекторе гасит свет), B (сохранение теряет transform glb-узла — потеря данных), C (редкий краш при старте), D (мультимир показывает чужой мир).
@@ -129,7 +129,7 @@
 ## 7. Окружение облачной сессии (контейнер эфемерный — восстанавливать)
 
 ```bash
-git submodule update --init --depth 1            # кроме Editor/res/samples (update = none)
+git submodule update --init --depth 1            # кроме projects/sandbox/res/samples (update = none)
 sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev \
      ccache xvfb libgl1-mesa-dri xdotool imagemagick
 cmake --preset ci-linux-gcc-debug                 # build/ci-linux-gcc-debug; ccache и PCH включены самим CMake (#180)

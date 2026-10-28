@@ -10,8 +10,8 @@
 
 // The asset browser shows res:// only (#165): editor-only resources behind edt:// never reach its layers.
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
 #endif
 #ifndef SNK_CORE_RES_DIR
 #error "SNK_CORE_RES_DIR must point at core/res"
@@ -35,7 +35,7 @@ BOOST_AUTO_TEST_SUITE(EdtAssetBrowserHidesEdt)
 
 BOOST_AUTO_TEST_CASE(ShippedResLayers_ListNoEditorOnlyFolders)
 {
-	const std::vector<fs::path> layers{ SNK_CORE_RES_DIR, SNK_EDITOR_RES_DIR };
+	const std::vector<fs::path> layers{ fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_TEST_PROJECT_DIR } / "res" };
 
 	const auto root = edt::list_merged_directory(layers, {});
 
@@ -48,7 +48,7 @@ BOOST_AUTO_TEST_CASE(ShippedResLayers_ListNoEditorOnlyFolders)
 
 BOOST_AUTO_TEST_CASE(ShippedEditorData_IsNotReachableThroughTheResLayers)
 {
-	const std::vector<fs::path> layers{ SNK_CORE_RES_DIR, SNK_EDITOR_RES_DIR };
+	const std::vector<fs::path> layers{ fs::path{ SNK_CORE_RES_DIR }, fs::path{ SNK_TEST_PROJECT_DIR } / "res" };
 
 	BOOST_TEST(edt::list_merged_directory(layers, "icons").empty());
 	BOOST_TEST(edt::list_merged_directory(layers, "templates").empty());
