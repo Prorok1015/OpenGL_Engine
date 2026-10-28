@@ -21,6 +21,9 @@ namespace prj
 		// Absolute, highest priority first (the order of the manifest); every one exists and is inside `root`.
 		std::vector<std::filesystem::path> content_roots;
 
+		// The manifest's engine_version against current_engine_version().
+		version_match engine_match = version_match::exact;
+
 		// <root>/.cache: regenerated data, never committed.
 		std::filesystem::path cache_dir() const { return root / ".cache"; }
 		// memory:// (data made at runtime, e.g. imports) inside the cache.
@@ -55,7 +58,32 @@ namespace prj
 	SNK_API std::optional<std::string> verify_project_mounts(const project_context& project,
 		const std::filesystem::path& engine_base = {});
 
-	// The project given on the command line could not be opened; the host exits with a dedicated code.
+	inline constexpr int k_exit_project_error = 2;
+	inline constexpr int k_exit_engine_version = 3;
+
+	// A project the host did not mount because of its engine version: an older one waits for the user's consent
+	// (version_action::ask_open_or_quit), a newer one is refused. The host runs without a project meanwhile.
+	struct held_project
+	{
+		enum class decision
+		{
+			none,
+			continue_without_project,
+			quit,
+		};
+
+		std::filesystem::path manifest_file;
+		std::string name;
+		engine_version engine;
+		version_action action = version_action::refuse;
+		decision answer = decision::none;
+	};
+
+	// How the host exits after holding `project` back: 0 when the user chose to go on without it; otherwise
+	// k_exit_engine_version (the user quit, or nobody answered: a headless run).
+	SNK_API int exit_code_for(const held_project& project);
+
+	// The project given on the command line could not be opened; the host exits with k_exit_project_error.
 	class SNK_API project_error : public std::runtime_error
 	{
 	public:

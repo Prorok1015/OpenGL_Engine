@@ -74,6 +74,10 @@ public:
     const system_registry& registry() const { return m_registry; }
 
     system_factory() = default;
+    // A layer over `parent` (MODULE_LAYER.md): the parent's systems and game phases are visible to
+    // plans built from this factory; registering one of their names here is refused with an error.
+    explicit system_factory(const system_factory* parent)
+        : m_registry(parent ? &parent->m_registry : nullptr) {}
     ~system_factory() = default;
     system_factory(const system_factory&) = default;
     system_factory(system_factory&&) = default;
@@ -83,6 +87,10 @@ public:
 private:
     bool add_entry(const std::string &name, system_desc desc, system_run_fn run,
                    std::function<system_instance()> make, std::vector<access_entry> access) {
+        if (const auto* parent = m_registry.parent(); parent && parent->find(name)) {
+            egLOG_ERROR("ecs", "system '{}' not registered: the name belongs to the parent context", name);
+            return false;
+        }
         const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make), std::move(access) });
         ASSERT_MSG(added, "ecs system already registered in the factory!");
         return added;

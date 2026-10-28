@@ -25,7 +25,7 @@
 ## 3. #59 — PIC, visibility, SNK_API
 - Сейчас (бинарник не меняется): `CMAKE_POSITION_INDEPENDENT_CODE ON` глобально до `include(ThirdParty)`; hidden visibility только нашим таргетам через `snk_target_defaults(tgt)` (`cmake/SnkTarget.cmake`); ручной `core/core/common/include/snk/common/snk_api.h` с одним макросом `SNK_API` (пустой в статике).
 - Shared-вариант: опция `SNK_ENGINE_SHARED` (OFF), один `snk_engine SHARED` из компонентов core+engine через `$<LINK_LIBRARY:WHOLE_ARCHIVE,...>` (минимум CMake → 3.24); CI-задача «Linux GCC Shared»; Windows MSVC shared собирается и тестируется в CI («Windows MSVC Shared», #198).
-- Что ломается в shared: typeinfo для исключений/`dynamic_cast` (экспорт классов); синглтоны (`cfg::config_manager::instance`, реестр spdlog, профайлер, `thread_local` frame allocator) — жить только в `snk_engine`; `entt::meta` контекст в статическом `locator` каждого бинарника — хост передаёт `entt::locator<entt::meta_ctx>::handle()` в модуль.
+- Что ломается в shared: typeinfo для исключений/`dynamic_cast` (экспорт классов); синглтоны (`cfg::config_manager::instance`, реестр spdlog, профайлер, `thread_local` frame allocator) — жить только в `snk_engine`; `entt::meta` контекст в статическом `locator` каждого бинарника — хост передаёт `entt::locator<entt::meta_ctx>::handle()` в модуль. **Уточнено (#218, #220):** свой locator и у exe относительно `snk_engine`, поэтому подключаться надо не к контексту хоста, а к контексту движка (`ecs::meta_context_handle()`). Игровой модуль подключается к meta-контексту своего слоя, а у `app_data_storage` модуля родитель — корневое хранилище ([MODULE_LAYER.md](MODULE_LAYER.md)).
 
 ## 4. #60 — registration_scope вместо game_system
 ```cpp
