@@ -341,7 +341,7 @@ void edt::editor_system::on_game_layer_change(bool before)
 		// Nothing of the editor may refer to the old layer once it goes: the preview set, the loads in flight, the level.
 		close_prefab_editor();
 		m_pending_desc_handle = {};
-		m_level_after_layer_change = {};
+		m_level_after_layer_change = res::tag{};
 		if (m_loading_level) {
 			m_level_after_layer_change = m_state.level_tag;
 			m_loading_level = false;
