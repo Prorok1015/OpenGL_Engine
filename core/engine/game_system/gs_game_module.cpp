@@ -1,4 +1,5 @@
 #include <snk/game/gs_game_module.h>
+#include <snk/command/cmd_registry.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/common/logger/engine_log.h>
@@ -22,7 +23,7 @@ namespace {
 			: m_contexts(contexts)
 			, m_tasks(tasks)
 			, m_current(current)
-			, m_storage(&root)
+			, m_storage(&root, ds::app_data_storage::isolated)
 		{
 			// The new layer becomes the game layer before the empty one goes, so the game layer changes once.
 			m_layer = &m_contexts.create_layer(m_tasks);
@@ -38,6 +39,7 @@ namespace {
 			m_storage.attach(borrowed(m_layer->systems()));
 			m_storage.attach(borrowed(m_layer->components()));
 			m_storage.attach(m_layer->hot_reload());
+			m_storage.construct<gs::module_context>(*m_layer, root.require_shared<cmd::command_registry>().get(), m_tasks);
 			m_current = module;
 		}
 
@@ -65,6 +67,25 @@ namespace {
 		ds::app_data_storage m_storage;
 	};
 
+}
+
+bool gs::module_context::add_command(cmd::command_desc desc)
+{
+	if (!m_commands) {
+		egLOG_ERROR("app", "module_context: no command registry, command '{}' not added", desc.id);
+		return false;
+	}
+	cmd::registration added = m_commands->add(std::move(desc));
+	if (!added.active()) {
+		return false;
+	}
+	m_layer.keep(std::move(added));
+	return true;
+}
+
+void gs::module_context::add_log_sink(engine::log_callback_t callback)
+{
+	m_layer.keep(engine::add_log_sink(std::move(callback)));
 }
 
 std::unique_ptr<app::modules::module_layer> gs::game_layer_factory::create(ds::app_data_storage& root, std::string_view module)
