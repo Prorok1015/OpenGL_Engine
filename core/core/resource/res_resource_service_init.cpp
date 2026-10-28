@@ -35,7 +35,8 @@ void core::res::resource_init(ds::app_data_storage& data)
 		verify();
 
 		data.construct<::res::resource_system>(std::ref(tasks),
-			::res::resource_system::project_mount_table(engine_base, project.content_roots, project.memory_dir()));
+			::res::resource_system::project_mount_table(engine_base, project.content_roots, project.cache_dir(),
+				project.user_profile_dir()));
 		return;
 	}
 	data.construct<::res::resource_system>(std::ref(tasks));
