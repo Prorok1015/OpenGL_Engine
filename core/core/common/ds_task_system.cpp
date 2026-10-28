@@ -236,10 +236,7 @@ namespace ds::detail {
 	void task_state_base::cancel()
 	{
 		m_stop.request_stop();
-		task_status expected = task_status::pending;
-		if (m_status.compare_exchange_strong(expected, task_status::cancelled, std::memory_order_acq_rel)) {
-			finalize();
-		}
+		finish_unrun(task_status::cancelled);
 	}
 
 	bool task_state_base::finish_pending(task_status outcome, std::string message)
@@ -248,10 +245,19 @@ namespace ds::detail {
 			std::lock_guard lock(m_mutex);
 			m_error = std::move(message);
 		}
+		return finish_unrun(outcome);
+	}
+
+	bool task_state_base::finish_unrun(task_status outcome)
+	{
+		// Claimed as running, so execute() cannot take the body while it is dropped. A queue entry outlives a
+		// cancelled task until a worker pops it: without the drop, its captures would outlive wait_idle().
 		task_status expected = task_status::pending;
-		if (!m_status.compare_exchange_strong(expected, outcome, std::memory_order_acq_rel)) {
+		if (!m_status.compare_exchange_strong(expected, task_status::running, std::memory_order_acq_rel)) {
 			return false;
 		}
+		drop_body();
+		m_status.store(outcome, std::memory_order_release);
 		finalize();
 		return true;
 	}
