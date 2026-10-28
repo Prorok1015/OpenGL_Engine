@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <filesystem>
 #include <chrono>
 #include <mutex>
@@ -29,7 +30,10 @@ namespace res {
             schedule_timer();
         }
 
+        // On the io thread: a poll that already fired is queued with success and would re-arm the timer after a
+        // cancel alone, so io_context::run() would never run out of work.
         void stop() {
+            m_stopped = true;
             timer.cancel();
         }
 
@@ -46,7 +50,7 @@ namespace res {
         void schedule_timer() {
             timer.expires_after(std::chrono::milliseconds(500));
             timer.async_wait([this](auto ec) {
-                if (ec) return;
+                if (ec || m_stopped) return;
 
                 for (const auto& root : watch_paths) {
                     update_state(root, true);
@@ -91,6 +95,7 @@ namespace res {
 
         std::function<void(fs::path)> m_notify_cb;
         boost::asio::steady_timer timer;
+        std::atomic<bool> m_stopped{ false };
         std::vector<fs::path> watch_paths;
         std::mutex m_state_mutex;
         std::unordered_map<fs::path, fs::file_time_type> file_states;

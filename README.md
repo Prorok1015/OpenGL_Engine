@@ -214,7 +214,14 @@ CFG_VAR_DEF_FLOAT(speed, "player.speed", 5.0f);
 int value = *my_var;
 ```
 
-Override via `.cfg` files or CLI: `--set path.to.var=100`
+Override via `.cfg` files or CLI: `--set path/to/var 100` (name and value are two arguments).
+
+**Lists.** `CFG_VAR_DEF_STRING_LIST(var, "a/b", "default1", "default2")` defines a list of strings; the variable is `cfg::variable<std::vector<std::string>>`, a module reads it with `cfg::config_view::list("a/b")` (`value("a/b")` gives the JSON array). In yaml a list is a sequence, block (`- x`) or flow (`[x, y]`); on the CLI `--set a/b "[x, y]"` is a flow sequence, `"[]"` an empty list and a value without `[` a list of that one element.
+
+- A list is **replaced as a whole**: a later file (`extends`), a later `--set` or a second `load` never merges with it.
+- A scalar where a list is expected (and the other way round) is refused with a warning in the log, the value stays as it was.
+- Elements are text (`12` is `"12"`). A null element (`~`, `null`), a nested list or a map are refused, the list stays as it was. Quote what yaml would read otherwise: an element holding `,` (`"[\"a,b\", c]"`; there is no backslash escape, `[a\, b]` is the two elements `a\` and `b`) or starting with `*` (`"*.ini"`).
+- A key with no value (`key:` or `key: ~`) is ignored for every kind of variable.
 
 ---
 

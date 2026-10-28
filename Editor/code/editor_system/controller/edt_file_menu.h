@@ -61,6 +61,8 @@ namespace edt
 		void on_unsaved_choice(unsaved_choice choice, const std::function<void(bool discard)>& action);
 		// False (and logged) if the action refused.
 		bool invoke(std::string_view action_id, boost::json::value args);
+		// invoke() for file.save / file.save_as from the menu: a failed write is also shown to the user, not only logged.
+		bool save_or_report(std::string_view action_id, boost::json::value args);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
 

@@ -2,6 +2,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <snk/common/snk_api.h>
 
 namespace cfg {
@@ -14,6 +15,9 @@ namespace cfg {
 		// The value of a registered variable as text; nullopt when no variable has that name. Main thread: the
 		// configuration has no lock (variables are registered and set on the main thread), so a worker must not call it.
 		std::optional<std::string> value(std::string_view name) const;
+		// The elements of a list variable (value() gives the same list as a JSON array); nullopt when no variable has
+		// that name or the variable is not a list. Same thread rule as value().
+		std::optional<std::vector<std::string>> list(std::string_view name) const;
 		bool has(std::string_view name) const { return value(name).has_value(); }
 	};
 
