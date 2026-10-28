@@ -3,6 +3,7 @@
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/core/core_module.h>
+#include <snk/core/core_project_modules.h>
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
@@ -64,6 +65,10 @@ int main(int argc, char* argv[])
 		module_loader.register_all_services(app_storage);
 		module_loader.initialize_all_services(app_storage);
 		initialized = true;
+		// After the host's own modules: initialize_all_services must not see the loader grow.
+		core::project_modules_options project_modules;
+		project_modules.with_editor_modules = true;
+		core::load_project_modules(module_loader, app_storage, project_modules);
 
 		app::application editor;
 		result = editor.run(app_storage);

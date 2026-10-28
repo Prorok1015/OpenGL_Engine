@@ -1,17 +1,22 @@
 #include <boost/test/unit_test.hpp>
 #include "../test_module_env.hpp"
+#include "../test_temp_dir.hpp"
 #include "test_game_dll_api.h"
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/core/core_project_modules.h>
 #include <snk/desc/desc_base.hpp>
+#include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -193,6 +198,43 @@ BOOST_AUTO_TEST_CASE(base_resources_a_library_requested_settle_and_go_after_it_i
 	rs->signal_changed(missing);
 	pump();
 	BOOST_TEST(rs->require_sync<res::text_resource>(base).has_error()); // erased: a fresh, engine-made block
+}
+
+BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stays_free)
+{
+	namespace fs = std::filesystem;
+	test_util::temp_dir dir("dll_project_module");
+	fs::create_directories(dir.path() / "game" / "build" / "bin");
+	const fs::path game = fs::canonical(dir.path() / "game");
+	const fs::path built = game / "build" / "bin" / g_module_path.filename();
+	fs::copy_file(g_module_path, built);
+
+	prj::project_context project;
+	project.root = game;
+	project.data.name = "Game";
+	project.data.modules.emplace_back();
+	project.data.modules.back().name = std::string{ dll_game::module_name };
+	root.construct<prj::project_context>(std::move(project));
+
+	const auto report = core::load_project_modules(loader, root, core::project_modules_options{});
+	BOOST_TEST(report.loaded == std::vector<std::string>{ std::string{ dll_game::module_name } });
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_TEST(layer->descs().is_registered(dll_game::desc_type));
+
+	const fs::path copy = game / ".cache" / "modules" / (std::string{ dll_game::module_name } + ".0" + g_module_path.extension().string());
+	BOOST_TEST(resident(copy));
+	BOOST_TEST(!resident(built));
+	{
+		// What a rebuild does while the editor runs: Windows refuses it for a loaded image.
+		std::ofstream rebuilt(built, std::ios::binary | std::ios::trunc);
+		rebuilt << "rebuilt";
+		BOOST_TEST(rebuilt.good());
+	}
+
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(copy));
+	root.destruct<prj::project_context>();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

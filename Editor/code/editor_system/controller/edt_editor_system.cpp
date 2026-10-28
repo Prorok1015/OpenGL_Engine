@@ -330,8 +330,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		startup_level = data.require<prj::project_context>().data.start_scene;
 	}
 	if (!project_held && !startup_level.empty()) {
-		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
-		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
+		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
+		const res::tag level = startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level);
+		editor_layer->register_implicit("edt/load_level", [this, level, started = false]() mutable {
+			if (!std::exchange(started, true)) {
+				begin_level_load(level);
+			}
+			return poll_level_load();
+		});
 	}
 
 	if (cfg_agent_server) {
