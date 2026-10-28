@@ -117,7 +117,7 @@ namespace prj {
 │   ├── memory/                 ← memory:// (было <res>/../sandbox)
 │   └── user_profile/           ← user:// в редакторе (тестовый профиль, §2.4)
 ├── .snk/                       ← mcp.json, agent_policy.json (AI_INTEGRATION.md, уже есть)
-├── build/                      ← сборка игрового кода (#160/#217), не протокол
+├── build/                      ← сборка игрового кода (#160/#217), не протокол и не монтируется; приватный каталог, как .cache и .snk (#426)
 └── code/                       ← исходники game-модуля (шаблон #160)
 ```
 
@@ -186,7 +186,7 @@ namespace prj {
 |---|---|---|---|---|
 | PR-1 | #153 (ч.1), #156 (ч.1) | Модуль `snk::project`: `parse_manifest`/`load_manifest`, `snk_version.h`, `prj::compare`. Поведение редактора не меняется | S–M | — |
 | PR-2 | #153 (ч.2), #154 | `res::mount_table`, `resource_system(tasks, mounts)`, `layers()` экземпляра; `res://` проект → движок, `engine://` read-only; `--project`, `project_context`, заголовок окна, `start_scene` | M | PR-1, #377 |
-| PR-3 | #155 | `cache://`, `user://` (тестовый профиль), `memory://` → `.cache/memory`, `platform::user_data_dir()`, `build_dir` в контексте, MCP `project_dir` по умолчанию | M | PR-2 |
+| PR-3 | #155 | `cache://`, `user://` (тестовый профиль), `memory://` → `.cache/memory`, `platform::user_data_dir()`, `build_dir()` в контексте (приватный каталог, без монтирования — #426), MCP `project_dir` по умолчанию | M | PR-2 |
 | PR-4 | #156 (ч.2) | Проверка версии в `main`, диалог, `--allow-engine-version-mismatch`, коды возврата | S | PR-2 |
 | PR-5 | #157 | Тестовый проект; игровое и тестовое содержимое `Editor/res` переезжает в него; тесты, гейт desc, smoke, `release.yml` переходят на `--project` | M–L (в основном переносы) | PR-2, PR-3, EPIC-36 #162/#163 |
 | PR-6 | #158 | File → New Project (из шаблона-каталога) / Open Project / Recent (до 5), переключение перезапуском | M | PR-3, PR-4, вопрос 9 (стык с #164) |
