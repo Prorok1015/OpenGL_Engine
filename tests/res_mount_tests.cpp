@@ -270,6 +270,7 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_MountsAValidProjectAndCreatesItsWritableFol
 	const auto& project_ctx = data.require<prj::project_context>();
 	BOOST_TEST(fs::is_directory(project_ctx.memory_dir()));
 	BOOST_TEST(fs::is_directory(project_ctx.user_profile_dir()));
+	BOOST_TEST(!fs::exists(project_ctx.build_dir())); // not a mount: nothing creates it
 	BOOST_TEST(data.require<res::resource_system>().get_resources_path() == fs::canonical(project));
 	BOOST_TEST(data.require<res::resource_system>().exists(res::tag{ "res://levels/main.desc" }));
 	core::res::resource_term(data);

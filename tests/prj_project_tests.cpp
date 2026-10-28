@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/project/prj_project.h>
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -199,7 +200,7 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesSymlinkedWritableFolders)
 
 BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsOverPrivateFolders)
 {
-	for (const std::string_view root : { ".snk", ".cache", ".cache/user_profile", ".cache/memory" }) {
+	for (const std::string_view root : { ".snk", ".cache", ".cache/user_profile", ".cache/memory", "build", "build/res" }) {
 		BOOST_TEST_INFO("content root: " << root);
 		test_util::temp_dir dir("prj_private_root");
 		dir.write("project.snkproj", R"({ "format_version": 1, "name": "Sandbox", "engine_version": "0.2.0", "content_roots": [")"
@@ -210,6 +211,16 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesContentRootsOverPrivateFolders)
 		BOOST_TEST(!opened.context.has_value());
 		BOOST_TEST(opened.error.find("private folder") != std::string::npos);
 	}
+}
+
+BOOST_AUTO_TEST_CASE(BuildDir_IsPrivateButNotMounted)
+{
+	prj::project_context project;
+	project.root = fs::path{ "/projects/game" };
+
+	BOOST_TEST(project.build_dir() == project.root / "build");
+	BOOST_TEST(std::ranges::count(project.private_dirs(), project.build_dir()) == 1);
+	BOOST_TEST(std::ranges::count(project.writable_dirs(), project.build_dir()) == 0);
 }
 
 BOOST_AUTO_TEST_CASE(Verify_RefusesASymlinkedUserProfileAndSnk)
