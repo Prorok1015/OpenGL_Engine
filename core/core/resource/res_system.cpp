@@ -239,6 +239,9 @@ res::resource_system::~resource_system() {
   }
   m_lifetime.cancel_tasks();
   m_tasks.wait_idle(m_lifetime);
+  // The gate is closed: nothing parked runs any more, and what it holds (adapters, blocks) goes now, not when the root
+  // settles what it waited for.
+  cancel_parked();
   // The vfs threads are joined only now: the tasks that were running may still store() through them.
   m_resolvers.clear();
   if (m_parent) {
@@ -304,15 +307,11 @@ void res::resource_system::start_loading(const res::tag &tag,
       return;
     }
 
-    // A resolver thread of the root settles `raw`, possibly after this layer is gone.
-    raw->on_settled([gate = m_gate, tag, block, raw, ad = std::move(ad)](auto &) {
-      const bool open = gate->with([&](resource_system &self) {
-        self.run_on_compute([system = &self, tag, block, raw, ad] { system->collect_stage(tag, block, raw, ad); }, block);
-      });
-      if (!open && !is_finished(*block)) {
-        block->set_error("Load cancelled");
-      }
+    // A resolver thread of the root settles `raw`, possibly after this layer is gone: it holds only the id.
+    const auto id = park(block, [this, tag, block, raw, ad = std::move(ad)] {
+      run_on_compute([this, tag, block, raw, ad] { collect_stage(tag, block, raw, ad); }, block);
     });
+    raw->on_settled([gate = m_gate, id](auto &) { run_parked(gate, id); });
   } catch (const std::exception &e) {
     egLOG_ERROR("res/resolver", "Failed to start loading {0}: {1}", tag.view(), e.what());
     block->set_error(std::string{"Load error: "} + e.what());
@@ -419,15 +418,21 @@ void res::resource_system::await_blocks(
   state->blocks = std::move(blocks);
   state->on_done = std::move(on_done);
   state->pending = state->blocks.size();
+  // The dependencies (a parent's blocks too) hold only this id, never the state with its continuation.
+  const std::uint64_t id = register_await(state);
 
   const auto fail_owner = [](const std::shared_ptr<resource_handle> &block, const std::string &message) {
     if (!is_finished(*block)) {
       block->set_error(message);
     }
   };
-  // The owner may have failed meanwhile (a cycle), and then nobody is left to continue.
-  const auto one_settled = [fail_owner](const std::shared_ptr<await_state> &s) {
-    if (--s->pending != 0 || is_finished(*s->owner)) {
+  // The owner may have failed meanwhile (a cycle), and then nobody is left to continue. The last one drops the wait.
+  const auto one_settled = [fail_owner, id](resource_system &self, const std::shared_ptr<await_state> &s) {
+    if (--s->pending != 0) {
+      return;
+    }
+    self.drop_await(id);
+    if (is_finished(*s->owner)) {
       return;
     }
     std::string failure;
@@ -451,7 +456,7 @@ void res::resource_system::await_blocks(
           state->failure = "Dependency failed: invalid handle";
         }
       }
-      one_settled(state);
+      one_settled(*this, state);
       continue;
     }
 
@@ -462,6 +467,7 @@ void res::resource_system::await_blocks(
       for (const auto &member : added.members) {
         fail_owner(member, message);
       }
+      drop_await(id);
       return;
     }
     if (added.result == wait_graph::verdict::too_deep) {
@@ -469,24 +475,26 @@ void res::resource_system::await_blocks(
                                   std::to_string(k_max_dependency_depth);
       egLOG_ERROR("res/graph", "{}", message);
       fail_owner(owner, message);
+      drop_await(id);
       return;
     }
 
     // A dependency may be the parent's block, which settles after this layer is gone.
-    dep->on_settled([gate = m_gate, state, i, one_settled](auto &settled) {
-      const bool open = gate->with([&](resource_system &self) {
-        self.m_graph->remove_edge(state->owner.get(), &settled);
+    dep->on_settled([gate = m_gate, id, i, one_settled](auto &settled) {
+      gate->with([&](resource_system &self) {
+        const auto s = self.find_await(id);
+        if (!s) {
+          return;
+        }
+        self.m_graph->remove_edge(s->owner.get(), &settled);
         if (settled.has_error()) {
-          std::lock_guard lock(state->mutex);
-          if (state->failure.empty()) {
-            state->failure = "Dependency failed: " + std::string{state->blocks[i].second.view()} + ": " + settled.error_msg;
+          std::lock_guard lock(s->mutex);
+          if (s->failure.empty()) {
+            s->failure = "Dependency failed: " + std::string{s->blocks[i].second.view()} + ": " + settled.error_msg;
           }
         }
-        one_settled(state);
+        one_settled(self, s);
       });
-      if (!open && !is_finished(*state->owner)) {
-        state->owner->set_error("Load cancelled");
-      }
     });
   }
 }
@@ -748,6 +756,9 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
     epoch = ++m_watch_epoch;
   }
 
+  // Every tag of the batch reaches the layers: a layer's resource may be built from any of them (a layer prefab on a
+  // base model on the changed texture), and the layer's own graph walks on from there.
+  std::vector<res::tag> for_layers = batch;
   // One task per signal, the batch in one piece: its order is the delivery order.
   m_tasks.post_main([this, batch = std::move(batch), epoch, alive = m_lifetime.token()]() {
     if (alive.expired()) {
@@ -761,16 +772,16 @@ void res::resource_system::signal_changed_local(const res::tag &tag) {
   // Held while the layers handle the signal: a layer removes itself under this lock before it goes away.
   std::lock_guard layers_lock(m_layers_mutex);
   for (resource_system *layer : m_layers) {
-    layer->signal_changed_local(tag);
+    for (const auto &changed : for_layers) {
+      layer->signal_changed_local(changed);
+    }
   }
 }
 
 bool res::resource_system::erase(const res::tag &tag) {
-  if (m_parent) {
-    return root().erase(tag);
-  }
-  const auto found = m_resolvers.find(tag.protocol());
-  if (found == m_resolvers.end()) {
+  auto &resolvers = root().m_resolvers;
+  const auto found = resolvers.find(tag.protocol());
+  if (found == resolvers.end()) {
     egLOG_WARN("resource/erase", "Protocol '{}' is not supported!", tag.protocol());
     return false;
   }
@@ -939,3 +950,107 @@ res::mount_table res::resource_system::project_mount_table(
   return table;
 }
 
+std::uint64_t res::resource_system::park(std::shared_ptr<resource_handle> block, std::function<void()> run) {
+  std::lock_guard lock(m_parked_mutex);
+  const std::uint64_t id = m_next_parked++;
+  m_parked.emplace(id, parked{ std::move(block), std::move(run) });
+  return id;
+}
+
+std::optional<res::resource_system::parked> res::resource_system::unpark(std::uint64_t id) {
+  std::lock_guard lock(m_parked_mutex);
+  const auto found = m_parked.find(id);
+  if (found == m_parked.end()) {
+    return std::nullopt;
+  }
+  parked taken = std::move(found->second);
+  m_parked.erase(found);
+  return taken;
+}
+
+void res::resource_system::run_parked(const std::shared_ptr<gate> &gate, std::uint64_t id) {
+  gate->with([id](resource_system &self) {
+    if (auto step = self.unpark(id)) {
+      step->run();
+    }
+  });
+}
+
+std::uint64_t res::resource_system::register_await(std::shared_ptr<await_state> state) {
+  std::lock_guard lock(m_parked_mutex);
+  const std::uint64_t id = m_next_parked++;
+  m_awaits.emplace(id, std::move(state));
+  return id;
+}
+
+std::shared_ptr<res::resource_system::await_state> res::resource_system::find_await(std::uint64_t id) {
+  std::lock_guard lock(m_parked_mutex);
+  const auto found = m_awaits.find(id);
+  return found == m_awaits.end() ? nullptr : found->second;
+}
+
+void res::resource_system::drop_await(std::uint64_t id) {
+  std::lock_guard lock(m_parked_mutex);
+  m_awaits.erase(id);
+}
+
+void res::resource_system::cancel_parked() {
+  std::unordered_map<std::uint64_t, parked> steps;
+  std::unordered_map<std::uint64_t, std::shared_ptr<await_state>> waits;
+  {
+    std::lock_guard lock(m_parked_mutex);
+    steps.swap(m_parked);
+    waits.swap(m_awaits);
+  }
+  // Outside the lock: failing a block runs its callbacks.
+  for (auto &[id, step] : steps) {
+    if (step.block && !is_finished(*step.block)) {
+      step.block->set_error("Load cancelled");
+    }
+  }
+  for (auto &[id, wait] : waits) {
+    if (!is_finished(*wait->owner)) {
+      wait->owner->set_error("Load cancelled");
+    }
+  }
+}
+
+void res::resource_system::keep_warm(const std::shared_ptr<resource_handle> &block, cache_key key) {
+  // In a layer the block may be the parent's and settle after the layer is gone.
+  block->on_settled([gate = m_gate, weak = std::weak_ptr<resource_handle>(block), key = std::move(key)](auto &) {
+    const auto held = weak.lock();
+    if (!held || held->has_error()) {
+      return;
+    }
+    gate->with([&](resource_system &self) {
+      self.push_resource_to_strong_cache(key, held);
+      // In a layer the block may be the parent's: the layer's cache entry is what its requests find, and what a
+      // change evicts (the pin alone would keep serving the old block).
+      if (self.m_parent && !self.find_cached(key)) {
+        self.push_resource_to_cache(key, held);
+      }
+    });
+  });
+}
+
+void res::resource_system::serialize_pinned(const res::tag &tag, std::shared_ptr<resource_handle> block, adapter ad) {
+  // Main thread: serializing may wait for field handles, which a pool thread must not do. Run outside the gate (the
+  // wait may need a callback that goes through it); the system cannot go away meanwhile, both are on the main thread.
+  const auto id = park(block, [this, tag, block, ad = std::move(ad)] {
+    try {
+      if (!ad) {
+        throw std::runtime_error("No adapter found for resource type");
+      }
+      store(tag, ad->serialize(tag, block->data));
+    } catch (const std::exception &e) {
+      egLOG_ERROR("res/error", "Failed to auto-serialize {0}: {1}", tag.string(), e.what());
+    }
+  });
+  m_tasks.post_main([gate = m_gate, id] {
+    std::optional<parked> step;
+    gate->with([&](resource_system &self) { step = self.unpark(id); });
+    if (step) {
+      step->run();
+    }
+  });
+}
