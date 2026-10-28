@@ -1,6 +1,8 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <cstddef>
+#include <stdexcept>
 #include <unordered_map>
 #include <optional>
 #include <string>
@@ -331,6 +333,38 @@ std::string cfg::format_list(const std::vector<std::string>& values)
 void cfg::warn_wrong_kind(std::string_view name, std::string_view problem)
 {
 	egLOG_WARN("config", "'{}': {}; the value is ignored", name, problem);
+}
+
+namespace {
+	// std::sto* skip leading blanks and stop at the first character that is not part of the number; only blanks may
+	// follow it here.
+	template<class T, class Parse>
+	std::optional<T> parse_number(std::string_view text, Parse parse)
+	{
+		const std::string owned{ text };
+		try {
+			std::size_t used = 0;
+			const T value = parse(owned, &used);
+			if (owned.find_first_not_of(" \t", used) != std::string::npos) {
+				return std::nullopt;
+			}
+			return value;
+		} catch (const std::invalid_argument&) {
+			return std::nullopt;
+		} catch (const std::out_of_range&) {
+			return std::nullopt;
+		}
+	}
+}
+
+std::optional<int> cfg::parse_int(std::string_view text)
+{
+	return parse_number<int>(text, [](const std::string& s, std::size_t* used) { return std::stoi(s, used); });
+}
+
+std::optional<float> cfg::parse_float(std::string_view text)
+{
+	return parse_number<float>(text, [](const std::string& s, std::size_t* used) { return std::stof(s, used); });
 }
 
 void cfg::registrate_variable(std::string_view name, variable_base* var)
