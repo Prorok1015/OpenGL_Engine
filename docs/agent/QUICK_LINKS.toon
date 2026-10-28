@@ -82,7 +82,7 @@ GUI:
 # full controller/panel decomposition. There is NO Editor/panels/ or Editor/editor_app.h.
 Main Editor:
   → Editor/main.cpp (module bootstrap: Core → Engine → Editor)
-  → Editor/config/editor.cfg (settings; resource.path = ../res/)
+  → Editor/config/editor.cfg (settings; resource.path = ../../projects/sandbox/res/ when run without --project)
   → Editor/code/editor_system/controller/edt_editor_system.cpp/h (coordinator)
   → Editor/code/editor_system/controller/edt_level_controller.cpp/h (level I/O, derive_world_arrays)
 

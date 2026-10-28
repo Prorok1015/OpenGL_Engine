@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <string_view>
 #include <vector>
+#include <snk/resource/resolvers/res_write_policy.h>
 
 namespace res
 {
@@ -19,6 +20,8 @@ namespace res
 		// Lowest priority first: the last root wins a lookup and receives writes.
 		std::vector<std::filesystem::path> roots;
 		mount_access access = mount_access::read_write;
+		// Which paths store() may write (checked against the tag and the file it resolves to); every path by default.
+		write_policy writable = write_policy::allow_all();
 	};
 
 	using mount_table = std::vector<mount>;

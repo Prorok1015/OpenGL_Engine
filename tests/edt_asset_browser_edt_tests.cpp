@@ -60,7 +60,7 @@ BOOST_FIXTURE_TEST_CASE(RegisteringEdt_DoesNotAddALayerToTheBrowser, test_util::
 	const auto layers_before = rs->get_resource_layers();
 
 	test_util::temp_dir data("asset_browser_edt_data");
-	BOOST_REQUIRE(edt::register_data_protocol(*rs, data.path()));
+	BOOST_REQUIRE(edt::register_data_protocol(*rs, data.path(), data.path() / "user"));
 
 	const auto layers_after = rs->get_resource_layers();
 	BOOST_REQUIRE(!layers_after.empty());

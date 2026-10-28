@@ -8,6 +8,7 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/res_tag.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_scene_layer.h>
@@ -74,6 +75,12 @@ protected:
 			const res::tag tag{ std::string{ name } };
 			if (layer.resources().exists(tag)) {
 				layer.resources().require<desc::desc_base>(tag).then(layer.tasks(), [frames](desc::desc_base&) { ++*frames; });
+			}
+		}
+		if (layer.resources().exists(res::tag{ std::string{ dll_game::base_tag } })) {
+			for (const std::string_view name : { dll_game::base_tag, dll_game::base_missing_tag }) {
+				layer.resources().require<res::text_resource>(res::tag{ std::string{ name } })
+					.then(layer.tasks(), [frames](res::text_resource&) { ++*frames; });
 			}
 		}
 		data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "dll.task" }, [frames](ds::task_context&) {})

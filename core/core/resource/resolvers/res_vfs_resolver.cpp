@@ -10,8 +10,9 @@
 #include <shared_mutex>
 #include <chrono>
 #include <thread>
+#include <utility>
 
-res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access)
+res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy)
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			if (m_closing) {
@@ -23,6 +24,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 			}
 		})
 	, m_access(access)
+	, m_write_policy(std::move(policy))
 {
 	if (points.empty())
 		return;
@@ -190,6 +192,14 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 		tmp_path = safe_path(entries_stack.top(), tmp_tag);
 		if (!target_path.has_value() || !tmp_path.has_value()) {
 			egLOG_WARN("resource", "Rejected store of '{}': path escapes the resource root", tag.view());
+			return false;
+		}
+		// Both the tag and the file it resolves to must be writable: a link inside the root may lead to a folder
+		// the policy does not cover.
+		const std::string tag_path = fs::path{ tag.relative() }.lexically_normal().generic_string();
+		const std::string file_path = target_path->lexically_relative(entries_stack.top()).generic_string();
+		if (!m_write_policy.allows(tag_path) || !m_write_policy.allows(file_path)) {
+			egLOG_WARN("resource", "Rejected store of '{}': the path is not writable for this protocol", tag.view());
 			return false;
 		}
 		std::error_code ec;

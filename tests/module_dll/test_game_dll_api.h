@@ -17,5 +17,9 @@ namespace dll_game {
 	inline constexpr std::string_view waited_tag = "memory://t/dll_waited.desc";
 	// Same, for a resource that fails to load: its callback is dropped without a call.
 	inline constexpr std::string_view failing_tag = "memory://t/dll_failing.desc";
+	// When the host stored base_tag (a text: the base's adapter), the module waits for it and for base_missing_tag
+	// (never stored, fails) through res_handle::then (#416): blocks of the BASE's cache, requested from the library.
+	inline constexpr std::string_view base_tag = "memory://t/dll_base.txt";
+	inline constexpr std::string_view base_missing_tag = "memory://t/dll_base_missing.txt";
 
 }
