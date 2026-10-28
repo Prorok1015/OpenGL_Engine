@@ -51,6 +51,7 @@
 #include <format>
 #include <fstream>
 #include <span>
+#include <utility>
 
 namespace {
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
@@ -93,6 +94,9 @@ edt::editor_system::~editor_system()
 	}
 	if (m_prefab_panel) {
 		m_prefab_panel->set_context(nullptr);
+	}
+	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
+		ctx_mgr->set_on_game_layer_change(nullptr);
 	}
 }
 
@@ -333,6 +337,33 @@ void edt::editor_system::wire_controller_callbacks()
 	};
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
+		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
+			on_game_layer_change(change == scn::context_manager::game_layer_change::before);
+		});
+	}
+}
+
+void edt::editor_system::on_game_layer_change(bool before)
+{
+	if (before) {
+		// Nothing of the editor may refer to the old layer once it goes: the preview set, the loads in flight, the level.
+		close_prefab_editor();
+		m_pending_desc_handle = {};
+		m_level_after_layer_change = res::tag{};
+		if (m_loading_level) {
+			m_level_after_layer_change = m_state.level_tag;
+			m_loading_level = false;
+			m_loading_level_handle = {};
+		}
+		m_level_ctrl.detach_from_game_layer();
+		return;
+	}
+	if (scn::context_set* level = m_services.level_set()) {
+		level->set_mode(ecs::run_mode::edit);
+	}
+	m_level_ctrl.attach_to_game_layer();
+	if (m_level_after_layer_change.is_valid()) {
+		begin_level_load(std::exchange(m_level_after_layer_change, res::tag{}));
 	}
 }
 
@@ -579,6 +610,8 @@ bool edt::editor_system::poll_level_load()
 
 bool edt::editor_system::poll_pending_desc()
 {
+	// Dropped when the game layer changed under the load.
+	if (!m_pending_desc_handle.is_valid()) return false;
 	if (m_pending_desc_handle.has_error()) {
 		egLOG_ERROR("Editor/Drop", "Failed to load desc '{}'", m_pending_desc_tag.view());
 		m_pending_desc_handle = {};

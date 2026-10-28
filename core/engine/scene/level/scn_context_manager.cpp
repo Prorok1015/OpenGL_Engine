@@ -34,14 +34,19 @@ scn::context_manager::context_manager(res::resource_system& resource,
 
 scn::context_manager::~context_manager()
 {
-	// The sets first: the worlds of a layer are built from its services.
+	// The layers' tasks first (they may touch the worlds), then the sets: the worlds of a layer are built from its
+	// services.
+	for (const auto& layer : m_layers) {
+		layer->stop_tasks();
+	}
 	m_sets.clear();
 }
 
 std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_view name, scn::scene_layer* layer)
 {
 	auto hot_reload = layer ? layer->hot_reload() : m_hot_reload_manager;
-	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), m_channel_types);
+	auto channel_types = layer ? layer->channel_types() : m_channel_types;
+	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types));
 	set->set_layer(layer);
 	return set;
 }
@@ -60,13 +65,15 @@ void scn::context_manager::update(std::chrono::duration<float> dt)
 	}
 }
 
-scn::scene_layer& scn::context_manager::create_layer()
+scn::scene_layer& scn::context_manager::create_layer(ds::task_system* tasks)
 {
-	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory));
+	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory, *m_channel_types, tasks));
 }
 
 void scn::context_manager::destroy_layer(scn::scene_layer& layer)
 {
+	// The layer's tasks may still touch its worlds.
+	layer.stop_tasks();
 	if (m_game_layer == &layer) {
 		set_game_layer(nullptr);
 	}
@@ -78,6 +85,9 @@ void scn::context_manager::destroy_layer(scn::scene_layer& layer)
 
 void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 {
+	if (m_on_game_layer_change) {
+		m_on_game_layer_change(game_layer_change::before);
+	}
 	if (auto* hot_reload = hot_reload_of(*m_level_set); hot_reload && m_level_set->tag().is_valid()) {
 		hot_reload->unwatch_resource(m_level_set->tag());
 	}
@@ -90,6 +100,9 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	*it = std::move(replacement);
 	m_level_set = it->get();
 	m_game_layer = layer;
+	if (m_on_game_layer_change) {
+		m_on_game_layer_change(game_layer_change::after);
+	}
 }
 
 scn::context_set& scn::context_manager::create_set(std::string_view name, scn::scene_layer* layer)

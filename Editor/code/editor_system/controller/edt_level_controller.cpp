@@ -155,6 +155,60 @@ void edt::level_controller::finish_level_load(res::res_handle<scn::level_desc>& 
 	}
 }
 
+// ─── Game layer change ──────────────────────────────────────────────────────
+
+void edt::level_controller::detach_from_game_layer()
+{
+	unwatch_level();
+	m_detached_level.reset();
+	m_detached_world = m_state.active_world_idx;
+	if (!m_state.editor_tag.is_valid()) {
+		// No level: the new layer has no worlds for the editor either.
+		m_world_ctrl.clear_active_world();
+		return;
+	}
+
+	if (auto ctx_mgr = m_services.ctx_manager.lock(); ctx_mgr && m_world_ctrl.on_save_camera) {
+		const std::string* name = m_state.active_world_name();
+		if (auto* world = name ? ctx_mgr->level_set().find(*name) : nullptr) {
+			m_world_ctrl.on_save_camera(world->state());
+		}
+	}
+	m_detached_level = build_level_json();
+	// The world descs hold handles into the old layer's cache, whose desc types may belong to the module going away.
+	m_state.world_descs.clear();
+	m_state.world_names.clear();
+	m_state.worlds_systems_list.clear();
+	m_world_ctrl.clear_active_world();
+}
+
+void edt::level_controller::attach_to_game_layer()
+{
+	if (!m_detached_level) return;
+	const boost::json::object level_json = std::move(*m_detached_level);
+	m_detached_level.reset();
+
+	auto ctx_mgr = m_services.ctx_manager.lock();
+	if (!ctx_mgr) return;
+	auto& resources = *m_services.resources();
+	resources.store(m_state.editor_tag, m_services.descs()->serialize_to_bytes(boost::json::value{ level_json }));
+	resources.signal_changed(m_state.editor_tag);
+	if (!ctx_mgr->load_level(m_state.editor_tag)) {
+		egLOG_ERROR("Editor/GameLayer", "Level '{}' could not be rebuilt in the new game layer", m_state.editor_tag.view());
+		return;
+	}
+	watch_level();
+	auto level_res = resources.require_sync<scn::level_desc>(m_state.editor_tag);
+	if (!level_res.is_ready()) {
+		egLOG_ERROR("Editor/GameLayer", "Level desc '{}' failed to load in the new game layer", m_state.editor_tag.view());
+		return;
+	}
+	populate_worlds_from_level(level_res);
+	const int world_count = static_cast<int>(m_state.world_names.size());
+	const int world = m_detached_world >= 0 && m_detached_world < world_count ? m_detached_world : 0;
+	m_world_ctrl.select_world(world_count == 0 ? -1 : world);
+}
+
 // ─── Desc-to-scene (asset drop / export auto-add) ──────────────────────────
 
 void edt::level_controller::add_desc_to_scene(const res::res_handle<desc::desc_base>& handle, const std::string& key)
