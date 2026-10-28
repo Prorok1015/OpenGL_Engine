@@ -3,5 +3,6 @@
     "name": "Empty Project",
     "engine_version": "0.0.0",
     "start_scene": "res://levels/main.desc",
-    "content_roots": ["res"]
+    "content_roots": ["res"],
+    "modules": [{ "name": "game", "kind": "runtime", "optional": true }]
 }
