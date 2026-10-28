@@ -224,6 +224,9 @@ namespace app::modules {
 					e.state = module_state::initialized;
 					e.provided = data.size() - e.size_before;
 					done.push_back(i);
+					if (e.layer) {
+						e.layer->activate();
+					}
 				}
 			} catch (...) {
 				shutdown_entries(done, data);
@@ -306,6 +309,9 @@ namespace app::modules {
 				e.module->register_services(storage_of(e, data));
 				e.state = module_state::registered;
 				e.module->initialize_services(storage_of(e, data));
+				if (e.layer) {
+					e.layer->activate();
+				}
 			} catch (...) {
 				shutdown_entry(e, data);
 				if (data.size() != e.size_before) {

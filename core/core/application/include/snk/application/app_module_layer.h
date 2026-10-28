@@ -12,6 +12,9 @@ namespace app::modules {
 	{
 		virtual ~module_layer() = default;
 		virtual ds::app_data_storage& storage() = 0;
+		// The module has registered and initialized: the layer goes into use (the game worlds move to it), so
+		// whatever is built on it sees everything the module registered.
+		virtual void activate() {}
 	};
 
 	// Put in the root storage by the engine; module_loader asks it for the layer of a layered() module.
