@@ -92,7 +92,8 @@ namespace cfg {
 			} else if constexpr (std::is_same_v<T, std::string>) {
 				value_ = std::string(val);
 			} else if constexpr (std::is_same_v<T, std::filesystem::path>) {
-				value_ = location / val;
+				// An empty value is an empty path, not the directory of the config file.
+				value_ = val.empty() ? std::filesystem::path{} : location / val;
 			} else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
 				warn_wrong_kind(name_, "the variable is a list: write a yaml sequence (--set takes \"[a, b]\")");
 			} else {

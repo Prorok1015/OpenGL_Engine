@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/common/snk_api.h>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -9,7 +10,8 @@ namespace res
 	// Which paths a resolver may store into. A pattern reads `protocol://glob`; the glob is matched against the
 	// normalized path under the protocol, segment by segment (split at '/'):
 	//   *   inside a segment: any characters but '/'      ("settings/*" does not reach "settings/a/b")
-	//   **  as a whole segment: zero or more segments     ("settings/**" reaches "settings/a/b")
+	//   **  as a whole segment: zero or more segments     ("**/x" reaches "x" and "a/b/x"); a trailing "**" needs
+	//       at least one ("settings/**" reaches "settings/a/b" but not "settings", gitignore style)
 	// Case matters. Patterns of another protocol are skipped, so one list can serve every resolver. A pattern that is
 	// malformed (no protocol, an empty glob or segment, '**' mixed with other characters) is ignored with a warning,
 	// i.e. it allows nothing.
@@ -20,6 +22,10 @@ namespace res
 		static write_policy read_only();
 
 		write_policy(std::string_view protocol, const std::vector<std::string>& patterns);
+
+		// How many patterns of this protocol the policy holds (0 for allow_all and read_only, and when every pattern
+		// was skipped or malformed).
+		std::size_t pattern_count() const { return m_patterns.size(); }
 
 		// `relative_path` is already normalized (safe_path / lexically_normal): no '..', '.' or doubled '/'.
 		bool allows(std::string_view relative_path) const;

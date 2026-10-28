@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -62,8 +63,14 @@ bool edt::register_data_protocol(res::resource_system& res, const std::filesyste
 		egLOG_WARN("editor/data", "editor data directory '{}' not found: shipped edt:// resources are unavailable", data_path.string());
 	}
 
+	res::write_policy policy{ DATA_PROTOCOL, write_patterns };
+	if (!write_patterns.empty() && policy.pattern_count() == 0) {
+		egLOG_WARN("editor/data", "none of the {} write patterns applies to edt:// (a pattern reads edt://glob, the scheme in lower case): "
+			"every write into edt:// will be refused", write_patterns.size());
+	}
+
 	// The vfs resolver reads top-down and stores into the top root only, so the shipped data stays untouched; the policy
 	// keeps even that root to the paths of `write_patterns`.
-	res.add_mount(res::mount{ DATA_PROTOCOL, { data_path, user_path }, res::mount_access::read_write, res::write_policy{ DATA_PROTOCOL, write_patterns } });
+	res.add_mount(res::mount{ DATA_PROTOCOL, { data_path, user_path }, res::mount_access::read_write, std::move(policy) });
 	return exists;
 }

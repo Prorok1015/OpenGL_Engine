@@ -91,4 +91,16 @@ BOOST_AUTO_TEST_CASE(WriteSetting_NameEscapingTheSettingsFolder_IsNotReadBack)
 	BOOST_TEST(!std::filesystem::exists(dir.path() / "escaped.txt"));
 }
 
+BOOST_AUTO_TEST_CASE(WriteSetting_ThroughALayerLimitedToAModulePrefix_ReturnsFalseInsteadOfThrowing)
+{
+	res::resource_system layer{ *rs };
+	layer.limit_writes_to("memory://modules/game/");
+
+	bool written = true;
+	BOOST_CHECK_NO_THROW(written = edt::write_setting(layer, "layout.ini", "x"));
+
+	BOOST_TEST(!written);
+	BOOST_TEST(!std::filesystem::exists(user / "settings" / "layout.ini"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

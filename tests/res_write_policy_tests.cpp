@@ -94,6 +94,42 @@ BOOST_AUTO_TEST_CASE(DoubleStarInTheMiddle_MatchesZeroOrMoreSegments)
 	BOOST_TEST(!policy.allows("a/b/y.txt"));
 }
 
+BOOST_AUTO_TEST_CASE(TrailingDoubleStar_NeedsAtLeastOneSegment)
+{
+	const auto policy = edt_policy({ "edt://settings/**" });
+
+	BOOST_TEST(!policy.allows("settings"));
+	BOOST_TEST(policy.allows("settings/a"));
+	BOOST_TEST(policy.allows("settings/a/b.ini"));
+	BOOST_TEST(edt_policy({ "edt://**" }).allows("a"));
+	BOOST_TEST(edt_policy({ "edt://**" }).allows("a/b/c"));
+	BOOST_TEST(!edt_policy({ "edt://**" }).allows(""));
+}
+
+BOOST_AUTO_TEST_CASE(LeadingDoubleStar_MatchesAtAnyDepthIncludingTheRoot)
+{
+	const auto exact = edt_policy({ "edt://**/x" });
+	BOOST_TEST(exact.allows("x"));
+	BOOST_TEST(exact.allows("a/x"));
+	BOOST_TEST(exact.allows("a/b/x"));
+	BOOST_TEST(!exact.allows("xa"));
+	BOOST_TEST(!exact.allows("a/xa"));
+	BOOST_TEST(!exact.allows("x/a"));
+
+	const auto by_extension = edt_policy({ "edt://**/*.ini" });
+	BOOST_TEST(by_extension.allows("a.ini"));
+	BOOST_TEST(by_extension.allows("d/e/a.ini"));
+	BOOST_TEST(!by_extension.allows("a.json"));
+}
+
+BOOST_AUTO_TEST_CASE(PatternCount_CountsOnlyThePatternsOfItsProtocol)
+{
+	BOOST_TEST(edt_policy({ "res://**", "Edt://x/**", "edt://a/**", "edt://b/*", "edt://c//d" }).pattern_count() == 2u);
+	BOOST_TEST(edt_policy({}).pattern_count() == 0u);
+	BOOST_TEST(res::write_policy::allow_all().pattern_count() == 0u);
+	BOOST_TEST(res::write_policy::read_only().pattern_count() == 0u);
+}
+
 BOOST_AUTO_TEST_CASE(Matching_IsCaseSensitive)
 {
 	const auto policy = edt_policy({ "edt://settings/**" });
