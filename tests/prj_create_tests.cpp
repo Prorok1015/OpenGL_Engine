@@ -9,8 +9,8 @@
 #include <string>
 #include <string_view>
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_EDITOR_DATA_DIR
+#error "SNK_EDITOR_DATA_DIR must point at Editor/data"
 #endif
 
 // File > New Project (EPIC-42 #158): a project made from a template folder.
@@ -19,7 +19,7 @@ namespace {
 	namespace fs = std::filesystem;
 
 	// The one template the editor ships (Editor/data/templates/projects/empty).
-	const fs::path k_empty_template = fs::path{ SNK_EDITOR_RES_DIR } / ".." / "data" / "templates" / "projects" / "empty";
+	const fs::path k_empty_template = fs::path{ SNK_EDITOR_DATA_DIR } / "templates" / "projects" / "empty";
 
 	std::string read_text(const fs::path& file)
 	{

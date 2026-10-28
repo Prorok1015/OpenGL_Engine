@@ -13,8 +13,8 @@
 #include <string_view>
 #include <vector>
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_EDITOR_DATA_DIR
+#error "SNK_EDITOR_DATA_DIR must point at Editor/data"
 #endif
 
 // File > New Project / Open Project (EPIC-42 #158): checked here, then handed to a new editor while this one exits.
@@ -23,7 +23,7 @@ namespace {
 	namespace fs = std::filesystem;
 	namespace json = boost::json;
 
-	const fs::path k_empty_template = fs::path{ SNK_EDITOR_RES_DIR } / ".." / "data" / "templates" / "projects" / "empty";
+	const fs::path k_empty_template = fs::path{ SNK_EDITOR_DATA_DIR } / "templates" / "projects" / "empty";
 
 	std::string utf8_of(const fs::path& path)
 	{
