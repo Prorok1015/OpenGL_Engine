@@ -1,0 +1,7 @@
+{
+    "format_version": 1,
+    "name": "Sandbox",
+    "engine_version": "0.2.0",
+    "start_scene": "res://levels/editor_level.desc",
+    "content_roots": ["res"]
+}

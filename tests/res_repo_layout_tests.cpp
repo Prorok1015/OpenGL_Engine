@@ -17,8 +17,8 @@
 // stay are listed one by one), and every res:// / engine:// / edt:// path that shipped descs and engine sources
 // mention resolves to a file.
 
-#ifndef SNK_EDITOR_RES_DIR
-#error "SNK_EDITOR_RES_DIR must point at Editor/res"
+#ifndef SNK_TEST_PROJECT_DIR
+#error "SNK_TEST_PROJECT_DIR must point at projects/sandbox"
 #endif
 #ifndef SNK_CORE_RES_DIR
 #error "SNK_CORE_RES_DIR must point at core/res"
@@ -47,13 +47,13 @@ struct resource_layout
 };
 
 const fs::path core_res{ SNK_CORE_RES_DIR };
-const fs::path editor_res{ SNK_EDITOR_RES_DIR };
-const fs::path editor_data = editor_res.parent_path() / "data";
+const fs::path project_res = fs::path{ SNK_TEST_PROJECT_DIR } / "res";
+const fs::path editor_data{ SNK_EDITOR_DATA_DIR };
 const fs::path repo_root = core_res.parent_path().parent_path();
 
 resource_layout shipped_layout()
 {
-	return { { core_res, editor_res }, { core_res }, { editor_data } };
+	return { { core_res, project_res }, { core_res }, { editor_data } };
 }
 
 // What stays in the game resources although its name looks like a test: every entry is a fixture some test or the CI
@@ -224,22 +224,22 @@ BOOST_AUTO_TEST_SUITE(ResRepoLayout)
 BOOST_AUTO_TEST_CASE(GameResourceRoots_HoldNoStrayTestFiles)
 {
 	const auto in_core = stray_test_files(core_res, {});
-	const auto in_editor = stray_test_files(editor_res, allowed_fixtures);
+	const auto in_project = stray_test_files(project_res, allowed_fixtures);
 
 	BOOST_TEST(in_core.empty(), "stray test files in core/res:" << joined(in_core));
-	BOOST_TEST(in_editor.empty(), "stray test files in Editor/res (list a real fixture in allowed_fixtures):" << joined(in_editor));
+	BOOST_TEST(in_project.empty(), "stray test files in projects/sandbox/res (list a real fixture in allowed_fixtures):" << joined(in_project));
 }
 
 BOOST_AUTO_TEST_CASE(EveryAllowedFixture_StillExists)
 {
 	for (const std::string& fixture : allowed_fixtures) {
-		BOOST_TEST(fs::is_regular_file(editor_res / fixture), fixture);
+		BOOST_TEST(fs::is_regular_file(project_res / fixture), fixture);
 	}
 }
 
 BOOST_AUTO_TEST_CASE(EveryResEngineAndEdtPathInShippedDescs_ResolvesToAFile)
 {
-	const auto problems = dangling_desc_references(shipped_layout(), { core_res, editor_res, editor_data });
+	const auto problems = dangling_desc_references(shipped_layout(), { core_res, project_res, editor_data });
 
 	BOOST_TEST(problems.empty(), "dangling references in descs:" << joined(problems));
 }

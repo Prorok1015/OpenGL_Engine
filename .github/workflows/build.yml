@@ -408,8 +408,8 @@ jobs:
           echo "::group::core/res"
           "$tool" core/res --check || status=1
           echo "::endgroup::"
-          echo "::group::Editor/res + Editor/data"
-          "$tool" Editor/res --base core/res --edt Editor/data --check || status=1
+          echo "::group::projects/sandbox/res + Editor/data"
+          "$tool" projects/sandbox/res --base core/res --edt Editor/data --check || status=1
           echo "::endgroup::"
           exit $status
 
@@ -481,16 +481,29 @@ jobs:
       - name: Smoke run (smoke_level)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/smoke/final.png \
-            -- --set editor/startup_level levels/smoke_level.desc
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/smoke/final.png headless_out/smoke/editor.log \
             200x200+860+450 0.055 tools/headless/reference/smoke.png
+
+      # The same run on a copy of the test project outside the repository (EPIC-42 #157): nothing in the engine or the
+      # editor may reach the project's files through a path of the repository. Same reference picture.
+      - name: Smoke run (project outside the repository)
+        run: |
+          copy="${RUNNER_TEMP}/sandbox_copy"
+          rm -rf "$copy"
+          cp -r projects/sandbox "$copy"
+          tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/outside/final.png \
+            -- --project "$copy" --set editor/startup_level levels/smoke_level.desc
+          tools/headless/check_smoke.sh headless_out/outside/final.png headless_out/outside/editor.log \
+            200x200+860+450 0.055 tools/headless/reference/smoke.png
+          grep -q "opened project 'Sandbox' (${copy}/project.snkproj)" headless_out/outside/editor.log
 
       # Click-driven scenario (zoom, select, toolbar, light selection); a crash or error log fails it.
       - name: Smoke run (checklist actions)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --actions tools/headless/smoke_checklist.actions --size 1920x1080 \
             --shot headless_out/checklist/final.png \
-            -- --set editor/startup_level levels/smoke_level.desc
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc
           tools/headless/check_smoke.sh headless_out/checklist/final.png headless_out/checklist/editor.log \
             200x200+860+450 0 tools/headless/reference/checklist.png
 
@@ -499,7 +512,7 @@ jobs:
       - name: Smoke run (Game view)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/game_view/final.png \
-            -- --set editor/startup_level levels/smoke_level.desc editor/show_game_view true
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/game_view/final.png headless_out/game_view/editor.log \
             200x200+940+260 0.03 tools/headless/reference/game_view.png
 
@@ -509,7 +522,7 @@ jobs:
       - name: Smoke run (two worlds, Game view)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/two_worlds/final.png \
-            -- --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_two_worlds.desc editor/show_game_view true
           tools/headless/check_smoke.sh headless_out/two_worlds/final.png headless_out/two_worlds/editor.log \
             320x360+980+180 0.03 tools/headless/reference/two_worlds.png
 
@@ -521,7 +534,7 @@ jobs:
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/capture/final.png \
             --wait-for-log 'captured viewport' \
-            -- --set editor/startup_level levels/smoke_level.desc capture/on_settled "$PWD/headless_out/capture/scene.png"
+            -- --project projects/sandbox --set editor/startup_level levels/smoke_level.desc capture/on_settled "$PWD/headless_out/capture/scene.png"
           tools/headless/check_smoke.sh headless_out/capture/scene.png headless_out/capture/editor.log \
             100x100+100+100 0 tools/headless/reference/capture_scene.png
 
