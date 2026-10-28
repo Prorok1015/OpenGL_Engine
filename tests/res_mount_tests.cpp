@@ -145,31 +145,61 @@ BOOST_FIXTURE_TEST_CASE(ResourceSystem_ExposesLayersOfTheMountTable, layers_fixt
 BOOST_FIXTURE_TEST_CASE(ProjectMountTable_EngineUnderTheContentRootsFirstOnTop, layers_fixture)
 {
 	const fs::path shared = dir.path() / "project" / "shared";
-	const fs::path memory = dir.path() / "project" / ".cache" / "memory";
+	const fs::path cache = dir.path() / "project" / ".cache";
+	const fs::path memory = cache / "memory";
+	const fs::path user = cache / "user_profile";
 
-	const auto table = res::resource_system::project_mount_table(engine, { project, shared }, memory);
+	const auto table = res::resource_system::project_mount_table(engine, { project, shared }, cache, user);
 
-	BOOST_REQUIRE(table.size() == 3u);
+	BOOST_REQUIRE(table.size() == 5u);
 	BOOST_TEST(table[0].protocol == res::tag::default_protocol());
 	BOOST_TEST((table[0].roots == std::vector<fs::path>{ engine, shared, project }));
 	BOOST_TEST((table[0].access == res::mount_access::read_write));
 	BOOST_TEST(table[1].protocol == res::tag::memory);
 	BOOST_TEST((table[1].roots == std::vector<fs::path>{ memory }));
-	BOOST_TEST(table[2].protocol == res::tag::engine);
-	BOOST_TEST((table[2].roots == std::vector<fs::path>{ engine }));
-	BOOST_TEST((table[2].access == res::mount_access::read_only));
+	BOOST_TEST(table[2].protocol == res::tag::cache);
+	BOOST_TEST((table[2].roots == std::vector<fs::path>{ cache }));
+	BOOST_TEST(table[3].protocol == res::tag::user);
+	BOOST_TEST((table[3].roots == std::vector<fs::path>{ user }));
+	BOOST_TEST(table[4].protocol == res::tag::engine);
+	BOOST_TEST((table[4].roots == std::vector<fs::path>{ engine }));
+	BOOST_TEST((table[4].access == res::mount_access::read_only));
 	// Only a table: the caller creates the folders.
 	BOOST_TEST(!fs::exists(memory));
 }
 
 BOOST_FIXTURE_TEST_CASE(ProjectMountTable_WithoutEngineBaseHasNoEngineLayer, layers_fixture)
 {
-	const fs::path memory = dir.path() / "project" / ".cache" / "memory";
-	const auto table = res::resource_system::project_mount_table({}, { project }, memory);
+	const fs::path cache = dir.path() / "project" / ".cache";
+	const auto table = res::resource_system::project_mount_table({}, { project }, cache, cache / "user_profile");
 
-	BOOST_REQUIRE(table.size() == 2u);
+	BOOST_REQUIRE(table.size() == 4u);
 	BOOST_TEST((table[0].roots == std::vector<fs::path>{ project }));
-	BOOST_TEST(table[1].protocol == res::tag::memory);
+	for (const auto& mount : table) {
+		BOOST_TEST(mount.protocol != res::tag::engine);
+	}
+}
+
+BOOST_FIXTURE_TEST_CASE(CacheAndUser_ResolveAndStoreInTheirDirectories, layers_fixture)
+{
+	ds::task_system tasks{ test_util::manual_tasks() };
+	const fs::path cache = dir.path() / "project" / ".cache";
+	const fs::path user = cache / "user_profile";
+	fs::create_directories(cache / "memory");
+	fs::create_directories(user);
+	res::resource_system sys(tasks, res::resource_system::project_mount_table({}, { project }, cache, user));
+
+	BOOST_TEST(sys.store(res::tag{ "cache://thumbs/a.png" }, to_bytes("thumb")));
+	BOOST_TEST(sys.store(res::tag{ "user://saves/slot1.json" }, to_bytes("save")));
+	BOOST_TEST(wait_for_content(cache / "thumbs" / "a.png", "thumb"));
+	BOOST_TEST(wait_for_content(user / "saves" / "slot1.json", "save"));
+	BOOST_TEST(sys.exists(res::tag{ "cache://thumbs/a.png" }));
+	BOOST_TEST(sys.exists(res::tag{ "user://saves/slot1.json" }));
+
+	// Neither leaks into the content: the project's res:// does not see them.
+	BOOST_TEST(!sys.exists(res::tag{ "res://thumbs/a.png" }));
+	BOOST_TEST(!sys.exists(res::tag{ "res://saves/slot1.json" }));
+	BOOST_TEST(!sys.store(res::tag{ "user://../../escape.txt" }, to_bytes("x")));
 }
 
 BOOST_FIXTURE_TEST_CASE(Store_OverAnEngineOnlyFileIsLogged, layers_fixture)
@@ -238,6 +268,7 @@ BOOST_FIXTURE_TEST_CASE(ResourceInit_MountsAValidProjectAndCreatesItsWritableFol
 
 	const auto& project_ctx = data.require<prj::project_context>();
 	BOOST_TEST(fs::is_directory(project_ctx.memory_dir()));
+	BOOST_TEST(fs::is_directory(project_ctx.user_profile_dir()));
 	BOOST_TEST(data.require<res::resource_system>().get_resources_path() == fs::canonical(project));
 	BOOST_TEST(data.require<res::resource_system>().exists(res::tag{ "res://levels/main.desc" }));
 	core::res::resource_term(data);
