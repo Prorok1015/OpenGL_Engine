@@ -38,6 +38,10 @@ protected:
 	}
 };
 
+// A level with a component of the module's desc type.
+constexpr const char* MODULE_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[
+	{"__type":"world_desc","name":"w0","systems":[],"components":{"gc":{"__type":"editor_game_desc","speed":3}}}]})";
+
 constexpr const char* BASE_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":[]},
 	{"__type":"world_desc","name":"w1","systems":[]}]})";
@@ -54,6 +58,7 @@ struct editor_fixture : test_util::module_env {
 			if (change == scn::context_manager::game_layer_change::before) {
 				level_ctrl.detach_from_game_layer();
 			} else {
+				module_types_at_attach.push_back(services.descs()->is_registered("editor_game_desc"));
 				level_ctrl.attach_to_game_layer();
 			}
 		});
@@ -77,6 +82,13 @@ struct editor_fixture : test_util::module_env {
 	edt::scene_editor scene_ed{ state, services };
 	edt::world_controller world_ctrl{ state, services };
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
+	// Whether the module's desc type was known each time the editor rebuilt its level.
+	std::vector<bool> module_types_at_attach;
+
+	bool level_has_module_component() const
+	{
+		return boost::json::serialize(level_ctrl.build_level_json()).find("editor_game_desc") != std::string::npos;
+	}
 };
 
 }
@@ -114,6 +126,28 @@ BOOST_AUTO_TEST_CASE(the_edited_level_moves_into_the_layer_of_a_loaded_module_an
 	BOOST_TEST(contexts().level_set().find("w1") != nullptr);
 	BOOST_TEST((state.world_names == std::vector<std::string>{ "w0", "w1" }), boost::test_tools::per_element());
 	BOOST_TEST(state.active_world_idx == 1);
+}
+
+BOOST_AUTO_TEST_CASE(the_editor_rebuilds_its_level_after_the_module_registered)
+{
+	open_level(put("lv.desc", BASE_LEVEL));
+	loader.load(std::make_unique<editor_game_module>(), root);
+	BOOST_REQUIRE(module_types_at_attach.size() == 1u); // the game layer changes once
+	BOOST_TEST(module_types_at_attach.front());
+	loader.unload("editor_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_component_of_the_module_survives_unload_and_reload_in_the_edited_level)
+{
+	loader.load(std::make_unique<editor_game_module>(), root);
+	open_level(put("lv.desc", MODULE_LEVEL));
+	BOOST_REQUIRE(level_has_module_component());
+
+	loader.unload("editor_game", root);
+	BOOST_TEST(level_has_module_component()); // kept as written while the module is away
+	loader.load(std::make_unique<editor_game_module>(), root);
+	BOOST_TEST(level_has_module_component());
+	loader.unload("editor_game", root);
 }
 
 BOOST_AUTO_TEST_CASE(without_an_open_level_a_layer_change_leaves_the_editor_empty)

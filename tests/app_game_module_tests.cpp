@@ -6,6 +6,7 @@
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_prefab_desc.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
@@ -175,6 +176,15 @@ constexpr const char* GAME_LEVEL = R"({"__type":"level_desc","name":"lv","worlds
 	{"__type":"world_desc","name":"w0","systems":["game::move","game::world"],
 	 "components":{"g":{"__type":"game_desc","value":2}}}]})";
 
+// A world of the module's layer with a prefab instance: the layer's hot reload manager watches the prefab.
+constexpr const char* PREFAB_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[
+	{"__type":"world_desc","name":"w0","systems":["game::move"],
+	 "components":{"g":{"__type":"game_desc","value":1}},
+	 "children":{"robot":{"components":{"model_key":"memory://t/rig.prefab.desc"}}}}]})";
+
+constexpr const char* RIG_PREFAB = R"({"__type":"prefab_desc","__version":3,"children":[
+	{"__id":"00000000000000a1","name":"bone"}]})";
+
 struct game_module_fixture : test_util::module_env {
 	game_module_fixture()
 	{
@@ -268,6 +278,36 @@ BOOST_AUTO_TEST_CASE(unloading_takes_the_worlds_then_the_layer_then_the_module_s
 
 	loader.unload("test_game", root);
 	BOOST_TEST(g_teardown == (std::vector<std::string>{ "world", "service" }), boost::test_tools::per_element());
+}
+
+// Under ASan: unloading must not reach the layer's hot reload manager after the layer's resources are gone.
+BOOST_AUTO_TEST_CASE(unloading_a_module_whose_world_has_a_prefab_instance)
+{
+	put("rig.prefab.desc", RIG_PREFAB);
+	loader.load(std::make_unique<test_game_module>(), root);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", PREFAB_LEVEL)));
+	pump();
+	auto* world = contexts().level_set().find("w0");
+	BOOST_REQUIRE(world != nullptr);
+	BOOST_TEST(!world->state().view<scn::prefab_instance>().empty());
+
+	loader.unload("test_game", root);
+	BOOST_TEST(contexts().level_set().size() == 0u);
+	BOOST_TEST(!contexts().game_layer()->descs().is_registered("game_desc"));
+}
+
+BOOST_AUTO_TEST_CASE(the_game_layer_moves_to_the_module_only_after_it_registered)
+{
+	auto* empty = contexts().game_layer();
+	loader.load(std::make_unique<test_game_module>(), root);
+	BOOST_TEST(contexts().game_layer() != empty);
+	BOOST_TEST(contexts().game_layer()->descs().is_registered("game_desc"));
+
+	// A module that fails to register never becomes the game layer.
+	loader.unload("test_game", root);
+	auto* fresh = contexts().game_layer();
+	BOOST_CHECK_THROW(loader.load(std::make_unique<throwing_game_module>(), root), std::runtime_error);
+	BOOST_TEST(contexts().game_layer() == fresh);
 }
 
 BOOST_AUTO_TEST_CASE(the_module_loads_again_after_unloading)

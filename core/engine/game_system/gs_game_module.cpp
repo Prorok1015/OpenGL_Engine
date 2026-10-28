@@ -25,20 +25,17 @@ namespace {
 			, m_current(current)
 			, m_storage(&root, ds::app_data_storage::isolated)
 		{
-			// The new layer becomes the game layer before the empty one goes, so the game layer changes once.
+			// The game layer moves to it in activate(), once the module has registered: the worlds built then see the
+			// module's systems and types.
 			m_layer = &m_contexts.create_layer(m_tasks);
-			auto* previous = m_contexts.game_layer();
-			m_contexts.set_game_layer(m_layer);
-			if (previous) {
-				m_contexts.destroy_layer(*previous);
-			}
 			m_storage.attach(borrowed(*m_layer));
 			m_storage.attach(borrowed(m_layer->resources()));
 			m_storage.attach(borrowed(m_layer->descs()));
 			m_storage.attach(borrowed(m_layer->assembler()));
 			m_storage.attach(borrowed(m_layer->systems()));
 			m_storage.attach(borrowed(m_layer->components()));
-			m_storage.attach(m_layer->hot_reload());
+			// Borrowed like the rest: the layer destroys its hot reload manager while its resources are still there.
+			m_storage.attach(borrowed(*m_layer->hot_reload()));
 			m_storage.construct<gs::module_context>(*m_layer, root.require_shared<cmd::command_registry>().get(), m_tasks);
 			m_current = module;
 		}
@@ -48,10 +45,23 @@ namespace {
 			// Its tasks, its worlds (the set "level" goes with the change of the game layer), the rest of the layer,
 			// then the module's services: none of them may run the module's code after the layer is gone.
 			m_layer->stop_tasks();
-			m_contexts.set_game_layer(&m_contexts.create_layer(m_tasks));
+			if (m_active) {
+				m_contexts.set_game_layer(&m_contexts.create_layer(m_tasks));
+			}
 			m_contexts.destroy_layer(*m_layer);
 			m_storage = ds::app_data_storage{};
 			m_current.clear();
+		}
+
+		// The new layer becomes the game layer before the empty one goes, so the game layer changes once.
+		void activate() override
+		{
+			auto* previous = m_contexts.game_layer();
+			m_contexts.set_game_layer(m_layer);
+			m_active = true;
+			if (previous) {
+				m_contexts.destroy_layer(*previous);
+			}
 		}
 
 		game_module_layer(const game_module_layer&) = delete;
@@ -64,6 +74,7 @@ namespace {
 		ds::task_system* m_tasks = nullptr;
 		std::string& m_current;
 		scn::scene_layer* m_layer = nullptr;
+		bool m_active = false;
 		ds::app_data_storage m_storage;
 	};
 
