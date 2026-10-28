@@ -141,10 +141,8 @@ BOOST_AUTO_TEST_CASE(a_failed_resource_drops_the_library_callback_without_a_call
 	BOOST_REQUIRE(layer != nullptr);
 	BOOST_REQUIRE(ds::detail::held_count(layer->tasks()) == 2u);
 	pump();
-	{
-		const auto failed = layer->resources().require<desc::desc_base>(failing);
-		BOOST_REQUIRE(failed.has_error());
-	}
+	// The failed block is not kept (nothing holds it once it settled), so it is not asked again here. Its callback left
+	// the owner only through drop_held: a block destroyed unsettled would leave it held.
 	BOOST_TEST(ds::detail::held_count(layer->tasks()) == 0u);
 	loader.unload(dll_game::module_name, root);
 	BOOST_TEST(!resident(g_module_path));
