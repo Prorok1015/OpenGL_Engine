@@ -169,6 +169,16 @@ BOOST_AUTO_TEST_CASE(StateQueries_AreAllowedByCommandId)
 	}
 }
 
+// problems.list is listed by its id: another problems.* command stays hidden until it is reviewed.
+BOOST_AUTO_TEST_CASE(ProblemsList_IsAllowedByCommandId_NotItsDomain)
+{
+	cmd::command_desc desc;
+	desc.id = "problems.list";
+	BOOST_TEST(edt::agent_may_use(desc));
+	desc.id = "problems.clear";
+	BOOST_TEST(!edt::agent_may_use(desc));
+}
+
 BOOST_AUTO_TEST_CASE(StateQueriesStayClosedWhenTheMetadataSaysMutateOrRisk)
 {
 	cmd::command_desc desc;

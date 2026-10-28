@@ -42,6 +42,7 @@ namespace edt {
 	class viewport_panel;
 	class game_view_panel;
 	class console_panel;
+	class problems_panel;
 	class blackboard_panel;
 	class asset_browser_panel;
 	class prefab_editor_panel;
@@ -127,6 +128,7 @@ namespace edt {
 		std::shared_ptr<viewport_panel>        m_viewport_panel;
 		std::shared_ptr<game_view_panel>       m_game_view_panel;
 		std::shared_ptr<console_panel>         m_console_panel;
+		std::shared_ptr<problems_panel>        m_problems_panel;
 		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
 		// The console's feed from the engine log; removed with the editor system.
 		engine::log_sink_handle                m_log_sink;

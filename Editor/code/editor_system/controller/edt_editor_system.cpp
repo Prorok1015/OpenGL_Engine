@@ -13,6 +13,7 @@
 #include "edt_viewport_panel.h"
 #include "edt_game_view_panel.h"
 #include "edt_console_panel.h"
+#include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
 #include "edt_asset_browser_panel.h"
 #include "edt_prefab_editor_panel.h"
@@ -256,6 +257,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}));
 	}
 	add_panel(m_console_panel, dock_slot::bottom_right, true);
+	m_problems_panel = std::make_shared<problems_panel>(m_context->problems(), data.has_value<prj::project_context>()
+		? data.require<prj::project_context>().root : std::filesystem::path{});
+	add_panel(m_problems_panel, dock_slot::bottom_right, true);
 	m_blackboard_panel = std::make_shared<blackboard_panel>();
 	m_blackboard_panel->set_manager_getter([this] { return m_services.ctx_manager.lock(); });
 	add_panel(m_blackboard_panel, dock_slot::bottom_right, false);

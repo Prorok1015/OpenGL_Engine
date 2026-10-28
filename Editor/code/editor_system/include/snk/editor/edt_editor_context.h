@@ -8,6 +8,7 @@
 #include "edt_inspector_registry.h"
 #include "edt_job_service.h"
 #include "edt_panel_registry.h"
+#include "edt_problem_list.h"
 #include "edt_selection_service.h"
 #include <vector>
 
@@ -24,8 +25,8 @@ namespace edt
 	// Facade over the engine services and the editor's own services. Created by editor_system::init and
 	// registered in ds::app_data_storage (data.require<edt::editor_context>()). Engine services are
 	// references and are not owned; `commands` is the process-wide command registry that actions() adds the
-	// editor's part to (and that the engine registered log.read into). The job.* and dialog.* commands are
-	// registered here and live as long as the context. A job that failed (threw) is logged and shown as an error
+	// editor's part to (and that the engine registered log.read into). The job.*, dialog.* and problems.list
+	// commands are registered here and live as long as the context. A job that failed (threw) is logged and shown as an error
 	// message dialog; the destructor waits for the running jobs, so build the context after what they use. The scene document belongs to the editor (its controllers are built
 	// on it before the context exists); the context's document_manager refers to it and owns the prefab preview.
 	// The engine services the editor works through (context manager, assembler, system factory) are the editor's
@@ -55,6 +56,8 @@ namespace edt
 		const selection_service& selection() const { return m_selection; }
 		dialog_service& dialogs() { return m_dialogs; }
 		job_service& jobs() { return m_jobs; }
+		problem_list& problems() { return m_problems; }
+		const problem_list& problems() const { return m_problems; }
 		panel_registry& panels() { return m_panels; }
 		action_registry& actions() { return m_actions; }
 		inspector_registry& inspectors() { return m_inspectors; }
@@ -70,6 +73,7 @@ namespace edt
 		selection_service m_selection{ m_events };
 		dialog_service m_dialogs;
 		job_service m_jobs;
+		problem_list m_problems{ &m_events };
 		panel_registry m_panels;
 		action_registry m_actions;
 		inspector_registry m_inspectors;

@@ -144,7 +144,8 @@ namespace edt
 
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
-	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished).
+	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
+	// problem_list (problems_changed).
 	class editor_events
 	{
 	public:
@@ -161,5 +162,7 @@ namespace edt
 		signal<std::uint64_t, const std::string&> job_started; // (id, label)
 		signal<std::uint64_t, float, const std::string&> job_progress; // (id, fraction in [0, 1], note)
 		signal<std::uint64_t, job_status, const std::string&> job_finished; // (id, done | failed | cancelled, error text)
+		// The problems of one source were replaced or cleared (problem_list).
+		signal<const std::string&> problems_changed; // (source)
 	};
 }
