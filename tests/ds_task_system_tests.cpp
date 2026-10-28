@@ -618,6 +618,8 @@ BOOST_AUTO_TEST_CASE(TheOwnerHoldsTheCapturesOfItsCallbacks)
 		task_owner.cancel_tasks();
 		owner.reset();
 		BOOST_TEST(watched.expired());
+		// The cancelled task's entry stays in the lane until a worker pops it; without this the next run_one takes it.
+		while (tasks.run_one(lane::compute)) {}
 		tasks.drain_main();
 	}
 	{ // delivered: the owner lets go of it after the call
@@ -629,7 +631,8 @@ BOOST_AUTO_TEST_CASE(TheOwnerHoldsTheCapturesOfItsCallbacks)
 		auto handle = tasks.run(lane::compute, { "delivered" }, [](ds::task_context&) {});
 		handle.then_main(owner, [capture, &calls](ds::task_result<void>&) { ++calls; });
 		capture.reset();
-		tasks.run_one(lane::compute);
+		BOOST_REQUIRE(tasks.run_one(lane::compute));
+		BOOST_REQUIRE(handle.done());
 		tasks.drain_main();
 		BOOST_TEST(calls == 1);
 		BOOST_TEST(watched.expired());
