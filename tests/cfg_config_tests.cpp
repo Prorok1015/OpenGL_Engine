@@ -23,6 +23,16 @@ int run_cli(std::vector<std::string> args)
 
 BOOST_AUTO_TEST_SUITE(CfgConfigTests)
 
+BOOST_AUTO_TEST_CASE(Cli_AllowEngineVersionMismatchSetsItsVariable)
+{
+	// Stands in for core_module's variable of the same name for the length of the test.
+	cfg::variable<bool> allow{ "project/allow_engine_version_mismatch", false };
+	run_cli({});
+	BOOST_TEST(!static_cast<bool>(allow));
+	run_cli({ "--allow-engine-version-mismatch" });
+	BOOST_TEST(static_cast<bool>(allow));
+}
+
 BOOST_AUTO_TEST_CASE(Cli_ProjectIsSetProjectFileAndSetStillWins)
 {
 	// Stands in for core_module's variable of the same name for the length of the test.

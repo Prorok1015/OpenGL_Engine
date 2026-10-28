@@ -14,6 +14,7 @@
 #include <format>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -400,6 +401,79 @@ BOOST_AUTO_TEST_CASE(Imgui_FilePickerClosedFromOutsideCancelsAndANewOneOpensAgai
 	imgui.frame([&] { service.update(); });
 	BOOST_TEST(service.pending() == 0u);
 	BOOST_TEST(picked == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Choice_AnswerByIndexBeforeItIsDrawnRunsTheCallbackAtOnce)
+{
+	std::vector<std::optional<std::size_t>> got;
+	const auto id = service.choose("Pick", "Which one?", { "First", "Second" },
+		[&](std::optional<std::size_t> picked) { got.push_back(picked); });
+
+	const auto list = service.list();
+	BOOST_REQUIRE(list.size() == 1u);
+	BOOST_TEST(list[0].kind == "choice");
+	BOOST_TEST(list[0].text == "Which one?");
+
+	BOOST_TEST(service.answer(id, boost::json::parse(R"({"index":1})")).ok);
+	BOOST_REQUIRE(got.size() == 1u);
+	BOOST_TEST((got[0] == std::optional<std::size_t>{ 1 }));
+	BOOST_TEST(service.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Choice_CancelAnswerReportsNoOption)
+{
+	std::vector<std::optional<std::size_t>> got;
+	const auto id = service.choose("Pick", "Which one?", { "Only" },
+		[&](std::optional<std::size_t> picked) { got.push_back(picked); });
+
+	BOOST_TEST(service.answer(id, boost::json::parse(R"({"cancel":true})")).ok);
+	BOOST_REQUIRE(got.size() == 1u);
+	BOOST_TEST(!got[0].has_value());
+}
+
+BOOST_AUTO_TEST_CASE(Choice_RejectsAnIndexOutOfRangeAndMixedAnswers)
+{
+	int calls = 0;
+	const auto id = service.choose("Pick", "Which one?", { "A", "B" }, [&](std::optional<std::size_t>) { ++calls; });
+
+	BOOST_TEST(!service.answer(id, boost::json::parse(R"({"index":2})")).ok);
+	BOOST_TEST(!service.answer(id, boost::json::parse(R"({"index":-1})")).ok);
+	BOOST_TEST(!service.answer(id, boost::json::parse(R"({"index":0,"cancel":true})")).ok);
+	BOOST_TEST(!service.answer(id, boost::json::parse(R"({})")).ok);
+	BOOST_TEST(calls == 0);
+	BOOST_TEST(service.is_pending(id));
+}
+
+BOOST_AUTO_TEST_CASE(Choice_CancelAllAutoAnswerReportsNoOption)
+{
+	edt::dialog_auto_answer answer;
+	answer.cancel_all = true;
+	service.set_auto_answer(answer);
+
+	std::vector<std::optional<std::size_t>> got;
+	service.choose("Pick", "Which one?", { "A" }, [&](std::optional<std::size_t> picked) { got.push_back(picked); });
+	gui.frame();
+
+	BOOST_REQUIRE(got.size() == 1u);
+	BOOST_TEST(!got[0].has_value());
+	BOOST_TEST(service.pending() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(Choice_EscapeReportsNoOption)
+{
+	imgui_ctx imgui;
+	std::vector<std::optional<std::size_t>> got;
+	service.choose("Pick", "Which one?", { "A", "B" }, [&](std::optional<std::size_t> picked) { got.push_back(picked); });
+	imgui.frame([&] { service.update(); });
+	imgui.frame([&] { service.update(); });
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+	imgui.frame([&] { service.update(); });
+
+	BOOST_REQUIRE(got.size() == 1u);
+	BOOST_TEST(!got[0].has_value());
+	BOOST_TEST(service.pending() == 0u);
+	ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+	imgui.frame([] {});
 }
 
 BOOST_AUTO_TEST_SUITE_END()
