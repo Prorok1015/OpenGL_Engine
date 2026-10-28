@@ -164,8 +164,11 @@ namespace ds {
 
 		protected:
 			virtual void invoke(task_context& ctx) = 0;
+			virtual void drop_body() noexcept = 0;
 
 		private:
+			// pending -> `outcome` without running the body, whose captures go before the task reads as done.
+			bool finish_unrun(task_status outcome);
 			void finalize();
 
 			const task_desc m_desc;
@@ -211,6 +214,8 @@ namespace ds {
 					value.emplace(body(ctx));
 				}
 			}
+
+			void drop_body() noexcept override { m_body = nullptr; }
 
 		private:
 			body_t m_body;
