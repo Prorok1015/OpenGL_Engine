@@ -383,7 +383,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
 		const res::tag level = startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level);
 		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { begin_level_load(level); },
-			[this] { return poll_level_load(); }));
+			[this] {
+				if (poll_level_load()) {
+					return true;
+				}
+				// Begun in a frame, the load ends a frame later, and closing its modal focuses the top panel. The
+				// editor starts with no panel focused, as when the load began before the first frame (#437).
+				ImGui::SetWindowFocus(nullptr);
+				return false;
+			}));
 	}
 
 	if (cfg_agent_server) {

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.26)
 
 # SNK_COMPILER_CACHE / SNK_PCH. Before project(): the MSVC debug-info policy it sets must precede
 # it, and NO_POLICY_SCOPE keeps that policy in this scope.
