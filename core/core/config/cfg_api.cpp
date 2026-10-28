@@ -171,7 +171,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 {
 	po::options_description desc("Allowed options");
 	desc.add_options()
-		("help,c", "call list of variables")
+		("help,h", "call list of variables")
 		("config,c", po::value<std::string>(), "set a path to a config entry")
 		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var")
 		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it")

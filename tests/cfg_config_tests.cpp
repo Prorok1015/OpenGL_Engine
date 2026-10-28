@@ -194,6 +194,14 @@ BOOST_AUTO_TEST_CASE(Cli_HelpReturnsFalseAndSkipsOverrides)
 	BOOST_TEST(static_cast<int>(a) == 1);
 }
 
+// -h is --help; -c belongs to --config alone (#382), which ConfigFile_* loads through.
+BOOST_AUTO_TEST_CASE(Cli_ShortHIsHelp)
+{
+	cfg::variable<int> a{ "cfgtest/short_help_var", 1 };
+	BOOST_TEST(run_cli({ "-h", "--set", "cfgtest/short_help_var", "99" }) == 0);
+	BOOST_TEST(static_cast<int>(a) == 1);
+}
+
 // ---- config file: extends chain + prefix maps + path vars (runs ONCE per process) ----
 
 // ---- variables of the same name, config_view (#405) ----
@@ -266,7 +274,8 @@ BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningF
 	cfg::variable<int> missing{ "common/not_in_any_file", 77 };
 	cfg::variable_map files{ "logger/file" };
 
-	cfg::initialize_configs(top);
+	// Through the command line, as the editor gets it: -c is --config (#382).
+	BOOST_TEST(run_cli({ "-c", top.string() }) == 1);
 	BOOST_TEST(cfg::loaded_config_path() == std::filesystem::absolute(top).lexically_normal());
 
 	// base value inherited through two levels of extends
