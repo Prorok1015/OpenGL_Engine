@@ -337,7 +337,18 @@ struct channel_type_impl final : channel_type
 class channel_registry
 {
 public:
-	// False when the type is already registered. A broadcast copies the message, so T must be copyable.
+	channel_registry() = default;
+	// A layer's registry (MODULE_LAYER.md): the parent's types as they are now, at their indices, then this one's.
+	// Types the parent gets later are not seen here, so the indices of the sets built on it never move. The parent
+	// outlives this registry.
+	explicit channel_registry(const channel_registry* parent)
+		: m_parent(parent)
+		, m_parent_size(parent ? parent->size() : 0)
+	{
+	}
+
+	// False when the type is already registered (here or in the parent). A broadcast copies the message, so T must
+	// be copyable.
 	template <class T>
 	bool add()
 	{
@@ -351,8 +362,8 @@ public:
 	std::optional<size_t> index_of() const
 	{
 		const entt::id_type hash = entt::type_hash<T>::value();
-		for (size_t i = 0; i < m_types.size(); ++i) {
-			if (m_types[i]->hash() == hash) return i;
+		for (size_t i = 0; i < size(); ++i) {
+			if (type(i).hash() == hash) return i;
 		}
 		return std::nullopt;
 	}
@@ -360,10 +371,15 @@ public:
 	template <class T>
 	bool contains() const { return index_of<T>().has_value(); }
 
-	size_t size() const { return m_types.size(); }
-	const detail::channel_type& type(size_t index) const { return *m_types[index]; }
+	size_t size() const { return m_parent_size + m_types.size(); }
+	const detail::channel_type& type(size_t index) const
+	{
+		return index < m_parent_size ? m_parent->type(index) : *m_types[index - m_parent_size];
+	}
 
 private:
+	const channel_registry* m_parent = nullptr;
+	size_t m_parent_size = 0;
 	std::vector<std::unique_ptr<detail::channel_type>> m_types;
 };
 
