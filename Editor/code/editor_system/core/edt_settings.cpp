@@ -18,7 +18,7 @@ bool edt::write_setting(res::resource_system& res, std::string_view name, std::s
 	const res::tag tag = settings_tag(name);
 	std::vector<std::byte> bytes(text.size());
 	std::transform(text.begin(), text.end(), bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
-	if (!res.store(tag, bytes)) {
+	if (!res.store_sync(tag, bytes)) {
 		egLOG_WARN("editor/settings", "cannot store '{}'", tag.view());
 		return false;
 	}

@@ -78,13 +78,14 @@ BOOST_AUTO_TEST_CASE(WriteSetting_LandsInTheUserRootNeverInTheShippedData)
 {
 	BOOST_REQUIRE(edt::write_setting(*rs, "layout.ini", "[Window][Main]"));
 
+	BOOST_TEST(std::filesystem::exists(user / "settings" / "layout.ini")); // written when write_setting returns
 	BOOST_TEST(wait_for_text(user / "settings" / "layout.ini", "[Window][Main]"));
 	BOOST_TEST(!std::filesystem::exists(data / "settings"));
 }
 
 BOOST_AUTO_TEST_CASE(WriteSetting_NameEscapingTheSettingsFolder_IsNotReadBack)
 {
-	edt::write_setting(*rs, "../../escaped.txt", "x");
+	BOOST_TEST(!edt::write_setting(*rs, "../../escaped.txt", "x"));
 
 	BOOST_TEST(!edt::read_setting(*rs, "../../escaped.txt").has_value());
 	BOOST_TEST(!std::filesystem::exists(dir.path() / "escaped.txt"));
