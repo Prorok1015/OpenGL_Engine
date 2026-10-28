@@ -18,6 +18,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}/import"
 	"${CMAKE_CURRENT_SOURCE_DIR}/gizmo"
 	"${CMAKE_CURRENT_SOURCE_DIR}/input"
+	"${CMAKE_CURRENT_SOURCE_DIR}/game_build"
 )
 
 # snk::engine = aggregated object code (symbols); snk::engine_api = the public header surface

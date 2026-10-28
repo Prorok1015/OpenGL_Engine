@@ -23,6 +23,7 @@ edt::editor_context::editor_context(res::resource_system& resources, rnd::render
 	};
 	add_all(register_job_commands(m_actions.commands(), m_jobs));
 	add_all(register_dialog_commands(m_actions.commands(), m_dialogs));
+	add_all(register_problem_commands(m_actions.commands(), m_problems));
 	add_all(register_state_commands(m_actions.commands(), state_command_sources{
 		m_documents, m_selection, m_services, m_asset_kinds,
 		[this] { return m_resources.get_resource_layers(); } }));
