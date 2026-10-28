@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -17,9 +18,18 @@ namespace ds {
 	class app_data_storage
 	{
 	public:
+		struct isolated_t {};
+		static constexpr isolated_t isolated{};
+
 		app_data_storage() = default;
 		explicit app_data_storage(app_data_storage* parent)
 			: m_parent(parent) {
+		}
+		// A child that reads through to the parent only the services listed with expose<T>(): a game module's layer,
+		// whose module must not reach the base's registries (MODULE_LAYER.md §5). Anything else of the parent is
+		// refused: has_value false, require_shared null, require throws std::logic_error.
+		app_data_storage(app_data_storage* parent, isolated_t)
+			: m_parent(parent), m_isolated(true) {
 		}
 		app_data_storage(app_data_storage&& other) = default;
 		app_data_storage& operator=(app_data_storage&& other) {
@@ -28,6 +38,8 @@ namespace ds {
 				m_entries = std::move(other.m_entries);
 				m_index = std::move(other.m_index);
 				m_parent = other.m_parent;
+				m_isolated = other.m_isolated;
+				m_exposed = std::move(other.m_exposed);
 			}
 			return *this;
 		}
@@ -60,6 +72,10 @@ namespace ds {
 		T& require() const {
 			const entry* found = find_entry(type_key<T>(), type_name<T>());
 			if (!found) {
+				if (hidden(type_key<T>(), type_name<T>())) {
+					throw std::logic_error(std::string{ "ds::app_data_storage::require: " } + std::string{ type_name<T>() }
+						+ " belongs to the base and is not exposed to this storage (register through the module's layer)");
+				}
 				// Hard error in every build type: a missing service must not turn into a null dereference.
 				throw std::runtime_error(std::string{ "ds::app_data_storage::require: service not found: " } + std::string{ type_name<T>() });
 			}
@@ -74,6 +90,15 @@ namespace ds {
 		template<class KEY, class INSTANCE, class... A>
 		KEY& construct(A&&... args) {
 			return add<KEY, INSTANCE>(std::forward<A>(args)...);
+		}
+
+		// Puts an object owned elsewhere under T; `object` may be an aliasing shared_ptr that owns nothing (a
+		// layer's storage refers to the layer's services this way).
+		template<class T>
+		T& attach(std::shared_ptr<T> object) {
+			T& ref = *object;
+			insert(type_key<T>(), type_name<T>(), std::move(object));
+			return ref;
 		}
 
 		template<class T>
@@ -91,6 +116,12 @@ namespace ds {
 
 		std::size_t size() const noexcept {
 			return m_entries.size();
+		}
+
+		// An isolated storage reads T through to its parent.
+		template<class T>
+		void expose() {
+			m_exposed.insert(type_key<T>());
 		}
 
 	private:
@@ -134,15 +165,28 @@ namespace ds {
 			}
 		}
 
-		// Looks in this storage first, then in the parents.
+		// Looks in this storage first, then in the parents, up to an isolated storage that does not expose the key.
 		const entry* find_entry(std::uint64_t key, std::string_view name) const {
 			for (const app_data_storage* storage = this; storage != nullptr; storage = storage->m_parent) {
 				auto it = storage->m_index.find(key);
 				if (it != storage->m_index.end() && storage->m_entries[it->second].name == name) {
 					return &storage->m_entries[it->second];
 				}
+				if (storage->m_isolated && !storage->m_exposed.contains(key)) {
+					return nullptr;
+				}
 			}
 			return nullptr;
+		}
+
+		// Not found because an isolated storage stops the lookup before a parent that has it.
+		bool hidden(std::uint64_t key, std::string_view name) const {
+			for (const app_data_storage* storage = this; storage != nullptr; storage = storage->m_parent) {
+				if (storage->m_isolated && !storage->m_exposed.contains(key)) {
+					return storage->m_parent && storage->m_parent->find_entry(key, name) != nullptr;
+				}
+			}
+			return false;
 		}
 
 		void destroy_all() {
@@ -155,5 +199,7 @@ namespace ds {
 		std::vector<entry> m_entries;
 		std::unordered_map<std::uint64_t, std::size_t> m_index;
 		app_data_storage* m_parent = nullptr;
+		bool m_isolated = false;
+		std::unordered_set<std::uint64_t> m_exposed;
 	};
 }

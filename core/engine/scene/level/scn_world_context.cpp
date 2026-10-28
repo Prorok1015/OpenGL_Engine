@@ -94,7 +94,7 @@ void scn::world_context::run_phase(size_t order_index, ecs::run_mode mode, const
 	}
 }
 
-void scn::world_context::apply_commands(entt::registry& state)
+void scn::world_context::apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta)
 {
 	if (auto* changer = state.ctx().find<ecs::entity_changer>()) {
 		changer->apply(state);
@@ -112,7 +112,7 @@ void scn::world_context::apply_commands(entt::registry& state)
 			if (id == entt::type_hash<ecs::sandbox_entity>::value()) continue;
 			if (storage.empty()) continue;
 
-			if (auto type = entt::resolve(id)) {
+			if (auto type = ecs::find_meta(layer_meta, id)) {
 				if (auto func = type.func(ecs::loader_get_h)) {
 					func.invoke({}, &loader, static_cast<const entt::basic_sparse_set<ecs::sandbox_entity>*>(&storage));
 				}

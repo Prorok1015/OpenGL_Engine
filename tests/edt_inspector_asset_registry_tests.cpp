@@ -77,9 +77,10 @@ struct context_fixture : test_util::null_engine_fixture
 		: null_engine_fixture(false)
 		, gui(nullptr, nullptr)
 		, services{ .ctx_manager = storage.require_shared<scn::context_manager>(),
-			.assembler = &storage.require<scn::ecs_assembler>(), .sfactory = &storage.require<ecs::system_factory>() }
+			.base_descs = &storage.require<desc::desc_system>(), .base_resources = &storage.require<res::resource_system>(),
+			.base_assembler = &storage.require<scn::ecs_assembler>(), .base_sfactory = &storage.require<ecs::system_factory>() }
 		, context(std::make_unique<edt::editor_context>(
-			storage.require<desc::desc_system>(), storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
+			storage.require<res::resource_system>(), storage.require<rnd::render_system>(),
 			gui, services, tasks, commands, scene))
 	{
 	}

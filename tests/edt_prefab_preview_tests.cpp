@@ -73,9 +73,11 @@ struct preview_fixture : test_util::scene_env
 		hot = std::make_shared<scn::hot_reload_manager>(*assembler, *rs);
 		mgr = std::make_shared<scn::context_manager>(*rs, *assembler, sf, hot);
 		services.ctx_manager = mgr;
-		services.assembler = assembler.get();
-		services.sfactory = &sf;
-		editor = std::make_unique<edt::prefab_document>(services, *rs, *descs);
+		services.base_descs = descs.get();
+		services.base_resources = rs.get();
+		services.base_assembler = assembler.get();
+		services.base_sfactory = &sf;
+		editor = std::make_unique<edt::prefab_document>(services);
 	}
 
 	std::size_t preview_sets() const
@@ -327,8 +329,8 @@ BOOST_AUTO_TEST_CASE(Save_TheLevelFileDoesNotIncludeThePreview)
 	BOOST_REQUIRE(level_res.is_ready());
 	// the editor's own load and save path (what Ctrl+S serializes), not a hand-filled list
 	edt::scene_editor scene_ed(state, services);
-	edt::world_controller world_ctrl(state, services, *rs, *descs);
-	edt::level_controller level_ctrl(state, services, *rs, *descs, scene_ed, world_ctrl);
+	edt::world_controller world_ctrl(state, services);
+	edt::level_controller level_ctrl(state, services, scene_ed, world_ctrl);
 	level_ctrl.populate_worlds_from_level(level_res);
 	editor->open(prefab_a);
 	BOOST_REQUIRE(editor->is_open());

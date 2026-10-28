@@ -30,6 +30,8 @@ namespace edt
 		void set_on_node_changed(std::function<void()> cb);
 		void set_inspector_registry(inspector_registry* registry);
 		void set_desc_system(desc::desc_system* desc_system);
+		// The desc system asked for at each use: the game layer's, which changes when a game module loads or unloads.
+		void set_desc_source(std::function<desc::desc_system*()> source);
 		// Composed bases of instance nodes are kept here (shared with the hierarchy); null disables override editing.
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		// The desc under the cache changed: the next frame composes again.
@@ -60,7 +62,8 @@ namespace edt
 		scn::prefab_desc::prefab_node* m_owner          = nullptr;
 		std::vector<uint64_t>          m_target;
 		inspector_registry*            m_inspectors     = nullptr;
-		desc::desc_system*             m_desc_system    = nullptr;
+		std::function<desc::desc_system*()> m_desc_source;
+		desc::desc_system* descs() const { return m_desc_source ? m_desc_source() : nullptr; }
 		std::shared_ptr<override_edit::view_cache> m_view_cache;
 		std::function<void()>          m_on_node_changed;
 		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).

@@ -369,7 +369,7 @@ struct instance_fixture : node_id_fixture
 			{"__id":"00000000000000b2","name":"twin"},
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/rig.prefab.desc"}}]})"));
 		pump(); // the parent_desc handles of the instances load in the background
-		services.assembler = assembler.get();
+		services.base_assembler = assembler.get();
 		editor = std::make_unique<edt::scene_editor>(state, services);
 	}
 
@@ -618,7 +618,7 @@ struct nested_fixture : node_id_fixture
 		world().deserialize(*descs, parse_migrated(R"({"__type":"prefab_desc","__version":3,"children":[
 			{"__id":"00000000000000c1","name":"robot","components":{"model_key":"memory://t/body.prefab.desc"}}]})"));
 		pump(); // the parent_desc handles of the instances load in the background
-		services.assembler = assembler.get();
+		services.base_assembler = assembler.get();
 	}
 
 	scn::world_desc& world() { return state.world_descs[0]; }
@@ -726,7 +726,7 @@ BOOST_FIXTURE_TEST_CASE(Override_ViewCacheComposesOncePerGeneration, nested_fixt
 	namespace oe = edt::override_edit;
 	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
 	const std::vector<uint64_t> mid{ 0xb1ull };
-	oe::view_cache cache(*assembler, state);
+	oe::view_cache cache(services, state);
 
 	const auto first = cache.base(robot(), tooth);
 	BOOST_REQUIRE(first && *first);
@@ -748,7 +748,7 @@ BOOST_FIXTURE_TEST_CASE(Override_ViewCacheResultsOutliveInvalidation, nested_fix
 	namespace oe = edt::override_edit;
 	const std::vector<uint64_t> tooth{ 0xb1ull, 0xa1ull };
 	const std::vector<uint64_t> mid{ 0xb1ull };
-	oe::view_cache cache(*assembler, state);
+	oe::view_cache cache(services, state);
 
 	const auto base = cache.base(robot(), tooth);
 	const auto listing = cache.children(robot(), mid);

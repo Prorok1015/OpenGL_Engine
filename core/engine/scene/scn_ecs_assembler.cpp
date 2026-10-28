@@ -25,13 +25,13 @@ namespace scn {
 
 		if (actual_type.empty()) return;
 
-		auto it = m_spawners.find(actual_type);
-		if (it == m_spawners.end()) {
+		const spawner_pair* found = find_spawner(actual_type);
+		if (!found) {
 			egLOG_WARN("assembler/warning", "No ECS spawner for desc type: {0}", actual_type);
 			return;
 		}
 
-		bool is_structural = (it->second.category == spawner_category::structural);
+		bool is_structural = (found->category == spawner_category::structural);
 
 		if (parent_desc.is_valid() && !is_hot_reload && !is_structural) {
 			scn::tracked_component_info info{ actual_type, parent_desc.get_tag(), overrides };
@@ -48,10 +48,10 @@ namespace scn {
 		}
 
 		if (overrides.empty() && parent_desc.is_valid()) {
-			if (is_hot_reload && it->second.patch) {
-				it->second.patch(reg, e, *parent_desc);
-			} else if (it->second.spawn) {
-				it->second.spawn(reg, e, *parent_desc, name);
+			if (is_hot_reload && found->patch) {
+				found->patch(reg, e, *parent_desc);
+			} else {
+				run_spawner(*found, reg, e, *parent_desc, name);
 			}
 			return;
 		}
@@ -77,10 +77,10 @@ namespace scn {
 			temp_desc->deserialize(m_desc_sys, overrides);
 		}
 
-		if (is_hot_reload && it->second.patch) {
-			it->second.patch(reg, e, *temp_desc);
-		} else if (it->second.spawn) {
-			it->second.spawn(reg, e, *temp_desc, name);
+		if (is_hot_reload && found->patch) {
+			found->patch(reg, e, *temp_desc);
+		} else {
+			run_spawner(*found, reg, e, *temp_desc, name);
 		}
 	}
 

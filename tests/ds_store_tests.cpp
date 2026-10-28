@@ -168,4 +168,36 @@ BOOST_AUTO_TEST_CASE(ConstructBaseKeyFromDerivedInstance)
     BOOST_CHECK_EQUAL(&storage.require<base_iface>(), &iface);
 }
 
+BOOST_AUTO_TEST_CASE(IsolatedChildSeesOnlyExposedParentServices)
+{
+    ds::app_data_storage parent_storage;
+    test_service& exposed = parent_storage.construct<test_service>();
+    parent_storage.construct<another_test_service>();
+
+    ds::app_data_storage child_storage(&parent_storage, ds::app_data_storage::isolated);
+    child_storage.expose<test_service>();
+
+    BOOST_CHECK(child_storage.has_value<test_service>());
+    BOOST_CHECK_EQUAL(&child_storage.require<test_service>(), &exposed);
+
+    // Not exposed: refused, not handed out.
+    BOOST_CHECK(!child_storage.has_value<another_test_service>());
+    BOOST_CHECK(child_storage.require_shared<another_test_service>() == nullptr);
+    BOOST_CHECK_THROW(child_storage.require<another_test_service>(), std::logic_error);
+
+    // Its own services and a grandchild's lookup go through it the same way.
+    child_storage.construct<named_service>();
+    ds::app_data_storage grandchild(&child_storage);
+    BOOST_CHECK(grandchild.has_value<named_service>());
+    BOOST_CHECK(grandchild.has_value<test_service>());
+    BOOST_CHECK(!grandchild.has_value<another_test_service>());
+}
+
+BOOST_AUTO_TEST_CASE(IsolatedChildStillReportsAMissingServiceAsMissing)
+{
+    ds::app_data_storage parent_storage;
+    ds::app_data_storage child_storage(&parent_storage, ds::app_data_storage::isolated);
+    BOOST_CHECK_THROW(child_storage.require<test_service>(), std::runtime_error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

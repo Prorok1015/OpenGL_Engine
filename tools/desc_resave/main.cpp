@@ -15,7 +15,7 @@
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #endif
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/render/rnd_render_service_init.h>
 #include <snk/scene/scn_ecs_assembler.h>

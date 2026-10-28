@@ -1,6 +1,8 @@
 #pragma once
 #include <snk/application/app_module_entry.h>
 #include <snk/application/app_module_interface.h>
+#include <snk/application/app_module_layer.h>
+#include <snk/application/app_module_source.h>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
@@ -33,11 +35,24 @@ namespace app::modules {
 
 	class module_loader {
 	private:
+		// Closes the source before deleting it.
+		struct source_closer {
+			void operator()(module_source* source) const {
+				source->close();
+				delete source;
+			}
+		};
+		using source_ptr = std::unique_ptr<module_source, source_closer>;
+
 		struct entry {
+			// Declared first, so it is closed after the module and its layer are destroyed.
+			source_ptr source{};
 			module_ptr module;
 			module_state state = module_state::added;
 			std::size_t size_before = 0; // storage.size() right before this module registered
 			std::size_t provided = 0;    // services it left in the storage after register + initialize
+			// A layered() module's layer; declared after `module`, so it goes first when the entry is destroyed.
+			std::unique_ptr<module_layer> layer{};
 		};
 
 		std::vector<entry> m_entries;
@@ -65,15 +80,33 @@ namespace app::modules {
 			return "?";
 		}
 
+		// The storage the module registers into: its layer's, or the root.
+		static ds::app_data_storage& storage_of(entry& e, ds::app_data_storage& data) {
+			return e.layer ? e.layer->storage() : data;
+		}
+
+		void create_layer(entry& e, ds::app_data_storage& data) {
+			if (!e.module->layered() || e.layer) {
+				return;
+			}
+			const auto factory = data.require_shared<module_layer_factory>();
+			if (!factory) {
+				fail(std::format("module_loader: cannot load '{}': it needs a layer and the storage has no module_layer_factory", e.module->name()));
+			}
+			e.layer = factory->create(data, e.module->name());
+		}
+
 		void shutdown_entry(entry& e, ds::app_data_storage& data) {
 			e.state = module_state::shut_down;
 			try {
-				e.module->shutdown_services(data);
+				e.module->shutdown_services(storage_of(e, data));
 			} catch (const std::exception& ex) {
 				egLOG_ERROR("app", "module '{}' threw during shutdown: {}", e.module->name(), ex.what());
 			} catch (...) {
 				egLOG_ERROR("app", "module '{}' threw unknown exception during shutdown", e.module->name());
 			}
+			// Right away, not with the entry: the layer belongs to services of modules that shut down after this one.
+			e.layer.reset();
 		}
 
 		// Shuts down the given entries (indices into m_entries) in reverse order.
@@ -141,7 +174,7 @@ namespace app::modules {
 
 	public:
 		void add_module(std::unique_ptr<module_interface> module) {
-			m_entries.push_back(entry{ module_ptr{ module.release() } });
+			m_entries.push_back(make_entry(nullptr, module_ptr{ module.release() }));
 			m_sorted = false;
 		}
 
@@ -164,7 +197,8 @@ namespace app::modules {
 					continue;
 				}
 				e.size_before = data.size();
-				e.module->register_services(data);
+				create_layer(e, data);
+				e.module->register_services(storage_of(e, data));
 				e.state = module_state::registered;
 			}
 		}
@@ -184,11 +218,15 @@ namespace app::modules {
 					}
 					if (e.state == module_state::added) {
 						e.size_before = data.size();
+						create_layer(e, data);
 					}
-					e.module->initialize_services(data);
+					e.module->initialize_services(storage_of(e, data));
 					e.state = module_state::initialized;
 					e.provided = data.size() - e.size_before;
 					done.push_back(i);
+					if (e.layer) {
+						e.layer->activate();
+					}
 				}
 			} catch (...) {
 				shutdown_entries(done, data);
@@ -199,8 +237,8 @@ namespace app::modules {
 		// Loads one module after startup: every module it depends on must already be initialized,
 		// otherwise nothing is registered and std::logic_error is thrown. The module is appended
 		// (its dependencies are all ahead of it), registered and initialized; if either phase
-		// throws the exception propagates and nothing is kept. If initialize_services throws, the
-		// module has already registered services, so it is shut down (a throw there is logged),
+		// throws the exception propagates and nothing is kept. If register_services or initialize_services
+		// throws, the module may have registered services, so it is shut down (a throw there is logged),
 		// the storage size is checked against the pre-load size (error log if it differs) and the
 		// module is dropped, which lets the same module be loaded again later.
 		void load(std::unique_ptr<module_interface> module, ds::app_data_storage& data) {
@@ -212,23 +250,52 @@ namespace app::modules {
 		// flags do not match this host. The module is later destroyed through the entry's own
 		// destroy function, so the binary that allocated it frees it.
 		void load(const module_entry& exports, ds::app_data_storage& data) {
-			if (const std::string problem = check_module_entry(exports); !problem.empty()) {
-				fail(std::format("module_loader: refusing module: {}", problem));
-			}
-			module_ptr module{ exports.create(), module_deleter{ exports.destroy } };
-			if (!module) {
-				fail("module_loader: refusing module: snk_create_module returned null");
-			}
-			load(std::move(module), data);
+			load_entry(make_entry(nullptr, create_module(exports, "module")), data);
 		}
 
 		void load(module_ptr module, ds::app_data_storage& data) {
-			ASSERT_MSG(module, "module_loader::load: null module");
-			const std::string name{ module->name() };
+			load_entry(make_entry(nullptr, std::move(module)), data);
+		}
+
+		// Same, for a module whose code comes from `source` (a shared library, or compiled in). The source is
+		// opened here and closed after the module is destroyed: when it is unloaded, when the loader goes away,
+		// or right away when the load fails (std::logic_error when the source cannot be opened or its entry is refused).
+		void load(std::unique_ptr<module_source> source, ds::app_data_storage& data) {
+			ASSERT_MSG(source, "module_loader::load: null module source");
+			source_ptr opened{ source.release() };
+			if (const std::string problem = opened->open(); !problem.empty()) {
+				fail(std::format("module_loader: refusing module {}: {}", opened->describe(), problem));
+			}
+			module_ptr module = create_module(opened->entry(), opened->describe());
+			load_entry(make_entry(std::move(opened), std::move(module)), data);
+		}
+
+	private:
+		static entry make_entry(source_ptr source, module_ptr module) {
+			entry e;
+			e.source = std::move(source);
+			e.module = std::move(module);
+			return e;
+		}
+
+		static module_ptr create_module(const module_entry& exports, const std::string& origin) {
+			if (const std::string problem = check_module_entry(exports); !problem.empty()) {
+				fail(std::format("module_loader: refusing {}: {}", origin, problem));
+			}
+			module_ptr module{ exports.create(), module_deleter{ exports.destroy } };
+			if (!module) {
+				fail(std::format("module_loader: refusing {}: snk_create_module returned null", origin));
+			}
+			return module;
+		}
+
+		void load_entry(entry e, ds::app_data_storage& data) {
+			ASSERT_MSG(e.module, "module_loader::load: null module");
+			const std::string name{ e.module->name() };
 			if (find(name)) {
 				fail(std::format("module_loader: cannot load '{}': a module with this name is already present", name));
 			}
-			for (const auto dep : module->depends_on()) {
+			for (const auto dep : e.module->depends_on()) {
 				const entry* d = find(dep);
 				if (!d || d->state != module_state::initialized) {
 					fail(std::format("module_loader: cannot load '{}': dependency '{}' is {}", name, dep,
@@ -236,12 +303,15 @@ namespace app::modules {
 				}
 			}
 
-			entry e{ std::move(module) };
 			e.size_before = data.size();
-			e.module->register_services(data);
-			e.state = module_state::registered;
+			create_layer(e, data);
 			try {
-				e.module->initialize_services(data);
+				e.module->register_services(storage_of(e, data));
+				e.state = module_state::registered;
+				e.module->initialize_services(storage_of(e, data));
+				if (e.layer) {
+					e.layer->activate();
+				}
 			} catch (...) {
 				shutdown_entry(e, data);
 				if (data.size() != e.size_before) {
@@ -256,6 +326,19 @@ namespace app::modules {
 			std::erase(m_unloaded, name);
 			m_entries.push_back(std::move(e));
 		}
+
+	public:
+		module_loader() = default;
+		// The modules go in reverse load order, each before the code it came from (its source).
+		~module_loader() {
+			while (!m_entries.empty()) {
+				m_entries.pop_back();
+			}
+		}
+		module_loader(const module_loader&) = delete;
+		module_loader& operator=(const module_loader&) = delete;
+		module_loader(module_loader&&) = delete;
+		module_loader& operator=(module_loader&&) = delete;
 
 		// Unloads one initialized module: refused (std::logic_error, nothing touched) if another
 		// initialized module depends on it. Otherwise it is shut down and removed. Afterwards the
@@ -289,6 +372,9 @@ namespace app::modules {
 			const std::size_t actual = data.size();
 
 			m_unloaded.emplace_back(name);
+			// The module before its source: erase() move-assigns members in declaration order.
+			e->module.reset();
+			e->source.reset();
 			m_entries.erase(m_entries.begin() + (e - m_entries.data()));
 
 			if (actual != expected) {

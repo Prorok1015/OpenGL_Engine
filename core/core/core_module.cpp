@@ -13,10 +13,13 @@
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/project/prj_project.h>
 
 #include <algorithm>
 #include <chrono>
+#include <format>
+#include <utility>
 
 namespace {
 	CFG_VAR_DEF_STRING(cfg_log_file,  "logger/file",  "logs/engine.log");
@@ -33,6 +36,11 @@ namespace {
 	// Headless determinism (tools/run_headless.sh --frames): constant frame dt instead of wall clock.
 	CFG_VAR_DEF_FLOAT(cfg_fixed_frame_dt, "app/fixed_frame_dt", 0.0f);
 	CFG_VAR_DEF_INT(cfg_freeze_after_frames, "app/freeze_after_frames", 0);
+
+	// --project <project.snkproj or its directory>; empty: no project, res:// comes from resource/path.
+	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
+	// --allow-engine-version-mismatch: open a project of an older engine MAJOR.MINOR without asking (never a newer one).
+	CFG_VAR_DEF_BOOL(cfg_allow_engine_version_mismatch, "project/allow_engine_version_mismatch", false);
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -72,6 +80,39 @@ namespace {
 	}
 }
 
+namespace {
+	// Before resource_init, which mounts the project's content roots.
+	void open_cli_project(ds::app_data_storage& data)
+	{
+		const std::filesystem::path file = *cfg_project_file;
+		if (file.empty()) {
+			return;
+		}
+		auto opened = prj::open_project(file);
+		if (!opened.context) {
+			throw prj::project_error(opened.error);
+		}
+		auto& project = *opened.context;
+
+		const auto action = prj::version_action_for(project.engine_match, cfg_allow_engine_version_mismatch);
+		const auto engine_line = std::format("project '{}' was made for engine {}, this is engine {}", project.data.name,
+			prj::to_string(project.data.engine), prj::to_string(prj::current_engine_version()));
+		if (action == prj::version_action::ask_open_or_quit || action == prj::version_action::refuse) {
+			// Not mounted: the host runs without a project and asks (or tells) the user; see prj::held_project.
+			egLOG_WARN("project", "{}; not opened{}", engine_line, action == prj::version_action::ask_open_or_quit
+				? " (start with --allow-engine-version-mismatch to open it without migrating)" : "");
+			data.construct<prj::held_project>(prj::held_project{ project.manifest_file, project.data.name, project.data.engine,
+				action, prj::held_project::decision::none });
+			return;
+		}
+		if (action == prj::version_action::open_with_notice) {
+			egLOG_INFO("project", "{}", engine_line);
+		}
+		egLOG_INFO("project", "opened project '{}' ({})", project.data.name, project.manifest_file.string());
+		data.construct<prj::project_context>(std::move(project));
+	}
+}
+
 void core::core_module::register_services(ds::app_data_storage& data)
 {
 	// Before resource_system (and so destroyed after it): resource work will run on its lanes.
@@ -80,6 +121,7 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	// Created on the main thread, which is the only one that may invoke commands.
 	auto& commands = data.construct<cmd::command_registry>();
 	data.construct<engine_commands>().log = cmd::register_log_commands(commands);
+	open_cli_project(data);
 	res::resource_init(data);// core
 	desc::desc_init(data);// core
 	window::window_init(data);// core
@@ -165,6 +207,12 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 	window::window_term(data);
 	desc::desc_term(data);
 	res::resource_term(data);
+	if (data.has_value<prj::project_context>()) {
+		data.destruct<prj::project_context>();
+	}
+	if (data.has_value<prj::held_project>()) {
+		data.destruct<prj::held_project>();
+	}
 	data.destruct<engine_commands>();
 	data.destruct<app::frame_control>();
 	data.destruct<cmd::command_registry>();

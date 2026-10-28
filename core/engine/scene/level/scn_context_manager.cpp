@@ -29,14 +29,26 @@ scn::context_manager::context_manager(res::resource_system& resource,
 	, m_assembler(assembler)
 	, m_system_factory(system_factory)
 	, m_resource(resource)
-	, m_level_set(&add_level_set())
+	, m_level_set(m_sets.emplace_back(make_set(level_set_name, nullptr)).get())
 {}
 
-scn::context_manager::~context_manager() = default;
-
-scn::context_set& scn::context_manager::add_level_set()
+scn::context_manager::~context_manager()
 {
-	return *m_sets.emplace_back(std::make_unique<scn::context_set>(std::string{ level_set_name }, m_hot_reload_manager, m_channel_types));
+	// The layers' tasks first (they may touch the worlds), then the sets: the worlds of a layer are built from its
+	// services.
+	for (const auto& layer : m_layers) {
+		layer->stop_tasks();
+	}
+	m_sets.clear();
+}
+
+std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_view name, scn::scene_layer* layer)
+{
+	auto hot_reload = layer ? layer->hot_reload() : m_hot_reload_manager;
+	auto channel_types = layer ? layer->channel_types() : m_channel_types;
+	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types));
+	set->set_layer(layer);
+	return set;
 }
 
 void scn::context_manager::update(std::chrono::duration<float> dt)
@@ -48,15 +60,58 @@ void scn::context_manager::update(std::chrono::duration<float> dt)
 	if (m_hot_reload_manager) {
 		m_hot_reload_manager->tick();
 	}
+	for (const auto& layer : m_layers) {
+		layer->hot_reload()->tick();
+	}
 }
 
-scn::context_set& scn::context_manager::create_set(std::string_view name)
+scn::scene_layer& scn::context_manager::create_layer(ds::task_system* tasks)
+{
+	return *m_layers.emplace_back(std::make_unique<scn::scene_layer>(m_resource, m_assembler, m_system_factory, *m_channel_types, tasks));
+}
+
+void scn::context_manager::destroy_layer(scn::scene_layer& layer)
+{
+	// The layer's tasks may still touch its worlds.
+	layer.stop_tasks();
+	if (m_game_layer == &layer) {
+		set_game_layer(nullptr);
+	}
+	std::erase_if(m_sets, [&layer](const auto& set) { return set->layer() == &layer; });
+	const auto it = std::ranges::find_if(m_layers, [&layer](const auto& owned) { return owned.get() == &layer; });
+	ASSERT_MSG(it != m_layers.end(), "destroy_layer: the layer was not created by this manager");
+	m_layers.erase(it);
+}
+
+void scn::context_manager::set_game_layer(scn::scene_layer* layer)
+{
+	if (m_on_game_layer_change) {
+		m_on_game_layer_change(game_layer_change::before);
+	}
+	if (auto* hot_reload = hot_reload_of(*m_level_set); hot_reload && m_level_set->tag().is_valid()) {
+		hot_reload->unwatch_resource(m_level_set->tag());
+	}
+	// The set "level" stays first in the update order and keeps how it runs; its worlds go with the old layer.
+	const auto it = std::ranges::find_if(m_sets, [this](const auto& set) { return set.get() == m_level_set; });
+	auto replacement = make_set(level_set_name, layer);
+	replacement->set_mode(m_level_set->mode());
+	replacement->set_seed(m_level_set->seed());
+	replacement->set_active(m_level_set->active());
+	*it = std::move(replacement);
+	m_level_set = it->get();
+	m_game_layer = layer;
+	if (m_on_game_layer_change) {
+		m_on_game_layer_change(game_layer_change::after);
+	}
+}
+
+scn::context_set& scn::context_manager::create_set(std::string_view name, scn::scene_layer* layer)
 {
 	if (auto* existing = find_set(name)) {
 		egLOG_ERROR("scene", "create_set: set '{}' already exists, keeping the existing one", name);
 		return *existing;
 	}
-	return *m_sets.emplace_back(std::make_unique<scn::context_set>(std::string{ name }, m_hot_reload_manager, m_channel_types));
+	return *m_sets.emplace_back(make_set(name, layer));
 }
 
 void scn::context_manager::destroy_set(std::string_view name)
@@ -85,7 +140,7 @@ scn::world_context& scn::context_manager::create_context(std::string_view set, s
 {
 	auto& target = get_set(set);
 	auto& context = target.create_context(name, target.acquire_free_id(), kind);
-	target.add_systems(context, systems, m_system_factory);
+	target.add_systems(context, systems, systems_of(target));
 	return context;
 }
 
@@ -107,7 +162,7 @@ scn::world_context& scn::context_manager::create_preview(std::string_view tag, s
 	if (find_set(set_name)) {
 		destroy_set(set_name);
 	}
-	auto& set = create_set(set_name);
+	auto& set = create_set(set_name, m_game_layer);
 	// before the context exists: a context takes the mode of its set when it is created
 	set.set_mode(ecs::run_mode::edit);
 	return create_context(set_name, name, context_kind::preview, systems);
@@ -134,17 +189,19 @@ scn::world_context* scn::context_manager::find_preview(std::string_view tag) con
 
 bool scn::context_manager::load_level(const res::tag& level_tag)
 {
-	auto level_res = m_resource.require_sync<scn::level_desc>(level_tag);
+	auto& level = get_set(level_set_name);
+	auto level_res = resources_of(level).require_sync<scn::level_desc>(level_tag);
 	if (level_res.is_ready()) {
-		auto& set = get_set(level_set_name);
-		if (m_hot_reload_manager && set.tag().is_valid()) {
-			m_hot_reload_manager->unwatch_resource(set.tag());
+		auto& set = level;
+		auto* hot_reload = hot_reload_of(set);
+		if (hot_reload && set.tag().is_valid()) {
+			hot_reload->unwatch_resource(set.tag());
 		}
 		set.clear();
-		set.load_from_desc(*level_res, m_system_factory, m_assembler);
-		if (m_hot_reload_manager) {
-			m_hot_reload_manager->watch_resource(level_tag, [this](const res::tag& changed_tag) {
-				auto level_res = m_resource.require_sync<scn::level_desc>(changed_tag);
+		set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
+		if (hot_reload) {
+			hot_reload->watch_resource(level_tag, [this](const res::tag& changed_tag) {
+				auto level_res = resources_of(get_set(level_set_name)).require_sync<scn::level_desc>(changed_tag);
 				if (level_res.is_ready()) {
 					auto& set = get_set(level_set_name);
 					std::vector<std::string> new_names;
@@ -167,9 +224,9 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 						for (const auto& name : new_names) {
 							if (set.has(name)) set.destroy_context(name);
 						}
-						set.load_from_desc(*level_res, m_system_factory, m_assembler);
+						set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
 					} else {
-						set.load_systems_from_desc(*level_res, m_system_factory);
+						set.load_systems_from_desc(*level_res, systems_of(set));
 					}
 					if (m_on_reload) m_on_reload();
 				} else {
