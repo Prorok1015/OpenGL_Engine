@@ -74,6 +74,20 @@ BOOST_AUTO_TEST_CASE(Cli_ProjectIsSetProjectFileAndSetStillWins)
 	BOOST_TEST(static_cast<std::filesystem::path>(project_file) == std::filesystem::current_path() / "b");
 }
 
+BOOST_AUTO_TEST_CASE(Variable_PathEmptyValueIsAnEmptyPath_NotTheConfigDirectory)
+{
+	cfg::variable<std::filesystem::path> direct{ "cfgtest/path_empty_direct", "default" };
+	cfg::variable<std::filesystem::path> from_yaml{ "cfgtest/path_empty_yaml", "default" };
+	cfg::variable<std::filesystem::path> relative{ "cfgtest/path_relative", "default" };
+
+	direct.update("/some/config/dir", "");
+	BOOST_TEST(direct->empty());
+
+	BOOST_TEST(cfg::load_config_text("cfgtest:\n  path_empty_yaml: \"\"\n  path_relative: ../data/\n", "/some/config/dir"));
+	BOOST_TEST(from_yaml->empty());
+	BOOST_TEST((*relative == std::filesystem::path{ "/some/config/dir" } / "../data/"));
+}
+
 // ---- variable<T>::update parsing ----
 
 BOOST_AUTO_TEST_CASE(Variable_IntParsesDecimalAndNegative)

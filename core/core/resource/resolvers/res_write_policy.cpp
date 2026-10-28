@@ -1,5 +1,6 @@
 #include <snk/resource/resolvers/res_write_policy.h>
 #include <snk/common/logger/engine_log.h>
+#include <cctype>
 #include <utility>
 
 namespace {
@@ -50,11 +51,21 @@ namespace {
 		return g == glob.size();
 	}
 
+	std::string lowered(std::string_view text)
+	{
+		std::string out(text);
+		for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return out;
+	}
+
 	bool glob_matches(const std::vector<std::string>& glob, std::size_t g, const std::vector<std::string>& path, std::size_t p)
 	{
 		if (g == glob.size()) return p == path.size();
 		if (glob[g] == ANY_SEGMENTS) {
-			for (std::size_t skip = p; skip <= path.size(); ++skip) {
+			// A trailing '**' stands for what is inside the folder before it, so it needs at least one segment
+			// ("settings/**" does not name "settings" itself); elsewhere it may match none ("**/x" reaches "x").
+			const bool trailing = g + 1 == glob.size();
+			for (std::size_t skip = trailing ? p + 1 : p; skip <= path.size(); ++skip) {
 				if (glob_matches(glob, g + 1, path, skip)) return true;
 			}
 			return false;
@@ -85,7 +96,11 @@ res::write_policy::write_policy(std::string_view protocol, const std::vector<std
 			egLOG_WARN("resource/write", "write pattern '{}' ignored: it must read protocol://glob", pattern);
 			continue;
 		}
-		if (std::string_view{ pattern }.substr(0, split) != protocol) {
+		const std::string_view scheme = std::string_view{ pattern }.substr(0, split);
+		if (scheme != protocol) {
+			if (lowered(scheme) == lowered(protocol)) {
+				egLOG_WARN("resource/write", "write pattern '{}' ignored: the scheme is case-sensitive, write '{}://'", pattern, protocol);
+			}
 			continue;
 		}
 		auto segments = split_segments(std::string_view{ pattern }.substr(split + separator.size()));

@@ -216,7 +216,7 @@ CFG_VAR_DEF_FLOAT(speed, "player.speed", 5.0f);
 int value = *my_var;
 ```
 
-Override via `.cfg` files or CLI: `--set path/to/var 100` (name and value are two arguments).
+Override via `.cfg` files or CLI: `--set path/to/var 100` (name and value are two arguments). A path value in a `.cfg` file is relative to that file's directory, an empty one (`""`) is an empty path.
 
 **Lists.** `CFG_VAR_DEF_STRING_LIST(var, "a/b", "default1", "default2")` defines a list of strings; the variable is `cfg::variable<std::vector<std::string>>`, a module reads it with `cfg::config_view::list("a/b")` (`value("a/b")` gives the JSON array). In yaml a list is a sequence, block (`- x`) or flow (`[x, y]`); on the CLI `--set a/b "[x, y]"` is a flow sequence, `"[]"` an empty list and a value without `[` a list of that one element.
 

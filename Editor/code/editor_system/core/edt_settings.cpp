@@ -4,6 +4,7 @@
 #include <snk/resource/resources/res_resource_text.h>
 #include <algorithm>
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 res::tag edt::settings_tag(std::string_view name)
@@ -18,8 +19,14 @@ bool edt::write_setting(res::resource_system& res, std::string_view name, std::s
 	const res::tag tag = settings_tag(name);
 	std::vector<std::byte> bytes(text.size());
 	std::transform(text.begin(), text.end(), bytes.begin(), [](char c) { return static_cast<std::byte>(c); });
-	if (!res.store_sync(tag, bytes)) {
-		egLOG_WARN("editor/settings", "cannot store '{}'", tag.view());
+	try {
+		if (!res.store_sync(tag, bytes)) {
+			egLOG_WARN("editor/settings", "cannot store '{}'", tag.view());
+			return false;
+		}
+	} catch (const std::logic_error& e) {
+		// A resource layer limited to a module's memory:// prefix refuses every other tag by throwing.
+		egLOG_WARN("editor/settings", "cannot store '{}': {}", tag.view(), e.what());
 		return false;
 	}
 	res.signal_changed(tag);
