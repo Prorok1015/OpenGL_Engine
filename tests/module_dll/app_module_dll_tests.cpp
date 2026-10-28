@@ -4,11 +4,13 @@
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/desc/desc_base.hpp>
+#include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <system_error>
 
 #if defined(_WIN32)
