@@ -11,6 +11,8 @@ projects/sandbox/res/assets/
 # Made by the editor in an open project: regenerated data and the editor's own files (EPIC-42).
 projects/*/.cache/
 projects/*/.snk/
+# memory:// of a run without --project: <resource/path>/../sandbox.
+projects/*/sandbox/
 out/
 bin/
 build/
