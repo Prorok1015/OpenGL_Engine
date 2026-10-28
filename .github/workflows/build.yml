@@ -466,6 +466,18 @@ jobs:
         if: always()
         run: ccache -s
 
+      # #403: a non-interactive run (-n) refuses a project of another engine version before any window opens and
+      # exits with code 3. timeout turns a hang (waiting on a dialog nobody answers) into a failed step, not a stuck job.
+      - name: Non-interactive run refuses a newer project (exit 3)
+        run: |
+          mkdir -p headless_out/non_interactive
+          log=headless_out/non_interactive/editor.log
+          rc=0
+          timeout 60 "$EDITOR_BIN" --config Editor/config/editor.cfg --project tests/data/projects/newer_engine -n >"$log" 2>&1 || rc=$?
+          tail -20 "$log"
+          if [ "$rc" -ne 3 ]; then echo "expected exit code 3, got $rc (124 = timed out)"; exit 1; fi
+          grep -q "a non-interactive run does not ask" "$log"
+
       - name: Smoke run (smoke_level)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/smoke/final.png \

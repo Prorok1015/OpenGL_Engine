@@ -56,6 +56,12 @@ int prj::exit_code_for(const held_project& project)
 	return project.answer == held_project::decision::continue_without_project ? 0 : k_exit_engine_version;
 }
 
+bool prj::refuse_without_asking(version_action action, bool non_interactive)
+{
+	const bool held = action == version_action::ask_open_or_quit || action == version_action::refuse;
+	return held && non_interactive;
+}
+
 std::optional<std::string> prj::verify_project_mounts(const project_context& project, const fs::path& engine_base)
 {
 	std::error_code ec;

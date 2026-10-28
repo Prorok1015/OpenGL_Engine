@@ -79,14 +79,27 @@ namespace prj
 		decision answer = decision::none;
 	};
 
-	// How the host exits after holding `project` back: 0 when the user chose to go on without it; otherwise
-	// k_exit_engine_version (the user quit, or nobody answered: a headless run).
+	// How the host exits after holding `project` back: 0 when the user chose to go on without it (a button, or Esc);
+	// otherwise k_exit_engine_version (the user quit, or the window closed with the question unanswered).
 	SNK_API int exit_code_for(const held_project& project);
+
+	// True when the project must not be held for a question but refused at once: a non-interactive run
+	// (--non-interactive, -n) never asks and takes the safe answer, and for a project of another engine version that
+	// is not opening it. Never "yes to everything": only --allow-engine-version-mismatch opens an older project.
+	SNK_API bool refuse_without_asking(version_action action, bool non_interactive);
 
 	// The project given on the command line could not be opened; the host exits with k_exit_project_error.
 	class SNK_API project_error : public std::runtime_error
 	{
 	public:
 		using std::runtime_error::runtime_error;
+	};
+
+	// The project was refused for its engine version without asking (refuse_without_asking); the host exits with
+	// k_exit_engine_version before it opens a window.
+	class SNK_API engine_version_error : public project_error
+	{
+	public:
+		using project_error::project_error;
 	};
 }

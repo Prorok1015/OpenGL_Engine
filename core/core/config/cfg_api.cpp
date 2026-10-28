@@ -130,7 +130,9 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		("config,c", po::value<std::string>(), "set a path to a config entry")
 		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var")
 		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it")
-		("allow-engine-version-mismatch", "open a project made for an older engine version without asking");
+		("allow-engine-version-mismatch", "open a project made for an older engine version without asking")
+		("non-interactive,n", "never ask the user anything: every question takes its safe answer (this is not --yes); "
+			"a project of another engine version is not opened and the editor exits with code 3");
 	
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -160,6 +162,9 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	}
 	if (vm.count("allow-engine-version-mismatch")) {
 		set_registered("project/allow_engine_version_mismatch", "true");
+	}
+	if (vm.count("non-interactive")) {
+		set_registered("app/non_interactive", "true");
 	}
 
 	if (vm.count("set")) {

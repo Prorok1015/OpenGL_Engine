@@ -34,6 +34,19 @@ BOOST_AUTO_TEST_CASE(Cli_AllowEngineVersionMismatchSetsItsVariable)
 	BOOST_TEST(static_cast<bool>(allow));
 }
 
+BOOST_AUTO_TEST_CASE(Cli_NonInteractiveSetsItsVariableInBothForms)
+{
+	for (const std::string& flag : { std::string{ "--non-interactive" }, std::string{ "-n" } }) {
+		BOOST_TEST_INFO("flag: " << flag);
+		// Stands in for core_module's variable of the same name for the length of the test.
+		cfg::variable<bool> non_interactive{ "app/non_interactive", false };
+		run_cli({});
+		BOOST_TEST(!static_cast<bool>(non_interactive));
+		run_cli({ flag });
+		BOOST_TEST(static_cast<bool>(non_interactive));
+	}
+}
+
 BOOST_AUTO_TEST_CASE(Cli_ProjectIsSetProjectFileAndSetStillWins)
 {
 	// Stands in for core_module's variable of the same name for the length of the test.
