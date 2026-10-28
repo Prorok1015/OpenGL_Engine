@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_dialog_service.h"
 #include "edt_job_service.h"
+#include "edt_problem_list.h"
 #include "edt_registration.h"
 #include <snk/command/cmd_registry.h>
 #include <vector>
@@ -19,4 +20,8 @@ namespace edt
 	// dialog.list {} -> {dialogs: [{id, kind, text, answer_schema, on_screen}]}
 	// dialog.answer {id, answer} -> {id, resolved}; see dialog_service::answer for the answers and the error codes
 	[[nodiscard]] std::vector<registration> register_dialog_commands(cmd::command_registry& commands, dialog_service& dialogs);
+
+	// problems.list {source?, severity?: error|warning|note} -> {problems: [problem]}; both arguments filter
+	// problem = {source, severity, file, line, column, code, message, notes: [string]}; file "" and line/column 0 mean none
+	[[nodiscard]] std::vector<registration> register_problem_commands(cmd::command_registry& commands, const problem_list& problems);
 }

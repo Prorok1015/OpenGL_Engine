@@ -169,6 +169,16 @@ BOOST_AUTO_TEST_CASE(StateQueries_AreAllowedByCommandId)
 	}
 }
 
+// problems.list is listed by its id: another problems.* command stays hidden until it is reviewed.
+BOOST_AUTO_TEST_CASE(ProblemsList_IsAllowedByCommandId_NotItsDomain)
+{
+	cmd::command_desc desc;
+	desc.id = "problems.list";
+	BOOST_TEST(edt::agent_may_use(desc));
+	desc.id = "problems.clear";
+	BOOST_TEST(!edt::agent_may_use(desc));
+}
+
 BOOST_AUTO_TEST_CASE(StateQueriesStayClosedWhenTheMetadataSaysMutateOrRisk)
 {
 	cmd::command_desc desc;
@@ -191,7 +201,7 @@ BOOST_AUTO_TEST_CASE(ADomainOutsideTheReadList_IsNotAllowedEvenIfTheMetadataSays
 	cmd::command_desc desc;
 	for (const char* id : { "file.save", "file.exit", "file.new", "app.advance", "app.resume", "help.about", "edit.undo",
 		"scene.delete", "scene.node.create", "scene.query_all", "node.delete", "node.get_all", "component.set", "component.schema2",
-		"asset.import", "asset.query.all", "selection.set", "problems.list", "nodot", "" }) {
+		"asset.import", "asset.query.all", "selection.set", "problems.clear", "nodot", "" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_TEST(!edt::agent_may_use(desc));

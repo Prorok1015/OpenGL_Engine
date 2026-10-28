@@ -3,6 +3,7 @@
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
+#include <algorithm>
 #include <optional>
 #include <cstdint>
 #include <format>
@@ -186,5 +187,74 @@ std::vector<edt::registration> edt::register_dialog_commands(cmd::command_regist
 		return dialogs.answer(*id, request.args.as_object().at("answer"));
 	};
 	keep(out, commands.add(std::move(answer)));
+	return out;
+}
+
+std::vector<edt::registration> edt::register_problem_commands(cmd::command_registry& commands, const problem_list& problems)
+{
+	std::vector<registration> out;
+
+	cmd::command_desc list;
+	list.id = "problems.list";
+	list.summary = "List the editor's problems (build errors and warnings, ...), optionally of one source or one severity";
+	list.args_schema = json::parse(R"({
+		"type": "object",
+		"properties": {
+			"source": { "type": "string" },
+			"severity": { "type": "string", "enum": ["error", "warning", "note"] }
+		},
+		"additionalProperties": false
+	})");
+	list.result_schema = json::parse(R"({
+		"type": "object",
+		"properties": {
+			"problems": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"source": { "type": "string" },
+						"severity": { "type": "string", "enum": ["error", "warning", "note"] },
+						"file": { "type": "string" },
+						"line": { "type": "integer", "minimum": 0 },
+						"column": { "type": "integer", "minimum": 0 },
+						"code": { "type": "string" },
+						"message": { "type": "string" },
+						"notes": { "type": "array", "items": { "type": "string" } }
+					},
+					"required": ["source", "severity", "file", "line", "column", "code", "message", "notes"],
+					"additionalProperties": false
+				}
+			}
+		},
+		"required": ["problems"],
+		"additionalProperties": false
+	})");
+	list.invoke = [&problems](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		std::optional<std::string> source;
+		if (const json::value* value = args.if_contains("source")) source = std::string(value->as_string());
+		std::optional<problem_severity> severity;
+		if (const json::value* value = args.if_contains("severity")) severity = problem_severity_from(value->as_string());
+
+		json::array entries;
+		for (const auto& [from, item] : problems.list()) {
+			if (source && from != *source) continue;
+			if (severity && item.severity != *severity) continue;
+			json::array notes;
+			for (const auto& note : item.notes) notes.push_back(json::string(note));
+			entries.push_back(json::object{
+				{ "source", json::string(from) },
+				{ "severity", json::string(problem_severity_name(item.severity)) },
+				{ "file", json::string(item.file) },
+				{ "line", std::max(item.line, 0) },
+				{ "column", std::max(item.column, 0) },
+				{ "code", json::string(item.code) },
+				{ "message", json::string(item.message) },
+				{ "notes", std::move(notes) } });
+		}
+		return cmd::result::success(json::object{ { "problems", std::move(entries) } });
+	};
+	keep(out, commands.add(std::move(list)));
 	return out;
 }
