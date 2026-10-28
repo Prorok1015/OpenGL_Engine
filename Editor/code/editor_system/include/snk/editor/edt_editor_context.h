@@ -11,7 +11,6 @@
 #include "edt_selection_service.h"
 #include <vector>
 
-namespace desc { class desc_system; }
 namespace res { class resource_system; }
 namespace rnd { class render_system; }
 namespace gui { class gui_system; }
@@ -31,18 +30,18 @@ namespace edt
 	// on it before the context exists); the context's document_manager refers to it and owns the prefab preview.
 	// The engine services the editor works through (context manager, assembler, system factory) are the editor's
 	// editor_services, which the context refers to: they live as long as the editor, so the context must not be used
-	// after the editor_system is gone.
+	// after the editor_system is gone. Game data (descs, levels, prefabs) goes through services() at the moment of use,
+	// since the game layer can change; resources() is the base resource system, for the editor's own assets.
 	class editor_context
 	{
 	public:
-		editor_context(desc::desc_system& descs, res::resource_system& resources, rnd::render_system& render,
+		editor_context(res::resource_system& resources, rnd::render_system& render,
 			gui::gui_system& gui, editor_services& services, ds::task_system& tasks, cmd::command_registry& commands,
 			scene_document& scene);
 		~editor_context();
 		editor_context(const editor_context&) = delete;
 		editor_context& operator=(const editor_context&) = delete;
 
-		desc::desc_system& descs() const { return m_descs; }
 		res::resource_system& resources() const { return m_resources; }
 		rnd::render_system& render() const { return m_render; }
 		gui::gui_system& gui() const { return m_gui; }
@@ -62,7 +61,6 @@ namespace edt
 		asset_kind_registry& asset_kinds() { return m_asset_kinds; }
 
 	private:
-		desc::desc_system& m_descs;
 		res::resource_system& m_resources;
 		rnd::render_system& m_render;
 		gui::gui_system& m_gui;
