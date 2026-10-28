@@ -407,7 +407,8 @@ namespace {
 	}
 
 	// Held without FILE_SHARE_DELETE: while the handle is open nobody can rename, remove or replace the folder.
-	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE;
+	// FILE_READ_ATTRIBUTES for is_real_folder: NtCreateFile does not add it as CreateFileW does.
+	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
 	constexpr ULONG k_folder_share = FILE_SHARE_READ | FILE_SHARE_WRITE;
 
 	// The root and every folder down to `parts`, each opened from the handle of the one above it and all held until
@@ -544,7 +545,8 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	}
 	const fs::path target = reached / request.leaf;
 	// FILE_CREATE: nothing planted at the temp name is opened, not even a link.
-	handle_holder file = open_in(chain.back().get(), request.tmp_leaf, FILE_GENERIC_WRITE | DELETE, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE);
+	handle_holder file = open_in(chain.back().get(), request.tmp_leaf, FILE_GENERIC_WRITE | FILE_READ_ATTRIBUTES | DELETE, 0,
+		FILE_CREATE, FILE_NON_DIRECTORY_FILE);
 	if (!file.valid()) {
 		return last_error_text("cannot create", request.tmp_path);
 	}
