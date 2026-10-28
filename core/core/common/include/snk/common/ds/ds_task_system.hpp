@@ -97,7 +97,8 @@ namespace ds {
 		// Callbacks of the caller's binary (#406). The functor lives in an engine slot that `owner` holds; the engine's
 		// queues, task continuations and resource blocks hold only the engine's call of the slot. ~lifetime takes the
 		// functor out of every slot it holds and destroys it there, so nothing made by a game module's code is left
-		// in the engine's containers once its lifetimes are gone. A slot of an owner already gone is empty.
+		// in the engine's containers once its lifetimes are gone. Only then_main on a task bound to no lifetime (the
+		// engine's own tasks) makes a slot no owner holds: its queued call alone keeps it.
 		[[nodiscard]] SNK_API std::shared_ptr<held_slot> hold(const lifetime& owner, std::function<void(void*)> fn);
 		// Main thread: the one call of the slot (none if it is empty or was called); the owner lets go of it.
 		SNK_API void call_held(const std::shared_ptr<held_slot>& slot, void* arg);

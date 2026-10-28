@@ -15,5 +15,7 @@ namespace dll_game {
 	// When the host stored it before loading, the module waits for it with res_handle::then (#406): a callback of the
 	// library's code on a block that settles after the library is gone.
 	inline constexpr std::string_view waited_tag = "memory://t/dll_waited.desc";
+	// Same, for a resource that fails to load: its callback is dropped without a call.
+	inline constexpr std::string_view failing_tag = "memory://t/dll_failing.desc";
 
 }

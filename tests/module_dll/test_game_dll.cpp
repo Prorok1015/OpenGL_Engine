@@ -68,12 +68,14 @@ protected:
 		ecs::register_component<dll_game::dll_component>(layer.meta());
 		auto& service = data.construct<dll_service>();
 
-		const res::tag waited{ std::string{ dll_game::waited_tag } };
-		if (layer.resources().exists(waited)) {
-			auto* frames = &service.frames;
-			layer.resources().require<desc::desc_base>(waited).then(layer.tasks(), [frames](desc::desc_base&) { ++*frames; });
-		}
+		// Only when the host stored them: it checks that the callbacks are registered (held_count).
 		auto* frames = &service.frames;
+		for (const std::string_view name : { dll_game::waited_tag, dll_game::failing_tag }) {
+			const res::tag tag{ std::string{ name } };
+			if (layer.resources().exists(tag)) {
+				layer.resources().require<desc::desc_base>(tag).then(layer.tasks(), [frames](desc::desc_base&) { ++*frames; });
+			}
+		}
 		data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "dll.task" }, [frames](ds::task_context&) {})
 			.then_main(layer.tasks(), [frames](ds::task_result<void>&) { ++*frames; });
 	}

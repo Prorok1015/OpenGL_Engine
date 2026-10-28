@@ -64,10 +64,20 @@ namespace ds::detail {
 		std::function<void(void*)> fn; // made in the caller's binary: destroyed by take()'s caller or by ~lifetime
 		std::weak_ptr<lifetime_state> owner;
 
+		// For the one call, on the owner's thread (main), where ~lifetime runs too.
 		std::function<void(void*)> take()
 		{
 			std::lock_guard lock(mutex);
 			return std::exchange(fn, nullptr);
+		}
+
+		// Destroys the functor under the lock, so a concurrent clear() (~lifetime on main while a block fails on a
+		// worker) returns only once it is gone: no thread is still in its destructor when the module's library closes.
+		// The functor's destructor must not touch a slot (it would deadlock).
+		void clear()
+		{
+			std::lock_guard lock(mutex);
+			fn = nullptr;
 		}
 	};
 
@@ -152,12 +162,15 @@ namespace ds::detail {
 		if (!slot) {
 			return;
 		}
+		const auto owner = slot->owner.lock();
+		// Only safe on the owner's thread: ~lifetime, which empties the slot, runs there too.
+		ASSERT_MSG(!owner || std::this_thread::get_id() == owner->owner_thread, "call_held: the owner's thread only");
 		auto fn = slot->take(); // ours now: destroyed here, after the call, wherever it throws
 		if (!fn) {
 			return;
 		}
 		forget_slot(slot);
-		const running_scope running(slot->owner.lock());
+		const running_scope running(owner);
 		try {
 			fn(arg);
 		} catch (const std::exception& e) {
@@ -172,7 +185,7 @@ namespace ds::detail {
 		if (!slot) {
 			return;
 		}
-		slot->take(); // the functor goes here, without a call
+		slot->clear(); // the functor goes here, without a call
 		forget_slot(slot);
 	}
 
@@ -637,7 +650,7 @@ namespace ds {
 		// Outside the lock, here and now, on this thread: the functors (a game module's code) go before anything
 		// that outlives this lifetime (a queue, a task, a block) could destroy them later. The slots stay, empty.
 		for (const auto& slot : released) {
-			slot->take();
+			slot->clear();
 		}
 	}
 
@@ -656,7 +669,9 @@ namespace ds {
 		std::lock_guard lock(m_state->mutex);
 		std::erase_if(m_state->tasks, [&released](const std::weak_ptr<detail::task_state_base>& weak) {
 			auto alive = weak.lock();
-			const bool drop = !alive || alive->done();
+			// finalized, not done: a task that stored its status but has not queued its continuations yet must stay
+			// visible to wait_idle and run_pending_main.
+			const bool drop = !alive || alive->finalized();
 			if (alive) {
 				released.push_back(std::move(alive));
 			}
