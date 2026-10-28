@@ -165,6 +165,7 @@ bool res::vfs_resolver::store(const::res::tag& tag, const std::vector<std::byte>
 
 bool res::vfs_resolver::store_sync(const::res::tag& tag, const std::vector<std::byte>& data)
 {
+	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "store_sync on the io thread would wait for itself");
 	auto done = std::make_shared<std::promise<bool>>();
 	auto written = done->get_future();
 	if (!queue_store(tag, data, done)) {
@@ -214,7 +215,13 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 	}
 
 	boost::asio::post(io, [this, tag, target = *target_path, tmp_tag, tmp = *tmp_path, data_ptr, done = std::move(done)] {
-		const bool written = write_pending(tag, target, tmp_tag, tmp, data_ptr);
+		// The promise is fulfilled exactly once, whatever happens: a broken one would throw out of store_sync.
+		bool written = false;
+		try {
+			written = write_pending(tag, target, tmp_tag, tmp, data_ptr);
+		} catch (...) {
+			written = false;
+		}
 		if (done) {
 			done->set_value(written);
 		}
@@ -485,8 +492,12 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 
 		std::error_code ec;
 		const auto status = fs::status(path, ec);
-		if (!fs::exists(status)) {
+		if (status.type() == fs::file_type::not_found) {
 			data_sp->set_error("File does not exist: " + path.string());
+			return;
+		}
+		if (ec) {
+			data_sp->set_error("Cannot access '" + path.string() + "': " + ec.message());
 			return;
 		}
 		// A folder opens as a stream on Linux, and tellg() then reports LLONG_MAX.
@@ -501,8 +512,10 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 			return;
 		}
 
+		// The file may have been swapped since status(): a size the file system does not confirm is not allocated.
 		auto size = file.tellg();
-		if (size < 0) {
+		const auto file_bytes = fs::file_size(path, ec);
+		if (size < 0 || ec || static_cast<std::uintmax_t>(size) > file_bytes) {
 			data_sp->set_error("Failed to get the size of: " + path.string());
 			return;
 		}
