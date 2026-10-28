@@ -377,7 +377,8 @@ BOOST_AUTO_TEST_CASE(RunHelper_Talks)
 	print_line(stdout, "cwd=" + utf8_of(fs::current_path()));
 	std::fputs("err tail", stderr);
 	std::fflush(stderr);
-	std::exit(7);
+	// Not std::exit: no atexit handlers (the leak check of a sanitizer build could change the exit code).
+	std::_Exit(7);
 }
 
 // Does nothing in a normal run; with --plt-late-marker it says "grandchild ready" and writes the marker 3 s later.
