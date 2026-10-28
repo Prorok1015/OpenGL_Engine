@@ -50,6 +50,8 @@ namespace scn
 					 ecs_assembler::desc_spawner_fn spawn,
 					 ecs_assembler::desc_patcher_fn patch = {},
 					 spawner_category category = spawner_category::component);
+		// A structural type that assembles through the assembler running it (see ecs_assembler::desc_structural_fn).
+		void structural_spawner(std::string_view type, ecs_assembler::desc_structural_fn spawn);
 
 		std::size_t size() const { return m_entries.size(); }
 

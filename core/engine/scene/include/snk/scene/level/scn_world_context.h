@@ -6,6 +6,7 @@
 #include <snk/scene/scn_time.h>
 #include <snk/common/snk_api.h>
 #include <entt/entity/registry.hpp>
+#include <entt/meta/context.hpp>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -62,8 +63,13 @@ namespace scn
 
 		bool has_phase_work(size_t order_index) const;
 		void run_phase(size_t order_index, ecs::run_mode mode, const ecs::runtime_context& ctx) const;
-		void apply_commands() { apply_commands(m_state); }
-		static void apply_commands(entt::registry& state);
+		void apply_commands() { apply_commands(m_state, m_meta); }
+		// Moves the sandbox entities into `state`; component types are looked up in `layer_meta` (a module layer's
+		// meta context, MODULE_LAYER.md), then in the engine's.
+		static void apply_commands(entt::registry& state, const entt::meta_ctx* layer_meta = nullptr);
+
+		// The meta context of the layer the context belongs to; null: the engine's only.
+		void set_meta(const entt::meta_ctx* meta) { m_meta = meta; }
 
 		// The context owns its time. begin_frame advances the stepper by the mode's rules and
 		// writes delta_time and update_alpha into the registry ctx; the fixed steps it allows are
@@ -86,6 +92,7 @@ namespace scn
 		context_kind m_kind = context_kind::runtime;
 		bool m_extract = true;
 		int m_input_layer = 0;
+		const entt::meta_ctx* m_meta = nullptr;
 		entt::registry m_state;
 
 		std::optional<std::vector<std::string>> m_systems;

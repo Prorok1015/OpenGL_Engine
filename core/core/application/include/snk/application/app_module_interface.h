@@ -17,5 +17,9 @@ namespace app::modules {
 		// Names of modules that must be registered/initialized before this one. The loader
 		// stable-topo-sorts on these; independent modules keep their insertion order.
 		virtual std::vector<std::string_view> depends_on() const { return {}; }
+		// A game module registers into a layer of its own (MODULE_LAYER.md): module_loader::load creates one with the
+		// module_layer_factory of the storage, passes the layer's storage to the three calls and destroys the layer
+		// after shutdown_services, before the module.
+		virtual bool layered() const { return false; }
 	};
 }

@@ -35,6 +35,8 @@ endfunction()
 #   <component>/ (root)                  sources and internal headers, PRIVATE to the component
 #
 # Every component must have an include/ directory; SnkInstall.cmake installs it to <prefix>/include.
+# An optional include_base/ holds base-only headers (the engine and the editor, never a game module): in-tree
+# consumers see it, the SDK does not (MODULE_LAYER.md).
 # SDK_INTERNAL: backend headers are engine-internal (render picks the backend), so include/ is for in-tree
 # consumers only: it is neither installed into the SDK nor part of the exported interface.
 function(snk_component_headers tgt)
@@ -56,6 +58,10 @@ function(snk_component_headers tgt)
 		endif()
 	else()
 		message(FATAL_ERROR "snk_component_headers(${tgt}): ${_public} does not exist")
+	endif()
+	set(_base_only "${CMAKE_CURRENT_SOURCE_DIR}/include_base")
+	if(IS_DIRECTORY "${_base_only}")
+		target_include_directories(${tgt} ${_scope} "$<BUILD_INTERFACE:${_base_only}>")
 	endif()
 endfunction()
 

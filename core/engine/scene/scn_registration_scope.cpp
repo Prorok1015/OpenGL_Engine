@@ -59,6 +59,12 @@ void scn::registration_scope::spawner(std::string_view type,
 	m_entries.push_back({ entry_kind::spawner, std::string{ type } });
 }
 
+void scn::registration_scope::structural_spawner(std::string_view type, ecs_assembler::desc_structural_fn spawn)
+{
+	m_assembler->register_structural_spawner(type, std::move(spawn));
+	m_entries.push_back({ entry_kind::spawner, std::string{ type } });
+}
+
 void scn::registration_scope::release()
 {
 	for (auto it = m_entries.rbegin(); it != m_entries.rend(); ++it) {
@@ -117,12 +123,13 @@ scn::registration_scope scn::register_scene_types(desc::desc_system& desc_sys, e
 	scope.migration(world_desc::__type, 2, migrate_prefab_v2);
 	scope.migration("level_desc", 1, [](json::object&) {}); // the worlds are typed objects and migrate on their own
 
-	auto prefab_spawn = [&assembler](entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {
+	// The assembler that runs it: a prefab spawned in a layer builds its components with the layer's.
+	auto prefab_spawn = [](const ecs_assembler& running, entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view name) {
 		const auto& prefab = static_cast<const prefab_desc&>(base);
-		assemble_prefab(assembler, reg, e, prefab, name, prefab.get_tag());
+		assemble_prefab(running, reg, e, prefab, name, prefab.get_tag());
 	};
-	scope.spawner("prefab_desc", prefab_spawn, nullptr, spawner_category::structural);
-	scope.spawner(world_desc::__type, prefab_spawn, nullptr, spawner_category::structural);
+	scope.structural_spawner("prefab_desc", prefab_spawn);
+	scope.structural_spawner(world_desc::__type, prefab_spawn);
 
 	simple_spawner<scene_anchor_desc>(scope, "anchor_desc", assemble_scene_anchor);
 	simple_spawner<camera_desc>(scope, camera_desc::__type, assemble_camera);

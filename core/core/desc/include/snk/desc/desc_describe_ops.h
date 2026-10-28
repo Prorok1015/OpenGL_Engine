@@ -30,7 +30,7 @@ namespace desc
 	// object with "__type" that is stored once under a deterministic memory:// tag of the owner and required from there.
 	// An empty string clears the handle (so does a null on a field with write_null_if_empty). Written as the tag of the
 	// handle, an empty string while it is not set (so write_if_valid() leaves the key out). A handle whose tag is one of
-	// those memory://overrides/ copies is written as the inline object again (the loaded desc's own serialize plus
+	// those memory copies (desc::is_override_tag) is written as the inline object again (the loaded desc's own serialize plus
 	// "__type"): the copy lives in the memory store of this process only, and a saved tag would not resolve in the next
 	// one. A value that is neither a tag nor an object with "__type", a read without a desc_system and owner in the
 	// context, or an inline object of an owner without a tag, does not fit: the field keeps its handle. Only the
@@ -74,7 +74,7 @@ namespace desc
 			}
 			const std::string_view tag = handle.get_tag().view();
 			// A failed handle keeps its tag; get_sync would log an error on every save.
-			if (tag.starts_with("memory://overrides/") && !handle.has_error()) { // see desc_system::make_mem_tag_deterministic
+			if (desc::is_override_tag(tag) && !handle.has_error()) { // see desc_system::make_mem_tag_deterministic
 				if (const auto instance = handle.get_sync()) {
 					json::object inline_desc;
 					instance->serialize(inline_desc);

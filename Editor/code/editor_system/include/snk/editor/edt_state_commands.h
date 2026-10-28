@@ -5,14 +5,12 @@
 #include <functional>
 #include <vector>
 
-namespace desc { class desc_system; }
-namespace scn { class ecs_assembler; }
-
 namespace edt
 {
 	class asset_kind_registry;
 	class document_manager;
 	class selection_service;
+	struct editor_services;
 
 	// A call may ask for at most this many items per page (scene.query, asset.query); the schema refuses more.
 	inline constexpr int state_query_max_page_size = 200;
@@ -24,8 +22,8 @@ namespace edt
 	{
 		document_manager& documents;
 		selection_service& selection;
-		desc::desc_system& descs;
-		scn::ecs_assembler& assembler;
+		// The desc system and the assembler of the game layer, taken at each call (editor_services).
+		const editor_services& services;
 		asset_kind_registry& asset_kinds;
 		// The physical roots behind res://, lowest layer first, as the resource system mounts them (the asset
 		// browser lists the same merged view). Null: no assets.

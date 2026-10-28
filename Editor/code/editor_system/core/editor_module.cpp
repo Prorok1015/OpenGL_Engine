@@ -6,11 +6,13 @@
 #include <snk/input/inp_input_system.h>
 #include "edt_editor_system.h"
 #include "edt_data_protocol.h"
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #endif
 #include <snk/desc/desc_system.h>
+#include <snk/project/prj_project.h>
+#include <snk/project/prj_modules.h>
 
 #include <snk/render/rnd_frame_assembler.h>
 #include <snk/scene/level/scn_render_data_extractor.h>
@@ -49,7 +51,13 @@ void editor::editor_module::initialize_services(ds::app_data_storage& data)
 		images.emplace_back(logo_res->data(), logo_res->size().x, logo_res->size().y, wnd::window_image::TYPE::LOGO);
 		win_service.get_active_window()->set_logo(images);
 	}
-	win_service.get_active_window()->set_title("Snake Editor");
+	if (data.has_value<prj::project_context>()) {
+		// No game module can be provided yet (loading is EPIC-52 #21): the manifest's modules are only reported.
+		prj::resolve_modules(data.require<prj::project_context>().data, {}, true);
+	}
+	win_service.get_active_window()->set_title(data.has_value<prj::project_context>()
+		? "Snake Editor - " + data.require<prj::project_context>().data.name
+		: std::string{ "Snake Editor" });
 
 	data.require<edt::editor_system>().init(data);
 }

@@ -7,7 +7,7 @@ file(GLOB_RECURSE SE_RESOURCE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_
 target_sources(${PROJECT_NAME} PRIVATE ${SE_RESOURCE_SOURCES})
 snk_component_headers(${PROJECT_NAME})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::engine_logger PRIVATE snk::image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE snk::config_system)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::engine_logger PRIVATE snk::image PUBLIC Boost::json PUBLIC Boost::asio PRIVATE snk::config_system PRIVATE snk::project)
 
 #assimp
 # ASSIMP_* / BUILD_SHARED_LIBS options live in cmake/ThirdParty.cmake (EPIC-41 US-41-1).
