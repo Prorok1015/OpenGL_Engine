@@ -851,7 +851,8 @@ res::mount_table res::resource_system::config_mount_table() {
 res::mount_table res::resource_system::project_mount_table(
     const std::filesystem::path &engine_base,
     const std::vector<std::filesystem::path> &content_roots,
-    const std::filesystem::path &memory_root) {
+    const std::filesystem::path &cache_dir,
+    const std::filesystem::path &user_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
   if (engine_base.empty()) {
     egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
@@ -864,7 +865,9 @@ res::mount_table res::resource_system::project_mount_table(
 
   mount_table table;
   table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
-  table.push_back(mount{tag::memory, {memory_root}, mount_access::read_write});
+  table.push_back(mount{tag::memory, {cache_dir / "memory"}, mount_access::read_write});
+  table.push_back(mount{tag::cache, {cache_dir}, mount_access::read_write});
+  table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
   add_engine_mount(table, engine_base);
   return table;
 }

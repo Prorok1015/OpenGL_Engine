@@ -2,12 +2,18 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 
 namespace cmd { class command_registry; }
 namespace ds { class task_system; }
 
 namespace edt
 {
+	// The folder whose .snk/ receives mcp.json: `configured` (editor/project_dir) when set, else the open project's
+	// root, else the working directory.
+	std::filesystem::path agent_project_dir(const std::filesystem::path& configured,
+		const std::optional<std::filesystem::path>& project_root);
+
 	struct agent_server_options
 	{
 		// 0: the operating system picks a free port.

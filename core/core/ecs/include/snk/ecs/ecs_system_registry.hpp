@@ -2,6 +2,7 @@
 #include <snk/ecs/ecs_phase.hpp>
 #include <snk/ecs/ecs_system_access.hpp>
 #include <snk/ecs/ecs_system_interface.hpp>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -66,6 +67,16 @@ public:
 		const std::string key = entry.name;
 		return m_entries.emplace(key, std::move(entry)).second;
 	}
+
+	// False when nothing is registered under the name. Not synchronised: remove between frames, with no task
+	// running a plan. Plans built earlier still hold the system's run function and instances: rebuild them
+	// (scn::context_set::rebuild_all_plans) before the code goes away.
+	bool remove(const std::string& name)
+	{
+		return m_entries.erase(name) != 0;
+	}
+
+	[[nodiscard]] std::size_t size() const noexcept { return m_entries.size(); }
 
 	[[nodiscard]] const system_entry* find(const std::string& name) const
 	{

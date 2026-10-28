@@ -108,6 +108,31 @@ namespace
 		return out;
 	}
 
+	// A module name becomes a file name (game.dll): [A-Za-z][A-Za-z0-9_-]{0,63}.
+	bool is_module_name(std::string_view name)
+	{
+		if (name.empty() || name.size() > 64 || !std::isalpha(static_cast<unsigned char>(name.front()))) {
+			return false;
+		}
+		for (const char c : name) {
+			const auto u = static_cast<unsigned char>(c);
+			if (u >= 0x80 || !(std::isalnum(u) || c == '_' || c == '-')) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	std::string lowercase(std::string_view text)
+	{
+		std::string out;
+		out.reserve(text.size());
+		for (const char c : text) {
+			out += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		return out;
+	}
+
 	bool is_res_tag(std::string_view text)
 	{
 		constexpr std::string_view prefix = "res://";
@@ -191,6 +216,9 @@ namespace
 			fail(path + ".name", "required field is missing");
 		}
 		ref.name = require_non_empty_string(*name, path + ".name");
+		if (!is_module_name(ref.name)) {
+			fail(path + ".name", "expected a letter, then up to 63 letters, digits, '_' or '-'");
+		}
 
 		if (const auto* kind = object.if_contains("kind")) {
 			const std::string_view text = require_string(*kind, path + ".kind");
@@ -283,7 +311,8 @@ namespace
 			for (std::size_t i = 0; i < array.size(); ++i) {
 				const std::string path = std::format("$.modules[{}]", i);
 				auto ref = parse_module(array[i], path, warnings);
-				if (!seen.insert(ref.name).second) {
+				// "Game" and "game" are the same file on Windows and macOS.
+				if (!seen.insert(lowercase(ref.name)).second) {
 					fail(path + ".name", "duplicate module name");
 				}
 				result.modules.push_back(std::move(ref));
