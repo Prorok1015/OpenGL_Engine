@@ -227,7 +227,7 @@ void res::resource_system::register_mount(const mount &mounted) {
         mounted.access == mount_access::read_only ? "read-only" : "read-write",
         mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
   auto &resolver =
-      registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access);
+      registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access, mounted.writable);
   resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
 }

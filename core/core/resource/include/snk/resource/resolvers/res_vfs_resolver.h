@@ -2,6 +2,7 @@
 #include <snk/resource/res_tag.h>
 #include <snk/resource/resolvers/res_resolver_interface.hpp>
 #include <snk/resource/resolvers/res_file_watcher.h>
+#include <snk/resource/resolvers/res_write_policy.h>
 #include <snk/resource/res_mount_table.h>
 #include <vector>
 #include <string>
@@ -25,7 +26,10 @@ namespace res
 	public:
 		vfs_resolver(const std::string_view prt)
 			: core::res::res_resolver_interface(prt), watcher(io) {}
-		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access = mount_access::read_write);
+		// `policy` limits which paths store() may write (checked against the tag and against the file it resolves to);
+		// the default allows every path.
+		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access = mount_access::read_write,
+			write_policy policy = write_policy::allow_all());
 		~vfs_resolver();
 
 		std::optional<res::tag> path_mapper(const fs::path& path) const;
@@ -68,6 +72,7 @@ namespace res
 		std::unordered_map<res::tag, std::uint64_t> m_erased;
 		std::uint64_t m_erase_generation = 0;
 		mount_access m_access = mount_access::read_write;
+		write_policy m_write_policy = write_policy::allow_all();
 		// Set first in the destructor: a watcher poll still queued must not signal a resource_system being destroyed.
 		std::atomic<bool> m_closing{ false };
 	};
