@@ -58,6 +58,17 @@ namespace {
 			m_current.clear();
 		}
 
+		// From inside one of the module's callbacks (a continuation of its tasks, or a callback held by layer.tasks())
+		// the unload would destroy the code that runs it.
+		std::string unload_refusal() const override
+		{
+			if (ds::detail::running_callbacks(m_layer->tasks()) > 0) {
+				return "called from inside one of the module's callbacks; unload from a main-queue item of the engine "
+					"(task_system::post_main) instead";
+			}
+			return {};
+		}
+
 		// The new layer becomes the game layer before the empty one goes, so the game layer changes once.
 		void activate() override
 		{
@@ -99,6 +110,15 @@ bool gs::module_context::add_command(cmd::command_desc desc)
 	}
 	m_layer.keep(std::move(added));
 	return true;
+}
+
+ds::task_handle<void> gs::module_context::run(ds::lane lane, ds::task_desc desc, std::function<void(ds::task_context&)> fn)
+{
+	ASSERT_MSG(m_tasks, "module_context::run: the layer has no task system");
+	if (!m_tasks) {
+		return {};
+	}
+	return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::move(fn));
 }
 
 std::string gs::module_resource_prefix(std::string_view module)

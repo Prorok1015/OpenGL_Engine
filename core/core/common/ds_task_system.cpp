@@ -7,6 +7,7 @@
 #include <format>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 #include <boost/asio/post.hpp>
 #include <boost/asio/thread_pool.hpp>
@@ -47,17 +48,26 @@ namespace ds::detail {
 		return g_on_worker;
 	}
 
+	struct lifetime_state;
+
 	// A main-thread continuation of a task bound to a lifetime: run once, by the queue or by run_pending_main.
 	struct main_item {
 		std::function<void()> fn;
+		std::weak_ptr<lifetime_state> origin;
 		std::atomic<bool> taken{ false };
 
-		void run()
+		void run();
+	};
+
+	struct held_slot {
+		std::mutex mutex;
+		std::function<void(void*)> fn; // made in the caller's binary: destroyed by take()'s caller or by ~lifetime
+		std::weak_ptr<lifetime_state> owner;
+
+		std::function<void(void*)> take()
 		{
-			if (!taken.exchange(true)) {
-				auto call = std::move(fn); // the captures go with it, right after the call
-				run_guarded(call, "main-thread task");
-			}
+			std::lock_guard lock(mutex);
+			return std::exchange(fn, nullptr);
 		}
 	};
 
@@ -68,31 +78,121 @@ namespace ds::detail {
 		const std::thread::id owner_thread = std::this_thread::get_id();
 		std::mutex mutex;
 		std::vector<std::weak_ptr<task_state_base>> tasks;
-		// Callbacks the owner holds (hold_callback); cleared by ~lifetime.
-		std::unordered_map<const void*, std::shared_ptr<void>> held;
+		// The slots the owner holds (hold); ~lifetime empties them.
+		std::vector<std::shared_ptr<held_slot>> held;
 		// Queued main-thread continuations of the bound tasks (the queue owns them).
 		std::vector<std::weak_ptr<main_item>> main_items;
+		// Callbacks of this owner, or continuations of its tasks, running now (running_callbacks).
+		std::atomic<int> running{ 0 };
 	};
 
-	void hold_callback(const std::weak_ptr<lifetime_state>& owner, std::shared_ptr<void> callback)
-	{
-		if (const auto state = owner.lock()) {
-			std::lock_guard lock(state->mutex);
-			const void* key = callback.get();
-			state->held.emplace(key, std::move(callback));
+	namespace {
+		struct running_scope {
+			explicit running_scope(std::shared_ptr<lifetime_state> s) : state(std::move(s)) { if (state) ++state->running; }
+			~running_scope() { if (state) --state->running; }
+			running_scope(const running_scope&) = delete;
+			running_scope& operator=(const running_scope&) = delete;
+			std::shared_ptr<lifetime_state> state;
+		};
+
+		void forget_slot(const std::shared_ptr<held_slot>& slot)
+		{
+			std::shared_ptr<held_slot> released; // destructed after the unlock
+			if (const auto state = slot->owner.lock()) {
+				std::lock_guard lock(state->mutex);
+				if (const auto it = std::ranges::find(state->held, slot); it != state->held.end()) {
+					released = std::move(*it);
+					state->held.erase(it);
+				}
+			}
 		}
 	}
 
-	void release_callback(const std::weak_ptr<lifetime_state>& owner, const void* callback)
+	void main_item::run()
 	{
-		std::shared_ptr<void> released; // destructed after the unlock
-		if (const auto state = owner.lock()) {
-			std::lock_guard lock(state->mutex);
-			if (const auto it = state->held.find(callback); it != state->held.end()) {
-				released = std::move(it->second);
-				state->held.erase(it);
-			}
+		if (!taken.exchange(true)) {
+			auto call = std::move(fn); // the captures go with it, right after the call
+			const running_scope running(origin.lock());
+			run_guarded(call, "main-thread task");
 		}
+	}
+
+	namespace {
+		std::shared_ptr<held_slot> hold_in(const std::shared_ptr<lifetime_state>& state, std::function<void(void*)> fn)
+		{
+			auto slot = std::make_shared<held_slot>();
+			slot->fn = std::move(fn);
+			slot->owner = state;
+			if (!state) {
+				return slot;
+			}
+			std::vector<std::shared_ptr<held_slot>> released; // destructed after the unlock
+			std::lock_guard lock(state->mutex);
+			// Slots called or dropped already left on their own; this only catches ones emptied some other way.
+			std::erase_if(state->held, [&released](std::shared_ptr<held_slot>& held) {
+				std::lock_guard slot_lock(held->mutex);
+				if (held->fn) {
+					return false;
+				}
+				released.push_back(std::move(held));
+				return true;
+			});
+			state->held.push_back(slot);
+			return slot;
+		}
+	}
+
+	std::shared_ptr<held_slot> hold(const lifetime& owner, std::function<void(void*)> fn)
+	{
+		return hold_in(owner.token().lock(), std::move(fn));
+	}
+
+	void call_held(const std::shared_ptr<held_slot>& slot, void* arg)
+	{
+		if (!slot) {
+			return;
+		}
+		auto fn = slot->take(); // ours now: destroyed here, after the call, wherever it throws
+		if (!fn) {
+			return;
+		}
+		forget_slot(slot);
+		const running_scope running(slot->owner.lock());
+		try {
+			fn(arg);
+		} catch (const std::exception& e) {
+			egLOG_ERROR("task", "main-thread callback threw: {}", e.what());
+		} catch (...) {
+			egLOG_ERROR("task", "main-thread callback threw an unknown exception");
+		}
+	}
+
+	void drop_held(const std::shared_ptr<held_slot>& slot)
+	{
+		if (!slot) {
+			return;
+		}
+		slot->take(); // the functor goes here, without a call
+		forget_slot(slot);
+	}
+
+	std::size_t held_count(const lifetime& owner)
+	{
+		const auto state = owner.token().lock();
+		if (!state) {
+			return 0;
+		}
+		std::lock_guard lock(state->mutex);
+		return static_cast<std::size_t>(std::ranges::count_if(state->held, [](const std::shared_ptr<held_slot>& held) {
+			std::lock_guard slot_lock(held->mutex);
+			return static_cast<bool>(held->fn);
+		}));
+	}
+
+	int running_callbacks(const lifetime& owner)
+	{
+		const auto state = owner.token().lock();
+		return state ? state->running.load() : 0;
 	}
 
 	struct task_system_impl {
@@ -379,15 +479,64 @@ namespace ds::detail {
 		}
 		auto item = std::make_shared<main_item>();
 		item->fn = std::move(fn);
+		item->origin = origin;
+		std::vector<std::shared_ptr<main_item>> released; // destructed after the unlock: they may hold user captures
 		{
 			std::lock_guard lock(state->mutex);
-			std::erase_if(state->main_items, [](const std::weak_ptr<main_item>& weak) {
-				const auto queued = weak.lock();
-				return !queued || queued->taken.load();
+			std::erase_if(state->main_items, [&released](const std::weak_ptr<main_item>& weak) {
+				auto queued = weak.lock();
+				const bool gone = !queued || queued->taken.load();
+				if (queued) {
+					released.push_back(std::move(queued));
+				}
+				return gone;
 			});
 			state->main_items.push_back(item);
 		}
 		return [item] { item->run(); };
+	}
+
+	void task_state_base::continue_on_main(std::shared_ptr<held_slot> slot)
+	{
+		add_continuation(true, [slot = std::move(slot)] { call_held(slot, nullptr); });
+	}
+
+	void task_state_base::continue_on_main(std::function<void(void*)> fn)
+	{
+		std::shared_ptr<lifetime_state> origin;
+		{
+			std::lock_guard lock(m_mutex);
+			origin = m_origin.lock();
+		}
+		// Bound to no lifetime (only the engine's own tasks are: a module's run through module_context, bound to its
+		// layer): the queued call alone holds it.
+		continue_on_main(hold_in(origin, std::move(fn)));
+	}
+
+	bool task_state_base::finalized() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_finalized;
+	}
+
+	void task_state_base::wait_finalized()
+	{
+		ASSERT_MSG(!on_worker_thread(), "task wait_finalized(): not allowed on a pool thread");
+		if (finalized()) {
+			return;
+		}
+		auto sys = m_sys.lock();
+		if (sys && sys->cfg.mode == policy::manual) {
+			while (!finalized()) {
+				if (!sys->run_one(lane::compute) && !sys->run_one(lane::io)) {
+					egLOG_ERROR("task", "wait_finalized('{}'): nothing left to run in manual mode", m_desc.name);
+					return;
+				}
+			}
+			return;
+		}
+		std::unique_lock lock(m_mutex);
+		m_cv.wait(lock, [this] { return m_finalized; });
 	}
 
 	void run_pending_main(const lifetime& owner)
@@ -397,19 +546,27 @@ namespace ds::detail {
 			return;
 		}
 		ASSERT_MSG(std::this_thread::get_id() == state->owner_thread, "run_pending_main: the owner's thread only");
-		std::vector<std::shared_ptr<main_item>> items;
-		{
-			std::lock_guard lock(state->mutex);
-			for (const auto& weak : state->main_items) {
-				if (auto queued = weak.lock()) {
-					items.push_back(std::move(queued));
+		// A continuation may queue another one of the same tasks: run until none is left, within a bound.
+		constexpr int max_passes = 16;
+		for (int pass = 0; pass < max_passes; ++pass) {
+			std::vector<std::shared_ptr<main_item>> items;
+			{
+				std::lock_guard lock(state->mutex);
+				for (const auto& weak : state->main_items) {
+					if (auto queued = weak.lock(); queued && !queued->taken.load()) {
+						items.push_back(std::move(queued));
+					}
 				}
+				state->main_items.clear();
 			}
-			state->main_items.clear();
+			if (items.empty()) {
+				return;
+			}
+			for (const auto& item : items) {
+				item->run();
+			}
 		}
-		for (const auto& item : items) {
-			item->run();
-		}
+		egLOG_WARN("task", "run_pending_main: continuations still queued after {} passes; the rest waits for drain_main", max_passes);
 	}
 
 	void task_state_base::add_continuation(bool on_main, std::function<void()> fn)
@@ -447,6 +604,14 @@ namespace ds::detail {
 				sys->post_main(for_main(std::move(c.fn)), main_class::general);
 			}
 		}
+		pending.clear();
+		// Last: wait_idle (wait_finalized) returns only now, when every continuation is queued or has run. Nothing
+		// above waits for the main thread, which may be the one waiting here.
+		{
+			std::lock_guard lock(m_mutex);
+			m_finalized = true;
+		}
+		m_cv.notify_all();
 	}
 
 } // namespace ds::detail
@@ -464,10 +629,15 @@ namespace ds {
 		if (m_state->cancel_on_destroy) {
 			cancel_tasks();
 		}
-		decltype(m_state->held) released; // destructed after the unlock: the captures go now, on this thread
+		decltype(m_state->held) released;
 		{
 			std::lock_guard lock(m_state->mutex);
 			released.swap(m_state->held);
+		}
+		// Outside the lock, here and now, on this thread: the functors (a game module's code) go before anything
+		// that outlives this lifetime (a queue, a task, a block) could destroy them later. The slots stay, empty.
+		for (const auto& slot : released) {
+			slot->take();
 		}
 	}
 
@@ -651,8 +821,10 @@ namespace ds {
 		for (bool waited = true; waited;) {
 			waited = false;
 			for (const auto& state : owner.bound()) {
-				if (!state->done()) {
-					state->wait();
+				// finalized, not only done: the continuations are queued (run_pending_main finds them) and nothing
+				// of the task runs any more (#406).
+				if (!state->finalized()) {
+					state->wait_finalized();
 					waited = true;
 				}
 			}

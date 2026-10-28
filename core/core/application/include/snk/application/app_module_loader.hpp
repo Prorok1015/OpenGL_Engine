@@ -367,6 +367,12 @@ namespace app::modules {
 				}
 			}
 
+			if (e->layer) {
+				if (const std::string refusal = e->layer->unload_refusal(); !refusal.empty()) {
+					fail(std::format("module_loader: cannot unload '{}': {}", name, refusal));
+				}
+			}
+
 			const std::size_t expected = data.size() - e->provided;
 			shutdown_entry(*e, data);
 			const std::size_t actual = data.size();

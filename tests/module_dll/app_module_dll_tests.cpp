@@ -101,4 +101,20 @@ BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)
 	}
 }
 
+// #406: the library's callbacks on a resource still loading and on its task, then the library goes before either
+// settles. What the engine holds of them afterwards is its own code: settling the block and draining the main queue
+// after the library is unmapped runs nothing of it (ASan/UBSan shared, Windows shared).
+BOOST_AUTO_TEST_CASE(callbacks_of_an_unloaded_library_leave_nothing_of_it_in_the_engine)
+{
+	put("dll_waited.desc", R"({"__type":"dll_desc","value":1})");
+	loader.load(game_library(), root);
+	BOOST_REQUIRE(resident(g_module_path));
+	loader.unload(dll_game::module_name, root);
+	BOOST_TEST(!resident(g_module_path));
+	pump();
+	for (int i = 0; i < 4; ++i) {
+		tasks.drain_main();
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()

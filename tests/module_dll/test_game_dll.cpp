@@ -7,6 +7,8 @@
 #include <snk/ecs/ecs_component_registry.hpp>
 #include <snk/ecs/ecs_system.h>
 #include <snk/game/gs_game_module.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/res_tag.h>
 #include <snk/scene/scn_ecs_assembler.h>
 #include <snk/scene/scn_scene_layer.h>
 
@@ -64,7 +66,16 @@ protected:
 		layer.systems().register_system<&dll_move>(std::string{ dll_game::system_name });
 		layer.components().add<dll_game::dll_component>(std::string{ dll_game::component_name });
 		ecs::register_component<dll_game::dll_component>(layer.meta());
-		data.construct<dll_service>();
+		auto& service = data.construct<dll_service>();
+
+		const res::tag waited{ std::string{ dll_game::waited_tag } };
+		if (layer.resources().exists(waited)) {
+			auto* frames = &service.frames;
+			layer.resources().require<desc::desc_base>(waited).then(layer.tasks(), [frames](desc::desc_base&) { ++*frames; });
+		}
+		auto* frames = &service.frames;
+		data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "dll.task" }, [frames](ds::task_context&) {})
+			.then_main(layer.tasks(), [frames](ds::task_result<void>&) { ++*frames; });
 	}
 
 	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override

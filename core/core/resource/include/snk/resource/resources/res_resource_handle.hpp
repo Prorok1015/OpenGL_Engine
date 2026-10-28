@@ -4,12 +4,22 @@
 #include <snk/common/ds/ds_polymorphic_cast.hpp>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/common/snk_api.h>
 #include <chrono>
 #include <memory>
 #include <functional>
+#include <type_traits>
 
 namespace core::res
 {
+    namespace detail {
+        // res_handle::then with a functor of the caller's binary (#406): the block's callback and the main-queue item
+        // are the engine's, the functor stays in `slot` (its owner empties it when it goes). The slot is called with a
+        // pointer to the block's data, on the main thread; a failed block empties it without a call.
+        SNK_API void then_on_main(const std::shared_ptr<res_resource_block>& block, ds::task_system& tasks,
+            std::shared_ptr<ds::detail::held_slot> slot);
+    }
+
     template<typename T>
     class res_handle {
     public:
@@ -75,18 +85,10 @@ namespace core::res
             if (!m_block) return;
             ASSERT_MSG(m_tasks, "res_handle::then: the handle has no task_system");
             if (!m_tasks) return;
-            m_block->on_settled([tasks = m_tasks, weak = owner.token(), held = ds::detail::held_by(owner, std::move(cb))](auto& block) {
-                if (!block.data) {
-                    ds::detail::release_callback(weak, held.lock().get());
-                    return;
-                }
-                tasks->post_main([weak, held, data = block.data]() {
-                    if (const auto callback = held.lock()) {
-                        (*callback)(*ds::polymorphic_pointer_cast<T>(data));
-                        ds::detail::release_callback(weak, callback.get());
-                    }
-                });
-            });
+            using data_t = std::remove_cvref_t<decltype(m_block->data)>;
+            detail::then_on_main(m_block, *m_tasks, ds::detail::hold(owner, [cb = std::move(cb)](void* data) {
+                cb(*ds::polymorphic_pointer_cast<T>(*static_cast<data_t*>(data)));
+            }));
         }
 
         const ::res::tag& get_tag() const

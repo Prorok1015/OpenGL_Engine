@@ -20,6 +20,18 @@ CFG_VAR_DEF_PATH(cfg_res_path, "resource/path", "./res");
 // Optional lower layer (engine base resources). Empty = single-root setup.
 CFG_VAR_DEF_PATH(cfg_res_base_path, "resource/base_path", "");
 
+void core::res::detail::then_on_main(const std::shared_ptr<res_resource_block>& block, ds::task_system& tasks,
+                                     std::shared_ptr<ds::detail::held_slot> slot) {
+  // Both lambdas are compiled here, in the engine: the block and the main queue hold nothing of the caller's binary.
+  block->on_settled([tasks = &tasks, slot = std::move(slot)](res_resource_block &settled) {
+    if (!settled.data) {
+      ds::detail::drop_held(slot);
+      return;
+    }
+    tasks->post_main([slot, data = settled.data]() mutable { ds::detail::call_held(slot, &data); });
+  });
+}
+
 namespace {
 constexpr std::size_t k_max_dependency_depth = 32;
 

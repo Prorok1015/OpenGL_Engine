@@ -636,6 +636,7 @@ BOOST_AUTO_TEST_CASE(TheOwnerHoldsTheCapturesOfItsCallbacks)
 		tasks.drain_main();
 		BOOST_TEST(calls == 1);
 		BOOST_TEST(watched.expired());
+		BOOST_TEST(ds::detail::held_count(owner) == 0u);
 	}
 }
 
@@ -836,6 +837,49 @@ BOOST_AUTO_TEST_SUITE(TaskSystemThreadedTests)
 
 // Real threads: meant for the TSan job. Everything the callbacks touch is main-thread data, so a
 // race here is a task_system bug.
+
+// #406 B1: what a game module's layer does when it goes, right after its task finished on a worker. The worker stores
+// the status before it queues the continuations: wait_idle must wait for that too, or run_pending_main misses them
+// and they run later, after the module is gone.
+BOOST_AUTO_TEST_CASE(ContinuationsOfAFinishedTaskAreQueuedBeforeWaitIdleReturns)
+{
+	ds::task_system_config config;
+	config.compute_threads = 2;
+	ds::task_system tasks(config);
+
+	constexpr int rounds = 50;
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			bool gone = false;
+			int plain_calls = 0;
+			int owned_calls = 0;
+			int calls_after_gone = 0;
+			auto layer = std::make_unique<ds::lifetime>(ds::lifetime_option::cancel_on_destroy);
+			auto owner = std::make_unique<ds::lifetime>();
+			auto handle = tasks.run(lane::compute, { "module task" }, *layer, [](ds::task_context&) {});
+			handle.then_main([&](ds::task_result<void>&) { ++(gone ? calls_after_gone : plain_calls); });
+			handle.then_main(*owner, [&](ds::task_result<void>&) { ++(gone ? calls_after_gone : owned_calls); });
+			while (!handle.done()) {
+				std::this_thread::yield();
+			}
+
+			layer->cancel_tasks();
+			tasks.wait_idle(*layer);
+			ds::detail::run_pending_main(*layer);
+			owner.reset();
+			layer.reset();
+			gone = true;
+
+			for (int i = 0; i < 4; ++i) {
+				tasks.drain_main();
+			}
+			BOOST_TEST(plain_calls == 1);
+			BOOST_TEST(owned_calls == 1);
+			BOOST_TEST(calls_after_gone == 0);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(ThenMainRunsOnTheMainThreadAfterCompletion)
 {
 	ds::task_system_config config;

@@ -239,6 +239,31 @@ constexpr const char* PREFAB_LEVEL = R"({"__type":"level_desc","name":"lv","worl
 constexpr const char* RIG_PREFAB = R"({"__type":"prefab_desc","__version":3,"children":[
 	{"__id":"00000000000000a1","name":"bone"}]})";
 
+// A continuation of the module's task that tries to unload the module it belongs to (#406).
+app::modules::module_loader* g_unloader = nullptr;
+ds::app_data_storage* g_unload_root = nullptr;
+std::string g_unload_refusal;
+
+class self_unloading_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "self_unloading_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		data.require<gs::module_context>()
+			.run(ds::lane::compute, ds::task_desc{ .name = "game.self_unload" }, [](ds::task_context&) {})
+			.then_main([](ds::task_result<void>&) {
+				try {
+					g_unloader->unload("self_unloading_game", *g_unload_root);
+				} catch (const std::logic_error& e) {
+					g_unload_refusal = e.what();
+				}
+			});
+	}
+};
+
 // Callbacks of the module with an owner that are still waiting when it unloads: a continuation in the main queue and
 // the callback of a resource still loading. Their captures must be gone before the module's source is closed (#406).
 std::weak_ptr<int> g_queued_capture;
@@ -407,6 +432,20 @@ BOOST_AUTO_TEST_CASE(an_unload_from_a_main_queue_item_runs_only_the_module_conti
 	BOOST_TEST(g_plain_calls == 1); // its entry in the queue did nothing afterwards
 	BOOST_TEST(g_plain_capture.expired());
 	BOOST_TEST(g_owned_capture.expired());
+}
+
+BOOST_AUTO_TEST_CASE(an_unload_from_inside_the_module_callback_is_refused)
+{
+	g_unloader = &loader;
+	g_unload_root = &root;
+	g_unload_refusal.clear();
+	loader.load(std::make_unique<self_unloading_game_module>(), root);
+	tasks.run_one(ds::lane::compute);
+	tasks.drain_main();
+	BOOST_TEST(g_unload_refusal.find("inside one of the module's callbacks") != std::string::npos);
+	BOOST_TEST((loader.state("self_unloading_game") == app::modules::module_state::initialized));
+	loader.unload("self_unloading_game", root); // from outside it goes
+	BOOST_TEST((loader.state("self_unloading_game") == app::modules::module_state::unloaded));
 }
 
 BOOST_AUTO_TEST_CASE(the_module_callbacks_are_gone_before_its_source_closes)
