@@ -14,6 +14,7 @@
 namespace po = boost::program_options;
 
 bool is_initialized = false;
+std::filesystem::path loaded_config_file;
 
 constexpr auto EXTENDS_KEY = "extends";
 constexpr auto SEPARATOR = '/';
@@ -155,7 +156,13 @@ void cfg::initialize_configs(std::filesystem::path init_file)
 	}
 	is_initialized = true;
 
+	loaded_config_file = std::filesystem::absolute(init_file).lexically_normal();
 	load_config_file_with_extends(init_file);
+}
+
+std::filesystem::path cfg::loaded_config_path()
+{
+	return loaded_config_file;
 }
 
 bool cfg::initialize_configs(int argc, char* argv[])

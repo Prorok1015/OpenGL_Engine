@@ -1,0 +1,142 @@
+#include <snk/platform/plt_process.h>
+#include <format>
+#include <system_error>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <string_view>
+#else
+#include <spawn.h>
+#include <sys/types.h>
+extern char** environ;
+#endif
+
+namespace fs = std::filesystem;
+
+#ifdef _WIN32
+
+namespace
+{
+	std::wstring widen(const std::string& utf8)
+	{
+		if (utf8.empty()) {
+			return {};
+		}
+		const int size = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+		std::wstring out(static_cast<std::size_t>(size), L'\0');
+		MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), size);
+		return out;
+	}
+
+	// The quoting CommandLineToArgvW (and the C runtime) undoes: backslashes are literal unless they precede a quote.
+	std::wstring quoted(std::wstring_view arg)
+	{
+		if (!arg.empty() && arg.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) {
+			return std::wstring{ arg };
+		}
+		std::wstring out = L"\"";
+		for (auto it = arg.begin();; ++it) {
+			std::size_t backslashes = 0;
+			while (it != arg.end() && *it == L'\\') {
+				++it;
+				++backslashes;
+			}
+			if (it == arg.end()) {
+				out.append(backslashes * 2, L'\\');
+				break;
+			}
+			if (*it == L'"') {
+				out.append(backslashes * 2 + 1, L'\\');
+			} else {
+				out.append(backslashes, L'\\');
+			}
+			out.push_back(*it);
+		}
+		out.push_back(L'"');
+		return out;
+	}
+}
+
+fs::path platform::current_executable()
+{
+	std::wstring buffer(MAX_PATH, L'\0');
+	// Long paths can exceed MAX_PATH; the documented limit of a Windows path is 32767 characters.
+	while (buffer.size() <= 32768) {
+		const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+		if (length == 0) {
+			return {};
+		}
+		if (length < buffer.size()) {
+			buffer.resize(length);
+			return fs::path{ buffer };
+		}
+		buffer.resize(buffer.size() * 2);
+	}
+	return {};
+}
+
+std::optional<std::string> platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
+{
+	std::wstring command_line = quoted(program.native());
+	for (const auto& arg : args) {
+		command_line += L' ';
+		command_line += quoted(widen(arg));
+	}
+
+	STARTUPINFOW startup{};
+	startup.cb = sizeof(startup);
+	PROCESS_INFORMATION process{};
+	// CreateProcessW may write into the command line, so it gets its own buffer.
+	if (!CreateProcessW(program.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+			DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, nullptr, nullptr, &startup, &process)) {
+		const auto error = std::error_code{ static_cast<int>(GetLastError()), std::system_category() };
+		return std::format("cannot start '{}': {}", program.string(), error.message());
+	}
+	CloseHandle(process.hThread);
+	CloseHandle(process.hProcess);
+	return std::nullopt;
+}
+
+#else
+
+fs::path platform::current_executable()
+{
+	std::error_code ec;
+	const fs::path path = fs::read_symlink("/proc/self/exe", ec);
+	return ec ? fs::path{} : path;
+}
+
+std::optional<std::string> platform::spawn_detached(const fs::path& program, const std::vector<std::string>& args)
+{
+	std::string program_name = program.string();
+	std::vector<std::string> owned = args;
+	std::vector<char*> argv;
+	argv.reserve(owned.size() + 2);
+	argv.push_back(program_name.data());
+	for (auto& arg : owned) {
+		argv.push_back(arg.data());
+	}
+	argv.push_back(nullptr);
+
+	posix_spawnattr_t attributes;
+	posix_spawnattr_init(&attributes);
+#ifdef POSIX_SPAWN_SETSID
+	// Its own session: closing the terminal (or the process group) of this editor does not take the new one along.
+	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+#endif
+	pid_t pid = 0;
+	const int result = posix_spawn(&pid, program_name.c_str(), nullptr, &attributes, argv.data(), environ);
+	posix_spawnattr_destroy(&attributes);
+	if (result != 0) {
+		return std::format("cannot start '{}': {}", program_name, std::generic_category().message(result));
+	}
+	return std::nullopt;
+}
+
+#endif

@@ -16,6 +16,9 @@ namespace cfg {
 
 	SNK_API void initialize_configs(std::filesystem::path init_file);
 	SNK_API bool initialize_configs(int argc, char* args[]);
+	// The absolute path of the file initialize_configs loaded (--config); empty when none was. The editor passes it on
+	// when it restarts itself into another project (EPIC-42 #158).
+	SNK_API std::filesystem::path loaded_config_path();
 
 	// Loads a config file with its `extends` chain (a later file replaces what an earlier one set, lists included),
 	// without the once-per-process guard of initialize_configs. False when a file is missing or is not valid yaml.
