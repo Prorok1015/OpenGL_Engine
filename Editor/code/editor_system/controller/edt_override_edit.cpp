@@ -2,6 +2,7 @@
 #include <snk/scene/scn_glm_json_convert.h>
 #include <snk/desc/desc_json_ops.h>
 #include "edt_scene_document.h"
+#include <snk/editor/edt_editor_services.h>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -171,7 +172,7 @@ std::shared_ptr<const std::optional<edt::override_edit::prefab_node>> edt::overr
 	for (const auto& e : m_bases) {
 		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
 	}
-	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(m_assembler, owner, target));
+	auto value = std::make_shared<const std::optional<prefab_node>>(find_base_node(*m_services.assembler(), owner, target));
 	m_bases.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
 	return value;
 }
@@ -183,7 +184,7 @@ std::shared_ptr<const std::vector<edt::override_edit::listed_node>> edt::overrid
 	for (const auto& e : m_children) {
 		if (e.world == m_state.active_world_idx && e.owner_id == owner.node_id && std::ranges::equal(e.target, target)) return e.value;
 	}
-	auto value = std::make_shared<const std::vector<listed_node>>(list_children(m_assembler, owner, target));
+	auto value = std::make_shared<const std::vector<listed_node>>(list_children(*m_services.assembler(), owner, target));
 	m_children.push_back({ m_state.active_world_idx, owner.node_id, std::vector<uint64_t>(target.begin(), target.end()), value });
 	return value;
 }

@@ -10,3 +10,4 @@ entt::locator<entt::meta_ctx>::node_type ecs::meta_context_handle()
 	static_cast<void>(meta_context());
 	return entt::locator<entt::meta_ctx>::handle();
 }
+

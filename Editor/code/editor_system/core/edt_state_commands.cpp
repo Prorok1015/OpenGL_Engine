@@ -1,6 +1,7 @@
 #include <snk/editor/edt_state_commands.h>
 #include <snk/editor/edt_asset_kind_registry.h>
 #include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_services.h>
 #include <snk/editor/edt_selection_service.h>
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
@@ -533,7 +534,7 @@ namespace {
 		std::optional<prefab_node> base;
 		const prefab_node* subject = at.owner;
 		if (!at.target.empty()) {
-			base = edt::override_edit::find_base_node(sources.assembler, *at.owner, at.target);
+			base = edt::override_edit::find_base_node(*sources.services.assembler(), *at.owner, at.target);
 			if (!base) return cmd::result::failure(cmd::codes::not_found, "no node at that path inside the prefab instance");
 			subject = &*base;
 		}
@@ -587,7 +588,7 @@ namespace {
 		const bool composed = !at.target.empty() || !at.owner->overrides.empty() || references_prefab(*at.owner);
 		// The cap applies before any child is expanded: expanding costs a copy of the prefab content of each one.
 		if (composed) {
-			for (const auto& listed : edt::override_edit::list_children(sources.assembler, *at.owner, at.target, max_children_listed, &child_total)) {
+			for (const auto& listed : edt::override_edit::list_children(*sources.services.assembler(), *at.owner, at.target, max_children_listed, &child_total)) {
 				rows.push_back({ listed.node.node_id, listed.node.name, sorted_keys(listed.node.components), listed.has_children });
 			}
 		} else {
@@ -627,9 +628,10 @@ namespace {
 	cmd::result component_schema(const edt::state_command_sources& sources, const cmd::call& request)
 	{
 		const std::string type = text_of(request.args.as_object().at("type").as_string());
-		const desc::type_schema* schema = sources.descs.find_schema(type);
+		const desc::desc_system& descs = *sources.services.descs();
+		const desc::type_schema* schema = descs.find_schema(type);
 		if (!schema) {
-			if (sources.descs.is_registered(type)) {
+			if (descs.is_registered(type)) {
 				return cmd::result::failure(cmd::codes::not_found, std::format("'{}' has no schema yet (it is not on the generic desc schema)", type));
 			}
 			return cmd::result::failure(cmd::codes::not_found, std::format("no desc type '{}'; the __type of a component in node.get names one", type));
@@ -639,7 +641,7 @@ namespace {
 		out["version"] = schema->version;
 		out["kind"] = json::string(desc::to_string(schema->kind));
 		out["is_component"] = schema->is_component;
-		out["schema"] = desc::to_json_schema(*schema, sources.descs.schemas());
+		out["schema"] = desc::to_json_schema(*schema, descs.schemas());
 		return cmd::result::success(std::move(out));
 	}
 

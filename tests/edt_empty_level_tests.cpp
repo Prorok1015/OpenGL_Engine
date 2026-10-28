@@ -56,7 +56,7 @@ struct empty_level_fixture : test_util::scene_env
 	scn::context_manager mgr;
 	edt::editor_services services;
 	edt::scene_document state;
-	edt::world_controller world_ctrl{ state, services, *rs, *descs };
+	edt::world_controller world_ctrl{ state, services };
 };
 
 }

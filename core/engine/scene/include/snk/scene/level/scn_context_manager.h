@@ -3,6 +3,7 @@
 #include <snk/scene/level/scn_world_context.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/scn_ecs_assembler.h>
+#include <snk/scene/scn_scene_layer.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
 #include <snk/ecs/ecs_channel.hpp>
@@ -20,7 +21,8 @@ namespace scn
 {
 	// Owns every simulation context, grouped into named sets, and steps them each frame. Sets run
 	// in the order they were created. The level is the set "level"; the shared services (resources,
-	// system factory, assembler, hot reload) are injected once and used by all sets.
+	// system factory, assembler, hot reload) are injected once. A set belongs to the base (these services)
+	// or to a layer the manager owns (MODULE_LAYER.md), whose services then build its worlds.
 	class SNK_API context_manager
 	{
 	public:
@@ -43,8 +45,17 @@ namespace scn
 		// Steps every active set, then ticks hot reload once.
 		void update(std::chrono::duration<float> dt);
 
-		// The set "level"; lives as long as the manager.
+		// The set "level". It lives as long as the manager, but set_game_layer() replaces it.
 		scn::context_set& level_set() { return *m_level_set; }
+
+		// A layer over the manager's services; lives until destroy_layer() or the manager.
+		scn::scene_layer& create_layer();
+		// Destroys the sets of the layer, then the layer. The game layer's set "level" goes back to the base, empty.
+		void destroy_layer(scn::scene_layer& layer);
+		// The layer the set "level" and the previews belong to; null: the base services.
+		scn::scene_layer* game_layer() const { return m_game_layer; }
+		// Replaces the set "level" with an empty one on `layer` (null: the base) and makes it the game layer.
+		void set_game_layer(scn::scene_layer* layer);
 
 		// Replaces the contents of the set "level" with the worlds of the level desc and watches the
 		// desc for changes. False (and the current level kept) when the desc cannot be loaded.
@@ -55,8 +66,8 @@ namespace scn
 		// `kind::level` survive the reload.
 		void set_on_reload(std::function<void()> cb) { m_on_reload = std::move(cb); }
 
-		// Returns the existing set when the name is taken.
-		scn::context_set& create_set(std::string_view name);
+		// Returns the existing set when the name is taken. `layer` null: the base services.
+		scn::context_set& create_set(std::string_view name, scn::scene_layer* layer = nullptr);
 		// The set "level" cannot be destroyed.
 		void destroy_set(std::string_view name);
 		scn::context_set* find_set(std::string_view name) const;
@@ -84,7 +95,7 @@ namespace scn
 			for (const auto& s : m_sets) fn(*s);
 		}
 
-		// Preview of an asset (prefab, scene, ...): the set "preview:<tag>" with one `kind::preview`
+		// Preview of an asset (prefab, scene, ...): the set "preview:<tag>" of the game layer with one `kind::preview`
 		// context. It has its own time, runs in Edit mode and takes part in hot reload, and being a
 		// set of its own it is neither part of the level nor affected by a level reload. Creating a
 		// preview for a tag that already has one replaces it.
@@ -114,13 +125,21 @@ namespace scn
 		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
 
 	private:
-		scn::context_set& add_level_set();
+		std::unique_ptr<scn::context_set> make_set(std::string_view name, scn::scene_layer* layer);
+		// The services that build the worlds of `set`: its layer's, or the base's.
+		ecs::system_factory& systems_of(const scn::context_set& set) { return set.layer() ? set.layer()->systems() : m_system_factory; }
+		scn::ecs_assembler& assembler_of(const scn::context_set& set) { return set.layer() ? set.layer()->assembler() : m_assembler; }
+		res::resource_system& resources_of(const scn::context_set& set) { return set.layer() ? set.layer()->resources() : m_resource; }
+		scn::hot_reload_manager* hot_reload_of(const scn::context_set& set) { return set.layer() ? set.layer()->hot_reload().get() : m_hot_reload_manager.get(); }
 
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();
 		scn::ecs_assembler& m_assembler;
 		ecs::system_factory& m_system_factory;
 		res::resource_system& m_resource;
+		// Before the sets: the worlds of a layer go before the layer.
+		std::vector<std::unique_ptr<scn::scene_layer>> m_layers;
+		scn::scene_layer* m_game_layer = nullptr;
 		// Stable addresses; creation order is the update order.
 		std::vector<std::unique_ptr<scn::context_set>> m_sets;
 		scn::context_set* m_level_set = nullptr;

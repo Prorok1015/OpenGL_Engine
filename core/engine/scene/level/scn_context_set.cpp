@@ -1,4 +1,5 @@
 #include <snk/scene/level/scn_context_set.h>
+#include <snk/scene/scn_scene_layer.h>
 #include <algorithm>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
@@ -117,6 +118,9 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	auto& w = *(m_contexts[id] = std::make_unique<scn::world_context>(id, name));
 	m_context_ids[std::string{ name }] = id;
 	w.set_kind(kind);
+	if (m_layer) {
+		w.set_meta(&m_layer->meta());
+	}
 	m_channel.attach(id, w.get_name(), w.state());
 	w.seed(m_seed);
 	w.set_mode(m_mode);

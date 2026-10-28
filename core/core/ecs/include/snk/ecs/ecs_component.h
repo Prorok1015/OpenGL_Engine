@@ -44,6 +44,16 @@ namespace ecs
     [[nodiscard]] SNK_API entt::meta_ctx& meta_context();
     [[nodiscard]] SNK_API entt::locator<entt::meta_ctx>::node_type meta_context_handle();
 
+    // `id` in the layer's context first (none: null), then in the engine's.
+    [[nodiscard]] inline entt::meta_type find_meta(const entt::meta_ctx* layer, entt::id_type id) {
+        if (layer) {
+            if (auto type = entt::resolve(*layer, id)) {
+                return type;
+            }
+        }
+        return entt::resolve(meta_context(), id);
+    }
+
     template<typename T>
     entt::meta_factory<T> register_component(entt::meta_ctx& ctx) {
         return entt::meta_factory<T>{ ctx }

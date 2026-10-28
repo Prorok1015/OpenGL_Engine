@@ -27,9 +27,11 @@ void scn::scene_init(ds::app_data_storage &store) {
   store.construct<scn::hot_reload_manager>(store.require<scn::ecs_assembler>(),
                                            resource);
 
-  store.construct<scn::context_manager>(
+  auto &contexts = store.construct<scn::context_manager>(
       resource, assembler, sfactory,
       store.require_shared<scn::hot_reload_manager>());
+  // The game worlds always live in a layer, empty until a game module fills it (MODULE_LAYER.md).
+  contexts.set_game_layer(&contexts.create_layer());
   store.construct<rnd::skinning_manager>();
   resource.registrate_adapter<scn::worldwrap_adapter>(
       scn::worldwrap_adapter::INFO, resource, desc_sys);

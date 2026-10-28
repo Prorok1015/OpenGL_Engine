@@ -118,7 +118,10 @@ struct state_fixture : test_util::scene_env
 		prefab_kind.open = [](edt::editor_context&, const res::tag&) {};
 		kind_registration = kinds.add(std::move(prefab_kind));
 
-		edt::state_command_sources sources{ documents, selection, *descs, *assembler, kinds, [this] { return disk.layers; } };
+		services.base_descs = descs.get();
+		services.base_resources = rs.get();
+		services.base_assembler = assembler.get();
+		edt::state_command_sources sources{ documents, selection, services, kinds, [this] { return disk.layers; } };
 		registrations = edt::register_state_commands(commands, sources);
 	}
 
@@ -172,7 +175,7 @@ struct state_fixture : test_util::scene_env
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
-	edt::document_manager documents{ scene, services, events, *rs, *descs };
+	edt::document_manager documents{ scene, services, events };
 	edt::selection_service selection{ events };
 	edt::asset_kind_registry kinds;
 	edt::registration kind_registration;

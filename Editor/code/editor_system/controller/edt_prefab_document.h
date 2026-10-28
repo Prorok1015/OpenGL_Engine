@@ -8,9 +8,6 @@
 #include <functional>
 #include <entt/entt.hpp>
 
-namespace res { class resource_system; }
-namespace desc { class desc_system; }
-
 namespace edt
 {
 	struct editor_services;
@@ -22,7 +19,7 @@ namespace edt
 	class prefab_document final : public document
 	{
 	public:
-		prefab_document(editor_services& services, res::resource_system& res, desc::desc_system& desc);
+		explicit prefab_document(editor_services& services);
 
 		void open(const res::tag& prefab_tag);
 		void close();
@@ -51,8 +48,6 @@ namespace edt
 		void inject_camera(entt::registry& reg);
 
 		editor_services& m_services;
-		res::resource_system& m_res;
-		desc::desc_system& m_desc;
 
 		res::tag m_source_tag;
 		std::string m_prefab_name;
