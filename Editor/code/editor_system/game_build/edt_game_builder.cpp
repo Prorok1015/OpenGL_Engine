@@ -18,7 +18,7 @@ namespace json = boost::json;
 namespace fs = std::filesystem;
 
 namespace {
-	constexpr const char* k_popup = "Building##edt_build";
+	constexpr const char* k_window = "Building the game##edt_build";
 	constexpr const char* k_presets = "CMakePresets.json";
 
 	std::string utf8_of(const fs::path& path)
@@ -293,15 +293,11 @@ void edt::game_builder::finish(game_build_result& result)
 bool edt::game_builder::draw_progress()
 {
 	if (!is_building()) {
-		if (ImGui::BeginPopupModal(k_popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-			ImGui::CloseCurrentPopup();
-			ImGui::EndPopup();
-		}
 		return false;
 	}
-
-	ImGui::OpenPopup(k_popup);
-	if (ImGui::BeginPopupModal(k_popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar)) {
+	// A window, not a modal: a build takes minutes and the editor stays usable meanwhile (#434).
+	if (ImGui::Begin(k_window, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse
+			| ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar)) {
 		const bool escape = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
 		m_spinner_t += ImGui::GetIO().DeltaTime;
 		const char* spinners[] = { "|", "/", "-", "\\" };
@@ -312,9 +308,8 @@ bool edt::game_builder::draw_progress()
 		}
 		if (ImGui::Button("Cancel") || escape) {
 			cancel();
-			ImGui::CloseCurrentPopup();
 		}
-		ImGui::EndPopup();
 	}
+	ImGui::End();
 	return true;
 }

@@ -48,7 +48,7 @@ namespace edt
 		process_runner run = platform::run_process;
 		// Runs on the worker thread. Null: find_toolchain with `toolchain`, kept for the editor session.
 		std::function<std::variant<edt::toolchain, std::string>(std::stop_token)> find_toolchain;
-		// Shows the progress modal (dialog_service::implicit_registrar); null: none (tests).
+		// Shows the progress window (dialog_service::implicit_registrar); null: none (tests).
 		std::function<void(std::string_view id, std::function<bool()> draw)> show_progress;
 	};
 
@@ -115,7 +115,7 @@ namespace edt
 		// The presets check runs on every frame (shortcut dispatch reads `enabled`): one stat per second is enough.
 		mutable std::chrono::steady_clock::time_point m_presets_checked{};
 		mutable bool m_presets_found = false;
-		// Seen by the progress modal, which the editor layer may still call after this is gone.
+		// Seen by the progress window, which the editor layer may still call after this is gone.
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		registration m_action;
 		// Last: dies first, so no on_done reaches a half-destroyed builder.
