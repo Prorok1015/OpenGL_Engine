@@ -267,6 +267,7 @@ BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningF
 	cfg::variable_map files{ "logger/file" };
 
 	cfg::initialize_configs(top);
+	BOOST_TEST(cfg::loaded_config_path() == std::filesystem::absolute(top).lexically_normal());
 
 	// base value inherited through two levels of extends
 	BOOST_TEST(static_cast<int>(width) == 100);

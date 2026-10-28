@@ -136,7 +136,7 @@ std::vector<edt::registration> edt::register_dialog_commands(cmd::command_regist
 					"type": "object",
 					"properties": {
 						"id": { "type": "integer" },
-						"kind": { "type": "string", "enum": ["unsaved", "save_as", "pick_file", "message", "choice"] },
+						"kind": { "type": "string", "enum": ["unsaved", "save_as", "pick_file", "path", "message", "choice"] },
 						"text": { "type": "string" },
 						"answer_schema": { "type": "object" },
 						"on_screen": { "type": "boolean" }

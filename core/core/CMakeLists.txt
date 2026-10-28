@@ -9,7 +9,7 @@ target_sources(${PROJECT_NAME} PRIVATE ${SE_SOURCES})
 # Cross-layer consumers compile against snk::core_api instead (EPIC-49 US-49-1/US-49-3).
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_system PRIVATE snk::application PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::command PRIVATE snk::ecs PRIVATE snk::project)
+target_link_libraries(${PROJECT_NAME} PRIVATE snk::common PRIVATE snk::config_system PRIVATE snk::application PRIVATE snk::window PRIVATE snk::resource_system PRIVATE snk::desc_system PRIVATE snk::command PRIVATE snk::ecs PRIVATE snk::project PRIVATE snk::platform)
 
 # Public contract of the CORE layer (EPIC-49 US-49-3). INTERFACE-only: it carries the curated
 # set of components whose headers upper layers legitimately compile against — NOT drv_opengl
@@ -29,6 +29,7 @@ snk_usage_only(_core_api_libs
 	snk::window
 	snk::config_system
 	snk::project
+	snk::platform
 )
 target_link_libraries(core_api INTERFACE ${_core_api_libs})
 # core_module.h (snk/core/) belongs to the layer contract.
@@ -46,6 +47,7 @@ add_subdirectory("common")
 add_subdirectory("command")
 add_subdirectory("config")
 add_subdirectory("project")
+add_subdirectory("platform")
 add_subdirectory("application")
 add_subdirectory("input")
 add_subdirectory("windows/window_service")

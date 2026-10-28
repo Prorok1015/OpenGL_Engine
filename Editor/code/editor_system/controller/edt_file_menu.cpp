@@ -1,5 +1,10 @@
 #include "edt_file_menu.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/project/prj_project.h>
+#include <cstddef>
+#include <format>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace json = boost::json;
@@ -46,6 +51,50 @@ namespace {
 	}
 
 	constexpr const char* UNSAVED_MESSAGE = "the level has unsaved changes: pass discard_unsaved to drop them";
+	constexpr std::string_view LEVEL_NOT_SAVED = "The level was not saved (the changes are kept)";
+	constexpr std::string_view PROJECT_NOT_OPENED = "The project was not opened";
+
+	// {path, allow_engine_version_mismatch?, discard_unsaved?}: what file.open_project takes.
+	json::value open_project_schema()
+	{
+		return json::object{
+			{ "type", "object" },
+			{ "properties", json::object{
+				{ "path", json::object{ { "type", "string" }, { "minLength", 1 } } },
+				{ "allow_engine_version_mismatch", json::object{ { "type", "boolean" } } },
+				{ "discard_unsaved", json::object{ { "type", "boolean" } } } } },
+			{ "required", json::array{ "path" } },
+			{ "additionalProperties", false } };
+	}
+
+	// {path, name?, discard_unsaved?}: what file.new_project takes; the name defaults to the folder's name.
+	json::value new_project_schema()
+	{
+		return json::object{
+			{ "type", "object" },
+			{ "properties", json::object{
+				{ "path", json::object{ { "type", "string" }, { "minLength", 1 } } },
+				{ "name", json::object{ { "type", "string" }, { "minLength", 1 } } },
+				{ "discard_unsaved", json::object{ { "type", "boolean" } } } } },
+			{ "required", json::array{ "path" } },
+			{ "additionalProperties", false } };
+	}
+
+	// What file.new_project and file.open_project give back: the manifest the new editor opens.
+	json::value switched_project_schema()
+	{
+		return json::object{
+			{ "type", "object" },
+			{ "properties", json::object{ { "manifest", json::object{ { "type", "string" } } } } },
+			{ "required", json::array{ "manifest" } },
+			{ "additionalProperties", false } };
+	}
+
+	bool flag(const json::value& args, std::string_view key)
+	{
+		const json::value* value = args.as_object().if_contains(key);
+		return value && value->as_bool();
+	}
 }
 
 edt::file_menu::file_menu(dialog_service& dialogs, action_registry& actions, file_menu_hooks hooks)
@@ -62,13 +111,12 @@ bool edt::file_menu::invoke(std::string_view action_id, json::value args)
 	return outcome.ok;
 }
 
-bool edt::file_menu::save_or_report(std::string_view action_id, json::value args)
+bool edt::file_menu::invoke_or_report(std::string_view action_id, json::value args, std::string_view failure)
 {
 	const action_result outcome = m_actions.invoke(action_id, args);
 	if (!outcome.ok) {
 		egLOG_WARN("Editor/File", "{}", outcome.error);
-		m_dialogs.message(message_level::error, "The level was not saved: " + outcome.error + ". The changes are kept; "
-			"the console has the cause.");
+		m_dialogs.message(message_level::error, std::format("{}: {}. The console has the cause.", failure, outcome.error));
 	}
 	return outcome.ok;
 }
@@ -94,7 +142,7 @@ void edt::file_menu::on_unsaved_choice(unsaved_choice choice, const std::functio
 		}
 		if (!m_hooks.level_path().empty()) {
 			// A failed write must not continue into New/Exit: the changes would be lost.
-			if (save_or_report("file.save", json::object{})) action(true);
+			if (invoke_or_report("file.save", json::object{}, LEVEL_NOT_SAVED)) action(true);
 			return;
 		}
 		// Untitled level: Save-As runs first, the action follows a successful write.
@@ -176,8 +224,48 @@ void edt::file_menu::ask_save_path(std::function<void()> then)
 		if (!alive.lock()) return;
 		auto after = std::move(m_after_save);
 		m_after_save.clear();
-		if (!save_or_report("file.save_as", json::object{ { "path", path } })) return;
+		if (!invoke_or_report("file.save_as", json::object{ { "path", path } }, LEVEL_NOT_SAVED)) return;
 		for (const auto& action : after) action();
+	});
+}
+
+edt::action_result edt::file_menu::switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch)
+{
+	// Checked here, so a project that cannot open never costs the user this editor.
+	const auto opened = prj::open_project(project);
+	if (!opened.context) return action_result::failure("failed", opened.error);
+	if (auto error = m_hooks.open_project(opened.context->manifest_file, allow_engine_version_mismatch))
+		return action_result::failure("failed", *error);
+	if (m_hooks.is_dirty()) m_hooks.discard_changes();
+	m_hooks.exit();
+	return action_result::success(json::object{ { "manifest", to_json_string(opened.context->manifest_file) } });
+}
+
+void edt::file_menu::new_project()
+{
+	const std::string initial = to_json_string(m_hooks.projects_path / "NewProject");
+	m_dialogs.ask_path("New Project", "Folder of the new project (it is created; its name names the project):", initial,
+		[this, alive = std::weak_ptr<void>(m_alive)](const std::string& path) {
+			if (!alive.lock()) return;
+			guard_unsaved([this, path](bool discard) {
+				invoke_or_report("file.new_project", json::object{ { "path", path }, { "discard_unsaved", discard } },
+					"The project was not created");
+			});
+		});
+}
+
+void edt::file_menu::open_project()
+{
+	pick_file_options options;
+	options.title = "Open Project";
+	options.start_path = m_hooks.projects_path;
+	options.extensions = { std::string(prj::k_manifest_file_name.substr(prj::k_manifest_file_name.find('.'))) };
+	m_dialogs.pick_file(std::move(options), [this, alive = std::weak_ptr<void>(m_alive)](const std::filesystem::path& picked) {
+		if (!alive.lock()) return;
+		guard_unsaved([this, picked](bool discard) {
+			invoke_or_report("file.open_project", json::object{ { "path", to_json_string(picked) }, { "discard_unsaved", discard } },
+				PROJECT_NOT_OPENED);
+		});
 	});
 }
 
@@ -185,7 +273,7 @@ void edt::file_menu::quick_save()
 {
 	if (!m_hooks.has_scene()) return;
 	if (!m_hooks.level_path().empty()) {
-		save_or_report("file.save", json::object{});
+		invoke_or_report("file.save", json::object{}, LEVEL_NOT_SAVED);
 	} else {
 		save_level();
 	}
@@ -245,6 +333,58 @@ void edt::file_menu::register_actions()
 		.args_schema = path_schema(false),
 		.activate = [this] { import_model(); },
 		.enabled = [this] { return static_cast<bool>(m_hooks.import_model); } });
+
+	add({ .id = "file.new_project", .label = "New Project...", .menu_path = "File", .separator_before = true,
+		.execute = [this](const json::value& args) {
+			if (!m_hooks.create_project || !m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
+			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+			const auto folder = from_json_string(args.as_object().at("path").as_string()).lexically_normal();
+			const auto base = folder.has_filename() ? folder.filename() : folder.parent_path().filename();
+			const json::value* name = args.as_object().if_contains("name");
+			const auto created = m_hooks.create_project(folder, name ? std::string(name->as_string()) : to_json_string(base));
+			if (!created.error.empty()) return action_result::failure("failed", created.error);
+			return switch_to_project(created.manifest_file, false);
+		},
+		.args_schema = new_project_schema(),
+		.result_schema = switched_project_schema(),
+		.activate = [this] { new_project(); } });
+
+	add({ .id = "file.open_project", .label = "Open Project...", .menu_path = "File",
+		.execute = [this](const json::value& args) {
+			if (!m_hooks.open_project) return action_result::failure("failed", "projects are not available here");
+			if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+			return switch_to_project(from_json_string(args.as_object().at("path").as_string()), flag(args, "allow_engine_version_mismatch"));
+		},
+		.args_schema = open_project_schema(),
+		.result_schema = switched_project_schema(),
+		.activate = [this] { open_project(); } });
+
+	// One item per recent project: the list only changes when the editor restarts on another project.
+	for (std::size_t i = 0; i < m_hooks.recent_projects.size(); ++i) {
+		const std::filesystem::path manifest = m_hooks.recent_projects[i];
+		const std::string id = std::format("file.recent_project.{}", i);
+		add({ .id = id,
+			.label = std::format("{}. {}  ({})", i + 1, to_json_string(manifest.parent_path().filename()),
+				to_json_string(manifest.parent_path())),
+			.menu_path = "File", .separator_before = i == 0,
+			.execute = [this, manifest](const json::value& args) {
+				if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+				return switch_to_project(manifest, false);
+			},
+			.args_schema = discard_schema(),
+			.result_schema = switched_project_schema(),
+			// file.open_project does the same for agents and scripts.
+			.expose_as_tool = false,
+			.activate = [this, id] {
+				guard_unsaved([this, id](bool discard) {
+					invoke_or_report(id, json::object{ { "discard_unsaved", discard } }, PROJECT_NOT_OPENED);
+				});
+			},
+			.enabled = [manifest] {
+				std::error_code ec;
+				return std::filesystem::is_regular_file(manifest, ec);
+			} });
+	}
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {

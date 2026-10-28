@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/project/prj_create.h>
 #include <snk/window/wnd_window_system.h>
 #include <filesystem>
 #include <functional>
@@ -26,11 +27,19 @@ namespace edt
 		std::function<void(const std::filesystem::path&)> import_model;
 		std::function<void()> exit;
 		std::filesystem::path resources_path;  // where "Open Level" starts
+		// Starts another editor on the project (its manifest file); this one exits afterwards. The error, if it did not start.
+		std::function<std::optional<std::string>(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch)> open_project;
+		// Makes a project in `folder` from the editor's template.
+		std::function<prj::create_result(const std::filesystem::path& folder, const std::string& name)> create_project;
+		std::filesystem::path projects_path;   // where "New Project" and "Open Project" start
+		// File > Recent Projects, most recent first (manifest files); the one open now is left out by the caller.
+		std::vector<std::filesystem::path> recent_projects;
 	};
 
-	// The File menu: New / Open / Save / Save As / Import / Exit, with the "unsaved changes" flow for New and Exit.
-	// Each item is two layers. The action (file.new, file.open, file.save, file.save_as, file.import_model,
-	// file.exit) takes everything as JSON arguments and works without any UI. The methods below are the
+	// The File menu: New / Open / Save / Save As / Import / New Project / Open Project / Exit, with the "unsaved
+	// changes" flow for everything that leaves the level. Each item is two layers. The action (file.new, file.open,
+	// file.save, file.save_as, file.import_model, file.new_project, file.open_project, file.exit) takes everything as
+	// JSON arguments and works without any UI. The methods below are the
 	// frontend a click or a shortcut runs: they ask through dialog_service and then invoke the action.
 	class file_menu
 	{
@@ -44,6 +53,10 @@ namespace edt
 		// Save: overwrites the saved level, asks for a path if it has none yet (Ctrl+S).
 		void quick_save();
 		void import_model();
+		// Asks for a folder, makes a project there from the template and switches to it (EPIC-42 #158).
+		void new_project();
+		// Asks for a project.snkproj and switches to it. Switching starts another editor and exits this one.
+		void open_project();
 		void exit();
 
 		// Sends the window's own close request (X button, Alt+F4) through exit(), so it asks about unsaved
@@ -61,8 +74,11 @@ namespace edt
 		void on_unsaved_choice(unsaved_choice choice, const std::function<void(bool discard)>& action);
 		// False (and logged) if the action refused.
 		bool invoke(std::string_view action_id, boost::json::value args);
-		// invoke() for file.save / file.save_as from the menu: a failed write is also shown to the user, not only logged.
-		bool save_or_report(std::string_view action_id, boost::json::value args);
+		// invoke() for what a person started from the menu: a failure is also shown to them, after `failure`.
+		bool invoke_or_report(std::string_view action_id, boost::json::value args, std::string_view failure);
+		// Checks that `project` (a manifest or its folder) opens, starts another editor on it and exits this one. The
+		// caller already settled the unsaved changes.
+		action_result switch_to_project(const std::filesystem::path& project, bool allow_engine_version_mismatch);
 		// One Save As dialog at a time; `then` (if any) runs after it wrote the level.
 		void ask_save_path(std::function<void()> then);
 

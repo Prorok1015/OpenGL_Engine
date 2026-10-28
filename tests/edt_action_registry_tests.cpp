@@ -450,8 +450,9 @@ BOOST_AUTO_TEST_CASE(FileMenu_KeepsItsOrderSeparatorsAndShortcutText)
 	BOOST_TEST((f.actions.menus() == std::vector<std::string>{ "File", "View", "Help" }));
 	const auto items = f.actions.items("File");
 	BOOST_TEST((labels_of(items) == std::vector<std::string>{
-		"New Level", "Open Level...", "Save Level", "Save Level As...", "Import Model...", "Exit" }));
-	const std::vector<bool> separators{ false, false, false, false, true, true };
+		"New Level", "Open Level...", "Save Level", "Save Level As...", "Import Model...", "New Project...", "Open Project...",
+		"Exit" }));
+	const std::vector<bool> separators{ false, false, false, false, true, true, false, true };
 	for (std::size_t i = 0; i < items.size(); ++i) {
 		BOOST_TEST_CONTEXT(items[i].label) {
 			BOOST_CHECK_EQUAL(items[i].separator_before, separators[i]);
@@ -752,7 +753,7 @@ BOOST_AUTO_TEST_CASE(EveryRegisteredActionHasValidSchemas)
 	file_menu_fixture f;
 	auto menus = edt::register_builtin_menus(f.actions);
 	const auto ids = f.actions.ids();
-	BOOST_CHECK_EQUAL(ids.size(), 7u);
+	BOOST_CHECK_EQUAL(ids.size(), 9u);
 	for (const auto& id : ids) {
 		const auto* desc = f.actions.find(id);
 		BOOST_REQUIRE(desc != nullptr);
@@ -773,7 +774,8 @@ BOOST_AUTO_TEST_CASE(Tools_SkipPlaceholdersButTheMenuStillShowsThem)
 	std::vector<std::string> tools;
 	for (const auto* desc : f.actions.tools()) tools.push_back(desc->id);
 	BOOST_TEST((tools == std::vector<std::string>{
-		"file.new", "file.open", "file.save", "file.save_as", "file.import_model", "file.exit" }));
+		"file.new", "file.open", "file.save", "file.save_as", "file.import_model", "file.new_project", "file.open_project",
+		"file.exit" }));
 	BOOST_CHECK(f.actions.contains("help.about"));
 	BOOST_TEST((labels_of(f.actions.items("Help")) == std::vector<std::string>{ "About" }));
 }
