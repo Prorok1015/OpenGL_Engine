@@ -601,4 +601,69 @@ BOOST_AUTO_TEST_CASE(a_base_block_failing_on_a_worker_while_the_callback_owner_g
 	}
 }
 
+// #422: the same interleaving made deterministic. The worker that drops the callback is held inside the destruction
+// of its functor (a capture's destructor) until the main thread has started ~lifetime of the owner; ~lifetime must not
+// return before that destruction has finished, or a game module's library could close under the worker.
+BOOST_AUTO_TEST_CASE(the_owner_waits_for_a_worker_that_destroys_its_dropped_callback)
+{
+	struct latch_state {
+		std::atomic<bool> in_destructor{ false };
+		std::atomic<bool> owner_going{ false };
+		std::atomic<bool> destroyed{ false };
+	};
+	struct blocking_capture {
+		std::shared_ptr<latch_state> state;
+		~blocking_capture()
+		{
+			state->in_destructor = true;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!state->owner_going && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			// The owner is in ~lifetime now; it must wait for this destructor, not return first.
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			state->destroyed = true;
+		}
+	};
+
+	ds::task_system threaded;
+	res::resource_system root{ threaded, res::mount_table{} };
+	auto& gated = root.registrate_resolver<gated_resolver>(res::tag::memory);
+	constexpr int rounds = 10;
+	for (int round = 0; round < rounds; ++round) {
+		BOOST_TEST_CONTEXT("round " << round) {
+			const res::tag tag{ "memory://latched/base" + std::to_string(round) + ".txt" };
+			BOOST_REQUIRE(root.store(tag, test_util::to_bytes("text")));
+			auto in_layer = std::make_unique<res::resource_system>(root);
+			auto owner = std::make_unique<ds::lifetime>();
+			gated.gate = true;
+			const auto handle = in_layer->require<res::text_resource>(tag); // the base's adapter: a block of the root
+			auto state = std::make_shared<latch_state>();
+			{
+				auto capture = std::make_shared<blocking_capture>();
+				capture->state = state;
+				handle.then(*owner, [capture](res::text_resource&) {});
+			}
+
+			gated.fail(); // the block fails on a pool task, which drops the callback there
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!state->in_destructor && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			BOOST_REQUIRE(state->in_destructor.load());
+			state->owner_going = true;
+			owner.reset();
+			BOOST_TEST(state->destroyed.load()); // ~lifetime returned only after the worker was done with it
+
+			while (!handle.has_error() && std::chrono::steady_clock::now() < deadline) {
+				std::this_thread::yield();
+			}
+			BOOST_REQUIRE(handle.has_error());
+			in_layer.reset();
+			gated.gate = false;
+			threaded.drain_main(std::chrono::milliseconds(50));
+		}
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()
