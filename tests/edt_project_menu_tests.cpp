@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifndef SNK_EDITOR_DATA_DIR
@@ -37,6 +38,13 @@ namespace {
 		{
 			// Nothing is drawn: dialogs are answered through dialog_service::answer, as a script or an agent does.
 			dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+			make_menu();
+		}
+
+		// The editor builds the menu once, with the recent projects it read at startup.
+		void make_menu(std::vector<fs::path> recent = {})
+		{
+			menu.reset();
 			edt::file_menu_hooks hooks;
 			hooks.has_scene = [] { return true; };
 			hooks.is_dirty = [this] { return dirty; };
@@ -56,6 +64,7 @@ namespace {
 				return prj::create_project(k_empty_template, folder, name);
 			};
 			hooks.projects_path = dir.path();
+			hooks.recent_projects = std::move(recent);
 			menu = std::make_unique<edt::file_menu>(dialogs, actions, std::move(hooks));
 			menu->register_actions();
 		}
@@ -197,6 +206,64 @@ BOOST_AUTO_TEST_CASE(NewProject_FromTheMenu_AFailureIsShown)
 	const auto shown = dialogs.list();
 	BOOST_REQUIRE(shown.size() == 1u);
 	BOOST_TEST(shown[0].kind == "message");
+	BOOST_TEST(exits == 0);
+}
+
+BOOST_AUTO_TEST_CASE(RecentProjects_AreItemsOfTheFileMenuInTheirOrder)
+{
+	const fs::path first = make_project("first");
+	const fs::path second = make_project("second");
+	make_menu({ first, second });
+
+	const auto items = actions.items("File");
+	std::vector<const edt::menu_item_info*> recent;
+	for (const auto& item : items) {
+		if (item.id.starts_with("file.recent_project.")) recent.push_back(&item);
+	}
+	BOOST_REQUIRE(recent.size() == 2u);
+	BOOST_TEST(recent[0]->id == "file.recent_project.0");
+	BOOST_TEST(recent[0]->label.starts_with("1. first"));
+	BOOST_TEST(recent[0]->separator_before);
+	BOOST_TEST(recent[1]->id == "file.recent_project.1");
+	BOOST_TEST(recent[1]->label.starts_with("2. second"));
+	BOOST_TEST(!recent[1]->separator_before);
+	BOOST_TEST(items.back().id == "file.exit");
+	// file.open_project is the one agents call.
+	for (const auto* tool : actions.tools()) BOOST_TEST(!tool->id.starts_with("file.recent_project."));
+}
+
+BOOST_AUTO_TEST_CASE(RecentProject_StartsAnEditorOnItAndExits)
+{
+	const fs::path manifest = make_project("game");
+	make_menu({ manifest });
+
+	const auto result = invoke("file.recent_project.0", "{}");
+
+	BOOST_REQUIRE_MESSAGE(result.ok, result.error);
+	BOOST_REQUIRE(started.size() == 1u);
+	BOOST_TEST(fs::equivalent(started[0], manifest));
+	BOOST_TEST(!allowed_mismatch);
+	BOOST_TEST(exits == 1);
+}
+
+BOOST_AUTO_TEST_CASE(RecentProject_WithUnsavedChanges_AsksFirst)
+{
+	make_menu({ make_project("game") });
+	dirty = true;
+
+	BOOST_TEST(invoke("file.recent_project.0", "{}").code == "needs_input");
+	BOOST_TEST(started.empty());
+	BOOST_TEST(invoke("file.recent_project.0", R"({"discard_unsaved":true})").ok);
+	BOOST_TEST(started.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(RecentProject_ThatIsGone_IsDisabled)
+{
+	make_menu({ dir.path() / "gone" / "project.snkproj" });
+
+	BOOST_TEST(!actions.is_enabled("file.recent_project.0"));
+	BOOST_TEST(!invoke("file.recent_project.0", "{}").ok);
+	BOOST_TEST(started.empty());
 	BOOST_TEST(exits == 0);
 }
 

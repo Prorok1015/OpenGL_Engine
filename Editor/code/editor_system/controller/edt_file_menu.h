@@ -32,6 +32,8 @@ namespace edt
 		// Makes a project in `folder` from the editor's template.
 		std::function<prj::create_result(const std::filesystem::path& folder, const std::string& name)> create_project;
 		std::filesystem::path projects_path;   // where "New Project" and "Open Project" start
+		// File > Recent Projects, most recent first (manifest files); the one open now is left out by the caller.
+		std::vector<std::filesystem::path> recent_projects;
 	};
 
 	// The File menu: New / Open / Save / Save As / Import / New Project / Open Project / Exit, with the "unsaved

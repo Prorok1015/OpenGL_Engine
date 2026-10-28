@@ -26,6 +26,7 @@
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
 #include "edt_engine_version_prompt.h"
+#include "edt_recent_projects.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
@@ -302,6 +303,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Next to the open project, else where the editor was started.
 	hooks.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
 		: std::filesystem::current_path();
+	hooks.recent_projects = edt::recent_projects_besides(m_res, data.has_value<prj::project_context>()
+		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().manifest_file } : std::nullopt);
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();

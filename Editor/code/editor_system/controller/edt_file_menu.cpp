@@ -1,8 +1,10 @@
 #include "edt_file_menu.h"
 #include <snk/common/logger/engine_log.h>
 #include <snk/project/prj_project.h>
+#include <cstddef>
 #include <format>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace json = boost::json;
@@ -356,6 +358,33 @@ void edt::file_menu::register_actions()
 		.args_schema = open_project_schema(),
 		.result_schema = switched_project_schema(),
 		.activate = [this] { open_project(); } });
+
+	// One item per recent project: the list only changes when the editor restarts on another project.
+	for (std::size_t i = 0; i < m_hooks.recent_projects.size(); ++i) {
+		const std::filesystem::path manifest = m_hooks.recent_projects[i];
+		const std::string id = std::format("file.recent_project.{}", i);
+		add({ .id = id,
+			.label = std::format("{}. {}  ({})", i + 1, to_json_string(manifest.parent_path().filename()),
+				to_json_string(manifest.parent_path())),
+			.menu_path = "File", .separator_before = i == 0,
+			.execute = [this, manifest](const json::value& args) {
+				if (m_hooks.is_dirty() && !wants_discard(args)) return action_result::failure("needs_input", UNSAVED_MESSAGE);
+				return switch_to_project(manifest, false);
+			},
+			.args_schema = discard_schema(),
+			.result_schema = switched_project_schema(),
+			// file.open_project does the same for agents and scripts.
+			.expose_as_tool = false,
+			.activate = [this, id] {
+				guard_unsaved([this, id](bool discard) {
+					invoke_or_report(id, json::object{ { "discard_unsaved", discard } }, PROJECT_NOT_OPENED);
+				});
+			},
+			.enabled = [manifest] {
+				std::error_code ec;
+				return std::filesystem::is_regular_file(manifest, ec);
+			} });
+	}
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
 		.execute = [this](const json::value& args) {
