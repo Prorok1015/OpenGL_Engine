@@ -40,11 +40,19 @@ namespace app::modules {
 		module_entry m_entry;
 	};
 
-	// A module in a shared library (LoadLibraryW / dlopen), entry points resolved by their SNK_DECLARE_MODULE names.
+	// A module in a shared library, entry points resolved by their SNK_DECLARE_MODULE names. Only a file that lies,
+	// once made canonical (symlinks resolved), inside `module_dir` is loaded, by that absolute path: LoadLibraryExW
+	// with the DLL's own directory and the system directories as the only search path for its dependencies, dlopen
+	// with a path (never a bare name, which LD_LIBRARY_PATH and the loader's search order would resolve). A relative
+	// path, a bare name or a file outside the directory is refused by open() before anything is loaded.
 	// On Linux the image is unmapped by close() only if the module keeps hidden visibility (SPIKE-218 §3.5).
+	//
+	// For module authors: the library's static initializers (and DllMain) run inside open(), before the host has
+	// checked snk_module_build_info. They must not use the engine or EnTT; do that in the module's services.
 	class SNK_API native_library_source final : public module_source {
 	public:
-		explicit native_library_source(std::filesystem::path path);
+		// `module_dir`: the project's (or the build's) directory of game modules, absolute.
+		native_library_source(std::filesystem::path path, std::filesystem::path module_dir);
 		~native_library_source() override;
 
 		native_library_source(const native_library_source&) = delete;
@@ -60,6 +68,7 @@ namespace app::modules {
 
 	private:
 		std::filesystem::path m_path;
+		std::filesystem::path m_module_dir;
 		void* m_handle = nullptr;
 		module_entry m_entry;
 	};

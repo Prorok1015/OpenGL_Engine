@@ -1,24 +1,11 @@
 #include <snk/project/prj_project.h>
+#include <snk/common/fs_paths.h>
 #include <format>
 #include <system_error>
 #include <utility>
 
 namespace fs = std::filesystem;
-
-namespace
-{
-	// Whole components: "/game/res2" is not inside "/game/res".
-	bool is_inside(const fs::path& dir, const fs::path& candidate)
-	{
-		auto cand_it = candidate.begin();
-		for (auto dir_it = dir.begin(); dir_it != dir.end(); ++dir_it, ++cand_it) {
-			if (cand_it == candidate.end() || *dir_it != *cand_it) {
-				return false;
-			}
-		}
-		return true;
-	}
-}
+using fs_paths::is_inside;
 
 prj::open_result prj::open_project(const fs::path& path)
 {

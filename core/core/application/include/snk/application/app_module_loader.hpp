@@ -322,6 +322,18 @@ namespace app::modules {
 		}
 
 	public:
+		module_loader() = default;
+		// The modules go in reverse load order, each before the code it came from (its source).
+		~module_loader() {
+			while (!m_entries.empty()) {
+				m_entries.pop_back();
+			}
+		}
+		module_loader(const module_loader&) = delete;
+		module_loader& operator=(const module_loader&) = delete;
+		module_loader(module_loader&&) = delete;
+		module_loader& operator=(module_loader&&) = delete;
+
 		// Unloads one initialized module: refused (std::logic_error, nothing touched) if another
 		// initialized module depends on it. Otherwise it is shut down and removed. Afterwards the
 		// storage must have shrunk by exactly the services the module left behind at load time

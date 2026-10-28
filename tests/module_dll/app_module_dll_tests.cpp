@@ -7,6 +7,7 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <system_error>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -28,9 +29,17 @@ namespace {
 
 const std::filesystem::path g_module_path{ SNK_TEST_GAME_DLL_PATH };
 
-// Whether the image is still mapped (a leftover reference, or GNU_UNIQUE symbols pinning it on Linux).
-bool resident(const std::filesystem::path& path)
+std::unique_ptr<app::modules::native_library_source> game_library()
 {
+	return std::make_unique<app::modules::native_library_source>(g_module_path, g_module_path.parent_path());
+}
+
+// Whether the image is still mapped (a leftover reference, or GNU_UNIQUE symbols pinning it on Linux).
+// The loader opens the canonical path; GetModuleHandleW matches it only with backslashes.
+bool resident(const std::filesystem::path& file)
+{
+	std::error_code ec;
+	const std::filesystem::path path = std::filesystem::canonical(file, ec);
 #if defined(_WIN32)
 	return ::GetModuleHandleW(path.c_str()) != nullptr;
 #else
@@ -53,7 +62,7 @@ BOOST_FIXTURE_TEST_SUITE(app_module_dll_tests, test_util::module_env)
 BOOST_AUTO_TEST_CASE(a_module_library_fills_its_layer_and_its_worlds_run)
 {
 	const std::size_t root_size = root.size();
-	loader.load(std::make_unique<app::modules::native_library_source>(g_module_path), root);
+	loader.load(game_library(), root);
 	BOOST_TEST(root.size() == root_size);
 
 	auto* layer = contexts().game_layer();
@@ -76,7 +85,8 @@ BOOST_AUTO_TEST_CASE(unloading_releases_the_library_and_it_loads_again)
 {
 	for (int round = 0; round < 2; ++round) {
 		BOOST_TEST_CONTEXT("round " << round) {
-			loader.load(std::make_unique<app::modules::native_library_source>(g_module_path), root);
+			loader.load(game_library(), root);
+			BOOST_TEST(resident(g_module_path));
 			BOOST_REQUIRE(contexts().load_level(put("lv.desc", DLL_LEVEL)));
 			pump();
 			auto* world = contexts().level_set().find("w0");

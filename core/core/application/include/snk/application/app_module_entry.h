@@ -38,6 +38,7 @@ namespace app::modules {
 		// EnTT type ids and container layouts cross the boundary, so EnTT's mode is part of the ABI (#218).
 		inline constexpr std::uint32_t entt_standard_cpp = 1u << 4; // ENTT_STANDARD_CPP
 		inline constexpr std::uint32_t entt_wide_id = 1u << 5;      // ENTT_ID_TYPE other than 32 bits
+		inline constexpr std::uint32_t entt_custom_page = 1u << 6;  // ENTT_SPARSE_PAGE / ENTT_PACKED_PAGE not the defaults
 	}
 
 	namespace compiler_id {
@@ -84,6 +85,10 @@ namespace app::modules {
 #endif
 		if constexpr (sizeof(ENTT_ID_TYPE) != sizeof(std::uint32_t)) {
 			flags |= build_flag::entt_wide_id;
+		}
+		// The storages' page sizes: a registry built with others does not index the same pools the same way.
+		if constexpr (ENTT_SPARSE_PAGE != 4096 || ENTT_PACKED_PAGE != 1024) {
+			flags |= build_flag::entt_custom_page;
 		}
 		return snk_module_build_info{ SNK_MODULE_API_VERSION, compiler, flags };
 	}
