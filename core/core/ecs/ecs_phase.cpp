@@ -12,6 +12,11 @@ bool ecs::phase_table::add_game_phase(std::string name, phase anchor, phase_side
 	return true;
 }
 
+bool ecs::phase_table::remove_game_phase(std::string_view name)
+{
+	return std::erase_if(m_game, [&](const game_phase& g) { return g.name == name; }) != 0;
+}
+
 bool ecs::phase_table::contains(const phase_id& id) const
 {
 	if (id.is_builtin()) return true;

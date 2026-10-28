@@ -24,17 +24,19 @@ namespace ecs {
 //       { .phase = ecs::phase::transform, .after = { "scn::depth_system" }, .run_in_edit = true });
 class system_factory {
 public:
+    // Each register_system returns false (and asserts) when the name is already registered.
+
     // Stateless system (free function).
     template <auto Candidate>
-    void register_system(const std::string &name, system_desc desc = {}) {
-        add_entry(name, std::move(desc), &run_stateless<Candidate>, [] { return system_instance{}; }, access_of<Candidate>());
+    bool register_system(const std::string &name, system_desc desc = {}) {
+        return add_entry(name, std::move(desc), &run_stateless<Candidate>, [] { return system_instance{}; }, access_of<Candidate>());
     }
 
     // Stateful system shared by every world that enables it.
     template <auto Candidate, typename T>
     requires std::is_base_of_v<ecs::system_interface, T>
-    void register_system(const std::string &name, system_desc desc, std::shared_ptr<T> system) {
-        add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
+    bool register_system(const std::string &name, system_desc desc, std::shared_ptr<T> system) {
+        return add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
                   [system] { return system_instance{ system, system.get() }; }, access_of<Candidate>());
     }
 
@@ -45,8 +47,8 @@ public:
     // instance (the shared_ptr overload above) is kept across rebuilds and keeps its state.
     template <auto Candidate, typename T, class... ARGS>
     requires std::is_base_of_v<ecs::system_interface, T>
-    void register_system(const std::string &name, system_desc desc, ARGS... args) {
-        add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
+    bool register_system(const std::string &name, system_desc desc, ARGS... args) {
+        return add_entry(name, std::move(desc), &run_stateful<Candidate, T>,
                   [args...] { auto system = std::make_shared<T>(args...); return system_instance{ system, system.get() }; },
                   access_of<Candidate>());
     }
@@ -56,6 +58,16 @@ public:
     // phase (its systems are dropped as unknown_phase); call scn::context_set::rebuild_all_plans then.
     bool add_game_phase(std::string name, phase anchor, phase_side side) {
         return m_registry.phases().add_game_phase(std::move(name), anchor, side);
+    }
+
+    // False when the name is not a game phase. See phase_table::remove_game_phase.
+    bool remove_game_phase(std::string_view name) {
+        return m_registry.phases().remove_game_phase(name);
+    }
+
+    // False when no system has this name. See system_registry::remove for when removing is safe.
+    bool unregister_system(const std::string& name) {
+        return m_registry.remove(name);
     }
 
     system_registry& registry() { return m_registry; }
@@ -69,10 +81,11 @@ public:
     system_factory& operator=(system_factory&&) = default;
 
 private:
-    void add_entry(const std::string &name, system_desc desc, system_run_fn run,
+    bool add_entry(const std::string &name, system_desc desc, system_run_fn run,
                    std::function<system_instance()> make, std::vector<access_entry> access) {
         const bool added = m_registry.add(system_entry{ name, std::move(desc), run, std::move(make), std::move(access) });
         ASSERT_MSG(added, "ecs system already registered in the factory!");
+        return added;
     }
 
     template <auto Candidate>
