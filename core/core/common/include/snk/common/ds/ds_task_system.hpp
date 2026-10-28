@@ -90,6 +90,23 @@ namespace ds {
 		std::shared_ptr<detail::lifetime_state> m_state;
 	};
 
+	namespace detail {
+		// A callback its owner lifetime holds (#406): whatever queues it (a task's continuations, the main queue, a
+		// resource block) keeps a weak reference only, so its captures (a game module's code among them) go when the
+		// owner does, on the owner's thread. hold_callback is a no-op once the owner is gone.
+		SNK_API void hold_callback(const std::weak_ptr<lifetime_state>& owner, std::shared_ptr<void> callback);
+		// After the call: the owner stops holding it.
+		SNK_API void release_callback(const std::weak_ptr<lifetime_state>& owner, const void* callback);
+
+		template<class F>
+		[[nodiscard]] std::weak_ptr<F> held_by(const lifetime& owner, F fn)
+		{
+			auto held = std::make_shared<F>(std::move(fn));
+			hold_callback(owner.token(), held);
+			return held;
+		}
+	}
+
 	class task_context
 	{
 	public:
@@ -296,6 +313,7 @@ namespace ds {
 
 		// Same, but dropped without a call if `owner` is already destroyed; checked on the main
 		// thread right before the call, where the owner dies too, so it cannot die in between.
+		// `owner` holds `fn`: its captures go when the owner does, even while the call is still queued.
 		void then_main(const lifetime& owner, callback_t fn) const
 		{
 			ASSERT_MSG(m_state, "task_handle::then_main: empty handle");
@@ -303,9 +321,10 @@ namespace ds {
 				return;
 			}
 			m_state->add_continuation(true, [st = std::static_pointer_cast<state_t>(m_state), weak = owner.token(),
-				fn = std::move(fn)]() {
-				if (!weak.expired()) {
-					deliver(*st, fn);
+				held = detail::held_by(owner, std::move(fn))]() {
+				if (const auto callback = held.lock()) {
+					deliver(*st, *callback);
+					detail::release_callback(weak, callback.get());
 				}
 			});
 		}

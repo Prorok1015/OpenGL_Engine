@@ -186,6 +186,30 @@ private:
 	cmd::registration m_kept;
 };
 
+// Continuations of the module's task, with and without an owner; their captures stand for the module's code (#406).
+std::weak_ptr<int> g_plain_capture;
+std::weak_ptr<int> g_owned_capture;
+int g_plain_calls = 0;
+
+class continuing_game_module final : public gs::game_module {
+public:
+	std::string_view name() const override { return "continuing_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
+	{
+		auto task = data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "game.continued" },
+			[](ds::task_context&) {});
+		auto plain = std::make_shared<int>(0);
+		g_plain_capture = plain;
+		task.then_main([plain](ds::task_result<void>&) { ++g_plain_calls; });
+		auto owned = std::make_shared<int>(0);
+		g_owned_capture = owned;
+		task.then_main(layer.tasks(), [owned](ds::task_result<void>&) {});
+	}
+};
+
 class throwing_game_module final : public gs::game_module {
 public:
 	std::string_view name() const override { return "throwing_game"; }
@@ -295,6 +319,20 @@ BOOST_AUTO_TEST_CASE(the_module_tasks_are_stopped_before_its_layer_goes)
 	BOOST_TEST(g_task->done());
 	BOOST_TEST((g_task->status() == ds::task_status::cancelled));
 	BOOST_TEST(!g_task_ran);
+}
+
+// Stopping the module's tasks queues their continuations; the unload runs them while the layer is there, so nothing
+// of the module's code waits in the main queue for the next frame, after its source is closed.
+BOOST_AUTO_TEST_CASE(unloading_runs_and_drops_the_continuations_of_the_module_tasks)
+{
+	g_plain_calls = 0;
+	loader.load(std::make_unique<continuing_game_module>(), root);
+	BOOST_REQUIRE(!g_plain_capture.expired());
+	BOOST_REQUIRE(!g_owned_capture.expired());
+	loader.unload("continuing_game", root);
+	BOOST_TEST(g_plain_calls == 1);
+	BOOST_TEST(g_plain_capture.expired());
+	BOOST_TEST(g_owned_capture.expired());
 }
 
 BOOST_AUTO_TEST_CASE(unloading_takes_the_worlds_then_the_layer_then_the_module_services)

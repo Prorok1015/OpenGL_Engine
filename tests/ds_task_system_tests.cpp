@@ -576,6 +576,66 @@ BOOST_AUTO_TEST_CASE(CallbackOfFinishedTaskIsSkippedAfterOwnerDestroyed)
 	BOOST_TEST(calls == 0);
 }
 
+// #406: the owner holds what then_main(owner, ...) captures, so the captures (a game module's code among them) go when
+// the owner does, wherever the call waits: on a task not run yet, in the main queue, on a cancelled task.
+BOOST_AUTO_TEST_CASE(TheOwnerHoldsTheCapturesOfItsCallbacks)
+{
+	ds::task_system tasks(manual_config());
+	const auto watch = [](std::weak_ptr<int>& watched) {
+		auto capture = std::make_shared<int>(0);
+		watched = capture;
+		return [capture](auto&) {};
+	};
+
+	{ // the task has not run yet
+		std::weak_ptr<int> watched;
+		auto owner = std::make_unique<ds::lifetime>();
+		auto handle = tasks.run(lane::compute, { "not run" }, [](ds::task_context&) {});
+		handle.then_main(*owner, watch(watched));
+		BOOST_TEST(!watched.expired());
+		owner.reset();
+		BOOST_TEST(watched.expired());
+		tasks.run_one(lane::compute);
+		tasks.drain_main();
+	}
+	{ // the call is in the main queue
+		std::weak_ptr<int> watched;
+		auto owner = std::make_unique<ds::lifetime>();
+		auto handle = tasks.run(lane::compute, { "queued" }, [](ds::task_context&) {});
+		handle.then_main(*owner, watch(watched));
+		tasks.run_one(lane::compute);
+		BOOST_TEST(tasks.pending_main(main_class::general) == 1u);
+		owner.reset();
+		BOOST_TEST(watched.expired());
+		tasks.drain_main();
+	}
+	{ // the task was cancelled
+		std::weak_ptr<int> watched;
+		ds::lifetime task_owner;
+		auto owner = std::make_unique<ds::lifetime>();
+		auto handle = tasks.run(lane::compute, { "cancelled" }, task_owner, [](ds::task_context&) {});
+		handle.then_main(*owner, watch(watched));
+		task_owner.cancel_tasks();
+		owner.reset();
+		BOOST_TEST(watched.expired());
+		tasks.drain_main();
+	}
+	{ // delivered: the owner lets go of it after the call
+		std::weak_ptr<int> watched;
+		ds::lifetime owner;
+		int calls = 0;
+		auto capture = std::make_shared<int>(0);
+		watched = capture;
+		auto handle = tasks.run(lane::compute, { "delivered" }, [](ds::task_context&) {});
+		handle.then_main(owner, [capture, &calls](ds::task_result<void>&) { ++calls; });
+		capture.reset();
+		tasks.run_one(lane::compute);
+		tasks.drain_main();
+		BOOST_TEST(calls == 1);
+		BOOST_TEST(watched.expired());
+	}
+}
+
 BOOST_AUTO_TEST_CASE(PlainThenMainIgnoresLifetimes)
 {
 	ds::task_system tasks(manual_config());

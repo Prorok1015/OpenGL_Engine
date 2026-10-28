@@ -54,7 +54,30 @@ namespace ds::detail {
 		const std::thread::id owner_thread = std::this_thread::get_id();
 		std::mutex mutex;
 		std::vector<std::weak_ptr<task_state_base>> tasks;
+		// Callbacks the owner holds (hold_callback); cleared by ~lifetime.
+		std::unordered_map<const void*, std::shared_ptr<void>> held;
 	};
+
+	void hold_callback(const std::weak_ptr<lifetime_state>& owner, std::shared_ptr<void> callback)
+	{
+		if (const auto state = owner.lock()) {
+			std::lock_guard lock(state->mutex);
+			const void* key = callback.get();
+			state->held.emplace(key, std::move(callback));
+		}
+	}
+
+	void release_callback(const std::weak_ptr<lifetime_state>& owner, const void* callback)
+	{
+		std::shared_ptr<void> released; // destructed after the unlock
+		if (const auto state = owner.lock()) {
+			std::lock_guard lock(state->mutex);
+			if (const auto it = state->held.find(callback); it != state->held.end()) {
+				released = std::move(it->second);
+				state->held.erase(it);
+			}
+		}
+	}
 
 	struct task_system_impl {
 		using work_queue = std::deque<std::function<void()>>;
@@ -372,6 +395,11 @@ namespace ds {
 		ASSERT_MSG(std::this_thread::get_id() == m_state->owner_thread, "lifetime: destroy on the thread that created it");
 		if (m_state->cancel_on_destroy) {
 			cancel_tasks();
+		}
+		decltype(m_state->held) released; // destructed after the unlock: the captures go now, on this thread
+		{
+			std::lock_guard lock(m_state->mutex);
+			released.swap(m_state->held);
 		}
 	}
 

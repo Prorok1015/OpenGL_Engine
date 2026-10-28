@@ -70,15 +70,20 @@ namespace core::res
         // Runs `cb` on the main thread (next task_system::drain_main) once the resource is ready; never for a
         // failed one, and dropped if `owner` is destroyed first. Pending callbacks are bound to the handle's
         // task_system, so a handle that was not obtained from resource_system::require cannot use it.
+        // `owner` holds `cb`: its captures go when the owner does, even while the block is still loading (#406).
         void then(const ds::lifetime& owner, std::function<void(T&)> cb) const {
             if (!m_block) return;
             ASSERT_MSG(m_tasks, "res_handle::then: the handle has no task_system");
             if (!m_tasks) return;
-            m_block->on_settled([tasks = m_tasks, weak = owner.token(), cb = std::move(cb)](auto& block) {
-                if (!block.data) return;
-                tasks->post_main([weak, cb, data = block.data]() {
-                    if (!weak.expired()) {
-                        cb(*ds::polymorphic_pointer_cast<T>(data));
+            m_block->on_settled([tasks = m_tasks, weak = owner.token(), held = ds::detail::held_by(owner, std::move(cb))](auto& block) {
+                if (!block.data) {
+                    ds::detail::release_callback(weak, held.lock().get());
+                    return;
+                }
+                tasks->post_main([weak, held, data = block.data]() {
+                    if (const auto callback = held.lock()) {
+                        (*callback)(*ds::polymorphic_pointer_cast<T>(data));
+                        ds::detail::release_callback(weak, callback.get());
                     }
                 });
             });

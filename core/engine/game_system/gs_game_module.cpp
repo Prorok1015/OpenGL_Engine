@@ -3,6 +3,8 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include <chrono>
+#include <cstddef>
 #include <format>
 #include <stdexcept>
 
@@ -46,12 +48,28 @@ namespace {
 			// Its tasks, its worlds (the set "level" goes with the change of the game layer), the rest of the layer,
 			// then the module's services: none of them may run the module's code after the layer is gone.
 			m_layer->stop_tasks();
+			run_queued_main_items();
 			if (m_active) {
 				m_contexts.set_game_layer(&m_contexts.create_layer(m_tasks));
 			}
 			m_contexts.destroy_layer(*m_layer);
 			m_storage = ds::app_data_storage{};
 			m_current.clear();
+		}
+
+		// Stopping the module's tasks queued their main-thread continuations (then_main, with an owner or without): run
+		// them while the layer is there, so none of them holds the module's code past its unload (#406). One pass over
+		// what is queued now, so an item that queues itself again cannot keep the unload going.
+		void run_queued_main_items()
+		{
+			if (!m_tasks) {
+				return;
+			}
+			for (std::size_t queued = m_tasks->pending_main(ds::main_class::general); queued > 0; --queued) {
+				if (m_tasks->drain_main(std::chrono::nanoseconds{ 0 }) == 0) {
+					break;
+				}
+			}
 		}
 
 		// The new layer becomes the game layer before the empty one goes, so the game layer changes once.
