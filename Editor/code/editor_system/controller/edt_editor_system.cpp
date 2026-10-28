@@ -31,7 +31,9 @@
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/project/prj_create.h>
 #include <snk/project/prj_project.h>
+#include <snk/platform/plt_process.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
@@ -48,12 +50,46 @@
 #include <snk/config/cfg_variables.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
+#include <boost/json/object.hpp>
+#include <filesystem>
 #include <format>
 #include <fstream>
+#include <optional>
 #include <span>
+#include <string>
 #include <utility>
+#include <vector>
+
+// Editor/data (editor_module): the project templates live under it.
+CFG_VAR_EXT_PATH(cfg_edt_data_path);
 
 namespace {
+	std::string utf8_of(const std::filesystem::path& path)
+	{
+		const std::u8string text = path.u8string();
+		return std::string(text.begin(), text.end());
+	}
+
+	// Switching projects restarts the editor (EPIC-42 #158): the same program and config file, the other project.
+	// Overrides given with --set are not carried over.
+	std::optional<std::string> start_editor_on(const std::filesystem::path& manifest_file, bool allow_engine_version_mismatch)
+	{
+		const std::filesystem::path program = platform::current_executable();
+		if (program.empty()) {
+			return std::string{ "the editor cannot find its own program file" };
+		}
+		std::vector<std::string> args;
+		if (const auto config = cfg::loaded_config_path(); !config.empty()) {
+			args.insert(args.end(), { "--config", utf8_of(config) });
+		}
+		args.insert(args.end(), { "--project", utf8_of(manifest_file) });
+		if (allow_engine_version_mismatch) {
+			args.push_back("--allow-engine-version-mismatch");
+		}
+		egLOG_INFO("Editor/Project", "restarting the editor on '{}'", manifest_file.string());
+		return platform::spawn_detached(program, args);
+	}
+
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
@@ -255,6 +291,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 #endif
 	hooks.exit = m_exit_action;
 	hooks.resources_path = m_res.get_resources_path();
+	hooks.open_project = start_editor_on;
+	hooks.create_project = [](const std::filesystem::path& folder, const std::string& name) {
+		return prj::create_project(*cfg_edt_data_path / "templates" / "projects" / "empty", folder, name);
+	};
+	// Next to the open project, else where the editor was started.
+	hooks.projects_path = data.has_value<prj::project_context>() ? data.require<prj::project_context>().root.parent_path()
+		: std::filesystem::current_path();
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
@@ -263,7 +306,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
 	if (project_held) {
-		ask_about_held_project(m_context->dialogs(), data.require<prj::held_project>(), m_exit_action);
+		auto& held = data.require<prj::held_project>();
+		ask_about_held_project(m_context->dialogs(), held, m_exit_action, [this, manifest = held.manifest_file] {
+			const auto outcome = m_context->actions().invoke("file.open_project", boost::json::object{
+				{ "path", utf8_of(manifest) }, { "allow_engine_version_mismatch", true }, { "discard_unsaved", true } });
+			if (!outcome.ok) {
+				m_context->dialogs().message(message_level::error, std::format("The project was not opened: {}.", outcome.error));
+			}
+		});
 	}
 
 	std::string startup_level = cfg_startup_level;

@@ -51,7 +51,7 @@ namespace edt
 		struct dialog_info
 		{
 			dialog_id id = 0;
-			// "unsaved", "save_as", "pick_file", "message" or "choice".
+			// "unsaved", "save_as", "pick_file", "path", "message" or "choice".
 			std::string kind;
 			std::string text;
 			// JSON Schema (cmd_json_schema.h) of what answer() takes.
@@ -74,6 +74,9 @@ namespace edt
 		dialog_id confirm_unsaved(std::function<void(unsaved_choice)> on_answer);
 		// Asks for a path relative to res://. `on_path` runs once the popup is closed; cancelling reports nothing.
 		dialog_id save_as(std::string initial_path, std::function<void(const std::string&)> on_path);
+		// Asks for a path of the file system (kind "path", answered like save_as), e.g. the folder of a new project.
+		dialog_id ask_path(std::string title, std::string prompt, std::string initial_path,
+			std::function<void(const std::string&)> on_path);
 		// Own file dialog per call, so filters and start folder of one call never leak into another.
 		dialog_id pick_file(pick_file_options options, std::function<void(const std::filesystem::path&)> on_pick);
 		dialog_id message(message_level level, std::string text);
@@ -89,7 +92,7 @@ namespace edt
 		// Everything asked for and not answered yet, in the order they will be shown.
 		std::vector<dialog_info> list() const;
 		// Answers a dialog the way a click would: the same callback runs with the same value. `answer` must match
-		// the dialog's answer_schema (unsaved: {"choice": "save|discard|cancel"}; save_as and pick_file: {"path": "..."}
+		// the dialog's answer_schema (unsaved: {"choice": "save|discard|cancel"}; save_as, path and pick_file: {"path": "..."}
 		// or {"cancel": true}; message: {}; choice: {"index": N} or {"cancel": true}). Codes: "not_found" (no such pending dialog), "invalid_args" (the answer
 		// breaks the schema or means nothing), "failed" (already answered). A dialog that is on screen closes in the
 		// next update() (value {"resolved": false} until then); one that was never drawn resolves at once

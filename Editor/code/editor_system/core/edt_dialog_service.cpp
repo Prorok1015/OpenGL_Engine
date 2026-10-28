@@ -7,6 +7,7 @@
 #include <imgui.h>
 #include <algorithm>
 #include <format>
+#include <string_view>
 
 namespace json = boost::json;
 
@@ -189,11 +190,21 @@ private:
 	std::optional<edt::unsaved_choice> m_answer;
 };
 
+// One line of text that names a path: Save Level As ("save_as") and the folder of a new project ("path").
+struct path_prompt
+{
+	const char* kind = "save_as";
+	std::string title = "Save Level";
+	std::string prompt = "Path (relative to res://):";
+	std::string button = "Save";
+};
+
 class save_as_request final : public request
 {
 public:
-	save_as_request(dialog_id request_id, std::string initial, std::function<void(const std::string&)> on_path)
+	save_as_request(dialog_id request_id, path_prompt prompt, std::string initial, std::function<void(const std::string&)> on_path)
 		: request(request_id)
+		, m_prompt(std::move(prompt))
 		, m_on_path(std::move(on_path))
 	{
 		auto cp = std::format_to_n(m_buffer, sizeof(m_buffer) - 1, "{}", initial);
@@ -202,7 +213,7 @@ public:
 
 	bool answer_automatically(const edt::dialog_auto_answer& answer) override
 	{
-		if (answer.save_as_path) {
+		if (answer.save_as_path && std::string_view{ m_prompt.kind } == "save_as") {
 			finish(*answer.save_as_path);
 			return true;
 		}
@@ -211,13 +222,13 @@ public:
 
 	bool draw() override
 	{
-		const std::string label = popup_label("Save Level");
+		const std::string label = popup_label(m_prompt.title.c_str());
 
 		bool is_open = true;
 		bool save = false;
 		bool from_answer = false;
 		if (begin_modal(label, MODAL_FLAGS)) {
-			ImGui::Text("Path (relative to res://):");
+			ImGui::TextUnformatted(m_prompt.prompt.c_str());
 			ImGui::SetNextItemWidth(480.f);
 			ImGui::InputText("##sp", m_buffer, sizeof(m_buffer));
 
@@ -229,7 +240,7 @@ public:
 			const float avail = ImGui::GetContentRegionAvail().x;
 			ImGui::SetCursorPosX((avail - bw * 2.f - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 
-			if (ImGui::Button("Save", {bw, 0.f})) {
+			if (ImGui::Button(m_prompt.button.c_str(), {bw, 0.f})) {
 				save = true;
 				is_open = false;
 			}
@@ -256,8 +267,8 @@ public:
 		return is_open;
 	}
 
-	const char* kind() const override { return "save_as"; }
-	std::string text() const override { return "Path (relative to res://):"; }
+	const char* kind() const override { return m_prompt.kind; }
+	std::string text() const override { return m_prompt.prompt; }
 
 	json::value answer_schema() const override
 	{
@@ -280,6 +291,7 @@ private:
 		if (m_on_path) m_on_path(path);
 	}
 
+	path_prompt m_prompt;
 	char m_buffer[512] = {};
 	std::function<void(const std::string&)> m_on_path;
 	std::optional<path_answer> m_answer;
@@ -518,7 +530,14 @@ edt::dialog_service::dialog_id edt::dialog_service::confirm_unsaved(std::functio
 edt::dialog_service::dialog_id edt::dialog_service::save_as(std::string initial_path,
 	std::function<void(const std::string&)> on_path)
 {
-	return enqueue(std::make_unique<save_as_request>(m_next_id, std::move(initial_path), std::move(on_path)));
+	return enqueue(std::make_unique<save_as_request>(m_next_id, path_prompt{}, std::move(initial_path), std::move(on_path)));
+}
+
+edt::dialog_service::dialog_id edt::dialog_service::ask_path(std::string title, std::string prompt, std::string initial_path,
+	std::function<void(const std::string&)> on_path)
+{
+	return enqueue(std::make_unique<save_as_request>(m_next_id, path_prompt{ "path", std::move(title), std::move(prompt), "OK" },
+		std::move(initial_path), std::move(on_path)));
 }
 
 edt::dialog_service::dialog_id edt::dialog_service::pick_file(pick_file_options options,

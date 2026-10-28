@@ -26,9 +26,18 @@ struct prompt_fixture
 		return *dialogs.current();
 	}
 
+	// As the editor asks it: with "Open Anyway" (EPIC-42 #158).
+	edt::dialog_service::dialog_id ask_with_open_anyway()
+	{
+		edt::ask_about_held_project(dialogs, held, [this] { ++quits; }, [this] { ++reopened; });
+		BOOST_REQUIRE(dialogs.current().has_value());
+		return *dialogs.current();
+	}
+
 	edt::dialog_service dialogs;
 	prj::held_project held;
 	int quits = 0;
+	int reopened = 0;
 };
 
 }
@@ -79,6 +88,35 @@ BOOST_AUTO_TEST_CASE(Prompt_UnansweredMeansAnErrorExit)
 	ask();
 	BOOST_TEST((held.answer == prj::held_project::decision::none));
 	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_engine_version);
+}
+
+BOOST_AUTO_TEST_CASE(OpenAnyway_IsTheFirstButtonForAnOlderProject)
+{
+	BOOST_TEST(dialogs.answer(ask_with_open_anyway(), boost::json::parse(R"({"index":0})")).ok);
+	BOOST_TEST(reopened == 1);
+	BOOST_TEST(quits == 0);
+	// This editor goes on (and exits normally) while the other one opens the project.
+	BOOST_TEST(prj::exit_code_for(held) == 0);
+}
+
+BOOST_AUTO_TEST_CASE(OpenAnyway_KeepsContinueAndQuitAfterIt)
+{
+	BOOST_TEST(dialogs.answer(ask_with_open_anyway(), boost::json::parse(R"({"index":2})")).ok);
+	BOOST_TEST(quits == 1);
+	BOOST_TEST(reopened == 0);
+
+	held.answer = prj::held_project::decision::none;
+	BOOST_TEST(dialogs.answer(ask_with_open_anyway(), boost::json::parse(R"({"index":1})")).ok);
+	BOOST_TEST((held.answer == prj::held_project::decision::continue_without_project));
+	BOOST_TEST(reopened == 0);
+}
+
+BOOST_AUTO_TEST_CASE(OpenAnyway_IsNotOfferedForANewerProject)
+{
+	held.action = prj::version_action::refuse;
+	BOOST_TEST(dialogs.answer(ask_with_open_anyway(), boost::json::parse(R"({"index":1})")).ok);
+	BOOST_TEST(quits == 1);
+	BOOST_TEST(reopened == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
