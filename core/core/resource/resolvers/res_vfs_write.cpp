@@ -1,8 +1,10 @@
 #include "res_vfs_write.h"
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -16,6 +18,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <winternl.h>
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -27,17 +30,31 @@ namespace fs = std::filesystem;
 
 namespace {
 
-	// Components of a path below the root, without "." (lexically_relative gives "." for the root itself).
-	std::vector<fs::path> folder_parts(const fs::path& folder)
+	// The folders below the root. safe_path never yields an absolute path or "..", but the walk does not rely on it.
+	std::optional<std::vector<fs::path>> folder_parts(const fs::path& folder)
 	{
+		if (folder.has_root_path()) {
+			return std::nullopt;
+		}
 		std::vector<fs::path> parts;
 		for (const auto& part : folder) {
+			if (part == "..") {
+				return std::nullopt;
+			}
+			// lexically_relative gives "." for the root itself; a trailing separator gives an empty one.
 			if (!part.empty() && part != ".") {
 				parts.push_back(part);
 			}
 		}
 		return parts;
 	}
+
+	bool is_plain_name(const fs::path& name)
+	{
+		return !name.empty() && !name.has_root_path() && name == name.filename() && name != "." && name != "..";
+	}
+
+	constexpr std::string_view k_not_below = "the path is not a chain of folder names below the resource root";
 
 }
 
@@ -47,7 +64,7 @@ namespace {
 
 	std::string errno_text(std::string_view what, const fs::path& path)
 	{
-		return std::format("{} '{}': {}", what, path.string(), std::strerror(errno));
+		return std::format("{} '{}': {}", what, path.string(), std::generic_category().message(errno));
 	}
 
 	class fd_holder
@@ -81,6 +98,30 @@ namespace {
 		int m_fd;
 	};
 
+	// Removes the temp file from its folder unless the write got through; also when the write throws.
+	class temp_guard
+	{
+	public:
+		temp_guard(int folder, const fs::path& name) : m_folder(folder), m_name(name) {}
+		~temp_guard()
+		{
+			if (m_armed) {
+				const int error = errno; // the caller's message is built from it
+				::unlinkat(m_folder, m_name.c_str(), 0);
+				errno = error;
+			}
+		}
+		temp_guard(const temp_guard&) = delete;
+		temp_guard& operator=(const temp_guard&) = delete;
+
+		void dismiss() { m_armed = false; }
+
+	private:
+		int m_folder;
+		const fs::path& m_name;
+		bool m_armed = true;
+	};
+
 	constexpr int k_dir_flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
 
 	// The folder `name` in `parent`, never through a link; made first when `create` and it is missing.
@@ -88,7 +129,8 @@ namespace {
 	{
 		int fd = ::openat(parent, name.c_str(), k_dir_flags);
 		if (fd < 0 && errno == ENOENT && create) {
-			if (::mkdirat(parent, name.c_str(), 0755) != 0 && errno != EEXIST) {
+			// The umask applies, as it did to the folders std::filesystem made.
+			if (::mkdirat(parent, name.c_str(), 0777) != 0 && errno != EEXIST) {
 				return -1;
 			}
 			fd = ::openat(parent, name.c_str(), k_dir_flags);
@@ -98,11 +140,11 @@ namespace {
 
 	// The folder below the root, one component at a time. -1 with errno set when one is a link, not a folder, or
 	// (without `create`) missing.
-	fd_holder open_below(int root, const fs::path& folder, bool create, fs::path& reached)
+	fd_holder open_below(int root, const std::vector<fs::path>& parts, bool create, fs::path& reached)
 	{
 		fd_holder current;
 		int at = root;
-		for (const auto& part : folder_parts(folder)) {
+		for (const auto& part : parts) {
 			reached /= part;
 			fd_holder next{ open_folder(at, part, create) };
 			if (next.get() < 0) {
@@ -149,9 +191,11 @@ res::detail::pinned_root::~pinned_root()
 int res::detail::pinned_root::descriptor(std::string& error)
 {
 	if (m_fd >= 0) {
-		struct stat information;
-		// The folder it named was removed (a fresh project made later): open the one there now.
-		if (::fstat(m_fd, &information) != 0 || information.st_nlink == 0) {
+		struct stat held;
+		struct stat at_path;
+		// The folder at the root's path is no longer the one held (removed, or renamed and replaced): open the one there.
+		if (::fstat(m_fd, &held) != 0 || held.st_nlink == 0 || ::lstat(m_root.c_str(), &at_path) != 0
+			|| held.st_dev != at_path.st_dev || held.st_ino != at_path.st_ino) {
 			::close(m_fd);
 			m_fd = -1;
 		}
@@ -170,34 +214,38 @@ int res::detail::pinned_root::descriptor(std::string& error)
 
 std::string res::detail::write_beneath(pinned_root& root, const write_request& request)
 {
+	const auto parts = folder_parts(request.folder);
+	if (!parts || !is_plain_name(request.leaf) || !is_plain_name(request.tmp_leaf)) {
+		return std::string{ k_not_below };
+	}
 	std::string error;
 	const int root_fd = root.descriptor(error);
 	if (root_fd < 0) {
 		return error;
 	}
 	fs::path reached = root.path();
-	const fd_holder folder = open_below(root_fd, request.folder, true, reached);
+	const fd_holder folder = open_below(root_fd, *parts, true, reached);
 	if (folder.get() < 0) {
 		return errno_text("cannot open the folder (a link, or not a folder)", reached);
 	}
+	if (request.hook && *request.hook) {
+		(*request.hook)(write_stage::folders_held, request.tmp_path);
+	}
 
-	// O_EXCL with O_NOFOLLOW: nothing planted at the temp name is opened, not even a link.
-	fd_holder file{ ::openat(folder.get(), request.tmp_leaf.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644) };
+	// O_EXCL with O_NOFOLLOW: nothing planted at the temp name is opened, not even a link. The umask applies.
+	fd_holder file{ ::openat(folder.get(), request.tmp_leaf.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0666) };
 	if (file.get() < 0) {
 		return errno_text("cannot create", request.tmp_path);
 	}
-	const auto drop_tmp = [&](std::string why) {
-		::unlinkat(folder.get(), request.tmp_leaf.c_str(), 0);
-		return why;
-	};
+	temp_guard guard{ folder.get(), request.tmp_leaf };
 	if (!write_all(file.get(), request.data)) {
-		return drop_tmp(errno_text("writing failed for", request.tmp_path));
+		return errno_text("writing failed for", request.tmp_path);
 	}
 	if (request.durable && ::fsync(file.get()) != 0) {
-		return drop_tmp(errno_text("cannot flush", request.tmp_path));
+		return errno_text("cannot flush", request.tmp_path);
 	}
 	if (::close(file.release()) != 0) {
-		return drop_tmp(errno_text("writing failed for", request.tmp_path));
+		return errno_text("writing failed for", request.tmp_path);
 	}
 
 	if (request.hook && *request.hook) {
@@ -205,34 +253,78 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	}
 	// Inside the folder that was opened: a link at the target's name is replaced itself, never followed.
 	if (::renameat(folder.get(), request.tmp_leaf.c_str(), folder.get(), request.leaf.c_str()) != 0) {
-		return drop_tmp(errno_text("cannot replace", reached / request.leaf));
+		return errno_text("cannot replace", reached / request.leaf);
 	}
-	if (request.durable) {
-		::fsync(folder.get());
+	guard.dismiss();
+	// The file is in place: a folder that was not flushed only weakens durability across a crash.
+	if (request.durable && ::fsync(folder.get()) != 0) {
+		egLOG_WARN("resource/write", "{}", errno_text("cannot flush the folder", reached));
 	}
 	return {};
 }
 
-std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, std::string_view leaf)
+std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf)
 {
+	const auto parts = folder_parts(folder);
+	if (!parts || !is_plain_name(leaf)) {
+		return std::string{ k_not_below };
+	}
 	std::string error;
 	const int root_fd = root.descriptor(error);
 	if (root_fd < 0) {
 		return error;
 	}
 	fs::path reached = root.path();
-	const fd_holder at = open_below(root_fd, folder, false, reached);
+	const fd_holder at = open_below(root_fd, *parts, false, reached);
 	if (at.get() < 0) {
 		return errno == ENOENT ? std::string{} : errno_text("cannot open the folder (a link, or not a folder)", reached);
 	}
-	const std::string name{ leaf };
-	if (::unlinkat(at.get(), name.c_str(), 0) != 0 && errno != ENOENT) {
-		return errno_text("cannot remove", reached / name);
+	if (::unlinkat(at.get(), leaf.c_str(), 0) == 0) {
+		return {};
 	}
-	return {};
+	// A folder: removed when empty, as std::filesystem::remove did (Linux reports EISDIR, POSIX allows EPERM).
+	int code = errno;
+	if (code == EISDIR || code == EPERM) {
+		if (::unlinkat(at.get(), leaf.c_str(), AT_REMOVEDIR) == 0) {
+			return {};
+		}
+		if (errno != ENOTDIR) {
+			code = errno;
+		}
+	}
+	if (code == ENOENT) {
+		return {};
+	}
+	errno = code;
+	return errno_text("cannot remove", reached / leaf);
 }
 
 #else
+
+#ifndef FILE_OPEN
+#define FILE_OPEN 0x00000001
+#endif
+#ifndef FILE_CREATE
+#define FILE_CREATE 0x00000002
+#endif
+#ifndef FILE_OPEN_IF
+#define FILE_OPEN_IF 0x00000003
+#endif
+#ifndef FILE_DIRECTORY_FILE
+#define FILE_DIRECTORY_FILE 0x00000001
+#endif
+#ifndef FILE_SYNCHRONOUS_IO_NONALERT
+#define FILE_SYNCHRONOUS_IO_NONALERT 0x00000020
+#endif
+#ifndef FILE_NON_DIRECTORY_FILE
+#define FILE_NON_DIRECTORY_FILE 0x00000040
+#endif
+#ifndef FILE_OPEN_REPARSE_POINT
+#define FILE_OPEN_REPARSE_POINT 0x00200000
+#endif
+#ifndef OBJ_CASE_INSENSITIVE
+#define OBJ_CASE_INSENSITIVE 0x00000040L
+#endif
 
 namespace {
 
@@ -273,37 +365,54 @@ namespace {
 		HANDLE m_handle;
 	};
 
-	// A real folder (not a reparse point), held without FILE_SHARE_DELETE: while the handle is open nobody can rename,
-	// remove or replace it, so the names below it keep resolving through it.
-	handle_holder hold_folder(const fs::path& path, bool create)
+	// `name` (one component) inside the folder `parent` holds, resolved from that handle and never through a reparse
+	// point: one at `name` is opened itself. Invalid with the last error set on failure.
+	handle_holder open_in(HANDLE parent, const fs::path& name, ACCESS_MASK access, ULONG share, ULONG disposition, ULONG options)
 	{
-		const auto open = [&] {
-			return handle_holder{ ::CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-				nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
-		};
-		handle_holder folder = open();
-		if (!folder.valid() && create && (::GetLastError() == ERROR_FILE_NOT_FOUND || ::GetLastError() == ERROR_PATH_NOT_FOUND)) {
-			if (!::CreateDirectoryW(path.c_str(), nullptr) && ::GetLastError() != ERROR_ALREADY_EXISTS) {
-				return handle_holder{};
-			}
-			folder = open();
+		const std::wstring& text = name.native();
+		if (text.size() * sizeof(wchar_t) > 0xfffe) {
+			::SetLastError(ERROR_FILENAME_EXCED_RANGE);
+			return handle_holder{};
 		}
-		if (!folder.valid()) {
-			return folder;
+		UNICODE_STRING unicode{};
+		unicode.Buffer = const_cast<PWSTR>(text.c_str());
+		unicode.Length = static_cast<USHORT>(text.size() * sizeof(wchar_t));
+		unicode.MaximumLength = unicode.Length;
+		OBJECT_ATTRIBUTES attributes{};
+		attributes.Length = sizeof(attributes);
+		attributes.RootDirectory = parent;
+		attributes.ObjectName = &unicode;
+		attributes.Attributes = OBJ_CASE_INSENSITIVE; // as Win32 opens names
+		IO_STATUS_BLOCK status_block{};
+		HANDLE handle = nullptr;
+		const NTSTATUS status = ::NtCreateFile(&handle, access | SYNCHRONIZE, &attributes, &status_block, nullptr,
+			FILE_ATTRIBUTE_NORMAL, share, disposition, options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT, nullptr, 0);
+		if (status < 0) {
+			::SetLastError(::RtlNtStatusToDosError(status));
+			return handle_holder{};
 		}
+		return handle_holder{ handle };
+	}
+
+	bool is_real_folder(HANDLE folder)
+	{
 		BY_HANDLE_FILE_INFORMATION information{};
-		if (!::GetFileInformationByHandle(folder.get(), &information)
+		if (!::GetFileInformationByHandle(folder, &information)
 			|| (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0
 			|| (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
 			::SetLastError(ERROR_CANT_ACCESS_FILE);
-			return handle_holder{};
+			return false;
 		}
-		return folder;
+		return true;
 	}
 
-	// The root and every folder down to `folder`, all held until the chain goes; empty on failure, `reached` naming
-	// where it stopped.
-	std::vector<handle_holder> hold_chain(const fs::path& root, const fs::path& folder, bool create, fs::path& reached)
+	// Held without FILE_SHARE_DELETE: while the handle is open nobody can rename, remove or replace the folder.
+	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE;
+	constexpr ULONG k_folder_share = FILE_SHARE_READ | FILE_SHARE_WRITE;
+
+	// The root and every folder down to `parts`, each opened from the handle of the one above it and all held until
+	// the chain goes; empty on failure, `reached` naming where it stopped.
+	std::vector<handle_holder> hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached)
 	{
 		std::vector<handle_holder> chain;
 		// Closing what was held must not change the error the caller reports.
@@ -318,15 +427,17 @@ namespace {
 			fs::create_directories(root, ec); // the mounted folder itself, pinned when mounted
 		}
 		reached = root;
-		handle_holder top = hold_folder(reached, false);
-		if (!top.valid()) {
+		handle_holder top{ ::CreateFileW(root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr, OPEN_EXISTING,
+			FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
+		if (!top.valid() || !is_real_folder(top.get())) {
 			return give_up();
 		}
 		chain.push_back(std::move(top));
-		for (const auto& part : folder_parts(folder)) {
+		for (const auto& part : parts) {
 			reached /= part;
-			handle_holder next = hold_folder(reached, create);
-			if (!next.valid()) {
+			handle_holder next = open_in(chain.back().get(), part, k_folder_access, k_folder_share,
+				create ? FILE_OPEN_IF : FILE_OPEN, FILE_DIRECTORY_FILE);
+			if (!next.valid() || !is_real_folder(next.get())) {
 				return give_up();
 			}
 			chain.push_back(std::move(next));
@@ -341,17 +452,75 @@ namespace {
 		return ::SetFileInformationByHandle(file, FileDispositionInfo, &disposition, sizeof(disposition)) != 0;
 	}
 
-	// Renames the open file to `target` (a path through the held folders), replacing what is there; a link at the
-	// target is replaced itself.
-	bool rename_to(HANDLE file, const fs::path& target)
+	// Deletes the temp file when its handle closes unless the write got through; also when the write throws.
+	class temp_guard
 	{
-		const std::wstring name = target.native();
-		std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + name.size() * sizeof(wchar_t));
+	public:
+		temp_guard(HANDLE file, const fs::path& path) : m_file(file), m_path(path) {}
+		~temp_guard()
+		{
+			if (m_armed) {
+				const DWORD code = ::GetLastError(); // the caller's message is built from it
+				if (!set_delete_on_close(m_file)) {
+					egLOG_WARN("resource/write", "{}", last_error_text("the temp file stays behind", m_path));
+				}
+				::SetLastError(code);
+			}
+		}
+		temp_guard(const temp_guard&) = delete;
+		temp_guard& operator=(const temp_guard&) = delete;
+
+		void dismiss() { m_armed = false; }
+
+	private:
+		HANDLE m_file;
+		const fs::path& m_path;
+		bool m_armed = true;
+	};
+
+	std::optional<std::wstring> final_path(HANDLE handle)
+	{
+		constexpr DWORD flags = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+		const DWORD size = ::GetFinalPathNameByHandleW(handle, nullptr, 0, flags);
+		if (size == 0) {
+			return std::nullopt;
+		}
+		std::wstring path(size, L'\0');
+		const DWORD length = ::GetFinalPathNameByHandleW(handle, path.data(), size, flags);
+		if (length == 0 || length >= size) {
+			return std::nullopt;
+		}
+		path.resize(length);
+		return path;
+	}
+
+	// Belt and braces over the handle-relative opens: the file's final path is the root's, the folders and the name.
+	bool lies_at(HANDLE file, HANDLE root, const std::vector<fs::path>& parts, const fs::path& name)
+	{
+		const auto actual = final_path(file);
+		auto expected = final_path(root);
+		if (!actual || !expected) {
+			return false;
+		}
+		for (const auto& part : parts) {
+			expected->append(L"\\").append(part.native());
+		}
+		expected->append(L"\\").append(name.native());
+		return ::CompareStringOrdinal(actual->c_str(), static_cast<int>(actual->size()), expected->c_str(),
+			static_cast<int>(expected->size()), TRUE) == CSTR_EQUAL;
+	}
+
+	// Renames the open file to `name` inside the folder `folder` holds, replacing what is there; a link at the target
+	// is replaced itself.
+	bool rename_to(HANDLE file, HANDLE folder, const fs::path& name)
+	{
+		const std::wstring& text = name.native();
+		std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + text.size() * sizeof(wchar_t));
 		auto* info = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
 		info->ReplaceIfExists = TRUE;
-		info->RootDirectory = nullptr;
-		info->FileNameLength = static_cast<DWORD>(name.size() * sizeof(wchar_t));
-		std::memcpy(info->FileName, name.data(), name.size() * sizeof(wchar_t));
+		info->RootDirectory = folder;
+		info->FileNameLength = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+		std::memcpy(info->FileName, text.data(), text.size() * sizeof(wchar_t));
 		return ::SetFileInformationByHandle(file, FileRenameInfo, info, static_cast<DWORD>(buffer.size())) != 0;
 	}
 
@@ -361,35 +530,40 @@ res::detail::pinned_root::~pinned_root() = default;
 
 std::string res::detail::write_beneath(pinned_root& root, const write_request& request)
 {
+	const auto parts = folder_parts(request.folder);
+	if (!parts || !is_plain_name(request.leaf) || !is_plain_name(request.tmp_leaf)) {
+		return std::string{ k_not_below };
+	}
 	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(root.path(), request.folder, true, reached);
+	const std::vector<handle_holder> chain = hold_chain(root.path(), *parts, true, reached);
 	if (chain.empty()) {
 		return last_error_text("cannot open the folder (a reparse point, or not a folder)", reached);
 	}
-	const fs::path tmp = reached / request.tmp_leaf;
-	const fs::path target = reached / request.leaf;
-	// CREATE_NEW: nothing planted at the temp name is opened, not even a link.
-	handle_holder file{ ::CreateFileW(tmp.c_str(), GENERIC_WRITE | DELETE, 0, nullptr, CREATE_NEW,
-		FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
-	if (!file.valid()) {
-		return last_error_text("cannot create", tmp);
+	if (request.hook && *request.hook) {
+		(*request.hook)(write_stage::folders_held, request.tmp_path);
 	}
-	const auto drop_tmp = [&](std::string why) {
-		set_delete_on_close(file.get());
-		file.reset();
-		return why;
-	};
+	const fs::path target = reached / request.leaf;
+	// FILE_CREATE: nothing planted at the temp name is opened, not even a link.
+	handle_holder file = open_in(chain.back().get(), request.tmp_leaf, FILE_GENERIC_WRITE | DELETE, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE);
+	if (!file.valid()) {
+		return last_error_text("cannot create", request.tmp_path);
+	}
+	temp_guard guard{ file.get(), request.tmp_path };
+	if (!lies_at(file.get(), chain.front().get(), *parts, request.tmp_leaf)) {
+		::SetLastError(ERROR_CANT_ACCESS_FILE);
+		return last_error_text("the temp file was not created below the resource root", request.tmp_path);
+	}
 	std::size_t done = 0;
 	while (done < request.data.size()) {
 		const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(request.data.size() - done, 1u << 30));
 		DWORD wrote = 0;
 		if (!::WriteFile(file.get(), request.data.data() + done, chunk, &wrote, nullptr) || wrote == 0) {
-			return drop_tmp(last_error_text("writing failed for", tmp));
+			return last_error_text("writing failed for", request.tmp_path);
 		}
 		done += wrote;
 	}
 	if (request.durable && !::FlushFileBuffers(file.get())) {
-		return drop_tmp(last_error_text("cannot flush", tmp));
+		return last_error_text("cannot flush", request.tmp_path);
 	}
 
 	if (request.hook && *request.hook) {
@@ -399,7 +573,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	// indexer, antivirus) is open on it, and replacing it is denied for a moment.
 	bool renamed = false;
 	for (int attempt = 0; attempt < 50 && !renamed; ++attempt) {
-		renamed = rename_to(file.get(), target);
+		renamed = rename_to(file.get(), chain.back().get(), request.leaf);
 		if (!renamed) {
 			if (::GetLastError() != ERROR_ACCESS_DENIED) {
 				break;
@@ -408,24 +582,28 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 		}
 	}
 	if (!renamed) {
-		return drop_tmp(last_error_text("cannot replace", target));
+		return last_error_text("cannot replace", target);
 	}
+	guard.dismiss();
 	return {};
 }
 
-std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, std::string_view leaf)
+std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf)
 {
+	const auto parts = folder_parts(folder);
+	if (!parts || !is_plain_name(leaf)) {
+		return std::string{ k_not_below };
+	}
 	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(root.path(), folder, false, reached);
+	const std::vector<handle_holder> chain = hold_chain(root.path(), *parts, false, reached);
 	if (chain.empty()) {
 		const DWORD code = ::GetLastError();
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND
 			? std::string{}
 			: last_error_text("cannot open the folder (a reparse point, or not a folder)", reached);
 	}
-	const fs::path path = reached / fs::path{ std::string{ leaf } };
-	handle_holder file{ ::CreateFileW(path.c_str(), DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-		OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr) };
+	const fs::path path = reached / leaf;
+	handle_holder file = open_in(chain.back().get(), leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, 0);
 	if (!file.valid()) {
 		const DWORD code = ::GetLastError();
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND ? std::string{} : last_error_text("cannot remove", path);

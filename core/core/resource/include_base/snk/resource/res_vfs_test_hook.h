@@ -3,7 +3,6 @@
 #include <snk/common/engine_assert.h>
 #include <filesystem>
 #include <functional>
-#include <shared_mutex>
 #include <utility>
 
 // Base only (include_base/, not installed in the SDK): pauses a vfs_resolver's write on its io thread, so a test can
@@ -15,10 +14,7 @@ namespace res::detail {
 		// without a lock, so it must not change while a write is in flight.
 		static void set(vfs_resolver& resolver, std::function<void(write_stage, const std::filesystem::path& tmp_path)> hook)
 		{
-			{
-				std::shared_lock lock(resolver.m_pending_mutex);
-				ASSERT_MSG(resolver.m_pending_writes.empty(), "vfs write hook changed while a store is in flight");
-			}
+			ASSERT_MSG(resolver.m_writes_in_flight.load() == 0, "vfs write hook changed while a store is in flight");
 			resolver.m_write_hook = std::move(hook);
 		}
 	};

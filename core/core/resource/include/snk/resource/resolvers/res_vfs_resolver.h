@@ -26,7 +26,7 @@ namespace res
 		struct write_hook_access;
 		// Where a store's write may be paused by a test hook (res_vfs_test_hook.h, base only): after the path was checked
 		// again on the io thread, and with the temp file written, before the rename.
-		enum class write_stage : int { after_check, before_rename };
+		enum class write_stage : int { after_check, folders_held, before_rename };
 	}
 
 	namespace io = boost::asio;
@@ -87,6 +87,8 @@ namespace res
 		std::unique_ptr<detail::pinned_root> m_write_root;
 		// Tests only (detail::write_hook_access): set and cleared while no store is in flight, read on the io thread.
 		std::function<void(detail::write_stage, const fs::path& tmp_path)> m_write_hook;
+		// Stores queued and not finished: the hook may change only while none is.
+		std::atomic<int> m_writes_in_flight{ 0 };
 		friend struct detail::write_hook_access;
 	};
 }

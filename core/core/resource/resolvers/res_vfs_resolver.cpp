@@ -232,6 +232,7 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 		return false;
 	}
 
+	++m_writes_in_flight;
 	boost::asio::post(io, [this, tag, target = *target_path, tmp_tag, tmp = *tmp_path, data_ptr, done = std::move(done)] {
 		// The promise is fulfilled exactly once, whatever happens: a broken one would throw out of store_sync.
 		bool written = false;
@@ -240,6 +241,8 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 		} catch (...) {
 			written = false;
 		}
+		// Before the promise: once store_sync returns, no write is in flight.
+		--m_writes_in_flight;
 		if (done) {
 			done->set_value(written);
 		}
@@ -296,7 +299,7 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 		const fs::path relative = path.lexically_relative(m_write_root->path());
 		const std::string error = relative.empty() || *relative.begin() == ".."
 			? std::string{ "its file does not lie below the resource root" }
-			: detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename().string());
+			: detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename());
 		if (!error.empty()) {
 			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), error);
 		}
@@ -466,8 +469,8 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		}
 		detail::write_request request;
 		request.folder = relative.parent_path();
-		request.leaf = relative.filename().string();
-		request.tmp_leaf = tmp_path.filename().string();
+		request.leaf = relative.filename();
+		request.tmp_leaf = tmp_path.filename();
 		request.data = data_ptr->data;
 		// Scratch data of the process: not worth an fsync per store (#417).
 		request.durable = protocol != ::res::tag::memory;
