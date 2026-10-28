@@ -76,6 +76,9 @@ int main(int argc, char* argv[])
 				result = code;
 			}
 		}
+	} catch (const prj::engine_version_error& e) {
+		egLOG_ERROR("app", "{}", e.what());
+		result = prj::k_exit_engine_version;
 	} catch (const prj::project_error& e) {
 		egLOG_ERROR("app", "{}", e.what());
 		result = prj::k_exit_project_error;
