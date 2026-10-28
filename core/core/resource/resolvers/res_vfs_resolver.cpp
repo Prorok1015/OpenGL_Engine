@@ -483,8 +483,15 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 	try {
 		egLOG("resource/resolver", "loading file '{}'", path.string());
 
-		if (!fs::exists(path)) {
+		std::error_code ec;
+		const auto status = fs::status(path, ec);
+		if (!fs::exists(status)) {
 			data_sp->set_error("File does not exist: " + path.string());
+			return;
+		}
+		// A folder opens as a stream on Linux, and tellg() then reports LLONG_MAX.
+		if (!fs::is_regular_file(status)) {
+			data_sp->set_error("Not a regular file: " + path.string());
 			return;
 		}
 
@@ -495,6 +502,10 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 		}
 
 		auto size = file.tellg();
+		if (size < 0) {
+			data_sp->set_error("Failed to get the size of: " + path.string());
+			return;
+		}
 		std::vector<std::byte> data;
 
 		if (size > 0) {

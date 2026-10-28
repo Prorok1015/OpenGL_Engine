@@ -128,6 +128,13 @@ BOOST_AUTO_TEST_CASE(Resolve_WithoutMountsReportsNoEntryPoints)
 	BOOST_TEST(result.find("No entry points") != std::string::npos);
 }
 
+// A tag that names a folder (an asset browser path, a failed level save that left one) is an error, never a read.
+BOOST_FIXTURE_TEST_CASE(Resolve_AFolderIsAnError, mounts_fixture)
+{
+	res::vfs_resolver r("res", { low, high });
+	BOOST_TEST(load(r, "res://sub").find("ERR:Not a regular file") == 0u);
+}
+
 BOOST_FIXTURE_TEST_CASE(Exists_SearchesEveryMount, mounts_fixture)
 {
 	res::vfs_resolver r("res", { low, high });
