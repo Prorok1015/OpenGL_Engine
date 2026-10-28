@@ -15,12 +15,28 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <snk/common/snk_api.h>
 
 namespace desc
 {
+	// Where get_field_desc keeps the memory copy of an inline sub-desc: memory://overrides/, or, for a game module's
+	// layer, under the layer's own write prefix (memory://modules/<name>/overrides/, MODULE_LAYER.md).
+	inline std::string override_root(const res::resource_system& resources)
+	{
+		const std::string& prefix = resources.write_prefix();
+		return (prefix.empty() ? std::string{ "memory://" } : prefix) + "overrides/";
+	}
+
+	inline bool is_override_tag(std::string_view tag)
+	{
+		return tag.starts_with("memory://overrides/")
+			|| (tag.starts_with("memory://modules/") && tag.find("/overrides/") != std::string_view::npos);
+	}
+
 	class SNK_API desc_system
 	{
 	public:
@@ -388,8 +404,8 @@ namespace desc
 			std::string serialized = json::serialize(data);
 			uint64_t content_hash = fnv1a_64(serialized);
 
-			std::string path = std::format("memory://overrides/{}/{}_{:x}.desc",
-				owner_name, field, content_hash);
+			std::string path = std::format("{}{}/{}_{:x}.desc",
+				override_root(m_res_system), owner_name, field, content_hash);
 
 			return res::tag{ path };
 		}

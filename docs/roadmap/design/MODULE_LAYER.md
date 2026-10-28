@@ -67,7 +67,20 @@ EnTT не знает «родительского» контекста. Расс
   - Проверка в тестах (`app_game_module_tests`):
     - число систем базы, команд, типов каналов и лог-синков до загрузки и после выгрузки совпадает;
     - модуль не видит реестр команд, систему задач и `context_manager`, прямой `require` отклоняется.
-  - Остаётся глобальная функция `engine::add_log_sink`: хранилище её не закрывает. Модуль обязан идти через `module_context`.
+- **Глобальные пути вне хранилища** (#405, решение владельца 2026-10-28). CI-проверка `tools/ci/check_sdk_base_only.py` берёт базовые имена из деревьев `include_base/` (пути, функции SNK_API, типы, макросы) и с самотестом:
+  - **Лог-синки.** `engine::add_log_sink` и `log_sink_handle` лежат в `snk/common/logger/engine_log_sinks.h`, в `include_base/`. Это заголовки только для базы: редактор и движок их видят, в SDK они не ставятся (`snk_component_headers`, `SnkInstall.cmake`, проверка `tools/ci/check_sdk_headers.sh`). Модуль получает синк только через `module_context::add_log_sink`.
+  - **meta.** `ecs::register_component<T>(const char*)` удалён: он писал в процессный meta-контекст движка. В SDK `ecs::meta_context()` отдаёт только `const entt::meta_ctx&` (`find_meta`/`resolve`). Изменяемый контекст (`mutable_meta_context()`) и хэндл локатора (`meta_context_handle()`) лежат в `snk/ecs/ecs_meta_context.h` (`include_base/`). Модуль регистрирует только в `layer.meta()`. В статической сборке модуль делит локатор с движком, поэтому `entt::meta_factory<T>{}` без контекста всё ещё попадает в контекст движка. Это относится только к модулю, вкомпилированному в бинарник движка (тесты); DLL получает свой локатор.
+  - **Конфиг.** Модуль читает конфиг через `module_context::config()` (`cfg::config_view`, `cfg_api.h`): только `value(name)`, без записи. `cfg::variable`, `variable_map` и `registrate_*` лежат в `snk/config/cfg_variables.h` (`include_base/`). Переменные с одинаковым именем больше не подменяют и не стирают друг друга: обновляются все, а каждая снимается сама.
+  - **Ресурсы.**
+    - Слой модуля пишет только под `memory://modules/<имя модуля>/` (`gs::module_resource_prefix`, `resource_system::limit_writes_to`). Это касается `store`, `erase` и `pin_resource` ещё не сохранённого тега: такой pin записывается и отклоняется до того, как что-то закреплено. Любой другой тег, включая `res://`, чужой модуль и `..`, отклоняется. Чтение по-прежнему сквозное.
+    - Inline-desc (`get_field_desc`) desc_system слоя хранит под `<префикс>overrides/` (`desc::override_root`, `desc::is_override_tag`), а не в общем `memory://overrides/`.
+    - `resource_system::parent()` отдаёт `const`: через слой нельзя писать в базу.
+    - Редактор пишет свои теги через базовый `resource_system` (`editor_services::writable_resources()`). Пустой игровой слой базы не ограничен.
+  - **Способ ошибки:** `std::logic_error`, как при отказе `require` скрытого сервиса. Это нарушение контракта модуля, а не сбой IO (сбой IO — по-прежнему `false`).
+  - **Позже:**
+    - постоянное хранилище модуля `module://<имя>/` в `.cache`;
+    - закрыть эти функции на уровне символов, сейчас они остаются экспортированными (#407);
+    - колбэки модуля в main-очереди и `on_settled` переживают выгрузку (#406).
 - Полностью read-only базу (`require<const T>`) не вводим: нужен новый API хранилища, а выигрыш поверх затенения и RAII-хэндлов мал.
 
 ## 6. Жизненный цикл

@@ -1,6 +1,10 @@
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
+#include <algorithm>
 #include <unordered_map>
+#include <optional>
+#include <string>
 #include <variant>
+#include <vector>
 #include <yaml-cpp/yaml.h>
 #include <boost/program_options.hpp>
 #include <cstdio>
@@ -22,9 +26,32 @@ namespace cfg {
 			return instance;
 		}
 
-		std::unordered_map<std::string, cfg::variable_base*> registered_variables;
-		std::unordered_map<std::string, cfg::variable_map*>  registered_prefixes;
+		// Several variables may share a name: every one is updated, and each one leaves on its own.
+		std::unordered_map<std::string, std::vector<cfg::variable_base*>> registered_variables;
+		std::unordered_map<std::string, std::vector<cfg::variable_map*>>  registered_prefixes;
+
+		void update_variable(std::string_view name, const std::filesystem::path& location, std::string_view value)
+		{
+			if (auto it = registered_variables.find(std::string{ name }); it != registered_variables.end()) {
+				for (auto* var : it->second) {
+					var->update(location, value);
+				}
+			}
+		}
 	};
+
+	template<class T>
+	void remove_registration(std::unordered_map<std::string, std::vector<T*>>& map, std::string_view name, T* var)
+	{
+		const auto it = map.find(std::string{ name });
+		if (it == map.end()) {
+			return;
+		}
+		std::erase(it->second, var);
+		if (it->second.empty()) {
+			map.erase(it);
+		}
+	}
 
 } // namespace cfg
 
@@ -41,9 +68,8 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 		if (value.IsScalar()) {
 			std::string val_str = value.as<std::string>();
 			auto& mgr = cfg::config_manager::instance();
-			auto var_it = mgr.registered_variables.find(current);
-			if (var_it != mgr.registered_variables.end()) {
-				var_it->second->update(config_location, val_str);
+			if (mgr.registered_variables.contains(current)) {
+				mgr.update_variable(current, config_location, val_str);
 			} else {
 				// Check prefix variables by walking up the path.
 				// "a/b/c/d" → try "a/b/c" (suffix "d"), then "a/b" (suffix "c/d"), then "a" (suffix "b/c/d").
@@ -56,7 +82,9 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 					std::string suffix = current.substr(sep + 1);
 					auto pfx_it = mgr.registered_prefixes.find(prefix);
 					if (pfx_it != mgr.registered_prefixes.end()) {
-						pfx_it->second->update_entry(suffix, val_str);
+						for (auto* map : pfx_it->second) {
+							map->update_entry(suffix, val_str);
+						}
 						break;
 					}
 					path = prefix;
@@ -125,10 +153,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 
 	// Before --set, so that `--set project/...` still wins like every other --set.
 	const auto set_registered = [](std::string_view name, std::string_view value) {
-		auto& vars = cfg::config_manager::instance().registered_variables;
-		if (auto var_it = vars.find(std::string{ name }); var_it != vars.end()) {
-			var_it->second->update(std::filesystem::current_path(), value);
-		}
+		cfg::config_manager::instance().update_variable(name, std::filesystem::current_path(), value);
 	};
 	if (vm.count("project")) {
 		set_registered("project/file", vm["project"].as<std::string>());
@@ -142,10 +167,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		for (std::size_t i = 1; i < tokens.size(); i += 2) {
 			std::string name = tokens[i - 1];
 			std::string val = tokens[i];
-			auto var_it = cfg::config_manager::instance().registered_variables.find(name);
-			if (var_it != cfg::config_manager::instance().registered_variables.end()) {
-				var_it->second->update(std::filesystem::current_path(), val);
-			}
+			cfg::config_manager::instance().update_variable(name, std::filesystem::current_path(), val);
 		}
 	}
 
@@ -154,20 +176,30 @@ bool cfg::initialize_configs(int argc, char* argv[])
 
 void cfg::registrate_variable(std::string_view name, variable_base* var)
 {
-	cfg::config_manager::instance().registered_variables[std::string{ name }] = var;
+	cfg::config_manager::instance().registered_variables[std::string{ name }].push_back(var);
 }
 
 void cfg::unregistrate_variable(std::string_view name, variable_base* var)
 {
-	cfg::config_manager::instance().registered_variables.erase(std::string{ name });
+	cfg::remove_registration(cfg::config_manager::instance().registered_variables, name, var);
 }
 
 void cfg::registrate_prefix(std::string_view prefix, variable_map* var)
 {
-	cfg::config_manager::instance().registered_prefixes[std::string{ prefix }] = var;
+	cfg::config_manager::instance().registered_prefixes[std::string{ prefix }].push_back(var);
 }
 
 void cfg::unregistrate_prefix(std::string_view prefix, variable_map* var)
 {
-	cfg::config_manager::instance().registered_prefixes.erase(std::string{ prefix });
+	cfg::remove_registration(cfg::config_manager::instance().registered_prefixes, prefix, var);
+}
+
+std::optional<std::string> cfg::config_view::value(std::string_view name) const
+{
+	const auto& vars = cfg::config_manager::instance().registered_variables;
+	const auto it = vars.find(std::string{ name });
+	if (it == vars.end() || it->second.empty()) {
+		return std::nullopt;
+	}
+	return it->second.front()->text();
 }

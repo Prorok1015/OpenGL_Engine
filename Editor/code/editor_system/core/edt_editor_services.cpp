@@ -26,6 +26,11 @@ res::resource_system* edt::editor_services::resources() const
 	return layer ? &layer->resources() : base_resources;
 }
 
+res::resource_system* edt::editor_services::writable_resources() const
+{
+	return base_resources ? base_resources : resources();
+}
+
 scn::ecs_assembler* edt::editor_services::assembler() const
 {
 	auto* layer = active_layer();

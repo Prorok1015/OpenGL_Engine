@@ -1,5 +1,5 @@
 #include <snk/application/application.h>
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/core/core_module.h>

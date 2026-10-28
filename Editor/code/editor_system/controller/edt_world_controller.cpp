@@ -115,7 +115,7 @@ void edt::world_controller::create_world(const std::string& name)
 	world_json["name"] = name;
 
 	res::tag mem_tag{ "memory://editor/world_" + name + ".desc" };
-	m_services.resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ world_json }));
+	m_services.writable_resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ world_json }));
 	m_services.resources()->signal_changed(mem_tag);
 
 	auto world_res = m_services.resources()->require_sync<scn::world_desc>(mem_tag);

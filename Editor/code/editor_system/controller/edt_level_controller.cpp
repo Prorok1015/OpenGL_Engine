@@ -72,7 +72,7 @@ void edt::level_controller::new_level()
 	unwatch_level();
 	m_state.editor_tag = mem_tag;
 
-	m_services.resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ level_json }));
+	m_services.writable_resources()->store(mem_tag, m_services.descs()->serialize_to_bytes(json::value{ level_json }));
 	m_services.resources()->signal_changed(mem_tag);
 
 	if (!ctx_mgr->load_level(mem_tag)) {
@@ -191,7 +191,7 @@ void edt::level_controller::attach_to_game_layer()
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr) return;
 	auto& resources = *m_services.resources();
-	resources.store(m_state.editor_tag, m_services.descs()->serialize_to_bytes(boost::json::value{ level_json }));
+	m_services.writable_resources()->store(m_state.editor_tag, m_services.descs()->serialize_to_bytes(boost::json::value{ level_json }));
 	resources.signal_changed(m_state.editor_tag);
 	if (!ctx_mgr->load_level(m_state.editor_tag)) {
 		egLOG_ERROR("Editor/GameLayer", "Level '{}' could not be rebuilt in the new game layer", m_state.editor_tag.view());

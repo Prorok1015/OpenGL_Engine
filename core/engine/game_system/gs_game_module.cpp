@@ -2,7 +2,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <format>
 #include <stdexcept>
 
@@ -28,6 +28,7 @@ namespace {
 			// The game layer moves to it in activate(), once the module has registered: the worlds built then see the
 			// module's systems and types.
 			m_layer = &m_contexts.create_layer(m_tasks);
+			m_layer->resources().limit_writes_to(gs::module_resource_prefix(module));
 			m_storage.attach(borrowed(*m_layer));
 			m_storage.attach(borrowed(m_layer->resources()));
 			m_storage.attach(borrowed(m_layer->descs()));
@@ -94,6 +95,11 @@ bool gs::module_context::add_command(cmd::command_desc desc)
 	}
 	m_layer.keep(std::move(added));
 	return true;
+}
+
+std::string gs::module_resource_prefix(std::string_view module)
+{
+	return std::format("memory://modules/{}/", module);
 }
 
 void gs::module_context::add_log_sink(engine::log_callback_t callback)

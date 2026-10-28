@@ -12,8 +12,11 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 // A resource layer (#220 PR-4, MODULE_LAYER.md): a resource_system over a parent that shares its resolvers and
@@ -170,6 +173,20 @@ struct game_desc : desc::desc_base {
 	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
 };
 
+// A desc with an inline sub-desc: desc_system stores the inline object under a memory tag of the owner.
+struct holder_desc : desc::desc_base {
+	res::res_handle<desc::desc_base> inner;
+
+	void deserialize(desc::desc_system& ds, const boost::json::object& obj) override
+	{
+		inner = ds.get_field_desc<desc::desc_base>(*this, obj.at("inner"));
+	}
+	void serialize(boost::json::object&) const override {}
+};
+
+// A module only reads the base through its layer.
+static_assert(std::is_same_v<decltype(std::declval<const res::resource_system&>().parent()), const res::resource_system*>);
+
 }
 
 BOOST_FIXTURE_TEST_SUITE(res_layer_tests, layer_fixture)
@@ -243,7 +260,8 @@ BOOST_AUTO_TEST_CASE(destroying_the_layer_cancels_its_pending_loads)
 	BOOST_TEST(pending.has_error());
 }
 
-BOOST_AUTO_TEST_CASE(store_exists_and_erase_go_to_the_root)
+// The base's empty game layer has no limit: its writes go to the root's resolvers.
+BOOST_AUTO_TEST_CASE(a_layer_without_a_write_limit_stores_and_erases_in_the_root)
 {
 	const auto tag = tag_of("stored.txt");
 	BOOST_TEST(layer->store(tag, test_util::to_bytes("x")));
@@ -252,6 +270,39 @@ BOOST_AUTO_TEST_CASE(store_exists_and_erase_go_to_the_root)
 	BOOST_TEST(layer->erase(tag));
 	BOOST_TEST(!rs->exists(tag));
 	BOOST_TEST((layer->get_resource_layers() == rs->get_resource_layers()));
+}
+
+// A game module's layer writes only under memory://modules/<name>/ (#405, MODULE_LAYER.md): the base stays as it was,
+// and reads still go through to it.
+BOOST_AUTO_TEST_CASE(a_module_layer_writes_only_under_its_prefix)
+{
+	layer->limit_writes_to("memory://modules/game/");
+	const res::tag own{ "memory://modules/game/stored.txt" };
+	BOOST_TEST(layer->store(own, test_util::to_bytes("x")));
+	BOOST_TEST(rs->exists(own));
+	BOOST_TEST(layer->erase(own));
+	BOOST_TEST(!rs->exists(own));
+
+	const auto base = tag_of("base.txt");
+	BOOST_REQUIRE(rs->store(base, test_util::to_bytes("base")));
+	BOOST_TEST(layer->exists(base));
+	BOOST_CHECK_THROW(layer->store(base, test_util::to_bytes("changed")), std::logic_error);
+	BOOST_CHECK_THROW(layer->erase(base), std::logic_error);
+	BOOST_TEST(rs->exists(base));
+	BOOST_TEST(load<res::text_resource>(*layer, base).get()->str() == "base");
+
+	// A pin of a tag not stored yet would be written out: refused before anything is pinned.
+	const auto pinned = tag_of("pinned.txt");
+	BOOST_CHECK_THROW(layer->pin_resource(pinned, res::text_resource{ pinned, test_util::to_bytes("p") }), std::logic_error);
+	BOOST_TEST(layer->pinned_count() == 0u);
+
+	for (const char* refused : { "res://stored.txt", "memory://modules/other/stored.txt", "memory://modules/game/../other/x",
+			"memory://modules/game/", "memory://modules/gamex/stored.txt" }) {
+		BOOST_TEST_CONTEXT(refused) {
+			BOOST_CHECK_THROW(layer->store(res::tag{ refused }, test_util::to_bytes("x")), std::logic_error);
+			BOOST_CHECK_THROW(layer->erase(res::tag{ refused }), std::logic_error);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(a_desc_type_of_the_layer_loads_only_through_the_layer)
@@ -274,6 +325,39 @@ BOOST_AUTO_TEST_CASE(a_desc_type_of_the_layer_loads_only_through_the_layer)
 		}
 		BOOST_TEST(load<desc::desc_base>(*rs, tag).has_error());
 		layer.reset(); // the layer's adapter uses layer_descs: the layer goes first
+	}
+	rs->unregistrate_adapter(core::desc::desc_adapter_t::INFO);
+}
+
+// An inline sub-desc in a module's layer is kept under the layer's own prefix (#408 review): the layer's write limit
+// does not stop a level with an inline texture or material from loading.
+BOOST_AUTO_TEST_CASE(an_inline_desc_loads_in_a_layer_with_a_write_limit)
+{
+	desc::desc_system base_descs{ *rs };
+	rs->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*rs), std::ref(base_descs));
+	{
+		layer->limit_writes_to("memory://modules/game/");
+		desc::desc_system layer_descs{ *layer };
+		layer_descs.register_desc<game_desc>("game_desc");
+		layer_descs.register_desc<holder_desc>("holder_desc");
+		layer->registrate_adapter<core::desc::desc_adapter_t>(core::desc::desc_adapter_t::INFO, std::ref(*layer), std::ref(layer_descs));
+
+		const auto tag = put("h.desc", R"({ "__type": "holder_desc", "inner": { "__type": "game_desc", "value": 5 } })");
+		{
+			const auto holder = load<desc::desc_base>(*layer, tag);
+			BOOST_REQUIRE(holder.is_ready());
+			const auto* loaded = dynamic_cast<const holder_desc*>(holder.get().get());
+			BOOST_REQUIRE(loaded != nullptr);
+			pump();
+			BOOST_REQUIRE(loaded->inner.is_ready());
+			const std::string_view inner_tag = loaded->inner.get_tag().view();
+			BOOST_TEST(inner_tag.starts_with("memory://modules/game/overrides/"));
+			BOOST_TEST(desc::is_override_tag(inner_tag));
+			const auto* inner = dynamic_cast<const game_desc*>(loaded->inner.get().get());
+			BOOST_REQUIRE(inner != nullptr);
+			BOOST_TEST(inner->value == 5);
+		}
+		layer.reset();
 	}
 	rs->unregistrate_adapter(core::desc::desc_adapter_t::INFO);
 }

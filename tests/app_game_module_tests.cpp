@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_module_env.hpp"
-#include <snk/common/logger/engine_log.h>
+#include <snk/common/logger/engine_log_sinks.h>
+#include <snk/config/cfg_variables.h>
 #include <snk/ecs/ecs_channel.hpp>
 #include <snk/ecs/ecs_component.h>
 #include <snk/ecs/ecs_system.h>
@@ -16,6 +17,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 // A game module in the same binary (#220 PR-6, MODULE_LAYER.md): module_loader gives it a layer, it registers a desc
@@ -129,7 +132,18 @@ struct probe_result {
 	bool contexts_visible = true;
 	bool require_refused = false;
 	bool own_layer_visible = false;
+	std::optional<std::string> config_value;
+	bool own_store_written = false;
+	bool base_store_refused = false;
+	bool base_erase_refused = false;
 };
+
+// Set by the base before the probing module loads.
+constexpr const char* PROBE_VARIABLE = "gametest/probe";
+const res::tag PROBE_BASE_TAG{ "memory://t/base.txt" };
+
+// The module only reads the configuration.
+static_assert(std::is_same_v<decltype(std::declval<const gs::module_context&>().config()), const cfg::config_view&>);
 probe_result g_probe;
 
 class probing_game_module final : public gs::game_module {
@@ -152,6 +166,20 @@ protected:
 			g_probe.require_refused = true;
 		}
 		g_probe.own_layer_visible = data.has_value<scn::scene_layer>() && data.has_value<gs::module_context>();
+
+		g_probe.config_value = data.require<gs::module_context>().config().value(PROBE_VARIABLE);
+		auto& resources = data.require<res::resource_system>();
+		g_probe.own_store_written = resources.store(res::tag{ gs::module_resource_prefix(name()) + "own.txt" }, test_util::to_bytes("own"));
+		try {
+			resources.store(PROBE_BASE_TAG, test_util::to_bytes("changed"));
+		} catch (const std::logic_error&) {
+			g_probe.base_store_refused = true;
+		}
+		try {
+			resources.erase(PROBE_BASE_TAG);
+		} catch (const std::logic_error&) {
+			g_probe.base_erase_refused = true;
+		}
 	}
 
 private:
@@ -375,7 +403,14 @@ BOOST_AUTO_TEST_CASE(base_sets_keep_running_without_a_plan_rebuild)
 BOOST_AUTO_TEST_CASE(a_module_cannot_reach_the_base_registries_directly)
 {
 	const std::size_t base_commands = commands.size();
+	cfg::variable<int> probe{ PROBE_VARIABLE, 7 };
+	BOOST_REQUIRE(rs->store(PROBE_BASE_TAG, test_util::to_bytes("base")));
 	loader.load(std::make_unique<probing_game_module>(), root);
+	BOOST_TEST(g_probe.config_value.value_or("") == "7");
+	BOOST_TEST(g_probe.own_store_written);
+	BOOST_TEST(g_probe.base_store_refused);
+	BOOST_TEST(g_probe.base_erase_refused);
+	BOOST_TEST(rs->exists(PROBE_BASE_TAG));
 	BOOST_TEST(!g_probe.commands_visible);
 	BOOST_TEST(!g_probe.tasks_visible);
 	BOOST_TEST(!g_probe.contexts_visible);

@@ -6,6 +6,7 @@
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/ds/ds_task_system.hpp>
+#include <snk/config/cfg_api.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <snk/common/snk_api.h>
 #include <memory>
@@ -46,6 +47,10 @@ namespace gs
 		virtual void shutdown_content(scn::scene_layer&, ds::app_data_storage&) {}
 	};
 
+	// Where a game module's layer may store and erase resources: memory://modules/<module>/ (MODULE_LAYER.md). Any
+	// other tag, res:// included, is refused with std::logic_error.
+	SNK_API std::string module_resource_prefix(std::string_view module);
+
 	// What a game module registers in the engine outside its layer (MODULE_LAYER.md §5), in its layer's storage
 	// (data.require<gs::module_context>()). Every registration is kept by the layer and removed when the layer goes, so
 	// the engine holds nothing that refers to the module.
@@ -57,8 +62,10 @@ namespace gs
 
 		// A command in the process-wide registry; false when there is none or it refused the command (logged).
 		bool add_command(cmd::command_desc desc);
-		// A listener of the engine log (engine::add_log_sink).
+		// A listener of the engine log; the only way a module gets one (installing one directly is base-only).
 		void add_log_sink(engine::log_callback_t callback);
+		// The configuration, read-only: defining or writing a variable is base-only.
+		const cfg::config_view& config() const { return m_config; }
 		// A task bound to the layer: cancelled and waited for before the layer's worlds go.
 		template<class F>
 		auto run(ds::lane lane, ds::task_desc desc, F&& fn)
@@ -71,6 +78,7 @@ namespace gs
 		scn::scene_layer& m_layer;
 		cmd::command_registry* m_commands = nullptr;
 		ds::task_system* m_tasks = nullptr;
+		cfg::config_view m_config;
 	};
 
 	// The engine's module_layer_factory: while a game module is loaded its layer is the game layer, and a fresh empty

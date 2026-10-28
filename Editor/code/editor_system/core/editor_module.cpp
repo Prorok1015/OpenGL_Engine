@@ -5,7 +5,7 @@
 #include <snk/window/wnd_window_system.h>
 #include <snk/input/inp_input_system.h>
 #include "edt_editor_system.h"
-#include <snk/config/cfg_api.h>
+#include <snk/config/cfg_variables.h>
 #if SNK_HAS_ASSIMP
 #include <snk/scene/adapters/scn_model_importer_adapter.h>
 #endif
