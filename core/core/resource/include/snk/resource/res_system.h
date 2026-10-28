@@ -162,6 +162,12 @@ namespace res
 			return count;
 		}
 
+		// Read-only: dependency targets this system keeps for its layers. For tests and diagnostics.
+		std::size_t layer_needs_count() const {
+			std::lock_guard lock(m_layer_needs_mutex);
+			return m_layer_needs.size();
+		}
+
 		// Read-only: resources pinned in this system (warmup, pin_resource; a layer: the layer's only). For tests and
 		// diagnostics.
 		std::size_t pinned_count() const {

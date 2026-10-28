@@ -101,7 +101,8 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		("help,c", "call list of variables")
 		("config,c", po::value<std::string>(), "set a path to a config entry")
 		("set,s", po::value<std::vector<std::string>>()->multitoken()->composing(), "set a config var")
-		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it");
+		("project", po::value<std::string>(), "open a game project: its project.snkproj or the directory holding it")
+		("allow-engine-version-mismatch", "open a project made for an older engine version without asking");
 	
 	po::variables_map vm;
 	po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -122,12 +123,18 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		cfg::initialize_configs(config_path);
 	}
 
-	// Before --set, so that `--set project/file` still wins like every other --set.
-	if (vm.count("project")) {
+	// Before --set, so that `--set project/...` still wins like every other --set.
+	const auto set_registered = [](std::string_view name, std::string_view value) {
 		auto& vars = cfg::config_manager::instance().registered_variables;
-		if (auto var_it = vars.find("project/file"); var_it != vars.end()) {
-			var_it->second->update(std::filesystem::current_path(), vm["project"].as<std::string>());
+		if (auto var_it = vars.find(std::string{ name }); var_it != vars.end()) {
+			var_it->second->update(std::filesystem::current_path(), value);
 		}
+	};
+	if (vm.count("project")) {
+		set_registered("project/file", vm["project"].as<std::string>());
+	}
+	if (vm.count("allow-engine-version-mismatch")) {
+		set_registered("project/allow_engine_version_mismatch", "true");
 	}
 
 	if (vm.count("set")) {

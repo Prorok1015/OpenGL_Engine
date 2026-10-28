@@ -224,6 +224,7 @@ res::resource_system::resource_system(resource_system &parent)
 }
 
 res::resource_system::~resource_system() {
+  ASSERT_MSG(m_layers.empty(), "A resource_system outlives its layers: destroy the layers first");
   if (m_parent) {
     // First: a signal from the root may be walking the layers right now.
     std::lock_guard lock(m_parent->m_layers_mutex);
