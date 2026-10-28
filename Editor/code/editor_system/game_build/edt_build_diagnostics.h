@@ -32,5 +32,9 @@ namespace edt
 		std::vector<std::string> m_context;
 		// A CMake message whose indented text is still coming (index in m_items).
 		std::optional<std::size_t> m_cmake_open;
+		// Blank lines seen inside that message.
+		int m_cmake_breaks = 0;
+		// The line without its colour escapes.
+		std::string m_clean;
 	};
 }

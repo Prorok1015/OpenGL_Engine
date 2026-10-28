@@ -188,6 +188,22 @@ namespace {
 		return false;
 	}
 
+	// Drops ANSI CSI sequences (ESC '[' parameters, final byte 0x40-0x7E): coloured GCC/Clang output.
+	void strip_escapes(sv line, std::string& out)
+	{
+		out.clear();
+		out.reserve(line.size());
+		for (std::size_t i = 0; i < line.size(); ++i) {
+			if (line[i] != '\x1b' || i + 1 >= line.size() || line[i + 1] != '[') {
+				out += line[i];
+				continue;
+			}
+			std::size_t end = i + 2;
+			while (end < line.size() && !(line[end] >= 0x40 && line[end] <= 0x7E)) ++end;
+			i = end;
+		}
+	}
+
 	// "[3/10] Building CXX object ..." (ninja).
 	bool is_progress(sv line)
 	{
@@ -224,6 +240,10 @@ namespace {
 
 void edt::build_output_parser::feed(std::string_view line)
 {
+	if (line.find('\x1b') != sv::npos) {
+		strip_escapes(line, m_clean);
+		line = m_clean;
+	}
 	while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.remove_suffix(1);
 	if (continue_cmake(line)) return;
 	if (line.empty() || line.front() == ' ' || line.front() == '\t') return;
@@ -266,7 +286,8 @@ void edt::build_output_parser::feed(std::string_view line)
 
 	const std::size_t tool_end = line.find(": ");
 	const sv tool = tool_end == sv::npos ? sv{} : line.substr(0, tool_end);
-	if (!tool.empty() && tool.find(' ') == sv::npos && is_linker(tool)) {
+	// A space may be in the linker's directory ("C:/Program Files/.../ld.exe"), not in its name.
+	if (!tool.empty() && base_name(tool).find(' ') == sv::npos && is_linker(tool)) {
 		const sv rest = trim(line.substr(tool_end + 1));
 		if (const auto kind = gcc_kind(rest)) {
 			if (kind->severity == problem_severity::note) {
@@ -351,8 +372,9 @@ bool edt::build_output_parser::continue_cmake(std::string_view line)
 	std::string& message = m_items[*m_cmake_open].message;
 	const sv text = trim(line);
 	if (text.empty()) {
-		// The text may start after a blank line; a blank line after the text ends it.
-		if (!message.empty()) m_cmake_open.reset();
+		// The text may start after a blank line. find_package says what to do in the second paragraph, so the
+		// message ends at the second blank line after the text started.
+		if (!message.empty() && ++m_cmake_breaks >= 2) m_cmake_open.reset();
 		return true;
 	}
 	if (line.starts_with("  ")) {
@@ -407,6 +429,9 @@ bool edt::build_output_parser::parse_cmake(std::string_view line)
 	}
 	const bool text_follows = item.message.empty();
 	add(std::move(item));
-	if (text_follows) m_cmake_open = m_items.size() - 1;
+	if (text_follows) {
+		m_cmake_open = m_items.size() - 1;
+		m_cmake_breaks = 0;
+	}
 	return true;
 }
