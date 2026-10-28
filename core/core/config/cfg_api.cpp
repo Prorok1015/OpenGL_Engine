@@ -69,6 +69,22 @@ namespace cfg {
 } // namespace cfg
 
 namespace {
+
+// Empty when `sequence` is a flat list of scalars (copied to `values`); otherwise why it is not one.
+std::string read_flat_list(const YAML::Node& sequence, std::vector<std::string>& values)
+{
+	for (const auto& element : sequence) {
+		if (element.IsNull()) {
+			return "null elements are not allowed in a list";
+		}
+		if (!element.IsScalar()) {
+			return "nested lists and maps are not allowed in a list";
+		}
+		values.push_back(element.as<std::string>());
+	}
+	return {};
+}
+
 void load_map(const std::filesystem::path& config_location, const std::string& parent, YAML::Node map_node)
 {
 	for (auto it = map_node.begin(); it != map_node.end(); ++it) {
@@ -105,16 +121,8 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 			}
 		} else if (value.IsSequence()) {
 			std::vector<std::string> values;
-			bool flat = true;
-			for (const auto& element : value) {
-				if (!element.IsScalar()) {
-					flat = false;
-					break;
-				}
-				values.push_back(element.as<std::string>());
-			}
-			if (!flat) {
-				cfg::warn_wrong_kind(current, "a list holds scalars only: nested lists and maps are not allowed");
+			if (const std::string problem = read_flat_list(value, values); !problem.empty()) {
+				cfg::warn_wrong_kind(current, problem);
 			} else if (cfg::config_manager::instance().registered_variables.contains(current)) {
 				cfg::config_manager::instance().update_list(current, values);
 			}
@@ -124,14 +132,14 @@ void load_map(const std::filesystem::path& config_location, const std::string& p
 	}
 }
 
-void load_config_file(std::filesystem::path file_path)
+void load_config_file_with_extends(std::filesystem::path file_path)
 {
 	YAML::Node config = YAML::LoadFile(std::filesystem::absolute(file_path).string());
 	if (config[EXTENDS_KEY]) {
 		// TODO: add assert if its not a sequence
 		for (auto it = config[EXTENDS_KEY].begin(); it != config[EXTENDS_KEY].end(); ++it) {
 			auto file = file_path.parent_path() / it->as<std::string>();
-			load_config_file(file);
+			load_config_file_with_extends(file);
 		}
 	}
 	
@@ -147,7 +155,7 @@ void cfg::initialize_configs(std::filesystem::path init_file)
 	}
 	is_initialized = true;
 
-	load_config_file(init_file);
+	load_config_file_with_extends(init_file);
 }
 
 bool cfg::initialize_configs(int argc, char* argv[])
@@ -200,6 +208,17 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	return true;
 }
 
+bool cfg::load_config_file(const std::filesystem::path& file)
+{
+	try {
+		load_config_file_with_extends(file);
+		return true;
+	} catch (const YAML::Exception& e) {
+		egLOG_ERROR("config", "cannot load '{}': {}", file.string(), e.what());
+		return false;
+	}
+}
+
 bool cfg::load_config_text(std::string_view yaml_text, const std::filesystem::path& location)
 {
 	try {
@@ -224,15 +243,11 @@ std::optional<std::vector<std::string>> parse_list_argument(std::string_view nam
 		const YAML::Node node = YAML::Load(std::string{ value });
 		if (node.IsSequence()) {
 			std::vector<std::string> values;
-			for (const auto& element : node) {
-				if (!element.IsScalar()) {
-					values.clear();
-					break;
-				}
-				values.push_back(element.as<std::string>());
-			}
-			if (values.size() == node.size()) {
+			if (const std::string problem = read_flat_list(node, values); problem.empty()) {
 				return values;
+			} else {
+				cfg::warn_wrong_kind(name, "--set: " + problem);
+				return std::nullopt;
 			}
 		}
 	} catch (const YAML::Exception&) {

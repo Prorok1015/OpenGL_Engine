@@ -17,12 +17,18 @@ namespace cfg {
 	SNK_API void initialize_configs(std::filesystem::path init_file);
 	SNK_API bool initialize_configs(int argc, char* args[]);
 
+	// Loads a config file with its `extends` chain (a later file replaces what an earlier one set, lists included),
+	// without the once-per-process guard of initialize_configs. False when a file is missing or is not valid yaml.
+	SNK_API bool load_config_file(const std::filesystem::path& file);
+
 	// Loads yaml text the way a config file is loaded (without `extends`, and without the once-per-process guard of
 	// initialize_configs). False when the text is not valid yaml. Paths are relative to `location`.
 	SNK_API bool load_config_text(std::string_view yaml_text, const std::filesystem::path& location);
 
 	// What `--set name value` does: a scalar variable parses `value`; a list variable takes `value` as a flow yaml
-	// sequence ("[a, b]", "[]") or, without a leading '[', as a list of that one element. Always replaces.
+	// sequence ("[a, b]", "[]") or, without a leading '[', as a list of that one element. Always replaces. Yaml rules
+	// apply inside the brackets: an element holding ',' is quoted ("[\"a,b\", c]"; "[a\\, b]" is the two elements `a\` and `b`),
+	// and so is one that starts with '*'. Null (`~`), nested lists and maps are refused, the list is left as it was.
 	SNK_API void set_variable(std::string_view name, std::string_view value);
 
 	// A list as the JSON array text config_view::value() returns.

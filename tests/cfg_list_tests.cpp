@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/config/cfg_api.h>
 #include <snk/config/cfg_variables.h>
+#include "test_temp_dir.hpp"
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -210,6 +211,87 @@ BOOST_AUTO_TEST_CASE(Registration_ListAndScalarOfOneName_EachTakesItsOwnKindOnly
 	load("cfglist:\n  mixed: scalar\n");
 	BOOST_TEST((*list == strings{ "a" }));
 	BOOST_TEST(*text == "scalar");
+}
+
+BOOST_AUTO_TEST_CASE(Extends_ChildListReplacesTheBaseListAsAWhole)
+{
+	test_util::temp_dir dir{ "cfglist_extends" };
+	dir.write("base.yaml", "cfglist:\n  extended: [a, b, c]\n  inherited: [x, y]\n  scalar: from_base\n");
+	dir.write("conf/child.yaml", "extends:\n  - ../base.yaml\ncfglist:\n  extended: [z]\n");
+	cfg::variable<strings> extended{ "cfglist/extended", strings{ "default" } };
+	cfg::variable<strings> inherited{ "cfglist/inherited", strings{ "default" } };
+	cfg::variable<std::string> scalar{ "cfglist/scalar", "default" };
+
+	BOOST_TEST(cfg::load_config_file(dir.path() / "conf" / "child.yaml"));
+
+	BOOST_TEST((*extended == strings{ "z" }));
+	BOOST_TEST((*inherited == strings{ "x", "y" }));
+	BOOST_TEST(*scalar == "from_base");
+}
+
+BOOST_AUTO_TEST_CASE(LoadConfigFile_MissingFileOrBrokenBase_ReturnsFalse)
+{
+	test_util::temp_dir dir{ "cfglist_missing" };
+	dir.write("child.yaml", "extends:\n  - no_such_base.yaml\n");
+
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "no_such.yaml"));
+	BOOST_TEST(!cfg::load_config_file(dir.path() / "child.yaml"));
+}
+
+BOOST_AUTO_TEST_CASE(Yaml_NullElementInAList_IsRefusedLikeANestedOne)
+{
+	cfg::variable<strings> flow{ "cfglist/null_flow", strings{ "default" } };
+	cfg::variable<strings> block{ "cfglist/null_block", strings{ "default" } };
+	cfg::variable<strings> word{ "cfglist/null_word", strings{ "default" } };
+
+	BOOST_TEST(load("cfglist:\n  null_flow: [a, ~]\n  null_block:\n    - a\n    - ~\n  null_word: [a, null]\n"));
+
+	BOOST_TEST((*flow == strings{ "default" }));
+	BOOST_TEST((*block == strings{ "default" }));
+	BOOST_TEST((*word == strings{ "default" }));
+}
+
+BOOST_AUTO_TEST_CASE(Yaml_QuotedNullWordsInAList_AreTextNotNull)
+{
+	cfg::variable<strings> v{ "cfglist/quoted_null", strings{} };
+
+	BOOST_TEST(load("cfglist:\n  quoted_null: [\"~\", \"null\"]\n"));
+
+	BOOST_TEST((*v == strings{ "~", "null" }));
+}
+
+BOOST_AUTO_TEST_CASE(Yaml_NullValue_IsIgnoredForListsAndScalarsAlike)
+{
+	cfg::variable<strings> list{ "cfglist/null_list", strings{ "default" } };
+	cfg::variable<std::string> text{ "cfglist/null_text", "default" };
+	cfg::variable<int> number{ "cfglist/null_number", 7 };
+
+	BOOST_TEST(load("cfglist:\n  null_list: ~\n  null_text:\n  null_number: ~\n"));
+
+	BOOST_TEST((*list == strings{ "default" }));
+	BOOST_TEST(*text == "default");
+	BOOST_TEST(*number == 7);
+}
+
+BOOST_AUTO_TEST_CASE(SetVariable_NullElementInAFlowSequence_KeepsTheList)
+{
+	cfg::variable<strings> v{ "cfglist/set_null", strings{ "default" } };
+
+	cfg::set_variable("cfglist/set_null", "[a, ~]");
+
+	BOOST_TEST((*v == strings{ "default" }));
+}
+
+BOOST_AUTO_TEST_CASE(SetVariable_AnUnquotedCommaSplitsAndABackslashDoesNotEscapeIt)
+{
+	cfg::variable<strings> split{ "cfglist/set_comma", strings{} };
+	cfg::variable<strings> quoted{ "cfglist/set_comma_quoted", strings{} };
+
+	cfg::set_variable("cfglist/set_comma", "[a\\, b]");
+	cfg::set_variable("cfglist/set_comma_quoted", "[\"a, b\", c]");
+
+	BOOST_TEST((*split == strings{ "a\\", "b" }));
+	BOOST_TEST((*quoted == strings{ "a, b", "c" }));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
