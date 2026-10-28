@@ -26,6 +26,13 @@ namespace {
 	// is never held open, so it can be rebuilt while the module runs (hot reload, #435).
 	constexpr int k_max_copies = 1000;
 
+	// path::string() throws on Windows for a name outside the ANSI code page.
+	std::string utf8(const fs::path& path)
+	{
+		const std::u8string text = path.u8string();
+		return { text.begin(), text.end() };
+	}
+
 	// <root>/build/bin: the project's build output (build_dir, #426).
 	fs::path build_output_dir(const prj::project_context& project)
 	{
@@ -64,13 +71,25 @@ namespace {
 		std::error_code ec;
 		const fs::path real = fs::canonical(dir, ec);
 		if (ec) {
-			return std::format("'{}' cannot be resolved: {}", dir.string(), ec.message());
+			return std::format("'{}' cannot be resolved: {}", utf8(dir), ec.message());
 		}
 		if (real == root || !fs_paths::is_inside(root, real)) {
-			return std::format("'{}' resolves to '{}', outside the project", dir.string(), real.string());
+			return std::format("'{}' resolves to '{}', outside the project", utf8(dir), utf8(real));
 		}
 		if (!fs::is_directory(real, ec)) {
-			return std::format("'{}' is not a folder", real.string());
+			return std::format("'{}' is not a folder", utf8(real));
+		}
+		out = real;
+		return {};
+	}
+
+	// `file` made canonical, or why it is not a file inside the canonical folder `dir`.
+	std::string file_inside(const fs::path& dir, const fs::path& file, fs::path& out)
+	{
+		std::error_code ec;
+		const fs::path real = fs::canonical(file, ec);
+		if (ec || real == dir || !fs_paths::is_inside(dir, real) || !fs::is_regular_file(real, ec)) {
+			return std::format("'{}' is not a file inside '{}'", utf8(file), utf8(dir));
 		}
 		out = real;
 		return {};
@@ -78,7 +97,7 @@ namespace {
 
 	bool is_copy_of(const std::string& name, const fs::path& file)
 	{
-		const std::string file_name = file.filename().string();
+		const std::string file_name = utf8(file.filename());
 		if (!file_name.starts_with(name + ".")) {
 			return false;
 		}
@@ -118,6 +137,21 @@ namespace {
 		}
 	}
 
+	// The library's debug symbols next to its copy, if there are any inside the build output: best effort.
+	void copy_symbols(const fs::path& output, const fs::path& library, const fs::path& copy, module_copy& out)
+	{
+		std::error_code ec;
+		const fs::path symbols = fs::path{ library }.replace_extension(".pdb");
+		fs::path real;
+		if (!fs::exists(symbols, ec) || !file_inside(output, symbols, real).empty()) {
+			return;
+		}
+		const fs::path target = fs::path{ copy }.replace_extension(".pdb");
+		if (fs::copy_file(real, target, fs::copy_options::none, ec)) {
+			out.files.push_back(target);
+		}
+	}
+
 	// Empty string on success.
 	std::string copy_library(const prj::project_context& project, const std::string& name, const fs::path& found, module_copy& out)
 	{
@@ -126,12 +160,12 @@ namespace {
 		if (std::string why = folder_inside(root, build_output_dir(project), output); !why.empty()) {
 			return why;
 		}
-		std::error_code ec;
-		const fs::path library = fs::canonical(found, ec);
-		if (ec || !fs_paths::is_inside(output, library) || library == output || !fs::is_regular_file(library, ec)) {
-			return std::format("'{}' is not a file inside '{}'", found.string(), output.string());
+		fs::path library;
+		if (std::string why = file_inside(output, found, library); !why.empty()) {
+			return why;
 		}
 
+		std::error_code ec;
 		// Checked before anything is created in it: a .cache linked out of the project gets no folders.
 		if (fs::path cache; fs::exists(project.cache_dir(), ec)) {
 			if (std::string why = folder_inside(root, project.cache_dir(), cache); !why.empty()) {
@@ -144,26 +178,21 @@ namespace {
 		}
 		remove_old_copies(out.folder, name);
 
-		const std::string extension = library.extension().string();
+		const fs::path extension = library.extension();
 		for (int n = 0; n < k_max_copies; ++n) {
-			const fs::path target = out.folder / std::format("{}.{}{}", name, n, extension);
+			fs::path target = out.folder / std::format("{}.{}", name, n);
+			target += extension;
 			if (fs::copy_file(library, target, fs::copy_options::none, ec)) {
 				out.library = target;
 				out.files.push_back(target);
-				const fs::path symbols = fs::path{ library }.replace_extension(".pdb");
-				if (fs::is_regular_file(symbols, ec)) {
-					const fs::path symbols_copy = fs::path{ target }.replace_extension(".pdb");
-					if (fs::copy_file(symbols, symbols_copy, fs::copy_options::overwrite_existing, ec)) {
-						out.files.push_back(symbols_copy);
-					}
-				}
+				copy_symbols(output, library, target, out);
 				return {};
 			}
 			if (ec != std::errc::file_exists) {
-				return std::format("cannot copy '{}' to '{}': {}", library.string(), target.string(), ec.message());
+				return std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), ec.message());
 			}
 		}
-		return std::format("no free name for a copy of '{}' in '{}'", library.string(), out.folder.string());
+		return std::format("no free name for a copy of '{}' in '{}'", utf8(library), utf8(out.folder));
 	}
 
 	// Empty string once the module is loaded. The module is checked against the manifest's name before it gets a
@@ -171,18 +200,30 @@ namespace {
 	std::string load_module(app::modules::module_loader& loader, ds::app_data_storage& data,
 		std::unique_ptr<app::modules::module_source> source, const std::string& name)
 	{
-		try {
-			auto prepared = app::modules::module_loader::prepare(std::move(source));
-			if (prepared.name() != name) {
-				return std::format("{} is the module '{}'", prepared.describe(), prepared.name());
-			}
-			loader.load(std::move(prepared), data);
-			return {};
-		} catch (const std::exception& e) {
-			return e.what();
-		} catch (...) {
-			return "unknown exception";
+		auto prepared = app::modules::module_loader::prepare(std::move(source));
+		if (prepared.name() != name) {
+			return std::format("{} is the module '{}'", prepared.describe(), prepared.name());
 		}
+		loader.load(std::move(prepared), data);
+		return {};
+	}
+
+	// Empty string once loaded, else why not; on failure the copy is gone.
+	std::string load_one(app::modules::module_loader& loader, ds::app_data_storage& data, const prj::project_context& project,
+		const core::project_modules_options& options, const std::string& name, module_copy& copy)
+	{
+		std::unique_ptr<app::modules::module_source> source;
+		if (const auto it = options.compiled_in.find(name); it != options.compiled_in.end()) {
+			source = std::make_unique<app::modules::static_module_source>(name, it->second);
+		} else if (const auto found = find_library(project, name)) {
+			if (std::string why = copy_library(project, name, *found, copy); !why.empty()) {
+				return why;
+			}
+			source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
+		} else {
+			return "its library is no longer in the build output";
+		}
+		return load_module(loader, data, std::move(source), name);
 	}
 
 }
@@ -208,31 +249,29 @@ core::project_modules_report core::load_project_modules(app::modules::module_loa
 
 	if (options.with_editor_modules) {
 		for (const auto& ref : project.data.modules) {
-			if (ref.kind == prj::module_kind::editor) {
+			if (ref.kind != prj::module_kind::editor) {
+				continue;
+			}
+			if (ref.optional) {
+				egLOG_DEBUG("project", "optional editor module '{}' is not loaded: editor modules are not supported yet (#22)", ref.name);
+			} else {
 				egLOG_WARN("project", "editor module '{}' is not loaded: editor modules are not supported yet (#22)", ref.name);
 			}
 		}
 	}
 
 	for (const auto& ref : resolution.resolved) {
-		std::unique_ptr<app::modules::module_source> source;
 		module_copy copy;
 		std::string problem;
-		if (const auto it = options.compiled_in.find(ref.name); it != options.compiled_in.end()) {
-			source = std::make_unique<app::modules::static_module_source>(ref.name, it->second);
-		} else if (const auto found = find_library(project, ref.name)) {
-			problem = copy_library(project, ref.name, *found, copy);
-			if (problem.empty()) {
-				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
-			}
-		} else {
-			problem = "its library is no longer in the build output";
-		}
-		if (source) {
-			problem = load_module(loader, data, std::move(source), ref.name);
+		try {
+			problem = load_one(loader, data, project, options, ref.name, copy);
+		} catch (const std::exception& e) {
+			problem = e.what();
+		} catch (...) {
+			problem = "unknown exception";
 		}
 		if (problem.empty()) {
-			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + copy.library.string());
+			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
 			report.loaded.push_back(ref.name);
 			continue;
 		}

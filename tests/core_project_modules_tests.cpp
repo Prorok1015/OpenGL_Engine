@@ -1,8 +1,10 @@
 #include <boost/test/unit_test.hpp>
+#include "test_module_env.hpp"
 #include "test_temp_dir.hpp"
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/core/core_project_modules.h>
+#include <snk/game/gs_game_module.h>
 #include <snk/project/prj_project.h>
 #include <algorithm>
 #include <cstdint>
@@ -46,8 +48,30 @@ struct other_module final : app::modules::module_interface
 	std::string_view name() const override { return "other_game"; }
 };
 
+class first_game_module final : public gs::game_module
+{
+public:
+	std::string_view name() const override { return "first_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer&, ds::app_data_storage&) override {}
+};
+
+class second_game_module final : public gs::game_module
+{
+public:
+	std::string_view name() const override { return "second_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer&, ds::app_data_storage&) override {}
+};
+
 }
 
+SNK_DECLARE_MODULE_PREFIXED(project_first_, first_game_module)
+SNK_DECLARE_MODULE_PREFIXED(project_second_, second_game_module)
 SNK_DECLARE_MODULE_PREFIXED(project_probe_, probe_module)
 SNK_DECLARE_MODULE_PREFIXED(project_other_, other_module)
 
@@ -63,6 +87,16 @@ app::modules::module_entry probe_entry()
 app::modules::module_entry other_entry()
 {
 	return { &project_other_module_api_version, &project_other_module_build_info, &project_other_create_module, &project_other_destroy_module };
+}
+
+app::modules::module_entry first_game_entry()
+{
+	return { &project_first_module_api_version, &project_first_module_build_info, &project_first_create_module, &project_first_destroy_module };
+}
+
+app::modules::module_entry second_game_entry()
+{
+	return { &project_second_module_api_version, &project_second_module_build_info, &project_second_create_module, &project_second_destroy_module };
 }
 
 std::string library_file(const std::string& name)
@@ -145,6 +179,21 @@ struct project_fixture {
 		core::project_modules_options options;
 		options.compiled_in.emplace("test_game", entry);
 		return options;
+	}
+};
+
+// A project in the engine a game module loads into: the layer factory, which takes one game module at a time.
+struct game_project_fixture : test_util::module_env {
+	test_util::temp_dir dir{ "core_project_game_modules" };
+
+	game_project_fixture()
+	{
+		fs::create_directories(dir.path() / "game");
+		prj::project_context project;
+		project.root = fs::canonical(dir.path() / "game");
+		project.data.name = "Game";
+		project.data.modules = { manifest_module("first_game"), manifest_module("second_game"), manifest_module("test_game") };
+		root.construct<prj::project_context>(std::move(project));
 	}
 };
 
@@ -312,6 +361,37 @@ BOOST_AUTO_TEST_CASE(a_cache_linked_out_of_the_project_gets_no_copy)
 
 	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
 	BOOST_TEST(!fs::exists(dir.path() / "outside" / "modules"));
+}
+
+#if !defined(_WIN32)
+BOOST_AUTO_TEST_CASE(a_library_without_the_lib_prefix_is_found_too)
+{
+	open({ manifest_module("test_game") });
+	dir.write(fs::path{ "game" } / "build" / "bin" / "test_game.so", "not a library");
+	const auto report = load();
+
+	BOOST_TEST(report.missing_required.empty());
+	BOOST_TEST(report.refused == std::vector<std::string>{ "test_game" });
+}
+#endif
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_FIXTURE_TEST_SUITE(core_project_game_modules_tests, game_project_fixture)
+
+BOOST_AUTO_TEST_CASE(a_second_game_module_is_refused_and_the_rest_still_loads)
+{
+	core::project_modules_options options;
+	options.compiled_in.emplace("first_game", first_game_entry());
+	options.compiled_in.emplace("second_game", second_game_entry());
+	options.compiled_in.emplace("test_game", probe_entry());
+	const auto report = core::load_project_modules(loader, root, options);
+
+	BOOST_TEST(report.loaded == (std::vector<std::string>{ "first_game", "test_game" }));
+	BOOST_TEST(report.refused == std::vector<std::string>{ "second_game" });
+	BOOST_TEST((loader.state("first_game") == app::modules::module_state::initialized));
+	BOOST_TEST(!loader.state("second_game").has_value());
+	BOOST_TEST(contexts().game_layer() != nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

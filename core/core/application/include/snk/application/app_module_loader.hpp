@@ -64,6 +64,11 @@ namespace app::modules {
 			throw std::logic_error(std::move(message));
 		}
 
+		// A load refused: not logged here, whoever asked for the load logs it once, with its own context.
+		[[noreturn]] static void refuse(std::string message) {
+			throw std::logic_error(std::move(message));
+		}
+
 		entry* find(std::string_view name) {
 			const auto it = std::ranges::find_if(m_entries, [&](const entry& e) { return e.module->name() == name; });
 			return it == m_entries.end() ? nullptr : &*it;
@@ -91,7 +96,7 @@ namespace app::modules {
 			}
 			const auto factory = data.require_shared<module_layer_factory>();
 			if (!factory) {
-				fail(std::format("module_loader: cannot load '{}': it needs a layer and the storage has no module_layer_factory", e.module->name()));
+				refuse(std::format("module_loader: cannot load '{}': it needs a layer and the storage has no module_layer_factory", e.module->name()));
 			}
 			e.layer = factory->create(data, e.module->name());
 		}
@@ -283,7 +288,7 @@ namespace app::modules {
 			ASSERT_MSG(source, "module_loader::prepare: null module source");
 			source_ptr opened{ source.release() };
 			if (const std::string problem = opened->open(); !problem.empty()) {
-				fail(std::format("module_loader: refusing module {}: {}", opened->describe(), problem));
+				refuse(std::format("module_loader: refusing module {}: {}", opened->describe(), problem));
 			}
 			module_ptr module = create_module(opened->entry(), opened->describe());
 			return prepared_module{ std::move(opened), std::move(module) };
@@ -310,11 +315,11 @@ namespace app::modules {
 
 		static module_ptr create_module(const module_entry& exports, const std::string& origin) {
 			if (const std::string problem = check_module_entry(exports); !problem.empty()) {
-				fail(std::format("module_loader: refusing {}: {}", origin, problem));
+				refuse(std::format("module_loader: refusing {}: {}", origin, problem));
 			}
 			module_ptr module{ exports.create(), module_deleter{ exports.destroy } };
 			if (!module) {
-				fail(std::format("module_loader: refusing {}: snk_create_module returned null", origin));
+				refuse(std::format("module_loader: refusing {}: snk_create_module returned null", origin));
 			}
 			return module;
 		}
@@ -323,12 +328,12 @@ namespace app::modules {
 			ASSERT_MSG(e.module, "module_loader::load: null module");
 			const std::string name{ e.module->name() };
 			if (find(name)) {
-				fail(std::format("module_loader: cannot load '{}': a module with this name is already present", name));
+				refuse(std::format("module_loader: cannot load '{}': a module with this name is already present", name));
 			}
 			for (const auto dep : e.module->depends_on()) {
 				const entry* d = find(dep);
 				if (!d || d->state != module_state::initialized) {
-					fail(std::format("module_loader: cannot load '{}': dependency '{}' is {}", name, dep,
+					refuse(std::format("module_loader: cannot load '{}': dependency '{}' is {}", name, dep,
 						d ? state_name(d->state) : std::string_view{ "not loaded" }));
 				}
 			}

@@ -1,4 +1,5 @@
 #include "edt_editor_system.h"
+#include "edt_begin_then_poll.h"
 #include <snk/editor/edt_editor_context.h>
 #include <snk/common/engine_assert.h>
 #include "edt_selection_wiring.h"
@@ -332,12 +333,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	if (!project_held && !startup_level.empty()) {
 		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
 		const res::tag level = startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level);
-		editor_layer->register_implicit("edt/load_level", [this, level, started = false]() mutable {
-			if (!std::exchange(started, true)) {
-				begin_level_load(level);
-			}
-			return poll_level_load();
-		});
+		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { begin_level_load(level); },
+			[this] { return poll_level_load(); }));
 	}
 
 	if (cfg_agent_server) {

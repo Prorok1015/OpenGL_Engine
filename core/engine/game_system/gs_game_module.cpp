@@ -136,7 +136,7 @@ std::unique_ptr<app::modules::module_layer> gs::game_layer_factory::create(ds::a
 	if (!m_current.empty()) {
 		std::string message = std::format("game module '{}' refused: game module '{}' is loaded, and one game module at a "
 			"time is supported", module, m_current);
-		egLOG_ERROR("app", "{}", message);
+		// Logged by whoever loads the module (core::load_project_modules), like the loader's own refusals.
 		throw std::logic_error(std::move(message));
 	}
 	egLOG_INFO("app", "game layer for module '{}'", module);

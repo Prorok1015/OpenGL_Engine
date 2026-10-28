@@ -237,4 +237,33 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	root.destruct<prj::project_context>();
 }
 
+BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its_copy_removed)
+{
+	namespace fs = std::filesystem;
+	test_util::temp_dir dir("dll_project_wrong_module");
+	fs::create_directories(dir.path() / "game" / "build" / "bin");
+	const fs::path game = fs::canonical(dir.path() / "game");
+	// The library of test_game_dll under the file name the manifest's "other_game" looks for.
+	std::string other_file = g_module_path.filename().string();
+	other_file.replace(other_file.find(dll_game::module_name), dll_game::module_name.size(), "other_game");
+	fs::copy_file(g_module_path, game / "build" / "bin" / other_file);
+
+	prj::project_context project;
+	project.root = game;
+	project.data.name = "Game";
+	project.data.modules.emplace_back();
+	project.data.modules.back().name = "other_game";
+	root.construct<prj::project_context>(std::move(project));
+
+	const std::size_t root_size = root.size();
+	const auto report = core::load_project_modules(loader, root, core::project_modules_options{});
+	BOOST_TEST(report.refused == std::vector<std::string>{ "other_game" });
+	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
+	BOOST_TEST(root.size() == root_size);
+	const fs::path copy = game / ".cache" / "modules" / ("other_game.0" + g_module_path.extension().string());
+	// Windows does not delete a mapped image: gone means released too.
+	BOOST_TEST(!fs::exists(copy));
+	root.destruct<prj::project_context>();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
