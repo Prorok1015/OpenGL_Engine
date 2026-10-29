@@ -50,11 +50,12 @@ namespace {
 // Members are destroyed bottom-up: the server first (its thread is joined), then the host it calls, then the queue.
 struct edt::agent_server::impl
 {
-	impl(cmd::command_registry& commands, ds::task_system& tasks, const agent_server_options& options_, std::string token_)
+	impl(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations, const agent_server_options& options_,
+		std::string token_)
 		: options(options_)
 		, token(std::move(token_))
 		, queue(commands, tasks)
-		, bridge(commands, queue, tasks)
+		, bridge(commands, queue, tasks, confirmations)
 		, server(bridge, make_server_config(options_, token))
 	{
 	}
@@ -68,8 +69,9 @@ struct edt::agent_server::impl
 	bool file_written = false;
 };
 
-edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_server_options options)
-	: m_impl(std::make_unique<impl>(commands, tasks, options, mcp::generate_token()))
+edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations,
+	agent_server_options options)
+	: m_impl(std::make_unique<impl>(commands, tasks, confirmations, options, mcp::generate_token()))
 {
 	if (!m_impl->server.start()) {
 		egLOG_ERROR("mcp", "the agent server did not start");

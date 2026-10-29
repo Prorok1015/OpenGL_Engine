@@ -34,7 +34,9 @@
 #include "edt_build_settings_panel.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
+#include "edt_agent_access.h"
 #include "edt_agent_server.h"
+#include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include <snk/application/app_deterministic_time.h>
@@ -162,6 +164,7 @@ edt::editor_system::~editor_system()
 {
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
+	m_agent_access.reset();
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
 	// Gone already (storage torn down without editor_term): its destructor stopped the jobs and let go of the document.
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
@@ -473,7 +476,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::string project_dir = cfg_project_dir;
 		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
 			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
-		m_agent_server = std::make_unique<agent_server>(data.require<cmd::command_registry>(), data.require<ds::task_system>(), std::move(options));
+		const std::filesystem::path project_policy = options.project_dir / ".snk" / "agent_policy.json";
+		const auto user_roots = m_res.mount_roots("edt");
+		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
+		auto& commands = data.require<cmd::command_registry>();
+		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
+		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access == nullptr || m_agent_access->frame(ImGui::GetFont()); });
+		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));
 	}
 }
 

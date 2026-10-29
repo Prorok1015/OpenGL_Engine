@@ -401,4 +401,19 @@ BOOST_FIXTURE_TEST_CASE(DisabledCommand_StaysDisabled_NotAskedAbout, policy_fixt
 	BOOST_TEST(gate->asked == before);
 }
 
+BOOST_AUTO_TEST_CASE(Ask_InvalidArguments_FailWithNoTicketAndNobodyAsked)
+{
+	policy_fixture f;
+	f.gate->mode = cmd::policy_mode::ask;
+	cmd::call request = f.from_agent();
+	request.args = boost::json::object{ { "n", "not a number" } };
+
+	const cmd::result answer = f.commands.invoke("test.act", request);
+
+	BOOST_TEST(!answer.ok);
+	BOOST_TEST(answer.code == cmd::codes::invalid_args);
+	BOOST_TEST(f.commands.pending_confirmations() == 0u);
+	BOOST_TEST(f.runs == 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

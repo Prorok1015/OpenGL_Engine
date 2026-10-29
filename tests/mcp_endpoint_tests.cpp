@@ -748,6 +748,7 @@ BOOST_AUTO_TEST_CASE(Delete_EndsTheSession)
 	BOOST_TEST(ep.session_count() == 0u);
 	BOOST_TEST(send(session_request(session, rpc("1", "ping"))).status == 404);
 	BOOST_TEST(send(session_request(session, {}, "DELETE")).status == 404);
+	BOOST_TEST(host.closed_sessions() == std::vector<std::string>{ session });
 }
 
 BOOST_AUTO_TEST_CASE(CloseAll_ClosesTheStreamsAndForgetsTheSessions)
@@ -757,6 +758,7 @@ BOOST_AUTO_TEST_CASE(CloseAll_ClosesTheStreamsAndForgetsTheSessions)
 	ep.close_all();
 	BOOST_TEST(stream->closed());
 	BOOST_TEST(ep.session_count() == 0u);
+	BOOST_TEST(host.closed_sessions() == std::vector<std::string>{ session });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -797,6 +799,7 @@ BOOST_AUTO_TEST_CASE(TooManySessions_TheOldestMakesRoom)
 	BOOST_TEST(status_of(first) == 404);
 	BOOST_TEST(status_of(second) == 200);
 	BOOST_TEST(status_of(third) == 200);
+	BOOST_TEST(host.closed_sessions() == std::vector<std::string>{ first });
 }
 
 BOOST_AUTO_TEST_CASE(TooManySubscriptions_AreRefused)

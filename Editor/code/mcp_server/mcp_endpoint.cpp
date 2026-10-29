@@ -382,6 +382,7 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 std::string mcp::endpoint::create_session()
 {
 	std::string id = random_hex(16);
+	std::vector<std::string> evicted;
 	{
 		std::lock_guard lock(m_state->mutex);
 		// A client that never sent DELETE must not lock the others out: the oldest session makes room.
@@ -395,11 +396,15 @@ std::string mcp::endpoint::create_session()
 			if (oldest->second.channel) {
 				oldest->second.channel->close();
 			}
+			evicted.push_back(oldest->first);
 			m_state->sessions.erase(oldest);
 		}
 		session created;
 		created.serial = m_state->next_serial++;
 		m_state->sessions.emplace(id, std::move(created));
+	}
+	for (std::string& gone : evicted) {
+		m_host.session_closed(std::move(gone));
 	}
 	return id;
 }
@@ -735,12 +740,16 @@ void mcp::endpoint::handle_delete(const http_request& request, const responder& 
 		respond(std::move(session_error));
 		return;
 	}
+	bool erased = false;
 	{
 		std::lock_guard lock(m_state->mutex);
-		m_state->sessions.erase(session_id);
+		erased = m_state->sessions.erase(session_id) > 0;
 	}
 	if (channel) {
 		channel->close();
+	}
+	if (erased) {
+		m_host.session_closed(std::move(session_id));
 	}
 	respond(http_response{});
 }
@@ -788,5 +797,6 @@ void mcp::endpoint::close_all()
 		if (entry.second.channel) {
 			entry.second.channel->close();
 		}
+		m_host.session_closed(entry.first);
 	}
 }

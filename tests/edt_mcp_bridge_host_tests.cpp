@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_manual_tasks.hpp"
+#include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
@@ -54,7 +55,9 @@ struct bridge_fixture
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
 	cmd::main_thread_queue queue{ commands, tasks };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks };
+	edt::session_grants grants;
+	edt::agent_confirmations confirmations{ commands, grants };
+	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
 	std::vector<cmd::registration> registrations;
 
 	std::size_t drain()
@@ -475,7 +478,7 @@ BOOST_AUTO_TEST_CASE(CallTool_ATooLargeResultIsAnErrorNotAMegabyteWall)
 BOOST_AUTO_TEST_CASE(HostGoneBeforeTheDrain_AnswersWithAnError)
 {
 	add(make("log.read"));
-	auto doomed = std::make_unique<edt::mcp_bridge_host>(commands, queue, tasks);
+	auto doomed = std::make_unique<edt::mcp_bridge_host>(commands, queue, tasks, confirmations);
 	std::optional<mcp::call_result> result;
 	std::optional<std::vector<mcp::tool_info>> tools;
 	doomed->call_tool({}, "log_read", json_of("{}"), nullptr, [&result](mcp::call_result r) { result = std::move(r); });

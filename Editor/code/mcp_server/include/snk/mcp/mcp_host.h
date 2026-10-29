@@ -107,5 +107,8 @@ namespace mcp
 		virtual void read_resource(request_context context, std::string uri, std::function<void(resource_result)> done) = 0;
 		// The module does not know the application's logger. Callable from any thread.
 		virtual void log(log_level level, std::string_view message) = 0;
+		// The session is gone (DELETE, pushed out by a newer one, or the server stopped). Called from the I/O thread,
+		// outside the endpoint's lock; state kept per session can be dropped.
+		virtual void session_closed(std::string session_id) { (void)session_id; }
 	};
 }

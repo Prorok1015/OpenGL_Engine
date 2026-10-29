@@ -202,6 +202,26 @@ namespace edt
 			return reinterpret_cast<const char*>(text);
 		}
 
+		constexpr const char8_t* label_allow_once = u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u043e\u0434\u0438\u043d \u0440\u0430\u0437";
+		constexpr const char8_t* label_allow_session =
+			u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u0434\u043e \u043a\u043e\u043d\u0446\u0430 \u0441\u0435\u0441\u0441\u0438\u0438 \u044d\u0442\u043e\u0433\u043e \u0430\u0433\u0435\u043d\u0442\u0430";
+		constexpr const char8_t* label_deny = u8"\u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c";
+
+	}
+
+	bool confirmation_glyphs_available(const ImFont& font)
+	{
+		for (const char8_t* label : { label_allow_once, label_allow_session, label_deny }) {
+			const char* text = utf8(label);
+			while (*text != '\0') {
+				unsigned int codepoint = 0;
+				text += ImTextCharFromUtf8(&codepoint, text, nullptr);
+				if (codepoint == 0 || font.FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) == nullptr) {
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	bool draw_agent_confirmations(agent_confirmations& confirmations)
@@ -231,15 +251,15 @@ namespace edt
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());
 				}
 				ImGui::EndChild();
-				if (ImGui::Button(utf8(u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u043e\u0434\u0438\u043d \u0440\u0430\u0437"))) {
+				if (ImGui::Button(utf8(label_allow_once))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_once);
 				}
 				ImGui::SameLine();
-				if (ImGui::Button(utf8(u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u0434\u043e \u043a\u043e\u043d\u0446\u0430 \u0441\u0435\u0441\u0441\u0438\u0438 \u044d\u0442\u043e\u0433\u043e \u0430\u0433\u0435\u043d\u0442\u0430"))) {
+				if (ImGui::Button(utf8(label_allow_session))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_session);
 				}
 				ImGui::SameLine();
-				if (ImGui::Button(utf8(u8"\u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c"))) {
+				if (ImGui::Button(utf8(label_deny))) {
 					chosen.emplace_back(request.id, confirmation_answer::deny);
 				}
 				ImGui::Separator();

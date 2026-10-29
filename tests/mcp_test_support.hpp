@@ -108,6 +108,18 @@ public:
 		m_logs.emplace_back(message);
 	}
 
+	void session_closed(std::string session_id) override
+	{
+		std::lock_guard lock(m_mutex);
+		m_closed_sessions.push_back(std::move(session_id));
+	}
+
+	std::vector<std::string> closed_sessions() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_closed_sessions;
+	}
+
 	void set_tools(std::vector<mcp::tool_info> tools)
 	{
 		std::lock_guard lock(m_mutex);
@@ -185,6 +197,7 @@ private:
 	std::vector<call_record> m_calls;
 	std::vector<std::function<void(mcp::call_result)>> m_deferred;
 	std::vector<std::string> m_logs;
+	std::vector<std::string> m_closed_sessions;
 	mcp::call_result m_next_result;
 	bool m_defer_calls = false;
 	bool m_throw_on_list = false;

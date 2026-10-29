@@ -226,6 +226,10 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 		};
 		return answer;
 	};
+	// A call that cannot run is not worth a person's attention: it fails here, with nobody asked.
+	if (auto problem = json_schema::validate(command.args_schema, request.args)) {
+		return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': {}", command.id, *problem));
+	}
 	// The same question asked again is the question already waiting, not a second one.
 	const auto same = std::find_if(m_tickets.begin(), m_tickets.end(), [&](const confirmation_ticket& t) {
 		return t.command == command.id && t.args == args && t.session == request.from.session;

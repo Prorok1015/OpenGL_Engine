@@ -5,6 +5,7 @@
 #include <optional>
 
 namespace cmd { class command_registry; }
+namespace edt { class agent_confirmations; }
 namespace ds { class task_system; }
 
 namespace edt
@@ -32,7 +33,8 @@ namespace edt
 	class agent_server
 	{
 	public:
-		agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_server_options options);
+		// `confirmations` outlives the server (destroy the server first).
+		agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations, agent_server_options options);
 		~agent_server();
 		agent_server(const agent_server&) = delete;
 		agent_server& operator=(const agent_server&) = delete;

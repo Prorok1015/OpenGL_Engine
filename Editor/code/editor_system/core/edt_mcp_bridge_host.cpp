@@ -250,21 +250,25 @@ struct edt::mcp_bridge_host::state
 {
 	cmd::command_registry* commands = nullptr;
 	cmd::main_thread_queue* queue = nullptr;
+	agent_confirmations* confirmations = nullptr;
 };
 
-edt::mcp_bridge_host::mcp_bridge_host(cmd::command_registry& commands, cmd::main_thread_queue& queue, ds::task_system& tasks)
+edt::mcp_bridge_host::mcp_bridge_host(cmd::command_registry& commands, cmd::main_thread_queue& queue, ds::task_system& tasks,
+	agent_confirmations& confirmations)
 	: m_tasks(tasks)
 	, m_state(std::make_shared<state>())
 {
 	ASSERT_MSG(tasks.on_main(), "mcp_bridge_host: create it on the main thread");
 	m_state->commands = &commands;
 	m_state->queue = &queue;
+	m_state->confirmations = &confirmations;
 }
 
 edt::mcp_bridge_host::~mcp_bridge_host()
 {
 	m_state->commands = nullptr;
 	m_state->queue = nullptr;
+	m_state->confirmations = nullptr;
 }
 
 void edt::mcp_bridge_host::list_tools(std::function<void(std::vector<mcp::tool_info>)> done)
@@ -384,6 +388,15 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 		found.found = true;
 		found.contents.push_back(std::move(content));
 		done(std::move(found));
+	});
+}
+
+void edt::mcp_bridge_host::session_closed(std::string session_id)
+{
+	m_tasks.post_main([state = m_state, session = std::move(session_id)] {
+		if (state->confirmations != nullptr) {
+			state->confirmations->drop_session(session);
+		}
 	});
 }
 
