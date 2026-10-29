@@ -70,10 +70,25 @@ namespace cmd
 		void discard(std::string_view ticket);
 		std::size_t pending_confirmations() const;
 
+		// What a ticket was issued for, as the registry bound it: the confirmation UI shows this, never the agent's own text.
+		struct pending_confirmation
+		{
+			std::string command;
+			// The arguments as serialized when the ticket was issued.
+			std::string args;
+			// Why the policy asked.
+			std::string reason;
+			std::string session;
+			bool approved = false;
+		};
+		std::optional<pending_confirmation> confirmation_of(std::string_view ticket);
+
 		// A ticket lives this long from its issue.
 		static constexpr std::chrono::seconds confirmation_lifetime{ 120 };
-		// An agent that asks again and again cannot fill the list: past this the call is `denied`.
-		static constexpr std::size_t max_pending_confirmations = 64;
+		// One agent session cannot fill the list for the others: past this many waiting tickets of a session its next ask is
+		// `denied`; the same call asked again gets the ticket it already has. And a ceiling for all sessions together.
+		static constexpr std::size_t max_pending_confirmations_per_session = 8;
+		static constexpr std::size_t max_pending_confirmations = 128;
 		// Tests: the time tickets expire by.
 		void set_clock(std::function<std::chrono::steady_clock::time_point()> now);
 
@@ -86,10 +101,12 @@ namespace cmd
 			std::string command;
 			std::string args;
 			std::string session;
+			std::string reason;
 			std::chrono::steady_clock::time_point expires;
 			bool approved = false;
 		};
 
+		// Main thread only, like everything of the registry (m_tickets, the gate).
 		// nullopt: the call may go on.
 		std::optional<result> apply_policy(const command_desc& command, const call& request);
 		void drop_expired_tickets();
