@@ -5,7 +5,11 @@
 #include <algorithm>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 // The agent policy (A6b #293 / A6c #449): defaults, the two layers and "the stricter wins", the files, and the gate in
 // a real command_registry.
