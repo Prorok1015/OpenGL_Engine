@@ -34,6 +34,8 @@ namespace prj
 		std::vector<std::filesystem::path> writable_dirs() const { return { cache_dir(), memory_dir(), user_profile_dir() }; }
 		// <root>/.snk: the editor's own files (the MCP connection file with its token, the agent policy).
 		std::filesystem::path snk_dir() const { return root / ".snk"; }
+		// <root>/code: the game module's sources, mounted as code:// when the folder exists (#450).
+		std::filesystem::path code_dir() const { return root / "code"; }
 		// <root>/build: where the game code is built (#160/#217). Not mounted; nothing writes there yet.
 		std::filesystem::path build_dir() const { return root / "build"; }
 		// Never content: no content root may be, contain or lie inside one of them.
@@ -56,7 +58,10 @@ namespace prj
 	// - no content root lies inside another one, and none lies inside `engine_base` or contains it (empty: no base);
 	// - no content root is, contains or lies inside a private dir (.cache, .snk, build): res:// would expose the agent
 	//   token, write the test profile or serve build output;
-	// - each writable dir, and .snk, that exists is a real directory (not a symlink) inside the project.
+	// - each writable dir, and .snk, that exists is a real directory (not a symlink) inside the project;
+	// - code/, when it exists, is a real directory (not a symlink or junction) inside the project that no content root
+	//   contains or lies inside, and that is none of the private dirs: code:// would otherwise write through a link or
+	//   serve assets.
 	SNK_API std::optional<std::string> verify_project_mounts(const project_context& project,
 		const std::filesystem::path& engine_base = {});
 
