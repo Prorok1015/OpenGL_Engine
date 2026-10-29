@@ -45,10 +45,10 @@ namespace edt
 		class duplicate_key_finder
 		{
 		public:
-			static constexpr std::size_t max_object_size = static_cast<std::size_t>(-1);
-			static constexpr std::size_t max_array_size = static_cast<std::size_t>(-1);
-			static constexpr std::size_t max_key_size = static_cast<std::size_t>(-1);
-			static constexpr std::size_t max_string_size = static_cast<std::size_t>(-1);
+			[[maybe_unused]] static constexpr std::size_t max_object_size = static_cast<std::size_t>(-1);
+			[[maybe_unused]] static constexpr std::size_t max_array_size = static_cast<std::size_t>(-1);
+			[[maybe_unused]] static constexpr std::size_t max_key_size = static_cast<std::size_t>(-1);
+			[[maybe_unused]] static constexpr std::size_t max_string_size = static_cast<std::size_t>(-1);
 
 			std::string duplicate;
 
