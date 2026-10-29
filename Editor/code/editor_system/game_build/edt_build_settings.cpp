@@ -24,6 +24,9 @@ namespace {
 	constexpr std::string_view k_build_before_play = "build_before_play";
 	constexpr std::string_view k_log_verbosity = "log_verbosity";
 	constexpr std::string_view k_fresh_configure = "fresh_configure";
+	constexpr std::string_view k_live_enabled = "live_enabled";
+	constexpr std::string_view k_live_quiet_ms = "live_quiet_ms";
+	constexpr std::string_view k_live_jobs = "live_jobs";
 
 	std::string bad_value(std::string_view key, const json::value& value, std::string_view expected)
 	{
@@ -38,6 +41,17 @@ namespace {
 			out = value->get_bool();
 		} else {
 			warnings.push_back(bad_value(key, *value, "true or false"));
+		}
+	}
+
+	void read_int(const json::object& doc, std::string_view key, int min, int max, int& out, std::vector<std::string>& warnings)
+	{
+		const json::value* value = doc.if_contains(key);
+		if (!value || value->is_null()) return;
+		if (value->is_int64() && value->get_int64() >= min && value->get_int64() <= max) {
+			out = static_cast<int>(value->get_int64());
+		} else {
+			warnings.push_back(bad_value(key, *value, std::format("an integer in [{}, {}]", min, max)));
 		}
 	}
 
@@ -161,6 +175,9 @@ edt::parsed_build_settings edt::parse_build_settings(std::string_view json_text)
 			}
 		}
 	}
+	read_bool(object, k_live_enabled, settings.live_enabled, out.warnings);
+	read_int(object, k_live_quiet_ms, 0, k_max_live_quiet_ms, settings.live_quiet_ms, out.warnings);
+	read_int(object, k_live_jobs, 0, k_max_live_jobs, settings.live_jobs, out.warnings);
 	return out;
 }
 
@@ -184,6 +201,9 @@ void edt::merge_build_settings(json::value& doc, const build_settings& settings)
 		for (const auto& name : settings.fresh_configure) names.emplace_back(json::string(name));
 		object[k_fresh_configure] = std::move(names);
 	}
+	object[k_live_enabled] = settings.live_enabled;
+	object[k_live_quiet_ms] = settings.live_quiet_ms;
+	object[k_live_jobs] = settings.live_jobs;
 }
 
 edt::build_settings edt::load_build_settings(const fs::path& snk_dir)

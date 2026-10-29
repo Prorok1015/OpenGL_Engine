@@ -62,6 +62,7 @@ struct build_fixture
 			log_lines.emplace_back(message);
 			if (level == engine::log_level::warn) warn_lines.emplace_back(message);
 			if (level == engine::log_level::info) info_lines.emplace_back(message);
+			if (level == engine::log_level::debug) debug_lines.emplace_back(message);
 		});
 	}
 
@@ -139,6 +140,21 @@ struct build_fixture
 		return out;
 	}
 
+	edt::build_request quiet_request(std::string configuration)
+	{
+		edt::build_request out = request(std::move(configuration));
+		out.report = edt::build_report::problems_only;
+		return out;
+	}
+
+	// show_progress that counts the windows it was asked to open.
+	edt::game_builder_options counted_progress_options()
+	{
+		auto out = options();
+		out.show_progress = [this](std::string_view, std::function<bool()>) { ++progress_windows; };
+		return out;
+	}
+
 	fs::path module_path() const
 	{
 		return fs::absolute(root / "build" / "bin" / edt::module_file_name("game"));
@@ -169,6 +185,12 @@ struct build_fixture
 	{
 		const std::lock_guard lock(log_mutex);
 		return std::any_of(warn_lines.begin(), warn_lines.end(), [text](const std::string& line) { return line.find(text) != std::string::npos; });
+	}
+
+	bool logged_at_debug(std::string_view text)
+	{
+		const std::lock_guard lock(log_mutex);
+		return std::any_of(debug_lines.begin(), debug_lines.end(), [text](const std::string& line) { return line.find(text) != std::string::npos; });
 	}
 
 	bool logged(std::string_view text)
@@ -203,6 +225,7 @@ struct build_fixture
 	int toolchain_lookups = 0;
 	edt::build_settings settings;
 	int settings_reads = 0;
+	int progress_windows = 0;
 	std::vector<recorded_call> calls;
 	std::function<platform::process_result(std::size_t, const std::function<void(std::string_view)>&, std::stop_token)> script =
 		[](std::size_t, const std::function<void(std::string_view)>&, std::stop_token) {
@@ -215,6 +238,7 @@ struct build_fixture
 	std::vector<std::string> log_lines;
 	std::vector<std::string> warn_lines;
 	std::vector<std::string> info_lines;
+	std::vector<std::string> debug_lines;
 	engine::log_sink_handle log;
 };
 
@@ -877,6 +901,145 @@ BOOST_AUTO_TEST_CASE(Cancel_RaisesNoModuleBuilt)
 	BOOST_REQUIRE(build().ok);
 	run_until_idle();
 	BOOST_CHECK(built.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ProblemsOnly_SetupError_ShowsNoDialog)
+{
+	toolchain_error = "CMake was not found: install it or set build/cmake";
+	make();
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	run_to_end();
+	BOOST_CHECK(calls.empty());
+	BOOST_CHECK(messages().empty());
+	BOOST_CHECK(!builder->is_building());
+}
+
+BOOST_AUTO_TEST_CASE(ProblemsOnly_Failure_ShowsNoDialog_SetsTheProblems_AndLogsTheTailAtDebug)
+{
+	make();
+	problems.set("build", { edt::problem{ edt::problem_severity::error, "old.cpp", 1, 0, {}, "old", {} } });
+	script = [](std::size_t index, const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (index == 0) return exited(0);
+		on_line("FAILED: CMakeFiles/game.dir/src/game_module.cpp.o");
+		on_line("/p/code/src/game_module.cpp:12:5: error: 'x' was not declared in this scope");
+		on_line("ninja: build stopped: subcommand failed.");
+		return exited(1);
+	};
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	BOOST_CHECK(build_problems().empty()); // cleared at launch, as for a manual build
+	run_to_end();
+
+	BOOST_CHECK(messages().empty());
+	const auto items = build_problems();
+	BOOST_REQUIRE_EQUAL(items.size(), 1u);
+	BOOST_CHECK_EQUAL(items[0].file, "/p/code/src/game_module.cpp");
+	BOOST_CHECK(!warned("ninja: build stopped: subcommand failed."));
+	BOOST_CHECK(logged_at_debug("ninja: build stopped: subcommand failed."));
+}
+
+BOOST_AUTO_TEST_CASE(ProblemsOnly_Success_LogsBuiltAtDebug)
+{
+	make();
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	run_to_end();
+	BOOST_CHECK(messages().empty());
+	BOOST_CHECK(!logged_at_info("game module built"));
+	BOOST_CHECK(logged_at_debug("game module built"));
+	BOOST_CHECK(!logged_at_info("building the game module"));
+}
+
+BOOST_AUTO_TEST_CASE(DialogReport_IsTheDefault)
+{
+	const edt::build_request defaults;
+	BOOST_CHECK(defaults.report == edt::build_report::dialog);
+	BOOST_CHECK(defaults.show_progress);
+	BOOST_CHECK(edt::make_manual_build_request(edt::build_settings{}, "", options()).report == edt::build_report::dialog);
+	BOOST_CHECK(edt::make_manual_build_request(edt::build_settings{}, "", options()).show_progress);
+}
+
+BOOST_AUTO_TEST_CASE(ShowProgressFalse_OpensNoWindow)
+{
+	make(counted_progress_options());
+	auto hidden = request("debuggame");
+	hidden.show_progress = false;
+	BOOST_REQUIRE(builder->start(hidden).ok);
+	run_to_end();
+	BOOST_CHECK_EQUAL(progress_windows, 0);
+
+	BOOST_REQUIRE(build().ok);
+	BOOST_CHECK_EQUAL(progress_windows, 1);
+	run_to_end();
+}
+
+BOOST_AUTO_TEST_CASE(ShowProgressFalse_OnARestart_OpensNoSecondWindow)
+{
+	make(counted_progress_options());
+	BOOST_REQUIRE(build().ok);
+	BOOST_CHECK_EQUAL(progress_windows, 1);
+	auto next = request("release");
+	next.cancel_on_restart = true;
+	next.show_progress = false;
+	BOOST_REQUIRE(builder->start(next).ok);
+	run_until_idle();
+	BOOST_CHECK_EQUAL(progress_windows, 1);
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "release" }));
+}
+
+BOOST_AUTO_TEST_CASE(LiveRequest_IsAQuietLowPriorityRestartingBuild)
+{
+	edt::game_builder_options opts;
+	opts.default_configuration = "debuggame";
+	opts.preset_for = [](std::string_view configuration) { return "p-" + std::string(configuration); };
+	opts.auto_jobs = [] { return 16; };
+	edt::build_settings chosen;
+	chosen.reload_after_build = true;
+	chosen.log_verbosity = edt::log_verbosity::verbose;
+	chosen.jobs_mode = edt::jobs_mode::manual_jobs; // live jobs do not follow the manual mode
+
+	auto out = edt::make_live_build_request(chosen, opts);
+	BOOST_CHECK_EQUAL(out.configuration, "debuggame");
+	BOOST_CHECK_EQUAL(out.preset, "p-debuggame");
+	BOOST_CHECK_EQUAL(out.jobs, 2);
+	BOOST_CHECK(out.priority == edt::build_priority::low);
+	BOOST_CHECK(out.cancel_on_restart);
+	BOOST_CHECK(out.verbosity == edt::log_verbosity::verbose);
+	BOOST_CHECK(out.report == edt::build_report::problems_only);
+	BOOST_CHECK(!out.show_progress);
+	BOOST_CHECK(!out.reload_after);
+	BOOST_CHECK(!out.fresh);
+
+	chosen.configuration = "release";
+	chosen.fresh_configure = { "release" };
+	out = edt::make_live_build_request(chosen, opts);
+	BOOST_CHECK_EQUAL(out.configuration, "release");
+	BOOST_CHECK(out.fresh);
+
+	opts.auto_jobs = [] { return 1; };
+	BOOST_CHECK_EQUAL(edt::make_live_build_request(chosen, opts).jobs, 1);
+	opts.auto_jobs = [] { return 0; };
+	BOOST_CHECK_EQUAL(edt::make_live_build_request(chosen, opts).jobs, 1); // at least 1
+	opts.auto_jobs = nullptr;
+	BOOST_CHECK_EQUAL(edt::make_live_build_request(chosen, opts).jobs, 2);
+	chosen.live_jobs = 7;
+	BOOST_CHECK_EQUAL(edt::make_live_build_request(chosen, opts).jobs, 7);
+}
+
+BOOST_AUTO_TEST_CASE(LiveRequest_RunsWithoutDialogOrWindow)
+{
+	settings.fresh_configure = { "debuggame" };
+	make(counted_progress_options());
+	script = [](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		return exited(index == 1 ? 1 : 0);
+	};
+	BOOST_REQUIRE(builder->start(edt::make_live_build_request(settings, counted_progress_options())).ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame", "--fresh" }));
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame", "--parallel", "2" }));
+	BOOST_CHECK(calls[0].low_priority && calls[1].low_priority);
+	BOOST_CHECK_EQUAL(progress_windows, 0);
+	BOOST_CHECK(messages().empty());
 }
 
 BOOST_AUTO_TEST_CASE(NinjaProgress_IsParsed)

@@ -33,6 +33,9 @@ namespace edt
 	};
 
 	enum class build_priority : std::uint8_t { normal, low };
+	// How a build tells the person about itself. problems_only (live builds): no message dialog, the output tail of a
+	// failure and the start and success lines at debug; the problems go to the list as always.
+	enum class build_report : std::uint8_t { dialog, problems_only };
 
 	// Everything one build needs besides the project; made per build by a profile (make_manual_build_request).
 	struct build_request
@@ -53,6 +56,9 @@ namespace edt
 		bool reload_after = true;
 		// Configure with --fresh (CMake 3.24+): the configuration is in build_settings::fresh_configure.
 		bool fresh = false;
+		build_report report = build_report::dialog;
+		// false: no progress window is opened for this request (one already open stays).
+		bool show_progress = true;
 	};
 
 	struct game_builder_options
@@ -134,9 +140,15 @@ namespace edt
 	// fresh when the configuration is in settings.fresh_configure.
 	build_request make_manual_build_request(const build_settings& settings, std::string configuration,
 		const game_builder_options& options);
+	// A background build of live mode (#445): settings.configuration else options.default_configuration,
+	// options.preset_for, live_jobs (0: min(2, auto_jobs), at least 1), low priority, cancel_on_restart, the settings'
+	// verbosity, problems_only without a progress window, no reload (live mode reloads after its quiet period);
+	// fresh like the manual build.
+	build_request make_live_build_request(const build_settings& settings, const game_builder_options& options);
 
 	// Builds the open project's game module (<root>/code, CMake presets) on a job: Build > Build Game, action
-	// build.game_module. The output goes to the problem list (source "build"); a failure is shown as a message.
+	// build.game_module. The output goes to the problem list (source "build"); a failure is shown as a message
+	// (build_report::dialog).
 	// Main thread only. Destroy it before the job_service, problem_list, dialog_service and action_registry it uses,
 	// and after job_service::cancel_all_and_wait (its jobs reach none of them, only its on_done does).
 	class game_builder

@@ -106,6 +106,11 @@ namespace edt
 		void set_configuration(std::optional<std::string> configuration) { m_settings.configuration = std::move(configuration); }
 		void set_reload_after_build(bool reload) { m_settings.reload_after_build = reload; }
 		void set_log_verbosity(log_verbosity verbosity) { m_settings.log_verbosity = verbosity; }
+		void set_live_enabled(bool enabled) { m_settings.live_enabled = enabled; }
+		// Clamped to [0, k_max_live_quiet_ms].
+		void set_live_quiet_ms(int quiet_ms);
+		// Clamped to [0, k_max_live_jobs]; 0: auto.
+		void set_live_jobs(int jobs);
 
 		bool dirty() const;
 		// Drops the queued edits (the files are not read again).
@@ -174,7 +179,8 @@ namespace edt
 	};
 
 	// build.settings.get {} -> {configuration, jobs_mode, jobs: {manual?, estimate: {jobs, cores, ram_bytes}},
-	// reload_after_build, log_verbosity, configurations: {<cfg>: {preset, team_defines, user_defines}}, errors}.
+	// reload_after_build, log_verbosity, live: {enabled, quiet_ms, jobs}, configurations: {<cfg>: {preset, team_defines,
+	// user_defines}}, errors}.
 	// Reads the files on every call. Fails with no_project, or failed when the presets cannot be read. Read-only.
 	[[nodiscard]] std::vector<registration> register_build_settings_commands(cmd::command_registry& commands,
 		build_settings_command_options options);

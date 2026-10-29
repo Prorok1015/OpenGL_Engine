@@ -227,6 +227,23 @@ edt::build_request edt::make_manual_build_request(const build_settings& settings
 	return out;
 }
 
+edt::build_request edt::make_live_build_request(const build_settings& settings, const game_builder_options& options)
+{
+	build_request out = make_manual_build_request(settings, {}, options);
+	if (settings.live_jobs > 0) {
+		out.jobs = settings.live_jobs;
+	} else {
+		// Few jobs: a live build runs while the person works in the editor.
+		out.jobs = std::max(1, std::min(2, options.auto_jobs ? options.auto_jobs() : 2));
+	}
+	out.priority = build_priority::low;
+	out.cancel_on_restart = true;
+	out.report = build_report::problems_only;
+	out.show_progress = false;
+	out.reload_after = false;
+	return out;
+}
+
 edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialog_service& dialogs, action_registry& actions,
 	game_builder_options options)
 	: m_jobs(jobs)
@@ -330,9 +347,14 @@ void edt::game_builder::launch(build_request request)
 	m_configuration = request.configuration;
 
 	m_problems.clear("build");
-	egLOG_INFO("editor/build", "building the game module ({}, preset '{}', {}{}) in '{}'", request.configuration, request.preset,
-		request.jobs > 0 ? std::format("{} jobs", request.jobs) : std::string{ "jobs of the preset" },
+	const std::string started = std::format("building the game module ({}, preset '{}', {}{}) in '{}'", request.configuration,
+		request.preset, request.jobs > 0 ? std::format("{} jobs", request.jobs) : std::string{ "jobs of the preset" },
 		request.fresh ? ", fresh configure" : "", utf8_of(project.root / "code"));
+	if (request.report == build_report::problems_only) {
+		egLOG_DEBUG("editor/build", "{}", started);
+	} else {
+		egLOG_INFO("editor/build", "{}", started);
+	}
 	m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
 		[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
 		[this, request](ds::task_result<game_build_result>& result) {
@@ -352,7 +374,7 @@ void edt::game_builder::launch(build_request request)
 				}
 			}
 		});
-	if (m_options.show_progress && !m_progress_shown) {
+	if (m_options.show_progress && request.show_progress && !m_progress_shown) {
 		m_progress_shown = true;
 		m_spinner_t = 0.f;
 		m_options.show_progress("edt/build_game", [this, alive = std::weak_ptr<int>(m_alive)] {
@@ -393,14 +415,18 @@ std::string edt::game_builder::disabled_reason() const
 void edt::game_builder::finish(game_build_result& result, const build_request& request)
 {
 	if (result.restarted) return;
+	const bool quiet = request.report == build_report::problems_only;
 	if (!result.tail.empty() && (!result.ok() || request.verbosity != log_verbosity::errors)) {
 		std::string text;
 		for (const auto& line : result.tail) {
 			text += '\n';
 			text += line;
 		}
-		// A failure's message points at the log, so its output must not hide below the default level.
-		if (!result.ok()) {
+		// A failure's message points at the log, so its output must not hide below the default level; a problems_only
+		// build has no message and fails often while the person types.
+		if (!result.ok() && quiet) {
+			egLOG_DEBUG("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
+		} else if (!result.ok()) {
 			egLOG_WARN("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
 		} else if (request.verbosity == log_verbosity::verbose) {
 			egLOG_INFO("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
@@ -411,7 +437,7 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 
 	if (!result.setup_error.empty()) {
 		egLOG_WARN("editor/build", "the game module was not built: {}", result.setup_error);
-		m_dialogs.message(message_level::error, result.setup_error);
+		if (!quiet) m_dialogs.message(message_level::error, result.setup_error);
 		return;
 	}
 
@@ -426,7 +452,12 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 			built += built.empty() ? "" : ", ";
 			built += utf8_of(module.path);
 		}
-		egLOG_INFO("editor/build", "game module built: {}", built.empty() ? std::string{ "(no module file of the manifest found in build/bin)" } : built);
+		if (built.empty()) built = "(no module file of the manifest found in build/bin)";
+		if (quiet) {
+			egLOG_DEBUG("editor/build", "game module built: {}", built);
+		} else {
+			egLOG_INFO("editor/build", "game module built: {}", built);
+		}
 		if (m_options.events) {
 			// A slot may start the next build.
 			const std::uint64_t job = m_job;
@@ -448,7 +479,7 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 		summary = std::format("The game build failed: the {} step exited with code {} (see the log)", result.failed_step, result.exit_code);
 	}
 	egLOG_WARN("editor/build", "{}", summary);
-	m_dialogs.message(message_level::error, std::move(summary));
+	if (!quiet) m_dialogs.message(message_level::error, std::move(summary));
 }
 
 bool edt::game_builder::draw_progress()
