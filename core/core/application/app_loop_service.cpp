@@ -11,6 +11,7 @@ void app::loop_service::init(ds::app_data_storage& storage)
 {
 	m_stop_requested = false;
 	m_frames = 0;
+	m_steps = 0;
 	m_settled = false;
 	m_ready_frame.reset();
 	if (m_control) m_control->restart();
@@ -51,6 +52,12 @@ void app::loop_service::on_step(ds::app_data_storage& storage)
 
 	stage_context ctx{ storage, dt };
 	m_stages.run(ctx);
+
+	++m_steps;
+	if (m_exit_after_frames > 0 && m_steps == m_exit_after_frames) {
+		egLOG_INFO("app", "exit after {} frames (app/exit_after_frames)", m_steps);
+		request_stop();
+	}
 }
 
 void app::loop_service::term(ds::app_data_storage& storage)

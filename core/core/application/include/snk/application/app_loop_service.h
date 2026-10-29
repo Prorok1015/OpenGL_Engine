@@ -31,6 +31,8 @@ namespace app
 		// Deterministic time only. After the freeze the loop logs "scene settled" on the first frame
 		// `settled` returns true (no loads in flight), so a screenshot shows the finished frame.
 		void set_settled_probe(std::function<bool(ds::app_data_storage&)> settled) { m_settled_probe = std::move(settled); }
+		// > 0: after this many steps the loop requests its own stop (`app/exit_after_frames`); 0: never.
+		void set_exit_after_frames(std::uint64_t frames) { m_exit_after_frames = frames; }
 		bool should_stop() const override { return m_stop_requested; }
 		void request_stop() override { m_stop_requested = true; }
 
@@ -39,6 +41,8 @@ namespace app
 		deterministic_time m_time;
 		frame_control* m_control;
 		std::uint64_t m_frames = 0;
+		std::uint64_t m_steps = 0;
+		std::uint64_t m_exit_after_frames = 0;
 		std::function<bool(ds::app_data_storage&)> m_ready_probe;
 		std::function<bool(ds::app_data_storage&)> m_settled_probe;
 		bool m_settled = false;

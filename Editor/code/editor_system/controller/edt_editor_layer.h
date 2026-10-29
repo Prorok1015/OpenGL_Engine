@@ -25,6 +25,8 @@ namespace edt {
 			m_manager.unregister_implicit(id);
 		}
 
+		// The implicit callbacks alone, without the dockspace (--headless).
+		void process_implicit() { m_manager.process_implicit(); }
 		// A callback registered under an id starting with `prefix` waits for the next UI frame.
 		bool has_implicit_prefix(std::string_view prefix) const {
 			return m_manager.has_implicit_prefix(prefix);

@@ -3,6 +3,7 @@
 #include <vector>
 #include <snk/application/app_frame_stage.h>
 #include <snk/application/app_loop_service.h>
+#include <snk/application/application.h>
 
 BOOST_AUTO_TEST_SUITE(AppLoopServiceTests)
 
@@ -116,6 +117,33 @@ BOOST_AUTO_TEST_CASE(DeterministicTimeCountsFramesFromReady) {
 		loop.on_step(storage);
 	}
 	BOOST_TEST(dts == (std::vector<float>{ 0.25f, 0.25f, 0.25f, 0.25f, 0.f, 0.f, 0.f }));
+}
+
+BOOST_AUTO_TEST_CASE(ExitAfterFramesStopsTheRunWithZero) {
+	app::frame_stage_registry stages;
+	int frames = 0;
+	stages.set_body(app::builtin_stage::update, [&frames](app::stage_context&) { ++frames; });
+
+	ds::app_data_storage storage;
+	auto& loop = storage.construct<app::app_loop_service_interface, app::loop_service>(stages);
+	static_cast<app::loop_service&>(loop).set_exit_after_frames(5);
+	app::application application;
+	BOOST_TEST(application.run(storage) == 0);
+	BOOST_TEST(frames == 5);
+	// A second run counts from the start again.
+	frames = 0;
+	BOOST_TEST(application.run(storage) == 0);
+	BOOST_TEST(frames == 5);
+}
+
+BOOST_AUTO_TEST_CASE(ExitAfterZeroFramesNeverStops) {
+	app::frame_stage_registry stages;
+	ds::app_data_storage storage;
+	app::loop_service loop(stages);
+	loop.set_exit_after_frames(0);
+	loop.init(storage);
+	for (int i = 0; i < 10; ++i) loop.on_step(storage);
+	BOOST_TEST(!loop.should_stop());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

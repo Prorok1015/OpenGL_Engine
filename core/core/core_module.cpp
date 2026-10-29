@@ -36,6 +36,8 @@ namespace {
 	// Headless determinism (tools/run_headless.sh --frames): constant frame dt instead of wall clock.
 	CFG_VAR_DEF_FLOAT(cfg_fixed_frame_dt, "app/fixed_frame_dt", 0.0f);
 	CFG_VAR_DEF_INT(cfg_freeze_after_frames, "app/freeze_after_frames", 0);
+	// > 0: the loop stops after this many frames and the host exits with 0 (CI smoke runs of --headless).
+	CFG_VAR_DEF_INT(cfg_exit_after_frames, "app/exit_after_frames", 0);
 
 	// --project <project.snkproj or its directory>; empty: no project, res:// comes from resource/path.
 	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
@@ -44,6 +46,8 @@ namespace {
 	// --non-interactive / -n: nobody can answer a question, so none is asked and each takes its safe answer. Today
 	// only the engine version check asks (prj::refuse_without_asking).
 	CFG_VAR_DEF_BOOL(cfg_non_interactive, "app/non_interactive", false);
+	// --headless: there is no window to pick a project in, so a run without --project is a project error.
+	CFG_VAR_DEF_BOOL(cfg_project_required, "project/required", false);
 
 	// Captures all keys under "logger/category_file":
 	//   logger/category_file/edt       → logs/editor.log
@@ -89,6 +93,9 @@ namespace {
 	{
 		const std::filesystem::path file = *cfg_project_file;
 		if (file.empty()) {
+			if (cfg_project_required) {
+				throw prj::project_error("no project given: --headless needs --project <project.snkproj or its directory>");
+			}
 			return;
 		}
 		auto opened = prj::open_project(file);
@@ -146,9 +153,12 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	auto& frame_control = data.construct<app::frame_control>(time);
 	data.require<engine_commands>().app_frame = app::register_frame_commands(commands, frame_control);
 	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time, &frame_control);
+	auto* loop_impl = dynamic_cast<app::loop_service*>(&loop);
+	ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
+	if (loop_impl) {
+		loop_impl->set_exit_after_frames(static_cast<std::uint64_t>(std::max(0, static_cast<int>(cfg_exit_after_frames))));
+	}
 	if (time.enabled()) {
-		auto* loop_impl = dynamic_cast<app::loop_service*>(&loop);
-		ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
 		if (loop_impl) loop_impl->set_settled_probe([](ds::app_data_storage& storage) {
 			auto& tasks = storage.require<ds::task_system>();
 			return storage.require<::res::resource_system>().pending_loads() == 0

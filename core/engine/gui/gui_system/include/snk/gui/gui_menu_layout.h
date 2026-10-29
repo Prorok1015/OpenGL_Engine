@@ -52,6 +52,8 @@ namespace gui
 		void uncheck_all();
 
 		void process();
+		// Only the implicit callbacks (the last part of process()): no menu bar, no checked menu windows.
+		void process_implicit();
 
 		void set_show_main_menu(bool show) { is_show_main_menu = show; }
 		bool get_is_show_main_menu() const { return is_show_main_menu; };

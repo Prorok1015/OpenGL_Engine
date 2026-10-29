@@ -536,6 +536,38 @@ jobs:
           if [ "$rc" -ne 3 ]; then echo "expected exit code 3, got $rc (124 = timed out)"; exit 1; fi
           grep -q "a non-interactive run does not ask" "$log"
 
+      # #452: --headless runs with no display at all (no Xvfb, DISPLAY unset): a null window, the null renderer, no
+      # panels. stdout stays empty (it is reserved for a protocol), the log goes to stderr. The level load is async and
+      # logs nothing else on success: editor/exit_after_level_loaded ends the run with 0 once "level loaded" is logged,
+      # app/exit_after_frames is only the cap (reaching it means the level never loaded). Without --project the run
+      # is a project error (exit 2).
+      - name: Headless run (no display)
+        run: |
+          mkdir -p headless_out/headless
+          out=headless_out/headless/stdout.txt
+          err=headless_out/headless/stderr.log
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 "$EDITOR_BIN" --config Editor/config/editor.cfg --headless \
+            --project projects/sandbox --set editor/startup_level levels/smoke_level.desc \
+            editor/exit_after_level_loaded true app/exit_after_frames 20000 \
+            >"$out" 2>"$err" || rc=$?
+          tail -20 "$err"
+          if [ "$rc" -ne 0 ]; then echo "expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
+          if [ -s "$out" ]; then echo "::error::stdout is not empty:"; head -20 "$out"; exit 1; fi
+          grep -q "headless: no display; agent actions run without a human" "$err"
+          if ! grep -q "level loaded: .*smoke_level.desc" "$err"; then
+            echo "::error::the startup level did not load (exit_after_frames cap reached?)"; exit 1
+          fi
+          grep -q "exit after the level loaded" "$err"
+          if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless log"; exit 1; fi
+
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 60 "$EDITOR_BIN" --config Editor/config/editor.cfg --headless \
+            >headless_out/headless/no_project.stdout 2>headless_out/headless/no_project.log || rc=$?
+          tail -5 headless_out/headless/no_project.log
+          if [ "$rc" -ne 2 ]; then echo "expected exit code 2 without --project, got $rc"; exit 1; fi
+          grep -q -- "--headless needs --project" headless_out/headless/no_project.log
+
       - name: Smoke run (smoke_level)
         run: |
           tools/run_headless.sh --editor "$EDITOR_BIN" --frames 120 --size 1600x900 --shot headless_out/smoke/final.png \

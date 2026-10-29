@@ -9,6 +9,12 @@
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/gui/gui_system.h>
 #include <snk/resource/res_system.h>
+#include <snk/config/cfg_variables.h>
+#include <snk/common/logger/engine_log.h>
+
+// --headless: no window (window/system = null), so no panels are drawn; see the `ui` stage below.
+// Also read by dialog_service.
+CFG_VAR_DEF_BOOL(cfg_edt_headless, "editor/headless", false);
 
 namespace components {
 
@@ -23,9 +29,18 @@ namespace components {
 		data.construct<edt::editor_system>(desc_system, res_sys, rnd_sys, gui_sys);
 		// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
 		auto& stages = data.require<app::frame_stage_registry>();
-		stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
-			c.storage.require<gui::gui_system>().render();
-		});
+		if (cfg_edt_headless) {
+			egLOG_INFO("editor", "headless: no display; agent actions run without a human");
+			// No panels; the implicit callbacks still run, since level loads and next-frame work are queued there.
+			stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
+				auto& editor = c.storage.require<edt::editor_system>();
+				c.storage.require<gui::gui_system>().run_without_drawing([&editor] { editor.run_implicit_callbacks(); });
+			});
+		} else {
+			stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {
+				c.storage.require<gui::gui_system>().render();
+			});
+		}
 		// The 3D view is shown inside an ImGui panel: game cameras draw into textures, not the backbuffer.
 		// The redirector also releases the textures of cameras that no longer exist.
 		// Job progress is polled once per frame, after the `tasks` stage delivered the jobs that finished.
