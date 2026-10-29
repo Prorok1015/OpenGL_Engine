@@ -762,7 +762,7 @@ prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, c
 	}
 
 	for (const auto& edit : edits) {
-		const std::string& cfg = std::visit([](const auto& op) -> const std::string& { return op.cfg; }, edit);
+		const std::string cfg = std::visit([](const auto& op) { return op.cfg; }, edit);
 		const json::object* preset = find_named(std::as_const(read.doc), "configurePresets", user_preset_name(cfg));
 		const json::value* dir = preset ? preset->if_contains("binaryDir") : nullptr;
 		if (dir && dir->is_string()) {
