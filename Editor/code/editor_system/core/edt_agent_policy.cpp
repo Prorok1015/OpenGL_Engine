@@ -5,6 +5,7 @@
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/basic_parser.hpp>
+#include <boost/json/basic_parser_impl.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/parse_options.hpp>
 #include <fstream>
