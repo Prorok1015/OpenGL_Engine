@@ -73,7 +73,8 @@ include(imgui)
 # Slim build: only configure the sublibraries the engine actually links. The Boost
 # superproject pulls in their transitive dependencies automatically.
 #   Boost::json                -> resource_system, desc_system, application, command
-#   Boost::asio                -> resource_system
+#   Boost::asio                -> resource_system, the editor's MCP server module
+#   Boost::beast               -> the editor's MCP server module only (HTTP over asio; never linked by the engine)
 #   Boost::program_options     -> config_system
 #   Boost::unit_test_framework -> unit_tests   (the "test" sublibrary)
 #   Boost::describe, mp11      -> desc_system  (type_schema generation, ADR-04)
@@ -87,7 +88,7 @@ if(NOT ENGINE_BOOST_NO_LIB)
         URL_MD5 893b5203b862eb9bbd08553e24ff146a
         DOWNLOAD_EXTRACT_TIMESTAMP ON
     )
-    set(BOOST_INCLUDE_LIBRARIES json asio program_options test describe mp11)
+    set(BOOST_INCLUDE_LIBRARIES json asio beast program_options test describe mp11)
     FetchContent_MakeAvailable(Boost)
     file(GLOB_RECURSE BOOST_NATVIS_FILES CONFIGURE_DEPENDS "${boost_SOURCE_DIR}/libs/*.natvis")
     message(STATUS "Found Boost Natvis files: ${BOOST_NATVIS_FILES}")

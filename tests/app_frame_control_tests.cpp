@@ -195,9 +195,12 @@ BOOST_AUTO_TEST_CASE(Registered_WithStrictSchemas)
 	const cmd::command_desc* desc = commands.find("app.advance");
 	BOOST_REQUIRE(desc != nullptr);
 	BOOST_CHECK(desc->expose_as_tool);
-	BOOST_CHECK(!desc->mutates);
+	// Holds the time of the process until app.resume: not read-only, so the read-only MCP server does not list it.
+	BOOST_CHECK(desc->mutates);
 	BOOST_CHECK(desc->risk == cmd::danger::none);
 	BOOST_CHECK(commands.contains("app.resume"));
+	BOOST_REQUIRE(commands.find("app.resume") != nullptr);
+	BOOST_CHECK(commands.find("app.resume")->mutates);
 	BOOST_CHECK(!desc->args_schema.as_object().at("additionalProperties").as_bool());
 	BOOST_CHECK(!desc->result_schema.as_object().at("additionalProperties").as_bool());
 }

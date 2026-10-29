@@ -28,4 +28,5 @@ if(SNK_ENGINE_SHARED AND MSVC)
 	# imgui is stateful and is exported (IMGUI_API).
 	set(_edt_assimp assimp Boost::json)
 endif()
-target_link_libraries(${PROJECT_NAME} PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp})
+# snk::mcp_server: edt::mcp_bridge_host implements mcp::host (public header), so consumers see its include dir.
+target_link_libraries(${PROJECT_NAME} PUBLIC snk::mcp_server PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE ${_edt_assimp})

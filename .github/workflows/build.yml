@@ -224,6 +224,11 @@ jobs:
       - name: Check GL is used only inside the GL driver
         run: tools/ci/check_no_gl_outside_drivers.sh
 
+      # AI A6a: the editor's MCP server module is linked by the editor and its tests only, never by the engine, the game
+      # or the SDK, and includes nothing but Boost. Fast tier, needs no build; the SDK jobs repeat it on the installed package.
+      - name: Check the MCP server is not linked into the engine, the game or the SDK
+        run: tools/ci/check_mcp_server_isolation.sh
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -543,6 +548,10 @@ jobs:
       - name: Check the installed headers (static)
         run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_STATIC}"
 
+      # The MCP server is an editor module: the installed SDK must not carry it.
+      - name: Check the SDK has no MCP server (static)
+        run: tools/ci/check_mcp_server_isolation.sh --sdk "${SDK_PREFIX_STATIC}"
+
       - name: Check the package does not point into the build or source tree (static)
         run: |
           find "${SDK_PREFIX_STATIC}/lib/cmake/snake_sdk" -type f | sort
@@ -584,6 +593,9 @@ jobs:
       # Fails the job when an installed header is missing, misplaced or leaks internal paths; see the script.
       - name: Check the installed headers (shared)
         run: tools/ci/check_sdk_headers.sh "${SDK_PREFIX_SHARED}"
+
+      - name: Check the SDK has no MCP server (shared)
+        run: tools/ci/check_mcp_server_isolation.sh --sdk "${SDK_PREFIX_SHARED}"
 
       - name: Check the package does not point into the build or source tree (shared)
         run: |
@@ -660,6 +672,9 @@ jobs:
 
       - name: Check the installed headers
         run: bash tools/ci/check_sdk_headers.sh "${SDK_PREFIX}"
+
+      - name: Check the SDK has no MCP server
+        run: bash tools/ci/check_mcp_server_isolation.sh --sdk "${SDK_PREFIX}"
 
       - name: Check the installed layout
         run: |

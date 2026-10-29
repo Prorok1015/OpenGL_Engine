@@ -30,6 +30,10 @@ namespace components {
 		stages.add_stage("editor_jobs", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
 			if (c.storage.has_value<edt::editor_context>()) c.storage.require<edt::editor_context>().jobs().pump();
 		});
+		// The agent server follows the command set and the log once per frame (it exists only when editor/agent_server is set).
+		stages.add_stage("editor_agent", app::builtin_stage::input, app::stage_side::after, [](app::stage_context& c) {
+			if (c.storage.has_value<edt::editor_system>()) c.storage.require<edt::editor_system>().pump_agent_server();
+		});
 		auto redirector = std::make_shared<edt::camera_redirector>();
 		stages.add_stage("editor_redirect_cameras", app::builtin_stage::extract, app::stage_side::before,
 			[redirector](app::stage_context& c) {
@@ -44,6 +48,7 @@ namespace components {
 		auto& stages = data.require<app::frame_stage_registry>();
 		stages.remove_stage("editor_redirect_cameras");
 		stages.remove_stage("editor_jobs");
+		stages.remove_stage("editor_agent");
 		stages.clear_body(app::builtin_stage::ui);
 		// Jobs run code owned by editor_system; stop them while it, the context and the task system are all alive.
 		if (data.has_value<edt::editor_context>()) {

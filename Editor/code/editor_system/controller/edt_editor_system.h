@@ -43,6 +43,7 @@ namespace edt {
 	class asset_browser_panel;
 	class prefab_editor_panel;
 	class prefab_document;
+	class mcp_service;
 
 	class editor_system
 	{
@@ -57,6 +58,9 @@ namespace edt {
 		editor_context* context() const { return m_context; }
 
 		void begin_level_load(const res::tag& level_tag);
+
+		// Once per frame (the `editor_agent` stage): keeps the agent server in step with the command set. Does nothing when it is off.
+		void pump_agent_server();
 
 	private:
 		editor_context* m_context = nullptr;
@@ -103,6 +107,8 @@ namespace edt {
 		void create_viewport_panel();
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
+		// Starts the read-only MCP server when `editor/agent_server` is set (off by default).
+		void start_agent_server(ds::app_data_storage& data);
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
@@ -135,6 +141,9 @@ namespace edt {
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
 		std::unique_ptr<edt::file_menu> m_file_menu;
+
+		// The agent server (A6a); null when it is off. Stopped before the panels go.
+		std::unique_ptr<mcp_service> m_mcp;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

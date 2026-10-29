@@ -23,6 +23,7 @@
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
+#include "edt_mcp_service.h"
 #include <snk/application/app_deterministic_time.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
@@ -43,6 +44,7 @@
 #include <snk/config/cfg_api.h>
 #include <imgui.h>
 #include <entt/entt.hpp>
+#include <algorithm>
 #include <format>
 #include <fstream>
 #include <span>
@@ -52,6 +54,12 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
+	// The MCP server for AI agents (docs/roadmap/design/AI_INTEGRATION.md). Off unless the user turns it on; read-only (A6a).
+	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
+	// 127.0.0.1 port of the agent server; 0 picks a free one (the connection file tells which).
+	CFG_VAR_DEF_INT(cfg_agent_port, "editor/agent_port", 0);
+	// Port and token for clients, written when the server starts; relative to the working directory, user-readable only.
+	CFG_VAR_DEF_STRING(cfg_agent_connection_file, "editor/agent_connection_file", ".snk/mcp.json");
 }
 
 edt::editor_system::editor_system(desc::desc_system& desc_system_, res::resource_system& res_sys, rnd::render_system& rnd_sys, gui::gui_system& gui_sys)
@@ -229,6 +237,27 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		begin_level_load(startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	}
+
+	if (cfg_agent_server) start_agent_server(data);
+}
+
+void edt::editor_system::start_agent_server(ds::app_data_storage& data)
+{
+	mcp_service::settings settings;
+	const int port = cfg_agent_port;
+	settings.port = static_cast<std::uint16_t>(std::clamp(port, 0, 65535));
+	const std::string connection_file = cfg_agent_connection_file;
+	settings.connection_file = std::filesystem::path(connection_file);
+	if (data.has_value<rnd::capture_service>()) {
+		settings.viewport_ids = [&capture = data.require<rnd::capture_service>()] { return capture.target_ids(); };
+	}
+	auto service = std::make_unique<mcp_service>(data.require<cmd::command_registry>(), data.require<ds::task_system>(), std::move(settings));
+	if (service->start()) m_mcp = std::move(service);
+}
+
+void edt::editor_system::pump_agent_server()
+{
+	if (m_mcp) m_mcp->pump();
 }
 
 void edt::editor_system::create_panels(bool capture_log)

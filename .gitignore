@@ -24,3 +24,5 @@ Makefile
 **/Release
 **/logs
 headless_out/
+# MCP agent server: port and token for clients (editor/agent_connection_file)
+.snk/

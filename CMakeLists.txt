@@ -90,6 +90,15 @@ add_subdirectory(core)
 
 add_subdirectory(Editor)
 add_subdirectory(tools/desc_resave)
+
+# The MCP server (snk_mcp_server) belongs to the editor only: neither the engine nor the SDK roots may reach it
+# (docs/roadmap/design/AI_INTEGRATION.md 3.7, decision 7). tools/ci/check_mcp_server_isolation.sh checks the sources.
+foreach(_snk_sdk_root IN ITEMS snk::engine snk::engine_api)
+	snk_pch_sees_all(_snk_mcp_leak ${_snk_sdk_root} snk_mcp_server)
+	if(_snk_mcp_leak)
+		message(FATAL_ERROR "${_snk_sdk_root} links snk_mcp_server: the MCP server must stay out of the engine, the game and the SDK")
+	endif()
+endforeach()
 snk_isolate_third_party_warnings()
 
 enable_testing()
@@ -99,7 +108,12 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit_tests.cpp"
 
 add_executable(unit_tests tests/unit_tests.cpp ${TEST_SOURCES})
 
-target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+target_link_libraries(unit_tests PRIVATE snk::editor_system PRIVATE snk::mcp_server PRIVATE Boost::asio PRIVATE snk::engine PRIVATE snk::engine_api PRIVATE Boost::unit_test_framework PRIVATE snk::sanitizers)
+# mcp_server_socket_tests.cpp talks to the MCP server over a loopback socket and includes Asio.
+if(WIN32)
+	target_compile_definitions(unit_tests PRIVATE _WIN32_WINNT=0x0A00)
+	target_link_libraries(unit_tests PRIVATE ws2_32 mswsock)
+endif()
 
 # rnd_null_driver_tests and rnd_validation_tests drive the internal null and validation backends; both are
 # linked through render (shared: snk_engine). rnd_per_draw_data_tests runs render's internal frame_upload_pass,

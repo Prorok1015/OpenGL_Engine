@@ -37,6 +37,9 @@ app::frame_command_registrations app::register_frame_commands(cmd::command_regis
 		"required": ["frame", "target_frame"],
 		"additionalProperties": false
 	})");
+	// It changes the state of the process (time is held until app.resume), so it is not read-only: the MCP server of the
+	// read-only step (AI_INTEGRATION A6a) leaves it out. This does not mean undo.
+	desc.mutates = true;
 	desc.invoke = [&control](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const auto frames = cmd::json_schema::integer_of(args.at("frames"));
@@ -65,6 +68,7 @@ app::frame_command_registrations app::register_frame_commands(cmd::command_regis
 		"required": ["frame"],
 		"additionalProperties": false
 	})");
+	resume.mutates = true;
 	resume.invoke = [&control](const cmd::call&) {
 		control.release();
 		return cmd::result::success(json::object{ { "frame", static_cast<std::int64_t>(control.frame()) } });

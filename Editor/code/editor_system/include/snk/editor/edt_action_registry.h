@@ -84,6 +84,11 @@ namespace edt
 		std::uint32_t schema_version = 1;
 		// Listed by tools() for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
+		// Copied to the command. An action that changes anything (the level, a file, the editor's state) sets
+		// `mutates`: the MCP server of the read-only step exposes only commands that do not. `risk` says what a
+		// person has to confirm first.
+		bool mutates = false;
+		cmd::danger risk = cmd::danger::none;
 		std::function<void()> activate;
 		// Null: always enabled.
 		std::function<bool()> enabled;

@@ -194,6 +194,7 @@ void edt::file_menu::register_actions()
 			return action_result::success();
 		},
 		.args_schema = discard_schema(),
+		.mutates = true, .risk = cmd::danger::confirm, // can throw away unsaved work
 		.activate = [this] { new_level(); } });
 
 	add({ .id = "file.open", .label = "Open Level...", .menu_path = "File",
@@ -203,6 +204,7 @@ void edt::file_menu::register_actions()
 			return action_result::success();
 		},
 		.args_schema = path_schema(true),
+		.mutates = true, .risk = cmd::danger::confirm,
 		.activate = [this] { open_level(); } });
 
 	add({ .id = "file.save", .label = "Save Level", .menu_path = "File", .shortcut = "Ctrl+S",
@@ -212,6 +214,7 @@ void edt::file_menu::register_actions()
 			if (!m_hooks.quick_save()) return action_result::failure("failed", "the level could not be written");
 			return action_result::success();
 		},
+		.mutates = true,
 		.activate = [this] { quick_save(); } });
 
 	add({ .id = "file.save_as", .label = "Save Level As...", .menu_path = "File", .shortcut = "Ctrl+Shift+S",
@@ -222,6 +225,7 @@ void edt::file_menu::register_actions()
 			return action_result::success();
 		},
 		.args_schema = path_schema(false),
+		.mutates = true, .risk = cmd::danger::confirm, // writes a file
 		.activate = [this] { save_level(); } });
 
 	add({ .id = "file.import_model", .label = "Import Model...", .menu_path = "File", .separator_before = true,
@@ -230,6 +234,7 @@ void edt::file_menu::register_actions()
 			return action_result::success();
 		},
 		.args_schema = path_schema(false),
+		.mutates = true,
 		.activate = [this] { import_model(); } });
 
 	add({ .id = "file.exit", .label = "Exit", .menu_path = "File", .separator_before = true,
@@ -240,5 +245,6 @@ void edt::file_menu::register_actions()
 			return action_result::success();
 		},
 		.args_schema = discard_schema(),
+		.mutates = true, .risk = cmd::danger::confirm, // closes the editor
 		.activate = [this] { exit(); } });
 }
