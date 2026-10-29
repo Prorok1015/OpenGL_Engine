@@ -129,7 +129,7 @@ namespace {
 				if (world >= m_worlds.size()) {
 					continue;
 				}
-				const prefab_node* node = find_node(m_worlds[world].get_root(), id);
+				const prefab_node* node = find_node(std::as_const(m_worlds[world]).get_root(), id);
 				if (!node) {
 					continue;
 				}
