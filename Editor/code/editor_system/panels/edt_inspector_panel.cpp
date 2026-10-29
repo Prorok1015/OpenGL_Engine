@@ -157,6 +157,9 @@ namespace edt
 		} else {
 			ImGui::TextUnformatted(node.name.c_str());
 		}
+		if (m_agent_marked && m_agent_marked(node.node_id)) {
+			ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.3f, 1.0f), "Changed by an agent (not saved or accepted yet)");
+		}
 		ImGui::Separator();
 
 		if (m_readonly) ImGui::BeginDisabled();

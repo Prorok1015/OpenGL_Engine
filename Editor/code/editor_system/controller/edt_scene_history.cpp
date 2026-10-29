@@ -1,5 +1,7 @@
 #include "edt_scene_history.h"
 #include <algorithm>
+#include <charconv>
+#include <system_error>
 #include <format>
 #include <map>
 #include <set>
@@ -106,12 +108,17 @@ namespace {
 		{
 			for (const auto& change : m_changes) {
 				m_keys.push_back(node_key(change.world, change.id));
+				// A node that only moved is the agent's edit when the agent moved it, not when a sibling went.
+				if (!change.positional || (change.before && change.after && change.before->parent != change.after->parent)) {
+					m_marks.push_back(m_keys.back());
+				}
 			}
 		}
 
 		void undo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, true); }
 		void redo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, false); }
 		const std::vector<std::string>& keys() const override { return m_keys; }
+		const std::vector<std::string>& marks() const override { return m_marks; }
 
 		// Undo removes the nodes the commit created, with everything under them: a node someone else put there
 		// since would go with them. The nodes of this commit are not in the way: undo puts them back first.
@@ -159,8 +166,31 @@ namespace {
 		edt::scene_history_index& m_index;
 		std::vector<edt::scene_node_change> m_changes;
 		std::vector<std::string> m_keys;
+		std::vector<std::string> m_marks;
 	};
 
+}
+
+std::optional<std::pair<std::size_t, std::uint64_t>> edt::parse_node_key(std::string_view key)
+{
+	constexpr std::string_view prefix = "node:";
+	if (!key.starts_with(prefix)) {
+		return std::nullopt;
+	}
+	key.remove_prefix(prefix.size());
+	const std::size_t colon = key.find(':');
+	if (colon == std::string_view::npos) {
+		return std::nullopt;
+	}
+	std::size_t world = 0;
+	std::uint64_t id = 0;
+	const auto world_text = key.substr(0, colon);
+	const auto id_text = key.substr(colon + 1);
+	if (std::from_chars(world_text.data(), world_text.data() + world_text.size(), world).ec != std::errc{}
+		|| std::from_chars(id_text.data(), id_text.data() + id_text.size(), id, 16).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	return std::pair{ world, id };
 }
 
 scn::prefab_desc::prefab_node edt::shallow_copy(const scn::prefab_desc::prefab_node& node)

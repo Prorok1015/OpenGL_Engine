@@ -84,6 +84,18 @@ std::vector<edt::registration> edt::register_edit_actions(
 		.result_schema = applied_schema(),
 		.enabled = [active, idle] { return idle() && active() && active()->next_redo_entry().has_value(); } }));
 
+	// The person has looked at what the agent did: no more "changed by agent" marks. Not for agents themselves.
+	out.push_back(actions.add({ .id = "edit.accept_agent_changes", .label = "Accept Agent Changes", .menu_path = "Edit",
+		.separator_before = true,
+		.execute = [active](const json::value&) {
+			document* doc = active();
+			const bool had = doc && doc->has_agent_changes();
+			if (had) doc->accept_agent_changes();
+			return action_result::success(json::object{ { "accepted", had } });
+		},
+		.result_schema = json::parse(R"({"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"]})"),
+		.enabled = [active] { return active() && active()->has_agent_changes(); } }));
+
 	// The other usual binding of Redo: no menu item of its own.
 	out.push_back(actions.add({ .id = "edit.redo_alt", .label = "Redo", .shortcut = "Ctrl+Shift+Z",
 		.yields_to_text_input = true,

@@ -42,6 +42,8 @@ namespace edt
 		void begin_rename(const scn::prefab_desc::prefab_node& node);
 		// The id of the node being renamed, 0 when none.
 		uint64_t renaming() const { return m_rename_id; }
+		// Nodes (by id, in the shown world) an agent changed since the last save or accept: shown "(agent)".
+		void set_agent_marks(std::function<bool(uint64_t node_id)> marked) { m_agent_marked = std::move(marked); }
 
 		// Multi-world support
 		void set_world_names(std::vector<std::string> names, int active_idx = 0);
@@ -93,6 +95,7 @@ namespace edt
 		char m_filter[128]           = {};
 		char m_rename_buf[256]       = {};
 		uint64_t m_rename_id = 0;
+		std::function<bool(uint64_t)> m_agent_marked;
 		bool m_rename_seen = false; // drawn this frame
 
 		// World tabs

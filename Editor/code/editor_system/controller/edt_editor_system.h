@@ -33,6 +33,7 @@ namespace inp  { class input_router; }
 namespace edt {
 	class agent_server;
 	class file_menu;
+	class agent_sessions;
 	class game_builder;
 	class game_reloader;
 	class editor_context;
@@ -172,6 +173,8 @@ namespace edt {
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
+		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
+		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

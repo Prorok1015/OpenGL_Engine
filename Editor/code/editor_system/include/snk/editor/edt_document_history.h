@@ -29,6 +29,9 @@ namespace edt
 		// Undoing this edit out of order would lose what someone added since (a node under a node it created): the
 		// key of what is in the way. Asked by rollback_group only.
 		virtual std::optional<std::string> undo_conflict() const { return std::nullopt; }
+		// What the edit changed in a way a person should see ("changed by agent"); a key moved only because of an
+		// edit next to it is in keys() but not here.
+		virtual const std::vector<std::string>& marks() const { return keys(); }
 	};
 
 	struct history_record

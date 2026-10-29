@@ -429,8 +429,10 @@ namespace edt
 		const char* prefix = get_type_prefix(node);
 
 		// Build ImGui IDs using format_to_n into stack buffer (no heap allocation)
+		const bool by_agent = m_agent_marked && m_agent_marked(node.node_id);
 		char id_buf[512];
-		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{0}{1}##{2:x}", prefix, node.name, node.node_id);
+		auto id_result = std::format_to_n(id_buf, sizeof(id_buf) - 1, "{0}{1}{2}##{3:x}", prefix, node.name,
+			by_agent ? " (agent)" : "", node.node_id);
 		*id_result.out = '\0';
 
 		// ── inline rename ────────────────────────────────────────────────────
@@ -470,6 +472,7 @@ namespace edt
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 
 		const bool opened = ImGui::TreeNodeEx(id_buf, flags);
+		if (by_agent && ImGui::IsItemHovered()) ImGui::SetTooltip("Changed by an agent (not saved or accepted yet)");
 
 		// ── selection ───────────────────────────────────────────────────────
 		if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen()) {

@@ -58,6 +58,46 @@ void edt::scene_document::mark_clean()
 {
 	m_unrecorded = false;
 	m_history.mark_saved();
+	move_agent_marks_to_now();
+}
+
+void edt::scene_document::accept_agent_changes()
+{
+	move_agent_marks_to_now();
+}
+
+void edt::scene_document::move_agent_marks_to_now()
+{
+	const history_record* top = m_history.next_undo();
+	m_agent_from = top ? agent_mark_from{ top->id, top->changes.size() } : agent_mark_from{};
+}
+
+const std::set<std::pair<std::size_t, std::uint64_t>>& edt::scene_document::agent_changes() const
+{
+	auto& cache = m_agent_changes;
+	if (cache.valid && cache.generation == desc_generation && cache.from == m_agent_from) {
+		return cache.nodes;
+	}
+	cache.nodes.clear();
+	const auto& records = m_history.records();
+	for (std::size_t r = 0; r < m_history.position(); ++r) {
+		const history_record& record = records[r];
+		if (record.origin.kind != cmd::origin_kind::agent || record.id < m_agent_from.record) {
+			continue;
+		}
+		const std::size_t first = record.id == m_agent_from.record ? m_agent_from.changes : 0;
+		for (std::size_t c = first; c < record.changes.size(); ++c) {
+			for (const std::string& key : record.changes[c]->marks()) {
+				if (const auto node = parse_node_key(key)) {
+					cache.nodes.insert(*node);
+				}
+			}
+		}
+	}
+	cache.valid = true;
+	cache.generation = desc_generation;
+	cache.from = m_agent_from;
+	return cache.nodes;
 }
 
 bool edt::scene_document::undo()
@@ -165,6 +205,7 @@ void edt::scene_document::reset_history()
 {
 	const bool dirty = is_dirty();
 	m_history.clear();
+	m_agent_from = {};
 	m_unrecorded = dirty;
 	m_history.mark_saved();
 	if (!m_index.rebuild(world_descs)) {

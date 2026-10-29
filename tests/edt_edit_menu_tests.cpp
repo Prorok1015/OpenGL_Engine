@@ -177,4 +177,25 @@ BOOST_AUTO_TEST_CASE(the_edit_actions_are_not_offered_to_an_agent)
 	BOOST_TEST(!actions.find("edit.redo_alt")->expose_as_tool);
 }
 
+BOOST_AUTO_TEST_CASE(accepting_the_agents_changes_clears_their_marks)
+{
+	BOOST_TEST(!actions.is_enabled("edit.accept_agent_changes"));
+	{
+		edt::edit_origin_scope scope(scene, cmd::origin::agent("s1"));
+		rename("b");
+	}
+	BOOST_REQUIRE(scene.has_agent_changes());
+	BOOST_TEST(actions.is_enabled("edit.accept_agent_changes"));
+
+	const auto accepted = actions.invoke("edit.accept_agent_changes", boost::json::object{});
+	BOOST_REQUIRE(accepted.ok);
+	BOOST_TEST(accepted.value.as_object().at("accepted").as_bool());
+	BOOST_TEST(!scene.has_agent_changes());
+	BOOST_TEST(!actions.is_enabled("edit.accept_agent_changes"));
+	// Accepting is not undoing: the edit stays, and so does its record.
+	BOOST_TEST(name() == "b");
+	BOOST_TEST(scene.history().can_undo());
+	BOOST_TEST(!edt::agent_may_use(*actions.find("edit.accept_agent_changes")));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

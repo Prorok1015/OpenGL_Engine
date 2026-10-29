@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -79,6 +80,13 @@ namespace edt
 		bool redo() override;
 		std::optional<history_entry> next_undo_entry() const override;
 		std::optional<history_entry> next_redo_entry() const override;
+
+		// The nodes {world index, node id} the applied edits of an agent changed since the last save or accept: what the
+		// panels mark "changed by agent". Undoing such an edit unmarks its nodes, redoing it marks them again.
+		const std::set<std::pair<std::size_t, std::uint64_t>>& agent_changes() const;
+		bool has_agent_changes() const override { return !agent_changes().empty(); }
+		// A person took the agent's edits as they are: they are no longer marked (saving does the same).
+		void accept_agent_changes() override;
 		// The before-apply hook runs only when the rollback undoes something.
 		rollback_result rollback_group(std::uint64_t group);
 		// Forgets the history and takes the worlds as they are now as its start: after a load, a level reload, the game
@@ -136,6 +144,25 @@ namespace edt
 		editor_events* m_events = nullptr;
 		std::function<bool()> m_pusher;
 		std::function<bool(std::size_t)> m_world_reloader;
+
+		// Where the agent's edits a person has not looked at begin: the top record at the last save or accept, and how
+		// many of its edits it had (a session folds more into the same record).
+		struct agent_mark_from
+		{
+			std::uint64_t record = 0;
+			std::size_t changes = 0;
+			bool operator==(const agent_mark_from&) const = default;
+		};
+		void move_agent_marks_to_now();
+		agent_mark_from m_agent_from;
+		struct agent_changes_cache
+		{
+			bool valid = false;
+			std::uint64_t generation = 0;
+			agent_mark_from from;
+			std::set<std::pair<std::size_t, std::uint64_t>> nodes;
+		};
+		mutable agent_changes_cache m_agent_changes;
 		std::function<bool()> m_save;
 		std::function<bool(const res::tag&)> m_save_as;
 	};
