@@ -247,6 +247,35 @@ BOOST_AUTO_TEST_CASE(StartWithResult_KeepsTheValueOfADoneJob)
 	BOOST_TEST(done_called);
 }
 
+BOOST_AUTO_TEST_CASE(StoredResults_StayUnderTheBudget_OldestDroppedFirst)
+{
+	constexpr std::size_t half = edt::job_service::RESULT_BUDGET / 2;
+	const auto first = jobs->start_with_result(ds::lane::io, { "first", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(boost::json::string(std::string(half, 'a'))); });
+	run_lane(ds::lane::io);
+	deliver();
+	BOOST_TEST(jobs->info(first)->result.has_value());
+
+	const auto second = jobs->start_with_result(ds::lane::io, { "second", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(boost::json::string(std::string(half, 'b'))); });
+	run_lane(ds::lane::io);
+	deliver();
+	const auto dropped = jobs->info(first);
+	BOOST_REQUIRE(dropped.has_value());
+	BOOST_TEST((dropped->status == edt::job_status::done));
+	BOOST_TEST(!dropped->result.has_value());
+	BOOST_TEST(dropped->result_dropped);
+	BOOST_TEST(jobs->info(second)->result.has_value());
+	BOOST_TEST(!jobs->info(second)->result_dropped);
+
+	const auto third = jobs->start_with_result(ds::lane::io, { "third", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(1); });
+	run_lane(ds::lane::io);
+	deliver();
+	BOOST_TEST(jobs->info(second)->result.has_value());
+	BOOST_TEST(jobs->info(third)->result.has_value());
+}
+
 BOOST_AUTO_TEST_CASE(StartWithResult_WithoutOnDone_StillKeepsTheValue)
 {
 	const auto id = jobs->start_with_result(ds::lane::io, { "log", "test" }, owner,

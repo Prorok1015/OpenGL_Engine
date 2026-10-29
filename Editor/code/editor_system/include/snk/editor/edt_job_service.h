@@ -49,7 +49,12 @@ namespace edt
 			bool cancel_requested = false;
 			// Done jobs started with start_with_result: what the work returned.
 			std::optional<boost::json::value> result;
+			// The result was dropped to keep the stored results under RESULT_BUDGET (the oldest go first).
+			bool result_dropped = false;
 		};
+
+		// Total bytes (serialized) of the results the finished history keeps; the newest one is always kept.
+		static constexpr std::size_t RESULT_BUDGET = 16u * 1024u * 1024u;
 
 		// `events` (null: none) gets job_started / job_progress / job_finished; it must outlive the service.
 		explicit job_service(ds::task_system& tasks, editor_events* events = nullptr);
@@ -157,6 +162,9 @@ namespace edt
 		std::unordered_map<job_id, record> m_jobs;
 		std::unordered_set<job_id> m_cancelled;
 		std::deque<job_info> m_finished;
+		// Parallel to m_finished: the serialized size of each kept result (0: none).
+		std::deque<std::size_t> m_result_sizes;
+		std::size_t m_result_bytes = 0;
 		// Last: destroyed first, so continuations that still hold `this` are dropped before the maps die.
 		ds::lifetime m_life;
 	};

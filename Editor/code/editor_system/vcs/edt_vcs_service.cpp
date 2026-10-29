@@ -13,6 +13,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
 #include <stop_token>
@@ -43,6 +44,10 @@ namespace {
 	constexpr std::size_t k_tail_lines = 20;
 	constexpr std::size_t k_tail_bytes = 4 * 1024;
 	constexpr std::size_t k_unlimited = std::numeric_limits<std::size_t>::max();
+	// status, log, branches and the filter list: git is stopped beyond this and the answer says `truncated`.
+	constexpr std::size_t k_read_cap = 4 * 1024 * 1024;
+	// A cursor past this many commits is clamped: no history is that long, and skip + count stays far from overflow.
+	constexpr std::int64_t k_max_skip = 1'000'000'000;
 
 	// What a job needs to run git: copied into it, so a job never touches the service.
 	struct git_context
@@ -51,6 +56,8 @@ namespace {
 		std::vector<std::string> environment;
 		fs::path cwd;
 		edt::process_runner run;
+		// Per call, after safe_base_args: the -c pairs that switch off the repository's filter drivers.
+		std::vector<std::string> config_args;
 	};
 
 	struct git_output
@@ -60,7 +67,51 @@ namespace {
 		std::string err;
 		// stdout reached the cap: git was stopped, the rest is missing.
 		bool truncated = false;
+		// Git was not run: the error code to report (with `err` as the message).
+		std::string refused_code;
 	};
+
+	// A repository's own config (a project unzipped with its .git) must never run a program on a read: every key that
+	// names a program git could start during status, diff, log, for-each-ref or rev-parse is overridden here, filter
+	// drivers per call (switch_off_filters). Writes and the network come with #455.
+	std::vector<std::string> safe_base_args()
+	{
+#ifdef _WIN32
+		constexpr const char* no_hooks = "core.hooksPath=NUL";
+#else
+		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
+#endif
+		return { "--no-pager",
+			"-c", "core.quotepath=off",
+			"-c", "core.fsmonitor=false",
+			"-c", no_hooks,
+			"-c", "diff.external=",
+			"-c", "log.showSignature=false",
+			"-c", "status.submoduleSummary=false",
+			"-c", "diff.ignoreSubmodules=all",
+			"--no-optional-locks", "--literal-pathspecs" };
+	}
+
+	// What the environment of git must not carry from the editor's: they would point git at another repository or
+	// index, or add config (and with it programs) behind the -c overrides.
+	bool is_unsafe_variable(std::string_view entry)
+	{
+		const std::size_t equals = entry.find('=', 1);
+		if (equals == std::string_view::npos) return false;
+		std::string name(entry.substr(0, equals));
+		if (edt::k_native_env == edt::env_flavor::windows) {
+			for (char& c : name) {
+				if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+			}
+		}
+		for (const std::string_view unsafe : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+				"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG_PARAMETERS",
+				"GIT_CONFIG_COUNT", "GIT_EXTERNAL_DIFF" }) {
+			if (name == unsafe) return true;
+		}
+		if (name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_")) return true;
+		return name == "GIT_EXEC_PATH" && equals + 1 < entry.size();
+	}
 
 	fs::path path_of(std::string_view utf8)
 	{
@@ -96,7 +147,8 @@ namespace {
 		git_output out;
 		std::stop_source own;
 		const std::stop_callback forward{ stop, [&own] { own.request_stop(); } };
-		std::vector<std::string> full{ "-c", "core.quotepath=off", "--no-optional-locks", "--literal-pathspecs" };
+		std::vector<std::string> full = safe_base_args();
+		full.insert(full.end(), git.config_args.begin(), git.config_args.end());
 		full.insert(full.end(), args.begin(), args.end());
 		platform::process_options options;
 		options.working_dir = git.cwd;
@@ -119,6 +171,67 @@ namespace {
 			out.out.append(chunk);
 		}, own.get_token());
 		return out;
+	}
+
+	// Empties clean, smudge and process of every filter driver the repository's config (or any other) names, plus
+	// lfs, for the next call; config is read again per job, so an edit between two reads is seen. Nullopt when done;
+	// otherwise what to report instead of running git.
+	std::optional<git_output> switch_off_filters(git_context& git, std::stop_token stop)
+	{
+		git_output listed = run_git(git, { "config", "-z", "--get-regexp", "^filter\\." }, stop, k_read_cap);
+		// Exit code 1: no such key.
+		if (!listed.process.error.empty() || listed.truncated
+			|| (listed.process.exit_code != 0 && listed.process.exit_code != 1)) {
+			if (listed.truncated) {
+				listed.refused_code = "unsafe_repository";
+				listed.err = "fatal: the repository's config names too many filter drivers";
+			}
+			return listed;
+		}
+		std::vector<std::string> drivers{ "lfs" };
+		std::size_t start = 0;
+		while (start < listed.out.size()) {
+			const std::size_t end = std::min(listed.out.find('\0', start), listed.out.size());
+			const std::string_view record = std::string_view(listed.out).substr(start, end - start);
+			start = end + 1;
+			const std::string_view name = record.substr(0, record.find('\n'));
+			constexpr std::string_view prefix = "filter.";
+			const std::size_t last_dot = name.rfind('.');
+			if (!name.starts_with(prefix) || last_dot == std::string_view::npos || last_dot <= prefix.size()) continue;
+			const std::string driver(name.substr(prefix.size(), last_dot - prefix.size()));
+			// "-c" splits at the first '=': such a name could not be overridden.
+			const bool expressible = std::none_of(driver.begin(), driver.end(),
+				[](char c) { return c == '=' || static_cast<unsigned char>(c) < 0x20; });
+			if (!expressible) {
+				listed.refused_code = "unsafe_repository";
+				listed.err = std::format("fatal: the filter driver '{}' cannot be switched off", edt::vcs::valid_utf8(driver));
+				return listed;
+			}
+			if (std::find(drivers.begin(), drivers.end(), driver) == drivers.end()) drivers.push_back(driver);
+		}
+		for (const auto& driver : drivers) {
+			for (const char* key : { "clean=", "smudge=", "process=", "required=false" }) {
+				git.config_args.emplace_back("-c");
+				git.config_args.push_back(std::format("filter.{}.{}", driver, key));
+			}
+		}
+		return std::nullopt;
+	}
+
+	// Every read: filters off first, then git.
+	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
+		std::size_t cap = k_read_cap)
+	{
+		if (auto refused = switch_off_filters(git, stop)) return std::move(*refused);
+		return run_git(git, args, stop, cap);
+	}
+
+	// A capped output ends inside a record: only the records up to the last `separator` are whole.
+	std::string_view whole_records(const git_output& out, char separator)
+	{
+		if (!out.truncated) return out.out;
+		const std::size_t last = out.out.rfind(separator);
+		return last == std::string::npos ? std::string_view{} : std::string_view(out.out).substr(0, last + 1);
 	}
 
 	std::vector<std::string_view> lines_of(std::string_view text)
@@ -176,6 +289,7 @@ namespace {
 	std::optional<json::value> failure_of(const git_output& out, const ds::task_context& task)
 	{
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (!out.refused_code.empty()) return error_json(out.refused_code, out.err, out.err, -1);
 		if (!out.process.error.empty()) return error_json("vcs_unavailable", out.process.error, out.err, -1);
 		if (out.process.exit_code != 0 && !out.truncated) {
 			return error_json(edt::vcs::classify_error(out.err), summary_of(out.err, out.process.exit_code), out.err,
@@ -190,22 +304,25 @@ namespace {
 	{
 		std::stop_source stop;
 		std::atomic<bool> fired = false;
+		std::atomic<bool> returned = false;
 		git_output out;
 		{
 			// Destroyed (stop requested, joined) as soon as git returns: no thread outlives the probe.
-			std::jthread watchdog([&stop, &fired, timeout](std::stop_token own) {
+			std::jthread watchdog([&stop, &fired, &returned, timeout](std::stop_token own) {
 				std::mutex mutex;
 				std::condition_variable_any wake;
 				std::unique_lock lock(mutex);
 				static_cast<void>(wake.wait_for(lock, own, timeout, [] { return false; }));
-				if (!own.stop_requested()) {
+				if (!own.stop_requested() && !returned) {
 					fired = true;
 					stop.request_stop();
 				}
 			});
 			out = run_git(git, args, stop.get_token());
+			returned = true;
 		}
-		timed_out = fired;
+		// A git that finished as the deadline hit (not stopped by it) answered in time.
+		timed_out = fired && out.process.cancelled;
 		return out;
 	}
 
@@ -214,8 +331,10 @@ namespace {
 		if (cursor.empty()) return 0;
 		std::int64_t value = 0;
 		const auto [end, error] = std::from_chars(cursor.data(), cursor.data() + cursor.size(), value);
-		if (error != std::errc{} || end != cursor.data() + cursor.size() || value < 0) return std::nullopt;
-		return value;
+		if (end != cursor.data() + cursor.size()) return std::nullopt;
+		if (error == std::errc::result_out_of_range && cursor.front() != '-') return k_max_skip;
+		if (error != std::errc{} || value < 0) return std::nullopt;
+		return std::min(value, k_max_skip);
 	}
 }
 
@@ -239,6 +358,7 @@ edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 	, m_options(std::move(options))
 {
 	m_environment = m_options.environment ? *m_options.environment : own_environment();
+	std::erase_if(m_environment, [](const std::string& entry) { return is_unsafe_variable(entry); });
 	// Plain English messages for classify_error, and nothing that waits for a person.
 	set_variable(m_environment, "LC_ALL", "C");
 	set_variable(m_environment, "GIT_TERMINAL_PROMPT", "0");
@@ -342,22 +462,26 @@ edt::vcs_service::started edt::vcs_service::unavailable() const
 edt::vcs_service::started edt::vcs_service::start_status()
 {
 	return run_job("git status", [](const git_context& git, ds::task_context& task) -> json::value {
-		const git_output out = run_git(git, { "status", "--porcelain=v2", "--branch", "-z" }, task.stop);
+		// Submodules are not entered: a submodule's config is as untrusted as the repository's.
+		const git_output out = run_read(git, { "status", "--porcelain=v2", "--branch", "-z", "--ignore-submodules=all" },
+			task.stop);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
-		return vcs::to_json(vcs::parse_status(out.out));
+		json::value result = vcs::to_json(vcs::parse_status(whole_records(out, '\0')));
+		result.as_object()["truncated"] = out.truncated;
+		return result;
 	});
 }
 
 edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, bool staged)
 {
-	std::vector<std::string> args{ "diff", "--no-color", "--no-ext-diff" };
+	std::vector<std::string> args{ "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all" };
 	if (staged) args.emplace_back("--cached");
 	if (!path.empty()) {
 		args.emplace_back("--");
 		args.push_back(path);
 	}
 	return run_job("git diff", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
-		const git_output out = run_git(git, args, task.stop, k_diff_cap);
+		const git_output out = run_read(git, args, task.stop, k_diff_cap);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
 		std::string text = vcs::valid_utf8(vcs::utf8_prefix(out.out, k_diff_cap));
 		bool truncated = out.truncated;
@@ -380,27 +504,27 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 	// One more than asked: whether it comes back tells if there is a next page.
 	std::vector<std::string> args{ "log", "-z", std::string(vcs::k_log_format), std::format("--skip={}", *skip),
 		std::format("--max-count={}", count + 1) };
+	// Whatever the ref and the path hold, git reads them as a revision and a path, never as options.
+	args.emplace_back("--end-of-options");
 	if (!ref.empty()) args.push_back(ref);
-	if (!path.empty()) {
-		args.emplace_back("--");
-		args.push_back(path);
-	}
+	args.emplace_back("--");
+	if (!path.empty()) args.push_back(path);
 	return run_job("git log", [args = std::move(args), count, first = *skip](const git_context& git, ds::task_context& task) -> json::value {
-		const git_output out = run_git(git, args, task.stop);
+		const git_output out = run_read(git, args, task.stop);
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
 		// A branch without commits has no log, which is not an error for the reader.
 		if (out.process.error.empty() && out.process.exit_code != 0 && std::string_view(vcs::classify_error(out.err)) == "no_commits") {
 			return json::object{ { "commits", json::array{} } };
 		}
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
-		auto commits = vcs::parse_log(out.out);
-		const bool more = commits.size() > static_cast<std::size_t>(count);
-		if (more) commits.resize(static_cast<std::size_t>(count));
+		auto commits = vcs::parse_log(whole_records(out, '\0'));
+		const bool more = out.truncated || commits.size() > static_cast<std::size_t>(count);
+		if (commits.size() > static_cast<std::size_t>(count)) commits.resize(static_cast<std::size_t>(count));
 		json::array entries;
 		entries.reserve(commits.size());
 		for (const auto& commit : commits) entries.push_back(vcs::to_json(commit));
-		json::object result{ { "commits", std::move(entries) } };
-		if (more) result["next_cursor"] = json::string(std::to_string(first + count));
+		json::object result{ { "commits", std::move(entries) }, { "truncated", out.truncated } };
+		if (more) result["next_cursor"] = json::string(std::to_string(first + static_cast<std::int64_t>(commits.size())));
 		return result;
 	});
 }
@@ -408,11 +532,12 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 edt::vcs_service::started edt::vcs_service::start_branches()
 {
 	return run_job("git branches", [](const git_context& git, ds::task_context& task) -> json::value {
-		const git_output out = run_git(git, { "for-each-ref", std::string(vcs::k_ref_format), "refs/heads", "refs/remotes" }, task.stop);
+		const git_output out = run_read(git, { "for-each-ref", std::string(vcs::k_ref_format), "refs/heads", "refs/remotes" },
+			task.stop);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
 		json::array branches;
-		json::object result;
-		for (const auto& ref : vcs::parse_refs(out.out)) {
+		json::object result{ { "truncated", out.truncated } };
+		for (const auto& ref : vcs::parse_refs(whole_records(out, '\n'))) {
 			if (ref.head && !ref.remote) result["current"] = json::string(vcs::valid_utf8(ref.name));
 			branches.push_back(vcs::to_json(ref));
 		}

@@ -24,7 +24,8 @@ namespace {
 			"note": { "type": "string" },
 			"cancel_requested": { "type": "boolean" },
 			"error": { "type": "string" },
-			"result": { "description": "What a done job produced (vcs.* jobs: their parsed answer); absent otherwise" }
+			"result": { "description": "What a done job produced (vcs.* jobs: their parsed answer); absent otherwise" },
+			"result_dropped": { "type": "boolean", "description": "The result was dropped to bound the memory of the history" }
 		},
 		"required": ["id", "label", "status", "fraction", "note", "cancel_requested"],
 		"additionalProperties": false
@@ -63,6 +64,7 @@ namespace {
 			{ "cancel_requested", job.cancel_requested } };
 		if (!job.error.empty()) out["error"] = json::string(job.error);
 		if (job.result) out["result"] = *job.result;
+		if (job.result_dropped) out["result_dropped"] = true;
 		return out;
 	}
 

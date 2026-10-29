@@ -14,6 +14,7 @@
 #include <format>
 #include <fstream>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -42,6 +43,7 @@ namespace {
 
 namespace fs = std::filesystem;
 namespace json = boost::json;
+using namespace std::string_literals;
 
 // ü: MSVC reads the source in the local code page, so non-ASCII text is spelled in escapes.
 const std::string u_umlaut = "\xC3\xBC";
@@ -228,6 +230,11 @@ struct fake_git_fixture : vcs_fixture
 				on_line(edt::utf8_of(base) + "\n");
 				return exited(0);
 			}
+			if (has_arg(args, "--get-regexp")) {
+				if (filter_config.empty()) return exited(1);
+				on_line(filter_config);
+				return exited(0);
+			}
 			return command(args, opts, on_line, stop);
 		};
 		return options;
@@ -235,6 +242,8 @@ struct fake_git_fixture : vcs_fixture
 
 	std::vector<std::vector<std::string>> calls;
 	platform::process_options last_options;
+	// What the listing of the filter drivers prints; empty: none (exit 1).
+	std::string filter_config;
 	std::function<platform::process_result(const std::vector<std::string>&, const platform::process_options&,
 		const std::function<void(std::string_view)>&, std::stop_token)> command;
 };
@@ -416,6 +425,85 @@ BOOST_AUTO_TEST_CASE(NotARepository_IsReportedAndTheJobResultCarriesTheError)
 	BOOST_TEST(text(finished->front()->as_object().at("error").as_object().at("code")) == "not_a_repository");
 }
 
+// A project unzipped with a hostile .git/config: an fsmonitor hook, a diff textconv and command driver and a clean
+// filter, all a script that leaves a marker. Plain git runs them; the reads of the service run none.
+BOOST_AUTO_TEST_CASE(AHostileRepositoryConfig_RunsNothingOnReads)
+{
+	const fs::path repo = make_repository();
+	const fs::path marker = base / "ran.txt";
+	const fs::path script = base / "evil.sh";
+	const auto generic = [](const fs::path& path) {
+		const std::u8string utf8 = path.generic_u8string();
+		return std::string(utf8.begin(), utf8.end());
+	};
+	const std::string script_text = generic(script);
+	// Git (for Windows too) runs these through its sh; forward slashes keep the paths intact there.
+	write(script, "#!/bin/sh\necho ran >> '" + generic(marker) + "'\ncat\n");
+#ifndef _WIN32
+	fs::permissions(script, fs::perms::owner_all, fs::perm_options::add);
+#endif
+	write(repo / ".gitattributes", "*.txt diff=evil filter=evil\n");
+	git(repo, { "config", "core.fsmonitor", script_text });
+	git(repo, { "config", "diff.evil.textconv", script_text });
+	git(repo, { "config", "diff.evil.command", script_text });
+	git(repo, { "config", "filter.evil.clean", script_text });
+	git(repo, { "config", "filter.evil.smudge", script_text });
+
+	git(repo, { "diff" });
+	git(repo, { "status" });
+	std::error_code ec;
+#ifdef _WIN32
+	BOOST_WARN_MESSAGE(fs::exists(marker, ec), "plain git ran none of the scripts here: the check below proves less");
+#else
+	BOOST_REQUIRE_MESSAGE(fs::exists(marker, ec), "plain git must run the hostile config, or this test proves nothing");
+#endif
+	fs::remove(marker, ec);
+
+	make_service(real_options(repo));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	const json::value status = finish(service->start_status());
+	BOOST_TEST(!status.as_object().contains("error"), json::serialize(status));
+	const json::value unstaged = finish(service->start_diff({}, false));
+	BOOST_TEST(text(unstaged.as_object().at("text")).find("+two") != std::string::npos, json::serialize(unstaged));
+	const json::value staged = finish(service->start_diff({}, true));
+	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
+	finish(service->start_diff("a.txt", false));
+	finish(service->start_log({}, {}, 10, {}));
+	finish(service->start_log({}, "a.txt", 10, {}));
+	finish(service->start_branches());
+
+	BOOST_TEST(!fs::exists(marker, ec), "a read ran a program of the repository's config");
+}
+
+// Linux and macOS only: Windows names hold no newline, and are UTF-16, so no byte can be invalid UTF-8.
+BOOST_AUTO_TEST_CASE(RealRepository_ANewlineAndANonUtf8Name_KeepTheOtherEntries)
+{
+#ifdef _WIN32
+	BOOST_TEST_MESSAGE("skipped on Windows: a file name cannot hold a newline or a byte that is not UTF-8");
+#else
+	const fs::path repo = base / "names";
+	fs::create_directories(repo);
+	git(repo, { "init", "-q" });
+	write(repo / "line\nbreak.txt", "1\n");
+	write(repo / fs::path(std::string("bad\xFF") + "name.txt"), "2\n");
+	write(repo / "zz after.txt", "3\n");
+	make_service(real_options(repo));
+
+	const json::value status = finish(service->start_status());
+	BOOST_TEST_INFO("status: " << json::serialize(status));
+	const json::array& entries = status.as_object().at("entries").as_array();
+	BOOST_TEST(entries.size() == 3u);
+	const auto has_path = [&entries](std::string_view path) {
+		return std::any_of(entries.begin(), entries.end(), [path](const json::value& e) {
+			return e.as_object().at("path").as_string() == path && e.as_object().at("kind").as_string() == "untracked";
+		});
+	};
+	BOOST_TEST(has_path("line\nbreak.txt"));
+	BOOST_TEST(has_path("bad\xEF\xBF\xBD" "name.txt"));
+	BOOST_TEST(has_path("zz after.txt"));
+#endif
+}
+
 BOOST_AUTO_TEST_CASE(NoProject_IsReported)
 {
 	make_service(real_options(std::nullopt));
@@ -477,8 +565,20 @@ BOOST_AUTO_TEST_CASE(EveryCall_GetsTheFixedOptionsAndEnvironment)
 	finish(service->start_status());
 	const auto& args = calls.back();
 	BOOST_REQUIRE(args.size() >= 5u);
-	BOOST_TEST(args[0] == "-c");
-	BOOST_TEST(args[1] == "core.quotepath=off");
+	BOOST_TEST(args[0] == "--no-pager");
+	const auto subcommand = std::find(args.begin(), args.end(), "status");
+	for (const char* config : { "core.quotepath=off", "core.fsmonitor=false", "diff.external=", "log.showSignature=false",
+			"status.submoduleSummary=false", "diff.ignoreSubmodules=all", "filter.lfs.clean=", "filter.lfs.smudge=",
+			"filter.lfs.process=", "filter.lfs.required=false" }) {
+		BOOST_TEST_CONTEXT(config) {
+			const auto found = std::find(args.begin(), args.end(), config);
+			BOOST_REQUIRE(found != args.end());
+			BOOST_TEST(*std::prev(found) == "-c");
+			BOOST_TEST((found < subcommand));
+		}
+	}
+	BOOST_TEST(std::any_of(args.begin(), args.end(), [](const std::string& a) { return a.starts_with("core.hooksPath="); }));
+	BOOST_TEST(has_arg(args, "--ignore-submodules=all"));
 	BOOST_TEST(has_arg(args, "--no-optional-locks"));
 	BOOST_TEST(has_arg(args, "--literal-pathspecs"));
 	BOOST_TEST(has_arg(args, "--porcelain=v2"));
@@ -629,6 +729,7 @@ BOOST_AUTO_TEST_CASE(Diff_IsCutAtTheCapAndGitIsStopped)
 	command = [&stopped](const std::vector<std::string>& args, const platform::process_options&,
 		const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
 		BOOST_TEST(has_arg(args, "--no-ext-diff"));
+		BOOST_TEST(has_arg(args, "--no-textconv"));
 		BOOST_TEST(has_arg(args, "--cached"));
 		BOOST_TEST(args.back() == "some file.txt");
 		const std::string chunk(64 * 1024, 'x');
@@ -660,9 +761,156 @@ BOOST_AUTO_TEST_CASE(Log_PassesThePageAndClampsTheLimit)
 	BOOST_REQUIRE(args.size() >= 2u);
 	BOOST_TEST(args[args.size() - 2] == "--");
 	BOOST_TEST(args.back() == "src/a b.cpp");
+	BOOST_TEST(args[args.size() - 4] == "--end-of-options");
+	BOOST_TEST(args[args.size() - 3] == "main");
 
+	finish(service->start_log({}, {}, 10, "99999999999999999999999"));
+	const auto& plain = calls.back();
+	BOOST_TEST(has_arg(plain, "--skip=1000000000"));
+	BOOST_TEST(plain.back() == "--");
+	BOOST_TEST(plain[plain.size() - 2] == "--end-of-options");
+
+	// A ref that looks like an option never reaches git.
+	const std::size_t before = calls.size();
 	BOOST_TEST(service->start_log("-p", {}, 10, {}).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_log("--output=/tmp/x", {}, 10, {}).code == cmd::codes::invalid_args);
 	BOOST_TEST(service->start_log({}, {}, 10, "-1").code == cmd::codes::invalid_args);
+	run_to_end();
+	BOOST_TEST(calls.size() == before);
+}
+
+BOOST_AUTO_TEST_CASE(Status_IsCappedAtFourMiB_AndKeepsOnlyWholeRecords)
+{
+	bool stopped = false;
+	command = [&stopped](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		on_line(std::string_view("# branch.head main\0", 19));
+		std::string record = "? " + std::string(1000, 'f');
+		record.push_back('\0');
+		for (int i = 0; i < 6000 && !stop.stop_requested(); ++i) on_line(record);
+		stopped = stop.stop_requested();
+		platform::process_result result = exited(143);
+		result.cancelled = stopped;
+		return result;
+	};
+	make_service(fake_options());
+
+	const json::value result = finish(service->start_status());
+	BOOST_TEST(stopped);
+	BOOST_TEST(result.as_object().at("truncated").as_bool());
+	const json::array& entries = result.as_object().at("entries").as_array();
+	BOOST_TEST(!entries.empty());
+	BOOST_TEST(entries.size() < 6000u);
+	for (const auto& entry : entries) {
+		BOOST_REQUIRE_EQUAL(entry.as_object().at("path").as_string().size(), 1000u);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(Branches_AreCappedAtFourMiB)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		const std::string line = "refs/heads/" + std::string(1000, 'b') + std::string("\0aaaa\0\0 \n", 9);
+		for (int i = 0; i < 6000 && !stop.stop_requested(); ++i) on_line(line);
+		platform::process_result result = exited(143);
+		result.cancelled = stop.stop_requested();
+		return result;
+	};
+	make_service(fake_options());
+	const json::value result = finish(service->start_branches());
+	BOOST_TEST(result.as_object().at("truncated").as_bool());
+	const json::array& branches = result.as_object().at("branches").as_array();
+	BOOST_TEST(!branches.empty());
+	for (const auto& branch : branches) {
+		BOOST_REQUIRE_EQUAL(branch.as_object().at("name").as_string().size(), 1000u);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(FilterDrivers_OfTheConfig_AreSwitchedOffOnEveryCall)
+{
+	filter_config = "filter.evil.clean\n./run-me\0filter.evil.smudge\nx\0filter.with.dot.process\ny\0"s;
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	make_service(fake_options());
+
+	finish(service->start_diff({}, false));
+	const auto& args = calls.back();
+	for (const char* config : { "filter.evil.clean=", "filter.evil.smudge=", "filter.evil.process=",
+			"filter.evil.required=false", "filter.with.dot.clean=", "filter.with.dot.process=", "filter.lfs.clean=" }) {
+		BOOST_TEST_CONTEXT(config) {
+			BOOST_TEST(has_arg(args, config));
+		}
+	}
+	BOOST_TEST(std::count(args.begin(), args.end(), "filter.evil.clean=") == 1);
+	// The listing itself runs with the safe base and nothing of the repository's.
+	const auto& listing = calls[calls.size() - 2];
+	BOOST_TEST(has_arg(listing, "--get-regexp"));
+	BOOST_TEST(has_arg(listing, "core.fsmonitor=false"));
+}
+
+BOOST_AUTO_TEST_CASE(AFilterDriverThatCannotBeOverridden_RefusesTheRead)
+{
+	filter_config = "filter.a=b.clean\nx\0"s;
+	bool ran = false;
+	command = [&ran](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { ran = true; return exited(0); };
+	make_service(fake_options());
+
+	const json::value result = finish(service->start_status());
+	BOOST_TEST(text(result.as_object().at("error").as_object().at("code")) == "unsafe_repository");
+	BOOST_TEST(!ran);
+}
+
+BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	auto options = fake_options();
+	for (const char* entry : { "GIT_DIR=/elsewhere/.git", "GIT_WORK_TREE=/elsewhere", "GIT_INDEX_FILE=/i",
+			"GIT_OBJECT_DIRECTORY=/o", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/a", "GIT_CONFIG_PARAMETERS='core.fsmonitor'='x'",
+			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=x", "GIT_EXEC_PATH=/evil",
+			"GIT_EXTERNAL_DIFF=/evil", "GIT_CEILING_DIRECTORIES=/kept", "HOME=/kept" }) {
+		options.environment->emplace_back(entry);
+	}
+	make_service(std::move(options));
+	finish(service->start_status());
+
+	const auto& env = *last_options.environment;
+	for (const char* gone : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+			"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
+			"GIT_CONFIG_VALUE_0", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF" }) {
+		BOOST_TEST_CONTEXT(gone) {
+			BOOST_TEST(!edt::variable_of(env, gone).has_value());
+		}
+	}
+	BOOST_TEST(edt::variable_of(env, "GIT_CEILING_DIRECTORIES").value_or("") == "/kept");
+	BOOST_TEST(edt::variable_of(env, "HOME").value_or("") == "/kept");
+
+	auto empty_exec = fake_options();
+	empty_exec.environment->emplace_back("GIT_EXEC_PATH=");
+	make_service(std::move(empty_exec));
+	finish(service->start_status());
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_EXEC_PATH").has_value());
+}
+
+// The watchdog stopped nothing: git answered (the runner ignored the stop), so the probe is not a hang.
+BOOST_AUTO_TEST_CASE(AProbeThatFinishesPastTheDeadline_WithoutBeingStopped_IsNotAHang)
+{
+	auto options = fake_options();
+	options.probe_timeout = std::chrono::milliseconds(20);
+	options.run = [this](const fs::path&, const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "--version")) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			on_line("git version 2.45.1\n");
+			return exited(0);
+		}
+		on_line(edt::utf8_of(base) + "\n");
+		return exited(0);
+	};
+	make_service(std::move(options));
+	BOOST_TEST(service->info().available, service->info().reason);
+	BOOST_TEST(service->info().git_version == "2.45.1");
 }
 
 // A job.cancel while git runs reaches the runner's stop token; the job ends cancelled.

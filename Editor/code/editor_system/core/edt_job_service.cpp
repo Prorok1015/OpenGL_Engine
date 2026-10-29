@@ -1,6 +1,7 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/common/logger/engine_log.h>
+#include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <format>
 #include <vector>
@@ -118,9 +119,22 @@ void edt::job_service::retire(job_id id, job_status status, std::string error, s
 	// A copy: a job_finished slot may retire more jobs and push this outcome out of the history.
 	const std::optional<boost::json::value> finished_result = m_events ? outcome.result : std::nullopt;
 
+	const std::size_t result_bytes = outcome.result ? boost::json::serialize(*outcome.result).size() : 0;
 	m_finished.push_back(std::move(outcome));
+	m_result_sizes.push_back(result_bytes);
+	m_result_bytes += result_bytes;
 	while (m_finished.size() > FINISHED_HISTORY) {
+		m_result_bytes -= m_result_sizes.front();
 		m_finished.pop_front();
+		m_result_sizes.pop_front();
+	}
+	// The newest result always stays; older ones go first.
+	for (std::size_t i = 0; m_result_bytes > RESULT_BUDGET && i + 1 < m_finished.size(); ++i) {
+		if (m_result_sizes[i] == 0) continue;
+		m_finished[i].result.reset();
+		m_finished[i].result_dropped = true;
+		m_result_bytes -= m_result_sizes[i];
+		m_result_sizes[i] = 0;
 	}
 
 	if (!m_events) return;

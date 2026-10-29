@@ -32,8 +32,11 @@ namespace edt
 	// Git for the editor and its agents (#454). Read-only here: status, diff, log, branches. Every git command runs as
 	// a job_service job on ds::lane::io (job.cancel stops git) and its parsed answer is the job's result (job.get).
 	// Git runs with LC_ALL=C, no terminal or credential prompt (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never, ssh in
-	// BatchMode unless GIT_SSH_COMMAND is set), `-c core.quotepath=off --no-optional-locks --literal-pathspecs`, and
-	// stderr read apart from stdout. There is no force-push, reset --hard, branch delete or rebase, and never will be.
+	// BatchMode unless GIT_SSH_COMMAND is set), without the variables that redirect it or add config (GIT_DIR,
+	// GIT_CONFIG_*, ...), and stderr read apart from stdout. A read never runs a program the repository's config names:
+	// --no-pager, core.fsmonitor=false, core.hooksPath to nothing, diff.external empty, --no-ext-diff --no-textconv,
+	// log.showSignature=false, submodules ignored, and every filter driver (listed per job, plus lfs) emptied.
+	// There is no force-push, reset --hard, branch delete or rebase, and never will be.
 	// Main thread only.
 	class vcs_service
 	{
@@ -106,11 +109,12 @@ namespace edt
 
 	// vcs.info {} -> {available, reason?, code?, root?, git_version?} (sync)
 	// vcs.status {} -> {job}; result {branch: {head, detached, oid, upstream?, ahead?, behind?},
-	//     entries: [{path, orig_path?, index, worktree, kind: ordinary|renamed|unmerged|untracked|ignored}], clean}
+	//     entries: [{path, orig_path?, index, worktree, kind: ordinary|renamed|unmerged|untracked|ignored}], clean, truncated}
 	// vcs.diff {path?, staged?} -> {job}; result {text, truncated} (text cut at 256 KiB, truncated true then)
 	// vcs.log {ref?, path?, limit? (1..200, 50), cursor?} -> {job}; result {commits: [{hash, parents, author, email,
-	//     time, subject}], next_cursor?}
-	// vcs.branches {} -> {job}; result {current?, branches: [{name, full_name, oid, upstream?, head, remote}]}
+	//     time, subject}], next_cursor?, truncated}
+	// vcs.branches {} -> {job}; result {current?, branches: [{name, full_name, oid, upstream?, head, remote}], truncated}
+	// status, log and branches stop git past 4 MiB of output and keep the whole records (truncated: true).
 	// A git failure ends the job `done` with result {error: {code, message, stderr_tail, exit_code}}: code from
 	// vcs::classify_error (auth_required, not_a_repository, ...) or vcs_unavailable when git could not start; message
 	// is git's last fatal:/error: line; stderr_tail its last 20 stderr lines (at most 4 KiB).
