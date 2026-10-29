@@ -64,8 +64,18 @@ bool prj::refuse_without_asking(version_action action, bool non_interactive)
 
 namespace {
 
-	// A link at code/ (a symlink, or a junction on Windows, which symlink_status reports as a symlink too) would send
-	// every code:// write wherever it leads.
+	// MSVC's std::filesystem has a file type of its own for a junction.
+	bool is_junction(const fs::file_status& status)
+	{
+#ifdef _MSC_VER
+		return status.type() == fs::file_type::junction;
+#else
+		(void)status;
+		return false;
+#endif
+	}
+
+	// A link at code/ (a symlink or a junction) would send every code:// write wherever it leads.
 	std::optional<std::string> verify_code_dir(const prj::project_context& project, const fs::path& root,
 		const std::vector<fs::path>& content_roots)
 	{
@@ -78,7 +88,7 @@ namespace {
 		if (ec) {
 			return std::format("'{}' cannot be checked: {}", dir.generic_string(), ec.message());
 		}
-		if (fs::is_symlink(status) || status.type() == fs::file_type::junction) {
+		if (fs::is_symlink(status) || is_junction(status)) {
 			return std::format("'{}' is a link; the project's code folder must be a real folder", dir.generic_string());
 		}
 		if (!fs::is_directory(status)) {
