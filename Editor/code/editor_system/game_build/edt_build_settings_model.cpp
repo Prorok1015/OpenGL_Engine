@@ -424,6 +424,7 @@ std::vector<edt::registration> edt::register_build_settings_commands(cmd::comman
 	cmd::command_desc get;
 	get.id = "build.settings.get";
 	get.summary = "The game build settings of the open project: configuration, jobs, module reload, log verbosity, and the "
+	get.category = cmd::agent_category::read;
 		"CMake defines per configuration (team ones from CMakePresets.json, the user's from CMakeUserPresets.json)";
 	get.args_schema = cmd::no_args_schema();
 	get.result_schema = json::parse(k_get_result_schema);
