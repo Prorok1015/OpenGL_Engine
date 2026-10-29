@@ -58,13 +58,13 @@ namespace {
 		return json::object{ { "context", json::string(scene.world_names[node->first]) }, { "path", std::move(ids) } };
 	}
 
-	constexpr std::string_view no_args = R"({"type":"object","properties":{},"additionalProperties":false})";
-	constexpr std::string_view state_result = R"({"type":"object","properties":{
+	constexpr std::string_view no_args = R"json({"type":"object","properties":{},"additionalProperties":false})json";
+	constexpr std::string_view state_result = R"json({"type":"object","properties":{
 		"open":{"type":"boolean","description":"the caller has a session open now"},
 		"label":{"type":"string"},
 		"group":{"type":"integer","description":"the history group of the current step"},
 		"steps":{"type":"integer","description":"steps of the session: checkpoints + 1"},
-		"records":{"type":"integer","description":"undo records of the session in the history"}},"required":["open"]})";
+		"records":{"type":"integer","description":"undo records of the session in the history"}},"required":["open"]})json";
 }
 
 std::vector<edt::registration> edt::agent_sessions::register_commands(cmd::command_registry& commands)
@@ -85,23 +85,23 @@ std::vector<edt::registration> edt::agent_sessions::register_commands(cmd::comma
 	};
 
 	add("agent.session.begin", "Open a session: the caller's edits of the scene become one undo record per step, labelled `label`, that agent.session.rollback can undo whole (an open session of the caller is ended first)",
-		R"({"type":"object","properties":{"label":{"type":"string","minLength":1}},"required":["label"],"additionalProperties":false})",
+		R"json({"type":"object","properties":{"label":{"type":"string","minLength":1}},"required":["label"],"additionalProperties":false})json",
 		state_result, true, &agent_sessions::begin);
 	add("agent.session.checkpoint", "End the current step of the session and start the next one (its own undo record); rollback still undoes all steps",
-		R"({"type":"object","properties":{"label":{"type":"string","minLength":1,"description":"the next step's; default: the session's"}},"additionalProperties":false})",
+		R"json({"type":"object","properties":{"label":{"type":"string","minLength":1,"description":"the next step's; default: the session's"}},"additionalProperties":false})json",
 		state_result, true, &agent_sessions::checkpoint);
 	add("agent.session.end", "Close the session; its edits stay as they are (and can still be undone one record at a time)",
 		no_args, state_result, true, &agent_sessions::end);
 	add("agent.session.rollback", "Undo the session's edits, newest first; stops before an edit whose node someone else (a person, another session) changed after it (stopped_at) and then leaves the session open",
 		no_args,
-		R"({"type":"object","properties":{
+		R"json({"type":"object","properties":{
 			"rolled_back":{"type":"integer"},"remaining":{"type":"integer","description":"edits still applied: the rollback stopped before them"},
 			"unavailable":{"type":"integer","description":"edits that went over the history limit and stay applied"},
 			"open":{"type":"boolean","description":"the session is still open: it stopped at a conflict"},
 			"failed":{"type":"boolean","description":"undoing threw: the history was cleared"},
 			"stopped_at":{"type":"object","properties":{"key":{"type":"string"},"label":{"type":"string","description":"the label of the later edit in the way: a person's, or a step of another session"},
 				"ref":{"type":"object","description":"the node, as node.get takes it"}},"required":["key"]}},
-			"required":["rolled_back","remaining","open"]})",
+			"required":["rolled_back","remaining","open"]})json",
 		true, &agent_sessions::rollback);
 	add("agent.session.get", "The caller's session: open, label, steps and undo records", no_args, state_result, false, &agent_sessions::get);
 	return out;
