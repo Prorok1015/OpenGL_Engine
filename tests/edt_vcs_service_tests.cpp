@@ -14,6 +14,7 @@
 #include <format>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -1310,6 +1311,24 @@ BOOST_AUTO_TEST_CASE(TheRepositoryConfigAllowlist)
 	make_service(real_options(clone));
 	const json::value in_clone = finish(service->start_branch_create("topic", {}, agent));
 	BOOST_TEST(!in_clone.as_object().contains("error"), json::serialize(in_clone));
+
+	// What newer git writes on clone or fetch: data only.
+	for (const auto& [key, value] : std::initializer_list<std::pair<const char*, const char*>>{
+		{ "remote.origin.followRemoteHEAD", "warn" }, { "remote.origin.promisor", "false" },
+		{ "remote.origin.partialclonefilter", "blob:none" }, { "core.sparseCheckout", "false" },
+		{ "core.sparseCheckoutCone", "true" }, { "maintenance.auto", "false" }, { "submodule.active", "." },
+		{ "submodule.lib.url", "https://example.com/lib.git" }, { "submodule.lib.active", "true" } }) {
+		git(clone, { "config", key, value });
+	}
+	const json::value newer_keys = finish(service->start_branch_create("topic2", {}, agent));
+	BOOST_TEST(!newer_keys.as_object().contains("error"), json::serialize(newer_keys));
+
+	git(clone, { "config", "submodule.lib.update", "!touch pwned" });
+	const json::value update_command = finish(service->start_branch_create("topic3", {}, agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(update_command));
+	BOOST_REQUIRE(is_error(update_command, "unsafe_repository"));
+	BOOST_TEST(text(update_command.as_object().at("error").as_object().at("message")).find("submodule.lib.update")
+		!= std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -629,18 +629,25 @@ namespace {
 		const auto one_of = [](std::string_view value, std::initializer_list<std::string_view> allowed) {
 			return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
 		};
-		if (one_of(section, { "extensions", "index", "gc", "lfs" })) return true;
+		if (one_of(section, { "extensions", "index", "gc", "lfs", "maintenance" })) return true;
 		if (!subsection) {
 			if (section == "core") {
 				return one_of(name, { "repositoryformatversion", "filemode", "bare", "logallrefupdates", "ignorecase",
-					"symlinks", "precomposeunicode", "autocrlf", "eol", "safecrlf", "longpaths" })
+					"symlinks", "precomposeunicode", "autocrlf", "eol", "safecrlf", "longpaths", "sparsecheckout",
+					"sparsecheckoutcone" })
 					|| (name == "hookspath" && allow_hooks);
 			}
 			if (section == "user") return one_of(name, { "name", "email" });
 			if (section == "credential") return name == "helper";
-			return one_of(lower, { "init.defaultbranch", "pull.rebase", "pull.ff", "push.default", "fetch.prune" });
+			return one_of(lower, { "init.defaultbranch", "pull.rebase", "pull.ff", "push.default", "fetch.prune",
+				"submodule.active" });
 		}
-		if (section == "remote") return one_of(name, { "url", "pushurl", "fetch", "tagopt", "prune" });
+		if (section == "remote") {
+			return one_of(name, { "url", "pushurl", "fetch", "tagopt", "prune", "followremotehead", "promisor",
+				"partialclonefilter" });
+		}
+		// Never submodule.<name>.update: "!command" runs it.
+		if (section == "submodule") return one_of(name, { "url", "active" });
 		if (section == "branch") return one_of(name, { "remote", "merge", "rebase", "pushremote" });
 		if (section == "credential") return name == "helper";
 		return section == "filter";
