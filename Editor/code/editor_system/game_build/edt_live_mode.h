@@ -8,6 +8,7 @@
 #include <boost/json/object.hpp>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -32,8 +33,13 @@ namespace edt
 
 	struct live_mode_options
 	{
-		// For live_build; `now` is also the clock of live.status.
+		// For live_build; `now` is also the clock of live.status. Its `reload` is replaced when the two below are set.
 		live_build_deps build;
+		// Runs `fn` once on the next UI frame under `id` (editor_layer::register_implicit, as game_reloader_options).
+		std::function<void(const std::string& id, std::function<void()> fn)> next_frame;
+		// game_reloader::reload_quiet. With next_frame: build.reload asks for it on the next UI frame (k_reload_frame_id
+		// + module), never inside tick(), and hands its report to live_build.
+		std::function<core::reload_report(const std::string& module)> reload_module;
 		// Why live mode cannot be turned on now; empty: it can. Null: it always can.
 		std::function<std::string()> unavailable_reason;
 		// Writes live_enabled into build.json; the error, nullopt when it is stored. Null: not stored.
@@ -53,6 +59,9 @@ namespace edt
 	{
 	public:
 		static constexpr const char* k_toggle_id = "build.live.toggle";
+		// Not #435's "edt/reload_game_module/": register_implicit ignores a taken id, and a dropped request would leave
+		// live_build waiting in `reloading` for a report that never comes.
+		static constexpr std::string_view k_reload_frame_id = "edt/live_reload_game_module/";
 
 		live_mode(problem_list& problems, action_registry& actions, live_mode_options options);
 		~live_mode();
@@ -84,6 +93,8 @@ namespace edt
 		// hh:mm:ss of the last reload, local time.
 		const std::string& reload_clock();
 
+		// Seen by the reloads queued for the next UI frame, which may come after this is gone.
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 		live_mode_options m_options;
 		std::function<std::chrono::steady_clock::time_point()> m_now;
 		live_build m_build;

@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <functional>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -50,6 +52,10 @@ struct live_mode_fixture
 	bool building = false;
 	std::vector<edt::build_request> starts;
 	std::vector<std::string> reloads;
+	// The modules whose running copy is the build/bin file as it is now.
+	std::set<std::string> current;
+	// What next_frame queued: the editor runs them in its next UI frame, the test in run_frame().
+	std::vector<std::pair<std::string, std::function<void()>>> frames;
 	std::string unavailable;
 	std::vector<bool> stored;
 	int toggled = 0;
@@ -66,8 +72,12 @@ struct live_mode_fixture
 		};
 		options.build.is_building = [this] { return building; };
 		options.build.cancel_build = [this] { building = false; };
-		options.build.reload = [this](const std::string& module) {
+		options.build.is_loaded_current = [this](const std::string& module) { return current.contains(module); };
+		options.build.modules = [] { return std::vector<std::string>{ "game" }; };
+		options.next_frame = [this](const std::string& id, std::function<void()> fn) { frames.emplace_back(id, std::move(fn)); };
+		options.reload_module = [this](const std::string& module) {
 			reloads.push_back(module);
+			current.insert(module);
 			return core::reload_report{ core::reload_status::reloaded, {} };
 		};
 		options.unavailable_reason = [this] { return unavailable; };
@@ -77,6 +87,27 @@ struct live_mode_fixture
 		};
 		options.on_toggled = [this] { ++toggled; };
 		live = std::make_unique<edt::live_mode>(problems, actions, std::move(options));
+	}
+
+	void run_frame()
+	{
+		auto queued = std::move(frames);
+		frames.clear();
+		for (auto& [id, fn] : queued) fn();
+	}
+
+	// What game_builder does when the build of starts[index] succeeds: the build/bin file is new.
+	void succeed(std::size_t index)
+	{
+		BOOST_REQUIRE(index < starts.size());
+		BOOST_REQUIRE(starts[index].on_finished);
+		edt::build_outcome outcome;
+		outcome.kind = edt::build_outcome::succeeded;
+		outcome.job = 7;
+		outcome.modules.push_back(edt::game_module_build_result{ "game", "build/bin/game.dll", "debuggame", 7, false });
+		building = false;
+		current.erase("game");
+		starts[index].on_finished(outcome);
 	}
 
 	std::optional<edt::menu_item_info> toggle_item() const
@@ -250,7 +281,7 @@ BOOST_AUTO_TEST_CASE(IsOffByDefault_TheToggleTurnsItOnAndStoresIt)
 
 	BOOST_REQUIRE(actions.invoke(edt::live_mode::k_toggle_id, json::object{}).ok);
 	BOOST_TEST(live->enabled());
-	BOOST_TEST(live->status().state == edt::live_state::idle);
+	BOOST_TEST((live->status().state == edt::live_state::idle));
 	BOOST_TEST((stored == std::vector<bool>{ true }));
 	BOOST_TEST(toggled == 1);
 	BOOST_TEST(toggle_item()->checked);
@@ -299,7 +330,40 @@ BOOST_AUTO_TEST_CASE(CodeChanges_StartALiveBuildAfterTheDebounce)
 	now += edt::live_build::k_debounce;
 	live->tick();
 	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
-	BOOST_TEST(live->status().state == edt::live_state::building);
+	BOOST_TEST((live->status().state == edt::live_state::building));
+}
+
+// The reload after the quiet period is only asked for in tick(); it runs in the next UI frame.
+BOOST_AUTO_TEST_CASE(TheLiveReload_NeverRunsInsideTick_OnlyInTheNextUiFrame)
+{
+	make();
+	BOOST_REQUIRE(!live->set_enabled(true, false));
+	live->on_changes(std::vector<res::file_change>{ file_change("code://src/game.cpp") });
+	now += edt::live_build::k_debounce;
+	live->tick();
+	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+	succeed(0);
+	now += std::chrono::milliseconds(edt::k_default_live_quiet_ms);
+	live->tick();
+	live->tick();
+	BOOST_TEST(reloads.empty());
+	BOOST_TEST((live->status().state == edt::live_state::reloading));
+	BOOST_REQUIRE_EQUAL(frames.size(), 1u);
+
+	run_frame();
+	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
+	BOOST_TEST((live->status().state == edt::live_state::reloaded));
+}
+
+BOOST_AUTO_TEST_CASE(AFrameQueuedBeforeLiveModeWasDestroyed_ReloadsNothing)
+{
+	make();
+	BOOST_REQUIRE(!live->set_enabled(true, false));
+	BOOST_REQUIRE(live->build().reload_now().kind == edt::reload_now_kind::requested);
+	BOOST_REQUIRE_EQUAL(frames.size(), 1u);
+	live.reset();
+	run_frame();
+	BOOST_TEST(reloads.empty());
 }
 
 // The Build Settings window applies build.json; live mode follows its live_enabled through the model's callback.
@@ -376,30 +440,38 @@ BOOST_AUTO_TEST_CASE(LiveOn_TheLiveToolsAreListedAndCallable_BuildGameModuleStay
 	BOOST_TEST(status.structured.as_object().at("enabled").as_bool());
 	BOOST_TEST(status.structured.as_object().at("state").as_string() == "idle");
 
-	// Nothing was built yet: refused with the reason.
+	// The running copy is the build's file already: nothing to swap.
+	current.insert("game");
 	mcp::call_result reload = call_tool("live_reload_now");
-	BOOST_TEST(reload.is_error);
-	BOOST_TEST(reloads.empty());
+	BOOST_REQUIRE(!reload.is_error);
+	BOOST_TEST(reload.structured.as_object().at("status").as_string() == "up_to_date");
+	BOOST_TEST(reload.structured.as_object().at("message").as_string() == "up to date");
+	BOOST_TEST(frames.empty());
 
 	mcp::call_result rebuild = call_tool("live_rebuild_now");
 	BOOST_REQUIRE(!rebuild.is_error);
 	BOOST_TEST(rebuild.structured.as_object().at("started").as_bool());
 	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+	// Refused while the build runs.
+	BOOST_TEST(call_tool("live_reload_now").is_error);
 
-	// The build succeeds; the agent reloads without waiting for the quiet period.
-	edt::build_outcome outcome;
-	outcome.kind = edt::build_outcome::succeeded;
-	outcome.job = 7;
-	outcome.modules.push_back(edt::game_module_build_result{ "game", "build/bin/game.dll", "debuggame", 7, false });
-	building = false;
-	BOOST_REQUIRE(starts[0].on_finished);
-	// No tick: it would reload by itself (no change, so no quiet period to wait for).
-	starts[0].on_finished(outcome);
+	// The build succeeds; the agent asks for the reload without waiting for the quiet period. No tick in between: it
+	// would request the reload by itself (no change, so no quiet period).
+	succeed(0);
 	reload = call_tool("live_reload_now");
 	BOOST_REQUIRE(!reload.is_error);
-	BOOST_TEST(reload.structured.as_object().at("reloaded").as_bool());
-	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
+	BOOST_TEST(reload.structured.as_object().at("status").as_string() == "requested");
+	// Asked for on the next UI frame, never inside the call.
+	BOOST_TEST(reloads.empty());
+	BOOST_REQUIRE_EQUAL(frames.size(), 1u);
+	BOOST_TEST(frames[0].first == "edt/live_reload_game_module/game");
+	status = call_tool("live_status");
+	BOOST_TEST(status.structured.as_object().at("state").as_string() == "reloading");
+	// A second request waits for the first.
+	BOOST_TEST(call_tool("live_reload_now").is_error);
 
+	run_frame();
+	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
 	status = call_tool("live_status");
 	BOOST_REQUIRE(!status.is_error);
 	BOOST_TEST(status.structured.as_object().at("state").as_string() == "reloaded");

@@ -496,7 +496,26 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	live.build.start_build = [this](build_request request) { return m_game_builder->start(std::move(request)); };
 	live.build.is_building = [this] { return m_game_builder->is_building(); };
 	live.build.cancel_build = [this] { m_game_builder->cancel(); };
-	live.build.reload = [this](const std::string& module) { return m_game_reloader->reload_quiet(module); };
+	// The host appears in the storage after init, like for game_reloader: looked up when used.
+	live.build.is_loaded_current = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
+	};
+	live.build.modules = [&data] {
+		std::vector<std::string> modules;
+		if (data.has_value<prj::project_context>()) {
+			for (const auto& module : data.require<prj::project_context>().data.modules) {
+				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
+			}
+		}
+		return modules;
+	};
+	live.next_frame = [this](const std::string& id, std::function<void()> fn) {
+		editor_layer->register_implicit(id, [fn = std::move(fn)] {
+			fn();
+			return false;
+		});
+	};
+	live.reload_module = [this](const std::string& module) { return m_game_reloader->reload_quiet(module); };
 	live.unavailable_reason = [this, has_code] {
 		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
 		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };

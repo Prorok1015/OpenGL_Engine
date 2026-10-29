@@ -42,8 +42,11 @@ namespace {
 
 	constexpr const char* k_reload_schema = R"({
 		"type": "object",
-		"properties": { "reloaded": { "type": "boolean" }, "message": { "type": "string" } },
-		"required": ["reloaded"],
+		"properties": {
+			"status": { "type": "string", "enum": ["requested", "up_to_date"] },
+			"message": { "type": "string" }
+		},
+		"required": ["status", "message"],
 		"additionalProperties": false
 	})";
 
@@ -82,6 +85,26 @@ namespace {
 #endif
 		const auto of_day = std::chrono::hh_mm_ss(seconds - std::chrono::floor<std::chrono::days>(seconds));
 		return std::format("{:02}:{:02}:{:02}", of_day.hours().count(), of_day.minutes().count(), of_day.seconds().count());
+	}
+
+	edt::live_mode_options with_frame_reload(edt::live_mode_options options, const std::shared_ptr<int>& alive)
+	{
+		if (!options.next_frame || !options.reload_module) return options;
+		options.build.reload = [next_frame = options.next_frame, reload = options.reload_module,
+			current = options.build.is_loaded_current, alive = std::weak_ptr<int>(alive)](const std::string& module,
+			std::function<void(const core::reload_report&)> done) {
+			next_frame(std::string(edt::live_mode::k_reload_frame_id) + module,
+				[reload, current, alive, module, done = std::move(done)] {
+					if (alive.expired()) return;
+					// #435 may have taken the same file earlier in this frame: a second swap would only cost a level rebuild.
+					if (current && current(module)) {
+						done(core::reload_report{ core::reload_status::reloaded, "up to date" });
+						return;
+					}
+					done(reload(module));
+				});
+		};
+		return options;
 	}
 
 	double seconds_between(std::chrono::steady_clock::time_point from, std::chrono::steady_clock::time_point to)
@@ -137,7 +160,7 @@ json::object edt::live_status_json(bool enabled, const live_status& status, std:
 }
 
 edt::live_mode::live_mode(problem_list& problems, action_registry& actions, live_mode_options options)
-	: m_options(std::move(options))
+	: m_options(with_frame_reload(std::move(options), m_alive))
 	, m_now(m_options.build.now ? m_options.build.now
 		: std::function<std::chrono::steady_clock::time_point()>([] { return std::chrono::steady_clock::now(); }))
 	, m_build(problems, m_options.build)
@@ -301,21 +324,26 @@ void edt::live_mode::register_commands(action_registry& actions)
 
 	cmd::command_desc reload;
 	reload.id = "live.reload_now";
-	reload.summary = "Live mode: reload the game module now from the last successful live build, without waiting for the "
-		"quiet period. Fails when no such build exists or the sources changed after it started";
+	reload.summary = "Live mode: reload now, without waiting for the quiet period, each game module whose build differs from "
+		"the running copy. status requested: the reload runs on the next editor frame, its result shows in live.status "
+		"(reloaded or reload_failed); up_to_date: nothing to reload. Fails while a build runs or reloads still wait";
 	reload.args_schema = cmd::no_args_schema();
 	reload.result_schema = json::parse(k_reload_schema);
 	reload.mutates = true;
 	reload.agent_when_enabled = true;
 	reload.enabled = live_on;
 	reload.invoke = [this](const cmd::call&) {
-		const std::optional<std::string> problem = m_build.reload_now();
-		if (!problem) return cmd::result::success(json::object{ { "reloaded", true } });
-		// Tried and not taken: an answer, not a refusal.
-		if (m_build.status().state == live_state::reload_failed) {
-			return cmd::result::success(json::object{ { "reloaded", false }, { "message", json::string(*problem) } });
+		const reload_now_result outcome = m_build.reload_now();
+		switch (outcome.kind) {
+		case reload_now_kind::requested:
+			return cmd::result::success(json::object{ { "status", "requested" }, { "message", json::string(outcome.message.empty()
+				? std::string_view("the reload runs on the next editor frame; see live.status") : std::string_view(outcome.message)) } });
+		case reload_now_kind::up_to_date:
+			return cmd::result::success(json::object{ { "status", "up_to_date" }, { "message", json::string(outcome.message) } });
+		case reload_now_kind::refused:
+			break;
 		}
-		return cmd::result::failure(cmd::codes::failed, *problem);
+		return cmd::result::failure(cmd::codes::failed, outcome.message);
 	};
 	if (auto added = actions.add(std::move(reload), std::nullopt); added.active()) m_registrations.push_back(std::move(added));
 }
