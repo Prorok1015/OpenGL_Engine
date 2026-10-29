@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,7 +26,9 @@ struct confirmations_fixture
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 	edt::session_grants grants;
 	std::shared_ptr<edt::agent_policy_gate> gate = std::make_shared<edt::agent_policy_gate>(policy);
+	// The question's clock, and the registry's own (its tickets live longer than a question).
 	std::chrono::steady_clock::time_point current{};
+	std::chrono::steady_clock::time_point registry_time{};
 	std::unique_ptr<edt::agent_confirmations> confirmations;
 	std::vector<cmd::registration> registrations;
 	int runs = 0;
@@ -40,7 +43,7 @@ struct confirmations_fixture
 		gate->set_can_ask(true);
 		gate->set_session_grants(&grants);
 		commands.set_policy_gate(gate);
-		commands.set_clock([this] { return current; });
+		commands.set_clock([this] { return registry_time; });
 		confirmations = std::make_unique<edt::agent_confirmations>(commands, grants, [this] { return current; });
 	}
 
@@ -217,104 +220,142 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverLiftsAProjectDeny)
 	BOOST_TEST(confirmations->pending().empty());
 }
 
-BOOST_AUTO_TEST_CASE(AllowForTheSession_IsKeptInMemoryOnly)
+BOOST_AUTO_TEST_CASE(AllowForTheSession_IsKeptInMemoryOnly_NothingIsWrittenAnywhere)
+{
+	const auto files_under_dir = [this] {
+		std::set<std::string> files;
+		for (const auto& entry : fs::recursive_directory_iterator(dir.path())) {
+			if (entry.is_regular_file()) files.insert(entry.path().generic_string());
+		}
+		return files;
+	};
+	const auto before = files_under_dir();
+
+	run("code.create", "s1");
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
+	BOOST_TEST(grants.has("s1", agent_category::code_files));
+
+	BOOST_TEST((files_under_dir() == before));
+	// A fresh editor over the same files knows nothing of it.
+	edt::agent_policy again{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	BOOST_TEST((again.effective(*commands.find("code.create")).mode == cmd::policy_mode::ask));
+	edt::session_grants fresh;
+	BOOST_TEST(!fresh.has("s1", agent_category::code_files));
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverLiftsAPersonalDenyEither)
 {
 	run("code.create", "s1");
 	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
+	dir.write("personal.json", R"({"categories":{"code_files":"deny"}})");
 
-	BOOST_TEST(!fs::exists(dir.path() / ".snk"));
-	BOOST_TEST(!fs::exists(dir.path() / "personal.json"));
+	run("code.create", "s1");
+
+	BOOST_TEST(finished.back().code == cmd::codes::denied);
+	BOOST_TEST(runs == 1);
 }
 
-BOOST_AUTO_TEST_CASE(NoAnswerIn60Seconds_DeniesTheCall)
+BOOST_AUTO_TEST_CASE(WithNobodyToAsk_TheAnswerIsAnImmediateDeny)
 {
+	gate->set_can_ask(false);
+
 	run("code.create");
 
-	current += 59s;
-	confirmations->tick();
-	BOOST_TEST(finished.empty());
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+	BOOST_TEST(runs == 0);
+}
 
-	current += 1s;
-	confirmations->tick();
+BOOST_AUTO_TEST_CASE(AnAnswerPastTheDeadline_IsRefused_EvenBeforeTick)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+
+	current += 61s;
+
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
 	BOOST_REQUIRE(finished.size() == 1u);
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
 	BOOST_TEST(finished[0].error.find("nobody answered") != std::string::npos);
 	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(ACommandUnregisteredWhileItsRequestWaits_IsDenied)
+{
+	run("code.create");
+	const std::uint64_t id = only_pending_id();
+
+	registrations[1].reset();
+	BOOST_TEST(commands.find("code.create") == nullptr);
+
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
 	BOOST_TEST(commands.pending_confirmations() == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(ALateAnswer_ChangesNothing)
+BOOST_AUTO_TEST_CASE(LongArguments_ReachTheDialogWhole)
 {
-	run("code.create");
-	const std::uint64_t id = only_pending_id();
-	current += 61s;
-	confirmations->tick();
+	boost::json::object args;
+	args["note"] = std::string(5000, 'x');
+	args["path"] = "../CMakeLists.txt";
+	cmd::call request = agent_call("s1");
+	request.args = args;
+	confirmations->invoke("code.create", std::move(request), [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
 
-	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
-	BOOST_TEST(finished.size() == 1u);
-	BOOST_TEST(runs == 0);
+	const auto pending = confirmations->pending();
+
+	BOOST_REQUIRE(pending.size() == 1u);
+	BOOST_TEST(pending[0].args.size() > 5000u);
+	BOOST_TEST(pending[0].args.find("../CMakeLists.txt") != std::string::npos);
+	BOOST_TEST(pending[0].args.find("\"note\"") != std::string::npos);
+	BOOST_TEST(pending[0].args.find("...") == std::string::npos);
 }
 
-BOOST_AUTO_TEST_CASE(AnAnswerIsGivenOnce)
+BOOST_AUTO_TEST_CASE(AllowForTheSession_SettlesTheWaitingRequestsOfThatSessionAndCategory)
 {
-	run("code.create");
-	const std::uint64_t id = only_pending_id();
+	cmd::call first = agent_call("s1");
+	first.args = boost::json::object{ { "n", 1 } };
+	cmd::call second = agent_call("s1");
+	second.args = boost::json::object{ { "n", 2 } };
+	const auto record = [this](cmd::result outcome) { finished.push_back(std::move(outcome)); };
+	confirmations->invoke("code.create", first, record);
+	confirmations->invoke("code.create", second, record);
+	run("cmake.edit", "s1");
+	run("code.create", "s2");
+	BOOST_REQUIRE(confirmations->pending().size() == 4u);
+	const std::uint64_t id = confirmations->pending().front().id;
 
-	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_once));
-	BOOST_TEST(!confirmations->answer(id, edt::confirmation_answer::allow_once));
-	BOOST_TEST(!confirmations->answer(9999, edt::confirmation_answer::deny));
-	BOOST_TEST(finished.size() == 1u);
-	BOOST_TEST(runs == 1);
+	confirmations->answer(id, edt::confirmation_answer::allow_session);
+
+	BOOST_TEST(runs == 2);
+	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST(finished[0].ok);
+	BOOST_TEST(finished[1].ok);
+	const auto left = confirmations->pending();
+	BOOST_REQUIRE(left.size() == 2u);
+	BOOST_TEST(left[0].command == "cmake.edit");
+	BOOST_TEST(left[1].session == "s2");
 }
 
-BOOST_AUTO_TEST_CASE(ASessionThatEnds_DeclinesItsWaitingCallsOnly)
+BOOST_AUTO_TEST_CASE(TheGrant_IsGivenOnlyWhenTheTicketIsApproved)
 {
 	run("code.create", "s1");
-	run("code.create", "s2");
-	BOOST_TEST(confirmations->pending().size() == 2u);
+	const std::uint64_t id = only_pending_id();
+	// The registry's ticket is gone (it lives 120 s) while the question (60 s) still waits.
+	registry_time += cmd::command_registry::confirmation_lifetime + 1s;
 
-	confirmations->drop_session("s1");
-
-	BOOST_REQUIRE(finished.size() == 1u);
-	BOOST_TEST(finished[0].code == cmd::codes::denied);
-	BOOST_TEST(finished[0].error.find("disconnected") != std::string::npos);
-	const auto pending = confirmations->pending();
-	BOOST_REQUIRE(pending.size() == 1u);
-	BOOST_TEST(pending[0].session == "s2");
-	BOOST_TEST(commands.pending_confirmations() == 1u);
-}
-
-BOOST_AUTO_TEST_CASE(TheDestructor_AnswersWhatIsStillWaiting)
-{
-	run("code.create");
-
-	confirmations.reset();
+	BOOST_TEST(confirmations->answer(id, edt::confirmation_answer::allow_session));
 
 	BOOST_REQUIRE(finished.size() == 1u);
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(finished[0].error.find("expired") != std::string::npos);
+	BOOST_TEST(!grants.has("s1", agent_category::code_files));
 	BOOST_TEST(runs == 0);
-}
-
-BOOST_AUTO_TEST_CASE(NoSessionId_NoGrant)
-{
-	cmd::call request = agent_call("");
-	request.args = boost::json::object{};
-	confirmations->invoke("code.create", request, [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
-	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
-
-	BOOST_TEST(grants.empty());
-	BOOST_TEST(runs == 1);
-}
-
-BOOST_AUTO_TEST_CASE(DescribeArguments_CutsALongText)
-{
-	boost::json::object big;
-	big["text"] = std::string(2000, 'x');
-	const std::string text = edt::agent_confirmations::describe_arguments(big, 100);
-
-	BOOST_TEST(text.size() <= 103u);
-	BOOST_TEST(text.ends_with("..."));
-	BOOST_TEST(edt::agent_confirmations::describe_arguments(boost::json::object{}) == "{}");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

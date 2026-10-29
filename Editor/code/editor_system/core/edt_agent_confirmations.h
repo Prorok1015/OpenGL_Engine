@@ -17,7 +17,8 @@ namespace edt
 	enum class confirmation_answer : std::uint8_t
 	{
 		allow_once,
-		// Until this agent session ends: the same category is not asked about again for this session id. Kept in
+		// Until this agent session ends: the same category is not asked about again for this session id, and what already waits
+		// for that session and category is allowed with it (also a request whose command had its own `ask` entry). Kept in
 		// memory only (never written to a file), dropped with the session (drop_session), and it can only turn an ask
 		// into an allow, never lift a deny.
 		allow_session,
@@ -74,19 +75,18 @@ namespace edt
 		// confirmed one.
 		void invoke(std::string_view command_id, cmd::call request, finish done);
 
-		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped).
+		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped). Allowing
+		// runs the command, so call it from the frame's update, never from inside an ImGui window.
 		bool answer(std::uint64_t id, confirmation_answer what);
 
-		// Once per frame: times out what waited too long.
+		// Once per frame, from the editor's per-frame update, not from drawing the window: times out what waited too long.
+		// An answer after the deadline is refused whether or not tick() has run, and pending() leaves the late ones out.
 		void tick();
 
 		// The agent session ended: its waiting requests are declined and its grants forgotten.
 		void drop_session(std::string_view session);
 
 		std::vector<confirmation_request> pending() const;
-
-		// The arguments as text for the question, cut at `limit` characters.
-		static std::string describe_arguments(const boost::json::value& args, std::size_t limit = 600);
 
 	private:
 		struct waiting
