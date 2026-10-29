@@ -422,6 +422,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return false;
 		});
 	};
+	// Reload during a live build: waits under edt/reload_game_module/<module>, which also holds live mode's next build.
+	reload_options.each_frame = [this](const std::string& id, std::function<bool()> poll) {
+		editor_layer->register_implicit(id, std::move(poll));
+	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
 
 	create_live_mode(data);
