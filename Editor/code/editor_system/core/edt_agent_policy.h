@@ -4,10 +4,12 @@
 #include <snk/project/prj_json_text.h>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace edt
 {
@@ -18,7 +20,9 @@ namespace edt
 	//  - the person's own settings, edt://settings/agent_policy.json, which can only tighten the project's.
 
 	// The mode of a category when nothing says otherwise (the owner's decision of 2026-10-29): one table, easy to change.
-	// A command with `risk` confirm or deny_by_default is at least ask / deny, whatever its category says.
+	// A command with `risk` confirm or deny_by_default is at least ask / deny by default, and only an entry for that very
+	// command in the project's file lifts it: an entry for its category does not. `live` is allowed here, but effective_mode
+	// denies it whenever the live mode is off, whatever any layer says.
 	constexpr cmd::policy_mode default_mode(cmd::agent_category category)
 	{
 		using enum cmd::agent_category;
@@ -79,10 +83,11 @@ namespace edt
 	};
 
 	// The mode of one command: the project layer (or the defaults) combined with the personal layer by the stricter.
-	// `project_error` / `personal_error` (a layer that could not be read): every category but `read` is denied, so a
-	// broken file never opens anything.
+	// `project_error` / `personal_error` (a layer that could not be read): everything is denied, reads included, so a
+	// broken file never opens anything. `live_mode_on` false (the default: closed): a `live` command is denied before any
+	// layer is read.
 	effective_policy effective_mode(const cmd::command_desc& command, const policy_layer& project, const policy_layer& personal,
-		const std::string& project_error = {}, const std::string& personal_error = {});
+		const std::string& project_error = {}, const std::string& personal_error = {}, bool live_mode_on = false);
 
 	// The two files, read again when they change on disk (a person edits them; an agent cannot).
 	class agent_policy
@@ -92,7 +97,13 @@ namespace edt
 
 		// Re-reads a file that changed; cheap otherwise.
 		void refresh();
+		// Main thread only (as the registry that calls the gate).
 		effective_policy effective(const cmd::command_desc& command);
+
+		// Whether the live mode is on: `live` commands are denied while it is not (and while nothing says it is).
+		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
+		// Command ids a layer names that no command has get one warning per load (a typo, or a module not loaded yet).
+		void set_known_commands(std::function<bool(std::string_view)> exists);
 
 		const policy_layer& project() const { return m_project.layer; }
 		const policy_layer& personal() const { return m_personal.layer; }
@@ -113,16 +124,22 @@ namespace edt
 			std::string error;
 			bool loaded = false;
 			bool existed = false;
+			// The last error of looking at the file, so a file that cannot be examined is warned about once.
+			std::string stat_error;
 			std::filesystem::file_time_type modified{};
 			std::uintmax_t size = 0;
 		};
 
-		static void reload(source& what);
+		void reload(source& what);
 		static bool changed_on_disk(const source& what);
-		static std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write);
+		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write);
+		void warn_unknown_commands(const source& what) const;
 
 		source m_project;
 		source m_personal;
+		std::function<bool()> m_live_on;
+		std::function<bool(std::string_view)> m_known;
+		std::thread::id m_main_thread = std::this_thread::get_id();
 	};
 
 	// The registry's gate for agents: asks agent_policy. `ask` becomes a confirmation only when a person can be asked.

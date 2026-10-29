@@ -1,10 +1,15 @@
 #include "edt_agent_policy.h"
+#include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
+#include <boost/json/basic_parser.hpp>
 #include <boost/json/parse.hpp>
+#include <boost/json/parse_options.hpp>
 #include <fstream>
+#include <set>
+#include <thread>
 #include <iterator>
 #include <system_error>
 #include <utility>
@@ -33,6 +38,60 @@ namespace edt
 		std::string text_of(const json::string& text)
 		{
 			return std::string(text.data(), text.size());
+		}
+
+		// Boost.JSON keeps the last of two equal keys without a word: `{"code_edit":"deny","code_edit":"allow"}` would read as
+		// allow. This handler only watches the keys of every object and stops at the first one seen twice.
+		class duplicate_key_finder
+		{
+		public:
+			static constexpr std::size_t max_object_size = static_cast<std::size_t>(-1);
+			static constexpr std::size_t max_array_size = static_cast<std::size_t>(-1);
+			static constexpr std::size_t max_key_size = static_cast<std::size_t>(-1);
+			static constexpr std::size_t max_string_size = static_cast<std::size_t>(-1);
+
+			std::string duplicate;
+
+			bool on_document_begin(json::error_code&) { return true; }
+			bool on_document_end(json::error_code&) { return true; }
+			bool on_array_begin(json::error_code&) { return true; }
+			bool on_array_end(std::size_t, json::error_code&) { return true; }
+			bool on_object_begin(json::error_code&) { m_keys.emplace_back(); return true; }
+			bool on_object_end(std::size_t, json::error_code&) { m_keys.pop_back(); return true; }
+			bool on_key_part(std::string_view part, std::size_t, json::error_code&) { m_key.append(part); return true; }
+			bool on_key(std::string_view part, std::size_t, json::error_code& ec)
+			{
+				m_key.append(part);
+				const bool fresh = m_keys.back().insert(m_key).second;
+				if (!fresh) {
+					duplicate = m_key;
+					ec = json::error::object_too_large;
+				}
+				m_key.clear();
+				return fresh;
+			}
+			bool on_string_part(std::string_view, std::size_t, json::error_code&) { return true; }
+			bool on_string(std::string_view, std::size_t, json::error_code&) { return true; }
+			bool on_number_part(std::string_view, json::error_code&) { return true; }
+			bool on_int64(std::int64_t, std::string_view, json::error_code&) { return true; }
+			bool on_uint64(std::uint64_t, std::string_view, json::error_code&) { return true; }
+			bool on_double(double, std::string_view, json::error_code&) { return true; }
+			bool on_bool(bool, json::error_code&) { return true; }
+			bool on_null(json::error_code&) { return true; }
+			bool on_comment_part(std::string_view, json::error_code&) { return true; }
+			bool on_comment(std::string_view, json::error_code&) { return true; }
+
+		private:
+			std::vector<std::set<std::string>> m_keys;
+			std::string m_key;
+		};
+
+		std::string find_duplicate_key(std::string_view text)
+		{
+			json::basic_parser<duplicate_key_finder> parser{ json::parse_options{} };
+			json::error_code ec;
+			parser.write(text.data(), text.size(), ec);
+			return parser.handler().duplicate;
 		}
 
 		std::optional<std::string> read_text(const std::filesystem::path& file)
@@ -92,6 +151,9 @@ namespace edt
 			return out;
 		};
 
+		if (const std::string duplicate = find_duplicate_key(text); !duplicate.empty()) {
+			return fail("the key '" + duplicate + "' is written twice");
+		}
 		boost::system::error_code ec;
 		const json::value root = json::parse(text, ec);
 		if (ec || !root.is_object()) return fail("not a JSON object");
@@ -160,7 +222,7 @@ namespace edt
 	}
 
 	effective_policy effective_mode(const cmd::command_desc& command, const policy_layer& project, const policy_layer& personal,
-		const std::string& project_error, const std::string& personal_error)
+		const std::string& project_error, const std::string& personal_error, bool live_mode_on)
 	{
 		using cmd::agent_category;
 		if (command.category == agent_category::unset) {
@@ -169,21 +231,32 @@ namespace edt
 		if (command.category == agent_category::not_for_agents) {
 			return { cmd::policy_mode::deny, policy_source::fallback, "the command is not for agents" };
 		}
-		if (command.category != agent_category::read) {
-			if (!project_error.empty()) {
-				return { cmd::policy_mode::deny, policy_source::project, "the project's agent_policy.json cannot be used: " + project_error };
-			}
-			if (!personal_error.empty()) {
-				return { cmd::policy_mode::deny, policy_source::personal, "your agent policy cannot be used: " + personal_error };
-			}
+		// Before any layer is read: neither file can open the live commands while the mode is off.
+		if (command.category == agent_category::live && !live_mode_on) {
+			return { cmd::policy_mode::deny, policy_source::fallback, "the live mode is off" };
+		}
+		if (!project_error.empty()) {
+			return { cmd::policy_mode::deny, policy_source::project, "the project's agent_policy.json cannot be used: " + project_error };
+		}
+		if (!personal_error.empty()) {
+			return { cmd::policy_mode::deny, policy_source::personal, "your agent policy cannot be used: " + personal_error };
 		}
 
-		const cmd::policy_mode fallback = default_mode(command);
-		const std::optional<cmd::policy_mode> from_project = project.resolve(command);
-		const cmd::policy_mode base = from_project.value_or(fallback);
+		// A command's own entry is the only thing that lifts its risk floor; an entry for its category is held to it.
+		const cmd::policy_mode floor = mode_of_risk(command.risk);
+		const auto resolve = [&command, floor](const policy_layer& layer) -> std::optional<cmd::policy_mode> {
+			if (const auto own = layer.commands.find(command.id); own != layer.commands.end()) return own->second;
+			if (const auto category = layer.categories.find(command.category); category != layer.categories.end()) {
+				return cmd::strictest(category->second, floor);
+			}
+			return std::nullopt;
+		};
+
+		const std::optional<cmd::policy_mode> from_project = resolve(project);
+		const cmd::policy_mode base = from_project.value_or(default_mode(command));
 		const policy_source base_source = from_project ? policy_source::project : policy_source::default_table;
 
-		const std::optional<cmd::policy_mode> from_personal = personal.resolve(command);
+		const std::optional<cmd::policy_mode> from_personal = resolve(personal);
 		if (from_personal && *from_personal > base) {
 			return { *from_personal, policy_source::personal, "your own settings make it " + std::string(cmd::to_string(*from_personal)) };
 		}
@@ -198,16 +271,51 @@ namespace edt
 		m_personal.file = std::move(personal_file);
 	}
 
+	namespace {
+
+		// What can be told about a policy file without reading it. A file that cannot be examined (not "not found": a refused
+		// access, a folder where the file should be) is an error of the layer, never "no file".
+		struct file_probe
+		{
+			bool exists = false;
+			std::filesystem::file_time_type modified{};
+			std::uintmax_t size = 0;
+			std::string error;
+		};
+
+		file_probe probe_file(const std::filesystem::path& file)
+		{
+			file_probe out;
+			if (file.empty()) return out;
+			std::error_code ec;
+			const std::filesystem::file_status status = std::filesystem::status(file, ec);
+			if (ec) {
+				out.error = "the file cannot be examined: " + ec.message();
+				return out;
+			}
+			if (!std::filesystem::exists(status)) return out;
+			if (!std::filesystem::is_regular_file(status)) {
+				out.error = "it is not a regular file";
+				return out;
+			}
+			out.exists = true;
+			out.modified = std::filesystem::last_write_time(file, ec);
+			if (ec) {
+				out.error = "the file cannot be examined: " + ec.message();
+				return out;
+			}
+			out.size = std::filesystem::file_size(file, ec);
+			if (ec) out.error = "the file cannot be examined: " + ec.message();
+			return out;
+		}
+
+	}
+
 	bool agent_policy::changed_on_disk(const source& what)
 	{
 		if (!what.loaded) return true;
-		std::error_code ec;
-		const bool exists = std::filesystem::is_regular_file(what.file, ec);
-		if (exists != what.existed) return true;
-		if (!exists) return false;
-		const auto modified = std::filesystem::last_write_time(what.file, ec);
-		const auto size = std::filesystem::file_size(what.file, ec);
-		return modified != what.modified || size != what.size;
+		const file_probe now = probe_file(what.file);
+		return now.exists != what.existed || now.modified != what.modified || now.size != what.size || now.error != what.stat_error;
 	}
 
 	void agent_policy::reload(source& what)
@@ -215,26 +323,46 @@ namespace edt
 		what.loaded = true;
 		what.layer = {};
 		what.error.clear();
-		std::error_code ec;
-		what.existed = !what.file.empty() && std::filesystem::is_regular_file(what.file, ec);
-		if (!what.existed) {
-			what.modified = {};
-			what.size = 0;
-			return;
+		const file_probe now = probe_file(what.file);
+		what.existed = now.exists;
+		what.modified = now.modified;
+		what.size = now.size;
+		what.stat_error = now.error;
+		if (!now.error.empty()) {
+			what.error = now.error;
 		}
-		what.modified = std::filesystem::last_write_time(what.file, ec);
-		what.size = std::filesystem::file_size(what.file, ec);
-		const std::optional<std::string> text = read_text(what.file);
-		if (!text) {
-			what.error = "the file cannot be read";
-		}
-		else {
-			policy_parse_result parsed = parse_policy_layer(*text);
-			what.layer = std::move(parsed.layer);
-			what.error = std::move(parsed.error);
+		else if (now.exists) {
+			const std::optional<std::string> text = read_text(what.file);
+			if (!text) {
+				what.error = "the file cannot be read";
+			}
+			else {
+				policy_parse_result parsed = parse_policy_layer(*text);
+				what.layer = std::move(parsed.layer);
+				what.error = std::move(parsed.error);
+			}
 		}
 		if (!what.error.empty()) {
 			egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
+		}
+		warn_unknown_commands(what);
+	}
+
+	void agent_policy::warn_unknown_commands(const source& what) const
+	{
+		if (!m_known) return;
+		for (const auto& [id, mode] : what.layer.commands) {
+			if (!m_known(id)) {
+				egLOG_WARN("editor/agent_policy", "{}: no command '{}' (a typo, or a module that is not loaded)", fs_paths::utf8_of(what.file), id);
+			}
+		}
+	}
+
+	void agent_policy::set_known_commands(std::function<bool(std::string_view)> exists)
+	{
+		m_known = std::move(exists);
+		for (const source* what : { &m_project, &m_personal }) {
+			if (what->loaded) warn_unknown_commands(*what);
 		}
 	}
 
@@ -247,12 +375,15 @@ namespace edt
 
 	effective_policy agent_policy::effective(const cmd::command_desc& command)
 	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective: main thread only");
 		refresh();
-		return effective_mode(command, m_project.layer, m_personal.layer, m_project.error, m_personal.error);
+		const bool live_on = m_live_on && m_live_on();
+		return effective_mode(command, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
 	}
 
 	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write)
 	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::save: main thread only");
 		const std::string text = serialize_policy_layer(layer);
 		std::error_code ec;
 		if (!what.file.has_parent_path()) return "no place to write the policy";
