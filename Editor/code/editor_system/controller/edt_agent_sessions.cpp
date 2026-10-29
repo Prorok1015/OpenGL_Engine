@@ -63,7 +63,7 @@ namespace {
 		"open":{"type":"boolean","description":"the caller has a session open now"},
 		"label":{"type":"string"},
 		"group":{"type":"integer","description":"the history group of the current step"},
-		"steps":{"type":"integer","description":"steps of the session (checkpoints + 1)"},
+		"steps":{"type":"integer","description":"steps of the session: checkpoints + 1"},
 		"records":{"type":"integer","description":"undo records of the session in the history"}},"required":["open"]})";
 }
 
@@ -97,7 +97,7 @@ std::vector<edt::registration> edt::agent_sessions::register_commands(cmd::comma
 		R"({"type":"object","properties":{
 			"rolled_back":{"type":"integer"},"remaining":{"type":"integer","description":"edits still applied: the rollback stopped before them"},
 			"unavailable":{"type":"integer","description":"edits that went over the history limit and stay applied"},
-			"open":{"type":"boolean","description":"the session is still open (it stopped at a conflict)"},
+			"open":{"type":"boolean","description":"the session is still open: it stopped at a conflict"},
 			"failed":{"type":"boolean","description":"undoing threw: the history was cleared"},
 			"stopped_at":{"type":"object","properties":{"key":{"type":"string"},"label":{"type":"string","description":"the label of the later edit in the way: a person's, or a step of another session"},
 				"ref":{"type":"object","description":"the node, as node.get takes it"}},"required":["key"]}},
