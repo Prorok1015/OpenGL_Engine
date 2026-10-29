@@ -49,6 +49,13 @@ void edt::build_settings_panel::reload()
 	m_changed_checked = std::chrono::steady_clock::now();
 }
 
+void edt::build_settings_panel::refresh_if_clean()
+{
+	// Not loaded yet, or closed: it reads the files when it opens.
+	if (m_reload_on_open || m_model.dirty()) return;
+	reload();
+}
+
 void edt::build_settings_panel::on_before_begin()
 {
 	if (m_reload_on_open) {
@@ -99,7 +106,33 @@ void edt::build_settings_panel::on_render()
 
 	draw_presets();
 	draw_module();
+	draw_live();
 	draw_footer();
+}
+
+void edt::build_settings_panel::draw_live()
+{
+	if (!ImGui::CollapsingHeader("Live", ImGuiTreeNodeFlags_DefaultOpen)) return;
+	const build_settings& settings = m_model.settings();
+	const std::string unavailable = m_live_unavailable ? m_live_unavailable() : std::string{};
+	bool enabled = settings.live_enabled;
+	// Turning it off always works.
+	ImGui::BeginDisabled(!enabled && !unavailable.empty());
+	if (ImGui::Checkbox("Enable live mode", &enabled)) m_model.set_live_enabled(enabled);
+	ImGui::EndDisabled();
+	if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+		ImGui::SetTooltip("%s", !unavailable.empty() ? unavailable.c_str()
+			: "Rebuild the game module after a source change and reload it once the sources stay quiet");
+	}
+
+	int quiet_ms = settings.live_quiet_ms;
+	ImGui::SetNextItemWidth(140.f);
+	if (ImGui::InputInt("Quiet period (ms)", &quiet_ms, 100, 1000)) m_model.set_live_quiet_ms(quiet_ms);
+
+	int jobs = settings.live_jobs;
+	const std::string jobs_label = std::format("Jobs (0 = auto: {})###live_jobs", live_auto_jobs(m_model.estimate().jobs));
+	ImGui::SetNextItemWidth(140.f);
+	if (ImGui::InputInt(jobs_label.c_str(), &jobs)) m_model.set_live_jobs(jobs);
 }
 
 void edt::build_settings_panel::draw_presets()

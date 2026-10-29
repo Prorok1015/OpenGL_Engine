@@ -60,12 +60,19 @@ namespace edt
 		// What the editor builds without a configuration in build.json (cfg build/configuration).
 		void set_default_configuration(std::string configuration) { m_default_configuration = std::move(configuration); }
 		void set_estimate(const jobs_estimate& estimate) { m_estimate = estimate; }
-		// Whether a game build runs: removing a define and applying a removal wait for its end, since its successful
-		// configure clears fresh_configure. Null: never.
+		// Whether the person's game build runs: removing a define and applying a removal wait for its end, since its
+		// successful configure clears fresh_configure. Null: never.
 		void set_building(std::function<bool()> building) { m_building = std::move(building); }
 		bool is_building() const { return m_building && m_building(); }
+		// Stops a running background (live) build (game_builder::stop_background), called by apply() before it writes
+		// a --fresh mark, so that build does not run on with the old configure; its outcome reaches live mode, which
+		// builds again. A build configuring meanwhile cannot clear the new mark anyway (fresh_generation). Null: none.
+		void set_stop_background(std::function<void()> stop) { m_stop_background = std::move(stop); }
 		// How the files are written; null: prj::write_text_atomically (tests inject failures).
 		void set_writer(prj::text_writer write) { m_write = std::move(write); }
+		// Called by apply() after it wrote build.json, with the settings now in the file (live mode follows
+		// live_enabled, #445). Null: none.
+		void set_on_settings_applied(std::function<void(const build_settings&)> applied) { m_on_settings_applied = std::move(applied); }
 
 		// Empty when the presets were read; otherwise why the window has nothing to show.
 		const std::string& unavailable_reason() const { return m_unavailable; }
@@ -150,7 +157,9 @@ namespace edt
 		std::string m_default_configuration = "debuggame";
 		jobs_estimate m_estimate{};
 		std::function<bool()> m_building;
+		std::function<void()> m_stop_background;
 		prj::text_writer m_write;
+		std::function<void(const build_settings&)> m_on_settings_applied;
 		std::string m_unavailable = "Open a project first";
 		std::vector<std::string> m_load_errors;
 
