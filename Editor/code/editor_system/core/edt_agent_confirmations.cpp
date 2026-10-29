@@ -216,14 +216,24 @@ namespace edt
 
 	}
 
-	bool confirmation_glyphs_available(const ImFont& font)
+	bool confirmation_glyphs_available(ImFont& font)
 	{
 		for (const char8_t* label : { label_allow_once, label_allow_session, label_deny }) {
-			const char* text = utf8(label);
-			while (*text != '\0') {
-				unsigned int codepoint = 0;
-				text += ImTextCharFromUtf8(&codepoint, text, nullptr);
-				if (codepoint == 0 || font.FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) == nullptr) {
+			for (const char8_t* at = label; *at != u8'\0';) {
+				const unsigned int lead = *at;
+				const int length = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : 0;
+				if (length == 0) {
+					return false;
+				}
+				unsigned int codepoint = length == 1 ? lead : lead & (0xFFu >> (length + 1));
+				for (int i = 1; i < length; ++i) {
+					if ((at[i] & 0xC0) != 0x80) {
+						return false;
+					}
+					codepoint = (codepoint << 6) | (at[i] & 0x3Fu);
+				}
+				at += length;
+				if (font.FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) == nullptr) {
 					return false;
 				}
 			}

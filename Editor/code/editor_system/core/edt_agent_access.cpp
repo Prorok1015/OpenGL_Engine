@@ -23,7 +23,7 @@ edt::agent_access::~agent_access()
 	m_commands.set_policy_gate(nullptr);
 }
 
-bool edt::agent_access::frame(const ImFont* font)
+bool edt::agent_access::frame(ImFont* font)
 {
 	m_policy.refresh();
 

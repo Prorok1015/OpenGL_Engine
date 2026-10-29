@@ -115,7 +115,7 @@ namespace edt
 
 	// Whether the font draws every letter of the window's buttons. The built-in ImGui font has no Cyrillic and shows '?',
 	// so a person would answer buttons they cannot read: without the glyphs nobody is asked (ask = deny).
-	bool confirmation_glyphs_available(const ImFont& font);
+	bool confirmation_glyphs_available(ImFont& font);
 
 	// The window with the waiting requests: nothing is drawn (no ImGui call at all) while none waits. Returns true
 	// while it should be called again, so it fits an implicit-layout registrar.

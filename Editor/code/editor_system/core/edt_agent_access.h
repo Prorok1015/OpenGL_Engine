@@ -31,7 +31,7 @@ namespace edt
 		// Once per frame, between windows (never inside one): re-reads a changed policy, decides whether a person can
 		// be asked, times out what waited too long and draws the question. `font` is the UI font of the frame; without
 		// it, or without Cyrillic in it, an `ask` is a `deny`. Returns true: it fits an implicit-layout registrar.
-		bool frame(const ImFont* font);
+		bool frame(ImFont* font);
 
 		// Whether a person who can read the question is there. Headless it stays false: an `ask` is a `deny`. Losing the
 		// person declines what waits.
