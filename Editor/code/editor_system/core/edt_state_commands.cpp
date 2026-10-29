@@ -14,6 +14,7 @@
 #include "edt_asset_layers.h"
 #include "edt_override_edit.h"
 #include "edt_scene_document.h"
+#include "edt_scene_ref.h"
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -111,12 +112,7 @@ namespace {
 
 	std::string with_ref(std::string text)
 	{
-		constexpr std::string_view placeholder = "@REF@";
-		constexpr std::string_view ref = R"({"type":"object","properties":{"context":{"type":"string","description":"name of the world"},"path":{"type":"array","items":{"type":"string"},"description":"node ids from the world root, 16-char hex each"}},"required":["context","path"],"additionalProperties":false})";
-		for (std::size_t at = text.find(placeholder); at != std::string::npos; at = text.find(placeholder, at + ref.size())) {
-			text.replace(at, placeholder.size(), ref);
-		}
-		return text;
+		return edt::scene_ref::with_ref(std::move(text));
 	}
 
 	void keep(std::vector<edt::registration>& out, edt::registration added)
@@ -268,18 +264,7 @@ namespace {
 	// A world by name; a "<level>/<world>" context is read as its world.
 	world_lookup find_world(const edt::scene_document& scene, std::string_view context)
 	{
-		const auto index_of = [&scene](std::string_view name) -> std::optional<std::size_t> {
-			const std::size_t count = std::min(scene.world_names.size(), scene.world_descs.size());
-			for (std::size_t i = 0; i < count; ++i) {
-				if (scene.world_names[i] == name) return i;
-			}
-			return std::nullopt;
-		};
-		auto index = index_of(context);
-		if (!index) {
-			const std::size_t slash = context.find('/');
-			if (slash != std::string_view::npos) index = index_of(context.substr(slash + 1));
-		}
+		const auto index = edt::scene_ref::find_world(scene, context);
 		if (!index) return {};
 		return { &scene.world_descs[*index], scene.world_names[*index] };
 	}
@@ -298,45 +283,13 @@ namespace {
 	// False with `error` filled when the ref is malformed or leads nowhere.
 	bool locate(const edt::scene_document& scene, const json::value& ref, located& out, cmd::result& error)
 	{
-		const json::object& object = ref.as_object();
-		const json::value* context = object.if_contains("context");
-		const json::value* path = object.if_contains("path");
-		if (!context || !context->is_string() || !path || !path->is_array()) {
-			error = cmd::result::failure(cmd::codes::invalid_args, "a ref is {context: world name, path: [hex node id, ...]}");
-			return false;
-		}
-		for (const json::value& item : path->as_array()) {
-			const auto id = item.is_string() ? desc::parse_node_id(std::string_view(item.as_string())) : std::nullopt;
-			if (!id) {
-				error = cmd::result::failure(cmd::codes::invalid_args, "a path item is not a 16-char hex node id");
-				return false;
-			}
-			out.path.push_back(*id);
-		}
-		out.world = find_world(scene, std::string_view(context->as_string()));
-		if (!out.world.desc) {
-			error = cmd::result::failure(cmd::codes::not_found, std::format("no world '{}' in the document", text_of(context->as_string())));
-			return false;
-		}
-		const prefab_node& root = out.world.desc->get_root();
-		const std::vector<prefab_node>* level = &root.children;
-		for (std::size_t i = 0; i < out.path.size(); ++i) {
-			const auto it = std::ranges::find(*level, out.path[i], &prefab_node::node_id);
-			if (it == level->end()) {
-				if (!out.owner) {
-					error = cmd::result::failure(cmd::codes::not_found, "no node at that path");
-					return false;
-				}
-				out.target.assign(out.path.begin() + static_cast<std::ptrdiff_t>(i), out.path.end());
-				break;
-			}
-			out.owner = &*it;
-			level = &it->children;
-		}
-		if (!out.owner) {
-			out.owner = &root;
-			out.is_root = true;
-		}
+		edt::scene_ref::location<const prefab_node> at;
+		if (!edt::scene_ref::locate(scene, ref, at, error)) return false;
+		out.world = { &scene.world_descs[at.world], std::move(at.world_name) };
+		out.owner = at.owner;
+		out.path = std::move(at.path);
+		out.target = std::move(at.target);
+		out.is_root = at.is_root;
 		return true;
 	}
 

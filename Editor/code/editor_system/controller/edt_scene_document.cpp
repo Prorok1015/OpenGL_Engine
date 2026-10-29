@@ -11,19 +11,31 @@ void edt::scene_document::commit(std::string_view label, commit_mode mode)
 		// The world list changed: the edits before cannot be undone into it.
 		m_unrecorded = true;
 		reset_history();
-	} else {
-		record_edit(label);
+		return; // state_only edits (a new level, a new world) were never announced
 	}
-	// state_only edits (a new level, a new world) were never announced; only a push that did something is.
-	if (mode == commit_mode::push && m_pusher && m_pusher()) {
-		notify_changed();
+	switch (record_edit(label)) {
+	case scene_history_index::diff_result::changed:
+		// The worlds the edit changed, the active one or not; the others stay as they are.
+		reload_touched();
+		break;
+	case scene_history_index::diff_result::unchanged:
+		m_index.take_touched();
+		break;
+	case scene_history_index::diff_result::unavailable:
+		// What changed is not known: the active world, as before the history.
+		m_index.take_touched();
+		if (m_pusher && m_pusher()) {
+			notify_changed();
+		}
+		break;
 	}
 }
 
-void edt::scene_document::record_edit(std::string_view label)
+edt::scene_history_index::diff_result edt::scene_document::record_edit(std::string_view label)
 {
 	std::unique_ptr<history_change> change;
-	switch (m_index.diff(world_descs, change, m_last_stats)) {
+	const auto result = m_index.diff(world_descs, change, m_last_stats);
+	switch (result) {
 	case scene_history_index::diff_result::changed:
 		m_history.record(std::string{ label }, m_origin, std::move(change));
 		break;
@@ -39,6 +51,7 @@ void edt::scene_document::record_edit(std::string_view label)
 		m_index.rebuild(world_descs);
 		break;
 	}
+	return result;
 }
 
 void edt::scene_document::mark_clean()
@@ -147,8 +160,13 @@ void edt::scene_document::rebase_history()
 void edt::scene_document::finish_apply()
 {
 	touch_descs();
-	// An undo can change a world that is not the active one: its context is rebuilt as well, or it would keep the
-	// state before (and a save would write its live transforms back over the undone desc).
+	reload_touched();
+}
+
+void edt::scene_document::reload_touched()
+{
+	// An edit or an undo can change a world that is not the active one: its context is rebuilt as well, or it would
+	// keep the state before (and a save would write its live transforms back over the desc).
 	bool pushed = false;
 	for (const std::size_t world : m_index.take_touched()) {
 		if (static_cast<int>(world) == active_world_idx) {

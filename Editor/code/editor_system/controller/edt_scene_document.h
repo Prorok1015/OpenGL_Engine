@@ -60,8 +60,9 @@ namespace edt
 		}
 
 		// Every edit of the level ends here: bumps the generation, records what the edit changed in the history (the
-		// worlds are compared with the last commit by node id, #141), pushes the descs to the level (commit_mode::push)
-		// and tells document_changed. The generation grows by exactly one per commit (the pusher must not bump it again).
+		// worlds are compared with the last commit by node id, #141), pushes the descs of the worlds it changed to the
+		// level (commit_mode::push: the active one through the pusher, the others through the world reloader; an edit
+		// that changed nothing pushes nothing) and tells document_changed. The generation grows by exactly one per commit (the pusher must not bump it again).
 		// `label` names the edit in the log and the Edit menu. A push that finds nothing to push to (no level loaded) does
 		// not announce; commit_mode::state_only never does, and is a boundary of the history (the world list changed).
 		void commit(std::string_view label, commit_mode mode = commit_mode::push);
@@ -113,12 +114,14 @@ namespace edt
 		save_result save_as(const res::tag& target) override;
 
 	private:
-		void record_edit(std::string_view label);
+		scene_history_index::diff_result record_edit(std::string_view label);
 		// Runs `apply` (an undo, a redo, a rollback) between the before-apply hook and the reload of the worlds it changed.
 		// False when one of them threw: the history was cleared (recover_from_apply).
 		bool apply_history(std::string_view what, const std::function<void()>& apply);
 		void recover_from_apply(std::string_view what, std::string_view error);
 		void finish_apply();
+		// Rebuilds the contexts of the worlds changed since the last call; document_changed if any was rebuilt.
+		void reload_touched();
 
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
 		bool m_unrecorded = false;
