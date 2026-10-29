@@ -299,7 +299,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
-	}, *cfg_build_configuration);
+	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_building(); });
 	add_panel(m_build_settings_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();

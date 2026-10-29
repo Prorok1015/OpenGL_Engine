@@ -708,7 +708,8 @@ prj::user_presets_read_result prj::read_user_presets(const fs::path& code_dir)
 	return parse_user_presets(file, read_file(file));
 }
 
-prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, const std::vector<user_presets_edit>& edits)
+prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, const std::vector<user_presets_edit>& edits,
+	const text_writer& write)
 {
 	user_presets_save_result result;
 	const main_presets_result main = load_cmake_presets(code_dir / k_cmake_presets_file_name);
@@ -751,7 +752,7 @@ prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, c
 	if (original.exists && text == original.text) {
 		return result;
 	}
-	if (auto problem = write_text_atomically(file, text)) {
+	if (auto problem = write ? write(file, text) : write_text_atomically(file, text)) {
 		result.error = std::move(*problem);
 		return result;
 	}

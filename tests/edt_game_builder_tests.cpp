@@ -548,6 +548,52 @@ BOOST_AUTO_TEST_CASE(FreshConfigure_AFailedConfigureKeepsItPending)
 	BOOST_TEST(cleared.empty());
 }
 
+BOOST_AUTO_TEST_CASE(FreshConfigure_ACancelledBuildKeepsItPending)
+{
+	settings.fresh_configure = { "debuggame" };
+	std::vector<std::string> cleared;
+	auto opts = options();
+	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	make(std::move(opts));
+	script = [this](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index == 0) return exited(0);
+		builder->cancel();
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	BOOST_REQUIRE(build().ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame", "--fresh" }));
+	BOOST_TEST(cleared.empty());
+}
+
+BOOST_AUTO_TEST_CASE(FreshConfigure_ARestartedBuildKeepsItPending)
+{
+	std::vector<std::string> cleared;
+	auto opts = options();
+	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	make(std::move(opts));
+	script = [this](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index != 1) return exited(0);
+		auto next = request("release");
+		next.cancel_on_restart = true;
+		BOOST_CHECK(builder->start(next).ok);
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	auto first = request("debuggame");
+	first.fresh = true;
+	BOOST_REQUIRE(builder->start(first).ok);
+	run_until_idle();
+	BOOST_REQUIRE_EQUAL(calls.size(), 4u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame", "--fresh" }));
+	BOOST_TEST((calls[2].args == std::vector<std::string>{ "--preset", "release" }));
+	BOOST_TEST(cleared.empty());
+}
+
 BOOST_AUTO_TEST_CASE(ManualRequest_IsFreshOnlyForAPendingConfiguration)
 {
 	edt::build_settings pending;

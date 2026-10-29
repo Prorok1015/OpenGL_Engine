@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,4 +17,7 @@ namespace prj
 	// Writes `text` to a temporary file next to `file` and renames it over `file`, so a reader never sees half of it.
 	// A symbolic link is replaced at its target. The error names the file; nullopt on success.
 	SNK_API std::optional<std::string> write_text_atomically(const std::filesystem::path& file, std::string_view text);
+
+	// How a file is written: write_text_atomically, or a fake in tests. Returns the error, nullopt on success.
+	using text_writer = std::function<std::optional<std::string>(const std::filesystem::path& file, std::string_view text)>;
 }

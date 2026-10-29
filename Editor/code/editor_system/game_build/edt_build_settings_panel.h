@@ -1,7 +1,6 @@
 #pragma once
 #include "edt_panel_base.h"
 #include "edt_build_settings_model.h"
-#include <array>
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -21,8 +20,9 @@ namespace edt
 		static constexpr const char* k_id = "build_settings";
 		static constexpr const char* k_title = "Build Settings";
 
-		// `project_root` nullopt: no project is open.
-		build_settings_panel(std::function<std::optional<std::filesystem::path>()> project_root, std::string default_configuration);
+		// `project_root` nullopt: no project is open. `building`: whether a game build runs (build_settings_model::set_building).
+		build_settings_panel(std::function<std::optional<std::filesystem::path>()> project_root, std::string default_configuration,
+			std::function<bool()> building);
 
 		// Brings the window to the front on its next frame.
 		void focus() { m_focus = true; }
@@ -50,8 +50,8 @@ namespace edt
 		std::string m_define_configuration;
 		// Text of the user define values being edited inline, by name.
 		std::map<std::string, std::string> m_value_edits;
-		std::array<char, 256> m_new_name{};
-		std::array<char, 1024> m_new_value{};
+		std::string m_new_name;
+		std::string m_new_value;
 		bool m_add_everywhere = false;
 		std::string m_define_error;
 		std::vector<std::string> m_apply_errors;

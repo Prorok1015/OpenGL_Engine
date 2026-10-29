@@ -16,6 +16,8 @@
 namespace edt
 {
 	inline constexpr int k_max_manual_jobs = 1024;
+	inline constexpr std::string_view k_building_reason = "A build is running: removing a define waits until it ends "
+		"(the build would clear the --fresh mark that the removal needs)";
 
 	// user-<cfg> when <code_dir>/CMakeUserPresets.json has it, else `configuration`. A broken user file is logged as a
 	// warning and gives `configuration` (the team preset still builds).
@@ -58,6 +60,12 @@ namespace edt
 		// What the editor builds without a configuration in build.json (cfg build/configuration).
 		void set_default_configuration(std::string configuration) { m_default_configuration = std::move(configuration); }
 		void set_estimate(const jobs_estimate& estimate) { m_estimate = estimate; }
+		// Whether a game build runs: removing a define and applying a removal wait for its end, since its successful
+		// configure clears fresh_configure. Null: never.
+		void set_building(std::function<bool()> building) { m_building = std::move(building); }
+		bool is_building() const { return m_building && m_building(); }
+		// How the files are written; null: prj::write_text_atomically (tests inject failures).
+		void set_writer(prj::text_writer write) { m_write = std::move(write); }
 
 		// Empty when the presets were read; otherwise why the window has nothing to show.
 		const std::string& unavailable_reason() const { return m_unavailable; }
@@ -90,7 +98,8 @@ namespace edt
 		std::optional<std::string> set_define(std::string_view configuration, std::string_view name, std::string_view value);
 		// For every configuration, or for none when one of them refuses it.
 		std::optional<std::string> set_define_everywhere(std::string_view name, std::string_view value);
-		void remove_define(std::string_view configuration, std::string_view name);
+		// Refused while a build runs (k_building_reason) or for a define the user preset does not have.
+		std::optional<std::string> remove_define(std::string_view configuration, std::string_view name);
 		void set_jobs_mode(jobs_mode mode) { m_settings.jobs_mode = mode; }
 		// Clamped to [1, k_max_manual_jobs].
 		void set_manual_jobs(int jobs);
@@ -109,10 +118,16 @@ namespace edt
 		std::vector<std::string> pending_fresh() const;
 		// The files whose content differs from what load() (or the last apply) saw.
 		std::vector<std::filesystem::path> changed_on_disk() const;
+		// When build.json changed on disk only in fresh_configure (the builder cleared a mark), takes that over
+		// silently and returns true.
+		bool refresh_fresh_configure();
+		// Why apply() would refuse now (a build runs and the edits remove a define); nullopt when it would not.
+		std::optional<std::string> apply_blocked_reason() const;
 
-		// Writes the user presets (read fresh and edited, prj::save_user_presets) and build.json (read, merged, written
-		// atomically). A broken build.json is never overwritten; when the Apply removes a define it would have to
-		// record --fresh there, so then nothing is written. Reloads after a full success; on an error the edits stay.
+		// Writes build.json (read, merged, written atomically; with the --fresh marks) and then the user presets (read
+		// fresh and edited, prj::save_user_presets). A broken build.json is never overwritten; when it cannot be written
+		// and the Apply removes a define, the user presets are not written either. Reloads after a full success; on an
+		// error the edits stay.
 		build_settings_apply_result apply();
 
 	private:
@@ -129,6 +144,8 @@ namespace edt
 		std::filesystem::path m_root;
 		std::string m_default_configuration = "debuggame";
 		jobs_estimate m_estimate{};
+		std::function<bool()> m_building;
+		prj::text_writer m_write;
 		std::string m_unavailable = "Open a project first";
 		std::vector<std::string> m_load_errors;
 

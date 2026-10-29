@@ -2,6 +2,7 @@
 #include "edt_path_text.h"
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include <array>
 #include <cmath>
 #include <format>
 #include <utility>
@@ -26,11 +27,12 @@ namespace {
 }
 
 edt::build_settings_panel::build_settings_panel(std::function<std::optional<fs::path>()> project_root,
-	std::string default_configuration)
+	std::string default_configuration, std::function<bool()> building)
 	: panel_base(k_id, k_title)
 	, m_project_root(std::move(project_root))
 {
 	m_model.set_default_configuration(std::move(default_configuration));
+	m_model.set_building(std::move(building));
 }
 
 void edt::build_settings_panel::reload()
@@ -91,6 +93,7 @@ void edt::build_settings_panel::on_render()
 	const auto now = std::chrono::steady_clock::now();
 	if (now - m_changed_checked >= std::chrono::seconds(1)) {
 		m_changed_checked = now;
+		m_model.refresh_fresh_configure();
 		m_changed = m_model.changed_on_disk();
 	}
 
@@ -161,7 +164,8 @@ void edt::build_settings_panel::draw_defines()
 
 	if (ImGui::BeginTabBar("##define_configurations")) {
 		for (const auto& entry : configurations) {
-			if (ImGui::BeginTabItem(entry.display_name.c_str())) {
+			const std::string label = entry.display_name + "##" + entry.name;
+			if (ImGui::BeginTabItem(label.c_str())) {
 				if (m_define_configuration != entry.name) {
 					m_define_configuration = entry.name;
 					m_value_edits.clear();
@@ -178,6 +182,7 @@ void edt::build_settings_panel::draw_defines()
 	const auto team = shown->team_defines;
 	const auto user = shown->user_defines;
 	std::optional<std::string> removed;
+	const bool building = m_model.is_building();
 
 	constexpr ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders | ImGuiTableFlags_SizingStretchProp;
 	if (ImGui::BeginTable("##defines", 3, flags)) {
@@ -216,36 +221,41 @@ void edt::build_settings_panel::draw_defines()
 				text = value;
 			}
 			ImGui::TableSetColumnIndex(2);
+			ImGui::BeginDisabled(building);
 			if (ImGui::SmallButton("x")) removed = name;
-			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove (the next build configures from scratch)");
+			ImGui::EndDisabled();
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+				ImGui::SetTooltip("%s", building ? k_building_reason.data() : "Remove (the next build configures from scratch)");
+			}
 			ImGui::PopID();
 		}
 		ImGui::EndTable();
 	}
 	if (removed) {
-		m_model.remove_define(m_define_configuration, *removed);
-		m_value_edits.erase(*removed);
+		if (auto problem = m_model.remove_define(m_define_configuration, *removed)) {
+			m_define_error = std::move(*problem);
+		} else {
+			m_value_edits.erase(*removed);
+		}
 	}
 
 	ImGui::SetNextItemWidth(180.f);
-	ImGui::InputTextWithHint("##new_define_name", "NAME", m_new_name.data(), m_new_name.size());
+	ImGui::InputTextWithHint("##new_define_name", "NAME", &m_new_name);
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(180.f);
-	ImGui::InputTextWithHint("##new_define_value", "value", m_new_value.data(), m_new_value.size());
+	ImGui::InputTextWithHint("##new_define_value", "value", &m_new_value);
 	ImGui::SameLine();
 	ImGui::Checkbox("all configurations", &m_add_everywhere);
 	ImGui::SameLine();
 	if (ImGui::Button("+ Add")) {
-		const std::string name = m_new_name.data();
-		const std::string value = m_new_value.data();
-		auto problem = m_add_everywhere ? m_model.set_define_everywhere(name, value)
-			: m_model.set_define(m_define_configuration, name, value);
+		auto problem = m_add_everywhere ? m_model.set_define_everywhere(m_new_name, m_new_value)
+			: m_model.set_define(m_define_configuration, m_new_name, m_new_value);
 		if (problem) {
 			m_define_error = std::move(*problem);
 		} else {
 			m_define_error.clear();
-			m_new_name.fill('\0');
-			m_new_value.fill('\0');
+			m_new_name.clear();
+			m_new_value.clear();
 		}
 	}
 	if (!m_define_error.empty()) {
@@ -281,7 +291,8 @@ void edt::build_settings_panel::draw_footer()
 {
 	ImGui::Separator();
 	const bool dirty = m_model.dirty();
-	ImGui::BeginDisabled(!dirty);
+	const std::optional<std::string> blocked = m_model.apply_blocked_reason();
+	ImGui::BeginDisabled(!dirty || blocked.has_value());
 	if (ImGui::Button("Apply")) {
 		const build_settings_apply_result result = m_model.apply();
 		m_apply_errors.clear();
@@ -293,7 +304,9 @@ void edt::build_settings_panel::draw_footer()
 		}
 		m_changed = m_model.changed_on_disk();
 	}
+	ImGui::EndDisabled();
 	ImGui::SameLine();
+	ImGui::BeginDisabled(!dirty);
 	if (ImGui::Button("Revert")) {
 		m_model.revert();
 		m_value_edits.clear();
@@ -316,6 +329,7 @@ void edt::build_settings_panel::draw_footer()
 	}
 
 	ImGui::PushTextWrapPos(0.f);
+	if (blocked) ImGui::TextColored(k_warning_color, "%s", blocked->c_str());
 	for (const auto& file : m_changed) {
 		ImGui::TextColored(k_warning_color, "%s changed outside the editor - Apply merges onto the current file",
 			relative(file).c_str());

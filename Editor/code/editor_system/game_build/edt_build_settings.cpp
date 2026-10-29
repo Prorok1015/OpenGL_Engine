@@ -212,7 +212,8 @@ std::optional<std::string> edt::check_build_settings_file(const fs::path& snk_di
 	return parse_settings_document(file, read_settings_file(file), doc);
 }
 
-std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, const std::function<void(build_settings&)>& change)
+std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, const std::function<void(build_settings&)>& change,
+	const prj::text_writer& write)
 {
 	const fs::path file = snk_dir / k_build_settings_file;
 	const file_read read = read_settings_file(file);
@@ -228,7 +229,8 @@ std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, c
 	std::error_code ec;
 	fs::create_directories(snk_dir, ec);
 	if (ec) return std::format("'{}' cannot be created: {}", utf8_of(snk_dir), ec.message());
-	if (auto problem = prj::write_text_atomically(file, prj::to_indented_json(doc))) return problem;
+	const std::string text = prj::to_indented_json(doc);
+	if (auto problem = write ? write(file, text) : prj::write_text_atomically(file, text)) return problem;
 	return std::nullopt;
 }
 

@@ -1,4 +1,5 @@
 #pragma once
+#include <snk/project/prj_json_text.h>
 #include <boost/json/fwd.hpp>
 #include <cstdint>
 #include <filesystem>
@@ -56,8 +57,9 @@ namespace edt
 	// Reads <snk_dir>/build.json, lets `change` edit the settings parsed from it, merges them back (unknown keys kept)
 	// and writes the file atomically (prj::write_text_atomically), creating <snk_dir>, unless `change` changed nothing.
 	// A file that cannot be read or is not a JSON object is an error and is never overwritten. nullopt on success.
+	// `write` set: the file is written through it (tests).
 	std::optional<std::string> update_build_settings(const std::filesystem::path& snk_dir,
-		const std::function<void(build_settings&)>& change);
+		const std::function<void(build_settings&)>& change, const prj::text_writer& write = {});
 	// Why update_build_settings would refuse <snk_dir>/build.json; nullopt when it is missing or a JSON object.
 	std::optional<std::string> check_build_settings_file(const std::filesystem::path& snk_dir);
 	// Drops `configuration` from fresh_configure of <snk_dir>/build.json (update_build_settings).

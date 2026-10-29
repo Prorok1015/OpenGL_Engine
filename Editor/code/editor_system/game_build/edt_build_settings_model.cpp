@@ -230,15 +230,17 @@ std::optional<std::string> edt::build_settings_model::set_define_everywhere(std:
 	return std::nullopt;
 }
 
-void edt::build_settings_model::remove_define(std::string_view configuration, std::string_view name)
+std::optional<std::string> edt::build_settings_model::remove_define(std::string_view configuration, std::string_view name)
 {
+	if (is_building()) return std::string(k_building_reason);
 	const auto it = std::find_if(m_configurations.begin(), m_configurations.end(),
 		[configuration](const build_settings_configuration& entry) { return entry.name == configuration; });
-	if (it == m_configurations.end()) return;
+	if (it == m_configurations.end()) return std::format("CMakePresets.json has no configure preset '{}'", configuration);
 	const auto define = it->user_defines.find(std::string(name));
-	if (define == it->user_defines.end()) return;
+	if (define == it->user_defines.end()) return std::format("user-{} has no define {}", configuration, name);
 	it->user_defines.erase(define);
 	m_define_edits.push_back(prj::remove_define{ std::string(configuration), std::string(name) });
+	return std::nullopt;
 }
 
 bool edt::build_settings_model::settings_changed() const
@@ -319,6 +321,43 @@ std::vector<fs::path> edt::build_settings_model::changed_on_disk() const
 	return out;
 }
 
+std::optional<std::string> edt::build_settings_model::apply_blocked_reason() const
+{
+	if (is_building() && !pending_fresh().empty()) return std::string(k_building_reason);
+	return std::nullopt;
+}
+
+bool edt::build_settings_model::refresh_fresh_configure()
+{
+	if (!available()) return false;
+	const snapshot now = read_snapshot(build_settings_file());
+	if (now.exists == m_settings_snapshot.exists && now.text == m_settings_snapshot.text) return false;
+	if (!now.exists || !m_settings_snapshot.exists) return false;
+
+	// Equal when they differ only in fresh_configure (and in keys merge_build_settings adds with their defaults).
+	const auto without_fresh = [](const std::string& text) -> std::optional<std::pair<json::object, build_settings>> {
+		std::error_code ec;
+		json::value doc = json::parse(text, ec);
+		if (ec || !doc.is_object()) return std::nullopt;
+		for (const std::string_view key : { "configuration", "jobs_mode", "reload_after_build", "build_before_play",
+			"log_verbosity", "fresh_configure" }) {
+			doc.get_object().erase(key);
+		}
+		build_settings settings = parse_build_settings(text).settings;
+		settings.fresh_configure.clear();
+		return std::pair{ std::move(doc.get_object()), std::move(settings) };
+	};
+	const auto before = without_fresh(m_settings_snapshot.text);
+	const auto after = without_fresh(now.text);
+	if (!before || !after || before->first != after->first || before->second != after->second) return false;
+
+	const std::vector<std::string> fresh = parse_build_settings(now.text).settings.fresh_configure;
+	m_loaded_settings.fresh_configure = fresh;
+	m_settings.fresh_configure = fresh;
+	m_settings_snapshot = now;
+	return true;
+}
+
 edt::build_settings_apply_result edt::build_settings_model::apply()
 {
 	build_settings_apply_result result;
@@ -329,31 +368,15 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 	const std::vector<prj::user_presets_edit> edits = pending_user_edits();
 	const std::vector<std::string> fresh = pending_fresh();
 	const bool write_settings = settings_changed() || !fresh.empty();
+	if (auto blocked = apply_blocked_reason()) {
+		result.user_presets_error = std::move(*blocked);
+		return result;
+	}
 
+	// build.json first: a --fresh mark without the removal costs one configure, a removal without the mark leaves the
+	// define in CMakeCache.txt.
+	bool settings_ok = true;
 	if (write_settings) {
-		if (auto problem = check_build_settings_file(snk_dir())) {
-			result.build_settings_error = std::move(*problem);
-			if (!fresh.empty()) {
-				result.user_presets_error = "not written: removing a define needs a --fresh configure, which .snk/build.json "
-					"cannot record";
-				return result;
-			}
-		}
-	}
-
-	bool presets_ok = true;
-	if (!edits.empty()) {
-		const prj::user_presets_save_result saved = prj::save_user_presets(code_dir(), edits);
-		if (!saved.error.empty()) {
-			presets_ok = false;
-			result.user_presets_error = saved.error;
-		} else {
-			m_user_snapshot = read_snapshot(user_presets_file());
-		}
-	}
-
-	if (write_settings && result.build_settings_error.empty()) {
-		const std::vector<std::string> marked = presets_ok ? fresh : std::vector<std::string>{};
 		// Only the fields edited here: the rest of the file stays as it is on disk now.
 		const build_settings edited = m_settings;
 		const build_settings loaded = m_loaded_settings;
@@ -362,15 +385,30 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 			if (edited.jobs_mode != loaded.jobs_mode) on_disk.jobs_mode = edited.jobs_mode;
 			if (edited.reload_after_build != loaded.reload_after_build) on_disk.reload_after_build = edited.reload_after_build;
 			if (edited.log_verbosity != loaded.log_verbosity) on_disk.log_verbosity = edited.log_verbosity;
-			for (const auto& configuration : marked) {
+			for (const auto& configuration : fresh) {
 				if (!contains(on_disk.fresh_configure, configuration)) on_disk.fresh_configure.push_back(configuration);
 			}
-		});
+		}, m_write);
 		if (problem) {
+			settings_ok = false;
 			result.build_settings_error = std::move(*problem);
 		} else {
 			m_settings_snapshot = read_snapshot(build_settings_file());
-			result.fresh = marked;
+			result.fresh = fresh;
+		}
+	}
+
+	if (!edits.empty()) {
+		if (!settings_ok && !fresh.empty()) {
+			result.user_presets_error = "not written: removing a define needs a --fresh configure, which .snk/build.json "
+				"could not record";
+		} else {
+			const prj::user_presets_save_result saved = prj::save_user_presets(code_dir(), edits, m_write);
+			if (!saved.error.empty()) {
+				result.user_presets_error = saved.error;
+			} else {
+				m_user_snapshot = read_snapshot(user_presets_file());
+			}
 		}
 	}
 
@@ -407,7 +445,8 @@ std::vector<edt::registration> edt::register_build_settings_commands(cmd::comman
 			{ "jobs", std::max(1, estimate.jobs) },
 			{ "cores", estimate.cores },
 			{ "ram_bytes", estimate.ram } } } };
-		if (const auto manual = model.preset_jobs()) jobs["manual"] = *manual;
+		// A hand-written 0 or negative `jobs` is not a manual value CMake would use.
+		if (const auto manual = model.preset_jobs(); manual && *manual >= 1) jobs["manual"] = *manual;
 
 		json::object configurations;
 		for (const auto& entry : model.configurations()) {

@@ -6,6 +6,7 @@
 #include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/project/prj_cmake_presets.h>
+#include <snk/project/prj_json_text.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
@@ -96,6 +97,15 @@ struct model_fixture
 	void with_user() { dir.write("code/CMakeUserPresets.json", k_user); }
 	void with_settings(std::string_view text) { dir.write(".snk/build.json", text); }
 	void load() { model.load(root()); }
+
+	// Writes through prj::write_text_atomically, except `failing`, which fails.
+	void fail_writes_of(fs::path failing)
+	{
+		model.set_writer([failing = std::move(failing)](const fs::path& file, std::string_view text) -> std::optional<std::string> {
+			if (file == failing) return "disk full";
+			return prj::write_text_atomically(file, text);
+		});
+	}
 };
 
 }
@@ -327,6 +337,99 @@ BOOST_AUTO_TEST_CASE(BrokenBuildJson_IsNeverOverwritten)
 	BOOST_TEST(model.dirty());
 }
 
+BOOST_AUTO_TEST_CASE(FailedBuildJsonWrite_WritesNoRemovalWithoutItsMark)
+{
+	with_user();
+	load();
+	const std::string user_before = read_text(user_file());
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	fail_writes_of(settings_file());
+	const auto result = model.apply();
+	BOOST_TEST(result.build_settings_error == "disk full");
+	BOOST_TEST(!result.user_presets_error.empty());
+	BOOST_TEST(result.fresh.empty());
+	BOOST_TEST(read_text(user_file()) == user_before);
+	BOOST_TEST(!fs::exists(settings_file()));
+	BOOST_TEST(model.dirty());
+}
+
+BOOST_AUTO_TEST_CASE(FailedUserPresetsWrite_KeepsTheFreshMark)
+{
+	with_user();
+	load();
+	const std::string user_before = read_text(user_file());
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	fail_writes_of(user_file());
+	const auto result = model.apply();
+	BOOST_TEST(result.build_settings_error.empty());
+	BOOST_TEST(result.user_presets_error == "disk full");
+	BOOST_TEST((result.fresh == std::vector<std::string>{ "debuggame" }));
+	BOOST_TEST(read_text(user_file()) == user_before);
+	BOOST_TEST((edt::load_build_settings(root() / ".snk").fresh_configure == std::vector<std::string>{ "debuggame" }));
+	BOOST_TEST(model.dirty());
+}
+
+BOOST_AUTO_TEST_CASE(WhileABuildRuns_NoDefineIsRemovedAndNoRemovalApplied)
+{
+	with_user();
+	bool building = true;
+	model.set_building([&building] { return building; });
+	load();
+	BOOST_TEST(model.remove_define("debuggame", "MY_FLAG").has_value());
+	BOOST_TEST(!model.dirty());
+
+	// Queued before the build started, applied while it runs: refused, since the build would clear the mark.
+	building = false;
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	building = true;
+	BOOST_TEST(model.apply_blocked_reason().has_value());
+	const std::string user_before = read_text(user_file());
+	const auto refused = model.apply();
+	BOOST_TEST(!refused.ok());
+	BOOST_TEST(read_text(user_file()) == user_before);
+	BOOST_TEST(!fs::exists(settings_file()));
+
+	building = false;
+	BOOST_TEST(!model.apply_blocked_reason().has_value());
+	BOOST_TEST(model.apply().ok());
+	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
+}
+
+BOOST_AUTO_TEST_CASE(WhileABuildRuns_OtherEditsStillApply)
+{
+	with_user();
+	model.set_building([] { return true; });
+	load();
+	BOOST_REQUIRE(!model.set_define("debuggame", "NEW", "x").has_value());
+	BOOST_TEST(!model.apply_blocked_reason().has_value());
+	BOOST_TEST(model.apply().ok());
+}
+
+BOOST_AUTO_TEST_CASE(AClearedFreshMark_IsTakenOverSilently)
+{
+	with_user();
+	load();
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
+
+	BOOST_REQUIRE(!edt::clear_fresh_configure(root() / ".snk", "debuggame").has_value());
+	BOOST_TEST(model.refresh_fresh_configure());
+	BOOST_TEST(model.changed_on_disk().empty());
+	BOOST_TEST(model.settings().fresh_configure.empty());
+	BOOST_TEST(!model.dirty());
+}
+
+BOOST_AUTO_TEST_CASE(AnotherChangeOnDisk_IsNotTakenOver)
+{
+	with_settings(R"({"fresh_configure":["debuggame"]})");
+	load();
+	with_settings(R"({"log_verbosity":"verbose"})");
+	BOOST_TEST(!model.refresh_fresh_configure());
+	BOOST_TEST((model.changed_on_disk() == std::vector<fs::path>{ settings_file() }));
+	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
+}
+
 BOOST_AUTO_TEST_CASE(BrokenUserPresets_AreAnErrorOnLoad_AndOnApply)
 {
 	dir.write("code/CMakeUserPresets.json", "[1, 2]");
@@ -430,6 +533,15 @@ BOOST_AUTO_TEST_CASE(AnAgentSeesAndCallsIt)
 	BOOST_TEST((debuggame.at("team_defines").as_object().at("CMAKE_BUILD_TYPE").as_string() == "DebugGame"));
 	BOOST_TEST((debuggame.at("user_defines").as_object().at("MY_FLAG").as_string() == "1"));
 	BOOST_TEST((configurations.at("release").as_object().at("preset").as_string() == "release"));
+}
+
+BOOST_AUTO_TEST_CASE(AJobsValueBelowOne_IsLeftOut)
+{
+	dir.write("code/CMakeUserPresets.json", R"({"version":3,"configurePresets":[{"name":"user-debuggame","inherits":"debuggame"}],
+		"buildPresets":[{"name":"user-debuggame","configurePreset":"user-debuggame","jobs":0}]})");
+	const mcp::call_result result = call("build_settings_get");
+	BOOST_REQUIRE(!result.is_error);
+	BOOST_TEST(!result.structured.as_object().at("jobs").as_object().contains("manual"));
 }
 
 BOOST_AUTO_TEST_CASE(WithoutAProject_FailsWithNoProject)
