@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <string_view>
 #include <vector>
+#include <snk/resource/res_file_change.h>
 #include <snk/resource/resolvers/res_write_policy.h>
 
 namespace res
@@ -22,6 +23,8 @@ namespace res
 		mount_access access = mount_access::read_write;
 		// Which paths store() may write (checked against the tag and the file it resolves to); every path by default.
 		write_policy writable = write_policy::allow_all();
+		// What the mount's watcher reports and skips.
+		watch_options watch;
 	};
 
 	using mount_table = std::vector<mount>;

@@ -355,6 +355,24 @@ namespace res
 		// mapping the same way (the alias' resolver data stays).
 		bool erase(const res::tag& tag);
 
+		// Deletes the file of `tag` for real (code://, #450): a regular file, through the resolver's safe write and its
+		// write policy, and returns once it is gone. Then the cache entries of the tag go like after erase().
+		// Throws std::logic_error for a tag outside limit_writes_to.
+		file_operation remove(const res::tag& tag);
+
+		// Moves the file `from` to `to` (one protocol; never over an existing file), by the same rules as remove(); the
+		// cache entries of both tags go.
+		file_operation rename(const res::tag& from, const res::tag& to);
+
+		// What happened below a mount that reports changes (code://): files and folders created, modified, deleted or
+		// renamed, found by the watcher (about 0.5 s after they happened) or done through this resource_system (self).
+		// A batch per poll or per operation, in the order found, called on the main thread, never twice for one change.
+		// Coalescing and debouncing are the subscriber's. Subscribe and unsubscribe on the main thread; a listener may
+		// unsubscribe (itself or another). A layer subscribes on its root.
+		using changes_listener = std::function<void(std::span<const file_change>)>;
+		void subscribe_changes(std::string_view protocol, void* owner, changes_listener listener);
+		void unsubscribe_changes(void* owner);
+
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
 			m_pinned_resources.erase_tag(tag);
@@ -584,6 +602,17 @@ namespace res
 			bool keep_dependencies = false;
 		};
 		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
+
+		struct change_subscription {
+			std::uint64_t id = 0;
+			std::string protocol;
+			void* owner = nullptr;
+			changes_listener listener;
+		};
+		void deliver_changes(const std::string& protocol, const std::vector<file_change>& batch);
+		std::mutex m_changes_mutex;
+		std::vector<change_subscription> m_change_subscriptions;
+		std::uint64_t m_next_subscription = 0;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
 
 		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it

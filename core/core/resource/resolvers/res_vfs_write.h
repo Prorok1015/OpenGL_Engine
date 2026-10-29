@@ -60,4 +60,18 @@ namespace res::detail {
 	// Empty on success (also when there is nothing to remove), else why it failed. An empty folder is removed too.
 	std::string remove_beneath(pinned_root& root, const std::filesystem::path& folder, const std::filesystem::path& leaf);
 
+	struct rename_request {
+		// Below the root, as safe_path resolved them: canonical folders and single names inside them.
+		std::filesystem::path from_folder;
+		std::filesystem::path from_leaf;
+		std::filesystem::path to_folder;
+		std::filesystem::path to_leaf;
+	};
+
+	// Moves a regular file between folders below the root, each opened without following a link and the move done
+	// relative to them. Never replaces: an existing target is an error (POSIX Linux: renameat2 RENAME_NOREPLACE, where
+	// the file system lacks it a check first; Windows: a rename without ReplaceIfExists). The target's folders are made
+	// when missing. Empty on success, else why it failed; on failure the file stays where it was.
+	std::string rename_beneath(pinned_root& root, const rename_request& request);
+
 }

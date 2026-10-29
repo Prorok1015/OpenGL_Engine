@@ -36,8 +36,9 @@ namespace res
 		explicit vfs_resolver(const std::string_view prt);
 		// `policy` limits which paths store() may write (checked against the tag and against the file it resolves to);
 		// the default allows every path.
+		// `watch` says what the watcher reports and skips (changes_callback only with watch.report_changes).
 		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access = mount_access::read_write,
-			write_policy policy = write_policy::allow_all());
+			write_policy policy = write_policy::allow_all(), watch_options watch = {});
 		~vfs_resolver();
 
 		std::optional<res::tag> path_mapper(const fs::path& path) const;
@@ -49,6 +50,12 @@ namespace res
 		// Only for the memory protocol (scratch data); false for the other protocols (their files stay) and for a tag
 		// this resolver does not hold.
 		virtual bool erase(const ::res::tag& tag) override;
+		// A regular file of the top root (never a folder or a link), through the opened folders like a store (#414), and
+		// under the write policy. Return once the io thread has done it, behind the stores queued before.
+		virtual ::res::file_operation remove(const ::res::tag& tag) override;
+		// Both tags in this protocol and both under the write policy; refused when `to` exists. Missing folders of `to`
+		// are made.
+		virtual ::res::file_operation rename(const ::res::tag& from, const ::res::tag& to) override;
 		virtual bool exists(const ::res::tag& tag) const override;
 
 	private:
@@ -57,6 +64,14 @@ namespace res
 		// The only place a tag becomes a file path: nullopt when the tag would leave `root`.
 		std::optional<fs::path> safe_path(const fs::path& root, const tag& tag) const;
 		std::optional<fs::path> resolve_tag(const tag& tag) const;
+		// The file a remove or rename may touch: inside the top root and under the write policy as a tag and as the file
+		// it resolves to. nullopt with `why` set otherwise.
+		std::optional<fs::path> writable_path(const tag& tag, std::string& why) const;
+		// On the io thread; the error text, empty on success.
+		std::string remove_on_io(const tag& tag, const fs::path& target);
+		std::string rename_on_io(const tag& from, const fs::path& source, const tag& to, const fs::path& target);
+		// Tells the changes callback, if the mount reports changes, about what was done through this resolver.
+		void report_self_change(const tag& tag, const tag& old_tag, change_kind kind);
 		// The file a store writes first and then renames over the target: a tag of its own, so safe_path checks it too.
 		// Hidden and unique per store, so it never lands on a real resource or on a link planted at a guessed name.
 		static res::tag make_temp_tag(const tag& tag);

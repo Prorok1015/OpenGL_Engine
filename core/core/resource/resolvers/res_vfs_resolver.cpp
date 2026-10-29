@@ -18,7 +18,8 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt)
 {
 }
 
-res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy)
+res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy,
+	watch_options watch)
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			if (m_closing) {
@@ -48,7 +49,25 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 	}
 	// Opened on the first write: the root may not exist yet (a user folder, a project made after the mount).
 	m_write_root = std::make_unique<detail::pinned_root>(entries_stack.top());
-	
+
+	if (watch.report_changes) {
+		watcher.report_changes(std::move(watch), [this](std::vector<raw_change> found) {
+			if (m_closing) {
+				return;
+			}
+			std::vector<file_change> batch;
+			batch.reserve(found.size());
+			for (const auto& change : found) {
+				const auto changed = path_mapper(change.path);
+				if (!changed) {
+					continue;
+				}
+				const auto old = change.old_path.empty() ? std::nullopt : path_mapper(change.old_path);
+				batch.push_back(file_change{ *changed, old.value_or(res::tag{}), change.kind, change.is_directory, false });
+			}
+			notify_changes(std::move(batch));
+		});
+	}
 	watcher.start();
 	work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(boost::asio::make_work_guard(io));
 	io_thread = std::thread([this]() {
@@ -316,6 +335,183 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 	return true;
 }
 
+std::optional<fs::path> res::vfs_resolver::writable_path(const tag& tag, std::string& why) const
+{
+	if (m_access == mount_access::read_only) {
+		why = std::format("protocol '{}' is read-only", protocol);
+		return std::nullopt;
+	}
+	if (entries_stack.empty() || !m_write_root) {
+		why = std::format("protocol '{}' has no folder mounted", protocol);
+		return std::nullopt;
+	}
+	auto path = safe_path(entries_stack.top(), tag);
+	if (!path) {
+		why = std::format("'{}' escapes the resource root, or ends in a link", tag.view());
+		return std::nullopt;
+	}
+	const std::string tag_path = fs::path{ tag.relative() }.lexically_normal().generic_string();
+	const std::string file_path = path->lexically_relative(entries_stack.top()).generic_string();
+	if (!m_write_policy.allows(tag_path)) {
+		why = std::format("no write pattern of protocol '{}' matches '{}'", protocol, tag_path);
+		return std::nullopt;
+	}
+	if (!m_write_policy.allows(file_path)) {
+		why = std::format("its file resolves to '{}' below the root (through a link, or a folder in another case), which no write "
+			"pattern of protocol '{}' matches", file_path, protocol);
+		return std::nullopt;
+	}
+	return path;
+}
+
+void res::vfs_resolver::report_self_change(const tag& tag, const tag& old_tag, change_kind kind)
+{
+	if (!watcher.reports_changes() || m_closing) {
+		return;
+	}
+	notify_changes({ file_change{ tag, old_tag, kind, false, true } });
+}
+
+res::file_operation res::vfs_resolver::remove(const::res::tag& tag)
+{
+	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "remove on the io thread would wait for itself");
+	std::string why;
+	const auto target = writable_path(tag, why);
+	if (!target) {
+		egLOG_WARN("resource/remove", "Rejected remove of '{}': {}", tag.view(), why);
+		return file_operation::failure(std::move(why));
+	}
+	std::error_code ec;
+	const auto status = fs::symlink_status(*target, ec);
+	if (status.type() == fs::file_type::not_found) {
+		return file_operation::failure(std::format("'{}' does not exist", tag.view()));
+	}
+	if (!fs::is_regular_file(status)) {
+		return file_operation::failure(std::format("'{}' is not a regular file", tag.view()));
+	}
+
+	auto done = std::make_shared<std::promise<std::string>>();
+	auto result = done->get_future();
+	boost::asio::post(io, [this, tag, path = *target, done] {
+		std::string error;
+		try {
+			error = remove_on_io(tag, path);
+		} catch (const std::exception& ex) {
+			error = ex.what();
+		}
+		done->set_value(std::move(error));
+	});
+	std::string error = result.get();
+	if (!error.empty()) {
+		egLOG_WARN("resource/remove", "Failed to remove '{}': {}", tag.view(), error);
+		return file_operation::failure(std::move(error));
+	}
+	return file_operation::success();
+}
+
+std::string res::vfs_resolver::remove_on_io(const tag& tag, const fs::path& target)
+{
+	// Again right before anything is touched, as a store does: a parent may have become a link since remove().
+	if (safe_path(entries_stack.top(), tag) != target) {
+		return "its file no longer stays inside the resource root";
+	}
+	const fs::path relative = target.lexically_relative(m_write_root->path());
+	if (relative.empty() || *relative.begin() == "..") {
+		return "its file does not lie below the resource root";
+	}
+	if (std::string error = detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename()); !error.empty()) {
+		return error;
+	}
+	{
+		std::unique_lock lock(m_pending_mutex);
+		m_pending_writes.erase(tag);
+	}
+	watcher.mark_removed(target);
+	report_self_change(tag, res::tag{}, change_kind::deleted);
+	egLOG("resource/remove", "Removed resource '{}'", tag.view());
+	return {};
+}
+
+res::file_operation res::vfs_resolver::rename(const::res::tag& from, const::res::tag& to)
+{
+	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "rename on the io thread would wait for itself");
+	if (from.protocol() != protocol || to.protocol() != protocol) {
+		return file_operation::failure(std::format("'{}' and '{}' are not both in protocol '{}'", from.view(), to.view(), protocol));
+	}
+	if (from == to) {
+		return file_operation::failure("the new name is the old one");
+	}
+	std::string why;
+	const auto source = writable_path(from, why);
+	if (!source) {
+		egLOG_WARN("resource/rename", "Rejected rename of '{}': {}", from.view(), why);
+		return file_operation::failure(std::move(why));
+	}
+	const auto target = writable_path(to, why);
+	if (!target) {
+		egLOG_WARN("resource/rename", "Rejected rename to '{}': {}", to.view(), why);
+		return file_operation::failure(std::move(why));
+	}
+	std::error_code ec;
+	const auto source_status = fs::symlink_status(*source, ec);
+	if (source_status.type() == fs::file_type::not_found) {
+		return file_operation::failure(std::format("'{}' does not exist", from.view()));
+	}
+	if (!fs::is_regular_file(source_status)) {
+		return file_operation::failure(std::format("'{}' is not a regular file", from.view()));
+	}
+	if (fs::symlink_status(*target, ec).type() != fs::file_type::not_found) {
+		return file_operation::failure(std::format("'{}' already exists", to.view()));
+	}
+
+	auto done = std::make_shared<std::promise<std::string>>();
+	auto result = done->get_future();
+	boost::asio::post(io, [this, from, to, source = *source, target = *target, done] {
+		std::string error;
+		try {
+			error = rename_on_io(from, source, to, target);
+		} catch (const std::exception& ex) {
+			error = ex.what();
+		}
+		done->set_value(std::move(error));
+	});
+	std::string error = result.get();
+	if (!error.empty()) {
+		egLOG_WARN("resource/rename", "Failed to rename '{}' to '{}': {}", from.view(), to.view(), error);
+		return file_operation::failure(std::move(error));
+	}
+	return file_operation::success();
+}
+
+std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& source, const tag& to, const fs::path& target)
+{
+	if (safe_path(entries_stack.top(), from) != source || safe_path(entries_stack.top(), to) != target) {
+		return "its file no longer stays inside the resource root";
+	}
+	const fs::path from_relative = source.lexically_relative(m_write_root->path());
+	const fs::path to_relative = target.lexically_relative(m_write_root->path());
+	if (from_relative.empty() || *from_relative.begin() == ".." || to_relative.empty() || *to_relative.begin() == "..") {
+		return "its file does not lie below the resource root";
+	}
+	detail::rename_request request;
+	request.from_folder = from_relative.parent_path();
+	request.from_leaf = from_relative.filename();
+	request.to_folder = to_relative.parent_path();
+	request.to_leaf = to_relative.filename();
+	if (std::string error = detail::rename_beneath(*m_write_root, request); !error.empty()) {
+		return error;
+	}
+	{
+		std::unique_lock lock(m_pending_mutex);
+		m_pending_writes.erase(from);
+		m_pending_writes.erase(to);
+	}
+	watcher.mark_renamed(source, target);
+	report_self_change(to, from, change_kind::renamed);
+	egLOG("resource/rename", "Renamed resource '{}' to '{}'", from.view(), to.view());
+	return {};
+}
+
 bool res::vfs_resolver::exists(const::res::tag& tag) const
 {
 	{
@@ -472,6 +668,8 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		if (relative.empty() || *relative.begin() == ".." || tmp_path.parent_path() != target_path.parent_path()) {
 			return fail("its file does not lie below the resource root");
 		}
+		std::error_code exists_ec;
+		const bool existed = fs::exists(target_path, exists_ec);
 		detail::write_request request;
 		request.folder = relative.parent_path();
 		request.leaf = relative.filename();
@@ -487,6 +685,7 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 
 		// Update file_watcher snapshot so it doesn't treat our own write as an external change.
 		watcher.mark_written(target_path);
+		report_self_change(tag, res::tag{}, existed ? change_kind::modified : change_kind::created);
 
 		{
 			std::unique_lock lock(m_pending_mutex);

@@ -227,10 +227,20 @@ void res::resource_system::register_mount(const mount &mounted) {
   egLOG("resource/system", "Mount {}:// ({}): {}", mounted.protocol,
         mounted.access == mount_access::read_only ? "read-only" : "read-write",
         mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
-  auto &resolver =
-      registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access, mounted.writable);
+  auto &resolver = registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access,
+                                                      mounted.writable, mounted.watch);
   resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
+  if (mounted.watch.report_changes) {
+    resolver.set_changes_callback([this, protocol = std::string{mounted.protocol}](std::vector<res::file_change> batch) {
+      m_tasks.post_main([this, protocol, batch = std::move(batch), alive = m_lifetime.token()]() {
+        if (alive.expired()) {
+          return;
+        }
+        deliver_changes(protocol, batch);
+      });
+    });
+  }
 }
 
 void res::resource_system::add_mount(mount added) {
@@ -935,6 +945,83 @@ bool res::resource_system::erase(const res::tag &tag) {
   forget_erased(tag);
   signal_changed(tag);
   return true;
+}
+
+res::file_operation res::resource_system::remove(const res::tag &tag) {
+  check_writable(tag);
+  auto &resolvers = root().m_resolvers;
+  const auto found = resolvers.find(tag.protocol());
+  if (found == resolvers.end()) {
+    egLOG_WARN("resource/remove", "Protocol '{}' is not supported!", tag.protocol());
+    return file_operation::failure("protocol is not supported");
+  }
+  auto result = found->second->remove(tag);
+  if (!result) {
+    return result;
+  }
+  forget_erased(tag);
+  signal_changed(tag);
+  return result;
+}
+
+res::file_operation res::resource_system::rename(const res::tag &from, const res::tag &to) {
+  check_writable(from);
+  check_writable(to);
+  if (from.protocol() != to.protocol()) {
+    return file_operation::failure("a file cannot move between protocols");
+  }
+  auto &resolvers = root().m_resolvers;
+  const auto found = resolvers.find(from.protocol());
+  if (found == resolvers.end()) {
+    egLOG_WARN("resource/rename", "Protocol '{}' is not supported!", from.protocol());
+    return file_operation::failure("protocol is not supported");
+  }
+  auto result = found->second->rename(from, to);
+  if (!result) {
+    return result;
+  }
+  forget_erased(from);
+  signal_changed(from);
+  signal_changed(to);
+  return result;
+}
+
+void res::resource_system::subscribe_changes(std::string_view protocol, void *owner, changes_listener listener) {
+  auto &base = root();
+  std::lock_guard lock(base.m_changes_mutex);
+  base.m_change_subscriptions.push_back(
+      change_subscription{++base.m_next_subscription, std::string{protocol}, owner, std::move(listener)});
+}
+
+void res::resource_system::unsubscribe_changes(void *owner) {
+  auto &base = root();
+  std::lock_guard lock(base.m_changes_mutex);
+  std::erase_if(base.m_change_subscriptions, [owner](const change_subscription &entry) { return entry.owner == owner; });
+}
+
+void res::resource_system::deliver_changes(const std::string &protocol, const std::vector<file_change> &batch) {
+  std::vector<std::uint64_t> targets;
+  {
+    std::lock_guard lock(m_changes_mutex);
+    for (const auto &entry : m_change_subscriptions) {
+      if (entry.protocol == protocol) {
+        targets.push_back(entry.id);
+      }
+    }
+  }
+  for (const std::uint64_t id : targets) {
+    changes_listener listener;
+    {
+      // A previous listener of this delivery may have unsubscribed this one.
+      std::lock_guard lock(m_changes_mutex);
+      const auto entry = std::ranges::find(m_change_subscriptions, id, &change_subscription::id);
+      if (entry == m_change_subscriptions.end()) {
+        continue;
+      }
+      listener = entry->listener;
+    }
+    listener(batch);
+  }
 }
 
 void res::resource_system::forget_erased(const res::tag &tag) {
