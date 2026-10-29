@@ -777,6 +777,14 @@ namespace {
 		}
 		for (const auto& entry : entries) {
 			const std::string lower = lower_case(entry.key);
+			// --local --list does not follow includes, but git applies them: an included file could carry hook.* or
+			// remote.*.promisor past the two checks below.
+			if ((!git.allow_hooks || git.refuse_partial_clone)
+				&& (lower.starts_with("include.") || lower.starts_with("includeif."))) {
+				return refused("unsafe_repository", std::format("the repository's git config sets '{}' ({}): an include, "
+					"whose keys a git write not made by a person cannot check", edt::vcs::valid_utf8(entry.key),
+					edt::vcs::valid_utf8(entry.scope)));
+			}
 			// hook.<name>.command / .event run whatever core.hooksPath says.
 			if (!git.allow_hooks && lower.starts_with("hook.")) {
 				return refused("unsafe_repository", std::format("the repository's git config sets '{}' ({}): a config-based "

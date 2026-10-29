@@ -1627,6 +1627,32 @@ BOOST_AUTO_TEST_CASE(AConfigBasedHook_RefusesAGuardedWrite_EvenWithAnyRepoConfig
 	BOOST_TEST(head_of(repo) == before);
 }
 
+// Re-check of #474: `config --local --list` does not follow include.path, git does. An included hook.* must not pass.
+BOOST_AUTO_TEST_CASE(AnIncludedConfigFile_RefusesAGuardedWrite_EvenWithAnyRepoConfig)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("included_hook");
+	const fs::path marker = base / "included_hook_ran.txt";
+	const fs::path script = base / "included-hook.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	const fs::path included = base / "included_hook.inc";
+	write(included, "[hook \"evil\"]\n\tcommand = " + generic_text(script) + "\n\tevent = pre-commit\n");
+	git(repo, { "config", "include.path", generic_text(included) });
+	write(repo / "a.txt", "changed\n");
+	git(repo, { "add", "a.txt" });
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value refused = finish(service->start_commit("message", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("include.path") != std::string::npos);
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(head_of(repo) == before);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtVcsFakeGitTests, fake_git_fixture)
