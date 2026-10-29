@@ -61,6 +61,8 @@ struct confirmations_fixture
 		desc.id = std::move(id);
 		desc.category = category;
 		desc.summary = "does " + desc.id;
+		// Any arguments: the tests send {"n":1}, {"path":...} and so on, and the default schema allows none.
+		desc.args_schema = boost::json::value{ { "type", "object" } };
 		desc.invoke = [this](const cmd::call&) {
 			++runs;
 			return cmd::result::success();
@@ -336,10 +338,12 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_SettlesTheWaitingRequestsOfThatSessionAn
 
 	confirmations->answer(id, edt::confirmation_answer::allow_session);
 
-	BOOST_TEST(runs == 2);
 	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST_INFO("first: " << finished[0].code << ": " << finished[0].error);
 	BOOST_TEST(finished[0].ok);
+	BOOST_TEST_INFO("second: " << finished[1].code << ": " << finished[1].error);
 	BOOST_TEST(finished[1].ok);
+	BOOST_TEST(runs == 2);
 	const auto left = confirmations->pending();
 	BOOST_REQUIRE(left.size() == 2u);
 	BOOST_TEST(left[0].command == "cmake.edit");
@@ -363,10 +367,12 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_DoesNotApproveARequestThatAlreadyTimedOu
 
 	BOOST_TEST(confirmations->answer(visible.front().id, edt::confirmation_answer::allow_session));
 
-	BOOST_TEST(runs == 1);
 	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST_INFO("first: " << finished[0].code << ": " << finished[0].error);
 	BOOST_TEST(finished[0].ok);
+	BOOST_TEST_INFO("second: " << finished[1].code << ": " << finished[1].error);
 	BOOST_TEST(finished[1].code == cmd::codes::denied);
+	BOOST_TEST(runs == 1);
 	BOOST_TEST(finished[1].error.find("nobody answered") != std::string::npos);
 }
 
