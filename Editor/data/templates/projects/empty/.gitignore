@@ -1,0 +1,5 @@
+build/
+.cache/
+.snk/*
+!.snk/agent_policy.json
+code/CMakeUserPresets.json
