@@ -27,6 +27,8 @@ namespace edt {
 
 		// The registries the dockspace draws; nothing is drawn before this is set.
 		void set_context(editor_context& context) { m_context = &context; }
+		// See dockspace::set_menu_bar_status.
+		void set_menu_bar_status(std::function<void()> draw) { m_dockspace.set_menu_bar_status(std::move(draw)); }
 
 	private:
 		gui::menu_layout_manager m_manager;

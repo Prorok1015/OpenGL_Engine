@@ -94,7 +94,7 @@ void edt::draw_main_menu(action_registry& actions, panel_registry& panels)
 		for (const menu_item_info& item : actions.items(menu)) {
 			if (item.separator_before) ImGui::Separator();
 			const char* shortcut_text = item.shortcut_text.empty() ? nullptr : item.shortcut_text.c_str();
-			if (ImGui::MenuItem(item.label.c_str(), shortcut_text, false, item.enabled))
+			if (ImGui::MenuItem(item.label.c_str(), shortcut_text, item.checked, item.enabled))
 				actions.activate(item.id);
 			if (!item.enabled && !item.disabled_tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 				ImGui::SetTooltip("%s", item.disabled_tooltip.c_str());

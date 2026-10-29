@@ -400,6 +400,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		// Only the fields edited here: the rest of the file stays as it is on disk now.
 		const build_settings edited = m_settings;
 		const build_settings loaded = m_loaded_settings;
+		build_settings written;
 		auto problem = update_build_settings(snk_dir(), [&](build_settings& on_disk) {
 			if (edited.configuration != loaded.configuration) on_disk.configuration = edited.configuration;
 			if (edited.jobs_mode != loaded.jobs_mode) on_disk.jobs_mode = edited.jobs_mode;
@@ -411,6 +412,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 			for (const auto& configuration : fresh) {
 				if (!contains(on_disk.fresh_configure, configuration)) on_disk.fresh_configure.push_back(configuration);
 			}
+			written = on_disk;
 		}, m_write);
 		if (problem) {
 			settings_ok = false;
@@ -418,6 +420,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		} else {
 			m_settings_snapshot = read_snapshot(build_settings_file());
 			result.fresh = fresh;
+			if (m_on_settings_applied) m_on_settings_applied(written);
 		}
 	}
 

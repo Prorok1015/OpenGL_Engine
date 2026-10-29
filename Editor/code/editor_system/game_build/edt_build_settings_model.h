@@ -66,6 +66,9 @@ namespace edt
 		bool is_building() const { return m_building && m_building(); }
 		// How the files are written; null: prj::write_text_atomically (tests inject failures).
 		void set_writer(prj::text_writer write) { m_write = std::move(write); }
+		// Called by apply() after it wrote build.json, with the settings now in the file (live mode follows
+		// live_enabled, #445). Null: none.
+		void set_on_settings_applied(std::function<void(const build_settings&)> applied) { m_on_settings_applied = std::move(applied); }
 
 		// Empty when the presets were read; otherwise why the window has nothing to show.
 		const std::string& unavailable_reason() const { return m_unavailable; }
@@ -151,6 +154,7 @@ namespace edt
 		jobs_estimate m_estimate{};
 		std::function<bool()> m_building;
 		prj::text_writer m_write;
+		std::function<void(const build_settings&)> m_on_settings_applied;
 		std::string m_unavailable = "Open a project first";
 		std::vector<std::string> m_load_errors;
 

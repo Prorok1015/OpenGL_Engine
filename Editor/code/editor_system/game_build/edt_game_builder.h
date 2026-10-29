@@ -186,6 +186,8 @@ namespace edt
 		[[nodiscard]] std::uint64_t job() const { return is_building() ? m_job : 0; }
 		// Why build.game_module is disabled; empty when it is enabled.
 		[[nodiscard]] std::string disabled_reason() const;
+		// What make_manual_build_request / make_live_build_request read (settings, preset_for, auto_jobs).
+		[[nodiscard]] const game_builder_options& options() const { return m_options; }
 		// Result {started, job} like build.game_module; a request queued behind a running build gives started false, job 0.
 		// Fails with `disabled`, `busy` (a build runs and the request does not cancel_on_restart) or `invalid_args`.
 		action_result start(build_request request);

@@ -233,8 +233,7 @@ edt::build_request edt::make_live_build_request(const build_settings& settings, 
 	if (settings.live_jobs > 0) {
 		out.jobs = settings.live_jobs;
 	} else {
-		// Few jobs: a live build runs while the person works in the editor.
-		out.jobs = std::max(1, std::min(2, options.auto_jobs ? options.auto_jobs() : 2));
+		out.jobs = live_auto_jobs(options.auto_jobs ? options.auto_jobs() : 2);
 	}
 	out.priority = build_priority::low;
 	out.cancel_on_restart = true;

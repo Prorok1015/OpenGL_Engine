@@ -36,6 +36,10 @@ namespace {
 	constexpr std::array<std::string_view, 7> read_commands = { "scene.query", "node.get", "component.schema", "asset.query", "selection.get",
 		"problems.list", "build.settings.get" };
 
+	// The commands an agent may use while the person's switch that `enabled` reads is on (command_desc::agent_when_enabled):
+	// live mode (#445), whose switch is the consent (AI_INTEGRATION.md section 5). Listed one by one, like read_commands.
+	constexpr std::array<std::string_view, 3> when_enabled_commands = { "live.status", "live.rebuild_now", "live.reload_now" };
+
 	// What an agent may ask of viewport.capture. A request for 8192 x 8192 is a quarter of a gigabyte of readback
 	// and copies; the answer is a PNG that has to be base64 encoded and sent.
 	constexpr std::int64_t agent_max_capture_side = 2048;
@@ -141,7 +145,7 @@ namespace {
 		if (!has_png_field(command.result_schema)) {
 			tool.output_schema = command.result_schema;
 		}
-		tool.read_only = true;
+		tool.read_only = !command.mutates;
 		tool.destructive = false;
 		return tool;
 	}
@@ -213,7 +217,15 @@ namespace {
 
 bool edt::agent_may_use(const cmd::command_desc& command)
 {
-	if (!command.expose_as_tool || command.mutates || command.long_running || command.risk != cmd::danger::none) {
+	if (!command.expose_as_tool || command.long_running || command.risk != cmd::danger::none) {
+		return false;
+	}
+	if (command.agent_when_enabled) {
+		const bool listed = std::find(when_enabled_commands.begin(), when_enabled_commands.end(), command.id)
+			!= when_enabled_commands.end();
+		return listed && command.enabled && command.enabled();
+	}
+	if (command.mutates) {
 		return false;
 	}
 	for (const std::string_view allowed : read_commands) {

@@ -80,6 +80,11 @@ namespace cmd
 		bool long_running = false;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
+		// The person's consent is a switch of theirs that `enabled` reads (live mode, #445): an MCP agent may see and
+		// call the command while `enabled` returns true, even though it `mutates`, as long as `risk` is none,
+		// `expose_as_tool` is set and it is not `long_running`. Hidden from the agent and refused while `enabled` is
+		// false or null. A stopgap: the agent policy (A6c, #449) replaces it with a policy row per command.
+		bool agent_when_enabled = false;
 		std::function<result(const call&)> invoke;
 		// Null: always enabled.
 		std::function<bool()> enabled;

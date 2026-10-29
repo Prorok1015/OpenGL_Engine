@@ -20,6 +20,12 @@ namespace edt
 	inline constexpr int k_max_live_quiet_ms = 600000;
 	inline constexpr int k_max_live_jobs = 1024;
 
+	// The jobs of a live build with live_jobs 0, from the auto estimate: few, since it runs while the person works.
+	constexpr int live_auto_jobs(int estimate)
+	{
+		return estimate < 1 ? 1 : (estimate > 2 ? 2 : estimate);
+	}
+
 	// The person's build settings of one project: <root>/.snk/build.json (per user, never committed). Its keys are the
 	// field names; jobs_mode is "auto" | "manual", log_verbosity "errors" | "normal" | "verbose".
 	struct build_settings

@@ -61,6 +61,10 @@ namespace edt
 		bool separator_before = false;
 		// Shown as a tooltip on the menu item while the action is disabled (why it is, e.g. a feature not built in).
 		std::string disabled_tooltip;
+		// Read every frame instead of `disabled_tooltip` when set (the reason changes while the editor runs).
+		std::function<std::string()> disabled_reason;
+		// A toggle: the menu item shows a check mark while it returns true. Null: a plain item.
+		std::function<bool()> checked;
 		// What a menu click or the shortcut does: normally asks the user for the arguments (dialog_service)
 		// and then calls registry.invoke. Null: invoke with no arguments, which an action with required
 		// arguments cannot do, so it needs one to have a menu item or a shortcut.
@@ -78,6 +82,8 @@ namespace edt
 		std::string shortcut_hint{};
 		bool separator_before = false;
 		std::string disabled_tooltip{};
+		std::function<std::string()> disabled_reason{};
+		std::function<bool()> checked{};
 		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
 		action_fn execute{};
 		// JSON Schema (see cmd_json_schema.h) of the arguments (a top-level "type":"object") and of the result. Null: no_args_schema(). `invoke` validates the arguments
@@ -105,6 +111,7 @@ namespace edt
 		bool separator_before = false;
 		bool enabled = true;
 		std::string disabled_tooltip;
+		bool checked = false;
 	};
 
 	// The editor's view of a cmd::command_registry: the commands themselves (id, schemas, enabled, invoke) live in

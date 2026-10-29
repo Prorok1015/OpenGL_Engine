@@ -31,6 +31,7 @@ namespace edt
 		if (ImGui::BeginMenuBar())
 		{
 			draw_main_menu(actions, panels);
+			if (m_menu_bar_status) m_menu_bar_status();
 			ImGui::EndMenuBar();
 		}
 
