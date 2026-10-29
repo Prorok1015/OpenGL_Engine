@@ -1,10 +1,15 @@
 #pragma once
+#include "cmd_policy.h"
 #include "cmd_registration.h"
 #include "cmd_types.h"
 #include <boost/json/value.hpp>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -47,9 +52,52 @@ namespace cmd
 
 		bool on_main_thread() const noexcept { return std::this_thread::get_id() == m_main_thread; }
 
+		// The policy for calls from agents (origin `agent`; the other origins are not asked): `invoke` asks the gate
+		// before it checks the arguments or runs anything. Without a gate nothing is checked here. null removes it.
+		// - allow: the command runs.
+		// - deny: `denied`, the command does not run.
+		// - ask: with a person to ask (`gate->can_ask()`) the answer is `confirmation_required` with a one-time ticket in
+		//   `value["ticket"]`; without one (headless) it is `denied`. After a person approved the ticket, the same call
+		//   (same command, the same arguments, the same agent session) with `call::confirmation` set to it runs once;
+		//   any other call with it, a second use, or one before the approval is `denied`. The gate is asked again on
+		//   that call, so a policy that turned to deny meanwhile wins.
+		void set_policy_gate(std::shared_ptr<policy_gate> gate);
+
+		// A person said yes to the ticket of a confirmation_required answer. False for a ticket that is unknown or
+		// has expired.
+		bool approve(std::string_view ticket);
+		// Forgets a ticket (the person said no, or did not answer in time).
+		void discard(std::string_view ticket);
+		std::size_t pending_confirmations() const;
+
+		// A ticket lives this long from its issue.
+		static constexpr std::chrono::seconds confirmation_lifetime{ 120 };
+		// An agent that asks again and again cannot fill the list: past this the call is `denied`.
+		static constexpr std::size_t max_pending_confirmations = 64;
+		// Tests: the time tickets expire by.
+		void set_clock(std::function<std::chrono::steady_clock::time_point()> now);
+
 	private:
 		struct entry;
 
+		struct confirmation_ticket
+		{
+			std::string id;
+			std::string command;
+			std::string args;
+			std::string session;
+			std::chrono::steady_clock::time_point expires;
+			bool approved = false;
+		};
+
+		// nullopt: the call may go on.
+		std::optional<result> apply_policy(const command_desc& command, const call& request);
+		void drop_expired_tickets();
+		std::chrono::steady_clock::time_point now() const;
+
+		std::shared_ptr<policy_gate> m_gate;
+		std::function<std::chrono::steady_clock::time_point()> m_clock;
+		std::vector<confirmation_ticket> m_tickets;
 		std::vector<std::shared_ptr<entry>> m_commands;
 		std::uint64_t m_next_key = 1;
 		std::thread::id m_main_thread = std::this_thread::get_id();
