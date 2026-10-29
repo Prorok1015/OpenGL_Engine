@@ -278,10 +278,14 @@ BOOST_AUTO_TEST_CASE(NoFiles_TheDefaultsApply)
 	test_util::temp_dir dir("edt_agent_policy_none");
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 
+	// No folder, no file: a fresh project. Not an error on any platform, so the defaults apply, reads included.
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::allow));
+	BOOST_TEST((policy.effective(command_of("scene.move", agent_category::scene_edit)).mode == policy_mode::allow));
 	const auto effective = policy.effective(command_of("code.create", agent_category::code_files));
 
 	BOOST_TEST((effective.mode == policy_mode::ask));
 	BOOST_TEST(policy.project_error().empty());
+	BOOST_TEST(policy.personal_error().empty());
 }
 
 BOOST_AUTO_TEST_CASE(AFileEditedByAPerson_IsTakenOverWithoutARestart)

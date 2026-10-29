@@ -53,6 +53,8 @@ namespace edt
 		std::map<cmd::agent_category, cmd::policy_mode> categories;
 		std::map<std::string, cmd::policy_mode> commands;
 
+		// The command's own entry, else its category's held to the command's risk floor (confirm -> at least ask,
+		// deny_by_default -> at least deny); nullopt: this layer says nothing.
 		std::optional<cmd::policy_mode> resolve(const cmd::command_desc& command) const;
 		bool empty() const { return categories.empty() && commands.empty(); }
 	};
@@ -126,6 +128,8 @@ namespace edt
 			bool existed = false;
 			// The last error of looking at the file, so a file that cannot be examined is warned about once.
 			std::string stat_error;
+			// The unknown command ids of this load were already warned about.
+			bool warned_unknown = false;
 			std::filesystem::file_time_type modified{};
 			std::uintmax_t size = 0;
 		};
@@ -133,7 +137,7 @@ namespace edt
 		void reload(source& what);
 		static bool changed_on_disk(const source& what);
 		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write);
-		void warn_unknown_commands(const source& what) const;
+		void warn_unknown_commands(source& what) const;
 
 		source m_project;
 		source m_personal;

@@ -90,7 +90,7 @@ namespace edt
 		{
 			json::basic_parser<duplicate_key_finder> parser{ json::parse_options{} };
 			json::error_code ec;
-			parser.write(text.data(), text.size(), ec);
+			parser.write_some(false, text.data(), text.size(), ec);
 			return parser.handler().duplicate;
 		}
 
@@ -137,8 +137,11 @@ namespace edt
 
 	std::optional<cmd::policy_mode> policy_layer::resolve(const cmd::command_desc& command) const
 	{
+		// A command's own entry is the only thing that lifts its risk floor; an entry for its category is held to it.
 		if (const auto own = commands.find(command.id); own != commands.end()) return own->second;
-		if (const auto category = categories.find(command.category); category != categories.end()) return category->second;
+		if (const auto category = categories.find(command.category); category != categories.end()) {
+			return cmd::strictest(category->second, mode_of_risk(command.risk));
+		}
 		return std::nullopt;
 	}
 
@@ -242,21 +245,11 @@ namespace edt
 			return { cmd::policy_mode::deny, policy_source::personal, "your agent policy cannot be used: " + personal_error };
 		}
 
-		// A command's own entry is the only thing that lifts its risk floor; an entry for its category is held to it.
-		const cmd::policy_mode floor = mode_of_risk(command.risk);
-		const auto resolve = [&command, floor](const policy_layer& layer) -> std::optional<cmd::policy_mode> {
-			if (const auto own = layer.commands.find(command.id); own != layer.commands.end()) return own->second;
-			if (const auto category = layer.categories.find(command.category); category != layer.categories.end()) {
-				return cmd::strictest(category->second, floor);
-			}
-			return std::nullopt;
-		};
-
-		const std::optional<cmd::policy_mode> from_project = resolve(project);
+		const std::optional<cmd::policy_mode> from_project = project.resolve(command);
 		const cmd::policy_mode base = from_project.value_or(default_mode(command));
 		const policy_source base_source = from_project ? policy_source::project : policy_source::default_table;
 
-		const std::optional<cmd::policy_mode> from_personal = resolve(personal);
+		const std::optional<cmd::policy_mode> from_personal = personal.resolve(command);
 		if (from_personal && *from_personal > base) {
 			return { *from_personal, policy_source::personal, "your own settings make it " + std::string(cmd::to_string(*from_personal)) };
 		}
@@ -289,6 +282,12 @@ namespace edt
 			if (file.empty()) return out;
 			std::error_code ec;
 			const std::filesystem::file_status status = std::filesystem::status(file, ec);
+			// A missing file is the normal case of a project with no policy of its own. Some standard libraries report it as
+			// an error code besides file_type::not_found, so that comes first.
+			if (status.type() == std::filesystem::file_type::not_found || ec == std::errc::no_such_file_or_directory
+				|| ec == std::errc::not_a_directory) {
+				return out;
+			}
 			if (ec) {
 				out.error = "the file cannot be examined: " + ec.message();
 				return out;
@@ -328,6 +327,7 @@ namespace edt
 		what.modified = now.modified;
 		what.size = now.size;
 		what.stat_error = now.error;
+		what.warned_unknown = false;
 		if (!now.error.empty()) {
 			what.error = now.error;
 		}
@@ -348,9 +348,10 @@ namespace edt
 		warn_unknown_commands(what);
 	}
 
-	void agent_policy::warn_unknown_commands(const source& what) const
+	void agent_policy::warn_unknown_commands(source& what) const
 	{
-		if (!m_known) return;
+		if (!m_known || what.warned_unknown) return;
+		what.warned_unknown = true;
 		for (const auto& [id, mode] : what.layer.commands) {
 			if (!m_known(id)) {
 				egLOG_WARN("editor/agent_policy", "{}: no command '{}' (a typo, or a module that is not loaded)", fs_paths::utf8_of(what.file), id);
@@ -361,7 +362,7 @@ namespace edt
 	void agent_policy::set_known_commands(std::function<bool(std::string_view)> exists)
 	{
 		m_known = std::move(exists);
-		for (const source* what : { &m_project, &m_personal }) {
+		for (source* what : { &m_project, &m_personal }) {
 			if (what->loaded) warn_unknown_commands(*what);
 		}
 	}
