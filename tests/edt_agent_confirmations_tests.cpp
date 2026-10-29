@@ -6,7 +6,9 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <set>
+#include <fstream>
+#include <iterator>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -223,9 +225,11 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_NeverLiftsAProjectDeny)
 BOOST_AUTO_TEST_CASE(AllowForTheSession_IsKeptInMemoryOnly_NothingIsWrittenAnywhere)
 {
 	const auto files_under_dir = [this] {
-		std::set<std::string> files;
+		std::map<std::string, std::string> files;
 		for (const auto& entry : fs::recursive_directory_iterator(dir.path())) {
-			if (entry.is_regular_file()) files.insert(entry.path().generic_string());
+			if (!entry.is_regular_file()) continue;
+			std::ifstream in(entry.path(), std::ios::binary);
+			files[entry.path().generic_string()] = std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 		}
 		return files;
 	};
@@ -340,6 +344,53 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_SettlesTheWaitingRequestsOfThatSessionAn
 	BOOST_REQUIRE(left.size() == 2u);
 	BOOST_TEST(left[0].command == "cmake.edit");
 	BOOST_TEST(left[1].session == "s2");
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_DoesNotApproveARequestThatAlreadyTimedOut)
+{
+	cmd::call early = agent_call("s1");
+	early.args = boost::json::object{ { "n", 1 } };
+	cmd::call later = agent_call("s1");
+	later.args = boost::json::object{ { "n", 2 } };
+	const auto record = [this](cmd::result outcome) { finished.push_back(std::move(outcome)); };
+	confirmations->invoke("code.create", early, record);
+	current += 50s;
+	confirmations->invoke("code.create", later, record);
+	current += 20s;
+	// The first is past its deadline (no tick() yet) and hidden; the second still waits.
+	const auto visible = confirmations->pending();
+	BOOST_REQUIRE(visible.size() == 1u);
+
+	BOOST_TEST(confirmations->answer(visible.front().id, edt::confirmation_answer::allow_session));
+
+	BOOST_TEST(runs == 1);
+	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST(finished[0].ok);
+	BOOST_TEST(finished[1].code == cmd::codes::denied);
+	BOOST_TEST(finished[1].error.find("nobody answered") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_AfterThePolicyTurnedToDeny_DeniesTheSettledRequestsToo)
+{
+	cmd::call first = agent_call("s1");
+	first.args = boost::json::object{ { "n", 1 } };
+	cmd::call second = agent_call("s1");
+	second.args = boost::json::object{ { "n", 2 } };
+	const auto record = [this](cmd::result outcome) { finished.push_back(std::move(outcome)); };
+	confirmations->invoke("code.create", first, record);
+	confirmations->invoke("code.create", second, record);
+	BOOST_REQUIRE(confirmations->pending().size() == 2u);
+	const std::uint64_t id = confirmations->pending().front().id;
+
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"deny"}})");
+	confirmations->answer(id, edt::confirmation_answer::allow_session);
+
+	BOOST_TEST(runs == 0);
+	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(finished[1].code == cmd::codes::denied);
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(TheGrant_IsGivenOnlyWhenTheTicketIsApproved)

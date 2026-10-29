@@ -94,6 +94,14 @@ namespace edt
 		waiting entry = std::move(*found);
 		m_waiting.erase(found);
 
+		// A yes after the deadline is no yes, whoever asks: the answer itself, or a grant that settles the ones still waiting.
+		std::string late_text;
+		if (what && *what != confirmation_answer::deny && entry.request.deadline <= now()) {
+			late_text = std::format("nobody answered within {} seconds", timeout.count());
+			what = std::nullopt;
+			why_not = late_text;
+		}
+
 		if (!what || *what == confirmation_answer::deny) {
 			m_commands.discard(entry.ticket);
 			const std::string why = what ? "a person declined it" : std::string(why_not);
