@@ -57,12 +57,13 @@ cmd::main_thread_queue::~main_thread_queue()
 	m_state->registry = nullptr;
 }
 
-std::future<cmd::result> cmd::main_thread_queue::post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation)
+std::future<cmd::result> cmd::main_thread_queue::post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation,
+	std::string confirmation)
 {
 	auto pending = std::make_shared<pending_call>();
 	std::future<result> outcome = pending->promise.get_future();
 	m_tasks.post_main([state = m_state, pending, id = std::move(id),
-		request = call{ std::move(args), std::move(from), expected_generation }]() {
+		request = call{ std::move(args), std::move(from), expected_generation, std::move(confirmation) }]() {
 		if (state->registry == nullptr) {
 			pending->set(result::failure(codes::failed, "the command queue was closed before the command ran"));
 			return;
@@ -72,16 +73,17 @@ std::future<cmd::result> cmd::main_thread_queue::post(std::string id, boost::jso
 	return outcome;
 }
 
-std::future<cmd::result> cmd::main_thread_queue::call_now_or_post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation)
+std::future<cmd::result> cmd::main_thread_queue::call_now_or_post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation,
+	std::string confirmation)
 {
-	if (!m_tasks.on_main()) return post(std::move(id), std::move(args), std::move(from), expected_generation);
+	if (!m_tasks.on_main()) return post(std::move(id), std::move(args), std::move(from), expected_generation, std::move(confirmation));
 
 	std::promise<result> inline_outcome;
 	std::future<result> outcome = inline_outcome.get_future();
 	if (m_state->registry == nullptr) {
 		inline_outcome.set_value(result::failure(codes::failed, "the command queue was closed before the command ran"));
 	} else {
-		inline_outcome.set_value(run(*m_state->registry, id, call{ std::move(args), std::move(from), expected_generation }));
+		inline_outcome.set_value(run(*m_state->registry, id, call{ std::move(args), std::move(from), expected_generation, std::move(confirmation) }));
 	}
 	return outcome;
 }

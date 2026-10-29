@@ -257,19 +257,131 @@ BOOST_FIXTURE_TEST_CASE(ApprovedTicket_IsNotEnoughWhenThePolicyTurnedToDeny, pol
 BOOST_FIXTURE_TEST_CASE(NoGuessedTicket_Works, policy_fixture)
 {
 	gate->mode = cmd::policy_mode::ask;
+	const std::string real = ticket_of(commands.invoke("test.act", from_agent()));
+	commands.approve(real);
+	std::string guessed = real;
+	guessed[0] = guessed[0] == 'a' ? 'b' : 'a';
+	BOOST_REQUIRE(guessed.size() == 32u);
 
-	BOOST_TEST(commands.invoke("test.act", from_agent(1, "s1", "0000000000000000")).code == cmd::codes::denied);
+	BOOST_TEST(commands.invoke("test.act", from_agent(1, "s1", guessed)).code == cmd::codes::denied);
 	BOOST_TEST(runs == 0);
+	BOOST_TEST(commands.pending_confirmations() == 1u);
 }
 
-BOOST_FIXTURE_TEST_CASE(TooManyPendingTickets_AreRefused, policy_fixture)
+BOOST_FIXTURE_TEST_CASE(OneSessionCannotFillTheListForTheOthers, policy_fixture)
 {
 	gate->mode = cmd::policy_mode::ask;
-	for (std::size_t i = 0; i < cmd::command_registry::max_pending_confirmations; ++i) {
-		BOOST_REQUIRE(commands.invoke("test.act", from_agent(static_cast<std::int64_t>(i))).code == cmd::codes::confirmation_required);
+	for (std::size_t i = 0; i < cmd::command_registry::max_pending_confirmations_per_session; ++i) {
+		BOOST_REQUIRE(commands.invoke("test.act", from_agent(static_cast<std::int64_t>(i), "greedy")).code == cmd::codes::confirmation_required);
 	}
 
+	BOOST_TEST(commands.invoke("test.act", from_agent(1000, "greedy")).code == cmd::codes::denied);
+	const auto other = commands.invoke("test.act", from_agent(1, "polite"));
+	BOOST_TEST(other.code == cmd::codes::confirmation_required);
+	BOOST_TEST(commands.pending_confirmations() == cmd::command_registry::max_pending_confirmations_per_session + 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(TheSameQuestionAskedAgain_IsTheTicketAlreadyWaiting, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+
+	const std::string first = ticket_of(commands.invoke("test.act", from_agent(5)));
+	const std::string again = ticket_of(commands.invoke("test.act", from_agent(5)));
+	const std::string other_args = ticket_of(commands.invoke("test.act", from_agent(6)));
+	const std::string other_session = ticket_of(commands.invoke("test.act", from_agent(5, "s2")));
+
+	BOOST_TEST(first == again);
+	BOOST_TEST(first != other_args);
+	BOOST_TEST(first != other_session);
+	BOOST_TEST(commands.pending_confirmations() == 3u);
+}
+
+BOOST_FIXTURE_TEST_CASE(TheCapFreesUpWhenTheTicketsExpire, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	for (std::size_t i = 0; i < cmd::command_registry::max_pending_confirmations_per_session; ++i) {
+		BOOST_REQUIRE(commands.invoke("test.act", from_agent(static_cast<std::int64_t>(i))).code == cmd::codes::confirmation_required);
+	}
 	BOOST_TEST(commands.invoke("test.act", from_agent(1000)).code == cmd::codes::denied);
+
+	current += cmd::command_registry::confirmation_lifetime + 1s;
+
+	BOOST_TEST(commands.invoke("test.act", from_agent(1000)).code == cmd::codes::confirmation_required);
+	BOOST_TEST(commands.pending_confirmations() == 1u);
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAllowedCallWithSomeoneElsesTicket_LeavesThatTicketAlone, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	const std::string victim = ticket_of(commands.invoke("test.act", from_agent(7, "victim")));
+
+	gate->mode = cmd::policy_mode::allow;
+	BOOST_TEST(commands.invoke("test.act", from_agent(1, "attacker", victim)).ok);
+
+	gate->mode = cmd::policy_mode::ask;
+	BOOST_TEST(commands.approve(victim));
+	BOOST_TEST(commands.invoke("test.act", from_agent(7, "victim", victim)).ok);
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAllowedCallWithItsOwnTicket_DropsIt, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	const std::string ticket = ticket_of(commands.invoke("test.act", from_agent(7)));
+
+	gate->mode = cmd::policy_mode::allow;
+	BOOST_TEST(commands.invoke("test.act", from_agent(7, "s1", ticket)).ok);
+
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ATicketSurvivesAnInterveningDeny_WithinItsLifetime, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	const std::string ticket = ticket_of(commands.invoke("test.act", from_agent(3)));
+	commands.approve(ticket);
+
+	gate->mode = cmd::policy_mode::deny;
+	BOOST_TEST(commands.invoke("test.act", from_agent(3, "s1", ticket)).code == cmd::codes::denied);
+	current += 60s;
+	gate->mode = cmd::policy_mode::ask;
+
+	BOOST_TEST(commands.invoke("test.act", from_agent(3, "s1", ticket)).ok);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(ATicketIsConsumed_EvenWhenTheSchemaThenRefusesTheArguments, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	cmd::call bad;
+	bad.args = boost::json::object{ { "n", "not an integer" } };
+	bad.from = cmd::origin::agent("s1");
+	const std::string ticket = ticket_of(commands.invoke("test.act", bad));
+	commands.approve(ticket);
+
+	bad.confirmation = ticket;
+	BOOST_TEST(commands.invoke("test.act", bad).code == cmd::codes::invalid_args);
+	BOOST_TEST(commands.invoke("test.act", bad).code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(TheTicketKnowsWhatItWasIssuedFor, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	gate->reason = "creates a file";
+	const std::string ticket = ticket_of(commands.invoke("test.act", from_agent(7, "s9")));
+
+	const auto bound = commands.confirmation_of(ticket);
+
+	BOOST_REQUIRE(bound.has_value());
+	BOOST_TEST(bound->command == "test.act");
+	BOOST_TEST(bound->session == "s9");
+	BOOST_TEST(bound->reason == "creates a file");
+	BOOST_TEST(bound->args == R"({"n":7})");
+	BOOST_TEST(!bound->approved);
+	commands.approve(ticket);
+	BOOST_TEST(commands.confirmation_of(ticket)->approved);
+	BOOST_TEST(!commands.confirmation_of("nope").has_value());
 }
 
 BOOST_FIXTURE_TEST_CASE(DisabledCommand_StaysDisabled_NotAskedAbout, policy_fixture)

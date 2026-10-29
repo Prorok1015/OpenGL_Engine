@@ -127,6 +127,7 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 
 void cmd::command_registry::set_policy_gate(std::shared_ptr<policy_gate> gate)
 {
+	ASSERT_MSG(on_main_thread(), "command_registry::set_policy_gate: main thread only");
 	m_gate = std::move(gate);
 	if (!m_gate) m_tickets.clear();
 }
@@ -152,8 +153,18 @@ std::size_t cmd::command_registry::pending_confirmations() const
 	return m_tickets.size();
 }
 
+std::optional<cmd::command_registry::pending_confirmation> cmd::command_registry::confirmation_of(std::string_view ticket)
+{
+	ASSERT_MSG(on_main_thread(), "command_registry::confirmation_of: main thread only");
+	drop_expired_tickets();
+	const auto found = std::find_if(m_tickets.begin(), m_tickets.end(), [ticket](const confirmation_ticket& t) { return t.id == ticket; });
+	if (found == m_tickets.end()) return std::nullopt;
+	return pending_confirmation{ found->command, found->args, found->reason, found->session, found->approved };
+}
+
 bool cmd::command_registry::approve(std::string_view ticket)
 {
+	ASSERT_MSG(on_main_thread(), "command_registry::approve: main thread only");
 	drop_expired_tickets();
 	const auto found = std::find_if(m_tickets.begin(), m_tickets.end(), [ticket](const confirmation_ticket& t) { return t.id == ticket; });
 	if (found == m_tickets.end()) return false;
@@ -163,6 +174,7 @@ bool cmd::command_registry::approve(std::string_view ticket)
 
 void cmd::command_registry::discard(std::string_view ticket)
 {
+	ASSERT_MSG(on_main_thread(), "command_registry::discard: main thread only");
 	std::erase_if(m_tickets, [ticket](const confirmation_ticket& t) { return t.id == ticket; });
 }
 
@@ -178,7 +190,13 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 		return denied(decision.reason.empty() ? "the policy denies it" : decision.reason);
 	}
 	if (decision.mode == policy_mode::allow) {
-		if (!request.confirmation.empty()) discard(request.confirmation);
+		// A ticket is dropped only by the call it was issued for: a guessed id must not wipe another session's question.
+		if (!request.confirmation.empty()) {
+			const std::string args = boost::json::serialize(request.args);
+			std::erase_if(m_tickets, [&](const confirmation_ticket& t) {
+				return t.id == request.confirmation && t.command == command.id && t.args == args && t.session == request.from.session;
+			});
+		}
 		return std::nullopt;
 	}
 
@@ -198,23 +216,46 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 		return std::nullopt;
 	}
 
+	const auto describe = [&command](const confirmation_ticket& ticket) {
+		result answer = result::failure(codes::confirmation_required, std::format("'{}' needs a person's confirmation", command.id));
+		answer.value = boost::json::object{
+			{ "ticket", ticket.id },
+			{ "command", command.id },
+			{ "reason", ticket.reason },
+			{ "expires_in_s", static_cast<std::int64_t>(confirmation_lifetime.count()) },
+		};
+		return answer;
+	};
+	// The same question asked again is the question already waiting, not a second one.
+	const auto same = std::find_if(m_tickets.begin(), m_tickets.end(), [&](const confirmation_ticket& t) {
+		return t.command == command.id && t.args == args && t.session == request.from.session;
+	});
+	if (same != m_tickets.end()) return describe(*same);
+
+	const auto of_session = std::count_if(m_tickets.begin(), m_tickets.end(),
+		[&request](const confirmation_ticket& t) { return t.session == request.from.session; });
+	if (static_cast<std::size_t>(of_session) >= max_pending_confirmations_per_session) {
+		return denied("too many of its confirmations are waiting for a person");
+	}
 	if (m_tickets.size() >= max_pending_confirmations) {
 		return denied("too many confirmations are waiting for a person");
 	}
-	thread_local std::mt19937_64 random{ std::random_device{}() };
+	// The ticket is a secret between the registry and whoever asks: 128 bits straight from the system's source.
+	std::random_device entropy;
+	const auto word = [&entropy] {
+		const std::uint64_t high = entropy();
+		return (high << 32) | entropy();
+	};
 	confirmation_ticket ticket;
-	ticket.id = std::format("{:016x}{:016x}", random(), random());
+	const std::uint64_t first = word();
+	const std::uint64_t second = word();
+	ticket.id = std::format("{:016x}{:016x}", first, second);
 	ticket.command = command.id;
 	ticket.args = args;
 	ticket.session = request.from.session;
+	ticket.reason = decision.reason;
 	ticket.expires = now() + confirmation_lifetime;
-	result answer = result::failure(codes::confirmation_required, std::format("'{}' needs a person's confirmation", command.id));
-	answer.value = boost::json::object{
-		{ "ticket", ticket.id },
-		{ "command", command.id },
-		{ "reason", decision.reason },
-		{ "expires_in_s", static_cast<std::int64_t>(confirmation_lifetime.count()) },
-	};
+	result answer = describe(ticket);
 	m_tickets.push_back(std::move(ticket));
 	return answer;
 }
