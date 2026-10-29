@@ -16,6 +16,19 @@
 
 namespace {
 
+	// Whether the folder has an entry spelled exactly `name`; a case-insensitive file system lists the old spelling.
+	bool directory_lists(const fs::path& folder, std::string_view name)
+	{
+		std::error_code ec;
+		fs::directory_iterator it(folder, ec);
+		for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
+			if (fs_paths::utf8_of(it->path().filename()) == name) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	std::string folded(std::string_view text)
 	{
 		std::string out(text);
@@ -295,7 +308,10 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 
 	{
 		std::unique_lock lock(m_pending_mutex);
-		m_pending_writes[tag] = data_ptr;
+		// A create that may not replace is not served before it is on disk: it can still be refused.
+		if (replace) {
+			m_pending_writes[tag] = data_ptr;
+		}
 		m_erased.erase(tag); // a store after an erase: the pending erase task finds no mark and leaves the file alone
 	}
 
@@ -374,7 +390,7 @@ bool res::vfs_resolver::erase(const::res::tag& tag)
 			? std::string{ "its file does not lie below the resource root" }
 			: detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename());
 		if (!error.empty()) {
-			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", path.string(), error);
+			egLOG_WARN("resource/erase", "Failed to remove '{}': {}", fs_paths::utf8_of(path), error);
 		}
 		std::unique_lock lock(m_pending_mutex);
 		if (const auto it = m_erased.find(tag); it != m_erased.end() && it->second == generation) {
@@ -526,7 +542,9 @@ res::file_operation res::vfs_resolver::rename(const::res::tag& from, const::res:
 	if (fs::symlink_status(*target, ec).type() != fs::file_type::not_found) {
 		std::error_code same_ec;
 		const bool same_file = fs::equivalent(*source, *target, same_ec) && !same_ec;
-		case_only = same_file && folded(from.name()) == folded(to.name());
+		// Only a rename that changes the case: on a case-sensitive file system a hard link under another case is a file
+		// of its own, and then the directory lists the new name as it is spelled.
+		case_only = same_file && folded(from.name()) == folded(to.name()) && !directory_lists(target->parent_path(), to.name());
 		if (!case_only) {
 			return file_operation::failure(std::format("'{}' already exists", to.view()));
 		}
@@ -773,27 +791,27 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const
 {
 	try {
-		egLOG("resource/resolver", "loading file '{}'", path.string());
+		egLOG("resource/resolver", "loading file '{}'", fs_paths::utf8_of(path));
 
 		std::error_code ec;
 		const auto status = fs::status(path, ec);
 		if (status.type() == fs::file_type::not_found) {
-			data_sp->set_error("File does not exist: " + path.string());
+			data_sp->set_error("File does not exist: " + fs_paths::utf8_of(path));
 			return;
 		}
 		if (ec) {
-			data_sp->set_error("Cannot access '" + path.string() + "': " + ec.message());
+			data_sp->set_error("Cannot access '" + fs_paths::utf8_of(path) + "': " + ec.message());
 			return;
 		}
 		// A folder opens as a stream on Linux, and tellg() then reports LLONG_MAX.
 		if (!fs::is_regular_file(status)) {
-			data_sp->set_error("Not a regular file: " + path.string());
+			data_sp->set_error("Not a regular file: " + fs_paths::utf8_of(path));
 			return;
 		}
 
 		std::ifstream file(path, std::ios::binary | std::ios::ate);
 		if (!file.is_open()) {
-			data_sp->set_error("Failed to open file: " + path.string());
+			data_sp->set_error("Failed to open file: " + fs_paths::utf8_of(path));
 			return;
 		}
 
@@ -801,7 +819,7 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 		auto size = file.tellg();
 		const auto file_bytes = fs::file_size(path, ec);
 		if (size < 0 || ec || static_cast<std::uintmax_t>(size) > file_bytes) {
-			data_sp->set_error("Failed to get the size of: " + path.string());
+			data_sp->set_error("Failed to get the size of: " + fs_paths::utf8_of(path));
 			return;
 		}
 		std::vector<std::byte> data;
@@ -810,7 +828,7 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 			file.seekg(0, std::ios::beg);
 			data.resize(static_cast<size_t>(size));
 			if (!file.read(reinterpret_cast<char*>(data.data()), size)) {
-				data_sp->set_error("Failed to read data: " + path.string());
+				data_sp->set_error("Failed to read data: " + fs_paths::utf8_of(path));
 				return;
 			}
 		}
@@ -822,7 +840,7 @@ void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface
 	}
 	catch (const std::exception& e) {
 		data_sp->set_error(std::string("Internal IO error: ") + e.what());
-		egLOG("resource/error", "Critical error loading {}: {}", path.string(), e.what());
+		egLOG("resource/error", "Critical error loading {}: {}", fs_paths::utf8_of(path), e.what());
 	}
 	catch (...) {
 		data_sp->set_error("Unknown critical error");

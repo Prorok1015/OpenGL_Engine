@@ -29,7 +29,7 @@ namespace res
 
 	// Why a relative path (UTF-8, '/' separated) is not a name every platform can hold, or empty when it is: a ':' (a
 	// Windows alternate data stream or a drive), a control character, an empty segment, '.' or '..', a segment ending in
-	// a space or a dot, or a Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or without an extension,
+	// a space or a dot, or a Windows device name (CON, PRN, AUX, NUL, CONIN$, CONOUT$, COM1-9, LPT1-9, with or without an extension,
 	// whatever the case). Checked on every platform so a project stays portable. Pure.
 	inline std::string portable_path_problem(std::string_view relative)
 	{
@@ -46,8 +46,14 @@ namespace res
 			std::string stem{ segment.substr(0, segment.find('.')) };
 			for (char& c : stem) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 			while (!stem.empty() && stem.back() == ' ') stem.pop_back();
-			const bool numbered = stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem[3] >= '1' && stem[3] <= '9';
-			if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" || numbered) {
+			// COM1-9 and LPT1-9, also with the superscript digits (UTF-8 of U+00B9, U+00B2, U+00B3) Windows reserves too.
+			bool numbered = false;
+			if (stem.starts_with("com") || stem.starts_with("lpt")) {
+				const std::string_view digit = std::string_view{ stem }.substr(3);
+				numbered = (digit.size() == 1 && digit[0] >= '1' && digit[0] <= '9')
+					|| digit == "\xC2\xB9" || digit == "\xC2\xB2" || digit == "\xC2\xB3";
+			}
+			if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" || stem == "conin$" || stem == "conout$" || numbered) {
 				return "a name cannot be a device name of Windows (CON, NUL, COM1, ...)";
 			}
 			if (end == std::string_view::npos) break;

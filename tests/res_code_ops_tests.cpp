@@ -462,4 +462,65 @@ BOOST_FIXTURE_TEST_CASE(ExternalRenameAndDelete_DropWhatWasCached, ops_fixture)
 	BOOST_TEST(deleted.has_error());
 }
 
+BOOST_FIXTURE_TEST_CASE(NonAnsiNames_CanBeRead, ops_fixture)
+{
+	{
+		std::ofstream out(code / "src" / fs::path{ std::u8string{ u8"\u65e5\u672c.cpp" } }, std::ios::binary);
+		out << "int nihon;";
+	}
+
+	auto handle = sys->require_sync<res::text_resource>(res::tag{ "code://src/\xE6\x97\xA5\xE6\x9C\xAC.cpp" });
+	test_util::pump(tasks);
+
+	BOOST_REQUIRE(!handle.has_error());
+	BOOST_TEST(handle.get_sync()->str() == "int nihon;");
+}
+
+BOOST_FIXTURE_TEST_CASE(Remove_ALink_IsRefusedAndTheTargetStays, ops_fixture)
+{
+	std::error_code ec;
+	fs::create_symlink(code / "src" / "game.cpp", code / "src" / "link.cpp", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+
+	BOOST_TEST(!sys->remove(res::tag{ "code://src/link.cpp" }).ok);
+	BOOST_TEST(fs::is_symlink(code / "src" / "link.cpp"));
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;");
+}
+
+BOOST_FIXTURE_TEST_CASE(Create_Refused_LeavesWhatWasLoadedAlone_Created_ServesTheNewFile, ops_fixture)
+{
+	auto before = sys->require_sync<res::text_resource>(res::tag{ "code://src/game.cpp" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!before.has_error());
+
+	BOOST_TEST(!sys->create_sync(res::tag{ "code://src/game.cpp" }, to_bytes("never")).ok);
+	auto again = sys->require_sync<res::text_resource>(res::tag{ "code://src/game.cpp" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!again.has_error());
+	BOOST_TEST(again.get_sync()->str() == "int game;");
+
+	BOOST_TEST(sys->create_sync(res::tag{ "code://src/made.cpp" }, to_bytes("made")).ok);
+	auto made = sys->require_sync<res::text_resource>(res::tag{ "code://src/made.cpp" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!made.has_error());
+	BOOST_TEST(made.get_sync()->str() == "made");
+}
+
+BOOST_FIXTURE_TEST_CASE(Rename_OfAHardLinkUnderAnotherCase_IsAClashWhereTheFileSystemKeepsCase, ops_fixture)
+{
+	std::error_code ec;
+	fs::create_hard_link(code / "src" / "game.cpp", code / "src" / "Game.cpp", ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("hard links unavailable, or the file system folds case: " << ec.message());
+		return;
+	}
+
+	BOOST_TEST(!sys->rename(res::tag{ "code://src/game.cpp" }, res::tag{ "code://src/Game.cpp" }).ok);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	BOOST_TEST(fs::exists(code / "src" / "Game.cpp"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

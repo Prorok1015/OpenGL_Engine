@@ -320,6 +320,16 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 	if (at.get() < 0) {
 		return errno == ENOENT ? std::string{} : errno_text("cannot open the folder (a link, or not a folder)", reached);
 	}
+	if (files_only) {
+		// Again on the io thread: the check before the post is long past, and unlinkat removes a link, a FIFO or a socket.
+		struct stat entry;
+		if (::fstatat(at.get(), leaf.c_str(), &entry, AT_SYMLINK_NOFOLLOW) != 0) {
+			return errno == ENOENT ? std::string{} : errno_text("cannot inspect", reached / leaf);
+		}
+		if (!S_ISREG(entry.st_mode)) {
+			return std::format("'{}' is not a regular file", fs_paths::utf8_of(reached / leaf));
+		}
+	}
 	if (::unlinkat(at.get(), leaf.c_str(), 0) == 0) {
 		return {};
 	}
@@ -716,6 +726,16 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 	if (!file.valid()) {
 		const DWORD code = ::GetLastError();
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND ? std::string{} : last_error_text("cannot remove", path);
+	}
+	if (files_only) {
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!::GetFileInformationByHandle(file.get(), &information)) {
+			return last_error_text("cannot inspect", path);
+		}
+		if ((information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+			::SetLastError(ERROR_CANT_ACCESS_FILE);
+			return last_error_text("not a regular file", path);
+		}
 	}
 	if (!set_delete_on_close(file.get())) {
 		return last_error_text("cannot remove", path);
