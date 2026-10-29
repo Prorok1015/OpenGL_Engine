@@ -2,6 +2,7 @@
 #include <snk/command/cmd_types.h>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -52,6 +53,8 @@ namespace edt
 		// Where it stopped: the key a later edit of someone else changed too, and that edit's label.
 		std::optional<std::string> conflict_key;
 		std::string conflict_label;
+		// Undoing an edit threw half way: the counts are what was done before, and the history was cleared.
+		bool failed = false;
 	};
 
 	// Records are applied up to the current position; undo steps back, redo forward, a new record drops what was undone.
@@ -100,6 +103,9 @@ namespace edt
 		// whose key a later applied record of another origin changed too, or whose undo_conflict names something, so
 		// a human's edit is never undone or overwritten. The records that were undone (redo) are dropped as well.
 		rollback_result rollback_group(std::uint64_t group);
+		// The same, counting into `result` as it goes (so the counts survive an exception), and calling
+		// `before_first_undo` right before it changes anything.
+		void rollback_group(std::uint64_t group, rollback_result& result, const std::function<void()>& before_first_undo);
 
 	private:
 		static std::string origin_key(const cmd::origin& origin);

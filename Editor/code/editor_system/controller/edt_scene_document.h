@@ -75,6 +75,7 @@ namespace edt
 		const document_history& history() const { return m_history; }
 		bool undo();
 		bool redo();
+		// The before-apply hook runs only when the rollback undoes something.
 		rollback_result rollback_group(std::uint64_t group);
 		// Forgets the history and takes the worlds as they are now as its start: after a load, a level reload, the game
 		// layer letting go of the level. Dirty stays as it was.
@@ -114,7 +115,9 @@ namespace edt
 	private:
 		void record_edit(std::string_view label);
 		// Runs `apply` (an undo, a redo, a rollback) between the before-apply hook and the reload of the worlds it changed.
-		void apply_history(std::string_view what, const std::function<void()>& apply);
+		// False when one of them threw: the history was cleared (recover_from_apply).
+		bool apply_history(std::string_view what, const std::function<void()>& apply);
+		void recover_from_apply(std::string_view what, std::string_view error);
 		void finish_apply();
 
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).

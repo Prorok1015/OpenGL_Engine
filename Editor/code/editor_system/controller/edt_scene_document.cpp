@@ -68,36 +68,64 @@ bool edt::scene_document::redo()
 edt::rollback_result edt::scene_document::rollback_group(std::uint64_t group)
 {
 	rollback_result result;
-	apply_history("Rollback", [&] {
-		result = m_history.rollback_group(group);
+	// Rolls nothing back (no group, a conflict at its newest edit): nobody is told the worlds change.
+	auto before = m_before_apply;
+	m_before_apply = nullptr;
+	const bool applied = apply_history("Rollback", [&] {
+		m_history.rollback_group(group, result, [&] {
+			if (before) {
+				before();
+			}
+		});
 		// Undone out of order: the nodes around the undone ones were not part of the changes, so the index takes the
 		// worlds as they are now rather than as the changes left them.
 		if (result.rolled_back > 0) {
 			m_index.rebuild(world_descs);
 		}
 	});
+	m_before_apply = std::move(before);
+	result.failed = !applied;
 	return result;
 }
 
-void edt::scene_document::apply_history(std::string_view what, const std::function<void()>& apply)
+bool edt::scene_document::apply_history(std::string_view what, const std::function<void()>& apply)
 {
-	if (m_before_apply) {
-		m_before_apply();
-	}
+	bool ok = true;
 	try {
+		if (m_before_apply) {
+			m_before_apply();
+		}
 		apply();
 	} catch (const std::exception& e) {
-		// Half applied: what the worlds hold now is neither state of the history. Keep it, reload it, start over.
-		egLOG_ERROR("Editor/History", "{} failed ({}): the history is cleared and the worlds are reloaded as they are", what, e.what());
-		m_history.clear();
-		m_unrecorded = true;
-		m_history.mark_saved();
-		m_index.rebuild(world_descs);
-		for (std::size_t world = 0; world < world_descs.size(); ++world) {
-			m_index.touch(world);
-		}
+		recover_from_apply(what, e.what());
+		ok = false;
+	} catch (...) {
+		recover_from_apply(what, "unknown exception");
+		ok = false;
 	}
-	finish_apply();
+	try {
+		finish_apply();
+	} catch (const std::exception& e) {
+		recover_from_apply(what, e.what());
+		ok = false;
+	} catch (...) {
+		recover_from_apply(what, "unknown exception");
+		ok = false;
+	}
+	return ok;
+}
+
+void edt::scene_document::recover_from_apply(std::string_view what, std::string_view error)
+{
+	// Half applied: what the worlds hold now is neither state of the history. Keep it, reload it, start over.
+	egLOG_ERROR("Editor/History", "{} failed ({}): the history is cleared and the worlds are reloaded as they are", what, error);
+	m_history.clear();
+	m_unrecorded = true;
+	m_history.mark_saved();
+	m_index.rebuild(world_descs);
+	for (std::size_t world = 0; world < world_descs.size(); ++world) {
+		m_index.touch(world);
+	}
 }
 
 void edt::scene_document::reset_history()

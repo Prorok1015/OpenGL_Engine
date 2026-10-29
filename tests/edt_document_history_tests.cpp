@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -572,6 +573,8 @@ BOOST_AUTO_TEST_CASE(a_reorder_by_the_human_stops_the_rollback_of_the_agents_edi
 	root().children.push_back(std::move(b));
 	scene.commit("move b last");
 	const prefab_node reordered = root();
+	int applied = 0;
+	scene.set_before_history_apply([&applied] { ++applied; });
 
 	const auto result = scene.rollback_group(group);
 
@@ -579,6 +582,7 @@ BOOST_AUTO_TEST_CASE(a_reorder_by_the_human_stops_the_rollback_of_the_agents_edi
 	BOOST_TEST(*result.conflict_key == "node:0:0000000000000014");
 	BOOST_TEST(result.rolled_back == 0u);
 	BOOST_TEST(same_tree(root(), reordered));
+	BOOST_TEST(applied == 0); // nothing changed, nothing went stale
 }
 
 BOOST_AUTO_TEST_CASE(a_rollback_never_removes_what_the_human_put_under_the_agents_node)
@@ -624,6 +628,117 @@ BOOST_AUTO_TEST_CASE(a_rollback_never_removes_a_node_the_human_moved_under_the_a
 	BOOST_TEST(*result.conflict_key == "node:0:0000000000000014");
 	BOOST_TEST(result.conflict_label == "move b under it");
 	BOOST_TEST(find(root(), 20) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(grouping_under_a_new_parent_rolls_back_whole)
+{
+	const prefab_node before = root();
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		auto parent = make_node(60, "group");
+		parent.children.push_back(node(20));
+		parent.children.push_back(node(30));
+		root().children.erase(root().children.begin() + 1, root().children.begin() + 3);
+		root().children.push_back(std::move(parent));
+		scene.commit("group b and c");
+	}
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_TEST(!result.conflict_key.has_value());
+	BOOST_TEST(result.rolled_back == 1u);
+	BOOST_TEST(same_tree(root(), before));
+	scene.commit("nothing");
+	BOOST_TEST(scene.last_commit_stats().changes == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_never_removes_a_human_node_deep_under_the_agents_node)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		auto parent = make_node(60, "agent made");
+		auto child = make_node(61, "agent child");
+		child.children.push_back(make_node(62, "agent grandchild"));
+		parent.children.push_back(std::move(child));
+		root().children.push_back(std::move(parent));
+		scene.commit("create");
+	}
+	node(62).children.push_back(make_node(63, "human made"));
+	scene.commit("create deep");
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "node:0:000000000000003f");
+	BOOST_TEST(result.conflict_label == "create deep");
+	BOOST_TEST(find(root(), 63) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(a_node_the_agent_deleted_comes_back_with_the_humans_child_and_stays)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		root().children.push_back(make_node(60, "agent made"));
+		scene.commit("create");
+	}
+	node(60).children.push_back(make_node(61, "human made"));
+	scene.commit("create under it");
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		root().children.pop_back();
+		scene.commit("delete");
+	}
+
+	const auto result = scene.rollback_group(group);
+
+	// The delete is undone, the create is not: it would take the human's node with it.
+	BOOST_TEST(result.rolled_back == 1u);
+	BOOST_TEST(result.remaining == 1u);
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "node:0:000000000000003d");
+	BOOST_TEST(result.conflict_label == "create under it");
+	BOOST_TEST(find(root(), 60) != nullptr);
+	BOOST_TEST(find(root(), 61) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(a_throwing_hook_clears_the_history_and_keeps_the_scene_dirty)
+{
+	node(20).name = "b2";
+	scene.commit("rename b");
+	scene.set_before_history_apply([] { throw std::runtime_error("selection"); });
+
+	BOOST_TEST(scene.undo());
+
+	BOOST_TEST(!scene.history().can_undo());
+	BOOST_TEST(scene.is_dirty());
+	BOOST_TEST(node(20).name == "b2");
+	scene.commit("nothing");
+	BOOST_TEST(scene.last_commit_stats().changes == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_that_throws_says_so)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		node(20).name = "agent b";
+		scene.commit("rename b");
+	}
+	scene.set_before_history_apply([] { throw 42; });
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_TEST(result.failed);
+	BOOST_TEST(result.rolled_back == 0u);
+	BOOST_TEST(!scene.history().can_undo());
+	BOOST_TEST(scene.is_dirty());
 }
 
 BOOST_AUTO_TEST_CASE(an_edit_after_an_undo_drops_the_redo)

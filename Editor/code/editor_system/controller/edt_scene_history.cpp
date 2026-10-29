@@ -114,13 +114,15 @@ namespace {
 		const std::vector<std::string>& keys() const override { return m_keys; }
 
 		// Undo removes the nodes the commit created, with everything under them: a node someone else put there
-		// since would go with them.
+		// since would go with them. The nodes of this commit are not in the way: undo puts them back first.
 		std::optional<std::string> undo_conflict() const override
 		{
-			std::set<std::pair<std::size_t, std::uint64_t>> created;
+			std::set<std::pair<std::size_t, std::uint64_t>> own;
+			std::vector<std::pair<std::size_t, std::uint64_t>> created;
 			for (const auto& change : m_changes) {
+				own.insert({ change.world, change.id });
 				if (!change.before) {
-					created.insert({ change.world, change.id });
+					created.push_back({ change.world, change.id });
 				}
 			}
 			for (const auto& [world, id] : created) {
@@ -137,7 +139,7 @@ namespace {
 						if (foreign) {
 							return;
 						}
-						if (!created.contains({ world, child.node_id })) {
+						if (!own.contains({ world, child.node_id })) {
 							foreign = node_key(world, child.node_id);
 							return;
 						}

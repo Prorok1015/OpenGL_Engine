@@ -136,8 +136,15 @@ std::uint64_t edt::document_history::open_group(const cmd::origin& origin) const
 edt::rollback_result edt::document_history::rollback_group(std::uint64_t group)
 {
 	rollback_result result;
+	rollback_group(group, result, {});
+	return result;
+}
+
+void edt::document_history::rollback_group(std::uint64_t group, rollback_result& result, const std::function<void()>& before_first_undo)
+{
+	result = {};
 	if (group == 0) {
-		return result;
+		return;
 	}
 	drop_redo();
 	if (const auto evicted = m_evicted.find(group); evicted != m_evicted.end()) {
@@ -198,6 +205,9 @@ edt::rollback_result edt::document_history::rollback_group(std::uint64_t group)
 			if (result.conflict_key) {
 				break;
 			}
+			if (!rolled && before_first_undo) {
+				before_first_undo();
+			}
 			change.undo();
 			entry.changes.pop_back();
 			++result.rolled_back;
@@ -214,5 +224,4 @@ edt::rollback_result edt::document_history::rollback_group(std::uint64_t group)
 	if (!result.conflict_key) {
 		end_group(group);
 	}
-	return result;
 }
