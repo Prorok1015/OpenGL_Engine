@@ -130,7 +130,7 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
   - URL вида `<helper>::…`, `git://`, `ext::`, `file://` и локальные пути заблокированы `protocol.allow=never` (разрешены только https и ssh); `remote.<name>.vcs` (запускает `git-remote-<x>` из PATH) отдельно не проверяется, но этот ключ не входит в allowlist конфига репозитория;
   - `.gitattributes` и filter-драйверы внутри подмодулей не проверяются: обход подмодулей выключен;
   - конфиг репозитория читается до запуска git, запись в `.git/config` в промежутке не видна (принятый предел); через `code://` агент `.git` не пишет: монтируется только `<root>/code`, `prj::code_write_patterns` разрешает лишь файлы кода и запрещает любые папки `.*`;
-  - `GIT_NO_LAZY_FETCH` понимает только git 2.45+; на более старом git частичный клон закрыт лишь allowlist-ом (`extensions.partialclone`), а с `allow_any_repo_config` докачка возможна;
+  - `GIT_NO_LAZY_FETCH` понимает только git 2.45+; на более старом git частичный клон (`extensions.partialclone`) отказывает `unsafe_repository` и с `allow_any_repo_config` («lazy fetch can't be disabled before git 2.45»);
   - охраняемые сетевые вызовы не могут работать с локальным remote, поэтому тесты merge-шага pull и alternates на настоящем git доходят только до отказа транспорта; аргументы merge проверяет тест с поддельным git.
 - `dialog_service`: у каждого запроса есть id и схема ответа. Команды `dialog.list` / `dialog.answer{id, answer}` дают программный ответ на модалку, которую открыл человек или старый код. `dialog_auto_answer` (`edt_dialog_service.h:26`) остаётся для тестов.
 

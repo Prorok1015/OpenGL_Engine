@@ -1433,12 +1433,16 @@ BOOST_AUTO_TEST_CASE(APartialClone_LazyFetchesNothingOnAGuardedCheckout)
 	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
 	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("extensions.partialclone") != std::string::npos);
 
-	if (!git_at_least(service->info().git_version, 2, 45)) {
-		BOOST_TEST_MESSAGE("git " << service->info().git_version << " has no GIT_NO_LAZY_FETCH: the opt-in half is skipped");
-		return;
-	}
 	fs::remove(trace, ec);
 	service->set_write_permissions({ false, false, false, true });
+	if (!git_at_least(service->info().git_version, 2, 45)) {
+		const json::value old_git = finish(service->start_checkout("other", cmd::origin_kind::agent));
+		BOOST_TEST_INFO("old git: " << json::serialize(old_git));
+		BOOST_REQUIRE(is_error(old_git, "unsafe_repository"));
+		BOOST_TEST(text(old_git.as_object().at("error").as_object().at("message")).find("lazy fetch") != std::string::npos);
+		BOOST_TEST(!fs::exists(marker, ec));
+		return;
+	}
 	const json::value no_fetch = finish(service->start_checkout("other", cmd::origin_kind::agent));
 	BOOST_TEST(no_fetch.as_object().contains("error"), json::serialize(no_fetch));
 	std::string traced;

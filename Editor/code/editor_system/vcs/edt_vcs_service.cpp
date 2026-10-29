@@ -71,6 +71,8 @@ namespace {
 		bool guarded = false;
 		// Guarded, without allow_any_repo_config: the repository's own config must pass the allowlist (config_refusal).
 		bool check_repo_config = false;
+		// Guarded, with allow_any_repo_config, on git before 2.45 (no GIT_NO_LAZY_FETCH): a partial clone still refuses.
+		bool refuse_partial_clone = false;
 		bool allow_hooks = false;
 		// Guarded write that can run filter drivers, without allow_filters: refused when a configured driver applies
 		// to a file it touches.
@@ -725,7 +727,7 @@ namespace {
 	// a key outside the allowlist. Read before anything else of the call.
 	std::optional<git_output> config_refusal(const git_context& git, std::stop_token stop)
 	{
-		if (!git.check_repo_config) return std::nullopt;
+		if (!git.check_repo_config && !git.refuse_partial_clone) return std::nullopt;
 		git_output local = run_git(git, { "config", "--local", "--list", "-z", "--show-origin" }, stop, k_read_cap);
 		if (listing_failed(local)) return local;
 		if (local.truncated) return refused("unsafe_repository", "the repository's git config is too large to check");
@@ -754,6 +756,12 @@ namespace {
 			for (auto& entry : scoped_entries_of(worktree.out)) entries.push_back(std::move(entry));
 		}
 		for (const auto& entry : entries) {
+			if (git.refuse_partial_clone && lower_case(entry.key) == "extensions.partialclone") {
+				return refused("unsafe_repository", std::format("the repository is a partial clone ({}): lazy fetch "
+					"can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
+					"project allows any repository config", edt::vcs::valid_utf8(entry.scope)));
+			}
+			if (!git.check_repo_config) continue;
 			if (!repo_key_allowed(entry.key, git.allow_hooks)) {
 				return refused("unsafe_repository", std::format("the repository's git config sets '{}' ({}), which a git "
 					"write not made by a person does not accept unless the project allows any repository config",
@@ -1009,6 +1017,8 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		}
 		context.guarded = true;
 		context.check_repo_config = !m_write_permissions.allow_any_repo_config;
+		context.refuse_partial_clone = m_write_permissions.allow_any_repo_config
+			&& !version_at_least(m_state.git_version, 2, 45);
 		context.allow_hooks = m_write_permissions.allow_hooks;
 		context.refuse_filters = write->runs_filters && !m_write_permissions.allow_filters;
 		context.guard_network = write->network;
