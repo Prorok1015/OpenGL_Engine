@@ -65,11 +65,6 @@ namespace edt {
 
 		void begin_level_load(const res::tag& level_tag);
 
-		// Around a reload of the game module (core::reload_hooks): the level, with its unsaved edits, is detached at the
-		// first change of the game layer and attached again only at the end, to whichever layer is the game layer then.
-		void begin_module_swap();
-		void end_module_swap();
-
 	private:
 		editor_context* m_context = nullptr;
 		// The context is registered after this system, so a storage that is torn down without editor_term() destroys
@@ -151,9 +146,9 @@ namespace edt {
 		res::res_handle<scn::level_desc> m_loading_level_handle;
 		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
 		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
-		void on_game_layer_change(bool before);
 		void follow_game_layer_change(bool before);
-		module_swap_gate m_swap_gate;
+		// Changes of the game layer reach follow_game_layer_change through it; a reload of the game module holds them (#435).
+		module_swap_gate m_swap_gate{ [this](bool before) { follow_game_layer_change(before); } };
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
@@ -171,7 +166,6 @@ namespace edt {
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
-		connection m_module_built;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

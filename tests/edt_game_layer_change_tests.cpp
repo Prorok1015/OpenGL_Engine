@@ -114,13 +114,8 @@ struct editor_fixture : test_util::module_env {
 		services.base_assembler = assembler.get();
 		services.base_sfactory = &sf;
 		contexts().set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
-			const bool before = change == scn::context_manager::game_layer_change::before;
-			if (gate.pass(before)) follow(before);
+			gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
-		swap_hooks.before_swap = [this] { gate.begin(); };
-		swap_hooks.after_swap = [this](const core::reload_report&) {
-			if (gate.end()) follow(false);
-		};
 	}
 
 	void follow(bool before)
@@ -153,9 +148,8 @@ struct editor_fixture : test_util::module_env {
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
 	// Whether the module's desc type was known each time the editor rebuilt its level.
 	std::vector<bool> module_types_at_attach;
-	// As editor_system wires a reload of the game module (#435).
-	edt::module_swap_gate gate;
-	core::reload_hooks swap_hooks;
+	// What editor_system routes the changes of the game layer and a reload of the game module through (#435).
+	edt::module_swap_gate gate{ [this](bool before) { follow(before); } };
 	core::project_module_host host{ loader, root, core::project_modules_options{} };
 
 	bool level_has(std::string_view text) const
@@ -247,7 +241,7 @@ BOOST_AUTO_TEST_CASE(a_reload_keeps_the_unsaved_level_and_builds_it_only_in_the_
 	BOOST_REQUIRE(level_has("\"Entity\""));
 	module_types_at_attach.clear();
 
-	const auto report = host.reload("editor_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, swap_hooks);
+	const auto report = host.reload("editor_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 
 	BOOST_TEST((report.status == core::reload_status::reloaded));
 	// Once, in the new layer: never in the empty one between the two modules.
@@ -268,7 +262,7 @@ BOOST_AUTO_TEST_CASE(a_reload_that_rolls_back_keeps_the_level_in_the_previous_bu
 	scene_ed.create_entity("Empty");
 	module_types_at_attach.clear();
 
-	const auto report = host.reload("editor_game", build_of(failing_entry()), [] { return build_of(v1_entry()); }, swap_hooks);
+	const auto report = host.reload("editor_game", build_of(failing_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 
 	BOOST_TEST((report.status == core::reload_status::rolled_back));
 	BOOST_TEST((module_types_at_attach == std::vector<bool>{ true }));
@@ -284,7 +278,7 @@ BOOST_AUTO_TEST_CASE(a_lost_module_leaves_the_level_in_the_empty_layer)
 	open_level(put("lv.desc", MODULE_LEVEL));
 	module_types_at_attach.clear();
 
-	const auto report = host.reload("editor_game", build_of(failing_entry()), [] { return build_of(failing_entry()); }, swap_hooks);
+	const auto report = host.reload("editor_game", build_of(failing_entry()), [] { return build_of(failing_entry()); }, gate.hooks());
 
 	BOOST_TEST((report.status == core::reload_status::lost));
 	BOOST_TEST((module_types_at_attach == std::vector<bool>{ false }));
@@ -300,7 +294,7 @@ BOOST_AUTO_TEST_CASE(a_refused_build_does_not_touch_the_level)
 	auto entry = v2_entry();
 	entry.api_version = [] { return SNK_MODULE_API_VERSION + 0x0001'0000u; };
 
-	const auto report = host.reload("editor_game", build_of(entry), [] { return build_of(v1_entry()); }, swap_hooks);
+	const auto report = host.reload("editor_game", build_of(entry), [] { return build_of(v1_entry()); }, gate.hooks());
 
 	BOOST_TEST((report.status == core::reload_status::refused));
 	BOOST_TEST(module_types_at_attach.empty());

@@ -5,9 +5,11 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace app::modules { class module_loader; class module_source; }
@@ -111,6 +113,8 @@ namespace core
 		{
 			std::filesystem::path library;
 			std::filesystem::path folder;
+			// The libraries copied along, by file name: size and time of the build's file when copied.
+			std::map<std::string, std::pair<std::uintmax_t, std::filesystem::file_time_type>> siblings;
 		};
 		struct module_copies
 		{
@@ -127,6 +131,8 @@ namespace core
 		ds::app_data_storage& m_data;
 		project_modules_options m_options;
 		std::map<std::string, module_copies> m_copies;
+		// A reload runs: one asked for from inside it (a hook, the module's own code) is refused.
+		bool m_reloading = false;
 	};
 
 	// project_module_host::load_all with a host of its own (no reload afterwards).

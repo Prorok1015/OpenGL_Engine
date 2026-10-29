@@ -385,22 +385,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (!data.has_value<core::project_module_host>()) {
 			return core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
 		}
-		core::reload_hooks hooks;
-		// There is no Play in the editor yet; play_session (#39) is stopped here once it exists.
-		hooks.before_swap = [this] { begin_module_swap(); };
-		hooks.after_swap = [this](const core::reload_report&) { end_module_swap(); };
-		return data.require<core::project_module_host>().reload(module, hooks);
+		return data.require<core::project_module_host>().reload(module, m_swap_gate.hooks());
 	};
 	reload_options.building = [this] { return m_game_builder && m_game_builder->is_building(); };
-	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
-	// On the next UI frame: the build finishes in the job pump, and the module must not be swapped under it.
-	m_module_built = m_context->events().game_module_built.subscribe([this](const game_module_build_result& built) {
-		if (!built.reload) return;
-		editor_layer->register_implicit("edt/reload_game_module", [this, module = built.module] {
-			m_game_reloader->reload(module);
+	reload_options.events = &m_context->events();
+	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
+		editor_layer->register_implicit(id, [fn = std::move(fn)] {
+			fn();
 			return false;
 		});
-	});
+	};
+	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
@@ -503,27 +498,8 @@ void edt::editor_system::wire_controller_callbacks()
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
-			on_game_layer_change(change == scn::context_manager::game_layer_change::before);
+			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
-	}
-}
-
-void edt::editor_system::begin_module_swap()
-{
-	m_swap_gate.begin();
-}
-
-void edt::editor_system::end_module_swap()
-{
-	if (m_swap_gate.end()) {
-		follow_game_layer_change(false);
-	}
-}
-
-void edt::editor_system::on_game_layer_change(bool before)
-{
-	if (m_swap_gate.pass(before)) {
-		follow_game_layer_change(before);
 	}
 }
 

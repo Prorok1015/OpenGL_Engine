@@ -1,5 +1,4 @@
 #include "edt_game_reloader.h"
-#include "edt_game_builder.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/common/logger/engine_log.h>
@@ -57,6 +56,20 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 		if (!outcome.ok) m_dialogs.message(message_level::warning, std::format("The game module was not reloaded: {}", outcome.error));
 	};
 	m_action = actions.add(std::move(command), std::move(ui));
+
+	if (m_options.events) {
+		m_built = m_options.events->game_module_built.subscribe([this](const game_module_build_result& built) {
+			if (!built.reload || !m_options.next_frame) {
+				return;
+			}
+			// One per module: two modules built at once are both reloaded.
+			m_options.next_frame("edt/reload_game_module/" + built.module, [this, alive = std::weak_ptr<int>(m_alive), module = built.module] {
+				if (!alive.expired()) {
+					reload(module);
+				}
+			});
+		});
+	}
 }
 
 std::string edt::game_reloader::disabled_reason() const
@@ -67,7 +80,12 @@ std::string edt::game_reloader::disabled_reason() const
 	if (!m_options.modules || m_options.modules().empty()) {
 		return "The project names no game module";
 	}
-	if (!pick({})) {
+	const auto now = std::chrono::steady_clock::now();
+	if (m_build_checked == std::chrono::steady_clock::time_point{} || now - m_build_checked >= std::chrono::seconds(1)) {
+		m_build_checked = now;
+		m_build_found = pick({}).has_value();
+	}
+	if (!m_build_found) {
 		return "The game module has not been built";
 	}
 	return {};
@@ -84,18 +102,6 @@ std::optional<std::string> edt::game_reloader::pick(const std::string& module) c
 		}
 	}
 	return std::nullopt;
-}
-
-core::reload_report edt::game_reloader::reload_built(const std::filesystem::path& module_path)
-{
-	if (m_options.modules) {
-		for (const auto& name : m_options.modules()) {
-			if (module_path.filename() == std::filesystem::path{ module_file_name(name) }) {
-				return reload(name);
-			}
-		}
-	}
-	return tell({}, { core::reload_status::refused, "the build is no module of the project" });
 }
 
 core::reload_report edt::game_reloader::reload(const std::string& module)

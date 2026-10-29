@@ -85,7 +85,10 @@ protected:
 
 	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override
 	{
-		data.destruct<dll_service>();
+		// Also after a registration that failed before it was made.
+		if (data.has_value<dll_service>()) {
+			data.destruct<dll_service>();
+		}
 	}
 
 private:

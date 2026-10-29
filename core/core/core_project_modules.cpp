@@ -14,6 +14,7 @@
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -136,8 +137,9 @@ namespace {
 	{
 		fs::path library;
 		fs::path folder; // <root>/.cache/modules/<pid>-<n>, canonical
-		// Libraries copied along with the module: loaded by name, so a reload does not replace one already loaded.
-		std::vector<fs::path> siblings;
+		// Libraries copied along with the module, by file name: size and time of the build's file. They are loaded by
+		// name, so a reload does not replace one already loaded.
+		std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>> siblings;
 	};
 
 	// The checked, canonical <root>/.cache/modules, made if missing; empty string on success.
@@ -201,7 +203,8 @@ namespace {
 			}
 			std::error_code copy_ec;
 			if (fs::copy_file(real, folder / it->path().filename(), fs::copy_options::none, copy_ec) && is_library(real)) {
-				out.siblings.push_back(it->path().filename());
+				std::error_code stamp_ec;
+				out.siblings[utf8(it->path().filename())] = { fs::file_size(real, stamp_ec), fs::last_write_time(real, stamp_ec) };
 			}
 		}
 		out.library = target;
@@ -234,14 +237,29 @@ namespace {
 		}
 	}
 
-	void warn_about_siblings(const std::string& name, const module_copy& copy)
+	// Only the libraries the running copy loaded too and that the build changed since: the system keeps those.
+	// While a reload runs, from its start to its after_swap: unloading the module from inside the reload (a hook, or the
+	// module's own code calling back into the editor) would destroy code that is still on the stack.
+	struct reloading_scope
 	{
-		if (copy.siblings.empty()) {
-			return;
-		}
+		bool& flag;
+		explicit reloading_scope(bool& reloading) : flag(reloading) { flag = true; }
+		~reloading_scope() { flag = false; }
+		reloading_scope(const reloading_scope&) = delete;
+		reloading_scope& operator=(const reloading_scope&) = delete;
+	};
+
+	void warn_about_siblings(const std::string& name, const std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>>& now,
+		const std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>>& before)
+	{
 		std::string list;
-		for (const auto& file : copy.siblings) {
-			list += (list.empty() ? "" : ", ") + utf8(file);
+		for (const auto& [file, stamp] : now) {
+			if (const auto it = before.find(file); it != before.end() && it->second != stamp) {
+				list += (list.empty() ? "" : ", ") + file;
+			}
+		}
+		if (list.empty()) {
+			return;
 		}
 		egLOG_WARN("project", "module '{}': the libraries next to it are not reloaded, the system keeps the ones already "
 			"loaded; restart the editor to pick up changes to {}", name, list);
@@ -357,7 +375,7 @@ core::project_modules_report core::project_module_host::load_all()
 		if (problem.empty()) {
 			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
 			if (!copy.folder.empty()) {
-				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder };
+				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings };
 			}
 			report.loaded.push_back(ref.name);
 			continue;
@@ -378,6 +396,10 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 		egLOG_ERROR("project", "module '{}' not reloaded: {}", name, why);
 		return reload_report{ reload_status::refused, std::move(why) };
 	};
+	if (m_reloading) {
+		return refused("a reload is already running");
+	}
+	const reloading_scope scope{ m_reloading };
 	if (!m_data.has_value<prj::project_context>()) {
 		return refused("no project is open");
 	}
@@ -395,16 +417,18 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 		return refused(std::move(why));
 	}
 
+	std::optional<loaded_copy> running;
 	std::function<std::unique_ptr<app::modules::module_source>()> previous;
 	if (const auto it = m_copies.find(name); it != m_copies.end() && it->second.current) {
-		previous = [running = *it->second.current] {
-			return std::make_unique<app::modules::native_library_source>(running.library, running.folder);
+		running = it->second.current;
+		previous = [library = running->library, folder = running->folder] {
+			return std::make_unique<app::modules::native_library_source>(library, folder);
 		};
 	}
 	const reload_report report = swap(name, std::make_unique<app::modules::native_library_source>(copy.library, copy.folder),
-		previous, hooks, loaded_copy{ copy.library, copy.folder });
-	if (report.status == reload_status::reloaded) {
-		warn_about_siblings(name, copy);
+		previous, hooks, loaded_copy{ copy.library, copy.folder, copy.siblings });
+	if (report.status == reload_status::reloaded && running) {
+		warn_about_siblings(name, copy.siblings, running->siblings);
 	}
 	return report;
 }
@@ -412,6 +436,11 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 core::reload_report core::project_module_host::reload(const std::string& name, std::unique_ptr<app::modules::module_source> next,
 	std::function<std::unique_ptr<app::modules::module_source>()> previous, const reload_hooks& hooks)
 {
+	if (m_reloading) {
+		egLOG_ERROR("project", "module '{}' not reloaded: a reload is already running", name);
+		return { reload_status::refused, "a reload is already running" };
+	}
+	const reloading_scope scope{ m_reloading };
 	return swap(name, std::move(next), previous, hooks, std::nullopt);
 }
 
@@ -484,7 +513,11 @@ core::reload_report core::project_module_host::swap(const std::string& name, std
 	}
 	drop_copy();
 
-	if (!was_loaded || !previous) {
+	if (!was_loaded) {
+		// Nothing ran before, so nothing was lost.
+		return finish({ reload_status::refused, std::format("the new build failed: {}", problem) });
+	}
+	if (!previous) {
 		return finish({ reload_status::lost, std::format("the new build failed: {}", problem) });
 	}
 	const std::string rollback = guarded([&] { return load_module(m_loader, m_data, previous(), name); });

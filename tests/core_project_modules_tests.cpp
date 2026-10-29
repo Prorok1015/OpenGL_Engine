@@ -16,6 +16,7 @@
 #include <format>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -550,6 +551,30 @@ BOOST_AUTO_TEST_CASE(when_the_previous_build_fails_too_no_module_runs)
 	BOOST_TEST(contexts().game_layer() != nullptr);
 	BOOST_TEST(!registered("build1_desc"));
 	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:lost" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(a_reload_asked_for_from_inside_a_reload_is_refused)
+{
+	std::optional<core::reload_report> nested;
+	hooks.before_swap = [&] {
+		nested = host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()));
+	};
+	const auto report = host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_REQUIRE(nested.has_value());
+	BOOST_TEST((nested->status == core::reload_status::refused));
+	BOOST_TEST(nested->message.find("already running") != std::string::npos);
+	BOOST_TEST(registered("build2_desc"));
+}
+
+BOOST_AUTO_TEST_CASE(a_failed_build_with_nothing_running_is_refused_not_lost)
+{
+	loader.unload("reload_game", root);
+	const auto report = host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("fails to register") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(without_a_build_in_the_project_nothing_is_reloaded)
