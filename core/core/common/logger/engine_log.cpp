@@ -22,6 +22,7 @@ namespace {
 	std::vector<spdlog::sink_ptr> s_sinks;
 	spdlog::sink_ptr s_file_sink;
 	bool s_initialized = false;
+	engine::console_target s_console_target = engine::console_target::stdout_;
 	// Own copy: spdlog::get_level() dereferences the default logger, which spdlog::shutdown() destroys.
 	spdlog::level::level_enum s_global_level = spdlog::level::info;
 
@@ -133,10 +134,21 @@ namespace {
 
 void engine::init_logger()
 {
+	init_logger(s_console_target);
+}
+
+void engine::init_logger(console_target console)
+{
 	if (s_initialized) return;
+	s_console_target = console;
 
 	// Console sink — colored output
-	auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+	spdlog::sink_ptr console_sink;
+	if (console == console_target::stderr_) {
+		console_sink = std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
+	} else {
+		console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+	}
 	console_sink->set_pattern("[%H:%M:%S.%e] [%^%l%$] [%n] %v");
 	s_sinks.push_back(console_sink);
 
@@ -306,6 +318,16 @@ std::size_t engine::log_sink_count()
 {
 	std::lock_guard lock(s_listeners_mutex);
 	return s_listeners ? s_listeners->size() : 0;
+}
+
+std::size_t engine::console_sink_count(console_target target)
+{
+	std::lock_guard lock(s_logger_mutex);
+	return static_cast<std::size_t>(std::count_if(s_sinks.begin(), s_sinks.end(), [target](const spdlog::sink_ptr& sink) {
+		return target == console_target::stderr_
+			? std::dynamic_pointer_cast<spdlog::sinks::stderr_color_sink_mt>(sink) != nullptr
+			: std::dynamic_pointer_cast<spdlog::sinks::stdout_color_sink_mt>(sink) != nullptr;
+	}));
 }
 
 void engine::remove_log_sink(std::uint64_t id)

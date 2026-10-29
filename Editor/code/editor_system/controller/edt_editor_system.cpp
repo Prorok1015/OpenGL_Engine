@@ -747,6 +747,11 @@ bool edt::editor_system::poll_import_progress()
 
 // ─── Level load ─────────────────────────────────────────────────────────────
 
+void edt::editor_system::run_implicit_callbacks()
+{
+	if (editor_layer) editor_layer->process_implicit();
+}
+
 void edt::editor_system::begin_level_load(const res::tag& original_tag)
 {
 	m_level_ctrl.unwatch_level();

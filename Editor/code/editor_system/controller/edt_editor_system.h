@@ -66,6 +66,10 @@ namespace edt {
 
 		void begin_level_load(const res::tag& level_tag);
 
+		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
+		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
+		void run_implicit_callbacks();
+
 	private:
 		editor_context* m_context = nullptr;
 		// The context is registered after this system, so a storage that is torn down without editor_term() destroys

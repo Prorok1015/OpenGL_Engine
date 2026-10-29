@@ -325,4 +325,31 @@ BOOST_AUTO_TEST_CASE(ConfigFile_ExtendsChainOverridesAndPathsRelativeToDefiningF
 	BOOST_TEST(static_cast<int>(width) == 640);
 }
 
+BOOST_AUTO_TEST_CASE(Cli_HeadlessSelectsTheNullWindowAndRendererAndNeedsAProject)
+{
+	// Stand in for the variables of core_module, the window and render services and the editor for the length of the test.
+	cfg::variable<bool> headless{ "editor/headless", false };
+	cfg::variable<bool> non_interactive{ "app/non_interactive", false };
+	cfg::variable<bool> project_required{ "project/required", false };
+	cfg::variable<std::string> window_system{ "window/system", "glfw" };
+	cfg::variable<std::string> render_backend{ "render/backend", "gl" };
+	run_cli({ "--headless" });
+	BOOST_TEST(static_cast<bool>(headless));
+	BOOST_TEST(static_cast<bool>(non_interactive));
+	BOOST_TEST(static_cast<bool>(project_required));
+	BOOST_TEST(*window_system == "null");
+	BOOST_TEST(*render_backend == "null");
+	// The real variables of the same names took the values too: put them back for the tests that follow.
+	run_cli({ "-s", "editor/headless", "false", "app/non_interactive", "false", "project/required", "false",
+		"window/system", "glfw", "render/backend", "gl" });
+	BOOST_TEST(*window_system == "glfw");
+}
+
+BOOST_AUTO_TEST_CASE(Cli_McpStdioIsAcceptedAndSetsNothingYet)
+{
+	cfg::variable<bool> headless{ "editor/headless", false };
+	BOOST_TEST(run_cli({ "--mcp-stdio" }) == 1);
+	BOOST_TEST(!static_cast<bool>(headless));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

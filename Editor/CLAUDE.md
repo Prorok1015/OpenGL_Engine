@@ -251,6 +251,15 @@ Non-blocking ImGui modal — must be called every frame while open.
 - Transform committed only on gizmo release (not every frame)
 - `edt_transform_gizmo.hpp` — pure ImGui DrawList implementation, no external gizmo lib
 
+## Headless (#452)
+
+`editor --headless --project <dir>`: no display, no GPU, no panels (CI step "Headless run (no display)" in `editor-smoke`; `tools/run_headless.sh` is the separate Xvfb path for screenshots).
+- `--headless` sets `editor/headless`, `app/non_interactive`, `project/required` (no `--project` → exit 2, like any project error), `window/system=null` (`wnd::null_window_system`) and `render/backend=null`; `gui_init` picks `gui::null_imgui_backend` for a window without a GL surface.
+- `main` scans argv for `--headless`/`--mcp-stdio` before `init_logger`: the console log goes to **stderr**, stdout stays empty for a protocol. `--help` still prints to stdout.
+- The `ui` stage does not draw panels: it runs only the implicit callbacks (`editor_system::run_implicit_callbacks`) inside `gui_system::run_without_drawing` (a CPU-only ImGui frame). They must keep running: the startup level load, `next_frame` work (module reload), progress windows and dialogs live there and use ImGui. A dialog that waits for an answer waits forever in headless (later: `unavailable_headless`).
+- The panels never run: nothing sizes the editor/game camera targets by a panel or binds input, so `viewport.capture` may have nothing to read.
+- `app/exit_after_frames N` (core, any host): the loop stops after N frames with exit code 0 — a smoke-test hook.
+
 ## Common Pitfalls
 
 - **EnTT `registry::each()` does not exist** — use `registry.storage<entt::entity>()` to iterate all entities

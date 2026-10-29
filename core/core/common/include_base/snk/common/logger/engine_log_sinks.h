@@ -52,4 +52,6 @@ namespace engine
 	[[nodiscard]] SNK_API log_sink_handle add_log_sink(log_callback_t callback);
 	// Sinks installed now. For tests and diagnostics (a module must leave as many as it found).
 	[[nodiscard]] SNK_API std::size_t log_sink_count();
+	// spdlog console sinks writing to `target` now (0 before init_logger). For tests and diagnostics.
+	[[nodiscard]] SNK_API std::size_t console_sink_count(console_target target);
 }

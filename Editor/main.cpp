@@ -8,6 +8,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
 #include <snk/project/prj_project.h>
+#include <string_view>
 #include <utility>
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
@@ -44,7 +45,16 @@ int main(int argc, char* argv[])
 	char** argv = argvu.get();
 #endif
 
-	engine::init_logger();
+	// Before the configs are parsed, so the first line already goes there: stdout belongs to a protocol (or to
+	// nobody) when the editor runs without a display.
+	bool log_to_stderr = false;
+	for (int i = 1; i < argc; ++i) {
+		const std::string_view arg = argv[i];
+		if (arg == "--headless" || arg == "--mcp-stdio") {
+			log_to_stderr = true;
+		}
+	}
+	engine::init_logger(log_to_stderr ? engine::console_target::stderr_ : engine::console_target::stdout_);
 
 	if (!cfg::initialize_configs(argc, argv)) {
 		return -1;

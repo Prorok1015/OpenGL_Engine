@@ -25,6 +25,9 @@ namespace edt {
 			m_manager.unregister_implicit(id);
 		}
 
+		// The implicit callbacks alone, without the dockspace (--headless).
+		void process_implicit() { m_manager.process_implicit(); }
+
 		// The registries the dockspace draws; nothing is drawn before this is set.
 		void set_context(editor_context& context) { m_context = &context; }
 

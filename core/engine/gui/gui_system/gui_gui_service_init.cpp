@@ -4,6 +4,7 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/gui/gui_debug_layer.h>
 #include <snk/gui_gl/gui_gl_backend.h>
+#include <snk/gui/gui_null_backend.h>
 #include <snk/gui/gui_platform_backend.h>
 #include <snk/application/app_deterministic_time.h>
 #include <snk/common/engine_assert.h>
@@ -41,15 +42,23 @@ void engine::gui::gui_init(ds::app_data_storage& data)
 	// The panels show render targets: the backend turns their texture handles into ImGui ids through the driver.
 	auto* driver = data.require<rnd::render_system>().get_driver();
 	ASSERT_MSG(driver, "gui_init: the render system has no driver");
-	auto& backend = data.construct<::gui::gl::gl_imgui_backend>(*driver);
+	auto window = wnd_system.get_active_window();
+	ASSERT_MSG(window, "gui_init: no active window");
+	// Without a GL surface (null window, --headless) the render backend is null too: nothing to draw ImGui with.
+	::gui::imgui_backend_interface* backend_ptr = nullptr;
+	if (window && window->gl_surface_ptr()) {
+		auto& gl_backend = data.construct<::gui::imgui_backend_interface, ::gui::gl::gl_imgui_backend>(*driver);
+		static_cast<::gui::gl::gl_imgui_backend&>(gl_backend).set_ui_font_bytes(load_ui_font_bytes(data.require<res::resource_system>()));
+		backend_ptr = &gl_backend;
+	} else {
+		backend_ptr = &data.construct<::gui::imgui_backend_interface, ::gui::null_imgui_backend>(*driver);
+	}
+	auto& backend = *backend_ptr;
 	backend.set_dpi_scale(wnd_system.get_active_content_scale());
-	backend.set_ui_font_bytes(load_ui_font_bytes(data.require<res::resource_system>()));
 	backend.init();
 	const auto is_exist = std::filesystem::exists(backend.get_settings_filename());
 	backend.set_initial_layout_by_default(!is_exist);
 
-	auto window = wnd_system.get_active_window();
-	ASSERT_MSG(window, "gui_init: no active window");
 	auto& platform = data.construct<::gui::platform_backend>(*window);
 	platform.init();
 	if (data.has_value<app::deterministic_time>()) {
@@ -71,6 +80,6 @@ void engine::gui::gui_term(ds::app_data_storage& data)
 	// Shut down while the GL context is still alive (engine terminates before core).
 	data.require<::gui::platform_backend>().shutdown();
 	data.destruct<::gui::platform_backend>();
-	data.require<::gui::gl::gl_imgui_backend>().shutdown();
-	data.destruct<::gui::gl::gl_imgui_backend>();
+	data.require<::gui::imgui_backend_interface>().shutdown();
+	data.destruct<::gui::imgui_backend_interface>();
 }

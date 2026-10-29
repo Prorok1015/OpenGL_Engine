@@ -53,3 +53,13 @@ void gui::gui_system::render()
 	render_menues();
 	backend->render();
 }
+
+void gui::gui_system::run_without_drawing(const std::function<void()>& body)
+{
+	PROFILE_SCOPE("GuiNoDraw");
+	backend->new_frame();
+	m_platform->new_frame();
+	ImGui::NewFrame();
+	body();
+	ImGui::EndFrame();
+}
