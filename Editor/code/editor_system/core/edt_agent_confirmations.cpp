@@ -65,19 +65,30 @@ namespace edt
 			return;
 		}
 
+		const std::string ticket_id(ticket->as_string());
+		// The same question asked again while it waits is the ticket already in the list: one question to the person.
+		if (std::any_of(m_waiting.begin(), m_waiting.end(), [&ticket_id](const waiting& w) { return w.ticket == ticket_id; })) {
+			done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the same request is already waiting for a person's answer", command_id)));
+			return;
+		}
+		// What the person reads is what the registry bound to the ticket, never text the agent chose.
+		const std::optional<cmd::command_registry::pending_confirmation> bound = m_commands.confirmation_of(ticket_id);
+		if (!bound) {
+			done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: its confirmation is gone", command_id)));
+			return;
+		}
 		const cmd::command_desc* command = m_commands.find(command_id);
 		waiting entry;
-		entry.ticket = std::string(ticket->as_string());
+		entry.ticket = ticket_id;
 		entry.command_id = std::string(command_id);
 		entry.call = std::move(request);
 		entry.done = std::move(done);
 		entry.request.id = m_next_id++;
-		entry.request.command = entry.command_id;
+		entry.request.command = bound->command;
 		entry.request.summary = command != nullptr ? command->summary : std::string{};
-		entry.request.reason = body->if_contains("reason") != nullptr && body->at("reason").is_string()
-			? std::string(body->at("reason").as_string()) : std::string{};
-		entry.request.args = describe_arguments(entry.call.args);
-		entry.request.session = entry.call.from.session;
+		entry.request.reason = bound->reason;
+		entry.request.args = bound->args.size() > 600 ? bound->args.substr(0, 600) + "..." : bound->args;
+		entry.request.session = bound->session;
 		entry.request.category = command != nullptr ? command->category : cmd::agent_category::unset;
 		entry.request.asked_at = now();
 		entry.request.deadline = entry.request.asked_at + timeout;

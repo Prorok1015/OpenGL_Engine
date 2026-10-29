@@ -121,6 +121,22 @@ BOOST_AUTO_TEST_CASE(Ask_WaitsForAPerson_AndDescribesTheCall)
 	BOOST_TEST((pending[0].deadline - pending[0].asked_at == edt::agent_confirmations::timeout));
 }
 
+BOOST_AUTO_TEST_CASE(TheSameRequestAskedAgain_IsNotAskedTwice)
+{
+	run("code.create");
+	run("code.create");
+
+	BOOST_TEST(confirmations->pending().size() == 1u);
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(finished[0].error.find("already waiting") != std::string::npos);
+
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_once);
+	BOOST_TEST(finished.size() == 2u);
+	BOOST_TEST(finished[1].ok);
+	BOOST_TEST(runs == 1);
+}
+
 BOOST_AUTO_TEST_CASE(AllowOnce_RunsTheCallOnce_AndTheNextCallAsksAgain)
 {
 	run("code.create");
