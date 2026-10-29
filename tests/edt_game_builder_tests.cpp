@@ -935,6 +935,9 @@ BOOST_AUTO_TEST_CASE(ProblemsOnly_Failure_ShowsNoDialog_SetsTheProblems_AndLogsT
 	BOOST_CHECK_EQUAL(items[0].file, "/p/code/src/game_module.cpp");
 	BOOST_CHECK(!warned("ninja: build stopped: subcommand failed."));
 	BOOST_CHECK(logged_at_debug("ninja: build stopped: subcommand failed."));
+	// The summary of compile errors is in Problems already: no warning per failed background build.
+	BOOST_CHECK(!warned("see Problems"));
+	BOOST_CHECK(logged_at_debug("see Problems"));
 }
 
 BOOST_AUTO_TEST_CASE(ProblemsOnly_Success_LogsBuiltAtDebug)

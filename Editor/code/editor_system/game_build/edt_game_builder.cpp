@@ -47,7 +47,7 @@ namespace {
 
 	edt::game_build_result restarted_result()
 	{
-		egLOG_INFO("editor/build", "build stopped for a newer request");
+		egLOG_DEBUG("editor/build", "build stopped for a newer request");
 		edt::game_build_result result;
 		result.restarted = true;
 		return result;
@@ -478,7 +478,12 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 	} else {
 		summary = std::format("The game build failed: the {} step exited with code {} (see the log)", result.failed_step, result.exit_code);
 	}
-	egLOG_WARN("editor/build", "{}", summary);
+	// Compile errors of a quiet build are in Problems already; a failure without them has only this line.
+	if (quiet && errors > 0 && result.process_error.empty()) {
+		egLOG_DEBUG("editor/build", "{}", summary);
+	} else {
+		egLOG_WARN("editor/build", "{}", summary);
+	}
 	if (!quiet) m_dialogs.message(message_level::error, std::move(summary));
 }
 
