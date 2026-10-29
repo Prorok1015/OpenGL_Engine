@@ -36,6 +36,8 @@ namespace edt
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		// The desc under the cache changed: the next frame composes again.
 		void invalidate_view();
+		// An edit made in the panel waits for its widget to let go before it is committed.
+		bool has_pending_commit() const { return m_pending_commit; }
 		component_ui ui_of(const std::string& component_key) const;
 
 	protected:

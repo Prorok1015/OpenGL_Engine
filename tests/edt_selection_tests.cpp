@@ -159,6 +159,31 @@ BOOST_AUTO_TEST_CASE(Edit_ClearsTheSelectionBeforeTheDescChanges)
 	BOOST_CHECK(reg.valid(ent));
 }
 
+BOOST_AUTO_TEST_CASE(Undo_ClearsTheSelectionBeforeTheDescChanges)
+{
+	state.reset_history();
+	scn::prefab_desc::prefab_node node;
+	node.name = "n";
+	node.node_id = 11;
+	state.world_descs[0].get_root().children.push_back(node);
+	state.commit("Create entity");
+	BOOST_REQUIRE(state.history().can_undo());
+	hierarchy.set_selected_node(&state.world_descs[0].get_root().children[0]);
+	service.select(at({ 11 }));
+	BOOST_REQUIRE(hierarchy.get_selected_node());
+	int cleared = 0;
+	auto counting = events.selection_changed.subscribe([&cleared](const edt::selection& sel) {
+		if (sel.empty()) ++cleared;
+	});
+
+	BOOST_REQUIRE(state.undo()); // the node the hierarchy points at goes
+
+	BOOST_TEST(cleared == 1);
+	BOOST_TEST(!service.has_selection());
+	BOOST_TEST(hierarchy.get_selected_node() == nullptr);
+	BOOST_TEST(state.world_descs[0].get_root().children.empty());
+}
+
 BOOST_AUTO_TEST_CASE(Push_FindsTheRespawnedEntityAfterTheListenersOfDocumentChanged)
 {
 	auto old_ent = spawn({ 3 });

@@ -24,6 +24,8 @@ namespace edt
 	protected:
 		void on_before_begin() override;
 		void on_render() override;
+		// Closed by its X or the View menu: the preview document closes with it (on_close), as with the Close button.
+		void on_hidden() override;
 
 	private:
 		void render_toolbar();

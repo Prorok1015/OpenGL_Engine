@@ -59,7 +59,7 @@ namespace {
 			const ImGuiKey key = key_from_name(chord.key);
 			if (key != ImGuiKey_None && ImGui::IsKeyPressed(key, false)) pressed = chord;
 		});
-		if (pressed) actions.dispatch(*pressed);
+		if (pressed) actions.dispatch(*pressed, io.WantTextInput);
 	}
 
 	void draw_panel_toggles(edt::panel_registry& panels)
@@ -77,6 +77,7 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 {
 	std::vector<registration> out;
 	out.push_back(actions.add_menu("File"));
+	out.push_back(actions.add_menu("Edit"));
 	out.push_back(actions.add_menu(std::string(view_menu_name)));
 	out.push_back(actions.add_menu("Build"));
 	out.push_back(actions.add_menu("Help"));
@@ -94,7 +95,7 @@ void edt::draw_main_menu(action_registry& actions, panel_registry& panels)
 		for (const menu_item_info& item : actions.items(menu)) {
 			if (item.separator_before) ImGui::Separator();
 			const char* shortcut_text = item.shortcut_text.empty() ? nullptr : item.shortcut_text.c_str();
-			if (ImGui::MenuItem(item.label.c_str(), shortcut_text, false, item.enabled))
+			if (ImGui::MenuItem(item.label.c_str(), shortcut_text, item.checked, item.enabled))
 				actions.activate(item.id);
 			if (!item.enabled && !item.disabled_tooltip.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 				ImGui::SetTooltip("%s", item.disabled_tooltip.c_str());

@@ -37,6 +37,11 @@ namespace edt
 		scn::prefab_desc::prefab_node* get_selected_owner() const { return m_selected_owner; }
 		const std::vector<uint64_t>& get_selected_target() const { return m_selected_target; }
 		void set_selected_node(scn::prefab_desc::prefab_node* node);
+		// Opens the inline rename of `node`. It follows the node by id: an edit that moves the node keeps it, one that
+		// removes the node cancels it at the next frame.
+		void begin_rename(const scn::prefab_desc::prefab_node& node);
+		// The id of the node being renamed, 0 when none.
+		uint64_t renaming() const { return m_rename_id; }
 
 		// Multi-world support
 		void set_world_names(std::vector<std::string> names, int active_idx = 0);
@@ -87,7 +92,8 @@ namespace edt
 
 		char m_filter[128]           = {};
 		char m_rename_buf[256]       = {};
-		scn::prefab_desc::prefab_node* m_rename_node = nullptr;
+		uint64_t m_rename_id = 0;
+		bool m_rename_seen = false; // drawn this frame
 
 		// World tabs
 		std::vector<std::string> m_world_names;

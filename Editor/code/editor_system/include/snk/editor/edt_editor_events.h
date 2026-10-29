@@ -158,6 +158,8 @@ namespace edt
 		std::uint64_t job = 0;
 		// Whether the module is reloaded after this build (#444: the build settings decide).
 		bool reload = true;
+		// Built by live mode's background build (build_request::preemptible), not by the person.
+		bool background = false;
 	};
 
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service

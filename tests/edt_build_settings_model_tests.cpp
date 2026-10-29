@@ -338,6 +338,28 @@ BOOST_AUTO_TEST_CASE(RemovedDefine_MarksTheConfigurationForAFreshConfigure)
 	BOOST_TEST(!model.dirty());
 }
 
+// #445: every mark bumps fresh_generation, also one for a configuration that is marked already, so a build that
+// started before it does not clear it.
+BOOST_AUTO_TEST_CASE(RemovedDefine_BumpsTheFreshGeneration_EvenWhenMarkedAlready)
+{
+	with_user();
+	with_settings(R"({"fresh_configure":["debuggame"],"fresh_generation":4})");
+	load();
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(model.settings().fresh_generation == 5u);
+	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
+
+	// The build that started with generation 4 finishes its configure now: the newer mark stays.
+	BOOST_REQUIRE(!edt::clear_fresh_configure(root() / ".snk", "debuggame", 4).has_value());
+	BOOST_TEST((edt::load_build_settings(root() / ".snk").fresh_configure == std::vector<std::string>{ "debuggame" }));
+
+	// An edit without a removal leaves the generation alone.
+	model.set_reload_after_build(false);
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(model.settings().fresh_generation == 5u);
+}
+
 BOOST_AUTO_TEST_CASE(RenamedDefine_IsARemoveAndAnAdd)
 {
 	with_user();
@@ -427,6 +449,26 @@ BOOST_AUTO_TEST_CASE(WhileABuildRuns_NoDefineIsRemovedAndNoRemovalApplied)
 	building = false;
 	BOOST_TEST(!model.apply_blocked_reason().has_value());
 	BOOST_TEST(model.apply().ok());
+	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
+}
+
+// #445: only the person's build blocks a removal; a live build is stopped before the --fresh mark is written.
+BOOST_AUTO_TEST_CASE(DuringALiveBuild_ARemovalAppliesAndStopsItFirst)
+{
+	with_user();
+	model.set_building([] { return false; }); // the person's build only
+	int cancels = 0;
+	model.set_stop_background([&cancels] { ++cancels; });
+	load();
+
+	BOOST_REQUIRE(!model.set_define("debuggame", "NEW", "x").has_value());
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(cancels == 0); // no --fresh mark: nothing a live build could clear
+
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	BOOST_TEST(!model.apply_blocked_reason().has_value());
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(cancels == 1);
 	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
 }
 
