@@ -5,7 +5,7 @@
 
 namespace {
 
-	constexpr std::array<std::string_view, 3> IGNORED_DIRS{ "build", "_deps", "CMakeFiles" };
+	constexpr std::array<std::string_view, 4> IGNORED_DIRS{ "build", "out", "_deps", "CMakeFiles" };
 	constexpr std::array<std::string_view, 3> SOURCE_EXTENSIONS{ ".cpp", ".cc", ".cxx" };
 	constexpr std::array<std::string_view, 3> HEADER_EXTENSIONS{ ".h", ".hpp", ".inl" };
 	constexpr std::string_view CMAKE_EXTENSION = ".cmake";

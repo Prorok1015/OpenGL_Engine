@@ -1,5 +1,7 @@
 #include "edt_code_tree.h"
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_path_sanitize.h>
 #include <algorithm>
 #include <cctype>
 #include <iterator>
@@ -30,24 +32,12 @@ namespace edt
 			return folder.empty() ? std::string{ name } : std::string{ folder } + "/" + std::string{ name };
 		}
 
-		// CON, NUL, COM1.. with or without an extension: Windows opens the device instead of a file of that name.
-		bool is_device_name(std::string_view segment)
+		// What Windows (and a shell) treat as more than a plain character; the portable rules of res cover the rest.
+		std::string check_characters(std::string_view segment)
 		{
-			const std::string stem = folded(std::string{ segment.substr(0, segment.find('.')) });
-			if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul") return true;
-			return stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem[3] >= '1' && stem[3] <= '9';
-		}
-
-		std::string check_segment(std::string_view segment)
-		{
-			if (segment.empty()) return "a name is empty";
-			if (segment == "." || segment == "..") return "'.' and '..' are not allowed";
-			if (segment.back() == ' ' || segment.back() == '.') return "a name cannot end in a space or a dot";
-			if (is_device_name(segment)) return "a name cannot be a device name of Windows (CON, NUL, COM1, ...)";
 			for (const char c : segment) {
-				if (static_cast<unsigned char>(c) < 0x20 || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<'
-					|| c == '>' || c == '|') {
-					return "a name cannot hold control characters or any of \\ : * ? \" < > |";
+				if (c == '\\' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+					return "a name cannot hold any of \\ * ? \" < > |";
 				}
 			}
 			return {};
@@ -60,13 +50,13 @@ namespace edt
 		std::vector<code_entry> folders;
 		std::vector<code_entry> files;
 		std::error_code ec;
-		const fs::path dir = relative_dir.empty() ? m_root : m_root / fs::path{ std::string{ relative_dir } };
+		const fs::path dir = relative_dir.empty() ? m_root : m_root / fs_paths::path_from_utf8(relative_dir);
 		fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
 		for (const fs::directory_iterator end; !ec && it != end; it.increment(ec)) {
 			std::error_code entry_ec;
 			const auto status = it->symlink_status(entry_ec);
 			if (entry_ec) continue;
-			const std::string name = it->path().filename().string();
+			const std::string name = fs_paths::utf8_of(it->path().filename());
 			code_entry entry;
 			entry.name = name;
 			entry.relative = join(relative_dir, name);
@@ -90,25 +80,25 @@ namespace edt
 
 	fs::path code_tree_model::physical_path(std::string_view relative) const
 	{
-		return m_root / fs::path{ std::string{ relative } };
+		return m_root / fs_paths::path_from_utf8(relative);
 	}
 
 	std::string check_code_file_path(std::string_view relative)
 	{
-		if (relative.empty()) return "the name is empty";
-		if (relative.front() == '/') return "the path must be relative to code/";
+		if (!relative.empty() && relative.front() == '/') return "the path must be relative to code/";
+		if (std::string problem = res::portable_path_problem(relative); !problem.empty()) return problem;
+		if (std::string problem = check_characters(relative); !problem.empty()) return problem;
+
 		std::size_t begin = 0;
-		std::string last;
+		std::string_view last;
 		while (begin <= relative.size()) {
 			const std::size_t end = relative.find('/', begin);
-			const std::string_view segment = relative.substr(begin, end == std::string_view::npos ? end : end - begin);
-			if (std::string problem = check_segment(segment); !problem.empty()) return problem;
-			last = std::string{ segment };
+			last = relative.substr(begin, end == std::string_view::npos ? end : end - begin);
 			if (end == std::string_view::npos) {
 				break;
 			}
-			if (prj::is_code_ignored_dir(segment)) {
-				return std::string{ "'" } + std::string{ segment } + "' is not a place for code (build output or a hidden folder)";
+			if (prj::is_code_ignored_dir(last)) {
+				return std::string{ "'" } + std::string{ last } + "' is not a place for code (build output or a hidden folder)";
 			}
 			begin = end + 1;
 		}
@@ -135,14 +125,11 @@ namespace edt
 			return res::file_operation::failure(std::move(problem));
 		}
 		const res::tag tag = tag_of(relative);
-		if (m_res.exists(tag)) {
-			return res::file_operation::failure("'" + relative + "' already exists");
+		auto result = m_res.create_sync(tag, {});
+		if (result.ok) {
+			egLOG("editor/code", "Created {}", tag.view());
 		}
-		if (!m_res.store_sync(tag, {})) {
-			return res::file_operation::failure("'" + relative + "' could not be written (see the log)");
-		}
-		egLOG("editor/code", "Created {}", tag.view());
-		return res::file_operation::success();
+		return result;
 	}
 
 	res::file_operation code_actions::rename_file(std::string_view relative, std::string_view new_name)

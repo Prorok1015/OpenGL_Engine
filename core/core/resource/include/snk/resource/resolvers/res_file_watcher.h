@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 #include <boost/asio.hpp>
+#include <snk/common/fs_paths.h>
 #include <snk/resource/res_file_change.h>
 
 namespace fs = std::filesystem;
@@ -53,22 +54,26 @@ namespace res {
             else if (!(old->second == state)) changed.push_back({ path, {}, change_kind::modified, false });
         }
 
-        const auto key_count = [](const std::vector<fs::path>& paths, const std::map<fs::path, watch_file_state>& files,
-                                   const watch_file_state& key) {
-            return std::ranges::count_if(paths, [&](const fs::path& path) { return files.at(path) == key; });
+        // Paths by (size, modification time): a key held by exactly one vanished and one new file is a rename.
+        using key_type = std::pair<std::uintmax_t, std::int64_t>;
+        const auto key_of = [](const watch_file_state& state) {
+            return key_type{ state.size, static_cast<std::int64_t>(state.modified.time_since_epoch().count()) };
         };
+        std::map<key_type, std::vector<fs::path>> gone_by_key;
+        std::map<key_type, std::vector<fs::path>> new_by_key;
+        for (const auto& path : gone_files) gone_by_key[key_of(before.files.at(path))].push_back(path);
+        for (const auto& path : new_files) new_by_key[key_of(after.files.at(path))].push_back(path);
         std::vector<raw_change> renamed;
         std::vector<raw_change> deleted;
         std::vector<raw_change> created;
         std::set<fs::path> paired_new;
         std::set<fs::path> paired_gone;
-        for (const auto& old_path : gone_files) {
-            const watch_file_state& key = before.files.at(old_path);
-            if (key_count(gone_files, before.files, key) != 1 || key_count(new_files, after.files, key) != 1) continue;
-            const auto target = std::ranges::find_if(new_files, [&](const fs::path& path) { return after.files.at(path) == key; });
-            renamed.push_back({ *target, old_path, change_kind::renamed, false });
-            paired_new.insert(*target);
-            paired_gone.insert(old_path);
+        for (const auto& [key, old_paths] : gone_by_key) {
+            const auto candidates = new_by_key.find(key);
+            if (old_paths.size() != 1 || candidates == new_by_key.end() || candidates->second.size() != 1) continue;
+            renamed.push_back({ candidates->second.front(), old_paths.front(), change_kind::renamed, false });
+            paired_new.insert(candidates->second.front());
+            paired_gone.insert(old_paths.front());
         }
         for (auto it = gone_files.rbegin(); it != gone_files.rend(); ++it) {
             if (!paired_gone.contains(*it)) deleted.push_back({ *it, {}, change_kind::deleted, false });
@@ -223,7 +228,7 @@ namespace res {
                     std::error_code entry_ec;
                     const auto status = it->symlink_status(entry_ec);
                     if (entry_ec) continue;
-                    const std::string name = it->path().filename().string();
+                    const std::string name = fs_paths::utf8_of(it->path().filename());
                     if (fs::is_directory(status)) {
                         if (m_options.ignore_dir && m_options.ignore_dir(name)) {
                             it.disable_recursion_pending();

@@ -35,9 +35,9 @@ namespace edt
 		std::filesystem::path m_root;
 	};
 
-	// Empty when `relative` (under code://) names a place a code file may be made at: '/' separated names without
-	// '..', '.', a drive, control characters or a name that ends in a space or a dot, no ignored folder, and a code
-	// file name at the end. The write policy has the last word; this gives the user the reason before the attempt.
+	// Empty when `relative` (under code://) names a place a code file may be made at: '/' separated names that every
+	// platform can hold (res::portable_path_problem: no '..', ':', control characters, trailing space or dot, device
+	// names), none of \ * ? " < > |, no ignored folder, and a code file name at the end. The write policy has the last word; this gives the user the reason before the attempt.
 	std::string check_code_file_path(std::string_view relative);
 
 	// What the Code tree does to files, through the resource system (the safe write of #427 and the write policy), so

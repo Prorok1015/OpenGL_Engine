@@ -1,4 +1,5 @@
 #include "edt_code_section.h"
+#include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
@@ -44,10 +45,12 @@ namespace edt
 
 	void code_section::report(const res::file_operation& result)
 	{
-		if (!result.ok) {
-			m_error = result.error;
-			egLOG_WARN("editor/code", "{}", result.error);
+		if (result.ok) {
+			m_error.clear();
+			return;
 		}
+		m_error = result.error;
+		egLOG_WARN("editor/code", "{}", result.error);
 	}
 
 	void code_section::open_dialog(dialog_kind kind, std::string target, std::string initial_text)
@@ -81,7 +84,7 @@ namespace edt
 			}
 			ImGui::Separator();
 			if (ImGui::MenuItem("Copy path")) {
-				ImGui::SetClipboardText(m_actions.tree().physical_path(entry.relative).string().c_str());
+				ImGui::SetClipboardText(fs_paths::utf8_of(m_actions.tree().physical_path(entry.relative)).c_str());
 			}
 		}
 		ImGui::EndPopup();

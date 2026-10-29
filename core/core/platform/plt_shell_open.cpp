@@ -1,5 +1,6 @@
 #include <snk/platform/plt_shell_open.h>
 #include <snk/platform/plt_process.h>
+#include <snk/common/fs_paths.h>
 #include <format>
 #include <string>
 #include <system_error>
@@ -27,11 +28,11 @@ namespace {
 	std::string refusal_of(const fs::path& file)
 	{
 		if (!file.is_absolute()) {
-			return std::format("'{}' is not an absolute path", file.string());
+			return std::format("'{}' is not an absolute path", fs_paths::utf8_of(file));
 		}
 		std::error_code ec;
 		if (!fs::is_regular_file(file, ec)) {
-			return std::format("'{}' is not an existing file", file.string());
+			return std::format("'{}' is not an existing file", fs_paths::utf8_of(file));
 		}
 		return {};
 	}
@@ -80,9 +81,9 @@ std::string platform::open_in_shell(const fs::path& file)
 	if (!::ShellExecuteExW(&info)) {
 		const DWORD code = ::GetLastError();
 		if (code == ERROR_NO_ASSOCIATION) {
-			return std::format("no program is associated with '{}'", file.string());
+			return std::format("no program is associated with '{}'", fs_paths::utf8_of(file));
 		}
-		return std::format("cannot open '{}': {}", file.string(), std::system_category().message(static_cast<int>(code)));
+		return std::format("cannot open '{}': {}", fs_paths::utf8_of(file), std::system_category().message(static_cast<int>(code)));
 	}
 	return {};
 #else
@@ -90,7 +91,7 @@ std::string platform::open_in_shell(const fs::path& file)
 	if (program.empty()) {
 		return "xdg-open was not found in PATH";
 	}
-	const auto started = platform::spawn_detached(program, { file.string() });
+	const auto started = platform::spawn_detached(program, { fs_paths::utf8_of(file) });
 	return started.error;
 #endif
 }

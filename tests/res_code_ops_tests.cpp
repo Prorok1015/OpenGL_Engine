@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/resource/res_mount_table.h>
 #include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <snk/resource/resolvers/res_file_watcher.h>
 // Not test_scene_env.hpp: res_vfs_resolver.h brings in Asio and so <windows.h>.
 #include "test_manual_tasks.hpp"
@@ -259,10 +260,34 @@ BOOST_FIXTURE_TEST_CASE(Rename_AFile_MovesItAndTellsSubscribers, ops_fixture)
 	BOOST_TEST(renamed->old_tag.view() == "code://src/game.cpp");
 }
 
-BOOST_FIXTURE_TEST_CASE(Rename_IntoANewFolder_MakesTheFolder, ops_fixture)
+BOOST_FIXTURE_TEST_CASE(Rename_ToAFolderThatExists_Moves_ToOneThatDoesNot_IsRefusedAndMakesNothing, ops_fixture)
 {
-	BOOST_TEST(sys->rename(res::tag{ "code://src/game.cpp" }, res::tag{ "code://src/game/core/game.cpp" }).ok);
-	BOOST_TEST(read_file(code / "src" / "game" / "core" / "game.cpp") == "int game;");
+	fs::create_directories(code / "other");
+	BOOST_TEST(sys->rename(res::tag{ "code://src/game.cpp" }, res::tag{ "code://other/game.cpp" }).ok);
+	BOOST_TEST(read_file(code / "other" / "game.cpp") == "int game;");
+
+	BOOST_TEST(!sys->rename(res::tag{ "code://other/game.cpp" }, res::tag{ "code://nowhere/deep/game.cpp" }).ok);
+	BOOST_TEST(fs::exists(code / "other" / "game.cpp"));
+	BOOST_TEST(!fs::exists(code / "nowhere"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Rename_OfAFolder_IsRefusedAndNothingChanges, ops_fixture)
+{
+	BOOST_TEST(!sys->rename(res::tag{ "code://src" }, res::tag{ "code://src2" }).ok);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Rename_ByCaseOnly_IsNotAClashWithItself, ops_fixture)
+{
+	const auto result = sys->rename(res::tag{ "code://src/game.cpp" }, res::tag{ "code://src/Game.cpp" });
+
+	// On a case-sensitive file system Game.cpp is a new name; on a case-insensitive one it is the same file. Either way
+	// the file is there under the new spelling and the rename is not refused as "already exists".
+	BOOST_TEST(result.ok);
+	std::vector<std::string> names;
+	for (const auto& entry : fs::directory_iterator(code / "src")) names.push_back(entry.path().filename().string());
+	BOOST_TEST(std::ranges::count(names, "Game.cpp") == 1);
+	BOOST_TEST(std::ranges::count(names, "game.cpp") == 0);
 }
 
 BOOST_FIXTURE_TEST_CASE(Rename_OverAnExistingFile_IsRefusedAndKeepsBoth, ops_fixture)
@@ -341,6 +366,100 @@ BOOST_FIXTURE_TEST_CASE(Unsubscribe_StopsTheDelivery, ops_fixture)
 	BOOST_TEST(sys->remove(res::tag{ "code://src/game.cpp" }).ok);
 	pump_until([this] { return !seen.empty(); }, 1500ms);
 	BOOST_TEST(seen.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(Names_StreamsDevicesAndTrailingDots_AreRefusedEverywhere, ops_fixture)
+{
+	for (const char* tag : { "code://build:x.cpp", "code://CMakeLists.txt:a.cpp", "code://src/game.cpp:stream", "code://nul.cpp",
+	                         "code://src/CON.h", "code://src/com1.cpp", "code://src/lpt9.hpp", "code://src/x.cpp.", "code://src/x.cpp " }) {
+		BOOST_TEST_INFO(tag);
+		BOOST_TEST(!sys->store(res::tag{ tag }, to_bytes("x")));
+		BOOST_TEST(!sys->create_sync(res::tag{ tag }, to_bytes("x")).ok);
+		BOOST_TEST(!sys->remove(res::tag{ tag }).ok);
+		BOOST_TEST(!sys->rename(res::tag{ "code://src/game.cpp" }, res::tag{ tag }).ok);
+	}
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+}
+
+BOOST_FIXTURE_TEST_CASE(Create_NeverReplacesAnExistingFile, ops_fixture)
+{
+	const auto result = sys->create_sync(res::tag{ "code://src/game.cpp" }, to_bytes("replaced"));
+
+	BOOST_TEST(!result.ok);
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;");
+	BOOST_TEST(sys->create_sync(res::tag{ "code://src/fresh.cpp" }, to_bytes("fresh")).ok);
+	BOOST_TEST(read_file(code / "src" / "fresh.cpp") == "fresh");
+	BOOST_TEST(!sys->create_sync(res::tag{ "code://src/fresh.cpp" }, to_bytes("again")).ok);
+	BOOST_TEST(read_file(code / "src" / "fresh.cpp") == "fresh");
+}
+
+BOOST_FIXTURE_TEST_CASE(Remove_AFolder_IsRefusedEvenWhenEmpty, ops_fixture)
+{
+	fs::create_directories(code / "empty_dir");
+
+	BOOST_TEST(!sys->remove(res::tag{ "code://empty_dir" }).ok);
+	BOOST_TEST(!sys->remove(res::tag{ "code://src" }).ok);
+	BOOST_TEST(fs::exists(code / "empty_dir"));
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+}
+
+BOOST_FIXTURE_TEST_CASE(NonAnsiNames_AreListedWatchedAndReported, ops_fixture)
+{
+	const fs::path name = fs::path{ std::u8string{ u8"\u65e5\u672c.cpp" } };
+	{
+		std::ofstream out(code / "src" / name, std::ios::binary);
+		out << "int nihon;";
+	}
+
+	BOOST_TEST(pump_until([this] {
+		return std::ranges::any_of(seen, [](const res::file_change& c) {
+			return c.kind == res::change_kind::created && c.tag.view() == "code://src/\xE6\x97\xA5\xE6\x9C\xAC.cpp";
+		});
+	}));
+
+	fs::remove(code / "src" / name);
+	BOOST_TEST(pump_until([this] {
+		return std::ranges::any_of(seen, [](const res::file_change& c) {
+			return c.kind == res::change_kind::deleted && c.tag.view() == "code://src/\xE6\x97\xA5\xE6\x9C\xAC.cpp";
+		});
+	}));
+	// The watcher still runs: a later change is told.
+	dir.write("project/code/src/after.cpp", "after");
+	BOOST_TEST(pump_until([this] { return has(res::change_kind::created, "code://src/after.cpp", false); }));
+}
+
+BOOST_FIXTURE_TEST_CASE(NonAnsiNames_CanBeStoredRenamedAndRemoved, ops_fixture)
+{
+	const res::tag tag{ "code://src/\xE6\x97\xA5\xE6\x9C\xAC.cpp" };
+	BOOST_TEST(sys->create_sync(tag, to_bytes("nihon")).ok);
+	BOOST_TEST(fs::exists(code / "src" / fs::path{ std::u8string{ u8"\u65e5\u672c.cpp" } }));
+	BOOST_TEST(sys->rename(tag, res::tag{ "code://src/\xE6\x9C\xAC.cpp" }).ok);
+	BOOST_TEST(sys->remove(res::tag{ "code://src/\xE6\x9C\xAC.cpp" }).ok);
+}
+
+BOOST_FIXTURE_TEST_CASE(ExternalRenameAndDelete_DropWhatWasCached, ops_fixture)
+{
+	auto before = sys->require_sync<res::text_resource>(res::tag{ "code://src/game.cpp" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!before.has_error());
+	BOOST_TEST(before.get_sync()->str() == "int game;");
+
+	fs::rename(code / "src" / "game.cpp", code / "src" / "hero.cpp");
+	BOOST_TEST(pump_until([this] { return has(res::change_kind::renamed, "code://src/hero.cpp", false); }));
+
+	auto gone = sys->require_sync<res::text_resource>(res::tag{ "code://src/game.cpp" });
+	test_util::pump(tasks);
+	BOOST_TEST(gone.has_error());
+	auto moved = sys->require_sync<res::text_resource>(res::tag{ "code://src/hero.cpp" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!moved.has_error());
+	BOOST_TEST(moved.get_sync()->str() == "int game;");
+
+	fs::remove(code / "src" / "hero.cpp");
+	BOOST_TEST(pump_until([this] { return has(res::change_kind::deleted, "code://src/hero.cpp", false); }));
+	auto deleted = sys->require_sync<res::text_resource>(res::tag{ "code://src/hero.cpp" });
+	test_util::pump(tasks);
+	BOOST_TEST(deleted.has_error());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

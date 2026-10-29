@@ -1,6 +1,7 @@
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/common.h>
+#include <snk/common/fs_paths.h>
 #include <snk/common/core_thread_utils.hpp>
 #include <snk/resource/res_path_sanitize.h>
 #include "res_vfs_write.h"
@@ -12,6 +13,17 @@
 #include <chrono>
 #include <thread>
 #include <utility>
+
+namespace {
+
+	std::string folded(std::string_view text)
+	{
+		std::string out(text);
+		for (char& c : out) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		return out;
+	}
+
+}
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt)
 	: core::res::res_resolver_interface(prt), watcher(io)
@@ -65,6 +77,19 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 				}
 				const auto old = change.old_path.empty() ? std::nullopt : path_mapper(change.old_path);
 				batch.push_back(file_change{ *changed, old.value_or(res::tag{}), change.kind, change.is_directory, false });
+				// What was cached under a file that is gone, moved or newly there is stale; created and modified files are
+				// signalled by the watcher's own callback.
+				if (!change.is_directory) {
+					if (change.kind == change_kind::deleted) {
+						notify_resource_changed(*changed);
+					}
+					else if (change.kind == change_kind::renamed) {
+						notify_resource_changed(*changed);
+						if (old) {
+							notify_resource_changed(*old);
+						}
+					}
+				}
 			}
 			notify_changes(std::move(batch));
 		});
@@ -119,7 +144,7 @@ std::optional<res::tag> res::vfs_resolver::path_mapper(const fs::path& path) con
 		fs::path rel_path = full_path.lexically_relative(full_entry);
 
 		if (!rel_path.empty() && *rel_path.begin() != "..") {
-			std::string result_str = (rel_path == ".") ? "" : rel_path.generic_string();
+			std::string result_str = (rel_path == ".") ? "" : fs_paths::generic_utf8_of(rel_path);
 
 			return res::tag(protocol, result_str);
 		}
@@ -204,8 +229,25 @@ bool res::vfs_resolver::store_sync(const::res::tag& tag, const std::vector<std::
 	return written.get();
 }
 
+res::file_operation res::vfs_resolver::create_sync(const::res::tag& tag, const std::vector<std::byte>& data)
+{
+	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "create_sync on the io thread would wait for itself");
+	if (exists(tag)) {
+		return file_operation::failure(std::format("'{}' already exists", tag.view()));
+	}
+	auto done = std::make_shared<std::promise<bool>>();
+	auto written = done->get_future();
+	if (!queue_store(tag, data, done, false)) {
+		return file_operation::failure(std::format("'{}' may not be written (see the log)", tag.view()));
+	}
+	if (!written.get()) {
+		return file_operation::failure(std::format("'{}' could not be created (it exists now, or the write failed; see the log)", tag.view()));
+	}
+	return file_operation::success();
+}
+
 bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std::byte>& data,
-	std::shared_ptr<std::promise<bool>> done)
+	std::shared_ptr<std::promise<bool>> done, bool replace)
 {
 	if (m_access == mount_access::read_only) {
 		egLOG_WARN("resource", "Rejected store of '{}': protocol '{}' is read-only", tag.view(), protocol);
@@ -224,8 +266,14 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 		}
 		// Both the tag and the file it resolves to must be writable: a link inside the root may lead to a folder
 		// the policy does not cover.
-		const std::string tag_path = fs::path{ tag.relative() }.lexically_normal().generic_string();
-		const std::string file_path = target_path->lexically_relative(entries_stack.top()).generic_string();
+		const std::string tag_path = fs_paths::generic_utf8_of(fs_paths::path_from_utf8(tag.relative()).lexically_normal());
+		const std::string file_path = fs_paths::generic_utf8_of(target_path->lexically_relative(entries_stack.top()));
+		if (m_file_operations) {
+			if (const std::string problem = res::portable_path_problem(tag.relative()); !problem.empty()) {
+				egLOG_WARN("resource", "Rejected store of '{}': {}", tag.view(), problem);
+				return false;
+			}
+		}
 		if (!m_write_policy.allows(tag_path)) {
 			egLOG_WARN("resource", "Rejected store of '{}': no write pattern of protocol '{}' matches '{}'", tag.view(), protocol, tag_path);
 			return false;
@@ -258,11 +306,11 @@ bool res::vfs_resolver::queue_store(const::res::tag& tag, const std::vector<std:
 	}
 
 	++m_writes_in_flight;
-	boost::asio::post(io, [this, tag, target = *target_path, tmp_tag, tmp = *tmp_path, data_ptr, done = std::move(done)] {
+	boost::asio::post(io, [this, tag, target = *target_path, tmp_tag, tmp = *tmp_path, data_ptr, replace, done = std::move(done)] {
 		// The promise is fulfilled exactly once, whatever happens: a broken one would throw out of store_sync.
 		bool written = false;
 		try {
-			written = write_pending(tag, target, tmp_tag, tmp, data_ptr);
+			written = write_pending(tag, target, tmp_tag, tmp, data_ptr, replace);
 		} catch (...) {
 			written = false;
 		}
@@ -351,8 +399,14 @@ std::optional<fs::path> res::vfs_resolver::writable_path(const tag& tag, std::st
 		why = std::format("'{}' escapes the resource root, or ends in a link", tag.view());
 		return std::nullopt;
 	}
-	const std::string tag_path = fs::path{ tag.relative() }.lexically_normal().generic_string();
-	const std::string file_path = path->lexically_relative(entries_stack.top()).generic_string();
+	if (m_file_operations) {
+		why = res::portable_path_problem(tag.relative());
+		if (!why.empty()) {
+			return std::nullopt;
+		}
+	}
+	const std::string tag_path = fs_paths::generic_utf8_of(fs_paths::path_from_utf8(tag.relative()).lexically_normal());
+	const std::string file_path = fs_paths::generic_utf8_of(path->lexically_relative(entries_stack.top()));
 	if (!m_write_policy.allows(tag_path)) {
 		why = std::format("no write pattern of protocol '{}' matches '{}'", protocol, tag_path);
 		return std::nullopt;
@@ -423,7 +477,7 @@ std::string res::vfs_resolver::remove_on_io(const tag& tag, const fs::path& targ
 	if (relative.empty() || *relative.begin() == "..") {
 		return "its file does not lie below the resource root";
 	}
-	if (std::string error = detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename()); !error.empty()) {
+	if (std::string error = detail::remove_beneath(*m_write_root, relative.parent_path(), relative.filename(), true); !error.empty()) {
 		return error;
 	}
 	{
@@ -467,16 +521,23 @@ res::file_operation res::vfs_resolver::rename(const::res::tag& from, const::res:
 	if (!fs::is_regular_file(source_status)) {
 		return file_operation::failure(std::format("'{}' is not a regular file", from.view()));
 	}
+	// A target that is the source itself under another case (a.cpp -> A.cpp on Windows or macOS) is a rename, not a clash.
+	bool case_only = false;
 	if (fs::symlink_status(*target, ec).type() != fs::file_type::not_found) {
-		return file_operation::failure(std::format("'{}' already exists", to.view()));
+		std::error_code same_ec;
+		const bool same_file = fs::equivalent(*source, *target, same_ec) && !same_ec;
+		case_only = same_file && folded(from.name()) == folded(to.name());
+		if (!case_only) {
+			return file_operation::failure(std::format("'{}' already exists", to.view()));
+		}
 	}
 
 	auto done = std::make_shared<std::promise<std::string>>();
 	auto result = done->get_future();
-	boost::asio::post(io, [this, from, to, source = *source, target = *target, done] {
+	boost::asio::post(io, [this, from, to, source = *source, target = *target, case_only, done] {
 		std::string error;
 		try {
-			error = rename_on_io(from, source, to, target);
+			error = rename_on_io(from, source, to, target, case_only);
 		} catch (const std::exception& ex) {
 			error = ex.what();
 		}
@@ -490,7 +551,7 @@ res::file_operation res::vfs_resolver::rename(const::res::tag& from, const::res:
 	return file_operation::success();
 }
 
-std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& source, const tag& to, const fs::path& target)
+std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& source, const tag& to, const fs::path& target, bool case_only)
 {
 	if (safe_path(entries_stack.top(), from) != source || safe_path(entries_stack.top(), to) != target) {
 		return "its file no longer stays inside the resource root";
@@ -505,6 +566,7 @@ std::string res::vfs_resolver::rename_on_io(const tag& from, const fs::path& sou
 	request.from_leaf = from_relative.filename();
 	request.to_folder = to_relative.parent_path();
 	request.to_leaf = to_relative.filename();
+	request.allow_replace = case_only;
 	if (std::string error = detail::rename_beneath(*m_write_root, request); !error.empty()) {
 		return error;
 	}
@@ -560,7 +622,7 @@ bool res::vfs_resolver::exists_below_top(const tag& tag) const
 std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const tag& tag) const
 {
 	const std::string_view rel_view = tag.relative();
-	const fs::path rel{ rel_view };
+	const fs::path rel = fs_paths::path_from_utf8(rel_view);
 
 	// An empty tag would map to the root itself; control characters have no business in a file name.
 	if (rel_view.empty() || res::has_control_chars(rel_view)) {
@@ -570,7 +632,7 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 		return std::nullopt;
 	}
 	for (const auto& part : rel) {
-		const std::string name = part.generic_string();
+		const std::string name = fs_paths::generic_utf8_of(part);
 		if (name == "..") {
 			return std::nullopt;
 		}
@@ -645,7 +707,7 @@ res::tag res::vfs_resolver::make_temp_tag(const tag& tag)
 }
 
 bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& target_path, const res::tag& tmp_tag,
-	const fs::path& tmp_path, const core::res::res_resolver_interface::async_raw_data& data_ptr)
+	const fs::path& tmp_path, const core::res::res_resolver_interface::async_raw_data& data_ptr, bool replace)
 {
 	// The temp file is never removed by path here: write_beneath removes its own, inside the folder it opened.
 	const auto fail = [&](std::string_view why) {
@@ -684,6 +746,7 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 		request.data = data_ptr->data;
 		// Scratch data of the process: not worth an fsync per store (#417).
 		request.durable = protocol != ::res::tag::memory;
+		request.replace = replace;
 		request.hook = &m_write_hook;
 		request.tmp_path = tmp_path;
 		if (const std::string error = detail::write_beneath(*m_write_root, request); !error.empty()) {

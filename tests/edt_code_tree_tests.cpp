@@ -2,6 +2,7 @@
 #include "edt_code_tree.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -111,6 +112,20 @@ BOOST_FIXTURE_TEST_CASE(List_SkipsLinks, code_tree_fixture)
 BOOST_FIXTURE_TEST_CASE(List_OfAMissingFolder_IsEmpty, code_tree_fixture)
 {
 	BOOST_TEST(edt::code_tree_model{ code }.list("nope").empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(List_HandlesNamesOutsideTheCodePage, code_tree_fixture)
+{
+	{
+		std::ofstream out(code / fs::path{ std::u8string{ u8"\u65e5\u672c.cpp" } }, std::ios::binary);
+		out << "int nihon;";
+	}
+
+	const auto entries = edt::code_tree_model{ code }.list("");
+	const auto found = std::ranges::find_if(entries, [](const edt::code_entry& e) { return e.name == "\xE6\x97\xA5\xE6\x9C\xAC.cpp"; });
+	BOOST_REQUIRE(found != entries.end());
+	BOOST_TEST(found->relative == "\xE6\x97\xA5\xE6\x9C\xAC.cpp");
+	BOOST_TEST(fs::exists(edt::code_tree_model{ code }.physical_path(found->relative)));
 }
 
 BOOST_AUTO_TEST_CASE(CheckPath_AcceptsCodeFilesInSubfolders)

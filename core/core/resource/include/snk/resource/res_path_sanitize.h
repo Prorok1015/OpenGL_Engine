@@ -27,6 +27,35 @@ namespace res
 		return false;
 	}
 
+	// Why a relative path (UTF-8, '/' separated) is not a name every platform can hold, or empty when it is: a ':' (a
+	// Windows alternate data stream or a drive), a control character, an empty segment, '.' or '..', a segment ending in
+	// a space or a dot, or a Windows device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9, with or without an extension,
+	// whatever the case). Checked on every platform so a project stays portable. Pure.
+	inline std::string portable_path_problem(std::string_view relative)
+	{
+		if (relative.empty()) return "the path is empty";
+		std::size_t begin = 0;
+		while (begin <= relative.size()) {
+			const std::size_t end = relative.find('/', begin);
+			const std::string_view segment = relative.substr(begin, end == std::string_view::npos ? end : end - begin);
+			if (segment.empty()) return "a name is empty";
+			if (segment == "." || segment == "..") return "'.' and '..' are not allowed";
+			if (has_control_chars(segment)) return "a name has a control character";
+			if (segment.find(':') != std::string_view::npos) return "a name cannot hold ':' (a stream or a drive on Windows)";
+			if (segment.back() == ' ' || segment.back() == '.') return "a name cannot end in a space or a dot";
+			std::string stem{ segment.substr(0, segment.find('.')) };
+			for (char& c : stem) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+			const bool numbered = stem.size() == 4 && (stem.starts_with("com") || stem.starts_with("lpt")) && stem[3] >= '1' && stem[3] <= '9';
+			if (stem == "con" || stem == "prn" || stem == "aux" || stem == "nul" || numbered) {
+				return "a name cannot be a device name of Windows (CON, NUL, COM1, ...)";
+			}
+			if (end == std::string_view::npos) break;
+			begin = end + 1;
+		}
+		return {};
+	}
+
 	namespace detail
 	{
 		// Cut at `limit` bytes without splitting a UTF-8 sequence.

@@ -136,6 +136,18 @@ namespace res
 			return resolvers.at(tag.protocol())->store_sync(tag, data);
 		}
 
+		// store_sync() for a new file: refused when the tag already has one, also when one appears while the data is
+		// written (the resolver moves the temp file in without replacing). Says why it did not happen.
+		file_operation create_sync(const tag& tag, const std::vector<std::byte>& data) {
+			check_writable(tag);
+			const auto& resolvers = root().m_resolvers;
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				return file_operation::failure("protocol is not supported");
+			}
+			return resolvers.at(tag.protocol())->create_sync(tag, data);
+		}
+
 
 		// keep_dependencies retains graph edges until unwatch, without retaining resource data.
 		void watch(const res::tag& tag, void* owner, reload_callback cb, bool keep_dependencies = false) {

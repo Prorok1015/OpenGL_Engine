@@ -104,7 +104,7 @@ BOOST_AUTO_TEST_CASE(WritePatterns_RefuseOtherFiles)
 BOOST_AUTO_TEST_CASE(WritePatterns_RefuseIgnoredFolders_AtAnyDepthAndInAnyCase)
 {
 	const auto policy = code_policy();
-	for (const std::string folder : { "build", "Build", "BUILD", "_deps", "CMakeFiles", ".cache", ".git", ".snk", ".vs" }) {
+	for (const std::string folder : { "build", "Build", "BUILD", "out", "_deps", "CMakeFiles", ".cache", ".git", ".snk", ".vs" }) {
 		BOOST_TEST_INFO(folder);
 		BOOST_TEST(!policy.allows(folder + "/a.cpp"));
 		BOOST_TEST(!policy.allows(folder + "/deep/er/a.h"));
@@ -188,20 +188,38 @@ BOOST_AUTO_TEST_CASE(Verify_RefusesACodeFolderInsideAContentRoot)
 	}
 }
 
+BOOST_AUTO_TEST_CASE(Verify_RefusesALinkToAFolderInsideTheProjectToo)
+{
+	test_util::temp_dir dir("prj_code_verify_inner_link");
+	const auto project = open_game(dir);
+	fs::create_directories(project.root / "inner");
+
+	std::error_code ec;
+	fs::create_directory_symlink(project.root / "inner", project.code_dir(), ec);
+	if (ec) {
+		BOOST_TEST_MESSAGE("symlinks unavailable: " << ec.message());
+		return;
+	}
+	const auto problem = prj::verify_project_mounts(project);
+	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("is a link") != std::string::npos);
+}
+
 #ifdef _WIN32
 BOOST_AUTO_TEST_CASE(Verify_RefusesAJunctionAsTheCodeFolder)
 {
 	test_util::temp_dir dir("prj_code_verify_junction");
 	const auto project = open_game(dir);
-	fs::create_directories(dir.path() / "elsewhere");
+	fs::create_directories(project.root / "inner");
 
-	const std::string command = "mklink /J \"" + project.code_dir().string() + "\" \"" + (dir.path() / "elsewhere").string() + "\" >nul";
+	const std::string command = "mklink /J \"" + project.code_dir().string() + "\" \"" + (project.root / "inner").string() + "\" >nul";
 	if (std::system(("cmd /c " + command).c_str()) != 0 || !fs::exists(project.code_dir())) {
 		BOOST_TEST_MESSAGE("junctions unavailable");
 		return;
 	}
 	const auto problem = prj::verify_project_mounts(project);
 	BOOST_REQUIRE(problem.has_value());
+	BOOST_TEST(problem->find("is a link") != std::string::npos);
 }
 #endif
 

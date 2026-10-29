@@ -37,6 +37,13 @@ namespace core::res
 		}
 
 
+		// store_sync() that never replaces a file: refused when one is there, also when it appears meanwhile.
+		virtual ::res::file_operation create_sync(const ::res::tag& tag, const std::vector<std::byte>& data) {
+			(void)tag;
+			(void)data;
+			return ::res::file_operation::failure("this protocol cannot create files");
+		}
+
 		// Removes the data stored under the tag; false when this resolver cannot (the default) or the tag is not its own.
 		virtual bool erase(const ::res::tag& tag) {
 			(void)tag;
