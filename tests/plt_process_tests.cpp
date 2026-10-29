@@ -422,6 +422,22 @@ BOOST_AUTO_TEST_CASE(TakeLines_SplitsOnLfAndCrLfAcrossChunks)
 	BOOST_TEST(pending.empty());
 }
 
+BOOST_AUTO_TEST_CASE(TakeOutput_Raw_PassesTheChunksUnsplit)
+{
+	std::string received;
+	int chunks = 0;
+	const auto collect = [&](std::string_view chunk) { received.append(chunk); ++chunks; };
+	std::string pending;
+	const std::string utf16{ "a\0\n\0\r", 5 };
+
+	platform::detail::take_output(true, pending, utf16, false, collect);
+	platform::detail::take_output(true, pending, std::string_view{ "\0", 1 }, false, collect);
+	platform::detail::take_output(true, pending, {}, true, collect);
+	BOOST_TEST(received == utf16 + std::string(1, '\0'));
+	BOOST_TEST(chunks == 2);
+	BOOST_TEST(pending.empty());
+}
+
 // Progress output rewrites its line with a lone '\r'; a "\r\n" split across two reads is still one break.
 BOOST_AUTO_TEST_CASE(TakeLines_EndsALineAtALoneCarriageReturn)
 {

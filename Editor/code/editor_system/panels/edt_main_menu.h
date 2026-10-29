@@ -5,7 +5,7 @@
 
 namespace edt
 {
-	// Declares the menus in the order the editor shows them (File, View, Help) and the placeholder "About" item.
+	// Declares the menus in the order the editor shows them (File, View, Build, Help) and the placeholder "About" item.
 	// Keep the returned registrations as long as the menus should exist.
 	std::vector<registration> register_builtin_menus(action_registry& actions);
 

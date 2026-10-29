@@ -32,6 +32,7 @@ namespace inp  { class input_router; }
 namespace edt {
 	class agent_server;
 	class file_menu;
+	class game_builder;
 	class editor_context;
 	class editor_layer;
 	class model_importer;
@@ -158,6 +159,8 @@ namespace edt {
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
 		std::unique_ptr<edt::file_menu> m_file_menu;
+		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
+		std::unique_ptr<edt::game_builder> m_game_builder;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
