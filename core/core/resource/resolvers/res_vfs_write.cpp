@@ -1,5 +1,6 @@
 #include "res_vfs_write.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/common/fs_paths.h>
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -24,6 +25,12 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
+#if defined(__APPLE__)
+#include <stdio.h>
+#endif
 #endif
 
 namespace fs = std::filesystem;
@@ -64,7 +71,7 @@ namespace {
 
 	std::string errno_text(std::string_view what, const fs::path& path)
 	{
-		return std::format("{} '{}': {}", what, path.string(), std::generic_category().message(errno));
+		return std::format("{} '{}': {}", what, fs_paths::utf8_of(path), std::generic_category().message(errno));
 	}
 
 	class fd_holder
@@ -163,6 +170,37 @@ namespace {
 		return current;
 	}
 
+	// Moves the entry without replacing one at the target. Linux has it atomically (renameat2, RENAME_NOREPLACE = 1);
+	// elsewhere, or on a file system without the flag, the target is looked up first inside the opened folder.
+	int rename_no_replace(int from_folder, const char* from, int to_folder, const char* to)
+	{
+#if defined(__linux__) && defined(SYS_renameat2)
+		if (::syscall(SYS_renameat2, from_folder, from, to_folder, to, 1u) == 0) {
+			return 0;
+		}
+		if (errno != ENOSYS && errno != EINVAL) {
+			return -1;
+		}
+#endif
+#if defined(__APPLE__) && defined(RENAME_EXCL)
+		if (::renameatx_np(from_folder, from, to_folder, to, RENAME_EXCL) == 0) {
+			return 0;
+		}
+		if (errno != ENOTSUP && errno != EINVAL) {
+			return -1;
+		}
+#endif
+		struct stat existing;
+		if (::fstatat(to_folder, to, &existing, AT_SYMLINK_NOFOLLOW) == 0) {
+			errno = EEXIST;
+			return -1;
+		}
+		if (errno != ENOENT) {
+			return -1;
+		}
+		return ::renameat(from_folder, from, to_folder, to);
+	}
+
 	bool write_all(int fd, std::span<const std::byte> data)
 	{
 		std::size_t done = 0;
@@ -252,8 +290,11 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 		(*request.hook)(write_stage::before_rename, request.tmp_path);
 	}
 	// Inside the folder that was opened: a link at the target's name is replaced itself, never followed.
-	if (::renameat(folder.get(), request.tmp_leaf.c_str(), folder.get(), request.leaf.c_str()) != 0) {
-		return errno_text("cannot replace", reached / request.leaf);
+	const int moved = request.replace
+		? ::renameat(folder.get(), request.tmp_leaf.c_str(), folder.get(), request.leaf.c_str())
+		: rename_no_replace(folder.get(), request.tmp_leaf.c_str(), folder.get(), request.leaf.c_str());
+	if (moved != 0) {
+		return errno_text(request.replace ? "cannot replace" : "cannot create", reached / request.leaf);
 	}
 	guard.dismiss();
 	// The file is in place: a folder that was not flushed only weakens durability across a crash.
@@ -263,7 +304,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	return {};
 }
 
-std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf)
+std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf, bool files_only)
 {
 	const auto parts = folder_parts(folder);
 	if (!parts || !is_plain_name(leaf)) {
@@ -284,7 +325,7 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 	}
 	// A folder: removed when empty, as std::filesystem::remove did (Linux reports EISDIR, POSIX allows EPERM).
 	int code = errno;
-	if (code == EISDIR || code == EPERM) {
+	if (!files_only && (code == EISDIR || code == EPERM)) {
 		if (::unlinkat(at.get(), leaf.c_str(), AT_REMOVEDIR) == 0) {
 			return {};
 		}
@@ -297,6 +338,46 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 	}
 	errno = code;
 	return errno_text("cannot remove", reached / leaf);
+}
+
+std::string res::detail::rename_beneath(pinned_root& root, const rename_request& request)
+{
+	const auto from_parts = folder_parts(request.from_folder);
+	const auto to_parts = folder_parts(request.to_folder);
+	if (!from_parts || !to_parts || !is_plain_name(request.from_leaf) || !is_plain_name(request.to_leaf)) {
+		return std::string{ k_not_below };
+	}
+	std::string error;
+	const int root_fd = root.descriptor(error);
+	if (root_fd < 0) {
+		return error;
+	}
+	fs::path from_reached = root.path();
+	const fd_holder from_folder = open_below(root_fd, *from_parts, false, from_reached);
+	if (from_folder.get() < 0) {
+		return errno_text("cannot open the folder (a link, or not a folder)", from_reached);
+	}
+
+	// The source first: a rename that cannot happen touches nothing.
+	struct stat source;
+	if (::fstatat(from_folder.get(), request.from_leaf.c_str(), &source, AT_SYMLINK_NOFOLLOW) != 0) {
+		return errno_text("cannot find", from_reached / request.from_leaf);
+	}
+	if (!S_ISREG(source.st_mode)) {
+		return std::format("'{}' is not a regular file", fs_paths::utf8_of(from_reached / request.from_leaf));
+	}
+	fs::path to_reached = root.path();
+	const fd_holder to_folder = open_below(root_fd, *to_parts, false, to_reached);
+	if (to_folder.get() < 0) {
+		return errno_text("cannot open the target folder (missing, a link, or not a folder)", to_reached);
+	}
+	const int moved = request.allow_replace
+		? ::renameat(from_folder.get(), request.from_leaf.c_str(), to_folder.get(), request.to_leaf.c_str())
+		: rename_no_replace(from_folder.get(), request.from_leaf.c_str(), to_folder.get(), request.to_leaf.c_str());
+	if (moved != 0) {
+		return errno_text("cannot move to", to_reached / request.to_leaf);
+	}
+	return {};
 }
 
 #else
@@ -331,7 +412,7 @@ namespace {
 	std::string last_error_text(std::string_view what, const fs::path& path)
 	{
 		const DWORD code = ::GetLastError();
-		return std::format("{} '{}': {}", what, path.string(), std::system_category().message(static_cast<int>(code)));
+		return std::format("{} '{}': {}", what, fs_paths::utf8_of(path), std::system_category().message(static_cast<int>(code)));
 	}
 
 	class handle_holder
@@ -527,7 +608,7 @@ namespace {
 	// Renames the open file to `name` inside the folder `folder` holds, replacing what is there; a link at the target
 	// is replaced itself. Not SetFileInformationByHandle: it turns a relative name into a path below the current
 	// directory, which together with RootDirectory is an invalid parameter.
-	bool rename_to(HANDLE file, HANDLE folder, const fs::path& name)
+	bool rename_to(HANDLE file, HANDLE folder, const fs::path& name, bool replace = true)
 	{
 		const auto set_information = set_information_file();
 		if (!set_information) {
@@ -538,7 +619,7 @@ namespace {
 		// FILE_RENAME_INFORMATION has FILE_RENAME_INFO's layout.
 		std::vector<std::byte> buffer(sizeof(FILE_RENAME_INFO) + text.size() * sizeof(wchar_t));
 		auto* info = reinterpret_cast<FILE_RENAME_INFO*>(buffer.data());
-		info->ReplaceIfExists = TRUE;
+		info->ReplaceIfExists = replace ? TRUE : FALSE;
 		info->RootDirectory = folder;
 		info->FileNameLength = static_cast<DWORD>(text.size() * sizeof(wchar_t));
 		std::memcpy(info->FileName, text.data(), text.size() * sizeof(wchar_t));
@@ -600,7 +681,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	// indexer, antivirus) is open on it, and replacing it is denied for a moment.
 	bool renamed = false;
 	for (int attempt = 0; attempt < 50 && !renamed; ++attempt) {
-		renamed = rename_to(file.get(), chain.back().get(), request.leaf);
+		renamed = rename_to(file.get(), chain.back().get(), request.leaf, request.replace);
 		if (!renamed) {
 			if (::GetLastError() != ERROR_ACCESS_DENIED) {
 				break;
@@ -615,7 +696,7 @@ std::string res::detail::write_beneath(pinned_root& root, const write_request& r
 	return {};
 }
 
-std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf)
+std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folder, const fs::path& leaf, bool files_only)
 {
 	const auto parts = folder_parts(folder);
 	if (!parts || !is_plain_name(leaf)) {
@@ -630,13 +711,55 @@ std::string res::detail::remove_beneath(pinned_root& root, const fs::path& folde
 			: last_error_text("cannot open the folder (a reparse point, or not a folder)", reached);
 	}
 	const fs::path path = reached / leaf;
-	handle_holder file = open_in(chain.back().get(), leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, 0);
+	handle_holder file = open_in(chain.back().get(), leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
+		files_only ? FILE_NON_DIRECTORY_FILE : 0);
 	if (!file.valid()) {
 		const DWORD code = ::GetLastError();
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND ? std::string{} : last_error_text("cannot remove", path);
 	}
 	if (!set_delete_on_close(file.get())) {
 		return last_error_text("cannot remove", path);
+	}
+	return {};
+}
+
+std::string res::detail::rename_beneath(pinned_root& root, const rename_request& request)
+{
+	const auto from_parts = folder_parts(request.from_folder);
+	const auto to_parts = folder_parts(request.to_folder);
+	if (!from_parts || !to_parts || !is_plain_name(request.from_leaf) || !is_plain_name(request.to_leaf)) {
+		return std::string{ k_not_below };
+	}
+	fs::path from_reached;
+	const std::vector<handle_holder> from_chain = hold_chain(root.path(), *from_parts, false, from_reached);
+	if (from_chain.empty()) {
+		return last_error_text("cannot open the folder (a reparse point, or not a folder)", from_reached);
+	}
+	const fs::path source = from_reached / request.from_leaf;
+	handle_holder file = open_in(from_chain.back().get(), request.from_leaf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		FILE_OPEN, FILE_NON_DIRECTORY_FILE);
+	if (!file.valid()) {
+		return last_error_text("cannot find", source);
+	}
+	BY_HANDLE_FILE_INFORMATION information{};
+	if (!::GetFileInformationByHandle(file.get(), &information)) {
+		return last_error_text("cannot inspect", source);
+	}
+	if ((information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0) {
+		::SetLastError(ERROR_CANT_ACCESS_FILE);
+		return last_error_text("not a regular file", source);
+	}
+	if (!lies_at(file.get(), from_chain.front().get(), *from_parts, request.from_leaf)) {
+		::SetLastError(ERROR_CANT_ACCESS_FILE);
+		return last_error_text("the file was not found below the resource root", source);
+	}
+	fs::path to_reached;
+	const std::vector<handle_holder> to_chain = hold_chain(root.path(), *to_parts, false, to_reached);
+	if (to_chain.empty()) {
+		return last_error_text("cannot open the target folder (missing, a reparse point, or not a folder)", to_reached);
+	}
+	if (!rename_to(file.get(), to_chain.back().get(), request.to_leaf, request.allow_replace)) {
+		return last_error_text("cannot move to", to_reached / request.to_leaf);
 	}
 	return {};
 }

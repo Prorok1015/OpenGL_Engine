@@ -86,6 +86,9 @@ namespace res
 		std::filesystem::path get_resources_path() const;
 		// Physical roots behind res://, lowest layer first, top (writable) layer last; the same list the vfs resolver mounts.
 		std::vector<std::filesystem::path> get_resource_layers() const;
+		// The folders a table mount of `protocol` serves, lowest priority first; empty when it is not mounted (code://
+		// is mounted only when the project has a code/ folder).
+		std::vector<std::filesystem::path> mount_roots(std::string_view protocol) const;
 
 		// No project open: res:// over resource/base_path (if set) and resource/path, memory:// next to resource/path,
 		// engine:// on resource/base_path (if set).
@@ -93,10 +96,11 @@ namespace res
 		// A project open: res:// over `engine_base` (empty: none) and `content_roots` (highest priority first, as in the
 		// manifest; the first one receives writes), cache:// in `cache_dir` with memory:// in its "memory" folder,
 		// user:// in `user_dir`, engine:// on `engine_base`. Only builds the table: the caller checks and creates the
-		// directories (core::res::resource_init).
+		// directories (core::res::resource_init). `code_dir` non-empty: code:// over it, writing only the files
+		// prj::code_write_patterns() allow (sources, headers, CMake files; none inside build/, hidden or fetched folders).
 		static mount_table project_mount_table(const std::filesystem::path& engine_base,
 			const std::vector<std::filesystem::path>& content_roots, const std::filesystem::path& cache_dir,
-			const std::filesystem::path& user_dir);
+			const std::filesystem::path& user_dir, const std::filesystem::path& code_dir = {});
 		// resource/base_path as configured, empty when not set; not checked.
 		static std::filesystem::path configured_engine_base();
 
@@ -130,6 +134,18 @@ namespace res
 				return false;
 			}
 			return resolvers.at(tag.protocol())->store_sync(tag, data);
+		}
+
+		// store_sync() for a new file: refused when the tag already has one, also when one appears while the data is
+		// written (the resolver moves the temp file in without replacing). Says why it did not happen.
+		file_operation create_sync(const tag& tag, const std::vector<std::byte>& data) {
+			check_writable(tag);
+			const auto& resolvers = root().m_resolvers;
+			if (resolvers.find(tag.protocol()) == resolvers.end()) {
+				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
+				return file_operation::failure("protocol is not supported");
+			}
+			return resolvers.at(tag.protocol())->create_sync(tag, data);
 		}
 
 
@@ -353,6 +369,24 @@ namespace res
 		// entries and those of everything built from it go, watchers are called. An erased original loses its alias
 		// mapping the same way (the alias' resolver data stays).
 		bool erase(const res::tag& tag);
+
+		// Deletes the file of `tag` for real (code://, #450): a regular file, through the resolver's safe write and its
+		// write policy, and returns once it is gone. Then the cache entries of the tag go like after erase().
+		// Throws std::logic_error for a tag outside limit_writes_to.
+		file_operation remove(const res::tag& tag);
+
+		// Moves the file `from` to `to` (one protocol; never over an existing file), by the same rules as remove(); the
+		// cache entries of both tags go.
+		file_operation rename(const res::tag& from, const res::tag& to);
+
+		// What happened below a mount that reports changes (code://): files and folders created, modified, deleted or
+		// renamed, found by the watcher (about 0.5 s after they happened) or done through this resource_system (self).
+		// A batch per poll or per operation, in the order found, called on the main thread, never twice for one change.
+		// Coalescing and debouncing are the subscriber's. Subscribe and unsubscribe on the main thread; a listener may
+		// unsubscribe (itself or another). A layer subscribes on its root.
+		using changes_listener = std::function<void(std::span<const file_change>)>;
+		void subscribe_changes(std::string_view protocol, void* owner, changes_listener listener);
+		void unsubscribe_changes(void* owner);
 
 		void unpin_resource(const res::tag& tag) {
 			std::unique_lock lock(m_pinning_mutex);
@@ -583,6 +617,17 @@ namespace res
 			bool keep_dependencies = false;
 		};
 		std::unordered_map<res::tag, std::unordered_map<void*, watcher>> m_watchers;
+
+		struct change_subscription {
+			std::uint64_t id = 0;
+			std::string protocol;
+			void* owner = nullptr;
+			changes_listener listener;
+		};
+		void deliver_changes(const std::string& protocol, const std::vector<file_change>& batch);
+		std::mutex m_changes_mutex;
+		std::vector<change_subscription> m_change_subscriptions;
+		std::uint64_t m_next_subscription = 0;
 		std::uint64_t m_watch_epoch = 0; // bumped by watch() and signal_changed(), guarded by m_cache_mutex
 
 		// Edges of the dependency graph between tags, guarded by m_cache_mutex: dependency -> tags built from it

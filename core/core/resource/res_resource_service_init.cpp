@@ -34,9 +34,13 @@ void core::res::resource_init(ds::app_data_storage& data)
 		}
 		verify();
 
+		std::filesystem::path code_dir = project.code_dir();
+		if (!std::filesystem::is_directory(code_dir, ec)) {
+			code_dir.clear();
+		}
 		data.construct<::res::resource_system>(std::ref(tasks),
 			::res::resource_system::project_mount_table(engine_base, project.content_roots, project.cache_dir(),
-				project.user_profile_dir()));
+				project.user_profile_dir(), code_dir));
 		return;
 	}
 	data.construct<::res::resource_system>(std::ref(tasks));

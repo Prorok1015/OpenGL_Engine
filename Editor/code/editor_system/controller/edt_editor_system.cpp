@@ -16,6 +16,8 @@
 #include "edt_problems_panel.h"
 #include "edt_blackboard_panel.h"
 #include "edt_asset_browser_panel.h"
+#include "edt_code_section.h"
+#include <snk/platform/plt_shell_open.h>
 #include "edt_prefab_editor_panel.h"
 #include "edt_component_renderers.h"
 #include "edt_builtin_asset_kinds.h"
@@ -483,6 +485,11 @@ void edt::editor_system::create_panels(bool capture_log)
 	m_console_panel = std::make_shared<console_panel>();
 	m_asset_browser_panel = std::make_shared<asset_browser_panel>();
 	m_asset_browser_panel->set_layers(m_res.get_resource_layers());
+	if (const auto code_roots = m_res.mount_roots(prj::k_code_protocol); !code_roots.empty()) {
+		code_actions actions{ m_res, code_tree_model{ code_roots.back() },
+			[](const std::filesystem::path& file) { return platform::open_in_shell(file); } };
+		m_asset_browser_panel->set_code_section(std::make_shared<code_section>(m_res, std::move(actions)));
+	}
 
 	if (!capture_log) return;
 

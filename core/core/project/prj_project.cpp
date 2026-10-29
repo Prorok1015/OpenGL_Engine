@@ -62,6 +62,59 @@ bool prj::refuse_without_asking(version_action action, bool non_interactive)
 	return held && non_interactive;
 }
 
+namespace {
+
+	// MSVC's std::filesystem has a file type of its own for a junction.
+	bool is_junction(const fs::file_status& status)
+	{
+#ifdef _MSC_VER
+		return status.type() == fs::file_type::junction;
+#else
+		(void)status;
+		return false;
+#endif
+	}
+
+	// A link at code/ (a symlink or a junction) would send every code:// write wherever it leads.
+	std::optional<std::string> verify_code_dir(const prj::project_context& project, const fs::path& root,
+		const std::vector<fs::path>& content_roots)
+	{
+		std::error_code ec;
+		const fs::path dir = project.code_dir();
+		const auto status = fs::symlink_status(dir, ec);
+		if (status.type() == fs::file_type::not_found) {
+			return std::nullopt;
+		}
+		if (ec) {
+			return std::format("'{}' cannot be checked: {}", dir.generic_string(), ec.message());
+		}
+		if (fs::is_symlink(status) || is_junction(status)) {
+			return std::format("'{}' is a link; the project's code folder must be a real folder", dir.generic_string());
+		}
+		if (!fs::is_directory(status)) {
+			return std::format("'{}' is not a directory", dir.generic_string());
+		}
+		const fs::path real = fs::canonical(dir, ec);
+		if (ec || !is_inside(root, real)) {
+			return std::format("'{}' leads outside the project", dir.generic_string());
+		}
+		for (const auto& content_root : content_roots) {
+			if (is_inside(content_root, real) || is_inside(real, content_root)) {
+				return std::format("the code folder '{}' overlaps the content root '{}': res:// would serve code or code:// assets",
+					dir.generic_string(), content_root.generic_string());
+			}
+		}
+		for (const auto& private_dir : project.private_dirs()) {
+			if (is_inside(private_dir, real) || is_inside(real, private_dir)) {
+				return std::format("the code folder '{}' overlaps the project's private folder '{}'", dir.generic_string(),
+					private_dir.generic_string());
+			}
+		}
+		return std::nullopt;
+	}
+
+}
+
 std::optional<std::string> prj::verify_project_mounts(const project_context& project, const fs::path& engine_base)
 {
 	std::error_code ec;
@@ -135,6 +188,10 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 		if (ec || !is_inside(root, real)) {
 			return std::format("'{}' leads outside the project", dir.generic_string());
 		}
+	}
+
+	if (const auto problem = verify_code_dir(project, root, roots)) {
+		return problem;
 	}
 	return std::nullopt;
 }

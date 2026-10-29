@@ -1,4 +1,5 @@
 #include "edt_asset_browser_panel.h"
+#include "edt_code_section.h"
 #include <imgui.h>
 #include <algorithm>
 #include <cctype>
@@ -37,6 +38,11 @@ namespace edt
 		m_layers = std::move(layers);
 		m_current_rel.clear();
 		m_needs_refresh = true;
+	}
+
+	void asset_browser_panel::set_code_section(std::shared_ptr<code_section> section)
+	{
+		m_code_section = std::move(section);
 	}
 
 	void asset_browser_panel::navigate_to(const std::filesystem::path& rel_dir)
@@ -153,6 +159,9 @@ namespace edt
 			ImGui::TreePop();
 		}
 		ImGui::PopStyleVar();
+
+		if (m_code_section)
+			m_code_section->render();
 
 		ImGui::NextColumn();
 

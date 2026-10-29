@@ -24,6 +24,9 @@ namespace res
 		// user:// (the editor's test profile) are folders inside it, so cache://memory/... and cache://user_profile/...
 		// alias them: clearing the cache must leave those two folders alone.
 		static constexpr std::string_view cache = "cache";
+		// <project>/code: the game module's sources as text, mounted only when the folder exists (#450). Never an asset
+		// protocol: res:// does not see it and it does not see assets.
+		static constexpr std::string_view code = "code";
 		// The player's data (saves, settings); a test profile while the editor runs.
 		static constexpr std::string_view user = "user";
 		static tag make(const std::string_view path) {

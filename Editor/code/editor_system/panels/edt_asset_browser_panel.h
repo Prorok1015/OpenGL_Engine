@@ -3,11 +3,14 @@
 #include "edt_asset_layers.h"
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace edt
 {
+	class code_section;
+
 	class asset_browser_panel : public panel_base
 	{
 	public:
@@ -15,6 +18,9 @@ namespace edt
 
 		// Physical roots behind res://, lowest layer first, top last (as the resource system mounts them).
 		void set_layers(std::vector<std::filesystem::path> layers);
+
+		// The Code tree under the res:// tree; none when the project has no code/ folder (nothing is drawn then).
+		void set_code_section(std::shared_ptr<code_section> section);
 
 		// Callback fired on double-click on a file entry; the argument is relative to res:// (layer independent).
 		void set_on_file_double_clicked(std::function<void(const std::filesystem::path&)> cb) {
@@ -35,6 +41,7 @@ namespace edt
 		const char* get_file_icon(const std::filesystem::path& path) const;
 
 		std::vector<std::filesystem::path> m_layers;
+		std::shared_ptr<code_section> m_code_section;
 		std::filesystem::path m_current_rel;
 		char m_search[128] = {};
 
