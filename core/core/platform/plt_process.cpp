@@ -1,4 +1,5 @@
 #include <snk/platform/plt_process.h>
+#include <snk/common/logger/engine_log.h>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -23,6 +24,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -389,7 +391,8 @@ platform::process_result platform::run_process(const fs::path& program, const st
 
 	PROCESS_INFORMATION process{};
 	if (!CreateProcessW(resolved.c_str(), command_line.data(), nullptr, nullptr, TRUE,
-			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
+				| static_cast<DWORD>(options.low_priority ? BELOW_NORMAL_PRIORITY_CLASS : 0),
 			options.environment ? environment.data() : nullptr,
 			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process)) {
 		return system_failure("cannot start", program);
@@ -660,6 +663,11 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	write_end.reset();
 	if (spawned != 0) {
 		return failure("cannot start", program, spawned);
+	}
+	// The child leads its own group: what it starts later inherits the value.
+	if (options.low_priority && ::setpriority(PRIO_PGRP, static_cast<id_t>(pid), 10) != 0) {
+		egLOG_DEBUG("platform/process", "cannot lower the priority of '{}': {}", resolved.string(),
+			std::error_code(errno, std::generic_category()).message());
 	}
 
 	bool reaped = false;

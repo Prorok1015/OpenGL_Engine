@@ -47,6 +47,9 @@ namespace platform
 		// `on_line` gets the output bytes in the chunks they were read in, not split into lines: for output that is
 		// not 8-bit text (cmd /u writes UTF-16LE, where a 0x0A byte is not always a line break).
 		bool raw_output = false;
+		// Below normal priority (Windows) / nice 10 for the child's process group (POSIX), so a background build
+		// leaves the machine usable. Failing to lower it is not an error.
+		bool low_priority = false;
 	};
 
 	struct process_result

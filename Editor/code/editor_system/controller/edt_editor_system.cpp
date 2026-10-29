@@ -353,6 +353,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (module.kind == prj::module_kind::runtime) game.modules.push_back(module.name);
 		}
 		build_options.project = [game] { return std::optional<game_project>{ game }; };
+		build_options.settings = [snk_dir = project.snk_dir()] { return load_build_settings(snk_dir); };
 	} else {
 		build_options.project = [] { return std::optional<game_project>{}; };
 	}
