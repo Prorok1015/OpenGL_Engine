@@ -21,20 +21,24 @@ namespace cmd
 		main_thread_queue(const main_thread_queue&) = delete;
 		main_thread_queue& operator=(const main_thread_queue&) = delete;
 
+		// `confirmation` is the ticket of a confirmation_required answer (call::confirmation) once a person approved it;
+		// it is a parameter of its own and never read from the JSON arguments.
 		// Safe from any thread. The future becomes ready after the drain that runs the call; the outcome is
 		// whatever registry.invoke gives, so a command that is gone by then yields not_found. A call that never
 		// runs (the queue is destroyed first, or the task system shuts down) yields "failed", and so does one whose
 		// command throws (the message is the exception text). Do not wait on the future from the main thread
 		// before the drain: nothing would run the call and the wait never ends. Code that can run on either
 		// thread uses call_now_or_post() instead.
-		[[nodiscard]] std::future<result> post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation = 0);
+		[[nodiscard]] std::future<result> post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation = 0,
+			std::string confirmation = {});
 
 		// For a caller that may be on the main thread: there the command runs at once, inside this call, and the
 		// future is already ready, so waiting on it cannot deadlock. This skips the queue, so it runs ahead of
 		// calls that were posted earlier and are still waiting for the drain. On any other thread it is post().
 		// Chosen over a future that asserts when waited on from the main thread: std::future cannot be hooked,
 		// and the inline call keeps the usual "wait for the answer" code correct on both threads.
-		[[nodiscard]] std::future<result> call_now_or_post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation = 0);
+		[[nodiscard]] std::future<result> call_now_or_post(std::string id, boost::json::value args, origin from, std::uint64_t expected_generation = 0,
+			std::string confirmation = {});
 
 	private:
 		struct state;
