@@ -216,6 +216,11 @@ bool edt::agent_may_use(const cmd::command_desc& command)
 	if (!command.expose_as_tool || command.mutates || command.long_running || command.risk != cmd::danger::none) {
 		return false;
 	}
+	// The policy allows `read` by default and denies a command with no category: a tool listed here must not be one
+	// that the gate then refuses.
+	if (command.category != cmd::agent_category::read) {
+		return false;
+	}
 	for (const std::string_view allowed : read_commands) {
 		if (command.id == allowed) {
 			return true;

@@ -1,5 +1,7 @@
 #include "edt_editor_system.h"
 #include "edt_begin_then_poll.h"
+#include <algorithm>
+#include <chrono>
 #include <snk/editor/edt_editor_context.h>
 #include <snk/common/engine_assert.h>
 #include "edt_selection_wiring.h"
@@ -117,6 +119,8 @@ namespace {
 	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
+	// Minutes without a request after which an agent's MCP session is closed (its "allow until the end of the session" with it); 0: never.
+	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
 	// Build > Build Game (#434). Empty paths: found by the editor (see game_build_sdk_dir, edt_toolchain.h).
@@ -473,6 +477,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		agent_server_options options;
 		const int port = cfg_agent_server_port;
 		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
+		const int idle_minutes = cfg_agent_session_idle_minutes;
+		options.session_idle_timeout = std::chrono::minutes{ std::max(idle_minutes, 0) };
 		const std::string project_dir = cfg_project_dir;
 		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
 			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
@@ -481,7 +487,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
-		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access == nullptr || m_agent_access->frame(ImGui::GetFont()); });
+		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
 		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));
 	}
 }

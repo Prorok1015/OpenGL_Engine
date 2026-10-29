@@ -34,6 +34,7 @@ namespace {
 		mcp::server_config config;
 		config.port = options.port;
 		config.token = std::move(token);
+		config.session_idle_timeout = options.session_idle_timeout;
 		config.info.name = "snake-editor";
 		config.info.version = "0";
 		config.info.snk_api = snk_api_version;

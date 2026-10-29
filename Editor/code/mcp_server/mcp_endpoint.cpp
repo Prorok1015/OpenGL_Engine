@@ -368,12 +368,14 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 		error = error_response(400, invalid_request, "the Mcp-Session-Id header is required");
 		return false;
 	}
+	expire_idle_sessions();
 	std::lock_guard lock(m_state->mutex);
 	const auto found = m_state->sessions.find(*header);
 	if (found == m_state->sessions.end()) {
 		error = error_response(404, invalid_request, "unknown session, initialize again");
 		return false;
 	}
+	found->second.last_used = now();
 	session_id = found->first;
 	channel = found->second.channel;
 	return true;
@@ -381,6 +383,7 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 
 std::string mcp::endpoint::create_session()
 {
+	expire_idle_sessions();
 	std::string id = random_hex(16);
 	std::vector<std::string> evicted;
 	{
@@ -401,6 +404,7 @@ std::string mcp::endpoint::create_session()
 		}
 		session created;
 		created.serial = m_state->next_serial++;
+		created.last_used = now();
 		m_state->sessions.emplace(id, std::move(created));
 	}
 	for (std::string& gone : evicted) {
@@ -784,6 +788,41 @@ void mcp::endpoint::notify_resource_updated(const std::string& uri)
 void mcp::endpoint::notify_tools_changed()
 {
 	notify_sessions(nullptr, sse_message(json::serialize(notification("notifications/tools/list_changed", json::value(nullptr)))));
+}
+
+std::chrono::steady_clock::time_point mcp::endpoint::now() const
+{
+	return m_config.clock ? m_config.clock() : std::chrono::steady_clock::now();
+}
+
+void mcp::endpoint::expire_idle_sessions() const
+{
+	if (m_config.session_idle_timeout <= std::chrono::milliseconds::zero()) {
+		return;
+	}
+	std::vector<std::string> expired;
+	std::vector<std::shared_ptr<event_channel>> channels;
+	{
+		std::lock_guard lock(m_state->mutex);
+		const auto current = now();
+		for (auto it = m_state->sessions.begin(); it != m_state->sessions.end();) {
+			if (current - it->second.last_used < m_config.session_idle_timeout) {
+				++it;
+				continue;
+			}
+			expired.push_back(it->first);
+			if (it->second.channel) {
+				channels.push_back(it->second.channel);
+			}
+			it = m_state->sessions.erase(it);
+		}
+	}
+	for (const auto& channel : channels) {
+		channel->close();
+	}
+	for (std::string& id : expired) {
+		m_host.session_closed(std::move(id));
+	}
 }
 
 void mcp::endpoint::close_all()

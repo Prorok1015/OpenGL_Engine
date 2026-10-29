@@ -6,6 +6,7 @@
 #include <boost/json/value.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -39,6 +40,11 @@ namespace mcp
 		// without Origin (not a browser) is fine.
 		std::vector<std::string> allowed_origins;
 		std::size_t max_sessions = 8;
+		// A session with no request for this long is closed (host::session_closed), so what is kept per session, such as
+		// a person's "allow until the session ends", does not outlive a client that went away. 0: never.
+		std::chrono::milliseconds session_idle_timeout{ std::chrono::minutes(30) };
+		// Tests only: the clock of the idle timeout. Empty: std::chrono::steady_clock.
+		std::function<std::chrono::steady_clock::time_point()> clock;
 		std::size_t max_subscriptions_per_session = 64;
 		server_info info;
 	};
@@ -77,6 +83,9 @@ namespace mcp
 		void notify_tools_changed();
 		// Drops the sessions and closes their streams.
 		void close_all();
+		// Closes the sessions that were idle for session_idle_timeout. Done on its own at every session lookup, and by
+		// the server once in a while, for a client that never comes back.
+		void expire_idle_sessions() const;
 
 		std::size_t session_count() const;
 
@@ -84,6 +93,7 @@ namespace mcp
 		struct session
 		{
 			std::uint64_t serial = 0; // creation order, for eviction
+			std::chrono::steady_clock::time_point last_used{};
 			std::set<std::string> subscriptions;
 			std::shared_ptr<event_channel> channel;
 		};
@@ -111,6 +121,7 @@ namespace mcp
 		bool lookup_session(const http_request& request, std::string& session_id, std::shared_ptr<event_channel>& channel,
 			http_response& error) const;
 		std::string create_session();
+		std::chrono::steady_clock::time_point now() const;
 
 		bool host_header_ok(const http_request& request) const;
 		bool origin_ok(const http_request& request) const;

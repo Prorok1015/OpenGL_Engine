@@ -1,4 +1,5 @@
 #pragma once
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -21,6 +22,8 @@ namespace edt
 		std::uint16_t port = 0;
 		// <project_dir>/.snk/mcp.json receives the port and the token for the client.
 		std::filesystem::path project_dir;
+		// An MCP session with no request for this long is closed. 0: never.
+		std::chrono::minutes session_idle_timeout{ 30 };
 	};
 
 	// The MCP server of the editor (module snk_mcp_server) with everything it needs on the editor's side: the

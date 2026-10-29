@@ -4,6 +4,7 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -764,6 +765,70 @@ BOOST_AUTO_TEST_CASE(CloseAll_ClosesTheStreamsAndForgetsTheSessions)
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(McpEndpointLimitTests)
+
+BOOST_AUTO_TEST_CASE(IdleSession_IsClosedThroughTheHostAndOthersStay)
+{
+	fake_host host;
+	mcp::endpoint_config config = make_config();
+	config.session_idle_timeout = std::chrono::minutes(30);
+	std::chrono::steady_clock::time_point current{};
+	config.clock = [&current] { return current; };
+	mcp::endpoint ep(host, config);
+	ep.set_port(test_port);
+
+	auto open = [&]() -> std::string {
+		std::optional<mcp::http_response> response;
+		ep.handle(make_request("POST", rpc("1", "initialize", R"({"protocolVersion":"2025-06-18"})")),
+			[&response](mcp::http_response r) { response = std::move(r); });
+		for (const mcp::http_header& h : response->headers) {
+			if (h.name == "Mcp-Session-Id") {
+				return h.value;
+			}
+		}
+		return {};
+	};
+	auto status_of = [&](const std::string& session) {
+		mcp::http_request request = make_request("POST", rpc("1", "ping"));
+		set_header(request, "mcp-session-id", session);
+		int status = 0;
+		ep.handle(request, [&status](mcp::http_response r) { status = r.status; });
+		return status;
+	};
+
+	const std::string quiet = open();
+	const std::string busy = open();
+	current += std::chrono::minutes(20);
+	BOOST_TEST(status_of(busy) == 200);
+	current += std::chrono::minutes(20);
+
+	BOOST_TEST(status_of(busy) == 200);
+	BOOST_TEST(status_of(quiet) == 404);
+	BOOST_TEST(host.closed_sessions() == std::vector<std::string>{ quiet });
+	BOOST_TEST(ep.session_count() == 1u);
+
+	current += std::chrono::minutes(31);
+	ep.expire_idle_sessions();
+	BOOST_TEST(ep.session_count() == 0u);
+	BOOST_TEST(host.closed_sessions().size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(IdleTimeoutZero_NeverExpires)
+{
+	fake_host host;
+	mcp::endpoint_config config = make_config();
+	config.session_idle_timeout = std::chrono::milliseconds::zero();
+	std::chrono::steady_clock::time_point current{};
+	config.clock = [&current] { return current; };
+	mcp::endpoint ep(host, config);
+	ep.set_port(test_port);
+	ep.handle(make_request("POST", rpc("1", "initialize", R"({"protocolVersion":"2025-06-18"})")), [](mcp::http_response) {});
+
+	current += std::chrono::hours(1000);
+	ep.expire_idle_sessions();
+
+	BOOST_TEST(ep.session_count() == 1u);
+	BOOST_TEST(host.closed_sessions().empty());
+}
 
 BOOST_AUTO_TEST_CASE(TooManySessions_TheOldestMakesRoom)
 {

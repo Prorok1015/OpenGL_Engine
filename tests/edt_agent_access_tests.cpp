@@ -57,6 +57,12 @@ struct access_fixture
 		access.reset();
 	}
 
+	void person_arrives()
+	{
+		access->set_questions_routed(true);
+		access->set_person_present(true);
+	}
+
 	void ask_as(std::string session)
 	{
 		cmd::call request;
@@ -100,9 +106,51 @@ BOOST_AUTO_TEST_CASE(FrameWithoutAFont_KeepsNobodyToAsk)
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
 }
 
-BOOST_AUTO_TEST_CASE(PersonPresent_AnAskWaitsForTheAnswer)
+BOOST_AUTO_TEST_CASE(QuestionsNotRoutedYet_AnAskIsADenyEvenWithAPerson)
 {
 	access->set_person_present(true);
+	ask_as("s1");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(access->confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(TheFontStopsBeingReadable_WaitingRequestsAreDeclinedAndNewOnesDenied)
+{
+	person_arrives();
+	ask_as("s1");
+	BOOST_REQUIRE(access->confirmations().pending().size() == 1u);
+
+	BOOST_TEST(access->frame(nullptr));
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(access->confirmations().pending().empty());
+	ask_as("s1");
+	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST(finished[1].code == cmd::codes::denied);
+}
+
+BOOST_AUTO_TEST_CASE(EveryDefaultReadTool_NeedsNoQuestion)
+{
+	cmd::command_desc desc;
+	desc.id = "log.read";
+	desc.category = agent_category::read;
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.invoke = [](const cmd::call&) { return cmd::result::success(); };
+	registrations.push_back(commands.add(std::move(desc)));
+
+	cmd::call request;
+	request.args = boost::json::object{};
+	request.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("log.read", request).ok);
+}
+
+BOOST_AUTO_TEST_CASE(PersonPresent_AnAskWaitsForTheAnswer)
+{
+	person_arrives();
 	ask_as("s1");
 
 	BOOST_TEST(finished.empty());
@@ -111,7 +159,7 @@ BOOST_AUTO_TEST_CASE(PersonPresent_AnAskWaitsForTheAnswer)
 
 BOOST_AUTO_TEST_CASE(SessionClosed_DeclinesOnlyThatSessionsRequests)
 {
-	access->set_person_present(true);
+	person_arrives();
 	ask_as("s1");
 	ask_as("s2");
 
@@ -128,7 +176,7 @@ BOOST_AUTO_TEST_CASE(SessionClosed_DeclinesOnlyThatSessionsRequests)
 
 BOOST_AUTO_TEST_CASE(SessionClosed_ForgetsTheSessionsGrants)
 {
-	access->set_person_present(true);
+	person_arrives();
 	ask_as("s1");
 	access->confirmations().answer(access->confirmations().pending().front().id, edt::confirmation_answer::allow_session);
 	BOOST_TEST(access->grants().has("s1", agent_category::code_files));
@@ -141,7 +189,7 @@ BOOST_AUTO_TEST_CASE(SessionClosed_ForgetsTheSessionsGrants)
 
 BOOST_AUTO_TEST_CASE(DestroyingTheAccess_AnswersWaitingRequestsAndRemovesTheGate)
 {
-	access->set_person_present(true);
+	person_arrives();
 	ask_as("s1");
 	bridge.reset();
 	access.reset();

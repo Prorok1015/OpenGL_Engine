@@ -23,6 +23,8 @@ namespace mcp
 		std::vector<std::string> allowed_origins;
 		std::size_t max_connections = 16;
 		std::size_t max_sessions = 8;
+		// See endpoint_config::session_idle_timeout.
+		std::chrono::milliseconds session_idle_timeout{ std::chrono::minutes(30) };
 		std::size_t max_header_bytes = 16 * 1024;
 		std::size_t max_message_bytes = 1024 * 1024;
 		// Answers waiting to be written to one client. Past this the server stops reading its next requests until the

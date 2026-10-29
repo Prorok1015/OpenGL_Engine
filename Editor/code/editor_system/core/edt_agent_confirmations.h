@@ -88,6 +88,9 @@ namespace edt
 		// The agent session ended: its waiting requests are declined and its grants forgotten.
 		void drop_session(std::string_view session);
 
+		// Nobody can answer any more (the window cannot be shown): everything waiting is declined with `why`.
+		void decline_all(std::string_view why);
+
 		std::vector<confirmation_request> pending() const;
 
 	private:

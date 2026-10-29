@@ -80,6 +80,7 @@ namespace mcp::detail
 		asio::io_context io{ 1 };
 		tcp::acceptor acceptor{ io };
 		asio::steady_timer retry_timer{ io };
+		asio::steady_timer sweep_timer{ io };
 		asio::executor_work_guard<asio::io_context::executor_type> work{ asio::make_work_guard(io) };
 		std::thread thread;
 		std::atomic<bool> running_flag{ false };
@@ -92,6 +93,7 @@ namespace mcp::detail
 
 	private:
 		void accept_next();
+		void arm_sweep();
 		void run();
 	};
 
@@ -482,6 +484,7 @@ namespace mcp::detail
 			out.token = config.token;
 			out.allowed_origins = config.allowed_origins;
 			out.max_sessions = config.max_sessions;
+			out.session_idle_timeout = config.session_idle_timeout;
 			out.info = config.info;
 			return out;
 		}
@@ -547,6 +550,7 @@ namespace mcp::detail
 		}
 		ep.set_port(bound_port.load());
 		accept_next();
+		arm_sweep();
 		running_flag = true;
 		thread = std::thread([this] { run(); });
 		application.log(log_level::info, "the MCP server listens on http://127.0.0.1:" + std::to_string(bound_port.load()) + "/mcp");
@@ -585,6 +589,7 @@ namespace mcp::detail
 			acceptor.close(ignored);
 			try {
 				retry_timer.cancel();
+				sweep_timer.cancel();
 			} catch (...) {
 			}
 			try {
@@ -605,6 +610,23 @@ namespace mcp::detail
 		if (thread.joinable()) {
 			thread.join();
 		}
+	}
+
+	void server_core::arm_sweep()
+	{
+		sweep_timer.expires_after(std::chrono::seconds(30));
+		sweep_timer.async_wait([this](const boost::system::error_code& ec) {
+			if (ec) {
+				return;
+			}
+			try {
+				ep.expire_idle_sessions();
+			} catch (...) {
+			}
+			if (running_flag.load()) {
+				arm_sweep();
+			}
+		});
 	}
 
 	void server_core::accept_next()

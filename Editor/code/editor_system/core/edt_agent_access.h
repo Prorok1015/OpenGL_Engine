@@ -33,8 +33,13 @@ namespace edt
 		// it, or without Cyrillic in it, an `ask` is a `deny`. Returns true: it fits an implicit-layout registrar.
 		bool frame(const ImFont* font);
 
-		// Whether a person who can read the question is there. Headless it stays false: an `ask` is a `deny`.
+		// Whether a person who can read the question is there. Headless it stays false: an `ask` is a `deny`. Losing the
+		// person declines what waits.
 		void set_person_present(bool present);
+
+		// Whether the MCP bridge sends agent calls through confirmations(). Until it does an `ask` would only issue a
+		// ticket nobody sees, so nobody is asked, whatever frame() finds: an `ask` is a `deny`.
+		void set_questions_routed(bool routed) { m_routed = routed; }
 
 	private:
 		cmd::command_registry& m_commands;
@@ -43,5 +48,7 @@ namespace edt
 		std::shared_ptr<agent_policy_gate> m_gate;
 		std::unique_ptr<agent_confirmations> m_confirmations;
 		bool m_warned_about_font = false;
+		bool m_routed = false;
+		bool m_person_present = false;
 	};
 }

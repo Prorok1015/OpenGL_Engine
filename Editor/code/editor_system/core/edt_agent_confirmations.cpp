@@ -183,6 +183,13 @@ namespace edt
 		m_grants.drop_session(session);
 	}
 
+	void agent_confirmations::decline_all(std::string_view why)
+	{
+		while (!m_waiting.empty()) {
+			finish_waiting(m_waiting.front().request.id, std::nullopt, why);
+		}
+	}
+
 	std::vector<confirmation_request> agent_confirmations::pending() const
 	{
 		std::vector<confirmation_request> out;

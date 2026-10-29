@@ -31,6 +31,8 @@ bool edt::agent_access::frame(const ImFont* font)
 	if (!readable && !m_warned_about_font) {
 		egLOG_ERROR("agent", "the UI font has no Cyrillic: nobody can be asked about an agent's request, so every `ask` is a `deny`");
 		m_warned_about_font = true;
+	} else if (readable) {
+		m_warned_about_font = false;
 	}
 	set_person_present(readable);
 
@@ -40,5 +42,9 @@ bool edt::agent_access::frame(const ImFont* font)
 
 void edt::agent_access::set_person_present(bool present)
 {
-	m_gate->set_can_ask(present);
+	m_gate->set_can_ask(present && m_routed);
+	if (!present && m_person_present) {
+		m_confirmations->decline_all("the question cannot be shown");
+	}
+	m_person_present = present;
 }
