@@ -35,6 +35,7 @@ namespace edt {
 	class file_menu;
 	class game_builder;
 	class game_reloader;
+	class vcs_service;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -179,6 +180,8 @@ namespace edt {
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
+		// Version control (#454); its commands are in m_registrations, removed before it.
+		std::unique_ptr<edt::vcs_service> m_vcs;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 
