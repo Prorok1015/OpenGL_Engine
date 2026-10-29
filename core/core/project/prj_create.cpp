@@ -1,7 +1,7 @@
 #include <snk/project/prj_create.h>
+#include <snk/project/prj_json_text.h>
 #include <snk/project/prj_manifest.h>
 #include <snk/project/prj_version.h>
-#include <cstddef>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -10,7 +10,6 @@
 #include <system_error>
 #include <utility>
 #include <boost/json/parse.hpp>
-#include <boost/json/serialize.hpp>
 #include <boost/json/value.hpp>
 
 namespace fs = std::filesystem;
@@ -30,42 +29,6 @@ namespace
 	{
 		const fs::path relative = inner.lexically_relative(outer);
 		return !relative.empty() && *relative.begin() != "..";
-	}
-
-	// Boost.JSON writes one line; a manifest is read and edited by people.
-	void write_indented(std::string& out, const json::value& value, int depth)
-	{
-		const auto newline = [&out](int level) {
-			out += '\n';
-			out.append(static_cast<std::size_t>(level) * 4, ' ');
-		};
-		if (value.is_object() && !value.as_object().empty()) {
-			out += '{';
-			bool first = true;
-			for (const auto& [key, item] : value.as_object()) {
-				out += first ? "" : ",";
-				first = false;
-				newline(depth + 1);
-				out += json::serialize(json::value{ key });
-				out += ": ";
-				write_indented(out, item, depth + 1);
-			}
-			newline(depth);
-			out += '}';
-		} else if (value.is_array() && !value.as_array().empty()) {
-			out += '[';
-			bool first = true;
-			for (const auto& item : value.as_array()) {
-				out += first ? "" : ",";
-				first = false;
-				newline(depth + 1);
-				write_indented(out, item, depth + 1);
-			}
-			newline(depth);
-			out += ']';
-		} else {
-			out += json::serialize(value);
-		}
 	}
 
 	bool is_valid_name(std::string_view name)
@@ -100,9 +63,7 @@ namespace
 		root.as_object()["name"] = name;
 		root.as_object()["engine_version"] = prj::to_string(prj::current_engine_version());
 
-		std::string text;
-		write_indented(text, root, 0);
-		text += '\n';
+		const std::string text = prj::to_indented_json(root);
 		std::ofstream out(manifest_file, std::ios::binary | std::ios::trunc);
 		out << text;
 		out.close();

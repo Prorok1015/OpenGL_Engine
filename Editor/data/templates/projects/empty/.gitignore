@@ -1,0 +1,4 @@
+build/
+.cache/
+.snk/
+code/CMakeUserPresets.json

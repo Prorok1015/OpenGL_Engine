@@ -67,6 +67,12 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 		BOOST_TEST(fs::is_regular_file(dir.path() / "game" / file));
 	}
 	BOOST_TEST(!fs::exists(dir.path() / "game" / "build"));
+	// Dotfiles come along too: the build trees and the per-user presets stay out of the game's repository.
+	const std::string ignore = read_text(dir.path() / "game" / ".gitignore");
+	for (const char* line : { "build/\n", ".cache/\n", ".snk/\n", "code/CMakeUserPresets.json\n" }) {
+		BOOST_TEST_INFO("line: " << line);
+		BOOST_TEST(ignore.find(line) != std::string::npos);
+	}
 
 	const auto opened = prj::open_project(created.manifest_file);
 	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
