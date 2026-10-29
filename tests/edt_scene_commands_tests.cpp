@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
 #include "edt_mcp_bridge_host.h"
+#include "edt_override_edit.h"
 #include "edt_scene_commands.h"
 #include "edt_scene_document.h"
 #include <snk/command/cmd_registry.h>
@@ -11,6 +12,8 @@
 #include <snk/editor/edt_selection_service.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
+#include <glm/vec3.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -48,15 +51,19 @@ constexpr const char* WORLD_1 = R"({
 	"children": [
 		{ "__id": "00000000000000e1", "name": "Inst",
 		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/rig.prefab.desc" } } },
-		{ "__id": "00000000000000e2", "name": "Other" }
+		{ "__id": "00000000000000e2", "name": "Other" },
+		{ "__id": "00000000000000e3", "name": "Lens", "components": { "lens": { "__parent": "memory://t/lens.desc" } } }
 	]
 })";
+
+constexpr const char* LENS = R"({ "__type": "camera_desc", "fov": 30.0 })";
 
 struct commands_fixture : test_util::scene_env
 {
 	commands_fixture()
 	{
-		put("rig.prefab.desc", PREFAB);
+		rig = put("rig.prefab.desc", PREFAB);
+		put("lens.desc", LENS);
 		for (const auto& [name, text] : { std::pair{ "w0", WORLD }, std::pair{ "w1", WORLD_1 } }) {
 			auto world = load<scn::world_desc>(put(std::string(name) + ".desc", text));
 			BOOST_REQUIRE(world);
@@ -103,6 +110,7 @@ struct commands_fixture : test_util::scene_env
 		return *scene.history().next_undo();
 	}
 
+	res::tag rig;
 	edt::editor_services services;
 	edt::scene_document scene;
 	edt::editor_events events;
@@ -311,7 +319,9 @@ BOOST_AUTO_TEST_CASE(an_edit_of_another_world_reloads_that_world_only)
 BOOST_AUTO_TEST_CASE(an_edit_that_changes_nothing_commits_nothing)
 {
 	const auto before = scene.generation();
-	BOOST_REQUIRE(call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Crate2"})").ok);
+	const auto renamed = call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Crate2"})");
+	BOOST_REQUIRE(renamed.ok);
+	BOOST_TEST(renamed.value.as_object().at("unchanged").as_bool());
 	BOOST_TEST(scene.generation() == before);
 	BOOST_TEST(pushes == 0);
 	BOOST_TEST(!scene.history().can_undo());
@@ -327,6 +337,141 @@ BOOST_AUTO_TEST_CASE(an_edit_clears_the_selection)
 
 	BOOST_REQUIRE(call("scene.node.delete", R"({"ref":)" + ref({ "00000000000000a4" }) + "}").ok);
 	BOOST_TEST(!selection.has_selection());
+}
+
+BOOST_AUTO_TEST_CASE(a_component_that_only_references_a_desc_has_that_desc_type)
+{
+	const std::string lens = ref({ "00000000000000e3" }, "w1");
+	const auto set = call("component.set", R"({"ref":)" + lens + R"(,"key":"lens","patch":{"fov":33.0}})");
+	BOOST_REQUIRE_MESSAGE(set.ok, set.error);
+	BOOST_TEST(child(root(1), 0xe3)->components.at("lens").overrides.at("fov").to_number<double>() == 33.0);
+
+	const auto unknown = call("component.set", R"({"ref":)" + lens + R"(,"key":"lens","patch":{"no_such_field":1}})");
+	BOOST_TEST(unknown.code == cmd::codes::invalid_args);
+	BOOST_TEST(unknown.error.find("camera_desc") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(an_edit_to_how_things_are_says_unchanged_and_keeps_the_generation)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_REQUIRE(call("transform.set", R"({"ref":)" + crate + R"(,"position":[1,2,3]})").ok);
+	const auto generation = scene.generation();
+	const auto records = scene.history().size();
+
+	for (const std::string& args : {
+			R"({"ref":)" + crate + R"(,"position":[1,2,3]})",
+			R"({"ref":)" + crate + R"(,"name":"Crate2"})",
+			R"({"ref":)" + crate + R"(,"parent":)" + ref({}) + R"(,"index":2})",
+			R"({"ref":)" + crate + R"(,"parent":)" + ref({}) + "}",
+			R"({"ref":)" + crate + R"(,"parent":)" + ref({}) + R"(,"index":99})" }) {
+		const std::string id = args.find("position") != std::string::npos ? "transform.set"
+			: args.find("name") != std::string::npos ? "scene.node.rename" : "scene.node.reparent";
+		BOOST_TEST_CONTEXT(id << " " << args) {
+			const auto outcome = call(id, args);
+			BOOST_REQUIRE_MESSAGE(outcome.ok, outcome.error);
+			BOOST_TEST(outcome.value.as_object().at("unchanged").as_bool());
+			BOOST_TEST(scene.generation() == generation);
+		}
+	}
+	BOOST_TEST(scene.history().size() == records);
+}
+
+BOOST_AUTO_TEST_CASE(a_commit_that_changed_no_desc_still_rebuilds_the_active_world)
+{
+	// A gizmo drag that an override rounds back to the base: the desc is as it was, the live entity is not.
+	scene.commit("Move entity");
+	BOOST_TEST(pushes == 1);
+	BOOST_TEST(!scene.history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(arguments_that_do_not_fit_are_refused)
+{
+	const std::string crate = ref({ "00000000000000a4" });
+	BOOST_TEST(call("transform.set", R"({"ref":)" + crate + R"(,"scale":[1,1e39,1]})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.node.rename", R"({"ref":)" + crate + R"(,"name":"a\u0001b"})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.node.rename", R"({"ref":)" + crate + R"(,"name":")" + std::string(257, 'x') + R"("})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.node.rename", R"({"ref":)" + crate + R"(,"name":")" + std::string(256, 'x') + R"("})").ok);
+	BOOST_TEST(call("component.add", R"({"ref":)" + crate + R"(,"key":"__type","type":"camera_desc"})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"components":{"__parent":{"type":"camera_desc"}}})").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"components":{"":{"type":"camera_desc"}}})").code == cmd::codes::invalid_args);
+
+	// 0: not given, so the generation of the call still counts.
+	cmd::call request;
+	request.args = json::parse(R"({"ref":)" + crate + R"(,"name":"Bin","expected_generation":0})");
+	request.from = cmd::origin::agent("s1");
+	request.expected_generation = scene.generation() + 3;
+	BOOST_TEST(commands.invoke("scene.node.rename", request).code == cmd::codes::stale);
+}
+
+BOOST_AUTO_TEST_CASE(a_create_with_one_bad_component_creates_nothing)
+{
+	const auto created = call("scene.node.create", R"({"parent":)" + ref({}) + R"(,"components":{
+		"good":{"type":"camera_desc","fields":{"fov":50.0}},
+		"bad":{"type":"camera_desc","fields":{"no_such_field":1}}}})");
+	BOOST_TEST(created.code == cmd::codes::invalid_args);
+	BOOST_TEST(root().children.size() == 3u);
+	BOOST_TEST(!scene.history().can_undo());
+}
+
+BOOST_AUTO_TEST_CASE(copies_get_free_names_and_moves_stay_in_their_world)
+{
+	const std::string crate = ref({ "00000000000000a3" });
+	BOOST_REQUIRE(call("scene.node.duplicate", R"({"ref":)" + crate + "}").ok);
+	BOOST_REQUIRE(call("scene.node.duplicate", R"({"ref":)" + crate + "}").ok);
+	std::vector<std::string> names;
+	for (const auto& node : root().children) names.push_back(node.name);
+	BOOST_TEST((names == std::vector<std::string>{ "MainCamera", "Crate", "Crate_copy_1", "Crate_copy", "Crate2" }), boost::test_tools::per_element());
+
+	BOOST_TEST(call("scene.node.reparent", R"({"ref":)" + crate + R"(,"parent":)" + ref({}, "w1") + "}").code == cmd::codes::invalid_args);
+	BOOST_TEST(call("scene.node.reparent", R"({"ref":)" + ref({}) + R"(,"parent":)" + crate + "}").code == cmd::codes::invalid_args);
+}
+
+BOOST_AUTO_TEST_CASE(a_copy_of_an_instance_keeps_its_overrides_on_the_prefab)
+{
+	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"fov":55.0}})").ok);
+
+	const auto copy = call("scene.node.duplicate", R"({"ref":)" + ref({ "00000000000000e1" }, "w1") + "}");
+	BOOST_REQUIRE_MESSAGE(copy.ok, copy.error);
+	const prefab_node& original = *child(root(1), 0xe1);
+	const prefab_node& duplicate = root(1).children[1];
+	BOOST_TEST(duplicate.node_id != original.node_id);
+	BOOST_TEST(duplicate.name == "Inst_copy");
+	// The records address the prefab's content, which keeps its ids.
+	BOOST_REQUIRE(duplicate.overrides.size() == original.overrides.size());
+	BOOST_TEST((duplicate.overrides[0].target == std::vector<std::uint64_t>{ 0xc1 }));
+}
+
+BOOST_AUTO_TEST_CASE(values_written_inside_an_instance_and_back)
+{
+	const std::string eye = ref({ "00000000000000e1", "00000000000000c1" }, "w1");
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"fov":55.0}})").ok);
+	BOOST_REQUIRE(call("transform.set", R"({"ref":)" + eye + R"(,"position":[0,5,0]})").ok);
+
+	const prefab_node& inst = *child(root(1), 0xe1);
+	const auto base = edt::override_edit::find_base_node(*assembler, inst, std::vector<std::uint64_t>{ 0xc1 });
+	BOOST_REQUIRE(base.has_value());
+	const auto effective = edt::override_edit::effective_component(inst, std::vector<std::uint64_t>{ 0xc1 }, "camera_desc",
+		edt::override_edit::component_json(base->components.at("camera_desc")));
+	BOOST_TEST(effective.at("fov").to_number<double>() == 55.0);
+	glm::vec3 position{}, rotation{}, scale{ 1.0f };
+	edt::override_edit::effective_transform(inst, std::vector<std::uint64_t>{ 0xc1 }, *base, position, rotation, scale);
+	BOOST_TEST(position.y == 5.0f);
+	BOOST_TEST(std::ranges::any_of(inst.overrides, [](const scn::override_record& r) { return r.component == scn::transform_pseudo_component; }));
+
+	BOOST_REQUIRE(call("component.set", R"({"ref":)" + eye + R"(,"key":"camera_desc","patch":{"fov":null}})").ok);
+	BOOST_TEST(std::ranges::none_of(inst.overrides, [](const scn::override_record& r) { return r.component == "camera_desc"; }));
+
+	// The prefab itself is not touched.
+	auto prefab = load<scn::prefab_desc>(rig);
+	BOOST_REQUIRE(prefab);
+	BOOST_TEST(prefab->get_root().children[0].components.at("camera_desc").overrides.at("fov").to_number<double>() == 40.0);
+}
+
+BOOST_AUTO_TEST_CASE(a_script_is_not_held_back_by_a_gesture)
+{
+	gesture = true;
+	BOOST_TEST(call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Box"})", cmd::origin::test()).ok);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

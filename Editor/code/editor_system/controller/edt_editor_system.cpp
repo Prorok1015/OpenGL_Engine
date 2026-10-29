@@ -355,8 +355,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
 	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
+	// A text field that only has the keyboard is no gesture; a typed value not yet committed is the inspector's pending commit.
 	const auto gesture_active = [this] {
-		return ImGui::IsAnyItemActive() || (m_inspector_panel && m_inspector_panel->has_pending_commit())
+		return (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput) || (m_inspector_panel && m_inspector_panel->has_pending_commit())
 			|| (m_viewport_panel && m_viewport_panel->is_dragging_gizmo());
 	};
 	for (auto& command : register_scene_commands(m_context->actions().commands(),

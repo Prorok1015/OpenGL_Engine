@@ -19,8 +19,8 @@ void edt::scene_document::commit(std::string_view label, commit_mode mode)
 		reload_touched();
 		break;
 	case scene_history_index::diff_result::unchanged:
-		m_index.take_touched();
-		break;
+		// Nothing to record, but the active world is still rebuilt from its desc: an edit that came back to the desc's
+		// value (a gizmo drag an override rounds back to the base) has to drop what the live entity drifted to.
 	case scene_history_index::diff_result::unavailable:
 		// What changed is not known: the active world, as before the history.
 		m_index.take_touched();

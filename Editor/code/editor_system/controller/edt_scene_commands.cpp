@@ -15,6 +15,8 @@
 #include <boost/json.hpp>
 #include <glm/vec3.hpp>
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -98,18 +100,63 @@ namespace {
 		return std::nullopt;
 	}
 
+	// Three finite numbers a float holds.
 	std::optional<glm::vec3> vec3_of(const json::value* value)
 	{
 		if (!value || !value->is_array() || value->as_array().size() != 3) return std::nullopt;
 		glm::vec3 out{};
 		for (std::size_t i = 0; i < 3; ++i) {
 			const json::value& item = value->as_array()[i];
-			if (item.is_double()) out[static_cast<glm::length_t>(i)] = static_cast<float>(item.as_double());
-			else if (item.is_int64()) out[static_cast<glm::length_t>(i)] = static_cast<float>(item.as_int64());
-			else if (item.is_uint64()) out[static_cast<glm::length_t>(i)] = static_cast<float>(item.as_uint64());
+			double number = 0.0;
+			if (item.is_double()) number = item.as_double();
+			else if (item.is_int64()) number = static_cast<double>(item.as_int64());
+			else if (item.is_uint64()) number = static_cast<double>(item.as_uint64());
 			else return std::nullopt;
+			if (!std::isfinite(number) || std::abs(number) > FLT_MAX) return std::nullopt;
+			out[static_cast<glm::length_t>(i)] = static_cast<float>(number);
 		}
 		return out;
+	}
+
+	// The desc type of a component: its own, else the type of the desc it references (a "__parent" alone).
+	std::string type_of(const scn::prefab_desc::prefab_comp_node& component)
+	{
+		if (!component.type_name.empty()) return component.type_name;
+		if (component.parent_desc.is_valid() && component.parent_desc.is_ready()) return std::string(component.parent_desc->get_type());
+		return {};
+	}
+
+	constexpr std::size_t max_name_bytes = 256;
+
+	std::optional<cmd::result> check_name(std::string_view name)
+	{
+		if (name.empty() || name.size() > max_name_bytes) {
+			return failure(cmd::codes::invalid_args, std::format("a name is 1 to {} bytes", max_name_bytes));
+		}
+		if (std::ranges::any_of(name, [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7f; })) {
+			return failure(cmd::codes::invalid_args, "a name has no control characters");
+		}
+		return std::nullopt;
+	}
+
+	// "__" keys belong to the desc format (__type, __parent).
+	std::optional<cmd::result> check_component_key(std::string_view key)
+	{
+		if (key.empty() || key.starts_with("__")) {
+			return failure(cmd::codes::invalid_args, std::format("'{}' is not a component key: empty or starting with \"__\"", key));
+		}
+		return std::nullopt;
+	}
+
+	// `base`, or base_1, base_2, ... : the first that no sibling has (as scene_editor names a copy).
+	std::string unique_name(const std::vector<prefab_node>& siblings, const std::string& base)
+	{
+		const auto taken = [&](const std::string& name) { return std::ranges::any_of(siblings, [&](const prefab_node& n) { return n.name == name; }); };
+		if (!taken(base)) return base;
+		for (int i = 1;; ++i) {
+			std::string candidate = base + "_" + std::to_string(i);
+			if (!taken(candidate)) return candidate;
+		}
 	}
 
 	json::object ref_json(const std::string& world, std::span<const std::uint64_t> path)
@@ -144,8 +191,10 @@ namespace {
 	{
 		edt::scene_command_sources sources;
 
-		// The edit runs only when the caller may edit now; `apply` validates, calls `changing()` right before it
-		// changes the worlds and fills the result. A commit follows a change.
+		// The edit runs only when the caller may edit now. `apply` checks everything first and calls `changing()` right
+		// before it changes the worlds: nothing undoes what it did when it fails after that, so after changing() it
+		// does not fail. A commit follows a change; an edit that leaves the scene as it is commits nothing and says
+		// `unchanged` (the generation stays).
 		using edit_fn = std::function<cmd::result(edt::scene_document&, const json::object& args, json::object& out,
 			const std::function<void()>& changing)>;
 
@@ -164,7 +213,10 @@ namespace {
 			}
 			std::uint64_t expected = call.expected_generation;
 			if (const json::value* given = args.if_contains("expected_generation")) {
-				expected = static_cast<std::uint64_t>(cmd::json_schema::integer_of(*given).value_or(0));
+				const auto number = cmd::json_schema::integer_of(*given);
+				if (!number || *number < 0) return failure(cmd::codes::invalid_args, "expected_generation is a generation number");
+				// 0: not given.
+				if (*number != 0) expected = static_cast<std::uint64_t>(*number);
 			}
 			if (expected != 0 && expected != scene.generation()) {
 				cmd::result stale = failure(cmd::codes::stale,
@@ -185,6 +237,7 @@ namespace {
 			});
 			if (!outcome.ok) return outcome;
 			if (changed) scene.commit(label);
+			else out["unchanged"] = true;
 			out["generation"] = scene.generation();
 			return cmd::result::success(std::move(out));
 		}
@@ -244,8 +297,10 @@ namespace {
 			node.node_id = desc::new_node_id();
 			const json::value* name = args.if_contains("name");
 			node.name = name ? std::string(name->as_string()) : std::string("Entity");
+			if (auto bad = check_name(node.name)) return *bad;
 			if (const json::value* components = args.if_contains("components")) {
 				for (const auto& [key, spec] : components->as_object()) {
+					if (auto bad = check_component_key(key)) return *bad;
 					const json::object* object = spec.if_object();
 					const json::value* type = object ? object->if_contains("type") : nullptr;
 					const json::value* fields = object ? object->if_contains("fields") : nullptr;
@@ -298,12 +353,12 @@ namespace {
 			if (auto bad = context::own_node(at)) return *bad;
 			if (at.is_root) return failure(cmd::codes::invalid_args, "the root of a world cannot be duplicated");
 
-			prefab_node copy = *at.owner;
-			scn::regenerate_node_ids(copy);
-			copy.name += "_copy";
-			const std::uint64_t id = copy.node_id;
 			prefab_node* parent = node_at(scene.world_descs[at.world].get_root(), std::span(at.path).first(at.path.size() - 1));
 			ASSERT_MSG(parent, "the parent of a located node is gone");
+			prefab_node copy = *at.owner;
+			scn::regenerate_node_ids(copy);
+			copy.name = unique_name(parent->children, copy.name + "_copy");
+			const std::uint64_t id = copy.node_id;
 			changing();
 			auto& children = parent->children;
 			const auto original = std::ranges::find(children, at.path.back(), &prefab_node::node_id);
@@ -331,10 +386,17 @@ namespace {
 			}
 
 			prefab_node& root = scene.world_descs[at.world].get_root();
-			changing();
 			prefab_node* old_parent = node_at(root, std::span(at.path).first(at.path.size() - 1));
 			ASSERT_MSG(old_parent, "the parent of a located node is gone");
+			std::vector<std::uint64_t> path = parent.path;
+			path.push_back(at.path.back());
+			out["ref"] = ref_json(at.world_name, path);
 			const auto it = std::ranges::find(old_parent->children, at.path.back(), &prefab_node::node_id);
+			const auto current = static_cast<std::size_t>(it - old_parent->children.begin());
+			if (old_parent == parent.owner && index_arg(args, old_parent->children.size() - 1) == current) {
+				return cmd::result::success(); // already there
+			}
+			changing();
 			prefab_node moved = std::move(*it);
 			old_parent->children.erase(it);
 			// Found again: taking the node out may have moved the new parent in memory.
@@ -342,9 +404,6 @@ namespace {
 			ASSERT_MSG(new_parent, "the new parent is gone");
 			auto& children = new_parent->children;
 			children.insert(children.begin() + static_cast<std::ptrdiff_t>(index_arg(args, children.size())), std::move(moved));
-			std::vector<std::uint64_t> path = parent.path;
-			path.push_back(at.path.back());
-			out["ref"] = ref_json(at.world_name, path);
 			return cmd::result::success();
 		});
 	}
@@ -359,6 +418,7 @@ namespace {
 			if (at.is_root) return failure(cmd::codes::invalid_args, "the root of a world is named by the level");
 
 			std::string name(args.at("name").as_string());
+			if (auto bad = check_name(name)) return *bad;
 			if (name == at.owner->name) return cmd::result::success();
 			changing();
 			at.owner->name = std::move(name);
@@ -377,6 +437,7 @@ namespace {
 			if (auto bad = context::own_node(at)) return *bad;
 
 			const std::string key(args.at("key").as_string());
+			if (auto bad = check_component_key(key)) return *bad;
 			if (at.owner->components.contains(key)) {
 				return failure(cmd::codes::invalid_args, std::format("the node already has a component '{}'", key));
 			}
@@ -426,7 +487,7 @@ namespace {
 					return failure(cmd::codes::not_found, std::format("the node has no component '{}'", key));
 				}
 				json::object edited = merge_patch(component->second.overrides, patch).as_object();
-				if (auto bad = check_fields(*descs, component->second.type_name, patch, edited)) return *bad;
+				if (auto bad = check_fields(*descs, type_of(component->second), patch, edited)) return *bad;
 				if (edited == component->second.overrides) return cmd::result::success();
 				changing();
 				component->second.overrides = std::move(edited);
@@ -445,7 +506,7 @@ namespace {
 			const json::object base_json = edt::override_edit::component_json(component->second);
 			const json::object effective = edt::override_edit::effective_component(*at.owner, at.target, key, base_json);
 			json::object edited = merge_patch(effective, patch).as_object();
-			if (auto bad = check_fields(*descs, component->second.type_name, patch, edited)) return *bad;
+			if (auto bad = check_fields(*descs, type_of(component->second), patch, edited)) return *bad;
 			if (edited == effective) return cmd::result::success();
 			changing();
 			edt::override_edit::write_component(*at.owner, at.target, key, base_json, edited);
@@ -473,10 +534,16 @@ namespace {
 
 			if (at.target.empty()) {
 				prefab_node& node = *at.owner;
+				const glm::vec3 to_position = position.value_or(node.position);
+				const glm::vec3 to_rotation = rotation.value_or(node.rotation);
+				const glm::vec3 to_scale = scale.value_or(node.scale);
+				if (node.has_transform && to_position == node.position && to_rotation == node.rotation && to_scale == node.scale) {
+					return cmd::result::success();
+				}
 				changing();
-				if (position) node.position = *position;
-				if (rotation) node.rotation = *rotation;
-				if (scale) node.scale = *scale;
+				node.position = to_position;
+				node.rotation = to_rotation;
+				node.scale = to_scale;
 				node.has_transform = true;
 				return cmd::result::success();
 			}
@@ -489,6 +556,9 @@ namespace {
 			glm::vec3 rot{};
 			glm::vec3 scl{ 1.0f };
 			edt::override_edit::effective_transform(*at.owner, at.target, *base, pos, rot, scl);
+			if (position.value_or(pos) == pos && rotation.value_or(rot) == rot && scale.value_or(scl) == scl) {
+				return cmd::result::success();
+			}
 			changing();
 			edt::override_edit::write_transform(*at.owner, at.target, *base,
 				position.value_or(pos), rotation.value_or(rot), scale.value_or(scl));
@@ -507,8 +577,11 @@ namespace {
 			properties, common_args, required);
 	}
 
-	constexpr std::string_view generation_result = R"({"type":"object","properties":{"generation":{"type":"integer"}},"required":["generation"]})";
-	constexpr std::string_view ref_result = R"({"type":"object","properties":{"generation":{"type":"integer"},"ref":@REF@},"required":["generation"]})";
+	constexpr std::string_view generation_result = R"({"type":"object","properties":{"generation":{"type":"integer"},
+		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
+	constexpr std::string_view ref_result = R"({"type":"object","properties":{"generation":{"type":"integer"},"ref":@REF@,
+		"unchanged":{"type":"boolean","description":"the scene already was so: nothing was committed"}},"required":["generation"]})";
+	constexpr std::string_view index_arg_schema = R"("index":{"type":"integer","minimum":0,"description":"place among the children; past the end (or none): last"})";
 }
 
 std::vector<edt::registration> edt::register_scene_commands(cmd::command_registry& commands, scene_command_sources sources)
@@ -529,7 +602,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 	};
 
 	add("scene.node.create", "Create a node under `parent` (a ref; the world root: path []), with components {key: {type, fields?}}",
-		args_with(R"("parent":@REF@,"name":{"type":"string","minLength":1},"index":{"type":"integer","minimum":0},
+		args_with(std::string(R"("parent":@REF@,"name":{"type":"string","minLength":1},)") + std::string(index_arg_schema) + R"(,
 			"components":{"type":"object","description":"{key: {type: desc type, fields?: object}}"})",
 			R"("parent")"),
 		ref_result, &node_create);
@@ -537,7 +610,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 	add("scene.node.duplicate", "Copy a node with everything under it right after it; the copy gets new ids",
 		args_with(R"("ref":@REF@)", R"("ref")"), ref_result, &node_duplicate);
 	add("scene.node.reparent", "Move a node under `parent` (same world) at `index` (default: last)",
-		args_with(R"("ref":@REF@,"parent":@REF@,"index":{"type":"integer","minimum":0})", R"("ref","parent")"), ref_result, &node_reparent);
+		args_with(std::string(R"("ref":@REF@,"parent":@REF@,)") + std::string(index_arg_schema), R"("ref","parent")"), ref_result, &node_reparent);
 	add("scene.node.rename", "Rename a node (names are for display: nodes are addressed by id)",
 		args_with(R"("ref":@REF@,"name":{"type":"string","minLength":1})", R"("ref","name")"), generation_result, &node_rename);
 	add("component.add", "Add a component of desc `type` under `key`, with `fields` checked against the type's schema",
@@ -546,7 +619,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		generation_result, &component_add);
 	add("component.remove", "Remove the component `key` of a node", args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1})", R"("ref","key")"),
 		generation_result, &component_remove);
-	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field); inside a prefab instance the change becomes override records",
+	add("component.set", "Change fields of the component `key` with a JSON Merge Patch (RFC 7386; null clears a field: on a node of the scene the field falls back to the referenced desc's value, inside a prefab instance to the prefab's); inside a prefab instance the change becomes override records",
 		args_with(R"("ref":@REF@,"key":{"type":"string","minLength":1},"patch":{"type":"object"})", R"("ref","key","patch")"),
 		generation_result, &component_set);
 	add("transform.set", "Set position, rotation (Euler degrees) and/or scale of a node; inside a prefab instance as override records",

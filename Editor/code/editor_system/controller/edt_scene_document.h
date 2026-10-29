@@ -62,7 +62,7 @@ namespace edt
 		// Every edit of the level ends here: bumps the generation, records what the edit changed in the history (the
 		// worlds are compared with the last commit by node id, #141), pushes the descs of the worlds it changed to the
 		// level (commit_mode::push: the active one through the pusher, the others through the world reloader; an edit
-		// that changed nothing pushes nothing) and tells document_changed. The generation grows by exactly one per commit (the pusher must not bump it again).
+		// that changed no desc still rebuilds the active world) and tells document_changed. The generation grows by exactly one per commit (the pusher must not bump it again).
 		// `label` names the edit in the log and the Edit menu. A push that finds nothing to push to (no level loaded) does
 		// not announce; commit_mode::state_only never does, and is a boundary of the history (the world list changed).
 		void commit(std::string_view label, commit_mode mode = commit_mode::push);
