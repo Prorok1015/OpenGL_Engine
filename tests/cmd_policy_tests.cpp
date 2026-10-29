@@ -36,6 +36,7 @@ struct policy_fixture
 	std::shared_ptr<fake_gate> gate = std::make_shared<fake_gate>();
 	std::chrono::steady_clock::time_point current{};
 	int runs = 0;
+	bool fail_runs = false;
 	cmd::registration registration;
 
 	policy_fixture()
@@ -47,7 +48,7 @@ struct policy_fixture
 			{ "properties", boost::json::object{ { "n", boost::json::object{ { "type", "integer" } } } } }, { "additionalProperties", false } };
 		desc.invoke = [this](const cmd::call&) {
 			++runs;
-			return cmd::result::success();
+			return fail_runs ? cmd::result::failure("test_failed", "the command failed") : cmd::result::success();
 		};
 		registration = commands.add(std::move(desc));
 		commands.set_policy_gate(gate);
@@ -64,6 +65,7 @@ struct policy_fixture
 
 	std::string ticket_of(const cmd::result& answer) const
 	{
+		BOOST_REQUIRE(answer.value.is_object() && answer.value.as_object().contains("ticket"));
 		return std::string{ answer.value.as_object().at("ticket").as_string().c_str() };
 	}
 };
@@ -349,20 +351,37 @@ BOOST_FIXTURE_TEST_CASE(ATicketSurvivesAnInterveningDeny_WithinItsLifetime, poli
 	BOOST_TEST(runs == 1);
 }
 
-BOOST_FIXTURE_TEST_CASE(ATicketIsConsumed_EvenWhenTheSchemaThenRefusesTheArguments, policy_fixture)
+BOOST_FIXTURE_TEST_CASE(AnAskWithInvalidArguments_IssuesNoTicket, policy_fixture)
 {
 	gate->mode = cmd::policy_mode::ask;
 	cmd::call bad;
 	bad.args = boost::json::object{ { "n", "not an integer" } };
 	bad.from = cmd::origin::agent("s1");
-	const std::string ticket = ticket_of(commands.invoke("test.act", bad));
-	commands.approve(ticket);
 
-	bad.confirmation = ticket;
-	BOOST_TEST(commands.invoke("test.act", bad).code == cmd::codes::invalid_args);
-	BOOST_TEST(commands.invoke("test.act", bad).code == cmd::codes::denied);
-	BOOST_TEST(runs == 0);
+	const cmd::result answer = commands.invoke("test.act", bad);
+
+	BOOST_TEST(answer.code == cmd::codes::invalid_args);
+	BOOST_TEST(!(answer.value.is_object() && answer.value.as_object().contains("ticket")));
 	BOOST_TEST(commands.pending_confirmations() == 0u);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(ATicket_IsConsumed_EvenWhenTheCommandThenFails, policy_fixture)
+{
+	gate->mode = cmd::policy_mode::ask;
+	const std::string ticket = ticket_of(commands.invoke("test.act", from_agent(4)));
+	BOOST_TEST(commands.approve(ticket));
+
+	fail_runs = true;
+	const cmd::result failed = commands.invoke("test.act", from_agent(4, "s1", ticket));
+	BOOST_TEST(!failed.ok);
+	BOOST_TEST(failed.code == "test_failed");
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+
+	fail_runs = false;
+	BOOST_TEST(commands.invoke("test.act", from_agent(4, "s1", ticket)).code == cmd::codes::denied);
+	BOOST_TEST(runs == 1);
 }
 
 BOOST_FIXTURE_TEST_CASE(TheTicketKnowsWhatItWasIssuedFor, policy_fixture)
@@ -399,21 +418,6 @@ BOOST_FIXTURE_TEST_CASE(DisabledCommand_StaysDisabled_NotAskedAbout, policy_fixt
 	request.from = cmd::origin::agent("s1");
 	BOOST_TEST(commands.invoke("test.off", request).code == cmd::codes::disabled);
 	BOOST_TEST(gate->asked == before);
-}
-
-BOOST_AUTO_TEST_CASE(Ask_InvalidArguments_FailWithNoTicketAndNobodyAsked)
-{
-	policy_fixture f;
-	f.gate->mode = cmd::policy_mode::ask;
-	cmd::call request = f.from_agent();
-	request.args = boost::json::object{ { "n", "not a number" } };
-
-	const cmd::result answer = f.commands.invoke("test.act", request);
-
-	BOOST_TEST(!answer.ok);
-	BOOST_TEST(answer.code == cmd::codes::invalid_args);
-	BOOST_TEST(f.commands.pending_confirmations() == 0u);
-	BOOST_TEST(f.runs == 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
