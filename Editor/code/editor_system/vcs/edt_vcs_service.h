@@ -4,6 +4,7 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_registration.h>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -23,6 +24,9 @@ namespace edt
 		process_runner run = platform::run_process;
 		// The environment git runs in, before the vcs variables are added; nullopt: this process's.
 		std::optional<std::vector<std::string>> environment;
+		// The probes (git --version, git rev-parse) run on the main thread: git is stopped after this long and version
+		// control is off ("git did not answer within 5 s").
+		std::chrono::milliseconds probe_timeout{ 5000 };
 	};
 
 	// Git for the editor and its agents (#454). Read-only here: status, diff, log, branches. Every git command runs as
@@ -37,9 +41,11 @@ namespace edt
 		struct state
 		{
 			bool available = false;
-			// Why not: "git not found", "no project", "not a repository", ...
+			// Why not: "git not found", "no project is open", "not a repository", ...
 			std::string reason;
-			// "no_project", "vcs_unavailable" or "not_a_repository" when not available.
+			// When not available: "vcs_unavailable" (no git, git cannot run, a probe timed out), "no_project", or what
+			// git reported for the project root (vcs::classify_error: "not_a_repository", ...). Only the first two make
+			// the commands refuse at once; otherwise their job runs and ends with git's error as its result.
 			std::string code;
 			std::filesystem::path git;
 			std::string git_version;
@@ -81,6 +87,7 @@ namespace edt
 
 	private:
 		void probe_repository(const std::optional<std::filesystem::path>& project);
+		void set_probe_timeout();
 		started unavailable() const;
 		// Defined in the .cpp, its only user.
 		template<class F>
@@ -104,8 +111,9 @@ namespace edt
 	// vcs.log {ref?, path?, limit? (1..200, 50), cursor?} -> {job}; result {commits: [{hash, parents, author, email,
 	//     time, subject}], next_cursor?}
 	// vcs.branches {} -> {job}; result {current?, branches: [{name, full_name, oid, upstream?, head, remote}]}
-	// A git failure ends the job `done` with result {error: {code, message, exit_code}}; code from
-	// vcs::classify_error (auth_required, not_a_repository, ...) or vcs_unavailable when git could not start.
-	// Without git or a repository the commands fail at once with vcs_unavailable / no_project / not_a_repository.
+	// A git failure ends the job `done` with result {error: {code, message, stderr_tail, exit_code}}: code from
+	// vcs::classify_error (auth_required, not_a_repository, ...) or vcs_unavailable when git could not start; message
+	// is git's last fatal:/error: line; stderr_tail its last 20 stderr lines (at most 4 KiB).
+	// Only without git (vcs_unavailable) or a project (no_project) do the commands fail at once.
 	[[nodiscard]] std::vector<registration> register_vcs_commands(cmd::command_registry& commands, vcs_service& service);
 }

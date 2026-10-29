@@ -8,13 +8,18 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
 #include <algorithm>
+#include <atomic>
 #include <charconv>
+#include <chrono>
+#include <condition_variable>
 #include <format>
 #include <limits>
+#include <mutex>
 #include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -35,6 +40,8 @@ namespace json = boost::json;
 namespace {
 	constexpr std::size_t k_stderr_cap = 64 * 1024;
 	constexpr std::size_t k_message_cap = 2000;
+	constexpr std::size_t k_tail_lines = 20;
+	constexpr std::size_t k_tail_bytes = 4 * 1024;
 	constexpr std::size_t k_unlimited = std::numeric_limits<std::size_t>::max();
 
 	// What a job needs to run git: copied into it, so a job never touches the service.
@@ -114,22 +121,92 @@ namespace {
 		return out;
 	}
 
-	json::value error_json(std::string_view code, std::string_view message, int exit_code)
+	std::vector<std::string_view> lines_of(std::string_view text)
+	{
+		std::vector<std::string_view> out;
+		while (!text.empty()) {
+			const std::size_t end = text.find('\n');
+			const std::string_view line = trim(text.substr(0, end));
+			if (!line.empty()) out.push_back(line);
+			if (end == std::string_view::npos) break;
+			text.remove_prefix(end + 1);
+		}
+		return out;
+	}
+
+	// The last k_tail_lines non-empty lines of stderr, at most k_tail_bytes (the end is kept).
+	std::string stderr_tail(std::string_view err)
+	{
+		const auto lines = lines_of(err);
+		std::string tail;
+		for (std::size_t i = lines.size() > k_tail_lines ? lines.size() - k_tail_lines : 0; i < lines.size(); ++i) {
+			if (!tail.empty()) tail.push_back('\n');
+			tail.append(lines[i]);
+		}
+		if (tail.size() > k_tail_bytes) {
+			std::size_t start = tail.size() - k_tail_bytes;
+			while (start < tail.size() && (static_cast<unsigned char>(tail[start]) & 0xC0) == 0x80) ++start;
+			tail.erase(0, start);
+		}
+		return edt::vcs::valid_utf8(tail);
+	}
+
+	// The line that says what went wrong: git's last "fatal:" or "error:" line, else its last line.
+	std::string summary_of(std::string_view err, int exit_code)
+	{
+		const auto lines = lines_of(err);
+		for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+			if (it->starts_with("fatal:") || it->starts_with("error:")) return std::string(*it);
+		}
+		if (!lines.empty()) return std::string(lines.back());
+		return std::format("git exited with code {}", exit_code);
+	}
+
+	json::value error_json(std::string_view code, std::string_view message, std::string_view err, int exit_code)
 	{
 		const std::string text = edt::vcs::valid_utf8(edt::vcs::utf8_prefix(trim(message), k_message_cap));
 		return json::object{ { "error", json::object{
-			{ "code", json::string(code) }, { "message", json::string(text) }, { "exit_code", exit_code } } } };
+			{ "code", json::string(code) },
+			{ "message", json::string(text) },
+			{ "stderr_tail", json::string(stderr_tail(err)) },
+			{ "exit_code", exit_code } } } };
 	}
 
 	// The job's answer when git did not do its job; nullopt when it did. A stop of the job ends it `cancelled`.
 	std::optional<json::value> failure_of(const git_output& out, const ds::task_context& task)
 	{
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
-		if (!out.process.error.empty()) return error_json("vcs_unavailable", out.process.error, -1);
+		if (!out.process.error.empty()) return error_json("vcs_unavailable", out.process.error, out.err, -1);
 		if (out.process.exit_code != 0 && !out.truncated) {
-			return error_json(edt::vcs::classify_error(out.err), out.err, out.process.exit_code);
+			return error_json(edt::vcs::classify_error(out.err), summary_of(out.err, out.process.exit_code), out.err,
+				out.process.exit_code);
 		}
 		return std::nullopt;
+	}
+
+	// A probe on the main thread: git is stopped after `timeout`. `timed_out` tells whether that happened.
+	git_output run_probe(const git_context& git, const std::vector<std::string>& args, std::chrono::milliseconds timeout,
+		bool& timed_out)
+	{
+		std::stop_source stop;
+		std::atomic<bool> fired = false;
+		git_output out;
+		{
+			// Destroyed (stop requested, joined) as soon as git returns: no thread outlives the probe.
+			std::jthread watchdog([&stop, &fired, timeout](std::stop_token own) {
+				std::mutex mutex;
+				std::condition_variable_any wake;
+				std::unique_lock lock(mutex);
+				static_cast<void>(wake.wait_for(lock, own, timeout, [] { return false; }));
+				if (!own.stop_requested()) {
+					fired = true;
+					stop.request_stop();
+				}
+			});
+			out = run_git(git, args, stop.get_token());
+		}
+		timed_out = fired;
+		return out;
 	}
 
 	std::optional<std::int64_t> skip_of(std::string_view cursor)
@@ -145,8 +222,11 @@ namespace {
 template<class F>
 edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work)
 {
-	if (!info().available) return unavailable();
-	git_context context{ m_state.git, m_environment, *m_state.root, m_options.run };
+	// Only "no git" and "no project" refuse at once; whatever git itself reports (not a repository, ...) is the job's
+	// result, so every command answers the same way.
+	const state& now = info();
+	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
+	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run };
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
 			return work(context, task);
@@ -175,7 +255,13 @@ edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 		egLOG_INFO("editor/vcs", "git not found on PATH: version control is off (set vcs/git)");
 		return;
 	}
-	const git_output version = run_git({ git, m_environment, {}, m_options.run }, { "--version" }, {});
+	bool timed_out = false;
+	const git_output version = run_probe({ git, m_environment, {}, m_options.run }, { "--version" }, m_options.probe_timeout,
+		timed_out);
+	if (timed_out) {
+		set_probe_timeout();
+		return;
+	}
 	if (!version.process.error.empty() || version.process.exit_code != 0) {
 		m_state.code = "vcs_unavailable";
 		m_state.reason = std::format("git not found ('{}': {})", utf8_of(git), version.process.error.empty()
@@ -203,7 +289,13 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 		m_state.reason = "no project is open";
 		return;
 	}
-	const git_output top = run_git({ m_state.git, m_environment, *project, m_options.run }, { "rev-parse", "--show-toplevel" }, {});
+	bool timed_out = false;
+	const git_output top = run_probe({ m_state.git, m_environment, *project, m_options.run }, { "rev-parse", "--show-toplevel" },
+		m_options.probe_timeout, timed_out);
+	if (timed_out) {
+		set_probe_timeout();
+		return;
+	}
 	if (!top.process.error.empty()) {
 		m_state.code = "vcs_unavailable";
 		m_state.reason = std::format("git could not run in '{}': {}", utf8_of(*project), top.process.error);
@@ -212,9 +304,9 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 	}
 	if (top.process.exit_code != 0) {
 		const std::string_view kind = vcs::classify_error(top.err);
-		m_state.code = kind == "not_a_repository" ? std::string(kind) : std::string("vcs_unavailable");
+		m_state.code = kind;
 		m_state.reason = kind == "not_a_repository" ? std::string("not a repository")
-			: vcs::valid_utf8(vcs::utf8_prefix(trim(top.err), k_message_cap));
+			: vcs::valid_utf8(vcs::utf8_prefix(summary_of(top.err, top.process.exit_code), k_message_cap));
 		egLOG_INFO("editor/vcs", "'{}': {}", utf8_of(*project), m_state.reason);
 		return;
 	}
@@ -230,6 +322,16 @@ const edt::vcs_service::state& edt::vcs_service::info()
 	auto project = m_options.project_root ? m_options.project_root() : std::nullopt;
 	if (!m_probed || project != m_probed_project) probe_repository(project);
 	return m_state;
+}
+
+void edt::vcs_service::set_probe_timeout()
+{
+	m_state.available = false;
+	m_state.code = "vcs_unavailable";
+	const auto ms = m_options.probe_timeout.count();
+	m_state.reason = ms % 1000 == 0 ? std::format("git did not answer within {} s", ms / 1000)
+		: std::format("git did not answer within {} ms", ms);
+	egLOG_WARN("editor/vcs", "{}: version control is off", m_state.reason);
 }
 
 edt::vcs_service::started edt::vcs_service::unavailable() const

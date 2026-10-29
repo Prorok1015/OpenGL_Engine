@@ -2,6 +2,7 @@
 #include "edt_vcs_service.h"
 #include "edt_path_text.h"
 #include <snk/editor/edt_job_service.h>
+#include <snk/editor/edt_service_commands.h>
 #include <snk/platform/plt_process.h>
 #include <boost/json/array.hpp>
 #include <boost/json/object.hpp>
@@ -18,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -89,7 +91,7 @@ struct vcs_fixture
 		ds::task_system_config config;
 		config.mode = ds::policy::manual;
 		tasks = std::make_unique<ds::task_system>(config);
-		jobs = std::make_unique<edt::job_service>(*tasks);
+		jobs = std::make_unique<edt::job_service>(*tasks, &events);
 		static int counter = 0;
 		base = fs::temp_directory_path() / std::format("snk_edt_vcs_tests_{}_{}",
 			std::chrono::steady_clock::now().time_since_epoch().count(), ++counter);
@@ -195,6 +197,7 @@ struct vcs_fixture
 		return options;
 	}
 
+	edt::editor_events events;
 	std::unique_ptr<ds::task_system> tasks;
 	std::unique_ptr<edt::job_service> jobs;
 	fs::path base;
@@ -375,7 +378,9 @@ BOOST_AUTO_TEST_CASE(RealRepository_CancelledJob_EndsCancelledWithoutAResult)
 	BOOST_TEST(!info->result.has_value());
 }
 
-BOOST_AUTO_TEST_CASE(NotARepository_IsReportedAndTheCommandsRefuse)
+// vcs.info says so at once; the other commands still answer {job}, and git's own error is the job's result, seen
+// through job.get and job_finished.
+BOOST_AUTO_TEST_CASE(NotARepository_IsReportedAndTheJobResultCarriesTheError)
 {
 	const fs::path plain = base / "plain";
 	fs::create_directories(plain);
@@ -387,14 +392,28 @@ BOOST_AUTO_TEST_CASE(NotARepository_IsReportedAndTheCommandsRefuse)
 	BOOST_TEST(state.reason == "not a repository");
 	BOOST_TEST(!state.git_version.empty());
 
-	const auto started = service->start_status();
-	BOOST_TEST(!started);
-	BOOST_TEST(started.code == "not_a_repository");
 	registrations = edt::register_vcs_commands(commands, *service);
-	const cmd::result refused = commands.invoke("vcs.branches", json::object{}, cmd::origin::test());
-	BOOST_TEST(!refused.ok);
-	BOOST_TEST(refused.code == "not_a_repository");
-	BOOST_TEST(jobs->list().empty());
+	for (auto& registration : edt::register_job_commands(commands, *jobs)) registrations.push_back(std::move(registration));
+	auto finished = std::make_shared<std::vector<std::optional<json::value>>>();
+	const auto connection = events.job_finished.subscribe([finished](std::uint64_t, edt::job_status, const std::string&,
+		const std::optional<json::value>& result) { finished->push_back(result); });
+
+	const cmd::result started = commands.invoke("vcs.log", json::object{}, cmd::origin::test());
+	BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+	const std::int64_t job = started.value.as_object().at("job").as_int64();
+	run_to_end();
+
+	const cmd::result got = commands.invoke("job.get", json::object{ { "id", job } }, cmd::origin::test());
+	BOOST_REQUIRE_MESSAGE(got.ok, got.code + ": " + got.error);
+	BOOST_TEST(text(got.value.as_object().at("status")) == "done");
+	const json::object& error = got.value.as_object().at("result").as_object().at("error").as_object();
+	BOOST_TEST(text(error.at("code")) == "not_a_repository");
+	BOOST_TEST(text(error.at("message")).find("not a git repository") != std::string::npos);
+	BOOST_TEST(text(error.at("stderr_tail")).find("not a git repository") != std::string::npos);
+
+	BOOST_REQUIRE_EQUAL(finished->size(), 1u);
+	BOOST_REQUIRE(finished->front().has_value());
+	BOOST_TEST(text(finished->front()->as_object().at("error").as_object().at("code")) == "not_a_repository");
 }
 
 BOOST_AUTO_TEST_CASE(NoProject_IsReported)
@@ -501,7 +520,94 @@ BOOST_AUTO_TEST_CASE(AFailure_IsAResultWithTheClassifiedError)
 	const json::object& error = result.as_object().at("error").as_object();
 	BOOST_TEST(text(error.at("code")) == "auth_required");
 	BOOST_TEST(text(error.at("message")).find("terminal prompts disabled") != std::string::npos);
+	BOOST_TEST(text(error.at("stderr_tail")).find("terminal prompts disabled") != std::string::npos);
 	BOOST_TEST(error.at("exit_code").as_int64() == 128);
+}
+
+BOOST_AUTO_TEST_CASE(AFailure_StderrTailKeepsTheLast20Lines_MessageTheFatalLine)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		for (int i = 0; i < 30; ++i) opts.on_stderr_line(std::format("hint: line {}", i));
+		opts.on_stderr_line("fatal: bad revision 'nope'");
+		opts.on_stderr_line(std::string(5000, 'x'));
+		return exited(128);
+	};
+	make_service(fake_options());
+
+	const json::value result = finish(service->start_log("nope", {}, 10, {}));
+	const json::object& error = result.as_object().at("error").as_object();
+	BOOST_TEST(text(error.at("code")) == "bad_revision");
+	BOOST_TEST(text(error.at("message")) == "fatal: bad revision 'nope'");
+	const std::string tail = text(error.at("stderr_tail"));
+	BOOST_TEST(tail.size() <= 4096u);
+	BOOST_TEST(tail.ends_with("xxx"));
+
+	command = [](const std::vector<std::string>&, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		for (int i = 0; i < 30; ++i) opts.on_stderr_line(std::format("warning: line {}", i));
+		return exited(1);
+	};
+	const json::value short_lines = finish(service->start_status());
+	const std::string short_tail = text(short_lines.as_object().at("error").as_object().at("stderr_tail"));
+	BOOST_TEST(short_tail.starts_with("warning: line 10"));
+	BOOST_TEST(short_tail.ends_with("warning: line 29"));
+	BOOST_TEST(std::count(short_tail.begin(), short_tail.end(), '\n') == 19);
+}
+
+namespace {
+	// A runner call that hangs until it is stopped, as a git waiting on a network drive would.
+	platform::process_result hang_until_stopped(std::stop_token stop)
+	{
+		const auto give_up = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!stop.stop_requested() && std::chrono::steady_clock::now() < give_up) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		platform::process_result result = exited(-1);
+		result.cancelled = stop.stop_requested();
+		return result;
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AVersionProbeThatHangs_TimesOutAndTurnsVersionControlOff)
+{
+	auto options = fake_options();
+	options.probe_timeout = std::chrono::milliseconds(100);
+	options.run = [](const fs::path&, const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token stop) { return hang_until_stopped(stop); };
+
+	const auto before = std::chrono::steady_clock::now();
+	make_service(std::move(options));
+	BOOST_TEST((std::chrono::steady_clock::now() - before < std::chrono::seconds(30)));
+
+	BOOST_TEST(!service->info().available);
+	BOOST_TEST(service->info().code == "vcs_unavailable");
+	BOOST_TEST(service->info().reason == "git did not answer within 100 ms");
+	BOOST_TEST(service->start_status().code == "vcs_unavailable");
+	BOOST_TEST(jobs->list().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ARevParseThatHangs_TimesOutAndTurnsVersionControlOff)
+{
+	auto options = fake_options();
+	options.probe_timeout = std::chrono::milliseconds(100);
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	options.run = [](const fs::path&, const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.45.1\n");
+			return exited(0);
+		}
+		return hang_until_stopped(stop);
+	};
+	make_service(std::move(options));
+
+	BOOST_TEST(!service->info().available);
+	BOOST_TEST(service->info().git_version == "2.45.1");
+	BOOST_TEST(service->info().code == "vcs_unavailable");
+	BOOST_TEST(service->info().reason.starts_with("git did not answer within"));
+	BOOST_TEST(service->start_branches().code == "vcs_unavailable");
 }
 
 BOOST_AUTO_TEST_CASE(AGitThatCannotStart_IsVcsUnavailable)
