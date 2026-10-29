@@ -50,6 +50,10 @@ namespace platform
 		// Below normal priority (Windows) / nice 10 for the child's process group (POSIX), so a background build
 		// leaves the machine usable. Failing to lower it is not an error.
 		bool low_priority = false;
+		// Set: the child's stderr gets a pipe of its own, and its lines (split as stdout's are; raw_output does not
+		// apply) go here while stdout's still go to `on_line`. The two callbacks never run at the same time; on
+		// Windows this one runs on a helper thread. Null: stderr shares stdout's pipe.
+		std::function<void(std::string_view line)> on_stderr_line;
 	};
 
 	struct process_result
@@ -66,8 +70,8 @@ namespace platform
 
 	// Runs `program` with `args` (UTF-8, the program itself not among them) and waits for it. A program without a
 	// directory is looked up only in the PATH of the environment the child gets (on Windows with the PATHEXT
-	// extensions; never in the current directory). stdout and stderr go to one pipe and arrive line by line in
-	// `on_line` (without the line break; "\r\n", "\n" and a lone "\r" end a line; a line is cut at k_max_line_size; a
+	// extensions; never in the current directory). stdout and stderr go to one pipe (unless
+	// process_options::on_stderr_line is set) and arrive line by line in `on_line` (without the line break; "\r\n", "\n" and a lone "\r" end a line; a line is cut at k_max_line_size; a
 	// last line without a break is delivered too), on the calling thread. stdin is empty. A stop request ends the
 	// process and everything it started, then returns with `cancelled`; what it started and left running is ended as
 	// well once it exits. Blocks: call it from a worker thread.

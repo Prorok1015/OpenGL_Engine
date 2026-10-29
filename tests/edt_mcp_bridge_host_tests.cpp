@@ -203,6 +203,24 @@ BOOST_AUTO_TEST_CASE(BuildSettingsGet_IsAllowedByCommandId_NotItsDomain)
 	}
 }
 
+// The git reads are listed by id; vcs.* will also hold the git writes (#455), which stay hidden.
+BOOST_AUTO_TEST_CASE(VcsReads_AreAllowedByCommandId_NotTheirDomain)
+{
+	cmd::command_desc desc;
+	for (const char* id : { "vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches" }) {
+		desc.id = id;
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(edt::agent_may_use(desc));
+		}
+	}
+	for (const char* id : { "vcs.stage", "vcs.commit", "vcs.push", "vcs.checkout" }) {
+		desc.id = id;
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(!edt::agent_may_use(desc));
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(StateQueriesStayClosedWhenTheMetadataSaysMutateOrRisk)
 {
 	cmd::command_desc desc;

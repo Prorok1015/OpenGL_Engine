@@ -6,6 +6,8 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include "edt_editor_layer.h"
 #include <snk/gui/gui_debug_layer.h>
+#include <imgui.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -286,6 +288,48 @@ BOOST_AUTO_TEST_CASE(SetWorldNames_DoesNotCrash)
 {
 	edt::scene_hierarchy_panel panel;
 	BOOST_CHECK_NO_THROW(panel.set_world_names({ "World1", "World2" }, 0));
+}
+
+BOOST_AUTO_TEST_CASE(Rename_FollowsItsNodeAndEndsWhenTheNodeGoes)
+{
+	ImGuiContext* context = ImGui::CreateContext();
+	ImGuiIO& io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	io.DisplaySize = ImVec2(800.f, 600.f);
+	unsigned char* pixels = nullptr;
+	int width = 0, height = 0;
+	io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+	const auto frame = [](edt::scene_hierarchy_panel& panel) {
+		ImGui::NewFrame();
+		panel.render();
+		ImGui::EndFrame();
+	};
+
+	scn::world_desc desc;
+	for (const std::uint64_t id : { 1u, 2u, 3u }) {
+		scn::prefab_desc::prefab_node node;
+		node.node_id = id;
+		node.name = "n" + std::to_string(id);
+		desc.get_root().children.push_back(node);
+	}
+	edt::scene_hierarchy_panel panel;
+	panel.set_world_desc(&desc);
+	panel.begin_rename(desc.get_root().children[1]);
+	frame(panel);
+	BOOST_TEST(panel.renaming() == 2u);
+
+	// A node before it goes (an agent's delete, an undo): the rename stays on node 2, now at index 0.
+	desc.get_root().children.erase(desc.get_root().children.begin());
+	frame(panel);
+	BOOST_TEST(panel.renaming() == 2u);
+
+	// The node itself goes: the rename ends instead of landing on node 3.
+	desc.get_root().children.erase(desc.get_root().children.begin());
+	frame(panel);
+	BOOST_TEST(panel.renaming() == 0u);
+	BOOST_TEST(desc.get_root().children[0].name == "n3");
+
+	ImGui::DestroyContext(context);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

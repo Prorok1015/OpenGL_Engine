@@ -1,11 +1,13 @@
 #pragma once
 #include "edt_document.h"
+#include <boost/json/value.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -156,6 +158,8 @@ namespace edt
 		std::uint64_t job = 0;
 		// Whether the module is reloaded after this build (#444: the build settings decide).
 		bool reload = true;
+		// Built by live mode's background build (build_request::preemptible), not by the person.
+		bool background = false;
 	};
 
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
@@ -177,7 +181,8 @@ namespace edt
 		// with `cancelled` and no progress.
 		signal<std::uint64_t, const std::string&> job_started; // (id, label)
 		signal<std::uint64_t, float, const std::string&> job_progress; // (id, fraction in [0, 1], note)
-		signal<std::uint64_t, job_status, const std::string&> job_finished; // (id, done | failed | cancelled, error text)
+		// (id, done | failed | cancelled, error text, result: set only for a `done` job_service::start_with_result job)
+		signal<std::uint64_t, job_status, const std::string&, const std::optional<boost::json::value>&> job_finished;
 		// After a successful build, on the main thread, once per module file the build produced (game_builder).
 		signal<const game_module_build_result&> game_module_built;
 		// The problems of one source were replaced or cleared (problem_list).

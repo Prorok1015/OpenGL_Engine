@@ -20,7 +20,10 @@ namespace edt
 	//    problems.list, build.settings.get).
 	//    Metadata is only as good as the one who wrote it (a command that forgot `mutates` must not become an agent
 	//    tool), so a new domain or command is opt-in here.
-	// Mutating tools, confirmations and the project policy come with A6b.
+	//  - OR, for a command marked `agent_when_enabled` (cmd_types.h): one of the listed ones (live.status,
+	//    live.rebuild_now, live.reload_now) with `expose_as_tool`, no `risk`, not `long_running`, and only while its
+	//    `enabled` returns true (live mode is on: the person's consent, #445). It may mutate.
+	// Confirmations and the project policy come with A6b/A6c; #449 turns the `agent_when_enabled` commands into policy rows.
 	bool agent_may_use(const cmd::command_desc& command);
 
 	// "viewport.capture" -> "viewport_capture"; "x.y" at version 2 -> "x_y_v2".

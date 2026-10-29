@@ -45,6 +45,8 @@ namespace edt
 		bool running() const;
 		// The bound port; 0 when the server did not start.
 		std::uint16_t port() const;
+		// Tells the connected clients to list the tools again (a command's `enabled` gate changed, e.g. live mode).
+		void notify_tools_changed();
 
 	private:
 		struct impl;

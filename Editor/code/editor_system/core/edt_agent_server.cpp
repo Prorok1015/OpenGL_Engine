@@ -27,7 +27,8 @@ namespace {
 
 	constexpr const char* instructions =
 		"Read-only access to the Snake editor: the engine log, background jobs, open dialogs and screenshots of the "
-		"scene and game views. A tool is a command of the editor; its name is the command id with '.' replaced by '_'.";
+		"scene and game views. While the person has live mode on (Build > Live Mode), live_status, live_rebuild_now and "
+		"live_reload_now are listed too. A tool is a command of the editor; its name is the command id with '.' replaced by '_'.";
 
 	mcp::server_config make_server_config(const edt::agent_server_options& options, std::string token)
 	{
@@ -116,4 +117,11 @@ bool edt::agent_server::running() const
 std::uint16_t edt::agent_server::port() const
 {
 	return m_impl->server.port();
+}
+
+void edt::agent_server::notify_tools_changed()
+{
+	if (m_impl->server.running()) {
+		m_impl->server.notify_tools_changed();
+	}
 }

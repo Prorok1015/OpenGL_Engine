@@ -30,11 +30,14 @@
 #include "edt_input_target.h"
 #include "edt_edit_menu.h"
 #include "edt_file_menu.h"
+#include "edt_scene_commands.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
+#include "edt_vcs_service.h"
+#include "edt_live_mode.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
@@ -130,6 +133,8 @@ namespace {
 	CFG_VAR_DEF_PATH(cfg_build_vs_path, "build/vs_path", "");
 	CFG_VAR_DEF_STRING(cfg_build_vs_min_version, "build/vs_min_version", "17.14");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
+	// The git program of version control (#454); empty: git on PATH.
+	CFG_VAR_DEF_PATH(cfg_vcs_git, "vcs/git", "");
 
 	// The SDK the game module is built against: build/sdk_dir, else the installed editor's, else the engine build
 	// tree's (where this editor was built).
@@ -170,6 +175,8 @@ edt::editor_system::~editor_system()
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
 	m_agent_access.reset();
+	// The layer may outlive this system; its menu bar must not reach live mode any more.
+	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
 	// Gone already (storage torn down without editor_term): its destructor stopped the jobs and let go of the document.
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
@@ -309,7 +316,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
-	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_building(); });
+	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_manual_build_running(); });
+	// A live build is stopped instead: its configure would clear the --fresh mark that a define removal writes.
+	m_build_settings_panel->set_stop_background([this] { stop_live_build(); });
 	add_panel(m_build_settings_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
@@ -363,6 +372,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu->register_actions();
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); })) {
 		m_registrations.push_back(std::move(action));
+	}
+	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
+	for (auto& command : register_scene_commands(m_context->actions().commands(),
+			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
+		m_registrations.push_back(std::move(command));
 	}
 	m_file_menu->attach_window_close(wnd_sys);
 
@@ -418,7 +432,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		return data.require<core::project_module_host>().reload(module, m_swap_gate.hooks());
 	};
-	reload_options.building = [this] { return m_game_builder && m_game_builder->is_building(); };
+	reload_options.building = [this] { return m_game_builder && m_game_builder->is_manual_build_running(); };
+	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
+	reload_options.stop_background = [this] { stop_live_build(); };
 	reload_options.events = &m_context->events();
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
@@ -426,7 +442,13 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			return false;
 		});
 	};
+	// Reload during a live build: waits under edt/reload_game_module/<module>, which also holds live mode's next build.
+	reload_options.each_frame = [this](const std::string& id, std::function<bool()> poll) {
+		editor_layer->register_implicit(id, std::move(poll));
+	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
+
+	create_live_mode(data);
 
 	m_registrations.push_back(m_context->actions().add({ .id = "build.settings.open", .label = "Build Settings...",
 		.menu_path = "Build", .separator_before = true,
@@ -434,7 +456,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_context->panels().set_open(m_build_settings_panel->get_id(), true);
 			m_build_settings_panel->focus();
 		}),
-		.expose_as_tool = false }));
+		.expose_as_tool = false, .category = cmd::agent_category::not_for_agents }));
 	build_settings_command_options settings_command;
 	settings_command.project_root = [&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
@@ -442,6 +464,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
+		m_registrations.push_back(std::move(command));
+	}
+
+	vcs_options vcs;
+	vcs.git = *cfg_vcs_git;
+	vcs.project_root = [&data]() -> std::optional<std::filesystem::path> {
+		if (!data.has_value<prj::project_context>()) return std::nullopt;
+		return data.require<prj::project_context>().root;
+	};
+	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
 
@@ -496,6 +529,90 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
 		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));
 	}
+}
+
+void edt::editor_system::create_live_mode(ds::app_data_storage& data)
+{
+	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
+		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
+	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
+
+	live_mode_options live;
+	live.build.settings = m_game_builder->options().settings;
+	live.build.make_request = [this](const build_settings& settings) {
+		return make_live_build_request(settings, m_game_builder->options());
+	};
+	live.build.start_build = [this](build_request request) { return m_game_builder->start(std::move(request)); };
+	live.build.is_building = [this] { return m_game_builder->is_building(); };
+	live.build.stop_background = [this] { m_game_builder->stop_background(); };
+	// The host appears in the storage after init, like for game_reloader: looked up when used.
+	live.build.is_loaded_current = [&data](const std::string& module) {
+		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
+	};
+	live.build.modules = [&data] {
+		std::vector<std::string> modules;
+		if (data.has_value<prj::project_context>()) {
+			for (const auto& module : data.require<prj::project_context>().data.modules) {
+				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
+			}
+		}
+		return modules;
+	};
+	live.build.reload_pending = [this] {
+		return editor_layer->has_implicit_prefix(game_reloader::k_reload_frame_id) || editor_layer->has_implicit_prefix(live_mode::k_reload_frame_id);
+	};
+	live.events = &m_context->events();
+	live.next_frame = [this](const std::string& id, std::function<void()> fn) {
+		editor_layer->register_implicit(id, [fn = std::move(fn)] {
+			fn();
+			return false;
+		});
+	};
+	live.reload_module = [this](const std::string& module) { return m_game_reloader->reload_quiet(module); };
+	live.unavailable_reason = [this, has_code] {
+		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
+		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
+	};
+	if (snk_dir) {
+		live.store_enabled = [this, dir = *snk_dir](bool enabled) {
+			auto problem = update_build_settings(dir,[enabled](build_settings& settings) { settings.live_enabled = enabled; });
+			m_build_settings_panel->refresh_if_clean();
+			return problem;
+		};
+	}
+	live.on_toggled = [this] {
+		if (m_agent_server) m_agent_server->notify_tools_changed();
+	};
+	live.open_problems = [this] {
+		m_context->panels().set_open(m_problems_panel->get_id(), true);
+		ImGui::SetWindowFocus(m_problems_panel->get_title().c_str());
+	};
+	live.open_settings = [this] {
+		m_context->panels().set_open(m_build_settings_panel->get_id(), true);
+		m_build_settings_panel->focus();
+	};
+	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
+	m_live_mode->watch(m_res);
+	m_build_settings_panel->set_on_settings_applied([this](const build_settings& settings) { m_live_mode->follow_settings(settings); });
+	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
+	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
+
+	if (snk_dir && load_build_settings(*snk_dir).live_enabled) {
+		if (auto refused = m_live_mode->set_enabled(true, false)) {
+			egLOG_WARN("editor/build", "live mode is on in .snk/build.json but stays off: {}", *refused);
+		}
+	}
+}
+
+void edt::editor_system::tick_live_mode()
+{
+	if (m_live_mode) m_live_mode->tick();
+}
+
+void edt::editor_system::stop_live_build()
+{
+	// Not cancel(): that drops the person's request waiting for the live build and gives live mode no outcome.
+	if (m_game_builder) m_game_builder->stop_background();
 }
 
 void edt::editor_system::create_panels(bool capture_log)
@@ -881,6 +998,13 @@ void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
 	}
+}
+
+bool edt::editor_system::person_is_editing() const
+{
+	// A text field that only has the keyboard is no gesture; a typed value not yet committed is the inspector's pending commit.
+	return (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput) || (m_inspector_panel && m_inspector_panel->has_pending_commit())
+		|| (m_viewport_panel && m_viewport_panel->is_dragging_gizmo());
 }
 
 void edt::editor_system::close_prefab_editor()

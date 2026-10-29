@@ -453,6 +453,26 @@ BOOST_AUTO_TEST_CASE(WhileABuildRuns_NoDefineIsRemovedAndNoRemovalApplied)
 	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
 }
 
+// #445: only the person's build blocks a removal; a live build is stopped before the --fresh mark is written.
+BOOST_AUTO_TEST_CASE(DuringALiveBuild_ARemovalAppliesAndStopsItFirst)
+{
+	with_user();
+	model.set_building([] { return false; }); // the person's build only
+	int cancels = 0;
+	model.set_stop_background([&cancels] { ++cancels; });
+	load();
+
+	BOOST_REQUIRE(!model.set_define("debuggame", "NEW", "x").has_value());
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(cancels == 0); // no --fresh mark: nothing a live build could clear
+
+	BOOST_REQUIRE(!model.remove_define("debuggame", "MY_FLAG").has_value());
+	BOOST_TEST(!model.apply_blocked_reason().has_value());
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(cancels == 1);
+	BOOST_TEST((model.settings().fresh_configure == std::vector<std::string>{ "debuggame" }));
+}
+
 BOOST_AUTO_TEST_CASE(WhileABuildRuns_OtherEditsStillApply)
 {
 	with_user();

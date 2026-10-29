@@ -54,6 +54,7 @@ namespace {
 	constexpr std::string_view k_late_marker_flag = "--plt-late-marker";
 	constexpr std::string_view k_tree_flag = "--plt-tree";
 	constexpr std::string_view k_quiet_flag = "--plt-quiet";
+	constexpr std::string_view k_flood_flag = "--plt-flood";
 	constexpr std::string_view k_probe_name = "snk_plt_path_probe";
 	constexpr std::string_view k_test_variable = "SNK_PLT_TEST";
 
@@ -89,7 +90,7 @@ namespace {
 	bool is_child_run()
 	{
 		return !marker_argument().empty() || has_argument(k_talk_flag) || has_argument(k_late_marker_flag)
-			|| has_argument(k_tree_flag) || has_argument(k_quiet_flag);
+			|| has_argument(k_tree_flag) || has_argument(k_quiet_flag) || has_argument(k_flood_flag);
 	}
 
 	fs::path path_of_utf8(const std::string& utf8)
@@ -556,6 +557,107 @@ BOOST_AUTO_TEST_CASE(RunProcess_DeliversTheLinesOfStdoutAndStderrAndTheExitCode)
 	BOOST_TEST(!result);
 	BOOST_TEST(contains_in_order(lines, { "out one", "err one", "out two" }));
 	BOOST_TEST(std::ranges::any_of(lines, [](const std::string& line) { return line.starts_with("err tail"); }));
+}
+
+BOOST_AUTO_TEST_CASE(RunProcess_OnStderrLine_SeparatesTheTwoStreams)
+{
+	if (is_child_run()) {
+		return;
+	}
+	std::vector<std::string> lines;
+	std::vector<std::string> error_lines;
+	platform::process_options options;
+	options.on_stderr_line = [&error_lines](std::string_view line) { error_lines.emplace_back(line); };
+
+	const auto result = run_self({ "--run_test=PltProcessTests/RunHelper_Talks", "--", std::string{ k_talk_flag } },
+		options, lines);
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST_INFO("stdout: " << joined(lines) << " stderr: " << joined(error_lines));
+	BOOST_TEST(result.exit_code == 7);
+	BOOST_TEST(contains_in_order(lines, { "out one", "out two" }));
+	BOOST_TEST(std::ranges::none_of(lines, [](const std::string& line) { return line.starts_with("err "); }));
+	BOOST_TEST(contains_in_order(error_lines, { "err one" }));
+	BOOST_TEST(std::ranges::any_of(error_lines, [](const std::string& line) { return line.starts_with("err tail"); }));
+	BOOST_TEST(std::ranges::none_of(error_lines, [](const std::string& line) { return line.starts_with("out"); }));
+}
+
+constexpr int k_flood_lines = 20000;
+
+// Does nothing in a normal run; with --plt-flood it writes k_flood_lines numbered lines to stdout and to stderr in
+// turn, far more than a pipe holds, so a parent that reads only one of the pipes would block it for good.
+BOOST_AUTO_TEST_CASE(RunHelper_FloodsBothStreams)
+{
+	if (!has_argument(k_flood_flag)) {
+		return;
+	}
+	for (int i = 0; i < k_flood_lines; ++i) {
+		const std::string out = "o" + std::to_string(i) + "\n";
+		const std::string err = "e" + std::to_string(i) + "\n";
+		std::fputs(out.c_str(), stdout);
+		std::fputs(err.c_str(), stderr);
+	}
+	std::fflush(stdout);
+	std::fflush(stderr);
+	std::_Exit(0);
+}
+
+BOOST_AUTO_TEST_CASE(RunProcess_OnStderrLine_BothPipesFullAtOnce_AllBytesArrive)
+{
+	if (is_child_run()) {
+		return;
+	}
+	std::vector<std::string> lines;
+	std::vector<std::string> error_lines;
+	platform::process_options options;
+	options.on_stderr_line = [&error_lines](std::string_view line) { error_lines.emplace_back(line); };
+
+	const auto result = run_self({ "--run_test=PltProcessTests/RunHelper_FloodsBothStreams", "--",
+		std::string{ k_flood_flag } }, options, lines);
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST(result.exit_code == 0);
+	const auto numbered = [](const std::vector<std::string>& got, char prefix) {
+		std::vector<std::string> mine;
+		std::copy_if(got.begin(), got.end(), std::back_inserter(mine),
+			[prefix](const std::string& line) { return !line.empty() && line.front() == prefix; });
+		if (mine.size() != static_cast<std::size_t>(k_flood_lines)) return false;
+		for (int i = 0; i < k_flood_lines; ++i) {
+			if (mine[static_cast<std::size_t>(i)] != prefix + std::to_string(i)) return false;
+		}
+		return true;
+	};
+	BOOST_TEST(numbered(lines, 'o'));
+	BOOST_TEST(numbered(error_lines, 'e'));
+	BOOST_TEST(std::ranges::none_of(lines, [](const std::string& line) { return line.starts_with("e"); }));
+	BOOST_TEST(std::ranges::none_of(error_lines, [](const std::string& line) { return line.starts_with("o"); }));
+}
+
+// raw_output applies to stdout only: stderr still arrives as lines.
+BOOST_AUTO_TEST_CASE(RunProcess_OnStderrLine_WithRawOutput_SplitsOnlyStderr)
+{
+	if (is_child_run()) {
+		return;
+	}
+	std::string output;
+	std::vector<std::string> error_lines;
+	platform::process_options options;
+	options.raw_output = true;
+	options.on_stderr_line = [&error_lines](std::string_view line) { error_lines.emplace_back(line); };
+
+	const auto result = platform::run_process(platform::current_executable(),
+		{ "--run_test=PltProcessTests/RunHelper_Talks", "--", std::string{ k_talk_flag } }, options,
+		[&output](std::string_view chunk) { output.append(chunk); }, {});
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST_INFO("stdout: " << output << " stderr: " << joined(error_lines));
+	BOOST_TEST(result.exit_code == 7);
+	BOOST_TEST(output.find("out one") != std::string::npos);
+	BOOST_TEST(output.find("out two") != std::string::npos);
+	BOOST_TEST(output.find("err one") == std::string::npos);
+	BOOST_TEST(output.find("err tail") == std::string::npos);
+	BOOST_TEST(contains_in_order(error_lines, { "err one" }));
+	BOOST_TEST(std::ranges::any_of(error_lines, [](const std::string& line) { return line.starts_with("err tail"); }));
 }
 
 BOOST_AUTO_TEST_CASE(RunProcess_PassesTheEnvironmentAndTheWorkingDirectory)

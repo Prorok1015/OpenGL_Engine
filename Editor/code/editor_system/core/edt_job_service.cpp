@@ -1,6 +1,7 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/common/logger/engine_log.h>
+#include <boost/json/serialize.hpp>
 #include <algorithm>
 #include <format>
 #include <vector>
@@ -97,7 +98,7 @@ void edt::job_service::pump()
 	}
 }
 
-void edt::job_service::retire(job_id id, job_status status, std::string error)
+void edt::job_service::retire(job_id id, job_status status, std::string error, std::optional<boost::json::value> result)
 {
 	const auto found = m_jobs.find(id);
 	if (found == m_jobs.end()) return;
@@ -113,16 +114,32 @@ void edt::job_service::retire(job_id id, job_status status, std::string error)
 	outcome.note = note;
 	outcome.error = error;
 	outcome.cancel_requested = status == job_status::cancelled;
+	if (status == job_status::done) outcome.result = std::move(result);
 	m_jobs.erase(found);
+	// A copy: a job_finished slot may retire more jobs and push this outcome out of the history.
+	const std::optional<boost::json::value> finished_result = m_events ? outcome.result : std::nullopt;
 
+	const std::size_t result_bytes = outcome.result ? boost::json::serialize(*outcome.result).size() : 0;
 	m_finished.push_back(std::move(outcome));
+	m_result_sizes.push_back(result_bytes);
+	m_result_bytes += result_bytes;
 	while (m_finished.size() > FINISHED_HISTORY) {
+		m_result_bytes -= m_result_sizes.front();
 		m_finished.pop_front();
+		m_result_sizes.pop_front();
+	}
+	// The newest result always stays; older ones go first.
+	for (std::size_t i = 0; m_result_bytes > RESULT_BUDGET && i + 1 < m_finished.size(); ++i) {
+		if (m_result_sizes[i] == 0) continue;
+		m_finished[i].result.reset();
+		m_finished[i].result_dropped = true;
+		m_result_bytes -= m_result_sizes[i];
+		m_result_sizes[i] = 0;
 	}
 
 	if (!m_events) return;
 	if (progress_changed && status != job_status::cancelled) m_events->job_progress.emit(id, fraction, note);
-	m_events->job_finished.emit(id, status, error);
+	m_events->job_finished.emit(id, status, error, finished_result);
 }
 
 void edt::job_service::cancel_all_and_wait()
@@ -153,7 +170,8 @@ void edt::job_service::cancel_all_and_wait()
 
 edt::connection edt::report_failed_jobs(editor_events& events, const job_service& jobs, dialog_service& dialogs)
 {
-	return events.job_finished.subscribe([&jobs, &dialogs](std::uint64_t id, job_status status, const std::string& error) {
+	return events.job_finished.subscribe([&jobs, &dialogs](std::uint64_t id, job_status status, const std::string& error,
+		const std::optional<boost::json::value>&) {
 		if (status != job_status::failed) return;
 		// The outcome is in the history before job_finished is raised.
 		const auto outcome = jobs.info(id);
