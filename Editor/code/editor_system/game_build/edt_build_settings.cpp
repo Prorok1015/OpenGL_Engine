@@ -24,6 +24,7 @@ namespace {
 	constexpr std::string_view k_build_before_play = "build_before_play";
 	constexpr std::string_view k_log_verbosity = "log_verbosity";
 	constexpr std::string_view k_fresh_configure = "fresh_configure";
+	constexpr std::string_view k_fresh_generation = "fresh_generation";
 	constexpr std::string_view k_live_enabled = "live_enabled";
 	constexpr std::string_view k_live_quiet_ms = "live_quiet_ms";
 	constexpr std::string_view k_live_jobs = "live_jobs";
@@ -175,6 +176,15 @@ edt::parsed_build_settings edt::parse_build_settings(std::string_view json_text)
 			}
 		}
 	}
+	if (const json::value* value = object.if_contains(k_fresh_generation); value && !value->is_null()) {
+		if (value->is_uint64()) {
+			settings.fresh_generation = value->get_uint64();
+		} else if (value->is_int64() && value->get_int64() >= 0) {
+			settings.fresh_generation = static_cast<std::uint64_t>(value->get_int64());
+		} else {
+			out.warnings.push_back(bad_value(k_fresh_generation, *value, "a non-negative integer"));
+		}
+	}
 	read_bool(object, k_live_enabled, settings.live_enabled, out.warnings);
 	read_int(object, k_live_quiet_ms, 0, k_max_live_quiet_ms, settings.live_quiet_ms, out.warnings);
 	read_int(object, k_live_jobs, 0, k_max_live_jobs, settings.live_jobs, out.warnings);
@@ -200,6 +210,11 @@ void edt::merge_build_settings(json::value& doc, const build_settings& settings)
 		json::array names;
 		for (const auto& name : settings.fresh_configure) names.emplace_back(json::string(name));
 		object[k_fresh_configure] = std::move(names);
+	}
+	if (settings.fresh_generation == 0) {
+		object.stable_erase(k_fresh_generation);
+	} else {
+		object[k_fresh_generation] = settings.fresh_generation;
 	}
 	object[k_live_enabled] = settings.live_enabled;
 	object[k_live_quiet_ms] = settings.live_quiet_ms;
@@ -254,9 +269,11 @@ std::optional<std::string> edt::update_build_settings(const fs::path& snk_dir, c
 	return std::nullopt;
 }
 
-std::optional<std::string> edt::clear_fresh_configure(const fs::path& snk_dir, std::string_view configuration)
+std::optional<std::string> edt::clear_fresh_configure(const fs::path& snk_dir, std::string_view configuration,
+	std::optional<std::uint64_t> generation)
 {
-	return update_build_settings(snk_dir, [configuration](build_settings& settings) {
+	return update_build_settings(snk_dir, [configuration, generation](build_settings& settings) {
+		if (generation && settings.fresh_generation != *generation) return;
 		std::erase(settings.fresh_configure, configuration);
 	});
 }

@@ -20,6 +20,12 @@ namespace edt
 	inline constexpr int k_max_live_quiet_ms = 600000;
 	inline constexpr int k_max_live_jobs = 1024;
 
+	// The jobs of a live build with live_jobs 0, from the auto estimate: few, since it runs while the person works.
+	constexpr int live_auto_jobs(int estimate)
+	{
+		return estimate < 1 ? 1 : (estimate > 2 ? 2 : estimate);
+	}
+
 	// The person's build settings of one project: <root>/.snk/build.json (per user, never committed). Its keys are the
 	// field names; jobs_mode is "auto" | "manual", log_verbosity "errors" | "normal" | "verbose".
 	struct build_settings
@@ -35,6 +41,10 @@ namespace edt
 		// Configurations whose next configure runs with --fresh: a user define was removed, and CMakeCache.txt of the
 		// shared build tree still holds it. Cleared by the builder after a successful configure.
 		std::vector<std::string> fresh_configure;
+		// Bumped by every mark written (build.json `fresh_generation`, left out while 0; files without it read 0). A
+		// build clears a mark only if the generation it started with is still the file's: a mark set again while its
+		// configure ran must survive it.
+		std::uint64_t fresh_generation = 0;
 		// Live mode (#445): rebuild in the background after the sources stay unchanged for live_quiet_ms.
 		bool live_enabled = false;
 		// [0, k_max_live_quiet_ms].
@@ -72,6 +82,8 @@ namespace edt
 		const std::function<void(build_settings&)>& change, const prj::text_writer& write = {});
 	// Why update_build_settings would refuse <snk_dir>/build.json; nullopt when it is missing or a JSON object.
 	std::optional<std::string> check_build_settings_file(const std::filesystem::path& snk_dir);
-	// Drops `configuration` from fresh_configure of <snk_dir>/build.json (update_build_settings).
-	std::optional<std::string> clear_fresh_configure(const std::filesystem::path& snk_dir, std::string_view configuration);
+	// Drops `configuration` from fresh_configure of <snk_dir>/build.json (update_build_settings); with `generation`, only
+	// while the file's fresh_generation is still that one.
+	std::optional<std::string> clear_fresh_configure(const std::filesystem::path& snk_dir, std::string_view configuration,
+		std::optional<std::uint64_t> generation = std::nullopt);
 }
