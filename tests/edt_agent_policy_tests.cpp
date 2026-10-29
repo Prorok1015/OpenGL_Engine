@@ -151,7 +151,12 @@ BOOST_AUTO_TEST_CASE(AProjectCanLoosenADefault_ForExample_AllowBuilds)
 	const auto build = command_of("build.game_module", agent_category::build, cmd::danger::deny_by_default);
 
 	BOOST_TEST((edt::effective_mode(build, layer_with("build.game_module", policy_mode::allow), {}).mode == policy_mode::allow));
-	BOOST_TEST((edt::effective_mode(build, layer_with(agent_category::build, policy_mode::ask), {}).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(build, layer_with("build.game_module", policy_mode::ask), {}).mode == policy_mode::ask));
+	// An entry for the whole category is held to the command's risk floor (deny_by_default): it cannot loosen it.
+	BOOST_TEST((edt::effective_mode(build, layer_with(agent_category::build, policy_mode::ask), {}).mode == policy_mode::deny));
+	// A category entry still works for a command without a risk of its own.
+	const auto plain_build = command_of("build.plain", agent_category::build);
+	BOOST_TEST((edt::effective_mode(plain_build, layer_with(agent_category::build, policy_mode::ask), {}).mode == policy_mode::ask));
 }
 
 BOOST_AUTO_TEST_CASE(ABrokenLayer_DeniesEverything_ReadsIncluded)
