@@ -546,7 +546,7 @@ BOOST_AUTO_TEST_CASE(when_the_previous_build_fails_too_no_module_runs)
 	const auto report = host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_failing_entry()), hooks);
 
 	BOOST_TEST((report.status == core::reload_status::lost));
-	BOOST_TEST(!loader.state("reload_game").has_value());
+	BOOST_TEST((loader.state("reload_game") == app::modules::module_state::unloaded));
 	BOOST_TEST(contexts().game_layer() != nullptr);
 	BOOST_TEST(!registered("build1_desc"));
 	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:lost" }), boost::test_tools::per_element());
