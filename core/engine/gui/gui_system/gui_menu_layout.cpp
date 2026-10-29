@@ -1,5 +1,6 @@
 #include <snk/gui/gui_menu_layout.h>
 #include <imgui.h>
+#include <algorithm>
 #include <ranges>
 #include <snk/common/engine_assert.h>
 #include <snk/common/logger/engine_log.h>
