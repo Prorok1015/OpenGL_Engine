@@ -61,6 +61,10 @@ namespace edt
 		bool separator_before = false;
 		// Shown as a tooltip on the menu item while the action is disabled (why it is, e.g. a feature not built in).
 		std::string disabled_tooltip;
+		// Read every frame instead of `disabled_tooltip` when set (the reason changes while the editor runs).
+		std::function<std::string()> disabled_reason;
+		// A toggle: the menu item shows a check mark while it returns true. Null: a plain item.
+		std::function<bool()> checked;
 		// The menu text as of now ("Undo Rename node"); null: `label`.
 		std::function<std::string()> dynamic_label;
 		// The shortcut does nothing while a text field has the keyboard: Ctrl+Z there undoes the typing.
@@ -82,6 +86,8 @@ namespace edt
 		std::string shortcut_hint{};
 		bool separator_before = false;
 		std::string disabled_tooltip{};
+		std::function<std::string()> disabled_reason{};
+		std::function<bool()> checked{};
 		std::function<std::string()> dynamic_label{};
 		bool yields_to_text_input = false;
 		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
@@ -97,11 +103,11 @@ namespace edt
 		// action says it only reads: the MCP server offers an agent the commands that do not mutate, so a forgotten
 		// flag must keep an action out of reach, not put it in.
 		bool mutates = true;
-		// What the action is to an agent (cmd::command_desc::category); unset: out of an agent's reach.
-		cmd::agent_category category = cmd::agent_category::unset;
 		std::function<void()> activate{};
 		// Null: always enabled.
 		std::function<bool()> enabled{};
+		// What the command is to an agent (cmd::command_desc::category); unset: closed to agents.
+		cmd::agent_category category = cmd::agent_category::unset;
 	};
 
 	// One menu item as the main menu draws it.
@@ -113,6 +119,7 @@ namespace edt
 		bool separator_before = false;
 		bool enabled = true;
 		std::string disabled_tooltip;
+		bool checked = false;
 	};
 
 	// The editor's view of a cmd::command_registry: the commands themselves (id, schemas, enabled, invoke) live in

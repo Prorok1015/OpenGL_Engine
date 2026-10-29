@@ -94,8 +94,8 @@ std::vector<edt::registration> edt::register_edit_actions(
 			return action_result::success(json::object{ { "accepted", had } });
 		},
 		.result_schema = json::parse(R"({"type":"object","properties":{"accepted":{"type":"boolean"}},"required":["accepted"]})"),
-		.category = cmd::agent_category::not_for_agents,
-		.enabled = [active] { return active() && active()->has_agent_changes(); } }));
+		.enabled = [active] { return active() && active()->has_agent_changes(); },
+		.category = cmd::agent_category::not_for_agents }));
 
 	// The other usual binding of Redo: no menu item of its own.
 	out.push_back(actions.add({ .id = "edit.redo_alt", .label = "Redo", .shortcut = "Ctrl+Shift+Z",
