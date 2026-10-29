@@ -51,6 +51,8 @@ namespace edt
 		log_verbosity verbosity = log_verbosity::normal;
 		// Passed on as game_module_build_result::reload.
 		bool reload_after = true;
+		// Configure with --fresh (CMake 3.24+): the configuration is in build_settings::fresh_configure.
+		bool fresh = false;
 	};
 
 	struct game_builder_options
@@ -83,6 +85,9 @@ namespace edt
 		std::function<int()> auto_jobs;
 		// Gets game_module_built; null: none. Must outlive the builder.
 		editor_events* events = nullptr;
+		// On the main thread, after a `fresh` request's configure step succeeded (also when the build step then fails):
+		// the configuration no longer needs --fresh. Null: nothing is recorded.
+		std::function<void(std::string_view configuration)> on_fresh_configured;
 	};
 
 	// What one build produced; filled on the worker thread.
@@ -109,6 +114,8 @@ namespace edt
 		std::vector<std::string> tail;
 		// Stopped for a cancel_on_restart request: nothing to report.
 		bool restarted = false;
+		// The configure step succeeded.
+		bool configured = false;
 
 		bool ok() const { return setup_error.empty() && failed_step.empty(); }
 	};
@@ -123,7 +130,8 @@ namespace edt
 	std::vector<std::string> module_file_names(std::string_view module);
 
 	// The build of Build > Build Game: `configuration` (empty: settings.configuration, else
-	// options.default_configuration), options.preset_for, the settings' jobs mode and verbosity, normal priority.
+	// options.default_configuration), options.preset_for, the settings' jobs mode and verbosity, normal priority;
+	// fresh when the configuration is in settings.fresh_configure.
 	build_request make_manual_build_request(const build_settings& settings, std::string configuration,
 		const game_builder_options& options);
 

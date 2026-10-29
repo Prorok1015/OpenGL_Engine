@@ -502,6 +502,62 @@ BOOST_AUTO_TEST_CASE(PresetFor_NamesThePresetOfBothCommands)
 	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "user-debuggame" }));
 }
 
+BOOST_AUTO_TEST_CASE(FreshConfigure_WhenTheConfigurationIsPending_AndClearedAfterTheConfigure)
+{
+	settings.fresh_configure = { "debuggame" };
+	std::vector<std::string> cleared;
+	auto opts = options();
+	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	make(std::move(opts));
+	// The build step fails: the configure did run fresh, so the cache no longer holds the removed define.
+	script = [](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) { return exited(index == 0 ? 0 : 1); };
+	BOOST_REQUIRE(build().ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame", "--fresh" }));
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame" }));
+	BOOST_TEST((cleared == std::vector<std::string>{ "debuggame" }));
+}
+
+BOOST_AUTO_TEST_CASE(FreshConfigure_NotForAnotherConfiguration)
+{
+	settings.fresh_configure = { "release" };
+	std::vector<std::string> cleared;
+	auto opts = options();
+	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	make(std::move(opts));
+	BOOST_REQUIRE(build().ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame" }));
+	BOOST_TEST(cleared.empty());
+}
+
+BOOST_AUTO_TEST_CASE(FreshConfigure_AFailedConfigureKeepsItPending)
+{
+	settings.fresh_configure = { "debuggame" };
+	std::vector<std::string> cleared;
+	auto opts = options();
+	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	make(std::move(opts));
+	script = [](std::size_t, const std::function<void(std::string_view)>&, std::stop_token) { return exited(1); };
+	BOOST_REQUIRE(build().ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(calls.size(), 1u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame", "--fresh" }));
+	BOOST_TEST(cleared.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ManualRequest_IsFreshOnlyForAPendingConfiguration)
+{
+	edt::build_settings pending;
+	pending.fresh_configure = { "release" };
+	const auto opts = options();
+	BOOST_TEST(edt::make_manual_build_request(pending, "release", opts).fresh);
+	BOOST_TEST(!edt::make_manual_build_request(pending, "debuggame", opts).fresh);
+	BOOST_TEST(!edt::make_manual_build_request(edt::build_settings{}, "release", opts).fresh);
+}
+
 BOOST_AUTO_TEST_CASE(ManualJobs_PassNoParallel)
 {
 	settings.jobs_mode = edt::jobs_mode::manual_jobs;

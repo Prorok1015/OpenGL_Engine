@@ -7,7 +7,6 @@
 #include <format>
 #include <fstream>
 #include <iterator>
-#include <random>
 #include <system_error>
 #include <utility>
 #include <boost/json/object.hpp>
@@ -96,41 +95,6 @@ namespace
 			result.error = std::format("cannot read '{}'", utf8_of(file));
 		}
 		return result;
-	}
-
-	std::optional<std::string> write_atomically(const fs::path& link_or_file, std::string_view text)
-	{
-		// A linked file is replaced at its target; renaming onto the link would turn it into a plain file.
-		fs::path file = link_or_file;
-		std::error_code link_ec;
-		if (fs::is_symlink(link_or_file, link_ec)) {
-			file = fs::canonical(link_or_file, link_ec);
-			if (link_ec) {
-				return std::format("'{}' links to a file that cannot be reached: {}", utf8_of(link_or_file), link_ec.message());
-			}
-		}
-		std::random_device random;
-		fs::path temp_name{ "." };
-		temp_name += file.filename();
-		temp_name += std::format(".{:08x}.tmp", random());
-		const fs::path temp = file.parent_path() / temp_name;
-		std::error_code ignored;
-		{
-			std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-			out.write(text.data(), static_cast<std::streamsize>(text.size()));
-			out.close();
-			if (out.fail()) {
-				fs::remove(temp, ignored);
-				return std::format("cannot write '{}'", utf8_of(temp));
-			}
-		}
-		std::error_code ec;
-		fs::rename(temp, file, ec);
-		if (ec) {
-			fs::remove(temp, ignored);
-			return std::format("cannot replace '{}': {}", utf8_of(file), ec.message());
-		}
-		return std::nullopt;
 	}
 
 	std::vector<std::string> inherits_of(const json::object& preset)
@@ -787,7 +751,7 @@ prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, c
 	if (original.exists && text == original.text) {
 		return result;
 	}
-	if (auto problem = write_atomically(file, text)) {
+	if (auto problem = write_text_atomically(file, text)) {
 		result.error = std::move(*problem);
 		return result;
 	}
