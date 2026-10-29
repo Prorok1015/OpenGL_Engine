@@ -1,6 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_build_settings.h"
 #include "test_temp_dir.hpp"
+#include <fstream>
+#include <iterator>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -47,8 +49,7 @@ struct warn_log
 
 bool same(const edt::build_settings& a, const edt::build_settings& b)
 {
-	return a.configuration == b.configuration && a.jobs_mode == b.jobs_mode && a.reload_after_build == b.reload_after_build
-		&& a.build_before_play == b.build_before_play && a.log_verbosity == b.log_verbosity;
+	return a == b;
 }
 
 }
@@ -174,6 +175,76 @@ BOOST_AUTO_TEST_CASE(Load_BrokenJson_GivesDefaultsAndWarnsNamingTheFile)
 	const auto settings = edt::load_build_settings(dir.path() / ".snk");
 	BOOST_CHECK(same(settings, edt::build_settings{}));
 	BOOST_CHECK(log.has("build.json"));
+}
+
+BOOST_AUTO_TEST_CASE(FreshConfigure_ParsesNamesOnce_AndDropsOnlyBadEntries)
+{
+	auto parsed = edt::parse_build_settings(R"({"fresh_configure":["debuggame","release","debuggame"]})");
+	BOOST_CHECK(parsed.warnings.empty());
+	BOOST_CHECK((parsed.settings.fresh_configure == std::vector<std::string>{ "debuggame", "release" }));
+
+	parsed = edt::parse_build_settings(R"({"fresh_configure":["release",4,""]})");
+	BOOST_CHECK_EQUAL(parsed.warnings.size(), 2u);
+	BOOST_CHECK((parsed.settings.fresh_configure == std::vector<std::string>{ "release" }));
+
+	parsed = edt::parse_build_settings(R"({"fresh_configure":"release"})");
+	BOOST_CHECK_EQUAL(parsed.warnings.size(), 1u);
+	BOOST_CHECK(parsed.settings.fresh_configure.empty());
+
+	parsed = edt::parse_build_settings(R"({"fresh_configure":null})");
+	BOOST_CHECK(parsed.warnings.empty());
+	BOOST_CHECK(parsed.settings.fresh_configure.empty());
+}
+
+BOOST_AUTO_TEST_CASE(FreshConfigure_MergeWritesTheList_AndDropsTheKeyWhenEmpty)
+{
+	boost::json::value doc = boost::json::parse(R"({"note":1})");
+	edt::build_settings settings;
+	settings.fresh_configure = { "release" };
+	edt::merge_build_settings(doc, settings);
+	BOOST_CHECK(doc.as_object().at("fresh_configure") == boost::json::parse(R"(["release"])"));
+	BOOST_CHECK(same(edt::parse_build_settings(boost::json::serialize(doc)).settings, settings));
+
+	settings.fresh_configure.clear();
+	edt::merge_build_settings(doc, settings);
+	BOOST_CHECK(!doc.as_object().contains("fresh_configure"));
+	BOOST_CHECK(doc.as_object().at("note").as_int64() == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Update_CreatesTheFolder_KeepsUnknownKeys_AndWritesNothingWithoutAChange)
+{
+	test_util::temp_dir dir("edt build settings update");
+	const auto snk = dir.path() / ".snk";
+	BOOST_CHECK(!edt::update_build_settings(snk, [](edt::build_settings&) {}).has_value());
+	BOOST_CHECK(!std::filesystem::exists(snk / "build.json"));
+
+	BOOST_REQUIRE(!edt::update_build_settings(snk, [](edt::build_settings& settings) {
+		settings.fresh_configure.push_back("debuggame");
+	}).has_value());
+	BOOST_CHECK((edt::load_build_settings(snk).fresh_configure == std::vector<std::string>{ "debuggame" }));
+
+	dir.write(".snk/build.json", R"({"mine":true,"fresh_configure":["debuggame","release"]})");
+	BOOST_REQUIRE(!edt::clear_fresh_configure(snk, "debuggame").has_value());
+	const auto doc = boost::json::parse([&] {
+		std::ifstream in(snk / "build.json", std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	}());
+	BOOST_CHECK(doc.as_object().at("mine").as_bool());
+	BOOST_CHECK(doc.as_object().at("fresh_configure") == boost::json::parse(R"(["release"])"));
+}
+
+BOOST_AUTO_TEST_CASE(Update_ABrokenFileIsAnErrorAndStaysAsItIs)
+{
+	test_util::temp_dir dir("edt build settings update broken");
+	constexpr std::string_view broken = R"({"fresh_configure": ["debuggame")";
+	dir.write(".snk/build.json", broken);
+	BOOST_CHECK(edt::check_build_settings_file(dir.path() / ".snk").has_value());
+	BOOST_CHECK(edt::clear_fresh_configure(dir.path() / ".snk", "debuggame").has_value());
+	std::ifstream in(dir.path() / ".snk" / "build.json", std::ios::binary);
+	BOOST_CHECK(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()) == broken);
+
+	dir.write(".snk/build.json", "[]");
+	BOOST_CHECK(edt::check_build_settings_file(dir.path() / ".snk").has_value());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

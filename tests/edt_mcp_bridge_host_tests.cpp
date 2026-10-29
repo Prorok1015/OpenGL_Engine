@@ -179,6 +179,20 @@ BOOST_AUTO_TEST_CASE(ProblemsList_IsAllowedByCommandId_NotItsDomain)
 	BOOST_TEST(!edt::agent_may_use(desc));
 }
 
+// build.settings.get is listed by its id; build.* also holds build.game_module, which runs the project's CMake code.
+BOOST_AUTO_TEST_CASE(BuildSettingsGet_IsAllowedByCommandId_NotItsDomain)
+{
+	cmd::command_desc desc;
+	desc.id = "build.settings.get";
+	BOOST_TEST(edt::agent_may_use(desc));
+	for (const char* id : { "build.settings.set", "build.settings.open", "build.game_module", "build.reload_game_module" }) {
+		desc.id = id;
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(!edt::agent_may_use(desc));
+		}
+	}
+}
+
 BOOST_AUTO_TEST_CASE(StateQueriesStayClosedWhenTheMetadataSaysMutateOrRisk)
 {
 	cmd::command_desc desc;

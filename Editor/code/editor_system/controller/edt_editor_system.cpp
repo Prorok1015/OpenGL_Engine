@@ -29,6 +29,9 @@
 #include "edt_file_menu.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
+#include "edt_build_jobs.h"
+#include "edt_build_settings_model.h"
+#include "edt_build_settings_panel.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
@@ -295,6 +298,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	add_panel(m_blackboard_panel, dock_slot::bottom_right, false);
 	add_panel(m_asset_browser_panel, dock_slot::bottom_left, true);
 	add_panel(m_prefab_panel, dock_slot::floating, false);
+	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
+		if (!data.has_value<prj::project_context>()) return std::nullopt;
+		return data.require<prj::project_context>().root;
+	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_building(); });
+	add_panel(m_build_settings_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -356,6 +364,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		build_options.project = [game] { return std::optional<game_project>{ game }; };
 		build_options.settings = [snk_dir = project.snk_dir()] { return load_build_settings(snk_dir); };
+		build_options.preset_for = [code_dir = project.root / "code"](std::string_view configuration) {
+			return preset_for_configuration(code_dir, configuration);
+		};
+		build_options.on_fresh_configured = [snk_dir = project.snk_dir()](std::string_view configuration) {
+			if (auto problem = clear_fresh_configure(snk_dir, configuration)) {
+				egLOG_WARN("editor/build", "{}: the next build of {} configures with --fresh again", *problem, configuration);
+			}
+		};
 	} else {
 		build_options.project = [] { return std::optional<game_project>{}; };
 	}
@@ -366,6 +382,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		editor_layer->register_implicit(id, std::move(draw));
 	};
 	build_options.events = &m_context->events();
+	build_options.auto_jobs = [] { return estimate_jobs().jobs; };
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
@@ -399,6 +416,23 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		});
 	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
+
+	m_registrations.push_back(m_context->actions().add({ .id = "build.settings.open", .label = "Build Settings...",
+		.menu_path = "Build", .separator_before = true,
+		.execute = no_args([this] {
+			m_context->panels().set_open(m_build_settings_panel->get_id(), true);
+			m_build_settings_panel->focus();
+		}),
+		.expose_as_tool = false }));
+	build_settings_command_options settings_command;
+	settings_command.project_root = [&data]() -> std::optional<std::filesystem::path> {
+		if (!data.has_value<prj::project_context>()) return std::nullopt;
+		return data.require<prj::project_context>().root;
+	};
+	settings_command.default_configuration = *cfg_build_configuration;
+	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
+		m_registrations.push_back(std::move(command));
+	}
 
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
