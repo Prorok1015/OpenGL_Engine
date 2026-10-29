@@ -138,6 +138,7 @@ BOOST_AUTO_TEST_CASE(the_commands_mutate_and_are_not_offered_over_mcp_yet)
 			BOOST_REQUIRE(command != nullptr);
 			BOOST_TEST(command->mutates);
 			BOOST_TEST((command->risk == cmd::danger::none));
+			BOOST_TEST((command->category == cmd::agent_category::scene_edit));
 			BOOST_TEST(!edt::agent_may_use(*command));
 		}
 	}

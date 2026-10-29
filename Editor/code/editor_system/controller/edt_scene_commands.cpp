@@ -610,6 +610,7 @@ std::vector<edt::registration> edt::register_scene_commands(cmd::command_registr
 		desc.args_schema = parse_schema(args);
 		desc.result_schema = parse_schema(result);
 		desc.mutates = true;
+		desc.category = cmd::agent_category::scene_edit;
 		desc.invoke = [ctx, body](const cmd::call& call) { return body(*ctx, call); };
 		registration added = commands.add(std::move(desc));
 		if (added.active()) out.push_back(std::move(added));
