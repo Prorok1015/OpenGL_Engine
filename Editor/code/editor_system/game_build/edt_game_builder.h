@@ -40,8 +40,9 @@ namespace edt
 	// How one build_request ended, for its on_finished.
 	struct build_outcome
 	{
-		// restarted: stopped for a newer cancel_on_restart request, which runs next.
-		enum kind_t { succeeded, failed, restarted };
+		// restarted: stopped for a newer cancel_on_restart request, which runs next. preempted: a preemptible build
+		// stopped for a request that is not (the person's build), which runs next.
+		enum kind_t { succeeded, failed, restarted, preempted };
 		kind_t kind = failed;
 		std::uint64_t job = 0;
 		int errors = 0;
@@ -50,6 +51,8 @@ namespace edt
 		std::vector<game_module_build_result> modules;
 		// failed: the setup error or the failure summary.
 		std::string message;
+		// failed: a request that waited for a running build to stop could not start then (`message` says why).
+		bool not_started = false;
 	};
 
 	// Everything one build needs besides the project; made per build by a profile (make_manual_build_request).
@@ -64,8 +67,11 @@ namespace edt
 		// low: the build's processes run below normal priority (platform::process_options::low_priority).
 		build_priority priority = build_priority::normal;
 		// Meeting a running build, cancel it and run once it has stopped (only the latest such request waits);
-		// false: the request fails with `busy`.
+		// false: the request fails with `busy`. A preemptible request never stops a build that is not (`busy` then).
 		bool cancel_on_restart = false;
+		// A background build (live mode) that yields: a request that is not preemptible stops it and runs once it has
+		// stopped, as cancel_on_restart does. A preemptible request meeting a build that is not stays `busy`.
+		bool preemptible = false;
 		log_verbosity verbosity = log_verbosity::normal;
 		// Passed on as game_module_build_result::reload.
 		bool reload_after = true;
@@ -159,7 +165,7 @@ namespace edt
 	build_request make_manual_build_request(const build_settings& settings, std::string configuration,
 		const game_builder_options& options);
 	// A background build of live mode (#445): settings.configuration else options.default_configuration,
-	// options.preset_for, live_jobs (0: min(2, auto_jobs), at least 1), low priority, cancel_on_restart, the settings'
+	// options.preset_for, live_jobs (0: min(2, auto_jobs), at least 1), low priority, cancel_on_restart, preemptible, the settings'
 	// verbosity, problems_only without a progress window, no reload (live mode reloads after its quiet period);
 	// fresh like the manual build.
 	build_request make_live_build_request(const build_settings& settings, const game_builder_options& options);
@@ -182,6 +188,10 @@ namespace edt
 		game_builder& operator=(const game_builder&) = delete;
 
 		[[nodiscard]] bool is_building() const;
+		// A preemptible (live) build runs: a manual request stops it rather than being `busy`.
+		[[nodiscard]] bool building_preemptible() const { return is_building() && m_running_preemptible; }
+		// A build the person started runs (what greys out reloads and define removal).
+		[[nodiscard]] bool is_manual_build_running() const { return is_building() && !m_running_preemptible; }
 		// The running build's job; 0 when none runs.
 		[[nodiscard]] std::uint64_t job() const { return is_building() ? m_job : 0; }
 		// Why build.game_module is disabled; empty when it is enabled.
@@ -189,7 +199,8 @@ namespace edt
 		// What make_manual_build_request / make_live_build_request read (settings, preset_for, auto_jobs).
 		[[nodiscard]] const game_builder_options& options() const { return m_options; }
 		// Result {started, job} like build.game_module; a request queued behind a running build gives started false, job 0.
-		// Fails with `disabled`, `busy` (a build runs and the request does not cancel_on_restart) or `invalid_args`.
+		// Fails with `disabled`, `busy` (a build runs and neither the request's cancel_on_restart nor the running build's
+		// preemptible lets it through) or `invalid_args`.
 		action_result start(build_request request);
 		// Also drops a request waiting for the running build to stop.
 		void cancel();
@@ -209,6 +220,10 @@ namespace edt
 		// Stops the running build for a restart without cancelling its job, so its on_done still comes.
 		std::shared_ptr<std::stop_source> m_restart_stop;
 		std::optional<build_request> m_pending;
+		// Of the running (or last) build.
+		bool m_running_preemptible = false;
+		// The running build was stopped for a request that is not preemptible.
+		bool m_preempted = false;
 		std::string m_configuration;
 		float m_spinner_t = 0.f;
 		bool m_progress_shown = false;

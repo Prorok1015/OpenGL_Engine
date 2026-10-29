@@ -926,7 +926,7 @@ BOOST_AUTO_TEST_CASE(ProblemsOnly_Failure_ShowsNoDialog_SetsTheProblems_AndLogsT
 		return exited(1);
 	};
 	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
-	BOOST_CHECK(build_problems().empty()); // cleared at launch, as for a manual build
+	BOOST_CHECK_EQUAL(build_problems().size(), 1u); // kept until the quiet build ends
 	run_to_end();
 
 	BOOST_CHECK(messages().empty());
@@ -989,6 +989,117 @@ BOOST_AUTO_TEST_CASE(ShowProgressFalse_OnARestart_OpensNoSecondWindow)
 	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "release" }));
 }
 
+BOOST_AUTO_TEST_CASE(ProblemsOnly_KeepsTheProblemsUntilItEnds_ASuccessReplacesThem)
+{
+	make();
+	problems.set("build", { edt::problem{ edt::problem_severity::error, "old.cpp", 1, 0, {}, "old", {} } });
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	BOOST_CHECK_EQUAL(build_problems().size(), 1u);
+	run_to_end();
+	BOOST_CHECK(build_problems().empty());
+}
+
+BOOST_AUTO_TEST_CASE(ProblemsOnly_ACancelledOrRestartedBuildLeavesTheProblems)
+{
+	make();
+	problems.set("build", { edt::problem{ edt::problem_severity::error, "old.cpp", 1, 0, {}, "old", {} } });
+	script = [this](std::size_t, const std::function<void(std::string_view)>&, std::stop_token) {
+		builder->cancel();
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(build_problems().size(), 1u);
+	BOOST_CHECK_EQUAL(build_problems()[0].message, "old");
+
+	// Stopped for a newer quiet request, which is then cancelled: nothing replaces the list either.
+	calls.clear();
+	script = [this](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index == 0) {
+			auto next = quiet_request("release");
+			next.cancel_on_restart = true;
+			BOOST_CHECK(builder->start(next).ok);
+		} else {
+			builder->cancel();
+		}
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	auto first = quiet_request("debuggame");
+	first.cancel_on_restart = true;
+	BOOST_REQUIRE(builder->start(first).ok);
+	run_until_idle();
+	BOOST_REQUIRE_EQUAL(build_problems().size(), 1u);
+	BOOST_CHECK_EQUAL(build_problems()[0].message, "old");
+}
+
+BOOST_AUTO_TEST_CASE(ManualBuild_ClearsTheProblemsAtLaunch)
+{
+	make();
+	problems.set("build", { edt::problem{ edt::problem_severity::error, "old.cpp", 1, 0, {}, "old", {} } });
+	BOOST_REQUIRE(builder->start(request("debuggame")).ok);
+	BOOST_CHECK(build_problems().empty());
+	run_to_end();
+}
+
+// Owner decision (#445): the person's build goes first. It stops the live build and runs once it has stopped.
+BOOST_AUTO_TEST_CASE(ManualRequest_PreemptsALiveBuild_AndStartsOnceItStopped)
+{
+	make(observed_options());
+	write_module();
+	bool stop_seen = false;
+	std::optional<edt::action_result> manual;
+	script = [&](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token stop) {
+		if (index != 0) return exited(0);
+		BOOST_CHECK(builder->building_preemptible());
+		BOOST_CHECK(!builder->is_manual_build_running());
+		manual = builder->start(request("release"));
+		stop_seen = stop.stop_requested();
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	BOOST_REQUIRE(builder->start(edt::make_live_build_request(settings, options())).ok);
+	run_until_idle();
+
+	BOOST_REQUIRE(manual.has_value());
+	BOOST_REQUIRE_MESSAGE(manual->ok, manual->error); // not busy
+	BOOST_CHECK(!manual->value.as_object().at("started").as_bool());
+	BOOST_CHECK(stop_seen);
+	BOOST_REQUIRE_EQUAL(calls.size(), 3u);
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--preset", "release" }));
+	BOOST_TEST((calls[2].args == std::vector<std::string>{ "--build", "--preset", "release" }));
+	BOOST_CHECK(!calls[1].low_priority);
+	BOOST_REQUIRE_EQUAL(built.size(), 1u);
+	BOOST_CHECK_EQUAL(built[0].configuration, "release");
+	BOOST_CHECK(!builder->is_building());
+}
+
+BOOST_AUTO_TEST_CASE(LiveRequest_NeverStopsOrReplacesAManualBuild)
+{
+	make();
+	BOOST_REQUIRE(builder->start(request("debuggame")).ok);
+	BOOST_CHECK(builder->is_manual_build_running());
+	BOOST_CHECK(!builder->building_preemptible());
+	BOOST_CHECK_EQUAL(builder->start(edt::make_live_build_request(settings, options())).code, "busy");
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame" }));
+
+	// The manual request waits for the live build to stop: neither a live request nor a second manual one replaces it.
+	calls.clear();
+	BOOST_REQUIRE(builder->start(edt::make_live_build_request(settings, options())).ok);
+	BOOST_REQUIRE(builder->start(request("release")).ok);
+	BOOST_CHECK_EQUAL(builder->start(edt::make_live_build_request(settings, options())).code, "busy");
+	BOOST_CHECK_EQUAL(builder->start(request("debuggame")).code, "busy");
+	run_until_idle();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u); // the live build stopped before its first step
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "release" }));
+}
+
 BOOST_AUTO_TEST_CASE(LiveRequest_IsAQuietLowPriorityRestartingBuild)
 {
 	edt::game_builder_options opts;
@@ -1006,6 +1117,8 @@ BOOST_AUTO_TEST_CASE(LiveRequest_IsAQuietLowPriorityRestartingBuild)
 	BOOST_CHECK_EQUAL(out.jobs, 2);
 	BOOST_CHECK(out.priority == edt::build_priority::low);
 	BOOST_CHECK(out.cancel_on_restart);
+	BOOST_CHECK(out.preemptible);
+	BOOST_CHECK(!edt::make_manual_build_request(chosen, {}, opts).preemptible);
 	BOOST_CHECK(out.verbosity == edt::log_verbosity::verbose);
 	BOOST_CHECK(out.report == edt::build_report::problems_only);
 	BOOST_CHECK(!out.show_progress);
@@ -1134,6 +1247,56 @@ BOOST_AUTO_TEST_CASE(OnFinished_ARestartedRequestReportsRestarted_ThenTheNewOneF
 	run_until_idle();
 
 	BOOST_TEST((order == std::vector<std::string>{ "first restarted", "second succeeded" }));
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_APreemptedLiveBuildAndAReplacedLiveRequestReportPreempted)
+{
+	make();
+	std::vector<std::string> order;
+	const auto record = [&order](std::string who) {
+		return [&order, who](const edt::build_outcome& outcome) {
+			order.push_back(who + (outcome.kind == edt::build_outcome::preempted ? " preempted"
+				: outcome.kind == edt::build_outcome::succeeded ? " succeeded" : " other"));
+		};
+	};
+	auto live = edt::make_live_build_request(settings, options());
+	live.on_finished = record("live1");
+	BOOST_REQUIRE(builder->start(live).ok);
+	live.on_finished = record("live2");
+	BOOST_REQUIRE(builder->start(live).ok); // waits for live1 to stop
+	auto manual = request("release");
+	manual.on_finished = record("manual");
+	BOOST_REQUIRE(builder->start(manual).ok);
+	// The waiting live request never runs: it hears so at once.
+	BOOST_TEST((order == std::vector<std::string>{ "live2 preempted" }));
+
+	run_until_idle();
+	BOOST_TEST((order == std::vector<std::string>{ "live2 preempted", "live1 preempted", "manual succeeded" }));
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_AWaitingRequestThatCannotStartReportsNotStarted)
+{
+	make();
+	std::optional<edt::build_outcome> seen;
+	script = [&](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index != 0) return exited(0);
+		auto next = quiet_request("release");
+		next.cancel_on_restart = true;
+		next.on_finished = [&seen](const edt::build_outcome& outcome) { seen = outcome; };
+		BOOST_CHECK(builder->start(next).ok);
+		has_project = false; // the waiting request is refused when its turn comes
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	run_until_idle();
+
+	BOOST_REQUIRE(seen.has_value());
+	BOOST_CHECK(seen->not_started);
+	BOOST_CHECK(seen->kind == edt::build_outcome::failed);
+	BOOST_CHECK_EQUAL(seen->message, "Open a project first");
+	BOOST_CHECK(!builder->is_building());
 }
 
 BOOST_AUTO_TEST_CASE(OnFinished_NotCalledOnAUserCancel)

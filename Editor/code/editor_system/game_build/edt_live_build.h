@@ -94,6 +94,9 @@ namespace edt
 		std::function<bool(const std::string& module)> is_loaded_current;
 		// The project's runtime modules: what reload_now looks at before any live build succeeded. Null: none.
 		std::function<std::vector<std::string>()> modules;
+		// A module reload is queued for the next UI frame (#435's or live mode's); no build starts meanwhile, since it
+		// would refuse the reload. Null: never.
+		std::function<bool()> reload_pending;
 	};
 
 	// Live mode (#445): rebuilds the game module after a batch of relevant source changes and reloads it once the
@@ -104,6 +107,8 @@ namespace edt
 	public:
 		static constexpr std::chrono::milliseconds k_debounce{ 500 };
 		static constexpr std::string_view k_problem_source = "reload";
+		static constexpr std::chrono::milliseconds k_quiet_refresh{ 200 };
+		static constexpr std::string_view k_waiting_message = "waiting for the running build";
 
 		live_build(problem_list& problems, live_build_deps deps);
 		~live_build();
@@ -122,6 +127,8 @@ namespace edt
 		// else deps.modules) whose build/bin file differs from the running copy; up_to_date when none does. Refused
 		// when off, while a build runs or while reloads are still waiting for their result.
 		reload_now_result reload_now();
+		// A build that was not live mode's succeeded (the person's): its errors are gone, so `errors` turns `idle`.
+		void on_manual_build_succeeded();
 		[[nodiscard]] const live_status& status() const { return m_status; }
 
 	private:
@@ -143,11 +150,17 @@ namespace edt
 			bool stale = false;
 		};
 
-		void take_outcomes();
+		// True when an outcome of the current request was handled (that build has just ended).
+		bool take_outcomes();
 		void handle(const build_outcome& outcome);
 		// The start error, unless it is `busy` (stays pending).
 		std::optional<std::string> try_start();
 		bool quiet_enough() const;
+		// live_quiet_ms as build.json has it now, read at most every k_quiet_refresh while settling.
+		void refresh_quiet_ms();
+		// Whether a build may start in this tick: none runs or is being given way to, none ended in this tick and no
+		// reload waits. Otherwise the state turns pending with the reason.
+		bool may_start(bool build_ended);
 		// The auto reload after settling: the modules of m_built.
 		void reload_built();
 		// False when every module is current (nothing requested).
@@ -173,6 +186,9 @@ namespace edt
 		// A live build is running (its outcome has not come yet).
 		bool m_ours = false;
 		int m_quiet_ms = k_default_live_quiet_ms;
+		std::optional<std::chrono::steady_clock::time_point> m_quiet_read;
+		// is_building() as the last tick saw it: a build that ended since gets one more frame for its reload.
+		bool m_was_building = false;
 		// The modules of the last successful live build; set while it may still be reloaded.
 		std::optional<std::vector<game_module_build_result>> m_built;
 		bool m_reload_due = false;

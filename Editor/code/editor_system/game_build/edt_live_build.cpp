@@ -81,8 +81,11 @@ void edt::live_build::on_changes(std::span<const source_change> changes)
 void edt::live_build::tick()
 {
 	if (!m_enabled) return;
-	take_outcomes();
-	if (m_ours && !m_deps.is_building()) {
+	const bool ours_ended = take_outcomes();
+	const bool building = m_deps.is_building();
+	const bool build_ended = ours_ended || (m_was_building && !building);
+	m_was_building = building;
+	if (m_ours && !building) {
 		// Cancelled from outside (job.cancel): job_service gives no on_done, so no outcome comes.
 		m_ours = false;
 		m_dirty = false;
@@ -91,12 +94,44 @@ void edt::live_build::tick()
 		m_status.message = "The live build was cancelled";
 		m_status.job = 0;
 	}
-	if (m_dirty && (m_force || !m_last_change || m_deps.now() - *m_last_change >= k_debounce)) {
+	if (m_dirty && (m_force || !m_last_change || m_deps.now() - *m_last_change >= k_debounce) && may_start(build_ended)) {
 		try_start();
 	}
+	if (m_reload_due) refresh_quiet_ms();
 	// Never while a build runs: it may be writing the module file, and game_reloader refuses then anyway.
-	if (m_reload_due && !m_dirty && !m_ours && !m_deps.is_building() && quiet_enough()) {
+	if (m_reload_due && !m_dirty && !m_ours && !building && quiet_enough()) {
 		reload_built();
+	}
+}
+
+bool edt::live_build::may_start(bool build_ended)
+{
+	// A build that ended in this frame may have queued its reload (#435) for the UI stage: let that run first.
+	if (build_ended) return false;
+	if (m_deps.reload_pending && m_deps.reload_pending()) {
+		m_status.state = live_state::pending;
+		m_status.message = "waiting for the module reload";
+		return false;
+	}
+	return true;
+}
+
+void edt::live_build::refresh_quiet_ms()
+{
+	const auto now = m_deps.now();
+	if (m_quiet_read && now - *m_quiet_read < k_quiet_refresh) return;
+	m_quiet_read = now;
+	m_quiet_ms = m_deps.settings().live_quiet_ms;
+}
+
+void edt::live_build::on_manual_build_succeeded()
+{
+	if (!m_enabled || m_ours) return;
+	m_status.errors = 0;
+	m_status.warnings = 0;
+	if (m_status.state == live_state::errors) {
+		m_status.state = live_state::idle;
+		m_status.message = "manual build succeeded";
 	}
 }
 
@@ -108,6 +143,8 @@ std::optional<std::string> edt::live_build::rebuild_now()
 	m_force = true;
 	m_built.reset();
 	m_reload_due = false;
+	// Queued: tick() starts it once the reload ran.
+	if (!may_start(false)) return std::nullopt;
 	return try_start();
 }
 
@@ -133,24 +170,44 @@ edt::reload_now_result edt::live_build::reload_now()
 	return { reload_now_kind::requested, {} };
 }
 
-void edt::live_build::take_outcomes()
+bool edt::live_build::take_outcomes()
 {
-	if (m_inbox->empty()) return;
+	if (m_inbox->empty()) return false;
 	inbox items;
 	items.swap(*m_inbox);
+	bool handled = false;
 	for (const auto& item : items) {
 		// A request restarted by a newer one reports `restarted` under its own attempt.
 		if (item.attempt != m_attempt || !m_ours) continue;
 		handle(item.outcome);
+		handled = true;
 	}
+	return handled;
 }
 
 void edt::live_build::handle(const build_outcome& outcome)
 {
 	m_ours = false;
+	if (outcome.kind == build_outcome::preempted) {
+		// The person's build goes first; these sources are still unbuilt, so live mode builds again after it.
+		m_dirty = true;
+		m_status.state = live_state::pending;
+		m_status.message = std::string(k_waiting_message);
+		return;
+	}
+	if (outcome.not_started) {
+		// It waited for a build to stop and was then refused (not a cancel): the changes stay to be built, and the
+		// next tick's start reports the reason again or gets through.
+		m_dirty = true;
+		m_status.state = live_state::errors;
+		m_status.message = outcome.message;
+		warn_once(outcome.message);
+		return;
+	}
 	m_status.job = outcome.job;
 	m_status.last_build_end = m_deps.now();
 	switch (outcome.kind) {
+	case build_outcome::preempted:
 	case build_outcome::restarted:
 		m_status.state = m_dirty ? live_state::pending : live_state::idle;
 		return;
@@ -182,7 +239,7 @@ std::optional<std::string> edt::live_build::try_start()
 {
 	if (m_deps.is_building() && !m_ours) {
 		m_status.state = live_state::pending;
-		m_status.message = "Waiting for the running build";
+		m_status.message = std::string(k_waiting_message);
 		return std::nullopt;
 	}
 	const build_settings settings = m_deps.settings();
@@ -196,7 +253,7 @@ std::optional<std::string> edt::live_build::try_start()
 	if (!result.ok) {
 		if (result.code == "busy") {
 			m_status.state = live_state::pending;
-			m_status.message = "Waiting for the running build";
+			m_status.message = std::string(k_waiting_message);
 			return std::nullopt;
 		}
 		// No retry until the next change: the reason (no project, no presets) does not go away by itself.
@@ -214,6 +271,7 @@ std::optional<std::string> edt::live_build::try_start()
 	m_ours = true;
 	m_build_gen = m_change_gen;
 	m_quiet_ms = settings.live_quiet_ms;
+	m_quiet_read = m_deps.now();
 	m_built.reset();
 	m_reload_due = false;
 	mark_rounds_stale();
