@@ -52,9 +52,11 @@ void edt::live_build::set_enabled(bool enabled)
 	m_last_change.reset();
 	m_built.reset();
 	m_reload_due = false;
-	// Outcomes of a build started before are stale now.
+	m_last_modules.clear();
+	// Outcomes of a build started before are stale now; results of reloads requested before are dropped.
 	++m_attempt;
 	m_inbox->clear();
+	m_rounds.clear();
 	m_warned.clear();
 	m_problems.clear(k_problem_source);
 	m_status = live_status{};
@@ -69,6 +71,7 @@ void edt::live_build::on_changes(std::span<const source_change> changes)
 	m_dirty = true;
 	m_built.reset();
 	m_reload_due = false;
+	mark_rounds_stale();
 	if (!m_ours) {
 		m_status.state = live_state::pending;
 		m_status.message.clear();
@@ -108,13 +111,26 @@ std::optional<std::string> edt::live_build::rebuild_now()
 	return try_start();
 }
 
-std::optional<std::string> edt::live_build::reload_now()
+edt::reload_now_result edt::live_build::reload_now()
 {
-	if (!m_enabled) return "Live mode is off";
+	const auto refused = [](std::string why) { return reload_now_result{ reload_now_kind::refused, std::move(why) }; };
+	if (!m_enabled) return refused("Live mode is off");
 	take_outcomes();
-	if (m_ours || m_deps.is_building()) return "A build is running";
-	if (!m_built) return "There is no successful live build to reload, or the sources changed after it started";
-	return reload_built();
+	if (m_ours || m_deps.is_building()) return refused("A build is running");
+	if (!m_rounds.empty()) return refused("A reload is still waiting for its result");
+	std::vector<std::string> modules = m_last_modules;
+	if (modules.empty() && m_deps.modules) modules = m_deps.modules();
+	if (modules.empty()) return refused("There is no game module to reload");
+	// Taken over by this request; the quiet period no longer matters.
+	m_reload_due = false;
+	if (!request_reloads(modules)) {
+		if (m_status.state == live_state::settling) {
+			m_status.state = live_state::reloaded;
+			m_status.message = "up to date";
+		}
+		return { reload_now_kind::up_to_date, "up to date" };
+	}
+	return { reload_now_kind::requested, {} };
 }
 
 void edt::live_build::take_outcomes()
@@ -148,6 +164,8 @@ void edt::live_build::handle(const build_outcome& outcome)
 		m_status.errors = outcome.errors;
 		m_status.warnings = outcome.warnings;
 		m_status.message.clear();
+		m_last_modules.clear();
+		for (const auto& built : outcome.modules) m_last_modules.push_back(built.module);
 		if (m_change_gen != m_build_gen) {
 			// Built from sources that changed meanwhile: the next build is pending.
 			m_status.state = live_state::pending;
@@ -198,6 +216,7 @@ std::optional<std::string> edt::live_build::try_start()
 	m_quiet_ms = settings.live_quiet_ms;
 	m_built.reset();
 	m_reload_due = false;
+	mark_rounds_stale();
 	m_status.state = live_state::building;
 	m_status.configuration = configuration;
 	m_status.message.clear();
@@ -213,47 +232,92 @@ bool edt::live_build::quiet_enough() const
 	return !m_last_change || m_deps.now() - *m_last_change >= std::chrono::milliseconds(m_quiet_ms);
 }
 
-std::optional<std::string> edt::live_build::reload_built()
+void edt::live_build::reload_built()
 {
 	ASSERT_MSG(m_built.has_value(), "reload_built without a successful live build");
 	m_reload_due = false;
 	if (m_built->empty()) {
 		m_status.state = live_state::idle;
 		m_status.message = "The live build produced no module file";
-		return m_status.message;
+		return;
 	}
+	std::vector<std::string> modules;
+	for (const auto& built : *m_built) modules.push_back(built.module);
+	if (!request_reloads(modules)) {
+		// A build that changed nothing (ninja had no work): the running copies are that build already.
+		m_status.state = live_state::reloaded;
+		m_status.message = "up to date";
+	}
+}
+
+bool edt::live_build::request_reloads(const std::vector<std::string>& modules)
+{
+	std::vector<std::string> wanted;
+	for (const auto& module : modules) {
+		if (!m_deps.is_loaded_current || !m_deps.is_loaded_current(module)) wanted.push_back(module);
+	}
+	if (wanted.empty()) return false;
+	mark_rounds_stale();
+	reload_round round;
+	round.id = ++m_round_id;
+	round.waiting = wanted.size();
+	m_rounds.push_back(std::move(round));
 	m_status.state = live_state::reloading;
-	std::vector<problem> failures;
-	for (const auto& built : *m_built) {
-		const core::reload_report report = m_deps.reload(built.module);
-		if (report.status == core::reload_status::reloaded) continue;
+	m_status.message.clear();
+	const std::uint64_t id = m_round_id;
+	for (const auto& module : wanted) {
+		m_deps.reload(module, [this, alive = std::weak_ptr<int>(m_alive), id, module](const core::reload_report& report) {
+			if (!alive.expired()) on_reload_result(id, module, report);
+		});
+	}
+	return true;
+}
+
+void edt::live_build::on_reload_result(std::uint64_t round, const std::string& module, const core::reload_report& report)
+{
+	const auto it = std::find_if(m_rounds.begin(), m_rounds.end(), [round](const reload_round& item) { return item.id == round; });
+	// A round dropped by set_enabled(false).
+	if (it == m_rounds.end()) return;
+	if (report.status != core::reload_status::reloaded) {
 		problem item;
 		item.severity = report.status == core::reload_status::refused ? problem_severity::warning : problem_severity::error;
 		switch (report.status) {
 		case core::reload_status::refused:
-			item.message = std::format("The game module '{}' was not reloaded: {}. The running version is kept.", built.module, report.message);
+			item.message = std::format("The game module '{}' was not reloaded: {}. The running version is kept.", module, report.message);
 			break;
 		case core::reload_status::rolled_back:
-			item.message = std::format("The game module '{}' was rolled back to the previous build: {}", built.module, report.message);
+			item.message = std::format("The game module '{}' was rolled back to the previous build: {}", module, report.message);
 			break;
 		default:
-			item.message = std::format("The game module '{}' is not loaded: {}", built.module, report.message);
+			item.message = std::format("The game module '{}' is not loaded: {}", module, report.message);
 			break;
 		}
 		egLOG_WARN("editor/build", "live reload: {}", item.message);
-		failures.push_back(std::move(item));
+		it->failures.push_back(std::move(item));
 	}
-	if (failures.empty()) {
-		m_problems.clear(k_problem_source);
-		m_status.state = live_state::reloaded;
-		m_status.last_reload = m_deps.now();
-		m_status.message.clear();
-		return std::nullopt;
+	if (--it->waiting > 0) return;
+
+	reload_round done = std::move(*it);
+	m_rounds.erase(it);
+	const bool failed = !done.failures.empty();
+	const std::string first = failed ? done.failures.front().message : std::string{};
+	if (done.id > m_finished_round) {
+		m_finished_round = done.id;
+		if (failed) {
+			m_problems.set(k_problem_source, std::move(done.failures));
+		} else {
+			m_problems.clear(k_problem_source);
+		}
 	}
-	m_status.message = failures.front().message;
-	m_status.state = live_state::reload_failed;
-	m_problems.set(k_problem_source, std::move(failures));
-	return m_status.message;
+	if (!failed) m_status.last_reload = m_deps.now();
+	if (done.stale || m_status.state != live_state::reloading) return;
+	m_status.state = failed ? live_state::reload_failed : live_state::reloaded;
+	m_status.message = first;
+}
+
+void edt::live_build::mark_rounds_stale()
+{
+	for (auto& round : m_rounds) round.stale = true;
 }
 
 void edt::live_build::warn_once(const std::string& message)

@@ -36,7 +36,7 @@ namespace edt
 		errors,
 		// Built; waits until the sources stay unchanged for live_quiet_ms.
 		settling,
-		// Inside the reload call only.
+		// Reloads were requested; waits until every module has reported.
 		reloading,
 		reloaded,
 		reload_failed,
@@ -58,6 +58,22 @@ namespace edt
 		std::string message;
 	};
 
+	enum class reload_now_kind : std::uint8_t
+	{
+		// The reloads were requested; the result shows in status().
+		requested,
+		// Every module already runs from the file build/bin has now: nothing was requested.
+		up_to_date,
+		// Not allowed now (`message` says why).
+		refused,
+	};
+
+	struct reload_now_result
+	{
+		reload_now_kind kind = reload_now_kind::refused;
+		std::string message;
+	};
+
 	struct live_build_deps
 	{
 		std::function<std::chrono::steady_clock::time_point()> now = [] { return std::chrono::steady_clock::now(); };
@@ -70,8 +86,14 @@ namespace edt
 		std::function<bool()> is_building;
 		// game_builder::cancel.
 		std::function<void()> cancel_build;
-		// game_reloader::reload_quiet: no dialog.
-		std::function<core::reload_report(const std::string& module)> reload;
+		// Asks for game_reloader::reload_quiet(module) on the next UI frame (next_frame, one id per module, like the
+		// reload of #435: only there is the module swap safe) and calls `done` with its report. Never `done` in the call.
+		std::function<void(const std::string& module, std::function<void(const core::reload_report&)> done)> reload;
+		// The copy in use was made from the build/bin file as it is now (core::project_module_host::is_current).
+		// Null: never, so every reload is requested.
+		std::function<bool(const std::string& module)> is_loaded_current;
+		// The project's runtime modules: what reload_now looks at before any live build succeeded. Null: none.
+		std::function<std::vector<std::string>()> modules;
 	};
 
 	// Live mode (#445): rebuilds the game module after a batch of relevant source changes and reloads it once the
@@ -96,9 +118,10 @@ namespace edt
 		void tick();
 		// Starts a build now, skipping the debounce; behind the person's build it waits (pending). nullopt: started or queued.
 		std::optional<std::string> rebuild_now();
-		// Reloads now, skipping the quiet period: only after a successful live build with no change since it started.
-		// nullopt: reloaded.
-		std::optional<std::string> reload_now();
+		// Requests now, skipping the quiet period, the reload of each module (those of the last successful live build,
+		// else deps.modules) whose build/bin file differs from the running copy; up_to_date when none does. Refused
+		// when off, while a build runs or while reloads are still waiting for their result.
+		reload_now_result reload_now();
 		[[nodiscard]] const live_status& status() const { return m_status; }
 
 	private:
@@ -110,12 +133,27 @@ namespace edt
 		// Filled by on_finished, which may come after the controller is gone (it holds a weak_ptr).
 		using inbox = std::vector<finished>;
 
+		// The reloads requested at once. A late round still updates Problems unless a newer round has finished; it
+		// moves the state only if no change, build or other round came after it was requested (`stale`).
+		struct reload_round
+		{
+			std::uint64_t id = 0;
+			std::size_t waiting = 0;
+			std::vector<problem> failures;
+			bool stale = false;
+		};
+
 		void take_outcomes();
 		void handle(const build_outcome& outcome);
 		// The start error, unless it is `busy` (stays pending).
 		std::optional<std::string> try_start();
 		bool quiet_enough() const;
-		std::optional<std::string> reload_built();
+		// The auto reload after settling: the modules of m_built.
+		void reload_built();
+		// False when every module is current (nothing requested).
+		bool request_reloads(const std::vector<std::string>& modules);
+		void on_reload_result(std::uint64_t round, const std::string& module, const core::reload_report& report);
+		void mark_rounds_stale();
 		void warn_once(const std::string& message);
 
 		problem_list& m_problems;
@@ -138,7 +176,14 @@ namespace edt
 		// The modules of the last successful live build; set while it may still be reloaded.
 		std::optional<std::vector<game_module_build_result>> m_built;
 		bool m_reload_due = false;
+		// The module names of the last successful live build, also after a later change.
+		std::vector<std::string> m_last_modules;
+		std::vector<reload_round> m_rounds;
+		std::uint64_t m_round_id = 0;
+		std::uint64_t m_finished_round = 0;
 		std::string m_warned;
 		std::shared_ptr<inbox> m_inbox = std::make_shared<inbox>();
+		// Seen by the reload callbacks, which come a frame later.
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 	};
 }
