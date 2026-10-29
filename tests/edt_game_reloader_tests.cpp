@@ -114,6 +114,77 @@ BOOST_AUTO_TEST_CASE(while_a_build_runs_the_action_is_disabled)
 	BOOST_TEST(reloaded.empty());
 }
 
+// #445: only the person's build greys Reload out; a live build is stopped first.
+BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_stays_enabled_and_stops_it_first)
+{
+	bool background = true;
+	int cancels = 0;
+	bool stops_at_once = false;
+	auto opts = options();
+	opts.background_building = [&background] { return background; };
+	opts.stop_background = [&] {
+		++cancels;
+		if (stops_at_once) background = false;
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+	BOOST_TEST(reloader->disabled_reason().empty());
+
+	// The job ends at the next pump: refused this time, nothing swapped while the linker may still write.
+	const auto stopping = invoke();
+	BOOST_REQUIRE(stopping.ok);
+	BOOST_TEST(stopping.value.as_object().at("status").as_string() == "refused");
+	BOOST_TEST(cancels == 1);
+	BOOST_TEST(reloaded.empty());
+
+	stops_at_once = true;
+	const auto outcome = invoke();
+	BOOST_REQUIRE(outcome.ok);
+	BOOST_TEST(outcome.value.as_object().at("status").as_string() == "reloaded");
+	BOOST_TEST(cancels == 2);
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+
+	// Gone: nothing to cancel.
+	BOOST_TEST(invoke().ok);
+	BOOST_TEST(cancels == 2);
+}
+
+// The live build that the action stops is still running for a frame or two: the reload waits for it instead of being
+// refused (a refused click would meet the next live build again, every time).
+BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_queues_the_reload_until_no_build_runs)
+{
+	bool background = true;
+	int stops = 0;
+	std::vector<std::pair<std::string, std::function<bool()>>> polls;
+	auto opts = options();
+	opts.background_building = [&background] { return background; };
+	opts.stop_background = [&stops] { ++stops; };
+	opts.each_frame = [&polls](const std::string& id, std::function<bool()> poll) {
+		for (const auto& queued : polls) {
+			if (queued.first == id) return; // register_implicit ignores a taken id
+		}
+		polls.emplace_back(id, std::move(poll));
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+
+	const auto queued = invoke();
+	BOOST_REQUIRE_MESSAGE(queued.ok, queued.error);
+	BOOST_TEST(queued.value.as_object().at("status").as_string() == "queued");
+	BOOST_TEST(stops == 1);
+	BOOST_TEST(reloaded.empty());
+	BOOST_REQUIRE(polls.size() == 1u);
+	BOOST_TEST(polls[0].first == "edt/reload_game_module/game");
+
+	BOOST_TEST(invoke().ok); // a second click: still one reload waiting
+	BOOST_TEST(polls.size() == 1u);
+
+	BOOST_TEST(polls[0].second()); // the stopped job has not ended yet: keeps waiting
+	BOOST_TEST(reloaded.empty());
+	background = false;
+	BOOST_TEST(!polls[0].second());
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+	BOOST_TEST(messages().empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_build_not_taken_is_shown_with_its_reason)
 {
 	make();
@@ -159,6 +230,30 @@ BOOST_AUTO_TEST_CASE(a_reload_scheduled_before_the_reloader_went_does_nothing)
 	reloader.reset();
 	scheduled.front().second();
 	BOOST_TEST(reloaded.empty());
+}
+
+BOOST_AUTO_TEST_CASE(reload_quiet_returns_a_build_not_taken_without_a_message)
+{
+	make();
+	for (const auto status : { core::reload_status::refused, core::reload_status::rolled_back, core::reload_status::lost }) {
+		next = { status, std::string{ "because of " } + std::string{ core::to_string(status) } };
+		const auto report = reloader->reload_quiet("game");
+		BOOST_TEST((report.status == status));
+		BOOST_TEST(report.message == next.message);
+	}
+	BOOST_TEST(reloaded.size() == 3u);
+	BOOST_TEST(messages().empty());
+}
+
+BOOST_AUTO_TEST_CASE(reload_quiet_is_refused_while_a_build_runs)
+{
+	make();
+	building = true;
+	const auto report = reloader->reload_quiet("game");
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message == "a build is running");
+	BOOST_TEST(reloaded.empty());
+	BOOST_TEST(messages().empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

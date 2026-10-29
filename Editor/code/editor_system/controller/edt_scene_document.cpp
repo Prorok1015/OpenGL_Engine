@@ -78,6 +78,26 @@ bool edt::scene_document::redo()
 	return true;
 }
 
+namespace {
+	std::optional<edt::history_entry> entry_of(const edt::history_record* record)
+	{
+		if (!record) {
+			return std::nullopt;
+		}
+		return edt::history_entry{ record->label, record->origin };
+	}
+}
+
+std::optional<edt::history_entry> edt::scene_document::next_undo_entry() const
+{
+	return entry_of(m_history.next_undo());
+}
+
+std::optional<edt::history_entry> edt::scene_document::next_redo_entry() const
+{
+	return entry_of(m_history.next_redo());
+}
+
 edt::rollback_result edt::scene_document::rollback_group(std::uint64_t group)
 {
 	rollback_result result;

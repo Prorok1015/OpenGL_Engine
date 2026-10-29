@@ -26,6 +26,7 @@
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
+#include "edt_edit_menu.h"
 #include "edt_file_menu.h"
 #include "edt_scene_commands.h"
 #include "edt_game_builder.h"
@@ -354,6 +355,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
+	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); })) {
+		m_registrations.push_back(std::move(action));
+	}
 	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
 			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
@@ -373,8 +377,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		build_options.preset_for = [code_dir = project.root / "code"](std::string_view configuration) {
 			return preset_for_configuration(code_dir, configuration);
 		};
-		build_options.on_fresh_configured = [snk_dir = project.snk_dir()](std::string_view configuration) {
-			if (auto problem = clear_fresh_configure(snk_dir, configuration)) {
+		build_options.on_fresh_configured = [snk_dir = project.snk_dir()](std::string_view configuration, std::uint64_t generation) {
+			if (auto problem = clear_fresh_configure(snk_dir, configuration, generation)) {
 				egLOG_WARN("editor/build", "{}: the next build of {} configures with --fresh again", *problem, configuration);
 			}
 		};
