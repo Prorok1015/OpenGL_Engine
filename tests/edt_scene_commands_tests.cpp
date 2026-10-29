@@ -474,4 +474,45 @@ BOOST_AUTO_TEST_CASE(a_script_is_not_held_back_by_a_gesture)
 	BOOST_TEST(call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Box"})", cmd::origin::test()).ok);
 }
 
+BOOST_AUTO_TEST_CASE(a_copy_of_a_long_name_stays_a_valid_name)
+{
+	const std::string crate = ref({ "00000000000000a3" });
+	// 255 bytes of two-byte characters and one 'x': the cut must not split a character.
+	std::string json_name = "x";
+	for (int i = 0; i < 127; ++i) json_name += "\\u044f";
+	BOOST_REQUIRE(call("scene.node.rename", R"({"ref":)" + crate + R"(,"name":")" + json_name + R"("})").ok);
+	BOOST_REQUIRE(child(root(), 0xa3)->name.size() == 255u);
+
+	BOOST_REQUIRE(call("scene.node.duplicate", R"({"ref":)" + crate + "}").ok);
+	BOOST_REQUIRE(call("scene.node.duplicate", R"({"ref":)" + crate + "}").ok);
+	for (const auto& node : root().children) {
+		BOOST_TEST_CONTEXT(node.name.size()) {
+			BOOST_TEST(node.name.size() <= 256u);
+			BOOST_TEST(!node.name.empty());
+			// Whole characters only: no name ends inside a two-byte sequence.
+			const std::size_t before_ascii = node.name.find_last_not_of("_copy0123456789");
+			if (node.name.size() > 200 && before_ascii != std::string::npos) {
+				BOOST_TEST((static_cast<unsigned char>(node.name[before_ascii]) & 0xC0) == 0x80u);
+			}
+		}
+	}
+	BOOST_TEST(root().children[2].name.ends_with("_copy_1"));
+	BOOST_TEST(root().children[3].name.ends_with("_copy"));
+}
+
+BOOST_AUTO_TEST_CASE(a_utf8_name_is_a_name)
+{
+	BOOST_REQUIRE(call("scene.node.rename", R"({"ref":)" + ref({ "00000000000000a4" }) + R"(,"name":"Ящик"})").ok);
+	BOOST_TEST(child(root(), 0xa4)->name == std::string(json::parse(R"("Ящик")").as_string()));
+}
+
+BOOST_AUTO_TEST_CASE(the_same_index_under_another_parent_is_a_move)
+{
+	const auto moved = call("scene.node.reparent", R"({"ref":)" + ref({ "00000000000000a3", "00000000000000b1" }) + R"(,"parent":)" + ref({}) + R"(,"index":0})");
+	BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
+	BOOST_TEST(!moved.value.as_object().contains("unchanged"));
+	BOOST_TEST(root().children[0].node_id == 0xb1u);
+	BOOST_TEST(child(root(), 0xa3)->children.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

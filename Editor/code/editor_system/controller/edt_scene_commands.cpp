@@ -148,13 +148,24 @@ namespace {
 		return std::nullopt;
 	}
 
-	// `base`, or base_1, base_2, ... : the first that no sibling has (as scene_editor names a copy).
-	std::string unique_name(const std::vector<prefab_node>& siblings, const std::string& base)
+	// At most `bytes` of `text`, cut before a UTF-8 continuation byte.
+	std::string_view utf8_prefix(std::string_view text, std::size_t bytes)
 	{
-		const auto taken = [&](const std::string& name) { return std::ranges::any_of(siblings, [&](const prefab_node& n) { return n.name == name; }); };
-		if (!taken(base)) return base;
-		for (int i = 1;; ++i) {
-			std::string candidate = base + "_" + std::to_string(i);
+		if (text.size() <= bytes) return text;
+		while (bytes > 0 && (static_cast<unsigned char>(text[bytes]) & 0xC0) == 0x80) --bytes;
+		return text.substr(0, bytes);
+	}
+
+	// name + suffix, then name + suffix + _1, _2, ... : the first that no sibling has (as scene_editor names a copy),
+	// `name` shortened so the result stays a valid name.
+	std::string unique_name(const std::vector<prefab_node>& siblings, std::string_view name, std::string_view suffix)
+	{
+		const auto taken = [&](const std::string& candidate) {
+			return std::ranges::any_of(siblings, [&](const prefab_node& n) { return n.name == candidate; });
+		};
+		for (int i = 0;; ++i) {
+			const std::string tail = i == 0 ? std::string(suffix) : std::format("{}_{}", suffix, i);
+			std::string candidate = std::string(utf8_prefix(name, max_name_bytes - tail.size())) + tail;
 			if (!taken(candidate)) return candidate;
 		}
 	}
@@ -357,7 +368,7 @@ namespace {
 			ASSERT_MSG(parent, "the parent of a located node is gone");
 			prefab_node copy = *at.owner;
 			scn::regenerate_node_ids(copy);
-			copy.name = unique_name(parent->children, copy.name + "_copy");
+			copy.name = unique_name(parent->children, copy.name, "_copy");
 			const std::uint64_t id = copy.node_id;
 			changing();
 			auto& children = parent->children;
