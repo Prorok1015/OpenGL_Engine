@@ -1,5 +1,6 @@
 #include "edt_game_builder.h"
 #include "edt_build_diagnostics.h"
+#include "edt_path_text.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_editor_events.h>
@@ -14,20 +15,14 @@
 #include <deque>
 #include <format>
 #include <system_error>
-#include <thread>
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
+using edt::utf8_of;
 
 namespace {
 	constexpr const char* k_window = "Building the game##edt_build";
 	constexpr const char* k_presets = "CMakePresets.json";
-
-	std::string utf8_of(const fs::path& path)
-	{
-		const std::u8string text = path.u8string();
-		return std::string(text.begin(), text.end());
-	}
 
 	json::value args_schema()
 	{
@@ -210,19 +205,14 @@ std::vector<std::string> edt::module_file_names(std::string_view module)
 #endif
 }
 
-int edt::default_build_jobs()
-{
-	return std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
-}
-
 edt::build_request edt::make_manual_build_request(const build_settings& settings, std::string configuration,
 	const game_builder_options& options)
 {
 	build_request out;
 	out.configuration = !configuration.empty() ? std::move(configuration) : settings.configuration.value_or(options.default_configuration);
 	out.preset = options.preset_for ? options.preset_for(out.configuration) : out.configuration;
-	if (settings.jobs_mode == jobs_mode::auto_jobs) {
-		out.jobs = std::max(1, options.auto_jobs ? options.auto_jobs() : default_build_jobs());
+	if (settings.jobs_mode == jobs_mode::auto_jobs && options.auto_jobs) {
+		out.jobs = std::max(1, options.auto_jobs());
 	}
 	out.priority = build_priority::normal;
 	out.cancel_on_restart = false;
@@ -301,7 +291,9 @@ edt::action_result edt::game_builder::start(build_request request)
 	if (request.configuration.empty()) return action_result::failure("invalid_args", "The build request has no configuration");
 	if (is_building()) {
 		if (!request.cancel_on_restart) return action_result::failure("busy", "A build is already running");
+		if (m_pending) egLOG_WARN("editor/build", "a waiting build request ({}) was replaced by a newer one", m_pending->configuration);
 		m_pending = std::move(request);
+		// Not job_service::cancel: that skips on_done, which starts the waiting request. So the job ends as `done`.
 		if (m_restart_stop) m_restart_stop->request_stop();
 		return action_result::success(json::object{ { "started", false }, { "job", 0 } });
 	}
@@ -313,7 +305,10 @@ edt::action_result edt::game_builder::start(build_request request)
 void edt::game_builder::launch(build_request request)
 {
 	// Only a request that meets a running build waits; one left by a job cancelled from outside is stale.
-	m_pending.reset();
+	if (m_pending) {
+		egLOG_WARN("editor/build", "a waiting build request ({}) was dropped: its build was cancelled", m_pending->configuration);
+		m_pending.reset();
+	}
 	if (request.preset.empty()) request.preset = request.configuration;
 	const game_project project = *m_options.project();
 
@@ -358,7 +353,10 @@ void edt::game_builder::launch(build_request request)
 
 void edt::game_builder::cancel()
 {
-	m_pending.reset();
+	if (m_pending) {
+		egLOG_WARN("editor/build", "a waiting build request ({}) was dropped: the build was cancelled", m_pending->configuration);
+		m_pending.reset();
+	}
 	if (is_building()) m_jobs.cancel(m_job);
 }
 

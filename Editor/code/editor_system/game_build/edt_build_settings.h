@@ -40,7 +40,7 @@ namespace edt
 	std::string_view jobs_mode_name(jobs_mode mode);
 	std::string_view log_verbosity_name(log_verbosity verbosity);
 
-	// Unknown keys are ignored.
+	// Unknown keys are ignored; null on a known key means its default.
 	parsed_build_settings parse_build_settings(std::string_view json_text);
 	// Writes the known keys into `doc` (made an object if it is not one), keeping the other keys and their order.
 	void merge_build_settings(boost::json::value& doc, const build_settings& settings);

@@ -96,7 +96,6 @@ struct build_fixture
 			++settings_reads;
 			return settings;
 		};
-		out.auto_jobs = [] { return 4; };
 		return out;
 	}
 
@@ -259,7 +258,7 @@ BOOST_AUTO_TEST_CASE(Success_ConfiguresThenBuildsInCodeWithTheSdk)
 	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
 	BOOST_CHECK(calls[0].program == fs::path("fake-cmake"));
 	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame" }));
-	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame", "--parallel", "4" }));
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame" }));
 	for (const auto& call : calls) {
 		BOOST_CHECK(!call.low_priority);
 		BOOST_CHECK(call.working_dir == root / "code");
@@ -279,7 +278,7 @@ BOOST_AUTO_TEST_CASE(Configuration_ComesFromTheArgument)
 	run_to_end();
 	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
 	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "release" }));
-	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "release", "--parallel", "4" }));
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "release" }));
 	BOOST_CHECK_EQUAL(build({ { "configuration", "Debug" } }).code, "invalid_args");
 }
 
@@ -500,13 +499,15 @@ BOOST_AUTO_TEST_CASE(PresetFor_NamesThePresetOfBothCommands)
 	run_to_end();
 	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
 	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "user-debuggame" }));
-	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "user-debuggame", "--parallel", "4" }));
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "user-debuggame" }));
 }
 
 BOOST_AUTO_TEST_CASE(ManualJobs_PassNoParallel)
 {
 	settings.jobs_mode = edt::jobs_mode::manual_jobs;
-	make();
+	auto opts = options();
+	opts.auto_jobs = [] { return 4; };
+	make(std::move(opts));
 	BOOST_REQUIRE(build().ok);
 	run_to_end();
 	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
@@ -522,7 +523,6 @@ BOOST_AUTO_TEST_CASE(AutoJobs_ComeFromTheOption)
 	run_to_end();
 	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
 	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame", "--parallel", "13" }));
-	BOOST_CHECK_GE(edt::default_build_jobs(), 1);
 }
 
 BOOST_AUTO_TEST_CASE(VerboseVerbosity_PassesVerbose_AndLogsTheOutputAtInfo)
@@ -536,7 +536,7 @@ BOOST_AUTO_TEST_CASE(VerboseVerbosity_PassesVerbose_AndLogsTheOutputAtInfo)
 	BOOST_REQUIRE(build().ok);
 	run_to_end();
 	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
-	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame", "--parallel", "4", "--verbose" }));
+	BOOST_TEST((calls[1].args == std::vector<std::string>{ "--build", "--preset", "debuggame", "--verbose" }));
 	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame" }));
 	BOOST_CHECK(logged_at_info("Linking CXX shared library"));
 }
@@ -585,7 +585,9 @@ BOOST_AUTO_TEST_CASE(Configuration_ArgumentThenSettingsThenDefault)
 
 BOOST_AUTO_TEST_CASE(Settings_AreReadAtEveryStart)
 {
-	make();
+	auto opts = options();
+	opts.auto_jobs = [] { return 4; };
+	make(std::move(opts));
 	BOOST_CHECK_EQUAL(settings_reads, 0);
 	BOOST_REQUIRE(build().ok);
 	run_to_end();
@@ -617,6 +619,9 @@ BOOST_AUTO_TEST_CASE(ManualRequest_FollowsTheSettings)
 	BOOST_CHECK(!out.cancel_on_restart);
 	BOOST_CHECK(out.verbosity == edt::log_verbosity::errors);
 	BOOST_CHECK(!out.reload_after);
+
+	opts.auto_jobs = nullptr;
+	BOOST_CHECK_EQUAL(edt::make_manual_build_request(chosen, "release", opts).jobs, 0); // no formula: the preset decides
 }
 
 BOOST_AUTO_TEST_CASE(LowPriority_ReachesTheProcessOptions)
@@ -706,6 +711,7 @@ BOOST_AUTO_TEST_CASE(Cancel_DropsTheWaitingRequest)
 	next.cancel_on_restart = true;
 	BOOST_REQUIRE(builder->start(next).ok);
 	builder->cancel();
+	BOOST_CHECK(warned("was dropped"));
 	run_until_idle();
 	BOOST_CHECK(calls.empty());
 	BOOST_CHECK(!builder->is_building());

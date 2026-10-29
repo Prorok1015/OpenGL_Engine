@@ -1,4 +1,5 @@
 #include "edt_build_settings.h"
+#include "edt_path_text.h"
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -11,6 +12,7 @@
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
+using edt::utf8_of;
 
 namespace {
 	constexpr std::string_view k_configuration = "configuration";
@@ -18,12 +20,6 @@ namespace {
 	constexpr std::string_view k_reload_after_build = "reload_after_build";
 	constexpr std::string_view k_build_before_play = "build_before_play";
 	constexpr std::string_view k_log_verbosity = "log_verbosity";
-
-	std::string utf8_of(const fs::path& path)
-	{
-		const std::u8string text = path.u8string();
-		return std::string(text.begin(), text.end());
-	}
 
 	std::string bad_value(std::string_view key, const json::value& value, std::string_view expected)
 	{
@@ -33,7 +29,7 @@ namespace {
 	void read_bool(const json::object& doc, std::string_view key, bool& out, std::vector<std::string>& warnings)
 	{
 		const json::value* value = doc.if_contains(key);
-		if (!value) return;
+		if (!value || value->is_null()) return;
 		if (value->is_bool()) {
 			out = value->get_bool();
 		} else {
@@ -73,14 +69,14 @@ edt::parsed_build_settings edt::parse_build_settings(std::string_view json_text)
 	const json::object& object = doc.get_object();
 	build_settings& settings = out.settings;
 
-	if (const json::value* value = object.if_contains(k_configuration)) {
+	if (const json::value* value = object.if_contains(k_configuration); value && !value->is_null()) {
 		if (value->is_string() && (value->get_string() == "debuggame" || value->get_string() == "release")) {
 			settings.configuration = std::string(value->get_string());
-		} else if (!value->is_null()) {
+		} else {
 			out.warnings.push_back(bad_value(k_configuration, *value, "\"debuggame\" or \"release\""));
 		}
 	}
-	if (const json::value* value = object.if_contains(k_jobs_mode)) {
+	if (const json::value* value = object.if_contains(k_jobs_mode); value && !value->is_null()) {
 		if (value->is_string() && value->get_string() == "auto") {
 			settings.jobs_mode = jobs_mode::auto_jobs;
 		} else if (value->is_string() && value->get_string() == "manual") {
@@ -91,7 +87,7 @@ edt::parsed_build_settings edt::parse_build_settings(std::string_view json_text)
 	}
 	read_bool(object, k_reload_after_build, settings.reload_after_build, out.warnings);
 	read_bool(object, k_build_before_play, settings.build_before_play, out.warnings);
-	if (const json::value* value = object.if_contains(k_log_verbosity)) {
+	if (const json::value* value = object.if_contains(k_log_verbosity); value && !value->is_null()) {
 		bool known = false;
 		if (value->is_string()) {
 			for (const log_verbosity candidate : { log_verbosity::errors, log_verbosity::normal, log_verbosity::verbose }) {

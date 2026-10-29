@@ -131,9 +131,14 @@ BOOST_AUTO_TEST_CASE(BadValues_WarnAndKeepTheDefaults)
 			[&key](const std::string& warning) { return warning.find(key) != std::string::npos; }), key);
 	}
 
-	const auto null_configuration = edt::parse_build_settings(R"({"configuration":null})");
-	BOOST_CHECK(null_configuration.warnings.empty());
-	BOOST_CHECK(!null_configuration.settings.configuration.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(NullValues_AreTheDefaultsSilently)
+{
+	const auto parsed = edt::parse_build_settings(R"({"configuration":null,"jobs_mode":null,"reload_after_build":null,
+		"build_before_play":null,"log_verbosity":null})");
+	BOOST_CHECK(parsed.warnings.empty());
+	BOOST_CHECK(same(parsed.settings, edt::build_settings{}));
 }
 
 BOOST_AUTO_TEST_CASE(NotAnObject_IsOneWarning)

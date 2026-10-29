@@ -53,9 +53,6 @@ namespace edt
 		bool reload_after = true;
 	};
 
-	// std::thread::hardware_concurrency(), at least 1.
-	int default_build_jobs();
-
 	struct game_builder_options
 	{
 		// Nullopt: no project is open.
@@ -82,8 +79,8 @@ namespace edt
 		std::function<std::string(std::string_view configuration)> preset_for = [](std::string_view configuration) {
 			return std::string(configuration);
 		};
-		// The jobs of a build whose settings say jobs_mode auto.
-		std::function<int()> auto_jobs = default_build_jobs;
+		// The jobs of a build whose settings say jobs_mode auto (at least 1 is passed); null: no `--parallel`, the preset decides.
+		std::function<int()> auto_jobs;
 		// Gets game_module_built; null: none. Must outlive the builder.
 		editor_events* events = nullptr;
 	};
