@@ -50,3 +50,13 @@ set_target_properties(game PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY "$<1:${_game_bin}>"
 	LIBRARY_OUTPUT_DIRECTORY "$<1:${_game_bin}>"
 	PDB_OUTPUT_DIRECTORY "$<1:${_game_bin}>")
+
+# The editor loads a copy of the module from .cache/modules/<pid>-<n>/ with what lies next to it (#435).
+if(MSVC)
+	# The module names its PDB by file name only, not by its path in build/bin: the debugger takes the one next to the
+	# copy, and the PDB in build/bin stays free for the next build.
+	target_link_options(game PRIVATE "$<$<CONFIG:DebugGame>:/PDBALTPATH:%_PDB%>")
+else()
+	# Libraries next to the module are found next to its copy.
+	set_target_properties(game PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()

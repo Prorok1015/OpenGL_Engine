@@ -4,19 +4,28 @@
 #include <snk/application/app_module_loader.hpp>
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/core/core_project_modules.h>
+#include <snk/desc/desc_base.hpp>
 #include <snk/game/gs_game_module.h>
+#include <snk/platform/plt_process.h>
 #include <snk/project/prj_project.h>
+#include <snk/scene/scn_scene_layer.h>
+#include <boost/json.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <format>
+#include <functional>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 
-// core::load_project_modules (#428): the manifest's game modules, compiled in or copied out of <root>/build/bin. A
-// real library is loaded in tests/module_dll (shared configurations); here a file that is no library stands in for
-// one wherever the load is expected to fail.
+// core::load_project_modules (#428): the manifest's game modules, compiled in or copied out of <root>/build/bin, and
+// core::project_module_host::reload (#435) with compiled-in builds. A real library is loaded and reloaded in
+// tests/module_dll (shared configurations); here a file that is no library stands in for one wherever the load is
+// expected to fail.
 
 namespace fs = std::filesystem;
 
@@ -68,8 +77,40 @@ protected:
 	void register_content(scn::scene_layer&, ds::app_data_storage&) override {}
 };
 
+// Builds of one game module for reload: each registers a desc type of its own.
+template<int Build>
+class reload_game_module final : public gs::game_module
+{
+public:
+	std::string_view name() const override { return "reload_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage&) override
+	{
+		if constexpr (Build < 0) {
+			throw std::runtime_error("this build fails to register");
+		} else {
+			layer.descs().register_component_desc<build_desc>(std::format("build{}_desc", Build));
+		}
+	}
+
+private:
+	struct build_desc : desc::desc_base {
+		void deserialize(desc::desc_system&, const boost::json::object&) override {}
+		void serialize(boost::json::object&) const override {}
+	};
+};
+
+using reload_v1 = reload_game_module<1>;
+using reload_v2 = reload_game_module<2>;
+using reload_failing = reload_game_module<-1>;
+
 }
 
+SNK_DECLARE_MODULE_PREFIXED(reload_v1_, reload_v1)
+SNK_DECLARE_MODULE_PREFIXED(reload_v2_, reload_v2)
+SNK_DECLARE_MODULE_PREFIXED(reload_failing_, reload_failing)
 SNK_DECLARE_MODULE_PREFIXED(project_first_, first_game_module)
 SNK_DECLARE_MODULE_PREFIXED(project_second_, second_game_module)
 SNK_DECLARE_MODULE_PREFIXED(project_probe_, probe_module)
@@ -98,6 +139,41 @@ app::modules::module_entry second_game_entry()
 {
 	return { &project_second_module_api_version, &project_second_module_build_info, &project_second_create_module, &project_second_destroy_module };
 }
+
+app::modules::module_entry reload_v1_entry()
+{
+	return { &reload_v1_module_api_version, &reload_v1_module_build_info, &reload_v1_create_module, &reload_v1_destroy_module };
+}
+
+app::modules::module_entry reload_v2_entry()
+{
+	return { &reload_v2_module_api_version, &reload_v2_module_build_info, &reload_v2_create_module, &reload_v2_destroy_module };
+}
+
+app::modules::module_entry reload_failing_entry()
+{
+	return { &reload_failing_module_api_version, &reload_failing_module_build_info, &reload_failing_create_module,
+		&reload_failing_destroy_module };
+}
+
+std::unique_ptr<app::modules::module_source> compiled(app::modules::module_entry entry)
+{
+	return std::make_unique<app::modules::static_module_source>("reload_game", entry);
+}
+
+std::function<std::unique_ptr<app::modules::module_source>()> rollback_to(app::modules::module_entry entry)
+{
+	return [entry] { return compiled(entry); };
+}
+
+// No process has this id on any system the tests run on (Linux pid_max is below 2^22, Windows ids are 32-bit).
+constexpr std::int64_t k_dead_pid = 2147483000;
+// Always running: init on Linux, System on Windows.
+#if defined(_WIN32)
+constexpr std::int64_t k_running_pid = 4;
+#else
+constexpr std::int64_t k_running_pid = 1;
+#endif
 
 std::string library_file(const std::string& name)
 {
@@ -298,21 +374,21 @@ BOOST_AUTO_TEST_CASE(a_library_that_cannot_be_opened_is_refused_and_its_copy_rem
 	BOOST_TEST(fs::exists(library));
 }
 
-BOOST_AUTO_TEST_CASE(copies_left_by_earlier_runs_are_removed_and_only_those)
+BOOST_AUTO_TEST_CASE(copies_of_ended_processes_are_removed_and_only_those)
 {
 	open({ manifest_module("test_game") });
 	put_broken_library("test_game");
 	const fs::path cache = root / ".cache" / "modules";
-	dir.write(cache / ("test_game.7" + copy_extension()), "old");
-	dir.write(cache / "test_game.7.pdb", "old");
-	dir.write(cache / ("other_game.3" + copy_extension()), "other");
-	dir.write(cache / ("test_game_x.1" + copy_extension()), "other");
-	dir.write(cache / "test_game.notes", "other");
+	dir.write(cache / ("test_game.7" + copy_extension()), "a copy of the layout before #435");
+	dir.write(cache / std::format("{}-0", k_dead_pid) / library_file("test_game"), "an editor that ended");
+	dir.write(cache / std::format("{}-3", k_running_pid) / library_file("test_game"), "an editor that runs");
+	dir.write(cache / std::format("{}-9", platform::current_process_id()) / library_file("test_game"), "this process, unused");
+	dir.write(cache / "notes" / "keep.txt", "no copy");
 	load();
 
 	auto left = files_in(cache);
 	std::ranges::sort(left);
-	BOOST_TEST(left == (std::vector<std::string>{ "other_game.3" + copy_extension(), "test_game.notes", "test_game_x.1" + copy_extension() }));
+	BOOST_TEST(left == (std::vector<std::string>{ std::format("{}-3", k_running_pid), "notes" }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(a_build_output_linked_out_of_the_project_is_refused)
@@ -392,6 +468,97 @@ BOOST_AUTO_TEST_CASE(a_second_game_module_is_refused_and_the_rest_still_loads)
 	BOOST_TEST((loader.state("first_game") == app::modules::module_state::initialized));
 	BOOST_TEST(!loader.state("second_game").has_value());
 	BOOST_TEST(contexts().game_layer() != nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The engine side with the game layer factory, and a host over it: reload() with compiled-in builds.
+struct reload_fixture : test_util::module_env {
+	core::project_module_host host{ loader, root, core::project_modules_options{} };
+	std::vector<std::string> calls;
+	core::reload_hooks hooks;
+
+	reload_fixture()
+	{
+		hooks.before_swap = [this] { calls.push_back("before"); };
+		hooks.after_swap = [this](const core::reload_report& report) { calls.push_back(std::string{ "after:" } + std::string{ core::to_string(report.status) }); };
+		loader.load(compiled(reload_v1_entry()), root);
+	}
+
+	bool registered(std::string_view type)
+	{
+		auto* layer = contexts().game_layer();
+		return layer && layer->descs().is_registered(type);
+	}
+};
+
+BOOST_FIXTURE_TEST_SUITE(core_project_module_reload_tests, reload_fixture)
+
+BOOST_AUTO_TEST_CASE(a_new_build_takes_the_place_of_the_running_one)
+{
+	const auto report = host.reload("reload_game", compiled(reload_v2_entry()), rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST(report.message.empty());
+	BOOST_TEST(registered("build2_desc"));
+	BOOST_TEST(!registered("build1_desc"));
+	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:reloaded" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_one_is_not_touched)
+{
+	auto entry = reload_v2_entry();
+	entry.api_version = &next_major_api;
+	auto* layer = contexts().game_layer();
+	const auto report = host.reload("reload_game", compiled(entry), rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("api") != std::string::npos);
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(contexts().game_layer() == layer);
+	BOOST_TEST(registered("build1_desc"));
+}
+
+BOOST_AUTO_TEST_CASE(a_build_of_another_module_is_refused)
+{
+	const auto report = host.reload("reload_game", std::make_unique<app::modules::static_module_source>("x", other_entry()),
+		rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message.find("other_game") != std::string::npos);
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(registered("build1_desc"));
+}
+
+BOOST_AUTO_TEST_CASE(a_build_that_fails_to_register_rolls_back_to_the_previous_one)
+{
+	const auto report = host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_v1_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::rolled_back));
+	BOOST_TEST(report.message.find("fails to register") != std::string::npos);
+	BOOST_TEST((loader.state("reload_game") == app::modules::module_state::initialized));
+	BOOST_TEST(registered("build1_desc"));
+	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:rolled_back" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(when_the_previous_build_fails_too_no_module_runs)
+{
+	const auto report = host.reload("reload_game", compiled(reload_failing_entry()), rollback_to(reload_failing_entry()), hooks);
+
+	BOOST_TEST((report.status == core::reload_status::lost));
+	BOOST_TEST(!loader.state("reload_game").has_value());
+	BOOST_TEST(contexts().game_layer() != nullptr);
+	BOOST_TEST(!registered("build1_desc"));
+	BOOST_TEST((calls == std::vector<std::string>{ "before", "after:lost" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(without_a_build_in_the_project_nothing_is_reloaded)
+{
+	const auto report = host.reload("reload_game", hooks);
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(registered("build1_desc"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

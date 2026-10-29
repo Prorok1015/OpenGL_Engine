@@ -15,6 +15,11 @@ namespace platform
 	// The file of the running program; empty when the system cannot tell.
 	SNK_API std::filesystem::path current_executable();
 
+	SNK_API std::int64_t current_process_id();
+	// Whether a process with this id runs now: true for one this process may not look at, false for an id <= 0. An id
+	// the system reused for another program counts as running.
+	SNK_API bool process_is_running(std::int64_t pid);
+
 	struct spawn_result
 	{
 		// The id the system gave the new process; 0 exactly when `error` is set.

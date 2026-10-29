@@ -2,6 +2,7 @@
 #include "edt_build_diagnostics.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/object.hpp>
@@ -199,6 +200,7 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 		input.run = m_options.run;
 		input.find_toolchain = m_options.find_toolchain;
 		m_configuration = input.configuration;
+		m_modules = input.modules;
 
 		m_problems.clear("build");
 		egLOG_INFO("editor/build", "building the game module ({}) in '{}'", input.configuration, utf8_of(project.root / "code"));
@@ -299,6 +301,14 @@ void edt::game_builder::finish(game_build_result& result)
 			built += utf8_of(module);
 		}
 		egLOG_INFO("editor/build", "game module built: {}", built.empty() ? std::string{ "(no module file of the manifest found in build/bin)" } : built);
+		if (m_options.events) {
+			for (std::size_t i = 0; i < result.modules.size() && i < m_modules.size(); ++i) {
+				std::error_code ec;
+				if (fs::exists(result.modules[i], ec)) {
+					m_options.events->game_module_built.emit({ m_modules[i], result.modules[i], m_configuration, m_job, true });
+				}
+			}
+		}
 		return;
 	}
 

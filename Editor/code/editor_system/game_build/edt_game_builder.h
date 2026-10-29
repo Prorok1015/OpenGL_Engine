@@ -21,6 +21,7 @@ namespace edt
 	class action_registry;
 	class dialog_service;
 	class job_service;
+	class editor_events;
 
 	// The open project as the builder sees it.
 	struct game_project
@@ -50,6 +51,8 @@ namespace edt
 		std::function<std::variant<edt::toolchain, std::string>(std::stop_token)> find_toolchain;
 		// Shows the progress window (dialog_service::implicit_registrar); null: none (tests).
 		std::function<void(std::string_view id, std::function<bool()> draw)> show_progress;
+		// Raises game_module_built after a successful build; null: none (tests).
+		editor_events* events = nullptr;
 	};
 
 	// What one build produced; filled on the worker thread.
@@ -113,6 +116,8 @@ namespace edt
 		std::shared_ptr<toolchain_cache> m_toolchains = std::make_shared<toolchain_cache>();
 		std::uint64_t m_job = 0;
 		std::string m_configuration;
+		// The manifest's names of the modules being built, in the order of game_build_result::modules.
+		std::vector<std::string> m_modules;
 		float m_spinner_t = 0.f;
 		// The presets check runs on every frame (shortcut dispatch reads `enabled`): one stat per second is enough.
 		mutable std::chrono::steady_clock::time_point m_presets_checked{};
