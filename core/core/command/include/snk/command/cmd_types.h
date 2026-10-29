@@ -34,6 +34,38 @@ namespace cmd
 	// the MCP server.
 	enum class danger : std::uint8_t { none, confirm, deny_by_default };
 
+	// What a command is to an agent: the policy (A6b #293, A6c #449) sets one mode per category and may override it for a
+	// command. `unset` is a command nobody has classified: an agent cannot see or call it (fail closed). `not_for_agents`
+	// says so on purpose (a command that answers dialogs, that opens editor windows).
+	enum class agent_category : std::uint8_t
+	{
+		unset,
+		not_for_agents,
+		read,           // state, log, screenshots
+		scene_edit,     // undoable edits of the scene
+		code_edit,      // editing an existing code file
+		code_files,     // creating and deleting code files
+		cmake_presets,  // CMake files and presets: editing them runs code at configure time
+		build,          // building and reloading the game module (runs the project's CMake code)
+		live,           // the live mode's commands, while it is on
+	};
+
+	constexpr const char* to_string(agent_category category)
+	{
+		switch (category) {
+		case agent_category::unset: return "unset";
+		case agent_category::not_for_agents: return "not_for_agents";
+		case agent_category::read: return "read";
+		case agent_category::scene_edit: return "scene_edit";
+		case agent_category::code_edit: return "code_edit";
+		case agent_category::code_files: return "code_files";
+		case agent_category::cmake_presets: return "cmake_presets";
+		case agent_category::build: return "build";
+		case agent_category::live: return "live";
+		}
+		return "unset";
+	}
+
 	enum class origin_kind : std::uint8_t { ui, test, agent, game };
 
 	// Who asked for a command.
@@ -85,6 +117,7 @@ namespace cmd
 		danger risk = danger::none;
 		bool mutates = false;
 		bool long_running = false;
+		agent_category category = agent_category::unset;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
 		// The person's consent is a switch of theirs that `enabled` reads (live mode, #445): an MCP agent may see and

@@ -32,6 +32,7 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 	cmd::command_desc command;
 	command.id = k_action_id;
 	command.summary = "Reload Game Module";
+	command.category = cmd::agent_category::build;
 	command.args_schema = args_schema();
 	command.result_schema = result_schema();
 	command.expose_as_tool = true;
