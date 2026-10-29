@@ -189,13 +189,14 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 				changes.push_back({ w, node.node_id, std::nullopt, scene_node_state{ parent, previous, depth, shallow_copy(node) }, false });
 			} else {
 				scene_node_state& old = it->second;
-				// Under a moved parent a node keeps its place among its siblings but not its depth.
-				old.depth = depth;
 				const bool same_node = same_shallow(old.node, node);
 				if (!same_node || old.parent != parent || old.previous != previous) {
 					++stats.snapshots_copied;
 					changes.push_back({ w, node.node_id, old, scene_node_state{ parent, previous, depth, shallow_copy(node) },
 						same_node && old.parent == parent });
+				} else {
+					// Under a moved parent a node keeps its place among its siblings but not its depth.
+					old.depth = depth;
 				}
 			}
 			std::uint64_t before = 0;
@@ -231,6 +232,23 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 	}
 	change = std::make_unique<scene_change>(worlds, *this, std::move(changes));
 	return diff_result::changed;
+}
+
+void edt::scene_history_index::refresh_depths(std::size_t world, const scn::world_desc& desc)
+{
+	if (world >= m_worlds.size()) {
+		return;
+	}
+	auto& index = m_worlds[world];
+	const auto walk = [&](const auto& self, const prefab_node& node, int depth) -> void {
+		if (const auto it = index.find(node.node_id); it != index.end()) {
+			it->second.depth = depth;
+		}
+		for (const auto& child : node.children) {
+			self(self, child, depth + 1);
+		}
+	};
+	walk(walk, desc.get_root(), 0);
 }
 
 void edt::scene_history_index::set(std::size_t world, std::uint64_t id, const std::optional<scene_node_state>& state)
@@ -327,5 +345,18 @@ void edt::apply_scene_changes(std::vector<scn::world_desc>& worlds, scene_histor
 			place.siblings->erase(place.siblings->begin() + static_cast<std::ptrdiff_t>(place.index));
 		}
 		index.set(change.world, change.id, std::nullopt);
+	}
+	// The nodes below a moved one were not part of the change, but their depth is: a later change records it as its
+	// `before`, and undo places by depth.
+	std::vector<bool> touched(worlds.size(), false);
+	for (const auto& change : changes) {
+		if (change.world < worlds.size()) {
+			touched[change.world] = true;
+		}
+	}
+	for (std::size_t w = 0; w < worlds.size(); ++w) {
+		if (touched[w]) {
+			index.refresh_depths(w, worlds[w]);
+		}
 	}
 }

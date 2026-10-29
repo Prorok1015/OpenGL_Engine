@@ -6,6 +6,7 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -108,9 +109,10 @@ struct scene_fixture
 	}
 
 	// The edit, then undo back to the start and redo to the edit, comparing the whole tree each time.
-	void check_round_trip(const std::string& label)
+	void check_round_trip(const std::string& label, const std::function<void()>& edit)
 	{
 		const prefab_node before = root();
+		edit();
 		scene.commit(label);
 		BOOST_REQUIRE(scene.history().can_undo());
 		const prefab_node after = root();
@@ -282,55 +284,46 @@ BOOST_FIXTURE_TEST_SUITE(edt_scene_history_tests, scene_fixture)
 
 BOOST_AUTO_TEST_CASE(every_kind_of_edit_undoes_and_redoes)
 {
-	root().children.push_back(make_node(60, "created"));
-	check_round_trip("create");
-
-	root().children.erase(root().children.begin() + 1);
-	check_round_trip("delete");
-
-	root().children.erase(root().children.begin());
-	check_round_trip("delete a subtree");
-
-	auto copy = node(10);
-	copy.node_id = 70;
-	copy.children[0].node_id = 71;
-	copy.children[1].node_id = 72;
-	root().children.insert(root().children.begin() + 1, std::move(copy));
-	check_round_trip("duplicate");
-
-	auto moved = node(20);
-	root().children.erase(root().children.begin() + 1);
-	node(10).children.insert(node(10).children.begin() + 1, std::move(moved));
-	check_round_trip("reparent");
-
-	auto lifted = node(11);
-	node(10).children.erase(node(10).children.begin());
-	root().children.push_back(std::move(lifted));
-	check_round_trip("reparent a child up");
-
-	std::swap(root().children[1], root().children[3]);
-	check_round_trip("reorder");
-
-	node(30).name = "renamed";
-	check_round_trip("rename");
-
-	node(40).position = { 1.0f, 2.0f, 3.0f };
-	node(40).has_transform = true;
-	check_round_trip("transform");
-
-	scn::prefab_desc::prefab_comp_node component;
-	component.type_name = "stat_desc";
-	component.overrides["hp"] = 5;
-	node(50).components["stat"] = component;
-	check_round_trip("add a component");
-
-	scn::override_record record;
-	record.target = { 7 };
-	record.component = "stat";
-	record.path = "/hp";
-	record.value = 3;
-	node(12).overrides.push_back(record);
-	check_round_trip("override");
+	check_round_trip("create", [&] { root().children.push_back(make_node(60, "created")); });
+	check_round_trip("delete", [&] { root().children.erase(root().children.begin() + 1); });
+	check_round_trip("delete a subtree", [&] { root().children.erase(root().children.begin()); });
+	check_round_trip("duplicate", [&] {
+		auto copy = node(10);
+		copy.node_id = 70;
+		copy.children[0].node_id = 71;
+		copy.children[1].node_id = 72;
+		root().children.insert(root().children.begin() + 1, std::move(copy));
+	});
+	check_round_trip("reparent", [&] {
+		auto moved = node(20);
+		root().children.erase(root().children.begin() + 1);
+		node(10).children.insert(node(10).children.begin() + 1, std::move(moved));
+	});
+	check_round_trip("reparent a child up", [&] {
+		auto lifted = node(11);
+		node(10).children.erase(node(10).children.begin());
+		root().children.push_back(std::move(lifted));
+	});
+	check_round_trip("reorder", [&] { std::swap(root().children[1], root().children[3]); });
+	check_round_trip("rename", [&] { node(30).name = "renamed"; });
+	check_round_trip("transform", [&] {
+		node(40).position = { 1.0f, 2.0f, 3.0f };
+		node(40).has_transform = true;
+	});
+	check_round_trip("add a component", [&] {
+		scn::prefab_desc::prefab_comp_node component;
+		component.type_name = "stat_desc";
+		component.overrides["hp"] = 5;
+		node(50).components["stat"] = component;
+	});
+	check_round_trip("override", [&] {
+		scn::override_record record;
+		record.target = { 7 };
+		record.component = "stat";
+		record.path = "/hp";
+		record.value = 3;
+		node(12).overrides.push_back(record);
+	});
 }
 
 BOOST_AUTO_TEST_CASE(deleted_siblings_come_back_in_their_order)
@@ -356,9 +349,20 @@ BOOST_AUTO_TEST_CASE(a_moved_subtree_is_undone_with_its_children)
 	node(11).children.push_back(std::move(b));
 	scene.commit("move b under a1");
 
+	const prefab_node after = root();
+
 	BOOST_REQUIRE(scene.undo());
 	BOOST_REQUIRE(scene.undo());
 	BOOST_TEST(same_tree(root(), before));
+	BOOST_REQUIRE(scene.redo());
+	BOOST_REQUIRE(scene.redo());
+	BOOST_TEST(same_tree(root(), after));
+	// Undo places by depth: the depths below the moved nodes followed them.
+	BOOST_REQUIRE(scene.undo());
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(same_tree(root(), before));
+	scene.commit("nothing");
+	BOOST_TEST(scene.last_commit_stats().changes == 0u);
 }
 
 BOOST_AUTO_TEST_CASE(undo_to_the_save_point_makes_the_scene_clean)

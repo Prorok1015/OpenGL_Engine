@@ -61,6 +61,8 @@ namespace edt
 
 		// Brings the node `id` of `world` to `state` in the index (nullopt: removes it); used when a change is applied.
 		void set(std::size_t world, std::uint64_t id, const std::optional<scene_node_state>& state);
+		// Takes the depth of every node of `world` from `desc`, whose structure the index already holds.
+		void refresh_depths(std::size_t world, const scn::world_desc& desc);
 
 	private:
 		std::vector<std::unordered_map<std::uint64_t, scene_node_state>> m_worlds;
