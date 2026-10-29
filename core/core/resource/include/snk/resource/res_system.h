@@ -145,7 +145,10 @@ namespace res
 				egLOG_WARN("resource/store", "Protocol '{}' is not supported!", tag.protocol());
 				return file_operation::failure("protocol is not supported");
 			}
-			return resolvers.at(tag.protocol())->create_sync(tag, data);
+			auto result = resolvers.at(tag.protocol())->create_sync(tag, data);
+			// Whatever was loaded under the tag meanwhile is dropped, created or refused.
+			signal_changed(tag);
+			return result;
 		}
 
 

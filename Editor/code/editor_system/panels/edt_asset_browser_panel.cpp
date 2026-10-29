@@ -1,3 +1,4 @@
+#include <snk/common/fs_paths.h>
 #include "edt_asset_browser_panel.h"
 #include "edt_code_section.h"
 #include <imgui.h>
@@ -16,7 +17,7 @@ namespace edt
 
 	const char* asset_browser_panel::get_file_icon(const std::filesystem::path& p) const
 	{
-		std::string ext = to_lower(p.extension().string());
+		std::string ext = to_lower(fs_paths::utf8_of(p.extension()));
 		if (ext == ".obj" || ext == ".gltf" || ext == ".glb" || ext == ".fbx") return "[3D] ";
 		if (ext == ".desc")                                                      return "[D]  ";
 		if (ext == ".png"  || ext == ".jpg"  || ext == ".jpeg" ||
@@ -133,7 +134,7 @@ namespace edt
 				ImGui::SameLine(0.f, 2.f);
 				ImGui::TextDisabled(">");
 				ImGui::SameLine(0.f, 2.f);
-				const std::string seg = part.string();
+				const std::string seg = fs_paths::utf8_of(part);
 				if (ImGui::SmallButton(seg.c_str()))
 					navigate_to(cursor);
 			}
@@ -188,7 +189,7 @@ namespace edt
 			if (from_lower_layer)
 				ImGui::PopStyleColor();
 			if (ImGui::IsItemHovered() && m_layers.size() > 1)
-				ImGui::SetTooltip("layer %zu: %s", e.src.layer, m_layers[e.src.layer].string().c_str());
+				ImGui::SetTooltip("layer %zu: %s", e.src.layer, fs_paths::utf8_of(m_layers[e.src.layer]).c_str());
 
 			if (e.src.is_dir) {
 				// Navigate into folder on click
@@ -203,7 +204,7 @@ namespace edt
 
 				// Drag source: path relative to res:// (the physical path would be wrong for lower layers)
 				if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
-					const std::string full = e.src.relative.generic_string();
+					const std::string full = fs_paths::generic_utf8_of(e.src.relative);
 					ImGui::SetDragDropPayload("ASSET_PATH", full.c_str(), full.size() + 1);
 					ImGui::TextUnformatted(e.label.c_str());
 					ImGui::EndDragDropSource();
@@ -212,9 +213,9 @@ namespace edt
 				// Context menu
 				if (ImGui::BeginPopupContextItem()) {
 					if (ImGui::MenuItem("Copy path"))
-						ImGui::SetClipboardText(e.src.path.string().c_str());
+						ImGui::SetClipboardText(fs_paths::utf8_of(e.src.path).c_str());
 					if (ImGui::MenuItem("Copy relative path")) {
-						ImGui::SetClipboardText(e.src.relative.generic_string().c_str());
+						ImGui::SetClipboardText(fs_paths::generic_utf8_of(e.src.relative).c_str());
 					}
 					ImGui::EndPopup();
 				}
