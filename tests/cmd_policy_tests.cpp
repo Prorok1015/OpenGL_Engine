@@ -2,6 +2,8 @@
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_registry.h>
 #include <boost/json/object.hpp>
+#include <algorithm>
+#include <cstdint>
 #include <chrono>
 #include <memory>
 #include <string>
