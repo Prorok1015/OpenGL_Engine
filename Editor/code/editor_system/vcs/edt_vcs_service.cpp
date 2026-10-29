@@ -52,6 +52,8 @@ namespace {
 	constexpr std::size_t k_unlimited = std::numeric_limits<std::size_t>::max();
 	// status, log, branches and the filter list: git is stopped beyond this and the answer says `truncated`.
 	constexpr std::size_t k_read_cap = 4 * 1024 * 1024;
+	// The file lists of the filter check (the whole index): past this the check fails closed.
+	constexpr std::size_t k_list_cap = 64 * 1024 * 1024;
 	// A cursor past this many commits is clamped: no history is that long, and skip + count stays far from overflow.
 	constexpr std::int64_t k_max_skip = 1'000'000'000;
 
@@ -62,15 +64,30 @@ namespace {
 		std::vector<std::string> environment;
 		fs::path cwd;
 		edt::process_runner run;
-		// Per call, after safe_base_args: the hooks and filter overrides of a read, the agent overrides of a write.
+		// Per call, after safe_base_args: the hooks and filter overrides of a read, the guard overrides of a write.
 		std::vector<std::string> config_args;
-		// An agent's write that can run filter drivers, without allow_filters: refused when a configured driver applies
-		// to a path it touches.
+		// A write not from a person (origin agent, test, game): the guarded path.
+		bool guarded = false;
+		// Guarded, without allow_any_repo_config: the repository's own config must pass the allowlist (config_refusal).
+		bool check_repo_config = false;
+		bool allow_hooks = false;
+		// Guarded write that can run filter drivers, without allow_filters: refused when a configured driver applies
+		// to a file it touches.
 		bool refuse_filters = false;
-		// An agent's network call: refused when the repository's config would pick a program it runs (network_refusal).
+		// Guarded network call: refused when the repository's config would pick a program it runs (network_refusal).
 		bool guard_network = false;
 		bool allow_repo_credential_helper = false;
 	};
+
+	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
+	{
+		git_context context;
+		context.git = std::move(git);
+		context.environment = std::move(environment);
+		context.cwd = std::move(cwd);
+		context.run = std::move(run);
+		return context;
+	}
 
 	struct git_output
 	{
@@ -120,7 +137,8 @@ namespace {
 	}
 
 	// What the environment of git must not carry from the editor's: they would point git at another repository or
-	// index, or add config (and with it programs) behind the -c overrides.
+	// index, add config (and with it programs) behind the -c overrides, or allow transports (GIT_ALLOW_PROTOCOL wins
+	// over protocol.allow).
 	bool is_unsafe_variable(std::string_view entry)
 	{
 		const std::size_t equals = entry.find('=', 1);
@@ -128,7 +146,7 @@ namespace {
 		const std::string name = variable_name(entry);
 		for (const std::string_view unsafe : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
 				"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG_PARAMETERS",
-				"GIT_CONFIG_COUNT", "GIT_EXTERNAL_DIFF" }) {
+				"GIT_CONFIG_COUNT", "GIT_EXTERNAL_DIFF", "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER" }) {
 			if (name == unsafe) return true;
 		}
 		if (name.starts_with("GIT_CONFIG_KEY_") || name.starts_with("GIT_CONFIG_VALUE_")) return true;
@@ -325,27 +343,87 @@ namespace {
 		return out;
 	}
 
-	// The files a write touches, for the filter check: `paths` (stage, unstage: the files under them, tracked or not),
-	// `staged` (commit: what the index changes), `target` (checkout, pull: what differs between HEAD and the target).
-	enum class touched_kind : std::uint8_t { paths, staged, target };
+	bool succeeded(const git_output& out)
+	{
+		return out.process.error.empty() && out.process.exit_code == 0 && !out.truncated;
+	}
+
+	// The files a write touches, for the filter check. Always the whole index: reset, commit, checkout and merge re-hash
+	// any tracked file whose stat is stale (all of them in a project just unzipped) through its clean filter. Besides:
+	// `paths` (stage, unstage) the untracked files under the paths and the paths, `target` (checkout, pull) what
+	// differs between HEAD and the target.
+	enum class touched_kind : std::uint8_t { index, paths, target };
 
 	struct touched_files
 	{
-		touched_kind kind = touched_kind::paths;
+		touched_kind kind = touched_kind::index;
 		std::vector<std::string> paths;
+		// An OID or a full ref name, resolved once by the caller.
 		std::string target;
 	};
 
-	// What `git checkout <name> --` checks out: <name> when it resolves to a commit (a branch, a tag, a hash), as git
-	// takes it then; otherwise, when exactly one remote has a branch of that name, that remote-tracking branch (git
-	// then creates the local one). Several remotes or none: <name>, which the filter check fails closed on.
-	std::string checkout_target(const git_context& git, const std::string& name, std::stop_token stop)
+	struct touched_list
 	{
-		const git_output resolved = run_git(git, { "rev-parse", "--verify", "--quiet", name + "^{commit}" },
+		std::vector<std::string> files;
+		// `target` only: the files that differ from HEAD.
+		std::vector<std::string> changed;
+	};
+
+	// Relative to the repository root; nullopt when git could not tell.
+	std::optional<touched_list> touched_paths(const git_context& git, const touched_files& touched, std::stop_token stop)
+	{
+		const git_output index = run_git(git, { "ls-files", "-z", "--cached" }, stop, k_list_cap);
+		if (!succeeded(index)) return std::nullopt;
+		touched_list list;
+		list.files = split_nul(index.out);
+		if (touched.kind == touched_kind::paths) {
+			std::vector<std::string> args{ "ls-files", "-z", "--others", "--exclude-standard", "--" };
+			args.insert(args.end(), touched.paths.begin(), touched.paths.end());
+			const git_output others = run_git(git, args, stop, k_list_cap);
+			if (!succeeded(others)) return std::nullopt;
+			for (auto& file : split_nul(others.out)) list.files.push_back(std::move(file));
+			list.files.insert(list.files.end(), touched.paths.begin(), touched.paths.end());
+		}
+		else if (touched.kind == touched_kind::target) {
+			git_output diff = run_git(git, { "diff", "--name-only", "--no-renames", "-z", "HEAD", touched.target, "--" },
+				stop, k_list_cap);
+			// A branch without commits: every file of the target.
+			if (diff.process.error.empty() && diff.process.exit_code != 0) {
+				diff = run_git(git, { "ls-tree", "-r", "-z", "--name-only", "--full-tree", touched.target }, stop, k_list_cap);
+			}
+			if (!succeeded(diff)) return std::nullopt;
+			list.changed = split_nul(diff.out);
+			list.files.insert(list.files.end(), list.changed.begin(), list.changed.end());
+		}
+		return list;
+	}
+
+	// How a guarded checkout runs, decided once so that the filter check and the checkout see the same tree.
+	enum class checkout_kind : std::uint8_t { branch, commit, remote_branch };
+
+	struct checkout_plan
+	{
+		checkout_kind kind = checkout_kind::branch;
+		// The OID (branch, commit) or refs/remotes/<remote>/<name> (remote_branch) the filter check diffs against.
+		std::string target;
+	};
+
+	// <name> as a local branch (refs/heads/<name>) first, else as a commit (a tag, a hash, any other ref; as its OID:
+	// `git diff HEAD x` would take tag x where checkout takes branch x), else the branch of exactly one remote.
+	// Nullopt: none of them.
+	std::optional<checkout_plan> plan_checkout(const git_context& git, const std::string& name, std::stop_token stop)
+	{
+		const git_output branch = run_git(git, { "rev-parse", "--verify", "--quiet", "refs/heads/" + name + "^{commit}" },
 			stop, k_read_cap);
-		if (resolved.process.error.empty() && resolved.process.exit_code == 0) return name;
+		if (succeeded(branch) && !trim(branch.out).empty()) {
+			return checkout_plan{ checkout_kind::branch, std::string(trim(branch.out)) };
+		}
+		const git_output commit = run_git(git, { "rev-parse", "--verify", "--quiet", name + "^{commit}" }, stop, k_read_cap);
+		if (succeeded(commit) && !trim(commit.out).empty()) {
+			return checkout_plan{ checkout_kind::commit, std::string(trim(commit.out)) };
+		}
 		const git_output refs = run_git(git, { "for-each-ref", "--format=%(refname)", "refs/remotes" }, stop, k_read_cap);
-		if (!refs.process.error.empty() || refs.process.exit_code != 0 || refs.truncated) return name;
+		if (!succeeded(refs)) return std::nullopt;
 		constexpr std::string_view prefix = "refs/remotes/";
 		const std::string suffix = "/" + name;
 		std::string found;
@@ -361,33 +439,8 @@ namespace {
 			++matches;
 			found = std::string(line);
 		}
-		return matches == 1 ? found : name;
-	}
-
-	// Relative to the repository root; nullopt when git could not tell.
-	std::optional<std::vector<std::string>> touched_paths(const git_context& git, const touched_files& touched,
-		std::stop_token stop)
-	{
-		git_output listed;
-		if (touched.kind == touched_kind::paths) {
-			std::vector<std::string> args{ "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--" };
-			args.insert(args.end(), touched.paths.begin(), touched.paths.end());
-			listed = run_git(git, args, stop, k_read_cap);
-		}
-		else if (touched.kind == touched_kind::staged) {
-			listed = run_git(git, { "diff", "--cached", "--name-only", "--no-renames", "-z" }, stop, k_read_cap);
-		}
-		else {
-			listed = run_git(git, { "diff", "--name-only", "--no-renames", "-z", "HEAD", touched.target, "--" }, stop, k_read_cap);
-			// A branch without commits: every file of the target.
-			if (listed.process.error.empty() && listed.process.exit_code != 0) {
-				listed = run_git(git, { "ls-tree", "-r", "-z", "--name-only", "--full-tree", touched.target }, stop, k_read_cap);
-			}
-		}
-		if (!listed.process.error.empty() || listed.process.exit_code != 0 || listed.truncated) return std::nullopt;
-		std::vector<std::string> files = split_nul(listed.out);
-		if (touched.kind == touched_kind::paths) files.insert(files.end(), touched.paths.begin(), touched.paths.end());
-		return files;
+		if (matches != 1) return std::nullopt;
+		return checkout_plan{ checkout_kind::remote_branch, found };
 	}
 
 	// The drivers of `configured` that `git check-attr filter` names for `files` (attributes of the work tree,
@@ -405,7 +458,7 @@ namespace {
 				args.push_back(files[next++]);
 			}
 			const git_output out = run_git(git, args, stop, k_read_cap);
-			if (!out.process.error.empty() || out.process.exit_code != 0 || out.truncated) return std::nullopt;
+			if (!succeeded(out)) return std::nullopt;
 			// path, "filter", value: "unspecified", "unset", "set" or a driver name.
 			const auto fields = split_nul(out.out);
 			for (std::size_t i = 0; i + 2 < fields.size(); i += 3) {
@@ -419,7 +472,7 @@ namespace {
 		return found;
 	}
 
-	// An agent's write without allow_filters: refused (filters_require_opt_in) when a configured clean, smudge or process
+	// A guarded write without allow_filters: refused (filters_require_opt_in) when a configured clean, smudge or process
 	// driver applies to a file it touches. Nullopt: git may run.
 	std::optional<git_output> filter_refusal(const git_context& git, const touched_files& touched, std::stop_token stop)
 	{
@@ -431,22 +484,20 @@ namespace {
 		if (configured.empty() && !listed.truncated) return std::nullopt;
 		const auto refuse = [](std::string why) {
 			return refused("filters_require_opt_in",
-				why + "; an agent's git write runs filter drivers only when filters are allowed for it");
+				why + "; a git write not made by a person runs filter drivers only when filters are allowed for it");
 		};
 		if (listed.truncated) return refuse("the repository's git config sets too many filter drivers to check");
 		const std::string names = names_of(configured);
-		const auto files = touched_paths(git, touched, stop);
-		if (!files) return refuse(std::format("filter drivers ({}) are configured and git could not tell which files this write touches", names));
+		const auto list = touched_paths(git, touched, stop);
+		if (!list) return refuse(std::format("filter drivers ({}) are configured and git could not tell which files this write touches", names));
 		// The target's attributes may differ from the work tree's, which check-attr reads.
-		if (touched.kind == touched_kind::target) {
-			for (const auto& file : *files) {
-				if (file == ".gitattributes" || file.ends_with("/.gitattributes")) {
-					return refuse(std::format("this write changes '{}' while filter drivers ({}) are configured",
-						edt::vcs::valid_utf8(file), names));
-				}
+		for (const auto& file : list->changed) {
+			if (file == ".gitattributes" || file.ends_with("/.gitattributes")) {
+				return refuse(std::format("this write changes '{}' while filter drivers ({}) are configured",
+					edt::vcs::valid_utf8(file), names));
 			}
 		}
-		const auto applied = applied_drivers(git, *files, configured, stop);
+		const auto applied = applied_drivers(git, list->files, configured, stop);
 		if (!applied) return refuse(std::format("filter drivers ({}) are configured and git could not read the files' attributes", names));
 		if (!applied->empty()) return refuse(std::format("the filter drivers ({}) apply to files this write touches", names_of(*applied)));
 		return std::nullopt;
@@ -539,8 +590,10 @@ namespace {
 						edt::vcs::valid_utf8(base)));
 				}
 			}
-			if ((entry.key == upload_key && entry.value != "git-upload-pack")
-				|| (entry.key == receive_key && entry.value != "git-receive-pack")) {
+			// Any remote's, not only this one's: a remote named by a URL rewrite or a later call is as hostile.
+			const bool remote_key = entry.key.starts_with("remote.");
+			if ((remote_key && entry.key.ends_with(".uploadpack") && entry.value != "git-upload-pack")
+				|| (remote_key && entry.key.ends_with(".receivepack") && entry.value != "git-receive-pack")) {
 				return refused("unsafe_repository", std::format("{} set to '{}'", edt::vcs::valid_utf8(entry.key),
 					edt::vcs::valid_utf8(entry.value)));
 			}
@@ -548,6 +601,82 @@ namespace {
 		for (std::string config : { upload_key + "=git-upload-pack", receive_key + "=git-receive-pack" }) {
 			git.config_args.emplace_back("-c");
 			git.config_args.push_back(std::move(config));
+		}
+		return std::nullopt;
+	}
+
+	std::string lower_case(std::string_view text)
+	{
+		std::string out(text);
+		for (char& c : out) {
+			if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+		}
+		return out;
+	}
+
+	// Whether a key of the repository's own config may stand for a guarded call. Section and key compare without
+	// case (git lower-cases them), the subsection is not looked at. filter.*, credential.*helper and core.hooksPath
+	// pass here and stay under their own rules (filter_refusal, network_refusal, the hooks override).
+	bool repo_key_allowed(std::string_view key, bool allow_hooks)
+	{
+		const std::string lower = lower_case(key);
+		const std::size_t first = lower.find('.');
+		const std::size_t last = lower.rfind('.');
+		if (first == std::string::npos || first == 0 || last + 1 >= lower.size()) return false;
+		const std::string_view section = std::string_view(lower).substr(0, first);
+		const std::string_view name = std::string_view(lower).substr(last + 1);
+		const bool subsection = first != last;
+		const auto one_of = [](std::string_view value, std::initializer_list<std::string_view> allowed) {
+			return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
+		};
+		if (one_of(section, { "extensions", "index", "gc", "lfs" })) return true;
+		if (!subsection) {
+			if (section == "core") {
+				return one_of(name, { "repositoryformatversion", "filemode", "bare", "logallrefupdates", "ignorecase",
+					"symlinks", "precomposeunicode", "autocrlf", "eol", "safecrlf", "longpaths" })
+					|| (name == "hookspath" && allow_hooks);
+			}
+			if (section == "user") return one_of(name, { "name", "email" });
+			if (section == "credential") return name == "helper";
+			return one_of(lower, { "init.defaultbranch", "pull.rebase", "pull.ff", "push.default", "fetch.prune" });
+		}
+		if (section == "remote") return one_of(name, { "url", "pushurl", "fetch", "tagopt", "prune" });
+		if (section == "branch") return one_of(name, { "remote", "merge", "rebase", "pushremote" });
+		if (section == "credential") return name == "helper";
+		return section == "filter";
+	}
+
+	bool is_true(std::string_view value)
+	{
+		const std::string lower = lower_case(trim(value));
+		return lower == "true" || lower == "yes" || lower == "on" || lower == "1";
+	}
+
+	// A guarded call without allow_any_repo_config: refused (unsafe_repository) when the repository's own config
+	// (.git/config, and config.worktree under extensions.worktreeConfig; includes not followed, include.* itself is no
+	// allowed key) sets a key outside the allowlist. Read before anything else of the call.
+	std::optional<git_output> config_refusal(const git_context& git, std::stop_token stop)
+	{
+		if (!git.check_repo_config) return std::nullopt;
+		git_output local = run_git(git, { "config", "--local", "--list", "-z", "--show-origin" }, stop, k_read_cap);
+		if (listing_failed(local)) return local;
+		if (local.truncated) return refused("unsafe_repository", "the repository's git config is too large to check");
+		std::vector<scoped_entry> entries = scoped_entries_of(local.out);
+		const bool worktree_config = std::any_of(entries.begin(), entries.end(), [](const scoped_entry& entry) {
+			return lower_case(entry.key) == "extensions.worktreeconfig" && is_true(entry.value);
+		});
+		if (worktree_config) {
+			git_output worktree = run_git(git, { "config", "--worktree", "--list", "-z", "--show-origin" }, stop, k_read_cap);
+			if (listing_failed(worktree)) return worktree;
+			if (worktree.truncated) return refused("unsafe_repository", "the worktree's git config is too large to check");
+			for (auto& entry : scoped_entries_of(worktree.out)) entries.push_back(std::move(entry));
+		}
+		for (const auto& entry : entries) {
+			if (!repo_key_allowed(entry.key, git.allow_hooks)) {
+				return refused("unsafe_repository", std::format("the repository's git config sets '{}' ({}), which a git "
+					"write not made by a person does not accept unless the project allows any repository config",
+					edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
+			}
 		}
 		return std::nullopt;
 	}
@@ -658,6 +787,13 @@ namespace {
 		return std::nullopt;
 	}
 
+	// A guarded branch or ref name: no glob characters, which push and branch would expand or reject inconsistently.
+	std::optional<std::string> pattern_error(std::string_view what, std::string_view value)
+	{
+		if (value.find_first_of("*?[") != std::string_view::npos) return std::format("{} must not hold '*', '?' or '['", what);
+		return std::nullopt;
+	}
+
 	// A remote is the name of a configured one: no URL (no ':'), so the transport is never one the call picks.
 	std::optional<std::string> remote_error(std::string_view remote)
 	{
@@ -754,18 +890,27 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 	// result, so every command answers the same way.
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
-	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run, {}, false, false, false };
+	git_context context = make_context(m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run);
+	// Everything not from a person (agent, test, game) takes the guarded path.
+	const bool guarded = write && write->caller != cmd::origin_kind::ui;
 	// The network checks read the config with --show-scope (git 2.26).
-	if (write && write->caller == cmd::origin_kind::agent && write->network && !version_at_least(m_state.git_version, 2, 26)) {
+	if (guarded && write->network && !version_at_least(m_state.git_version, 2, 26)) {
 		return { 0, "vcs_unavailable", std::format("git 2.26 or newer is required for agent network operations (found {})",
 			m_state.git_version) };
 	}
-	if (write && write->caller == cmd::origin_kind::agent) {
+	if (guarded) {
 		std::erase_if(context.environment, [](const std::string& entry) { return is_askpass_variable(entry); });
 		// The environment's GIT_SSH_COMMAND (always set) wins over core.sshCommand anyway; this states it.
 		const std::string ssh = variable_of(context.environment, "GIT_SSH_COMMAND").value_or("ssh -oBatchMode=yes");
-		context.config_args = { "-c", "core.askPass=", "-c", "core.sshCommand=" + ssh, "-c", "protocol.ext.allow=never",
-			"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "gpg.program=", "-c", "core.gitProxy=" };
+		context.config_args = { "-c", "core.askPass=", "-c", "core.sshCommand=" + ssh,
+			// Only https and ssh: file:// and local paths run the other repository's hooks (git drops the -c overrides
+			// for the local transport), git://, ext:: and <helper>:: run programs or go unencrypted.
+			"-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.ssh.allow=always",
+			"-c", "protocol.ext.allow=never",
+			"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "merge.verifySignatures=false",
+			"-c", "gpg.program=", "-c", "gpg.openpgp.program=", "-c", "gpg.x509.program=", "-c", "gpg.ssh.program=",
+			"-c", "gpg.ssh.defaultKeyCommand=",
+			"-c", "core.gitProxy=", "-c", "core.alternateRefsCommand=" };
 		// The first core.gitProxy git reads wins, so the repository's would come before the -c one; an empty
 		// GIT_PROXY_COMMAND is read before any config and means no proxy.
 		set_variable(context.environment, "GIT_PROXY_COMMAND", "");
@@ -774,12 +919,17 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 			context.config_args.emplace_back("-c");
 			context.config_args.push_back("core.hooksPath=" + utf8_of(m_scratch.root / k_no_hooks_dir));
 		}
+		context.guarded = true;
+		context.check_repo_config = !m_write_permissions.allow_any_repo_config;
+		context.allow_hooks = m_write_permissions.allow_hooks;
 		context.refuse_filters = write->runs_filters && !m_write_permissions.allow_filters;
 		context.guard_network = write->network;
 		context.allow_repo_credential_helper = m_write_permissions.allow_repo_credential_helper;
 	}
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
+			// The repository's own config is read before anything else of a guarded call.
+			if (auto refusal = config_refusal(context, task.stop)) return refusal_json(*refusal, task);
 			return work(context, task);
 		});
 	return { id, {}, {} };
@@ -808,7 +958,7 @@ edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 		return;
 	}
 	bool timed_out = false;
-	const git_output version = run_probe({ git, m_environment, {}, m_options.run, {}, false, false, false }, { "--version" }, m_options.probe_timeout,
+	const git_output version = run_probe(make_context(git, m_environment, {}, m_options.run), { "--version" }, m_options.probe_timeout,
 		timed_out);
 	if (timed_out) {
 		set_probe_timeout();
@@ -842,7 +992,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 		return;
 	}
 	bool timed_out = false;
-	const git_output top = run_probe({ m_state.git, m_environment, *project, m_options.run, {}, false, false, false }, { "rev-parse", "--show-toplevel" },
+	const git_output top = run_probe(make_context(m_state.git, m_environment, *project, m_options.run), { "rev-parse", "--show-toplevel" },
 		m_options.probe_timeout, timed_out);
 	if (timed_out) {
 		set_probe_timeout();
@@ -1069,7 +1219,7 @@ edt::vcs_service::started edt::vcs_service::start_commit(const std::string& mess
 	const fs::path file = m_scratch.root / std::format("commit_message_{}.txt", ++m_message_count);
 	return run_job("git commit", [file, message](const git_context& git, ds::task_context& task) -> json::value {
 		const remove_on_exit cleanup{ file };
-		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::staged, {}, {} }, task.stop)) {
+		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::index, {}, {} }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
 		{
@@ -1095,6 +1245,10 @@ edt::vcs_service::started edt::vcs_service::start_branch_create(const std::strin
 	if (!from.empty()) {
 		if (auto error = argument_error("from", from)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
+	if (caller != cmd::origin_kind::ui) {
+		if (auto error = pattern_error("name", name)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+		if (auto error = pattern_error("from", from)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
 	std::vector<std::string> args{ "branch", "--end-of-options", name };
 	if (!from.empty()) args.push_back(from);
 	return run_job("git branch", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
@@ -1107,12 +1261,31 @@ edt::vcs_service::started edt::vcs_service::start_branch_create(const std::strin
 edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& ref, cmd::origin_kind caller)
 {
 	if (auto error = argument_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
-	// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
-	std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
-	return run_job("git checkout", [args = std::move(args), ref](const git_context& git, ds::task_context& task) -> json::value {
-		const std::string target = git.refuse_filters ? checkout_target(git, ref, task.stop) : ref;
-		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, target }, task.stop)) {
-			return refusal_json(*refusal, task);
+	if (caller != cmd::origin_kind::ui) {
+		if (auto error = pattern_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
+	return run_job("git checkout", [ref](const git_context& git, ds::task_context& task) -> json::value {
+		// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
+		std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
+		if (git.guarded) {
+			// Resolved once: the filter check and the checkout must see the same tree.
+			const auto plan = plan_checkout(git, ref, task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!plan) {
+				return error_json("bad_revision", std::format("'{}' is no local branch, no commit and no branch of exactly "
+					"one remote", vcs::valid_utf8(ref)), {}, -1);
+			}
+			if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, plan->target }, task.stop)) {
+				return refusal_json(*refusal, task);
+			}
+			// A branch by its short name, once refs/heads/<ref> is known to exist: `checkout refs/heads/x` would detach,
+			// and with a branch x git takes the branch even when a tag x exists too.
+			if (plan->kind == checkout_kind::commit) {
+				args = { "checkout", "-q", "--no-recurse-submodules", "--detach", plan->target, "--" };
+			}
+			else if (plan->kind == checkout_kind::remote_branch) {
+				args = { "checkout", "-q", "--no-recurse-submodules", "-b", ref, "--track", plan->target, "--" };
+			}
 		}
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
@@ -1170,11 +1343,21 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 			return error_json("git_failed", "there is nothing to merge: name the remote's branch, or set the current "
 				"branch's upstream", fetched.err, -1);
 		}
-		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, "FETCH_HEAD" }, task.stop)) {
+		// Its object, as a commit OID read once: the check and the merge must see the same commit, whatever writes
+		// FETCH_HEAD meanwhile.
+		const std::string fetched_object(trim(std::string_view(first).substr(0, first.find('\t'))));
+		const git_output peeled = run_git(git, { "rev-parse", "--verify", "--quiet", fetched_object + "^{commit}" },
+			task.stop, k_read_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		const std::string commit(trim(peeled.out));
+		if (fetched_object.empty() || !succeeded(peeled) || commit.empty()) {
+			return error_json("git_failed", "what fetch got for merging is not a commit", fetched.err, -1);
+		}
+		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, commit }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
 		const git_output merged = run_write(git, { "-c", "submodule.recurse=false", "merge", "--ff-only", "--no-stat",
-			"FETCH_HEAD" }, task.stop);
+			commit }, task.stop);
 		if (auto failure = write_failure_of(merged, task)) return std::move(*failure);
 		git_output both = merged;
 		both.out = fetched.out + merged.out;
@@ -1188,6 +1371,9 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 {
 	if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (auto error = branch_error(branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (caller != cmd::origin_kind::ui) {
+		if (auto error = pattern_error("branch", branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
 	// Never --force, --force-with-lease, --mirror or a +refspec: a push that is not a fast-forward is rejected.
 	std::vector<std::string> args{ "push", "--recurse-submodules=no" };
 	if (set_upstream) args.emplace_back("--set-upstream");

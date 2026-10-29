@@ -261,12 +261,28 @@ struct vcs_fixture
 		git(repo, { "symbolic-ref", "HEAD", "refs/heads/main" });
 		git(repo, { "config", "user.name", "Test User" });
 		git(repo, { "config", "user.email", "test@example.com" });
-		git(repo, { "config", "commit.gpgsign", "false" });
 		git(repo, { "config", "core.autocrlf", "false" });
 		write(repo / "a.txt", "one\n");
 		git(repo, { "add", "a.txt" });
 		git(repo, { "commit", "-q", "-m", "first commit" });
 		return repo;
+	}
+
+	// <base>/<name>: a bare repository whose HEAD is main.
+	fs::path make_bare(std::string_view name)
+	{
+		const fs::path remote = base / name;
+		fs::create_directories(remote);
+		git(remote, { "init", "-q", "--bare" });
+		git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+		return remote;
+	}
+
+	static std::string file_url(const fs::path& path)
+	{
+		const std::u8string utf8 = path.generic_u8string();
+		const std::string generic(utf8.begin(), utf8.end());
+		return "file://" + (generic.starts_with('/') ? generic : "/" + generic);
 	}
 
 	void make_service(edt::vcs_options options)
@@ -641,7 +657,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_StageUnstageCommitBranchCheckout)
 	isolate_config();
 	const fs::path repo = make_repository();
 	make_service(real_options(repo));
-	constexpr auto person = cmd::origin_kind::test;
+	constexpr auto person = cmd::origin_kind::ui;
 	const auto entry_of = [](const json::value& status, std::string_view path) -> const json::object* {
 		for (const auto& item : status.as_object().at("entries").as_array()) {
 			if (item.as_object().at("path").as_string() == path) return &item.as_object();
@@ -709,7 +725,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_FetchPullPush_AgainstALocalBareRepository)
 	const fs::path repo = make_plain_repository("local");
 	git(repo, { "remote", "add", "origin", url });
 	make_service(real_options(repo));
-	constexpr auto person = cmd::origin_kind::test;
+	constexpr auto person = cmd::origin_kind::ui;
 
 	for (const char* bad : { "+main", "-x", "a:b", "main:refs/heads/other" }) {
 		BOOST_TEST_CONTEXT(bad) {
@@ -833,9 +849,18 @@ BOOST_AUTO_TEST_CASE(ARepositoryCredentialHelper_RefusesAnAgentsPush)
 	BOOST_TEST(is_error(finish(service->start_fetch("origin", cmd::origin_kind::agent)), "unsafe_repository"));
 	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "unsafe_repository"));
 
-	service->set_write_permissions({ false, false, true });
+	// With the opt-in the helper rule lets the push through to git, which then refuses the file transport: a guarded
+	// call reaches only https and ssh remotes.
+	service->set_write_permissions({ false, false, true, false });
 	const json::value allowed = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
-	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST_INFO("allowed: " << json::serialize(allowed));
+	BOOST_TEST(!is_error(allowed, "unsafe_repository"));
+	BOOST_TEST(allowed.as_object().contains("error"));
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+
+	const json::value by_person = finish(service->start_push("origin", "main", false, cmd::origin_kind::ui));
+	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
 	BOOST_TEST(head_of(remote) == head_of(repo));
 }
 
@@ -1014,7 +1039,7 @@ BOOST_AUTO_TEST_CASE(AnLfsStyleFilter_RefusesAnAgentsCommit_UnlessFiltersAreAllo
 	BOOST_TEST(is_error(finish(service->start_stage({ "other.bin" }, cmd::origin_kind::agent)), "filters_require_opt_in"));
 	BOOST_TEST(!fs::exists(marker, ec), "a refused write ran the filter");
 
-	service->set_write_permissions({ false, true, false });
+	service->set_write_permissions({ false, true, false, false });
 	const json::value staged = finish(service->start_stage({ "other.bin" }, cmd::origin_kind::agent));
 	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
 	const json::value committed = finish(service->start_commit("agent commit", cmd::origin_kind::agent));
@@ -1067,6 +1092,224 @@ BOOST_AUTO_TEST_CASE(WriteCommands_MutateAndHaveNoAgentCategory)
 	BOOST_REQUIRE_MESSAGE(commit.ok, commit.error);
 	const json::value result = finish(static_cast<edt::job_service::job_id>(commit.value.as_object().at("job").as_int64()));
 	BOOST_TEST(text(result.as_object().at("hash")) == head_of(repo));
+}
+
+// Security review of #474: reset, commit, checkout and merge re-hash a tracked file whose stat is stale through its
+// clean filter, whatever paths the call names. A guarded write refuses while any file of the index is under a
+// configured driver; with allow_any_repo_config too (filter.* passes the allowlist anyway).
+BOOST_AUTO_TEST_CASE(AGuardedWrite_RefusesAFilterOnAStaleTrackedFile)
+{
+	isolate_config();
+	const fs::path remote = make_bare("stale_remote.git");
+	const fs::path repo = make_plain_repository("stale");
+	write(repo / ".gitattributes", "*.dat filter=evil\n");
+	write(repo / "a.dat", "data\n");
+	git(repo, { "add", ".gitattributes", "a.dat" });
+	git(repo, { "commit", "-q", "-m", "attributes" });
+	git(repo, { "branch", "other" });
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "push", "-q", "-u", "origin", "main" });
+	write(repo / "t.txt", "t\n");
+	git(repo, { "add", "t.txt" });
+	const fs::path marker = base / "stale_filter_ran.txt";
+	const fs::path script = base / "stale-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.evil.clean", generic_text(script) });
+	git(repo, { "config", "filter.evil.smudge", generic_text(script) });
+	// Same bytes, new stat: what unzipping does to every file.
+	write(repo / "a.dat", "data\n");
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	for (const bool any_config : { false, true }) {
+		BOOST_TEST_CONTEXT("allow_any_repo_config " << any_config) {
+			service->set_write_permissions({ false, false, false, any_config });
+			const auto agent = cmd::origin_kind::agent;
+			BOOST_TEST(is_error(finish(service->start_unstage({ "t.txt" }, agent)), "filters_require_opt_in"));
+			BOOST_TEST(is_error(finish(service->start_commit("message", agent)), "filters_require_opt_in"));
+			BOOST_TEST(is_error(finish(service->start_checkout("other", agent)), "filters_require_opt_in"));
+			// Pull: its fetch is refused first (file transport); either way the merge never runs.
+			BOOST_TEST(finish(service->start_pull({}, {}, agent)).as_object().contains("error"));
+			BOOST_TEST(head_of(repo) == before);
+			BOOST_TEST(!fs::exists(marker, ec), "a guarded write ran the clean filter of a stale tracked file");
+		}
+	}
+}
+
+// Security review of #474: with branch x and tag x, `git diff HEAD x` takes the tag while `git checkout x` takes the
+// branch. The guarded checkout resolves once (the branch first) and checks the tree it checks out.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfANameThatIsABranchAndATag_ChecksTheBranch)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("ambiguous");
+	git(repo, { "checkout", "-q", "-b", "x" });
+	write(repo / "notes.txt", "notes\n");
+	git(repo, { "add", "notes.txt" });
+	git(repo, { "commit", "-q", "-m", "notes" });
+	git(repo, { "checkout", "-q", "-b", "side", "main" });
+	write(repo / "data.bin", "raw bytes\n");
+	git(repo, { "add", "data.bin" });
+	git(repo, { "commit", "-q", "-m", "data" });
+	git(repo, { "tag", "x" });
+	git(repo, { "checkout", "-q", "main" });
+	const fs::path marker = base / "ambiguous_filter_ran.txt";
+	const fs::path script = base / "ambiguous-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	write(repo / ".git" / "info" / "attributes", "*.bin filter=lfs\n");
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value checked_out = finish(service->start_checkout("x", cmd::origin_kind::agent));
+	BOOST_TEST(!checked_out.as_object().contains("error"), json::serialize(checked_out));
+	std::string head_ref = git_text(repo, { "symbolic-ref", "HEAD" });
+	while (!head_ref.empty() && (head_ref.back() == '\n' || head_ref.back() == '\r')) head_ref.pop_back();
+	BOOST_TEST(head_ref == "refs/heads/x");
+	BOOST_TEST(fs::exists(repo / "notes.txt"));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(repo / "data.bin", ec));
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Security review of #474: a push over the file transport runs the other repository's hooks, without the -c
+// overrides (git drops them for the local transport). A guarded call allows only https and ssh.
+BOOST_AUTO_TEST_CASE(AGuardedPushToALocalRepository_IsRefusedByGit_AndRunsNoHookThere)
+{
+	isolate_config();
+	const fs::path remote = make_bare("hooked_remote.git");
+	const fs::path marker = base / "pre_receive_ran.txt";
+	make_script(remote / "hooks" / "pre-receive", "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	const fs::path repo = make_plain_repository("hooked");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	for (const bool any_config : { false, true }) {
+		BOOST_TEST_CONTEXT("allow_any_repo_config " << any_config) {
+			service->set_write_permissions({ false, false, false, any_config });
+			const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+			BOOST_TEST_INFO("refused: " << json::serialize(refused));
+			BOOST_TEST(refused.as_object().contains("error"));
+			BOOST_TEST(!is_error(refused, "unsafe_repository"));
+			BOOST_TEST(text(refused.as_object().at("error").as_object().at("stderr_tail")).find("not allowed") != std::string::npos);
+			BOOST_TEST(!fs::exists(marker, ec));
+			BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+		}
+	}
+
+	// A person's push goes through and the hook runs: the hook above is live.
+	const json::value by_person = finish(service->start_push("origin", "main", false, cmd::origin_kind::ui));
+	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
+#ifdef _WIN32
+	BOOST_WARN_MESSAGE(fs::exists(marker, ec), "the pre-receive hook did not run here: the checks above prove less");
+#else
+	BOOST_TEST(fs::exists(marker, ec), "the pre-receive hook must run for a person, or this test proves nothing");
+#endif
+}
+
+// Security review of #474: core.alternateRefsCommand runs on a fetch when the repository has alternates. The
+// allowlist refuses the key; with allow_any_repo_config the override (and the transport rule) still keep it from
+// running.
+BOOST_AUTO_TEST_CASE(AlternateRefsCommand_RunsNotOnAGuardedFetch)
+{
+	isolate_config();
+	const fs::path remote = make_bare("alternates_remote.git");
+	const fs::path source = make_plain_repository("alternates_source");
+	git(source, { "push", "-q", file_url(remote), "main" });
+	const fs::path repo = make_plain_repository("alternates");
+	write(repo / ".git" / "objects" / "info" / "alternates", generic_text(source / ".git" / "objects") + "\n");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	const fs::path marker = base / "alternate_refs_ran.txt";
+	const fs::path script = base / "alternate-refs.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "core.alternateRefsCommand", generic_text(script) });
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	const json::value refused = finish(service->start_fetch("origin", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("core.alternaterefscommand") != std::string::npos);
+	BOOST_TEST(!fs::exists(marker, ec));
+
+	service->set_write_permissions({ false, false, false, true });
+	const json::value overridden = finish(service->start_fetch("origin", cmd::origin_kind::agent));
+	BOOST_TEST(!is_error(overridden, "unsafe_repository"), json::serialize(overridden));
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Security review of #474: merge.verifySignatures makes pull's merge run gpg.ssh.program. The allowlist refuses the
+// keys; with allow_any_repo_config the overrides still keep the program from running.
+BOOST_AUTO_TEST_CASE(SignatureVerification_RunsNoProgramOnAGuardedPull)
+{
+	isolate_config();
+	const fs::path remote = make_bare("signed_remote.git");
+	const fs::path repo = make_plain_repository("signed");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "push", "-q", "-u", "origin", "main" });
+	const fs::path other = base / "signed_other";
+	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(other) });
+	git(other, { "config", "user.name", "Other User" });
+	git(other, { "config", "user.email", "other@example.com" });
+	write(other / "theirs.txt", "theirs\n");
+	git(other, { "add", "theirs.txt" });
+	git(other, { "commit", "-q", "-m", "their commit" });
+	git(other, { "push", "-q", "origin", "main" });
+	const fs::path marker = base / "gpg_ran.txt";
+	const fs::path script = base / "gpg-ssh.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexit 1\n");
+	git(repo, { "config", "merge.verifySignatures", "true" });
+	git(repo, { "config", "gpg.format", "ssh" });
+	git(repo, { "config", "gpg.ssh.program", generic_text(script) });
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "unsafe_repository"));
+	BOOST_TEST(!fs::exists(marker, ec));
+
+	service->set_write_permissions({ false, false, false, true });
+	const json::value overridden = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(!is_error(overridden, "unsafe_repository"), json::serialize(overridden));
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(head_of(repo) == before);
+}
+
+// The allowlist of the repository's own config: an unknown key refuses a guarded write and is named; the config
+// `git clone` writes passes; allow_any_repo_config lets the unknown key through.
+BOOST_AUTO_TEST_CASE(TheRepositoryConfigAllowlist)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("allowlist");
+	make_service(real_options(repo));
+	const auto agent = cmd::origin_kind::agent;
+
+	for (const char* key : { "core.pager", "foo.bar" }) {
+		BOOST_TEST_CONTEXT(key) {
+			git(repo, { "config", key, "cat" });
+			const json::value refused = finish(service->start_branch_create("topic", {}, agent));
+			BOOST_TEST_INFO("refused: " << json::serialize(refused));
+			BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+			BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find(key) != std::string::npos);
+			git(repo, { "config", "--unset", key });
+		}
+	}
+	git(repo, { "config", "core.pager", "cat" });
+	service->set_write_permissions({ false, false, false, true });
+	const json::value allowed = finish(service->start_branch_create("topic", {}, agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+
+	const fs::path remote = make_bare("allowlist_remote.git");
+	git(repo, { "push", "-q", file_url(remote), "main" });
+	const fs::path clone = base / "allowlist_clone";
+	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(clone) });
+	git(clone, { "config", "user.name", "Clone User" });
+	git(clone, { "config", "user.email", "clone@example.com" });
+	make_service(real_options(clone));
+	const json::value in_clone = finish(service->start_branch_create("topic", {}, agent));
+	BOOST_TEST(!in_clone.as_object().contains("error"), json::serialize(in_clone));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1391,7 +1634,8 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
 	for (const char* entry : { "GIT_DIR=/elsewhere/.git", "GIT_WORK_TREE=/elsewhere", "GIT_INDEX_FILE=/i",
 			"GIT_OBJECT_DIRECTORY=/o", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/a", "GIT_CONFIG_PARAMETERS='core.fsmonitor'='x'",
 			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=x", "GIT_EXEC_PATH=/evil",
-			"GIT_EXTERNAL_DIFF=/evil", "GIT_CEILING_DIRECTORIES=/kept", "HOME=/kept" }) {
+			"GIT_EXTERNAL_DIFF=/evil", "GIT_ALLOW_PROTOCOL=file:ext", "GIT_PROTOCOL_FROM_USER=1", "GIT_CEILING_DIRECTORIES=/kept",
+			"HOME=/kept" }) {
 		options.environment->emplace_back(entry);
 	}
 	make_service(std::move(options));
@@ -1400,7 +1644,7 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
 	const auto& env = *last_options.environment;
 	for (const char* gone : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
 			"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
-			"GIT_CONFIG_VALUE_0", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF" }) {
+			"GIT_CONFIG_VALUE_0", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF", "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER" }) {
 		BOOST_TEST_CONTEXT(gone) {
 			BOOST_TEST(!edt::variable_of(env, gone).has_value());
 		}
@@ -1517,19 +1761,66 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 
 	BOOST_TEST(arg_starting_with(person, "remote.origin.uploadpack=").empty());
 
-	service->set_write_permissions({ true, false, false });
+	service->set_write_permissions({ true, false, false, false });
 	finish(service->start_fetch({}, cmd::origin_kind::agent));
 	const auto allowed = calls.back();
 	BOOST_TEST(has_arg(allowed, "fetch"));
 	BOOST_TEST(arg_starting_with(allowed, "core.hooksPath=").empty());
-	for (const char* config : { "core.askPass=", "protocol.ext.allow=never", "commit.gpgsign=false", "tag.gpgsign=false",
-			"gpg.program=", "core.gitProxy=", "remote.origin.uploadpack=git-upload-pack",
-			"remote.origin.receivepack=git-receive-pack" }) {
+	for (const char* config : { "core.askPass=", "protocol.allow=never", "protocol.https.allow=always",
+			"protocol.ssh.allow=always", "protocol.ext.allow=never", "commit.gpgsign=false", "tag.gpgsign=false",
+			"merge.verifySignatures=false", "gpg.program=", "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=",
+			"gpg.ssh.defaultKeyCommand=", "core.gitProxy=", "core.alternateRefsCommand=",
+			"remote.origin.uploadpack=git-upload-pack", "remote.origin.receivepack=git-receive-pack" }) {
 		BOOST_TEST_CONTEXT(config) {
 			BOOST_TEST(has_arg(allowed, config));
 		}
 	}
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_PROXY_COMMAND").value_or("x").empty());
+	// The repository's own config was read first.
+	BOOST_TEST(std::any_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
+		return has_arg(call, "--local") && has_arg(call, "--list") && has_arg(call, "--show-origin");
+	}));
+
+	// test and game are guarded like agent; only ui is a person.
+	for (const auto caller : { cmd::origin_kind::test, cmd::origin_kind::game }) {
+		finish(service->start_branch_create("topic", {}, caller));
+		BOOST_TEST(has_arg(calls.back(), "protocol.allow=never"));
+	}
+	finish(service->start_branch_create("topic", {}, cmd::origin_kind::ui));
+	BOOST_TEST(!has_arg(calls.back(), "protocol.allow=never"));
+
+	// Glob characters in a guarded branch or ref name.
+	for (const char* name : { "a*", "a?", "a[b" }) {
+		BOOST_TEST(service->start_branch_create(name, {}, cmd::origin_kind::agent).code == cmd::codes::invalid_args, name);
+		BOOST_TEST(service->start_checkout(name, cmd::origin_kind::agent).code == cmd::codes::invalid_args, name);
+		BOOST_TEST(service->start_push("origin", name, false, cmd::origin_kind::agent).code == cmd::codes::invalid_args, name);
+	}
+}
+
+// The guarded pull: the merge gets the OID the FETCH_HEAD line named (peeled once), with the signature overrides.
+BOOST_AUTO_TEST_CASE(AGuardedPull_MergesTheOidItChecked)
+{
+	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	auto options = fake_options();
+	options.run = [inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "1111111111111111111111111111111111111111^{commit}")) {
+			on_line("2222222222222222222222222222222222222222\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	const json::value result = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+	const auto& merge = calls.back();
+	BOOST_TEST(has_arg(merge, "merge"));
+	BOOST_TEST(merge.back() == "2222222222222222222222222222222222222222");
+	BOOST_TEST(has_arg(merge, "merge.verifySignatures=false"));
+	BOOST_TEST(has_arg(merge, "gpg.ssh.program="));
+	BOOST_TEST(!has_arg(merge, "FETCH_HEAD"));
 }
 
 // A configured driver refuses an agent's write only when check-attr names it for a file the write touches; a
@@ -1548,7 +1839,13 @@ BOOST_AUTO_TEST_CASE(AFilterDriver_RefusesAnAgentsTreeWrite_OnlyWhereItApplies)
 			return dash_dash == args.end() ? std::vector<std::string>{} : std::vector<std::string>(std::next(dash_dash), args.end());
 		};
 		if (has_arg(args, "ls-files")) {
-			for (const auto& path : after_dash_dash()) on_line(path + '\0');
+			// The whole index is `changed`; --others: the paths asked for.
+			if (has_arg(args, "--others")) {
+				for (const auto& path : after_dash_dash()) on_line(path + '\0');
+			}
+			else {
+				on_line(changed);
+			}
 			return exited(0);
 		}
 		if (has_arg(args, "--name-only")) {
@@ -1609,7 +1906,7 @@ BOOST_AUTO_TEST_CASE(AFilterDriver_RefusesAnAgentsTreeWrite_OnlyWhereItApplies)
 	BOOST_TEST(!finish(service->start_commit("message", cmd::origin_kind::ui)).as_object().contains("error"));
 	BOOST_TEST((ran == std::vector<std::string>{ "commit" }));
 
-	service->set_write_permissions({ false, true, false });
+	service->set_write_permissions({ false, true, false, false });
 	ran.clear();
 	BOOST_TEST(!finish(service->start_commit("message", agent)).as_object().contains("error"));
 	BOOST_TEST((ran == std::vector<std::string>{ "commit" }));
@@ -1633,7 +1930,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsNetworkCall_RefusesProgramsTheRepositoryConfigPicks
 	for (const auto& unsafe : { "local\0credential.helper\n!touch marker\0"s, "worktree\0credential.https://x.helper\nstore\0"s,
 			"local\0core.sshcommand\nevil-ssh\0"s, "local\0url.file:///srv/evil.git.insteadof\nhttps://example.com/\0"s,
 			"local\0url.ext::sh -c evil.pushinsteadof\ngit@example.com:\0"s, "global\0remote.origin.uploadpack\nevil-pack\0"s,
-			"local\0remote.origin.receivepack\nevil-pack\0"s }) {
+			"local\0remote.origin.receivepack\nevil-pack\0"s, "local\0remote.other.receivepack\nevil-pack\0"s }) {
 		filter_config = unsafe;
 		BOOST_TEST_CONTEXT(unsafe) {
 			const json::value result = push(cmd::origin_kind::agent);
@@ -1648,7 +1945,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsNetworkCall_RefusesProgramsTheRepositoryConfigPicks
 			"local\0credential.helper\n\0"s, "global\0core.sshcommand\nssh -i key\0"s,
 			"local\0url.https://mirror.example.com/.insteadof\nhttps://example.com/\0"s,
 			"local\0url.git@example.com:.pushinsteadof\nhttps://example.com/\0"s,
-			"local\0remote.origin.uploadpack\ngit-upload-pack\0"s, "local\0remote.other.receivepack\nevil-pack\0"s }) {
+			"local\0remote.origin.uploadpack\ngit-upload-pack\0"s }) {
 		filter_config = fine;
 		BOOST_TEST_CONTEXT(fine) {
 			const json::value result = push(cmd::origin_kind::agent);
@@ -1658,7 +1955,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsNetworkCall_RefusesProgramsTheRepositoryConfigPicks
 	}
 
 	filter_config = "local\0credential.helper\n!touch marker\0"s;
-	service->set_write_permissions({ false, false, true });
+	service->set_write_permissions({ false, false, true, false });
 	BOOST_TEST(!push(cmd::origin_kind::agent).as_object().contains("error"));
 	BOOST_TEST(pushed);
 }

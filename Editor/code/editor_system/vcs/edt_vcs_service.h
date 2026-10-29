@@ -30,15 +30,18 @@ namespace edt
 		std::chrono::milliseconds probe_timeout{ 5000 };
 	};
 
-	// What an agent's git write may run of the repository's config. Off: hooks point at an empty folder of the editor;
-	// stage, unstage, commit, checkout and pull are refused with filters_require_opt_in when a configured filter driver
-	// applies to a file they touch (switching the driver off instead would commit LFS files as raw bytes); fetch, pull
-	// and push are refused with unsafe_repository when a credential helper comes from the repository's own config.
+	// What a guarded git write (one not from a person) may run of the repository's config. Off: hooks point at an empty
+	// folder of the editor; stage, unstage, commit, checkout and pull are refused with filters_require_opt_in when a
+	// configured filter driver applies to a file in the index or one they touch (switching the driver off instead would
+	// commit LFS files as raw bytes); fetch, pull and push are refused with unsafe_repository when a credential helper
+	// comes from the repository's own config; any key of the repository's own config outside the allowlist refuses.
 	struct vcs_write_permissions
 	{
 		bool allow_hooks = false;
 		bool allow_filters = false;
 		bool allow_repo_credential_helper = false;
+		// Skips only the allowlist of the repository's own config keys; every override and other rule stays.
+		bool allow_any_repo_config = false;
 	};
 
 	// Git for the editor and its agents (#454): reads (status, diff, log, branches), writes (stage, unstage, commit,
@@ -49,11 +52,12 @@ namespace edt
 	// GIT_CONFIG_*, ...), and stderr read apart from stdout. A read never runs a program the repository's config names:
 	// --no-pager, core.fsmonitor=false, core.hooksPath to nothing, diff.external empty, --no-ext-diff --no-textconv,
 	// log.showSignature=false, submodules ignored, and every filter driver (listed per job, plus lfs) emptied.
-	// A write keeps fsmonitor, diff.external and submodules off too; for a person (origin ui, test, game) hooks and
-	// filters run as in plain git. For an agent they run only under vcs_write_permissions; core.askPass, core.sshCommand,
-	// core.gitProxy, gpg signing and the ext:: transport are switched off (GIT_ASKPASS and SSH_ASKPASS dropped), and a
-	// network call is refused (unsafe_repository) when the repository's config sets a credential helper, core.sshCommand,
-	// a URL rewrite to another transport, or the remote's upload-pack / receive-pack.
+	// A write keeps fsmonitor, diff.external and submodules off too; for a person (origin ui) hooks and filters run as in
+	// plain git. Every other origin (agent, test, game) is guarded: the repository's own config must pass an allowlist,
+	// hooks and filters run only under vcs_write_permissions, only https and ssh transports are allowed, and
+	// core.askPass, core.sshCommand, core.gitProxy, core.alternateRefsCommand and signing are switched off
+	// (GIT_ASKPASS and SSH_ASKPASS dropped); a network call is refused (unsafe_repository) when the config sets a
+	// credential helper, core.sshCommand, a URL rewrite to another transport, or an upload-pack / receive-pack.
 	// There is no force-push, reset --hard, branch delete or rebase, and never will be.
 	// Main thread only.
 	class vcs_service
