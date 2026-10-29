@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/resource/res_tag.h>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -39,6 +40,13 @@ namespace edt
 		virtual bool can_save() const { return false; }
 		virtual save_result save() { return save_result::failure("the document cannot be saved"); }
 		virtual save_result save_as(const res::tag&) { return save_result::failure("the document cannot be saved"); }
+
+		// Undo history (EPIC-15); a document without one has nothing to undo. The labels name the edit undo (redo)
+		// would apply; nullopt when there is none.
+		virtual bool undo() { return false; }
+		virtual bool redo() { return false; }
+		virtual std::optional<std::string> next_undo_label() const { return std::nullopt; }
+		virtual std::optional<std::string> next_redo_label() const { return std::nullopt; }
 
 		// Called once by the document_manager that takes the document over; nothing else assigns ids.
 		void assign_id(document_id id) { m_id = id; }

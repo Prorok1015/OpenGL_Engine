@@ -26,6 +26,7 @@
 #include "edt_asset_export_dialog.h"
 #include "edt_async_import_task.h"
 #include "edt_input_target.h"
+#include "edt_edit_menu.h"
 #include "edt_file_menu.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
@@ -353,6 +354,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_file_menu = std::make_unique<file_menu>(m_context->dialogs(), m_context->actions(), std::move(hooks));
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
+	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), [] { return ImGui::IsAnyItemActive(); })) {
+		m_registrations.push_back(std::move(action));
+	}
 	m_file_menu->attach_window_close(wnd_sys);
 
 	game_builder_options build_options;

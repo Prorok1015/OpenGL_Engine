@@ -65,6 +65,26 @@ bool edt::scene_document::redo()
 	return true;
 }
 
+namespace {
+	std::optional<std::string> label_of(const edt::history_record* record)
+	{
+		if (!record) {
+			return std::nullopt;
+		}
+		return record->origin.kind == cmd::origin_kind::agent ? record->label + " (agent)" : record->label;
+	}
+}
+
+std::optional<std::string> edt::scene_document::next_undo_label() const
+{
+	return label_of(m_history.next_undo());
+}
+
+std::optional<std::string> edt::scene_document::next_redo_label() const
+{
+	return label_of(m_history.next_redo());
+}
+
 edt::rollback_result edt::scene_document::rollback_group(std::uint64_t group)
 {
 	rollback_result result;

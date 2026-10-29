@@ -61,6 +61,10 @@ namespace edt
 		bool separator_before = false;
 		// Shown as a tooltip on the menu item while the action is disabled (why it is, e.g. a feature not built in).
 		std::string disabled_tooltip;
+		// The menu text as of now ("Undo Rename node"); null: `label`.
+		std::function<std::string()> dynamic_label;
+		// The shortcut does nothing while a text field has the keyboard: Ctrl+Z there undoes the typing.
+		bool yields_to_text_input = false;
 		// What a menu click or the shortcut does: normally asks the user for the arguments (dialog_service)
 		// and then calls registry.invoke. Null: invoke with no arguments, which an action with required
 		// arguments cannot do, so it needs one to have a menu item or a shortcut.
@@ -78,6 +82,8 @@ namespace edt
 		std::string shortcut_hint{};
 		bool separator_before = false;
 		std::string disabled_tooltip{};
+		std::function<std::string()> dynamic_label{};
+		bool yields_to_text_input = false;
 		// Everything the action needs comes in `args`; it never reads ImGui input. Dialogs belong to `activate`.
 		action_fn execute{};
 		// JSON Schema (see cmd_json_schema.h) of the arguments (a top-level "type":"object") and of the result. Null: no_args_schema(). `invoke` validates the arguments
@@ -163,8 +169,9 @@ namespace edt
 		// does not exist or is disabled.
 		bool activate(std::string_view id);
 
-		// Activates the first enabled action bound to `chord`. False if there is none.
-		bool dispatch(const shortcut& chord);
+		// Activates the first enabled action bound to `chord`; with `text_input` (a text field has the keyboard),
+		// one that does not yield to it. False if there is none.
+		bool dispatch(const shortcut& chord, bool text_input = false);
 		// Visits every bound shortcut (not the ones of disabled actions); `visit` must not change the registry.
 		void for_each_shortcut(const std::function<void(const shortcut&)>& visit) const;
 

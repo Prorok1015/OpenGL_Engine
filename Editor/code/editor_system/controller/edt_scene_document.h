@@ -73,8 +73,11 @@ namespace edt
 		// The undo history (#141): commits record into it, undo/redo/rollback below apply it and push like a commit.
 		document_history& history() { return m_history; }
 		const document_history& history() const { return m_history; }
-		bool undo();
-		bool redo();
+		bool undo() override;
+		bool redo() override;
+		// The record's label, with " (agent)" when an agent made it.
+		std::optional<std::string> next_undo_label() const override;
+		std::optional<std::string> next_redo_label() const override;
 		// The before-apply hook runs only when the rollback undoes something.
 		rollback_result rollback_group(std::uint64_t group);
 		// Forgets the history and takes the worlds as they are now as its start: after a load, a level reload, the game
