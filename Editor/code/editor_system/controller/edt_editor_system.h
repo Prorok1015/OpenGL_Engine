@@ -35,6 +35,7 @@ namespace edt {
 	class file_menu;
 	class game_builder;
 	class game_reloader;
+	class live_mode;
 	class editor_context;
 	class editor_layer;
 	class model_importer;
@@ -69,6 +70,11 @@ namespace edt {
 		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
 		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
 		void run_implicit_callbacks();
+		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
+		void tick_live_mode();
+		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
+		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
+		bool person_is_editing() const;
 
 	private:
 		editor_context* m_context = nullptr;
@@ -127,6 +133,10 @@ namespace edt {
 		void create_viewport_panel();
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
+		void create_live_mode(ds::app_data_storage& data);
+		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
+		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
+		void stop_live_build();
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
@@ -174,6 +184,8 @@ namespace edt {
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
+		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
+		std::unique_ptr<edt::live_mode> m_live_mode;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

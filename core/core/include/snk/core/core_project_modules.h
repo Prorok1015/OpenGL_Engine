@@ -107,6 +107,9 @@ namespace core
 
 		// The library reload() would copy, if the project's build output has one.
 		std::optional<std::filesystem::path> build_output(const std::string& name) const;
+		// The copy in use was made from the library the build output has now (same file, size and write time). True
+		// for a compiled-in module; false for one that runs from no copy.
+		bool is_current(const std::string& name) const;
 
 	private:
 		struct loaded_copy
@@ -115,6 +118,10 @@ namespace core
 			std::filesystem::path folder;
 			// The libraries copied along, by file name: size and time of the build's file when copied.
 			std::map<std::string, std::pair<std::uintmax_t, std::filesystem::file_time_type>> siblings;
+			// The build's library the copy was made from, with its size and time then.
+			std::filesystem::path source;
+			std::uintmax_t source_size = 0;
+			std::filesystem::file_time_type source_time{};
 		};
 		struct module_copies
 		{

@@ -140,6 +140,9 @@ namespace {
 		// Libraries copied along with the module, by file name: size and time of the build's file. They are loaded by
 		// name, so a reload does not replace one already loaded.
 		std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>> siblings;
+		fs::path source;
+		std::uintmax_t source_size = 0;
+		fs::file_time_type source_time{};
 	};
 
 	// The checked, canonical <root>/.cache/modules, made if missing; empty string on success.
@@ -192,6 +195,10 @@ namespace {
 			return why;
 		};
 		const fs::path target = folder / library.filename();
+		// Before the copy: a build that writes meanwhile leaves a newer time, so the copy is not taken for current.
+		out.source = library;
+		out.source_size = fs::file_size(library, ec);
+		out.source_time = fs::last_write_time(library, ec);
 		if (!fs::copy_file(library, target, fs::copy_options::none, ec)) {
 			return fail(std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), ec.message()));
 		}
@@ -281,6 +288,32 @@ std::optional<std::filesystem::path> core::project_module_host::build_output(con
 		return std::nullopt;
 	}
 	return find_library(m_data.require<prj::project_context>(), name);
+}
+
+bool core::project_module_host::is_current(const std::string& name) const
+{
+	if (m_options.compiled_in.contains(name)) {
+		return true;
+	}
+	const auto it = m_copies.find(name);
+	if (it == m_copies.end() || !it->second.current) {
+		return false;
+	}
+	const auto found = build_output(name);
+	if (!found) {
+		return false;
+	}
+	const loaded_copy& copy = *it->second.current;
+	std::error_code ec;
+	if (!fs::equivalent(*found, copy.source, ec) || ec) {
+		return false;
+	}
+	const std::uintmax_t size = fs::file_size(*found, ec);
+	if (ec) {
+		return false;
+	}
+	const fs::file_time_type time = fs::last_write_time(*found, ec);
+	return !ec && size == copy.source_size && time == copy.source_time;
 }
 
 void core::project_module_host::remove_unused_copies() const
@@ -375,7 +408,7 @@ core::project_modules_report core::project_module_host::load_all()
 		if (problem.empty()) {
 			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
 			if (!copy.folder.empty()) {
-				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings };
+				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time };
 			}
 			report.loaded.push_back(ref.name);
 			continue;
@@ -426,7 +459,7 @@ core::reload_report core::project_module_host::reload(const std::string& name, c
 		};
 	}
 	const reload_report report = swap(name, std::make_unique<app::modules::native_library_source>(copy.library, copy.folder),
-		previous, hooks, loaded_copy{ copy.library, copy.folder, copy.siblings });
+		previous, hooks, loaded_copy{ copy.library, copy.folder, copy.siblings, copy.source, copy.source_size, copy.source_time });
 	if (report.status == reload_status::reloaded && running) {
 		warn_about_siblings(name, copy.siblings, running->siblings);
 	}

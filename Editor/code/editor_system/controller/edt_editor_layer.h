@@ -27,9 +27,15 @@ namespace edt {
 
 		// The implicit callbacks alone, without the dockspace (--headless).
 		void process_implicit() { m_manager.process_implicit(); }
+		// A callback registered under an id starting with `prefix` waits for the next UI frame.
+		bool has_implicit_prefix(std::string_view prefix) const {
+			return m_manager.has_implicit_prefix(prefix);
+		}
 
 		// The registries the dockspace draws; nothing is drawn before this is set.
 		void set_context(editor_context& context) { m_context = &context; }
+		// See dockspace::set_menu_bar_status.
+		void set_menu_bar_status(std::function<void()> draw) { m_dockspace.set_menu_bar_status(std::move(draw)); }
 
 	private:
 		gui::menu_layout_manager m_manager;

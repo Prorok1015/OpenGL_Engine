@@ -120,6 +120,7 @@ edt::registration edt::action_registry::add(action_desc desc)
 	command.mutates = desc.mutates;
 	command.invoke = [execute = std::move(desc.execute)](const cmd::call& request) { return execute(request.args); };
 	command.enabled = std::move(desc.enabled);
+	command.category = desc.category;
 
 	action_ui ui;
 	ui.label = std::move(desc.label);
@@ -128,6 +129,10 @@ edt::registration edt::action_registry::add(action_desc desc)
 	ui.shortcut_hint = std::move(desc.shortcut_hint);
 	ui.separator_before = desc.separator_before;
 	ui.disabled_tooltip = std::move(desc.disabled_tooltip);
+	ui.disabled_reason = std::move(desc.disabled_reason);
+	ui.checked = std::move(desc.checked);
+	ui.dynamic_label = std::move(desc.dynamic_label);
+	ui.yields_to_text_input = desc.yields_to_text_input;
 	ui.activate = std::move(desc.activate);
 	return add(std::move(command), std::move(ui));
 }
@@ -212,13 +217,15 @@ std::vector<edt::menu_item_info> edt::action_registry::items(std::string_view me
 	std::vector<menu_item_info> out;
 	for (const auto& a : m_ui) {
 		if (a->ui.menu_path != menu) continue;
+		const bool enabled = m_commands.is_enabled(a->id);
 		out.push_back({
 			a->id,
-			a->ui.label,
+			a->ui.dynamic_label ? a->ui.dynamic_label() : a->ui.label,
 			a->ui.shortcut_hint.empty() ? a->ui.shortcut : a->ui.shortcut_hint,
 			a->ui.separator_before,
-			m_commands.is_enabled(a->id),
-			a->ui.disabled_tooltip });
+			enabled,
+			!enabled && a->ui.disabled_reason ? a->ui.disabled_reason() : a->ui.disabled_tooltip,
+			a->ui.checked && a->ui.checked() });
 	}
 	return out;
 }
@@ -276,10 +283,11 @@ bool edt::action_registry::activate(std::string_view id)
 	return true;
 }
 
-bool edt::action_registry::dispatch(const shortcut& chord)
+bool edt::action_registry::dispatch(const shortcut& chord, bool text_input)
 {
 	for (const auto& a : m_ui) {
-		if (a->binding == chord && m_commands.is_enabled(a->id)) return activate(a->id);
+		if (a->binding != chord || (text_input && a->ui.yields_to_text_input)) continue;
+		if (m_commands.is_enabled(a->id)) return activate(a->id);
 	}
 	return false;
 }

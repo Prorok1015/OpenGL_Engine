@@ -45,6 +45,8 @@ std::vector<edt::connection> edt::wire_selection(
 	});
 
 	scene_ed.on_before_modify = [&service] { service.clear(); };
+	// Undo and redo replace nodes the selection points into.
+	state.set_before_history_apply([&service] { service.clear(); });
 	world_ctrl.on_world_switched = [&events, &hierarchy, &state](int idx) {
 		hierarchy.set_world_desc(state.active_world_desc());
 		hierarchy.set_world_names(state.world_names, idx);

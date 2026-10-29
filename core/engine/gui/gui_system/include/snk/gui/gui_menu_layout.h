@@ -42,6 +42,8 @@ namespace gui
 
 		void register_implicit(const std::string_view id, UI_CALLBACK callback);
 		void unregister_implicit(const std::string_view id);
+		// An implicit callback whose id starts with `prefix` is registered (waits for its next process()).
+		bool has_implicit_prefix(std::string_view prefix) const;
 
 		void set_menu_checked(const std::string_view path, bool checked);
 		bool get_is_item_checked(const std::string_view path) const;

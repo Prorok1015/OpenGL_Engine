@@ -360,7 +360,7 @@ bool edt::build_settings_model::refresh_fresh_configure()
 		json::value doc = json::parse(text, ec);
 		if (ec || !doc.is_object()) return std::nullopt;
 		for (const std::string_view key : { "configuration", "jobs_mode", "reload_after_build", "build_before_play",
-			"log_verbosity", "fresh_configure", "live_enabled", "live_quiet_ms", "live_jobs" }) {
+			"log_verbosity", "fresh_configure", "fresh_generation", "live_enabled", "live_quiet_ms", "live_jobs" }) {
 			doc.get_object().erase(key);
 		}
 		build_settings settings = parse_build_settings(text).settings;
@@ -392,6 +392,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		result.user_presets_error = std::move(*blocked);
 		return result;
 	}
+	if (!fresh.empty() && m_stop_background) m_stop_background();
 
 	// build.json first: a --fresh mark without the removal costs one configure, a removal without the mark leaves the
 	// define in CMakeCache.txt.
@@ -400,6 +401,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		// Only the fields edited here: the rest of the file stays as it is on disk now.
 		const build_settings edited = m_settings;
 		const build_settings loaded = m_loaded_settings;
+		build_settings written;
 		auto problem = update_build_settings(snk_dir(), [&](build_settings& on_disk) {
 			if (edited.configuration != loaded.configuration) on_disk.configuration = edited.configuration;
 			if (edited.jobs_mode != loaded.jobs_mode) on_disk.jobs_mode = edited.jobs_mode;
@@ -411,6 +413,9 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 			for (const auto& configuration : fresh) {
 				if (!contains(on_disk.fresh_configure, configuration)) on_disk.fresh_configure.push_back(configuration);
 			}
+			// Also for a configuration marked already: a build configuring now must not clear this newer mark.
+			if (!fresh.empty()) ++on_disk.fresh_generation;
+			written = on_disk;
 		}, m_write);
 		if (problem) {
 			settings_ok = false;
@@ -418,6 +423,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		} else {
 			m_settings_snapshot = read_snapshot(build_settings_file());
 			result.fresh = fresh;
+			if (m_on_settings_applied) m_on_settings_applied(written);
 		}
 	}
 
@@ -448,6 +454,7 @@ std::vector<edt::registration> edt::register_build_settings_commands(cmd::comman
 	get.id = "build.settings.get";
 	get.summary = "The game build settings of the open project: configuration, jobs, module reload, log verbosity, live mode, and the "
 		"CMake defines per configuration (team ones from CMakePresets.json, the user's from CMakeUserPresets.json)";
+	get.category = cmd::agent_category::read;
 	get.args_schema = cmd::no_args_schema();
 	get.result_schema = json::parse(k_get_result_schema);
 	get.mutates = false;
