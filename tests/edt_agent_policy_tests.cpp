@@ -414,8 +414,8 @@ BOOST_AUTO_TEST_CASE(AFileThatCannotBeExamined_IsALayerError_NotNoFile)
 	const fs::path locked = dir.path() / "locked";
 	fs::permissions(locked, fs::perms::none);
 	std::error_code ec;
-	fs::status(locked / "agent_policy.json", ec);
-	if (!ec) {
+	const fs::file_status probed = fs::status(locked / "agent_policy.json", ec);
+	if (!ec && probed.type() != fs::file_type::none) {
 		fs::permissions(locked, fs::perms::owner_all);
 		BOOST_TEST_MESSAGE("permissions are not enforced here (running as root?)");
 		return;
