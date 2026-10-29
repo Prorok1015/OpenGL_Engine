@@ -45,8 +45,8 @@ namespace prj
 		std::vector<configure_preset> configure;
 		std::vector<build_preset> build;
 
-		const configure_preset* find_configure(std::string_view name) const;
-		const build_preset* find_build(std::string_view name) const;
+		SNK_API const configure_preset* find_configure(std::string_view name) const;
+		SNK_API const build_preset* find_build(std::string_view name) const;
 	};
 
 	struct main_presets_result
