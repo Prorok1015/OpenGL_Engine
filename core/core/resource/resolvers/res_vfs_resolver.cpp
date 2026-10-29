@@ -19,7 +19,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt)
 }
 
 res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access, write_policy policy,
-	watch_options watch)
+	watch_options watch, bool file_operations)
 	: core::res::res_resolver_interface(prt)
 	, watcher(io, [this](fs::path pth) {
 			if (m_closing) {
@@ -32,6 +32,7 @@ res::vfs_resolver::vfs_resolver(const std::string_view prt, const std::vector<fs
 		})
 	, m_access(access)
 	, m_write_policy(std::move(policy))
+	, m_file_operations(file_operations)
 {
 	if (points.empty())
 		return;
@@ -375,6 +376,9 @@ void res::vfs_resolver::report_self_change(const res::tag& changed, const res::t
 res::file_operation res::vfs_resolver::remove(const::res::tag& tag)
 {
 	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "remove on the io thread would wait for itself");
+	if (!m_file_operations) {
+		return file_operation::failure(std::format("protocol '{}' does not allow removing files", protocol));
+	}
 	std::string why;
 	const auto target = writable_path(tag, why);
 	if (!target) {
@@ -435,6 +439,9 @@ std::string res::vfs_resolver::remove_on_io(const tag& tag, const fs::path& targ
 res::file_operation res::vfs_resolver::rename(const::res::tag& from, const::res::tag& to)
 {
 	ASSERT_MSG(std::this_thread::get_id() != io_thread.get_id(), "rename on the io thread would wait for itself");
+	if (!m_file_operations) {
+		return file_operation::failure(std::format("protocol '{}' does not allow renaming files", protocol));
+	}
 	if (from.protocol() != protocol || to.protocol() != protocol) {
 		return file_operation::failure(std::format("'{}' and '{}' are not both in protocol '{}'", from.view(), to.view(), protocol));
 	}

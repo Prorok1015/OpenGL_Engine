@@ -241,7 +241,9 @@ BOOST_FIXTURE_TEST_CASE(Remove_ThroughALinkedFolder_IsRefused, ops_fixture)
 BOOST_FIXTURE_TEST_CASE(Remove_InAnotherProtocol_IsRefused, ops_fixture)
 {
 	BOOST_TEST(!sys->remove(res::tag{ "res://levels/main.desc" }).ok);
+	BOOST_TEST(!sys->rename(res::tag{ "res://levels/main.desc" }, res::tag{ "res://levels/other.desc" }).ok);
 	BOOST_TEST(fs::exists(content / "levels" / "main.desc"));
+	BOOST_TEST(!fs::exists(content / "levels" / "other.desc"));
 }
 
 BOOST_FIXTURE_TEST_CASE(Rename_AFile_MovesItAndTellsSubscribers, ops_fixture)

@@ -228,7 +228,7 @@ void res::resource_system::register_mount(const mount &mounted) {
         mounted.access == mount_access::read_only ? "read-only" : "read-write",
         mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
   auto &resolver = registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access,
-                                                      mounted.writable, mounted.watch);
+                                                      mounted.writable, mounted.watch, mounted.file_operations);
   resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
   if (mounted.watch.report_changes) {
@@ -1186,7 +1186,8 @@ res::mount_table res::resource_system::project_mount_table(
     table.push_back(mount{tag::code, {code_dir}, mount_access::read_write,
                           write_policy{tag::code, prj::code_write_patterns(), false},
                           watch_options{true, [](std::string_view name) { return prj::is_code_ignored_dir(name); },
-                                        [](std::string_view name) { return prj::is_code_file(name); }}});
+                                        [](std::string_view name) { return prj::is_code_file(name); }},
+                          true});
   }
   add_engine_mount(table, engine_base);
   return table;

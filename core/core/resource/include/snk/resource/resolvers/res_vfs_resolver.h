@@ -38,7 +38,7 @@ namespace res
 		// the default allows every path.
 		// `watch` says what the watcher reports and skips (changes_callback only with watch.report_changes).
 		vfs_resolver(const std::string_view prt, const std::vector<fs::path>& points, mount_access access = mount_access::read_write,
-			write_policy policy = write_policy::allow_all(), watch_options watch = {});
+			write_policy policy = write_policy::allow_all(), watch_options watch = {}, bool file_operations = false);
 		~vfs_resolver();
 
 		std::optional<res::tag> path_mapper(const fs::path& path) const;
@@ -96,6 +96,7 @@ namespace res
 		std::uint64_t m_erase_generation = 0;
 		mount_access m_access = mount_access::read_write;
 		write_policy m_write_policy = write_policy::allow_all();
+		bool m_file_operations = false;
 		// Set first in the destructor: a watcher poll still queued must not signal a resource_system being destroyed.
 		std::atomic<bool> m_closing{ false };
 		// The top root, where stores write (#414): opened on the io thread at the first write, used only there.
