@@ -364,12 +364,12 @@ std::optional<fs::path> res::vfs_resolver::writable_path(const tag& tag, std::st
 	return path;
 }
 
-void res::vfs_resolver::report_self_change(const tag& tag, const tag& old_tag, change_kind kind)
+void res::vfs_resolver::report_self_change(const res::tag& changed, const res::tag& old_tag, change_kind kind)
 {
 	if (!watcher.reports_changes() || m_closing) {
 		return;
 	}
-	notify_changes({ file_change{ tag, old_tag, kind, false, true } });
+	notify_changes({ file_change{ changed, old_tag, kind, false, true } });
 }
 
 res::file_operation res::vfs_resolver::remove(const::res::tag& tag)

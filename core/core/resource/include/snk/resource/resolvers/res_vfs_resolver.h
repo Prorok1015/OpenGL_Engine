@@ -71,7 +71,7 @@ namespace res
 		std::string remove_on_io(const tag& tag, const fs::path& target);
 		std::string rename_on_io(const tag& from, const fs::path& source, const tag& to, const fs::path& target);
 		// Tells the changes callback, if the mount reports changes, about what was done through this resolver.
-		void report_self_change(const tag& tag, const tag& old_tag, change_kind kind);
+		void report_self_change(const res::tag& changed, const res::tag& old_tag, change_kind kind);
 		// The file a store writes first and then renames over the target: a tag of its own, so safe_path checks it too.
 		// Hidden and unique per store, so it never lands on a real resource or on a link planted at a guessed name.
 		static res::tag make_temp_tag(const tag& tag);

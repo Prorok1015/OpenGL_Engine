@@ -24,7 +24,7 @@ namespace res
 		// Which paths store() may write (checked against the tag and the file it resolves to); every path by default.
 		write_policy writable = write_policy::allow_all();
 		// What the mount's watcher reports and skips.
-		watch_options watch;
+		watch_options watch = watch_options{};
 	};
 
 	using mount_table = std::vector<mount>;
