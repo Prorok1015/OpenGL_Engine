@@ -1,5 +1,6 @@
 #include <snk/project/prj_cmake_presets.h>
 #include <snk/project/prj_json_text.h>
+#include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -97,8 +98,17 @@ namespace
 		return result;
 	}
 
-	std::optional<std::string> write_atomically(const fs::path& file, std::string_view text)
+	std::optional<std::string> write_atomically(const fs::path& link_or_file, std::string_view text)
 	{
+		// A linked file is replaced at its target; renaming onto the link would turn it into a plain file.
+		fs::path file = link_or_file;
+		std::error_code link_ec;
+		if (fs::is_symlink(link_or_file, link_ec)) {
+			file = fs::canonical(link_or_file, link_ec);
+			if (link_ec) {
+				return std::format("'{}' links to a file that cannot be reached: {}", utf8_of(link_or_file), link_ec.message());
+			}
+		}
 		std::random_device random;
 		fs::path temp_name{ "." };
 		temp_name += file.filename();
@@ -336,17 +346,36 @@ namespace
 				doc["configurePresets"].get_array().emplace_back(std::move(created));
 			}
 
+			// The team's build preset of that name carries its targets, configuration and cleanFirst over.
+			const bool team_build = m_main.find_build(cfg) != nullptr;
 			if (json::object* preset = find_named(m_doc, "buildPresets", name)) {
+				if (team_build && !preset->contains("inherits")) {
+					(*preset)["inherits"] = jsv(cfg);
+				}
 				if (!preset->contains("configurePreset")) {
 					(*preset)["configurePreset"] = jsv(name);
 				}
 			} else {
 				json::object created;
 				created["name"] = jsv(name);
+				if (team_build) {
+					created["inherits"] = jsv(cfg);
+				}
 				created["configurePreset"] = jsv(name);
 				doc["buildPresets"].get_array().emplace_back(std::move(created));
 			}
 			return std::nullopt;
+		}
+
+		int effective_version() const
+		{
+			int version = std::max(m_main.version, prj::k_min_presets_version);
+			if (m_doc.is_object()) {
+				if (const json::value* own = m_doc.get_object().if_contains("version")) {
+					version = std::max(version, int_of(*own).value_or(0));
+				}
+			}
+			return version;
 		}
 
 		std::optional<std::string> apply(const prj::ensure_user_preset& edit)
@@ -356,6 +385,9 @@ namespace
 
 		std::optional<std::string> apply(const prj::set_define& edit)
 		{
+			if (auto problem = prj::check_user_define(m_main, edit.cfg, edit.name, edit.value, effective_version())) {
+				return problem;
+			}
 			if (auto problem = ensure(edit.cfg)) {
 				return problem;
 			}
@@ -560,6 +592,62 @@ prj::main_presets_result prj::load_cmake_presets(const fs::path& file)
 	return result;
 }
 
+const prj::build_preset* prj::main_presets::find_build(std::string_view name) const
+{
+	const auto it = std::find_if(build.begin(), build.end(), [&](const auto& preset) { return preset.name == name; });
+	return it == build.end() ? nullptr : &*it;
+}
+
+std::optional<std::string> prj::invalid_preset_macro(std::string_view text, int presets_version)
+{
+	static constexpr std::string_view k_v3_macros[] = { "sourceDir", "sourceParentDir", "sourceDirName", "presetName",
+		"generator", "hostSystemName", "dollar" };
+	const auto known = [presets_version](std::string_view macro) {
+		if (std::find(std::begin(k_v3_macros), std::end(k_v3_macros), macro) != std::end(k_v3_macros)) {
+			return true;
+		}
+		return (macro == "fileDir" && presets_version >= 4) || (macro == "pathListSep" && presets_version >= 5);
+	};
+	constexpr std::string_view k_openers[] = { "{", "env{", "penv{", "vendor{" };
+	for (std::size_t at = text.find('$'); at != std::string_view::npos; at = text.find('$', at + 1)) {
+		const std::string_view rest = text.substr(at + 1);
+		std::size_t open = std::string_view::npos;
+		for (const std::string_view opener : k_openers) {
+			if (rest.starts_with(opener)) {
+				open = opener.size();
+				break;
+			}
+		}
+		const std::size_t close = open == std::string_view::npos ? std::string_view::npos : rest.find('}', open);
+		const bool valid = close != std::string_view::npos && close > open && (open > 1 || known(rest.substr(open, close - open)));
+		if (!valid) {
+			const std::string_view shown = close == std::string_view::npos ? rest.substr(0, 16) : rest.substr(0, close + 1);
+			return std::format("'${}' is not a CMake presets macro (presets version {}), and CMake would then refuse every "
+				"preset; write ${{dollar}} for a literal '$', e.g. ${{dollar}}{{CMAKE_SOURCE_DIR}}", shown, presets_version);
+		}
+		at += close + 1;
+	}
+	return std::nullopt;
+}
+
+std::optional<std::string> prj::check_user_define(const main_presets& main, std::string_view cfg, std::string_view name,
+	std::string_view value, int presets_version)
+{
+	if (name.empty()) {
+		return std::string{ "a define needs a name" };
+	}
+	if (auto problem = invalid_preset_macro(name, presets_version)) {
+		return std::format("define name: {}", *problem);
+	}
+	if (auto problem = invalid_preset_macro(value, presets_version)) {
+		return std::format("define {}: {}", name, *problem);
+	}
+	if (const configure_preset* team = main.find_configure(cfg); team && team->cache_variables.contains(std::string{ name })) {
+		return std::format("{} is set by the team preset '{}' in CMakePresets.json and is read-only here", name, cfg);
+	}
+	return std::nullopt;
+}
+
 std::string prj::user_preset_name(std::string_view cfg)
 {
 	std::string name{ k_user_prefix };
@@ -671,6 +759,19 @@ prj::user_presets_save_result prj::save_user_presets(const fs::path& code_dir, c
 	if (!read.error.empty()) {
 		result.error = std::move(read.error);
 		return result;
+	}
+
+	for (const auto& edit : edits) {
+		const std::string& cfg = std::visit([](const auto& op) -> const std::string& { return op.cfg; }, edit);
+		const json::object* preset = find_named(std::as_const(read.doc), "configurePresets", user_preset_name(cfg));
+		const json::value* dir = preset ? preset->if_contains("binaryDir") : nullptr;
+		if (dir && dir->is_string()) {
+			const std::string expected = user_binary_dir(*main.presets, cfg);
+			if (to_std(dir->get_string()) != expected) {
+				egLOG_WARN("project", "{}: binaryDir of '{}' is '{}', the tree of '{}' is '{}'; left as it is",
+					utf8_of(file), user_preset_name(cfg), to_std(dir->get_string()), cfg, expected);
+			}
+		}
 	}
 
 	json::value doc = read.doc;

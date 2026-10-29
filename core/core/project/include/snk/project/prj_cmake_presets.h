@@ -46,6 +46,7 @@ namespace prj
 		std::vector<build_preset> build;
 
 		const configure_preset* find_configure(std::string_view name) const;
+		const build_preset* find_build(std::string_view name) const;
 	};
 
 	struct main_presets_result
@@ -60,16 +61,21 @@ namespace prj
 
 	// Edits of CMakeUserPresets.json, kept as a list so they can be applied again to the file as it is on disk at
 	// save time. `cfg` names a configure preset of CMakePresets.json; the edits go to user-<cfg>.
+	// user-<cfg> inherits <cfg>: the configure preset always, the build preset when CMakePresets.json has a build preset
+	// named <cfg>.
 	struct ensure_user_preset
 	{
 		std::string cfg;
 	};
+	// Refused (see check_user_define) for a name the team preset <cfg> already sets: team defines are read-only.
 	struct set_define
 	{
 		std::string cfg;
 		std::string name;
 		std::string value;
 	};
+	// Does not unset the variable in an existing CMakeCache.txt, and user-<cfg> shares its build tree with <cfg>: the next
+	// build must configure with --fresh (CMake 3.24+).
 	struct remove_define
 	{
 		std::string cfg;
@@ -84,6 +90,16 @@ namespace prj
 	using user_presets_edit = std::variant<ensure_user_preset, set_define, remove_define, set_jobs>;
 
 	SNK_API std::string user_preset_name(std::string_view cfg);
+
+	// The error for the first `$` in `text` that does not start a preset macro CMake knows at `presets_version`
+	// (${sourceDir} ${sourceParentDir} ${sourceDirName} ${presetName} ${generator} ${hostSystemName} ${dollar}
+	// $env{X} $penv{X} $vendor{X}; ${fileDir} from 4, ${pathListSep} from 5). CMake reads both presets files together
+	// and one bad macro makes it refuse all of them.
+	SNK_API std::optional<std::string> invalid_preset_macro(std::string_view text, int presets_version);
+	// Why set_define{cfg, name, value} is refused: an empty name, an unknown macro in the name or value, or a name the
+	// team preset <cfg> sets (effective cacheVariables of CMakePresets.json; read-only for the editor).
+	SNK_API std::optional<std::string> check_user_define(const main_presets& main, std::string_view cfg,
+		std::string_view name, std::string_view value, int presets_version);
 
 	// The binaryDir of user-<cfg>: the effective binaryDir of `cfg` with ${presetName} replaced by `cfg`, so both build
 	// in one tree; ${sourceDir}/../build/<cfg> when `cfg` has none.

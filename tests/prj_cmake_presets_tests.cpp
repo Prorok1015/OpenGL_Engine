@@ -65,7 +65,7 @@ namespace {
   ],
   "buildPresets": [
     { "name": "mine", "configurePreset": "mine" },
-    { "name": "user-debuggame", "configurePreset": "user-debuggame", "targets": ["all"] }
+    { "name": "user-debuggame", "inherits": "debuggame", "configurePreset": "user-debuggame", "targets": ["all"] }
   ]
 }
 )";
@@ -218,6 +218,8 @@ BOOST_AUTO_TEST_CASE(Apply_ToNothing_MakesTheSkeleton)
 	BOOST_TEST(text_of(configure.at("binaryDir")) == "${sourceDir}/../build/debuggame");
 	BOOST_TEST(configure.at("cacheVariables").as_object().empty());
 	const auto& build = preset_in(doc, "buildPresets", "user-debuggame");
+	BOOST_TEST((keys_of(build) == std::vector<std::string>{ "name", "inherits", "configurePreset" }));
+	BOOST_TEST(text_of(build.at("inherits")) == "debuggame");
 	BOOST_TEST(text_of(build.at("configurePreset")) == "user-debuggame");
 	BOOST_TEST(!build.contains("jobs"));
 	BOOST_TEST(prj::has_user_preset(doc, "debuggame"));
@@ -419,8 +421,6 @@ BOOST_AUTO_TEST_CASE(Save_FileChangedOnDisk_KeepsTheExternalChange)
 	test_util::temp_dir dir("prj_presets_external");
 	dir.write("CMakePresets.json", k_main);
 	dir.write("CMakeUserPresets.json", k_hand_user);
-	const auto seen_by_editor = prj::read_user_presets(dir.path());
-	BOOST_REQUIRE(seen_by_editor.error.empty());
 	const std::vector<prj::user_presets_edit> edits{
 		prj::set_define{ "debuggame", "EDITOR", "1" },
 		prj::set_jobs{ "debuggame", 3 },
@@ -461,5 +461,89 @@ BOOST_AUTO_TEST_CASE(Save_CrlfFile_StaysCrlf)
 	BOOST_TEST(text.find("\r\n") != std::string::npos);
 	BOOST_TEST(lone_newlines == 0u);
 }
+
+BOOST_AUTO_TEST_CASE(Apply_BuildPreset_InheritsTheTeamBuildPreset_OnlyWhenThereIsOne)
+{
+	const auto main = parse_main(k_main);
+	json::value doc = json::parse(R"({ "version": 3, "configurePresets": [], "buildPresets": [
+		{ "name": "user-debuggame", "configurePreset": "user-debuggame" },
+		{ "name": "user-release", "inherits": "mine", "configurePreset": "user-release" }
+	] })");
+	BOOST_REQUIRE(!prj::apply_user_presets_edits(doc, main, {
+		prj::ensure_user_preset{ "debuggame" },
+		prj::ensure_user_preset{ "release" },
+	}));
+	// Added where missing, never overwritten.
+	BOOST_TEST(text_of(preset_in(doc, "buildPresets", "user-debuggame").at("inherits")) == "debuggame");
+	BOOST_TEST(text_of(preset_in(doc, "buildPresets", "user-release").at("inherits")) == "mine");
+
+	const auto no_build = parse_main(R"({ "version": 3, "configurePresets": [ { "name": "debuggame" } ] })");
+	json::value fresh;
+	BOOST_REQUIRE(!prj::apply_user_presets_edits(fresh, no_build, { prj::ensure_user_preset{ "debuggame" } }));
+	BOOST_TEST(!preset_in(fresh, "buildPresets", "user-debuggame").contains("inherits"));
+}
+
+BOOST_AUTO_TEST_CASE(PresetMacros_OnlyTheOnesCMakeKnows)
+{
+	for (const char* valid : { "plain", "", "${sourceDir}/x", "${sourceParentDir}", "${sourceDirName}", "${presetName}",
+			 "${generator}", "${hostSystemName}", "${dollar}", "${dollar}{CMAKE_SOURCE_DIR}", "$env{HOME}/a", "$penv{PATH}",
+			 "$vendor{x.y}" }) {
+		BOOST_TEST_INFO("text: " << valid);
+		BOOST_TEST(!prj::invalid_preset_macro(valid, 3).has_value());
+	}
+	for (const char* invalid : { "${CMAKE_SOURCE_DIR}", "a$b", "$", "${sourceDir", "${}", "$env{}", "$other{x}",
+			 "${fileDir}", "${pathListSep}" }) {
+		BOOST_TEST_INFO("text: " << invalid);
+		BOOST_TEST(prj::invalid_preset_macro(invalid, 3).has_value());
+	}
+	BOOST_TEST(!prj::invalid_preset_macro("${fileDir}", 4).has_value());
+	BOOST_TEST(prj::invalid_preset_macro("${pathListSep}", 4).has_value());
+	BOOST_TEST(!prj::invalid_preset_macro("${pathListSep}", 5).has_value());
+	BOOST_TEST(prj::invalid_preset_macro("${x}", 3).value_or("").find("${dollar}") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(SetDefine_RefusesWhatWouldBreakThePresets)
+{
+	const auto main = parse_main(k_main);
+	const auto refused = [&](prj::set_define edit) {
+		json::value doc;
+		const auto problem = prj::apply_user_presets_edits(doc, main, { edit });
+		BOOST_TEST_INFO("define: " << edit.name << " = " << edit.value);
+		BOOST_TEST(problem.has_value());
+		// Nothing was created for a refused edit.
+		BOOST_TEST(doc.is_null());
+		return problem.value_or("");
+	};
+	refused({ "debuggame", "", "1" });
+	BOOST_TEST(refused({ "debuggame", "A", "${CMAKE_SOURCE_DIR}/x" }).find("${dollar}") != std::string::npos);
+	refused({ "debuggame", "A${x}", "1" });
+	// Team defines are read-only, inherited ones included.
+	refused({ "debuggame", "CMAKE_BUILD_TYPE", "Debug" });
+	refused({ "debuggame", "CMAKE_EXPORT_COMPILE_COMMANDS", "OFF" });
+
+	json::value doc;
+	BOOST_TEST(!prj::apply_user_presets_edits(doc, main, { prj::set_define{ "debuggame", "A", "$env{HOME}/${presetName}" } }));
+	// ${fileDir} is known once the user file is version 4.
+	json::value v4 = json::parse(R"({ "version": 4 })");
+	BOOST_TEST(!prj::apply_user_presets_edits(v4, main, { prj::set_define{ "debuggame", "B", "${fileDir}" } }));
+	BOOST_TEST(prj::check_user_define(main, "debuggame", "B", "${fileDir}", 3).has_value());
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(Save_LinkedUserFile_WritesTheTarget)
+{
+	test_util::temp_dir dir("prj_presets_link");
+	dir.write("CMakePresets.json", k_main);
+	const fs::path target = dir.write("shared/presets.json", "{ \"version\": 3 }\n");
+	const fs::path link = dir.path() / "CMakeUserPresets.json";
+	fs::create_symlink(target, link);
+
+	const auto saved = prj::save_user_presets(dir.path(), { prj::ensure_user_preset{ "debuggame" } });
+	BOOST_REQUIRE_MESSAGE(saved.error.empty(), saved.error);
+	BOOST_TEST(saved.written);
+	BOOST_TEST(fs::is_symlink(link));
+	BOOST_TEST(read_text(target).find("user-debuggame") != std::string::npos);
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

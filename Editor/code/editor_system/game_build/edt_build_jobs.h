@@ -28,6 +28,7 @@ namespace edt
 		compiler_family compiler = compiler_family::gnu;
 	};
 
-	// recommended_jobs for this machine (std::thread::hardware_concurrency, platform::total_physical_memory).
+	// recommended_jobs for what this process may use (platform::available_cpu_count, total_physical_memory: on Linux
+	// within the affinity mask and cgroup limits of a container).
 	jobs_estimate estimate_jobs();
 }

@@ -1,7 +1,6 @@
 #include "edt_build_jobs.h"
-#include <snk/platform/plt_memory.h>
+#include <snk/platform/plt_hardware.h>
 #include <algorithm>
-#include <thread>
 
 int edt::recommended_jobs(unsigned cores, std::uint64_t ram_bytes, compiler_family compiler)
 {
@@ -29,7 +28,7 @@ edt::compiler_family edt::host_compiler_family()
 edt::jobs_estimate edt::estimate_jobs()
 {
 	jobs_estimate estimate;
-	estimate.cores = std::thread::hardware_concurrency();
+	estimate.cores = platform::available_cpu_count();
 	estimate.ram = platform::total_physical_memory();
 	estimate.compiler = host_compiler_family();
 	estimate.jobs = recommended_jobs(estimate.cores, estimate.ram, estimate.compiler);
