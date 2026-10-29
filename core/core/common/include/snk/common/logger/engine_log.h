@@ -15,8 +15,13 @@ namespace engine
 {
 	enum class log_level { trace, debug, info, warn, error };
 
-	// Initialize the logging system. Call once at startup.
+	// Where the colored console sink writes. stderr_ keeps stdout free for a protocol (--headless, --mcp-stdio).
+	enum class console_target { stdout_, stderr_ };
+
+	// Initialize the logging system. Call once at startup. The first initialization wins; the target is
+	// remembered, so a logger re-created after shutdown_logger() writes to the same stream.
 	SNK_API void init_logger();
+	SNK_API void init_logger(console_target console);
 
 	// Shutdown the logging system. Call once at exit.
 	SNK_API void shutdown_logger();

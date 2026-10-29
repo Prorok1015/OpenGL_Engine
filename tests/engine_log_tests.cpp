@@ -547,4 +547,23 @@ BOOST_AUTO_TEST_CASE(Journal_SequenceKeepsCountingAcrossShutdown)
 	BOOST_TEST(page.entries[0].seq == before);
 }
 
+BOOST_AUTO_TEST_CASE(ConsoleTarget_StderrReplacesTheStdoutSinkAndSurvivesARestart)
+{
+	engine::shutdown_logger();
+	engine::init_logger(engine::console_target::stderr_);
+	BOOST_TEST(engine::console_sink_count(engine::console_target::stderr_) == 1u);
+	BOOST_TEST(engine::console_sink_count(engine::console_target::stdout_) == 0u);
+
+	// A logger re-created lazily after a shutdown keeps the chosen stream.
+	engine::shutdown_logger();
+	egLOG_INFO("covtest/console_target", "after restart");
+	BOOST_TEST(engine::console_sink_count(engine::console_target::stderr_) == 1u);
+	BOOST_TEST(engine::console_sink_count(engine::console_target::stdout_) == 0u);
+
+	engine::shutdown_logger();
+	engine::init_logger(engine::console_target::stdout_);
+	BOOST_TEST(engine::console_sink_count(engine::console_target::stdout_) == 1u);
+	BOOST_TEST(engine::console_sink_count(engine::console_target::stderr_) == 0u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

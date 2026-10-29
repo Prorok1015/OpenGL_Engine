@@ -3,8 +3,11 @@
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_service_commands.h>
 #include <boost/json/parse.hpp>
+#include <boost/json/value.hpp>
+#include <algorithm>
 #include <format>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -225,6 +228,97 @@ BOOST_AUTO_TEST_CASE(Destructor_CancelsWhatIsLeft)
 	BOOST_TEST(!ran);
 }
 
+BOOST_AUTO_TEST_CASE(StartWithResult_KeepsTheValueOfADoneJob)
+{
+	bool done_called = false;
+	const auto id = jobs->start_with_result(ds::lane::io, { "status", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(boost::json::object{ { "branch", "main" } }); },
+		[&done_called](ds::task_result<boost::json::value>& r) { done_called = r.ok(); });
+	BOOST_REQUIRE(jobs->info(id).has_value());
+	BOOST_TEST(!jobs->info(id)->result.has_value());
+
+	run_lane(ds::lane::io);
+	deliver();
+	const auto finished = jobs->info(id);
+	BOOST_REQUIRE(finished.has_value());
+	BOOST_TEST((finished->status == edt::job_status::done));
+	BOOST_REQUIRE(finished->result.has_value());
+	BOOST_TEST(std::string(finished->result->as_object().at("branch").as_string()) == "main");
+	BOOST_TEST(done_called);
+}
+
+BOOST_AUTO_TEST_CASE(StoredResults_StayUnderTheBudget_OldestDroppedFirst)
+{
+	constexpr std::size_t half = edt::job_service::RESULT_BUDGET / 2;
+	const auto first = jobs->start_with_result(ds::lane::io, { "first", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(boost::json::string(std::string(half, 'a'))); });
+	run_lane(ds::lane::io);
+	deliver();
+	BOOST_TEST(jobs->info(first)->result.has_value());
+
+	const auto second = jobs->start_with_result(ds::lane::io, { "second", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(boost::json::string(std::string(half, 'b'))); });
+	run_lane(ds::lane::io);
+	deliver();
+	const auto dropped = jobs->info(first);
+	BOOST_REQUIRE(dropped.has_value());
+	BOOST_TEST((dropped->status == edt::job_status::done));
+	BOOST_TEST(!dropped->result.has_value());
+	BOOST_TEST(dropped->result_dropped);
+	BOOST_TEST(jobs->info(second)->result.has_value());
+	BOOST_TEST(!jobs->info(second)->result_dropped);
+
+	const auto third = jobs->start_with_result(ds::lane::io, { "third", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(1); });
+	run_lane(ds::lane::io);
+	deliver();
+	BOOST_TEST(jobs->info(second)->result.has_value());
+	BOOST_TEST(jobs->info(third)->result.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(StartWithResult_WithoutOnDone_StillKeepsTheValue)
+{
+	const auto id = jobs->start_with_result(ds::lane::io, { "log", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(42); });
+	run_lane(ds::lane::io);
+	deliver();
+	const auto finished = jobs->info(id);
+	BOOST_REQUIRE(finished.has_value() && finished->result.has_value());
+	BOOST_TEST(finished->result->as_int64() == 42);
+}
+
+BOOST_AUTO_TEST_CASE(Start_ReturningJson_KeepsNoResult)
+{
+	const auto id = jobs->start(ds::lane::io, { "plain", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(1); },
+		[](ds::task_result<boost::json::value>&) {});
+	run_lane(ds::lane::io);
+	deliver();
+	const auto finished = jobs->info(id);
+	BOOST_REQUIRE(finished.has_value());
+	BOOST_TEST(!finished->result.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(StartWithResult_FailedOrCancelledJobs_HaveNoResult)
+{
+	const auto failed = jobs->start_with_result(ds::lane::io, { "fails", "test" }, owner,
+		[](ds::task_context&) -> boost::json::value { throw std::runtime_error("boom"); });
+	const auto cancelled = jobs->start_with_result(ds::lane::io, { "cancelled", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(1); });
+	BOOST_TEST(jobs->cancel(cancelled));
+	run_lane(ds::lane::io);
+	deliver();
+
+	const auto failed_info = jobs->info(failed);
+	BOOST_REQUIRE(failed_info.has_value());
+	BOOST_TEST((failed_info->status == edt::job_status::failed));
+	BOOST_TEST(!failed_info->result.has_value());
+	const auto cancelled_info = jobs->info(cancelled);
+	BOOST_REQUIRE(cancelled_info.has_value());
+	BOOST_TEST((cancelled_info->status == edt::job_status::cancelled));
+	BOOST_TEST(!cancelled_info->result.has_value());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 namespace {
@@ -246,7 +340,8 @@ struct job_events_fixture
 		connections.push_back(events.job_progress.subscribe([this](std::uint64_t id, float fraction, const std::string& note) {
 			log.push_back(std::format("progress:{}:{}:{}", id, fraction, note));
 		}));
-		connections.push_back(events.job_finished.subscribe([this](std::uint64_t id, edt::job_status status, const std::string& error) {
+		connections.push_back(events.job_finished.subscribe([this](std::uint64_t id, edt::job_status status, const std::string& error,
+			const std::optional<boost::json::value>&) {
 			log.push_back(std::format("finish:{}:{}:{}", id, edt::job_status_name(status), error));
 		}));
 	}
@@ -510,7 +605,8 @@ BOOST_AUTO_TEST_CASE(CancelAllAndWait_AlsoStopsAJobStartedByAFinishedSlot)
 		edt::job_service::job_id id = 0;
 	};
 	auto state = std::make_shared<follow_state>();
-	connections.push_back(events.job_finished.subscribe([this, state](std::uint64_t, edt::job_status, const std::string&) {
+	connections.push_back(events.job_finished.subscribe([this, state](std::uint64_t, edt::job_status, const std::string&,
+		const std::optional<boost::json::value>&) {
 		if (state->id == 0) {
 			state->id = start("follow_up", [state](ds::task_context&) { state->ran = true; return 1; });
 		}
@@ -527,6 +623,25 @@ BOOST_AUTO_TEST_CASE(CancelAllAndWait_AlsoStopsAJobStartedByAFinishedSlot)
 	deliver();
 	BOOST_TEST(!state->ran);
 	BOOST_TEST(tasks->snapshot().empty());
+}
+
+BOOST_AUTO_TEST_CASE(JobFinished_CarriesTheResultOfADoneJob)
+{
+	// Shared with the slot, which the fixture keeps beyond this test body.
+	auto results = std::make_shared<std::vector<std::optional<boost::json::value>>>();
+	connections.push_back(events.job_finished.subscribe([results](std::uint64_t, edt::job_status, const std::string&,
+		const std::optional<boost::json::value>& result) { results->push_back(result); }));
+	jobs->start_with_result(ds::lane::io, { "with result", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value("value"); });
+	start("plain", [](ds::task_context&) { return 1; }, ds::lane::io);
+
+	run_lane(ds::lane::io);
+	deliver();
+	BOOST_REQUIRE(results->size() == 2u);
+	const auto with_value = std::ranges::find_if(*results, [](const auto& r) { return r.has_value(); });
+	BOOST_REQUIRE(with_value != results->end());
+	BOOST_TEST(std::string((*with_value)->as_string()) == "value");
+	BOOST_TEST(std::ranges::count_if(*results, [](const auto& r) { return r.has_value(); }) == 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -658,6 +773,22 @@ BOOST_AUTO_TEST_CASE(JobCommands_OnlyCancelChangesAnything)
 		BOOST_TEST(desc->mutates == (std::string(id) == "job.cancel"), id);
 		BOOST_TEST((desc->risk == cmd::danger::none), id);
 	}
+}
+
+BOOST_AUTO_TEST_CASE(JobGet_OfADoneJobWithAResult_ReturnsIt)
+{
+	const auto id = jobs->start_with_result(ds::lane::io, { "vcs.status", "test" }, owner,
+		[](ds::task_context&) { return boost::json::value(boost::json::object{ { "clean", true } }); });
+	const std::string args = std::format(R"({{"id":{}}})", id);
+	BOOST_TEST(!call("job.get", args).value.as_object().contains("result"));
+
+	run_lane(ds::lane::io);
+	deliver();
+	const cmd::result got = call("job.get", args);
+	BOOST_REQUIRE_MESSAGE(got.ok, got.error);
+	const json::object& job = got.value.as_object();
+	BOOST_REQUIRE(job.contains("result"));
+	BOOST_TEST(job.at("result").as_object().at("clean").as_bool());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

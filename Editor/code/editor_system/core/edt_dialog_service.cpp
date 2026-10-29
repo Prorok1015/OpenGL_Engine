@@ -4,6 +4,8 @@
 #include "edt_file_dialog.h"
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
+#include <snk/common/logger/engine_log.h>
+#include <snk/config/cfg_variables.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
@@ -64,6 +66,9 @@ struct edt::dialog_service::request
 private:
 	bool m_opened = false;
 };
+
+// edt_editor_init.cpp; must stay outside the anonymous namespace to link to the global definition.
+CFG_VAR_EXT_BOOL(cfg_edt_headless);
 
 namespace {
 
@@ -640,6 +645,11 @@ bool edt::dialog_service::update()
 	const bool answered = m_auto_answer && front.answer_automatically(*m_auto_answer);
 	bool open = false;
 	if (!answered) {
+		// Until headless dialogs fail fast (#452 PR-3), say why the run seems stuck.
+		if (!front.drawn && cfg_edt_headless) {
+			egLOG_WARN("editor/dialog", "headless: dialog {} ({}) waits for an answer that only the MCP command "
+				"dialog.answer can give: {}", front.id, front.kind(), front.text());
+		}
 		front.drawn = true;
 		open = front.draw();
 	}

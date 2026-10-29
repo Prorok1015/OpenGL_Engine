@@ -180,10 +180,15 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		("allow-engine-version-mismatch", "open a project made for an older engine version without asking")
 		("non-interactive,n", "do not wait for answers, take the safe one (this is not --yes). Today it covers the "
 			"engine version check: a project made for another engine version is refused with exit code 3 instead of "
-			"asking; an older one still opens with --allow-engine-version-mismatch");
+			"asking; an older one still opens with --allow-engine-version-mismatch")
+		("headless", "run the editor without a display: no window, no GPU, no ImGui panels; needs --project and "
+			"implies --non-interactive. The log goes to stderr")
+		("mcp-stdio", "reserved for the MCP stdio transport (#452); today it only moves the log to stderr");
 	
 	po::variables_map vm;
-	po::store(po::parse_command_line(argc, argv, desc), vm);
+	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
+	const int style = po::command_line_style::default_style & ~po::command_line_style::allow_guessing;
+	po::store(po::command_line_parser(argc, argv).options(desc).style(style).run(), vm);
 	po::notify(vm);
 
 	if (vm.count("help")) {
@@ -211,8 +216,14 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	if (vm.count("allow-engine-version-mismatch")) {
 		set_registered("project/allow_engine_version_mismatch", "true");
 	}
-	if (vm.count("non-interactive")) {
+	if (vm.count("non-interactive") || vm.count("headless")) {
 		set_registered("app/non_interactive", "true");
+	}
+	if (vm.count("headless")) {
+		set_registered("editor/headless", "true");
+		set_registered("project/required", "true");
+		set_registered("window/system", "null");
+		set_registered("render/backend", "null");
 	}
 
 	if (vm.count("set")) {

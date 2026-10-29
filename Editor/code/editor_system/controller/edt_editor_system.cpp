@@ -35,6 +35,7 @@
 #include "edt_build_jobs.h"
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
+#include "edt_vcs_service.h"
 #include "edt_live_mode.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
@@ -42,6 +43,7 @@
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include <snk/application/app_deterministic_time.h>
+#include <snk/application/app_loop_service_interface.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
@@ -115,6 +117,8 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
+	// The run ends with 0 right after the first successful level load (CI: the headless run proves the level loaded).
+	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
@@ -127,6 +131,8 @@ namespace {
 	CFG_VAR_DEF_PATH(cfg_build_vs_path, "build/vs_path", "");
 	CFG_VAR_DEF_STRING(cfg_build_vs_min_version, "build/vs_min_version", "17.14");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
+	// The git program of version control (#454); empty: git on PATH.
+	CFG_VAR_DEF_PATH(cfg_vcs_git, "vcs/git", "");
 
 	// The SDK the game module is built against: build/sdk_dir, else the installed editor's, else the engine build
 	// tree's (where this editor was built).
@@ -323,6 +329,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (auto win = wnd_sys.get_active_window())
 			win->shutdown();
 	};
+	if (cfg_exit_after_level_loaded) {
+		m_stop_after_level_loaded = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
+	}
 
 	m_state.set_save_handlers(
 		[this] { return m_level_ctrl.quick_save_level(); },
@@ -465,6 +474,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
+		m_registrations.push_back(std::move(command));
+	}
+
+	vcs_options vcs;
+	vcs.git = *cfg_vcs_git;
+	vcs.project_root = [&data]() -> std::optional<std::filesystem::path> {
+		if (!data.has_value<prj::project_context>()) return std::nullopt;
+		return data.require<prj::project_context>().root;
+	};
+	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
 
@@ -865,6 +885,11 @@ bool edt::editor_system::poll_import_progress()
 
 // ─── Level load ─────────────────────────────────────────────────────────────
 
+void edt::editor_system::run_implicit_callbacks()
+{
+	if (editor_layer) editor_layer->process_implicit();
+}
+
 void edt::editor_system::begin_level_load(const res::tag& original_tag)
 {
 	m_level_ctrl.unwatch_level();
@@ -922,9 +947,16 @@ bool edt::editor_system::poll_level_load()
 		ImGui::EndPopup();
 	}
 
-	m_level_ctrl.finish_level_load(m_loading_level_handle);
+	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
 	m_loading_level = false;
 	m_loading_level_handle = {};
+	if (loaded) {
+		egLOG_INFO("Editor/LoadLevel", "level loaded: {}", m_state.level_tag.view());
+		if (m_stop_after_level_loaded) {
+			egLOG_INFO("app", "exit after the level loaded (editor/exit_after_level_loaded)");
+			m_stop_after_level_loaded();
+		}
+	}
 	return false;
 }
 

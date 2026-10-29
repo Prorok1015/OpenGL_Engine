@@ -5,6 +5,7 @@
 #include <snk/gui/gui_menu_layout.h>
 #include <snk/gui/gui_layer_interface.h>
 #include <snk/common/snk_api.h>
+#include <functional>
 
 namespace gui
 {
@@ -48,6 +49,9 @@ namespace gui
 		void on_content_scale_changed(float scale) { m_pending_scale = scale; }
 
 		void render();
+		// An ImGui frame that draws nothing and updates no layer: `body` may use ImGui (a modal, a progress window)
+		// while there is no display to show it (--headless). Not inside render().
+		void run_without_drawing(const std::function<void()>& body);
 
 	private:
 		bool is_show = true;

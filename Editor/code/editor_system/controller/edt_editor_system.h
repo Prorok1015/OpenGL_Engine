@@ -36,6 +36,7 @@ namespace edt {
 	class agent_sessions;
 	class game_builder;
 	class game_reloader;
+	class vcs_service;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -68,6 +69,9 @@ namespace edt {
 
 		void begin_level_load(const res::tag& level_tag);
 
+		// The headless `ui` stage: the per-frame callbacks (level/asset loads, dialogs, progress windows, next-frame
+		// work) without the dockspace and the panels. They still use ImGui: call inside gui_system::run_without_drawing.
+		void run_implicit_callbacks();
 		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
 		void tick_live_mode();
 		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
@@ -176,12 +180,16 @@ namespace edt {
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
+		// Set with editor/exit_after_level_loaded: stops the frame loop once a level load succeeded (CI headless run).
+		std::function<void()> m_stop_after_level_loaded;
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
 		// agent.session.* (A5, #291); its commands are in m_registrations, dropped before it.
 		std::unique_ptr<edt::agent_sessions> m_agent_sessions;
+		// Version control (#454); its commands are in m_registrations, removed before it.
+		std::unique_ptr<edt::vcs_service> m_vcs;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 
