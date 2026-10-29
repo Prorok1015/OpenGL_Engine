@@ -3,11 +3,13 @@
 #include <snk/project/prj_project.h>
 #include <snk/project/prj_version.h>
 #include "test_temp_dir.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifndef SNK_EDITOR_DATA_DIR
 #error "SNK_EDITOR_DATA_DIR must point at Editor/data"
@@ -25,6 +27,19 @@ namespace {
 	{
 		std::ifstream in(file, std::ios::binary);
 		return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
+	}
+
+	std::vector<std::string> lines_of(std::string_view text)
+	{
+		std::vector<std::string> lines;
+		while (!text.empty()) {
+			const std::size_t end = std::min(text.find('\n'), text.size());
+			std::string_view line = text.substr(0, end);
+			if (line.ends_with('\r')) line.remove_suffix(1);
+			lines.emplace_back(line);
+			text.remove_prefix(std::min(end + 1, text.size()));
+		}
+		return lines;
 	}
 
 	std::size_t entries_in(const fs::path& folder)
@@ -67,6 +82,17 @@ BOOST_AUTO_TEST_CASE(Create_FromTheShippedTemplate_HasTheGameModuleProject)
 		BOOST_TEST(fs::is_regular_file(dir.path() / "game" / file));
 	}
 	BOOST_TEST(!fs::exists(dir.path() / "game" / "build"));
+	// Dotfiles come along too: the build trees and the per-user files stay out of the game's repository, the team's
+	// agent policy (.snk/agent_policy.json, AI_INTEGRATION section 5) stays in. A checkout may turn the file into CRLF.
+	const std::vector<std::string> ignore = lines_of(read_text(dir.path() / "game" / ".gitignore"));
+	const auto has_line = [&ignore](std::string_view line) { return std::ranges::find(ignore, line) != ignore.end(); };
+	for (const char* line : { "build/", ".cache/", ".snk/*", "!.snk/agent_policy.json", "code/CMakeUserPresets.json" }) {
+		BOOST_TEST_INFO("line: " << line);
+		BOOST_TEST(has_line(line));
+	}
+	// A whole-directory pattern would stop git from looking inside .snk, so the negation could not take effect.
+	BOOST_TEST(!has_line(".snk/"));
+	BOOST_TEST(!has_line(".snk"));
 
 	const auto opened = prj::open_project(created.manifest_file);
 	BOOST_REQUIRE_MESSAGE(opened.context.has_value(), opened.error);
