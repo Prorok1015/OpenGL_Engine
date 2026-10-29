@@ -159,6 +159,61 @@ BOOST_AUTO_TEST_CASE(EmptyPath_IsNeverAllowed)
 	BOOST_TEST(!edt_policy({ "edt://**" }).allows(""));
 }
 
+BOOST_AUTO_TEST_CASE(Deny_AfterAnAllow_BeatsIt)
+{
+	const auto policy = edt_policy({ "edt://**/*.cpp", "!edt://build/**" });
+
+	BOOST_TEST(policy.allows("src/a.cpp"));
+	BOOST_TEST(!policy.allows("build/a.cpp"));
+	BOOST_TEST(!policy.allows("build/deep/er/a.cpp"));
+}
+
+BOOST_AUTO_TEST_CASE(Deny_BeforeAnAllow_BeatsItAsWell)
+{
+	const auto policy = edt_policy({ "!edt://build/**", "edt://**/*.cpp" });
+
+	BOOST_TEST(policy.allows("src/a.cpp"));
+	BOOST_TEST(!policy.allows("build/a.cpp"));
+}
+
+BOOST_AUTO_TEST_CASE(Deny_OfASubfolderWithDoubleStar_ReachesItAtAnyDepth)
+{
+	const auto policy = edt_policy({ "edt://**", "!edt://**/_deps/**" });
+
+	BOOST_TEST(policy.allows("src/a.cpp"));
+	BOOST_TEST(!policy.allows("_deps/x/a.cpp"));
+	BOOST_TEST(!policy.allows("build/_deps/x/a.cpp"));
+	BOOST_TEST(policy.allows("src/deps/a.cpp"));
+}
+
+BOOST_AUTO_TEST_CASE(Deny_Alone_AllowsNothing)
+{
+	const auto policy = edt_policy({ "!edt://build/**" });
+
+	BOOST_TEST(!policy.allows("src/a.cpp"));
+	BOOST_TEST(policy.pattern_count() == 0);
+	BOOST_TEST(policy.deny_count() == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Deny_OfAnotherProtocol_IsSkipped)
+{
+	const auto policy = edt_policy({ "edt://**", "!code://build/**" });
+
+	BOOST_TEST(policy.allows("build/a.cpp"));
+	BOOST_TEST(policy.deny_count() == 0);
+}
+
+BOOST_AUTO_TEST_CASE(PoliciesWithoutDeny_BehaveAsBefore)
+{
+	const auto policy = edt_policy({ "edt://settings/**" });
+
+	BOOST_TEST(policy.deny_count() == 0);
+	BOOST_TEST(policy.pattern_count() == 1);
+	BOOST_TEST(policy.allows("settings/a.ini"));
+	BOOST_TEST(!policy.allows("icons/a.png"));
+	BOOST_TEST(res::write_policy::allow_all().allows("build/a.cpp"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(VfsResolverWritePolicy)
