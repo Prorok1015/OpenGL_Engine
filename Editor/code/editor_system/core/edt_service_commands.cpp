@@ -77,6 +77,7 @@ std::vector<edt::registration> edt::register_job_commands(cmd::command_registry&
 	cmd::command_desc list;
 	list.id = "job.list";
 	list.summary = "List the running background jobs (import, export, ...)";
+	list.category = cmd::agent_category::read;
 	list.result_schema = json::parse(JOB_LIST_SCHEMA);
 	list.invoke = [&jobs](const cmd::call&) {
 		json::array entries;
@@ -88,6 +89,7 @@ std::vector<edt::registration> edt::register_job_commands(cmd::command_registry&
 	cmd::command_desc get;
 	get.id = "job.get";
 	get.summary = "State of one job: running with its progress, or how a recently finished one ended";
+	get.category = cmd::agent_category::read;
 	get.args_schema = json::parse(ID_ARGS_SCHEMA);
 	get.result_schema = json::parse(JOB_SCHEMA);
 	get.invoke = [&jobs](const cmd::call& request) {
@@ -128,6 +130,7 @@ std::vector<edt::registration> edt::register_dialog_commands(cmd::command_regist
 	cmd::command_desc list;
 	list.id = "dialog.list";
 	list.summary = "List the modal dialogs waiting for an answer, with the schema of each answer";
+	list.category = cmd::agent_category::read;
 	list.result_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
@@ -167,6 +170,7 @@ std::vector<edt::registration> edt::register_dialog_commands(cmd::command_regist
 	cmd::command_desc answer;
 	answer.id = "dialog.answer";
 	answer.summary = "Answer a waiting dialog the way a click would; the answer must match its answer_schema";
+	answer.category = cmd::agent_category::not_for_agents;
 	answer.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
@@ -197,6 +201,7 @@ std::vector<edt::registration> edt::register_problem_commands(cmd::command_regis
 	cmd::command_desc list;
 	list.id = "problems.list";
 	list.summary = "List the editor's problems (build errors and warnings, ...), optionally of one source or one severity";
+	list.category = cmd::agent_category::read;
 	list.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {

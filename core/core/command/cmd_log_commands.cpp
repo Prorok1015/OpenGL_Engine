@@ -91,6 +91,7 @@ cmd::registration cmd::register_log_commands(command_registry& registry)
 	command_desc desc;
 	desc.id = "log.read";
 	desc.summary = "Read the engine log journal: entries since a sequence number, filtered by level and category";
+	desc.category = cmd::agent_category::read;
 	desc.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {

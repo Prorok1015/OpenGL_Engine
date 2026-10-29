@@ -901,6 +901,7 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 	cmd::command_desc query;
 	query.id = "scene.query";
 	query.summary = "Page through the nodes of a world of the open scene: ref, name and component keys. Filter by name, component or subtree; follow next_cursor for more";
+	query.category = cmd::agent_category::read;
 	query.args_schema = parse_schema(with_ref(R"({
 		"type": "object",
 		"properties": {
@@ -949,6 +950,7 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 	cmd::command_desc get;
 	get.id = "node.get";
 	get.summary = "One node by ref: name, parent, children, transform and its components as desc JSON, plus the override records it holds";
+	get.category = cmd::agent_category::read;
 	get.args_schema = parse_schema(with_ref(R"({
 		"type": "object",
 		"properties": {
@@ -996,6 +998,7 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 	cmd::command_desc schema;
 	schema.id = "component.schema";
 	schema.summary = "JSON Schema of a component type (its __type), generated from the desc schema: field keys, types, ranges, defaults";
+	schema.category = cmd::agent_category::read;
 	schema.args_schema = parse_schema(R"({
 		"type": "object",
 		"properties": { "type": { "type": "string", "minLength": 1 } },
@@ -1019,6 +1022,7 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 	cmd::command_desc assets;
 	assets.id = "asset.query";
 	assets.summary = "Page through the assets under res:// (all resource layers merged, sorted by path): tag, kind, size. Filter by glob, kind or directory";
+	assets.category = cmd::agent_category::read;
 	assets.args_schema = parse_schema(R"({
 		"type": "object",
 		"properties": {
@@ -1058,6 +1062,7 @@ std::vector<edt::registration> edt::register_state_commands(cmd::command_registr
 	cmd::command_desc selection;
 	selection.id = "selection.get";
 	selection.summary = "The current selection of the editor as refs (none when nothing is selected)";
+	selection.category = cmd::agent_category::read;
 	selection.result_schema = parse_schema(with_ref(R"({
 		"type": "object",
 		"properties": {
