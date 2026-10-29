@@ -179,6 +179,7 @@ void edt::level_controller::detach_from_game_layer()
 	m_state.world_descs.clear();
 	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();
+	m_state.reset_history();
 	m_world_ctrl.clear_active_world();
 }
 
@@ -260,6 +261,8 @@ bool edt::level_controller::write_level_to_disk(const std::string& rel_path)
 		return false;
 	}
 	m_scene_editor.sync_ecs_transforms_to_desc();
+	// Live transforms written back are the level as it is, not an edit to undo.
+	m_state.rebase_history();
 
 	std::filesystem::path frel(rel_path);
 	const std::string stem = frel.stem().string();
@@ -332,6 +335,8 @@ void edt::apply_world_resync(
 
 	// An empty list is a valid state (idx -1): the arrays are cleared so nothing can index a world that is gone.
 	const int idx = resync_world_arrays(desc_worlds, state.world_descs, state.world_names, state.worlds_systems_list, active_name, is_alive);
+	// The worlds were reloaded from the files: what the edits changed is gone from them.
+	state.reset_history();
 	if (idx < 0) {
 		if (!active_name.empty()) {
 			egLOG_WARN("Editor/Reload", "Active world '{}' is gone after reload, the level has no worlds", active_name);
@@ -353,7 +358,10 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 	m_state.world_descs.clear();
 	m_state.world_names.clear();
 	m_state.worlds_systems_list.clear();
-	if (!level_res.is_ready()) return;
+	if (!level_res.is_ready()) {
+		m_state.reset_history();
+		return;
+	}
 	// world_descs is the single ordered source of truth (desc order); names and systems
 	// are derived from it so all three parallel arrays stay index-aligned.
 	for (const auto& wh : level_res->get_worlds()) {
@@ -364,4 +372,5 @@ void edt::level_controller::populate_worlds_from_level(const res::res_handle<scn
 		m_state.world_descs.push_back(*world);
 	}
 	derive_world_arrays(m_state.world_descs, m_state.world_names, m_state.worlds_systems_list);
+	m_state.reset_history();
 }

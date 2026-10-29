@@ -315,6 +315,35 @@ BOOST_AUTO_TEST_CASE(CallNowOrPost_RunsAheadOfCallsAlreadyWaitingInTheQueue)
 	BOOST_TEST(order == expected, boost::test_tools::per_element());
 }
 
+BOOST_AUTO_TEST_CASE(Confirmation_TravelsAsAParameterOfItsOwn_NotInTheArguments)
+{
+	struct ask_gate final : cmd::policy_gate
+	{
+		cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override { return cmd::policy_decision::ask("x"); }
+		bool can_ask() const override { return true; }
+	};
+	commands.set_policy_gate(std::make_shared<ask_gate>());
+	int runs = 0;
+	cmd::command_desc desc;
+	desc.id = "test.guarded";
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	auto registration = commands.add(std::move(desc));
+
+	auto asked = queue.call_now_or_post("test.guarded", boost::json::object{}, cmd::origin::agent("s1"));
+	const std::string ticket = std::string{ asked.get().value.as_object().at("ticket").as_string().c_str() };
+	commands.approve(ticket);
+
+	auto smuggled = queue.call_now_or_post("test.guarded", boost::json::object{ { "confirmation", ticket } }, cmd::origin::agent("s1"));
+	BOOST_TEST(smuggled.get().code == cmd::codes::confirmation_required);
+	BOOST_TEST(runs == 0);
+	auto presented = queue.call_now_or_post("test.guarded", boost::json::object{}, cmd::origin::agent("s1"), 0, ticket);
+	BOOST_TEST(presented.get().ok);
+	BOOST_TEST(runs == 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(CmdMainThreadQueueLifetimeTests)
