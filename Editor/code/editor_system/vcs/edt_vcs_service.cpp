@@ -336,13 +336,14 @@ namespace {
 		std::string target;
 	};
 
-	// What `git checkout <name> --` checks out: <name>, or, when it is no local branch and exactly one remote has a
-	// branch of that name, that remote-tracking branch (git then creates the local one). Several remotes or none:
-	// <name>, which the filter check then fails closed on if it is no revision.
+	// What `git checkout <name> --` checks out: <name> when it resolves to a commit (a branch, a tag, a hash), as git
+	// takes it then; otherwise, when exactly one remote has a branch of that name, that remote-tracking branch (git
+	// then creates the local one). Several remotes or none: <name>, which the filter check fails closed on.
 	std::string checkout_target(const git_context& git, const std::string& name, std::stop_token stop)
 	{
-		const git_output local = run_git(git, { "rev-parse", "--verify", "--quiet", "refs/heads/" + name }, stop, k_read_cap);
-		if (local.process.error.empty() && local.process.exit_code == 0) return name;
+		const git_output resolved = run_git(git, { "rev-parse", "--verify", "--quiet", "--end-of-options", name + "^{commit}" },
+			stop, k_read_cap);
+		if (resolved.process.error.empty() && resolved.process.exit_code == 0) return name;
 		const git_output refs = run_git(git, { "for-each-ref", "--format=%(refname)", "refs/remotes" }, stop, k_read_cap);
 		if (!refs.process.error.empty() || refs.process.exit_code != 0 || refs.truncated) return name;
 		constexpr std::string_view prefix = "refs/remotes/";

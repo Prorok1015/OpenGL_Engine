@@ -924,6 +924,49 @@ BOOST_AUTO_TEST_CASE(AnAgentsCheckoutOfARemoteOnlyBranch_IsCheckedAgainstTheRemo
 	BOOST_TEST(!fs::exists(marker, ec));
 }
 
+// A name that resolves to a commit (here a tag) is what git checks out, even when a remote has a branch of that name:
+// the filter check diffs against the tag, not the remote branch.
+BOOST_AUTO_TEST_CASE(AnAgentsCheckoutOfATagNamedLikeARemoteBranch_IsCheckedAgainstTheTag)
+{
+	isolate_config();
+	const fs::path remote = base / "tag_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("tagged");
+	git(repo, { "remote", "add", "origin", url });
+	git(repo, { "push", "-q", "origin", "main" });
+	// origin/feature: notes only.
+	git(repo, { "checkout", "-q", "-b", "remote_feature" });
+	write(repo / "notes.txt", "notes\n");
+	git(repo, { "add", "notes.txt" });
+	git(repo, { "commit", "-q", "-m", "notes" });
+	git(repo, { "push", "-q", "origin", "remote_feature:feature" });
+	// Tag feature: a commit that adds data.bin.
+	git(repo, { "checkout", "-q", "-b", "side", "main" });
+	write(repo / "data.bin", "raw bytes\n");
+	git(repo, { "add", "data.bin" });
+	git(repo, { "commit", "-q", "-m", "data" });
+	git(repo, { "tag", "feature" });
+	git(repo, { "checkout", "-q", "main" });
+	git(repo, { "fetch", "-q", "origin" });
+
+	const fs::path script = base / "tag-filter.sh";
+	make_script(script, "cat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	write(repo / ".git" / "info" / "attributes", "*.bin filter=lfs\n");
+	const std::string main_head = head_of(repo);
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_checkout("feature", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == main_head);
+	BOOST_TEST(git_text(repo, { "for-each-ref", "refs/heads/feature" }).empty());
+}
+
 // Owner decision (#454): a configured filter driver that applies to a file of the commit refuses an agent's commit
 // before git runs (switching the driver off would commit LFS files as raw bytes); allow_filters lets it run, and the
 // filter runs. A driver no attribute names (a global filter.lfs the repository does not use; the repository's config
