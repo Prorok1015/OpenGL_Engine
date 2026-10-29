@@ -19,7 +19,7 @@ namespace {
 
 	json::value result_schema()
 	{
-		return json::parse(R"({"type":"object","properties":{"status":{"type":"string","enum":["reloaded","refused","rolled_back","lost"]},)"
+		return json::parse(R"({"type":"object","properties":{"status":{"type":"string","enum":["reloaded","refused","rolled_back","lost","queued"]},)"
 			R"("message":{"type":"string"}},"required":["status","message"],"additionalProperties":false})");
 	}
 
@@ -43,6 +43,9 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 		if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
 		std::string module;
 		if (const json::value* chosen = request.args.as_object().if_contains("module")) module = std::string(chosen->as_string());
+		if (m_options.background_building && m_options.background_building() && m_options.each_frame) {
+			return reload_after_background(module);
+		}
 		const core::reload_report report = reload(module);
 		return action_result::success(json::object{ { "status", core::to_string(report.status) }, { "message", report.message } });
 	};
@@ -63,7 +66,7 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 				return;
 			}
 			// One per module: two modules built at once are both reloaded.
-			m_options.next_frame("edt/reload_game_module/" + built.module, [this, alive = std::weak_ptr<int>(m_alive), module = built.module] {
+			m_options.next_frame(std::string(k_reload_frame_id) + built.module, [this, alive = std::weak_ptr<int>(m_alive), module = built.module] {
 				if (!alive.expired()) {
 					reload(module);
 				}
@@ -109,6 +112,31 @@ core::reload_report edt::game_reloader::reload(const std::string& module)
 	std::string who = module;
 	core::reload_report report = attempt(module, who);
 	return tell(who, std::move(report));
+}
+
+edt::action_result edt::game_reloader::reload_after_background(const std::string& module)
+{
+	const std::optional<std::string> name = pick(module);
+	if (!name) {
+		const core::reload_report report = tell(module, { core::reload_status::refused, "it has not been built" });
+		return action_result::success(json::object{ { "status", core::to_string(report.status) }, { "message", report.message } });
+	}
+	if (m_options.stop_background) m_options.stop_background();
+	// A second click while it waits finds the id taken: one reload, not two.
+	m_options.each_frame(std::string(k_reload_frame_id) + *name, [this, alive = std::weak_ptr<int>(m_alive), who = *name] {
+		if (alive.expired()) return false;
+		// The stopped job ends at a later pump; its compiler or linker may write the file until then.
+		if (any_build_running()) return true;
+		reload(who);
+		return false;
+	});
+	return action_result::success(json::object{ { "status", "queued" },
+		{ "message", "the live build is stopped; the module is reloaded once it has ended" } });
+}
+
+bool edt::game_reloader::any_build_running() const
+{
+	return (m_options.building && m_options.building()) || (m_options.background_building && m_options.background_building());
 }
 
 core::reload_report edt::game_reloader::reload_quiet(const std::string& module)

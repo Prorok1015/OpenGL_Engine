@@ -206,8 +206,9 @@ namespace edt
 		// Also drops a request waiting for the running build to stop.
 		void cancel();
 		// Stops a running preemptible (live) build the way a preempting request does: its on_done still comes, with
-		// outcome `preempted`, and a fresh configure it finished is still recorded. A preemptible request waiting for it
-		// is dropped (told `preempted`); a waiting request of the person's stays and starts once it has stopped.
+		// outcome `preempted`. A stopped build reports no configure (its result has `configured` false), so a --fresh
+		// mark it was configuring for stays: one extra fresh configure, never a lost mark. A preemptible request waiting
+		// for it is dropped (told `preempted`); a waiting request of the person's stays and starts once it has stopped.
 		// Nothing when no preemptible build runs.
 		void stop_background();
 

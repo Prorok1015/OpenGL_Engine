@@ -148,6 +148,43 @@ BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_stays_enabled_and_stops_it_f
 	BOOST_TEST(cancels == 2);
 }
 
+// The live build that the action stops is still running for a frame or two: the reload waits for it instead of being
+// refused (a refused click would meet the next live build again, every time).
+BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_queues_the_reload_until_no_build_runs)
+{
+	bool background = true;
+	int stops = 0;
+	std::vector<std::pair<std::string, std::function<bool()>>> polls;
+	auto opts = options();
+	opts.background_building = [&background] { return background; };
+	opts.stop_background = [&stops] { ++stops; };
+	opts.each_frame = [&polls](const std::string& id, std::function<bool()> poll) {
+		for (const auto& queued : polls) {
+			if (queued.first == id) return; // register_implicit ignores a taken id
+		}
+		polls.emplace_back(id, std::move(poll));
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+
+	const auto queued = invoke();
+	BOOST_REQUIRE_MESSAGE(queued.ok, queued.error);
+	BOOST_TEST(queued.value.as_object().at("status").as_string() == "queued");
+	BOOST_TEST(stops == 1);
+	BOOST_TEST(reloaded.empty());
+	BOOST_REQUIRE(polls.size() == 1u);
+	BOOST_TEST(polls[0].first == "edt/reload_game_module/game");
+
+	BOOST_TEST(invoke().ok); // a second click: still one reload waiting
+	BOOST_TEST(polls.size() == 1u);
+
+	BOOST_TEST(polls[0].second()); // the stopped job has not ended yet: keeps waiting
+	BOOST_TEST(reloaded.empty());
+	background = false;
+	BOOST_TEST(!polls[0].second());
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+	BOOST_TEST(messages().empty());
+}
+
 BOOST_AUTO_TEST_CASE(a_build_not_taken_is_shown_with_its_reason)
 {
 	make();

@@ -587,6 +587,34 @@ BOOST_AUTO_TEST_CASE(a_live_build_the_editor_stops_is_built_again)
 	BOOST_CHECK(reloads.empty());
 }
 
+// Reload during a live build: the editor stops it and queues #435's reload until no build runs (reload_pending). The
+// reload runs in the UI stage of the frame the build has ended in, and only the frame after starts the next live build.
+BOOST_AUTO_TEST_CASE(a_reload_the_editor_queued_runs_before_the_next_live_build)
+{
+	make();
+	change();
+	advance(500ms);
+	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+
+	reload_queued = true; // Build > Reload: stop_background + the waiting implicit
+	std::vector<std::string> order;
+	const auto ui = [&] {
+		if (!reload_queued || building) return; // the implicit waits while a build runs
+		order.push_back("reload");
+		reload_queued = false;
+	};
+	frame({}, ui); // still stopping
+	BOOST_CHECK(order.empty());
+
+	frame([this] { finish(0, edt::build_outcome::preempted); }, ui);
+	BOOST_CHECK((order == std::vector<std::string>{ "reload" }));
+	BOOST_CHECK_EQUAL(starts.size(), 1u);
+
+	frame({});
+	BOOST_CHECK_EQUAL(starts.size(), 2u); // the changes are built again, after the reload
+	BOOST_CHECK(is(state(), edt::live_state::building));
+}
+
 BOOST_AUTO_TEST_CASE(turning_off_cancels_a_live_build)
 {
 	make();
