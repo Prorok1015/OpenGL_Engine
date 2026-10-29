@@ -90,7 +90,7 @@ namespace cmd
 		// Carried for the document-generation check that arrives with mutating commands; not read yet.
 		std::uint64_t expected_generation = 0;
 		// The ticket of a confirmation_required answer, once a person approved it; never part of the JSON arguments.
-		std::string confirmation;
+		std::string confirmation = std::string{};
 	};
 
 	struct result
