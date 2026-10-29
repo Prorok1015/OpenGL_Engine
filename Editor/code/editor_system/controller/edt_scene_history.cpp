@@ -295,6 +295,7 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 		return diff_result::unchanged;
 	}
 	for (const auto& entry : changes) {
+		touch(entry.world);
 		if (entry.positional) {
 			set_place(entry.world, entry.id, *entry.after);
 		} else {

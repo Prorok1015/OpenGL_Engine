@@ -66,6 +66,10 @@ namespace edt {
 
 		void begin_level_load(const res::tag& level_tag);
 
+		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
+		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
+		bool person_is_editing() const;
+
 	private:
 		editor_context* m_context = nullptr;
 		// The context is registered after this system, so a storage that is torn down without editor_term() destroys

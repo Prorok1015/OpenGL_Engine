@@ -24,6 +24,8 @@ namespace cmd
 		inline constexpr const char* confirmation_required = "confirmation_required";
 		// The command ran and could not do its job.
 		inline constexpr const char* failed = "failed";
+		// Not now: the editor is in the middle of a person's gesture (a drag, an edit in a field). Call again.
+		inline constexpr const char* busy = "busy";
 		// The state the call was built on has changed (a page cursor, later an expected generation): read again.
 		inline constexpr const char* stale = "stale";
 		// The command ran, but its result breaks result_schema.

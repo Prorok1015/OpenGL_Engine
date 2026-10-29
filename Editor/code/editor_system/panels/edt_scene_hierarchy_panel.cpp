@@ -31,9 +31,16 @@ namespace edt
 		m_selected_owner = nullptr;
 		m_selected_path.clear();
 		m_selected_target.clear();
-		m_rename_node   = nullptr;
+		m_rename_id     = 0;
 		m_multi_selected.clear();
 		m_last_clicked_flat_idx = -1;
+	}
+
+	void scene_hierarchy_panel::begin_rename(const scn::prefab_desc::prefab_node& node)
+	{
+		m_rename_id = node.node_id;
+		auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
+		*cp.out = '\0';
 	}
 
 	void scene_hierarchy_panel::set_selected_node(scn::prefab_desc::prefab_node* node)
@@ -280,7 +287,7 @@ namespace edt
 						m_selected_owner = nullptr;
 						m_selected_path.clear();
 						m_selected_target.clear();
-						m_rename_node   = nullptr;
+						m_rename_id     = 0;
 						m_multi_selected.clear();
 						m_last_clicked_flat_idx = -1;
 						if (m_on_world_changed) m_on_world_changed(i);
@@ -388,8 +395,11 @@ namespace edt
 
 		auto& children = m_world_desc->get_root().children;
 		int flat_index = 0;
+		m_rename_seen = false;
 		for (int i = 0; i < (int)children.size(); ++i)
 			draw_node(children[i], lower_filter, flat_index);
+		// The node went away (an agent's edit, an undo) or out of sight: no rename may land on another one.
+		if (!m_rename_seen) m_rename_id = 0;
 
 		// ── drop on empty area → move to root ────────────────────────────
 		ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -424,7 +434,8 @@ namespace edt
 		*id_result.out = '\0';
 
 		// ── inline rename ────────────────────────────────────────────────────
-		if (m_rename_node == &node) {
+		if (m_rename_id != 0 && node.node_id == m_rename_id) {
+			m_rename_seen = true;
 			char rename_id[512];
 			auto rn_result = std::format_to_n(rename_id, sizeof(rename_id) - 1, "##rename##{:x}", node.node_id);
 			*rn_result.out = '\0';
@@ -437,10 +448,10 @@ namespace edt
 					node.name = m_rename_buf;
 					if (m_on_rename_node) m_on_rename_node(old_name, node.name);
 				}
-				m_rename_node = nullptr;
+				m_rename_id = 0;
 			}
 			if (ImGui::IsItemDeactivated())
-				m_rename_node = nullptr;
+				m_rename_id = 0;
 			return;
 		}
 
@@ -553,9 +564,7 @@ namespace edt
 
 		// ── double-click to rename ───────────────────────────────────────────
 		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-			m_rename_node = &node;
-			auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
-			*cp.out = '\0';
+			begin_rename(node);
 		}
 
 		// ── context menu ─────────────────────────────────────────────────────
@@ -564,9 +573,7 @@ namespace edt
 
 			if (!multi_mode) {
 				if (ImGui::MenuItem("Rename")) {
-					m_rename_node = &node;
-					auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
-					*cp.out = '\0';
+					begin_rename(node);
 				}
 			}
 
