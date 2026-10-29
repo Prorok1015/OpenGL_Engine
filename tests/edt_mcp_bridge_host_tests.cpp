@@ -207,6 +207,7 @@ BOOST_AUTO_TEST_CASE(BuildSettingsGet_IsAllowedByCommandId_NotItsDomain)
 BOOST_AUTO_TEST_CASE(VcsReads_AreAllowedByCommandId_NotTheirDomain)
 {
 	cmd::command_desc desc;
+	desc.category = cmd::agent_category::read;
 	for (const char* id : { "vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
@@ -269,7 +270,8 @@ BOOST_AUTO_TEST_CASE(EveryListedTool_IsAllowedByTheDefaultPolicy)
 {
 	test_util::temp_dir dir{ "edt_listed_tools" };
 	edt::agent_policy policy{ dir.path() / "project.json", dir.path() / "personal.json" };
-	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture", "scene.query", "problems.list" }) {
+	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture", "scene.query", "problems.list",
+		"vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches" }) {
 		cmd::command_desc desc;
 		desc.id = id;
 		desc.category = cmd::agent_category::read;
