@@ -5,6 +5,7 @@
 #include <boost/json/object.hpp>
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -54,7 +55,18 @@ struct live_fixture
 		};
 		out.is_loaded_current = [this](const std::string& module) { return current.contains(module); };
 		out.modules = [this] { return project_modules; };
+		out.reload_pending = [this] { return reload_queued; };
 		return out;
+	}
+
+	// One editor frame in the order of its stages: tasks (the job pump: builds end), live mode's tick, the UI (the
+	// queued reloads run).
+	void frame(const std::function<void()>& tasks_stage, const std::function<void()>& ui_stage = {})
+	{
+		now += 16ms;
+		if (tasks_stage) tasks_stage();
+		live->tick();
+		if (ui_stage) ui_stage();
 	}
 
 	void make(bool enabled = true)
@@ -148,6 +160,8 @@ struct live_fixture
 	std::vector<waiting_reload> waiting;
 	std::set<std::string> current;
 	std::vector<std::string> project_modules;
+	// An implicit reload (#435's or live mode's) waits for the UI stage.
+	bool reload_queued = false;
 	core::reload_report next_reload{ core::reload_status::reloaded, {} };
 	edt::problem_list problems;
 	std::unique_ptr<edt::live_build> live;
@@ -508,6 +522,10 @@ BOOST_AUTO_TEST_CASE(a_manual_build_keeps_the_changes_pending_until_it_ends)
 	BOOST_CHECK(starts.empty());
 
 	building = false;
+	// The frame in which it ended belongs to its reload: no start yet.
+	advance(16ms);
+	BOOST_CHECK(starts.empty());
+
 	next_start = edt::action_result::failure("busy", "A build is already running");
 	advance(16ms);
 	BOOST_CHECK_EQUAL(starts.size(), 1u);
@@ -583,6 +601,134 @@ BOOST_AUTO_TEST_CASE(an_outcome_after_the_controller_went_is_harmless)
 	edt::build_outcome outcome;
 	outcome.kind = edt::build_outcome::succeeded;
 	starts[0].on_finished(outcome);
+}
+
+// A manual build ends in the job pump and queues #435's reload for the UI stage: the live tick of that frame starts
+// nothing, so the reload is not refused for a running build; the next frame's tick starts the live build.
+BOOST_AUTO_TEST_CASE(a_build_that_ended_in_this_frame_gets_its_reload_before_a_live_build_starts)
+{
+	make();
+	building = true; // the person's build
+	change();
+	advance(500ms);
+	BOOST_REQUIRE(starts.empty());
+
+	bool reload_refused = false;
+	frame([this] {
+		building = false;
+		reload_queued = true;
+	}, [&] {
+		reload_refused = building;
+		reload_queued = false;
+	});
+	BOOST_CHECK(starts.empty());
+	BOOST_CHECK(!reload_refused);
+
+	frame({});
+	BOOST_CHECK_EQUAL(starts.size(), 1u);
+	BOOST_CHECK(is(state(), edt::live_state::building));
+}
+
+BOOST_AUTO_TEST_CASE(a_queued_reload_holds_a_start_and_rebuild_now)
+{
+	make();
+	reload_queued = true;
+	change();
+	advance(500ms);
+	BOOST_CHECK(starts.empty());
+	BOOST_CHECK(is(state(), edt::live_state::pending));
+	BOOST_CHECK(!live->rebuild_now().has_value()); // queued, not refused
+	BOOST_CHECK(starts.empty());
+
+	reload_queued = false;
+	advance(16ms);
+	BOOST_CHECK_EQUAL(starts.size(), 1u);
+}
+
+// Owner decision: the person's build preempts the live one, which builds again once it has ended.
+BOOST_AUTO_TEST_CASE(a_preempted_live_build_waits_for_the_manual_one_and_builds_again)
+{
+	make();
+	change();
+	advance(500ms);
+	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+
+	finish(0, edt::build_outcome::preempted);
+	building = true; // the manual build that preempted it
+	advance(16ms);
+	BOOST_CHECK(is(state(), edt::live_state::pending));
+	BOOST_CHECK_EQUAL(live->status().message, std::string(edt::live_build::k_waiting_message));
+	advance(5s);
+	BOOST_CHECK_EQUAL(starts.size(), 1u);
+	BOOST_CHECK(reloads.empty());
+
+	building = false;
+	advance(16ms);
+	BOOST_CHECK_EQUAL(starts.size(), 1u); // the frame of its end
+	advance(16ms);
+	BOOST_CHECK_EQUAL(starts.size(), 2u);
+	BOOST_CHECK(reloads.empty());
+}
+
+// The live restart waited for the running build to stop and was then refused: not a cancel from outside.
+BOOST_AUTO_TEST_CASE(a_queued_restart_that_cannot_start_keeps_the_changes_and_shows_why)
+{
+	make();
+	change();
+	advance(500ms);
+	change();
+	advance(500ms);
+	BOOST_REQUIRE_EQUAL(starts.size(), 2u); // the restart, queued behind the first
+
+	finish(0, edt::build_outcome::restarted);
+	building = false;
+	edt::build_outcome refused;
+	refused.not_started = true;
+	refused.message = "Open a project first";
+	starts[1].on_finished(refused);
+	advance(16ms);
+	BOOST_CHECK(is(state(), edt::live_state::errors));
+	BOOST_CHECK_EQUAL(live->status().message, "Open a project first");
+	BOOST_CHECK_EQUAL(starts.size(), 2u);
+
+	// The changes are still to be built: one more start, which is refused the ordinary way.
+	next_start = edt::action_result::failure("disabled", "Open a project first");
+	advance(16ms);
+	BOOST_CHECK_EQUAL(starts.size(), 3u);
+	BOOST_CHECK(is(state(), edt::live_state::errors));
+	advance(1s);
+	BOOST_CHECK_EQUAL(starts.size(), 3u);
+	BOOST_CHECK_EQUAL(warned("Open a project first"), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(lowering_the_quiet_period_while_settling_reloads_sooner)
+{
+	make();
+	change();
+	advance(500ms);
+	finish(0, edt::build_outcome::succeeded);
+	advance(16ms);
+	BOOST_REQUIRE(is(state(), edt::live_state::settling));
+
+	settings.live_quiet_ms = 500;
+	advance(300ms); // 816 ms after the change: over the new quiet period, far below the old one
+	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
+}
+
+BOOST_AUTO_TEST_CASE(a_manual_build_that_succeeds_clears_the_errors)
+{
+	make();
+	change();
+	advance(500ms);
+	finish(0, edt::build_outcome::failed, 2);
+	live->tick();
+	BOOST_REQUIRE(is(state(), edt::live_state::errors));
+	BOOST_REQUIRE_EQUAL(live->status().errors, 2);
+
+	live->on_manual_build_succeeded();
+	BOOST_CHECK(is(state(), edt::live_state::idle));
+	BOOST_CHECK_EQUAL(live->status().errors, 0);
+	BOOST_CHECK_EQUAL(live->status().message, "manual build succeeded");
 }
 
 BOOST_AUTO_TEST_CASE(states_have_names)

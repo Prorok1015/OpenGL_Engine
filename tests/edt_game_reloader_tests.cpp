@@ -114,6 +114,40 @@ BOOST_AUTO_TEST_CASE(while_a_build_runs_the_action_is_disabled)
 	BOOST_TEST(reloaded.empty());
 }
 
+// #445: only the person's build greys Reload out; a live build is stopped first.
+BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_stays_enabled_and_stops_it_first)
+{
+	bool background = true;
+	int cancels = 0;
+	bool stops_at_once = false;
+	auto opts = options();
+	opts.background_building = [&background] { return background; };
+	opts.cancel_background = [&] {
+		++cancels;
+		if (stops_at_once) background = false;
+	};
+	reloader = std::make_unique<edt::game_reloader>(dialogs, actions, std::move(opts));
+	BOOST_TEST(reloader->disabled_reason().empty());
+
+	// The job ends at the next pump: refused this time, nothing swapped while the linker may still write.
+	const auto stopping = invoke();
+	BOOST_REQUIRE(stopping.ok);
+	BOOST_TEST(stopping.value.as_object().at("status").as_string() == "refused");
+	BOOST_TEST(cancels == 1);
+	BOOST_TEST(reloaded.empty());
+
+	stops_at_once = true;
+	const auto outcome = invoke();
+	BOOST_REQUIRE(outcome.ok);
+	BOOST_TEST(outcome.value.as_object().at("status").as_string() == "reloaded");
+	BOOST_TEST(cancels == 2);
+	BOOST_TEST(reloaded == std::vector<std::string>{ "game" });
+
+	// Gone: nothing to cancel.
+	BOOST_TEST(invoke().ok);
+	BOOST_TEST(cancels == 2);
+}
+
 BOOST_AUTO_TEST_CASE(a_build_not_taken_is_shown_with_its_reason)
 {
 	make();

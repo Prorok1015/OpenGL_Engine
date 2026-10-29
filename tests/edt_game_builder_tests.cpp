@@ -1249,6 +1249,56 @@ BOOST_AUTO_TEST_CASE(OnFinished_ARestartedRequestReportsRestarted_ThenTheNewOneF
 	BOOST_TEST((order == std::vector<std::string>{ "first restarted", "second succeeded" }));
 }
 
+BOOST_AUTO_TEST_CASE(OnFinished_APreemptedLiveBuildAndAReplacedLiveRequestReportPreempted)
+{
+	make();
+	std::vector<std::string> order;
+	const auto record = [&order](std::string who) {
+		return [&order, who](const edt::build_outcome& outcome) {
+			order.push_back(who + (outcome.kind == edt::build_outcome::preempted ? " preempted"
+				: outcome.kind == edt::build_outcome::succeeded ? " succeeded" : " other"));
+		};
+	};
+	auto live = edt::make_live_build_request(settings, options());
+	live.on_finished = record("live1");
+	BOOST_REQUIRE(builder->start(live).ok);
+	live.on_finished = record("live2");
+	BOOST_REQUIRE(builder->start(live).ok); // waits for live1 to stop
+	auto manual = request("release");
+	manual.on_finished = record("manual");
+	BOOST_REQUIRE(builder->start(manual).ok);
+	// The waiting live request never runs: it hears so at once.
+	BOOST_TEST((order == std::vector<std::string>{ "live2 preempted" }));
+
+	run_until_idle();
+	BOOST_TEST((order == std::vector<std::string>{ "live2 preempted", "live1 preempted", "manual succeeded" }));
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_AWaitingRequestThatCannotStartReportsNotStarted)
+{
+	make();
+	std::optional<edt::build_outcome> seen;
+	script = [&](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index != 0) return exited(0);
+		auto next = quiet_request("release");
+		next.cancel_on_restart = true;
+		next.on_finished = [&seen](const edt::build_outcome& outcome) { seen = outcome; };
+		BOOST_CHECK(builder->start(next).ok);
+		has_project = false; // the waiting request is refused when its turn comes
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	BOOST_REQUIRE(builder->start(quiet_request("debuggame")).ok);
+	run_until_idle();
+
+	BOOST_REQUIRE(seen.has_value());
+	BOOST_CHECK(seen->not_started);
+	BOOST_CHECK(seen->kind == edt::build_outcome::failed);
+	BOOST_CHECK_EQUAL(seen->message, "Open a project first");
+	BOOST_CHECK(!builder->is_building());
+}
+
 BOOST_AUTO_TEST_CASE(OnFinished_NotCalledOnAUserCancel)
 {
 	make();

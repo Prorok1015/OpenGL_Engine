@@ -40,8 +40,9 @@ namespace edt
 	// How one build_request ended, for its on_finished.
 	struct build_outcome
 	{
-		// restarted: stopped for a newer cancel_on_restart request, which runs next.
-		enum kind_t { succeeded, failed, restarted };
+		// restarted: stopped for a newer cancel_on_restart request, which runs next. preempted: a preemptible build
+		// stopped for a request that is not (the person's build), which runs next.
+		enum kind_t { succeeded, failed, restarted, preempted };
 		kind_t kind = failed;
 		std::uint64_t job = 0;
 		int errors = 0;
@@ -50,6 +51,8 @@ namespace edt
 		std::vector<game_module_build_result> modules;
 		// failed: the setup error or the failure summary.
 		std::string message;
+		// failed: a request that waited for a running build to stop could not start then (`message` says why).
+		bool not_started = false;
 	};
 
 	// Everything one build needs besides the project; made per build by a profile (make_manual_build_request).
