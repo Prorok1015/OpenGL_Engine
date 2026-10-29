@@ -3,6 +3,7 @@
 #include <snk/resource/adapters/res_text_adapter.h>
 #include <snk/resource/adapters/res_binary_adapter.h>
 #include <snk/config/cfg_variables.h>
+#include <snk/project/prj_code.h>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <algorithm>
 #include <atomic>
@@ -226,10 +227,20 @@ void res::resource_system::register_mount(const mount &mounted) {
   egLOG("resource/system", "Mount {}:// ({}): {}", mounted.protocol,
         mounted.access == mount_access::read_only ? "read-only" : "read-write",
         mounted.roots.empty() ? std::string{} : mounted.roots.back().string());
-  auto &resolver =
-      registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access, mounted.writable);
+  auto &resolver = registrate_resolver<vfs_resolver>(mounted.protocol, mounted.roots, mounted.access,
+                                                      mounted.writable, mounted.watch, mounted.file_operations);
   resolver.set_resource_changed_callback(
       [this](const res::tag &tag) { signal_changed(tag); });
+  if (mounted.watch.report_changes) {
+    resolver.set_changes_callback([this, protocol = std::string{mounted.protocol}](std::vector<res::file_change> batch) {
+      m_tasks.post_main([this, protocol, batch = std::move(batch), alive = m_lifetime.token()]() {
+        if (alive.expired()) {
+          return;
+        }
+        deliver_changes(protocol, batch);
+      });
+    });
+  }
 }
 
 void res::resource_system::add_mount(mount added) {
@@ -936,6 +947,83 @@ bool res::resource_system::erase(const res::tag &tag) {
   return true;
 }
 
+res::file_operation res::resource_system::remove(const res::tag &tag) {
+  check_writable(tag);
+  auto &resolvers = root().m_resolvers;
+  const auto found = resolvers.find(tag.protocol());
+  if (found == resolvers.end()) {
+    egLOG_WARN("resource/remove", "Protocol '{}' is not supported!", tag.protocol());
+    return file_operation::failure("protocol is not supported");
+  }
+  auto result = found->second->remove(tag);
+  if (!result) {
+    return result;
+  }
+  forget_erased(tag);
+  signal_changed(tag);
+  return result;
+}
+
+res::file_operation res::resource_system::rename(const res::tag &from, const res::tag &to) {
+  check_writable(from);
+  check_writable(to);
+  if (from.protocol() != to.protocol()) {
+    return file_operation::failure("a file cannot move between protocols");
+  }
+  auto &resolvers = root().m_resolvers;
+  const auto found = resolvers.find(from.protocol());
+  if (found == resolvers.end()) {
+    egLOG_WARN("resource/rename", "Protocol '{}' is not supported!", from.protocol());
+    return file_operation::failure("protocol is not supported");
+  }
+  auto result = found->second->rename(from, to);
+  if (!result) {
+    return result;
+  }
+  forget_erased(from);
+  signal_changed(from);
+  signal_changed(to);
+  return result;
+}
+
+void res::resource_system::subscribe_changes(std::string_view protocol, void *owner, changes_listener listener) {
+  auto &base = root();
+  std::lock_guard lock(base.m_changes_mutex);
+  base.m_change_subscriptions.push_back(
+      change_subscription{++base.m_next_subscription, std::string{protocol}, owner, std::move(listener)});
+}
+
+void res::resource_system::unsubscribe_changes(void *owner) {
+  auto &base = root();
+  std::lock_guard lock(base.m_changes_mutex);
+  std::erase_if(base.m_change_subscriptions, [owner](const change_subscription &entry) { return entry.owner == owner; });
+}
+
+void res::resource_system::deliver_changes(const std::string &protocol, const std::vector<file_change> &batch) {
+  std::vector<std::uint64_t> targets;
+  {
+    std::lock_guard lock(m_changes_mutex);
+    for (const auto &entry : m_change_subscriptions) {
+      if (entry.protocol == protocol) {
+        targets.push_back(entry.id);
+      }
+    }
+  }
+  for (const std::uint64_t id : targets) {
+    changes_listener listener;
+    {
+      // A previous listener of this delivery may have unsubscribed this one.
+      std::lock_guard lock(m_changes_mutex);
+      const auto entry = std::ranges::find(m_change_subscriptions, id, &change_subscription::id);
+      if (entry == m_change_subscriptions.end()) {
+        continue;
+      }
+      listener = entry->listener;
+    }
+    listener(batch);
+  }
+}
+
 void res::resource_system::forget_erased(const res::tag &tag) {
   unpin_resource(tag);
   {
@@ -1014,11 +1102,15 @@ std::filesystem::path res::resource_system::get_resources_path() const {
 }
 
 std::vector<std::filesystem::path> res::resource_system::get_resource_layers() const {
+  return mount_roots(tag::default_protocol());
+}
+
+std::vector<std::filesystem::path> res::resource_system::mount_roots(std::string_view protocol) const {
   if (m_parent) {
-    return m_parent->get_resource_layers();
+    return m_parent->mount_roots(protocol);
   }
   for (const auto &mount : m_mounts) {
-    if (mount.protocol == tag::default_protocol()) {
+    if (mount.protocol == protocol) {
       return mount.roots;
     }
   }
@@ -1072,7 +1164,7 @@ res::mount_table res::resource_system::project_mount_table(
     const std::filesystem::path &engine_base,
     const std::vector<std::filesystem::path> &content_roots,
     const std::filesystem::path &cache_dir,
-    const std::filesystem::path &user_dir) {
+    const std::filesystem::path &user_dir, const std::filesystem::path &code_dir) {
   ASSERT_MSG(!content_roots.empty(), "A project has at least one content root");
   if (engine_base.empty()) {
     egLOG_WARN("resource/system", "resource/base_path is not set: res:// has no engine layer and engine:// is not mounted");
@@ -1088,6 +1180,15 @@ res::mount_table res::resource_system::project_mount_table(
   table.push_back(mount{tag::memory, {cache_dir / "memory"}, mount_access::read_write});
   table.push_back(mount{tag::cache, {cache_dir}, mount_access::read_write});
   table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
+  if (!code_dir.empty()) {
+    // Case folded: on a case-insensitive file system "Build/a.cpp" is the folder the deny patterns name.
+    // The watcher skips the folders the write policy refuses and reports code files only: one list for both.
+    table.push_back(mount{tag::code, {code_dir}, mount_access::read_write,
+                          write_policy{tag::code, prj::code_write_patterns(), false},
+                          watch_options{true, [](std::string_view name) { return prj::is_code_ignored_dir(name); },
+                                        [](std::string_view name) { return prj::is_code_file(name); }},
+                          true});
+  }
   add_engine_mount(table, engine_base);
   return table;
 }

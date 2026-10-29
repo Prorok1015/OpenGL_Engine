@@ -87,10 +87,13 @@ res::write_policy res::write_policy::read_only()
 	return write_policy{};
 }
 
-res::write_policy::write_policy(std::string_view protocol, const std::vector<std::string>& patterns)
+res::write_policy::write_policy(std::string_view protocol, const std::vector<std::string>& patterns, bool case_sensitive)
+	: m_case_sensitive(case_sensitive)
 {
 	constexpr std::string_view separator = "://";
-	for (const std::string& pattern : patterns) {
+	for (const std::string& listed : patterns) {
+		const bool deny = !listed.empty() && listed.front() == '!';
+		const std::string pattern = deny ? listed.substr(1) : listed;
 		const std::size_t split = pattern.find(separator);
 		if (split == std::string::npos) {
 			egLOG_WARN("resource/write", "write pattern '{}' ignored: it must read protocol://glob", pattern);
@@ -103,12 +106,13 @@ res::write_policy::write_policy(std::string_view protocol, const std::vector<std
 			}
 			continue;
 		}
-		auto segments = split_segments(std::string_view{ pattern }.substr(split + separator.size()));
+		const std::string glob_text = case_sensitive ? pattern.substr(split + separator.size()) : lowered(pattern.substr(split + separator.size()));
+		auto segments = split_segments(glob_text);
 		if (!is_valid_glob(segments)) {
 			egLOG_WARN("resource/write", "write pattern '{}' ignored: empty segment, or '**' mixed with other characters", pattern);
 			continue;
 		}
-		m_patterns.push_back(std::move(segments));
+		(deny ? m_denied : m_patterns).push_back(std::move(segments));
 	}
 }
 
@@ -117,7 +121,10 @@ bool res::write_policy::allows(std::string_view relative_path) const
 	if (m_allow_all) return true;
 	if (relative_path.empty()) return false;
 
-	const auto path = split_segments(relative_path);
+	const auto path = split_segments(m_case_sensitive ? std::string{ relative_path } : lowered(relative_path));
+	for (const auto& glob : m_denied) {
+		if (glob_matches(glob, 0, path, 0)) return false;
+	}
 	for (const auto& glob : m_patterns) {
 		if (glob_matches(glob, 0, path, 0)) return true;
 	}

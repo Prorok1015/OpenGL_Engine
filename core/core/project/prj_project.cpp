@@ -14,14 +14,14 @@ prj::open_result prj::open_project(const fs::path& path)
 	std::error_code ec;
 	const fs::path absolute = fs::absolute(path, ec);
 	if (ec) {
-		result.error = std::format("cannot resolve project path '{}': {}", path.string(), ec.message());
+		result.error = std::format("cannot resolve project path '{}': {}", fs_paths::utf8_of(path), ec.message());
 		return result;
 	}
 	const fs::path manifest_file = fs::is_directory(absolute, ec) ? absolute / k_manifest_file_name : absolute;
 
 	auto loaded = load_manifest(manifest_file);
 	if (!loaded.data) {
-		result.error = std::format("cannot open project '{}': {}", manifest_file.string(),
+		result.error = std::format("cannot open project '{}': {}", fs_paths::utf8_of(manifest_file),
 			loaded.error ? to_string(*loaded.error) : std::string{ "unknown error" });
 		return result;
 	}
@@ -29,7 +29,7 @@ prj::open_result prj::open_project(const fs::path& path)
 	project_context context;
 	context.root = fs::canonical(manifest_file.parent_path(), ec);
 	if (ec) {
-		result.error = std::format("cannot resolve project directory '{}': {}", manifest_file.parent_path().string(), ec.message());
+		result.error = std::format("cannot resolve project directory '{}': {}", fs_paths::utf8_of(manifest_file.parent_path()), ec.message());
 		return result;
 	}
 	context.manifest_file = context.root / manifest_file.filename();
@@ -62,12 +62,65 @@ bool prj::refuse_without_asking(version_action action, bool non_interactive)
 	return held && non_interactive;
 }
 
+namespace {
+
+	// MSVC's std::filesystem has a file type of its own for a junction.
+	bool is_junction(const fs::file_status& status)
+	{
+#ifdef _MSC_VER
+		return status.type() == fs::file_type::junction;
+#else
+		(void)status;
+		return false;
+#endif
+	}
+
+	// A link at code/ (a symlink or a junction) would send every code:// write wherever it leads.
+	std::optional<std::string> verify_code_dir(const prj::project_context& project, const fs::path& root,
+		const std::vector<fs::path>& content_roots)
+	{
+		std::error_code ec;
+		const fs::path dir = project.code_dir();
+		const auto status = fs::symlink_status(dir, ec);
+		if (status.type() == fs::file_type::not_found) {
+			return std::nullopt;
+		}
+		if (ec) {
+			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
+		}
+		if (fs::is_symlink(status) || is_junction(status)) {
+			return std::format("'{}' is a link; the project's code folder must be a real folder", fs_paths::generic_utf8_of(dir));
+		}
+		if (!fs::is_directory(status)) {
+			return std::format("'{}' is not a directory", fs_paths::generic_utf8_of(dir));
+		}
+		const fs::path real = fs::canonical(dir, ec);
+		if (ec || !is_inside(root, real)) {
+			return std::format("'{}' leads outside the project", fs_paths::generic_utf8_of(dir));
+		}
+		for (const auto& content_root : content_roots) {
+			if (is_inside(content_root, real) || is_inside(real, content_root)) {
+				return std::format("the code folder '{}' overlaps the content root '{}': res:// would serve code or code:// assets",
+					fs_paths::generic_utf8_of(dir), fs_paths::generic_utf8_of(content_root));
+			}
+		}
+		for (const auto& private_dir : project.private_dirs()) {
+			if (is_inside(private_dir, real) || is_inside(real, private_dir)) {
+				return std::format("the code folder '{}' overlaps the project's private folder '{}'", fs_paths::generic_utf8_of(dir),
+					fs_paths::generic_utf8_of(private_dir));
+			}
+		}
+		return std::nullopt;
+	}
+
+}
+
 std::optional<std::string> prj::verify_project_mounts(const project_context& project, const fs::path& engine_base)
 {
 	std::error_code ec;
 	const fs::path root = fs::canonical(project.root, ec);
 	if (ec) {
-		return std::format("project directory '{}' cannot be resolved: {}", project.root.string(), ec.message());
+		return std::format("project directory '{}' cannot be resolved: {}", fs_paths::utf8_of(project.root), ec.message());
 	}
 
 	// The manifest already refused "..", absolute paths, drives and device names; canonical() also catches a
@@ -76,15 +129,15 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 	for (const auto& dir : project.content_roots) {
 		const fs::path content_root = fs::canonical(dir, ec);
 		if (ec || !fs::is_directory(content_root, ec)) {
-			return std::format("content root '{}' is not a directory", dir.generic_string());
+			return std::format("content root '{}' is not a directory", fs_paths::generic_utf8_of(dir));
 		}
 		if (!is_inside(root, content_root)) {
-			return std::format("content root '{}' leads outside the project", dir.generic_string());
+			return std::format("content root '{}' leads outside the project", fs_paths::generic_utf8_of(dir));
 		}
 		// One file would be reachable under two tags, and a store through the outer root would land in the inner one.
 		for (const auto& other : roots) {
 			if (is_inside(other, content_root) || is_inside(content_root, other)) {
-				return std::format("content roots '{}' and '{}' overlap", other.generic_string(), content_root.generic_string());
+				return std::format("content roots '{}' and '{}' overlap", fs_paths::generic_utf8_of(other), fs_paths::generic_utf8_of(content_root));
 			}
 		}
 		roots.push_back(content_root);
@@ -94,12 +147,12 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 	if (!engine_base.empty()) {
 		const fs::path base = fs::weakly_canonical(engine_base, ec);
 		if (ec) {
-			return std::format("engine resources '{}' cannot be resolved: {}", engine_base.string(), ec.message());
+			return std::format("engine resources '{}' cannot be resolved: {}", fs_paths::utf8_of(engine_base), ec.message());
 		}
 		for (const auto& content_root : roots) {
 			if (is_inside(base, content_root) || is_inside(content_root, base)) {
-				return std::format("content root '{}' overlaps the engine resources '{}'", content_root.generic_string(),
-					base.generic_string());
+				return std::format("content root '{}' overlaps the engine resources '{}'", fs_paths::generic_utf8_of(content_root),
+					fs_paths::generic_utf8_of(base));
 			}
 		}
 	}
@@ -107,8 +160,8 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 	for (const auto& dir : project.private_dirs()) {
 		for (const auto& content_root : roots) {
 			if (is_inside(dir, content_root) || is_inside(content_root, dir)) {
-				return std::format("content root '{}' overlaps the project's private folder '{}'", content_root.generic_string(),
-					dir.generic_string());
+				return std::format("content root '{}' overlaps the project's private folder '{}'", fs_paths::generic_utf8_of(content_root),
+					fs_paths::generic_utf8_of(dir));
 			}
 		}
 	}
@@ -123,18 +176,22 @@ std::optional<std::string> prj::verify_project_mounts(const project_context& pro
 			continue;
 		}
 		if (ec) {
-			return std::format("'{}' cannot be checked: {}", dir.generic_string(), ec.message());
+			return std::format("'{}' cannot be checked: {}", fs_paths::generic_utf8_of(dir), ec.message());
 		}
 		if (fs::is_symlink(status)) {
-			return std::format("'{}' is a symlink; the project's writable folders must be real folders", dir.generic_string());
+			return std::format("'{}' is a symlink; the project's writable folders must be real folders", fs_paths::generic_utf8_of(dir));
 		}
 		if (!fs::is_directory(status)) {
-			return std::format("'{}' is not a directory", dir.generic_string());
+			return std::format("'{}' is not a directory", fs_paths::generic_utf8_of(dir));
 		}
 		const fs::path real = fs::canonical(dir, ec);
 		if (ec || !is_inside(root, real)) {
-			return std::format("'{}' leads outside the project", dir.generic_string());
+			return std::format("'{}' leads outside the project", fs_paths::generic_utf8_of(dir));
 		}
+	}
+
+	if (const auto problem = verify_code_dir(project, root, roots)) {
+		return problem;
 	}
 	return std::nullopt;
 }
