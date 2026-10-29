@@ -17,6 +17,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <ios>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -77,6 +78,8 @@ namespace {
 		// Guarded network call: refused when the repository's config would pick a program it runs (network_refusal).
 		bool guard_network = false;
 		bool allow_repo_credential_helper = false;
+		// git 2.40+: check-attr --source=<tree> reads the attributes of a checkout's target.
+		bool attr_source = false;
 	};
 
 	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
@@ -443,22 +446,25 @@ namespace {
 		return checkout_plan{ checkout_kind::remote_branch, found };
 	}
 
-	// The drivers of `configured` that `git check-attr filter` names for `files` (attributes of the work tree,
-	// .git/info/attributes and core.attributesFile); nullopt when git could not tell.
-	std::optional<std::vector<std::string>> applied_drivers(const git_context& git, const std::vector<std::string>& files,
-		const std::vector<std::string>& configured, std::stop_token stop)
+	// The drivers of `configured` that `git check-attr <source> filter` names for `files`, added to `found`; false when
+	// git could not tell. `source`: nothing (the work tree's .gitattributes first), "--cached" (the index's) or
+	// "--source=<tree>" (a target's); .git/info/attributes and core.attributesFile always count.
+	bool applied_drivers(const git_context& git, const std::vector<std::string>& files,
+		const std::vector<std::string>& configured, const std::string& source, std::vector<std::string>& found,
+		std::stop_token stop)
 	{
-		std::vector<std::string> found;
 		std::size_t next = 0;
 		while (next < files.size()) {
-			std::vector<std::string> args{ "check-attr", "-z", "filter", "--" };
+			std::vector<std::string> args{ "check-attr", "-z" };
+			if (!source.empty()) args.push_back(source);
+			args.insert(args.end(), { "filter", "--" });
 			std::size_t bytes = 0;
 			while (next < files.size() && (bytes == 0 || bytes + files[next].size() < edt::vcs_service::k_max_paths_bytes)) {
 				bytes += files[next].size() + 1;
 				args.push_back(files[next++]);
 			}
 			const git_output out = run_git(git, args, stop, k_read_cap);
-			if (!succeeded(out)) return std::nullopt;
+			if (!succeeded(out)) return false;
 			// path, "filter", value: "unspecified", "unset", "set" or a driver name.
 			const auto fields = split_nul(out.out);
 			for (std::size_t i = 0; i + 2 < fields.size(); i += 3) {
@@ -469,7 +475,39 @@ namespace {
 				}
 			}
 		}
-		return found;
+		return true;
+	}
+
+	bool is_attributes_file(std::string_view path)
+	{
+		return path == ".gitattributes" || path.ends_with("/.gitattributes");
+	}
+
+	// Without check-attr --source (git < 2.40): whether a tracked .gitattributes of the work tree differs from the
+	// index's (`diff --quiet`, explicit paths: the calls run with --literal-pathspecs). Nullopt: git could not tell.
+	std::optional<bool> attributes_differ_from_index(const git_context& git, const std::vector<std::string>& index_files,
+		std::stop_token stop)
+	{
+		std::vector<std::string> attributes;
+		std::copy_if(index_files.begin(), index_files.end(), std::back_inserter(attributes),
+			[](const std::string& file) { return is_attributes_file(file); });
+		// Comparing the work tree with the index re-hashes through clean filters: these run with every driver emptied.
+		git_context quiet = git;
+		if (!attributes.empty() && switch_off_filters(quiet, stop)) return std::nullopt;
+		std::size_t next = 0;
+		while (next < attributes.size()) {
+			std::vector<std::string> args{ "diff", "--quiet", "--no-ext-diff", "--no-textconv", "--" };
+			std::size_t bytes = 0;
+			while (next < attributes.size() && (bytes == 0 || bytes + attributes[next].size() < edt::vcs_service::k_max_paths_bytes)) {
+				bytes += attributes[next].size() + 1;
+				args.push_back(attributes[next++]);
+			}
+			const git_output out = run_git(quiet, args, stop, k_read_cap);
+			if (!out.process.error.empty() || out.truncated) return std::nullopt;
+			if (out.process.exit_code == 1) return true;
+			if (out.process.exit_code != 0) return std::nullopt;
+		}
+		return false;
 	}
 
 	// A guarded write without allow_filters: refused (filters_require_opt_in) when a configured clean, smudge or process
@@ -492,14 +530,29 @@ namespace {
 		if (!list) return refuse(std::format("filter drivers ({}) are configured and git could not tell which files this write touches", names));
 		// The target's attributes may differ from the work tree's, which check-attr reads.
 		for (const auto& file : list->changed) {
-			if (file == ".gitattributes" || file.ends_with("/.gitattributes")) {
+			if (is_attributes_file(file)) {
 				return refuse(std::format("this write changes '{}' while filter drivers ({}) are configured",
 					edt::vcs::valid_utf8(file), names));
 			}
 		}
-		const auto applied = applied_drivers(git, list->files, configured, stop);
-		if (!applied) return refuse(std::format("filter drivers ({}) are configured and git could not read the files' attributes", names));
-		if (!applied->empty()) return refuse(std::format("the filter drivers ({}) apply to files this write touches", names_of(*applied)));
+		// check-attr reads the work tree's .gitattributes first, but checkout and merge smudge with the index's or the
+		// target's: all of them are asked.
+		std::vector<std::string> sources{ std::string{}, "--cached" };
+		if (touched.kind == touched_kind::target && git.attr_source) sources.push_back("--source=" + touched.target);
+		std::vector<std::string> applied;
+		for (const auto& source : sources) {
+			if (!applied_drivers(git, list->files, configured, source, applied, stop)) {
+				return refuse(std::format("filter drivers ({}) are configured and git could not read the files' attributes", names));
+			}
+		}
+		if (!applied.empty()) return refuse(std::format("the filter drivers ({}) apply to files this write touches", names_of(applied)));
+		if (!git.attr_source) {
+			const auto differ = attributes_differ_from_index(git, list->files, stop);
+			if (!differ) return refuse(std::format("filter drivers ({}) are configured and git could not compare the "
+				"work tree's .gitattributes with the index", names));
+			if (*differ) return refuse(std::format("filter drivers ({}) are configured and a .gitattributes of the work "
+				"tree differs from the index", names));
+		}
 		return std::nullopt;
 	}
 
@@ -509,9 +562,12 @@ namespace {
 		// Section and key lower case, the subsection as written.
 		std::string key;
 		std::string value;
+		// False for a bare key (`[section] key`, no '='), which git reads as boolean true; `key =` has an empty value.
+		bool has_value = false;
 	};
 
-	// `git config -z --show-scope --get-regexp`: "<scope>\0<key>\n<value>\0" records (no "\n<value>" for a bare key).
+	// `git config -z --show-scope|--show-origin --get-regexp|--list`: "<scope>\0<key>\n<value>\0" records; a bare key
+	// is "<scope>\0<key>\0" (no newline), `key =` is "<scope>\0<key>\n\0".
 	std::vector<scoped_entry> scoped_entries_of(std::string_view listing)
 	{
 		std::vector<scoped_entry> entries;
@@ -519,8 +575,9 @@ namespace {
 		for (std::size_t i = 0; i + 1 < fields.size(); i += 2) {
 			const std::string& record = fields[i + 1];
 			const std::size_t newline = record.find('\n');
-			entries.push_back({ fields[i], record.substr(0, newline),
-				newline == std::string::npos ? std::string{} : record.substr(newline + 1) });
+			const bool has_value = newline != std::string::npos;
+			entries.push_back({ fields[i], record.substr(0, newline), has_value ? record.substr(newline + 1) : std::string{},
+				has_value });
 		}
 		return entries;
 	}
@@ -573,7 +630,7 @@ namespace {
 		for (const auto& entry : scoped_entries_of(listed.out)) {
 			const bool helper = entry.key.starts_with("credential.") && entry.key.ends_with(".helper");
 			// An empty helper only clears the list.
-			if (helper && !entry.value.empty() && entry.scope != "system" && entry.scope != "global"
+			if (helper && (!entry.has_value || !entry.value.empty()) && entry.scope != "system" && entry.scope != "global"
 				&& !git.allow_repo_credential_helper) {
 				return refused("unsafe_repository", "a credential helper set by the repository: an agent's network call "
 					"runs only the system's or the user's");
@@ -636,7 +693,11 @@ namespace {
 					|| (lower.starts_with("lfs.extension.") && one_of(name, { "clean", "smudge" })));
 			return !program;
 		}
-		if (one_of(section, { "extensions", "index", "gc", "maintenance" })) return true;
+		// Not extensions.partialClone (or any other): a partial clone fetches missing objects behind network_refusal.
+		if (section == "extensions") {
+			return !subsection && one_of(name, { "objectformat", "refstorage", "worktreeconfig", "preciousobjects" });
+		}
+		if (one_of(section, { "index", "gc", "maintenance" })) return true;
 		if (!subsection) {
 			if (section == "core") {
 				return one_of(name, { "repositoryformatversion", "filemode", "bare", "logallrefupdates", "ignorecase",
@@ -650,8 +711,7 @@ namespace {
 				"submodule.active" });
 		}
 		if (section == "remote") {
-			return one_of(name, { "url", "pushurl", "fetch", "tagopt", "prune", "followremotehead", "promisor",
-				"partialclonefilter" });
+			return one_of(name, { "url", "pushurl", "fetch", "tagopt", "prune", "followremotehead" });
 		}
 		// Never submodule.<name>.update: "!command" runs it.
 		if (section == "submodule") return one_of(name, { "url", "active" });
@@ -660,15 +720,9 @@ namespace {
 		return section == "filter";
 	}
 
-	bool is_true(std::string_view value)
-	{
-		const std::string lower = lower_case(trim(value));
-		return lower == "true" || lower == "yes" || lower == "on" || lower == "1";
-	}
-
 	// A guarded call without allow_any_repo_config: refused (unsafe_repository) when the repository's own config
-	// (.git/config, and config.worktree under extensions.worktreeConfig; includes not followed, include.* itself is no
-	// allowed key) sets a key outside the allowlist. Read before anything else of the call.
+	// (.git/config and the worktree's config.worktree; includes not followed, include.* itself is no allowed key) sets
+	// a key outside the allowlist. Read before anything else of the call.
 	std::optional<git_output> config_refusal(const git_context& git, std::stop_token stop)
 	{
 		if (!git.check_repo_config) return std::nullopt;
@@ -676,13 +730,27 @@ namespace {
 		if (listing_failed(local)) return local;
 		if (local.truncated) return refused("unsafe_repository", "the repository's git config is too large to check");
 		std::vector<scoped_entry> entries = scoped_entries_of(local.out);
-		const bool worktree_config = std::any_of(entries.begin(), entries.end(), [](const scoped_entry& entry) {
-			return lower_case(entry.key) == "extensions.worktreeconfig" && is_true(entry.value);
-		});
-		if (worktree_config) {
-			git_output worktree = run_git(git, { "config", "--worktree", "--list", "-z", "--show-origin" }, stop, k_read_cap);
-			if (listing_failed(worktree)) return worktree;
-			if (worktree.truncated) return refused("unsafe_repository", "the worktree's git config is too large to check");
+		// config.worktree is read whatever extensions.worktreeConfig says (a bare `worktreeConfig` key is true to git),
+		// as a file: `config --worktree` fails without the extension in a repository with several worktrees.
+		const git_output where = run_git(git, { "rev-parse", "--git-path", "config.worktree" }, stop, k_read_cap);
+		if (!succeeded(where) || trim(where.out).empty()) {
+			return refused("unsafe_repository", "git could not name the worktree's config file");
+		}
+		fs::path worktree_file = path_of(trim(where.out));
+		if (worktree_file.is_relative()) worktree_file = git.cwd / worktree_file;
+		std::error_code ec;
+		const fs::file_status status = fs::status(worktree_file, ec);
+		if (status.type() != fs::file_type::not_found) {
+			if (ec) {
+				return refused("unsafe_repository", std::format("the worktree's config file '{}' cannot be checked: {}",
+					edt::utf8_of(worktree_file), ec.message()));
+			}
+			const git_output worktree = run_git(git, { "config", "--file", edt::utf8_of(worktree_file), "--list", "-z",
+				"--show-origin" }, stop, k_read_cap);
+			if (!succeeded(worktree)) {
+				return refused("unsafe_repository", std::format("the worktree's config file '{}' cannot be read",
+					edt::utf8_of(worktree_file)));
+			}
 			for (auto& entry : scoped_entries_of(worktree.out)) entries.push_back(std::move(entry));
 		}
 		for (const auto& entry : entries) {
@@ -924,10 +992,16 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 			"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "merge.verifySignatures=false",
 			"-c", "gpg.program=", "-c", "gpg.openpgp.program=", "-c", "gpg.x509.program=", "-c", "gpg.ssh.program=",
 			"-c", "gpg.ssh.defaultKeyCommand=",
-			"-c", "core.gitProxy=", "-c", "core.alternateRefsCommand=" };
+			"-c", "core.gitProxy=", "-c", "core.alternateRefsCommand=",
+			// No background gc or maintenance started by the write (they outlive the job and its overrides).
+			"-c", "gc.auto=0", "-c", "maintenance.auto=false" };
 		// The first core.gitProxy git reads wins, so the repository's would come before the -c one; an empty
 		// GIT_PROXY_COMMAND is read before any config and means no proxy.
 		set_variable(context.environment, "GIT_PROXY_COMMAND", "");
+		// A partial clone fetches a missing object from its promisor remote on demand (git 2.45+ honours this), past
+		// network_refusal.
+		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
+		context.attr_source = version_at_least(m_state.git_version, 2, 40);
 		if (!m_write_permissions.allow_hooks) {
 			if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
 			context.config_args.emplace_back("-c");
