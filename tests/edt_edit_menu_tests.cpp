@@ -1,4 +1,5 @@
 #include <boost/test/unit_test.hpp>
+#include "edt_agent_policy.h"
 #include "edt_edit_menu.h"
 #include "edt_mcp_bridge_host.h"
 #include "edt_main_menu.h"
@@ -195,7 +196,12 @@ BOOST_AUTO_TEST_CASE(accepting_the_agents_changes_clears_their_marks)
 	// Accepting is not undoing: the edit stays, and so does its record.
 	BOOST_TEST(name() == "b");
 	BOOST_TEST(scene.history().can_undo());
-	BOOST_TEST(!edt::agent_may_use(*actions.find("edit.accept_agent_changes")));
+	// What a person has looked at is theirs to say: no policy file hands it to an agent.
+	const auto* accept = actions.find("edit.accept_agent_changes");
+	BOOST_TEST((accept->category == cmd::agent_category::not_for_agents));
+	edt::policy_layer allowed;
+	allowed.commands["edit.accept_agent_changes"] = cmd::policy_mode::allow;
+	BOOST_TEST((edt::effective_mode(*accept, allowed, {}).mode == cmd::policy_mode::deny));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

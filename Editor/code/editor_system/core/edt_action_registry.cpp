@@ -118,6 +118,7 @@ edt::registration edt::action_registry::add(action_desc desc)
 	command.result_schema = std::move(desc.result_schema);
 	command.expose_as_tool = desc.expose_as_tool;
 	command.mutates = desc.mutates;
+	command.category = desc.category;
 	command.invoke = [execute = std::move(desc.execute)](const cmd::call& request) { return execute(request.args); };
 	command.enabled = std::move(desc.enabled);
 

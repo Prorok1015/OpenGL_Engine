@@ -69,7 +69,7 @@ void edt::scene_document::accept_agent_changes()
 void edt::scene_document::move_agent_marks_to_now()
 {
 	const history_record* top = m_history.next_undo();
-	m_agent_from = top ? agent_mark_from{ top->id, top->changes.size() } : agent_mark_from{};
+	m_agent_from = top && !top->changes.empty() ? top->changes.back()->serial() : 0;
 }
 
 const std::set<std::pair<std::size_t, std::uint64_t>>& edt::scene_document::agent_changes() const
@@ -82,12 +82,14 @@ const std::set<std::pair<std::size_t, std::uint64_t>>& edt::scene_document::agen
 	const auto& records = m_history.records();
 	for (std::size_t r = 0; r < m_history.position(); ++r) {
 		const history_record& record = records[r];
-		if (record.origin.kind != cmd::origin_kind::agent || record.id < m_agent_from.record) {
+		if (record.origin.kind != cmd::origin_kind::agent) {
 			continue;
 		}
-		const std::size_t first = record.id == m_agent_from.record ? m_agent_from.changes : 0;
-		for (std::size_t c = first; c < record.changes.size(); ++c) {
-			for (const std::string& key : record.changes[c]->marks()) {
+		for (const auto& change : record.changes) {
+			if (change->serial() <= m_agent_from) {
+				continue;
+			}
+			for (const std::string& key : change->marks()) {
 				if (const auto node = parse_node_key(key)) {
 					cache.nodes.insert(*node);
 				}
@@ -193,6 +195,7 @@ void edt::scene_document::recover_from_apply(std::string_view what, std::string_
 	// Half applied: what the worlds hold now is neither state of the history. Keep it, reload it, start over.
 	egLOG_ERROR("Editor/History", "{} failed ({}): the history is cleared and the worlds are reloaded as they are", what, error);
 	m_history.clear();
+	m_agent_changes.valid = false;
 	m_unrecorded = true;
 	m_history.mark_saved();
 	m_index.rebuild(world_descs);
@@ -205,7 +208,8 @@ void edt::scene_document::reset_history()
 {
 	const bool dirty = is_dirty();
 	m_history.clear();
-	m_agent_from = {};
+	m_agent_from = 0;
+	m_agent_changes.valid = false;
 	m_unrecorded = dirty;
 	m_history.mark_saved();
 	if (!m_index.rebuild(world_descs)) {

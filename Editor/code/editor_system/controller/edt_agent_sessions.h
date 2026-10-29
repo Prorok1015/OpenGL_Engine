@@ -12,8 +12,9 @@ namespace edt
 
 	// agent.session.begin/checkpoint/end/rollback/get (A5, #291; AI_INTEGRATION.md §3.4): the edits an agent makes in a
 	// session go into history groups of its own, so the session is one undo record per step and can be rolled back
-	// whole, up to the first edit a person made to the same node after it. One session per caller origin (an MCP session
-	// id; "ui" / "test" for scripts and tests). A boundary of the history (a level loaded, a world added) ends them all.
+	// whole, up to the first edit someone else (a person, another session) made to the same node after it. One session
+	// per agent origin (an MCP session id; "test" for tests): any other caller is refused. A boundary of the history (a
+	// level loaded, a world added) ends them all.
 	class agent_sessions
 	{
 	public:

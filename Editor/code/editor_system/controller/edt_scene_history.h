@@ -41,6 +41,8 @@ namespace edt
 		std::optional<scene_node_state> after;
 		// Only where it sits changed, not what is in it: before and after hold no copy of the node (placement_of).
 		bool positional = false;
+		// Positional under the same parent, and it is the node that was moved there, not one a sibling shifted.
+		bool moved_among_siblings = false;
 	};
 
 	class scene_history_index

@@ -145,21 +145,15 @@ namespace edt
 		std::function<bool()> m_pusher;
 		std::function<bool(std::size_t)> m_world_reloader;
 
-		// Where the agent's edits a person has not looked at begin: the top record at the last save or accept, and how
-		// many of its edits it had (a session folds more into the same record).
-		struct agent_mark_from
-		{
-			std::uint64_t record = 0;
-			std::size_t changes = 0;
-			bool operator==(const agent_mark_from&) const = default;
-		};
+		// Where the agent's edits a person has not looked at begin: the serial of the newest applied edit at the last save
+		// or accept. An edit folded into an older record after it (undo, then the session edits again) is still newer.
 		void move_agent_marks_to_now();
-		agent_mark_from m_agent_from;
+		std::uint64_t m_agent_from = 0;
 		struct agent_changes_cache
 		{
 			bool valid = false;
 			std::uint64_t generation = 0;
-			agent_mark_from from;
+			std::uint64_t from = 0;
 			std::set<std::pair<std::size_t, std::uint64_t>> nodes;
 		};
 		mutable agent_changes_cache m_agent_changes;

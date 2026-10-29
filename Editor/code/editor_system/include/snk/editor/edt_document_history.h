@@ -32,6 +32,14 @@ namespace edt
 		// What the edit changed in a way a person should see ("changed by agent"); a key moved only because of an
 		// edit next to it is in keys() but not here.
 		virtual const std::vector<std::string>& marks() const { return keys(); }
+
+		// When the history took it, increasing over the life of the history (clear() included): an edit folded into an
+		// older record still comes after everything recorded before it. 0 until recorded.
+		std::uint64_t serial() const { return m_serial; }
+
+	private:
+		friend class document_history;
+		std::uint64_t m_serial = 0;
 	};
 
 	struct history_record
@@ -102,6 +110,8 @@ namespace edt
 		void end_group(std::uint64_t group);
 		// The open group of `origin`, 0 when none.
 		std::uint64_t open_group(const cmd::origin& origin) const;
+		// Edits of the group that went over the limit and stay applied.
+		std::size_t evicted(std::uint64_t group) const;
 		// Undoes the applied edits of the group, newest first, and drops them from the history. Stops before an edit
 		// whose key a later applied record of another origin changed too, or whose undo_conflict names something, so
 		// a human's edit is never undone or overwritten. The records that were undone (redo) are dropped as well.
@@ -127,6 +137,7 @@ namespace edt
 		std::size_t m_limit;
 		std::uint64_t m_next_id = 1;
 		std::uint64_t m_next_group = 1;
+		std::uint64_t m_next_serial = 1;
 		// The id of the record on top when saved; nullopt: no state of the history is the saved one.
 		std::optional<std::uint64_t> m_saved = std::uint64_t{ 0 };
 		std::map<std::string, open_group_state> m_groups; // by origin

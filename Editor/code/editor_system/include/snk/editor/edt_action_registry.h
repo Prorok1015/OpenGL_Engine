@@ -97,6 +97,8 @@ namespace edt
 		// action says it only reads: the MCP server offers an agent the commands that do not mutate, so a forgotten
 		// flag must keep an action out of reach, not put it in.
 		bool mutates = true;
+		// What the action is to an agent (cmd::command_desc::category); unset: out of an agent's reach.
+		cmd::agent_category category = cmd::agent_category::unset;
 		std::function<void()> activate{};
 		// Null: always enabled.
 		std::function<bool()> enabled{};

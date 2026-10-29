@@ -10,6 +10,7 @@
 #include <snk/scene/level/scn_world_desc.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -253,6 +254,141 @@ BOOST_AUTO_TEST_CASE(a_node_that_only_moved_up_is_not_marked)
 
 	BOOST_REQUIRE(call("scene.node.reparent", R"({"ref":)" + ref(A) + R"(,"parent":)" + ref(B) + "}").ok);
 	BOOST_TEST(marked(10)); // moved under another node: the agent's doing
+}
+
+BOOST_AUTO_TEST_CASE(only_an_agent_opens_a_session)
+{
+	BOOST_TEST(call("agent.session.begin", R"({"label":"Mine"})", cmd::origin::ui()).code == cmd::codes::denied);
+	BOOST_TEST(!call("agent.session.get", "{}", cmd::origin::ui()).value.at("open").as_bool());
+	BOOST_TEST(call("agent.session.begin", R"({"label":"Test"})", cmd::origin::test()).ok);
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_after_the_person_undid_and_redid_steps_undoes_what_is_applied)
+{
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"Tidy up"})").ok);
+	BOOST_REQUIRE(rename(A, "a2").ok);
+	BOOST_REQUIRE(call("agent.session.checkpoint").ok);
+	BOOST_REQUIRE(rename(B, "b2").ok);
+	BOOST_REQUIRE(scene.undo());
+	BOOST_REQUIRE(scene.redo());
+	BOOST_REQUIRE(scene.undo()); // step 2 is undone, waiting for a redo
+
+	const auto undone = call("agent.session.rollback");
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.value.at("rolled_back").as_uint64() == 1u);
+	BOOST_TEST(undone.value.at("remaining").as_uint64() == 0u);
+	BOOST_TEST(!undone.value.at("open").as_bool());
+	BOOST_TEST(name(0) == "a");
+	BOOST_TEST(name(1) == "b");
+	BOOST_TEST(!scene.history().can_redo());
+}
+
+BOOST_AUTO_TEST_CASE(steps_over_the_history_limit_stay_and_are_counted)
+{
+	scene.history().set_limit(1);
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"Tidy up"})").ok);
+	BOOST_REQUIRE(rename(A, "a2").ok);
+	BOOST_REQUIRE(call("agent.session.checkpoint").ok);
+	BOOST_REQUIRE(rename(B, "b2").ok);
+
+	const auto undone = call("agent.session.rollback");
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.value.at("rolled_back").as_uint64() == 1u);
+	BOOST_TEST(undone.value.at("unavailable").as_uint64() == 1u);
+	BOOST_TEST(name(0) == "a2");
+	BOOST_TEST(name(1) == "b");
+}
+
+BOOST_AUTO_TEST_CASE(a_conflict_on_a_node_the_person_deleted_has_no_ref)
+{
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"Tidy up"})").ok);
+	BOOST_REQUIRE(rename(B, "agent b").ok);
+	auto& children = scene.world_descs[0].get_root().children;
+	children.erase(children.begin() + 1);
+	scene.commit("Delete node");
+
+	const auto undone = call("agent.session.rollback");
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.value.at("open").as_bool());
+	const auto& at = undone.value.at("stopped_at").as_object();
+	BOOST_TEST(at.at("key").as_string() == "node:0:0000000000000014");
+	BOOST_TEST(at.at("label").as_string() == "Delete node");
+	BOOST_TEST(!at.contains("ref"));
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_stops_at_another_sessions_edit_of_the_same_node)
+{
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"One"})", cmd::origin::agent("s1")).ok);
+	BOOST_REQUIRE(rename(B, "one", cmd::origin::agent("s1")).ok);
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"Two"})", cmd::origin::agent("s2")).ok);
+	BOOST_REQUIRE(rename(B, "two", cmd::origin::agent("s2")).ok);
+
+	const auto undone = call("agent.session.rollback", "{}", cmd::origin::agent("s1"));
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.value.at("open").as_bool());
+	BOOST_TEST(undone.value.at("rolled_back").as_uint64() == 0u);
+	BOOST_TEST(undone.value.at("stopped_at").at("label").as_string() == "Two");
+	BOOST_TEST(name(1) == "two");
+}
+
+BOOST_AUTO_TEST_CASE(remaining_counts_the_steps_the_rollback_did_not_reach)
+{
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"Tidy up"})").ok);
+	BOOST_REQUIRE(rename(A, "agent a").ok);
+	BOOST_REQUIRE(call("agent.session.checkpoint").ok);
+	BOOST_REQUIRE(rename(B, "agent b").ok);
+	BOOST_REQUIRE(call("agent.session.checkpoint").ok);
+	BOOST_REQUIRE(rename(C, "agent c").ok);
+	person_renames(1, "person b");
+
+	const auto undone = call("agent.session.rollback");
+	BOOST_REQUIRE_MESSAGE(undone.ok, undone.error);
+	BOOST_TEST(undone.value.at("rolled_back").as_uint64() == 1u);
+	BOOST_TEST(undone.value.at("remaining").as_uint64() == 2u); // step 2 stopped, step 1 not reached
+	BOOST_TEST(name(0) == "agent a");
+	BOOST_TEST(name(2) == "c");
+}
+
+BOOST_AUTO_TEST_CASE(an_edit_folded_into_a_record_from_before_the_save_is_marked)
+{
+	BOOST_REQUIRE(call("agent.session.begin", R"({"label":"Tidy up"})").ok);
+	BOOST_REQUIRE(rename(A, "a2").ok);
+	person_renames(1, "person b");
+	scene.mark_clean();
+	BOOST_REQUIRE(scene.undo()); // the person's: the session's record is on top again
+
+	BOOST_REQUIRE(rename(C, "c2").ok);
+	BOOST_TEST(scene.history().size() == 1u); // folded into the session's record
+	BOOST_TEST(marked(30));
+	BOOST_TEST(!marked(10)); // saved
+}
+
+BOOST_AUTO_TEST_CASE(a_reorder_marks_the_node_that_was_moved)
+{
+	{
+		edt::edit_origin_scope scope(scene, cmd::origin::agent("s1"));
+		auto& children = scene.world_descs[0].get_root().children;
+		std::rotate(children.begin(), children.begin() + 1, children.end()); // a goes last
+		scene.commit("Move node");
+	}
+	BOOST_TEST(marked(10));
+	BOOST_TEST(!marked(20));
+	BOOST_TEST(!marked(30));
+	BOOST_TEST(!marked(40));
+}
+
+BOOST_AUTO_TEST_CASE(an_edit_redone_after_an_accept_is_marked_and_after_a_save_is_not)
+{
+	BOOST_REQUIRE(rename(A, "a2").ok);
+	BOOST_REQUIRE(scene.undo());
+	scene.accept_agent_changes();
+	BOOST_REQUIRE(scene.redo());
+	BOOST_TEST(marked(10)); // not what the person accepted
+
+	scene.mark_clean();
+	BOOST_REQUIRE(scene.undo());
+	BOOST_REQUIRE(scene.redo());
+	BOOST_TEST(!marked(10)); // back at what was saved
 }
 
 BOOST_AUTO_TEST_SUITE_END()

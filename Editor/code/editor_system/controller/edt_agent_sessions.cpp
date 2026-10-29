@@ -92,14 +92,14 @@ std::vector<edt::registration> edt::agent_sessions::register_commands(cmd::comma
 		state_result, true, &agent_sessions::checkpoint);
 	add("agent.session.end", "Close the session; its edits stay as they are (and can still be undone one record at a time)",
 		no_args, state_result, true, &agent_sessions::end);
-	add("agent.session.rollback", "Undo the session's edits, newest first; stops before an edit whose node a person changed after it (stopped_at) and then leaves the session open",
+	add("agent.session.rollback", "Undo the session's edits, newest first; stops before an edit whose node someone else (a person, another session) changed after it (stopped_at) and then leaves the session open",
 		no_args,
 		R"({"type":"object","properties":{
 			"rolled_back":{"type":"integer"},"remaining":{"type":"integer","description":"edits still applied: the rollback stopped before them"},
 			"unavailable":{"type":"integer","description":"edits that went over the history limit and stay applied"},
 			"open":{"type":"boolean","description":"the session is still open (it stopped at a conflict)"},
 			"failed":{"type":"boolean","description":"undoing threw: the history was cleared"},
-			"stopped_at":{"type":"object","properties":{"key":{"type":"string"},"label":{"type":"string","description":"the person's edit in the way"},
+			"stopped_at":{"type":"object","properties":{"key":{"type":"string"},"label":{"type":"string","description":"the label of the later edit in the way: a person's, or a step of another session"},
 				"ref":{"type":"object","description":"the node, as node.get takes it"}},"required":["key"]}},
 			"required":["rolled_back","remaining","open"]})",
 		true, &agent_sessions::rollback);
@@ -137,6 +137,10 @@ void edt::agent_sessions::session_closed(const std::string& session_id)
 
 cmd::result edt::agent_sessions::begin(const cmd::call& call)
 {
+	// A person's (or a script's) edits in a session would be undone by its rollback without anyone seeing it coming.
+	if (call.from.kind != cmd::origin_kind::agent && call.from.kind != cmd::origin_kind::test) {
+		return cmd::result::failure(cmd::codes::denied, "a session is for agents: the caller is not one");
+	}
 	const std::string key = key_of(call.from);
 	end_session(key, call.from);
 	session opened;
@@ -193,6 +197,18 @@ cmd::result edt::agent_sessions::rollback(const cmd::call& call)
 		current->groups.pop_back();
 	}
 
+	if (stopped) {
+		// The steps before the one it stopped in were not reached: all of their edits are still there.
+		const auto& history = scene.history();
+		for (std::size_t g = 0; g + 1 < current->groups.size(); ++g) {
+			for (const history_record& record : history.records()) {
+				if (record.group == current->groups[g]) {
+					remaining += record.changes.size();
+				}
+			}
+			unavailable += history.evicted(current->groups[g]);
+		}
+	}
 	out["rolled_back"] = rolled_back;
 	out["remaining"] = remaining;
 	out["unavailable"] = unavailable;
