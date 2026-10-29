@@ -1,115 +1,86 @@
 # EPIC-15: Command Pattern — Undo/Redo
 
 **Theme:** editor
-**Status:** planned
+**Status:** in progress
 **Issue:** [#29](https://github.com/Prorok1015/OpenGL_Engine/issues/29)
 **Depends on:** EPIC-08, EPIC-09 (операции через desc — легко обернуть в команды)
 
 ## Цель
 
-Undo/Redo для всех структурных операций над сценой через Command Pattern.
+Undo/Redo для всех правок сцены: история на диффах состояния (см. «Архитектура»).
 Горячие клавиши Ctrl+Z / Ctrl+Y.
 
 ---
 
 ## Архитектура
 
-Все мутации `m_world_desc` проходят через `edt::command_manager`:
+**Решение владельца (2026-10-29):** история на диффах, а не на классах команд. Первоначальный план (`edt::command` с
+`execute/undo` и по классу на операцию: `cmd_add_node`, `cmd_delete_node`, `cmd_transform`, `cmd_set_field`, ...)
+отклонён: каждая новая правка (инспектор, гизмо, агент, A5-команды) требовала бы своего класса, и любая правка мимо
+класса молча ломала бы undo. Вместо этого документ сравнивает своё состояние с последним коммитом, и всё, что прошло
+через `scene_document::commit()`, попадает в историю само.
 
-```cpp
-// Editor/code/editor_system/edt_command_manager.h
+### Общая история: `document_history` (`snk/editor/edt_document_history.h`)
 
-namespace edt {
+Не знает типа документа (сцена сейчас, data-документы #146 потом):
 
-    class command {
-    public:
-        virtual ~command() = default;
-        virtual void execute() = 0;
-        virtual void undo()    = 0;
-        virtual std::string description() const = 0;
-    };
+- `history_change` — разница одной правки: `undo()`, `redo()`, `keys()` (что изменено: узел, поле; две правки
+  конфликтуют, если у них общий ключ);
+- `history_record` — `id`, `label` (имя в меню Edit), `origin` (`cmd::origin`: ui / test / agent+session / game),
+  список `history_change`, `group`;
+- `document_history` — записи и позиция: `record(label, origin, change)` (null = ничего не изменилось, не пишется;
+  отменённое (redo) отбрасывается), `undo()/redo()`, `next_undo()/next_redo()`, лимит (по умолчанию 100, старые
+  уходят первыми), `clear()`.
+- **Save-point**: `mark_saved()` запоминает id верхней записи, `is_at_save_point()` — вернулись ли к ней undo/redo.
+  Если сохранённая запись отброшена (отменена и заменена новой правкой, ушла за лимит, откачена), сохранённого
+  состояния в истории больше нет.
 
-    class command_manager {
-    public:
-        void execute(std::unique_ptr<command> cmd);  // execute + push to history
-        void undo();
-        void redo();
-        bool can_undo() const;
-        bool can_redo() const;
-        void clear();
+### Группы и `rollback_group`
 
-        // Для отображения в UI (история команд)
-        const std::deque<std::unique_ptr<command>>& history() const;
+- `begin_group(label, origin)` открывает группу origin'а (сессии агента), `end_group(id)` закрывает, `open_group(origin)`.
+- Пока никто другой не правит, правки группы складываются в одну запись (одна строка в Undo). Правка другого origin'а
+  между ними — следующая правка группы начинает новую запись той же группы после неё: undo остаётся линейным.
+- `rollback_group(id)` откатывает применённые правки группы от новых к старым и удаляет их из истории. Останавливается
+  перед правкой, чей ключ поменяла более поздняя запись другого origin'а (человек переименовал тот же узел): правку
+  человека никогда не откатывает и не перетирает. Результат: `rolled_back`, `remaining`, `conflict_key`,
+  `conflict_label`. Отменённые (redo) записи отбрасываются; если что-то откачено, save-point сбрасывается; без
+  конфликта группа закрывается.
 
-    private:
-        std::deque<std::unique_ptr<command>> m_undo_stack;  // max ~50
-        std::deque<std::unique_ptr<command>> m_redo_stack;
-        static constexpr size_t MAX_HISTORY = 50;
-    };
-}
-```
+### Сцена: дифф по node id (`controller/edt_scene_history.h`)
 
----
+- `scene_history_index` — на каждый мир: `node_id → {parent, previous (сосед перед ним), depth, узел без детей}`.
+  Узел без детей (shallow): `name`, transform, `has_transform`, override records и по компоненту `type_name`,
+  `parent_desc` (по тегу) и JSON `overrides`; `edits` (`comp_edit`) не входят — они строятся только при раскрытии.
+- `commit()` обходит миры, сравнивает каждый узел с индексом и копирует только изменённые; удалённые — те, что есть
+  в индексе, но не встретились. Одна запись = один `scene_change` с ключами `node:<world>:<id016x>`; узел, у которого
+  поменялось только место среди неизменных соседей (сосед перед ним появился или исчез), меняется, но ключа не даёт.
+- Применение (undo/redo): узлы, которые остаются, ставятся по глубине (родители раньше детей), внутри одной
+  глубины — после своего предыдущего соседа; затем удаляются уходящие. Индекс обновляется вместе с мирами.
+- Счётчики `last_commit_stats()`: `nodes_compared`, `snapshots_copied`, `changes`. На 2000 узлах правка одного поля —
+  compared = все, copied = 1, changes = 1; удаление поддерева из k узлов — changes = k (состояния переезжают из
+  индекса, не копируются).
 
-## Команды
+### `scene_document`
 
-### `cmd_add_node` — добавить узел
+- `is_dirty() = m_unrecorded || !history.is_at_save_point()` — undo до сохранённого состояния делает документ чистым.
+- `commit(label, push)`: дифф → `history.record(label, edit_origin(), change)`; без изменений — ничего (и dirty не
+  меняется). Если сравнить нельзя (узел без id, id дважды, другое число миров) — правка помечается как «не в истории»
+  (`m_unrecorded`), история очищается, индекс строится заново.
+- `undo()/redo()/rollback_group()` вызывают `set_before_history_apply` (указатели в миры, выделение, устаревают),
+  применяют историю и пушат как коммит (`touch_descs`, pusher, `document_changed`).
+- `edit_origin_scope(scene, origin)` — RAII: правки внутри записываются от имени origin'а (сессия агента).
 
-```cpp
-struct cmd_add_node : edt::command {
-    scn::prefab_desc::prefab_node node_snapshot;  // копия добавляемого узла
-    std::string parent_path;  // путь в дереве до родителя (или root)
+### Границы истории
 
-    void execute() override { /* добавить в m_world_desc + serialize_and_push */ }
-    void undo()    override { /* удалить из m_world_desc + serialize_and_push */ }
-};
-```
+История очищается (`reset_history()`, dirty сохраняется) и начинается с текущих миров:
 
-### `cmd_delete_node` — удалить узел
+- загрузка уровня и New level (`populate_worlds_from_level`);
+- изменение списка миров — `commit(commit_mode::state_only)` (Create world, New level) — граница, а не запись;
+- перечитывание уровня с диска (`apply_world_resync`);
+- уход уровня из game layer (`detach_from_game_layer`) и сборка в новом (`attach_to_game_layer`).
 
-```cpp
-struct cmd_delete_node : edt::command {
-    scn::prefab_desc::prefab_node node_snapshot;  // полная копия удалённого узла
-    std::string parent_path;
-    size_t index;  // позиция в children для восстановления
-
-    void execute() override { /* удалить */ }
-    void undo()    override { /* вставить обратно на ту же позицию */ }
-};
-```
-
-### `cmd_transform` — изменение трансформа
-
-```cpp
-struct cmd_transform : edt::command {
-    std::string node_name;
-    glm::vec3 old_pos, new_pos;
-    glm::vec3 old_rot, new_rot;
-    glm::vec3 old_scale, new_scale;
-
-    void execute() override { /* применить new_* */ }
-    void undo()    override { /* применить old_* */ }
-};
-```
-
-### `cmd_set_field` — изменение поля компонента (из Inspector)
-
-```cpp
-struct cmd_set_field : edt::command {
-    std::string node_name;
-    std::string comp_key;
-    std::string field_key;
-    boost::json::value old_value;
-    boost::json::value new_value;
-
-    void execute() override { /* overrides[field_key] = new_value + on_node_changed */ }
-    void undo()    override { /* overrides[field_key] = old_value + on_node_changed */ }
-};
-```
-
-### `cmd_rename_node`, `cmd_reparent_node`, `cmd_duplicate_node`
-
-Аналогично — снапшот до/после + serialize_and_push.
+Перед сохранением живые трансформы пишутся в desc (`sync_ecs_transforms_to_desc`) — это `rebase_history()`: индекс
+берёт миры как есть, без записи.
 
 ---
 
@@ -133,7 +104,7 @@ Edit
   └── Redo <desc>   Ctrl+Y
 ```
 
-`<desc>` = `command::description()` последней команды.
+`<desc>` = `history_record::label` записи, которую применит Undo/Redo (`next_undo()/next_redo()`).
 
 ### История в Console Panel (опционально)
 
@@ -144,18 +115,17 @@ Edit
 
 ## Особые случаи
 
-- **Transform drag** — генерирует одну команду при `mouse release` (не на каждый кадр)
-- **Batch операции** — удаление нескольких узлов = одна команда `cmd_delete_batch`
-- **Save** — НЕ очищает историю (можно undo после сохранения в рамках сессии)
-- **Load level** / **New level** — очищает историю (`command_manager::clear()`)
+- **Transform drag** — один коммит при `mouse release` (не на каждый кадр) = одна запись
+- **Batch операции** — удаление нескольких узлов = один коммит = одна запись
+- **Save** — НЕ очищает историю: `mark_clean()` ставит save-point, undo после сохранения возможен
+- **Load level** / **New level** / новый мир — граница истории (`reset_history()`)
 
 ---
 
 ## Критерии готовности
 
-- [ ] `command_manager` реализован с undo/redo стеком (макс. 50 шагов)
+- [ ] `document_history` + дифф сцены: undo/redo, лимит, save-point, группы, `rollback_group` (#141–#144)
 - [ ] Ctrl+Z / Ctrl+Y работают в редакторе
-- [ ] Add node, Delete node, Transform commit обёрнуты в команды
-- [ ] Inspector field change создаёт `cmd_set_field`
-- [ ] Меню Edit → Undo/Redo с описанием последней команды
+- [ ] Add/Delete/Duplicate/Reparent/Rename, Transform commit и правка в Inspector — каждая одна запись истории
+- [ ] Меню Edit → Undo/Redo с именем записи (#145)
 - [ ] Load/New level очищает историю

@@ -1,6 +1,9 @@
 #pragma once
 #include "edt_editor_camera.h"
+#include "edt_scene_history.h"
+#include <snk/command/cmd_types.h>
 #include <snk/editor/edt_document.h>
+#include <snk/editor/edt_document_history.h>
 #include <snk/resource/res_tag.h>
 #include <snk/scene/level/scn_world_desc.h>
 #include <cstdint>
@@ -56,14 +59,35 @@ namespace edt
 			return has_active_world() && active_world_idx < static_cast<int>(world_names.size()) ? &world_names[active_world_idx] : nullptr;
 		}
 
-		// Every edit of the level ends here: marks the document dirty, bumps the generation, pushes the descs to the
-		// level (commit_mode::push) and tells document_changed. The generation grows by exactly one per commit (the pusher
-		// must not bump it again). `label` names the edit for the log now and for the Edit menu once edits are undoable.
-		// A push that finds nothing to push to (no level loaded) does not announce; commit_mode::state_only never does.
+		// Every edit of the level ends here: bumps the generation, records what the edit changed in the history (the
+		// worlds are compared with the last commit by node id, #141), pushes the descs to the level (commit_mode::push)
+		// and tells document_changed. The generation grows by exactly one per commit (the pusher must not bump it again).
+		// `label` names the edit in the log and the Edit menu. A push that finds nothing to push to (no level loaded) does
+		// not announce; commit_mode::state_only never does, and is a boundary of the history (the world list changed).
 		void commit(std::string_view label, commit_mode mode = commit_mode::push);
 		// Announces document_changed for the current generation; commit does it after the push.
 		void notify_changed();
-		void mark_clean() { m_dirty = false; }
+		// The document is as saved: undo or redo back to here makes it clean again (#144).
+		void mark_clean();
+
+		// The undo history (#141): commits record into it, undo/redo/rollback below apply it and push like a commit.
+		document_history& history() { return m_history; }
+		const document_history& history() const { return m_history; }
+		bool undo();
+		bool redo();
+		rollback_result rollback_group(std::uint64_t group);
+		// Forgets the history and takes the worlds as they are now as its start: after a load, a level reload, the game
+		// layer letting go of the level. Dirty stays as it was.
+		void reset_history();
+		// Takes the worlds as they are now without recording a change (the live transforms written back before a save).
+		void rebase_history();
+		// Runs before undo, redo or a rollback changes the worlds: pointers into them (the selection) go stale.
+		void set_before_history_apply(std::function<void()> fn) { m_before_apply = std::move(fn); }
+		// Who makes the edits committed now; edits of an agent are recorded as its (AI_INTEGRATION.md §3.4).
+		const cmd::origin& edit_origin() const { return m_origin; }
+		cmd::origin exchange_edit_origin(cmd::origin origin) { return std::exchange(m_origin, std::move(origin)); }
+		// What the last commit compared and copied.
+		const scene_commit_stats& last_commit_stats() const { return m_last_stats; }
 
 		// Set by scene_editor, which knows how to reload a world from its desc. Returns false when it did nothing.
 		void set_pusher(std::function<bool()> pusher) { m_pusher = std::move(pusher); }
@@ -79,17 +103,41 @@ namespace edt
 		std::string_view kind() const override { return "scene"; }
 		const std::string& title() const override { return level_name; }
 		const res::tag& source() const override { return level_tag; }
-		bool is_dirty() const override { return m_dirty; }
+		bool is_dirty() const override { return m_unrecorded || !m_history.is_at_save_point(); }
 		std::uint64_t generation() const override { return desc_generation; }
 		bool can_save() const override { return editor_tag.is_valid() && m_save != nullptr; }
 		save_result save() override;
 		save_result save_as(const res::tag& target) override;
 
 	private:
-		bool m_dirty = false;
+		void record_edit(std::string_view label);
+		void finish_apply();
+
+		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
+		bool m_unrecorded = false;
+		document_history m_history;
+		scene_history_index m_index;
+		scene_commit_stats m_last_stats;
+		cmd::origin m_origin = cmd::origin::ui();
+		std::function<void()> m_before_apply;
 		editor_events* m_events = nullptr;
 		std::function<bool()> m_pusher;
 		std::function<bool()> m_save;
 		std::function<bool(const res::tag&)> m_save_as;
+	};
+
+	// Edits committed while it lives are made by `origin` (an agent's session).
+	class edit_origin_scope
+	{
+	public:
+		edit_origin_scope(scene_document& document, cmd::origin origin)
+			: m_document(document), m_previous(document.exchange_edit_origin(std::move(origin))) {}
+		~edit_origin_scope() { m_document.exchange_edit_origin(std::move(m_previous)); }
+		edit_origin_scope(const edit_origin_scope&) = delete;
+		edit_origin_scope& operator=(const edit_origin_scope&) = delete;
+
+	private:
+		scene_document& m_document;
+		cmd::origin m_previous;
 	};
 }
