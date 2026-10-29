@@ -11,6 +11,8 @@
 
 namespace edt
 {
+	class session_grants;
+
 	// What an agent may do without asking, with a confirmation, or not at all (A6b #293, A6c #449; AI_INTEGRATION.md,
 	// section 5). One mode per command category, overridable per command, in two layers that combine by "the stricter wins":
 	//  - the project's policy, <project>/.snk/agent_policy.json, committed, written only by a person through the settings
@@ -134,9 +136,13 @@ namespace edt
 		cmd::policy_decision decide(const cmd::command_desc& command, const cmd::call& request) override;
 		bool can_ask() const override { return m_can_ask; }
 		void set_can_ask(bool value) { m_can_ask = value; }
+		// "Allow until this agent session ends": an `ask` for a category the agent's session was granted is an allow.
+		// A deny stays a deny. null: no grants.
+		void set_session_grants(const session_grants* grants) { m_grants = grants; }
 
 	private:
 		agent_policy& m_policy;
+		const session_grants* m_grants = nullptr;
 		bool m_can_ask = false;
 	};
 }
