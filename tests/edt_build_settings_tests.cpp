@@ -64,6 +64,9 @@ BOOST_AUTO_TEST_CASE(Defaults)
 	BOOST_CHECK(settings.reload_after_build);
 	BOOST_CHECK(!settings.build_before_play);
 	BOOST_CHECK(settings.log_verbosity == edt::log_verbosity::normal);
+	BOOST_CHECK(!settings.live_enabled);
+	BOOST_CHECK_EQUAL(settings.live_quiet_ms, 3000);
+	BOOST_CHECK_EQUAL(settings.live_jobs, 0);
 
 	const auto parsed = edt::parse_build_settings("{}");
 	BOOST_CHECK(parsed.warnings.empty());
@@ -138,6 +141,48 @@ BOOST_AUTO_TEST_CASE(NullValues_AreTheDefaultsSilently)
 {
 	const auto parsed = edt::parse_build_settings(R"({"configuration":null,"jobs_mode":null,"reload_after_build":null,
 		"build_before_play":null,"log_verbosity":null})");
+	BOOST_CHECK(parsed.warnings.empty());
+	BOOST_CHECK(same(parsed.settings, edt::build_settings{}));
+}
+
+BOOST_AUTO_TEST_CASE(Live_ParsesMergesAndRoundTrips)
+{
+	const auto parsed = edt::parse_build_settings(R"({"live_enabled":true,"live_quiet_ms":0,"live_jobs":1024})");
+	BOOST_CHECK(parsed.warnings.empty());
+	BOOST_CHECK(parsed.settings.live_enabled);
+	BOOST_CHECK_EQUAL(parsed.settings.live_quiet_ms, 0);
+	BOOST_CHECK_EQUAL(parsed.settings.live_jobs, 1024);
+
+	boost::json::value doc = boost::json::parse(R"({"note":"mine"})");
+	edt::build_settings settings;
+	settings.live_enabled = true;
+	settings.live_quiet_ms = 600000;
+	settings.live_jobs = 3;
+	edt::merge_build_settings(doc, settings);
+	const auto& object = doc.as_object();
+	BOOST_CHECK(object.at("note").as_string() == "mine");
+	BOOST_CHECK(object.at("live_enabled").as_bool());
+	BOOST_CHECK_EQUAL(object.at("live_quiet_ms").as_int64(), 600000);
+	BOOST_CHECK_EQUAL(object.at("live_jobs").as_int64(), 3);
+	BOOST_CHECK(same(edt::parse_build_settings(boost::json::serialize(doc)).settings, settings));
+}
+
+BOOST_AUTO_TEST_CASE(Live_BadValuesWarnAndDefault_NullIsTheDefault)
+{
+	for (const char* text : {
+		R"({"live_enabled":1,"live_quiet_ms":-1,"live_jobs":1025})",
+		R"({"live_enabled":"yes","live_quiet_ms":600001,"live_jobs":-3})",
+		R"({"live_enabled":[],"live_quiet_ms":"3000","live_jobs":2.5})" }) {
+		const auto parsed = edt::parse_build_settings(text);
+		BOOST_CHECK_EQUAL(parsed.warnings.size(), 3u);
+		BOOST_CHECK(same(parsed.settings, edt::build_settings{}));
+		for (const std::string key : { "live_enabled", "live_quiet_ms", "live_jobs" }) {
+			BOOST_CHECK_MESSAGE(std::any_of(parsed.warnings.begin(), parsed.warnings.end(),
+				[&key](const std::string& warning) { return warning.find(key) != std::string::npos; }), key);
+		}
+	}
+
+	const auto parsed = edt::parse_build_settings(R"({"live_enabled":null,"live_quiet_ms":null,"live_jobs":null})");
 	BOOST_CHECK(parsed.warnings.empty());
 	BOOST_CHECK(same(parsed.settings, edt::build_settings{}));
 }
