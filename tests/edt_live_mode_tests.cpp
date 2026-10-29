@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_live_mode.h"
+#include "edt_agent_confirmations.h"
 #include "edt_build_settings_model.h"
 #include "edt_mcp_bridge_host.h"
 #include "test_manual_tasks.hpp"
@@ -44,7 +45,9 @@ struct live_mode_fixture
 	cmd::command_registry commands;
 	edt::action_registry actions{ commands };
 	cmd::main_thread_queue queue{ commands, tasks };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks };
+	edt::session_grants grants;
+	edt::agent_confirmations confirmations{ commands, grants };
+	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
 	edt::problem_list problems;
 	edt::editor_events events;
 	std::vector<cmd::registration> registrations;
