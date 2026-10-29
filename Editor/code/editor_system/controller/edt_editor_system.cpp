@@ -478,7 +478,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const int port = cfg_agent_server_port;
 		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
 		const int idle_minutes = cfg_agent_session_idle_minutes;
-		options.session_idle_timeout = std::chrono::minutes{ std::max(idle_minutes, 0) };
+		// More than a week is the same as never, and keeps the minutes far from overflowing the clock's nanoseconds.
+		constexpr int never_after_minutes = 7 * 24 * 60;
+		options.session_idle_timeout = std::chrono::minutes{ (idle_minutes > never_after_minutes) ? 0 : std::max(idle_minutes, 0) };
 		const std::string project_dir = cfg_project_dir;
 		options.project_dir = agent_project_dir(project_dir, data.has_value<prj::project_context>()
 			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);

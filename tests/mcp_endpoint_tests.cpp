@@ -812,6 +812,43 @@ BOOST_AUTO_TEST_CASE(IdleSession_IsClosedThroughTheHostAndOthersStay)
 	BOOST_TEST(host.closed_sessions().size() == 2u);
 }
 
+BOOST_AUTO_TEST_CASE(IdleSessionWithAnOpenEventStream_IsKeptUntilTheStreamCloses)
+{
+	fake_host host;
+	mcp::endpoint_config config = make_config();
+	config.session_idle_timeout = std::chrono::minutes(30);
+	std::chrono::steady_clock::time_point current{};
+	config.clock = [&current] { return current; };
+	mcp::endpoint ep(host, config);
+	ep.set_port(test_port);
+
+	std::optional<mcp::http_response> opened;
+	ep.handle(make_request("POST", rpc("1", "initialize", R"({"protocolVersion":"2025-06-18"})")),
+		[&opened](mcp::http_response r) { opened = std::move(r); });
+	std::string session;
+	for (const mcp::http_header& h : opened->headers) {
+		if (h.name == "Mcp-Session-Id") {
+			session = h.value;
+		}
+	}
+	mcp::http_request listen = make_request("GET", "");
+	set_header(listen, "mcp-session-id", session);
+	set_header(listen, "accept", "text/event-stream");
+	std::shared_ptr<mcp::event_channel> stream;
+	ep.handle(listen, [&stream](mcp::http_response r) { stream = std::move(r.stream); });
+	BOOST_REQUIRE(stream != nullptr);
+
+	current += std::chrono::hours(5);
+	ep.expire_idle_sessions();
+	BOOST_TEST(ep.session_count() == 1u);
+	BOOST_TEST(host.closed_sessions().empty());
+
+	stream->close();
+	ep.expire_idle_sessions();
+	BOOST_TEST(ep.session_count() == 0u);
+	BOOST_TEST(host.closed_sessions() == std::vector<std::string>{ session });
+}
+
 BOOST_AUTO_TEST_CASE(IdleTimeoutZero_NeverExpires)
 {
 	fake_host host;

@@ -612,6 +612,7 @@ BOOST_AUTO_TEST_CASE(ItIsReadOnlyAndAllowedById)
 	BOOST_TEST(!desc->mutates);
 	BOOST_TEST((desc->risk == cmd::danger::none));
 	BOOST_TEST(edt::agent_may_use(*desc));
+	BOOST_TEST((desc->category == cmd::agent_category::read));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

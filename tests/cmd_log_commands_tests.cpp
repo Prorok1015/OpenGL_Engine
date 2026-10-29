@@ -62,6 +62,7 @@ BOOST_AUTO_TEST_CASE(Registered_WithSchemasAndListedAsATool)
 	BOOST_REQUIRE(registration.active());
 	const cmd::command_desc* desc = commands.find("log.read");
 	BOOST_REQUIRE(desc != nullptr);
+	BOOST_TEST((desc->category == cmd::agent_category::read));
 	BOOST_CHECK(desc->expose_as_tool);
 	BOOST_CHECK(!desc->mutates);
 	BOOST_CHECK(desc->args_schema.as_object().contains("properties"));

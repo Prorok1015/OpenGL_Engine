@@ -163,6 +163,7 @@ BOOST_AUTO_TEST_CASE(Registered_ProblemsListOnly_AndItChangesNothing)
 	BOOST_TEST(registrations.size() == 1u);
 	const cmd::command_desc* desc = commands.find("problems.list");
 	BOOST_TEST_REQUIRE(desc != nullptr);
+	BOOST_TEST((desc->category == cmd::agent_category::read));
 	BOOST_TEST(!desc->mutates);
 	BOOST_TEST((desc->risk == cmd::danger::none));
 }

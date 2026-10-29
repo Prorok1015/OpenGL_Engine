@@ -197,6 +197,7 @@ BOOST_AUTO_TEST_CASE(AllFiveCommandsAreRegisteredReadOnlyAndOfferedToAgents)
 			BOOST_TEST(!command->long_running);
 			BOOST_TEST((command->risk == cmd::danger::none));
 			BOOST_TEST(edt::agent_may_use(*command));
+			BOOST_TEST((command->category == cmd::agent_category::read));
 		}
 	}
 }

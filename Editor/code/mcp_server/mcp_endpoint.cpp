@@ -806,7 +806,9 @@ void mcp::endpoint::expire_idle_sessions() const
 		std::lock_guard lock(m_state->mutex);
 		const auto current = now();
 		for (auto it = m_state->sessions.begin(); it != m_state->sessions.end();) {
-			if (current - it->second.last_used < m_config.session_idle_timeout) {
+			// A client that listens on the event stream is there, whether or not it sends requests.
+			const bool listening = it->second.channel && !it->second.channel->closed();
+			if (listening || current - it->second.last_used < m_config.session_idle_timeout) {
 				++it;
 				continue;
 			}

@@ -589,6 +589,9 @@ namespace mcp::detail
 			acceptor.close(ignored);
 			try {
 				retry_timer.cancel();
+			} catch (...) {
+			}
+			try {
 				sweep_timer.cancel();
 			} catch (...) {
 			}
