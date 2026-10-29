@@ -17,11 +17,13 @@ edt::scene_editor::scene_editor(scene_document& state, editor_services& services
 	, m_services(services)
 {
 	m_state.set_pusher([this] { return serialize_and_push(); });
+	m_state.set_world_reloader([this](std::size_t index) { return reload_world(index); });
 }
 
 edt::scene_editor::~scene_editor()
 {
 	m_state.set_pusher(nullptr);
+	m_state.set_world_reloader(nullptr);
 }
 
 // ─── Entity CRUD ─────────────────────────────────────────────────────────────
@@ -213,29 +215,30 @@ void edt::scene_editor::on_transform_committed(
 
 bool edt::scene_editor::serialize_and_push()
 {
-	if (!m_state.editor_tag.is_valid()) return false;
+	return m_state.has_active_world() && reload_world(static_cast<std::size_t>(m_state.active_world_idx));
+}
+
+bool edt::scene_editor::reload_world(std::size_t index)
+{
+	if (!m_state.editor_tag.is_valid() || index >= m_state.world_descs.size()) return false;
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) return false;
 
-	auto* world_desc = m_state.active_world_desc();
-	if (!world_desc) return false;
-	const std::string world_name = m_state.active_world_name()
-		? *m_state.active_world_name()
-		: std::string(world_desc->get_name());
+	const scn::world_desc& world_desc = m_state.world_descs[index];
+	const std::string world_name = index < m_state.world_names.size()
+		? m_state.world_names[index]
+		: std::string(world_desc.get_name());
 
 	scn::context_set& lvl = ctx_mgr->level_set();
 	if (!lvl.has(world_name))
 		return false;
 
-	{
-		scn::world_context& world = lvl.get(world_name);
-		if (on_save_camera) on_save_camera(world.state());
-	}
+	// The editor camera lives in the active world only.
+	const bool active = static_cast<int>(index) == m_state.active_world_idx;
+	if (active && on_save_camera) on_save_camera(lvl.get(world_name).state());
 	// TODO: Better just save the world on a disk. hot reload system will take care of reloading it in the editor and the game.
-	lvl.reload_context(world_name, *world_desc, *m_services.sfactory(), *m_services.assembler());
-
-	scn::world_context& world = lvl.get(world_name);
-	if (on_inject_camera) on_inject_camera(world.state());
+	lvl.reload_context(world_name, world_desc, *m_services.sfactory(), *m_services.assembler());
+	if (active && on_inject_camera) on_inject_camera(lvl.get(world_name).state());
 
 	return true;
 }

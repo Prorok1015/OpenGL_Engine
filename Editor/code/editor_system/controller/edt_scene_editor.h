@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/scene/level/scn_prefab_desc.h>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -44,6 +45,8 @@ namespace edt
 		// Reloads the active world from its desc. False when there is nothing to push to (no level, no such world).
 		// Edits do not call this directly: scene_document::commit does.
 		bool serialize_and_push();
+		// Reloads world `index` from its desc, the editor camera kept when it is the active one.
+		bool reload_world(std::size_t index);
 		void sync_ecs_transforms_to_desc();
 
 		// Copies a live transform into the node. A node that references a desc and has no transform of its own is
