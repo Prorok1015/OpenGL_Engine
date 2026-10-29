@@ -1102,11 +1102,15 @@ std::filesystem::path res::resource_system::get_resources_path() const {
 }
 
 std::vector<std::filesystem::path> res::resource_system::get_resource_layers() const {
+  return mount_roots(tag::default_protocol());
+}
+
+std::vector<std::filesystem::path> res::resource_system::mount_roots(std::string_view protocol) const {
   if (m_parent) {
-    return m_parent->get_resource_layers();
+    return m_parent->mount_roots(protocol);
   }
   for (const auto &mount : m_mounts) {
-    if (mount.protocol == tag::default_protocol()) {
+    if (mount.protocol == protocol) {
       return mount.roots;
     }
   }

@@ -86,6 +86,9 @@ namespace res
 		std::filesystem::path get_resources_path() const;
 		// Physical roots behind res://, lowest layer first, top (writable) layer last; the same list the vfs resolver mounts.
 		std::vector<std::filesystem::path> get_resource_layers() const;
+		// The folders a table mount of `protocol` serves, lowest priority first; empty when it is not mounted (code://
+		// is mounted only when the project has a code/ folder).
+		std::vector<std::filesystem::path> mount_roots(std::string_view protocol) const;
 
 		// No project open: res:// over resource/base_path (if set) and resource/path, memory:// next to resource/path,
 		// engine:// on resource/base_path (if set).
