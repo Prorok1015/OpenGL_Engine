@@ -32,6 +32,7 @@
 #include "edt_build_jobs.h"
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
+#include "edt_live_mode.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
@@ -162,6 +163,8 @@ edt::editor_system::~editor_system()
 {
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
+	// The layer may outlive this system; its menu bar must not reach live mode any more.
+	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
 	// Gone already (storage torn down without editor_term): its destructor stopped the jobs and let go of the document.
 	if (const std::shared_ptr<edt::editor_context> context = m_context_alive.lock()) {
@@ -417,6 +420,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
 
+	create_live_mode(data);
+
 	m_registrations.push_back(m_context->actions().add({ .id = "build.settings.open", .label = "Build Settings...",
 		.menu_path = "Build", .separator_before = true,
 		.execute = no_args([this] {
@@ -475,6 +480,61 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			? std::optional<std::filesystem::path>{ data.require<prj::project_context>().root } : std::nullopt);
 		m_agent_server = std::make_unique<agent_server>(data.require<cmd::command_registry>(), data.require<ds::task_system>(), std::move(options));
 	}
+}
+
+void edt::editor_system::create_live_mode(ds::app_data_storage& data)
+{
+	const std::optional<std::filesystem::path> snk_dir = data.has_value<prj::project_context>()
+		? std::optional<std::filesystem::path>{ data.require<prj::project_context>().snk_dir() } : std::nullopt;
+	const bool has_code = !m_res.mount_roots(prj::k_code_protocol).empty();
+
+	live_mode_options live;
+	live.build.settings = m_game_builder->options().settings;
+	live.build.make_request = [this](const build_settings& settings) {
+		return make_live_build_request(settings, m_game_builder->options());
+	};
+	live.build.start_build = [this](build_request request) { return m_game_builder->start(std::move(request)); };
+	live.build.is_building = [this] { return m_game_builder->is_building(); };
+	live.build.cancel_build = [this] { m_game_builder->cancel(); };
+	live.build.reload = [this](const std::string& module) { return m_game_reloader->reload_quiet(module); };
+	live.unavailable_reason = [this, has_code] {
+		if (std::string reason = m_game_builder->disabled_reason(); !reason.empty()) return reason;
+		return has_code ? std::string{} : std::string{ "The project has no code folder (code://)" };
+	};
+	if (snk_dir) {
+		live.store_enabled = [this, dir = *snk_dir](bool enabled) {
+			auto problem = update_build_settings(dir,[enabled](build_settings& settings) { settings.live_enabled = enabled; });
+			m_build_settings_panel->refresh_if_clean();
+			return problem;
+		};
+	}
+	live.on_toggled = [this] {
+		if (m_agent_server) m_agent_server->notify_tools_changed();
+	};
+	live.open_problems = [this] {
+		m_context->panels().set_open(m_problems_panel->get_id(), true);
+		ImGui::SetWindowFocus(m_problems_panel->get_title().c_str());
+	};
+	live.open_settings = [this] {
+		m_context->panels().set_open(m_build_settings_panel->get_id(), true);
+		m_build_settings_panel->focus();
+	};
+	m_live_mode = std::make_unique<live_mode>(m_context->problems(), m_context->actions(), std::move(live));
+	m_live_mode->watch(m_res);
+	m_build_settings_panel->set_on_settings_applied([this](const build_settings& settings) { m_live_mode->follow_settings(settings); });
+	m_build_settings_panel->set_live_unavailable_reason([this] { return m_live_mode->unavailable_reason(); });
+	editor_layer->set_menu_bar_status([this] { m_live_mode->draw_status(); });
+
+	if (snk_dir && load_build_settings(*snk_dir).live_enabled) {
+		if (auto refused = m_live_mode->set_enabled(true, false)) {
+			egLOG_WARN("editor/build", "live mode is on in .snk/build.json but stays off: {}", *refused);
+		}
+	}
+}
+
+void edt::editor_system::tick_live_mode()
+{
+	if (m_live_mode) m_live_mode->tick();
 }
 
 void edt::editor_system::create_panels(bool capture_log)
