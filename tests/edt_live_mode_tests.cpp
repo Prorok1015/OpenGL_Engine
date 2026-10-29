@@ -60,6 +60,8 @@ struct live_mode_fixture
 	std::string unavailable;
 	std::vector<bool> stored;
 	int toggled = 0;
+	// game_builder::stop_background calls (never cancel: that would drop a waiting manual build).
+	int stops = 0;
 	std::unique_ptr<edt::live_mode> live;
 
 	void make()
@@ -72,7 +74,10 @@ struct live_mode_fixture
 			return edt::action_result::success(json::object{ { "started", true }, { "job", 7 } });
 		};
 		options.build.is_building = [this] { return building; };
-		options.build.cancel_build = [this] { building = false; };
+		options.build.stop_background = [this] {
+			++stops;
+			building = false;
+		};
 		options.build.is_loaded_current = [this](const std::string& module) { return current.contains(module); };
 		options.build.modules = [] { return std::vector<std::string>{ "game" }; };
 		options.next_frame = [this](const std::string& id, std::function<void()> fn) { frames.emplace_back(id, std::move(fn)); };
@@ -380,6 +385,42 @@ BOOST_AUTO_TEST_CASE(AManualBuildThatSucceeds_ClearsTheLiveErrors)
 	events.game_module_built.emit(built);
 	BOOST_TEST((live->status().state == edt::live_state::idle));
 	BOOST_TEST(live->status().errors == 0);
+}
+
+// "Turn off" stops the live build through stop_background, so a manual build waiting for it is kept by the builder.
+BOOST_AUTO_TEST_CASE(TurningOffDuringALiveBuild_StopsItThroughStopBackground)
+{
+	make();
+	BOOST_REQUIRE(!live->set_enabled(true, false));
+	BOOST_REQUIRE(!live->build().rebuild_now().has_value());
+	BOOST_REQUIRE(building);
+	BOOST_REQUIRE(actions.invoke(edt::live_mode::k_toggle_id, json::object{}).ok);
+	BOOST_TEST(!live->enabled());
+	BOOST_TEST(stops == 1);
+}
+
+// Reload or a define removal stops the live build (editor_system::stop_live_build): the outcome comes as `preempted`
+// and live mode builds the same changes again.
+BOOST_AUTO_TEST_CASE(ALiveBuildStoppedByTheEditor_IsBuiltAgain)
+{
+	make();
+	BOOST_REQUIRE(!live->set_enabled(true, false));
+	live->on_changes(std::vector<res::file_change>{ file_change("code://src/game.cpp") });
+	now += edt::live_build::k_debounce;
+	live->tick();
+	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+
+	edt::build_outcome stopped;
+	stopped.kind = edt::build_outcome::preempted;
+	building = false;
+	starts[0].on_finished(stopped);
+	now += std::chrono::milliseconds(16);
+	live->tick();
+	BOOST_TEST(starts.size() == 1u); // the frame of its end
+	now += std::chrono::milliseconds(16);
+	live->tick();
+	BOOST_TEST(starts.size() == 2u);
+	BOOST_TEST((live->status().state == edt::live_state::building));
 }
 
 BOOST_AUTO_TEST_CASE(AFrameQueuedBeforeLiveModeWasDestroyed_ReloadsNothing)

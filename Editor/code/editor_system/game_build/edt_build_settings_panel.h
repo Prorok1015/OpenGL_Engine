@@ -33,8 +33,8 @@ namespace edt
 		}
 		// build.json was written elsewhere (Build > Live Mode): read the files again unless edits are queued.
 		void refresh_if_clean();
-		// See build_settings_model::set_cancel_background.
-		void set_cancel_background(std::function<void()> cancel) { m_model.set_cancel_background(std::move(cancel)); }
+		// See build_settings_model::set_stop_background.
+		void set_stop_background(std::function<void()> cancel) { m_model.set_stop_background(std::move(cancel)); }
 		// Why live mode cannot be turned on now (empty: it can); null: it always can.
 		void set_live_unavailable_reason(std::function<std::string()> reason) { m_live_unavailable = std::move(reason); }
 

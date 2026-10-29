@@ -306,7 +306,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_manual_build_running(); });
 	// A live build is stopped instead: its configure would clear the --fresh mark that a define removal writes.
-	m_build_settings_panel->set_cancel_background([this] { cancel_live_build(); });
+	m_build_settings_panel->set_stop_background([this] { stop_live_build(); });
 	add_panel(m_build_settings_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
@@ -414,7 +414,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	reload_options.building = [this] { return m_game_builder && m_game_builder->is_manual_build_running(); };
 	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
-	reload_options.cancel_background = [this] { cancel_live_build(); };
+	reload_options.stop_background = [this] { stop_live_build(); };
 	reload_options.events = &m_context->events();
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
@@ -499,7 +499,7 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 	};
 	live.build.start_build = [this](build_request request) { return m_game_builder->start(std::move(request)); };
 	live.build.is_building = [this] { return m_game_builder->is_building(); };
-	live.build.cancel_build = [this] { m_game_builder->cancel(); };
+	live.build.stop_background = [this] { m_game_builder->stop_background(); };
 	// The host appears in the storage after init, like for game_reloader: looked up when used.
 	live.build.is_loaded_current = [&data](const std::string& module) {
 		return data.has_value<core::project_module_host>() && data.require<core::project_module_host>().is_current(module);
@@ -564,13 +564,10 @@ void edt::editor_system::tick_live_mode()
 	if (m_live_mode) m_live_mode->tick();
 }
 
-void edt::editor_system::cancel_live_build()
+void edt::editor_system::stop_live_build()
 {
-	// Only a live build: game_builder::cancel would stop the person's build too.
-	// cancel() also drops a waiting request, which here could be the person's queued manual build.
-	if (m_game_builder && m_game_builder->building_preemptible() && !m_game_builder->manual_request_waiting()) {
-		m_game_builder->cancel();
-	}
+	// Not cancel(): that drops the person's request waiting for the live build and gives live mode no outcome.
+	if (m_game_builder) m_game_builder->stop_background();
 }
 
 void edt::editor_system::create_panels(bool capture_log)

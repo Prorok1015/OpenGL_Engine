@@ -64,9 +64,10 @@ namespace edt
 		// successful configure clears fresh_configure. Null: never.
 		void set_building(std::function<bool()> building) { m_building = std::move(building); }
 		bool is_building() const { return m_building && m_building(); }
-		// Stops a running background (live) build, called by apply() before it writes a --fresh mark: that build would
-		// clear it the same way; live mode builds again by itself. Null: none.
-		void set_cancel_background(std::function<void()> cancel) { m_cancel_background = std::move(cancel); }
+		// Stops a running background (live) build (game_builder::stop_background), called by apply() before it writes
+		// a --fresh mark, so that build does not run on with the old configure; its outcome reaches live mode, which
+		// builds again. A build configuring meanwhile cannot clear the new mark anyway (fresh_generation). Null: none.
+		void set_stop_background(std::function<void()> stop) { m_stop_background = std::move(stop); }
 		// How the files are written; null: prj::write_text_atomically (tests inject failures).
 		void set_writer(prj::text_writer write) { m_write = std::move(write); }
 		// Called by apply() after it wrote build.json, with the settings now in the file (live mode follows
@@ -156,7 +157,7 @@ namespace edt
 		std::string m_default_configuration = "debuggame";
 		jobs_estimate m_estimate{};
 		std::function<bool()> m_building;
-		std::function<void()> m_cancel_background;
+		std::function<void()> m_stop_background;
 		prj::text_writer m_write;
 		std::function<void(const build_settings&)> m_on_settings_applied;
 		std::string m_unavailable = "Open a project first";

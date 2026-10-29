@@ -458,7 +458,7 @@ BOOST_AUTO_TEST_CASE(DuringALiveBuild_ARemovalAppliesAndStopsItFirst)
 	with_user();
 	model.set_building([] { return false; }); // the person's build only
 	int cancels = 0;
-	model.set_cancel_background([&cancels] { ++cancels; });
+	model.set_stop_background([&cancels] { ++cancels; });
 	load();
 
 	BOOST_REQUIRE(!model.set_define("debuggame", "NEW", "x").has_value());
