@@ -1,5 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/scene/level/scn_context_manager.h>
@@ -7,6 +9,7 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_model.h>
 #include <snk/scene/level/scn_level_desc.h>
+#include "edt_edit_menu.h"
 #include "edt_level_controller.h"
 #include "edt_prefab_document.h"
 #include "edt_scene_editor.h"
@@ -347,6 +350,37 @@ BOOST_AUTO_TEST_CASE(PreviewDocument_IsNeverDirtyAndItsCommitsAreTheScenesAlone)
 
 	BOOST_TEST(scene.is_dirty());
 	BOOST_TEST(!prefab.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(EditUndo_FollowsTheActiveDocument)
+{
+	scn::world_desc world;
+	scn::prefab_desc::prefab_node node;
+	node.node_id = 10;
+	node.name = "a";
+	world.get_root().children.push_back(node);
+	scene.world_descs.push_back(std::move(world));
+	scene.reset_history();
+	scene.world_descs[0].get_root().children[0].name = "b";
+	scene.commit("Rename node");
+
+	edt::action_registry actions;
+	edt::dialog_service dialogs;
+	auto registered = edt::register_edit_actions(actions, documents, dialogs, {});
+	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
+
+	// The preview has no history: while it is the active document there is nothing to undo.
+	auto& prefab = documents.open_prefab(prefab_a);
+	BOOST_REQUIRE(prefab.is_open());
+	BOOST_REQUIRE(documents.active() == &prefab);
+	BOOST_TEST(!actions.is_enabled("edit.undo"));
+
+	// Closing it (the prefab editor does on any close of its window) gives the scene back.
+	documents.close(prefab.id());
+	BOOST_REQUIRE(documents.active() == &scene);
+	BOOST_TEST(actions.is_enabled("edit.undo"));
+	BOOST_REQUIRE(actions.invoke("edit.undo", boost::json::object{}).ok);
+	BOOST_TEST(scene.world_descs[0].get_root().children[0].name == "a");
 }
 
 BOOST_AUTO_TEST_CASE(SceneSave_GoesThroughTheHandlersOfTheEditor)

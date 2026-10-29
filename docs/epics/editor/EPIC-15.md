@@ -101,25 +101,29 @@ undo→redo после сохранения вернёт трансформ до
 
 ## Интеграция с UI
 
-### Горячие клавиши
+### Меню Edit и горячие клавиши (#145)
 
-В `edt_dockspace.cpp` (`render_menu_bar`):
-```cpp
-if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false))
-    m_on_undo();
-if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false))
-    m_on_redo();
-```
-
-### Меню Edit
+`controller/edt_edit_menu.h`: `register_edit_actions(actions, documents, gesture_active)`, меню Edit между File и View:
 
 ```
 Edit
-  ├── Undo <desc>   Ctrl+Z
-  └── Redo <desc>   Ctrl+Y
+  ├── Undo <label>   Ctrl+Z
+  └── Redo <label>   Ctrl+Y   (и Ctrl+Shift+Z — скрытое edit.redo_alt)
 ```
 
-`<desc>` = `history_record::label` записи, которую применит Undo/Redo (`next_undo()/next_redo()`).
+- Действия `edit.undo` / `edit.redo` работают с историей **активного документа** (`document_manager::active()`,
+  виртуальные `document::undo/redo/next_undo_entry/next_redo_entry`; у документа без истории — «нечего»), так что
+  data-документы (#146) подключатся без правки меню. Результат `{applied, label?, origin?}` — метка записи как есть
+  и кто её сделал (`ui`/`test`/`agent`/`game`).
+- `<label>` в меню — `history_record::label` записи, которую применит Undo/Redo; правка агента — с « (agent)».
+- Недоступны во время жеста (`gesture_active` = `ImGui::IsAnyItemActive()`), чтобы undo не попал в середину drag,
+  и пока ждёт ответа диалог `dialog_service` (`pending() > 0`: правка ушла бы за модальное окно).
+- Закрытие окна префаба любым способом (кнопка Close, крестик окна, меню View) закрывает его документ, и активным
+  снова становится сцена.
+- `action_ui::yields_to_text_input`: пока текстовое поле держит клавиатуру (`io.WantTextInput`), Ctrl+Z/Ctrl+Y
+  достаются ему (undo набора текста), Ctrl+S и прочие — нет. Подпись пункта меню — `action_ui::dynamic_label`.
+- Перед применением снимается выделение (`set_before_history_apply` в `wire_selection`).
+- Агенту недоступны (`mutates`, без категории агента); агент откатывает свои правки через `agent.session.*` (A5).
 
 ### История в Console Panel (опционально)
 
@@ -139,8 +143,8 @@ Edit
 
 ## Критерии готовности
 
-- [ ] `document_history` + дифф сцены: undo/redo, лимит, save-point, группы, `rollback_group` (#141–#144)
-- [ ] Ctrl+Z / Ctrl+Y работают в редакторе
-- [ ] Add/Delete/Duplicate/Reparent/Rename, Transform commit и правка в Inspector — каждая одна запись истории
-- [ ] Меню Edit → Undo/Redo с именем записи (#145)
-- [ ] Load/New level очищает историю
+- [x] `document_history` + дифф сцены: undo/redo, лимит, save-point, группы, `rollback_group` (#141–#144)
+- [x] Ctrl+Z / Ctrl+Y работают в редакторе (#145)
+- [x] Add/Delete/Duplicate/Reparent/Rename, Transform commit и правка в Inspector — каждая одна запись истории
+- [x] Меню Edit → Undo/Redo с именем записи (#145)
+- [x] Load/New level очищает историю
