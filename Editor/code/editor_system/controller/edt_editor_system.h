@@ -69,6 +69,9 @@ namespace edt {
 
 		// Live mode's frame (#445): the `editor_live` frame stage, after the job pump.
 		void tick_live_mode();
+		// A person is in the middle of an edit: an active ImGui item other than a text field that only has the
+		// keyboard, a value the inspector has not committed yet, a gizmo ring being dragged. An agent's edit waits.
+		bool person_is_editing() const;
 
 	private:
 		editor_context* m_context = nullptr;

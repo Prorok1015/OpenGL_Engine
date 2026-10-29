@@ -46,6 +46,8 @@ namespace edt
 		glm::vec2 get_viewport_pos() const { return m_image_pos; }
 		glm::vec2 get_viewport_size() const { return m_viewport_size; }
 		bool is_focused() const { return m_focused; }
+		// A rotate ring of the gizmo is being dragged (translate and scale handles are active ImGui items).
+		bool is_dragging_gizmo() const { return m_active_ring >= 0; }
 
 		// Wireframe view of the editor camera. A state of this viewport, not of the level: it is not saved.
 		bool wireframe() const { return m_wireframe; }
