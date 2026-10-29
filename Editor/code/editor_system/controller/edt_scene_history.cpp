@@ -44,6 +44,19 @@ namespace {
 		return false;
 	}
 
+	const prefab_node* find_node(const prefab_node& root, std::uint64_t id)
+	{
+		if (root.node_id == id) {
+			return &root;
+		}
+		for (const auto& child : root.children) {
+			if (const auto* found = find_node(child, id)) {
+				return found;
+			}
+		}
+		return nullptr;
+	}
+
 	prefab_node* find_node(prefab_node& root, std::uint64_t id)
 	{
 		if (root.node_id == id) {
@@ -78,7 +91,13 @@ namespace {
 		to.overrides = from.overrides;
 	}
 
-	// The undo record of one commit: the nodes it changed, keyed node:<world>:<id> for conflicts.
+	std::string node_key(std::size_t world, std::uint64_t id)
+	{
+		return std::format("node:{}:{:016x}", world, id);
+	}
+
+	// The undo record of one commit: the nodes it changed, keyed node:<world>:<id> for conflicts. A node that only
+	// moved among its siblings has a key too: undoing the change puts it back, over a later reorder of someone else.
 	class scene_change final : public edt::history_change
 	{
 	public:
@@ -86,15 +105,52 @@ namespace {
 			: m_worlds(worlds), m_index(index), m_changes(std::move(changes))
 		{
 			for (const auto& change : m_changes) {
-				if (!change.positional) {
-					m_keys.push_back(std::format("node:{}:{:016x}", change.world, change.id));
-				}
+				m_keys.push_back(node_key(change.world, change.id));
 			}
 		}
 
 		void undo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, true); }
 		void redo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, false); }
 		const std::vector<std::string>& keys() const override { return m_keys; }
+
+		// Undo removes the nodes the commit created, with everything under them: a node someone else put there
+		// since would go with them.
+		std::optional<std::string> undo_conflict() const override
+		{
+			std::set<std::pair<std::size_t, std::uint64_t>> created;
+			for (const auto& change : m_changes) {
+				if (!change.before) {
+					created.insert({ change.world, change.id });
+				}
+			}
+			for (const auto& [world, id] : created) {
+				if (world >= m_worlds.size()) {
+					continue;
+				}
+				const prefab_node* node = find_node(m_worlds[world].get_root(), id);
+				if (!node) {
+					continue;
+				}
+				std::optional<std::string> foreign;
+				const auto walk = [&](const auto& self, const prefab_node& n) -> void {
+					for (const auto& child : n.children) {
+						if (foreign) {
+							return;
+						}
+						if (!created.contains({ world, child.node_id })) {
+							foreign = node_key(world, child.node_id);
+							return;
+						}
+						self(self, child);
+					}
+				};
+				walk(walk, *node);
+				if (foreign) {
+					return foreign;
+				}
+			}
+			return std::nullopt;
+		}
 
 	private:
 		std::vector<scn::world_desc>& m_worlds;
@@ -127,6 +183,13 @@ bool edt::same_shallow(const scn::prefab_desc::prefab_node& a, const scn::prefab
 		}
 	}
 	return true;
+}
+
+edt::scene_node_state edt::placement_of(const scene_node_state& state, std::uint64_t id)
+{
+	scene_node_state out{ state.parent, state.previous, state.depth, {} };
+	out.node.node_id = id != 0 ? id : state.node.node_id;
+	return out;
 }
 
 bool edt::scene_history_index::rebuild(const std::vector<scn::world_desc>& worlds)
@@ -190,10 +253,12 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 			} else {
 				scene_node_state& old = it->second;
 				const bool same_node = same_shallow(old.node, node);
-				if (!same_node || old.parent != parent || old.previous != previous) {
+				if (!same_node) {
 					++stats.snapshots_copied;
-					changes.push_back({ w, node.node_id, old, scene_node_state{ parent, previous, depth, shallow_copy(node) },
-						same_node && old.parent == parent });
+					changes.push_back({ w, node.node_id, old, scene_node_state{ parent, previous, depth, shallow_copy(node) }, false });
+				} else if (old.parent != parent || old.previous != previous) {
+					// Moved, not edited: only where it sits is kept, so applying it never touches what is in the node.
+					changes.push_back({ w, node.node_id, placement_of(old), placement_of({ parent, previous, depth, {} }, node.node_id), true });
 				} else {
 					// Under a moved parent a node keeps its place among its siblings but not its depth.
 					old.depth = depth;
@@ -228,7 +293,11 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 		return diff_result::unchanged;
 	}
 	for (const auto& entry : changes) {
-		set(entry.world, entry.id, entry.after);
+		if (entry.positional) {
+			set_place(entry.world, entry.id, *entry.after);
+		} else {
+			set(entry.world, entry.id, entry.after);
+		}
 	}
 	change = std::make_unique<scene_change>(worlds, *this, std::move(changes));
 	return diff_result::changed;
@@ -249,6 +318,30 @@ void edt::scene_history_index::refresh_depths(std::size_t world, const scn::worl
 		}
 	};
 	walk(walk, desc.get_root(), 0);
+}
+
+void edt::scene_history_index::set_place(std::size_t world, std::uint64_t id, const scene_node_state& place)
+{
+	if (world >= m_worlds.size()) {
+		return;
+	}
+	if (const auto it = m_worlds[world].find(id); it != m_worlds[world].end()) {
+		it->second.parent = place.parent;
+		it->second.previous = place.previous;
+		it->second.depth = place.depth;
+	}
+}
+
+std::vector<std::size_t> edt::scene_history_index::take_touched()
+{
+	return std::exchange(m_touched, {});
+}
+
+void edt::scene_history_index::touch(std::size_t world)
+{
+	if (std::find(m_touched.begin(), m_touched.end(), world) == m_touched.end()) {
+		m_touched.push_back(world);
+	}
 }
 
 void edt::scene_history_index::set(std::size_t world, std::uint64_t id, const std::optional<scene_node_state>& state)
@@ -312,6 +405,22 @@ void edt::apply_scene_changes(std::vector<scn::world_desc>& worlds, scene_histor
 	for (const auto* change : ordered) {
 		const scene_node_state& state = *target(*change);
 		prefab_node& root = worlds[change->world].get_root();
+		index.touch(change->world);
+		if (change->positional) {
+			node_place place;
+			// Gone (someone deleted it since): nothing to put back.
+			if (state.depth > 0 && find_place(root.children, change->id, place)) {
+				prefab_node* parent = find_node(root, state.parent);
+				const std::uint64_t previous = place.index == 0 ? 0 : (*place.siblings)[place.index - 1].node_id;
+				if (!parent || &parent->children != place.siblings || previous != state.previous) {
+					prefab_node moved = std::move((*place.siblings)[place.index]);
+					place.siblings->erase(place.siblings->begin() + static_cast<std::ptrdiff_t>(place.index));
+					insert_at(root, std::move(moved), state);
+				}
+				index.set_place(change->world, change->id, state);
+			}
+			continue;
+		}
 		if (state.depth == 0) {
 			assign_shallow(root, state.node);
 		} else {
@@ -340,6 +449,7 @@ void edt::apply_scene_changes(std::vector<scn::world_desc>& worlds, scene_histor
 		if (change.world >= worlds.size() || target(change)) {
 			continue;
 		}
+		index.touch(change.world);
 		node_place place;
 		if (find_place(worlds[change.world].get_root().children, change.id, place)) {
 			place.siblings->erase(place.siblings->begin() + static_cast<std::ptrdiff_t>(place.index));

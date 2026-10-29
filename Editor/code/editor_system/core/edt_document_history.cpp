@@ -25,9 +25,15 @@ void edt::document_history::drop_redo()
 void edt::document_history::enforce_limit()
 {
 	while (m_records.size() > m_limit && m_position > 0) {
-		// The saved state stays reachable only while its record is kept, or when nothing below it is left.
-		if (m_saved && *m_saved == m_records.front().id) {
+		const history_record& front = m_records.front();
+		// The state before the front record is gone; the state after it is where undo stops now (top id 0).
+		if (m_saved && *m_saved == 0) {
 			m_saved.reset();
+		} else if (m_saved && *m_saved == front.id) {
+			m_saved = 0;
+		}
+		if (front.group != 0) {
+			m_evicted[front.group] += front.changes.size();
 		}
 		m_records.erase(m_records.begin());
 		--m_position;
@@ -95,6 +101,7 @@ void edt::document_history::clear()
 	m_records.clear();
 	m_position = 0;
 	m_groups.clear();
+	m_evicted.clear();
 	m_saved.reset();
 }
 
@@ -133,6 +140,24 @@ edt::rollback_result edt::document_history::rollback_group(std::uint64_t group)
 		return result;
 	}
 	drop_redo();
+	if (const auto evicted = m_evicted.find(group); evicted != m_evicted.end()) {
+		result.unavailable = evicted->second;
+	}
+	// The label of the latest record of someone else after record `after` that changed `key`.
+	const auto changed_by = [&](const std::string& key, std::size_t after, const std::string& origin) {
+		for (std::size_t r = m_records.size(); r-- > after + 1;) {
+			const auto& other = m_records[r];
+			if (other.group == group || origin_key(other.origin) == origin) {
+				continue;
+			}
+			for (const auto& change : other.changes) {
+				if (std::find(change->keys().begin(), change->keys().end(), key) != change->keys().end()) {
+					return other.label;
+				}
+			}
+		}
+		return std::string{};
+	};
 	const auto shares_key = [](const history_change& a, const history_change& b) {
 		return std::any_of(a.keys().begin(), a.keys().end(), [&](const std::string& key) {
 			return std::find(b.keys().begin(), b.keys().end(), key) != b.keys().end();
@@ -162,6 +187,12 @@ edt::rollback_result edt::document_history::rollback_group(std::uint64_t group)
 					result.conflict_key = *key;
 					result.conflict_label = other.label;
 					break;
+				}
+			}
+			if (!result.conflict_key) {
+				if (auto blocked = change.undo_conflict()) {
+					result.conflict_label = changed_by(*blocked, r, origin_key(entry.origin));
+					result.conflict_key = std::move(blocked);
 				}
 			}
 			if (result.conflict_key) {

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,6 +27,9 @@ public:
 	void undo() override { m_journal.push_back(m_name + "-"); }
 	void redo() override { m_journal.push_back(m_name + "+"); }
 	const std::vector<std::string>& keys() const override { return m_keys; }
+	std::optional<std::string> undo_conflict() const override { return blocked; }
+
+	std::optional<std::string> blocked;
 
 private:
 	std::vector<std::string>& m_journal;
@@ -278,6 +282,67 @@ BOOST_AUTO_TEST_CASE(a_rollback_stops_before_an_edit_someone_changed_after)
 	BOOST_TEST(history.open_group(agent) == group);
 }
 
+BOOST_AUTO_TEST_CASE(the_saved_start_is_gone_once_its_first_edit_went_over_the_limit)
+{
+	history.set_limit(3);
+	for (int i = 0; i < 4; ++i) {
+		history.record("edit", cmd::origin::ui(), change(std::to_string(i)));
+	}
+	while (history.undo()) {
+	}
+	// Edit 0 is still applied and cannot be undone: this is not the state that was saved.
+	BOOST_TEST(!history.is_at_save_point());
+}
+
+BOOST_AUTO_TEST_CASE(a_saved_first_edit_over_the_limit_is_where_undo_stops)
+{
+	history.set_limit(3);
+	history.record("saved", cmd::origin::ui(), change("0"));
+	history.mark_saved();
+	for (int i = 1; i < 4; ++i) {
+		history.record("edit", cmd::origin::ui(), change(std::to_string(i)));
+	}
+	BOOST_TEST(!history.is_at_save_point());
+	while (history.undo()) {
+	}
+	BOOST_TEST(history.is_at_save_point());
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_tells_the_edits_that_went_over_the_limit)
+{
+	history.set_limit(2);
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = history.begin_group("Agent session", agent);
+	history.record("a", agent, change("a"));
+	history.record("human", cmd::origin::ui(), change("h"));
+	history.record("b", agent, change("b"));
+
+	const auto result = history.rollback_group(group);
+
+	BOOST_TEST(result.rolled_back == 1u);
+	BOOST_TEST(result.unavailable == 1u);
+	BOOST_TEST((journal == std::vector<std::string>{ "b-" }), boost::test_tools::per_element());
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_stops_where_the_change_says_something_is_in_the_way)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = history.begin_group("Agent session", agent);
+	auto created = std::make_unique<fake_change>(journal, "a", std::vector<std::string>{ "p" });
+	created->blocked = "c";
+	history.record("a", agent, std::move(created));
+	history.record("human", cmd::origin::ui(), change("h", { "c" }));
+
+	const auto result = history.rollback_group(group);
+
+	BOOST_TEST(result.rolled_back == 0u);
+	BOOST_TEST(result.remaining == 1u);
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "c");
+	BOOST_TEST(result.conflict_label == "human");
+	BOOST_TEST(journal.empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(edt_scene_history_tests, scene_fixture)
@@ -469,6 +534,153 @@ BOOST_AUTO_TEST_CASE(the_agents_edits_roll_back_up_to_the_humans)
 	BOOST_TEST(node(20).name == "human b");
 	BOOST_TEST(node(30).name == "c");
 	BOOST_TEST(find(root(), 60) == nullptr);
+	scene.commit("nothing");
+	BOOST_TEST(scene.last_commit_stats().changes == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_node_the_agent_moved_by_a_delete_keeps_the_humans_rename)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		root().children.erase(root().children.begin() + 2); // c: d moves up behind b
+		scene.commit("delete c");
+	}
+	node(40).name = "human d";
+	scene.commit("rename d");
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_TEST(node(40).name == "human d");
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "node:0:0000000000000028");
+	BOOST_TEST(result.conflict_label == "rename d");
+}
+
+BOOST_AUTO_TEST_CASE(a_reorder_by_the_human_stops_the_rollback_of_the_agents_edit)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		node(20).name = "agent b";
+		scene.commit("rename b");
+	}
+	auto b = node(20);
+	root().children.erase(root().children.begin() + 1);
+	root().children.push_back(std::move(b));
+	scene.commit("move b last");
+	const prefab_node reordered = root();
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "node:0:0000000000000014");
+	BOOST_TEST(result.rolled_back == 0u);
+	BOOST_TEST(same_tree(root(), reordered));
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_never_removes_what_the_human_put_under_the_agents_node)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		root().children.push_back(make_node(60, "agent made"));
+		scene.commit("create");
+	}
+	node(60).children.push_back(make_node(61, "human made"));
+	scene.commit("create under it");
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "node:0:000000000000003d");
+	BOOST_TEST(result.conflict_label == "create under it");
+	BOOST_TEST(find(root(), 60) != nullptr);
+	BOOST_TEST(find(root(), 61) != nullptr);
+	scene.commit("nothing");
+	BOOST_TEST(scene.last_commit_stats().changes == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(a_rollback_never_removes_a_node_the_human_moved_under_the_agents_node)
+{
+	const auto agent = cmd::origin::agent("s1");
+	const auto group = scene.history().begin_group("Agent session", agent);
+	{
+		edt::edit_origin_scope scope(scene, agent);
+		root().children.push_back(make_node(60, "agent made"));
+		scene.commit("create");
+	}
+	auto b = node(20);
+	root().children.erase(root().children.begin() + 1);
+	node(60).children.push_back(std::move(b));
+	scene.commit("move b under it");
+
+	const auto result = scene.rollback_group(group);
+
+	BOOST_REQUIRE(result.conflict_key.has_value());
+	BOOST_TEST(*result.conflict_key == "node:0:0000000000000014");
+	BOOST_TEST(result.conflict_label == "move b under it");
+	BOOST_TEST(find(root(), 20) != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(an_edit_after_an_undo_drops_the_redo)
+{
+	node(20).name = "b2";
+	scene.commit("rename b");
+	BOOST_REQUIRE(scene.undo());
+	node(30).name = "c2";
+	scene.commit("rename c");
+
+	BOOST_TEST(!scene.history().can_redo());
+	BOOST_TEST(node(20).name == "b");
+	BOOST_TEST(node(30).name == "c2");
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(node(30).name == "c");
+	BOOST_TEST(!scene.undo());
+	BOOST_TEST(!scene.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(edits_over_the_limit_leave_the_scene_dirty_at_the_oldest_undo)
+{
+	scene.history().set_limit(3);
+	for (int i = 0; i < 4; ++i) {
+		node(20).name = "b" + std::to_string(i);
+		scene.commit("rename b");
+	}
+	while (scene.undo()) {
+	}
+	BOOST_TEST(node(20).name == "b0");
+	BOOST_TEST(scene.is_dirty());
+}
+
+BOOST_AUTO_TEST_CASE(an_undo_reloads_the_world_it_changed_not_only_the_active_one)
+{
+	scn::world_desc second;
+	second.get_root().node_id = 2;
+	second.get_root().children.push_back(make_node(90, "in world 1"));
+	scene.world_descs.push_back(std::move(second));
+	scene.reset_history();
+	std::vector<std::size_t> reloaded;
+	int pushes = 0;
+	scene.set_pusher([&pushes] { ++pushes; return true; });
+	scene.set_world_reloader([&reloaded](std::size_t world) { reloaded.push_back(world); return true; });
+
+	scene.active_world_idx = 1;
+	scene.world_descs[1].get_root().children[0].name = "renamed in world 1";
+	scene.commit("rename");
+	pushes = 0;
+	scene.active_world_idx = 0;
+
+	BOOST_REQUIRE(scene.undo());
+	BOOST_TEST(scene.world_descs[1].get_root().children[0].name == "in world 1");
+	BOOST_TEST((reloaded == std::vector<std::size_t>{ 1 }), boost::test_tools::per_element());
+	BOOST_TEST(pushes == 0); // world 0 did not change
+
+	BOOST_REQUIRE(scene.redo());
+	BOOST_TEST((reloaded == std::vector<std::size_t>{ 1, 1 }), boost::test_tools::per_element());
 }
 
 BOOST_AUTO_TEST_CASE(a_commit_compares_every_node_and_copies_only_the_changed)

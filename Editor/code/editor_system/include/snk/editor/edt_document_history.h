@@ -25,6 +25,9 @@ namespace edt
 		virtual void redo() = 0;
 		// What the edit changed (a node, a field): two changes conflict when they share a key.
 		virtual const std::vector<std::string>& keys() const = 0;
+		// Undoing this edit out of order would lose what someone added since (a node under a node it created): the
+		// key of what is in the way. Asked by rollback_group only.
+		virtual std::optional<std::string> undo_conflict() const { return std::nullopt; }
 	};
 
 	struct history_record
@@ -44,6 +47,8 @@ namespace edt
 		std::size_t rolled_back = 0;
 		// Edits of the group still applied: the rollback stopped at a conflict before them.
 		std::size_t remaining = 0;
+		// Edits of the group that went over the history limit: they stay applied, nothing can undo them.
+		std::size_t unavailable = 0;
 		// Where it stopped: the key a later edit of someone else changed too, and that edit's label.
 		std::optional<std::string> conflict_key;
 		std::string conflict_label;
@@ -92,8 +97,8 @@ namespace edt
 		// The open group of `origin`, 0 when none.
 		std::uint64_t open_group(const cmd::origin& origin) const;
 		// Undoes the applied edits of the group, newest first, and drops them from the history. Stops before an edit
-		// whose key a later applied record of another origin changed too, so a human's edit is never undone or
-		// overwritten. The records that were undone (redo) are dropped as well.
+		// whose key a later applied record of another origin changed too, or whose undo_conflict names something, so
+		// a human's edit is never undone or overwritten. The records that were undone (redo) are dropped as well.
 		rollback_result rollback_group(std::uint64_t group);
 
 	private:
@@ -116,5 +121,7 @@ namespace edt
 		// The id of the record on top when saved; nullopt: no state of the history is the saved one.
 		std::optional<std::uint64_t> m_saved = std::uint64_t{ 0 };
 		std::map<std::string, open_group_state> m_groups; // by origin
+		// Edits of a group that went over the limit, by group.
+		std::map<std::uint64_t, std::size_t> m_evicted;
 	};
 }

@@ -91,6 +91,8 @@ namespace edt
 
 		// Set by scene_editor, which knows how to reload a world from its desc. Returns false when it did nothing.
 		void set_pusher(std::function<bool()> pusher) { m_pusher = std::move(pusher); }
+		// Reloads world `index` (not the active one) from its desc after undo/redo changed it; set by scene_editor.
+		void set_world_reloader(std::function<bool(std::size_t index)> reloader) { m_world_reloader = std::move(reloader); }
 		// Where document_changed goes; set by document_manager.
 		void bind_events(editor_events* events) { m_events = events; }
 		// How the level reaches the disk; set by the editor, which owns the level controller.
@@ -111,6 +113,8 @@ namespace edt
 
 	private:
 		void record_edit(std::string_view label);
+		// Runs `apply` (an undo, a redo, a rollback) between the before-apply hook and the reload of the worlds it changed.
+		void apply_history(std::string_view what, const std::function<void()>& apply);
 		void finish_apply();
 
 		// Changed in a way the history does not hold (a new level, a world added, an edit it could not compare).
@@ -122,6 +126,7 @@ namespace edt
 		std::function<void()> m_before_apply;
 		editor_events* m_events = nullptr;
 		std::function<bool()> m_pusher;
+		std::function<bool(std::size_t)> m_world_reloader;
 		std::function<bool()> m_save;
 		std::function<bool(const res::tag&)> m_save_as;
 	};

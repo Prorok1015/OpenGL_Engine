@@ -37,7 +37,7 @@ namespace edt
 		std::uint64_t id = 0;
 		std::optional<scene_node_state> before;
 		std::optional<scene_node_state> after;
-		// Only its place among unchanged siblings moved (a sibling before it came or went): not an edit of the node.
+		// Only where it sits changed, not what is in it: before and after hold no copy of the node (placement_of).
 		bool positional = false;
 	};
 
@@ -61,14 +61,23 @@ namespace edt
 
 		// Brings the node `id` of `world` to `state` in the index (nullopt: removes it); used when a change is applied.
 		void set(std::size_t world, std::uint64_t id, const std::optional<scene_node_state>& state);
+		// Moves the node in the index, keeping what the index has in it.
+		void set_place(std::size_t world, std::uint64_t id, const scene_node_state& place);
 		// Takes the depth of every node of `world` from `desc`, whose structure the index already holds.
 		void refresh_depths(std::size_t world, const scn::world_desc& desc);
 
+		// The worlds changes were applied to since the last call: their contexts have to be rebuilt.
+		std::vector<std::size_t> take_touched();
+		void touch(std::size_t world);
+
 	private:
 		std::vector<std::unordered_map<std::uint64_t, scene_node_state>> m_worlds;
+		std::vector<std::size_t> m_touched;
 		bool m_valid = false;
 	};
 
+	// Where `state` puts its node, without what is in it; `id` names the node when `state` has none.
+	scene_node_state placement_of(const scene_node_state& state, std::uint64_t id = 0);
 	// Copies a node's own fields, not its children.
 	scn::prefab_desc::prefab_node shallow_copy(const scn::prefab_desc::prefab_node& node);
 	// Whether two nodes are equal in their own fields (components by type, parent reference and overrides).
