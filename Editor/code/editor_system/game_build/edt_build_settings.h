@@ -1,7 +1,9 @@
 #pragma once
+#include <snk/project/prj_json_text.h>
 #include <boost/json/fwd.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,6 +28,11 @@ namespace edt
 		// Stored only: there is no Play yet.
 		bool build_before_play = false;
 		edt::log_verbosity log_verbosity = edt::log_verbosity::normal;
+		// Configurations whose next configure runs with --fresh: a user define was removed, and CMakeCache.txt of the
+		// shared build tree still holds it. Cleared by the builder after a successful configure.
+		std::vector<std::string> fresh_configure;
+
+		bool operator==(const build_settings&) const = default;
 	};
 
 	struct parsed_build_settings
@@ -46,4 +53,15 @@ namespace edt
 	void merge_build_settings(boost::json::value& doc, const build_settings& settings);
 	// <snk_dir>/build.json; defaults when it is missing (silently) or unreadable (with a warning naming the file).
 	build_settings load_build_settings(const std::filesystem::path& snk_dir);
+
+	// Reads <snk_dir>/build.json, lets `change` edit the settings parsed from it, merges them back (unknown keys kept)
+	// and writes the file atomically (prj::write_text_atomically), creating <snk_dir>, unless `change` changed nothing.
+	// A file that cannot be read or is not a JSON object is an error and is never overwritten. nullopt on success.
+	// `write` set: the file is written through it (tests).
+	std::optional<std::string> update_build_settings(const std::filesystem::path& snk_dir,
+		const std::function<void(build_settings&)>& change, const prj::text_writer& write = {});
+	// Why update_build_settings would refuse <snk_dir>/build.json; nullopt when it is missing or a JSON object.
+	std::optional<std::string> check_build_settings_file(const std::filesystem::path& snk_dir);
+	// Drops `configuration` from fresh_configure of <snk_dir>/build.json (update_build_settings).
+	std::optional<std::string> clear_fresh_configure(const std::filesystem::path& snk_dir, std::string_view configuration);
 }

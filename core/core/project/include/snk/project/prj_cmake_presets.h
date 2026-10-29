@@ -8,6 +8,7 @@
 #include <vector>
 #include <boost/json/value.hpp>
 #include <snk/common/snk_api.h>
+#include <snk/project/prj_json_text.h>
 
 // The game module's CMake presets (#444): <root>/code/CMakePresets.json is committed and never written by the editor;
 // per-user settings go to CMakeUserPresets.json next to it, into presets named user-<cfg> that the editor owns.
@@ -134,8 +135,8 @@ namespace prj
 	};
 
 	// Reads CMakePresets.json and CMakeUserPresets.json from `code_dir` again, applies `edits` and writes the user file
-	// (atomically, through a temporary file) only when its content changes. A missing or broken main file, or a broken
+	// (atomically, through a temporary file; through `write` when it is set) only when its content changes. A missing or broken main file, or a broken
 	// user file, is an error and nothing is written.
 	SNK_API user_presets_save_result save_user_presets(const std::filesystem::path& code_dir,
-		const std::vector<user_presets_edit>& edits);
+		const std::vector<user_presets_edit>& edits, const text_writer& write = {});
 }

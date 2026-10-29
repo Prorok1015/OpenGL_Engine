@@ -147,8 +147,12 @@ namespace {
 		}
 		if (in.request.verbosity == edt::log_verbosity::verbose) build_args.push_back("--verbose");
 
+		std::vector<std::string> configure_args{ "--preset", preset };
+		if (in.request.fresh) configure_args.push_back("--fresh");
+
 		ctx.set_progress(0.f, "Configuring");
-		if (step("configure", { "--preset", preset })) {
+		if (step("configure", std::move(configure_args))) {
+			result.configured = true;
 			ctx.set_progress(0.f, "Building");
 			step("build", std::move(build_args));
 		}
@@ -218,6 +222,8 @@ edt::build_request edt::make_manual_build_request(const build_settings& settings
 	out.cancel_on_restart = false;
 	out.verbosity = settings.log_verbosity;
 	out.reload_after = settings.reload_after_build;
+	out.fresh = std::find(settings.fresh_configure.begin(), settings.fresh_configure.end(), out.configuration)
+		!= settings.fresh_configure.end();
 	return out;
 }
 
@@ -324,14 +330,18 @@ void edt::game_builder::launch(build_request request)
 	m_configuration = request.configuration;
 
 	m_problems.clear("build");
-	egLOG_INFO("editor/build", "building the game module ({}, preset '{}', {}) in '{}'", request.configuration, request.preset,
-		request.jobs > 0 ? std::format("{} jobs", request.jobs) : std::string{ "jobs of the preset" }, utf8_of(project.root / "code"));
+	egLOG_INFO("editor/build", "building the game module ({}, preset '{}', {}{}) in '{}'", request.configuration, request.preset,
+		request.jobs > 0 ? std::format("{} jobs", request.jobs) : std::string{ "jobs of the preset" },
+		request.fresh ? ", fresh configure" : "", utf8_of(project.root / "code"));
 	m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
 		[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
 		[this, request](ds::task_result<game_build_result>& result) {
 			if (!result.ok()) {
 				egLOG_WARN("editor/build", "the build job failed: {}", result.error);
 			} else {
+				if (request.fresh && result.value->configured && m_options.on_fresh_configured) {
+					m_options.on_fresh_configured(request.configuration);
+				}
 				finish(*result.value, request);
 			}
 			if (m_pending) {
