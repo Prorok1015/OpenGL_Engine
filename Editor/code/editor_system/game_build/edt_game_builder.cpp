@@ -225,6 +225,7 @@ edt::build_request edt::make_manual_build_request(const build_settings& settings
 	out.reload_after = settings.reload_after_build;
 	out.fresh = std::find(settings.fresh_configure.begin(), settings.fresh_configure.end(), out.configuration)
 		!= settings.fresh_configure.end();
+	out.fresh_generation = settings.fresh_generation;
 	return out;
 }
 
@@ -388,7 +389,7 @@ void edt::game_builder::launch(build_request request)
 				outcome.job = m_job;
 			} else {
 				if (request.fresh && result.value->configured && m_options.on_fresh_configured) {
-					m_options.on_fresh_configured(request.configuration);
+					m_options.on_fresh_configured(request.configuration, request.fresh_generation);
 				}
 				outcome = finish(*result.value, request);
 			}
@@ -425,6 +426,24 @@ void edt::game_builder::cancel()
 		m_pending.reset();
 	}
 	if (is_building()) m_jobs.cancel(m_job);
+}
+
+void edt::game_builder::stop_background()
+{
+	if (!building_preemptible()) return;
+	if (m_pending && m_pending->preemptible) {
+		build_request dropped = std::move(*m_pending);
+		m_pending.reset();
+		if (dropped.on_finished) {
+			build_outcome outcome;
+			outcome.kind = build_outcome::preempted;
+			dropped.on_finished(outcome);
+		}
+	}
+	if (!m_preempted) egLOG_DEBUG("editor/build", "the live build is stopped by the editor");
+	m_preempted = true;
+	// Not job_service::cancel: that skips on_done, so neither the outcome nor a waiting manual request would follow.
+	if (m_restart_stop) m_restart_stop->request_stop();
 }
 
 bool edt::game_builder::has_presets() const

@@ -45,7 +45,7 @@ struct live_fixture
 			return next_start;
 		};
 		out.is_building = [this] { return building; };
-		out.cancel_build = [this] {
+		out.stop_background = [this] {
 			++cancels;
 			building = false;
 		};
@@ -567,6 +567,24 @@ BOOST_AUTO_TEST_CASE(a_user_cancel_of_a_live_build_goes_idle)
 	advance(10s);
 	BOOST_CHECK(reloads.empty());
 	BOOST_CHECK_EQUAL(starts.size(), 1u);
+}
+
+// Reload Game Module or a define removal stops a live build through game_builder::stop_background: its outcome comes
+// as `preempted`, not as the silence of a job.cancel above, so the changes it was building are built again.
+BOOST_AUTO_TEST_CASE(a_live_build_the_editor_stops_is_built_again)
+{
+	make();
+	change();
+	advance(500ms);
+	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+
+	finish(0, edt::build_outcome::preempted);
+	advance(16ms);
+	BOOST_CHECK(is(state(), edt::live_state::pending));
+	advance(16ms);
+	BOOST_CHECK_EQUAL(starts.size(), 2u);
+	BOOST_CHECK(is(state(), edt::live_state::building));
+	BOOST_CHECK(reloads.empty());
 }
 
 BOOST_AUTO_TEST_CASE(turning_off_cancels_a_live_build)

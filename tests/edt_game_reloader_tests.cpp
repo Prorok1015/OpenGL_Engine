@@ -122,7 +122,7 @@ BOOST_AUTO_TEST_CASE(during_a_live_build_the_action_stays_enabled_and_stops_it_f
 	bool stops_at_once = false;
 	auto opts = options();
 	opts.background_building = [&background] { return background; };
-	opts.cancel_background = [&] {
+	opts.stop_background = [&] {
 		++cancels;
 		if (stops_at_once) background = false;
 	};

@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_game_builder.h"
+#include "edt_live_build.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
@@ -11,6 +12,7 @@
 #include <boost/json/object.hpp>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -531,7 +533,7 @@ BOOST_AUTO_TEST_CASE(FreshConfigure_WhenTheConfigurationIsPending_AndClearedAfte
 	settings.fresh_configure = { "debuggame" };
 	std::vector<std::string> cleared;
 	auto opts = options();
-	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	opts.on_fresh_configured = [&cleared](std::string_view configuration, std::uint64_t) { cleared.emplace_back(configuration); };
 	make(std::move(opts));
 	// The build step fails: the configure did run fresh, so the cache no longer holds the removed define.
 	script = [](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) { return exited(index == 0 ? 0 : 1); };
@@ -543,12 +545,27 @@ BOOST_AUTO_TEST_CASE(FreshConfigure_WhenTheConfigurationIsPending_AndClearedAfte
 	BOOST_TEST((cleared == std::vector<std::string>{ "debuggame" }));
 }
 
+BOOST_AUTO_TEST_CASE(FreshConfigure_HandsOverTheGenerationTheRequestStartedWith)
+{
+	settings.fresh_configure = { "debuggame" };
+	settings.fresh_generation = 7;
+	std::vector<std::uint64_t> generations;
+	auto opts = options();
+	opts.on_fresh_configured = [&generations](std::string_view, std::uint64_t generation) { generations.push_back(generation); };
+	make(std::move(opts));
+	BOOST_REQUIRE(build().ok);
+	settings.fresh_generation = 8; // marked again while it runs
+	run_to_end();
+	BOOST_TEST((generations == std::vector<std::uint64_t>{ 7 }));
+	BOOST_CHECK_EQUAL(edt::make_live_build_request(settings, options()).fresh_generation, 8u);
+}
+
 BOOST_AUTO_TEST_CASE(FreshConfigure_NotForAnotherConfiguration)
 {
 	settings.fresh_configure = { "release" };
 	std::vector<std::string> cleared;
 	auto opts = options();
-	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	opts.on_fresh_configured = [&cleared](std::string_view configuration, std::uint64_t) { cleared.emplace_back(configuration); };
 	make(std::move(opts));
 	BOOST_REQUIRE(build().ok);
 	run_to_end();
@@ -562,7 +579,7 @@ BOOST_AUTO_TEST_CASE(FreshConfigure_AFailedConfigureKeepsItPending)
 	settings.fresh_configure = { "debuggame" };
 	std::vector<std::string> cleared;
 	auto opts = options();
-	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	opts.on_fresh_configured = [&cleared](std::string_view configuration, std::uint64_t) { cleared.emplace_back(configuration); };
 	make(std::move(opts));
 	script = [](std::size_t, const std::function<void(std::string_view)>&, std::stop_token) { return exited(1); };
 	BOOST_REQUIRE(build().ok);
@@ -577,7 +594,7 @@ BOOST_AUTO_TEST_CASE(FreshConfigure_ACancelledBuildKeepsItPending)
 	settings.fresh_configure = { "debuggame" };
 	std::vector<std::string> cleared;
 	auto opts = options();
-	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	opts.on_fresh_configured = [&cleared](std::string_view configuration, std::uint64_t) { cleared.emplace_back(configuration); };
 	make(std::move(opts));
 	script = [this](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
 		if (index == 0) return exited(0);
@@ -597,7 +614,7 @@ BOOST_AUTO_TEST_CASE(FreshConfigure_ARestartedBuildKeepsItPending)
 {
 	std::vector<std::string> cleared;
 	auto opts = options();
-	opts.on_fresh_configured = [&cleared](std::string_view configuration) { cleared.emplace_back(configuration); };
+	opts.on_fresh_configured = [&cleared](std::string_view configuration, std::uint64_t) { cleared.emplace_back(configuration); };
 	make(std::move(opts));
 	script = [this](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
 		if (index != 1) return exited(0);
@@ -1297,6 +1314,80 @@ BOOST_AUTO_TEST_CASE(OnFinished_AWaitingRequestThatCannotStartReportsNotStarted)
 	BOOST_CHECK(seen->kind == edt::build_outcome::failed);
 	BOOST_CHECK_EQUAL(seen->message, "Open a project first");
 	BOOST_CHECK(!builder->is_building());
+}
+
+// #445: the editor stops a live build (live mode off, Reload, a define removal) without job.cancel: its outcome comes as
+// `preempted`, and the person's request waiting for it still starts.
+BOOST_AUTO_TEST_CASE(StopBackground_StopsTheLiveBuild_TheWaitingManualRequestStillStarts)
+{
+	make(observed_options());
+	write_module();
+	std::vector<std::string> order;
+	auto live = edt::make_live_build_request(settings, options());
+	live.on_finished = [&order](const edt::build_outcome& outcome) {
+		order.push_back(outcome.kind == edt::build_outcome::preempted ? "live preempted" : "live other");
+	};
+	BOOST_REQUIRE(builder->start(live).ok);
+	BOOST_REQUIRE(builder->start(request("release")).ok); // waits for the live build to stop
+	builder->stop_background();
+	run_until_idle();
+
+	BOOST_TEST((order == std::vector<std::string>{ "live preempted" }));
+	BOOST_REQUIRE_EQUAL(built.size(), 1u);
+	BOOST_CHECK_EQUAL(built[0].configuration, "release");
+	BOOST_CHECK(!builder->is_building());
+}
+
+// NEW-A of the #445 review: "Turn off" during a live build used to drop the person's build waiting for it.
+BOOST_AUTO_TEST_CASE(TurningLiveModeOff_KeepsTheManualBuildWaitingForTheLiveOne)
+{
+	make(observed_options());
+	write_module();
+	edt::live_build_deps deps;
+	deps.settings = [this] { return settings; };
+	deps.make_request = [this](const edt::build_settings& chosen) { return edt::make_live_build_request(chosen, options()); };
+	deps.start_build = [this](edt::build_request request) { return builder->start(std::move(request)); };
+	deps.is_building = [this] { return builder->is_building(); };
+	deps.stop_background = [this] { builder->stop_background(); };
+	deps.reload = [](const std::string&, std::function<void(const core::reload_report&)>) {};
+	edt::live_build live(problems, std::move(deps));
+	live.set_enabled(true);
+	BOOST_REQUIRE(!live.rebuild_now().has_value());
+	BOOST_REQUIRE(builder->building_preemptible());
+
+	BOOST_REQUIRE(build().ok); // Ctrl+B: waits for the live build to stop
+	live.set_enabled(false);
+	run_until_idle();
+
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u); // the live build stopped before its first step
+	BOOST_TEST((calls[0].args == std::vector<std::string>{ "--preset", "debuggame" }));
+	BOOST_CHECK(!calls[0].low_priority);
+	BOOST_CHECK_EQUAL(built.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(StopBackground_DropsAWaitingLiveRestart_AndLeavesAManualBuildAlone)
+{
+	make();
+	std::vector<std::string> order;
+	auto live = edt::make_live_build_request(settings, options());
+	live.on_finished = [&order](const edt::build_outcome& outcome) {
+		order.push_back(outcome.kind == edt::build_outcome::preempted ? "first preempted" : "first other");
+	};
+	BOOST_REQUIRE(builder->start(live).ok);
+	live.on_finished = [&order](const edt::build_outcome& outcome) {
+		order.push_back(outcome.kind == edt::build_outcome::preempted ? "restart preempted" : "restart other");
+	};
+	BOOST_REQUIRE(builder->start(live).ok); // the restart waits
+	builder->stop_background();
+	BOOST_TEST((order == std::vector<std::string>{ "restart preempted" }));
+	run_until_idle();
+	BOOST_TEST((order == std::vector<std::string>{ "restart preempted", "first preempted" }));
+	BOOST_CHECK(calls.empty()); // stopped before its first step; nothing else ran
+
+	BOOST_REQUIRE(builder->start(request("debuggame")).ok);
+	builder->stop_background(); // the person's build: nothing happens
+	run_until_idle();
+	BOOST_CHECK_EQUAL(calls.size(), 2u);
 }
 
 BOOST_AUTO_TEST_CASE(OnFinished_NotCalledOnAUserCancel)

@@ -27,10 +27,10 @@ namespace edt
 		// The person's build is running (greys the action out, refuses a reload); null: never.
 		std::function<bool()> building;
 		// A background (live) build is running; null: never. It does not grey the action out: a reload first stops it
-		// through cancel_background (live mode builds again later) and is refused only while it is still stopping, since
+		// through stop_background (live mode builds again later) and is refused only while it is still stopping, since
 		// it may be writing the module file.
 		std::function<bool()> background_building;
-		std::function<void()> cancel_background;
+		std::function<void()> stop_background;
 		// game_module_built is taken from here; null: no reload after a build.
 		editor_events* events = nullptr;
 		// Runs `fn` once on the next UI frame under `id`: a build finishes in the job pump, and the module must not be

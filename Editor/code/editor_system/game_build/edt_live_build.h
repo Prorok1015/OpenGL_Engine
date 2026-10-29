@@ -84,8 +84,9 @@ namespace edt
 		std::function<action_result(build_request)> start_build;
 		// game_builder::is_building; any build, the person's too.
 		std::function<bool()> is_building;
-		// game_builder::cancel.
-		std::function<void()> cancel_build;
+		// game_builder::stop_background: stops a live build so its outcome still comes (`preempted`) and a request of
+		// the person's waiting for it stays queued. Never game_builder::cancel, which drops that request.
+		std::function<void()> stop_background;
 		// Asks for game_reloader::reload_quiet(module) on the next UI frame (next_frame, one id per module, like the
 		// reload of #435: only there is the module swap safe) and calls `done` with its report. Never `done` in the call.
 		std::function<void(const std::string& module, std::function<void(const core::reload_report&)> done)> reload;

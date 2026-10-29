@@ -77,6 +77,8 @@ namespace edt
 		bool reload_after = true;
 		// Configure with --fresh (CMake 3.24+): the configuration is in build_settings::fresh_configure.
 		bool fresh = false;
+		// build_settings::fresh_generation when the request was made: handed to on_fresh_configured.
+		std::uint64_t fresh_generation = 0;
 		build_report report = build_report::dialog;
 		// false: no progress window is opened for this request (one already open stays).
 		bool show_progress = true;
@@ -116,8 +118,9 @@ namespace edt
 		// Gets game_module_built; null: none. Must outlive the builder.
 		editor_events* events = nullptr;
 		// On the main thread, after a `fresh` request's configure step succeeded (also when the build step then fails):
-		// the configuration no longer needs --fresh. Null: nothing is recorded.
-		std::function<void(std::string_view configuration)> on_fresh_configured;
+		// the configuration no longer needs --fresh, unless it was marked again after `generation` (the request's
+		// fresh_generation). Null: nothing is recorded.
+		std::function<void(std::string_view configuration, std::uint64_t generation)> on_fresh_configured;
 	};
 
 	// What one build produced; filled on the worker thread.
@@ -206,6 +209,11 @@ namespace edt
 		action_result start(build_request request);
 		// Also drops a request waiting for the running build to stop.
 		void cancel();
+		// Stops a running preemptible (live) build the way a preempting request does: its on_done still comes, with
+		// outcome `preempted`, and a fresh configure it finished is still recorded. A preemptible request waiting for it
+		// is dropped (told `preempted`); a waiting request of the person's stays and starts once it has stopped.
+		// Nothing when no preemptible build runs.
+		void stop_background();
 
 	private:
 		bool has_presets() const;

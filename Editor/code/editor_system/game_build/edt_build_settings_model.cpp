@@ -360,7 +360,7 @@ bool edt::build_settings_model::refresh_fresh_configure()
 		json::value doc = json::parse(text, ec);
 		if (ec || !doc.is_object()) return std::nullopt;
 		for (const std::string_view key : { "configuration", "jobs_mode", "reload_after_build", "build_before_play",
-			"log_verbosity", "fresh_configure", "live_enabled", "live_quiet_ms", "live_jobs" }) {
+			"log_verbosity", "fresh_configure", "fresh_generation", "live_enabled", "live_quiet_ms", "live_jobs" }) {
 			doc.get_object().erase(key);
 		}
 		build_settings settings = parse_build_settings(text).settings;
@@ -392,7 +392,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		result.user_presets_error = std::move(*blocked);
 		return result;
 	}
-	if (!fresh.empty() && m_cancel_background) m_cancel_background();
+	if (!fresh.empty() && m_stop_background) m_stop_background();
 
 	// build.json first: a --fresh mark without the removal costs one configure, a removal without the mark leaves the
 	// define in CMakeCache.txt.
@@ -413,6 +413,8 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 			for (const auto& configuration : fresh) {
 				if (!contains(on_disk.fresh_configure, configuration)) on_disk.fresh_configure.push_back(configuration);
 			}
+			// Also for a configuration marked already: a build configuring now must not clear this newer mark.
+			if (!fresh.empty()) ++on_disk.fresh_generation;
 			written = on_disk;
 		}, m_write);
 		if (problem) {

@@ -372,8 +372,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		build_options.preset_for = [code_dir = project.root / "code"](std::string_view configuration) {
 			return preset_for_configuration(code_dir, configuration);
 		};
-		build_options.on_fresh_configured = [snk_dir = project.snk_dir()](std::string_view configuration) {
-			if (auto problem = clear_fresh_configure(snk_dir, configuration)) {
+		build_options.on_fresh_configured = [snk_dir = project.snk_dir()](std::string_view configuration, std::uint64_t generation) {
+			if (auto problem = clear_fresh_configure(snk_dir, configuration, generation)) {
 				egLOG_WARN("editor/build", "{}: the next build of {} configures with --fresh again", *problem, configuration);
 			}
 		};
