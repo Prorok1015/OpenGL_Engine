@@ -276,6 +276,7 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 	cmd::command_desc command;
 	command.id = k_action_id;
 	command.summary = "Build Game";
+	command.category = cmd::agent_category::build;
 	command.args_schema = args_schema();
 	command.result_schema = result_schema();
 	command.expose_as_tool = true;
