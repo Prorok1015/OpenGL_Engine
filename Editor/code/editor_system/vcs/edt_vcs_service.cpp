@@ -629,7 +629,14 @@ namespace {
 		const auto one_of = [](std::string_view value, std::initializer_list<std::string_view> allowed) {
 			return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
 		};
-		if (one_of(section, { "extensions", "index", "gc", "lfs", "maintenance" })) return true;
+		// lfs.* is data, except the keys that name a program git-lfs runs.
+		if (section == "lfs") {
+			const bool program = subsection
+				&& ((lower.starts_with("lfs.customtransfer.") && one_of(name, { "path", "args" }))
+					|| (lower.starts_with("lfs.extension.") && one_of(name, { "clean", "smudge" })));
+			return !program;
+		}
+		if (one_of(section, { "extensions", "index", "gc", "maintenance" })) return true;
 		if (!subsection) {
 			if (section == "core") {
 				return one_of(name, { "repositoryformatversion", "filemode", "bare", "logallrefupdates", "ignorecase",

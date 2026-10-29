@@ -1287,7 +1287,7 @@ BOOST_AUTO_TEST_CASE(TheRepositoryConfigAllowlist)
 	make_service(real_options(repo));
 	const auto agent = cmd::origin_kind::agent;
 
-	for (const char* key : { "core.pager", "foo.bar" }) {
+	for (const char* key : { "core.pager", "foo.bar", "lfs.customtransfer.evil.path", "lfs.extension.evil.clean" }) {
 		BOOST_TEST_CONTEXT(key) {
 			git(repo, { "config", key, "cat" });
 			const json::value refused = finish(service->start_branch_create("topic", {}, agent));
