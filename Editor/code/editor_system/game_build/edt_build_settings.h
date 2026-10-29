@@ -16,6 +16,10 @@ namespace edt
 	// How much of a build's output reaches the log (game_builder::finish).
 	enum class log_verbosity : std::uint8_t { errors, normal, verbose };
 
+	inline constexpr int k_default_live_quiet_ms = 3000;
+	inline constexpr int k_max_live_quiet_ms = 600000;
+	inline constexpr int k_max_live_jobs = 1024;
+
 	// The person's build settings of one project: <root>/.snk/build.json (per user, never committed). Its keys are the
 	// field names; jobs_mode is "auto" | "manual", log_verbosity "errors" | "normal" | "verbose".
 	struct build_settings
@@ -31,6 +35,12 @@ namespace edt
 		// Configurations whose next configure runs with --fresh: a user define was removed, and CMakeCache.txt of the
 		// shared build tree still holds it. Cleared by the builder after a successful configure.
 		std::vector<std::string> fresh_configure;
+		// Live mode (#445): rebuild in the background after the sources stay unchanged for live_quiet_ms.
+		bool live_enabled = false;
+		// [0, k_max_live_quiet_ms].
+		int live_quiet_ms = k_default_live_quiet_ms;
+		// [0, k_max_live_jobs]; 0: auto (make_live_build_request).
+		int live_jobs = 0;
 
 		bool operator==(const build_settings&) const = default;
 	};

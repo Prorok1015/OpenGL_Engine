@@ -232,6 +232,41 @@ BOOST_AUTO_TEST_CASE(Apply_CreatesTheSnkFolder)
 	BOOST_TEST(!fs::exists(user_file()));
 }
 
+BOOST_AUTO_TEST_CASE(Live_RoundTripsThroughApply_AndRevert)
+{
+	with_settings(R"({"unknown_key":5})");
+	load();
+	model.set_live_enabled(true);
+	model.set_live_quiet_ms(1500);
+	model.set_live_jobs(3);
+	BOOST_TEST(model.dirty());
+	model.revert();
+	BOOST_TEST(!model.dirty());
+	BOOST_TEST(!model.settings().live_enabled);
+
+	model.set_live_enabled(true);
+	model.set_live_quiet_ms(1500);
+	model.set_live_jobs(3);
+	BOOST_TEST((model.pending_files() == std::vector<fs::path>{ settings_file() }));
+	BOOST_REQUIRE(model.apply().ok());
+	BOOST_TEST(!model.dirty());
+	BOOST_TEST(model.settings().live_enabled);
+	BOOST_TEST(model.settings().live_quiet_ms == 1500);
+	BOOST_TEST(model.settings().live_jobs == 3);
+	const json::object settings = read_json(settings_file()).as_object();
+	BOOST_TEST((settings.at("unknown_key").as_int64() == 5));
+	BOOST_TEST(settings.at("live_enabled").as_bool());
+	BOOST_TEST((settings.at("live_quiet_ms").as_int64() == 1500));
+	BOOST_TEST((settings.at("live_jobs").as_int64() == 3));
+
+	model.set_live_quiet_ms(-5);
+	model.set_live_jobs(5000);
+	BOOST_TEST(model.settings().live_quiet_ms == 0);
+	BOOST_TEST(model.settings().live_jobs == edt::k_max_live_jobs);
+	model.set_live_quiet_ms(edt::k_max_live_quiet_ms + 1);
+	BOOST_TEST(model.settings().live_quiet_ms == edt::k_max_live_quiet_ms);
+}
+
 BOOST_AUTO_TEST_CASE(ManualJobs_GoToEveryConfiguration_AutoClearsThem)
 {
 	load();
@@ -533,6 +568,21 @@ BOOST_AUTO_TEST_CASE(AnAgentSeesAndCallsIt)
 	BOOST_TEST((debuggame.at("team_defines").as_object().at("CMAKE_BUILD_TYPE").as_string() == "DebugGame"));
 	BOOST_TEST((debuggame.at("user_defines").as_object().at("MY_FLAG").as_string() == "1"));
 	BOOST_TEST((configurations.at("release").as_object().at("preset").as_string() == "release"));
+	const json::object& live = got.at("live").as_object();
+	BOOST_TEST(!live.at("enabled").as_bool());
+	BOOST_TEST((live.at("quiet_ms").as_int64() == 3000));
+	BOOST_TEST((live.at("jobs").as_int64() == 0));
+}
+
+BOOST_AUTO_TEST_CASE(Live_IsReported)
+{
+	with_settings(R"({"live_enabled":true,"live_quiet_ms":500,"live_jobs":4})");
+	const mcp::call_result result = call("build_settings_get");
+	BOOST_REQUIRE(!result.is_error);
+	const json::object& live = result.structured.as_object().at("live").as_object();
+	BOOST_TEST(live.at("enabled").as_bool());
+	BOOST_TEST((live.at("quiet_ms").as_int64() == 500));
+	BOOST_TEST((live.at("jobs").as_int64() == 4));
 }
 
 BOOST_AUTO_TEST_CASE(AJobsValueBelowOne_IsLeftOut)
