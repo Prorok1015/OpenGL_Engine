@@ -128,6 +128,8 @@ namespace edt {
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
 		void create_live_mode(ds::app_data_storage& data);
+		// Stops a running live build (never the person's); live mode builds again by itself.
+		void cancel_live_build();
 
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;

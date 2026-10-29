@@ -2,6 +2,7 @@
 #include "edt_build_settings.h"
 #include "edt_live_build.h"
 #include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_registration.h>
 #include <snk/resource/res_file_change.h>
@@ -46,6 +47,9 @@ namespace edt
 		std::function<std::optional<std::string>(bool enabled)> store_enabled;
 		// After live mode was turned on or off: the tools an agent sees changed.
 		std::function<void()> on_toggled;
+		// game_module_built is taken from here: a build that is not live mode's (`background` false) clears its errors
+		// (live_build::on_manual_build_succeeded). Null: none. Must outlive the live_mode.
+		editor_events* events = nullptr;
 		// Items of the status popup; null: not shown.
 		std::function<void()> open_problems;
 		std::function<void()> open_settings;
@@ -98,6 +102,7 @@ namespace edt
 		live_mode_options m_options;
 		std::function<std::chrono::steady_clock::time_point()> m_now;
 		live_build m_build;
+		connection m_built;
 		res::resource_system* m_watched = nullptr;
 		std::optional<std::chrono::steady_clock::time_point> m_clock_of;
 		std::string m_clock_text;

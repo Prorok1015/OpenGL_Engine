@@ -63,7 +63,7 @@ edt::game_reloader::game_reloader(dialog_service& dialogs, action_registry& acti
 				return;
 			}
 			// One per module: two modules built at once are both reloaded.
-			m_options.next_frame("edt/reload_game_module/" + built.module, [this, alive = std::weak_ptr<int>(m_alive), module = built.module] {
+			m_options.next_frame(std::string(k_reload_frame_id) + built.module, [this, alive = std::weak_ptr<int>(m_alive), module = built.module] {
 				if (!alive.expired()) {
 					reload(module);
 				}

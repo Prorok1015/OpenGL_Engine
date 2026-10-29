@@ -89,6 +89,11 @@ void gui::menu_layout_manager::unregister_implicit(const std::string_view id)
 	std::erase_if(implicit_callback_list, [id](auto& i) { return i.first == id; });
 }
 
+bool gui::menu_layout_manager::has_implicit_prefix(std::string_view prefix) const
+{
+	return std::ranges::any_of(implicit_callback_list, [prefix](const auto& i) { return std::string_view(i.first).starts_with(prefix); });
+}
+
 std::vector<std::string> gui::menu_layout_manager::split(std::string_view path, std::string_view delim)
 {
 	std::vector<std::string> tokens;

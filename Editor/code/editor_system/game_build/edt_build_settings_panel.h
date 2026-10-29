@@ -20,7 +20,7 @@ namespace edt
 		static constexpr const char* k_id = "build_settings";
 		static constexpr const char* k_title = "Build Settings";
 
-		// `project_root` nullopt: no project is open. `building`: whether a game build runs (build_settings_model::set_building).
+		// `project_root` nullopt: no project is open. `building`: whether the person's game build runs (build_settings_model::set_building).
 		build_settings_panel(std::function<std::optional<std::filesystem::path>()> project_root, std::string default_configuration,
 			std::function<bool()> building);
 
@@ -33,6 +33,8 @@ namespace edt
 		}
 		// build.json was written elsewhere (Build > Live Mode): read the files again unless edits are queued.
 		void refresh_if_clean();
+		// See build_settings_model::set_cancel_background.
+		void set_cancel_background(std::function<void()> cancel) { m_model.set_cancel_background(std::move(cancel)); }
 		// Why live mode cannot be turned on now (empty: it can); null: it always can.
 		void set_live_unavailable_reason(std::function<std::string()> reason) { m_live_unavailable = std::move(reason); }
 

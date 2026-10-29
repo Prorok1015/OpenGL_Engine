@@ -46,6 +46,7 @@ struct live_mode_fixture
 	cmd::main_thread_queue queue{ commands, tasks };
 	edt::mcp_bridge_host bridge{ commands, queue, tasks };
 	edt::problem_list problems;
+	edt::editor_events events;
 	std::vector<cmd::registration> registrations;
 
 	std::chrono::steady_clock::time_point now{ std::chrono::seconds(100) };
@@ -86,6 +87,7 @@ struct live_mode_fixture
 			return std::nullopt;
 		};
 		options.on_toggled = [this] { ++toggled; };
+		options.events = &events;
 		live = std::make_unique<edt::live_mode>(problems, actions, std::move(options));
 	}
 
@@ -353,6 +355,31 @@ BOOST_AUTO_TEST_CASE(TheLiveReload_NeverRunsInsideTick_OnlyInTheNextUiFrame)
 	run_frame();
 	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
 	BOOST_TEST((live->status().state == edt::live_state::reloaded));
+}
+
+// A successful build of the person's clears live mode's errors; live mode's own builds (background) do not count.
+BOOST_AUTO_TEST_CASE(AManualBuildThatSucceeds_ClearsTheLiveErrors)
+{
+	make();
+	BOOST_REQUIRE(!live->set_enabled(true, false));
+	BOOST_REQUIRE(!live->build().rebuild_now().has_value());
+	BOOST_REQUIRE_EQUAL(starts.size(), 1u);
+	edt::build_outcome failed;
+	failed.errors = 3;
+	failed.message = "The game build failed with 3 errors (see Problems)";
+	building = false;
+	starts[0].on_finished(failed);
+	live->tick();
+	BOOST_REQUIRE((live->status().state == edt::live_state::errors));
+
+	edt::game_module_build_result built{ "game", "build/bin/game.dll", "debuggame", 9, false, true };
+	events.game_module_built.emit(built);
+	BOOST_TEST((live->status().state == edt::live_state::errors));
+
+	built.background = false;
+	events.game_module_built.emit(built);
+	BOOST_TEST((live->status().state == edt::live_state::idle));
+	BOOST_TEST(live->status().errors == 0);
 }
 
 BOOST_AUTO_TEST_CASE(AFrameQueuedBeforeLiveModeWasDestroyed_ReloadsNothing)

@@ -506,7 +506,8 @@ edt::build_outcome edt::game_builder::finish(game_build_result& result, const bu
 		for (const auto& module : result.modules) {
 			if (!module.exists) continue;
 			outcome.modules.push_back(
-				game_module_build_result{ module.name, module.path, request.configuration, outcome.job, request.reload_after });
+				game_module_build_result{ module.name, module.path, request.configuration, outcome.job, request.reload_after,
+					request.preemptible });
 		}
 		if (m_options.events) {
 			// A slot may start the next build.

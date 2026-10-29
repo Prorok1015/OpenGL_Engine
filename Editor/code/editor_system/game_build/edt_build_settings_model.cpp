@@ -392,6 +392,7 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 		result.user_presets_error = std::move(*blocked);
 		return result;
 	}
+	if (!fresh.empty() && m_cancel_background) m_cancel_background();
 
 	// build.json first: a --fresh mark without the removal costs one configure, a removal without the mark leaves the
 	// define in CMakeCache.txt.

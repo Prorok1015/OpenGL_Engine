@@ -166,6 +166,11 @@ edt::live_mode::live_mode(problem_list& problems, action_registry& actions, live
 	, m_build(problems, m_options.build)
 {
 	register_commands(actions);
+	if (m_options.events) {
+		m_built = m_options.events->game_module_built.subscribe([this](const game_module_build_result& built) {
+			if (!built.background) m_build.on_manual_build_succeeded();
+		});
+	}
 }
 
 edt::live_mode::~live_mode()

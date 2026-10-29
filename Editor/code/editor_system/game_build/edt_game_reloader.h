@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace edt
@@ -44,6 +45,8 @@ namespace edt
 	{
 	public:
 		static constexpr const char* k_action_id = "build.reload_game_module";
+		// next_frame id of the reload after a build: + the module name.
+		static constexpr std::string_view k_reload_frame_id = "edt/reload_game_module/";
 
 		game_reloader(dialog_service& dialogs, action_registry& actions, game_reloader_options options);
 

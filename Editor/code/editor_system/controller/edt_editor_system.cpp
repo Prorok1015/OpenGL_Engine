@@ -304,7 +304,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_build_settings_panel = std::make_shared<build_settings_panel>([&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
 		return data.require<prj::project_context>().root;
-	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_building(); });
+	}, *cfg_build_configuration, [this] { return m_game_builder && m_game_builder->is_manual_build_running(); });
+	// A live build is stopped instead: its configure would clear the --fresh mark that a define removal writes.
+	m_build_settings_panel->set_cancel_background([this] { cancel_live_build(); });
 	add_panel(m_build_settings_panel, dock_slot::floating, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
@@ -410,7 +412,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		}
 		return data.require<core::project_module_host>().reload(module, m_swap_gate.hooks());
 	};
-	reload_options.building = [this] { return m_game_builder && m_game_builder->is_building(); };
+	reload_options.building = [this] { return m_game_builder && m_game_builder->is_manual_build_running(); };
+	reload_options.background_building = [this] { return m_game_builder && m_game_builder->building_preemptible(); };
+	reload_options.cancel_background = [this] { cancel_live_build(); };
 	reload_options.events = &m_context->events();
 	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
@@ -509,6 +513,10 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 		}
 		return modules;
 	};
+	live.build.reload_pending = [this] {
+		return editor_layer->has_implicit_prefix(game_reloader::k_reload_frame_id) || editor_layer->has_implicit_prefix(live_mode::k_reload_frame_id);
+	};
+	live.events = &m_context->events();
 	live.next_frame = [this](const std::string& id, std::function<void()> fn) {
 		editor_layer->register_implicit(id, [fn = std::move(fn)] {
 			fn();
@@ -554,6 +562,12 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 void edt::editor_system::tick_live_mode()
 {
 	if (m_live_mode) m_live_mode->tick();
+}
+
+void edt::editor_system::cancel_live_build()
+{
+	// Only a live build: game_builder::cancel would stop the person's build too.
+	if (m_game_builder && m_game_builder->building_preemptible()) m_game_builder->cancel();
 }
 
 void edt::editor_system::create_panels(bool capture_log)
