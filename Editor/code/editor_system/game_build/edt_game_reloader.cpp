@@ -123,7 +123,7 @@ core::reload_report edt::game_reloader::attempt(const std::string& module, std::
 		return { core::reload_status::refused, "a build is running" };
 	}
 	if (m_options.background_building && m_options.background_building()) {
-		if (m_options.cancel_background) m_options.cancel_background();
+		if (m_options.stop_background) m_options.stop_background();
 		// A cancelled job ends at the next pump, and its compiler or linker may still write the file until then.
 		if (m_options.background_building()) {
 			return { core::reload_status::refused, "the live build is being stopped; reload again in a moment" };

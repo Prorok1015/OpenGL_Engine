@@ -25,8 +25,8 @@ edt::live_build::live_build(problem_list& problems, live_build_deps deps)
 	: m_problems(problems)
 	, m_deps(std::move(deps))
 {
-	ASSERT_MSG(m_deps.start_build && m_deps.is_building && m_deps.cancel_build && m_deps.reload,
-		"live_build needs start_build, is_building, cancel_build and reload");
+	ASSERT_MSG(m_deps.start_build && m_deps.is_building && m_deps.stop_background && m_deps.reload,
+		"live_build needs start_build, is_building, stop_background and reload");
 	if (!m_deps.now) m_deps.now = [] { return std::chrono::steady_clock::now(); };
 	if (!m_deps.settings) m_deps.settings = [] { return build_settings{}; };
 	if (!m_deps.make_request) {
@@ -45,7 +45,7 @@ void edt::live_build::set_enabled(bool enabled)
 		m_status.state = live_state::idle;
 		return;
 	}
-	if (m_ours && m_deps.is_building()) m_deps.cancel_build();
+	if (m_ours && m_deps.is_building()) m_deps.stop_background();
 	m_ours = false;
 	m_dirty = false;
 	m_force = false;
