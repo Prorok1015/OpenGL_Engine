@@ -271,6 +271,18 @@ namespace {
 		return run_git(git, args, stop);
 	}
 
+	// "2.45.1", "2.39.2.windows.1": whether it is at least major.minor. A version that does not read so is not.
+	bool version_at_least(std::string_view version, int major, int minor)
+	{
+		const char* const end = version.data() + version.size();
+		int found_major = 0;
+		const auto [after_major, major_error] = std::from_chars(version.data(), end, found_major);
+		if (major_error != std::errc{} || after_major == end || *after_major != '.') return false;
+		int found_minor = 0;
+		if (std::from_chars(after_major + 1, end, found_minor).ec != std::errc{}) return false;
+		return found_major > major || (found_major == major && found_minor >= minor);
+	}
+
 	// What to report instead of running git.
 	git_output refused(std::string_view code, std::string message)
 	{
@@ -323,6 +335,33 @@ namespace {
 		std::vector<std::string> paths;
 		std::string target;
 	};
+
+	// What `git checkout <name> --` checks out: <name>, or, when it is no local branch and exactly one remote has a
+	// branch of that name, that remote-tracking branch (git then creates the local one). Several remotes or none:
+	// <name>, which the filter check then fails closed on if it is no revision.
+	std::string checkout_target(const git_context& git, const std::string& name, std::stop_token stop)
+	{
+		const git_output local = run_git(git, { "rev-parse", "--verify", "--quiet", "refs/heads/" + name }, stop, k_read_cap);
+		if (local.process.error.empty() && local.process.exit_code == 0) return name;
+		const git_output refs = run_git(git, { "for-each-ref", "--format=%(refname)", "refs/remotes" }, stop, k_read_cap);
+		if (!refs.process.error.empty() || refs.process.exit_code != 0 || refs.truncated) return name;
+		constexpr std::string_view prefix = "refs/remotes/";
+		const std::string suffix = "/" + name;
+		std::string found;
+		int matches = 0;
+		std::string_view rest = refs.out;
+		while (!rest.empty()) {
+			const std::size_t end = std::min(rest.find('\n'), rest.size());
+			const std::string_view line = trim(rest.substr(0, end));
+			rest.remove_prefix(std::min(end + 1, rest.size()));
+			if (!line.starts_with(prefix) || !line.ends_with(suffix) || line.size() <= prefix.size() + suffix.size()) continue;
+			const std::string_view remote = line.substr(prefix.size(), line.size() - prefix.size() - suffix.size());
+			if (remote.find('/') != std::string_view::npos) continue;
+			++matches;
+			found = std::string(line);
+		}
+		return matches == 1 ? found : name;
+	}
 
 	// Relative to the repository root; nullopt when git could not tell.
 	std::optional<std::vector<std::string>> touched_paths(const git_context& git, const touched_files& touched,
@@ -715,6 +754,11 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
 	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run, {}, false, false, false };
+	// The network checks read the config with --show-scope (git 2.26).
+	if (write && write->caller == cmd::origin_kind::agent && write->network && !version_at_least(m_state.git_version, 2, 26)) {
+		return { 0, "vcs_unavailable", std::format("git 2.26 or newer is required for agent network operations (found {})",
+			m_state.git_version) };
+	}
 	if (write && write->caller == cmd::origin_kind::agent) {
 		std::erase_if(context.environment, [](const std::string& entry) { return is_askpass_variable(entry); });
 		// The environment's GIT_SSH_COMMAND (always set) wins over core.sshCommand anyway; this states it.
@@ -1065,7 +1109,8 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 	// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
 	std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
 	return run_job("git checkout", [args = std::move(args), ref](const git_context& git, ds::task_context& task) -> json::value {
-		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, ref }, task.stop)) {
+		const std::string target = git.refuse_filters ? checkout_target(git, ref, task.stop) : ref;
+		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, target }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
 		const git_output out = run_write(git, args, task.stop);

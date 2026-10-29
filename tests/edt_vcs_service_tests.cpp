@@ -839,6 +839,91 @@ BOOST_AUTO_TEST_CASE(ARepositoryCredentialHelper_RefusesAnAgentsPush)
 	BOOST_TEST(head_of(remote) == head_of(repo));
 }
 
+// A helper set in a file the local config includes is the repository's too (git reports the including file's scope).
+BOOST_AUTO_TEST_CASE(ACredentialHelperFromAnIncludeOfTheLocalConfig_RefusesAnAgentsPush)
+{
+	isolate_config();
+	const fs::path remote = base / "include_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("include");
+	git(repo, { "remote", "add", "origin", url });
+	const fs::path marker = base / "include_helper_ran.txt";
+	const fs::path script = base / "include_helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	const fs::path included = base / "included.gitconfig";
+	write(included, "[credential]\n\thelper = " + generic_text(script) + "\n");
+	git(repo, { "config", "include.path", generic_text(included) });
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "unsafe_repository"), json::serialize(refused));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+}
+
+// git checkout <name> of a branch only a remote has: the filter check diffs against that remote's branch, and git
+// creates the local tracking branch.
+BOOST_AUTO_TEST_CASE(AnAgentsCheckoutOfARemoteOnlyBranch_IsCheckedAgainstTheRemoteBranch)
+{
+	isolate_config();
+	const fs::path remote = base / "dwim_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("dwim");
+	git(repo, { "remote", "add", "origin", url });
+	git(repo, { "push", "-q", "origin", "main" });
+
+	const fs::path other = base / "dwim_other";
+	git(base, { "clone", "-q", url, edt::utf8_of(other) });
+	git(other, { "config", "user.name", "Other User" });
+	git(other, { "config", "user.email", "other@example.com" });
+	git(other, { "config", "commit.gpgsign", "false" });
+	git(other, { "checkout", "-q", "-b", "feature" });
+	write(other / "notes.txt", "notes\n");
+	git(other, { "add", "notes.txt" });
+	git(other, { "commit", "-q", "-m", "notes" });
+	git(other, { "push", "-q", "origin", "feature" });
+	git(other, { "checkout", "-q", "-b", "feature_bin", "main" });
+	write(other / "data.bin", "raw bytes\n");
+	git(other, { "add", "data.bin" });
+	git(other, { "commit", "-q", "-m", "data" });
+	git(other, { "push", "-q", "origin", "feature_bin" });
+	git(repo, { "fetch", "-q", "origin" });
+
+	// A filter driver no attribute names.
+	const fs::path marker = base / "dwim_filter_ran.txt";
+	const fs::path script = base / "dwim-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	make_service(real_options(repo));
+	const auto agent = cmd::origin_kind::agent;
+
+	const json::value checked_out = finish(service->start_checkout("feature", agent));
+	BOOST_TEST(!checked_out.as_object().contains("error"), json::serialize(checked_out));
+	std::string upstream = git_text(repo, { "rev-parse", "--abbrev-ref", "feature@{upstream}" });
+	while (!upstream.empty() && (upstream.back() == '\n' || upstream.back() == '\r')) upstream.pop_back();
+	BOOST_TEST(upstream == "origin/feature");
+	BOOST_TEST(fs::exists(repo / "notes.txt"));
+	const json::value back = finish(service->start_checkout("main", agent));
+	BOOST_TEST(!back.as_object().contains("error"), json::serialize(back));
+
+	// Now an attribute names the driver for a file the remote's branch adds (not a .gitattributes the checkout changes).
+	write(repo / ".git" / "info" / "attributes", "*.bin filter=lfs\n");
+	const json::value refused = finish(service->start_checkout("feature_bin", agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	BOOST_TEST(git_text(repo, { "for-each-ref", "refs/heads/feature_bin" }).empty());
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
 // Owner decision (#454): a configured filter driver that applies to a file of the commit refuses an agent's commit
 // before git runs (switching the driver off would commit LFS files as raw bytes); allow_filters lets it run, and the
 // filter runs. A driver no attribute names (a global filter.lfs the repository does not use; the repository's config
@@ -1572,6 +1657,36 @@ BOOST_AUTO_TEST_CASE(Cancel_StopsARunningCommit_AndRemovesItsMessageFile)
 	BOOST_REQUIRE(info.has_value());
 	BOOST_TEST((info->status == edt::job_status::cancelled));
 	BOOST_TEST(!info->result.has_value());
+}
+
+// The network checks need git config --show-scope (git 2.26): an older git refuses an agent's network call at once.
+BOOST_AUTO_TEST_CASE(AGitOlderThan2_26_RefusesAnAgentsNetworkCall)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	auto options = fake_options();
+	options.run = [inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.25.4\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	BOOST_REQUIRE(service->info().available);
+	const std::string expected = "git 2.26 or newer is required for agent network operations (found 2.25.4)";
+
+	const auto agent = cmd::origin_kind::agent;
+	for (const auto& started : { service->start_fetch({}, agent), service->start_pull({}, {}, agent),
+			service->start_push("origin", "main", false, agent) }) {
+		BOOST_TEST(started.code == "vcs_unavailable");
+		BOOST_TEST(started.error == expected);
+	}
+	BOOST_TEST(jobs->list().empty());
+	// A person's network call and an agent's local write still run.
+	BOOST_TEST(!finish(service->start_push("origin", "main", false, cmd::origin_kind::ui)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_branch_create("topic", {}, agent)).as_object().contains("error"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
