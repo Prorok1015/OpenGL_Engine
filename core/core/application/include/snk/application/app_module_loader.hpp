@@ -69,6 +69,18 @@ namespace app::modules {
 			throw std::logic_error(std::move(message));
 		}
 
+		// The message of the exception being handled. What a module's own code threw lives in that code: read it while
+		// the code is still loaded.
+		static std::string current_exception_message() {
+			try {
+				throw;
+			} catch (const std::exception& ex) {
+				return ex.what();
+			} catch (...) {
+				return "unknown exception";
+			}
+		}
+
 		entry* find(std::string_view name) {
 			const auto it = std::ranges::find_if(m_entries, [&](const entry& e) { return e.module->name() == name; });
 			return it == m_entries.end() ? nullptr : &*it;
@@ -290,7 +302,13 @@ namespace app::modules {
 			if (const std::string problem = opened->open(); !problem.empty()) {
 				refuse(std::format("module_loader: refusing module {}: {}", opened->describe(), problem));
 			}
-			module_ptr module = create_module(opened->entry(), opened->describe());
+			// An exception of the module's code must not outlive the code, which goes with `opened`: a copy of the host's.
+			module_ptr module;
+			try {
+				module = create_module(opened->entry(), opened->describe());
+			} catch (...) {
+				refuse(current_exception_message());
+			}
 			return prepared_module{ std::move(opened), std::move(module) };
 		}
 
@@ -348,10 +366,16 @@ namespace app::modules {
 					e.layer->activate();
 				}
 			} catch (...) {
+				// A module with code of its own (a source): what it threw lives in that code, which is released with
+				// the entry. Its message is read now and the host throws its own exception instead.
+				const std::string what = e.source ? current_exception_message() : std::string{};
 				shutdown_entry(e, data);
 				if (data.size() != e.size_before) {
 					egLOG_ERROR("app", "module '{}' left the service storage asymmetric after a failed load: {} services, expected {}",
 						name, data.size(), e.size_before);
+				}
+				if (e.source) {
+					refuse(std::format("module_loader: module '{}' failed to load: {}", name, what));
 				}
 				throw;
 			}

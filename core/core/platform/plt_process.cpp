@@ -1,4 +1,5 @@
 #include <snk/platform/plt_process.h>
+#include <snk/common/logger/engine_log.h>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -23,6 +24,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <spawn.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -389,7 +391,8 @@ platform::process_result platform::run_process(const fs::path& program, const st
 
 	PROCESS_INFORMATION process{};
 	if (!CreateProcessW(resolved.c_str(), command_line.data(), nullptr, nullptr, TRUE,
-			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+			CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
+				| static_cast<DWORD>(options.low_priority ? BELOW_NORMAL_PRIORITY_CLASS : 0),
 			options.environment ? environment.data() : nullptr,
 			options.working_dir.empty() ? nullptr : options.working_dir.c_str(), &startup.StartupInfo, &process)) {
 		return system_failure("cannot start", program);
@@ -661,6 +664,11 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	if (spawned != 0) {
 		return failure("cannot start", program, spawned);
 	}
+	// The child leads its own group: what it starts later inherits the value.
+	if (options.low_priority && ::setpriority(PRIO_PGRP, static_cast<id_t>(pid), 10) != 0) {
+		egLOG_DEBUG("platform/process", "cannot lower the priority of '{}': {}", resolved.string(),
+			std::error_code(errno, std::generic_category()).message());
+	}
 
 	bool reaped = false;
 	// on_line may throw: no process is left behind then either.
@@ -741,3 +749,31 @@ platform::process_result platform::run_process(const fs::path& program, const st
 }
 
 #endif
+
+std::int64_t platform::current_process_id()
+{
+#ifdef _WIN32
+	return static_cast<std::int64_t>(::GetCurrentProcessId());
+#else
+	return static_cast<std::int64_t>(::getpid());
+#endif
+}
+
+bool platform::process_is_running(std::int64_t pid)
+{
+	if (pid <= 0) {
+		return false;
+	}
+#ifdef _WIN32
+	const HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+	if (process == nullptr) {
+		return ::GetLastError() == ERROR_ACCESS_DENIED;
+	}
+	DWORD code = 0;
+	const bool running = ::GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+	::CloseHandle(process);
+	return running;
+#else
+	return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+#endif
+}

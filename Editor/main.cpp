@@ -8,6 +8,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
 #include <snk/project/prj_project.h>
+#include <utility>
 
 #if defined(_WIN32) && !defined(ENGINE_CONSOLE_MODE)
 #include <Windows.h>
@@ -68,7 +69,8 @@ int main(int argc, char* argv[])
 		// After the host's own modules: initialize_all_services must not see the loader grow.
 		core::project_modules_options project_modules;
 		project_modules.with_editor_modules = true;
-		core::load_project_modules(module_loader, app_storage, project_modules);
+		// In the storage, so the editor can reload a module from a new build (#435).
+		app_storage.construct<core::project_module_host>(module_loader, app_storage, std::move(project_modules)).load_all();
 
 		app::application editor;
 		result = editor.run(app_storage);
@@ -97,6 +99,10 @@ int main(int argc, char* argv[])
 
 	if (initialized) {
 		try {
+			// It refers to the loader, which goes after the storage.
+			if (app_storage.has_value<core::project_module_host>()) {
+				app_storage.destruct<core::project_module_host>();
+			}
 			module_loader.shutdown_all_services(app_storage);
 		} catch (const std::exception& e) {
 			egLOG_ERROR("app", "error during shutdown: {}", e.what());

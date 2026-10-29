@@ -1,4 +1,5 @@
 #include "edt_toolchain.h"
+#include "edt_path_text.h"
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
 #include <cstdlib>
@@ -11,14 +12,9 @@ extern char** environ;
 #endif
 
 namespace fs = std::filesystem;
+using edt::utf8_of;
 
 namespace {
-	std::string utf8_of(const fs::path& path)
-	{
-		const std::u8string text = path.u8string();
-		return std::string(text.begin(), text.end());
-	}
-
 	fs::path path_of(std::string_view utf8)
 	{
 		return fs::path(std::u8string(utf8.begin(), utf8.end()));

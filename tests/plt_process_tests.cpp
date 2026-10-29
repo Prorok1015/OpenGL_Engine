@@ -747,4 +747,29 @@ BOOST_AUTO_TEST_CASE(RunProcess_AMissingProgramIsAnError)
 	BOOST_TEST(!any_line);
 }
 
+#ifdef __linux__
+// The value is set right after the spawn, so the script waits for it instead of reading it once.
+BOOST_AUTO_TEST_CASE(RunProcess_LowPriority_NicesTheChild)
+{
+	if (is_child_run()) {
+		return;
+	}
+	platform::process_options options;
+	options.low_priority = true;
+	std::vector<std::string> lines;
+	const std::string script = "i=0; while [ $i -lt 100 ]; do read -r s < /proc/$$/stat; set -- $s; "
+		"[ \"${19}\" -ge 10 ] && break; i=$((i+1)); sleep 0.05; done; echo \"nice=${19}\"";
+
+	const auto result = platform::run_process(fs::path{ "/bin/sh" }, { "-c", script }, options,
+		[&lines](std::string_view line) { lines.emplace_back(line); }, {});
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST_INFO("output: " << joined(lines));
+	BOOST_TEST(result.exit_code == 0);
+	const auto found = std::ranges::find_if(lines, [](const std::string& line) { return line.starts_with("nice="); });
+	BOOST_REQUIRE(found != lines.end());
+	BOOST_TEST(std::stoi(found->substr(5)) >= 10);
+}
+#endif
+
 BOOST_AUTO_TEST_SUITE_END()

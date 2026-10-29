@@ -1,7 +1,9 @@
 #include "edt_game_builder.h"
 #include "edt_build_diagnostics.h"
+#include "edt_path_text.h"
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/object.hpp>
@@ -16,16 +18,11 @@
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
+using edt::utf8_of;
 
 namespace {
 	constexpr const char* k_window = "Building the game##edt_build";
 	constexpr const char* k_presets = "CMakePresets.json";
-
-	std::string utf8_of(const fs::path& path)
-	{
-		const std::u8string text = path.u8string();
-		return std::string(text.begin(), text.end());
-	}
 
 	json::value args_schema()
 	{
@@ -42,13 +39,52 @@ namespace {
 		fs::path root;
 		std::vector<std::string> modules;
 		fs::path sdk_dir;
-		std::string configuration;
+		edt::build_request request;
 		edt::process_runner run;
 		std::function<std::variant<edt::toolchain, std::string>(std::stop_token)> find_toolchain;
+		std::shared_ptr<std::stop_source> restart;
 	};
+
+	edt::game_build_result restarted_result()
+	{
+		egLOG_INFO("editor/build", "build stopped for a newer request");
+		edt::game_build_result result;
+		result.restarted = true;
+		return result;
+	}
+
+	std::vector<edt::game_build_result::module_file> find_modules(const fs::path& root, const std::vector<std::string>& modules)
+	{
+		std::error_code ec;
+		fs::path dir = fs::absolute(root / "build" / "bin", ec);
+		if (ec) dir = root / "build" / "bin";
+		std::vector<edt::game_build_result::module_file> out;
+		for (const auto& module : modules) {
+			const auto names = edt::module_file_names(module);
+			edt::game_build_result::module_file file{ module, dir / names.front(), false };
+			for (const auto& name : names) {
+				if (fs::exists(dir / name, ec)) {
+					file.path = dir / name;
+					file.exists = true;
+					break;
+				}
+			}
+			out.push_back(std::move(file));
+		}
+		return out;
+	}
 
 	edt::game_build_result run_build(const build_input& in, ds::task_context& ctx)
 	{
+		// The steps see one token: the job's cancel and the builder's restart both stop them.
+		std::stop_source stop_source = *in.restart;
+		const std::stop_callback forward_cancel(ctx.stop, [stop_source]() mutable { stop_source.request_stop(); });
+		const std::stop_token stop = stop_source.get_token();
+		if (stop.stop_requested()) {
+			ctx.throw_if_stopped();
+			return restarted_result();
+		}
+
 		edt::game_build_result result;
 		std::error_code ec;
 		if (in.sdk_dir.empty() || !fs::is_regular_file(in.sdk_dir / "snake_sdkConfig.cmake", ec)) {
@@ -57,8 +93,9 @@ namespace {
 		}
 
 		ctx.set_progress(0.f, "Looking for the toolchain");
-		auto found = in.find_toolchain(ctx.stop);
+		auto found = in.find_toolchain(stop);
 		ctx.throw_if_stopped();
+		if (stop.stop_requested()) return restarted_result();
 		if (auto* error = std::get_if<std::string>(&found)) {
 			result.setup_error = std::move(*error);
 			return result;
@@ -68,6 +105,7 @@ namespace {
 		platform::process_options options;
 		options.working_dir = in.root / "code";
 		options.environment = tools.environment;
+		options.low_priority = in.request.priority == edt::build_priority::low;
 		edt::set_variable(*options.environment, "SNAKE_SDK_DIR", utf8_of(in.sdk_dir));
 
 		edt::build_output_parser parser;
@@ -83,8 +121,12 @@ namespace {
 		};
 
 		const auto step = [&](const char* name, std::vector<std::string> args) {
-			const auto outcome = in.run(tools.cmake, args, options, on_line, ctx.stop);
+			const auto outcome = in.run(tools.cmake, args, options, on_line, stop);
 			if (outcome.cancelled) {
+				if (!ctx.stop.stop_requested()) {
+					result.restarted = true;
+					return false;
+				}
 				egLOG_INFO("editor/build", "build cancelled");
 				throw ds::task_cancelled{};
 			}
@@ -97,17 +139,24 @@ namespace {
 			return true;
 		};
 
-		ctx.set_progress(0.f, "Configuring");
-		if (step("configure", { "--preset", in.configuration })) {
-			ctx.set_progress(0.f, "Building");
-			step("build", { "--build", "--preset", in.configuration });
+		const std::string& preset = in.request.preset.empty() ? in.request.configuration : in.request.preset;
+		std::vector<std::string> build_args{ "--build", "--preset", preset };
+		if (in.request.jobs > 0) {
+			build_args.push_back("--parallel");
+			build_args.push_back(std::to_string(in.request.jobs));
 		}
+		if (in.request.verbosity == edt::log_verbosity::verbose) build_args.push_back("--verbose");
+
+		ctx.set_progress(0.f, "Configuring");
+		if (step("configure", { "--preset", preset })) {
+			ctx.set_progress(0.f, "Building");
+			step("build", std::move(build_args));
+		}
+		if (result.restarted) return restarted_result();
 
 		result.problems = parser.take();
 		result.tail.assign(tail.begin(), tail.end());
-		for (const auto& module : in.modules) {
-			result.modules.push_back(in.root / "build" / "bin" / edt::module_file_name(module));
-		}
+		result.modules = find_modules(in.root, in.modules);
 		return result;
 	}
 }
@@ -147,6 +196,31 @@ std::string edt::module_file_name(std::string_view module)
 #endif
 }
 
+std::vector<std::string> edt::module_file_names(std::string_view module)
+{
+#ifdef _WIN32
+	return { module_file_name(module) };
+#else
+	return { module_file_name(module), std::format("{}.so", module) };
+#endif
+}
+
+edt::build_request edt::make_manual_build_request(const build_settings& settings, std::string configuration,
+	const game_builder_options& options)
+{
+	build_request out;
+	out.configuration = !configuration.empty() ? std::move(configuration) : settings.configuration.value_or(options.default_configuration);
+	out.preset = options.preset_for ? options.preset_for(out.configuration) : out.configuration;
+	if (settings.jobs_mode == jobs_mode::auto_jobs && options.auto_jobs) {
+		out.jobs = std::max(1, options.auto_jobs());
+	}
+	out.priority = build_priority::normal;
+	out.cancel_on_restart = false;
+	out.verbosity = settings.log_verbosity;
+	out.reload_after = settings.reload_after_build;
+	return out;
+}
+
 edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialog_service& dialogs, action_registry& actions,
 	game_builder_options options)
 	: m_jobs(jobs)
@@ -159,6 +233,7 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 			m_options.default_configuration);
 		m_options.default_configuration = "debuggame";
 	}
+	if (!m_options.settings) m_options.settings = [] { return build_settings{}; };
 	if (!m_options.find_toolchain) {
 		m_options.find_toolchain = [cache = m_toolchains, settings = m_options.toolchain, run = m_options.run](std::stop_token stop) {
 			return cache->get(settings, run, stop);
@@ -185,39 +260,11 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 	command.risk = cmd::danger::deny_by_default;
 	command.enabled = [this] { return disabled_reason().empty(); };
 	command.invoke = [this](const cmd::call& request) {
-		const json::value& args = request.args;
-		if (is_building()) return action_result::failure("busy", "A build is already running");
-		if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
-		const game_project project = *m_options.project();
-
-		build_input input;
-		input.root = project.root;
-		input.modules = project.modules;
-		input.sdk_dir = m_options.sdk_dir;
-		input.configuration = m_options.default_configuration;
-		if (const json::value* chosen = args.as_object().if_contains("configuration")) input.configuration = std::string(chosen->as_string());
-		input.run = m_options.run;
-		input.find_toolchain = m_options.find_toolchain;
-		m_configuration = input.configuration;
-
-		m_problems.clear("build");
-		egLOG_INFO("editor/build", "building the game module ({}) in '{}'", input.configuration, utf8_of(project.root / "code"));
-		m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
-			[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
-			[this](ds::task_result<game_build_result>& result) {
-				if (!result.ok()) {
-					egLOG_WARN("editor/build", "the build job failed: {}", result.error);
-					return;
-				}
-				finish(*result.value);
-			});
-		if (m_options.show_progress) {
-			m_spinner_t = 0.f;
-			m_options.show_progress("edt/build_game", [this, alive = std::weak_ptr<int>(m_alive)] {
-				return !alive.expired() && draw_progress();
-			});
+		std::string configuration;
+		if (const json::value* chosen = request.args.as_object().if_contains("configuration")) {
+			configuration = std::string(chosen->as_string());
 		}
-		return action_result::success(json::object{ { "started", true }, { "job", m_job } });
+		return start(make_manual_build_request(m_options.settings(), std::move(configuration), m_options));
 	};
 
 	action_ui ui;
@@ -239,8 +286,77 @@ bool edt::game_builder::is_building() const
 	return m_job != 0 && m_jobs.is_running(m_job);
 }
 
+edt::action_result edt::game_builder::start(build_request request)
+{
+	if (request.configuration.empty()) return action_result::failure("invalid_args", "The build request has no configuration");
+	if (is_building()) {
+		if (!request.cancel_on_restart) return action_result::failure("busy", "A build is already running");
+		if (m_pending) egLOG_WARN("editor/build", "a waiting build request ({}) was replaced by a newer one", m_pending->configuration);
+		m_pending = std::move(request);
+		// Not job_service::cancel: that skips on_done, which starts the waiting request. So the job ends as `done`.
+		if (m_restart_stop) m_restart_stop->request_stop();
+		return action_result::success(json::object{ { "started", false }, { "job", 0 } });
+	}
+	if (const std::string reason = disabled_reason(); !reason.empty()) return action_result::failure("disabled", reason);
+	launch(std::move(request));
+	return action_result::success(json::object{ { "started", true }, { "job", m_job } });
+}
+
+void edt::game_builder::launch(build_request request)
+{
+	// Only a request that meets a running build waits; one left by a job cancelled from outside is stale.
+	if (m_pending) {
+		egLOG_WARN("editor/build", "a waiting build request ({}) was dropped: its build was cancelled", m_pending->configuration);
+		m_pending.reset();
+	}
+	if (request.preset.empty()) request.preset = request.configuration;
+	const game_project project = *m_options.project();
+
+	build_input input;
+	input.root = project.root;
+	input.modules = project.modules;
+	input.sdk_dir = m_options.sdk_dir;
+	input.request = request;
+	input.run = m_options.run;
+	input.find_toolchain = m_options.find_toolchain;
+	m_restart_stop = std::make_shared<std::stop_source>();
+	input.restart = m_restart_stop;
+	m_configuration = request.configuration;
+
+	m_problems.clear("build");
+	egLOG_INFO("editor/build", "building the game module ({}, preset '{}', {}) in '{}'", request.configuration, request.preset,
+		request.jobs > 0 ? std::format("{} jobs", request.jobs) : std::string{ "jobs of the preset" }, utf8_of(project.root / "code"));
+	m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
+		[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
+		[this, request](ds::task_result<game_build_result>& result) {
+			if (!result.ok()) {
+				egLOG_WARN("editor/build", "the build job failed: {}", result.error);
+			} else {
+				finish(*result.value, request);
+			}
+			if (m_pending) {
+				build_request next = std::move(*m_pending);
+				m_pending.reset();
+				if (const auto outcome = start(std::move(next)); !outcome.ok) {
+					egLOG_WARN("editor/build", "the waiting build did not start: {}", outcome.error);
+				}
+			}
+		});
+	if (m_options.show_progress && !m_progress_shown) {
+		m_progress_shown = true;
+		m_spinner_t = 0.f;
+		m_options.show_progress("edt/build_game", [this, alive = std::weak_ptr<int>(m_alive)] {
+			return !alive.expired() && draw_progress();
+		});
+	}
+}
+
 void edt::game_builder::cancel()
 {
+	if (m_pending) {
+		egLOG_WARN("editor/build", "a waiting build request ({}) was dropped: the build was cancelled", m_pending->configuration);
+		m_pending.reset();
+	}
 	if (is_building()) m_jobs.cancel(m_job);
 }
 
@@ -264,19 +380,22 @@ std::string edt::game_builder::disabled_reason() const
 	return {};
 }
 
-void edt::game_builder::finish(game_build_result& result)
+void edt::game_builder::finish(game_build_result& result, const build_request& request)
 {
-	if (!result.tail.empty()) {
+	if (result.restarted) return;
+	if (!result.tail.empty() && (!result.ok() || request.verbosity != log_verbosity::errors)) {
 		std::string text;
 		for (const auto& line : result.tail) {
 			text += '\n';
 			text += line;
 		}
 		// A failure's message points at the log, so its output must not hide below the default level.
-		if (result.ok()) {
-			egLOG_DEBUG("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
-		} else {
+		if (!result.ok()) {
 			egLOG_WARN("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
+		} else if (request.verbosity == log_verbosity::verbose) {
+			egLOG_INFO("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
+		} else {
+			egLOG_DEBUG("editor/build", "build output (last {} lines):{}", result.tail.size(), text);
 		}
 	}
 
@@ -293,12 +412,20 @@ void edt::game_builder::finish(game_build_result& result)
 	if (result.ok()) {
 		std::string built;
 		for (const auto& module : result.modules) {
-			std::error_code ec;
-			if (!fs::exists(module, ec)) continue;
+			if (!module.exists) continue;
 			built += built.empty() ? "" : ", ";
-			built += utf8_of(module);
+			built += utf8_of(module.path);
 		}
 		egLOG_INFO("editor/build", "game module built: {}", built.empty() ? std::string{ "(no module file of the manifest found in build/bin)" } : built);
+		if (m_options.events) {
+			// A slot may start the next build.
+			const std::uint64_t job = m_job;
+			for (const auto& module : result.modules) {
+				if (!module.exists) continue;
+				m_options.events->game_module_built.emit(
+					game_module_build_result{ module.name, module.path, request.configuration, job, request.reload_after });
+			}
+		}
 		return;
 	}
 
@@ -317,6 +444,7 @@ void edt::game_builder::finish(game_build_result& result)
 bool edt::game_builder::draw_progress()
 {
 	if (!is_building()) {
+		m_progress_shown = false;
 		return false;
 	}
 	// A window, not a modal: a build takes minutes and the editor stays usable meanwhile (#434).

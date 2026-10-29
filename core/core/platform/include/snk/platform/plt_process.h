@@ -15,6 +15,11 @@ namespace platform
 	// The file of the running program; empty when the system cannot tell.
 	SNK_API std::filesystem::path current_executable();
 
+	SNK_API std::int64_t current_process_id();
+	// Whether a process with this id runs now: true for one this process may not look at, false for an id <= 0. An id
+	// the system reused for another program counts as running.
+	SNK_API bool process_is_running(std::int64_t pid);
+
 	struct spawn_result
 	{
 		// The id the system gave the new process; 0 exactly when `error` is set.
@@ -42,6 +47,9 @@ namespace platform
 		// `on_line` gets the output bytes in the chunks they were read in, not split into lines: for output that is
 		// not 8-bit text (cmd /u writes UTF-16LE, where a 0x0A byte is not always a line break).
 		bool raw_output = false;
+		// Below normal priority (Windows) / nice 10 for the child's process group (POSIX), so a background build
+		// leaves the machine usable. Failing to lower it is not an error.
+		bool low_priority = false;
 	};
 
 	struct process_result

@@ -4,26 +4,29 @@
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
+#include <snk/platform/plt_process.h>
 #include <snk/project/prj_modules.h>
 #include <snk/project/prj_project.h>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
 
 	namespace fs = std::filesystem;
 
-	// Copies of the same file under a new name each load: Windows maps one image per file name, and the build output
-	// is never held open, so it can be rebuilt while the module runs (hot reload, #435).
 	constexpr int k_max_copies = 1000;
 
 	// path::string() throws on Windows for a name outside the ANSI code page.
@@ -95,104 +98,118 @@ namespace {
 		return {};
 	}
 
-	bool is_copy_of(const std::string& name, const fs::path& file)
+	// What goes with the module into its copy: its debug symbols and the libraries it may load from its own folder.
+	bool travels_with_module(const fs::path& file)
 	{
-		const std::string file_name = utf8(file.filename());
-		if (!file_name.starts_with(name + ".")) {
-			return false;
-		}
-		const std::string_view rest = std::string_view{ file_name }.substr(name.size() + 1);
-		const std::string_view number = rest.substr(0, rest.find('.'));
-		return !number.empty() && number.size() < rest.size()
-			&& std::ranges::all_of(number, [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; });
+#if defined(_WIN32)
+		const std::string extension = utf8(file.extension());
+		return extension == ".dll" || extension == ".pdb" || extension == ".DLL" || extension == ".PDB";
+#else
+		const std::string name = utf8(file.filename());
+		return name.ends_with(".so") || name.find(".so.") != std::string::npos;
+#endif
 	}
 
-	// Copies left by earlier runs. One another editor still has loaded cannot be removed on Windows and stays.
-	void remove_old_copies(const fs::path& cache, const std::string& name)
+	bool is_library(const fs::path& file)
 	{
-		std::error_code ec;
-		std::vector<fs::path> old;
-		for (fs::directory_iterator it{ cache, ec }, end; !ec && it != end; it.increment(ec)) {
-			if (is_copy_of(name, it->path())) {
-				old.push_back(it->path());
-			}
+		const std::string extension = utf8(file.extension());
+		return extension != ".pdb" && extension != ".PDB";
+	}
+
+	// The process a copy folder <pid>-<n> belongs to; nullopt for a name of another kind.
+	std::optional<std::int64_t> owner_of(const fs::path& folder)
+	{
+		const std::string name = utf8(folder.filename());
+		const auto dash = name.find('-');
+		std::int64_t pid = 0;
+		if (dash == std::string::npos || dash == 0 || dash + 1 == name.size()) {
+			return std::nullopt;
 		}
-		for (const auto& file : old) {
-			fs::remove(file, ec);
+		const auto [end, error] = std::from_chars(name.data(), name.data() + dash, pid);
+		if (error != std::errc{} || end != name.data() + dash
+			|| !std::ranges::all_of(std::string_view{ name }.substr(dash + 1), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
+			return std::nullopt;
 		}
+		return pid;
 	}
 
 	struct module_copy
 	{
 		fs::path library;
-		fs::path folder; // canonical <root>/.cache/modules
-		std::vector<fs::path> files; // the library and what came with it
+		fs::path folder; // <root>/.cache/modules/<pid>-<n>, canonical
+		// Libraries copied along with the module, by file name: size and time of the build's file. They are loaded by
+		// name, so a reload does not replace one already loaded.
+		std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>> siblings;
 	};
 
-	void remove_copy(const module_copy& copy)
+	// The checked, canonical <root>/.cache/modules, made if missing; empty string on success.
+	std::string cache_folder(const prj::project_context& project, fs::path& out)
 	{
 		std::error_code ec;
-		for (const auto& file : copy.files) {
-			fs::remove(file, ec);
+		// Checked before anything is created in it: a .cache linked out of the project gets no folders.
+		if (fs::path cache; fs::exists(project.cache_dir(), ec)) {
+			if (std::string why = folder_inside(project.root, project.cache_dir(), cache); !why.empty()) {
+				return why;
+			}
 		}
+		fs::create_directories(module_cache_dir(project), ec);
+		return folder_inside(project.root, module_cache_dir(project), out);
 	}
 
-	// The library's debug symbols next to its copy, if there are any inside the build output: best effort.
-	void copy_symbols(const fs::path& output, const fs::path& library, const fs::path& copy, module_copy& out)
+	// Empty string on success; on failure nothing of the copy is left.
+	std::string copy_library(const prj::project_context& project, const fs::path& found, module_copy& out)
 	{
-		std::error_code ec;
-		const fs::path symbols = fs::path{ library }.replace_extension(".pdb");
-		fs::path real;
-		if (!fs::exists(symbols, ec) || !file_inside(output, symbols, real).empty()) {
-			return;
-		}
-		const fs::path target = fs::path{ copy }.replace_extension(".pdb");
-		if (fs::copy_file(real, target, fs::copy_options::none, ec)) {
-			out.files.push_back(target);
-		}
-	}
-
-	// Empty string on success.
-	std::string copy_library(const prj::project_context& project, const std::string& name, const fs::path& found, module_copy& out)
-	{
-		const fs::path& root = project.root;
 		fs::path output;
-		if (std::string why = folder_inside(root, build_output_dir(project), output); !why.empty()) {
+		if (std::string why = folder_inside(project.root, build_output_dir(project), output); !why.empty()) {
 			return why;
 		}
 		fs::path library;
 		if (std::string why = file_inside(output, found, library); !why.empty()) {
 			return why;
 		}
-
-		std::error_code ec;
-		// Checked before anything is created in it: a .cache linked out of the project gets no folders.
-		if (fs::path cache; fs::exists(project.cache_dir(), ec)) {
-			if (std::string why = folder_inside(root, project.cache_dir(), cache); !why.empty()) {
-				return why;
-			}
-		}
-		fs::create_directories(module_cache_dir(project), ec);
-		if (std::string why = folder_inside(root, module_cache_dir(project), out.folder); !why.empty()) {
+		fs::path cache;
+		if (std::string why = cache_folder(project, cache); !why.empty()) {
 			return why;
 		}
-		remove_old_copies(out.folder, name);
 
-		const fs::path extension = library.extension();
-		for (int n = 0; n < k_max_copies; ++n) {
-			fs::path target = out.folder / std::format("{}.{}", name, n);
-			target += extension;
-			if (fs::copy_file(library, target, fs::copy_options::none, ec)) {
-				out.library = target;
-				out.files.push_back(target);
-				copy_symbols(output, library, target, out);
-				return {};
-			}
-			if (ec != std::errc::file_exists) {
-				return std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), ec.message());
+		std::error_code ec;
+		const std::int64_t pid = platform::current_process_id();
+		fs::path folder;
+		for (int n = 0; n < k_max_copies && folder.empty(); ++n) {
+			const fs::path candidate = cache / std::format("{}-{}", pid, n);
+			if (fs::create_directory(candidate, ec)) {
+				folder = candidate;
+			} else if (ec) {
+				return std::format("cannot make '{}': {}", utf8(candidate), ec.message());
 			}
 		}
-		return std::format("no free name for a copy of '{}' in '{}'", utf8(library), utf8(out.folder));
+		if (folder.empty()) {
+			return std::format("no free folder for a copy of '{}' in '{}'", utf8(library), utf8(cache));
+		}
+
+		const auto fail = [&](std::string why) {
+			fs::remove_all(folder, ec);
+			return why;
+		};
+		const fs::path target = folder / library.filename();
+		if (!fs::copy_file(library, target, fs::copy_options::none, ec)) {
+			return fail(std::format("cannot copy '{}' to '{}': {}", utf8(library), utf8(target), ec.message()));
+		}
+		for (fs::directory_iterator it{ output, ec }, end; !ec && it != end; it.increment(ec)) {
+			fs::path real;
+			if (it->path().filename() == library.filename() || !travels_with_module(it->path())
+				|| !file_inside(output, it->path(), real).empty()) {
+				continue;
+			}
+			std::error_code copy_ec;
+			if (fs::copy_file(real, folder / it->path().filename(), fs::copy_options::none, copy_ec) && is_library(real)) {
+				std::error_code stamp_ec;
+				out.siblings[utf8(it->path().filename())] = { fs::file_size(real, stamp_ec), fs::last_write_time(real, stamp_ec) };
+			}
+		}
+		out.library = target;
+		out.folder = folder;
+		return {};
 	}
 
 	// Empty string once the module is loaded. The module is checked against the manifest's name before it gets a
@@ -208,38 +225,117 @@ namespace {
 		return {};
 	}
 
-	// Empty string once loaded, else why not; on failure the copy is gone.
-	std::string load_one(app::modules::module_loader& loader, ds::app_data_storage& data, const prj::project_context& project,
-		const core::project_modules_options& options, const std::string& name, module_copy& copy)
+	template<class F>
+	std::string guarded(F&& body)
 	{
-		std::unique_ptr<app::modules::module_source> source;
-		if (const auto it = options.compiled_in.find(name); it != options.compiled_in.end()) {
-			source = std::make_unique<app::modules::static_module_source>(name, it->second);
-		} else if (const auto found = find_library(project, name)) {
-			if (std::string why = copy_library(project, name, *found, copy); !why.empty()) {
-				return why;
-			}
-			source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
-		} else {
-			return "its library is no longer in the build output";
+		try {
+			return body();
+		} catch (const std::exception& e) {
+			return e.what();
+		} catch (...) {
+			return "unknown exception";
 		}
-		return load_module(loader, data, std::move(source), name);
+	}
+
+	// Only the libraries the running copy loaded too and that the build changed since: the system keeps those.
+	// While a reload runs, from its start to its after_swap: unloading the module from inside the reload (a hook, or the
+	// module's own code calling back into the editor) would destroy code that is still on the stack.
+	struct reloading_scope
+	{
+		bool& flag;
+		explicit reloading_scope(bool& reloading) : flag(reloading) { flag = true; }
+		~reloading_scope() { flag = false; }
+		reloading_scope(const reloading_scope&) = delete;
+		reloading_scope& operator=(const reloading_scope&) = delete;
+	};
+
+	void warn_about_siblings(const std::string& name, const std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>>& now,
+		const std::map<std::string, std::pair<std::uintmax_t, fs::file_time_type>>& before)
+	{
+		std::string list;
+		for (const auto& [file, stamp] : now) {
+			if (const auto it = before.find(file); it != before.end() && it->second != stamp) {
+				list += (list.empty() ? "" : ", ") + file;
+			}
+		}
+		if (list.empty()) {
+			return;
+		}
+		egLOG_WARN("project", "module '{}': the libraries next to it are not reloaded, the system keeps the ones already "
+			"loaded; restart the editor to pick up changes to {}", name, list);
 	}
 
 }
 
-core::project_modules_report core::load_project_modules(app::modules::module_loader& loader, ds::app_data_storage& data,
-	const project_modules_options& options)
+core::project_module_host::project_module_host(app::modules::module_loader& loader, ds::app_data_storage& data,
+	project_modules_options options)
+	: m_loader(loader)
+	, m_data(data)
+	, m_options(std::move(options))
+{
+}
+
+std::optional<std::filesystem::path> core::project_module_host::build_output(const std::string& name) const
+{
+	if (!m_data.has_value<prj::project_context>()) {
+		return std::nullopt;
+	}
+	return find_library(m_data.require<prj::project_context>(), name);
+}
+
+void core::project_module_host::remove_unused_copies() const
+{
+	if (!m_data.has_value<prj::project_context>()) {
+		return;
+	}
+	const auto& project = m_data.require<prj::project_context>();
+	std::error_code ec;
+	if (!fs::exists(module_cache_dir(project), ec)) {
+		return;
+	}
+	fs::path cache;
+	if (!cache_folder(project, cache).empty()) {
+		return;
+	}
+	const auto in_use = [&](const fs::path& folder) {
+		return std::ranges::any_of(m_copies, [&](const auto& entry) {
+			const module_copies& copies = entry.second;
+			return (copies.current && copies.current->folder == folder) || (copies.previous && copies.previous->folder == folder);
+		});
+	};
+	const std::int64_t self = platform::current_process_id();
+	std::vector<fs::path> unused;
+	for (fs::directory_iterator it{ cache, ec }, end; !ec && it != end; it.increment(ec)) {
+		std::error_code type_ec;
+		if (!it->is_directory(type_ec)) {
+			// A copy of the layout before #435 (<name>.<n>.<ext>).
+			unused.push_back(it->path());
+			continue;
+		}
+		const auto owner = owner_of(it->path());
+		if (!owner || (*owner == self ? in_use(it->path()) : platform::process_is_running(*owner))) {
+			continue;
+		}
+		unused.push_back(it->path());
+	}
+	// One still mapped by a process cannot go on Windows and stays.
+	for (const auto& entry : unused) {
+		fs::remove_all(entry, ec);
+	}
+}
+
+core::project_modules_report core::project_module_host::load_all()
 {
 	project_modules_report report;
-	if (!data.has_value<prj::project_context>()) {
+	if (!m_data.has_value<prj::project_context>()) {
 		return report;
 	}
-	const auto& project = data.require<prj::project_context>();
+	const auto& project = m_data.require<prj::project_context>();
+	remove_unused_copies();
 
 	std::vector<std::string> known;
 	for (const auto& ref : project.data.modules) {
-		if (ref.kind == prj::module_kind::runtime && (options.compiled_in.contains(ref.name) || find_library(project, ref.name))) {
+		if (ref.kind == prj::module_kind::runtime && (m_options.compiled_in.contains(ref.name) || find_library(project, ref.name))) {
 			known.push_back(ref.name);
 		}
 	}
@@ -247,7 +343,7 @@ core::project_modules_report core::load_project_modules(app::modules::module_loa
 	report.missing_required = resolution.missing_required;
 	report.missing_optional = resolution.missing_optional;
 
-	if (options.with_editor_modules) {
+	if (m_options.with_editor_modules) {
 		for (const auto& ref : project.data.modules) {
 			if (ref.kind != prj::module_kind::editor) {
 				continue;
@@ -262,22 +358,179 @@ core::project_modules_report core::load_project_modules(app::modules::module_loa
 
 	for (const auto& ref : resolution.resolved) {
 		module_copy copy;
-		std::string problem;
-		try {
-			problem = load_one(loader, data, project, options, ref.name, copy);
-		} catch (const std::exception& e) {
-			problem = e.what();
-		} catch (...) {
-			problem = "unknown exception";
-		}
+		const std::string problem = guarded([&]() -> std::string {
+			std::unique_ptr<app::modules::module_source> source;
+			if (const auto it = m_options.compiled_in.find(ref.name); it != m_options.compiled_in.end()) {
+				source = std::make_unique<app::modules::static_module_source>(ref.name, it->second);
+			} else if (const auto found = find_library(project, ref.name)) {
+				if (std::string why = copy_library(project, *found, copy); !why.empty()) {
+					return why;
+				}
+				source = std::make_unique<app::modules::native_library_source>(copy.library, copy.folder);
+			} else {
+				return "its library is no longer in the build output";
+			}
+			return load_module(m_loader, m_data, std::move(source), ref.name);
+		});
 		if (problem.empty()) {
 			egLOG_INFO("project", "module '{}' loaded{}", ref.name, copy.library.empty() ? std::string{} : " from " + utf8(copy.library));
+			if (!copy.folder.empty()) {
+				m_copies[ref.name].current = loaded_copy{ copy.library, copy.folder, copy.siblings };
+			}
 			report.loaded.push_back(ref.name);
 			continue;
 		}
 		egLOG_ERROR("project", "module '{}' refused: {}", ref.name, problem);
-		remove_copy(copy);
+		std::error_code ec;
+		if (!copy.folder.empty()) {
+			fs::remove_all(copy.folder, ec);
+		}
 		report.refused.push_back(ref.name);
 	}
 	return report;
+}
+
+core::reload_report core::project_module_host::reload(const std::string& name, const reload_hooks& hooks)
+{
+	const auto refused = [&](std::string why) {
+		egLOG_ERROR("project", "module '{}' not reloaded: {}", name, why);
+		return reload_report{ reload_status::refused, std::move(why) };
+	};
+	if (m_reloading) {
+		return refused("a reload is already running");
+	}
+	const reloading_scope scope{ m_reloading };
+	if (!m_data.has_value<prj::project_context>()) {
+		return refused("no project is open");
+	}
+	if (m_options.compiled_in.contains(name)) {
+		return refused("it is compiled into the host");
+	}
+	const auto& project = m_data.require<prj::project_context>();
+	const auto found = find_library(project, name);
+	if (!found) {
+		return refused(std::format("there is no build of it in '{}'", utf8(build_output_dir(project))));
+	}
+	remove_unused_copies();
+	module_copy copy;
+	if (std::string why = guarded([&] { return copy_library(project, *found, copy); }); !why.empty()) {
+		return refused(std::move(why));
+	}
+
+	std::optional<loaded_copy> running;
+	std::function<std::unique_ptr<app::modules::module_source>()> previous;
+	if (const auto it = m_copies.find(name); it != m_copies.end() && it->second.current) {
+		running = it->second.current;
+		previous = [library = running->library, folder = running->folder] {
+			return std::make_unique<app::modules::native_library_source>(library, folder);
+		};
+	}
+	const reload_report report = swap(name, std::make_unique<app::modules::native_library_source>(copy.library, copy.folder),
+		previous, hooks, loaded_copy{ copy.library, copy.folder, copy.siblings });
+	if (report.status == reload_status::reloaded && running) {
+		warn_about_siblings(name, copy.siblings, running->siblings);
+	}
+	return report;
+}
+
+core::reload_report core::project_module_host::reload(const std::string& name, std::unique_ptr<app::modules::module_source> next,
+	std::function<std::unique_ptr<app::modules::module_source>()> previous, const reload_hooks& hooks)
+{
+	if (m_reloading) {
+		egLOG_ERROR("project", "module '{}' not reloaded: a reload is already running", name);
+		return { reload_status::refused, "a reload is already running" };
+	}
+	const reloading_scope scope{ m_reloading };
+	return swap(name, std::move(next), previous, hooks, std::nullopt);
+}
+
+core::reload_report core::project_module_host::swap(const std::string& name, std::unique_ptr<app::modules::module_source> next,
+	const std::function<std::unique_ptr<app::modules::module_source>()>& previous, const reload_hooks& hooks,
+	const std::optional<loaded_copy>& copy)
+{
+	std::error_code ec;
+	const auto drop_copy = [&] {
+		if (copy) {
+			fs::remove_all(copy->folder, ec);
+		}
+	};
+
+	// Checked next to the running module: nothing of the running one is touched until the new one passed.
+	std::optional<app::modules::module_loader::prepared_module> prepared;
+	std::string problem = guarded([&]() -> std::string {
+		prepared.emplace(app::modules::module_loader::prepare(std::move(next)));
+		if (prepared->name() != name) {
+			std::string why = std::format("{} is the module '{}'", prepared->describe(), prepared->name());
+			prepared.reset();
+			return why;
+		}
+		return {};
+	});
+	if (!problem.empty()) {
+		drop_copy();
+		egLOG_ERROR("project", "module '{}' not reloaded: {}", name, problem);
+		return { reload_status::refused, std::move(problem) };
+	}
+
+	if (hooks.before_swap) {
+		hooks.before_swap();
+	}
+	const auto finish = [&](reload_report report) {
+		if (report.status == reload_status::reloaded) {
+			egLOG_INFO("project", "module '{}' reloaded{}", name, copy ? " from " + utf8(copy->library) : std::string{});
+		} else {
+			egLOG_ERROR("project", "module '{}' not reloaded: {}", name, report.message);
+		}
+		if (hooks.after_swap) {
+			hooks.after_swap(report);
+		}
+		remove_unused_copies();
+		return report;
+	};
+
+	const bool was_loaded = m_loader.state(name) == app::modules::module_state::initialized;
+	if (was_loaded) {
+		problem = guarded([&] { m_loader.unload(name, m_data); return std::string{}; });
+		if (!problem.empty() && m_loader.state(name) == app::modules::module_state::initialized) {
+			prepared.reset();
+			drop_copy();
+			return finish({ reload_status::refused, std::format("the running module could not be unloaded: {}", problem) });
+		}
+		if (!problem.empty()) {
+			// Unloaded, but it left services behind (logged by the loader): go on with the new one.
+			egLOG_ERROR("project", "module '{}': {}", name, problem);
+		}
+	}
+
+	problem = guarded([&] { m_loader.load(std::move(*prepared), m_data); return std::string{}; });
+	prepared.reset();
+	if (problem.empty()) {
+		auto& copies = m_copies[name];
+		if (copy) {
+			copies.previous = std::exchange(copies.current, *copy);
+		}
+		return finish({ reload_status::reloaded, {} });
+	}
+	drop_copy();
+
+	if (!was_loaded) {
+		// Nothing ran before, so nothing was lost.
+		return finish({ reload_status::refused, std::format("the new build failed: {}", problem) });
+	}
+	if (!previous) {
+		return finish({ reload_status::lost, std::format("the new build failed: {}", problem) });
+	}
+	const std::string rollback = guarded([&] { return load_module(m_loader, m_data, previous(), name); });
+	if (rollback.empty()) {
+		return finish({ reload_status::rolled_back, std::format("the new build failed, the previous one runs again: {}", problem) });
+	}
+	m_copies.erase(name);
+	return finish({ reload_status::lost, std::format("the new build failed: {}; the previous one failed to load again: {}", problem, rollback) });
+}
+
+core::project_modules_report core::load_project_modules(app::modules::module_loader& loader, ds::app_data_storage& data,
+	const project_modules_options& options)
+{
+	project_module_host host(loader, data, options);
+	return host.load_all();
 }

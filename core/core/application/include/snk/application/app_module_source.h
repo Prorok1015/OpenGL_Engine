@@ -49,6 +49,8 @@ namespace app::modules {
 	//
 	// For module authors: the library's static initializers (and DllMain) run inside open(), before the host has
 	// checked snk_module_build_info. They must not use the engine or EnTT; do that in the module's services.
+	// Nothing of the library (an exception its code threw, an object, a string, a vtable) may outlive its unload: an
+	// exception of a module that fails to load reaches the host as module_loader's own std::logic_error with its message.
 	class SNK_API native_library_source final : public module_source {
 	public:
 		// `module_dir`: the project's (or the build's) directory of game modules, absolute.
