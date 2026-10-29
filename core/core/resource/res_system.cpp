@@ -1178,8 +1178,11 @@ res::mount_table res::resource_system::project_mount_table(
   table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
   if (!code_dir.empty()) {
     // Case folded: on a case-insensitive file system "Build/a.cpp" is the folder the deny patterns name.
+    // The watcher skips the folders the write policy refuses and reports code files only: one list for both.
     table.push_back(mount{tag::code, {code_dir}, mount_access::read_write,
-                          write_policy{tag::code, prj::code_write_patterns(), false}});
+                          write_policy{tag::code, prj::code_write_patterns(), false},
+                          watch_options{true, [](std::string_view name) { return prj::is_code_ignored_dir(name); },
+                                        [](std::string_view name) { return prj::is_code_file(name); }}});
   }
   add_engine_mount(table, engine_base);
   return table;
