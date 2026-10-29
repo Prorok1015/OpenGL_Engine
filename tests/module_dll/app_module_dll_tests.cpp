@@ -353,8 +353,12 @@ BOOST_AUTO_TEST_CASE(a_project_module_reloads_from_a_new_build_and_keeps_the_pre
 	core::project_module_host host(loader, root, core::project_modules_options{});
 	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
 	BOOST_TEST(moved_value(*this) == 3);
+	BOOST_TEST(host.is_current(std::string{ dll_game::module_name }));
 
 	project.build(g_v2_path);
+	// A copy within the file system's time resolution keeps the old time: the new build must differ.
+	fs::last_write_time(project.built, fs::last_write_time(project.built) + std::chrono::hours(1));
+	BOOST_TEST(!host.is_current(std::string{ dll_game::module_name }));
 	// What goes with the module into its copy: its symbols and the libraries next to it.
 	const fs::path symbols = fs::path{ project_library_name(dll_game::module_name) }.replace_extension(".pdb");
 	const std::string sibling = project_library_name("helper");
@@ -365,6 +369,7 @@ BOOST_AUTO_TEST_CASE(a_project_module_reloads_from_a_new_build_and_keeps_the_pre
 	const auto report = host.reload(std::string{ dll_game::module_name });
 
 	BOOST_CHECK_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	BOOST_TEST(host.is_current(std::string{ dll_game::module_name }));
 	BOOST_TEST(resident(project.copy(1)));
 	BOOST_TEST(!resident(project.copy(0)));
 	BOOST_TEST(fs::is_directory(project.copy_folder(0))); // the previous copy stays for a rollback
@@ -413,6 +418,9 @@ BOOST_AUTO_TEST_CASE(a_build_that_fails_to_register_rolls_back_to_the_previous_c
 
 	BOOST_CHECK_MESSAGE(report.status == core::reload_status::rolled_back, report.message);
 	BOOST_CHECK_MESSAGE(report.message.find("fails to register") != std::string::npos, report.message);
+	// The previous copy runs again: the failing build is still the newer one in build/bin.
+	std::filesystem::last_write_time(project.built, std::filesystem::last_write_time(project.built) + std::chrono::hours(1));
+	BOOST_TEST(!host.is_current(std::string{ dll_game::module_name }));
 	BOOST_TEST(resident(project.copy(0)));
 	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
 	BOOST_TEST(moved_value(*this) == 3);

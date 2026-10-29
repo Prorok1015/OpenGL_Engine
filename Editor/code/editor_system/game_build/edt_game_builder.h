@@ -3,6 +3,7 @@
 #include "edt_toolchain.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_registration.h>
 #include <chrono>
@@ -21,7 +22,6 @@
 namespace edt
 {
 	class dialog_service;
-	class editor_events;
 	class job_service;
 
 	// The open project as the builder sees it.
@@ -36,6 +36,24 @@ namespace edt
 	// How a build tells the person about itself. problems_only (live builds): no message dialog, the output tail of a
 	// failure and the start and success lines at debug; the problems go to the list as always.
 	enum class build_report : std::uint8_t { dialog, problems_only };
+
+	// How one build_request ended, for its on_finished.
+	struct build_outcome
+	{
+		// restarted: stopped for a newer cancel_on_restart request, which runs next. preempted: a preemptible build
+		// stopped for a request that is not (the person's build), which runs next.
+		enum kind_t { succeeded, failed, restarted, preempted };
+		kind_t kind = failed;
+		std::uint64_t job = 0;
+		int errors = 0;
+		int warnings = 0;
+		// succeeded: one per module file that exists, as game_module_built gets them.
+		std::vector<game_module_build_result> modules;
+		// failed: the setup error or the failure summary.
+		std::string message;
+		// failed: a request that waited for a running build to stop could not start then (`message` says why).
+		bool not_started = false;
+	};
 
 	// Everything one build needs besides the project; made per build by a profile (make_manual_build_request).
 	struct build_request
@@ -59,9 +77,14 @@ namespace edt
 		bool reload_after = true;
 		// Configure with --fresh (CMake 3.24+): the configuration is in build_settings::fresh_configure.
 		bool fresh = false;
+		// build_settings::fresh_generation when the request was made: handed to on_fresh_configured.
+		std::uint64_t fresh_generation = 0;
 		build_report report = build_report::dialog;
 		// false: no progress window is opened for this request (one already open stays).
 		bool show_progress = true;
+		// On the main thread when the build of this request ends. Not called for a job cancelled from outside
+		// (job.cancel, game_builder::cancel): job_service skips its on_done.
+		std::function<void(const build_outcome&)> on_finished;
 	};
 
 	struct game_builder_options
@@ -95,8 +118,9 @@ namespace edt
 		// Gets game_module_built; null: none. Must outlive the builder.
 		editor_events* events = nullptr;
 		// On the main thread, after a `fresh` request's configure step succeeded (also when the build step then fails):
-		// the configuration no longer needs --fresh. Null: nothing is recorded.
-		std::function<void(std::string_view configuration)> on_fresh_configured;
+		// the configuration no longer needs --fresh, unless it was marked again after `generation` (the request's
+		// fresh_generation). Null: nothing is recorded.
+		std::function<void(std::string_view configuration, std::uint64_t generation)> on_fresh_configured;
 	};
 
 	// What one build produced; filled on the worker thread.
@@ -181,11 +205,17 @@ namespace edt
 		action_result start(build_request request);
 		// Also drops a request waiting for the running build to stop.
 		void cancel();
+		// Stops a running preemptible (live) build the way a preempting request does: its on_done still comes, with
+		// outcome `preempted`. A stopped build reports no configure (its result has `configured` false), so a --fresh
+		// mark it was configuring for stays: one extra fresh configure, never a lost mark. A preemptible request waiting
+		// for it is dropped (told `preempted`); a waiting request of the person's stays and starts once it has stopped.
+		// Nothing when no preemptible build runs.
+		void stop_background();
 
 	private:
 		bool has_presets() const;
 		void launch(build_request request);
-		void finish(game_build_result& result, const build_request& request);
+		build_outcome finish(game_build_result& result, const build_request& request);
 		bool draw_progress();
 
 		job_service& m_jobs;

@@ -278,6 +278,35 @@ BOOST_AUTO_TEST_CASE(Update_CreatesTheFolder_KeepsUnknownKeys_AndWritesNothingWi
 	BOOST_CHECK(doc.as_object().at("fresh_configure") == boost::json::parse(R"(["release"])"));
 }
 
+// #445: a build clears its --fresh mark only if no newer mark was written since it started.
+BOOST_AUTO_TEST_CASE(FreshGeneration_GuardsTheClear_AndOldFilesReadAsZero)
+{
+	test_util::temp_dir dir("edt build settings fresh generation");
+	const auto snk = dir.path() / ".snk";
+
+	// A file of before the generation: 0, and a build that started with 0 clears as before.
+	dir.write(".snk/build.json", R"({"fresh_configure":["debuggame"]})");
+	const auto old = edt::parse_build_settings(R"({"fresh_configure":["debuggame"]})");
+	BOOST_CHECK(old.warnings.empty());
+	BOOST_CHECK_EQUAL(old.settings.fresh_generation, 0u);
+	BOOST_REQUIRE(!edt::clear_fresh_configure(snk, "debuggame", 0).has_value());
+	BOOST_CHECK(edt::load_build_settings(snk).fresh_configure.empty());
+
+	// Marked again (generation 3) while a build of generation 2 configured: the mark survives that build.
+	dir.write(".snk/build.json", R"({"fresh_configure":["debuggame"],"fresh_generation":3})");
+	BOOST_REQUIRE(!edt::clear_fresh_configure(snk, "debuggame", 2).has_value());
+	BOOST_CHECK((edt::load_build_settings(snk).fresh_configure == std::vector<std::string>{ "debuggame" }));
+	BOOST_REQUIRE(!edt::clear_fresh_configure(snk, "debuggame", 3).has_value());
+	const edt::build_settings cleared = edt::load_build_settings(snk);
+	BOOST_CHECK(cleared.fresh_configure.empty());
+	BOOST_CHECK_EQUAL(cleared.fresh_generation, 3u); // kept: only a mark bumps it
+
+	BOOST_CHECK(!edt::parse_build_settings(R"({"fresh_generation":-1})").warnings.empty());
+	boost::json::value doc = boost::json::object{};
+	edt::merge_build_settings(doc, edt::build_settings{});
+	BOOST_CHECK(!doc.as_object().contains("fresh_generation"));
+}
+
 BOOST_AUTO_TEST_CASE(Update_ABrokenFileIsAnErrorAndStaysAsItIs)
 {
 	test_util::temp_dir dir("edt build settings update broken");

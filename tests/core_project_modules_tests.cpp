@@ -362,6 +362,22 @@ BOOST_AUTO_TEST_CASE(a_compiled_in_module_wins_over_the_build_output)
 	BOOST_TEST(files_in(root / ".cache" / "modules").empty());
 }
 
+BOOST_AUTO_TEST_CASE(a_compiled_in_module_is_current_and_a_refused_library_is_not)
+{
+	open({ manifest_module("test_game") });
+	put_broken_library("test_game");
+	{
+		core::project_module_host host(loader, data, compiled_in(probe_entry()));
+		host.load_all();
+		BOOST_TEST(host.is_current("test_game"));
+		loader.unload("test_game", data);
+	}
+	core::project_module_host host(loader, data, core::project_modules_options{});
+	BOOST_TEST(host.load_all().refused == std::vector<std::string>{ "test_game" });
+	BOOST_TEST(!host.is_current("test_game"));
+	BOOST_TEST(!host.is_current("no_such_module"));
+}
+
 BOOST_AUTO_TEST_CASE(a_library_that_cannot_be_opened_is_refused_and_its_copy_removed)
 {
 	open({ manifest_module("test_game") });
