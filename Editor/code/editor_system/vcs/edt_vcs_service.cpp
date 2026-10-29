@@ -895,6 +895,20 @@ namespace {
 		return failure_of(out, task);
 	}
 
+	// write_failure_of for a step that updates the work tree (checkout, merge): git may report a file it could not write
+	// ("error: unable to read sha1 file of x", a partial clone without lazy fetch) and still exit 0.
+	std::optional<json::value> tree_write_failure_of(const git_output& out, const ds::task_context& task)
+	{
+		if (auto failure = write_failure_of(out, task)) return failure;
+		for (const std::string_view line : lines_of(out.err)) {
+			if (line.starts_with("error:") || line.starts_with("fatal:")) {
+				return error_json(edt::vcs::classify_error(out.err), summary_of(out.err, out.process.exit_code), out.err,
+					out.process.exit_code);
+			}
+		}
+		return std::nullopt;
+	}
+
 	// The job's answer for what filter_refusal or network_refusal returned: a refusal code, or git's own failure.
 	json::value refusal_json(const git_output& out, const ds::task_context& task)
 	{
@@ -1431,7 +1445,7 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 			}
 		}
 		const git_output out = run_write(git, args, task.stop);
-		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		if (auto failure = tree_write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
 	}, write_mode{ caller, true, false });
 }
@@ -1501,7 +1515,7 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 		}
 		const git_output merged = run_write(git, { "-c", "submodule.recurse=false", "merge", "--ff-only", "--no-stat",
 			commit }, task.stop);
-		if (auto failure = write_failure_of(merged, task)) return std::move(*failure);
+		if (auto failure = tree_write_failure_of(merged, task)) return std::move(*failure);
 		git_output both = merged;
 		both.out = fetched.out + merged.out;
 		both.err = fetched.err + merged.err;

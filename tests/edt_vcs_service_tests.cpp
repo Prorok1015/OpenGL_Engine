@@ -1443,8 +1443,9 @@ BOOST_AUTO_TEST_CASE(APartialClone_LazyFetchesNothingOnAGuardedCheckout)
 		BOOST_TEST(!fs::exists(marker, ec));
 		return;
 	}
+	// Git without lazy fetch cannot write big.txt: the checkout fails in git (git_failed), or the policy refuses first.
 	const json::value no_fetch = finish(service->start_checkout("other", cmd::origin_kind::agent));
-	BOOST_TEST(no_fetch.as_object().contains("error"), json::serialize(no_fetch));
+	BOOST_TEST((is_error(no_fetch, "git_failed") || is_error(no_fetch, "unsafe_repository")), json::serialize(no_fetch));
 	std::string traced;
 	{
 		std::ifstream in(trace, std::ios::binary);
@@ -1532,7 +1533,7 @@ BOOST_AUTO_TEST_CASE(APromisorRemoteWithoutTheExtension_LazyFetchesNothingOnAGua
 		BOOST_TEST(text(opted_in.as_object().at("error").as_object().at("message")).find("remote.origin.promisor") != std::string::npos);
 	}
 	else {
-		BOOST_TEST(opted_in.as_object().contains("error"));
+		BOOST_TEST((is_error(opted_in, "git_failed") || is_error(opted_in, "unsafe_repository")));
 		std::string traced;
 		{
 			std::ifstream in(trace, std::ios::binary);
@@ -1728,6 +1729,25 @@ BOOST_AUTO_TEST_CASE(AFailure_IsAResultWithTheClassifiedError)
 	BOOST_TEST(text(error.at("message")).find("terminal prompts disabled") != std::string::npos);
 	BOOST_TEST(text(error.at("stderr_tail")).find("terminal prompts disabled") != std::string::npos);
 	BOOST_TEST(error.at("exit_code").as_int64() == 128);
+}
+
+// git checkout can report a file it could not write and still exit 0 (a partial clone without lazy fetch).
+BOOST_AUTO_TEST_CASE(ACheckoutThatReportsAnErrorButExitsZero_IsAFailure)
+{
+	command = [](const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (std::find(args.begin(), args.end(), "checkout") != args.end()) {
+			opts.on_stderr_line("error: unable to read sha1 file of big.txt (0123456789abcdef0123456789abcdef01234567)");
+		}
+		return exited(0);
+	};
+	make_service(fake_options());
+
+	const json::value result = finish(service->start_checkout("other", cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(result));
+	BOOST_REQUIRE(is_error(result, "git_failed"));
+	BOOST_TEST(text(result.as_object().at("error").as_object().at("message")).find("unable to read sha1 file")
+		!= std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AFailure_StderrTailKeepsTheLast20Lines_MessageTheFatalLine)
