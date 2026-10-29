@@ -44,6 +44,12 @@ struct confirmations_fixture
 		confirmations = std::make_unique<edt::agent_confirmations>(commands, grants, [this] { return current; });
 	}
 
+	// The destructor of agent_confirmations answers what still waits, into `finished`: it must go before the members it uses.
+	~confirmations_fixture()
+	{
+		confirmations.reset();
+	}
+
 	void add(std::string id, agent_category category)
 	{
 		cmd::command_desc desc;
