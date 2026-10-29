@@ -161,4 +161,28 @@ BOOST_AUTO_TEST_CASE(a_reload_scheduled_before_the_reloader_went_does_nothing)
 	BOOST_TEST(reloaded.empty());
 }
 
+BOOST_AUTO_TEST_CASE(reload_quiet_returns_a_build_not_taken_without_a_message)
+{
+	make();
+	for (const auto status : { core::reload_status::refused, core::reload_status::rolled_back, core::reload_status::lost }) {
+		next = { status, std::string{ "because of " } + std::string{ core::to_string(status) } };
+		const auto report = reloader->reload_quiet("game");
+		BOOST_TEST((report.status == status));
+		BOOST_TEST(report.message == next.message);
+	}
+	BOOST_TEST(reloaded.size() == 3u);
+	BOOST_TEST(messages().empty());
+}
+
+BOOST_AUTO_TEST_CASE(reload_quiet_is_refused_while_a_build_runs)
+{
+	make();
+	building = true;
+	const auto report = reloader->reload_quiet("game");
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_TEST(report.message == "a build is running");
+	BOOST_TEST(reloaded.empty());
+	BOOST_TEST(messages().empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

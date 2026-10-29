@@ -106,14 +106,28 @@ std::optional<std::string> edt::game_reloader::pick(const std::string& module) c
 
 core::reload_report edt::game_reloader::reload(const std::string& module)
 {
+	std::string who = module;
+	core::reload_report report = attempt(module, who);
+	return tell(who, std::move(report));
+}
+
+core::reload_report edt::game_reloader::reload_quiet(const std::string& module)
+{
+	std::string who = module;
+	return attempt(module, who);
+}
+
+core::reload_report edt::game_reloader::attempt(const std::string& module, std::string& who)
+{
 	if (m_options.building && m_options.building()) {
-		return tell(module, { core::reload_status::refused, "a build is running" });
+		return { core::reload_status::refused, "a build is running" };
 	}
 	const std::optional<std::string> name = pick(module);
 	if (!name) {
-		return tell(module, { core::reload_status::refused, "it has not been built" });
+		return { core::reload_status::refused, "it has not been built" };
 	}
-	return tell(*name, m_options.reload(*name));
+	who = *name;
+	return m_options.reload(*name);
 }
 
 core::reload_report edt::game_reloader::tell(const std::string& module, core::reload_report report)

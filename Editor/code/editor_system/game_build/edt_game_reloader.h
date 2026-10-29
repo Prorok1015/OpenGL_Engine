@@ -46,9 +46,13 @@ namespace edt
 		[[nodiscard]] std::string disabled_reason() const;
 		// Empty `module`: the first runtime module that has a build.
 		core::reload_report reload(const std::string& module);
+		// reload without the message for a build not taken: the caller reports it (live mode, #445).
+		core::reload_report reload_quiet(const std::string& module);
 
 	private:
 		std::optional<std::string> pick(const std::string& module) const;
+		// `who` gets the module the report is about: the picked one, else `module`.
+		core::reload_report attempt(const std::string& module, std::string& who);
 		core::reload_report tell(const std::string& module, core::reload_report report);
 
 		dialog_service& m_dialogs;

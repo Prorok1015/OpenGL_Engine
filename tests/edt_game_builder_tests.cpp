@@ -1045,6 +1045,115 @@ BOOST_AUTO_TEST_CASE(LiveRequest_RunsWithoutDialogOrWindow)
 	BOOST_CHECK(messages().empty());
 }
 
+BOOST_AUTO_TEST_CASE(OnFinished_Success_CarriesTheProducedModules)
+{
+	make();
+	script = [this](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index == 1) write_module();
+		return exited(0);
+	};
+	std::vector<edt::build_outcome> outcomes;
+	auto req = quiet_request("release");
+	req.reload_after = false;
+	req.on_finished = [&outcomes](const edt::build_outcome& outcome) { outcomes.push_back(outcome); };
+	const auto started = builder->start(req);
+	BOOST_REQUIRE(started.ok);
+	const auto job = started.value.as_object().at("job").to_number<std::uint64_t>();
+	run_to_end();
+
+	BOOST_REQUIRE_EQUAL(outcomes.size(), 1u);
+	BOOST_CHECK(outcomes[0].kind == edt::build_outcome::succeeded);
+	BOOST_CHECK_EQUAL(outcomes[0].job, job);
+	BOOST_CHECK_EQUAL(outcomes[0].errors, 0);
+	BOOST_REQUIRE_EQUAL(outcomes[0].modules.size(), 1u);
+	BOOST_CHECK_EQUAL(outcomes[0].modules[0].module, "game");
+	BOOST_CHECK(outcomes[0].modules[0].path == module_path());
+	BOOST_CHECK_EQUAL(outcomes[0].modules[0].configuration, "release");
+	BOOST_CHECK(!outcomes[0].modules[0].reload);
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_Failure_CarriesTheErrorCount)
+{
+	make();
+	script = [](std::size_t index, const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (index == 0) return exited(0);
+		on_line("/p/code/src/a.cpp:1:1: error: first");
+		on_line("/p/code/src/a.cpp:2:1: error: second");
+		on_line("/p/code/src/a.cpp:3:1: warning: third");
+		return exited(1);
+	};
+	std::vector<edt::build_outcome> outcomes;
+	auto req = quiet_request("debuggame");
+	req.on_finished = [&outcomes](const edt::build_outcome& outcome) { outcomes.push_back(outcome); };
+	BOOST_REQUIRE(builder->start(req).ok);
+	run_to_end();
+
+	BOOST_REQUIRE_EQUAL(outcomes.size(), 1u);
+	BOOST_CHECK(outcomes[0].kind == edt::build_outcome::failed);
+	BOOST_CHECK_EQUAL(outcomes[0].errors, 2);
+	BOOST_CHECK_EQUAL(outcomes[0].warnings, 1);
+	BOOST_CHECK(outcomes[0].modules.empty());
+	BOOST_CHECK(outcomes[0].message.find("2 errors") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_SetupError_IsAFailureWithItsText)
+{
+	toolchain_error = "no toolchain here";
+	make();
+	std::vector<edt::build_outcome> outcomes;
+	auto req = quiet_request("debuggame");
+	req.on_finished = [&outcomes](const edt::build_outcome& outcome) { outcomes.push_back(outcome); };
+	BOOST_REQUIRE(builder->start(req).ok);
+	run_to_end();
+	BOOST_REQUIRE_EQUAL(outcomes.size(), 1u);
+	BOOST_CHECK(outcomes[0].kind == edt::build_outcome::failed);
+	BOOST_CHECK_EQUAL(outcomes[0].message, "no toolchain here");
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_ARestartedRequestReportsRestarted_ThenTheNewOneFinishes)
+{
+	make();
+	std::vector<std::string> order;
+	script = [this, &order](std::size_t index, const std::function<void(std::string_view)>&, std::stop_token) {
+		if (index != 0) return exited(0);
+		auto next = quiet_request("release");
+		next.cancel_on_restart = true;
+		next.on_finished = [&order](const edt::build_outcome& outcome) {
+			order.push_back(outcome.kind == edt::build_outcome::succeeded ? "second succeeded" : "second other");
+		};
+		BOOST_CHECK(builder->start(next).ok);
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	auto first = quiet_request("debuggame");
+	first.on_finished = [&order](const edt::build_outcome& outcome) {
+		order.push_back(outcome.kind == edt::build_outcome::restarted ? "first restarted" : "first other");
+	};
+	BOOST_REQUIRE(builder->start(first).ok);
+	run_until_idle();
+
+	BOOST_TEST((order == std::vector<std::string>{ "first restarted", "second succeeded" }));
+}
+
+BOOST_AUTO_TEST_CASE(OnFinished_NotCalledOnAUserCancel)
+{
+	make();
+	script = [this](std::size_t, const std::function<void(std::string_view)>&, std::stop_token) {
+		builder->cancel();
+		platform::process_result result;
+		result.cancelled = true;
+		return result;
+	};
+	int calls_seen = 0;
+	auto req = quiet_request("debuggame");
+	req.on_finished = [&calls_seen](const edt::build_outcome&) { ++calls_seen; };
+	BOOST_REQUIRE(builder->start(req).ok);
+	run_until_idle();
+	BOOST_CHECK(!builder->is_building());
+	BOOST_CHECK_EQUAL(calls_seen, 0);
+}
+
 BOOST_AUTO_TEST_CASE(NinjaProgress_IsParsed)
 {
 	BOOST_CHECK((edt::parse_ninja_progress("[3/10] Building CXX object x.o") == std::optional<std::pair<int, int>>{ std::pair{ 3, 10 } }));

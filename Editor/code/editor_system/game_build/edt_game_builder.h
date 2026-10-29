@@ -3,6 +3,7 @@
 #include "edt_toolchain.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_problem_list.h>
 #include <snk/editor/edt_registration.h>
 #include <chrono>
@@ -21,7 +22,6 @@
 namespace edt
 {
 	class dialog_service;
-	class editor_events;
 	class job_service;
 
 	// The open project as the builder sees it.
@@ -36,6 +36,21 @@ namespace edt
 	// How a build tells the person about itself. problems_only (live builds): no message dialog, the output tail of a
 	// failure and the start and success lines at debug; the problems go to the list as always.
 	enum class build_report : std::uint8_t { dialog, problems_only };
+
+	// How one build_request ended, for its on_finished.
+	struct build_outcome
+	{
+		// restarted: stopped for a newer cancel_on_restart request, which runs next.
+		enum kind_t { succeeded, failed, restarted };
+		kind_t kind = failed;
+		std::uint64_t job = 0;
+		int errors = 0;
+		int warnings = 0;
+		// succeeded: one per module file that exists, as game_module_built gets them.
+		std::vector<game_module_build_result> modules;
+		// failed: the setup error or the failure summary.
+		std::string message;
+	};
 
 	// Everything one build needs besides the project; made per build by a profile (make_manual_build_request).
 	struct build_request
@@ -59,6 +74,9 @@ namespace edt
 		build_report report = build_report::dialog;
 		// false: no progress window is opened for this request (one already open stays).
 		bool show_progress = true;
+		// On the main thread when the build of this request ends. Not called for a job cancelled from outside
+		// (job.cancel, game_builder::cancel): job_service skips its on_done.
+		std::function<void(const build_outcome&)> on_finished;
 	};
 
 	struct game_builder_options
@@ -177,7 +195,7 @@ namespace edt
 	private:
 		bool has_presets() const;
 		void launch(build_request request);
-		void finish(game_build_result& result, const build_request& request);
+		build_outcome finish(game_build_result& result, const build_request& request);
 		bool draw_progress();
 
 		job_service& m_jobs;
