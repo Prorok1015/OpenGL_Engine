@@ -345,7 +345,7 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work)
 	// result, so every command answers the same way.
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
-	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run };
+	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run, {} };
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
 			return work(context, task);
@@ -376,7 +376,7 @@ edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 		return;
 	}
 	bool timed_out = false;
-	const git_output version = run_probe({ git, m_environment, {}, m_options.run }, { "--version" }, m_options.probe_timeout,
+	const git_output version = run_probe({ git, m_environment, {}, m_options.run, {} }, { "--version" }, m_options.probe_timeout,
 		timed_out);
 	if (timed_out) {
 		set_probe_timeout();
@@ -410,7 +410,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 		return;
 	}
 	bool timed_out = false;
-	const git_output top = run_probe({ m_state.git, m_environment, *project, m_options.run }, { "rev-parse", "--show-toplevel" },
+	const git_output top = run_probe({ m_state.git, m_environment, *project, m_options.run, {} }, { "rev-parse", "--show-toplevel" },
 		m_options.probe_timeout, timed_out);
 	if (timed_out) {
 		set_probe_timeout();
