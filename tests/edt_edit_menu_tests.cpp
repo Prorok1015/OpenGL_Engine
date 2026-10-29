@@ -1,8 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_edit_menu.h"
+#include "edt_mcp_bridge_host.h"
 #include "edt_main_menu.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document_manager.h>
 #include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_editor_services.h>
@@ -28,6 +30,7 @@ struct edit_menu_fixture
 		scene.world_descs.push_back(std::move(world));
 		scene.reset_history();
 		scene.mark_clean();
+		dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
 	}
 
 	std::string& name() { return scene.world_descs[0].get_root().children[0].name; }
@@ -51,9 +54,10 @@ struct edit_menu_fixture
 	edt::editor_events events;
 	edt::document_manager documents{ scene, services, events };
 	edt::action_registry actions;
+	edt::dialog_service dialogs;
 	bool gesture = false;
 	std::vector<edt::registration> menus = edt::register_builtin_menus(actions);
-	std::vector<edt::registration> registered = edt::register_edit_actions(actions, documents, [this] { return gesture; });
+	std::vector<edt::registration> registered = edt::register_edit_actions(actions, documents, dialogs, [this] { return gesture; });
 };
 
 }
@@ -84,6 +88,7 @@ BOOST_AUTO_TEST_CASE(undo_and_redo_go_through_the_active_document)
 	BOOST_REQUIRE(undone.ok);
 	BOOST_TEST(undone.value.as_object().at("applied").as_bool());
 	BOOST_TEST(undone.value.as_object().at("label").as_string() == "Rename node");
+	BOOST_TEST(undone.value.as_object().at("origin").as_string() == "ui");
 	BOOST_TEST(name() == "a");
 	BOOST_TEST(!scene.is_dirty());
 
@@ -110,6 +115,28 @@ BOOST_AUTO_TEST_CASE(an_agents_edit_says_so)
 		rename("b");
 	}
 	BOOST_TEST(label("edit.undo") == "Undo Rename node (agent)");
+
+	// The text of the menu says so; the result carries the label as recorded and the origin apart.
+	const auto undone = actions.invoke("edit.undo", boost::json::object{});
+	BOOST_REQUIRE(undone.ok);
+	BOOST_TEST(undone.value.as_object().at("label").as_string() == "Rename node");
+	BOOST_TEST(undone.value.as_object().at("origin").as_string() == "agent");
+}
+
+BOOST_AUTO_TEST_CASE(nothing_is_undone_behind_a_dialog)
+{
+	rename("b");
+	const auto prompt = dialogs.confirm_unsaved([](edt::unsaved_choice) {});
+	BOOST_REQUIRE(dialogs.pending() == 1u);
+
+	BOOST_TEST(!actions.is_enabled("edit.undo"));
+	BOOST_TEST(!actions.dispatch(*edt::shortcut::parse("Ctrl+Z")));
+	BOOST_TEST(name() == "b");
+
+	BOOST_REQUIRE(dialogs.answer(prompt, boost::json::parse(R"({"choice":"cancel"})")).ok);
+	BOOST_REQUIRE(dialogs.pending() == 0u);
+	BOOST_TEST(actions.dispatch(*edt::shortcut::parse("Ctrl+Z")));
+	BOOST_TEST(name() == "a");
 }
 
 BOOST_AUTO_TEST_CASE(nothing_is_undone_during_a_gesture)
@@ -145,6 +172,7 @@ BOOST_AUTO_TEST_CASE(the_edit_actions_are_not_offered_to_an_agent)
 		const auto* command = actions.find(id);
 		BOOST_REQUIRE_MESSAGE(command, id);
 		BOOST_CHECK_MESSAGE(command->mutates, id);
+		BOOST_CHECK_MESSAGE(!edt::agent_may_use(*command), id);
 	}
 	BOOST_TEST(!actions.find("edit.redo_alt")->expose_as_tool);
 }

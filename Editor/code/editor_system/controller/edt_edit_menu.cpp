@@ -1,4 +1,5 @@
 #include "edt_edit_menu.h"
+#include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_document.h>
 #include <snk/editor/edt_document_manager.h>
 #include <boost/json.hpp>
@@ -9,58 +10,79 @@
 namespace {
 	namespace json = boost::json;
 
-	json::value applied_schema()
+	const char* origin_name(cmd::origin_kind kind)
 	{
-		return json::parse(R"({"type":"object","properties":{"applied":{"type":"boolean"},"label":{"type":"string"}},
-			"required":["applied"]})");
+		switch (kind) {
+		case cmd::origin_kind::ui: return "ui";
+		case cmd::origin_kind::test: return "test";
+		case cmd::origin_kind::agent: return "agent";
+		case cmd::origin_kind::game: return "game";
+		}
+		return "ui";
 	}
 
-	json::value applied(bool done, const std::optional<std::string>& label)
+	json::value applied_schema()
+	{
+		return json::parse(R"({"type":"object","properties":{"applied":{"type":"boolean"},"label":{"type":"string"},
+			"origin":{"type":"string","enum":["ui","test","agent","game"],"description":"who made the edit"}},"required":["applied"]})");
+	}
+
+	json::value applied(bool done, const std::optional<edt::history_entry>& entry)
 	{
 		json::object out{ { "applied", done } };
-		if (label) out["label"] = *label;
+		if (done && entry) {
+			out["label"] = entry->label;
+			out["origin"] = origin_name(entry->origin.kind);
+		}
 		return out;
+	}
+
+	// "Undo Rename node", "Undo Rename node (agent)", or just "Undo".
+	std::string menu_text(const char* verb, const std::optional<edt::history_entry>& entry)
+	{
+		if (!entry) return verb;
+		std::string text = std::string(verb) + " " + entry->label;
+		if (entry->origin.kind == cmd::origin_kind::agent) text += " (agent)";
+		return text;
 	}
 }
 
 std::vector<edt::registration> edt::register_edit_actions(
-	action_registry& actions, document_manager& documents, std::function<bool()> gesture_active)
+	action_registry& actions, document_manager& documents, const dialog_service& dialogs, std::function<bool()> gesture_active)
 {
-	const auto idle = [gesture_active = std::move(gesture_active)] { return !gesture_active || !gesture_active(); };
+	const auto idle = [&dialogs, gesture_active = std::move(gesture_active)] {
+		return dialogs.pending() == 0 && (!gesture_active || !gesture_active());
+	};
 	const auto active = [&documents]() -> document* { return documents.active(); };
 	std::vector<registration> out;
 
 	out.push_back(actions.add({ .id = "edit.undo", .label = "Undo", .menu_path = "Edit", .shortcut = "Ctrl+Z",
 		.dynamic_label = [active] {
 			const document* doc = active();
-			const auto label = doc ? doc->next_undo_label() : std::nullopt;
-			return label ? "Undo " + *label : std::string{ "Undo" };
+			return menu_text("Undo", doc ? doc->next_undo_entry() : std::nullopt);
 		},
 		.yields_to_text_input = true,
 		.execute = [active](const json::value&) {
 			document* doc = active();
-			const auto label = doc ? doc->next_undo_label() : std::nullopt;
-			const bool done = doc && doc->undo();
-			return action_result::success(applied(done, done ? label : std::nullopt));
+			const auto entry = doc ? doc->next_undo_entry() : std::nullopt;
+			return action_result::success(applied(doc && doc->undo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && active()->next_undo_label().has_value(); } }));
+		.enabled = [active, idle] { return idle() && active() && active()->next_undo_entry().has_value(); } }));
 
 	out.push_back(actions.add({ .id = "edit.redo", .label = "Redo", .menu_path = "Edit", .shortcut = "Ctrl+Y",
 		.dynamic_label = [active] {
 			const document* doc = active();
-			const auto label = doc ? doc->next_redo_label() : std::nullopt;
-			return label ? "Redo " + *label : std::string{ "Redo" };
+			return menu_text("Redo", doc ? doc->next_redo_entry() : std::nullopt);
 		},
 		.yields_to_text_input = true,
 		.execute = [active](const json::value&) {
 			document* doc = active();
-			const auto label = doc ? doc->next_redo_label() : std::nullopt;
-			const bool done = doc && doc->redo();
-			return action_result::success(applied(done, done ? label : std::nullopt));
+			const auto entry = doc ? doc->next_redo_entry() : std::nullopt;
+			return action_result::success(applied(doc && doc->redo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && active()->next_redo_label().has_value(); } }));
+		.enabled = [active, idle] { return idle() && active() && active()->next_redo_entry().has_value(); } }));
 
 	// The other usual binding of Redo: no menu item of its own.
 	out.push_back(actions.add({ .id = "edit.redo_alt", .label = "Redo", .shortcut = "Ctrl+Shift+Z",

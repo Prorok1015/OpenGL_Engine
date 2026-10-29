@@ -23,6 +23,14 @@ namespace edt
 		m_open = false; // hidden by default until a prefab is opened
 	}
 
+	void prefab_editor_panel::on_hidden()
+	{
+		// Collapsed or behind another tab the window is still open: only a closed one lets the document go.
+		if (!is_open() && m_ctx && m_on_close) {
+			m_on_close();
+		}
+	}
+
 	void prefab_editor_panel::on_before_begin()
 	{
 		ImGui::SetNextWindowSize(ImVec2(900.f, 650.f), ImGuiCond_FirstUseEver);
