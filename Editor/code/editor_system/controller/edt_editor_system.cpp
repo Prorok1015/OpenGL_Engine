@@ -473,6 +473,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	// TODO(#455): set_write_permissions from the project policy; until then hooks and filters stay off for agents.
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}

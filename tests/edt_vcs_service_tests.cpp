@@ -9,11 +9,13 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -21,6 +23,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -84,6 +87,61 @@ platform::process_result exited(int code)
 	platform::process_result result;
 	result.exit_code = code;
 	return result;
+}
+
+// Forward slashes: git (for Windows too) hands these paths to its sh.
+std::string generic_text(const fs::path& path)
+{
+	const std::u8string utf8 = path.generic_u8string();
+	return std::string(utf8.begin(), utf8.end());
+}
+
+// A script git runs through sh; written with \n line ends, executable where that is a permission.
+void make_script(const fs::path& file, std::string_view body)
+{
+	fs::create_directories(file.parent_path());
+	{
+		std::ofstream out(file, std::ios::binary | std::ios::trunc);
+		const std::string text = "#!/bin/sh\n" + std::string(body);
+		out.write(text.data(), static_cast<std::streamsize>(text.size()));
+	}
+#ifndef _WIN32
+	fs::permissions(file, fs::perms::owner_all, fs::perm_options::add);
+#endif
+}
+
+bool is_error(const json::value& result, std::string_view code)
+{
+	const json::object& object = result.as_object();
+	return object.contains("error") && object.at("error").as_object().at("code").as_string() == code;
+}
+
+// As `git config --list` prints a key whose subsection is lower case already.
+std::string lower_key(std::string_view key)
+{
+	std::string out(key);
+	for (char& c : out) {
+		if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+	}
+	return out;
+}
+
+// "2.45.1", "2.39.2.windows.1": at least major.minor.
+bool git_at_least(std::string_view version, int major, int minor)
+{
+	const char* const end = version.data() + version.size();
+	int found_major = 0;
+	const auto [after_major, major_error] = std::from_chars(version.data(), end, found_major);
+	if (major_error != std::errc{} || after_major == end || *after_major != '.') return false;
+	int found_minor = 0;
+	if (std::from_chars(after_major + 1, end, found_minor).ec != std::errc{}) return false;
+	return found_major > major || (found_major == major && found_minor >= minor);
+}
+
+std::string arg_starting_with(const std::vector<std::string>& args, std::string_view prefix)
+{
+	const auto found = std::find_if(args.begin(), args.end(), [prefix](const std::string& a) { return a.starts_with(prefix); });
+	return found == args.end() ? std::string{} : *found;
 }
 
 struct vcs_fixture
@@ -186,6 +244,71 @@ struct vcs_fixture
 		return repo;
 	}
 
+	// What git prints on stdout, as it wrote it.
+	std::string git_text(const fs::path& dir, const std::vector<std::string>& args)
+	{
+		std::string output;
+		platform::process_options options;
+		options.working_dir = dir;
+		options.environment = environment;
+		options.raw_output = true;
+		const auto result = platform::run_process(real_git(), args, options,
+			[&output](std::string_view chunk) { output.append(chunk); }, {});
+		BOOST_REQUIRE_MESSAGE(result.error.empty() && result.exit_code == 0,
+			std::format("git {}: {} (exit {})", args.empty() ? std::string{} : args.front(), result.error, result.exit_code));
+		return output;
+	}
+
+	std::string head_of(const fs::path& dir)
+	{
+		std::string text = git_text(dir, { "rev-parse", "HEAD" });
+		while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+		return text;
+	}
+
+	// Only the repository's own config counts: a system or global one (git for Windows sets filter.lfs in its
+	// system config) stays out of the tests that depend on what is configured.
+	void isolate_config()
+	{
+		const fs::path global = base / "global.gitconfig";
+		write(global, "");
+		edt::set_variable(environment, "GIT_CONFIG_NOSYSTEM", "1");
+		edt::set_variable(environment, "GIT_CONFIG_GLOBAL", edt::utf8_of(global));
+	}
+
+	// <base>/<name>: one commit of a.txt on main.
+	fs::path make_plain_repository(std::string_view name)
+	{
+		const fs::path repo = base / name;
+		fs::create_directories(repo);
+		git(repo, { "init", "-q" });
+		git(repo, { "symbolic-ref", "HEAD", "refs/heads/main" });
+		git(repo, { "config", "user.name", "Test User" });
+		git(repo, { "config", "user.email", "test@example.com" });
+		git(repo, { "config", "core.autocrlf", "false" });
+		write(repo / "a.txt", "one\n");
+		git(repo, { "add", "a.txt" });
+		git(repo, { "commit", "-q", "-m", "first commit" });
+		return repo;
+	}
+
+	// <base>/<name>: a bare repository whose HEAD is main.
+	fs::path make_bare(std::string_view name)
+	{
+		const fs::path remote = base / name;
+		fs::create_directories(remote);
+		git(remote, { "init", "-q", "--bare" });
+		git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+		return remote;
+	}
+
+	static std::string file_url(const fs::path& path)
+	{
+		const std::u8string utf8 = path.generic_u8string();
+		const std::string generic(utf8.begin(), utf8.end());
+		return "file://" + (generic.starts_with('/') ? generic : "/" + generic);
+	}
+
 	void make_service(edt::vcs_options options)
 	{
 		service = std::make_unique<edt::vcs_service>(*jobs, std::move(options));
@@ -224,6 +347,10 @@ struct fake_git_fixture : vcs_fixture
 			last_options = opts;
 			if (has_arg(args, "--version")) {
 				on_line("git version 2.45.1\n");
+				return exited(0);
+			}
+			if (has_arg(args, "--git-path")) {
+				on_line(edt::utf8_of(base / path_of(args.back())) + "\n");
 				return exited(0);
 			}
 			if (has_arg(args, "rev-parse")) {
@@ -328,7 +455,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_ThroughTheCommands)
 	const fs::path repo = make_repository();
 	make_service(real_options(repo));
 	registrations = edt::register_vcs_commands(commands, *service);
-	BOOST_TEST(registrations.size() == 5u);
+	BOOST_TEST(registrations.size() == 13u);
 
 	const cmd::result info = commands.invoke("vcs.info", json::object{}, cmd::origin::test());
 	BOOST_REQUIRE_MESSAGE(info.ok, info.error);
@@ -547,6 +674,986 @@ BOOST_AUTO_TEST_CASE(GitNotOnPath_IsGitNotFound)
 	BOOST_TEST(service->info().reason == "git not found");
 }
 
+// stage, unstage, commit (a multi-line UTF-8 message, through its file), branch.create and checkout on a real
+// repository, read back through the service's reads.
+BOOST_AUTO_TEST_CASE(RealRepository_StageUnstageCommitBranchCheckout)
+{
+	isolate_config();
+	const fs::path repo = make_repository();
+	make_service(real_options(repo));
+	constexpr auto person = cmd::origin_kind::ui;
+	const auto entry_of = [](const json::value& status, std::string_view path) -> const json::object* {
+		for (const auto& item : status.as_object().at("entries").as_array()) {
+			if (item.as_object().at("path").as_string() == path) return &item.as_object();
+		}
+		return nullptr;
+	};
+
+	write(repo / "fresh file.txt", "fresh\n");
+	const json::value staged = finish(service->start_stage({ "fresh file.txt", "a.txt" }, person));
+	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
+	const json::value after_stage = finish(service->start_status());
+	const json::object* fresh = entry_of(after_stage, "fresh file.txt");
+	BOOST_REQUIRE(fresh != nullptr);
+	BOOST_TEST(text(fresh->at("index")) == "A");
+
+	const json::value unstaged = finish(service->start_unstage({ "fresh file.txt" }, person));
+	BOOST_TEST(!unstaged.as_object().contains("error"), json::serialize(unstaged));
+	const json::value after_unstage = finish(service->start_status());
+	fresh = entry_of(after_unstage, "fresh file.txt");
+	BOOST_REQUIRE(fresh != nullptr);
+	BOOST_TEST(text(fresh->at("kind")) == "untracked");
+	BOOST_TEST(fs::exists(repo / "fresh file.txt"));
+
+	const std::string message = "Subject with " + u_umlaut + "\n\nBody line one\nBody line two \xE2\x9C\x93\n";
+	const json::value committed = finish(service->start_commit(message, person));
+	BOOST_TEST_INFO("commit: " << json::serialize(committed));
+	BOOST_REQUIRE(committed.as_object().contains("hash"));
+	BOOST_TEST(text(committed.as_object().at("hash")) == head_of(repo));
+	std::string body = git_text(repo, { "log", "-1", "--format=%B" });
+	while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) body.pop_back();
+	BOOST_TEST(body == message.substr(0, message.size() - 1));
+	const json::value log = finish(service->start_log({}, {}, 1, {}));
+	BOOST_TEST(text(log.as_object().at("commits").as_array()[0].as_object().at("subject")) == "Subject with " + u_umlaut);
+	const json::value after_commit = finish(service->start_status());
+	BOOST_TEST(entry_of(after_commit, "a.txt") == nullptr);
+
+	BOOST_TEST(service->start_branch_create("-x", {}, person).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_branch_create("ok", "--orphan", person).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_checkout("--force", person).code == cmd::codes::invalid_args);
+	const json::value created = finish(service->start_branch_create("topic", "main", person));
+	BOOST_TEST(!created.as_object().contains("error"), json::serialize(created));
+	const json::value checked_out = finish(service->start_checkout("topic", person));
+	BOOST_TEST(!checked_out.as_object().contains("error"), json::serialize(checked_out));
+	const json::value on_topic = finish(service->start_status());
+	BOOST_TEST(text(on_topic.as_object().at("branch").as_object().at("head")) == "topic");
+	finish(service->start_checkout("main", person));
+	const json::value branches = finish(service->start_branches());
+	BOOST_TEST(text(branches.as_object().at("current")) == "main");
+
+	// Git's own refusal is the job's result: nothing to commit.
+	const json::value nothing = finish(service->start_commit("nothing staged", person));
+	BOOST_TEST(nothing.as_object().contains("error"), json::serialize(nothing));
+	BOOST_TEST(head_of(repo) == text(committed.as_object().at("hash")));
+}
+
+BOOST_AUTO_TEST_CASE(RealRepository_FetchPullPush_AgainstALocalBareRepository)
+{
+	isolate_config();
+	const fs::path remote = base / "remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("local");
+	git(repo, { "remote", "add", "origin", url });
+	make_service(real_options(repo));
+	constexpr auto person = cmd::origin_kind::ui;
+
+	for (const char* bad : { "+main", "-x", "a:b", "main:refs/heads/other" }) {
+		BOOST_TEST_CONTEXT(bad) {
+			BOOST_TEST(service->start_push("origin", bad, false, person).code == cmd::codes::invalid_args);
+		}
+	}
+	BOOST_TEST(service->start_push("file:///elsewhere", "main", false, person).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_push("--mirror", "main", false, person).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_pull({}, "main", person).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_pull("origin", "+main", person).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_fetch("-q", person).code == cmd::codes::invalid_args);
+	BOOST_TEST(jobs->list().empty());
+
+	const json::value pushed = finish(service->start_push("origin", "main", true, person));
+	BOOST_TEST(!pushed.as_object().contains("error"), json::serialize(pushed));
+	BOOST_TEST(head_of(remote) == head_of(repo));
+
+	// Someone else pushes a commit on top.
+	const fs::path other = base / "other";
+	git(base, { "clone", "-q", url, edt::utf8_of(other) });
+	git(other, { "config", "user.name", "Other User" });
+	git(other, { "config", "user.email", "other@example.com" });
+	git(other, { "config", "commit.gpgsign", "false" });
+	write(other / "theirs.txt", "theirs\n");
+	git(other, { "add", "theirs.txt" });
+	git(other, { "commit", "-q", "-m", "their commit" });
+	git(other, { "push", "-q", "origin", "main" });
+	const std::string theirs = head_of(other);
+	BOOST_TEST(head_of(repo) != theirs);
+
+	const json::value fetched = finish(service->start_fetch("origin", person));
+	BOOST_TEST(!fetched.as_object().contains("error"), json::serialize(fetched));
+	std::string tracking = git_text(repo, { "rev-parse", "origin/main" });
+	while (!tracking.empty() && (tracking.back() == '\n' || tracking.back() == '\r')) tracking.pop_back();
+	BOOST_TEST(tracking == theirs);
+	BOOST_TEST(head_of(repo) != theirs);
+
+	// The upstream set by the push: a pull without arguments fast-forwards to it.
+	const json::value pulled = finish(service->start_pull({}, {}, person));
+	BOOST_TEST(!pulled.as_object().contains("error"), json::serialize(pulled));
+	BOOST_TEST(head_of(repo) == theirs);
+	BOOST_TEST(fs::exists(repo / "theirs.txt"));
+
+	write(other / "more.txt", "more\n");
+	git(other, { "add", "more.txt" });
+	git(other, { "commit", "-q", "-m", "one more" });
+	git(other, { "push", "-q", "origin", "main" });
+	const json::value named = finish(service->start_pull("origin", "main", person));
+	BOOST_TEST(!named.as_object().contains("error"), json::serialize(named));
+	BOOST_TEST(head_of(repo) == head_of(other));
+
+	// Diverged: a pull that is not a fast-forward is refused, nothing is merged.
+	write(other / "diverge.txt", "theirs\n");
+	git(other, { "add", "diverge.txt" });
+	git(other, { "commit", "-q", "-m", "their side" });
+	git(other, { "push", "-q", "origin", "main" });
+	write(repo / "mine.txt", "mine\n");
+	finish(service->start_stage({ "mine.txt" }, person));
+	const std::string mine = text(finish(service->start_commit("my side", person)).as_object().at("hash"));
+	const json::value refused = finish(service->start_pull({}, {}, person));
+	BOOST_TEST(refused.as_object().contains("error"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == mine);
+	// And a push that is not a fast-forward is rejected, never forced.
+	const json::value rejected = finish(service->start_push("origin", "main", false, person));
+	BOOST_TEST(rejected.as_object().contains("error"), json::serialize(rejected));
+	BOOST_TEST(head_of(remote) == head_of(other));
+}
+
+// Owner decision (#454): an agent's commit runs no hook of the repository; a person's does.
+BOOST_AUTO_TEST_CASE(AHostilePreCommitHook_RunsForAPersonButNotForAnAgent)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("hooks");
+	const fs::path marker = base / "hook_ran.txt";
+	make_script(repo / ".git" / "hooks" / "pre-commit", "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	write(repo / "a.txt", "by an agent\n");
+	const json::value staged = finish(service->start_stage({ "a.txt" }, cmd::origin_kind::agent));
+	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
+	const json::value by_agent = finish(service->start_commit("by an agent", cmd::origin_kind::agent));
+	BOOST_REQUIRE_MESSAGE(by_agent.as_object().contains("hash"), json::serialize(by_agent));
+	BOOST_TEST(head_of(repo) == text(by_agent.as_object().at("hash")));
+	BOOST_TEST(!fs::exists(marker, ec), "an agent's commit ran the repository's pre-commit hook");
+
+	write(repo / "a.txt", "by a person\n");
+	finish(service->start_stage({ "a.txt" }, cmd::origin_kind::ui));
+	const json::value by_person = finish(service->start_commit("by a person", cmd::origin_kind::ui));
+	BOOST_REQUIRE_MESSAGE(by_person.as_object().contains("hash"), json::serialize(by_person));
+	BOOST_TEST(fs::exists(marker, ec), "a person's commit must run the hooks as plain git does");
+}
+
+// Owner decision (#454): a credential helper from the repository's own config refuses an agent's network call before
+// git runs; a person's push goes on, and so does an agent's with allow_repo_credential_helper.
+BOOST_AUTO_TEST_CASE(ARepositoryCredentialHelper_RefusesAnAgentsPush)
+{
+	isolate_config();
+	const fs::path remote = base / "helper_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("helper");
+	git(repo, { "remote", "add", "origin", url });
+	const fs::path marker = base / "helper_ran.txt";
+	const fs::path script = base / "helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "credential.helper", generic_text(script) });
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("a credential helper set by the repository")
+		!= std::string::npos);
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+	BOOST_TEST(is_error(finish(service->start_fetch("origin", cmd::origin_kind::agent)), "unsafe_repository"));
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "unsafe_repository"));
+
+	// With the opt-in the helper rule lets the push through to git, which then refuses the file transport: a guarded
+	// call reaches only https and ssh remotes.
+	service->set_write_permissions({ false, false, true, false });
+	const json::value allowed = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("allowed: " << json::serialize(allowed));
+	BOOST_TEST(!is_error(allowed, "unsafe_repository"));
+	BOOST_TEST(allowed.as_object().contains("error"));
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+
+	const json::value by_person = finish(service->start_push("origin", "main", false, cmd::origin_kind::ui));
+	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
+	BOOST_TEST(head_of(remote) == head_of(repo));
+}
+
+// A helper set in a file the local config includes is the repository's too (git reports the including file's scope).
+BOOST_AUTO_TEST_CASE(ACredentialHelperFromAnIncludeOfTheLocalConfig_RefusesAnAgentsPush)
+{
+	isolate_config();
+	const fs::path remote = base / "include_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("include");
+	git(repo, { "remote", "add", "origin", url });
+	const fs::path marker = base / "include_helper_ran.txt";
+	const fs::path script = base / "include_helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	const fs::path included = base / "included.gitconfig";
+	write(included, "[credential]\n\thelper = " + generic_text(script) + "\n");
+	git(repo, { "config", "include.path", generic_text(included) });
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "unsafe_repository"), json::serialize(refused));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+}
+
+// git checkout <name> of a branch only a remote has: the filter check diffs against that remote's branch, and git
+// creates the local tracking branch.
+BOOST_AUTO_TEST_CASE(AnAgentsCheckoutOfARemoteOnlyBranch_IsCheckedAgainstTheRemoteBranch)
+{
+	isolate_config();
+	const fs::path remote = base / "dwim_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("dwim");
+	git(repo, { "remote", "add", "origin", url });
+	git(repo, { "push", "-q", "origin", "main" });
+
+	const fs::path other = base / "dwim_other";
+	git(base, { "clone", "-q", url, edt::utf8_of(other) });
+	git(other, { "config", "user.name", "Other User" });
+	git(other, { "config", "user.email", "other@example.com" });
+	git(other, { "config", "commit.gpgsign", "false" });
+	git(other, { "checkout", "-q", "-b", "feature" });
+	write(other / "notes.txt", "notes\n");
+	git(other, { "add", "notes.txt" });
+	git(other, { "commit", "-q", "-m", "notes" });
+	git(other, { "push", "-q", "origin", "feature" });
+	git(other, { "checkout", "-q", "-b", "feature_bin", "main" });
+	write(other / "data.bin", "raw bytes\n");
+	git(other, { "add", "data.bin" });
+	git(other, { "commit", "-q", "-m", "data" });
+	git(other, { "push", "-q", "origin", "feature_bin" });
+	git(repo, { "fetch", "-q", "origin" });
+
+	// A filter driver no attribute names.
+	const fs::path marker = base / "dwim_filter_ran.txt";
+	const fs::path script = base / "dwim-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	make_service(real_options(repo));
+	const auto agent = cmd::origin_kind::agent;
+
+	const json::value checked_out = finish(service->start_checkout("feature", agent));
+	BOOST_TEST(!checked_out.as_object().contains("error"), json::serialize(checked_out));
+	std::string upstream = git_text(repo, { "rev-parse", "--abbrev-ref", "feature@{upstream}" });
+	while (!upstream.empty() && (upstream.back() == '\n' || upstream.back() == '\r')) upstream.pop_back();
+	BOOST_TEST(upstream == "origin/feature");
+	BOOST_TEST(fs::exists(repo / "notes.txt"));
+	const json::value back = finish(service->start_checkout("main", agent));
+	BOOST_TEST(!back.as_object().contains("error"), json::serialize(back));
+
+	// Now an attribute names the driver for a file the remote's branch adds (not a .gitattributes the checkout changes).
+	write(repo / ".git" / "info" / "attributes", "*.bin filter=lfs\n");
+	const json::value refused = finish(service->start_checkout("feature_bin", agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	BOOST_TEST(git_text(repo, { "for-each-ref", "refs/heads/feature_bin" }).empty());
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// A name that resolves to a commit (here a tag) is what git checks out, even when a remote has a branch of that name:
+// the filter check diffs against the tag, not the remote branch.
+BOOST_AUTO_TEST_CASE(AnAgentsCheckoutOfATagNamedLikeARemoteBranch_IsCheckedAgainstTheTag)
+{
+	isolate_config();
+	const fs::path remote = base / "tag_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("tagged");
+	git(repo, { "remote", "add", "origin", url });
+	git(repo, { "push", "-q", "origin", "main" });
+	// origin/feature: notes only.
+	git(repo, { "checkout", "-q", "-b", "remote_feature" });
+	write(repo / "notes.txt", "notes\n");
+	git(repo, { "add", "notes.txt" });
+	git(repo, { "commit", "-q", "-m", "notes" });
+	git(repo, { "push", "-q", "origin", "remote_feature:feature" });
+	// Tag feature: a commit that adds data.bin.
+	git(repo, { "checkout", "-q", "-b", "side", "main" });
+	write(repo / "data.bin", "raw bytes\n");
+	git(repo, { "add", "data.bin" });
+	git(repo, { "commit", "-q", "-m", "data" });
+	git(repo, { "tag", "feature" });
+	git(repo, { "checkout", "-q", "main" });
+	git(repo, { "fetch", "-q", "origin" });
+
+	const fs::path script = base / "tag-filter.sh";
+	make_script(script, "cat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	write(repo / ".git" / "info" / "attributes", "*.bin filter=lfs\n");
+	const std::string main_head = head_of(repo);
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_checkout("feature", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	BOOST_TEST(head_of(repo) == main_head);
+	BOOST_TEST(git_text(repo, { "for-each-ref", "refs/heads/feature" }).empty());
+}
+
+// Owner decision (#454): a configured filter driver that applies to a file of the commit refuses an agent's commit
+// before git runs (switching the driver off would commit LFS files as raw bytes); allow_filters lets it run, and the
+// filter runs. A driver no attribute names (a global filter.lfs the repository does not use; the repository's config
+// stands in for the global one here) blocks nothing.
+BOOST_AUTO_TEST_CASE(AnLfsStyleFilter_RefusesAnAgentsCommit_UnlessFiltersAreAllowed)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("lfs");
+	const fs::path marker = base / "filter_ran.txt";
+	const fs::path script = base / "lfs-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	std::error_code ec;
+	{
+		make_service(real_options(repo));
+		write(repo / "plain.bin", "not under a filter yet\n");
+		const json::value staged = finish(service->start_stage({ "plain.bin" }, cmd::origin_kind::agent));
+		BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
+		const json::value committed = finish(service->start_commit("no attribute names the filter", cmd::origin_kind::agent));
+		BOOST_REQUIRE_MESSAGE(committed.as_object().contains("hash"), json::serialize(committed));
+		BOOST_TEST(!fs::exists(marker, ec));
+	}
+
+	write(repo / ".gitattributes", "*.bin filter=lfs\n");
+	write(repo / "data.bin", "raw bytes\n");
+	// A person stages with the filter, as plain git does.
+	git(repo, { "add", ".gitattributes", "data.bin" });
+	const bool filters_run_here = fs::exists(marker, ec);
+#ifdef _WIN32
+	BOOST_WARN_MESSAGE(filters_run_here, "plain git ran no filter here: the last check below is skipped");
+#else
+	BOOST_REQUIRE_MESSAGE(filters_run_here, "plain git must run the filter, or this test proves nothing");
+#endif
+	fs::remove(marker, ec);
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_commit("agent commit", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "filters_require_opt_in"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("lfs") != std::string::npos);
+	BOOST_TEST(head_of(repo) == before);
+	write(repo / "other.bin", "more raw bytes\n");
+	BOOST_TEST(is_error(finish(service->start_stage({ "other.bin" }, cmd::origin_kind::agent)), "filters_require_opt_in"));
+	BOOST_TEST(!fs::exists(marker, ec), "a refused write ran the filter");
+
+	service->set_write_permissions({ false, true, false, false });
+	const json::value staged = finish(service->start_stage({ "other.bin" }, cmd::origin_kind::agent));
+	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
+	const json::value committed = finish(service->start_commit("agent commit", cmd::origin_kind::agent));
+	BOOST_REQUIRE_MESSAGE(committed.as_object().contains("hash"), json::serialize(committed));
+	BOOST_TEST(head_of(repo) != before);
+	BOOST_TEST(head_of(repo) == text(committed.as_object().at("hash")));
+	if (filters_run_here) BOOST_TEST(fs::exists(marker, ec), "with allow_filters the filter must run");
+}
+
+// The writes are mutating commands with no agent category (closed to agents until #455).
+BOOST_AUTO_TEST_CASE(WriteCommands_MutateAndHaveNoAgentCategory)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("commands");
+	make_service(real_options(repo));
+	registrations = edt::register_vcs_commands(commands, *service);
+	for (const char* id : { "vcs.stage", "vcs.unstage", "vcs.commit", "vcs.branch.create", "vcs.checkout", "vcs.fetch",
+			"vcs.pull", "vcs.push" }) {
+		BOOST_TEST_CONTEXT(id) {
+			const cmd::command_desc* desc = commands.find(id);
+			BOOST_REQUIRE(desc != nullptr);
+			BOOST_TEST(desc->mutates);
+			BOOST_TEST((desc->category == cmd::agent_category::unset));
+		}
+	}
+	for (const char* id : { "vcs.reset", "vcs.rebase", "vcs.branch.delete", "vcs.push.force" }) {
+		BOOST_TEST(commands.find(id) == nullptr, id);
+	}
+
+	const auto invalid = [this](std::string_view id, std::string_view args) {
+		return commands.invoke(id, json::parse(args), cmd::origin::test()).code == cmd::codes::invalid_args;
+	};
+	BOOST_TEST(invalid("vcs.stage", R"({"paths":[]})"));
+	BOOST_TEST(invalid("vcs.stage", R"({"paths":[""]})"));
+	BOOST_TEST(invalid("vcs.commit", R"({"message":""})"));
+	BOOST_TEST(invalid("vcs.commit", R"({"message":"  \n"})"));
+	BOOST_TEST(invalid("vcs.push", R"({"remote":"origin","branch":"+main"})"));
+	BOOST_TEST(invalid("vcs.push", R"({"remote":"origin","branch":"-f"})"));
+	BOOST_TEST(invalid("vcs.push", R"({"remote":"origin","branch":"a:b"})"));
+	BOOST_TEST(invalid("vcs.push", R"({"remote":"origin","branch":"main","force":true})"));
+	BOOST_TEST(invalid("vcs.pull", R"({"branch":"main"})"));
+	BOOST_TEST(invalid("vcs.checkout", R"({"ref":"-f"})"));
+	BOOST_TEST(jobs->list().empty());
+
+	write(repo / "b.txt", "bee\n");
+	const cmd::result stage = commands.invoke("vcs.stage", json::parse(R"({"paths":["b.txt"]})"), cmd::origin::test());
+	BOOST_REQUIRE_MESSAGE(stage.ok, stage.error);
+	finish(static_cast<edt::job_service::job_id>(stage.value.as_object().at("job").as_int64()));
+	const cmd::result commit = commands.invoke("vcs.commit", json::parse(R"({"message":"b"})"), cmd::origin::test());
+	BOOST_REQUIRE_MESSAGE(commit.ok, commit.error);
+	const json::value result = finish(static_cast<edt::job_service::job_id>(commit.value.as_object().at("job").as_int64()));
+	BOOST_TEST(text(result.as_object().at("hash")) == head_of(repo));
+}
+
+// Security review of #474: reset, commit, checkout and merge re-hash a tracked file whose stat is stale through its
+// clean filter, whatever paths the call names. A guarded write refuses while any file of the index is under a
+// configured driver; with allow_any_repo_config too (filter.* passes the allowlist anyway).
+BOOST_AUTO_TEST_CASE(AGuardedWrite_RefusesAFilterOnAStaleTrackedFile)
+{
+	isolate_config();
+	const fs::path remote = make_bare("stale_remote.git");
+	const fs::path repo = make_plain_repository("stale");
+	write(repo / ".gitattributes", "*.dat filter=evil\n");
+	write(repo / "a.dat", "data\n");
+	git(repo, { "add", ".gitattributes", "a.dat" });
+	git(repo, { "commit", "-q", "-m", "attributes" });
+	git(repo, { "branch", "other" });
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "push", "-q", "-u", "origin", "main" });
+	write(repo / "t.txt", "t\n");
+	git(repo, { "add", "t.txt" });
+	const fs::path marker = base / "stale_filter_ran.txt";
+	const fs::path script = base / "stale-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.evil.clean", generic_text(script) });
+	git(repo, { "config", "filter.evil.smudge", generic_text(script) });
+	// Same bytes, new stat: what unzipping does to every file.
+	write(repo / "a.dat", "data\n");
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	for (const bool any_config : { false, true }) {
+		BOOST_TEST_CONTEXT("allow_any_repo_config " << any_config) {
+			service->set_write_permissions({ false, false, false, any_config });
+			const auto agent = cmd::origin_kind::agent;
+			BOOST_TEST(is_error(finish(service->start_unstage({ "t.txt" }, agent)), "filters_require_opt_in"));
+			BOOST_TEST(is_error(finish(service->start_commit("message", agent)), "filters_require_opt_in"));
+			BOOST_TEST(is_error(finish(service->start_checkout("other", agent)), "filters_require_opt_in"));
+			// Pull: its fetch is refused first (file transport); either way the merge never runs.
+			BOOST_TEST(finish(service->start_pull({}, {}, agent)).as_object().contains("error"));
+			BOOST_TEST(head_of(repo) == before);
+			BOOST_TEST(!fs::exists(marker, ec), "a guarded write ran the clean filter of a stale tracked file");
+		}
+	}
+}
+
+// Security review of #474: with branch x and tag x, `git diff HEAD x` takes the tag while `git checkout x` takes the
+// branch. The guarded checkout resolves once (the branch first) and checks the tree it checks out.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_OfANameThatIsABranchAndATag_ChecksTheBranch)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("ambiguous");
+	git(repo, { "checkout", "-q", "-b", "x" });
+	write(repo / "notes.txt", "notes\n");
+	git(repo, { "add", "notes.txt" });
+	git(repo, { "commit", "-q", "-m", "notes" });
+	git(repo, { "checkout", "-q", "-b", "side", "main" });
+	write(repo / "data.bin", "raw bytes\n");
+	git(repo, { "add", "data.bin" });
+	git(repo, { "commit", "-q", "-m", "data" });
+	git(repo, { "tag", "x" });
+	git(repo, { "checkout", "-q", "main" });
+	const fs::path marker = base / "ambiguous_filter_ran.txt";
+	const fs::path script = base / "ambiguous-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
+	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	write(repo / ".git" / "info" / "attributes", "*.bin filter=lfs\n");
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value checked_out = finish(service->start_checkout("x", cmd::origin_kind::agent));
+	BOOST_TEST(!checked_out.as_object().contains("error"), json::serialize(checked_out));
+	std::string head_ref = git_text(repo, { "symbolic-ref", "HEAD" });
+	while (!head_ref.empty() && (head_ref.back() == '\n' || head_ref.back() == '\r')) head_ref.pop_back();
+	BOOST_TEST(head_ref == "refs/heads/x");
+	BOOST_TEST(fs::exists(repo / "notes.txt"));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(repo / "data.bin", ec));
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Security review of #474: a push over the file transport runs the other repository's hooks, without the -c
+// overrides (git drops them for the local transport). A guarded call allows only https and ssh.
+BOOST_AUTO_TEST_CASE(AGuardedPushToALocalRepository_IsRefusedByGit_AndRunsNoHookThere)
+{
+	isolate_config();
+	const fs::path remote = make_bare("hooked_remote.git");
+	const fs::path marker = base / "pre_receive_ran.txt";
+	make_script(remote / "hooks" / "pre-receive", "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	const fs::path repo = make_plain_repository("hooked");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	for (const bool any_config : { false, true }) {
+		BOOST_TEST_CONTEXT("allow_any_repo_config " << any_config) {
+			service->set_write_permissions({ false, false, false, any_config });
+			const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+			BOOST_TEST_INFO("refused: " << json::serialize(refused));
+			BOOST_TEST(refused.as_object().contains("error"));
+			BOOST_TEST(!is_error(refused, "unsafe_repository"));
+			BOOST_TEST(text(refused.as_object().at("error").as_object().at("stderr_tail")).find("not allowed") != std::string::npos);
+			BOOST_TEST(!fs::exists(marker, ec));
+			BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+		}
+	}
+
+	// A person's push goes through and the hook runs: the hook above is live.
+	const json::value by_person = finish(service->start_push("origin", "main", false, cmd::origin_kind::ui));
+	BOOST_TEST(!by_person.as_object().contains("error"), json::serialize(by_person));
+#ifdef _WIN32
+	BOOST_WARN_MESSAGE(fs::exists(marker, ec), "the pre-receive hook did not run here: the checks above prove less");
+#else
+	BOOST_TEST(fs::exists(marker, ec), "the pre-receive hook must run for a person, or this test proves nothing");
+#endif
+}
+
+// Security review of #474: core.alternateRefsCommand runs on a fetch when the repository has alternates. The
+// allowlist refuses the key; with allow_any_repo_config the override (and the transport rule) still keep it from
+// running.
+BOOST_AUTO_TEST_CASE(AlternateRefsCommand_RunsNotOnAGuardedFetch)
+{
+	isolate_config();
+	const fs::path remote = make_bare("alternates_remote.git");
+	const fs::path source = make_plain_repository("alternates_source");
+	git(source, { "push", "-q", file_url(remote), "main" });
+	const fs::path repo = make_plain_repository("alternates");
+	write(repo / ".git" / "objects" / "info" / "alternates", generic_text(source / ".git" / "objects") + "\n");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	const fs::path marker = base / "alternate_refs_ran.txt";
+	const fs::path script = base / "alternate-refs.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "core.alternateRefsCommand", generic_text(script) });
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	const json::value refused = finish(service->start_fetch("origin", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("core.alternaterefscommand") != std::string::npos);
+	BOOST_TEST(!fs::exists(marker, ec));
+
+	service->set_write_permissions({ false, false, false, true });
+	const json::value overridden = finish(service->start_fetch("origin", cmd::origin_kind::agent));
+	BOOST_TEST(!is_error(overridden, "unsafe_repository"), json::serialize(overridden));
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Security review of #474: merge.verifySignatures makes pull's merge run gpg.ssh.program. The allowlist refuses the
+// keys; with allow_any_repo_config the overrides still keep the program from running.
+BOOST_AUTO_TEST_CASE(SignatureVerification_RunsNoProgramOnAGuardedPull)
+{
+	isolate_config();
+	const fs::path remote = make_bare("signed_remote.git");
+	const fs::path repo = make_plain_repository("signed");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "push", "-q", "-u", "origin", "main" });
+	const fs::path other = base / "signed_other";
+	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(other) });
+	git(other, { "config", "user.name", "Other User" });
+	git(other, { "config", "user.email", "other@example.com" });
+	write(other / "theirs.txt", "theirs\n");
+	git(other, { "add", "theirs.txt" });
+	git(other, { "commit", "-q", "-m", "their commit" });
+	git(other, { "push", "-q", "origin", "main" });
+	const fs::path marker = base / "gpg_ran.txt";
+	const fs::path script = base / "gpg-ssh.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexit 1\n");
+	git(repo, { "config", "merge.verifySignatures", "true" });
+	git(repo, { "config", "gpg.format", "ssh" });
+	git(repo, { "config", "gpg.ssh.program", generic_text(script) });
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "unsafe_repository"));
+	BOOST_TEST(!fs::exists(marker, ec));
+
+	service->set_write_permissions({ false, false, false, true });
+	const json::value overridden = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(!is_error(overridden, "unsafe_repository"), json::serialize(overridden));
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(head_of(repo) == before);
+}
+
+// The allowlist of the repository's own config: an unknown key refuses a guarded write and is named; the config
+// `git clone` writes passes; allow_any_repo_config lets the unknown key through.
+BOOST_AUTO_TEST_CASE(TheRepositoryConfigAllowlist)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("allowlist");
+	make_service(real_options(repo));
+	const auto agent = cmd::origin_kind::agent;
+
+	for (const char* key : { "core.pager", "foo.bar", "lfs.customtransfer.evil.path", "lfs.extension.evil.clean" }) {
+		BOOST_TEST_CONTEXT(key) {
+			git(repo, { "config", key, "cat" });
+			const json::value refused = finish(service->start_branch_create("topic", {}, agent));
+			BOOST_TEST_INFO("refused: " << json::serialize(refused));
+			BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+			BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find(key) != std::string::npos);
+			git(repo, { "config", "--unset", key });
+		}
+	}
+	git(repo, { "config", "core.pager", "cat" });
+	service->set_write_permissions({ false, false, false, true });
+	const json::value allowed = finish(service->start_branch_create("topic", {}, agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+
+	const fs::path remote = make_bare("allowlist_remote.git");
+	git(repo, { "push", "-q", file_url(remote), "main" });
+	const fs::path clone = base / "allowlist_clone";
+	git(base, { "clone", "-q", file_url(remote), edt::utf8_of(clone) });
+	git(clone, { "config", "user.name", "Clone User" });
+	git(clone, { "config", "user.email", "clone@example.com" });
+	make_service(real_options(clone));
+	const json::value in_clone = finish(service->start_branch_create("topic", {}, agent));
+	BOOST_TEST(!in_clone.as_object().contains("error"), json::serialize(in_clone));
+
+	// What newer git writes on clone or fetch: data only.
+	for (const auto& [key, value] : std::initializer_list<std::pair<const char*, const char*>>{
+		{ "remote.origin.followRemoteHEAD", "warn" }, { "core.sparseCheckout", "false" },
+		{ "core.sparseCheckoutCone", "true" }, { "maintenance.auto", "false" }, { "submodule.active", "." },
+		{ "submodule.lib.url", "https://example.com/lib.git" }, { "submodule.lib.active", "true" } }) {
+		git(clone, { "config", key, value });
+	}
+	const json::value newer_keys = finish(service->start_branch_create("topic2", {}, agent));
+	BOOST_TEST(!newer_keys.as_object().contains("error"), json::serialize(newer_keys));
+
+	// A partial clone fetches missing objects on demand, past the network checks: refused, as any other extension.
+	for (const auto& [key, value] : std::initializer_list<std::pair<const char*, const char*>>{
+		{ "remote.origin.promisor", "true" }, { "remote.origin.partialclonefilter", "blob:none" },
+		{ "extensions.partialClone", "origin" }, { "extensions.noop", "true" } }) {
+		BOOST_TEST_CONTEXT(key) {
+			git(clone, { "config", key, value });
+			const json::value refused = finish(service->start_branch_create("topic4", {}, agent));
+			BOOST_TEST_INFO("refused: " << json::serialize(refused));
+			BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+			BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find(lower_key(key)) != std::string::npos);
+			git(clone, { "config", "--unset", key });
+		}
+	}
+
+	git(clone, { "config", "submodule.lib.update", "!touch pwned" });
+	const json::value update_command = finish(service->start_branch_create("topic3", {}, agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(update_command));
+	BOOST_REQUIRE(is_error(update_command, "unsafe_repository"));
+	BOOST_TEST(text(update_command.as_object().at("error").as_object().at("message")).find("submodule.lib.update")
+		!= std::string::npos);
+}
+
+// Second review of #474 (N1): a bare `worktreeConfig` key is true to git, and config.worktree then sets what it
+// likes (protocol.file.allow beats the -c fallback). The worktree's config file is read whatever the extension says.
+BOOST_AUTO_TEST_CASE(TheWorktreeConfigFile_IsCheckedWhateverTheExtensionSays)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("worktree_config");
+	{
+		std::ofstream config(repo / ".git" / "config", std::ios::binary | std::ios::app);
+		const std::string bare_key = "[extensions]\n\tworktreeConfig\n";
+		config.write(bare_key.data(), static_cast<std::streamsize>(bare_key.size()));
+	}
+	write(repo / ".git" / "config.worktree", "[protocol \"file\"]\n\tallow = always\n");
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_branch_create("topic", {}, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("protocol.file.allow") != std::string::npos);
+
+	// Without the extension git ignores the file, and it is still checked.
+	const fs::path plain = make_plain_repository("worktree_config_plain");
+	write(plain / ".git" / "config.worktree", "[core]\n\tpager = cat\n");
+	make_service(real_options(plain));
+	const json::value plain_refused = finish(service->start_branch_create("topic", {}, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(plain_refused));
+	BOOST_REQUIRE(is_error(plain_refused, "unsafe_repository"));
+	BOOST_TEST(text(plain_refused.as_object().at("error").as_object().at("message")).find("core.pager") != std::string::npos);
+}
+
+// Second review of #474 (N2): a partial clone fetches a missing object from its promisor remote on demand, past the
+// network checks (and with the repository's credential helper). extensions.partialClone is refused; with
+// allow_any_repo_config, GIT_NO_LAZY_FETCH (git 2.45+) keeps the checkout from fetching: GIT_TRACE shows no fetch.
+BOOST_AUTO_TEST_CASE(APartialClone_LazyFetchesNothingOnAGuardedCheckout)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("partial");
+	git(repo, { "checkout", "-q", "-b", "other" });
+	write(repo / "big.txt", "a blob the promisor would have to send\n");
+	git(repo, { "add", "big.txt" });
+	git(repo, { "commit", "-q", "-m", "big" });
+	git(repo, { "checkout", "-q", "main" });
+	std::string blob = git_text(repo, { "rev-parse", "other:big.txt" });
+	while (!blob.empty() && (blob.back() == '\n' || blob.back() == '\r')) blob.pop_back();
+	BOOST_REQUIRE(blob.size() > 2);
+	std::error_code ec;
+	const fs::path object = repo / ".git" / "objects" / blob.substr(0, 2) / blob.substr(2);
+	// Loose objects are read-only; Windows does not delete a read-only file.
+	fs::permissions(object, fs::perms::owner_write, fs::perm_options::add, ec);
+	BOOST_REQUIRE_MESSAGE(fs::remove(object, ec), ec.message());
+	git(repo, { "config", "core.repositoryformatversion", "1" });
+	git(repo, { "remote", "add", "origin", "https://127.0.0.1:9/unreachable.git" });
+	git(repo, { "config", "extensions.partialClone", "origin" });
+	const fs::path marker = base / "partial_helper_ran.txt";
+	const fs::path script = base / "partial-helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "credential.helper", generic_text(script) });
+	const fs::path trace = base / "partial_trace.txt";
+	auto options = real_options(repo);
+	edt::set_variable(*options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(options));
+
+	const json::value refused = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("extensions.partialclone") != std::string::npos);
+
+	fs::remove(trace, ec);
+	service->set_write_permissions({ false, false, false, true });
+	if (!git_at_least(service->info().git_version, 2, 45)) {
+		const json::value old_git = finish(service->start_checkout("other", cmd::origin_kind::agent));
+		BOOST_TEST_INFO("old git: " << json::serialize(old_git));
+		BOOST_REQUIRE(is_error(old_git, "unsafe_repository"));
+		BOOST_TEST(text(old_git.as_object().at("error").as_object().at("message")).find("lazy fetch") != std::string::npos);
+		BOOST_TEST(!fs::exists(marker, ec));
+		return;
+	}
+	// Git without lazy fetch cannot write big.txt: the checkout fails in git (git_failed), or the policy refuses first.
+	const json::value no_fetch = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST((is_error(no_fetch, "git_failed") || is_error(no_fetch, "unsafe_repository")), json::serialize(no_fetch));
+	std::string traced;
+	{
+		std::ifstream in(trace, std::ios::binary);
+		traced.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	}
+	BOOST_TEST(!traced.empty(), "GIT_TRACE wrote nothing: the check below proves nothing");
+	BOOST_TEST(traced.find("fetch") == std::string::npos, traced);
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Second review of #474 (N3): check-attr reads the work tree's .gitattributes first, but checkout smudges with the
+// index's. A work tree .gitattributes that drops the filter line must not let the checkout through.
+BOOST_AUTO_TEST_CASE(AWorkTreeGitattributesThatHidesAFilter_DoesNotPassTheCheck)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("hidden_attributes");
+	write(repo / ".gitattributes", "*.bin filter=evil\n");
+	write(repo / "data.bin", "raw bytes\n");
+	git(repo, { "add", ".gitattributes", "data.bin" });
+	git(repo, { "commit", "-q", "-m", "attributes" });
+	git(repo, { "checkout", "-q", "-b", "other" });
+	write(repo / "data.bin", "other bytes\n");
+	git(repo, { "add", "data.bin" });
+	git(repo, { "commit", "-q", "-m", "other bytes" });
+	git(repo, { "checkout", "-q", "main" });
+	const fs::path marker = base / "hidden_filter_ran.txt";
+	const fs::path script = base / "hidden-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.evil.clean", generic_text(script) });
+	git(repo, { "config", "filter.evil.smudge", generic_text(script) });
+	write(repo / ".gitattributes", "");
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	std::string head_ref = git_text(repo, { "symbolic-ref", "HEAD" });
+	while (!head_ref.empty() && (head_ref.back() == '\n' || head_ref.back() == '\r')) head_ref.pop_back();
+	BOOST_TEST(head_ref == "refs/heads/main");
+}
+
+// Final review of #474 (N2b): git 2.43's `clone --filter=blob:none` writes remote.origin.promisor=true and
+// partialclonefilter, no extension, and a checkout lazy-fetches. Refused by the allowlist; with
+// allow_any_repo_config, refused before git 2.45 and fetching nothing (GIT_TRACE) from it.
+BOOST_AUTO_TEST_CASE(APromisorRemoteWithoutTheExtension_LazyFetchesNothingOnAGuardedCheckout)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("promisor");
+	git(repo, { "checkout", "-q", "-b", "other" });
+	write(repo / "big.txt", "a blob the promisor would have to send\n");
+	git(repo, { "add", "big.txt" });
+	git(repo, { "commit", "-q", "-m", "big" });
+	git(repo, { "checkout", "-q", "main" });
+	std::string blob = git_text(repo, { "rev-parse", "other:big.txt" });
+	while (!blob.empty() && (blob.back() == '\n' || blob.back() == '\r')) blob.pop_back();
+	BOOST_REQUIRE(blob.size() > 2);
+	std::error_code ec;
+	const fs::path object = repo / ".git" / "objects" / blob.substr(0, 2) / blob.substr(2);
+	fs::permissions(object, fs::perms::owner_write, fs::perm_options::add, ec);
+	BOOST_REQUIRE_MESSAGE(fs::remove(object, ec), ec.message());
+	git(repo, { "remote", "add", "origin", "https://127.0.0.1:9/unreachable.git" });
+	git(repo, { "config", "remote.origin.promisor", "true" });
+	git(repo, { "config", "remote.origin.partialclonefilter", "blob:none" });
+	const fs::path marker = base / "promisor_helper_ran.txt";
+	const fs::path script = base / "promisor-helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "credential.helper", generic_text(script) });
+	const fs::path trace = base / "promisor_trace.txt";
+	auto options = real_options(repo);
+	edt::set_variable(*options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(options));
+
+	const json::value refused = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("remote.origin.promisor") != std::string::npos);
+
+	fs::remove(trace, ec);
+	service->set_write_permissions({ false, false, false, true });
+	const json::value opted_in = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("opted in: " << json::serialize(opted_in));
+	if (!git_at_least(service->info().git_version, 2, 45)) {
+		BOOST_REQUIRE(is_error(opted_in, "unsafe_repository"));
+		BOOST_TEST(text(opted_in.as_object().at("error").as_object().at("message")).find("remote.origin.promisor") != std::string::npos);
+	}
+	else {
+		BOOST_TEST((is_error(opted_in, "git_failed") || is_error(opted_in, "unsafe_repository")));
+		std::string traced;
+		{
+			std::ifstream in(trace, std::ios::binary);
+			traced.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+		BOOST_TEST(!traced.empty(), "GIT_TRACE wrote nothing: the check below proves nothing");
+		BOOST_TEST(traced.find("fetch") == std::string::npos, traced);
+	}
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Final review of #474 (N3b): an untracked top-level .gitattributes sets the filter, a tracked sub/.gitattributes
+// edited in the work tree unsets it: none of the three check-attr views names the driver, yet checkout smudges. A
+// tracked .gitattributes that differs from the index refuses on every git.
+BOOST_AUTO_TEST_CASE(AMixedAttributesLayout_DoesNotHideAFilter)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("mixed_attributes");
+	write(repo / "sub" / ".gitattributes", "*.txt text\n");
+	write(repo / "sub" / "f.txt", "one\n");
+	git(repo, { "add", "sub/.gitattributes", "sub/f.txt" });
+	git(repo, { "commit", "-q", "-m", "sub" });
+	git(repo, { "checkout", "-q", "-b", "other" });
+	write(repo / "sub" / "f.txt", "two\n");
+	git(repo, { "add", "sub/f.txt" });
+	git(repo, { "commit", "-q", "-m", "change f" });
+	git(repo, { "checkout", "-q", "main" });
+	const fs::path marker = base / "mixed_filter_ran.txt";
+	const fs::path script = base / "mixed-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.evil.clean", generic_text(script) });
+	git(repo, { "config", "filter.evil.smudge", generic_text(script) });
+	// Only sub/ (a.txt at the top would show the driver to the work-tree view).
+	write(repo / ".gitattributes", "sub/*.txt filter=evil\n");
+	write(repo / "sub" / ".gitattributes", "*.txt -filter\n");
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Final review of #474 (hardening): a repository's protocol.file.allow=always beats protocol.allow=never; the
+// specific -c protocol.file.allow=never beats it. With allow_any_repo_config the push to a local repository is still
+// refused by git, and that repository's pre-receive does not run.
+BOOST_AUTO_TEST_CASE(ARepositoryProtocolFileAllow_DoesNotOpenTheFileTransport)
+{
+	isolate_config();
+	const fs::path remote = make_bare("file_allowed_remote.git");
+	const fs::path marker = base / "file_allowed_pre_receive_ran.txt";
+	make_script(remote / "hooks" / "pre-receive", "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	const fs::path repo = make_plain_repository("file_allowed");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "config", "protocol.file.allow", "always" });
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_TEST(refused.as_object().contains("error"));
+	BOOST_TEST(!is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("stderr_tail")).find("not allowed") != std::string::npos);
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+}
+
+// Final review of #474 (hardening): config-based hooks (hook.<name>.command/.event) do not go through
+// core.hooksPath. Without allow_hooks any hook.* key refuses, even with allow_any_repo_config.
+BOOST_AUTO_TEST_CASE(AConfigBasedHook_RefusesAGuardedWrite_EvenWithAnyRepoConfig)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("config_hook");
+	const fs::path marker = base / "config_hook_ran.txt";
+	const fs::path script = base / "config-hook.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	git(repo, { "config", "hook.evil.command", generic_text(script) });
+	git(repo, { "config", "hook.evil.event", "pre-commit" });
+	write(repo / "a.txt", "changed\n");
+	git(repo, { "add", "a.txt" });
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value refused = finish(service->start_commit("message", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("hook.evil.command") != std::string::npos);
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(head_of(repo) == before);
+}
+
+// Re-check of #474: `config --local --list` does not follow include.path, git does. An included hook.* must not pass.
+BOOST_AUTO_TEST_CASE(AnIncludedConfigFile_RefusesAGuardedWrite_EvenWithAnyRepoConfig)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("included_hook");
+	const fs::path marker = base / "included_hook_ran.txt";
+	const fs::path script = base / "included-hook.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	const fs::path included = base / "included_hook.inc";
+	write(included, "[hook \"evil\"]\n\tcommand = " + generic_text(script) + "\n\tevent = pre-commit\n");
+	git(repo, { "config", "include.path", generic_text(included) });
+	write(repo / "a.txt", "changed\n");
+	git(repo, { "add", "a.txt" });
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value refused = finish(service->start_commit("message", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("include.path") != std::string::npos);
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(head_of(repo) == before);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtVcsFakeGitTests, fake_git_fixture)
@@ -622,6 +1729,25 @@ BOOST_AUTO_TEST_CASE(AFailure_IsAResultWithTheClassifiedError)
 	BOOST_TEST(text(error.at("message")).find("terminal prompts disabled") != std::string::npos);
 	BOOST_TEST(text(error.at("stderr_tail")).find("terminal prompts disabled") != std::string::npos);
 	BOOST_TEST(error.at("exit_code").as_int64() == 128);
+}
+
+// git checkout can report a file it could not write and still exit 0 (a partial clone without lazy fetch).
+BOOST_AUTO_TEST_CASE(ACheckoutThatReportsAnErrorButExitsZero_IsAFailure)
+{
+	command = [](const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (std::find(args.begin(), args.end(), "checkout") != args.end()) {
+			opts.on_stderr_line("error: unable to read sha1 file of big.txt (0123456789abcdef0123456789abcdef01234567)");
+		}
+		return exited(0);
+	};
+	make_service(fake_options());
+
+	const json::value result = finish(service->start_checkout("other", cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(result));
+	BOOST_REQUIRE(is_error(result, "git_failed"));
+	BOOST_TEST(text(result.as_object().at("error").as_object().at("message")).find("unable to read sha1 file")
+		!= std::string::npos);
 }
 
 BOOST_AUTO_TEST_CASE(AFailure_StderrTailKeepsTheLast20Lines_MessageTheFatalLine)
@@ -869,7 +1995,8 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
 	for (const char* entry : { "GIT_DIR=/elsewhere/.git", "GIT_WORK_TREE=/elsewhere", "GIT_INDEX_FILE=/i",
 			"GIT_OBJECT_DIRECTORY=/o", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/a", "GIT_CONFIG_PARAMETERS='core.fsmonitor'='x'",
 			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.fsmonitor", "GIT_CONFIG_VALUE_0=x", "GIT_EXEC_PATH=/evil",
-			"GIT_EXTERNAL_DIFF=/evil", "GIT_CEILING_DIRECTORIES=/kept", "HOME=/kept" }) {
+			"GIT_EXTERNAL_DIFF=/evil", "GIT_ALLOW_PROTOCOL=file:ext", "GIT_PROTOCOL_FROM_USER=1", "GIT_CEILING_DIRECTORIES=/kept",
+			"HOME=/kept" }) {
 		options.environment->emplace_back(entry);
 	}
 	make_service(std::move(options));
@@ -878,7 +2005,7 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
 	const auto& env = *last_options.environment;
 	for (const char* gone : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
 			"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
-			"GIT_CONFIG_VALUE_0", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF" }) {
+			"GIT_CONFIG_VALUE_0", "GIT_EXEC_PATH", "GIT_EXTERNAL_DIFF", "GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER" }) {
 		BOOST_TEST_CONTEXT(gone) {
 			BOOST_TEST(!edt::variable_of(env, gone).has_value());
 		}
@@ -937,6 +2064,332 @@ BOOST_AUTO_TEST_CASE(Cancel_StopsTheRunningGit)
 	BOOST_REQUIRE(info.has_value());
 	BOOST_TEST((info->status == edt::job_status::cancelled));
 	BOOST_TEST(!info->result.has_value());
+}
+
+// An agent's write: hooks point at an empty folder of the editor, askpass is off, ssh is the editor's; filters are
+// not switched off (a refusal handles them). A person's write keeps git's own behaviour.
+BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	auto options = fake_options();
+	options.environment->push_back("GIT_ASKPASS=/usr/bin/evil-askpass");
+	options.environment->push_back("SSH_ASKPASS=/usr/bin/evil-askpass");
+	make_service(std::move(options));
+
+	finish(service->start_stage({ "a.txt", "-rf" }, cmd::origin_kind::agent));
+	const auto agent = calls.back();
+	BOOST_REQUIRE(agent.size() >= 4u);
+	BOOST_TEST(agent[agent.size() - 4] == "add");
+	BOOST_TEST(agent[agent.size() - 3] == "--");
+	BOOST_TEST(agent.back() == "-rf");
+	BOOST_TEST(has_arg(agent, "core.askPass="));
+	BOOST_TEST(has_arg(agent, "core.sshCommand=ssh -oBatchMode=yes"));
+	BOOST_TEST(has_arg(agent, "core.fsmonitor=false"));
+	BOOST_TEST(has_arg(agent, "diff.external="));
+	BOOST_TEST(!has_arg(agent, "filter.lfs.clean="));
+	const std::string hooks = arg_starting_with(agent, "core.hooksPath=");
+	BOOST_REQUIRE(!hooks.empty());
+	const fs::path hooks_dir = path_of(std::string_view(hooks).substr(std::string_view("core.hooksPath=").size()));
+	std::error_code ec;
+	BOOST_TEST(fs::is_directory(hooks_dir, ec));
+	BOOST_TEST(fs::is_empty(hooks_dir, ec));
+	BOOST_TEST(!fs::equivalent(hooks_dir.parent_path(), base, ec));
+	BOOST_TEST(!edt::variable_of(*last_options.environment, "GIT_ASKPASS").has_value());
+	BOOST_TEST(!edt::variable_of(*last_options.environment, "SSH_ASKPASS").has_value());
+
+	// Something wrote into the folder: the next agent write gets an empty one again.
+	write(hooks_dir / "pre-commit", "#!/bin/sh\n");
+	finish(service->start_commit("message", cmd::origin_kind::agent));
+	std::size_t commit_call = calls.size();
+	while (commit_call > 0 && !has_arg(calls[commit_call - 1], "commit")) --commit_call;
+	BOOST_REQUIRE(commit_call > 0);
+	const std::string again = arg_starting_with(calls[commit_call - 1], "core.hooksPath=");
+	BOOST_REQUIRE(!again.empty());
+	BOOST_TEST(fs::is_empty(path_of(std::string_view(again).substr(std::string_view("core.hooksPath=").size())), ec));
+
+	finish(service->start_push("origin", "main", false, cmd::origin_kind::ui));
+	const auto person = calls.back();
+	BOOST_TEST(arg_starting_with(person, "core.hooksPath=").empty());
+	BOOST_TEST(!has_arg(person, "core.askPass="));
+	BOOST_TEST(has_arg(person, "core.fsmonitor=false"));
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_ASKPASS").value_or("") == "/usr/bin/evil-askpass");
+	BOOST_TEST(!has_arg(person, "--force"));
+	BOOST_REQUIRE(person.size() >= 3u);
+	BOOST_TEST(person[person.size() - 3] == "--end-of-options");
+	BOOST_TEST(person[person.size() - 2] == "origin");
+	BOOST_TEST(person.back() == "main");
+
+	BOOST_TEST(arg_starting_with(person, "remote.origin.uploadpack=").empty());
+
+	service->set_write_permissions({ true, false, false, false });
+	finish(service->start_fetch({}, cmd::origin_kind::agent));
+	const auto allowed = calls.back();
+	BOOST_TEST(has_arg(allowed, "fetch"));
+	BOOST_TEST(arg_starting_with(allowed, "core.hooksPath=").empty());
+	for (const char* config : { "core.askPass=", "protocol.allow=never", "protocol.https.allow=always",
+			"protocol.ssh.allow=always", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never", "commit.gpgsign=false", "tag.gpgsign=false",
+			"merge.verifySignatures=false", "gpg.program=", "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=",
+			"gpg.ssh.defaultKeyCommand=", "core.gitProxy=", "core.alternateRefsCommand=", "gc.auto=0",
+			"maintenance.auto=false",
+			"remote.origin.uploadpack=git-upload-pack", "remote.origin.receivepack=git-receive-pack" }) {
+		BOOST_TEST_CONTEXT(config) {
+			BOOST_TEST(has_arg(allowed, config));
+		}
+	}
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_PROXY_COMMAND").value_or("x").empty());
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1");
+	// The repository's own config was read first.
+	BOOST_TEST(std::any_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
+		return has_arg(call, "--local") && has_arg(call, "--list") && has_arg(call, "--show-origin");
+	}));
+
+	// test and game are guarded like agent; only ui is a person.
+	for (const auto caller : { cmd::origin_kind::test, cmd::origin_kind::game }) {
+		finish(service->start_branch_create("topic", {}, caller));
+		BOOST_TEST(has_arg(calls.back(), "protocol.allow=never"));
+	}
+	finish(service->start_branch_create("topic", {}, cmd::origin_kind::ui));
+	BOOST_TEST(!has_arg(calls.back(), "protocol.allow=never"));
+
+	// Glob characters in a guarded branch or ref name.
+	for (const char* name : { "a*", "a?", "a[b" }) {
+		BOOST_TEST(service->start_branch_create(name, {}, cmd::origin_kind::agent).code == cmd::codes::invalid_args, name);
+		BOOST_TEST(service->start_checkout(name, cmd::origin_kind::agent).code == cmd::codes::invalid_args, name);
+		BOOST_TEST(service->start_push("origin", name, false, cmd::origin_kind::agent).code == cmd::codes::invalid_args, name);
+	}
+}
+
+// The guarded pull: the merge gets the OID the FETCH_HEAD line named (peeled once), with the signature overrides.
+BOOST_AUTO_TEST_CASE(AGuardedPull_MergesTheOidItChecked)
+{
+	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	auto options = fake_options();
+	options.run = [inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "1111111111111111111111111111111111111111^{commit}")) {
+			on_line("2222222222222222222222222222222222222222\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	const json::value result = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+	const auto& merge = calls.back();
+	BOOST_TEST(has_arg(merge, "merge"));
+	BOOST_TEST(merge.back() == "2222222222222222222222222222222222222222");
+	BOOST_TEST(has_arg(merge, "merge.verifySignatures=false"));
+	BOOST_TEST(has_arg(merge, "gpg.ssh.program="));
+	BOOST_TEST(!has_arg(merge, "FETCH_HEAD"));
+}
+
+// A configured driver refuses an agent's write only when check-attr names it for a file the write touches; a
+// .gitattributes a checkout or pull would change refuses it whatever check-attr says.
+BOOST_AUTO_TEST_CASE(AFilterDriver_RefusesAnAgentsTreeWrite_OnlyWhereItApplies)
+{
+	filter_config = "filter.lfs.clean\ngit-lfs clean -- %f\0filter.lfs.smudge\ngit-lfs smudge -- %f\0"
+		"filter.lfs.required\ntrue\0filter.crypt.process\ncrypt-filter\0"s;
+	write(base / "FETCH_HEAD", "0123456789abcdef\t\tbranch 'main' of /elsewhere\n");
+	std::string changed = "a.bin\0"s;
+	std::vector<std::string> ran;
+	command = [&ran, &changed](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		const auto after_dash_dash = [&args] {
+			const auto dash_dash = std::find(args.begin(), args.end(), "--");
+			return dash_dash == args.end() ? std::vector<std::string>{} : std::vector<std::string>(std::next(dash_dash), args.end());
+		};
+		if (has_arg(args, "ls-files")) {
+			// The whole index is `changed`; --others: the paths asked for.
+			if (has_arg(args, "--others")) {
+				for (const auto& path : after_dash_dash()) on_line(path + '\0');
+			}
+			else {
+				on_line(changed);
+			}
+			return exited(0);
+		}
+		if (has_arg(args, "--name-only")) {
+			on_line(changed);
+			return exited(0);
+		}
+		if (has_arg(args, "check-attr")) {
+			for (const auto& path : after_dash_dash()) {
+				on_line(path + '\0' + "filter" + '\0' + (path.ends_with(".bin") ? "lfs" : "unspecified") + '\0');
+			}
+			return exited(0);
+		}
+		for (const char* subcommand : { "add", "reset", "commit", "checkout", "merge", "branch", "fetch", "push" }) {
+			if (has_arg(args, subcommand)) ran.emplace_back(subcommand);
+		}
+		return exited(0);
+	};
+	make_service(fake_options());
+	const auto agent = cmd::origin_kind::agent;
+	const auto refused_with_lfs = [](const json::value& result) {
+		if (!is_error(result, "filters_require_opt_in")) return false;
+		const std::string message = text(result.as_object().at("error").as_object().at("message"));
+		return message.find("lfs") != std::string::npos && message.find("crypt") == std::string::npos;
+	};
+
+	BOOST_TEST(refused_with_lfs(finish(service->start_stage({ "a.bin" }, agent))));
+	BOOST_TEST(refused_with_lfs(finish(service->start_unstage({ "a.bin" }, agent))));
+	BOOST_TEST(refused_with_lfs(finish(service->start_commit("message", agent))));
+	BOOST_TEST(refused_with_lfs(finish(service->start_checkout("main", agent))));
+	BOOST_TEST(ran.empty());
+	BOOST_TEST(refused_with_lfs(finish(service->start_pull({}, {}, agent))));
+	BOOST_TEST((ran == std::vector<std::string>{ "fetch" }));
+
+	// Configured, but no attribute names a driver for these files: git runs.
+	ran.clear();
+	changed = "a.txt\0"s;
+	BOOST_TEST(!finish(service->start_stage({ "a.txt" }, agent)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_commit("message", agent)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_checkout("main", agent)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_pull({}, {}, agent)).as_object().contains("error"));
+	BOOST_TEST((ran == std::vector<std::string>{ "add", "commit", "checkout", "fetch", "merge" }));
+
+	// A .gitattributes the target changes: the work tree's attributes say nothing about the target's.
+	ran.clear();
+	changed = "a.txt\0sub/.gitattributes\0"s;
+	BOOST_TEST(is_error(finish(service->start_checkout("main", agent)), "filters_require_opt_in"));
+	BOOST_TEST(ran.empty());
+
+	// Writes that touch no file are not checked.
+	finish(service->start_branch_create("topic", {}, agent));
+	finish(service->start_fetch("origin", agent));
+	finish(service->start_push("origin", "topic", true, agent));
+	BOOST_TEST((ran == std::vector<std::string>{ "branch", "fetch", "push" }));
+
+	// A person's write runs git, filters and all.
+	ran.clear();
+	changed = "a.bin\0"s;
+	BOOST_TEST(!finish(service->start_commit("message", cmd::origin_kind::ui)).as_object().contains("error"));
+	BOOST_TEST((ran == std::vector<std::string>{ "commit" }));
+
+	service->set_write_permissions({ false, true, false, false });
+	ran.clear();
+	BOOST_TEST(!finish(service->start_commit("message", agent)).as_object().contains("error"));
+	BOOST_TEST((ran == std::vector<std::string>{ "commit" }));
+}
+
+// What an agent's network call refuses in the repository's config (git config --show-scope), and what it lets by.
+BOOST_AUTO_TEST_CASE(AnAgentsNetworkCall_RefusesProgramsTheRepositoryConfigPicks)
+{
+	bool pushed = false;
+	command = [&pushed](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "push")) pushed = true;
+		return exited(0);
+	};
+	make_service(fake_options());
+	const auto push = [this, &pushed](cmd::origin_kind caller) {
+		pushed = false;
+		return finish(service->start_push("origin", "main", false, caller));
+	};
+
+	for (const auto& unsafe : { "local\0credential.helper\n!touch marker\0"s, "worktree\0credential.https://x.helper\nstore\0"s,
+			"local\0core.sshcommand\nevil-ssh\0"s, "local\0url.file:///srv/evil.git.insteadof\nhttps://example.com/\0"s,
+			"local\0url.ext::sh -c evil.pushinsteadof\ngit@example.com:\0"s, "global\0remote.origin.uploadpack\nevil-pack\0"s,
+			"local\0remote.origin.receivepack\nevil-pack\0"s, "local\0remote.other.receivepack\nevil-pack\0"s }) {
+		filter_config = unsafe;
+		BOOST_TEST_CONTEXT(unsafe) {
+			const json::value result = push(cmd::origin_kind::agent);
+			BOOST_TEST(is_error(result, "unsafe_repository"), json::serialize(result));
+			BOOST_TEST(!pushed);
+			push(cmd::origin_kind::ui);
+			BOOST_TEST(pushed);
+		}
+	}
+
+	for (const auto& fine : { "global\0credential.helper\nmanager\0"s, "system\0credential.helper\nstore\0"s,
+			"local\0credential.helper\n\0"s, "global\0core.sshcommand\nssh -i key\0"s,
+			"local\0url.https://mirror.example.com/.insteadof\nhttps://example.com/\0"s,
+			"local\0url.git@example.com:.pushinsteadof\nhttps://example.com/\0"s,
+			"local\0remote.origin.uploadpack\ngit-upload-pack\0"s }) {
+		filter_config = fine;
+		BOOST_TEST_CONTEXT(fine) {
+			const json::value result = push(cmd::origin_kind::agent);
+			BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+			BOOST_TEST(pushed);
+		}
+	}
+
+	filter_config = "local\0credential.helper\n!touch marker\0"s;
+	service->set_write_permissions({ false, false, true, false });
+	BOOST_TEST(!push(cmd::origin_kind::agent).as_object().contains("error"));
+	BOOST_TEST(pushed);
+}
+
+// A job.cancel while a write runs stops git; the commit message file goes too.
+BOOST_AUTO_TEST_CASE(Cancel_StopsARunningCommit_AndRemovesItsMessageFile)
+{
+	edt::job_service::job_id running = 0;
+	bool saw_stop = false;
+	fs::path message_file;
+	std::string written;
+	command = [this, &running, &saw_stop, &message_file, &written](const std::vector<std::string>& args,
+		const platform::process_options&, const std::function<void(std::string_view)>&, std::stop_token stop) {
+		const auto flag = std::find(args.begin(), args.end(), "-F");
+		if (flag != args.end() && std::next(flag) != args.end()) {
+			message_file = path_of(*std::next(flag));
+			std::ifstream in(message_file, std::ios::binary);
+			written.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+		jobs->cancel(running);
+		const platform::process_result result = hang_until_stopped(stop);
+		saw_stop = result.cancelled;
+		return result;
+	};
+	make_service(fake_options());
+	const std::string message = "line one\nline two \xE2\x9C\x93\n";
+	const auto started = service->start_commit(message, cmd::origin_kind::ui);
+	BOOST_REQUIRE(static_cast<bool>(started));
+	running = started.job;
+	run_to_end();
+
+	BOOST_TEST(saw_stop);
+	BOOST_TEST(written == message);
+	BOOST_REQUIRE(!message_file.empty());
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(message_file, ec));
+	BOOST_TEST(!fs::equivalent(message_file.parent_path(), base, ec));
+	const auto info = jobs->info(running);
+	BOOST_REQUIRE(info.has_value());
+	BOOST_TEST((info->status == edt::job_status::cancelled));
+	BOOST_TEST(!info->result.has_value());
+}
+
+// The network checks need git config --show-scope (git 2.26): an older git refuses an agent's network call at once.
+BOOST_AUTO_TEST_CASE(AGitOlderThan2_26_RefusesAnAgentsNetworkCall)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	auto options = fake_options();
+	options.run = [inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.25.4\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	BOOST_REQUIRE(service->info().available);
+	const std::string expected = "git 2.26 or newer is required for agent network operations (found 2.25.4)";
+
+	const auto agent = cmd::origin_kind::agent;
+	for (const auto& started : { service->start_fetch({}, agent), service->start_pull({}, {}, agent),
+			service->start_push("origin", "main", false, agent) }) {
+		BOOST_TEST(started.code == "vcs_unavailable");
+		BOOST_TEST(started.error == expected);
+	}
+	BOOST_TEST(jobs->list().empty());
+	// A person's network call and an agent's local write still run.
+	BOOST_TEST(!finish(service->start_push("origin", "main", false, cmd::origin_kind::ui)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_branch_create("topic", {}, agent)).as_object().contains("error"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
