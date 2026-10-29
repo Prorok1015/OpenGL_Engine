@@ -5,14 +5,24 @@
 #include <snk/gui/gui_system.h>
 #include <snk/window/wnd_window_service_init.h>
 #include <imgui.h>
+#include <string_view>
 
 // The pieces of `editor --headless` (#452) that do not need the editor itself.
+
+namespace {
+	// Puts window/system back even when a REQUIRE fails, so later tests get the default window system.
+	struct window_system_guard
+	{
+		explicit window_system_guard(std::string_view value) { cfg::set_variable("window/system", value); }
+		~window_system_guard() { cfg::set_variable("window/system", "glfw"); }
+	};
+}
 
 BOOST_AUTO_TEST_SUITE(AppHeadlessTests)
 
 BOOST_AUTO_TEST_CASE(WindowSystemNullFromConfigBuildsAWindowWithoutAGlSurface)
 {
-	cfg::set_variable("window/system", "null");
+	window_system_guard guard("null");
 	ds::app_data_storage storage;
 	core::window::window_init(storage);
 	auto& windows = storage.require<wnd::window_system>();
@@ -21,7 +31,6 @@ BOOST_AUTO_TEST_CASE(WindowSystemNullFromConfigBuildsAWindowWithoutAGlSurface)
 	BOOST_TEST(windows.get_active_window()->gl_surface_ptr() == nullptr);
 	BOOST_TEST(!windows.is_stop_running());
 	core::window::window_term(storage);
-	cfg::set_variable("window/system", "glfw");
 }
 
 BOOST_FIXTURE_TEST_CASE(ExitAfterFramesStopsTheEngineFrameLoop, test_util::null_engine_fixture)

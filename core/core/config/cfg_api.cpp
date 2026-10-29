@@ -186,7 +186,9 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		("mcp-stdio", "reserved for the MCP stdio transport (#452); today it only moves the log to stderr");
 	
 	po::variables_map vm;
-	po::store(po::parse_command_line(argc, argv, desc), vm);
+	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
+	const int style = po::command_line_style::default_style & ~po::command_line_style::allow_guessing;
+	po::store(po::command_line_parser(argc, argv).options(desc).style(style).run(), vm);
 	po::notify(vm);
 
 	if (vm.count("help")) {

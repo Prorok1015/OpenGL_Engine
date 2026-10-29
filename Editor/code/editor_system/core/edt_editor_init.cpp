@@ -12,10 +12,9 @@
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log.h>
 
-namespace {
-	// --headless: no window (window/system = null), so no panels are drawn; see the `ui` stage below.
-	CFG_VAR_DEF_BOOL(cfg_headless, "editor/headless", false);
-}
+// --headless: no window (window/system = null), so no panels are drawn; see the `ui` stage below.
+// Also read by dialog_service.
+CFG_VAR_DEF_BOOL(cfg_edt_headless, "editor/headless", false);
 
 namespace components {
 
@@ -30,7 +29,7 @@ namespace components {
 		data.construct<edt::editor_system>(desc_system, res_sys, rnd_sys, gui_sys);
 		// The editor's ImGui pass is the body of the `ui` stage, between the 3D render and present.
 		auto& stages = data.require<app::frame_stage_registry>();
-		if (cfg_headless) {
+		if (cfg_edt_headless) {
 			egLOG_INFO("editor", "headless: no display; agent actions run without a human");
 			// No panels; the implicit callbacks still run, since level loads and next-frame work are queued there.
 			stages.set_body(app::builtin_stage::ui, [](app::stage_context& c) {

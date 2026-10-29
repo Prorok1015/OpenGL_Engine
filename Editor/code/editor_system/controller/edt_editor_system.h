@@ -168,6 +168,8 @@ namespace edt {
 
 		bool m_export_dialog_active = false;
 		std::function<void()> m_exit_action;
+		// Set with editor/exit_after_level_loaded: stops the frame loop once a level load succeeded (CI headless run).
+		std::function<void()> m_stop_after_level_loaded;
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;

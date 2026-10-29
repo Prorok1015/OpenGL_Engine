@@ -2,6 +2,7 @@
 #include <snk/config/cfg_variables.h>
 #include "test_temp_dir.hpp"
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -343,6 +344,14 @@ BOOST_AUTO_TEST_CASE(Cli_HeadlessSelectsTheNullWindowAndRendererAndNeedsAProject
 	run_cli({ "-s", "editor/headless", "false", "app/non_interactive", "false", "project/required", "false",
 		"window/system", "glfw", "render/backend", "gl" });
 	BOOST_TEST(*window_system == "glfw");
+}
+
+BOOST_AUTO_TEST_CASE(Cli_AbbreviatedOptionIsRefused)
+{
+	// main sends the log to stderr only for the exact spelling, so a prefix must not pass as --headless.
+	cfg::variable<bool> headless{ "editor/headless", false };
+	BOOST_CHECK_THROW(run_cli({ "--head" }), std::exception);
+	BOOST_TEST(!static_cast<bool>(headless));
 }
 
 BOOST_AUTO_TEST_CASE(Cli_McpStdioIsAcceptedAndSetsNothingYet)

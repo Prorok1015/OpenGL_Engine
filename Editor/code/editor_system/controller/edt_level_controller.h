@@ -102,7 +102,8 @@ namespace edt
 		bool save_level_as(const std::string& rel_path);
 		bool quick_save_level();
 
-		void finish_level_load(res::res_handle<scn::level_desc>& handle);
+		// True when the level is in the context manager and its worlds are known.
+		bool finish_level_load(res::res_handle<scn::level_desc>& handle);
 
 		boost::json::object load_desc_template(const std::string& filename);
 		boost::json::object build_level_json() const;

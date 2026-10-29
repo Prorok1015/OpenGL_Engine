@@ -259,6 +259,9 @@ Non-blocking ImGui modal — must be called every frame while open.
 - The `ui` stage does not draw panels: it runs only the implicit callbacks (`editor_system::run_implicit_callbacks`) inside `gui_system::run_without_drawing` (a CPU-only ImGui frame). They must keep running: the startup level load, `next_frame` work (module reload), progress windows and dialogs live there and use ImGui. A dialog that waits for an answer waits forever in headless (later: `unavailable_headless`).
 - The panels never run: nothing sizes the editor/game camera targets by a panel or binds input, so `viewport.capture` may have nothing to read.
 - `app/exit_after_frames N` (core, any host): the loop stops after N frames with exit code 0 — a smoke-test hook.
+- A successful level load logs `level loaded: <tag>` (`Editor/LoadLevel`); `editor/exit_after_level_loaded` stops the loop right after it (exit 0). CI uses it with `app/exit_after_frames` as the cap, so a level that never loads fails the step.
+- Until dialogs fail fast in headless, a dialog that comes on screen logs a WARN (`editor/dialog`): only MCP `dialog.answer` can answer it.
+- Options are parsed without abbreviations (`allow_guessing` off): `--head` is an error, not `--headless`.
 
 ## Common Pitfalls
 

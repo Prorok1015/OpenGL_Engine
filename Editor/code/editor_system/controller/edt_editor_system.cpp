@@ -38,6 +38,7 @@
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
 #include <snk/application/app_deterministic_time.h>
+#include <snk/application/app_loop_service_interface.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/desc/desc_system.h>
@@ -111,6 +112,8 @@ namespace {
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
+	// The run ends with 0 right after the first successful level load (CI: the headless run proves the level loaded).
+	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
@@ -309,6 +312,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		if (auto win = wnd_sys.get_active_window())
 			win->shutdown();
 	};
+	if (cfg_exit_after_level_loaded) {
+		m_stop_after_level_loaded = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
+	}
 
 	m_state.set_save_handlers(
 		[this] { return m_level_ctrl.quick_save_level(); },
@@ -809,9 +815,16 @@ bool edt::editor_system::poll_level_load()
 		ImGui::EndPopup();
 	}
 
-	m_level_ctrl.finish_level_load(m_loading_level_handle);
+	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
 	m_loading_level = false;
 	m_loading_level_handle = {};
+	if (loaded) {
+		egLOG_INFO("Editor/LoadLevel", "level loaded: {}", m_state.level_tag.view());
+		if (m_stop_after_level_loaded) {
+			egLOG_INFO("app", "exit after the level loaded (editor/exit_after_level_loaded)");
+			m_stop_after_level_loaded();
+		}
+	}
 	return false;
 }
 
