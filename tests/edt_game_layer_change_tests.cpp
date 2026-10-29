@@ -302,4 +302,17 @@ BOOST_AUTO_TEST_CASE(a_refused_build_does_not_touch_the_level)
 	loader.unload("editor_game", root);
 }
 
+BOOST_AUTO_TEST_CASE(loading_a_level_starts_a_new_undo_history)
+{
+	const auto tag = put("lv.desc", BASE_LEVEL);
+	open_level(tag);
+	scene_ed.create_entity("Empty");
+	BOOST_REQUIRE(state.history().can_undo());
+
+	open_level(tag);
+
+	BOOST_TEST(!state.history().can_undo());
+	BOOST_TEST(!state.is_dirty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

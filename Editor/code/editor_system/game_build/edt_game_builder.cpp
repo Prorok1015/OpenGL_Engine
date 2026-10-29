@@ -15,6 +15,7 @@
 #include <deque>
 #include <format>
 #include <system_error>
+#include <utility>
 
 namespace json = boost::json;
 namespace fs = std::filesystem;
@@ -224,6 +225,7 @@ edt::build_request edt::make_manual_build_request(const build_settings& settings
 	out.reload_after = settings.reload_after_build;
 	out.fresh = std::find(settings.fresh_configure.begin(), settings.fresh_configure.end(), out.configuration)
 		!= settings.fresh_configure.end();
+	out.fresh_generation = settings.fresh_generation;
 	return out;
 }
 
@@ -323,12 +325,20 @@ edt::action_result edt::game_builder::start(build_request request)
 		const bool allowed = request.preemptible ? request.cancel_on_restart && !manual_ahead
 			: request.cancel_on_restart || preempts;
 		if (!allowed) return action_result::failure("busy", "A build is already running");
-		if (m_pending) egLOG_WARN("editor/build", "a waiting build request ({}) was replaced by a newer one", m_pending->configuration);
 		if (preempts && !m_preempted) {
 			egLOG_DEBUG("editor/build", "the live build stops for the build of {}", request.configuration);
 			m_preempted = true;
 		}
-		m_pending = std::move(request);
+		std::optional<build_request> replaced = std::exchange(m_pending, std::move(request));
+		if (replaced) {
+			egLOG_WARN("editor/build", "a waiting build request ({}) was replaced by a newer one", replaced->configuration);
+			// It never runs: its owner hears so now, not after the running build.
+			if (replaced->on_finished) {
+				build_outcome dropped;
+				dropped.kind = preempts ? build_outcome::preempted : build_outcome::restarted;
+				replaced->on_finished(dropped);
+			}
+		}
 		// Not job_service::cancel: that skips on_done, which starts the waiting request. So the job ends as `done`.
 		if (m_restart_stop) m_restart_stop->request_stop();
 		return action_result::success(json::object{ { "started", false }, { "job", 0 } });
@@ -374,19 +384,31 @@ void edt::game_builder::launch(build_request request)
 	m_job = m_jobs.start(ds::lane::io, { "Build game", "build" }, m_lifetime,
 		[input = std::move(input)](ds::task_context& ctx) { return run_build(input, ctx); },
 		[this, request](ds::task_result<game_build_result>& result) {
+			build_outcome outcome;
 			if (!result.ok()) {
 				egLOG_WARN("editor/build", "the build job failed: {}", result.error);
+				outcome.message = std::format("The build job failed: {}", result.error);
+				outcome.job = m_job;
 			} else {
 				if (request.fresh && result.value->configured && m_options.on_fresh_configured) {
-					m_options.on_fresh_configured(request.configuration);
+					m_options.on_fresh_configured(request.configuration, request.fresh_generation);
 				}
-				finish(*result.value, request);
+				outcome = finish(*result.value, request);
 			}
+			if (request.on_finished) request.on_finished(outcome);
 			if (m_pending) {
 				build_request next = std::move(*m_pending);
 				m_pending.reset();
-				if (const auto outcome = start(std::move(next)); !outcome.ok) {
-					egLOG_WARN("editor/build", "the waiting build did not start: {}", outcome.error);
+				const auto report = next.on_finished;
+				if (const auto started = start(std::move(next)); !started.ok) {
+					egLOG_WARN("editor/build", "the waiting build did not start: {}", started.error);
+					// Its owner would otherwise see no build and no outcome, as after a cancel.
+					if (report) {
+						build_outcome refused;
+						refused.not_started = true;
+						refused.message = started.error;
+						report(refused);
+					}
 				}
 			}
 		});
@@ -406,6 +428,24 @@ void edt::game_builder::cancel()
 		m_pending.reset();
 	}
 	if (is_building()) m_jobs.cancel(m_job);
+}
+
+void edt::game_builder::stop_background()
+{
+	if (!building_preemptible()) return;
+	if (m_pending && m_pending->preemptible) {
+		build_request dropped = std::move(*m_pending);
+		m_pending.reset();
+		if (dropped.on_finished) {
+			build_outcome outcome;
+			outcome.kind = build_outcome::preempted;
+			dropped.on_finished(outcome);
+		}
+	}
+	if (!m_preempted) egLOG_DEBUG("editor/build", "the live build is stopped by the editor");
+	m_preempted = true;
+	// Not job_service::cancel: that skips on_done, so neither the outcome nor a waiting manual request would follow.
+	if (m_restart_stop) m_restart_stop->request_stop();
 }
 
 bool edt::game_builder::has_presets() const
@@ -428,9 +468,14 @@ std::string edt::game_builder::disabled_reason() const
 	return {};
 }
 
-void edt::game_builder::finish(game_build_result& result, const build_request& request)
+edt::build_outcome edt::game_builder::finish(game_build_result& result, const build_request& request)
 {
-	if (result.restarted) return;
+	build_outcome outcome;
+	outcome.job = m_job;
+	if (result.restarted) {
+		outcome.kind = m_preempted ? build_outcome::preempted : build_outcome::restarted;
+		return outcome;
+	}
 	const bool quiet = request.report == build_report::problems_only;
 	if (!result.tail.empty() && (!result.ok() || request.verbosity != log_verbosity::errors)) {
 		std::string text;
@@ -454,11 +499,15 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 	if (!result.setup_error.empty()) {
 		egLOG_WARN("editor/build", "the game module was not built: {}", result.setup_error);
 		if (!quiet) m_dialogs.message(message_level::error, result.setup_error);
-		return;
+		outcome.message = result.setup_error;
+		return outcome;
 	}
 
 	const std::size_t errors = static_cast<std::size_t>(std::count_if(result.problems.begin(), result.problems.end(),
 		[](const problem& item) { return item.severity == problem_severity::error; }));
+	outcome.errors = static_cast<int>(errors);
+	outcome.warnings = static_cast<int>(std::count_if(result.problems.begin(), result.problems.end(),
+		[](const problem& item) { return item.severity == problem_severity::warning; }));
 	m_problems.set("build", std::move(result.problems));
 
 	if (result.ok()) {
@@ -474,16 +523,17 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 		} else {
 			egLOG_INFO("editor/build", "game module built: {}", built);
 		}
+		outcome.kind = build_outcome::succeeded;
+		for (const auto& module : result.modules) {
+			if (!module.exists) continue;
+			outcome.modules.push_back(
+				game_module_build_result{ module.name, module.path, request.configuration, outcome.job, request.reload_after });
+		}
 		if (m_options.events) {
 			// A slot may start the next build.
-			const std::uint64_t job = m_job;
-			for (const auto& module : result.modules) {
-				if (!module.exists) continue;
-				m_options.events->game_module_built.emit(
-					game_module_build_result{ module.name, module.path, request.configuration, job, request.reload_after });
-			}
+			for (const auto& file : outcome.modules) m_options.events->game_module_built.emit(file);
 		}
-		return;
+		return outcome;
 	}
 
 	std::string summary;
@@ -500,7 +550,9 @@ void edt::game_builder::finish(game_build_result& result, const build_request& r
 	} else {
 		egLOG_WARN("editor/build", "{}", summary);
 	}
-	if (!quiet) m_dialogs.message(message_level::error, std::move(summary));
+	if (!quiet) m_dialogs.message(message_level::error, summary);
+	outcome.message = std::move(summary);
+	return outcome;
 }
 
 bool edt::game_builder::draw_progress()
