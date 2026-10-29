@@ -351,6 +351,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (module.kind == prj::module_kind::runtime) game.modules.push_back(module.name);
 		}
 		build_options.project = [game] { return std::optional<game_project>{ game }; };
+		build_options.settings = [snk_dir = project.snk_dir()] { return load_build_settings(snk_dir); };
 	} else {
 		build_options.project = [] { return std::optional<game_project>{}; };
 	}
@@ -360,6 +361,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	build_options.show_progress = [this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	};
+	build_options.events = &m_context->events();
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
