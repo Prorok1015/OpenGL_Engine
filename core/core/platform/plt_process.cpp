@@ -3,10 +3,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <format>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -331,6 +334,17 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	if (!SetHandleInformation(read_end.get(), HANDLE_FLAG_INHERIT, 0)) {
 		return system_failure("cannot create the output pipe of", program);
 	}
+	const bool split_stderr = static_cast<bool>(options.on_stderr_line);
+	HANDLE error_read_raw = nullptr;
+	HANDLE error_write_raw = nullptr;
+	if (split_stderr && !CreatePipe(&error_read_raw, &error_write_raw, &inheritable, 0)) {
+		return system_failure("cannot create the error pipe of", program);
+	}
+	handle_owner error_read_end{ error_read_raw };
+	handle_owner error_write_end{ error_write_raw };
+	if (split_stderr && !SetHandleInformation(error_read_end.get(), HANDLE_FLAG_INHERIT, 0)) {
+		return system_failure("cannot create the error pipe of", program);
+	}
 	handle_owner null_input{ CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable,
 		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
 	if (null_input.get() == nullptr) {
@@ -345,11 +359,12 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		return system_failure("cannot prepare the start of", program);
 	}
 	const scope_exit delete_attributes{ [attributes] { DeleteProcThreadAttributeList(attributes); } };
-	// Only these two are inherited: any other inheritable handle of this process would keep the pipe (or a file of
-	// the editor) open for as long as the build runs.
-	HANDLE inherited[] = { write_end.get(), null_input.get() };
-	if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited),
-			nullptr, nullptr)) {
+	// Only these are inherited: any other inheritable handle of this process would keep the pipe (or a file of the
+	// editor) open for as long as the build runs.
+	HANDLE inherited[] = { write_end.get(), null_input.get(), error_write_end.get() };
+	const std::size_t inherited_count = split_stderr ? 3 : 2;
+	if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited,
+			sizeof(HANDLE) * inherited_count, nullptr, nullptr)) {
 		return system_failure("cannot prepare the start of", program);
 	}
 
@@ -358,7 +373,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
 	startup.StartupInfo.hStdInput = null_input.get();
 	startup.StartupInfo.hStdOutput = write_end.get();
-	startup.StartupInfo.hStdError = write_end.get();
+	startup.StartupInfo.hStdError = split_stderr ? error_write_end.get() : write_end.get();
 	startup.lpAttributeList = attributes;
 
 	std::wstring command_line = quote_windows_arg(program.native());
@@ -401,6 +416,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	handle_owner thread_handle{ process.hThread };
 	// ReadFile sees the end of the output only once no process holds a write end, this one included.
 	write_end.reset();
+	error_write_end.reset();
 	null_input.reset();
 
 	handle_owner job{ CreateJobObjectW(nullptr, nullptr) };
@@ -437,13 +453,68 @@ platform::process_result platform::run_process(const fs::path& program, const st
 		// Ending the job closes the pipe along with the processes, so the blocking ReadFile returns; it stays in
 		// place for the wait, as a child that closed its output early is still running.
 		const std::stop_callback cancel{ stop, [job = job.get()] { TerminateJobObject(job, 1); } };
-		std::string pending;
-		char buffer[k_read_size];
-		DWORD got = 0;
-		while (ReadFile(read_end.get(), buffer, static_cast<DWORD>(sizeof(buffer)), &got, nullptr)) {
-			detail::take_output(options.raw_output, pending, std::string_view{ buffer, got }, false, on_line);
+		// Anonymous pipes have no overlapped reads: stderr is read by a thread of its own, and a lock keeps the two
+		// callbacks from running at the same time.
+		std::mutex delivery;
+		std::exception_ptr error_failure;
+		std::thread error_reader;
+		if (split_stderr) {
+			error_reader = std::thread([&] {
+				std::string error_pending;
+				char error_buffer[k_read_size];
+				DWORD error_got = 0;
+				bool deliver = true;
+				const auto take = [&](std::string_view chunk, bool end_of_output) {
+					if (!deliver) {
+						return;
+					}
+					try {
+						const std::lock_guard lock(delivery);
+						detail::take_lines(error_pending, chunk, end_of_output, options.on_stderr_line);
+					} catch (...) {
+						// Rethrown on the calling thread; the pipe is still drained so the child is not blocked.
+						error_failure = std::current_exception();
+						deliver = false;
+					}
+				};
+				while (ReadFile(error_read_end.get(), error_buffer, static_cast<DWORD>(sizeof(error_buffer)), &error_got,
+						nullptr)) {
+					take(std::string_view{ error_buffer, error_got }, false);
+				}
+				take({}, true);
+			});
 		}
-		detail::take_output(options.raw_output, pending, {}, true, on_line);
+		const auto deliver_output = [&](std::string& pending, std::string_view chunk, bool end_of_output) {
+			std::unique_lock lock(delivery, std::defer_lock);
+			if (split_stderr) {
+				lock.lock();
+			}
+			detail::take_output(options.raw_output, pending, chunk, end_of_output, on_line);
+		};
+		try {
+			std::string pending;
+			char buffer[k_read_size];
+			DWORD got = 0;
+			while (ReadFile(read_end.get(), buffer, static_cast<DWORD>(sizeof(buffer)), &got, nullptr)) {
+				deliver_output(pending, std::string_view{ buffer, got }, false);
+			}
+			deliver_output(pending, {}, true);
+		} catch (...) {
+			// Ending the job closes the error pipe, so the reader thread can be joined.
+			TerminateJobObject(job.get(), 1);
+			if (error_reader.joinable()) {
+				error_reader.join();
+			}
+			throw;
+		}
+		if (error_reader.joinable()) {
+			error_reader.join();
+		}
+		if (error_failure) {
+			TerminateJobObject(job.get(), 1);
+			WaitForSingleObject(process_handle.get(), INFINITE);
+			std::rethrow_exception(error_failure);
+		}
 		WaitForSingleObject(process_handle.get(), INFINITE);
 		result.cancelled = stop.stop_requested();
 	}
@@ -587,13 +658,21 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	}
 	fd_owner read_end{ pipe_ends[0] };
 	fd_owner write_end{ pipe_ends[1] };
+	const bool split_stderr = static_cast<bool>(options.on_stderr_line);
+	int error_ends[2] = { -1, -1 };
+	if (split_stderr && ::pipe2(error_ends, O_CLOEXEC) != 0) {
+		return failure("cannot create the error pipe of", program, errno);
+	}
+	fd_owner error_read_end{ error_ends[0] };
+	fd_owner error_write_end{ error_ends[1] };
 
 	posix_spawn_file_actions_t file_actions;
 	posix_spawn_file_actions_init(&file_actions);
 	const scope_exit destroy_file_actions{ [&file_actions] { posix_spawn_file_actions_destroy(&file_actions); } };
 	int action_error = posix_spawn_file_actions_adddup2(&file_actions, write_end.get(), STDOUT_FILENO);
 	if (action_error == 0) {
-		action_error = posix_spawn_file_actions_adddup2(&file_actions, write_end.get(), STDERR_FILENO);
+		action_error = posix_spawn_file_actions_adddup2(&file_actions,
+			split_stderr ? error_write_end.get() : write_end.get(), STDERR_FILENO);
 	}
 	if (action_error == 0) {
 		action_error = posix_spawn_file_actions_addopen(&file_actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
@@ -661,6 +740,7 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	const int spawned = ::posix_spawn(&pid, resolved.c_str(), &file_actions, &attributes, argv.data(),
 		options.environment ? envp.data() : environ);
 	write_end.reset();
+	error_write_end.reset();
 	if (spawned != 0) {
 		return failure("cannot start", program, spawned);
 	}
@@ -685,9 +765,24 @@ platform::process_result platform::run_process(const fs::path& program, const st
 	bool killed = false;
 	std::optional<steady::time_point> exited_at;
 	// The child may close its output long before it exits: a stop is honoured until then.
-	bool pipe_open = true;
+	bool output_open = true;
+	bool error_open = split_stderr;
 	std::string pending;
+	std::string error_pending;
 	char buffer[k_read_size];
+	const auto read_from = [&](int fd, bool& still_open, bool error_stream) {
+		const ssize_t got = ::read(fd, buffer, sizeof(buffer));
+		if (got > 0) {
+			const std::string_view chunk{ buffer, static_cast<std::size_t>(got) };
+			if (error_stream) {
+				detail::take_lines(error_pending, chunk, false, options.on_stderr_line);
+			} else {
+				detail::take_output(options.raw_output, pending, chunk, false, on_line);
+			}
+		} else if (got == 0 || (errno != EINTR && errno != EAGAIN)) {
+			still_open = false;
+		}
+	};
 	for (;;) {
 		const auto now = steady::now();
 		if (!terminated_at && stop.stop_requested()) {
@@ -704,30 +799,39 @@ platform::process_result platform::run_process(const fs::path& program, const st
 			::kill(-pid, SIGKILL);
 		}
 		// A descendant that left the group may hold the pipe for good.
-		if (exited_at && (!pipe_open || now - *exited_at >= k_drain_after)) {
+		const bool any_open = output_open || error_open;
+		if (exited_at && (!any_open || now - *exited_at >= k_drain_after)) {
 			break;
 		}
-		if (!pipe_open) {
+		if (!any_open) {
 			::poll(nullptr, 0, k_poll_ms);
 			continue;
 		}
-		pollfd watched{ read_end.get(), POLLIN, 0 };
-		const int ready = ::poll(&watched, 1, k_poll_ms);
+		// poll skips an entry whose descriptor is negative.
+		pollfd watched[2] = { { output_open ? read_end.get() : -1, POLLIN, 0 },
+			{ error_open ? error_read_end.get() : -1, POLLIN, 0 } };
+		const int ready = ::poll(watched, 2, k_poll_ms);
 		if (ready < 0) {
-			pipe_open = errno == EINTR;
+			if (errno != EINTR) {
+				output_open = false;
+				error_open = false;
+			}
 			continue;
 		}
 		if (ready == 0) {
 			continue;
 		}
-		const ssize_t got = ::read(read_end.get(), buffer, sizeof(buffer));
-		if (got > 0) {
-			detail::take_output(options.raw_output, pending, std::string_view{ buffer, static_cast<std::size_t>(got) }, false, on_line);
-		} else if (got == 0 || (errno != EINTR && errno != EAGAIN)) {
-			pipe_open = false;
+		if (watched[0].revents != 0) {
+			read_from(read_end.get(), output_open, false);
+		}
+		if (watched[1].revents != 0) {
+			read_from(error_read_end.get(), error_open, true);
 		}
 	}
 	detail::take_output(options.raw_output, pending, {}, true, on_line);
+	if (split_stderr) {
+		detail::take_lines(error_pending, {}, true, options.on_stderr_line);
+	}
 
 	process_result result;
 	result.cancelled = stop.stop_requested();

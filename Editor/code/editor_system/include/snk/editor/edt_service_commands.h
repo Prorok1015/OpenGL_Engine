@@ -14,7 +14,8 @@ namespace edt
 	// job.list {} -> {jobs: [job]}
 	// job.get {id} -> job (a running job or one of the last finished); not_found otherwise
 	// job.cancel {id} -> {id, cancelled: true}; not_found for an unknown id, failed for one that already finished
-	// job = {id, label, status: running|done|failed|cancelled, fraction, note, cancel_requested, error?}
+	// job = {id, label, status: running|done|failed|cancelled, fraction, note, cancel_requested, error?, result?}
+	// (result: what a done job started with job_service::start_with_result returned)
 	[[nodiscard]] std::vector<registration> register_job_commands(cmd::command_registry& commands, job_service& jobs);
 
 	// dialog.list {} -> {dialogs: [{id, kind, text, answer_schema, on_screen}]}

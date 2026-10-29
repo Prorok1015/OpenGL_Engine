@@ -2,6 +2,7 @@
 #include "edt_editor_events.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/engine_assert.h>
+#include <boost/json/value.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -46,6 +47,8 @@ namespace edt
 			std::string error;
 			// A cancel was asked for and the job has not been retired yet.
 			bool cancel_requested = false;
+			// Done jobs started with start_with_result: what the work returned.
+			std::optional<boost::json::value> result;
 		};
 
 		// `events` (null: none) gets job_started / job_progress / job_finished; it must outlive the service.
@@ -64,28 +67,18 @@ namespace edt
 		job_id start(ds::lane where, ds::task_desc desc, const ds::lifetime& owner, F&& work,
 			std::function<void(ds::task_result<std::invoke_result_t<F&, ds::task_context&>>&)> on_done)
 		{
-			using result_t = std::invoke_result_t<F&, ds::task_context&>;
-			ASSERT_MSG(m_tasks.on_main(), "job_service::start: main thread only");
-			std::string label = desc.name;
-			auto handle = m_tasks.run(where, std::move(desc), owner, std::forward<F>(work));
-			const job_id id = handle.id();
-			m_jobs.emplace(id, record{ handle, label, 0.f, {} });
-			if (m_events) m_events->job_started.emit(id, label);
-			// Bound to m_life, not to `owner`: the bookkeeping must run even if the owner is gone.
-			handle.then_main(m_life, [this, id, owner_token = owner.token(), on_done = std::move(on_done)](
-				ds::task_result<result_t>& result) {
-				const bool known = m_jobs.contains(id);
-				const bool cancelled = m_cancelled.erase(id) > 0 || result.status == ds::task_status::cancelled;
-				// Retired before on_done runs, so on_done sees the job as finished.
-				if (known) {
-					retire(id, cancelled ? job_status::cancelled : (result.ok() ? job_status::done : job_status::failed),
-						cancelled || result.ok() ? std::string{} : result.error);
-				}
-				if (known && !cancelled && !owner_token.expired() && on_done) {
-					on_done(result);
-				}
-			});
-			return id;
+			return launch(where, std::move(desc), owner, std::forward<F>(work), std::move(on_done), false);
+		}
+
+		// As start, for work that returns JSON: a job that ends `done` keeps that value as job_info::result (job.get
+		// shows it) and job_finished carries it. `on_done` is optional.
+		template<class F>
+		job_id start_with_result(ds::lane where, ds::task_desc desc, const ds::lifetime& owner, F&& work,
+			std::function<void(ds::task_result<boost::json::value>&)> on_done = {})
+		{
+			static_assert(std::is_same_v<std::invoke_result_t<F&, ds::task_context&>, boost::json::value>,
+				"job_service::start_with_result: the work must return boost::json::value");
+			return launch(where, std::move(desc), owner, std::forward<F>(work), std::move(on_done), true);
 		}
 
 		// Cooperative: sets the stop token seen by `work`. A job that has not started never runs.
@@ -121,8 +114,42 @@ namespace edt
 
 		static constexpr std::size_t FINISHED_HISTORY = 64;
 
+		template<class F, class Done>
+		job_id launch(ds::lane where, ds::task_desc desc, const ds::lifetime& owner, F&& work, Done on_done,
+			bool keep_result)
+		{
+			using result_t = std::invoke_result_t<F&, ds::task_context&>;
+			ASSERT_MSG(m_tasks.on_main(), "job_service::start: main thread only");
+			std::string label = desc.name;
+			auto handle = m_tasks.run(where, std::move(desc), owner, std::forward<F>(work));
+			const job_id id = handle.id();
+			m_jobs.emplace(id, record{ handle, label, 0.f, {} });
+			if (m_events) m_events->job_started.emit(id, label);
+			// Bound to m_life, not to `owner`: the bookkeeping must run even if the owner is gone.
+			handle.then_main(m_life, [this, id, keep_result, owner_token = owner.token(), on_done = std::move(on_done)](
+				ds::task_result<result_t>& result) {
+				const bool known = m_jobs.contains(id);
+				const bool cancelled = m_cancelled.erase(id) > 0 || result.status == ds::task_status::cancelled;
+				// Retired before on_done runs, so on_done sees the job as finished.
+				if (known) {
+					std::optional<boost::json::value> produced;
+					if constexpr (std::is_same_v<result_t, boost::json::value>) {
+						if (keep_result && !cancelled && result.ok() && result.value) produced = *result.value;
+					} else {
+						(void)keep_result;
+					}
+					retire(id, cancelled ? job_status::cancelled : (result.ok() ? job_status::done : job_status::failed),
+						cancelled || result.ok() ? std::string{} : result.error, std::move(produced));
+				}
+				if (known && !cancelled && !owner_token.expired() && on_done) {
+					on_done(result);
+				}
+			});
+			return id;
+		}
+
 		// Drops the job from m_jobs, keeps its outcome in the history and raises job_finished.
-		void retire(job_id id, job_status status, std::string error);
+		void retire(job_id id, job_status status, std::string error, std::optional<boost::json::value> result = std::nullopt);
 		job_info describe(job_id id, const record& job) const;
 
 		ds::task_system& m_tasks;

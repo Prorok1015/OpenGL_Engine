@@ -97,7 +97,7 @@ void edt::job_service::pump()
 	}
 }
 
-void edt::job_service::retire(job_id id, job_status status, std::string error)
+void edt::job_service::retire(job_id id, job_status status, std::string error, std::optional<boost::json::value> result)
 {
 	const auto found = m_jobs.find(id);
 	if (found == m_jobs.end()) return;
@@ -113,7 +113,10 @@ void edt::job_service::retire(job_id id, job_status status, std::string error)
 	outcome.note = note;
 	outcome.error = error;
 	outcome.cancel_requested = status == job_status::cancelled;
+	if (status == job_status::done) outcome.result = std::move(result);
 	m_jobs.erase(found);
+	// A copy: a job_finished slot may retire more jobs and push this outcome out of the history.
+	const std::optional<boost::json::value> finished_result = m_events ? outcome.result : std::nullopt;
 
 	m_finished.push_back(std::move(outcome));
 	while (m_finished.size() > FINISHED_HISTORY) {
@@ -122,7 +125,7 @@ void edt::job_service::retire(job_id id, job_status status, std::string error)
 
 	if (!m_events) return;
 	if (progress_changed && status != job_status::cancelled) m_events->job_progress.emit(id, fraction, note);
-	m_events->job_finished.emit(id, status, error);
+	m_events->job_finished.emit(id, status, error, finished_result);
 }
 
 void edt::job_service::cancel_all_and_wait()
@@ -153,7 +156,8 @@ void edt::job_service::cancel_all_and_wait()
 
 edt::connection edt::report_failed_jobs(editor_events& events, const job_service& jobs, dialog_service& dialogs)
 {
-	return events.job_finished.subscribe([&jobs, &dialogs](std::uint64_t id, job_status status, const std::string& error) {
+	return events.job_finished.subscribe([&jobs, &dialogs](std::uint64_t id, job_status status, const std::string& error,
+		const std::optional<boost::json::value>&) {
 		if (status != job_status::failed) return;
 		// The outcome is in the history before job_finished is raised.
 		const auto outcome = jobs.info(id);

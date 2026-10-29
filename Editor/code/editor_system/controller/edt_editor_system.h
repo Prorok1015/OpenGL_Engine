@@ -35,6 +35,7 @@ namespace edt {
 	class file_menu;
 	class game_builder;
 	class game_reloader;
+	class vcs_service;
 	class editor_context;
 	class editor_layer;
 	class model_importer;
@@ -168,6 +169,8 @@ namespace edt {
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
 		std::unique_ptr<edt::game_reloader> m_game_reloader;
+		// Version control (#454); its commands are in m_registrations, removed before it.
+		std::unique_ptr<edt::vcs_service> m_vcs;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

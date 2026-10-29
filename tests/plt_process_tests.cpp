@@ -558,6 +558,56 @@ BOOST_AUTO_TEST_CASE(RunProcess_DeliversTheLinesOfStdoutAndStderrAndTheExitCode)
 	BOOST_TEST(std::ranges::any_of(lines, [](const std::string& line) { return line.starts_with("err tail"); }));
 }
 
+BOOST_AUTO_TEST_CASE(RunProcess_OnStderrLine_SeparatesTheTwoStreams)
+{
+	if (is_child_run()) {
+		return;
+	}
+	std::vector<std::string> lines;
+	std::vector<std::string> error_lines;
+	platform::process_options options;
+	options.on_stderr_line = [&error_lines](std::string_view line) { error_lines.emplace_back(line); };
+
+	const auto result = run_self({ "--run_test=PltProcessTests/RunHelper_Talks", "--", std::string{ k_talk_flag } },
+		options, lines);
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST_INFO("stdout: " << joined(lines) << " stderr: " << joined(error_lines));
+	BOOST_TEST(result.exit_code == 7);
+	BOOST_TEST(contains_in_order(lines, { "out one", "out two" }));
+	BOOST_TEST(std::ranges::none_of(lines, [](const std::string& line) { return line.starts_with("err "); }));
+	BOOST_TEST(contains_in_order(error_lines, { "err one" }));
+	BOOST_TEST(std::ranges::any_of(error_lines, [](const std::string& line) { return line.starts_with("err tail"); }));
+	BOOST_TEST(std::ranges::none_of(error_lines, [](const std::string& line) { return line.starts_with("out"); }));
+}
+
+// raw_output applies to stdout only: stderr still arrives as lines.
+BOOST_AUTO_TEST_CASE(RunProcess_OnStderrLine_WithRawOutput_SplitsOnlyStderr)
+{
+	if (is_child_run()) {
+		return;
+	}
+	std::string output;
+	std::vector<std::string> error_lines;
+	platform::process_options options;
+	options.raw_output = true;
+	options.on_stderr_line = [&error_lines](std::string_view line) { error_lines.emplace_back(line); };
+
+	const auto result = platform::run_process(platform::current_executable(),
+		{ "--run_test=PltProcessTests/RunHelper_Talks", "--", std::string{ k_talk_flag } }, options,
+		[&output](std::string_view chunk) { output.append(chunk); }, {});
+
+	BOOST_REQUIRE_MESSAGE(result.error.empty(), result.error);
+	BOOST_TEST_INFO("stdout: " << output << " stderr: " << joined(error_lines));
+	BOOST_TEST(result.exit_code == 7);
+	BOOST_TEST(output.find("out one") != std::string::npos);
+	BOOST_TEST(output.find("out two") != std::string::npos);
+	BOOST_TEST(output.find("err one") == std::string::npos);
+	BOOST_TEST(output.find("err tail") == std::string::npos);
+	BOOST_TEST(contains_in_order(error_lines, { "err one" }));
+	BOOST_TEST(std::ranges::any_of(error_lines, [](const std::string& line) { return line.starts_with("err tail"); }));
+}
+
 BOOST_AUTO_TEST_CASE(RunProcess_PassesTheEnvironmentAndTheWorkingDirectory)
 {
 	if (is_child_run()) {

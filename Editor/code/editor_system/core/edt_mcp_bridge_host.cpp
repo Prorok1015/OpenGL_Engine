@@ -30,11 +30,11 @@ namespace {
 	// expose whatever gets registered under it, flag or no flag.
 	constexpr std::array<std::string_view, 4> read_domains = { "log", "job", "dialog", "viewport" };
 
-	// The state queries of A4, problems.list and build.settings.get are allowed one command at a time, not by domain: scene.* and node.*
-	// will also hold the mutating commands of A5, and a new command in these domains stays hidden from an agent until
-	// it is reviewed and listed here.
-	constexpr std::array<std::string_view, 7> read_commands = { "scene.query", "node.get", "component.schema", "asset.query", "selection.get",
-		"problems.list", "build.settings.get" };
+	// The state queries of A4, problems.list, build.settings.get and the git reads (#454) are allowed one command at a time, not by
+	// domain: scene.* and node.* will also hold the mutating commands of A5, vcs.* the git writes (#455), and a new command in these
+	// domains stays hidden from an agent until it is reviewed and listed here.
+	constexpr std::array<std::string_view, 12> read_commands = { "scene.query", "node.get", "component.schema", "asset.query", "selection.get",
+		"problems.list", "build.settings.get", "vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches" };
 
 	// What an agent may ask of viewport.capture. A request for 8192 x 8192 is a quarter of a gigabyte of readback
 	// and copies; the answer is a PNG that has to be base64 encoded and sent.

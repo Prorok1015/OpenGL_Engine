@@ -32,6 +32,7 @@
 #include "edt_build_jobs.h"
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
+#include "edt_vcs_service.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
@@ -123,6 +124,8 @@ namespace {
 	CFG_VAR_DEF_PATH(cfg_build_vs_path, "build/vs_path", "");
 	CFG_VAR_DEF_STRING(cfg_build_vs_min_version, "build/vs_min_version", "17.14");
 	CFG_VAR_DEF_STRING(cfg_build_configuration, "build/configuration", "debuggame");
+	// The git program of version control (#454); empty: git on PATH.
+	CFG_VAR_DEF_PATH(cfg_vcs_git, "vcs/git", "");
 
 	// The SDK the game module is built against: build/sdk_dir, else the installed editor's, else the engine build
 	// tree's (where this editor was built).
@@ -431,6 +434,17 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	settings_command.default_configuration = *cfg_build_configuration;
 	for (auto& command : register_build_settings_commands(m_context->actions().commands(), std::move(settings_command))) {
+		m_registrations.push_back(std::move(command));
+	}
+
+	vcs_options vcs;
+	vcs.git = *cfg_vcs_git;
+	vcs.project_root = [&data]() -> std::optional<std::filesystem::path> {
+		if (!data.has_value<prj::project_context>()) return std::nullopt;
+		return data.require<prj::project_context>().root;
+	};
+	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
 
