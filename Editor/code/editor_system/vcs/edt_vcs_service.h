@@ -30,13 +30,15 @@ namespace edt
 		std::chrono::milliseconds probe_timeout{ 5000 };
 	};
 
-	// What an agent's git write may run of the repository's config. Off: hooks point at an empty folder of the editor,
-	// and a write that can run a filter driver (stage, unstage, commit, checkout, pull) is refused with
-	// filters_require_opt_in (switching the driver off instead would commit LFS files as raw bytes).
+	// What an agent's git write may run of the repository's config. Off: hooks point at an empty folder of the editor;
+	// stage, unstage, commit, checkout and pull are refused with filters_require_opt_in when a configured filter driver
+	// applies to a file they touch (switching the driver off instead would commit LFS files as raw bytes); fetch, pull
+	// and push are refused with unsafe_repository when a credential helper comes from the repository's own config.
 	struct vcs_write_permissions
 	{
 		bool allow_hooks = false;
 		bool allow_filters = false;
+		bool allow_repo_credential_helper = false;
 	};
 
 	// Git for the editor and its agents (#454): reads (status, diff, log, branches), writes (stage, unstage, commit,
@@ -48,8 +50,10 @@ namespace edt
 	// --no-pager, core.fsmonitor=false, core.hooksPath to nothing, diff.external empty, --no-ext-diff --no-textconv,
 	// log.showSignature=false, submodules ignored, and every filter driver (listed per job, plus lfs) emptied.
 	// A write keeps fsmonitor, diff.external and submodules off too; for a person (origin ui, test, game) hooks and
-	// filters run as in plain git. For an agent they run only under vcs_write_permissions, and core.askPass and
-	// core.sshCommand never come from the repository's config (GIT_ASKPASS and SSH_ASKPASS are dropped as well).
+	// filters run as in plain git. For an agent they run only under vcs_write_permissions; core.askPass, core.sshCommand,
+	// core.gitProxy, gpg signing and the ext:: transport are switched off (GIT_ASKPASS and SSH_ASKPASS dropped), and a
+	// network call is refused (unsafe_repository) when the repository's config sets a credential helper, core.sshCommand,
+	// a URL rewrite to another transport, or the remote's upload-pack / receive-pack.
 	// There is no force-push, reset --hard, branch delete or rebase, and never will be.
 	// Main thread only.
 	class vcs_service
@@ -138,6 +142,8 @@ namespace edt
 			cmd::origin_kind caller = cmd::origin_kind::ui;
 			// The command reads or writes the work tree, where filter drivers run.
 			bool runs_filters = false;
+			// The command talks to a remote.
+			bool network = false;
 		};
 
 		void probe_repository(const std::optional<std::filesystem::path>& project);
@@ -175,12 +181,13 @@ namespace edt
 	// vcs.stage {paths} / vcs.unstage {paths} -> {job}; result {output}
 	// vcs.commit {message} -> {job}; result {hash}
 	// vcs.branch.create {name, from?} / vcs.checkout {ref} -> {job}; result {output}
-	// vcs.fetch {remote?} / vcs.pull {remote?, branch?} (--ff-only) -> {job}; result {output}
+	// vcs.fetch {remote?} / vcs.pull {remote?, branch?} -> {job}; result {output} (pull = fetch, then
+	//     merge --ff-only FETCH_HEAD)
 	// vcs.push {remote, branch, set_upstream?} -> {job}; result {output} (no force: a branch +x, -x or a:b is invalid_args)
 	// `output` is git's last lines (at most 20, 4 KiB).
 	// A git failure ends the job `done` with result {error: {code, message, stderr_tail, exit_code}}: code from
 	// vcs::classify_error (auth_required, not_a_repository, ...) or vcs_unavailable when git could not start, or
-	// filters_require_opt_in for an agent's write refused before git ran; message is git's last fatal:/error: line;
+	// filters_require_opt_in / unsafe_repository for an agent's write refused before git ran; message is git's last fatal:/error: line;
 	// stderr_tail its last 20 stderr lines (at most 4 KiB).
 	// Only without git (vcs_unavailable) or a project (no_project) do the commands fail at once.
 	[[nodiscard]] std::vector<registration> register_vcs_commands(cmd::command_registry& commands, vcs_service& service);

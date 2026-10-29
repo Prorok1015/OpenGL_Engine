@@ -309,6 +309,10 @@ struct fake_git_fixture : vcs_fixture
 				on_line("git version 2.45.1\n");
 				return exited(0);
 			}
+			if (has_arg(args, "--git-path")) {
+				on_line(edt::utf8_of(base / "FETCH_HEAD") + "\n");
+				return exited(0);
+			}
 			if (has_arg(args, "rev-parse")) {
 				on_line(edt::utf8_of(base) + "\n");
 				return exited(0);
@@ -799,8 +803,46 @@ BOOST_AUTO_TEST_CASE(AHostilePreCommitHook_RunsForAPersonButNotForAnAgent)
 	BOOST_TEST(fs::exists(marker, ec), "a person's commit must run the hooks as plain git does");
 }
 
-// Owner decision (#454): with a filter driver configured an agent's commit is refused before git runs (switching the
-// driver off would commit LFS files as raw bytes); allow_filters lets it run, and the filter runs.
+// Owner decision (#454): a credential helper from the repository's own config refuses an agent's network call before
+// git runs; a person's push goes on, and so does an agent's with allow_repo_credential_helper.
+BOOST_AUTO_TEST_CASE(ARepositoryCredentialHelper_RefusesAnAgentsPush)
+{
+	isolate_config();
+	const fs::path remote = base / "helper_remote.git";
+	fs::create_directories(remote);
+	git(remote, { "init", "-q", "--bare" });
+	git(remote, { "symbolic-ref", "HEAD", "refs/heads/main" });
+	const std::string remote_path = generic_text(remote);
+	const std::string url = "file://" + (remote_path.starts_with('/') ? remote_path : "/" + remote_path);
+	const fs::path repo = make_plain_repository("helper");
+	git(repo, { "remote", "add", "origin", url });
+	const fs::path marker = base / "helper_ran.txt";
+	const fs::path script = base / "helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "credential.helper", generic_text(script) });
+	make_service(real_options(repo));
+	std::error_code ec;
+
+	const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("a credential helper set by the repository")
+		!= std::string::npos);
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+	BOOST_TEST(is_error(finish(service->start_fetch("origin", cmd::origin_kind::agent)), "unsafe_repository"));
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "unsafe_repository"));
+
+	service->set_write_permissions({ false, false, true });
+	const json::value allowed = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST(head_of(remote) == head_of(repo));
+}
+
+// Owner decision (#454): a configured filter driver that applies to a file of the commit refuses an agent's commit
+// before git runs (switching the driver off would commit LFS files as raw bytes); allow_filters lets it run, and the
+// filter runs. A driver no attribute names (a global filter.lfs the repository does not use; the repository's config
+// stands in for the global one here) blocks nothing.
 BOOST_AUTO_TEST_CASE(AnLfsStyleFilter_RefusesAnAgentsCommit_UnlessFiltersAreAllowed)
 {
 	isolate_config();
@@ -810,11 +852,21 @@ BOOST_AUTO_TEST_CASE(AnLfsStyleFilter_RefusesAnAgentsCommit_UnlessFiltersAreAllo
 	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
 	git(repo, { "config", "filter.lfs.clean", generic_text(script) });
 	git(repo, { "config", "filter.lfs.smudge", generic_text(script) });
+	std::error_code ec;
+	{
+		make_service(real_options(repo));
+		write(repo / "plain.bin", "not under a filter yet\n");
+		const json::value staged = finish(service->start_stage({ "plain.bin" }, cmd::origin_kind::agent));
+		BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
+		const json::value committed = finish(service->start_commit("no attribute names the filter", cmd::origin_kind::agent));
+		BOOST_REQUIRE_MESSAGE(committed.as_object().contains("hash"), json::serialize(committed));
+		BOOST_TEST(!fs::exists(marker, ec));
+	}
+
 	write(repo / ".gitattributes", "*.bin filter=lfs\n");
 	write(repo / "data.bin", "raw bytes\n");
 	// A person stages with the filter, as plain git does.
 	git(repo, { "add", ".gitattributes", "data.bin" });
-	std::error_code ec;
 	const bool filters_run_here = fs::exists(marker, ec);
 #ifdef _WIN32
 	BOOST_WARN_MESSAGE(filters_run_here, "plain git ran no filter here: the last check below is skipped");
@@ -832,10 +884,9 @@ BOOST_AUTO_TEST_CASE(AnLfsStyleFilter_RefusesAnAgentsCommit_UnlessFiltersAreAllo
 	BOOST_TEST(head_of(repo) == before);
 	write(repo / "other.bin", "more raw bytes\n");
 	BOOST_TEST(is_error(finish(service->start_stage({ "other.bin" }, cmd::origin_kind::agent)), "filters_require_opt_in"));
-	BOOST_TEST(is_error(finish(service->start_checkout("main", cmd::origin_kind::agent)), "filters_require_opt_in"));
 	BOOST_TEST(!fs::exists(marker, ec), "a refused write ran the filter");
 
-	service->set_write_permissions({ false, true });
+	service->set_write_permissions({ false, true, false });
 	const json::value staged = finish(service->start_stage({ "other.bin" }, cmd::origin_kind::agent));
 	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
 	const json::value committed = finish(service->start_commit("agent commit", cmd::origin_kind::agent));
@@ -1336,63 +1387,152 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 	BOOST_TEST(person[person.size() - 2] == "origin");
 	BOOST_TEST(person.back() == "main");
 
-	service->set_write_permissions({ true, false });
+	BOOST_TEST(arg_starting_with(person, "remote.origin.uploadpack=").empty());
+
+	service->set_write_permissions({ true, false, false });
 	finish(service->start_fetch({}, cmd::origin_kind::agent));
 	const auto allowed = calls.back();
+	BOOST_TEST(has_arg(allowed, "fetch"));
 	BOOST_TEST(arg_starting_with(allowed, "core.hooksPath=").empty());
-	BOOST_TEST(has_arg(allowed, "core.askPass="));
+	for (const char* config : { "core.askPass=", "protocol.ext.allow=never", "commit.gpgsign=false", "tag.gpgsign=false",
+			"gpg.program=", "core.gitProxy=", "remote.origin.uploadpack=git-upload-pack",
+			"remote.origin.receivepack=git-receive-pack" }) {
+		BOOST_TEST_CONTEXT(config) {
+			BOOST_TEST(has_arg(allowed, config));
+		}
+	}
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_PROXY_COMMAND").value_or("x").empty());
 }
 
-BOOST_AUTO_TEST_CASE(AFilterDriver_RefusesAnAgentsTreeWrites_BeforeGitRuns)
+// A configured driver refuses an agent's write only when check-attr names it for a file the write touches; a
+// .gitattributes a checkout or pull would change refuses it whatever check-attr says.
+BOOST_AUTO_TEST_CASE(AFilterDriver_RefusesAnAgentsTreeWrite_OnlyWhereItApplies)
 {
 	filter_config = "filter.lfs.clean\ngit-lfs clean -- %f\0filter.lfs.smudge\ngit-lfs smudge -- %f\0"
 		"filter.lfs.required\ntrue\0filter.crypt.process\ncrypt-filter\0"s;
+	write(base / "FETCH_HEAD", "0123456789abcdef\t\tbranch 'main' of /elsewhere\n");
+	std::string changed = "a.bin\0"s;
 	std::vector<std::string> ran;
-	command = [&ran](const std::vector<std::string>& args, const platform::process_options&,
-		const std::function<void(std::string_view)>&, std::stop_token) {
-		for (const char* subcommand : { "add", "reset", "commit", "checkout", "pull", "branch", "fetch", "push" }) {
+	command = [&ran, &changed](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		const auto after_dash_dash = [&args] {
+			const auto dash_dash = std::find(args.begin(), args.end(), "--");
+			return dash_dash == args.end() ? std::vector<std::string>{} : std::vector<std::string>(std::next(dash_dash), args.end());
+		};
+		if (has_arg(args, "ls-files")) {
+			for (const auto& path : after_dash_dash()) on_line(path + '\0');
+			return exited(0);
+		}
+		if (has_arg(args, "--name-only")) {
+			on_line(changed);
+			return exited(0);
+		}
+		if (has_arg(args, "check-attr")) {
+			for (const auto& path : after_dash_dash()) {
+				on_line(path + '\0' + "filter" + '\0' + (path.ends_with(".bin") ? "lfs" : "unspecified") + '\0');
+			}
+			return exited(0);
+		}
+		for (const char* subcommand : { "add", "reset", "commit", "checkout", "merge", "branch", "fetch", "push" }) {
 			if (has_arg(args, subcommand)) ran.emplace_back(subcommand);
 		}
 		return exited(0);
 	};
 	make_service(fake_options());
 	const auto agent = cmd::origin_kind::agent;
+	const auto refused_with_lfs = [](const json::value& result) {
+		if (!is_error(result, "filters_require_opt_in")) return false;
+		const std::string message = text(result.as_object().at("error").as_object().at("message"));
+		return message.find("lfs") != std::string::npos && message.find("crypt") == std::string::npos;
+	};
 
-	const std::vector<std::pair<const char*, edt::vcs_service::started>> refused{
-		{ "stage", service->start_stage({ "a.bin" }, agent) },
-		{ "unstage", service->start_unstage({ "a.bin" }, agent) },
-		{ "commit", service->start_commit("message", agent) },
-		{ "checkout", service->start_checkout("main", agent) },
-		{ "pull", service->start_pull({}, {}, agent) } };
-	for (const auto& [name, started] : refused) {
-		BOOST_TEST_CONTEXT(name) {
-			const json::value result = finish(started);
-			BOOST_TEST(is_error(result, "filters_require_opt_in"), json::serialize(result));
-			const std::string message = text(result.as_object().at("error").as_object().at("message"));
-			BOOST_TEST(message.find("lfs") != std::string::npos);
-			BOOST_TEST(message.find("crypt") != std::string::npos);
-		}
-	}
+	BOOST_TEST(refused_with_lfs(finish(service->start_stage({ "a.bin" }, agent))));
+	BOOST_TEST(refused_with_lfs(finish(service->start_unstage({ "a.bin" }, agent))));
+	BOOST_TEST(refused_with_lfs(finish(service->start_commit("message", agent))));
+	BOOST_TEST(refused_with_lfs(finish(service->start_checkout("main", agent))));
 	BOOST_TEST(ran.empty());
-	const auto listing = arg_starting_with(calls.back(), "^filter");
-	BOOST_TEST(listing == "^filter\\..*\\.(clean|smudge|process)$");
+	BOOST_TEST(refused_with_lfs(finish(service->start_pull({}, {}, agent))));
+	BOOST_TEST((ran == std::vector<std::string>{ "fetch" }));
 
-	// Writes that touch no file run no filter: not refused.
+	// Configured, but no attribute names a driver for these files: git runs.
+	ran.clear();
+	changed = "a.txt\0"s;
+	BOOST_TEST(!finish(service->start_stage({ "a.txt" }, agent)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_commit("message", agent)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_checkout("main", agent)).as_object().contains("error"));
+	BOOST_TEST(!finish(service->start_pull({}, {}, agent)).as_object().contains("error"));
+	BOOST_TEST((ran == std::vector<std::string>{ "add", "commit", "checkout", "fetch", "merge" }));
+
+	// A .gitattributes the target changes: the work tree's attributes say nothing about the target's.
+	ran.clear();
+	changed = "a.txt\0sub/.gitattributes\0"s;
+	BOOST_TEST(is_error(finish(service->start_checkout("main", agent)), "filters_require_opt_in"));
+	BOOST_TEST(ran.empty());
+
+	// Writes that touch no file are not checked.
 	finish(service->start_branch_create("topic", {}, agent));
 	finish(service->start_fetch("origin", agent));
 	finish(service->start_push("origin", "topic", true, agent));
 	BOOST_TEST((ran == std::vector<std::string>{ "branch", "fetch", "push" }));
 
-	// A person's commit runs git, filters and all.
+	// A person's write runs git, filters and all.
 	ran.clear();
+	changed = "a.bin\0"s;
 	BOOST_TEST(!finish(service->start_commit("message", cmd::origin_kind::ui)).as_object().contains("error"));
 	BOOST_TEST((ran == std::vector<std::string>{ "commit" }));
 
-	service->set_write_permissions({ false, true });
+	service->set_write_permissions({ false, true, false });
 	ran.clear();
 	BOOST_TEST(!finish(service->start_commit("message", agent)).as_object().contains("error"));
 	BOOST_TEST((ran == std::vector<std::string>{ "commit" }));
-	BOOST_TEST(!has_arg(calls.back(), "filter.lfs.clean="));
+}
+
+// What an agent's network call refuses in the repository's config (git config --show-scope), and what it lets by.
+BOOST_AUTO_TEST_CASE(AnAgentsNetworkCall_RefusesProgramsTheRepositoryConfigPicks)
+{
+	bool pushed = false;
+	command = [&pushed](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "push")) pushed = true;
+		return exited(0);
+	};
+	make_service(fake_options());
+	const auto push = [this, &pushed](cmd::origin_kind caller) {
+		pushed = false;
+		return finish(service->start_push("origin", "main", false, caller));
+	};
+
+	for (const auto& unsafe : { "local\0credential.helper\n!touch marker\0"s, "worktree\0credential.https://x.helper\nstore\0"s,
+			"local\0core.sshcommand\nevil-ssh\0"s, "local\0url.file:///srv/evil.git.insteadof\nhttps://example.com/\0"s,
+			"local\0url.ext::sh -c evil.pushinsteadof\ngit@example.com:\0"s, "global\0remote.origin.uploadpack\nevil-pack\0"s,
+			"local\0remote.origin.receivepack\nevil-pack\0"s }) {
+		filter_config = unsafe;
+		BOOST_TEST_CONTEXT(unsafe) {
+			const json::value result = push(cmd::origin_kind::agent);
+			BOOST_TEST(is_error(result, "unsafe_repository"), json::serialize(result));
+			BOOST_TEST(!pushed);
+			push(cmd::origin_kind::ui);
+			BOOST_TEST(pushed);
+		}
+	}
+
+	for (const auto& fine : { "global\0credential.helper\nmanager\0"s, "system\0credential.helper\nstore\0"s,
+			"local\0credential.helper\n\0"s, "global\0core.sshcommand\nssh -i key\0"s,
+			"local\0url.https://mirror.example.com/.insteadof\nhttps://example.com/\0"s,
+			"local\0url.git@example.com:.pushinsteadof\nhttps://example.com/\0"s,
+			"local\0remote.origin.uploadpack\ngit-upload-pack\0"s, "local\0remote.other.receivepack\nevil-pack\0"s }) {
+		filter_config = fine;
+		BOOST_TEST_CONTEXT(fine) {
+			const json::value result = push(cmd::origin_kind::agent);
+			BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+			BOOST_TEST(pushed);
+		}
+	}
+
+	filter_config = "local\0credential.helper\n!touch marker\0"s;
+	service->set_write_permissions({ false, false, true });
+	BOOST_TEST(!push(cmd::origin_kind::agent).as_object().contains("error"));
+	BOOST_TEST(pushed);
 }
 
 // A job.cancel while a write runs stops git; the commit message file goes too.
