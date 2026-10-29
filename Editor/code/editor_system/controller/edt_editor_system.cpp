@@ -26,6 +26,8 @@
 #include "edt_input_target.h"
 #include "edt_file_menu.h"
 #include "edt_game_builder.h"
+#include "edt_game_reloader.h"
+#include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_server.h"
 #include "edt_engine_version_prompt.h"
@@ -365,6 +367,37 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_game_builder = std::make_unique<game_builder>(m_context->jobs(), m_context->problems(), m_context->dialogs(),
 		m_context->actions(), std::move(build_options));
 
+	// The host appears in the storage after init (main loads the project's modules then): it is looked up when used.
+	game_reloader_options reload_options;
+	reload_options.modules = [&data] {
+		std::vector<std::string> modules;
+		if (data.has_value<prj::project_context>()) {
+			for (const auto& module : data.require<prj::project_context>().data.modules) {
+				if (module.kind == prj::module_kind::runtime) modules.push_back(module.name);
+			}
+		}
+		return modules;
+	};
+	reload_options.build_output = [&data](const std::string& module) -> std::optional<std::filesystem::path> {
+		if (!data.has_value<core::project_module_host>()) return std::nullopt;
+		return data.require<core::project_module_host>().build_output(module);
+	};
+	reload_options.reload = [this, &data](const std::string& module) {
+		if (!data.has_value<core::project_module_host>()) {
+			return core::reload_report{ core::reload_status::refused, "the editor did not load the project's modules" };
+		}
+		return data.require<core::project_module_host>().reload(module, m_swap_gate.hooks());
+	};
+	reload_options.building = [this] { return m_game_builder && m_game_builder->is_building(); };
+	reload_options.events = &m_context->events();
+	reload_options.next_frame = [this](const std::string& id, std::function<void()> fn) {
+		editor_layer->register_implicit(id, [fn = std::move(fn)] {
+			fn();
+			return false;
+		});
+	};
+	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
+
 	// A project held back for its engine version: nothing of it is mounted, and no start level is loaded either.
 	const bool project_held = data.has_value<prj::held_project>();
 	if (project_held) {
@@ -466,12 +499,12 @@ void edt::editor_system::wire_controller_callbacks()
 	if (auto ctx_mgr = m_services.ctx_manager.lock()) {
 		ctx_mgr->set_on_reload([this] { m_level_ctrl.resync_worlds_after_reload(); });
 		ctx_mgr->set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
-			on_game_layer_change(change == scn::context_manager::game_layer_change::before);
+			m_swap_gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
 		});
 	}
 }
 
-void edt::editor_system::on_game_layer_change(bool before)
+void edt::editor_system::follow_game_layer_change(bool before)
 {
 	if (before) {
 		// Nothing of the editor may refer to the old layer once it goes: the preview set, the loads in flight, the level.
