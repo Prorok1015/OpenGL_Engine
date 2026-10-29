@@ -433,11 +433,11 @@ BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(EdtBuiltinMenuTests)
 
-BOOST_AUTO_TEST_CASE(Menus_AreFileViewBuildHelp_EvenBeforeAnyActionIsRegistered)
+BOOST_AUTO_TEST_CASE(Menus_AreFileEditViewBuildHelp_EvenBeforeAnyActionIsRegistered)
 {
 	edt::action_registry actions;
 	auto menus = edt::register_builtin_menus(actions);
-	BOOST_TEST((actions.menus() == std::vector<std::string>{ "File", "View", "Build", "Help" }));
+	BOOST_TEST((actions.menus() == std::vector<std::string>{ "File", "Edit", "View", "Build", "Help" }));
 	BOOST_TEST((labels_of(actions.items("Help")) == std::vector<std::string>{ "About" }));
 	BOOST_CHECK(actions.activate("help.about")); // a placeholder, as before
 }
@@ -447,7 +447,7 @@ BOOST_AUTO_TEST_CASE(FileMenu_KeepsItsOrderSeparatorsAndShortcutText)
 	file_menu_fixture f;
 	auto menus = edt::register_builtin_menus(f.actions);
 
-	BOOST_TEST((f.actions.menus() == std::vector<std::string>{ "File", "View", "Build", "Help" }));
+	BOOST_TEST((f.actions.menus() == std::vector<std::string>{ "File", "Edit", "View", "Build", "Help" }));
 	const auto items = f.actions.items("File");
 	BOOST_TEST((labels_of(items) == std::vector<std::string>{
 		"New Level", "Open Level...", "Save Level", "Save Level As...", "Import Model...", "New Project...", "Open Project...",
