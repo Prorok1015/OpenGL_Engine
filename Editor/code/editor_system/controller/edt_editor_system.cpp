@@ -29,6 +29,7 @@
 #include "edt_edit_menu.h"
 #include "edt_file_menu.h"
 #include "edt_scene_commands.h"
+#include "edt_agent_sessions.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -231,6 +232,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_inspector_panel->set_view_cache(view_cache);
 		m_hierarchy_panel->set_view_cache(std::move(view_cache));
 	}
+	// "Changed by agent" (AI_INTEGRATION.md §3.4): nodes of the active world an agent's edits changed, not saved or accepted.
+	const auto changed_by_agent = [this](std::uint64_t node_id) {
+		return m_state.has_active_world() && m_state.agent_changes().contains({ static_cast<std::size_t>(m_state.active_world_idx), node_id });
+	};
+	m_hierarchy_panel->set_agent_marks(changed_by_agent);
+	m_inspector_panel->set_agent_marks(changed_by_agent);
 	create_viewport_panel();
 
 	// Wire all controller + panel callbacks
@@ -375,6 +382,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
 			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
+		m_registrations.push_back(std::move(command));
+	}
+	m_agent_sessions = std::make_unique<agent_sessions>(m_context->documents());
+	for (auto& command : m_agent_sessions->register_commands(m_context->actions().commands())) {
 		m_registrations.push_back(std::move(command));
 	}
 	m_file_menu->attach_window_close(wnd_sys);

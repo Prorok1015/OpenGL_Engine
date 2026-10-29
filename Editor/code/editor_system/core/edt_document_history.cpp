@@ -46,6 +46,7 @@ void edt::document_history::record(std::string label, const cmd::origin& origin,
 		return;
 	}
 	drop_redo();
+	change->m_serial = m_next_serial++;
 	const auto group = m_groups.find(origin_key(origin));
 	if (group != m_groups.end() && m_position > 0 && m_records[m_position - 1].group == group->second.id) {
 		// Nobody else edited since the last edit of the group: one record.
@@ -131,6 +132,12 @@ std::uint64_t edt::document_history::open_group(const cmd::origin& origin) const
 {
 	const auto it = m_groups.find(origin_key(origin));
 	return it == m_groups.end() ? 0 : it->second.id;
+}
+
+std::size_t edt::document_history::evicted(std::uint64_t group) const
+{
+	const auto it = m_evicted.find(group);
+	return it == m_evicted.end() ? 0 : it->second;
 }
 
 edt::rollback_result edt::document_history::rollback_group(std::uint64_t group)

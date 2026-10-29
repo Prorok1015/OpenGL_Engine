@@ -6,6 +6,8 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -39,6 +41,8 @@ namespace edt
 		std::optional<scene_node_state> after;
 		// Only where it sits changed, not what is in it: before and after hold no copy of the node (placement_of).
 		bool positional = false;
+		// Positional under the same parent, and it is the node that was moved there, not one a sibling shifted.
+		bool moved_among_siblings = false;
 	};
 
 	class scene_history_index
@@ -78,6 +82,8 @@ namespace edt
 
 	// Where `state` puts its node, without what is in it; `id` names the node when `state` has none.
 	scene_node_state placement_of(const scene_node_state& state, std::uint64_t id = 0);
+	// The world and node id of a key "node:<world>:<id hex>" of a scene change.
+	std::optional<std::pair<std::size_t, std::uint64_t>> parse_node_key(std::string_view key);
 	// Copies a node's own fields, not its children.
 	scn::prefab_desc::prefab_node shallow_copy(const scn::prefab_desc::prefab_node& node);
 	// Whether two nodes are equal in their own fields (components by type, parent reference and overrides).

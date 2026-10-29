@@ -58,6 +58,48 @@ void edt::scene_document::mark_clean()
 {
 	m_unrecorded = false;
 	m_history.mark_saved();
+	move_agent_marks_to_now();
+}
+
+void edt::scene_document::accept_agent_changes()
+{
+	move_agent_marks_to_now();
+}
+
+void edt::scene_document::move_agent_marks_to_now()
+{
+	const history_record* top = m_history.next_undo();
+	m_agent_from = top && !top->changes.empty() ? top->changes.back()->serial() : 0;
+}
+
+const std::set<std::pair<std::size_t, std::uint64_t>>& edt::scene_document::agent_changes() const
+{
+	auto& cache = m_agent_changes;
+	if (cache.valid && cache.generation == desc_generation && cache.from == m_agent_from) {
+		return cache.nodes;
+	}
+	cache.nodes.clear();
+	const auto& records = m_history.records();
+	for (std::size_t r = 0; r < m_history.position(); ++r) {
+		const history_record& record = records[r];
+		if (record.origin.kind != cmd::origin_kind::agent) {
+			continue;
+		}
+		for (const auto& change : record.changes) {
+			if (change->serial() <= m_agent_from) {
+				continue;
+			}
+			for (const std::string& key : change->marks()) {
+				if (const auto node = parse_node_key(key)) {
+					cache.nodes.insert(*node);
+				}
+			}
+		}
+	}
+	cache.valid = true;
+	cache.generation = desc_generation;
+	cache.from = m_agent_from;
+	return cache.nodes;
 }
 
 bool edt::scene_document::undo()
@@ -153,6 +195,7 @@ void edt::scene_document::recover_from_apply(std::string_view what, std::string_
 	// Half applied: what the worlds hold now is neither state of the history. Keep it, reload it, start over.
 	egLOG_ERROR("Editor/History", "{} failed ({}): the history is cleared and the worlds are reloaded as they are", what, error);
 	m_history.clear();
+	m_agent_changes.valid = false;
 	m_unrecorded = true;
 	m_history.mark_saved();
 	m_index.rebuild(world_descs);
@@ -165,6 +208,8 @@ void edt::scene_document::reset_history()
 {
 	const bool dirty = is_dirty();
 	m_history.clear();
+	m_agent_from = 0;
+	m_agent_changes.valid = false;
 	m_unrecorded = dirty;
 	m_history.mark_saved();
 	if (!m_index.rebuild(world_descs)) {

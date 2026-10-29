@@ -36,6 +36,8 @@ namespace edt
 		void set_view_cache(std::shared_ptr<override_edit::view_cache> cache);
 		// The desc under the cache changed: the next frame composes again.
 		void invalidate_view();
+		// Nodes (by id) an agent changed since the last save or accept: the header says so.
+		void set_agent_marks(std::function<bool(uint64_t node_id)> marked) { m_agent_marked = std::move(marked); }
 		// An edit made in the panel waits for its widget to let go before it is committed.
 		bool has_pending_commit() const { return m_pending_commit; }
 		component_ui ui_of(const std::string& component_key) const;
@@ -70,6 +72,7 @@ namespace edt
 		std::function<void()>          m_on_node_changed;
 		// Desc was edited live but not yet pushed to ECS (a drag is still in progress).
 		bool                           m_pending_commit = false;
+		std::function<bool(uint64_t)>  m_agent_marked;
 
 		// Cached serialized parent_desc data — built once on selection change for read-only display
 		std::unordered_map<std::string, boost::json::object> m_parent_cache;

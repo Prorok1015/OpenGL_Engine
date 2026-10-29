@@ -1,8 +1,11 @@
 #include "edt_scene_history.h"
 #include <algorithm>
+#include <charconv>
+#include <system_error>
 #include <format>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -96,6 +99,49 @@ namespace {
 		return std::format("node:{}:{:016x}", world, id);
 	}
 
+	// The children of `parent` that kept their order among each other: the longest run of them whose old places
+	// increase. A sibling inserted, removed or moved past them leaves them in it; what was moved itself is not.
+	std::unordered_set<std::uint64_t> kept_order(const std::unordered_map<std::uint64_t, edt::scene_node_state>& old_index,
+		const prefab_node& parent)
+	{
+		std::unordered_map<std::uint64_t, std::uint64_t> next_of; // previous sibling -> node, before the commit
+		for (const auto& [id, state] : old_index) {
+			if (state.parent == parent.node_id && state.depth > 0) {
+				next_of[state.previous] = id;
+			}
+		}
+		std::unordered_map<std::uint64_t, std::size_t> old_place;
+		for (auto it = next_of.find(0); it != next_of.end() && !old_place.contains(it->second); it = next_of.find(it->second)) {
+			old_place.emplace(it->second, old_place.size());
+		}
+		std::vector<std::pair<std::size_t, std::uint64_t>> places; // old place, id; in the order they are now
+		for (const auto& child : parent.children) {
+			if (const auto it = old_place.find(child.node_id); it != old_place.end()) {
+				places.push_back({ it->second, child.node_id });
+			}
+		}
+		// Patience sorting: tails[k] ends the best run of length k + 1; back links rebuild it.
+		std::vector<std::size_t> tails;
+		std::vector<std::size_t> link(places.size(), places.size());
+		for (std::size_t i = 0; i < places.size(); ++i) {
+			const auto at = std::lower_bound(tails.begin(), tails.end(), places[i].first,
+				[&](std::size_t tail, std::size_t place) { return places[tail].first < place; });
+			if (at != tails.begin()) {
+				link[i] = *(at - 1);
+			}
+			if (at == tails.end()) {
+				tails.push_back(i);
+			} else {
+				*at = i;
+			}
+		}
+		std::unordered_set<std::uint64_t> kept;
+		for (std::size_t i = tails.empty() ? places.size() : tails.back(); i < places.size(); i = link[i]) {
+			kept.insert(places[i].second);
+		}
+		return kept;
+	}
+
 	// The undo record of one commit: the nodes it changed, keyed node:<world>:<id> for conflicts. A node that only
 	// moved among its siblings has a key too: undoing the change puts it back, over a later reorder of someone else.
 	class scene_change final : public edt::history_change
@@ -106,12 +152,18 @@ namespace {
 		{
 			for (const auto& change : m_changes) {
 				m_keys.push_back(node_key(change.world, change.id));
+				// A node that only moved is the agent's edit when the agent moved it, not when a sibling went.
+				if (!change.positional || change.moved_among_siblings
+					|| (change.before && change.after && change.before->parent != change.after->parent)) {
+					m_marks.push_back(m_keys.back());
+				}
 			}
 		}
 
 		void undo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, true); }
 		void redo() override { edt::apply_scene_changes(m_worlds, m_index, m_changes, false); }
 		const std::vector<std::string>& keys() const override { return m_keys; }
+		const std::vector<std::string>& marks() const override { return m_marks; }
 
 		// Undo removes the nodes the commit created, with everything under them: a node someone else put there
 		// since would go with them. The nodes of this commit are not in the way: undo puts them back first.
@@ -159,8 +211,31 @@ namespace {
 		edt::scene_history_index& m_index;
 		std::vector<edt::scene_node_change> m_changes;
 		std::vector<std::string> m_keys;
+		std::vector<std::string> m_marks;
 	};
 
+}
+
+std::optional<std::pair<std::size_t, std::uint64_t>> edt::parse_node_key(std::string_view key)
+{
+	constexpr std::string_view prefix = "node:";
+	if (!key.starts_with(prefix)) {
+		return std::nullopt;
+	}
+	key.remove_prefix(prefix.size());
+	const std::size_t colon = key.find(':');
+	if (colon == std::string_view::npos) {
+		return std::nullopt;
+	}
+	std::size_t world = 0;
+	std::uint64_t id = 0;
+	const auto world_text = key.substr(0, colon);
+	const auto id_text = key.substr(colon + 1);
+	if (std::from_chars(world_text.data(), world_text.data() + world_text.size(), world).ec != std::errc{}
+		|| std::from_chars(id_text.data(), id_text.data() + id_text.size(), id, 16).ec != std::errc{}) {
+		return std::nullopt;
+	}
+	return std::pair{ world, id };
 }
 
 scn::prefab_desc::prefab_node edt::shallow_copy(const scn::prefab_desc::prefab_node& node)
@@ -276,6 +351,20 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 		if (!ok) {
 			return diff_result::unavailable;
 		}
+	}
+	// Which of the nodes that shifted among their siblings was the one moved; the index still holds the old places.
+	std::map<std::pair<std::size_t, std::uint64_t>, std::unordered_set<std::uint64_t>> kept_by_parent;
+	for (auto& entry : changes) {
+		if (!entry.positional || entry.before->parent != entry.after->parent) {
+			continue;
+		}
+		auto kept = kept_by_parent.find({ entry.world, entry.after->parent });
+		if (kept == kept_by_parent.end()) {
+			const prefab_node* parent = find_node(std::as_const(worlds[entry.world]).get_root(), entry.after->parent);
+			kept = kept_by_parent.emplace(std::pair{ entry.world, entry.after->parent },
+				parent ? kept_order(m_worlds[entry.world], *parent) : std::unordered_set<std::uint64_t>{}).first;
+		}
+		entry.moved_among_siblings = !kept->second.contains(entry.id);
 	}
 	// Removed nodes, parents first; their index entries go below, so the states are moved out.
 	std::vector<scene_node_change> removed;
