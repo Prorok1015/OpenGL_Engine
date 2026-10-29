@@ -15,7 +15,8 @@ namespace edt
 	// Driven by the command metadata, and fail closed:
 	//  - listed for tools at all (`expose_as_tool`), not `mutates`, no `risk` (confirm / deny_by_default), not `long_running`;
 	//  - AND either a domain of read commands (the part of the id before the first dot: log, job, dialog, viewport) or
-	//    one of the listed state queries (scene.query, node.get, component.schema, asset.query, selection.get).
+	//    one of the listed read commands (scene.query, node.get, component.schema, asset.query, selection.get,
+	//    problems.list, build.settings.get).
 	//    Metadata is only as good as the one who wrote it (a command that forgot `mutates` must not become an agent
 	//    tool), so a new domain or command is opt-in here.
 	// Mutating tools, confirmations and the project policy come with A6b.
