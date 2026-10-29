@@ -567,7 +567,10 @@ void edt::editor_system::tick_live_mode()
 void edt::editor_system::cancel_live_build()
 {
 	// Only a live build: game_builder::cancel would stop the person's build too.
-	if (m_game_builder && m_game_builder->building_preemptible()) m_game_builder->cancel();
+	// cancel() also drops a waiting request, which here could be the person's queued manual build.
+	if (m_game_builder && m_game_builder->building_preemptible() && !m_game_builder->manual_request_waiting()) {
+		m_game_builder->cancel();
+	}
 }
 
 void edt::editor_system::create_panels(bool capture_log)

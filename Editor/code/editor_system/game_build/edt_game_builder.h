@@ -192,6 +192,8 @@ namespace edt
 		[[nodiscard]] bool building_preemptible() const { return is_building() && m_running_preemptible; }
 		// A build the person started runs (what greys out reloads and define removal).
 		[[nodiscard]] bool is_manual_build_running() const { return is_building() && !m_running_preemptible; }
+		// A manual request waiting for a live build to stop: that live build is already being stopped.
+		[[nodiscard]] bool manual_request_waiting() const { return m_pending.has_value() && !m_pending->preemptible; }
 		// The running build's job; 0 when none runs.
 		[[nodiscard]] std::uint64_t job() const { return is_building() ? m_job : 0; }
 		// Why build.game_module is disabled; empty when it is enabled.
