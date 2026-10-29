@@ -10,3 +10,6 @@ snk_component_headers(platform_system)
 
 # The operating system's services the engine and the editor share (EPIC-42 #158: restarting the editor).
 target_link_libraries(platform_system PUBLIC snk::api PRIVATE $<BUILD_LOCAL_INTERFACE:snk::compiler_warnings>)
+if(WIN32)
+	target_link_libraries(platform_system PRIVATE shell32)
+endif()
