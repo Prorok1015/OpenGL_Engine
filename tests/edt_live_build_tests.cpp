@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,10 +48,12 @@ struct live_fixture
 			++cancels;
 			building = false;
 		};
-		out.reload = [this](const std::string& module) {
+		out.reload = [this](const std::string& module, std::function<void(const core::reload_report&)> done) {
 			reloads.push_back(module);
-			return next_reload;
+			waiting.push_back({ module, std::move(done) });
 		};
+		out.is_loaded_current = [this](const std::string& module) { return current.contains(module); };
+		out.modules = [this] { return project_modules; };
 		return out;
 	}
 
@@ -97,6 +100,18 @@ struct live_fixture
 		BOOST_REQUIRE_EQUAL(starts.size(), index + 1);
 		finish(index, edt::build_outcome::succeeded);
 		advance(std::chrono::milliseconds(settings.live_quiet_ms));
+		deliver();
+	}
+
+	// The next UI frame: every requested reload reports next_reload; a reloaded module runs from build/bin as it is.
+	void deliver()
+	{
+		auto due = std::move(waiting);
+		waiting.clear();
+		for (auto& item : due) {
+			if (next_reload.status == core::reload_status::reloaded) current.insert(item.module);
+			item.done(next_reload);
+		}
 	}
 
 	edt::live_state state() const { return live->status().state; }
@@ -123,7 +138,16 @@ struct live_fixture
 	std::vector<edt::build_request> starts;
 	edt::action_result next_start = edt::action_result::success(boost::json::object{ { "started", true }, { "job", 7 } });
 	int cancels = 0;
+	// Requested reloads, in order.
 	std::vector<std::string> reloads;
+	struct waiting_reload
+	{
+		std::string module;
+		std::function<void(const core::reload_report&)> done;
+	};
+	std::vector<waiting_reload> waiting;
+	std::set<std::string> current;
+	std::vector<std::string> project_modules;
 	core::reload_report next_reload{ core::reload_status::reloaded, {} };
 	edt::problem_list problems;
 	std::unique_ptr<edt::live_build> live;
@@ -228,6 +252,8 @@ BOOST_AUTO_TEST_CASE(success_reloads_only_after_the_quiet_period)
 	BOOST_CHECK(reloads.empty());
 	advance(1ms);
 	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
+	BOOST_CHECK(is(state(), edt::live_state::reloading));
+	deliver();
 	BOOST_CHECK(is(state(), edt::live_state::reloaded));
 	BOOST_CHECK(live->status().last_reload == now);
 	BOOST_CHECK(reload_problems().empty());
@@ -326,43 +352,148 @@ BOOST_AUTO_TEST_CASE(rebuild_now_when_off_is_an_error)
 BOOST_AUTO_TEST_CASE(reload_now_skips_the_quiet_period_after_a_successful_build)
 {
 	make();
-	BOOST_CHECK(live->reload_now().has_value()); // nothing built yet
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::refused); // nothing to reload yet
 	change();
 	advance(500ms);
-	BOOST_CHECK(live->reload_now().has_value()); // building
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::refused); // building
 	finish(0, edt::build_outcome::succeeded);
-	BOOST_CHECK(!live->reload_now().has_value());
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::requested);
 	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
+	BOOST_CHECK(is(state(), edt::live_state::reloading));
+	deliver();
 	BOOST_CHECK(is(state(), edt::live_state::reloaded));
 	advance(10s);
 	BOOST_CHECK_EQUAL(reloads.size(), 1u);
 }
 
-BOOST_AUTO_TEST_CASE(reload_now_refuses_a_build_that_missed_a_change)
+BOOST_AUTO_TEST_CASE(reload_now_again_after_its_own_reload_is_up_to_date)
 {
 	make();
 	change();
 	advance(500ms);
-	change();
 	finish(0, edt::build_outcome::succeeded);
-	const auto error = live->reload_now();
-	BOOST_REQUIRE(error.has_value());
-	BOOST_CHECK(error->find("changed") != std::string::npos);
-	BOOST_CHECK(reloads.empty());
+	BOOST_REQUIRE(live->reload_now().kind == edt::reload_now_kind::requested);
+	deliver();
+	const auto again = live->reload_now();
+	BOOST_CHECK(again.kind == edt::reload_now_kind::up_to_date);
+	BOOST_CHECK_EQUAL(again.message, "up to date");
+	BOOST_CHECK_EQUAL(reloads.size(), 1u);
+	BOOST_CHECK(is(state(), edt::live_state::reloaded));
 }
 
-BOOST_AUTO_TEST_CASE(reload_now_returns_the_reason_of_a_failed_reload)
+BOOST_AUTO_TEST_CASE(reload_now_after_a_manual_build_reloads_the_newer_file)
+{
+	make();
+	build_and_settle();
+	BOOST_REQUIRE_EQUAL(reloads.size(), 1u);
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::up_to_date);
+
+	current.erase("game"); // a manual build without reload left a newer build/bin file
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::requested);
+	BOOST_CHECK_EQUAL(reloads.size(), 2u);
+	deliver();
+	BOOST_CHECK(is(state(), edt::live_state::reloaded));
+}
+
+BOOST_AUTO_TEST_CASE(reload_now_before_any_live_build_takes_the_project_modules)
+{
+	project_modules = { "game", "tools" };
+	current = { "tools" };
+	make();
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::requested);
+	BOOST_TEST((reloads == std::vector<std::string>{ "game" }));
+}
+
+BOOST_AUTO_TEST_CASE(reload_now_is_refused_while_reloads_wait)
+{
+	make();
+	change();
+	advance(500ms);
+	finish(0, edt::build_outcome::succeeded);
+	BOOST_REQUIRE(live->reload_now().kind == edt::reload_now_kind::requested);
+	const auto again = live->reload_now();
+	BOOST_CHECK(again.kind == edt::reload_now_kind::refused);
+	BOOST_CHECK(!again.message.empty());
+	BOOST_CHECK_EQUAL(reloads.size(), 1u);
+}
+
+BOOST_AUTO_TEST_CASE(a_failed_reload_of_reload_now_shows_in_the_status_and_a_retry_is_allowed)
 {
 	make();
 	change();
 	advance(500ms);
 	finish(0, edt::build_outcome::succeeded);
 	next_reload = { core::reload_status::rolled_back, "init failed" };
-	const auto error = live->reload_now();
-	BOOST_REQUIRE(error.has_value());
-	BOOST_CHECK(error->find("init failed") != std::string::npos);
+	BOOST_REQUIRE(live->reload_now().kind == edt::reload_now_kind::requested);
+	deliver();
 	BOOST_CHECK(is(state(), edt::live_state::reload_failed));
+	BOOST_CHECK(live->status().message.find("init failed") != std::string::npos);
 	BOOST_CHECK_EQUAL(reload_problems().size(), 1u);
+
+	next_reload = { core::reload_status::reloaded, {} };
+	BOOST_CHECK(live->reload_now().kind == edt::reload_now_kind::requested);
+	deliver();
+	BOOST_CHECK(is(state(), edt::live_state::reloaded));
+	BOOST_CHECK(reload_problems().empty());
+}
+
+BOOST_AUTO_TEST_CASE(tick_only_requests_the_reload_and_the_result_completes_it)
+{
+	make();
+	change();
+	advance(500ms);
+	finish(0, edt::build_outcome::succeeded);
+	advance(3s);
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_CHECK(is(state(), edt::live_state::reloading));
+	advance(10s);
+	BOOST_CHECK(is(state(), edt::live_state::reloading));
+	BOOST_CHECK_EQUAL(reloads.size(), 1u);
+	deliver();
+	BOOST_CHECK(is(state(), edt::live_state::reloaded));
+}
+
+BOOST_AUTO_TEST_CASE(a_build_that_changed_nothing_requests_no_reload)
+{
+	current = { "game" };
+	make();
+	build_and_settle();
+	BOOST_CHECK(reloads.empty());
+	BOOST_CHECK(is(state(), edt::live_state::reloaded));
+}
+
+BOOST_AUTO_TEST_CASE(a_change_during_reloading_starts_a_build_and_the_late_result_only_reaches_the_problems)
+{
+	make();
+	change();
+	advance(500ms);
+	finish(0, edt::build_outcome::succeeded);
+	advance(3s);
+	BOOST_REQUIRE(is(state(), edt::live_state::reloading));
+
+	change();
+	BOOST_CHECK(is(state(), edt::live_state::pending));
+	next_reload = { core::reload_status::rolled_back, "init failed" };
+	deliver();
+	BOOST_CHECK_EQUAL(reload_problems().size(), 1u);
+	BOOST_CHECK(is(state(), edt::live_state::pending));
+	advance(500ms);
+	BOOST_CHECK_EQUAL(starts.size(), 2u);
+	BOOST_CHECK(is(state(), edt::live_state::building));
+}
+
+BOOST_AUTO_TEST_CASE(a_reload_result_after_the_controller_went_is_harmless)
+{
+	make();
+	change();
+	advance(500ms);
+	finish(0, edt::build_outcome::succeeded);
+	advance(3s);
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	live.reset();
+	next_reload = { core::reload_status::lost, "gone" };
+	deliver();
+	BOOST_CHECK(reload_problems().empty());
 }
 
 BOOST_AUTO_TEST_CASE(a_manual_build_keeps_the_changes_pending_until_it_ends)
