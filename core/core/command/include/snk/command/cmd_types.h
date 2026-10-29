@@ -17,6 +17,11 @@ namespace cmd
 		inline constexpr const char* not_found = "not_found";
 		// A valid call that needs a decision first (e.g. discard_unsaved).
 		inline constexpr const char* needs_input = "needs_input";
+		// The policy refuses the call from an agent: denied outright, or it needed a confirmation that was not given.
+		inline constexpr const char* denied = "denied";
+		// The policy wants a person to confirm this call from an agent. The result's value holds the "ticket": after
+		// the person approved it (command_registry::approve), the same call with `call::confirmation` set to it runs once.
+		inline constexpr const char* confirmation_required = "confirmation_required";
 		// The command ran and could not do its job.
 		inline constexpr const char* failed = "failed";
 		// The state the call was built on has changed (a page cursor, later an expected generation): read again.
@@ -52,6 +57,8 @@ namespace cmd
 		origin from;
 		// Carried for the document-generation check that arrives with mutating commands; not read yet.
 		std::uint64_t expected_generation = 0;
+		// The ticket of a confirmation_required answer, once a person approved it; never part of the JSON arguments.
+		std::string confirmation = std::string{};
 	};
 
 	struct result
