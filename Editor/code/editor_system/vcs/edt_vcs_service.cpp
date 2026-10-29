@@ -351,6 +351,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc info;
 	info.id = "vcs.info";
+	info.category = cmd::agent_category::read;
 	info.summary = "Whether git is available for the open project: its repository root and the git version";
 	info.result_schema = json::parse(R"({
 		"type": "object",
@@ -377,6 +378,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc status;
 	status.id = "vcs.status";
+	status.category = cmd::agent_category::read;
 	status.summary = "Start reading git status (branch, upstream, ahead/behind, changed files); the result arrives in job.get";
 	status.result_schema = json::parse(JOB_RESULT_SCHEMA);
 	status.invoke = [&service](const cmd::call&) { return job_answer(service.start_status()); };
@@ -384,6 +386,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc diff;
 	diff.id = "vcs.diff";
+	diff.category = cmd::agent_category::read;
 	diff.summary = "Start reading the working tree diff (or the staged one), of one path or all; text capped at 256 KiB; "
 		"the result arrives in job.get";
 	diff.args_schema = json::parse(R"({
@@ -405,6 +408,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc log;
 	log.id = "vcs.log";
+	log.category = cmd::agent_category::read;
 	log.summary = "Start reading the commit log of a ref (default HEAD), optionally of one path, one page at a time; "
 		"the result arrives in job.get";
 	log.args_schema = json::parse(R"({
@@ -430,6 +434,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc branches;
 	branches.id = "vcs.branches";
+	branches.category = cmd::agent_category::read;
 	branches.summary = "Start listing the local and remote-tracking branches; the result arrives in job.get";
 	branches.result_schema = json::parse(JOB_RESULT_SCHEMA);
 	branches.invoke = [&service](const cmd::call&) { return job_answer(service.start_branches()); };
