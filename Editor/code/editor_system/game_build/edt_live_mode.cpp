@@ -293,6 +293,8 @@ void edt::live_mode::register_commands(action_registry& actions)
 		return action_result::success();
 	};
 	toggle.expose_as_tool = false;
+	// The switch is the person's consent: an agent never flips it.
+	toggle.category = cmd::agent_category::not_for_agents;
 	if (auto added = actions.add(std::move(toggle)); added.active()) m_registrations.push_back(std::move(added));
 
 	const auto live_on = [this] { return m_build.enabled(); };
@@ -305,6 +307,8 @@ void edt::live_mode::register_commands(action_registry& actions)
 	status.args_schema = cmd::no_args_schema();
 	status.result_schema = json::parse(k_status_schema);
 	status.mutates = false;
+	// TODO(#449): drop agent_when_enabled once the bridge asks agent_policy (live category, set_live_mode) instead.
+	status.category = cmd::agent_category::live;
 	status.agent_when_enabled = true;
 	status.enabled = live_on;
 	status.invoke = [this](const cmd::call&) {
@@ -319,6 +323,7 @@ void edt::live_mode::register_commands(action_registry& actions)
 	rebuild.args_schema = cmd::no_args_schema();
 	rebuild.result_schema = json::parse(k_rebuild_schema);
 	rebuild.mutates = true;
+	rebuild.category = cmd::agent_category::live;
 	rebuild.agent_when_enabled = true;
 	rebuild.enabled = live_on;
 	rebuild.invoke = [this](const cmd::call&) {
@@ -335,6 +340,7 @@ void edt::live_mode::register_commands(action_registry& actions)
 	reload.args_schema = cmd::no_args_schema();
 	reload.result_schema = json::parse(k_reload_schema);
 	reload.mutates = true;
+	reload.category = cmd::agent_category::live;
 	reload.agent_when_enabled = true;
 	reload.enabled = live_on;
 	reload.invoke = [this](const cmd::call&) {

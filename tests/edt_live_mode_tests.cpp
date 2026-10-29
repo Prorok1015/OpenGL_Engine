@@ -423,6 +423,21 @@ BOOST_AUTO_TEST_CASE(ALiveBuildStoppedByTheEditor_IsBuiltAgain)
 	BOOST_TEST((live->status().state == edt::live_state::building));
 }
 
+// #466's policy: the three agent tools are the `live` category (denied while live mode is off), the switch is never an
+// agent's.
+BOOST_AUTO_TEST_CASE(TheCommandsHaveTheirAgentCategories)
+{
+	make();
+	for (const char* id : { "live.status", "live.rebuild_now", "live.reload_now" }) {
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_REQUIRE(commands.find(id) != nullptr);
+			BOOST_TEST((commands.find(id)->category == cmd::agent_category::live));
+		}
+	}
+	BOOST_REQUIRE(commands.find(edt::live_mode::k_toggle_id) != nullptr);
+	BOOST_TEST((commands.find(edt::live_mode::k_toggle_id)->category == cmd::agent_category::not_for_agents));
+}
+
 BOOST_AUTO_TEST_CASE(AFrameQueuedBeforeLiveModeWasDestroyed_ReloadsNothing)
 {
 	make();

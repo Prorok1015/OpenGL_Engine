@@ -120,6 +120,7 @@ edt::registration edt::action_registry::add(action_desc desc)
 	command.mutates = desc.mutates;
 	command.invoke = [execute = std::move(desc.execute)](const cmd::call& request) { return execute(request.args); };
 	command.enabled = std::move(desc.enabled);
+	command.category = desc.category;
 
 	action_ui ui;
 	ui.label = std::move(desc.label);

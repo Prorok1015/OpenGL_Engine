@@ -100,6 +100,8 @@ namespace edt
 		std::function<void()> activate{};
 		// Null: always enabled.
 		std::function<bool()> enabled{};
+		// What the command is to an agent (cmd::command_desc::category); unset: closed to agents.
+		cmd::agent_category category = cmd::agent_category::unset;
 	};
 
 	// One menu item as the main menu draws it.

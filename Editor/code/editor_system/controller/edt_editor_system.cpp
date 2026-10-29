@@ -436,7 +436,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			m_context->panels().set_open(m_build_settings_panel->get_id(), true);
 			m_build_settings_panel->focus();
 		}),
-		.expose_as_tool = false }));
+		.expose_as_tool = false, .category = cmd::agent_category::not_for_agents }));
 	build_settings_command_options settings_command;
 	settings_command.project_root = [&data]() -> std::optional<std::filesystem::path> {
 		if (!data.has_value<prj::project_context>()) return std::nullopt;
