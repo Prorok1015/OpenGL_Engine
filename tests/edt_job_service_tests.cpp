@@ -673,6 +673,11 @@ BOOST_AUTO_TEST_CASE(Registered_JobListGetAndCancel)
 	BOOST_TEST(registrations.size() == 3u);
 	BOOST_TEST(commands.contains("job.list"));
 	BOOST_TEST(commands.contains("job.get"));
+	for (const char* id : { "job.list", "job.get" }) {
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST((commands.find(id)->category == cmd::agent_category::read));
+		}
+	}
 	BOOST_TEST(commands.contains("job.cancel"));
 }
 

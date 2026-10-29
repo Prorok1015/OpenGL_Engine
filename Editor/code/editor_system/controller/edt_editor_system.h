@@ -32,6 +32,7 @@ namespace inp  { class input_router; }
 
 namespace edt {
 	class agent_server;
+	class agent_access;
 	class file_menu;
 	class agent_sessions;
 	class game_builder;
@@ -198,7 +199,9 @@ namespace edt {
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
-		// The MCP server (editor/agent_server, off by default); null when it is off. Last member: stopped first.
+		// The policy and the confirmations behind the MCP server (editor/agent_server, off by default); null when it is off.
+		std::unique_ptr<agent_access> m_agent_access;
+		// The MCP server; null when it is off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 	};
 }

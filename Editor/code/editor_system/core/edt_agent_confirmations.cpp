@@ -183,6 +183,13 @@ namespace edt
 		m_grants.drop_session(session);
 	}
 
+	void agent_confirmations::decline_all(std::string_view why)
+	{
+		while (!m_waiting.empty()) {
+			finish_waiting(m_waiting.front().request.id, std::nullopt, why);
+		}
+	}
+
 	std::vector<confirmation_request> agent_confirmations::pending() const
 	{
 		std::vector<confirmation_request> out;
@@ -202,6 +209,36 @@ namespace edt
 			return reinterpret_cast<const char*>(text);
 		}
 
+		constexpr const char8_t* label_allow_once = u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u043e\u0434\u0438\u043d \u0440\u0430\u0437";
+		constexpr const char8_t* label_allow_session =
+			u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u0434\u043e \u043a\u043e\u043d\u0446\u0430 \u0441\u0435\u0441\u0441\u0438\u0438 \u044d\u0442\u043e\u0433\u043e \u0430\u0433\u0435\u043d\u0442\u0430";
+		constexpr const char8_t* label_deny = u8"\u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c";
+
+	}
+
+	bool confirmation_glyphs_available(ImFont& font)
+	{
+		for (const char8_t* label : { label_allow_once, label_allow_session, label_deny }) {
+			for (const char8_t* at = label; *at != u8'\0';) {
+				const unsigned int lead = *at;
+				const int length = lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : 0;
+				if (length == 0) {
+					return false;
+				}
+				unsigned int codepoint = length == 1 ? lead : lead & (0xFFu >> (length + 1));
+				for (int i = 1; i < length; ++i) {
+					if ((at[i] & 0xC0) != 0x80) {
+						return false;
+					}
+					codepoint = (codepoint << 6) | (at[i] & 0x3Fu);
+				}
+				at += length;
+				if (font.FindGlyphNoFallback(static_cast<ImWchar>(codepoint)) == nullptr) {
+					return false;
+				}
+			}
+		}
+		return true;
 	}
 
 	bool draw_agent_confirmations(agent_confirmations& confirmations)
@@ -231,15 +268,15 @@ namespace edt
 					ImGui::TextUnformatted(request.args.c_str(), request.args.c_str() + request.args.size());
 				}
 				ImGui::EndChild();
-				if (ImGui::Button(utf8(u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u043e\u0434\u0438\u043d \u0440\u0430\u0437"))) {
+				if (ImGui::Button(utf8(label_allow_once))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_once);
 				}
 				ImGui::SameLine();
-				if (ImGui::Button(utf8(u8"\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u0434\u043e \u043a\u043e\u043d\u0446\u0430 \u0441\u0435\u0441\u0441\u0438\u0438 \u044d\u0442\u043e\u0433\u043e \u0430\u0433\u0435\u043d\u0442\u0430"))) {
+				if (ImGui::Button(utf8(label_allow_session))) {
 					chosen.emplace_back(request.id, confirmation_answer::allow_session);
 				}
 				ImGui::SameLine();
-				if (ImGui::Button(utf8(u8"\u041e\u0442\u043a\u043b\u043e\u043d\u0438\u0442\u044c"))) {
+				if (ImGui::Button(utf8(label_deny))) {
 					chosen.emplace_back(request.id, confirmation_answer::deny);
 				}
 				ImGui::Separator();

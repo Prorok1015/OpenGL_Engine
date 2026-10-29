@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_build_settings_model.h"
+#include "edt_agent_confirmations.h"
 #include "edt_mcp_bridge_host.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
@@ -550,7 +551,9 @@ struct agent_fixture : model_fixture
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
 	cmd::main_thread_queue queue{ commands, tasks };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks };
+	edt::session_grants grants;
+	edt::agent_confirmations confirmations{ commands, grants };
+	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
 	std::optional<fs::path> project;
 	std::vector<cmd::registration> registrations;
 
@@ -651,6 +654,7 @@ BOOST_AUTO_TEST_CASE(ItIsReadOnlyAndAllowedById)
 	BOOST_TEST(!desc->mutates);
 	BOOST_TEST((desc->risk == cmd::danger::none));
 	BOOST_TEST(edt::agent_may_use(*desc));
+	BOOST_TEST((desc->category == cmd::agent_category::read));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

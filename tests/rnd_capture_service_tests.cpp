@@ -332,6 +332,7 @@ BOOST_AUTO_TEST_CASE(Registered_WithStrictSchemasAndNoRisk)
 	BOOST_REQUIRE(command.active());
 	const cmd::command_desc* desc = commands.find("viewport.capture");
 	BOOST_REQUIRE(desc != nullptr);
+	BOOST_TEST((desc->category == cmd::agent_category::read));
 	BOOST_CHECK(desc->expose_as_tool);
 	BOOST_CHECK(!desc->mutates);
 	BOOST_CHECK(!desc->long_running);

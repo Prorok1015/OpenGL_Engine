@@ -1,5 +1,8 @@
 #include <boost/test/unit_test.hpp>
 #include "test_manual_tasks.hpp"
+#include "edt_agent_confirmations.h"
+#include "edt_agent_policy.h"
+#include "test_temp_dir.hpp"
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
@@ -54,7 +57,9 @@ struct bridge_fixture
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
 	cmd::main_thread_queue queue{ commands, tasks };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks };
+	edt::session_grants grants;
+	edt::agent_confirmations confirmations{ commands, grants };
+	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
 	std::vector<cmd::registration> registrations;
 
 	std::size_t drain()
@@ -66,6 +71,7 @@ struct bridge_fixture
 	{
 		cmd::command_desc desc;
 		desc.id = std::move(id);
+		desc.category = cmd::agent_category::read;
 		desc.summary = "A command";
 		desc.invoke = [](const cmd::call&) { return cmd::result::success(); };
 		return desc;
@@ -125,6 +131,7 @@ BOOST_AUTO_TEST_SUITE(EdtAgentPolicyTests)
 BOOST_AUTO_TEST_CASE(ReadCommandsInAReadDomain_AreAllowed)
 {
 	cmd::command_desc desc;
+	desc.category = cmd::agent_category::read;
 	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
@@ -161,6 +168,7 @@ BOOST_AUTO_TEST_CASE(MutatingRiskyLongRunningAndHiddenCommands_AreNot)
 BOOST_AUTO_TEST_CASE(StateQueries_AreAllowedByCommandId)
 {
 	cmd::command_desc desc;
+	desc.category = cmd::agent_category::read;
 	for (const char* id : { "scene.query", "node.get", "component.schema", "asset.query", "selection.get" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
@@ -174,6 +182,7 @@ BOOST_AUTO_TEST_CASE(ProblemsList_IsAllowedByCommandId_NotItsDomain)
 {
 	cmd::command_desc desc;
 	desc.id = "problems.list";
+	desc.category = cmd::agent_category::read;
 	BOOST_TEST(edt::agent_may_use(desc));
 	desc.id = "problems.clear";
 	BOOST_TEST(!edt::agent_may_use(desc));
@@ -184,6 +193,7 @@ BOOST_AUTO_TEST_CASE(BuildSettingsGet_IsAllowedByCommandId_NotItsDomain)
 {
 	cmd::command_desc desc;
 	desc.id = "build.settings.get";
+	desc.category = cmd::agent_category::read;
 	BOOST_TEST(edt::agent_may_use(desc));
 	for (const char* id : { "build.settings.set", "build.settings.open", "build.game_module", "build.reload_game_module" }) {
 		desc.id = id;
@@ -197,6 +207,7 @@ BOOST_AUTO_TEST_CASE(BuildSettingsGet_IsAllowedByCommandId_NotItsDomain)
 BOOST_AUTO_TEST_CASE(VcsReads_AreAllowedByCommandId_NotTheirDomain)
 {
 	cmd::command_desc desc;
+	desc.category = cmd::agent_category::read;
 	for (const char* id : { "vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches" }) {
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
@@ -238,6 +249,36 @@ BOOST_AUTO_TEST_CASE(ADomainOutsideTheReadList_IsNotAllowedEvenIfTheMetadataSays
 		desc.id = id;
 		BOOST_TEST_CONTEXT(id) {
 			BOOST_TEST(!edt::agent_may_use(desc));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(ACommandWithoutTheReadCategory_IsNotListed_WhateverItsMetadataSays)
+{
+	cmd::command_desc desc;
+	desc.id = "log.read";
+	BOOST_TEST(!edt::agent_may_use(desc));
+	for (const auto category : { cmd::agent_category::not_for_agents, cmd::agent_category::scene_edit, cmd::agent_category::code_files,
+		cmd::agent_category::build, cmd::agent_category::live }) {
+		desc.category = category;
+		BOOST_TEST(!edt::agent_may_use(desc));
+	}
+	desc.category = cmd::agent_category::read;
+	BOOST_TEST(edt::agent_may_use(desc));
+}
+
+BOOST_AUTO_TEST_CASE(EveryListedTool_IsAllowedByTheDefaultPolicy)
+{
+	test_util::temp_dir dir{ "edt_listed_tools" };
+	edt::agent_policy policy{ dir.path() / "project.json", dir.path() / "personal.json" };
+	for (const char* id : { "log.read", "job.list", "job.get", "dialog.list", "viewport.capture", "scene.query", "problems.list",
+		"vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches" }) {
+		cmd::command_desc desc;
+		desc.id = id;
+		desc.category = cmd::agent_category::read;
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST(edt::agent_may_use(desc));
+			BOOST_TEST((policy.effective(desc).mode == cmd::policy_mode::allow));
 		}
 	}
 }
@@ -494,7 +535,7 @@ BOOST_AUTO_TEST_CASE(CallTool_ATooLargeResultIsAnErrorNotAMegabyteWall)
 BOOST_AUTO_TEST_CASE(HostGoneBeforeTheDrain_AnswersWithAnError)
 {
 	add(make("log.read"));
-	auto doomed = std::make_unique<edt::mcp_bridge_host>(commands, queue, tasks);
+	auto doomed = std::make_unique<edt::mcp_bridge_host>(commands, queue, tasks, confirmations);
 	std::optional<mcp::call_result> result;
 	std::optional<std::vector<mcp::tool_info>> tools;
 	doomed->call_tool({}, "log_read", json_of("{}"), nullptr, [&result](mcp::call_result r) { result = std::move(r); });

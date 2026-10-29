@@ -315,13 +315,18 @@ BOOST_AUTO_TEST_CASE(CallNowOrPost_RunsAheadOfCallsAlreadyWaitingInTheQueue)
 	BOOST_TEST(order == expected, boost::test_tools::per_element());
 }
 
-BOOST_AUTO_TEST_CASE(Confirmation_TravelsAsAParameterOfItsOwn_NotInTheArguments)
+namespace {
+
+struct ask_gate final : cmd::policy_gate
 {
-	struct ask_gate final : cmd::policy_gate
-	{
-		cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override { return cmd::policy_decision::ask("x"); }
-		bool can_ask() const override { return true; }
-	};
+	cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override { return cmd::policy_decision::ask("x"); }
+	bool can_ask() const override { return true; }
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(Confirmation_SmuggledInTheArguments_IsRefusedBySchemaThatForbidsExtraKeys)
+{
 	commands.set_policy_gate(std::make_shared<ask_gate>());
 	int runs = 0;
 	cmd::command_desc desc;
@@ -333,7 +338,36 @@ BOOST_AUTO_TEST_CASE(Confirmation_TravelsAsAParameterOfItsOwn_NotInTheArguments)
 	auto registration = commands.add(std::move(desc));
 
 	auto asked = queue.call_now_or_post("test.guarded", boost::json::object{}, cmd::origin::agent("s1"));
-	const std::string ticket = std::string{ asked.get().value.as_object().at("ticket").as_string().c_str() };
+	const cmd::result question = asked.get();
+	BOOST_REQUIRE(question.value.is_object() && question.value.as_object().contains("ticket"));
+	const std::string ticket = std::string{ question.value.as_object().at("ticket").as_string().c_str() };
+	commands.approve(ticket);
+
+	auto smuggled = queue.call_now_or_post("test.guarded", boost::json::object{ { "confirmation", ticket } }, cmd::origin::agent("s1"));
+	BOOST_TEST(smuggled.get().code == cmd::codes::invalid_args);
+	BOOST_TEST(runs == 0);
+	auto presented = queue.call_now_or_post("test.guarded", boost::json::object{}, cmd::origin::agent("s1"), 0, ticket);
+	BOOST_TEST(presented.get().ok);
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_CASE(Confirmation_TravelsAsAParameterOfItsOwn_NotInTheArguments)
+{
+	commands.set_policy_gate(std::make_shared<ask_gate>());
+	int runs = 0;
+	cmd::command_desc desc;
+	desc.id = "test.guarded";
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	auto registration = commands.add(std::move(desc));
+
+	auto asked = queue.call_now_or_post("test.guarded", boost::json::object{}, cmd::origin::agent("s1"));
+	const cmd::result question = asked.get();
+	BOOST_REQUIRE(question.value.is_object() && question.value.as_object().contains("ticket"));
+	const std::string ticket = std::string{ question.value.as_object().at("ticket").as_string().c_str() };
 	commands.approve(ticket);
 
 	auto smuggled = queue.call_now_or_post("test.guarded", boost::json::object{ { "confirmation", ticket } }, cmd::origin::agent("s1"));

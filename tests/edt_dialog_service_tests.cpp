@@ -1185,6 +1185,8 @@ BOOST_AUTO_TEST_CASE(DialogCommands_AnswerIsMutatingAndNeedsConfirmation_ListIsR
 	BOOST_TEST((answer_desc->risk == cmd::danger::confirm));
 	BOOST_TEST(!list_desc->mutates);
 	BOOST_TEST((list_desc->risk == cmd::danger::none));
+	BOOST_TEST((list_desc->category == cmd::agent_category::read));
+	BOOST_TEST((answer_desc->category == cmd::agent_category::not_for_agents));
 }
 
 // The answer schema of a dialog that asks for a path must not accept {}: one of path / cancel is required.

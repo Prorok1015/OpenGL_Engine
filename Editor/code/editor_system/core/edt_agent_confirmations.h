@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+struct ImFont;
+
 namespace edt
 {
 	// What a person answers to "the agent wants to ...".
@@ -86,6 +88,9 @@ namespace edt
 		// The agent session ended: its waiting requests are declined and its grants forgotten.
 		void drop_session(std::string_view session);
 
+		// Nobody can answer any more (the window cannot be shown): everything waiting is declined with `why`.
+		void decline_all(std::string_view why);
+
 		std::vector<confirmation_request> pending() const;
 
 	private:
@@ -107,6 +112,10 @@ namespace edt
 		std::uint64_t m_next_id = 1;
 		std::vector<waiting> m_waiting;
 	};
+
+	// Whether the font draws every letter of the window's buttons. The built-in ImGui font has no Cyrillic and shows '?',
+	// so a person would answer buttons they cannot read: without the glyphs nobody is asked (ask = deny).
+	bool confirmation_glyphs_available(ImFont& font);
 
 	// The window with the waiting requests: nothing is drawn (no ImGui call at all) while none waits. Returns true
 	// while it should be called again, so it fits an implicit-layout registrar.

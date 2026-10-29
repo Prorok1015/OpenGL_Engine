@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_agent_confirmations.h"
 #include <snk/mcp/mcp_host.h>
 #include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
@@ -42,7 +43,8 @@ namespace edt
 	class mcp_bridge_host final : public mcp::host
 	{
 	public:
-		mcp_bridge_host(cmd::command_registry& commands, cmd::main_thread_queue& queue, ds::task_system& tasks);
+		mcp_bridge_host(cmd::command_registry& commands, cmd::main_thread_queue& queue, ds::task_system& tasks,
+			agent_confirmations& confirmations);
 		~mcp_bridge_host() override;
 		mcp_bridge_host(const mcp_bridge_host&) = delete;
 		mcp_bridge_host& operator=(const mcp_bridge_host&) = delete;
@@ -53,6 +55,8 @@ namespace edt
 		void list_resources(std::function<void(std::vector<mcp::resource_info>)> done) override;
 		void read_resource(mcp::request_context context, std::string uri, std::function<void(mcp::resource_result)> done) override;
 		void log(mcp::log_level level, std::string_view message) override;
+		// Forgets what the session was granted and declines what it still waits on.
+		void session_closed(std::string session_id) override;
 
 	private:
 		struct state;
