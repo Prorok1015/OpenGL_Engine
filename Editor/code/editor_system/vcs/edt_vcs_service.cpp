@@ -12,16 +12,22 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <format>
+#include <fstream>
 #include <initializer_list>
+#include <ios>
 #include <limits>
 #include <mutex>
+#include <optional>
+#include <random>
 #include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -56,8 +62,10 @@ namespace {
 		std::vector<std::string> environment;
 		fs::path cwd;
 		edt::process_runner run;
-		// Per call, after safe_base_args: the -c pairs that switch off the repository's filter drivers.
+		// Per call, after safe_base_args: the hooks and filter overrides of a read, the agent overrides of a write.
 		std::vector<std::string> config_args;
+		// An agent's write that can run filter drivers, without allow_filters: refused when the config names any.
+		bool refuse_filters = false;
 	};
 
 	struct git_output
@@ -72,24 +80,39 @@ namespace {
 	};
 
 	// A repository's own config (a project unzipped with its .git) must never run a program on a read: every key that
-	// names a program git could start during status, diff, log, for-each-ref or rev-parse is overridden here, filter
-	// drivers per call (switch_off_filters). Writes and the network come with #455.
+	// names a program git could start during status, diff, log, for-each-ref or rev-parse is overridden here, hooks
+	// and filter drivers per read (run_read). Every call, writes included, gets these.
 	std::vector<std::string> safe_base_args()
 	{
-#ifdef _WIN32
-		constexpr const char* no_hooks = "core.hooksPath=NUL";
-#else
-		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
-#endif
 		return { "--no-pager",
 			"-c", "core.quotepath=off",
 			"-c", "core.fsmonitor=false",
-			"-c", no_hooks,
 			"-c", "diff.external=",
 			"-c", "log.showSignature=false",
 			"-c", "status.submoduleSummary=false",
 			"-c", "diff.ignoreSubmodules=all",
 			"--no-optional-locks", "--literal-pathspecs" };
+	}
+
+	// The name of a NAME=value entry, upper case on Windows (which ignores its case); empty without '='.
+	std::string variable_name(std::string_view entry)
+	{
+		const std::size_t equals = entry.find('=', 1);
+		if (equals == std::string_view::npos) return {};
+		std::string name(entry.substr(0, equals));
+		if (edt::k_native_env == edt::env_flavor::windows) {
+			for (char& c : name) {
+				if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+			}
+		}
+		return name;
+	}
+
+	// A program that would be asked for a password: an agent's git never starts one.
+	bool is_askpass_variable(std::string_view entry)
+	{
+		const std::string name = variable_name(entry);
+		return name == "GIT_ASKPASS" || name == "SSH_ASKPASS";
 	}
 
 	// What the environment of git must not carry from the editor's: they would point git at another repository or
@@ -98,12 +121,7 @@ namespace {
 	{
 		const std::size_t equals = entry.find('=', 1);
 		if (equals == std::string_view::npos) return false;
-		std::string name(entry.substr(0, equals));
-		if (edt::k_native_env == edt::env_flavor::windows) {
-			for (char& c : name) {
-				if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-			}
-		}
+		const std::string name = variable_name(entry);
 		for (const std::string_view unsafe : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
 				"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG_PARAMETERS",
 				"GIT_CONFIG_COUNT", "GIT_EXTERNAL_DIFF" }) {
@@ -173,6 +191,26 @@ namespace {
 		return out;
 	}
 
+	// The driver names of `git config -z --get-regexp ^filter\.`: "filter.<name>.<key>\n<value>\0" records, each name
+	// once, in order.
+	std::vector<std::string> drivers_of(std::string_view listing)
+	{
+		std::vector<std::string> drivers;
+		std::size_t start = 0;
+		while (start < listing.size()) {
+			const std::size_t end = std::min(listing.find('\0', start), listing.size());
+			const std::string_view record = listing.substr(start, end - start);
+			start = end + 1;
+			const std::string_view name = record.substr(0, record.find('\n'));
+			constexpr std::string_view prefix = "filter.";
+			const std::size_t last_dot = name.rfind('.');
+			if (!name.starts_with(prefix) || last_dot == std::string_view::npos || last_dot <= prefix.size()) continue;
+			std::string driver(name.substr(prefix.size(), last_dot - prefix.size()));
+			if (std::find(drivers.begin(), drivers.end(), driver) == drivers.end()) drivers.push_back(std::move(driver));
+		}
+		return drivers;
+	}
+
 	// Empties clean, smudge and process of every filter driver the repository's config (or any other) names, plus
 	// lfs, for the next call; config is read again per job, so an edit between two reads is seen. Nullopt when done;
 	// otherwise what to report instead of running git.
@@ -189,16 +227,7 @@ namespace {
 			return listed;
 		}
 		std::vector<std::string> drivers{ "lfs" };
-		std::size_t start = 0;
-		while (start < listed.out.size()) {
-			const std::size_t end = std::min(listed.out.find('\0', start), listed.out.size());
-			const std::string_view record = std::string_view(listed.out).substr(start, end - start);
-			start = end + 1;
-			const std::string_view name = record.substr(0, record.find('\n'));
-			constexpr std::string_view prefix = "filter.";
-			const std::size_t last_dot = name.rfind('.');
-			if (!name.starts_with(prefix) || last_dot == std::string_view::npos || last_dot <= prefix.size()) continue;
-			const std::string driver(name.substr(prefix.size(), last_dot - prefix.size()));
+		for (auto& driver : drivers_of(listed.out)) {
 			// "-c" splits at the first '=': such a name could not be overridden.
 			const bool expressible = std::none_of(driver.begin(), driver.end(),
 				[](char c) { return c == '=' || static_cast<unsigned char>(c) < 0x20; });
@@ -207,7 +236,7 @@ namespace {
 				listed.err = std::format("fatal: the filter driver '{}' cannot be switched off", edt::vcs::valid_utf8(driver));
 				return listed;
 			}
-			if (std::find(drivers.begin(), drivers.end(), driver) == drivers.end()) drivers.push_back(driver);
+			if (std::find(drivers.begin(), drivers.end(), driver) == drivers.end()) drivers.push_back(std::move(driver));
 		}
 		for (const auto& driver : drivers) {
 			for (const char* key : { "clean=", "smudge=", "process=", "required=false" }) {
@@ -218,12 +247,47 @@ namespace {
 		return std::nullopt;
 	}
 
-	// Every read: filters off first, then git.
+	// Every read: no hooks, filters off first, then git.
 	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
 		std::size_t cap = k_read_cap)
 	{
+#ifdef _WIN32
+		constexpr const char* no_hooks = "core.hooksPath=NUL";
+#else
+		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
+#endif
+		git.config_args.insert(git.config_args.begin(), { "-c", no_hooks });
 		if (auto refused = switch_off_filters(git, stop)) return std::move(*refused);
 		return run_git(git, args, stop, cap);
+	}
+
+	// Every write: an agent's that can run a filter driver is refused while the config (any scope) names one with a
+	// program, before git runs. Output is not capped: stopping a write half way is worse than its text.
+	git_output run_write(const git_context& git, const std::vector<std::string>& args, std::stop_token stop)
+	{
+		if (git.refuse_filters) {
+			git_output listed = run_git(git, { "config", "-z", "--get-regexp", "^filter\\..*\\.(clean|smudge|process)$" },
+				stop, k_read_cap);
+			// Exit code 1: no such key.
+			if (!listed.process.error.empty() || (listed.process.exit_code != 0 && listed.process.exit_code != 1)) return listed;
+			const auto drivers = drivers_of(listed.out);
+			if (!drivers.empty() || listed.truncated) {
+				std::string names;
+				for (const auto& driver : drivers) {
+					if (names.size() > 200) {
+						names += ", ...";
+						break;
+					}
+					if (!names.empty()) names += ", ";
+					names += edt::vcs::valid_utf8(driver);
+				}
+				listed.refused_code = "filters_require_opt_in";
+				listed.err = std::format("the repository's git config sets filter drivers ({}) that this write would run; "
+					"an agent's git write runs them only when filters are allowed for it", names.empty() ? "many" : names);
+				return listed;
+			}
+		}
+		return run_git(git, args, stop);
 	}
 
 	// A capped output ends inside a record: only the records up to the last `separator` are whole.
@@ -298,6 +362,82 @@ namespace {
 		return std::nullopt;
 	}
 
+	// failure_of for a write: some failures ("nothing to commit", a rejected push's summary) are told on stdout only.
+	std::optional<json::value> write_failure_of(git_output out, const ds::task_context& task)
+	{
+		if (trim(out.err).empty() && out.process.exit_code != 0) {
+			out.err = out.out.size() > k_stderr_cap ? out.out.substr(out.out.size() - k_stderr_cap) : out.out;
+		}
+		return failure_of(out, task);
+	}
+
+	// What a write that went well says: git's last lines.
+	json::value output_json(const git_output& out)
+	{
+		std::string text = out.out;
+		if (!text.empty() && !out.err.empty()) text.push_back('\n');
+		text += out.err;
+		return json::object{ { "output", json::string(stderr_tail(text)) } };
+	}
+
+	// A path, a ref or a remote as an argument: git must never read it as an option, and a NUL would cut it short.
+	std::optional<std::string> argument_error(std::string_view what, std::string_view value)
+	{
+		if (value.empty()) return std::format("{} must not be empty", what);
+		if (value.front() == '-') return std::format("{} must not start with '-'", what);
+		if (value.find('\0') != std::string_view::npos) return std::format("{} must not hold a NUL", what);
+		return std::nullopt;
+	}
+
+	// A remote is the name of a configured one: no URL (no ':'), so the transport is never one the call picks.
+	std::optional<std::string> remote_error(std::string_view remote)
+	{
+		if (auto error = argument_error("remote", remote)) return error;
+		if (remote.find(':') != std::string_view::npos) return std::string("remote must be the name of a configured remote, not a URL");
+		return std::nullopt;
+	}
+
+	// A branch of pull or push: a plain name, never a refspec that forces (+x) or names another destination (a:b).
+	std::optional<std::string> branch_error(std::string_view branch)
+	{
+		if (!branch.empty() && branch.front() == '+') return std::string("branch must not start with '+' (no force)");
+		if (auto error = argument_error("branch", branch)) return error;
+		if (branch.find(':') != std::string_view::npos) return std::string("branch must be a branch name, not a refspec with ':'");
+		return std::nullopt;
+	}
+
+	std::optional<std::string> paths_error(const std::vector<std::string>& paths)
+	{
+		if (paths.empty()) return std::string("paths must not be empty");
+		std::size_t bytes = 0;
+		for (const auto& path : paths) {
+			if (path.empty()) return std::string("a path must not be empty");
+			if (path.find('\0') != std::string::npos) return std::string("a path must not hold a NUL");
+			bytes += path.size() + 1;
+		}
+		if (bytes > edt::vcs_service::k_max_paths_bytes) {
+			return std::format("the paths take more than {} bytes: give fewer per call", edt::vcs_service::k_max_paths_bytes);
+		}
+		return std::nullopt;
+	}
+
+	// Deletes the commit message file however the job ends.
+	struct remove_on_exit
+	{
+		fs::path path;
+
+		explicit remove_on_exit(fs::path file) : path(std::move(file)) {}
+		remove_on_exit(const remove_on_exit&) = delete;
+		remove_on_exit& operator=(const remove_on_exit&) = delete;
+		~remove_on_exit()
+		{
+			std::error_code ec;
+			fs::remove(path, ec);
+		}
+	};
+
+	constexpr std::string_view k_no_hooks_dir = "no_hooks";
+
 	// A probe on the main thread: git is stopped after `timeout`. `timed_out` tells whether that happened.
 	git_output run_probe(const git_context& git, const std::vector<std::string>& args, std::chrono::milliseconds timeout,
 		bool& timed_out)
@@ -339,13 +479,25 @@ namespace {
 }
 
 template<class F>
-edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work)
+edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, std::optional<write_mode> write)
 {
 	// Only "no git" and "no project" refuse at once; whatever git itself reports (not a repository, ...) is the job's
 	// result, so every command answers the same way.
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
-	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run, {} };
+	git_context context{ m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run, {}, false };
+	if (write && write->caller == cmd::origin_kind::agent) {
+		std::erase_if(context.environment, [](const std::string& entry) { return is_askpass_variable(entry); });
+		// The environment's GIT_SSH_COMMAND (always set) wins over core.sshCommand anyway; this states it.
+		const std::string ssh = variable_of(context.environment, "GIT_SSH_COMMAND").value_or("ssh -oBatchMode=yes");
+		context.config_args = { "-c", "core.askPass=", "-c", "core.sshCommand=" + ssh };
+		if (!m_write_permissions.allow_hooks) {
+			if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
+			context.config_args.emplace_back("-c");
+			context.config_args.push_back("core.hooksPath=" + utf8_of(m_scratch.root / k_no_hooks_dir));
+		}
+		context.refuse_filters = write->runs_filters && !m_write_permissions.allow_filters;
+	}
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
 			return work(context, task);
@@ -376,7 +528,7 @@ edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 		return;
 	}
 	bool timed_out = false;
-	const git_output version = run_probe({ git, m_environment, {}, m_options.run, {} }, { "--version" }, m_options.probe_timeout,
+	const git_output version = run_probe({ git, m_environment, {}, m_options.run, {}, false }, { "--version" }, m_options.probe_timeout,
 		timed_out);
 	if (timed_out) {
 		set_probe_timeout();
@@ -410,7 +562,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 		return;
 	}
 	bool timed_out = false;
-	const git_output top = run_probe({ m_state.git, m_environment, *project, m_options.run, {} }, { "rev-parse", "--show-toplevel" },
+	const git_output top = run_probe({ m_state.git, m_environment, *project, m_options.run, {}, false }, { "rev-parse", "--show-toplevel" },
 		m_options.probe_timeout, timed_out);
 	if (timed_out) {
 		set_probe_timeout();
@@ -546,6 +698,188 @@ edt::vcs_service::started edt::vcs_service::start_branches()
 	});
 }
 
+edt::vcs_service::scratch_dir::~scratch_dir()
+{
+	if (root.empty()) return;
+	std::error_code ec;
+	fs::remove_all(root, ec);
+}
+
+std::optional<std::string> edt::vcs_service::ensure_scratch()
+{
+	std::error_code ec;
+	if (!m_scratch.root.empty() && fs::is_directory(m_scratch.root, ec)) {
+		const fs::path hooks = m_scratch.root / k_no_hooks_dir;
+		if (fs::is_directory(hooks, ec) && fs::is_empty(hooks, ec) && !ec) return std::nullopt;
+		// Something put a file in it (or took it away): an empty one again.
+		fs::remove_all(hooks, ec);
+		ec.clear();
+		if (fs::create_directory(hooks, ec) && fs::is_empty(hooks, ec) && !ec) return std::nullopt;
+		return std::format("cannot make the empty hooks folder '{}': {}", utf8_of(hooks), ec ? ec.message() : "not empty");
+	}
+	const fs::path temp = fs::temp_directory_path(ec);
+	if (ec) return std::format("no temp folder for git's files: {}", ec.message());
+	// Unguessable, and made by this call (create_directory fails on one that exists): nobody else put hooks in it.
+	std::random_device entropy;
+	for (int attempt = 0; attempt < 16; ++attempt) {
+		const std::uint64_t tag = (std::uint64_t{ entropy() } << 32) ^ std::uint64_t{ entropy() }
+			^ static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+		const fs::path root = temp / std::format("snk_editor_vcs_{:016x}", tag);
+		if (!fs::create_directory(root, ec)) {
+			if (ec) return std::format("cannot make a folder for git's files in '{}': {}", utf8_of(temp), ec.message());
+			continue;
+		}
+#ifndef _WIN32
+		fs::permissions(root, fs::perms::owner_all, fs::perm_options::replace, ec);
+#endif
+		if (!ec) static_cast<void>(fs::create_directory(root / k_no_hooks_dir, ec));
+		if (ec) {
+			const std::string message = ec.message();
+			fs::remove_all(root, ec);
+			return std::format("cannot prepare the folder '{}' for git's files: {}", utf8_of(root), message);
+		}
+		m_scratch.root = root;
+		return std::nullopt;
+	}
+	return std::format("cannot make a folder for git's files in '{}'", utf8_of(temp));
+}
+
+void edt::vcs_service::set_write_permissions(vcs_write_permissions permissions)
+{
+	m_write_permissions = permissions;
+}
+
+edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::string>& paths, cmd::origin_kind caller)
+{
+	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	std::vector<std::string> args{ "add", "--" };
+	args.insert(args.end(), paths.begin(), paths.end());
+	return run_job("git add", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, true });
+}
+
+edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std::string>& paths, cmd::origin_kind caller)
+{
+	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	// reset (not restore --staged): it also unstages on a branch without commits.
+	std::vector<std::string> args{ "reset", "-q", "--" };
+	args.insert(args.end(), paths.begin(), paths.end());
+	return run_job("git reset", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, true });
+}
+
+edt::vcs_service::started edt::vcs_service::start_commit(const std::string& message, cmd::origin_kind caller)
+{
+	if (trim(message).empty()) return { 0, cmd::codes::invalid_args, "message must not be empty" };
+	if (message.find('\0') != std::string::npos) return { 0, cmd::codes::invalid_args, "message must not hold a NUL" };
+	// The runner has no stdin: the message goes through a file only this editor writes to.
+	if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
+	const fs::path file = m_scratch.root / std::format("commit_message_{}.txt", ++m_message_count);
+	return run_job("git commit", [file, message](const git_context& git, ds::task_context& task) -> json::value {
+		const remove_on_exit cleanup{ file };
+		{
+			std::ofstream out(file, std::ios::binary | std::ios::trunc);
+			out.write(message.data(), static_cast<std::streamsize>(message.size()));
+			out.close();
+			if (!out) {
+				return error_json("git_failed", std::format("cannot write the commit message to '{}'", utf8_of(file)), {}, -1);
+			}
+		}
+		const git_output out = run_write(git, { "commit", "-q", "-F", utf8_of(file) }, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		const git_output head = run_git(git, { "rev-parse", "--verify", "HEAD" }, task.stop);
+		if (auto failure = failure_of(head, task)) return std::move(*failure);
+		return json::object{ { "hash", json::string(vcs::valid_utf8(trim(head.out))) } };
+	}, write_mode{ caller, true });
+}
+
+edt::vcs_service::started edt::vcs_service::start_branch_create(const std::string& name, const std::string& from,
+	cmd::origin_kind caller)
+{
+	if (auto error = argument_error("name", name)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (!from.empty()) {
+		if (auto error = argument_error("from", from)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
+	std::vector<std::string> args{ "branch", "--end-of-options", name };
+	if (!from.empty()) args.push_back(from);
+	return run_job("git branch", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, false });
+}
+
+edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& ref, cmd::origin_kind caller)
+{
+	if (auto error = argument_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
+	std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
+	return run_job("git checkout", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, true });
+}
+
+edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remote, cmd::origin_kind caller)
+{
+	if (!remote.empty()) {
+		if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
+	std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
+	if (!remote.empty()) args.push_back(remote);
+	return run_job("git fetch", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, false });
+}
+
+edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote, const std::string& branch,
+	cmd::origin_kind caller)
+{
+	if (!branch.empty() && remote.empty()) return { 0, cmd::codes::invalid_args, "branch needs a remote" };
+	if (!remote.empty()) {
+		if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
+	if (!branch.empty()) {
+		if (auto error = branch_error(branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	}
+	// Fast-forward only, never a rebase (whatever pull.rebase says) nor a merge commit.
+	std::vector<std::string> args{ "pull", "--ff-only", "--no-rebase", "--no-stat", "--no-recurse-submodules" };
+	if (!remote.empty()) args.push_back(remote);
+	if (!branch.empty()) args.push_back(branch);
+	return run_job("git pull", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, true });
+}
+
+edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote, const std::string& branch,
+	bool set_upstream, cmd::origin_kind caller)
+{
+	if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (auto error = branch_error(branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	// Never --force, --force-with-lease, --mirror or a +refspec: a push that is not a fast-forward is rejected.
+	std::vector<std::string> args{ "push", "--recurse-submodules=no" };
+	if (set_upstream) args.emplace_back("--set-upstream");
+	args.emplace_back("--end-of-options");
+	args.push_back(remote);
+	args.push_back(branch);
+	return run_job("git push", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
+		const git_output out = run_write(git, args, task.stop);
+		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
+		return output_json(out);
+	}, write_mode{ caller, false });
+}
+
 namespace {
 	constexpr const char* JOB_RESULT_SCHEMA = R"({
 		"type": "object",
@@ -569,6 +903,40 @@ namespace {
 	void keep(std::vector<edt::registration>& out, edt::registration added)
 	{
 		if (added.active()) out.push_back(std::move(added));
+	}
+
+	std::vector<std::string> paths_arg(const json::object& args)
+	{
+		std::vector<std::string> paths;
+		if (const json::value* value = args.if_contains("paths")) {
+			paths.reserve(value->as_array().size());
+			for (const auto& path : value->as_array()) paths.emplace_back(path.as_string());
+		}
+		return paths;
+	}
+
+	constexpr const char* PATHS_ARGS_SCHEMA = R"({
+		"type": "object",
+		"properties": {
+			"paths": { "type": "array", "items": { "type": "string", "minLength": 1 },
+				"description": "Relative to the repository root, at least one" }
+		},
+		"required": ["paths"],
+		"additionalProperties": false
+	})";
+
+	// A git write: mutates, and no agent category yet.
+	cmd::command_desc write_command(std::string id, std::string summary, const char* args_schema)
+	{
+		cmd::command_desc desc;
+		desc.id = std::move(id);
+		desc.summary = std::move(summary);
+		desc.args_schema = json::parse(args_schema);
+		desc.result_schema = json::parse(JOB_RESULT_SCHEMA);
+		desc.mutates = true;
+		// TODO(#455): vcs_* categories
+		desc.category = cmd::agent_category::unset;
+		return desc;
 	}
 }
 
@@ -666,5 +1034,105 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	branches.result_schema = json::parse(JOB_RESULT_SCHEMA);
 	branches.invoke = [&service](const cmd::call&) { return job_answer(service.start_branches()); };
 	keep(out, commands.add(std::move(branches)));
+
+	cmd::command_desc stage = write_command("vcs.stage", "Start staging paths (git add); the result arrives in job.get",
+		PATHS_ARGS_SCHEMA);
+	stage.invoke = [&service](const cmd::call& request) {
+		return job_answer(service.start_stage(paths_arg(request.args.as_object()), request.from.kind));
+	};
+	keep(out, commands.add(std::move(stage)));
+
+	cmd::command_desc unstage = write_command("vcs.unstage", "Start unstaging paths (git reset -- paths); the work tree "
+		"keeps its changes; the result arrives in job.get", PATHS_ARGS_SCHEMA);
+	unstage.invoke = [&service](const cmd::call& request) {
+		return job_answer(service.start_unstage(paths_arg(request.args.as_object()), request.from.kind));
+	};
+	keep(out, commands.add(std::move(unstage)));
+
+	cmd::command_desc commit = write_command("vcs.commit", "Start committing what is staged with this message; the "
+		"result ({hash}) arrives in job.get", R"({
+		"type": "object",
+		"properties": { "message": { "type": "string", "minLength": 1 } },
+		"required": ["message"],
+		"additionalProperties": false
+	})");
+	commit.invoke = [&service](const cmd::call& request) {
+		return job_answer(service.start_commit(string_arg(request.args.as_object(), "message"), request.from.kind));
+	};
+	keep(out, commands.add(std::move(commit)));
+
+	cmd::command_desc branch_create = write_command("vcs.branch.create", "Start creating a branch at a ref (default HEAD) "
+		"without switching to it; the result arrives in job.get", R"({
+		"type": "object",
+		"properties": {
+			"name": { "type": "string", "minLength": 1 },
+			"from": { "type": "string", "minLength": 1, "description": "The commit or branch it starts at; default HEAD" }
+		},
+		"required": ["name"],
+		"additionalProperties": false
+	})");
+	branch_create.invoke = [&service](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		return job_answer(service.start_branch_create(string_arg(args, "name"), string_arg(args, "from"), request.from.kind));
+	};
+	keep(out, commands.add(std::move(branch_create)));
+
+	cmd::command_desc checkout = write_command("vcs.checkout", "Start switching the work tree to a branch or commit "
+		"(never forced: local changes it would overwrite stop it); the result arrives in job.get", R"({
+		"type": "object",
+		"properties": { "ref": { "type": "string", "minLength": 1 } },
+		"required": ["ref"],
+		"additionalProperties": false
+	})");
+	checkout.invoke = [&service](const cmd::call& request) {
+		return job_answer(service.start_checkout(string_arg(request.args.as_object(), "ref"), request.from.kind));
+	};
+	keep(out, commands.add(std::move(checkout)));
+
+	cmd::command_desc fetch = write_command("vcs.fetch", "Start fetching from a remote (default: the branch's, else "
+		"origin); the result arrives in job.get", R"({
+		"type": "object",
+		"properties": { "remote": { "type": "string", "minLength": 1, "description": "A configured remote's name" } },
+		"additionalProperties": false
+	})");
+	fetch.invoke = [&service](const cmd::call& request) {
+		return job_answer(service.start_fetch(string_arg(request.args.as_object(), "remote"), request.from.kind));
+	};
+	keep(out, commands.add(std::move(fetch)));
+
+	cmd::command_desc pull = write_command("vcs.pull", "Start pulling, fast-forward only (no merge commit, no rebase); "
+		"the result arrives in job.get", R"({
+		"type": "object",
+		"properties": {
+			"remote": { "type": "string", "minLength": 1, "description": "A configured remote's name" },
+			"branch": { "type": "string", "minLength": 1, "description": "The remote's branch; needs remote" }
+		},
+		"additionalProperties": false
+	})");
+	pull.invoke = [&service](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		return job_answer(service.start_pull(string_arg(args, "remote"), string_arg(args, "branch"), request.from.kind));
+	};
+	keep(out, commands.add(std::move(pull)));
+
+	cmd::command_desc push = write_command("vcs.push", "Start pushing a branch to a remote (never forced: a push that "
+		"is not a fast-forward is rejected); the result arrives in job.get", R"({
+		"type": "object",
+		"properties": {
+			"remote": { "type": "string", "minLength": 1, "description": "A configured remote's name" },
+			"branch": { "type": "string", "minLength": 1, "description": "A branch name: no leading '+' or '-', no ':'" },
+			"set_upstream": { "type": "boolean" }
+		},
+		"required": ["remote", "branch"],
+		"additionalProperties": false
+	})");
+	push.invoke = [&service](const cmd::call& request) {
+		const json::object& args = request.args.as_object();
+		bool set_upstream = false;
+		if (const json::value* value = args.if_contains("set_upstream")) set_upstream = value->as_bool();
+		return job_answer(service.start_push(string_arg(args, "remote"), string_arg(args, "branch"), set_upstream,
+			request.from.kind));
+	};
+	keep(out, commands.add(std::move(push)));
 	return out;
 }
