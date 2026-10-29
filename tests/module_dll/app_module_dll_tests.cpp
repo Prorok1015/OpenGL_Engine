@@ -5,6 +5,7 @@
 #include <snk/application/app_module_source.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/core/core_project_modules.h>
+#include <snk/platform/plt_process.h>
 #include <snk/desc/desc_base.hpp>
 #include <snk/project/prj_project.h>
 #include <snk/resource/resources/res_resource_text.h>
@@ -12,6 +13,7 @@
 #include <entt/entt.hpp>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -38,6 +40,9 @@
 namespace {
 
 const std::filesystem::path g_module_path{ SNK_TEST_GAME_DLL_PATH };
+const std::filesystem::path g_v2_path{ SNK_TEST_GAME_DLL_V2_PATH };
+const std::filesystem::path g_failing_path{ SNK_TEST_GAME_DLL_FAILING_PATH };
+const std::filesystem::path g_bad_api_path{ SNK_TEST_GAME_DLL_BAD_API_PATH };
 
 std::unique_ptr<app::modules::native_library_source> game_library()
 {
@@ -75,6 +80,66 @@ std::string project_library_name(std::string_view module)
 constexpr const char* DLL_LEVEL = R"({"__type":"level_desc","name":"lv","worlds":[
 	{"__type":"world_desc","name":"w0","systems":["dll::move"],
 	 "components":{"g":{"__type":"dll_desc","value":2}}}]})";
+
+}
+
+namespace {
+
+// A project in a temporary folder whose manifest names test_game_dll, with a build of it in build/bin (#435).
+struct dll_project {
+	test_util::temp_dir dir;
+	std::filesystem::path game;
+	std::filesystem::path built;
+
+	dll_project(std::string_view name, ds::app_data_storage& storage)
+		: dir(name)
+	{
+		namespace fs = std::filesystem;
+		fs::create_directories(dir.path() / "game" / "build" / "bin");
+		game = fs::canonical(dir.path() / "game");
+		built = game / "build" / "bin" / project_library_name(dll_game::module_name);
+		prj::project_context project;
+		project.root = game;
+		project.data.name = "Game";
+		project.data.modules.emplace_back();
+		project.data.modules.back().name = std::string{ dll_game::module_name };
+		storage.construct<prj::project_context>(std::move(project));
+	}
+
+	// What a build of the module leaves in build/bin.
+	void build(const std::filesystem::path& library) const
+	{
+		std::filesystem::copy_file(library, built, std::filesystem::copy_options::overwrite_existing);
+		BOOST_REQUIRE_MESSAGE(std::filesystem::is_regular_file(built), "not at the lookup path: " << built.string());
+	}
+
+	// The folder of this process's n-th copy, and the module in it.
+	std::filesystem::path copy_folder(int n) const
+	{
+		return game / ".cache" / "modules" / std::format("{}-{}", platform::current_process_id(), n);
+	}
+	std::filesystem::path copy(int n) const { return copy_folder(n) / project_library_name(dll_game::module_name); }
+};
+
+// The level of DLL_LEVEL after one update: 2 plus the step of the build that runs.
+int moved_value(test_util::module_env& env)
+{
+	auto& contexts = env.contexts();
+	if (!contexts.load_level(env.put("lv.desc", DLL_LEVEL))) {
+		return -1;
+	}
+	env.pump();
+	auto* world = contexts.level_set().find("w0");
+	if (!world) {
+		return -1;
+	}
+	auto view = world->state().view<dll_game::dll_component>();
+	if (view.size() != 1u) {
+		return -1;
+	}
+	contexts.update(std::chrono::duration<float>(0.016f));
+	return view.get<dll_game::dll_component>(view.front()).value;
+}
 
 }
 
@@ -235,7 +300,8 @@ BOOST_AUTO_TEST_CASE(a_project_module_runs_from_a_copy_and_its_build_output_stay
 	BOOST_REQUIRE(layer != nullptr);
 	BOOST_TEST(layer->descs().is_registered(dll_game::desc_type));
 
-	const fs::path copy = game / ".cache" / "modules" / (std::string{ dll_game::module_name } + ".0" + g_module_path.extension().string());
+	const fs::path copy = game / ".cache" / "modules" / std::format("{}-0", platform::current_process_id())
+		/ project_library_name(dll_game::module_name);
 	BOOST_TEST(resident(copy));
 	BOOST_TEST(!resident(built));
 	{
@@ -273,9 +339,84 @@ BOOST_AUTO_TEST_CASE(a_project_library_that_is_another_module_is_refused_and_its
 	BOOST_TEST(report.refused == std::vector<std::string>{ "other_game" });
 	BOOST_TEST(!loader.state(dll_game::module_name).has_value());
 	BOOST_TEST(root.size() == root_size);
-	const fs::path copy = game / ".cache" / "modules" / ("other_game.0" + g_module_path.extension().string());
+	const fs::path copy = game / ".cache" / "modules" / std::format("{}-0", platform::current_process_id());
 	// Windows does not delete a mapped image: gone means released too.
 	BOOST_TEST(!fs::exists(copy));
+	root.destruct<prj::project_context>();
+}
+
+BOOST_AUTO_TEST_CASE(a_project_module_reloads_from_a_new_build_and_keeps_the_previous_copy)
+{
+	namespace fs = std::filesystem;
+	dll_project project("dll_reload", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, core::project_modules_options{});
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+	BOOST_TEST(moved_value(*this) == 3);
+
+	project.build(g_v2_path);
+	// What goes with the module into its copy: its symbols and the libraries next to it.
+	const fs::path symbols = fs::path{ project_library_name(dll_game::module_name) }.replace_extension(".pdb");
+	const std::string sibling = project_library_name("helper");
+	{
+		std::ofstream(project.built.parent_path() / symbols) << "symbols";
+		std::ofstream(project.built.parent_path() / sibling) << "a library next to the module";
+	}
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_CHECK_MESSAGE(report.status == core::reload_status::reloaded, report.message);
+	BOOST_TEST(resident(project.copy(1)));
+	BOOST_TEST(!resident(project.copy(0)));
+	BOOST_TEST(fs::is_directory(project.copy_folder(0))); // the previous copy stays for a rollback
+#if defined(_WIN32)
+	BOOST_TEST(fs::exists(project.copy_folder(1) / symbols));
+#endif
+	BOOST_TEST(fs::exists(project.copy_folder(1) / sibling));
+	BOOST_TEST(moved_value(*this) == 4);
+	{
+		std::ofstream rebuilt(project.built, std::ios::binary | std::ios::trunc);
+		rebuilt << "rebuilt";
+		BOOST_TEST(rebuilt.good());
+	}
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+BOOST_AUTO_TEST_CASE(a_build_of_another_api_is_refused_and_the_running_module_stays)
+{
+	dll_project project("dll_reload_bad_api", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, core::project_modules_options{});
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	project.build(g_bad_api_path);
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_TEST((report.status == core::reload_status::refused));
+	BOOST_CHECK_MESSAGE(report.message.find("api") != std::string::npos, report.message);
+	BOOST_TEST(resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
+	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
+	root.destruct<prj::project_context>();
+}
+
+BOOST_AUTO_TEST_CASE(a_build_that_fails_to_register_rolls_back_to_the_previous_copy)
+{
+	dll_project project("dll_reload_failing", root);
+	project.build(g_module_path);
+	core::project_module_host host(loader, root, core::project_modules_options{});
+	BOOST_REQUIRE(host.load_all().loaded.size() == 1u);
+
+	project.build(g_failing_path);
+	const auto report = host.reload(std::string{ dll_game::module_name });
+
+	BOOST_CHECK_MESSAGE(report.status == core::reload_status::rolled_back, report.message);
+	BOOST_CHECK_MESSAGE(report.message.find("fails to register") != std::string::npos, report.message);
+	BOOST_TEST(resident(project.copy(0)));
+	BOOST_TEST(!std::filesystem::exists(project.copy_folder(1)));
+	BOOST_TEST(moved_value(*this) == 3);
+	loader.unload(dll_game::module_name, root);
 	root.destruct<prj::project_context>();
 }
 

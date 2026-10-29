@@ -12,6 +12,7 @@
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
 #include "edt_level_controller.h"
+#include "edt_module_swap_gate.h"
 #include "edt_async_import_task.h"
 #include <snk/common/ds/ds_store.hpp>
 #include <snk/common/ds/ds_task_system.hpp>
@@ -33,6 +34,7 @@ namespace edt {
 	class agent_server;
 	class file_menu;
 	class game_builder;
+	class game_reloader;
 	class editor_context;
 	class editor_layer;
 	class model_importer;
@@ -144,7 +146,9 @@ namespace edt {
 		res::res_handle<scn::level_desc> m_loading_level_handle;
 		// A game module loaded or unloaded: the editor lets go of the old game layer, then rebuilds its level in the
 		// new one (level_controller::detach_from_game_layer / attach_to_game_layer).
-		void on_game_layer_change(bool before);
+		void follow_game_layer_change(bool before);
+		// Changes of the game layer reach follow_game_layer_change through it; a reload of the game module holds them (#435).
+		module_swap_gate m_swap_gate{ [this](bool before) { follow_game_layer_change(before); } };
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
@@ -161,6 +165,7 @@ namespace edt {
 		std::unique_ptr<edt::file_menu> m_file_menu;
 		// Build > Build Game; after the file menu, so it is destroyed first (its job is stopped in the destructor).
 		std::unique_ptr<edt::game_builder> m_game_builder;
+		std::unique_ptr<edt::game_reloader> m_game_reloader;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

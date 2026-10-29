@@ -749,3 +749,31 @@ platform::process_result platform::run_process(const fs::path& program, const st
 }
 
 #endif
+
+std::int64_t platform::current_process_id()
+{
+#ifdef _WIN32
+	return static_cast<std::int64_t>(::GetCurrentProcessId());
+#else
+	return static_cast<std::int64_t>(::getpid());
+#endif
+}
+
+bool platform::process_is_running(std::int64_t pid)
+{
+	if (pid <= 0) {
+		return false;
+	}
+#ifdef _WIN32
+	const HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+	if (process == nullptr) {
+		return ::GetLastError() == ERROR_ACCESS_DENIED;
+	}
+	DWORD code = 0;
+	const bool running = ::GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+	::CloseHandle(process);
+	return running;
+#else
+	return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+#endif
+}

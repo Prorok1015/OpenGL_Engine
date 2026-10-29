@@ -16,6 +16,7 @@
 #include <boost/json.hpp>
 #include <entt/entt.hpp>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -44,10 +45,23 @@ public:
 	void serialize(boost::json::object& obj) const override { obj["value"] = value; }
 };
 
+// The builds a reload swaps between (#435, CMakeLists.txt): TEST_DLL_V2 moves by 2, TEST_DLL_FAILING fails to register,
+// TEST_DLL_BAD_API reports the next major API version.
+#if defined(TEST_DLL_V2)
+constexpr int k_step = 2;
+#else
+constexpr int k_step = 1;
+#endif
+#if defined(TEST_DLL_FAILING)
+constexpr bool k_fails = true;
+#else
+constexpr bool k_fails = false;
+#endif
+
 void dll_move(entt::view<entt::get_t<dll_game::dll_component>> view)
 {
 	for (auto&& [entity, component] : view.each()) {
-		++component.value;
+		component.value += k_step;
 	}
 }
 
@@ -59,6 +73,26 @@ public:
 
 protected:
 	void register_content(scn::scene_layer& layer, ds::app_data_storage& data) override
+	{
+		if constexpr (k_fails) {
+			static_cast<void>(layer);
+			static_cast<void>(data);
+			throw std::runtime_error("this build of test_game_dll fails to register");
+		} else {
+			register_everything(layer, data);
+		}
+	}
+
+	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override
+	{
+		// Also after a registration that failed before it was made.
+		if (data.has_value<dll_service>()) {
+			data.destruct<dll_service>();
+		}
+	}
+
+private:
+	static void register_everything(scn::scene_layer& layer, ds::app_data_storage& data)
 	{
 		layer.descs().register_component_desc<dll_desc>(dll_game::desc_type);
 		layer.assembler().register_desc_spawner(dll_game::desc_type, [](entt::registry& reg, entt::entity e, const desc::desc_base& base, const std::string_view) {
@@ -86,13 +120,25 @@ protected:
 		data.require<gs::module_context>().run(ds::lane::compute, ds::task_desc{ .name = "dll.task" }, [frames](ds::task_context&) {})
 			.then_main(layer.tasks(), [frames](ds::task_result<void>&) { ++*frames; });
 	}
-
-	void shutdown_content(scn::scene_layer&, ds::app_data_storage& data) override
-	{
-		data.destruct<dll_service>();
-	}
 };
 
 }
 
+#if defined(TEST_DLL_BAD_API)
+extern "C" {
+SNK_MODULE_EXPORT std::uint32_t snk_module_api_version() { return SNK_MODULE_API_VERSION + 0x0001'0000u; }
+SNK_MODULE_EXPORT const struct snk_module_build_info* snk_module_build_info()
+{
+	static const struct snk_module_build_info info = [] {
+		auto built = ::app::modules::make_build_info();
+		built.api = SNK_MODULE_API_VERSION + 0x0001'0000u;
+		return built;
+	}();
+	return &info;
+}
+SNK_MODULE_EXPORT ::app::modules::module_interface* snk_create_module() { return new test_game_dll_module(); }
+SNK_MODULE_EXPORT void snk_destroy_module(::app::modules::module_interface* module) { delete module; }
+}
+#else
 SNK_DECLARE_MODULE(test_game_dll_module)
+#endif
