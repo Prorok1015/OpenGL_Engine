@@ -1,5 +1,4 @@
 #include "edt_agent_policy.h"
-#include "edt_agent_confirmations.h"
 #include <snk/common/engine_assert.h>
 #include <snk/common/fs_paths.h>
 #include <snk/common/logger/engine_log.h>
@@ -407,16 +406,12 @@ namespace edt
 		return save(m_personal, layer, write);
 	}
 
-	cmd::policy_decision agent_policy_gate::decide(const cmd::command_desc& command, const cmd::call& request)
+	cmd::policy_decision agent_policy_gate::decide(const cmd::command_desc& command, const cmd::call&)
 	{
 		const effective_policy decision = m_policy.effective(command);
 		switch (decision.mode) {
 		case cmd::policy_mode::allow: return cmd::policy_decision::allow();
-		case cmd::policy_mode::ask:
-			if (m_grants != nullptr && !request.from.session.empty() && m_grants->has(request.from.session, command.category)) {
-				return cmd::policy_decision::allow();
-			}
-			return cmd::policy_decision::ask(command.summary);
+		case cmd::policy_mode::ask: return cmd::policy_decision::ask(command.summary);
 		case cmd::policy_mode::deny: return cmd::policy_decision::deny(decision.reason);
 		}
 		return cmd::policy_decision::deny("the policy cannot be read");
