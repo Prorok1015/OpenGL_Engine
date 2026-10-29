@@ -67,10 +67,10 @@ private:
 	bool m_opened = false;
 };
 
-namespace {
-
-// edt_editor_init.cpp
+// edt_editor_init.cpp; must stay outside the anonymous namespace to link to the global definition.
 CFG_VAR_EXT_BOOL(cfg_edt_headless);
+
+namespace {
 
 using dialog_id = edt::dialog_service::dialog_id;
 using request = edt::dialog_service::request;
