@@ -548,7 +548,9 @@ namespace {
 			}
 		}
 		if (!applied.empty()) return refuse(std::format("the filter drivers ({}) apply to files this write touches", names_of(applied)));
-		if (!git.attr_source) {
+		// Every git: an untracked .gitattributes plus a tracked one edited in the work tree can hide a driver from all
+		// three views above.
+		{
 			const auto differ = attributes_differ_from_index(git, list->files, stop);
 			if (!differ) return refuse(std::format("filter drivers ({}) are configured and git could not compare the "
 				"work tree's .gitattributes with the index", names));
@@ -722,12 +724,30 @@ namespace {
 		return section == "filter";
 	}
 
+	// git_config_bool: a bare key is true; true/yes/on and false/no/off without case; an empty value is false; an integer
+	// (with a k, m or g suffix) is true unless 0. What git would reject as no boolean counts as true here.
+	bool config_bool(std::string_view value, bool has_value)
+	{
+		if (!has_value) return true;
+		const std::string lower = lower_case(value);
+		if (lower.empty() || lower == "false" || lower == "no" || lower == "off") return false;
+		if (lower == "true" || lower == "yes" || lower == "on") return true;
+		std::string_view digits = lower;
+		if (!digits.empty() && (digits.back() == 'k' || digits.back() == 'm' || digits.back() == 'g')) digits.remove_suffix(1);
+		std::int64_t number = 0;
+		const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), number);
+		if (error == std::errc{} && end == digits.data() + digits.size()) return number != 0;
+		return true;
+	}
+
 	// A guarded call without allow_any_repo_config: refused (unsafe_repository) when the repository's own config
 	// (.git/config and the worktree's config.worktree; includes not followed, include.* itself is no allowed key) sets
 	// a key outside the allowlist. Read before anything else of the call.
 	std::optional<git_output> config_refusal(const git_context& git, std::stop_token stop)
 	{
-		if (!git.check_repo_config && !git.refuse_partial_clone) return std::nullopt;
+		// Read when the allowlist applies, and also under allow_any_repo_config for what no opt-in but its own lifts:
+		// a partial clone before git 2.45, config-based hooks (hook.*) without allow_hooks.
+		if (!git.guarded || (!git.check_repo_config && !git.refuse_partial_clone && git.allow_hooks)) return std::nullopt;
 		git_output local = run_git(git, { "config", "--local", "--list", "-z", "--show-origin" }, stop, k_read_cap);
 		if (listing_failed(local)) return local;
 		if (local.truncated) return refused("unsafe_repository", "the repository's git config is too large to check");
@@ -756,7 +776,22 @@ namespace {
 			for (auto& entry : scoped_entries_of(worktree.out)) entries.push_back(std::move(entry));
 		}
 		for (const auto& entry : entries) {
-			if (git.refuse_partial_clone && lower_case(entry.key) == "extensions.partialclone") {
+			const std::string lower = lower_case(entry.key);
+			// hook.<name>.command / .event run whatever core.hooksPath says.
+			if (!git.allow_hooks && lower.starts_with("hook.")) {
+				return refused("unsafe_repository", std::format("the repository's git config sets '{}' ({}): a config-based "
+					"hook, which a git write not made by a person runs only when hooks are allowed for it",
+					edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
+			}
+			// git 2.43 `clone --filter` writes only remote.<name>.promisor (and partialclonefilter), no extension.
+			const bool promisor = lower.starts_with("remote.") && lower.ends_with(".promisor")
+				&& config_bool(entry.value, entry.has_value);
+			if (git.refuse_partial_clone && promisor) {
+				return refused("unsafe_repository", std::format("the repository is a partial clone ('{}' is true, {}): lazy "
+					"fetch can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
+					"project allows any repository config", edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
+			}
+			if (git.refuse_partial_clone && lower == "extensions.partialclone") {
 				return refused("unsafe_repository", std::format("the repository is a partial clone ({}): lazy fetch "
 					"can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
 					"project allows any repository config", edt::vcs::valid_utf8(entry.scope)));
@@ -997,6 +1032,8 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 			// for the local transport), git://, ext:: and <helper>:: run programs or go unencrypted.
 			"-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.ssh.allow=always",
 			"-c", "protocol.ext.allow=never",
+			// A repository's protocol.file.allow beats protocol.allow; the specific -c beats the repository's.
+			"-c", "protocol.file.allow=never", "-c", "protocol.git.allow=never",
 			"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "merge.verifySignatures=false",
 			"-c", "gpg.program=", "-c", "gpg.openpgp.program=", "-c", "gpg.x509.program=", "-c", "gpg.ssh.program=",
 			"-c", "gpg.ssh.defaultKeyCommand=",
@@ -1006,8 +1043,8 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		// The first core.gitProxy git reads wins, so the repository's would come before the -c one; an empty
 		// GIT_PROXY_COMMAND is read before any config and means no proxy.
 		set_variable(context.environment, "GIT_PROXY_COMMAND", "");
-		// A partial clone fetches a missing object from its promisor remote on demand (git 2.45+ honours this), past
-		// network_refusal.
+		// A partial clone fetches a missing object from its promisor remote on demand, past network_refusal. Honoured
+		// by git 2.45+ and by maintenance releases back to 2.39.4 (distro 2.43 too); config_refusal covers the rest.
 		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
 		context.attr_source = version_at_least(m_state.git_version, 2, 40);
 		if (!m_write_permissions.allow_hooks) {

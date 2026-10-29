@@ -1487,6 +1487,146 @@ BOOST_AUTO_TEST_CASE(AWorkTreeGitattributesThatHidesAFilter_DoesNotPassTheCheck)
 	BOOST_TEST(head_ref == "refs/heads/main");
 }
 
+// Final review of #474 (N2b): git 2.43's `clone --filter=blob:none` writes remote.origin.promisor=true and
+// partialclonefilter, no extension, and a checkout lazy-fetches. Refused by the allowlist; with
+// allow_any_repo_config, refused before git 2.45 and fetching nothing (GIT_TRACE) from it.
+BOOST_AUTO_TEST_CASE(APromisorRemoteWithoutTheExtension_LazyFetchesNothingOnAGuardedCheckout)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("promisor");
+	git(repo, { "checkout", "-q", "-b", "other" });
+	write(repo / "big.txt", "a blob the promisor would have to send\n");
+	git(repo, { "add", "big.txt" });
+	git(repo, { "commit", "-q", "-m", "big" });
+	git(repo, { "checkout", "-q", "main" });
+	std::string blob = git_text(repo, { "rev-parse", "other:big.txt" });
+	while (!blob.empty() && (blob.back() == '\n' || blob.back() == '\r')) blob.pop_back();
+	BOOST_REQUIRE(blob.size() > 2);
+	std::error_code ec;
+	const fs::path object = repo / ".git" / "objects" / blob.substr(0, 2) / blob.substr(2);
+	fs::permissions(object, fs::perms::owner_write, fs::perm_options::add, ec);
+	BOOST_REQUIRE_MESSAGE(fs::remove(object, ec), ec.message());
+	git(repo, { "remote", "add", "origin", "https://127.0.0.1:9/unreachable.git" });
+	git(repo, { "config", "remote.origin.promisor", "true" });
+	git(repo, { "config", "remote.origin.partialclonefilter", "blob:none" });
+	const fs::path marker = base / "promisor_helper_ran.txt";
+	const fs::path script = base / "promisor-helper.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\n");
+	git(repo, { "config", "credential.helper", generic_text(script) });
+	const fs::path trace = base / "promisor_trace.txt";
+	auto options = real_options(repo);
+	edt::set_variable(*options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(options));
+
+	const json::value refused = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("remote.origin.promisor") != std::string::npos);
+
+	fs::remove(trace, ec);
+	service->set_write_permissions({ false, false, false, true });
+	const json::value opted_in = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("opted in: " << json::serialize(opted_in));
+	if (!git_at_least(service->info().git_version, 2, 45)) {
+		BOOST_REQUIRE(is_error(opted_in, "unsafe_repository"));
+		BOOST_TEST(text(opted_in.as_object().at("error").as_object().at("message")).find("remote.origin.promisor") != std::string::npos);
+	}
+	else {
+		BOOST_TEST(opted_in.as_object().contains("error"));
+		std::string traced;
+		{
+			std::ifstream in(trace, std::ios::binary);
+			traced.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+		BOOST_TEST(!traced.empty(), "GIT_TRACE wrote nothing: the check below proves nothing");
+		BOOST_TEST(traced.find("fetch") == std::string::npos, traced);
+	}
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Final review of #474 (N3b): an untracked top-level .gitattributes sets the filter, a tracked sub/.gitattributes
+// edited in the work tree unsets it: none of the three check-attr views names the driver, yet checkout smudges. A
+// tracked .gitattributes that differs from the index refuses on every git.
+BOOST_AUTO_TEST_CASE(AMixedAttributesLayout_DoesNotHideAFilter)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("mixed_attributes");
+	write(repo / "sub" / ".gitattributes", "*.txt text\n");
+	write(repo / "sub" / "f.txt", "one\n");
+	git(repo, { "add", "sub/.gitattributes", "sub/f.txt" });
+	git(repo, { "commit", "-q", "-m", "sub" });
+	git(repo, { "checkout", "-q", "-b", "other" });
+	write(repo / "sub" / "f.txt", "two\n");
+	git(repo, { "add", "sub/f.txt" });
+	git(repo, { "commit", "-q", "-m", "change f" });
+	git(repo, { "checkout", "-q", "main" });
+	const fs::path marker = base / "mixed_filter_ran.txt";
+	const fs::path script = base / "mixed-filter.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\ncat\n");
+	git(repo, { "config", "filter.evil.clean", generic_text(script) });
+	git(repo, { "config", "filter.evil.smudge", generic_text(script) });
+	// Only sub/ (a.txt at the top would show the driver to the work-tree view).
+	write(repo / ".gitattributes", "sub/*.txt filter=evil\n");
+	write(repo / "sub" / ".gitattributes", "*.txt -filter\n");
+	make_service(real_options(repo));
+
+	const json::value refused = finish(service->start_checkout("other", cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "filters_require_opt_in"), json::serialize(refused));
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+}
+
+// Final review of #474 (hardening): a repository's protocol.file.allow=always beats protocol.allow=never; the
+// specific -c protocol.file.allow=never beats it. With allow_any_repo_config the push to a local repository is still
+// refused by git, and that repository's pre-receive does not run.
+BOOST_AUTO_TEST_CASE(ARepositoryProtocolFileAllow_DoesNotOpenTheFileTransport)
+{
+	isolate_config();
+	const fs::path remote = make_bare("file_allowed_remote.git");
+	const fs::path marker = base / "file_allowed_pre_receive_ran.txt";
+	make_script(remote / "hooks" / "pre-receive", "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	const fs::path repo = make_plain_repository("file_allowed");
+	git(repo, { "remote", "add", "origin", file_url(remote) });
+	git(repo, { "config", "protocol.file.allow", "always" });
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value refused = finish(service->start_push("origin", "main", false, cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_TEST(refused.as_object().contains("error"));
+	BOOST_TEST(!is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("stderr_tail")).find("not allowed") != std::string::npos);
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(git_text(remote, { "for-each-ref" }).empty());
+}
+
+// Final review of #474 (hardening): config-based hooks (hook.<name>.command/.event) do not go through
+// core.hooksPath. Without allow_hooks any hook.* key refuses, even with allow_any_repo_config.
+BOOST_AUTO_TEST_CASE(AConfigBasedHook_RefusesAGuardedWrite_EvenWithAnyRepoConfig)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("config_hook");
+	const fs::path marker = base / "config_hook_ran.txt";
+	const fs::path script = base / "config-hook.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexit 0\n");
+	git(repo, { "config", "hook.evil.command", generic_text(script) });
+	git(repo, { "config", "hook.evil.event", "pre-commit" });
+	write(repo / "a.txt", "changed\n");
+	git(repo, { "add", "a.txt" });
+	const std::string before = head_of(repo);
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	const json::value refused = finish(service->start_commit("message", cmd::origin_kind::agent));
+	BOOST_TEST_INFO("refused: " << json::serialize(refused));
+	BOOST_REQUIRE(is_error(refused, "unsafe_repository"));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find("hook.evil.command") != std::string::npos);
+	std::error_code ec;
+	BOOST_TEST(!fs::exists(marker, ec));
+	BOOST_TEST(head_of(repo) == before);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_FIXTURE_TEST_SUITE(EdtVcsFakeGitTests, fake_git_fixture)
@@ -1942,7 +2082,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 	BOOST_TEST(has_arg(allowed, "fetch"));
 	BOOST_TEST(arg_starting_with(allowed, "core.hooksPath=").empty());
 	for (const char* config : { "core.askPass=", "protocol.allow=never", "protocol.https.allow=always",
-			"protocol.ssh.allow=always", "protocol.ext.allow=never", "commit.gpgsign=false", "tag.gpgsign=false",
+			"protocol.ssh.allow=always", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never", "commit.gpgsign=false", "tag.gpgsign=false",
 			"merge.verifySignatures=false", "gpg.program=", "gpg.openpgp.program=", "gpg.x509.program=", "gpg.ssh.program=",
 			"gpg.ssh.defaultKeyCommand=", "core.gitProxy=", "core.alternateRefsCommand=", "gc.auto=0",
 			"maintenance.auto=false",
