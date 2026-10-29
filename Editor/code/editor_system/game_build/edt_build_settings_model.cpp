@@ -52,10 +52,20 @@ namespace {
 			},
 			"reload_after_build": { "type": "boolean" },
 			"log_verbosity": { "type": "string", "enum": ["errors", "normal", "verbose"] },
+			"live": {
+				"type": "object",
+				"properties": {
+					"enabled": { "type": "boolean" },
+					"quiet_ms": { "type": "integer", "minimum": 0, "maximum": 600000 },
+					"jobs": { "type": "integer", "minimum": 0, "maximum": 1024 }
+				},
+				"required": ["enabled", "quiet_ms", "jobs"],
+				"additionalProperties": false
+			},
 			"configurations": { "type": "object" },
 			"errors": { "type": "array", "items": { "type": "string" } }
 		},
-		"required": ["configuration", "jobs_mode", "jobs", "reload_after_build", "log_verbosity", "configurations", "errors"],
+		"required": ["configuration", "jobs_mode", "jobs", "reload_after_build", "log_verbosity", "live", "configurations", "errors"],
 		"additionalProperties": false
 	})";
 }
@@ -190,6 +200,16 @@ int edt::build_settings_model::manual_jobs() const
 void edt::build_settings_model::set_manual_jobs(int jobs)
 {
 	m_manual_jobs = std::clamp(jobs, 1, k_max_manual_jobs);
+}
+
+void edt::build_settings_model::set_live_quiet_ms(int quiet_ms)
+{
+	m_settings.live_quiet_ms = std::clamp(quiet_ms, 0, k_max_live_quiet_ms);
+}
+
+void edt::build_settings_model::set_live_jobs(int jobs)
+{
+	m_settings.live_jobs = std::clamp(jobs, 0, k_max_live_jobs);
 }
 
 int edt::build_settings_model::presets_version() const
@@ -340,7 +360,7 @@ bool edt::build_settings_model::refresh_fresh_configure()
 		json::value doc = json::parse(text, ec);
 		if (ec || !doc.is_object()) return std::nullopt;
 		for (const std::string_view key : { "configuration", "jobs_mode", "reload_after_build", "build_before_play",
-			"log_verbosity", "fresh_configure" }) {
+			"log_verbosity", "fresh_configure", "live_enabled", "live_quiet_ms", "live_jobs" }) {
 			doc.get_object().erase(key);
 		}
 		build_settings settings = parse_build_settings(text).settings;
@@ -385,6 +405,9 @@ edt::build_settings_apply_result edt::build_settings_model::apply()
 			if (edited.jobs_mode != loaded.jobs_mode) on_disk.jobs_mode = edited.jobs_mode;
 			if (edited.reload_after_build != loaded.reload_after_build) on_disk.reload_after_build = edited.reload_after_build;
 			if (edited.log_verbosity != loaded.log_verbosity) on_disk.log_verbosity = edited.log_verbosity;
+			if (edited.live_enabled != loaded.live_enabled) on_disk.live_enabled = edited.live_enabled;
+			if (edited.live_quiet_ms != loaded.live_quiet_ms) on_disk.live_quiet_ms = edited.live_quiet_ms;
+			if (edited.live_jobs != loaded.live_jobs) on_disk.live_jobs = edited.live_jobs;
 			for (const auto& configuration : fresh) {
 				if (!contains(on_disk.fresh_configure, configuration)) on_disk.fresh_configure.push_back(configuration);
 			}
@@ -423,7 +446,7 @@ std::vector<edt::registration> edt::register_build_settings_commands(cmd::comman
 
 	cmd::command_desc get;
 	get.id = "build.settings.get";
-	get.summary = "The game build settings of the open project: configuration, jobs, module reload, log verbosity, and the "
+	get.summary = "The game build settings of the open project: configuration, jobs, module reload, log verbosity, live mode, and the "
 		"CMake defines per configuration (team ones from CMakePresets.json, the user's from CMakeUserPresets.json)";
 	get.args_schema = cmd::no_args_schema();
 	get.result_schema = json::parse(k_get_result_schema);
@@ -464,6 +487,10 @@ std::vector<edt::registration> edt::register_build_settings_commands(cmd::comman
 			{ "jobs", std::move(jobs) },
 			{ "reload_after_build", settings.reload_after_build },
 			{ "log_verbosity", json::string(log_verbosity_name(settings.log_verbosity)) },
+			{ "live", json::object{
+				{ "enabled", settings.live_enabled },
+				{ "quiet_ms", settings.live_quiet_ms },
+				{ "jobs", settings.live_jobs } } },
 			{ "configurations", std::move(configurations) },
 			{ "errors", std::move(errors) } });
 	};
