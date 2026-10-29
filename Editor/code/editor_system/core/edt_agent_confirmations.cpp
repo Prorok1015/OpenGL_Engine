@@ -126,7 +126,10 @@ namespace edt
 			m_grants.add(entry.request.session, entry.request.category);
 		}
 		entry.call.confirmation = entry.ticket;
-		entry.done(m_commands.invoke(entry.command_id, entry.call));
+		cmd::result outcome = m_commands.invoke(entry.command_id, entry.call);
+		// A ticket the registry did not consume (the policy turned to deny meanwhile) is not left waiting for its lifetime.
+		m_commands.discard(entry.ticket);
+		entry.done(std::move(outcome));
 
 		if (grant) {
 			// What already waits for the same session and category is covered by the answer just given: settle it the way
