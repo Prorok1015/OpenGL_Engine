@@ -355,13 +355,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	for (auto& menu : register_builtin_menus(m_context->actions())) m_registrations.push_back(std::move(menu));
 	m_file_menu->register_actions();
 	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
-	// A text field that only has the keyboard is no gesture; a typed value not yet committed is the inspector's pending commit.
-	const auto gesture_active = [this] {
-		return (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput) || (m_inspector_panel && m_inspector_panel->has_pending_commit())
-			|| (m_viewport_panel && m_viewport_panel->is_dragging_gizmo());
-	};
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
-			{ m_context->documents(), m_context->selection(), m_services, gesture_active })) {
+			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
 		m_registrations.push_back(std::move(command));
 	}
 	m_file_menu->attach_window_close(wnd_sys);
@@ -871,6 +866,13 @@ void edt::editor_system::open_prefab_for_edit(const res::tag& tag)
 		m_prefab_panel->set_context(&prefab);
 		m_prefab_panel->set_open(true);
 	}
+}
+
+bool edt::editor_system::person_is_editing() const
+{
+	// A text field that only has the keyboard is no gesture; a typed value not yet committed is the inspector's pending commit.
+	return (ImGui::IsAnyItemActive() && !ImGui::GetIO().WantTextInput) || (m_inspector_panel && m_inspector_panel->has_pending_commit())
+		|| (m_viewport_panel && m_viewport_panel->is_dragging_gizmo());
 }
 
 void edt::editor_system::close_prefab_editor()

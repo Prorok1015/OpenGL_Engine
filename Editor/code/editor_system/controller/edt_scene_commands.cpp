@@ -118,12 +118,15 @@ namespace {
 		return out;
 	}
 
-	// The desc type of a component: its own, else the type of the desc it references (a "__parent" alone).
+	// The desc type of a component: its own, else the type of the desc it references (a "__parent" alone). Unlike
+	// the inspector, which draws every frame and takes the type once the desc is there, a command waits for it: its
+	// answer must not depend on whether a load has finished yet.
 	std::string type_of(const scn::prefab_desc::prefab_comp_node& component)
 	{
 		if (!component.type_name.empty()) return component.type_name;
-		if (component.parent_desc.is_valid() && component.parent_desc.is_ready()) return std::string(component.parent_desc->get_type());
-		return {};
+		if (!component.parent_desc.is_valid()) return {};
+		component.parent_desc.wait();
+		return component.parent_desc.is_ready() ? std::string(component.parent_desc->get_type()) : std::string{};
 	}
 
 	constexpr std::size_t max_name_bytes = 256;

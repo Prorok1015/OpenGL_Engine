@@ -44,7 +44,8 @@ namespace edt
 		// -1 (or any index outside world_descs) = the level has no worlds; use the accessors below, never index directly.
 		int active_world_idx = 0;
 		// Bumped on every change of the edited descs (and of which one is edited); caches of derived views key on it.
-		uint64_t desc_generation = 0;
+		// Never 0: an expected_generation of 0 means "not given", so a document at 0 could not be guarded.
+		uint64_t desc_generation = 1;
 		void touch_descs() { ++desc_generation; }
 
 		// Survives the reload of the editor world, which recreates the camera entity.
