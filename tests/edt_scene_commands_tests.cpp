@@ -52,7 +52,7 @@ constexpr const char* WORLD_1 = R"({
 		{ "__id": "00000000000000e1", "name": "Inst",
 		  "components": { "inst": { "__type": "prefab_desc", "__parent": "memory://t/rig.prefab.desc" } } },
 		{ "__id": "00000000000000e2", "name": "Other" },
-		{ "__id": "00000000000000e3", "name": "Lens", "components": { "lens": { "__parent": "memory://t/lens.desc" } } }
+		{ "__id": "00000000000000e3", "name": "Lens", "components": { "lens": "memory://t/lens.desc" } }
 	]
 })";
 
@@ -342,6 +342,8 @@ BOOST_AUTO_TEST_CASE(an_edit_clears_the_selection)
 
 BOOST_AUTO_TEST_CASE(a_component_that_only_references_a_desc_has_that_desc_type)
 {
+	// "key": "<tag>" is the component with no type of its own (in the object form the key is the type).
+	BOOST_REQUIRE(child(root(1), 0xe3)->components.at("lens").type_name.empty());
 	const std::string lens = ref({ "00000000000000e3" }, "w1");
 	const auto set = call("component.set", R"({"ref":)" + lens + R"(,"key":"lens","patch":{"fov":33.0}})");
 	BOOST_REQUIRE_MESSAGE(set.ok, set.error);

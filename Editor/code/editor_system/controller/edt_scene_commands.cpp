@@ -118,7 +118,8 @@ namespace {
 		return out;
 	}
 
-	// The desc type of a component: its own, else the type of the desc it references (a "__parent" alone). Unlike
+	// The desc type of a component: its own, else the type of the desc it references (`"key": "<tag>"`; in the object
+	// form the key is the type), as the assembler spawns it. Unlike
 	// the inspector, which draws every frame and takes the type once the desc is there, a command waits for it: its
 	// answer must not depend on whether a load has finished yet.
 	std::string type_of(const scn::prefab_desc::prefab_comp_node& component)
