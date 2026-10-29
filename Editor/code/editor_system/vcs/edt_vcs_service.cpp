@@ -341,7 +341,7 @@ namespace {
 	// then creates the local one). Several remotes or none: <name>, which the filter check fails closed on.
 	std::string checkout_target(const git_context& git, const std::string& name, std::stop_token stop)
 	{
-		const git_output resolved = run_git(git, { "rev-parse", "--verify", "--quiet", "--end-of-options", name + "^{commit}" },
+		const git_output resolved = run_git(git, { "rev-parse", "--verify", "--quiet", name + "^{commit}" },
 			stop, k_read_cap);
 		if (resolved.process.error.empty() && resolved.process.exit_code == 0) return name;
 		const git_output refs = run_git(git, { "for-each-ref", "--format=%(refname)", "refs/remotes" }, stop, k_read_cap);
