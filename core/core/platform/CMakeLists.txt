@@ -9,4 +9,4 @@ target_sources(platform_system PRIVATE ${SE_PLATFORM_SOURCES})
 snk_component_headers(platform_system)
 
 # The operating system's services the engine and the editor share (EPIC-42 #158: restarting the editor).
-target_link_libraries(platform_system PUBLIC snk::api PRIVATE $<BUILD_LOCAL_INTERFACE:snk::compiler_warnings>)
+target_link_libraries(platform_system PUBLIC snk::api PRIVATE snk::engine_logger PRIVATE $<BUILD_LOCAL_INTERFACE:snk::compiler_warnings>)

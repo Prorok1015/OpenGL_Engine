@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
@@ -142,6 +143,15 @@ namespace edt
 		std::shared_ptr<detail::signal_state<Args...>> m_state = std::make_shared<detail::signal_state<Args...>>();
 	};
 
+	// One runtime module of the project that a build produced.
+	struct game_module_build_result {
+		std::string module; // the manifest's module name
+		std::filesystem::path path; // absolute, <root>/build/bin/<file>
+		std::string configuration;
+		std::uint64_t job = 0;
+		bool reload = true; // the request asks to load the new module
+	};
+
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
 	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
@@ -162,6 +172,8 @@ namespace edt
 		signal<std::uint64_t, const std::string&> job_started; // (id, label)
 		signal<std::uint64_t, float, const std::string&> job_progress; // (id, fraction in [0, 1], note)
 		signal<std::uint64_t, job_status, const std::string&> job_finished; // (id, done | failed | cancelled, error text)
+		// Raised by game_builder on the main thread after a successful build only, once per runtime module on disk.
+		signal<const game_module_build_result&> game_module_built;
 		// The problems of one source were replaced or cleared (problem_list).
 		signal<const std::string&> problems_changed; // (source)
 	};
