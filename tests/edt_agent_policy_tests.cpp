@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_agent_policy.h"
 #include <snk/command/cmd_registry.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -153,15 +154,40 @@ BOOST_AUTO_TEST_CASE(AProjectCanLoosenADefault_ForExample_AllowBuilds)
 	BOOST_TEST((edt::effective_mode(build, layer_with(agent_category::build, policy_mode::ask), {}).mode == policy_mode::ask));
 }
 
-BOOST_AUTO_TEST_CASE(ABrokenLayer_DeniesEverythingButReads)
+BOOST_AUTO_TEST_CASE(ABrokenLayer_DeniesEverything_ReadsIncluded)
 {
 	const auto read = command_of("scene.query", agent_category::read);
 	const auto edit = command_of("scene.move", agent_category::scene_edit);
 
-	BOOST_TEST((edt::effective_mode(read, {}, {}, "bad json", {}).mode == policy_mode::allow));
+	BOOST_TEST((edt::effective_mode(read, {}, {}, "bad json", {}).mode == policy_mode::deny));
 	BOOST_TEST((edt::effective_mode(edit, {}, {}, "bad json", {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode(read, {}, {}, {}, "bad json").mode == policy_mode::deny));
 	BOOST_TEST((edt::effective_mode(edit, {}, {}, {}, "bad json").mode == policy_mode::deny));
 	BOOST_TEST(edt::effective_mode(edit, {}, {}, "bad json", {}).reason.find("bad json") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(LiveCommands_AreDeniedWhileLiveModeIsOff_WhateverAnyLayerSays)
+{
+	const auto live = command_of("live.status", agent_category::live);
+	edt::policy_layer allow_all = layer_with(agent_category::live, policy_mode::allow);
+	allow_all.commands["live.status"] = policy_mode::allow;
+
+	BOOST_TEST((edt::effective_mode(live, allow_all, allow_all, {}, {}, false).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode(live, {}, {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode(live, {}, {}, {}, {}, true).mode == policy_mode::allow));
+	BOOST_TEST((edt::effective_mode(live, layer_with(agent_category::live, policy_mode::deny), {}, {}, {}, true).mode == policy_mode::deny));
+}
+
+BOOST_AUTO_TEST_CASE(ACategoryEntry_DoesNotLiftTheRiskFloor_OnlyTheCommandsOwnEntryDoes)
+{
+	const auto build = command_of("build.game_module", agent_category::build, cmd::danger::deny_by_default);
+	const auto confirm = command_of("code.wipe", agent_category::code_edit, cmd::danger::confirm);
+
+	BOOST_TEST((edt::effective_mode(build, layer_with(agent_category::build, policy_mode::allow), {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode(build, layer_with("build.game_module", policy_mode::allow), {}).mode == policy_mode::allow));
+	BOOST_TEST((edt::effective_mode(confirm, layer_with(agent_category::code_edit, policy_mode::allow), {}).mode == policy_mode::ask));
+	BOOST_TEST((edt::effective_mode(confirm, layer_with("code.wipe", policy_mode::allow), {}).mode == policy_mode::allow));
+	BOOST_TEST((edt::effective_mode(confirm, layer_with(agent_category::code_edit, policy_mode::deny), {}).mode == policy_mode::deny));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -210,6 +236,24 @@ BOOST_AUTO_TEST_CASE(Parse_Mistakes_AreErrorsNotSkipped)
 		BOOST_TEST(!parsed.error.empty());
 		BOOST_TEST(parsed.layer.empty());
 	}
+}
+
+BOOST_AUTO_TEST_CASE(Parse_ARepeatedKey_IsAnError_NotTheLastOneWinning)
+{
+	for (const char* bad : {
+		R"({"categories":{"code_edit":"deny","code_edit":"allow"}})",
+		R"({"commands":{"a.b":"deny","a.b":"allow"}})",
+		R"({"version":1,"version":1})",
+		R"({"categories":{},"categories":{}})",
+		R"({"allow":["a.b"],"allow":["c.d"]})" }) {
+		BOOST_TEST_INFO(bad);
+		const auto parsed = edt::parse_policy_layer(bad);
+		BOOST_TEST(!parsed.error.empty());
+		BOOST_TEST(parsed.error.find("twice") != std::string::npos);
+		BOOST_TEST(parsed.layer.empty());
+	}
+	// The same key in two different objects is fine.
+	BOOST_TEST(edt::parse_policy_layer(R"({"categories":{"read":"allow"},"commands":{"read":"allow"}})").error.empty());
 }
 
 BOOST_AUTO_TEST_CASE(Serialize_RoundTrips)
@@ -263,7 +307,7 @@ BOOST_AUTO_TEST_CASE(ABrokenFile_FailsClosed_UntilItIsFixed)
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 
 	BOOST_TEST((policy.effective(command_of("scene.move", agent_category::scene_edit)).mode == policy_mode::deny));
-	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::allow));
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::deny));
 
 	dir.write(".snk/agent_policy.json", "{}");
 	BOOST_TEST((policy.effective(command_of("scene.move", agent_category::scene_edit)).mode == policy_mode::allow));
@@ -301,13 +345,86 @@ BOOST_AUTO_TEST_CASE(SaveProject_WithAFailingWriter_ReportsAndKeepsTheOldLayer)
 BOOST_AUTO_TEST_CASE(ThePersonalFile_OnlyTightens)
 {
 	test_util::temp_dir dir("edt_agent_policy_personal");
-	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"allow"}})");
-	dir.write("personal.json", R"({"categories":{"code_files":"deny","scene_edit":"allow"}})");
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"allow","build":"deny"}})");
+	dir.write("personal.json", R"({"categories":{"code_files":"deny","build":"allow"}})");
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 
+	// The personal deny tightens the project's allow; the personal allow does not lift the project's deny.
 	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::deny));
-	BOOST_TEST((policy.effective(command_of("scene.move", agent_category::scene_edit)).mode == policy_mode::allow));
+	BOOST_TEST((policy.effective(command_of("build.run", agent_category::build)).mode == policy_mode::deny));
 }
+
+BOOST_AUTO_TEST_CASE(LiveCommands_FollowTheLiveModeTheOwnerGives)
+{
+	test_util::temp_dir dir("edt_agent_policy_live");
+	dir.write(".snk/agent_policy.json", R"({"categories":{"live":"allow"}})");
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	const auto live = command_of("live.status", agent_category::live);
+
+	BOOST_TEST((policy.effective(live).mode == policy_mode::deny));
+	bool on = false;
+	policy.set_live_mode([&on] { return on; });
+	BOOST_TEST((policy.effective(live).mode == policy_mode::deny));
+	on = true;
+	BOOST_TEST((policy.effective(live).mode == policy_mode::allow));
+	on = false;
+	BOOST_TEST((policy.effective(live).mode == policy_mode::deny));
+}
+
+BOOST_AUTO_TEST_CASE(ABrokenFile_DeniesEvenReads)
+{
+	test_util::temp_dir dir("edt_agent_policy_broken_reads");
+	dir.write(".snk/agent_policy.json", R"({"commands":{"scene.query":"deny"},"commands":{}})");
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).mode == policy_mode::deny));
+}
+
+BOOST_AUTO_TEST_CASE(ACommandIdNoCommandHas_IsWarnedAboutOncePerLoad)
+{
+	test_util::temp_dir dir("edt_agent_policy_unknown");
+	dir.write(".snk/agent_policy.json", R"({"deny":["no.such_command","scene.query"],"allow":["another.typo"]})");
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "editor/agent_policy") warnings.emplace_back(message);
+	});
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	policy.set_known_commands([](std::string_view id) { return id == "scene.query"; });
+	const auto read = command_of("scene.query", agent_category::read);
+
+	policy.effective(read);
+	policy.effective(read);
+
+	// Both unknown ids once, though effective() ran twice, and the known one not at all; the layer still works.
+	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("no.such_command") != std::string::npos; }) == 1);
+	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("another.typo") != std::string::npos; }) == 1);
+	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("'scene.query'") != std::string::npos; }) == 0);
+	BOOST_TEST((policy.effective(read).mode == policy_mode::deny));
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(AFileThatCannotBeExamined_IsALayerError_NotNoFile)
+{
+	test_util::temp_dir dir("edt_agent_policy_stat");
+	dir.write("locked/agent_policy.json", R"({"categories":{"scene_edit":"allow"}})");
+	const fs::path locked = dir.path() / "locked";
+	fs::permissions(locked, fs::perms::none);
+	std::error_code ec;
+	fs::status(locked / "agent_policy.json", ec);
+	if (!ec) {
+		fs::permissions(locked, fs::perms::owner_all);
+		BOOST_TEST_MESSAGE("permissions are not enforced here (running as root?)");
+		return;
+	}
+
+	edt::agent_policy policy{ locked / "agent_policy.json", dir.path() / "personal.json" };
+	const auto decision = policy.effective(command_of("scene.query", agent_category::read));
+	fs::permissions(locked, fs::perms::owner_all);
+
+	BOOST_TEST((decision.mode == policy_mode::deny));
+	BOOST_TEST(!policy.project_error().empty());
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
 
