@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -61,6 +62,8 @@ namespace edt
 
 	// The categories that can be set (not `unset` and `not_for_agents`).
 	std::optional<cmd::agent_category> parse_settable_category(std::string_view name);
+	// Every category a file can set, in the order the policy window lists them.
+	std::span<const cmd::agent_category> settable_categories();
 	std::optional<cmd::policy_mode> parse_policy_mode(std::string_view name);
 
 	// The "vcs" section of one layer (#455); a key the file does not set stays nullopt. How the two layers combine is

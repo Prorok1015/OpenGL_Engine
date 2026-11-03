@@ -236,6 +236,11 @@ namespace edt
 		return cmd::strictest(default_mode(category), mode_of_risk(command.risk));
 	}
 
+	std::span<const cmd::agent_category> settable_categories()
+	{
+		return settable;
+	}
+
 	std::optional<cmd::agent_category> parse_settable_category(std::string_view name)
 	{
 		for (const cmd::agent_category category : settable) {
