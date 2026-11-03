@@ -1331,7 +1331,7 @@ namespace {
 	};
 
 	// The lines of a probe's output, without their line ends.
-	std::vector<std::string_view> lines_of(std::string_view text)
+	std::vector<std::string_view> probe_lines(std::string_view text)
 	{
 		std::vector<std::string_view> out;
 		while (!text.empty()) {
@@ -1842,7 +1842,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 		egLOG_INFO("editor/vcs", "'{}': {}", utf8_of(*project), m_state.reason);
 		return;
 	}
-	const std::vector<std::string_view> lines = lines_of(top.out);
+	const std::vector<std::string_view> lines = probe_lines(top.out);
 	m_state.root = path_of(lines.empty() ? std::string_view{} : lines[0]);
 	// A git that does not know a flag echoes it ("--absolute-git-dir"): both folders stay unknown (no watcher).
 	if (lines.size() >= 3 && path_of(lines[1]).is_absolute() && !lines[2].empty() && lines[2].front() != '-') {
