@@ -10,6 +10,7 @@
 #include <snk/input/inp_events.hpp>
 #include "edt_guizmo.hpp"
 #include <imgui.h>
+#include <utility>
 
 namespace edt
 {
@@ -28,6 +29,31 @@ namespace edt
 	const res::tag& viewport_panel::render_target_tag()
 	{
 		return s_editor_cam_tag;
+	}
+
+	void viewport_panel::suspend_camera()
+	{
+		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
+		if (!reg) return;
+		for (auto ent : reg->view<scn::camera_component>()) {
+			auto& cam = reg->get<scn::camera_component>(ent);
+			if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
+			if (cam.m_viewport.size != glm::ivec2{ 0 }) m_suspended_size = cam.m_viewport.size;
+			cam.m_viewport.size = glm::ivec2{ 0 };
+		}
+	}
+
+	void viewport_panel::resume_camera()
+	{
+		const std::optional<glm::ivec2> size = std::exchange(m_suspended_size, std::nullopt);
+		entt::registry* reg = m_get_registry ? m_get_registry() : nullptr;
+		if (!reg || !size) return;
+		// A visible panel sizes it again in its next on_render anyway; this covers a closed or hidden one.
+		for (auto ent : reg->view<scn::camera_component>()) {
+			auto& cam = reg->get<scn::camera_component>(ent);
+			if (cam.color_targets.empty() || cam.color_targets[0] != s_editor_cam_tag) continue;
+			if (cam.m_viewport.size == glm::ivec2{ 0 }) cam.m_viewport.size = *size;
+		}
 	}
 
 	void viewport_panel::set_registry_getter(std::function<entt::registry*()> getter)

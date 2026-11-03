@@ -5,6 +5,8 @@
 #include "edt_camera_redirect.h"
 #include "edt_edit_menu.h"
 #include "edt_editor_camera.h"
+#include "edt_editor_mode.h"
+#include "edt_editor_mode_commands.h"
 #include "edt_input_target.h"
 #include "edt_level_controller.h"
 #include "edt_module_swap_gate.h"
@@ -22,6 +24,7 @@
 #include <snk/application/app_frame_control.h>
 #include <snk/application/app_module_source.h>
 #include <snk/common/mem_allocator.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/core/core_project_modules.h>
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_dialog_service.h>
@@ -235,7 +238,10 @@ struct play_fixture : test_util::module_env
 	edt::world_controller world_ctrl{ state, services };
 	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
 	inp::input_router router{ std::make_shared<inp::ecs_input_manager>() };
-	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router } };
+	// What editor_system's start_blocker says (a level or an asset loading); nullopt: nothing blocks.
+	std::optional<std::string> start_blocked;
+	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router,
+		.start_blocker = [this] { return start_blocked; } } };
 	std::vector<state_change> seen;
 	edt::connection seen_connection = events.play_state_changed.subscribe([this](edt::play_state s, edt::play_reason r) {
 		seen.emplace_back(s, r);
@@ -1087,6 +1093,362 @@ BOOST_AUTO_TEST_CASE(ten_cycles_over_real_frames_do_not_grow_the_frame_allocator
 	BOOST_TEST(used_while_playing.back() <= used_while_playing[1]);
 	BOOST_TEST(ds::frame_allocator_usage().peak <= peak_after_warm_up);
 	BOOST_TEST(storage.require<scn::context_manager>().find_set(edt::k_play_set) == nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// Game mode (#294): editor_mode_controller pauses Play on the way to the editor and resumes only its own pause on the
+// way back; editor.mode.toggle is the command of F11 and of agents.
+namespace {
+
+struct editor_mode_fixture : play_fixture
+{
+	edt::editor_mode_controller modes{ play, events };
+	std::vector<edt::editor_mode> modes_seen;
+	edt::connection modes_connection = events.editor_mode_changed.subscribe([this](edt::editor_mode mode) {
+		modes_seen.push_back(mode);
+	});
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_editor_mode_tests, editor_mode_fixture)
+
+BOOST_AUTO_TEST_CASE(the_game_starts_a_stopped_play_the_editor_pauses_it_and_the_game_resumes_that_pause)
+{
+	open_level();
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+
+	BOOST_TEST(!modes.toggle().has_value());
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+
+	BOOST_TEST(!modes.toggle().has_value());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	BOOST_TEST(modes.holds_pause());
+
+	BOOST_TEST(!modes.toggle().has_value());
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	BOOST_TEST(!modes.holds_pause());
+
+	BOOST_TEST((modes_seen == std::vector<edt::editor_mode>{ edt::editor_mode::game, edt::editor_mode::editor, edt::editor_mode::game }));
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::paused, edt::play_reason::user },
+		{ edt::play_state::playing, edt::play_reason::user } }));
+	// The same mode again changes nothing.
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST(modes_seen.size() == 3u);
+}
+
+BOOST_AUTO_TEST_CASE(a_refused_start_keeps_the_editor_mode)
+{
+	const std::optional<std::string> refused = modes.set_mode(edt::editor_mode::game);
+	BOOST_REQUIRE(refused.has_value());
+	BOOST_TEST(*refused == "no level with a world to play");
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST(!play.active());
+	BOOST_TEST(modes_seen.empty());
+}
+
+BOOST_AUTO_TEST_CASE(the_reason_of_the_caller_goes_to_play)
+{
+	open_level();
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game, edt::play_reason::agent).has_value());
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::editor, edt::play_reason::agent).has_value());
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::agent },
+		{ edt::play_state::paused, edt::play_reason::agent } }));
+}
+
+BOOST_AUTO_TEST_CASE(a_pause_made_by_someone_else_is_not_lifted)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_REQUIRE(play.pause()); // the person's Pause in game mode
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::editor).has_value());
+	BOOST_TEST(!modes.holds_pause());
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+}
+
+BOOST_AUTO_TEST_CASE(a_stop_in_editor_mode_drops_the_note_and_the_game_starts_a_fresh_play)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
+	BOOST_REQUIRE(modes.holds_pause());
+
+	play.stop(edt::play_reason::agent);
+	BOOST_TEST(!modes.holds_pause());
+	seen.clear();
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	BOOST_TEST(play.frames_run() == 0u);
+	// Started, not resumed: a new set "play".
+	BOOST_TEST((seen == std::vector<state_change>{ { edt::play_state::playing, edt::play_reason::user } }));
+	BOOST_TEST(play_set() != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(a_restart_after_a_module_reload_is_not_the_controllers_pause)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
+	// The reload stops Play and starts it again paused: a Stop all the same.
+	play.before_module_swap();
+	play.after_module_swap();
+	BOOST_REQUIRE((play.state() == edt::play_state::paused));
+	BOOST_TEST(!modes.holds_pause());
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST((play.state() == edt::play_state::paused));
+}
+
+BOOST_AUTO_TEST_CASE(an_external_resume_and_pause_is_not_the_controllers_pause)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
+	BOOST_REQUIRE(play.resume());
+	BOOST_TEST(!modes.holds_pause());
+	BOOST_REQUIRE(play.pause());
+	BOOST_TEST(!modes.holds_pause());
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST((play.state() == edt::play_state::paused));
+}
+
+BOOST_AUTO_TEST_CASE(a_stop_in_game_mode_brings_the_editor_back_but_not_without_a_ui)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	play.stop(edt::play_reason::agent);
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((modes_seen == std::vector<edt::editor_mode>{ edt::editor_mode::game, edt::editor_mode::editor }));
+	BOOST_TEST(!modes.holds_pause());
+
+	// A module reload stops Play and starts it again: the game layout stays.
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	modes_seen.clear();
+	play.before_module_swap();
+	play.after_module_swap();
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST(modes_seen.empty());
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	play.stop();
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+
+	// Headless: no layout to go back to.
+	edt::editor_mode_controller headless{ play, events, false };
+	BOOST_REQUIRE(!headless.set_mode(edt::editor_mode::game).has_value());
+	play.stop();
+	BOOST_TEST((headless.mode() == edt::editor_mode::game));
+}
+
+BOOST_AUTO_TEST_CASE(a_reload_whose_restart_fails_leaves_game_mode_with_a_warning)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	std::vector<std::string> warnings;
+	const engine::log_sink_handle sink = engine::add_log_sink([&warnings](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn) warnings.emplace_back(message);
+	});
+
+	play.before_module_swap();
+	start_blocked = "a level is loading";
+	play.after_module_swap();
+	modes.after_module_swap(); // what the swap gate's hook calls next
+	BOOST_TEST(!play.active());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((modes_seen.back() == edt::editor_mode::editor));
+	BOOST_TEST(std::any_of(warnings.begin(), warnings.end(),
+		[](const std::string& w) { return w.find("did not start again after the module reload") != std::string::npos; }));
+
+	// A reload that restarts Play keeps game mode.
+	start_blocked.reset();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	play.before_module_swap();
+	play.after_module_swap();
+	modes.after_module_swap();
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+}
+
+BOOST_AUTO_TEST_CASE(a_step_in_editor_mode_keeps_the_note)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::editor).has_value());
+	BOOST_REQUIRE(play.step(2));
+	BOOST_TEST(modes.holds_pause());
+	BOOST_TEST(!modes.set_mode(edt::editor_mode::game).has_value());
+	BOOST_TEST((play.state() == edt::play_state::playing));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+struct editor_mode_commands_fixture : play_commands_fixture
+{
+	edt::editor_mode_controller modes{ play, events };
+	// What editor_system wires: the agent policy's mode of the play.* command the switch would run.
+	std::vector<edt::registration> mode_commands = edt::register_editor_mode_commands(actions,
+		{ .modes = [this] { return &modes; }, .play = [this] { return &play; }, .person_is_editing = [this] { return editing; },
+			.agent_mode_of = [this](std::string_view id) {
+				const cmd::command_desc* command = commands.find(id);
+				return command ? access.policy().effective(*command).mode : cmd::policy_mode::deny;
+			} });
+
+	// The person's own settings may close a command for agents like the project's file.
+	void personal_policy(std::string_view json_text) { dir.write("personal.json", json_text); }
+
+	cmd::result agent_toggle(const char* args = "{}")
+	{
+		return commands.invoke("editor.mode.toggle", json::parse(args), cmd::origin::agent("agent-1"));
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_editor_mode_commands_tests, editor_mode_commands_fixture)
+
+BOOST_AUTO_TEST_CASE(editor_mode_toggle_is_a_play_tool_that_needs_a_display_with_a_strict_schema_and_f11_in_view)
+{
+	const cmd::command_desc* toggle = commands.find("editor.mode.toggle");
+	BOOST_REQUIRE(toggle);
+	BOOST_TEST((toggle->category == cmd::agent_category::play));
+	BOOST_TEST(toggle->needs_display);
+	BOOST_TEST(toggle->mutates);
+	BOOST_TEST(toggle->expose_as_tool);
+	BOOST_TEST(json::serialize(toggle->args_schema.as_object().at("properties").as_object().at("mode").as_object().at("enum")) == R"json(["editor","game"])json");
+	BOOST_TEST((toggle->args_schema.as_object().at("additionalProperties") == json::value(false)));
+	BOOST_TEST((toggle->result_schema.as_object().at("additionalProperties") == json::value(false)));
+
+	const auto items = actions.items("View");
+	const auto item = std::find_if(items.begin(), items.end(), [](const edt::menu_item_info& i) { return i.id == "editor.mode.toggle"; });
+	BOOST_REQUIRE((item != items.end()));
+	BOOST_TEST(item->shortcut_text == "F11");
+	BOOST_TEST(!item->checked);
+
+	BOOST_TEST(commands.invoke("editor.mode.toggle", json::parse(R"json({"mode":"menu"})json")).code == cmd::codes::invalid_args);
+	BOOST_TEST(commands.invoke("editor.mode.toggle", json::parse(R"json({"other":1})json")).code == cmd::codes::invalid_args);
+
+	commands.set_headless(true);
+	BOOST_TEST(commands.invoke("editor.mode.toggle", json::object{}).code == cmd::codes::unavailable_headless);
+	commands.set_headless(false);
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+}
+
+BOOST_AUTO_TEST_CASE(an_agent_switches_with_and_without_the_mode_argument_over_mcp)
+{
+	open_level();
+	const mcp::call_result game = call_tool("editor_mode_toggle", R"json({"mode":"game"})json");
+	BOOST_REQUIRE(!game.is_error);
+	BOOST_TEST(json::serialize(game.structured) == R"json({"mode":"game","play_state":"playing"})json");
+	BOOST_TEST(actions.items("View").front().checked);
+
+	// The mode it is in already: nothing changes.
+	const mcp::call_result again = call_tool("editor_mode_toggle", R"json({"mode":"game"})json");
+	BOOST_REQUIRE(!again.is_error);
+	BOOST_TEST(json::serialize(again.structured) == R"json({"mode":"game","play_state":"playing"})json");
+
+	const mcp::call_result toggled = call_tool("editor_mode_toggle");
+	BOOST_REQUIRE(!toggled.is_error);
+	BOOST_TEST(json::serialize(toggled.structured) == R"json({"mode":"editor","play_state":"paused"})json");
+
+	const mcp::call_result editor = call_tool("editor_mode_toggle", R"json({"mode":"editor"})json");
+	BOOST_REQUIRE(!editor.is_error);
+	BOOST_TEST(json::serialize(editor.structured) == R"json({"mode":"editor","play_state":"paused"})json");
+
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::agent },
+		{ edt::play_state::paused, edt::play_reason::agent } }));
+}
+
+BOOST_AUTO_TEST_CASE(a_refused_start_is_failed_with_its_reason_and_a_persons_gesture_makes_an_agent_busy)
+{
+	const mcp::call_result refused = call_tool("editor_mode_toggle");
+	BOOST_TEST(refused.is_error);
+	BOOST_TEST(text_of_error(refused) == "failed: no level with a world to play");
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+
+	open_level();
+	editing = true;
+	BOOST_TEST(commands.invoke("editor.mode.toggle", json::object{}, cmd::origin::agent("agent-1")).code == cmd::codes::busy);
+	BOOST_TEST(!play.active());
+	editing = false;
+
+	// A person's F11 (the menu's activate) switches with reason user.
+	BOOST_TEST(actions.activate("editor.mode.toggle"));
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::playing, edt::play_reason::user }));
+}
+
+BOOST_AUTO_TEST_CASE(an_agents_switch_is_denied_where_the_policy_denies_the_play_command_it_would_run)
+{
+	open_level();
+	personal_policy(R"json({"commands":{"play.start":"deny"}})json");
+	const cmd::result start = agent_toggle(R"json({"mode":"game"})json");
+	BOOST_TEST(start.code == cmd::codes::denied);
+	BOOST_TEST(start.error.find("play.start") != std::string::npos);
+	BOOST_TEST(!play.active());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	// A person's F11 is not an agent's call.
+	BOOST_TEST(actions.activate("editor.mode.toggle"));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+
+	personal_policy(R"json({ "commands": { "play.pause": "deny" } })json"); // another size: seen as changed whatever the clock
+	BOOST_TEST(agent_toggle().code == cmd::codes::denied);
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+
+	personal_policy(R"json({"commands":{"play.resume":"ask"}})json");
+	BOOST_REQUIRE(agent_toggle().ok); // to the editor: pauses
+	BOOST_REQUIRE(modes.holds_pause());
+	const cmd::result resume = agent_toggle();
+	BOOST_TEST(resume.code == cmd::codes::denied);
+	BOOST_TEST(resume.error.find("play.resume needs a person's approval") != std::string::npos);
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	// No play.* change: the policy of play.* is not asked.
+	BOOST_TEST(agent_toggle(R"json({"mode":"editor"})json").ok);
+}
+
+BOOST_AUTO_TEST_CASE(with_play_on_ask_a_persons_yes_to_the_toggle_is_enough_to_start_play)
+{
+	open_level();
+	personal_policy(R"json({"categories":{"play":"ask"}})json");
+	access.set_questions_routed(true);
+	access.set_person_present(true);
+
+	std::optional<cmd::result> outcome;
+	cmd::call request;
+	request.args = json::object{};
+	request.from = cmd::origin::agent("agent-1");
+	access.confirmations().invoke("editor.mode.toggle", std::move(request), [&outcome](cmd::result r) { outcome = std::move(r); });
+	BOOST_REQUIRE(!outcome.has_value()); // the person is asked about the toggle
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE(waiting.size() == 1u);
+	BOOST_TEST(waiting.front().command == "editor.mode.toggle");
+	BOOST_REQUIRE(access.confirmations().answer(waiting.front().id, edt::confirmation_answer::allow_once));
+	pump();
+	BOOST_REQUIRE(outcome.has_value());
+	BOOST_TEST(outcome->ok, outcome->error);
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+}
+
+BOOST_AUTO_TEST_CASE(a_toggle_allowed_by_its_own_entry_does_not_open_a_play_command_on_ask)
+{
+	open_level();
+	personal_policy(R"json({"categories":{"play":"ask"},"commands":{"editor.mode.toggle":"allow"}})json");
+	const cmd::result start = agent_toggle(R"json({"mode":"game"})json");
+	BOOST_TEST(start.code == cmd::codes::denied);
+	BOOST_TEST(start.error.find("play.start needs a person's approval") != std::string::npos);
+	BOOST_TEST(!play.active());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

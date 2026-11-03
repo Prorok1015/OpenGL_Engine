@@ -36,6 +36,7 @@ namespace edt
 		}
 
 		ImGuiID dockspace_id = ImGui::GetID("MainDockspace");
+		m_dockspace_id = dockspace_id;
 		ImGui::DockSpace(dockspace_id, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_PassthruCentralNode);
 
 		if (!m_layout_initialized)
@@ -47,6 +48,11 @@ namespace edt
 		ImGui::End();
 
 		panels.render_all();
+	}
+
+	void dockspace::keep_alive()
+	{
+		if (m_dockspace_id != 0) ImGui::DockSpace(m_dockspace_id, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_KeepAliveOnly);
 	}
 
 	void dockspace::setup_default_layout(ImGuiID dockspace_id, const std::vector<panel_info>& panels)

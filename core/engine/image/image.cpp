@@ -3,10 +3,19 @@
 #include <stb_image.h>
 #include <stb_image_write.h>
 
+#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <stdexcept>
 #include <array>
 #include <cstring>
+
+namespace {
+	// stb has no getter for its global flip: kept here so a decode can tell which way its rows came out. Decodes
+	// hold the lock shared, a flip change exclusively, so the recorded flip is the one stb used.
+	std::shared_mutex g_image_flip_mutex;
+	stb_image::Image::ImageFlip g_image_flip = stb_image::Image::ImageFlip::NONE;
+}
 
 
 stb_image::Image::Image(const std::string_view filename)
@@ -45,12 +54,19 @@ void stb_image::Image::free_image_data(unsigned char* data)
 stb_image::Image stb_image::Image::read_from_memory(const unsigned char* data, int len)
 {
 	Image result;
+	std::shared_lock lock(g_image_flip_mutex);
+	result.flipFlag_ = g_image_flip;
 	if ((result.data_ = stbi_load_from_memory(data, len, &result.width_, &result.height_, &result.channels_, 0)))
 	{
 		result.size_ = result.width_ * result.height_ * result.channels_;
 		return result;
 	}
 	return Image();
+}
+
+bool stb_image::Image::info_from_memory(const unsigned char* data, int len, int& width, int& height, int& channels)
+{
+	return stbi_info_from_memory(data, len, &width, &height, &channels) != 0;
 }
 
 bool stb_image::Image::read(const std::string_view filename)
@@ -66,6 +82,8 @@ bool stb_image::Image::read(const std::string_view filename)
 
 void stb_image::Image::set_image_flip(ImageFlip flag)
 {
+	std::unique_lock lock(g_image_flip_mutex);
+	g_image_flip = flag;
 	switch (flag)
 	{
 	case Image::ImageFlip::NONE:

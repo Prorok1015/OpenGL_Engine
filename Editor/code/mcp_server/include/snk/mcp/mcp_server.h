@@ -70,6 +70,10 @@ namespace mcp
 		void notify_resource_updated(const std::string& uri);
 		void notify_tools_changed();
 
+		// The open sessions and the end of one of them (host::session_closed is called, on the calling thread). Thread-safe.
+		std::vector<session_info> sessions() const;
+		bool close_session(const std::string& id);
+
 	private:
 		std::shared_ptr<detail::server_core> m_core;
 	};

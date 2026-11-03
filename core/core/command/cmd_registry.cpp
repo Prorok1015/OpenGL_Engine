@@ -81,8 +81,10 @@ cmd::registration cmd::command_registry::add(command_desc desc)
 	added->desc = std::move(desc);
 	const std::uint64_t key = added->key;
 	m_commands.push_back(std::move(added));
+	++m_changes;
 	return registration(m_alive, [this, key] {
 		std::erase_if(m_commands, [key](const std::shared_ptr<entry>& e) { return e->key == key; });
+		++m_changes;
 	});
 }
 
