@@ -1300,7 +1300,7 @@ namespace {
 
 	constexpr std::string_view k_no_hooks_dir = "no_hooks";
 
-	// Counts a job that runs git from its start until it ends, or until it is dropped without running.
+	// Counts a write job that runs git from its start until it ends, or until it is dropped without running.
 	struct running_job
 	{
 		std::shared_ptr<std::atomic<int>> count;
@@ -1324,7 +1324,10 @@ namespace {
 	struct release_at_end
 	{
 		running_job* job = nullptr;
-		~release_at_end() { job->release(); }
+		~release_at_end()
+		{
+			if (job != nullptr) job->release();
+		}
 	};
 
 	// The lines of a probe's output, without their line ends.
@@ -1742,8 +1745,12 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		if (!m_policy_file.empty()) context.policy_file = m_policy_file;
 		else if (m_probed_project) context.policy_file = *m_probed_project / ".snk" / "agent_policy.json";
 	}
-	auto running = std::make_shared<running_job>(m_running_jobs);
-	if (m_job_observer) m_job_observer();
+	// Only a write can touch the index; a read (--no-optional-locks) changing it is someone else's doing.
+	std::shared_ptr<running_job> running;
+	if (write) {
+		running = std::make_shared<running_job>(m_running_writes);
+		if (m_write_observer) m_write_observer();
+	}
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work), running = std::move(running)](ds::task_context& task) -> json::value {
 			const release_at_end end{ running.get() };
@@ -1803,6 +1810,7 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 {
 	m_probed = true;
 	m_probed_project = project;
+	++m_state_generation;
 	if (!m_git_found) return;
 	m_state.available = false;
 	m_state.root.reset();
@@ -1836,11 +1844,15 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 	}
 	const std::vector<std::string_view> lines = lines_of(top.out);
 	m_state.root = path_of(lines.empty() ? std::string_view{} : lines[0]);
-	if (lines.size() >= 3 && !lines[1].empty() && !lines[2].empty()) {
+	// A git that does not know a flag echoes it ("--absolute-git-dir"): both folders stay unknown (no watcher).
+	if (lines.size() >= 3 && path_of(lines[1]).is_absolute() && !lines[2].empty() && lines[2].front() != '-') {
 		m_state.git_dir = path_of(lines[1]).lexically_normal();
 		// git prints it relative to where it ran (the project root) unless it is elsewhere.
 		const fs::path common = path_of(lines[2]);
-		m_state.common_dir = (common.is_absolute() ? common : *project / common).lexically_normal();
+		const fs::path joined = common.is_absolute() ? common : *project / common;
+		std::error_code ec;
+		fs::path resolved = fs::weakly_canonical(joined, ec);
+		m_state.common_dir = ec ? joined.lexically_normal() : std::move(resolved);
 	}
 	m_state.available = true;
 	m_state.code.clear();
@@ -1857,6 +1869,7 @@ const edt::vcs_service::state& edt::vcs_service::info()
 
 void edt::vcs_service::set_probe_timeout()
 {
+	++m_state_generation;
 	m_state.available = false;
 	m_state.code = "vcs_unavailable";
 	const auto ms = m_options.probe_timeout.count();

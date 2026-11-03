@@ -74,6 +74,9 @@ namespace edt
 		static constexpr std::chrono::milliseconds k_change_delay{ 1000 };
 		// A change of the repository (editor_events::repository_changed) refreshes after this quiet time.
 		static constexpr std::chrono::milliseconds k_repo_delay{ 250 };
+		// A refs change refreshed this soon after a write of the panel ended is that write's own: writes_finished()
+		// already reloaded the History tab.
+		static constexpr std::chrono::milliseconds k_own_refs_window{ 2000 };
 
 		git_panel_model(editor_events& events, ports ports);
 
@@ -137,7 +140,8 @@ namespace edt
 		const std::optional<git_busy_progress>& busy_progress() const { return m_busy_progress; }
 		// Writes that have ended, however: what HEAD and the refs point at may have moved (the History tab reloads).
 		std::uint64_t writes_finished() const { return m_writes_finished; }
-		// Refreshes that followed a change of HEAD or the refs made outside the panel: the History tab reloads.
+		// Refreshes that followed a change of HEAD or the refs not made by the panel's own write (that one moved
+		// writes_finished()): the History tab reloads.
 		std::uint64_t refs_changed() const { return m_refs_changed; }
 		// The last failure, as git or the command said it; also logged under "vcs".
 		const std::string& error() const { return m_error; }
@@ -177,6 +181,9 @@ namespace edt
 		// A refs change waits for the next refresh.
 		bool m_refs_pending = false;
 		std::uint64_t m_refs_changed = 0;
+		// writes_finished() when a refs change was last taken.
+		std::uint64_t m_writes_seen_by_refs = 0;
+		std::optional<clock::time_point> m_last_write_end;
 
 		bool m_available = false;
 		std::string m_reason;

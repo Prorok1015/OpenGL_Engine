@@ -111,7 +111,12 @@ void edt::git_panel_model::repository_changed(repository_change kind)
 void edt::git_panel_model::refresh()
 {
 	m_stale = false;
-	if (std::exchange(m_refs_pending, false)) ++m_refs_changed;
+	if (std::exchange(m_refs_pending, false)) {
+		const bool own_write = m_writes_finished != m_writes_seen_by_refs && m_last_write_end
+			&& m_ports.now() - *m_last_write_end <= k_own_refs_window;
+		if (!own_write) ++m_refs_changed;
+		m_writes_seen_by_refs = m_writes_finished;
+	}
 	m_read = true;
 	m_refresh_at.reset();
 	const cmd::result info = m_ports.invoke("vcs.info", json::object{});
@@ -317,6 +322,7 @@ void edt::git_panel_model::finished(std::uint64_t id, job_status status, const s
 	}
 	if (job.kind != job_kind::write) return;
 	++m_writes_finished;
+	m_last_write_end = m_ports.now();
 	if (succeeded && job.label == "Commit") m_message.clear();
 	// A cancel is also what the editor's shutdown sends (job_service::cancel_all_and_wait): nothing is asked then.
 	if (status == job_status::cancelled) {

@@ -242,7 +242,7 @@ namespace edt
 		// the questions it still has waiting). Raised by the agent server's bridge on the main thread.
 		signal<const std::string&> agent_session_closed; // (MCP session id)
 		// The repository changed on disk (a commit or checkout in a terminal...), at most once per kind per poll
-		// (500 ms). The editor's own git calls do not raise `index`.
+		// (500 ms). The editor's own git writes do not raise `index`.
 		signal<repository_change> repository_changed;
 	};
 }

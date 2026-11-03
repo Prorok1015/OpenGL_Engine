@@ -31,6 +31,8 @@ struct watcher_fixture
 	watcher_t::clock::time_point now{};
 	// Each folder listing takes this long (by the fake clock).
 	watcher_t::clock::duration listing_takes{};
+	// Each stat takes this long.
+	watcher_t::clock::duration stat_takes{};
 	bool own_running = false;
 	std::size_t stats = 0;
 	std::unique_ptr<watcher_t> watcher;
@@ -85,6 +87,7 @@ struct watcher_fixture
 		out.now = [this] { return now; };
 		out.stat_file = [this](const fs::path& path) -> std::optional<edt::vcs::file_stamp> {
 			++stats;
+			now += stat_takes;
 			const auto found = entries.find(path);
 			if (found == entries.end()) return std::nullopt;
 			return found->second.stamp;
@@ -97,7 +100,7 @@ struct watcher_fixture
 			}
 			return listed;
 		};
-		out.own_jobs_running = [this] { return own_running; };
+		out.own_writes_running = [this] { return own_running; };
 		return out;
 	}
 
@@ -226,15 +229,67 @@ BOOST_AUTO_TEST_CASE(TooManyRefs_WatchesOnlyTheirFolders_AndStillSeesANewBranchF
 	BOOST_TEST(nothing());
 }
 
-BOOST_AUTO_TEST_CASE(ASlowRefsWalk_WatchesOnlyTheirFolders)
+BOOST_AUTO_TEST_CASE(RefsGrowingPastTheBudget_SwitchToFolders_AndThatPollReportsNothing)
+{
+	arm();
+	BOOST_TEST(!watcher->refs_folders_only());
+	for (std::size_t i = 0; i <= watcher_t::k_refs_budget; ++i) {
+		write(git_dir / "refs" / "remotes" / "origin" / std::format("b{}", i), 41);
+	}
+	BOOST_TEST(nothing());
+	BOOST_TEST(watcher->refs_folders_only());
+	write(git_dir / "refs" / "heads" / "topic", 41);
+	BOOST_TEST(only_refs());
+}
+
+BOOST_AUTO_TEST_CASE(OneSlowRefsWalk_KeepsWatchingEveryFile)
 {
 	listing_takes = 3ms;
 	arm();
-	BOOST_TEST(watcher->refs_folders_only());
+	BOOST_TEST(!watcher->refs_folders_only());
+	listing_takes = {};
+	// The first walk that finishes is the baseline.
 	BOOST_TEST(nothing());
+	// An existing ref rewritten in place: only a per-file watch sees it.
+	write(git_dir / "refs" / "heads" / "main", 41);
+	BOOST_TEST(only_refs());
+	BOOST_TEST(!watcher->refs_folders_only());
+}
+
+BOOST_AUTO_TEST_CASE(ThreeSlowRefsWalksInARow_WatchOnlyTheirFolders_AndTheSwitchReportsNothing)
+{
+	listing_takes = 3ms;
+	arm();
+	BOOST_TEST(nothing());
+	BOOST_TEST(!watcher->refs_folders_only());
+	BOOST_TEST(nothing());
+	BOOST_TEST(watcher->refs_folders_only());
 	write(git_dir / "refs" / "heads" / "topic", 41);
 	BOOST_TEST(only_refs());
 	BOOST_TEST(nothing());
+}
+
+BOOST_AUTO_TEST_CASE(AFastRefsWalk_StartsTheSlowCountAgain)
+{
+	listing_takes = 3ms;
+	arm();
+	listing_takes = {};
+	BOOST_TEST(nothing());
+	listing_takes = 3ms;
+	BOOST_TEST(nothing());
+	BOOST_TEST(nothing());
+	BOOST_TEST(!watcher->refs_folders_only());
+}
+
+BOOST_AUTO_TEST_CASE(ASlowWalkOfOneHugeFolder_IsGivenUpBeforeItsEnd)
+{
+	for (int i = 0; i < 1000; ++i) write(git_dir / "refs" / "tags" / std::format("t{}", i), 41);
+	arm();
+	stat_takes = 10us;
+	const std::size_t before = stats;
+	BOOST_TEST(nothing());
+	BOOST_TEST(stats - before < 1000u);
+	BOOST_TEST(!watcher->refs_folders_only());
 }
 
 BOOST_AUTO_TEST_CASE(AFastWalkOfFewRefs_WatchesEveryFile)
@@ -244,10 +299,10 @@ BOOST_AUTO_TEST_CASE(AFastWalkOfFewRefs_WatchesEveryFile)
 	BOOST_TEST(!watcher->refs_folders_only());
 }
 
-BOOST_AUTO_TEST_CASE(AnIndexChangeOfAnOwnJob_IsNotReported_DuringItNorAfterIt)
+BOOST_AUTO_TEST_CASE(AnIndexChangeOfAnOwnWrite_IsNotReported_DuringItNorAfterIt)
 {
 	arm();
-	watcher->begin_own_job();
+	watcher->begin_own_write();
 	own_running = true;
 	write(git_dir / "index", 130);
 	write(repo / "CMakeLists.txt", 12);
@@ -258,10 +313,10 @@ BOOST_AUTO_TEST_CASE(AnIndexChangeOfAnOwnJob_IsNotReported_DuringItNorAfterIt)
 	BOOST_TEST(nothing());
 }
 
-BOOST_AUTO_TEST_CASE(ARefsChangeDuringAnOwnJob_IsReported)
+BOOST_AUTO_TEST_CASE(ARefsChangeDuringAnOwnWrite_IsReported)
 {
 	arm();
-	watcher->begin_own_job();
+	watcher->begin_own_write();
 	own_running = true;
 	write(git_dir / "index", 130);
 	write(git_dir / "refs" / "heads" / "main", 41);
@@ -270,27 +325,27 @@ BOOST_AUTO_TEST_CASE(ARefsChangeDuringAnOwnJob_IsReported)
 	BOOST_TEST(nothing());
 }
 
-BOOST_AUTO_TEST_CASE(AShortOwnJobBetweenTwoTicks_StillHidesItsIndexChange)
+BOOST_AUTO_TEST_CASE(AShortOwnWriteBetweenTwoTicks_StillHidesItsIndexChange)
 {
 	arm();
 	// Started and ended before the next tick: the running count is back to 0 when tick looks.
-	watcher->begin_own_job();
+	watcher->begin_own_write();
 	write(git_dir / "index", 130);
 	BOOST_TEST(nothing());
 	BOOST_TEST(nothing());
 }
 
-BOOST_AUTO_TEST_CASE(AnIndexChangeBeforeAnOwnJob_IsStillReported)
+BOOST_AUTO_TEST_CASE(AnIndexChangeBeforeAnOwnWrite_IsStillReported)
 {
 	arm();
 	write(git_dir / "index", 130);
-	watcher->begin_own_job();
+	watcher->begin_own_write();
 	own_running = true;
 	BOOST_TEST(only_index());
 	BOOST_TEST(nothing());
 }
 
-BOOST_AUTO_TEST_CASE(AJobSeenOnlyThroughTheRunningCount_StillHidesItsIndexChange)
+BOOST_AUTO_TEST_CASE(AWriteSeenOnlyThroughTheRunningCount_StillHidesItsIndexChange)
 {
 	arm();
 	own_running = true;

@@ -113,16 +113,22 @@ namespace edt
 		vcs_service(const vcs_service&) = delete;
 		vcs_service& operator=(const vcs_service&) = delete;
 
-		// The cached state; the repository is looked up again when the project root changed.
+		// The cached state; the repository is looked up again when the project root changed. Only a new project root
+		// probes again: a `git init` in the open project is seen after a project switch or a restart.
 		const state& info();
+		// The cached state as it is, never probing (what info() returned last).
+		const state& cached_state() const { return m_state; }
+		// Moves whenever a probe set the state: compare it to see that cached_state() changed.
+		std::uint64_t state_generation() const { return m_state_generation; }
 		// The project root the cached state was probed for.
 		const std::optional<std::filesystem::path>& probed_project() const { return m_probed_project; }
 
-		// Called on the main thread as each job that runs git is started, before git can run (repository_watcher:
-		// the work tree and the index changes of the editor's own git calls are not news).
-		void set_job_observer(std::function<void()> on_start) { m_job_observer = std::move(on_start); }
-		// The jobs that run git and have not ended yet (any thread decrements it as a job ends or is dropped unrun).
-		int running_jobs() const { return m_running_jobs->load(); }
+		// Called on the main thread as each write job that runs git is started, before git can run
+		// (repository_watcher: what the editor's own writes do to the index and the work tree is not news). Reads pass
+		// --no-optional-locks and never touch the index: they are not reported.
+		void set_write_observer(std::function<void()> on_start) { m_write_observer = std::move(on_start); }
+		// The write jobs that run git and have not ended yet (decremented on any thread as a job ends or is dropped unrun).
+		int running_writes() const { return m_running_writes->load(); }
 
 		using log_filter = vcs_log_filter;
 
@@ -271,9 +277,11 @@ namespace edt
 		std::uint64_t m_message_count = 0;
 		// Shared with the log jobs, which fill it on the io lane.
 		std::shared_ptr<log_snapshots> m_log_snapshots;
-		std::function<void()> m_job_observer;
+		std::function<void()> m_write_observer;
 		// Shared with the jobs: one dropped before it ran may be destroyed after the service.
-		std::shared_ptr<std::atomic<int>> m_running_jobs = std::make_shared<std::atomic<int>>(0);
+		std::shared_ptr<std::atomic<int>> m_running_writes = std::make_shared<std::atomic<int>>(0);
+		// 1: the state the constructor set; every probe adds one.
+		std::uint64_t m_state_generation = 1;
 		// Last: its jobs are stopped before the rest goes.
 		ds::lifetime m_life{ ds::lifetime_option::cancel_on_destroy };
 	};

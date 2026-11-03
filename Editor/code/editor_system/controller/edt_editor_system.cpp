@@ -544,10 +544,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	};
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
 	edt::vcs::repository_watcher::ports watch_ports;
-	watch_ports.own_jobs_running = [this] { return m_vcs && m_vcs->running_jobs() > 0; };
+	watch_ports.own_writes_running = [this] { return m_vcs && m_vcs->running_writes() > 0; };
 	m_repo_watcher = std::make_unique<edt::vcs::repository_watcher>(std::move(watch_ports));
-	m_vcs->set_job_observer([this] {
-		if (m_repo_watcher) m_repo_watcher->begin_own_job();
+	m_vcs->set_write_observer([this] {
+		if (m_repo_watcher) m_repo_watcher->begin_own_write();
 	});
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
@@ -754,17 +754,8 @@ void edt::editor_system::tick_live_mode()
 void edt::editor_system::tick_repository_watcher()
 {
 	if (!m_repo_watcher || !m_vcs || !m_context) return;
-	const vcs_service::state& state = m_vcs->info();
-	std::vector<std::filesystem::path> paths;
-	if (state.available && state.git_dir) {
-		paths = { *state.git_dir, state.common_dir.value_or(*state.git_dir), state.root.value_or(std::filesystem::path{}),
-			m_vcs->probed_project().value_or(std::filesystem::path{}) };
-	}
-	if (paths != m_watched_paths) {
-		m_watched_paths = paths;
-		if (paths.empty()) m_repo_watcher->set_paths({}, {}, {}, {});
-		else m_repo_watcher->set_paths(paths[0], paths[1], paths[2], paths[3]);
-	}
+	// Not info(): after a project switch that would run the blocking repository probe here, every frame.
+	m_repo_watcher->follow(*m_vcs);
 	const edt::vcs::repository_changes changes = m_repo_watcher->tick();
 	if (changes.refs) m_context->events().repository_changed.emit(repository_change::refs);
 	if (changes.index) m_context->events().repository_changed.emit(repository_change::index);
