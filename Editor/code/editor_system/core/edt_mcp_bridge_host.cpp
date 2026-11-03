@@ -43,6 +43,23 @@ namespace {
 		return command_id == "viewport.capture";
 	}
 
+	bool is_compare(std::string_view command_id)
+	{
+		return command_id == "capture.compare";
+	}
+
+	// The agent may ask for less than a ceiling, never for more.
+	void ceiling(json::object& object, const char* key, std::int64_t limit)
+	{
+		std::int64_t value = limit;
+		if (const json::value* given = object.if_contains(key)) {
+			if (const std::optional<std::int64_t> number = cmd::json_schema::integer_of(*given)) {
+				value = std::min(*number, limit);
+			}
+		}
+		object[key] = value;
+	}
+
 	// Limits the size an agent asks of viewport.capture. A size that is not an integer is left for the schema check of
 	// the registry to refuse. Returns the reason when the request is too big.
 	// The side the agent does not name is derived by the command from the aspect of the view (a tall view and
@@ -69,20 +86,19 @@ namespace {
 		if (!sized) {
 			object["width"] = agent_default_capture_width;
 		}
-		// The agent may ask for less than the ceilings, never for more.
-		const auto ceiling = [&object](const char* key, std::int64_t limit) {
-			std::int64_t value = limit;
-			if (const json::value* given = object.if_contains(key)) {
-				if (const std::optional<std::int64_t> number = cmd::json_schema::integer_of(*given)) {
-					value = std::min(*number, limit);
-				}
-			}
-			object[key] = value;
-		};
-		ceiling("max_side", agent_max_capture_side);
-		ceiling("max_pixels", agent_max_capture_pixels);
-		ceiling("max_source_pixels", agent_max_source_pixels);
+		ceiling(object, "max_side", agent_max_capture_side);
+		ceiling(object, "max_pixels", agent_max_capture_pixels);
+		ceiling(object, "max_source_pixels", agent_max_source_pixels);
 		return std::nullopt;
+	}
+
+	// capture.compare reads the view back whole and cannot scale it (the comparison is at full size), so of the
+	// viewport.capture limits only the source one applies: a bigger view, or reference, is refused.
+	void limit_compare_args(json::value& args)
+	{
+		if (args.is_object()) {
+			ceiling(args.as_object(), "max_source_pixels", agent_max_source_pixels);
+		}
 	}
 
 	std::string too_large_text(std::size_t bytes)
@@ -326,6 +342,8 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 				done(error_result(*refusal));
 				return;
 			}
+		} else if (is_compare(id)) {
+			limit_compare_args(limited);
 		}
 		cmd::call request;
 		request.args = std::move(limited);

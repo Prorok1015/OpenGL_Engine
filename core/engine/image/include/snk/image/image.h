@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <string_view>
 #include <vector>
 
@@ -36,9 +37,13 @@ namespace stb_image {
 		int height() const { return height_; };
 		size_t size() const { return size_; }
 		void flip(ImageFlip fp) { flipFlag_ = fp; }
+		// After read_from_memory: the flip stb decoded the rows with (VERTICAL: the first row is the bottom one).
+		ImageFlip flipped() const { return flipFlag_; }
 
 		static void free_image_data(unsigned char* data);
 		static Image read_from_memory(const unsigned char* data, int len);
+		// The size and channel count from the header, without decoding the pixels; false when stb cannot read it.
+		static bool info_from_memory(const unsigned char* data, int len, int& width, int& height, int& channels);
 		static void set_image_flip(ImageFlip flag);
 		static void write_to_memory(ImageType type, const unsigned char* data, int width, int height, int channels, std::vector<std::byte>& out_data);
 	

@@ -42,6 +42,7 @@ namespace {
 	struct render_commands
 	{
 		cmd::registration capture;
+		cmd::registration compare;
 	};
 
 	std::size_t budget_of(int configured)
@@ -141,6 +142,7 @@ void engine::render::render_init(ds::app_data_storage& data)
 	auto& commands = data.construct<render_commands>();
 	if (data.has_value<cmd::command_registry>()) {
 		commands.capture = rnd::register_capture_commands(data.require<cmd::command_registry>(), capture);
+		commands.compare = rnd::register_capture_compare_command(data.require<cmd::command_registry>(), capture, res_sys);
 	}
 }
 
