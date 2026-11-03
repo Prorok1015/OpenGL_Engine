@@ -879,4 +879,46 @@ BOOST_AUTO_TEST_CASE(PlaySet_TenStartStopCyclesOnTheGameLayerLeaveNothingBehind)
 	BOOST_TEST(mgr.level_set().layer() == &layer);
 }
 
+BOOST_AUTO_TEST_CASE(HotReload_LevelReloadsAndSwitchesDoNotGrowTheWatchedTags)
+{
+	const auto prefab_tag = put("m.prefab.desc", PREFAB_HP1);
+	const auto prefab = load<scn::prefab_desc>(prefab_tag);
+	const auto tag1 = put("lv.desc", LEVEL_V1);
+	const auto tag3 = put("lv3.desc", LEVEL_V3_DIFFERENT_WORLDS);
+	constexpr auto frame = std::chrono::duration<float>(0.001f);
+
+	// watched_count() after: loading the first level, its full reload, switching to the other level
+	std::size_t expected[3] = {};
+	for (int cycle = 0; cycle < 10; ++cycle) {
+		BOOST_TEST_CONTEXT("cycle " << cycle) {
+			put("lv.desc", LEVEL_V1);
+			pump();
+
+			BOOST_REQUIRE(mgr.load_level(tag1));
+			spawn_prefab(*assembler, mgr.level_set().get("w0"), *prefab, prefab_tag);
+			const std::size_t loaded = hot->watched_count();
+
+			put("lv.desc", LEVEL_V3_DIFFERENT_WORLDS); // another list of worlds: a full rebuild of the level
+			rs->signal_changed(tag1);
+			pump();
+			mgr.update(frame);
+			BOOST_REQUIRE(mgr.level_set().has("only"));
+			const std::size_t reloaded = hot->watched_count();
+
+			BOOST_REQUIRE(mgr.load_level(tag3));
+			const std::size_t switched = hot->watched_count();
+
+			if (cycle == 0) {
+				BOOST_TEST(loaded >= 2u); // the level and the prefab, at least
+				expected[0] = loaded;
+				expected[1] = reloaded;
+				expected[2] = switched;
+			}
+			BOOST_TEST(loaded == expected[0]);
+			BOOST_TEST(reloaded == expected[1]);
+			BOOST_TEST(switched == expected[2]);
+		}
+	}
+}
+
 BOOST_AUTO_TEST_SUITE_END()
