@@ -971,3 +971,104 @@ BOOST_AUTO_TEST_CASE(ManyThreads_UseTheEndpointAtOnce)
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(McpEndpointSessionListTests)
+
+namespace {
+
+struct listing_fixture
+{
+	fake_host host;
+	std::chrono::steady_clock::time_point current{};
+	mcp::endpoint ep;
+
+	listing_fixture()
+		: ep(host, [this] {
+			mcp::endpoint_config config = make_config();
+			config.clock = [this] { return current; };
+			return config;
+		}())
+	{
+		ep.set_port(test_port);
+	}
+
+	std::string open(const std::string& client_info_json)
+	{
+		std::optional<mcp::http_response> response;
+		ep.handle(make_request("POST", rpc("1", "initialize",
+			R"({"protocolVersion":"2025-06-18","clientInfo":)" + client_info_json + "}")),
+			[&response](mcp::http_response r) { response = std::move(r); });
+		for (const mcp::http_header& h : response->headers) {
+			if (h.name == "Mcp-Session-Id") {
+				return h.value;
+			}
+		}
+		return {};
+	}
+
+	int ping(const std::string& session)
+	{
+		mcp::http_request request = make_request("POST", rpc("1", "ping"));
+		set_header(request, "mcp-session-id", session);
+		int status = 0;
+		ep.handle(request, [&status](mcp::http_response r) { status = r.status; });
+		return status;
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(Sessions_AreListedOldestFirstWithTheirClientAndTimes, listing_fixture)
+{
+	const std::string first = open(R"({"name":"claude-code","version":"1"})");
+	current += std::chrono::seconds(30);
+	const std::string second = open(R"({"name":"other"})");
+	current += std::chrono::seconds(30);
+	BOOST_TEST(ping(first) == 200);
+	current += std::chrono::seconds(10);
+
+	const std::vector<mcp::session_info> listed = ep.sessions();
+	BOOST_REQUIRE_EQUAL(listed.size(), 2u);
+	BOOST_TEST(listed[0].id == first);
+	BOOST_TEST(listed[0].client_name == "claude-code");
+	BOOST_TEST(listed[0].age.count() == 70);
+	BOOST_TEST(listed[0].idle.count() == 10);
+	BOOST_TEST(listed[1].id == second);
+	BOOST_TEST(listed[1].client_name == "other");
+	BOOST_TEST(listed[1].age.count() == 40);
+	BOOST_TEST(listed[1].idle.count() == 40);
+	BOOST_TEST(!listed[1].listening);
+}
+
+BOOST_FIXTURE_TEST_CASE(ClientName_IsCutAndHasNoControlCharacters, listing_fixture)
+{
+	open(R"({"name":"a\u0000b\nc\u001b[31md"})");
+	open("{}");
+	open(R"({"name":5})");
+	open(R"({"name":")" + std::string(200, 'x') + R"("})");
+
+	const std::vector<mcp::session_info> listed = ep.sessions();
+	BOOST_REQUIRE_EQUAL(listed.size(), 4u);
+	BOOST_TEST(listed[0].client_name == "abc[31md");
+	BOOST_TEST(listed[1].client_name.empty());
+	BOOST_TEST(listed[2].client_name.empty());
+	BOOST_TEST(listed[3].client_name == std::string(64, 'x'));
+}
+
+BOOST_FIXTURE_TEST_CASE(CloseSession_EndsOnlyThatSessionAndTellsTheHost, listing_fixture)
+{
+	const std::string keep = open(R"({"name":"keep"})");
+	const std::string drop = open(R"({"name":"drop"})");
+
+	BOOST_TEST(ep.close_session(drop));
+	BOOST_TEST(ping(drop) == 404);
+	BOOST_TEST(ping(keep) == 200);
+	BOOST_TEST(host.closed_sessions() == std::vector<std::string>{ drop });
+	BOOST_TEST(ep.session_count() == 1u);
+
+	BOOST_TEST(!ep.close_session(drop));
+	BOOST_TEST(!ep.close_session("nope"));
+	BOOST_TEST(host.closed_sessions().size() == 1u);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

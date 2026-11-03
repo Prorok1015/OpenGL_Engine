@@ -242,7 +242,7 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 	return true;
 }
 
-std::string mcp::endpoint::create_session()
+std::string mcp::endpoint::create_session(std::string client_name)
 {
 	expire_idle_sessions();
 	std::string id = new_session_id();
@@ -265,7 +265,9 @@ std::string mcp::endpoint::create_session()
 		}
 		session created;
 		created.serial = m_state->next_serial++;
-		created.last_used = now();
+		created.started = now();
+		created.last_used = created.started;
+		created.client_name = std::move(client_name);
 		m_state->sessions.emplace(id, std::move(created));
 	}
 	for (std::string& gone : evicted) {
@@ -378,12 +380,38 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 	});
 }
 
+namespace {
+
+	// clientInfo.name of initialize, to show a person: whatever the client sent, cut and cleaned.
+	std::string client_name_of(const json::object& params)
+	{
+		const json::value* info = params.if_contains("clientInfo");
+		const json::value* name = info != nullptr && info->is_object() ? info->as_object().if_contains("name") : nullptr;
+		if (name == nullptr || !name->is_string()) {
+			return {};
+		}
+		std::string out;
+		for (const char ch : std::string_view(name->as_string().data(), name->as_string().size())) {
+			const auto byte = static_cast<unsigned char>(ch);
+			if (byte < 0x20 || byte == 0x7f) {
+				continue;
+			}
+			if (out.size() >= 64) {
+				break;
+			}
+			out.push_back(ch);
+		}
+		return out;
+	}
+
+}
+
 void mcp::endpoint::on_initialize(const json::value& id, const json::object& params, const responder& respond)
 {
 	bool accepted = false;
 	http_response response = json_response(m_rpc.initialize(id, params, accepted));
 	if (accepted) {
-		response.set_header("Mcp-Session-Id", create_session());
+		response.set_header("Mcp-Session-Id", create_session(client_name_of(params)));
 	}
 	respond(std::move(response));
 }
@@ -520,6 +548,52 @@ void mcp::endpoint::expire_idle_sessions() const
 	for (std::string& id : expired) {
 		m_host.session_closed(std::move(id));
 	}
+}
+
+std::vector<mcp::session_info> mcp::endpoint::sessions() const
+{
+	expire_idle_sessions();
+	std::vector<std::pair<std::uint64_t, session_info>> found;
+	{
+		std::lock_guard lock(m_state->mutex);
+		const auto current = now();
+		found.reserve(m_state->sessions.size());
+		for (const auto& [id, entry] : m_state->sessions) {
+			session_info info;
+			info.id = id;
+			info.client_name = entry.client_name;
+			info.age = std::chrono::duration_cast<std::chrono::seconds>(current - entry.started);
+			info.idle = std::chrono::duration_cast<std::chrono::seconds>(current - entry.last_used);
+			info.listening = entry.channel && !entry.channel->closed();
+			found.emplace_back(entry.serial, std::move(info));
+		}
+	}
+	std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	std::vector<session_info> out;
+	out.reserve(found.size());
+	for (auto& entry : found) {
+		out.push_back(std::move(entry.second));
+	}
+	return out;
+}
+
+bool mcp::endpoint::close_session(const std::string& id)
+{
+	std::shared_ptr<event_channel> channel;
+	{
+		std::lock_guard lock(m_state->mutex);
+		const auto found = m_state->sessions.find(id);
+		if (found == m_state->sessions.end()) {
+			return false;
+		}
+		channel = found->second.channel;
+		m_state->sessions.erase(found);
+	}
+	if (channel) {
+		channel->close();
+	}
+	m_host.session_closed(id);
+	return true;
 }
 
 void mcp::endpoint::close_all()
