@@ -65,7 +65,7 @@ std::vector<edt::registration> edt::register_editor_mode_commands(action_registr
 		}
 		const bool agent = call.from.kind == cmd::origin_kind::agent;
 		// The toggle must not open what the policy keeps closed on the play.* command making the same change. Only a mode
-		// stricter than the toggle's own refuses: an `ask` both share was already put to the person for this very call.
+		// stricter than the toggle's own refuses: an `ask` both share was approved by the person or their session grant.
 		if (const std::string_view play_command = controller->play_command_for(target); agent && !play_command.empty() && agent_mode_of) {
 			const cmd::policy_mode mode = agent_mode_of(play_command);
 			if (mode > agent_mode_of("editor.mode.toggle")) {

@@ -192,8 +192,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 			"Missing or broken: every agent request is denied")
 		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
 			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
-			"--game=res://<level> also sets the level to start (editor/game_level; only a res:// tag); write it with '=': "
-			"'--game <level>' does not take the level");
+			"--game=res://<level> or --game res://<level> also sets the level to start (editor/game_level; only a res:// tag)");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
@@ -241,21 +240,6 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		// Its own key: the editor checks it is a res:// tag, which editor/startup_level is not held to.
 		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
 			set_registered("editor/game_level", level);
-		} else {
-			// The parser has no positional arguments: `--game <level>` would drop the level without a word, and the start
-			// level would stand in for it.
-			std::string_view after_game;
-			for (int i = 1; i + 1 < argc; ++i) {
-				if (std::string_view{ argv[i] } == "--game" && argv[i + 1][0] != '-') {
-					after_game = argv[i + 1];
-					break;
-				}
-			}
-			if (!after_game.empty()) {
-				egLOG_ERROR("config", "'{}' after --game is not taken: write the level as --game=res://<level>", after_game);
-				// Not a res:// tag, so the editor refuses it and loads no level at all.
-				set_registered("editor/game_level", "--game " + std::string{ after_game });
-			}
 		}
 	}
 	if (vm.count("headless")) {
