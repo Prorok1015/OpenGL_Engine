@@ -34,6 +34,13 @@ cmd::command_desc command_of(std::string id, agent_category category, cmd::dange
 	return desc;
 }
 
+// The layer a person is shown: the file as the policy reads it now.
+edt::policy_layer reviewed(edt::agent_policy& policy)
+{
+	policy.refresh();
+	return policy.project();
+}
+
 edt::policy_layer layer_with(agent_category category, policy_mode mode)
 {
 	edt::policy_layer layer;
@@ -306,7 +313,7 @@ BOOST_AUTO_TEST_CASE(AFileEditedByAPerson_IsTakenOverWithoutARestart)
 
 	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"allow"}})");
 	policy.set_approval_allowed(true);
-	BOOST_TEST(!policy.approve_project_layer().has_value());
+	BOOST_TEST(!policy.approve_project_layer(reviewed(policy)).has_value());
 	BOOST_TEST((policy.effective(command).mode == policy_mode::allow));
 
 	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"deny","extra":1}})");
@@ -363,7 +370,7 @@ BOOST_AUTO_TEST_CASE(ThePersonalFile_OnlyTightens)
 	dir.write("personal.json", R"({"categories":{"code_files":"deny","build":"allow"}})");
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 	policy.set_approval_allowed(true);
-	BOOST_TEST(!policy.approve_project_layer().has_value());
+	BOOST_TEST(!policy.approve_project_layer(reviewed(policy)).has_value());
 
 	// The personal deny tightens the project's allow; the personal allow does not lift the project's deny.
 	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::deny));
@@ -376,7 +383,7 @@ BOOST_AUTO_TEST_CASE(LiveCommands_FollowTheLiveModeTheOwnerGives)
 	dir.write(".snk/agent_policy.json", R"({"categories":{"live":"allow"}})");
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 	policy.set_approval_allowed(true);
-	BOOST_TEST(!policy.approve_project_layer().has_value());
+	BOOST_TEST(!policy.approve_project_layer(reviewed(policy)).has_value());
 	const auto live = command_of("live.status", agent_category::live);
 
 	BOOST_TEST((policy.effective(live).mode == policy_mode::deny));
@@ -488,7 +495,7 @@ struct gate_fixture
 	{
 		dir.write(".snk/agent_policy.json", text);
 		policy.set_approval_allowed(true);
-		BOOST_REQUIRE(!policy.approve_project_layer().has_value());
+		BOOST_REQUIRE(!policy.approve_project_layer(reviewed(policy)).has_value());
 	}
 };
 
@@ -684,15 +691,21 @@ struct approval_fixture
 	test_util::temp_dir dir{ "edt_agent_policy_approval" };
 	fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
 	fs::path approved_file = dir.path() / "settings" / "agent_policy_approved" / "p.json";
+	std::string key = "/projects/p";
 	cmd::command_desc create = command_of("code.create", agent_category::code_files);
 	cmd::command_desc build = command_of("build.game_module", agent_category::build, cmd::danger::deny_by_default);
 	cmd::command_desc wipe = command_of("code.wipe", agent_category::code_files, cmd::danger::confirm);
+	std::vector<cmd::command_desc> extra;
 
 	std::unique_ptr<edt::agent_policy> make(bool person_present = true)
 	{
-		auto policy = std::make_unique<edt::agent_policy>(project_file, dir.path() / "personal.json", approved_file);
+		auto policy = std::make_unique<edt::agent_policy>(project_file, dir.path() / "personal.json", edt::approved_snapshot_location{ approved_file, key });
 		policy->set_approval_allowed(person_present);
-		policy->set_command_source([this] { return std::vector<const cmd::command_desc*>{ &create, &build, &wipe }; });
+		policy->set_command_source([this] { 
+			std::vector<const cmd::command_desc*> listed{ &create, &build, &wipe };
+			for (const cmd::command_desc& more : extra) listed.push_back(&more);
+			return listed;
+		});
 		return policy;
 	}
 
@@ -717,7 +730,7 @@ BOOST_FIXTURE_TEST_CASE(AFileLooserThanTheDefaults_WaitsForAPerson_AndTheStricte
 	BOOST_REQUIRE(!policy->pending_loosenings().empty());
 	BOOST_TEST(policy->pending_loosenings().front().what == "category code_files");
 
-	BOOST_TEST(!policy->approve_project_layer().has_value());
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
 	BOOST_TEST(!policy->project_pending_approval());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::allow));
 	BOOST_TEST((policy->effective(create).source == edt::policy_source::project));
@@ -729,7 +742,7 @@ BOOST_FIXTURE_TEST_CASE(WithoutAPerson_ALooserFileNeverTakesEffect, approval_fix
 	const auto policy = make(false);
 
 	BOOST_TEST((policy->effective(create).mode == policy_mode::ask));
-	const auto refused = policy->approve_project_layer();
+	const auto refused = policy->approve_project_layer(reviewed(*policy));
 	BOOST_REQUIRE(refused.has_value());
 	BOOST_TEST(policy->project_pending_approval());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::ask));
@@ -759,7 +772,7 @@ BOOST_FIXTURE_TEST_CASE(AFileLoosenedLaterOnDisk_IsPending_UntilApproved, approv
 	BOOST_TEST((policy->effective(create).source == edt::policy_source::approval_pending));
 	BOOST_TEST(policy->project_pending_approval());
 
-	BOOST_TEST(!policy->approve_project_layer().has_value());
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::allow));
 }
 
@@ -768,7 +781,7 @@ BOOST_FIXTURE_TEST_CASE(TheApprovedCopy_SurvivesARestart, approval_fixture)
 	write_project(R"({"categories":{"code_files":"allow"}})");
 	{
 		const auto policy = make();
-		BOOST_TEST(!policy->approve_project_layer().has_value());
+		BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
 	}
 	const auto again = make(false);
 	BOOST_TEST((again->effective(create).mode == policy_mode::allow));
@@ -797,7 +810,7 @@ BOOST_FIXTURE_TEST_CASE(AnUnusableFile_DeniesAndIsNotPending, approval_fixture)
 	const auto policy = make();
 	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
 	BOOST_TEST(!policy->project_pending_approval());
-	BOOST_TEST(policy->approve_project_layer().has_value());
+	BOOST_TEST(policy->approve_project_layer(reviewed(*policy)).has_value());
 }
 
 BOOST_FIXTURE_TEST_CASE(ACorruptApprovedCopy_IsTheBuiltInDefaults, approval_fixture)
@@ -807,6 +820,29 @@ BOOST_FIXTURE_TEST_CASE(ACorruptApprovedCopy_IsTheBuiltInDefaults, approval_fixt
 	const auto policy = make();
 	BOOST_TEST((policy->effective(create).mode == policy_mode::ask));
 	BOOST_TEST(policy->project_pending_approval());
+	// The copy is kept, not overwritten, and nothing is adopted silently while it is lost.
+	BOOST_TEST(fs::exists(approved_file.string() + ".corrupt"));
+	BOOST_TEST(!fs::exists(approved_file));
+
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
+	BOOST_TEST(fs::exists(approved_file));
+	BOOST_TEST((policy->effective(create).mode == policy_mode::allow));
+}
+
+BOOST_FIXTURE_TEST_CASE(ACopyApprovedForAnotherProject_IsNotTrusted, approval_fixture)
+{
+	{
+		write_project(R"({"categories":{"code_files":"deny"}})");
+		const auto policy = make(false);
+		policy->effective(create);
+		BOOST_TEST(fs::exists(approved_file));
+	}
+	key = "/projects/other";
+	write_project(R"({"categories":{"code_files":"ask"}})");
+	const auto policy = make();
+	policy->effective(create);
+	BOOST_TEST(policy->project_pending_approval());
+	BOOST_TEST(fs::exists(approved_file.string() + ".corrupt"));
 }
 
 BOOST_FIXTURE_TEST_CASE(APersonsSaveInTheSettingsWindow_IsTheirApproval, approval_fixture)
@@ -833,8 +869,106 @@ BOOST_FIXTURE_TEST_CASE(ApprovingAndAChangedFile_TellTheListeners, approval_fixt
 	policy->effective(create);
 	int changed = 0;
 	policy->set_on_changed([&changed] { ++changed; });
-	BOOST_TEST(!policy->approve_project_layer().has_value());
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
 	BOOST_TEST(changed == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(ACommandEntryNamedLikeAnInternalProbe_CannotHideALoosening, approval_fixture)
+{
+	// Written to the parser: refused as a whole, so the file denies everything and is never adopted.
+	write_project(R"({"categories":{"cmake_presets":"allow","code_files":"allow","code_edit":"allow"},"commands":{"\u0001probe":"deny"}})");
+	const auto policy = make();
+	BOOST_TEST(!policy->project_error().empty());
+	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
+	BOOST_TEST(!fs::exists(approved_file));
+
+	// Whatever ids a layer holds, the categories are judged by their own entries.
+	edt::policy_layer layer;
+	layer.categories[agent_category::cmake_presets] = policy_mode::allow;
+	layer.categories[agent_category::code_files] = policy_mode::allow;
+	layer.categories[agent_category::code_edit] = policy_mode::allow;
+	layer.commands["\x01probe"] = policy_mode::deny;
+	layer.commands[""] = policy_mode::deny;
+	BOOST_TEST(edt::find_loosenings({}, layer, {}).size() >= 3u);
+}
+
+BOOST_AUTO_TEST_CASE(ACommandIdOutsideTheGrammar_IsALayerError)
+{
+	for (const char* text : { R"({"commands":{"":"deny"}})", R"({"commands":{"a b":"deny"}})", R"({"commands":{"a/b":"deny"}})",
+			R"({"allow":["a\u0001b"]})", R"({"deny":[""]})" }) {
+		BOOST_TEST_CONTEXT(text) { BOOST_TEST(!edt::parse_policy_layer(text).error.empty()); }
+	}
+	BOOST_TEST(edt::parse_policy_layer(R"({"commands":{"build.live.toggle":"deny","a-b_c.D9":"ask"}})").error.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(AFileThatChangedSinceItWasShown_IsNotApproved, approval_fixture)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	const auto policy = make();
+	const edt::policy_layer shown = reviewed(*policy);
+
+	write_project(R"({"categories":{"code_files":"allow","code_edit":"allow","build":"ask"}})");
+	const auto refused = policy->approve_project_layer(shown);
+	BOOST_REQUIRE(refused.has_value());
+	BOOST_TEST(policy->project_pending_approval());
+	BOOST_TEST((policy->effective(create).mode == policy_mode::ask));
+	BOOST_TEST(!fs::exists(approved_file));
+
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
+	BOOST_TEST((policy->effective(create).mode == policy_mode::allow));
+}
+
+BOOST_FIXTURE_TEST_CASE(APersonsEditOnTopOfTheApprovedLayer_DropsThePendingLoosenings, approval_fixture)
+{
+	write_project(R"({"categories":{"code_files":"deny"}})");
+	const auto policy = make();
+	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
+	write_project(R"({"categories":{"code_files":"allow","build":"ask"},"commands":{}})");
+	BOOST_TEST(policy->project_pending_approval());
+
+	edt::policy_layer edited = policy->approved_project();
+	edited.categories[agent_category::scene_edit] = policy_mode::ask;
+	BOOST_TEST(!policy->save_project(edited).has_value());
+
+	BOOST_TEST(!policy->project_pending_approval());
+	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
+	BOOST_TEST((policy->effective(build).mode == policy_mode::deny));
+	BOOST_TEST((policy->approved_project().categories.at(agent_category::scene_edit) == policy_mode::ask));
+	BOOST_TEST(!policy->approved_project().categories.contains(agent_category::build));
+}
+
+BOOST_FIXTURE_TEST_CASE(ALooseningOfOneCategory_DoesNotLoosenTheCallsCategoryOfAnotherCommand, approval_fixture)
+{
+	write_project(R"({"categories":{"code_edit":"allow"}})");
+	const auto policy = make();
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
+	const cmd::command_desc write = command_of("code.write", agent_category::code_edit);
+	BOOST_TEST((policy->effective(write).mode == policy_mode::allow));
+
+	write_project(R"({"categories":{"code_edit":"allow","cmake_presets":"allow"}})");
+	BOOST_TEST((policy->effective(write).mode == policy_mode::allow));
+	// A CMake write by code.write is judged by cmake_presets: still asked until a person approves the looser file.
+	BOOST_TEST((policy->effective(write, agent_category::cmake_presets).mode == policy_mode::ask));
+	BOOST_TEST(policy->project_pending_approval());
+}
+
+BOOST_FIXTURE_TEST_CASE(AnEntryForACommandThatLaterGetsARiskFloor_IsNotRecordedAndIsJudgedAgain, approval_fixture)
+{
+	extra.push_back(command_of("scene.query", agent_category::read));
+	write_project(R"({"categories":{"code_files":"deny"},"commands":{"scene.query":"allow"}})");
+	const auto policy = make(false);
+	BOOST_TEST((policy->effective(extra.front()).mode == policy_mode::allow));
+	BOOST_TEST(!policy->project_pending_approval());
+	// The deny was recorded; the entry that equals the default today was not.
+	BOOST_TEST(policy->approved_project().categories.contains(agent_category::code_files));
+	BOOST_TEST(policy->approved_project().commands.empty());
+
+	// The module is loaded again with a floor on the command (and another command, so that the registry visibly changed).
+	extra.front().risk = cmd::danger::confirm;
+	extra.push_back(command_of("other.thing", agent_category::read));
+	BOOST_TEST((policy->effective(extra.front()).mode == policy_mode::ask));
+	BOOST_TEST(policy->project_pending_approval());
+	BOOST_TEST((policy->effective(extra.front()).source == edt::policy_source::approval_pending));
 }
 
 BOOST_AUTO_TEST_CASE(FindLoosenings_SeesEveryWayAFileGetsLooser)
@@ -881,11 +1015,14 @@ BOOST_AUTO_TEST_CASE(TheApprovedCopyOfAProject_IsKeptByItsCanonicalPath)
 	fs::create_directories(dir.path() / "a");
 	fs::create_directories(dir.path() / "b");
 	const fs::path settings = dir.path() / "settings";
-	const fs::path first = edt::approved_snapshot_file(settings, dir.path() / "a");
-	BOOST_TEST((first == edt::approved_snapshot_file(settings, dir.path() / "a" / ".." / "a")));
-	BOOST_TEST((first != edt::approved_snapshot_file(settings, dir.path() / "b")));
-	BOOST_TEST((first.parent_path() == settings / "agent_policy_approved"));
-	BOOST_TEST(first.extension() == ".json");
+	const edt::approved_snapshot_location first = edt::approved_snapshot_for(settings, dir.path() / "a");
+	const edt::approved_snapshot_location same = edt::approved_snapshot_for(settings, dir.path() / "a" / ".." / "a");
+	BOOST_TEST((first.file == same.file));
+	BOOST_TEST(first.key == same.key);
+	BOOST_TEST((first.file != edt::approved_snapshot_for(settings, dir.path() / "b").file));
+	BOOST_TEST((first.file.parent_path() == settings / "agent_policy_approved"));
+	BOOST_TEST(first.file.extension() == ".json");
+	BOOST_TEST(!first.key.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

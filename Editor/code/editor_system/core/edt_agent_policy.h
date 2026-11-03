@@ -123,9 +123,15 @@ namespace edt
 	std::vector<policy_loosening> find_loosenings(const policy_layer& approved, const policy_layer& current,
 		const std::vector<const cmd::command_desc*>& commands);
 
-	// Where the layer a person approved for `project_root` is kept: <personal_settings_dir>/agent_policy_approved/<hash of the
-	// canonical project path>.json. A moved project is a new project: it is approved again.
-	std::filesystem::path approved_snapshot_file(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root);
+	// Where the layer a person approved for a project is kept: <personal_settings_dir>/agent_policy_approved/<hash>.json, and
+	// the canonical path ("key") the copy was approved for, written inside it and checked on load (a hash that two paths share
+	// must not hand one project the approval of another). A moved project is a new project: it is approved again.
+	struct approved_snapshot_location
+	{
+		std::filesystem::path file;
+		std::string key;
+	};
+	approved_snapshot_location approved_snapshot_for(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root);
 
 	// The two files, read again when they change on disk (a person edits them; an agent cannot).
 	//
@@ -137,8 +143,9 @@ namespace edt
 	class agent_policy
 	{
 	public:
-		// `approved_file`: where the approved copy is kept (empty: in memory only, as in tests).
-		agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file, std::filesystem::path approved_file = {});
+		// `approved`: where the approved copy is kept (empty file: in memory only, as in tests). The copy is trusted because no
+		// command, tool or agent can write into edt://settings; one that could would approve its own loosenings.
+		agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file, approved_snapshot_location approved = {});
 
 		// Re-reads a file that changed; cheap otherwise.
 		void refresh();
@@ -162,8 +169,9 @@ namespace edt
 		const std::vector<policy_loosening>& pending_loosenings() const { return m_loosenings; }
 		// The layer a person approved last (empty before any).
 		const policy_layer& approved_project() const { return m_approved; }
-		// The person approves the project file as it is now. The error, nullopt on success.
-		std::optional<std::string> approve_project_layer();
+		// The person approves the project file, which must still be the `reviewed` layer they were shown: a file that changed
+		// in between (a checkout, an agent's tool) is refused and has to be looked at again. The error, nullopt on success.
+		std::optional<std::string> approve_project_layer(const policy_layer& reviewed);
 
 		// Called (main thread) after a layer that was already loaded is read again, because its file changed or a person saved it:
 		// what an agent may see can have changed, so the MCP clients are told to ask for the tool list again.
@@ -176,7 +184,10 @@ namespace edt
 		const std::filesystem::path& project_file() const { return m_project.file; }
 		const std::filesystem::path& personal_file() const { return m_personal.file; }
 
-		// A person's edit (the settings window): writes the file atomically and takes the layer over. The error, nullopt on success.
+		// A person's edit (the settings window): writes the file atomically, takes the layer over and approves all of it. The
+		// window therefore builds `layer` from approved_project() plus the person's edits, never from the file as it is while
+		// loosenings wait: whatever pending loosening is in `layer` is approved with it, and one that is not is dropped from
+		// the file. The error, nullopt on success.
 		std::optional<std::string> save_project(const policy_layer& layer, const prj::text_writer& write = {});
 		std::optional<std::string> save_personal(const policy_layer& layer, const prj::text_writer& write = {});
 
@@ -201,6 +212,7 @@ namespace edt
 		// Compares the project file with the approved layer: takes it over when it loosens nothing, else it is pending.
 		void reconcile_project();
 		std::optional<std::string> keep_approved(const policy_layer& layer);
+		void load_approved();
 		std::vector<const cmd::command_desc*> commands() const;
 		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write, bool approve = false);
 		void warn_unknown_commands(source& what) const;
@@ -212,7 +224,12 @@ namespace edt
 		std::function<void()> m_on_changed;
 		std::function<std::vector<const cmd::command_desc*>()> m_commands;
 		std::filesystem::path m_approved_file;
+		std::string m_approved_key;
 		policy_layer m_approved;
+		// The approved copy exists but could not be used (kept next to it as *.corrupt): what a person had approved is unknown,
+		// so nothing is adopted silently until they approve again.
+		bool m_snapshot_lost = false;
+		std::size_t m_reconciled_commands = static_cast<std::size_t>(-1);
 		std::vector<policy_loosening> m_loosenings;
 		bool m_pending = false;
 		bool m_approval_allowed = false;

@@ -106,7 +106,7 @@ struct bridge_fixture
 		access.policy().refresh();
 		// These tests are about what the file says; a file that is not usable stays unapproved (and denies).
 		access.policy().set_approval_allowed(true);
-		access.policy().approve_project_layer();
+		access.policy().approve_project_layer(access.policy().project());
 	}
 
 	int rewrites = 0;

@@ -62,7 +62,8 @@ struct confirmations_fixture
 	{
 		dir.write(".snk/agent_policy.json", text);
 		policy.set_approval_allowed(true);
-		BOOST_REQUIRE(!policy.approve_project_layer().has_value());
+		policy.refresh();
+		BOOST_REQUIRE(!policy.approve_project_layer(policy.project()).has_value());
 	}
 
 	void add(std::string id, agent_category category)
