@@ -190,6 +190,11 @@ namespace edt
 		return "user";
 	}
 
+	// What changed in the repository of the project (vcs::repository_watcher, #485): `index` = the index or a
+	// top-level file of the work tree (the status may differ), `refs` = HEAD, a branch, a tag, FETCH_HEAD... (the
+	// status and the history may differ).
+	enum class repository_change : std::uint8_t { index, refs };
+
 	// What an agent changed outside the scene (A7 #451: a code file written, created, deleted, renamed), for the agent's
 	// status bar (#449).
 	struct agent_action_info
@@ -206,7 +211,7 @@ namespace edt
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
 	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
 	// problem_list (problems_changed), game_builder (game_module_built), mcp_bridge_host via editor_system
-	// (agent_session_closed).
+	// (agent_session_closed), editor_system's repository watcher (repository_changed).
 	class editor_events
 	{
 	public:
@@ -236,5 +241,8 @@ namespace edt
 		// server): what is kept for it goes (its open agent session, its "allow until the end of the session",
 		// the questions it still has waiting). Raised by the agent server's bridge on the main thread.
 		signal<const std::string&> agent_session_closed; // (MCP session id)
+		// The repository changed on disk (a commit or checkout in a terminal...), at most once per kind per poll
+		// (500 ms). The editor's own git calls do not raise `index`.
+		signal<repository_change> repository_changed;
 	};
 }

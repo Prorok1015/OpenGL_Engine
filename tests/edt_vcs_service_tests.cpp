@@ -3,6 +3,7 @@
 #include "edt_path_text.h"
 #include "edt_agent_policy.h"
 #include "edt_git_panel_model.h"
+#include "edt_repository_watcher.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_service_commands.h>
 #include <snk/platform/plt_process.h>
@@ -2420,6 +2421,97 @@ BOOST_AUTO_TEST_CASE(AnAgentsPull_WithoutARemote_IsCheckedAgainstTheBranchsRemot
 
 	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "denied"));
 	BOOST_TEST(is_error(finish(service->start_fetch({}, cmd::origin_kind::agent)), "denied"));
+}
+
+// #485: the probe gives the worktree's own git folder and the common one, absolute, for the repository watcher.
+BOOST_AUTO_TEST_CASE(RealRepository_AndALinkedWorktree_GiveAbsoluteGitDirAndCommonDir)
+{
+	const fs::path repo = make_plain_repository("main_repo");
+	fs::create_directories(repo / "sub");
+	const fs::path tree = base / "linked";
+	git(repo, { "worktree", "add", "-b", "linked_branch", edt::utf8_of(tree) });
+	const auto check = [this](const fs::path& project, const fs::path& git_dir, const fs::path& common_dir) {
+		make_service(real_options(project));
+		const auto& state = service->info();
+		BOOST_REQUIRE_MESSAGE(state.available, state.reason);
+		BOOST_REQUIRE(state.git_dir.has_value());
+		BOOST_REQUIRE(state.common_dir.has_value());
+		BOOST_TEST(state.git_dir->is_absolute(), edt::utf8_of(*state.git_dir));
+		BOOST_TEST(state.common_dir->is_absolute(), edt::utf8_of(*state.common_dir));
+		std::error_code ec;
+		BOOST_TEST(fs::equivalent(*state.git_dir, git_dir, ec), edt::utf8_of(*state.git_dir));
+		BOOST_TEST(fs::equivalent(*state.common_dir, common_dir, ec), edt::utf8_of(*state.common_dir));
+	};
+	check(repo, repo / ".git", repo / ".git");
+	check(repo / "sub", repo / ".git", repo / ".git");
+	check(tree, repo / ".git" / "worktrees" / "linked", repo / ".git");
+
+	registrations = edt::register_vcs_commands(commands, *service);
+	const cmd::result info = commands.invoke("vcs.info", json::object{}, cmd::origin::test());
+	BOOST_REQUIRE_MESSAGE(info.ok, info.error);
+	BOOST_TEST(info.value.as_object().contains("git_dir"));
+	BOOST_TEST(info.value.as_object().contains("common_dir"));
+}
+
+BOOST_AUTO_TEST_CASE(TheJobObserver_SeesEachGitJobStart_AndTheRunningCountGoesBackToZero)
+{
+	const fs::path repo = make_plain_repository("observed");
+	make_service(real_options(repo));
+	int started = 0;
+	int running_at_start = -1;
+	service->set_job_observer([this, &started, &running_at_start] {
+		++started;
+		running_at_start = service->running_jobs();
+	});
+	const auto status = service->start_status(cmd::origin_kind::ui);
+	BOOST_TEST(started == 1);
+	BOOST_TEST(running_at_start == 1);
+	BOOST_TEST(service->running_jobs() == 1);
+	finish(status);
+	BOOST_TEST(service->running_jobs() == 0);
+
+	// Cancelled before it ran: the job is dropped unrun and counts no more.
+	const auto cancelled = service->start_branches(cmd::origin_kind::ui);
+	BOOST_REQUIRE(static_cast<bool>(cancelled));
+	BOOST_TEST(started == 2);
+	BOOST_TEST(jobs->cancel(cancelled.job));
+	run_to_end();
+	BOOST_TEST(service->running_jobs() == 0);
+}
+
+// The watcher over a real repository (std::filesystem ports, a hand-moved clock): a commit and a checkout made
+// outside the editor are refs changes.
+BOOST_AUTO_TEST_CASE(RealRepository_TheWatcher_SeesACommitAndACheckoutMadeOutsideTheEditor)
+{
+	const fs::path repo = make_plain_repository("watched");
+	git(repo, { "config", "commit.gpgsign", "false" });
+	// The commit below then writes refs/heads/main as a new loose file: seen whatever the file system's time resolution.
+	git(repo, { "pack-refs", "--all" });
+	make_service(real_options(repo));
+	const auto& state = service->info();
+	BOOST_REQUIRE_MESSAGE(state.available, state.reason);
+	BOOST_REQUIRE(state.git_dir.has_value() && state.common_dir.has_value() && state.root.has_value());
+
+	edt::vcs::repository_watcher::clock::time_point now{};
+	edt::vcs::repository_watcher::ports ports;
+	ports.now = [&now] { return now; };
+	edt::vcs::repository_watcher watcher(std::move(ports));
+	watcher.set_paths(*state.git_dir, *state.common_dir, *state.root, repo);
+	BOOST_REQUIRE(watcher.armed());
+	const auto poll = [&now, &watcher] {
+		now += edt::vcs::repository_watcher::k_poll_interval;
+		return watcher.tick();
+	};
+	BOOST_TEST(!poll().any());
+
+	write(repo / "b.txt", "bee\n");
+	git(repo, { "add", "b.txt" });
+	git(repo, { "commit", "-q", "-m", "made outside" });
+	BOOST_TEST(poll().refs);
+
+	// HEAD's text gets longer and a new loose ref appears.
+	git(repo, { "checkout", "-q", "-b", "a_branch_made_outside" });
+	BOOST_TEST(poll().refs);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

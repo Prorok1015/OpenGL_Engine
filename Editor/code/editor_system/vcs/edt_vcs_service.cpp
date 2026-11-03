@@ -1300,6 +1300,48 @@ namespace {
 
 	constexpr std::string_view k_no_hooks_dir = "no_hooks";
 
+	// Counts a job that runs git from its start until it ends, or until it is dropped without running.
+	struct running_job
+	{
+		std::shared_ptr<std::atomic<int>> count;
+		std::atomic<bool> released = false;
+
+		explicit running_job(std::shared_ptr<std::atomic<int>> counter)
+			: count(std::move(counter))
+		{
+			++*count;
+		}
+		running_job(const running_job&) = delete;
+		running_job& operator=(const running_job&) = delete;
+		~running_job() { release(); }
+
+		void release()
+		{
+			if (!released.exchange(true)) --*count;
+		}
+	};
+
+	struct release_at_end
+	{
+		running_job* job = nullptr;
+		~release_at_end() { job->release(); }
+	};
+
+	// The lines of a probe's output, without their line ends.
+	std::vector<std::string_view> lines_of(std::string_view text)
+	{
+		std::vector<std::string_view> out;
+		while (!text.empty()) {
+			const std::size_t end = text.find('\n');
+			std::string_view line = text.substr(0, end);
+			if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+			out.push_back(line);
+			if (end == std::string_view::npos) break;
+			text.remove_prefix(end + 1);
+		}
+		return out;
+	}
+
 	// A probe on the main thread: git is stopped after `timeout`. `timed_out` tells whether that happened.
 	git_output run_probe(const git_context& git, const std::vector<std::string>& args, std::chrono::milliseconds timeout,
 		bool& timed_out)
@@ -1700,8 +1742,11 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		if (!m_policy_file.empty()) context.policy_file = m_policy_file;
 		else if (m_probed_project) context.policy_file = *m_probed_project / ".snk" / "agent_policy.json";
 	}
+	auto running = std::make_shared<running_job>(m_running_jobs);
+	if (m_job_observer) m_job_observer();
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
-		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
+		[context = std::move(context), work = std::move(work), running = std::move(running)](ds::task_context& task) -> json::value {
+			const release_at_end end{ running.get() };
 			// The repository's own config is read before anything else of a guarded call.
 			if (auto refusal = config_refusal(context, task.stop)) return refusal_json(*refusal, task);
 			return work(context, task);
@@ -1761,14 +1806,16 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 	if (!m_git_found) return;
 	m_state.available = false;
 	m_state.root.reset();
+	m_state.git_dir.reset();
+	m_state.common_dir.reset();
 	if (!project) {
 		m_state.code = "no_project";
 		m_state.reason = "no project is open";
 		return;
 	}
 	bool timed_out = false;
-	const git_output top = run_probe(make_context(m_state.git, m_environment, *project, m_options.run), { "rev-parse", "--show-toplevel" },
-		m_options.probe_timeout, timed_out);
+	const git_output top = run_probe(make_context(m_state.git, m_environment, *project, m_options.run),
+		{ "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir" }, m_options.probe_timeout, timed_out);
 	if (timed_out) {
 		set_probe_timeout();
 		return;
@@ -1787,7 +1834,14 @@ void edt::vcs_service::probe_repository(const std::optional<fs::path>& project)
 		egLOG_INFO("editor/vcs", "'{}': {}", utf8_of(*project), m_state.reason);
 		return;
 	}
-	m_state.root = path_of(trim(top.out));
+	const std::vector<std::string_view> lines = lines_of(top.out);
+	m_state.root = path_of(lines.empty() ? std::string_view{} : lines[0]);
+	if (lines.size() >= 3 && !lines[1].empty() && !lines[2].empty()) {
+		m_state.git_dir = path_of(lines[1]).lexically_normal();
+		// git prints it relative to where it ran (the project root) unless it is elsewhere.
+		const fs::path common = path_of(lines[2]);
+		m_state.common_dir = (common.is_absolute() ? common : *project / common).lexically_normal();
+	}
 	m_state.available = true;
 	m_state.code.clear();
 	m_state.reason.clear();
@@ -2447,7 +2501,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	cmd::command_desc info;
 	info.id = "vcs.info";
 	info.category = cmd::agent_category::vcs_read;
-	info.summary = "Whether git is available for the open project: its repository root and the git version";
+	info.summary = "Whether git is available for the open project: its repository root, git folders and the git version";
 	info.result_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
@@ -2455,6 +2509,8 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 			"reason": { "type": "string" },
 			"code": { "type": "string" },
 			"root": { "type": "string" },
+			"git_dir": { "type": "string" },
+			"common_dir": { "type": "string" },
 			"git_version": { "type": "string" }
 		},
 		"required": ["available"],
@@ -2466,6 +2522,8 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		if (!state.reason.empty()) result["reason"] = json::string(state.reason);
 		if (!state.code.empty()) result["code"] = json::string(state.code);
 		if (state.root) result["root"] = json::string(vcs::valid_utf8(utf8_of(*state.root)));
+		if (state.git_dir) result["git_dir"] = json::string(vcs::valid_utf8(utf8_of(*state.git_dir)));
+		if (state.common_dir) result["common_dir"] = json::string(vcs::valid_utf8(utf8_of(*state.common_dir)));
 		if (!state.git_version.empty()) result["git_version"] = json::string(state.git_version);
 		return cmd::result::success(std::move(result));
 	};

@@ -40,6 +40,7 @@
 #include "edt_build_settings_panel.h"
 #include "edt_git_panel.h"
 #include "edt_vcs_service.h"
+#include "edt_repository_watcher.h"
 #include "edt_live_mode.h"
 #include "edt_play_session.h"
 #include <snk/core/core_project_modules.h>
@@ -542,6 +543,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
+	edt::vcs::repository_watcher::ports watch_ports;
+	watch_ports.own_jobs_running = [this] { return m_vcs && m_vcs->running_jobs() > 0; };
+	m_repo_watcher = std::make_unique<edt::vcs::repository_watcher>(std::move(watch_ports));
+	m_vcs->set_job_observer([this] {
+		if (m_repo_watcher) m_repo_watcher->begin_own_job();
+	});
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -742,6 +749,25 @@ void edt::editor_system::create_live_mode(ds::app_data_storage& data)
 void edt::editor_system::tick_live_mode()
 {
 	if (m_live_mode) m_live_mode->tick();
+}
+
+void edt::editor_system::tick_repository_watcher()
+{
+	if (!m_repo_watcher || !m_vcs || !m_context) return;
+	const vcs_service::state& state = m_vcs->info();
+	std::vector<std::filesystem::path> paths;
+	if (state.available && state.git_dir) {
+		paths = { *state.git_dir, state.common_dir.value_or(*state.git_dir), state.root.value_or(std::filesystem::path{}),
+			m_vcs->probed_project().value_or(std::filesystem::path{}) };
+	}
+	if (paths != m_watched_paths) {
+		m_watched_paths = paths;
+		if (paths.empty()) m_repo_watcher->set_paths({}, {}, {}, {});
+		else m_repo_watcher->set_paths(paths[0], paths[1], paths[2], paths[3]);
+	}
+	const edt::vcs::repository_changes changes = m_repo_watcher->tick();
+	if (changes.refs) m_context->events().repository_changed.emit(repository_change::refs);
+	if (changes.index) m_context->events().repository_changed.emit(repository_change::index);
 }
 
 void edt::editor_system::stop_live_build()

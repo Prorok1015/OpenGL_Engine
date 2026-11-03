@@ -14,7 +14,8 @@
 
 // What the Git panel shows and does (#456), without ImGui: every action is a vcs.* command (#454) run through
 // `invoke` as a person's call, and its job's result comes back through editor_events::job_finished. Nothing runs
-// while the panel is hidden; a change of code/ seen meanwhile makes it refresh when it is shown. Main thread only.
+// while the panel is hidden; a change of code/ or of the repository (editor_events::repository_changed) seen meanwhile
+// makes it refresh when it is shown. Main thread only.
 namespace edt
 {
 	struct git_change
@@ -71,6 +72,8 @@ namespace edt
 
 		// A change of code/ refreshes after this quiet time.
 		static constexpr std::chrono::milliseconds k_change_delay{ 1000 };
+		// A change of the repository (editor_events::repository_changed) refreshes after this quiet time.
+		static constexpr std::chrono::milliseconds k_repo_delay{ 250 };
 
 		git_panel_model(editor_events& events, ports ports);
 
@@ -82,6 +85,9 @@ namespace edt
 		void refresh();
 		// code/ changed: a refresh k_change_delay after the last change, while visible.
 		void files_changed();
+		// The repository changed: a refresh k_repo_delay after the last change, while visible; `refs` also moves
+		// refs_changed() with that refresh. Raised through editor_events::repository_changed.
+		void repository_changed(repository_change kind);
 
 		void select(const std::string& path, bool staged);
 		void set_staged(const std::string& path, bool staged);
@@ -131,6 +137,8 @@ namespace edt
 		const std::optional<git_busy_progress>& busy_progress() const { return m_busy_progress; }
 		// Writes that have ended, however: what HEAD and the refs point at may have moved (the History tab reloads).
 		std::uint64_t writes_finished() const { return m_writes_finished; }
+		// Refreshes that followed a change of HEAD or the refs made outside the panel: the History tab reloads.
+		std::uint64_t refs_changed() const { return m_refs_changed; }
 		// The last failure, as git or the command said it; also logged under "vcs".
 		const std::string& error() const { return m_error; }
 
@@ -166,6 +174,9 @@ namespace edt
 		bool m_read = false;
 		bool m_stale = true;
 		std::optional<clock::time_point> m_refresh_at;
+		// A refs change waits for the next refresh.
+		bool m_refs_pending = false;
+		std::uint64_t m_refs_changed = 0;
 
 		bool m_available = false;
 		std::string m_reason;
@@ -193,6 +204,7 @@ namespace edt
 		// Last: gone before the state their slots touch.
 		connection m_finished;
 		connection m_progress;
+		connection m_repository;
 	};
 
 	// The History tab's ports: the panel's own, with vcs.log{all, author, grep}, vcs.show_files and vcs.diff{commit}.
