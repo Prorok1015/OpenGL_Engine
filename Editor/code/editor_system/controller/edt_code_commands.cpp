@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <system_error>
@@ -24,6 +25,8 @@ namespace {
 
 	constexpr std::size_t k_max_path_bytes = 1024;
 	constexpr std::size_t k_max_listed = 5000;
+	// `old` of a replace: the search stays linear (Boyer-Moore) and small next to the file.
+	constexpr std::size_t k_max_replace_old = 64 * 1024;
 	constexpr const char* k_no_project = "no_project";
 
 	json::value parse_schema(std::string_view text)
@@ -88,6 +91,29 @@ namespace {
 		return {};
 	}
 
+	// What a path names on disk, links and short (8.3) or Unicode-folded names resolved: still inside code/, and no
+	// folder on the way that is never code. Checked again after the name rules, which see only what the agent wrote.
+	// A path that does not exist (yet) is the operation's to report.
+	std::string on_disk_problem(const fs::path& root, std::string_view relative, bool ends_in_file)
+	{
+		std::error_code ec;
+		const fs::path base = fs::canonical(root, ec);
+		if (ec) return "code/ cannot be resolved";
+		const fs::path real = fs::canonical(relative.empty() ? root : root / fs_paths::path_from_utf8(relative), ec);
+		if (ec) return {};
+		const fs::path inside = real.lexically_relative(base);
+		if (inside.empty() || (!inside.empty() && *inside.begin() == "..")) return "the path leads out of code/";
+		if (inside == ".") return {};
+		std::size_t parts = static_cast<std::size_t>(std::distance(inside.begin(), inside.end()));
+		for (const fs::path& part : inside) {
+			if (ends_in_file && --parts == 0) break;
+			if (prj::is_code_ignored_dir(fs_paths::utf8_of(part))) {
+				return std::format("'{}' is not a place for code (build output or a hidden folder)", fs_paths::utf8_of(part));
+			}
+		}
+		return {};
+	}
+
 	struct file_read
 	{
 		std::vector<std::byte> bytes;
@@ -100,9 +126,11 @@ namespace {
 	file_read read_fresh(res::resource_system& res, const fs::path& root, const res::tag& tag)
 	{
 		if (!res.exists(tag)) return { {}, std::format("no file '{}' in code/", tag.relative()) };
+		if (std::string problem = on_disk_problem(root, tag.relative(), true); !problem.empty()) return { {}, std::move(problem) };
 		std::error_code ec;
 		const auto size = fs::file_size(root / fs_paths::path_from_utf8(tag.relative()), ec);
-		if (!ec && size > edt::k_code_file_limit) {
+		if (ec) return { {}, std::format("'{}' could not be read", tag.relative()) };
+		if (size > edt::k_code_file_limit) {
 			return { {}, std::format("'{}' is {} bytes: at most {} go through code.* in one call", tag.relative(), size, edt::k_code_file_limit) };
 		}
 		const auto raw = res.fetch_data(tag);
@@ -193,7 +221,18 @@ namespace {
 			while (!folders.empty() && !truncated) {
 				const std::string folder = std::move(folders.back());
 				folders.pop_back();
-				for (const edt::code_entry& entry : tree.list(folder)) {
+				// Before and after: a folder swapped for a link meanwhile is not listed (the window between is a
+				// second program's race; listing through a handle that never follows links would close it).
+				if (std::string problem = on_disk_problem(*code_root, folder, false); !problem.empty()) {
+					return cmd::result::failure(cmd::codes::failed, std::move(problem));
+				}
+				const std::vector<edt::code_entry> listed = tree.list(folder);
+				if (std::string problem = on_disk_problem(*code_root, folder, false); !problem.empty()) {
+					return cmd::result::failure(cmd::codes::failed, std::move(problem));
+				}
+				for (const edt::code_entry& entry : listed) {
+					// A name that is not UTF-8 cannot go into JSON, nor be read or written through code.*.
+					if (!edt::is_valid_utf8(entry.name)) continue;
 					if (entries.size() >= k_max_listed) {
 						truncated = true;
 						break;
@@ -271,15 +310,21 @@ namespace {
 				const json::object& replace = replace_arg->as_object();
 				const std::string_view old_text = view_of(replace.at("old").as_string());
 				const std::string_view new_text = view_of(replace.at("new").as_string());
-				std::size_t found = std::string::npos;
-				std::size_t matches = 0;
-				for (std::size_t at = current.find(old_text); at != std::string::npos; at = current.find(old_text, at + 1)) {
-					if (matches++ == 0) found = at;
-				}
-				if (matches != 1) {
+				if (old_text.size() > k_max_replace_old) {
 					return cmd::result::failure(cmd::codes::failed,
-						std::format("`old` is found {} times in '{}': it must be found exactly once", matches, path));
+						std::format("`old` is {} bytes: at most {}; write the whole `text` instead", old_text.size(), k_max_replace_old));
 				}
+				// The first match and whether there is a second, no more: linear in the file whatever `old` is.
+				const std::boyer_moore_searcher searcher(old_text.begin(), old_text.end());
+				const auto first = std::search(current.begin(), current.end(), searcher);
+				if (first == current.end()) {
+					return cmd::result::failure(cmd::codes::failed, std::format("`old` is not found in '{}'", path));
+				}
+				if (std::search(first + 1, current.end(), searcher) != current.end()) {
+					return cmd::result::failure(cmd::codes::failed,
+						std::format("`old` is found more than once in '{}': give more of the text around it", path));
+				}
+				const auto found = static_cast<std::size_t>(first - current.begin());
 				next = current.substr(0, found);
 				next += new_text;
 				next += current.substr(found + old_text.size());

@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 // code.list/read/write/create/delete/rename (A7, #451): code:// only, versions, UTF-8, CMake judged apart.
@@ -295,6 +296,40 @@ BOOST_AUTO_TEST_CASE(TheReads_AreOfferedToAgents_TheChangesWaitForThePolicy)
 		}
 	}
 }
+
+BOOST_AUTO_TEST_CASE(Replace_WithAnOldTooBig_IsRefused_BeforeAnySearch)
+{
+	const std::string old_text(64 * 1024 + 1, 'a');
+	const auto written = call("code.write", json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") },
+		{ "replace", json::object{ { "old", old_text }, { "new", "" } } } });
+	BOOST_TEST(written.code == cmd::codes::failed);
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int game;\r\nint more;\n");
+}
+
+#ifndef _WIN32
+BOOST_AUTO_TEST_CASE(List_LeavesOutANameThatIsNotUtf8)
+{
+	dir.write("project/code/src/\xff\xfe.cpp", "x");
+	const auto listed = call("code.list", json::object{ { "dir", "src" } });
+	BOOST_REQUIRE_MESSAGE(listed.ok, listed.error);
+	for (const auto& entry : listed.value.at("entries").as_array()) {
+		const auto& path = entry.at("path").as_string();
+		BOOST_TEST(edt::is_valid_utf8(std::string_view(path.data(), path.size())));
+	}
+}
+
+BOOST_AUTO_TEST_CASE(AFolderLinkedOutOfCode_IsNeitherListedNorRead)
+{
+	dir.write("project/res/levels/secret.cpp", "secret");
+	std::error_code ec;
+	fs::create_directory_symlink(content / "levels", code / "src" / "linked", ec);
+	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	BOOST_TEST(call("code.list", json::object{ { "dir", "src/linked" } }).code == cmd::codes::failed);
+	const auto read = call("code.read", json::object{ { "path", "src/linked/secret.cpp" } });
+	BOOST_TEST(read.code == cmd::codes::failed);
+	BOOST_TEST(read.value.as_object().if_contains("text") == nullptr);
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(Utf8_IsStrict)
 {
