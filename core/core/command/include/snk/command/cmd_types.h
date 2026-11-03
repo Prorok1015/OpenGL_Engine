@@ -51,6 +51,7 @@ namespace cmd
 		build,          // building and reloading the game module (runs the project's CMake code)
 		live,           // the live mode's commands, while it is on
 		editor_control, // running the editor itself: editor.quit of a headless editor driven over stdio
+		play,           // Play mode of the scene: start, pause, step, stop, status; app.advance/app.resume in the editor
 		vcs_read,       // git status, diff, log, branches
 		vcs_commit,     // stage, unstage, commit
 		vcs_branch,     // create a branch, check one out
@@ -71,6 +72,7 @@ namespace cmd
 		case agent_category::build: return "build";
 		case agent_category::live: return "live";
 		case agent_category::editor_control: return "editor_control";
+		case agent_category::play: return "play";
 		case agent_category::vcs_read: return "vcs_read";
 		case agent_category::vcs_commit: return "vcs_commit";
 		case agent_category::vcs_branch: return "vcs_branch";

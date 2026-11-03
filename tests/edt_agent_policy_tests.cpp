@@ -62,6 +62,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersTable_ForEveryCategory)
 	BOOST_TEST((edt::default_mode(agent_category::build) == policy_mode::deny));
 	BOOST_TEST((edt::default_mode(agent_category::live) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::editor_control) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::play) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_read) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_commit) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_branch) == policy_mode::allow));
@@ -281,6 +282,15 @@ BOOST_AUTO_TEST_CASE(Serialize_RoundTrips)
 	BOOST_TEST(parsed.error.empty());
 	BOOST_TEST((parsed.layer.categories == layer.categories));
 	BOOST_TEST((parsed.layer.commands == layer.commands));
+}
+
+BOOST_AUTO_TEST_CASE(ThePlayCategory_IsSettableByName)
+{
+	BOOST_TEST(std::string_view(cmd::to_string(agent_category::play)) == "play");
+	BOOST_TEST((edt::parse_settable_category("play") == agent_category::play));
+	const auto parsed = edt::parse_policy_layer(R"({"categories":{"play":"deny"}})");
+	BOOST_TEST(parsed.error.empty());
+	BOOST_TEST((parsed.layer.categories.at(agent_category::play) == policy_mode::deny));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

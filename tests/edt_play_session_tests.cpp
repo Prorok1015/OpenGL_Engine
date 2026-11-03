@@ -8,11 +8,18 @@
 #include "edt_input_target.h"
 #include "edt_level_controller.h"
 #include "edt_module_swap_gate.h"
+#include "edt_play_commands.h"
 #include "edt_play_session.h"
+#include "edt_agent_access.h"
+#include "edt_agent_confirmations.h"
+#include "edt_mcp_bridge_host.h"
+#include "test_temp_dir.hpp"
 #include "edt_scene_commands.h"
 #include "edt_scene_document.h"
 #include "edt_scene_editor.h"
 #include "edt_world_controller.h"
+#include <snk/application/app_frame_commands.h>
+#include <snk/application/app_frame_control.h>
 #include <snk/application/app_module_source.h>
 #include <snk/common/mem_allocator.h>
 #include <snk/core/core_project_modules.h>
@@ -25,6 +32,7 @@
 #include <snk/game/gs_game_module.h>
 #include <snk/input/inp_ecs_input_manager.h>
 #include <snk/input/inp_input_router.h>
+#include <snk/mcp/mcp_host.h>
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/resource/res_mount_table.h>
@@ -757,6 +765,208 @@ BOOST_AUTO_TEST_CASE(a_leftover_play_set_is_not_reused)
 	BOOST_TEST(contexts().level_set().active());
 	BOOST_TEST(!state.edits_locked());
 	contexts().destroy_set(edt::k_play_set);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The Play menu as agent tools (US-63-C, #491): play.* over the MCP bridge under the owner's default policy (`play`:
+// allow), and app.advance only during Play.
+namespace {
+
+struct play_commands_fixture : play_fixture
+{
+	~play_commands_fixture()
+	{
+		play.stop();
+	}
+
+	// An MCP tools/call of session "agent-1"; a `busy` call is tried again by the confirmations until it gives up.
+	mcp::call_result call_tool(const std::string& name, const std::string& args = "{}")
+	{
+		std::optional<mcp::call_result> result;
+		mcp::request_context context;
+		context.session_id = "agent-1";
+		bridge.call_tool(context, name, json::parse(args), nullptr, [&result](mcp::call_result r) { result = std::move(r); });
+		pump();
+		if (!result) {
+			now += edt::agent_confirmations::busy_wait + std::chrono::seconds(1);
+			access.confirmations().tick();
+			pump();
+		}
+		BOOST_REQUIRE(result.has_value());
+		return std::move(*result);
+	}
+
+	static std::string text_of_error(const mcp::call_result& result)
+	{
+		return result.content.empty() ? std::string{} : result.content.front().text;
+	}
+
+	void run_frames(int frames)
+	{
+		for (int i = 0; i < frames; ++i) contexts().update(std::chrono::duration<float>(0.016f));
+	}
+
+	bool editing = false;
+	std::chrono::steady_clock::time_point now{};
+	edt::action_registry actions{ commands };
+	std::vector<edt::registration> play_commands = edt::register_play_commands(actions,
+		{ .play = [this] { return &play; }, .person_is_editing = [this] { return editing; } });
+	std::vector<edt::registration> scene_commands = edt::register_scene_commands(commands,
+		{ documents, selection, services, [this] { return editing; } });
+	app::frame_control frame_control;
+	app::frame_command_registrations core_frame_commands = app::register_frame_commands(commands, frame_control);
+	app::frame_command_registrations frame_commands = edt::register_play_frame_commands(core_frame_commands, commands,
+		frame_control, [this] { return play.active(); });
+	test_util::temp_dir dir{ "edt_play_commands" };
+	edt::agent_access access{ commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json", [this] { return now; } };
+	edt::mcp_bridge_host bridge{ commands, tasks, access };
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_play_commands_tests, play_commands_fixture)
+
+BOOST_AUTO_TEST_CASE(an_agent_starts_pauses_steps_and_stops_play_over_mcp)
+{
+	open_level();
+	const mcp::call_result started = call_tool("play_start");
+	BOOST_REQUIRE(!started.is_error);
+	BOOST_TEST(json::serialize(started.structured) == R"({"state":"playing","frame":0,"worlds":["w0","w1"]})");
+	BOOST_TEST(play.active());
+
+	run_frames(3);
+	const mcp::call_result playing = call_tool("play_status");
+	BOOST_REQUIRE(!playing.is_error);
+	BOOST_TEST(json::serialize(playing.structured) == R"({"state":"playing","frame":3,"worlds":["w0","w1"]})");
+
+	const mcp::call_result paused = call_tool("play_pause");
+	BOOST_REQUIRE(!paused.is_error);
+	BOOST_TEST((paused.structured.as_object().at("state").as_string() == "paused"));
+	run_frames(2); // paused: no frame is simulated
+
+	const mcp::call_result stepping = call_tool("play_step", R"({"n":2})");
+	BOOST_REQUIRE(!stepping.is_error);
+	BOOST_TEST((stepping.structured.as_object().at("state").as_string() == "paused"));
+	run_frames(4); // the two frames of the step, then paused again
+	const mcp::call_result stepped = call_tool("play_status");
+	BOOST_TEST(json::serialize(stepped.structured) == R"({"state":"paused","frame":5,"worlds":["w0","w1"]})");
+
+	const mcp::call_result resumed = call_tool("play_resume");
+	BOOST_REQUIRE(!resumed.is_error);
+	BOOST_TEST((resumed.structured.as_object().at("state").as_string() == "playing"));
+
+	const mcp::call_result stopped = call_tool("play_stop");
+	BOOST_REQUIRE(!stopped.is_error);
+	BOOST_TEST(json::serialize(stopped.structured) == R"({"state":"stopped","frame":0,"worlds":[]})");
+	BOOST_TEST(!play.active());
+	BOOST_TEST(json::serialize(call_tool("play_status").structured) == R"({"state":"stopped","frame":0,"worlds":[]})");
+
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::agent },
+		{ edt::play_state::paused, edt::play_reason::agent },
+		{ edt::play_state::playing, edt::play_reason::agent },
+		{ edt::play_state::stopped, edt::play_reason::agent } }));
+}
+
+BOOST_AUTO_TEST_CASE(play_start_while_paused_resumes_and_a_refusal_is_failed_with_its_reason)
+{
+	const mcp::call_result no_level = call_tool("play_start");
+	BOOST_TEST(no_level.is_error);
+	BOOST_TEST(text_of_error(no_level) == "failed: no level with a world to play");
+
+	open_level();
+	BOOST_REQUIRE(!call_tool("play_start").is_error);
+	const mcp::call_result again = call_tool("play_start");
+	BOOST_TEST(again.is_error);
+	BOOST_TEST(text_of_error(again) == "failed: Play is running already");
+
+	BOOST_REQUIRE(play.pause());
+	const mcp::call_result resumed = call_tool("play_start");
+	BOOST_REQUIRE(!resumed.is_error);
+	BOOST_TEST((resumed.structured.as_object().at("state").as_string() == "playing"));
+}
+
+BOOST_AUTO_TEST_CASE(play_step_while_playing_fails_pause_first_and_the_menu_step_needs_pause)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	BOOST_TEST(actions.is_enabled("play.step"));
+	BOOST_TEST(!actions.items("Play").at(2).enabled); // Play, Pause, Step, Stop
+	BOOST_TEST(actions.items("Play").at(2).id == "play.step");
+
+	const mcp::call_result refused = call_tool("play_step");
+	BOOST_TEST(refused.is_error);
+	BOOST_TEST(text_of_error(refused).find("pause first") != std::string::npos);
+	BOOST_TEST(text_of_error(refused).rfind("failed", 0) == 0u);
+	BOOST_TEST(play.pending_steps() == 0u);
+	BOOST_TEST((play.state() == edt::play_state::playing));
+
+	BOOST_REQUIRE(play.pause());
+	BOOST_TEST(actions.items("Play").at(2).enabled);
+	BOOST_TEST(actions.activate("play.step")); // the menu's Step: one frame
+	BOOST_TEST(play.pending_steps() == 1u);
+	BOOST_TEST(call_tool("play_step", R"({"n":601})").is_error); // 1..600
+}
+
+BOOST_AUTO_TEST_CASE(an_agents_play_start_during_a_persons_gesture_is_busy)
+{
+	open_level();
+	editing = true;
+	const mcp::call_result busy = call_tool("play_start");
+	BOOST_TEST(busy.is_error);
+	BOOST_TEST(text_of_error(busy).rfind("busy", 0) == 0u);
+	BOOST_TEST(!play.active());
+	// The registry gives the same answer at once.
+	BOOST_TEST(commands.invoke("play.start", json::object{}, cmd::origin::agent("agent-1")).code == "busy");
+	// The menu's Play is greyed out meanwhile.
+	BOOST_TEST(!actions.items("Play").at(0).enabled);
+
+	editing = false;
+	BOOST_TEST(!call_tool("play_start").is_error);
+	// Pause, step, stop and status need no gesture check.
+	editing = true;
+	BOOST_TEST(!call_tool("play_pause").is_error);
+	BOOST_TEST(!call_tool("play_step").is_error);
+	BOOST_TEST(!call_tool("play_status").is_error);
+	BOOST_TEST(!call_tool("play_stop").is_error);
+}
+
+BOOST_AUTO_TEST_CASE(an_agents_scene_edit_over_mcp_during_play_is_busy)
+{
+	open_level();
+	BOOST_REQUIRE(!call_tool("play_start").is_error);
+	const mcp::call_result renamed = call_tool("scene_node_rename", R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})");
+	BOOST_TEST(renamed.is_error);
+	BOOST_TEST(text_of_error(renamed).rfind("busy", 0) == 0u);
+	BOOST_TEST(text_of_error(renamed).find("stop play first") != std::string::npos);
+
+	BOOST_REQUIRE(!call_tool("play_stop").is_error);
+	BOOST_TEST(!call_tool("scene_node_rename", R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})").is_error);
+}
+
+BOOST_AUTO_TEST_CASE(app_advance_is_disabled_outside_play_and_runs_during_play)
+{
+	BOOST_TEST(!core_frame_commands.advance.active()); // the core's registration is gone, the play one replaced it
+	BOOST_TEST(frame_commands.active());
+	BOOST_TEST((commands.find("app.advance")->category == cmd::agent_category::play));
+	BOOST_TEST((commands.find("app.resume")->category == cmd::agent_category::play));
+
+	const auto agent = cmd::origin::agent("agent-1");
+	BOOST_TEST(commands.invoke("app.advance", json::parse(R"({"frames":2})"), agent).code == "disabled");
+	BOOST_TEST(commands.invoke("app.resume", json::object{}, agent).code == "disabled");
+	BOOST_TEST(frame_control.pending() == 0u);
+
+	open_level();
+	BOOST_REQUIRE(play.start());
+	const auto advanced = commands.invoke("app.advance", json::parse(R"({"frames":2})"), agent);
+	BOOST_TEST(advanced.ok);
+	BOOST_TEST(frame_control.pending() == 2u);
+	BOOST_REQUIRE(play.pause());
+	BOOST_TEST(commands.invoke("app.resume", json::object{}, agent).ok); // paused is Play too
+
+	play.stop();
+	BOOST_TEST(commands.invoke("app.advance", json::parse(R"({"frames":1})"), agent).code == "disabled");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

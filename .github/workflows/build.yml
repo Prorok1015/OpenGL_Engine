@@ -577,14 +577,15 @@ jobs:
           grep -q -- "--headless needs --project" headless_out/headless/no_project.log
 
       # MCP over stdio (#452): an agent drives the headless editor through its stdin/stdout. Every stdout line must be
-      # JSON-RPC, problems_list must answer, and closing stdin must end the editor with 0.
+      # JSON-RPC, problems_list must answer, Play must start, step 2 frames and stop (#491), and closing stdin must end
+      # the editor with 0.
       - name: Headless MCP over stdio
         run: |
           mkdir -p headless_out/mcp_stdio
           err=headless_out/mcp_stdio/stderr.log
           rc=0
           env -u DISPLAY -u WAYLAND_DISPLAY timeout 240 python3 tools/headless_mcp_smoke.py --editor "$EDITOR_BIN" \
-            --stderr "$err" -- --config Editor/config/editor.cfg --project projects/sandbox || rc=$?
+            --stderr "$err" --play -- --config Editor/config/editor.cfg --project projects/sandbox || rc=$?
           tail -20 "$err" || true
           if [ "$rc" -ne 0 ]; then echo "::error::the MCP stdio smoke failed (rc $rc, 124 = timed out)"; exit 1; fi
           grep -q "agent server: MCP over stdin/stdout" "$err"
