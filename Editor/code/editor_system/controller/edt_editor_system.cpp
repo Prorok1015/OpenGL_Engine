@@ -32,6 +32,7 @@
 #include "edt_file_menu.h"
 #include "edt_scene_commands.h"
 #include "edt_agent_sessions.h"
+#include "edt_code_commands.h"
 #include "edt_game_builder.h"
 #include "edt_game_reloader.h"
 #include "edt_build_jobs.h"
@@ -401,6 +402,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	}
 	m_agent_sessions = std::make_unique<agent_sessions>(m_context->documents());
 	for (auto& command : m_agent_sessions->register_commands(m_context->actions().commands())) {
+		m_registrations.push_back(std::move(command));
+	}
+	// A7 (#451): the agent's edits of code/ through code://; without a code folder they answer no_project.
+	for (auto& command : register_code_commands(m_context->actions().commands(), { m_res, &m_context->events() })) {
 		m_registrations.push_back(std::move(command));
 	}
 	m_file_menu->attach_window_close(wnd_sys);

@@ -307,6 +307,7 @@ void edt::git_panel_model::finished(std::uint64_t id, job_status status, const s
 		}
 	}
 	if (job.kind != job_kind::write) return;
+	++m_writes_finished;
 	if (succeeded && job.label == "Commit") m_message.clear();
 	// A cancel is also what the editor's shutdown sends (job_service::cancel_all_and_wait): nothing is asked then.
 	if (status == job_status::cancelled) {
