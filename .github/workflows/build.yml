@@ -13,6 +13,8 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
+  # By hand on aibranch or main (Actions > Build > Run workflow): the same jobs as a push.
+  workflow_dispatch:
   pull_request:
     # ready_for_review: marking a draft PR ready starts the full run (see the tiers below).
     types: [opened, synchronize, reopened, ready_for_review]
@@ -21,18 +23,23 @@ on:
       - '**/*.md'
 
 # Two tiers. FAST runs on every PR event, drafts included, and on pushes; FULL runs only on pushes
-# and on PRs that are not drafts, so a non-draft PR gets one complete run. Whole-job FULL jobs carry
-#   if: github.event_name == 'push' || github.event.pull_request.draft == false
+# (and runs started by hand, which count as pushes everywhere below) and on PRs that are not drafts,
+# so a non-draft PR gets one complete run. Whole-job FULL jobs carry
+#   if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
 # Matrix jobs that mix tiers (build, sanitizers) pick their matrix with the same condition: job-level
 # `if` cannot read `matrix`, so the matrix itself is built from a fast or a full JSON list.
 # Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
 # Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared (both also build the project
 # template's game module, #434), Linux TSan,
-# SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes only.
+# SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes (and by hand) only.
 
+# A newer push to a PR cancels its running run. A push run (aibranch, main) is never cancelled once it
+# runs, or frequent merges would leave the branch without a single complete run (#476): the benchmark
+# job runs only there. GitHub still keeps one waiting run per group, so a run that has not started yet
+# gives way to the newer push.
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -46,7 +53,7 @@ jobs:
       # PCH is off in the ci-linux-clang-debug preset: it catches headers that compile only thanks to the PCH.
       # Fast list on draft PRs, full list otherwise.
       matrix:
-        include: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Windows MSVC Release","os":"windows-latest","preset":"ci-windows-msvc-release"},{"name":"Windows MSVC Shared Release","os":"windows-latest","preset":"ci-windows-msvc-shared-release"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]') }}
+        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Windows MSVC Release","os":"windows-latest","preset":"ci-windows-msvc-release"},{"name":"Windows MSVC Shared Release","os":"windows-latest","preset":"ci-windows-msvc-shared-release"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]' || '[{"name":"Windows MSVC Debug","os":"windows-latest","preset":"ci-windows-msvc-debug"},{"name":"Linux Clang Debug","os":"ubuntu-latest","preset":"ci-linux-clang-debug"}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -131,7 +138,7 @@ jobs:
   # variant is the 'Windows MSVC Shared Release' entry of the build matrix above. FULL tier.
   shared:
     name: Linux GCC Shared
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
 
     env:
@@ -264,15 +271,15 @@ jobs:
         run: ./unit_tests --log_level=test_suite
 
       - name: Build SDK targets
-        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: cmake --build build/ci-linux-no-assimp --target snk_sdk --parallel
 
       - name: Install SDK
-        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: cmake --install build/ci-linux-no-assimp --prefix "${SDK_PREFIX}"
 
       - name: Check the SDK has no assimp
-        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: |
           if grep -rIil assimp "${SDK_PREFIX}/lib/cmake"; then
             echo "::error::the package config mentions assimp"
@@ -284,17 +291,17 @@ jobs:
           fi
 
       - name: Configure consumer
-        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: |
           cmake -S tests/package_consumer -B build/consumer-no-assimp -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             "-DCMAKE_PREFIX_PATH=${SDK_PREFIX}" -DSNK_CONSUMER_HEADER_CHECK=ON
 
       - name: Build consumer
-        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: cmake --build build/consumer-no-assimp
 
       - name: Run consumer
-        if: github.event_name == 'push' || github.event.pull_request.draft == false
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: build/consumer-no-assimp/package_consumer
 
   # Sanitizer builds (Linux only; project targets instrumented, third-party is not).
@@ -307,7 +314,7 @@ jobs:
       fail-fast: false
       # ASan+UBSan is FAST, TSan is FULL: the matrix is the fast or the full list (see the tiers above).
       matrix:
-        include: ${{ fromJSON((github.event_name == 'push' || github.event.pull_request.draft == false) && '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false},{"name":"Linux TSan","preset":"ci-linux-tsan","experimental":false}]' || '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false}]') }}
+        include: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.draft == false) && '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false},{"name":"Linux TSan","preset":"ci-linux-tsan","experimental":false}]' || '[{"name":"Linux ASan+UBSan","preset":"ci-linux-asan","experimental":false}]') }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -539,7 +546,8 @@ jobs:
       # #452: --headless runs with no display at all (no Xvfb, DISPLAY unset): a null window, the null renderer, no
       # panels. stdout stays empty (it is reserved for a protocol), the log goes to stderr. The level load is async and
       # logs nothing else on success: editor/exit_after_level_loaded ends the run with 0 once "level loaded" is logged,
-      # app/exit_after_frames is only the cap (reaching it means the level never loaded). Without --project the run
+      # app/exit_after_frames is only the cap (reaching it means the level never loaded; the frame limiter is off so the
+      # cap comes before the timeout). Without --project the run
       # is a project error (exit 2).
       - name: Headless run (no display)
         run: |
@@ -549,7 +557,7 @@ jobs:
           rc=0
           env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 "$EDITOR_BIN" --config Editor/config/editor.cfg --headless \
             --project projects/sandbox --set editor/startup_level levels/smoke_level.desc \
-            editor/exit_after_level_loaded true app/exit_after_frames 20000 \
+            editor/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
             >"$out" 2>"$err" || rc=$?
           tail -20 "$err"
           if [ "$rc" -ne 0 ]; then echo "expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
@@ -567,6 +575,20 @@ jobs:
           tail -5 headless_out/headless/no_project.log
           if [ "$rc" -ne 2 ]; then echo "expected exit code 2 without --project, got $rc"; exit 1; fi
           grep -q -- "--headless needs --project" headless_out/headless/no_project.log
+
+      # MCP over stdio (#452): an agent drives the headless editor through its stdin/stdout. Every stdout line must be
+      # JSON-RPC, problems_list must answer, and closing stdin must end the editor with 0.
+      - name: Headless MCP over stdio
+        run: |
+          mkdir -p headless_out/mcp_stdio
+          err=headless_out/mcp_stdio/stderr.log
+          rc=0
+          env -u DISPLAY -u WAYLAND_DISPLAY timeout 240 python3 tools/headless_mcp_smoke.py --editor "$EDITOR_BIN" \
+            --stderr "$err" -- --config Editor/config/editor.cfg --project projects/sandbox || rc=$?
+          tail -20 "$err" || true
+          if [ "$rc" -ne 0 ]; then echo "::error::the MCP stdio smoke failed (rc $rc, 124 = timed out)"; exit 1; fi
+          grep -q "agent server: MCP over stdin/stdout" "$err"
+          if grep -E '\[(error|critical)\]' "$err"; then echo "::error::errors in the headless MCP log"; exit 1; fi
 
       - name: Smoke run (smoke_level)
         run: |
@@ -664,7 +686,7 @@ jobs:
   extract-bench:
     name: Extract benchmark (Linux, report-only)
     # Pushes to aibranch/main only: no value on a PR run.
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     continue-on-error: true
 
@@ -735,7 +757,7 @@ jobs:
   # libraries are bundled). Static, then shared (SNK_ENGINE_SHARED) engine, in one job. FULL tier.
   sdk-package:
     name: SDK package (Linux)
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
 
     env:
@@ -860,7 +882,7 @@ jobs:
   # lib/snk/, and the consumer copies the DLL next to its executable (no rpath on Windows).
   sdk-package-windows:
     name: SDK package (Windows shared)
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     defaults:
       run:

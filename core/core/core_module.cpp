@@ -4,6 +4,7 @@
 #include <snk/desc/desc_desc_service_init.h>
 #include <snk/ecs/ecs_ecs_service_init.h>
 #include <snk/window/wnd_window_system.h>
+#include <snk/window/wnd_null_window_system.h>
 #include <snk/application/app_frame_commands.h>
 #include <snk/application/app_frame_control.h>
 #include <snk/application/app_loop_service.h>
@@ -38,6 +39,8 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_freeze_after_frames, "app/freeze_after_frames", 0);
 	// > 0: the loop stops after this many frames and the host exits with 0 (CI smoke runs of --headless).
 	CFG_VAR_DEF_INT(cfg_exit_after_frames, "app/exit_after_frames", 0);
+	// Frames a second at most without a window (window/system = null), which would otherwise spin a core; 0: no limit.
+	CFG_VAR_DEF_INT(cfg_headless_target_fps, "app/headless_target_fps", 60);
 
 	// --project <project.snkproj or its directory>; empty: no project, res:// comes from resource/path.
 	CFG_VAR_DEF_PATH(cfg_project_file, "project/file", "");
@@ -157,6 +160,8 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
 	if (loop_impl) {
 		loop_impl->set_exit_after_frames(static_cast<std::uint64_t>(std::max(0, static_cast<int>(cfg_exit_after_frames))));
+		const bool null_window = dynamic_cast<wnd::null_window_system*>(&data.require<wnd::window_system>()) != nullptr;
+		loop_impl->set_frame_limit(app::headless_frame_limit(cfg_headless_target_fps, null_window));
 	}
 	if (time.enabled()) {
 		if (loop_impl) loop_impl->set_settled_probe([](ds::app_data_storage& storage) {

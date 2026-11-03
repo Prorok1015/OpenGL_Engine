@@ -1,6 +1,7 @@
 #pragma once
 #include <snk/mcp/mcp_host.h>
 #include <snk/mcp/mcp_http.h>
+#include <snk/mcp/mcp_rpc.h>
 
 #include <boost/json/object.hpp>
 #include <boost/json/value.hpp>
@@ -20,16 +21,6 @@
 
 namespace mcp
 {
-	struct server_info
-	{
-		std::string name = "snk-editor";
-		std::string version = "0";
-		// Version of the command set (serverInfo.snk_api); empty: not reported.
-		std::string snk_api;
-		// Sent to the client as `instructions`; empty: not sent.
-		std::string instructions;
-	};
-
 	struct endpoint_config
 	{
 		// Bearer token. Empty: every request is refused (fail closed).
@@ -57,7 +48,7 @@ namespace mcp
 	// Supported: initialize, ping, tools/list, tools/call (with notifications/progress on the event stream),
 	// resources/list, resources/templates/list, resources/read, resources/subscribe, resources/unsubscribe,
 	// notifications/resources/updated and notifications/tools/list_changed on the event stream (GET).
-	// Batches are refused (removed from the protocol in 2025-06-18).
+	// Batches are refused (removed from the protocol in 2025-06-18). The methods themselves are rpc_dispatcher's.
 	class endpoint
 	{
 	public:
@@ -113,8 +104,6 @@ namespace mcp
 		void handle_delete(const http_request& request, const responder& respond);
 		void dispatch_rpc(const boost::json::object& message, const http_request& request, const responder& respond);
 		void on_initialize(const boost::json::value& id, const boost::json::object& params, const responder& respond);
-		void on_subscribe(const boost::json::value& id, const boost::json::object& params, const std::string& session_id,
-			bool subscribe, const responder& respond);
 
 		// The session named by the Mcp-Session-Id header. False, with the HTTP error in `error`, when the header is
 		// missing or names no session.
@@ -132,6 +121,7 @@ namespace mcp
 
 		host& m_host;
 		endpoint_config m_config;
+		rpc_dispatcher m_rpc;
 		std::atomic<std::uint16_t> m_port{ 0 };
 
 		std::shared_ptr<shared_state> m_state;

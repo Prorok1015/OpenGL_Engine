@@ -41,6 +41,14 @@ bool edt::agent_access::frame(ImFont* font)
 	return draw_agent_confirmations(*m_confirmations);
 }
 
+bool edt::agent_access::frame_headless()
+{
+	m_policy.refresh();
+	set_person_present(false);
+	m_confirmations->tick();
+	return true;
+}
+
 void edt::agent_access::set_person_present(bool present)
 {
 	m_gate->set_can_ask(present && m_routed);

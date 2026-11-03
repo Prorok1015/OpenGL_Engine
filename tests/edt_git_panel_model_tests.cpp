@@ -182,6 +182,20 @@ BOOST_AUTO_TEST_CASE(OneWriteAtATime)
 	BOOST_TEST(model.error().find("Fetch") != std::string::npos);
 }
 
+BOOST_AUTO_TEST_CASE(EveryEndedWrite_IsCounted_AReadIsNot)
+{
+	open_and_read();
+	BOOST_TEST(model.writes_finished() == 0u);
+	model.fetch();
+	finish("vcs.fetch", json::object{ { "output", "" } });
+	BOOST_TEST(model.writes_finished() == 1u);
+	model.pull();
+	finish("vcs.pull", json::object{}, edt::job_status::cancelled);
+	BOOST_TEST(model.writes_finished() == 2u);
+	finish("vcs.status", status_result());
+	BOOST_TEST(model.writes_finished() == 2u);
+}
+
 BOOST_AUTO_TEST_CASE(AGitError_ShowsInThePanel)
 {
 	open_and_read();
