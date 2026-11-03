@@ -242,7 +242,7 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 	return true;
 }
 
-std::string mcp::endpoint::create_session()
+std::string mcp::endpoint::create_session(std::string client_name)
 {
 	expire_idle_sessions();
 	std::string id = new_session_id();
@@ -265,7 +265,9 @@ std::string mcp::endpoint::create_session()
 		}
 		session created;
 		created.serial = m_state->next_serial++;
-		created.last_used = now();
+		created.started = now();
+		created.last_used = created.started;
+		created.client_name = std::move(client_name);
 		m_state->sessions.emplace(id, std::move(created));
 	}
 	for (std::string& gone : evicted) {
@@ -378,12 +380,77 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 	});
 }
 
+namespace {
+
+	// A code point the person must not be shown from a client's own words: controls, C1 controls, and the invisible
+	// formatting that reorders or hides text (zero-width and bidi marks, bidi embeddings and isolates).
+	bool hidden_code_point(std::uint32_t cp)
+	{
+		return cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp <= 0x9f) || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0x202a && cp <= 0x202e)
+			|| (cp >= 0x2066 && cp <= 0x2069) || cp == 0xfeff;
+	}
+
+	// The next code point of well-formed UTF-8 at `at` and its length in bytes; length 0 for anything else (a stray or
+	// truncated byte, an overlong or surrogate or too large value).
+	std::size_t decode_code_point(std::string_view text, std::size_t at, std::uint32_t& cp)
+	{
+		const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+		const unsigned char lead = byte(at);
+		std::size_t length = 0;
+		std::uint32_t value = 0;
+		std::uint32_t minimum = 0;
+		if (lead < 0x80) { cp = lead; return 1; }
+		else if ((lead & 0xe0) == 0xc0) { length = 2; value = lead & 0x1f; minimum = 0x80; }
+		else if ((lead & 0xf0) == 0xe0) { length = 3; value = lead & 0x0f; minimum = 0x800; }
+		else if ((lead & 0xf8) == 0xf0) { length = 4; value = lead & 0x07; minimum = 0x10000; }
+		else return 0;
+		if (at + length > text.size()) return 0;
+		for (std::size_t i = 1; i < length; ++i) {
+			if ((byte(at + i) & 0xc0) != 0x80) return 0;
+			value = (value << 6) | (byte(at + i) & 0x3f);
+		}
+		if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return 0;
+		cp = value;
+		return length;
+	}
+
+	// clientInfo.name of initialize, to show a person: whatever the client sent, cleaned code point by code point (what is
+	// hidden or malformed is dropped) and cut at 64 bytes on a code point boundary.
+	std::string client_name_of(const json::object& params)
+	{
+		const json::value* info = params.if_contains("clientInfo");
+		const json::value* name = info != nullptr && info->is_object() ? info->as_object().if_contains("name") : nullptr;
+		if (name == nullptr || !name->is_string()) {
+			return {};
+		}
+		const std::string_view text(name->as_string().data(), name->as_string().size());
+		std::string out;
+		for (std::size_t at = 0; at < text.size();) {
+			std::uint32_t cp = 0;
+			const std::size_t length = decode_code_point(text, at, cp);
+			if (length == 0) {
+				++at;
+				continue;
+			}
+			if (!hidden_code_point(cp)) {
+				if (out.size() + length > 64) {
+					break;
+				}
+				out.append(text.substr(at, length));
+			}
+			at += length;
+		}
+		return out;
+	}
+
+}
+
 void mcp::endpoint::on_initialize(const json::value& id, const json::object& params, const responder& respond)
 {
 	bool accepted = false;
 	http_response response = json_response(m_rpc.initialize(id, params, accepted));
 	if (accepted) {
-		response.set_header("Mcp-Session-Id", create_session());
+		response.set_header("Mcp-Session-Id", create_session(client_name_of(params)));
 	}
 	respond(std::move(response));
 }
@@ -520,6 +587,52 @@ void mcp::endpoint::expire_idle_sessions() const
 	for (std::string& id : expired) {
 		m_host.session_closed(std::move(id));
 	}
+}
+
+std::vector<mcp::session_info> mcp::endpoint::sessions() const
+{
+	expire_idle_sessions();
+	std::vector<std::pair<std::uint64_t, session_info>> found;
+	{
+		std::lock_guard lock(m_state->mutex);
+		const auto current = now();
+		found.reserve(m_state->sessions.size());
+		for (const auto& [id, entry] : m_state->sessions) {
+			session_info info;
+			info.id = id;
+			info.client_name = entry.client_name;
+			info.age = std::chrono::duration_cast<std::chrono::seconds>(current - entry.started);
+			info.idle = std::chrono::duration_cast<std::chrono::seconds>(current - entry.last_used);
+			info.listening = entry.channel && !entry.channel->closed();
+			found.emplace_back(entry.serial, std::move(info));
+		}
+	}
+	std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	std::vector<session_info> out;
+	out.reserve(found.size());
+	for (auto& entry : found) {
+		out.push_back(std::move(entry.second));
+	}
+	return out;
+}
+
+bool mcp::endpoint::close_session(const std::string& id)
+{
+	std::shared_ptr<event_channel> channel;
+	{
+		std::lock_guard lock(m_state->mutex);
+		const auto found = m_state->sessions.find(id);
+		if (found == m_state->sessions.end()) {
+			return false;
+		}
+		channel = found->second.channel;
+		m_state->sessions.erase(found);
+	}
+	if (channel) {
+		channel->close();
+	}
+	m_host.session_closed(id);
+	return true;
 }
 
 void mcp::endpoint::close_all()

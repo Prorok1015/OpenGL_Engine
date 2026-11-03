@@ -6,6 +6,7 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -76,6 +77,23 @@ BOOST_AUTO_TEST_CASE(Add_FillsDefaultSchemasAndKeepsTheDescription)
 	BOOST_CHECK(kept->mutates);
 	BOOST_CHECK(kept->long_running);
 	BOOST_CHECK(!kept->expose_as_tool);
+}
+
+BOOST_AUTO_TEST_CASE(Generation_CountsEveryRegistrationAndUnregistration)
+{
+	cmd::command_registry registry;
+	const std::uint64_t start = registry.generation();
+	std::optional<cmd::registration> first = registry.add(make_command("test.one"));
+	BOOST_TEST(registry.generation() == start + 1);
+	// A command registered again under the same id (a module reloaded) leaves the size as it was and still moves the count.
+	const std::size_t size = registry.size();
+	first.reset();
+	std::optional<cmd::registration> again = registry.add(make_command("test.one"));
+	BOOST_TEST(registry.size() == size);
+	BOOST_TEST(registry.generation() == start + 3);
+	// A refused registration changes nothing.
+	std::optional<cmd::registration> refused = registry.add(make_command("test.one"));
+	BOOST_TEST(registry.generation() == start + 3);
 }
 
 BOOST_AUTO_TEST_CASE(Add_RefusesIncompleteAndDuplicateCommands)

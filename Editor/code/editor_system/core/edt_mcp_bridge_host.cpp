@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -245,6 +246,8 @@ struct edt::mcp_bridge_host::state
 	cmd::command_registry* commands = nullptr;
 	agent_access* access = nullptr;
 	session_closed_hook on_session_closed;
+	// Ended on purpose (end_sessions); ids are never reused, so an entry never blocks a later session.
+	std::set<std::string> ended_sessions;
 };
 
 edt::mcp_bridge_host::mcp_bridge_host(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access,
@@ -268,6 +271,15 @@ edt::mcp_bridge_host::~mcp_bridge_host()
 void edt::mcp_bridge_host::stop_reporting()
 {
 	m_state->on_session_closed = nullptr;
+}
+
+void edt::mcp_bridge_host::end_sessions(const std::vector<std::string>& session_ids)
+{
+	constexpr std::size_t remembered = 1024;
+	if (m_state->ended_sessions.size() + session_ids.size() > remembered) {
+		m_state->ended_sessions.clear();
+	}
+	m_state->ended_sessions.insert(session_ids.begin(), session_ids.end());
 }
 
 void edt::mcp_bridge_host::list_tools(std::function<void(std::vector<mcp::tool_info>)> done)
@@ -294,6 +306,10 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 		done = std::move(done)]() mutable {
 		if (state->commands == nullptr || state->access == nullptr) {
 			done(error_result("the editor is shutting down"));
+			return;
+		}
+		if (state->ended_sessions.contains(session)) {
+			done(error_result("the agent session was closed"));
 			return;
 		}
 		// The same check as the listing: a tool that is not listed does not exist for the agent.

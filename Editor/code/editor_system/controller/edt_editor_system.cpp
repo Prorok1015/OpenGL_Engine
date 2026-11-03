@@ -47,6 +47,7 @@
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
 #include "edt_agent_server.h"
+#include "edt_agent_server_settings.h"
 #include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
@@ -141,7 +142,8 @@ namespace {
 	// The run ends with 0 right after the first successful level load (CI: the headless run proves the level loaded).
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
-	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
+	// "" (not set), true or false: an explicit false wins over the person's own switch (parse_cfg_switch).
+	CFG_VAR_DEF_STRING(cfg_agent_server, "editor/agent_server", "");
 	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
 	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
 	// Read like the window service does: "null" is a run without a display (--headless sets it).
@@ -584,11 +586,20 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		egLOG_ERROR("mcp", "editor/mcp_stdio needs the --mcp-stdio option (stdout must belong to the protocol): no stdio transport");
 		stdio = false;
 	}
-	if (cfg_agent_server || stdio) {
+	{
+		// The policy and the server object always exist, so the person can switch the HTTP transport on later (#449). The
+		// transport itself runs when cfg `editor/agent_server` says so (it wins, with its port) or the person's own switch
+		// (edt://settings/agent_server.json) is on.
 		agent_server_options options;
-		options.http = cfg_agent_server;
-		const int port = cfg_agent_server_port;
-		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
+		const auto user_roots_for_server = m_res.mount_roots("edt");
+		const std::filesystem::path settings_dir = (user_roots_for_server.empty() ? default_user_data_dir() : user_roots_for_server.back()) / "settings";
+		m_agent_server_settings_file = settings_dir / "agent_server.json";
+		const agent_server_settings person_choice = load_agent_server_settings(m_agent_server_settings_file);
+		const std::string cfg_text = cfg_agent_server;
+		const int cfg_port = cfg_agent_server_port;
+		const agent_http_choice http = decide_agent_http(parse_cfg_switch(cfg_text), cfg_port, person_choice, headless, stdio);
+		options.http = http.enabled;
+		options.port = http.port;
 		const int idle_minutes = cfg_agent_session_idle_minutes;
 		// More than a week is the same as never, and keeps the minutes far from overflowing the clock's nanoseconds.
 		constexpr int never_after_minutes = 7 * 24 * 60;
@@ -610,6 +621,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		});
 		m_agent_access->policy().set_live_mode([this] { return m_live_mode != nullptr && m_live_mode->enabled(); });
 		m_agent_access->set_questions_routed(true);
+		// A person is here to approve a looser project policy only with a window; headless never loosens (#483).
+		m_agent_access->policy().set_approval_allowed(!headless);
 		m_agent_access->set_headless(headless);
 		if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
 			if (headless) {
@@ -621,6 +634,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
 		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
 			if (m_agent_access == nullptr) return false;
+			// Nothing to do for a person who does not use agents: no question can come, and the policy files are not read.
+			if (m_agent_server == nullptr || !m_agent_server->active()) return true;
 			return headless ? m_agent_access->frame_headless() : m_agent_access->frame(ImGui::GetFont());
 		});
 		// One signal for the end of an MCP session; whoever keeps something per session listens to it.
@@ -662,9 +677,28 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			registration added = register_editor_quit(commands, std::move(quit));
 			if (added.active()) m_registrations.push_back(std::move(added));
 		}
-	} else if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
-		egLOG_WARN("agent", "--agent-policy {} is not used: no agent server (editor/agent_server or --mcp-stdio)", utf8_of(preanswers));
 	}
+}
+
+bool edt::editor_system::set_agent_server(bool enabled, std::uint16_t port)
+{
+	if (!m_agent_server) {
+		return false;
+	}
+	bool done = true;
+	if (enabled) {
+		done = m_agent_server->start_http(port);
+	}
+	else {
+		m_agent_server->stop_http();
+	}
+	if (!done) {
+		return false;
+	}
+	if (const std::optional<std::string> error = save_agent_server_settings(m_agent_server_settings_file, agent_server_settings{ enabled, port })) {
+		egLOG_WARN("editor/agent_server", "the agent server choice cannot be saved: {}", *error);
+	}
+	return true;
 }
 
 void edt::editor_system::create_live_mode(ds::app_data_storage& data)

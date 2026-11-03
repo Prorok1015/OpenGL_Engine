@@ -38,6 +38,9 @@ namespace cmd
 
 		bool contains(std::string_view id) const;
 		std::size_t size() const;
+		// Counts every registration and every unregistration: a change of the set of commands that keeps `size()` (a module
+		// reloaded) still moves it.
+		std::uint64_t generation() const { return m_changes; }
 		// Stays valid until the command is unregistered.
 		const command_desc* find(std::string_view id) const;
 		// False for an unknown id; true when the command has no `enabled`.
@@ -124,6 +127,7 @@ namespace cmd
 		std::function<std::chrono::steady_clock::time_point()> m_clock;
 		std::vector<confirmation_ticket> m_tickets;
 		std::vector<std::shared_ptr<entry>> m_commands;
+		std::uint64_t m_changes = 0;
 		std::uint64_t m_next_key = 1;
 		std::thread::id m_main_thread = std::this_thread::get_id();
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
