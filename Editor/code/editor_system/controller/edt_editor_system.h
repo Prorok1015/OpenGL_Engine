@@ -52,6 +52,7 @@ namespace edt {
 	class problems_panel;
 	class blackboard_panel;
 	class build_settings_panel;
+	class git_panel;
 	class asset_browser_panel;
 	class prefab_editor_panel;
 	class prefab_document;
@@ -152,6 +153,7 @@ namespace edt {
 		std::shared_ptr<problems_panel>        m_problems_panel;
 		std::shared_ptr<blackboard_panel>      m_blackboard_panel;
 		std::shared_ptr<build_settings_panel>  m_build_settings_panel;
+		std::shared_ptr<git_panel>             m_git_panel;
 		// The console's feed from the engine log; removed with the editor system.
 		engine::log_sink_handle                m_log_sink;
 		std::shared_ptr<asset_browser_panel>   m_asset_browser_panel;
