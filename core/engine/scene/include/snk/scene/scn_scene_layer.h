@@ -57,6 +57,8 @@ namespace scn
 		const ds::lifetime& tasks() const { return m_tasks; }
 		// Cancels the layer's tasks and waits for them. Idempotent; the layer does it before its worlds and services go.
 		void stop_tasks();
+		// What the layer's tasks run on; null when nothing is bound to tasks().
+		ds::task_system* task_runner() const { return m_task_system; }
 
 		// Holds a registration made in a base registry (cmd::registration, engine::log_sink_handle, ...) until the
 		// layer goes; what is kept is dropped in reverse order. Returns the kept object.

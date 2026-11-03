@@ -56,6 +56,8 @@ namespace edt
 		virtual std::optional<history_entry> next_redo_entry() const { return std::nullopt; }
 		// Edits of an agent a person has not saved or accepted yet ("changed by agent", AI_INTEGRATION.md §3.4).
 		virtual bool has_agent_changes() const { return false; }
+		// Nothing may change the document now (Play runs): commits, undo and redo are refused, saving is not.
+		virtual bool edits_locked() const { return false; }
 		virtual void accept_agent_changes() {}
 
 		// Called once by the document_manager that takes the document over; nothing else assigns ids.

@@ -10,14 +10,12 @@
 #include <boost/system/error_code.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <random>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -26,16 +24,13 @@
 namespace json = boost::json;
 
 namespace {
-	constexpr std::string_view latest_protocol = "2025-06-18";
-	constexpr std::array<std::string_view, 2> supported_protocols = { "2025-06-18", "2025-03-26" };
-
-	// JSON-RPC and MCP error codes.
-	constexpr int parse_error = -32700;
-	constexpr int invalid_request = -32600;
-	constexpr int method_not_found = -32601;
-	constexpr int invalid_params = -32602;
-	constexpr int internal_error = -32603;
-	constexpr int resource_not_found = -32002;
+	using mcp::rpc_error;
+	using mcp::rpc_notification;
+	using mcp::rpc_result;
+	using mcp::rpc_codes::internal_error;
+	using mcp::rpc_codes::invalid_params;
+	using mcp::rpc_codes::invalid_request;
+	using mcp::rpc_codes::parse_error;
 
 	char lower(char c)
 	{
@@ -56,11 +51,6 @@ namespace {
 		return json::string(text);
 	}
 
-	bool is_supported(std::string_view version)
-	{
-		return std::find(supported_protocols.begin(), supported_protocols.end(), version) != supported_protocols.end();
-	}
-
 	// Compares without stopping at the first difference.
 	bool secure_equals(std::string_view a, std::string_view b)
 	{
@@ -72,38 +62,6 @@ namespace {
 			diff = static_cast<unsigned char>(diff | (ca ^ cb));
 		}
 		return diff == 0;
-	}
-
-	json::value rpc_result(const json::value& id, json::value result)
-	{
-		json::object message;
-		message["jsonrpc"] = "2.0";
-		message["id"] = id;
-		message["result"] = std::move(result);
-		return message;
-	}
-
-	json::value rpc_error(const json::value& id, int code, std::string_view text)
-	{
-		json::object error;
-		error["code"] = code;
-		error["message"] = make_string(text);
-		json::object message;
-		message["jsonrpc"] = "2.0";
-		message["id"] = id;
-		message["error"] = std::move(error);
-		return message;
-	}
-
-	json::value notification(std::string_view method, json::value params)
-	{
-		json::object message;
-		message["jsonrpc"] = "2.0";
-		message["method"] = make_string(method);
-		if (!params.is_null()) {
-			message["params"] = std::move(params);
-		}
-		return message;
 	}
 
 	mcp::http_response json_response(const json::value& message, int status = 200)
@@ -135,111 +93,12 @@ namespace {
 		const std::size_t query = target.find('?');
 		return query == std::string::npos ? target : target.substr(0, query);
 	}
-
-	std::string random_hex(std::size_t bytes)
-	{
-		static constexpr char digits[] = "0123456789abcdef";
-		std::random_device source;
-		std::string out;
-		out.reserve(bytes * 2);
-		for (std::size_t i = 0; i < bytes; ++i) {
-			const unsigned value = source() & 0xFFu;
-			out.push_back(digits[value >> 4]);
-			out.push_back(digits[value & 0xFu]);
-		}
-		return out;
-	}
-
-	json::value tool_json(mcp::tool_info& tool)
-	{
-		json::object entry;
-		entry["name"] = make_string(tool.name);
-		entry["description"] = make_string(tool.description);
-		if (tool.input_schema.is_object()) {
-			entry["inputSchema"] = std::move(tool.input_schema);
-		} else {
-			json::object schema;
-			schema["type"] = "object";
-			entry["inputSchema"] = std::move(schema);
-		}
-		if (tool.output_schema.is_object()) {
-			entry["outputSchema"] = std::move(tool.output_schema);
-		}
-		json::object annotations;
-		annotations["readOnlyHint"] = tool.read_only;
-		annotations["destructiveHint"] = tool.destructive;
-		annotations["idempotentHint"] = tool.idempotent;
-		annotations["openWorldHint"] = tool.open_world;
-		entry["annotations"] = std::move(annotations);
-		return entry;
-	}
-
-	json::value call_result_json(mcp::call_result& result)
-	{
-		json::array content;
-		content.reserve(result.content.size() + 1);
-		for (mcp::content_block& block : result.content) {
-			json::object entry;
-			if (block.type == mcp::content_block::kind::image) {
-				entry["type"] = "image";
-				entry["data"] = make_string(block.data);
-				entry["mimeType"] = make_string(block.mime_type);
-			} else {
-				entry["type"] = "text";
-				entry["text"] = make_string(block.text);
-			}
-			content.push_back(std::move(entry));
-		}
-		const bool has_structured = result.structured.is_object();
-		if (content.empty() && has_structured) {
-			// A client that predates structuredContent still gets the data.
-			json::object entry;
-			entry["type"] = "text";
-			entry["text"] = make_string(json::serialize(result.structured));
-			content.push_back(std::move(entry));
-		}
-		json::object out;
-		out["content"] = std::move(content);
-		if (has_structured) {
-			out["structuredContent"] = std::move(result.structured);
-		}
-		out["isError"] = result.is_error;
-		return out;
-	}
-
-	json::value resource_json(const mcp::resource_info& resource)
-	{
-		json::object entry;
-		entry["uri"] = make_string(resource.uri);
-		entry["name"] = make_string(resource.name);
-		if (!resource.description.empty()) {
-			entry["description"] = make_string(resource.description);
-		}
-		if (!resource.mime_type.empty()) {
-			entry["mimeType"] = make_string(resource.mime_type);
-		}
-		return entry;
-	}
-
-	json::value resource_content_json(const mcp::resource_content& content)
-	{
-		json::object entry;
-		entry["uri"] = make_string(content.uri);
-		if (!content.mime_type.empty()) {
-			entry["mimeType"] = make_string(content.mime_type);
-		}
-		if (content.is_blob) {
-			entry["blob"] = make_string(content.blob);
-		} else {
-			entry["text"] = make_string(content.text);
-		}
-		return entry;
-	}
 }
 
 mcp::endpoint::endpoint(host& application, endpoint_config config)
 	: m_host(application)
 	, m_config(std::move(config))
+	, m_rpc(application, m_config.info)
 	, m_state(std::make_shared<shared_state>())
 {
 }
@@ -386,7 +245,7 @@ bool mcp::endpoint::lookup_session(const http_request& request, std::string& ses
 std::string mcp::endpoint::create_session()
 {
 	expire_idle_sessions();
-	std::string id = random_hex(16);
+	std::string id = new_session_id();
 	std::vector<std::string> evicted;
 	{
 		std::lock_guard lock(m_state->mutex);
@@ -423,7 +282,7 @@ void mcp::endpoint::handle_post(const http_request& request, const responder& re
 		return;
 	}
 	if (const std::string* version = request.header("mcp-protocol-version")) {
-		if (!is_supported(*version)) {
+		if (!is_supported_protocol(*version)) {
 			respond(error_response(400, invalid_request, "unsupported MCP-Protocol-Version"));
 			return;
 		}
@@ -450,44 +309,27 @@ void mcp::endpoint::handle_post(const http_request& request, const responder& re
 
 void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request& request, const responder& respond)
 {
-	const json::value* method_value = message.if_contains("method");
-	const json::value* id_value = message.if_contains("id");
-	if (method_value == nullptr) {
-		// A response to a request of ours; the server sends none, so there is nothing to match it with.
-		if (id_value != nullptr && (message.contains("result") || message.contains("error"))) {
+	rpc_message rpc = classify_rpc(message);
+	if (rpc.type == rpc_message::kind::response) {
+		respond(accepted_response());
+		return;
+	}
+	if (rpc.type == rpc_message::kind::invalid) {
+		respond(error_response(400, invalid_request, rpc.error));
+		return;
+	}
+	const bool is_request = rpc.type == rpc_message::kind::request;
+	if (rpc.bad_params) {
+		if (is_request) {
+			respond(json_response(rpc_error(rpc.id, invalid_params, "params must be an object")));
+		} else {
 			respond(accepted_response());
-			return;
 		}
-		respond(error_response(400, invalid_request, "a JSON-RPC message needs a method"));
 		return;
-	}
-	if (!method_value->is_string()) {
-		respond(error_response(400, invalid_request, "method must be a string"));
-		return;
-	}
-	const std::string method(method_value->get_string().c_str(), method_value->get_string().size());
-	const bool is_request = id_value != nullptr;
-	if (is_request && !(id_value->is_string() || id_value->is_int64() || id_value->is_uint64())) {
-		respond(error_response(400, invalid_request, "id must be a string or an integer"));
-		return;
-	}
-	const json::value id = is_request ? *id_value : json::value(nullptr);
-
-	json::object params;
-	if (const json::value* params_value = message.if_contains("params")) {
-		if (!params_value->is_object()) {
-			if (is_request) {
-				respond(json_response(rpc_error(id, invalid_params, "params must be an object")));
-			} else {
-				respond(accepted_response());
-			}
-			return;
-		}
-		params = params_value->get_object();
 	}
 
-	if (method == "initialize" && is_request) {
-		on_initialize(id, params, respond);
+	if (rpc.method == "initialize" && is_request) {
+		on_initialize(rpc.id, rpc.params, respond);
 		return;
 	}
 
@@ -504,195 +346,46 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 		return;
 	}
 
-	if (method == "ping") {
-		respond(json_response(rpc_result(id, json::object{})));
-	} else if (method == "tools/list") {
-		m_host.list_tools([respond, id](std::vector<tool_info> tools) {
-			json::array list;
-			list.reserve(tools.size());
-			for (tool_info& tool : tools) {
-				list.push_back(tool_json(tool));
+	rpc_session session;
+	session.id = session_id;
+	if (channel) {
+		session.notify = [weak = std::weak_ptr<event_channel>(channel)](const json::value& note) {
+			if (const std::shared_ptr<event_channel> stream = weak.lock()) {
+				stream->push(sse_message(json::serialize(note)));
 			}
-			json::object result;
-			result["tools"] = std::move(list);
-			respond(json_response(rpc_result(id, std::move(result))));
-		});
-	} else if (method == "tools/call") {
-		const json::value* name = params.if_contains("name");
-		if (name == nullptr || !name->is_string()) {
-			respond(json_response(rpc_error(id, invalid_params, "name is required")));
-			return;
-		}
-		json::value arguments = json::object{};
-		if (const json::value* given = params.if_contains("arguments")) {
-			if (given->is_object()) {
-				arguments = *given;
-			} else if (!given->is_null()) {
-				respond(json_response(rpc_error(id, invalid_params, "arguments must be an object")));
-				return;
-			}
-		}
-		progress_sink progress = [](double, double, std::string_view) {};
-		if (channel) {
-			const json::value* meta = params.if_contains("_meta");
-			const json::value* token = (meta != nullptr && meta->is_object()) ? meta->get_object().if_contains("progressToken") : nullptr;
-			if (token != nullptr && (token->is_string() || token->is_int64() || token->is_uint64())) {
-				progress = [weak = std::weak_ptr<event_channel>(channel), token_copy = *token](double done_units, double total, std::string_view text) {
-					const std::shared_ptr<event_channel> stream = weak.lock();
-					if (!stream) {
-						return;
-					}
-					json::object body;
-					body["progressToken"] = token_copy;
-					body["progress"] = done_units;
-					if (total > 0) {
-						body["total"] = total;
-					}
-					if (!text.empty()) {
-						body["message"] = make_string(text);
-					}
-					stream->push(sse_message(json::serialize(notification("notifications/progress", std::move(body)))));
-				};
-			}
-		}
-		request_context context;
-		context.session_id = session_id;
-		m_host.call_tool(std::move(context), std::string(name->get_string().c_str(), name->get_string().size()),
-			std::move(arguments), std::move(progress), [respond, id](call_result result) {
-				respond(json_response(rpc_result(id, call_result_json(result))));
-			});
-	} else if (method == "resources/list") {
-		m_host.list_resources([respond, id](std::vector<resource_info> resources) {
-			json::array list;
-			list.reserve(resources.size());
-			for (const resource_info& resource : resources) {
-				list.push_back(resource_json(resource));
-			}
-			json::object result;
-			result["resources"] = std::move(list);
-			respond(json_response(rpc_result(id, std::move(result))));
-		});
-	} else if (method == "resources/templates/list") {
-		json::object result;
-		result["resourceTemplates"] = json::array{};
-		respond(json_response(rpc_result(id, std::move(result))));
-	} else if (method == "resources/read") {
-		const json::value* uri = params.if_contains("uri");
-		if (uri == nullptr || !uri->is_string()) {
-			respond(json_response(rpc_error(id, invalid_params, "uri is required")));
-			return;
-		}
-		request_context context;
-		context.session_id = session_id;
-		m_host.read_resource(std::move(context), std::string(uri->get_string().c_str(), uri->get_string().size()),
-			[respond, id](resource_result outcome) {
-				if (!outcome.found) {
-					respond(json_response(rpc_error(id, resource_not_found,
-						outcome.error.empty() ? std::string_view("resource not found") : std::string_view(outcome.error))));
-					return;
-				}
-				json::array contents;
-				contents.reserve(outcome.contents.size());
-				for (const resource_content& content : outcome.contents) {
-					contents.push_back(resource_content_json(content));
-				}
-				json::object result;
-				result["contents"] = std::move(contents);
-				respond(json_response(rpc_result(id, std::move(result))));
-			});
-	} else if (method == "resources/subscribe" || method == "resources/unsubscribe") {
-		on_subscribe(id, params, session_id, method == "resources/subscribe", respond);
-	} else {
-		respond(json_response(rpc_error(id, method_not_found, "method not found")));
+		};
 	}
+	// The answer may come after the endpoint is gone, so the state is captured.
+	session.subscribe = [state = m_state, limit = m_config.max_subscriptions_per_session, session_id](const std::string& uri, bool subscribe) {
+		std::lock_guard lock(state->mutex);
+		const auto found = state->sessions.find(session_id);
+		if (found == state->sessions.end()) {
+			return true;
+		}
+		auto& subscriptions = found->second.subscriptions;
+		if (!subscribe) {
+			subscriptions.erase(uri);
+			return true;
+		}
+		if (subscriptions.size() >= limit && subscriptions.count(uri) == 0) {
+			return false;
+		}
+		subscriptions.insert(uri);
+		return true;
+	};
+	m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [respond](json::value answer) {
+		respond(json_response(answer));
+	});
 }
 
 void mcp::endpoint::on_initialize(const json::value& id, const json::object& params, const responder& respond)
 {
-	const json::value* requested = params.if_contains("protocolVersion");
-	if (requested == nullptr || !requested->is_string()) {
-		respond(json_response(rpc_error(id, invalid_params, "protocolVersion is required")));
-		return;
+	bool accepted = false;
+	http_response response = json_response(m_rpc.initialize(id, params, accepted));
+	if (accepted) {
+		response.set_header("Mcp-Session-Id", create_session());
 	}
-	const std::string asked(requested->get_string().c_str(), requested->get_string().size());
-	const std::string negotiated = is_supported(asked) ? asked : std::string(latest_protocol);
-
-	json::object tools;
-	tools["listChanged"] = true;
-	json::object resources;
-	resources["subscribe"] = true;
-	resources["listChanged"] = false;
-	json::object capabilities;
-	capabilities["tools"] = std::move(tools);
-	capabilities["resources"] = std::move(resources);
-
-	json::object info;
-	info["name"] = make_string(m_config.info.name);
-	info["version"] = make_string(m_config.info.version);
-	if (!m_config.info.snk_api.empty()) {
-		info["snk_api"] = make_string(m_config.info.snk_api);
-	}
-
-	json::object result;
-	result["protocolVersion"] = make_string(negotiated);
-	result["capabilities"] = std::move(capabilities);
-	result["serverInfo"] = std::move(info);
-	if (!m_config.info.instructions.empty()) {
-		result["instructions"] = make_string(m_config.info.instructions);
-	}
-
-	http_response response = json_response(rpc_result(id, std::move(result)));
-	response.set_header("Mcp-Session-Id", create_session());
 	respond(std::move(response));
-}
-
-void mcp::endpoint::on_subscribe(const json::value& id, const json::object& params, const std::string& session_id,
-	bool subscribe, const responder& respond)
-{
-	const json::value* uri = params.if_contains("uri");
-	if (uri == nullptr || !uri->is_string()) {
-		respond(json_response(rpc_error(id, invalid_params, "uri is required")));
-		return;
-	}
-	const std::string text(uri->get_string().c_str(), uri->get_string().size());
-	if (!subscribe) {
-		{
-			std::lock_guard lock(m_state->mutex);
-			const auto found = m_state->sessions.find(session_id);
-			if (found != m_state->sessions.end()) {
-				found->second.subscriptions.erase(text);
-			}
-		}
-		respond(json_response(rpc_result(id, json::object{})));
-		return;
-	}
-	// Only a resource the host offers can be subscribed to; the list may arrive later, so the state is captured.
-	const std::size_t limit = m_config.max_subscriptions_per_session;
-	m_host.list_resources([state = m_state, limit, id, session_id, text, respond](std::vector<resource_info> resources) {
-		const bool known = std::any_of(resources.begin(), resources.end(), [&text](const resource_info& r) { return r.uri == text; });
-		if (!known) {
-			respond(json_response(rpc_error(id, invalid_params, "unknown resource")));
-			return;
-		}
-		bool too_many = false;
-		{
-			std::lock_guard lock(state->mutex);
-			const auto found = state->sessions.find(session_id);
-			if (found != state->sessions.end()) {
-				auto& subscriptions = found->second.subscriptions;
-				if (subscriptions.size() >= limit && subscriptions.count(text) == 0) {
-					too_many = true;
-				} else {
-					subscriptions.insert(text);
-				}
-			}
-		}
-		if (too_many) {
-			respond(json_response(rpc_error(id, invalid_params, "too many subscriptions")));
-			return;
-		}
-		respond(json_response(rpc_result(id, json::object{})));
-	});
 }
 
 void mcp::endpoint::handle_get(const http_request& request, const responder& respond)
@@ -784,12 +477,12 @@ void mcp::endpoint::notify_resource_updated(const std::string& uri)
 {
 	json::object params;
 	params["uri"] = make_string(uri);
-	notify_sessions(&uri, sse_message(json::serialize(notification("notifications/resources/updated", std::move(params)))));
+	notify_sessions(&uri, sse_message(json::serialize(rpc_notification("notifications/resources/updated", std::move(params)))));
 }
 
 void mcp::endpoint::notify_tools_changed()
 {
-	notify_sessions(nullptr, sse_message(json::serialize(notification("notifications/tools/list_changed", json::value(nullptr)))));
+	notify_sessions(nullptr, sse_message(json::serialize(rpc_notification("notifications/tools/list_changed", json::value(nullptr)))));
 }
 
 std::chrono::steady_clock::time_point mcp::endpoint::now() const

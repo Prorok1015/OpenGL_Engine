@@ -56,6 +56,7 @@ namespace edt {
 	class asset_browser_panel;
 	class prefab_editor_panel;
 	class prefab_document;
+	class play_session;
 
 	class editor_system
 	{
@@ -138,6 +139,9 @@ namespace edt {
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
 		void create_live_mode(ds::app_data_storage& data);
+		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
+		void create_play_session(ds::app_data_storage& data);
+		void draw_play_status();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
@@ -195,15 +199,21 @@ namespace edt {
 		std::unique_ptr<edt::vcs_service> m_vcs;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
+		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
+		// while the context it reports to is still there.
+		std::unique_ptr<edt::play_session> m_play;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
-		// The policy and the confirmations behind the MCP server (editor/agent_server, off by default); null when it is off.
+		// Taken by work the stdio transport posts to the main thread: it finds the system gone through the weak copy.
+		std::shared_ptr<int> m_stdio_alive = std::make_shared<int>(0);
+		// The policy and the confirmations behind the MCP server (editor/agent_server, editor/mcp_stdio, off by default);
+		// null when both are off.
 		std::unique_ptr<agent_access> m_agent_access;
-		// The MCP server; null when it is off. Last member: stopped first, before the access it asks.
+		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;

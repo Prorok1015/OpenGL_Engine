@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -2640,6 +2641,106 @@ BOOST_AUTO_TEST_CASE(AFailure_StderrTailKeepsTheLast20Lines_MessageTheFatalLine)
 	BOOST_TEST(short_tail.starts_with("warning: line 10"));
 	BOOST_TEST(short_tail.ends_with("warning: line 29"));
 	BOOST_TEST(std::count(short_tail.begin(), short_tail.end(), '\n') == 19);
+}
+
+// A finished job reports 1 (ds::task_state_base marks a body that returned as complete), so the progress is read
+// while git still runs: the manual task system runs the job on this thread, inside finish().
+BOOST_AUTO_TEST_CASE(FetchPullAndPush_AskGitForProgress_AndReportItAsTheJobsProgress)
+{
+	std::function<void()> while_running;
+	command = [&while_running](const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "fetch") || has_arg(args, "push")) {
+			opts.on_stderr_line("remote: Counting objects: 100% (10/10), done.");
+			opts.on_stderr_line("Receiving objects:  45% (450/1000), 1.2 MiB | 3 MiB/s");
+			// A phase of a smaller share later on: the fraction stays where it was, the text follows git.
+			opts.on_stderr_line("Counting objects:  50% (1/2)");
+			if (while_running) while_running();
+		}
+		return exited(0);
+	};
+	make_service(fake_options());
+
+	std::optional<edt::job_progress> seen;
+	edt::job_service::job_id job = 0;
+	while_running = [&] { seen = jobs->progress(job); };
+
+	const auto fetched = service->start_fetch({}, cmd::origin_kind::ui);
+	job = fetched.job;
+	finish(fetched);
+	BOOST_TEST(has_arg(calls.back(), "--progress"));
+	BOOST_REQUIRE(seen.has_value());
+	BOOST_TEST(std::abs(seen->fraction - 0.46f) < 1e-4f, seen->fraction);
+	BOOST_TEST(seen->note == "Counting objects 50%");
+
+	seen.reset();
+	const auto pushed = service->start_push("origin", "main", false, cmd::origin_kind::ui);
+	job = pushed.job;
+	finish(pushed);
+	BOOST_TEST(has_arg(calls.back(), "--progress"));
+	BOOST_REQUIRE(seen.has_value());
+	BOOST_TEST(seen->note == "Counting objects 50%");
+
+	calls.clear();
+	while_running = nullptr;
+	finish(service->start_pull("origin", "main", cmd::origin_kind::ui));
+	const auto fetch = std::find_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "fetch"); });
+	BOOST_REQUIRE(fetch != calls.end());
+	BOOST_TEST(has_arg(*fetch, "--progress"));
+}
+
+// git rewrites a progress line with '\r' hundreds of times; the runner delivers each as a line of its own.
+BOOST_AUTO_TEST_CASE(ProgressUpdates_DoNotPushTheFatalLineOutOfTheStderrTail)
+{
+	command = [](const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "fetch")) {
+			opts.on_stderr_line("remote: Enumerating objects: 200, done.");
+			for (int i = 0; i < 200; ++i) opts.on_stderr_line(std::format("Receiving objects: {:3}% ({}/200)", i / 2, i));
+			opts.on_stderr_line("fatal: unable to access 'https://example.com/x.git/': Could not resolve host: example.com");
+		}
+		return exited(128);
+	};
+	make_service(fake_options());
+
+	const json::value result = finish(service->start_fetch({}, cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(result));
+	BOOST_REQUIRE(is_error(result, "network"));
+	const json::object& error = result.as_object().at("error").as_object();
+	BOOST_TEST(text(error.at("message")).starts_with("fatal: unable to access"));
+	const std::string tail = text(error.at("stderr_tail"));
+	BOOST_TEST(tail.ends_with("Could not resolve host: example.com"), tail);
+	BOOST_TEST(tail.find("Enumerating objects: 200, done.") != std::string::npos, tail);
+	std::size_t updates = 0;
+	for (std::size_t at = tail.find("Receiving objects"); at != std::string::npos; at = tail.find("Receiving objects", at + 1)) ++updates;
+	BOOST_TEST(updates == 1u, tail);
+	BOOST_TEST(tail.find("Receiving objects:  99% (199/200)") != std::string::npos, tail);
+}
+
+BOOST_AUTO_TEST_CASE(AFailureWithoutAFatalLine_IsNotSummedUpByAProgressUpdate)
+{
+	bool with_warning = true;
+	command = [&with_warning](const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "fetch")) {
+			if (with_warning) opts.on_stderr_line("warning: redirecting to https://example.com/y.git/");
+			opts.on_stderr_line("Receiving objects:  45% (450/1000)");
+			opts.on_stderr_line("Receiving objects:  46% (460/1000)");
+		}
+		return exited(1);
+	};
+	make_service(fake_options());
+
+	const json::value warned = finish(service->start_fetch({}, cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(warned));
+	BOOST_REQUIRE(warned.is_object() && warned.as_object().contains("error"));
+	BOOST_TEST(text(warned.at("error").at("message")) == "warning: redirecting to https://example.com/y.git/");
+
+	with_warning = false;
+	const json::value bare = finish(service->start_fetch({}, cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(bare));
+	BOOST_REQUIRE(bare.is_object() && bare.as_object().contains("error"));
+	BOOST_TEST(text(bare.at("error").at("message")) == "git exited with code 1");
 }
 
 namespace {

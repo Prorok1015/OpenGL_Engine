@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <utility>
 #include <snk/application/app_deterministic_time.h>
 #include <snk/application/app_frame_control.h>
 #include <snk/application/app_frame_stage.h>
@@ -11,6 +12,12 @@
 
 namespace app
 {
+	// When a frame that began at `frame_start` may end so the loop runs at most `fps` frames a second; nullopt for
+	// fps <= 0 (no limit).
+	SNK_API std::optional<std::chrono::steady_clock::time_point> frame_deadline(std::chrono::steady_clock::time_point frame_start, int fps);
+	// The frame rate cap of a loop without a window (app/headless_target_fps): none with a window, which has its own pace.
+	constexpr int headless_frame_limit(int configured_fps, bool null_window) { return null_window && configured_fps > 0 ? configured_fps : 0; }
+
 	// The one frame loop of every host (editor, game): times the frame and runs the stages of the
 	// registry it is given. Host-specific behaviour is added by modules as stages; the loop itself
 	// knows neither the window nor the renderer.
@@ -33,6 +40,10 @@ namespace app
 		void set_settled_probe(std::function<bool(ds::app_data_storage&)> settled) { m_settled_probe = std::move(settled); }
 		// > 0: after this many steps the loop requests its own stop (`app/exit_after_frames`); 0: never.
 		void set_exit_after_frames(std::uint64_t frames) { m_exit_after_frames = frames; }
+		// > 0: after a frame the loop sleeps until frame_deadline (a loop without a window would spin a core); 0: no limit.
+		void set_frame_limit(int fps) { m_frame_limit = fps; }
+		// Tests only: what waits for the deadline. Null: std::this_thread::sleep_until.
+		void set_sleep_until(std::function<void(std::chrono::steady_clock::time_point)> sleep) { m_sleep_until = std::move(sleep); }
 		bool should_stop() const override { return m_stop_requested; }
 		void request_stop() override { m_stop_requested = true; }
 
@@ -43,6 +54,8 @@ namespace app
 		std::uint64_t m_frames = 0;
 		std::uint64_t m_steps = 0;
 		std::uint64_t m_exit_after_frames = 0;
+		int m_frame_limit = 0;
+		std::function<void(std::chrono::steady_clock::time_point)> m_sleep_until;
 		std::function<bool(ds::app_data_storage&)> m_ready_probe;
 		std::function<bool(ds::app_data_storage&)> m_settled_probe;
 		bool m_settled = false;

@@ -29,7 +29,7 @@ namespace edt
 
 		constexpr cmd::agent_category settable[] = {
 			cmd::agent_category::read, cmd::agent_category::scene_edit, cmd::agent_category::code_edit, cmd::agent_category::code_files,
-			cmd::agent_category::cmake_presets, cmd::agent_category::build, cmd::agent_category::live,
+			cmd::agent_category::cmake_presets, cmd::agent_category::build, cmd::agent_category::live, cmd::agent_category::editor_control,
 			cmd::agent_category::vcs_read, cmd::agent_category::vcs_commit, cmd::agent_category::vcs_branch,
 			cmd::agent_category::vcs_sync, cmd::agent_category::vcs_push,
 		};

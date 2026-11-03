@@ -79,7 +79,12 @@ std::vector<edt::registration> edt::agent_sessions::register_commands(cmd::comma
 		desc.result_schema = parse_schema(result);
 		desc.mutates = mutates;
 		desc.category = cmd::agent_category::scene_edit;
-		desc.invoke = [this, body](const cmd::call& call) { return (this->*body)(call); };
+		desc.invoke = [this, body, mutates](const cmd::call& call) {
+			if (mutates && m_documents.scene().edits_locked()) {
+				return cmd::result::failure(cmd::codes::busy, "the scene is playing: stop play first");
+			}
+			return (this->*body)(call);
+		};
 		registration added = commands.add(std::move(desc));
 		if (added.active()) out.push_back(std::move(added));
 	};
