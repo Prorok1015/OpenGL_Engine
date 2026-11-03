@@ -78,6 +78,10 @@ namespace edt::vcs
 			// job_service::cancel.
 			std::function<bool(std::uint64_t job)> cancel;
 			std::function<clock::time_point()> now = [] { return clock::now(); };
+			// vcs.log takes all/author/grep and vcs.show_files and vcs.diff{commit} exist (#457 PR-1). Without them the
+			// history is HEAD's (or the branch's), the author and text filters are not sent and a selection reads no
+			// files.
+			bool extended_reads = false;
 		};
 
 		static constexpr int k_page_size = 200;
@@ -90,6 +94,11 @@ namespace edt::vcs
 		static constexpr int k_max_restarts = 3;
 
 		history_model(editor_events& events, ports ports);
+		// Cancels the jobs it still waits for.
+		~history_model();
+		// The job_finished slot holds `this`.
+		history_model(const history_model&) = delete;
+		history_model& operator=(const history_model&) = delete;
 
 		// The tab's frame (shown) or its hidden frames. Shown for the first time, it loads.
 		void set_visible(bool visible);
@@ -97,8 +106,11 @@ namespace edt::vcs
 		void tick();
 		// From the top, with the filter as it is (Refresh, or after a commit, pull or checkout).
 		void reload();
+		// A new filter drops the selection (the commit may not pass it).
 		void set_filter(history_filter filter);
 		const history_filter& filter() const { return m_filter; }
+		// The author and text filters are sent (ports::extended_reads).
+		bool filters_by_text() const { return m_ports.extended_reads; }
 		// Rows [first, last] are on screen: loads the next page when `last` is near the end of what is loaded.
 		void show_rows(std::size_t first, std::size_t last);
 
@@ -132,6 +144,7 @@ namespace edt::vcs
 		void start_page();
 		// Drops the rows and the running page, keeps the selection (it comes back when its row loads again).
 		void restart();
+		void clear_selection();
 		void finished(std::uint64_t id, job_status status, const std::string& error, const std::optional<boost::json::value>& result);
 		void apply_page(const boost::json::object& result);
 		void forget_job(std::optional<std::uint64_t>& job);
@@ -146,6 +159,8 @@ namespace edt::vcs
 
 		bool m_visible = false;
 		bool m_loaded_once = false;
+		// What the rows were asked with; m_filter waits for its quiet time to become it.
+		history_filter m_applied_filter;
 		history_filter m_filter;
 		std::optional<clock::time_point> m_reload_at;
 

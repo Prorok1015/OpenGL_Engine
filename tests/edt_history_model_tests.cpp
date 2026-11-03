@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -41,12 +42,16 @@ struct history_fixture
 	history_model::clock::time_point now{};
 	// Newest first; commit i's first parent is i + 1, and every tenth one also merges i + 2.
 	std::size_t history_size = 1000;
+	// A command invoke refuses, as a registry would refuse arguments it does not know.
+	std::string refused;
 	history_model model{ events, ports() };
 
-	history_model::ports ports()
+	history_model::ports ports(bool extended_reads = true)
 	{
 		history_model::ports out;
+		out.extended_reads = extended_reads;
 		out.invoke = [this](std::string_view id, json::value args) {
+			if (id == refused) return cmd::result::failure("invalid_args", "unknown argument 'all'");
 			const std::uint64_t job = next_job++;
 			calls.push_back({ std::string(id), args.as_object(), job });
 			return cmd::result::success(json::object{ { "job", job } });
@@ -359,6 +364,111 @@ BOOST_AUTO_TEST_CASE(ACommitOfAPage_IsReadWithItsRefs)
 	BOOST_TEST(commit->refs[3].name == "v1");
 
 	BOOST_TEST(!edt::vcs::history_commit_of(json::parse(R"({"subject":"no hash"})").as_object()));
+}
+
+BOOST_AUTO_TEST_CASE(ANewFilterDuringAPage_LeavesThatPagesPagingAsItWas)
+{
+	open_and_load();
+	model.show_rows(150, 190);
+	model.set_filter({ "main", "", "" });
+	answer_log();
+	BOOST_TEST(model.commits().size() == 400u);
+	model.show_rows(350, 390);
+	const auto page = last("vcs.log");
+	BOOST_TEST(page->args.at("all").as_bool());
+	BOOST_TEST(!page->args.contains("ref"));
+	BOOST_TEST(page->args.at("cursor").as_string() == "c400");
+
+	now += history_model::k_filter_delay;
+	model.tick();
+	BOOST_TEST(last("vcs.log")->args.at("ref").as_string() == "main");
+	BOOST_TEST(!last("vcs.log")->args.contains("cursor"));
+}
+
+BOOST_AUTO_TEST_CASE(ANewFilter_DropsTheSelection_ARefreshKeepsIt)
+{
+	open_and_load();
+	model.select(5);
+	model.reload();
+	BOOST_TEST(model.selected_commit() == hash_of(5));
+	model.set_filter({ "", "", "fix" });
+	now += history_model::k_filter_delay;
+	model.tick();
+	BOOST_TEST(model.selected_commit().empty());
+	BOOST_TEST(!model.files_loading());
+}
+
+BOOST_AUTO_TEST_CASE(AFilterChangeDuringAStaleRestart_AsksWithTheNewFilterFromTheTop)
+{
+	open_and_load();
+	model.show_rows(150, 190);
+	finish(*last("vcs.log"), json::parse(R"({"error":{"code":"stale"}})"));
+	const call restarted = *last("vcs.log");
+	model.set_filter({ "dev", "", "" });
+	now += history_model::k_filter_delay;
+	model.tick();
+	BOOST_TEST(!cancelled.empty());
+	BOOST_TEST(cancelled.back() == restarted.job);
+	finish(restarted, json::object{ { "commits", json::array{ commit_json(0) } }, { "next_cursor", "c1" } });
+	BOOST_TEST(model.commits().empty());
+	BOOST_TEST(last("vcs.log")->args.at("ref").as_string() == "dev");
+}
+
+BOOST_AUTO_TEST_CASE(APageThatBringsNothingNew_EndsTheHistory)
+{
+	open_and_load();
+	model.show_rows(150, 190);
+	json::array repeated;
+	repeated.emplace_back(commit_json(3));
+	finish(*last("vcs.log"), json::object{ { "commits", std::move(repeated) }, { "next_cursor", "c400" } });
+	BOOST_TEST(model.at_end());
+	model.show_rows(160, 199);
+	BOOST_TEST(count("vcs.log") == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ARefusedLogCall_ShowsWhy_AndIsNotRepeatedOnScroll)
+{
+	refused = "vcs.log";
+	model.set_visible(true);
+	BOOST_TEST(calls.empty());
+	BOOST_TEST(!model.loading());
+	BOOST_TEST(model.error() == "vcs.log: unknown argument 'all'");
+	model.show_rows(0, 40);
+	BOOST_TEST(calls.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AModelDestroyedWithAJobRunning_CancelsIt_AndIgnoresItsEnd)
+{
+	auto owned = std::make_unique<history_model>(events, ports());
+	owned->set_visible(true);
+	const call page = *last("vcs.log");
+	owned.reset();
+	BOOST_REQUIRE_EQUAL(cancelled.size(), 1u);
+	BOOST_TEST(cancelled.front() == page.job);
+	finish(page, json::object{ { "commits", json::array{ commit_json(0) } } });
+}
+
+BOOST_AUTO_TEST_CASE(WithoutTheExtendedReads_ItShowsHeadsHistory_AndNoFiles)
+{
+	history_model plain{ events, ports(false) };
+	plain.set_visible(true);
+	const call page = *last("vcs.log");
+	BOOST_TEST(!page.args.contains("all"));
+	plain.set_filter({ "main", "ann", "fix" });
+	now += history_model::k_filter_delay;
+	plain.tick();
+	const auto filtered = last("vcs.log");
+	BOOST_TEST(filtered->args.at("ref").as_string() == "main");
+	BOOST_TEST(!filtered->args.contains("author"));
+	BOOST_TEST(!filtered->args.contains("grep"));
+	BOOST_TEST(!plain.filters_by_text());
+
+	answer_log();
+	plain.select(2);
+	plain.select_file("a.cpp");
+	BOOST_TEST(plain.selected_commit() == hash_of(2));
+	BOOST_TEST(count("vcs.show_files") == 0u);
+	BOOST_TEST(count("vcs.diff") == 0u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

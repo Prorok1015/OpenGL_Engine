@@ -83,6 +83,12 @@ edt::vcs::history_model::history_model(editor_events& events, ports ports)
 		});
 }
 
+edt::vcs::history_model::~history_model()
+{
+	if (!m_ports.cancel) return;
+	for (const auto& entry : m_jobs) m_ports.cancel(entry.first);
+}
+
 void edt::vcs::history_model::set_visible(bool visible)
 {
 	m_visible = visible;
@@ -100,6 +106,8 @@ void edt::vcs::history_model::reload()
 	m_reload_at.reset();
 	m_restarts = 0;
 	m_error.clear();
+	if (m_applied_filter != m_filter) clear_selection();
+	m_applied_filter = m_filter;
 	restart();
 	// Hidden, it loads when it is shown again.
 	m_loaded_once = m_visible;
@@ -124,19 +132,26 @@ void edt::vcs::history_model::show_rows(std::size_t, std::size_t last)
 void edt::vcs::history_model::select(std::size_t row)
 {
 	if (row >= m_commits.size() || m_commits[row].hash == m_selected) return;
+	clear_selection();
+	m_error.clear();
+	m_selected = m_commits[row].hash;
+	if (m_ports.extended_reads) m_files_job = start("vcs.show_files", json::object{ { "commit", m_selected } }, job_kind::files);
+}
+
+void edt::vcs::history_model::clear_selection()
+{
 	forget_job(m_files_job);
 	forget_job(m_diff_job);
-	m_selected = m_commits[row].hash;
+	m_selected.clear();
 	m_files.clear();
 	m_selected_file.clear();
 	m_diff_text.clear();
 	m_diff_truncated = false;
-	m_files_job = start("vcs.show_files", json::object{ { "commit", m_selected } }, job_kind::files);
 }
 
 void edt::vcs::history_model::select_file(const std::string& path)
 {
-	if (m_selected.empty() || path == m_selected_file) return;
+	if (m_selected.empty() || !m_ports.extended_reads || path == m_selected_file) return;
 	forget_job(m_diff_job);
 	m_selected_file = path;
 	m_diff_text.clear();
@@ -171,13 +186,13 @@ std::optional<std::uint64_t> edt::vcs::history_model::start(std::string_view id,
 void edt::vcs::history_model::start_page()
 {
 	json::object args{ { "limit", k_page_size } };
-	if (m_filter.branch.empty()) {
+	if (!m_applied_filter.branch.empty()) {
+		args["ref"] = m_applied_filter.branch;
+	} else if (m_ports.extended_reads) {
 		args["all"] = true;
-	} else {
-		args["ref"] = m_filter.branch;
 	}
-	if (!m_filter.author.empty()) args["author"] = m_filter.author;
-	if (!m_filter.text.empty()) args["grep"] = m_filter.text;
+	if (m_ports.extended_reads && !m_applied_filter.author.empty()) args["author"] = m_applied_filter.author;
+	if (m_ports.extended_reads && !m_applied_filter.text.empty()) args["grep"] = m_applied_filter.text;
 	if (!m_cursor.empty()) args["cursor"] = m_cursor;
 	m_log_job = start("vcs.log", std::move(args), job_kind::log);
 	if (!m_log_job) m_log_failed = true;
@@ -259,7 +274,9 @@ void edt::vcs::history_model::apply_page(const json::object& result)
 	}
 	m_graph.append(laid_out);
 	m_cursor = string_of(result, "next_cursor");
-	if (m_cursor.empty()) {
+	// A page that brought nothing new would be asked for again and again.
+	if (m_cursor.empty() || laid_out.empty()) {
+		m_cursor.clear();
 		m_at_end = true;
 		m_graph.finish();
 		return;
