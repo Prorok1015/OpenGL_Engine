@@ -9,7 +9,7 @@
 #include <string_view>
 
 namespace cmd { class command_registry; }
-namespace edt { class agent_access; }
+namespace edt { class agent_access; class editor_events; class job_service; }
 namespace ds { class task_system; }
 
 namespace edt
@@ -36,6 +36,10 @@ namespace edt
 		std::function<void()> on_stdio_eof;
 		// Called on the main thread when an MCP session ended, except while the server itself stops. Empty: nothing.
 		std::function<void(const std::string& session_id)> on_session_closed;
+		// Both set: a tool call that starts a job, from a client that asked for progress, is answered when the job ends,
+		// with its progress forwarded meanwhile (mcp_bridge_options). Both outlive the server.
+		job_service* jobs = nullptr;
+		editor_events* events = nullptr;
 	};
 
 	// The MCP server of the editor (module snk_mcp_server) with everything it needs on the editor's side: the
@@ -63,6 +67,8 @@ namespace edt
 		// Tells the connected clients of both transports to list the tools again (a command's `enabled` gate changed,
 		// e.g. live mode).
 		void notify_tools_changed();
+		// Once per frame, main thread: the progress and the time limit of the tool calls that wait for their job.
+		void tick();
 
 	private:
 		struct impl;

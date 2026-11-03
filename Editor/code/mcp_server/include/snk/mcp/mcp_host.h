@@ -90,10 +90,14 @@ namespace mcp
 	struct request_context
 	{
 		std::string session_id;
+		// The JSON-RPC id of the request; notifications/cancelled names it (host::cancel_request).
+		boost::json::value request_id;
+		// The client sent a progressToken and the transport can deliver notifications: `progress` reaches it.
+		bool wants_progress = false;
 	};
 
-	// Reports the progress of a running call. Callable from any thread; ignored when the client sent no progressToken.
-	// `total` is 0 when unknown.
+	// Reports the progress of a running call. Callable from any thread; ignored when the client sent no progressToken
+	// (request_context::wants_progress tells). `total` is 0 when unknown.
 	using progress_sink = std::function<void(double progress, double total, std::string_view message)>;
 
 	// What the server asks of the application. The module calls it from its own I/O thread; it never touches the
@@ -116,5 +120,13 @@ namespace mcp
 		// The session is gone (DELETE, pushed out by a newer one, or the server stopped). Called from the I/O thread,
 		// outside the endpoint's lock; state kept per session can be dropped.
 		virtual void session_closed(std::string session_id) { (void)session_id; }
+		// notifications/cancelled: the client no longer wants the answer to request `request_id` of the session. A host
+		// that still works on it may stop and must not answer it; one that already answered ignores this (the spec
+		// allows both orders). Called from the I/O thread.
+		virtual void cancel_request(std::string session_id, boost::json::value request_id)
+		{
+			(void)session_id;
+			(void)request_id;
+		}
 	};
 }

@@ -340,21 +340,33 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 		respond(std::move(session_error));
 		return;
 	}
+	rpc_session session;
+	session.id = session_id;
 	if (!is_request) {
 		// notifications/initialized, notifications/cancelled and the rest need no answer.
 		respond(accepted_response());
+		m_rpc.notification(rpc.method, rpc.params, session);
 		return;
 	}
 
-	rpc_session session;
-	session.id = session_id;
-	if (channel) {
-		session.notify = [weak = std::weak_ptr<event_channel>(channel)](const json::value& note) {
-			if (const std::shared_ptr<event_channel> stream = weak.lock()) {
-				stream->push(sse_message(json::serialize(note)));
+	// The stream the session has when the notification is sent: one opened after the call, or a reconnect, gets it.
+	session.notify = [weak = std::weak_ptr<shared_state>(m_state), session_id](const json::value& note) {
+		const std::shared_ptr<shared_state> state = weak.lock();
+		if (!state) {
+			return;
+		}
+		std::shared_ptr<event_channel> stream;
+		{
+			std::lock_guard lock(state->mutex);
+			const auto found = state->sessions.find(session_id);
+			if (found != state->sessions.end()) {
+				stream = found->second.channel;
 			}
-		};
-	}
+		}
+		if (stream) {
+			stream->push(sse_message(json::serialize(note)));
+		}
+	};
 	// The answer may come after the endpoint is gone, so the state is captured.
 	session.subscribe = [state = m_state, limit = m_config.max_subscriptions_per_session, session_id](const std::string& uri, bool subscribe) {
 		std::lock_guard lock(state->mutex);

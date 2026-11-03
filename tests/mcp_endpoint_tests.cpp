@@ -760,6 +760,66 @@ BOOST_AUTO_TEST_CASE(SecondStream_ReplacesTheFirst)
 	BOOST_TEST(events_of(second->take()).size() == 1u);
 }
 
+BOOST_AUTO_TEST_CASE(Progress_ReachesAStreamOpenedAfterTheCall)
+{
+	host.set_defer_calls(true);
+	const std::string session = initialize();
+	ep.handle(session_request(session, rpc("5", "tools/call", R"({"name":"long","_meta":{"progressToken":"tok-1"}})")), [](mcp::http_response) {});
+	ep.handle(session_request(session, rpc("6", "tools/call", R"({"name":"plain"})")), [](mcp::http_response) {});
+	const auto calls = host.calls();
+	BOOST_REQUIRE_EQUAL(calls.size(), 2u);
+	BOOST_TEST(calls[0].wants_progress);
+	BOOST_TEST(calls[0].request_id.as_int64() == 5);
+	BOOST_TEST(!calls[1].wants_progress);
+
+	// Without a stream the frame is dropped, not kept for later.
+	calls[0].progress(0.1, 1.0, "nobody listens yet");
+	const auto stream = send(get_stream(*this, session)).stream;
+	stream->take();
+	calls[0].progress(0.5, 1.0, "half");
+
+	const std::vector<json::value> events = events_of(stream->take());
+	BOOST_REQUIRE_EQUAL(events.size(), 1u);
+	BOOST_TEST(text_of(events[0].at("method")) == "notifications/progress");
+	BOOST_TEST(text_of(events[0].at("params").at("message")) == "half");
+}
+
+BOOST_AUTO_TEST_CASE(Progress_FollowsAReconnectedStream)
+{
+	host.set_defer_calls(true);
+	const std::string session = initialize();
+	const auto first = send(get_stream(*this, session)).stream;
+	first->take();
+	ep.handle(session_request(session, rpc("5", "tools/call", R"({"name":"long","_meta":{"progressToken":"tok-1"}})")), [](mcp::http_response) {});
+	const auto calls = host.calls();
+	BOOST_REQUIRE_EQUAL(calls.size(), 1u);
+
+	const auto second = send(get_stream(*this, session)).stream;
+	BOOST_TEST(first->closed());
+	second->take();
+	calls[0].progress(0.5, 1.0, "after the reconnect");
+
+	BOOST_TEST(first->take().empty());
+	const std::vector<json::value> events = events_of(second->take());
+	BOOST_REQUIRE_EQUAL(events.size(), 1u);
+	BOOST_TEST(text_of(events[0].at("params").at("message")) == "after the reconnect");
+}
+
+BOOST_AUTO_TEST_CASE(Cancelled_ReachesTheHostWithTheRequestId)
+{
+	const std::string session = initialize();
+	const mcp::http_response response = send(session_request(session,
+		R"({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"call-3","reason":"user"}})"));
+	BOOST_TEST(response.status == 202);
+	// Without an id that could name a request there is nothing to cancel.
+	BOOST_TEST(send(session_request(session, R"({"jsonrpc":"2.0","method":"notifications/cancelled","params":{}})")).status == 202);
+
+	const auto cancels = host.cancels();
+	BOOST_REQUIRE_EQUAL(cancels.size(), 1u);
+	BOOST_TEST(cancels[0].session_id == session);
+	BOOST_TEST(text_of(cancels[0].request_id) == "call-3");
+}
+
 BOOST_AUTO_TEST_CASE(Delete_EndsTheSession)
 {
 	const std::string session = initialize();

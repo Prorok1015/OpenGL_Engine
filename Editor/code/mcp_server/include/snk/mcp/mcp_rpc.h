@@ -89,6 +89,10 @@ namespace mcp
 		void dispatch(const std::string& method, const boost::json::value& id, const boost::json::object& params,
 			const rpc_session& session, const reply_sink& reply) const;
 
+		// A notification of an open session (no answer): notifications/cancelled goes to host::cancel_request, the rest
+		// is ignored.
+		void notification(const std::string& method, const boost::json::object& params, const rpc_session& session) const;
+
 	private:
 		host& m_host;
 		server_info m_info;

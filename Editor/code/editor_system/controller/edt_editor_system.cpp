@@ -620,6 +620,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
 		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
 			if (m_agent_access == nullptr) return false;
+			if (m_agent_server) m_agent_server->tick();
 			return headless ? m_agent_access->frame_headless() : m_agent_access->frame(ImGui::GetFont());
 		});
 		// One signal for the end of an MCP session; whoever keeps something per session listens to it.
@@ -631,6 +632,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			if (m_agent_sessions) m_agent_sessions->session_closed(session);
 		}));
 		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
+		options.jobs = &m_context->jobs();
+		options.events = &events;
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
 		// Every open document, not only the scene: a modified preview is dropped too.

@@ -41,6 +41,14 @@ public:
 		std::string name;
 		boost::json::value args;
 		mcp::progress_sink progress;
+		boost::json::value request_id;
+		bool wants_progress = false;
+	};
+
+	struct cancel_record
+	{
+		std::string session_id;
+		boost::json::value request_id;
 	};
 
 	void list_tools(std::function<void(std::vector<mcp::tool_info>)> done) override
@@ -62,7 +70,7 @@ public:
 		mcp::call_result answer;
 		{
 			std::lock_guard lock(m_mutex);
-			m_calls.push_back({ context.session_id, name, args, progress });
+			m_calls.push_back({ context.session_id, name, args, progress, context.request_id, context.wants_progress });
 			if (m_throw_on_call) {
 				throw std::runtime_error("call_tool failed");
 			}
@@ -112,6 +120,18 @@ public:
 	{
 		std::lock_guard lock(m_mutex);
 		m_closed_sessions.push_back(std::move(session_id));
+	}
+
+	void cancel_request(std::string session_id, boost::json::value request_id) override
+	{
+		std::lock_guard lock(m_mutex);
+		m_cancels.push_back({ std::move(session_id), std::move(request_id) });
+	}
+
+	std::vector<cancel_record> cancels() const
+	{
+		std::lock_guard lock(m_mutex);
+		return m_cancels;
 	}
 
 	std::vector<std::string> closed_sessions() const
@@ -198,6 +218,7 @@ private:
 	std::vector<std::function<void(mcp::call_result)>> m_deferred;
 	std::vector<std::string> m_logs;
 	std::vector<std::string> m_closed_sessions;
+	std::vector<cancel_record> m_cancels;
 	mcp::call_result m_next_result;
 	bool m_defer_calls = false;
 	bool m_throw_on_list = false;
