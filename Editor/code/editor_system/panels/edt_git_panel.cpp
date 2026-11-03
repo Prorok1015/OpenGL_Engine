@@ -194,6 +194,11 @@ void edt::git_panel::draw_header()
 	if (busy) {
 		ImGui::SameLine();
 		ImGui::TextDisabled("%s: running...", m_model.busy().c_str());
+		if (const auto& progress = m_model.busy_progress()) {
+			ImGui::SameLine();
+			ImGui::ProgressBar(std::clamp(progress->fraction, 0.0f, 1.0f), ImVec2(ImGui::GetFontSize() * 14.0f, 0.0f),
+				progress->text.c_str());
+		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Cancel")) m_model.cancel();
 	} else if (m_model.loading()) {
