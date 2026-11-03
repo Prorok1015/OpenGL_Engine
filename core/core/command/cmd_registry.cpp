@@ -10,6 +10,14 @@
 
 namespace json = boost::json;
 
+cmd::agent_category cmd::category_of_call(const command_desc& command, const call& request)
+{
+	if (!command.category_of || !request.args.is_object() || json_schema::validate(command.args_schema, request.args)) {
+		return command.category;
+	}
+	return command.category_of(request);
+}
+
 boost::json::value cmd::no_args_schema()
 {
 	return boost::json::value{ { "type", "object" }, { "properties", boost::json::object{} }, { "additionalProperties", false } };

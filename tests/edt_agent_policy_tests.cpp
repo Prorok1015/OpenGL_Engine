@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_agent_policy.h"
 #include <snk/command/cmd_registry.h>
+#include <boost/json/parse.hpp>
 #include <snk/common/logger/engine_log_sinks.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
@@ -525,6 +526,81 @@ BOOST_FIXTURE_TEST_CASE(AFileThatTurnsToDeny_StopsTheCallAtOnce, gate_fixture)
 
 	BOOST_TEST(call("scene.move").code == cmd::codes::denied);
 	BOOST_TEST(runs == 1);
+}
+
+namespace {
+
+// A code.write as #451 has it: code_edit, but a CMake file is cmake_presets.
+struct per_call_fixture : gate_fixture
+{
+	int asked_category = 0;
+
+	per_call_fixture()
+	{
+		cmd::command_desc desc = command_of("code.write", agent_category::code_edit);
+		desc.args_schema = boost::json::parse(R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})");
+		desc.category_of = [this](const cmd::call& request) {
+			++asked_category;
+			const std::string_view path = request.args.as_object().at("path").as_string();
+			return path.ends_with("CMakeLists.txt") ? agent_category::cmake_presets : agent_category::code_edit;
+		};
+		desc.invoke = [this](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		registrations.push_back(commands.add(std::move(desc)));
+	}
+
+	cmd::result write(boost::json::value path)
+	{
+		return commands.invoke("code.write", boost::json::object{ { "path", std::move(path) } }, cmd::origin::agent("s1"));
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheCategoryItsArgumentsGive, per_call_fixture)
+{
+	gate->set_can_ask(true);
+
+	BOOST_TEST(write("src/a.cpp").ok);
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::confirmation_required);
+	BOOST_TEST(runs == 1);
+
+	dir.write(".snk/agent_policy.json", R"({"categories":{"cmake_presets":"allow","code_edit":"deny"}})");
+	BOOST_TEST(write("CMakeLists.txt").ok);
+	BOOST_TEST(write("src/a.cpp").code == cmd::codes::denied);
+	BOOST_TEST(runs == 2);
+}
+
+BOOST_FIXTURE_TEST_CASE(ArgumentsThatBreakTheSchema_NeverReachCategoryOf, per_call_fixture)
+{
+	BOOST_TEST(write(5).code == cmd::codes::invalid_args);
+	BOOST_TEST(asked_category == 0);
+
+	// Refused by the command's own category: the call learns nothing about its arguments.
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"deny"}})");
+	BOOST_TEST(write(5).code == cmd::codes::denied);
+	BOOST_TEST(asked_category == 0);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(CategoryOfCall_WithoutAHook_IsTheCommandsCategory)
+{
+	cmd::command_desc plain = command_of("scene.move", agent_category::scene_edit);
+	cmd::call request;
+	request.args = boost::json::object{};
+	BOOST_TEST((cmd::category_of_call(plain, request) == agent_category::scene_edit));
+}
+
+BOOST_AUTO_TEST_CASE(AnUnclassifiedCommand_StaysDenied_WhateverCategoryItsCallHas)
+{
+	edt::policy_layer allow_all;
+	allow_all.categories[agent_category::code_edit] = policy_mode::allow;
+	const cmd::command_desc unset = command_of("misc.thing", agent_category::unset);
+	const cmd::command_desc not_for = command_of("edit.accept", agent_category::not_for_agents);
+	BOOST_TEST((edt::effective_mode_of_call(unset, agent_category::code_edit, allow_all, {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode_of_call(not_for, agent_category::code_edit, allow_all, {}).mode == policy_mode::deny));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

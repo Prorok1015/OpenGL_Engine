@@ -1,5 +1,6 @@
 #pragma once
 #include "cmd_types.h"
+#include <snk/common/snk_api.h>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -35,6 +36,11 @@ namespace cmd
 		static policy_decision ask(std::string why) { return { policy_mode::ask, std::move(why) }; }
 		static policy_decision deny(std::string why) { return { policy_mode::deny, std::move(why) }; }
 	};
+
+	// The category the policy judges this call by: command_desc::category_of when the command has one and the
+	// arguments match args_schema, else command_desc::category. Arguments that do not match never reach category_of,
+	// and a call refused for its category learns nothing about them.
+	SNK_API agent_category category_of_call(const command_desc& command, const call& request);
 
 	// Decides whether a call from an agent (origin `agent`) may run. Installed into the command_registry, which asks it
 	// inside `invoke`, so no path of calling a command goes around it. Main thread only, like the registry.

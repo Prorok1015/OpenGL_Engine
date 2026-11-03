@@ -107,7 +107,12 @@ namespace edt
 
 	cmd::policy_mode default_mode(const cmd::command_desc& command)
 	{
-		return cmd::strictest(default_mode(command.category), mode_of_risk(command.risk));
+		return default_mode(command, command.category);
+	}
+
+	cmd::policy_mode default_mode(const cmd::command_desc& command, cmd::agent_category category)
+	{
+		return cmd::strictest(default_mode(category), mode_of_risk(command.risk));
 	}
 
 	std::optional<cmd::agent_category> parse_settable_category(std::string_view name)
@@ -139,10 +144,15 @@ namespace edt
 
 	std::optional<cmd::policy_mode> policy_layer::resolve(const cmd::command_desc& command) const
 	{
+		return resolve(command, command.category);
+	}
+
+	std::optional<cmd::policy_mode> policy_layer::resolve(const cmd::command_desc& command, cmd::agent_category category) const
+	{
 		// A command's own entry is the only thing that lifts its risk floor; an entry for its category is held to it.
 		if (const auto own = commands.find(command.id); own != commands.end()) return own->second;
-		if (const auto category = categories.find(command.category); category != categories.end()) {
-			return cmd::strictest(category->second, mode_of_risk(command.risk));
+		if (const auto entry = categories.find(category); entry != categories.end()) {
+			return cmd::strictest(entry->second, mode_of_risk(command.risk));
 		}
 		return std::nullopt;
 	}
@@ -229,15 +239,21 @@ namespace edt
 	effective_policy effective_mode(const cmd::command_desc& command, const policy_layer& project, const policy_layer& personal,
 		const std::string& project_error, const std::string& personal_error, bool live_mode_on)
 	{
+		return effective_mode_of_call(command, command.category, project, personal, project_error, personal_error, live_mode_on);
+	}
+
+	effective_policy effective_mode_of_call(const cmd::command_desc& command, cmd::agent_category category, const policy_layer& project,
+		const policy_layer& personal, const std::string& project_error, const std::string& personal_error, bool live_mode_on)
+	{
 		using cmd::agent_category;
-		if (command.category == agent_category::unset) {
+		if (command.category == agent_category::unset || category == agent_category::unset) {
 			return { cmd::policy_mode::deny, policy_source::fallback, "the command is not classified for agents" };
 		}
-		if (command.category == agent_category::not_for_agents) {
+		if (command.category == agent_category::not_for_agents || category == agent_category::not_for_agents) {
 			return { cmd::policy_mode::deny, policy_source::fallback, "the command is not for agents" };
 		}
 		// Before any layer is read: neither file can open the live commands while the mode is off.
-		if (command.category == agent_category::live && !live_mode_on) {
+		if (category == agent_category::live && !live_mode_on) {
 			return { cmd::policy_mode::deny, policy_source::fallback, "the live mode is off" };
 		}
 		if (!project_error.empty()) {
@@ -247,11 +263,11 @@ namespace edt
 			return { cmd::policy_mode::deny, policy_source::personal, "your agent policy cannot be used: " + personal_error };
 		}
 
-		const std::optional<cmd::policy_mode> from_project = project.resolve(command);
-		const cmd::policy_mode base = from_project.value_or(default_mode(command));
+		const std::optional<cmd::policy_mode> from_project = project.resolve(command, category);
+		const cmd::policy_mode base = from_project.value_or(default_mode(command, category));
 		const policy_source base_source = from_project ? policy_source::project : policy_source::default_table;
 
-		const std::optional<cmd::policy_mode> from_personal = personal.resolve(command);
+		const std::optional<cmd::policy_mode> from_personal = personal.resolve(command, category);
 		if (from_personal && *from_personal > base) {
 			return { *from_personal, policy_source::personal, "your own settings make it " + std::string(cmd::to_string(*from_personal)) };
 		}
@@ -378,10 +394,15 @@ namespace edt
 
 	effective_policy agent_policy::effective(const cmd::command_desc& command)
 	{
+		return effective(command, command.category);
+	}
+
+	effective_policy agent_policy::effective(const cmd::command_desc& command, cmd::agent_category category)
+	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective: main thread only");
 		refresh();
 		const bool live_on = m_live_on && m_live_on();
-		return effective_mode(command, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
+		return effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
 	}
 
 	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write)
@@ -409,11 +430,13 @@ namespace edt
 
 	cmd::policy_decision agent_policy_gate::decide(const cmd::command_desc& command, const cmd::call& request)
 	{
-		const effective_policy decision = m_policy.effective(command);
+		// Per call: code.write to a CMake file is judged, and granted for the session, as cmake_presets.
+		const cmd::agent_category category = cmd::category_of_call(command, request);
+		const effective_policy decision = m_policy.effective(command, category);
 		switch (decision.mode) {
 		case cmd::policy_mode::allow: return cmd::policy_decision::allow();
 		case cmd::policy_mode::ask:
-			if (m_grants != nullptr && !request.from.session.empty() && m_grants->has(request.from.session, command.category)) {
+			if (m_grants != nullptr && !request.from.session.empty() && m_grants->has(request.from.session, category)) {
 				return cmd::policy_decision::allow();
 			}
 			return cmd::policy_decision::ask(command.summary);

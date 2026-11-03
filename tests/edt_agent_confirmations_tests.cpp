@@ -10,6 +10,7 @@
 #include <iterator>
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -195,6 +196,41 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_CoversThatCategoryOfThatSessionOnly)
 
 	run("cmake.edit", "s1");
 	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AllowForTheSession_GrantsTheCategoryTheCallWasAskedBy)
+{
+	cmd::command_desc desc;
+	desc.id = "code.write";
+	desc.category = agent_category::code_edit;
+	desc.summary = "writes a code file";
+	desc.args_schema = boost::json::value{ { "type", "object" } };
+	desc.category_of = [](const cmd::call& request) {
+		const auto* path = request.args.as_object().if_contains("path");
+		return path && path->is_string() && std::string_view(path->as_string()).ends_with("CMakeLists.txt")
+			? agent_category::cmake_presets : agent_category::code_edit;
+	};
+	desc.invoke = [this](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	registrations.push_back(commands.add(std::move(desc)));
+	const auto write_cmake = [this] {
+		cmd::call request = agent_call("s1");
+		request.args = boost::json::object{ { "path", "CMakeLists.txt" } };
+		confirmations->invoke("code.write", std::move(request), [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
+	};
+
+	write_cmake();
+	BOOST_REQUIRE(confirmations->pending().size() == 1u);
+	BOOST_TEST((confirmations->pending().front().category == agent_category::cmake_presets));
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
+
+	BOOST_TEST(grants.has("s1", agent_category::cmake_presets));
+	BOOST_TEST(!grants.has("s1", agent_category::code_edit));
+	write_cmake();
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(runs == 2);
 }
 
 BOOST_AUTO_TEST_CASE(AllowForTheSession_IsDroppedWithTheSession)
