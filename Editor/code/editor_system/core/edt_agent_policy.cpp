@@ -150,7 +150,10 @@ namespace edt
 	std::optional<cmd::policy_mode> policy_layer::resolve(const cmd::command_desc& command, cmd::agent_category category) const
 	{
 		// A command's own entry is the only thing that lifts its risk floor; an entry for its category is held to it.
-		if (const auto own = commands.find(command.id); own != commands.end()) return own->second;
+		// It speaks for the command's own category only: "code.write": "allow" must not allow its CMake writes.
+		if (category == command.category) {
+			if (const auto own = commands.find(command.id); own != commands.end()) return own->second;
+		}
 		if (const auto entry = categories.find(category); entry != categories.end()) {
 			return cmd::strictest(entry->second, mode_of_risk(command.risk));
 		}

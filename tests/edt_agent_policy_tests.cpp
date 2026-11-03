@@ -584,6 +584,18 @@ BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheStricterOfItsCommandsCategoryAndItsOwn
 	BOOST_TEST(runs == 2);
 }
 
+BOOST_FIXTURE_TEST_CASE(ACommandsOwnEntry_DoesNotSpeakForTheCategoryOfItsCall, per_call_fixture)
+{
+	gate->set_can_ask(true);
+	dir.write(".snk/agent_policy.json", R"({"commands":{"code.write":"allow"}})");
+	BOOST_TEST(write("src/a.cpp").ok);
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::confirmation_required);
+
+	dir.write(".snk/agent_policy.json", R"({"commands":{"code.write":"allow"},"categories":{"cmake_presets":"deny"}})");
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::denied);
+	BOOST_TEST(runs == 1);
+}
+
 BOOST_FIXTURE_TEST_CASE(ArgumentsThatBreakTheSchema_NeverReachCategoryOf, per_call_fixture)
 {
 	BOOST_TEST(write(5).code == cmd::codes::invalid_args);
