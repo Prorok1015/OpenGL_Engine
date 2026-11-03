@@ -307,9 +307,8 @@ void edt::live_mode::register_commands(action_registry& actions)
 	status.args_schema = cmd::no_args_schema();
 	status.result_schema = json::parse(k_status_schema);
 	status.mutates = false;
-	// TODO(#449): drop agent_when_enabled once the bridge asks agent_policy (live category, set_live_mode) instead.
+	// `live` is denied by the agent policy while live mode is off (agent_policy::set_live_mode): the person's switch is the consent.
 	status.category = cmd::agent_category::live;
-	status.agent_when_enabled = true;
 	status.enabled = live_on;
 	status.invoke = [this](const cmd::call&) {
 		return cmd::result::success(live_status_json(m_build.enabled(), m_build.status(), m_now()));
@@ -324,7 +323,6 @@ void edt::live_mode::register_commands(action_registry& actions)
 	rebuild.result_schema = json::parse(k_rebuild_schema);
 	rebuild.mutates = true;
 	rebuild.category = cmd::agent_category::live;
-	rebuild.agent_when_enabled = true;
 	rebuild.enabled = live_on;
 	rebuild.invoke = [this](const cmd::call&) {
 		if (auto problem = m_build.rebuild_now()) return cmd::result::failure(cmd::codes::failed, *problem);
@@ -341,7 +339,6 @@ void edt::live_mode::register_commands(action_registry& actions)
 	reload.result_schema = json::parse(k_reload_schema);
 	reload.mutates = true;
 	reload.category = cmd::agent_category::live;
-	reload.agent_when_enabled = true;
 	reload.enabled = live_on;
 	reload.invoke = [this](const cmd::call&) {
 		const reload_now_result outcome = m_build.reload_now();
