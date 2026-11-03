@@ -56,6 +56,7 @@ Editor/
     ├── vcs/                          # git (#454)
     │   ├── edt_vcs_parse.cpp/h       # pure parsers: status --porcelain=v2 -z, log -z, for-each-ref, stderr classification, valid_utf8
     │   ├── edt_vcs_service.cpp/h     # vcs_service: git as job_service jobs; vcs.info/status/diff/log/branches, stage/unstage/commit/branch.create/checkout, fetch/pull/push
+    │   ├── edt_git_panel_model.cpp/h # git_panel_model: the Git panel's state and actions over vcs.* (no ImGui), diff_lines (#456)
     │   ├── edt_commit_graph.cpp/h    # commit_graph: incremental lane layout of the history graph (#457), pure
     │   └── edt_history_model.cpp/h   # history_model: History tab state without ImGui: vcs.log pages loaded as rows come into view, filter (300 ms), stale restart, commit files/diff (#457)
     │
@@ -104,6 +105,7 @@ Controllers communicate via `std::function` callbacks set by `editor_system` dur
 | `console_panel` | `edt_console_panel.h` | `add_log(level, msg)`, max 10K entries with 25% trim, counts per level, filter, clear |
 | `problems_panel` | `edt_problems_panel.h` | "Problems" (open by default, docked with the console): table of `editor_context::problems()` (severity, file:line relative to the project root, message; notes in the row's tooltip, rows clipped with `ImGuiListClipper`), counts per severity as filters, "Copy" in the row's context menu |
 | `blackboard_panel` | `edt_blackboard_panel.h` | "Blackboard" (View menu, closed by default): read-only table of the committed blackboard of a context set (key, value, type, writer) with a set picker and a key filter; the rows and the value text are `edt_blackboard_view.h` (no ImGui, unit-tested) |
+| `git_panel` | `edt_git_panel.h` | "Git" (View menu, closed by default, #456): branch, upstream ahead/behind, Refresh/Fetch/Pull/Push ("running..." + Cancel), staged/changes/untracked with stage checkboxes, commit message + Commit, branch combo (switch asks first when there are changes) + create, diff of the selected file through `ImGuiListClipper`. Only draws `git_panel_model`, which runs every action as a `vcs.*` command (`action_registry::invoke`, origin ui) and takes the results from `job_finished`; git errors are `vcs` warnings and a line in the panel. Reads nothing while hidden; a code:// change refreshes it 1 s after the last one (the repository outside code/: Refresh, #485). An untracked file shows no diff |
 | `asset_browser_panel` | `edt_asset_browser_panel.h` | Directory tree + file grid; drag-drop to viewport |
 | `dockspace` | `edt_dockspace.h` | ImGui DockSpace + default layout; the menu bar is `draw_main_menu` (`edt_main_menu.h`) |
 | `panel_base` | `edt_panel_base.h` | `render()` wraps ImGui::Begin/End; `virtual on_render()` |
