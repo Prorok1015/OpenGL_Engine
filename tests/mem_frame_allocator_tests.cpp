@@ -148,4 +148,23 @@ BOOST_AUTO_TEST_CASE(ManySmallAllocations) {
 	ds::frame_allocator_reset();
 }
 
+// --- Usage stats ---
+
+BOOST_AUTO_TEST_CASE(UsageCountsTheFrameAndKeepsTheHighWaterMarkAcrossResets) {
+	ds::frame_allocator_reset();
+	BOOST_TEST(ds::frame_allocator_usage().used == 0u);
+	auto* res = ds::frame_allocator();
+	void* p = res->allocate(4096, 16);
+	const ds::frame_allocator_stats during = ds::frame_allocator_usage();
+	BOOST_TEST(during.used >= 4096u);
+	BOOST_TEST(during.peak >= during.used);
+	BOOST_TEST(during.capacity > 0u);
+	res->deallocate(p, 4096, 16);
+
+	ds::frame_allocator_reset();
+	const ds::frame_allocator_stats after = ds::frame_allocator_usage();
+	BOOST_TEST(after.used == 0u);
+	BOOST_TEST(after.peak >= during.used);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -35,6 +35,7 @@ namespace {
 
 		void reset() noexcept
 		{
+			note_peak();
 #ifndef NDEBUG
 			auto leaks = debug.report_leaks();
 			if (leaks > 0) {
@@ -43,6 +44,15 @@ namespace {
 #endif
 			linear.reset();
 		}
+
+		void note_peak() noexcept
+		{
+			if (linear.used() > peak) {
+				peak = linear.used();
+			}
+		}
+
+		std::size_t peak = 0;
 	};
 
 	frame_allocator_storage& get_storage()
@@ -63,6 +73,13 @@ namespace ds {
 	void frame_allocator_reset()
 	{
 		get_storage().reset();
+	}
+
+	frame_allocator_stats frame_allocator_usage()
+	{
+		auto& storage = get_storage();
+		storage.note_peak();
+		return { storage.linear.used(), storage.peak, storage.linear.capacity(), storage.linear.overflow_block_count() };
 	}
 
 } // namespace ds

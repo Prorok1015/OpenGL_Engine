@@ -1,0 +1,841 @@
+#include <boost/test/unit_test.hpp>
+#include "test_module_env.hpp"
+#include "null_engine_fixture.hpp"
+#include "edt_agent_sessions.h"
+#include "edt_camera_redirect.h"
+#include "edt_edit_menu.h"
+#include "edt_editor_camera.h"
+#include "edt_input_target.h"
+#include "edt_level_controller.h"
+#include "edt_module_swap_gate.h"
+#include "edt_play_session.h"
+#include "edt_scene_commands.h"
+#include "edt_scene_document.h"
+#include "edt_scene_editor.h"
+#include "edt_world_controller.h"
+#include <snk/application/app_module_source.h>
+#include <snk/common/mem_allocator.h>
+#include <snk/core/core_project_modules.h>
+#include <snk/editor/edt_action_registry.h>
+#include <snk/editor/edt_dialog_service.h>
+#include <snk/editor/edt_document_manager.h>
+#include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_editor_services.h>
+#include <snk/editor/edt_selection_service.h>
+#include <snk/game/gs_game_module.h>
+#include <snk/input/inp_ecs_input_manager.h>
+#include <snk/input/inp_input_router.h>
+#include <snk/render/rnd_render_system.h>
+#include <snk/render/texture/rnd_texture_manager.h>
+#include <snk/resource/res_mount_table.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
+#include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_hot_reload_manager.h>
+#include <snk/scene/level/scn_level_desc.h>
+#include <snk/scene/scn_camera_controller_component.hpp>
+#include <snk/scene/scn_model.h>
+#include <snk/scene/scn_scene_layer.h>
+#include <boost/json.hpp>
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+// Play of the scene document (#490, US-63-B): the set "play" is built from copies of the document, the level is
+// hidden and the document locked while it runs, Stop brings the editor back as it was, and nothing is left behind.
+
+namespace {
+
+namespace json = boost::json;
+
+struct play_game_desc : desc::desc_base {
+	void deserialize(desc::desc_system&, const json::object&) override {}
+	void serialize(json::object&) const override {}
+};
+
+// A build of the game module "play_game"; Build 2 registers one more type.
+template<int Build>
+class play_game_build final : public gs::game_module {
+public:
+	std::string_view name() const override { return "play_game"; }
+	std::vector<std::string_view> depends_on() const override { return {}; }
+
+protected:
+	void register_content(scn::scene_layer& layer, ds::app_data_storage&) override
+	{
+		layer.descs().register_component_desc<play_game_desc>("play_game_desc");
+		if constexpr (Build > 1) {
+			layer.descs().register_component_desc<play_game_desc>("play_game_v2_desc");
+		}
+	}
+};
+
+using play_game_v1 = play_game_build<1>;
+using play_game_v2 = play_game_build<2>;
+
+}
+
+SNK_DECLARE_MODULE_PREFIXED(play_game_v1_, play_game_v1)
+SNK_DECLARE_MODULE_PREFIXED(play_game_v2_, play_game_v2)
+
+namespace {
+
+std::unique_ptr<app::modules::module_source> build_of(app::modules::module_entry entry)
+{
+	return std::make_unique<app::modules::static_module_source>("play_game", entry);
+}
+
+app::modules::module_entry v1_entry()
+{
+	return { &play_game_v1_module_api_version, &play_game_v1_module_build_info, &play_game_v1_create_module,
+		&play_game_v1_destroy_module };
+}
+
+app::modules::module_entry v2_entry()
+{
+	return { &play_game_v2_module_api_version, &play_game_v2_module_build_info, &play_game_v2_create_module,
+		&play_game_v2_destroy_module };
+}
+
+constexpr std::uint64_t cam_id = 0xa1;
+constexpr std::uint64_t crate_id = 0xa2;
+
+// w0: a camera that draws to the backbuffer (redirected in the editor) and a crate; w1: empty.
+constexpr const char* LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+	{"__type":"world_desc","__version":3,"name":"w0","systems":[],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}},
+		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
+	{"__type":"world_desc","__version":3,"name":"w1","systems":[]}]})";
+
+// The same level after a change on disk: the crate is gone and a world was added.
+constexpr const char* LEVEL_CHANGED = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+	{"__type":"world_desc","__version":3,"name":"w0","systems":[],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}}]},
+	{"__type":"world_desc","__version":3,"name":"w1","systems":[]},
+	{"__type":"world_desc","__version":3,"name":"w2","systems":[]}]})";
+
+// LEVEL with a system that runs only in Play (not in Edit, the level's mode) and holds a resource nothing else holds.
+constexpr const char* PLAY_ONLY_SYSTEM = "test::hold_play_only_resource";
+constexpr const char* HOLDING_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+	{"__type":"world_desc","__version":3,"name":"w0","systems":["test::hold_play_only_resource"],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}},
+		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
+	{"__type":"world_desc","__version":3,"name":"w1","systems":[]}]})";
+
+// A context variable of the world: the handle goes with the world's registry.
+struct play_only_holder
+{
+	res::res_handle<res::text_resource> handle;
+};
+res::resource_system* g_play_only_resources = nullptr;
+res::tag g_play_only_tag;
+
+void hold_play_only_resource(play_only_holder& holder)
+{
+	if (!holder.handle.is_valid() && g_play_only_resources) {
+		holder.handle = g_play_only_resources->require<res::text_resource>(g_play_only_tag);
+	}
+}
+
+// A level with a component of the module's desc type.
+constexpr const char* MODULE_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+	{"__type":"world_desc","__version":3,"name":"w0","systems":[],"components":{"gc":{"__type":"play_game_desc","speed":3}}}]})";
+
+using state_change = std::pair<edt::play_state, edt::play_reason>;
+
+struct play_fixture : test_util::module_env
+{
+	play_fixture()
+	{
+		services.ctx_manager = root.require_shared<scn::context_manager>();
+		services.base_descs = descs.get();
+		services.base_resources = rs.get();
+		services.base_assembler = assembler.get();
+		services.base_sfactory = &sf;
+		// What editor_system wires: the editor camera follows the active world, a switch is announced.
+		const auto save_camera = [this](entt::registry& reg) { edt::save_camera_state(reg, state.camera); };
+		const auto inject_camera = [this](entt::registry& reg) { edt::inject_camera(reg, state.camera); };
+		scene_ed.on_save_camera = save_camera;
+		scene_ed.on_inject_camera = inject_camera;
+		world_ctrl.on_save_camera = save_camera;
+		world_ctrl.on_inject_camera = inject_camera;
+		world_ctrl.on_world_switched = [this](int) { events.active_world_changed.emit(state.id()); };
+		contexts().set_on_reload([this] { level_ctrl.resync_worlds_after_reload(); });
+		contexts().set_on_game_layer_change([this](scn::context_manager::game_layer_change change) {
+			gate.on_game_layer_change(change == scn::context_manager::game_layer_change::before);
+		});
+		gate.set_play_hooks([this] { play.before_module_swap(); }, [this] { play.after_module_swap(); });
+		contexts().level_set().set_mode(ecs::run_mode::edit);
+	}
+
+	~play_fixture()
+	{
+		play.stop();
+		contexts().set_on_game_layer_change(nullptr);
+		contexts().set_on_reload(nullptr);
+	}
+
+	res::tag open_level(const char* text = LEVEL)
+	{
+		const res::tag tag = put("lv.desc", text);
+		state.editor_tag = tag;
+		state.level_tag = tag;
+		auto handle = services.resources()->require_sync<scn::level_desc>(tag);
+		BOOST_REQUIRE(level_ctrl.finish_level_load(handle));
+		return tag;
+	}
+
+	// The level file changes on disk; the hot reload notices it in the next update.
+	void change_level_file(const char* text)
+	{
+		const res::tag tag = put("lv.desc", text);
+		rs->signal_changed(tag);
+		pump();
+		contexts().update(std::chrono::duration<float>(0.016f));
+	}
+
+	void select(std::uint64_t node, std::string world = "w0")
+	{
+		edt::selection value;
+		value.world = std::move(world);
+		value.path = { node };
+		selection.select(std::move(value));
+	}
+
+	std::string level_json() const { return json::serialize(level_ctrl.build_level_json()); }
+
+	scn::context_set* play_set() { return contexts().find_set(edt::k_play_set); }
+	scn::hot_reload_manager& layer_hot_reload() { return *contexts().game_layer()->hot_reload(); }
+
+	static std::size_t editor_cameras(entt::registry& reg) { return reg.view<edt::editor_camera_tag>().size(); }
+
+	edt::editor_services services;
+	edt::scene_document state;
+	edt::editor_events events;
+	edt::document_manager documents{ state, services, events };
+	edt::selection_service selection{ events };
+	edt::scene_editor scene_ed{ state, services };
+	edt::world_controller world_ctrl{ state, services };
+	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
+	inp::input_router router{ std::make_shared<inp::ecs_input_manager>() };
+	edt::play_session play{ state, services, world_ctrl, selection, events, edt::play_session_options{ .input = &router } };
+	std::vector<state_change> seen;
+	edt::connection seen_connection = events.play_state_changed.subscribe([this](edt::play_state s, edt::play_reason r) {
+		seen.emplace_back(s, r);
+	});
+	edt::module_swap_gate gate{ [this](bool before) {
+		if (before) level_ctrl.detach_from_game_layer();
+		else level_ctrl.attach_to_game_layer();
+	} };
+	core::project_module_host host{ loader, root, core::project_modules_options{} };
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_play_session_tests, play_fixture)
+
+BOOST_AUTO_TEST_CASE(start_builds_the_play_set_from_copies_hides_the_level_and_changes_nothing_of_the_document)
+{
+	open_level();
+	scene_ed.create_entity("Empty"); // unsaved: Play shows the level as edited
+	BOOST_REQUIRE(state.is_dirty());
+	const std::string before = level_json();
+	const std::uint64_t generation = state.generation();
+	const std::size_t attached = layer_hot_reload().attached_count();
+
+	BOOST_REQUIRE(play.start());
+
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_TEST(!set->hot_reload());
+	BOOST_TEST(set->layer() == contexts().game_layer());
+	BOOST_TEST((set->mode() == ecs::run_mode::play));
+	BOOST_TEST(set->size() == 2u);
+	set->for_each([](scn::world_context& world) { BOOST_TEST((world.kind() == scn::context_kind::play)); });
+	BOOST_TEST(layer_hot_reload().attached_count() == attached); // nothing of the play set is hot reloaded
+	// The unsaved entity is in the twin: built from the document, not from the file.
+	bool has_entity = false;
+	for (auto [ent, name] : set->get("w0").state().view<scn::name_component>().each()) {
+		if (name.name == "Entity") has_entity = true;
+	}
+	BOOST_TEST(has_entity);
+
+	scn::context_set& level = contexts().level_set();
+	BOOST_TEST(!level.active());
+	level.for_each([](scn::world_context& world) { BOOST_TEST(!world.extract()); });
+	BOOST_TEST(editor_cameras(set->get("w0").state()) == 1u);
+	BOOST_TEST(editor_cameras(set->get("w1").state()) == 0u);
+
+	BOOST_TEST(state.edits_locked());
+	BOOST_TEST(level_json() == before);
+	BOOST_TEST(state.generation() == generation);
+	BOOST_TEST(state.is_dirty());
+	BOOST_TEST((seen == std::vector<state_change>{ { edt::play_state::playing, edt::play_reason::user } }));
+
+	// The views and the input read the play set.
+	BOOST_TEST(edt::view_set(services) == set);
+	BOOST_TEST(edt::view_registry(services, state) == &set->get("w0").state());
+	const auto target = edt::active_input_target(services, state);
+	BOOST_REQUIRE(target.has_value());
+	BOOST_TEST(target->set == "play");
+
+	// A second start is refused, nothing changes.
+	BOOST_TEST(play.start_refusal().has_value());
+	BOOST_TEST(!play.start());
+	BOOST_TEST(seen.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(switching_the_active_world_during_play_moves_the_editor_camera_to_the_other_twin)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(world_ctrl.switch_to_world(1));
+
+	BOOST_TEST(editor_cameras(play_set()->get("w0").state()) == 0u);
+	BOOST_TEST(editor_cameras(play_set()->get("w1").state()) == 1u);
+	BOOST_TEST(edt::view_registry(services, state) == &play_set()->get("w1").state());
+
+	play.stop();
+	BOOST_TEST(state.active_world_idx == 0); // the world active before Play
+	BOOST_TEST(edt::view_registry(services, state) == &contexts().level_set().get("w0").state());
+}
+
+BOOST_AUTO_TEST_CASE(stop_brings_the_editor_back_as_it_was_before_play)
+{
+	open_level();
+	select(crate_id);
+	const edt::editor_camera_state camera = state.camera;
+	const std::string before = level_json();
+	const bool dirty = state.is_dirty();
+
+	BOOST_REQUIRE(play.start());
+	// The person flies the camera in the twin and selects something else.
+	entt::registry& twin = play_set()->get("w0").state();
+	for (auto [ent, ctrl] : twin.view<edt::editor_camera_tag, scn::mouse_controller_component>().each()) {
+		ctrl.position += glm::vec3(5.f, 0.f, 0.f);
+	}
+	select(cam_id);
+	router.bind({ .set = "play", .context = "w0" }, glm::ivec4(0, 0, 10, 10));
+	router.set_hold("play", { .active = true, .captured = true, .owner = { .set = "play", .context = "w0" } });
+	play.stop();
+
+	BOOST_TEST(play_set() == nullptr);
+	BOOST_TEST((play.state() == edt::play_state::stopped));
+	scn::context_set& level = contexts().level_set();
+	BOOST_TEST(level.active());
+	level.for_each([](scn::world_context& world) { BOOST_TEST(world.extract()); });
+	BOOST_TEST(state.camera.position.x == camera.position.x);
+	entt::registry& level_w0 = level.get("w0").state();
+	BOOST_TEST(editor_cameras(level_w0) == 1u);
+	for (auto [ent, ctrl] : level_w0.view<edt::editor_camera_tag, scn::mouse_controller_component>().each()) {
+		BOOST_TEST(ctrl.position.x == camera.position.x);
+	}
+	BOOST_TEST((selection.current().path == std::vector<std::uint64_t>{ crate_id }));
+	BOOST_TEST(selection.current().world == "w0");
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(level_json() == before);
+	BOOST_TEST(state.is_dirty() == dirty);
+	BOOST_TEST(router.binding_count() == 0u);
+	BOOST_TEST(router.hold_count() == 0u);
+	BOOST_TEST((seen == std::vector<state_change>{ { edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::stopped, edt::play_reason::user } }));
+	BOOST_TEST(edt::view_set(services) == &level);
+}
+
+BOOST_AUTO_TEST_CASE(a_level_change_during_play_waits_for_stop_and_a_vanished_selection_is_deselected)
+{
+	open_level();
+	select(crate_id);
+	BOOST_REQUIRE(play.start());
+
+	change_level_file(LEVEL_CHANGED);
+
+	// Not while playing: the level stays as it was, its cameras stay hidden.
+	BOOST_TEST(contexts().has_pending_level_reload());
+	BOOST_TEST(contexts().level_set().find("w2") == nullptr);
+	BOOST_TEST(state.world_names.size() == 2u);
+	contexts().level_set().for_each([](scn::world_context& world) { BOOST_TEST(!world.extract()); });
+	BOOST_TEST(play_set()->find("w2") == nullptr);
+
+	play.stop();
+
+	BOOST_TEST(!contexts().has_pending_level_reload());
+	BOOST_TEST(contexts().level_set().find("w2") != nullptr);
+	BOOST_TEST((state.world_names == std::vector<std::string>{ "w0", "w1", "w2" }), boost::test_tools::per_element());
+	BOOST_TEST(!selection.has_selection()); // the crate is gone
+	BOOST_TEST(editor_cameras(contexts().level_set().get("w0").state()) == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(pause_resume_and_step_map_to_the_play_set)
+{
+	open_level();
+	BOOST_TEST(!play.pause()); // stopped: nothing to pause
+	BOOST_TEST(!play.step(1));
+	BOOST_REQUIRE(play.start());
+	scn::context_set& set = *play_set();
+
+	BOOST_TEST(play.pause());
+	BOOST_TEST((set.mode() == ecs::run_mode::pause));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	BOOST_TEST(!play.pause());
+
+	BOOST_TEST(play.resume());
+	BOOST_TEST((set.mode() == ecs::run_mode::play));
+	BOOST_TEST(!play.resume());
+
+	BOOST_TEST(play.step(3, edt::play_reason::agent));
+	BOOST_TEST((set.mode() == ecs::run_mode::step));
+	BOOST_TEST(set.pending_steps() == 3u);
+	BOOST_TEST(play.pending_steps() == 3u);
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	for (int frame = 0; frame < 3; ++frame) contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_TEST(play.pending_steps() == 0u);
+	BOOST_TEST((set.mode() == ecs::run_mode::pause));
+
+	BOOST_TEST(play.step(0)); // one frame at least
+	BOOST_TEST(play.pending_steps() == 1u);
+
+	play.set_time_scale(0.5f);
+	BOOST_TEST(set.time_scale() == 0.5f);
+	play.set_seed(77u);
+	BOOST_TEST(set.seed() == 77u);
+
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::paused, edt::play_reason::user },
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::paused, edt::play_reason::agent } }));
+
+	// Kept for the next session.
+	play.stop();
+	BOOST_REQUIRE(play.start());
+	BOOST_TEST(play_set()->time_scale() == 0.5f);
+	BOOST_TEST(play_set()->seed() == 77u);
+	BOOST_TEST((play_set()->mode() == ecs::run_mode::play));
+}
+
+BOOST_AUTO_TEST_CASE(edits_during_play_are_refused_but_saving_is_allowed)
+{
+	open_level();
+	scene_ed.create_entity("Empty");
+	BOOST_REQUIRE(state.history().can_undo());
+	edt::action_registry actions;
+	edt::dialog_service dialogs;
+	dialogs.set_registrar([](std::string_view, std::function<bool()>) {});
+	const auto edit_actions = edt::register_edit_actions(actions, documents, dialogs, nullptr);
+	cmd::command_registry commands;
+	const auto scene_commands = edt::register_scene_commands(commands, { documents, selection, services, nullptr });
+	edt::agent_sessions sessions(documents);
+	const auto session_commands = sessions.register_commands(commands);
+	int saves = 0;
+	state.set_save_handlers([&saves] { ++saves; return true; }, [&saves](const res::tag&) { ++saves; return true; });
+	BOOST_REQUIRE(actions.is_enabled("edit.undo"));
+
+	BOOST_REQUIRE(play.start());
+	const std::string before = level_json();
+	const std::uint64_t generation = state.generation();
+	const std::size_t children = state.world_descs[0].get_root().children.size();
+
+	state.commit("Edit node");
+	scene_ed.create_entity("Empty");
+	scene_ed.delete_entity(crate_id);
+	world_ctrl.create_world("w9");
+	BOOST_TEST(state.generation() == generation);
+	BOOST_TEST(state.world_descs[0].get_root().children.size() == children);
+	BOOST_TEST(state.world_names.size() == 2u);
+	BOOST_TEST(contexts().level_set().find("w9") == nullptr);
+
+	BOOST_TEST(!actions.is_enabled("edit.undo"));
+	BOOST_TEST(actions.invoke("edit.undo", json::object{}).code == "disabled");
+	BOOST_TEST(actions.invoke("edit.redo", json::object{}).code == "disabled");
+	BOOST_TEST(!state.undo());
+
+	const auto renamed = commands.invoke("scene.node.rename",
+		json::parse(R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})"), cmd::origin::agent("s1"));
+	BOOST_TEST(renamed.code == "busy");
+	BOOST_TEST(renamed.error.find("stop play first") != std::string::npos);
+	const auto by_person = commands.invoke("scene.node.rename",
+		json::parse(R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})"), cmd::origin::ui());
+	BOOST_TEST(by_person.code == "busy");
+	const auto begun = commands.invoke("agent.session.begin", json::parse(R"({"label":"x"})"), cmd::origin::agent("s1"));
+	BOOST_TEST(begun.code == "busy");
+	BOOST_TEST(begun.error.find("stop play first") != std::string::npos);
+	BOOST_TEST(commands.invoke("agent.session.get", json::object{}, cmd::origin::agent("s1")).ok);
+	BOOST_TEST(level_json() == before);
+
+	BOOST_TEST(state.can_save());
+	BOOST_TEST(state.save().saved);
+	BOOST_TEST(saves == 1);
+
+	play.stop();
+	BOOST_TEST(actions.is_enabled("edit.undo"));
+	BOOST_TEST(commands.invoke("scene.node.rename",
+		json::parse(R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})"), cmd::origin::agent("s1")).ok);
+}
+
+BOOST_AUTO_TEST_CASE(ten_start_stop_cycles_leave_nothing_behind)
+{
+	g_play_only_resources = rs.get();
+	g_play_only_tag = put("play_only.txt", "held by the play set only");
+	BOOST_REQUIRE(contexts().game_layer()->systems().register_system<&hold_play_only_resource>(PLAY_ONLY_SYSTEM));
+	open_level(HOLDING_LEVEL);
+	edt::camera_redirector redirector;
+	std::vector<std::string> released;
+	const auto redirect = [&] {
+		redirector.update(contexts(), [&released](const res::tag& tag) { released.emplace_back(tag.view()); });
+	};
+	redirect();
+
+	struct counters
+	{
+		std::size_t sets = 0;
+		std::size_t contexts = 0;
+		std::size_t attached = 0;
+		std::size_t base_attached = 0;
+		std::size_t channel_types = 0;
+		std::size_t live_resources = 0;
+		std::size_t bindings = 0;
+		std::size_t holds = 0;
+		std::size_t redirected_targets = 0;
+		bool operator==(const counters&) const = default;
+	};
+	const auto snapshot = [&] {
+		counters c;
+		contexts().for_each_set([&c](scn::context_set&) { ++c.sets; });
+		contexts().for_each([&c](scn::world_context&) { ++c.contexts; });
+		c.attached = layer_hot_reload().attached_count();
+		c.base_attached = hot->attached_count();
+		c.channel_types = contexts().channels().size();
+		c.live_resources = rs->live_resources();
+		c.bindings = router.binding_count();
+		c.holds = router.hold_count();
+		c.redirected_targets = redirector.tracked_count();
+		return c;
+	};
+	const counters baseline = snapshot();
+	BOOST_REQUIRE(baseline.redirected_targets == 1u); // the level's camera
+
+	for (int cycle = 0; cycle < 10; ++cycle) {
+		BOOST_TEST_CONTEXT("cycle " << cycle) {
+			BOOST_REQUIRE(play.start());
+			// What a frame of the editor makes while playing: a texture for the play camera, a binding of the Game view
+			// and a mouse hold on the play twin.
+			redirect();
+			router.bind({ .set = "play", .context = "w0" }, glm::ivec4(0, 0, 10, 10));
+			router.set_hold("play", { .active = true, .captured = true, .owner = { .set = "play", .context = "w0" } });
+			for (int frame = 0; frame < 3; ++frame) contexts().update(std::chrono::duration<float>(0.016f));
+			pump(); // the load of the play-only resource ends: only the play world holds it
+
+			const counters playing = snapshot();
+			BOOST_TEST(playing.live_resources > baseline.live_resources);
+			BOOST_TEST(playing.sets == baseline.sets + 1);
+			BOOST_TEST(playing.contexts == baseline.contexts + 2);
+			BOOST_TEST(playing.redirected_targets == baseline.redirected_targets + 1);
+			BOOST_TEST(playing.bindings == baseline.bindings + 1);
+			BOOST_TEST(playing.holds == baseline.holds + 1);
+			BOOST_TEST(playing.attached == baseline.attached);
+			BOOST_TEST(playing.base_attached == baseline.base_attached);
+
+			released.clear();
+			play.stop();
+			redirect(); // the editor's next frame
+			BOOST_TEST((released == std::vector<std::string>{ "memory://__game_camera_rt_play" }), boost::test_tools::per_element());
+			BOOST_TEST((snapshot() == baseline));
+		}
+	}
+	const counters after = snapshot();
+	BOOST_TEST(after.sets == baseline.sets);
+	BOOST_TEST(after.contexts == baseline.contexts);
+	BOOST_TEST(after.attached == baseline.attached);
+	BOOST_TEST(after.channel_types == baseline.channel_types);
+	BOOST_TEST(after.live_resources == baseline.live_resources);
+	BOOST_TEST(after.redirected_targets == baseline.redirected_targets);
+	BOOST_TEST(after.holds == 0u);
+	BOOST_TEST(seen.size() == 20u);
+	g_play_only_resources = nullptr;
+}
+
+BOOST_AUTO_TEST_CASE(a_continuation_of_a_play_task_does_not_run_after_stop)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::scene_layer* layer = play_set()->layer();
+	BOOST_REQUIRE(layer);
+	entt::registry* twin = &play_set()->get("w0").state();
+	bool continued = false;
+	auto handle = tasks.run(ds::lane::compute, ds::task_desc{ .name = "a play task", .category = "test" },
+		layer->tasks(), play_set()->tasks(), [](ds::task_context&) {});
+	handle.then_main([&continued, twin](ds::task_result<void>&) { continued = twin->valid(entt::null); });
+	BOOST_REQUIRE(tasks.run_one(ds::lane::compute)); // done: its continuation waits in the main queue
+
+	play.stop();
+	pump();
+
+	BOOST_TEST(!continued);
+	BOOST_TEST((handle.status() == ds::task_status::ready));
+}
+
+BOOST_AUTO_TEST_CASE(play_does_not_start_while_a_level_or_an_asset_loads)
+{
+	open_level();
+	std::optional<std::string> blocker = "a level is loading";
+	edt::play_session gated{ state, services, world_ctrl, selection, events,
+		edt::play_session_options{ .start_blocker = [&blocker] { return blocker; } } };
+
+	BOOST_TEST((gated.start_refusal() == blocker));
+	BOOST_TEST(!gated.start());
+	BOOST_TEST(play_set() == nullptr);
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(seen.empty());
+
+	blocker.reset();
+	BOOST_TEST(!gated.start_refusal().has_value());
+	BOOST_TEST(gated.start());
+	gated.stop();
+}
+
+BOOST_AUTO_TEST_CASE(stop_called_again_from_an_event_raised_during_stop_does_nothing)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(world_ctrl.switch_to_world(1)); // Stop switches back to w0, which raises active_world_changed
+	int stops_inside = 0;
+	const edt::connection again = events.active_world_changed.subscribe([this, &stops_inside](edt::document_id) {
+		if (play.active()) {
+			++stops_inside;
+			play.stop();
+		}
+	});
+
+	play.stop();
+
+	BOOST_TEST(stops_inside >= 1);
+	BOOST_TEST((play.state() == edt::play_state::stopped));
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::stopped, edt::play_reason::user } }));
+	BOOST_TEST(contexts().level_set().active());
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(*state.active_world_name() == "w0");
+}
+
+BOOST_AUTO_TEST_CASE(stop_cancels_the_tasks_of_the_play_set_and_the_level_tasks_of_the_same_layer_go_on)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::scene_layer* layer = play_set()->layer();
+	BOOST_REQUIRE(layer);
+	BOOST_REQUIRE(contexts().level_set().layer() == layer);
+	entt::registry* twin = &play_set()->get("w0").state();
+	bool play_ran = false;
+	bool level_ran = false;
+	auto play_task = tasks.run(ds::lane::compute, ds::task_desc{ .name = "holds the play registry", .category = "test" },
+		layer->tasks(), play_set()->tasks(), [&play_ran, twin](ds::task_context&) { play_ran = twin->valid(entt::null); });
+	auto level_task = tasks.run(ds::lane::compute, ds::task_desc{ .name = "a level task", .category = "test" },
+		layer->tasks(), contexts().level_set().tasks(), [&level_ran](ds::task_context&) { level_ran = true; });
+
+	play.stop();
+	pump();
+
+	BOOST_TEST(!play_ran);
+	BOOST_TEST((play_task.status() == ds::task_status::cancelled));
+	BOOST_TEST(level_ran);
+	BOOST_TEST((level_task.status() == ds::task_status::ready));
+}
+
+BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(!contexts().game_layer()->descs().is_registered("play_game_v2_desc"));
+
+	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::stopped, edt::play_reason::stopped_for_reload },
+		{ edt::play_state::playing, edt::play_reason::module_reloaded } }));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_TEST(set->layer() == contexts().game_layer());
+	// The old layer is freed before the new one is made, so its address may come back: the new build's type tells.
+	BOOST_TEST(set->layer()->descs().is_registered("play_game_v2_desc"));
+	BOOST_TEST(set->find("w0") != nullptr);
+	BOOST_TEST(services.descs()->is_registered("play_game_v2_desc"));
+	BOOST_TEST(!contexts().level_set().active());
+	BOOST_TEST(state.edits_locked());
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(a_module_reload_while_paused_starts_play_again_paused)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play.pause());
+
+	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::paused, edt::play_reason::module_reloaded }));
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_TEST((set->mode() == ecs::run_mode::pause));
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
+BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
+{
+	open_level();
+	namespace fs = std::filesystem;
+	const fs::path base = fs::temp_directory_path() / "snk_edt_play_profile_tests";
+	fs::remove_all(base);
+	const fs::path editor_profile = base / "user_profile";
+	const fs::path play_profile = base / "play_profile";
+	fs::create_directories(editor_profile);
+	fs::create_directories(play_profile);
+	std::ofstream(play_profile / "save.json") << "{}"; // left by the previous session
+	{
+		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
+		edt::play_session session(state, services, world_ctrl, selection, events,
+			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = { editor_profile } });
+		const res::tag settings{ "user://settings.txt" };
+		std::ofstream(editor_profile / "settings.txt") << "editor";
+		auto held = profile_rs.require_sync<res::text_resource>(settings);
+		pump();
+		BOOST_REQUIRE(held.is_ready());
+
+		BOOST_REQUIRE(session.start());
+		BOOST_TEST(fs::is_directory(play_profile));
+		BOOST_TEST(!fs::exists(play_profile / "save.json"));
+		BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ play_profile }));
+		// What the editor profile cached is not served from the play profile.
+		std::ofstream(play_profile / "settings.txt") << "play";
+		auto in_play = profile_rs.require_sync<res::text_resource>(settings);
+		pump();
+		BOOST_REQUIRE(in_play.is_ready());
+		BOOST_TEST(in_play.get_sync()->str() == "play");
+		BOOST_TEST(held.get_sync()->str() == "editor"); // a handle held from before keeps what it read
+
+		session.stop();
+		BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ editor_profile }));
+	}
+	fs::remove_all(base);
+}
+
+BOOST_AUTO_TEST_CASE(play_is_refused_without_a_level)
+{
+	BOOST_TEST(play.start_refusal().has_value());
+	BOOST_TEST(!play.start());
+	BOOST_TEST(play_set() == nullptr);
+	BOOST_TEST(seen.empty());
+}
+
+BOOST_AUTO_TEST_CASE(a_leftover_play_set_is_not_reused)
+{
+	open_level();
+	contexts().create_set(edt::k_play_set, nullptr, scn::set_options{ .hot_reload = false });
+	BOOST_TEST(!play.start());
+	BOOST_TEST(contexts().level_set().active());
+	BOOST_TEST(!state.edits_locked());
+	contexts().destroy_set(edt::k_play_set);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The frame allocator over real frames (extract and render on the null backend): Play does not leave it fuller.
+namespace {
+
+struct engine_play_fixture : test_util::null_engine_fixture
+{
+	engine_play_fixture() : null_engine_fixture(false)
+	{
+		services.ctx_manager = storage.require_shared<scn::context_manager>();
+		services.base_descs = &storage.require<desc::desc_system>();
+		services.base_resources = &storage.require<res::resource_system>();
+		services.base_assembler = &storage.require<scn::ecs_assembler>();
+		services.base_sfactory = &storage.require<ecs::system_factory>();
+		world_ctrl.on_world_switched = [this](int) { events.active_world_changed.emit(state.id()); };
+		// The editor's editor_redirect_cameras stage (edt_editor_init.cpp).
+		storage.require<app::frame_stage_registry>().add_stage("test_redirect_cameras", app::builtin_stage::extract,
+			app::stage_side::before, [this](app::stage_context& c) {
+				auto& textures = c.storage.require<rnd::render_system>().get_texture_manager();
+				redirector.update(c.storage.require<scn::context_manager>(), [&textures](const res::tag& tag) { textures.remove(tag); });
+			});
+	}
+
+	~engine_play_fixture()
+	{
+		play.stop();
+		storage.require<app::frame_stage_registry>().remove_stage("test_redirect_cameras");
+	}
+
+	edt::camera_redirector redirector;
+	edt::editor_services services;
+	edt::scene_document state;
+	edt::editor_events events;
+	edt::document_manager documents{ state, services, events };
+	edt::selection_service selection{ events };
+	edt::scene_editor scene_ed{ state, services };
+	edt::world_controller world_ctrl{ state, services };
+	edt::level_controller level_ctrl{ state, services, scene_ed, world_ctrl };
+	edt::play_session play{ state, services, world_ctrl, selection, events };
+};
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(edt_play_session_frame_tests, engine_play_fixture)
+
+BOOST_AUTO_TEST_CASE(ten_cycles_over_real_frames_do_not_grow_the_frame_allocator)
+{
+	const res::tag level = res::tag::make("levels/smoke_level.desc");
+	state.editor_tag = level;
+	state.level_tag = level;
+	auto handle = services.resources()->require_sync<scn::level_desc>(level);
+	BOOST_REQUIRE(level_ctrl.finish_level_load(handle));
+	// The level's assets finish loading over the first frames; the first cycle only warms up.
+	BOOST_REQUIRE(run_frames(5) == 5);
+	const std::size_t targets = redirector.tracked_count();
+
+	std::vector<std::size_t> used_while_playing;
+	std::size_t peak_after_warm_up = 0;
+	for (int cycle = 0; cycle < 10; ++cycle) {
+		BOOST_TEST_CONTEXT("cycle " << cycle) {
+			BOOST_REQUIRE(play.start());
+			BOOST_REQUIRE(run_frames(3) == 3);
+			const ds::frame_allocator_stats playing = ds::frame_allocator_usage();
+			BOOST_TEST(playing.used > 0u); // the last frame's packets
+			BOOST_TEST(playing.overflow_blocks == 0u);
+			BOOST_TEST(redirector.tracked_count() > targets); // the play cameras draw into textures of their own
+			used_while_playing.push_back(playing.used);
+
+			play.stop();
+			BOOST_REQUIRE(run_frames(1) == 1);
+			BOOST_TEST(redirector.tracked_count() == targets);
+			if (cycle == 1) peak_after_warm_up = ds::frame_allocator_usage().peak;
+		}
+	}
+	BOOST_TEST(used_while_playing.back() <= used_while_playing[1]);
+	BOOST_TEST(ds::frame_allocator_usage().peak <= peak_after_warm_up);
+	BOOST_TEST(storage.require<scn::context_manager>().find_set(edt::k_play_set) == nullptr);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -804,6 +804,59 @@ BOOST_AUTO_TEST_CASE(CancelReleasesTheCapturesOfAQueuedTask)
 	BOOST_CHECK(handle.status() == task_status::cancelled);
 }
 
+// A world set's tasks (a group of its layer's): what a task of the group starts for the same owner is the group's too.
+BOOST_AUTO_TEST_CASE(AChildOfAGroupTaskJoinsTheGroupOnlyForTheSameOwner)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	ds::lifetime other_owner;
+	ds::lifetime group;
+	ds::task_handle<void> same;
+	ds::task_handle<void> other;
+	ds::task_handle<void> from_continuation;
+	auto parent = tasks.run(lane::compute, { "parent" }, owner, group, [&](ds::task_context&) {
+		same = tasks.run(lane::io, { "same owner" }, owner, [](ds::task_context&) {});
+		other = tasks.run(lane::io, { "other owner" }, other_owner, [](ds::task_context&) {});
+	});
+	parent.then_main([&](ds::task_result<void>&) {
+		from_continuation = tasks.run(lane::io, { "from the continuation" }, owner, [](ds::task_context&) {});
+	});
+	tasks.run_one(lane::compute);
+	tasks.drain_main();
+	BOOST_REQUIRE(same.valid());
+	BOOST_REQUIRE(other.valid());
+	BOOST_REQUIRE(from_continuation.valid());
+
+	group.cancel_tasks();
+	BOOST_CHECK(same.status() == task_status::cancelled);
+	BOOST_CHECK(from_continuation.status() == task_status::cancelled);
+	BOOST_CHECK(other.status() == task_status::pending);
+	other_owner.cancel_tasks();
+}
+
+// Stop of Play: a continuation of a set's task captured the set's registry; it must not run once the set is gone,
+// although the task's origin (the layer) lives on.
+BOOST_AUTO_TEST_CASE(TheContinuationsOfAGroupTaskDoNotRunOnceTheGroupIsGone)
+{
+	ds::task_system tasks(manual_config());
+	ds::lifetime owner;
+	auto group = std::make_unique<ds::lifetime>(ds::lifetime_option::cancel_on_destroy);
+	int plain_calls = 0;
+	int owned_calls = 0;
+	auto handle = tasks.run(lane::compute, { "t" }, owner, *group, [](ds::task_context&) {});
+	handle.then_main([&](ds::task_result<void>&) { ++plain_calls; });
+	handle.then_main(owner, [&](ds::task_result<void>&) { ++owned_calls; });
+	BOOST_TEST(ds::detail::held_count(owner) == 2u);
+
+	group.reset(); // cancels the task: its continuations are queued, then dropped with the group
+	BOOST_CHECK(handle.status() == task_status::cancelled);
+	BOOST_TEST(ds::detail::held_count(owner) == 0u);
+	ds::detail::run_pending_main(owner);
+	tasks.drain_main();
+	BOOST_TEST(plain_calls == 0);
+	BOOST_TEST(owned_calls == 0);
+}
+
 BOOST_AUTO_TEST_CASE(WhenAllTakesTypedHandles)
 {
 	ds::task_system tasks(manual_config());

@@ -30,6 +30,8 @@ namespace prj
 		std::filesystem::path memory_dir() const { return cache_dir() / "memory"; }
 		// user:// while the editor runs: a test profile, so the editor never touches the player's real data.
 		std::filesystem::path user_profile_dir() const { return cache_dir() / "user_profile"; }
+		// user:// during Play in the editor: emptied at every start, so a session never sees the previous one's saves.
+		std::filesystem::path play_profile_dir() const { return cache_dir() / "play_profile"; }
 		// What the resource system mounts for writing besides the content roots, parents first.
 		std::vector<std::filesystem::path> writable_dirs() const { return { cache_dir(), memory_dir(), user_profile_dir() }; }
 		// <root>/.snk: the editor's own files (the MCP connection file with its token, the agent policy).

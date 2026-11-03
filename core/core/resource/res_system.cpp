@@ -249,6 +249,44 @@ void res::resource_system::add_mount(mount added) {
   m_mounts.push_back(std::move(added));
 }
 
+bool res::resource_system::remount(std::string_view protocol, std::vector<std::filesystem::path> roots) {
+  ASSERT_MSG(!m_parent, "A resource layer uses the mounts of its root");
+  ASSERT_MSG(m_tasks.on_main(), "remount: main thread only");
+  const auto found = std::ranges::find_if(m_mounts, [protocol](const mount &m) { return m.protocol == protocol; });
+  if (found == m_mounts.end()) {
+    egLOG_WARN("resource/system", "remount: {}:// is not mounted", protocol);
+    return false;
+  }
+  found->roots = std::move(roots);
+  unregistrate_resolver(found->protocol);
+  register_mount(*found);
+  // What was read from the old roots is not served any more: for the cache the files behind the tags changed.
+  std::vector<res::tag> cached;
+  collect_cached_tags(protocol, cached);
+  std::ranges::sort(cached, [](const res::tag &a, const res::tag &b) { return a.view() < b.view(); });
+  const auto repeated = std::ranges::unique(cached, [](const res::tag &a, const res::tag &b) { return a.view() == b.view(); });
+  cached.erase(repeated.begin(), repeated.end());
+  for (const auto &tag : cached) {
+    signal_changed(tag);
+  }
+  return true;
+}
+
+void res::resource_system::collect_cached_tags(std::string_view protocol, std::vector<res::tag> &out) {
+  {
+    std::shared_lock lock(m_cache_mutex);
+    m_cache.for_each_tag([&](const res::tag &tag) {
+      if (tag.protocol() == protocol) {
+        out.push_back(tag);
+      }
+    });
+  }
+  std::lock_guard layers_lock(m_layers_mutex);
+  for (resource_system *layer : m_layers) {
+    layer->collect_cached_tags(protocol, out);
+  }
+}
+
 res::resource_system::resource_system(resource_system &parent)
     : m_graph(std::make_unique<wait_graph>()), m_tasks(parent.m_tasks), m_parent(&parent) {
   m_gate->self = this;

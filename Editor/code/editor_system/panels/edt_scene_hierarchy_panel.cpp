@@ -38,6 +38,7 @@ namespace edt
 
 	void scene_hierarchy_panel::begin_rename(const scn::prefab_desc::prefab_node& node)
 	{
+		if (locked()) return;
 		m_rename_id = node.node_id;
 		auto cp = std::format_to_n(m_rename_buf, sizeof(m_rename_buf) - 1, "{}", node.name);
 		*cp.out = '\0';
@@ -53,6 +54,40 @@ namespace edt
 		if (node && m_world_desc) find_path(m_world_desc->get_root().children, node, m_selected_path);
 		m_multi_selected.clear();
 		m_last_clicked_flat_idx = -1;
+	}
+
+	bool scene_hierarchy_panel::select_path(const std::vector<uint64_t>& path, const std::vector<uint64_t>& target)
+	{
+		if (!m_world_desc || path.size() <= target.size()) return false;
+		// The desc's own part of the path, then the ids inside the instance.
+		const std::size_t own = path.size() - target.size();
+		scn::prefab_desc::prefab_node* node = nullptr;
+		auto* children = &m_world_desc->get_root().children;
+		for (std::size_t i = 0; i < own; ++i) {
+			const auto it = std::ranges::find(*children, path[i], &scn::prefab_desc::prefab_node::node_id);
+			if (it == children->end()) return false;
+			node = &*it;
+			children = &node->children;
+		}
+		m_multi_selected.clear();
+		m_last_clicked_flat_idx = -1;
+		if (target.empty()) {
+			m_selected_node = node;
+			m_selected_readonly = false;
+			notify_selected();
+			return true;
+		}
+		if (!m_view_cache) return false;
+		const auto base = m_view_cache->base(*node, target);
+		if (!base || !base->has_value()) return false;
+		m_instance_selection = **base;
+		m_selected_node = &m_instance_selection;
+		m_selected_readonly = true;
+		m_selected_owner = node;
+		m_selected_target = target;
+		m_selected_path = path;
+		if (m_on_node_selected) m_on_node_selected(m_selected_node);
+		return true;
 	}
 
 	void scene_hierarchy_panel::set_on_node_selected(std::function<void(scn::prefab_desc::prefab_node*)> cb)
@@ -296,10 +331,12 @@ namespace edt
 				}
 			}
 
+			ImGui::BeginDisabled(locked());
 			if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
 				m_new_world_buf[0] = '\0';
 				ImGui::OpenPopup("##new_world_popup");
 			}
+			ImGui::EndDisabled();
 
 			draw_new_world_popup();
 
@@ -332,16 +369,23 @@ namespace edt
 
 	void scene_hierarchy_panel::on_render()
 	{
+		const bool edits_locked = locked();
+		if (edits_locked) {
+			ImGui::TextDisabled("Stop Play to edit");
+			m_rename_id = 0;
+		}
 		if (!m_world_names.empty()) {
 			draw_world_tabs();
 			ImGui::Separator();
 		} else {
 			// Without worlds there are no tabs, so this is the only way to get one.
 			ImGui::TextDisabled("This level has no worlds");
+			ImGui::BeginDisabled(edits_locked);
 			if (ImGui::Button("+ New World")) {
 				m_new_world_buf[0] = '\0';
 				ImGui::OpenPopup("##new_world_popup");
 			}
+			ImGui::EndDisabled();
 			draw_new_world_popup();
 			ImGui::Separator();
 		}
@@ -351,7 +395,7 @@ namespace edt
 		ImGui::InputTextWithHint("##filter", "Filter by name...", m_filter, sizeof(m_filter));
 
 		// New root node button
-		ImGui::BeginDisabled(!m_world_desc);
+		ImGui::BeginDisabled(!m_world_desc || edits_locked);
 		if (ImGui::Button("+ New Entity"))
 			ImGui::OpenPopup("##new_entity_type");
 		ImGui::EndDisabled();
@@ -385,7 +429,7 @@ namespace edt
 		collect_flat_order(m_world_desc->get_root().children, lower_filter);
 
 		// Delete key shortcut
-		if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+		if (!edits_locked && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
 			ImGui::IsKeyPressed(ImGuiKey_Delete) &&
 			((m_selected_node && !m_selected_readonly) || m_multi_selected.size() > 1))
 		{
@@ -403,7 +447,7 @@ namespace edt
 
 		// ── drop on empty area → move to root ────────────────────────────
 		ImVec2 avail = ImGui::GetContentRegionAvail();
-		if (avail.y > 0.f) {
+		if (!edits_locked && avail.y > 0.f) {
 			ImGui::InvisibleButton("##root_drop_area", ImVec2(-1.f, avail.y));
 			if (ImGui::BeginDragDropTarget()) {
 				if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("HIERARCHY_NODE")) {
@@ -519,14 +563,15 @@ namespace edt
 		}
 
 		// ── drag source ─────────────────────────────────────────────────────
-		if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+		const bool edits_locked = locked();
+		if (!edits_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
 			ImGui::SetDragDropPayload("HIERARCHY_NODE", &node.node_id, sizeof(node.node_id));
 			ImGui::TextUnformatted(node.name.c_str());
 			ImGui::EndDragDropSource();
 		}
 
 		// ── drop target: position-based (top edge = insert before, middle = make child, bottom edge = insert after)
-		if (ImGui::BeginDragDropTarget()) {
+		if (!edits_locked && ImGui::BeginDragDropTarget()) {
 			// Draw visual hint based on mouse position
 			ImVec2 item_min = ImGui::GetItemRectMin();
 			ImVec2 item_max = ImGui::GetItemRectMax();
@@ -566,12 +611,12 @@ namespace edt
 		}
 
 		// ── double-click to rename ───────────────────────────────────────────
-		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+		if (!edits_locked && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 			begin_rename(node);
 		}
 
 		// ── context menu ─────────────────────────────────────────────────────
-		if (ImGui::BeginPopupContextItem()) {
+		if (!edits_locked && ImGui::BeginPopupContextItem()) {
 			const bool multi_mode = m_multi_selected.size() > 1;
 
 			if (!multi_mode) {
