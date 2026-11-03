@@ -37,6 +37,7 @@
 #include "edt_build_jobs.h"
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
+#include "edt_git_panel.h"
 #include "edt_vcs_service.h"
 #include "edt_live_mode.h"
 #include <snk/core/core_project_modules.h>
@@ -330,6 +331,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// A live build is stopped instead: its configure would clear the --fresh mark that a define removal writes.
 	m_build_settings_panel->set_stop_background([this] { stop_live_build(); });
 	add_panel(m_build_settings_panel, dock_slot::floating, false);
+	// #456: through the vcs.* commands as the person's calls; closed by default, so it reads nothing until opened.
+	git_panel_model::ports git_ports;
+	git_ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
+	git_ports.cancel = [this](std::uint64_t job) { return m_context->jobs().cancel(job); };
+	m_git_panel = std::make_shared<git_panel>(m_context->events(), std::move(git_ports), m_context->dialogs(), m_res);
+	add_panel(m_git_panel, dock_slot::right, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
