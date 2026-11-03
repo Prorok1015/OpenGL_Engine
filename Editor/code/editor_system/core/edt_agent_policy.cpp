@@ -9,6 +9,7 @@
 #include <boost/json/basic_parser_impl.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/parse_options.hpp>
+#include <boost/json/serialize.hpp>
 #include <cstdint>
 #include <format>
 #include <fstream>
