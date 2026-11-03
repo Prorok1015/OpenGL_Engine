@@ -115,21 +115,44 @@ namespace edt
 		inline static constexpr std::size_t k_max_log_snapshots = 8;
 		inline static constexpr std::size_t k_max_filter_bytes = 256;
 
-		started start_status();
+		// Reads; `caller` is the origin of the command (cmd::call::from). Not a person's (ui): no lazy fetch, no
+		// transport, and before git 2.45 a partial clone is refused.
+		started start_status(const cmd::origin& caller);
 		// `path` empty: the whole tree. `staged`: the index against HEAD.
-		started start_diff(const std::string& path, bool staged);
+		started start_diff(const std::string& path, bool staged, const cmd::origin& caller);
 		// The change `commit` (4..64 hex digits) made to `path` (empty: every file), against its first parent. With a
 		// path, a file the commit renamed shows as added: rename detection sees only the files of the path.
-		started start_commit_diff(const std::string& commit, const std::string& path);
+		started start_commit_diff(const std::string& commit, const std::string& path, const cmd::origin& caller);
 		// `ref` empty: HEAD. `limit` is clamped to [1, k_max_log_limit]. `cursor` is the next_cursor of a page (empty:
 		// the first page). The first page resolves its tips to commits once and keeps them as a snapshot (at most
 		// k_max_log_snapshots, least recently used dropped), so later pages walk the same history whatever was
 		// committed meanwhile; the cursor of a dropped snapshot, or of other arguments, ends the job with error `stale`.
 		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
-			const log_filter& filter = {});
+			const log_filter& filter, const cmd::origin& caller);
 		// The files `commit` (4..64 hex digits) changed, against its first parent (a root commit: every file).
-		started start_show_files(const std::string& commit);
-		started start_branches();
+		started start_show_files(const std::string& commit, const cmd::origin& caller);
+		started start_branches(const cmd::origin& caller);
+
+		// The same, by kind only (no agent session).
+		started start_status(cmd::origin_kind caller) { return start_status(cmd::origin{ caller, {} }); }
+		started start_diff(const std::string& path, bool staged, cmd::origin_kind caller)
+		{
+			return start_diff(path, staged, cmd::origin{ caller, {} });
+		}
+		started start_commit_diff(const std::string& commit, const std::string& path, cmd::origin_kind caller)
+		{
+			return start_commit_diff(commit, path, cmd::origin{ caller, {} });
+		}
+		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
+			const log_filter& filter, cmd::origin_kind caller)
+		{
+			return start_log(ref, path, limit, cursor, filter, cmd::origin{ caller, {} });
+		}
+		started start_show_files(const std::string& commit, cmd::origin_kind caller)
+		{
+			return start_show_files(commit, cmd::origin{ caller, {} });
+		}
+		started start_branches(cmd::origin_kind caller) { return start_branches(cmd::origin{ caller, {} }); }
 
 		// For the jobs started after it, while no policy source is set (the hard rules then use vcs_policy's defaults).
 		void set_write_permissions(vcs_write_permissions permissions);
@@ -202,9 +225,11 @@ namespace edt
 		started unavailable() const;
 		// The scratch folder with an empty hooks folder in it, made on first use; the error text when it cannot be.
 		std::optional<std::string> ensure_scratch();
-		// Defined in the .cpp, its only user. `write`: nullopt for a read.
+		// Defined in the .cpp, its only user. `write`: nullopt for a read, whose caller is `reader` (not ui: the
+		// protected read).
 		template<class F>
-		started run_job(std::string label, F work, std::optional<write_mode> write = std::nullopt, const hard_rule& rule = {});
+		started run_job(std::string label, F work, std::optional<write_mode> write = std::nullopt, const hard_rule& rule = {},
+			cmd::origin_kind reader = cmd::origin_kind::agent);
 		vcs_policy current_policy() const;
 
 		job_service& m_jobs;
