@@ -1,12 +1,14 @@
 #pragma once
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <span>
 #include <string>
+#include <vector>
 
-// How vfs_resolver writes and removes files under a mounted root without a race between the path check and the file
+// How vfs_resolver writes, removes and reads files under a mounted root without a race between the path check and the file
 // operation (#414): every folder below the root is opened relative to the one above it without following a link
 // (POSIX: openat with O_NOFOLLOW from a root descriptor kept open; Windows: NtCreateFile relative to the parent's handle
 // with FILE_OPEN_REPARSE_POINT, each refusing a reparse point and held without FILE_SHARE_DELETE), the temp file is
@@ -82,5 +84,32 @@ namespace res::detail {
 	// The source is checked first and the target's folders must exist: nothing is made. Empty on success, else why it
 	// failed; on failure the file stays where it was.
 	std::string rename_beneath(pinned_root& root, const rename_request& request);
+
+	enum class read_status : std::uint8_t { ok, missing, not_regular, too_large, failed };
+
+	struct read_result {
+		read_status status = read_status::failed;
+		// Why, for `failed` (and the cause of `missing`); empty otherwise.
+		std::string error;
+	};
+
+	struct read_request {
+		// A mounted root, canonical as pinned when mounted. Opened only: never made, so any layer of a mount reads.
+		std::filesystem::path root;
+		// Below the root, as safe_path resolved it, and a single name inside it.
+		std::filesystem::path folder;
+		std::filesystem::path leaf;
+		// A larger file is `too_large` and nothing is read.
+		std::uint64_t max_bytes = 0;
+		// Tests only: called before the folders are opened and once they are held, just before the file is opened.
+		const std::function<void(read_stage)>* hook = nullptr;
+	};
+
+	// Reads a regular file below the root like the writes reach theirs (#484): every folder opened from the one above it
+	// without following a link (Windows: none may be a reparse point), the file opened from the last folder without
+	// following a link and without blocking (POSIX: O_NONBLOCK, so a FIFO cannot hold the io thread), then checked to be
+	// a regular file through that same descriptor or handle and read from it. A link, a folder, a FIFO or a device at
+	// the name is `not_regular`.
+	read_result read_beneath(const read_request& request, std::vector<std::byte>& out);
 
 }

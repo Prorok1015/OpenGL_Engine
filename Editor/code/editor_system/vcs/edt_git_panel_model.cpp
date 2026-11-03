@@ -383,3 +383,13 @@ void edt::git_panel_model::fail(std::string text)
 	egLOG_WARN("vcs", "{}", text);
 	m_error = std::move(text);
 }
+
+edt::vcs::history_model::ports edt::history_ports_of(const git_panel_model::ports& ports)
+{
+	vcs::history_model::ports out;
+	out.invoke = ports.invoke;
+	out.cancel = ports.cancel;
+	out.now = ports.now;
+	out.extended_reads = true;
+	return out;
+}

@@ -42,6 +42,7 @@ namespace edt
 		case build: return policy_mode::deny;
 		case live: return policy_mode::allow;
 		case editor_control: return policy_mode::allow;
+		case play: return policy_mode::allow;
 		// What a git write may touch is held by the hard rules of the "vcs" section (vcs_policy), whatever the mode.
 		case vcs_read: return policy_mode::allow;
 		case vcs_commit: return policy_mode::allow;

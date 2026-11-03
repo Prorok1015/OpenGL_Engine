@@ -1,4 +1,5 @@
 #pragma once
+#include "edt_history_model.h"
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_editor_events.h>
 #include <boost/json/value.hpp>
@@ -193,4 +194,7 @@ namespace edt
 		connection m_finished;
 		connection m_progress;
 	};
+
+	// The History tab's ports: the panel's own, with vcs.log{all, author, grep}, vcs.show_files and vcs.diff{commit}.
+	vcs::history_model::ports history_ports_of(const git_panel_model::ports& ports);
 }

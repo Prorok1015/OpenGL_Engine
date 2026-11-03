@@ -276,6 +276,30 @@ BOOST_AUTO_TEST_CASE(Step_SetModeStepIsOneFrameAndAnotherModeCancelsTheSteps)
 	BOOST_TEST(g_ticks == 2);
 }
 
+BOOST_AUTO_TEST_CASE(FramesRun_CountsPlayAndStepFramesOnly)
+{
+	scn::context_set set("play", nullptr);
+	set.create_context("a", 0, scn::context_kind::play);
+	BOOST_TEST(set.frames_run() == 0u);
+
+	set.set_mode(ecs::run_mode::play);
+	for (int i = 0; i < 3; ++i) set.update(one_frame);
+	BOOST_TEST(set.frames_run() == 3u);
+
+	set.set_mode(ecs::run_mode::pause);
+	set.update(one_frame);
+	set.update(one_frame);
+	BOOST_TEST(set.frames_run() == 3u);
+
+	set.step(2);
+	for (int i = 0; i < 4; ++i) set.update(one_frame); // two frames of the step, then paused again
+	BOOST_TEST(set.frames_run() == 5u);
+
+	set.set_mode(ecs::run_mode::edit);
+	set.update(one_frame);
+	BOOST_TEST(set.frames_run() == 5u);
+}
+
 BOOST_AUTO_TEST_CASE(TimeScale_MultipliesTheFrameDeltaOfAPlayContext)
 {
 	scn::context_set set("play", nullptr);

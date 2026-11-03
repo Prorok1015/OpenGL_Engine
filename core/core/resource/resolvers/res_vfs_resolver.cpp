@@ -7,7 +7,6 @@
 #include "res_vfs_write.h"
 #include <cctype>
 #include <format>
-#include <fstream>
 #include <random>
 #include <shared_mutex>
 #include <chrono>
@@ -215,14 +214,15 @@ core::res::res_resolver_interface::async_raw_data res::vfs_resolver::resolve(con
 	}
 
 	auto data_sp = std::make_shared<core::res::res_control_block<std::vector<std::byte>>>();
-	auto path = resolve_tag(tag);
-	if (!path.has_value()) {
+	auto found = resolve_tag(tag);
+	if (!found.has_value()) {
 		egLOG_WARN("resource", "Rejected resolve of '{}': path escapes the resource root", tag.view());
 		data_sp->set_error("Tag escapes the resource root: " + tag.string());
 		return data_sp;
 	}
 
-	boost::asio::post(io.get_executor(), std::bind(&vfs_resolver::resolfy_pending_writes, this, data_sp, *path));
+	boost::asio::post(io.get_executor(), std::bind(&vfs_resolver::read_from_disk, this, data_sp, std::move(found->first),
+		std::move(found->second)));
 	return data_sp;
 }
 
@@ -692,20 +692,20 @@ std::optional<fs::path> res::vfs_resolver::safe_path(const fs::path& root, const
 	return candidate;
 }
 
-std::optional<fs::path> res::vfs_resolver::resolve_tag(const tag& tag) const
+std::optional<std::pair<fs::path, fs::path>> res::vfs_resolver::resolve_tag(const tag& tag) const
 {
 	auto stack = entries_stack;
-	std::optional<fs::path> first_accepted;
+	std::optional<std::pair<fs::path, fs::path>> first_accepted;
 	while (!stack.empty())
 	{
 		auto path = safe_path(stack.top(), tag);
 		if (path.has_value()) {
 			std::error_code ec;
 			if (fs::exists(*path, ec)) {
-				return path;
+				return std::pair{ stack.top(), std::move(*path) };
 			}
 			if (!first_accepted.has_value()) {
-				first_accepted = std::move(path);
+				first_accepted.emplace(stack.top(), std::move(*path));
 			}
 		}
 
@@ -788,55 +788,39 @@ bool res::vfs_resolver::write_pending(const res::tag& tag, const fs::path& targe
 	}
 }
 
-void res::vfs_resolver::resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const
+void res::vfs_resolver::read_from_disk(core::res::res_resolver_interface::async_raw_data data_sp, fs::path root, fs::path path) const
 {
 	try {
 		egLOG("resource/resolver", "loading file '{}'", fs_paths::utf8_of(path));
 
-		std::error_code ec;
-		const auto status = fs::status(path, ec);
-		if (status.type() == fs::file_type::not_found) {
+		// Nothing goes by path from here (#484): the folders below the layer's root and the file are opened without
+		// following a link, and the bytes come from the descriptor that was checked to be a regular file.
+		const fs::path relative = path.lexically_relative(root);
+		detail::read_request request;
+		request.root = std::move(root);
+		request.folder = relative.parent_path();
+		request.leaf = relative.filename();
+		request.max_bytes = m_read_limit != 0 ? m_read_limit : res::max_external_file_bytes;
+		request.hook = m_read_hook ? &m_read_hook : nullptr;
+		std::vector<std::byte> data;
+		const detail::read_result result = detail::read_beneath(request, data);
+		switch (result.status) {
+		case detail::read_status::ok:
+			data_sp->set_ready(std::move(data));
+			return;
+		case detail::read_status::missing:
 			data_sp->set_error("File does not exist: " + fs_paths::utf8_of(path));
 			return;
-		}
-		if (ec) {
-			data_sp->set_error("Cannot access '" + fs_paths::utf8_of(path) + "': " + ec.message());
-			return;
-		}
-		// A folder opens as a stream on Linux, and tellg() then reports LLONG_MAX.
-		if (!fs::is_regular_file(status)) {
+		case detail::read_status::not_regular:
 			data_sp->set_error("Not a regular file: " + fs_paths::utf8_of(path));
 			return;
-		}
-
-		std::ifstream file(path, std::ios::binary | std::ios::ate);
-		if (!file.is_open()) {
-			data_sp->set_error("Failed to open file: " + fs_paths::utf8_of(path));
+		case detail::read_status::too_large:
+			data_sp->set_error(std::format("File is larger than {} bytes: {}", request.max_bytes, fs_paths::utf8_of(path)));
 			return;
+		case detail::read_status::failed:
+			break;
 		}
-
-		// The file may have been swapped since status(): a size the file system does not confirm is not allocated.
-		auto size = file.tellg();
-		const auto file_bytes = fs::file_size(path, ec);
-		if (size < 0 || ec || static_cast<std::uintmax_t>(size) > file_bytes) {
-			data_sp->set_error("Failed to get the size of: " + fs_paths::utf8_of(path));
-			return;
-		}
-		std::vector<std::byte> data;
-
-		if (size > 0) {
-			file.seekg(0, std::ios::beg);
-			data.resize(static_cast<size_t>(size));
-			if (!file.read(reinterpret_cast<char*>(data.data()), size)) {
-				data_sp->set_error("Failed to read data: " + fs_paths::utf8_of(path));
-				return;
-			}
-		}
-
-		// Close before waking waiters: on Windows an open handle blocks deleting or replacing the file.
-		file.close();
-		data_sp->set_ready(std::move(data));
-
+		data_sp->set_error("Failed to open file: " + result.error);
 	}
 	catch (const std::exception& e) {
 		data_sp->set_error(std::string("Internal IO error: ") + e.what());

@@ -2,6 +2,7 @@
 #include "edt_vcs_service.h"
 #include "edt_path_text.h"
 #include "edt_agent_policy.h"
+#include "edt_git_panel_model.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_service_commands.h>
 #include <snk/platform/plt_process.h>
@@ -604,6 +605,71 @@ BOOST_AUTO_TEST_CASE(RealRepository_LogOfAll_ShowsEveryBranchAndTag_WithTheirRef
 }
 
 // A tag of a tag of a commit no branch reaches: `all` peels it to that commit; a tag of a tag of a tree is left out.
+// #457: the History tab, wired as the Git panel wires it (history_ports_of, origin ui), reads every branch, filters by
+// author and by message text, and shows a commit's files and a file's diff through the vcs.* commands.
+BOOST_AUTO_TEST_CASE(RealRepository_TheHistoryTab_ReadsEveryBranch_FiltersAndShowsACommitsFilesAndDiff)
+{
+	isolate_config();
+	const fs::path repo = make_empty_repository("history_tab");
+	write(repo / "a.txt", "one\n");
+	git(repo, { "add", "a.txt" });
+	commit_at(repo, "m1", 1000);
+	git(repo, { "checkout", "-q", "-b", "feature" });
+	write(repo / "a.txt", "one\ntwo\n");
+	git(repo, { "add", "a.txt" });
+	commit_at(repo, "f1 Fix", 2000, "Ann");
+	git(repo, { "checkout", "-q", "main" });
+	commit_at(repo, "m2", 3000);
+	make_service(real_options(repo));
+	registrations = edt::register_vcs_commands(commands, *service);
+
+	auto now = edt::vcs::history_model::clock::now();
+	edt::git_panel_model::ports panel;
+	panel.invoke = [this](std::string_view id, json::value args) { return commands.invoke(id, std::move(args), cmd::origin::ui()); };
+	panel.cancel = [this](std::uint64_t job) { return jobs->cancel(job); };
+	panel.now = [&now] { return now; };
+	edt::vcs::history_model history(events, edt::history_ports_of(panel));
+	BOOST_TEST(history.filters_by_text());
+	const auto subjects = [&history] {
+		std::vector<std::string> out;
+		for (const auto& commit : history.commits()) out.push_back(commit.subject);
+		return out;
+	};
+	const auto filter_by = [&](edt::vcs::history_filter filter) {
+		history.set_filter(std::move(filter));
+		now += edt::vcs::history_model::k_filter_delay + std::chrono::milliseconds(1);
+		history.tick();
+		run_to_end();
+	};
+
+	history.set_visible(true);
+	run_to_end();
+	BOOST_TEST(history.error().empty(), history.error());
+	BOOST_TEST((subjects() == std::vector<std::string>{ "m2", "f1 Fix", "m1" }));
+	BOOST_TEST(history.at_end());
+
+	filter_by({ .branch = {}, .author = "ann", .text = {} });
+	BOOST_TEST(history.error().empty(), history.error());
+	BOOST_TEST((subjects() == std::vector<std::string>{ "f1 Fix" }));
+	filter_by({ .branch = {}, .author = {}, .text = "fix" });
+	BOOST_TEST((subjects() == std::vector<std::string>{ "f1 Fix" }));
+	filter_by({ .branch = "main", .author = {}, .text = {} });
+	BOOST_TEST((subjects() == std::vector<std::string>{ "m2", "m1" }));
+	filter_by({});
+	BOOST_REQUIRE((subjects() == std::vector<std::string>{ "m2", "f1 Fix", "m1" }));
+
+	history.select(1);
+	run_to_end();
+	BOOST_TEST(history.error().empty(), history.error());
+	BOOST_REQUIRE(history.files().size() == 1u);
+	BOOST_TEST(history.files().front().path == "a.txt");
+	BOOST_TEST(history.files().front().status == 'M');
+	history.select_file("a.txt");
+	run_to_end();
+	BOOST_TEST(history.error().empty(), history.error());
+	BOOST_TEST(history.diff_text().find("+two") != std::string::npos, history.diff_text());
+}
+
 BOOST_AUTO_TEST_CASE(RealRepository_LogOfAll_PeelsATagOfATag)
 {
 	isolate_config();

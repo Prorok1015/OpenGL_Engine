@@ -217,7 +217,7 @@ std::vector<edt::menu_item_info> edt::action_registry::items(std::string_view me
 	std::vector<menu_item_info> out;
 	for (const auto& a : m_ui) {
 		if (a->ui.menu_path != menu) continue;
-		const bool enabled = m_commands.is_enabled(a->id);
+		const bool enabled = enabled_for_person(*a);
 		out.push_back({
 			a->id,
 			a->ui.dynamic_label ? a->ui.dynamic_label() : a->ui.label,
@@ -233,6 +233,11 @@ std::vector<edt::menu_item_info> edt::action_registry::items(std::string_view me
 bool edt::action_registry::is_enabled(std::string_view id) const
 {
 	return m_commands.is_enabled(id);
+}
+
+bool edt::action_registry::enabled_for_person(const ui_entry& entry) const
+{
+	return m_commands.is_enabled(entry.id) && (!entry.ui.enabled || entry.ui.enabled());
 }
 
 const cmd::command_desc* edt::action_registry::find(std::string_view id) const
@@ -270,6 +275,7 @@ bool edt::action_registry::activate(std::string_view id)
 {
 	if (!m_commands.is_enabled(id)) return false;
 	std::shared_ptr<ui_entry> entry = find_ui(id);
+	if (entry && entry->ui.enabled && !entry->ui.enabled()) return false;
 	if (entry && entry->ui.activate) {
 		// The callback may unregister its own action, even to add the same id again. Its own copy keeps it alive
 		// while it runs; the entry is let go first, so the removal takes effect at once (the entry owns the command).
@@ -287,7 +293,7 @@ bool edt::action_registry::dispatch(const shortcut& chord, bool text_input)
 {
 	for (const auto& a : m_ui) {
 		if (a->binding != chord || (text_input && a->ui.yields_to_text_input)) continue;
-		if (m_commands.is_enabled(a->id)) return activate(a->id);
+		if (enabled_for_person(*a)) return activate(a->id);
 	}
 	return false;
 }
@@ -295,6 +301,6 @@ bool edt::action_registry::dispatch(const shortcut& chord, bool text_input)
 void edt::action_registry::for_each_shortcut(const std::function<void(const shortcut&)>& visit) const
 {
 	for (const auto& a : m_ui) {
-		if (a->binding && m_commands.is_enabled(a->id)) visit(*a->binding);
+		if (a->binding && enabled_for_person(*a)) visit(*a->binding);
 	}
 }
