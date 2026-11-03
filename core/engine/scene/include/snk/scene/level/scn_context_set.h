@@ -12,6 +12,7 @@
 #include <snk/ecs/ecs_system_registry.hpp>
 #include <snk/resource/res_tag.h>
 #include <snk/common/engine_assert.h>
+#include <snk/common/ds/ds_task_system.hpp>
 #include <snk/common/snk_api.h>
 #include <chrono>
 #include <cstdint>
@@ -58,6 +59,15 @@ namespace scn
 		// the first context: a context takes the layer's meta context when it is created.
 		scene_layer* layer() const { return m_layer; }
 		void set_layer(scene_layer* layer) { m_layer = layer; }
+
+		// The tasks a game module started for this set (gs::module_context::run while the set is current()). Each is
+		// a task of the layer as well; stopping the set's tasks leaves those of the layer's other sets running.
+		const ds::lifetime& tasks() const { return m_tasks; }
+		// Cancels the set's tasks and waits for them on the layer's task system. Idempotent; the set does it before
+		// its contexts go.
+		void stop_tasks();
+		// The set whose contexts are being updated or loaded now (main thread); null outside.
+		static context_set* current();
 		// An inactive set is skipped by context_manager::update.
 		bool active() const { return m_active; }
 		void set_active(bool active) { m_active = active; }
@@ -232,5 +242,7 @@ namespace scn
 		// Ordered by id, so contexts always run in id order.
 		std::map<uint32_t, std::unique_ptr<scn::world_context>> m_contexts;
 		std::unordered_map<std::string, uint32_t> m_context_ids;
+		// Last: the tasks may touch the contexts.
+		ds::lifetime m_tasks{ ds::lifetime_option::cancel_on_destroy };
 	};
 }

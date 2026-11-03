@@ -121,10 +121,8 @@ void edt::play_session::stop(play_reason reason)
 {
 	if (!active()) return;
 	if (const auto contexts = m_services.ctx_manager.lock()) {
-		if (scn::context_set* play = contexts->find_set(k_play_set)) {
-			// A task of the game module may hold a play registry: none may run once the set is gone. The layer is the
-			// level's too, so its tasks stop as well; a module restarts what its edit-mode systems need.
-			if (scn::scene_layer* layer = play->layer()) layer->stop_tasks();
+		if (contexts->find_set(k_play_set)) {
+			// The set stops its own tasks before its registries go; the level's tasks of the same layer go on.
 			contexts->destroy_set(k_play_set);
 		}
 	}

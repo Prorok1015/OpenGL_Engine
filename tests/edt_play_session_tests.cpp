@@ -533,22 +533,28 @@ BOOST_AUTO_TEST_CASE(ten_start_stop_cycles_leave_nothing_behind)
 	BOOST_TEST(seen.size() == 20u);
 }
 
-BOOST_AUTO_TEST_CASE(the_tasks_of_the_game_layer_stop_with_play)
+BOOST_AUTO_TEST_CASE(stop_cancels_the_tasks_of_the_play_set_and_the_level_tasks_of_the_same_layer_go_on)
 {
 	open_level();
 	BOOST_REQUIRE(play.start());
 	scn::scene_layer* layer = play_set()->layer();
 	BOOST_REQUIRE(layer);
+	BOOST_REQUIRE(contexts().level_set().layer() == layer);
 	entt::registry* twin = &play_set()->get("w0").state();
-	bool ran = false;
-	auto handle = tasks.run(ds::lane::compute, ds::task_desc{ .name = "holds the play registry", .category = "test" }, layer->tasks(),
-		[&ran, twin](ds::task_context&) { ran = twin->valid(entt::null); });
+	bool play_ran = false;
+	bool level_ran = false;
+	auto play_task = tasks.run(ds::lane::compute, ds::task_desc{ .name = "holds the play registry", .category = "test" },
+		layer->tasks(), play_set()->tasks(), [&play_ran, twin](ds::task_context&) { play_ran = twin->valid(entt::null); });
+	auto level_task = tasks.run(ds::lane::compute, ds::task_desc{ .name = "a level task", .category = "test" },
+		layer->tasks(), contexts().level_set().tasks(), [&level_ran](ds::task_context&) { level_ran = true; });
 
 	play.stop();
 	pump();
 
-	BOOST_TEST(!ran);
-	BOOST_TEST(handle.done());
+	BOOST_TEST(!play_ran);
+	BOOST_TEST((play_task.status() == ds::task_status::cancelled));
+	BOOST_TEST(level_ran);
+	BOOST_TEST((level_task.status() == ds::task_status::ready));
 }
 
 BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)

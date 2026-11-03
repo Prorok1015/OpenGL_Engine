@@ -1,8 +1,25 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <algorithm>
+#include <utility>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
+
+namespace {
+	scn::context_set* g_current_set = nullptr;
+
+	class current_set_scope
+	{
+	public:
+		explicit current_set_scope(scn::context_set& set) : m_previous(std::exchange(g_current_set, &set)) {}
+		~current_set_scope() { g_current_set = m_previous; }
+		current_set_scope(const current_set_scope&) = delete;
+		current_set_scope& operator=(const current_set_scope&) = delete;
+
+	private:
+		scn::context_set* m_previous;
+	};
+}
 
 scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
 							  std::shared_ptr<ecs::channel_registry> channel_types, set_options options)
@@ -15,7 +32,21 @@ scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_
 
 scn::context_set::~context_set()
 {
+	stop_tasks();
 	clear();
+}
+
+void scn::context_set::stop_tasks()
+{
+	m_tasks.cancel_tasks();
+	if (m_layer && m_layer->task_runner()) {
+		m_layer->task_runner()->wait_idle(m_tasks);
+	}
+}
+
+scn::context_set* scn::context_set::current()
+{
+	return g_current_set;
 }
 
 void scn::context_set::set_seed(uint64_t seed)
@@ -29,6 +60,7 @@ void scn::context_set::set_seed(uint64_t seed)
 void scn::context_set::update(std::chrono::duration<float> dt)
 {
 	PROFILE_SCOPE("LevelUpdate");
+	const current_set_scope current_scope(*this);
 
 	const ecs::run_mode mode = m_mode;
 	begin_frame_channel(mode);
@@ -166,6 +198,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler,
 										 context_kind kind)
 {
+	const current_set_scope current_scope(*this);
 	m_tag = desc.get_tag();
 	// no leftover fraction of a step from the previous level
 	for (const auto& [id, context] : m_contexts) {
@@ -189,6 +222,7 @@ void scn::context_set::reload_context(
 	ecs::system_factory& sf,
 	scn::ecs_assembler& assambler)
 {
+	const current_set_scope current_scope(*this);
 	ASSERT_MSG(m_context_ids.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
 
 	const uint32_t old_id = m_context_ids[std::string{name}];

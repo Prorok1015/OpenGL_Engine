@@ -428,6 +428,22 @@ namespace ds {
 			return task_handle<result_t>(std::move(state));
 		}
 
+		// Same, also seen by cancel_tasks and wait_idle of `group` (a subset of the owner's tasks: a world set's).
+		// The task belongs to `owner` otherwise: its main-thread continuations go with run_pending_main(owner).
+		template<class F>
+		auto run(lane where, task_desc desc, const lifetime& owner, const lifetime& group, F&& fn)
+		{
+			using result_t = std::invoke_result_t<F&, task_context&>;
+			using state_t = detail::task_state<result_t>;
+			auto state = std::make_shared<state_t>(std::move(desc), weak_impl(), next_id(),
+				typename state_t::body_t(std::forward<F>(fn)));
+			group.bind(state);
+			// Last: the task's origin is the owner's.
+			owner.bind(state);
+			submit(where, state);
+			return task_handle<result_t>(std::move(state));
+		}
+
 		// Continuation on the pool, never blocks: `fn` is queued on `where` once every input has
 		// finished. If any input failed, `fn` does not run and the result carries that failure:
 		// error if an input errored (message names it), else cancelled.

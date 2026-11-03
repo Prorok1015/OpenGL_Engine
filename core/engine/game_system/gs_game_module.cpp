@@ -118,6 +118,10 @@ ds::task_handle<void> gs::module_context::run(ds::lane lane, ds::task_desc desc,
 	if (!m_tasks) {
 		return {};
 	}
+	// Started by a system of one of the layer's sets: Stop of a Play set cancels it, the level's tasks go on.
+	if (const scn::context_set* set = scn::context_set::current(); set && set->layer() == &m_layer) {
+		return m_tasks->run(lane, std::move(desc), m_layer.tasks(), set->tasks(), std::move(fn));
+	}
 	return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::move(fn));
 }
 
