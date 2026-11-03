@@ -31,3 +31,7 @@ Makefile
 **/Release
 **/logs
 headless_out/
+
+# Python bytecode (tools/*.py run or compiled locally)
+__pycache__/
+*.pyc

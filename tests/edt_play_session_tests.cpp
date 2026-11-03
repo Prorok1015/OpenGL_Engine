@@ -816,8 +816,8 @@ struct play_commands_fixture : play_fixture
 		{ documents, selection, services, [this] { return editing; } });
 	app::frame_control frame_control;
 	app::frame_command_registrations core_frame_commands = app::register_frame_commands(commands, frame_control);
-	app::frame_command_registrations frame_commands = edt::register_play_frame_commands(core_frame_commands, commands,
-		frame_control, [this] { return play.active(); });
+	edt::play_frame_commands frame_commands = edt::register_play_frame_commands(core_frame_commands, commands,
+		frame_control, [this] { return play.active(); }, events);
 	test_util::temp_dir dir{ "edt_play_commands" };
 	edt::agent_access access{ commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json", [this] { return now; } };
 	edt::mcp_bridge_host bridge{ commands, tasks, access };
@@ -832,25 +832,25 @@ BOOST_AUTO_TEST_CASE(an_agent_starts_pauses_steps_and_stops_play_over_mcp)
 	open_level();
 	const mcp::call_result started = call_tool("play_start");
 	BOOST_REQUIRE(!started.is_error);
-	BOOST_TEST(json::serialize(started.structured) == R"({"state":"playing","frame":0,"worlds":["w0","w1"]})");
+	BOOST_TEST(json::serialize(started.structured) == R"json({"state":"playing","frame":0,"worlds":["w0","w1"]})json");
 	BOOST_TEST(play.active());
 
 	run_frames(3);
 	const mcp::call_result playing = call_tool("play_status");
 	BOOST_REQUIRE(!playing.is_error);
-	BOOST_TEST(json::serialize(playing.structured) == R"({"state":"playing","frame":3,"worlds":["w0","w1"]})");
+	BOOST_TEST(json::serialize(playing.structured) == R"json({"state":"playing","frame":3,"worlds":["w0","w1"]})json");
 
 	const mcp::call_result paused = call_tool("play_pause");
 	BOOST_REQUIRE(!paused.is_error);
 	BOOST_TEST((paused.structured.as_object().at("state").as_string() == "paused"));
 	run_frames(2); // paused: no frame is simulated
 
-	const mcp::call_result stepping = call_tool("play_step", R"({"n":2})");
+	const mcp::call_result stepping = call_tool("play_step", R"json({"n":2})json");
 	BOOST_REQUIRE(!stepping.is_error);
 	BOOST_TEST((stepping.structured.as_object().at("state").as_string() == "paused"));
 	run_frames(4); // the two frames of the step, then paused again
 	const mcp::call_result stepped = call_tool("play_status");
-	BOOST_TEST(json::serialize(stepped.structured) == R"({"state":"paused","frame":5,"worlds":["w0","w1"]})");
+	BOOST_TEST(json::serialize(stepped.structured) == R"json({"state":"paused","frame":5,"worlds":["w0","w1"]})json");
 
 	const mcp::call_result resumed = call_tool("play_resume");
 	BOOST_REQUIRE(!resumed.is_error);
@@ -858,9 +858,9 @@ BOOST_AUTO_TEST_CASE(an_agent_starts_pauses_steps_and_stops_play_over_mcp)
 
 	const mcp::call_result stopped = call_tool("play_stop");
 	BOOST_REQUIRE(!stopped.is_error);
-	BOOST_TEST(json::serialize(stopped.structured) == R"({"state":"stopped","frame":0,"worlds":[]})");
+	BOOST_TEST(json::serialize(stopped.structured) == R"json({"state":"stopped","frame":0,"worlds":[]})json");
 	BOOST_TEST(!play.active());
-	BOOST_TEST(json::serialize(call_tool("play_status").structured) == R"({"state":"stopped","frame":0,"worlds":[]})");
+	BOOST_TEST(json::serialize(call_tool("play_status").structured) == R"json({"state":"stopped","frame":0,"worlds":[]})json");
 
 	BOOST_TEST((seen == std::vector<state_change>{
 		{ edt::play_state::playing, edt::play_reason::agent },
@@ -906,7 +906,7 @@ BOOST_AUTO_TEST_CASE(play_step_while_playing_fails_pause_first_and_the_menu_step
 	BOOST_TEST(actions.items("Play").at(2).enabled);
 	BOOST_TEST(actions.activate("play.step")); // the menu's Step: one frame
 	BOOST_TEST(play.pending_steps() == 1u);
-	BOOST_TEST(call_tool("play_step", R"({"n":601})").is_error); // 1..600
+	BOOST_TEST(call_tool("play_step", R"json({"n":601})json").is_error); // 1..600
 }
 
 BOOST_AUTO_TEST_CASE(an_agents_play_start_during_a_persons_gesture_is_busy)
@@ -924,49 +924,88 @@ BOOST_AUTO_TEST_CASE(an_agents_play_start_during_a_persons_gesture_is_busy)
 
 	editing = false;
 	BOOST_TEST(!call_tool("play_start").is_error);
-	// Pause, step, stop and status need no gesture check.
+	// Pause, step, resume (play.start while paused too: it touches no document), stop and status need no gesture check.
 	editing = true;
 	BOOST_TEST(!call_tool("play_pause").is_error);
 	BOOST_TEST(!call_tool("play_step").is_error);
+	const mcp::call_result resumed = call_tool("play_start");
+	BOOST_REQUIRE(!resumed.is_error);
+	BOOST_TEST((resumed.structured.as_object().at("state").as_string() == "playing"));
+	BOOST_TEST(!call_tool("play_pause").is_error);
+	BOOST_TEST(!call_tool("play_resume").is_error);
 	BOOST_TEST(!call_tool("play_status").is_error);
 	BOOST_TEST(!call_tool("play_stop").is_error);
+	// A fresh start during the gesture is busy again.
+	BOOST_TEST(text_of_error(call_tool("play_start")).rfind("busy", 0) == 0u);
+	BOOST_TEST(!play.active());
 }
 
 BOOST_AUTO_TEST_CASE(an_agents_scene_edit_over_mcp_during_play_is_busy)
 {
 	open_level();
 	BOOST_REQUIRE(!call_tool("play_start").is_error);
-	const mcp::call_result renamed = call_tool("scene_node_rename", R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})");
+	const mcp::call_result renamed = call_tool("scene_node_rename", R"json({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})json");
 	BOOST_TEST(renamed.is_error);
 	BOOST_TEST(text_of_error(renamed).rfind("busy", 0) == 0u);
 	BOOST_TEST(text_of_error(renamed).find("stop play first") != std::string::npos);
 
 	BOOST_REQUIRE(!call_tool("play_stop").is_error);
-	BOOST_TEST(!call_tool("scene_node_rename", R"({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})").is_error);
+	BOOST_TEST(!call_tool("scene_node_rename", R"json({"ref":{"context":"w0","path":["00000000000000a2"]},"name":"Box"})json").is_error);
 }
 
 BOOST_AUTO_TEST_CASE(app_advance_is_disabled_outside_play_and_runs_during_play)
 {
 	BOOST_TEST(!core_frame_commands.advance.active()); // the core's registration is gone, the play one replaced it
-	BOOST_TEST(frame_commands.active());
+	BOOST_TEST(frame_commands.commands.active());
 	BOOST_TEST((commands.find("app.advance")->category == cmd::agent_category::play));
 	BOOST_TEST((commands.find("app.resume")->category == cmd::agent_category::play));
 
 	const auto agent = cmd::origin::agent("agent-1");
-	BOOST_TEST(commands.invoke("app.advance", json::parse(R"({"frames":2})"), agent).code == "disabled");
+	BOOST_TEST(commands.invoke("app.advance", json::parse(R"json({"frames":2})json"), agent).code == "disabled");
 	BOOST_TEST(commands.invoke("app.resume", json::object{}, agent).code == "disabled");
 	BOOST_TEST(frame_control.pending() == 0u);
 
 	open_level();
 	BOOST_REQUIRE(play.start());
-	const auto advanced = commands.invoke("app.advance", json::parse(R"({"frames":2})"), agent);
+	const auto advanced = commands.invoke("app.advance", json::parse(R"json({"frames":2})json"), agent);
 	BOOST_TEST(advanced.ok);
 	BOOST_TEST(frame_control.pending() == 2u);
 	BOOST_REQUIRE(play.pause());
 	BOOST_TEST(commands.invoke("app.resume", json::object{}, agent).ok); // paused is Play too
 
 	play.stop();
-	BOOST_TEST(commands.invoke("app.advance", json::parse(R"({"frames":1})"), agent).code == "disabled");
+	BOOST_TEST(commands.invoke("app.advance", json::parse(R"json({"frames":1})json"), agent).code == "disabled");
+}
+
+BOOST_AUTO_TEST_CASE(app_advance_hold_is_released_whenever_play_stops)
+{
+	open_level();
+	const auto agent = cmd::origin::agent("agent-1");
+	// Stopped by the agent.
+	BOOST_REQUIRE(!call_tool("play_start").is_error);
+	BOOST_REQUIRE(commands.invoke("app.advance", json::parse(R"json({"frames":5})json"), agent).ok);
+	BOOST_TEST(frame_control.holding());
+	BOOST_REQUIRE(!call_tool("play_stop").is_error);
+	BOOST_TEST(!frame_control.holding());
+	BOOST_TEST(frame_control.pending() == 0u);
+
+	// Stopped by the person while paused (app.resume is disabled now: nothing else could release it).
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play.pause());
+	BOOST_REQUIRE(commands.invoke("app.advance", json::parse(R"json({"frames":3})json"), agent).ok);
+	BOOST_TEST(frame_control.holding());
+	play.stop();
+	BOOST_TEST(!frame_control.holding());
+	BOOST_TEST(commands.invoke("app.resume", json::object{}, agent).code == "disabled");
+
+	// Stopped for a module reload and started again: the hold does not carry over.
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(commands.invoke("app.advance", json::parse(R"json({"frames":3})json"), agent).ok);
+	play.before_module_swap();
+	BOOST_TEST(!frame_control.holding());
+	play.after_module_swap();
+	BOOST_TEST(play.active());
+	BOOST_TEST(!frame_control.holding());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

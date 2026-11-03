@@ -26,8 +26,10 @@ class SmokeFailure(Exception):
 
 
 class EditorSession:
-    def __init__(self, command, stderr_path, request_timeout):
+    def __init__(self, command, stderr_path, request_timeout, overall_timeout):
         self.request_timeout = request_timeout
+        self.overall_timeout = overall_timeout
+        self.overall_deadline = time.monotonic() + overall_timeout
         self.stderr_file = open(stderr_path, "wb") if stderr_path else None
         self.process = subprocess.Popen(
             command,
@@ -66,13 +68,21 @@ class EditorSession:
         except (BrokenPipeError, OSError) as error:
             raise SmokeFailure(f"the editor does not take input any more: {error}")
 
+    def deadline(self, seconds):
+        """now + seconds, but never past the overall deadline."""
+        return min(time.monotonic() + seconds, self.overall_deadline)
+
     def request(self, request_id, method, params):
+        what = f"{method} {params.get('name')}" if method == "tools/call" else method
+        if time.monotonic() >= self.overall_deadline:
+            raise SmokeFailure(f"the overall deadline of {self.overall_timeout} s passed before {what} (id {request_id})")
         self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-        deadline = time.monotonic() + self.request_timeout
+        deadline = self.deadline(self.request_timeout)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise SmokeFailure(f"no answer to {method} (id {request_id}) within {self.request_timeout} s")
+                raise SmokeFailure(f"no answer to {what} (id {request_id}) within {self.request_timeout} s "
+                                   f"or the overall deadline of {self.overall_timeout} s")
             try:
                 raw = self.lines.get(timeout=remaining)
             except queue.Empty:
@@ -148,7 +158,7 @@ def drive_play(session, first_id, timeout):
     expect_status("play_status", structured, "stopped")
 
     # The startup level may still be loading: Play refuses with `failed` until it is there.
-    deadline = time.monotonic() + timeout
+    deadline = session.deadline(timeout)
     while True:
         is_error, structured, text = call_tool(session, next_id(), "play_start")
         if not is_error:
@@ -174,7 +184,7 @@ def drive_play(session, first_id, timeout):
     if is_error:
         raise SmokeFailure(f"play_step answered with an error: {text}")
     expect_status("play_step", structured, "paused")
-    deadline = time.monotonic() + timeout
+    deadline = session.deadline(timeout)
     while True:
         is_error, structured, text = call_tool(session, next_id(), "play_status")
         if is_error:
@@ -203,7 +213,7 @@ def run(arguments):
         editor_args = editor_args[1:]
     command = [arguments.editor, "--headless", "--mcp-stdio", *editor_args]
     print("$ " + " ".join(command))
-    session = EditorSession(command, arguments.stderr, arguments.request_timeout)
+    session = EditorSession(command, arguments.stderr, arguments.request_timeout, arguments.overall_timeout)
     try:
         init = session.request(1, "initialize", {
             "protocolVersion": PROTOCOL_VERSION,
@@ -244,6 +254,8 @@ def main():
     parser.add_argument("--editor", required=True, help="the editor executable")
     parser.add_argument("--stderr", help="file for the editor's stderr (the log); default: inherited")
     parser.add_argument("--request-timeout", type=float, default=90.0, help="seconds to wait for each answer")
+    parser.add_argument("--overall-timeout", type=float, default=200.0,
+                        help="seconds for everything before stdin is closed; a failure names the step that was waiting")
     parser.add_argument("--play", action="store_true", help="also start, pause, step and stop Play over MCP (#491)")
     parser.add_argument("--exit-timeout", type=float, default=30.0, help="seconds to wait for the exit after stdin closes")
     parser.add_argument("editor_args", nargs=argparse.REMAINDER, help="more arguments for the editor, after --")

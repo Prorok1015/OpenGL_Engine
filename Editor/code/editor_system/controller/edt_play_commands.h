@@ -2,6 +2,7 @@
 #include <snk/application/app_frame_commands.h>
 #include <snk/application/app_frame_control.h>
 #include <snk/command/cmd_registry.h>
+#include <snk/editor/edt_editor_events.h>
 #include <snk/editor/edt_registration.h>
 #include <functional>
 #include <vector>
@@ -29,9 +30,18 @@ namespace edt
 	// no; Step: only paused); an agent's call is judged by the command alone and gets the reason of a refusal.
 	[[nodiscard]] std::vector<registration> register_play_commands(action_registry& actions, play_commands_deps deps);
 
+	struct play_frame_commands
+	{
+		app::frame_command_registrations commands{};
+		// Releases the time hold of app.advance whenever Play stops (any path: agent, person, level or module change):
+		// app.resume is disabled outside Play, so nothing else could release it then.
+		connection release_on_stop{};
+	};
+
 	// Drops `core` (app.advance / app.resume as core_module registered them: no category) and registers them again into
 	// `commands` with category `play`, enabled only while `play_active` says so: outside Play an agent's app.advance
-	// is `disabled` and cannot hold the editor's time. Keep the result no longer than what `play_active` reads.
-	[[nodiscard]] app::frame_command_registrations register_play_frame_commands(app::frame_command_registrations& core,
-		cmd::command_registry& commands, app::frame_control& control, std::function<bool()> play_active);
+	// is `disabled` and cannot hold the editor's time. `control` must outlive the result; keep the result no longer
+	// than what `play_active` reads.
+	[[nodiscard]] play_frame_commands register_play_frame_commands(app::frame_command_registrations& core,
+		cmd::command_registry& commands, app::frame_control& control, std::function<bool()> play_active, editor_events& events);
 }

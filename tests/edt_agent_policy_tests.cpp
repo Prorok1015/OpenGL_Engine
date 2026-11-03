@@ -288,7 +288,7 @@ BOOST_AUTO_TEST_CASE(ThePlayCategory_IsSettableByName)
 {
 	BOOST_TEST(std::string_view(cmd::to_string(agent_category::play)) == "play");
 	BOOST_TEST((edt::parse_settable_category("play") == agent_category::play));
-	const auto parsed = edt::parse_policy_layer(R"({"categories":{"play":"deny"}})");
+	const auto parsed = edt::parse_policy_layer(R"json({"categories":{"play":"deny"}})json");
 	BOOST_TEST(parsed.error.empty());
 	BOOST_TEST((parsed.layer.categories.at(agent_category::play) == policy_mode::deny));
 }

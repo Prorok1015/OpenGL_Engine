@@ -21,8 +21,9 @@ app::frame_command_registrations app::register_frame_commands(cmd::command_regis
 	desc.id = "app.advance";
 	desc.category = options.category;
 	desc.enabled = options.enabled;
-	desc.summary = "Run the next N frames of simulation time and hold the time between calls (deterministic stepping); app.resume releases the hold";
-	desc.args_schema = json::parse(R"({
+	desc.summary = "Run the next N frames of simulation time and hold the time between calls (deterministic stepping); app.resume releases the hold. "
+		"frame / target_frame count the application's frames (every frame the loop started), not the frames of Play (play.status)";
+	desc.args_schema = json::parse(R"json({
 		"type": "object",
 		"properties": {
 			"frames": { "type": "integer", "minimum": 1, "maximum": 1000000 },
@@ -30,8 +31,8 @@ app::frame_command_registrations app::register_frame_commands(cmd::command_regis
 		},
 		"required": ["frames"],
 		"additionalProperties": false
-	})");
-	desc.result_schema = json::parse(R"({
+	})json");
+	desc.result_schema = json::parse(R"json({
 		"type": "object",
 		"properties": {
 			"frame": { "type": "integer", "minimum": 0 },
@@ -39,7 +40,7 @@ app::frame_command_registrations app::register_frame_commands(cmd::command_regis
 		},
 		"required": ["frame", "target_frame"],
 		"additionalProperties": false
-	})");
+	})json");
 	desc.invoke = [&control](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const auto frames = cmd::json_schema::integer_of(args.at("frames"));
@@ -63,13 +64,13 @@ app::frame_command_registrations app::register_frame_commands(cmd::command_regis
 	resume.category = options.category;
 	resume.enabled = std::move(options.enabled);
 	resume.summary = "Release the time hold of app.advance: the frame loop runs on its own time again";
-	resume.args_schema = json::parse(R"({ "type": "object", "properties": {}, "additionalProperties": false })");
-	resume.result_schema = json::parse(R"({
+	resume.args_schema = json::parse(R"json({ "type": "object", "properties": {}, "additionalProperties": false })json");
+	resume.result_schema = json::parse(R"json({
 		"type": "object",
 		"properties": { "frame": { "type": "integer", "minimum": 0 } },
 		"required": ["frame"],
 		"additionalProperties": false
-	})");
+	})json");
 	resume.invoke = [&control](const cmd::call&) {
 		control.release();
 		return cmd::result::success(json::object{ { "frame", static_cast<std::int64_t>(control.frame()) } });

@@ -762,10 +762,12 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	}
 	// app.advance / app.resume step the editor's whole frame loop: an agent gets them only during Play.
 	if (data.has_value<app::frame_command_registrations>() && data.has_value<app::frame_control>()) {
-		app::frame_command_registrations frame_commands = register_play_frame_commands(data.require<app::frame_command_registrations>(),
-			m_context->actions().commands(), data.require<app::frame_control>(), [this] { return m_play && m_play->active(); });
-		m_registrations.push_back(std::move(frame_commands.advance));
-		m_registrations.push_back(std::move(frame_commands.resume));
+		play_frame_commands frame_commands = register_play_frame_commands(data.require<app::frame_command_registrations>(),
+			m_context->actions().commands(), data.require<app::frame_control>(), [this] { return m_play && m_play->active(); },
+			m_context->events());
+		m_registrations.push_back(std::move(frame_commands.commands.advance));
+		m_registrations.push_back(std::move(frame_commands.commands.resume));
+		m_play_hold_release = std::move(frame_commands.release_on_stop);
 	}
 
 	editor_layer->set_menu_bar_status([this] {

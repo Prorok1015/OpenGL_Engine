@@ -21,16 +21,16 @@ namespace {
 
 	json::value status_schema()
 	{
-		return json::parse(R"({
+		return json::parse(R"json({
 			"type": "object",
 			"properties": {
 				"state": { "type": "string", "enum": ["stopped", "playing", "paused"] },
-				"frame": { "type": "integer", "minimum": 0 },
+				"frame": { "type": "integer", "minimum": 0, "description": "frames the play set simulated since Start (Play and Step frames; 0 when stopped); not app.advance's frame" },
 				"worlds": { "type": "array", "items": { "type": "string" } }
 			},
 			"required": ["state", "frame", "worlds"],
 			"additionalProperties": false
-		})");
+		})json");
 	}
 
 	json::object status_of(const edt::play_session* play)
@@ -80,18 +80,20 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	out.reserve(6);
 
 	cmd::command_desc start = play_command("play.start",
-		"Start Play of the scene as it is edited (saved or not); while paused, resume it. Returns the play status");
+		"Start Play of the scene as it is edited (saved or not); while paused, resume it. Returns the play status "
+		"(frame: frames the play set simulated since Start, not app.advance's frame)");
 	start.enabled = [session] { return session() != nullptr; };
 	start.invoke = [session, unavailable, editing = deps.person_is_editing](const cmd::call& call) {
 		play_session* play = session();
 		if (!play) return unavailable();
-		// Play locks the document: a value the person has not committed yet would be lost.
-		if (call.from.kind == cmd::origin_kind::agent && editing && editing()) {
-			return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
-		}
+		// Resuming touches no document, as play.resume.
 		if (play->state() == play_state::paused) {
 			play->resume(reason_of(call));
 			return cmd::result::success(status_of(play));
+		}
+		// Start locks the document: a value the person has not committed yet would be lost.
+		if (call.from.kind == cmd::origin_kind::agent && editing && editing()) {
+			return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
 		}
 		if (auto refused = play->start_refusal()) return cmd::result::failure(cmd::codes::failed, *refused);
 		if (!play->start(reason_of(call))) return cmd::result::failure(cmd::codes::failed, "Play did not start: see the log");
@@ -128,11 +130,11 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	cmd::command_desc step = play_command("play.step",
 		"While Play is paused, run n (1..600, default 1) frames of one fixed step each on the next frames, then pause again; "
 		"while playing it fails: pause first. Returns the play status (frame counts the step's frames once they ran)");
-	step.args_schema = json::parse(R"({
+	step.args_schema = json::parse(R"json({
 		"type": "object",
 		"properties": { "n": { "type": "integer", "minimum": 1, "maximum": 600, "description": "frames to run, default 1" } },
 		"additionalProperties": false
-	})");
+	})json");
 	step.enabled = [session] {
 		const play_session* play = session();
 		return play && play->active();
@@ -189,18 +191,24 @@ std::vector<edt::registration> edt::register_play_commands(action_registry& acti
 	out.push_back(actions.add(std::move(resume), std::nullopt));
 
 	cmd::command_desc status = play_command("play.status",
-		"The play status: state (stopped, playing, paused), frame (frames simulated since Start), worlds (of Play)");
+		"The play status: state (stopped, playing, paused), frame (frames the play set simulated since Start, Play and Step "
+		"frames only; not app.advance's frame, which counts the editor's frames), worlds (of Play)");
 	status.mutates = false;
 	status.invoke = [session](const cmd::call&) { return cmd::result::success(status_of(session())); };
 	out.push_back(actions.add(std::move(status), std::nullopt));
 	return out;
 }
 
-app::frame_command_registrations edt::register_play_frame_commands(app::frame_command_registrations& core,
-	cmd::command_registry& commands, app::frame_control& control, std::function<bool()> play_active)
+edt::play_frame_commands edt::register_play_frame_commands(app::frame_command_registrations& core,
+	cmd::command_registry& commands, app::frame_control& control, std::function<bool()> play_active, editor_events& events)
 {
 	// First: the same ids again would be refused.
 	core = app::frame_command_registrations{};
-	return app::register_frame_commands(commands, control,
+	play_frame_commands out;
+	out.commands = app::register_frame_commands(commands, control,
 		app::frame_command_options{ .category = cmd::agent_category::play, .enabled = std::move(play_active) });
+	out.release_on_stop = events.play_state_changed.subscribe([&control](play_state state, play_reason) {
+		if (state == play_state::stopped) control.release();
+	});
+	return out;
 }
