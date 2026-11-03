@@ -66,7 +66,6 @@ namespace {
 	struct engine_commands
 	{
 		cmd::registration log;
-		app::frame_command_registrations app_frame;
 	};
 
 	std::optional<engine::log_level> parse_known_log_level(std::string_view str)
@@ -154,7 +153,8 @@ void core::core_module::register_services(ds::app_data_storage& data)
 	data.construct<app::deterministic_time>(time);
 	// The frame loop steps by it on `app.advance`; destroyed after the commands that hold a reference to it.
 	auto& frame_control = data.construct<app::frame_control>(time);
-	data.require<engine_commands>().app_frame = app::register_frame_commands(commands, frame_control);
+	// Its own entry of the storage: a host may drop these and register app.* again with its own options (the editor).
+	data.construct<app::frame_command_registrations>(app::register_frame_commands(commands, frame_control));
 	auto& loop = data.construct<app::app_loop_service_interface, app::loop_service>(stages, time, &frame_control);
 	auto* loop_impl = dynamic_cast<app::loop_service*>(&loop);
 	ASSERT_MSG(loop_impl, "core_module: the frame loop is not app::loop_service");
@@ -236,6 +236,7 @@ void core::core_module::shutdown_services(ds::app_data_storage& data)
 		data.destruct<prj::held_project>();
 	}
 	data.destruct<engine_commands>();
+	data.destruct<app::frame_command_registrations>();
 	data.destruct<app::frame_control>();
 	data.destruct<cmd::command_registry>();
 	data.destruct<ds::task_system>();

@@ -69,6 +69,10 @@ namespace edt
 		std::function<std::string()> dynamic_label;
 		// The shortcut does nothing while a text field has the keyboard: Ctrl+Z there undoes the typing.
 		bool yields_to_text_input = false;
+		// The menu item and the shortcut need it as well as the command's `enabled`: a command an agent may call when
+		// a person may not, so that the agent gets the command's own refusal (play.step while playing). Null: the
+		// command's `enabled` alone.
+		std::function<bool()> enabled{};
 		// What a menu click or the shortcut does: normally asks the user for the arguments (dialog_service)
 		// and then calls registry.invoke. Null: invoke with no arguments, which an action with required
 		// arguments cannot do, so it needs one to have a menu item or a shortcut.
@@ -161,9 +165,10 @@ namespace edt
 
 		// Top-level menus in display order, including declared ones that have no action.
 		std::vector<std::string> menus() const;
-		// Items of one menu in registration order (state of `enabled` is read now).
+		// Items of one menu in registration order (state of `enabled` is read now, action_ui::enabled included).
 		std::vector<menu_item_info> items(std::string_view menu) const;
 
+		// The command's `enabled` (what invoke() checks); the menu and the shortcuts also check action_ui::enabled.
 		bool is_enabled(std::string_view id) const;
 		const cmd::command_desc* find(std::string_view id) const;
 		// The actions an agent may call, in registration order (expose_as_tool).
@@ -189,6 +194,8 @@ namespace edt
 		struct menu_decl;
 
 		std::shared_ptr<ui_entry> find_ui(std::string_view id) const;
+		// What a person may do with it now: the command's `enabled` and action_ui::enabled.
+		bool enabled_for_person(const ui_entry& entry) const;
 
 		std::unique_ptr<cmd::command_registry> m_owned;
 		cmd::command_registry& m_commands;

@@ -182,6 +182,24 @@ std::uint32_t edt::play_session::pending_steps() const
 	return play ? play->pending_steps() : 0u;
 }
 
+std::uint64_t edt::play_session::frames_run() const
+{
+	const auto contexts = m_services.ctx_manager.lock();
+	const scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
+	return play ? play->frames_run() : 0u;
+}
+
+std::vector<std::string> edt::play_session::world_names() const
+{
+	std::vector<std::string> names;
+	const auto contexts = m_services.ctx_manager.lock();
+	scn::context_set* play = contexts && active() ? contexts->find_set(k_play_set) : nullptr;
+	if (!play) return names;
+	names.reserve(play->size());
+	play->for_each([&names](scn::world_context& world) { names.emplace_back(world.get_name()); });
+	return names;
+}
+
 void edt::play_session::set_time_scale(float scale)
 {
 	const auto contexts = m_services.ctx_manager.lock();

@@ -76,6 +76,7 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 		update_context(id, *context, mode);
 	}
 
+	if (mode == ecs::run_mode::play || mode == ecs::run_mode::step) ++m_frames_run;
 	if (mode == ecs::run_mode::step) {
 		if (m_pending_steps > 0) --m_pending_steps;
 		if (m_pending_steps == 0) m_mode = ecs::run_mode::pause;
