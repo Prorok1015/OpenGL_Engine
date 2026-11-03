@@ -3,6 +3,7 @@
 #include <snk/editor/edt_action_registry.h>
 #include "edt_file_menu.h"
 #include "edt_main_menu.h"
+#include "edt_editor_mode.h"
 #include <snk/command/cmd_json_schema.h>
 #include <imgui.h>
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -174,15 +176,19 @@ struct shortcut_frames
 	shortcut_frames& operator=(const shortcut_frames&) = delete;
 
 	// One frame in which `key` goes down (and up again after it); `text_input`: a text field has the keyboard.
-	bool press(edt::action_registry& actions, ImGuiKey key, bool text_input)
+	bool press(edt::action_registry& actions, ImGuiKey key, bool text_input, bool ctrl = false,
+		const std::function<bool(std::string_view)>& allowed = {})
 	{
-		ImGui::GetIO().AddKeyEvent(key, true);
+		ImGuiIO& io = ImGui::GetIO();
+		if (ctrl) io.AddKeyEvent(ImGuiMod_Ctrl, true);
+		io.AddKeyEvent(key, true);
 		ImGui::NewFrame();
 		// NewFrame takes it from the previous frame's widgets; there are none here.
-		ImGui::GetIO().WantTextInput = text_input;
-		const bool fired = edt::fire_shortcuts(actions);
+		io.WantTextInput = text_input;
+		const bool fired = edt::fire_shortcuts(actions, allowed);
 		ImGui::EndFrame();
-		ImGui::GetIO().AddKeyEvent(key, false);
+		io.AddKeyEvent(key, false);
+		if (ctrl) io.AddKeyEvent(ImGuiMod_Ctrl, false);
 		ImGui::NewFrame();
 		ImGui::EndFrame();
 		return fired;
@@ -217,6 +223,36 @@ BOOST_AUTO_TEST_CASE(AShortcutThatYieldsToTextInput_DoesNotFireWhileTextIsTyped)
 	BOOST_TEST(!frames.press(actions, ImGuiKey_F10, false));
 	BOOST_TEST(toggles == 1);
 	BOOST_TEST(saves == 1);
+}
+
+BOOST_AUTO_TEST_CASE(InGameMode_OnlyTheModeToggleAndThePlayShortcutsFire)
+{
+	shortcut_frames frames;
+	edt::action_registry actions;
+	int toggles = 0;
+	int plays = 0;
+	int saves = 0;
+	auto toggle_reg = actions.add(make_action("editor.mode.toggle", "Game Mode", "View", [&] { ++toggles; }, "F11"));
+	auto play_reg = actions.add(make_action("play.start", "Play", "Play", [&] { ++plays; }, "Ctrl+P"));
+	auto save_reg = actions.add(make_action("file.save", "Save", "File", [&] { ++saves; }, "Ctrl+S"));
+	const std::function<bool(std::string_view)> game = edt::is_game_mode_shortcut;
+
+	BOOST_TEST(!frames.press(actions, ImGuiKey_S, false, true, game));
+	BOOST_TEST(saves == 0);
+	BOOST_TEST(frames.press(actions, ImGuiKey_F11, false, false, game));
+	BOOST_TEST(toggles == 1);
+	BOOST_TEST(frames.press(actions, ImGuiKey_P, false, true, game));
+	BOOST_TEST(plays == 1);
+
+	// Editor mode: every shortcut.
+	BOOST_TEST(frames.press(actions, ImGuiKey_S, false, true));
+	BOOST_TEST(saves == 1);
+	BOOST_TEST(frames.press(actions, ImGuiKey_F11, false));
+	BOOST_TEST(toggles == 2);
+
+	for (const char* id : { "play.pause", "play.step", "play.stop" }) BOOST_TEST(edt::is_game_mode_shortcut(id));
+	BOOST_TEST(!edt::is_game_mode_shortcut("play.resume"));
+	BOOST_TEST(!edt::is_game_mode_shortcut("edit.undo"));
 }
 
 BOOST_AUTO_TEST_CASE(DrawingTheMainMenu_FiresNoShortcut)

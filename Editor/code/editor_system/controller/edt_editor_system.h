@@ -209,6 +209,8 @@ namespace edt {
 		connection m_play_hold_release;
 		// Editor or game layout (#294); reset in the destructor before the Play session it pauses and starts.
 		std::unique_ptr<edt::editor_mode_controller> m_modes;
+		// Gives the Scene view's camera its size back when the editor layout returns.
+		connection m_mode_changed;
 		// The last level load ended with the level loaded (not failed or cancelled).
 		bool m_level_load_succeeded = false;
 

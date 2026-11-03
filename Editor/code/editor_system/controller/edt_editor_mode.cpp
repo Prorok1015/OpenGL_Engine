@@ -1,12 +1,30 @@
 #include "edt_editor_mode.h"
 #include "edt_play_session.h"
 #include <snk/common/logger/engine_log.h>
+#include <snk/resource/res_path_sanitize.h>
+#include <format>
 
 std::optional<edt::editor_mode> edt::editor_mode_of(std::string_view name)
 {
 	if (name == "editor") return editor_mode::editor;
 	if (name == "game") return editor_mode::game;
 	return std::nullopt;
+}
+
+bool edt::is_game_mode_shortcut(std::string_view action_id)
+{
+	return action_id == "editor.mode.toggle" || action_id == "play.start" || action_id == "play.pause"
+		|| action_id == "play.step" || action_id == "play.stop";
+}
+
+std::string edt::game_level_problem(std::string_view value)
+{
+	constexpr std::string_view scheme = "res://";
+	if (!value.starts_with(scheme)) return "only a res:// tag is taken (e.g. res://levels/main.desc)";
+	const std::string_view path = value.substr(scheme.size());
+	if (path.find('\\') != std::string_view::npos) return "the path holds '\\'";
+	if (std::string problem = res::portable_path_problem(path); !problem.empty()) return std::format("the path is not portable: {}", problem);
+	return {};
 }
 
 edt::editor_mode_controller::editor_mode_controller(play_session& play, editor_events& events)

@@ -73,7 +73,7 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 	return out;
 }
 
-bool edt::fire_shortcuts(action_registry& actions)
+bool edt::fire_shortcuts(action_registry& actions, const std::function<bool(std::string_view)>& allowed)
 {
 	const ImGuiIO& io = ImGui::GetIO();
 	std::optional<shortcut> pressed;
@@ -82,7 +82,7 @@ bool edt::fire_shortcuts(action_registry& actions)
 		const ImGuiKey key = key_from_name(chord.key);
 		if (key != ImGuiKey_None && ImGui::IsKeyPressed(key, false)) pressed = chord;
 	});
-	return pressed && actions.dispatch(*pressed, io.WantTextInput);
+	return pressed && actions.dispatch(*pressed, io.WantTextInput, allowed);
 }
 
 void edt::draw_main_menu(action_registry& actions, panel_registry& panels)

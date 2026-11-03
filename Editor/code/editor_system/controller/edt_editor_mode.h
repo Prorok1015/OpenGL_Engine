@@ -11,6 +11,14 @@ namespace edt
 	// "editor" / "game" (editor/start_mode, the mode argument of editor.mode.toggle); nullopt for anything else.
 	std::optional<editor_mode> editor_mode_of(std::string_view name);
 
+	// The actions whose shortcuts fire in game mode: editor.mode.toggle and the Play menu. Every other key belongs to
+	// the game there.
+	bool is_game_mode_shortcut(std::string_view action_id);
+
+	// Why `value` of --game=<level> (editor/game_level) cannot be the start level; empty when it can. Only a res:// tag
+	// with a portable relative path (res::portable_path_problem) is taken, never a file system path or another scheme.
+	std::string game_level_problem(std::string_view value);
+
 	// Which layout the editor shows (#294, AI_INTEGRATION.md §3.8) and what that does to Play: game mode plays, editor
 	// mode edits. Going to the editor pauses a running Play and remembers that it did; going back to the game resumes
 	// only that pause (a pause someone else made stays), and starts Play when it is stopped. The note is dropped by any

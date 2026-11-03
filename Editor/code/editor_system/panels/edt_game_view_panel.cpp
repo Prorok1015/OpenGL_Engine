@@ -136,11 +136,8 @@ namespace edt
 			}
 			// Bindings are cleared every frame; the whole window is the game's, hovered or not.
 			if (m_router && m_input_target) {
-				if (const auto target = m_input_target()) {
-					const ImVec2 fb_scale = ImGui::GetIO().DisplayFramebufferScale;
-					m_router->bind(*target, make_input_area({ viewport->Pos.x, viewport->Pos.y },
-						{ viewport->Size.x, viewport->Size.y }, { fb_scale.x, fb_scale.y }));
-				}
+				bind_game_window_input(m_router, m_input_target(), { viewport->Pos.x, viewport->Pos.y },
+					{ viewport->Size.x, viewport->Size.y }, m_input_blocked && m_input_blocked());
 			}
 		} else {
 			on_hidden();

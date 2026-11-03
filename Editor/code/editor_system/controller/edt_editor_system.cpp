@@ -141,6 +141,8 @@ namespace {
 	// "game" (--game, #294): once the start level has loaded, the Game view fills the window and Play starts; "editor":
 	// the panels. Anything else warns and is "editor".
 	CFG_VAR_DEF_STRING(cfg_start_mode, "editor/start_mode", "editor");
+	// --game=res://<level>: the level game mode starts on, instead of editor/startup_level. Only a res:// tag is taken.
+	CFG_VAR_DEF_STRING(cfg_game_level, "editor/game_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
 	// The run ends with 0 right after the first successful level load (CI: the headless run proves the level loaded).
@@ -210,7 +212,8 @@ edt::editor_system::~editor_system()
 	m_session_connections.clear();
 	m_agent_access.reset();
 	// The layer may outlive this system: no game layout drawn through it any more.
-	if (editor_layer) editor_layer->set_game_layout(nullptr, nullptr);
+	if (editor_layer) editor_layer->set_game_layout(nullptr, nullptr, nullptr);
+	m_mode_changed.disconnect();
 	m_modes.reset();
 	if (m_play) {
 		// Stop brings the level back and reports through the context: only while the context is there.
@@ -577,6 +580,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		egLOG_WARN("editor", "editor/start_mode '{}' is neither 'editor' nor 'game': the editor starts in editor mode", *cfg_start_mode);
 	}
 	const bool start_in_game = start_mode == editor_mode::game;
+	if (start_in_game && !cfg_game_level->empty()) {
+		if (const std::string problem = game_level_problem(*cfg_game_level); problem.empty()) {
+			startup_level = *cfg_game_level;
+		} else {
+			// Never read as a file path; and no other level stands in for the one asked for.
+			egLOG_ERROR("editor", "--game='{}' is not taken: {}; no level is loaded at startup", *cfg_game_level, problem);
+			startup_level.clear();
+		}
+	}
 	if (start_in_game && (project_held || startup_level.empty())) {
 		egLOG_WARN("editor", "game mode needs a start level (--game=<level>, editor/startup_level or the project's start "
 			"scene) and none is loaded: the editor starts in editor mode");
@@ -818,7 +830,18 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		m_registrations.push_back(std::move(command));
 	}
 	editor_layer->set_game_layout([this] { return m_modes && m_modes->mode() == editor_mode::game; },
-		[this] { m_game_view_panel->render_fullscreen(); });
+		[this] {
+			m_viewport_panel->suspend_camera();
+			m_game_view_panel->render_fullscreen();
+		},
+		is_game_mode_shortcut);
+	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
+		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
+	});
+	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
+	m_game_view_panel->set_input_blocked([this] {
+		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
+	});
 
 	editor_layer->set_menu_bar_status([this] {
 		draw_play_status();

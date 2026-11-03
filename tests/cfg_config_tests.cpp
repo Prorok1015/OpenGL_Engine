@@ -376,40 +376,47 @@ BOOST_AUTO_TEST_CASE(Cli_AgentPolicyIsAPathRelativeToTheWorkingDirectory)
 }
 
 // --game (#294): the variables stand in for the editor's of the same names; the real ones take the values too, so each
-// test puts them back.
-BOOST_AUTO_TEST_CASE(Cli_GameAloneSetsTheStartModeAndKeepsTheStartLevel)
+// test puts them back. The level goes to editor/game_level, never to editor/startup_level: the editor takes it only as a
+// res:// tag (edt::game_level_problem, EdtGameModeUiTests).
+BOOST_AUTO_TEST_CASE(Cli_GameAloneSetsTheStartModeAndNoLevel)
 {
 	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
 	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
 	run_cli({ "-s", "editor/startup_level", "levels/kept.desc" });
 	BOOST_TEST(run_cli({ "--game" }) == 1);
 	BOOST_TEST(*start_mode == "game");
+	BOOST_TEST(game_level->empty());
 	BOOST_TEST(*startup_level == "levels/kept.desc");
 	run_cli({ "-s", "editor/start_mode", "editor", "editor/startup_level", "" });
 	BOOST_TEST(*start_mode == "editor");
 }
 
-BOOST_AUTO_TEST_CASE(Cli_GameWithALevelSetsTheStartLevelAsWritten)
+BOOST_AUTO_TEST_CASE(Cli_GameWithALevelSetsTheGameLevelAsWritten)
 {
 	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
 	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
-	BOOST_TEST(run_cli({ "--game=levels/smoke_level.desc" }) == 1);
+	BOOST_TEST(run_cli({ "--game=res://levels/smoke_level.desc" }) == 1);
 	BOOST_TEST(*start_mode == "game");
-	// A resource path like editor/startup_level always takes, not a file of the working directory.
-	BOOST_TEST(*startup_level == "levels/smoke_level.desc");
-	run_cli({ "-s", "editor/start_mode", "editor", "editor/startup_level", "" });
+	BOOST_TEST(*game_level == "res://levels/smoke_level.desc");
 	BOOST_TEST(startup_level->empty());
+	// Not a res:// tag: still stored as written (no path is resolved here); the editor refuses it at startup.
+	BOOST_TEST(run_cli({ "--game=../levels/main.desc" }) == 1);
+	BOOST_TEST(*game_level == "../levels/main.desc");
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/game_level", "" });
+	BOOST_TEST(game_level->empty());
 }
 
 BOOST_AUTO_TEST_CASE(Cli_GameLosesToSet)
 {
 	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
-	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
-	BOOST_TEST(run_cli({ "--game=levels/a.desc", "-s", "editor/start_mode", "editor", "editor/startup_level", "levels/b.desc" }) == 1);
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	BOOST_TEST(run_cli({ "--game=res://levels/a.desc", "-s", "editor/start_mode", "editor", "editor/game_level", "res://levels/b.desc" }) == 1);
 	BOOST_TEST(*start_mode == "editor");
-	BOOST_TEST(*startup_level == "levels/b.desc");
-	run_cli({ "-s", "editor/startup_level", "" });
-	BOOST_TEST(startup_level->empty());
+	BOOST_TEST(*game_level == "res://levels/b.desc");
+	run_cli({ "-s", "editor/game_level", "" });
+	BOOST_TEST(game_level->empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
