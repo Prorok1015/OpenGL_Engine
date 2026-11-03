@@ -87,6 +87,8 @@ namespace {
 		std::vector<std::string> allowed_remotes;
 		// Guarded: the project's agent policy file (absolute; empty: none), which a checkout or pull must not change.
 		fs::path policy_file;
+		// git 2.30+: rev-parse takes --end-of-options.
+		bool rev_parse_end_of_options = false;
 	};
 
 	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
@@ -1337,11 +1339,32 @@ namespace {
 		return failure;
 	}
 
+	// A revision that git cannot read as an option or a range, so rev-parse needs no --end-of-options for it.
+	bool is_single_revision(std::string_view revision)
+	{
+		return !revision.empty() && revision.front() != '-' && revision.find("..") == std::string_view::npos;
+	}
+
+	// `rev-parse <options> [--end-of-options] <revisions>`: git before 2.30 does not know --end-of-options, and gets only
+	// revisions is_single_revision passed.
+	std::vector<std::string> rev_parse_args(const git_context& git, std::initializer_list<std::string_view> options,
+		const std::vector<std::string>& revisions)
+	{
+		std::vector<std::string> args{ "rev-parse" };
+		for (const std::string_view option : options) args.emplace_back(option);
+		if (git.rev_parse_end_of_options) args.emplace_back("--end-of-options");
+		args.insert(args.end(), revisions.begin(), revisions.end());
+		return args;
+	}
+
 	// `revision` peeled to a commit, as its full object name.
 	std::optional<json::value> resolve_commit(const git_context& git, std::string_view revision, const ds::task_context& task,
 		std::string& oid)
 	{
-		const git_output out = run_git(git, { "rev-parse", "--verify", "--end-of-options", std::string(revision) + "^{commit}" },
+		if (!is_single_revision(revision)) {
+			return error_json("bad_revision", "a revision must not start with '-' nor name a range", {}, -1);
+		}
+		const git_output out = run_git(git, rev_parse_args(git, { "--verify" }, { std::string(revision) + "^{commit}" }),
 			task.stop, k_read_cap);
 		if (auto failure = revision_failure_of(out, task)) return failure;
 		oid = std::string(trim(out.out));
@@ -1354,8 +1377,7 @@ namespace {
 		std::string& oid, std::optional<std::string>& parent)
 	{
 		if (auto failure = resolve_commit(git, commit, task, oid)) return failure;
-		const git_output first = run_git(git, { "rev-parse", "--verify", "--quiet", "--end-of-options", oid + "^1" },
-			task.stop, k_read_cap);
+		const git_output first = run_git(git, rev_parse_args(git, { "--verify", "--quiet" }, { oid + "^1" }), task.stop, k_read_cap);
 		if (task.stop.stop_requested()) throw ds::task_cancelled{};
 		if (first.process.error.empty() && first.process.exit_code == 0) {
 			std::string found(trim(first.out));
@@ -1387,7 +1409,32 @@ namespace {
 			"refs/tags" }, task.stop, k_read_cap);
 		if (auto failure = failure_of(refs, task)) return failure;
 		if (refs.truncated) return error_json("git_failed", "the repository has too many refs to list", {}, -1);
-		tips = edt::vcs::parse_tip_commits(refs.out);
+		edt::vcs::tip_list listed = edt::vcs::parse_tips(refs.out);
+		tips = std::move(listed.commits);
+		const auto add_tip = [&tips](std::string oid) {
+			if (std::find(tips.begin(), tips.end(), oid) == tips.end()) tips.push_back(std::move(oid));
+		};
+		// A tag of a tag: one rev-parse per chunk; if one of them peels to no commit (a tag of a tree), each alone.
+		for (std::size_t start = 0; start < listed.nested_tags.size(); start += k_tip_chunk) {
+			const std::size_t end = std::min(listed.nested_tags.size(), start + k_tip_chunk);
+			std::vector<std::string> peel;
+			for (std::size_t i = start; i < end; ++i) peel.push_back(listed.nested_tags[i] + "^{commit}");
+			const git_output batch = run_git(git, rev_parse_args(git, {}, peel), task.stop, k_read_cap);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			const auto peeled = lines_of(batch.out);
+			if (succeeded(batch) && peeled.size() == peel.size() && std::all_of(peeled.begin(), peeled.end(), is_full_oid)) {
+				for (const std::string_view oid : peeled) add_tip(std::string(oid));
+				continue;
+			}
+			for (const auto& one : peel) {
+				const git_output out = run_git(git, rev_parse_args(git, { "--verify", "--quiet" }, { one }), task.stop, k_read_cap);
+				if (task.stop.stop_requested()) throw ds::task_cancelled{};
+				const std::string oid(trim(out.out));
+				// git ran and found no commit under it (a tag of a tree): left out, like a plain tag of a tree.
+				if (succeeded(out) && is_full_oid(oid)) add_tip(oid);
+				else if (!out.process.error.empty()) return failure_of(out, task);
+			}
+		}
 		while (bytes_of(tips) > k_max_tip_bytes) {
 			std::vector<std::string> independent;
 			for (std::size_t start = 0; start < tips.size(); start += k_tip_chunk) {
@@ -1476,6 +1523,7 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
 	git_context context = make_context(m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run);
+	context.rev_parse_end_of_options = version_at_least(m_state.git_version, 2, 30);
 	// Everything not from a person (agent, test, game) takes the guarded path.
 	const bool guarded = write && write->caller != cmd::origin_kind::ui;
 	// The network checks read the config with --show-scope (git 2.26).
@@ -1707,6 +1755,7 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 	const std::string& cursor, const log_filter& filter)
 {
 	if (!ref.empty() && ref.front() == '-') return { 0, cmd::codes::invalid_args, "ref must not start with '-'" };
+	if (ref.find("..") != std::string::npos) return { 0, cmd::codes::invalid_args, "ref must name one revision, not a range" };
 	if (filter.all && !ref.empty()) return { 0, cmd::codes::invalid_args, "all and ref cannot be given together" };
 	if (auto error = filter_error("author", filter.author)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (auto error = filter_error("grep", filter.grep)) return { 0, cmd::codes::invalid_args, std::move(*error) };
@@ -2307,7 +2356,8 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	diff.id = "vcs.diff";
 	diff.category = cmd::agent_category::vcs_read;
 	diff.summary = "Start reading the working tree diff (or the staged one, or what a commit changed against its first "
-		"parent), of one path or all; text capped at 256 KiB; the result arrives in job.get";
+		"parent), of one path or all; text capped at 256 KiB; the result arrives in job.get. With commit and path, a file "
+		"the commit renamed shows as added (renames are found only among the files of the path)";
 	diff.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {

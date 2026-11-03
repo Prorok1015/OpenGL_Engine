@@ -342,10 +342,10 @@ bool edt::vcs::is_hex_object_name(std::string_view text)
 		[](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); });
 }
 
-std::vector<std::string> edt::vcs::parse_tip_commits(std::string_view output)
+edt::vcs::tip_list edt::vcs::parse_tips(std::string_view output)
 {
 	const auto full_oid = [](std::string_view oid) { return (oid.size() == 40 || oid.size() == 64) && is_hex_object_name(oid); };
-	std::vector<std::string> out;
+	tip_list out;
 	std::unordered_set<std::string_view> seen;
 	for (std::string_view line : split_keep_empty(output, '\n')) {
 		if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
@@ -356,9 +356,13 @@ std::vector<std::string> edt::vcs::parse_tip_commits(std::string_view output)
 			commit = fields[0];
 		} else if (fields[1] == "tag" && fields.size() >= 4 && fields[3] == "commit") {
 			commit = fields[2];
+		} else if (fields[1] == "tag" && fields.size() >= 4 && fields[3] == "tag") {
+			// One level of %(*...) peels only to the next tag: git peels the outer one to its commit.
+			if (full_oid(fields[0]) && seen.insert(fields[0]).second) out.nested_tags.emplace_back(fields[0]);
+			continue;
 		}
 		if (!full_oid(commit) || !seen.insert(commit).second) continue;
-		out.emplace_back(commit);
+		out.commits.emplace_back(commit);
 	}
 	return out;
 }

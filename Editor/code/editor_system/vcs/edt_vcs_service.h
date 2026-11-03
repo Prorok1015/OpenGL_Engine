@@ -115,7 +115,8 @@ namespace edt
 		started start_status();
 		// `path` empty: the whole tree. `staged`: the index against HEAD.
 		started start_diff(const std::string& path, bool staged);
-		// The change `commit` (4..64 hex digits) made to `path` (empty: every file), against its first parent.
+		// The change `commit` (4..64 hex digits) made to `path` (empty: every file), against its first parent. With a
+		// path, a file the commit renamed shows as added: rename detection sees only the files of the path.
 		started start_commit_diff(const std::string& commit, const std::string& path);
 		// `ref` empty: HEAD. `limit` is clamped to [1, k_max_log_limit]. `cursor` is the next_cursor of a page (empty:
 		// the first page). The first page resolves its tips to commits once and keeps them as a snapshot (at most

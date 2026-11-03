@@ -297,10 +297,16 @@ struct vcs_fixture
 	// An empty commit by `author` with author and committer date `time` (unix seconds).
 	void commit_at(const fs::path& repo, std::string_view message, std::int64_t time, std::string_view author = "Test User")
 	{
+		git_at(repo, { "-c", "user.name=" + std::string(author), "commit", "-q", "--allow-empty", "-m", std::string(message) }, time);
+	}
+
+	// git with author and committer date `time` (unix seconds).
+	void git_at(const fs::path& repo, const std::vector<std::string>& args, std::int64_t time)
+	{
 		const std::vector<std::string> saved = environment;
 		edt::set_variable(environment, "GIT_AUTHOR_DATE", std::format("{} +0000", time));
 		edt::set_variable(environment, "GIT_COMMITTER_DATE", std::format("{} +0000", time));
-		git(repo, { "-c", "user.name=" + std::string(author), "commit", "-q", "--allow-empty", "-m", std::string(message) });
+		git(repo, args);
 		environment = saved;
 	}
 
@@ -592,6 +598,73 @@ BOOST_AUTO_TEST_CASE(RealRepository_LogOfAll_ShowsEveryBranchAndTag_WithTheirRef
 	BOOST_TEST((subjects_of(finish(service->start_log({}, {}, 50, {}))) == std::vector<std::string>{ "m2", "m1" }));
 	BOOST_TEST((subjects_of(finish(service->start_log("v1", {}, 50, {}))) == std::vector<std::string>{ "f1", "m1" }));
 	BOOST_TEST(is_error(finish(service->start_log("no-such-branch", {}, 50, {})), "bad_revision"));
+}
+
+// A tag of a tag of a commit no branch reaches: `all` peels it to that commit; a tag of a tag of a tree is left out.
+BOOST_AUTO_TEST_CASE(RealRepository_LogOfAll_PeelsATagOfATag)
+{
+	isolate_config();
+	const fs::path repo = make_empty_repository("nested");
+	commit_at(repo, "on main", 1000);
+	git(repo, { "tag", "-a", "tree_tag", "-m", "a tree", "HEAD^{tree}" });
+	git(repo, { "tag", "-a", "tree_tag_tag", "-m", "a tag of a tree tag", "tree_tag" });
+	git(repo, { "checkout", "-q", "-b", "gone" });
+	commit_at(repo, "only tagged", 2000);
+	git(repo, { "tag", "-a", "inner", "-m", "inner" });
+	git(repo, { "tag", "-a", "outer", "-m", "outer", "inner" });
+	git(repo, { "checkout", "-q", "main" });
+	git(repo, { "branch", "-D", "gone" });
+	git(repo, { "tag", "-d", "inner" });
+	make_service(real_options(repo));
+
+	edt::vcs_service::log_filter all;
+	all.all = true;
+	const json::value page = finish(service->start_log({}, {}, 50, {}, all));
+	BOOST_TEST_INFO("log: " << json::serialize(page));
+	BOOST_TEST((subjects_of(page) == std::vector<std::string>{ "only tagged", "on main" }));
+}
+
+// Owner decision: --date-order. Dates out of creation order: P (5000) is the parent of C (2000) on main, S (3000) a
+// child of P on side, X (7000) merges side into main. Children come before their parents, otherwise newest first; the
+// default order would show P before its child C.
+BOOST_AUTO_TEST_CASE(RealRepository_Log_IsInDateOrder_ChildrenBeforeParents)
+{
+	isolate_config();
+	const fs::path repo = make_empty_repository("dates");
+	commit_at(repo, "B", 1000);
+	commit_at(repo, "P", 5000);
+	git(repo, { "branch", "side" });
+	commit_at(repo, "C", 2000);
+	git(repo, { "checkout", "-q", "side" });
+	commit_at(repo, "S", 3000);
+	git(repo, { "checkout", "-q", "main" });
+	git_at(repo, { "merge", "-q", "--no-ff", "-m", "X", "side" }, 7000);
+	make_service(real_options(repo));
+
+	const json::value page = finish(service->start_log({}, {}, 50, {}));
+	BOOST_TEST_INFO("log: " << json::serialize(page));
+	const std::vector<std::string> order = subjects_of(page);
+	BOOST_TEST((order == std::vector<std::string>{ "X", "S", "C", "P", "B" }));
+	const auto hashes = hashes_of(page);
+	const json::array& commits = page.as_object().at("commits").as_array();
+	for (std::size_t i = 0; i < commits.size(); ++i) {
+		for (const auto& parent : commits[i].as_object().at("parents").as_array()) {
+			const auto at = std::find(hashes.begin(), hashes.end(), text(parent));
+			BOOST_TEST((at != hashes.end() && static_cast<std::size_t>(at - hashes.begin()) > i), order[i]);
+		}
+	}
+	const std::string plain = git_text(repo, { "log", "--format=%s" });
+	std::vector<std::string> default_order;
+	std::string_view rest = plain;
+	while (!rest.empty()) {
+		const std::size_t end = rest.find('\n');
+		std::string_view line = rest.substr(0, end);
+		if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+		if (!line.empty()) default_order.emplace_back(line);
+		if (end == std::string_view::npos) break;
+		rest.remove_prefix(end + 1);
+	}
+	BOOST_TEST((default_order != order), "the default order matches the date order: this test proves nothing");
 }
 
 BOOST_AUTO_TEST_CASE(RealRepository_LogFilters_AreLiteralAndIgnoreCase)
@@ -2527,6 +2600,70 @@ BOOST_AUTO_TEST_CASE(ShowFilesAndCommitDiff_RunDiffTreeAgainstTheFirstParent)
 	BOOST_TEST(diff[diff.size() - 2] == "--");
 	BOOST_TEST(diff.back() == "dir/f.txt");
 	BOOST_TEST(std::any_of(diff.begin(), diff.end(), [](const std::string& a) { return a.starts_with("core.hooksPath="); }));
+}
+
+// rev-parse takes --end-of-options from git 2.30 (the probed version); older git gets the revision alone, which the
+// checks before keep from reading as an option ('-') or a range ("..").
+BOOST_AUTO_TEST_CASE(RevParse_TakesEndOfOptions_OnlyFromGit2_30)
+{
+	const std::string oid(40, 'c');
+	const std::string parent(40, 'd');
+	command = [&oid, &parent](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "rev-parse")) on_line((args.back().ends_with("^1") ? parent : oid) + "\n");
+		return exited(0);
+	};
+	const auto verifies = [this] {
+		std::vector<std::vector<std::string>> out;
+		for (const auto& call : calls) {
+			const auto at = std::find(call.begin(), call.end(), "rev-parse");
+			if (at != call.end() && has_arg(call, "--verify")) out.emplace_back(at, call.end());
+		}
+		return out;
+	};
+	for (const char* version : { "2.29.3", "2.30.0", "2.45.1" }) {
+		BOOST_TEST_CONTEXT(version) {
+			auto options = fake_options();
+			options.run = [this, inner = options.run, answer = std::format("git version {}\n", version)](const fs::path& git,
+				const std::vector<std::string>& args, const platform::process_options& opts,
+				const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+				if (has_arg(args, "--version")) {
+					on_line(answer);
+					return exited(0);
+				}
+				if (has_arg(args, "rev-parse") && has_arg(args, "--verify")) {
+					calls.push_back(args);
+					return command(args, opts, on_line, stop);
+				}
+				return inner(git, args, opts, on_line, stop);
+			};
+			make_service(std::move(options));
+			calls.clear();
+			const bool end_of_options = std::string_view(version) != "2.29.3";
+			const auto expect = [end_of_options](std::vector<std::string> args) {
+				if (end_of_options) args.insert(args.end() - 1, "--end-of-options");
+				return args;
+			};
+
+			finish(service->start_log("main", {}, 10, {}));
+			finish(service->start_show_files("cafe"));
+			finish(service->start_commit_diff("cafe", "a.txt"));
+			const std::vector<std::vector<std::string>> expected{
+				expect({ "rev-parse", "--verify", "main^{commit}" }),
+				expect({ "rev-parse", "--verify", "cafe^{commit}" }),
+				expect({ "rev-parse", "--verify", "--quiet", oid + "^1" }),
+				expect({ "rev-parse", "--verify", "cafe^{commit}" }),
+				expect({ "rev-parse", "--verify", "--quiet", oid + "^1" }) };
+			BOOST_TEST((verifies() == expected));
+
+			const std::size_t before = calls.size();
+			BOOST_TEST(service->start_log("main..topic", {}, 10, {}).code == cmd::codes::invalid_args);
+			BOOST_TEST(service->start_log("-n1", {}, 10, {}).code == cmd::codes::invalid_args);
+			BOOST_TEST(service->start_show_files("-abc").code == cmd::codes::invalid_args);
+			run_to_end();
+			BOOST_TEST(calls.size() == before);
+		}
+	}
 }
 
 BOOST_AUTO_TEST_CASE(Status_IsCappedAtFourMiB_AndKeepsOnlyWholeRecords)

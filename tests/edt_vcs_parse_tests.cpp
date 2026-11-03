@@ -231,17 +231,22 @@ BOOST_AUTO_TEST_CASE(TipCommits_PeelTagsAndSkipWhatIsNoCommit)
 	const std::string c(64, 'c');
 	const std::string t(40, 'e');
 	const std::string tree(40, 'f');
+	const std::string nested(40, '1');
 	const std::string output = a + " commit  \n"
 		+ a + " commit  \r\n"                 // a second ref of the same commit
 		+ t + " tag " + b + " commit\n"        // an annotated tag
 		+ t + " tag " + tree + " tree\n"       // a tag of a tree
+		+ nested + " tag " + t + " tag\n"      // a tag of a tag: git peels it
+		+ nested + " tag " + t + " tag\n"
 		+ tree + " tree  \n"
 		+ c + " commit  \n"
 		+ "xyz commit  \n"
 		+ "\n";
-	const auto tips = edt::vcs::parse_tip_commits(output);
-	BOOST_TEST((tips == std::vector<std::string>{ a, b, c }));
-	BOOST_TEST(edt::vcs::parse_tip_commits("").empty());
+	const auto tips = edt::vcs::parse_tips(output);
+	BOOST_TEST((tips.commits == std::vector<std::string>{ a, b, c }));
+	BOOST_TEST((tips.nested_tags == std::vector<std::string>{ nested }));
+	BOOST_TEST(edt::vcs::parse_tips("").commits.empty());
+	BOOST_TEST(edt::vcs::parse_tips("").nested_tags.empty());
 }
 
 BOOST_AUTO_TEST_CASE(HexObjectName_Is4To64HexDigits)

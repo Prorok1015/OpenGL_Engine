@@ -90,9 +90,17 @@ namespace edt::vcs
 	// The format given to `git for-each-ref` for the tips of a log over every branch, remote branch and tag.
 	inline constexpr std::string_view k_tip_format = "--format=%(objectname) %(objecttype) %(*objectname) %(*objecttype)";
 
-	// `git for-each-ref <k_tip_format>`: the commit each ref names (a tag peeled to its commit), each once, in order.
-	// A ref to anything else (a tag of a tree) is left out, and so is a line without a hex object name.
-	std::vector<std::string> parse_tip_commits(std::string_view output);
+	struct tip_list
+	{
+		// The commit each ref names (a tag peeled to its commit), each once, in order.
+		std::vector<std::string> commits;
+		// Tags whose first peel is a tag again: to be peeled to a commit by git (rev-parse <tag>^{commit}).
+		std::vector<std::string> nested_tags;
+	};
+
+	// `git for-each-ref <k_tip_format>`. A ref to anything else (a tag of a tree) is left out, and so is a line without
+	// a full hex object name.
+	tip_list parse_tips(std::string_view output);
 
 	// 4..64 hex digits: an abbreviated or full object name, never an option or a revision expression.
 	bool is_hex_object_name(std::string_view text);
