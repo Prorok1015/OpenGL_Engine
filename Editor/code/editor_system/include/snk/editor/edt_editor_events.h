@@ -162,6 +162,18 @@ namespace edt
 		bool background = false;
 	};
 
+	// What an agent changed outside the scene (A7 #451: a code file written, created, deleted, renamed), for the agent's
+	// status bar (#449).
+	struct agent_action_info
+	{
+		std::string command;
+		// What it acted on: a code:// path ("src/game.cpp"); "from -> to" for a rename.
+		std::string target;
+		std::size_t bytes = 0;
+		// The MCP session of the agent.
+		std::string session;
+	};
+
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
 	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
@@ -187,5 +199,7 @@ namespace edt
 		signal<const game_module_build_result&> game_module_built;
 		// The problems of one source were replaced or cleared (problem_list).
 		signal<const std::string&> problems_changed; // (source)
+		// An agent's call changed something outside the scene (code.write/create/delete/rename), after it happened.
+		signal<const agent_action_info&> agent_action;
 	};
 }
