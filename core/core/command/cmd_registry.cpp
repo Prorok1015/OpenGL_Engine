@@ -129,6 +129,9 @@ cmd::result cmd::command_registry::invoke(std::string_view id, const call& reque
 	if (it == m_commands.end()) return result::failure(codes::not_found, std::format("no command '{}'", id));
 	// Held while it runs: the command may unregister itself.
 	const std::shared_ptr<entry> command = *it;
+	if (m_headless && command->desc.needs_display) {
+		return result::failure(codes::unavailable_headless, std::format("'{}' needs a display; this editor runs headless", id));
+	}
 	if (!command->is_enabled()) return result::failure(codes::disabled, std::format("command '{}' is disabled", id));
 	if (!request.args.is_object()) return result::failure(codes::invalid_args, std::format("invalid arguments for '{}': expected an object", id));
 	// Before the schema: a call that is refused learns nothing about the arguments.

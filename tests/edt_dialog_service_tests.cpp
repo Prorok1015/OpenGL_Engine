@@ -4,11 +4,13 @@
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/editor/edt_service_commands.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <snk/window/wnd_null_window_system.h>
 #include <boost/json/parse.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -17,6 +19,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -347,6 +350,57 @@ BOOST_AUTO_TEST_CASE(AutoAnswer_CancelAllReportsCancelOnlyForTheUnsavedPrompt)
 
 	BOOST_TEST((got == std::vector<std::string>{ "cancel" }));
 	BOOST_TEST(service.pending() == 0u);
+}
+
+// The editor's headless auto answer (#452 PR-3): nothing waits, nothing is drawn (there is no ImGui context here), and each
+// dismissed dialog is one WARN.
+BOOST_AUTO_TEST_CASE(AutoAnswer_Headless_DismissesEveryKindAndWarnsOncePerDialog)
+{
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "dialog") warnings.emplace_back(message);
+	});
+	edt::dialog_auto_answer nobody;
+	nobody.cancel_all = true;
+	nobody.warn_headless = true;
+	service.set_auto_answer(nobody);
+
+	std::vector<std::string> got;
+	std::vector<std::optional<std::size_t>> chosen;
+	service.confirm_unsaved([&](edt::unsaved_choice c) { got.push_back(c == edt::unsaved_choice::cancel ? "cancel" : "other"); });
+	service.pick_file({ "Import Model", {}, {} }, [&](const std::filesystem::path&) { got.push_back("file"); });
+	service.save_as("start", [&](const std::string&) { got.push_back("path"); });
+	service.choose("Engine Version", "Which one?", { "A", "B" }, [&](std::optional<std::size_t> picked) { chosen.push_back(picked); });
+	service.message(edt::message_level::error, "it broke");
+	for (int i = 0; i < 5; ++i) gui.frame();
+
+	BOOST_TEST((got == std::vector<std::string>{ "cancel" }));
+	BOOST_REQUIRE(chosen.size() == 1u);
+	BOOST_TEST(!chosen[0].has_value());
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST((warnings == std::vector<std::string>{
+		"headless: 'Unsaved Changes' cancelled: nobody to answer",
+		"headless: 'Import Model' cancelled: nobody to answer",
+		"headless: 'Save Level' cancelled: nobody to answer",
+		"headless: 'Engine Version' cancelled: nobody to answer",
+		"headless: 'Error: it broke' cancelled: nobody to answer",
+	}));
+}
+
+BOOST_AUTO_TEST_CASE(AutoAnswer_CancelAllWithoutHeadless_LogsNothing)
+{
+	std::size_t warnings = 0;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view) {
+		if (level == engine::log_level::warn && category == "dialog") ++warnings;
+	});
+	edt::dialog_auto_answer answer;
+	answer.cancel_all = true;
+	service.set_auto_answer(answer);
+	service.message(edt::message_level::info, "x");
+	gui.frame();
+
+	BOOST_TEST(service.pending() == 0u);
+	BOOST_TEST(warnings == 0u);
 }
 
 // What Esc does to a modal: ImGui closes the popup, the request must not reopen it but resolve as cancelled.

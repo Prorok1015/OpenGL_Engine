@@ -153,6 +153,9 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
+	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run
+	// (agent_policy::set_preanswers_file). Relative to the working directory.
+	CFG_VAR_DEF_PATH(cfg_agent_policy_file, "editor/agent_policy_file", "");
 	// Build > Build Game (#434). Empty paths: found by the editor (see game_build_sdk_dir, edt_toolchain.h).
 	CFG_VAR_DEF_PATH(cfg_build_sdk_dir, "build/sdk_dir", "");
 	CFG_VAR_DEF_PATH(cfg_build_cmake, "build/cmake", "");
@@ -255,6 +258,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_context->dialogs().set_registrar([this](std::string_view id, std::function<bool()> draw) {
 		editor_layer->register_implicit(id, std::move(draw));
 	});
+	const bool headless = cfg_edt_headless || *cfg_window_system == "null";
+	if (headless) {
+		data.require<cmd::command_registry>().set_headless(true);
+		// Nobody answers a dialog: it is dismissed at once instead of waiting forever (dialog.answer is not for agents).
+		dialog_auto_answer nobody;
+		nobody.cancel_all = true;
+		nobody.warn_headless = true;
+		m_context->dialogs().set_auto_answer(nobody);
+	}
 	// The panels own input routing: whichever scene image is hovered feeds its context, nothing else does.
 	m_input_router = &data.require<inp::input_router>();
 	m_input_router->set_default_target(std::nullopt);
@@ -568,7 +580,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}));
 	}
 
-	const bool headless = cfg_edt_headless || *cfg_window_system == "null";
 	bool stdio = cfg_mcp_stdio;
 	if (stdio && !data.has_value<platform::protocol_stdout>()) {
 		egLOG_ERROR("mcp", "editor/mcp_stdio needs the --mcp-stdio option (stdout must belong to the protocol): no stdio transport");
@@ -611,6 +622,14 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_agent_access->set_questions_routed(true);
 		// A person is here to approve a looser project policy only with a window; headless never loosens (#483).
 		m_agent_access->policy().set_approval_allowed(!headless);
+		m_agent_access->set_headless(headless);
+		if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
+			if (headless) {
+				m_agent_access->policy().set_preanswers_file(preanswers, options.project_dir);
+			} else {
+				egLOG_WARN("agent", "--agent-policy ignored: not headless ({})", utf8_of(preanswers));
+			}
+		}
 		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
 		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
 			if (m_agent_access == nullptr) return false;
@@ -657,6 +676,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			registration added = register_editor_quit(commands, std::move(quit));
 			if (added.active()) m_registrations.push_back(std::move(added));
 		}
+	} else if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
+		egLOG_WARN("agent", "--agent-policy {} is not used: no agent server (editor/agent_server or --mcp-stdio)", utf8_of(preanswers));
 	}
 }
 

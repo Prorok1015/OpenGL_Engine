@@ -32,6 +32,9 @@ namespace edt
 		std::optional<std::filesystem::path> picked_file;
 		// Dismiss every dialog with no answer (an unsaved prompt still reports `cancel`).
 		bool cancel_all = false;
+		// With cancel_all, in a headless editor: every dialog dismissed logs a WARN, "headless: '<title>' cancelled: nobody to
+		// answer".
+		bool warn_headless = false;
 	};
 
 	// Modal dialogs of the editor. They are queued and shown one at a time, in the order they were asked for;

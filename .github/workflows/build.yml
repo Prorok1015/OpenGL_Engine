@@ -31,7 +31,8 @@ on:
 # Fast: Coverage (Linux GCC Debug, also runs the source gates), Linux Clang Debug, Windows MSVC Debug, Linux ASan+UBSan, Linux GCC no Assimp, Editor visual smoke.
 # Full adds: Windows MSVC Release, Windows MSVC Shared Release, Linux GCC Shared (both also build the project
 # template's game module, #434), Linux TSan,
-# SDK package (Linux), SDK package (Windows shared). Extract benchmark runs on pushes (and by hand) only.
+# SDK package (Linux), SDK package (Windows shared), Extract benchmark (#505: on a PR it only builds, so a warning
+# that only the optimized GCC build shows fails the PR; the benchmark runs and reports on pushes and by hand only).
 
 # A newer push to a PR cancels its running run. A push run (aibranch, main) is never cancelled once it
 # runs, or frequent merges would leave the branch without a single complete run (#476): the benchmark
@@ -681,14 +682,15 @@ jobs:
 
   # Report-only (RHI.md section 4, owner decision Q5): hosted runners are too noisy to gate on timings.
   # Runs the extract benchmark (tests/app_engine_null_backend_bench.cpp) on the null backend in an
-  # optimized build, prints the table into the job summary and uploads the JSON. continue-on-error keeps
-  # a failure here from failing the workflow; the job is not a required check.
+  # optimized build, prints the table into the job summary and uploads the JSON. FULL tier. On a PR it
+  # only builds (#505): the optimized GCC build with -Werror sees warnings no other job does (#476), and
+  # a failing build fails the PR. On a push continue-on-error keeps a failure here from failing the
+  # workflow.
   extract-bench:
     name: Extract benchmark (Linux, report-only)
-    # Pushes to aibranch/main only: no value on a PR run.
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: ${{ github.event_name != 'pull_request' }}
 
     env:
       FC_DIR: ${{ github.workspace }}/.fetchcontent-cache
@@ -727,6 +729,7 @@ jobs:
         run: ccache -s
 
       - name: Run extract benchmark
+        if: github.event_name != 'pull_request'
         working-directory: build/ci-linux-gcc-release
         run: |
           set -o pipefail
@@ -736,7 +739,7 @@ jobs:
             2>&1 | tee "$BENCH_DIR/bench_extract.log"
 
       - name: Summary
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         run: |
           if [ -f "$BENCH_DIR/bench_extract.json" ]; then
             tools/ci/bench_extract_summary.sh "$BENCH_DIR/bench_extract.json" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -745,7 +748,7 @@ jobs:
           fi
 
       - name: Upload benchmark report
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: extract-bench

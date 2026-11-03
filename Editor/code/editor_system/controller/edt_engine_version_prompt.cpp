@@ -35,8 +35,15 @@ void edt::ask_about_held_project(dialog_service& dialogs, prj::held_project& pro
 				quit();
 				return;
 			}
+			const bool reopen = picked && *picked < continue_index;
+			// Continue or a cancel (the headless auto answer) of a run that needs its project: a project error, never exit 0.
+			if (project.required && !reopen) {
+				project.answer = prj::held_project::decision::no_project;
+				quit();
+				return;
+			}
 			project.answer = prj::held_project::decision::continue_without_project;
-			if (picked && *picked < continue_index) {
+			if (reopen) {
 				open_anyway();
 			}
 		});

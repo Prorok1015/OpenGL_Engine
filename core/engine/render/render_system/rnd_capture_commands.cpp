@@ -39,6 +39,7 @@ cmd::registration rnd::register_capture_commands(cmd::command_registry& registry
 	desc.id = "viewport.capture";
 	desc.summary = "Capture the final render target of a viewport as a PNG (base64), optionally scaled";
 	desc.category = cmd::agent_category::read;
+	desc.needs_display = true;
 	desc.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {

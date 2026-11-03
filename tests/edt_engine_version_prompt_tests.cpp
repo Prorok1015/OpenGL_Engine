@@ -119,4 +119,43 @@ BOOST_AUTO_TEST_CASE(OpenAnyway_IsNotOfferedForANewerProject)
 	BOOST_TEST(reopened == 0);
 }
 
+// project/required (--headless, #452): going on without the project is the project error of a run without --project.
+BOOST_AUTO_TEST_CASE(Required_TheHeadlessAutoCancel_IsANoProjectError)
+{
+	held.required = true;
+	edt::dialog_auto_answer nobody;
+	nobody.cancel_all = true;
+	nobody.warn_headless = true;
+	dialogs.set_auto_answer(nobody);
+	ask();
+	dialogs.update();
+
+	BOOST_TEST(dialogs.pending() == 0u);
+	BOOST_TEST((held.answer == prj::held_project::decision::no_project));
+	BOOST_TEST(quits == 1);
+	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_project_error);
+}
+
+BOOST_AUTO_TEST_CASE(Required_ContinueWithoutProject_IsANoProjectErrorToo)
+{
+	held.required = true;
+	BOOST_TEST(dialogs.answer(ask(), boost::json::parse(R"({"index":0})")).ok);
+	BOOST_TEST((held.answer == prj::held_project::decision::no_project));
+	BOOST_TEST(quits == 1);
+	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_project_error);
+}
+
+BOOST_AUTO_TEST_CASE(NotRequired_TheAutoCancel_StillGoesOnWithoutTheProject)
+{
+	edt::dialog_auto_answer nobody;
+	nobody.cancel_all = true;
+	dialogs.set_auto_answer(nobody);
+	ask();
+	dialogs.update();
+
+	BOOST_TEST((held.answer == prj::held_project::decision::continue_without_project));
+	BOOST_TEST(quits == 0);
+	BOOST_TEST(prj::exit_code_for(held) == 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

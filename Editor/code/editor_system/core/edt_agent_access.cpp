@@ -51,9 +51,17 @@ bool edt::agent_access::frame_headless()
 
 void edt::agent_access::set_person_present(bool present)
 {
-	m_gate->set_can_ask(present && m_routed);
-	if (!present && m_person_present) {
+	const bool someone = present && !m_headless;
+	m_gate->set_can_ask(someone && m_routed);
+	if (!someone && m_person_present) {
 		m_confirmations->decline_all("the question cannot be shown");
 	}
-	m_person_present = present;
+	m_person_present = someone;
+}
+
+void edt::agent_access::set_headless(bool headless)
+{
+	m_headless = headless;
+	m_policy.set_headless(headless);
+	set_person_present(m_person_present);
 }

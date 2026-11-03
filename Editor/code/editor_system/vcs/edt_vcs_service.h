@@ -11,12 +11,24 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace edt
 {
+	// vcs.log's filters besides ref and path. At namespace scope: GCC cannot use a nested class with default member
+	// initializers as a default argument of its enclosing class's member functions.
+	struct vcs_log_filter
+	{
+		// Every branch, remote branch and tag instead of one ref.
+		bool all = false;
+		// Literal, without case; empty: none.
+		std::string author;
+		std::string grep;
+	};
+
 	struct vcs_options
 	{
 		// cfg vcs/git; empty: "git" on the PATH of the editor's environment.
@@ -31,7 +43,7 @@ namespace edt
 		std::chrono::milliseconds probe_timeout{ 5000 };
 	};
 
-	// Git for the editor and its agents (#454): reads (status, diff, log, branches), writes (stage, unstage, commit,
+	// Git for the editor and its agents (#454): reads (status, diff, log, show_files, branches), writes (stage, unstage, commit,
 	// branch create, checkout) and the network (fetch, pull --ff-only, push). Every git command runs as
 	// a job_service job on ds::lane::io (job.cancel stops git) and its parsed answer is the job's result (job.get).
 	// Git runs with LC_ALL=C, no terminal or credential prompt (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never, ssh in
@@ -98,15 +110,27 @@ namespace edt
 		// The cached state; the repository is looked up again when the project root changed.
 		const state& info();
 
+		using log_filter = vcs_log_filter;
+
+		inline static constexpr std::size_t k_max_log_snapshots = 8;
+		inline static constexpr std::size_t k_max_filter_bytes = 256;
+
 		// Reads; `caller` is the origin of the command (cmd::call::from). Not a person's (ui): no lazy fetch, no
 		// transport, and before git 2.45 a partial clone is refused.
 		started start_status(const cmd::origin& caller);
 		// `path` empty: the whole tree. `staged`: the index against HEAD.
 		started start_diff(const std::string& path, bool staged, const cmd::origin& caller);
+		// The change `commit` (4..64 hex digits) made to `path` (empty: every file), against its first parent. With a
+		// path, a file the commit renamed shows as added: rename detection sees only the files of the path.
+		started start_commit_diff(const std::string& commit, const std::string& path, const cmd::origin& caller);
 		// `ref` empty: HEAD. `limit` is clamped to [1, k_max_log_limit]. `cursor` is the next_cursor of a page (empty:
-		// the first page); it counts commits from the newest, so a commit made meanwhile shifts the pages by one.
+		// the first page). The first page resolves its tips to commits once and keeps them as a snapshot (at most
+		// k_max_log_snapshots, least recently used dropped), so later pages walk the same history whatever was
+		// committed meanwhile; the cursor of a dropped snapshot, or of other arguments, ends the job with error `stale`.
 		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
-			const cmd::origin& caller);
+			const log_filter& filter, const cmd::origin& caller);
+		// The files `commit` (4..64 hex digits) changed, against its first parent (a root commit: every file).
+		started start_show_files(const std::string& commit, const cmd::origin& caller);
 		started start_branches(const cmd::origin& caller);
 
 		// The same, by kind only (no agent session).
@@ -115,10 +139,29 @@ namespace edt
 		{
 			return start_diff(path, staged, cmd::origin{ caller, {} });
 		}
+		started start_commit_diff(const std::string& commit, const std::string& path, cmd::origin_kind caller)
+		{
+			return start_commit_diff(commit, path, cmd::origin{ caller, {} });
+		}
+		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
+			const log_filter& filter, cmd::origin_kind caller)
+		{
+			return start_log(ref, path, limit, cursor, filter, cmd::origin{ caller, {} });
+		}
+		// Without author, grep or all.
+		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
+			const cmd::origin& caller)
+		{
+			return start_log(ref, path, limit, cursor, log_filter{}, caller);
+		}
 		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
 			cmd::origin_kind caller)
 		{
-			return start_log(ref, path, limit, cursor, cmd::origin{ caller, {} });
+			return start_log(ref, path, limit, cursor, log_filter{}, cmd::origin{ caller, {} });
+		}
+		started start_show_files(const std::string& commit, cmd::origin_kind caller)
+		{
+			return start_show_files(commit, cmd::origin{ caller, {} });
 		}
 		started start_branches(cmd::origin_kind caller) { return start_branches(cmd::origin{ caller, {} }); }
 
@@ -184,6 +227,7 @@ namespace edt
 			// The command talks to a remote.
 			bool network = false;
 		};
+		struct log_snapshots;
 		// A hard rule of a guarded write: why the policy refuses it, nullopt when it does not.
 		using hard_rule = std::function<std::optional<std::string>(const vcs_policy&)>;
 
@@ -211,6 +255,8 @@ namespace edt
 		std::filesystem::path m_policy_file;
 		scratch_dir m_scratch;
 		std::uint64_t m_message_count = 0;
+		// Shared with the log jobs, which fill it on the io lane.
+		std::shared_ptr<log_snapshots> m_log_snapshots;
 		// Last: its jobs are stopped before the rest goes.
 		ds::lifetime m_life{ ds::lifetime_option::cancel_on_destroy };
 	};
@@ -218,9 +264,12 @@ namespace edt
 	// vcs.info {} -> {available, reason?, code?, root?, git_version?} (sync)
 	// vcs.status {} -> {job}; result {branch: {head, detached, oid, upstream?, ahead?, behind?},
 	//     entries: [{path, orig_path?, index, worktree, kind: ordinary|renamed|unmerged|untracked|ignored}], clean, truncated}
-	// vcs.diff {path?, staged?} -> {job}; result {text, truncated} (text cut at 256 KiB, truncated true then)
-	// vcs.log {ref?, path?, limit? (1..200, 50), cursor?} -> {job}; result {commits: [{hash, parents, author, email,
-	//     time, subject}], next_cursor?, truncated}
+	// vcs.diff {path?, staged?, commit?} -> {job}; result {text, truncated} (text cut at 256 KiB, truncated true then);
+	//     with commit: that commit's change against its first parent
+	// vcs.log {ref?, all?, path?, author?, grep?, limit? (1..200, 50), cursor?} -> {job}; result {commits: [{hash,
+	//     parents, author, email, time, subject, refs: [{name, kind: head|branch|remote|tag}]}], next_cursor?,
+	//     truncated}; newest first by commit date (--date-order); a cursor whose snapshot is gone: error `stale`
+	// vcs.show_files {commit} -> {job}; result {files: [{path, status, orig_path?}], truncated}
 	// vcs.branches {} -> {job}; result {current?, branches: [{name, full_name, oid, upstream?, head, remote}], truncated}
 	// status, log and branches stop git past 4 MiB of output and keep the whole records (truncated: true).
 	// Writes (mutates; agent categories vcs_commit, vcs_branch, vcs_sync, vcs_push; reads are vcs_read):

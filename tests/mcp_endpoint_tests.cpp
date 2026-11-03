@@ -441,6 +441,24 @@ BOOST_AUTO_TEST_CASE(ToolsList_ReportsSchemasAndAnnotations)
 	BOOST_TEST(!tools[1].at("annotations").at("readOnlyHint").as_bool());
 }
 
+BOOST_AUTO_TEST_CASE(ToolsList_MarksAToolThatIsUnavailableHeadless_InTheDescriptionAndMeta)
+{
+	mcp::tool_info capture = mcp_test::make_tool("viewport_capture");
+	capture.unavailable_headless = true;
+	host.set_tools({ capture, mcp_test::make_tool("log_read") });
+	const std::string session = initialize();
+
+	const json::value body = call(session, "tools/list");
+	const json::array& tools = body.at("result").at("tools").as_array();
+	BOOST_REQUIRE_EQUAL(tools.size(), 2u);
+	BOOST_TEST(text_of(tools[0].at("description")) == "A test tool (unavailable in headless mode)");
+	BOOST_TEST(tools[0].at("_meta").at("snk/unavailableHeadless").as_bool());
+	// Not an annotation of the MCP standard.
+	BOOST_TEST(!tools[0].at("annotations").as_object().contains("unavailableHeadless"));
+	BOOST_TEST(text_of(tools[1].at("description")) == "A test tool");
+	BOOST_TEST(!tools[1].as_object().contains("_meta"));
+}
+
 BOOST_AUTO_TEST_CASE(ToolsCall_PassesTheNameArgumentsAndSession)
 {
 	mcp::call_result answer;

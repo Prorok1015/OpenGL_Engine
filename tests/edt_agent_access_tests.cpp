@@ -58,6 +58,13 @@ struct access_fixture
 		access.reset();
 	}
 
+	// A project that is its own git worktree, so the --agent-policy file next to it is outside both.
+	std::filesystem::path project_root() const
+	{
+		std::filesystem::create_directories(dir.path() / "project" / ".git");
+		return dir.path() / "project";
+	}
+
 	void person_arrives()
 	{
 		access->set_questions_routed(true);
@@ -123,6 +130,73 @@ BOOST_AUTO_TEST_CASE(HeadlessFrame_NobodyIsAsked_EvenWithQuestionsRouted)
 	ask_as("s1");
 	BOOST_REQUIRE(finished.size() == 2u);
 	BOOST_TEST(finished[1].code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+}
+
+// Headless (#452 PR-3): whatever frame(), the font check or the routing would say, nobody is asked.
+BOOST_AUTO_TEST_CASE(Headless_NobodyIsAsked_EvenWithAReadableFontAndRoutedQuestions)
+{
+	access->set_headless(true);
+	// What frame() does with a font that has Cyrillic, and what the bridge does.
+	person_arrives();
+	ask_as("s1");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(access->confirmations().pending().empty());
+	BOOST_TEST(access->policy().headless());
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(TurningHeadless_DeclinesWhatWaits)
+{
+	person_arrives();
+	ask_as("s1");
+	BOOST_REQUIRE(access->confirmations().pending().size() == 1u);
+
+	access->set_headless(true);
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(access->confirmations().pending().empty());
+}
+
+BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_AnswersAnAskInAdvance)
+{
+	dir.write("answers.json", R"({"categories":{"code_files":"allow"}})");
+	access->policy().set_preanswers_file(dir.path() / "answers.json", project_root());
+	access->set_headless(true);
+	person_arrives();
+	ask_as("s1");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].ok);
+	BOOST_TEST(runs == 1);
+}
+
+// With a window the file never answers, also when nobody can be asked there (a font without Cyrillic, before the first frame).
+BOOST_AUTO_TEST_CASE(WithAWindowAndNobodyToAsk_TheAgentPolicyFile_DoesNotAnswer)
+{
+	dir.write("answers.json", R"({"categories":{"code_files":"allow"}})");
+	access->policy().set_preanswers_file(dir.path() / "answers.json", project_root());
+	access->set_questions_routed(true);
+	access->set_person_present(false);
+	ask_as("s1");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(WithAPerson_TheAgentPolicyFile_DoesNotAnswer)
+{
+	dir.write("answers.json", R"({"categories":{"code_files":"allow"}})");
+	access->policy().set_preanswers_file(dir.path() / "answers.json", project_root());
+	person_arrives();
+	ask_as("s1");
+
+	BOOST_TEST(finished.empty());
+	BOOST_TEST(access->confirmations().pending().size() == 1u);
 	BOOST_TEST(runs == 0);
 }
 

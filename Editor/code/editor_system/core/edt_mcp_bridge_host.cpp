@@ -117,7 +117,13 @@ namespace {
 		return properties != nullptr && properties->is_object() && properties->as_object().contains("png_base64");
 	}
 
-	mcp::tool_info describe(const cmd::command_desc& command)
+	// A command that needs a display in a headless editor: every call is refused by the registry with this code.
+	bool unavailable_headless(const cmd::command_desc& command, const cmd::command_registry& registry)
+	{
+		return command.needs_display && registry.headless();
+	}
+
+	mcp::tool_info describe(const cmd::command_desc& command, const cmd::command_registry& registry)
 	{
 		mcp::tool_info tool;
 		tool.name = edt::agent_tool_name(command);
@@ -131,6 +137,7 @@ namespace {
 		tool.destructive = command.mutates && (command.destructive || command.risk != cmd::danger::none);
 		tool.idempotent = false;
 		tool.open_world = false;
+		tool.unavailable_headless = unavailable_headless(command, registry);
 		return tool;
 	}
 
@@ -282,7 +289,7 @@ void edt::mcp_bridge_host::list_tools(std::function<void(std::vector<mcp::tool_i
 		if (state->commands != nullptr && state->access != nullptr) {
 			for (const cmd::command_desc* command : state->commands->list()) {
 				if (agent_may_use(*command, state->access->policy())) {
-					tools.push_back(describe(*command));
+					tools.push_back(describe(*command, *state->commands));
 				}
 			}
 		}
@@ -368,6 +375,10 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 		const cmd::command_desc* command = def != nullptr ? state->commands->find(def->command) : nullptr;
 		if (command == nullptr || !resource_readable(*command, state->access->policy())) {
 			done(unavailable("no such resource: " + uri));
+			return;
+		}
+		if (unavailable_headless(*command, *state->commands)) {
+			done(unavailable(std::string(cmd::codes::unavailable_headless) + ": " + uri + " needs a display; this editor runs headless"));
 			return;
 		}
 		const std::string id = command->id;
