@@ -28,6 +28,8 @@
 #include <snk/render/rnd_render_system.h>
 #include <snk/render/texture/rnd_texture_manager.h>
 #include <snk/resource/res_mount_table.h>
+#include <snk/resource/res_system.h>
+#include <snk/resource/resources/res_resource_text.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/scene/level/scn_level_desc.h>
@@ -42,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -119,6 +122,29 @@ constexpr const char* LEVEL_CHANGED = R"({"__type":"level_desc","__version":2,"n
 		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}}]},
 	{"__type":"world_desc","__version":3,"name":"w1","systems":[]},
 	{"__type":"world_desc","__version":3,"name":"w2","systems":[]}]})";
+
+// LEVEL with a system that runs only in Play (not in Edit, the level's mode) and holds a resource nothing else holds.
+constexpr const char* PLAY_ONLY_SYSTEM = "test::hold_play_only_resource";
+constexpr const char* HOLDING_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
+	{"__type":"world_desc","__version":3,"name":"w0","systems":["test::hold_play_only_resource"],"children":[
+		{"__id":"00000000000000a1","name":"Cam","components":{"camera":{"__type":"camera_desc","__version":1}}},
+		{"__id":"00000000000000a2","name":"Crate","components":{"stat":{"__type":"stat_desc","hp":3}}}]},
+	{"__type":"world_desc","__version":3,"name":"w1","systems":[]}]})";
+
+// A context variable of the world: the handle goes with the world's registry.
+struct play_only_holder
+{
+	res::res_handle<res::text_resource> handle;
+};
+res::resource_system* g_play_only_resources = nullptr;
+res::tag g_play_only_tag;
+
+void hold_play_only_resource(play_only_holder& holder)
+{
+	if (!holder.handle.is_valid() && g_play_only_resources) {
+		holder.handle = g_play_only_resources->require<res::text_resource>(g_play_only_tag);
+	}
+}
 
 // A level with a component of the module's desc type.
 constexpr const char* MODULE_LEVEL = R"({"__type":"level_desc","__version":2,"name":"lv","worlds":[
@@ -459,7 +485,10 @@ BOOST_AUTO_TEST_CASE(edits_during_play_are_refused_but_saving_is_allowed)
 
 BOOST_AUTO_TEST_CASE(ten_start_stop_cycles_leave_nothing_behind)
 {
-	open_level();
+	g_play_only_resources = rs.get();
+	g_play_only_tag = put("play_only.txt", "held by the play set only");
+	BOOST_REQUIRE(contexts().game_layer()->systems().register_system<&hold_play_only_resource>(PLAY_ONLY_SYSTEM));
+	open_level(HOLDING_LEVEL);
 	edt::camera_redirector redirector;
 	std::vector<std::string> released;
 	const auto redirect = [&] {
@@ -505,8 +534,10 @@ BOOST_AUTO_TEST_CASE(ten_start_stop_cycles_leave_nothing_behind)
 			router.bind({ .set = "play", .context = "w0" }, glm::ivec4(0, 0, 10, 10));
 			router.set_hold("play", { .active = true, .captured = true, .owner = { .set = "play", .context = "w0" } });
 			for (int frame = 0; frame < 3; ++frame) contexts().update(std::chrono::duration<float>(0.016f));
+			pump(); // the load of the play-only resource ends: only the play world holds it
 
 			const counters playing = snapshot();
+			BOOST_TEST(playing.live_resources > baseline.live_resources);
 			BOOST_TEST(playing.sets == baseline.sets + 1);
 			BOOST_TEST(playing.contexts == baseline.contexts + 2);
 			BOOST_TEST(playing.redirected_targets == baseline.redirected_targets + 1);
@@ -531,6 +562,71 @@ BOOST_AUTO_TEST_CASE(ten_start_stop_cycles_leave_nothing_behind)
 	BOOST_TEST(after.redirected_targets == baseline.redirected_targets);
 	BOOST_TEST(after.holds == 0u);
 	BOOST_TEST(seen.size() == 20u);
+	g_play_only_resources = nullptr;
+}
+
+BOOST_AUTO_TEST_CASE(a_continuation_of_a_play_task_does_not_run_after_stop)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	scn::scene_layer* layer = play_set()->layer();
+	BOOST_REQUIRE(layer);
+	entt::registry* twin = &play_set()->get("w0").state();
+	bool continued = false;
+	auto handle = tasks.run(ds::lane::compute, ds::task_desc{ .name = "a play task", .category = "test" },
+		layer->tasks(), play_set()->tasks(), [](ds::task_context&) {});
+	handle.then_main([&continued, twin](ds::task_result<void>&) { continued = twin->valid(entt::null); });
+	BOOST_REQUIRE(tasks.run_one(ds::lane::compute)); // done: its continuation waits in the main queue
+
+	play.stop();
+	pump();
+
+	BOOST_TEST(!continued);
+	BOOST_TEST((handle.status() == ds::task_status::ready));
+}
+
+BOOST_AUTO_TEST_CASE(play_does_not_start_while_a_level_or_an_asset_loads)
+{
+	open_level();
+	std::optional<std::string> blocker = "a level is loading";
+	edt::play_session gated{ state, services, world_ctrl, selection, events,
+		edt::play_session_options{ .start_blocker = [&blocker] { return blocker; } } };
+
+	BOOST_TEST((gated.start_refusal() == blocker));
+	BOOST_TEST(!gated.start());
+	BOOST_TEST(play_set() == nullptr);
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(seen.empty());
+
+	blocker.reset();
+	BOOST_TEST(!gated.start_refusal().has_value());
+	BOOST_TEST(gated.start());
+	gated.stop();
+}
+
+BOOST_AUTO_TEST_CASE(stop_called_again_from_an_event_raised_during_stop_does_nothing)
+{
+	open_level();
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(world_ctrl.switch_to_world(1)); // Stop switches back to w0, which raises active_world_changed
+	int stops_inside = 0;
+	const edt::connection again = events.active_world_changed.subscribe([this, &stops_inside](edt::document_id) {
+		if (play.active()) {
+			++stops_inside;
+			play.stop();
+		}
+	});
+
+	play.stop();
+
+	BOOST_TEST(stops_inside >= 1);
+	BOOST_TEST((play.state() == edt::play_state::stopped));
+	BOOST_TEST((seen == std::vector<state_change>{
+		{ edt::play_state::playing, edt::play_reason::user },
+		{ edt::play_state::stopped, edt::play_reason::user } }));
+	BOOST_TEST(contexts().level_set().active());
+	BOOST_TEST(!state.edits_locked());
+	BOOST_TEST(*state.active_world_name() == "w0");
 }
 
 BOOST_AUTO_TEST_CASE(stop_cancels_the_tasks_of_the_play_set_and_the_level_tasks_of_the_same_layer_go_on)
@@ -585,6 +681,26 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)
 	loader.unload("play_game", root);
 }
 
+BOOST_AUTO_TEST_CASE(a_module_reload_while_paused_starts_play_again_paused)
+{
+	loader.load(build_of(v1_entry()), root);
+	open_level(MODULE_LEVEL);
+	BOOST_REQUIRE(play.start());
+	BOOST_REQUIRE(play.pause());
+
+	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
+
+	BOOST_TEST((report.status == core::reload_status::reloaded));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	BOOST_TEST((seen.back() == state_change{ edt::play_state::paused, edt::play_reason::module_reloaded }));
+	scn::context_set* set = play_set();
+	BOOST_REQUIRE(set);
+	BOOST_TEST((set->mode() == ecs::run_mode::pause));
+
+	play.stop();
+	loader.unload("play_game", root);
+}
+
 BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 {
 	open_level();
@@ -599,12 +715,24 @@ BOOST_AUTO_TEST_CASE(user_is_a_fresh_play_profile_while_playing)
 	{
 		res::resource_system profile_rs(tasks, res::mount_table{ res::mount{ .protocol = res::tag::user, .roots = { editor_profile } } });
 		edt::play_session session(state, services, world_ctrl, selection, events,
-			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = editor_profile });
+			{ .profile_resources = &profile_rs, .play_profile = play_profile, .editor_profile = { editor_profile } });
+		const res::tag settings{ "user://settings.txt" };
+		std::ofstream(editor_profile / "settings.txt") << "editor";
+		auto held = profile_rs.require_sync<res::text_resource>(settings);
+		pump();
+		BOOST_REQUIRE(held.is_ready());
 
 		BOOST_REQUIRE(session.start());
 		BOOST_TEST(fs::is_directory(play_profile));
 		BOOST_TEST(!fs::exists(play_profile / "save.json"));
 		BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ play_profile }));
+		// What the editor profile cached is not served from the play profile.
+		std::ofstream(play_profile / "settings.txt") << "play";
+		auto in_play = profile_rs.require_sync<res::text_resource>(settings);
+		pump();
+		BOOST_REQUIRE(in_play.is_ready());
+		BOOST_TEST(in_play.get_sync()->str() == "play");
+		BOOST_TEST(held.get_sync()->str() == "editor"); // a handle held from before keeps what it read
 
 		session.stop();
 		BOOST_TEST((profile_rs.mount_roots(res::tag::user) == std::vector<fs::path>{ editor_profile }));

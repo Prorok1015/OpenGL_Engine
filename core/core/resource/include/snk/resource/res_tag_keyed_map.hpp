@@ -52,6 +52,15 @@ namespace res
 			}
 		}
 
+		// Each tag that has an entry, once.
+		template<class Fn>
+		void for_each_tag(Fn&& fn) const
+		{
+			for (const auto& entry : m_types) {
+				fn(entry.first);
+			}
+		}
+
 		[[nodiscard]] V* find(const cache_key& key)
 		{
 			auto it = m_entries.find(key);

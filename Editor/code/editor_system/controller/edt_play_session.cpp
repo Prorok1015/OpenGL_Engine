@@ -53,9 +53,11 @@ void edt::play_session::abandon()
 std::optional<std::string> edt::play_session::start_refusal() const
 {
 	if (active()) return std::string{ "Play is running already" };
+	if (m_stopping) return std::string{ "Play is stopping" };
 	if (!m_services.ctx_manager.lock()) return std::string{ "there is no context manager" };
 	if (!m_document.editor_tag.is_valid() || m_document.world_descs.empty()) return std::string{ "no level with a world to play" };
 	if (!m_services.assembler() || !m_services.sfactory()) return std::string{ "the scene services are missing" };
+	if (m_options.start_blocker) return m_options.start_blocker();
 	return std::nullopt;
 }
 
@@ -93,14 +95,18 @@ bool edt::play_session::start(play_reason reason)
 	play.set_seed(m_seed);
 	play.set_time_scale(m_time_scale);
 	m_time_scale = play.time_scale();
-	for (std::size_t i = 0; i < m_worlds_copy.size(); ++i) {
-		const scn::world_desc& copy = m_worlds_copy[i];
-		const std::string name = i < names.size() ? names[i] : std::string{ copy.get_name() };
-		scn::world_context& world = contexts->create_context(k_play_set, name, scn::context_kind::play,
-			i < systems.size() ? systems[i] : copy.get_systems());
-		world.set_input_layer(copy.get_input_layer());
-		const entt::entity root = world.state().create();
-		m_services.assembler()->spawn_from_desc(world.state(), root, copy, name);
+	{
+		// The tasks the systems and spawners start while the worlds are built belong to the set: Stop cancels them.
+		const scn::context_set::current_scope as_current(play);
+		for (std::size_t i = 0; i < m_worlds_copy.size(); ++i) {
+			const scn::world_desc& copy = m_worlds_copy[i];
+			const std::string name = i < names.size() ? names[i] : std::string{ copy.get_name() };
+			scn::world_context& world = contexts->create_context(k_play_set, name, scn::context_kind::play,
+				i < systems.size() ? systems[i] : copy.get_systems());
+			world.set_input_layer(copy.get_input_layer());
+			const entt::entity root = world.state().create();
+			m_services.assembler()->spawn_from_desc(world.state(), root, copy, name);
+		}
 	}
 
 	// The level stays as it is, frozen and not drawn; its cameras come back on Stop.
@@ -108,7 +114,7 @@ bool edt::play_session::start(play_reason reason)
 	level.for_each([](scn::world_context& world) { world.set_extract(false); });
 
 	m_document.set_edits_locked(true);
-	mount_user(m_options.play_profile, true);
+	mount_user({ m_options.play_profile }, true);
 	m_play_camera = m_document.camera;
 	m_camera_world.clear();
 	follow_active_world();
@@ -119,7 +125,9 @@ bool edt::play_session::start(play_reason reason)
 
 void edt::play_session::stop(play_reason reason)
 {
-	if (!active()) return;
+	if (!active() || m_stopping) return;
+	// The state changes (and is announced) last: until then a handler of an event raised here sees Play stopping.
+	m_stopping = true;
 	if (const auto contexts = m_services.ctx_manager.lock()) {
 		if (contexts->find_set(k_play_set)) {
 			// The set stops its own tasks before its registries go; the level's tasks of the same layer go on.
@@ -132,6 +140,7 @@ void edt::play_session::stop(play_reason reason)
 	m_document.set_edits_locked(false);
 	mount_user(m_options.editor_profile, false);
 	restore_editor();
+	m_stopping = false;
 	egLOG_INFO("play", "Play stopped");
 	set_state(play_state::stopped, reason);
 }
@@ -198,13 +207,16 @@ void edt::play_session::before_module_swap()
 {
 	if (!active()) return;
 	m_resume_after_swap = true;
+	m_paused_before_swap = m_state == play_state::paused;
 	stop(play_reason::stopped_for_reload);
 }
 
 void edt::play_session::after_module_swap()
 {
 	if (!std::exchange(m_resume_after_swap, false)) return;
+	const bool paused = std::exchange(m_paused_before_swap, false);
 	if (start(play_reason::module_reloaded)) {
+		if (paused) pause(play_reason::module_reloaded);
 		egLOG_INFO("play", "Play started again after the game module was reloaded");
 	} else {
 		egLOG_WARN("play", "Play did not start again after the game module was reloaded");
@@ -242,18 +254,20 @@ void edt::play_session::follow_active_world()
 	}
 }
 
-void edt::play_session::mount_user(const std::filesystem::path& root, bool fresh)
+void edt::play_session::mount_user(const std::vector<std::filesystem::path>& roots, bool fresh)
 {
-	if (!m_options.profile_resources || root.empty()) return;
+	if (!m_options.profile_resources || roots.empty() || std::ranges::any_of(roots, [](const auto& root) { return root.empty(); })) return;
 	if (fresh) {
 		// Every session starts with an empty profile: nothing saved by the previous one is seen.
-		std::error_code ec;
-		std::filesystem::remove_all(root, ec);
-		if (ec) egLOG_WARN("play", "the play profile '{}' was not emptied: {}", root.string(), ec.message());
-		std::filesystem::create_directories(root, ec);
-		if (ec) egLOG_WARN("play", "the play profile '{}' was not created: {}", root.string(), ec.message());
+		for (const std::filesystem::path& root : roots) {
+			std::error_code ec;
+			std::filesystem::remove_all(root, ec);
+			if (ec) egLOG_WARN("play", "the play profile '{}' was not emptied: {}", root.string(), ec.message());
+			std::filesystem::create_directories(root, ec);
+			if (ec) egLOG_WARN("play", "the play profile '{}' was not created: {}", root.string(), ec.message());
+		}
 	}
-	if (!m_options.profile_resources->remount(res::tag::user, { root })) {
+	if (!m_options.profile_resources->remount(res::tag::user, roots)) {
 		egLOG_WARN("play", "user:// stays where it was: it is not mounted");
 	}
 }
