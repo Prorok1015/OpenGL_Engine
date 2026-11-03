@@ -559,7 +559,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
-		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
+		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
+		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
+			if (m_agent_access == nullptr) return false;
+			return headless ? m_agent_access->frame_headless() : m_agent_access->frame(ImGui::GetFont());
+		});
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
 		// Every open document, not only the scene: a modified preview is dropped too.

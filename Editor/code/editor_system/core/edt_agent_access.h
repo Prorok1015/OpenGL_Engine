@@ -33,6 +33,10 @@ namespace edt
 		// it, or without Cyrillic in it, an `ask` is a `deny`. Returns true: it fits an implicit-layout registrar.
 		bool frame(ImFont* font);
 
+		// frame() without a person (headless): re-reads a changed policy and times out what waited; nobody is asked,
+		// so an `ask` is a `deny`, and nothing is drawn. Returns true, like frame().
+		bool frame_headless();
+
 		// Whether a person who can read the question is there. Headless it stays false: an `ask` is a `deny`. Losing the
 		// person declines what waits.
 		void set_person_present(bool present);
