@@ -6,19 +6,17 @@
 #include <snk/common/logger/engine_log.h>
 
 namespace {
-	scn::context_set* g_current_set = nullptr;
+	thread_local scn::context_set* g_current_set = nullptr;
+}
 
-	class current_set_scope
-	{
-	public:
-		explicit current_set_scope(scn::context_set& set) : m_previous(std::exchange(g_current_set, &set)) {}
-		~current_set_scope() { g_current_set = m_previous; }
-		current_set_scope(const current_set_scope&) = delete;
-		current_set_scope& operator=(const current_set_scope&) = delete;
+scn::context_set::current_scope::current_scope(context_set& set)
+	: m_previous(std::exchange(g_current_set, &set))
+{
+}
 
-	private:
-		scn::context_set* m_previous;
-	};
+scn::context_set::current_scope::~current_scope()
+{
+	g_current_set = m_previous;
 }
 
 scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
@@ -38,9 +36,12 @@ scn::context_set::~context_set()
 
 void scn::context_set::stop_tasks()
 {
+	ds::task_system* runner = m_layer ? m_layer->task_runner() : nullptr;
+	ASSERT_MSG(!ds::task_system::on_worker(), "context_set::stop_tasks: main thread only, never from a task");
+	ASSERT_MSG(!runner || runner->on_main(), "context_set::stop_tasks: main thread only");
 	m_tasks.cancel_tasks();
-	if (m_layer && m_layer->task_runner()) {
-		m_layer->task_runner()->wait_idle(m_tasks);
+	if (runner) {
+		runner->wait_idle(m_tasks);
 	}
 }
 
@@ -60,7 +61,7 @@ void scn::context_set::set_seed(uint64_t seed)
 void scn::context_set::update(std::chrono::duration<float> dt)
 {
 	PROFILE_SCOPE("LevelUpdate");
-	const current_set_scope current_scope(*this);
+	const current_scope as_current(*this);
 
 	const ecs::run_mode mode = m_mode;
 	begin_frame_channel(mode);
@@ -167,6 +168,7 @@ void scn::context_set::run_context_phase(uint32_t id, world_context& context, si
 
 scn::world_context& scn::context_set::create_context(std::string_view name, uint32_t id, context_kind kind)
 {
+	const current_scope as_current(*this);
 	if (auto it = m_context_ids.find(std::string{ name }); it != m_context_ids.end()) {
 		// replacing would free a context that the id map still points at
 		egLOG_ERROR("scene", "create_world: world '{}' already exists, keeping the existing one", name);
@@ -198,7 +200,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler,
 										 context_kind kind)
 {
-	const current_set_scope current_scope(*this);
+	const current_scope as_current(*this);
 	m_tag = desc.get_tag();
 	// no leftover fraction of a step from the previous level
 	for (const auto& [id, context] : m_contexts) {
@@ -222,7 +224,7 @@ void scn::context_set::reload_context(
 	ecs::system_factory& sf,
 	scn::ecs_assembler& assambler)
 {
-	const current_set_scope current_scope(*this);
+	const current_scope as_current(*this);
 	ASSERT_MSG(m_context_ids.contains(std::string{name}), "reload_world: level doesn't contain world with this name");
 
 	const uint32_t old_id = m_context_ids[std::string{name}];
@@ -269,6 +271,7 @@ void scn::context_set::add_systems(
 	const std::vector<std::string>& systems,
 	ecs::system_factory& sf)
 {
+	const current_scope as_current(*this);
 	context.set_systems(systems);
 	rebuild_context_plan(context.get_id(), sf);
 }

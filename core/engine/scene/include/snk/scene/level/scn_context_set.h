@@ -60,14 +60,33 @@ namespace scn
 		scene_layer* layer() const { return m_layer; }
 		void set_layer(scene_layer* layer) { m_layer = layer; }
 
-		// The tasks a game module started for this set (gs::module_context::run while the set is current()). Each is
-		// a task of the layer as well; stopping the set's tasks leaves those of the layer's other sets running.
+		// The tasks a game module started for this set (gs::module_context::run on the main thread while the set is
+		// current(), and the tasks those start in turn for the layer). Each is a task of the layer as well; stopping the
+		// set's tasks leaves those of the layer's other sets running. Their main-thread continuations never run once
+		// the set is gone.
+		// Precondition of stop_tasks (so of destroying the set): no task of the set waits for main-thread work
+		// (a then_main, a post_main, a resource the main thread finishes): wait_idle does not drain the main queue,
+		// such a task deadlocks it.
 		const ds::lifetime& tasks() const { return m_tasks; }
-		// Cancels the set's tasks and waits for them on the layer's task system. Idempotent; the set does it before
-		// its contexts go.
+		// Cancels the set's tasks and waits for them on the layer's task system. Main thread, not from inside one of
+		// the set's tasks or their continuations. Idempotent; the set does it before its contexts go.
 		void stop_tasks();
-		// The set whose contexts are being updated or loaded now (main thread); null outside.
+		// The set whose contexts are being built, updated or loaded now on this thread (the main thread); null outside
+		// and on every other thread.
 		static context_set* current();
+		// Makes `set` current() for its lifetime: for code that builds a set's worlds outside the set (a spawn from a
+		// desc), so the tasks its systems and spawners start belong to the set.
+		class SNK_API current_scope
+		{
+		public:
+			explicit current_scope(context_set& set);
+			~current_scope();
+			current_scope(const current_scope&) = delete;
+			current_scope& operator=(const current_scope&) = delete;
+
+		private:
+			context_set* m_previous;
+		};
 		// An inactive set is skipped by context_manager::update.
 		bool active() const { return m_active; }
 		void set_active(bool active) { m_active = active; }

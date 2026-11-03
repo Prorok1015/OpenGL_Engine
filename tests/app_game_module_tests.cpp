@@ -296,6 +296,10 @@ protected:
 gs::module_context* g_set_context = nullptr;
 std::map<std::string, ds::task_handle<void>> g_set_tasks;
 std::map<std::string, bool> g_set_task_ran;
+// With it the task starts a child task of the module from its body.
+bool g_spawn_child = false;
+std::map<std::string, ds::task_handle<void>> g_set_children;
+std::map<std::string, bool> g_set_child_ran;
 
 void game_start_task(entt::view<entt::get_t<game_component>>)
 {
@@ -303,7 +307,13 @@ void game_start_task(entt::view<entt::get_t<game_component>>)
 	if (!g_set_context || !set || g_set_tasks.contains(set->name())) return;
 	const std::string name = set->name();
 	g_set_tasks.emplace(name, g_set_context->run(ds::lane::compute, ds::task_desc{ .name = "game.set_task" },
-		[name](ds::task_context&) { g_set_task_ran[name] = true; }));
+		[name](ds::task_context&) {
+			g_set_task_ran[name] = true;
+			if (g_spawn_child && g_set_context) {
+				g_set_children.emplace(name, g_set_context->run(ds::lane::io, ds::task_desc{ .name = "game.set_child" },
+					[name](ds::task_context&) { g_set_child_ran[name] = true; }));
+			}
+		}));
 }
 
 class set_task_game_module final : public gs::game_module {
@@ -654,6 +664,43 @@ BOOST_AUTO_TEST_CASE(a_task_started_by_a_system_of_a_set_stops_with_that_set_and
 
 	loader.unload("set_task_game", root);
 	g_set_tasks.clear();
+}
+
+BOOST_AUTO_TEST_CASE(a_task_started_from_a_task_of_a_set_stops_with_that_set)
+{
+	g_set_tasks.clear();
+	g_set_task_ran.clear();
+	g_set_children.clear();
+	g_set_child_ran.clear();
+	g_spawn_child = true;
+	loader.load(std::make_unique<set_task_game_module>(), root);
+	auto* layer = contexts().game_layer();
+	BOOST_REQUIRE(layer != nullptr);
+	BOOST_REQUIRE(contexts().load_level(put("lv.desc", SET_TASK_LEVEL)));
+	pump();
+	auto& side = contexts().create_set("side", layer);
+	side.add_systems(side.create_context("s0", side.acquire_free_id()), { "game::start_task" }, layer->systems());
+
+	contexts().update(std::chrono::duration<float>(0.016f));
+	BOOST_REQUIRE(g_set_tasks.size() == 2u);
+	while (tasks.run_one(ds::lane::compute)) {}
+	BOOST_REQUIRE(g_set_children.size() == 2u);
+	const std::string level_name{ contexts().level_set().name() };
+	const auto level_child = g_set_children.at(level_name);
+	const auto side_child = g_set_children.at("side");
+
+	contexts().destroy_set("side");
+	BOOST_TEST((side_child.status() == ds::task_status::cancelled));
+	BOOST_TEST(!level_child.done());
+
+	pump();
+	BOOST_TEST(g_set_child_ran[level_name]);
+	BOOST_TEST(!g_set_child_ran["side"]);
+
+	g_spawn_child = false;
+	loader.unload("set_task_game", root);
+	g_set_tasks.clear();
+	g_set_children.clear();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
