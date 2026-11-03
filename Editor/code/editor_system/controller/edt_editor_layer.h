@@ -3,6 +3,7 @@
 #include <snk/gui/gui_menu_layout.h>
 #include "edt_dockspace.h"
 #include <chrono>
+#include <functional>
 
 namespace edt {
 	class editor_context;
@@ -36,10 +37,17 @@ namespace edt {
 		void set_context(editor_context& context) { m_context = &context; }
 		// See dockspace::set_menu_bar_status.
 		void set_menu_bar_status(std::function<void()> draw) { m_dockspace.set_menu_bar_status(std::move(draw)); }
+		// Game mode (#294): while `active` says so, `draw` is drawn instead of the dockspace and its panels.
+		void set_game_layout(std::function<bool()> active, std::function<void()> draw) {
+			m_game_active = std::move(active);
+			m_draw_game = std::move(draw);
+		}
 
 	private:
 		gui::menu_layout_manager m_manager;
 		dockspace m_dockspace;
 		editor_context* m_context = nullptr;
+		std::function<bool()> m_game_active;
+		std::function<void()> m_draw_game;
 	};
 }

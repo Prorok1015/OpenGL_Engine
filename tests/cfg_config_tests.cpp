@@ -375,4 +375,41 @@ BOOST_AUTO_TEST_CASE(Cli_AgentPolicyIsAPathRelativeToTheWorkingDirectory)
 	BOOST_TEST(agent_policy->empty());
 }
 
+// --game (#294): the variables stand in for the editor's of the same names; the real ones take the values too, so each
+// test puts them back.
+BOOST_AUTO_TEST_CASE(Cli_GameAloneSetsTheStartModeAndKeepsTheStartLevel)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
+	run_cli({ "-s", "editor/startup_level", "levels/kept.desc" });
+	BOOST_TEST(run_cli({ "--game" }) == 1);
+	BOOST_TEST(*start_mode == "game");
+	BOOST_TEST(*startup_level == "levels/kept.desc");
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/startup_level", "" });
+	BOOST_TEST(*start_mode == "editor");
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameWithALevelSetsTheStartLevelAsWritten)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
+	BOOST_TEST(run_cli({ "--game=levels/smoke_level.desc" }) == 1);
+	BOOST_TEST(*start_mode == "game");
+	// A resource path like editor/startup_level always takes, not a file of the working directory.
+	BOOST_TEST(*startup_level == "levels/smoke_level.desc");
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/startup_level", "" });
+	BOOST_TEST(startup_level->empty());
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameLosesToSet)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> startup_level{ "editor/startup_level", "" };
+	BOOST_TEST(run_cli({ "--game=levels/a.desc", "-s", "editor/start_mode", "editor", "editor/startup_level", "levels/b.desc" }) == 1);
+	BOOST_TEST(*start_mode == "editor");
+	BOOST_TEST(*startup_level == "levels/b.desc");
+	run_cli({ "-s", "editor/startup_level", "" });
+	BOOST_TEST(startup_level->empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

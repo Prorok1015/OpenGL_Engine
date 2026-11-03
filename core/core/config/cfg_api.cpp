@@ -188,7 +188,11 @@ bool cfg::initialize_configs(int argc, char* argv[])
 			"it also ends the editor (unsaved changes are dropped)")
 		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
 			"used only with --headless: it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
-			"Missing or broken: every agent request is denied");
+			"Missing or broken: every agent request is denied")
+		("game", po::value<std::string>()->implicit_value(std::string{}, ""), "start the editor in game mode: once the "
+			"start level has loaded, Play starts and the Game view fills the window (F11 switches to the editor and back). "
+			"--game=<level> also sets the start level (editor/startup_level); write it with '=': '--game <level>' "
+			"does not take the level");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
@@ -229,6 +233,12 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	}
 	if (vm.count("agent-policy")) {
 		set_registered("editor/agent_policy_file", vm["agent-policy"].as<std::string>());
+	}
+	if (vm.count("game")) {
+		set_registered("editor/start_mode", "game");
+		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
+			set_registered("editor/startup_level", level);
+		}
 	}
 	if (vm.count("headless")) {
 		set_registered("editor/headless", "true");
