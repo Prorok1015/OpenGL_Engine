@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/config/cfg_variables.h>
 #include <snk/common/logger/engine_log_sinks.h>
+#include "edt_editor_mode.h"
 #include "test_temp_dir.hpp"
 #include <filesystem>
 #include <stdexcept>
@@ -420,11 +421,31 @@ BOOST_AUTO_TEST_CASE(Cli_GameWithASpaceBeforeTheLevel_TakesNoLevelAndSaysSo)
 	});
 	BOOST_TEST(run_cli({ "--game", "res://levels/a.desc" }) == 1);
 	BOOST_TEST(*start_mode == "game");
-	BOOST_TEST(game_level->empty());
+	// Set to something the editor refuses at startup: no other level stands in for the one meant.
+	BOOST_TEST(!game_level->empty());
+	BOOST_TEST(!edt::game_level_problem(*game_level).empty());
 	BOOST_REQUIRE(errors.size() == 1u);
 	BOOST_TEST(errors.front().find("--game=res://") != std::string::npos);
 	BOOST_TEST(errors.front().find("res://levels/a.desc") != std::string::npos);
-	run_cli({ "-s", "editor/start_mode", "editor" });
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/game_level", "" });
+	BOOST_TEST(game_level->empty());
+}
+
+BOOST_AUTO_TEST_CASE(Cli_GameDoesNotTakeTheBlameForAStrayTokenElsewhere)
+{
+	cfg::variable<std::string> start_mode{ "editor/start_mode", "editor" };
+	cfg::variable<std::string> game_level{ "editor/game_level", "" };
+	std::vector<std::string> errors;
+	const engine::log_sink_handle sink = engine::add_log_sink([&errors](std::string_view, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.emplace_back(message);
+	});
+	BOOST_TEST(run_cli({ "stray", "--game" }) == 1);
+	BOOST_TEST(run_cli({ "--game", "--non-interactive", "stray" }) == 1);
+	BOOST_TEST(run_cli({ "--game=res://levels/a.desc", "stray" }) == 1);
+	BOOST_TEST(*game_level == "res://levels/a.desc");
+	BOOST_TEST(errors.empty());
+	run_cli({ "-s", "editor/start_mode", "editor", "editor/game_level", "", "app/non_interactive", "false" });
+	BOOST_TEST(game_level->empty());
 }
 
 BOOST_AUTO_TEST_CASE(Cli_GameLosesToSet)

@@ -45,6 +45,10 @@ namespace edt
 		// the play.* commands themselves keep closed.
 		std::string_view play_command_for(editor_mode mode) const;
 
+		// Right after play_session::after_module_swap (the swap gate's hook): Play that a reload stopped in game mode and
+		// that did not start again leaves the game layout (WARN).
+		void after_module_swap();
+
 		// Play is paused by this controller's switch to the editor, and nothing else changed Play since.
 		bool holds_pause() const { return m_paused_play; }
 
@@ -54,6 +58,8 @@ namespace edt
 		bool m_has_ui = true;
 		editor_mode m_mode = editor_mode::editor;
 		bool m_paused_play = false;
+		// The last change of Play was a reload's Stop while in game mode.
+		bool m_reload_stopped_game = false;
 		// Play's changes the controller makes itself are not someone else's.
 		bool m_changing_play = false;
 		connection m_play_changed;

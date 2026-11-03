@@ -18,8 +18,9 @@ namespace edt
 		std::function<play_session*()> play{};
 		// A person's gesture is in progress: an agent's switch that would start Play gets `busy` (as play.start).
 		std::function<bool()> person_is_editing{};
-		// The agent policy's mode for the command with this id (play.start, play.resume, play.pause). An agent's switch
-		// that would make that command's change is refused unless it is `allow`. Null: no agent policy, allow.
+		// The agent policy's mode for the command with this id (play.start, play.resume, play.pause, editor.mode.toggle).
+		// An agent's switch that would make a play.* command's change is refused when that command's mode is stricter
+		// than the toggle's own (the gate already judged the toggle). Null: no agent policy, allow.
 		std::function<cmd::policy_mode(std::string_view command_id)> agent_mode_of{};
 	};
 

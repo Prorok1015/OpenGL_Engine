@@ -64,15 +64,14 @@ std::vector<edt::registration> edt::register_editor_mode_commands(action_registr
 			target = *parsed;
 		}
 		const bool agent = call.from.kind == cmd::origin_kind::agent;
-		// The toggle must not open what the policy keeps closed on the play.* command making the same change.
+		// The toggle must not open what the policy keeps closed on the play.* command making the same change. Only a mode
+		// stricter than the toggle's own refuses: an `ask` both share was already put to the person for this very call.
 		if (const std::string_view play_command = controller->play_command_for(target); agent && !play_command.empty() && agent_mode_of) {
 			const cmd::policy_mode mode = agent_mode_of(play_command);
-			if (mode == cmd::policy_mode::deny) {
-				return cmd::result::failure(cmd::codes::denied, std::format("the agent policy denies {}, which this switch would run", play_command));
-			}
-			if (mode == cmd::policy_mode::ask) {
-				return cmd::result::failure(cmd::codes::denied,
-					std::format("{} needs a person's approval; call it directly", play_command));
+			if (mode > agent_mode_of("editor.mode.toggle")) {
+				return cmd::result::failure(cmd::codes::denied, mode == cmd::policy_mode::deny
+					? std::format("the agent policy denies {}, which this switch would run", play_command)
+					: std::format("{} needs a person's approval; call it directly", play_command));
 			}
 		}
 		if (agent && target == editor_mode::game && would_start() && editing && editing()) {

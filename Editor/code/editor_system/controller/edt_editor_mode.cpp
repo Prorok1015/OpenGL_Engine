@@ -3,6 +3,7 @@
 #include <snk/common/logger/engine_log.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <format>
+#include <utility>
 
 std::optional<edt::editor_mode> edt::editor_mode_of(std::string_view name)
 {
@@ -38,12 +39,23 @@ edt::editor_mode_controller::editor_mode_controller(play_session& play, editor_e
 		if (state != play_state::paused) m_paused_play = false;
 		// Owner decision: nothing to play in the game layout once Play stops; a module reload starts it again at once.
 		const bool reload = reason == play_reason::stopped_for_reload || reason == play_reason::module_reloaded;
+		m_reload_stopped_game = state == play_state::stopped && reason == play_reason::stopped_for_reload && m_mode == editor_mode::game;
 		if (state == play_state::stopped && !reload && m_has_ui && m_mode == editor_mode::game) {
 			m_mode = editor_mode::editor;
 			egLOG_INFO("editor", "editor mode: Play stopped");
 			m_events.editor_mode_changed.emit(m_mode);
 		}
 	});
+}
+
+void edt::editor_mode_controller::after_module_swap()
+{
+	if (!std::exchange(m_reload_stopped_game, false) || m_play.state() != play_state::stopped) return;
+	// play_session::after_module_swap did not start Play again (a start blocker, the level gone): nothing to play.
+	egLOG_WARN("editor", "game mode: Play did not start again after the module reload");
+	if (!m_has_ui || m_mode != editor_mode::game) return;
+	m_mode = editor_mode::editor;
+	m_events.editor_mode_changed.emit(m_mode);
 }
 
 std::string_view edt::editor_mode_controller::play_command_for(editor_mode mode) const

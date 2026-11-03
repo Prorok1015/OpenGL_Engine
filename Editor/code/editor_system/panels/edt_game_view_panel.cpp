@@ -4,6 +4,7 @@
 #include <snk/gui/gui_system.h>
 #include <snk/scene/scn_camera_component.hpp>
 #include <imgui.h>
+#include <utility>
 
 namespace edt
 {
@@ -125,6 +126,7 @@ namespace edt
 		const bool shown = ImGui::Begin("##game_mode_view", nullptr, flags);
 		ImGui::PopStyleColor();
 		ImGui::PopStyleVar(3);
+		m_input_rect.reset();
 		if (shown) {
 			m_target.reset();
 			const char* why = nullptr;
@@ -134,14 +136,19 @@ namespace edt
 			} else {
 				ImGui::TextDisabled("%s", why);
 			}
-			// Bindings are cleared every frame; the whole window is the game's, hovered or not.
-			if (m_router && m_input_target) {
-				bind_game_window_input(m_router, m_input_target(), { viewport->Pos.x, viewport->Pos.y },
-					{ viewport->Size.x, viewport->Size.y }, m_input_blocked && m_input_blocked());
-			}
+			m_input_rect = glm::vec4{ viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y };
 		} else {
 			on_hidden();
 		}
 		ImGui::End();
+	}
+
+	void game_view_panel::bind_fullscreen_input()
+	{
+		// Bindings are cleared every frame; the whole window is the game's, hovered or not.
+		const std::optional<glm::vec4> rect = std::exchange(m_input_rect, std::nullopt);
+		if (!rect || !m_router || !m_input_target) return;
+		bind_game_window_input(m_router, m_input_target(), { rect->x, rect->y }, { rect->z, rect->w },
+			m_input_blocked && m_input_blocked());
 	}
 }

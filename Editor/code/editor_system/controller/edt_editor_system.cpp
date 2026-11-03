@@ -212,7 +212,7 @@ edt::editor_system::~editor_system()
 	m_session_connections.clear();
 	m_agent_access.reset();
 	// The layer may outlive this system: no game layout drawn through it any more.
-	if (editor_layer) editor_layer->set_game_layout(nullptr, nullptr, nullptr);
+	if (editor_layer) editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
 	m_mode_changed.disconnect();
 	m_modes.reset();
 	if (m_play) {
@@ -800,7 +800,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		return std::nullopt;
 	};
 	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
-	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] { if (m_play) m_play->after_module_swap(); });
+	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] {
+		if (m_play) m_play->after_module_swap();
+		if (m_modes) m_modes->after_module_swap();
+	});
 
 	const auto locked = [this] { return m_state.edits_locked(); };
 	m_hierarchy_panel->set_edits_locked(locked);
@@ -843,7 +846,8 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 			m_viewport_panel->suspend_camera();
 			m_game_view_panel->render_fullscreen();
 		},
-		is_game_mode_shortcut);
+		is_game_mode_shortcut,
+		[this] { m_game_view_panel->bind_fullscreen_input(); });
 	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
 		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
 	});

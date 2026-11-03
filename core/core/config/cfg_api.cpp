@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 #include <yaml-cpp/yaml.h>
@@ -240,9 +241,21 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		// Its own key: the editor checks it is a res:// tag, which editor/startup_level is not held to.
 		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
 			set_registered("editor/game_level", level);
-		} else if (const auto stray = po::collect_unrecognized(parsed.options, po::include_positional); !stray.empty()) {
-			// The parser has no positional arguments: `--game <level>` would drop the level without a word.
-			egLOG_ERROR("config", "'{}' after --game is not taken: write the level as --game=res://<level>", stray.front());
+		} else {
+			// The parser has no positional arguments: `--game <level>` would drop the level without a word, and the start
+			// level would stand in for it.
+			std::string_view after_game;
+			for (int i = 1; i + 1 < argc; ++i) {
+				if (std::string_view{ argv[i] } == "--game" && argv[i + 1][0] != '-') {
+					after_game = argv[i + 1];
+					break;
+				}
+			}
+			if (!after_game.empty()) {
+				egLOG_ERROR("config", "'{}' after --game is not taken: write the level as --game=res://<level>", after_game);
+				// Not a res:// tag, so the editor refuses it and loads no level at all.
+				set_registered("editor/game_level", "--game " + std::string{ after_game });
+			}
 		}
 	}
 	if (vm.count("headless")) {

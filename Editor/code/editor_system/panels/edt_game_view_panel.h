@@ -39,6 +39,9 @@ namespace edt
 		// letterboxed image of the picked camera, and the whole window feeds the play context with input. The panel's
 		// own open state is left alone; the render target stays the "game" view of viewport.capture.
 		void render_fullscreen();
+		// After the frame's implicit callbacks (editor_layer), which may open a popup or a dialog: binds the window
+		// render_fullscreen() drew to the play context unless one is open now.
+		void bind_fullscreen_input();
 		// An editor dialog or question is shown over the full-window view: the game gets no input then. Null: never.
 		void set_input_blocked(std::function<bool()> blocked) { m_input_blocked = std::move(blocked); }
 
@@ -66,5 +69,7 @@ namespace edt
 		inp::input_router* m_router = nullptr;
 		input_target_getter m_input_target;
 		std::function<bool()> m_input_blocked;
+		// The viewport rect (pos, size) render_fullscreen() drew this frame, for bind_fullscreen_input().
+		std::optional<glm::vec4> m_input_rect;
 	};
 }
