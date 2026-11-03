@@ -1,9 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_editor_quit.h"
-#include "edt_agent_confirmations.h"
+#include "edt_agent_access.h"
 #include "edt_mcp_bridge_host.h"
 #include "test_manual_tasks.hpp"
-#include <snk/command/cmd_main_thread_queue.h>
+#include "test_temp_dir.hpp"
+#include <snk/mcp/mcp_host.h>
 #include <snk/editor/edt_document.h>
 #include <snk/mcp/mcp_stdio.h>
 #include <snk/resource/res_tag.h>
@@ -190,16 +191,21 @@ BOOST_AUTO_TEST_CASE(AnyUnsaved_LooksAtEveryOpenDocument)
 	BOOST_TEST(!edt::any_unsaved(nullptr));
 }
 
-// The bridge behind both transports: an agent on HTTP cannot stop the editor, whatever it calls; the session ids are the
-// real ones of a stdio transport and of the bridge's calls, not made up for the command.
+// The bridge behind both transports: editor.quit is a tool under the owner's default policy (editor_control: allow), yet
+// an agent on HTTP cannot stop the editor with it; the session ids are the real ones of a stdio transport and of the
+// bridge's calls, not made up for the command.
 BOOST_FIXTURE_TEST_CASE(AnHttpAgent_CannotQuit_ThroughTheBridge, quit_fixture)
 {
+	test_util::temp_dir dir{ "edt_editor_quit" };
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
-	cmd::main_thread_queue queue{ commands, tasks };
-	edt::session_grants grants;
-	edt::agent_confirmations confirmations{ commands, grants };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
+	// The answers outlive `access`, whose destructor answers the calls still waiting.
+	std::optional<std::vector<mcp::tool_info>> listed;
+	std::optional<mcp::call_result> over_http;
+	std::optional<mcp::call_result> over_stdio;
+	edt::agent_access access{ commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	access.set_questions_routed(true);
+	edt::mcp_bridge_host bridge{ commands, tasks, access };
 
 	mcp::stdio_config config;
 	config.write = [](std::string_view) { return true; };
@@ -213,22 +219,25 @@ BOOST_FIXTURE_TEST_CASE(AnHttpAgent_CannotQuit_ThroughTheBridge, quit_fixture)
 	const auto added = edt::register_editor_quit(commands, std::move(quit));
 	BOOST_REQUIRE(added.active());
 
-	// Over MCP: not even listed for an HTTP session (the bridge shows no editor_control command yet, #479).
-	std::optional<mcp::call_result> over_mcp;
+	bridge.list_tools([&listed](std::vector<mcp::tool_info> tools) { listed = std::move(tools); });
+	tasks.drain_main(std::chrono::hours(1));
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST(std::any_of(listed->begin(), listed->end(), [](const mcp::tool_info& tool) { return tool.name == "editor_quit"; }));
+
 	mcp::request_context http;
 	http.session_id = "0123456789abcdef0123456789abcdef";
-	bridge.call_tool(http, "editor_quit", boost::json::object{}, nullptr, [&over_mcp](mcp::call_result r) { over_mcp = std::move(r); });
+	bridge.call_tool(http, "editor_quit", boost::json::object{}, nullptr, [&over_http](mcp::call_result r) { over_http = std::move(r); });
 	tasks.drain_main(std::chrono::hours(1));
-	BOOST_REQUIRE(over_mcp.has_value());
-	BOOST_TEST(over_mcp->is_error);
+	BOOST_REQUIRE(over_http.has_value());
+	BOOST_TEST(over_http->is_error);
 	BOOST_TEST(stops == 0);
 
-	// The path the bridge runs a tool on, with the HTTP session's origin: denied.
-	auto refused = queue.call_now_or_post("editor.quit", json::object{}, cmd::origin::agent(http.session_id));
-	BOOST_TEST(refused.get().code == cmd::codes::denied);
-	BOOST_TEST(stops == 0);
-	auto accepted = queue.call_now_or_post("editor.quit", json::object{}, cmd::origin::agent(stdio.session_id()));
-	BOOST_TEST(accepted.get().ok);
+	mcp::request_context own;
+	own.session_id = stdio.session_id();
+	bridge.call_tool(own, "editor_quit", boost::json::object{}, nullptr, [&over_stdio](mcp::call_result r) { over_stdio = std::move(r); });
+	tasks.drain_main(std::chrono::hours(1));
+	BOOST_REQUIRE(over_stdio.has_value());
+	BOOST_TEST(!over_stdio->is_error);
 	BOOST_TEST(stops == 1);
 	stdio.stop();
 }

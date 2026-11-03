@@ -1,8 +1,8 @@
 #include "edt_agent_server.h"
+#include "edt_agent_access.h"
 #include "edt_mcp_bridge_host.h"
 
 #include <snk/common/logger/engine_log.h>
-#include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/mcp/mcp_connection_file.h>
@@ -26,12 +26,15 @@ std::filesystem::path edt::agent_project_dir(const std::filesystem::path& config
 namespace {
 	// Version of the command set an agent sees (serverInfo.snk_api, AI_INTEGRATION.md section 5): bump it when a
 	// tool is renamed or changes its schema in a breaking way.
-	constexpr const char* snk_api_version = "1";
+	constexpr const char* snk_api_version = "2";
 
 	constexpr const char* instructions =
-		"Read-only access to the Snake editor: the engine log, background jobs, open dialogs and screenshots of the "
-		"scene and game views. While the person has live mode on (Build > Live Mode), live_status, live_rebuild_now and "
-		"live_reload_now are listed too. A tool is a command of the editor; its name is the command id with '.' replaced by '_'.";
+		"Access to the Snake editor, as far as the person's agent policy allows: reading the engine log, jobs, dialogs, "
+		"the scene, the problems and the git state, taking screenshots, and (when the policy allows) editing the scene, "
+		"code files and building. Some tools ask the person for a confirmation before they run, and a call can wait for "
+		"the answer or for the person to finish what they are doing; a refused call says why. A tool is a command of the "
+		"editor; its name is the command id with '.' replaced by '_'. The list of tools changes with the policy "
+		"and with the person's switches (live mode): ask for it again after a tools/list_changed notification.";
 
 	mcp::server_info make_server_info()
 	{
@@ -59,19 +62,17 @@ namespace {
 	}
 }
 
-// Members are destroyed bottom-up: the transports first (their threads are joined), then the host they call, then the queue.
+// Members are destroyed bottom-up: the transports first (their threads are joined), then the host they call.
 struct edt::agent_server::impl
 {
-	impl(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations, const agent_server_options& options_)
+	impl(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access, const agent_server_options& options_)
 		: options(options_)
-		, queue(commands, tasks)
-		, bridge(commands, queue, tasks, confirmations)
+		, bridge(commands, tasks, access, options_.on_session_closed)
 	{
 	}
 
 	agent_server_options options;
 	std::string token;
-	cmd::main_thread_queue queue;
 	mcp_bridge_host bridge;
 	std::optional<mcp::server> server;
 	std::unique_ptr<mcp::stdio_transport> stdio;
@@ -79,9 +80,8 @@ struct edt::agent_server::impl
 	bool file_written = false;
 };
 
-edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations,
-	agent_server_options options)
-	: m_impl(std::make_unique<impl>(commands, tasks, confirmations, options))
+edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access, agent_server_options options)
+	: m_impl(std::make_unique<impl>(commands, tasks, access, options))
 {
 	if (m_impl->options.stdio_write) {
 		mcp::stdio_config config;
@@ -128,6 +128,8 @@ edt::agent_server::~agent_server()
 	if (!m_impl) {
 		return;
 	}
+	// The sessions end with the transports; the editor is going down with them, nobody is left to tell.
+	m_impl->bridge.stop_reporting();
 	if (m_impl->stdio) {
 		m_impl->stdio->stop();
 	}

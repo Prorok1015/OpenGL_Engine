@@ -37,6 +37,7 @@
 #include "edt_build_jobs.h"
 #include "edt_build_settings_model.h"
 #include "edt_build_settings_panel.h"
+#include "edt_git_panel.h"
 #include "edt_vcs_service.h"
 #include "edt_live_mode.h"
 #include <snk/core/core_project_modules.h>
@@ -186,6 +187,7 @@ edt::editor_system::~editor_system()
 {
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
+	m_session_connections.clear();
 	m_agent_access.reset();
 	// The layer may outlive this system; its menu bar must not reach live mode any more.
 	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
@@ -338,6 +340,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// A live build is stopped instead: its configure would clear the --fresh mark that a define removal writes.
 	m_build_settings_panel->set_stop_background([this] { stop_live_build(); });
 	add_panel(m_build_settings_panel, dock_slot::floating, false);
+	// #456: through the vcs.* commands as the person's calls; closed by default, so it reads nothing until opened.
+	git_panel_model::ports git_ports;
+	git_ports.invoke = [this](std::string_view id, boost::json::value args) { return m_context->actions().invoke(id, args); };
+	git_ports.cancel = [this](std::uint64_t job) { return m_context->jobs().cancel(job); };
+	m_git_panel = std::make_shared<git_panel>(m_context->events(), std::move(git_ports), m_context->dialogs(), m_res);
+	add_panel(m_git_panel, dock_slot::right, false);
 
 	auto& wnd_sys = data.require<wnd::window_system>();
 	m_exit_action = [&wnd_sys] {
@@ -394,7 +402,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); })) {
 		m_registrations.push_back(std::move(action));
 	}
-	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
+	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
 			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
 		m_registrations.push_back(std::move(command));
@@ -559,11 +567,25 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
+		m_agent_access->policy().set_on_changed([this] {
+			if (m_agent_server) m_agent_server->notify_tools_changed();
+		});
+		m_agent_access->policy().set_live_mode([this] { return m_live_mode != nullptr && m_live_mode->enabled(); });
+		m_agent_access->set_questions_routed(true);
 		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
 		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {
 			if (m_agent_access == nullptr) return false;
 			return headless ? m_agent_access->frame_headless() : m_agent_access->frame(ImGui::GetFont());
 		});
+		// One signal for the end of an MCP session; whoever keeps something per session listens to it.
+		editor_events& events = m_context->events();
+		m_session_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
+			if (m_agent_access) m_agent_access->confirmations().drop_session(session);
+		}));
+		m_session_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
+			if (m_agent_sessions) m_agent_sessions->session_closed(session);
+		}));
+		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
 		// Every open document, not only the scene: a modified preview is dropped too.
@@ -589,7 +611,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 				});
 			};
 		}
-		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));
+		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), *m_agent_access, std::move(options));
 		if (editor_quit_available(stdio, headless)) {
 			registration added = register_editor_quit(commands, std::move(quit));
 			if (added.active()) m_registrations.push_back(std::move(added));

@@ -4,12 +4,15 @@
 #include "test_temp_dir.hpp"
 #include <chrono>
 #include <filesystem>
+#include <stdexcept>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -195,6 +198,99 @@ BOOST_AUTO_TEST_CASE(AllowForTheSession_CoversThatCategoryOfThatSessionOnly)
 
 	run("cmake.edit", "s1");
 	BOOST_TEST(confirmations->pending().size() == 1u);
+}
+
+namespace {
+
+// code.write of #451: code_edit, cmake_presets for a CMake file; `classify` stands for its category_of.
+struct per_call_confirmations : confirmations_fixture
+{
+	std::function<agent_category(std::string_view)> classify = [](std::string_view path) {
+		return path.ends_with("CMakeLists.txt") ? agent_category::cmake_presets : agent_category::code_edit;
+	};
+
+	per_call_confirmations()
+	{
+		cmd::command_desc desc;
+		desc.id = "code.write";
+		desc.category = agent_category::code_edit;
+		desc.summary = "writes a code file";
+		desc.args_schema = boost::json::value{ { "type", "object" } };
+		desc.category_of = [this](const cmd::call& request) {
+			const auto& path = request.args.as_object().at("path").as_string();
+			return classify(std::string_view(path.data(), path.size()));
+		};
+		desc.invoke = [this](const cmd::call&) {
+			++runs;
+			return cmd::result::success();
+		};
+		registrations.push_back(commands.add(std::move(desc)));
+	}
+
+	void write(const char* path)
+	{
+		cmd::call request = agent_call("s1");
+		request.args = boost::json::object{ { "path", path } };
+		confirmations->invoke("code.write", std::move(request), [this](cmd::result outcome) { finished.push_back(std::move(outcome)); });
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(AllowForTheSession_GrantsTheCategoryTheCallWasAskedFor, per_call_confirmations)
+{
+	write("CMakeLists.txt");
+	BOOST_REQUIRE(confirmations->pending().size() == 1u);
+	BOOST_TEST((confirmations->pending().front().category == agent_category::cmake_presets));
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
+
+	BOOST_TEST(grants.has("s1", agent_category::cmake_presets));
+	BOOST_TEST(!grants.has("s1", agent_category::code_edit));
+	write("CMakeLists.txt");
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(runs == 2);
+}
+
+BOOST_FIXTURE_TEST_CASE(WhenBothAsk_TheCallsGrantCovers_TheCommandsDoesNot, per_call_confirmations)
+{
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"ask"}})");
+	grants.add("s1", agent_category::code_edit);
+	write("CMakeLists.txt");
+	BOOST_REQUIRE(confirmations->pending().size() == 1u);
+	BOOST_TEST((confirmations->pending().front().category == agent_category::cmake_presets));
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::deny);
+
+	grants.add("s1", agent_category::cmake_presets);
+	write("CMakeLists.txt");
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(runs == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(WhenOnlyTheCommandsCategoryAsks_ItsGrantIsTheOneNeeded, per_call_confirmations)
+{
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"ask","cmake_presets":"allow"}})");
+	grants.add("s1", agent_category::cmake_presets);
+	write("CMakeLists.txt");
+	BOOST_REQUIRE(confirmations->pending().size() == 1u);
+	BOOST_TEST((confirmations->pending().front().category == agent_category::code_edit));
+	confirmations->answer(only_pending_id(), edt::confirmation_answer::allow_session);
+
+	BOOST_TEST(grants.has("s1", agent_category::code_edit));
+	write("CMakeLists.txt");
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(runs == 2);
+}
+
+BOOST_FIXTURE_TEST_CASE(ACategoryOfThatThrows_IsRefused_WithNobodyAskedAndNoTicketLeft, per_call_confirmations)
+{
+	classify = [](std::string_view) -> agent_category { throw std::runtime_error("broken"); };
+	write("CMakeLists.txt");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(confirmations->pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+	BOOST_TEST(runs == 0);
 }
 
 BOOST_AUTO_TEST_CASE(AllowForTheSession_IsDroppedWithTheSession)

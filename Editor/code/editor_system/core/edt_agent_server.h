@@ -9,7 +9,7 @@
 #include <string_view>
 
 namespace cmd { class command_registry; }
-namespace edt { class agent_confirmations; }
+namespace edt { class agent_access; }
 namespace ds { class task_system; }
 
 namespace edt
@@ -34,10 +34,12 @@ namespace edt
 		std::function<bool(std::string_view)> stdio_write;
 		// The stdio session ended (stdin closed, or the client stopped taking the output). Called on a transport thread.
 		std::function<void()> on_stdio_eof;
+		// Called on the main thread when an MCP session ended, except while the server itself stops. Empty: nothing.
+		std::function<void(const std::string& session_id)> on_session_closed;
 	};
 
 	// The MCP server of the editor (module snk_mcp_server) with everything it needs on the editor's side: the
-	// main-thread queue and the bridge host, shared by its two transports: Streamable HTTP with the connection file
+	// bridge host, shared by its two transports: Streamable HTTP with the connection file
 	// (editor/agent_server) and stdio (editor/mcp_stdio, #452). Both are off by default. Tools are the commands of the
 	// registry the bridge lets agents use, resources are the log, the jobs, the dialogs and the screenshots of the two views.
 	//
@@ -46,8 +48,8 @@ namespace edt
 	class agent_server
 	{
 	public:
-		// `confirmations` outlives the server (destroy the server first).
-		agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations, agent_server_options options);
+		// `access` outlives the server (destroy the server first).
+		agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access, agent_server_options options);
 		~agent_server();
 		agent_server(const agent_server&) = delete;
 		agent_server& operator=(const agent_server&) = delete;

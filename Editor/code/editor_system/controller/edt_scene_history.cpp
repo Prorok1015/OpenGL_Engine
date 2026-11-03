@@ -366,19 +366,23 @@ edt::scene_history_index::diff_result edt::scene_history_index::diff(std::vector
 		}
 		entry.moved_among_siblings = !kept->second.contains(entry.id);
 	}
-	// Removed nodes, parents first; their index entries go below, so the states are moved out.
+	// Removed nodes, parents first; their index entries go below, so the states are moved out. Ordered through plain
+	// (depth, index) keys: sorting the changes themselves made GCC see std::optional as maybe uninitialized (#476).
 	std::vector<scene_node_change> removed;
+	std::vector<std::pair<int, std::size_t>> removed_order;
 	for (std::size_t w = 0; w < worlds.size(); ++w) {
 		for (auto& [id, state] : m_worlds[w]) {
 			if (!seen[w].contains(id)) {
+				removed_order.emplace_back(state.depth, removed.size());
 				removed.push_back({ w, id, std::move(state), std::nullopt, false });
 			}
 		}
 	}
-	std::stable_sort(removed.begin(), removed.end(), [](const scene_node_change& a, const scene_node_change& b) {
-		return a.before->depth < b.before->depth;
-	});
-	changes.insert(changes.end(), std::make_move_iterator(removed.begin()), std::make_move_iterator(removed.end()));
+	std::stable_sort(removed_order.begin(), removed_order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	changes.reserve(changes.size() + removed.size());
+	for (const auto& [depth, index] : removed_order) {
+		changes.push_back(std::move(removed[index]));
+	}
 	stats.changes = changes.size();
 	if (changes.empty()) {
 		return diff_result::unchanged;
