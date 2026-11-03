@@ -32,12 +32,13 @@ edt::editor_mode_controller::editor_mode_controller(play_session& play, editor_e
 	, m_events(events)
 	, m_has_ui(has_ui)
 {
-	m_play_changed = events.play_state_changed.subscribe([this](play_state state, play_reason) {
+	m_play_changed = events.play_state_changed.subscribe([this](play_state state, play_reason reason) {
 		if (m_changing_play) return;
 		// A Step keeps Play paused and announces nothing new; a Stop or a resume ends the pause this controller made.
 		if (state != play_state::paused) m_paused_play = false;
-		// Owner decision: nothing to play in the game layout once Play stops.
-		if (state == play_state::stopped && m_has_ui && m_mode == editor_mode::game) {
+		// Owner decision: nothing to play in the game layout once Play stops; a module reload starts it again at once.
+		const bool reload = reason == play_reason::stopped_for_reload || reason == play_reason::module_reloaded;
+		if (state == play_state::stopped && !reload && m_has_ui && m_mode == editor_mode::game) {
 			m_mode = editor_mode::editor;
 			egLOG_INFO("editor", "editor mode: Play stopped");
 			m_events.editor_mode_changed.emit(m_mode);

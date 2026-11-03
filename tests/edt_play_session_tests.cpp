@@ -1225,13 +1225,16 @@ BOOST_AUTO_TEST_CASE(a_stop_in_game_mode_brings_the_editor_back_but_not_without_
 	BOOST_TEST((modes_seen == std::vector<edt::editor_mode>{ edt::editor_mode::game, edt::editor_mode::editor }));
 	BOOST_TEST(!modes.holds_pause());
 
-	// A module reload stops Play too; it starts again in the editor layout.
+	// A module reload stops Play and starts it again: the game layout stays.
 	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	modes_seen.clear();
 	play.before_module_swap();
 	play.after_module_swap();
-	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST(modes_seen.empty());
 	BOOST_TEST((play.state() == edt::play_state::playing));
 	play.stop();
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
 
 	// Headless: no layout to go back to.
 	edt::editor_mode_controller headless{ play, events, false };
