@@ -43,6 +43,10 @@ namespace edt
 		// person declines what waits.
 		void set_person_present(bool present);
 
+		// A headless editor (editor/headless): nobody is ever asked, whatever frame(), set_person_present or the routing
+		// say; an `ask` is a `deny` unless the --agent-policy file answers it (agent_policy::set_headless: only here).
+		void set_headless(bool headless);
+
 		// Whether the MCP bridge sends agent calls through confirmations(). Until it does an `ask` would only issue a
 		// ticket nobody sees, so nobody is asked, whatever frame() finds: an `ask` is a `deny`.
 		void set_questions_routed(bool routed) { m_routed = routed; }
@@ -56,5 +60,6 @@ namespace edt
 		bool m_warned_about_font = false;
 		bool m_routed = false;
 		bool m_person_present = false;
+		bool m_headless = false;
 	};
 }

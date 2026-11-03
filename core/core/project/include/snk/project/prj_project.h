@@ -79,6 +79,8 @@ namespace prj
 			none,
 			continue_without_project,
 			quit,
+			// Not opened, and the run cannot go on without a project (`required`): ends like a run without --project.
+			no_project,
 		};
 
 		std::filesystem::path manifest_file;
@@ -86,10 +88,13 @@ namespace prj
 		engine_version engine;
 		version_action action = version_action::refuse;
 		decision answer = decision::none;
+		// project/required (--headless): going on without the project is a project error, not a choice.
+		bool required = false;
 	};
 
 	// How the host exits after holding `project` back: 0 when the user chose to go on without it (a button, or Esc);
-	// otherwise k_exit_engine_version (the user quit, or the window closed with the question unanswered).
+	// k_exit_project_error when the run needed it (no_project); otherwise k_exit_engine_version (the user quit, or the
+	// window closed with the question unanswered).
 	SNK_API int exit_code_for(const held_project& project);
 
 	// True when the project must not be held for a question but refused at once: a non-interactive run

@@ -23,6 +23,9 @@ namespace mcp
 		bool destructive = false;
 		bool idempotent = false;
 		bool open_world = false;
+		// Listed, but every call answers `unavailable_headless` (it needs a display the editor does not have). Not a standard
+		// annotation: tools/list says it in the description and in `_meta` ("snk/unavailableHeadless").
+		bool unavailable_headless = false;
 	};
 
 	// One block of a tool result.

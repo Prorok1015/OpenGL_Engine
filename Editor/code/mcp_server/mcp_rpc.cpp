@@ -40,7 +40,7 @@ namespace {
 	{
 		json::object entry;
 		entry["name"] = make_string(tool.name);
-		entry["description"] = make_string(tool.description);
+		entry["description"] = make_string(tool.unavailable_headless ? tool.description + " (unavailable in headless mode)" : tool.description);
 		if (tool.input_schema.is_object()) {
 			entry["inputSchema"] = std::move(tool.input_schema);
 		} else {
@@ -57,6 +57,11 @@ namespace {
 		annotations["idempotentHint"] = tool.idempotent;
 		annotations["openWorldHint"] = tool.open_world;
 		entry["annotations"] = std::move(annotations);
+		if (tool.unavailable_headless) {
+			json::object meta;
+			meta["snk/unavailableHeadless"] = true;
+			entry["_meta"] = std::move(meta);
+		}
 		return entry;
 	}
 

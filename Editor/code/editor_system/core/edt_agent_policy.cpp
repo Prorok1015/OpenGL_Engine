@@ -186,6 +186,37 @@ namespace edt
 			return out;
 		}
 
+		// Whether `path` is `folder` or lies under it (both canonical).
+		bool is_within(const std::filesystem::path& path, const std::filesystem::path& folder)
+		{
+			return std::mismatch(folder.begin(), folder.end(), path.begin(), path.end()).first == folder.end();
+		}
+
+		// The --agent-policy file is a person's answer: one inside the project, or inside the git worktree that holds it,
+		// could be written by the agent it answers for. Empty: the place is fine.
+		std::string preanswers_location_error(const std::filesystem::path& file, const std::filesystem::path& project_root)
+		{
+			if (project_root.empty()) return "there is no project folder to check its place against";
+			std::error_code ec;
+			const std::filesystem::path real = std::filesystem::canonical(file, ec);
+			if (ec) return "the file cannot be resolved: " + ec.message();
+			const std::filesystem::path root = std::filesystem::weakly_canonical(project_root, ec);
+			if (ec) return "the project folder cannot be resolved: " + ec.message();
+			if (is_within(real, root)) return "the --agent-policy file must be outside the project";
+			for (std::filesystem::path folder = root; !folder.empty(); folder = folder.parent_path()) {
+				std::error_code probe;
+				if (std::filesystem::exists(std::filesystem::symlink_status(folder / ".git", probe))) {
+					if (is_within(real, folder)) {
+						return "the --agent-policy file must be outside the project and the git worktree holding it ("
+							+ fs_paths::utf8_of(folder) + ")";
+					}
+					break;
+				}
+				if (folder == folder.parent_path()) break;
+			}
+			return {};
+		}
+
 		std::optional<std::string> read_text(const std::filesystem::path& file)
 		{
 			std::ifstream in(file, std::ios::binary);
@@ -229,6 +260,7 @@ namespace edt
 		case policy_source::project: return "project";
 		case policy_source::personal: return "personal";
 		case policy_source::approval_pending: return "approval_pending";
+		case policy_source::preanswers: return "preanswers";
 		}
 		return "fallback";
 	}
@@ -305,6 +337,9 @@ namespace edt
 				}
 			}
 			else if (name == "vcs") {
+				if (kind == policy_layer_kind::preanswers) {
+					return fail("\"vcs\" is not allowed in the --agent-policy file: the git rules come from the project and personal policies");
+				}
 				vcs_policy_layer vcs;
 				if (std::string error = parse_vcs_section(value, kind, vcs); !error.empty()) return fail(std::move(error));
 				out.layer.vcs = std::move(vcs);
@@ -386,6 +421,40 @@ namespace edt
 		std::string why = std::string(base_source == policy_source::project ? "the project's policy" : "the default policy") + " says "
 			+ cmd::to_string(base);
 		return { base, base_source, std::move(why) };
+	}
+
+	effective_policy apply_preanswers(const cmd::command_desc& command, cmd::agent_category category, effective_policy decided,
+		const policy_layer& preanswers, const std::string& preanswers_error)
+	{
+		if (!preanswers_error.empty()) {
+			return { cmd::policy_mode::deny, policy_source::preanswers, "the --agent-policy file cannot be used: " + preanswers_error };
+		}
+		if (decided.mode == cmd::policy_mode::deny) return decided;
+
+		// The raw entries, not policy_layer::resolve: the risk floor resolve adds to a category entry would turn "allow" into
+		// a tightening.
+		std::optional<cmd::policy_mode> answer;
+		bool own_entry = false;
+		if (category == command.category) {
+			if (const auto own = preanswers.commands.find(command.id); own != preanswers.commands.end()) {
+				answer = own->second;
+				own_entry = true;
+			}
+		}
+		if (!answer) {
+			if (const auto entry = preanswers.categories.find(category); entry != preanswers.categories.end()) answer = entry->second;
+		}
+		if (!answer) return decided;
+
+		if (*answer > decided.mode) {
+			return { *answer, policy_source::preanswers, "the --agent-policy file makes it " + std::string(cmd::to_string(*answer)) };
+		}
+		// As in the layers, only the command's own entry lifts the floor of its risk.
+		const bool lifts = own_entry || command.risk == cmd::danger::none;
+		if (decided.mode == cmd::policy_mode::ask && *answer == cmd::policy_mode::allow && lifts) {
+			return { cmd::policy_mode::allow, policy_source::preanswers, "the --agent-policy file answers the question with yes in advance" };
+		}
+		return decided;
 	}
 
 	namespace {
@@ -580,6 +649,7 @@ namespace edt
 		m_project.file = std::move(project_file);
 		m_personal.file = std::move(personal_file);
 		m_personal.kind = policy_layer_kind::personal;
+		m_preanswers.kind = policy_layer_kind::preanswers;
 		m_approved_file = std::move(approved.file);
 		m_approved_key = std::move(approved.key);
 		load_approved();
@@ -727,6 +797,25 @@ namespace edt
 		return out;
 	}
 
+	void agent_policy::set_preanswers_file(std::filesystem::path file, std::filesystem::path project_root)
+	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::set_preanswers_file: main thread only");
+		m_preanswers = source{};
+		m_preanswers.kind = policy_layer_kind::preanswers;
+		m_preanswers.file = std::move(file);
+		m_preanswers_project_root = std::move(project_root);
+		m_warned_preanswers_change = false;
+		if (has_preanswers()) reload(m_preanswers);
+	}
+
+	void agent_policy::set_headless(bool headless)
+	{
+		if (m_headless == headless) return;
+		m_headless = headless;
+		// What an agent may see follows: the --agent-policy file applies or stops applying.
+		if (has_preanswers() && m_on_changed) m_on_changed();
+	}
+
 	namespace {
 
 		// What can be told about a policy file without reading it. A file that cannot be examined (not "not found": a refused
@@ -795,6 +884,15 @@ namespace edt
 		if (!now.error.empty()) {
 			what.error = now.error;
 		}
+		else if (!now.exists && what.kind == policy_layer_kind::preanswers) {
+			// Not "no answers": the person named a file, and a run that cannot read it must not go on as if they had not.
+			what.error = "the file does not exist";
+		}
+		else if (std::string misplaced = what.kind == policy_layer_kind::preanswers
+				? preanswers_location_error(what.file, m_preanswers_project_root) : std::string{};
+			!misplaced.empty()) {
+			what.error = std::move(misplaced);
+		}
 		else if (now.exists) {
 			const std::optional<std::string> text = read_text(what.file);
 			if (!text) {
@@ -807,7 +905,13 @@ namespace edt
 			}
 		}
 		if (!what.error.empty()) {
-			egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
+			if (what.kind == policy_layer_kind::preanswers) {
+				egLOG_ERROR("editor/agent_policy", "--agent-policy {}: {}; every agent request of a headless run is denied",
+					fs_paths::utf8_of(what.file), what.error);
+			}
+			else {
+				egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
+			}
 		}
 		warn_unknown_commands(what);
 		if (&what == &m_project) reconcile_project();
@@ -828,7 +932,7 @@ namespace edt
 	void agent_policy::set_known_commands(std::function<bool(std::string_view)> exists)
 	{
 		m_known = std::move(exists);
-		for (source* what : { &m_project, &m_personal }) {
+		for (source* what : { &m_project, &m_personal, &m_preanswers }) {
 			if (what->loaded) warn_unknown_commands(*what);
 		}
 	}
@@ -837,6 +941,12 @@ namespace edt
 	{
 		for (source* what : { &m_project, &m_personal }) {
 			if (changed_on_disk(*what)) reload(*what);
+		}
+		// Read once: answers a running editor took in must not change under it (nor be swapped in by what it runs).
+		if (has_preanswers() && !m_warned_preanswers_change && changed_on_disk(m_preanswers)) {
+			m_warned_preanswers_change = true;
+			egLOG_WARN("editor/agent_policy", "--agent-policy {} changed while running: ignored until restart",
+				fs_paths::utf8_of(m_preanswers.file));
 		}
 	}
 
@@ -852,13 +962,18 @@ namespace edt
 		// A command registered after the file was judged (a module loaded later) may carry a risk floor an entry lifts.
 		if (m_commands && m_project.loaded && m_commands().size() != m_reconciled_commands) reconcile_project();
 		const bool live_on = m_live_on && m_live_on();
-		effective_policy now = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
+		effective_policy decided = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error,
+			m_personal.error, live_on);
 		// Also when nothing is pending: an entry the file has and the approved copy does not (see silently_recordable) must not
 		// lift what a command registered since carries, e.g. a risk floor after a module reload that left the registry's size.
 		const effective_policy held = effective_mode_of_call(command, category, m_approved, m_personal.layer, {}, m_personal.error, live_on);
-		if (held.mode <= now.mode) return now;
-		return { held.mode, policy_source::approval_pending,
-			"the project's agent_policy.json has something that waits for a person's approval; until then the approved version applies: " + held.reason };
+		if (held.mode > decided.mode) {
+			decided = { held.mode, policy_source::approval_pending,
+				"the project's agent_policy.json has something that waits for a person's approval; until then the approved version applies: " + held.reason };
+		}
+		// After the approval: the --agent-policy file answers only an `ask` the approved result gives, never above it.
+		if (!has_preanswers() || !m_headless) return decided;
+		return apply_preanswers(command, category, std::move(decided), m_preanswers.layer, m_preanswers.error);
 	}
 
 	vcs_policy agent_policy::effective_vcs()

@@ -6,6 +6,7 @@
 #include <charconv>
 #include <initializer_list>
 #include <system_error>
+#include <unordered_set>
 
 namespace json = boost::json;
 
@@ -236,13 +237,16 @@ json::value edt::vcs::to_json(const status_report& status)
 
 std::vector<edt::vcs::commit_entry> edt::vcs::parse_log(std::string_view output)
 {
-	constexpr std::size_t fields_per_commit = 6;
+	constexpr std::size_t fields_per_commit = 7;
 	std::vector<commit_entry> out;
 	const auto fields = split_keep_empty(output, '\0');
 	for (std::size_t i = 0; i + fields_per_commit <= fields.size(); i += fields_per_commit) {
 		commit_entry commit;
 		commit.hash = trim(fields[i]);
-		if (commit.hash.empty()) continue;
+		// Not a full lowercase object name: the output is not what the format asked for (another encoding, a cut).
+		const bool full_oid = (commit.hash.size() == 40 || commit.hash.size() == 64)
+			&& std::all_of(commit.hash.begin(), commit.hash.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+		if (!full_oid) continue;
 		std::string_view parents = fields[i + 1];
 		while (!parents.empty()) {
 			const std::size_t space = parents.find(' ');
@@ -258,6 +262,7 @@ std::vector<edt::vcs::commit_entry> edt::vcs::parse_log(std::string_view output)
 		const auto parsed = std::from_chars(time_text.data(), time_text.data() + time_text.size(), time);
 		commit.time = parsed.ec == std::errc{} ? time : 0;
 		commit.subject = fields[i + 5];
+		commit.refs = parse_decorations(fields[i + 6]);
 		out.push_back(std::move(commit));
 	}
 	return out;
@@ -267,13 +272,142 @@ json::value edt::vcs::to_json(const commit_entry& commit)
 {
 	json::array parents;
 	for (const auto& parent : commit.parents) parents.push_back(json::string(parent));
+	json::array refs;
+	refs.reserve(commit.refs.size());
+	for (const auto& ref : commit.refs) refs.push_back(json::object{ { "name", text_of(ref.name) }, { "kind", ref_kind_name(ref.kind) } });
 	return json::object{
 		{ "hash", json::string(commit.hash) },
 		{ "parents", std::move(parents) },
 		{ "author", text_of(commit.author) },
 		{ "email", text_of(commit.email) },
 		{ "time", commit.time },
-		{ "subject", text_of(commit.subject) } };
+		{ "subject", text_of(commit.subject) },
+		{ "refs", std::move(refs) } };
+}
+
+const char* edt::vcs::ref_kind_name(ref_kind kind)
+{
+	switch (kind) {
+	case ref_kind::head: return "head";
+	case ref_kind::branch: return "branch";
+	case ref_kind::remote: return "remote";
+	case ref_kind::tag: return "tag";
+	}
+	return "branch";
+}
+
+std::vector<edt::vcs::decoration> edt::vcs::parse_decorations(std::string_view text)
+{
+	constexpr std::string_view head_arrow = "HEAD -> ";
+	constexpr std::string_view tag_prefix = "tag: ";
+	constexpr std::string_view heads = "refs/heads/";
+	constexpr std::string_view remotes = "refs/remotes/";
+	constexpr std::string_view tags = "refs/tags/";
+	std::vector<decoration> out;
+	while (!text.empty()) {
+		const std::size_t comma = text.find(", ");
+		std::string_view item = trim(text.substr(0, comma));
+		text.remove_prefix(comma == std::string_view::npos ? text.size() : comma + 2);
+		if (item.starts_with(head_arrow)) {
+			out.push_back({ "HEAD", ref_kind::head });
+			item.remove_prefix(head_arrow.size());
+		} else if (item == "HEAD") {
+			out.push_back({ "HEAD", ref_kind::head });
+			continue;
+		}
+		const bool tagged = item.starts_with(tag_prefix);
+		if (tagged) item.remove_prefix(tag_prefix.size());
+		decoration ref;
+		if (item.starts_with(tags)) {
+			ref = { std::string(item.substr(tags.size())), ref_kind::tag };
+		} else if (tagged) {
+			ref = { std::string(item), ref_kind::tag };
+		} else if (item.starts_with(heads)) {
+			ref = { std::string(item.substr(heads.size())), ref_kind::branch };
+		} else if (item.starts_with(remotes)) {
+			ref = { std::string(item.substr(remotes.size())), ref_kind::remote };
+			if (ref.name.ends_with("/HEAD")) continue;
+		} else if (item.starts_with("refs/") || item == "grafted" || item == "replaced") {
+			// refs/stash, refs/notes, ...; a shallow or replaced commit's marker.
+			continue;
+		} else {
+			ref = { std::string(item), ref_kind::branch };
+		}
+		if (!ref.name.empty()) out.push_back(std::move(ref));
+	}
+	return out;
+}
+
+bool edt::vcs::is_hex_object_name(std::string_view text)
+{
+	if (text.size() < 4 || text.size() > 64) return false;
+	return std::all_of(text.begin(), text.end(),
+		[](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); });
+}
+
+edt::vcs::tip_list edt::vcs::parse_tips(std::string_view output)
+{
+	const auto full_oid = [](std::string_view oid) { return (oid.size() == 40 || oid.size() == 64) && is_hex_object_name(oid); };
+	tip_list out;
+	std::unordered_set<std::string_view> seen;
+	for (std::string_view line : split_keep_empty(output, '\n')) {
+		if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+		const auto fields = split_keep_empty(line, ' ');
+		if (fields.size() < 2) continue;
+		std::string_view commit;
+		if (fields[1] == "commit") {
+			commit = fields[0];
+		} else if (fields[1] == "tag" && fields.size() >= 4 && fields[3] == "commit") {
+			commit = fields[2];
+		} else if (fields[1] == "tag" && fields.size() >= 4 && fields[3] == "tag") {
+			// One level of %(*...) peels only to the next tag: git peels the outer one to its commit.
+			if (full_oid(fields[0]) && seen.insert(fields[0]).second) out.nested_tags.emplace_back(fields[0]);
+			continue;
+		}
+		if (!full_oid(commit) || !seen.insert(commit).second) continue;
+		out.commits.emplace_back(commit);
+	}
+	return out;
+}
+
+std::vector<edt::vcs::changed_file> edt::vcs::parse_name_status(std::string_view output)
+{
+	// Only what a NUL closed is whole.
+	const std::size_t last = output.rfind('\0');
+	output = last == std::string_view::npos ? std::string_view{} : output.substr(0, last + 1);
+	const auto fields = split_keep_empty(output, '\0');
+	std::vector<changed_file> out;
+	std::size_t i = 0;
+	while (i < fields.size()) {
+		const std::string_view status = fields[i];
+		const bool known = !status.empty() && status.front() >= 'A' && status.front() <= 'Z'
+			&& std::all_of(status.begin() + 1, status.end(), [](char c) { return c >= '0' && c <= '9'; });
+		if (!known) {
+			++i;
+			continue;
+		}
+		changed_file file;
+		file.status = status.front();
+		if (file.status == 'R' || file.status == 'C') {
+			if (i + 2 >= fields.size()) break;
+			file.orig_path = fields[i + 1];
+			file.path = fields[i + 2];
+			i += 3;
+		} else {
+			if (i + 1 >= fields.size()) break;
+			file.path = fields[i + 1];
+			i += 2;
+		}
+		if (!file.path.empty()) out.push_back(std::move(file));
+	}
+	return out;
+}
+
+json::value edt::vcs::to_json(const changed_file& file)
+{
+	json::object out{ { "path", text_of(file.path) }, { "status", json::string(std::string(1, file.status)) } };
+	if (!file.orig_path.empty()) out["orig_path"] = text_of(file.orig_path);
+	return out;
 }
 
 std::vector<edt::vcs::ref_entry> edt::vcs::parse_refs(std::string_view output)
