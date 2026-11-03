@@ -450,6 +450,8 @@ BOOST_AUTO_TEST_CASE(EffectiveVcs_FromTheFiles_ReadAgainWhenTheyChange)
 	BOOST_TEST((policy.effective_vcs().push_branches == std::vector<std::string>{ "agent/*" }));
 
 	dir.write(".snk/agent_policy.json", R"({"vcs":{"push_branches":["bot/*"],"allow_hooks":true}})");
+	policy.set_approval_allowed(true);
+	BOOST_TEST(!policy.approve_project_layer(reviewed(policy)).has_value());
 	BOOST_TEST((policy.effective_vcs().push_branches == std::vector<std::string>{ "bot/*" }));
 	BOOST_TEST(policy.effective_vcs().permissions.allow_hooks);
 
@@ -521,13 +523,14 @@ BOOST_AUTO_TEST_CASE(SaveProject_WritesTheFileAndTakesTheLayerOver)
 {
 	test_util::temp_dir dir("edt_agent_policy_save");
 	const fs::path project_file = dir.path() / ".snk" / "agent_policy.json";
-	edt::agent_policy policy{ project_file, dir.path() / "personal.json" };
+	const edt::approved_snapshot_location approved{ dir.path() / "approved.json", "/projects/save" };
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json", approved };
 
 	BOOST_TEST(!policy.save_project(layer_with(agent_category::code_files, policy_mode::allow)).has_value());
 
 	BOOST_TEST(fs::exists(project_file));
 	BOOST_TEST((policy.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::allow));
-	edt::agent_policy again{ project_file, dir.path() / "personal.json" };
+	edt::agent_policy again{ project_file, dir.path() / "personal.json", approved };
 	BOOST_TEST((again.effective(command_of("code.create", agent_category::code_files)).mode == policy_mode::allow));
 }
 
@@ -1061,6 +1064,7 @@ BOOST_FIXTURE_TEST_CASE(ACommandEntryNamedLikeAnInternalProbe_CannotHideALooseni
 	// Written to the parser: refused as a whole, so the file denies everything and is never adopted.
 	write_project(R"({"categories":{"cmake_presets":"allow","code_files":"allow","code_edit":"allow"},"commands":{"\u0001probe":"deny"}})");
 	const auto policy = make();
+	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
 	BOOST_TEST(!policy->project_error().empty());
 	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
 	BOOST_TEST(!fs::exists(approved_file));
@@ -1107,6 +1111,7 @@ BOOST_FIXTURE_TEST_CASE(APersonsEditOnTopOfTheApprovedLayer_DropsThePendingLoose
 	const auto policy = make();
 	BOOST_TEST((policy->effective(create).mode == policy_mode::deny));
 	write_project(R"({"categories":{"code_files":"allow","build":"ask"},"commands":{}})");
+	policy->effective(create);
 	BOOST_TEST(policy->project_pending_approval());
 
 	edt::policy_layer edited = policy->approved_project();
