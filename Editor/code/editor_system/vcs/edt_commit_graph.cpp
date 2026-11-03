@@ -1,83 +1,151 @@
 #include "edt_commit_graph.h"
+#include <snk/common/engine_assert.h>
 #include <algorithm>
 
 void edt::vcs::commit_graph::append(std::span<const graph_commit> commits)
 {
+	ASSERT_MSG(!m_finished, "commit_graph::append after finish(): lay out a new history in a new graph");
+	if (m_finished) return;
 	m_rows.reserve(m_rows.size() + commits.size());
 	for (const graph_commit& commit : commits) {
+		++m_work;
+		if (!m_seen.insert(commit.hash).second) continue;
+		if (m_rows.size() % k_snapshot_every == 0) snapshot();
+
 		graph_row row;
-		std::vector<std::size_t> waiting;
-		std::vector<std::size_t> passing;
-		for (std::size_t i = 0; i < m_lanes.size(); ++i) {
-			if (!m_lanes[i]) continue;
-			if (*m_lanes[i] == commit.hash) {
-				waiting.push_back(i);
-			} else {
-				passing.push_back(i);
-			}
+		const auto width_before = static_cast<std::uint32_t>(m_lanes.size());
+		std::uint32_t lane = 0;
+		if (const auto waiting = m_waiting.find(commit.hash); waiting != m_waiting.end()) {
+			lane = waiting->second;
+			row.from_above = true;
+			m_waiting.erase(waiting);
+			m_lanes[lane].clear();
+		} else {
+			lane = take_lane();
 		}
-		// The leftmost lane that waited for it carries on; the others merge into it here.
-		const std::size_t lane = waiting.empty() ? free_lane() : waiting.front();
-		for (const std::size_t i : waiting) {
-			row.up.emplace_back(i, lane);
-			m_lanes[i].reset();
-		}
-		for (const std::size_t i : passing) {
-			row.up.emplace_back(i, i);
-			row.down.emplace_back(i, i);
-		}
-		std::sort(row.up.begin(), row.up.end());
+		row.lane = lane;
+		row.links_begin = static_cast<std::uint32_t>(m_links.size());
+		bool lane_used = false;
+		std::uint32_t widest = std::max(width_before, lane + 1);
 
 		for (std::size_t k = 0; k < commit.parents.size(); ++k) {
+			++m_work;
 			const std::string& parent = commit.parents[k];
-			// A lane already waits for it (a branch merged back, or a duplicate parent): join that lane.
-			if (const auto existing = lane_waiting_for(parent)) {
-				// The first parent pulls a lane on its right into the commit's own: a branch merged back ends there,
-				// and the line it came from bends in.
-				if (k == 0 && !m_lanes[lane] && *existing > lane) {
-					m_lanes[lane] = parent;
-					m_lanes[*existing].reset();
-					std::replace(row.down.begin(), row.down.end(), lane_link{ *existing, *existing }, lane_link{ *existing, lane });
-					row.down.emplace_back(lane, lane);
-				} else {
-					row.down.emplace_back(lane, *existing);
-				}
+			if (std::find(commit.parents.begin(), commit.parents.begin() + static_cast<std::ptrdiff_t>(k), parent)
+				!= commit.parents.begin() + static_cast<std::ptrdiff_t>(k)) {
 				continue;
 			}
-			// The first parent goes straight on; the others open the lowest free lane.
-			const std::size_t target = k == 0 && !m_lanes[lane] ? lane : free_lane();
-			m_lanes[target] = parent;
-			row.down.emplace_back(lane, target);
+			if (m_seen.contains(parent)) {
+				++row.dropped;
+				continue;
+			}
+			std::uint32_t target = k_no_lane;
+			if (const auto waiting = m_waiting.find(parent); waiting != m_waiting.end()) {
+				const std::uint32_t other = waiting->second;
+				// The first parent pulls a lane on its right into the commit's own: a branch merged back ends there.
+				if (k == 0 && !lane_used && other > lane) {
+					m_waiting.erase(waiting);
+					free_lane(other);
+					wait(lane, parent);
+					lane_used = true;
+					row.bent = other;
+					widest = std::max(widest, other + 1);
+					target = lane;
+				} else {
+					target = other;
+				}
+			} else if (!lane_used) {
+				wait(lane, parent);
+				lane_used = true;
+				target = lane;
+			} else if (m_lanes.size() - m_free.size() < m_max_lanes) {
+				target = take_lane();
+				wait(target, parent);
+			} else {
+				++row.dropped;
+				continue;
+			}
+			m_links.push_back(target);
+			widest = std::max(widest, target + 1);
 		}
-		std::sort(row.down.begin(), row.down.end());
-
-		row.lane = lane;
-		row.width = lane + 1;
-		for (const auto& [from, to] : row.up) row.width = std::max({ row.width, from + 1, to + 1 });
-		for (const auto& [from, to] : row.down) row.width = std::max({ row.width, from + 1, to + 1 });
-		while (!m_lanes.empty() && !m_lanes.back()) m_lanes.pop_back();
-		m_rows.push_back(std::move(row));
+		if (!lane_used) free_lane(lane);
+		row.links_count = static_cast<std::uint32_t>(m_links.size()) - row.links_begin;
+		row.width = widest;
+		m_rows.push_back(row);
 	}
 }
 
-std::size_t edt::vcs::commit_graph::open_lanes() const
+void edt::vcs::commit_graph::finish()
 {
-	return static_cast<std::size_t>(std::count_if(m_lanes.begin(), m_lanes.end(), [](const auto& lane) { return lane.has_value(); }));
+	m_waiting.clear();
+	m_lanes.clear();
+	m_free.clear();
+	m_finished = true;
 }
 
-std::size_t edt::vcs::commit_graph::free_lane()
+std::span<const std::uint32_t> edt::vcs::commit_graph::links(const graph_row& row) const
 {
-	for (std::size_t i = 0; i < m_lanes.size(); ++i) {
-		if (!m_lanes[i]) return i;
+	return std::span<const std::uint32_t>(m_links).subspan(row.links_begin, row.links_count);
+}
+
+std::vector<std::uint32_t> edt::vcs::commit_graph::lanes_above(std::size_t row) const
+{
+	if (row >= m_rows.size() || m_snapshots.empty()) return {};
+	const std::size_t first = row / k_snapshot_every;
+	std::vector<std::uint32_t> lanes = m_snapshots[first];
+	for (std::size_t r = first * k_snapshot_every; r < row; ++r) advance(lanes, m_rows[r]);
+	return lanes;
+}
+
+void edt::vcs::commit_graph::advance(std::vector<std::uint32_t>& lanes, const graph_row& row) const
+{
+	const auto drop = [&lanes](std::uint32_t lane) {
+		const auto at = std::lower_bound(lanes.begin(), lanes.end(), lane);
+		if (at != lanes.end() && *at == lane) lanes.erase(at);
+	};
+	if (row.from_above) drop(row.lane);
+	if (row.bent != k_no_lane) drop(row.bent);
+	for (const std::uint32_t lane : links(row)) {
+		const auto at = std::lower_bound(lanes.begin(), lanes.end(), lane);
+		if (at == lanes.end() || *at != lane) lanes.insert(at, lane);
+	}
+}
+
+std::uint32_t edt::vcs::commit_graph::take_lane()
+{
+	++m_work;
+	if (!m_free.empty()) {
+		const std::uint32_t lane = *m_free.begin();
+		m_free.erase(m_free.begin());
+		return lane;
 	}
 	m_lanes.emplace_back();
-	return m_lanes.size() - 1;
+	return static_cast<std::uint32_t>(m_lanes.size() - 1);
 }
 
-std::optional<std::size_t> edt::vcs::commit_graph::lane_waiting_for(const std::string& hash) const
+void edt::vcs::commit_graph::free_lane(std::uint32_t lane)
 {
-	for (std::size_t i = 0; i < m_lanes.size(); ++i) {
-		if (m_lanes[i] && *m_lanes[i] == hash) return i;
+	++m_work;
+	m_lanes[lane].clear();
+	m_free.insert(lane);
+	// Trailing free lanes go, so the width shrinks when the rightmost branches end.
+	while (!m_lanes.empty() && m_free.contains(static_cast<std::uint32_t>(m_lanes.size() - 1))) {
+		m_free.erase(static_cast<std::uint32_t>(m_lanes.size() - 1));
+		m_lanes.pop_back();
 	}
-	return std::nullopt;
+}
+
+void edt::vcs::commit_graph::wait(std::uint32_t lane, const std::string& hash)
+{
+	m_lanes[lane] = hash;
+	m_waiting[hash] = lane;
+}
+
+void edt::vcs::commit_graph::snapshot()
+{
+	std::vector<std::uint32_t> lanes;
+	lanes.reserve(m_waiting.size());
+	for (const auto& [hash, lane] : m_waiting) lanes.push_back(lane);
+	std::sort(lanes.begin(), lanes.end());
+	m_snapshots.push_back(std::move(lanes));
 }
