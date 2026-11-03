@@ -27,6 +27,8 @@
 #include <windows.h>
 #include <winioctl.h>
 #include <cstring>
+#else
+#include <sys/stat.h>
 #endif
 
 namespace {
@@ -820,6 +822,156 @@ BOOST_FIXTURE_TEST_CASE(Write_AHeldFolderTurnedIntoALinkBeforeTheCreateIsNotFoll
 #else
 	static_cast<void>(stored); // refused, or written into the junction's own folder: either way not outside
 #endif
+}
+
+// ---- #484: reads go the same way --------------------------------------------------------------------------------------
+// The read is paused on the io thread before the folder walk (before_walk) or with the folders held (folders_held), and a
+// folder or the file is swapped there. Nothing outside the root is read, and nothing blocks.
+
+namespace {
+
+struct read_swap_fixture : swap_fixture
+{
+	// Reads `tag` with `hook` set for that one read, giving up (and failing the test) if the read does not finish.
+	std::string load_with(res::vfs_resolver& r, const char* tag, std::function<void(res::detail::read_stage)> hook,
+		std::uint64_t max_bytes = 0)
+	{
+		res::detail::read_hook_access::set(r, std::move(hook), max_bytes);
+		auto block = r.resolve(res::tag{ tag });
+		const bool finished = block->wait_for(std::chrono::seconds(10));
+		BOOST_REQUIRE_MESSAGE(finished, "the read blocked");
+		res::detail::read_hook_access::set(r, nullptr);
+		if (block->has_error()) return "ERR:" + block->error_msg;
+		return to_string(block->data);
+	}
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(Read_AParentSwappedForALinkBeforeTheWalkIsRefused, read_swap_fixture)
+{
+#if !defined(_WIN32)
+	if (!links_available()) return;
+#endif
+	dir.write("high/levels/keep.txt", "inside");
+	res::vfs_resolver r("res", { low, high });
+	std::string swap_error;
+	const std::string read = load_with(r, "res://levels/keep.txt", [&](res::detail::read_stage stage) {
+		if (stage != res::detail::read_stage::before_walk) {
+			return;
+		}
+		std::error_code ec;
+		fs::rename(high / "levels", high / "levels_moved", ec);
+		if (!ec) {
+#if defined(_WIN32)
+			fs::create_directory(high / "levels", ec);
+			swap_error = ec ? ec.message() : make_junction(high / "levels", outside);
+#else
+			fs::create_directory_symlink(outside, high / "levels", ec);
+			swap_error = ec ? ec.message() : std::string{};
+#endif
+		} else {
+			swap_error = ec.message();
+		}
+	});
+	BOOST_REQUIRE_MESSAGE(swap_error.empty(), swap_error);
+	BOOST_TEST(read.rfind("ERR:", 0) == 0u, read);
+	BOOST_TEST(outside_untouched());
+}
+
+// POSIX: the held folders are the ones read from, wherever they were moved; Windows: a held folder cannot be renamed.
+BOOST_FIXTURE_TEST_CASE(Read_AParentSwappedWhileHeldReadsTheHeldFolder, read_swap_fixture)
+{
+#if !defined(_WIN32)
+	if (!links_available()) return;
+#endif
+	dir.write("high/levels/keep.txt", "inside");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code moved;
+	const std::string read = load_with(r, "res://levels/keep.txt", [&](res::detail::read_stage stage) {
+		if (stage != res::detail::read_stage::folders_held) {
+			return;
+		}
+		fs::rename(high / "levels", high / "levels_moved", moved);
+		if (!moved) {
+			std::error_code ec;
+			fs::create_directory_symlink(outside, high / "levels", ec);
+		}
+	});
+	BOOST_TEST(read == "inside");
+	BOOST_TEST(outside_untouched());
+}
+
+BOOST_FIXTURE_TEST_CASE(Read_AFileSwappedForALinkIsRefused, read_swap_fixture)
+{
+	if (!links_available()) return;
+	dir.write("high/levels/a.txt", "inside");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code swapped;
+	const std::string read = load_with(r, "res://levels/a.txt", [&](res::detail::read_stage stage) {
+		if (stage == res::detail::read_stage::folders_held) {
+			fs::remove(high / "levels" / "a.txt", swapped);
+			if (!swapped) {
+				fs::create_symlink(outside / "keep.txt", high / "levels" / "a.txt", swapped);
+			}
+		}
+	});
+	BOOST_REQUIRE_MESSAGE(!swapped, swapped.message());
+	BOOST_TEST(read.rfind("ERR:Not a regular file", 0) == 0u, read);
+	BOOST_TEST(outside_untouched());
+}
+
+BOOST_FIXTURE_TEST_CASE(Read_AFolderSwappedInIsRefused, read_swap_fixture)
+{
+	dir.write("high/levels/a.txt", "inside");
+	res::vfs_resolver r("res", { low, high });
+	std::error_code swapped;
+	const std::string read = load_with(r, "res://levels/a.txt", [&](res::detail::read_stage stage) {
+		if (stage == res::detail::read_stage::folders_held) {
+			fs::remove(high / "levels" / "a.txt", swapped);
+			if (!swapped) {
+				fs::create_directory(high / "levels" / "a.txt", swapped);
+			}
+		}
+	});
+	BOOST_REQUIRE_MESSAGE(!swapped, swapped.message());
+	BOOST_TEST(read.rfind("ERR:Not a regular file", 0) == 0u, read);
+}
+
+#if !defined(_WIN32)
+// A FIFO without a writer would block an open or a read forever: refused at once.
+BOOST_FIXTURE_TEST_CASE(Read_AFifoIsRefusedWithoutBlocking, read_swap_fixture)
+{
+	fs::create_directories(high / "levels");
+	BOOST_REQUIRE(::mkfifo((high / "levels" / "pipe.txt").c_str(), 0600) == 0);
+	res::vfs_resolver r("res", { low, high });
+	BOOST_TEST(load_with(r, "res://levels/pipe.txt", nullptr).rfind("ERR:Not a regular file", 0) == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(Read_AFifoSwappedInAfterTheCheckIsRefusedWithoutBlocking, read_swap_fixture)
+{
+	dir.write("high/levels/a.txt", "inside");
+	res::vfs_resolver r("res", { low, high });
+	int made = -1;
+	const std::string read = load_with(r, "res://levels/a.txt", [&](res::detail::read_stage stage) {
+		if (stage == res::detail::read_stage::folders_held) {
+			std::error_code ec;
+			fs::remove(high / "levels" / "a.txt", ec);
+			made = ::mkfifo((high / "levels" / "a.txt").c_str(), 0600);
+		}
+	});
+	BOOST_REQUIRE(made == 0);
+	BOOST_TEST(read.rfind("ERR:Not a regular file", 0) == 0u, read);
+}
+#endif
+
+BOOST_FIXTURE_TEST_CASE(Read_OverTheCapIsRefused, read_swap_fixture)
+{
+	dir.write("high/big.txt", "0123456789");
+	res::vfs_resolver r("res", { low, high });
+	const std::string read = load_with(r, "res://big.txt", nullptr, 4);
+	BOOST_TEST(read.rfind("ERR:File is larger than 4 bytes", 0) == 0u, read);
+	BOOST_TEST(load_with(r, "res://big.txt", nullptr, 10) == "0123456789");
 }
 
 // The root's folder renamed away and a new one made at its path (a project recreated): the next write goes to the new one.
