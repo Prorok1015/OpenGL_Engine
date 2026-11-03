@@ -123,6 +123,9 @@ namespace cmd
 		// MCP clients (destructiveHint = mutates && (destructive || risk != none)); the policy never reads it.
 		bool destructive = false;
 		agent_category category = agent_category::unset;
+		// The category of one call when it depends on the arguments (code.write to a CMake file is cmake_presets, not
+		// code_edit). Pure; called only with arguments that match args_schema (category_of_call). Null: `category`.
+		std::function<agent_category(const call&)> category_of;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
 		std::function<result(const call&)> invoke;

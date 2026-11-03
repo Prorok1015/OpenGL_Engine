@@ -1086,6 +1086,55 @@ BOOST_AUTO_TEST_CASE(ABusyLiveCall_IsDeniedIfLiveModeIsSwitchedOffBeforeTheNextT
 	access.policy().set_live_mode(nullptr);
 }
 
+BOOST_AUTO_TEST_CASE(ACallJudgedByAnotherCategory_AsksForThatCategory_AndTheGrantAndTheBusyRetryFollowIt)
+{
+	// code.write is code_edit, but a write to CMakeLists.txt is judged as cmake_presets.
+	cmd::command_desc desc = make("code.write");
+	desc.category = cmd::agent_category::code_edit;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]})");
+	desc.category_of = [](const cmd::call& request) {
+		return request.args.as_object().at("path").as_string() == "CMakeLists.txt" ? cmd::agent_category::cmake_presets
+			: cmd::agent_category::code_edit;
+	};
+	desc.invoke = [this](const cmd::call&) {
+		++attempts;
+		if (attempts == 1) return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit");
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+
+	// code_edit asks by default, so a plain file is asked about too.
+	mcp::request_context context;
+	context.session_id = "session-1";
+	std::optional<mcp::call_result> cmake;
+	bridge.call_tool(context, "code_write", json_of(R"({"path":"CMakeLists.txt"})"), nullptr, [&cmake](mcp::call_result r) { cmake = std::move(r); });
+	drain();
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	BOOST_TEST((waiting[0].category == cmd::agent_category::cmake_presets));
+
+	// "Allow until the end of the session" is for the category that asked; the call is busy once and runs on the next tick.
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_session));
+	BOOST_TEST(!cmake.has_value());
+	BOOST_TEST(access.confirmations().pending().empty());
+	access.confirmations().tick();
+	BOOST_REQUIRE(cmake.has_value());
+	BOOST_TEST(!cmake->is_error);
+	BOOST_TEST(runs == 1);
+	BOOST_TEST(access.grants().has("session-1", cmd::agent_category::cmake_presets));
+	BOOST_TEST(!access.grants().has("session-1", cmd::agent_category::code_edit));
+
+	// The grant does not cover the plain file: it is code_edit, which still asks.
+	std::optional<mcp::call_result> plain;
+	bridge.call_tool(context, "code_write", json_of(R"({"path":"a.cpp"})"), nullptr, [&plain](mcp::call_result r) { plain = std::move(r); });
+	drain();
+	BOOST_TEST(!plain.has_value());
+	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
+	BOOST_TEST((access.confirmations().pending().front().category == cmd::agent_category::code_edit));
+}
+
 BOOST_AUTO_TEST_CASE(ASessionGrant_AllowsTheNextCallOfThatCategoryWithoutAQuestion)
 {
 	add_code_command();
