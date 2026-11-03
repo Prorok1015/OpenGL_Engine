@@ -857,7 +857,7 @@ namespace edt
 		const effective_policy held = effective_mode_of_call(command, category, m_approved, m_personal.layer, {}, m_personal.error, live_on);
 		if (held.mode <= now.mode) return now;
 		return { held.mode, policy_source::approval_pending,
-			"the project's agent_policy.json has something a person has not approved yet; until then the approved version applies: " + held.reason };
+			"the project's agent_policy.json has something that waits for a person's approval; until then the approved version applies: " + held.reason };
 	}
 
 	vcs_policy agent_policy::effective_vcs()
