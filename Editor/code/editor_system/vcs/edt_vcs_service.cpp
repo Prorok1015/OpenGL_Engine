@@ -73,6 +73,8 @@ namespace {
 		bool check_repo_config = false;
 		// Guarded, with allow_any_repo_config, on git before 2.45 (no GIT_NO_LAZY_FETCH): a partial clone still refuses.
 		bool refuse_partial_clone = false;
+		// Git before 2.45 (GIT_NO_LAZY_FETCH may be ignored): a read refuses a partial clone (partial_clone_read_refusal).
+		bool refuse_partial_clone_read = false;
 		bool allow_hooks = false;
 		// Guarded write that can run filter drivers, without allow_filters: refused when a configured driver applies
 		// to a file it touches.
@@ -111,7 +113,7 @@ namespace {
 
 	// A repository's own config (a project unzipped with its .git) must never run a program on a read: every key that
 	// names a program git could start during status, diff, log, for-each-ref or rev-parse is overridden here, hooks
-	// and filter drivers per read (run_read). Every call, writes included, gets these.
+	// and filter drivers per read (harden_read). Every call, writes included, gets these.
 	std::vector<std::string> safe_base_args()
 	{
 		return { "--no-pager",
@@ -276,20 +278,6 @@ namespace {
 			}
 		}
 		return std::nullopt;
-	}
-
-	// Every read: no hooks, filters off first, then git.
-	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
-		std::size_t cap = k_read_cap)
-	{
-#ifdef _WIN32
-		constexpr const char* no_hooks = "core.hooksPath=NUL";
-#else
-		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
-#endif
-		git.config_args.insert(git.config_args.begin(), { "-c", no_hooks });
-		if (auto refused = switch_off_filters(git, stop)) return std::move(*refused);
-		return run_git(git, args, stop, cap);
 	}
 
 	// A write's git. Output is not capped: stopping a write half way is worse than its text.
@@ -732,6 +720,15 @@ namespace {
 		return true;
 	}
 
+	// A partial clone, which lazily fetches a missing object from its promisor remote: extensions.partialClone, or a
+	// true remote.<name>.promisor (git 2.43 `clone --filter` writes only that, and partialclonefilter).
+	bool is_partial_clone_key(const scoped_entry& entry)
+	{
+		const std::string lower = lower_case(entry.key);
+		if (lower == "extensions.partialclone") return true;
+		return lower.starts_with("remote.") && lower.ends_with(".promisor") && config_bool(entry.value, entry.has_value);
+	}
+
 	// A guarded call without allow_any_repo_config: refused (unsafe_repository) when the repository's own config
 	// (.git/config and the worktree's config.worktree; includes not followed, include.* itself is no allowed key) sets
 	// a key outside the allowlist. Read before anything else of the call.
@@ -783,18 +780,10 @@ namespace {
 					"hook, which a git write not made by a person runs only when hooks are allowed for it",
 					edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
 			}
-			// git 2.43 `clone --filter` writes only remote.<name>.promisor (and partialclonefilter), no extension.
-			const bool promisor = lower.starts_with("remote.") && lower.ends_with(".promisor")
-				&& config_bool(entry.value, entry.has_value);
-			if (git.refuse_partial_clone && promisor) {
-				return refused("unsafe_repository", std::format("the repository is a partial clone ('{}' is true, {}): lazy "
-					"fetch can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
-					"project allows any repository config", edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
-			}
-			if (git.refuse_partial_clone && lower == "extensions.partialclone") {
-				return refused("unsafe_repository", std::format("the repository is a partial clone ({}): lazy fetch "
+			if (git.refuse_partial_clone && is_partial_clone_key(entry)) {
+				return refused("unsafe_repository", std::format("the repository is a partial clone ('{}', {}): lazy fetch "
 					"can't be disabled before git 2.45, so a git write not made by a person is refused even though the "
-					"project allows any repository config", edt::vcs::valid_utf8(entry.scope)));
+					"project allows any repository config", edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
 			}
 			if (!git.check_repo_config) continue;
 			if (!repo_key_allowed(entry.key, git.allow_hooks)) {
@@ -804,6 +793,49 @@ namespace {
 			}
 		}
 		return std::nullopt;
+	}
+
+	// A read on a git that may ignore GIT_NO_LAZY_FETCH: refused (unsafe_repository) in a partial clone, whose lazy
+	// fetch would run whatever transport program the repository's config names. All scopes, includes followed.
+	std::optional<git_output> partial_clone_read_refusal(const git_context& git, std::stop_token stop)
+	{
+		if (!git.refuse_partial_clone_read) return std::nullopt;
+		git_output listed = run_git(git, { "config", "-z", "--show-origin", "--get-regexp",
+			"^(extensions\\.partialclone|remote\\..*\\.promisor)$" }, stop, k_read_cap);
+		if (listing_failed(listed)) return listed;
+		if (listed.truncated) return refused("unsafe_repository", "the repository's git config is too large to check");
+		for (const auto& entry : scoped_entries_of(listed.out)) {
+			if (!is_partial_clone_key(entry)) continue;
+			return refused("unsafe_repository", std::format("the repository is a partial clone ('{}', {}): lazy fetch "
+				"can't be disabled before git 2.45, so version control does not read it with this git",
+				edt::vcs::valid_utf8(entry.key), edt::vcs::valid_utf8(entry.scope)));
+		}
+		return std::nullopt;
+	}
+
+	// What every read's git gets, whatever runs it next: no hooks, no transport, no partial clone on a git that would
+	// lazily fetch, filters off. Nullopt when done; otherwise what to report instead of running git.
+	std::optional<git_output> harden_read(git_context& git, std::stop_token stop)
+	{
+#ifdef _WIN32
+		constexpr const char* no_hooks = "core.hooksPath=NUL";
+#else
+		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
+#endif
+		// A read never needs the network. The repository's protocol.<name>.allow beats protocol.allow, so each
+		// transport git knows is closed by name as well.
+		git.config_args.insert(git.config_args.begin(), { "-c", no_hooks, "-c", "protocol.allow=never",
+			"-c", "protocol.file.allow=never", "-c", "protocol.git.allow=never", "-c", "protocol.ssh.allow=never",
+			"-c", "protocol.http.allow=never", "-c", "protocol.https.allow=never", "-c", "protocol.ext.allow=never" });
+		if (auto refusal = partial_clone_read_refusal(git, stop)) return refusal;
+		return switch_off_filters(git, stop);
+	}
+
+	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
+		std::size_t cap = k_read_cap)
+	{
+		if (auto refusal = harden_read(git, stop)) return std::move(*refusal);
+		return run_git(git, args, stop, cap);
 	}
 
 	// A capped output ends inside a record: only the records up to the last `separator` are whole.
@@ -1264,6 +1296,10 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 	const state& now = info();
 	if (!m_git_found || !m_probed_project || now.code == "vcs_unavailable" || now.code == "no_project") return unavailable();
 	git_context context = make_context(m_state.git, m_environment, now.root ? *now.root : *m_probed_project, m_options.run);
+	// GIT_NO_LAZY_FETCH is honoured by git 2.45+ and by maintenance releases back to 2.39.4 (distro 2.43 too); the
+	// version alone cannot tell those apart, so before 2.45 a partial clone is refused instead.
+	const bool lazy_fetch_may_run = !version_at_least(m_state.git_version, 2, 45);
+	context.refuse_partial_clone_read = lazy_fetch_may_run;
 	// Everything not from a person (agent, test, game) takes the guarded path.
 	const bool guarded = write && write->caller != cmd::origin_kind::ui;
 	// The network checks read the config with --show-scope (git 2.26).
@@ -1304,9 +1340,6 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		// The first core.gitProxy git reads wins, so the repository's would come before the -c one; an empty
 		// GIT_PROXY_COMMAND is read before any config and means no proxy.
 		set_variable(context.environment, "GIT_PROXY_COMMAND", "");
-		// A partial clone fetches a missing object from its promisor remote on demand, past network_refusal. Honoured
-		// by git 2.45+ and by maintenance releases back to 2.39.4 (distro 2.43 too); config_refusal covers the rest.
-		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
 		context.attr_source = version_at_least(m_state.git_version, 2, 40);
 		if (!permissions.allow_hooks) {
 			if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
@@ -1315,8 +1348,7 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		}
 		context.guarded = true;
 		context.check_repo_config = !permissions.allow_any_repo_config;
-		context.refuse_partial_clone = permissions.allow_any_repo_config
-			&& !version_at_least(m_state.git_version, 2, 45);
+		context.refuse_partial_clone = permissions.allow_any_repo_config && lazy_fetch_may_run;
 		context.allow_hooks = permissions.allow_hooks;
 		context.refuse_filters = write->runs_filters && !permissions.allow_filters;
 		context.guard_network = write->network;
@@ -1345,6 +1377,9 @@ edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 	set_variable(m_environment, "GIT_TERMINAL_PROMPT", "0");
 	set_variable(m_environment, "GCM_INTERACTIVE", "never");
 	if (!variable_of(m_environment, "GIT_SSH_COMMAND")) set_variable(m_environment, "GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+	// A partial clone fetches a missing object from its promisor remote on demand, through whatever transport program
+	// the repository's config names, a read too. Older git may ignore it: run_job's version rule covers that.
+	set_variable(m_environment, "GIT_NO_LAZY_FETCH", "1");
 
 	fs::path git = m_options.git;
 	if (git.empty()) {

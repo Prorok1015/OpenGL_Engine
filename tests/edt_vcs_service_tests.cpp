@@ -1560,6 +1560,65 @@ BOOST_AUTO_TEST_CASE(APromisorRemoteWithoutTheExtension_LazyFetchesNothingOnAGua
 	BOOST_TEST(!fs::exists(marker, ec));
 }
 
+// #503: a read in a partial clone that needs a blob the clone lacks would fetch it from the promisor remote, through
+// whatever program the repository's config names for the transport. No read runs one, whatever the remote's URL;
+// before git 2.45 the reads refuse the partial clone.
+BOOST_AUTO_TEST_CASE(APartialClone_RunsNoTransportProgramOnAnyRead)
+{
+	isolate_config();
+	const fs::path source = make_plain_repository("lazy_source");
+	write(source / "a.txt", "one\ntwo\n");
+	git(source, { "commit", "-q", "-am", "second" });
+	const fs::path server = base / "lazy_server.git";
+	git(base, { "clone", "-q", "--bare", generic_text(source), generic_text(server) });
+	git(server, { "config", "uploadpack.allowFilter", "true" });
+	const fs::path repo = base / "lazy_clone";
+	git(base, { "clone", "-q", "--no-checkout", "--filter=blob:none", file_url(server), generic_text(repo) });
+	// The index names blobs the clone never fetched: a diff against the empty work tree needs them.
+	git(repo, { "read-tree", "HEAD" });
+	BOOST_REQUIRE_MESSAGE(git_text(repo, { "rev-list", "--objects", "--missing=print", "HEAD" }).find('?') != std::string::npos,
+		"the clone holds every blob: the checks below prove nothing");
+
+	const fs::path marker = base / "lazy_transport_ran.txt";
+	const fs::path script = base / "lazy-transport.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexec git upload-pack \"$@\"\n");
+	// The repository opens every transport for itself; a read's -c overrides beat that.
+	git(repo, { "config", "protocol.allow", "always" });
+	git(repo, { "config", "protocol.file.allow", "always" });
+	git(repo, { "config", "protocol.ext.allow", "always" });
+	git(repo, { "config", "remote.origin.uploadpack", generic_text(script) });
+	git(repo, { "config", "core.gitProxy", generic_text(script) });
+	git(repo, { "config", "core.sshCommand", generic_text(script) });
+	make_service(real_options(repo));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	const bool lazy_fetch_off = git_at_least(service->info().git_version, 2, 45);
+
+	std::error_code ec;
+	const std::vector<std::string> urls{ file_url(server), "ext::" + generic_text(script), "git://127.0.0.1:9/lazy.git",
+		"ssh://127.0.0.1:9/lazy.git" };
+	for (const std::string& url : urls) {
+		BOOST_TEST_CONTEXT(url) {
+			git(repo, { "config", "remote.origin.url", url });
+			for (const auto& started : { service->start_status(), service->start_diff({}, false), service->start_diff("a.txt", false),
+					service->start_log({}, "a.txt", 10, {}), service->start_branches() }) {
+				const json::value result = finish(started);
+				BOOST_TEST_INFO("result: " << json::serialize(result));
+				// Git 2.45+: a normal answer, or git's error for the missing blob.
+				if (!lazy_fetch_off) BOOST_TEST(is_error(result, "unsafe_repository"));
+			}
+			BOOST_TEST(!fs::exists(marker, ec), "a read ran a program the repository's config names");
+		}
+	}
+
+	// Plain git fetches the blob through the hostile upload-pack: what the reads above kept from running.
+	git(repo, { "config", "remote.origin.url", file_url(server) });
+	platform::process_options plain;
+	plain.working_dir = repo;
+	plain.environment = environment;
+	static_cast<void>(platform::run_process(real_git(), { "diff" }, plain, [](std::string_view) {}, {}));
+	BOOST_WARN_MESSAGE(fs::exists(marker, ec), "plain git ran no upload-pack of the repository's here: the checks above prove less");
+}
+
 // Final review of #474 (N3b): an untracked top-level .gitattributes sets the filter, a tracked sub/.gitattributes
 // edited in the work tree unsets it: none of the three check-attr views names the driver, yet checkout smudges. A
 // tracked .gitattributes that differs from the index refuses on every git.
@@ -1873,6 +1932,118 @@ BOOST_AUTO_TEST_CASE(EveryCall_GetsTheFixedOptionsAndEnvironment)
 	BOOST_TEST(edt::variable_of(env, "GCM_INTERACTIVE").value_or("") == "never");
 	BOOST_TEST(edt::variable_of(env, "GIT_SSH_COMMAND").value_or("") == "ssh -oBatchMode=yes");
 	BOOST_TEST(edt::variable_of(env, "PATH").value_or("") == "/nowhere");
+}
+
+// #503: every read closes every transport ahead of the repository's config; every call (a person's write too) runs
+// without lazy fetch. On git 2.45+ the reads do not read the config for a partial clone.
+BOOST_AUTO_TEST_CASE(EveryRead_ClosesEveryTransport_AndNoCallLazilyFetches)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	make_service(fake_options());
+	BOOST_REQUIRE(service->info().available);
+#ifdef _WIN32
+	const std::string no_hooks = "core.hooksPath=NUL";
+#else
+	const std::string no_hooks = "core.hooksPath=/dev/null";
+#endif
+	const std::vector<std::string> transports_closed{ "-c", "protocol.allow=never", "-c", "protocol.file.allow=never",
+		"-c", "protocol.git.allow=never", "-c", "protocol.ssh.allow=never", "-c", "protocol.http.allow=never",
+		"-c", "protocol.https.allow=never", "-c", "protocol.ext.allow=never" };
+
+	finish(service->start_status());
+	std::vector<std::string> expected{ "--no-pager", "-c", "core.quotepath=off", "-c", "core.fsmonitor=false",
+		"-c", "diff.external=", "-c", "log.showSignature=false", "-c", "status.submoduleSummary=false",
+		"-c", "diff.ignoreSubmodules=all", "--no-optional-locks", "--literal-pathspecs", "-c", no_hooks };
+	expected.insert(expected.end(), transports_closed.begin(), transports_closed.end());
+	for (const char* config : { "filter.lfs.clean=", "filter.lfs.smudge=", "filter.lfs.process=", "filter.lfs.required=false" }) {
+		expected.emplace_back("-c");
+		expected.emplace_back(config);
+	}
+	for (const char* arg : { "status", "--porcelain=v2", "--branch", "-z", "--ignore-submodules=all" }) expected.emplace_back(arg);
+	BOOST_TEST(calls.back() == expected, boost::test_tools::per_element());
+	// The filter listing of the read runs closed too.
+	BOOST_TEST(std::search(calls[calls.size() - 2].begin(), calls[calls.size() - 2].end(), transports_closed.begin(),
+		transports_closed.end()) != calls[calls.size() - 2].end());
+
+	const auto no_partial_clone_check = [this] {
+		return std::none_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
+			return has_arg(call, "--show-origin") && has_arg(call, "--get-regexp");
+		});
+	};
+	BOOST_TEST(no_partial_clone_check());
+	const std::vector<std::function<edt::vcs_service::started()>> reads{
+		[this] { return service->start_diff({}, false); },
+		[this] { return service->start_diff("a.txt", true); },
+		[this] { return service->start_log("main", "a.txt", 10, {}); },
+		[this] { return service->start_branches(); } };
+	for (const auto& start : reads) {
+		calls.clear();
+		finish(start());
+		BOOST_REQUIRE(!calls.empty());
+		const auto& args = calls.back();
+		BOOST_TEST(std::search(args.begin(), args.end(), transports_closed.begin(), transports_closed.end()) != args.end());
+		BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1");
+		BOOST_TEST(no_partial_clone_check());
+	}
+
+	finish(service->start_branch_create("topic", {}, cmd::origin_kind::ui));
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1");
+	BOOST_TEST(!has_arg(calls.back(), "protocol.allow=never"));
+}
+
+// #503: before git 2.45 GIT_NO_LAZY_FETCH may be ignored, so a read in a partial clone (extensions.partialClone or a
+// true remote.<name>.promisor, any scope) is refused before git runs; any other repository reads as usual.
+BOOST_AUTO_TEST_CASE(AGitBefore2_45_RefusesReadsInAPartialClone)
+{
+	int reads_run = 0;
+	command = [&reads_run](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { ++reads_run; return exited(0); };
+	const auto listing = std::make_shared<std::string>();
+	auto options = fake_options();
+	options.run = [inner = options.run, listing](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.43.0\n");
+			return exited(0);
+		}
+		if (has_arg(args, "--show-origin") && has_arg(args, "--get-regexp")) {
+			if (listing->empty()) return exited(1);
+			on_line(*listing);
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	BOOST_REQUIRE(service->info().available);
+
+	*listing = "file:.git/config\0remote.origin.promisor\ntrue\0"s;
+	const auto reads = { service->start_status(), service->start_diff({}, false), service->start_diff("a.txt", true),
+		service->start_log({}, "a.txt", 10, {}), service->start_branches() };
+	for (const auto& started : reads) {
+		const json::value result = finish(started);
+		BOOST_TEST_INFO("result: " << json::serialize(result));
+		BOOST_REQUIRE(is_error(result, "unsafe_repository"));
+		BOOST_TEST(text(result.as_object().at("error").as_object().at("message")).find("partial clone") != std::string::npos);
+	}
+	BOOST_TEST(reads_run == 0);
+
+	*listing = "file:.git/config\0extensions.partialclone\norigin\0"s;
+	BOOST_TEST(is_error(finish(service->start_status()), "unsafe_repository"));
+	BOOST_TEST(reads_run == 0);
+
+	for (const std::string& normal : { "file:.git/config\0remote.origin.promisor\nfalse\0"s, std::string{} }) {
+		*listing = normal;
+		calls.clear();
+		const json::value result = finish(service->start_status());
+		BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+		BOOST_REQUIRE(!calls.empty());
+		BOOST_TEST(has_arg(calls.back(), "status"));
+	}
+
+	// A person's write is no read: it runs, without lazy fetch.
+	*listing = "file:.git/config\0remote.origin.promisor\ntrue\0"s;
+	BOOST_TEST(!finish(service->start_branch_create("topic", {}, cmd::origin_kind::ui)).as_object().contains("error"));
 }
 
 BOOST_AUTO_TEST_CASE(AUserGitSshCommand_IsKept)
