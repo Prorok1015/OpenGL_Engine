@@ -676,8 +676,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			registration added = register_editor_quit(commands, std::move(quit));
 			if (added.active()) m_registrations.push_back(std::move(added));
 		}
-	} else if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
-		egLOG_WARN("agent", "--agent-policy {} is not used: no agent server (editor/agent_server or --mcp-stdio)", utf8_of(preanswers));
 	}
 }
 
