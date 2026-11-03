@@ -428,13 +428,13 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 		return true;
 	};
 	// Shared by every copy of the sink: when the last one goes without an answer, the request completes empty.
-	auto request = std::make_shared<unanswered_request>(respond);
+	auto pending = std::make_shared<unanswered_request>(respond);
 	try {
-		m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [request](json::value answer) {
-			request->answer(json_response(answer));
+		m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [pending](json::value answer) {
+			pending->answer(json_response(answer));
 		});
 	} catch (...) {
-		request->disarm();
+		pending->disarm();
 		throw;
 	}
 }
