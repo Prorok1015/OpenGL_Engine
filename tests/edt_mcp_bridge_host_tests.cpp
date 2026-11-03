@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -738,6 +739,67 @@ BOOST_AUTO_TEST_CASE(ReadResource_UnknownOrUnavailableOrFailing)
 	const mcp::resource_result failed = read_resource("snk://viewport/game.png");
 	BOOST_TEST(!failed.found);
 	BOOST_TEST(failed.error == "not_found: unknown viewport 'game'");
+}
+
+BOOST_AUTO_TEST_CASE(Headless_AToolThatNeedsADisplay_IsListedMarked_AndEveryCallIsUnavailable)
+{
+	int runs = 0;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.needs_display = true;
+	capture.args_schema = json_of(capture_args_schema);
+	capture.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(capture));
+	// Hidden by the policy (build is denied by default): it stays hidden, needs_display or not.
+	cmd::command_desc hidden = make("build.game_module");
+	hidden.category = cmd::agent_category::build;
+	hidden.needs_display = true;
+	add(std::move(hidden));
+	add(make("log.read"));
+
+	for (const mcp::tool_info& tool : list_tools()) {
+		BOOST_TEST_CONTEXT(tool.name) { BOOST_TEST(!tool.unavailable_headless); }
+	}
+
+	commands.set_headless(true);
+	const std::vector<mcp::tool_info> tools = list_tools();
+	BOOST_TEST((names_of(tools) == std::vector<std::string>{ "viewport_capture", "log_read" }));
+	for (const mcp::tool_info& tool : tools) {
+		BOOST_TEST_CONTEXT(tool.name) { BOOST_TEST(tool.unavailable_headless == (tool.name == "viewport_capture")); }
+	}
+
+	const mcp::call_result result = call_tool("viewport_capture");
+	BOOST_TEST(result.is_error);
+	BOOST_REQUIRE_EQUAL(result.content.size(), 1u);
+	BOOST_TEST(result.content[0].text.starts_with("unavailable_headless: "));
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Headless_AViewportResource_IsUnavailableHeadless)
+{
+	int runs = 0;
+	cmd::command_desc capture = make("viewport.capture");
+	capture.needs_display = true;
+	capture.args_schema = json_of(capture_args_schema);
+	capture.result_schema = json_of(capture_result_schema);
+	capture.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success(json_of(R"({"viewport":"scene","width":1,"height":1,"format":"png","png_base64":"QUJD"})"));
+	};
+	add(std::move(capture));
+	BOOST_TEST(read_resource("snk://viewport/scene.png").found);
+
+	commands.set_headless(true);
+	for (const char* uri : { "snk://viewport/scene.png", "snk://viewport/game.png" }) {
+		const mcp::resource_result result = read_resource(uri);
+		BOOST_TEST_CONTEXT(uri) {
+			BOOST_TEST(!result.found);
+			BOOST_TEST(result.error.starts_with("unavailable_headless: "));
+		}
+	}
+	BOOST_TEST(runs == 1);
 }
 
 BOOST_AUTO_TEST_CASE(ReadResource_AMutatingCommandIsNeverRead)

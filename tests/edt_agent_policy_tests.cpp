@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <string>
@@ -841,6 +842,202 @@ BOOST_AUTO_TEST_CASE(AnUnclassifiedCommand_StaysDenied_WhateverCategoryItsCallHa
 	const cmd::command_desc not_for = command_of("edit.accept", agent_category::not_for_agents);
 	BOOST_TEST((edt::effective_mode_of_call(unset, agent_category::code_edit, allow_all, {}).mode == policy_mode::deny));
 	BOOST_TEST((edt::effective_mode_of_call(not_for, agent_category::code_edit, allow_all, {}).mode == policy_mode::deny));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// The --agent-policy file (#452 PR-3): answers to `ask` given in advance, read only while nobody can be asked.
+BOOST_AUTO_TEST_SUITE(EdtAgentPolicyPreanswers)
+
+namespace {
+
+struct preanswers_fixture
+{
+	test_util::temp_dir dir{ "edt_agent_policy_preanswers" };
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+
+	void answers(std::string_view text)
+	{
+		dir.write("answers.json", text);
+		policy.set_preanswers_file(dir.path() / "answers.json");
+	}
+
+	policy_mode mode_of(const cmd::command_desc& command) { return policy.effective(command).mode; }
+};
+
+}
+
+BOOST_FIXTURE_TEST_CASE(WithoutAPerson_TheFileTurnsAskIntoAllow, preanswers_fixture)
+{
+	answers(R"({"categories":{"code_files":"allow"},"commands":{"code.write":"allow"}})");
+	const auto create = command_of("code.create", agent_category::code_files);
+	const auto write = command_of("code.write", agent_category::code_edit);
+
+	BOOST_TEST(policy.preanswers_error().empty());
+	BOOST_TEST((mode_of(create) == policy_mode::allow));
+	BOOST_TEST((policy.effective(create).source == edt::policy_source::preanswers));
+	BOOST_TEST((mode_of(write) == policy_mode::allow));
+	// What the file does not answer still asks (and is a deny at the gate without a person).
+	BOOST_TEST((mode_of(command_of("code.edit_other", agent_category::code_edit)) == policy_mode::ask));
+}
+
+BOOST_FIXTURE_TEST_CASE(WithAPerson_TheSameFileDoesNothing_AskStillGoesToThePerson, preanswers_fixture)
+{
+	answers(R"({"categories":{"code_files":"allow","scene_edit":"deny"}})");
+	policy.set_person_can_answer(true);
+
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::ask));
+	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::allow));
+
+	policy.set_person_can_answer(false);
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::allow));
+}
+
+BOOST_FIXTURE_TEST_CASE(TheProjectsDeny_Stays, preanswers_fixture)
+{
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_files":"deny"},"commands":{"scene.move":"deny"}})");
+	answers(R"({"categories":{"code_files":"allow"},"commands":{"scene.move":"allow"}})");
+
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(ThePersonalDeny_Stays, preanswers_fixture)
+{
+	dir.write("personal.json", R"({"categories":{"code_files":"deny"}})");
+	answers(R"({"categories":{"code_files":"allow"}})");
+
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAllowForBuild_WhichIsDeniedByDefault_GivesNothing, preanswers_fixture)
+{
+	answers(R"({"categories":{"build":"allow"},"commands":{"build.game_module":"allow"}})");
+
+	BOOST_TEST((mode_of(command_of("build.game_module", agent_category::build, cmd::danger::deny_by_default)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("build.other", agent_category::build)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(NeverOpensWhatNoFileCanOpen, preanswers_fixture)
+{
+	answers(R"({"commands":{"misc.thing":"allow","edit.accept":"allow","live.reload":"allow"}})");
+
+	BOOST_TEST((mode_of(command_of("misc.thing", agent_category::unset)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("edit.accept", agent_category::not_for_agents)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("live.reload", agent_category::live)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(ACategoryAllow_DoesNotLiftARiskFloor_TheCommandsOwnEntryDoes, preanswers_fixture)
+{
+	answers(R"({"categories":{"read":"allow"}})");
+	const auto risky = command_of("viewport.peek", agent_category::read, cmd::danger::confirm);
+	BOOST_TEST((mode_of(risky) == policy_mode::ask));
+
+	answers(R"({"commands":{"viewport.peek":"allow"}})");
+	BOOST_TEST((mode_of(risky) == policy_mode::allow));
+}
+
+BOOST_FIXTURE_TEST_CASE(Tightening_AllowToDeny_WorksWithoutAPerson, preanswers_fixture)
+{
+	answers(R"({"categories":{"scene_edit":"deny"},"commands":{"scene.query":"ask"}})");
+
+	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::ask));
+	// A category "allow" never tightens a command the layers already allow, risk or not.
+	answers(R"({"categories":{"read":"allow"}})");
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::allow));
+}
+
+BOOST_FIXTURE_TEST_CASE(AnAllowFlagInAVcsSection_IsAFileError_AndEverythingIsDenied, preanswers_fixture)
+{
+	answers(R"({"categories":{"code_files":"allow"},"vcs":{"allow_hooks":true}})");
+
+	BOOST_TEST(!policy.preanswers_error().empty());
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::deny));
+	BOOST_TEST((policy.effective(command_of("scene.query", agent_category::read)).source == edt::policy_source::preanswers));
+}
+
+BOOST_AUTO_TEST_CASE(AnyVcsSection_IsRefusedInTheFile_TheLayersStillTakeIt)
+{
+	for (const char* text : { R"({"vcs":{"allow_filters":false}})", R"({"vcs":{"push_branches":["agent/*"]}})", R"({"vcs":{}})" }) {
+		BOOST_TEST_CONTEXT(text) {
+			BOOST_TEST(!edt::parse_policy_layer(text, edt::policy_layer_kind::preanswers).error.empty());
+			BOOST_TEST(edt::parse_policy_layer(text, edt::policy_layer_kind::project).error.empty());
+		}
+	}
+}
+
+BOOST_FIXTURE_TEST_CASE(AMissingFile_DeniesEverything_WithAnError, preanswers_fixture)
+{
+	std::vector<std::string> errors;
+	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error && category == "editor/agent_policy") errors.emplace_back(message);
+	});
+	policy.set_preanswers_file(dir.path() / "no_such_answers.json");
+
+	BOOST_TEST(errors.size() == 1u);
+	BOOST_TEST(!policy.preanswers_error().empty());
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::deny));
+
+	// Once the file is there it is read like the layers, without a restart.
+	dir.write("no_such_answers.json", "{}");
+	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::allow));
+	BOOST_TEST(policy.preanswers_error().empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(ABrokenFile_DeniesEverything, preanswers_fixture)
+{
+	answers("{ not json");
+
+	BOOST_TEST(!policy.preanswers_error().empty());
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(NoFileNamed_ChangesNothing, preanswers_fixture)
+{
+	BOOST_TEST(!policy.has_preanswers());
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::ask));
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::allow));
+}
+
+BOOST_FIXTURE_TEST_CASE(ThroughTheGate_AnAnsweredAskRuns_OnlyWhileNobodyCanBeAsked, preanswers_fixture)
+{
+	answers(R"({"categories":{"code_files":"allow"}})");
+	auto gate = std::make_shared<edt::agent_policy_gate>(policy);
+	cmd::command_registry commands;
+	int runs = 0;
+	cmd::command_desc desc = command_of("code.create", agent_category::code_files);
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	const cmd::registration registration = commands.add(std::move(desc));
+	commands.set_policy_gate(gate);
+
+	BOOST_TEST(commands.invoke("code.create", boost::json::object{}, cmd::origin::agent("s1")).ok);
+	gate->set_can_ask(true);
+	BOOST_TEST(commands.invoke("code.create", boost::json::object{}, cmd::origin::agent("s1")).code == cmd::codes::confirmation_required);
+	BOOST_TEST(runs == 1);
+	commands.set_policy_gate(nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(ApplyPreanswers_IsTheOnlyRule)
+{
+	const auto create = command_of("code.create", agent_category::code_files);
+	edt::policy_layer file;
+	file.categories[agent_category::code_files] = policy_mode::allow;
+	const edt::effective_policy asked{ policy_mode::ask, edt::policy_source::default_table, "asks" };
+	const edt::effective_policy denied{ policy_mode::deny, edt::policy_source::project, "no" };
+
+	BOOST_TEST((edt::apply_preanswers(create, create.category, asked, file, {}).mode == policy_mode::allow));
+	BOOST_TEST((edt::apply_preanswers(create, create.category, denied, file, {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::apply_preanswers(create, create.category, asked, file, "broken").mode == policy_mode::deny));
+	// A call judged by another category is not answered by the command's own entry.
+	edt::policy_layer by_command;
+	by_command.commands["code.create"] = policy_mode::allow;
+	BOOST_TEST((edt::apply_preanswers(create, agent_category::cmake_presets, asked, by_command, {}).mode == policy_mode::ask));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -185,7 +185,10 @@ bool cfg::initialize_configs(int argc, char* argv[])
 			"implies --non-interactive. The log goes to stderr")
 		("mcp-stdio", "serve MCP to an agent over stdin/stdout (newline-delimited JSON-RPC, one client). stdout carries "
 			"the protocol only: the log and everything else go to stderr. Closing stdin ends the session; with --headless "
-			"it also ends the editor (unsaved changes are dropped)");
+			"it also ends the editor (unsaved changes are dropped)")
+		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
+			"for a run nobody can be asked in (--headless): it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
+			"Missing or broken: every agent request is denied");
 	
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
@@ -223,6 +226,9 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	}
 	if (vm.count("mcp-stdio")) {
 		set_registered("editor/mcp_stdio", "true");
+	}
+	if (vm.count("agent-policy")) {
+		set_registered("editor/agent_policy_file", vm["agent-policy"].as<std::string>());
 	}
 	if (vm.count("headless")) {
 		set_registered("editor/headless", "true");

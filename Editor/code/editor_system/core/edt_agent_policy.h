@@ -100,8 +100,9 @@ namespace edt
 		std::string error;
 	};
 
-	// The personal layer may only tighten: a "vcs" flag set to true there is an error of that layer.
-	enum class policy_layer_kind : std::uint8_t { project, personal };
+	// The personal layer may only tighten: a "vcs" flag set to true there is an error of that layer. The --agent-policy file
+	// (`preanswers`, see apply_preanswers) has no "vcs" section at all: the git rules come from the two layers only.
+	enum class policy_layer_kind : std::uint8_t { project, personal, preanswers };
 
 	// {"version": 1, "categories": {"code_files": "allow"}, "commands": {"build.game_module": "ask"}, "vcs": {...}}; the
 	// lists "allow", "ask" and "deny" of command ids (AI_INTEGRATION.md, section 5) are read too. "vcs" holds
@@ -112,7 +113,7 @@ namespace edt
 	std::string serialize_policy_layer(const policy_layer& layer);
 
 	// Where a decision comes from.
-	enum class policy_source : std::uint8_t { fallback, default_table, project, personal };
+	enum class policy_source : std::uint8_t { fallback, default_table, project, personal, preanswers };
 	const char* to_string(policy_source source);
 
 	struct effective_policy
@@ -134,6 +135,14 @@ namespace edt
 	effective_policy effective_mode_of_call(const cmd::command_desc& command, cmd::agent_category category, const policy_layer& project,
 		const policy_layer& personal, const std::string& project_error = {}, const std::string& personal_error = {},
 		bool live_mode_on = false);
+
+	// The --agent-policy file (#452): a person's answers to `ask` given in advance for a run nobody can be asked in. It is not
+	// a policy layer: on top of `decided` (effective_mode_of_call of the two layers) it may turn an `ask` into `allow` (its
+	// command's own entry, or its category's for a command without risk) and tighten anything, never lift a deny (of a layer,
+	// of the defaults or a risk, of `unset`/`not_for_agents`, of the live switch). A file that cannot be used
+	// (`preanswers_error`) denies everything. The only place the file decides anything.
+	effective_policy apply_preanswers(const cmd::command_desc& command, cmd::agent_category category, effective_policy decided,
+		const policy_layer& preanswers, const std::string& preanswers_error);
 
 	// The git rules of the two layers: push_branches and remotes are the project's lists (else the defaults of vcs_policy),
 	// narrowed by the personal layer's to the entries both name; protected_branches are main, master and both layers'
@@ -159,6 +168,13 @@ namespace edt
 
 		// Whether the live mode is on: `live` commands are denied while it is not (and while nothing says it is).
 		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
+		// The --agent-policy file (apply_preanswers), read now and again when it changes; empty: none. A file that is missing
+		// or cannot be used is an ERROR and closes everything while it applies.
+		void set_preanswers_file(std::filesystem::path file);
+		// Whether a person can answer an `ask` now (agent_policy_gate::set_can_ask). The --agent-policy file applies only
+		// while nobody can (false, the default).
+		void set_person_can_answer(bool can_answer);
+		bool person_can_answer() const { return m_person_can_answer; }
 		// Command ids a layer names that no command has get one warning per load (a typo, or a module not loaded yet).
 		void set_known_commands(std::function<bool(std::string_view)> exists);
 		// Called (main thread) after a layer that was already loaded is read again, because its file changed or a person saved it:
@@ -171,6 +187,9 @@ namespace edt
 		const std::string& personal_error() const { return m_personal.error; }
 		const std::filesystem::path& project_file() const { return m_project.file; }
 		const std::filesystem::path& personal_file() const { return m_personal.file; }
+		const policy_layer& preanswers() const { return m_preanswers.layer; }
+		const std::string& preanswers_error() const { return m_preanswers.error; }
+		bool has_preanswers() const { return !m_preanswers.file.empty(); }
 
 		// A person's edit (the settings window): writes the file atomically and takes the layer over. The error, nullopt on success.
 		std::optional<std::string> save_project(const policy_layer& layer, const prj::text_writer& write = {});
@@ -200,6 +219,8 @@ namespace edt
 
 		source m_project;
 		source m_personal;
+		source m_preanswers;
+		bool m_person_can_answer = false;
 		std::function<bool()> m_live_on;
 		std::function<bool(std::string_view)> m_known;
 		std::function<void()> m_on_changed;
@@ -214,7 +235,12 @@ namespace edt
 
 		cmd::policy_decision decide(const cmd::command_desc& command, const cmd::call& request) override;
 		bool can_ask() const override { return m_can_ask; }
-		void set_can_ask(bool value) { m_can_ask = value; }
+		// Tells the policy too: the --agent-policy file answers only while nobody can be asked.
+		void set_can_ask(bool value)
+		{
+			m_can_ask = value;
+			m_policy.set_person_can_answer(value);
+		}
 		// "Allow until this agent session ends": an `ask` for a category the agent's session was granted is an allow.
 		// A deny stays a deny. null: no grants.
 		void set_session_grants(const session_grants* grants) { m_grants = grants; }

@@ -5,7 +5,6 @@
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
 #include <snk/common/logger/engine_log.h>
-#include <snk/config/cfg_variables.h>
 #include <imgui.h>
 #include <algorithm>
 #include <format>
@@ -29,6 +28,8 @@ struct edt::dialog_service::request
 	// What the dialog is, for dialog_service::list().
 	virtual const char* kind() const = 0;
 	virtual std::string text() const = 0;
+	// Its window title (a message: the level and the text), for the log of a headless run.
+	virtual std::string title() const = 0;
 	virtual json::value answer_schema() const = 0;
 	// Stores an answer that already matched answer_schema, to be acted on like the click it stands for. An error
 	// text if the answer means nothing for this dialog.
@@ -66,9 +67,6 @@ struct edt::dialog_service::request
 private:
 	bool m_opened = false;
 };
-
-// edt_editor_init.cpp; must stay outside the anonymous namespace to link to the global definition.
-CFG_VAR_EXT_BOOL(cfg_edt_headless);
 
 namespace {
 
@@ -161,6 +159,7 @@ public:
 
 	const char* kind() const override { return "unsaved"; }
 	std::string text() const override { return "You have unsaved changes. What would you like to do?"; }
+	std::string title() const override { return "Unsaved Changes"; }
 
 	json::value answer_schema() const override
 	{
@@ -274,6 +273,7 @@ public:
 
 	const char* kind() const override { return m_prompt.kind; }
 	std::string text() const override { return m_prompt.prompt; }
+	std::string title() const override { return m_prompt.title; }
 
 	json::value answer_schema() const override
 	{
@@ -345,6 +345,7 @@ public:
 
 	const char* kind() const override { return "pick_file"; }
 	std::string text() const override { return m_options.title; }
+	std::string title() const override { return m_options.title; }
 
 	json::value answer_schema() const override
 	{
@@ -383,9 +384,7 @@ public:
 
 	bool draw() override
 	{
-		const char* title = m_level == edt::message_level::error ? "Error"
-			: m_level == edt::message_level::warning ? "Warning" : "Info";
-		const std::string label = popup_label(title);
+		const std::string label = popup_label(level_title());
 
 		bool is_open = true;
 		if (begin_modal(label, MODAL_FLAGS)) {
@@ -405,6 +404,7 @@ public:
 
 	const char* kind() const override { return "message"; }
 	std::string text() const override { return m_text; }
+	std::string title() const override { return std::format("{}: {}", level_title(), m_text); }
 
 	json::value answer_schema() const override
 	{
@@ -420,6 +420,11 @@ public:
 	void settle() override {}
 
 private:
+	const char* level_title() const
+	{
+		return m_level == edt::message_level::error ? "Error" : m_level == edt::message_level::warning ? "Warning" : "Info";
+	}
+
 	edt::message_level m_level;
 	std::string m_text;
 	bool m_acknowledged = false;
@@ -474,6 +479,7 @@ public:
 
 	const char* kind() const override { return "choice"; }
 	std::string text() const override { return m_text; }
+	std::string title() const override { return m_title; }
 
 	json::value answer_schema() const override
 	{
@@ -643,13 +649,11 @@ bool edt::dialog_service::update()
 	// Callbacks may ask for more dialogs, which grows the queue; the request itself stays where it is.
 	request& front = *m_queue.front();
 	const bool answered = m_auto_answer && front.answer_automatically(*m_auto_answer);
+	if (answered && m_auto_answer->cancel_all && m_auto_answer->warn_headless) {
+		egLOG_WARN("dialog", "headless: '{}' cancelled: nobody to answer", front.title());
+	}
 	bool open = false;
 	if (!answered) {
-		// Until headless dialogs fail fast (#452 PR-3), say why the run seems stuck.
-		if (!front.drawn && cfg_edt_headless) {
-			egLOG_WARN("editor/dialog", "headless: dialog {} ({}) waits for an answer that only the MCP command "
-				"dialog.answer can give: {}", front.id, front.kind(), front.text());
-		}
 		front.drawn = true;
 		open = front.draw();
 	}

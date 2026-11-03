@@ -212,6 +212,7 @@ namespace edt
 		case policy_source::default_table: return "default";
 		case policy_source::project: return "project";
 		case policy_source::personal: return "personal";
+		case policy_source::preanswers: return "preanswers";
 		}
 		return "fallback";
 	}
@@ -287,6 +288,9 @@ namespace edt
 				}
 			}
 			else if (name == "vcs") {
+				if (kind == policy_layer_kind::preanswers) {
+					return fail("\"vcs\" is not allowed in the --agent-policy file: the git rules come from the project and personal policies");
+				}
 				vcs_policy_layer vcs;
 				if (std::string error = parse_vcs_section(value, kind, vcs); !error.empty()) return fail(std::move(error));
 				out.layer.vcs = std::move(vcs);
@@ -369,6 +373,40 @@ namespace edt
 		return { base, base_source, std::move(why) };
 	}
 
+	effective_policy apply_preanswers(const cmd::command_desc& command, cmd::agent_category category, effective_policy decided,
+		const policy_layer& preanswers, const std::string& preanswers_error)
+	{
+		if (!preanswers_error.empty()) {
+			return { cmd::policy_mode::deny, policy_source::preanswers, "the --agent-policy file cannot be used: " + preanswers_error };
+		}
+		if (decided.mode == cmd::policy_mode::deny) return decided;
+
+		// The raw entries, not policy_layer::resolve: the risk floor resolve adds to a category entry would turn "allow" into
+		// a tightening.
+		std::optional<cmd::policy_mode> answer;
+		bool own_entry = false;
+		if (category == command.category) {
+			if (const auto own = preanswers.commands.find(command.id); own != preanswers.commands.end()) {
+				answer = own->second;
+				own_entry = true;
+			}
+		}
+		if (!answer) {
+			if (const auto entry = preanswers.categories.find(category); entry != preanswers.categories.end()) answer = entry->second;
+		}
+		if (!answer) return decided;
+
+		if (*answer > decided.mode) {
+			return { *answer, policy_source::preanswers, "the --agent-policy file makes it " + std::string(cmd::to_string(*answer)) };
+		}
+		// As in the layers, only the command's own entry lifts the floor of its risk.
+		const bool lifts = own_entry || command.risk == cmd::danger::none;
+		if (decided.mode == cmd::policy_mode::ask && *answer == cmd::policy_mode::allow && lifts) {
+			return { cmd::policy_mode::allow, policy_source::preanswers, "the --agent-policy file answers the question with yes in advance" };
+		}
+		return decided;
+	}
+
 	vcs_policy effective_vcs(const policy_layer& project, const policy_layer& personal, const std::string& project_error,
 		const std::string& personal_error)
 	{
@@ -406,6 +444,24 @@ namespace edt
 		m_project.file = std::move(project_file);
 		m_personal.file = std::move(personal_file);
 		m_personal.kind = policy_layer_kind::personal;
+		m_preanswers.kind = policy_layer_kind::preanswers;
+	}
+
+	void agent_policy::set_preanswers_file(std::filesystem::path file)
+	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::set_preanswers_file: main thread only");
+		m_preanswers = source{};
+		m_preanswers.kind = policy_layer_kind::preanswers;
+		m_preanswers.file = std::move(file);
+		if (has_preanswers()) reload(m_preanswers);
+	}
+
+	void agent_policy::set_person_can_answer(bool can_answer)
+	{
+		if (m_person_can_answer == can_answer) return;
+		m_person_can_answer = can_answer;
+		// What an agent may see follows: the --agent-policy file applies or stops applying.
+		if (has_preanswers() && m_on_changed) m_on_changed();
 	}
 
 	namespace {
@@ -476,6 +532,10 @@ namespace edt
 		if (!now.error.empty()) {
 			what.error = now.error;
 		}
+		else if (!now.exists && what.kind == policy_layer_kind::preanswers) {
+			// Not "no answers": the person named a file, and a run that cannot read it must not go on as if they had not.
+			what.error = "the file does not exist";
+		}
 		else if (now.exists) {
 			const std::optional<std::string> text = read_text(what.file);
 			if (!text) {
@@ -488,7 +548,13 @@ namespace edt
 			}
 		}
 		if (!what.error.empty()) {
-			egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
+			if (what.kind == policy_layer_kind::preanswers) {
+				egLOG_ERROR("editor/agent_policy", "--agent-policy {}: {}; every agent request is denied while nobody can be asked",
+					fs_paths::utf8_of(what.file), what.error);
+			}
+			else {
+				egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
+			}
 		}
 		warn_unknown_commands(what);
 		if (was_loaded && m_on_changed) m_on_changed();
@@ -508,7 +574,7 @@ namespace edt
 	void agent_policy::set_known_commands(std::function<bool(std::string_view)> exists)
 	{
 		m_known = std::move(exists);
-		for (source* what : { &m_project, &m_personal }) {
+		for (source* what : { &m_project, &m_personal, &m_preanswers }) {
 			if (what->loaded) warn_unknown_commands(*what);
 		}
 	}
@@ -518,6 +584,7 @@ namespace edt
 		for (source* what : { &m_project, &m_personal }) {
 			if (changed_on_disk(*what)) reload(*what);
 		}
+		if (has_preanswers() && changed_on_disk(m_preanswers)) reload(m_preanswers);
 	}
 
 	effective_policy agent_policy::effective(const cmd::command_desc& command)
@@ -530,7 +597,10 @@ namespace edt
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective: main thread only");
 		refresh();
 		const bool live_on = m_live_on && m_live_on();
-		return effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
+		effective_policy decided = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error,
+			m_personal.error, live_on);
+		if (!has_preanswers() || m_person_can_answer) return decided;
+		return apply_preanswers(command, category, std::move(decided), m_preanswers.layer, m_preanswers.error);
 	}
 
 	vcs_policy agent_policy::effective_vcs()

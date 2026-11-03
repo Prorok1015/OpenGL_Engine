@@ -30,6 +30,8 @@ namespace cmd
 		inline constexpr const char* stale = "stale";
 		// The command ran, but its result breaks result_schema.
 		inline constexpr const char* result_invalid = "result_invalid";
+		// The command needs a display (command_desc::needs_display) and the process runs without one (--headless).
+		inline constexpr const char* unavailable_headless = "unavailable_headless";
 	}
 
 	// Not enforced by the registry yet: the policy that acts on it (confirmation, project allow-list) comes with
@@ -140,6 +142,9 @@ namespace cmd
 		std::function<agent_category(const call&)> category_of;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
+		// It reads or draws what only a display produces (a viewport capture): in a headless process
+		// (command_registry::set_headless) every call is `unavailable_headless`, whoever makes it.
+		bool needs_display = false;
 		std::function<result(const call&)> invoke;
 		// Null: always enabled.
 		std::function<bool()> enabled;
