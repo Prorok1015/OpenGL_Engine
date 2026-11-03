@@ -25,10 +25,10 @@ namespace rnd
 		double diff_pct = 0.0;
 	};
 
-	// A pixel differs when any of its RGBA channels differs by more than `fuzz_pct` % of 255 (ImageMagick's
-	// `compare -metric AE -fuzz`, per channel). Nullopt when the sizes differ or a view does not hold
-	// width * height * 4 bytes.
-	SNK_API std::optional<image_diff> compare_rgba8(const rgba8_view& a, const rgba8_view& b, double fuzz_pct);
+	// A pixel differs when any of its R, G, B channels differs by more than `fuzz_pct` % of 255 (ImageMagick's
+	// `compare -metric AE -fuzz`, per channel); alpha is ignored on both sides. Nullopt when the sizes differ or a
+	// view does not hold width * height * 4 bytes.
+	SNK_API std::optional<image_diff> compare_rgb_of_rgba8(const rgba8_view& a, const rgba8_view& b, double fuzz_pct);
 
 	// Expands 1 (grey), 2 (grey + alpha), 3 (RGB) or 4 (RGBA) channels to RGBA8; a missing alpha is 255.
 	// `bottom_up`: the source's first row is the bottom of the picture, the result puts the top row first.

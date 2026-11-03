@@ -19,7 +19,7 @@ namespace {
 	}
 }
 
-std::optional<rnd::image_diff> rnd::compare_rgba8(const rgba8_view& a, const rgba8_view& b, double fuzz_pct)
+std::optional<rnd::image_diff> rnd::compare_rgb_of_rgba8(const rgba8_view& a, const rgba8_view& b, double fuzz_pct)
 {
 	if (a.width != b.width || a.height != b.height) {
 		return std::nullopt;
@@ -32,7 +32,7 @@ std::optional<rnd::image_diff> rnd::compare_rgba8(const rgba8_view& a, const rgb
 	image_diff diff;
 	diff.total_pixels = static_cast<std::int64_t>(a.width) * a.height;
 	for (std::size_t pixel = 0; pixel < *bytes; pixel += pixel_bytes) {
-		for (std::size_t c = 0; c < pixel_bytes; ++c) {
+		for (std::size_t c = 0; c < 3; ++c) {
 			const int delta = std::abs(std::to_integer<int>(a.rgba[pixel + c]) - std::to_integer<int>(b.rgba[pixel + c]));
 			if (static_cast<double>(delta) > threshold) {
 				++diff.diff_pixels;

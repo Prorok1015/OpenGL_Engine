@@ -623,6 +623,27 @@ BOOST_AUTO_TEST_CASE(CallTool_AnAgentCanLowerTheCaptureCeilingsNeverRaiseThem)
 	BOOST_TEST(seen[1] == R"({"width":100,"max_side":2048,"max_pixels":4194304,"max_source_pixels":8388608})");
 }
 
+BOOST_AUTO_TEST_CASE(CallTool_ACompareGetsTheSourceCeilingOfACapture)
+{
+	std::vector<std::string> seen;
+	cmd::command_desc compare = make("capture.compare");
+	compare.args_schema = json_of(R"json({"type":"object","properties":{"reference":{"type":"string"},"max_source_pixels":{"type":"integer"}},"required":["reference"],"additionalProperties":false})json");
+	compare.invoke = [&seen](const cmd::call& request) {
+		seen.push_back(json::serialize(request.args));
+		return cmd::result::success();
+	};
+	add(std::move(compare));
+
+	BOOST_TEST(!call_tool("capture_compare", R"json({"reference":"res://r.png"})json").is_error);
+	BOOST_TEST(!call_tool("capture_compare", R"json({"reference":"res://r.png","max_source_pixels":33554432})json").is_error);
+	BOOST_TEST(!call_tool("capture_compare", R"json({"reference":"res://r.png","max_source_pixels":1000})json").is_error);
+	BOOST_REQUIRE_EQUAL(seen.size(), 3u);
+	// Only the source ceiling: a comparison is at full size, so nothing is scaled down.
+	BOOST_TEST(seen[0] == R"json({"reference":"res://r.png","max_source_pixels":8388608})json");
+	BOOST_TEST(seen[1] == R"json({"reference":"res://r.png","max_source_pixels":8388608})json");
+	BOOST_TEST(seen[2] == R"json({"reference":"res://r.png","max_source_pixels":1000})json");
+}
+
 BOOST_AUTO_TEST_CASE(CallTool_ATooLargeResultIsAnErrorNotAMegabyteWall)
 {
 	cmd::command_desc big = make("log.read");

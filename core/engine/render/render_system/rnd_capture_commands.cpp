@@ -2,12 +2,13 @@
 #include <snk/command/cmd_base64.h>
 #include <snk/command/cmd_json_schema.h>
 #include <snk/command/cmd_types.h>
+#include <snk/common/logger/engine_log.h>
+#include <snk/image/image.h>
 #include <snk/render/rnd_image_compare.h>
-#include <snk/resource/adapters/res_pct_adapter.h>
 #include <snk/resource/res_path_sanitize.h>
 #include <snk/resource/res_system.h>
 #include <snk/resource/res_tag.h>
-#include <snk/resource/resources/res_resource_picture.h>
+#include <snk/resource/resources/res_resource_binary.h>
 
 #include <boost/json/object.hpp>
 #include <boost/json/parse.hpp>
@@ -30,6 +31,50 @@ namespace json = boost::json;
 
 namespace {
 	constexpr std::int64_t max_side = 8192;
+	constexpr std::array<std::string_view, 3> reference_extensions{ "png", "jpg", "jpeg" };
+
+	// stb decodes by content (GIF, PSD, HDR... behind a .png name): only the two formats the extension promises pass.
+	bool is_png_or_jpeg(std::span<const std::byte> bytes)
+	{
+		constexpr std::array<std::uint8_t, 8> png{ 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+		constexpr std::array<std::uint8_t, 3> jpeg{ 0xFF, 0xD8, 0xFF };
+		const auto starts_with = [bytes](std::span<const std::uint8_t> magic) {
+			return bytes.size() >= magic.size() && std::equal(magic.begin(), magic.end(), bytes.begin(),
+				[](std::uint8_t expected, std::byte actual) { return std::to_integer<std::uint8_t>(actual) == expected; });
+		};
+		return starts_with(png) || starts_with(jpeg);
+	}
+
+	// The size in the IHDR of a PNG, read here because stb refuses a header over 1 GiB of pixels as unreadable, and
+	// such a reference is over the limits, not broken. Nullopt when the first chunk is not an IHDR.
+	std::optional<std::pair<std::int64_t, std::int64_t>> png_header_size(std::span<const std::byte> bytes)
+	{
+		// Signature (8), chunk length (4), chunk type (4), width (4), height (4).
+		constexpr std::size_t size_end = 24;
+		constexpr std::array<std::uint8_t, 4> ihdr{ 'I', 'H', 'D', 'R' };
+		if (bytes.size() < size_end || !std::equal(ihdr.begin(), ihdr.end(), bytes.begin() + 12,
+				[](std::uint8_t expected, std::byte actual) { return std::to_integer<std::uint8_t>(actual) == expected; })) {
+			return std::nullopt;
+		}
+		const auto big_endian = [bytes](std::size_t at) {
+			std::int64_t value = 0;
+			for (std::size_t i = 0; i < 4; ++i) {
+				value = (value << 8) | std::to_integer<std::int64_t>(bytes[at + i]);
+			}
+			return value;
+		};
+		return std::pair{ big_endian(16), big_endian(20) };
+	}
+
+	// Why a reference of `width` x `height` may not be decoded; empty when it may.
+	std::string reference_size_problem(std::string_view reference, std::int64_t width, std::int64_t height, std::int64_t pixel_limit)
+	{
+		if (width <= rnd::capture_compare_max_reference_side && height <= rnd::capture_compare_max_reference_side && width * height <= pixel_limit) {
+			return {};
+		}
+		return std::format("the reference '{}' is {}x{}, over the limits of {} pixels a side and {} pixels",
+			reference, width, height, rnd::capture_compare_max_reference_side, pixel_limit);
+	}
 
 	// 0 when the argument is absent.
 	std::optional<int> side_of(const json::object& args, const char* name)
@@ -49,6 +94,7 @@ namespace {
 	std::string reference_problem(std::string_view reference)
 	{
 		constexpr std::string_view scheme = "res://";
+		// Checked before resolve_alias: aliases are registered only by engine code (the model importer, for model tags).
 		if (!reference.starts_with(scheme)) {
 			return "the reference must be a res:// tag";
 		}
@@ -60,12 +106,11 @@ namespace {
 		if (const std::string problem = res::portable_path_problem(path); !problem.empty()) {
 			return "the reference path is not allowed: " + problem;
 		}
-		// Only pictures stb decodes: their orientation is known (pct_adapter flips them bottom-up).
 		const std::size_t dot = path.find_last_of('.');
 		const std::string_view extension = dot == std::string_view::npos || path.find('/', dot) != std::string_view::npos
 			? std::string_view{} : path.substr(dot + 1);
-		if (std::ranges::find(res::pct_adapter::EXTENSIONS, extension) == res::pct_adapter::EXTENSIONS.end()) {
-			return "the reference must be a .png or .jpg picture";
+		if (std::ranges::find(reference_extensions, extension) == reference_extensions.end()) {
+			return "the reference must be a .png, .jpg or .jpeg picture";
 		}
 		return {};
 	}
@@ -206,7 +251,7 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 {
 	cmd::command_desc desc;
 	desc.id = "capture.compare";
-	desc.summary = "Compare the final render target of a viewport with a res:// reference picture (pixels whose channels differ by more than fuzz %)";
+	desc.summary = "Compare the final render target of a viewport with a res:// PNG/JPEG reference (pixels whose RGB differs by more than fuzz %)";
 	desc.category = cmd::agent_category::read;
 	desc.needs_display = true;
 	desc.args_schema = json::parse(R"json({
@@ -215,7 +260,8 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 			"reference": { "type": "string", "minLength": 1 },
 			"viewport": { "type": "string", "minLength": 1 },
 			"fuzz": { "type": "number", "minimum": 0, "maximum": 100 },
-			"max_diff_pct": { "type": "number", "minimum": 0, "maximum": 100 }
+			"max_diff_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+			"max_source_pixels": { "type": "integer", "minimum": 1, "maximum": 33554432 }
 		},
 		"required": ["reference"],
 		"additionalProperties": false
@@ -246,6 +292,14 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 		if (!fuzz || !max_diff_pct) {
 			return cmd::result::failure(cmd::codes::invalid_args, "fuzz and max_diff_pct are numbers in 0..100");
 		}
+		capture_limits limits;
+		if (const json::value* max_source = args.if_contains("max_source_pixels")) {
+			const auto number = cmd::json_schema::integer_of(*max_source);
+			if (!number || *number < 1 || *number > limits.max_source_pixels) {
+				return cmd::result::failure(cmd::codes::invalid_args, "max_source_pixels is an integer in 1..33554432");
+			}
+			limits.max_source_pixels = *number;
+		}
 		std::string id = "game";
 		if (const json::value* viewport = args.if_contains("viewport")) {
 			id = std::string(viewport->as_string());
@@ -254,46 +308,66 @@ cmd::registration rnd::register_capture_compare_command(cmd::command_registry& r
 			return cmd::result::failure(cmd::codes::not_found, "unknown viewport '" + id + "'");
 		}
 
-		const res::res_handle<res::picture_resource> handle = resources.require_sync<res::picture_resource>(res::tag{ reference });
+		// The bytes, not a picture_resource: the picture adapter would decode the whole file before any limit is checked.
+		const res::res_handle<res::binary_resource> handle = resources.require_sync<res::binary_resource>(res::tag{ reference });
 		handle.wait();
-		const std::shared_ptr<res::picture_resource> picture = handle.get();
-		if (!picture) {
+		const std::shared_ptr<res::binary_resource> file = handle.get();
+		if (!file) {
+			// The resolver's error may name a path on disk: logged, not returned.
 			const auto block = handle.get_control_block();
-			const std::string why = block && !block->error_msg.empty() ? block->error_msg : std::string("no picture");
-			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' cannot be loaded: {}", reference, why));
+			egLOG_WARN("render", "capture.compare: the reference '{}' cannot be loaded: {}", reference,
+				block && !block->error_msg.empty() ? block->error_msg : std::string("no data"));
+			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' cannot be loaded", reference));
 		}
-		const glm::ivec2 reference_size = picture->size();
-		if (reference_size.x <= 0 || reference_size.y <= 0 || picture->data() == nullptr) {
-			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' is an empty picture", reference));
+		const std::vector<std::byte>& bytes = file->bytes();
+		if (bytes.size() > capture_compare_max_reference_bytes) {
+			return cmd::result::failure(cmd::codes::invalid_args, std::format("the reference '{}' is {} bytes, over the limit of {} bytes",
+				reference, bytes.size(), capture_compare_max_reference_bytes));
 		}
-		const std::int64_t reference_pixels = static_cast<std::int64_t>(reference_size.x) * reference_size.y;
-		if (reference_pixels > capture_service::max_pixels) {
-			return cmd::result::failure(cmd::codes::invalid_args, std::format("the reference '{}' ({}x{}) has more than {} pixels",
-				reference, reference_size.x, reference_size.y, capture_service::max_pixels));
+		if (!is_png_or_jpeg(bytes)) {
+			return cmd::result::failure(cmd::codes::invalid_args, std::format("the reference '{}' is not a PNG or JPEG file", reference));
 		}
-		const std::size_t reference_bytes = static_cast<std::size_t>(reference_pixels) * static_cast<std::size_t>(std::max(picture->channels(), 0));
-		// pct_adapter decodes with stb's vertical flip on: the first row of the picture is its bottom one.
-		const std::vector<std::byte> expected = to_rgba8_top_down(
-			std::span<const std::byte>(reinterpret_cast<const std::byte*>(picture->data()), reference_bytes),
-			reference_size.x, reference_size.y, picture->channels(), true);
-		if (expected.empty()) {
-			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' has {} channels", reference, picture->channels()));
+		const std::int64_t pixel_limit = std::min(capture_service::max_pixels, limits.max_source_pixels);
+		if (const auto png_size = png_header_size(bytes)) {
+			if (std::string problem = reference_size_problem(reference, png_size->first, png_size->second, pixel_limit); !problem.empty()) {
+				return cmd::result::failure(cmd::codes::invalid_args, std::move(problem));
+			}
+		}
+		const auto* encoded = reinterpret_cast<const unsigned char*>(bytes.data());
+		const int encoded_length = static_cast<int>(bytes.size());
+		int width = 0;
+		int height = 0;
+		int channels = 0;
+		if (!stb_image::Image::info_from_memory(encoded, encoded_length, width, height, channels) || width <= 0 || height <= 0) {
+			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' has no readable picture header", reference));
+		}
+		if (std::string problem = reference_size_problem(reference, width, height, pixel_limit); !problem.empty()) {
+			return cmd::result::failure(cmd::codes::invalid_args, std::move(problem));
 		}
 
-		capture_result captured = service.capture(id);
+		const capture_result captured = service.capture(id, { 0, 0 }, limits);
 		if (!captured.ok()) {
 			return capture_failure(captured);
 		}
 		const glm::ivec2 size = captured.image.size;
-		if (size != reference_size) {
+		if (size.x != width || size.y != height) {
 			return cmd::result::failure(capture_size_mismatch, std::format("size_mismatch: the capture of viewport '{}' is {}x{}, the reference '{}' is {}x{}",
-				id, size.x, size.y, reference, reference_size.x, reference_size.y));
+				id, size.x, size.y, reference, width, height));
 		}
-		// viewport.capture saves the frame without alpha, so a reference made from it is opaque: so is the capture here.
-		for (std::size_t alpha = 3; alpha < captured.image.rgba.size(); alpha += 4) {
-			captured.image.rgba[alpha] = std::byte{ 255 };
+
+		const stb_image::Image picture = stb_image::Image::read_from_memory(encoded, encoded_length);
+		if (picture.data() == nullptr || picture.width() != width || picture.height() != height) {
+			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' cannot be decoded", reference));
 		}
-		const std::optional<image_diff> diff = compare_rgba8({ size.x, size.y, captured.image.rgba }, { size.x, size.y, expected }, *fuzz);
+		// stb's vertical flip is global (pct_adapter turns it on); the decode records the one it ran with.
+		const bool bottom_up = picture.flipped() == stb_image::Image::ImageFlip::VERTICAL;
+		const std::vector<std::byte> expected = to_rgba8_top_down(
+			std::span<const std::byte>(reinterpret_cast<const std::byte*>(picture.data()), picture.size()),
+			width, height, picture.channels_count(), bottom_up);
+		if (expected.empty()) {
+			return cmd::result::failure(cmd::codes::failed, std::format("the reference '{}' has {} channels", reference, picture.channels_count()));
+		}
+		const std::optional<image_diff> diff = compare_rgb_of_rgba8({ size.x, size.y, captured.image.rgba }, { size.x, size.y, expected }, *fuzz);
 		if (!diff) {
 			return cmd::result::failure(cmd::codes::failed, "the capture and the reference cannot be compared");
 		}
