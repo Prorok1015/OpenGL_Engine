@@ -658,7 +658,7 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)
 	loader.load(build_of(v1_entry()), root);
 	open_level(MODULE_LEVEL);
 	BOOST_REQUIRE(play.start());
-	auto* old_layer = contexts().game_layer();
+	BOOST_REQUIRE(!contexts().game_layer()->descs().is_registered("play_game_v2_desc"));
 
 	const auto report = host.reload("play_game", build_of(v2_entry()), [] { return build_of(v1_entry()); }, gate.hooks());
 
@@ -671,7 +671,8 @@ BOOST_AUTO_TEST_CASE(a_module_reload_during_play_stops_it_and_starts_it_again)
 	scn::context_set* set = play_set();
 	BOOST_REQUIRE(set);
 	BOOST_TEST(set->layer() == contexts().game_layer());
-	BOOST_TEST(set->layer() != old_layer);
+	// The old layer is freed before the new one is made, so its address may come back: the new build's type tells.
+	BOOST_TEST(set->layer()->descs().is_registered("play_game_v2_desc"));
 	BOOST_TEST(set->find("w0") != nullptr);
 	BOOST_TEST(services.descs()->is_registered("play_game_v2_desc"));
 	BOOST_TEST(!contexts().level_set().active());
