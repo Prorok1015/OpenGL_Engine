@@ -777,6 +777,8 @@ struct play_commands_fixture : play_fixture
 {
 	~play_commands_fixture()
 	{
+		// First: a call still waiting must not answer into a test's local after it died.
+		access.confirmations().cancel_all("the test ended");
 		play.stop();
 	}
 

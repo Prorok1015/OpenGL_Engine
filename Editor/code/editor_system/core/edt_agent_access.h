@@ -21,7 +21,7 @@ namespace edt
 	public:
 		// `now`: the clock of the questions and of the busy wait; empty: std::chrono::steady_clock (tests pass their own).
 		agent_access(cmd::command_registry& commands, std::filesystem::path project_policy_file, std::filesystem::path personal_policy_file,
-			agent_confirmations::clock_function now = {});
+			agent_confirmations::clock_function now = {}, approved_snapshot_location approved_policy = {});
 		~agent_access();
 		agent_access(const agent_access&) = delete;
 		agent_access& operator=(const agent_access&) = delete;

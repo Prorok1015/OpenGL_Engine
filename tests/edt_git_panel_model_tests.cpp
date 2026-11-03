@@ -222,6 +222,34 @@ BOOST_AUTO_TEST_CASE(Cancel_StopsTheRunningWrite)
 	BOOST_TEST(model.error().empty());
 }
 
+BOOST_AUTO_TEST_CASE(TheRunningWritesProgress_IsShown_UntilItEnds)
+{
+	open_and_read();
+	model.fetch();
+	const auto fetch = last("vcs.fetch");
+	BOOST_REQUIRE(fetch);
+	BOOST_TEST(!model.busy_progress().has_value());
+
+	events.job_progress.emit(fetch->job + 100, 0.7f, "Writing objects 70%");
+	BOOST_TEST(!model.busy_progress().has_value());
+
+	events.job_progress.emit(fetch->job, 0.46f, "Receiving objects 45%");
+	BOOST_REQUIRE(model.busy_progress().has_value());
+	BOOST_TEST(model.busy_progress()->fraction == 0.46f);
+	BOOST_TEST(model.busy_progress()->text == "Receiving objects 45%");
+
+	events.job_progress.emit(fetch->job + 100, 0.9f, "Resolving deltas 100%");
+	BOOST_TEST(model.busy_progress()->text == "Receiving objects 45%");
+
+	finish("vcs.fetch", json::object{ { "output", "" } });
+	BOOST_TEST(model.busy().empty());
+	BOOST_TEST(!model.busy_progress().has_value());
+
+	// A late update of a write that has ended belongs to no running write.
+	events.job_progress.emit(fetch->job, 1.0f, "Resolving deltas 100%");
+	BOOST_TEST(!model.busy_progress().has_value());
+}
+
 BOOST_AUTO_TEST_CASE(PushWithoutAnUpstream_SetsOne)
 {
 	model.set_visible(true);

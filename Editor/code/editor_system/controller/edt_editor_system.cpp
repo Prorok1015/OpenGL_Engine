@@ -589,7 +589,8 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const auto user_roots = m_res.mount_roots("edt");
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
-		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
+		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json", agent_confirmations::clock_function{},
+			approved_snapshot_for(user_dir / "settings", options.project_dir));
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
 		m_vcs->set_policy_file(project_policy);
 		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });

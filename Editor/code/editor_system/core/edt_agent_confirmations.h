@@ -95,6 +95,10 @@ namespace edt
 		// Nobody can answer any more (the window cannot be shown): everything waiting is declined with `why`.
 		void decline_all(std::string_view why);
 
+		// decline_all, and the calls parked for a retry are answered `denied` too: afterwards no call of this object holds a `done`
+		// that can still run. For an owner that is about to destroy what those closures write to (the fixtures of the tests).
+		void cancel_all(std::string_view why);
+
 		std::vector<confirmation_request> pending() const;
 
 	private:
