@@ -710,3 +710,13 @@ void mcp::server::notify_tools_changed()
 {
 	m_core->ep.notify_tools_changed();
 }
+
+std::vector<mcp::session_info> mcp::server::sessions() const
+{
+	return m_core->ep.sessions();
+}
+
+bool mcp::server::close_session(const std::string& id)
+{
+	return m_core->ep.close_session(id);
+}

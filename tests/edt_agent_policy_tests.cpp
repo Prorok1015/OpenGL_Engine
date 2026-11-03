@@ -1255,6 +1255,75 @@ edt::policy_layer parsed(const char* text)
 
 }
 
+BOOST_FIXTURE_TEST_CASE(AValueThatIsOnlyTheDefault_IsNotRecordedAsApproved, approval_fixture)
+{
+	write_project(R"({"categories":{"code_files":"ask","code_edit":"deny"},"vcs":{"push_branches":["agent/*"],"remotes":["origin"],"protected_branches":["main","master"],"allow_hooks":false}})");
+	const auto policy = make(false);
+	policy->effective(create);
+	BOOST_TEST(!policy->project_pending_approval());
+	// Only what is stricter than the default is kept: code_edit deny, not code_files ask, and nothing of the vcs section.
+	BOOST_TEST(policy->approved_project().categories.size() == 1u);
+	BOOST_TEST(policy->approved_project().categories.contains(agent_category::code_edit));
+	BOOST_TEST(!policy->approved_project().vcs.has_value());
+}
+
+BOOST_FIXTURE_TEST_CASE(AValueThatWentBackToTheDefault_DropsTheApprovedEntry, approval_fixture)
+{
+	write_project(R"({"categories":{"code_files":"allow"},"vcs":{"allow_hooks":true,"protected_branches":["release"]}})");
+	const auto policy = make();
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
+	BOOST_TEST(policy->approved_project().categories.contains(agent_category::code_files));
+
+	write_project(R"({"categories":{"code_files":"ask"},"vcs":{"allow_hooks":false,"protected_branches":["release","hotfix"]}})");
+	policy->effective(create);
+	BOOST_TEST(!policy->project_pending_approval());
+	BOOST_TEST(!policy->approved_project().categories.contains(agent_category::code_files));
+	BOOST_REQUIRE(policy->approved_project().vcs.has_value());
+	BOOST_TEST(!policy->approved_project().vcs->allow_hooks.has_value());
+	BOOST_TEST(policy->approved_project().vcs->protected_branches.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(FindLoosenings_AnEmptyListIsNotAMissingKey_AndProtectedNamesAreComparedAsWritten)
+{
+	const auto count = [](const char* approved, const char* current) {
+		return edt::find_loosenings(parsed(approved), parsed(current), {}).size();
+	};
+	// No push at all, then the default again: looser. And the other way: stricter.
+	BOOST_TEST(count(R"({"vcs":{"push_branches":[]}})", "{}") == 1u);
+	BOOST_TEST(count(R"({"vcs":{"push_branches":[]}})", R"({"vcs":{"push_branches":["agent/*"]}})") == 1u);
+	BOOST_TEST(count("{}", R"({"vcs":{"push_branches":[]}})") == 0u);
+	BOOST_TEST(count(R"({"vcs":{"remotes":[]}})", "{}") == 1u);
+	BOOST_TEST(count("{}", R"({"vcs":{"remotes":[]}})") == 0u);
+	// A protected name that differs only in case is another entry as written: the approved one dropped is a loosening.
+	BOOST_TEST(count(R"({"vcs":{"protected_branches":["Release"]}})", R"({"vcs":{"protected_branches":["release"]}})") == 1u);
+	BOOST_TEST(count(R"({"vcs":{"protected_branches":["release"]}})", R"({"vcs":{"protected_branches":["release","Release"]}})") == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ACommandRegisteredAgainAtTheSameSize_IsJudgedAgainByTheRegistrysGeneration, approval_fixture)
+{
+	extra.push_back(command_of("scene.query", agent_category::read));
+	write_project(R"({"categories":{"code_files":"deny"},"commands":{"scene.query":"allow"}})");
+	std::uint64_t generation = 1;
+	int listed_calls = 0;
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json", edt::approved_snapshot_location{ approved_file, key } };
+	policy.set_command_source([this, &listed_calls] {
+		++listed_calls;
+		std::vector<const cmd::command_desc*> all{ &create, &build, &wipe };
+		for (const cmd::command_desc& more : extra) all.push_back(&more);
+		return all;
+	}, [&generation] { return generation; });
+	BOOST_TEST((policy.effective(extra.front()).mode == policy_mode::allow));
+
+	// The gate asks again and again: the list of commands is not copied while nothing was registered.
+	const int after_first = listed_calls;
+	for (int i = 0; i < 10; ++i) policy.effective(extra.front());
+	BOOST_TEST(listed_calls == after_first);
+
+	extra.front().risk = cmd::danger::confirm;
+	++generation;
+	BOOST_TEST((policy.effective(extra.front()).mode == policy_mode::ask));
+}
+
 BOOST_AUTO_TEST_CASE(FindLoosenings_JudgesTheVcsSection)
 {
 	const auto count = [](const char* approved, const char* current) {

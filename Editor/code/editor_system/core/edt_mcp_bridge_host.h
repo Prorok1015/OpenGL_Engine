@@ -93,6 +93,9 @@ namespace edt
 
 		// The server is stopping with the editor: its sessions ending now are not reported (the subscribers are going too).
 		void stop_reporting();
+		// These sessions were ended on purpose (the person closed one, or switched the server off): a call of theirs that
+		// is still queued answers with an error instead of running. Main thread.
+		void end_sessions(const std::vector<std::string>& session_ids);
 
 	private:
 		struct state;

@@ -216,7 +216,10 @@ namespace edt
 		void set_known_commands(std::function<bool(std::string_view)> exists);
 		// The commands of the registry, for judging what a changed project file loosens. Without it only the categories and the
 		// ids named in the layers are compared (never less strict).
-		void set_command_source(std::function<std::vector<const cmd::command_desc*>()> commands);
+		// `generation` (cmd::command_registry::generation) says whether the set of commands changed since the file was judged
+		// (a module reloaded with a risk floor an entry of the file would lift); without it only its size is compared.
+		void set_command_source(std::function<std::vector<const cmd::command_desc*>()> commands,
+			std::function<std::uint64_t()> generation = {});
 		// Whether a person is here to approve (a UI session; never headless). Without one approve_project_layer refuses and a
 		// loosening never takes effect.
 		void set_approval_allowed(bool allowed) { m_approval_allowed = allowed; }
@@ -273,6 +276,8 @@ namespace edt
 		void reconcile_project();
 		std::optional<std::string> keep_approved(const policy_layer& layer);
 		void load_approved();
+		// The commands changed since the project file was last judged: judges it again.
+		void rejudge_if_commands_changed();
 		std::vector<const cmd::command_desc*> commands() const;
 		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write, bool approve = false);
 		void warn_unknown_commands(source& what) const;
@@ -293,7 +298,8 @@ namespace edt
 		// The approved copy exists but could not be used (kept next to it as *.corrupt): what a person had approved is unknown,
 		// so nothing is adopted silently until they approve again.
 		bool m_snapshot_lost = false;
-		std::size_t m_reconciled_commands = static_cast<std::size_t>(-1);
+		std::function<std::uint64_t()> m_generation;
+		std::uint64_t m_reconciled_commands = static_cast<std::uint64_t>(-1);
 		std::vector<policy_loosening> m_loosenings;
 		bool m_pending = false;
 		bool m_approval_allowed = false;
