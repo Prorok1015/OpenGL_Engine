@@ -76,17 +76,6 @@ namespace {
 		}
 	}
 
-	edt::vcs::history_model::ports history_ports_of(const edt::git_panel_model::ports& ports)
-	{
-		edt::vcs::history_model::ports out;
-		out.invoke = ports.invoke;
-		out.cancel = ports.cancel;
-		out.now = ports.now;
-		// vcs.log{all, author, grep}, vcs.show_files and vcs.diff{commit} come with #457 PR-1.
-		out.extended_reads = false;
-		return out;
-	}
-
 	void draw_diff_lines(const char* id, const std::vector<edt::git_diff_line>& lines)
 	{
 		using edt::git_diff_line;
