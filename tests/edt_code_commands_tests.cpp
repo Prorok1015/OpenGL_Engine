@@ -263,6 +263,26 @@ BOOST_AUTO_TEST_CASE(ACMakeFile_IsJudgedAsCmakePresets_WhateverTheCase)
 	BOOST_TEST((category_of("code.rename", json::object{ { "from", "src/a.cpp" }, { "to", "CMakeLists.txt" } }) == agent_category::cmake_presets));
 	BOOST_TEST((category_of("code.rename", json::object{ { "from", "src/a.cpp" }, { "to", "lib/a.cpp" } }) == agent_category::code_files));
 	BOOST_TEST((category_of("code.read", json::object{ { "path", "CMakeLists.txt" } }) == agent_category::read));
+	for (const char* cmake : { "cmakelists.txt", "foo.cmake", "CMakePresets.json", "src/CMAKELISTS.TXT" }) {
+		BOOST_TEST_CONTEXT(cmake) {
+			BOOST_TEST((category_of("code.write", json::object{ { "path", cmake }, { "version", "v" }, { "text", "" } }) == agent_category::cmake_presets));
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(APathThatHidesACMakeFile_IsRefusedBeforeItsCategoryMatters)
+{
+	const std::string before = read_file(code / "CMakeLists.txt");
+	for (const char* hidden : { "./sub/../CMakeLists.txt", "src/../CMakeLists.txt", "CMakeLists.txt.", "CMakeLists.txt ", "CMakeLists.txt:x" }) {
+		BOOST_TEST_CONTEXT(hidden) {
+			BOOST_TEST(call("code.write", json::object{ { "path", hidden }, { "version", version_of("CMakeLists.txt") }, { "text", "x" } }).code
+				== cmd::codes::failed);
+			BOOST_TEST(call("code.delete", json::object{ { "path", hidden }, { "version", version_of("CMakeLists.txt") } }).code == cmd::codes::failed);
+			BOOST_TEST(call("code.rename", json::object{ { "from", "src/game.cpp" }, { "to", hidden } }).code == cmd::codes::failed);
+		}
+	}
+	BOOST_TEST(read_file(code / "CMakeLists.txt") == before);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
 }
 
 BOOST_AUTO_TEST_CASE(TheReads_AreOfferedToAgents_TheChangesWaitForThePolicy)
