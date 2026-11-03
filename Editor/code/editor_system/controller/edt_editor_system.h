@@ -146,6 +146,15 @@ namespace edt {
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
 
+	public:
+		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
+		// file; a different port restarts it) or off (every session ends and is reported). The choice is kept in
+		// edt://settings/agent_server.json, only when it took effect. False when there is no agent server object or the
+		// port cannot be bound. Main thread.
+		bool set_agent_server(bool enabled, std::uint16_t port);
+		agent_server* agent_server_object() { return m_agent_server.get(); }
+
+	private:
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
 
@@ -215,6 +224,7 @@ namespace edt {
 		std::unique_ptr<agent_access> m_agent_access;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
+		std::filesystem::path m_agent_server_settings_file;
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
 	};

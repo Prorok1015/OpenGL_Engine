@@ -93,16 +93,59 @@ edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system
 		egLOG_INFO("mcp", "agent server: MCP over stdin/stdout");
 	}
 	if (m_impl->options.http) {
-		start_http();
+		launch_http();
 	}
 }
 
-void edt::agent_server::start_http()
+bool edt::agent_server::start_http(std::uint16_t port)
+{
+	if (running() && m_impl->options.port == port) {
+		return true;
+	}
+	stop_http();
+	m_impl->options.http = true;
+	m_impl->options.port = port;
+	launch_http();
+	return running();
+}
+
+void edt::agent_server::stop_http()
+{
+	if (m_impl->server) {
+		m_impl->server->stop();
+		m_impl->server.reset();
+	}
+	if (m_impl->file_written) {
+		mcp::remove_connection_file(snk_dir_of(m_impl->options), m_impl->file_info);
+		m_impl->file_written = false;
+	}
+	m_impl->options.http = false;
+}
+
+std::vector<edt::agent_session_info> edt::agent_server::sessions() const
+{
+	std::vector<agent_session_info> out;
+	if (!m_impl->server) {
+		return out;
+	}
+	for (mcp::session_info& found : m_impl->server->sessions()) {
+		out.push_back({ std::move(found.id), std::move(found.client_name), found.age, found.idle, found.listening });
+	}
+	return out;
+}
+
+bool edt::agent_server::close_session(const std::string& id)
+{
+	return m_impl->server && m_impl->server->close_session(id);
+}
+
+void edt::agent_server::launch_http()
 {
 	m_impl->token = mcp::generate_token();
 	mcp::server& server = m_impl->server.emplace(m_impl->bridge, make_server_config(m_impl->options, m_impl->token));
 	if (!server.start()) {
 		egLOG_ERROR("mcp", "the agent server did not start");
+		m_impl->server.reset();
 		return;
 	}
 	mcp::connection_info info;
@@ -115,6 +158,7 @@ void edt::agent_server::start_http()
 	if (!failure.empty()) {
 		egLOG_ERROR("mcp", "the agent server is stopped: {}", failure);
 		server.stop();
+		m_impl->server.reset();
 		return;
 	}
 	m_impl->file_info = info;

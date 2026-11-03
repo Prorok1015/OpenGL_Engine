@@ -12,7 +12,7 @@ edt::agent_access::agent_access(cmd::command_registry& commands, std::filesystem
 {
 	m_gate->set_session_grants(&m_grants);
 	m_policy.set_known_commands([&commands](std::string_view id) { return commands.find(id) != nullptr; });
-	m_policy.set_command_source([&commands] { return commands.list(); });
+	m_policy.set_command_source([&commands] { return commands.list(); }, [&commands] { return commands.generation(); });
 	m_commands.set_policy_gate(m_gate);
 }
 

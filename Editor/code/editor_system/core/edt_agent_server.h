@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cmd { class command_registry; }
 namespace edt { class agent_access; }
@@ -18,6 +19,17 @@ namespace edt
 	// root, else the working directory.
 	std::filesystem::path agent_project_dir(const std::filesystem::path& configured,
 		const std::optional<std::filesystem::path>& project_root);
+
+	// One MCP session of the HTTP transport as the agents window shows it. `client_name` is what the client called itself
+	// (untrusted text, already cut and cleaned by the endpoint).
+	struct agent_session_info
+	{
+		std::string id;
+		std::string client_name;
+		std::chrono::seconds age{};
+		std::chrono::seconds idle{};
+		bool listening = false;
+	};
 
 	struct agent_server_options
 	{
@@ -54,6 +66,17 @@ namespace edt
 		agent_server(const agent_server&) = delete;
 		agent_server& operator=(const agent_server&) = delete;
 
+		// The HTTP transport, on and off while the editor runs (#449). start_http makes a new token and a new connection
+		// file; false (and nothing runs) when the port cannot be bound or the file cannot be written; true when it already
+		// runs on that port. A different port is a restart. stop_http ends every session through the usual
+		// `on_session_closed` (unlike the destructor, which is the editor going down) and removes the connection file.
+		// The stdio transport is not touched.
+		bool start_http(std::uint16_t port);
+		void stop_http();
+		// The open sessions of the HTTP transport, oldest first, and the end of one of them (reported like any end).
+		std::vector<agent_session_info> sessions() const;
+		bool close_session(const std::string& id);
+
 		// The HTTP server runs.
 		bool running() const;
 		// The bound port; 0 when the HTTP server did not start.
@@ -67,7 +90,7 @@ namespace edt
 	private:
 		struct impl;
 
-		void start_http();
+		void launch_http();
 
 		std::unique_ptr<impl> m_impl;
 	};

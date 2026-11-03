@@ -608,9 +608,11 @@ namespace edt
 		return m_commands ? m_commands() : std::vector<const cmd::command_desc*>{};
 	}
 
-	void agent_policy::set_command_source(std::function<std::vector<const cmd::command_desc*>()> commands)
+	void agent_policy::set_command_source(std::function<std::vector<const cmd::command_desc*>()> commands,
+		std::function<std::uint64_t()> generation)
 	{
 		m_commands = std::move(commands);
+		m_generation = std::move(generation);
 		if (m_project.loaded) reconcile_project();
 	}
 
@@ -631,9 +633,51 @@ namespace edt
 		// What of a file that loosens nothing is recorded without a person: its entries for a command other than `deny` are
 		// not. Such an entry equals the command's default today, but the command may be registered again with a risk floor,
 		// and a recorded entry would lift it unseen; so it is recorded only by an explicit approval.
+		// A value that is only what the default says is not recorded either: the person approved nothing there, and the
+		// default may be tightened later (a recorded copy of the old default would then hold the new one back). A value
+		// that went back to the default drops the approved entry (the baseline is tightened to the default).
+		void keep_default_values_out(const policy_layer& approved, policy_layer& out)
+		{
+			for (auto it = out.categories.begin(); it != out.categories.end();) {
+				const auto before = approved.categories.find(it->first);
+				const bool already = before != approved.categories.end() && before->second == it->second;
+				if (!already && it->second == default_mode(it->first)) {
+					it = out.categories.erase(it);
+				}
+				else {
+					++it;
+				}
+			}
+			if (!out.vcs) return;
+			const vcs_policy defaults;
+			const vcs_policy_layer none{};
+			const vcs_policy_layer& was = approved.vcs ? *approved.vcs : none;
+			vcs_policy_layer& now = *out.vcs;
+			const auto only_default_list = [](std::optional<std::vector<std::string>>& value, const std::optional<std::vector<std::string>>& before,
+				const std::vector<std::string>& default_list, bool entries_may_repeat_defaults) {
+				if (!value || value == before) return;
+				const bool all_default = entries_may_repeat_defaults
+					? std::all_of(value->begin(), value->end(), [&default_list](const std::string& entry) { return listed(default_list, entry); })
+					: *value == default_list;
+				if (all_default) value.reset();
+			};
+			only_default_list(now.push_branches, was.push_branches, defaults.push_branches, false);
+			only_default_list(now.remotes, was.remotes, defaults.remotes, false);
+			only_default_list(now.protected_branches, was.protected_branches, defaults.protected_branches, true);
+			const auto only_default_flag = [](std::optional<bool>& value, const std::optional<bool>& before) {
+				if (value && value != before && !*value) value.reset();
+			};
+			only_default_flag(now.allow_hooks, was.allow_hooks);
+			only_default_flag(now.allow_filters, was.allow_filters);
+			only_default_flag(now.allow_repo_credential_helper, was.allow_repo_credential_helper);
+			only_default_flag(now.allow_any_repo_config, was.allow_any_repo_config);
+			if (now == vcs_policy_layer{}) out.vcs.reset();
+		}
+
 		policy_layer silently_recordable(const policy_layer& approved, const policy_layer& current)
 		{
 			policy_layer out = current;
+			keep_default_values_out(approved, out);
 			for (auto it = out.commands.begin(); it != out.commands.end();) {
 				const auto before = approved.commands.find(it->first);
 				if (it->second == cmd::policy_mode::deny) {
@@ -655,12 +699,19 @@ namespace edt
 
 	}
 
+	void agent_policy::rejudge_if_commands_changed()
+	{
+		if (!m_commands || !m_project.loaded) return;
+		const std::uint64_t stamp = m_generation ? m_generation() : static_cast<std::uint64_t>(m_commands().size());
+		if (stamp != m_reconciled_commands) reconcile_project();
+	}
+
 	void agent_policy::reconcile_project()
 	{
 		m_loosenings.clear();
 		m_pending = false;
 		const std::vector<const cmd::command_desc*> known = commands();
-		m_reconciled_commands = known.size();
+		m_reconciled_commands = m_generation ? m_generation() : static_cast<std::uint64_t>(known.size());
 		if (!m_project.error.empty()) return;
 		m_loosenings = find_loosenings(m_approved, m_project.layer, known);
 		if (m_snapshot_lost && !m_project.layer.empty()) {
@@ -849,7 +900,7 @@ namespace edt
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective: main thread only");
 		refresh();
 		// A command registered after the file was judged (a module loaded later) may carry a risk floor an entry lifts.
-		if (m_commands && m_project.loaded && m_commands().size() != m_reconciled_commands) reconcile_project();
+		rejudge_if_commands_changed();
 		const bool live_on = m_live_on && m_live_on();
 		effective_policy now = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
 		// Also when nothing is pending: an entry the file has and the approved copy does not (see silently_recordable) must not
@@ -864,7 +915,7 @@ namespace edt
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective_vcs: main thread only");
 		refresh();
-		if (m_commands && m_project.loaded && m_commands().size() != m_reconciled_commands) reconcile_project();
+		rejudge_if_commands_changed();
 		const vcs_policy now = edt::effective_vcs(m_project.layer, m_personal.layer, m_project.error, m_personal.error);
 		if (!m_pending) return now;
 		return stricter_vcs(now, edt::effective_vcs(m_approved, m_personal.layer, {}, m_personal.error));
