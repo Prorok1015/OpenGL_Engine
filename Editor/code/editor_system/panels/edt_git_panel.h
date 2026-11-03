@@ -49,9 +49,9 @@ namespace edt
 		git_panel_model m_model;
 		vcs::history_model m_history;
 		std::uint64_t m_seen_writes = 0;
-		// The selected file's diff split into lines once, not every frame; the key says what it was split from.
+		// The selected file's diff split into lines once per history_model::diff_version, not every frame.
 		std::vector<git_diff_line> m_history_diff;
-		std::string m_history_diff_key;
+		std::uint64_t m_history_diff_version = 0;
 		dialog_service& m_dialogs;
 		res::resource_system& m_resources;
 		std::string m_new_branch;

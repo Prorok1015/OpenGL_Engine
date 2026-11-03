@@ -51,6 +51,31 @@ namespace {
 		return std::format("{} {}", code, change.path);
 	}
 
+	// At most k_shown_refs labels of at most k_ref_chars bytes each, then "+N": a commit many refs point at keeps its
+	// subject in view.
+	void draw_ref_labels(const std::vector<edt::vcs::history_ref>& refs)
+	{
+		constexpr std::size_t k_shown_refs = 3;
+		constexpr std::size_t k_ref_chars = 24;
+		for (std::size_t i = 0; i < refs.size() && i < k_shown_refs; ++i) {
+			const std::string& name = refs[i].name;
+			if (name.size() > k_ref_chars) {
+				std::size_t cut = k_ref_chars;
+				// Never inside a UTF-8 sequence.
+				while (cut > 0 && (static_cast<unsigned char>(name[cut]) & 0xC0u) == 0x80u) --cut;
+				ImGui::TextColored(ref_colour(refs[i].type), "%.*s...", static_cast<int>(cut), name.c_str());
+			} else {
+				ImGui::TextColored(ref_colour(refs[i].type), "%s", name.c_str());
+			}
+			if (name.size() > k_ref_chars && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", name.c_str());
+			ImGui::SameLine();
+		}
+		if (refs.size() > k_shown_refs) {
+			ImGui::TextDisabled("+%zu", refs.size() - k_shown_refs);
+			ImGui::SameLine();
+		}
+	}
+
 	edt::vcs::history_model::ports history_ports_of(const edt::git_panel_model::ports& ports)
 	{
 		edt::vcs::history_model::ports out;
@@ -296,10 +321,12 @@ void edt::git_panel::draw_history_filter()
 			changed = true;
 		}
 		for (const git_branch& branch : m_model.branches()) {
+			ImGui::PushID(branch.name.c_str());
 			if (ImGui::Selectable(branch.name.c_str(), filter.branch == branch.name)) {
 				filter.branch = branch.name;
 				changed = true;
 			}
+			ImGui::PopID();
 		}
 		ImGui::EndCombo();
 	}
@@ -337,11 +364,14 @@ void edt::git_panel::draw_history_table(float height)
 	ImGui::TableHeadersRow();
 
 	const float lane_width = ImGui::GetFontSize() * 0.9f;
+	// Thickness in step with the font, so a scaled UI keeps the lines visible.
+	const float line_thickness = std::max(1.0f, ImGui::GetFontSize() / 13.0f * 1.5f);
 	const float cell_padding = ImGui::GetStyle().CellPadding.y;
 	const float line_height = ImGui::GetTextLineHeight();
 	const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 	const std::optional<std::size_t> selected = m_history.selected_row();
-	std::size_t first_shown = commits.size();
+	bool any_shown = false;
+	std::size_t first_shown = 0;
 	std::size_t last_shown = 0;
 
 	ImGuiListClipper clipper;
@@ -350,15 +380,17 @@ void edt::git_panel::draw_history_table(float height)
 		if (clipper.DisplayStart >= clipper.DisplayEnd) continue;
 		const auto begin = static_cast<std::size_t>(clipper.DisplayStart);
 		const auto end = static_cast<std::size_t>(clipper.DisplayEnd);
-		first_shown = std::min(first_shown, begin);
-		last_shown = std::max(last_shown, end - 1);
+		first_shown = any_shown ? std::min(first_shown, begin) : begin;
+		last_shown = any_shown ? std::max(last_shown, end - 1) : end - 1;
+		any_shown = true;
 		std::vector<std::uint32_t> lanes = graph.lanes_above(begin);
 		for (std::size_t i = begin; i < end; ++i) {
 			const vcs::history_commit& commit = commits[i];
 			const vcs::graph_row& row = graph.rows()[i];
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			ImGui::PushID(static_cast<int>(i));
+			// By hash: after a reload the same index is another commit, and an open menu must not follow it there.
+			ImGui::PushID(commit.hash.c_str());
 			const ImVec2 origin = ImGui::GetCursorScreenPos();
 			const float width = lane_width * static_cast<float>(std::max<std::uint32_t>(row.width, 1));
 			if (ImGui::Selectable("##row", selected == i, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
@@ -383,16 +415,13 @@ void edt::git_panel::draw_history_table(float height)
 			};
 			for (const vcs::graph_segment& segment : vcs::row_segments(graph, row, lanes)) {
 				draw->AddLine(ImVec2(x_of(segment.from_lane), y_of(segment.from)), ImVec2(x_of(segment.to_lane), y_of(segment.to)),
-					lane_colour(segment.colour_lane), 1.5f);
+					lane_colour(segment.colour_lane), line_thickness);
 			}
 			draw->AddCircleFilled(ImVec2(x_of(row.lane), (top + bottom) * 0.5f), lane_width * 0.22f, lane_colour(row.lane));
 			graph.advance(lanes, row);
 
 			ImGui::TableSetColumnIndex(1);
-			for (const vcs::history_ref& ref : commit.refs) {
-				ImGui::TextColored(ref_colour(ref.type), "%s", ref.name.c_str());
-				ImGui::SameLine();
-			}
+			draw_ref_labels(commit.refs);
 			ImGui::TextUnformatted(commit.subject.c_str());
 			ImGui::TableSetColumnIndex(2);
 			ImGui::TextUnformatted(commit.author.c_str());
@@ -402,7 +431,7 @@ void edt::git_panel::draw_history_table(float height)
 		}
 	}
 	ImGui::EndTable();
-	if (first_shown <= last_shown) m_history.show_rows(first_shown, last_shown);
+	if (any_shown) m_history.show_rows(first_shown, last_shown);
 }
 
 void edt::git_panel::draw_history_details()
@@ -422,24 +451,28 @@ void edt::git_panel::draw_history_details()
 	const float files_width = ImGui::GetContentRegionAvail().x * 0.35f;
 	if (ImGui::BeginChild("##commit_files", ImVec2(files_width, 0.0f), ImGuiChildFlags_Borders)) {
 		if (m_history.files_loading()) ImGui::TextDisabled("...");
-		for (const vcs::history_file& file : m_history.files()) {
-			const std::string label = file.orig_path.empty() ? std::format("{} {}", file.status, file.path)
-															 : std::format("{} {} <- {}", file.status, file.path, file.orig_path);
-			if (ImGui::Selectable(label.c_str(), m_history.selected_file() == file.path)) m_history.select_file(file.path);
+		const auto& files = m_history.files();
+		ImGuiListClipper clipper;
+		clipper.Begin(static_cast<int>(files.size()));
+		while (clipper.Step()) {
+			for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+				const vcs::history_file& file = files[static_cast<std::size_t>(i)];
+				const std::string label = file.orig_path.empty() ? std::format("{} {}", file.status, file.path)
+																 : std::format("{} {} <- {}", file.status, file.path, file.orig_path);
+				if (ImGui::Selectable(label.c_str(), m_history.selected_file() == file.path)) m_history.select_file(file.path);
+			}
 		}
 	}
 	ImGui::EndChild();
 	ImGui::SameLine();
 	ImGui::BeginGroup();
+	if (m_history.diff_version() != m_history_diff_version) {
+		m_history_diff_version = m_history.diff_version();
+		m_history_diff = diff_lines(m_history.diff_text());
+	}
 	if (m_history.selected_file().empty()) {
 		ImGui::TextDisabled("Select a file to see what the commit changed in it.");
 	} else {
-		const std::string key = std::format("{}\n{}\n{}\n{}", hash, m_history.selected_file(), m_history.diff_text().size(),
-			m_history.diff_loading());
-		if (key != m_history_diff_key) {
-			m_history_diff_key = key;
-			m_history_diff = diff_lines(m_history.diff_text());
-		}
 		if (m_history.diff_truncated()) ImGui::TextDisabled("(cut at 256 KiB)");
 		draw_diff_lines("##commit_diff", m_history_diff);
 	}
