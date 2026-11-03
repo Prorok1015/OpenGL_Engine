@@ -21,7 +21,9 @@ namespace edt
 	//    window (no command can write it, and .snk is mounted under no protocol);
 	//  - the person's own settings, edt://settings/agent_policy.json, which can only tighten the project's.
 
-	// The mode of a category when nothing says otherwise (the owner's decision of 2026-10-29): one table, easy to change.
+	// The mode of a category when nothing says otherwise (the owner's decisions of 2026-10-29 and 2026-11-03): one table, easy to
+	// change. `code_edit` asks: with live mode on, a change to a source file is built and loaded into the editor, so an agent that
+	// edits code would run code without anyone being asked.
 	// A command with `risk` confirm or deny_by_default is at least ask / deny by default, and only an entry for that very
 	// command in the project's file lifts it: an entry for its category does not. `live` is allowed here, but effective_mode
 	// denies it whenever the live mode is off, whatever any layer says.
@@ -32,7 +34,7 @@ namespace edt
 		switch (category) {
 		case read: return policy_mode::allow;
 		case scene_edit: return policy_mode::allow;
-		case code_edit: return policy_mode::allow;
+		case code_edit: return policy_mode::ask;
 		case code_files: return policy_mode::ask;
 		case cmake_presets: return policy_mode::ask;
 		case build: return policy_mode::deny;
