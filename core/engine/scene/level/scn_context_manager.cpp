@@ -45,12 +45,9 @@ scn::context_manager::~context_manager()
 std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_view name, scn::scene_layer* layer,
 																 scn::set_options options)
 {
-	std::shared_ptr<scn::hot_reload_manager> hot_reload;
-	if (options.hot_reload) {
-		hot_reload = layer ? layer->hot_reload() : m_hot_reload_manager;
-	}
+	auto hot_reload = layer ? layer->hot_reload() : m_hot_reload_manager;
 	auto channel_types = layer ? layer->channel_types() : m_channel_types;
-	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types));
+	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types), options);
 	set->set_layer(layer);
 	return set;
 }
@@ -118,6 +115,8 @@ scn::context_set& scn::context_manager::create_set(std::string_view name, scn::s
 {
 	if (auto* existing = find_set(name)) {
 		egLOG_ERROR("scene", "create_set: set '{}' already exists, keeping the existing one", name);
+		ENGINE_VERIFY(existing->options() == options, "create_set: set '{}' exists with other options (hot_reload {}), they are kept",
+					  name, existing->options().hot_reload);
 		return *existing;
 	}
 	return *m_sets.emplace_back(make_set(name, layer, options));

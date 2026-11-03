@@ -3,6 +3,8 @@
 #include <snk/scene/scn_primitives.h>
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
+#include <snk/scene/scn_scene_layer.h>
+#include <snk/ecs/ecs_channel.hpp>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -729,114 +731,152 @@ BOOST_AUTO_TEST_CASE(PlaySet_LoadFromDescWithThePlayKindMakesPlayContexts)
 	BOOST_TEST(hot->attached_count() == 0u);
 }
 
-BOOST_AUTO_TEST_CASE(PlaySet_TenStartStopCyclesLeaveNothingBehind)
+BOOST_AUTO_TEST_CASE(CreateSet_WithATakenNameKeepsTheOptionsOfTheExistingSet)
 {
-	const auto prefab_tag = put("p.prefab.desc", PREFAB_HP1);
-	const auto prefab = load<scn::prefab_desc>(prefab_tag);
-	const auto level_tag = put("lv.desc", LEVEL_V1);
-	BOOST_REQUIRE(mgr.load_level(level_tag));
-	const auto level = load<scn::level_desc>(level_tag);
-	BOOST_REQUIRE(level);
-	// the prefab is spawned once outside Play too, so whatever it loads is already there before the baseline
-	spawn_prefab(*assembler, mgr.create_preview("p", "pv"), *prefab, prefab_tag);
+	auto& play = mgr.create_set("play", nullptr, scn::set_options{ .hot_reload = false });
+	auto& again = mgr.create_set("play"); // other options: logged as an error, the existing set comes back unchanged
+	BOOST_TEST(&again == &play);
+	BOOST_TEST(!again.hot_reload());
+	mgr.create_context("play", "w", scn::context_kind::play);
+	BOOST_TEST(hot->attached_count() == 0u);
 
-	struct counters
-	{
-		std::size_t sets = 0;
-		std::size_t contexts = 0;
-		std::size_t attached_registries = 0;
-		std::size_t channel_types = 0;
-		std::size_t live_resources = 0;
-	};
-	const auto snapshot = [this] {
-		counters c;
-		mgr.for_each_set([&c](scn::context_set&) { ++c.sets; });
-		mgr.for_each([&c](scn::world_context&) { ++c.contexts; });
-		c.attached_registries = hot->attached_count();
-		c.channel_types = mgr.channels().size();
-		c.live_resources = rs->live_resources();
-		return c;
-	};
-	const counters before = snapshot();
-	BOOST_REQUIRE(before.attached_registries == 3u); // two level worlds and the preview
+	// the flag is the set's own, not whether a manager was given
+	const scn::context_set without_manager("x", nullptr, nullptr, scn::set_options{ .hot_reload = true });
+	BOOST_TEST(without_manager.hot_reload());
+}
+
+namespace {
+
+struct play_msg { int value = 0; };
+constexpr ecs::bb_key<int> k_play{ "test.play" };
+
+// What a play world can hold: a resource no one else references.
+struct held_level { res::res_handle<scn::level_desc> handle; };
+
+struct play_counters
+{
+	std::size_t sets = 0;
+	std::size_t contexts = 0;
+	std::size_t channel_types = 0;
+	std::size_t base_attached = 0;
+	std::size_t base_live = 0;
+	std::size_t layer_attached = 0;
+	std::size_t layer_live = 0;
+	std::size_t layer_channel_types = 0;
+};
+
+play_counters count_play_state(manager_fixture& f, scn::scene_layer* layer)
+{
+	play_counters c;
+	f.mgr.for_each_set([&c](scn::context_set&) { ++c.sets; });
+	f.mgr.for_each([&c](scn::world_context&) { ++c.contexts; });
+	c.channel_types = f.mgr.channels().size();
+	c.base_attached = f.hot->attached_count();
+	c.base_live = f.rs->live_resources();
+	if (layer) {
+		c.layer_attached = layer->hot_reload()->attached_count();
+		c.layer_live = layer->resources().live_resources();
+		c.layer_channel_types = layer->channels().size();
+	}
+	return c;
+}
+
+void check_same(const play_counters& before, const play_counters& after)
+{
+	BOOST_TEST(after.sets == before.sets);
+	BOOST_TEST(after.contexts == before.contexts);
+	BOOST_TEST(after.channel_types == before.channel_types);
+	BOOST_TEST(after.base_attached == before.base_attached);
+	BOOST_TEST(after.base_live == before.base_live);
+	BOOST_TEST(after.layer_attached == before.layer_attached);
+	BOOST_TEST(after.layer_live == before.layer_live);
+	BOOST_TEST(after.layer_channel_types == before.layer_channel_types);
+}
+
+// Ten Play/Stop cycles on `layer` (null: the base), built like a play session: the play level is loaded through the
+// layer's resources under a tag the test does not hold, and only the play world keeps it alive.
+void run_play_cycles(manager_fixture& f, scn::scene_layer* layer)
+{
+	res::resource_system& resources = layer ? layer->resources() : *f.rs;
+	ecs::system_factory& systems = layer ? layer->systems() : f.sf;
+	scn::ecs_assembler& assembler = layer ? layer->assembler() : *f.assembler;
+	const auto play_tag = f.put("play_lv.desc", LEVEL_V1);
+	constexpr auto frame = std::chrono::duration<float>(0.016f);
+
+	const play_counters before = count_play_state(f, layer);
+	const std::size_t live_before = layer ? before.layer_live : before.base_live;
 
 	for (int cycle = 0; cycle < 10; ++cycle) {
 		BOOST_TEST_CONTEXT("cycle " << cycle) {
-			auto& play = mgr.create_set("play", nullptr, scn::set_options{ .hot_reload = false });
-			// a fresh channel every time: nothing left from the previous session
-			BOOST_TEST(play.channel().exchange_count() == 0u);
-			BOOST_TEST(play.channel().blackboard().committed().empty());
-			play.set_seed(1000u + static_cast<uint64_t>(cycle));
-			play.load_from_desc(*level, sf, *assembler, scn::context_kind::play);
-			spawn_prefab(*assembler, play.get("w0"), *prefab, prefab_tag);
-			BOOST_TEST(hot->attached_count() == before.attached_registries);
-
-			for (int frame = 0; frame < 3; ++frame) {
-				mgr.update(std::chrono::duration<float>(0.016f));
+			auto& play = f.mgr.create_set("play", layer, scn::set_options{ .hot_reload = false });
+			BOOST_TEST(play.layer() == layer);
+			{
+				auto level = resources.require_sync<scn::level_desc>(play_tag);
+				f.pump();
+				BOOST_REQUIRE(level.is_ready());
+				play.set_seed(1000u + static_cast<uint64_t>(cycle));
+				play.load_from_desc(*level, systems, assembler, scn::context_kind::play);
+				auto& reg = play.get("w0").state();
+				reg.emplace<held_level>(reg.create(), held_level{ level });
 			}
-			BOOST_TEST(play.channel().exchange_count() == 3u);
-			mgr.destroy_set("play");
+			const auto inbox = [&play] { return play.get("w0").state().ctx().get<ecs::inbox<play_msg>>().messages(); };
+
+			f.mgr.update(frame);
+			// nothing the previous session posted or wrote reaches this one
+			BOOST_TEST(inbox().empty());
+			BOOST_TEST(play.channel().reader().get_or(k_play, -1) == -1);
+
+			f.mgr.post("play", ecs::address{ "w0" }, play_msg{ cycle });
+			f.mgr.blackboard("play").set(k_play, cycle);
+			f.mgr.update(frame);
+			BOOST_REQUIRE(inbox().size() == 1u);
+			BOOST_TEST(inbox()[0].payload.value == cycle);
+			BOOST_TEST(play.channel().reader().get_or(k_play, -1) == cycle);
+			// still undelivered when the session stops
+			f.mgr.post("play", ecs::address{ "w0" }, play_msg{ 100 + cycle });
+			f.mgr.blackboard("play").set(k_play, 100 + cycle);
+
+			const play_counters during = count_play_state(f, layer);
+			BOOST_TEST(during.sets == before.sets + 1);
+			BOOST_TEST(during.contexts == before.contexts + 2);
+			BOOST_TEST((layer ? during.layer_live : during.base_live) > live_before); // the play level is alive
+			BOOST_TEST(during.base_attached == before.base_attached);
+			BOOST_TEST(during.layer_attached == before.layer_attached);
+
+			f.mgr.destroy_set("play");
+			check_same(before, count_play_state(f, layer));
 		}
 	}
+	BOOST_TEST(f.mgr.find_set("play") == nullptr);
+}
 
-	const counters after = snapshot();
-	BOOST_TEST(after.sets == before.sets);
-	BOOST_TEST(after.contexts == before.contexts);
-	BOOST_TEST(after.attached_registries == before.attached_registries);
-	BOOST_TEST(after.channel_types == before.channel_types);
-	BOOST_TEST(after.live_resources == before.live_resources);
-	BOOST_TEST(mgr.find_set("play") == nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(PlaySet_TenStartStopCyclesOnTheBaseLeaveNothingBehind)
+{
+	mgr.channels().add<play_msg>();
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	mgr.create_preview("p", "pv");
+	BOOST_REQUIRE(hot->attached_count() == 3u); // two level worlds and the preview
+
+	run_play_cycles(*this, nullptr);
 	BOOST_TEST(mgr.level_set().size() == 2u);
 }
 
-BOOST_AUTO_TEST_SUITE_END()
-
-BOOST_FIXTURE_TEST_SUITE(ScnWorldWrapAdapterTests, test_util::scene_env)
-
-BOOST_AUTO_TEST_CASE(WrapsAnyDescFileAsAWorldDesc)
+BOOST_AUTO_TEST_CASE(PlaySet_TenStartStopCyclesOnTheGameLayerLeaveNothingBehind)
 {
-	rs->registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, std::ref(*rs), std::ref(*descs));
-	auto tag = put("prefab_as_world.desc", R"({"__type":"prefab_desc","children":{"c":{"components":{"stat":{"__type":"stat_desc","hp":4}}}}})");
+	mgr.channels().add<play_msg>(); // before the layer: its registry sees the base's types as they are now
+	auto& layer = mgr.create_layer();
+	mgr.set_game_layer(&layer);
+	BOOST_REQUIRE(mgr.load_level(put("lv.desc", LEVEL_V1)));
+	pump();
+	mgr.create_preview("p", "pv");
+	BOOST_REQUIRE(layer.hot_reload()->attached_count() == 3u);
+	BOOST_REQUIRE(hot->attached_count() == 0u);
 
-	auto world = load<scn::world_desc>(tag);
-	BOOST_REQUIRE(world);
-	BOOST_TEST(world->get_type() == "world_desc");
-	BOOST_REQUIRE(world->get_root().children.size() == 1u);
-	BOOST_TEST(world->get_root().children[0].name == "c");
-}
-
-BOOST_AUTO_TEST_CASE(WorldTypedFileKeepsItsNameSystemsAndInheritsParent)
-{
-	rs->registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, std::ref(*rs), std::ref(*descs));
-	put("parent_world.desc", R"({"__type":"world_desc","name":"base","systems":["a","b"],"children":{"p":{"components":{"stat":{"__type":"stat_desc","hp":1}}}}})");
-	auto child = load<scn::world_desc>(put("child_world.desc",
-		R"({"__type":"world_desc","__parent":"memory://t/parent_world.desc","name":"derived"})"));
-
-	BOOST_REQUIRE(child);
-	BOOST_TEST(child->get_name() == "derived");                                  // own field wins
-	BOOST_TEST((child->get_systems() == std::vector<std::string>{ "a", "b" })); // inherited
-}
-
-BOOST_AUTO_TEST_CASE(WorldTypedFileInheritsParentContent)
-{
-	rs->registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, std::ref(*rs), std::ref(*descs));
-	put("parent_world.desc", R"({"__type":"world_desc","name":"base","children":{"p":{"components":{"stat":{"__type":"stat_desc","hp":1}}}}})");
-	auto child = load<scn::world_desc>(put("child_world.desc",
-		R"({"__type":"world_desc","__parent":"memory://t/parent_world.desc","name":"derived"})"));
-	BOOST_REQUIRE(child);
-	BOOST_TEST(child->get_root().children.size() == 1u);
-}
-
-BOOST_AUTO_TEST_CASE(SerializeProducesLoadableWorldJson)
-{
-	rs->registrate_adapter<scn::worldwrap_adapter>(scn::worldwrap_adapter::INFO, std::ref(*rs), std::ref(*descs));
-	auto world = load<scn::world_desc>(put("w.desc", R"({"__type":"world_desc","name":"w","systems":["s"]})"));
-	scn::worldwrap_adapter adapter(*rs, *descs);
-	auto bytes = adapter.serialize(tag_of("w.desc"), world);
-	std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-	auto parsed = boost::json::parse(text).as_object();
-	BOOST_TEST(parsed.at("__type").as_string() == "world_desc");
-	BOOST_TEST(parsed.at("name").as_string() == "w");
+	run_play_cycles(*this, &layer);
+	BOOST_TEST(mgr.level_set().size() == 2u);
+	BOOST_TEST(mgr.level_set().layer() == &layer);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

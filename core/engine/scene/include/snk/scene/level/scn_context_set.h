@@ -32,6 +32,8 @@ namespace scn
 		// False: the contexts' registries are never attached to hot reload, so a resource change does not reach
 		// them (a Play set runs on copies, ADR-07).
 		bool hot_reload = true;
+
+		bool operator==(const set_options&) const = default;
 	};
 
 	// A group of contexts stepped together: one mode, one seed, one phase order. Owned by the
@@ -41,9 +43,9 @@ namespace scn
 	{
 	public:
 		// `channel_types` is the registry of message types shared by the sets of a manager; null gives
-		// the set a registry of its own.
+		// the set a registry of its own. With `options.hot_reload` false `hot_manager` is not kept.
 		context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
-					std::shared_ptr<ecs::channel_registry> channel_types = nullptr);
+					std::shared_ptr<ecs::channel_registry> channel_types = nullptr, set_options options = {});
 		~context_set();
 		context_set(const context_set&) = delete;
 		context_set& operator=(const context_set&) = delete;
@@ -59,8 +61,9 @@ namespace scn
 		// An inactive set is skipped by context_manager::update.
 		bool active() const { return m_active; }
 		void set_active(bool active) { m_active = active; }
-		// Whether the contexts' registries are attached to a hot reload manager (set_options::hot_reload).
-		bool hot_reload() const { return m_hot_reload_manager != nullptr; }
+		const set_options& options() const { return m_options; }
+		// set_options::hot_reload: the contexts' registries are attached to the hot reload manager, when there is one.
+		bool hot_reload() const { return m_options.hot_reload; }
 
 		// The data channel of this set (blackboard + mailbox). It is exchanged once at the start of
 		// update(), before the contexts' begin_frame, and only while the set runs: in Edit and Pause it
@@ -81,13 +84,17 @@ namespace scn
 
 		// Step mode for `frames` (>= 1) frames: each of the next `frames` update() calls runs one full frame of
 		// exactly one fixed step, then the mode becomes Pause. set_mode(step) is step(1); any set_mode cancels it.
+		// 0 is refused with an error log and runs one frame.
 		void step(uint32_t frames);
 		// Frames of the current step still to run; 0 outside Step.
 		uint32_t pending_steps() const { return m_pending_steps; }
 
+		// At 60 fps a frame of scale s needs about s fixed steps, and fixed_stepper runs at most 8 a frame (its
+		// default max_steps): beyond 8 simulated time would be dropped, so the scale is capped there.
+		static constexpr float max_time_scale = 8.0f;
 		// Multiplies the frame delta of every context in Edit and Play (a step stays one fixed step). Default 1;
-		// 0 freezes the time without changing the mode. Negative or non-finite values are refused (logged) as 0.
-		// Survives clear() and level loads.
+		// 0 freezes the time without changing the mode. Refused with an error log: negative or NaN (-> 0), above
+		// max_time_scale or +inf (-> max_time_scale). Survives clear() and level loads.
 		void set_time_scale(float scale);
 		float time_scale() const { return m_time_scale; }
 
@@ -207,6 +214,8 @@ namespace scn
 		scene_layer* m_layer = nullptr;
 		std::vector<std::string> m_desc_world_names;
 		bool m_active = true;
+		set_options m_options;
+		// Null when the set takes no part in hot reload.
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		// Before the contexts: their ctx holds pointers into it, so it must outlive them.
 		scn::set_channel m_channel;

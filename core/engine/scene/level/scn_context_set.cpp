@@ -1,14 +1,14 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/scn_scene_layer.h>
 #include <algorithm>
-#include <cmath>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
 
 scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
-							  std::shared_ptr<ecs::channel_registry> channel_types)
+							  std::shared_ptr<ecs::channel_registry> channel_types, set_options options)
 	: m_name(std::move(name))
-	, m_hot_reload_manager(std::move(hot_manager))
+	, m_options(options)
+	, m_hot_reload_manager(options.hot_reload ? std::move(hot_manager) : std::shared_ptr<scn::hot_reload_manager>{})
 	, m_channel(m_name, std::move(channel_types))
 {
 }
@@ -74,16 +74,20 @@ void scn::context_set::set_mode(ecs::run_mode mode)
 
 void scn::context_set::step(uint32_t frames)
 {
-	ASSERT_MSG(frames >= 1, "context_set::step: at least one frame");
+	if (!ENGINE_VERIFY(frames >= 1, "set '{}': step of 0 frames, running one", m_name)) {
+		frames = 1;
+	}
 	set_mode(ecs::run_mode::step);
-	m_pending_steps = frames > 0 ? frames : 1u;
+	m_pending_steps = frames;
 }
 
 void scn::context_set::set_time_scale(float scale)
 {
-	if (!ENGINE_VERIFY(std::isfinite(scale) && scale >= 0.0f,
-					   "set '{}': time scale {} is not a finite non-negative number, using 0", m_name, scale)) {
+	if (!ENGINE_VERIFY(scale >= 0.0f, "set '{}': time scale {} is negative or NaN, using 0", m_name, scale)) {
 		scale = 0.0f;
+	} else if (!ENGINE_VERIFY(scale <= max_time_scale, "set '{}': time scale {} is above {}, using {}", m_name, scale,
+								max_time_scale, max_time_scale)) {
+		scale = max_time_scale;
 	}
 	m_time_scale = scale;
 	for (const auto& [id, context] : m_contexts) {
