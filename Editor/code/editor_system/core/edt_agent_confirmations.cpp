@@ -37,9 +37,12 @@ namespace edt
 		try {
 			return m_commands.invoke(command_id, request);
 		} catch (const std::exception& e) {
-			return cmd::result::failure(cmd::codes::failed, e.what());
+			// What the exception says may be a path or a string of the editor's: the agent gets a plain refusal, the log the cause.
+			egLOG_ERROR("agent", "command '{}' threw: {}", command_id, e.what());
+			return cmd::result::failure(cmd::codes::failed, "the command failed");
 		} catch (...) {
-			return cmd::result::failure(cmd::codes::failed, "the command threw an unknown exception");
+			egLOG_ERROR("agent", "command '{}' threw an unknown exception", command_id);
+			return cmd::result::failure(cmd::codes::failed, "the command failed");
 		}
 	}
 
@@ -99,6 +102,13 @@ namespace edt
 				return;
 			}
 			const std::string ticket_id(ticket->as_string());
+			// The registry hands out one ticket for one (command, arguments, session): an identical call that a person is
+			// being asked about holds it. That ticket is theirs to answer, never spent here; this try waits for the next tick.
+			if (std::any_of(m_waiting.begin(), m_waiting.end(), [&ticket_id](const waiting& w) { return w.ticket == ticket_id; })) {
+				park_or_finish(std::move(command_id), std::move(request), std::move(done), true,
+					cmd::result::failure(cmd::codes::busy, "an identical request is waiting for a person's answer"), give_up_at);
+				return;
+			}
 			if (!m_commands.approve(ticket_id)) {
 				done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the confirmation expired", command_id)));
 				return;
@@ -238,16 +248,29 @@ namespace edt
 			if (w.request.deadline <= current) late.push_back(w.request.id);
 		}
 		for (const std::uint64_t id : late) {
-			finish_waiting(id, std::nullopt, std::format("nobody answered within {} seconds", timeout.count()));
+			try {
+				finish_waiting(id, std::nullopt, std::format("nobody answered within {} seconds", timeout.count()));
+			} catch (const std::exception& e) {
+				egLOG_ERROR("agent", "an answer to an agent could not be delivered: {}", e.what());
+			} catch (...) {
+				egLOG_ERROR("agent", "an answer to an agent could not be delivered");
+			}
 		}
 
 		std::vector<retrying> due;
 		due.swap(m_retrying);
 		for (retrying& call : due) {
-			if (call.approved) {
-				run_approved(std::move(call.command_id), std::move(call.call), std::move(call.done), call.give_up_at);
-			} else {
-				start(std::move(call.command_id), std::move(call.call), std::move(call.done), call.give_up_at);
+			// One call whose answer cannot be delivered must not leave the others in the list without theirs.
+			try {
+				if (call.approved) {
+					run_approved(std::move(call.command_id), std::move(call.call), std::move(call.done), call.give_up_at);
+				} else {
+					start(std::move(call.command_id), std::move(call.call), std::move(call.done), call.give_up_at);
+				}
+			} catch (const std::exception& e) {
+				egLOG_ERROR("agent", "an answer to an agent could not be delivered: {}", e.what());
+			} catch (...) {
+				egLOG_ERROR("agent", "an answer to an agent could not be delivered");
 			}
 		}
 	}

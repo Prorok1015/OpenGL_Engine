@@ -321,6 +321,7 @@ namespace edt
 
 	void agent_policy::reload(source& what)
 	{
+		const bool was_loaded = what.loaded;
 		what.loaded = true;
 		what.layer = {};
 		what.error.clear();
@@ -348,6 +349,7 @@ namespace edt
 			egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
 		}
 		warn_unknown_commands(what);
+		if (was_loaded && m_on_changed) m_on_changed();
 	}
 
 	void agent_policy::warn_unknown_commands(source& what) const

@@ -270,6 +270,66 @@ BOOST_AUTO_TEST_CASE(TheLiveSwitch_IsTheConsentForTheLiveTools)
 	BOOST_TEST(runs == 1);
 }
 
+BOOST_AUTO_TEST_CASE(AMutatingCommandCannotBeRegisteredAsRead)
+{
+	cmd::command_desc desc = make("log.read");
+	desc.mutates = true;
+	cmd::registration registration = commands.add(std::move(desc));
+	BOOST_TEST(!registration.active());
+	BOOST_TEST(!commands.contains("log.read"));
+}
+
+BOOST_AUTO_TEST_CASE(AResourceIsHiddenForACommandThePolicyOnlyAsksAbout)
+{
+	add(make("log.read"));
+	std::optional<std::vector<mcp::resource_info>> listed;
+	bridge.list_resources([&listed](std::vector<mcp::resource_info> r) { listed = std::move(r); });
+	drain();
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST(listed->size() == 1u);
+
+	write_project_policy(R"({"version":1,"commands":{"log.read":"ask"}})");
+	listed.reset();
+	bridge.list_resources([&listed](std::vector<mcp::resource_info> r) { listed = std::move(r); });
+	drain();
+	BOOST_REQUIRE(listed.has_value());
+	BOOST_TEST(listed->empty());
+	BOOST_TEST(!read_resource("snk://log").found);
+	// The tool stays: calling it asks.
+	BOOST_TEST((names_of(list_tools()) == std::vector<std::string>{ "log_read" }));
+}
+
+BOOST_AUTO_TEST_CASE(ThePolicyChangingBetweenTheListAndTheCall_IsDecidedAtCallTime)
+{
+	int runs = 0;
+	cmd::command_desc desc = make("log.read");
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+	BOOST_TEST((names_of(list_tools()) == std::vector<std::string>{ "log_read" }));
+
+	write_project_policy(R"({"version":1,"commands":{"log.read":"deny"}})");
+	const mcp::call_result refused = call_tool("log_read");
+
+	BOOST_TEST(refused.is_error);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AChangedPolicyFile_TellsTheClientsToAskForTheToolsAgain)
+{
+	int changes = 0;
+	access.policy().set_on_changed([&changes] { ++changes; });
+	access.policy().refresh();
+	BOOST_TEST(changes == 0);
+	write_project_policy(R"({"version":1,"categories":{"read":"deny"}})");
+	BOOST_TEST(changes >= 1);
+	const int after_first = changes;
+	access.policy().refresh();
+	BOOST_TEST(changes == after_first);
+}
+
 BOOST_AUTO_TEST_CASE(ToolName_IsTheIdWithUnderscoresAndTheVersion)
 {
 	cmd::command_desc desc;
@@ -460,7 +520,8 @@ BOOST_AUTO_TEST_CASE(CallTool_AFailureIsAnErrorResultWithTheCode)
 
 	const mcp::call_result thrown = call_tool("job_list");
 	BOOST_TEST(thrown.is_error);
-	BOOST_TEST(thrown.content.at(0).text.find("boom") != std::string::npos);
+	// What the exception says stays in the log: the agent gets a plain refusal.
+	BOOST_TEST(thrown.content.at(0).text == "failed: the command failed");
 }
 
 BOOST_AUTO_TEST_CASE(CallTool_ACapturedPngBecomesAnImageBlock)
@@ -663,6 +724,7 @@ BOOST_AUTO_TEST_CASE(ReadResource_AMutatingCommandIsNeverRead)
 	int runs = 0;
 	cmd::command_desc log = make("log.read");
 	log.mutates = true;
+	log.category = cmd::agent_category::scene_edit;
 	log.invoke = [&runs](const cmd::call&) {
 		++runs;
 		return cmd::result::success();
@@ -928,6 +990,99 @@ BOOST_AUTO_TEST_CASE(AWaitingBusyCall_EndsWithItsSession)
 	BOOST_TEST(answered->is_error);
 	access.confirmations().tick();
 	BOOST_TEST(attempts == 1);
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_NeverSpendsTheTicketOfAnIdenticalQuestionThatWaits)
+{
+	add_code_command([this] {
+		return attempts == 1 ? cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit") : cmd::result::success();
+	});
+	start_call("code_create");
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(!answered.has_value());
+
+	// The same call again: the ticket the first one spent is gone, so this one is a question of its own.
+	std::optional<mcp::call_result> second;
+	mcp::request_context context;
+	context.session_id = "session-1";
+	bridge.call_tool(context, "code_create", json_of(R"({"path":"a.cpp"})"), nullptr, [&second](mcp::call_result r) { second = std::move(r); });
+	drain();
+	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
+
+	access.confirmations().tick();
+	BOOST_TEST(!answered.has_value());
+	BOOST_TEST(!second.has_value());
+	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
+
+	// The person's click on the second question still works.
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(second.has_value());
+	BOOST_TEST(!second->is_error);
+
+	access.confirmations().tick();
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(!answered->is_error);
+	BOOST_TEST(runs == 2);
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_IsDeniedIfThePolicyTurnsToDenyBeforeTheNextTick)
+{
+	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
+	start_call("code_create");
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(!answered.has_value());
+
+	write_project_policy(R"({"version":1,"categories":{"code_files":"deny"}})");
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(AnApprovedBusyRetry_IsDeniedIfNobodyCanBeAskedAnyMore)
+{
+	add_code_command([] { return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit"); });
+	start_call("code_create");
+	BOOST_TEST(access.confirmations().answer(the_question(), edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(!answered.has_value());
+
+	access.set_person_present(false);
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(ABusyLiveCall_IsDeniedIfLiveModeIsSwitchedOffBeforeTheNextTick)
+{
+	bool live_on = true;
+	access.policy().set_live_mode([&live_on] { return live_on; });
+	cmd::command_desc desc = make("live.rebuild_now");
+	desc.category = cmd::agent_category::live;
+	desc.mutates = true;
+	desc.args_schema = json_of(R"({"type":"object"})");
+	desc.invoke = [this](const cmd::call&) {
+		++attempts;
+		return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit");
+	};
+	add(std::move(desc));
+	start_call("live_rebuild_now");
+	BOOST_REQUIRE(!answered.has_value());
+
+	live_on = false;
+	access.confirmations().tick();
+
+	BOOST_REQUIRE(answered.has_value());
+	BOOST_TEST(answered->is_error);
+	BOOST_TEST(answered->content.at(0).text.rfind("denied", 0) == 0u);
+	BOOST_TEST(attempts == 1);
+	access.policy().set_live_mode(nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(ASessionGrant_AllowsTheNextCallOfThatCategoryWithoutAQuestion)

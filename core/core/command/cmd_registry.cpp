@@ -36,6 +36,11 @@ cmd::registration cmd::command_registry::add(command_desc desc)
 		egLOG_ERROR("command", "command '{}' not registered: the id is already taken", desc.id);
 		return {};
 	}
+	// `read` is the category an agent may use without asking; a command that changes things must not carry it.
+	if (desc.mutates && desc.category == agent_category::read) {
+		egLOG_ERROR("command", "command '{}' not registered: it mutates, so it cannot be in the agent category 'read'", desc.id);
+		return {};
+	}
 
 	if (desc.args_schema.is_null()) desc.args_schema = no_args_schema();
 	if (desc.result_schema.is_null()) desc.result_schema = no_args_schema();

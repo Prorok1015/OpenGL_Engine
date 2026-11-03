@@ -545,6 +545,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
+		m_agent_access->policy().set_on_changed([this] {
+			if (m_agent_server) m_agent_server->notify_tools_changed();
+		});
 		m_agent_access->policy().set_live_mode([this] { return m_live_mode != nullptr && m_live_mode->enabled(); });
 		m_agent_access->set_questions_routed(true);
 		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
