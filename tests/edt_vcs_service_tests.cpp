@@ -392,7 +392,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 	BOOST_TEST(fs::equivalent(*state.root, repo, ec));
 	BOOST_TEST(!state.git_version.empty());
 
-	const json::value status = finish(service->start_status());
+	const json::value status = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST_INFO("status: " << json::serialize(status));
 	const json::object& branch = status.as_object().at("branch").as_object();
 	BOOST_TEST(text(branch.at("head")) == "main");
@@ -415,7 +415,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 	BOOST_REQUIRE(untracked != nullptr);
 	BOOST_TEST(text(untracked->at("kind")) == "untracked");
 
-	const json::value page = finish(service->start_log({}, {}, 1, {}));
+	const json::value page = finish(service->start_log({}, {}, 1, {}, cmd::origin_kind::ui));
 	const json::array& first = page.as_object().at("commits").as_array();
 	BOOST_REQUIRE_EQUAL(first.size(), 1u);
 	BOOST_TEST(text(first[0].as_object().at("subject")) == "second: b");
@@ -423,7 +423,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 	BOOST_TEST(text(first[0].as_object().at("email")) == "test@example.com");
 	BOOST_TEST(first[0].as_object().at("time").as_int64() > 0);
 	BOOST_REQUIRE(page.as_object().contains("next_cursor"));
-	const json::value next = finish(service->start_log({}, {}, 1, text(page.as_object().at("next_cursor"))));
+	const json::value next = finish(service->start_log({}, {}, 1, text(page.as_object().at("next_cursor")), cmd::origin_kind::ui));
 	const json::array& second = next.as_object().at("commits").as_array();
 	BOOST_REQUIRE_EQUAL(second.size(), 1u);
 	BOOST_TEST(text(second[0].as_object().at("subject")) == "first commit");
@@ -432,10 +432,10 @@ BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 	BOOST_REQUIRE_EQUAL(parents.size(), 1u);
 	BOOST_TEST(text(parents[0]) == text(second[0].as_object().at("hash")));
 
-	const json::value of_path = finish(service->start_log("main", "a.txt", 50, {}));
+	const json::value of_path = finish(service->start_log("main", "a.txt", 50, {}, cmd::origin_kind::ui));
 	BOOST_TEST(of_path.as_object().at("commits").as_array().size() == 1u);
 
-	const json::value branches = finish(service->start_branches());
+	const json::value branches = finish(service->start_branches(cmd::origin_kind::ui));
 	BOOST_TEST(text(branches.as_object().at("current")) == "main");
 	const json::array& listed = branches.as_object().at("branches").as_array();
 	BOOST_TEST(listed.size() == 2u);
@@ -443,10 +443,10 @@ BOOST_AUTO_TEST_CASE(RealRepository_InfoStatusLogBranchesAndDiff)
 		return b.as_object().at("name").as_string() == "feature" && !b.as_object().at("head").as_bool();
 	}));
 
-	const json::value worktree = finish(service->start_diff("a.txt", false));
+	const json::value worktree = finish(service->start_diff("a.txt", false, cmd::origin_kind::ui));
 	BOOST_TEST(!worktree.as_object().at("truncated").as_bool());
 	BOOST_TEST(text(worktree.as_object().at("text")).find("+two") != std::string::npos);
-	const json::value staged = finish(service->start_diff({}, true));
+	const json::value staged = finish(service->start_diff({}, true, cmd::origin_kind::ui));
 	BOOST_TEST(text(staged.as_object().at("text")).find("c.txt") != std::string::npos);
 	BOOST_TEST(text(staged.as_object().at("text")).find("+two") == std::string::npos);
 }
@@ -493,9 +493,9 @@ BOOST_AUTO_TEST_CASE(RealRepository_WithoutCommits_HasAnEmptyLog)
 	git(repo, { "init", "-q" });
 	make_service(real_options(repo));
 
-	const json::value log = finish(service->start_log({}, {}, 10, {}));
+	const json::value log = finish(service->start_log({}, {}, 10, {}, cmd::origin_kind::ui));
 	BOOST_TEST(log.as_object().at("commits").as_array().empty());
-	const json::value status = finish(service->start_status());
+	const json::value status = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(text(status.as_object().at("branch").as_object().at("oid")).empty());
 }
 
@@ -504,7 +504,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_CancelledJob_EndsCancelledWithoutAResult)
 	const fs::path repo = make_repository();
 	make_service(real_options(repo));
 
-	const auto started = service->start_status();
+	const auto started = service->start_status(cmd::origin_kind::ui);
 	BOOST_REQUIRE(static_cast<bool>(started));
 	BOOST_TEST(jobs->cancel(started.job));
 	run_to_end();
@@ -589,16 +589,16 @@ BOOST_AUTO_TEST_CASE(AHostileRepositoryConfig_RunsNothingOnReads)
 
 	make_service(real_options(repo));
 	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
-	const json::value status = finish(service->start_status());
+	const json::value status = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(!status.as_object().contains("error"), json::serialize(status));
-	const json::value unstaged = finish(service->start_diff({}, false));
+	const json::value unstaged = finish(service->start_diff({}, false, cmd::origin_kind::ui));
 	BOOST_TEST(text(unstaged.as_object().at("text")).find("+two") != std::string::npos, json::serialize(unstaged));
-	const json::value staged = finish(service->start_diff({}, true));
+	const json::value staged = finish(service->start_diff({}, true, cmd::origin_kind::ui));
 	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
-	finish(service->start_diff("a.txt", false));
-	finish(service->start_log({}, {}, 10, {}));
-	finish(service->start_log({}, "a.txt", 10, {}));
-	finish(service->start_branches());
+	finish(service->start_diff("a.txt", false, cmd::origin_kind::ui));
+	finish(service->start_log({}, {}, 10, {}, cmd::origin_kind::ui));
+	finish(service->start_log({}, "a.txt", 10, {}, cmd::origin_kind::ui));
+	finish(service->start_branches(cmd::origin_kind::ui));
 
 	BOOST_TEST(!fs::exists(marker, ec), "a read ran a program of the repository's config");
 }
@@ -617,7 +617,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_ANewlineAndANonUtf8Name_KeepTheOtherEntries)
 	write(repo / "zz after.txt", "3\n");
 	make_service(real_options(repo));
 
-	const json::value status = finish(service->start_status());
+	const json::value status = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST_INFO("status: " << json::serialize(status));
 	const json::array& entries = status.as_object().at("entries").as_array();
 	BOOST_TEST(entries.size() == 3u);
@@ -637,7 +637,7 @@ BOOST_AUTO_TEST_CASE(NoProject_IsReported)
 	make_service(real_options(std::nullopt));
 	BOOST_TEST(!service->info().available);
 	BOOST_TEST(service->info().code == "no_project");
-	BOOST_TEST(service->start_branches().code == "no_project");
+	BOOST_TEST(service->start_branches(cmd::origin_kind::ui).code == "no_project");
 }
 
 BOOST_AUTO_TEST_CASE(GitNotFound_ClearErrorAndNoJob)
@@ -650,7 +650,7 @@ BOOST_AUTO_TEST_CASE(GitNotFound_ClearErrorAndNoJob)
 	BOOST_TEST(!state.available);
 	BOOST_TEST(state.code == "vcs_unavailable");
 	BOOST_TEST(state.reason.starts_with("git not found"), state.reason);
-	const auto started = service->start_status();
+	const auto started = service->start_status(cmd::origin_kind::ui);
 	BOOST_TEST(!started);
 	BOOST_TEST(started.code == "vcs_unavailable");
 
@@ -693,14 +693,14 @@ BOOST_AUTO_TEST_CASE(RealRepository_StageUnstageCommitBranchCheckout)
 	write(repo / "fresh file.txt", "fresh\n");
 	const json::value staged = finish(service->start_stage({ "fresh file.txt", "a.txt" }, person));
 	BOOST_TEST(!staged.as_object().contains("error"), json::serialize(staged));
-	const json::value after_stage = finish(service->start_status());
+	const json::value after_stage = finish(service->start_status(cmd::origin_kind::ui));
 	const json::object* fresh = entry_of(after_stage, "fresh file.txt");
 	BOOST_REQUIRE(fresh != nullptr);
 	BOOST_TEST(text(fresh->at("index")) == "A");
 
 	const json::value unstaged = finish(service->start_unstage({ "fresh file.txt" }, person));
 	BOOST_TEST(!unstaged.as_object().contains("error"), json::serialize(unstaged));
-	const json::value after_unstage = finish(service->start_status());
+	const json::value after_unstage = finish(service->start_status(cmd::origin_kind::ui));
 	fresh = entry_of(after_unstage, "fresh file.txt");
 	BOOST_REQUIRE(fresh != nullptr);
 	BOOST_TEST(text(fresh->at("kind")) == "untracked");
@@ -714,9 +714,9 @@ BOOST_AUTO_TEST_CASE(RealRepository_StageUnstageCommitBranchCheckout)
 	std::string body = git_text(repo, { "log", "-1", "--format=%B" });
 	while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) body.pop_back();
 	BOOST_TEST(body == message.substr(0, message.size() - 1));
-	const json::value log = finish(service->start_log({}, {}, 1, {}));
+	const json::value log = finish(service->start_log({}, {}, 1, {}, cmd::origin_kind::ui));
 	BOOST_TEST(text(log.as_object().at("commits").as_array()[0].as_object().at("subject")) == "Subject with " + u_umlaut);
-	const json::value after_commit = finish(service->start_status());
+	const json::value after_commit = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(entry_of(after_commit, "a.txt") == nullptr);
 
 	BOOST_TEST(service->start_branch_create("-x", {}, person).code == cmd::codes::invalid_args);
@@ -726,10 +726,10 @@ BOOST_AUTO_TEST_CASE(RealRepository_StageUnstageCommitBranchCheckout)
 	BOOST_TEST(!created.as_object().contains("error"), json::serialize(created));
 	const json::value checked_out = finish(service->start_checkout("topic", person));
 	BOOST_TEST(!checked_out.as_object().contains("error"), json::serialize(checked_out));
-	const json::value on_topic = finish(service->start_status());
+	const json::value on_topic = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(text(on_topic.as_object().at("branch").as_object().at("head")) == "topic");
 	finish(service->start_checkout("main", person));
-	const json::value branches = finish(service->start_branches());
+	const json::value branches = finish(service->start_branches(cmd::origin_kind::ui));
 	BOOST_TEST(text(branches.as_object().at("current")) == "main");
 
 	// Git's own refusal is the job's result: nothing to commit.
@@ -1560,6 +1560,129 @@ BOOST_AUTO_TEST_CASE(APromisorRemoteWithoutTheExtension_LazyFetchesNothingOnAGua
 	BOOST_TEST(!fs::exists(marker, ec));
 }
 
+// #503: a read in a partial clone that needs a blob the clone lacks would fetch it from the promisor remote, through
+// whatever program the repository's config names for the transport. No read runs one, whatever the remote's URL;
+// before git 2.45 the reads refuse the partial clone.
+BOOST_AUTO_TEST_CASE(APartialClone_RunsNoTransportProgramOnAnyRead)
+{
+	isolate_config();
+	const fs::path source = make_plain_repository("lazy_source");
+	write(source / "a.txt", "one\ntwo\n");
+	git(source, { "commit", "-q", "-am", "second" });
+	const fs::path server = base / "lazy_server.git";
+	git(base, { "clone", "-q", "--bare", generic_text(source), generic_text(server) });
+	git(server, { "config", "uploadpack.allowFilter", "true" });
+	const fs::path repo = base / "lazy_clone";
+	git(base, { "clone", "-q", "--no-checkout", "--filter=blob:none", file_url(server), generic_text(repo) });
+	// The index names blobs the clone never fetched: a diff against the empty work tree needs them.
+	git(repo, { "read-tree", "HEAD" });
+	BOOST_REQUIRE_MESSAGE(git_text(repo, { "rev-list", "--objects", "--missing=print", "HEAD" }).find('?') != std::string::npos,
+		"the clone holds every blob: the checks below prove nothing");
+
+	const fs::path marker = base / "lazy_transport_ran.txt";
+	const fs::path script = base / "lazy-transport.sh";
+	make_script(script, "echo ran >> '" + generic_text(marker) + "'\nexec git upload-pack \"$@\"\n");
+	// The repository opens every transport for itself; a read's -c overrides beat that.
+	git(repo, { "config", "protocol.allow", "always" });
+	git(repo, { "config", "protocol.file.allow", "always" });
+	git(repo, { "config", "protocol.ext.allow", "always" });
+	git(repo, { "config", "remote.origin.uploadpack", generic_text(script) });
+	git(repo, { "config", "core.gitProxy", generic_text(script) });
+	git(repo, { "config", "core.sshCommand", generic_text(script) });
+	make_service(real_options(repo));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	const bool lazy_fetch_off = git_at_least(service->info().git_version, 2, 45);
+
+	std::error_code ec;
+	const std::vector<std::string> urls{ file_url(server), "ext::" + generic_text(script), "git://127.0.0.1:9/lazy.git",
+		"ssh://127.0.0.1:9/lazy.git" };
+	const auto agent = cmd::origin_kind::agent;
+	for (const std::string& url : urls) {
+		BOOST_TEST_CONTEXT(url) {
+			git(repo, { "config", "remote.origin.url", url });
+			for (const auto& started : { service->start_status(agent), service->start_diff({}, false, agent),
+					service->start_diff("a.txt", false, agent), service->start_log({}, "a.txt", 10, {}, agent),
+					service->start_branches(agent) }) {
+				const json::value result = finish(started);
+				BOOST_TEST_INFO("result: " << json::serialize(result));
+				// Git 2.45+: a normal answer, or git's error for the missing blob.
+				if (!lazy_fetch_off) BOOST_TEST(is_error(result, "unsafe_repository"));
+			}
+			BOOST_TEST(!fs::exists(marker, ec), "an agent's read ran a program the repository's config names");
+		}
+	}
+
+	// A person's read is plain git (owner decision, #455): never refused; it may fetch the blob through the
+	// repository's upload-pack, which shows what the agent's reads above kept from running.
+	git(repo, { "config", "remote.origin.url", file_url(server) });
+	const auto person = cmd::origin_kind::ui;
+	for (const auto& started : { service->start_status(person), service->start_diff({}, false, person),
+			service->start_log({}, "a.txt", 10, {}, person), service->start_branches(person) }) {
+		const json::value result = finish(started);
+		BOOST_TEST(!is_error(result, "unsafe_repository"), json::serialize(result));
+	}
+	BOOST_WARN_MESSAGE(fs::exists(marker, ec), "a person's diff ran no upload-pack of the repository's here: the checks above "
+		"prove less");
+}
+
+// Security review of #504: protocol.<name>.allow of the repository reopens a transport no -c override names (ftp, ftps,
+// fd, <helper>::); GIT_ALLOW_PROTOCOL beats every config scope. An agent's read of a partial clone whose promisor is
+// ftp:// starts no ftp helper; an agent's fetch from such a remote is refused by git (only https and ssh).
+BOOST_AUTO_TEST_CASE(ARepositoryProtocolFtpAllow_OpensNoTransportForAnAgent)
+{
+	isolate_config();
+	const fs::path source = make_plain_repository("ftp_source");
+	write(source / "a.txt", "one\ntwo\n");
+	git(source, { "commit", "-q", "-am", "second" });
+	const fs::path server = base / "ftp_server.git";
+	git(base, { "clone", "-q", "--bare", generic_text(source), generic_text(server) });
+	git(server, { "config", "uploadpack.allowFilter", "true" });
+	const fs::path repo = base / "ftp_clone";
+	git(base, { "clone", "-q", "--no-checkout", "--filter=blob:none", file_url(server), generic_text(repo) });
+	git(repo, { "read-tree", "HEAD" });
+	BOOST_REQUIRE_MESSAGE(git_text(repo, { "rev-list", "--objects", "--missing=print", "HEAD" }).find('?') != std::string::npos,
+		"the clone holds every blob: the checks below prove nothing");
+	git(repo, { "config", "remote.origin.url", "ftp://127.0.0.1:9/lazy.git" });
+	git(repo, { "config", "protocol.allow", "always" });
+	git(repo, { "config", "protocol.ftp.allow", "always" });
+	const fs::path fetcher = make_plain_repository("ftp_fetch");
+	git(fetcher, { "remote", "add", "origin", "ftp://127.0.0.1:9/remote.git" });
+	git(fetcher, { "config", "protocol.ftp.allow", "always" });
+
+	const fs::path trace = base / "ftp_trace.txt";
+	const auto traced = [&trace] {
+		std::ifstream in(trace, std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	};
+	auto options = real_options(repo);
+	edt::set_variable(*options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(options));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	const bool lazy_fetch_off = git_at_least(service->info().git_version, 2, 45);
+	const auto agent = cmd::origin_kind::agent;
+	for (const auto& started : { service->start_status(agent), service->start_diff({}, false, agent),
+			service->start_diff("a.txt", false, agent) }) {
+		const json::value result = finish(started);
+		BOOST_TEST_INFO("result: " << json::serialize(result));
+		if (!lazy_fetch_off) BOOST_TEST(is_error(result, "unsafe_repository"));
+	}
+	BOOST_TEST(!traced().empty(), "GIT_TRACE wrote nothing: the check below proves nothing");
+	BOOST_TEST(traced().find("remote-ftp") == std::string::npos, traced());
+
+	std::error_code ec;
+	fs::remove(trace, ec);
+	auto fetch_options = real_options(fetcher);
+	edt::set_variable(*fetch_options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(fetch_options));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	service->set_write_permissions({ false, false, false, true });
+	const json::value fetched = finish(service->start_fetch({}, agent));
+	BOOST_TEST_INFO("fetched: " << json::serialize(fetched));
+	BOOST_REQUIRE(fetched.as_object().contains("error"));
+	BOOST_TEST(text(fetched.as_object().at("error").as_object().at("stderr_tail")).find("not allowed") != std::string::npos);
+	BOOST_TEST(traced().find("remote-ftp") == std::string::npos, traced());
+}
+
 // Final review of #474 (N3b): an untracked top-level .gitattributes sets the filter, a tracked sub/.gitattributes
 // edited in the work tree unsets it: none of the three check-attr views names the driver, yet checkout smudges. A
 // tracked .gitattributes that differs from the index refuses on every git.
@@ -1841,7 +1964,7 @@ BOOST_AUTO_TEST_CASE(EveryCall_GetsTheFixedOptionsAndEnvironment)
 	BOOST_REQUIRE(service->info().available);
 	BOOST_TEST(service->info().git_version == "2.45.1");
 
-	finish(service->start_status());
+	finish(service->start_status(cmd::origin_kind::ui));
 	const auto& args = calls.back();
 	BOOST_REQUIRE(args.size() >= 5u);
 	BOOST_TEST(args[0] == "--no-pager");
@@ -1875,6 +1998,163 @@ BOOST_AUTO_TEST_CASE(EveryCall_GetsTheFixedOptionsAndEnvironment)
 	BOOST_TEST(edt::variable_of(env, "PATH").value_or("") == "/nowhere");
 }
 
+// #503: an agent's read (any origin but ui) closes every transport ahead of the repository's config and runs without
+// lazy fetch; a person's read is plain git as before (owner decision, #455). On git 2.45+ no read looks for a
+// partial clone.
+BOOST_AUTO_TEST_CASE(AnAgentsRead_ClosesEveryTransport_APersonsReadIsPlainGit)
+{
+	command = [](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	make_service(fake_options());
+	BOOST_REQUIRE(service->info().available);
+#ifdef _WIN32
+	const std::string no_hooks = "core.hooksPath=NUL";
+#else
+	const std::string no_hooks = "core.hooksPath=/dev/null";
+#endif
+	const std::vector<std::string> transports_closed{ "-c", "protocol.allow=never", "-c", "protocol.file.allow=never",
+		"-c", "protocol.git.allow=never", "-c", "protocol.ssh.allow=never", "-c", "protocol.http.allow=never",
+		"-c", "protocol.https.allow=never", "-c", "protocol.ext.allow=never" };
+	const auto status_args = [&](bool agent) {
+		std::vector<std::string> expected{ "--no-pager", "-c", "core.quotepath=off", "-c", "core.fsmonitor=false",
+			"-c", "diff.external=", "-c", "log.showSignature=false", "-c", "status.submoduleSummary=false",
+			"-c", "diff.ignoreSubmodules=all", "--no-optional-locks", "--literal-pathspecs", "-c", no_hooks };
+		if (agent) expected.insert(expected.end(), transports_closed.begin(), transports_closed.end());
+		for (const char* config : { "filter.lfs.clean=", "filter.lfs.smudge=", "filter.lfs.process=", "filter.lfs.required=false" }) {
+			expected.emplace_back("-c");
+			expected.emplace_back(config);
+		}
+		for (const char* arg : { "status", "--porcelain=v2", "--branch", "-z", "--ignore-submodules=all" }) expected.emplace_back(arg);
+		return expected;
+	};
+	const auto closed = [&](const std::vector<std::string>& args) {
+		return std::search(args.begin(), args.end(), transports_closed.begin(), transports_closed.end()) != args.end();
+	};
+	const auto lazy_fetch_off = [this] {
+		return edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1";
+	};
+	// "unset" when the call has no GIT_ALLOW_PROTOCOL.
+	const auto allowed_protocols = [this] {
+		return edt::variable_of(*last_options.environment, "GIT_ALLOW_PROTOCOL").value_or("unset");
+	};
+	const auto no_partial_clone_check = [this] {
+		return std::none_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
+			return has_arg(call, "--show-origin") && has_arg(call, "--get-regexp");
+		});
+	};
+
+	for (const auto caller : { cmd::origin_kind::agent, cmd::origin_kind::test, cmd::origin_kind::game, cmd::origin_kind::ui }) {
+		const bool agent = caller != cmd::origin_kind::ui;
+		BOOST_TEST_CONTEXT("agent " << agent) {
+			calls.clear();
+			finish(service->start_status(caller));
+			BOOST_REQUIRE(calls.size() >= 2u);
+			BOOST_TEST(calls.back() == status_args(agent), boost::test_tools::per_element());
+			// The filter listing of the read runs the same way.
+			BOOST_TEST(closed(calls[calls.size() - 2]) == agent);
+			BOOST_TEST(lazy_fetch_off() == agent);
+			BOOST_TEST(no_partial_clone_check());
+			BOOST_TEST(allowed_protocols() == (agent ? "_none" : "unset"));
+			const std::vector<std::function<edt::vcs_service::started()>> reads{
+				[&] { return service->start_diff({}, false, caller); },
+				[&] { return service->start_diff("a.txt", true, caller); },
+				[&] { return service->start_log("main", "a.txt", 10, {}, caller); },
+				[&] { return service->start_branches(caller); } };
+			for (const auto& start : reads) {
+				calls.clear();
+				finish(start());
+				BOOST_REQUIRE(!calls.empty());
+				BOOST_TEST(closed(calls.back()) == agent);
+				BOOST_TEST(lazy_fetch_off() == agent);
+				BOOST_TEST(no_partial_clone_check());
+				BOOST_TEST(allowed_protocols() == (agent ? "_none" : "unset"));
+			}
+		}
+	}
+
+	// Through the command registry: the origin of the call decides.
+	registrations = edt::register_vcs_commands(commands, *service);
+	for (const auto caller : { cmd::origin_kind::agent, cmd::origin_kind::ui }) {
+		calls.clear();
+		const cmd::result started = commands.invoke("vcs.status", json::object{}, cmd::origin{ caller, {} });
+		BOOST_REQUIRE_MESSAGE(started.ok, started.error);
+		run_to_end();
+		BOOST_REQUIRE(!calls.empty());
+		BOOST_TEST(closed(calls.back()) == (caller != cmd::origin_kind::ui));
+	}
+
+	// A person's write stays plain git; an agent's write runs without lazy fetch.
+	finish(service->start_branch_create("topic", {}, cmd::origin_kind::ui));
+	BOOST_TEST(!lazy_fetch_off());
+	BOOST_TEST(allowed_protocols() == "unset");
+	finish(service->start_branch_create("topic2", {}, cmd::origin_kind::agent));
+	BOOST_TEST(lazy_fetch_off());
+	// A guarded write that never touches the network opens no transport either.
+	BOOST_TEST(allowed_protocols() == "_none");
+}
+
+// #503: before git 2.45 GIT_NO_LAZY_FETCH may be ignored, so an agent's read in a partial clone (extensions.partialClone
+// or a true remote.<name>.promisor, any scope) is refused before git runs; any other repository reads as usual. A
+// person's read is plain git and is never refused.
+BOOST_AUTO_TEST_CASE(AGitBefore2_45_RefusesAnAgentsReadsInAPartialClone)
+{
+	int reads_run = 0;
+	command = [&reads_run](const std::vector<std::string>&, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) { ++reads_run; return exited(0); };
+	const auto listing = std::make_shared<std::string>();
+	const auto checks = std::make_shared<int>(0);
+	auto options = fake_options();
+	options.run = [inner = options.run, listing, checks](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "--version")) {
+			on_line("git version 2.43.0\n");
+			return exited(0);
+		}
+		if (has_arg(args, "--show-origin") && has_arg(args, "--get-regexp")) {
+			++*checks;
+			if (listing->empty()) return exited(1);
+			on_line(*listing);
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	BOOST_REQUIRE(service->info().available);
+	const auto agent = cmd::origin_kind::agent;
+
+	*listing = "file:.git/config\0remote.origin.promisor\ntrue\0"s;
+	const auto reads = { service->start_status(agent), service->start_diff({}, false, agent),
+		service->start_diff("a.txt", true, agent), service->start_log({}, "a.txt", 10, {}, agent),
+		service->start_branches(agent) };
+	for (const auto& started : reads) {
+		const json::value result = finish(started);
+		BOOST_TEST_INFO("result: " << json::serialize(result));
+		BOOST_REQUIRE(is_error(result, "unsafe_repository"));
+		BOOST_TEST(text(result.as_object().at("error").as_object().at("message")).find("partial clone") != std::string::npos);
+	}
+	BOOST_TEST(reads_run == 0);
+
+	*listing = "file:.git/config\0extensions.partialclone\norigin\0"s;
+	BOOST_TEST(is_error(finish(service->start_status(agent)), "unsafe_repository"));
+	BOOST_TEST(reads_run == 0);
+
+	// A person's read in the same partial clone: plain git, not even checked.
+	const int checked = *checks;
+	const json::value person = finish(service->start_status(cmd::origin_kind::ui));
+	BOOST_TEST(!person.as_object().contains("error"), json::serialize(person));
+	BOOST_TEST(reads_run == 1);
+	BOOST_TEST(*checks == checked);
+
+	for (const std::string& normal : { "file:.git/config\0remote.origin.promisor\nfalse\0"s, std::string{} }) {
+		*listing = normal;
+		calls.clear();
+		const json::value result = finish(service->start_status(agent));
+		BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+		BOOST_REQUIRE(!calls.empty());
+		BOOST_TEST(has_arg(calls.back(), "status"));
+	}
+}
+
 BOOST_AUTO_TEST_CASE(AUserGitSshCommand_IsKept)
 {
 	command = [](const std::vector<std::string>&, const platform::process_options&,
@@ -1882,7 +2162,7 @@ BOOST_AUTO_TEST_CASE(AUserGitSshCommand_IsKept)
 	auto options = fake_options();
 	options.environment->push_back("GIT_SSH_COMMAND=ssh -i key");
 	make_service(std::move(options));
-	finish(service->start_branches());
+	finish(service->start_branches(cmd::origin_kind::ui));
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_SSH_COMMAND").value_or("") == "ssh -i key");
 }
 
@@ -1895,7 +2175,7 @@ BOOST_AUTO_TEST_CASE(AFailure_IsAResultWithTheClassifiedError)
 	};
 	make_service(fake_options());
 
-	const json::value result = finish(service->start_status());
+	const json::value result = finish(service->start_status(cmd::origin_kind::ui));
 	const json::object& error = result.as_object().at("error").as_object();
 	BOOST_TEST(text(error.at("code")) == "auth_required");
 	BOOST_TEST(text(error.at("message")).find("terminal prompts disabled") != std::string::npos);
@@ -1933,7 +2213,7 @@ BOOST_AUTO_TEST_CASE(AFailure_StderrTailKeepsTheLast20Lines_MessageTheFatalLine)
 	};
 	make_service(fake_options());
 
-	const json::value result = finish(service->start_log("nope", {}, 10, {}));
+	const json::value result = finish(service->start_log("nope", {}, 10, {}, cmd::origin_kind::ui));
 	const json::object& error = result.as_object().at("error").as_object();
 	BOOST_TEST(text(error.at("code")) == "bad_revision");
 	BOOST_TEST(text(error.at("message")) == "fatal: bad revision 'nope'");
@@ -1946,7 +2226,7 @@ BOOST_AUTO_TEST_CASE(AFailure_StderrTailKeepsTheLast20Lines_MessageTheFatalLine)
 		for (int i = 0; i < 30; ++i) opts.on_stderr_line(std::format("warning: line {}", i));
 		return exited(1);
 	};
-	const json::value short_lines = finish(service->start_status());
+	const json::value short_lines = finish(service->start_status(cmd::origin_kind::ui));
 	const std::string short_tail = text(short_lines.as_object().at("error").as_object().at("stderr_tail"));
 	BOOST_TEST(short_tail.starts_with("warning: line 10"));
 	BOOST_TEST(short_tail.ends_with("warning: line 29"));
@@ -1981,7 +2261,7 @@ BOOST_AUTO_TEST_CASE(AVersionProbeThatHangs_TimesOutAndTurnsVersionControlOff)
 	BOOST_TEST(!service->info().available);
 	BOOST_TEST(service->info().code == "vcs_unavailable");
 	BOOST_TEST(service->info().reason == "git did not answer within 100 ms");
-	BOOST_TEST(service->start_status().code == "vcs_unavailable");
+	BOOST_TEST(service->start_status(cmd::origin_kind::ui).code == "vcs_unavailable");
 	BOOST_TEST(jobs->list().empty());
 }
 
@@ -2005,7 +2285,7 @@ BOOST_AUTO_TEST_CASE(ARevParseThatHangs_TimesOutAndTurnsVersionControlOff)
 	BOOST_TEST(service->info().git_version == "2.45.1");
 	BOOST_TEST(service->info().code == "vcs_unavailable");
 	BOOST_TEST(service->info().reason.starts_with("git did not answer within"));
-	BOOST_TEST(service->start_branches().code == "vcs_unavailable");
+	BOOST_TEST(service->start_branches(cmd::origin_kind::ui).code == "vcs_unavailable");
 }
 
 BOOST_AUTO_TEST_CASE(AGitThatCannotStart_IsVcsUnavailable)
@@ -2017,7 +2297,7 @@ BOOST_AUTO_TEST_CASE(AGitThatCannotStart_IsVcsUnavailable)
 		return result;
 	};
 	make_service(fake_options());
-	const json::value result = finish(service->start_diff({}, false));
+	const json::value result = finish(service->start_diff({}, false, cmd::origin_kind::ui));
 	BOOST_TEST(text(result.as_object().at("error").as_object().at("code")) == "vcs_unavailable");
 }
 
@@ -2039,7 +2319,7 @@ BOOST_AUTO_TEST_CASE(Diff_IsCutAtTheCapAndGitIsStopped)
 	};
 	make_service(fake_options());
 
-	const json::value result = finish(service->start_diff("some file.txt", true));
+	const json::value result = finish(service->start_diff("some file.txt", true, cmd::origin_kind::ui));
 	BOOST_TEST(stopped);
 	BOOST_TEST(result.as_object().at("truncated").as_bool());
 	BOOST_TEST(result.as_object().at("text").as_string().size() == edt::vcs_service::k_diff_cap);
@@ -2051,7 +2331,7 @@ BOOST_AUTO_TEST_CASE(Log_PassesThePageAndClampsTheLimit)
 		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
 	make_service(fake_options());
 
-	finish(service->start_log("main", "src/a b.cpp", 500, "40"));
+	finish(service->start_log("main", "src/a b.cpp", 500, "40", cmd::origin_kind::ui));
 	const auto& args = calls.back();
 	BOOST_TEST(has_arg(args, "--skip=40"));
 	BOOST_TEST(has_arg(args, "--max-count=201"));
@@ -2062,7 +2342,7 @@ BOOST_AUTO_TEST_CASE(Log_PassesThePageAndClampsTheLimit)
 	BOOST_TEST(args[args.size() - 4] == "--end-of-options");
 	BOOST_TEST(args[args.size() - 3] == "main");
 
-	finish(service->start_log({}, {}, 10, "99999999999999999999999"));
+	finish(service->start_log({}, {}, 10, "99999999999999999999999", cmd::origin_kind::ui));
 	const auto& plain = calls.back();
 	BOOST_TEST(has_arg(plain, "--skip=1000000000"));
 	BOOST_TEST(plain.back() == "--");
@@ -2070,9 +2350,9 @@ BOOST_AUTO_TEST_CASE(Log_PassesThePageAndClampsTheLimit)
 
 	// A ref that looks like an option never reaches git.
 	const std::size_t before = calls.size();
-	BOOST_TEST(service->start_log("-p", {}, 10, {}).code == cmd::codes::invalid_args);
-	BOOST_TEST(service->start_log("--output=/tmp/x", {}, 10, {}).code == cmd::codes::invalid_args);
-	BOOST_TEST(service->start_log({}, {}, 10, "-1").code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_log("-p", {}, 10, {}, cmd::origin_kind::ui).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_log("--output=/tmp/x", {}, 10, {}, cmd::origin_kind::ui).code == cmd::codes::invalid_args);
+	BOOST_TEST(service->start_log({}, {}, 10, "-1", cmd::origin_kind::ui).code == cmd::codes::invalid_args);
 	run_to_end();
 	BOOST_TEST(calls.size() == before);
 }
@@ -2093,7 +2373,7 @@ BOOST_AUTO_TEST_CASE(Status_IsCappedAtFourMiB_AndKeepsOnlyWholeRecords)
 	};
 	make_service(fake_options());
 
-	const json::value result = finish(service->start_status());
+	const json::value result = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(stopped);
 	BOOST_TEST(result.as_object().at("truncated").as_bool());
 	const json::array& entries = result.as_object().at("entries").as_array();
@@ -2115,7 +2395,7 @@ BOOST_AUTO_TEST_CASE(Branches_AreCappedAtFourMiB)
 		return result;
 	};
 	make_service(fake_options());
-	const json::value result = finish(service->start_branches());
+	const json::value result = finish(service->start_branches(cmd::origin_kind::ui));
 	BOOST_TEST(result.as_object().at("truncated").as_bool());
 	const json::array& branches = result.as_object().at("branches").as_array();
 	BOOST_TEST(!branches.empty());
@@ -2131,7 +2411,7 @@ BOOST_AUTO_TEST_CASE(FilterDrivers_OfTheConfig_AreSwitchedOffOnEveryCall)
 		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
 	make_service(fake_options());
 
-	finish(service->start_diff({}, false));
+	finish(service->start_diff({}, false, cmd::origin_kind::ui));
 	const auto& args = calls.back();
 	for (const char* config : { "filter.evil.clean=", "filter.evil.smudge=", "filter.evil.process=",
 			"filter.evil.required=false", "filter.with.dot.clean=", "filter.with.dot.process=", "filter.lfs.clean=" }) {
@@ -2154,7 +2434,7 @@ BOOST_AUTO_TEST_CASE(AFilterDriverThatCannotBeOverridden_RefusesTheRead)
 		const std::function<void(std::string_view)>&, std::stop_token) { ran = true; return exited(0); };
 	make_service(fake_options());
 
-	const json::value result = finish(service->start_status());
+	const json::value result = finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(text(result.as_object().at("error").as_object().at("code")) == "unsafe_repository");
 	BOOST_TEST(!ran);
 }
@@ -2172,7 +2452,7 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
 		options.environment->emplace_back(entry);
 	}
 	make_service(std::move(options));
-	finish(service->start_status());
+	finish(service->start_status(cmd::origin_kind::ui));
 
 	const auto& env = *last_options.environment;
 	for (const char* gone : { "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
@@ -2188,7 +2468,7 @@ BOOST_AUTO_TEST_CASE(TheEnvironment_LosesWhatRedirectsGitOrAddsConfig)
 	auto empty_exec = fake_options();
 	empty_exec.environment->emplace_back("GIT_EXEC_PATH=");
 	make_service(std::move(empty_exec));
-	finish(service->start_status());
+	finish(service->start_status(cmd::origin_kind::ui));
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_EXEC_PATH").has_value());
 }
 
@@ -2226,7 +2506,7 @@ BOOST_AUTO_TEST_CASE(Cancel_StopsTheRunningGit)
 		return result;
 	};
 	make_service(fake_options());
-	const auto started = service->start_status();
+	const auto started = service->start_status(cmd::origin_kind::ui);
 	BOOST_REQUIRE(static_cast<bool>(started));
 	running = started.job;
 	run_to_end();
@@ -2293,6 +2573,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 	BOOST_TEST(person.back() == "main");
 
 	BOOST_TEST(arg_starting_with(person, "remote.origin.uploadpack=").empty());
+	BOOST_TEST(!edt::variable_of(*last_options.environment, "GIT_ALLOW_PROTOCOL").has_value());
 
 	service->set_write_permissions({ true, false, false, false });
 	finish(service->start_fetch({}, cmd::origin_kind::agent));
@@ -2311,6 +2592,8 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 	}
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_PROXY_COMMAND").value_or("x").empty());
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1");
+	// Beats every protocol.<name>.allow of the repository: only the transports the -c overrides allow.
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_ALLOW_PROTOCOL").value_or("") == "https:ssh");
 	// The repository's own config was read first.
 	BOOST_TEST(std::any_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
 		return has_arg(call, "--local") && has_arg(call, "--list") && has_arg(call, "--show-origin");
