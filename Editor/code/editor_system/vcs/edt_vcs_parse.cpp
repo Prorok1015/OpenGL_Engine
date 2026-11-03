@@ -243,7 +243,10 @@ std::vector<edt::vcs::commit_entry> edt::vcs::parse_log(std::string_view output)
 	for (std::size_t i = 0; i + fields_per_commit <= fields.size(); i += fields_per_commit) {
 		commit_entry commit;
 		commit.hash = trim(fields[i]);
-		if (commit.hash.empty()) continue;
+		// Not a full lowercase object name: the output is not what the format asked for (another encoding, a cut).
+		const bool full_oid = (commit.hash.size() == 40 || commit.hash.size() == 64)
+			&& std::all_of(commit.hash.begin(), commit.hash.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+		if (!full_oid) continue;
 		std::string_view parents = fields[i + 1];
 		while (!parents.empty()) {
 			const std::size_t space = parents.find(' ');

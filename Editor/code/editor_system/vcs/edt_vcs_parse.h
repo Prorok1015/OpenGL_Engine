@@ -83,7 +83,8 @@ namespace edt::vcs
 		std::vector<decoration> refs;
 	};
 
-	// The output of `git log -z <k_log_format>`: NUL ends each field and each commit, so a commit is seven fields.
+	// The output of `git log -z <k_log_format>`: NUL ends each field and each commit, so a commit is seven fields. A
+	// record whose hash is not a full lowercase object name (40 or 64 hex digits) is left out.
 	std::vector<commit_entry> parse_log(std::string_view output);
 	boost::json::value to_json(const commit_entry& commit);
 

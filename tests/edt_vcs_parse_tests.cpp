@@ -149,21 +149,24 @@ BOOST_AUTO_TEST_CASE(Status_ToJson)
 BOOST_AUTO_TEST_CASE(Log_ReadsCommitsOfSevenNulTerminatedFields)
 {
 	const std::string author = "J" + u_umlaut + "rgen";
-	const std::string output = "1111\0" "2222 3333\0"s + author + "\0j@example.com\0" "1700000000\0Merge branch 'x'\0"s
+	const std::string h1(40, '1');
+	const std::string h2(40, '2');
+	const std::string h3(64, '3');
+	const std::string output = h1 + "\0"s + h2 + " " + h3 + "\0"s + author + "\0j@example.com\0" "1700000000\0Merge branch 'x'\0"s
 		+ "HEAD -> refs/heads/main, tag: refs/tags/v1\0"s
-		+ "2222\0" "3333\0Ann\0ann@example.com\0" "1600000000\0\0\0"s;
+		+ h2 + "\0"s + h3 + "\0Ann\0ann@example.com\0" "1600000000\0\0\0"s;
 
 	const auto commits = edt::vcs::parse_log(output);
 
 	BOOST_REQUIRE_EQUAL(commits.size(), 2u);
-	BOOST_TEST(commits[0].hash == "1111");
-	BOOST_TEST((commits[0].parents == std::vector<std::string>{ "2222", "3333" }));
+	BOOST_TEST(commits[0].hash == h1);
+	BOOST_TEST((commits[0].parents == std::vector<std::string>{ h2, h3 }));
 	BOOST_TEST(commits[0].author == author);
 	BOOST_TEST(commits[0].email == "j@example.com");
 	BOOST_TEST(commits[0].time == 1700000000);
 	BOOST_TEST(commits[0].subject == "Merge branch 'x'");
 	BOOST_TEST(commits[1].subject.empty());
-	BOOST_TEST((commits[1].parents == std::vector<std::string>{ "3333" }));
+	BOOST_TEST((commits[1].parents == std::vector<std::string>{ h3 }));
 	BOOST_TEST(commits[0].refs.size() == 3u);
 	BOOST_TEST(commits[1].refs.empty());
 
@@ -184,10 +187,26 @@ BOOST_AUTO_TEST_CASE(Log_ReadsCommitsOfSevenNulTerminatedFields)
 
 BOOST_AUTO_TEST_CASE(Log_RootCommitAndAnIncompleteTail)
 {
-	const auto commits = edt::vcs::parse_log("aaaa\0\0A\0a@x\0" "5\0root\0\0" "bbbb\0cccc\0"s);
+	const std::string root(40, 'a');
+	const auto commits = edt::vcs::parse_log(root + "\0\0A\0a@x\0" "5\0root\0\0"s + std::string(40, 'b') + "\0cccc\0"s);
 	BOOST_REQUIRE_EQUAL(commits.size(), 1u);
+	BOOST_TEST(commits[0].hash == root);
 	BOOST_TEST(commits[0].parents.empty());
 	BOOST_TEST(edt::vcs::parse_log("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Log_DropsRecordsWithoutAFullLowercaseHash)
+{
+	const std::string fields = "\0\0A\0a@x\0" "5\0s\0\0"s;
+	const std::string good(40, 'c');
+	const std::string output = "abcd"s + fields                 // abbreviated
+		+ std::string(40, 'C') + fields                        // upper case
+		+ std::string(39, 'c') + "g" + fields                  // not hex
+		+ "\xFF\xFE" + std::string(38, 'c') + fields            // UTF-16 bytes
+		+ good + fields;
+	const auto commits = edt::vcs::parse_log(output);
+	BOOST_REQUIRE_EQUAL(commits.size(), 1u);
+	BOOST_TEST(commits[0].hash == good);
 }
 
 BOOST_AUTO_TEST_CASE(Decorations_TellHeadBranchRemoteAndTag)

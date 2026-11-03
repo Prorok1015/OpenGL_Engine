@@ -1295,6 +1295,35 @@ namespace {
 		return std::nullopt;
 	}
 
+	// A ref of vcs.log: check-ref-format characters plus ~^@{} (HEAD~3, v1.0^{commit}, main@{1}). Never ':' nor "^{/",
+	// with which git searches every commit message with a regex, nor a range.
+	std::optional<std::string> ref_error(std::string_view ref)
+	{
+		if (ref.empty()) return std::nullopt;
+		if (ref.front() == '-') return std::string("ref must not start with '-'");
+		static constexpr std::string_view punctuation = "/._-+~^@{}#%,=";
+		const bool allowed = std::all_of(ref.begin(), ref.end(), [](char c) {
+			const auto byte = static_cast<unsigned char>(c);
+			return byte >= 0x80 || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+				|| punctuation.find(c) != std::string_view::npos;
+		});
+		if (!allowed) return std::string("ref holds a character no ref name holds (':', a space, a control character, ...)");
+		if (ref.find("..") != std::string_view::npos) return std::string("ref must name one revision, not a range");
+		if (ref.find("^{/") != std::string_view::npos) return std::string("ref must not search commit messages (^{/...})");
+		return std::nullopt;
+	}
+
+	// A path of log or diff: no NUL and no control character.
+	std::optional<std::string> path_error(std::string_view path)
+	{
+		const bool control = std::any_of(path.begin(), path.end(), [](char c) {
+			const auto byte = static_cast<unsigned char>(c);
+			return byte < 0x20 || byte == 0x7F;
+		});
+		if (control) return std::string("path must not hold a control character");
+		return std::nullopt;
+	}
+
 	std::optional<std::string> commit_error(std::string_view commit)
 	{
 		if (!edt::vcs::is_hex_object_name(commit)) return std::string("commit must be 4 to 64 hex digits");
@@ -1716,6 +1745,7 @@ edt::vcs_service::started edt::vcs_service::start_status()
 
 edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, bool staged)
 {
+	if (auto error = path_error(path)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	std::vector<std::string> args{ "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all" };
 	if (staged) args.emplace_back("--cached");
 	if (!path.empty()) {
@@ -1732,6 +1762,7 @@ edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, 
 edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string& commit, const std::string& path)
 {
 	if (auto error = commit_error(commit)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (auto error = path_error(path)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	return run_job("git diff", [commit, path](const git_context& git, ds::task_context& task) -> json::value {
 		git_context read = git;
 		if (auto refused = harden_read(read, task.stop)) return refused_read(*refused, task);
@@ -1754,8 +1785,8 @@ edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string&
 edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, const std::string& path, int limit,
 	const std::string& cursor, const log_filter& filter)
 {
-	if (!ref.empty() && ref.front() == '-') return { 0, cmd::codes::invalid_args, "ref must not start with '-'" };
-	if (ref.find("..") != std::string::npos) return { 0, cmd::codes::invalid_args, "ref must name one revision, not a range" };
+	if (auto error = ref_error(ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (auto error = path_error(path)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (filter.all && !ref.empty()) return { 0, cmd::codes::invalid_args, "all and ref cannot be given together" };
 	if (auto error = filter_error("author", filter.author)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (auto error = filter_error("grep", filter.grep)) return { 0, cmd::codes::invalid_args, std::move(*error) };
@@ -1763,8 +1794,8 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 	if (!page) return { 0, cmd::codes::invalid_args, "cursor is not one that vcs.log returned" };
 	const int count = std::clamp(limit, 1, k_max_log_limit);
 	// One more than asked: whether it comes back tells if there is a next page.
-	std::vector<std::string> options{ "log", "-z", std::string(vcs::k_log_format), "--decorate=full", "--date-order",
-		std::format("--skip={}", page->skip), std::format("--max-count={}", count + 1) };
+	std::vector<std::string> options{ "log", "-z", std::string(vcs::k_log_format), "--encoding=UTF-8", "--decorate=full",
+		"--date-order", std::format("--skip={}", page->skip), std::format("--max-count={}", count + 1) };
 	if (!filter.author.empty()) options.push_back("--author=" + filter.author);
 	if (!filter.grep.empty()) options.push_back("--grep=" + filter.grep);
 	if (!filter.author.empty() || !filter.grep.empty()) {
@@ -1774,11 +1805,13 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 	std::string key = snapshot_key({ filter.all ? "all" : "ref", ref, path, filter.author, filter.grep });
 	return run_job("git log", [options = std::move(options), key = std::move(key), ref, path, all = filter.all, count,
 		page = *page, snapshots = m_log_snapshots](const git_context& git, ds::task_context& task) -> json::value {
+		// The repository too: a snapshot of one project is never served for another.
+		const std::string scoped_key = snapshot_key({ key, utf8_of(git.cwd) });
 		git_context read = git;
 		if (auto refused = harden_read(read, task.stop)) return refused_read(*refused, task);
 		std::vector<std::string> tips;
 		if (page.snapshot != 0) {
-			auto kept = snapshots->find(page.snapshot, key);
+			auto kept = snapshots->find(page.snapshot, scoped_key);
 			if (!kept) return stale_json();
 			tips = std::move(*kept);
 		} else if (all) {
@@ -1812,7 +1845,7 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 		for (const auto& commit : commits) entries.push_back(vcs::to_json(commit));
 		json::object result{ { "commits", std::move(entries) }, { "truncated", out.truncated } };
 		if (more) {
-			const std::uint64_t id = page.snapshot != 0 ? page.snapshot : snapshots->add(key, std::move(tips));
+			const std::uint64_t id = page.snapshot != 0 ? page.snapshot : snapshots->add(scoped_key, std::move(tips));
 			result["next_cursor"] = json::string(std::format("s{}:{}", id, page.skip + static_cast<std::int64_t>(commits.size())));
 		}
 		return result;

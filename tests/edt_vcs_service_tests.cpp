@@ -832,6 +832,61 @@ BOOST_AUTO_TEST_CASE(RealRepository_ShowFilesAndCommitDiff_OfARootANormalARename
 	std::string blob = git_text(repo, { "rev-parse", "HEAD:a.txt" });
 	while (!blob.empty() && (blob.back() == '\n' || blob.back() == '\r')) blob.pop_back();
 	BOOST_TEST(is_error(finish(service->start_show_files(blob)), "bad_revision"));
+
+	// --literal-pathspecs: path magic is a file name (none such here), so it matches nothing; a path out of the
+	// repository is git's own error, as the job's result.
+	const json::value magic = finish(service->start_commit_diff(normal, ":(top)a.txt"));
+	BOOST_TEST(!magic.as_object().contains("error"), json::serialize(magic));
+	BOOST_TEST(text(magic.as_object().at("text")).empty(), json::serialize(magic));
+	const json::value glob = finish(service->start_commit_diff(normal, "*.txt"));
+	BOOST_TEST(text(glob.as_object().at("text")).empty(), json::serialize(glob));
+	BOOST_TEST(finish(service->start_log({}, ":(top)a.txt", 50, {})).as_object().at("commits").as_array().empty());
+	const json::value outside = finish(service->start_commit_diff(normal, "../x"));
+	BOOST_TEST(outside.as_object().contains("error"), json::serialize(outside));
+}
+
+// Security review of #501: log --encoding=UTF-8, so a repository's i18n.logOutputEncoding cannot break the -z records.
+BOOST_AUTO_TEST_CASE(RealRepository_Log_IgnoresTheRepositorysOutputEncoding)
+{
+	isolate_config();
+	const fs::path repo = make_empty_repository("encoding");
+	commit_at(repo, "first " + u_umlaut, 1000);
+	commit_at(repo, "second", 2000);
+	git(repo, { "config", "i18n.logOutputEncoding", "UTF-16" });
+	make_service(real_options(repo));
+
+	const json::value page = finish(service->start_log({}, {}, 50, {}));
+	BOOST_TEST_INFO("log: " << json::serialize(page));
+	BOOST_TEST((subjects_of(page) == std::vector<std::string>{ "second", "first " + u_umlaut }));
+}
+
+// Security review of #501: the snapshot key holds the repository, so after a project switch a cursor of the old one
+// is stale, not a page of another history.
+BOOST_AUTO_TEST_CASE(RealRepository_ASnapshot_IsNotServedForAnotherRepository)
+{
+	isolate_config();
+	const fs::path first = make_empty_repository("first");
+	commit_at(first, "a1", 1000);
+	commit_at(first, "a2", 2000);
+	const fs::path second = make_empty_repository("second");
+	commit_at(second, "b1", 1000);
+	commit_at(second, "b2", 2000);
+	std::optional<fs::path> project = first;
+	edt::vcs_options options = real_options(first);
+	options.project_root = [&project] { return project; };
+	make_service(std::move(options));
+
+	const json::value page = finish(service->start_log({}, {}, 1, {}));
+	BOOST_TEST((subjects_of(page) == std::vector<std::string>{ "a2" }));
+	BOOST_REQUIRE(page.as_object().contains("next_cursor"));
+	const std::string cursor = text(page.as_object().at("next_cursor"));
+
+	project = second;
+	BOOST_TEST(is_error(finish(service->start_log({}, {}, 1, cursor)), "stale"));
+	project = first;
+	BOOST_TEST((subjects_of(finish(service->start_log({}, {}, 1, cursor))) == std::vector<std::string>{ "a1" }));
+	// project_root reads a local of this test.
+	service.reset();
 }
 
 BOOST_AUTO_TEST_CASE(RealRepository_CancelledJob_EndsCancelledWithoutAResult)
@@ -2441,6 +2496,7 @@ BOOST_AUTO_TEST_CASE(Log_PassesThePageAndClampsTheLimit)
 	BOOST_TEST(has_arg(args, "--max-count=201"));
 	BOOST_TEST(has_arg(args, "--date-order"));
 	BOOST_TEST(has_arg(args, "--decorate=full"));
+	BOOST_TEST(has_arg(args, "--encoding=UTF-8"));
 	BOOST_TEST(has_arg(args, "-z"));
 	BOOST_TEST(!has_arg(args, "main"));
 	BOOST_TEST(!has_arg(args, "--fixed-strings"));
@@ -2600,6 +2656,44 @@ BOOST_AUTO_TEST_CASE(ShowFilesAndCommitDiff_RunDiffTreeAgainstTheFirstParent)
 	BOOST_TEST(diff[diff.size() - 2] == "--");
 	BOOST_TEST(diff.back() == "dir/f.txt");
 	BOOST_TEST(std::any_of(diff.begin(), diff.end(), [](const std::string& a) { return a.starts_with("core.hooksPath="); }));
+}
+
+// Security review of #501: a ref is check-ref-format characters plus ~^@{}; ":/<regex>" and "^{/<regex>}" (a regex
+// search through every commit message), a range, a NUL or a control character never reach git, nor a path with a
+// control character.
+BOOST_AUTO_TEST_CASE(Log_RefusesRefsThatSearchOrRange_AndControlCharacters)
+{
+	command = [](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "rev-parse")) on_line(std::string(40, 'a') + "\n");
+		return exited(0);
+	};
+	make_service(fake_options());
+
+	for (const std::string& ref : { "origin/main"s, "HEAD~3"s, "v1.0^{commit}"s, "main@{1}"s, "feature/" + u_umlaut,
+			"release-1.2_rc+3"s }) {
+		BOOST_TEST(!finish(service->start_log(ref, {}, 10, {})).as_object().contains("error"), ref);
+		BOOST_TEST(last_call_with(calls, "--verify")->back() == ref + "^{commit}", ref);
+	}
+
+	const std::size_t before = calls.size();
+	for (const std::string& ref : { ":/fix"s, "HEAD^{/fix}"s, "main^{/}"s, "main:a.txt"s, "a b"s, "a..b"s, "a...b"s,
+			"x\0y"s, "main\n"s, "a\tb"s, "a\x7F"s, "a*"s, "a?"s, "a[1]"s, "a\\b"s, "-p"s }) {
+		BOOST_TEST(service->start_log(ref, {}, 10, {}).code == cmd::codes::invalid_args, ref);
+	}
+	for (const std::string& path : { "a\tb"s, "a\nb"s, "a\0b"s, "a\x1F"s }) {
+		BOOST_TEST(service->start_log({}, path, 10, {}).code == cmd::codes::invalid_args);
+		BOOST_TEST(service->start_diff(path, false).code == cmd::codes::invalid_args);
+		BOOST_TEST(service->start_commit_diff("cafe", path).code == cmd::codes::invalid_args);
+	}
+	run_to_end();
+	BOOST_TEST(calls.size() == before);
+
+	registrations = edt::register_vcs_commands(commands, *service);
+	BOOST_TEST(commands.invoke("vcs.log", json::parse(R"({"ref":":/fix"})"), cmd::origin::test()).code == cmd::codes::invalid_args);
+	BOOST_TEST(commands.invoke("vcs.log", json::parse(R"({"ref":"HEAD^{/fix}"})"), cmd::origin::test()).code == cmd::codes::invalid_args);
+	BOOST_TEST(commands.invoke("vcs.log", json::parse(R"({"ref":"a\u0000b"})"), cmd::origin::test()).code == cmd::codes::invalid_args);
+	BOOST_TEST(commands.invoke("vcs.diff", json::parse(R"({"path":"a\u0001b"})"), cmd::origin::test()).code == cmd::codes::invalid_args);
 }
 
 // rev-parse takes --end-of-options from git 2.30 (the probed version); older git gets the revision alone, which the
