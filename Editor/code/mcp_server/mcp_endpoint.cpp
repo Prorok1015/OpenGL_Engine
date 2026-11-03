@@ -382,7 +382,40 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 
 namespace {
 
-	// clientInfo.name of initialize, to show a person: whatever the client sent, cut and cleaned.
+	// A code point the person must not be shown from a client's own words: controls, C1 controls, and the invisible
+	// formatting that reorders or hides text (zero-width and bidi marks, bidi embeddings and isolates).
+	bool hidden_code_point(std::uint32_t cp)
+	{
+		return cp < 0x20 || cp == 0x7f || (cp >= 0x80 && cp <= 0x9f) || (cp >= 0x200b && cp <= 0x200f) || (cp >= 0x202a && cp <= 0x202e)
+			|| (cp >= 0x2066 && cp <= 0x2069) || cp == 0xfeff;
+	}
+
+	// The next code point of well-formed UTF-8 at `at` and its length in bytes; length 0 for anything else (a stray or
+	// truncated byte, an overlong or surrogate or too large value).
+	std::size_t decode_code_point(std::string_view text, std::size_t at, std::uint32_t& cp)
+	{
+		const auto byte = [&](std::size_t i) { return static_cast<unsigned char>(text[i]); };
+		const unsigned char lead = byte(at);
+		std::size_t length = 0;
+		std::uint32_t value = 0;
+		std::uint32_t minimum = 0;
+		if (lead < 0x80) { cp = lead; return 1; }
+		else if ((lead & 0xe0) == 0xc0) { length = 2; value = lead & 0x1f; minimum = 0x80; }
+		else if ((lead & 0xf0) == 0xe0) { length = 3; value = lead & 0x0f; minimum = 0x800; }
+		else if ((lead & 0xf8) == 0xf0) { length = 4; value = lead & 0x07; minimum = 0x10000; }
+		else return 0;
+		if (at + length > text.size()) return 0;
+		for (std::size_t i = 1; i < length; ++i) {
+			if ((byte(at + i) & 0xc0) != 0x80) return 0;
+			value = (value << 6) | (byte(at + i) & 0x3f);
+		}
+		if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return 0;
+		cp = value;
+		return length;
+	}
+
+	// clientInfo.name of initialize, to show a person: whatever the client sent, cleaned code point by code point (what is
+	// hidden or malformed is dropped) and cut at 64 bytes on a code point boundary.
 	std::string client_name_of(const json::object& params)
 	{
 		const json::value* info = params.if_contains("clientInfo");
@@ -390,16 +423,22 @@ namespace {
 		if (name == nullptr || !name->is_string()) {
 			return {};
 		}
+		const std::string_view text(name->as_string().data(), name->as_string().size());
 		std::string out;
-		for (const char ch : std::string_view(name->as_string().data(), name->as_string().size())) {
-			const auto byte = static_cast<unsigned char>(ch);
-			if (byte < 0x20 || byte == 0x7f) {
+		for (std::size_t at = 0; at < text.size();) {
+			std::uint32_t cp = 0;
+			const std::size_t length = decode_code_point(text, at, cp);
+			if (length == 0) {
+				++at;
 				continue;
 			}
-			if (out.size() >= 64) {
-				break;
+			if (!hidden_code_point(cp)) {
+				if (out.size() + length > 64) {
+					break;
+				}
+				out.append(text.substr(at, length));
 			}
-			out.push_back(ch);
+			at += length;
 		}
 		return out;
 	}

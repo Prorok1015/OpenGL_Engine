@@ -1055,6 +1055,28 @@ BOOST_FIXTURE_TEST_CASE(ClientName_IsCutAndHasNoControlCharacters, listing_fixtu
 	BOOST_TEST(listed[3].client_name == std::string(64, 'x'));
 }
 
+BOOST_FIXTURE_TEST_CASE(ClientName_IsCutOnACodePointBoundary_AndHiddenCharactersAreDropped, listing_fixture)
+{
+	// 63 bytes, then a two-byte character that would end at 65: it is left out whole, never split.
+	open(R"({"name":")" + std::string(63, 'x') + R"(\u00e9"})");
+	// 40 two-byte characters: 32 of them fit in 64 bytes.
+	std::string accents;
+	for (int i = 0; i < 40; ++i) accents += "\u00e9";
+	open(R"({"name":")" + accents + R"("})");
+	// C1 control, right-to-left override, zero-width space, byte order mark, line separators: none of them is shown.
+	open(R"({"name":"a\u0085b\u202ec\u200bd\ufeffe\u2066f\u2069g"})");
+	// A character outside the BMP stays.
+	open(R"({"name":"a\ud83d\ude00b"})");
+
+	const std::vector<mcp::session_info> listed = ep.sessions();
+	BOOST_REQUIRE_EQUAL(listed.size(), 4u);
+	BOOST_TEST(listed[0].client_name == std::string(63, 'x'));
+	BOOST_TEST(listed[1].client_name.size() == 64u);
+	BOOST_TEST(listed[1].client_name.substr(0, 2) == "\xc3\xa9");
+	BOOST_TEST(listed[2].client_name == "abcdefg");
+	BOOST_TEST(listed[3].client_name == "a\xf0\x9f\x98\x80" "b");
+}
+
 BOOST_FIXTURE_TEST_CASE(CloseSession_EndsOnlyThatSessionAndTellsTheHost, listing_fixture)
 {
 	const std::string keep = open(R"({"name":"keep"})");

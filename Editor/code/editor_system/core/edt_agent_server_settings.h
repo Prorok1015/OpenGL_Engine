@@ -29,6 +29,22 @@ namespace edt
 	agent_server_settings_result parse_agent_server_settings(std::string_view text);
 	std::string serialize_agent_server_settings(const agent_server_settings& settings);
 
+	// cfg `editor/agent_server` is a switch with three states: not set, true, false. An explicit false wins over the person's
+	// own choice, so a run that must not open a port (CI, an agent's `--headless --mcp-stdio`) can say so.
+	enum class cfg_switch : std::uint8_t { unset, on, off };
+	// "" is unset, "true" and "1" are on, anything else (false, 0, a typo) is off: when in doubt no port.
+	cfg_switch parse_cfg_switch(std::string_view text);
+
+	struct agent_http_choice
+	{
+		bool enabled = false;
+		std::uint16_t port = 0;
+	};
+	// Whether the HTTP transport starts with the editor. The cfg switch decides when it is set (its own port: `cfg_port`, 0 or
+	// out of range = any). Otherwise the person's file decides, except headless or with the stdio transport (a driven
+	// editor, not a person's session): there the file is ignored and the transport stays off.
+	agent_http_choice decide_agent_http(cfg_switch cfg, int cfg_port, const agent_server_settings& person, bool headless, bool stdio);
+
 	// A missing file is the defaults without a word; an unreadable or bad one is the defaults with a warning.
 	agent_server_settings load_agent_server_settings(const std::filesystem::path& file);
 	// Atomically; the error, nullopt on success.

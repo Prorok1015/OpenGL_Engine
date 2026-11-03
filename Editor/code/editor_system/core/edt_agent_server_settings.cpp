@@ -57,6 +57,24 @@ namespace edt
 		return prj::to_indented_json(root);
 	}
 
+	cfg_switch parse_cfg_switch(std::string_view text)
+	{
+		if (text.empty()) return cfg_switch::unset;
+		return text == "true" || text == "1" ? cfg_switch::on : cfg_switch::off;
+	}
+
+	agent_http_choice decide_agent_http(cfg_switch cfg, int cfg_port, const agent_server_settings& person, bool headless, bool stdio)
+	{
+		const auto valid_port = [](int port) { return port > 0 && port <= 65535 ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 }; };
+		switch (cfg) {
+		case cfg_switch::on: return { true, valid_port(cfg_port) };
+		case cfg_switch::off: return {};
+		case cfg_switch::unset: break;
+		}
+		if (headless || stdio) return {};
+		return { person.enabled, person.port };
+	}
+
 	agent_server_settings load_agent_server_settings(const std::filesystem::path& file)
 	{
 		std::error_code ec;

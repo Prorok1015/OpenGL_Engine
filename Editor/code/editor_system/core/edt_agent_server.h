@@ -67,10 +67,11 @@ namespace edt
 		agent_server& operator=(const agent_server&) = delete;
 
 		// The HTTP transport, on and off while the editor runs (#449). start_http makes a new token and a new connection
-		// file; false (and nothing runs) when the port cannot be bound or the file cannot be written; true when it already
-		// runs on that port. A different port is a restart. stop_http ends every session through the usual
-		// `on_session_closed` (unlike the destructor, which is the editor going down) and removes the connection file.
-		// The stdio transport is not touched.
+		// file; true when it already runs on that port. A different port is a restart, but the new port is bound first: when
+		// that fails (taken, or the file cannot be written) false comes back and the running server stays as it was.
+		// stop_http ends every session through the usual `on_session_closed` (unlike the destructor, which is the editor
+		// going down), a call of theirs still queued for the main thread answers with an error instead of running, and the
+		// connection file goes. The stdio transport is not touched.
 		bool start_http(std::uint16_t port);
 		void stop_http();
 		// The open sessions of the HTTP transport, oldest first, and the end of one of them (reported like any end).
@@ -79,6 +80,9 @@ namespace edt
 
 		// The HTTP server runs.
 		bool running() const;
+		// Something can be connected: the HTTP server runs or the stdio transport exists. Nobody needs the per-frame work
+		// for agents (questions, policy files) otherwise.
+		bool active() const;
 		// The bound port; 0 when the HTTP server did not start.
 		std::uint16_t port() const;
 		// The MCP session of the stdio client; empty without the transport or before its initialize.
@@ -90,7 +94,8 @@ namespace edt
 	private:
 		struct impl;
 
-		void launch_http();
+		bool bring_up_http(std::uint16_t port);
+		void end_all_http_sessions();
 
 		std::unique_ptr<impl> m_impl;
 	};

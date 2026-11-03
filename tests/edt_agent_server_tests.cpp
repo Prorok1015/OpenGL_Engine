@@ -153,6 +153,54 @@ BOOST_AUTO_TEST_CASE(WrongTypesAndPortsAreErrors)
 	BOOST_TEST(edt::parse_agent_server_settings(R"({"port":65535,"enabled":false})").error.empty());
 }
 
+BOOST_AUTO_TEST_CASE(TheCfgSwitch_HasThreeStates)
+{
+	using edt::cfg_switch;
+	BOOST_TEST((edt::parse_cfg_switch("") == cfg_switch::unset));
+	BOOST_TEST((edt::parse_cfg_switch("true") == cfg_switch::on));
+	BOOST_TEST((edt::parse_cfg_switch("1") == cfg_switch::on));
+	BOOST_TEST((edt::parse_cfg_switch("false") == cfg_switch::off));
+	BOOST_TEST((edt::parse_cfg_switch("0") == cfg_switch::off));
+	BOOST_TEST((edt::parse_cfg_switch("yes please") == cfg_switch::off));
+}
+
+BOOST_AUTO_TEST_CASE(TheCfgAndThePersonsFile_DecideTogether)
+{
+	using edt::cfg_switch;
+	const edt::agent_server_settings on{ true, 8123 };
+	const edt::agent_server_settings off{ false, 8123 };
+	// cfg x file x headless x stdio -> enabled, port.
+	struct row { cfg_switch cfg; edt::agent_server_settings file; bool headless; bool stdio; bool enabled; std::uint16_t port; };
+	const row table[] = {
+		// A person's session: cfg unset follows the file.
+		{ cfg_switch::unset, on, false, false, true, 8123 },
+		{ cfg_switch::unset, off, false, false, false, 8123 },
+		{ cfg_switch::unset, {}, false, false, false, 0 },
+		// cfg true wins, with its own port, whatever the file says.
+		{ cfg_switch::on, off, false, false, true, 5000 },
+		{ cfg_switch::on, on, false, false, true, 5000 },
+		// An explicit cfg false wins over a file that says on.
+		{ cfg_switch::off, on, false, false, false, 0 },
+		{ cfg_switch::off, on, true, true, false, 0 },
+		// A driven editor ignores the person's file.
+		{ cfg_switch::unset, on, true, false, false, 0 },
+		{ cfg_switch::unset, on, false, true, false, 0 },
+		{ cfg_switch::unset, on, true, true, false, 0 },
+		// ... but cfg true still opens it, headless or not.
+		{ cfg_switch::on, off, true, true, true, 5000 },
+	};
+	for (const row& r : table) {
+		BOOST_TEST_CONTEXT("cfg " << static_cast<int>(r.cfg) << " file " << r.file.enabled << " headless " << r.headless << " stdio " << r.stdio) {
+			const edt::agent_http_choice got = edt::decide_agent_http(r.cfg, 5000, r.file, r.headless, r.stdio);
+			BOOST_TEST(got.enabled == r.enabled);
+			BOOST_TEST(got.port == r.port);
+		}
+	}
+	// A cfg port that is not a port is "any".
+	BOOST_TEST(edt::decide_agent_http(cfg_switch::on, 70000, {}, false, false).port == 0);
+	BOOST_TEST(edt::decide_agent_http(cfg_switch::on, -1, {}, false, false).port == 0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 BOOST_AUTO_TEST_SUITE(EdtAgentServerRuntime)
@@ -183,25 +231,70 @@ BOOST_FIXTURE_TEST_CASE(HttpStartsAndStopsWhileTheServerObjectStays, server_fixt
 	BOOST_TEST(file()->token != token);
 }
 
-BOOST_FIXTURE_TEST_CASE(ADifferentPort_IsARestartWithANewToken, server_fixture)
+BOOST_FIXTURE_TEST_CASE(AFreePort_IsARestartWithANewToken_AndTheOldTokenIsRefused, server_fixture)
 {
-	BOOST_REQUIRE(server->start_http(0));
-	const std::string token = file()->token;
-	const std::uint16_t first = server->port();
-
-	// A free port the first run does not hold: the one a socket gets and gives back.
-	std::uint16_t other = 0;
+	// Two ports the operating system handed out, both free again (a port found this way can in theory be taken by another
+	// process before the server binds it; then the test says so and stops).
+	std::uint16_t first = 0;
+	std::uint16_t second = 0;
 	{
 		asio::io_context io;
-		tcp::acceptor probe(io, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
-		other = probe.local_endpoint().port();
+		tcp::acceptor one(io, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+		tcp::acceptor two(io, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+		first = one.local_endpoint().port();
+		second = two.local_endpoint().port();
 	}
-	BOOST_REQUIRE(other != first);
-	BOOST_REQUIRE(server->start_http(other));
-	BOOST_TEST(server->port() == other);
+	if (!server->start_http(first) || !server->start_http(second)) {
+		BOOST_TEST_MESSAGE("a port was taken in between; the test cannot say anything");
+		return;
+	}
+	BOOST_TEST(server->port() == second);
+	// The first run's token: gone from the file, and the new server does not accept it.
 	BOOST_REQUIRE(file().has_value());
-	BOOST_TEST(file()->token != token);
-	BOOST_TEST(file()->port == other);
+	const std::string fresh = file()->token;
+	BOOST_TEST(file()->port == second);
+	BOOST_TEST(open_session(second, fresh, "new").size() == 32u);
+
+	server->stop_http();
+	BOOST_REQUIRE(server->start_http(0));
+	BOOST_REQUIRE(file().has_value());
+	BOOST_TEST(file()->token != fresh);
+	BOOST_TEST(open_session(server->port(), fresh, "stale").empty());
+	BOOST_TEST(open_session(server->port(), file()->token, "good").size() == 32u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ATakenPort_LeavesTheRunningServerAsItWas, server_fixture)
+{
+	BOOST_REQUIRE(server->start_http(0));
+	const std::uint16_t running_port = server->port();
+	const std::string token = file()->token;
+	const std::string kept = open_session(running_port, token, "kept");
+	BOOST_REQUIRE(!kept.empty());
+
+	asio::io_context io;
+	tcp::acceptor holder(io, tcp::endpoint(asio::ip::address_v4::loopback(), 0), false);
+	const std::uint16_t taken = holder.local_endpoint().port();
+
+	BOOST_TEST(!server->start_http(taken));
+	BOOST_TEST(server->running());
+	BOOST_TEST(server->port() == running_port);
+	BOOST_REQUIRE(file().has_value());
+	BOOST_TEST(file()->token == token);
+	BOOST_TEST(file()->port == running_port);
+	// The session is still there and the token still opens a new one.
+	BOOST_TEST(server->sessions().size() == 1u);
+	BOOST_TEST(open_session(running_port, token, "again").size() == 32u);
+	tasks.drain_main(std::chrono::hours(1));
+	BOOST_TEST(closed.empty());
+}
+
+BOOST_FIXTURE_TEST_CASE(TheServerIsActiveOnlyWhileSomethingCanConnect, server_fixture)
+{
+	BOOST_TEST(!server->active());
+	BOOST_REQUIRE(server->start_http(0));
+	BOOST_TEST(server->active());
+	server->stop_http();
+	BOOST_TEST(!server->active());
 }
 
 BOOST_FIXTURE_TEST_CASE(StoppingHttp_EndsEveryAgentSessionAndReportsEachOne, server_fixture)
