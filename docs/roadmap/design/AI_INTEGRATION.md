@@ -134,7 +134,7 @@ class action_registry { registration add(cmd::command_desc, std::optional<action
 ### 3.4a Код (A7 #451)
 
 - `code.list` / `code.read` / `code.write` / `code.create` / `code.delete` / `code.rename` (`controller/edt_code_commands.h`): только `code://`, путь относительно `code/`, проверка `check_code_file_path` до любого действия.
-- `code.read` отдаёт `version` (fnv1a-64 + размер); `code.write` и `code.delete` требуют её, иначе `stale` и файл не меняется. Гонка с внешним редактором в момент записи не закрыта (в хранилище нет CAS), принято.
+- `code.read` отдаёт `version` (fnv1a-64 + размер); `code.write` и `code.delete` требуют её, иначе `stale` и файл не меняется. `version` — замок от потери правок, а не доказательство того, что агент прочитал файл. Гонка с внешним редактором в момент записи не закрыта (в хранилище нет CAS), принято.
 - UTF-8 строго, концы строк как есть, `replace` байт в байт и ровно одно совпадение; лимит 1 MiB.
 - Категории: чтение `read`, правка `code_edit`, создание/удаление/переименование `code_files`; CMake-путь (без учёта регистра) → `cmake_presets` через `command_desc::category_of` (#478).
 - Каждая мутация пишется в лог `agent` и поднимает `editor_events::agent_action` для статус-бара (#449).

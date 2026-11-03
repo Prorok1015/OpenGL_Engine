@@ -329,7 +329,71 @@ BOOST_AUTO_TEST_CASE(AFolderLinkedOutOfCode_IsNeitherListedNorRead)
 	BOOST_TEST(read.code == cmd::codes::failed);
 	BOOST_TEST(read.value.as_object().if_contains("text") == nullptr);
 }
+
+BOOST_AUTO_TEST_CASE(NoChangeGoesThroughAFolderLinkedOutOfCode)
+{
+	dir.write("project/res/levels/secret.cpp", "secret");
+	std::error_code ec;
+	fs::create_directory_symlink(content / "levels", code / "src" / "out", ec);
+	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	const std::string secret_version = edt::code_version_of(bytes_of("secret"));
+
+	BOOST_TEST(call("code.write", json::object{ { "path", "src/out/secret.cpp" }, { "version", secret_version }, { "text", "x" } }).code
+		== cmd::codes::failed);
+	BOOST_TEST(call("code.create", json::object{ { "path", "src/out/new.cpp" }, { "text", "x" } }).code == cmd::codes::failed);
+	BOOST_TEST(call("code.delete", json::object{ { "path", "src/out/secret.cpp" }, { "version", secret_version } }).code == cmd::codes::failed);
+	BOOST_TEST(call("code.rename", json::object{ { "from", "src/game.cpp" }, { "to", "src/out/game.cpp" } }).code == cmd::codes::failed);
+	BOOST_TEST(call("code.rename", json::object{ { "from", "src/out/secret.cpp" }, { "to", "src/stolen.cpp" } }).code == cmd::codes::failed);
+
+	BOOST_TEST(read_file(content / "levels" / "secret.cpp") == "secret");
+	BOOST_TEST(!fs::exists(content / "levels" / "new.cpp"));
+	BOOST_TEST(!fs::exists(content / "levels" / "game.cpp"));
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	BOOST_TEST(!fs::exists(code / "src" / "stolen.cpp"));
+}
+
+BOOST_AUTO_TEST_CASE(AFileLinkedToTheCMakeLists_IsNeitherWrittenNorDeleted)
+{
+	std::error_code ec;
+	fs::create_symlink(fs::path("..") / "CMakeLists.txt", code / "src" / "a.cpp", ec);
+	BOOST_REQUIRE_MESSAGE(!ec, ec.message());
+	const std::string cmake_version = edt::code_version_of(bytes_of("project(x)\n"));
+
+	BOOST_TEST(call("code.read", json::object{ { "path", "src/a.cpp" } }).code == cmd::codes::failed);
+	BOOST_TEST(call("code.write", json::object{ { "path", "src/a.cpp" }, { "version", cmake_version }, { "text", "evil()" } }).code
+		== cmd::codes::failed);
+	BOOST_TEST(call("code.delete", json::object{ { "path", "src/a.cpp" }, { "version", cmake_version } }).code == cmd::codes::failed);
+	BOOST_TEST(read_file(code / "CMakeLists.txt") == "project(x)\n");
+	BOOST_TEST(fs::is_symlink(fs::symlink_status(code / "src" / "a.cpp")));
+}
 #endif
+
+BOOST_AUTO_TEST_CASE(DeletingAFolder_IsRefused)
+{
+	fs::create_directories(code / "src" / "folder.cpp");
+	BOOST_TEST(call("code.delete", json::object{ { "path", "src/folder.cpp" }, { "version", edt::code_version_of({}) } }).code
+		== cmd::codes::failed);
+	BOOST_TEST(fs::is_directory(code / "src" / "folder.cpp"));
+	BOOST_TEST(call("code.delete", json::object{ { "path", "src" }, { "version", "x" } }).code == cmd::codes::failed);
+	BOOST_TEST(fs::is_directory(code / "src"));
+}
+
+BOOST_AUTO_TEST_CASE(Rename_OntoANameThatDiffersOnlyInCase_NeverReplacesAnotherFile)
+{
+	dir.write("project/code/src/other.cpp", "other");
+	const bool folds_case = fs::exists(code / "SRC" / "OTHER.CPP");
+	const auto moved = call("code.rename", json::object{ { "from", "src/game.cpp" }, { "to", "src/OTHER.cpp" } });
+	if (folds_case) {
+		// Windows, macOS: OTHER.cpp is other.cpp.
+		BOOST_TEST(moved.code == cmd::codes::failed);
+		BOOST_TEST(read_file(code / "src" / "other.cpp") == "other");
+		BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+	} else {
+		BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
+		BOOST_TEST(read_file(code / "src" / "other.cpp") == "other");
+		BOOST_TEST(read_file(code / "src" / "OTHER.cpp") == "int game;\r\nint more;\n");
+	}
+}
 
 BOOST_AUTO_TEST_CASE(Utf8_IsStrict)
 {

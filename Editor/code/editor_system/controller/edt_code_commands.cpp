@@ -9,6 +9,7 @@
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -27,6 +28,8 @@ namespace {
 	constexpr std::size_t k_max_listed = 5000;
 	// `old` of a replace: the search stays linear (Boyer-Moore) and small next to the file.
 	constexpr std::size_t k_max_replace_old = 64 * 1024;
+	// How long the main thread waits for the io thread to read a file before it gives up on the call.
+	constexpr std::chrono::seconds k_read_timeout{ 5 };
 	constexpr const char* k_no_project = "no_project";
 
 	json::value parse_schema(std::string_view text)
@@ -107,8 +110,11 @@ namespace {
 		std::size_t parts = static_cast<std::size_t>(std::distance(inside.begin(), inside.end()));
 		for (const fs::path& part : inside) {
 			if (ends_in_file && --parts == 0) break;
-			if (prj::is_code_ignored_dir(fs_paths::utf8_of(part))) {
-				return std::format("'{}' is not a place for code (build output or a hidden folder)", fs_paths::utf8_of(part));
+			const std::string name = fs_paths::utf8_of(part);
+			if (prj::is_code_ignored_dir(name)) {
+				// The name on disk, which may not be UTF-8: it goes into a JSON message only when it is.
+				return edt::is_valid_utf8(name) ? std::format("'{}' is not a place for code (build output or a hidden folder)", name)
+					: std::string{ "the path leads into a folder that is not a place for code" };
 			}
 		}
 		return {};
@@ -127,15 +133,20 @@ namespace {
 	{
 		if (!res.exists(tag)) return { {}, std::format("no file '{}' in code/", tag.relative()) };
 		if (std::string problem = on_disk_problem(root, tag.relative(), true); !problem.empty()) return { {}, std::move(problem) };
+		const fs::path file = root / fs_paths::path_from_utf8(tag.relative());
 		std::error_code ec;
-		const auto size = fs::file_size(root / fs_paths::path_from_utf8(tag.relative()), ec);
+		// A plain file only: not a link (the resolver refuses one too), a folder or a FIFO that would block the read.
+		if (!fs::is_regular_file(fs::symlink_status(file, ec)) || ec) return { {}, std::format("'{}' is not a regular file", tag.relative()) };
+		const auto size = fs::file_size(file, ec);
 		if (ec) return { {}, std::format("'{}' could not be read", tag.relative()) };
 		if (size > edt::k_code_file_limit) {
 			return { {}, std::format("'{}' is {} bytes: at most {} go through code.* in one call", tag.relative(), size, edt::k_code_file_limit) };
 		}
 		const auto raw = res.fetch_data(tag);
 		if (!raw) return { {}, "code:// is not mounted" };
-		raw->wait();
+		// The file may still be swapped for something that blocks after the checks above (the resolver reads by path,
+		// #484): the call gives up instead of holding the editor.
+		if (!raw->wait_for(k_read_timeout)) return { {}, std::format("'{}' could not be read in {} s", tag.relative(), k_read_timeout.count()) };
 		if (!raw->is_ready()) return { {}, std::format("'{}' could not be read", tag.relative()) };
 		return { raw->data, {} };
 	}
