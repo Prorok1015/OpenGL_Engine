@@ -148,6 +148,17 @@ namespace edt
 		{
 			return start_log(ref, path, limit, cursor, filter, cmd::origin{ caller, {} });
 		}
+		// Without author, grep or all.
+		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
+			const cmd::origin& caller)
+		{
+			return start_log(ref, path, limit, cursor, log_filter{}, caller);
+		}
+		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor,
+			cmd::origin_kind caller)
+		{
+			return start_log(ref, path, limit, cursor, log_filter{}, cmd::origin{ caller, {} });
+		}
 		started start_show_files(const std::string& commit, cmd::origin_kind caller)
 		{
 			return start_show_files(commit, cmd::origin{ caller, {} });
