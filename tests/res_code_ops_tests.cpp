@@ -524,3 +524,97 @@ BOOST_FIXTURE_TEST_CASE(Rename_OfAHardLinkUnderAnotherCase_IsAClashWhereTheFileS
 }
 
 BOOST_AUTO_TEST_SUITE_END()
+
+// res:// of a project reports its changes too (#515), for the Git panel; hot reload works as before.
+namespace {
+
+struct res_changes_fixture : ops_fixture
+{
+	std::vector<res::file_change> res_seen;
+	int res_owner = 0;
+	std::vector<std::string> reloaded;
+	int watch_owner = 0;
+
+	res_changes_fixture()
+	{
+		sys->subscribe_changes(res::tag::default_protocol(), &res_owner, [this](std::span<const res::file_change> batch) {
+			res_seen.insert(res_seen.end(), batch.begin(), batch.end());
+		});
+	}
+
+	~res_changes_fixture()
+	{
+		sys->unsubscribe_changes(&res_owner);
+	}
+
+	void watch(std::string_view tag)
+	{
+		sys->watch(res::tag{ tag }, &watch_owner, [this](const res::tag& changed) { reloaded.push_back(changed.string()); });
+	}
+
+	bool res_has(res::change_kind kind, std::string_view tag) const
+	{
+		return std::ranges::any_of(res_seen, [&](const res::file_change& c) {
+			return c.kind == kind && c.tag.view() == tag && !c.self;
+		});
+	}
+
+	bool was_reloaded(std::string_view tag) const
+	{
+		return std::ranges::any_of(reloaded, [tag](const std::string& r) { return r == tag; });
+	}
+};
+
+}
+
+BOOST_AUTO_TEST_SUITE(ResProjectChanges)
+
+BOOST_FIXTURE_TEST_CASE(ExternalFiles_AreReportedCreatedRenamedAndDeleted, res_changes_fixture)
+{
+	dir.write("project/res/levels/extra.desc", "extra");
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::created, "res://levels/extra.desc"); }));
+
+	fs::rename(content / "levels" / "extra.desc", content / "levels" / "moved.desc");
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::renamed, "res://levels/moved.desc"); }));
+	const auto renamed = std::ranges::find_if(res_seen, [](const res::file_change& c) { return c.kind == res::change_kind::renamed; });
+	BOOST_REQUIRE(renamed != res_seen.end());
+	BOOST_TEST(renamed->old_tag.view() == "res://levels/extra.desc");
+
+	fs::remove(content / "levels" / "moved.desc");
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::deleted, "res://levels/moved.desc"); }));
+}
+
+BOOST_FIXTURE_TEST_CASE(AFolderStartingWithADot_IsNotReported, res_changes_fixture)
+{
+	dir.write("project/res/.git/HEAD", "ref: refs/heads/main");
+	dir.write("project/res/textures/wall.png", "png");
+
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::created, "res://textures/wall.png"); }));
+	BOOST_TEST(std::ranges::none_of(res_seen, [](const res::file_change& c) { return c.tag.view().starts_with("res://.git"); }));
+}
+
+BOOST_FIXTURE_TEST_CASE(AnExternalEdit_StillReloadsALoadedWatchedResource, res_changes_fixture)
+{
+	auto handle = sys->require_sync<res::text_resource>(res::tag{ "res://levels/main.desc" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!handle.has_error());
+	BOOST_TEST(handle.get_sync()->str() == "level");
+	watch("res://levels/main.desc");
+
+	dir.write("project/res/levels/main.desc", "level, edited");
+
+	BOOST_TEST(pump_until([this] { return was_reloaded("res://levels/main.desc"); }));
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::modified, "res://levels/main.desc"); }));
+}
+
+BOOST_FIXTURE_TEST_CASE(AnExternalRename_ReloadsWhatWaitsUnderTheNewName, res_changes_fixture)
+{
+	watch("res://levels/hero.desc");
+
+	fs::rename(content / "levels" / "main.desc", content / "levels" / "hero.desc");
+
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::renamed, "res://levels/hero.desc"); }));
+	BOOST_TEST(pump_until([this] { return was_reloaded("res://levels/hero.desc"); }));
+}
+
+BOOST_AUTO_TEST_SUITE_END()

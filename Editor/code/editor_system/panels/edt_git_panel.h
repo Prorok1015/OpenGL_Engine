@@ -19,8 +19,8 @@ namespace edt
 	// View > Git (#456): the repository's changes, commit, branches and the diff of a file (tab Changes), and the
 	// history with its graph and the files of a commit (tab History, #457); it only draws git_panel_model and
 	// vcs::history_model, which run everything through the vcs.* commands. Closed by default: while closed it reads
-	// nothing and draws nothing; the history is read only while its tab is shown. A change of code/ refreshes it (the
-	// repository outside code/ through Refresh, #485).
+	// nothing and draws nothing; the history is read only while its tab is shown. A change of code/ or res/ refreshes it
+	// (the rest of the repository through Refresh, #485, #515).
 	class git_panel final : public panel_base
 	{
 	public:

@@ -1214,7 +1214,11 @@ res::mount_table res::resource_system::project_mount_table(
   layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
 
   mount_table table;
-  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
+  // Every file is reported, for the Git panel (#515). A folder whose name starts with '.' (.git, a tool's state) is not
+  // entered.
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write, write_policy::allow_all(),
+                        watch_options{true, [](std::string_view name) { return name.starts_with('.'); }, {}},
+                        false});
   table.push_back(mount{tag::memory, {cache_dir / "memory"}, mount_access::read_write});
   table.push_back(mount{tag::cache, {cache_dir}, mount_access::read_write});
   table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
