@@ -81,8 +81,8 @@ namespace edt
 		// All of it: what the person approves is never cut (the window scrolls).
 		entry.request.args = bound->args;
 		entry.request.session = bound->session;
-		// The category the gate asked by, so "allow for this session" grants that one (cmake_presets for a CMake file).
-		entry.request.category = command != nullptr ? cmd::category_of_call(*command, entry.call) : cmd::agent_category::unset;
+		// The category the gate asked for (cmake_presets for a CMake file), so "allow for this session" grants that one.
+		entry.request.category = bound->category;
 		entry.request.asked_at = now();
 		entry.request.deadline = entry.request.asked_at + timeout;
 		m_waiting.push_back(std::move(entry));
