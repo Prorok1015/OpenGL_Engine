@@ -300,14 +300,12 @@ struct vcs_fixture
 		git_at(repo, { "-c", "user.name=" + std::string(author), "commit", "-q", "--allow-empty", "-m", std::string(message) }, time);
 	}
 
-	// git with author and committer date k_epoch + `time` seconds; only their order matters to the tests.
+	// git with author and committer date `time` (unix seconds).
 	void git_at(const fs::path& repo, const std::vector<std::string>& args, std::int64_t time)
 	{
-		// git reads a bare number below 100000000 as a date part, not as seconds ("invalid date format: 1000 +0000").
-		constexpr std::int64_t k_epoch = 1'600'000'000;
 		const std::vector<std::string> saved = environment;
-		edt::set_variable(environment, "GIT_AUTHOR_DATE", std::format("{} +0000", k_epoch + time));
-		edt::set_variable(environment, "GIT_COMMITTER_DATE", std::format("{} +0000", k_epoch + time));
+		edt::set_variable(environment, "GIT_AUTHOR_DATE", std::format("{} +0000", time));
+		edt::set_variable(environment, "GIT_COMMITTER_DATE", std::format("{} +0000", time));
 		git(repo, args);
 		environment = saved;
 	}
@@ -2605,7 +2603,8 @@ BOOST_AUTO_TEST_CASE(Log_All_PassesTheTipCommits_AndReducesTooManyToIndependentO
 	BOOST_TEST(reductions == 3u);
 	const auto& reduced = *last_call_with(calls, "log");
 	const auto reduced_begin = std::find(reduced.begin(), reduced.end(), "--end-of-options") + 1;
-	BOOST_TEST(std::find(reduced_begin, reduced.end(), "--") - reduced_begin == 3);
+	const auto reduced_tips = std::find(reduced_begin, reduced.end(), "--") - reduced_begin;
+	BOOST_TEST(reduced_tips == 3);
 }
 
 // show_files and diff{commit}: the commit resolved (rev-parse --verify --end-of-options <x>^{commit}), its first parent
