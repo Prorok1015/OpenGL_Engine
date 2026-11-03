@@ -499,6 +499,10 @@ namespace edt
 	// and read by parse_policy_layer: this stops the build until it is.
 	static_assert(sizeof(policy_layer) == 2 * sizeof(std::map<std::string, cmd::policy_mode>) + sizeof(std::optional<vcs_policy_layer>),
 		"policy_layer changed: update find_loosenings, serialize_policy_layer, parse_policy_layer and their tests");
+	static_assert(sizeof(vcs_policy_layer) == 3 * sizeof(std::optional<std::vector<std::string>>) + 4 * sizeof(std::optional<bool>),
+		"vcs_policy_layer changed: update add_vcs_loosenings, effective_vcs, serialize, parse and their tests");
+	static_assert(sizeof(vcs_write_permissions) == 4 * sizeof(bool),
+		"vcs_write_permissions changed: update stricter_vcs, add_vcs_loosenings, effective_vcs and their tests");
 
 	std::vector<policy_loosening> find_loosenings(const policy_layer& approved, const policy_layer& current,
 		const std::vector<const cmd::command_desc*>& commands)
@@ -848,11 +852,12 @@ namespace edt
 		if (m_commands && m_project.loaded && m_commands().size() != m_reconciled_commands) reconcile_project();
 		const bool live_on = m_live_on && m_live_on();
 		effective_policy now = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
-		if (!m_pending) return now;
+		// Also when nothing is pending: an entry the file has and the approved copy does not (see silently_recordable) must not
+		// lift what a command registered since carries, e.g. a risk floor after a module reload that left the registry's size.
 		const effective_policy held = effective_mode_of_call(command, category, m_approved, m_personal.layer, {}, m_personal.error, live_on);
 		if (held.mode <= now.mode) return now;
 		return { held.mode, policy_source::approval_pending,
-			"the project's agent_policy.json changed and waits for a person's approval; until then the approved version applies: " + held.reason };
+			"the project's agent_policy.json has something a person has not approved yet; until then the approved version applies: " + held.reason };
 	}
 
 	vcs_policy agent_policy::effective_vcs()

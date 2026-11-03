@@ -1159,6 +1159,21 @@ BOOST_FIXTURE_TEST_CASE(AnEntryForACommandThatLaterGetsARiskFloor_IsNotRecordedA
 	BOOST_TEST((policy->effective(extra.front()).source == edt::policy_source::approval_pending));
 }
 
+BOOST_FIXTURE_TEST_CASE(AnEntryOfTheFile_DoesNotLiftTheFloorOfACommandRegisteredAgainAtTheSameSize, approval_fixture)
+{
+	extra.push_back(command_of("scene.query", agent_category::read));
+	write_project(R"({"commands":{"scene.query":"allow"}})");
+	const auto policy = make(false);
+	BOOST_TEST((policy->effective(extra.front()).mode == policy_mode::allow));
+	BOOST_TEST(!policy->project_pending_approval());
+
+	// A module reload registers the command again with a floor: same number of commands, nothing is judged again.
+	extra.front().risk = cmd::danger::deny_by_default;
+	BOOST_TEST((policy->effective(extra.front()).mode == policy_mode::deny));
+	extra.front().risk = cmd::danger::confirm;
+	BOOST_TEST((policy->effective(extra.front()).mode == policy_mode::ask));
+}
+
 BOOST_AUTO_TEST_CASE(FindLoosenings_SeesEveryWayAFileGetsLooser)
 {
 	const auto find = [](const edt::policy_layer& approved, const edt::policy_layer& current, std::vector<const cmd::command_desc*> commands = {}) {
