@@ -211,6 +211,25 @@ BOOST_AUTO_TEST_CASE(ACommandWithoutACategoryOrForNobody_IsHiddenWhateverThePoli
 	BOOST_TEST(!edt::agent_may_use(nobody, access.policy()));
 }
 
+BOOST_AUTO_TEST_CASE(GitCommands_AreListedByTheirOwnCategory)
+{
+	cmd::command_desc push = make("vcs.push");
+	push.category = cmd::agent_category::vcs_push;
+	push.mutates = true;
+	cmd::command_desc status = make("vcs.status");
+	status.category = cmd::agent_category::vcs_read;
+	BOOST_TEST(edt::agent_may_use(push, access.policy()));
+	BOOST_TEST(edt::agent_may_use(status, access.policy()));
+
+	write_project_policy(R"({"version":1,"categories":{"vcs_push":"deny"}})");
+	BOOST_TEST(!edt::agent_may_use(push, access.policy()));
+	BOOST_TEST(edt::agent_may_use(status, access.policy()));
+
+	write_project_policy(R"({"version":1,"categories":{"vcs_push":"allow","vcs_read":"deny"}})");
+	BOOST_TEST(edt::agent_may_use(push, access.policy()));
+	BOOST_TEST(!edt::agent_may_use(status, access.policy()));
+}
+
 BOOST_AUTO_TEST_CASE(ACommandNotOfferedAsATool_IsHidden)
 {
 	cmd::command_desc desc = make("log.read");
