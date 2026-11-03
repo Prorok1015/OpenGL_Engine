@@ -24,7 +24,7 @@ namespace edt
 
 		constexpr cmd::agent_category settable[] = {
 			cmd::agent_category::read, cmd::agent_category::scene_edit, cmd::agent_category::code_edit, cmd::agent_category::code_files,
-			cmd::agent_category::cmake_presets, cmd::agent_category::build, cmd::agent_category::live,
+			cmd::agent_category::cmake_presets, cmd::agent_category::build, cmd::agent_category::live, cmd::agent_category::editor_control,
 		};
 
 		cmd::policy_mode mode_of_risk(cmd::danger risk)

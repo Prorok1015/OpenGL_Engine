@@ -205,6 +205,30 @@ class server { public: server(host&, server_config); void start(); void stop(); 
 - Цена: процесс игры несёт код редактора — для автотестов и QA это нормально; поставочный бинарник игры (EPIC-54 #23) по-прежнему собирается без редактора и без MCP.
 - Зависимости: `play_session` (#39), реестр панелей (#138, скрыть/показать раскладку), `input_router` (#113), `frame_control` (A3).
 
+### 3.9 Headless-редактор и MCP через stdio (#452)
+
+- **Запуск:** `editor --headless --mcp-stdio --project <проект>`. `--headless` — без дисплея и GPU (`window/system=null`, `render/backend=null`, панели не рисуются), `--mcp-stdio` (cfg `editor/mcp_stdio`) — MCP по stdin/stdout: JSON-RPC, одно сообщение на строку, один клиент, одна сессия (её создаёт `initialize`). Без токена и заголовков: каналы принадлежат тому, кто запустил процесс. HTTP-сервер (`editor/agent_server`) от этого не зависит и может работать рядом; очередь главного потока и мост (`mcp_bridge_host`) у двух транспортов общие.
+- **stdout — только протокол.** `main` до инициализации логгера дублирует исходный stdout (`platform::take_stdout_for_protocol`), а fd 1 направляет в stderr: лог, `printf` библиотек и `--help` уходят в stderr, JSON пишется только в сохранённый дескриптор (на Windows — в двоичном режиме, строки кончаются `\n`). POSIX: SIGPIPE игнорируется.
+- **Протокол** — тот же `mcp::rpc_dispatcher`, что у HTTP (`mcp_rpc.h`): методы, ошибки и уведомления одинаковые. Не-JSON — `-32700` с `id: null`; пакет (массив) отклоняется, как по HTTP; запрос до `initialize` — `-32600`; уведомления клиента остаются без ответа; строка длиннее 16 МиБ — ошибка и конец ввода. `notifications/tools/list_changed` и прогресс (при `_meta.progressToken`) идут отдельными строками в тот же stdout.
+- **Конец stdin.** Сессия закрывается (`host::session_closed`). Headless: при несохранённых изменениях — WARN «stdin closed with unsaved changes: exiting without saving», изменения отбрасываются, редактор завершается с кодом 0. С окном редактор продолжает работать (INFO «MCP stdio client disconnected»).
+- **`editor.quit{discard_unsaved?}`** — только при `--mcp-stdio` и headless, вызвать может только сессия stdio (остальным `denied`). Несохранённые изменения без `discard_unsaved` — `needs_input`, как у `file.exit`. Ответ `{stopping: true}` приходит до конца кадра, цикл останавливается в конце кадра. Категория `editor_control` (по умолчанию `allow`). Пока мост показывает агенту только команды чтения, `editor.quit` по MCP не виден; появится, когда видимость перейдёт на категории политики (#479).
+- **Политика в headless:** `ask` без человека — `denied`. При умолчании владельца `code_edit = ask` headless-агент код не правит, пока политику не зададут явно (`--agent-policy`, PR-3 #452).
+- **Темп кадров:** без окна цикл ограничен `app/headless_target_fps` (60 по умолчанию, 0 — без ограничения), чтобы не занимать ядро целиком. Детерминированное время и `app/exit_after_frames` от этого не зависят.
+- **Конфигурация MCP-клиента** (stdio):
+
+```json
+{
+  "mcpServers": {
+    "snake-editor": {
+      "command": "<path>/editor",
+      "args": ["--headless", "--mcp-stdio", "--project", "<project>"]
+    }
+  }
+}
+```
+
+- CI: шаг «Headless MCP over stdio» в `editor-smoke` (`tools/headless_mcp_smoke.py`): `initialize`, `tools/list` (есть `problems_list`), `tools/call problems_list`, каждая строка stdout — JSON-RPC 2.0, после закрытия stdin — код 0.
+
 ## 4. Стыковка с другими эпиками
 
 | С чем | Как |
@@ -291,5 +315,5 @@ class server { public: server(host&, server_config); void start(); void stop(); 
 5. Откат сессии — только команды агента, остановка на первом конфликте с правкой человека и отчёт.
 6. Опасные действия — `confirm` / `deny_by_default` как в §5, белый список `.snk/agent_policy.json` правит только человек, сервер выключен по умолчанию.
 7. MCP-сервер — отдельный CMake-модуль `STATIC` на уровне редактора, без зависимостей от движка, линкуется только в редактор; в бинарник игры технически попасть не может (§3.7).
-8. Транспорт (Q1) — только Streamable HTTP в модуле `snk_mcp_server` (Boost.Beast из уже подключённого Boost). stdio-моста пока нет; клиентам, умеющим только stdio, — сторонний переходник (`mcp-remote`) на их стороне.
+8. Транспорт (Q1) — только Streamable HTTP в модуле `snk_mcp_server` (Boost.Beast из уже подключённого Boost). stdio-моста пока нет; клиентам, умеющим только stdio, — сторонний переходник (`mcp-remote`) на их стороне. Дополнение (#452): stdio-транспорт теперь есть в самом модуле (§3.9) — для headless-редактора, который запускает агент.
 9. Автоматизация игры (Q7) — через редактор в **игровом режиме запуска** (§3.8): редакторское почти всё отключено, сразу стартует игра; переключение игра ↔ редактор на лету без перезапуска, MCP работает в обоих режимах. Отдельного хоста и сервера в игровом бинарнике нет.

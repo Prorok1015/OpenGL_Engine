@@ -37,6 +37,7 @@ namespace edt
 		case cmake_presets: return policy_mode::ask;
 		case build: return policy_mode::deny;
 		case live: return policy_mode::allow;
+		case editor_control: return policy_mode::allow;
 		case unset:
 		case not_for_agents: break;
 		}

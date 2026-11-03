@@ -43,6 +43,7 @@
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
 #include "edt_agent_server.h"
+#include "edt_editor_quit.h"
 #include "edt_data_protocol.h"
 #include "edt_engine_version_prompt.h"
 #include "edt_recent_projects.h"
@@ -55,6 +56,7 @@
 #include <snk/project/prj_create.h>
 #include <snk/project/prj_project.h>
 #include <snk/platform/plt_process.h>
+#include <snk/platform/plt_stdio.h>
 #include <snk/editor/edt_dialog_service.h>
 #include <snk/render/rnd_capture_service.h>
 #include <snk/render/rnd_render_system.h>
@@ -84,6 +86,8 @@
 
 // Editor/data (editor_module): the project templates live under it.
 CFG_VAR_EXT_PATH(cfg_edt_data_path);
+// --headless (edt_editor_init.cpp).
+CFG_VAR_EXT_BOOL(cfg_edt_headless);
 
 namespace {
 	std::string utf8_of(const std::filesystem::path& path)
@@ -125,6 +129,10 @@ namespace {
 	CFG_VAR_DEF_BOOL(cfg_exit_after_level_loaded, "editor/exit_after_level_loaded", false);
 	// The MCP server for AI agents (read-only: log, jobs, dialogs, screenshots). Off unless the user turns it on.
 	CFG_VAR_DEF_BOOL(cfg_agent_server, "editor/agent_server", false);
+	// MCP over stdin/stdout for one agent (--mcp-stdio, #452); main hands the saved stdout over as platform::protocol_stdout.
+	CFG_VAR_DEF_BOOL(cfg_mcp_stdio, "editor/mcp_stdio", false);
+	// Read like the window service does: "null" is a run without a display (--headless sets it).
+	CFG_VAR_DEF_STRING(cfg_window_system, "window/system", "glfw");
 	// 0: the operating system picks a free port; it is written to <project dir>/.snk/mcp.json with the token.
 	CFG_VAR_DEF_INT(cfg_agent_server_port, "editor/agent_server_port", 0);
 	// Minutes without a request after which an agent's MCP session is closed (its "allow until the end of the session" with it); 0: never.
@@ -528,8 +536,15 @@ void edt::editor_system::init(ds::app_data_storage& data)
 			}));
 	}
 
-	if (cfg_agent_server) {
+	const bool headless = cfg_edt_headless || *cfg_window_system == "null";
+	bool stdio = cfg_mcp_stdio;
+	if (stdio && !data.has_value<platform::protocol_stdout>()) {
+		egLOG_ERROR("mcp", "editor/mcp_stdio needs the --mcp-stdio option (stdout must belong to the protocol): no stdio transport");
+		stdio = false;
+	}
+	if (cfg_agent_server || stdio) {
 		agent_server_options options;
+		options.http = cfg_agent_server;
 		const int port = cfg_agent_server_port;
 		options.port = (port > 0 && port <= 65535) ? static_cast<std::uint16_t>(port) : std::uint16_t{ 0 };
 		const int idle_minutes = cfg_agent_session_idle_minutes;
@@ -545,7 +560,30 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
 		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
+		editor_quit_sources quit;
+		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
+		quit.is_dirty = [this] { return m_state.is_dirty(); };
+		quit.discard_changes = [this] { m_state.mark_clean(); };
+		quit.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
+		if (stdio) {
+			options.stdio_write = [fd = data.require<platform::protocol_stdout>().fd](std::string_view line) {
+				// A client that stopped reading: nothing more can reach it, and the log says why.
+				if (!platform::write_all(fd, line)) {
+					egLOG_WARN("mcp", "the MCP stdio client does not take the output any more");
+				}
+			};
+			auto& tasks = data.require<ds::task_system>();
+			options.on_stdio_eof = [&tasks, alive = std::weak_ptr<int>(m_stdio_alive), headless, quit] {
+				tasks.post_main([alive, headless, quit] {
+					if (alive.lock()) on_stdio_input_closed(headless, quit);
+				});
+			};
+		}
 		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));
+		if (editor_quit_available(stdio, headless)) {
+			registration added = register_editor_quit(commands, std::move(quit));
+			if (added.active()) m_registrations.push_back(std::move(added));
+		}
 	}
 }
 

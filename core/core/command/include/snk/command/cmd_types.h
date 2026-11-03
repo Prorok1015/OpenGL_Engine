@@ -50,6 +50,7 @@ namespace cmd
 		cmake_presets,  // CMake files and presets: editing them runs code at configure time
 		build,          // building and reloading the game module (runs the project's CMake code)
 		live,           // the live mode's commands, while it is on
+		editor_control, // running the editor itself: editor.quit of a headless editor driven over stdio
 	};
 
 	constexpr const char* to_string(agent_category category)
@@ -64,6 +65,7 @@ namespace cmd
 		case agent_category::cmake_presets: return "cmake_presets";
 		case agent_category::build: return "build";
 		case agent_category::live: return "live";
+		case agent_category::editor_control: return "editor_control";
 		}
 		return "unset";
 	}
