@@ -4,11 +4,27 @@
 #include <snk/common/logger/engine_log.h>
 #include <boost/json/serialize.hpp>
 #include <algorithm>
+#include <exception>
 #include <format>
 #include <random>
 #include <utility>
 
 namespace json = boost::json;
+
+cmd::agent_category cmd::category_of_call(const command_desc& command, const call& request)
+{
+	if (!command.category_of || !request.args.is_object() || json_schema::validate(command.args_schema, request.args)) {
+		return command.category;
+	}
+	try {
+		return command.category_of(request);
+	} catch (const std::exception& e) {
+		egLOG_WARN("command", "the category of a call of '{}' could not be told ({}): it is refused", command.id, e.what());
+	} catch (...) {
+		egLOG_WARN("command", "the category of a call of '{}' could not be told: it is refused", command.id);
+	}
+	return agent_category::not_for_agents;
+}
 
 boost::json::value cmd::no_args_schema()
 {
@@ -34,6 +50,11 @@ cmd::registration cmd::command_registry::add(command_desc desc)
 	}
 	if (contains(desc.id)) {
 		egLOG_ERROR("command", "command '{}' not registered: the id is already taken", desc.id);
+		return {};
+	}
+	// `read` is the category an agent may use without asking; a command that changes things must not carry it.
+	if (desc.mutates && desc.category == agent_category::read) {
+		egLOG_ERROR("command", "command '{}' not registered: it mutates, so it cannot be in the agent category 'read'", desc.id);
 		return {};
 	}
 
@@ -159,7 +180,7 @@ std::optional<cmd::command_registry::pending_confirmation> cmd::command_registry
 	drop_expired_tickets();
 	const auto found = std::find_if(m_tickets.begin(), m_tickets.end(), [ticket](const confirmation_ticket& t) { return t.id == ticket; });
 	if (found == m_tickets.end()) return std::nullopt;
-	return pending_confirmation{ found->command, found->args, found->reason, found->session, found->approved };
+	return pending_confirmation{ found->command, found->args, found->reason, found->session, found->category, found->approved };
 }
 
 bool cmd::command_registry::approve(std::string_view ticket)
@@ -258,6 +279,7 @@ std::optional<cmd::result> cmd::command_registry::apply_policy(const command_des
 	ticket.args = args;
 	ticket.session = request.from.session;
 	ticket.reason = decision.reason;
+	ticket.category = decision.category != agent_category::unset ? decision.category : command.category;
 	ticket.expires = now() + confirmation_lifetime;
 	result answer = describe(ticket);
 	m_tickets.push_back(std::move(ticket));

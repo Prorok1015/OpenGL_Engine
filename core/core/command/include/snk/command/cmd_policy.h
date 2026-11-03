@@ -1,5 +1,6 @@
 #pragma once
 #include "cmd_types.h"
+#include <snk/common/snk_api.h>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -30,11 +31,22 @@ namespace cmd
 		policy_mode mode = policy_mode::deny;
 		// Shown to the agent in the error, and to the person in a confirmation.
 		std::string reason;
+		// An ask: the category it is for, which "allow for this session" grants. unset: the command's own.
+		agent_category category = agent_category::unset;
 
-		static policy_decision allow() { return { policy_mode::allow, {} }; }
-		static policy_decision ask(std::string why) { return { policy_mode::ask, std::move(why) }; }
-		static policy_decision deny(std::string why) { return { policy_mode::deny, std::move(why) }; }
+		static policy_decision allow() { return { policy_mode::allow, {}, agent_category::unset }; }
+		static policy_decision ask(std::string why, agent_category for_category = agent_category::unset)
+		{
+			return { policy_mode::ask, std::move(why), for_category };
+		}
+		static policy_decision deny(std::string why) { return { policy_mode::deny, std::move(why), agent_category::unset }; }
 	};
+
+	// The category the policy judges this call by, besides the command's own (the stricter of the two decides):
+	// command_desc::category_of when the command has one and the arguments match args_schema, else
+	// command_desc::category. Arguments that do not match never reach category_of; a category_of that throws gives
+	// not_for_agents (the call is refused).
+	SNK_API agent_category category_of_call(const command_desc& command, const call& request);
 
 	// Decides whether a call from an agent (origin `agent`) may run. Installed into the command_registry, which asks it
 	// inside `invoke`, so no path of calling a command goes around it. Main thread only, like the registry.

@@ -18,8 +18,11 @@ namespace mcp
 		boost::json::value input_schema;
 		// JSON Schema of the structured result. Null: not declared.
 		boost::json::value output_schema;
+		// MCP tool annotations (hints for the client, not guarantees).
 		bool read_only = false;
 		bool destructive = false;
+		bool idempotent = false;
+		bool open_world = false;
 	};
 
 	// One block of a tool result.
