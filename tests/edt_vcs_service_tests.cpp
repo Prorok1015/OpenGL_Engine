@@ -648,12 +648,12 @@ BOOST_AUTO_TEST_CASE(RealRepository_TheHistoryTab_ReadsEveryBranch_FiltersAndSho
 	BOOST_TEST((subjects() == std::vector<std::string>{ "m2", "f1 Fix", "m1" }));
 	BOOST_TEST(history.at_end());
 
-	filter_by({ .author = "ann" });
+	filter_by({ .branch = {}, .author = "ann", .text = {} });
 	BOOST_TEST(history.error().empty(), history.error());
 	BOOST_TEST((subjects() == std::vector<std::string>{ "f1 Fix" }));
-	filter_by({ .text = "fix" });
+	filter_by({ .branch = {}, .author = {}, .text = "fix" });
 	BOOST_TEST((subjects() == std::vector<std::string>{ "f1 Fix" }));
-	filter_by({ .branch = "main" });
+	filter_by({ .branch = "main", .author = {}, .text = {} });
 	BOOST_TEST((subjects() == std::vector<std::string>{ "m2", "m1" }));
 	filter_by({});
 	BOOST_REQUIRE((subjects() == std::vector<std::string>{ "m2", "f1 Fix", "m1" }));
