@@ -834,6 +834,36 @@ BOOST_AUTO_TEST_CASE(RealRepository_LogSnapshots_KeepTheEightMostRecentlyUsed)
 	BOOST_TEST(!is_error(second_page(cursors[1]), "stale"));
 }
 
+// #502: a file the commit renamed is diffed as that rename, named by its new or its old name, also with spaces and
+// non-ASCII letters in both names.
+BOOST_AUTO_TEST_CASE(RealRepository_CommitDiffOfARenamedPath_ShowsTheRename)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("renamed");
+	const std::string old_name = "old " + u_umlaut + " name.txt";
+	const std::string new_name = "dir with space/new " + u_umlaut + ".txt";
+	write(repo / path_of(old_name), "one\ntwo\nthree\nfour\nfive\nsix\n");
+	git(repo, { "add", "--", old_name });
+	git(repo, { "commit", "-q", "-m", "add" });
+	fs::create_directories(repo / "dir with space");
+	git(repo, { "mv", "--", old_name, new_name });
+	write(repo / path_of(new_name), "one\ntwo\nthree\nFOUR\nfive\nsix\n");
+	git(repo, { "add", "--", new_name });
+	git(repo, { "commit", "-q", "-m", "rename and edit" });
+	const std::string renamed = head_of(repo);
+	make_service(real_options(repo));
+
+	for (const std::string& asked : { new_name, old_name }) {
+		const std::string diff = text(finish(service->start_commit_diff(renamed, asked, cmd::origin_kind::ui)).as_object().at("text"));
+		BOOST_TEST_INFO("asked " << asked << ", diff: " << diff);
+		BOOST_TEST(diff.find("rename from " + old_name) != std::string::npos);
+		BOOST_TEST(diff.find("rename to " + new_name) != std::string::npos);
+		BOOST_TEST(diff.find("+FOUR") != std::string::npos);
+		BOOST_TEST(diff.find("new file") == std::string::npos);
+		BOOST_TEST(diff.find("+one") == std::string::npos);
+	}
+}
+
 BOOST_AUTO_TEST_CASE(RealRepository_ShowFilesAndCommitDiff_OfARootANormalARenameAndAMergeCommit)
 {
 	isolate_config();
@@ -3076,7 +3106,7 @@ BOOST_AUTO_TEST_CASE(ShowFilesAndCommitDiff_RunDiffTreeAgainstTheFirstParent)
 				on_line(oid + "\n");
 			}
 		}
-		if (has_arg(args, "diff-tree") && has_arg(args, "--name-status")) on_line("R100\0old\0new\0M\0x\0"s);
+		if (has_arg(args, "diff-tree") && has_arg(args, "--name-status")) on_line("R100\0old\0new\0M\0x\0R090\0bad\x01name\0clean\0"s);
 		return exited(0);
 	};
 	make_service(fake_options());
@@ -3084,7 +3114,7 @@ BOOST_AUTO_TEST_CASE(ShowFilesAndCommitDiff_RunDiffTreeAgainstTheFirstParent)
 	const json::value files = finish(service->start_show_files("cafe", cmd::origin_kind::ui));
 	BOOST_TEST_INFO("files: " << json::serialize(files));
 	const json::array& listed = files.as_object().at("files").as_array();
-	BOOST_REQUIRE_EQUAL(listed.size(), 2u);
+	BOOST_REQUIRE_EQUAL(listed.size(), 3u);
 	BOOST_TEST(text(listed[0].as_object().at("orig_path")) == "old");
 	const auto* tree = last_call_with(calls, "diff-tree");
 	BOOST_REQUIRE(tree != nullptr);
@@ -3109,6 +3139,22 @@ BOOST_AUTO_TEST_CASE(ShowFilesAndCommitDiff_RunDiffTreeAgainstTheFirstParent)
 	BOOST_TEST(diff[diff.size() - 2] == "--");
 	BOOST_TEST(diff.back() == "dir/f.txt");
 	BOOST_TEST(std::any_of(diff.begin(), diff.end(), [](const std::string& a) { return a.starts_with("core.hooksPath="); }));
+
+	// #502: a renamed path, by either name, is diffed with both names; a name from git with a control character is
+	// never passed on.
+	for (const char* asked : { "new", "old" }) {
+		finish(service->start_commit_diff("cafe", asked, cmd::origin_kind::ui));
+		const auto& renamed = *last_call_with(calls, "diff-tree");
+		BOOST_TEST(has_arg(renamed, "-p"), asked);
+		BOOST_REQUIRE(renamed.size() >= 3u);
+		BOOST_TEST(renamed[renamed.size() - 3] == "--", asked);
+		BOOST_TEST(renamed[renamed.size() - 2] == asked, asked);
+		BOOST_TEST(renamed.back() == (std::string_view(asked) == "new" ? "old" : "new"), asked);
+	}
+	finish(service->start_commit_diff("cafe", "clean", cmd::origin_kind::ui));
+	const auto& unsafe = *last_call_with(calls, "diff-tree");
+	BOOST_TEST(unsafe[unsafe.size() - 2] == "--");
+	BOOST_TEST(unsafe.back() == "clean");
 }
 
 // Security review of #501: a ref is check-ref-format characters plus ~^@{}; ":/<regex>" and "^{/<regex>}" (a regex

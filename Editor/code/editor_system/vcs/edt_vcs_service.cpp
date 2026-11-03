@@ -1856,13 +1856,31 @@ edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string&
 		std::string oid;
 		std::optional<std::string> parent;
 		if (auto failure = resolve_with_parent(read, commit, task, oid, parent)) return std::move(*failure);
-		std::vector<std::string> args{ "diff-tree", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-M",
-			"--ignore-submodules=all", "--no-commit-id" };
-		if (parent) args.push_back(*parent);
-		else args.emplace_back("--root");
-		args.push_back(oid);
+		const auto against_parent = [&](std::vector<std::string> args) {
+			if (parent) args.push_back(*parent);
+			else args.emplace_back("--root");
+			args.push_back(oid);
+			return args;
+		};
+		std::vector<std::string> paths;
+		if (!path.empty()) {
+			paths.push_back(path);
+			// A pathspec of one name hides the other side of a rename from -M: both names go in (#502).
+			const git_output names = run_git(read, against_parent({ "diff-tree", "-r", "-z", "--name-status", "-M", "--no-ext-diff",
+				"--no-textconv", "--no-commit-id" }), task.stop, k_read_cap);
+			if (auto failure = failure_of(names, task)) return std::move(*failure);
+			for (auto& file : vcs::parse_name_status(whole_records(names, '\0'))) {
+				if (file.status != 'R' || (file.path != path && file.orig_path != path)) continue;
+				std::string other = file.path == path ? std::move(file.orig_path) : std::move(file.path);
+				// It comes from git's output: checked like an argument before it is a pathspec.
+				if (!other.empty() && !path_error(other)) paths.push_back(std::move(other));
+				break;
+			}
+		}
+		std::vector<std::string> args = against_parent({ "diff-tree", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-M",
+			"--ignore-submodules=all", "--no-commit-id" });
 		args.emplace_back("--");
-		if (!path.empty()) args.push_back(path);
+		args.insert(args.end(), paths.begin(), paths.end());
 		const git_output out = run_git(read, args, task.stop, k_diff_cap);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
 		return diff_json(out);
@@ -2484,7 +2502,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	diff.category = cmd::agent_category::vcs_read;
 	diff.summary = "Start reading the working tree diff (or the staged one, or what a commit changed against its first "
 		"parent), of one path or all; text capped at 256 KiB; the result arrives in job.get. With commit and path, a file "
-		"the commit renamed shows as added (renames are found only among the files of the path)";
+		"the commit renamed (path either name) shows as the rename with its changes";
 	diff.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
