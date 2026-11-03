@@ -17,6 +17,7 @@
 #include <future>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <snk/common/snk_api.h>
 
 namespace res
@@ -24,9 +25,13 @@ namespace res
 	namespace detail {
 		class pinned_root;
 		struct write_hook_access;
+		struct read_hook_access;
 		// Where a store's write may be paused by a test hook (res_vfs_test_hook.h, base only): after the path was checked
 		// again on the io thread, and with the temp file written, before the rename.
 		enum class write_stage : int { after_check, folders_held, before_rename };
+		// Where a read may be paused the same way (#484): on the io thread before the folders are opened, and with them held
+		// before the file is opened.
+		enum class read_stage : int { before_walk, folders_held };
 	}
 
 	namespace io = boost::asio;
@@ -66,7 +71,9 @@ namespace res
 		bool exists_below_top(const tag& tag) const;
 		// The only place a tag becomes a file path: nullopt when the tag would leave `root`.
 		std::optional<fs::path> safe_path(const fs::path& root, const tag& tag) const;
-		std::optional<fs::path> resolve_tag(const tag& tag) const;
+		// The layer that has the file and its path there (the top layer when none has it); nullopt when every layer
+		// rejects the tag.
+		std::optional<std::pair<fs::path, fs::path>> resolve_tag(const tag& tag) const;
 		// The file a remove or rename may touch: inside the top root and under the write policy as a tag and as the file
 		// it resolves to. nullopt with `why` set otherwise.
 		std::optional<fs::path> writable_path(const tag& tag, std::string& why) const;
@@ -84,7 +91,8 @@ namespace res
 		// dropped, so resolve() does not serve bytes that never reached the disk.
 		bool write_pending(const res::tag& tag, const fs::path& target_path, const res::tag& tmp_tag, const fs::path& tmp_path,
 			const core::res::res_resolver_interface::async_raw_data& data, bool replace);
-		void resolfy_pending_writes(core::res::res_resolver_interface::async_raw_data data_sp, fs::path path) const;
+		// On the io thread: the file at `path` below the layer `root`, through detail::read_beneath (#484).
+		void read_from_disk(core::res::res_resolver_interface::async_raw_data data_sp, fs::path root, fs::path path) const;
 
 	private:
 		mutable io::io_context io;
@@ -109,6 +117,11 @@ namespace res
 		std::function<void(detail::write_stage, const fs::path& tmp_path)> m_write_hook;
 		// Stores queued and not finished: the hook may change only while none is.
 		std::atomic<int> m_writes_in_flight{ 0 };
+		// Tests only (detail::read_hook_access): called on the io thread at each read_stage of a read; and a smaller cap
+		// than res::max_external_file_bytes (0: that one). Set while no read is queued.
+		std::function<void(detail::read_stage)> m_read_hook;
+		std::uint64_t m_read_limit = 0;
 		friend struct detail::write_hook_access;
+		friend struct detail::read_hook_access;
 	};
 }

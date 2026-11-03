@@ -41,6 +41,7 @@
 #include "edt_git_panel.h"
 #include "edt_vcs_service.h"
 #include "edt_live_mode.h"
+#include "edt_play_commands.h"
 #include "edt_play_session.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
@@ -778,39 +779,21 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 	m_inspector_panel->set_edits_locked(locked);
 	m_viewport_panel->set_edits_locked(locked);
 
-	// UI actions; the agent's play.* commands are US-63-C (#491).
-	const auto add = [this](action_desc desc) {
-		desc.menu_path = "Play";
-		desc.category = cmd::agent_category::not_for_agents;
-		m_registrations.push_back(m_context->actions().add(std::move(desc)));
-	};
-	// The play.* lambdas check m_play: ~editor_system lets go of it before m_registrations goes.
-	add({ .id = "play.start", .label = "Play", .shortcut = "Ctrl+P",
-		.dynamic_label = [this] { return std::string{ m_play && m_play->state() == play_state::paused ? "Resume" : "Play" }; },
-		// Ctrl+P in a text field (a rename in the hierarchy) is typing.
-		.yields_to_text_input = true,
-		.execute = [this](const boost::json::value&) {
-			if (!m_play) return action_result::failure(cmd::codes::failed, "Play is not available");
-			if (m_play->state() == play_state::paused) {
-				m_play->resume();
-				return action_result::success();
-			}
-			if (auto refused = m_play->start_refusal()) return action_result::failure(cmd::codes::failed, *refused);
-			return m_play->start() ? action_result::success() : action_result::failure(cmd::codes::failed, "Play did not start: see the log");
-		},
-		// Not in the middle of an edit: a value the inspector has not committed would be lost to the lock.
-		.enabled = [this] {
-			return m_play && (m_play->state() == play_state::paused || (!m_play->active() && !m_play->start_refusal() && !person_is_editing()));
-		} });
-	add({ .id = "play.pause", .label = "Pause",
-		.execute = no_args([this] { if (m_play) m_play->pause(); }),
-		.enabled = [this] { return m_play && m_play->state() == play_state::playing; } });
-	add({ .id = "play.step", .label = "Step",
-		.execute = no_args([this] { if (m_play) m_play->step(1); }),
-		.enabled = [this] { return m_play && m_play->active(); } });
-	add({ .id = "play.stop", .label = "Stop", .separator_before = true,
-		.execute = no_args([this] { if (m_play) m_play->stop(); }),
-		.enabled = [this] { return m_play && m_play->active(); } });
+	// The Play menu and the agent's play.* (US-63-C, #491). The lambdas check m_play: ~editor_system lets go of it
+	// before m_registrations goes.
+	for (auto& command : register_play_commands(m_context->actions(),
+			{ .play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); } })) {
+		m_registrations.push_back(std::move(command));
+	}
+	// app.advance / app.resume step the editor's whole frame loop: an agent gets them only during Play.
+	if (data.has_value<app::frame_command_registrations>() && data.has_value<app::frame_control>()) {
+		play_frame_commands frame_commands = register_play_frame_commands(data.require<app::frame_command_registrations>(),
+			m_context->actions().commands(), data.require<app::frame_control>(), [this] { return m_play && m_play->active(); },
+			m_context->events());
+		m_registrations.push_back(std::move(frame_commands.commands.advance));
+		m_registrations.push_back(std::move(frame_commands.commands.resume));
+		m_play_hold_release = std::move(frame_commands.release_on_stop);
+	}
 
 	editor_layer->set_menu_bar_status([this] {
 		draw_play_status();

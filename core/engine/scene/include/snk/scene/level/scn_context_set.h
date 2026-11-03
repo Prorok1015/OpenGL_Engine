@@ -117,6 +117,8 @@ namespace scn
 		void step(uint32_t frames);
 		// Frames of the current step still to run; 0 outside Step.
 		uint32_t pending_steps() const { return m_pending_steps; }
+		// Frames update() ran in Play or Step since the set was made (Edit and Pause frames are not counted).
+		uint64_t frames_run() const { return m_frames_run; }
 
 		// At 60 fps a frame of scale s needs about s fixed steps, and fixed_stepper runs at most 8 a frame (its
 		// default max_steps): beyond 8 simulated time would be dropped, so the scale is capped there.
@@ -252,6 +254,7 @@ namespace scn
 
 		ecs::run_mode m_mode = ecs::run_mode::play;
 		uint32_t m_pending_steps = 0;
+		uint64_t m_frames_run = 0;
 		float m_time_scale = 1.0f;
 		uint64_t m_seed = ecs::rng::default_seed;
 

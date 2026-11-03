@@ -191,7 +191,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersDefaultTable_DecidesWhatElseIsListed)
 	const std::pair<agent_category, bool> table[] = {
 		{ agent_category::read, true }, { agent_category::scene_edit, true }, { agent_category::code_edit, true },
 		{ agent_category::code_files, true }, { agent_category::cmake_presets, true }, { agent_category::build, false },
-		{ agent_category::live, false },
+		{ agent_category::live, false }, { agent_category::play, true },
 	};
 	for (const auto& [category, listed] : table) {
 		cmd::command_desc desc = make("x.y");
