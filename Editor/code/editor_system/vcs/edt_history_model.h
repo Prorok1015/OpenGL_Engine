@@ -53,10 +53,10 @@ namespace edt::vcs
 	struct history_filter
 	{
 		// Empty: every local branch, remote-tracking branch and tag.
-		std::string branch;
-		std::string author;
+		std::string branch{};
+		std::string author{};
 		// Text in the commit message.
-		std::string text;
+		std::string text{};
 
 		bool operator==(const history_filter&) const = default;
 	};
