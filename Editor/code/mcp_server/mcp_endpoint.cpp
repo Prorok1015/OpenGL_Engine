@@ -122,6 +122,9 @@ namespace {
 			}
 		}
 
+		// The request is answered elsewhere (the dispatch threw: handle() sends the 500).
+		void disarm() { m_answered.store(true); }
+
 	private:
 		mcp::endpoint::responder m_respond;
 		std::atomic<bool> m_answered{ false };
@@ -426,9 +429,14 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 	};
 	// Shared by every copy of the sink: when the last one goes without an answer, the request completes empty.
 	auto request = std::make_shared<unanswered_request>(respond);
-	m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [request](json::value answer) {
-		request->answer(json_response(answer));
-	});
+	try {
+		m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [request](json::value answer) {
+			request->answer(json_response(answer));
+		});
+	} catch (...) {
+		request->disarm();
+		throw;
+	}
 }
 
 void mcp::endpoint::on_initialize(const json::value& id, const json::object& params, const responder& respond)
