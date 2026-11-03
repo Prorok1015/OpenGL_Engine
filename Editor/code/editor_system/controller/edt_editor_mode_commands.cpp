@@ -8,6 +8,7 @@
 #include <boost/json/parse.hpp>
 #include <boost/json/string.hpp>
 #include <boost/json/string_view.hpp>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -49,7 +50,8 @@ std::vector<edt::registration> edt::register_editor_mode_commands(action_registr
 		"additionalProperties": false
 	})json");
 	toggle.enabled = [modes, session] { return modes() != nullptr && session() != nullptr; };
-	toggle.invoke = [modes, session, would_start, editing = deps.person_is_editing](const cmd::call& call) {
+	toggle.invoke = [modes, session, would_start, editing = deps.person_is_editing, agent_mode_of = std::move(deps.agent_mode_of)](
+			const cmd::call& call) {
 		editor_mode_controller* controller = modes();
 		play_session* play = session();
 		if (!controller || !play) return cmd::result::failure(cmd::codes::failed, "the editor mode is not available");
@@ -62,6 +64,17 @@ std::vector<edt::registration> edt::register_editor_mode_commands(action_registr
 			target = *parsed;
 		}
 		const bool agent = call.from.kind == cmd::origin_kind::agent;
+		// The toggle must not open what the policy keeps closed on the play.* command making the same change.
+		if (const std::string_view play_command = controller->play_command_for(target); agent && !play_command.empty() && agent_mode_of) {
+			const cmd::policy_mode mode = agent_mode_of(play_command);
+			if (mode == cmd::policy_mode::deny) {
+				return cmd::result::failure(cmd::codes::denied, std::format("the agent policy denies {}, which this switch would run", play_command));
+			}
+			if (mode == cmd::policy_mode::ask) {
+				return cmd::result::failure(cmd::codes::denied,
+					std::format("{} needs a person's approval; call it directly", play_command));
+			}
+		}
 		if (agent && target == editor_mode::game && would_start() && editing && editing()) {
 			return cmd::result::failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
 		}

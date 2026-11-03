@@ -197,7 +197,8 @@ bool cfg::initialize_configs(int argc, char* argv[])
 	po::variables_map vm;
 	// No abbreviations: main picks the log stream from the exact spellings of --headless/--mcp-stdio before this.
 	const int style = po::command_line_style::default_style & ~po::command_line_style::allow_guessing;
-	po::store(po::command_line_parser(argc, argv).options(desc).style(style).run(), vm);
+	const po::parsed_options parsed = po::command_line_parser(argc, argv).options(desc).style(style).run();
+	po::store(parsed, vm);
 	po::notify(vm);
 
 	if (vm.count("help")) {
@@ -239,6 +240,9 @@ bool cfg::initialize_configs(int argc, char* argv[])
 		// Its own key: the editor checks it is a res:// tag, which editor/startup_level is not held to.
 		if (const auto& level = vm["game"].as<std::string>(); !level.empty()) {
 			set_registered("editor/game_level", level);
+		} else if (const auto stray = po::collect_unrecognized(parsed.options, po::include_positional); !stray.empty()) {
+			// The parser has no positional arguments: `--game <level>` would drop the level without a word.
+			egLOG_ERROR("config", "'{}' after --game is not taken: write the level as --game=res://<level>", stray.front());
 		}
 	}
 	if (vm.count("headless")) {

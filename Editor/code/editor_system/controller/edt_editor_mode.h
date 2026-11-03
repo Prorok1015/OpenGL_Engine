@@ -23,12 +23,14 @@ namespace edt
 	// mode edits. Going to the editor pauses a running Play and remembers that it did; going back to the game resumes
 	// only that pause (a pause someone else made stays), and starts Play when it is stopped. The note is dropped by any
 	// change of Play the controller did not make other than a Step (a Stop, a resume): a later switch never resumes a
-	// session that ended or a pause that is no longer its own. Raises editor_events::editor_mode_changed. No ImGui, no
-	// GL. Main thread.
+	// session that ended or a pause that is no longer its own. With a UI, any Stop in game mode (a person's, an agent's,
+	// a level load, a module reload) brings the editor layout back. Raises editor_events::editor_mode_changed. No ImGui,
+	// no GL. Main thread.
 	class editor_mode_controller
 	{
 	public:
-		editor_mode_controller(play_session& play, editor_events& events);
+		// `has_ui` false (headless): there is no layout to go back to, a Stop leaves the mode as it is.
+		editor_mode_controller(play_session& play, editor_events& events, bool has_ui = true);
 		editor_mode_controller(const editor_mode_controller&) = delete;
 		editor_mode_controller& operator=(const editor_mode_controller&) = delete;
 
@@ -38,12 +40,18 @@ namespace edt
 		std::optional<std::string> set_mode(editor_mode mode, play_reason reason = play_reason::user);
 		std::optional<std::string> toggle(play_reason reason = play_reason::user);
 
+		// The play.* command whose change set_mode(`mode`) would make now (play.start, play.resume or play.pause); empty
+		// when it would not change Play. editor.mode.toggle asks the agent policy about it, so the toggle opens nothing
+		// the play.* commands themselves keep closed.
+		std::string_view play_command_for(editor_mode mode) const;
+
 		// Play is paused by this controller's switch to the editor, and nothing else changed Play since.
 		bool holds_pause() const { return m_paused_play; }
 
 	private:
 		play_session& m_play;
 		editor_events& m_events;
+		bool m_has_ui = true;
 		editor_mode m_mode = editor_mode::editor;
 		bool m_paused_play = false;
 		// Play's changes the controller makes itself are not someone else's.

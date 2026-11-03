@@ -1216,6 +1216,30 @@ BOOST_AUTO_TEST_CASE(an_external_resume_and_pause_is_not_the_controllers_pause)
 	BOOST_TEST((play.state() == edt::play_state::paused));
 }
 
+BOOST_AUTO_TEST_CASE(a_stop_in_game_mode_brings_the_editor_back_but_not_without_a_ui)
+{
+	open_level();
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	play.stop(edt::play_reason::agent);
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((modes_seen == std::vector<edt::editor_mode>{ edt::editor_mode::game, edt::editor_mode::editor }));
+	BOOST_TEST(!modes.holds_pause());
+
+	// A module reload stops Play too; it starts again in the editor layout.
+	BOOST_REQUIRE(!modes.set_mode(edt::editor_mode::game).has_value());
+	play.before_module_swap();
+	play.after_module_swap();
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+	play.stop();
+
+	// Headless: no layout to go back to.
+	edt::editor_mode_controller headless{ play, events, false };
+	BOOST_REQUIRE(!headless.set_mode(edt::editor_mode::game).has_value());
+	play.stop();
+	BOOST_TEST((headless.mode() == edt::editor_mode::game));
+}
+
 BOOST_AUTO_TEST_CASE(a_step_in_editor_mode_keeps_the_note)
 {
 	open_level();
@@ -1234,8 +1258,21 @@ namespace {
 struct editor_mode_commands_fixture : play_commands_fixture
 {
 	edt::editor_mode_controller modes{ play, events };
+	// What editor_system wires: the agent policy's mode of the play.* command the switch would run.
 	std::vector<edt::registration> mode_commands = edt::register_editor_mode_commands(actions,
-		{ .modes = [this] { return &modes; }, .play = [this] { return &play; }, .person_is_editing = [this] { return editing; } });
+		{ .modes = [this] { return &modes; }, .play = [this] { return &play; }, .person_is_editing = [this] { return editing; },
+			.agent_mode_of = [this](std::string_view id) {
+				const cmd::command_desc* command = commands.find(id);
+				return command ? access.policy().effective(*command).mode : cmd::policy_mode::deny;
+			} });
+
+	// The person's own settings may close a command for agents like the project's file.
+	void personal_policy(std::string_view json_text) { dir.write("personal.json", json_text); }
+
+	cmd::result agent_toggle(const char* args = "{}")
+	{
+		return commands.invoke("editor.mode.toggle", json::parse(args), cmd::origin::agent("agent-1"));
+	}
 };
 
 }
@@ -1312,6 +1349,36 @@ BOOST_AUTO_TEST_CASE(a_refused_start_is_failed_with_its_reason_and_a_persons_ges
 	BOOST_TEST(actions.activate("editor.mode.toggle"));
 	BOOST_TEST((modes.mode() == edt::editor_mode::game));
 	BOOST_TEST((seen.back() == state_change{ edt::play_state::playing, edt::play_reason::user }));
+}
+
+BOOST_AUTO_TEST_CASE(an_agents_switch_is_denied_where_the_policy_denies_the_play_command_it_would_run)
+{
+	open_level();
+	personal_policy(R"json({"commands":{"play.start":"deny"}})json");
+	const cmd::result start = agent_toggle(R"json({"mode":"game"})json");
+	BOOST_TEST(start.code == cmd::codes::denied);
+	BOOST_TEST(start.error.find("play.start") != std::string::npos);
+	BOOST_TEST(!play.active());
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	// A person's F11 is not an agent's call.
+	BOOST_TEST(actions.activate("editor.mode.toggle"));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+
+	personal_policy(R"json({ "commands": { "play.pause": "deny" } })json"); // another size: seen as changed whatever the clock
+	BOOST_TEST(agent_toggle().code == cmd::codes::denied);
+	BOOST_TEST((modes.mode() == edt::editor_mode::game));
+	BOOST_TEST((play.state() == edt::play_state::playing));
+
+	personal_policy(R"json({"commands":{"play.resume":"ask"}})json");
+	BOOST_REQUIRE(agent_toggle().ok); // to the editor: pauses
+	BOOST_REQUIRE(modes.holds_pause());
+	const cmd::result resume = agent_toggle();
+	BOOST_TEST(resume.code == cmd::codes::denied);
+	BOOST_TEST(resume.error.find("play.resume needs a person's approval") != std::string::npos);
+	BOOST_TEST((modes.mode() == edt::editor_mode::editor));
+	BOOST_TEST((play.state() == edt::play_state::paused));
+	// No play.* change: the policy of play.* is not asked.
+	BOOST_TEST(agent_toggle(R"json({"mode":"editor"})json").ok);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

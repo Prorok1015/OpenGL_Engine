@@ -144,7 +144,7 @@ namespace edt {
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
 		// editor/start_mode=game (#294): the start level loaded (or did not), now switch to the game, which starts Play.
-		void enter_startup_game_mode();
+		void enter_startup_game_mode(bool level_loaded);
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
@@ -180,7 +180,8 @@ namespace edt {
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
-		bool poll_level_load();
+		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
+		bool poll_level_load(bool* loaded = nullptr);
 
 		// Async asset drop / export auto-add (US-24-5)
 		res::res_handle<desc::desc_base> m_pending_desc_handle;
@@ -211,8 +212,6 @@ namespace edt {
 		std::unique_ptr<edt::editor_mode_controller> m_modes;
 		// Gives the Scene view's camera its size back when the editor layout returns.
 		connection m_mode_changed;
-		// The last level load ended with the level loaded (not failed or cancelled).
-		bool m_level_load_succeeded = false;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;

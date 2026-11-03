@@ -27,14 +27,31 @@ std::string edt::game_level_problem(std::string_view value)
 	return {};
 }
 
-edt::editor_mode_controller::editor_mode_controller(play_session& play, editor_events& events)
+edt::editor_mode_controller::editor_mode_controller(play_session& play, editor_events& events, bool has_ui)
 	: m_play(play)
 	, m_events(events)
+	, m_has_ui(has_ui)
 {
 	m_play_changed = events.play_state_changed.subscribe([this](play_state state, play_reason) {
+		if (m_changing_play) return;
 		// A Step keeps Play paused and announces nothing new; a Stop or a resume ends the pause this controller made.
-		if (!m_changing_play && state != play_state::paused) m_paused_play = false;
+		if (state != play_state::paused) m_paused_play = false;
+		// Owner decision: nothing to play in the game layout once Play stops.
+		if (state == play_state::stopped && m_has_ui && m_mode == editor_mode::game) {
+			m_mode = editor_mode::editor;
+			egLOG_INFO("editor", "editor mode: Play stopped");
+			m_events.editor_mode_changed.emit(m_mode);
+		}
 	});
+}
+
+std::string_view edt::editor_mode_controller::play_command_for(editor_mode mode) const
+{
+	if (mode == m_mode) return {};
+	if (mode == editor_mode::editor) return m_play.state() == play_state::playing ? "play.pause" : "";
+	if (m_play.state() == play_state::stopped) return "play.start";
+	if (m_play.state() == play_state::paused && m_paused_play) return "play.resume";
+	return {};
 }
 
 std::optional<std::string> edt::editor_mode_controller::set_mode(editor_mode mode, play_reason reason)
@@ -55,8 +72,12 @@ std::optional<std::string> edt::editor_mode_controller::set_mode(editor_mode mod
 			return std::string{ "Play did not start: see the log" };
 		}
 	} else if (m_play.state() == play_state::paused && m_paused_play) {
-		m_play.resume(reason);
-		m_paused_play = false;
+		if (m_play.resume(reason)) {
+			m_paused_play = false;
+		} else {
+			// Still paused and still this controller's pause: the next switch to the game tries again.
+			egLOG_WARN("editor", "game mode entered, but Play did not resume");
+		}
 	}
 	m_changing_play = false;
 
