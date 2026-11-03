@@ -120,6 +120,9 @@ namespace cmd
 		bool mutates = false;
 		bool long_running = false;
 		agent_category category = agent_category::unset;
+		// The category of one call when it depends on the arguments (code.write to a CMake file is cmake_presets, not
+		// code_edit). Pure; called only with arguments that match args_schema (category_of_call). Null: `category`.
+		std::function<agent_category(const call&)> category_of;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
 		// The person's consent is a switch of theirs that `enabled` reads (live mode, #445): an MCP agent may see and

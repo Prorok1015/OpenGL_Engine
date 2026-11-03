@@ -44,6 +44,8 @@ namespace edt
 	}
 
 	cmd::policy_mode default_mode(const cmd::command_desc& command);
+	// The same for one call judged by `category` (cmd::category_of_call), with the command's risk floor.
+	cmd::policy_mode default_mode(const cmd::command_desc& command, cmd::agent_category category);
 
 	// The categories that can be set (not `unset` and `not_for_agents`).
 	std::optional<cmd::agent_category> parse_settable_category(std::string_view name);
@@ -58,6 +60,9 @@ namespace edt
 		// The command's own entry, else its category's held to the command's risk floor (confirm -> at least ask,
 		// deny_by_default -> at least deny); nullopt: this layer says nothing.
 		std::optional<cmd::policy_mode> resolve(const cmd::command_desc& command) const;
+		// The same for a call judged by `category` (cmd::category_of_call) instead of the command's own: the command's
+		// own entry counts only when `category` is the command's category.
+		std::optional<cmd::policy_mode> resolve(const cmd::command_desc& command, cmd::agent_category category) const;
 		bool empty() const { return categories.empty() && commands.empty(); }
 	};
 
@@ -92,6 +97,11 @@ namespace edt
 	// layer is read.
 	effective_policy effective_mode(const cmd::command_desc& command, const policy_layer& project, const policy_layer& personal,
 		const std::string& project_error = {}, const std::string& personal_error = {}, bool live_mode_on = false);
+	// One call judged by `category` (cmd::category_of_call). A command that is unset or not_for_agents stays denied,
+	// whatever category its call has.
+	effective_policy effective_mode_of_call(const cmd::command_desc& command, cmd::agent_category category, const policy_layer& project,
+		const policy_layer& personal, const std::string& project_error = {}, const std::string& personal_error = {},
+		bool live_mode_on = false);
 
 	// The two files, read again when they change on disk (a person edits them; an agent cannot).
 	class agent_policy
@@ -103,6 +113,8 @@ namespace edt
 		void refresh();
 		// Main thread only (as the registry that calls the gate).
 		effective_policy effective(const cmd::command_desc& command);
+		// One call judged by `category` (cmd::category_of_call).
+		effective_policy effective(const cmd::command_desc& command, cmd::agent_category category);
 
 		// Whether the live mode is on: `live` commands are denied while it is not (and while nothing says it is).
 		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
