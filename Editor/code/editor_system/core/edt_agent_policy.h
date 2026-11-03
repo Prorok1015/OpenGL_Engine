@@ -2,6 +2,7 @@
 #include <snk/command/cmd_policy.h>
 #include <snk/command/cmd_types.h>
 #include <snk/project/prj_json_text.h>
+#include "edt_vcs_policy.h"
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -10,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace edt
 {
@@ -37,6 +39,12 @@ namespace edt
 		case cmake_presets: return policy_mode::ask;
 		case build: return policy_mode::deny;
 		case live: return policy_mode::allow;
+		// What a git write may touch is held by the hard rules of the "vcs" section (vcs_policy), whatever the mode.
+		case vcs_read: return policy_mode::allow;
+		case vcs_commit: return policy_mode::allow;
+		case vcs_branch: return policy_mode::allow;
+		case vcs_sync: return policy_mode::allow;
+		case vcs_push: return policy_mode::allow;
 		case unset:
 		case not_for_agents: break;
 		}
@@ -49,16 +57,32 @@ namespace edt
 	std::optional<cmd::agent_category> parse_settable_category(std::string_view name);
 	std::optional<cmd::policy_mode> parse_policy_mode(std::string_view name);
 
+	// The "vcs" section of one layer (#455); a key the file does not set stays nullopt. How the two layers combine is
+	// effective_vcs.
+	struct vcs_policy_layer
+	{
+		std::optional<std::vector<std::string>> push_branches;
+		std::optional<std::vector<std::string>> remotes;
+		std::optional<std::vector<std::string>> protected_branches;
+		std::optional<bool> allow_hooks;
+		std::optional<bool> allow_filters;
+		std::optional<bool> allow_repo_credential_helper;
+		std::optional<bool> allow_any_repo_config;
+
+		bool operator==(const vcs_policy_layer&) const = default;
+	};
+
 	// One layer: a mode per category and per command. A command's own entry beats its category's.
 	struct policy_layer
 	{
 		std::map<cmd::agent_category, cmd::policy_mode> categories;
 		std::map<std::string, cmd::policy_mode> commands;
+		std::optional<vcs_policy_layer> vcs;
 
 		// The command's own entry, else its category's held to the command's risk floor (confirm -> at least ask,
 		// deny_by_default -> at least deny); nullopt: this layer says nothing.
 		std::optional<cmd::policy_mode> resolve(const cmd::command_desc& command) const;
-		bool empty() const { return categories.empty() && commands.empty(); }
+		bool empty() const { return categories.empty() && commands.empty() && !vcs; }
 	};
 
 	struct policy_parse_result
@@ -68,10 +92,15 @@ namespace edt
 		std::string error;
 	};
 
-	// {"version": 1, "categories": {"code_files": "allow"}, "commands": {"build.game_module": "ask"}}; the lists
-	// "allow", "ask" and "deny" of command ids (AI_INTEGRATION.md, section 5) are read too. A bad value, an unknown category
+	// The personal layer may only tighten: a "vcs" flag set to true there is an error of that layer.
+	enum class policy_layer_kind : std::uint8_t { project, personal };
+
+	// {"version": 1, "categories": {"code_files": "allow"}, "commands": {"build.game_module": "ask"}, "vcs": {...}}; the
+	// lists "allow", "ask" and "deny" of command ids (AI_INTEGRATION.md, section 5) are read too. "vcs" holds
+	// "push_branches", "remotes", "protected_branches" (lists of strings) and "allow_hooks", "allow_filters",
+	// "allow_repo_credential_helper", "allow_any_repo_config" (booleans), each optional. A bad value, an unknown category
 	// or an unknown key is an error, never skipped: a typo must not widen the policy.
-	policy_parse_result parse_policy_layer(std::string_view text);
+	policy_parse_result parse_policy_layer(std::string_view text, policy_layer_kind kind = policy_layer_kind::project);
 	std::string serialize_policy_layer(const policy_layer& layer);
 
 	// Where a decision comes from.
@@ -93,6 +122,13 @@ namespace edt
 	effective_policy effective_mode(const cmd::command_desc& command, const policy_layer& project, const policy_layer& personal,
 		const std::string& project_error = {}, const std::string& personal_error = {}, bool live_mode_on = false);
 
+	// The git rules of the two layers: push_branches and remotes are the project's lists (else the defaults of vcs_policy),
+	// narrowed by the personal layer's to the entries both name; protected_branches are main, master and both layers'
+	// entries; a flag is on only when the project turns it on and the personal layer does not turn it off. A layer that
+	// cannot be used: no push and no remote at all, every flag off.
+	vcs_policy effective_vcs(const policy_layer& project, const policy_layer& personal, const std::string& project_error = {},
+		const std::string& personal_error = {});
+
 	// The two files, read again when they change on disk (a person edits them; an agent cannot).
 	class agent_policy
 	{
@@ -103,6 +139,8 @@ namespace edt
 		void refresh();
 		// Main thread only (as the registry that calls the gate).
 		effective_policy effective(const cmd::command_desc& command);
+		// The rules of the "vcs" sections, read again like effective(). Main thread only.
+		vcs_policy effective_vcs();
 
 		// Whether the live mode is on: `live` commands are denied while it is not (and while nothing says it is).
 		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
@@ -124,6 +162,7 @@ namespace edt
 		struct source
 		{
 			std::filesystem::path file;
+			policy_layer_kind kind = policy_layer_kind::project;
 			policy_layer layer;
 			std::string error;
 			bool loaded = false;

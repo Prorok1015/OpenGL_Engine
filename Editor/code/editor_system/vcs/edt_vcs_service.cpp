@@ -82,6 +82,10 @@ namespace {
 		bool allow_repo_credential_helper = false;
 		// git 2.40+: check-attr --source=<tree> reads the attributes of a checkout's target.
 		bool attr_source = false;
+		// Guarded network call: `remote` (empty: the one git picks) must be one of `allowed_remotes` (remote_refusal).
+		bool check_remote = false;
+		std::string remote;
+		std::vector<std::string> allowed_remotes;
 	};
 
 	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
@@ -916,6 +920,18 @@ namespace {
 		return error_json("git_failed", "git could not check the repository's config", out.err, out.process.exit_code);
 	}
 
+	// A guarded network call to a remote the agent policy does not list (vcs.remotes): the job's answer, before git
+	// writes anything. Nullopt: allowed.
+	std::optional<json::value> remote_refusal(const git_context& git, const ds::task_context& task)
+	{
+		if (!git.check_remote) return std::nullopt;
+		const std::string remote = git.remote.empty() ? default_remote(git, task.stop) : git.remote;
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (std::find(git.allowed_remotes.begin(), git.allowed_remotes.end(), remote) != git.allowed_remotes.end()) return std::nullopt;
+		return error_json("denied", std::format("the agent policy does not allow the remote '{}' (vcs.remotes)",
+			edt::vcs::valid_utf8(remote)), {}, -1);
+	}
+
 	// What a write that went well says: git's last lines.
 	json::value output_json(const git_output& out)
 	{
@@ -939,6 +955,61 @@ namespace {
 	{
 		if (value.find_first_of("*?[") != std::string_view::npos) return std::format("{} must not hold '*', '?' or '['", what);
 		return std::nullopt;
+	}
+
+	// A guarded branch name as `git check-ref-format --branch` would take it, and stricter: every rule git has for a
+	// ref name, each component included, so a name never means another ref than it reads as.
+	std::optional<std::string> branch_name_error(std::string_view what, std::string_view name)
+	{
+		if (auto error = argument_error(what, name)) return error;
+		if (auto error = pattern_error(what, name)) return error;
+		const auto bad = [what, name](std::string_view why) {
+			return std::format("{} '{}' is not a valid branch name: {}", what, edt::vcs::valid_utf8(name), why);
+		};
+		if (name == "@") return bad("'@' alone");
+		for (const char c : name) {
+			const auto byte = static_cast<unsigned char>(c);
+			if (byte < 0x20 || byte == 0x7f || c == ' ') return bad("a space or a control character");
+			if (c == '~' || c == '^' || c == ':' || c == '\\') return bad("one of ~ ^ : \\");
+		}
+		if (name.find("..") != std::string_view::npos) return bad("'..'");
+		if (name.find("@{") != std::string_view::npos) return bad("'@{'");
+		if (name.find("//") != std::string_view::npos) return bad("'//'");
+		if (name.front() == '/' || name.back() == '/') return bad("a leading or trailing '/'");
+		if (name.back() == '.') return bad("a trailing '.'");
+		std::size_t start = 0;
+		while (start <= name.size()) {
+			const std::size_t end = std::min(name.find('/', start), name.size());
+			const std::string_view component = name.substr(start, end - start);
+			if (component.starts_with('.')) return bad("a component that starts with '.'");
+			if (component.ends_with(".lock")) return bad("a component that ends with '.lock'");
+			start = end + 1;
+		}
+		return std::nullopt;
+	}
+
+	// An agent session id as the MCP server makes it (32 hex digits); anything else gets no trailer.
+	bool is_trailer_session(std::string_view session)
+	{
+		if (session.empty() || session.size() > 64) return false;
+		return std::all_of(session.begin(), session.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-'; });
+	}
+
+	// The commit message of a guarded commit: an `Agent-Session:` trailer for a valid session, unless one is there.
+	std::string with_session_trailer(std::string message, const cmd::origin& caller)
+	{
+		if (caller.kind == cmd::origin_kind::ui || !is_trailer_session(caller.session)) return message;
+		std::size_t start = 0;
+		while (start < message.size()) {
+			const std::size_t end = std::min(message.find('\n', start), message.size());
+			if (std::string_view(message).substr(start, end - start).starts_with("Agent-Session:")) return message;
+			start = end + 1;
+		}
+		while (!message.empty() && (message.back() == '\n' || message.back() == '\r' || message.back() == ' ' || message.back() == '\t')) {
+			message.pop_back();
+		}
+		message += "\n\nAgent-Session: " + caller.session + "\n";
+		return message;
 	}
 
 	// A remote is the name of a configured one: no URL (no ':'), so the transport is never one the call picks.
@@ -1031,7 +1102,7 @@ namespace {
 }
 
 template<class F>
-edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, std::optional<write_mode> write)
+edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, std::optional<write_mode> write, const hard_rule& rule)
 {
 	// Only "no git" and "no project" refuse at once; whatever git itself reports (not a repository, ...) is the job's
 	// result, so every command answers the same way.
@@ -1045,7 +1116,20 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		return { 0, "vcs_unavailable", std::format("git 2.26 or newer is required for agent network operations (found {})",
 			m_state.git_version) };
 	}
+	vcs_policy policy;
+	std::optional<std::string> denied;
 	if (guarded) {
+		// Read once per job: an edit of the policy file applies to the next write.
+		policy = current_policy();
+		if (rule) denied = rule(policy);
+	}
+	if (denied) {
+		const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
+			[reason = std::move(*denied)](ds::task_context&) -> json::value { return error_json("denied", reason, {}, -1); });
+		return { id, {}, {} };
+	}
+	if (guarded) {
+		const vcs_write_permissions& permissions = policy.permissions;
 		std::erase_if(context.environment, [](const std::string& entry) { return is_askpass_variable(entry); });
 		// The environment's GIT_SSH_COMMAND (always set) wins over core.sshCommand anyway; this states it.
 		const std::string ssh = variable_of(context.environment, "GIT_SSH_COMMAND").value_or("ssh -oBatchMode=yes");
@@ -1069,22 +1153,28 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		// by git 2.45+ and by maintenance releases back to 2.39.4 (distro 2.43 too); config_refusal covers the rest.
 		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
 		context.attr_source = version_at_least(m_state.git_version, 2, 40);
-		if (!m_write_permissions.allow_hooks) {
+		if (!permissions.allow_hooks) {
 			if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
 			context.config_args.emplace_back("-c");
 			context.config_args.push_back("core.hooksPath=" + utf8_of(m_scratch.root / k_no_hooks_dir));
 		}
 		context.guarded = true;
-		context.check_repo_config = !m_write_permissions.allow_any_repo_config;
-		context.refuse_partial_clone = m_write_permissions.allow_any_repo_config
+		context.check_repo_config = !permissions.allow_any_repo_config;
+		context.refuse_partial_clone = permissions.allow_any_repo_config
 			&& !version_at_least(m_state.git_version, 2, 45);
-		context.allow_hooks = m_write_permissions.allow_hooks;
-		context.refuse_filters = write->runs_filters && !m_write_permissions.allow_filters;
+		context.allow_hooks = permissions.allow_hooks;
+		context.refuse_filters = write->runs_filters && !permissions.allow_filters;
 		context.guard_network = write->network;
-		context.allow_repo_credential_helper = m_write_permissions.allow_repo_credential_helper;
+		context.allow_repo_credential_helper = permissions.allow_repo_credential_helper;
+		if (write->network) {
+			context.check_remote = true;
+			context.remote = write->remote;
+			context.allowed_remotes = policy.remotes;
+		}
 	}
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
+			if (auto refusal = remote_refusal(context, task)) return std::move(*refusal);
 			// The repository's own config is read before anything else of a guarded call.
 			if (auto refusal = config_refusal(context, task.stop)) return refusal_json(*refusal, task);
 			return work(context, task);
@@ -1336,7 +1426,46 @@ void edt::vcs_service::set_write_permissions(vcs_write_permissions permissions)
 	m_write_permissions = permissions;
 }
 
-edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::string>& paths, cmd::origin_kind caller)
+edt::vcs_policy edt::vcs_service::current_policy() const
+{
+	if (m_policy_source) return m_policy_source();
+	vcs_policy defaults;
+	defaults.permissions = m_write_permissions;
+	return defaults;
+}
+
+bool edt::vcs_glob_match(std::string_view pattern, std::string_view text, bool ignore_case)
+{
+	const auto fold = [ignore_case](char c) {
+		return ignore_case && c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+	};
+	// Iterative, with one backtrack point per '*': linear enough for branch names, no recursion depth.
+	std::size_t p = 0;
+	std::size_t t = 0;
+	std::size_t star = std::string_view::npos;
+	std::size_t resume = 0;
+	while (t < text.size()) {
+		if (p < pattern.size() && pattern[p] == '*') {
+			star = p++;
+			resume = t;
+		}
+		else if (p < pattern.size() && (pattern[p] == '?' || fold(pattern[p]) == fold(text[t]))) {
+			++p;
+			++t;
+		}
+		else if (star != std::string_view::npos) {
+			p = star + 1;
+			t = ++resume;
+		}
+		else {
+			return false;
+		}
+	}
+	while (p < pattern.size() && pattern[p] == '*') ++p;
+	return p == pattern.size();
+}
+
+edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::string>& paths, const cmd::origin& caller)
 {
 	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	std::vector<std::string> args{ "add", "--" };
@@ -1348,10 +1477,10 @@ edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::s
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller, true, false });
+	}, write_mode{ caller.kind, true, false, {} });
 }
 
-edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std::string>& paths, cmd::origin_kind caller)
+edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std::string>& paths, const cmd::origin& caller)
 {
 	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	// reset (not restore --staged): it also unstages on a branch without commits.
@@ -1364,17 +1493,18 @@ edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std:
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller, true, false });
+	}, write_mode{ caller.kind, true, false, {} });
 }
 
-edt::vcs_service::started edt::vcs_service::start_commit(const std::string& message, cmd::origin_kind caller)
+edt::vcs_service::started edt::vcs_service::start_commit(const std::string& message, const cmd::origin& caller)
 {
 	if (trim(message).empty()) return { 0, cmd::codes::invalid_args, "message must not be empty" };
 	if (message.find('\0') != std::string::npos) return { 0, cmd::codes::invalid_args, "message must not hold a NUL" };
 	// The runner has no stdin: the message goes through a file only this editor writes to.
 	if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
 	const fs::path file = m_scratch.root / std::format("commit_message_{}.txt", ++m_message_count);
-	return run_job("git commit", [file, message](const git_context& git, ds::task_context& task) -> json::value {
+	return run_job("git commit", [file, message = with_session_trailer(message, caller)](const git_context& git,
+		ds::task_context& task) -> json::value {
 		const remove_on_exit cleanup{ file };
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::index, {}, {} }, task.stop)) {
 			return refusal_json(*refusal, task);
@@ -1392,18 +1522,18 @@ edt::vcs_service::started edt::vcs_service::start_commit(const std::string& mess
 		const git_output head = run_git(git, { "rev-parse", "--verify", "HEAD" }, task.stop);
 		if (auto failure = failure_of(head, task)) return std::move(*failure);
 		return json::object{ { "hash", json::string(vcs::valid_utf8(trim(head.out))) } };
-	}, write_mode{ caller, true, false });
+	}, write_mode{ caller.kind, true, false, {} });
 }
 
 edt::vcs_service::started edt::vcs_service::start_branch_create(const std::string& name, const std::string& from,
-	cmd::origin_kind caller)
+	const cmd::origin& caller)
 {
 	if (auto error = argument_error("name", name)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (!from.empty()) {
 		if (auto error = argument_error("from", from)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
-	if (caller != cmd::origin_kind::ui) {
-		if (auto error = pattern_error("name", name)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (caller.kind != cmd::origin_kind::ui) {
+		if (auto error = branch_name_error("name", name)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 		if (auto error = pattern_error("from", from)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
 	std::vector<std::string> args{ "branch", "--end-of-options", name };
@@ -1412,13 +1542,13 @@ edt::vcs_service::started edt::vcs_service::start_branch_create(const std::strin
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller, false, false });
+	}, write_mode{ caller.kind, false, false, {} });
 }
 
-edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& ref, cmd::origin_kind caller)
+edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& ref, const cmd::origin& caller)
 {
 	if (auto error = argument_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
-	if (caller != cmd::origin_kind::ui) {
+	if (caller.kind != cmd::origin_kind::ui) {
 		if (auto error = pattern_error("ref", ref)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
 	return run_job("git checkout", [ref](const git_context& git, ds::task_context& task) -> json::value {
@@ -1447,10 +1577,10 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = tree_write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller, true, false });
+	}, write_mode{ caller.kind, true, false, {} });
 }
 
-edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remote, cmd::origin_kind caller)
+edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remote, const cmd::origin& caller)
 {
 	if (!remote.empty()) {
 		if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
@@ -1463,11 +1593,11 @@ edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remot
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller, false, true });
+	}, write_mode{ caller.kind, false, true, remote });
 }
 
 edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote, const std::string& branch,
-	cmd::origin_kind caller)
+	const cmd::origin& caller)
 {
 	if (!branch.empty() && remote.empty()) return { 0, cmd::codes::invalid_args, "branch needs a remote" };
 	if (!remote.empty()) {
@@ -1520,30 +1650,50 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 		both.out = fetched.out + merged.out;
 		both.err = fetched.err + merged.err;
 		return output_json(both);
-	}, write_mode{ caller, true, true });
+	}, write_mode{ caller.kind, true, true, remote });
 }
 
 edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote, const std::string& branch,
-	bool set_upstream, cmd::origin_kind caller)
+	bool set_upstream, const cmd::origin& caller)
 {
 	if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	if (auto error = branch_error(branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
-	if (caller != cmd::origin_kind::ui) {
-		if (auto error = pattern_error("branch", branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	const bool guarded = caller.kind != cmd::origin_kind::ui;
+	if (guarded) {
+		if (auto error = branch_name_error("branch", branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
 	// Never --force, --force-with-lease, --mirror or a +refspec: a push that is not a fast-forward is rejected.
 	std::vector<std::string> args{ "push", "--recurse-submodules=no" };
+	// No tags, and the destination spelled out: push.default, remote.*.push and branch.*.merge cannot send a guarded
+	// push anywhere but the branch the hard rule checked.
+	if (guarded) args.emplace_back("--no-follow-tags");
 	if (set_upstream) args.emplace_back("--set-upstream");
 	args.emplace_back("--end-of-options");
 	args.push_back(remote);
-	args.push_back(branch);
+	args.push_back(guarded ? std::format("refs/heads/{0}:refs/heads/{0}", branch) : branch);
+	const hard_rule rule = [branch](const vcs_policy& policy) -> std::optional<std::string> {
+		const auto matches = [&branch](const std::vector<std::string>& patterns, bool ignore_case) {
+			return std::any_of(patterns.begin(), patterns.end(),
+				[&branch, ignore_case](const std::string& pattern) { return vcs_glob_match(pattern, branch, ignore_case); });
+		};
+		if (matches(policy.protected_branches, true)) {
+			return std::format("'{}' is a protected branch: agents never push to it (vcs.protected_branches)", vcs::valid_utf8(branch));
+		}
+		if (!matches(policy.push_branches, false)) {
+			std::string allowed;
+			for (const auto& pattern : policy.push_branches) allowed += (allowed.empty() ? "" : ", ") + vcs::valid_utf8(pattern);
+			return std::format("the agent policy does not allow a push to '{}' (vcs.push_branches: {})", vcs::valid_utf8(branch),
+				allowed.empty() ? "none" : allowed);
+		}
+		return std::nullopt;
+	};
 	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
 		if (auto refusal = network_refusal(git, remote, task.stop)) return refusal_json(*refusal, task);
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller, false, true });
+	}, write_mode{ caller.kind, false, true, remote }, rule);
 }
 
 namespace {
@@ -1591,8 +1741,8 @@ namespace {
 		"additionalProperties": false
 	})";
 
-	// A git write: mutates, and no agent category yet.
-	cmd::command_desc write_command(std::string id, std::string summary, const char* args_schema)
+	// A git write: mutates.
+	cmd::command_desc write_command(std::string id, cmd::agent_category category, std::string summary, const char* args_schema)
 	{
 		cmd::command_desc desc;
 		desc.id = std::move(id);
@@ -1600,8 +1750,7 @@ namespace {
 		desc.args_schema = json::parse(args_schema);
 		desc.result_schema = json::parse(JOB_RESULT_SCHEMA);
 		desc.mutates = true;
-		// TODO(#455): vcs_* categories
-		desc.category = cmd::agent_category::unset;
+		desc.category = category;
 		return desc;
 	}
 }
@@ -1612,7 +1761,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc info;
 	info.id = "vcs.info";
-	info.category = cmd::agent_category::read;
+	info.category = cmd::agent_category::vcs_read;
 	info.summary = "Whether git is available for the open project: its repository root and the git version";
 	info.result_schema = json::parse(R"({
 		"type": "object",
@@ -1639,7 +1788,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc status;
 	status.id = "vcs.status";
-	status.category = cmd::agent_category::read;
+	status.category = cmd::agent_category::vcs_read;
 	status.summary = "Start reading git status (branch, upstream, ahead/behind, changed files); the result arrives in job.get";
 	status.result_schema = json::parse(JOB_RESULT_SCHEMA);
 	status.invoke = [&service](const cmd::call&) { return job_answer(service.start_status()); };
@@ -1647,7 +1796,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc diff;
 	diff.id = "vcs.diff";
-	diff.category = cmd::agent_category::read;
+	diff.category = cmd::agent_category::vcs_read;
 	diff.summary = "Start reading the working tree diff (or the staged one), of one path or all; text capped at 256 KiB; "
 		"the result arrives in job.get";
 	diff.args_schema = json::parse(R"({
@@ -1669,7 +1818,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc log;
 	log.id = "vcs.log";
-	log.category = cmd::agent_category::read;
+	log.category = cmd::agent_category::vcs_read;
 	log.summary = "Start reading the commit log of a ref (default HEAD), optionally of one path, one page at a time; "
 		"the result arrives in job.get";
 	log.args_schema = json::parse(R"({
@@ -1695,27 +1844,27 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 
 	cmd::command_desc branches;
 	branches.id = "vcs.branches";
-	branches.category = cmd::agent_category::read;
+	branches.category = cmd::agent_category::vcs_read;
 	branches.summary = "Start listing the local and remote-tracking branches; the result arrives in job.get";
 	branches.result_schema = json::parse(JOB_RESULT_SCHEMA);
 	branches.invoke = [&service](const cmd::call&) { return job_answer(service.start_branches()); };
 	keep(out, commands.add(std::move(branches)));
 
-	cmd::command_desc stage = write_command("vcs.stage", "Start staging paths (git add); the result arrives in job.get",
+	cmd::command_desc stage = write_command("vcs.stage", cmd::agent_category::vcs_commit, "Start staging paths (git add); the result arrives in job.get",
 		PATHS_ARGS_SCHEMA);
 	stage.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_stage(paths_arg(request.args.as_object()), request.from.kind));
+		return job_answer(service.start_stage(paths_arg(request.args.as_object()), request.from));
 	};
 	keep(out, commands.add(std::move(stage)));
 
-	cmd::command_desc unstage = write_command("vcs.unstage", "Start unstaging paths (git reset -- paths); the work tree "
+	cmd::command_desc unstage = write_command("vcs.unstage", cmd::agent_category::vcs_commit, "Start unstaging paths (git reset -- paths); the work tree "
 		"keeps its changes; the result arrives in job.get", PATHS_ARGS_SCHEMA);
 	unstage.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_unstage(paths_arg(request.args.as_object()), request.from.kind));
+		return job_answer(service.start_unstage(paths_arg(request.args.as_object()), request.from));
 	};
 	keep(out, commands.add(std::move(unstage)));
 
-	cmd::command_desc commit = write_command("vcs.commit", "Start committing what is staged with this message; the "
+	cmd::command_desc commit = write_command("vcs.commit", cmd::agent_category::vcs_commit, "Start committing what is staged with this message; the "
 		"result ({hash}) arrives in job.get", R"({
 		"type": "object",
 		"properties": { "message": { "type": "string", "minLength": 1 } },
@@ -1723,11 +1872,11 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	commit.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_commit(string_arg(request.args.as_object(), "message"), request.from.kind));
+		return job_answer(service.start_commit(string_arg(request.args.as_object(), "message"), request.from));
 	};
 	keep(out, commands.add(std::move(commit)));
 
-	cmd::command_desc branch_create = write_command("vcs.branch.create", "Start creating a branch at a ref (default HEAD) "
+	cmd::command_desc branch_create = write_command("vcs.branch.create", cmd::agent_category::vcs_branch, "Start creating a branch at a ref (default HEAD) "
 		"without switching to it; the result arrives in job.get", R"({
 		"type": "object",
 		"properties": {
@@ -1739,11 +1888,11 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	})");
 	branch_create.invoke = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
-		return job_answer(service.start_branch_create(string_arg(args, "name"), string_arg(args, "from"), request.from.kind));
+		return job_answer(service.start_branch_create(string_arg(args, "name"), string_arg(args, "from"), request.from));
 	};
 	keep(out, commands.add(std::move(branch_create)));
 
-	cmd::command_desc checkout = write_command("vcs.checkout", "Start switching the work tree to a branch or commit "
+	cmd::command_desc checkout = write_command("vcs.checkout", cmd::agent_category::vcs_branch, "Start switching the work tree to a branch or commit "
 		"(never forced: local changes it would overwrite stop it); the result arrives in job.get", R"({
 		"type": "object",
 		"properties": { "ref": { "type": "string", "minLength": 1 } },
@@ -1751,22 +1900,22 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	checkout.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_checkout(string_arg(request.args.as_object(), "ref"), request.from.kind));
+		return job_answer(service.start_checkout(string_arg(request.args.as_object(), "ref"), request.from));
 	};
 	keep(out, commands.add(std::move(checkout)));
 
-	cmd::command_desc fetch = write_command("vcs.fetch", "Start fetching from a remote (default: the branch's, else "
+	cmd::command_desc fetch = write_command("vcs.fetch", cmd::agent_category::vcs_sync, "Start fetching from a remote (default: the branch's, else "
 		"origin); the result arrives in job.get", R"({
 		"type": "object",
 		"properties": { "remote": { "type": "string", "minLength": 1, "description": "A configured remote's name" } },
 		"additionalProperties": false
 	})");
 	fetch.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_fetch(string_arg(request.args.as_object(), "remote"), request.from.kind));
+		return job_answer(service.start_fetch(string_arg(request.args.as_object(), "remote"), request.from));
 	};
 	keep(out, commands.add(std::move(fetch)));
 
-	cmd::command_desc pull = write_command("vcs.pull", "Start pulling, fast-forward only (no merge commit, no rebase); "
+	cmd::command_desc pull = write_command("vcs.pull", cmd::agent_category::vcs_sync, "Start pulling, fast-forward only (no merge commit, no rebase); "
 		"the result arrives in job.get", R"({
 		"type": "object",
 		"properties": {
@@ -1777,11 +1926,11 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	})");
 	pull.invoke = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
-		return job_answer(service.start_pull(string_arg(args, "remote"), string_arg(args, "branch"), request.from.kind));
+		return job_answer(service.start_pull(string_arg(args, "remote"), string_arg(args, "branch"), request.from));
 	};
 	keep(out, commands.add(std::move(pull)));
 
-	cmd::command_desc push = write_command("vcs.push", "Start pushing a branch to a remote (never forced: a push that "
+	cmd::command_desc push = write_command("vcs.push", cmd::agent_category::vcs_push, "Start pushing a branch to a remote (never forced: a push that "
 		"is not a fast-forward is rejected); the result arrives in job.get", R"({
 		"type": "object",
 		"properties": {
@@ -1797,7 +1946,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		bool set_upstream = false;
 		if (const json::value* value = args.if_contains("set_upstream")) set_upstream = value->as_bool();
 		return job_answer(service.start_push(string_arg(args, "remote"), string_arg(args, "branch"), set_upstream,
-			request.from.kind));
+			request.from));
 	};
 	keep(out, commands.add(std::move(push)));
 	return out;
