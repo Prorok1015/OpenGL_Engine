@@ -61,6 +61,11 @@ BOOST_AUTO_TEST_CASE(TheOwnersTable_ForEveryCategory)
 	BOOST_TEST((edt::default_mode(agent_category::cmake_presets) == policy_mode::ask));
 	BOOST_TEST((edt::default_mode(agent_category::build) == policy_mode::deny));
 	BOOST_TEST((edt::default_mode(agent_category::live) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::vcs_read) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::vcs_commit) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::vcs_branch) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::vcs_sync) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::vcs_push) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::unset) == policy_mode::deny));
 	BOOST_TEST((edt::default_mode(agent_category::not_for_agents) == policy_mode::deny));
 }
@@ -275,6 +280,184 @@ BOOST_AUTO_TEST_CASE(Serialize_RoundTrips)
 	BOOST_TEST(parsed.error.empty());
 	BOOST_TEST((parsed.layer.categories == layer.categories));
 	BOOST_TEST((parsed.layer.commands == layer.commands));
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+BOOST_AUTO_TEST_SUITE(EdtAgentPolicyVcs)
+
+BOOST_AUTO_TEST_CASE(TheVcsCategories_AreSettableByName)
+{
+	for (const auto category : { agent_category::vcs_read, agent_category::vcs_commit, agent_category::vcs_branch,
+			agent_category::vcs_sync, agent_category::vcs_push }) {
+		BOOST_TEST_CONTEXT(cmd::to_string(category)) {
+			BOOST_TEST((edt::parse_settable_category(cmd::to_string(category)) == category));
+		}
+	}
+	BOOST_TEST(std::string_view(cmd::to_string(agent_category::vcs_push)) == "vcs_push");
+	const auto parsed = edt::parse_policy_layer(R"({"categories":{"vcs_push":"ask","vcs_sync":"deny"}})");
+	BOOST_TEST(parsed.error.empty());
+	BOOST_TEST((parsed.layer.categories.at(agent_category::vcs_push) == policy_mode::ask));
+}
+
+BOOST_AUTO_TEST_CASE(TheVcsSection_ParsesAndRoundTrips)
+{
+	const auto parsed = edt::parse_policy_layer(R"({"version":1,"vcs":{"push_branches":["agent/*","bot/*"],"remotes":["origin"],
+		"protected_branches":["release/*"],"allow_hooks":true,"allow_filters":false,"allow_repo_credential_helper":true,
+		"allow_any_repo_config":false}})");
+	BOOST_TEST(parsed.error.empty(), parsed.error);
+	BOOST_REQUIRE(parsed.layer.vcs.has_value());
+	const edt::vcs_policy_layer& vcs = *parsed.layer.vcs;
+	BOOST_TEST((vcs.push_branches == std::vector<std::string>{ "agent/*", "bot/*" }));
+	BOOST_TEST((vcs.remotes == std::vector<std::string>{ "origin" }));
+	BOOST_TEST((vcs.protected_branches == std::vector<std::string>{ "release/*" }));
+	BOOST_TEST((vcs.allow_hooks == true));
+	BOOST_TEST((vcs.allow_filters == false));
+	BOOST_TEST((vcs.allow_repo_credential_helper == true));
+	BOOST_TEST((vcs.allow_any_repo_config == false));
+	BOOST_TEST(!parsed.layer.empty());
+
+	const auto again = edt::parse_policy_layer(edt::serialize_policy_layer(parsed.layer));
+	BOOST_TEST(again.error.empty(), again.error);
+	BOOST_TEST((again.layer.vcs == parsed.layer.vcs));
+
+	// Only what is set is written back.
+	edt::policy_layer partial;
+	partial.vcs = edt::vcs_policy_layer{};
+	partial.vcs->remotes = std::vector<std::string>{ "upstream" };
+	const auto partial_again = edt::parse_policy_layer(edt::serialize_policy_layer(partial));
+	BOOST_TEST(partial_again.error.empty(), partial_again.error);
+	BOOST_TEST((partial_again.layer.vcs == partial.vcs));
+	BOOST_TEST(!partial_again.layer.vcs->push_branches.has_value());
+
+	// No section: none is written.
+	BOOST_TEST(edt::serialize_policy_layer(edt::policy_layer{}).find("vcs") == std::string::npos);
+	const auto empty_section = edt::parse_policy_layer(R"({"vcs":{}})");
+	BOOST_TEST(empty_section.error.empty());
+	BOOST_TEST(empty_section.layer.vcs.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(TheVcsSection_Mistakes_AreErrorsNotSkipped)
+{
+	for (const char* bad : {
+		R"({"vcs":[]})", R"({"vcs":{"push_branch":["agent/*"]}})", R"({"vcs":{"push_branches":"agent/*"}})",
+		R"({"vcs":{"push_branches":[1]}})", R"({"vcs":{"remotes":[""]}})", R"({"vcs":{"protected_branches":{}}})",
+		R"({"vcs":{"allow_hooks":"true"}})", R"({"vcs":{"allow_filters":1}})", R"({"vcs":{"allow_any_repo_config":null}})",
+		R"({"vcs":{"remotes":["a"],"remotes":["b"]}})" }) {
+		BOOST_TEST_INFO(bad);
+		const auto parsed = edt::parse_policy_layer(bad);
+		BOOST_TEST(!parsed.error.empty());
+		BOOST_TEST(parsed.layer.empty());
+	}
+}
+
+BOOST_AUTO_TEST_CASE(APersonalLayer_MaySwitchAFlagOff_NeverOn)
+{
+	for (const char* flag : { "allow_hooks", "allow_filters", "allow_repo_credential_helper", "allow_any_repo_config" }) {
+		BOOST_TEST_CONTEXT(flag) {
+			const std::string on = std::string(R"({"vcs":{")") + flag + R"(":true}})";
+			const std::string off = std::string(R"({"vcs":{")") + flag + R"(":false}})";
+			BOOST_TEST(edt::parse_policy_layer(on, edt::policy_layer_kind::project).error.empty());
+			const auto refused = edt::parse_policy_layer(on, edt::policy_layer_kind::personal);
+			BOOST_TEST(refused.error.find("only the project policy can allow") != std::string::npos, refused.error);
+			BOOST_TEST(refused.layer.empty());
+			BOOST_TEST(edt::parse_policy_layer(off, edt::policy_layer_kind::personal).error.empty());
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(EffectiveVcs_WithoutFiles_IsTheDefault)
+{
+	const edt::vcs_policy vcs = edt::effective_vcs({}, {});
+	BOOST_TEST((vcs.push_branches == std::vector<std::string>{ "agent/*" }));
+	BOOST_TEST((vcs.remotes == std::vector<std::string>{ "origin" }));
+	BOOST_TEST((vcs.protected_branches == std::vector<std::string>{ "main", "master" }));
+	BOOST_TEST(!vcs.permissions.allow_hooks);
+	BOOST_TEST(!vcs.permissions.allow_filters);
+	BOOST_TEST(!vcs.permissions.allow_repo_credential_helper);
+	BOOST_TEST(!vcs.permissions.allow_any_repo_config);
+}
+
+BOOST_AUTO_TEST_CASE(EffectiveVcs_ThePersonalLayerOnlyNarrows)
+{
+	edt::policy_layer project;
+	project.vcs = edt::vcs_policy_layer{};
+	project.vcs->push_branches = std::vector<std::string>{ "agent/*", "bot/*" };
+	project.vcs->remotes = std::vector<std::string>{ "origin", "upstream" };
+	project.vcs->protected_branches = std::vector<std::string>{ "release/*" };
+	project.vcs->allow_hooks = true;
+	project.vcs->allow_filters = true;
+	project.vcs->allow_any_repo_config = true;
+	edt::policy_layer personal;
+	personal.vcs = edt::vcs_policy_layer{};
+	personal.vcs->push_branches = std::vector<std::string>{ "bot/*", "everything/*" };
+	personal.vcs->remotes = std::vector<std::string>{ "upstream" };
+	personal.vcs->protected_branches = std::vector<std::string>{ "develop", "release/*" };
+	personal.vcs->allow_filters = false;
+
+	const edt::vcs_policy vcs = edt::effective_vcs(project, personal);
+	// A pattern only the personal layer names is never added.
+	BOOST_TEST((vcs.push_branches == std::vector<std::string>{ "bot/*" }));
+	BOOST_TEST((vcs.remotes == std::vector<std::string>{ "upstream" }));
+	BOOST_TEST((vcs.protected_branches == std::vector<std::string>{ "main", "master", "release/*", "develop" }));
+	BOOST_TEST(vcs.permissions.allow_hooks);
+	BOOST_TEST(!vcs.permissions.allow_filters);
+	BOOST_TEST(!vcs.permissions.allow_repo_credential_helper);
+	BOOST_TEST(vcs.permissions.allow_any_repo_config);
+
+	// Without a project list the personal one narrows the default.
+	edt::policy_layer narrowing;
+	narrowing.vcs = edt::vcs_policy_layer{};
+	narrowing.vcs->push_branches = std::vector<std::string>{ "agent/*", "bot/*" };
+	narrowing.vcs->remotes = std::vector<std::string>{};
+	const edt::vcs_policy narrowed = edt::effective_vcs({}, narrowing);
+	BOOST_TEST((narrowed.push_branches == std::vector<std::string>{ "agent/*" }));
+	BOOST_TEST(narrowed.remotes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(EffectiveVcs_ABrokenLayer_IsTheStrictest)
+{
+	edt::policy_layer project;
+	project.vcs = edt::vcs_policy_layer{};
+	project.vcs->push_branches = std::vector<std::string>{ "*" };
+	project.vcs->allow_hooks = true;
+	const std::vector<std::pair<std::string, std::string>> errors{ { "bad", "" }, { "", "bad" } };
+	for (const auto& error : errors) {
+		BOOST_TEST_CONTEXT(error.first << "/" << error.second) {
+			const edt::vcs_policy vcs = edt::effective_vcs(project, {}, error.first, error.second);
+			BOOST_TEST(vcs.push_branches.empty());
+			BOOST_TEST(vcs.remotes.empty());
+			BOOST_TEST((vcs.protected_branches == std::vector<std::string>{ "main", "master" }));
+			BOOST_TEST(!vcs.permissions.allow_hooks);
+			BOOST_TEST(!vcs.permissions.allow_filters);
+			BOOST_TEST(!vcs.permissions.allow_repo_credential_helper);
+			BOOST_TEST(!vcs.permissions.allow_any_repo_config);
+		}
+	}
+}
+
+BOOST_AUTO_TEST_CASE(EffectiveVcs_FromTheFiles_ReadAgainWhenTheyChange)
+{
+	test_util::temp_dir dir("edt_agent_policy_vcs");
+	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
+	BOOST_TEST((policy.effective_vcs().push_branches == std::vector<std::string>{ "agent/*" }));
+
+	dir.write(".snk/agent_policy.json", R"({"vcs":{"push_branches":["bot/*"],"allow_hooks":true}})");
+	BOOST_TEST((policy.effective_vcs().push_branches == std::vector<std::string>{ "bot/*" }));
+	BOOST_TEST(policy.effective_vcs().permissions.allow_hooks);
+
+	// A personal file that tries to turn a flag on is broken: everything closes.
+	dir.write("personal.json", R"({"vcs":{"allow_filters":true}})");
+	const edt::vcs_policy closed = policy.effective_vcs();
+	BOOST_TEST(!policy.personal_error().empty());
+	BOOST_TEST(closed.push_branches.empty());
+	BOOST_TEST(!closed.permissions.allow_hooks);
+
+	dir.write("personal.json", R"({"version":1,"vcs":{"allow_hooks":false}})");
+	const edt::vcs_policy off = policy.effective_vcs();
+	BOOST_TEST(policy.personal_error().empty());
+	BOOST_TEST((off.push_branches == std::vector<std::string>{ "bot/*" }));
+	BOOST_TEST(!off.permissions.allow_hooks);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

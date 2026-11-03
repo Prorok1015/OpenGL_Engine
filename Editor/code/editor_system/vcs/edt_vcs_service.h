@@ -1,5 +1,6 @@
 #pragma once
 #include "edt_toolchain.h"
+#include "edt_vcs_policy.h"
 #include <snk/common/ds/ds_task_system.hpp>
 #include <snk/command/cmd_registry.h>
 #include <snk/command/cmd_types.h>
@@ -30,20 +31,6 @@ namespace edt
 		std::chrono::milliseconds probe_timeout{ 5000 };
 	};
 
-	// What a guarded git write (one not from a person) may run of the repository's config. Off: hooks point at an empty
-	// folder of the editor; stage, unstage, commit, checkout and pull are refused with filters_require_opt_in when a
-	// configured filter driver applies to a file in the index or one they touch (switching the driver off instead would
-	// commit LFS files as raw bytes); fetch, pull and push are refused with unsafe_repository when a credential helper
-	// comes from the repository's own config; any key of the repository's own config outside the allowlist refuses.
-	struct vcs_write_permissions
-	{
-		bool allow_hooks = false;
-		bool allow_filters = false;
-		bool allow_repo_credential_helper = false;
-		// Skips only the allowlist of the repository's own config keys; every override and other rule stays.
-		bool allow_any_repo_config = false;
-	};
-
 	// Git for the editor and its agents (#454): reads (status, diff, log, branches), writes (stage, unstage, commit,
 	// branch create, checkout) and the network (fetch, pull --ff-only, push). Every git command runs as
 	// a job_service job on ds::lane::io (job.cancel stops git) and its parsed answer is the job's result (job.get).
@@ -58,6 +45,13 @@ namespace edt
 	// core.askPass, core.sshCommand, core.gitProxy, core.alternateRefsCommand and signing are switched off
 	// (GIT_ASKPASS and SSH_ASKPASS dropped); a network call is refused (unsafe_repository) when the config sets a
 	// credential helper, core.sshCommand, a URL rewrite to another transport, or an upload-pack / receive-pack.
+	// Hard rules of a guarded write (vcs_policy, #455), checked before git runs whatever the policy's mode: a push goes
+	// only to a branch matching push_branches and no protected branch, as the explicit refspec refs/heads/<b>:refs/heads/<b>
+	// without tags; fetch, pull and push only to a remote in remotes (an omitted remote is resolved once, as git would,
+	// and named to git; a pull without a branch fetches the current branch's upstream by name); a checkout or pull whose
+	// target changes the project's agent policy file is refused; a refusal is a `done` job with error code `denied`.
+	// A guarded commit loses every Agent-Session line of its message and gets `Agent-Session: <session>` for a valid
+	// agent session.
 	// There is no force-push, reset --hard, branch delete or rebase, and never will be.
 	// Main thread only.
 	class vcs_service
@@ -112,22 +106,47 @@ namespace edt
 		started start_log(const std::string& ref, const std::string& path, int limit, const std::string& cursor);
 		started start_branches();
 
-		// For the jobs started after it. TODO(#455): fed from the project's agent policy; until then both stay off.
+		// For the jobs started after it, while no policy source is set (the hard rules then use vcs_policy's defaults).
 		void set_write_permissions(vcs_write_permissions permissions);
 		const vcs_write_permissions& write_permissions() const { return m_write_permissions; }
+		// The agent policy's git rules, asked at the start of every guarded write, so an edit of the policy file applies
+		// at once; it replaces set_write_permissions. Null: the defaults and set_write_permissions.
+		void set_policy_source(std::function<vcs_policy()> source) { m_policy_source = std::move(source); }
+		// The project's agent policy file, which a guarded checkout or pull must not change; empty (the default):
+		// <project root>/.snk/agent_policy.json.
+		void set_policy_file(std::filesystem::path file) { m_policy_file = std::move(file); }
 
 		// Writes; `caller` is the origin of the command (cmd::call::from). Paths are relative to the repository root.
-		started start_stage(const std::vector<std::string>& paths, cmd::origin_kind caller);
-		started start_unstage(const std::vector<std::string>& paths, cmd::origin_kind caller);
-		started start_commit(const std::string& message, cmd::origin_kind caller);
+		started start_stage(const std::vector<std::string>& paths, const cmd::origin& caller);
+		started start_unstage(const std::vector<std::string>& paths, const cmd::origin& caller);
+		started start_commit(const std::string& message, const cmd::origin& caller);
 		// `from` empty: HEAD.
-		started start_branch_create(const std::string& name, const std::string& from, cmd::origin_kind caller);
-		started start_checkout(const std::string& ref, cmd::origin_kind caller);
+		started start_branch_create(const std::string& name, const std::string& from, const cmd::origin& caller);
+		started start_checkout(const std::string& ref, const cmd::origin& caller);
 		// `remote` empty: git's default (the branch's remote, else origin).
-		started start_fetch(const std::string& remote, cmd::origin_kind caller);
+		started start_fetch(const std::string& remote, const cmd::origin& caller);
 		// `branch` needs a `remote`.
-		started start_pull(const std::string& remote, const std::string& branch, cmd::origin_kind caller);
-		started start_push(const std::string& remote, const std::string& branch, bool set_upstream, cmd::origin_kind caller);
+		started start_pull(const std::string& remote, const std::string& branch, const cmd::origin& caller);
+		started start_push(const std::string& remote, const std::string& branch, bool set_upstream, const cmd::origin& caller);
+
+		// The same, by kind only (no agent session).
+		started start_stage(const std::vector<std::string>& paths, cmd::origin_kind caller) { return start_stage(paths, cmd::origin{ caller, {} }); }
+		started start_unstage(const std::vector<std::string>& paths, cmd::origin_kind caller) { return start_unstage(paths, cmd::origin{ caller, {} }); }
+		started start_commit(const std::string& message, cmd::origin_kind caller) { return start_commit(message, cmd::origin{ caller, {} }); }
+		started start_branch_create(const std::string& name, const std::string& from, cmd::origin_kind caller)
+		{
+			return start_branch_create(name, from, cmd::origin{ caller, {} });
+		}
+		started start_checkout(const std::string& ref, cmd::origin_kind caller) { return start_checkout(ref, cmd::origin{ caller, {} }); }
+		started start_fetch(const std::string& remote, cmd::origin_kind caller) { return start_fetch(remote, cmd::origin{ caller, {} }); }
+		started start_pull(const std::string& remote, const std::string& branch, cmd::origin_kind caller)
+		{
+			return start_pull(remote, branch, cmd::origin{ caller, {} });
+		}
+		started start_push(const std::string& remote, const std::string& branch, bool set_upstream, cmd::origin_kind caller)
+		{
+			return start_push(remote, branch, set_upstream, cmd::origin{ caller, {} });
+		}
 
 	private:
 		// A folder in the OS temp dir that only this editor writes to: the empty hooks folder of agent writes and the
@@ -149,6 +168,8 @@ namespace edt
 			// The command talks to a remote.
 			bool network = false;
 		};
+		// A hard rule of a guarded write: why the policy refuses it, nullopt when it does not.
+		using hard_rule = std::function<std::optional<std::string>(const vcs_policy&)>;
 
 		void probe_repository(const std::optional<std::filesystem::path>& project);
 		void set_probe_timeout();
@@ -157,7 +178,8 @@ namespace edt
 		std::optional<std::string> ensure_scratch();
 		// Defined in the .cpp, its only user. `write`: nullopt for a read.
 		template<class F>
-		started run_job(std::string label, F work, std::optional<write_mode> write = std::nullopt);
+		started run_job(std::string label, F work, std::optional<write_mode> write = std::nullopt, const hard_rule& rule = {});
+		vcs_policy current_policy() const;
 
 		job_service& m_jobs;
 		vcs_options m_options;
@@ -167,6 +189,8 @@ namespace edt
 		bool m_probed = false;
 		bool m_git_found = false;
 		vcs_write_permissions m_write_permissions;
+		std::function<vcs_policy()> m_policy_source;
+		std::filesystem::path m_policy_file;
 		scratch_dir m_scratch;
 		std::uint64_t m_message_count = 0;
 		// Last: its jobs are stopped before the rest goes.
@@ -181,7 +205,7 @@ namespace edt
 	//     time, subject}], next_cursor?, truncated}
 	// vcs.branches {} -> {job}; result {current?, branches: [{name, full_name, oid, upstream?, head, remote}], truncated}
 	// status, log and branches stop git past 4 MiB of output and keep the whole records (truncated: true).
-	// Writes (mutates; no agent category until #455, so agents see none of them):
+	// Writes (mutates; agent categories vcs_commit, vcs_branch, vcs_sync, vcs_push; reads are vcs_read):
 	// vcs.stage {paths} / vcs.unstage {paths} -> {job}; result {output}
 	// vcs.commit {message} -> {job}; result {hash}
 	// vcs.branch.create {name, from?} / vcs.checkout {ref} -> {job}; result {output}
@@ -191,7 +215,8 @@ namespace edt
 	// `output` is git's last lines (at most 20, 4 KiB).
 	// A git failure ends the job `done` with result {error: {code, message, stderr_tail, exit_code}}: code from
 	// vcs::classify_error (auth_required, not_a_repository, ...) or vcs_unavailable when git could not start, or
-	// filters_require_opt_in / unsafe_repository for an agent's write refused before git ran; message is git's last fatal:/error: line;
+	// filters_require_opt_in / unsafe_repository / denied (a hard rule of vcs_policy) for an agent's write refused before
+	// git ran; message is git's last fatal:/error: line;
 	// stderr_tail its last 20 stderr lines (at most 4 KiB).
 	// Only without git (vcs_unavailable) or a project (no_project) do the commands fail at once.
 	[[nodiscard]] std::vector<registration> register_vcs_commands(cmd::command_registry& commands, vcs_service& service);
