@@ -567,6 +567,8 @@ struct per_call_fixture : gate_fixture
 BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheStricterOfItsCommandsCategoryAndItsOwn, per_call_fixture)
 {
 	gate->set_can_ask(true);
+	// Said here, not taken from the defaults (code_edit's default moves to ask, owner decision for #451).
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"allow"}})");
 
 	BOOST_TEST(write("src/a.cpp").ok);
 	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::confirmation_required);
@@ -578,7 +580,7 @@ BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheStricterOfItsCommandsCategoryAndItsOwn
 	BOOST_TEST(write("src/a.cpp").code == cmd::codes::denied);
 
 	// Another size than the file before: the policy notices a change by modification time and size.
-	dir.write(".snk/agent_policy.json", R"({"categories":{"cmake_presets":"deny"}})");
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"allow", "cmake_presets":"deny"}})");
 	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::denied);
 	BOOST_TEST(write("src/a.cpp").ok);
 	BOOST_TEST(runs == 2);
@@ -598,6 +600,7 @@ BOOST_FIXTURE_TEST_CASE(ACommandsOwnEntry_DoesNotSpeakForTheCategoryOfItsCall, p
 
 BOOST_FIXTURE_TEST_CASE(ArgumentsThatBreakTheSchema_NeverReachCategoryOf, per_call_fixture)
 {
+	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"allow"}})");
 	BOOST_TEST(write(5).code == cmd::codes::invalid_args);
 	BOOST_TEST(asked_category == 0);
 
