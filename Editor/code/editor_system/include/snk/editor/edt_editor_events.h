@@ -216,14 +216,11 @@ namespace edt
 		signal<const game_module_build_result&> game_module_built;
 		// The problems of one source were replaced or cleared (problem_list).
 		signal<const std::string&> problems_changed; // (source)
-<<<<<<< HEAD
 		// Every change of the Play session's state, after it took effect (play_session).
 		signal<play_state, play_reason> play_state_changed;
-=======
 		// An MCP session of an agent ended (disconnect, idle timeout, an explicit close; not the editor stopping the
 		// server): what is kept for it goes (its open agent session, its "allow until the end of the session",
 		// the questions it still has waiting). Raised by the agent server's bridge on the main thread.
 		signal<const std::string&> agent_session_closed; // (MCP session id)
->>>>>>> origin/aibranch
 	};
 }
