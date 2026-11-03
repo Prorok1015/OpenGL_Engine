@@ -103,6 +103,9 @@ struct bridge_fixture
 		// The file watcher compares the time and the size: make a rewrite visible even within one clock tick.
 		std::filesystem::last_write_time(file, std::filesystem::file_time_type::clock::now() + std::chrono::seconds(++rewrites));
 		access.policy().refresh();
+		// These tests are about what the file says; a file that is not usable stays unapproved (and denies).
+		access.policy().set_approval_allowed(true);
+		access.policy().approve_project_layer();
 	}
 
 	int rewrites = 0;

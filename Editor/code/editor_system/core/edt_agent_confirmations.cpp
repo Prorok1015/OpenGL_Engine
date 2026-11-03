@@ -307,6 +307,16 @@ namespace edt
 		}
 	}
 
+	void agent_confirmations::cancel_all(std::string_view why)
+	{
+		decline_all(why);
+		std::vector<retrying> parked;
+		parked.swap(m_retrying);
+		for (retrying& call : parked) {
+			call.done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was not run: {}", call.command_id, why)));
+		}
+	}
+
 	std::vector<confirmation_request> agent_confirmations::pending() const
 	{
 		std::vector<confirmation_request> out;

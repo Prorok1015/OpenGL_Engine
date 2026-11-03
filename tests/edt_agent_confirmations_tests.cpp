@@ -58,6 +58,13 @@ struct confirmations_fixture
 		confirmations.reset();
 	}
 
+	void write_project(const char* text)
+	{
+		dir.write(".snk/agent_policy.json", text);
+		policy.set_approval_allowed(true);
+		BOOST_REQUIRE(!policy.approve_project_layer().has_value());
+	}
+
 	void add(std::string id, agent_category category)
 	{
 		cmd::command_desc desc;
@@ -268,7 +275,7 @@ BOOST_FIXTURE_TEST_CASE(WhenBothAsk_TheCallsGrantCovers_TheCommandsDoesNot, per_
 
 BOOST_FIXTURE_TEST_CASE(WhenOnlyTheCommandsCategoryAsks_ItsGrantIsTheOneNeeded, per_call_confirmations)
 {
-	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"ask","cmake_presets":"allow"}})");
+	write_project(R"({"categories":{"code_edit":"ask","cmake_presets":"allow"}})");
 	grants.add("s1", agent_category::cmake_presets);
 	write("CMakeLists.txt");
 	BOOST_REQUIRE(confirmations->pending().size() == 1u);

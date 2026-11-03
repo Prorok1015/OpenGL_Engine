@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace edt
 {
@@ -82,7 +83,7 @@ namespace edt
 	std::string serialize_policy_layer(const policy_layer& layer);
 
 	// Where a decision comes from.
-	enum class policy_source : std::uint8_t { fallback, default_table, project, personal };
+	enum class policy_source : std::uint8_t { fallback, default_table, project, personal, approval_pending };
 	const char* to_string(policy_source source);
 
 	struct effective_policy
@@ -105,11 +106,39 @@ namespace edt
 		const policy_layer& personal, const std::string& project_error = {}, const std::string& personal_error = {},
 		bool live_mode_on = false);
 
+	// What a changed project layer makes looser than the layer a person approved (#483). `to` is the worst case when the
+	// new layer only drops an entry (the mode it falls back to is not known here).
+	struct policy_loosening
+	{
+		std::string what;
+		cmd::policy_mode from = cmd::policy_mode::allow;
+		cmd::policy_mode to = cmd::policy_mode::allow;
+	};
+
+	// Every way `current` lets an agent do more than `approved` does: per category (also for the commands that carry a risk
+	// floor), per command of `commands`, and per entry for an id no command has (judged without knowing its category: a new
+	// or looser entry, or a dropped one that was not `allow`, counts). Conservative on purpose: an answer of "nothing" is what
+	// lets a changed file take over without a person, so it must never miss a loosening. A field added to policy_layer that can
+	// loosen has to be compared here.
+	std::vector<policy_loosening> find_loosenings(const policy_layer& approved, const policy_layer& current,
+		const std::vector<const cmd::command_desc*>& commands);
+
+	// Where the layer a person approved for `project_root` is kept: <personal_settings_dir>/agent_policy_approved/<hash of the
+	// canonical project path>.json. A moved project is a new project: it is approved again.
+	std::filesystem::path approved_snapshot_file(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root);
+
 	// The two files, read again when they change on disk (a person edits them; an agent cannot).
+	//
+	// The project file lives in the work tree, so whatever changes the tree (a checkout, a pull, a tool) changes the policy
+	// an agent is judged by. A change that lets an agent do more therefore waits for a person: until one approves it, every
+	// decision is the stricter of the approved layer and the file as it is now (a change that only tightens, or changes
+	// nothing, needs no one and takes over by itself). The approved layer is a copy kept next to the personal settings; a
+	// project without one is approved against the built-in defaults, i.e. an empty layer.
 	class agent_policy
 	{
 	public:
-		agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file);
+		// `approved_file`: where the approved copy is kept (empty: in memory only, as in tests).
+		agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file, std::filesystem::path approved_file = {});
 
 		// Re-reads a file that changed; cheap otherwise.
 		void refresh();
@@ -122,6 +151,20 @@ namespace edt
 		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
 		// Command ids a layer names that no command has get one warning per load (a typo, or a module not loaded yet).
 		void set_known_commands(std::function<bool(std::string_view)> exists);
+		// The commands of the registry, for judging what a changed project file loosens. Without it only the categories and the
+		// ids named in the layers are compared (never less strict).
+		void set_command_source(std::function<std::vector<const cmd::command_desc*>()> commands);
+		// Whether a person is here to approve (a UI session; never headless). Without one approve_project_layer refuses and a
+		// loosening never takes effect.
+		void set_approval_allowed(bool allowed) { m_approval_allowed = allowed; }
+		// The project file as it is now loosens something an agent may do and no person has approved it.
+		bool project_pending_approval() const { return m_pending; }
+		const std::vector<policy_loosening>& pending_loosenings() const { return m_loosenings; }
+		// The layer a person approved last (empty before any).
+		const policy_layer& approved_project() const { return m_approved; }
+		// The person approves the project file as it is now. The error, nullopt on success.
+		std::optional<std::string> approve_project_layer();
+
 		// Called (main thread) after a layer that was already loaded is read again, because its file changed or a person saved it:
 		// what an agent may see can have changed, so the MCP clients are told to ask for the tool list again.
 		void set_on_changed(std::function<void()> on_changed) { m_on_changed = std::move(on_changed); }
@@ -155,7 +198,11 @@ namespace edt
 
 		void reload(source& what);
 		static bool changed_on_disk(const source& what);
-		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write);
+		// Compares the project file with the approved layer: takes it over when it loosens nothing, else it is pending.
+		void reconcile_project();
+		std::optional<std::string> keep_approved(const policy_layer& layer);
+		std::vector<const cmd::command_desc*> commands() const;
+		std::optional<std::string> save(source& what, const policy_layer& layer, const prj::text_writer& write, bool approve = false);
 		void warn_unknown_commands(source& what) const;
 
 		source m_project;
@@ -163,6 +210,12 @@ namespace edt
 		std::function<bool()> m_live_on;
 		std::function<bool(std::string_view)> m_known;
 		std::function<void()> m_on_changed;
+		std::function<std::vector<const cmd::command_desc*>()> m_commands;
+		std::filesystem::path m_approved_file;
+		policy_layer m_approved;
+		std::vector<policy_loosening> m_loosenings;
+		bool m_pending = false;
+		bool m_approval_allowed = false;
 		std::thread::id m_main_thread = std::this_thread::get_id();
 	};
 

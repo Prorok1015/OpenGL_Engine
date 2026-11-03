@@ -9,6 +9,8 @@
 #include <boost/json/basic_parser_impl.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/parse_options.hpp>
+#include <cstdint>
+#include <format>
 #include <fstream>
 #include <set>
 #include <thread>
@@ -138,6 +140,7 @@ namespace edt
 		case policy_source::default_table: return "default";
 		case policy_source::project: return "project";
 		case policy_source::personal: return "personal";
+		case policy_source::approval_pending: return "approval_pending";
 		}
 		return "fallback";
 	}
@@ -279,10 +282,160 @@ namespace edt
 		return { base, base_source, std::move(why) };
 	}
 
-	agent_policy::agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file)
+	namespace {
+
+		cmd::policy_mode mode_in(const policy_layer& layer, const cmd::command_desc& command, cmd::agent_category category)
+		{
+			return layer.resolve(command, category).value_or(default_mode(command, category));
+		}
+
+		// The commands whose id a layer names and the registry does not know: judged by the entries alone.
+		void add_entry_loosenings(const policy_layer& approved, const policy_layer& current, const std::set<std::string>& known,
+			std::vector<policy_loosening>& out)
+		{
+			for (const auto& [id, mode] : current.commands) {
+				if (known.contains(id)) continue;
+				const auto before = approved.commands.find(id);
+				if (before == approved.commands.end()) {
+					if (mode != cmd::policy_mode::deny) out.push_back({ "entry '" + id + "'", cmd::policy_mode::deny, mode });
+				}
+				else if (mode < before->second) {
+					out.push_back({ "entry '" + id + "'", before->second, mode });
+				}
+			}
+			for (const auto& [id, mode] : approved.commands) {
+				if (known.contains(id) || current.commands.contains(id) || mode == cmd::policy_mode::allow) continue;
+				out.push_back({ "entry '" + id + "' (dropped)", mode, cmd::policy_mode::allow });
+			}
+		}
+
+		std::uint64_t fnv1a_64(std::string_view text)
+		{
+			std::uint64_t hash = 14695981039346656037ull;
+			for (const char c : text) {
+				hash ^= static_cast<unsigned char>(c);
+				hash *= 1099511628211ull;
+			}
+			return hash;
+		}
+
+	}
+
+	std::vector<policy_loosening> find_loosenings(const policy_layer& approved, const policy_layer& current,
+		const std::vector<const cmd::command_desc*>& commands)
+	{
+		std::vector<policy_loosening> out;
+		for (const cmd::agent_category category : settable) {
+			for (const cmd::danger risk : { cmd::danger::none, cmd::danger::confirm, cmd::danger::deny_by_default }) {
+				cmd::command_desc probe;
+				probe.id = "\x01probe";
+				probe.category = category;
+				probe.risk = risk;
+				const cmd::policy_mode before = mode_in(approved, probe, category);
+				const cmd::policy_mode now = mode_in(current, probe, category);
+				if (now < before) {
+					std::string what = "category " + std::string(cmd::to_string(category));
+					if (risk != cmd::danger::none) what += risk == cmd::danger::confirm ? " (commands that confirm)" : " (commands denied by default)";
+					out.push_back({ std::move(what), before, now });
+				}
+			}
+		}
+		std::set<std::string> known;
+		for (const cmd::command_desc* command : commands) {
+			if (command == nullptr) continue;
+			known.insert(command->id);
+			if (command->category == cmd::agent_category::unset || command->category == cmd::agent_category::not_for_agents) continue;
+			const cmd::policy_mode before = mode_in(approved, *command, command->category);
+			const cmd::policy_mode now = mode_in(current, *command, command->category);
+			if (now < before) out.push_back({ "command " + command->id, before, now });
+		}
+		add_entry_loosenings(approved, current, known, out);
+		return out;
+	}
+
+	std::filesystem::path approved_snapshot_file(const std::filesystem::path& personal_settings_dir, const std::filesystem::path& project_root)
+	{
+		std::error_code ec;
+		std::filesystem::path canonical = std::filesystem::weakly_canonical(project_root, ec);
+		if (ec) canonical = project_root.lexically_normal();
+		std::string key = fs_paths::utf8_of(canonical);
+		for (char& c : key) {
+			if (c == '\\') c = '/';
+#ifdef _WIN32
+			else if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+#endif
+		}
+		while (key.size() > 1 && key.back() == '/') key.pop_back();
+		return personal_settings_dir / "agent_policy_approved" / (std::format("{:016x}", fnv1a_64(key)) + ".json");
+	}
+
+	agent_policy::agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file, std::filesystem::path approved_file)
 	{
 		m_project.file = std::move(project_file);
 		m_personal.file = std::move(personal_file);
+		m_approved_file = std::move(approved_file);
+		if (m_approved_file.empty()) return;
+		if (const std::optional<std::string> text = read_text(m_approved_file)) {
+			policy_parse_result parsed = parse_policy_layer(*text);
+			if (parsed.error.empty()) {
+				m_approved = std::move(parsed.layer);
+			}
+			else {
+				egLOG_WARN("editor/agent_policy", "{}: {}; the built-in defaults are the approved policy", fs_paths::utf8_of(m_approved_file), parsed.error);
+			}
+		}
+	}
+
+	std::vector<const cmd::command_desc*> agent_policy::commands() const
+	{
+		return m_commands ? m_commands() : std::vector<const cmd::command_desc*>{};
+	}
+
+	void agent_policy::set_command_source(std::function<std::vector<const cmd::command_desc*>()> commands)
+	{
+		m_commands = std::move(commands);
+		if (m_project.loaded) reconcile_project();
+	}
+
+	std::optional<std::string> agent_policy::keep_approved(const policy_layer& layer)
+	{
+		if (!m_approved_file.empty()) {
+			std::error_code ec;
+			std::filesystem::create_directories(m_approved_file.parent_path(), ec);
+			if (const std::optional<std::string> error = prj::write_text_atomically(m_approved_file, serialize_policy_layer(layer))) return error;
+		}
+		m_approved = layer;
+		return std::nullopt;
+	}
+
+	void agent_policy::reconcile_project()
+	{
+		m_loosenings.clear();
+		m_pending = false;
+		if (!m_project.error.empty()) return;
+		m_loosenings = find_loosenings(m_approved, m_project.layer, commands());
+		m_pending = !m_loosenings.empty();
+		if (m_pending) {
+			egLOG_WARN("editor/agent_policy", "{}: loosens {} thing(s) an agent may do; the approved policy applies until a person approves it",
+				fs_paths::utf8_of(m_project.file), m_loosenings.size());
+			return;
+		}
+		if (serialize_policy_layer(m_project.layer) == serialize_policy_layer(m_approved)) return;
+		if (const std::optional<std::string> error = keep_approved(m_project.layer)) {
+			egLOG_WARN("editor/agent_policy", "the approved copy of the project policy cannot be kept: {}", *error);
+		}
+	}
+
+	std::optional<std::string> agent_policy::approve_project_layer()
+	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::approve_project_layer: main thread only");
+		if (!m_approval_allowed) return "no person is here to approve";
+		refresh();
+		if (!m_project.error.empty()) return "the project's agent_policy.json cannot be used: " + m_project.error;
+		if (const std::optional<std::string> error = keep_approved(m_project.layer)) return error;
+		reconcile_project();
+		if (m_on_changed) m_on_changed();
+		return std::nullopt;
 	}
 
 	namespace {
@@ -368,6 +521,7 @@ namespace edt
 			egLOG_WARN("editor/agent_policy", "{}: {}", fs_paths::utf8_of(what.file), what.error);
 		}
 		warn_unknown_commands(what);
+		if (&what == &m_project) reconcile_project();
 		if (was_loaded && m_on_changed) m_on_changed();
 	}
 
@@ -407,10 +561,15 @@ namespace edt
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective: main thread only");
 		refresh();
 		const bool live_on = m_live_on && m_live_on();
-		return effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
+		effective_policy now = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
+		if (!m_pending) return now;
+		const effective_policy held = effective_mode_of_call(command, category, m_approved, m_personal.layer, {}, m_personal.error, live_on);
+		if (held.mode <= now.mode) return now;
+		return { held.mode, policy_source::approval_pending,
+			"the project's agent_policy.json changed and waits for a person's approval; until then the approved version applies: " + held.reason };
 	}
 
-	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write)
+	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write, bool approve)
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::save: main thread only");
 		const std::string text = serialize_policy_layer(layer);
@@ -419,13 +578,20 @@ namespace edt
 		std::filesystem::create_directories(what.file.parent_path(), ec);
 		const std::optional<std::string> error = write ? write(what.file, text) : prj::write_text_atomically(what.file, text);
 		if (error) return error;
+		// A person's own edit is the approval of it.
+		if (approve) {
+			if (const std::optional<std::string> kept = keep_approved(layer)) {
+				reload(what);
+				return "saved, but the approval could not be kept: " + *kept;
+			}
+		}
 		reload(what);
 		return what.error.empty() ? std::nullopt : std::optional<std::string>{ what.error };
 	}
 
 	std::optional<std::string> agent_policy::save_project(const policy_layer& layer, const prj::text_writer& write)
 	{
-		return save(m_project, layer, write);
+		return save(m_project, layer, write, true);
 	}
 
 	std::optional<std::string> agent_policy::save_personal(const policy_layer& layer, const prj::text_writer& write)
