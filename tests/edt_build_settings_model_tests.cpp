@@ -1,10 +1,9 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_build_settings_model.h"
-#include "edt_agent_confirmations.h"
+#include "edt_agent_access.h"
 #include "edt_mcp_bridge_host.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
-#include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/project/prj_cmake_presets.h>
 #include <snk/project/prj_json_text.h>
@@ -550,10 +549,9 @@ struct agent_fixture : model_fixture
 {
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
-	cmd::main_thread_queue queue{ commands, tasks };
-	edt::session_grants grants;
-	edt::agent_confirmations confirmations{ commands, grants };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
+	test_util::temp_dir policy_dir{ "edt_bs_policy" };
+	edt::agent_access access{ commands, policy_dir.path() / "project.json", policy_dir.path() / "personal.json" };
+	edt::mcp_bridge_host bridge{ commands, tasks, access };
 	std::optional<fs::path> project;
 	std::vector<cmd::registration> registrations;
 
@@ -564,6 +562,7 @@ struct agent_fixture : model_fixture
 		options.project_root = [this] { return project; };
 		options.estimate = [] { return edt::jobs_estimate{ 4, 8, 16 * edt::k_gib, edt::compiler_family::gnu }; };
 		registrations = edt::register_build_settings_commands(commands, std::move(options));
+		access.set_questions_routed(true);
 	}
 
 	mcp::call_result call(const std::string& name)
@@ -653,7 +652,7 @@ BOOST_AUTO_TEST_CASE(ItIsReadOnlyAndAllowedById)
 	BOOST_REQUIRE(desc != nullptr);
 	BOOST_TEST(!desc->mutates);
 	BOOST_TEST((desc->risk == cmd::danger::none));
-	BOOST_TEST(edt::agent_may_use(*desc));
+	BOOST_TEST(edt::agent_may_use(*desc, access.policy()));
 	BOOST_TEST((desc->category == cmd::agent_category::read));
 }
 

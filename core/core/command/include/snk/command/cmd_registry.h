@@ -79,6 +79,8 @@ namespace cmd
 			// Why the policy asked.
 			std::string reason;
 			std::string session;
+			// The category the policy asked for (policy_decision::category): what "allow for this session" grants.
+			agent_category category = agent_category::unset;
 			bool approved = false;
 		};
 		std::optional<pending_confirmation> confirmation_of(std::string_view ticket);
@@ -102,6 +104,7 @@ namespace cmd
 			std::string args;
 			std::string session;
 			std::string reason;
+			agent_category category = agent_category::unset;
 			std::chrono::steady_clock::time_point expires;
 			bool approved = false;
 		};

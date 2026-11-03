@@ -168,6 +168,8 @@ namespace {
 		json::object annotations;
 		annotations["readOnlyHint"] = tool.read_only;
 		annotations["destructiveHint"] = tool.destructive;
+		annotations["idempotentHint"] = tool.idempotent;
+		annotations["openWorldHint"] = tool.open_world;
 		entry["annotations"] = std::move(annotations);
 		return entry;
 	}

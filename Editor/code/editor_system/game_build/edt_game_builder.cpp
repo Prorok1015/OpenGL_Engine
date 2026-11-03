@@ -283,7 +283,7 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 	command.expose_as_tool = true;
 	command.mutates = true;
 	// It runs the project's CMake code, i.e. anything: an agent never gets it without the person's approval
-	// (edt::agent_may_use refuses any risk; the highest level, for when approvals exist).
+	// (the agent policy keeps a risky command at ask / deny; the highest level).
 	command.risk = cmd::danger::deny_by_default;
 	command.enabled = [this] { return disabled_reason().empty(); };
 	command.invoke = [this](const cmd::call& request) {
