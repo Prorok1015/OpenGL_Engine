@@ -61,5 +61,6 @@ void edt::agent_access::set_person_present(bool present)
 void edt::agent_access::set_headless(bool headless)
 {
 	m_headless = headless;
+	m_policy.set_headless(headless);
 	set_person_present(m_person_present);
 }

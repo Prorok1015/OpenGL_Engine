@@ -57,6 +57,13 @@ struct access_fixture
 		access.reset();
 	}
 
+	// A project that is its own git worktree, so the --agent-policy file next to it is outside both.
+	std::filesystem::path project_root() const
+	{
+		std::filesystem::create_directories(dir.path() / "project" / ".git");
+		return dir.path() / "project";
+	}
+
 	void person_arrives()
 	{
 		access->set_questions_routed(true);
@@ -136,7 +143,7 @@ BOOST_AUTO_TEST_CASE(Headless_NobodyIsAsked_EvenWithAReadableFontAndRoutedQuesti
 	BOOST_REQUIRE(finished.size() == 1u);
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
 	BOOST_TEST(access->confirmations().pending().empty());
-	BOOST_TEST(!access->policy().person_can_answer());
+	BOOST_TEST(access->policy().headless());
 	BOOST_TEST(runs == 0);
 }
 
@@ -156,7 +163,7 @@ BOOST_AUTO_TEST_CASE(TurningHeadless_DeclinesWhatWaits)
 BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_AnswersAnAskInAdvance)
 {
 	dir.write("answers.json", R"({"categories":{"code_files":"allow"}})");
-	access->policy().set_preanswers_file(dir.path() / "answers.json");
+	access->policy().set_preanswers_file(dir.path() / "answers.json", project_root());
 	access->set_headless(true);
 	person_arrives();
 	ask_as("s1");
@@ -166,10 +173,24 @@ BOOST_AUTO_TEST_CASE(Headless_TheAgentPolicyFile_AnswersAnAskInAdvance)
 	BOOST_TEST(runs == 1);
 }
 
+// With a window the file never answers, also when nobody can be asked there (a font without Cyrillic, before the first frame).
+BOOST_AUTO_TEST_CASE(WithAWindowAndNobodyToAsk_TheAgentPolicyFile_DoesNotAnswer)
+{
+	dir.write("answers.json", R"({"categories":{"code_files":"allow"}})");
+	access->policy().set_preanswers_file(dir.path() / "answers.json", project_root());
+	access->set_questions_routed(true);
+	access->set_person_present(false);
+	ask_as("s1");
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+}
+
 BOOST_AUTO_TEST_CASE(WithAPerson_TheAgentPolicyFile_DoesNotAnswer)
 {
 	dir.write("answers.json", R"({"categories":{"code_files":"allow"}})");
-	access->policy().set_preanswers_file(dir.path() / "answers.json");
+	access->policy().set_preanswers_file(dir.path() / "answers.json", project_root());
 	person_arrives();
 	ask_as("s1");
 

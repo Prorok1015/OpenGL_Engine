@@ -783,6 +783,22 @@ BOOST_FIXTURE_TEST_CASE(ACommandsOwnEntry_DoesNotSpeakForTheCategoryOfItsCall, p
 	BOOST_TEST(runs == 1);
 }
 
+// The --agent-policy file answers a call by the call's category: code_edit does not answer a CMake write (cmake_presets).
+BOOST_FIXTURE_TEST_CASE(TheAgentPolicyFile_AnswersACallByItsOwnCategory, per_call_fixture)
+{
+	fs::create_directories(dir.path() / "project" / ".git");
+	policy.set_headless(true);
+	dir.write("answers.json", R"({"categories":{"code_edit":"allow"}})");
+	policy.set_preanswers_file(dir.path() / "answers.json", dir.path() / "project");
+	BOOST_TEST(write("src/a.cpp").ok);
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::denied);
+
+	dir.write("answers2.json", R"({"categories":{"code_edit":"allow","cmake_presets":"allow"}})");
+	policy.set_preanswers_file(dir.path() / "answers2.json", dir.path() / "project");
+	BOOST_TEST(write("CMakeLists.txt").ok);
+	BOOST_TEST(runs == 2);
+}
+
 BOOST_FIXTURE_TEST_CASE(ArgumentsThatBreakTheSchema_NeverReachCategoryOf, per_call_fixture)
 {
 	dir.write(".snk/agent_policy.json", R"({"categories":{"code_edit":"allow"}})");
@@ -846,7 +862,7 @@ BOOST_AUTO_TEST_CASE(AnUnclassifiedCommand_StaysDenied_WhateverCategoryItsCallHa
 
 BOOST_AUTO_TEST_SUITE_END()
 
-// The --agent-policy file (#452 PR-3): answers to `ask` given in advance, read only while nobody can be asked.
+// The --agent-policy file (#452 PR-3): answers to `ask` given in advance, applied only in a headless editor.
 BOOST_AUTO_TEST_SUITE(EdtAgentPolicyPreanswers)
 
 namespace {
@@ -856,10 +872,19 @@ struct preanswers_fixture
 	test_util::temp_dir dir{ "edt_agent_policy_preanswers" };
 	edt::agent_policy policy{ dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json" };
 
+	// A project that is its own git worktree; answers.json lies next to it, outside both.
+	fs::path project_root = dir.path() / "project";
+
+	preanswers_fixture()
+	{
+		fs::create_directories(project_root / ".git");
+		policy.set_headless(true);
+	}
+
 	void answers(std::string_view text)
 	{
 		dir.write("answers.json", text);
-		policy.set_preanswers_file(dir.path() / "answers.json");
+		policy.set_preanswers_file(dir.path() / "answers.json", project_root);
 	}
 
 	policy_mode mode_of(const cmd::command_desc& command) { return policy.effective(command).mode; }
@@ -867,7 +892,7 @@ struct preanswers_fixture
 
 }
 
-BOOST_FIXTURE_TEST_CASE(WithoutAPerson_TheFileTurnsAskIntoAllow, preanswers_fixture)
+BOOST_FIXTURE_TEST_CASE(Headless_TheFileTurnsAskIntoAllow, preanswers_fixture)
 {
 	answers(R"({"categories":{"code_files":"allow"},"commands":{"code.write":"allow"}})");
 	const auto create = command_of("code.create", agent_category::code_files);
@@ -881,15 +906,15 @@ BOOST_FIXTURE_TEST_CASE(WithoutAPerson_TheFileTurnsAskIntoAllow, preanswers_fixt
 	BOOST_TEST((mode_of(command_of("code.edit_other", agent_category::code_edit)) == policy_mode::ask));
 }
 
-BOOST_FIXTURE_TEST_CASE(WithAPerson_TheSameFileDoesNothing_AskStillGoesToThePerson, preanswers_fixture)
+BOOST_FIXTURE_TEST_CASE(WithAWindow_TheSameFileDoesNothing, preanswers_fixture)
 {
 	answers(R"({"categories":{"code_files":"allow","scene_edit":"deny"}})");
-	policy.set_person_can_answer(true);
+	policy.set_headless(false);
 
 	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::ask));
 	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::allow));
 
-	policy.set_person_can_answer(false);
+	policy.set_headless(true);
 	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::allow));
 }
 
@@ -974,17 +999,68 @@ BOOST_FIXTURE_TEST_CASE(AMissingFile_DeniesEverything_WithAnError, preanswers_fi
 	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
 		if (level == engine::log_level::error && category == "editor/agent_policy") errors.emplace_back(message);
 	});
-	policy.set_preanswers_file(dir.path() / "no_such_answers.json");
+	policy.set_preanswers_file(dir.path() / "no_such_answers.json", project_root);
 
 	BOOST_TEST(errors.size() == 1u);
 	BOOST_TEST(!policy.preanswers_error().empty());
 	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::deny));
 	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::deny));
 
-	// Once the file is there it is read like the layers, without a restart.
+	// Read once: a file that appears later changes nothing until a restart.
 	dir.write("no_such_answers.json", "{}");
+	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(AChangeWhileRunning_IsIgnored_WithOneWarning, preanswers_fixture)
+{
+	std::vector<std::string> warnings;
+	const auto sink = engine::add_log_sink([&warnings](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::warn && category == "editor/agent_policy") warnings.emplace_back(message);
+	});
+	answers(R"({"categories":{"code_files":"allow"}})");
+	const auto create = command_of("code.create", agent_category::code_files);
+	BOOST_TEST((mode_of(create) == policy_mode::allow));
+
+	// Another size than before: the change is seen by modification time and size.
+	dir.write("answers.json", R"({"categories":{"code_files":"deny","scene_edit":"deny"}})");
+	BOOST_TEST((mode_of(create) == policy_mode::allow));
+	dir.write("answers.json", R"({"categories":{"code_files":"ask"}})");
+	BOOST_TEST((mode_of(create) == policy_mode::allow));
 	BOOST_TEST((mode_of(command_of("scene.move", agent_category::scene_edit)) == policy_mode::allow));
+
+	BOOST_TEST(std::ranges::count_if(warnings, [](const std::string& w) { return w.find("changed while running") != std::string::npos; }) == 1);
+}
+
+BOOST_FIXTURE_TEST_CASE(AFileInsideTheProject_DeniesEverything, preanswers_fixture)
+{
+	dir.write("project/answers.json", R"({"categories":{"code_files":"allow"}})");
+	policy.set_preanswers_file(project_root / "answers.json", project_root);
+
+	BOOST_TEST(policy.preanswers_error().find("must be outside the project") != std::string::npos);
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::deny));
+	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(AFileInTheGitWorktreeOfTheProject_ButOutsideItsFolder_DeniesEverything, preanswers_fixture)
+{
+	fs::create_directories(dir.path() / "repo" / ".git");
+	fs::create_directories(dir.path() / "repo" / "game");
+	dir.write("repo/answers.json", R"({"categories":{"code_files":"allow"}})");
+	policy.set_preanswers_file(dir.path() / "repo" / "answers.json", dir.path() / "repo" / "game");
+
+	BOOST_TEST(policy.preanswers_error().find("must be outside the project") != std::string::npos);
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::deny));
+}
+
+BOOST_FIXTURE_TEST_CASE(AFileOutsideTheProjectsGitWorktree_Works, preanswers_fixture)
+{
+	fs::create_directories(dir.path() / "repo" / ".git");
+	fs::create_directories(dir.path() / "repo" / "game");
+	dir.write("outside.json", R"({"categories":{"code_files":"allow"}})");
+	policy.set_preanswers_file(dir.path() / "outside.json", dir.path() / "repo" / "game");
+
 	BOOST_TEST(policy.preanswers_error().empty());
+	BOOST_TEST((mode_of(command_of("code.create", agent_category::code_files)) == policy_mode::allow));
 }
 
 BOOST_FIXTURE_TEST_CASE(ABrokenFile_DeniesEverything, preanswers_fixture)
@@ -1002,7 +1078,7 @@ BOOST_FIXTURE_TEST_CASE(NoFileNamed_ChangesNothing, preanswers_fixture)
 	BOOST_TEST((mode_of(command_of("scene.query", agent_category::read)) == policy_mode::allow));
 }
 
-BOOST_FIXTURE_TEST_CASE(ThroughTheGate_AnAnsweredAskRuns_OnlyWhileNobodyCanBeAsked, preanswers_fixture)
+BOOST_FIXTURE_TEST_CASE(ThroughTheGate_AnAnsweredAskRuns_OnlyHeadless, preanswers_fixture)
 {
 	answers(R"({"categories":{"code_files":"allow"}})");
 	auto gate = std::make_shared<edt::agent_policy_gate>(policy);
@@ -1017,6 +1093,9 @@ BOOST_FIXTURE_TEST_CASE(ThroughTheGate_AnAnsweredAskRuns_OnlyWhileNobodyCanBeAsk
 	commands.set_policy_gate(gate);
 
 	BOOST_TEST(commands.invoke("code.create", boost::json::object{}, cmd::origin::agent("s1")).ok);
+	// A window where nobody can be asked (a font without Cyrillic, before the first frame): the file does not answer.
+	policy.set_headless(false);
+	BOOST_TEST(commands.invoke("code.create", boost::json::object{}, cmd::origin::agent("s1")).code == cmd::codes::denied);
 	gate->set_can_ask(true);
 	BOOST_TEST(commands.invoke("code.create", boost::json::object{}, cmd::origin::agent("s1")).code == cmd::codes::confirmation_required);
 	BOOST_TEST(runs == 1);

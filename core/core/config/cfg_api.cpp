@@ -187,7 +187,7 @@ bool cfg::initialize_configs(int argc, char* argv[])
 			"the protocol only: the log and everything else go to stderr. Closing stdin ends the session; with --headless "
 			"it also ends the editor (unsaved changes are dropped)")
 		("agent-policy", po::value<std::string>(), "a JSON file of answers given in advance to the agent policy's questions, "
-			"for a run nobody can be asked in (--headless): it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
+			"used only with --headless: it may turn \"ask\" into \"allow\" and tighten, never lift a deny. "
 			"Missing or broken: every agent request is denied");
 	
 	po::variables_map vm;

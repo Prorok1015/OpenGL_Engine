@@ -136,7 +136,7 @@ namespace edt
 		const policy_layer& personal, const std::string& project_error = {}, const std::string& personal_error = {},
 		bool live_mode_on = false);
 
-	// The --agent-policy file (#452): a person's answers to `ask` given in advance for a run nobody can be asked in. It is not
+	// The --agent-policy file (#452): a person's answers to `ask` given in advance for a headless run. It is not
 	// a policy layer: on top of `decided` (effective_mode_of_call of the two layers) it may turn an `ask` into `allow` (its
 	// command's own entry, or its category's for a command without risk) and tighten anything, never lift a deny (of a layer,
 	// of the defaults or a risk, of `unset`/`not_for_agents`, of the live switch). A file that cannot be used
@@ -168,13 +168,14 @@ namespace edt
 
 		// Whether the live mode is on: `live` commands are denied while it is not (and while nothing says it is).
 		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
-		// The --agent-policy file (apply_preanswers), read now and again when it changes; empty: none. A file that is missing
-		// or cannot be used is an ERROR and closes everything while it applies.
-		void set_preanswers_file(std::filesystem::path file);
-		// Whether a person can answer an `ask` now (agent_policy_gate::set_can_ask). The --agent-policy file applies only
-		// while nobody can (false, the default).
-		void set_person_can_answer(bool can_answer);
-		bool person_can_answer() const { return m_person_can_answer; }
+		// The --agent-policy file (apply_preanswers), read once, now; empty: none. A change while the editor runs is ignored
+		// (one WARN). A file that is missing, cannot be used, or lies inside `project_root` or the git worktree holding it
+		// (the nearest folder up from the project with a `.git` entry) is an ERROR and closes everything while it applies.
+		void set_preanswers_file(std::filesystem::path file, std::filesystem::path project_root);
+		// A headless editor (agent_access::set_headless). The --agent-policy file applies only there; with a window it never
+		// does, whether a person can be asked or not.
+		void set_headless(bool headless);
+		bool headless() const { return m_headless; }
 		// Command ids a layer names that no command has get one warning per load (a typo, or a module not loaded yet).
 		void set_known_commands(std::function<bool(std::string_view)> exists);
 		// Called (main thread) after a layer that was already loaded is read again, because its file changed or a person saved it:
@@ -220,7 +221,9 @@ namespace edt
 		source m_project;
 		source m_personal;
 		source m_preanswers;
-		bool m_person_can_answer = false;
+		std::filesystem::path m_preanswers_project_root;
+		bool m_warned_preanswers_change = false;
+		bool m_headless = false;
 		std::function<bool()> m_live_on;
 		std::function<bool(std::string_view)> m_known;
 		std::function<void()> m_on_changed;
@@ -235,12 +238,7 @@ namespace edt
 
 		cmd::policy_decision decide(const cmd::command_desc& command, const cmd::call& request) override;
 		bool can_ask() const override { return m_can_ask; }
-		// Tells the policy too: the --agent-policy file answers only while nobody can be asked.
-		void set_can_ask(bool value)
-		{
-			m_can_ask = value;
-			m_policy.set_person_can_answer(value);
-		}
+		void set_can_ask(bool value) { m_can_ask = value; }
 		// "Allow until this agent session ends": an `ask` for a category the agent's session was granted is an allow.
 		// A deny stays a deny. null: no grants.
 		void set_session_grants(const session_grants* grants) { m_grants = grants; }

@@ -53,7 +53,13 @@ prj::open_result prj::open_project(const fs::path& path)
 
 int prj::exit_code_for(const held_project& project)
 {
-	return project.answer == held_project::decision::continue_without_project ? 0 : k_exit_engine_version;
+	switch (project.answer) {
+	case held_project::decision::continue_without_project: return 0;
+	case held_project::decision::no_project: return k_exit_project_error;
+	case held_project::decision::none:
+	case held_project::decision::quit: break;
+	}
+	return k_exit_engine_version;
 }
 
 bool prj::refuse_without_asking(version_action action, bool non_interactive)

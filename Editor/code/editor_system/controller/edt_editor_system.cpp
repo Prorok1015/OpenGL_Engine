@@ -141,8 +141,8 @@ namespace {
 	CFG_VAR_DEF_INT(cfg_agent_session_idle_minutes, "editor/agent_session_idle_minutes", 30);
 	// Where .snk/mcp.json goes; empty: the open project's root, or the working directory without a project.
 	CFG_VAR_DEF_STRING(cfg_project_dir, "editor/project_dir", "");
-	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a run nobody can be
-	// asked in (agent_policy::set_preanswers_file). Relative to the working directory.
+	// --agent-policy <file> (#452): a person's answers to the agent policy's `ask`, given in advance for a headless run
+	// (agent_policy::set_preanswers_file). Relative to the working directory.
 	CFG_VAR_DEF_PATH(cfg_agent_policy_file, "editor/agent_policy_file", "");
 	// Build > Build Game (#434). Empty paths: found by the editor (see game_build_sdk_dir, edt_toolchain.h).
 	CFG_VAR_DEF_PATH(cfg_build_sdk_dir, "build/sdk_dir", "");
@@ -592,7 +592,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		m_agent_access->set_questions_routed(true);
 		m_agent_access->set_headless(headless);
 		if (const std::filesystem::path preanswers = *cfg_agent_policy_file; !preanswers.empty()) {
-			m_agent_access->policy().set_preanswers_file(preanswers);
+			if (headless) {
+				m_agent_access->policy().set_preanswers_file(preanswers, options.project_dir);
+			} else {
+				egLOG_WARN("agent", "--agent-policy ignored: not headless ({})", utf8_of(preanswers));
+			}
 		}
 		// Headless nobody reads a question, so the UI font is not checked (it has no Cyrillic there).
 		editor_layer->register_implicit("edt/agent_confirmations", [this, headless] {

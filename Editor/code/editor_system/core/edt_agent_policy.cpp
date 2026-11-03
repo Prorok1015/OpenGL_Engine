@@ -170,6 +170,37 @@ namespace edt
 			return out;
 		}
 
+		// Whether `path` is `folder` or lies under it (both canonical).
+		bool is_within(const std::filesystem::path& path, const std::filesystem::path& folder)
+		{
+			return std::mismatch(folder.begin(), folder.end(), path.begin(), path.end()).first == folder.end();
+		}
+
+		// The --agent-policy file is a person's answer: one inside the project, or inside the git worktree that holds it,
+		// could be written by the agent it answers for. Empty: the place is fine.
+		std::string preanswers_location_error(const std::filesystem::path& file, const std::filesystem::path& project_root)
+		{
+			if (project_root.empty()) return "there is no project folder to check its place against";
+			std::error_code ec;
+			const std::filesystem::path real = std::filesystem::canonical(file, ec);
+			if (ec) return "the file cannot be resolved: " + ec.message();
+			const std::filesystem::path root = std::filesystem::weakly_canonical(project_root, ec);
+			if (ec) return "the project folder cannot be resolved: " + ec.message();
+			if (is_within(real, root)) return "the --agent-policy file must be outside the project";
+			for (std::filesystem::path folder = root; !folder.empty(); folder = folder.parent_path()) {
+				std::error_code probe;
+				if (std::filesystem::exists(std::filesystem::symlink_status(folder / ".git", probe))) {
+					if (is_within(real, folder)) {
+						return "the --agent-policy file must be outside the project and the git worktree holding it ("
+							+ fs_paths::utf8_of(folder) + ")";
+					}
+					break;
+				}
+				if (folder == folder.parent_path()) break;
+			}
+			return {};
+		}
+
 		std::optional<std::string> read_text(const std::filesystem::path& file)
 		{
 			std::ifstream in(file, std::ios::binary);
@@ -447,19 +478,21 @@ namespace edt
 		m_preanswers.kind = policy_layer_kind::preanswers;
 	}
 
-	void agent_policy::set_preanswers_file(std::filesystem::path file)
+	void agent_policy::set_preanswers_file(std::filesystem::path file, std::filesystem::path project_root)
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::set_preanswers_file: main thread only");
 		m_preanswers = source{};
 		m_preanswers.kind = policy_layer_kind::preanswers;
 		m_preanswers.file = std::move(file);
+		m_preanswers_project_root = std::move(project_root);
+		m_warned_preanswers_change = false;
 		if (has_preanswers()) reload(m_preanswers);
 	}
 
-	void agent_policy::set_person_can_answer(bool can_answer)
+	void agent_policy::set_headless(bool headless)
 	{
-		if (m_person_can_answer == can_answer) return;
-		m_person_can_answer = can_answer;
+		if (m_headless == headless) return;
+		m_headless = headless;
 		// What an agent may see follows: the --agent-policy file applies or stops applying.
 		if (has_preanswers() && m_on_changed) m_on_changed();
 	}
@@ -536,6 +569,11 @@ namespace edt
 			// Not "no answers": the person named a file, and a run that cannot read it must not go on as if they had not.
 			what.error = "the file does not exist";
 		}
+		else if (std::string misplaced = what.kind == policy_layer_kind::preanswers
+				? preanswers_location_error(what.file, m_preanswers_project_root) : std::string{};
+			!misplaced.empty()) {
+			what.error = std::move(misplaced);
+		}
 		else if (now.exists) {
 			const std::optional<std::string> text = read_text(what.file);
 			if (!text) {
@@ -549,7 +587,7 @@ namespace edt
 		}
 		if (!what.error.empty()) {
 			if (what.kind == policy_layer_kind::preanswers) {
-				egLOG_ERROR("editor/agent_policy", "--agent-policy {}: {}; every agent request is denied while nobody can be asked",
+				egLOG_ERROR("editor/agent_policy", "--agent-policy {}: {}; every agent request of a headless run is denied",
 					fs_paths::utf8_of(what.file), what.error);
 			}
 			else {
@@ -584,7 +622,12 @@ namespace edt
 		for (source* what : { &m_project, &m_personal }) {
 			if (changed_on_disk(*what)) reload(*what);
 		}
-		if (has_preanswers() && changed_on_disk(m_preanswers)) reload(m_preanswers);
+		// Read once: answers a running editor took in must not change under it (nor be swapped in by what it runs).
+		if (has_preanswers() && !m_warned_preanswers_change && changed_on_disk(m_preanswers)) {
+			m_warned_preanswers_change = true;
+			egLOG_WARN("editor/agent_policy", "--agent-policy {} changed while running: ignored until restart",
+				fs_paths::utf8_of(m_preanswers.file));
+		}
 	}
 
 	effective_policy agent_policy::effective(const cmd::command_desc& command)
@@ -599,7 +642,7 @@ namespace edt
 		const bool live_on = m_live_on && m_live_on();
 		effective_policy decided = effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error,
 			m_personal.error, live_on);
-		if (!has_preanswers() || m_person_can_answer) return decided;
+		if (!has_preanswers() || !m_headless) return decided;
 		return apply_preanswers(command, category, std::move(decided), m_preanswers.layer, m_preanswers.error);
 	}
 
