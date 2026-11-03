@@ -2893,4 +2893,101 @@ BOOST_AUTO_TEST_CASE(APersonalLayerThatAllowsAFlag_ClosesEveryAgentNetworkCall)
 	BOOST_TEST(!network);
 }
 
+// A guarded pull that names a remote but no branch pulls the current branch's upstream only when the branch tracks
+// that remote; otherwise the caller must name the branch.
+BOOST_AUTO_TEST_CASE(AGuardedPull_OfANamedRemoteWithoutABranch_NeedsTheBranchToTrackIt)
+{
+	bool tracks = true;
+	command = [&tracks](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "symbolic-ref")) on_line("main\n");
+		if (has_arg(args, "branch.main.remote")) {
+			if (!tracks) return exited(1);
+			on_line("origin\n");
+		}
+		if (has_arg(args, "branch.main.merge")) on_line("refs/heads/main\n");
+		return exited(0);
+	};
+	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
+	make_service(fake_options());
+	service->set_policy_source([] {
+		edt::vcs_policy policy;
+		policy.remotes = { "origin", "upstream" };
+		return policy;
+	});
+	const auto fetches = [this] {
+		return std::count_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "fetch"); });
+	};
+	const auto agent = cmd::origin_kind::agent;
+
+	BOOST_TEST(is_error(finish(service->start_pull("upstream", {}, agent)), cmd::codes::invalid_args));
+	BOOST_TEST(fetches() == 0);
+
+	finish(service->start_pull("origin", {}, agent));
+	BOOST_REQUIRE(fetches() == 1);
+	const auto fetch = *std::find_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "fetch"); });
+	BOOST_REQUIRE(fetch.size() >= 2u);
+	BOOST_TEST(fetch[fetch.size() - 2] == "origin");
+	BOOST_TEST(fetch.back() == "refs/heads/main");
+
+	tracks = false;
+	BOOST_TEST(is_error(finish(service->start_pull("origin", {}, agent)), cmd::codes::invalid_args));
+	BOOST_TEST(fetches() == 1);
+}
+
+// A guarded checkout of a branch only a remote has checks out the very OID it checked, then sets the upstream; a
+// failing upstream step is reported but the branch stays.
+BOOST_AUTO_TEST_CASE(AGuardedCheckoutOfARemoteOnlyBranch_UsesTheCheckedOid)
+{
+	bool upstream_fails = false;
+	command = [&upstream_fails](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "for-each-ref")) {
+			on_line("refs/remotes/origin/feature\n");
+			return exited(0);
+		}
+		if (has_arg(args, "--set-upstream-to=refs/remotes/origin/feature") && upstream_fails) {
+			platform::process_result result = exited(128);
+			return result;
+		}
+		return exited(0);
+	};
+	auto options = fake_options();
+	options.run = [inner = options.run](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "refs/heads/feature^{commit}") || has_arg(args, "feature^{commit}")) return exited(1);
+		if (has_arg(args, "refs/remotes/origin/feature^{commit}")) {
+			on_line("3333333333333333333333333333333333333333\n");
+			return exited(0);
+		}
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+
+	const json::value result = finish(service->start_checkout("feature", cmd::origin_kind::agent));
+	BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+	const auto checkout = std::find_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
+		return has_arg(call, "checkout") && has_arg(call, "-b");
+	});
+	BOOST_REQUIRE(checkout != calls.end());
+	BOOST_REQUIRE(checkout->size() >= 4u);
+	BOOST_TEST((*checkout)[checkout->size() - 4] == "-b");
+	BOOST_TEST((*checkout)[checkout->size() - 3] == "feature");
+	BOOST_TEST((*checkout)[checkout->size() - 2] == "3333333333333333333333333333333333333333");
+	BOOST_TEST(checkout->back() == "--");
+	BOOST_TEST(!has_arg(*checkout, "--track"));
+	BOOST_TEST(!has_arg(*checkout, "refs/remotes/origin/feature"));
+	const auto& upstream = calls.back();
+	BOOST_TEST(has_arg(upstream, "branch"));
+	BOOST_TEST(has_arg(upstream, "--set-upstream-to=refs/remotes/origin/feature"));
+	BOOST_TEST(upstream.back() == "feature");
+	// The guarded overrides apply to the upstream step too.
+	BOOST_TEST(has_arg(upstream, "protocol.allow=never"));
+
+	upstream_fails = true;
+	const json::value failed = finish(service->start_checkout("feature", cmd::origin_kind::agent));
+	BOOST_TEST(failed.as_object().contains("error"), json::serialize(failed));
+	BOOST_TEST(has_arg(calls.back(), "--set-upstream-to=refs/remotes/origin/feature"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

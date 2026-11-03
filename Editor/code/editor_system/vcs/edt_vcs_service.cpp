@@ -1712,6 +1712,7 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 	return run_job("git checkout", [ref](const git_context& git, ds::task_context& task) -> json::value {
 		// The trailing "--": the ref is never read as a path. Never --force: local changes stop the checkout.
 		std::vector<std::string> args{ "checkout", "-q", "--no-recurse-submodules", ref, "--" };
+		std::string upstream;
 		if (git.guarded) {
 			// Resolved once: the filter check and the checkout must see the same tree.
 			const auto plan = plan_checkout(git, ref, task.stop);
@@ -1731,7 +1732,7 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 				target_oid = std::string(trim(peeled.out));
 			}
 			if (auto refusal = policy_refusal(git, target_oid, task)) return std::move(*refusal);
-			if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, plan->target }, task.stop)) {
+			if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, target_oid }, task.stop)) {
 				return refusal_json(*refusal, task);
 			}
 			// A branch by its short name, once refs/heads/<ref> is known to exist: `checkout refs/heads/x` would detach,
@@ -1740,11 +1741,19 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 				args = { "checkout", "-q", "--no-recurse-submodules", "--detach", plan->target, "--" };
 			}
 			else if (plan->kind == checkout_kind::remote_branch) {
-				args = { "checkout", "-q", "--no-recurse-submodules", "-b", ref, "--track", plan->target, "--" };
+				// The checked OID, not the remote ref, which a fetch on the other io thread may move meanwhile; the
+				// upstream is set after.
+				args = { "checkout", "-q", "--no-recurse-submodules", "-b", ref, target_oid, "--" };
+				upstream = plan->target;
 			}
 		}
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = tree_write_failure_of(out, task)) return std::move(*failure);
+		if (!upstream.empty()) {
+			// The branch stays when this fails: the checkout is done, only the tracking is missing.
+			const git_output tracked = run_write(git, { "branch", "--set-upstream-to=" + upstream, ref }, task.stop);
+			if (auto failure = write_failure_of(tracked, task)) return std::move(*failure);
+		}
 		return output_json(out);
 	}, write_mode{ caller.kind, true, false });
 }
@@ -1802,6 +1811,22 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 			target = resolved.remote;
 		}
 		if (auto refusal = network_refusal(git, target, task.stop)) return refusal_json(*refusal, task);
+		if (git.guarded && wanted.empty() && !remote.empty()) {
+			// A named remote without a branch: only the current branch's upstream on that very remote is pulled, never
+			// its branch.<b>.merge fetched from a remote it does not track.
+			std::string tracked;
+			if (!resolved.branch.empty()) {
+				const git_output own = run_git(git, { "config", "--get", "branch." + resolved.branch + ".remote" }, task.stop,
+					k_read_cap);
+				if (task.stop.stop_requested()) throw ds::task_cancelled{};
+				if (listing_failed(own) || own.truncated) return error_json("git_failed", "git could not read the current branch's remote", {}, -1);
+				tracked = std::string(trim(own.out));
+			}
+			if (tracked != remote) {
+				return error_json(cmd::codes::invalid_args, std::format("name the branch to pull from '{}'",
+					vcs::valid_utf8(remote)), {}, -1);
+			}
+		}
 		if (git.guarded && wanted.empty()) {
 			std::string why;
 			const std::optional<std::string> upstream = upstream_ref(git, resolved.branch, why, task.stop);
