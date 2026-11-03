@@ -189,7 +189,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersDefaultTable_DecidesWhatElseIsListed)
 	const std::pair<agent_category, bool> table[] = {
 		{ agent_category::read, true }, { agent_category::scene_edit, true }, { agent_category::code_edit, true },
 		{ agent_category::code_files, true }, { agent_category::cmake_presets, true }, { agent_category::build, false },
-		{ agent_category::live, false },
+		{ agent_category::live, false }, { agent_category::play, true },
 	};
 	for (const auto& [category, listed] : table) {
 		cmd::command_desc desc = make("x.y");
@@ -1318,6 +1318,37 @@ BOOST_AUTO_TEST_CASE(EveryWayASessionEnds_ReachesTheEditorOnce)
 	endpoint.close_all();
 	drain();
 	BOOST_TEST(closed_sessions.size() == 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ACallQueuedBeforeASessionWasEndedOnPurpose_DoesNotRun)
+{
+	int runs = 0;
+	cmd::command_desc desc = make("probe.read");
+	desc.invoke = [&runs](const cmd::call&) {
+		++runs;
+		return cmd::result::success();
+	};
+	add(std::move(desc));
+
+	std::optional<mcp::call_result> from_ended;
+	std::optional<mcp::call_result> from_other;
+	mcp::request_context ended;
+	ended.session_id = "closed-by-the-person";
+	mcp::request_context other;
+	other.session_id = "still-there";
+	bridge.call_tool(ended, "probe_read", json_of("{}"), nullptr, [&from_ended](mcp::call_result r) { from_ended = std::move(r); });
+	bridge.call_tool(other, "probe_read", json_of("{}"), nullptr, [&from_other](mcp::call_result r) { from_other = std::move(r); });
+	// The person closes the session while its call still waits for the main thread's queue.
+	bridge.end_sessions({ "closed-by-the-person" });
+	drain();
+
+	BOOST_REQUIRE(from_ended.has_value() && from_other.has_value());
+	BOOST_TEST(from_ended->is_error);
+	BOOST_TEST(!from_other->is_error);
+	BOOST_TEST(runs == 1);
+	// And a later call of the ended session is refused too.
+	BOOST_TEST(call_tool("probe_read", "{}", "closed-by-the-person").is_error);
+	BOOST_TEST(runs == 1);
 }
 
 BOOST_AUTO_TEST_CASE(ASessionEndingAfterTheBridgeIsGone_ReachesNobody)

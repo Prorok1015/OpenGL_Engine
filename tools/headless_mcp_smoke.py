@@ -2,11 +2,12 @@
 """Smoke test of the editor's MCP stdio transport (#452): no display, no sockets.
 
 Starts `<editor> --headless --mcp-stdio <editor args>`, speaks newline-delimited JSON-RPC on its stdin/stdout
-(initialize, notifications/initialized, tools/list, tools/call problems_list), then closes stdin and requires the
-editor to exit with 0. Every line on stdout must be a JSON-RPC 2.0 message: anything else (a stray print, a log line)
+(initialize, notifications/initialized, tools/list, tools/call problems_list), with --play also drives Play
+(#491: play_start, play_pause, play_step{n: 2}, play_status until the two frames ran, play_stop), then closes stdin and
+requires the editor to exit with 0. Every line on stdout must be a JSON-RPC 2.0 message: anything else (a stray print, a log line)
 breaks an MCP client. Standard library only; every wait has a timeout, so the script cannot hang.
 
-    tools/headless_mcp_smoke.py --editor build/dev-debug/Editor/editor [--stderr editor.log] -- \
+    tools/headless_mcp_smoke.py --editor build/dev-debug/Editor/editor [--stderr editor.log] [--play] -- \
         --config Editor/config/editor.cfg --project projects/sandbox
 """
 import argparse
@@ -25,8 +26,10 @@ class SmokeFailure(Exception):
 
 
 class EditorSession:
-    def __init__(self, command, stderr_path, request_timeout):
+    def __init__(self, command, stderr_path, request_timeout, overall_timeout):
         self.request_timeout = request_timeout
+        self.overall_timeout = overall_timeout
+        self.overall_deadline = time.monotonic() + overall_timeout
         self.stderr_file = open(stderr_path, "wb") if stderr_path else None
         self.process = subprocess.Popen(
             command,
@@ -65,13 +68,21 @@ class EditorSession:
         except (BrokenPipeError, OSError) as error:
             raise SmokeFailure(f"the editor does not take input any more: {error}")
 
+    def deadline(self, seconds):
+        """now + seconds, but never past the overall deadline."""
+        return min(time.monotonic() + seconds, self.overall_deadline)
+
     def request(self, request_id, method, params):
+        what = f"{method} {params.get('name')}" if method == "tools/call" else method
+        if time.monotonic() >= self.overall_deadline:
+            raise SmokeFailure(f"the overall deadline of {self.overall_timeout} s passed before {what} (id {request_id})")
         self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-        deadline = time.monotonic() + self.request_timeout
+        deadline = self.deadline(self.request_timeout)
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise SmokeFailure(f"no answer to {method} (id {request_id}) within {self.request_timeout} s")
+                raise SmokeFailure(f"no answer to {what} (id {request_id}) within {self.request_timeout} s "
+                                   f"or the overall deadline of {self.overall_timeout} s")
             try:
                 raw = self.lines.get(timeout=remaining)
             except queue.Empty:
@@ -116,13 +127,93 @@ class EditorSession:
             self.stderr_file.close()
 
 
+def call_tool(session, request_id, name, args=None):
+    """tools/call; returns (is_error, structuredContent, text of the first content block)."""
+    result = session.request(request_id, "tools/call", {"name": name, "arguments": args or {}})
+    content = result.get("content") or []
+    text = content[0].get("text", "") if content and isinstance(content[0], dict) else ""
+    return bool(result.get("isError")), result.get("structuredContent"), text
+
+
+def expect_status(name, structured, state):
+    if not isinstance(structured, dict) or structured.get("state") != state:
+        raise SmokeFailure(f"{name}: expected the state {state!r}, got {structured!r}")
+    if not isinstance(structured.get("frame"), int) or not isinstance(structured.get("worlds"), list):
+        raise SmokeFailure(f"{name}: not a play status: {structured!r}")
+    return structured
+
+
+def drive_play(session, first_id, timeout):
+    """Start, pause, step 2 frames, wait for them, stop. Returns the next free request id."""
+    request_id = first_id
+
+    def next_id():
+        nonlocal request_id
+        request_id += 1
+        return request_id
+
+    is_error, structured, text = call_tool(session, next_id(), "play_status")
+    if is_error:
+        raise SmokeFailure(f"play_status answered with an error: {text}")
+    expect_status("play_status", structured, "stopped")
+
+    # The startup level may still be loading: Play refuses with `failed` until it is there.
+    deadline = session.deadline(timeout)
+    while True:
+        is_error, structured, text = call_tool(session, next_id(), "play_start")
+        if not is_error:
+            break
+        if not text.startswith("failed") or time.monotonic() > deadline:
+            raise SmokeFailure(f"play_start answered with an error: {text}")
+        time.sleep(0.5)
+    expect_status("play_start", structured, "playing")
+    if not structured["worlds"]:
+        raise SmokeFailure(f"play_start: Play has no world: {structured!r}")
+    print(f"tools/call play_start: playing, worlds {structured['worlds']}")
+
+    is_error, structured, text = call_tool(session, next_id(), "play_step")
+    if not is_error or "pause first" not in text:
+        raise SmokeFailure(f"play_step while playing: expected 'pause first', got {text or structured!r}")
+
+    is_error, structured, text = call_tool(session, next_id(), "play_pause")
+    if is_error:
+        raise SmokeFailure(f"play_pause answered with an error: {text}")
+    paused_at = expect_status("play_pause", structured, "paused")["frame"]
+
+    is_error, structured, text = call_tool(session, next_id(), "play_step", {"n": 2})
+    if is_error:
+        raise SmokeFailure(f"play_step answered with an error: {text}")
+    expect_status("play_step", structured, "paused")
+    deadline = session.deadline(timeout)
+    while True:
+        is_error, structured, text = call_tool(session, next_id(), "play_status")
+        if is_error:
+            raise SmokeFailure(f"play_status answered with an error: {text}")
+        frame = expect_status("play_status", structured, "paused")["frame"]
+        if frame == paused_at + 2:
+            break
+        if frame > paused_at + 2:
+            raise SmokeFailure(f"play_step 2 from frame {paused_at} ran to frame {frame}")
+        if time.monotonic() > deadline:
+            raise SmokeFailure(f"play_step 2 from frame {paused_at} is still at frame {frame} after {timeout} s")
+        time.sleep(0.1)
+    print(f"tools/call play_step 2: frame {paused_at} -> {paused_at + 2}")
+
+    is_error, structured, text = call_tool(session, next_id(), "play_stop")
+    if is_error:
+        raise SmokeFailure(f"play_stop answered with an error: {text}")
+    expect_status("play_stop", structured, "stopped")
+    print("tools/call play_stop: stopped")
+    return next_id()
+
+
 def run(arguments):
     editor_args = arguments.editor_args
     if editor_args and editor_args[0] == "--":
         editor_args = editor_args[1:]
     command = [arguments.editor, "--headless", "--mcp-stdio", *editor_args]
     print("$ " + " ".join(command))
-    session = EditorSession(command, arguments.stderr, arguments.request_timeout)
+    session = EditorSession(command, arguments.stderr, arguments.request_timeout, arguments.overall_timeout)
     try:
         init = session.request(1, "initialize", {
             "protocolVersion": PROTOCOL_VERSION,
@@ -145,6 +236,9 @@ def run(arguments):
             raise SmokeFailure(f"problems_list answered with an error: {called}")
         print("tools/call problems_list: ok")
 
+        if arguments.play:
+            drive_play(session, 3, arguments.request_timeout)
+
         code = session.close_and_wait(arguments.exit_timeout)
         if code != 0:
             raise SmokeFailure(f"the editor exited with {code} after stdin was closed, expected 0")
@@ -160,6 +254,9 @@ def main():
     parser.add_argument("--editor", required=True, help="the editor executable")
     parser.add_argument("--stderr", help="file for the editor's stderr (the log); default: inherited")
     parser.add_argument("--request-timeout", type=float, default=90.0, help="seconds to wait for each answer")
+    parser.add_argument("--overall-timeout", type=float, default=200.0,
+                        help="seconds for everything before stdin is closed; a failure names the step that was waiting")
+    parser.add_argument("--play", action="store_true", help="also start, pause, step and stop Play over MCP (#491)")
     parser.add_argument("--exit-timeout", type=float, default=30.0, help="seconds to wait for the exit after stdin closes")
     parser.add_argument("editor_args", nargs=argparse.REMAINDER, help="more arguments for the editor, after --")
     arguments = parser.parse_args()

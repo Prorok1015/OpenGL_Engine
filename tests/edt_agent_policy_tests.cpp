@@ -70,6 +70,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersTable_ForEveryCategory)
 	BOOST_TEST((edt::default_mode(agent_category::build) == policy_mode::deny));
 	BOOST_TEST((edt::default_mode(agent_category::live) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::editor_control) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::play) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_read) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_commit) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::vcs_branch) == policy_mode::allow));
@@ -289,6 +290,15 @@ BOOST_AUTO_TEST_CASE(Serialize_RoundTrips)
 	BOOST_TEST(parsed.error.empty());
 	BOOST_TEST((parsed.layer.categories == layer.categories));
 	BOOST_TEST((parsed.layer.commands == layer.commands));
+}
+
+BOOST_AUTO_TEST_CASE(ThePlayCategory_IsSettableByName)
+{
+	BOOST_TEST(std::string_view(cmd::to_string(agent_category::play)) == "play");
+	BOOST_TEST((edt::parse_settable_category("play") == agent_category::play));
+	const auto parsed = edt::parse_policy_layer(R"json({"categories":{"play":"deny"}})json");
+	BOOST_TEST(parsed.error.empty());
+	BOOST_TEST((parsed.layer.categories.at(agent_category::play) == policy_mode::deny));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -1215,6 +1225,10 @@ BOOST_AUTO_TEST_CASE(FindLoosenings_SeesEveryWayAFileGetsLooser)
 	const auto lifted = find({}, layer_with("build.game_module", policy_mode::allow), { &build });
 	BOOST_TEST(std::ranges::any_of(lifted, [](const edt::policy_loosening& l) { return l.what == "command build.game_module"; }));
 	BOOST_TEST(find(layer_with("build.game_module", policy_mode::ask), layer_with("build.game_module", policy_mode::deny), { &build }).empty());
+
+	// Play (#491) is a settable category like the others: a project file that lifts its deny waits for approval.
+	BOOST_TEST(!find(layer_with(agent_category::play, policy_mode::deny), layer_with(agent_category::play, policy_mode::allow)).empty());
+	BOOST_TEST(find(layer_with(agent_category::play, policy_mode::allow), layer_with(agent_category::play, policy_mode::deny)).empty());
 }
 
 BOOST_AUTO_TEST_CASE(FindLoosenings_JudgesAnIdNoCommandHas_WithoutKnowingItsCategory)
@@ -1239,6 +1253,75 @@ edt::policy_layer parsed(const char* text)
 	return result.layer;
 }
 
+}
+
+BOOST_FIXTURE_TEST_CASE(AValueThatIsOnlyTheDefault_IsNotRecordedAsApproved, approval_fixture)
+{
+	write_project(R"({"categories":{"code_files":"ask","code_edit":"deny"},"vcs":{"push_branches":["agent/*"],"remotes":["origin"],"protected_branches":["main","master"],"allow_hooks":false}})");
+	const auto policy = make(false);
+	policy->effective(create);
+	BOOST_TEST(!policy->project_pending_approval());
+	// Only what is stricter than the default is kept: code_edit deny, not code_files ask, and nothing of the vcs section.
+	BOOST_TEST(policy->approved_project().categories.size() == 1u);
+	BOOST_TEST(policy->approved_project().categories.contains(agent_category::code_edit));
+	BOOST_TEST(!policy->approved_project().vcs.has_value());
+}
+
+BOOST_FIXTURE_TEST_CASE(AValueThatWentBackToTheDefault_DropsTheApprovedEntry, approval_fixture)
+{
+	write_project(R"({"categories":{"code_files":"allow"},"vcs":{"allow_hooks":true,"protected_branches":["release"]}})");
+	const auto policy = make();
+	BOOST_TEST(!policy->approve_project_layer(reviewed(*policy)).has_value());
+	BOOST_TEST(policy->approved_project().categories.contains(agent_category::code_files));
+
+	write_project(R"({"categories":{"code_files":"ask"},"vcs":{"allow_hooks":false,"protected_branches":["release","hotfix"]}})");
+	policy->effective(create);
+	BOOST_TEST(!policy->project_pending_approval());
+	BOOST_TEST(!policy->approved_project().categories.contains(agent_category::code_files));
+	BOOST_REQUIRE(policy->approved_project().vcs.has_value());
+	BOOST_TEST(!policy->approved_project().vcs->allow_hooks.has_value());
+	BOOST_TEST(policy->approved_project().vcs->protected_branches.has_value());
+}
+
+BOOST_AUTO_TEST_CASE(FindLoosenings_AnEmptyListIsNotAMissingKey_AndProtectedNamesAreComparedAsWritten)
+{
+	const auto count = [](const char* approved, const char* current) {
+		return edt::find_loosenings(parsed(approved), parsed(current), {}).size();
+	};
+	// No push at all, then the default again: looser. And the other way: stricter.
+	BOOST_TEST(count(R"({"vcs":{"push_branches":[]}})", "{}") == 1u);
+	BOOST_TEST(count(R"({"vcs":{"push_branches":[]}})", R"({"vcs":{"push_branches":["agent/*"]}})") == 1u);
+	BOOST_TEST(count("{}", R"({"vcs":{"push_branches":[]}})") == 0u);
+	BOOST_TEST(count(R"({"vcs":{"remotes":[]}})", "{}") == 1u);
+	BOOST_TEST(count("{}", R"({"vcs":{"remotes":[]}})") == 0u);
+	// A protected name that differs only in case is another entry as written: the approved one dropped is a loosening.
+	BOOST_TEST(count(R"({"vcs":{"protected_branches":["Release"]}})", R"({"vcs":{"protected_branches":["release"]}})") == 1u);
+	BOOST_TEST(count(R"({"vcs":{"protected_branches":["release"]}})", R"({"vcs":{"protected_branches":["release","Release"]}})") == 0u);
+}
+
+BOOST_FIXTURE_TEST_CASE(ACommandRegisteredAgainAtTheSameSize_IsJudgedAgainByTheRegistrysGeneration, approval_fixture)
+{
+	extra.push_back(command_of("scene.query", agent_category::read));
+	write_project(R"({"categories":{"code_files":"deny"},"commands":{"scene.query":"allow"}})");
+	std::uint64_t generation = 1;
+	int listed_calls = 0;
+	edt::agent_policy policy{ project_file, dir.path() / "personal.json", edt::approved_snapshot_location{ approved_file, key } };
+	policy.set_command_source([this, &listed_calls] {
+		++listed_calls;
+		std::vector<const cmd::command_desc*> all{ &create, &build, &wipe };
+		for (const cmd::command_desc& more : extra) all.push_back(&more);
+		return all;
+	}, [&generation] { return generation; });
+	BOOST_TEST((policy.effective(extra.front()).mode == policy_mode::allow));
+
+	// The gate asks again and again: the list of commands is not copied while nothing was registered.
+	const int after_first = listed_calls;
+	for (int i = 0; i < 10; ++i) policy.effective(extra.front());
+	BOOST_TEST(listed_calls == after_first);
+
+	extra.front().risk = cmd::danger::confirm;
+	++generation;
+	BOOST_TEST((policy.effective(extra.front()).mode == policy_mode::ask));
 }
 
 BOOST_AUTO_TEST_CASE(FindLoosenings_JudgesTheVcsSection)

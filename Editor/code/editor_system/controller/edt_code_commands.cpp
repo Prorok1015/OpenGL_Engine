@@ -28,7 +28,7 @@ namespace {
 	constexpr std::size_t k_max_listed = 5000;
 	// `old` of a replace: the search stays linear (Boyer-Moore) and small next to the file.
 	constexpr std::size_t k_max_replace_old = 64 * 1024;
-	// How long the main thread waits for the io thread to read a file before it gives up on the call.
+	// The read cannot block on what it reads (#484), but a slow file system or a long io queue must not hold the editor.
 	constexpr std::chrono::seconds k_read_timeout{ 5 };
 	constexpr const char* k_no_project = "no_project";
 
@@ -135,7 +135,7 @@ namespace {
 		if (std::string problem = on_disk_problem(root, tag.relative(), true); !problem.empty()) return { {}, std::move(problem) };
 		const fs::path file = root / fs_paths::path_from_utf8(tag.relative());
 		std::error_code ec;
-		// A plain file only: not a link (the resolver refuses one too), a folder or a FIFO that would block the read.
+		// A plain file only, with a message of its own: the resolver refuses a link, a folder or a FIFO too (#484).
 		if (!fs::is_regular_file(fs::symlink_status(file, ec)) || ec) return { {}, std::format("'{}' is not a regular file", tag.relative()) };
 		const auto size = fs::file_size(file, ec);
 		if (ec) return { {}, std::format("'{}' could not be read", tag.relative()) };
@@ -144,10 +144,14 @@ namespace {
 		}
 		const auto raw = res.fetch_data(tag);
 		if (!raw) return { {}, "code:// is not mounted" };
-		// The file may still be swapped for something that blocks after the checks above (the resolver reads by path,
-		// #484): the call gives up instead of holding the editor.
+		// A file swapped after the checks above is still refused by the resolver, which reads without following a link and
+		// without blocking on a FIFO (#484).
 		if (!raw->wait_for(k_read_timeout)) return { {}, std::format("'{}' could not be read in {} s", tag.relative(), k_read_timeout.count()) };
 		if (!raw->is_ready()) return { {}, std::format("'{}' could not be read", tag.relative()) };
+		// The file may have grown since its size was checked.
+		if (raw->data.size() > edt::k_code_file_limit) {
+			return { {}, std::format("'{}' is {} bytes: at most {} go through code.* in one call", tag.relative(), raw->data.size(), edt::k_code_file_limit) };
+		}
 		return { raw->data, {} };
 	}
 
