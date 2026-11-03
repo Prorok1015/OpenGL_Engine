@@ -9,12 +9,17 @@
 #include <boost/json/basic_parser_impl.hpp>
 #include <boost/json/parse.hpp>
 #include <boost/json/parse_options.hpp>
+#include <boost/json/string.hpp>
+#include <boost/json/value.hpp>
+#include <algorithm>
 #include <fstream>
+#include <initializer_list>
 #include <set>
 #include <thread>
 #include <iterator>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -25,6 +30,8 @@ namespace edt
 		constexpr cmd::agent_category settable[] = {
 			cmd::agent_category::read, cmd::agent_category::scene_edit, cmd::agent_category::code_edit, cmd::agent_category::code_files,
 			cmd::agent_category::cmake_presets, cmd::agent_category::build, cmd::agent_category::live, cmd::agent_category::editor_control,
+			cmd::agent_category::vcs_read, cmd::agent_category::vcs_commit, cmd::agent_category::vcs_branch,
+			cmd::agent_category::vcs_sync, cmd::agent_category::vcs_push,
 		};
 
 		cmd::policy_mode mode_of_risk(cmd::danger risk)
@@ -96,6 +103,73 @@ namespace edt
 			return parser.handler().duplicate;
 		}
 
+		// The "vcs" section of a layer; the error text, empty when it reads.
+		std::string parse_vcs_section(const json::value& value, policy_layer_kind kind, vcs_policy_layer& out)
+		{
+			if (!value.is_object()) return "\"vcs\" must be an object";
+			const auto read_list = [](const json::value& list, const std::string& name, std::optional<std::vector<std::string>>& into)
+				-> std::string {
+				if (!list.is_array()) return "\"vcs\": \"" + name + "\" must be a list of strings";
+				std::vector<std::string> items;
+				for (const json::value& item : list.as_array()) {
+					if (!item.is_string() || item.as_string().empty()) return "\"vcs\": \"" + name + "\" lists non-empty strings";
+					items.push_back(text_of(item.as_string()));
+				}
+				into = std::move(items);
+				return {};
+			};
+			for (const auto& member : value.as_object()) {
+				const std::string name(member.key());
+				const json::value& entry = member.value();
+				std::optional<bool>* flag = nullptr;
+				if (name == "push_branches") {
+					if (std::string error = read_list(entry, name, out.push_branches); !error.empty()) return error;
+					continue;
+				}
+				if (name == "remotes") {
+					if (std::string error = read_list(entry, name, out.remotes); !error.empty()) return error;
+					continue;
+				}
+				if (name == "protected_branches") {
+					if (std::string error = read_list(entry, name, out.protected_branches); !error.empty()) return error;
+					continue;
+				}
+				if (name == "allow_hooks") flag = &out.allow_hooks;
+				else if (name == "allow_filters") flag = &out.allow_filters;
+				else if (name == "allow_repo_credential_helper") flag = &out.allow_repo_credential_helper;
+				else if (name == "allow_any_repo_config") flag = &out.allow_any_repo_config;
+				else return "unknown key '" + name + "' in \"vcs\"";
+				if (!entry.is_bool()) return "\"vcs\": \"" + name + "\" must be true or false";
+				// The personal layer only tightens: it may switch a flag off, never on.
+				if (kind == policy_layer_kind::personal && entry.as_bool()) {
+					return "\"vcs\": only the project policy can allow " + name.substr(std::string_view("allow_").size());
+				}
+				*flag = entry.as_bool();
+			}
+			return {};
+		}
+
+		json::array json_list(const std::vector<std::string>& items)
+		{
+			json::array out;
+			out.reserve(items.size());
+			for (const auto& item : items) out.emplace_back(json::string(item));
+			return out;
+		}
+
+		// The project's list (else the default), keeping only what the personal list names too when it has one.
+		std::vector<std::string> narrowed(const std::optional<std::vector<std::string>>& project,
+			const std::optional<std::vector<std::string>>& personal, std::vector<std::string> fallback)
+		{
+			std::vector<std::string> out = project ? *project : std::move(fallback);
+			if (personal) {
+				std::erase_if(out, [&personal](const std::string& item) {
+					return std::find(personal->begin(), personal->end(), item) == personal->end();
+				});
+			}
+			return out;
+		}
+
 		std::optional<std::string> read_text(const std::filesystem::path& file)
 		{
 			std::ifstream in(file, std::ios::binary);
@@ -160,7 +234,7 @@ namespace edt
 		return std::nullopt;
 	}
 
-	policy_parse_result parse_policy_layer(std::string_view text)
+	policy_parse_result parse_policy_layer(std::string_view text, policy_layer_kind kind)
 	{
 		policy_parse_result out;
 		const auto fail = [&out](std::string why) {
@@ -212,6 +286,11 @@ namespace edt
 					put_command(command_id, *mode);
 				}
 			}
+			else if (name == "vcs") {
+				vcs_policy_layer vcs;
+				if (std::string error = parse_vcs_section(value, kind, vcs); !error.empty()) return fail(std::move(error));
+				out.layer.vcs = std::move(vcs);
+			}
 			else if (const auto listed = parse_policy_mode(name)) {
 				if (!value.is_array()) return fail("\"" + name + "\" must be a list of command ids");
 				for (const json::value& id : value.as_array()) {
@@ -236,6 +315,17 @@ namespace edt
 		root["version"] = 1;
 		root["categories"] = std::move(categories);
 		root["commands"] = std::move(commands);
+		if (layer.vcs) {
+			json::object vcs;
+			if (layer.vcs->push_branches) vcs["push_branches"] = json_list(*layer.vcs->push_branches);
+			if (layer.vcs->remotes) vcs["remotes"] = json_list(*layer.vcs->remotes);
+			if (layer.vcs->protected_branches) vcs["protected_branches"] = json_list(*layer.vcs->protected_branches);
+			if (layer.vcs->allow_hooks) vcs["allow_hooks"] = *layer.vcs->allow_hooks;
+			if (layer.vcs->allow_filters) vcs["allow_filters"] = *layer.vcs->allow_filters;
+			if (layer.vcs->allow_repo_credential_helper) vcs["allow_repo_credential_helper"] = *layer.vcs->allow_repo_credential_helper;
+			if (layer.vcs->allow_any_repo_config) vcs["allow_any_repo_config"] = *layer.vcs->allow_any_repo_config;
+			root["vcs"] = std::move(vcs);
+		}
 		return prj::to_indented_json(root);
 	}
 
@@ -279,10 +369,43 @@ namespace edt
 		return { base, base_source, std::move(why) };
 	}
 
+	vcs_policy effective_vcs(const policy_layer& project, const policy_layer& personal, const std::string& project_error,
+		const std::string& personal_error)
+	{
+		vcs_policy out;
+		if (!project_error.empty() || !personal_error.empty()) {
+			out.push_branches.clear();
+			out.remotes.clear();
+			return out;
+		}
+		const vcs_policy_layer none{};
+		const vcs_policy_layer& own = project.vcs ? *project.vcs : none;
+		const vcs_policy_layer& mine = personal.vcs ? *personal.vcs : none;
+		out.push_branches = narrowed(own.push_branches, mine.push_branches, std::move(out.push_branches));
+		out.remotes = narrowed(own.remotes, mine.remotes, std::move(out.remotes));
+		for (const auto* extra : { &own.protected_branches, &mine.protected_branches }) {
+			if (!*extra) continue;
+			for (const auto& branch : **extra) {
+				if (std::find(out.protected_branches.begin(), out.protected_branches.end(), branch) == out.protected_branches.end()) {
+					out.protected_branches.push_back(branch);
+				}
+			}
+		}
+		const auto flag = [](const std::optional<bool>& from_project, const std::optional<bool>& from_personal) {
+			return from_project.value_or(false) && from_personal.value_or(true);
+		};
+		out.permissions.allow_hooks = flag(own.allow_hooks, mine.allow_hooks);
+		out.permissions.allow_filters = flag(own.allow_filters, mine.allow_filters);
+		out.permissions.allow_repo_credential_helper = flag(own.allow_repo_credential_helper, mine.allow_repo_credential_helper);
+		out.permissions.allow_any_repo_config = flag(own.allow_any_repo_config, mine.allow_any_repo_config);
+		return out;
+	}
+
 	agent_policy::agent_policy(std::filesystem::path project_file, std::filesystem::path personal_file)
 	{
 		m_project.file = std::move(project_file);
 		m_personal.file = std::move(personal_file);
+		m_personal.kind = policy_layer_kind::personal;
 	}
 
 	namespace {
@@ -359,7 +482,7 @@ namespace edt
 				what.error = "the file cannot be read";
 			}
 			else {
-				policy_parse_result parsed = parse_policy_layer(*text);
+				policy_parse_result parsed = parse_policy_layer(*text, what.kind);
 				what.layer = std::move(parsed.layer);
 				what.error = std::move(parsed.error);
 			}
@@ -408,6 +531,13 @@ namespace edt
 		refresh();
 		const bool live_on = m_live_on && m_live_on();
 		return effective_mode_of_call(command, category, m_project.layer, m_personal.layer, m_project.error, m_personal.error, live_on);
+	}
+
+	vcs_policy agent_policy::effective_vcs()
+	{
+		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::effective_vcs: main thread only");
+		refresh();
+		return edt::effective_vcs(m_project.layer, m_personal.layer, m_project.error, m_personal.error);
 	}
 
 	std::optional<std::string> agent_policy::save(source& what, const policy_layer& layer, const prj::text_writer& write)

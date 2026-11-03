@@ -32,7 +32,8 @@ void scn::world_context::begin_frame(std::chrono::duration<float> dt)
 		break;
 	case ecs::run_mode::edit:
 	case ecs::run_mode::play:
-		frame_dt = static_cast<float>(m_stepper.clamp_dt(dt.count()));
+		// Scaled before the clamp: max_frame_dt keeps bounding the simulated time of one frame.
+		frame_dt = static_cast<float>(m_stepper.clamp_dt(static_cast<double>(dt.count()) * m_time_scale));
 		m_fixed_steps = m_stepper.advance(frame_dt);
 		break;
 	}

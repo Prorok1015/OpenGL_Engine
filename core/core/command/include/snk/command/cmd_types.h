@@ -51,6 +51,11 @@ namespace cmd
 		build,          // building and reloading the game module (runs the project's CMake code)
 		live,           // the live mode's commands, while it is on
 		editor_control, // running the editor itself: editor.quit of a headless editor driven over stdio
+		vcs_read,       // git status, diff, log, branches
+		vcs_commit,     // stage, unstage, commit
+		vcs_branch,     // create a branch, check one out
+		vcs_sync,       // fetch, pull (fast-forward only)
+		vcs_push,       // push to a remote
 	};
 
 	constexpr const char* to_string(agent_category category)
@@ -66,6 +71,11 @@ namespace cmd
 		case agent_category::build: return "build";
 		case agent_category::live: return "live";
 		case agent_category::editor_control: return "editor_control";
+		case agent_category::vcs_read: return "vcs_read";
+		case agent_category::vcs_commit: return "vcs_commit";
+		case agent_category::vcs_branch: return "vcs_branch";
+		case agent_category::vcs_sync: return "vcs_sync";
+		case agent_category::vcs_push: return "vcs_push";
 		}
 		return "unset";
 	}

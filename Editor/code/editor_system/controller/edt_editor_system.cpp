@@ -507,7 +507,6 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		return data.require<prj::project_context>().root;
 	};
 	m_vcs = std::make_unique<vcs_service>(m_context->jobs(), std::move(vcs));
-	// TODO(#455): set_write_permissions from the project policy; until then hooks and filters stay off for agents.
 	for (auto& command : register_vcs_commands(m_context->actions().commands(), *m_vcs)) {
 		m_registrations.push_back(std::move(command));
 	}
@@ -567,6 +566,9 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
+		// Asked at the start of every agent write, so an edit of either policy file applies at once.
+		m_vcs->set_policy_file(project_policy);
+		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
 		m_agent_access->policy().set_on_changed([this] {
 			if (m_agent_server) m_agent_server->notify_tools_changed();
 		});

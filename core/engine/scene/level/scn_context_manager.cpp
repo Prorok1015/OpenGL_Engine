@@ -42,11 +42,12 @@ scn::context_manager::~context_manager()
 	m_sets.clear();
 }
 
-std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_view name, scn::scene_layer* layer)
+std::unique_ptr<scn::context_set> scn::context_manager::make_set(std::string_view name, scn::scene_layer* layer,
+																 scn::set_options options)
 {
 	auto hot_reload = layer ? layer->hot_reload() : m_hot_reload_manager;
 	auto channel_types = layer ? layer->channel_types() : m_channel_types;
-	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types));
+	auto set = std::make_unique<scn::context_set>(std::string{ name }, std::move(hot_reload), std::move(channel_types), options);
 	set->set_layer(layer);
 	return set;
 }
@@ -94,7 +95,12 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	// The set "level" stays first in the update order and keeps how it runs; its worlds go with the old layer.
 	const auto it = std::ranges::find_if(m_sets, [this](const auto& set) { return set.get() == m_level_set; });
 	auto replacement = make_set(level_set_name, layer);
-	replacement->set_mode(m_level_set->mode());
+	if (m_level_set->mode() == ecs::run_mode::step) {
+		replacement->step(m_level_set->pending_steps());
+	} else {
+		replacement->set_mode(m_level_set->mode());
+	}
+	replacement->set_time_scale(m_level_set->time_scale());
 	replacement->set_seed(m_level_set->seed());
 	replacement->set_active(m_level_set->active());
 	*it = std::move(replacement);
@@ -105,13 +111,15 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	}
 }
 
-scn::context_set& scn::context_manager::create_set(std::string_view name, scn::scene_layer* layer)
+scn::context_set& scn::context_manager::create_set(std::string_view name, scn::scene_layer* layer, scn::set_options options)
 {
 	if (auto* existing = find_set(name)) {
 		egLOG_ERROR("scene", "create_set: set '{}' already exists, keeping the existing one", name);
+		ENGINE_VERIFY(existing->options() == options, "create_set: set '{}' exists with other options (hot_reload {}), they are kept",
+					  name, existing->options().hot_reload);
 		return *existing;
 	}
-	return *m_sets.emplace_back(make_set(name, layer));
+	return *m_sets.emplace_back(make_set(name, layer, options));
 }
 
 void scn::context_manager::destroy_set(std::string_view name)

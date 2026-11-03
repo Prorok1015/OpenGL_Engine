@@ -5,9 +5,10 @@
 #include <snk/common/logger/engine_log.h>
 
 scn::context_set::context_set(std::string name, std::shared_ptr<scn::hot_reload_manager> hot_manager,
-							  std::shared_ptr<ecs::channel_registry> channel_types)
+							  std::shared_ptr<ecs::channel_registry> channel_types, set_options options)
 	: m_name(std::move(name))
-	, m_hot_reload_manager(std::move(hot_manager))
+	, m_options(options)
+	, m_hot_reload_manager(options.hot_reload ? std::move(hot_manager) : std::shared_ptr<scn::hot_reload_manager>{})
 	, m_channel(m_name, std::move(channel_types))
 {
 }
@@ -42,7 +43,10 @@ void scn::context_set::update(std::chrono::duration<float> dt)
 		update_context(id, *context, mode);
 	}
 
-	if (mode == ecs::run_mode::step) m_mode = ecs::run_mode::pause;
+	if (mode == ecs::run_mode::step) {
+		if (m_pending_steps > 0) --m_pending_steps;
+		if (m_pending_steps == 0) m_mode = ecs::run_mode::pause;
+	}
 	sync_context_mode();
 }
 
@@ -64,7 +68,31 @@ void scn::context_set::begin_frame_channel(ecs::run_mode mode)
 void scn::context_set::set_mode(ecs::run_mode mode)
 {
 	m_mode = mode;
+	m_pending_steps = mode == ecs::run_mode::step ? 1 : 0;
 	sync_context_mode();
+}
+
+void scn::context_set::step(uint32_t frames)
+{
+	if (!ENGINE_VERIFY(frames >= 1, "set '{}': step of 0 frames, running one", m_name)) {
+		frames = 1;
+	}
+	set_mode(ecs::run_mode::step);
+	m_pending_steps = frames;
+}
+
+void scn::context_set::set_time_scale(float scale)
+{
+	if (!ENGINE_VERIFY(scale >= 0.0f, "set '{}': time scale {} is negative or NaN, using 0", m_name, scale)) {
+		scale = 0.0f;
+	} else if (!ENGINE_VERIFY(scale <= max_time_scale, "set '{}': time scale {} is above {}, using {}", m_name, scale,
+								max_time_scale, max_time_scale)) {
+		scale = max_time_scale;
+	}
+	m_time_scale = scale;
+	for (const auto& [id, context] : m_contexts) {
+		context->set_time_scale(m_time_scale);
+	}
 }
 
 void scn::context_set::sync_context_mode()
@@ -124,6 +152,7 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	m_channel.attach(id, w.get_name(), w.state());
 	w.seed(m_seed);
 	w.set_mode(m_mode);
+	w.set_time_scale(m_time_scale);
 	// lockstep: a context created later joins at the same point of the step as the others
 	if (lockstep_ref) w.set_stepper(*lockstep_ref);
 
@@ -134,7 +163,8 @@ scn::world_context& scn::context_set::create_context(std::string_view name, uint
 	return w;
 }
 
-void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler)
+void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factory& sfactory, scn::ecs_assembler& assambler,
+										 context_kind kind)
 {
 	m_tag = desc.get_tag();
 	// no leftover fraction of a step from the previous level
@@ -144,7 +174,7 @@ void scn::context_set::load_from_desc(const level_desc& desc, ecs::system_factor
 	m_desc_world_names.clear();
 	for (const auto& world_desc : desc.get_worlds()) {
 		m_desc_world_names.emplace_back(world_desc->get_name());
-		auto& world = create_context(world_desc->get_name(), acquire_free_id(), context_kind::level);
+		auto& world = create_context(world_desc->get_name(), acquire_free_id(), kind);
 		world.set_input_layer(world_desc->get_input_layer());
 		add_systems(world, world_desc->get_systems(), sfactory);
 
