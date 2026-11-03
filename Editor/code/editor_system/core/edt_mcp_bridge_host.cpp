@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -40,6 +41,23 @@ namespace {
 	bool is_capture(std::string_view command_id)
 	{
 		return command_id == "viewport.capture";
+	}
+
+	bool is_compare(std::string_view command_id)
+	{
+		return command_id == "capture.compare";
+	}
+
+	// The agent may ask for less than a ceiling, never for more.
+	void ceiling(json::object& object, const char* key, std::int64_t limit)
+	{
+		std::int64_t value = limit;
+		if (const json::value* given = object.if_contains(key)) {
+			if (const std::optional<std::int64_t> number = cmd::json_schema::integer_of(*given)) {
+				value = std::min(*number, limit);
+			}
+		}
+		object[key] = value;
 	}
 
 	// Limits the size an agent asks of viewport.capture. A size that is not an integer is left for the schema check of
@@ -68,20 +86,19 @@ namespace {
 		if (!sized) {
 			object["width"] = agent_default_capture_width;
 		}
-		// The agent may ask for less than the ceilings, never for more.
-		const auto ceiling = [&object](const char* key, std::int64_t limit) {
-			std::int64_t value = limit;
-			if (const json::value* given = object.if_contains(key)) {
-				if (const std::optional<std::int64_t> number = cmd::json_schema::integer_of(*given)) {
-					value = std::min(*number, limit);
-				}
-			}
-			object[key] = value;
-		};
-		ceiling("max_side", agent_max_capture_side);
-		ceiling("max_pixels", agent_max_capture_pixels);
-		ceiling("max_source_pixels", agent_max_source_pixels);
+		ceiling(object, "max_side", agent_max_capture_side);
+		ceiling(object, "max_pixels", agent_max_capture_pixels);
+		ceiling(object, "max_source_pixels", agent_max_source_pixels);
 		return std::nullopt;
+	}
+
+	// capture.compare reads the view back whole and cannot scale it (the comparison is at full size), so of the
+	// viewport.capture limits only the source one applies: a bigger view, or reference, is refused.
+	void limit_compare_args(json::value& args)
+	{
+		if (args.is_object()) {
+			ceiling(args.as_object(), "max_source_pixels", agent_max_source_pixels);
+		}
 	}
 
 	std::string too_large_text(std::size_t bytes)
@@ -245,6 +262,8 @@ struct edt::mcp_bridge_host::state
 	cmd::command_registry* commands = nullptr;
 	agent_access* access = nullptr;
 	session_closed_hook on_session_closed;
+	// Ended on purpose (end_sessions); ids are never reused, so an entry never blocks a later session.
+	std::set<std::string> ended_sessions;
 };
 
 edt::mcp_bridge_host::mcp_bridge_host(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access,
@@ -268,6 +287,15 @@ edt::mcp_bridge_host::~mcp_bridge_host()
 void edt::mcp_bridge_host::stop_reporting()
 {
 	m_state->on_session_closed = nullptr;
+}
+
+void edt::mcp_bridge_host::end_sessions(const std::vector<std::string>& session_ids)
+{
+	constexpr std::size_t remembered = 1024;
+	if (m_state->ended_sessions.size() + session_ids.size() > remembered) {
+		m_state->ended_sessions.clear();
+	}
+	m_state->ended_sessions.insert(session_ids.begin(), session_ids.end());
 }
 
 void edt::mcp_bridge_host::list_tools(std::function<void(std::vector<mcp::tool_info>)> done)
@@ -296,6 +324,10 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 			done(error_result("the editor is shutting down"));
 			return;
 		}
+		if (state->ended_sessions.contains(session)) {
+			done(error_result("the agent session was closed"));
+			return;
+		}
 		// The same check as the listing: a tool that is not listed does not exist for the agent.
 		const cmd::command_desc* command = find_tool(*state->commands, state->access->policy(), name);
 		if (command == nullptr) {
@@ -310,6 +342,8 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 				done(error_result(*refusal));
 				return;
 			}
+		} else if (is_compare(id)) {
+			limit_compare_args(limited);
 		}
 		cmd::call request;
 		request.args = std::move(limited);

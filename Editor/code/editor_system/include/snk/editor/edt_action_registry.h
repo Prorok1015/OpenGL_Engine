@@ -184,8 +184,8 @@ namespace edt
 		bool activate(std::string_view id);
 
 		// Activates the first enabled action bound to `chord`; with `text_input` (a text field has the keyboard),
-		// one that does not yield to it. False if there is none.
-		bool dispatch(const shortcut& chord, bool text_input = false);
+		// one that does not yield to it; with `allowed`, one whose id it accepts. False if there is none.
+		bool dispatch(const shortcut& chord, bool text_input = false, const std::function<bool(std::string_view)>& allowed = {});
 		// Visits every bound shortcut (not the ones of disabled actions); `visit` must not change the registry.
 		void for_each_shortcut(const std::function<void(const shortcut&)>& visit) const;
 

@@ -9,6 +9,7 @@
 #include <snk/mcp/mcp_server.h>
 #include <snk/mcp/mcp_stdio.h>
 
+#include <format>
 #include <memory>
 #include <optional>
 #include <string>
@@ -74,7 +75,7 @@ struct edt::agent_server::impl
 	agent_server_options options;
 	std::string token;
 	mcp_bridge_host bridge;
-	std::optional<mcp::server> server;
+	std::unique_ptr<mcp::server> server;
 	std::unique_ptr<mcp::stdio_transport> stdio;
 	mcp::connection_info file_info;
 	bool file_written = false;
@@ -93,34 +94,109 @@ edt::agent_server::agent_server(cmd::command_registry& commands, ds::task_system
 		egLOG_INFO("mcp", "agent server: MCP over stdin/stdout");
 	}
 	if (m_impl->options.http) {
-		start_http();
+		bring_up_http(m_impl->options.port);
 	}
 }
 
-void edt::agent_server::start_http()
+bool edt::agent_server::start_http(std::uint16_t port)
 {
-	m_impl->token = mcp::generate_token();
-	mcp::server& server = m_impl->server.emplace(m_impl->bridge, make_server_config(m_impl->options, m_impl->token));
-	if (!server.start()) {
-		egLOG_ERROR("mcp", "the agent server did not start");
+	if (running() && m_impl->options.port == port) {
+		return true;
+	}
+	return bring_up_http(port);
+}
+
+void edt::agent_server::stop_http()
+{
+	end_all_http_sessions();
+	if (m_impl->server) {
+		m_impl->server->stop();
+		m_impl->server.reset();
+	}
+	if (m_impl->file_written) {
+		mcp::remove_connection_file(snk_dir_of(m_impl->options), m_impl->file_info);
+		m_impl->file_written = false;
+	}
+	m_impl->options.http = false;
+}
+
+void edt::agent_server::end_all_http_sessions()
+{
+	if (!m_impl->server) {
 		return;
 	}
+	std::vector<std::string> ids;
+	for (const mcp::session_info& found : m_impl->server->sessions()) {
+		ids.push_back(found.id);
+	}
+	// Before the transport goes: a call of theirs that is already queued for the main thread must not run after this.
+	m_impl->bridge.end_sessions(ids);
+}
+
+std::vector<edt::agent_session_info> edt::agent_server::sessions() const
+{
+	std::vector<agent_session_info> out;
+	if (!m_impl->server) {
+		return out;
+	}
+	for (mcp::session_info& found : m_impl->server->sessions()) {
+		out.push_back({ std::move(found.id), std::move(found.client_name), found.age, found.idle, found.listening });
+	}
+	return out;
+}
+
+bool edt::agent_server::close_session(const std::string& id)
+{
+	if (!m_impl->server) {
+		return false;
+	}
+	m_impl->bridge.end_sessions({ id });
+	return m_impl->server->close_session(id);
+}
+
+bool edt::agent_server::active() const
+{
+	return running() || m_impl->stdio != nullptr;
+}
+
+// The new server binds its port first; only when that worked does it replace the old one, so a port that is taken leaves
+// the running server (and its connection file) as it was.
+bool edt::agent_server::bring_up_http(std::uint16_t port)
+{
+	agent_server_options wanted = m_impl->options;
+	wanted.port = port;
+	std::string token = mcp::generate_token();
+	auto fresh = std::make_unique<mcp::server>(m_impl->bridge, make_server_config(wanted, token));
+	if (!fresh->start()) {
+		egLOG_ERROR("mcp", "the agent server did not start on port {}{}", port,
+			running() ? std::format("; it keeps running on port {}", this->port()) : std::string{});
+		return false;
+	}
 	mcp::connection_info info;
-	info.port = server.port();
-	info.token = m_impl->token;
+	info.port = fresh->port();
+	info.token = token;
 	info.pid = mcp::current_process_id();
 	// A server nobody can find the token of is no use, one whose token file cannot be protected is not safe, and a
 	// project that another running editor already serves would have two editors fighting over one file.
-	const std::string failure = mcp::write_connection_file(snk_dir_of(m_impl->options), info);
+	const std::string failure = mcp::write_connection_file(snk_dir_of(wanted), info);
 	if (!failure.empty()) {
 		egLOG_ERROR("mcp", "the agent server is stopped: {}", failure);
-		server.stop();
-		return;
+		fresh->stop();
+		return false;
 	}
+	if (m_impl->server) {
+		end_all_http_sessions();
+		m_impl->server->stop();
+	}
+	m_impl->server = std::move(fresh);
+	m_impl->token = std::move(token);
+	m_impl->options = std::move(wanted);
+	m_impl->options.http = true;
 	m_impl->file_info = info;
 	m_impl->file_written = true;
 	egLOG_INFO("mcp", "agent server: {} (port and token in {})", info.url(),
 		mcp::connection_file_path(snk_dir_of(m_impl->options)).string());
+	return true;
 }
 
 edt::agent_server::~agent_server()

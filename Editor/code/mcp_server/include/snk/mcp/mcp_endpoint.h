@@ -49,6 +49,19 @@ namespace mcp
 	// resources/list, resources/templates/list, resources/read, resources/subscribe, resources/unsubscribe,
 	// notifications/resources/updated and notifications/tools/list_changed on the event stream (GET).
 	// Batches are refused (removed from the protocol in 2025-06-18). The methods themselves are rpc_dispatcher's.
+	// One MCP session as a person sees it (the agents window). `client_name` is what the client called itself in initialize
+	// (clientInfo.name): untrusted text, cut to 64 bytes without control characters.
+	struct session_info
+	{
+		std::string id;
+		std::string client_name;
+		std::chrono::seconds age{};
+		// Since the last request on the session.
+		std::chrono::seconds idle{};
+		// An event stream is open: the client is listening.
+		bool listening = false;
+	};
+
 	class endpoint
 	{
 	public:
@@ -79,12 +92,18 @@ namespace mcp
 		void expire_idle_sessions() const;
 
 		std::size_t session_count() const;
+		// The open sessions, oldest first.
+		std::vector<session_info> sessions() const;
+		// Ends one session as DELETE does (host::session_closed is called). False: there is none by that id.
+		bool close_session(const std::string& id);
 
 	private:
 		struct session
 		{
 			std::uint64_t serial = 0; // creation order, for eviction
+			std::chrono::steady_clock::time_point started{};
 			std::chrono::steady_clock::time_point last_used{};
+			std::string client_name;
 			std::set<std::string> subscriptions;
 			std::shared_ptr<event_channel> channel;
 		};
@@ -109,7 +128,7 @@ namespace mcp
 		// missing or names no session.
 		bool lookup_session(const http_request& request, std::string& session_id, std::shared_ptr<event_channel>& channel,
 			http_response& error) const;
-		std::string create_session();
+		std::string create_session(std::string client_name);
 		std::chrono::steady_clock::time_point now() const;
 
 		bool host_header_ok(const http_request& request) const;

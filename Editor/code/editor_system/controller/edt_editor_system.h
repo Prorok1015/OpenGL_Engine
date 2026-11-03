@@ -57,6 +57,7 @@ namespace edt {
 	class prefab_editor_panel;
 	class prefab_document;
 	class play_session;
+	class editor_mode_controller;
 
 	class editor_system
 	{
@@ -142,10 +143,21 @@ namespace edt {
 		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
 		void create_play_session(ds::app_data_storage& data);
 		void draw_play_status();
+		// editor/start_mode=game (#294): the start level loaded (or did not), now switch to the game, which starts Play.
+		void enter_startup_game_mode(bool level_loaded);
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
 
+	public:
+		// The person's switch for the agent server's HTTP transport (the agents window, #449): on (a new token and connection
+		// file; a different port restarts it) or off (every session ends and is reported). The choice is kept in
+		// edt://settings/agent_server.json, only when it took effect. False when there is no agent server object or the
+		// port cannot be bound. Main thread.
+		bool set_agent_server(bool enabled, std::uint16_t port);
+		agent_server* agent_server_object() { return m_agent_server.get(); }
+
+	private:
 		// Editor layer & panels
 		std::shared_ptr<edt::editor_layer> editor_layer;
 
@@ -177,7 +189,8 @@ namespace edt {
 		// The level whose load the change interrupted; loaded again into the new layer.
 		res::tag m_level_after_layer_change;
 		bool m_loading_level = false;
-		bool poll_level_load();
+		// True while the load goes on; when it ends, `loaded` (if given) says whether the level is loaded.
+		bool poll_level_load(bool* loaded = nullptr);
 
 		// Async asset drop / export auto-add (US-24-5)
 		res::res_handle<desc::desc_base> m_pending_desc_handle;
@@ -204,6 +217,10 @@ namespace edt {
 		std::unique_ptr<edt::play_session> m_play;
 		// Releases app.advance's time hold when Play stops (register_play_frame_commands).
 		connection m_play_hold_release;
+		// Editor or game layout (#294); reset in the destructor before the Play session it pauses and starts.
+		std::unique_ptr<edt::editor_mode_controller> m_modes;
+		// Gives the Scene view's camera its size back when the editor layout returns.
+		connection m_mode_changed;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
@@ -217,6 +234,7 @@ namespace edt {
 		std::unique_ptr<agent_access> m_agent_access;
 		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
+		std::filesystem::path m_agent_server_settings_file;
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;
 	};
