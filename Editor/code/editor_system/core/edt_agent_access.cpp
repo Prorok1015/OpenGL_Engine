@@ -4,11 +4,11 @@
 #include <utility>
 
 edt::agent_access::agent_access(cmd::command_registry& commands, std::filesystem::path project_policy_file,
-	std::filesystem::path personal_policy_file)
+	std::filesystem::path personal_policy_file, agent_confirmations::clock_function now)
 	: m_commands(commands)
 	, m_policy(std::move(project_policy_file), std::move(personal_policy_file))
 	, m_gate(std::make_shared<agent_policy_gate>(m_policy))
-	, m_confirmations(std::make_unique<agent_confirmations>(commands, m_grants))
+	, m_confirmations(std::make_unique<agent_confirmations>(commands, m_grants, std::move(now)))
 {
 	m_gate->set_session_grants(&m_grants);
 	m_policy.set_known_commands([&commands](std::string_view id) { return commands.find(id) != nullptr; });

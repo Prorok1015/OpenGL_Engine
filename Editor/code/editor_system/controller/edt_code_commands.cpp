@@ -483,7 +483,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 	auto impl = std::make_shared<code_commands>(deps);
 	std::vector<registration> out;
 	const auto add = [&](std::string id, std::string summary, std::string_view args, std::string_view result, bool mutates,
-		cmd::agent_category category, std::function<cmd::agent_category(const cmd::call&)> category_of,
+		bool destructive, cmd::agent_category category, std::function<cmd::agent_category(const cmd::call&)> category_of,
 		cmd::result (code_commands::*body)(const cmd::call&) const) {
 		cmd::command_desc desc;
 		desc.id = std::move(id);
@@ -491,6 +491,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 		desc.args_schema = parse_schema(args);
 		desc.result_schema = parse_schema(result);
 		desc.mutates = mutates;
+		desc.destructive = destructive;
 		desc.category = category;
 		desc.category_of = std::move(category_of);
 		desc.invoke = [impl, body](const cmd::call& call) { return ((*impl).*body)(call); };
@@ -510,7 +511,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 				"path":{"type":"string"},"kind":{"type":"string","enum":["file","dir"]},
 				"category":{"type":"string","enum":["source","header","cmake","other"]}},"required":["path","kind"]}},
 			"truncated":{"type":"boolean","description":"more than 5000 entries: list a folder at a time"}},"required":["entries","truncated"]})json",
-		false, cmd::agent_category::read, {}, &code_commands::list);
+		false, false, cmd::agent_category::read, {}, &code_commands::list);
 	add("code.read", "Read a code file (UTF-8) whole or a range of its lines; `version` is what code.write and code.delete take back",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1,"description":"under code/, '/' separated: src/game.cpp"},
@@ -520,7 +521,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 			"text":{"type":"string","description":"the lines asked for, line endings as they are"},
 			"version":{"type":"string"},"total_lines":{"type":"integer"},"from_line":{"type":"integer"},"line_count":{"type":"integer"}},
 			"required":["text","version","total_lines","from_line","line_count"]})json",
-		false, cmd::agent_category::read, {}, &code_commands::read);
+		false, false, cmd::agent_category::read, {}, &code_commands::read);
 	add("code.write", "Change an existing code file: the whole `text`, or `replace` {old, new} where `old` is found exactly once (byte for byte); `version` must be the one code.read gave, else `stale` and nothing is written",
 		R"json({"type":"object","properties":{
 			"path":{"type":"string","minLength":1},
@@ -529,19 +530,19 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 			"replace":{"type":"object","properties":{"old":{"type":"string","minLength":1},"new":{"type":"string"}},
 				"required":["old","new"],"additionalProperties":false}},
 			"required":["path","version"],"additionalProperties":false})json",
-		k_version_result, true, cmd::agent_category::code_edit, by_path(cmd::agent_category::code_edit), &code_commands::write);
+		k_version_result, true, false, cmd::agent_category::code_edit, by_path(cmd::agent_category::code_edit), &code_commands::write);
 	add("code.create", "Create a code file (never over an existing one); folders it needs are made",
 		R"json({"type":"object","properties":{"path":{"type":"string","minLength":1},"text":{"type":"string"}},
 			"required":["path"],"additionalProperties":false})json",
-		k_version_result, true, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::create);
+		k_version_result, true, false, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::create);
 	add("code.delete", "Delete a code file; `version` must be the one code.read gave, else `stale` and the file stays",
 		R"json({"type":"object","properties":{"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1}},
 			"required":["path","version"],"additionalProperties":false})json",
-		k_empty_result, true, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::remove);
+		k_empty_result, true, true, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::remove);
 	add("code.rename", "Rename or move a code file into an existing folder of code/ (never over an existing file)",
 		R"json({"type":"object","properties":{"from":{"type":"string","minLength":1},"to":{"type":"string","minLength":1}},
 			"required":["from","to"],"additionalProperties":false})json",
-		k_empty_result, true, cmd::agent_category::code_files,
+		k_empty_result, true, true, cmd::agent_category::code_files,
 		[](const cmd::call& call) {
 			// The stricter side: a move into or out of a CMake name is a CMake edit.
 			const cmd::agent_category from = code_call_category(string_arg(call, "from"), cmd::agent_category::code_files);

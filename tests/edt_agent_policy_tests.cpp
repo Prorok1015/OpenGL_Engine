@@ -56,7 +56,7 @@ BOOST_AUTO_TEST_CASE(TheOwnersTable_ForEveryCategory)
 {
 	BOOST_TEST((edt::default_mode(agent_category::read) == policy_mode::allow));
 	BOOST_TEST((edt::default_mode(agent_category::scene_edit) == policy_mode::allow));
-	BOOST_TEST((edt::default_mode(agent_category::code_edit) == policy_mode::allow));
+	BOOST_TEST((edt::default_mode(agent_category::code_edit) == policy_mode::ask));
 	BOOST_TEST((edt::default_mode(agent_category::code_files) == policy_mode::ask));
 	BOOST_TEST((edt::default_mode(agent_category::cmake_presets) == policy_mode::ask));
 	BOOST_TEST((edt::default_mode(agent_category::build) == policy_mode::deny));

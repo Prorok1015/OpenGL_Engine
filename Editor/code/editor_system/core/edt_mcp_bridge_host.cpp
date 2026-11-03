@@ -1,4 +1,5 @@
 #include "edt_mcp_bridge_host.h"
+#include "edt_agent_access.h"
 
 #include <snk/command/cmd_json_schema.h>
 #include <snk/common/engine_assert.h>
@@ -15,7 +16,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -25,21 +25,6 @@
 namespace json = boost::json;
 
 namespace {
-	// The domains (the part of a command id before the first dot) whose commands only read, and that exist today.
-	// `mutates` defaults to false for a command, so a domain that is listed here before its commands exist would
-	// expose whatever gets registered under it, flag or no flag.
-	constexpr std::array<std::string_view, 4> read_domains = { "log", "job", "dialog", "viewport" };
-
-	// The state queries of A4, problems.list, build.settings.get and the git reads (#454) are allowed one command at a time, not by
-	// domain: scene.* and node.* will also hold the mutating commands of A5, vcs.* the git writes (#455), and a new command in these
-	// domains stays hidden from an agent until it is reviewed and listed here.
-	constexpr std::array<std::string_view, 14> read_commands = { "scene.query", "node.get", "component.schema", "asset.query", "selection.get",
-		"problems.list", "build.settings.get", "vcs.info", "vcs.status", "vcs.diff", "vcs.log", "vcs.branches", "code.list", "code.read" };
-
-	// The commands an agent may use while the person's switch that `enabled` reads is on (command_desc::agent_when_enabled):
-	// live mode (#445), whose switch is the consent (AI_INTEGRATION.md section 5). Listed one by one, like read_commands.
-	constexpr std::array<std::string_view, 3> when_enabled_commands = { "live.status", "live.rebuild_now", "live.reload_now" };
-
 	// What an agent may ask of viewport.capture. A request for 8192 x 8192 is a quarter of a gigabyte of readback
 	// and copies; the answer is a PNG that has to be base64 encoded and sent.
 	constexpr std::int64_t agent_max_capture_side = 2048;
@@ -105,20 +90,15 @@ namespace {
 			+ std::to_string(agent_max_response_bytes) + "); ask for less (a smaller size, a smaller page)";
 	}
 
-	std::string_view domain_of(std::string_view id)
-	{
-		return id.substr(0, id.find('.'));
-	}
-
 	std::string text_of(const json::string& text)
 	{
 		return std::string(text.data(), text.size());
 	}
 
-	const cmd::command_desc* find_tool(const cmd::command_registry& registry, std::string_view name)
+	const cmd::command_desc* find_tool(const cmd::command_registry& registry, edt::agent_policy& policy, std::string_view name)
 	{
 		for (const cmd::command_desc* command : registry.list()) {
-			if (edt::agent_may_use(*command) && edt::agent_tool_name(*command) == name) {
+			if (edt::agent_tool_name(*command) == name && edt::agent_may_use(*command, policy)) {
 				return command;
 			}
 		}
@@ -146,7 +126,10 @@ namespace {
 			tool.output_schema = command.result_schema;
 		}
 		tool.read_only = !command.mutates;
-		tool.destructive = false;
+		// MCP reads a missing destructiveHint as true for a tool that writes: say it where the command is not risky.
+		tool.destructive = command.mutates && (command.destructive || command.risk != cmd::danger::none);
+		tool.idempotent = false;
+		tool.open_world = false;
 		return tool;
 	}
 
@@ -187,6 +170,13 @@ namespace {
 		return result;
 	}
 
+	// A resource is a read the client cannot be asked about: only a command that reads and that the policy simply allows.
+	bool resource_readable(const cmd::command_desc& command, edt::agent_policy& policy)
+	{
+		return command.category == cmd::agent_category::read && !command.mutates && edt::agent_may_use(command, policy)
+			&& policy.effective(command).mode == cmd::policy_mode::allow;
+	}
+
 	// The resources the editor offers, each read by one command.
 	struct resource_def
 	{
@@ -215,36 +205,16 @@ namespace {
 	}
 }
 
-bool edt::agent_may_use(const cmd::command_desc& command)
+bool edt::agent_may_use(const cmd::command_desc& command, agent_policy& policy)
 {
-	if (!command.expose_as_tool || command.long_running || command.risk != cmd::danger::none) {
+	if (!command.expose_as_tool) {
 		return false;
 	}
-	if (command.agent_when_enabled) {
-		const bool listed = std::find(when_enabled_commands.begin(), when_enabled_commands.end(), command.id)
-			!= when_enabled_commands.end();
-		return listed && command.enabled && command.enabled();
-	}
-	if (command.mutates) {
+	// Whatever the policy files say, a command nobody classified, or one that is nothing for an agent, does not exist for it.
+	if (command.category == cmd::agent_category::unset || command.category == cmd::agent_category::not_for_agents) {
 		return false;
 	}
-	// The policy allows `read` by default and denies a command with no category: a tool listed here must not be one
-	// that the gate then refuses.
-	if (command.category != cmd::agent_category::read) {
-		return false;
-	}
-	for (const std::string_view allowed : read_commands) {
-		if (command.id == allowed) {
-			return true;
-		}
-	}
-	const std::string_view domain = domain_of(command.id);
-	for (const std::string_view allowed : read_domains) {
-		if (domain == allowed) {
-			return true;
-		}
-	}
-	return false;
+	return policy.effective(command).mode != cmd::policy_mode::deny;
 }
 
 std::string edt::agent_tool_name(const cmd::command_desc& command)
@@ -266,35 +236,40 @@ std::string edt::agent_tool_name(const cmd::command_desc& command)
 struct edt::mcp_bridge_host::state
 {
 	cmd::command_registry* commands = nullptr;
-	cmd::main_thread_queue* queue = nullptr;
-	agent_confirmations* confirmations = nullptr;
+	agent_access* access = nullptr;
+	session_closed_hook on_session_closed;
 };
 
-edt::mcp_bridge_host::mcp_bridge_host(cmd::command_registry& commands, cmd::main_thread_queue& queue, ds::task_system& tasks,
-	agent_confirmations& confirmations)
+edt::mcp_bridge_host::mcp_bridge_host(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access,
+	session_closed_hook on_session_closed)
 	: m_tasks(tasks)
 	, m_state(std::make_shared<state>())
 {
 	ASSERT_MSG(tasks.on_main(), "mcp_bridge_host: create it on the main thread");
 	m_state->commands = &commands;
-	m_state->queue = &queue;
-	m_state->confirmations = &confirmations;
+	m_state->access = &access;
+	m_state->on_session_closed = std::move(on_session_closed);
 }
 
 edt::mcp_bridge_host::~mcp_bridge_host()
 {
 	m_state->commands = nullptr;
-	m_state->queue = nullptr;
-	m_state->confirmations = nullptr;
+	m_state->access = nullptr;
+	m_state->on_session_closed = nullptr;
+}
+
+void edt::mcp_bridge_host::stop_reporting()
+{
+	m_state->on_session_closed = nullptr;
 }
 
 void edt::mcp_bridge_host::list_tools(std::function<void(std::vector<mcp::tool_info>)> done)
 {
 	m_tasks.post_main([state = m_state, done = std::move(done)] {
 		std::vector<mcp::tool_info> tools;
-		if (state->commands != nullptr) {
+		if (state->commands != nullptr && state->access != nullptr) {
 			for (const cmd::command_desc* command : state->commands->list()) {
-				if (agent_may_use(*command)) {
+				if (agent_may_use(*command, state->access->policy())) {
 					tools.push_back(describe(*command));
 				}
 			}
@@ -306,32 +281,36 @@ void edt::mcp_bridge_host::list_tools(std::function<void(std::vector<mcp::tool_i
 void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string name, json::value args, mcp::progress_sink progress,
 	std::function<void(mcp::call_result)> done)
 {
-	// A6a has no long-running tool, so there is no progress to report.
+	// Builds report no progress here: they return a job at once, and job.get follows it.
 	(void)progress;
 	m_tasks.post_main([state = m_state, session = std::move(context.session_id), name = std::move(name), args = std::move(args),
-		done = std::move(done)] {
-		if (state->commands == nullptr || state->queue == nullptr) {
+		done = std::move(done)]() mutable {
+		if (state->commands == nullptr || state->access == nullptr) {
 			done(error_result("the editor is shutting down"));
 			return;
 		}
 		// The same check as the listing: a tool that is not listed does not exist for the agent.
-		const cmd::command_desc* command = find_tool(*state->commands, name);
+		const cmd::command_desc* command = find_tool(*state->commands, state->access->policy(), name);
 		if (command == nullptr) {
 			done(error_result("unknown tool '" + name + "'"));
 			return;
 		}
 		// Copied first: the command may unregister itself while it runs.
 		const std::string id = command->id;
-		json::value limited = args;
+		json::value limited = std::move(args);
 		if (is_capture(id)) {
 			if (const std::optional<std::string> refusal = limit_capture_args(limited)) {
 				done(error_result(*refusal));
 				return;
 			}
 		}
-		std::future<cmd::result> outcome = state->queue->call_now_or_post(id, std::move(limited), cmd::origin::agent(session));
-		// Ready: this runs on the main thread, where call_now_or_post runs the command inline.
-		done(to_call_result(outcome.get()));
+		cmd::call request;
+		request.args = std::move(limited);
+		request.from = cmd::origin::agent(session);
+		// `done` may be called later (a person is asked, a gesture is waited out). The closure holds nothing of the
+		// bridge, only the answer to the client.
+		state->access->confirmations().invoke(id, std::move(request),
+			[done = std::move(done)](cmd::result outcome) { done(to_call_result(std::move(outcome))); });
 	});
 }
 
@@ -339,10 +318,10 @@ void edt::mcp_bridge_host::list_resources(std::function<void(std::vector<mcp::re
 {
 	m_tasks.post_main([state = m_state, done = std::move(done)] {
 		std::vector<mcp::resource_info> resources;
-		if (state->commands != nullptr) {
+		if (state->commands != nullptr && state->access != nullptr) {
 			for (const resource_def& def : resource_defs) {
 				const cmd::command_desc* command = state->commands->find(def.command);
-				if (command == nullptr || !agent_may_use(*command)) {
+				if (command == nullptr || !resource_readable(*command, state->access->policy())) {
 					continue;
 				}
 				mcp::resource_info info;
@@ -359,8 +338,8 @@ void edt::mcp_bridge_host::list_resources(std::function<void(std::vector<mcp::re
 
 void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::string uri, std::function<void(mcp::resource_result)> done)
 {
-	m_tasks.post_main([state = m_state, session = std::move(context.session_id), uri = std::move(uri), done = std::move(done)] {
-		if (state->commands == nullptr || state->queue == nullptr) {
+	m_tasks.post_main([state = m_state, session = std::move(context.session_id), uri = std::move(uri), done = std::move(done)]() mutable {
+		if (state->commands == nullptr || state->access == nullptr) {
 			done(unavailable("the editor is shutting down"));
 			return;
 		}
@@ -371,7 +350,7 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 			}
 		}
 		const cmd::command_desc* command = def != nullptr ? state->commands->find(def->command) : nullptr;
-		if (command == nullptr || !agent_may_use(*command)) {
+		if (command == nullptr || !resource_readable(*command, state->access->policy())) {
 			done(unavailable("no such resource: " + uri));
 			return;
 		}
@@ -380,39 +359,43 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 		if (is_capture(id)) {
 			limit_capture_args(resource_args);
 		}
-		std::future<cmd::result> outcome = state->queue->call_now_or_post(id, std::move(resource_args), cmd::origin::agent(session));
-		cmd::result result = outcome.get();
-		if (!result.ok) {
-			done(unavailable(result.code + ": " + result.error));
-			return;
-		}
-
-		mcp::resource_content content;
-		content.uri = uri;
-		content.mime_type = std::string(def->mime_type);
-		const json::value* png = result.value.is_object() ? result.value.as_object().if_contains("png_base64") : nullptr;
-		if (png != nullptr && png->is_string()) {
-			content.is_blob = true;
-			content.blob = text_of(png->as_string());
-		} else {
-			content.text = json::serialize(result.value);
-		}
-		if (content.blob.size() + content.text.size() > agent_max_response_bytes) {
-			done(unavailable(too_large_text(content.blob.size() + content.text.size())));
-			return;
-		}
-		mcp::resource_result found;
-		found.found = true;
-		found.contents.push_back(std::move(content));
-		done(std::move(found));
+		cmd::call request;
+		request.args = std::move(resource_args);
+		request.from = cmd::origin::agent(session);
+		const std::string_view mime_type = def->mime_type;
+		state->access->confirmations().invoke(id, std::move(request),
+			[done = std::move(done), uri = std::move(uri), mime_type](cmd::result result) {
+				if (!result.ok) {
+					done(unavailable(result.code + ": " + result.error));
+					return;
+				}
+				mcp::resource_content content;
+				content.uri = uri;
+				content.mime_type = std::string(mime_type);
+				const json::value* png = result.value.is_object() ? result.value.as_object().if_contains("png_base64") : nullptr;
+				if (png != nullptr && png->is_string()) {
+					content.is_blob = true;
+					content.blob = text_of(png->as_string());
+				} else {
+					content.text = json::serialize(result.value);
+				}
+				if (content.blob.size() + content.text.size() > agent_max_response_bytes) {
+					done(unavailable(too_large_text(content.blob.size() + content.text.size())));
+					return;
+				}
+				mcp::resource_result found;
+				found.found = true;
+				found.contents.push_back(std::move(content));
+				done(std::move(found));
+			});
 	});
 }
 
 void edt::mcp_bridge_host::session_closed(std::string session_id)
 {
 	m_tasks.post_main([state = m_state, session = std::move(session_id)] {
-		if (state->confirmations != nullptr) {
-			state->confirmations->drop_session(session);
+		if (state->on_session_closed) {
+			state->on_session_closed(session);
 		}
 	});
 }

@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_code_commands.h"
+#include "edt_agent_policy.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_editor_events.h>
@@ -292,15 +293,87 @@ BOOST_AUTO_TEST_CASE(APathThatHidesACMakeFile_IsRefusedBeforeItsCategoryMatters)
 	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
 }
 
-BOOST_AUTO_TEST_CASE(TheReads_AreOfferedToAgents_TheChangesWaitForThePolicy)
+BOOST_AUTO_TEST_CASE(UnderTheDefaultPolicy_ReadsAreTools_ChangesAreAskedAbout)
 {
-	BOOST_TEST(edt::agent_may_use(*commands.find("code.list")));
-	BOOST_TEST(edt::agent_may_use(*commands.find("code.read")));
-	for (const char* id : { "code.write", "code.create", "code.delete", "code.rename" }) {
+	edt::agent_policy policy{ dir.path() / "no_project_policy.json", dir.path() / "no_personal_policy.json" };
+	for (const char* id : { "code.list", "code.read" }) {
 		BOOST_TEST_CONTEXT(id) {
-			BOOST_TEST(commands.find(id)->mutates);
+			const cmd::command_desc& command = *commands.find(id);
+			BOOST_TEST(edt::agent_may_use(command, policy));
+			BOOST_TEST((policy.effective(command).mode == cmd::policy_mode::allow));
+			BOOST_TEST(!command.mutates);
+			BOOST_TEST(!command.destructive);
 		}
 	}
+	for (const char* id : { "code.write", "code.create", "code.delete", "code.rename" }) {
+		BOOST_TEST_CONTEXT(id) {
+			const cmd::command_desc& command = *commands.find(id);
+			BOOST_TEST(edt::agent_may_use(command, policy));
+			BOOST_TEST((policy.effective(command).mode == cmd::policy_mode::ask));
+			BOOST_TEST(command.mutates);
+			// Only the commands that take a file away are destructive; a write keeps the file (its version is the lock).
+			BOOST_TEST(command.destructive == (std::string_view(id) == "code.delete" || std::string_view(id) == "code.rename"));
+		}
+	}
+	const cmd::command_desc& write = *commands.find("code.write");
+	const auto cmake = category_of("code.write", json::object{ { "path", "CMakeLists.txt" }, { "version", "v" }, { "text", "" } });
+	BOOST_TEST((policy.effective(write, cmake).mode == cmd::policy_mode::ask));
+}
+
+BOOST_AUTO_TEST_CASE(ThroughThePolicyGate_AnAgentsWriteRunsOnlyAfterAPersonSaidYes)
+{
+	edt::agent_policy policy{ dir.path() / "no_project_policy.json", dir.path() / "no_personal_policy.json" };
+	auto gate = std::make_shared<edt::agent_policy_gate>(policy);
+	gate->set_can_ask(true);
+	commands.set_policy_gate(gate);
+
+	const std::string version = version_of("src/game.cpp");
+	const std::string before = read_file(code / "src" / "game.cpp");
+	cmd::call request;
+	request.args = json::object{ { "path", "src/game.cpp" }, { "version", version }, { "text", "int agent;\n" } };
+	request.from = cmd::origin::agent("s1");
+	const auto asked = commands.invoke("code.write", request);
+	BOOST_REQUIRE(asked.code == cmd::codes::confirmation_required);
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == before);
+	BOOST_TEST(actions.empty());
+	const std::string ticket(asked.value.at("ticket").as_string());
+	const auto pending = commands.confirmation_of(ticket);
+	BOOST_REQUIRE(pending);
+	BOOST_TEST((pending->category == agent_category::code_edit));
+
+	BOOST_REQUIRE(commands.approve(ticket));
+	request.confirmation = ticket;
+	const auto written = commands.invoke("code.write", request);
+	BOOST_REQUIRE_MESSAGE(written.ok, written.error);
+	BOOST_TEST(read_file(code / "src" / "game.cpp") == "int agent;\n");
+	BOOST_TEST(actions.size() == 1u);
+
+	cmd::call cmake;
+	cmake.args = json::object{ { "path", "CMakeLists.txt" }, { "version", version_of("CMakeLists.txt") }, { "text", "project(y)\n" } };
+	cmake.from = cmd::origin::agent("s1");
+	const auto asked_cmake = commands.invoke("code.write", cmake);
+	BOOST_REQUIRE(asked_cmake.code == cmd::codes::confirmation_required);
+	const auto pending_cmake = commands.confirmation_of(std::string(asked_cmake.value.at("ticket").as_string()));
+	BOOST_REQUIRE(pending_cmake);
+	BOOST_TEST((pending_cmake->category == agent_category::cmake_presets));
+
+	cmd::call removal;
+	removal.args = json::object{ { "path", "src/game.cpp" }, { "version", version_of("src/game.cpp") } };
+	removal.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("code.delete", removal).code == cmd::codes::confirmation_required);
+
+	// Nobody to ask (headless): an ask is a denial and nothing runs.
+	gate->set_can_ask(false);
+	cmd::call headless;
+	headless.args = json::object{ { "path", "src/new.cpp" } };
+	headless.from = cmd::origin::agent("s1");
+	BOOST_TEST(commands.invoke("code.create", headless).code == cmd::codes::denied);
+	BOOST_TEST(!fs::exists(code / "src" / "new.cpp"));
+
+	// A person's own call is not asked.
+	BOOST_TEST(call("code.create", json::object{ { "path", "src/mine.cpp" } }, cmd::origin::ui()).ok);
+	BOOST_TEST(fs::exists(code / "src" / "mine.cpp"));
+	commands.set_policy_gate(nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(Replace_WithAnOldTooBig_IsRefused_BeforeAnySearch)

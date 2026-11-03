@@ -177,7 +177,8 @@ namespace edt
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
 	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
-	// problem_list (problems_changed), game_builder (game_module_built).
+	// problem_list (problems_changed), game_builder (game_module_built), mcp_bridge_host via editor_system
+	// (agent_session_closed).
 	class editor_events
 	{
 	public:
@@ -201,5 +202,9 @@ namespace edt
 		signal<const std::string&> problems_changed; // (source)
 		// An agent's call changed something outside the scene (code.write/create/delete/rename), after it happened.
 		signal<const agent_action_info&> agent_action;
+		// An MCP session of an agent ended (disconnect, idle timeout, an explicit close; not the editor stopping the
+		// server): what is kept for it goes (its open agent session, its "allow until the end of the session",
+		// the questions it still has waiting). Raised by the agent server's bridge on the main thread.
+		signal<const std::string&> agent_session_closed; // (MCP session id)
 	};
 }

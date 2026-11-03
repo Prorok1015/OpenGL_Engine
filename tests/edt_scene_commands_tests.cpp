@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "edt_mcp_bridge_host.h"
+#include "edt_agent_policy.h"
 #include "edt_override_edit.h"
 #include "edt_scene_commands.h"
 #include "edt_scene_document.h"
@@ -130,7 +130,7 @@ const std::vector<const char*> all_commands = { "scene.node.create", "scene.node
 
 BOOST_FIXTURE_TEST_SUITE(edt_scene_commands_tests, commands_fixture)
 
-BOOST_AUTO_TEST_CASE(the_commands_mutate_and_are_not_offered_over_mcp_yet)
+BOOST_AUTO_TEST_CASE(the_commands_mutate_and_the_owners_table_allows_them_to_an_agent)
 {
 	for (const char* id : all_commands) {
 		BOOST_TEST_CONTEXT(id) {
@@ -139,7 +139,7 @@ BOOST_AUTO_TEST_CASE(the_commands_mutate_and_are_not_offered_over_mcp_yet)
 			BOOST_TEST(command->mutates);
 			BOOST_TEST((command->risk == cmd::danger::none));
 			BOOST_TEST((command->category == cmd::agent_category::scene_edit));
-			BOOST_TEST(!edt::agent_may_use(*command));
+			BOOST_TEST((edt::default_mode(*command) == cmd::policy_mode::allow));
 		}
 	}
 }

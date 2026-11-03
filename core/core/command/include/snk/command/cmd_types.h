@@ -119,17 +119,15 @@ namespace cmd
 		danger risk = danger::none;
 		bool mutates = false;
 		bool long_running = false;
+		// The command removes or overwrites something that cannot simply be put back (a file, a branch). Only a hint to
+		// MCP clients (destructiveHint = mutates && (destructive || risk != none)); the policy never reads it.
+		bool destructive = false;
 		agent_category category = agent_category::unset;
 		// The category of one call when it depends on the arguments (code.write to a CMake file is cmake_presets, not
 		// code_edit). Pure; called only with arguments that match args_schema (category_of_call). Null: `category`.
 		std::function<agent_category(const call&)> category_of;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
-		// The person's consent is a switch of theirs that `enabled` reads (live mode, #445): an MCP agent may see and
-		// call the command while `enabled` returns true, even though it `mutates`, as long as `risk` is none,
-		// `expose_as_tool` is set and it is not `long_running`. Hidden from the agent and refused while `enabled` is
-		// false or null. A stopgap: the agent policy (A6c, #449) replaces it with a policy row per command.
-		bool agent_when_enabled = false;
 		std::function<result(const call&)> invoke;
 		// Null: always enabled.
 		std::function<bool()> enabled;
