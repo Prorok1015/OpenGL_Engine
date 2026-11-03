@@ -12,6 +12,7 @@
 #include <charconv>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <fstream>
@@ -278,9 +279,8 @@ namespace {
 		return std::nullopt;
 	}
 
-	// Every read: no hooks, filters off first, then git.
-	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
-		std::size_t cap = k_read_cap)
+	// Makes `git` a read's context: no hooks, filters off. Nullopt when done; otherwise what to report instead.
+	std::optional<git_output> harden_read(git_context& git, std::stop_token stop)
 	{
 #ifdef _WIN32
 		constexpr const char* no_hooks = "core.hooksPath=NUL";
@@ -288,7 +288,14 @@ namespace {
 		constexpr const char* no_hooks = "core.hooksPath=/dev/null";
 #endif
 		git.config_args.insert(git.config_args.begin(), { "-c", no_hooks });
-		if (auto refused = switch_off_filters(git, stop)) return std::move(*refused);
+		return switch_off_filters(git, stop);
+	}
+
+	// Every read: no hooks, filters off first, then git.
+	git_output run_read(git_context git, const std::vector<std::string>& args, std::stop_token stop,
+		std::size_t cap = k_read_cap)
+	{
+		if (auto refused = harden_read(git, stop)) return std::move(*refused);
 		return run_git(git, args, stop, cap);
 	}
 
@@ -1244,17 +1251,222 @@ namespace {
 		return out;
 	}
 
-	std::optional<std::int64_t> skip_of(std::string_view cursor)
+	struct log_page
 	{
-		if (cursor.empty()) return 0;
+		// 0: the first page.
+		std::uint64_t snapshot = 0;
+		std::int64_t skip = 0;
+	};
+
+	// "" (the first page) or "s<snapshot>:<skip>", as vcs.log returns it.
+	std::optional<log_page> page_of(std::string_view cursor)
+	{
+		if (cursor.empty()) return log_page{};
+		const std::size_t colon = cursor.find(':');
+		if (!cursor.starts_with('s') || colon == std::string_view::npos) return std::nullopt;
+		log_page page;
+		const std::string_view id = cursor.substr(1, colon - 1);
+		const auto [id_end, id_error] = std::from_chars(id.data(), id.data() + id.size(), page.snapshot);
+		if (id.empty() || id_error != std::errc{} || id_end != id.data() + id.size() || page.snapshot == 0) return std::nullopt;
+		const std::string_view skip = cursor.substr(colon + 1);
+		if (skip.empty() || skip.front() < '0' || skip.front() > '9') return std::nullopt;
 		std::int64_t value = 0;
-		const auto [end, error] = std::from_chars(cursor.data(), cursor.data() + cursor.size(), value);
-		if (end != cursor.data() + cursor.size()) return std::nullopt;
-		if (error == std::errc::result_out_of_range && cursor.front() != '-') return k_max_skip;
-		if (error != std::errc{} || value < 0) return std::nullopt;
-		return std::min(value, k_max_skip);
+		const auto [end, error] = std::from_chars(skip.data(), skip.data() + skip.size(), value);
+		if (end != skip.data() + skip.size()) return std::nullopt;
+		if (error == std::errc::result_out_of_range) value = k_max_skip;
+		else if (error != std::errc{}) return std::nullopt;
+		page.skip = std::min(value, k_max_skip);
+		return page;
+	}
+
+	// An author or grep filter of vcs.log.
+	std::optional<std::string> filter_error(std::string_view what, std::string_view value)
+	{
+		if (value.size() > edt::vcs_service::k_max_filter_bytes) {
+			return std::format("{} must be at most {} bytes", what, edt::vcs_service::k_max_filter_bytes);
+		}
+		const bool control = std::any_of(value.begin(), value.end(), [](char c) {
+			const auto byte = static_cast<unsigned char>(c);
+			return byte < 0x20 || byte == 0x7F;
+		});
+		if (control) return std::format("{} must not hold a control character", what);
+		return std::nullopt;
+	}
+
+	std::optional<std::string> commit_error(std::string_view commit)
+	{
+		if (!edt::vcs::is_hex_object_name(commit)) return std::string("commit must be 4 to 64 hex digits");
+		return std::nullopt;
+	}
+
+	bool is_full_oid(std::string_view text)
+	{
+		return (text.size() == 40 || text.size() == 64) && edt::vcs::is_hex_object_name(text);
+	}
+
+	// What makes a snapshot's later pages the same query: every part with its length, so no two queries read alike.
+	std::string snapshot_key(std::initializer_list<std::string_view> parts)
+	{
+		std::string key;
+		for (const std::string_view part : parts) key.append(std::format("{}:{}|", part.size(), part));
+		return key;
+	}
+
+	json::value stale_json()
+	{
+		return error_json("stale", "the history this cursor pages through is no longer kept; read it again from the first page",
+			{}, -1);
+	}
+
+	// The job's answer when harden_read refused.
+	json::value refused_read(const git_output& out, const ds::task_context& task)
+	{
+		if (auto failure = failure_of(out, task)) return std::move(*failure);
+		return error_json("git_failed", "git could not be prepared for a read", out.err, out.process.exit_code);
+	}
+
+	// failure_of for resolving a revision: whatever git says about one it cannot resolve ("Needed a single revision",
+	// an ambiguous short name) is bad_revision.
+	std::optional<json::value> revision_failure_of(const git_output& out, const ds::task_context& task)
+	{
+		auto failure = failure_of(out, task);
+		if (failure) {
+			json::object& error = failure->as_object()["error"].as_object();
+			if (error["code"].as_string() == "git_failed") error["code"] = "bad_revision";
+		}
+		return failure;
+	}
+
+	// `revision` peeled to a commit, as its full object name.
+	std::optional<json::value> resolve_commit(const git_context& git, std::string_view revision, const ds::task_context& task,
+		std::string& oid)
+	{
+		const git_output out = run_git(git, { "rev-parse", "--verify", "--end-of-options", std::string(revision) + "^{commit}" },
+			task.stop, k_read_cap);
+		if (auto failure = revision_failure_of(out, task)) return failure;
+		oid = std::string(trim(out.out));
+		if (!is_full_oid(oid)) return error_json("bad_revision", "git did not name a commit", out.err, out.process.exit_code);
+		return std::nullopt;
+	}
+
+	// `commit` resolved, and its first parent (nullopt: a root commit).
+	std::optional<json::value> resolve_with_parent(const git_context& git, std::string_view commit, const ds::task_context& task,
+		std::string& oid, std::optional<std::string>& parent)
+	{
+		if (auto failure = resolve_commit(git, commit, task, oid)) return failure;
+		const git_output first = run_git(git, { "rev-parse", "--verify", "--quiet", "--end-of-options", oid + "^1" },
+			task.stop, k_read_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (first.process.error.empty() && first.process.exit_code == 0) {
+			std::string found(trim(first.out));
+			if (!is_full_oid(found)) return error_json("git_failed", "git did not name the first parent", first.err, 0);
+			parent = std::move(found);
+			return std::nullopt;
+		}
+		// --quiet: no parent is exit code 1 and nothing on stderr.
+		if (first.process.error.empty() && first.process.exit_code == 1 && trim(first.err).empty()) return std::nullopt;
+		return failure_of(first, task);
+	}
+
+	// A log over every branch, remote branch and tag names its tips on the command line (Windows holds 32K characters).
+	constexpr std::size_t k_max_tip_bytes = 16 * 1024;
+	constexpr std::size_t k_tip_chunk = 256;
+
+	std::size_t bytes_of(const std::vector<std::string>& args)
+	{
+		std::size_t bytes = 0;
+		for (const auto& arg : args) bytes += arg.size() + 1;
+		return bytes;
+	}
+
+	// The commits of every branch, remote branch and tag; while they take too much of a command line, only those no
+	// other one reaches (merge-base --independent), which walk the same history.
+	std::optional<json::value> all_tips(const git_context& git, const ds::task_context& task, std::vector<std::string>& tips)
+	{
+		const git_output refs = run_git(git, { "for-each-ref", std::string(edt::vcs::k_tip_format), "refs/heads", "refs/remotes",
+			"refs/tags" }, task.stop, k_read_cap);
+		if (auto failure = failure_of(refs, task)) return failure;
+		if (refs.truncated) return error_json("git_failed", "the repository has too many refs to list", {}, -1);
+		tips = edt::vcs::parse_tip_commits(refs.out);
+		while (bytes_of(tips) > k_max_tip_bytes) {
+			std::vector<std::string> independent;
+			for (std::size_t start = 0; start < tips.size(); start += k_tip_chunk) {
+				const std::size_t end = std::min(tips.size(), start + k_tip_chunk);
+				std::vector<std::string> args{ "merge-base", "--independent" };
+				args.insert(args.end(), tips.begin() + static_cast<std::ptrdiff_t>(start), tips.begin() + static_cast<std::ptrdiff_t>(end));
+				const git_output out = run_git(git, args, task.stop, k_read_cap);
+				if (auto failure = failure_of(out, task)) return failure;
+				for (const std::string_view line : lines_of(out.out)) {
+					if (is_full_oid(line)) independent.emplace_back(line);
+				}
+			}
+			std::sort(independent.begin(), independent.end());
+			independent.erase(std::unique(independent.begin(), independent.end()), independent.end());
+			if (independent.size() >= tips.size()) {
+				return error_json("git_failed", "the branches and tags have too many separate tips for one log; name a ref",
+					{}, -1);
+			}
+			tips = std::move(independent);
+		}
+		return std::nullopt;
+	}
+
+	// The text of a diff, cut at k_diff_cap.
+	json::value diff_json(const git_output& out)
+	{
+		constexpr std::size_t cap = edt::vcs_service::k_diff_cap;
+		std::string text = edt::vcs::valid_utf8(edt::vcs::utf8_prefix(out.out, cap));
+		bool truncated = out.truncated;
+		// Replacement characters may have made it longer than the cap.
+		if (text.size() > cap) {
+			text = std::string(edt::vcs::utf8_prefix(text, cap));
+			truncated = true;
+		}
+		return json::object{ { "text", json::string(text) }, { "truncated", truncated } };
 	}
 }
+
+// The tips of the first page of a log, kept for its later pages. Locked: the log jobs run on the io lane.
+struct edt::vcs_service::log_snapshots
+{
+	struct snapshot
+	{
+		std::uint64_t id = 0;
+		std::string key;
+		std::vector<std::string> tips;
+		std::uint64_t used = 0;
+	};
+
+	std::mutex mutex;
+	std::vector<snapshot> items;
+	std::uint64_t next_id = 1;
+	std::uint64_t clock = 0;
+
+	// Nullopt when the snapshot was dropped, or was made for another query.
+	std::optional<std::vector<std::string>> find(std::uint64_t id, const std::string& key)
+	{
+		const std::scoped_lock lock(mutex);
+		for (auto& item : items) {
+			if (item.id != id) continue;
+			if (item.key != key) return std::nullopt;
+			item.used = ++clock;
+			return item.tips;
+		}
+		return std::nullopt;
+	}
+
+	std::uint64_t add(std::string key, std::vector<std::string> tips)
+	{
+		const std::scoped_lock lock(mutex);
+		if (items.size() >= k_max_log_snapshots) {
+			items.erase(std::min_element(items.begin(), items.end(),
+				[](const snapshot& a, const snapshot& b) { return a.used < b.used; }));
+		}
+		const std::uint64_t id = next_id++;
+		items.push_back({ id, std::move(key), std::move(tips), ++clock });
+		return id;
+	}
+};
 
 template<class F>
 edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, std::optional<write_mode> write, const hard_rule& rule)
@@ -1337,6 +1549,7 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 edt::vcs_service::vcs_service(job_service& jobs, vcs_options options)
 	: m_jobs(jobs)
 	, m_options(std::move(options))
+	, m_log_snapshots(std::make_shared<log_snapshots>())
 {
 	m_environment = m_options.environment ? *m_options.environment : own_environment();
 	std::erase_if(m_environment, [](const std::string& entry) { return is_unsafe_variable(entry); });
@@ -1464,39 +1677,83 @@ edt::vcs_service::started edt::vcs_service::start_diff(const std::string& path, 
 	return run_job("git diff", [args = std::move(args)](const git_context& git, ds::task_context& task) -> json::value {
 		const git_output out = run_read(git, args, task.stop, k_diff_cap);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
-		std::string text = vcs::valid_utf8(vcs::utf8_prefix(out.out, k_diff_cap));
-		bool truncated = out.truncated;
-		// Replacement characters may have made it longer than the cap.
-		if (text.size() > k_diff_cap) {
-			text = std::string(vcs::utf8_prefix(text, k_diff_cap));
-			truncated = true;
-		}
-		return json::object{ { "text", json::string(text) }, { "truncated", truncated } };
+		return diff_json(out);
+	});
+}
+
+edt::vcs_service::started edt::vcs_service::start_commit_diff(const std::string& commit, const std::string& path)
+{
+	if (auto error = commit_error(commit)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	return run_job("git diff", [commit, path](const git_context& git, ds::task_context& task) -> json::value {
+		git_context read = git;
+		if (auto refused = harden_read(read, task.stop)) return refused_read(*refused, task);
+		std::string oid;
+		std::optional<std::string> parent;
+		if (auto failure = resolve_with_parent(read, commit, task, oid, parent)) return std::move(*failure);
+		std::vector<std::string> args{ "diff-tree", "-p", "--no-color", "--no-ext-diff", "--no-textconv", "-M",
+			"--ignore-submodules=all", "--no-commit-id" };
+		if (parent) args.push_back(*parent);
+		else args.emplace_back("--root");
+		args.push_back(oid);
+		args.emplace_back("--");
+		if (!path.empty()) args.push_back(path);
+		const git_output out = run_git(read, args, task.stop, k_diff_cap);
+		if (auto failure = failure_of(out, task)) return std::move(*failure);
+		return diff_json(out);
 	});
 }
 
 edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, const std::string& path, int limit,
-	const std::string& cursor)
+	const std::string& cursor, const log_filter& filter)
 {
 	if (!ref.empty() && ref.front() == '-') return { 0, cmd::codes::invalid_args, "ref must not start with '-'" };
-	const auto skip = skip_of(cursor);
-	if (!skip) return { 0, cmd::codes::invalid_args, "cursor is not one that vcs.log returned" };
+	if (filter.all && !ref.empty()) return { 0, cmd::codes::invalid_args, "all and ref cannot be given together" };
+	if (auto error = filter_error("author", filter.author)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	if (auto error = filter_error("grep", filter.grep)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	const auto page = page_of(cursor);
+	if (!page) return { 0, cmd::codes::invalid_args, "cursor is not one that vcs.log returned" };
 	const int count = std::clamp(limit, 1, k_max_log_limit);
 	// One more than asked: whether it comes back tells if there is a next page.
-	std::vector<std::string> args{ "log", "-z", std::string(vcs::k_log_format), std::format("--skip={}", *skip),
-		std::format("--max-count={}", count + 1) };
-	// Whatever the ref and the path hold, git reads them as a revision and a path, never as options.
-	args.emplace_back("--end-of-options");
-	if (!ref.empty()) args.push_back(ref);
-	args.emplace_back("--");
-	if (!path.empty()) args.push_back(path);
-	return run_job("git log", [args = std::move(args), count, first = *skip](const git_context& git, ds::task_context& task) -> json::value {
-		const git_output out = run_read(git, args, task.stop);
-		if (task.stop.stop_requested()) throw ds::task_cancelled{};
-		// A branch without commits has no log, which is not an error for the reader.
-		if (out.process.error.empty() && out.process.exit_code != 0 && std::string_view(vcs::classify_error(out.err)) == "no_commits") {
-			return json::object{ { "commits", json::array{} } };
+	std::vector<std::string> options{ "log", "-z", std::string(vcs::k_log_format), "--decorate=full", "--date-order",
+		std::format("--skip={}", page->skip), std::format("--max-count={}", count + 1) };
+	if (!filter.author.empty()) options.push_back("--author=" + filter.author);
+	if (!filter.grep.empty()) options.push_back("--grep=" + filter.grep);
+	if (!filter.author.empty() || !filter.grep.empty()) {
+		options.emplace_back("--fixed-strings");
+		options.emplace_back("-i");
+	}
+	std::string key = snapshot_key({ filter.all ? "all" : "ref", ref, path, filter.author, filter.grep });
+	return run_job("git log", [options = std::move(options), key = std::move(key), ref, path, all = filter.all, count,
+		page = *page, snapshots = m_log_snapshots](const git_context& git, ds::task_context& task) -> json::value {
+		git_context read = git;
+		if (auto refused = harden_read(read, task.stop)) return refused_read(*refused, task);
+		std::vector<std::string> tips;
+		if (page.snapshot != 0) {
+			auto kept = snapshots->find(page.snapshot, key);
+			if (!kept) return stale_json();
+			tips = std::move(*kept);
+		} else if (all) {
+			if (auto failure = all_tips(read, task, tips)) return std::move(*failure);
+		} else {
+			std::string oid;
+			if (auto failure = resolve_commit(read, ref.empty() ? std::string_view("HEAD") : std::string_view(ref), task, oid)) {
+				// A branch without commits has no log, which is not an error for the reader.
+				const std::string_view code = failure->as_object().at("error").as_object().at("code").as_string();
+				if (ref.empty() && (code == "bad_revision" || code == "no_commits")) {
+					return json::object{ { "commits", json::array{} }, { "truncated", false } };
+				}
+				return std::move(*failure);
+			}
+			tips.push_back(std::move(oid));
 		}
+		if (tips.empty()) return json::object{ { "commits", json::array{} }, { "truncated", false } };
+		std::vector<std::string> args = options;
+		// Whatever the path holds, git reads it as a path, never as an option; the tips are object names.
+		args.emplace_back("--end-of-options");
+		args.insert(args.end(), tips.begin(), tips.end());
+		args.emplace_back("--");
+		if (!path.empty()) args.push_back(path);
+		const git_output out = run_git(read, args, task.stop, k_read_cap);
 		if (auto failure = failure_of(out, task)) return std::move(*failure);
 		auto commits = vcs::parse_log(whole_records(out, '\0'));
 		const bool more = out.truncated || commits.size() > static_cast<std::size_t>(count);
@@ -1505,8 +1762,34 @@ edt::vcs_service::started edt::vcs_service::start_log(const std::string& ref, co
 		entries.reserve(commits.size());
 		for (const auto& commit : commits) entries.push_back(vcs::to_json(commit));
 		json::object result{ { "commits", std::move(entries) }, { "truncated", out.truncated } };
-		if (more) result["next_cursor"] = json::string(std::to_string(first + static_cast<std::int64_t>(commits.size())));
+		if (more) {
+			const std::uint64_t id = page.snapshot != 0 ? page.snapshot : snapshots->add(key, std::move(tips));
+			result["next_cursor"] = json::string(std::format("s{}:{}", id, page.skip + static_cast<std::int64_t>(commits.size())));
+		}
 		return result;
+	});
+}
+
+edt::vcs_service::started edt::vcs_service::start_show_files(const std::string& commit)
+{
+	if (auto error = commit_error(commit)) return { 0, cmd::codes::invalid_args, std::move(*error) };
+	return run_job("git show files", [commit](const git_context& git, ds::task_context& task) -> json::value {
+		git_context read = git;
+		if (auto refused = harden_read(read, task.stop)) return refused_read(*refused, task);
+		std::string oid;
+		std::optional<std::string> parent;
+		if (auto failure = resolve_with_parent(read, commit, task, oid, parent)) return std::move(*failure);
+		// A merge against its first parent: what the merge brought into the branch.
+		std::vector<std::string> args{ "diff-tree", "-r", "-z", "--name-status", "-M", "--no-ext-diff", "--no-textconv",
+			"--no-commit-id" };
+		if (parent) args.push_back(*parent);
+		else args.emplace_back("--root");
+		args.push_back(oid);
+		const git_output out = run_git(read, args, task.stop, k_read_cap);
+		if (auto failure = failure_of(out, task)) return std::move(*failure);
+		json::array files;
+		for (const auto& file : vcs::parse_name_status(whole_records(out, '\0'))) files.push_back(vcs::to_json(file));
+		return json::object{ { "files", std::move(files) }, { "truncated", out.truncated } };
 	});
 }
 
@@ -2023,13 +2306,14 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	cmd::command_desc diff;
 	diff.id = "vcs.diff";
 	diff.category = cmd::agent_category::vcs_read;
-	diff.summary = "Start reading the working tree diff (or the staged one), of one path or all; text capped at 256 KiB; "
-		"the result arrives in job.get";
+	diff.summary = "Start reading the working tree diff (or the staged one, or what a commit changed against its first "
+		"parent), of one path or all; text capped at 256 KiB; the result arrives in job.get";
 	diff.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
 			"path": { "type": "string", "minLength": 1, "description": "Relative to the repository root" },
-			"staged": { "type": "boolean" }
+			"staged": { "type": "boolean" },
+			"commit": { "type": "string", "minLength": 1, "description": "A commit hash (4 to 64 hex digits); not with staged" }
 		},
 		"additionalProperties": false
 	})");
@@ -2038,6 +2322,10 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		const json::object& args = request.args.as_object();
 		bool staged = false;
 		if (const json::value* value = args.if_contains("staged")) staged = value->as_bool();
+		if (args.contains("commit")) {
+			if (staged) return cmd::result::failure(cmd::codes::invalid_args, "commit and staged cannot be given together");
+			return job_answer(service.start_commit_diff(string_arg(args, "commit"), string_arg(args, "path")));
+		}
 		return job_answer(service.start_diff(string_arg(args, "path"), staged));
 	};
 	keep(out, commands.add(std::move(diff)));
@@ -2045,13 +2333,17 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	cmd::command_desc log;
 	log.id = "vcs.log";
 	log.category = cmd::agent_category::vcs_read;
-	log.summary = "Start reading the commit log of a ref (default HEAD), optionally of one path, one page at a time; "
-		"the result arrives in job.get";
+	log.summary = "Start reading the commit log of a ref (default HEAD) or of every branch, remote branch and tag (all), "
+		"newest first by date, with each commit's refs, optionally of one path or by author or message text (literal, "
+		"any case), one page at a time; the result arrives in job.get (error code stale: start again without a cursor)";
 	log.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
 			"ref": { "type": "string", "minLength": 1 },
+			"all": { "type": "boolean", "description": "Every branch, remote branch and tag; not with ref" },
 			"path": { "type": "string", "minLength": 1, "description": "Relative to the repository root" },
+			"author": { "type": "string", "description": "Part of the author's name or email, at most 256 bytes" },
+			"grep": { "type": "string", "description": "Part of the commit message, at most 256 bytes" },
 			"limit": { "type": "integer", "minimum": 1, "maximum": 200 },
 			"cursor": { "type": "string", "description": "next_cursor of the previous page" }
 		},
@@ -2064,9 +2356,33 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		if (const json::value* value = args.if_contains("limit")) {
 			limit = static_cast<int>(cmd::json_schema::integer_of(*value).value_or(vcs_service::k_default_log_limit));
 		}
-		return job_answer(service.start_log(string_arg(args, "ref"), string_arg(args, "path"), limit, string_arg(args, "cursor")));
+		vcs_service::log_filter filter;
+		if (const json::value* value = args.if_contains("all")) filter.all = value->as_bool();
+		filter.author = string_arg(args, "author");
+		filter.grep = string_arg(args, "grep");
+		return job_answer(service.start_log(string_arg(args, "ref"), string_arg(args, "path"), limit, string_arg(args, "cursor"),
+			filter));
 	};
 	keep(out, commands.add(std::move(log)));
+
+	cmd::command_desc show_files;
+	show_files.id = "vcs.show_files";
+	show_files.category = cmd::agent_category::vcs_read;
+	show_files.summary = "Start listing the files a commit changed against its first parent (renames detected); the result "
+		"arrives in job.get";
+	show_files.args_schema = json::parse(R"({
+		"type": "object",
+		"properties": {
+			"commit": { "type": "string", "minLength": 1, "description": "A commit hash (4 to 64 hex digits)" }
+		},
+		"required": ["commit"],
+		"additionalProperties": false
+	})");
+	show_files.result_schema = json::parse(JOB_RESULT_SCHEMA);
+	show_files.invoke = [&service](const cmd::call& request) {
+		return job_answer(service.start_show_files(string_arg(request.args.as_object(), "commit")));
+	};
+	keep(out, commands.add(std::move(show_files)));
 
 	cmd::command_desc branches;
 	branches.id = "vcs.branches";

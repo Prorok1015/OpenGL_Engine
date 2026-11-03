@@ -146,11 +146,12 @@ BOOST_AUTO_TEST_CASE(Status_ToJson)
 	BOOST_TEST(!empty.as_object().at("branch").as_object().contains("upstream"));
 }
 
-BOOST_AUTO_TEST_CASE(Log_ReadsCommitsOfSixNulTerminatedFields)
+BOOST_AUTO_TEST_CASE(Log_ReadsCommitsOfSevenNulTerminatedFields)
 {
 	const std::string author = "J" + u_umlaut + "rgen";
 	const std::string output = "1111\0" "2222 3333\0"s + author + "\0j@example.com\0" "1700000000\0Merge branch 'x'\0"s
-		+ "2222\0" "3333\0Ann\0ann@example.com\0" "1600000000\0\0"s;
+		+ "HEAD -> refs/heads/main, tag: refs/tags/v1\0"s
+		+ "2222\0" "3333\0Ann\0ann@example.com\0" "1600000000\0\0\0"s;
 
 	const auto commits = edt::vcs::parse_log(output);
 
@@ -163,19 +164,146 @@ BOOST_AUTO_TEST_CASE(Log_ReadsCommitsOfSixNulTerminatedFields)
 	BOOST_TEST(commits[0].subject == "Merge branch 'x'");
 	BOOST_TEST(commits[1].subject.empty());
 	BOOST_TEST((commits[1].parents == std::vector<std::string>{ "3333" }));
+	BOOST_TEST(commits[0].refs.size() == 3u);
+	BOOST_TEST(commits[1].refs.empty());
 
 	const json::value value = edt::vcs::to_json(commits[0]);
 	BOOST_TEST(text(value.as_object().at("author")) == author);
 	BOOST_TEST(value.as_object().at("parents").as_array().size() == 2u);
 	BOOST_TEST(value.as_object().at("time").as_int64() == 1700000000);
+	const json::array& refs = value.as_object().at("refs").as_array();
+	BOOST_REQUIRE_EQUAL(refs.size(), 3u);
+	BOOST_TEST(text(refs[0].as_object().at("name")) == "HEAD");
+	BOOST_TEST(text(refs[0].as_object().at("kind")) == "head");
+	BOOST_TEST(text(refs[1].as_object().at("name")) == "main");
+	BOOST_TEST(text(refs[1].as_object().at("kind")) == "branch");
+	BOOST_TEST(text(refs[2].as_object().at("name")) == "v1");
+	BOOST_TEST(text(refs[2].as_object().at("kind")) == "tag");
+	BOOST_TEST(edt::vcs::to_json(commits[1]).as_object().at("refs").as_array().empty());
 }
 
 BOOST_AUTO_TEST_CASE(Log_RootCommitAndAnIncompleteTail)
 {
-	const auto commits = edt::vcs::parse_log("aaaa\0\0A\0a@x\0" "5\0root\0bbbb\0cccc\0"s);
+	const auto commits = edt::vcs::parse_log("aaaa\0\0A\0a@x\0" "5\0root\0\0" "bbbb\0cccc\0"s);
 	BOOST_REQUIRE_EQUAL(commits.size(), 1u);
 	BOOST_TEST(commits[0].parents.empty());
 	BOOST_TEST(edt::vcs::parse_log("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(Decorations_TellHeadBranchRemoteAndTag)
+{
+	using kind = edt::vcs::ref_kind;
+	const auto refs = edt::vcs::parse_decorations("HEAD -> refs/heads/feature/x, tag: refs/tags/v1.0, refs/remotes/origin/main, "
+		"refs/remotes/origin/HEAD, refs/heads/" + u_umlaut + ", refs/stash, refs/tags/light");
+	BOOST_REQUIRE_EQUAL(refs.size(), 6u);
+	BOOST_TEST(refs[0].name == "HEAD");
+	BOOST_TEST((refs[0].kind == kind::head));
+	BOOST_TEST(refs[1].name == "feature/x");
+	BOOST_TEST((refs[1].kind == kind::branch));
+	BOOST_TEST(refs[2].name == "v1.0");
+	BOOST_TEST((refs[2].kind == kind::tag));
+	BOOST_TEST(refs[3].name == "origin/main");
+	BOOST_TEST((refs[3].kind == kind::remote));
+	BOOST_TEST(refs[4].name == u_umlaut);
+	BOOST_TEST((refs[4].kind == kind::branch));
+	BOOST_TEST(refs[5].name == "light");
+	BOOST_TEST((refs[5].kind == kind::tag));
+
+	// Detached: HEAD alone; a shallow commit's marker is not a ref.
+	const auto detached = edt::vcs::parse_decorations("HEAD, grafted, refs/heads/main");
+	BOOST_REQUIRE_EQUAL(detached.size(), 2u);
+	BOOST_TEST((detached[0].kind == kind::head));
+	BOOST_TEST(detached[1].name == "main");
+	BOOST_TEST(edt::vcs::parse_decorations("").empty());
+	// Short names (no --decorate=full) read as branches and tags.
+	const auto short_names = edt::vcs::parse_decorations("HEAD -> main, tag: v2");
+	BOOST_REQUIRE_EQUAL(short_names.size(), 3u);
+	BOOST_TEST(short_names[1].name == "main");
+	BOOST_TEST((short_names[1].kind == kind::branch));
+	BOOST_TEST(short_names[2].name == "v2");
+	BOOST_TEST((short_names[2].kind == kind::tag));
+}
+
+BOOST_AUTO_TEST_CASE(TipCommits_PeelTagsAndSkipWhatIsNoCommit)
+{
+	const std::string a(40, 'a');
+	const std::string b(40, 'b');
+	const std::string c(64, 'c');
+	const std::string t(40, 'e');
+	const std::string tree(40, 'f');
+	const std::string output = a + " commit  \n"
+		+ a + " commit  \r\n"                 // a second ref of the same commit
+		+ t + " tag " + b + " commit\n"        // an annotated tag
+		+ t + " tag " + tree + " tree\n"       // a tag of a tree
+		+ tree + " tree  \n"
+		+ c + " commit  \n"
+		+ "xyz commit  \n"
+		+ "\n";
+	const auto tips = edt::vcs::parse_tip_commits(output);
+	BOOST_TEST((tips == std::vector<std::string>{ a, b, c }));
+	BOOST_TEST(edt::vcs::parse_tip_commits("").empty());
+}
+
+BOOST_AUTO_TEST_CASE(HexObjectName_Is4To64HexDigits)
+{
+	BOOST_TEST(edt::vcs::is_hex_object_name("abcd"));
+	BOOST_TEST(edt::vcs::is_hex_object_name("0123456789ABCDEFabcdef"));
+	BOOST_TEST(edt::vcs::is_hex_object_name(std::string(64, 'f')));
+	BOOST_TEST(!edt::vcs::is_hex_object_name("abc"));
+	BOOST_TEST(!edt::vcs::is_hex_object_name(std::string(65, 'f')));
+	BOOST_TEST(!edt::vcs::is_hex_object_name("abcg"));
+	BOOST_TEST(!edt::vcs::is_hex_object_name("-abcd"));
+	BOOST_TEST(!edt::vcs::is_hex_object_name("HEAD"));
+	BOOST_TEST(!edt::vcs::is_hex_object_name("abcd^1"));
+	BOOST_TEST(!edt::vcs::is_hex_object_name(""));
+}
+
+BOOST_AUTO_TEST_CASE(NameStatus_ReadsRenamesCopiesAndPlainChanges)
+{
+	const std::string output = "M\0" "a.txt\0"s
+		+ "R087\0old name.txt\0new name.txt\0"s
+		+ "C100\0src/x.h\0src/y.h\0"s
+		+ "A\0dir/" + cyrillic_file + ".txt\0"s
+		+ "D\0gone.txt\0"s
+		+ "T\0link\0"s;
+
+	const auto files = edt::vcs::parse_name_status(output);
+
+	BOOST_REQUIRE_EQUAL(files.size(), 6u);
+	BOOST_TEST(files[0].status == 'M');
+	BOOST_TEST(files[0].path == "a.txt");
+	BOOST_TEST(files[0].orig_path.empty());
+	BOOST_TEST(files[1].status == 'R');
+	BOOST_TEST(files[1].orig_path == "old name.txt");
+	BOOST_TEST(files[1].path == "new name.txt");
+	BOOST_TEST(files[2].status == 'C');
+	BOOST_TEST(files[2].orig_path == "src/x.h");
+	BOOST_TEST(files[2].path == "src/y.h");
+	BOOST_TEST(files[3].status == 'A');
+	BOOST_TEST(files[3].path == "dir/" + cyrillic_file + ".txt");
+	BOOST_TEST(files[4].status == 'D');
+	BOOST_TEST(files[5].status == 'T');
+
+	const json::value renamed = edt::vcs::to_json(files[1]);
+	BOOST_TEST(text(renamed.as_object().at("status")) == "R");
+	BOOST_TEST(text(renamed.as_object().at("orig_path")) == "old name.txt");
+	BOOST_TEST(text(renamed.as_object().at("path")) == "new name.txt");
+	BOOST_TEST(!edt::vcs::to_json(files[0]).as_object().contains("orig_path"));
+	BOOST_TEST(text(edt::vcs::to_json(edt::vcs::changed_file{ "bad\xFF", {}, 'A' }).as_object().at("path")) == "bad\xEF\xBF\xBD");
+}
+
+BOOST_AUTO_TEST_CASE(NameStatus_DropsAnIncompleteLastRecord)
+{
+	// A rename cut after its old path, a status without its path, a path without its closing NUL.
+	const auto cut_rename = edt::vcs::parse_name_status("M\0" "a.txt\0R100\0old.txt\0"s);
+	BOOST_REQUIRE_EQUAL(cut_rename.size(), 1u);
+	BOOST_TEST(cut_rename[0].path == "a.txt");
+	BOOST_TEST(edt::vcs::parse_name_status("M\0" "a.txt\0D\0"s).size() == 1u);
+	const auto cut_path = edt::vcs::parse_name_status("M\0" "a.txt\0A\0par"s);
+	BOOST_REQUIRE_EQUAL(cut_path.size(), 1u);
+	BOOST_TEST(cut_path[0].path == "a.txt");
+	BOOST_TEST(edt::vcs::parse_name_status("").empty());
+	BOOST_TEST(edt::vcs::parse_name_status("M"s).empty());
 }
 
 BOOST_AUTO_TEST_CASE(Refs_ReadsLocalAndRemoteBranches)

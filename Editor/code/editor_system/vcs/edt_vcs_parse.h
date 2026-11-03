@@ -53,8 +53,24 @@ namespace edt::vcs
 	status_report parse_status(std::string_view output);
 	boost::json::value to_json(const status_report& status);
 
-	// The format given to `git log -z`: hash, parents, author name, author email, author time (unix seconds), subject.
-	inline constexpr std::string_view k_log_format = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s";
+	// The format given to `git log -z --decorate=full`: hash, parents, author name, author email, author time (unix
+	// seconds), subject, decorations.
+	inline constexpr std::string_view k_log_format = "--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%s%x00%D";
+
+	enum class ref_kind : std::uint8_t { head, branch, remote, tag };
+	const char* ref_kind_name(ref_kind kind);
+
+	struct decoration
+	{
+		// "HEAD", "main", "origin/main", "v1".
+		std::string name;
+		ref_kind kind = ref_kind::branch;
+	};
+
+	// `%D` of `git log --decorate=full`: "HEAD -> refs/heads/main, tag: refs/tags/v1, refs/remotes/origin/main".
+	// A remote's symbolic HEAD (refs/remotes/x/HEAD) and refs outside heads, remotes and tags are left out; a short
+	// name (no refs/ prefix) is a branch.
+	std::vector<decoration> parse_decorations(std::string_view text);
 
 	struct commit_entry
 	{
@@ -64,11 +80,36 @@ namespace edt::vcs
 		std::string email;
 		std::int64_t time = 0;
 		std::string subject;
+		std::vector<decoration> refs;
 	};
 
-	// The output of `git log -z <k_log_format>`: NUL ends each field and each commit, so a commit is six fields.
+	// The output of `git log -z <k_log_format>`: NUL ends each field and each commit, so a commit is seven fields.
 	std::vector<commit_entry> parse_log(std::string_view output);
 	boost::json::value to_json(const commit_entry& commit);
+
+	// The format given to `git for-each-ref` for the tips of a log over every branch, remote branch and tag.
+	inline constexpr std::string_view k_tip_format = "--format=%(objectname) %(objecttype) %(*objectname) %(*objecttype)";
+
+	// `git for-each-ref <k_tip_format>`: the commit each ref names (a tag peeled to its commit), each once, in order.
+	// A ref to anything else (a tag of a tree) is left out, and so is a line without a hex object name.
+	std::vector<std::string> parse_tip_commits(std::string_view output);
+
+	// 4..64 hex digits: an abbreviated or full object name, never an option or a revision expression.
+	bool is_hex_object_name(std::string_view text);
+
+	struct changed_file
+	{
+		std::string path;
+		// Renamed or copied: the path it came from.
+		std::string orig_path;
+		// git's letter: A, M, D, T, R, C, U, X (the score of R and C is dropped).
+		char status = 'M';
+	};
+
+	// `git diff-tree -r -z --name-status`: "M", NUL, path, NUL; a rename or copy "R100", NUL, old, NUL, new, NUL. An
+	// incomplete last record (output cut short) is left out.
+	std::vector<changed_file> parse_name_status(std::string_view output);
+	boost::json::value to_json(const changed_file& file);
 
 	// The format given to `git for-each-ref`: one ref per line (a ref name holds no control character).
 	inline constexpr std::string_view k_ref_format = "--format=%(refname)%00%(objectname)%00%(upstream)%00%(HEAD)";
