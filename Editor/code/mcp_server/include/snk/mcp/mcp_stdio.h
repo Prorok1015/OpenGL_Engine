@@ -67,7 +67,8 @@ namespace mcp
 		void stop();
 
 		// One line of input without its '\n'; a trailing '\r' is dropped. The reader calls it; tests may call it
-		// directly when no reader runs. Ignored after stop().
+		// directly when no reader runs. Ignored after stop() and once the session ended
+		// (EOF, a broken or overflowed output): nothing is dispatched any more.
 		void handle_line(std::string_view line);
 
 		// Tests: waits until every queued line was written (or the output broke). False after `timeout`.

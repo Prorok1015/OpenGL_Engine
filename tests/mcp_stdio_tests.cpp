@@ -664,4 +664,19 @@ BOOST_FIXTURE_TEST_CASE(AReadThatIgnoresInterrupt_DoesNotHangStop, stdio_fixture
 	BOOST_TEST(host.closed_sessions().size() == 1u);
 }
 
+BOOST_FIXTURE_TEST_CASE(AfterTheOutputDied_InputReachesNoHost, stdio_fixture)
+{
+	mcp::stdio_config c = config();
+	c.write = [](std::string_view) { return false; };
+	mcp::stdio_transport transport(host, std::move(c));
+	transport.handle_line(initialize_line);
+	BOOST_REQUIRE(eof.wait());
+	transport.handle_line(initialize_line);
+	transport.handle_line(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"probe"}})");
+	BOOST_TEST(transport.session_id().empty());
+	BOOST_TEST(host.calls().empty());
+	transport.stop();
+	BOOST_TEST(eof.calls() == 1);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

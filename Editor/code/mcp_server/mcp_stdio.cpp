@@ -370,10 +370,17 @@ struct mcp::stdio_transport::core : std::enable_shared_from_this<mcp::stdio_tran
 	void handle_line(std::string_view line)
 	{
 		std::lock_guard lock(gate);
-		if (stopping) {
+		// Once the session is over (EOF, a dead output) nobody would get the answers: the input is only discarded.
+		if (stopping || ended || output_dead()) {
 			return;
 		}
 		handle_line_locked(line);
+	}
+
+	bool output_dead()
+	{
+		std::lock_guard lock(out_mutex);
+		return out_broken;
 	}
 
 	void handle_line_locked(std::string_view line)
