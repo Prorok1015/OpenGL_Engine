@@ -145,6 +145,9 @@ ownership: std::shared_ptr<T> or std::make_shared<T>()
 non_ownership: std::weak_ptr<T> (for cycles, caches)
 never: std::auto_ptr (deprecated), raw new/delete in code (use RAII)
 
+[RAW_STRING_PATTERNS]
+json_in_raw_strings: Always R"json(...)json", never R"(...)" (a `)"` inside the text, e.g. "(4 to 64 hex digits)", ends R"(...)" early: hit twice, #475 and #501)
+
 [DESCRIPTOR_PATTERNS]
 files: snake_case.desc (e.g., backpack.desc, level.desc)
 format: JSON with inheritance (extends: "parent.desc")
