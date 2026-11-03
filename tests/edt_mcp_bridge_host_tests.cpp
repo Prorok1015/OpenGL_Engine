@@ -1133,6 +1133,9 @@ BOOST_AUTO_TEST_CASE(ACallJudgedByAnotherCategory_AsksForThatCategory_AndTheGran
 	BOOST_TEST(!plain.has_value());
 	BOOST_REQUIRE_EQUAL(access.confirmations().pending().size(), 1u);
 	BOOST_TEST((access.confirmations().pending().front().category == cmd::agent_category::code_edit));
+	// `plain` is a local: the question still waiting would be answered into it after it is gone, when the fixture goes.
+	access.confirmations().decline_all("the test is over");
+	BOOST_TEST(plain.has_value());
 }
 
 BOOST_AUTO_TEST_CASE(ASessionGrant_AllowsTheNextCallOfThatCategoryWithoutAQuestion)
