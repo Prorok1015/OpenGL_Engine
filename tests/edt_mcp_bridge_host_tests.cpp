@@ -1764,7 +1764,7 @@ BOOST_AUTO_TEST_CASE(ACancelBeforeTheCallIsHeld_CancelsTheJob_AndAnswersNothing)
 	BOOST_TEST(outcome->notes.empty());
 }
 
-BOOST_AUTO_TEST_CASE(ASessionThatEndsBeforeTheCallIsHeld_CancelsTheJob_AndAnswersNothing)
+BOOST_AUTO_TEST_CASE(ASessionThatEndsBeforeTheCallIsHeld_DeclinesTheCall_AndStartsNoJob)
 {
 	cmd::command_desc asked = job_command("test.job_asked", [](ds::task_context&) { return json_of("{}"); });
 	asked.category = cmd::agent_category::code_files;
@@ -1778,11 +1778,12 @@ BOOST_AUTO_TEST_CASE(ASessionThatEndsBeforeTheCallIsHeld_CancelsTheJob_AndAnswer
 	held_bridge.session_closed("session-1");
 	drain();
 	// The question goes with the session (the fixture wires drop_session to agent_session_closed, as the editor does):
-	// the call is declined, the command never runs, and its `denied` is not sent to a session that has ended.
+	// the call is declined as any waiting call is, and the command never runs.
 	BOOST_TEST(access.confirmations().pending().empty());
 	BOOST_TEST(last_job == 0u);
 	finish_jobs();
-	BOOST_TEST(outcome->answers.empty());
+	BOOST_REQUIRE_EQUAL(outcome->answers.size(), 1u);
+	BOOST_TEST(outcome->answers[0].is_error);
 }
 
 BOOST_AUTO_TEST_CASE(Progress_IsSentOnlyWhenItGrows)

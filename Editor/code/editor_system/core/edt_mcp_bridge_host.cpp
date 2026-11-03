@@ -442,7 +442,9 @@ struct edt::mcp_bridge_host::state
 				send(call, fraction, note, at);
 			} else {
 				const float highest = call.waiting ? std::max(call.waiting->first, fraction) : fraction;
-				call.waiting.emplace(highest, note);
+				// A finished task reports 1.0 without a note (job_service::retire): keep the last thing said.
+				std::string kept = note.empty() && call.waiting ? std::move(call.waiting->second) : note;
+				call.waiting.emplace(highest, std::move(kept));
 			}
 		}
 	}
@@ -468,6 +470,13 @@ struct edt::mcp_bridge_host::state
 				entry.second.cancelled = true;
 			}
 		}
+		cancel_held(match);
+	}
+
+	// Only the held calls: a call still waiting for a person is declined by agent_confirmations::drop_session instead.
+	template<class Match>
+	void cancel_held(Match match)
+	{
 		const std::vector<held_call> dropped = take(match);
 		for (const held_call& call : dropped) {
 			if (jobs != nullptr) {
@@ -717,7 +726,7 @@ void edt::mcp_bridge_host::read_resource(mcp::request_context context, std::stri
 void edt::mcp_bridge_host::session_closed(std::string session_id)
 {
 	m_tasks.post_main([state = m_state, session = std::move(session_id)] {
-		state->cancel([&session](const auto& call) { return call.session == session; });
+		state->cancel_held([&session](const auto& call) { return call.session == session; });
 		if (state->on_session_closed) {
 			state->on_session_closed(session);
 		}
