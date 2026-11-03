@@ -396,7 +396,18 @@ namespace {
 					return cmd::result::failure(cmd::codes::failed, std::format("'{}': {}", path, problem));
 				}
 			}
-			// Never over an existing file; folders `to` needs are made (res::resource_system::rename).
+			// The target's folder must be there already: a rename makes none (code.create does).
+			const std::size_t slash = to.rfind('/');
+			if (slash != std::string_view::npos) {
+				const std::string_view folder = to.substr(0, slash);
+				std::error_code ec;
+				const auto status = fs::symlink_status(*root() / fs_paths::path_from_utf8(folder), ec);
+				if (ec || !fs::is_directory(status)) {
+					return cmd::result::failure(cmd::codes::failed,
+						std::format("there is no folder '{}' in code/ to move into: code.create makes the folders of a new file", folder));
+				}
+			}
+			// Never over an existing file.
 			const res::file_operation moved = m_deps.res.rename(edt::code_actions::tag_of(from), edt::code_actions::tag_of(to));
 			if (!moved.ok) return cmd::result::failure(cmd::codes::failed, std::format("'{}' was not renamed: {}", from, moved.error));
 			changed(call, "code.rename", std::format("{} -> {}", from, to), 0);
@@ -527,7 +538,7 @@ std::vector<edt::registration> edt::register_code_commands(cmd::command_registry
 		R"json({"type":"object","properties":{"path":{"type":"string","minLength":1},"version":{"type":"string","minLength":1}},
 			"required":["path","version"],"additionalProperties":false})json",
 		k_empty_result, true, cmd::agent_category::code_files, by_path(cmd::agent_category::code_files), &code_commands::remove);
-	add("code.rename", "Rename or move a code file within code/ (never over an existing file)",
+	add("code.rename", "Rename or move a code file into an existing folder of code/ (never over an existing file)",
 		R"json({"type":"object","properties":{"from":{"type":"string","minLength":1},"to":{"type":"string","minLength":1}},
 			"required":["from","to"],"additionalProperties":false})json",
 		k_empty_result, true, cmd::agent_category::code_files,

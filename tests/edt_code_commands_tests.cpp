@@ -241,6 +241,12 @@ BOOST_AUTO_TEST_CASE(Delete_NeedsTheVersionRead)
 
 BOOST_AUTO_TEST_CASE(Rename_MovesBetweenFolders_NeverOverAFile)
 {
+	const auto missing = call("code.rename", json::object{ { "from", "src/game.cpp" }, { "to", "lib/game.cpp" } });
+	BOOST_TEST(missing.code == cmd::codes::failed);
+	BOOST_TEST(missing.error.find("no folder 'lib'") != std::string::npos);
+	BOOST_TEST(fs::exists(code / "src" / "game.cpp"));
+
+	fs::create_directories(code / "lib");
 	const auto moved = call("code.rename", json::object{ { "from", "src/game.cpp" }, { "to", "lib/game.cpp" } });
 	BOOST_REQUIRE_MESSAGE(moved.ok, moved.error);
 	BOOST_TEST(fs::exists(code / "lib" / "game.cpp"));
