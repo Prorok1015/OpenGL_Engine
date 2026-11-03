@@ -60,7 +60,8 @@ namespace edt
 		// The command's own entry, else its category's held to the command's risk floor (confirm -> at least ask,
 		// deny_by_default -> at least deny); nullopt: this layer says nothing.
 		std::optional<cmd::policy_mode> resolve(const cmd::command_desc& command) const;
-		// The same for a call judged by `category` (cmd::category_of_call) instead of the command's own.
+		// The same for a call judged by `category` (cmd::category_of_call) instead of the command's own: the command's
+		// own entry counts only when `category` is the command's category.
 		std::optional<cmd::policy_mode> resolve(const cmd::command_desc& command, cmd::agent_category category) const;
 		bool empty() const { return categories.empty() && commands.empty(); }
 	};
