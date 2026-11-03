@@ -2603,7 +2603,8 @@ BOOST_AUTO_TEST_CASE(Log_All_PassesTheTipCommits_AndReducesTooManyToIndependentO
 	BOOST_TEST(reductions == 3u);
 	const auto& reduced = *last_call_with(calls, "log");
 	const auto reduced_begin = std::find(reduced.begin(), reduced.end(), "--end-of-options") + 1;
-	BOOST_TEST(std::find(reduced_begin, reduced.end(), "--") - reduced_begin == 3);
+	const auto reduced_tips = std::find(reduced_begin, reduced.end(), "--") - reduced_begin;
+	BOOST_TEST(reduced_tips == 3);
 }
 
 // show_files and diff{commit}: the commit resolved (rev-parse --verify --end-of-options <x>^{commit}), its first parent
