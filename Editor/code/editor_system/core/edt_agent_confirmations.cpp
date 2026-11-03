@@ -3,6 +3,7 @@
 #include <boost/json/serialize.hpp>
 #include <imgui.h>
 #include <algorithm>
+#include <exception>
 #include <cstdint>
 #include <format>
 
@@ -30,10 +31,27 @@ namespace edt
 	{
 	}
 
+	cmd::result agent_confirmations::run_command(std::string_view command_id, const cmd::call& request)
+	{
+		// A command that throws must not take the frame down, nor leave the agent without an answer.
+		try {
+			return m_commands.invoke(command_id, request);
+		} catch (const std::exception& e) {
+			return cmd::result::failure(cmd::codes::failed, e.what());
+		} catch (...) {
+			return cmd::result::failure(cmd::codes::failed, "the command threw an unknown exception");
+		}
+	}
+
 	agent_confirmations::~agent_confirmations()
 	{
 		while (!m_waiting.empty()) {
 			finish_waiting(m_waiting.front().request.id, std::nullopt, "the editor is closing");
+		}
+		std::vector<retrying> parked;
+		parked.swap(m_retrying);
+		for (retrying& call : parked) {
+			call.done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was not run: the editor is closing", call.command_id)));
 		}
 	}
 
@@ -44,9 +62,61 @@ namespace edt
 
 	void agent_confirmations::invoke(std::string_view command_id, cmd::call request, finish done)
 	{
-		cmd::result first = m_commands.invoke(command_id, request);
+		start(std::string(command_id), std::move(request), std::move(done), std::nullopt);
+	}
+
+	void agent_confirmations::park_or_finish(std::string command_id, cmd::call request, finish done, bool approved, cmd::result outcome,
+		std::optional<time_point> give_up_at)
+	{
+		if (outcome.code != cmd::codes::busy) {
+			done(std::move(outcome));
+			return;
+		}
+		const time_point limit = give_up_at ? *give_up_at : now() + busy_wait;
+		if (now() >= limit) {
+			done(std::move(outcome));
+			return;
+		}
+		retrying parked;
+		parked.command_id = std::move(command_id);
+		parked.call = std::move(request);
+		parked.call.confirmation.clear();
+		parked.done = std::move(done);
+		parked.approved = approved;
+		parked.give_up_at = limit;
+		m_retrying.push_back(std::move(parked));
+	}
+
+	void agent_confirmations::run_approved(std::string command_id, cmd::call request, finish done, std::optional<time_point> give_up_at)
+	{
+		request.confirmation.clear();
+		cmd::result outcome = run_command(command_id, request);
+		if (outcome.code == cmd::codes::confirmation_required) {
+			const json::object* body = outcome.value.if_object();
+			const json::value* ticket = body != nullptr ? body->if_contains("ticket") : nullptr;
+			if (ticket == nullptr || !ticket->is_string()) {
+				done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the registry gave no confirmation ticket", command_id)));
+				return;
+			}
+			const std::string ticket_id(ticket->as_string());
+			if (!m_commands.approve(ticket_id)) {
+				done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was refused: the confirmation expired", command_id)));
+				return;
+			}
+			request.confirmation = ticket_id;
+			outcome = run_command(command_id, request);
+			// A ticket the registry did not consume is not left waiting for its lifetime.
+			m_commands.discard(ticket_id);
+		}
+		park_or_finish(std::move(command_id), std::move(request), std::move(done), true, std::move(outcome), give_up_at);
+	}
+
+	void agent_confirmations::start(std::string command_id_text, cmd::call request, finish done, std::optional<time_point> give_up_at)
+	{
+		const std::string_view command_id = command_id_text;
+		cmd::result first = run_command(command_id, request);
 		if (first.code != cmd::codes::confirmation_required) {
-			done(std::move(first));
+			park_or_finish(command_id_text, std::move(request), std::move(done), false, std::move(first), give_up_at);
 			return;
 		}
 		const json::object* body = first.value.if_object();
@@ -126,10 +196,11 @@ namespace edt
 			m_grants.add(entry.request.session, entry.request.category);
 		}
 		entry.call.confirmation = entry.ticket;
-		cmd::result outcome = m_commands.invoke(entry.command_id, entry.call);
+		cmd::result outcome = run_command(entry.command_id, entry.call);
 		// A ticket the registry did not consume (the policy turned to deny meanwhile) is not left waiting for its lifetime.
 		m_commands.discard(entry.ticket);
-		entry.done(std::move(outcome));
+		// A person in the middle of a gesture (often the one who just clicked "Allow") is waited out, not asked again.
+		park_or_finish(entry.command_id, entry.call, std::move(entry.done), true, std::move(outcome), std::nullopt);
 
 		if (grant) {
 			// What already waits for the same session and category is covered by the answer just given: settle it the way
@@ -169,6 +240,16 @@ namespace edt
 		for (const std::uint64_t id : late) {
 			finish_waiting(id, std::nullopt, std::format("nobody answered within {} seconds", timeout.count()));
 		}
+
+		std::vector<retrying> due;
+		due.swap(m_retrying);
+		for (retrying& call : due) {
+			if (call.approved) {
+				run_approved(std::move(call.command_id), std::move(call.call), std::move(call.done), call.give_up_at);
+			} else {
+				start(std::move(call.command_id), std::move(call.call), std::move(call.done), call.give_up_at);
+			}
+		}
 	}
 
 	void agent_confirmations::drop_session(std::string_view session)
@@ -179,6 +260,18 @@ namespace edt
 		}
 		for (const std::uint64_t id : mine) {
 			finish_waiting(id, std::nullopt, "the agent disconnected");
+		}
+		std::vector<retrying> gone;
+		for (auto it = m_retrying.begin(); it != m_retrying.end();) {
+			if (it->call.from.session == session) {
+				gone.push_back(std::move(*it));
+				it = m_retrying.erase(it);
+			} else {
+				++it;
+			}
+		}
+		for (retrying& call : gone) {
+			call.done(cmd::result::failure(cmd::codes::denied, std::format("'{}' was not run: the agent disconnected", call.command_id)));
 		}
 		m_grants.drop_session(session);
 	}

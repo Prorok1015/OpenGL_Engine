@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "test_scene_env.hpp"
-#include "edt_mcp_bridge_host.h"
+#include "edt_agent_policy.h"
 #include "edt_scene_document.h"
 #include <snk/command/cmd_registry.h>
 #include <snk/desc/desc_json_schema.h>
@@ -196,7 +196,7 @@ BOOST_AUTO_TEST_CASE(AllFiveCommandsAreRegisteredReadOnlyAndOfferedToAgents)
 			BOOST_TEST(!command->mutates);
 			BOOST_TEST(!command->long_running);
 			BOOST_TEST((command->risk == cmd::danger::none));
-			BOOST_TEST(edt::agent_may_use(*command));
+			BOOST_TEST((edt::default_mode(*command) == cmd::policy_mode::allow));
 			BOOST_TEST((command->category == cmd::agent_category::read));
 		}
 	}

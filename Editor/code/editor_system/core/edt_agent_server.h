@@ -1,12 +1,14 @@
 #pragma once
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace cmd { class command_registry; }
-namespace edt { class agent_confirmations; }
+namespace edt { class agent_access; }
 namespace ds { class task_system; }
 
 namespace edt
@@ -24,6 +26,8 @@ namespace edt
 		std::filesystem::path project_dir;
 		// An MCP session with no request for this long is closed. 0: never.
 		std::chrono::minutes session_idle_timeout{ 30 };
+		// Called on the main thread when an MCP session ended, except while the server itself stops. Empty: nothing.
+		std::function<void(const std::string& session_id)> on_session_closed;
 	};
 
 	// The MCP server of the editor (module snk_mcp_server) with everything it needs on the editor's side: the
@@ -36,8 +40,8 @@ namespace edt
 	class agent_server
 	{
 	public:
-		// `confirmations` outlives the server (destroy the server first).
-		agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_confirmations& confirmations, agent_server_options options);
+		// `access` outlives the server (destroy the server first).
+		agent_server(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access, agent_server_options options);
 		~agent_server();
 		agent_server(const agent_server&) = delete;
 		agent_server& operator=(const agent_server&) = delete;

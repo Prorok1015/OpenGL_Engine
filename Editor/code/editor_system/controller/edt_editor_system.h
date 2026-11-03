@@ -203,5 +203,7 @@ namespace edt {
 		std::unique_ptr<agent_access> m_agent_access;
 		// The MCP server; null when it is off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
+		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
+		std::vector<connection> m_session_connections;
 	};
 }

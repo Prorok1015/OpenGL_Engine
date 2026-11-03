@@ -67,6 +67,10 @@ namespace edt
 		using finish = std::function<void(cmd::result)>;
 
 		static constexpr std::chrono::seconds timeout{ 60 };
+		// How long a call that finds a person in the middle of a gesture (`busy`) is tried again, once per tick(), before
+		// the agent is told. Also for a call a person has just allowed: that answer belongs to this very call, so it is
+		// not asked again, and the command itself still checks the state it finds (expected_generation, refs).
+		static constexpr std::chrono::seconds busy_wait{ 5 };
 
 		agent_confirmations(cmd::command_registry& commands, session_grants& grants, clock_function now = {});
 		~agent_confirmations();
@@ -74,7 +78,7 @@ namespace edt
 		agent_confirmations& operator=(const agent_confirmations&) = delete;
 
 		// `done` is called exactly once, on the main thread: at once for an answer that needs no person, later for a
-		// confirmed one.
+		// confirmed one or one that waited for a gesture to end.
 		void invoke(std::string_view command_id, cmd::call request, finish done);
 
 		// A person's answer to request `id`; false when it is no longer waiting (answered, timed out, session dropped). Allowing
@@ -94,6 +98,17 @@ namespace edt
 		std::vector<confirmation_request> pending() const;
 
 	private:
+		// A call that found a person in the middle of a gesture and is tried again by tick().
+		struct retrying
+		{
+			std::string command_id;
+			cmd::call call;
+			finish done;
+			// The person already allowed exactly this call: every try gets a fresh ticket approved here, never a question.
+			bool approved = false;
+			std::chrono::steady_clock::time_point give_up_at{};
+		};
+
 		struct waiting
 		{
 			confirmation_request request;
@@ -105,12 +120,22 @@ namespace edt
 
 		std::chrono::steady_clock::time_point now() const;
 		void finish_waiting(std::uint64_t id, std::optional<confirmation_answer> what, std::string_view why_not);
+		using time_point = std::chrono::steady_clock::time_point;
+		cmd::result run_command(std::string_view command_id, const cmd::call& request);
+		// One try of a call nobody has been asked about yet (a person may be asked now).
+		void start(std::string command_id, cmd::call request, finish done, std::optional<time_point> give_up_at);
+		// One try of a call a person allowed: a ticket is made and approved for exactly this call.
+		void run_approved(std::string command_id, cmd::call request, finish done, std::optional<time_point> give_up_at);
+		// `busy` parks the call for tick() until `give_up_at` (busy_wait after the first busy), anything else is the answer.
+		void park_or_finish(std::string command_id, cmd::call request, finish done, bool approved, cmd::result outcome,
+			std::optional<time_point> give_up_at);
 
 		cmd::command_registry& m_commands;
 		session_grants& m_grants;
 		clock_function m_clock;
 		std::uint64_t m_next_id = 1;
 		std::vector<waiting> m_waiting;
+		std::vector<retrying> m_retrying;
 	};
 
 	// Whether the font draws every letter of the window's buttons. The built-in ImGui font has no Cyrillic and shows '?',

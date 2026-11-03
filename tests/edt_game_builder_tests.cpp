@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_game_builder.h"
-#include "edt_agent_confirmations.h"
+#include "edt_agent_access.h"
 #include "edt_live_build.h"
 #include "edt_mcp_bridge_host.h"
 #include <snk/editor/edt_action_registry.h>
@@ -9,7 +9,7 @@
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_problem_list.h>
 #include <snk/common/logger/engine_log_sinks.h>
-#include <snk/command/cmd_main_thread_queue.h>
+#include "test_temp_dir.hpp"
 #include <boost/json/object.hpp>
 #include <algorithm>
 #include <chrono>
@@ -406,12 +406,11 @@ BOOST_AUTO_TEST_CASE(AnAgentCannotStartABuild)
 	const cmd::command_desc* command = actions.find(edt::game_builder::k_action_id);
 	BOOST_REQUIRE(command != nullptr);
 	BOOST_CHECK(command->risk == cmd::danger::deny_by_default);
-	BOOST_CHECK(!edt::agent_may_use(*command));
-
-	cmd::main_thread_queue queue{ actions.commands(), *tasks };
-	edt::session_grants grants;
-	edt::agent_confirmations confirmations{ actions.commands(), grants };
-	edt::mcp_bridge_host bridge{ actions.commands(), queue, *tasks, confirmations };
+	test_util::temp_dir policy_dir{ "edt_gb_policy" };
+	edt::agent_access access{ actions.commands(), policy_dir.path() / "project.json", policy_dir.path() / "personal.json" };
+	access.set_questions_routed(true);
+	BOOST_CHECK(!edt::agent_may_use(*command, access.policy()));
+	edt::mcp_bridge_host bridge{ actions.commands(), *tasks, access };
 
 	std::optional<std::vector<mcp::tool_info>> tools;
 	bridge.list_tools([&tools](std::vector<mcp::tool_info> listed) { tools = std::move(listed); });

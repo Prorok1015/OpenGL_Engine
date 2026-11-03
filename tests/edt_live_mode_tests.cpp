@@ -1,11 +1,11 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_live_mode.h"
-#include "edt_agent_confirmations.h"
+#include "edt_agent_access.h"
+#include "edt_agent_policy.h"
 #include "edt_build_settings_model.h"
 #include "edt_mcp_bridge_host.h"
 #include "test_manual_tasks.hpp"
 #include "test_temp_dir.hpp"
-#include <snk/command/cmd_main_thread_queue.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/editor/edt_action_registry.h>
 #include <snk/editor/edt_problem_list.h>
@@ -44,10 +44,9 @@ struct live_mode_fixture
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
 	edt::action_registry actions{ commands };
-	cmd::main_thread_queue queue{ commands, tasks };
-	edt::session_grants grants;
-	edt::agent_confirmations confirmations{ commands, grants };
-	edt::mcp_bridge_host bridge{ commands, queue, tasks, confirmations };
+	test_util::temp_dir policy_dir{ "edt_live_policy" };
+	edt::agent_access access{ commands, policy_dir.path() / "project.json", policy_dir.path() / "personal.json" };
+	edt::mcp_bridge_host bridge{ commands, tasks, access };
 	edt::problem_list problems;
 	edt::editor_events events;
 	std::vector<cmd::registration> registrations;
@@ -66,6 +65,13 @@ struct live_mode_fixture
 	// game_builder::stop_background calls (never cancel: that would drop a waiting manual build).
 	int stops = 0;
 	std::unique_ptr<edt::live_mode> live;
+
+	live_mode_fixture()
+	{
+		access.set_questions_routed(true);
+		// The person's switch is the consent for the live tools: the policy asks live mode, as editor_system wires it.
+		access.policy().set_live_mode([this] { return live != nullptr && live->enabled(); });
+	}
 
 	void make()
 	{
@@ -570,36 +576,40 @@ BOOST_AUTO_TEST_CASE(LiveOn_TheLiveToolsAreListedAndCallable_BuildGameModuleStay
 
 BOOST_AUTO_TEST_SUITE_END()
 
-BOOST_AUTO_TEST_SUITE(EdtAgentWhenEnabledTests)
+BOOST_FIXTURE_TEST_SUITE(EdtLiveToolsPolicyTests, live_mode_fixture)
 
-BOOST_AUTO_TEST_CASE(AMutatingCommand_IsAllowedOnlyWhileEnabled_AndOnlyWhenListed)
+BOOST_AUTO_TEST_CASE(TheLiveTools_AreDeniedWhileLiveModeIsOff_AndAllowedWhileItIsOn_ThroughThePolicy)
 {
-	bool on = false;
-	cmd::command_desc desc;
-	desc.id = "live.rebuild_now";
-	desc.mutates = true;
-	desc.agent_when_enabled = true;
-	BOOST_TEST(!edt::agent_may_use(desc)); // no `enabled` at all: closed
-	desc.enabled = [&on] { return on; };
-	BOOST_TEST(!edt::agent_may_use(desc));
-	on = true;
-	BOOST_TEST(edt::agent_may_use(desc));
+	make();
+	for (const char* id : { "live.status", "live.rebuild_now", "live.reload_now" }) {
+		const cmd::command_desc* tool = commands.find(id);
+		BOOST_REQUIRE_MESSAGE(tool != nullptr, id);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST((tool->category == cmd::agent_category::live));
+			BOOST_TEST(!live->enabled());
+			BOOST_TEST((access.policy().effective(*tool).mode == cmd::policy_mode::deny));
+			BOOST_TEST(!edt::agent_may_use(*tool, access.policy()));
+		}
+	}
 
-	desc.risk = cmd::danger::confirm;
-	BOOST_TEST(!edt::agent_may_use(desc));
-	desc.risk = cmd::danger::none;
-	desc.long_running = true;
-	BOOST_TEST(!edt::agent_may_use(desc));
-	desc.long_running = false;
-	desc.expose_as_tool = false;
-	BOOST_TEST(!edt::agent_may_use(desc));
-	desc.expose_as_tool = true;
+	BOOST_REQUIRE(!live->set_enabled(true, false));
+	for (const char* id : { "live.status", "live.rebuild_now", "live.reload_now" }) {
+		const cmd::command_desc* tool = commands.find(id);
+		BOOST_TEST_CONTEXT(id) {
+			BOOST_TEST((access.policy().effective(*tool).mode == cmd::policy_mode::allow));
+			BOOST_TEST(edt::agent_may_use(*tool, access.policy()));
+		}
+	}
 
-	// The flag alone opens nothing: build.game_module stays closed even if someone marks it.
-	desc.id = "build.game_module";
-	BOOST_TEST(!edt::agent_may_use(desc));
-	desc.id = "file.save";
-	BOOST_TEST(!edt::agent_may_use(desc));
+	// The menu items are not tools, whatever the switch says.
+	for (const char* id : { "build.live.toggle" }) {
+		const cmd::command_desc* item = commands.find(id);
+		BOOST_REQUIRE_MESSAGE(item != nullptr, id);
+		BOOST_TEST(!edt::agent_may_use(*item, access.policy()));
+	}
+
+	BOOST_REQUIRE(!live->set_enabled(false, false));
+	BOOST_TEST(!edt::agent_may_use(*commands.find("live.status"), access.policy()));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
