@@ -74,6 +74,9 @@ edt::git_panel_model::git_panel_model(editor_events& events, ports ports)
 		[this](std::uint64_t id, job_status status, const std::string& error, const std::optional<json::value>& result) {
 			finished(id, status, error, result);
 		});
+	m_progress = m_events.job_progress.subscribe([this](std::uint64_t id, float fraction, const std::string& note) {
+		if (m_busy_job == id) m_busy_progress = git_busy_progress{ fraction, note };
+	});
 }
 
 void edt::git_panel_model::set_visible(bool visible)
@@ -266,6 +269,7 @@ void edt::git_panel_model::start_write(std::string_view id, json::value args, st
 	if (const auto job = start(id, std::move(args), job_kind::write, std::move(label))) {
 		m_busy = busy;
 		m_busy_job = job;
+		m_busy_progress.reset();
 	}
 }
 
@@ -284,6 +288,7 @@ void edt::git_panel_model::finished(std::uint64_t id, job_status status, const s
 	if (job.kind == job_kind::write) {
 		m_busy.clear();
 		m_busy_job.reset();
+		m_busy_progress.reset();
 	}
 
 	bool succeeded = false;

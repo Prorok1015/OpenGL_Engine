@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <initializer_list>
 #include <ios>
 #include <iterator>
@@ -86,6 +87,8 @@ namespace {
 		std::vector<std::string> allowed_remotes;
 		// Guarded: the project's agent policy file (absolute; empty: none), which a checkout or pull must not change.
 		fs::path policy_file;
+		// fetch, pull, push: each progress update git prints (--progress), on the job's thread.
+		std::function<void(const edt::vcs::git_progress&)> on_progress;
 	};
 
 	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
@@ -204,8 +207,22 @@ namespace {
 		options.environment = git.environment;
 		// Bytes as git wrote them: -z output holds NULs, a diff its own line breaks.
 		options.raw_output = true;
-		options.on_stderr_line = [&out](std::string_view line) {
+		// A run of updates of one progress phase keeps only its latest line: hundreds of them would push the real
+		// "fatal:" out of stderr_tail.
+		std::size_t progress_start = std::string::npos;
+		std::string progress_phase;
+		options.on_stderr_line = [&out, &git, &progress_start, &progress_phase](std::string_view line) {
+			const std::optional<edt::vcs::git_progress> progress = edt::vcs::parse_progress(line);
+			if (progress && git.on_progress) git.on_progress(*progress);
+			if (progress && progress_start != std::string::npos && progress->phase == progress_phase) {
+				out.err.resize(progress_start);
+			}
+			progress_start = std::string::npos;
 			if (out.err.size() >= k_stderr_cap) return;
+			if (progress) {
+				progress_start = out.err.size();
+				progress_phase = progress->phase;
+			}
 			out.err.append(line);
 			out.err.push_back('\n');
 		};
@@ -924,6 +941,17 @@ namespace {
 		if (!text.empty() && !out.err.empty()) text.push_back('\n');
 		text += out.err;
 		return json::object{ { "output", json::string(stderr_tail(text)) } };
+	}
+
+	// git's network progress as the job's: "<phase> <percent>%", the fraction never going back within the job
+	// (`reached` lives as long as the job's work).
+	void report_progress(git_context& git, ds::task_context& task, float& reached)
+	{
+		git.on_progress = [&task, &reached](const edt::vcs::git_progress& progress) {
+			if (!progress.percent) return;
+			reached = std::max(reached, edt::vcs::progress_fraction(progress));
+			task.set_progress(reached, std::format("{} {}%", progress.phase, *progress.percent));
+		};
 	}
 
 	// A path, a ref or a remote as an argument: git must never read it as an option, and a NUL would cut it short.
@@ -1765,7 +1793,10 @@ edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remot
 	}
 	return run_job("git fetch", [remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
+		float reached = 0.f;
+		report_progress(git, task, reached);
+		// --progress: git prints it to stderr only on a terminal otherwise.
+		std::vector<std::string> args{ "fetch", "--progress", "--no-recurse-submodules", "--end-of-options" };
 		std::string target = remote;
 		if (git.guarded) {
 			// Resolved once and named to git: the remote checked is the remote fetched from.
@@ -1797,7 +1828,9 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
 	return run_job("git pull", [remote, branch](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
+		float reached = 0.f;
+		report_progress(git, task, reached);
+		std::vector<std::string> args{ "fetch", "--progress", "--no-recurse-submodules", "--end-of-options" };
 		std::string target = remote;
 		std::string wanted = branch;
 		network_target resolved;
@@ -1886,7 +1919,7 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 		if (auto error = branch_name_error("branch", branch)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
 	// Never --force, --force-with-lease, --mirror or a +refspec: a push that is not a fast-forward is rejected.
-	std::vector<std::string> args{ "push", "--recurse-submodules=no" };
+	std::vector<std::string> args{ "push", "--progress", "--recurse-submodules=no" };
 	// No tags, and the destination spelled out: push.default, remote.*.push and branch.*.merge cannot send a guarded
 	// push anywhere but the branch the hard rule checked.
 	if (guarded) args.emplace_back("--no-follow-tags");
@@ -1912,6 +1945,8 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 	};
 	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
+		float reached = 0.f;
+		report_progress(git, task, reached);
 		if (git.guarded) {
 			if (auto refusal = remote_refusal(git, remote)) return std::move(*refusal);
 		}
