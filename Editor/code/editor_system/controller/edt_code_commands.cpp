@@ -9,6 +9,7 @@
 #include <snk/resource/res_system.h>
 #include <boost/json.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <format>
@@ -27,6 +28,8 @@ namespace {
 	constexpr std::size_t k_max_listed = 5000;
 	// `old` of a replace: the search stays linear (Boyer-Moore) and small next to the file.
 	constexpr std::size_t k_max_replace_old = 64 * 1024;
+	// The read cannot block on what it reads (#484), but a slow file system or a long io queue must not hold the editor.
+	constexpr std::chrono::seconds k_read_timeout{ 5 };
 	constexpr const char* k_no_project = "no_project";
 
 	json::value parse_schema(std::string_view text)
@@ -143,8 +146,12 @@ namespace {
 		if (!raw) return { {}, "code:// is not mounted" };
 		// A file swapped after the checks above is still refused by the resolver, which reads without following a link and
 		// without blocking on a FIFO (#484).
-		raw->wait();
+		if (!raw->wait_for(k_read_timeout)) return { {}, std::format("'{}' could not be read in {} s", tag.relative(), k_read_timeout.count()) };
 		if (!raw->is_ready()) return { {}, std::format("'{}' could not be read", tag.relative()) };
+		// The file may have grown since its size was checked.
+		if (raw->data.size() > edt::k_code_file_limit) {
+			return { {}, std::format("'{}' is {} bytes: at most {} go through code.* in one call", tag.relative(), raw->data.size(), edt::k_code_file_limit) };
+		}
 		return { raw->data, {} };
 	}
 

@@ -1,4 +1,5 @@
 #include "res_vfs_write.h"
+#include <snk/resource/res_reparse_tag.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/common/fs_paths.h>
 #include <algorithm>
@@ -429,6 +430,11 @@ res::detail::read_result res::detail::read_beneath(const read_request& request, 
 	if (!S_ISREG(information.st_mode)) {
 		return { read_status::not_regular, {} };
 	}
+	// A regular file now: back to blocking reads, which FUSE and network file systems may need.
+	const int flags = ::fcntl(file.get(), F_GETFL);
+	if (flags < 0 || ::fcntl(file.get(), F_SETFL, flags & ~O_NONBLOCK) != 0) {
+		return { read_status::failed, errno_text("cannot inspect", reached / request.leaf) };
+	}
 	if (information.st_size < 0 || static_cast<std::uint64_t>(information.st_size) > request.max_bytes) {
 		return { read_status::too_large, {} };
 	}
@@ -520,7 +526,8 @@ namespace {
 
 	// `name` (one component) inside the folder `parent` holds, resolved from that handle and never through a reparse
 	// point: one at `name` is opened itself. Invalid with the last error set on failure.
-	handle_holder open_in(HANDLE parent, const fs::path& name, ACCESS_MASK access, ULONG share, ULONG disposition, ULONG options)
+	handle_holder open_in(HANDLE parent, const fs::path& name, ACCESS_MASK access, ULONG share, ULONG disposition, ULONG options,
+		bool open_reparse_point = true)
 	{
 		const std::wstring& text = name.native();
 		if (text.size() * sizeof(wchar_t) > 0xfffe) {
@@ -540,7 +547,8 @@ namespace {
 		HANDLE handle = nullptr;
 		// FILE_READ_ATTRIBUTES as CreateFileW adds it: GetFileInformationByHandle and GetFinalPathNameByHandleW need it.
 		const NTSTATUS status = ::NtCreateFile(&handle, access | SYNCHRONIZE | FILE_READ_ATTRIBUTES, &attributes, &status_block, nullptr,
-			FILE_ATTRIBUTE_NORMAL, share, disposition, options | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT, nullptr, 0);
+			FILE_ATTRIBUTE_NORMAL, share, disposition,
+			options | FILE_SYNCHRONOUS_IO_NONALERT | (open_reparse_point ? FILE_OPEN_REPARSE_POINT : 0), nullptr, 0);
 		if (status < 0) {
 			::SetLastError(::RtlNtStatusToDosError(status));
 			return handle_holder{};
@@ -562,13 +570,73 @@ namespace {
 		return true;
 	}
 
+	bool same_file(const BY_HANDLE_FILE_INFORMATION& a, const BY_HANDLE_FILE_INFORMATION& b)
+	{
+		return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber && a.nFileIndexHigh == b.nFileIndexHigh
+			&& a.nFileIndexLow == b.nFileIndexLow;
+	}
+
+	enum class reparse_kind { none, redirect, filter, unknown };
+
+	// What `handle` (opened as the reparse point itself) is: a name surrogate (link, junction) redirects, any other
+	// reparse point is a filter's file kept in place (OneDrive/Cloud Files placeholder, dedup, WCI).
+	reparse_kind reparse_of(HANDLE handle, const BY_HANDLE_FILE_INFORMATION& information)
+	{
+		if ((information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+			return reparse_kind::none;
+		}
+		FILE_ATTRIBUTE_TAG_INFO tag{};
+		if (!::GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &tag, sizeof(tag))) {
+			return reparse_kind::unknown;
+		}
+		return res::detail::reparse_tag_redirects(tag.ReparseTag) ? reparse_kind::redirect : reparse_kind::filter;
+	}
+
+	// A read's folder (#484): `held` was opened as the reparse point itself. A folder a filter keeps in place is opened
+	// again through the filter by `reopen` and kept only if that is the same folder; a link or a junction is refused.
+	// Invalid with the last error set when refused.
+	handle_holder read_folder(handle_holder held, const std::function<handle_holder()>& reopen)
+	{
+		BY_HANDLE_FILE_INFORMATION information{};
+		if (!held.valid() || !::GetFileInformationByHandle(held.get(), &information)) {
+			return handle_holder{};
+		}
+		if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+			::SetLastError(ERROR_DIRECTORY);
+			return handle_holder{};
+		}
+		switch (reparse_of(held.get(), information)) {
+		case reparse_kind::none:
+			return held;
+		case reparse_kind::filter:
+			break;
+		case reparse_kind::redirect:
+		case reparse_kind::unknown:
+			::SetLastError(ERROR_CANT_ACCESS_FILE);
+			return handle_holder{};
+		}
+		handle_holder followed = reopen();
+		BY_HANDLE_FILE_INFORMATION after{};
+		if (!followed.valid() || !::GetFileInformationByHandle(followed.get(), &after)) {
+			return handle_holder{};
+		}
+		if (!same_file(information, after) || (after.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+			::SetLastError(ERROR_CANT_ACCESS_FILE);
+			return handle_holder{};
+		}
+		return followed;
+	}
+
 	// Held without FILE_SHARE_DELETE: while the handle is open nobody can rename, remove or replace the folder.
 	constexpr ACCESS_MASK k_folder_access = FILE_LIST_DIRECTORY | FILE_TRAVERSE;
 	constexpr ULONG k_folder_share = FILE_SHARE_READ | FILE_SHARE_WRITE;
 
 	// The root and every folder down to `parts`, each opened from the handle of the one above it and all held until
 	// the chain goes; empty on failure, `reached` naming where it stopped.
-	std::vector<handle_holder> hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached)
+	// `for_read`: a folder a file system filter keeps as a reparse point (a cloud placeholder) is entered through the filter
+	// (read_folder); writes refuse every reparse point.
+	std::vector<handle_holder> hold_chain(const fs::path& root, const std::vector<fs::path>& parts, bool create, fs::path& reached,
+		bool for_read = false)
 	{
 		std::vector<handle_holder> chain;
 		// Closing what was held must not change the error the caller reports.
@@ -585,7 +653,13 @@ namespace {
 		reached = root;
 		handle_holder top{ ::CreateFileW(root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr, OPEN_EXISTING,
 			FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
-		if (!top.valid() || !is_real_folder(top.get())) {
+		if (for_read) {
+			top = read_folder(std::move(top), [&root] {
+				return handle_holder{ ::CreateFileW(root.c_str(), k_folder_access | SYNCHRONIZE, k_folder_share, nullptr, OPEN_EXISTING,
+					FILE_FLAG_BACKUP_SEMANTICS, nullptr) };
+			});
+		}
+		if (!top.valid() || (!for_read && !is_real_folder(top.get()))) {
 			return give_up();
 		}
 		chain.push_back(std::move(top));
@@ -593,7 +667,13 @@ namespace {
 			reached /= part;
 			handle_holder next = open_in(chain.back().get(), part, k_folder_access, k_folder_share,
 				create ? FILE_OPEN_IF : FILE_OPEN, FILE_DIRECTORY_FILE);
-			if (!next.valid() || !is_real_folder(next.get())) {
+			if (for_read) {
+				const HANDLE parent = chain.back().get();
+				next = read_folder(std::move(next), [parent, &part] {
+					return open_in(parent, part, k_folder_access, k_folder_share, FILE_OPEN, FILE_DIRECTORY_FILE, false);
+				});
+			}
+			if (!next.valid() || (!for_read && !is_real_folder(next.get()))) {
 				return give_up();
 			}
 			chain.push_back(std::move(next));
@@ -861,10 +941,10 @@ res::detail::read_result res::detail::read_beneath(const read_request& request, 
 		return code == ERROR_FILE_NOT_FOUND || code == ERROR_PATH_NOT_FOUND;
 	};
 	fs::path reached;
-	const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached);
+	const std::vector<handle_holder> chain = hold_chain(request.root, *parts, false, reached, true);
 	if (chain.empty()) {
 		return { is_missing() ? read_status::missing : read_status::failed,
-			last_error_text("cannot open the folder (a reparse point, or not a folder)", reached) };
+			last_error_text("cannot open the folder (a link, a junction, or not a folder)", reached) };
 	}
 	if (request.hook && *request.hook) {
 		(*request.hook)(read_stage::folders_held);
@@ -872,8 +952,8 @@ res::detail::read_result res::detail::read_beneath(const read_request& request, 
 	const fs::path path = reached / request.leaf;
 	// Opened itself if it is a reparse point (open_in adds FILE_OPEN_REPARSE_POINT); shared, so a writer may still
 	// replace or remove the file while it is read.
-	const handle_holder file = open_in(chain.back().get(), request.leaf, FILE_READ_DATA,
-		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN, 0);
+	constexpr ULONG k_file_share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+	handle_holder file = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN, 0);
 	if (!file.valid()) {
 		if (is_missing()) {
 			return { read_status::missing, {} };
@@ -884,8 +964,33 @@ res::detail::read_result res::detail::read_beneath(const read_request& request, 
 	if (!::GetFileInformationByHandle(file.get(), &information)) {
 		return { read_status::failed, last_error_text("cannot inspect", path) };
 	}
-	if ((information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0
-		|| ::GetFileType(file.get()) != FILE_TYPE_DISK) {
+	if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+		return { read_status::not_regular, {} };
+	}
+	switch (reparse_of(file.get(), information)) {
+	case reparse_kind::none:
+		break;
+	case reparse_kind::redirect:
+		return { read_status::not_regular, {} };
+	case reparse_kind::unknown:
+		return { read_status::failed, last_error_text("cannot inspect the reparse point", path) };
+	case reparse_kind::filter: {
+		// A placeholder or a deduplicated file: read through its filter, if that is still the same file.
+		handle_holder followed = open_in(chain.back().get(), request.leaf, FILE_READ_DATA, k_file_share, FILE_OPEN,
+			FILE_NON_DIRECTORY_FILE, false);
+		BY_HANDLE_FILE_INFORMATION after{};
+		if (!followed.valid() || !::GetFileInformationByHandle(followed.get(), &after)) {
+			return { read_status::failed, last_error_text("cannot open through its file system filter", path) };
+		}
+		if (!same_file(information, after)) {
+			return { read_status::not_regular, {} };
+		}
+		file = std::move(followed);
+		information = after;
+		break;
+	}
+	}
+	if (::GetFileType(file.get()) != FILE_TYPE_DISK) {
 		return { read_status::not_regular, {} };
 	}
 	const std::uint64_t size = (static_cast<std::uint64_t>(information.nFileSizeHigh) << 32) | information.nFileSizeLow;

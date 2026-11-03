@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/resource/resolvers/res_vfs_resolver.h>
 #include <snk/resource/res_vfs_test_hook.h>
+#include <snk/resource/res_reparse_tag.h>
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <atomic>
@@ -964,6 +965,19 @@ BOOST_FIXTURE_TEST_CASE(Read_AFifoSwappedInAfterTheCheckIsRefusedWithoutBlocking
 	BOOST_TEST(read.rfind("ERR:Not a regular file", 0) == 0u, read);
 }
 #endif
+
+// Windows reads refuse only reparse points that redirect a name; a cloud placeholder or a deduplicated file is read
+// through its filter, so a project under OneDrive (Known Folder Move) still loads.
+BOOST_AUTO_TEST_CASE(ReparseTag_OnlyNameSurrogatesRedirect)
+{
+	BOOST_TEST(res::detail::reparse_tag_redirects(0xA000000Cu)); // IO_REPARSE_TAG_SYMLINK
+	BOOST_TEST(res::detail::reparse_tag_redirects(0xA0000003u)); // IO_REPARSE_TAG_MOUNT_POINT (junction)
+	BOOST_TEST(res::detail::reparse_tag_redirects(0xA000001Du)); // IO_REPARSE_TAG_LX_SYMLINK
+	BOOST_TEST(!res::detail::reparse_tag_redirects(0x9000001Au)); // IO_REPARSE_TAG_CLOUD
+	BOOST_TEST(!res::detail::reparse_tag_redirects(0x9000601Au)); // IO_REPARSE_TAG_CLOUD_6
+	BOOST_TEST(!res::detail::reparse_tag_redirects(0x80000013u)); // IO_REPARSE_TAG_DEDUP
+	BOOST_TEST(!res::detail::reparse_tag_redirects(0x80000018u)); // IO_REPARSE_TAG_WCI
+}
 
 BOOST_FIXTURE_TEST_CASE(Read_OverTheCapIsRefused, read_swap_fixture)
 {
