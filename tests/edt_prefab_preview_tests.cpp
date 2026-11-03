@@ -393,6 +393,7 @@ BOOST_AUTO_TEST_CASE(OpenClose_TenDifferentPrefabsLeaveNoWatchedTagsBehind)
 	BOOST_REQUIRE(mgr->load_level(put("lv.desc", LEVEL_TWO_WORLDS)));
 	const std::size_t watched = hot->watched_count();
 	const std::size_t attached = hot->attached_count();
+	const std::size_t system_watched = rs->watched_tag_count();
 
 	for (int cycle = 0; cycle < 10; ++cycle) {
 		BOOST_TEST_CONTEXT("cycle " << cycle) {
@@ -404,6 +405,7 @@ BOOST_AUTO_TEST_CASE(OpenClose_TenDifferentPrefabsLeaveNoWatchedTagsBehind)
 
 			editor->close();
 			BOOST_TEST(hot->watched_count() == watched);
+			BOOST_TEST(rs->watched_tag_count() == system_watched); // no empty watcher map left behind per tag
 			BOOST_TEST(hot->attached_count() == attached);
 		}
 	}

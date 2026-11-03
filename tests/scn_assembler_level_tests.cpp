@@ -357,6 +357,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ATagSharedByTwoRegistriesStaysWatchedUntil
 	entt::registry first, second;
 	scn::hot_reload_manager mgr(*assembler, *rs);
 	BOOST_TEST(mgr.watched_count() == 0u);
+	const std::size_t system_watched = rs->watched_tag_count();
 	mgr.attach_registry(first);
 	mgr.attach_registry(second);
 	const auto e_first = first.create();
@@ -371,6 +372,7 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ATagSharedByTwoRegistriesStaysWatchedUntil
 	BOOST_TEST(mgr.watched_count() == watched); // still used by the second registry
 	mgr.detach_registry(second);
 	BOOST_TEST(mgr.watched_count() == 0u);
+	BOOST_TEST(rs->watched_tag_count() == system_watched);
 	mgr.detach_registry(second); // not attached: nothing to release twice
 	BOOST_TEST(mgr.watched_count() == 0u);
 }

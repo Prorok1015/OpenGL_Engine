@@ -165,9 +165,18 @@ namespace res
 
 		void unwatch(const res::tag& tag, void* owner) {
 			std::lock_guard lock(m_cache_mutex);
-			if (m_watchers.contains(tag)) {
-				m_watchers[tag].erase(owner);
+			const auto it = m_watchers.find(tag);
+			if (it == m_watchers.end()) return;
+			it->second.erase(owner);
+			if (it->second.empty()) {
+				m_watchers.erase(it);
 			}
+		}
+
+		// Tags with at least one watcher. For tests and diagnostics.
+		std::size_t watched_tag_count() const {
+			std::shared_lock lock(m_cache_mutex);
+			return m_watchers.size();
 		}
 
 		// Read-only: cached resources that were requested but have neither finished nor failed yet.
