@@ -562,15 +562,21 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
 		editor_quit_sources quit;
 		quit.stdio_session = [this] { return m_agent_server ? m_agent_server->stdio_session() : std::string{}; };
-		quit.is_dirty = [this] { return m_state.is_dirty(); };
-		quit.discard_changes = [this] { m_state.mark_clean(); };
+		// Every open document, not only the scene: a modified preview is dropped too.
+		quit.is_dirty = [this] {
+			return any_unsaved([this](const std::function<void(document&)>& visit) { m_context->documents().for_each(visit); });
+		};
+		quit.discard_changes = [this] {
+			m_state.mark_clean();
+			auto& documents = m_context->documents();
+			if (prefab_document* preview = documents.preview(); preview != nullptr && preview->is_dirty()) {
+				documents.close(preview->id());
+			}
+		};
 		quit.request_stop = [&data] { data.require<app::app_loop_service_interface>().request_stop(); };
 		if (stdio) {
 			options.stdio_write = [fd = data.require<platform::protocol_stdout>().fd](std::string_view line) {
-				// A client that stopped reading: nothing more can reach it, and the log says why.
-				if (!platform::write_all(fd, line)) {
-					egLOG_WARN("mcp", "the MCP stdio client does not take the output any more");
-				}
+				return platform::write_all(fd, line);
 			};
 			auto& tasks = data.require<ds::task_system>();
 			options.on_stdio_eof = [&tasks, alive = std::weak_ptr<int>(m_stdio_alive), headless, quit] {

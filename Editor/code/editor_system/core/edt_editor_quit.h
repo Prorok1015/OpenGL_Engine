@@ -1,5 +1,6 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
+#include <snk/editor/edt_document.h>
 #include <snk/editor/edt_registration.h>
 #include <functional>
 #include <string>
@@ -11,11 +12,18 @@ namespace edt
 	{
 		// The MCP session of the stdio transport; empty while there is none.
 		std::function<std::string()> stdio_session;
+		// Any open document has unsaved changes (any_unsaved).
 		std::function<bool()> is_dirty;
+		// Drops them in every open document.
 		std::function<void()> discard_changes;
 		// app_loop_service_interface::request_stop: the loop ends after the current frame, exit code 0.
 		std::function<void()> request_stop;
 	};
+
+	// Visits the open documents (document_manager::for_each).
+	using document_visitor = std::function<void(const std::function<void(document&)>&)>;
+	// Any open document, not only the scene, with unsaved changes.
+	bool any_unsaved(const document_visitor& for_each);
 
 	// editor.quit exists only where nobody else can close the editor: an agent on the stdio pipes of a headless one.
 	constexpr bool editor_quit_available(bool stdio_transport, bool headless) { return stdio_transport && headless; }

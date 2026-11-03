@@ -10,6 +10,15 @@
 
 namespace json = boost::json;
 
+bool edt::any_unsaved(const document_visitor& for_each)
+{
+	bool dirty = false;
+	if (for_each) {
+		for_each([&dirty](document& open) { dirty = dirty || open.is_dirty(); });
+	}
+	return dirty;
+}
+
 edt::registration edt::register_editor_quit(cmd::command_registry& commands, editor_quit_sources sources)
 {
 	auto source = std::make_shared<editor_quit_sources>(std::move(sources));
@@ -29,7 +38,7 @@ edt::registration edt::register_editor_quit(cmd::command_registry& commands, edi
 		const bool discard = flag != nullptr && flag->as_bool();
 		const bool dirty = source->is_dirty && source->is_dirty();
 		if (dirty && !discard) {
-			return cmd::result::failure(cmd::codes::needs_input, "the level has unsaved changes: pass discard_unsaved to drop them");
+			return cmd::result::failure(cmd::codes::needs_input, "an open document has unsaved changes: pass discard_unsaved to drop them");
 		}
 		if (dirty && source->discard_changes) {
 			source->discard_changes();

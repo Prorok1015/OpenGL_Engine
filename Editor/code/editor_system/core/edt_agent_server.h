@@ -29,10 +29,10 @@ namespace edt
 		std::filesystem::path project_dir;
 		// An MCP session with no request for this long is closed. 0: never.
 		std::chrono::minutes session_idle_timeout{ 30 };
-		// MCP over stdin/stdout (--mcp-stdio): writes one message line (the saved stdout, platform::protocol_stdout).
-		// Null: no stdio transport.
-		std::function<void(std::string_view)> stdio_write;
-		// The stdio client closed stdin. Called on the transport's reader thread.
+		// MCP over stdin/stdout (--mcp-stdio): writes one message line (the saved stdout, platform::protocol_stdout);
+		// false when the client is gone. Called on the transport's writer thread. Null: no stdio transport.
+		std::function<bool(std::string_view)> stdio_write;
+		// The stdio session ended (stdin closed, or the client stopped taking the output). Called on a transport thread.
 		std::function<void()> on_stdio_eof;
 	};
 

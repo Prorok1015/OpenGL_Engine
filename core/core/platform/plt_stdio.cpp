@@ -56,6 +56,7 @@ int platform::take_stdout_for_protocol()
 		if (saved < 0) {
 			return -1;
 		}
+		SetHandleInformation(output, HANDLE_FLAG_INHERIT, 0);
 	} else {
 		saved = redirect_stdout(out, err);
 		if (saved < 0) {

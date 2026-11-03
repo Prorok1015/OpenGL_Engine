@@ -2,12 +2,21 @@
 #include <snk/platform/plt_stdio.h>
 #include <cstddef>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #include <fcntl.h>
 #include <io.h>
 #else
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -22,6 +31,11 @@ namespace {
 	int close_fd(int fd) { return _close(fd); }
 	int read_fd(int fd, char* buffer, unsigned size) { return _read(fd, buffer, size); }
 	int stdout_fd() { return _fileno(stdout); }
+	bool inherited_by_children(int fd)
+	{
+		DWORD flags = 0;
+		return GetHandleInformation(reinterpret_cast<HANDLE>(_get_osfhandle(fd)), &flags) && (flags & HANDLE_FLAG_INHERIT) != 0;
+	}
 #else
 	bool make_pipe(int fds[2]) { return ::pipe(fds) == 0; }
 	int dup_fd(int fd) { return ::dup(fd); }
@@ -29,6 +43,7 @@ namespace {
 	int close_fd(int fd) { return ::close(fd); }
 	int read_fd(int fd, char* buffer, unsigned size) { return static_cast<int>(::read(fd, buffer, size)); }
 	int stdout_fd() { return ::fileno(stdout); }
+	bool inherited_by_children(int fd) { return (::fcntl(fd, F_GETFD) & FD_CLOEXEC) == 0; }
 #endif
 
 	// Everything until every write end is closed.
@@ -86,6 +101,22 @@ BOOST_AUTO_TEST_CASE(RedirectStdout_OnlyTheSavedDescriptorReachesTheOriginalStdo
 	BOOST_TEST(read_all(errors[0]).find("noise from a library") != std::string::npos);
 	close_fd(original[0]);
 	close_fd(errors[0]);
+}
+
+BOOST_AUTO_TEST_CASE(TheSavedDescriptor_IsNotInheritedByChildProcesses)
+{
+	int original[2] = { -1, -1 };
+	int errors[2] = { -1, -1 };
+	BOOST_REQUIRE(make_pipe(original));
+	BOOST_REQUIRE(make_pipe(errors));
+	// Any descriptor will do as "stdout": the real one is left alone.
+	const int saved = platform::redirect_stdout(original[1], errors[1]);
+	BOOST_REQUIRE(saved >= 0);
+	BOOST_TEST(!inherited_by_children(saved));
+	close_fd(saved);
+	for (const int fd : { original[0], original[1], errors[0], errors[1] }) {
+		close_fd(fd);
+	}
 }
 
 BOOST_AUTO_TEST_SUITE_END()
