@@ -2016,6 +2016,32 @@ BOOST_AUTO_TEST_CASE(ProgressUpdates_DoNotPushTheFatalLineOutOfTheStderrTail)
 	BOOST_TEST(tail.find("Receiving objects:  99% (199/200)") != std::string::npos, tail);
 }
 
+BOOST_AUTO_TEST_CASE(AFailureWithoutAFatalLine_IsNotSummedUpByAProgressUpdate)
+{
+	bool with_warning = true;
+	command = [&with_warning](const std::vector<std::string>& args, const platform::process_options& opts,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "fetch")) {
+			if (with_warning) opts.on_stderr_line("warning: redirecting to https://example.com/y.git/");
+			opts.on_stderr_line("Receiving objects:  45% (450/1000)");
+			opts.on_stderr_line("Receiving objects:  46% (460/1000)");
+		}
+		return exited(1);
+	};
+	make_service(fake_options());
+
+	const json::value warned = finish(service->start_fetch({}, cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(warned));
+	BOOST_REQUIRE(warned.is_object() && warned.as_object().contains("error"));
+	BOOST_TEST(text(warned.at("error").at("message")) == "warning: redirecting to https://example.com/y.git/");
+
+	with_warning = false;
+	const json::value bare = finish(service->start_fetch({}, cmd::origin_kind::ui));
+	BOOST_TEST_INFO("result: " << json::serialize(bare));
+	BOOST_REQUIRE(bare.is_object() && bare.as_object().contains("error"));
+	BOOST_TEST(text(bare.at("error").at("message")) == "git exited with code 1");
+}
+
 namespace {
 	// A runner call that hangs until it is stopped, as a git waiting on a network drive would.
 	platform::process_result hang_until_stopped(std::stop_token stop)

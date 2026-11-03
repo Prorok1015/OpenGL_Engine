@@ -4,6 +4,7 @@
 #include <snk/resource/res_system.h>
 #include <imgui.h>
 #include "misc/cpp/imgui_stdlib.h"
+#include <algorithm>
 #include <format>
 #include <span>
 
@@ -87,7 +88,8 @@ void edt::git_panel::draw_header()
 		ImGui::TextDisabled("%s: running...", m_model.busy().c_str());
 		if (const auto& progress = m_model.busy_progress()) {
 			ImGui::SameLine();
-			ImGui::ProgressBar(progress->fraction, ImVec2(200.0f, 0.0f), progress->text.c_str());
+			ImGui::ProgressBar(std::clamp(progress->fraction, 0.0f, 1.0f), ImVec2(ImGui::GetFontSize() * 14.0f, 0.0f),
+				progress->text.c_str());
 		}
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Cancel")) m_model.cancel();
