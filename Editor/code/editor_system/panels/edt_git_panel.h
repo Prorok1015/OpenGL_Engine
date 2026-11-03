@@ -1,6 +1,7 @@
 #pragma once
 #include "edt_panel_base.h"
 #include "edt_git_panel_model.h"
+#include <memory>
 #include <string>
 
 namespace res
@@ -38,7 +39,8 @@ namespace edt
 		git_panel_model m_model;
 		dialog_service& m_dialogs;
 		res::resource_system& m_resources;
-		std::string m_message;
 		std::string m_new_branch;
+		// The dialog service outlives the panel: a question still open when the panel goes answers into nothing.
+		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
 	};
 }

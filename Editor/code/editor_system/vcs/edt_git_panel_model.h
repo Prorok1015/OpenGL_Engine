@@ -76,7 +76,11 @@ namespace edt
 
 		void select(const std::string& path, bool staged);
 		void set_staged(const std::string& path, bool staged);
-		void commit(const std::string& message);
+		// The message being written; a commit clears it only once it succeeded.
+		std::string& message() { return m_message; }
+		// Something staged and a message that is not only blanks.
+		bool can_commit() const;
+		void commit();
 		void fetch();
 		void pull();
 		// To the upstream's remote, else to origin with --set-upstream.
@@ -101,6 +105,8 @@ namespace edt
 		const std::vector<git_change>& unstaged() const { return m_unstaged; }
 		const std::vector<git_change>& untracked() const { return m_untracked; }
 		bool has_changes() const { return !m_staged.empty() || !m_unstaged.empty() || !m_untracked.empty(); }
+		// Changes a branch switch could get in the way of (untracked files are left where they are).
+		bool has_tracked_changes() const { return !m_staged.empty() || !m_unstaged.empty(); }
 		const std::vector<git_branch>& branches() const { return m_branches; }
 
 		const std::string& selected() const { return m_selected; }
@@ -127,6 +133,10 @@ namespace edt
 		void start_write(std::string_view id, boost::json::value args, std::string label);
 		void finished(std::uint64_t id, job_status status, const std::string& error, const std::optional<boost::json::value>& result);
 		void apply_status(const boost::json::object& result);
+		// After a status: the selected file where it is now (staged if it is there and was, else where it moved), or
+		// nothing when it is gone.
+		void reselect();
+		void forget();
 		void apply_branches(const boost::json::object& result);
 		void apply_diff(const boost::json::object& result);
 		void fail(std::string text);
@@ -162,6 +172,7 @@ namespace edt
 		bool m_diff_truncated = false;
 		std::string m_diff_note;
 
+		std::string m_message;
 		std::string m_busy;
 		std::string m_error;
 		// Last: gone before the state its slot touches.

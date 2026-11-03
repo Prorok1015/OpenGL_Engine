@@ -3,6 +3,7 @@
 #include <snk/editor/edt_editor_events.h>
 #include <boost/json.hpp>
 #include <chrono>
+#include <memory>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -136,10 +137,11 @@ BOOST_AUTO_TEST_CASE(ACodeChange_RefreshesOnceAfterTheQuietTime_WhileVisible)
 	model.files_changed();
 	model.tick();
 	BOOST_TEST(calls.size() == before);
+	const auto status_before = last("vcs.status")->job;
 	now += 1001ms;
 	model.tick();
 	model.tick();
-	BOOST_TEST(last("vcs.status")->job > 1u);
+	BOOST_TEST(last("vcs.status")->job != status_before);
 	BOOST_TEST(calls.size() == before + 3u); // info, status, branches
 }
 
@@ -221,11 +223,105 @@ BOOST_AUTO_TEST_CASE(ARemoteBranch_IsCheckedOutByItsName)
 	BOOST_TEST(json::serialize(last("vcs.checkout")->args) == R"({"ref":"feature"})");
 }
 
-BOOST_AUTO_TEST_CASE(Commit_SendsTheMessage)
+BOOST_AUTO_TEST_CASE(Commit_SendsTheMessage_AndClearsItOnlyOnceItSucceeded)
 {
 	open_and_read();
-	model.commit("Fix the thing");
+	model.message() = "   \n";
+	BOOST_TEST(!model.can_commit());
+	model.message() = "Fix the thing";
+	BOOST_TEST(model.can_commit());
+	model.commit();
 	BOOST_TEST(json::serialize(last("vcs.commit")->args) == R"({"message":"Fix the thing"})");
+	finish("vcs.commit", json::parse(R"({"error":{"code":"git_failed","message":"pre-commit hook refused","stderr_tail":"","exit_code":1}})"));
+	BOOST_TEST(model.message() == "Fix the thing");
+
+	finish("vcs.status", status_result());
+	model.commit();
+	finish("vcs.commit", json::object{ { "hash", "abc" } });
+	BOOST_TEST(model.message().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AfterStaging_TheSelectionFollowsTheFile)
+{
+	open_and_read();
+	model.select("src/b.cpp", false);
+	model.set_staged("src/b.cpp", true);
+	finish("vcs.stage", json::object{ { "output", "" } });
+	finish("vcs.status", json::parse(R"({"branch":{"head":"main"},"entries":[{"path":"src/b.cpp","index":"M","worktree":"."}],"clean":false,"truncated":false})"));
+	BOOST_TEST(model.selected() == "src/b.cpp");
+	BOOST_TEST(model.selected_staged());
+	BOOST_TEST(json::serialize(last("vcs.diff")->args) == R"({"path":"src/b.cpp","staged":true})");
+
+	// Committed elsewhere: the file is in no list any more.
+	model.refresh();
+	finish("vcs.status", json::parse(R"({"branch":{"head":"main"},"entries":[],"clean":true,"truncated":false})"));
+	BOOST_TEST(model.selected().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AWriteThatEndsWhileHidden_ReadsNothingUntilShown)
+{
+	open_and_read();
+	model.fetch();
+	model.set_visible(false);
+	const auto before = calls.size();
+	finish("vcs.fetch", json::object{ { "output", "" } });
+	BOOST_TEST(calls.size() == before);
+	model.set_visible(true);
+	BOOST_TEST(calls.size() == before + 3u);
+}
+
+BOOST_AUTO_TEST_CASE(ACancelledWrite_AsksNothing_AsAtTheEditorsShutdown)
+{
+	open_and_read();
+	model.push();
+	const auto before = calls.size();
+	finish("vcs.push", json::value{}, edt::job_status::cancelled);
+	BOOST_TEST(calls.size() == before);
+	BOOST_TEST(model.busy().empty());
+}
+
+BOOST_AUTO_TEST_CASE(AnOlderDiffOrBranchesResult_IsIgnored)
+{
+	open_and_read();
+	model.select("src/a.cpp", true);
+	const auto first_diff = last("vcs.diff")->job;
+	model.select("src/b.cpp", false);
+	finish("vcs.diff", json::object{ { "text", "@@ -1 +1 @@\n+b\n" }, { "truncated", false } });
+	events.job_finished.emit(first_diff, edt::job_status::done, std::string{},
+		std::optional<json::value>{ json::object{ { "text", "@@ -1 +1 @@\n+a\n+a\n" }, { "truncated", false } } });
+	BOOST_TEST(model.diff().size() == 2u);
+
+	model.refresh();
+	const auto first_branches = last("vcs.branches")->job;
+	model.refresh();
+	finish("vcs.branches", json::parse(R"({"branches":[{"name":"new","head":true,"remote":false}],"truncated":false})"));
+	events.job_finished.emit(first_branches, edt::job_status::done, std::string{},
+		std::optional<json::value>{ json::parse(R"({"branches":[{"name":"old","head":true,"remote":false}],"truncated":false})") });
+	BOOST_REQUIRE(model.branches().size() == 1u);
+	BOOST_TEST(model.branches()[0].name == "new");
+}
+
+BOOST_AUTO_TEST_CASE(OriginHead_IsNoBranchToSwitchTo_AndUntrackedFilesDoNotHoldASwitch)
+{
+	model.set_visible(true);
+	finish("vcs.status", json::parse(R"({"branch":{"head":"main"},"entries":[{"path":"n.cpp","index":"?","worktree":"?"}],"clean":false,"truncated":false})"));
+	finish("vcs.branches", json::parse(R"({"branches":[{"name":"main","head":true,"remote":false},{"name":"origin/HEAD","head":false,"remote":true},
+		{"name":"origin/main","head":false,"remote":true}],"truncated":false})"));
+	BOOST_TEST(model.branches().size() == 2u);
+	BOOST_TEST(model.has_changes());
+	BOOST_TEST(!model.has_tracked_changes());
+}
+
+BOOST_AUTO_TEST_CASE(AModelGoneBeforeItsJobEnds_HearsNothing)
+{
+	edt::editor_events own_events;
+	auto gone = std::make_unique<edt::git_panel_model>(own_events, ports());
+	gone->set_visible(true);
+	const auto job = last("vcs.status")->job;
+	gone.reset();
+	own_events.job_finished.emit(job, edt::job_status::done, std::string{},
+		std::optional<json::value>{ json::parse(R"({"branch":{"head":"x"},"entries":[],"clean":true,"truncated":false})") });
+	BOOST_TEST(true);
 }
 
 BOOST_AUTO_TEST_CASE(SelectingAFile_ShowsItsDiff_AndAnUntrackedOneSaysWhyNot)

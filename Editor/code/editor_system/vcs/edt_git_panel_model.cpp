@@ -108,13 +108,60 @@ void edt::git_panel_model::refresh()
 	if (!m_available) {
 		m_reason = info.ok && info.value.is_object() ? string_of(info.value.as_object(), "reason") : info.error;
 		if (m_reason.empty()) m_reason = "git is not available";
+		forget();
 		return;
 	}
 	m_reason.clear();
-	// A newer read replaces what an older one would bring.
+	// A newer read replaces what an older one would bring; the diff follows the status (reselect).
 	m_status_job = start("vcs.status", json::object{}, job_kind::status, "Status");
 	m_branches_job = start("vcs.branches", json::object{}, job_kind::branches, "Branches");
-	if (!m_selected.empty()) select(m_selected, m_selected_staged);
+}
+
+void edt::git_panel_model::forget()
+{
+	m_status_job.reset();
+	m_branches_job.reset();
+	m_diff_job.reset();
+	m_head.clear();
+	m_detached = false;
+	m_upstream.clear();
+	m_ahead.reset();
+	m_behind.reset();
+	m_staged.clear();
+	m_unstaged.clear();
+	m_untracked.clear();
+	m_branches.clear();
+	m_selected.clear();
+	m_diff.clear();
+	m_diff_note.clear();
+	m_diff_truncated = false;
+}
+
+void edt::git_panel_model::reselect()
+{
+	if (m_selected.empty()) return;
+	const auto in = [this](const std::vector<git_change>& changes) {
+		return std::any_of(changes.begin(), changes.end(), [this](const git_change& c) { return c.path == m_selected; });
+	};
+	const bool staged = in(m_staged);
+	const bool unstaged = in(m_unstaged);
+	const std::string path = m_selected;
+	if (in(m_untracked) || (staged && unstaged)) {
+		select(path, staged && unstaged ? m_selected_staged : false);
+	} else if (staged || unstaged) {
+		select(path, staged);
+	} else {
+		m_selected.clear();
+		m_diff.clear();
+		m_diff_note.clear();
+		m_diff_truncated = false;
+		m_diff_job.reset();
+	}
+}
+
+bool edt::git_panel_model::can_commit() const
+{
+	return m_busy.empty() && !m_staged.empty() && m_message.find_first_not_of(" \t\r\n") != std::string::npos;
 }
 
 void edt::git_panel_model::select(const std::string& path, bool staged)
@@ -139,9 +186,10 @@ void edt::git_panel_model::set_staged(const std::string& path, bool staged)
 		staged ? "Stage" : "Unstage");
 }
 
-void edt::git_panel_model::commit(const std::string& message)
+void edt::git_panel_model::commit()
 {
-	start_write("vcs.commit", json::object{ { "message", message } }, "Commit");
+	if (!can_commit()) return;
+	start_write("vcs.commit", json::object{ { "message", m_message } }, "Commit");
 }
 
 void edt::git_panel_model::fetch()
@@ -238,6 +286,7 @@ void edt::git_panel_model::finished(std::uint64_t id, job_status status, const s
 		m_busy_job.reset();
 	}
 
+	bool succeeded = false;
 	if (status == job_status::failed) {
 		fail(std::format("{}: {}", job.label, error));
 	} else if (status == job_status::done && result && result->is_object()) {
@@ -245,14 +294,27 @@ void edt::git_panel_model::finished(std::uint64_t id, job_status status, const s
 		if (const json::value* git_error = value.if_contains("error"); git_error && git_error->is_object()) {
 			const std::string message = string_of(git_error->as_object(), "message");
 			fail(std::format("{}: {}", job.label, message.empty() ? string_of(git_error->as_object(), "code") : message));
-		} else if (current) {
-			if (job.kind == job_kind::status) apply_status(value);
-			if (job.kind == job_kind::branches) apply_branches(value);
-			if (job.kind == job_kind::diff) apply_diff(value);
+		} else {
+			succeeded = true;
+			if (current && job.kind == job_kind::status) apply_status(value);
+			if (current && job.kind == job_kind::branches) apply_branches(value);
+			if (current && job.kind == job_kind::diff) apply_diff(value);
 		}
 	}
-	// What a write changed shows at once, whatever it ended with (a pull that stopped half way changed things too).
-	if (job.kind == job_kind::write && status != job_status::running) refresh();
+	if (job.kind != job_kind::write) return;
+	if (succeeded && job.label == "Commit") m_message.clear();
+	// A cancel is also what the editor's shutdown sends (job_service::cancel_all_and_wait): nothing is asked then.
+	if (status == job_status::cancelled) {
+		m_stale = true;
+		return;
+	}
+	// What a write changed shows at once, whatever it ended with (a pull that stopped half way changed things too);
+	// hidden, it shows when the panel is opened again.
+	if (m_visible) {
+		refresh();
+	} else {
+		m_stale = true;
+	}
 }
 
 void edt::git_panel_model::apply_status(const json::object& result)
@@ -269,7 +331,10 @@ void edt::git_panel_model::apply_status(const json::object& result)
 		m_behind = number_of(b, "behind");
 	}
 	const json::value* entries = result.if_contains("entries");
-	if (!entries || !entries->is_array()) return;
+	if (!entries || !entries->is_array()) {
+		reselect();
+		return;
+	}
 	for (const json::value& item : entries->as_array()) {
 		if (!item.is_object()) continue;
 		const json::object& entry = item.as_object();
@@ -281,6 +346,7 @@ void edt::git_panel_model::apply_status(const json::object& result)
 		if (change.index != '.' && change.index != '!') m_staged.push_back(change);
 		if (change.worktree != '.' && change.worktree != '!') m_unstaged.push_back(std::move(change));
 	}
+	reselect();
 }
 
 void edt::git_panel_model::apply_branches(const json::object& result)
@@ -292,6 +358,8 @@ void edt::git_panel_model::apply_branches(const json::object& result)
 		if (!item.is_object()) continue;
 		const json::object& ref = item.as_object();
 		git_branch branch{ string_of(ref, "name") };
+		// origin/HEAD only names the remote's default branch: nothing to switch to.
+		if (branch.name.ends_with("/HEAD")) continue;
 		branch.remote = ref.contains("remote") && ref.at("remote").is_bool() && ref.at("remote").as_bool();
 		branch.head = ref.contains("head") && ref.at("head").is_bool() && ref.at("head").as_bool();
 		m_branches.push_back(std::move(branch));

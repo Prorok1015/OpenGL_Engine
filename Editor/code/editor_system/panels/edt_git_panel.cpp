@@ -24,9 +24,8 @@ namespace {
 edt::git_panel::git_panel(editor_events& events, git_panel_model::ports ports, dialog_service& dialogs, res::resource_system& resources)
 	: panel_base("git", "Git"), m_model(events, std::move(ports)), m_dialogs(dialogs), m_resources(resources)
 {
-	if (!m_resources.mount_roots(prj::k_code_protocol).empty()) {
-		m_resources.subscribe_changes(prj::k_code_protocol, this, [this](std::span<const res::file_change>) { m_model.files_changed(); });
-	}
+	// Whether or not code/ is mounted yet: a project that comes later still refreshes the panel.
+	m_resources.subscribe_changes(prj::k_code_protocol, this, [this](std::span<const res::file_change>) { m_model.files_changed(); });
 }
 
 edt::git_panel::~git_panel()
@@ -98,11 +97,11 @@ void edt::git_panel::draw_header()
 	if (ImGui::BeginCombo("##branches", head.c_str())) {
 		for (const git_branch& branch : m_model.branches()) {
 			if (ImGui::Selectable(branch.name.c_str(), branch.head) && !branch.head) {
-				if (m_model.has_changes()) {
+				if (m_model.has_tracked_changes()) {
 					// git refuses a switch that would lose them; this only says so before it tries.
 					m_dialogs.choose("Switch branch", std::format("There are uncommitted changes. Switch to '{}' anyway?", branch.name),
-						{ "Switch", "Cancel" }, [this, branch](std::optional<std::size_t> answer) {
-							if (answer == 0u) m_model.checkout(branch);
+						{ "Switch", "Cancel" }, [this, branch, alive = std::weak_ptr<int>(m_alive)](std::optional<std::size_t> answer) {
+							if (answer == 0u && !alive.expired()) m_model.checkout(branch);
 						});
 				} else {
 					m_model.checkout(branch);
@@ -152,13 +151,9 @@ void edt::git_panel::draw_changes()
 
 void edt::git_panel::draw_commit()
 {
-	ImGui::InputTextMultiline("##message", &m_message, ImVec2(-1.0f, ImGui::GetTextLineHeight() * 4.0f));
-	const bool can_commit = m_model.busy().empty() && !m_model.staged().empty() && !m_message.empty();
-	ImGui::BeginDisabled(!can_commit);
-	if (ImGui::Button("Commit")) {
-		m_model.commit(m_message);
-		m_message.clear();
-	}
+	ImGui::InputTextMultiline("##message", &m_model.message(), ImVec2(-1.0f, ImGui::GetTextLineHeight() * 4.0f));
+	ImGui::BeginDisabled(!m_model.can_commit());
+	if (ImGui::Button("Commit")) m_model.commit();
 	ImGui::EndDisabled();
 	if (m_model.staged().empty()) {
 		ImGui::SameLine();
