@@ -85,6 +85,10 @@ void edt::world_controller::clear_active_world()
 
 void edt::world_controller::create_world(const std::string& name)
 {
+	if (m_state.edits_locked()) {
+		egLOG_WARN("play", "world '{}' not created: stop Play to edit", name);
+		return;
+	}
 	auto ctx_mgr = m_services.ctx_manager.lock();
 	if (!ctx_mgr || !m_services.sfactory() || !m_services.assembler()) return;
 

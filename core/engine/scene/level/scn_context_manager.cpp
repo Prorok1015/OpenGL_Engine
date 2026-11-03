@@ -3,6 +3,7 @@
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
 #include <algorithm>
+#include <utility>
 
 namespace {
 	// Names in desc order; false when a world desc failed to load.
@@ -92,6 +93,7 @@ void scn::context_manager::set_game_layer(scn::scene_layer* layer)
 	if (auto* hot_reload = hot_reload_of(*m_level_set); hot_reload && m_level_set->tag().is_valid()) {
 		hot_reload->unwatch_resource(m_level_set->tag());
 	}
+	m_pending_level_reload = res::tag{};
 	// The set "level" stays first in the update order and keeps how it runs; its worlds go with the old layer.
 	const auto it = std::ranges::find_if(m_sets, [this](const auto& set) { return set.get() == m_level_set; });
 	auto replacement = make_set(level_set_name, layer);
@@ -206,40 +208,17 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 			hot_reload->unwatch_resource(set.tag());
 		}
 		set.clear();
+		m_pending_level_reload = res::tag{};
 		set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
 		if (hot_reload) {
 			hot_reload->watch_resource(level_tag, [this](const res::tag& changed_tag) {
-				auto level_res = resources_of(get_set(level_set_name)).require_sync<scn::level_desc>(changed_tag);
-				if (level_res.is_ready()) {
-					auto& set = get_set(level_set_name);
-					std::vector<std::string> new_names;
-					const bool names_ok = collect_world_names(*level_res, new_names);
-					if (!names_ok) {
-						// load_from_desc dereferences every world handle, so a broken world file must not reach it
-						egLOG_WARN("Level Manager", "level reload '{}': world desc failed to load, keeping the current level", changed_tag.view());
-						return;
-					}
-					// compare against the desc's worlds only (in desc order, which decides context ids): runtime-created contexts are not part of it
-					const std::vector<std::string> old_names = set.desc_world_names();
-					const bool is_full_reload = new_names != old_names;
-
-					if (is_full_reload) {
-						// drop only the level contexts; runtime-created ones keep their state
-						for (const auto& name : old_names) {
-							if (set.has(name)) set.destroy_context(name);
-						}
-						// a runtime context sharing a name with a new desc world is replaced by the desc one
-						for (const auto& name : new_names) {
-							if (set.has(name)) set.destroy_context(name);
-						}
-						set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
-					} else {
-						set.load_systems_from_desc(*level_res, systems_of(set));
-					}
-					if (m_on_reload) m_on_reload();
-				} else {
-					egLOG("Level Manager", "Failed to reload level '{0}'", changed_tag.view());
+				if (!get_set(level_set_name).active()) {
+					// Play: the level is frozen and hidden; rebuilding it now would bring back its cameras.
+					egLOG("Level Manager", "level reload '{}' deferred: the level set is inactive", changed_tag.view());
+					m_pending_level_reload = changed_tag;
+					return;
 				}
+				reload_level(changed_tag);
 			});
 		}
 	} else {
@@ -247,4 +226,46 @@ bool scn::context_manager::load_level(const res::tag& level_tag)
 		return false;
 	}
 	return true;
+}
+
+void scn::context_manager::apply_pending_level_reload()
+{
+	if (!m_pending_level_reload.is_valid()) return;
+	const res::tag changed_tag = std::exchange(m_pending_level_reload, res::tag{});
+	reload_level(changed_tag);
+}
+
+void scn::context_manager::reload_level(const res::tag& changed_tag)
+{
+	auto level_res = resources_of(get_set(level_set_name)).require_sync<scn::level_desc>(changed_tag);
+	if (!level_res.is_ready()) {
+		egLOG("Level Manager", "Failed to reload level '{0}'", changed_tag.view());
+		return;
+	}
+	auto& set = get_set(level_set_name);
+	std::vector<std::string> new_names;
+	const bool names_ok = collect_world_names(*level_res, new_names);
+	if (!names_ok) {
+		// load_from_desc dereferences every world handle, so a broken world file must not reach it
+		egLOG_WARN("Level Manager", "level reload '{}': world desc failed to load, keeping the current level", changed_tag.view());
+		return;
+	}
+	// compare against the desc's worlds only (in desc order, which decides context ids): runtime-created contexts are not part of it
+	const std::vector<std::string> old_names = set.desc_world_names();
+	const bool is_full_reload = new_names != old_names;
+
+	if (is_full_reload) {
+		// drop only the level contexts; runtime-created ones keep their state
+		for (const auto& name : old_names) {
+			if (set.has(name)) set.destroy_context(name);
+		}
+		// a runtime context sharing a name with a new desc world is replaced by the desc one
+		for (const auto& name : new_names) {
+			if (set.has(name)) set.destroy_context(name);
+		}
+		set.load_from_desc(*level_res, systems_of(set), assembler_of(set));
+	} else {
+		set.load_systems_from_desc(*level_res, systems_of(set));
+	}
+	if (m_on_reload) m_on_reload();
 }

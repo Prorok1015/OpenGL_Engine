@@ -48,6 +48,13 @@ namespace edt
 		// Multi-world support
 		void set_world_names(std::vector<std::string> names, int active_idx = 0);
 		void set_on_world_changed(std::function<void(int)> cb) { m_on_world_changed = std::move(cb); }
+		// True while the document must not change (Play): nodes and worlds can be selected, not created, renamed,
+		// duplicated, deleted or moved; a hint says why.
+		void set_edits_locked(std::function<bool()> locked) { m_edits_locked = std::move(locked); }
+		// Selects the node at `path` (node ids from the world root; for a node inside an instance the instance's path,
+		// then `target`, its ids below the instance) as a click would, the node-selected callback included. False when
+		// the shown world has no such node.
+		bool select_path(const std::vector<uint64_t>& path, const std::vector<uint64_t>& target);
 		void set_on_create_world(std::function<void(const std::string&)> cb) { m_on_create_world = std::move(cb); }
 
 	protected:
@@ -63,6 +70,7 @@ namespace edt
 		const scn::prefab_desc* get_referenced_prefab(const scn::prefab_desc::prefab_node& node) const;
 		void draw_world_tabs();
 		void draw_new_world_popup();
+		bool locked() const { return m_edits_locked && m_edits_locked(); }
 		void collect_flat_order(const std::vector<scn::prefab_desc::prefab_node>& nodes, const std::string& lower_filter);
 		void delete_selected();
 		void duplicate_selected();
@@ -88,6 +96,7 @@ namespace edt
 		std::function<void(const std::string&, const std::string&)>  m_on_rename_node;
 		std::function<void(uint64_t)>                                m_on_duplicate_node;
 		std::function<void(const std::vector<uint64_t>&)>            m_on_duplicate_nodes;
+		std::function<bool()>                                        m_edits_locked;
 		std::function<void(uint64_t, uint64_t, int)>                 m_on_reparent_node;
 		std::function<void(int)>                                      m_on_world_changed;
 		std::function<void(const std::string&)>                      m_on_create_world;

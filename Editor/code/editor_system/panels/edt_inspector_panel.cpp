@@ -136,6 +136,18 @@ namespace edt
 
 	void inspector_panel::on_render()
 	{
+		// Play: everything is shown, nothing can be changed (the widgets write into the desc as they are dragged).
+		const bool locked = m_edits_locked && m_edits_locked();
+		if (locked) {
+			ImGui::TextDisabled("Stop Play to edit");
+			ImGui::BeginDisabled();
+		}
+		render_selected();
+		if (locked) ImGui::EndDisabled();
+	}
+
+	void inspector_panel::render_selected()
+	{
 		if (!m_selected_node) {
 			// Selection may be cleared while an edit is still pending (e.g. text field lost focus on click).
 			commit_if_idle();

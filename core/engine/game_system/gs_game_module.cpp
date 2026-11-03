@@ -1,6 +1,7 @@
 #include <snk/game/gs_game_module.h>
 #include <snk/command/cmd_registry.h>
 #include <snk/scene/level/scn_context_manager.h>
+#include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/common/logger/engine_log_sinks.h>
 #include <format>
@@ -117,6 +118,12 @@ ds::task_handle<void> gs::module_context::run(ds::lane lane, ds::task_desc desc,
 	ASSERT_MSG(m_tasks, "module_context::run: the layer has no task system");
 	if (!m_tasks) {
 		return {};
+	}
+	// Started by a system of one of the layer's sets: Stop of a Play set cancels it, the level's tasks go on. Only the
+	// main thread builds and updates sets; from a task of a set (or its continuation) the child joins that set in ds.
+	const scn::context_set* set = m_tasks->on_main() ? scn::context_set::current() : nullptr;
+	if (set && set->layer() == &m_layer) {
+		return m_tasks->run(lane, std::move(desc), m_layer.tasks(), set->tasks(), std::move(fn));
 	}
 	return m_tasks->run(lane, std::move(desc), m_layer.tasks(), std::move(fn));
 }

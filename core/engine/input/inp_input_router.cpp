@@ -1,5 +1,7 @@
 #include <snk/input/inp_input_router.h>
 #include <snk/common/engine_assert.h>
+#include <string_view>
+#include <vector>
 
 namespace
 {
@@ -23,6 +25,14 @@ void inp::input_router::bind(input_target target, const glm::ivec4& rect)
 void inp::input_router::clear_bindings()
 {
 	m_bindings.clear();
+}
+
+void inp::input_router::forget_set(std::string_view set)
+{
+	std::erase_if(m_bindings, [set](const binding& b) { return b.target.set == set; });
+	if (const auto it = m_holds.find(set); it != m_holds.end()) {
+		m_holds.erase(it);
+	}
 }
 
 inp::input_state inp::input_router::neutral(const inp::input_state& raw)

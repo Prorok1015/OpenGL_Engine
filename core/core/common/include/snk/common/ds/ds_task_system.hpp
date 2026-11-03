@@ -88,6 +88,8 @@ namespace ds {
 	private:
 		friend class task_system;
 		void bind(const std::shared_ptr<detail::task_state_base>& state) const;
+		// Seen by cancel_tasks and wait_idle like a bound task, but not the task's origin (bind sets that).
+		void bind_group(const std::shared_ptr<detail::task_state_base>& state) const;
 		[[nodiscard]] std::vector<std::shared_ptr<detail::task_state_base>> bound() const;
 
 		std::shared_ptr<detail::lifetime_state> m_state;
@@ -188,6 +190,10 @@ namespace ds {
 			// The lifetime the task is bound to (lifetime::bind): its queued main-thread continuations can be run
 			// early through it (run_pending_main).
 			void set_origin(std::weak_ptr<lifetime_state> origin);
+			// The group lifetime the task is bound to besides its origin (lifetime::bind_group). A task started from
+			// inside it (its body or a main-thread continuation) for the same origin joins the group too, and its
+			// main-thread continuations are dropped without a call once the group is destroyed.
+			void set_group(std::weak_ptr<lifetime_state> group);
 			// then_main with a functor of the caller's binary: the task keeps and queues the engine's call of a slot.
 			// With a slot (then_main(owner, ...)): the owner holds the functor. Without: the lifetime the task is bound
 			// to holds it; for a task bound to none, the queued call alone does.
@@ -229,6 +235,7 @@ namespace ds {
 			struct continuation { bool on_main; std::function<void()> fn; };
 			std::vector<continuation> m_continuations;
 			std::weak_ptr<lifetime_state> m_origin;
+			std::weak_ptr<lifetime_state> m_group;
 			bool m_finalized = false;
 		};
 
@@ -416,6 +423,8 @@ namespace ds {
 		}
 
 		// Same, bound to `owner` (before it is queued): cancel_on_destroy / cancel_tasks / wait_idle see it.
+		// Started from inside a task (its body or a main-thread continuation) that has a group and the same owner,
+		// it joins that group as well (see the overload with `group`).
 		template<class F>
 		auto run(lane where, task_desc desc, const lifetime& owner, F&& fn)
 		{
@@ -423,7 +432,23 @@ namespace ds {
 			using state_t = detail::task_state<result_t>;
 			auto state = std::make_shared<state_t>(std::move(desc), weak_impl(), next_id(),
 				typename state_t::body_t(std::forward<F>(fn)));
-			owner.bind(state);
+			bind_to(owner, nullptr, state);
+			submit(where, state);
+			return task_handle<result_t>(std::move(state));
+		}
+
+		// Same, also seen by cancel_tasks and wait_idle of `group` (a subset of the owner's tasks: a world set's).
+		// The task belongs to `owner` otherwise: its main-thread continuations go with run_pending_main(owner).
+		// Its main-thread continuations (then_main with or without an owner) are dropped without a call once
+		// `group` is destroyed, and the tasks started from inside it for `owner` join `group` too.
+		template<class F>
+		auto run(lane where, task_desc desc, const lifetime& owner, const lifetime& group, F&& fn)
+		{
+			using result_t = std::invoke_result_t<F&, task_context&>;
+			using state_t = detail::task_state<result_t>;
+			auto state = std::make_shared<state_t>(std::move(desc), weak_impl(), next_id(),
+				typename state_t::body_t(std::forward<F>(fn)));
+			bind_to(owner, &group, state);
 			submit(where, state);
 			return task_handle<result_t>(std::move(state));
 		}
@@ -498,6 +523,9 @@ namespace ds {
 		std::weak_ptr<detail::task_system_impl> weak_impl() const;
 		std::uint64_t next_id();
 		void submit(lane where, const std::shared_ptr<detail::task_state_base>& state);
+		// Binds to `owner` (the origin) and to `group`; without `group`, to the group of the running task when its
+		// origin is `owner`.
+		void bind_to(const lifetime& owner, const lifetime* group, const std::shared_ptr<detail::task_state_base>& state);
 
 		std::shared_ptr<detail::task_system_impl> m_impl;
 	};

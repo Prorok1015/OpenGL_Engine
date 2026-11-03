@@ -68,7 +68,7 @@ std::vector<edt::registration> edt::register_edit_actions(
 			return action_result::success(applied(doc && doc->undo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && active()->next_undo_entry().has_value(); } }));
+		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_undo_entry().has_value(); } }));
 
 	out.push_back(actions.add({ .id = "edit.redo", .label = "Redo", .menu_path = "Edit", .shortcut = "Ctrl+Y",
 		.dynamic_label = [active] {
@@ -82,7 +82,7 @@ std::vector<edt::registration> edt::register_edit_actions(
 			return action_result::success(applied(doc && doc->redo(), entry));
 		},
 		.result_schema = applied_schema(),
-		.enabled = [active, idle] { return idle() && active() && active()->next_redo_entry().has_value(); } }));
+		.enabled = [active, idle] { return idle() && active() && !active()->edits_locked() && active()->next_redo_entry().has_value(); } }));
 
 	// The person has looked at what the agent did: no more "changed by agent" marks. Not for agents themselves.
 	out.push_back(actions.add({ .id = "edit.accept_agent_changes", .label = "Accept Agent Changes", .menu_path = "Edit",

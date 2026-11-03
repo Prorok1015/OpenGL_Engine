@@ -66,6 +66,11 @@ struct live_mode_fixture
 	int stops = 0;
 	std::unique_ptr<edt::live_mode> live;
 
+	~live_mode_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
+	}
+
 	live_mode_fixture()
 	{
 		access.set_questions_routed(true);
