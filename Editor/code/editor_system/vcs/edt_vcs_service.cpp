@@ -1315,6 +1315,10 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		// program the repository's config names, past network_refusal and on a read too.
 		set_variable(context.environment, "GIT_NO_LAZY_FETCH", "1");
 		context.refuse_partial_clone_read = !write && lazy_fetch_may_run;
+		// GIT_ALLOW_PROTOCOL beats every protocol.*.allow, so the repository's config cannot reopen a transport the -c
+		// overrides do not name (ftp, ftps, fd, <helper>::). git allows exactly the names listed: "_none" is no URL
+		// scheme and no <helper>:: name (those never hold '_'), so it allows nothing.
+		set_variable(context.environment, "GIT_ALLOW_PROTOCOL", write && write->network ? "https:ssh" : "_none");
 	}
 	const bool guarded = write && context.agent_call;
 	// The network checks read the config with --show-scope (git 2.26).

@@ -1625,6 +1625,64 @@ BOOST_AUTO_TEST_CASE(APartialClone_RunsNoTransportProgramOnAnyRead)
 		"prove less");
 }
 
+// Security review of #504: protocol.<name>.allow of the repository reopens a transport no -c override names (ftp, ftps,
+// fd, <helper>::); GIT_ALLOW_PROTOCOL beats every config scope. An agent's read of a partial clone whose promisor is
+// ftp:// starts no ftp helper; an agent's fetch from such a remote is refused by git (only https and ssh).
+BOOST_AUTO_TEST_CASE(ARepositoryProtocolFtpAllow_OpensNoTransportForAnAgent)
+{
+	isolate_config();
+	const fs::path source = make_plain_repository("ftp_source");
+	write(source / "a.txt", "one\ntwo\n");
+	git(source, { "commit", "-q", "-am", "second" });
+	const fs::path server = base / "ftp_server.git";
+	git(base, { "clone", "-q", "--bare", generic_text(source), generic_text(server) });
+	git(server, { "config", "uploadpack.allowFilter", "true" });
+	const fs::path repo = base / "ftp_clone";
+	git(base, { "clone", "-q", "--no-checkout", "--filter=blob:none", file_url(server), generic_text(repo) });
+	git(repo, { "read-tree", "HEAD" });
+	BOOST_REQUIRE_MESSAGE(git_text(repo, { "rev-list", "--objects", "--missing=print", "HEAD" }).find('?') != std::string::npos,
+		"the clone holds every blob: the checks below prove nothing");
+	git(repo, { "config", "remote.origin.url", "ftp://127.0.0.1:9/lazy.git" });
+	git(repo, { "config", "protocol.allow", "always" });
+	git(repo, { "config", "protocol.ftp.allow", "always" });
+	const fs::path fetcher = make_plain_repository("ftp_fetch");
+	git(fetcher, { "remote", "add", "origin", "ftp://127.0.0.1:9/remote.git" });
+	git(fetcher, { "config", "protocol.ftp.allow", "always" });
+
+	const fs::path trace = base / "ftp_trace.txt";
+	const auto traced = [&trace] {
+		std::ifstream in(trace, std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	};
+	auto options = real_options(repo);
+	edt::set_variable(*options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(options));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	const bool lazy_fetch_off = git_at_least(service->info().git_version, 2, 45);
+	const auto agent = cmd::origin_kind::agent;
+	for (const auto& started : { service->start_status(agent), service->start_diff({}, false, agent),
+			service->start_diff("a.txt", false, agent) }) {
+		const json::value result = finish(started);
+		BOOST_TEST_INFO("result: " << json::serialize(result));
+		if (!lazy_fetch_off) BOOST_TEST(is_error(result, "unsafe_repository"));
+	}
+	BOOST_TEST(!traced().empty(), "GIT_TRACE wrote nothing: the check below proves nothing");
+	BOOST_TEST(traced().find("remote-ftp") == std::string::npos, traced());
+
+	std::error_code ec;
+	fs::remove(trace, ec);
+	auto fetch_options = real_options(fetcher);
+	edt::set_variable(*fetch_options.environment, "GIT_TRACE", edt::utf8_of(trace));
+	make_service(std::move(fetch_options));
+	BOOST_REQUIRE_MESSAGE(service->info().available, service->info().reason);
+	service->set_write_permissions({ false, false, false, true });
+	const json::value fetched = finish(service->start_fetch({}, agent));
+	BOOST_TEST_INFO("fetched: " << json::serialize(fetched));
+	BOOST_REQUIRE(fetched.as_object().contains("error"));
+	BOOST_TEST(text(fetched.as_object().at("error").as_object().at("stderr_tail")).find("not allowed") != std::string::npos);
+	BOOST_TEST(traced().find("remote-ftp") == std::string::npos, traced());
+}
+
 // Final review of #474 (N3b): an untracked top-level .gitattributes sets the filter, a tracked sub/.gitattributes
 // edited in the work tree unsets it: none of the three check-attr views names the driver, yet checkout smudges. A
 // tracked .gitattributes that differs from the index refuses on every git.
@@ -1975,6 +2033,10 @@ BOOST_AUTO_TEST_CASE(AnAgentsRead_ClosesEveryTransport_APersonsReadIsPlainGit)
 	const auto lazy_fetch_off = [this] {
 		return edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1";
 	};
+	// "unset" when the call has no GIT_ALLOW_PROTOCOL.
+	const auto allowed_protocols = [this] {
+		return edt::variable_of(*last_options.environment, "GIT_ALLOW_PROTOCOL").value_or("unset");
+	};
 	const auto no_partial_clone_check = [this] {
 		return std::none_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
 			return has_arg(call, "--show-origin") && has_arg(call, "--get-regexp");
@@ -1992,6 +2054,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsRead_ClosesEveryTransport_APersonsReadIsPlainGit)
 			BOOST_TEST(closed(calls[calls.size() - 2]) == agent);
 			BOOST_TEST(lazy_fetch_off() == agent);
 			BOOST_TEST(no_partial_clone_check());
+			BOOST_TEST(allowed_protocols() == (agent ? "_none" : "unset"));
 			const std::vector<std::function<edt::vcs_service::started()>> reads{
 				[&] { return service->start_diff({}, false, caller); },
 				[&] { return service->start_diff("a.txt", true, caller); },
@@ -2004,6 +2067,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsRead_ClosesEveryTransport_APersonsReadIsPlainGit)
 				BOOST_TEST(closed(calls.back()) == agent);
 				BOOST_TEST(lazy_fetch_off() == agent);
 				BOOST_TEST(no_partial_clone_check());
+				BOOST_TEST(allowed_protocols() == (agent ? "_none" : "unset"));
 			}
 		}
 	}
@@ -2022,8 +2086,11 @@ BOOST_AUTO_TEST_CASE(AnAgentsRead_ClosesEveryTransport_APersonsReadIsPlainGit)
 	// A person's write stays plain git; an agent's write runs without lazy fetch.
 	finish(service->start_branch_create("topic", {}, cmd::origin_kind::ui));
 	BOOST_TEST(!lazy_fetch_off());
+	BOOST_TEST(allowed_protocols() == "unset");
 	finish(service->start_branch_create("topic2", {}, cmd::origin_kind::agent));
 	BOOST_TEST(lazy_fetch_off());
+	// A guarded write that never touches the network opens no transport either.
+	BOOST_TEST(allowed_protocols() == "_none");
 }
 
 // #503: before git 2.45 GIT_NO_LAZY_FETCH may be ignored, so an agent's read in a partial clone (extensions.partialClone
@@ -2506,6 +2573,7 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 	BOOST_TEST(person.back() == "main");
 
 	BOOST_TEST(arg_starting_with(person, "remote.origin.uploadpack=").empty());
+	BOOST_TEST(!edt::variable_of(*last_options.environment, "GIT_ALLOW_PROTOCOL").has_value());
 
 	service->set_write_permissions({ true, false, false, false });
 	finish(service->start_fetch({}, cmd::origin_kind::agent));
@@ -2524,6 +2592,8 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 	}
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_PROXY_COMMAND").value_or("x").empty());
 	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_NO_LAZY_FETCH").value_or("") == "1");
+	// Beats every protocol.<name>.allow of the repository: only the transports the -c overrides allow.
+	BOOST_TEST(edt::variable_of(*last_options.environment, "GIT_ALLOW_PROTOCOL").value_or("") == "https:ssh");
 	// The repository's own config was read first.
 	BOOST_TEST(std::any_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
 		return has_arg(call, "--local") && has_arg(call, "--list") && has_arg(call, "--show-origin");
