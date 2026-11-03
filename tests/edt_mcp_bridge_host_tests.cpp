@@ -85,6 +85,7 @@ struct bridge_fixture
 
 	~bridge_fixture()
 	{
+		access.confirmations().cancel_all("the test ends");
 		session_listener.disconnect();
 	}
 
@@ -752,6 +753,13 @@ struct question_fixture : bridge_fixture
 	question_fixture()
 	{
 		access.set_person_present(true);
+	}
+
+	// A waiting call answers into this class's members and the test's locals: answered while they are alive, before
+	// any of them is destroyed.
+	~question_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
 	}
 
 	void add_code_command(std::function<cmd::result()> body = {})

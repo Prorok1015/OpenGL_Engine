@@ -53,6 +53,7 @@ struct access_fixture
 
 	~access_fixture()
 	{
+		access->confirmations().cancel_all("the test ends");
 		bridge.reset();
 		access.reset();
 	}

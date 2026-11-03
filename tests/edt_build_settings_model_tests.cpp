@@ -555,6 +555,11 @@ struct agent_fixture : model_fixture
 	std::optional<fs::path> project;
 	std::vector<cmd::registration> registrations;
 
+	~agent_fixture()
+	{
+		access.confirmations().cancel_all("the test ends");
+	}
+
 	agent_fixture()
 	{
 		project = root();
