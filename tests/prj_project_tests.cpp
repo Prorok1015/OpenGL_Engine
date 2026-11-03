@@ -139,6 +139,9 @@ BOOST_AUTO_TEST_CASE(HeldProject_ExitsWithAnErrorUnlessTheUserWentOn)
 	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_engine_version);
 	held.answer = prj::held_project::decision::continue_without_project;
 	BOOST_TEST(prj::exit_code_for(held) == 0);
+	// A run that needed the project (--headless) and went on without it: the exit of a run without --project.
+	held.answer = prj::held_project::decision::no_project;
+	BOOST_TEST(prj::exit_code_for(held) == prj::k_exit_project_error);
 	BOOST_TEST(prj::k_exit_engine_version != prj::k_exit_project_error);
 }
 

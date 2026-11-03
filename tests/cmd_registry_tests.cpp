@@ -1,8 +1,10 @@
 #include <boost/test/unit_test.hpp>
 #include <snk/command/cmd_registry.h>
+#include <snk/command/cmd_policy.h>
 #include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <utility>
@@ -306,6 +308,63 @@ BOOST_AUTO_TEST_CASE(Invoke_PassesTheOriginAndGenerationToTheCommand)
 	BOOST_CHECK(seen[4] != seen[2]);
 	BOOST_CHECK_EQUAL(generations[0], 0u);
 	BOOST_CHECK_EQUAL(generations[4], 42u);
+}
+
+namespace {
+
+// Asked about every agent call; refuses all of them.
+struct counting_deny_gate final : cmd::policy_gate
+{
+	int asked = 0;
+	cmd::policy_decision decide(const cmd::command_desc&, const cmd::call&) override
+	{
+		++asked;
+		return cmd::policy_decision::deny("no");
+	}
+};
+
+}
+
+BOOST_AUTO_TEST_CASE(Headless_ACommandThatNeedsADisplay_IsUnavailableToEveryCaller_BeforeTheSchemaAndTheGate)
+{
+	cmd::command_registry commands;
+	int runs = 0;
+	cmd::command_desc capture = echo_command(runs);
+	capture.needs_display = true;
+	auto reg = commands.add(std::move(capture));
+	auto gate = std::make_shared<counting_deny_gate>();
+	commands.set_policy_gate(gate);
+	commands.set_headless(true);
+	BOOST_TEST(commands.headless());
+
+	for (const cmd::origin& from : { cmd::origin::ui(), cmd::origin::test(), cmd::origin::agent("s1"), cmd::origin::game() }) {
+		// Arguments that break the schema: the answer is still unavailable_headless.
+		const cmd::result result = commands.invoke("test.echo", json_of(R"({"nope":1})"), from);
+		BOOST_TEST(!result.ok);
+		BOOST_TEST(result.code == cmd::codes::unavailable_headless);
+	}
+	BOOST_TEST(gate->asked == 0);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_AUTO_TEST_CASE(Headless_OtherCommandsRun_AndWithADisplayNothingChanges)
+{
+	cmd::command_registry commands;
+	int runs = 0;
+	cmd::command_desc capture = echo_command(runs);
+	capture.needs_display = true;
+	auto reg = commands.add(std::move(capture));
+	auto plain = commands.add(make_command("test.plain"));
+
+	BOOST_TEST(!commands.headless());
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"a"})")).ok);
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"nope":1})")).code == cmd::codes::invalid_args);
+
+	commands.set_headless(true);
+	BOOST_TEST(commands.invoke("test.plain", json_of("{}")).ok);
+	commands.set_headless(false);
+	BOOST_TEST(commands.invoke("test.echo", json_of(R"({"text":"b"})")).ok);
+	BOOST_TEST(runs == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

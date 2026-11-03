@@ -102,8 +102,13 @@ int main(int argc, char* argv[])
 		if (app_storage.has_value<prj::held_project>()) {
 			const auto& held = app_storage.require<prj::held_project>();
 			if (const int code = prj::exit_code_for(held); code != 0) {
-				egLOG_ERROR("app", "project '{}' was not opened: its engine version {} does not match this editor",
-					held.name, prj::to_string(held.engine));
+				if (held.answer == prj::held_project::decision::no_project) {
+					egLOG_ERROR("app", "no project: '{}' was not opened (engine {}) and this run needs a project",
+						held.name, prj::to_string(held.engine));
+				} else {
+					egLOG_ERROR("app", "project '{}' was not opened: its engine version {} does not match this editor",
+						held.name, prj::to_string(held.engine));
+				}
 				result = code;
 			}
 		}

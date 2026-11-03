@@ -100,8 +100,9 @@ namespace edt
 		std::string error;
 	};
 
-	// The personal layer may only tighten: a "vcs" flag set to true there is an error of that layer.
-	enum class policy_layer_kind : std::uint8_t { project, personal };
+	// The personal layer may only tighten: a "vcs" flag set to true there is an error of that layer. The --agent-policy file
+	// (`preanswers`, see apply_preanswers) has no "vcs" section at all: the git rules come from the two layers only.
+	enum class policy_layer_kind : std::uint8_t { project, personal, preanswers };
 
 	// {"version": 1, "categories": {"code_files": "allow"}, "commands": {"build.game_module": "ask"}, "vcs": {...}}; the
 	// lists "allow", "ask" and "deny" of command ids (AI_INTEGRATION.md, section 5) are read too. "vcs" holds
@@ -112,7 +113,7 @@ namespace edt
 	std::string serialize_policy_layer(const policy_layer& layer);
 
 	// Where a decision comes from.
-	enum class policy_source : std::uint8_t { fallback, default_table, project, personal, approval_pending };
+	enum class policy_source : std::uint8_t { fallback, default_table, project, personal, approval_pending, preanswers };
 	const char* to_string(policy_source source);
 
 	struct effective_policy
@@ -134,6 +135,14 @@ namespace edt
 	effective_policy effective_mode_of_call(const cmd::command_desc& command, cmd::agent_category category, const policy_layer& project,
 		const policy_layer& personal, const std::string& project_error = {}, const std::string& personal_error = {},
 		bool live_mode_on = false);
+
+	// The --agent-policy file (#452): a person's answers to `ask` given in advance for a headless run. It is not
+	// a policy layer: on top of `decided` (effective_mode_of_call of the two layers) it may turn an `ask` into `allow` (its
+	// command's own entry, or its category's for a command without risk) and tighten anything, never lift a deny (of a layer,
+	// of the defaults or a risk, of `unset`/`not_for_agents`, of the live switch). A file that cannot be used
+	// (`preanswers_error`) denies everything. The only place the file decides anything.
+	effective_policy apply_preanswers(const cmd::command_desc& command, cmd::agent_category category, effective_policy decided,
+		const policy_layer& preanswers, const std::string& preanswers_error);
 
 	// What a changed project layer makes looser than the layer a person approved (#483). `to` is the worst case when the
 	// new layer only drops an entry (the mode it falls back to is not known here).
@@ -194,6 +203,14 @@ namespace edt
 
 		// Whether the live mode is on: `live` commands are denied while it is not (and while nothing says it is).
 		void set_live_mode(std::function<bool()> is_on) { m_live_on = std::move(is_on); }
+		// The --agent-policy file (apply_preanswers), read once, now; empty: none. A change while the editor runs is ignored
+		// (one WARN). A file that is missing, cannot be used, or lies inside `project_root` or the git worktree holding it
+		// (the nearest folder up from the project with a `.git` entry) is an ERROR and closes everything while it applies.
+		void set_preanswers_file(std::filesystem::path file, std::filesystem::path project_root);
+		// A headless editor (agent_access::set_headless). The --agent-policy file applies only there; with a window it never
+		// does, whether a person can be asked or not.
+		void set_headless(bool headless);
+		bool headless() const { return m_headless; }
 		// Command ids a layer names that no command has get one warning per load (a typo, or a module not loaded yet).
 		void set_known_commands(std::function<bool(std::string_view)> exists);
 		// The commands of the registry, for judging what a changed project file loosens. Without it only the categories and the
@@ -221,6 +238,9 @@ namespace edt
 		const std::string& personal_error() const { return m_personal.error; }
 		const std::filesystem::path& project_file() const { return m_project.file; }
 		const std::filesystem::path& personal_file() const { return m_personal.file; }
+		const policy_layer& preanswers() const { return m_preanswers.layer; }
+		const std::string& preanswers_error() const { return m_preanswers.error; }
+		bool has_preanswers() const { return !m_preanswers.file.empty(); }
 
 		// A person's edit (the settings window): writes the file atomically, takes the layer over and approves all of it. The
 		// window therefore builds `layer` from approved_project() plus the person's edits, never from the file as it is while
@@ -258,6 +278,10 @@ namespace edt
 
 		source m_project;
 		source m_personal;
+		source m_preanswers;
+		std::filesystem::path m_preanswers_project_root;
+		bool m_warned_preanswers_change = false;
+		bool m_headless = false;
 		std::function<bool()> m_live_on;
 		std::function<bool(std::string_view)> m_known;
 		std::function<void()> m_on_changed;

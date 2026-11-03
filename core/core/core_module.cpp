@@ -119,7 +119,7 @@ namespace {
 			egLOG_WARN("project", "{}; not opened{}", engine_line, action == prj::version_action::ask_open_or_quit
 				? " (start with --allow-engine-version-mismatch to open it without migrating)" : "");
 			data.construct<prj::held_project>(prj::held_project{ project.manifest_file, project.data.name, project.data.engine,
-				action, prj::held_project::decision::none });
+				action, prj::held_project::decision::none, static_cast<bool>(cfg_project_required) });
 			return;
 		}
 		if (action == prj::version_action::open_with_notice) {

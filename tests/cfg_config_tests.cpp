@@ -365,4 +365,14 @@ BOOST_AUTO_TEST_CASE(Cli_McpStdioTurnsOnTheStdioTransportOnly)
 	BOOST_TEST(!static_cast<bool>(mcp_stdio));
 }
 
+BOOST_AUTO_TEST_CASE(Cli_AgentPolicyIsAPathRelativeToTheWorkingDirectory)
+{
+	// Stands in for the editor's variable of the same name for the length of the test.
+	cfg::variable<std::filesystem::path> agent_policy{ "editor/agent_policy_file", "" };
+	BOOST_TEST(run_cli({ "--agent-policy", "answers/agent.json" }) == 1);
+	BOOST_TEST(static_cast<std::filesystem::path>(agent_policy) == std::filesystem::current_path() / "answers/agent.json");
+	run_cli({ "-s", "editor/agent_policy_file", "" });
+	BOOST_TEST(agent_policy->empty());
+}
+
 BOOST_AUTO_TEST_SUITE_END()

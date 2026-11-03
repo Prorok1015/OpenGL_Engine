@@ -52,6 +52,11 @@ namespace cmd
 
 		bool on_main_thread() const noexcept { return std::this_thread::get_id() == m_main_thread; }
 
+		// A process without a display (--headless): a `needs_display` command answers `unavailable_headless` to every
+		// caller, before its arguments are checked and before the policy gate is asked.
+		void set_headless(bool headless) { m_headless = headless; }
+		bool headless() const noexcept { return m_headless; }
+
 		// The policy for calls from agents (origin `agent`; the other origins are not asked): `invoke` asks the gate
 		// before it checks the arguments or runs anything. Without a gate nothing is checked here. null removes it.
 		// - allow: the command runs.
@@ -122,5 +127,6 @@ namespace cmd
 		std::uint64_t m_next_key = 1;
 		std::thread::id m_main_thread = std::this_thread::get_id();
 		std::shared_ptr<int> m_alive = std::make_shared<int>(0);
+		bool m_headless = false;
 	};
 }
