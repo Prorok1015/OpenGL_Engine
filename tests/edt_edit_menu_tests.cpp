@@ -1,7 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_agent_policy.h"
 #include "edt_edit_menu.h"
-#include "edt_mcp_bridge_host.h"
+#include "edt_agent_policy.h"
 #include "edt_main_menu.h"
 #include "edt_scene_document.h"
 #include <snk/editor/edt_action_registry.h>
@@ -173,7 +173,7 @@ BOOST_AUTO_TEST_CASE(the_edit_actions_are_not_offered_to_an_agent)
 		const auto* command = actions.find(id);
 		BOOST_REQUIRE_MESSAGE(command, id);
 		BOOST_CHECK_MESSAGE(command->mutates, id);
-		BOOST_CHECK_MESSAGE(!edt::agent_may_use(*command), id);
+		BOOST_CHECK_MESSAGE(command->category == cmd::agent_category::unset || command->category == cmd::agent_category::not_for_agents, id);
 	}
 	BOOST_TEST(!actions.find("edit.redo_alt")->expose_as_tool);
 }

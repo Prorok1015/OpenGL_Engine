@@ -179,6 +179,7 @@ edt::editor_system::~editor_system()
 {
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
+	m_session_connections.clear();
 	m_agent_access.reset();
 	// The layer may outlive this system; its menu bar must not reach live mode any more.
 	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
@@ -393,7 +394,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	for (auto& action : register_edit_actions(m_context->actions(), m_context->documents(), m_context->dialogs(), [] { return ImGui::IsAnyItemActive(); })) {
 		m_registrations.push_back(std::move(action));
 	}
-	// A5 (#291): the agent's edits of the scene. Not offered over MCP yet (agent_may_use refuses what mutates).
+	// A5 (#291): the agent's edits of the scene. Offered over MCP by the agent policy (scene_edit: allowed by default).
 	for (auto& command : register_scene_commands(m_context->actions().commands(),
 			{ m_context->documents(), m_context->selection(), m_services, [this] { return person_is_editing(); } })) {
 		m_registrations.push_back(std::move(command));
@@ -551,8 +552,22 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		const std::filesystem::path user_dir = user_roots.empty() ? default_user_data_dir() : user_roots.back();
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
+		m_agent_access->policy().set_on_changed([this] {
+			if (m_agent_server) m_agent_server->notify_tools_changed();
+		});
+		m_agent_access->policy().set_live_mode([this] { return m_live_mode != nullptr && m_live_mode->enabled(); });
+		m_agent_access->set_questions_routed(true);
 		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
-		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));
+		// One signal for the end of an MCP session; whoever keeps something per session listens to it.
+		editor_events& events = m_context->events();
+		m_session_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
+			if (m_agent_access) m_agent_access->confirmations().drop_session(session);
+		}));
+		m_session_connections.push_back(events.agent_session_closed.subscribe([this](const std::string& session) {
+			if (m_agent_sessions) m_agent_sessions->session_closed(session);
+		}));
+		options.on_session_closed = [&events](const std::string& session) { events.agent_session_closed.emit(session); };
+		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), *m_agent_access, std::move(options));
 	}
 }
 

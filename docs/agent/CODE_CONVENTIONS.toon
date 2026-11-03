@@ -169,7 +169,7 @@ system_interface: empty base (virtual dtor only) — NO update()/initialize() me
 system_logic: free/member fn; args (entt::view, ctx resources) auto-injected by ecs::invoker
 system_order: explicit — phase (input, pre_update, fixed_update, update, post_update, transform, late_update) + after/before by system name; ties broken by order in world_desc.systems. Argument types never decide order, they only feed Debug access-conflict warnings
 world_creation: one execution plan per world (ecs::build_system_plan), built when the world loads or its system list changes; contexts run in id order; data between contexts of a set goes through scn::set_channel (WORLD_MESSAGING.md)
-modes: scn::context_set::set_mode(ecs::run_mode::edit|play|pause|step) — edit/pause run only run_in_edit systems
+modes: scn::context_set::set_mode(ecs::run_mode::edit|play|pause|step) — edit/pause run only run_in_edit systems; step(n) = n frames of one fixed step, then pause; set_time_scale(s) scales dt in edit/play
 
 [IMGUI_PATTERNS]
 begin_end_pairing:  # End() ALWAYS called; Begin() result only gates drawing

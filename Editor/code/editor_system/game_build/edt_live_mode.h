@@ -57,8 +57,8 @@ namespace edt
 
 	// Live mode in the editor (#445): owns the live_build, feeds it the code:// changes and a tick per frame, and
 	// registers Build > Live Mode (build.live.toggle, not a tool) and the agent tools live.status, live.rebuild_now and
-	// live.reload_now. Those three are `agent_when_enabled`: an agent sees and calls them only while live mode is on (the
-	// person's consent, AI_INTEGRATION.md section 5). Main thread only.
+	// live.reload_now. Those three are category `live`: the agent policy denies them while live mode is off, so an agent sees
+	// and calls them only while it is on (the person's consent, AI_INTEGRATION.md section 5). Main thread only.
 	class live_mode
 	{
 	public:

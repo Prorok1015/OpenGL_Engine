@@ -434,6 +434,8 @@ BOOST_AUTO_TEST_CASE(ToolsList_ReportsSchemasAndAnnotations)
 	BOOST_TEST(text_of(tools[0].at("outputSchema").at("type")) == "object");
 	BOOST_TEST(tools[0].at("annotations").at("readOnlyHint").as_bool());
 	BOOST_TEST(!tools[0].at("annotations").at("destructiveHint").as_bool());
+	BOOST_TEST(!tools[0].at("annotations").at("idempotentHint").as_bool());
+	BOOST_TEST(!tools[0].at("annotations").at("openWorldHint").as_bool());
 	BOOST_TEST(text_of(tools[1].at("inputSchema").at("type")) == "object");
 	BOOST_TEST(!tools[1].as_object().contains("outputSchema"));
 	BOOST_TEST(!tools[1].at("annotations").at("readOnlyHint").as_bool());
