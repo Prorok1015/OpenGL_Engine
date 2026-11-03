@@ -197,9 +197,17 @@ struct gated_writer
 		return [this](std::string_view) {
 			std::unique_lock lock(mutex);
 			++writes;
+			cv.notify_all();
 			cv.wait(lock, [this] { return open; });
 			return true;
 		};
+	}
+
+	// The writer thread is inside its first write.
+	bool wait_for_a_write()
+	{
+		std::unique_lock lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(20), [this] { return writes > 0; });
 	}
 
 	void release()
@@ -558,6 +566,8 @@ BOOST_FIXTURE_TEST_CASE(AnOutputOverTheLimit_EndsTheSessionOnce, stdio_fixture)
 	c.max_output_bytes = 1024;
 	mcp::stdio_transport transport(host, std::move(c));
 	transport.handle_line(initialize_line);
+	// Only then may the queue overflow: what is still queued at the overflow is dropped.
+	BOOST_REQUIRE(gate.wait_for_a_write());
 	const std::string session = transport.session_id();
 	for (int i = 0; i < 100; ++i) {
 		transport.notify_tools_changed();
