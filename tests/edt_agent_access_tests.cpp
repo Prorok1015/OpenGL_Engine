@@ -106,6 +106,25 @@ BOOST_AUTO_TEST_CASE(FrameWithoutAFont_KeepsNobodyToAsk)
 	BOOST_TEST(finished[0].code == cmd::codes::denied);
 }
 
+// Headless: no person even when questions would be routed; a waiting question is declined, a new ask is a deny.
+BOOST_AUTO_TEST_CASE(HeadlessFrame_NobodyIsAsked_EvenWithQuestionsRouted)
+{
+	person_arrives();
+	ask_as("s1");
+	BOOST_REQUIRE(access->confirmations().pending().size() == 1u);
+
+	BOOST_TEST(access->frame_headless());
+
+	BOOST_REQUIRE(finished.size() == 1u);
+	BOOST_TEST(finished[0].code == cmd::codes::denied);
+	BOOST_TEST(access->confirmations().pending().empty());
+
+	ask_as("s1");
+	BOOST_REQUIRE(finished.size() == 2u);
+	BOOST_TEST(finished[1].code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+}
+
 BOOST_AUTO_TEST_CASE(QuestionsNotRoutedYet_AnAskIsADenyEvenWithAPerson)
 {
 	access->set_person_present(true);

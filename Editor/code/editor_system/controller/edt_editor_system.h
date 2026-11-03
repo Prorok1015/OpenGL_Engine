@@ -201,9 +201,12 @@ namespace edt {
 		// Panels and menus in the editor_context registries; removed first, before the panels they point at.
 		std::vector<registration> m_registrations;
 
-		// The policy and the confirmations behind the MCP server (editor/agent_server, off by default); null when it is off.
+		// Taken by work the stdio transport posts to the main thread: it finds the system gone through the weak copy.
+		std::shared_ptr<int> m_stdio_alive = std::make_shared<int>(0);
+		// The policy and the confirmations behind the MCP server (editor/agent_server, editor/mcp_stdio, off by default);
+		// null when both are off.
 		std::unique_ptr<agent_access> m_agent_access;
-		// The MCP server; null when it is off. Last member: stopped first, before the access it asks.
+		// The MCP server (HTTP and/or stdio); null when both are off. Last member: stopped first, before the access it asks.
 		std::unique_ptr<agent_server> m_agent_server;
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;

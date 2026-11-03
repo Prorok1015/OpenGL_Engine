@@ -550,12 +550,22 @@ platform::spawn_result platform::spawn_detached(const fs::path& program, const s
 
 	posix_spawnattr_t attributes;
 	posix_spawnattr_init(&attributes);
+	// Its own session (POSIX_SPAWN_SETSID below): closing the terminal (or the process group) of this editor does not
+	// take the new one along.
+	// The new editor starts with the default SIGPIPE, not the one --mcp-stdio ignores, and without our stdin, which
+	// may be an agent's pipe.
+	sigset_t default_signals;
+	sigemptyset(&default_signals);
+	sigaddset(&default_signals, SIGPIPE);
+	posix_spawnattr_setsigdefault(&attributes, &default_signals);
+	short flags = POSIX_SPAWN_SETSIGDEF;
 #ifdef POSIX_SPAWN_SETSID
-	// Its own session: closing the terminal (or the process group) of this editor does not take the new one along.
-	posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSID);
+	flags = static_cast<short>(flags | POSIX_SPAWN_SETSID);
 #endif
+	posix_spawnattr_setflags(&attributes, flags);
 	posix_spawn_file_actions_t file_actions;
 	posix_spawn_file_actions_init(&file_actions);
+	posix_spawn_file_actions_addopen(&file_actions, 0, "/dev/null", O_RDONLY, 0);
 #if defined(__GLIBC__)
 #if __GLIBC_PREREQ(2, 34)
 	// Only stdin/out/err go along: Asio does not open its sockets close-on-exec, so the new editor would otherwise

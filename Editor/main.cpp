@@ -7,6 +7,7 @@
 #include <snk/engine/engine_module.h>
 #include <snk/common/logger/engine_log.h>
 #include <snk/editor/editor_module.h>
+#include <snk/platform/plt_stdio.h>
 #include <snk/project/prj_project.h>
 #include <string_view>
 #include <utility>
@@ -48,19 +49,32 @@ int main(int argc, char* argv[])
 	// Before the configs are parsed, so the first line already goes there: stdout belongs to a protocol (or to
 	// nobody) when the editor runs without a display.
 	bool log_to_stderr = false;
+	bool mcp_stdio = false;
 	for (int i = 1; i < argc; ++i) {
 		const std::string_view arg = argv[i];
 		if (arg == "--headless" || arg == "--mcp-stdio") {
 			log_to_stderr = true;
 		}
+		if (arg == "--mcp-stdio") {
+			mcp_stdio = true;
+		}
 	}
+	// MCP over stdio: only the protocol may reach the real stdout, so whatever else writes there (a library's printf,
+	// --help) lands on stderr from here on.
+	const int protocol_fd = mcp_stdio ? platform::take_stdout_for_protocol() : -1;
 	engine::init_logger(log_to_stderr ? engine::console_target::stderr_ : engine::console_target::stdout_);
+	if (mcp_stdio && protocol_fd < 0) {
+		egLOG_ERROR("app", "--mcp-stdio: stdout could not be taken for the protocol");
+	}
 
 	if (!cfg::initialize_configs(argc, argv)) {
 		return -1;
 	}
 
 	ds::app_data_storage app_storage;
+	if (protocol_fd >= 0) {
+		app_storage.construct<platform::protocol_stdout>(protocol_fd);
+	}
 
 	app::modules::module_loader module_loader;
 	module_loader.add_module(std::make_unique<core::core_module>());

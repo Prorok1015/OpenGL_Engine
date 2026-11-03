@@ -1,6 +1,17 @@
 #include <snk/application/app_loop_service.h>
 #include <snk/common/eng_profiler.h>
 #include <snk/common/logger/engine_log.h>
+#include <chrono>
+#include <optional>
+#include <thread>
+
+std::optional<std::chrono::steady_clock::time_point> app::frame_deadline(std::chrono::steady_clock::time_point frame_start, int fps)
+{
+	if (fps <= 0) {
+		return std::nullopt;
+	}
+	return frame_start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(1'000'000'000 / fps));
+}
 
 app::loop_service::loop_service(frame_stage_registry& stages, deterministic_time time, frame_control* control)
 	: m_stages(stages), m_time(time), m_control(control)
@@ -57,6 +68,16 @@ void app::loop_service::on_step(ds::app_data_storage& storage)
 	if (m_exit_after_frames > 0 && m_steps == m_exit_after_frames) {
 		egLOG_INFO("app", "exit after {} frames (app/exit_after_frames)", m_steps);
 		request_stop();
+	}
+	if (m_stop_requested) {
+		return;
+	}
+	if (const auto deadline = frame_deadline(current_time, m_frame_limit)) {
+		if (m_sleep_until) {
+			m_sleep_until(*deadline);
+		} else {
+			std::this_thread::sleep_until(*deadline);
+		}
 	}
 }
 
