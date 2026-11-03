@@ -559,6 +559,13 @@ struct res_changes_fixture : ops_fixture
 		});
 	}
 
+	// Written beside the project and moved in: the watcher never sees the file half written.
+	void place(std::string_view rel, std::string_view text)
+	{
+		const fs::path staged = dir.write("staging.tmp", text);
+		fs::rename(staged, content / fs::path{ rel });
+	}
+
 	bool was_reloaded(std::string_view tag) const
 	{
 		return std::ranges::any_of(reloaded, [tag](const std::string& r) { return r == tag; });
@@ -571,7 +578,7 @@ BOOST_AUTO_TEST_SUITE(ResProjectChanges)
 
 BOOST_FIXTURE_TEST_CASE(ExternalFiles_AreReportedCreatedRenamedAndDeleted, res_changes_fixture)
 {
-	dir.write("project/res/levels/extra.desc", "extra");
+	place("levels/extra.desc", "extra");
 	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::created, "res://levels/extra.desc"); }));
 
 	fs::rename(content / "levels" / "extra.desc", content / "levels" / "moved.desc");
@@ -584,7 +591,7 @@ BOOST_FIXTURE_TEST_CASE(ExternalFiles_AreReportedCreatedRenamedAndDeleted, res_c
 	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::deleted, "res://levels/moved.desc"); }));
 }
 
-BOOST_FIXTURE_TEST_CASE(AFolderStartingWithADot_IsNotReported, res_changes_fixture)
+BOOST_FIXTURE_TEST_CASE(GitFolder_IsNotReported, res_changes_fixture)
 {
 	dir.write("project/res/.git/HEAD", "ref: refs/heads/main");
 	dir.write("project/res/textures/wall.png", "png");
@@ -605,6 +612,22 @@ BOOST_FIXTURE_TEST_CASE(AnExternalEdit_StillReloadsALoadedWatchedResource, res_c
 
 	BOOST_TEST(pump_until([this] { return was_reloaded("res://levels/main.desc"); }));
 	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::modified, "res://levels/main.desc"); }));
+}
+
+BOOST_FIXTURE_TEST_CASE(AFileInAnotherDotFolder_StillReloadsAfterAnExternalEdit, res_changes_fixture)
+{
+	fs::create_directories(content / ".shared");
+	place(".shared/palette.desc", "red");
+	BOOST_TEST(pump_until([this] { return res_has(res::change_kind::created, "res://.shared/palette.desc"); }));
+	auto handle = sys->require_sync<res::text_resource>(res::tag{ "res://.shared/palette.desc" });
+	test_util::pump(tasks);
+	BOOST_REQUIRE(!handle.has_error());
+	BOOST_TEST(handle.get_sync()->str() == "red");
+	watch("res://.shared/palette.desc");
+
+	dir.write("project/res/.shared/palette.desc", "red and blue");
+
+	BOOST_TEST(pump_until([this] { return was_reloaded("res://.shared/palette.desc"); }));
 }
 
 BOOST_FIXTURE_TEST_CASE(AnExternalRename_ReloadsWhatWaitsUnderTheNewName, res_changes_fixture)

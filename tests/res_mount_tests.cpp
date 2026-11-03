@@ -181,7 +181,7 @@ BOOST_FIXTURE_TEST_CASE(ProjectMountTable_WithoutEngineBaseHasNoEngineLayer, lay
 	}
 }
 
-BOOST_FIXTURE_TEST_CASE(ProjectMountTable_ResReportsEveryFile_OutsideFoldersStartingWithADot, layers_fixture)
+BOOST_FIXTURE_TEST_CASE(ProjectMountTable_ResReportsEveryFile_OutsideGit, layers_fixture)
 {
 	const fs::path cache = dir.path() / "project" / ".cache";
 	const auto table = res::resource_system::project_mount_table({}, { project }, cache, cache / "user_profile");
@@ -192,9 +192,9 @@ BOOST_FIXTURE_TEST_CASE(ProjectMountTable_ResReportsEveryFile_OutsideFoldersStar
 	BOOST_TEST(options.report_changes);
 	BOOST_REQUIRE(static_cast<bool>(options.ignore_dir));
 	BOOST_TEST(options.ignore_dir(".git"));
-	BOOST_TEST(options.ignore_dir(".cache"));
+	BOOST_TEST(!options.ignore_dir(".shared"));
 	BOOST_TEST(!options.ignore_dir("textures"));
-	BOOST_TEST(!options.ignore_dir("levels.old"));
+	BOOST_TEST(!options.ignore_dir(".git2"));
 	BOOST_TEST(!static_cast<bool>(options.accept_file));
 	// Storing works as before; removing and renaming stay code:// only.
 	BOOST_TEST(!table[0].file_operations);

@@ -3,7 +3,12 @@
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_hot_reload_manager.h>
 #include <snk/ecs/ecs_system.h>
+#include <snk/common/logger/engine_log_sinks.h>
 #include <algorithm>
+#include <format>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace json = boost::json;
 
@@ -332,6 +337,33 @@ BOOST_AUTO_TEST_CASE(HotReloadManager_ReloadsEntitiesUsingAChangedComponentDesc)
 	mgr.tick();
 
 	BOOST_TEST(reg.get<stat_component>(e).label == "v2");
+}
+
+// A file deleted or moved away (a branch switch, a save that renames a backup) is no failed reload: no ERROR, the
+// registry keeps what it has (#515).
+BOOST_AUTO_TEST_CASE(HotReloadManager_ADeletedComponentDesc_KeepsTheRegistryWithoutAnError)
+{
+	auto tag = put("gone.desc", R"({"__type":"stat_desc","hp":4,"label":"kept"})");
+	entt::registry reg;
+	scn::hot_reload_manager mgr(*assembler, *rs);
+	mgr.attach_registry(reg);
+	auto e = reg.create();
+	assembler->assemble_and_apply(reg, e, "", handle(tag), {}, "stat");
+	BOOST_REQUIRE(reg.get<stat_component>(e).label == "kept");
+
+	std::vector<std::string> errors;
+	const auto sink = engine::add_log_sink([&errors](std::string_view category, engine::log_level level, std::string_view message) {
+		if (level == engine::log_level::error) errors.push_back(std::format("{}: {}", category, message));
+	});
+	BOOST_REQUIRE(ram->erase(tag));
+	rs->signal_changed(tag);
+	pump();
+	mgr.tick();
+
+	for (const auto& error : errors) BOOST_TEST_MESSAGE(error);
+	BOOST_TEST(errors.empty());
+	BOOST_TEST(reg.get<stat_component>(e).hp == 4);
+	BOOST_TEST(reg.get<stat_component>(e).label == "kept");
 }
 
 BOOST_AUTO_TEST_CASE(HotReloadManager_DestructionUnhooksRegistryAndWatchers)
