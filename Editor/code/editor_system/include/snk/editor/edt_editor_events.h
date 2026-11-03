@@ -162,6 +162,34 @@ namespace edt
 		bool background = false;
 	};
 
+	// Where the editor's Play session is (play_session, #39).
+	enum class play_state : std::uint8_t { stopped, playing, paused };
+
+	// Why it changed: a person (menu, shortcut, the editor's own UI), an agent's command, the game module was reloaded
+	// (Play started again after the swap) or is about to be (Play stopped for the swap).
+	enum class play_reason : std::uint8_t { user, agent, module_reloaded, stopped_for_reload };
+
+	inline const char* play_state_name(play_state state)
+	{
+		switch (state) {
+		case play_state::stopped: return "stopped";
+		case play_state::playing: return "playing";
+		case play_state::paused: return "paused";
+		}
+		return "stopped";
+	}
+
+	inline const char* play_reason_name(play_reason reason)
+	{
+		switch (reason) {
+		case play_reason::user: return "user";
+		case play_reason::agent: return "agent";
+		case play_reason::module_reloaded: return "module_reloaded";
+		case play_reason::stopped_for_reload: return "stopped_for_reload";
+		}
+		return "user";
+	}
+
 	// Editor-wide notifications, reached through editor_context::events(). Producers: selection_service
 	// (selection_changed), document_manager (document_opened/closed/activated), scene_document::commit (document_changed),
 	// world_controller wiring (active_world_changed), job_service (job_started, job_progress, job_finished),
@@ -187,5 +215,7 @@ namespace edt
 		signal<const game_module_build_result&> game_module_built;
 		// The problems of one source were replaced or cleared (problem_list).
 		signal<const std::string&> problems_changed; // (source)
+		// Every change of the Play session's state, after it took effect (play_session).
+		signal<play_state, play_reason> play_state_changed;
 	};
 }

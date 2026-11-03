@@ -223,6 +223,9 @@ namespace {
 					return failure(cmd::codes::not_found, "document is not the scene");
 				}
 			}
+			if (scene.edits_locked()) {
+				return failure(cmd::codes::busy, "the scene is playing: stop play first");
+			}
 			if (call.from.kind == cmd::origin_kind::agent && sources.gesture_active && sources.gesture_active()) {
 				return failure(cmd::codes::busy, "a person is in the middle of an edit; call again when it ends");
 			}

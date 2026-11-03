@@ -249,6 +249,19 @@ void res::resource_system::add_mount(mount added) {
   m_mounts.push_back(std::move(added));
 }
 
+bool res::resource_system::remount(std::string_view protocol, std::vector<std::filesystem::path> roots) {
+  ASSERT_MSG(!m_parent, "A resource layer uses the mounts of its root");
+  const auto found = std::ranges::find_if(m_mounts, [protocol](const mount &m) { return m.protocol == protocol; });
+  if (found == m_mounts.end()) {
+    egLOG_WARN("resource/system", "remount: {}:// is not mounted", protocol);
+    return false;
+  }
+  found->roots = std::move(roots);
+  unregistrate_resolver(found->protocol);
+  register_mount(*found);
+  return true;
+}
+
 res::resource_system::resource_system(resource_system &parent)
     : m_graph(std::make_unique<wait_graph>()), m_tasks(parent.m_tasks), m_parent(&parent) {
   m_gate->self = this;

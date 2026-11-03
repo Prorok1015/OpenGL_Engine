@@ -39,6 +39,7 @@
 #include "edt_build_settings_panel.h"
 #include "edt_vcs_service.h"
 #include "edt_live_mode.h"
+#include "edt_play_session.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
@@ -179,6 +180,14 @@ edt::editor_system::~editor_system()
 	// Its thread and the calls it queued use the registry and the task system: stop it before anything else goes.
 	m_agent_server.reset();
 	m_agent_access.reset();
+	if (m_play) {
+		// Stop brings the level back and reports through the context: only while the context is there.
+		if (m_context_alive.lock()) {
+			m_play.reset();
+		} else {
+			m_play->abandon();
+		}
+	}
 	// The layer may outlive this system; its menu bar must not reach live mode any more.
 	if (editor_layer) editor_layer->set_menu_bar_status(nullptr);
 	// The context (and its document_manager) outlives this system, which owns the scene document: let go of it first.
@@ -250,9 +259,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	// Wire all controller + panel callbacks
 	wire_controller_callbacks();
 	wire_panel_callbacks();
+	// During Play the selected entity is the one of the play twin, which the views show.
 	m_context->selection().set_registry_provider([this](const std::string& world) -> entt::registry* {
-		scn::context_set* level = m_services.level_set();
-		scn::world_context* found = level ? level->find(world) : nullptr;
+		scn::context_set* set = view_set(m_services);
+		scn::world_context* found = set ? set->find(world) : nullptr;
 		return found ? &found->state() : nullptr;
 	});
 	m_selection_connections = wire_selection(
@@ -288,17 +298,11 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	add_panel(m_inspector_panel, dock_slot::right, true);
 	add_panel(m_viewport_panel, dock_slot::center, true);
 	m_game_view_panel = std::make_shared<game_view_panel>(m_rnd, m_gui);
-	m_game_view_panel->set_registry_getter([this]() -> entt::registry* {
-		auto ctx_mgr = m_services.ctx_manager.lock();
-		const std::string* active = m_state.active_world_name();
-		if (!ctx_mgr || !active) return nullptr;
-		auto& level = ctx_mgr->level_set();
-		const auto& name = *active;
-		return level.has(name) ? &level.get(name).state() : nullptr;
-	});
+	// The views show the set "play" while Play runs (view_set), the level otherwise.
+	m_game_view_panel->set_registry_getter([this]() -> entt::registry* { return view_registry(m_services, m_state); });
 	m_game_view_panel->set_all_registries([this](const game_view_panel::registry_visitor& visit) {
-		if (auto ctx_mgr = m_services.ctx_manager.lock()) {
-			ctx_mgr->level_set().for_each([&visit](scn::world_context& world) { visit(world.state()); });
+		if (scn::context_set* set = view_set(m_services)) {
+			set->for_each([&visit](scn::world_context& world) { visit(world.state()); });
 		}
 	});
 	m_game_view_panel->set_input_router(m_input_router, [this] { return active_play_input_target(m_services, m_state); });
@@ -350,7 +354,10 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	hooks.level_path = [this] {
 		return m_state.level_tag.is_valid() ? std::string(m_state.level_tag.relative()) : std::string{};
 	};
-	hooks.new_level = [this] { m_level_ctrl.new_level(); };
+	hooks.new_level = [this] {
+		if (m_play && m_play->active()) m_play->stop();
+		m_level_ctrl.new_level();
+	};
 	hooks.quick_save = [this] { return m_state.save().saved; };
 	hooks.save_level_as = [this](const std::string& rel_path) {
 		if (rel_path.find("://") != std::string::npos) {
@@ -466,6 +473,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	m_game_reloader = std::make_unique<game_reloader>(m_context->dialogs(), m_context->actions(), std::move(reload_options));
 
 	create_live_mode(data);
+	create_play_session(data);
 
 	m_registrations.push_back(m_context->actions().add({ .id = "build.settings.open", .label = "Build Settings...",
 		.menu_path = "Build", .separator_before = true,
@@ -633,6 +641,68 @@ void edt::editor_system::stop_live_build()
 	if (m_game_builder) m_game_builder->stop_background();
 }
 
+void edt::editor_system::create_play_session(ds::app_data_storage& data)
+{
+	play_session_options options;
+	options.input = m_input_router;
+	// user:// is the project's test profile; Play gets a fresh one of its own every start.
+	if (const auto user_roots = m_res.mount_roots(res::tag::user); !user_roots.empty() && data.has_value<prj::project_context>()) {
+		options.profile_resources = &m_res;
+		options.play_profile = data.require<prj::project_context>().play_profile_dir();
+		options.editor_profile = user_roots.back();
+	}
+	options.restore_selection = [this](const selection& value) { return m_hierarchy_panel->select_path(value.path, value.target); };
+	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
+	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] { if (m_play) m_play->after_module_swap(); });
+
+	const auto locked = [this] { return m_state.edits_locked(); };
+	m_hierarchy_panel->set_edits_locked(locked);
+	m_inspector_panel->set_edits_locked(locked);
+	m_viewport_panel->set_edits_locked(locked);
+
+	// UI actions; the agent's play.* commands are US-63-C (#491).
+	const auto add = [this](action_desc desc) {
+		desc.menu_path = "Play";
+		desc.category = cmd::agent_category::not_for_agents;
+		m_registrations.push_back(m_context->actions().add(std::move(desc)));
+	};
+	add({ .id = "play.start", .label = "Play", .shortcut = "Ctrl+P",
+		.dynamic_label = [this] { return std::string{ m_play->state() == play_state::paused ? "Resume" : "Play" }; },
+		.execute = [this](const boost::json::value&) {
+			if (m_play->state() == play_state::paused) {
+				m_play->resume();
+				return action_result::success();
+			}
+			if (auto refused = m_play->start_refusal()) return action_result::failure(cmd::codes::failed, *refused);
+			return m_play->start() ? action_result::success() : action_result::failure(cmd::codes::failed, "Play did not start: see the log");
+		},
+		// Not in the middle of an edit: a value the inspector has not committed would be lost to the lock.
+		.enabled = [this] { return m_play->state() == play_state::paused || (!m_play->active() && !m_play->start_refusal() && !person_is_editing()); } });
+	add({ .id = "play.pause", .label = "Pause",
+		.execute = no_args([this] { m_play->pause(); }),
+		.enabled = [this] { return m_play->state() == play_state::playing; } });
+	add({ .id = "play.step", .label = "Step",
+		.execute = no_args([this] { m_play->step(1); }),
+		.enabled = [this] { return m_play->active(); } });
+	add({ .id = "play.stop", .label = "Stop", .separator_before = true,
+		.execute = no_args([this] { m_play->stop(); }),
+		.enabled = [this] { return m_play->active(); } });
+
+	editor_layer->set_menu_bar_status([this] {
+		draw_play_status();
+		m_live_mode->draw_status();
+	});
+}
+
+void edt::editor_system::draw_play_status()
+{
+	// Stopped: nothing at all, so the menu bar is what it is without Play.
+	if (!m_play || !m_play->active()) return;
+	const bool paused = m_play->state() == play_state::paused;
+	ImGui::TextColored(paused ? ImVec4(0.95f, 0.75f, 0.3f, 1.0f) : ImVec4(0.4f, 0.85f, 0.4f, 1.0f), "%s",
+		paused ? "Play: paused" : "Play: playing");
+}
+
 void edt::editor_system::create_panels(bool capture_log)
 {
 	m_hierarchy_panel = std::make_shared<scene_hierarchy_panel>();
@@ -663,15 +733,7 @@ void edt::editor_system::create_panels(bool capture_log)
 void edt::editor_system::create_viewport_panel()
 {
 	m_viewport_panel = std::make_shared<viewport_panel>(m_rnd, m_gui);
-	m_viewport_panel->set_registry_getter([this]() -> entt::registry* {
-		auto ctx_mgr = m_services.ctx_manager.lock();
-		const std::string* active = m_state.active_world_name();
-		if (!ctx_mgr || !active) return nullptr;
-		const auto& name = *active;
-		auto& level = ctx_mgr->level_set();
-		if (!level.has(name)) return nullptr;
-		return &level.get(name).state();
-	});
+	m_viewport_panel->set_registry_getter([this]() -> entt::registry* { return view_registry(m_services, m_state); });
 	m_viewport_panel->set_input_router(m_input_router, [this] { return active_input_target(m_services, m_state); });
 	m_viewport_panel->set_on_asset_dropped([this](const std::string& res_rel_path) {
 		if (!m_state.editor_tag.is_valid()) return;
@@ -704,7 +766,9 @@ void edt::editor_system::wire_controller_callbacks()
 void edt::editor_system::follow_game_layer_change(bool before)
 {
 	if (before) {
-		// Nothing of the editor may refer to the old layer once it goes: the preview set, the loads in flight, the level.
+		// Nothing of the editor may refer to the old layer once it goes: the set "play", the preview set, the loads in
+		// flight, the level. A reload of the module stopped Play already (module_swap_gate) and starts it again.
+		if (m_play && m_play->active()) m_play->stop(play_reason::stopped_for_reload);
 		close_prefab_editor();
 		m_pending_desc_handle = {};
 		m_level_after_layer_change = res::tag{};
@@ -910,6 +974,8 @@ void edt::editor_system::run_implicit_callbacks()
 
 void edt::editor_system::begin_level_load(const res::tag& original_tag)
 {
+	// Another level replaces the one Play was built from.
+	if (m_play && m_play->active()) m_play->stop();
 	m_level_ctrl.unwatch_level();
 
 	std::string stem = std::filesystem::path(std::string(original_tag.relative())).stem().string();

@@ -68,6 +68,9 @@ namespace res
 		// Mounts one more protocol after construction (the editor's edt://), like a mount of the constructor: logged,
 		// changes signalled. Main thread, before the protocol is used; not on a layer (it shares its root's resolvers).
 		void add_mount(mount added);
+		// Serves a table mount of `protocol` from other `roots` (Play swaps user:// for its own profile). Main thread, while
+		// nothing loads from the protocol; what was loaded from it before stays cached. False (logged) when it is not mounted.
+		bool remount(std::string_view protocol, std::vector<std::filesystem::path> roots);
 		// A layer over `parent` (MODULE_LAYER.md), main thread. It shares the parent's resolvers, mounts and tasks and
 		// has its own cache, pins, aliases, adapters, dependency graph and watchers. A request whose type has no adapter
 		// in the layer goes to the parent (one shared block); what the layer's own adapters load (the desc types, with a

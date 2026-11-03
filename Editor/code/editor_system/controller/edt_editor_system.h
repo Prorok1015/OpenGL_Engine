@@ -55,6 +55,7 @@ namespace edt {
 	class asset_browser_panel;
 	class prefab_editor_panel;
 	class prefab_document;
+	class play_session;
 
 	class editor_system
 	{
@@ -137,6 +138,9 @@ namespace edt {
 		void wire_controller_callbacks();
 		void wire_panel_callbacks();
 		void create_live_mode(ds::app_data_storage& data);
+		// Play (#39): the session, the locks of the panels, the Play menu and the status in the menu bar.
+		void create_play_session(ds::app_data_storage& data);
+		void draw_play_status();
 		// Stops a running live build through game_builder::stop_background (never the person's build, and a request of
 		// the person's waiting for it stays queued); the outcome reaches live mode, which builds the changes again.
 		void stop_live_build();
@@ -193,6 +197,9 @@ namespace edt {
 		std::unique_ptr<edt::vcs_service> m_vcs;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
+		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
+		// while the context it reports to is still there.
+		std::unique_ptr<edt::play_session> m_play;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
