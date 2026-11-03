@@ -80,7 +80,8 @@ namespace scn
 		// `kind::level` survive the reload.
 		void set_on_reload(std::function<void()> cb) { m_on_reload = std::move(cb); }
 
-		// Returns the existing set (its options unchanged) when the name is taken. `layer` null: the base services.
+		// Returns the existing set when the name is taken (logged; its options are kept, a mismatch is an error too).
+		// `layer` null: the base services.
 		scn::context_set& create_set(std::string_view name, scn::scene_layer* layer = nullptr, scn::set_options options = {});
 		// The set "level" cannot be destroyed.
 		void destroy_set(std::string_view name);

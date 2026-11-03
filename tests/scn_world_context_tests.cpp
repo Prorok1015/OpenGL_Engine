@@ -319,16 +319,53 @@ BOOST_AUTO_TEST_CASE(TimeScale_ZeroAdvancesNoFixedStepAndAStepIgnoresTheScale)
 	BOOST_TEST(a.fixed_steps() == 1);
 }
 
-BOOST_AUTO_TEST_CASE(TimeScale_NegativeOrNonFiniteIsRefusedAsZero)
+BOOST_AUTO_TEST_CASE(TimeScale_NegativeOrNaNIsRefusedAsZero)
 {
 	scn::context_set set("play", nullptr);
 	auto& a = set.create_context("a", 0, scn::context_kind::play);
-	for (const float bad : { -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() }) {
+	for (const float bad : { -1.0f, -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() }) {
 		set.set_time_scale(1.0f);
 		set.set_time_scale(bad);
 		BOOST_TEST(set.time_scale() == 0.0f);
 		BOOST_TEST(a.time_scale() == 0.0f);
 	}
+}
+
+BOOST_AUTO_TEST_CASE(TimeScale_AboveTheMaximumIsClampedToIt)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "read_dt" }, sf);
+
+	set.set_time_scale(scn::context_set::max_time_scale);
+	BOOST_TEST(set.time_scale() == scn::context_set::max_time_scale); // the maximum itself is valid
+	for (const float big : { scn::context_set::max_time_scale + 1.0f, 100.0f, std::numeric_limits<float>::infinity() }) {
+		set.set_time_scale(1.0f);
+		set.set_time_scale(big);
+		BOOST_TEST(set.time_scale() == scn::context_set::max_time_scale);
+		BOOST_TEST(a.time_scale() == scn::context_set::max_time_scale);
+	}
+
+	// at the maximum a 60 fps frame still fits in the stepper's step budget: no simulated time is dropped
+	set.update(std::chrono::duration<float>(1.0f / 60.0f));
+	BOOST_TEST(a.fixed_steps() <= a.stepper().max_steps());
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 8.0f / 60.0f, boost::test_tools::tolerance(1e-5f));
+}
+
+BOOST_AUTO_TEST_CASE(Step_ZeroFramesIsRefusedAndRunsOne)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "tick" }, sf);
+	set.set_mode(ecs::run_mode::pause);
+
+	set.step(0);
+	BOOST_TEST((set.mode() == ecs::run_mode::step));
+	BOOST_TEST(set.pending_steps() == 1u);
+	set.update(one_frame);
+	set.update(one_frame);
+	BOOST_TEST(g_ticks == 1);
+	BOOST_TEST((set.mode() == ecs::run_mode::pause));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
