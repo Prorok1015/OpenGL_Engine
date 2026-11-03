@@ -47,8 +47,11 @@ namespace edt
 	// credential helper, core.sshCommand, a URL rewrite to another transport, or an upload-pack / receive-pack.
 	// Hard rules of a guarded write (vcs_policy, #455), checked before git runs whatever the policy's mode: a push goes
 	// only to a branch matching push_branches and no protected branch, as the explicit refspec refs/heads/<b>:refs/heads/<b>
-	// without tags; fetch, pull and push only to a remote in remotes; a refusal is a `done` job with error code `denied`.
-	// A guarded commit with a valid agent session gets an `Agent-Session: <session>` trailer.
+	// without tags; fetch, pull and push only to a remote in remotes (an omitted remote is resolved once, as git would,
+	// and named to git; a pull without a branch fetches the current branch's upstream by name); a checkout or pull whose
+	// target changes the project's agent policy file is refused; a refusal is a `done` job with error code `denied`.
+	// A guarded commit loses every Agent-Session line of its message and gets `Agent-Session: <session>` for a valid
+	// agent session.
 	// There is no force-push, reset --hard, branch delete or rebase, and never will be.
 	// Main thread only.
 	class vcs_service
@@ -109,6 +112,9 @@ namespace edt
 		// The agent policy's git rules, asked at the start of every guarded write, so an edit of the policy file applies
 		// at once; it replaces set_write_permissions. Null: the defaults and set_write_permissions.
 		void set_policy_source(std::function<vcs_policy()> source) { m_policy_source = std::move(source); }
+		// The project's agent policy file, which a guarded checkout or pull must not change; empty (the default):
+		// <project root>/.snk/agent_policy.json.
+		void set_policy_file(std::filesystem::path file) { m_policy_file = std::move(file); }
 
 		// Writes; `caller` is the origin of the command (cmd::call::from). Paths are relative to the repository root.
 		started start_stage(const std::vector<std::string>& paths, const cmd::origin& caller);
@@ -161,8 +167,6 @@ namespace edt
 			bool runs_filters = false;
 			// The command talks to a remote.
 			bool network = false;
-			// A network command's remote as named (empty: the one git picks), checked against vcs_policy::remotes.
-			std::string remote;
 		};
 		// A hard rule of a guarded write: why the policy refuses it, nullopt when it does not.
 		using hard_rule = std::function<std::optional<std::string>(const vcs_policy&)>;
@@ -186,6 +190,7 @@ namespace edt
 		bool m_git_found = false;
 		vcs_write_permissions m_write_permissions;
 		std::function<vcs_policy()> m_policy_source;
+		std::filesystem::path m_policy_file;
 		scratch_dir m_scratch;
 		std::uint64_t m_message_count = 0;
 		// Last: its jobs are stopped before the rest goes.

@@ -544,6 +544,7 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		auto& commands = data.require<cmd::command_registry>();
 		m_agent_access = std::make_unique<agent_access>(commands, project_policy, user_dir / "settings" / "agent_policy.json");
 		// Asked at the start of every agent write, so an edit of either policy file applies at once.
+		m_vcs->set_policy_file(project_policy);
 		m_vcs->set_policy_source([this] { return m_agent_access != nullptr ? m_agent_access->policy().effective_vcs() : vcs_policy{}; });
 		editor_layer->register_implicit("edt/agent_confirmations", [this] { return m_agent_access != nullptr && m_agent_access->frame(ImGui::GetFont()); });
 		m_agent_server = std::make_unique<agent_server>(commands, data.require<ds::task_system>(), m_agent_access->confirmations(), std::move(options));

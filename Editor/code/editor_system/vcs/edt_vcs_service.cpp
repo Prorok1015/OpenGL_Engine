@@ -82,10 +82,10 @@ namespace {
 		bool allow_repo_credential_helper = false;
 		// git 2.40+: check-attr --source=<tree> reads the attributes of a checkout's target.
 		bool attr_source = false;
-		// Guarded network call: `remote` (empty: the one git picks) must be one of `allowed_remotes` (remote_refusal).
-		bool check_remote = false;
-		std::string remote;
+		// Guarded network call: the remotes the agent policy allows (remote_refusal).
 		std::vector<std::string> allowed_remotes;
+		// Guarded: the project's agent policy file (absolute; empty: none), which a checkout or pull must not change.
+		fs::path policy_file;
 	};
 
 	git_context make_context(fs::path git, std::vector<std::string> environment, fs::path cwd, edt::process_runner run)
@@ -605,26 +605,14 @@ namespace {
 			&& base.substr(0, colon).find('/') == std::string_view::npos;
 	}
 
-	// The remote git picks without one named: the current branch's, else origin.
-	std::string default_remote(const git_context& git, std::stop_token stop)
-	{
-		const git_output head = run_git(git, { "symbolic-ref", "-q", "--short", "HEAD" }, stop, k_read_cap);
-		const std::string branch(trim(head.out));
-		if (head.process.error.empty() && head.process.exit_code == 0 && !branch.empty()) {
-			const git_output remote = run_git(git, { "config", "--get", std::format("branch.{}.remote", branch) }, stop, k_read_cap);
-			const std::string name(trim(remote.out));
-			if (remote.process.error.empty() && remote.process.exit_code == 0 && !name.empty()) return name;
-		}
-		return "origin";
-	}
-
-	// An agent's network call: refused (unsafe_repository) when the repository's config picks a program it would run
-	// (a credential helper, core.sshCommand, a URL rewrite to another transport, upload-pack / receive-pack); otherwise
-	// `git` gets the remote's upload-pack and receive-pack forced. Nullopt: git may run.
-	std::optional<git_output> network_refusal(git_context& git, std::string remote, std::stop_token stop)
+	// An agent's network call to `remote` (resolved by resolve_network_target, never empty): refused
+	// (unsafe_repository) when the repository's config picks a program it would run (a credential helper,
+	// core.sshCommand, a URL rewrite to another transport, upload-pack / receive-pack); otherwise `git` gets the remote's
+	// upload-pack and receive-pack forced. Nullopt: git may run.
+	std::optional<git_output> network_refusal(git_context& git, const std::string& remote, std::stop_token stop)
 	{
 		if (!git.guard_network) return std::nullopt;
-		if (remote.empty()) remote = default_remote(git, stop);
+		if (remote.empty()) return refused("unsafe_repository", "the remote of an agent's network call was not resolved");
 		if (std::any_of(remote.begin(), remote.end(), [](char c) { return c == '=' || static_cast<unsigned char>(c) < 0x20; })) {
 			return refused("unsafe_repository", std::format("the remote '{}' cannot be guarded", edt::vcs::valid_utf8(remote)));
 		}
@@ -922,11 +910,8 @@ namespace {
 
 	// A guarded network call to a remote the agent policy does not list (vcs.remotes): the job's answer, before git
 	// writes anything. Nullopt: allowed.
-	std::optional<json::value> remote_refusal(const git_context& git, const ds::task_context& task)
+	std::optional<json::value> remote_refusal(const git_context& git, const std::string& remote)
 	{
-		if (!git.check_remote) return std::nullopt;
-		const std::string remote = git.remote.empty() ? default_remote(git, task.stop) : git.remote;
-		if (task.stop.stop_requested()) throw ds::task_cancelled{};
 		if (std::find(git.allowed_remotes.begin(), git.allowed_remotes.end(), remote) != git.allowed_remotes.end()) return std::nullopt;
 		return error_json("denied", std::format("the agent policy does not allow the remote '{}' (vcs.remotes)",
 			edt::vcs::valid_utf8(remote)), {}, -1);
@@ -995,21 +980,191 @@ namespace {
 		return std::all_of(session.begin(), session.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-'; });
 	}
 
-	// The commit message of a guarded commit: an `Agent-Session:` trailer for a valid session, unless one is there.
-	std::string with_session_trailer(std::string message, const cmd::origin& caller)
+	// A guarded commit's message, already through strip_session_trailers, with the session's trailer when the session
+	// is valid.
+	std::string with_session_trailer(std::string message, const std::string& session)
 	{
-		if (caller.kind == cmd::origin_kind::ui || !is_trailer_session(caller.session)) return message;
-		std::size_t start = 0;
-		while (start < message.size()) {
-			const std::size_t end = std::min(message.find('\n', start), message.size());
-			if (std::string_view(message).substr(start, end - start).starts_with("Agent-Session:")) return message;
-			start = end + 1;
-		}
+		if (!is_trailer_session(session)) return message;
 		while (!message.empty() && (message.back() == '\n' || message.back() == '\r' || message.back() == ' ' || message.back() == '\t')) {
 			message.pop_back();
 		}
-		message += "\n\nAgent-Session: " + caller.session + "\n";
+		message += "\n\nAgent-Session: " + session + "\n";
 		return message;
+	}
+
+	// What a guarded network call talks to, resolved once and then named to git explicitly, so the check and git can
+	// never see two different remotes (a checkout on the other io thread may move HEAD meanwhile).
+	struct network_target
+	{
+		std::string remote;
+		// The current branch; empty: HEAD is detached.
+		std::string branch;
+		// Not empty: git could not tell, the call is refused with this.
+		std::string error;
+	};
+
+	// The remote as named, else the current branch's branch.<b>.remote, else the only configured remote, else origin:
+	// the remote git itself would pick.
+	network_target resolve_network_target(const git_context& git, const std::string& named, std::stop_token stop)
+	{
+		network_target out;
+		const git_output head = run_git(git, { "symbolic-ref", "-q", "--short", "HEAD" }, stop, k_read_cap);
+		// Exit code 1: HEAD is detached.
+		if (listing_failed(head) || head.truncated) {
+			out.error = "git could not tell the current branch";
+			return out;
+		}
+		if (head.process.exit_code == 0) out.branch = std::string(trim(head.out));
+		if (!named.empty()) {
+			out.remote = named;
+			return out;
+		}
+		if (!out.branch.empty()) {
+			const git_output remote = run_git(git, { "config", "--get", "branch." + out.branch + ".remote" }, stop, k_read_cap);
+			if (listing_failed(remote) || remote.truncated) {
+				out.error = "git could not read the current branch's remote";
+				return out;
+			}
+			if (remote.process.exit_code == 0 && !trim(remote.out).empty()) {
+				out.remote = std::string(trim(remote.out));
+				return out;
+			}
+		}
+		const git_output remotes = run_git(git, { "remote" }, stop, k_read_cap);
+		if (!succeeded(remotes)) {
+			out.error = "git could not list the remotes";
+			return out;
+		}
+		const std::vector<std::string_view> names = lines_of(remotes.out);
+		out.remote = names.size() == 1 ? std::string(names.front()) : std::string("origin");
+		return out;
+	}
+
+	// The upstream branch.<b>.merge names, as a guarded pull fetches it explicitly; nullopt with `error` set when there
+	// is none or it is not a plain branch ref (a refspec with ':' or '+' would write local refs).
+	std::optional<std::string> upstream_ref(const git_context& git, const std::string& branch, std::string& error,
+		std::stop_token stop)
+	{
+		if (branch.empty()) {
+			error = "HEAD is detached: name the remote's branch to pull";
+			return std::nullopt;
+		}
+		const git_output merge = run_git(git, { "config", "--get", "branch." + branch + ".merge" }, stop, k_read_cap);
+		const std::string ref(trim(merge.out));
+		if (listing_failed(merge) || merge.truncated) {
+			error = "git could not read the current branch's upstream";
+			return std::nullopt;
+		}
+		if (merge.process.exit_code != 0 || ref.empty()) {
+			error = std::format("the branch '{}' has no upstream: name the remote's branch to pull", edt::vcs::valid_utf8(branch));
+			return std::nullopt;
+		}
+		if (!ref.starts_with("refs/") || branch_name_error("the upstream", ref)) {
+			error = std::format("the upstream '{}' of the branch '{}' is not a plain ref", edt::vcs::valid_utf8(ref),
+				edt::vcs::valid_utf8(branch));
+			return std::nullopt;
+		}
+		return ref;
+	}
+
+	// The policy file as a path of the repository ('/'-separated): empty when it is not in this repository; nullopt when
+	// git could not tell. Git computes it (rev-parse in the nearest folder of the file that exists), so a symlink or the
+	// case of a folder name never makes the file look outside.
+	std::optional<std::string> policy_path_in_repository(const git_context& git, std::stop_token stop)
+	{
+		if (git.policy_file.empty()) return std::string{};
+		fs::path dir = git.policy_file.parent_path();
+		fs::path rest = git.policy_file.filename();
+		std::error_code ec;
+		while (!dir.empty() && !fs::is_directory(dir, ec)) {
+			if (dir == dir.parent_path()) return std::string{};
+			rest = dir.filename() / rest;
+			dir = dir.parent_path();
+		}
+		if (dir.empty()) return std::string{};
+		const git_output own = run_git(git, { "rev-parse", "--show-toplevel" }, stop, k_read_cap);
+		if (!succeeded(own)) return std::nullopt;
+		git_context there = git;
+		there.cwd = dir;
+		const git_output where = run_git(there, { "rev-parse", "--show-toplevel", "--show-prefix" }, stop, k_read_cap);
+		if (!where.process.error.empty() || where.truncated) return std::nullopt;
+		if (where.process.exit_code != 0) {
+			// Not in a repository at all: nothing a checkout here can change. Any other failure fails closed.
+			if (std::string_view(edt::vcs::classify_error(where.err)) == "not_a_repository") return std::string{};
+			return std::nullopt;
+		}
+		const std::size_t first_end = where.out.find('\n');
+		if (first_end == std::string::npos) return std::nullopt;
+		// Another repository (a nested one, or the file is outside this one).
+		if (trim(std::string_view(where.out).substr(0, first_end)) != trim(own.out)) return std::string{};
+		const std::string prefix(trim(std::string_view(where.out).substr(first_end + 1)));
+		const std::u8string tail = rest.generic_u8string();
+		return prefix + std::string(tail.begin(), tail.end());
+	}
+
+	// A guarded checkout or pull to `target` (a commit OID) that would change the project's agent policy file: an agent
+	// must not change the policy it is judged by (agent_access reloads the file when it changes). Nullopt: allowed.
+	std::optional<json::value> policy_refusal(const git_context& git, const std::string& target, const ds::task_context& task)
+	{
+		if (!git.guarded) return std::nullopt;
+		const auto deny = [](std::string message) { return error_json("denied", message, {}, -1); };
+		const std::optional<std::string> path = policy_path_in_repository(git, task.stop);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (!path) return deny("git could not tell where the agent policy file is in the repository");
+		if (path->empty()) return std::nullopt;
+		const std::string shown = edt::vcs::valid_utf8(*path);
+		const git_output head = run_git(git, { "rev-parse", "--verify", "--quiet", "HEAD^{commit}" }, task.stop, k_read_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (!head.process.error.empty() || head.truncated) return deny("git could not read HEAD");
+		if (head.process.exit_code != 0) {
+			// No commit yet: the target brings the file in if its tree has it.
+			const git_output has = run_git(git, { "cat-file", "-e", target + ":" + *path }, task.stop, k_read_cap);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!has.process.error.empty() || has.process.exit_code == 0) {
+				return deny(std::format("the target holds the agent policy file '{}': agents cannot change the policy that "
+					"judges them", shown));
+			}
+			return std::nullopt;
+		}
+		const git_output diff = run_git(git, { "diff-tree", "--quiet", std::string(trim(head.out)), target, "--", *path },
+			task.stop, k_read_cap);
+		if (task.stop.stop_requested()) throw ds::task_cancelled{};
+		if (succeeded(diff)) return std::nullopt;
+		if (diff.process.error.empty() && diff.process.exit_code == 1) {
+			return deny(std::format("the target changes the agent policy file '{}': agents cannot change the policy that "
+				"judges them", shown));
+		}
+		return deny(std::format("git could not compare the agent policy file '{}' with the target", shown));
+	}
+
+	// A guarded commit's message: every line that reads as an Agent-Session trailer goes (it is the editor's to write),
+	// then the session's trailer is added when the session is one the MCP server makes.
+	std::string strip_session_trailers(std::string_view message)
+	{
+		std::string out;
+		out.reserve(message.size());
+		while (!message.empty()) {
+			const std::size_t end = message.find('\n');
+			const std::string_view line = message.substr(0, end);
+			message.remove_prefix(end == std::string_view::npos ? message.size() : end + 1);
+			std::string_view token = line;
+			while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.remove_prefix(1);
+			constexpr std::string_view key = "agent-session";
+			bool forged = token.size() >= key.size();
+			for (std::size_t i = 0; forged && i < key.size(); ++i) {
+				const char c = token[i];
+				forged = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == key[i];
+			}
+			if (forged) {
+				token.remove_prefix(key.size());
+				while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.remove_prefix(1);
+				forged = !token.empty() && token.front() == ':';
+			}
+			if (forged) continue;
+			out.append(line);
+			if (end != std::string_view::npos) out.push_back('\n');
+		}
+		return out;
 	}
 
 	// A remote is the name of a configured one: no URL (no ':'), so the transport is never one the call picks.
@@ -1166,15 +1321,12 @@ edt::vcs_service::started edt::vcs_service::run_job(std::string label, F work, s
 		context.refuse_filters = write->runs_filters && !permissions.allow_filters;
 		context.guard_network = write->network;
 		context.allow_repo_credential_helper = permissions.allow_repo_credential_helper;
-		if (write->network) {
-			context.check_remote = true;
-			context.remote = write->remote;
-			context.allowed_remotes = policy.remotes;
-		}
+		context.allowed_remotes = policy.remotes;
+		if (!m_policy_file.empty()) context.policy_file = m_policy_file;
+		else if (m_probed_project) context.policy_file = *m_probed_project / ".snk" / "agent_policy.json";
 	}
 	const auto id = m_jobs.start_with_result(ds::lane::io, ds::task_desc{ std::move(label), "vcs" }, m_life,
 		[context = std::move(context), work = std::move(work)](ds::task_context& task) -> json::value {
-			if (auto refusal = remote_refusal(context, task)) return std::move(*refusal);
 			// The repository's own config is read before anything else of a guarded call.
 			if (auto refusal = config_refusal(context, task.stop)) return refusal_json(*refusal, task);
 			return work(context, task);
@@ -1477,7 +1629,7 @@ edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::s
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller.kind, true, false, {} });
+	}, write_mode{ caller.kind, true, false });
 }
 
 edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std::string>& paths, const cmd::origin& caller)
@@ -1493,17 +1645,23 @@ edt::vcs_service::started edt::vcs_service::start_unstage(const std::vector<std:
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller.kind, true, false, {} });
+	}, write_mode{ caller.kind, true, false });
 }
 
 edt::vcs_service::started edt::vcs_service::start_commit(const std::string& message, const cmd::origin& caller)
 {
 	if (trim(message).empty()) return { 0, cmd::codes::invalid_args, "message must not be empty" };
 	if (message.find('\0') != std::string::npos) return { 0, cmd::codes::invalid_args, "message must not hold a NUL" };
+	std::string text = message;
+	if (caller.kind != cmd::origin_kind::ui) {
+		text = strip_session_trailers(message);
+		if (trim(text).empty()) return { 0, cmd::codes::invalid_args, "message must not be empty (an Agent-Session line is the editor's)" };
+		text = with_session_trailer(std::move(text), caller.session);
+	}
 	// The runner has no stdin: the message goes through a file only this editor writes to.
 	if (auto error = ensure_scratch()) return { 0, cmd::codes::failed, std::move(*error) };
 	const fs::path file = m_scratch.root / std::format("commit_message_{}.txt", ++m_message_count);
-	return run_job("git commit", [file, message = with_session_trailer(message, caller)](const git_context& git,
+	return run_job("git commit", [file, message = std::move(text)](const git_context& git,
 		ds::task_context& task) -> json::value {
 		const remove_on_exit cleanup{ file };
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::index, {}, {} }, task.stop)) {
@@ -1522,7 +1680,7 @@ edt::vcs_service::started edt::vcs_service::start_commit(const std::string& mess
 		const git_output head = run_git(git, { "rev-parse", "--verify", "HEAD" }, task.stop);
 		if (auto failure = failure_of(head, task)) return std::move(*failure);
 		return json::object{ { "hash", json::string(vcs::valid_utf8(trim(head.out))) } };
-	}, write_mode{ caller.kind, true, false, {} });
+	}, write_mode{ caller.kind, true, false });
 }
 
 edt::vcs_service::started edt::vcs_service::start_branch_create(const std::string& name, const std::string& from,
@@ -1542,7 +1700,7 @@ edt::vcs_service::started edt::vcs_service::start_branch_create(const std::strin
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller.kind, false, false, {} });
+	}, write_mode{ caller.kind, false, false });
 }
 
 edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& ref, const cmd::origin& caller)
@@ -1562,6 +1720,17 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 				return error_json("bad_revision", std::format("'{}' is no local branch, no commit and no branch of exactly "
 					"one remote", vcs::valid_utf8(ref)), {}, -1);
 			}
+			std::string target_oid = plan->target;
+			if (plan->kind == checkout_kind::remote_branch) {
+				const git_output peeled = run_git(git, { "rev-parse", "--verify", "--quiet", plan->target + "^{commit}" },
+					task.stop, k_read_cap);
+				if (task.stop.stop_requested()) throw ds::task_cancelled{};
+				if (!succeeded(peeled) || trim(peeled.out).empty()) {
+					return error_json("bad_revision", std::format("'{}' is not a commit", vcs::valid_utf8(plan->target)), {}, -1);
+				}
+				target_oid = std::string(trim(peeled.out));
+			}
+			if (auto refusal = policy_refusal(git, target_oid, task)) return std::move(*refusal);
 			if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, plan->target }, task.stop)) {
 				return refusal_json(*refusal, task);
 			}
@@ -1577,7 +1746,7 @@ edt::vcs_service::started edt::vcs_service::start_checkout(const std::string& re
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = tree_write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller.kind, true, false, {} });
+	}, write_mode{ caller.kind, true, false });
 }
 
 edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remote, const cmd::origin& caller)
@@ -1585,15 +1754,24 @@ edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remot
 	if (!remote.empty()) {
 		if (auto error = remote_error(remote)) return { 0, cmd::codes::invalid_args, std::move(*error) };
 	}
-	std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
-	if (!remote.empty()) args.push_back(remote);
-	return run_job("git fetch", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
+	return run_job("git fetch", [remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		if (auto refusal = network_refusal(git, remote, task.stop)) return refusal_json(*refusal, task);
+		std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
+		std::string target = remote;
+		if (git.guarded) {
+			// Resolved once and named to git: the remote checked is the remote fetched from.
+			const network_target resolved = resolve_network_target(git, remote, task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!resolved.error.empty()) return error_json("git_failed", resolved.error, {}, -1);
+			if (auto refusal = remote_refusal(git, resolved.remote)) return std::move(*refusal);
+			target = resolved.remote;
+		}
+		if (auto refusal = network_refusal(git, target, task.stop)) return refusal_json(*refusal, task);
+		if (!target.empty()) args.push_back(target);
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller.kind, false, true, remote });
+	}, write_mode{ caller.kind, false, true });
 }
 
 edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote, const std::string& branch,
@@ -1608,12 +1786,31 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	}
 	// git pull --ff-only in steps, so the filter check sees what the merge would change: fetch, then a fast-forward
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
-	std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
-	if (!remote.empty()) args.push_back(remote);
-	if (!branch.empty()) args.push_back(branch);
-	return run_job("git pull", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
+	return run_job("git pull", [remote, branch](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		if (auto refusal = network_refusal(git, remote, task.stop)) return refusal_json(*refusal, task);
+		std::vector<std::string> args{ "fetch", "--no-recurse-submodules", "--end-of-options" };
+		std::string target = remote;
+		std::string wanted = branch;
+		network_target resolved;
+		if (git.guarded) {
+			// The remote and the branch to merge are resolved once and named to git, so neither a checkout meanwhile
+			// nor git's own defaults can make it fetch from another remote than the one checked.
+			resolved = resolve_network_target(git, remote, task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!resolved.error.empty()) return error_json("git_failed", resolved.error, {}, -1);
+			if (auto refusal = remote_refusal(git, resolved.remote)) return std::move(*refusal);
+			target = resolved.remote;
+		}
+		if (auto refusal = network_refusal(git, target, task.stop)) return refusal_json(*refusal, task);
+		if (git.guarded && wanted.empty()) {
+			std::string why;
+			const std::optional<std::string> upstream = upstream_ref(git, resolved.branch, why, task.stop);
+			if (task.stop.stop_requested()) throw ds::task_cancelled{};
+			if (!upstream) return error_json("git_failed", why, {}, -1);
+			wanted = *upstream;
+		}
+		if (!target.empty()) args.push_back(target);
+		if (!wanted.empty()) args.push_back(wanted);
 		const git_output fetched = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(fetched, task)) return std::move(*failure);
 		const git_output where = run_git(git, { "rev-parse", "--git-path", "FETCH_HEAD" }, task.stop, k_read_cap);
@@ -1640,6 +1837,7 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 		if (fetched_object.empty() || !succeeded(peeled) || commit.empty()) {
 			return error_json("git_failed", "what fetch got for merging is not a commit", fetched.err, -1);
 		}
+		if (auto refusal = policy_refusal(git, commit, task)) return std::move(*refusal);
 		if (auto refusal = filter_refusal(git, touched_files{ touched_kind::target, {}, commit }, task.stop)) {
 			return refusal_json(*refusal, task);
 		}
@@ -1650,7 +1848,7 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 		both.out = fetched.out + merged.out;
 		both.err = fetched.err + merged.err;
 		return output_json(both);
-	}, write_mode{ caller.kind, true, true, remote });
+	}, write_mode{ caller.kind, true, true });
 }
 
 edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote, const std::string& branch,
@@ -1689,11 +1887,14 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 	};
 	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
+		if (git.guarded) {
+			if (auto refusal = remote_refusal(git, remote)) return std::move(*refusal);
+		}
 		if (auto refusal = network_refusal(git, remote, task.stop)) return refusal_json(*refusal, task);
 		const git_output out = run_write(git, args, task.stop);
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
-	}, write_mode{ caller.kind, false, true, remote }, rule);
+	}, write_mode{ caller.kind, false, true }, rule);
 }
 
 namespace {

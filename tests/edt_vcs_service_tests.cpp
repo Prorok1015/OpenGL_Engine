@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include "edt_vcs_service.h"
 #include "edt_path_text.h"
+#include "edt_agent_policy.h"
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_service_commands.h>
 #include <snk/platform/plt_process.h>
@@ -1724,9 +1725,15 @@ BOOST_AUTO_TEST_CASE(AnAgentsCommit_CarriesItsSessionAsATrailer)
 	BOOST_TEST(tagged.ends_with("\n\nAgent-Session: " + session), tagged);
 	BOOST_TEST(tagged.starts_with("Agent change\n\nWhy it was made."), tagged);
 
-	// One already in the message is kept, not doubled.
-	const std::string own = commit_body("Own trailer\n\nAgent-Session: abc\n", cmd::origin::agent(session));
-	BOOST_TEST(own.find(session) == std::string::npos, own);
+	// A forged trailer (any case, any spacing) is dropped and the real one added.
+	const std::string forged = commit_body("Forged\n\nagent-session : evil1\nAGENT-SESSION:evil2\nKeep: me\n", cmd::origin::agent(session));
+	BOOST_TEST(forged.ends_with("\n\nAgent-Session: " + session), forged);
+	BOOST_TEST(forged.find("evil") == std::string::npos, forged);
+	BOOST_TEST(forged.find("Keep: me") != std::string::npos, forged);
+	// With an invalid session the forged line goes too, and nothing is added.
+	const std::string no_session = commit_body("Forged\n\nAgent-Session: abc\n", cmd::origin::agent("NOT-HEX"));
+	BOOST_TEST(no_session.find("Agent-Session") == std::string::npos, no_session);
+	BOOST_TEST(service->start_commit("Agent-Session: abc\n", cmd::origin::agent(session)).code == cmd::codes::invalid_args);
 
 	for (const std::string& bad : std::vector<std::string>{ "0123abcd\nAgent-Session: evil", "0123ABCD", "s1", "", std::string(65, 'a') }) {
 		BOOST_TEST_CONTEXT(bad) {
@@ -1736,6 +1743,87 @@ BOOST_AUTO_TEST_CASE(AnAgentsCommit_CarriesItsSessionAsATrailer)
 	}
 	const std::string by_person = commit_body("By a person", cmd::origin{ cmd::origin_kind::ui, session });
 	BOOST_TEST(by_person.find("Agent-Session") == std::string::npos, by_person);
+}
+
+// Security review of #481: an agent must not change the policy that judges it. A guarded checkout whose target changes
+// the project's .snk/agent_policy.json is denied before git runs; one that leaves the file alone goes through.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_ThatChangesTheAgentPolicyFile_IsDenied)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("policy_checkout");
+	const fs::path policy_file = repo / ".snk" / "agent_policy.json";
+	write(policy_file, "{}\n");
+	git(repo, { "add", ".snk/agent_policy.json" });
+	git(repo, { "commit", "-q", "-m", "a weak policy" });
+	const std::string weak = head_of(repo);
+	const std::string strict = R"({"vcs":{"remotes":[]}})" "\n";
+	write(policy_file, strict);
+	git(repo, { "commit", "-q", "-am", "a strict policy" });
+	const std::string head = head_of(repo);
+	git(repo, { "checkout", "-q", "-b", "side" });
+	write(repo / "other.txt", "other\n");
+	git(repo, { "add", "other.txt" });
+	git(repo, { "commit", "-q", "-m", "not the policy" });
+	git(repo, { "checkout", "-q", "main" });
+	make_service(real_options(repo));
+	const auto read_policy = [&policy_file] {
+		std::ifstream in(policy_file, std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	};
+
+	const json::value refused = finish(service->start_checkout(weak, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(text(refused.as_object().at("error").as_object().at("message")).find(".snk/agent_policy.json") != std::string::npos);
+	BOOST_TEST(read_policy() == strict);
+	BOOST_TEST(head_of(repo) == head);
+
+	const json::value allowed = finish(service->start_checkout("side", cmd::origin_kind::agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+	BOOST_TEST(read_policy() == strict);
+	BOOST_TEST(fs::exists(repo / "other.txt"));
+}
+
+// The same with the project in a subfolder of the repository: the project's game/.snk/agent_policy.json is the one
+// checked, not a .snk at the repository's top.
+BOOST_AUTO_TEST_CASE(AGuardedCheckout_ChecksThePolicyFileOfAProjectInASubfolder)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("policy_subfolder");
+	const fs::path project = repo / "game";
+	write(project / ".snk" / "agent_policy.json", "{}\n");
+	git(repo, { "add", "game/.snk/agent_policy.json" });
+	git(repo, { "commit", "-q", "-m", "a weak policy" });
+	const std::string weak = head_of(repo);
+	write(project / ".snk" / "agent_policy.json", R"({"vcs":{"remotes":[]}})" "\n");
+	git(repo, { "commit", "-q", "-am", "a strict policy" });
+	git(repo, { "checkout", "-q", "-b", "side" });
+	write(repo / ".snk" / "agent_policy.json", "{}\n");
+	git(repo, { "add", ".snk/agent_policy.json" });
+	git(repo, { "commit", "-q", "-m", "a file of the same name outside the project" });
+	git(repo, { "checkout", "-q", "main" });
+	make_service(real_options(project));
+
+	BOOST_TEST(is_error(finish(service->start_checkout(weak, cmd::origin_kind::agent)), "denied"));
+	const json::value allowed = finish(service->start_checkout("side", cmd::origin_kind::agent));
+	BOOST_TEST(!allowed.as_object().contains("error"), json::serialize(allowed));
+}
+
+// Security review of #481: with no remote named, the remote checked is the one git would use (the branch's), and
+// a local URL rewrite under allow_any_repo_config changes nothing about that.
+BOOST_AUTO_TEST_CASE(AnAgentsPull_WithoutARemote_IsCheckedAgainstTheBranchsRemote)
+{
+	isolate_config();
+	const fs::path repo = make_plain_repository("branch_remote");
+	git(repo, { "remote", "add", "origin", "https://example.invalid/origin.git" });
+	git(repo, { "remote", "add", "upstream", "https://example.invalid/upstream.git" });
+	git(repo, { "config", "branch.main.remote", "upstream" });
+	git(repo, { "config", "branch.main.merge", "refs/heads/main" });
+	git(repo, { "config", "url.https://mirror.example.invalid/.insteadOf", "https://example.invalid/" });
+	make_service(real_options(repo));
+	service->set_write_permissions({ false, false, false, true });
+
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "denied"));
+	BOOST_TEST(is_error(finish(service->start_fetch({}, cmd::origin_kind::agent)), "denied"));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
@@ -2248,8 +2336,12 @@ BOOST_AUTO_TEST_CASE(AnAgentsWrite_RunsNoHooksNoAskpassAndTheEditorsSsh)
 BOOST_AUTO_TEST_CASE(AGuardedPull_MergesTheOidItChecked)
 {
 	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
-	command = [](const std::vector<std::string>&, const platform::process_options&,
-		const std::function<void(std::string_view)>&, std::stop_token) { return exited(0); };
+	command = [](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "symbolic-ref")) on_line("main\n");
+		if (has_arg(args, "branch.main.merge")) on_line("refs/heads/main\n");
+		return exited(0);
+	};
 	auto options = fake_options();
 	options.run = [inner = options.run](const fs::path& git, const std::vector<std::string>& args,
 		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
@@ -2262,6 +2354,13 @@ BOOST_AUTO_TEST_CASE(AGuardedPull_MergesTheOidItChecked)
 	make_service(std::move(options));
 	const json::value result = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
 	BOOST_TEST(!result.as_object().contains("error"), json::serialize(result));
+	// The remote and the upstream, resolved once, are named to git.
+	const auto fetch = std::find_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "fetch"); });
+	BOOST_REQUIRE(fetch != calls.end());
+	BOOST_REQUIRE(fetch->size() >= 3u);
+	BOOST_TEST((*fetch)[fetch->size() - 3] == "--end-of-options");
+	BOOST_TEST((*fetch)[fetch->size() - 2] == "origin");
+	BOOST_TEST(fetch->back() == "refs/heads/main");
 	const auto& merge = calls.back();
 	BOOST_TEST(has_arg(merge, "merge"));
 	BOOST_TEST(merge.back() == "2222222222222222222222222222222222222222");
@@ -2303,6 +2402,14 @@ BOOST_AUTO_TEST_CASE(AFilterDriver_RefusesAnAgentsTreeWrite_OnlyWhereItApplies)
 			for (const auto& path : after_dash_dash()) {
 				on_line(path + '\0' + "filter" + '\0' + (path.ends_with(".bin") ? "lfs" : "unspecified") + '\0');
 			}
+			return exited(0);
+		}
+		if (has_arg(args, "symbolic-ref")) {
+			on_line("main\n");
+			return exited(0);
+		}
+		if (has_arg(args, "branch.main.merge")) {
+			on_line("refs/heads/main\n");
 			return exited(0);
 		}
 		for (const char* subcommand : { "add", "reset", "commit", "checkout", "merge", "branch", "fetch", "push" }) {
@@ -2642,6 +2749,148 @@ BOOST_AUTO_TEST_CASE(TheVcsGlob)
 	BOOST_TEST(!edt::vcs_glob_match("main", "main2"));
 	BOOST_TEST(edt::vcs_glob_match("a*b*c", "a/x/b/y/c"));
 	BOOST_TEST(!edt::vcs_glob_match("a*b*c", "a/x/b/y/d"));
+}
+
+// Security review of #481: a branch without a remote in a repository whose only remote is not origin: git uses that
+// remote, so the check does too, and git is then told the remote (and the upstream) by name.
+BOOST_AUTO_TEST_CASE(AnOmittedRemote_IsResolvedOnce_AsGitWould_AndNamedToGit)
+{
+	bool detached = false;
+	command = [&detached](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "symbolic-ref")) {
+			if (detached) return exited(1);
+			on_line("main\n");
+			return exited(0);
+		}
+		if (has_arg(args, "branch.main.remote")) return exited(1);
+		if (has_arg(args, "branch.main.merge")) {
+			on_line("refs/heads/main\n");
+			return exited(0);
+		}
+		if (has_arg(args, "remote")) {
+			on_line("upstream\n");
+			return exited(0);
+		}
+		return exited(0);
+	};
+	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
+	make_service(fake_options());
+	const auto fetches = [this] {
+		std::vector<std::vector<std::string>> out;
+		for (const auto& call : calls) {
+			if (has_arg(call, "fetch")) out.push_back(call);
+		}
+		return out;
+	};
+	const auto agent = cmd::origin_kind::agent;
+
+	BOOST_TEST(is_error(finish(service->start_fetch({}, agent)), "denied"));
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, agent)), "denied"));
+	BOOST_TEST(fetches().empty());
+
+	service->set_policy_source([] {
+		edt::vcs_policy policy;
+		policy.remotes = { "upstream" };
+		return policy;
+	});
+	BOOST_TEST(!finish(service->start_fetch({}, agent)).as_object().contains("error"));
+	BOOST_REQUIRE_EQUAL(fetches().size(), 1u);
+	auto fetch = fetches().back();
+	BOOST_REQUIRE(fetch.size() >= 2u);
+	BOOST_TEST(fetch[fetch.size() - 2] == "--end-of-options");
+	BOOST_TEST(fetch.back() == "upstream");
+
+	finish(service->start_pull({}, {}, agent));
+	BOOST_REQUIRE_EQUAL(fetches().size(), 2u);
+	fetch = fetches().back();
+	BOOST_REQUIRE(fetch.size() >= 3u);
+	BOOST_TEST(fetch[fetch.size() - 3] == "--end-of-options");
+	BOOST_TEST(fetch[fetch.size() - 2] == "upstream");
+	BOOST_TEST(fetch.back() == "refs/heads/main");
+
+	// Detached: no upstream to name, so no guess either.
+	detached = true;
+	const json::value refused = finish(service->start_pull({}, {}, agent));
+	BOOST_TEST(is_error(refused, "git_failed"), json::serialize(refused));
+	BOOST_TEST(fetches().size() == 2u);
+}
+
+// Security review of #481: a guarded pull whose fetched commit changes the policy file is denied before the merge;
+// on a branch without commits, a target that holds the file is denied too.
+BOOST_AUTO_TEST_CASE(AGuardedPull_ThatChangesTheAgentPolicyFile_IsDenied)
+{
+	write(base / "FETCH_HEAD", "1111111111111111111111111111111111111111\t\tbranch 'main' of /elsewhere\n");
+	bool changes_policy = true;
+	bool unborn = false;
+	command = [&changes_policy](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>& on_line, std::stop_token) {
+		if (has_arg(args, "symbolic-ref")) on_line("main\n");
+		if (has_arg(args, "branch.main.merge")) on_line("refs/heads/main\n");
+		if (has_arg(args, "diff-tree")) return exited(changes_policy ? 1 : 0);
+		return exited(0);
+	};
+	auto options = fake_options();
+	options.run = [inner = options.run, &unborn](const fs::path& git, const std::vector<std::string>& args,
+		const platform::process_options& opts, const std::function<void(std::string_view)>& on_line, std::stop_token stop) {
+		if (has_arg(args, "1111111111111111111111111111111111111111^{commit}")) {
+			on_line("2222222222222222222222222222222222222222\n");
+			return exited(0);
+		}
+		if (unborn && has_arg(args, "HEAD^{commit}")) return exited(1);
+		return inner(git, args, opts, on_line, stop);
+	};
+	make_service(std::move(options));
+	const auto merged = [this] {
+		return std::any_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "merge"); });
+	};
+
+	const json::value refused = finish(service->start_pull({}, {}, cmd::origin_kind::agent));
+	BOOST_TEST(is_error(refused, "denied"), json::serialize(refused));
+	BOOST_TEST(!merged());
+	const auto diff = std::find_if(calls.begin(), calls.end(), [](const std::vector<std::string>& call) { return has_arg(call, "diff-tree"); });
+	BOOST_REQUIRE(diff != calls.end());
+	BOOST_TEST(has_arg(*diff, "2222222222222222222222222222222222222222"));
+	BOOST_TEST(diff->back() == ".snk/agent_policy.json");
+
+	changes_policy = false;
+	BOOST_TEST(!finish(service->start_pull({}, {}, cmd::origin_kind::agent)).as_object().contains("error"));
+	BOOST_TEST(merged());
+
+	// No HEAD yet: cat-file -e finds the file in the target (the fake answers 0).
+	calls.clear();
+	unborn = true;
+	BOOST_TEST(is_error(finish(service->start_pull({}, {}, cmd::origin_kind::agent)), "denied"));
+	BOOST_TEST(!merged());
+	BOOST_TEST(std::any_of(calls.begin(), calls.end(), [](const std::vector<std::string>& call) {
+		return has_arg(call, "cat-file") && has_arg(call, "2222222222222222222222222222222222222222:.snk/agent_policy.json");
+	}));
+}
+
+// Security review of #481, end to end: a personal policy that tries to switch a flag on is broken, effective_vcs is
+// the strictest, and a vcs_service fed from it refuses an agent's push and fetch.
+BOOST_AUTO_TEST_CASE(APersonalLayerThatAllowsAFlag_ClosesEveryAgentNetworkCall)
+{
+	bool network = false;
+	command = [&network](const std::vector<std::string>& args, const platform::process_options&,
+		const std::function<void(std::string_view)>&, std::stop_token) {
+		if (has_arg(args, "push") || has_arg(args, "fetch")) network = true;
+		return exited(0);
+	};
+	write(base / "project.json", R"({"vcs":{"push_branches":["*"],"remotes":["origin"]}})");
+	write(base / "personal.json", R"({"vcs":{"allow_hooks":true}})");
+	edt::agent_policy policy{ base / "project.json", base / "personal.json" };
+	const edt::vcs_policy effective = policy.effective_vcs();
+	BOOST_TEST(!policy.personal_error().empty());
+	BOOST_TEST(effective.push_branches.empty());
+	BOOST_TEST(effective.remotes.empty());
+	BOOST_TEST(!effective.permissions.allow_hooks);
+
+	make_service(fake_options());
+	service->set_policy_source([&policy] { return policy.effective_vcs(); });
+	BOOST_TEST(is_error(finish(service->start_push("origin", "agent/x", false, cmd::origin_kind::agent)), "denied"));
+	BOOST_TEST(is_error(finish(service->start_fetch("origin", cmd::origin_kind::agent)), "denied"));
+	BOOST_TEST(!network);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
