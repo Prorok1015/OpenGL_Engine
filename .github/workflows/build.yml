@@ -539,7 +539,8 @@ jobs:
       # #452: --headless runs with no display at all (no Xvfb, DISPLAY unset): a null window, the null renderer, no
       # panels. stdout stays empty (it is reserved for a protocol), the log goes to stderr. The level load is async and
       # logs nothing else on success: editor/exit_after_level_loaded ends the run with 0 once "level loaded" is logged,
-      # app/exit_after_frames is only the cap (reaching it means the level never loaded). Without --project the run
+      # app/exit_after_frames is only the cap (reaching it means the level never loaded; the frame limiter is off so the
+      # cap comes before the timeout). Without --project the run
       # is a project error (exit 2).
       - name: Headless run (no display)
         run: |
@@ -549,7 +550,7 @@ jobs:
           rc=0
           env -u DISPLAY -u WAYLAND_DISPLAY timeout 120 "$EDITOR_BIN" --config Editor/config/editor.cfg --headless \
             --project projects/sandbox --set editor/startup_level levels/smoke_level.desc \
-            editor/exit_after_level_loaded true app/exit_after_frames 20000 \
+            editor/exit_after_level_loaded true app/exit_after_frames 20000 app/headless_target_fps 0 \
             >"$out" 2>"$err" || rc=$?
           tail -20 "$err"
           if [ "$rc" -ne 0 ]; then echo "expected exit code 0, got $rc (124 = timed out)"; exit 1; fi
