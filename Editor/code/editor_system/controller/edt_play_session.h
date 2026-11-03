@@ -27,14 +27,14 @@ namespace edt
 		// user:// of this resource system is served from `play_profile` while Play runs (emptied at every start) and
 		// from the roots `editor_profile` again after Stop. Null or an empty path: user:// is left alone (no project).
 		res::resource_system* profile_resources = nullptr;
-		std::filesystem::path play_profile;
-		std::vector<std::filesystem::path> editor_profile;
+		std::filesystem::path play_profile{};
+		std::vector<std::filesystem::path> editor_profile{};
 		// Shows the selection taken before Play again (the hierarchy, which goes on to select it); false: it could not.
 		// Null: selection_service::select.
-		std::function<bool(const selection&)> restore_selection;
+		std::function<bool(const selection&)> restore_selection{};
 		// Why Play cannot start now besides the session's own reasons (a level or an asset still loading: the document
 		// is about to change under it); nullopt: nothing. Null: nothing ever.
-		std::function<std::optional<std::string>()> start_blocker;
+		std::function<std::optional<std::string>()> start_blocker{};
 	};
 
 	// Play of the scene document (ADR-07, WORLD_CONTEXT.md decision 2): a session of the document, not a document. Start
