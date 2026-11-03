@@ -48,6 +48,13 @@ edt::vcs::repository_watcher::repository_watcher(ports ports)
 
 void edt::vcs::repository_watcher::follow(const vcs_service& service)
 {
+	if (service.current_project() != service.probed_project()) {
+		// The old repository is not the project's any more; whatever probes next arms it again (forgetting the
+		// generation also re-arms a switch back to the probed project).
+		if (m_armed) set_paths({}, {}, {}, {});
+		m_followed_generation.reset();
+		return;
+	}
 	const std::uint64_t generation = service.state_generation();
 	if (m_followed_generation == generation) return;
 	m_followed_generation = generation;
@@ -134,8 +141,10 @@ edt::vcs::repository_changes edt::vcs::repository_watcher::tick()
 	bool switched = false;
 	std::optional<stamps> walked = walked_refs_stamps(switched);
 	if (!walked) return out;
-	// The first finished walk, or the switch to folders only, is a new baseline: not a change by itself.
+	// The switch to folders only, or the first finished walk after given-up ones, has nothing to compare with: a
+	// ref written meanwhile would be lost, so it reports refs once.
 	if (switched || !m_walked_refs) {
+		out.refs = true;
 		m_walked_refs = std::move(walked);
 		return out;
 	}

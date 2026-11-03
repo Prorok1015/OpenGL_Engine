@@ -122,6 +122,12 @@ namespace edt
 		std::uint64_t state_generation() const { return m_state_generation; }
 		// The project root the cached state was probed for.
 		const std::optional<std::filesystem::path>& probed_project() const { return m_probed_project; }
+		// The open project's root now (vcs_options::project_root), never probing: differs from probed_project() after a
+		// project switch nothing has probed yet.
+		std::optional<std::filesystem::path> current_project() const
+		{
+			return m_options.project_root ? m_options.project_root() : std::nullopt;
+		}
 
 		// Called on the main thread as each write job that runs git is started, before git can run
 		// (repository_watcher: what the editor's own writes do to the index and the work tree is not news). Reads pass

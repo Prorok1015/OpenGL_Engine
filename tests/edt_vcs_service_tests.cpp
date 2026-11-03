@@ -4329,19 +4329,41 @@ BOOST_AUTO_TEST_CASE(TheWatcher_FollowsTheCachedStateWithoutProbing_AndReArmsAft
 	BOOST_REQUIRE(watcher.armed());
 	BOOST_TEST(watcher.watched_git_dir() == *service->cached_state().git_dir);
 
-	std::error_code ec;
+	// A switch nothing has probed yet: the old repository is not watched any more, and nothing is probed.
 	project = second;
-	frames();
+	watcher.follow(*service);
+	BOOST_TEST(!watcher.armed());
+	fs::create_directories(first / ".git" / "refs" / "heads");
+	std::ofstream(first / ".git" / "HEAD") << "ref: refs/heads/main\n";
+	bool any = false;
+	for (int i = 0; i < 100; ++i) {
+		watcher.follow(*service);
+		now += std::chrono::milliseconds{ 100 };
+		any = watcher.tick().any() || any;
+	}
+	BOOST_TEST(!any);
+	BOOST_TEST(!watcher.armed());
 	BOOST_TEST(probes == 1);
-	BOOST_TEST(fs::equivalent(watcher.watched_git_dir(), first / ".git", ec));
 
+	// The probe (vcs.info, the panel's refresh) arms it on the new repository.
 	BOOST_TEST(service->info().available);
 	BOOST_TEST(probes == 2);
 	watcher.follow(*service);
+	BOOST_REQUIRE(watcher.armed());
 	BOOST_REQUIRE(service->cached_state().git_dir.has_value());
 	BOOST_TEST(watcher.watched_git_dir() == *service->cached_state().git_dir);
+	std::error_code ec;
 	BOOST_TEST(fs::equivalent(watcher.watched_git_dir(), second / ".git", ec));
 	BOOST_TEST(fs::equivalent(*service->cached_state().common_dir, second / ".git", ec));
+
+	// Away and back without a probe: back on the probed project, it watches again from the cached state.
+	project = first;
+	watcher.follow(*service);
+	BOOST_TEST(!watcher.armed());
+	project = second;
+	watcher.follow(*service);
+	BOOST_TEST(watcher.armed());
+	BOOST_TEST(probes == 2);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

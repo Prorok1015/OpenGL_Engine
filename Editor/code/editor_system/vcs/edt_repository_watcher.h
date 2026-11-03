@@ -80,7 +80,8 @@ namespace edt::vcs
 		const std::filesystem::path& watched_git_dir() const { return m_git_dir; }
 
 		// Re-arms from the service's cached state when its state_generation() moved since the last call (never probes:
-		// the watcher follows whatever probed, e.g. vcs.info or the Git panel's refresh).
+		// the watcher follows whatever probed, e.g. vcs.info or the Git panel's refresh). Off while the open project is
+		// not the one the state was probed for (a switch nothing has probed yet).
 		void follow(const vcs_service& service);
 
 		// A git write of the editor starts (vcs_service's write observer), before its git runs: an index change seen up
@@ -103,7 +104,8 @@ namespace edt::vcs
 		// HEAD, FETCH_HEAD, ORIG_HEAD, MERGE_HEAD, packed-refs.
 		stamps fixed_refs_stamps() const;
 		// refs/: every file, or (folders only) the folders found by the last folder walk; nullopt when a slow walk was
-		// given up (nothing known this time). `switched`: this call moved to folders only.
+		// given up (nothing known this time). `switched`: this call moved to folders only (nothing to compare with:
+		// tick reports refs once rather than lose a change).
 		std::optional<stamps> walked_refs_stamps(bool& switched);
 		// Every file under refs/, given up past the entry or time budget.
 		walk_result walk_ref_files(stamps& out) const;

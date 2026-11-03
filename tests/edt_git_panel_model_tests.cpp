@@ -451,36 +451,25 @@ BOOST_AUTO_TEST_CASE(ARefsChange_RefreshesTheStatus_AndTheHistory)
 	BOOST_TEST(model.refs_changed() == 1u);
 }
 
-// The panel's own write already reloaded the History tab (writes_finished): the refs change it made is not a second reload.
-BOOST_AUTO_TEST_CASE(TheRefsChangeOfThePanelsOwnWrite_DoesNotReloadTheHistoryAgain)
+// Every refs change reloads the History tab, also right after a write of the panel (owner decision: one extra
+// reload after the panel's own commit rather than a lost one after a commit made outside).
+BOOST_AUTO_TEST_CASE(AStageThenAnOutsideCommitWithinTwoSeconds_ReloadsTheHistory)
 {
 	open_and_read();
-	model.fetch();
-	finish("vcs.fetch", json::object{ { "output", "" } });
+	model.set_staged("src/b.cpp", true);
+	finish("vcs.stage", json::object{ { "output", "" } });
 	BOOST_TEST(model.writes_finished() == 1u);
-	now += 300ms;
-	events.repository_changed.emit(edt::repository_change::refs);
-	now += edt::git_panel_model::k_repo_delay;
-	model.tick();
-	BOOST_TEST(model.refs_changed() == 0u);
-
-	// A later one (a commit in a terminal) is not the write's.
+	now += 1500ms;
 	events.repository_changed.emit(edt::repository_change::refs);
 	now += edt::git_panel_model::k_repo_delay;
 	model.tick();
 	BOOST_TEST(model.refs_changed() == 1u);
-}
 
-BOOST_AUTO_TEST_CASE(ARefsChangeLongAfterAPanelWrite_ReloadsTheHistory)
-{
-	open_and_read();
-	model.fetch();
-	finish("vcs.fetch", json::object{ { "output", "" } });
 	now += 10s;
 	events.repository_changed.emit(edt::repository_change::refs);
 	now += edt::git_panel_model::k_repo_delay;
 	model.tick();
-	BOOST_TEST(model.refs_changed() == 1u);
+	BOOST_TEST(model.refs_changed() == 2u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

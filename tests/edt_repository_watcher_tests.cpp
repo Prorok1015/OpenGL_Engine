@@ -229,15 +229,18 @@ BOOST_AUTO_TEST_CASE(TooManyRefs_WatchesOnlyTheirFolders_AndStillSeesANewBranchF
 	BOOST_TEST(nothing());
 }
 
-BOOST_AUTO_TEST_CASE(RefsGrowingPastTheBudget_SwitchToFolders_AndThatPollReportsNothing)
+// The poll that switches has nothing to compare the folders with: it reports refs once rather than lose a ref
+// written meanwhile.
+BOOST_AUTO_TEST_CASE(RefsGrowingPastTheBudget_SwitchToFolders_AndThatPollReportsRefsOnce)
 {
 	arm();
 	BOOST_TEST(!watcher->refs_folders_only());
 	for (std::size_t i = 0; i <= watcher_t::k_refs_budget; ++i) {
 		write(git_dir / "refs" / "remotes" / "origin" / std::format("b{}", i), 41);
 	}
-	BOOST_TEST(nothing());
+	BOOST_TEST(only_refs());
 	BOOST_TEST(watcher->refs_folders_only());
+	BOOST_TEST(nothing());
 	write(git_dir / "refs" / "heads" / "topic", 41);
 	BOOST_TEST(only_refs());
 }
@@ -248,7 +251,8 @@ BOOST_AUTO_TEST_CASE(OneSlowRefsWalk_KeepsWatchingEveryFile)
 	arm();
 	BOOST_TEST(!watcher->refs_folders_only());
 	listing_takes = {};
-	// The first walk that finishes is the baseline.
+	// The first walk that finishes after a given-up one has nothing to compare with: refs once.
+	BOOST_TEST(only_refs());
 	BOOST_TEST(nothing());
 	// An existing ref rewritten in place: only a per-file watch sees it.
 	write(git_dir / "refs" / "heads" / "main", 41);
@@ -256,15 +260,27 @@ BOOST_AUTO_TEST_CASE(OneSlowRefsWalk_KeepsWatchingEveryFile)
 	BOOST_TEST(!watcher->refs_folders_only());
 }
 
-BOOST_AUTO_TEST_CASE(ThreeSlowRefsWalksInARow_WatchOnlyTheirFolders_AndTheSwitchReportsNothing)
+BOOST_AUTO_TEST_CASE(ThreeSlowRefsWalksInARow_WatchOnlyTheirFolders_AndTheSwitchReportsRefsOnce)
 {
 	listing_takes = 3ms;
 	arm();
 	BOOST_TEST(nothing());
 	BOOST_TEST(!watcher->refs_folders_only());
-	BOOST_TEST(nothing());
+	BOOST_TEST(only_refs());
 	BOOST_TEST(watcher->refs_folders_only());
+	BOOST_TEST(nothing());
 	write(git_dir / "refs" / "heads" / "topic", 41);
+	BOOST_TEST(only_refs());
+	BOOST_TEST(nothing());
+}
+
+BOOST_AUTO_TEST_CASE(ARefWrittenDuringAGivenUpWalk_IsReportedByTheNextFinishedOne)
+{
+	arm();
+	listing_takes = 3ms;
+	write(git_dir / "refs" / "heads" / "topic", 41);
+	BOOST_TEST(nothing());
+	listing_takes = {};
 	BOOST_TEST(only_refs());
 	BOOST_TEST(nothing());
 }
@@ -274,7 +290,7 @@ BOOST_AUTO_TEST_CASE(AFastRefsWalk_StartsTheSlowCountAgain)
 	listing_takes = 3ms;
 	arm();
 	listing_takes = {};
-	BOOST_TEST(nothing());
+	BOOST_TEST(only_refs());
 	listing_takes = 3ms;
 	BOOST_TEST(nothing());
 	BOOST_TEST(nothing());
