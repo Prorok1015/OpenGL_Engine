@@ -84,8 +84,10 @@ namespace mcp
 		boost::json::value initialize(const boost::json::value& id, const boost::json::object& params, bool& accepted) const;
 
 		// A request of an open session, other than initialize: ping, tools/*, resources/*; anything else is
-		// method_not_found. `reply` is called exactly once, possibly later and from another thread (when the host answers
-		// later). A host that throws inline throws out of here; the transport answers with an internal error.
+		// method_not_found. `reply` is called at most once, possibly later and from another thread (when the host answers
+		// later); never, when the host drops a cancelled call's answer: the transport completes the request when the last
+		// copy of `reply` is destroyed. A host that throws inline throws out of here; the transport answers with an
+		// internal error.
 		void dispatch(const std::string& method, const boost::json::value& id, const boost::json::object& params,
 			const rpc_session& session, const reply_sink& reply) const;
 

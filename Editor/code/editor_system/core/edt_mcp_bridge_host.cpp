@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -125,8 +126,8 @@ namespace {
 		return command.needs_display && registry.headless();
 	}
 
-	// A result that names a job may come back with the job's outcome (a client that asked for progress waits for it):
-	// the declared schema lets those fields through, also where it closes the object.
+	// The answer of a `starts_job` command may come back with the job's outcome (a client that asked for progress waits
+	// for it): the declared schema lets those fields through, also where it closes the object.
 	json::value with_job_outcome(json::value schema)
 	{
 		if (!schema.is_object()) {
@@ -152,7 +153,7 @@ namespace {
 		tool.description = command.summary;
 		tool.input_schema = command.args_schema;
 		if (!has_png_field(command.result_schema)) {
-			tool.output_schema = with_job_outcome(command.result_schema);
+			tool.output_schema = command.starts_job ? with_job_outcome(command.result_schema) : command.result_schema;
 		}
 		tool.read_only = !command.mutates;
 		// MCP reads a missing destructiveHint as true for a tool that writes: say it where the command is not risky.
@@ -245,12 +246,19 @@ namespace {
 		return std::nullopt;
 	}
 
+	// The job's outcome added to the command's answer. The answer goes out twice (structuredContent and its text copy),
+	// so a job result over half the response limit is left out (`result_dropped`; job.get still has it) rather than
+	// turning the whole answer into a "too large" error that would lose the job and its status.
 	mcp::call_result job_outcome(json::object answer, edt::job_status status, const std::string& error,
 		const std::optional<json::value>& result, bool result_dropped)
 	{
 		answer["status"] = edt::job_status_name(status);
 		if (result) {
-			answer["result"] = *result;
+			if (json::serialize(*result).size() > agent_max_response_bytes / 2) {
+				result_dropped = true;
+			} else {
+				answer["result"] = *result;
+			}
 		}
 		if (status == edt::job_status::failed || !error.empty()) {
 			answer["error"] = json::string(std::string_view(error));
@@ -314,9 +322,23 @@ struct edt::mcp_bridge_host::state
 		time_point deadline{};
 		time_point last_sent{};
 		bool sent_any = false;
-		// The latest progress that came within the interval after the last one sent.
+		// MCP wants the progress of one token to increase: a value not above it is not sent.
+		float last_fraction = 0.f;
+		// The highest progress that came within the interval after the last one sent, with the latest note.
 		std::optional<std::pair<float, std::string>> waiting;
 	};
+
+	// A tools/call between its hop to the main thread and its answer (or hold). notifications/cancelled or the end of
+	// the session may come while it waits for a person or a busy retry: it is marked, and its answer is dropped then.
+	struct pending_call
+	{
+		std::string session;
+		json::value request_id;
+		bool cancelled = false;
+	};
+
+	// At most this many calls of one session wait for their jobs; more are answered at once with `{job}`.
+	static constexpr std::size_t max_held_per_session = 16;
 
 	cmd::command_registry* commands = nullptr;
 	agent_access* access = nullptr;
@@ -325,6 +347,8 @@ struct edt::mcp_bridge_host::state
 	job_service* jobs = nullptr;
 	mcp_bridge_options options;
 	std::vector<held_call> held;
+	std::map<std::uint64_t, pending_call> pending;
+	std::uint64_t next_pending = 1;
 	connection progress_listener;
 	connection finished_listener;
 
@@ -340,6 +364,7 @@ struct edt::mcp_bridge_host::state
 		}
 		call.last_sent = at;
 		call.sent_any = true;
+		call.last_fraction = fraction;
 		call.waiting.reset();
 	}
 
@@ -351,13 +376,37 @@ struct edt::mcp_bridge_host::state
 		}
 	}
 
+	std::uint64_t begin_call(std::string session, json::value request_id)
+	{
+		const std::uint64_t key = next_pending++;
+		pending.emplace(key, pending_call{ std::move(session), std::move(request_id), false });
+		return key;
+	}
+
+	// Forgets the call; true when it was cancelled meanwhile.
+	bool end_call(std::uint64_t key)
+	{
+		const auto found = pending.find(key);
+		if (found == pending.end()) {
+			return false;
+		}
+		const bool cancelled = found->second.cancelled;
+		pending.erase(found);
+		return cancelled;
+	}
+
 	// Holds the answer while the job runs, answers at once with its outcome when it already ended. False: the service
-	// does not know the job, and `done` was not used.
+	// does not know the job, or the session already has max_held_per_session calls held, and `done` was not used.
 	bool follow(std::uint64_t job, json::object answer, std::string session, json::value request_id, mcp::progress_sink& progress,
 		std::function<void(mcp::call_result)>& done)
 	{
 		const std::optional<job_service::job_info> info = jobs->info(job);
 		if (!info) {
+			return false;
+		}
+		const std::size_t session_held = static_cast<std::size_t>(
+			std::count_if(held.begin(), held.end(), [&session](const held_call& call) { return call.session == session; }));
+		if (info->status == job_status::running && session_held >= max_held_per_session) {
 			return false;
 		}
 		if (info->status != job_status::running) {
@@ -383,10 +432,17 @@ struct edt::mcp_bridge_host::state
 			if (call.job != job) {
 				continue;
 			}
+			if (call.sent_any && fraction <= call.last_fraction) {
+				if (call.waiting) {
+					call.waiting->second = note;
+				}
+				continue;
+			}
 			if (!call.sent_any || at - call.last_sent >= options.progress_interval) {
 				send(call, fraction, note, at);
 			} else {
-				call.waiting.emplace(fraction, note);
+				const float highest = call.waiting ? std::max(call.waiting->first, fraction) : fraction;
+				call.waiting.emplace(highest, note);
 			}
 		}
 	}
@@ -401,10 +457,17 @@ struct edt::mcp_bridge_host::state
 		}
 	}
 
-	// Cancels the jobs of the calls `match` picks and drops their answers.
+	// Cancels the jobs of the calls `match` picks and drops their answers (the transport completes a request whose
+	// answer is dropped); calls not held yet are marked, and their answers dropped when they come. Only a `starts_job`
+	// command's call is held, so the job is the one this call started, never one it merely reported.
 	template<class Match>
 	void cancel(Match match)
 	{
+		for (auto& entry : pending) {
+			if (match(entry.second)) {
+				entry.second.cancelled = true;
+			}
+		}
 		const std::vector<held_call> dropped = take(match);
 		for (const held_call& call : dropped) {
 			if (jobs != nullptr) {
@@ -480,6 +543,7 @@ edt::mcp_bridge_host::~mcp_bridge_host()
 	m_state->finished_listener.disconnect();
 	// The answers are dropped unsent: the server that would carry them has stopped.
 	m_state->held.clear();
+	m_state->pending.clear();
 }
 
 void edt::mcp_bridge_host::tick()
@@ -490,6 +554,8 @@ void edt::mcp_bridge_host::tick()
 void edt::mcp_bridge_host::cancel_request(std::string session_id, json::value request_id)
 {
 	m_tasks.post_main([state = m_state, session = std::move(session_id), request_id = std::move(request_id)] {
+		// The call hopped to the main thread before this did (one queue, in order), so it is pending or held by now,
+		// or already answered (nothing to do).
 		state->cancel([&](const auto& call) { return call.session == session && call.request_id == request_id; });
 	});
 }
@@ -539,21 +605,28 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 				return;
 			}
 		}
+		const bool starts_job = command->starts_job;
 		cmd::call request;
 		request.args = std::move(limited);
 		request.from = cmd::origin::agent(session);
+		const std::uint64_t key = state->begin_call(session, request_id);
 		// `done` may be called later (a person is asked, a gesture is waited out). The closure holds the answer to the
 		// client and a weak reference to the state, never the bridge.
 		state->access->confirmations().invoke(id, std::move(request),
-			[weak = std::weak_ptr<mcp_bridge_host::state>(state), session = std::move(session), request_id = std::move(request_id),
-				wants_progress, progress = std::move(progress), done = std::move(done)](cmd::result outcome) mutable {
-				if (outcome.ok && wants_progress) {
-					const std::shared_ptr<mcp_bridge_host::state> self = weak.lock();
-					const std::optional<std::uint64_t> job = job_of(outcome.value);
-					if (self != nullptr && self->jobs != nullptr && job
-						&& self->follow(*job, outcome.value.as_object(), std::move(session), std::move(request_id), progress, done)) {
-						return;
+			[weak = std::weak_ptr<mcp_bridge_host::state>(state), key, session = std::move(session), request_id = std::move(request_id),
+				wants_progress, starts_job, progress = std::move(progress), done = std::move(done)](cmd::result outcome) mutable {
+				const std::shared_ptr<mcp_bridge_host::state> self = weak.lock();
+				const std::optional<std::uint64_t> job = (outcome.ok && starts_job) ? job_of(outcome.value) : std::nullopt;
+				if (self != nullptr && self->end_call(key)) {
+					// Cancelled while it waited: no answer (`done` is dropped), and the job it started stops.
+					if (job && self->jobs != nullptr) {
+						self->jobs->cancel(*job);
 					}
+					return;
+				}
+				if (wants_progress && job && self != nullptr && self->jobs != nullptr
+					&& self->follow(*job, outcome.value.as_object(), std::move(session), std::move(request_id), progress, done)) {
+					return;
 				}
 				done(to_call_result(std::move(outcome)));
 			});

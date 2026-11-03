@@ -145,6 +145,10 @@ namespace cmd
 		// It reads or draws what only a display produces (a viewport capture): in a headless process
 		// (command_registry::set_headless) every call is `unavailable_headless`, whoever makes it.
 		bool needs_display = false;
+		// The command itself starts a job_service job and answers `{job: N}` with it (vcs.fetch, build.game_module). An
+		// MCP client that asked for progress then gets the answer when that job ends, and cancelling the call cancels
+		// the job. Never set it on a command that only reports a job someone else started (job.get, live.status).
+		bool starts_job = false;
 		std::function<result(const call&)> invoke;
 		// Null: always enabled.
 		std::function<bool()> enabled;

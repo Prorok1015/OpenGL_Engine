@@ -805,6 +805,21 @@ BOOST_AUTO_TEST_CASE(Progress_FollowsAReconnectedStream)
 	BOOST_TEST(text_of(events[0].at("params").at("message")) == "after the reconnect");
 }
 
+BOOST_AUTO_TEST_CASE(AnAnswerTheHostDrops_CompletesThePostEmptyAndCloses)
+{
+	host.set_defer_calls(true);
+	const std::string session = initialize();
+	const pending_response response = try_send(session_request(session, rpc("5", "tools/call", R"({"name":"long"})")));
+	BOOST_REQUIRE(host.wait_for_deferred(1));
+	BOOST_TEST(!response->has_value());
+
+	BOOST_TEST(host.drop_deferred());
+	BOOST_REQUIRE(response->has_value());
+	BOOST_TEST((*response)->status == 202);
+	BOOST_TEST((*response)->body.empty());
+	BOOST_TEST((*response)->close);
+}
+
 BOOST_AUTO_TEST_CASE(Cancelled_ReachesTheHostWithTheRequestId)
 {
 	const std::string session = initialize();

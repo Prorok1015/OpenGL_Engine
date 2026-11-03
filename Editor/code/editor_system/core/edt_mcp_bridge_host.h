@@ -16,7 +16,8 @@ namespace edt
 	class editor_events;
 	class job_service;
 
-	// How the bridge follows a job a tool call started (a result `{job: N}`, N > 0) for a client that asked for progress.
+	// How the bridge follows the job a `starts_job` command's call started (a result `{job: N}`, N > 0) for a client that
+	// asked for progress.
 	struct mcp_bridge_options
 	{
 		// Both set: such a call is answered when its job ends, its progress forwarded meanwhile. Either null: the call
@@ -52,12 +53,14 @@ namespace edt
 	// frames later (a person is asked, a gesture is waited out), and the module posts it back to its own thread.
 	// What a `done` closure holds is only that answer, never the bridge or a connection.
 	//
-	// A call whose client sent a progressToken (request_context::wants_progress) and whose command answered with a
-	// running job (`{job: N}`, N > 0) is held: the job's progress goes out as notifications/progress (fraction of 1, the
-	// job's note) and the answer comes when the job ends, the result object plus `status` (job_status_name), `result`
-	// (the job's JSON) and `error` (failed). It is released earlier with `status: "running"` after
-	// mcp_bridge_options::hold_limit (tick()). notifications/cancelled for it, or the end of its MCP session, cancels the
-	// job and answers nothing.
+	// A call whose client sent a progressToken (request_context::wants_progress) to a command_desc::starts_job command
+	// that answered with a running job (`{job: N}`, N > 0) is held, at most 16 per session (more are answered at once):
+	// the job's progress goes out as notifications/progress (fraction of 1, strictly increasing, the job's note) and the
+	// answer comes when the job ends, the result object plus `status` (job_status_name), `result` (the job's JSON; left
+	// out with `result_dropped` past half the response limit) and `error` (failed). It is released earlier with
+	// `status: "running"` after mcp_bridge_options::hold_limit (tick()). notifications/cancelled for it, or the end of its
+	// MCP session, also while it still waits for a person, cancels the job and drops `done` uncalled (the transport
+	// completes the request without an answer).
 	//
 	// Create and destroy on the main thread. Destroy it after the server that uses it (it has stopped by then) and
 	// before the agent_access it points to: calls still waiting in the main queue find the host gone and are answered

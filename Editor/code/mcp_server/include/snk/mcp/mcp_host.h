@@ -103,7 +103,8 @@ namespace mcp
 	// What the server asks of the application. The module calls it from its own I/O thread; it never touches the
 	// application's state itself. Every method answers through `done`, exactly once, from any thread (also inline),
 	// so a host that must hop to another thread does not block the I/O thread. A host that throws is answered
-	// with an internal error.
+	// with an internal error. Only call_tool may also drop `done` without calling it, for a request the client
+	// cancelled (cancel_request) or whose session ended: the transport then completes the request without an answer.
 	class host
 	{
 	public:

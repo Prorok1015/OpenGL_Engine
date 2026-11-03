@@ -10,6 +10,7 @@
 #include <boost/system/error_code.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -87,6 +88,44 @@ namespace {
 		response.status = 202;
 		return response;
 	}
+
+	// The one way a request whose answer the host dropped unsent (a cancelled call, a session that ended) is completed:
+	// an empty 202, and the connection closes, so it never waits for an answer that will not come.
+	class unanswered_request
+	{
+	public:
+		explicit unanswered_request(mcp::endpoint::responder respond)
+			: m_respond(std::move(respond))
+		{
+		}
+		unanswered_request(const unanswered_request&) = delete;
+		unanswered_request& operator=(const unanswered_request&) = delete;
+
+		~unanswered_request()
+		{
+			if (m_answered.exchange(true)) {
+				return;
+			}
+			try {
+				mcp::http_response response = accepted_response();
+				response.close = true;
+				m_respond(std::move(response));
+			} catch (...) {
+				// A destructor: the connection is dropped by the server's own deadlines then.
+			}
+		}
+
+		void answer(mcp::http_response response)
+		{
+			if (!m_answered.exchange(true)) {
+				m_respond(std::move(response));
+			}
+		}
+
+	private:
+		mcp::endpoint::responder m_respond;
+		std::atomic<bool> m_answered{ false };
+	};
 
 	std::string path_of(const std::string& target)
 	{
@@ -385,8 +424,10 @@ void mcp::endpoint::dispatch_rpc(const json::object& message, const http_request
 		subscriptions.insert(uri);
 		return true;
 	};
-	m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [respond](json::value answer) {
-		respond(json_response(answer));
+	// Shared by every copy of the sink: when the last one goes without an answer, the request completes empty.
+	auto request = std::make_shared<unanswered_request>(respond);
+	m_rpc.dispatch(rpc.method, rpc.id, rpc.params, session, [request](json::value answer) {
+		request->answer(json_response(answer));
 	});
 }
 

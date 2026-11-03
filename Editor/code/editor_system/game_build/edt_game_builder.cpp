@@ -280,6 +280,7 @@ edt::game_builder::game_builder(job_service& jobs, problem_list& problems, dialo
 	command.category = cmd::agent_category::build;
 	command.args_schema = args_schema();
 	command.result_schema = result_schema();
+	command.starts_job = true;
 	command.expose_as_tool = true;
 	command.mutates = true;
 	// It runs the project's CMake code, i.e. anything: an agent never gets it without the person's approval
