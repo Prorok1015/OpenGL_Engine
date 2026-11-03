@@ -75,6 +75,10 @@ namespace edt
 		bool step(std::uint32_t frames, play_reason reason = play_reason::user);
 		// Pending frames of a step; 0 when not stepping or stopped.
 		std::uint32_t pending_steps() const;
+		// Frames the set "play" simulated since Start (context_set::frames_run); 0 when stopped.
+		std::uint64_t frames_run() const;
+		// The worlds of the set "play" in its order; empty when stopped.
+		std::vector<std::string> world_names() const;
 
 		// Kept across sessions; applied at once to a running one.
 		void set_time_scale(float scale);

@@ -1,7 +1,9 @@
 #pragma once
 #include <snk/command/cmd_registry.h>
 #include <snk/application/app_frame_control.h>
+#include <snk/command/cmd_types.h>
 #include <snk/common/snk_api.h>
+#include <functional>
 
 namespace app
 {
@@ -20,5 +22,15 @@ namespace app
 		bool active() const { return advance.active() && resume.active(); }
 	};
 
-	[[nodiscard]] SNK_API frame_command_registrations register_frame_commands(cmd::command_registry& registry, frame_control& control);
+	// What a host changes about the two commands. The defaults are those of every host: no category (closed to
+	// agents), always enabled. The editor registers them again with category `play`, enabled only during Play.
+	struct frame_command_options
+	{
+		cmd::agent_category category = cmd::agent_category::unset;
+		// Null: always enabled.
+		std::function<bool()> enabled{};
+	};
+
+	[[nodiscard]] SNK_API frame_command_registrations register_frame_commands(cmd::command_registry& registry, frame_control& control,
+		frame_command_options options = {});
 }

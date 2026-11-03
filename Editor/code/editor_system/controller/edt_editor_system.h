@@ -211,6 +211,8 @@ namespace edt {
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor
 		// while the context it reports to is still there.
 		std::unique_ptr<edt::play_session> m_play;
+		// Releases app.advance's time hold when Play stops (register_play_frame_commands).
+		connection m_play_hold_release;
 
 		// Selection routing between the panels; last member, so it is dropped before the panels are.
 		std::vector<connection> m_selection_connections;
