@@ -6,6 +6,8 @@
 #include "test_temp_dir.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <stdexcept>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -530,10 +532,13 @@ BOOST_FIXTURE_TEST_CASE(AFileThatTurnsToDeny_StopsTheCallAtOnce, gate_fixture)
 
 namespace {
 
-// A code.write as #451 has it: code_edit, but a CMake file is cmake_presets.
+// A code.write as #451 has it: code_edit, but a CMake file is cmake_presets. `classify` stands for its category_of.
 struct per_call_fixture : gate_fixture
 {
 	int asked_category = 0;
+	std::function<agent_category(std::string_view)> classify = [](std::string_view path) {
+		return path.ends_with("CMakeLists.txt") ? agent_category::cmake_presets : agent_category::code_edit;
+	};
 
 	per_call_fixture()
 	{
@@ -541,8 +546,8 @@ struct per_call_fixture : gate_fixture
 		desc.args_schema = boost::json::parse(R"({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})");
 		desc.category_of = [this](const cmd::call& request) {
 			++asked_category;
-			const std::string_view path = request.args.as_object().at("path").as_string();
-			return path.ends_with("CMakeLists.txt") ? agent_category::cmake_presets : agent_category::code_edit;
+			const auto& path = request.args.as_object().at("path").as_string();
+			return classify(std::string_view(path.data(), path.size()));
 		};
 		desc.invoke = [this](const cmd::call&) {
 			++runs;
@@ -559,7 +564,7 @@ struct per_call_fixture : gate_fixture
 
 }
 
-BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheCategoryItsArgumentsGive, per_call_fixture)
+BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheStricterOfItsCommandsCategoryAndItsOwn, per_call_fixture)
 {
 	gate->set_can_ask(true);
 
@@ -567,9 +572,15 @@ BOOST_FIXTURE_TEST_CASE(ACallIsJudgedByTheCategoryItsArgumentsGive, per_call_fix
 	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::confirmation_required);
 	BOOST_TEST(runs == 1);
 
+	// A person's deny of code_edit covers the CMake writes of code.write too: the call's category never loosens.
 	dir.write(".snk/agent_policy.json", R"({"categories":{"cmake_presets":"allow","code_edit":"deny"}})");
-	BOOST_TEST(write("CMakeLists.txt").ok);
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::denied);
 	BOOST_TEST(write("src/a.cpp").code == cmd::codes::denied);
+
+	// Another size than the file before: the policy notices a change by modification time and size.
+	dir.write(".snk/agent_policy.json", R"({"categories":{"cmake_presets":"deny"}})");
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::denied);
+	BOOST_TEST(write("src/a.cpp").ok);
 	BOOST_TEST(runs == 2);
 }
 
@@ -585,12 +596,42 @@ BOOST_FIXTURE_TEST_CASE(ArgumentsThatBreakTheSchema_NeverReachCategoryOf, per_ca
 	BOOST_TEST(runs == 0);
 }
 
+BOOST_FIXTURE_TEST_CASE(ACallCategoryOfUnsetOrNotForAgents_IsDenied, per_call_fixture)
+{
+	classify = [](std::string_view) { return agent_category::unset; };
+	BOOST_TEST(write("src/a.cpp").code == cmd::codes::denied);
+	classify = [](std::string_view) { return agent_category::not_for_agents; };
+	BOOST_TEST(write("src/a.cpp").code == cmd::codes::denied);
+	BOOST_TEST(runs == 0);
+}
+
+BOOST_FIXTURE_TEST_CASE(ACategoryOfThatThrows_IsARefusal_AndLeavesNoTicket, per_call_fixture)
+{
+	gate->set_can_ask(true);
+	classify = [](std::string_view) -> agent_category { throw std::runtime_error("broken"); };
+	BOOST_TEST(write("CMakeLists.txt").code == cmd::codes::denied);
+	BOOST_TEST(commands.pending_confirmations() == 0u);
+	BOOST_TEST(runs == 0);
+}
+
 BOOST_AUTO_TEST_CASE(CategoryOfCall_WithoutAHook_IsTheCommandsCategory)
 {
 	cmd::command_desc plain = command_of("scene.move", agent_category::scene_edit);
 	cmd::call request;
 	request.args = boost::json::object{};
 	BOOST_TEST((cmd::category_of_call(plain, request) == agent_category::scene_edit));
+}
+
+BOOST_AUTO_TEST_CASE(ALiveCommand_IsDeniedWhileLiveModeIsOff_WhateverCategoryItsCallHas)
+{
+	edt::policy_layer allow_all;
+	allow_all.categories[agent_category::code_edit] = policy_mode::allow;
+	allow_all.categories[agent_category::live] = policy_mode::allow;
+	const cmd::command_desc live = command_of("live.rebuild_now", agent_category::live);
+	const cmd::command_desc edit = command_of("code.write", agent_category::code_edit);
+	BOOST_TEST((edt::effective_mode_of_call(live, agent_category::code_edit, allow_all, {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode_of_call(edit, agent_category::live, allow_all, {}).mode == policy_mode::deny));
+	BOOST_TEST((edt::effective_mode_of_call(live, agent_category::code_edit, allow_all, {}, {}, {}, true).mode == policy_mode::allow));
 }
 
 BOOST_AUTO_TEST_CASE(AnUnclassifiedCommand_StaysDenied_WhateverCategoryItsCallHas)

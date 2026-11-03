@@ -253,7 +253,7 @@ namespace edt
 			return { cmd::policy_mode::deny, policy_source::fallback, "the command is not for agents" };
 		}
 		// Before any layer is read: neither file can open the live commands while the mode is off.
-		if (category == agent_category::live && !live_mode_on) {
+		if ((command.category == agent_category::live || category == agent_category::live) && !live_mode_on) {
 			return { cmd::policy_mode::deny, policy_source::fallback, "the live mode is off" };
 		}
 		if (!project_error.empty()) {
@@ -430,16 +430,22 @@ namespace edt
 
 	cmd::policy_decision agent_policy_gate::decide(const cmd::command_desc& command, const cmd::call& request)
 	{
-		// Per call: code.write to a CMake file is judged, and granted for the session, as cmake_presets.
-		const cmd::agent_category category = cmd::category_of_call(command, request);
-		const effective_policy decision = m_policy.effective(command, category);
+		// The command's own category and its call's (code.write to a CMake file: cmake_presets); the stricter decides, so
+		// a call's category never loosens what the command's allows.
+		const cmd::agent_category of_call = cmd::category_of_call(command, request);
+		const effective_policy by_command = m_policy.effective(command, command.category);
+		const effective_policy by_call = of_call == command.category ? by_command : m_policy.effective(command, of_call);
+		const effective_policy& decision = by_call.mode >= by_command.mode ? by_call : by_command;
 		switch (decision.mode) {
 		case cmd::policy_mode::allow: return cmd::policy_decision::allow();
-		case cmd::policy_mode::ask:
-			if (m_grants != nullptr && !request.from.session.empty() && m_grants->has(request.from.session, category)) {
+		case cmd::policy_mode::ask: {
+			// The grant has to be for the category that asks; when both ask, the call's (the narrower one) covers it.
+			const cmd::agent_category asking = by_call.mode == cmd::policy_mode::ask ? of_call : command.category;
+			if (m_grants != nullptr && !request.from.session.empty() && m_grants->has(request.from.session, asking)) {
 				return cmd::policy_decision::allow();
 			}
-			return cmd::policy_decision::ask(command.summary);
+			return cmd::policy_decision::ask(command.summary, asking);
+		}
 		case cmd::policy_mode::deny: return cmd::policy_decision::deny(decision.reason);
 		}
 		return cmd::policy_decision::deny("the policy cannot be read");
