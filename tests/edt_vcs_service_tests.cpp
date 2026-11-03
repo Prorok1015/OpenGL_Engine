@@ -779,6 +779,7 @@ BOOST_AUTO_TEST_CASE(RealRepository_CommitDiffOfARenamedPath_ShowsTheRename)
 	write(repo / path_of(old_name), "one\ntwo\nthree\nfour\nfive\nsix\n");
 	git(repo, { "add", "--", old_name });
 	git(repo, { "commit", "-q", "-m", "add" });
+	fs::create_directories(repo / "dir with space");
 	git(repo, { "mv", "--", old_name, new_name });
 	write(repo / path_of(new_name), "one\ntwo\nthree\nFOUR\nfive\nsix\n");
 	git(repo, { "add", "--", new_name });
