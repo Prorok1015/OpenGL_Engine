@@ -55,7 +55,9 @@ Editor/
     │
     ├── vcs/                          # git (#454)
     │   ├── edt_vcs_parse.cpp/h       # pure parsers: status --porcelain=v2 -z, log -z, for-each-ref, stderr classification, valid_utf8
-    │   └── edt_vcs_service.cpp/h     # vcs_service: git as job_service jobs; vcs.info/status/diff/log/branches, stage/unstage/commit/branch.create/checkout, fetch/pull/push
+    │   ├── edt_vcs_service.cpp/h     # vcs_service: git as job_service jobs; vcs.info/status/diff/log/branches, stage/unstage/commit/branch.create/checkout, fetch/pull/push
+    │   ├── edt_commit_graph.cpp/h    # commit_graph: incremental lane layout of the history graph (#457), pure
+    │   └── edt_history_model.cpp/h   # history_model: History tab state without ImGui: vcs.log pages loaded as rows come into view, filter (300 ms), stale restart, commit files/diff (#457)
     │
     ├── input/                        # Input binding helpers & file dialog
     │   ├── edt_input_manager.h       # make_input_area / to_framebuffer_size (window units -> framebuffer pixels)
