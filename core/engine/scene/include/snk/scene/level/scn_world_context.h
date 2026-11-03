@@ -85,6 +85,9 @@ namespace scn
 		void set_stepper(const ecs::fixed_stepper& stepper);
 		const ecs::fixed_stepper& stepper() const { return m_stepper; }
 		ecs::run_mode mode() const { return m_mode; }
+		// Factor on the frame delta in Edit and Play; the owner validates it (context_set::set_time_scale).
+		void set_time_scale(float scale) { m_time_scale = scale; }
+		float time_scale() const { return m_time_scale; }
 
 	private:
 		uint32_t m_id;
@@ -102,6 +105,7 @@ namespace scn
 
 		ecs::fixed_stepper m_stepper;
 		ecs::run_mode m_mode = ecs::run_mode::play;
+		float m_time_scale = 1.0f;
 		int m_fixed_steps = 0;
 	};
 } // namespace scn

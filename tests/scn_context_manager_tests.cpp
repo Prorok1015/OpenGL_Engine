@@ -4,6 +4,8 @@
 #include <snk/scene/level/scn_context_manager.h>
 #include <snk/scene/adapters/scn_worldwrap_adapter.h>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <set>
 #include <tuple>
 
@@ -665,6 +667,126 @@ BOOST_AUTO_TEST_CASE(Preview_TheLevelSetNeverContainsIt)
 	});
 	BOOST_TEST(mgr.level_set().size() == 2u);
 	BOOST_TEST(mgr.get_set("level").desc_world_names().size() == 2u);
+}
+
+// ---------------------------------------------------------------- the play set (US-63-A, #489)
+
+namespace {
+
+constexpr const char* PREFAB_HP1 = R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":1}}})";
+constexpr const char* PREFAB_HP8 = R"({"__type":"prefab_desc","components":{"stat":{"__type":"stat_desc","hp":8}}})";
+
+entt::entity spawn_prefab(scn::ecs_assembler& assembler, scn::world_context& context, const scn::prefab_desc& prefab,
+						  const res::tag& tag)
+{
+	const entt::entity e = context.state().create();
+	scn::assemble_prefab(assembler, context.state(), e, prefab, "inst", tag);
+	return e;
+}
+
+}
+
+BOOST_AUTO_TEST_CASE(PlaySet_WithoutHotReloadIsNotReloadedWhenAResourceItUsesChanges)
+{
+	const auto tag = put("m.prefab.desc", PREFAB_HP1);
+	const auto prefab = load<scn::prefab_desc>(tag);
+	auto& play = mgr.create_set("play", nullptr, scn::set_options{ .hot_reload = false });
+	BOOST_TEST(!play.hot_reload());
+	BOOST_TEST(mgr.level_set().hot_reload());
+
+	auto& in_level = mgr.create_context("level", "w", scn::context_kind::runtime);
+	auto& in_play = mgr.create_context("play", "w", scn::context_kind::play);
+	BOOST_TEST(hot->attached_count() == 1u); // only the level's context
+	const auto e_level = spawn_prefab(*assembler, in_level, *prefab, tag);
+	const auto e_play = spawn_prefab(*assembler, in_play, *prefab, tag);
+
+	put("m.prefab.desc", PREFAB_HP8);
+	rs->signal_changed(tag);
+	pump();
+	mgr.update(std::chrono::duration<float>(0.001f));
+
+	BOOST_TEST(in_level.state().get<test_util::stat_component>(e_level).hp == 8);
+	BOOST_TEST(in_play.state().get<test_util::stat_component>(e_play).hp == 1);
+
+	mgr.destroy_set("play"); // detaches nothing it never attached
+	BOOST_TEST(hot->attached_count() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(PlaySet_LoadFromDescWithThePlayKindMakesPlayContexts)
+{
+	const auto level = load<scn::level_desc>(put("lv.desc", LEVEL_V1));
+	BOOST_REQUIRE(level);
+	auto& play = mgr.create_set("play", nullptr, scn::set_options{ .hot_reload = false });
+	play.load_from_desc(*level, sf, *assembler, scn::context_kind::play);
+
+	BOOST_TEST(play.size() == 2u);
+	BOOST_TEST((play.desc_world_names() == std::vector<std::string>{ "w0", "w1" }));
+	play.for_each([](scn::world_context& context) {
+		BOOST_TEST((context.kind() == scn::context_kind::play));
+	});
+	BOOST_TEST(has_named(play.get("w0").state(), "c1"));
+	BOOST_TEST(mgr.level_set().size() == 0u);
+	BOOST_TEST(hot->attached_count() == 0u);
+}
+
+BOOST_AUTO_TEST_CASE(PlaySet_TenStartStopCyclesLeaveNothingBehind)
+{
+	const auto prefab_tag = put("p.prefab.desc", PREFAB_HP1);
+	const auto prefab = load<scn::prefab_desc>(prefab_tag);
+	const auto level_tag = put("lv.desc", LEVEL_V1);
+	BOOST_REQUIRE(mgr.load_level(level_tag));
+	const auto level = load<scn::level_desc>(level_tag);
+	BOOST_REQUIRE(level);
+	// the prefab is spawned once outside Play too, so whatever it loads is already there before the baseline
+	spawn_prefab(*assembler, mgr.create_preview("p", "pv"), *prefab, prefab_tag);
+
+	struct counters
+	{
+		std::size_t sets = 0;
+		std::size_t contexts = 0;
+		std::size_t attached_registries = 0;
+		std::size_t channel_types = 0;
+		std::size_t live_resources = 0;
+	};
+	const auto snapshot = [this] {
+		counters c;
+		mgr.for_each_set([&c](scn::context_set&) { ++c.sets; });
+		mgr.for_each([&c](scn::world_context&) { ++c.contexts; });
+		c.attached_registries = hot->attached_count();
+		c.channel_types = mgr.channels().size();
+		c.live_resources = rs->live_resources();
+		return c;
+	};
+	const counters before = snapshot();
+	BOOST_REQUIRE(before.attached_registries == 3u); // two level worlds and the preview
+
+	for (int cycle = 0; cycle < 10; ++cycle) {
+		BOOST_TEST_CONTEXT("cycle " << cycle) {
+			auto& play = mgr.create_set("play", nullptr, scn::set_options{ .hot_reload = false });
+			// a fresh channel every time: nothing left from the previous session
+			BOOST_TEST(play.channel().exchange_count() == 0u);
+			BOOST_TEST(play.channel().blackboard().committed().empty());
+			play.set_seed(1000u + static_cast<uint64_t>(cycle));
+			play.load_from_desc(*level, sf, *assembler, scn::context_kind::play);
+			spawn_prefab(*assembler, play.get("w0"), *prefab, prefab_tag);
+			BOOST_TEST(hot->attached_count() == before.attached_registries);
+
+			for (int frame = 0; frame < 3; ++frame) {
+				mgr.update(std::chrono::duration<float>(0.016f));
+			}
+			BOOST_TEST(play.channel().exchange_count() == 3u);
+			mgr.destroy_set("play");
+		}
+	}
+
+	const counters after = snapshot();
+	BOOST_TEST(after.sets == before.sets);
+	BOOST_TEST(after.contexts == before.contexts);
+	BOOST_TEST(after.attached_registries == before.attached_registries);
+	BOOST_TEST(after.channel_types == before.channel_types);
+	BOOST_TEST(after.live_resources == before.live_resources);
+	BOOST_TEST(mgr.find_set("play") == nullptr);
+	BOOST_TEST(mgr.level_set().size() == 2u);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

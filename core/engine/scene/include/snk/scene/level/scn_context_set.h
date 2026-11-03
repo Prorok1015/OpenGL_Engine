@@ -26,6 +26,14 @@ namespace scn
 {
 	class scene_layer;
 
+	// How the context_manager builds a set.
+	struct set_options
+	{
+		// False: the contexts' registries are never attached to hot reload, so a resource change does not reach
+		// them (a Play set runs on copies, ADR-07).
+		bool hot_reload = true;
+	};
+
 	// A group of contexts stepped together: one mode, one seed, one phase order. Owned by the
 	// context_manager (the level is the set "level").
 	// A context keeps its address until it is destroyed.
@@ -51,6 +59,8 @@ namespace scn
 		// An inactive set is skipped by context_manager::update.
 		bool active() const { return m_active; }
 		void set_active(bool active) { m_active = active; }
+		// Whether the contexts' registries are attached to a hot reload manager (set_options::hot_reload).
+		bool hot_reload() const { return m_hot_reload_manager != nullptr; }
 
 		// The data channel of this set (blackboard + mailbox). It is exchanged once at the start of
 		// update(), before the contexts' begin_frame, and only while the set runs: in Edit and Pause it
@@ -68,6 +78,18 @@ namespace scn
 		// The mode survives clear() and level loads.
 		void set_mode(ecs::run_mode mode);
 		ecs::run_mode mode() const { return m_mode; }
+
+		// Step mode for `frames` (>= 1) frames: each of the next `frames` update() calls runs one full frame of
+		// exactly one fixed step, then the mode becomes Pause. set_mode(step) is step(1); any set_mode cancels it.
+		void step(uint32_t frames);
+		// Frames of the current step still to run; 0 outside Step.
+		uint32_t pending_steps() const { return m_pending_steps; }
+
+		// Multiplies the frame delta of every context in Edit and Play (a step stays one fixed step). Default 1;
+		// 0 freezes the time without changing the mode. Negative or non-finite values are refused (logged) as 0.
+		// Survives clear() and level loads.
+		void set_time_scale(float scale);
+		float time_scale() const { return m_time_scale; }
 
 		// Every context owns an `ecs::rng` seeded from this seed and its id. Reseeds the existing
 		// contexts; contexts created later derive from it as well.
@@ -127,8 +149,9 @@ namespace scn
 		// are not part of it.
 		const std::vector<std::string>& desc_world_names() const { return m_desc_world_names; }
 
-		// One `kind::level` context per world of the desc.
-		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler);
+		// One context of `kind` per world of the desc.
+		void load_from_desc(const level_desc& desc, ecs::system_factory& desc_system, scn::ecs_assembler& assambler,
+							context_kind kind = context_kind::level);
 
 		// Recreates the context under the same id and kind.
 		void reload_context(
@@ -190,6 +213,8 @@ namespace scn
 		std::vector<ecs::channel_participant> m_participants;
 
 		ecs::run_mode m_mode = ecs::run_mode::play;
+		uint32_t m_pending_steps = 0;
+		float m_time_scale = 1.0f;
 		uint64_t m_seed = ecs::rng::default_seed;
 
 		// Phase order the set runs (copy of the table at the last plan build). Each context
