@@ -1061,7 +1061,7 @@ BOOST_FIXTURE_TEST_CASE(ClientName_IsCutOnACodePointBoundary_AndHiddenCharacters
 	open(R"({"name":")" + std::string(63, 'x') + R"(\u00e9"})");
 	// 40 two-byte characters: 32 of them fit in 64 bytes.
 	std::string accents;
-	for (int i = 0; i < 40; ++i) accents += "\u00e9";
+	for (int i = 0; i < 40; ++i) accents += "\xc3\xa9";
 	open(R"({"name":")" + accents + R"("})");
 	// C1 control, right-to-left override, zero-width space, byte order mark, line separators: none of them is shown.
 	open(R"({"name":"a\u0085b\u202ec\u200bd\ufeffe\u2066f\u2069g"})");
