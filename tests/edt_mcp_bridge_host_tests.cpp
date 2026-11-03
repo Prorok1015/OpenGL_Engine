@@ -64,6 +64,8 @@ struct bridge_fixture
 	ds::task_system tasks{ test_util::manual_tasks() };
 	cmd::command_registry commands;
 	std::chrono::steady_clock::time_point current{};
+	// Where the answers of the tests' calls land: it must outlive `access`, whose destructor answers the calls still waiting.
+	std::optional<mcp::call_result> answered;
 	edt::agent_access access{ commands, dir.path() / ".snk" / "agent_policy.json", dir.path() / "personal.json", [this] { return current; } };
 	edt::editor_events events;
 	std::vector<std::string> closed_sessions;
@@ -743,7 +745,6 @@ struct question_fixture : bridge_fixture
 {
 	int attempts = 0;
 	int runs = 0;
-	std::optional<mcp::call_result> answered;
 
 	question_fixture()
 	{
