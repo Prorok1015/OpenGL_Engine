@@ -227,23 +227,24 @@ namespace {
 		{ "snk://viewport/game.png", "Game view", "Screenshot of the game view", "image/png", "viewport.capture", R"({"viewport":"game"})" },
 	} };
 
-	// The job a successful result started: `{job: N}` with N > 0 (a build that did not start says job 0).
-	std::optional<std::uint64_t> job_of(const json::value& value)
+	// The job a successful result started: `{job: N}` with N > 0 (a build that did not start says job 0); 0 when none.
+	// Not an optional: GCC 13 -O2 reports the optional's value as maybe uninitialized once inlined (-Werror).
+	std::uint64_t job_of(const json::value& value)
 	{
 		if (!value.is_object()) {
-			return std::nullopt;
+			return 0;
 		}
 		const json::value* job = value.as_object().if_contains("job");
 		if (job == nullptr) {
-			return std::nullopt;
+			return 0;
 		}
 		if (job->is_int64() && job->as_int64() > 0) {
 			return static_cast<std::uint64_t>(job->as_int64());
 		}
-		if (job->is_uint64() && job->as_uint64() > 0) {
+		if (job->is_uint64()) {
 			return job->as_uint64();
 		}
-		return std::nullopt;
+		return 0;
 	}
 
 	// The job's outcome added to the command's answer. The answer goes out twice (structuredContent and its text copy),
@@ -625,16 +626,16 @@ void edt::mcp_bridge_host::call_tool(mcp::request_context context, std::string n
 			[weak = std::weak_ptr<mcp_bridge_host::state>(state), key, session = std::move(session), request_id = std::move(request_id),
 				wants_progress, starts_job, progress = std::move(progress), done = std::move(done)](cmd::result outcome) mutable {
 				const std::shared_ptr<mcp_bridge_host::state> self = weak.lock();
-				const std::optional<std::uint64_t> job = (outcome.ok && starts_job) ? job_of(outcome.value) : std::nullopt;
+				const std::uint64_t job = (outcome.ok && starts_job) ? job_of(outcome.value) : 0;
 				if (self != nullptr && self->end_call(key)) {
 					// Cancelled while it waited: no answer (`done` is dropped), and the job it started stops.
-					if (job && self->jobs != nullptr) {
-						self->jobs->cancel(*job);
+					if (job != 0 && self->jobs != nullptr) {
+						self->jobs->cancel(job);
 					}
 					return;
 				}
-				if (wants_progress && job && self != nullptr && self->jobs != nullptr
-					&& self->follow(*job, outcome.value.as_object(), std::move(session), std::move(request_id), progress, done)) {
+				if (wants_progress && job != 0 && self != nullptr && self->jobs != nullptr
+					&& self->follow(job, outcome.value.as_object(), std::move(session), std::move(request_id), progress, done)) {
 					return;
 				}
 				done(to_call_result(std::move(outcome)));
