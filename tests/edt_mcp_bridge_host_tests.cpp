@@ -328,14 +328,24 @@ BOOST_AUTO_TEST_CASE(ListTools_AnnotationsSayWhatAToolDoes)
 	risky.mutates = true;
 	risky.risk = cmd::danger::confirm;
 	add(std::move(risky));
+	// Marked destructive by itself (it removes a file), though nothing about its risk says so.
+	cmd::command_desc removes = make("code.rename");
+	removes.category = cmd::agent_category::code_files;
+	removes.mutates = true;
+	removes.destructive = true;
+	add(std::move(removes));
+	// A read command is never destructive, whatever the flag says.
+	cmd::command_desc odd = make("log.read");
+	odd.destructive = true;
+	add(std::move(odd));
 
 	const std::vector<mcp::tool_info> tools = list_tools();
-	BOOST_REQUIRE_EQUAL(tools.size(), 2u);
+	BOOST_REQUIRE_EQUAL(tools.size(), 4u);
 	for (const mcp::tool_info& tool : tools) {
 		BOOST_TEST_CONTEXT(tool.name) {
-			BOOST_TEST(!tool.read_only);
+			BOOST_TEST(tool.read_only == (tool.name == "log_read"));
 			BOOST_TEST(!tool.open_world);
-			BOOST_TEST(tool.destructive == (tool.name == "code_delete"));
+			BOOST_TEST(tool.destructive == (tool.name == "code_delete" || tool.name == "code_rename"));
 		}
 	}
 }

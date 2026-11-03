@@ -127,7 +127,7 @@ namespace {
 		}
 		tool.read_only = !command.mutates;
 		// MCP reads a missing destructiveHint as true for a tool that writes: say it where the command is not risky.
-		tool.destructive = command.mutates && command.risk != cmd::danger::none;
+		tool.destructive = command.mutates && (command.destructive || command.risk != cmd::danger::none);
 		tool.idempotent = false;
 		tool.open_world = false;
 		return tool;

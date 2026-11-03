@@ -119,6 +119,9 @@ namespace cmd
 		danger risk = danger::none;
 		bool mutates = false;
 		bool long_running = false;
+		// The command removes or overwrites something that cannot simply be put back (a file, a branch). Only a hint to
+		// MCP clients (destructiveHint = mutates && (destructive || risk != none)); the policy never reads it.
+		bool destructive = false;
 		agent_category category = agent_category::unset;
 		// Listed for agents and scripts. False for placeholders that do nothing.
 		bool expose_as_tool = true;
