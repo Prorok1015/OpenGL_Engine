@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <chrono>
+#include <limits>
 #include <map>
 #include <snk/scene/level/scn_context_set.h>
 #include <snk/scene/level/scn_world_context.h>
@@ -218,6 +219,153 @@ BOOST_AUTO_TEST_CASE(Time_ContextCreatedLaterJoinsTheStepOfTheOthers)
 	auto& b = lvl.create_context("b", 1);
 	BOOST_TEST(b.stepper().alpha() == a.stepper().alpha());
 	BOOST_TEST(b.stepper().alpha() > 0.0f);
+}
+
+// ---------------------------------------------------------------- step(n) and time scale (US-63-A, #489)
+
+BOOST_AUTO_TEST_CASE(Step_RunsExactlyNFramesOfOneFixedStepThenPauses)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "tick", "read_dt", "read_fixed" }, sf);
+
+	set.set_mode(ecs::run_mode::pause);
+	set.update(std::chrono::duration<float>(0.2f));
+	BOOST_TEST(g_ticks == 0); // gameplay does not run in Pause
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 0.0f);
+
+	set.step(3); // from Pause
+	BOOST_TEST((set.mode() == ecs::run_mode::step));
+	BOOST_TEST(set.pending_steps() == 3u);
+	for (int frame = 1; frame <= 3; ++frame) {
+		g_seen_fixed.clear();
+		set.update(std::chrono::duration<float>(0.2f)); // the wall dt does not matter
+		BOOST_TEST(g_ticks == frame);
+		BOOST_TEST(g_seen_dt.at(&a.state()) == 1.0f / 60.0f, boost::test_tools::tolerance(1e-6f));
+		BOOST_TEST(a.fixed_steps() == 1); // Play would run 8 for 0.2 s
+		BOOST_TEST(g_seen_fixed.at(&a.state()) == 1.0f / 60.0f, boost::test_tools::tolerance(1e-6f));
+		BOOST_TEST(set.pending_steps() == static_cast<uint32_t>(3 - frame));
+	}
+	BOOST_TEST((set.mode() == ecs::run_mode::pause));
+	BOOST_TEST((a.mode() == ecs::run_mode::pause));
+
+	set.update(std::chrono::duration<float>(0.2f));
+	set.update(std::chrono::duration<float>(0.2f));
+	BOOST_TEST(g_ticks == 3);
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 0.0f);
+}
+
+BOOST_AUTO_TEST_CASE(Step_SetModeStepIsOneFrameAndAnotherModeCancelsTheSteps)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "tick" }, sf);
+
+	set.set_mode(ecs::run_mode::step);
+	BOOST_TEST(set.pending_steps() == 1u);
+	set.update(one_frame);
+	BOOST_TEST(g_ticks == 1);
+	BOOST_TEST((set.mode() == ecs::run_mode::pause));
+	BOOST_TEST(set.pending_steps() == 0u);
+
+	set.step(5);
+	set.update(one_frame);
+	set.set_mode(ecs::run_mode::pause);
+	BOOST_TEST(set.pending_steps() == 0u);
+	set.update(one_frame);
+	BOOST_TEST(g_ticks == 2);
+}
+
+BOOST_AUTO_TEST_CASE(TimeScale_MultipliesTheFrameDeltaOfAPlayContext)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "read_dt" }, sf);
+	set.set_mode(ecs::run_mode::play);
+	BOOST_TEST(set.time_scale() == 1.0f);
+
+	for (const float scale : { 0.5f, 0.0f, 2.0f }) {
+		BOOST_TEST_CONTEXT("scale " << scale) {
+			set.set_time_scale(scale);
+			BOOST_TEST(a.time_scale() == scale);
+			set.update(std::chrono::duration<float>(0.01f));
+			BOOST_TEST(g_seen_dt.at(&a.state()) == 0.01f * scale, boost::test_tools::tolerance(1e-6f));
+		}
+	}
+
+	// scaled before the clamp: 0.2 * 2 is clamped to max_frame_dt (0.25)
+	set.update(std::chrono::duration<float>(0.2f));
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 0.25f, boost::test_tools::tolerance(1e-6f));
+
+	// a context created later takes the scale of its set
+	BOOST_TEST(set.create_context("b", 1, scn::context_kind::play).time_scale() == 2.0f);
+}
+
+BOOST_AUTO_TEST_CASE(TimeScale_ZeroAdvancesNoFixedStepAndAStepIgnoresTheScale)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "read_dt", "read_fixed" }, sf);
+
+	set.set_time_scale(0.0f);
+	set.update(std::chrono::duration<float>(0.1f));
+	BOOST_TEST(a.fixed_steps() == 0);
+	BOOST_TEST(g_seen_fixed.empty());
+
+	set.set_time_scale(4.0f);
+	set.step(1);
+	set.update(std::chrono::duration<float>(0.01f));
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 1.0f / 60.0f, boost::test_tools::tolerance(1e-6f));
+	BOOST_TEST(a.fixed_steps() == 1);
+}
+
+BOOST_AUTO_TEST_CASE(TimeScale_NegativeOrNaNIsRefusedAsZero)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	for (const float bad : { -1.0f, -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() }) {
+		set.set_time_scale(1.0f);
+		set.set_time_scale(bad);
+		BOOST_TEST(set.time_scale() == 0.0f);
+		BOOST_TEST(a.time_scale() == 0.0f);
+	}
+}
+
+BOOST_AUTO_TEST_CASE(TimeScale_AboveTheMaximumIsClampedToIt)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "read_dt" }, sf);
+
+	set.set_time_scale(scn::context_set::max_time_scale);
+	BOOST_TEST(set.time_scale() == scn::context_set::max_time_scale); // the maximum itself is valid
+	for (const float big : { scn::context_set::max_time_scale + 1.0f, 100.0f, std::numeric_limits<float>::infinity() }) {
+		set.set_time_scale(1.0f);
+		set.set_time_scale(big);
+		BOOST_TEST(set.time_scale() == scn::context_set::max_time_scale);
+		BOOST_TEST(a.time_scale() == scn::context_set::max_time_scale);
+	}
+
+	// at the maximum a 60 fps frame still fits in the stepper's step budget: no simulated time is dropped
+	set.update(std::chrono::duration<float>(1.0f / 60.0f));
+	BOOST_TEST(a.fixed_steps() <= a.stepper().max_steps());
+	BOOST_TEST(g_seen_dt.at(&a.state()) == 8.0f / 60.0f, boost::test_tools::tolerance(1e-5f));
+}
+
+BOOST_AUTO_TEST_CASE(Step_ZeroFramesIsRefusedAndRunsOne)
+{
+	scn::context_set set("play", nullptr);
+	auto& a = set.create_context("a", 0, scn::context_kind::play);
+	set.add_systems(a, { "tick" }, sf);
+	set.set_mode(ecs::run_mode::pause);
+
+	set.step(0);
+	BOOST_TEST((set.mode() == ecs::run_mode::step));
+	BOOST_TEST(set.pending_steps() == 1u);
+	set.update(one_frame);
+	set.update(one_frame);
+	BOOST_TEST(g_ticks == 1);
+	BOOST_TEST((set.mode() == ecs::run_mode::pause));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

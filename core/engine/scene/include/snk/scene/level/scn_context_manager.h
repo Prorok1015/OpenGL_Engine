@@ -56,8 +56,8 @@ namespace scn
 		void destroy_layer(scn::scene_layer& layer);
 		// The layer the set "level" and the previews belong to; null: the base services.
 		scn::scene_layer* game_layer() const { return m_game_layer; }
-		// Replaces the set "level" with an empty one on `layer` (null: the base) and makes it the game layer. Mode,
-		// seed and the active flag of the set carry over.
+		// Replaces the set "level" with an empty one on `layer` (null: the base) and makes it the game layer. Mode
+		// (with the frames left of a step), time scale, seed and the active flag of the set carry over.
 		void set_game_layer(scn::scene_layer* layer);
 
 		enum class game_layer_change { before, after };
@@ -74,8 +74,9 @@ namespace scn
 		// `kind::level` survive the reload.
 		void set_on_reload(std::function<void()> cb) { m_on_reload = std::move(cb); }
 
-		// Returns the existing set when the name is taken. `layer` null: the base services.
-		scn::context_set& create_set(std::string_view name, scn::scene_layer* layer = nullptr);
+		// Returns the existing set when the name is taken (logged; its options are kept, a mismatch is an error too).
+		// `layer` null: the base services.
+		scn::context_set& create_set(std::string_view name, scn::scene_layer* layer = nullptr, scn::set_options options = {});
 		// The set "level" cannot be destroyed.
 		void destroy_set(std::string_view name);
 		scn::context_set* find_set(std::string_view name) const;
@@ -114,9 +115,11 @@ namespace scn
 		// Null when the tag has no preview.
 		scn::world_context* find_preview(std::string_view tag) const;
 
-		// Mode and seed of every context of the set.
+		// Mode, seed and time scale of every context of the set.
 		void set_mode(std::string_view set, ecs::run_mode mode) { get_set(set).set_mode(mode); }
 		void set_seed(std::string_view set, uint64_t seed) { get_set(set).set_seed(seed); }
+		void step(std::string_view set, uint32_t frames) { get_set(set).step(frames); }
+		void set_time_scale(std::string_view set, float scale) { get_set(set).set_time_scale(scale); }
 
 		// Message types the sets can carry; shared by every set (also the ones created later). Modules
 		// register theirs at init: `channels().add<my_message>()`.
@@ -133,12 +136,16 @@ namespace scn
 		ecs::blackboard_writer& blackboard(std::string_view set) { return get_set(set).channel().external_blackboard(); }
 
 	private:
-		std::unique_ptr<scn::context_set> make_set(std::string_view name, scn::scene_layer* layer);
+		std::unique_ptr<scn::context_set> make_set(std::string_view name, scn::scene_layer* layer, scn::set_options options = {});
 		// The services that build the worlds of `set`: its layer's, or the base's.
 		ecs::system_factory& systems_of(const scn::context_set& set) { return set.layer() ? set.layer()->systems() : m_system_factory; }
 		scn::ecs_assembler& assembler_of(const scn::context_set& set) { return set.layer() ? set.layer()->assembler() : m_assembler; }
 		res::resource_system& resources_of(const scn::context_set& set) { return set.layer() ? set.layer()->resources() : m_resource; }
-		scn::hot_reload_manager* hot_reload_of(const scn::context_set& set) { return set.layer() ? set.layer()->hot_reload().get() : m_hot_reload_manager.get(); }
+		scn::hot_reload_manager* hot_reload_of(const scn::context_set& set)
+		{
+			if (!set.hot_reload()) return nullptr;
+			return set.layer() ? set.layer()->hot_reload().get() : m_hot_reload_manager.get();
+		}
 
 		std::shared_ptr<scn::hot_reload_manager> m_hot_reload_manager;
 		std::shared_ptr<ecs::channel_registry> m_channel_types = std::make_shared<ecs::channel_registry>();

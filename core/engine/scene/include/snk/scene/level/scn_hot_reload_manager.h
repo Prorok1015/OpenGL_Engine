@@ -17,6 +17,8 @@ namespace scn {
 
 		void attach_registry(entt::registry& reg);
 		void detach_registry(entt::registry& reg);
+		// Registries currently attached. For tests and diagnostics.
+		std::size_t attached_count() const { return m_registries.size(); }
 
 		void tick();
 

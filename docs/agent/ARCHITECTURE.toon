@@ -87,7 +87,9 @@ context: scn::world_context = one world (own registry, time, mode, rng, input, c
         only its own context; there is no cross-context argument type and no limit on their number.
 context_set: scn::context_set groups contexts that step together (one mode, one seed, one phase order);
         scn::context_manager owns the sets. The level is the set "level" (context_manager::level_set()),
-        a prefab/scene preview is "preview:<tag>", sets run in creation order.
+        a prefab/scene preview is "preview:<tag>", sets run in creation order. Play (EPIC-63) is the set "play":
+        create_set("play", layer, {.hot_reload = false}) + load_from_desc(desc, sf, assembler, context_kind::play);
+        Stop = destroy_set("play"). A set has its own time_scale and step(n).
 set_channel: contexts of one set exchange data only through scn::set_channel (ecs::blackboard_reader/writer,
         outbox/inbox), exchanged at the start of the set's update with a one-frame lag. Design and
         rules: docs/roadmap/design/WORLD_MESSAGING.md. Sets do not see each other's channels.
