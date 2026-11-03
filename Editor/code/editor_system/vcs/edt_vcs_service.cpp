@@ -868,10 +868,7 @@ namespace {
 		for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
 			if (it->starts_with("fatal:") || it->starts_with("error:")) return std::string(*it);
 		}
-		// A progress update ("Receiving objects: 45%") says nothing about why git stopped.
-		for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
-			if (!edt::vcs::parse_progress(*it)) return std::string(*it);
-		}
+		if (!lines.empty()) return std::string(lines.back());
 		return std::format("git exited with code {}", exit_code);
 	}
 
@@ -947,23 +944,13 @@ namespace {
 	}
 
 	// git's network progress as the job's: "<phase> <percent>%", the fraction never going back within the job
-	// (`state` lives as long as the job's work).
-	struct progress_state
+	// (`reached` lives as long as the job's work).
+	void report_progress(git_context& git, ds::task_context& task, float& reached)
 	{
-		float reached = 0.f;
-		std::string phase;
-		int percent = -1;
-	};
-
-	void report_progress(git_context& git, ds::task_context& task, progress_state& state)
-	{
-		git.on_progress = [&task, &state](const edt::vcs::git_progress& progress) {
+		git.on_progress = [&task, &reached](const edt::vcs::git_progress& progress) {
 			if (!progress.percent) return;
-			if (*progress.percent == state.percent && progress.phase == state.phase) return;
-			state.percent = *progress.percent;
-			state.phase = progress.phase;
-			state.reached = std::max(state.reached, edt::vcs::progress_fraction(progress));
-			task.set_progress(state.reached, std::format("{} {}%", progress.phase, *progress.percent));
+			reached = std::max(reached, edt::vcs::progress_fraction(progress));
+			task.set_progress(reached, std::format("{} {}%", progress.phase, *progress.percent));
 		};
 	}
 
@@ -1806,8 +1793,8 @@ edt::vcs_service::started edt::vcs_service::start_fetch(const std::string& remot
 	}
 	return run_job("git fetch", [remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		progress_state progress;
-		report_progress(git, task, progress);
+		float reached = 0.f;
+		report_progress(git, task, reached);
 		// --progress: git prints it to stderr only on a terminal otherwise.
 		std::vector<std::string> args{ "fetch", "--progress", "--no-recurse-submodules", "--end-of-options" };
 		std::string target = remote;
@@ -1841,8 +1828,8 @@ edt::vcs_service::started edt::vcs_service::start_pull(const std::string& remote
 	// to what fetch marked for merging. Never a rebase (whatever pull.rebase says) nor a merge commit.
 	return run_job("git pull", [remote, branch](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		progress_state progress;
-		report_progress(git, task, progress);
+		float reached = 0.f;
+		report_progress(git, task, reached);
 		std::vector<std::string> args{ "fetch", "--progress", "--no-recurse-submodules", "--end-of-options" };
 		std::string target = remote;
 		std::string wanted = branch;
@@ -1958,8 +1945,8 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 	};
 	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
-		progress_state progress;
-		report_progress(git, task, progress);
+		float reached = 0.f;
+		report_progress(git, task, reached);
 		if (git.guarded) {
 			if (auto refusal = remote_refusal(git, remote)) return std::move(*refusal);
 		}
