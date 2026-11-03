@@ -31,7 +31,7 @@ namespace {
 		"code files and building. Some tools ask the person for a confirmation before they run, and a call can wait for "
 		"the answer or for the person to finish what they are doing; a refused call says why. A tool is a command of the "
 		"editor; its name is the command id with '.' replaced by '_'. The list of tools changes with the policy "
-		"and with the person's switches (live mode): ask for it again after a tools/list_changed notification."; its name is the command id with '.' replaced by '_'.";
+		"and with the person's switches (live mode): ask for it again after a tools/list_changed notification.";
 
 	mcp::server_config make_server_config(const edt::agent_server_options& options, std::string token)
 	{
