@@ -1608,7 +1608,7 @@ BOOST_AUTO_TEST_CASE(Cancelled_CancelsTheJob_AndAnswersNothing)
 	BOOST_TEST(jobs.info(job)->cancel_requested);
 	events.job_progress.emit(job, 0.5f, "half");
 	finish_jobs();
-	BOOST_TEST(jobs.info(job)->status == edt::job_status::cancelled);
+	BOOST_TEST((jobs.info(job)->status == edt::job_status::cancelled));
 	BOOST_TEST(outcome->answers.empty());
 	BOOST_TEST(outcome->notes.empty());
 }
@@ -1672,7 +1672,7 @@ BOOST_AUTO_TEST_CASE(ADestroyedBridge_DropsTheCallsItHeld)
 	events.job_progress.emit(last_job, 0.5f, "half");
 	finish_jobs();
 	BOOST_TEST(outcome->answers.empty());
-	BOOST_TEST(jobs.info(last_job)->status == edt::job_status::done);
+	BOOST_TEST((jobs.info(last_job)->status == edt::job_status::done));
 }
 
 BOOST_AUTO_TEST_CASE(AJobTool_DeclaresTheOutcomeFields)
