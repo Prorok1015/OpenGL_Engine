@@ -3,6 +3,8 @@
 #include <snk/gui/gui_menu_layout.h>
 #include "edt_dockspace.h"
 #include <chrono>
+#include <functional>
+#include <string_view>
 
 namespace edt {
 	class editor_context;
@@ -36,10 +38,24 @@ namespace edt {
 		void set_context(editor_context& context) { m_context = &context; }
 		// See dockspace::set_menu_bar_status.
 		void set_menu_bar_status(std::function<void()> draw) { m_dockspace.set_menu_bar_status(std::move(draw)); }
+		// Game mode (#294): while `active` says so, `draw` is drawn instead of the dockspace and its panels (which is
+		// kept alive, so its docked windows stay docked), and only the shortcuts of the actions `shortcuts` accepts fire.
+		// `after_implicit` runs after the implicit callbacks of a frame `draw` drew (they may open a popup).
+		void set_game_layout(std::function<bool()> active, std::function<void()> draw,
+			std::function<bool(std::string_view)> shortcuts, std::function<void()> after_implicit) {
+			m_game_active = std::move(active);
+			m_draw_game = std::move(draw);
+			m_game_shortcuts = std::move(shortcuts);
+			m_game_after_implicit = std::move(after_implicit);
+		}
 
 	private:
 		gui::menu_layout_manager m_manager;
 		dockspace m_dockspace;
 		editor_context* m_context = nullptr;
+		std::function<bool()> m_game_active;
+		std::function<void()> m_draw_game;
+		std::function<bool(std::string_view)> m_game_shortcuts;
+		std::function<void()> m_game_after_implicit;
 	};
 }

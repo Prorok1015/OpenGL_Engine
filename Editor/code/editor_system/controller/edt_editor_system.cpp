@@ -43,6 +43,8 @@
 #include "edt_live_mode.h"
 #include "edt_play_commands.h"
 #include "edt_play_session.h"
+#include "edt_editor_mode.h"
+#include "edt_editor_mode_commands.h"
 #include <snk/core/core_project_modules.h>
 #include "edt_main_menu.h"
 #include "edt_agent_access.h"
@@ -137,6 +139,11 @@ namespace {
 
 	// Level opened at startup, e.g. --set editor/startup_level levels/smoke_level.desc (automation, headless runs).
 	CFG_VAR_DEF_STRING(cfg_startup_level, "editor/startup_level", "");
+	// "game" (--game, #294): once the start level has loaded, the Game view fills the window and Play starts; "editor":
+	// the panels. Anything else warns and is "editor".
+	CFG_VAR_DEF_STRING(cfg_start_mode, "editor/start_mode", "editor");
+	// --game=res://<level>: the level game mode starts on, instead of editor/startup_level. Only a res:// tag is taken.
+	CFG_VAR_DEF_STRING(cfg_game_level, "editor/game_level", "");
 	// Opens the Game view at startup (automation); otherwise it is toggled from the View menu.
 	CFG_VAR_DEF_BOOL(cfg_show_game_view, "editor/show_game_view", false);
 	// The run ends with 0 right after the first successful level load (CI: the headless run proves the level loaded).
@@ -206,6 +213,10 @@ edt::editor_system::~editor_system()
 	m_agent_server.reset();
 	m_session_connections.clear();
 	m_agent_access.reset();
+	// The layer may outlive this system: no game layout drawn through it any more.
+	if (editor_layer) editor_layer->set_game_layout(nullptr, nullptr, nullptr, nullptr);
+	m_mode_changed.disconnect();
+	m_modes.reset();
 	if (m_play) {
 		// Stop brings the level back and reports through the context: only while the context is there.
 		if (m_context_alive.lock()) {
@@ -566,17 +577,37 @@ void edt::editor_system::init(ds::app_data_storage& data)
 	if (startup_level.empty() && data.has_value<prj::project_context>()) {
 		startup_level = data.require<prj::project_context>().data.start_scene;
 	}
+	const std::optional<editor_mode> start_mode = editor_mode_of(*cfg_start_mode);
+	if (!start_mode) {
+		egLOG_WARN("editor", "editor/start_mode '{}' is neither 'editor' nor 'game': the editor starts in editor mode", *cfg_start_mode);
+	}
+	const bool start_in_game = start_mode == editor_mode::game;
+	if (start_in_game && !cfg_game_level->empty()) {
+		if (const std::string problem = game_level_problem(*cfg_game_level); problem.empty()) {
+			startup_level = *cfg_game_level;
+		} else {
+			// Never read as a file path; and no other level stands in for the one asked for.
+			egLOG_ERROR("editor", "--game='{}' is not taken: {}; no level is loaded at startup", *cfg_game_level, problem);
+			startup_level.clear();
+		}
+	}
+	if (start_in_game && (project_held || startup_level.empty())) {
+		egLOG_WARN("editor", "game mode needs a start level (--game=<level>, editor/startup_level or the project's start "
+			"scene) and none is loaded: the editor starts in editor mode");
+	}
 	if (!project_held && !startup_level.empty()) {
 		// On the first frame: the host loads the project's game modules after init (#428), and the level may use their types.
 		const res::tag level = startup_level.find("://") != std::string::npos ? res::tag{ startup_level } : res::tag::make(startup_level);
 		editor_layer->register_implicit("edt/load_level", begin_then_poll([this, level] { begin_level_load(level); },
-			[this] {
-				if (poll_level_load()) {
+			[this, start_in_game] {
+				bool loaded = false;
+				if (poll_level_load(&loaded)) {
 					return true;
 				}
 				// Begun in a frame, the load ends a frame later, and closing its modal focuses the top panel. The
 				// editor starts with no panel focused, as when the load began before the first frame (#437).
 				ImGui::SetWindowFocus(nullptr);
+				if (start_in_game) enter_startup_game_mode(loaded);
 				return false;
 			}));
 	}
@@ -803,7 +834,10 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		return std::nullopt;
 	};
 	m_play = std::make_unique<play_session>(m_state, m_services, m_world_ctrl, m_context->selection(), m_context->events(), std::move(options));
-	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] { if (m_play) m_play->after_module_swap(); });
+	m_swap_gate.set_play_hooks([this] { if (m_play) m_play->before_module_swap(); }, [this] {
+		if (m_play) m_play->after_module_swap();
+		if (m_modes) m_modes->after_module_swap();
+	});
 
 	const auto locked = [this] { return m_state.edits_locked(); };
 	m_hierarchy_panel->set_edits_locked(locked);
@@ -826,10 +860,55 @@ void edt::editor_system::create_play_session(ds::app_data_storage& data)
 		m_play_hold_release = std::move(frame_commands.release_on_stop);
 	}
 
+	// Game mode (#294): F11 / View > Game Mode / editor.mode.toggle. The layer draws the Game view full-window instead
+	// of the dockspace; the docked panel keeps its open state, so editor mode is drawn exactly as without it.
+	// Headless (set by init before this): no layout, so a Stop leaves the mode alone.
+	m_modes = std::make_unique<editor_mode_controller>(*m_play, m_context->events(), !m_context->actions().commands().headless());
+	const auto agent_mode_of = [this](std::string_view command_id) {
+		// No agent server: no agent can call at all.
+		if (!m_agent_access) return cmd::policy_mode::allow;
+		const cmd::command_desc* command = m_context->actions().find(command_id);
+		return command ? m_agent_access->policy().effective(*command).mode : cmd::policy_mode::deny;
+	};
+	for (auto& command : register_editor_mode_commands(m_context->actions(), { .modes = [this] { return m_modes.get(); },
+			.play = [this] { return m_play.get(); }, .person_is_editing = [this] { return person_is_editing(); },
+			.agent_mode_of = agent_mode_of })) {
+		m_registrations.push_back(std::move(command));
+	}
+	editor_layer->set_game_layout([this] { return m_modes && m_modes->mode() == editor_mode::game; },
+		[this] {
+			m_viewport_panel->suspend_camera();
+			m_game_view_panel->render_fullscreen();
+		},
+		is_game_mode_shortcut,
+		[this] { m_game_view_panel->bind_fullscreen_input(); });
+	m_mode_changed = m_context->events().editor_mode_changed.subscribe([this](editor_mode mode) {
+		if (mode == editor_mode::editor) m_viewport_panel->resume_camera();
+	});
+	// Popups and dialog_service modals are seen by ImGui; the agent's question is an ordinary window.
+	m_game_view_panel->set_input_blocked([this] {
+		return m_context->dialogs().pending() > 0 || (m_agent_access && !m_agent_access->confirmations().pending().empty());
+	});
+
 	editor_layer->set_menu_bar_status([this] {
 		draw_play_status();
 		m_live_mode->draw_status();
 	});
+}
+
+void edt::editor_system::enter_startup_game_mode(bool level_loaded)
+{
+	if (!level_loaded) {
+		egLOG_WARN("editor", "game mode not entered: the start level did not load");
+		return;
+	}
+	// editor/exit_after_level_loaded already asked the loop to stop: Play would only start to be torn down.
+	if (m_stop_after_level_loaded) {
+		egLOG_INFO("editor", "game mode not entered: the editor exits after the level loaded");
+		return;
+	}
+	// A refusal is logged by the controller; the editor stays in editor mode.
+	if (m_modes) (void)m_modes->set_mode(editor_mode::game);
 }
 
 void edt::editor_system::draw_play_status()
@@ -1136,10 +1215,11 @@ void edt::editor_system::begin_level_load(const res::tag& original_tag)
 	m_loading_level = true;
 }
 
-bool edt::editor_system::poll_level_load()
+bool edt::editor_system::poll_level_load(bool* loaded_out)
 {
 	if (m_loading_level_handle.has_error()) {
 		egLOG_ERROR("Editor/Load", "Failed to load level '{}'", m_state.editor_tag.view());
+		if (loaded_out) *loaded_out = false;
 		m_loading_level = false;
 		m_loading_level_handle = {};
 		return false;
@@ -1152,6 +1232,7 @@ bool edt::editor_system::poll_level_load()
 		{
 			if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
 				ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+				if (loaded_out) *loaded_out = false;
 				m_loading_level = false;
 				m_loading_level_handle = {};
 				ImGui::CloseCurrentPopup();
@@ -1175,6 +1256,7 @@ bool edt::editor_system::poll_level_load()
 	// Play cannot start during a load (start_blocker); one that runs anyway is of the level being replaced.
 	if (m_play && m_play->active()) m_play->stop();
 	const bool loaded = m_level_ctrl.finish_level_load(m_loading_level_handle);
+	if (loaded_out) *loaded_out = loaded;
 	m_loading_level = false;
 	m_loading_level_handle = {};
 	if (loaded) {

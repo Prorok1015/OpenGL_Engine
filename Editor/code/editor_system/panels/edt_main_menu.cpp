@@ -49,19 +49,6 @@ namespace {
 		return ImGuiKey_None;
 	}
 
-	// Works regardless of menu focus.
-	void fire_shortcuts(edt::action_registry& actions)
-	{
-		const ImGuiIO& io = ImGui::GetIO();
-		std::optional<edt::shortcut> pressed;
-		actions.for_each_shortcut([&](const edt::shortcut& chord) {
-			if (pressed || chord.ctrl != io.KeyCtrl || chord.shift != io.KeyShift || chord.alt != io.KeyAlt) return;
-			const ImGuiKey key = key_from_name(chord.key);
-			if (key != ImGuiKey_None && ImGui::IsKeyPressed(key, false)) pressed = chord;
-		});
-		if (pressed) actions.dispatch(*pressed, io.WantTextInput);
-	}
-
 	void draw_panel_toggles(edt::panel_registry& panels)
 	{
 		for (const edt::panel_info& panel : panels.panels()) {
@@ -86,10 +73,20 @@ std::vector<edt::registration> edt::register_builtin_menus(action_registry& acti
 	return out;
 }
 
+bool edt::fire_shortcuts(action_registry& actions, const std::function<bool(std::string_view)>& allowed)
+{
+	const ImGuiIO& io = ImGui::GetIO();
+	std::optional<shortcut> pressed;
+	actions.for_each_shortcut([&](const shortcut& chord) {
+		if (pressed || chord.ctrl != io.KeyCtrl || chord.shift != io.KeyShift || chord.alt != io.KeyAlt) return;
+		const ImGuiKey key = key_from_name(chord.key);
+		if (key != ImGuiKey_None && ImGui::IsKeyPressed(key, false)) pressed = chord;
+	});
+	return pressed && actions.dispatch(*pressed, io.WantTextInput, allowed);
+}
+
 void edt::draw_main_menu(action_registry& actions, panel_registry& panels)
 {
-	fire_shortcuts(actions);
-
 	for (const std::string& menu : actions.menus()) {
 		if (!ImGui::BeginMenu(menu.c_str())) continue;
 

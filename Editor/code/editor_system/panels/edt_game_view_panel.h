@@ -35,6 +35,16 @@ namespace edt
 		// The "game" view of viewport.capture.
 		const std::optional<res::tag>& render_target() const { return m_target; }
 
+		// Game mode (#294): instead of the panel, one undecorated window over the whole main viewport with only the
+		// letterboxed image of the picked camera, and the whole window feeds the play context with input. The panel's
+		// own open state is left alone; the render target stays the "game" view of viewport.capture.
+		void render_fullscreen();
+		// After the frame's implicit callbacks (editor_layer), which may open a popup or a dialog: binds the window
+		// render_fullscreen() drew to the play context unless one is open now.
+		void bind_fullscreen_input();
+		// An editor dialog or question is shown over the full-window view: the game gets no input then. Null: never.
+		void set_input_blocked(std::function<bool()> blocked) { m_input_blocked = std::move(blocked); }
+
 	protected:
 		void on_render() override;
 		// Closed, collapsed or in a hidden tab: stop rendering the picked camera.
@@ -46,11 +56,20 @@ namespace edt
 		gui::gui_system&    m_gui;
 		// Gives the game cameras that draw into `target` (in the registry of any world) `size`, switches the others off.
 		void apply_viewports_to_all(const res::tag& target, glm::ivec2 size, entt::entity picked = entt::null);
+		// The active world's registry once its cameras are refreshed; null (every game camera off) when there is no
+		// world or no camera in it, with `why` the text to show.
+		entt::registry* pick_registry(const char*& why);
+		// Sizes the picked camera of `reg` to `avail` (window units) and draws its image letterboxed into `avail` at the
+		// cursor; true when the image was drawn.
+		bool draw_picked_camera(entt::registry& reg, glm::vec2 avail);
 
 		std::function<entt::registry*()> m_get_registry;
 		std::function<void(const registry_visitor&)> m_for_each_registry;
 		game_view::selection m_selection;
 		inp::input_router* m_router = nullptr;
 		input_target_getter m_input_target;
+		std::function<bool()> m_input_blocked;
+		// The viewport rect (pos, size) render_fullscreen() drew this frame, for bind_fullscreen_input().
+		std::optional<glm::vec4> m_input_rect;
 	};
 }
