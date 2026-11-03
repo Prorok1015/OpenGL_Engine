@@ -287,7 +287,7 @@ BOOST_AUTO_TEST_CASE(NameStatus_ReadsRenamesCopiesAndPlainChanges)
 	const std::string output = "M\0" "a.txt\0"s
 		+ "R087\0old name.txt\0new name.txt\0"s
 		+ "C100\0src/x.h\0src/y.h\0"s
-		+ "A\0dir/" + cyrillic_file + ".txt\0"s
+		+ "A\0dir/"s + cyrillic_file + ".txt\0"s
 		+ "D\0gone.txt\0"s
 		+ "T\0link\0"s;
 

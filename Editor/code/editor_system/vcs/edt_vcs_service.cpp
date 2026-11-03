@@ -2456,7 +2456,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	show_files.args_schema = json::parse(R"({
 		"type": "object",
 		"properties": {
-			"commit": { "type": "string", "minLength": 1, "description": "A commit hash: 4 to 64 hex digits" }
+			"commit": { "type": "string", "minLength": 1, "description": "A commit hash (4 to 64 hex digits)" }
 		},
 		"required": ["commit"],
 		"additionalProperties": false

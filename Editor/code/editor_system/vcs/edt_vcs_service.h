@@ -18,17 +18,6 @@
 
 namespace edt
 {
-	// vcs.log's filters besides ref and path. At namespace scope: GCC cannot use a nested class with default member
-	// initializers as a default argument of its enclosing class's member functions.
-	struct vcs_log_filter
-	{
-		// Every branch, remote branch and tag instead of one ref.
-		bool all = false;
-		// Literal, without case; empty: none.
-		std::string author;
-		std::string grep;
-	};
-
 	struct vcs_options
 	{
 		// cfg vcs/git; empty: "git" on the PATH of the editor's environment.
@@ -110,7 +99,15 @@ namespace edt
 		// The cached state; the repository is looked up again when the project root changed.
 		const state& info();
 
-		using log_filter = vcs_log_filter;
+		// vcs.log's filters besides ref and path.
+		struct log_filter
+		{
+			// Every branch, remote branch and tag instead of one ref.
+			bool all = false;
+			// Literal, without case; empty: none.
+			std::string author;
+			std::string grep;
+		};
 
 		inline static constexpr std::size_t k_max_log_snapshots = 8;
 		inline static constexpr std::size_t k_max_filter_bytes = 256;
