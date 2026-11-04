@@ -428,6 +428,12 @@ void edt::editor_system::init(ds::app_data_storage& data)
 		begin_level_load(res::tag::make(relative.string()));
 		editor_layer->register_implicit("edt/load_level", [this] { return poll_level_load(); });
 	};
+	// An agent's file.open / file.new would replace the start level behind the loading screen, and Play would start on
+	// its level (#518). A person has no menu or shortcut then.
+	hooks.level_change_blocker = [this]() -> std::optional<std::string> {
+		if (m_modes && m_modes->startup_pending()) return std::string{ "the start level is loading" };
+		return std::nullopt;
+	};
 #if SNK_HAS_ASSIMP
 	hooks.import_model = [this](const std::filesystem::path& abs_path) { start_import(abs_path); };
 #endif

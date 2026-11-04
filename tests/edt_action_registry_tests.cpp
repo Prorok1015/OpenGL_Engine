@@ -11,6 +11,7 @@
 #include <boost/json/serialize.hpp>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -922,6 +923,29 @@ BOOST_AUTO_TEST_CASE(EachBuiltinActionRunsHeadlessWithJsonArguments)
 	BOOST_TEST((f.calls == std::vector<std::string>{
 		"new", "load:/res/levels/a.desc", "save_as:levels/b.desc", "quick_save", "import:/models/m.glb", "exit" }));
 	BOOST_CHECK(f.gui.callbacks.empty()); // no dialog was asked for
+}
+
+// While the start level of --game loads (#518) nobody may replace it: file.open and file.new answer busy, then run.
+BOOST_AUTO_TEST_CASE(LevelChanges_AreBusyWhileTheStartLevelLoads)
+{
+	file_menu_fixture f;
+	std::optional<std::string> blocker = "the start level is loading";
+	edt::action_registry actions;
+	edt::file_menu_hooks hooks = f.hooks;
+	hooks.level_change_blocker = [&blocker] { return blocker; };
+	edt::file_menu menu(f.dialogs, actions, hooks);
+	menu.register_actions();
+
+	const auto open = actions.invoke("file.open", json_of(R"({"path":"/res/levels/a.desc"})"));
+	BOOST_CHECK_EQUAL(open.code, "busy");
+	BOOST_CHECK_EQUAL(open.error, "the start level is loading");
+	BOOST_CHECK_EQUAL(actions.invoke("file.new", json_of(R"({"discard_unsaved":true})")).code, "busy");
+	BOOST_CHECK(f.calls.empty());
+
+	blocker.reset(); // finish_startup
+	BOOST_CHECK(actions.invoke("file.open", json_of(R"({"path":"/res/levels/a.desc"})")).ok);
+	BOOST_CHECK(actions.invoke("file.new", json_of("{}")).ok);
+	BOOST_TEST((f.calls == std::vector<std::string>{ "load:/res/levels/a.desc", "new" }));
 }
 
 // An editor built without assimp sets no import hook: the item stays in the menu, disabled, with the reason.
