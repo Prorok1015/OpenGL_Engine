@@ -262,7 +262,7 @@ namespace {
 
 	bool is_curl_home(const std::string& entry)
 	{
-		constexpr std::string_view name = "CURL_HOME=";
+		constexpr std::string_view name = "curl_home=";
 		return entry.size() >= name.size() && lower(std::string_view(entry).substr(0, name.size())) == name;
 	}
 
