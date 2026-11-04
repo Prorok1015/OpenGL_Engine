@@ -2452,6 +2452,7 @@ namespace {
 		desc.summary = std::move(summary);
 		desc.args_schema = json::parse(args_schema);
 		desc.result_schema = json::parse(JOB_RESULT_SCHEMA);
+		desc.starts_job = true;
 		desc.mutates = true;
 		desc.category = category;
 		return desc;
@@ -2494,6 +2495,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	status.category = cmd::agent_category::vcs_read;
 	status.summary = "Start reading git status (branch, upstream, ahead/behind, changed files); the result arrives in job.get";
 	status.result_schema = json::parse(JOB_RESULT_SCHEMA);
+	status.starts_job = true;
 	status.invoke = [&service](const cmd::call& request) { return job_answer(service.start_status(request.from)); };
 	keep(out, commands.add(std::move(status)));
 
@@ -2513,6 +2515,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	diff.result_schema = json::parse(JOB_RESULT_SCHEMA);
+	diff.starts_job = true;
 	diff.invoke = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		bool staged = false;
@@ -2546,6 +2549,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	log.result_schema = json::parse(JOB_RESULT_SCHEMA);
+	log.starts_job = true;
 	log.invoke = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		int limit = vcs_service::k_default_log_limit;
@@ -2575,6 +2579,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 		"additionalProperties": false
 	})");
 	show_files.result_schema = json::parse(JOB_RESULT_SCHEMA);
+	show_files.starts_job = true;
 	show_files.invoke = [&service](const cmd::call& request) {
 		return job_answer(service.start_show_files(string_arg(request.args.as_object(), "commit"), request.from));
 	};
@@ -2585,6 +2590,7 @@ std::vector<edt::registration> edt::register_vcs_commands(cmd::command_registry&
 	branches.category = cmd::agent_category::vcs_read;
 	branches.summary = "Start listing the local and remote-tracking branches; the result arrives in job.get";
 	branches.result_schema = json::parse(JOB_RESULT_SCHEMA);
+	branches.starts_job = true;
 	branches.invoke = [&service](const cmd::call& request) { return job_answer(service.start_branches(request.from)); };
 	keep(out, commands.add(std::move(branches)));
 

@@ -47,6 +47,14 @@ namespace {
 		return info;
 	}
 
+	edt::mcp_bridge_options make_bridge_options(const edt::agent_server_options& options)
+	{
+		edt::mcp_bridge_options out;
+		out.jobs = options.jobs;
+		out.events = options.events;
+		return out;
+	}
+
 	mcp::server_config make_server_config(const edt::agent_server_options& options, std::string token)
 	{
 		mcp::server_config config;
@@ -68,7 +76,7 @@ struct edt::agent_server::impl
 {
 	impl(cmd::command_registry& commands, ds::task_system& tasks, agent_access& access, const agent_server_options& options_)
 		: options(options_)
-		, bridge(commands, tasks, access, options_.on_session_closed)
+		, bridge(commands, tasks, access, options_.on_session_closed, make_bridge_options(options_))
 	{
 	}
 
@@ -231,6 +239,11 @@ std::uint16_t edt::agent_server::port() const
 std::string edt::agent_server::stdio_session() const
 {
 	return m_impl->stdio ? m_impl->stdio->session_id() : std::string{};
+}
+
+void edt::agent_server::tick()
+{
+	m_impl->bridge.tick();
 }
 
 void edt::agent_server::notify_tools_changed()

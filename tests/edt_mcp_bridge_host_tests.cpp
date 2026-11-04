@@ -7,6 +7,7 @@
 #include "edt_mcp_bridge_host.h"
 #include "mcp_test_support.hpp"
 #include <snk/editor/edt_editor_events.h>
+#include <snk/editor/edt_job_service.h>
 #include <snk/mcp/mcp_endpoint.h>
 #include <snk/command/cmd_registry.h>
 #include <filesystem>
@@ -21,6 +22,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1462,6 +1464,419 @@ BOOST_AUTO_TEST_CASE(ABridgeGoneBeforeThePersonAnswers_StillDeliversTheAnswerOnc
 	BOOST_REQUIRE_EQUAL(answers.size(), 1u);
 	BOOST_TEST(!answers[0].is_error);
 	BOOST_TEST(runs == 1);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+namespace {
+
+constexpr const char* job_result_schema = R"json({"type":"object","properties":{"job":{"type":"integer","minimum":0}},"required":["job"],"additionalProperties":false})json";
+
+struct progress_note
+{
+	double progress = 0;
+	double total = 0;
+	std::string message;
+};
+
+// What one tools/call got back: the notifications/progress sent for it and its answers (one at most).
+struct call_outcome
+{
+	std::vector<progress_note> notes;
+	std::vector<mcp::call_result> answers;
+};
+
+// A bridge that follows jobs (mcp_bridge_options) over a job_service of the manual task system and the fake clock. The
+// test raises the job progress itself; in the editor job_service::pump raises it once per frame.
+struct job_bridge_fixture : bridge_fixture
+{
+	edt::job_service jobs{ tasks, &events };
+	ds::lifetime job_owner{ ds::lifetime_option::cancel_on_destroy };
+	edt::mcp_bridge_host held_bridge{ commands, tasks, access, [this](const std::string& session) { events.agent_session_closed.emit(session); },
+		bridge_options() };
+	edt::job_service::job_id last_job = 0;
+
+	job_bridge_fixture()
+	{
+		add(job_command("test.job_ok", [](ds::task_context&) { return json_of(R"json({"lines":3})json"); }));
+		cmd::command_desc none = make("test.job_none");
+		none.starts_job = true;
+		none.result_schema = json_of(R"json({"type":"object","properties":{"started":{"type":"boolean"},"job":{"type":"integer"}},"required":["started","job"],"additionalProperties":false})json");
+		none.invoke = [](const cmd::call&) { return cmd::result::success(json_of(R"json({"started":false,"job":0})json")); };
+		add(std::move(none));
+	}
+
+	edt::mcp_bridge_options bridge_options()
+	{
+		edt::mcp_bridge_options options;
+		options.jobs = &jobs;
+		options.events = &events;
+		options.clock = [this] { return current; };
+		return options;
+	}
+
+	template<class Work>
+	cmd::command_desc job_command(std::string id, Work work)
+	{
+		cmd::command_desc desc = make(std::move(id));
+		desc.result_schema = json_of(job_result_schema);
+		desc.starts_job = true;
+		desc.invoke = [this, work](const cmd::call&) {
+			last_job = jobs.start_with_result(ds::lane::io, ds::task_desc{ "test job", "test", true }, job_owner, work);
+			return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(last_job) } });
+		};
+		return desc;
+	}
+
+	std::shared_ptr<call_outcome> start_call(const std::string& name, bool wants_progress, json::value request_id = 1,
+		const std::string& session = "session-1")
+	{
+		auto outcome = std::make_shared<call_outcome>();
+		mcp::request_context context;
+		context.session_id = session;
+		context.request_id = std::move(request_id);
+		context.wants_progress = wants_progress;
+		held_bridge.call_tool(context, name, json_of("{}"),
+			[outcome](double progress, double total, std::string_view message) { outcome->notes.push_back({ progress, total, std::string(message) }); },
+			[outcome](mcp::call_result result) { outcome->answers.push_back(std::move(result)); });
+		drain();
+		return outcome;
+	}
+
+	// Runs the queued jobs and delivers their end on the main thread.
+	void finish_jobs()
+	{
+		test_util::pump(tasks);
+	}
+};
+
+const json::object& structured(const call_outcome& outcome)
+{
+	BOOST_REQUIRE_EQUAL(outcome.answers.size(), 1u);
+	BOOST_REQUIRE(!outcome.answers[0].is_error);
+	return outcome.answers[0].structured.as_object();
+}
+
+}
+
+BOOST_FIXTURE_TEST_SUITE(EdtMcpBridgeJobProgressTests, job_bridge_fixture)
+
+BOOST_AUTO_TEST_CASE(WithAToken_TheAnswerWaitsForTheJob_AndItsProgressIsThrottled)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_REQUIRE(jobs.is_running(last_job));
+
+	events.job_progress.emit(last_job, 0.125f, "counting 12%");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+	BOOST_TEST(outcome->notes[0].progress == 0.125);
+	BOOST_TEST(outcome->notes[0].total == 1.0);
+	BOOST_TEST(outcome->notes[0].message == "counting 12%");
+
+	current += std::chrono::milliseconds(100);
+	events.job_progress.emit(last_job, 0.25f, "receiving 20%");
+	current += std::chrono::milliseconds(100);
+	events.job_progress.emit(last_job, 0.5f, "receiving 50%");
+	held_bridge.tick();
+	BOOST_TEST(outcome->notes.size() == 1u);
+
+	// The slot opens: the latest value goes out, the one it replaced never does.
+	current += std::chrono::milliseconds(100);
+	held_bridge.tick();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 2u);
+	BOOST_TEST(outcome->notes[1].progress == 0.5);
+	BOOST_TEST(outcome->notes[1].message == "receiving 50%");
+
+	current += std::chrono::milliseconds(50);
+	events.job_progress.emit(last_job, 0.875f, "resolving 87%");
+	BOOST_TEST(outcome->notes.size() == 2u);
+	BOOST_TEST(outcome->answers.empty());
+
+	// The last value before the end is not lost, and the answer comes after it.
+	finish_jobs();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 3u);
+	BOOST_TEST(outcome->notes[2].message == "resolving 87%");
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+	BOOST_TEST(answer.at("result").at("lines").as_int64() == 3);
+	BOOST_TEST(!answer.contains("error"));
+}
+
+BOOST_AUTO_TEST_CASE(WithoutAToken_TheJobIsAnsweredAtOnce)
+{
+	const auto outcome = start_call("test_job_ok", false);
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(!answer.contains("status"));
+
+	events.job_progress.emit(last_job, 0.5f, "half");
+	finish_jobs();
+	BOOST_TEST(outcome->notes.empty());
+	BOOST_TEST(outcome->answers.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(AJobThatAlreadyEnded_IsAnsweredAtOnceWithItsOutcome)
+{
+	const edt::job_service::job_id failed = jobs.start_with_result(ds::lane::io, ds::task_desc{ "test job", "test", true }, job_owner,
+		[](ds::task_context&) -> json::value { throw std::runtime_error("no remote"); });
+	finish_jobs();
+	BOOST_REQUIRE(!jobs.is_running(failed));
+	cmd::command_desc given = make("test.job_given");
+	given.result_schema = json_of(job_result_schema);
+	given.starts_job = true;
+	given.invoke = [failed](const cmd::call&) { return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(failed) } }); };
+	add(std::move(given));
+
+	const auto outcome = start_call("test_job_given", true);
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(text_of(answer.at("status")) == "failed");
+	BOOST_TEST(text_of(answer.at("error")).find("no remote") != std::string::npos);
+	BOOST_TEST(!answer.contains("result"));
+	BOOST_TEST(outcome->notes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(AResultWithoutAJob_IsAnsweredAtOnce)
+{
+	const auto outcome = start_call("test_job_none", true);
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("started").as_bool() == false);
+	BOOST_TEST(!answer.contains("status"));
+}
+
+BOOST_AUTO_TEST_CASE(Cancelled_CancelsTheJob_AndAnswersNothing)
+{
+	const auto outcome = start_call("test_job_ok", true, json::value("call-7"));
+	const edt::job_service::job_id job = last_job;
+
+	// Another session's request with the same id, or another id, is not this call.
+	held_bridge.cancel_request("session-2", json::value("call-7"));
+	held_bridge.cancel_request("session-1", json::value("call-8"));
+	drain();
+	BOOST_TEST(!jobs.info(job)->cancel_requested);
+
+	held_bridge.cancel_request("session-1", json::value("call-7"));
+	drain();
+	BOOST_TEST(jobs.info(job)->cancel_requested);
+	events.job_progress.emit(job, 0.5f, "half");
+	finish_jobs();
+	BOOST_TEST((jobs.info(job)->status == edt::job_status::cancelled));
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_TEST(outcome->notes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(TheEndOfTheSession_CancelsTheJob_AndAnswersNothing)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	const edt::job_service::job_id job = last_job;
+	const auto other = start_call("test_job_ok", true, json::value(1), "session-2");
+	const edt::job_service::job_id other_job = last_job;
+
+	held_bridge.session_closed("session-1");
+	drain();
+	BOOST_TEST(closed_sessions == std::vector<std::string>{ "session-1" });
+	BOOST_TEST(jobs.info(job)->cancel_requested);
+	finish_jobs();
+	BOOST_TEST(outcome->answers.empty());
+	// The other session's call is answered when its job ends.
+	const json::object& answer = structured(*other);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == other_job);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+}
+
+BOOST_AUTO_TEST_CASE(PastTheHoldLimit_TheAnswerSaysRunning_AndForwardingStops)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	events.job_progress.emit(last_job, 0.25f, "a quarter");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+
+	current += edt::mcp_bridge_options{}.hold_limit - std::chrono::milliseconds(1);
+	held_bridge.tick();
+	BOOST_TEST(outcome->answers.empty());
+
+	current += std::chrono::milliseconds(1);
+	held_bridge.tick();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "running");
+	BOOST_TEST(jobs.is_running(last_job));
+
+	current += std::chrono::seconds(1);
+	events.job_progress.emit(last_job, 0.75f, "later");
+	finish_jobs();
+	BOOST_TEST(outcome->notes.size() == 1u);
+	BOOST_TEST(outcome->answers.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ADestroyedBridge_DropsTheCallsItHeld)
+{
+	auto outcome = std::make_shared<call_outcome>();
+	{
+		edt::mcp_bridge_host local{ commands, tasks, access, {}, bridge_options() };
+		mcp::request_context context;
+		context.session_id = "session-1";
+		context.request_id = 3;
+		context.wants_progress = true;
+		local.call_tool(context, "test_job_ok", json_of("{}"), nullptr, [outcome](mcp::call_result result) { outcome->answers.push_back(std::move(result)); });
+		drain();
+		BOOST_TEST(outcome->answers.empty());
+	}
+	events.job_progress.emit(last_job, 0.5f, "half");
+	finish_jobs();
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_TEST((jobs.info(last_job)->status == edt::job_status::done));
+}
+
+BOOST_AUTO_TEST_CASE(AJobTool_DeclaresTheOutcomeFields)
+{
+	cmd::command_desc reporter = make("test.job_report");
+	reporter.result_schema = json_of(job_result_schema);
+	add(std::move(reporter));
+	int seen = 0;
+	for (const mcp::tool_info& tool : list_tools()) {
+		const bool starts_job = tool.name == "test_job_ok";
+		if (!starts_job && tool.name != "test_job_report") {
+			continue;
+		}
+		++seen;
+		const json::object& properties = tool.output_schema.at("properties").as_object();
+		BOOST_TEST_CONTEXT(tool.name) {
+			BOOST_TEST(properties.contains("job"));
+			BOOST_TEST(properties.contains("status") == starts_job);
+			BOOST_TEST(properties.contains("result") == starts_job);
+			BOOST_TEST(properties.contains("error") == starts_job);
+		}
+	}
+	BOOST_TEST(seen == 2);
+}
+
+BOOST_AUTO_TEST_CASE(AHeldJobThatFails_IsAnsweredWithItsError)
+{
+	add(job_command("test.job_fail", [](ds::task_context&) -> json::value { throw std::runtime_error("no remote"); }));
+	const auto outcome = start_call("test_job_fail", true);
+	BOOST_TEST(outcome->answers.empty());
+	finish_jobs();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "failed");
+	BOOST_TEST(text_of(answer.at("error")).find("no remote") != std::string::npos);
+}
+
+BOOST_AUTO_TEST_CASE(AnOversizedJobResult_IsLeftOut_TheJobAndItsStatusStay)
+{
+	add(job_command("test.job_huge", [](ds::task_context&) { return json::value(json::string(9u * 1024u * 1024u, 'x')); }));
+	const auto outcome = start_call("test_job_huge", true);
+	finish_jobs();
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(text_of(answer.at("status")) == "done");
+	BOOST_TEST(!answer.contains("result"));
+	BOOST_TEST(answer.at("result_dropped").as_bool());
+}
+
+BOOST_AUTO_TEST_CASE(AJobTheCommandDidNotStart_IsNotHeld)
+{
+	// Reports a job (as live.status does with the live build): answered at once, and cancelling it touches nothing.
+	const auto started = start_call("test_job_ok", false);
+	const edt::job_service::job_id job = last_job;
+	cmd::command_desc reporter = make("test.job_report");
+	reporter.result_schema = json_of(job_result_schema);
+	reporter.invoke = [job](const cmd::call&) { return cmd::result::success(json::object{ { "job", static_cast<std::int64_t>(job) } }); };
+	add(std::move(reporter));
+
+	const auto outcome = start_call("test_job_report", true, json::value(9));
+	const json::object& answer = structured(*outcome);
+	BOOST_TEST(!answer.contains("status"));
+	held_bridge.cancel_request("session-1", json::value(9));
+	drain();
+	BOOST_TEST(!jobs.info(job)->cancel_requested);
+	BOOST_TEST(started->answers.size() == 1u);
+}
+
+BOOST_AUTO_TEST_CASE(ACancelBeforeTheCallIsHeld_CancelsTheJob_AndAnswersNothing)
+{
+	// code_files: the owner's table asks a person, so the call waits before its command runs.
+	cmd::command_desc asked = job_command("test.job_asked", [](ds::task_context&) { return json_of("{}"); });
+	asked.category = cmd::agent_category::code_files;
+	asked.mutates = true;
+	add(std::move(asked));
+	access.set_person_present(true);
+
+	const auto outcome = start_call("test_job_asked", true, json::value(5));
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	held_bridge.cancel_request("session-1", json::value(5));
+	drain();
+
+	BOOST_TEST(access.confirmations().answer(waiting[0].id, edt::confirmation_answer::allow_once));
+	BOOST_REQUIRE(last_job != 0);
+	BOOST_TEST(jobs.info(last_job)->cancel_requested);
+	finish_jobs();
+	BOOST_TEST(outcome->answers.empty());
+	BOOST_TEST(outcome->notes.empty());
+}
+
+BOOST_AUTO_TEST_CASE(ASessionThatEndsBeforeTheCallIsHeld_DeclinesTheCall_AndStartsNoJob)
+{
+	cmd::command_desc asked = job_command("test.job_asked", [](ds::task_context&) { return json_of("{}"); });
+	asked.category = cmd::agent_category::code_files;
+	asked.mutates = true;
+	add(std::move(asked));
+	access.set_person_present(true);
+
+	const auto outcome = start_call("test_job_asked", true, json::value(5));
+	const auto waiting = access.confirmations().pending();
+	BOOST_REQUIRE_EQUAL(waiting.size(), 1u);
+	held_bridge.session_closed("session-1");
+	drain();
+	// The question goes with the session (the fixture wires drop_session to agent_session_closed, as the editor does):
+	// the call is declined as any waiting call is, and the command never runs.
+	BOOST_TEST(access.confirmations().pending().empty());
+	BOOST_TEST(last_job == 0u);
+	finish_jobs();
+	BOOST_REQUIRE_EQUAL(outcome->answers.size(), 1u);
+	BOOST_TEST(outcome->answers[0].is_error);
+}
+
+BOOST_AUTO_TEST_CASE(Progress_IsSentOnlyWhenItGrows)
+{
+	const auto outcome = start_call("test_job_ok", true);
+	events.job_progress.emit(last_job, 0.5f, "receiving 50%");
+	current += std::chrono::seconds(1);
+	events.job_progress.emit(last_job, 0.5f, "receiving 50% (1 MiB)");
+	events.job_progress.emit(last_job, 0.25f, "went back");
+	held_bridge.tick();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 1u);
+
+	events.job_progress.emit(last_job, 0.75f, "receiving 75%");
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 2u);
+	BOOST_TEST(outcome->notes[1].progress == 0.75);
+
+	// Within the interval: an equal value only refreshes the note of the one waiting.
+	current += std::chrono::milliseconds(10);
+	events.job_progress.emit(last_job, 0.875f, "resolving 87%");
+	events.job_progress.emit(last_job, 0.75f, "resolving 87% (late note)");
+	current += std::chrono::seconds(1);
+	held_bridge.tick();
+	BOOST_REQUIRE_EQUAL(outcome->notes.size(), 3u);
+	BOOST_TEST(outcome->notes[2].progress == 0.875);
+	BOOST_TEST(outcome->notes[2].message == "resolving 87% (late note)");
+}
+
+BOOST_AUTO_TEST_CASE(AtMost16CallsOfASession_AreHeld)
+{
+	std::vector<std::shared_ptr<call_outcome>> held;
+	for (int i = 0; i < 16; ++i) {
+		held.push_back(start_call("test_job_ok", true, json::value(i)));
+		BOOST_TEST(held.back()->answers.empty());
+	}
+	const auto extra = start_call("test_job_ok", true, json::value(16));
+	const json::object& answer = structured(*extra);
+	BOOST_TEST(answer.at("job").to_number<std::uint64_t>() == last_job);
+	BOOST_TEST(!answer.contains("status"));
+	// Another session has its own share.
+	const auto other = start_call("test_job_ok", true, json::value(0), "session-2");
+	BOOST_TEST(other->answers.empty());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
