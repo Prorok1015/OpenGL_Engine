@@ -76,6 +76,8 @@ namespace {
 		// Guarded: the repository a person was shown for this very call ("host/owner/repo (remote name)"); the job finds
 		// the same or denies. Empty: nobody was asked (the policy allowed it).
 		std::optional<std::string> shown;
+		// Guarded: a person approved this call, so a missing `shown` is a record lost, not a call nobody was asked about.
+		bool approved = false;
 	};
 
 	struct target
@@ -134,6 +136,10 @@ namespace {
 		const edt::vcs_service::repository_reader& git, ds::task_context& task, target& out)
 	{
 		const std::stop_token stop = task.stop;
+		// Fail closed: without the repository the person was shown there is nothing to compare the one found with.
+		if (plan.guarded && plan.approved && !plan.shown) {
+			return error_result("denied", "the repository shown for approval is no longer known: ask again");
+		}
 		if (plan.guarded && !plan.head.empty()) {
 			if (auto why = edt::vcs_push_branch_refusal(plan.policy, plan.head)) {
 				return error_result("denied", "a pull request's head must be a branch an agent may push: " + *why);
@@ -289,7 +295,7 @@ edt::vcs_policy edt::forge_service::current_policy() const
 
 void edt::forge_service::remember_shown(std::string key, std::string target)
 {
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = this->now();
 	std::erase_if(m_shown, [&](const shown_target& shown) { return shown.key == key || now - shown.at > k_shown_lifetime; });
 	if (m_shown.size() >= k_max_shown) m_shown.erase(m_shown.begin());
 	m_shown.push_back({ std::move(key), std::move(target), now });
@@ -297,7 +303,7 @@ void edt::forge_service::remember_shown(std::string key, std::string target)
 
 std::optional<std::string> edt::forge_service::take_shown(const std::string& key)
 {
-	const auto now = std::chrono::steady_clock::now();
+	const auto now = this->now();
 	std::erase_if(m_shown, [&](const shown_target& shown) { return now - shown.at > k_shown_lifetime; });
 	const auto found = std::find_if(m_shown.begin(), m_shown.end(), [&](const shown_target& shown) { return shown.key == key; });
 	if (found == m_shown.end()) return std::nullopt;
@@ -314,8 +320,13 @@ std::optional<std::string> edt::forge_service::describe(std::string before, cons
 	std::string target = "refused";
 	if (!refusal) {
 		const vcs_policy policy = current_policy();
-		const vcs_service::remote_snapshot snapshot = m_vcs.read_remote_now(remote);
+		const vcs_service::remote_snapshot snapshot = m_remote_reader ? m_remote_reader(remote) : m_vcs.read_remote_now(remote);
 		forge::forge_remote parsed;
+		if (snapshot.code == vcs_service::k_describe_timeout) {
+			// "refused" is what the job compares with, so it denies too.
+			remember_shown(std::move(key), target);
+			return std::string("repository could not be determined, will be refused");
+		}
 		if (!snapshot.ok()) {
 			refusal = snapshot.error;
 		} else if (!remote_in_policy(policy, snapshot.remote)) {
@@ -384,7 +395,7 @@ std::optional<std::string> edt::forge_service::check_create_request(const create
 	return std::nullopt;
 }
 
-edt::vcs_service::started edt::forge_service::start_create_pr(const create_request& request, const cmd::origin& caller)
+edt::vcs_service::started edt::forge_service::start_create_pr(const create_request& request, const cmd::origin& caller, bool approved)
 {
 	const bool guarded = caller.kind != cmd::origin_kind::ui;
 	// Only a person opens a pull request that is ready for review.
@@ -400,6 +411,7 @@ edt::vcs_service::started edt::forge_service::start_create_pr(const create_reque
 	if (guarded) {
 		plan.policy = current_policy();
 		plan.head = request.head;
+		plan.approved = approved;
 		plan.shown = take_shown(call_key(caller, "create_pr", { request.remote, request.base, request.head, request.title, request.body }));
 	}
 	forge::create_pr_request wanted;
@@ -416,7 +428,7 @@ edt::vcs_service::started edt::forge_service::start_create_pr(const create_reque
 	});
 }
 
-edt::vcs_service::started edt::forge_service::start_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller)
+edt::vcs_service::started edt::forge_service::start_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller, bool approved)
 {
 	if (number <= 0) return { 0, cmd::codes::invalid_args, "number must be a pull request number" };
 	call_plan plan;
@@ -425,6 +437,7 @@ edt::vcs_service::started edt::forge_service::start_pr_status(std::int64_t numbe
 	plan.guarded = caller.kind != cmd::origin_kind::ui;
 	if (plan.guarded) {
 		plan.policy = current_policy();
+		plan.approved = approved;
 		plan.shown = take_shown(call_key(caller, "pr_status", { remote, std::to_string(number) }));
 	}
 	return start_call(m_vcs, m_options, std::move(plan), caller, [number](forge::forge_provider& provider, const target& found,
@@ -435,7 +448,7 @@ edt::vcs_service::started edt::forge_service::start_pr_status(std::int64_t numbe
 	});
 }
 
-edt::vcs_service::started edt::forge_service::start_list_prs(const list_request& request, const cmd::origin& caller)
+edt::vcs_service::started edt::forge_service::start_list_prs(const list_request& request, const cmd::origin& caller, bool approved)
 {
 	if (request.state != "open" && request.state != "closed" && request.state != "all") {
 		return { 0, cmd::codes::invalid_args, "state must be open, closed or all" };
@@ -446,6 +459,7 @@ edt::vcs_service::started edt::forge_service::start_list_prs(const list_request&
 	plan.guarded = caller.kind != cmd::origin_kind::ui;
 	if (plan.guarded) {
 		plan.policy = current_policy();
+		plan.approved = approved;
 		const std::string limit = std::to_string(std::clamp(request.limit, 1, k_max_list_limit));
 		plan.shown = take_shown(call_key(caller, "list_prs", { request.remote, request.state, request.head, request.base, limit }));
 	}
@@ -486,7 +500,7 @@ std::vector<edt::registration> edt::register_forge_commands(cmd::command_registr
 	})", true);
 	create.risk = cmd::danger::confirm;
 	create.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_create_pr(create_request_of(request.args.as_object()), request.from));
+		return job_answer(service.start_create_pr(create_request_of(request.args.as_object()), request.from, !request.confirmation.empty()));
 	};
 	create.describe = [&service](const cmd::call& request) {
 		return service.describe_create_pr(create_request_of(request.args.as_object()), request.from);
@@ -506,7 +520,7 @@ std::vector<edt::registration> edt::register_forge_commands(cmd::command_registr
 	status.invoke = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
 		const std::int64_t number = cmd::json_schema::integer_of(args.at("number")).value_or(0);
-		return job_answer(service.start_pr_status(number, string_arg(args, "remote"), request.from));
+		return job_answer(service.start_pr_status(number, string_arg(args, "remote"), request.from, !request.confirmation.empty()));
 	};
 	status.describe = [&service](const cmd::call& request) {
 		const json::object& args = request.args.as_object();
@@ -528,7 +542,8 @@ std::vector<edt::registration> edt::register_forge_commands(cmd::command_registr
 		"additionalProperties": false
 	})", false);
 	list.invoke = [&service](const cmd::call& request) {
-		return job_answer(service.start_list_prs(list_request_of(request.args.as_object()), request.from));
+		return job_answer(service.start_list_prs(list_request_of(request.args.as_object()), request.from,
+			!request.confirmation.empty()));
 	};
 	list.describe = [&service](const cmd::call& request) {
 		return service.describe_list_prs(list_request_of(request.args.as_object()), request.from);

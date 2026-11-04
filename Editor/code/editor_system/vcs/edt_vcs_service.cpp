@@ -2505,7 +2505,7 @@ edt::vcs_service::remote_snapshot edt::vcs_service::read_remote_now(const std::s
 
 	std::stop_source stop;
 	std::atomic<bool> returned = false;
-	const std::chrono::milliseconds timeout = m_options.probe_timeout;
+	const std::chrono::milliseconds timeout = m_options.describe_timeout;
 	bool cancelled = false;
 	{
 		// Destroyed (stop requested, joined) as soon as the reads return: no thread outlives the call.
@@ -2539,10 +2539,7 @@ edt::vcs_service::remote_snapshot edt::vcs_service::read_remote_now(const std::s
 		}
 		returned = true;
 	}
-	if (cancelled) {
-		set_probe_timeout();
-		return fail("vcs_unavailable", m_state.reason);
-	}
+	if (cancelled) return fail(k_describe_timeout, "git did not answer in time");
 	return out;
 }
 
@@ -2639,7 +2636,7 @@ edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader:
 		// A bare key reads as an empty prefix, which every URL starts with.
 		const std::string_view prefix = newline == std::string::npos ? std::string_view{} : std::string_view(record).substr(newline + 1);
 		if (written.front().starts_with(prefix)) {
-			return reader_refusal(cmd::codes::denied, std::format("the repository's config rewrites the URL of the remote '{}' "
+			return reader_refusal(cmd::codes::denied, std::format("the git config (the repository's, or the global ~/.gitconfig) rewrites the URL of the remote '{}' "
 				"({}): the address a request goes to cannot be told", shown,
 				edt::vcs::valid_utf8(edt::vcs::utf8_prefix(record.substr(0, newline), 120))));
 		}

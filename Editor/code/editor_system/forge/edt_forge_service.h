@@ -42,7 +42,8 @@ namespace edt
 	// the remote parses and its host is allowed. That URL is the one written in the config (`remote.<name>.url`), never
 	// `git remote get-url`'s: a remote with a pushurl, or whose URL a url.<base>.insteadOf rewrites, is refused `denied`
 	// (the repository's own config could point the token at another repository). The repository is read before the
-	// person is asked (describe_*) and the job checks that it found the same one.
+	// person is asked (describe_*) and the job checks that it found the same one; an approved call whose shown repository
+	// is no longer remembered, or could not be determined in time, is denied.
 	class forge_service
 	{
 	public:
@@ -89,16 +90,25 @@ namespace edt
 		static std::optional<std::string> check_create_request(const create_request& request);
 
 		// What a person is told before an agent's call is allowed: the repository it would go to (host/owner/repo and the
-		// remote), read now from the config on the main thread (bounded by vcs_options::probe_timeout), or why the call
+		// remote), read now from the config on the main thread (bounded by vcs_options::describe_timeout), or why the call
 		// will be refused. Remembers the repository, so that the job started for the same call (same session and
 		// arguments) denies when it finds another. nullopt for a person's call. Plain text, already sanitized.
 		std::optional<std::string> describe_create_pr(const create_request& request, const cmd::origin& caller);
 		std::optional<std::string> describe_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller);
 		std::optional<std::string> describe_list_prs(const list_request& request, const cmd::origin& caller);
 
-		vcs_service::started start_create_pr(const create_request& request, const cmd::origin& caller);
-		vcs_service::started start_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller);
-		vcs_service::started start_list_prs(const list_request& request, const cmd::origin& caller);
+		// `approved`: a person answered a question for this call (call::confirmation is set). A guarded approved call whose
+		// shown repository is no longer remembered (evicted, expired) is `denied` by the job before any request.
+		vcs_service::started start_create_pr(const create_request& request, const cmd::origin& caller, bool approved = false);
+		vcs_service::started start_pr_status(std::int64_t number, const std::string& remote, const cmd::origin& caller, bool approved = false);
+		vcs_service::started start_list_prs(const list_request& request, const cmd::origin& caller, bool approved = false);
+
+		using clock_function = std::function<std::chrono::steady_clock::time_point()>;
+		using remote_reader = std::function<vcs_service::remote_snapshot(const std::string&)>;
+		// Tests: the clock the shown repositories age by, and the read of the remote that describe_* does (default:
+		// vcs_service::read_remote_now).
+		void set_clock(clock_function clock) { m_clock = std::move(clock); }
+		void set_remote_reader(remote_reader reader) { m_remote_reader = std::move(reader); }
 
 	private:
 		struct shown_target
@@ -112,12 +122,15 @@ namespace edt
 		vcs_policy current_policy() const;
 		std::optional<std::string> describe(std::string before, const std::string& remote, std::string key, const cmd::origin& caller,
 			std::string after, std::optional<std::string> refusal);
+		std::chrono::steady_clock::time_point now() const { return m_clock ? m_clock() : std::chrono::steady_clock::now(); }
 		void remember_shown(std::string key, std::string target);
 		// The repository shown for this call, once.
 		std::optional<std::string> take_shown(const std::string& key);
 
 		vcs_service& m_vcs;
 		std::function<vcs_policy()> m_policy_source;
+		clock_function m_clock;
+		remote_reader m_remote_reader;
 		// Held by the jobs as well: one dropped before it ran may outlive the service.
 		std::shared_ptr<const forge_options> m_options;
 		// The last few repositories shown to a person, by call; dropped when their job starts or after a few minutes.
