@@ -2154,6 +2154,24 @@ bool edt::vcs_glob_match(std::string_view pattern, std::string_view text, bool i
 	return p == pattern.size();
 }
 
+std::optional<std::string> edt::vcs_push_branch_refusal(const vcs_policy& policy, std::string_view branch)
+{
+	const auto matches = [branch](const std::vector<std::string>& patterns, bool ignore_case) {
+		return std::any_of(patterns.begin(), patterns.end(),
+			[branch, ignore_case](const std::string& pattern) { return vcs_glob_match(pattern, branch, ignore_case); });
+	};
+	if (matches(policy.protected_branches, true)) {
+		return std::format("'{}' is a protected branch: agents never push to it (vcs.protected_branches)", vcs::valid_utf8(branch));
+	}
+	if (!matches(policy.push_branches, false)) {
+		std::string allowed;
+		for (const auto& pattern : policy.push_branches) allowed += (allowed.empty() ? "" : ", ") + vcs::valid_utf8(pattern);
+		return std::format("the agent policy does not allow a push to '{}' (vcs.push_branches: {})", vcs::valid_utf8(branch),
+			allowed.empty() ? "none" : allowed);
+	}
+	return std::nullopt;
+}
+
 edt::vcs_service::started edt::vcs_service::start_stage(const std::vector<std::string>& paths, const cmd::origin& caller)
 {
 	if (auto error = paths_error(paths)) return { 0, cmd::codes::invalid_args, std::move(*error) };
@@ -2436,22 +2454,7 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 	args.emplace_back("--end-of-options");
 	args.push_back(remote);
 	args.push_back(guarded ? std::format("refs/heads/{0}:refs/heads/{0}", branch) : branch);
-	const hard_rule rule = [branch](const vcs_policy& policy) -> std::optional<std::string> {
-		const auto matches = [&branch](const std::vector<std::string>& patterns, bool ignore_case) {
-			return std::any_of(patterns.begin(), patterns.end(),
-				[&branch, ignore_case](const std::string& pattern) { return vcs_glob_match(pattern, branch, ignore_case); });
-		};
-		if (matches(policy.protected_branches, true)) {
-			return std::format("'{}' is a protected branch: agents never push to it (vcs.protected_branches)", vcs::valid_utf8(branch));
-		}
-		if (!matches(policy.push_branches, false)) {
-			std::string allowed;
-			for (const auto& pattern : policy.push_branches) allowed += (allowed.empty() ? "" : ", ") + vcs::valid_utf8(pattern);
-			return std::format("the agent policy does not allow a push to '{}' (vcs.push_branches: {})", vcs::valid_utf8(branch),
-				allowed.empty() ? "none" : allowed);
-		}
-		return std::nullopt;
-	};
+	const hard_rule rule = [branch](const vcs_policy& policy) { return vcs_push_branch_refusal(policy, branch); };
 	return run_job("git push", [args = std::move(args), remote](const git_context& shared, ds::task_context& task) -> json::value {
 		git_context git = shared;
 		progress_state progress;
@@ -2464,6 +2467,101 @@ edt::vcs_service::started edt::vcs_service::start_push(const std::string& remote
 		if (auto failure = write_failure_of(out, task)) return std::move(*failure);
 		return output_json(out);
 	}, write_mode{ caller.kind, false, true }, rule);
+}
+
+struct edt::vcs_service::repository_reader::impl
+{
+	git_context git;
+};
+
+edt::vcs_service::started edt::vcs_service::start_reader_job(std::string label, reader_work work, const cmd::origin& caller)
+{
+	return run_job(std::move(label), [work = std::move(work)](const git_context& shared, ds::task_context& task) -> json::value {
+		git_context git = shared;
+		if (auto refused = harden_read(git, task.stop)) return refused_read(*refused, task);
+		const repository_reader reader{ std::make_shared<const repository_reader::impl>(repository_reader::impl{ std::move(git) }) };
+		return work(reader, task);
+	}, std::nullopt, {}, caller.kind);
+}
+
+namespace {
+	// A failed git call as a reader answer; a stop of the job ends it cancelled.
+	edt::vcs_service::repository_reader::answer reader_failure(const git_output& out, std::stop_token stop)
+	{
+		if (stop.stop_requested()) throw ds::task_cancelled{};
+		edt::vcs_service::repository_reader::answer answer;
+		if (!out.refused_code.empty()) {
+			answer.code = out.refused_code;
+			answer.error = out.err;
+		} else if (!out.process.error.empty()) {
+			answer.code = "vcs_unavailable";
+			answer.error = out.process.error;
+		} else {
+			answer.code = edt::vcs::classify_error(out.err);
+			answer.error = summary_of(out.err, out.process.exit_code);
+		}
+		answer.error = edt::vcs::valid_utf8(edt::vcs::utf8_prefix(trim(answer.error), k_message_cap));
+		return answer;
+	}
+
+	edt::vcs_service::repository_reader::answer reader_refusal(std::string code, std::string message)
+	{
+		edt::vcs_service::repository_reader::answer answer;
+		answer.code = std::move(code);
+		answer.error = std::move(message);
+		return answer;
+	}
+}
+
+edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader::remote_name(const std::string& named,
+	std::stop_token stop) const
+{
+	if (!named.empty()) {
+		if (auto error = remote_error(named)) return reader_refusal(cmd::codes::invalid_args, std::move(*error));
+	}
+	// First, so that a folder that is no repository says so (resolve_network_target reports it as a general failure).
+	const git_output probe = run_git(m_impl->git, { "rev-parse", "--git-dir" }, stop, k_read_cap);
+	if (!probe.refused_code.empty() || !probe.process.error.empty() || probe.truncated || probe.process.exit_code != 0) {
+		return reader_failure(probe, stop);
+	}
+	const network_target target = resolve_network_target(m_impl->git, named, stop);
+	if (stop.stop_requested()) throw ds::task_cancelled{};
+	if (!target.error.empty()) return reader_refusal("git_failed", target.error);
+	if (auto error = remote_error(target.remote)) return reader_refusal("git_failed", std::move(*error));
+	answer out;
+	out.text = target.remote;
+	return out;
+}
+
+edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader::remote_url(const std::string& remote,
+	std::stop_token stop) const
+{
+	if (auto error = remote_error(remote)) return reader_refusal(cmd::codes::invalid_args, std::move(*error));
+	const git_output out = run_git(m_impl->git, { "remote", "get-url", remote }, stop, k_read_cap);
+	if (out.truncated || !out.refused_code.empty() || !out.process.error.empty() || out.process.exit_code != 0) {
+		return reader_failure(out, stop);
+	}
+	const auto lines = lines_of(out.out);
+	if (lines.empty()) return reader_refusal("git_failed", std::format("the remote '{}' has no URL", edt::vcs::valid_utf8(remote)));
+	answer found;
+	found.text = std::string(lines.front());
+	return found;
+}
+
+edt::vcs_service::repository_reader::answer edt::vcs_service::repository_reader::local_branch(const std::string& branch,
+	std::stop_token stop) const
+{
+	if (auto error = branch_name_error("branch", branch)) return reader_refusal(cmd::codes::invalid_args, std::move(*error));
+	const git_output out = run_git(m_impl->git, { "rev-parse", "--verify", "--quiet", "refs/heads/" + branch + "^{commit}" }, stop,
+		k_read_cap);
+	if (!out.refused_code.empty() || !out.process.error.empty() || out.truncated) return reader_failure(out, stop);
+	if (out.process.exit_code == 1) {
+		return reader_refusal(cmd::codes::not_found, std::format("there is no local branch '{}'", edt::vcs::valid_utf8(branch)));
+	}
+	if (out.process.exit_code != 0) return reader_failure(out, stop);
+	answer found;
+	found.text = std::string(trim(out.out));
+	return found;
 }
 
 namespace {

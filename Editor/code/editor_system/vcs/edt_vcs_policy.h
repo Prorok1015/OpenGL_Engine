@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,4 +37,8 @@ namespace edt
 	// `*` matches any run of characters (including '/'), `?` exactly one; everything else matches itself (ASCII case
 	// folded when `ignore_case`).
 	bool vcs_glob_match(std::string_view pattern, std::string_view text, bool ignore_case = false);
+
+	// Why the policy never lets an agent push `branch` (a protected branch, or none of push_branches); nullopt when it
+	// may. A guarded push and a forge pull request's head (#458) are judged by this one rule.
+	std::optional<std::string> vcs_push_branch_refusal(const vcs_policy& policy, std::string_view branch);
 }

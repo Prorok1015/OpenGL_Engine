@@ -6,6 +6,7 @@
 #include <snk/command/cmd_types.h>
 #include <snk/editor/edt_job_service.h>
 #include <snk/editor/edt_registration.h>
+#include <boost/json/value.hpp>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -14,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -232,6 +234,44 @@ namespace edt
 		{
 			return start_push(remote, branch, set_upstream, cmd::origin{ caller, {} });
 		}
+
+		// git's local answers for a job of someone else's that goes on to the network (the forge's pull request calls,
+		// #458): the same hardened read as every vcs read (no hooks, filter drivers off, no transport for an agent), and
+		// nothing here talks to a remote. Used on the job's thread only.
+		class repository_reader
+		{
+		public:
+			struct impl;
+
+			// `text` when `code` is empty; otherwise a vcs code (invalid_args, git_failed, not_found, vcs_unavailable, ...)
+			// and a message safe to show.
+			struct answer
+			{
+				std::string text;
+				std::string code;
+				std::string error;
+
+				bool ok() const { return code.empty(); }
+			};
+
+			explicit repository_reader(std::shared_ptr<const impl> state) : m_impl(std::move(state)) {}
+
+			// The remote as named, else the current branch's, else the only configured one, else origin (what git would
+			// pick); resolved once here, so the caller checks and uses one name.
+			answer remote_name(const std::string& named, std::stop_token stop) const;
+			// `git remote get-url <remote>`: the first URL.
+			answer remote_url(const std::string& remote, std::stop_token stop) const;
+			// The commit refs/heads/<branch> points to; `not_found` when there is no such local branch.
+			answer local_branch(const std::string& branch, std::stop_token stop) const;
+
+		private:
+			std::shared_ptr<const impl> m_impl;
+		};
+
+		// The answer of the work is the job's result (job.get). `caller` is the origin of the command: not a person's
+		// (ui) means the protected read. The work may throw ds::task_cancelled.
+		using reader_work = std::function<boost::json::value(const repository_reader&, ds::task_context&)>;
+		started start_reader_job(std::string label, reader_work work, const cmd::origin& caller);
 
 	private:
 		// A folder in the OS temp dir that only this editor writes to: the empty hooks folder of agent writes and the

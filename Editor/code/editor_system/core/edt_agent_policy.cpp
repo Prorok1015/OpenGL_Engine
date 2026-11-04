@@ -35,7 +35,7 @@ namespace edt
 			cmd::agent_category::cmake_presets, cmd::agent_category::build, cmd::agent_category::live, cmd::agent_category::editor_control,
 			cmd::agent_category::play,
 			cmd::agent_category::vcs_read, cmd::agent_category::vcs_commit, cmd::agent_category::vcs_branch,
-			cmd::agent_category::vcs_sync, cmd::agent_category::vcs_push,
+			cmd::agent_category::vcs_sync, cmd::agent_category::vcs_push, cmd::agent_category::vcs_forge,
 		};
 
 		cmd::policy_mode mode_of_risk(cmd::danger risk)

@@ -49,6 +49,8 @@ namespace edt
 		case vcs_branch: return policy_mode::allow;
 		case vcs_sync: return policy_mode::allow;
 		case vcs_push: return policy_mode::allow;
+		// Uses the stored token and the network: asks even for the reads (#458).
+		case vcs_forge: return policy_mode::ask;
 		case unset:
 		case not_for_agents: break;
 		}

@@ -28,6 +28,7 @@ namespace rnd  { class render_system; }
 namespace gui  { class gui_system; }
 namespace scn  { class ecs_assembler; class level_desc; }
 namespace ecs  { class system_factory; }
+namespace platform { class secret_store; }
 namespace inp  { class input_router; }
 
 namespace edt {
@@ -38,6 +39,7 @@ namespace edt {
 	class game_builder;
 	class game_reloader;
 	class vcs_service;
+	class forge_service;
 	class live_mode;
 	class editor_context;
 	class editor_layer;
@@ -214,6 +216,11 @@ namespace edt {
 		std::unique_ptr<edt::vcs_service> m_vcs;
 		// After the service whose write observer reaches it, so it is destroyed first.
 		std::unique_ptr<edt::vcs::repository_watcher> m_repo_watcher;
+		// Forge tokens (#458): the OS store, shared with the forge service (and the settings UI later). Its calls block: only jobs
+		// make them.
+		std::shared_ptr<platform::secret_store> m_secrets;
+		// Pull requests (#458); its commands are in m_registrations, removed before it; after the vcs service it asks.
+		std::unique_ptr<edt::forge_service> m_forge;
 		// Live mode (#445); after the builder and the reloader it calls, so it is destroyed first.
 		std::unique_ptr<edt::live_mode> m_live_mode;
 		// Play of the scene document; its actions are in m_registrations, removed before it. Stopped in the destructor

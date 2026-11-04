@@ -59,6 +59,7 @@ namespace cmd
 		vcs_branch,     // create a branch, check one out
 		vcs_sync,       // fetch, pull (fast-forward only)
 		vcs_push,       // push to a remote
+		vcs_forge,      // the code host's pull requests (create, status, list): uses the token and the network
 	};
 
 	constexpr const char* to_string(agent_category category)
@@ -80,6 +81,7 @@ namespace cmd
 		case agent_category::vcs_branch: return "vcs_branch";
 		case agent_category::vcs_sync: return "vcs_sync";
 		case agent_category::vcs_push: return "vcs_push";
+		case agent_category::vcs_forge: return "vcs_forge";
 		}
 		return "unset";
 	}
