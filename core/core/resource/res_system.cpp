@@ -1214,7 +1214,11 @@ res::mount_table res::resource_system::project_mount_table(
   layers.insert(layers.end(), content_roots.rbegin(), content_roots.rend());
 
   mount_table table;
-  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write});
+  // Every file is reported, for the Git panel (#515), and hot reload keeps every readable folder; only a repository's
+  // .git is skipped. The private folders (.cache, .snk, build) never lie in a content root: prj::verify_project_mounts.
+  table.push_back(mount{tag::default_protocol(), std::move(layers), mount_access::read_write, write_policy::allow_all(),
+                        watch_options{true, [](std::string_view name) { return name == ".git"; }, {}},
+                        false});
   table.push_back(mount{tag::memory, {cache_dir / "memory"}, mount_access::read_write});
   table.push_back(mount{tag::cache, {cache_dir}, mount_access::read_write});
   table.push_back(mount{tag::user, {user_dir}, mount_access::read_write});
