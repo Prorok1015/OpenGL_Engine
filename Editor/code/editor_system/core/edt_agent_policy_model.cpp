@@ -94,6 +94,20 @@ namespace edt
 		m_has_displayed = true;
 	}
 
+	void agent_policy_model::note_review_opened()
+	{
+		if (!m_has_displayed || m_review_open) return;
+		m_review_open = true;
+		m_displayed_since = m_now();
+		m_interacted = false;
+	}
+
+	void agent_policy_model::note_review_closed()
+	{
+		m_review_open = false;
+		m_interacted = false;
+	}
+
 	void agent_policy_model::forget_displayed()
 	{
 		m_displayed = {};
@@ -101,16 +115,17 @@ namespace edt
 		m_displayed_key.clear();
 		m_has_displayed = false;
 		m_interacted = false;
+		m_review_open = false;
 	}
 
 	void agent_policy_model::note_interaction()
 	{
-		if (m_has_displayed) m_interacted = true;
+		if (m_has_displayed && m_review_open) m_interacted = true;
 	}
 
 	bool agent_policy_model::approve_armed() const
 	{
-		return m_has_displayed && m_interacted && m_now() - m_displayed_since >= k_approve_arm_delay;
+		return m_has_displayed && m_review_open && m_interacted && !too_many_to_review() && m_now() - m_displayed_since >= k_approve_arm_delay;
 	}
 
 	bool agent_policy_model::pending() const
@@ -126,6 +141,7 @@ namespace edt
 	std::optional<std::string> agent_policy_model::approve()
 	{
 		if (!m_has_displayed) return "the policy has not been shown yet";
+		if (too_many_to_review()) return "Too many changes to review here; edit the file down or approve smaller steps";
 		if (!approve_armed()) return "look at the changes for a moment first: approving is possible once they have been on screen for a second";
 		m_policy.refresh();
 		const std::vector<policy_loosening>& now = m_policy.pending_loosenings();
@@ -134,7 +150,7 @@ namespace edt
 				return a.what == b.what && a.from == b.from && a.to == b.to;
 			});
 		if (!same) return "what the policy loosens changed since it was shown; review it again";
-		std::optional<std::string> error = m_policy.approve_project_layer(m_displayed);
+		std::optional<std::string> error = m_policy.approve_project_layer(m_displayed, &m_displayed_loosenings);
 		if (!error) forget_displayed();
 		return error;
 	}
@@ -239,7 +255,7 @@ namespace edt
 
 	bool agent_policy_model::set_vcs_list(policy_scope scope, vcs_list_key key, std::optional<std::vector<std::string>> value)
 	{
-		// What parse_policy_layer would refuse on the way back (control or invisible characters, a comma, too long).
+		// The same check parse_policy_layer makes (control or invisible characters, a comma, too long), so the edit saves.
 		if (value) {
 			for (const std::string& entry : *value) {
 				if (entry.empty() || !vcs_entry_problem(entry).empty()) return false;

@@ -1819,8 +1819,10 @@ BOOST_AUTO_TEST_CASE(AGitListEntry_WithControlInvisibleOrCommaCharacters_OrTooLo
 	BOOST_TEST(!parse("a\\ufeffb").error.empty());
 	BOOST_TEST(!parse(std::string(257, 'a')).error.empty());
 	BOOST_TEST(parse(std::string(256, 'a')).error.empty());
-	// A broken layer fails closed, whatever else it holds.
+	// A broken layer fails closed, whatever else it holds; the error names the problem, never the entry.
 	BOOST_TEST(parse("a,b").layer.empty());
+	BOOST_TEST(parse("SECRET\\u202ex").error.find("SECRET") == std::string::npos);
+	BOOST_TEST(edt::display_safe(std::string("a\n\xe2\x80\xae" "b\x07\xc3\x28")) == "a b(");
 	BOOST_TEST(edt::vcs_entry_problem("agent/*").empty());
 	BOOST_TEST(!edt::vcs_entry_problem(std::string("\xc3\x28")).empty());
 }

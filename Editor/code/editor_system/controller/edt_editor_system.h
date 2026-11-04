@@ -257,8 +257,8 @@ namespace edt {
 			std::chrono::steady_clock::time_point at;
 		};
 		std::deque<recent_agent_action> m_recent_agent_actions;
-		// "The project's agent policy waits for approval" was dismissed (reset when nothing waits any more).
-		bool m_policy_notice_dismissed = false;
+		// The pending loosenings (as text) the person sent away with "Later"; empty = not dismissed. A different set shows the notice again.
+		std::string m_policy_notice_dismissed_key;
 		std::chrono::steady_clock::time_point m_policy_refreshed{};
 		// Listeners of editor_events::agent_session_closed; dropped before the access and the sessions they reach.
 		std::vector<connection> m_session_connections;

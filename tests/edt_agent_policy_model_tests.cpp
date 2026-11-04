@@ -67,6 +67,7 @@ struct model_fixture
 	// What a person does before Approve works: the window is used, and the copy stays on screen for a second.
 	void arm()
 	{
+		model->note_review_opened();
 		model->note_interaction();
 		advance(edt::agent_policy_model::k_approve_arm_delay);
 	}
@@ -310,6 +311,7 @@ BOOST_AUTO_TEST_CASE(Approve_NeedsTheCopyOnScreenForASecond_AndTheWindowUsed)
 	model->refresh();
 	model->mark_displayed();
 	BOOST_TEST(!model->approve_armed());
+	model->note_review_opened();
 	model->note_interaction();
 	BOOST_TEST(!model->approve_armed());
 	advance(std::chrono::milliseconds(999));
@@ -331,6 +333,7 @@ BOOST_AUTO_TEST_CASE(Approve_IsNotArmedWithoutTheWindowBeingUsed)
 	write_project(R"({"categories":{"code_files":"allow"}})");
 	model->refresh();
 	model->mark_displayed();
+	model->note_review_opened();
 	advance(std::chrono::seconds(30));
 	BOOST_TEST(!model->approve_armed());
 	BOOST_TEST(model->approve().has_value());
@@ -356,6 +359,89 @@ BOOST_AUTO_TEST_CASE(Approve_IsDisarmedAgainWhenTheDisplayedLayerChanges)
 	arm();
 	BOOST_TEST(model->approve_armed());
 	BOOST_TEST(!model->approve().has_value());
+}
+
+BOOST_AUTO_TEST_CASE(Approve_CountsFromTheReviewPopupOpening_NotFromTheBanner)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	// A long-visible banner, used by the mouse: still nothing to approve until the list itself was opened.
+	model->note_interaction();
+	advance(std::chrono::seconds(30));
+	BOOST_TEST(!model->approve_armed());
+	BOOST_TEST(model->approve().has_value());
+
+	model->note_review_opened();
+	model->note_interaction();
+	BOOST_TEST(!model->approve_armed());
+	advance(std::chrono::milliseconds(999));
+	BOOST_TEST(!model->approve_armed());
+	advance(std::chrono::milliseconds(1));
+	BOOST_TEST(model->approve_armed());
+
+	// Closed and opened again: from zero.
+	model->note_review_closed();
+	BOOST_TEST(!model->approve_armed());
+	model->note_review_opened();
+	model->note_interaction();
+	BOOST_TEST(!model->approve_armed());
+	advance(edt::agent_policy_model::k_approve_arm_delay);
+	BOOST_TEST(model->approve_armed());
+}
+
+BOOST_AUTO_TEST_CASE(Approve_IsDisarmedWhenTheWindowWasHidden_AndStartsFromZeroWhenItComesBack)
+{
+	write_project(R"({"categories":{"code_files":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	arm();
+	BOOST_REQUIRE(model->approve_armed());
+
+	model->forget_displayed();
+	advance(std::chrono::seconds(60));
+	model->mark_displayed();
+	BOOST_TEST(!model->approve_armed());
+	model->note_interaction();
+	BOOST_TEST(!model->approve_armed());
+	BOOST_TEST(model->approve().has_value());
+	arm();
+	BOOST_TEST(model->approve_armed());
+}
+
+BOOST_AUTO_TEST_CASE(MoreLooseningsThanThePopupLists_CanNotBeApprovedThere)
+{
+	std::string commands;
+	for (std::size_t i = 0; i < edt::agent_policy_model::k_review_list_cap + 1; ++i) {
+		commands += (commands.empty() ? "" : ",") + std::string("\"extra.cmd") + std::to_string(i) + "\":\"allow\"";
+	}
+	write_project(R"({"commands":{)" + commands + "}}");
+	model->refresh();
+	model->mark_displayed();
+	BOOST_REQUIRE(model->displayed_loosenings().size() > edt::agent_policy_model::k_review_list_cap);
+	BOOST_TEST(model->too_many_to_review());
+	arm();
+	advance(std::chrono::seconds(30));
+	BOOST_TEST(!model->approve_armed());
+	const auto refused = model->approve();
+	BOOST_REQUIRE(refused.has_value());
+	BOOST_TEST(refused->find("Too many changes") != std::string::npos);
+	BOOST_TEST(model->pending());
+}
+
+BOOST_AUTO_TEST_CASE(Approve_RecordsOnlyWhatWasShown_NotACommandEntryThatLoosensNothing)
+{
+	// scene.query is allowed by default: its "allow" entry is no loosening, so the person was not shown it.
+	write_project(R"({"categories":{"code_files":"allow"},"commands":{"scene.query":"allow","code.write":"allow"}})");
+	model->refresh();
+	model->mark_displayed();
+	BOOST_REQUIRE(model->pending());
+	arm();
+	BOOST_TEST(!model->approve().has_value());
+	const edt::policy_layer& approved = policy->approved_project();
+	BOOST_TEST((approved.categories.at(agent_category::code_files) == policy_mode::allow));
+	BOOST_TEST((approved.commands.at("code.write") == policy_mode::allow));
+	BOOST_TEST(!approved.commands.contains("scene.query"));
 }
 
 BOOST_AUTO_TEST_CASE(NothingToApprove_ForgetsTheCopy)

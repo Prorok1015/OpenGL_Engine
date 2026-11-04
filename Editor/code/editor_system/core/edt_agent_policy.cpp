@@ -162,6 +162,10 @@ namespace edt
 				for (const json::value& item : list.as_array()) {
 					if (!item.is_string() || item.as_string().empty()) return "\"vcs\": \"" + name + "\" lists non-empty strings";
 					items.push_back(text_of(item.as_string()));
+					// The reason only, never the entry: the error is shown to a person and a hostile entry is the point.
+					if (const std::string problem = vcs_entry_problem(items.back()); !problem.empty()) {
+						return "\"vcs\": \"" + name + "\": " + problem;
+					}
 				}
 				into = std::move(items);
 				return {};
@@ -313,6 +317,24 @@ namespace edt
 			at += length;
 		}
 		return {};
+	}
+
+	std::string display_safe(std::string_view text)
+	{
+		std::string out;
+		out.reserve(text.size());
+		for (std::size_t at = 0; at < text.size();) {
+			std::uint32_t cp = 0;
+			const std::size_t length = decode_code_point(text, at, cp);
+			if (length == 0) {
+				++at;
+				continue;
+			}
+			if (cp == '\n' || cp == '\r' || cp == '\t') out += ' ';
+			else if (!hidden_code_point(cp)) out.append(text.substr(at, length));
+			at += length;
+		}
+		return out;
 	}
 
 	cmd::policy_mode default_mode(const cmd::command_desc& command)
@@ -896,7 +918,7 @@ namespace edt
 		}
 	}
 
-	std::optional<std::string> agent_policy::approve_project_layer(const policy_layer& reviewed)
+	std::optional<std::string> agent_policy::approve_project_layer(const policy_layer& reviewed, const std::vector<policy_loosening>* displayed)
 	{
 		ASSERT_MSG(std::this_thread::get_id() == m_main_thread, "agent_policy::approve_project_layer: main thread only");
 		if (!m_approval_allowed) return "no person is here to approve";
@@ -904,7 +926,15 @@ namespace edt
 		refresh();
 		if (!m_project.error.empty()) return "the project's agent_policy.json cannot be used: " + m_project.error;
 		if (serialize_policy_layer(m_project.layer) != shown) return "the project's agent_policy.json changed since it was shown; review it again";
-		if (const std::optional<std::string> error = keep_approved(m_project.layer)) return error;
+		// Only what the person saw is approved: a command entry that loosens nothing today (and so was not listed) could lift
+		// the risk floor of a command registered later, so it stays unapproved like on a silent take-over.
+		policy_layer record = silently_recordable(m_approved, m_project.layer);
+		for (const policy_loosening& change : displayed != nullptr ? *displayed : m_loosenings) {
+			for (const auto& [id, mode] : m_project.layer.commands) {
+				if (change.what == "entry '" + id + "'" || change.what == "command " + id) record.commands[id] = mode;
+			}
+		}
+		if (const std::optional<std::string> error = keep_approved(record)) return error;
 		reconcile_project();
 		if (m_on_changed) m_on_changed();
 		return std::nullopt;

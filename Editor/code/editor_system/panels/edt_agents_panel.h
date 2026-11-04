@@ -39,6 +39,8 @@ namespace edt
 	protected:
 		void on_before_begin() override;
 		void on_render() override;
+		// Closed, collapsed or in a hidden tab: nothing is drawn, so nothing stays armed.
+		void on_hidden() override;
 
 	private:
 		void draw_banner();

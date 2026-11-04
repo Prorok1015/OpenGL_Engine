@@ -87,6 +87,9 @@ namespace edt
 	// at most k_max_vcs_entry_bytes. "" = fine; else why, without the entry itself.
 	constexpr std::size_t k_max_vcs_entry_bytes = 256;
 	std::string vcs_entry_problem(std::string_view entry);
+	// Text that came from a file, safe to draw: control (newlines and tabs become a space), C1, zero-width and bidi code points
+	// and malformed UTF-8 are dropped. The same set as vcs_entry_problem.
+	std::string display_safe(std::string_view text);
 
 	// One layer: a mode per category and per command. A command's own entry beats its category's.
 	struct policy_layer
@@ -243,7 +246,9 @@ namespace edt
 		const policy_layer& approved_project() const { return m_approved; }
 		// The person approves the project file, which must still be the `reviewed` layer they were shown: a file that changed
 		// in between (a checkout, an agent's tool) is refused and has to be looked at again. The error, nullopt on success.
-		std::optional<std::string> approve_project_layer(const policy_layer& reviewed);
+		// `displayed`: the loosenings the person saw (default: all that wait now); of the command entries other than `deny` only those
+		// they name are approved, the others wait like any change of a file.
+		std::optional<std::string> approve_project_layer(const policy_layer& reviewed, const std::vector<policy_loosening>* displayed = nullptr);
 
 		// Called (main thread) after a layer that was already loaded is read again, because its file changed or a person saved it:
 		// what an agent may see can have changed, so the MCP clients are told to ask for the tool list again.

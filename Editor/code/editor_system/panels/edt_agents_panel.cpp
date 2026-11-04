@@ -123,6 +123,11 @@ void edt::agents_panel::on_render()
 	draw_footer();
 }
 
+void edt::agents_panel::on_hidden()
+{
+	m_model.forget_displayed();
+}
+
 void edt::agents_panel::draw_banner()
 {
 	const bool pending = m_model.pending();
@@ -150,14 +155,23 @@ void edt::agents_panel::draw_banner()
 
 void edt::agents_panel::draw_review_popup()
 {
-	if (!ImGui::BeginPopup(k_review_popup)) return;
+	if (!ImGui::BeginPopup(k_review_popup)) {
+		m_model.note_review_closed();
+		return;
+	}
+	// Arming counts from this frame on, and only a hover over the popup itself is use (it takes the focus when it opens).
+	m_model.note_review_opened();
+	if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows)) m_model.note_interaction();
 	ImGui::PushTextWrapPos(ImGui::GetFontSize() * 36.f);
 	ImGui::TextUnformatted("agent_policy.json lets agents do more than you approved. Until you approve it, the approved version applies "
 		"(whatever is stricter in the file already does). Saving your own edits in this window drops these changes from the file.");
 	ImGui::PopTextWrapPos();
-	for (const policy_loosening& change : m_model.displayed_loosenings()) {
-		// The text of a file: shortened, the whole of it in the tooltip, never a format string.
-		const std::string line = std::format("{}: {} -> {}", change.what, cmd::to_string(change.from), cmd::to_string(change.to));
+	const auto& shown = m_model.displayed_loosenings();
+	const std::size_t listed = std::min(shown.size(), agent_policy_model::k_review_list_cap);
+	for (std::size_t i = 0; i < listed; ++i) {
+		const policy_loosening& change = shown[i];
+		// The text of a file: cleaned, shortened, the whole of it in the tooltip, never a format string.
+		const std::string line = display_safe(std::format("{}: {} -> {}", change.what, cmd::to_string(change.from), cmd::to_string(change.to)));
 		ImGui::Bullet();
 		ImGui::SameLine();
 		ImGui::TextUnformatted(ellipsized(line, k_banner_line_bytes).c_str());
@@ -168,6 +182,7 @@ void edt::agents_panel::draw_review_popup()
 			ImGui::EndTooltip();
 		}
 	}
+	if (shown.size() > listed) ImGui::TextUnformatted(std::format("... and {} more", shown.size() - listed).c_str());
 	ImGui::Separator();
 	const bool armed = m_model.approve_armed();
 	ImGui::BeginDisabled(!armed);
@@ -185,9 +200,13 @@ void edt::agents_panel::draw_review_popup()
 	ImGui::EndDisabled();
 	ImGui::SameLine();
 	if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
-	if (!armed) {
+	if (m_model.too_many_to_review()) {
 		ImGui::SameLine();
-		ImGui::TextDisabled("available a moment after these changes appeared");
+		ImGui::TextDisabled("Too many changes to review here; edit the file down or approve smaller steps");
+	}
+	else if (!armed) {
+		ImGui::SameLine();
+		ImGui::TextDisabled("available a moment after you opened this list and pointed at it");
 	}
 	ImGui::EndPopup();
 }
@@ -281,7 +300,7 @@ void edt::agents_panel::draw_policy()
 
 	if (const std::string& error = m_model.error_of(m_scope); !error.empty()) {
 		ImGui::PushStyleColor(ImGuiCol_Text, k_error_color);
-		ImGui::TextWrapped("This file cannot be used and everything is denied until it is fixed: %s", error.c_str());
+		ImGui::TextWrapped("This file cannot be used and everything is denied until it is fixed: %s", display_safe(error).c_str());
 		ImGui::PopStyleColor();
 	}
 	if (m_model.base_changed(m_scope)) {
@@ -311,7 +330,7 @@ void edt::agents_panel::draw_policy()
 			ImGui::TextUnformatted(cmd::to_string(row.effective.mode));
 			ImGui::TableNextColumn();
 			ImGui::TextUnformatted(to_string(row.effective.source));
-			if (ImGui::IsItemHovered() && !row.effective.reason.empty()) ImGui::SetTooltip("%s", row.effective.reason.c_str());
+			if (ImGui::IsItemHovered() && !row.effective.reason.empty()) ImGui::SetTooltip("%s", display_safe(row.effective.reason).c_str());
 			ImGui::PopID();
 		}
 		ImGui::EndTable();
@@ -448,5 +467,5 @@ void edt::agents_panel::draw_footer()
 		ImGui::SameLine();
 		ImGui::TextColored(k_warning_color, "Applying replaces the file with the approved version plus your edits.");
 	}
-	if (!m_message.empty()) ImGui::TextColored(m_message_is_error ? k_error_color : k_ok_color, "%s", m_message.c_str());
+	if (!m_message.empty()) ImGui::TextColored(m_message_is_error ? k_error_color : k_ok_color, "%s", display_safe(m_message).c_str());
 }

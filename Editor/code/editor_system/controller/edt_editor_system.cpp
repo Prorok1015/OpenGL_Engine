@@ -937,7 +937,7 @@ void edt::editor_system::draw_agent_policy_notice()
 {
 	if (m_agent_access == nullptr) return;
 	if (!m_agent_access->policy().project_pending_approval()) {
-		m_policy_notice_dismissed = false;
+		m_policy_notice_dismissed_key.clear();
 		return;
 	}
 	// agent_access::frame reads the files every frame while the server is active; a waiting policy must also notice, about once
@@ -950,7 +950,11 @@ void edt::editor_system::draw_agent_policy_notice()
 			if (!m_agent_access->policy().project_pending_approval()) return;
 		}
 	}
-	if (m_policy_notice_dismissed) return;
+	std::string pending_key;
+	for (const policy_loosening& change : m_agent_access->policy().pending_loosenings()) {
+		pending_key += change.what + '|' + cmd::to_string(change.from) + '|' + cmd::to_string(change.to) + '\n';
+	}
+	if (m_policy_notice_dismissed_key == pending_key) return;
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.f, viewport->WorkPos.y + viewport->WorkSize.y - 12.f),
 		ImGuiCond_Always, ImVec2(1.f, 1.f));
@@ -960,10 +964,10 @@ void edt::editor_system::draw_agent_policy_notice()
 		ImGui::TextUnformatted("The project's agent policy waits for your approval.");
 		if (ImGui::Button("Open")) {
 			open_agents_panel();
-			m_policy_notice_dismissed = true;
+			m_policy_notice_dismissed_key = pending_key;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button("Later")) m_policy_notice_dismissed = true;
+		if (ImGui::Button("Later")) m_policy_notice_dismissed_key = pending_key;
 	}
 	ImGui::End();
 }

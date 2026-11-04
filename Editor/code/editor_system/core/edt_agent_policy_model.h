@@ -53,6 +53,8 @@ namespace edt
 		// How long the same layer has to be on screen, with the window used, before it can be approved: a button that appears
 		// under the mouse (a layout shift, an agent's checkout changing the file) must not be clicked by accident.
 		static constexpr std::chrono::milliseconds k_approve_arm_delay{ 1000 };
+		// More loosenings than this cannot be read in the Review popup (it lists this many): Approve stays off.
+		static constexpr std::size_t k_review_list_cap = 50;
 
 		// `now`: the clock of the arming delay (steady_clock by default).
 		explicit agent_policy_model(agent_policy& policy, command_source commands = {}, clock_fn now = {});
@@ -72,10 +74,17 @@ namespace edt
 		bool pending() const;
 		const std::vector<policy_loosening>& loosenings() const;
 		const std::vector<policy_loosening>& displayed_loosenings() const { return m_displayed_loosenings; }
-		// The person used the window (hovered or focused it) while the displayed copy was on screen.
+		// The Review popup was drawn (its first frame): the delay and the interaction count from here, not from when the copy
+		// first showed in the banner, so a long-visible banner does not arm Approve on the popup's first frame.
+		void note_review_opened();
+		// The popup is not drawn any more (closed, or the window hidden): arming starts from zero on the next opening.
+		void note_review_closed();
+		// The person used the popup (hovered it) or the window while the Review popup is open; ignored before it opened.
 		void note_interaction();
-		// The same copy has been displayed for k_approve_arm_delay and the window was used since it appeared.
+		// The same copy has been displayed for k_approve_arm_delay with the popup open, it was used since, and the list fits the
+		// popup (`too_many_to_review` is false).
 		bool approve_armed() const;
+		bool too_many_to_review() const { return m_displayed_loosenings.size() > k_review_list_cap; }
 		// Approves the layer of the last mark_displayed(); refused when it is not armed, or when the file or its loosenings are
 		// other by now. The error, nullopt on success.
 		std::optional<std::string> approve();
@@ -132,5 +141,6 @@ namespace edt
 		std::chrono::steady_clock::time_point m_displayed_since{};
 		bool m_has_displayed = false;
 		bool m_interacted = false;
+		bool m_review_open = false;
 	};
 }
